@@ -7,7 +7,9 @@
 //! interval (`0x4601f0`). A zone-music change (`0x4602e0`) or world entry (`0x45ffc0`, at
 //! `0x45ffdb`) arms the next start to −1 at `0x836400`, so the incoming track opens that tick
 //! (`0x460240`) at full volume: no fade-in primitive (`0x7a57b0`, `0x7a5730`) is called on a
-//! music slot.
+//! music slot. A start that plays nothing (no kit, a file missing from the archive, a failed
+//! open) leaves that deadline armed, so every tick retries with a fresh weighted pick
+//! (`0x460240` writes `[0x836400]` on no failure path): a missing file costs a tick, not the zone.
 //!
 //! Server-pushed music (`SMSG_PLAY_MUSIC`) takes the same slot. The server re-pushes an event
 //! track to loop it (the Darkmoon Faire every 5 s, vmangos `go_scripts.cpp:318`), so a push for
@@ -131,8 +133,11 @@ pub(super) struct ZoneAudio {
     lua_music_path: Option<String>,
     lua_music_watch: mixer::StreamWatch,
     /// When the next zone track starts (`Time::elapsed_secs_f64`); `None` while one plays or the
-    /// zone has no music.
+    /// zone has no music. A due start that plays nothing leaves it set, so the next frame retries
+    /// (`0x460240` never writes `[0x836400]` on a failure).
     next_track_at: Option<f64>,
+    /// Music paths already warned about, so a retry every frame reports a bad file once.
+    unplayable: std::collections::HashSet<String>,
     /// Last frame's [`SoundConfig::music_suppressed`], for its edges.
     music_suppressed: bool,
     /// The looping ambience kit currently up (0 = none), its handle and base volume.
@@ -163,6 +168,7 @@ impl Default for ZoneAudio {
             lua_music_path: None,
             lua_music_watch: mixer::StreamWatch::new("Lua music"),
             next_track_at: None,
+            unplayable: std::collections::HashSet::new(),
             music_suppressed: false,
             ambience_kit: 0,
             ambience: None,
@@ -295,38 +301,10 @@ fn zone_audio(
             if let Some(mut h) = zone.music.take() {
                 h.stop(mixer::fade(MUSIC_FADE_OUT_MS));
             }
-            zone.next_track_at = None;
-            // The intro preempts the zone track, at full, if off cooldown.
-            let mut slot_taken = false;
-            if let Some(intro) = intro {
-                let ok_at = zone
-                    .intro_last
-                    .get(&intro.id)
-                    .map(|t| t + intro.min_delay_minutes as f64 * 60.0);
-                if ok_at.is_none_or(|t| now >= t)
-                    && intro.sound_id != 0
-                    && start_music_stream(
-                        zone,
-                        &mut out,
-                        &mut kits,
-                        &assets,
-                        &config,
-                        intro.sound_id,
-                    )
-                {
-                    zone.intro_last.insert(intro.id, now);
-                    slot_taken = true;
-                }
-            }
-            // Otherwise the zone track starts now, on a change and on world entry alike (the −1
-            // that `0x4602e0` and `0x45ffc0` arm); the silence interval is same-zone spacing only.
-            if !slot_taken {
-                if let Some(kit) = zone_music_row(&areas.0, music_row).map(|m| m.sounds[phase]) {
-                    if kit != 0 {
-                        start_music_stream(zone, &mut out, &mut kits, &assets, &config, kit);
-                    }
-                }
-            }
+            let kit = zone_music_row(&areas.0, music_row).map(|m| m.sounds[phase]);
+            begin_zone_music(zone, intro, kit, now, |zone, kit| {
+                start_music_stream(zone, &mut out, &mut kits, &assets, &config, kit)
+            });
         }
     }
 
@@ -382,16 +360,13 @@ fn zone_audio(
         }
     }
     // The deadline passed: start the next track. Under a live Lua slot the reference's pump bails
-    // before reading the deadline (`0x460057`) while this consumes it and is refused at the slot;
-    // the same outcome, since only the verb ends the override and it always rewrites the deadline.
+    // before reading the deadline (`0x460057`); here the start is refused at the slot and the
+    // deadline stays armed until the verb rewrites it, the same outcome.
     if zone.next_track_at.is_some_and(|t| now >= t) && zone.music.is_none() {
-        zone.next_track_at = None;
-        if let Some(m) = zone_music_row(&areas.0, zone.zone_music) {
-            let kit = m.sounds[phase];
-            if kit != 0 {
-                start_music_stream(zone, &mut out, &mut kits, &assets, &config, kit);
-            }
-        }
+        let kit = zone_music_row(&areas.0, zone.zone_music).map(|m| m.sounds[phase]);
+        pump_zone_music(zone, kit, |zone, kit| {
+            start_music_stream(zone, &mut out, &mut kits, &assets, &config, kit)
+        });
     }
 
     // ---- per-frame volumes (sliders are live) ----
@@ -492,6 +467,62 @@ fn slot_holds(music_kit: u32, kit_id: u32, slot: Option<kira::sound::PlaybackSta
     music_kit == kit_id && slot.is_some_and(|s| s != kira::sound::PlaybackState::Stopped)
 }
 
+/// A zone-music change's start: the intro if off cooldown, else the zone track now, on a change
+/// and on world entry alike (the −1 that `0x4602e0` and `0x45ffc0` arm); the silence interval is
+/// same-zone spacing only. `kit` is the row's kit for the phase, `None` with no row. A start that
+/// plays nothing leaves the pump armed for the next frame (`0x460240` returns without writing
+/// `[0x836400]`), which is also how a phase with no kit waits for the other one.
+fn begin_zone_music(
+    zone: &mut ZoneAudio,
+    intro: Option<&benilla_formats::ZoneIntroEntry>,
+    kit: Option<u32>,
+    now: f64,
+    mut start: impl FnMut(&mut ZoneAudio, u32) -> bool,
+) {
+    zone.next_track_at = None;
+    if let Some(intro) = intro {
+        let ok_at = zone
+            .intro_last
+            .get(&intro.id)
+            .map(|t| t + intro.min_delay_minutes as f64 * 60.0);
+        if ok_at.is_none_or(|t| now >= t) && intro.sound_id != 0 && start(zone, intro.sound_id) {
+            zone.intro_last.insert(intro.id, now);
+            return;
+        }
+    }
+    let Some(kit) = kit else {
+        return;
+    };
+    if kit == 0 || !start(zone, kit) {
+        zone.next_track_at = Some(now);
+    }
+}
+
+/// The due start: the row's kit for the phase (`None` with no row) with a fresh weighted pick
+/// (`0x45bb70`) per attempt. The deadline is spent only by a stream that opened; a missing file,
+/// no kit or a refused slot leaves it armed (`0x46024b`–`0x4602a4` return before any write).
+fn pump_zone_music(
+    zone: &mut ZoneAudio,
+    kit: Option<u32>,
+    mut start: impl FnMut(&mut ZoneAudio, u32) -> bool,
+) {
+    match kit {
+        None => zone.next_track_at = None,
+        Some(0) => {}
+        Some(kit) => {
+            if start(zone, kit) {
+                zone.next_track_at = None;
+            }
+        }
+    }
+}
+
+/// Whether `path` is newly unplayable: the reference retries a bad pick silently every tick, so
+/// the log hears of each path once.
+fn first_unplayable(zone: &mut ZoneAudio, path: &str) -> bool {
+    zone.unplayable.insert(path.to_owned())
+}
+
 /// Open a music kit on the music slot at full volume (`0x460240` → `0x7a5dc0`), replacing what
 /// is there; whether a stream started.
 fn start_music_stream(
@@ -527,7 +558,9 @@ fn start_music_stream(
     let data = match bytes.and_then(mixer::stream_from_bytes) {
         Ok(d) => d,
         Err(e) => {
-            warn!("zone music: {path} — {e:#}");
+            if first_unplayable(zone, &path) {
+                warn!("zone music: {path} — {e:#}");
+            }
             return false;
         }
     };
@@ -544,7 +577,9 @@ fn start_music_stream(
             true
         }
         Err(e) => {
-            warn!("zone music: {path} — {e:#}");
+            if first_unplayable(zone, &path) {
+                warn!("zone music: {path} — {e:#}");
+            }
             false
         }
     }
@@ -930,10 +965,176 @@ pub(super) fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_music_suppression, slot_holds, take_lua_music_slot, ZoneAudio,
-        CINEMATIC_MUSIC_RESUME_SECS, LUA_MUSIC_SCHEDULE_SECS,
+        apply_music_suppression, begin_zone_music, first_unplayable, pump_zone_music, slot_holds,
+        take_lua_music_slot, ZoneAudio, CINEMATIC_MUSIC_RESUME_SECS, LUA_MUSIC_SCHEDULE_SECS,
     };
     use kira::sound::PlaybackState;
+
+    /// A kit of `files`, of which only the `present` ones open, picked uniformly per attempt as
+    /// the reference's weighted pick does: every attempt is logged in `tried`.
+    struct Kit {
+        files: usize,
+        present: Vec<usize>,
+        tried: Vec<usize>,
+        /// Picks to make first, then the RNG's.
+        script: Vec<usize>,
+    }
+
+    impl Kit {
+        fn start(&mut self, zone: &mut ZoneAudio, _kit: u32) -> bool {
+            let pick = if self.script.is_empty() {
+                zone.rand() as usize % self.files
+            } else {
+                self.script.remove(0)
+            };
+            self.tried.push(pick);
+            self.present.contains(&pick)
+        }
+    }
+
+    /// The pump's frame loop, as `zone_audio` runs it: a track starts once the deadline passed.
+    fn frames(zone: &mut ZoneAudio, kit: &mut Kit, n: usize, mut playing: impl FnMut() -> bool) {
+        for f in 0..n {
+            let now = f as f64 / 60.0;
+            if zone.next_track_at.is_some_and(|t| now >= t) && !playing() {
+                pump_zone_music(zone, Some(7), |z, k| kit.start(z, k));
+            }
+        }
+    }
+
+    /// The Crossroads' shape: four tracks, one in the install.
+    #[test]
+    fn a_pick_that_lands_on_a_missing_file_is_retried_until_one_plays() {
+        let mut zone = ZoneAudio {
+            next_track_at: Some(0.0),
+            ..ZoneAudio::default()
+        };
+        let mut kit = Kit {
+            files: 4,
+            present: vec![2],
+            tried: vec![],
+            script: vec![0, 1],
+        };
+        frames(&mut zone, &mut kit, 600, || false);
+        assert_eq!(kit.tried.last(), Some(&2), "a later frame found the track");
+        assert!(kit.tried.len() > 1, "the seed's first pick is a miss");
+        assert_eq!(
+            zone.next_track_at, None,
+            "the deadline is spent by the start"
+        );
+        let n = kit.tried.len();
+        frames(&mut zone, &mut kit, 60, || false);
+        assert_eq!(kit.tried.len(), n, "nothing retries once a stream opened");
+    }
+
+    #[test]
+    fn a_zone_change_whose_start_fails_keeps_the_pump_armed() {
+        let mut zone = ZoneAudio::default();
+        let mut kit = Kit {
+            files: 4,
+            present: vec![],
+            tried: vec![],
+            script: vec![0],
+        };
+        begin_zone_music(&mut zone, None, Some(7), 5.0, |z, k| kit.start(z, k));
+        assert_eq!(kit.tried.len(), 1, "the change starts inline");
+        assert_eq!(zone.next_track_at, Some(5.0), "and arms the retry at once");
+
+        kit.present = vec![0, 1, 2, 3];
+        let mut now = 5.0;
+        while zone.next_track_at.is_some() {
+            pump_zone_music(&mut zone, Some(7), |z, k| kit.start(z, k));
+            now += 1.0 / 60.0;
+            assert!(now < 10.0);
+        }
+        assert_eq!(kit.tried.len(), 2, "the next frame's pick played");
+    }
+
+    #[test]
+    fn a_zone_change_that_starts_leaves_nothing_armed() {
+        let mut zone = ZoneAudio {
+            next_track_at: Some(1.0),
+            ..ZoneAudio::default()
+        };
+        let mut kit = Kit {
+            files: 1,
+            present: vec![0],
+            tried: vec![],
+            script: vec![],
+        };
+        begin_zone_music(&mut zone, None, Some(7), 5.0, |z, k| kit.start(z, k));
+        assert_eq!(zone.next_track_at, None);
+        // No row: no music, nothing to retry.
+        begin_zone_music(&mut zone, None, None, 5.0, |_, _| {
+            panic!("no row starts nothing")
+        });
+        assert_eq!(zone.next_track_at, None);
+    }
+
+    /// Everlook: a kit for one phase only. The pump waits for the phase that has one.
+    #[test]
+    fn a_phase_with_no_kit_stays_armed_until_the_other_phase_has_one() {
+        let mut zone = ZoneAudio::default();
+        begin_zone_music(&mut zone, None, Some(0), 3.0, |_, _| {
+            panic!("kit 0 opens nothing")
+        });
+        assert_eq!(zone.next_track_at, Some(3.0));
+        for _ in 0..100 {
+            pump_zone_music(&mut zone, Some(0), |_, _| panic!("kit 0 opens nothing"));
+        }
+        assert_eq!(zone.next_track_at, Some(3.0));
+
+        let mut started = vec![];
+        pump_zone_music(&mut zone, Some(9), |_, k| {
+            started.push(k);
+            true
+        });
+        assert_eq!(started, [9]);
+        assert_eq!(zone.next_track_at, None);
+    }
+
+    #[test]
+    fn a_zone_with_no_music_row_drops_the_deadline() {
+        let mut zone = ZoneAudio {
+            next_track_at: Some(0.0),
+            ..ZoneAudio::default()
+        };
+        pump_zone_music(&mut zone, None, |_, _| panic!("no row starts nothing"));
+        assert_eq!(zone.next_track_at, None);
+    }
+
+    /// The intro wins when it plays; one that fails falls through to the zone track.
+    #[test]
+    fn an_intro_that_fails_falls_through_to_the_zone_track() {
+        let intro = benilla_formats::ZoneIntroEntry {
+            id: 1,
+            sound_id: 11,
+            priority: 0,
+            min_delay_minutes: 10,
+        };
+        let mut zone = ZoneAudio::default();
+        let mut asked = vec![];
+        begin_zone_music(&mut zone, Some(&intro), Some(7), 0.0, |_, k| {
+            asked.push(k);
+            k == 7
+        });
+        assert_eq!(asked, [11, 7]);
+        assert_eq!(zone.next_track_at, None);
+        assert!(
+            !zone.intro_last.contains_key(&1),
+            "a failed intro is not stamped"
+        );
+    }
+
+    #[test]
+    fn a_missing_path_is_reported_once_across_retries() {
+        let mut zone = ZoneAudio::default();
+        let hits = (0..500)
+            .filter(|_| first_unplayable(&mut zone, "Sound\\Music\\a.mp3"))
+            .count();
+        assert_eq!(hits, 1);
+        assert!(first_unplayable(&mut zone, "Sound\\Music\\b.mp3"));
+    }
 
     #[test]
     fn a_cinematic_cuts_the_music_and_brings_it_back_three_seconds_later() {
