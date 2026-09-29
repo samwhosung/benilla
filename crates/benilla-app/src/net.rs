@@ -960,8 +960,9 @@ pub(crate) enum ClientCommand {
         toggles: u8,
     },
     /// `CMSG_PET_ACTION`: `packed` is the slot's word as the server sent it, dispatched on its type
-    /// byte; `target_guid` is our selection (`0x4bd212`). The server does not reply, so the
-    /// caller applies the change locally first.
+    /// byte; `target_guid` is our selection (`0x4bd212`), or the player under the pet book's
+    /// `onSelf` (`0x4b4345`). The server does not reply, so the caller applies the change locally
+    /// first.
     PetAction {
         pet_guid: u64,
         packed: u32,

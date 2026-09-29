@@ -177,21 +177,6 @@ pub(super) fn drain_go_openers(
     }
 }
 
-/// Applies the self-cast modifier, `UseAction`'s `onSelf` (`SELFACTIONBUTTON1`-`12`): the caster
-/// replaces the selection as the bind candidate, guid and store both, the pair the autoSelfCast
-/// fallback swaps (`0x6e53d7`). Where `UseAction 0x4e5ee0` applies `onSelf` is untraced; this
-/// fills `ArmCast 0x6e5250`'s explicit guid (`0x6e5393`); a forced-self leg would look the same.
-fn self_bound<'a>(
-    mut ctx: cast_target::CastContext<'a>,
-    press: benilla_ui::script::ActionUse,
-) -> cast_target::CastContext<'a> {
-    if press.on_self {
-        ctx.selection_guid = ctx.self_guid;
-        ctx.rel.target_store = ctx.rel.self_store;
-    }
-    ctx
-}
-
 /// What a `UseAction` press reads and writes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ActionPress<'w, 's> {
@@ -279,7 +264,7 @@ pub(crate) fn use_action(
             );
             ladder.send_spell(
                 b.action,
-                &self_bound(targeting.context(), press),
+                &targeting.context().self_bound(press.on_self),
                 press.on_self,
             );
         }

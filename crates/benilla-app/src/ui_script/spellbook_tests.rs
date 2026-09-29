@@ -195,7 +195,7 @@ fn shipped_spellbook_drives_end_to_end() {
     s.mouse_button(x1, y1, "LeftButton", true);
     s.mouse_button(x1, y1, "LeftButton", false);
     assert!(s.errors().is_empty(), "click errors: {:?}", s.errors());
-    assert_eq!(s.take_spell_casts(), vec![133]);
+    assert_eq!(s.take_spell_casts(), vec![(133, false)]);
     assert!(s.cursor_payload().is_none(), "a cast never picks up");
 
     s.set_modifiers(true, false, false);
@@ -536,7 +536,7 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
     // ── The clicks ────────────────────────────────────────────────────────────────────────────
     click(&mut s, "SpellButton1", "LeftButton");
     assert!(s.errors().is_empty(), "click errors: {:?}", s.errors());
-    assert_eq!(s.take_pet_spell_casts(), vec![2649]);
+    assert_eq!(s.take_pet_spell_casts(), vec![(2649, false)]);
     assert!(s.take_spell_casts().is_empty());
     assert!(s.take_pet_spell_autocasts().is_empty());
 
@@ -710,7 +710,11 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
         "right-click errors: {:?}",
         s.errors()
     );
-    assert_eq!(s.take_spell_casts(), vec![133], "a right-click casts");
+    assert_eq!(
+        s.take_spell_casts(),
+        vec![(133, false)],
+        "a right-click casts"
+    );
     assert_eq!(
         body(&s),
         "",
@@ -719,7 +723,7 @@ fn the_macro_editor_takes_a_shift_click_and_only_a_shift_click() {
     assert!(s.cursor_payload().is_none());
 
     click(&mut s, "SpellButton1", "LeftButton");
-    assert_eq!(s.take_spell_casts(), vec![133]);
+    assert_eq!(s.take_spell_casts(), vec![(133, false)]);
     assert_eq!(body(&s), "");
 
     // ── Shift-click appends a whole `/cast` line and never casts ──────────────────────────────

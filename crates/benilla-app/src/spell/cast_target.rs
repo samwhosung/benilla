@@ -131,6 +131,20 @@ pub(crate) struct CastContext<'a> {
     pub(crate) self_move_flags: u32,
 }
 
+impl CastContext<'_> {
+    /// Applies the self-cast modifier, `onSelf`: the caster replaces the selection as the bind
+    /// candidate, guid and store both, the pair the autoSelfCast fallback swaps (`0x6e53d7`). It
+    /// is the explicit guid `CastSpell` and `CastSpellByName` hand `ArmCast 0x6e5250` (`0x4b4345`,
+    /// `0x4b4afa`, bound at `0x6e5393`); where `UseAction 0x4e5ee0` applies its own is untraced.
+    pub(crate) fn self_bound(mut self, on_self: bool) -> Self {
+        if on_self {
+            self.selection_guid = self.self_guid;
+            self.rel.target_store = self.rel.self_store;
+        }
+        self
+    }
+}
+
 /// Positions and combat reaches for the pre-send range refusal: the client's cast runs
 /// `CanTargetUnit 0x6e4440` and `IsTargetInRange 0x6e47b0` before the commit, so an out-of-range
 /// press refuses locally and none of the commit tail runs.

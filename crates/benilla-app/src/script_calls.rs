@@ -49,8 +49,8 @@ pub(crate) fn apply_script_calls(
             ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
             ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
             ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
-            ScriptCall::CastSpell(spell_id) => {
-                crate::ui_spellbook::cast_spell(&mut appliers.p3(), spell_id);
+            ScriptCall::CastSpell { spell_id, on_self } => {
+                crate::ui_spellbook::cast_spell(&mut appliers.p3(), spell_id, on_self);
             }
             ScriptCall::CastShapeshiftForm(spell_id) => {
                 crate::ui_shapeshift::cast_form(&mut appliers.p3(), spell_id);
@@ -65,8 +65,8 @@ pub(crate) fn apply_script_calls(
                 appliers.p5().use_container_item(script, bag, slot);
             }
             ScriptCall::UseInventoryItem(id) => appliers.p5().use_inventory_item(script, id),
-            ScriptCall::CastPetSpell(spell_id) => {
-                crate::ui_pet_book::cast_pet_spell(&mut appliers.p6(), spell_id);
+            ScriptCall::CastPetSpell { spell_id, on_self } => {
+                crate::ui_pet_book::cast_pet_spell(&mut appliers.p6(), spell_id, on_self);
             }
             ScriptCall::PetAction(slot) => appliers.p6().press_slot(slot),
             ScriptCall::PetOrder(packed) => appliers.p6().order(packed),
@@ -123,7 +123,7 @@ mod tests {
     use benilla_protocol::messages::{
         ActionButton, GroupMemberEntry, ACTION_KIND_MACRO, ACTION_KIND_SPELL,
     };
-    use benilla_ui::script::{SpellBookState, SpellSlotView, SpellTabView};
+    use benilla_ui::script::{PetBookState, SpellBookState, SpellSlotView, SpellTabView};
     use bevy::ecs::system::RunSystemOnce;
     use crossbeam_channel::Receiver;
 
@@ -350,6 +350,143 @@ mod tests {
             .iter()
             .map(|e| e.key)
             .collect()
+    }
+
+    /// `CastSpellByName(name, onSelf)` (`0x4b4ab0`) and `CastSpell(slot, book, onSelf)` (`0x4b42f0`)
+    /// swap the target guid for the active player's (`0x4b4afa`, `0x4b4345`) when
+    /// `GetBoolOrDefault` reads the flag true, so the cast goes to us whoever is selected, and the
+    /// selection stays where it was. Without the flag it goes to the selection.
+    #[test]
+    fn on_self_casts_at_the_player_and_leaves_the_selection() {
+        for (lua, target, selection) in [
+            (r#"CastSpellByName("Heal", 1)"#, ME, OLD),
+            (r#"CastSpellByName("Heal", "yes")"#, ME, OLD),
+            (r#"CastSpell(1, "spell", 1)"#, ME, OLD),
+            (
+                r#"TargetUnit("party1") CastSpellByName("Heal", 1)"#,
+                ME,
+                NEW,
+            ),
+            (r#"CastSpellByName("Heal")"#, OLD, OLD),
+            (r#"CastSpellByName("Heal", 0.5)"#, OLD, OLD),
+            (r#"CastSpellByName("Heal", "false")"#, OLD, OLD),
+            (r#"CastSpell(1, "spell")"#, OLD, OLD),
+            (r#"CastSpell(1, "spell", "0")"#, OLD, OLD),
+        ] {
+            let mut f = frame(true);
+            run(&mut f, lua);
+            assert_eq!(casts(&f), vec![(HEAL, Some(target))], "{lua}");
+            assert_eq!(selected(&f), Some(selection), "{lua}");
+        }
+    }
+
+    /// Power Word: Fortitude's word, an assist unit (implicit target 21), in the catalog and
+    /// the book.
+    const FORTITUDE: u32 = 1243;
+
+    fn with_fortitude(f: &mut Frame) {
+        let world = f.app.world_mut();
+        let display = benilla_formats::SpellDisplay {
+            implicit_target_a1: 21,
+            ..Default::default()
+        };
+        world.insert_resource(crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays([(FORTITUDE, display)].into()),
+            ..crate::ui_action::Spells::empty_for_tests()
+        });
+        world
+            .non_send_resource_mut::<UiScript>()
+            .set_spellbook(SpellBookState {
+                tabs: vec![SpellTabView {
+                    name: "Priest".into(),
+                    texture: None,
+                    offset: 0,
+                    num_spells: 1,
+                }],
+                slots: vec![SpellSlotView {
+                    spell_id: FORTITUDE,
+                    name: "Fortitude".into(),
+                    ..Default::default()
+                }],
+            });
+    }
+
+    /// The bind runs the ordinary relation chain over the player: with a unit we cannot assist
+    /// selected and `autoSelfCast` off, the plain call binds nothing (the cursor comes up), while
+    /// `onSelf` binds us; with a friendly player selected the plain call binds that player.
+    #[test]
+    fn on_self_binds_the_player_where_the_selection_is_not_assistable() {
+        for (selected_template, lua, target) in [
+            (FOE, r#"CastSpellByName("Fortitude")"#, None),
+            (FOE, r#"CastSpellByName("Fortitude", 1)"#, Some(ME)),
+            (FOE, r#"CastSpell(1, "spell", 1)"#, Some(ME)),
+            (FRIEND, r#"CastSpellByName("Fortitude")"#, Some(OLD)),
+            (FRIEND, r#"CastSpellByName("Fortitude", 1)"#, Some(ME)),
+        ] {
+            let mut f = frame(true);
+            // `CanAssist` passes a friendly player-controlled unit (`UNIT_FLAG_PLAYER_CONTROLLED`).
+            with_factions(&mut f, selected_template, &[(FLAGS, 0x8)]);
+            with_fortitude(&mut f);
+            run(&mut f, lua);
+            let sent: Vec<_> = target.into_iter().map(|t| (FORTITUDE, Some(t))).collect();
+            assert_eq!(casts(&f), sent, "{lua} at template {selected_template}");
+            assert_eq!(selected(&f), Some(OLD), "{lua}");
+        }
+    }
+
+    /// The pet's guid, and the pet book's Growl (`CMSG_PET_ACTION`'s type-1 word, `0x4b34ce`).
+    const PET: u64 = 0x50;
+    const GROWL: u32 = 2649;
+
+    /// The `CMSG_PET_ACTION`s sent, as `(pet, word, target)`.
+    fn pet_actions(f: &Frame) -> Vec<(u64, u32, u64)> {
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::PetAction {
+                    pet_guid,
+                    packed,
+                    target_guid,
+                } => Some((pet_guid, packed, target_guid)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `0x4b3300`'s pet fork sends the guid it was handed as the order's target (`0x4b34ce`), so
+    /// `CastSpell(slot, "pet", 1)` aims the pet's spell at the player, not the selection.
+    #[test]
+    fn a_pet_book_cast_on_self_aims_at_the_player() {
+        for (lua, target) in [
+            (r#"CastSpell(1, "pet", 1)"#, ME),
+            (r#"CastSpell(1, "pet", "on")"#, ME),
+            (r#"CastSpell(1, "pet")"#, OLD),
+            (r#"CastSpell(1, "pet", "0")"#, OLD),
+        ] {
+            let mut f = frame(true);
+            f.app
+                .world_mut()
+                .resource_mut::<crate::ui_pet::PetBar>()
+                .spells
+                .pet_guid = PET;
+            f.app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .set_pet_book(PetBookState {
+                    token: Some("PET".into()),
+                    slots: vec![SpellSlotView {
+                        spell_id: GROWL,
+                        name: "Growl".into(),
+                        ..Default::default()
+                    }],
+                });
+            run(&mut f, lua);
+            assert_eq!(
+                pet_actions(&f),
+                vec![(PET, 0x0100_0000 | GROWL, target)],
+                "{lua}"
+            );
+            assert_eq!(selected(&f), Some(OLD), "{lua}");
+        }
     }
 
     /// `/target` then `/cast`: `TargetUnit` commits through `SetSelection 0x493540` before it

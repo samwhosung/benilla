@@ -33,10 +33,12 @@ pub enum ScriptCall {
     SpellStopTargeting,
     /// `SpellStopCasting()` (`0x6e6e80`), made with something to stop.
     SpellStopCasting,
-    /// `CastSpell(id, "spell")` and `CastSpellByName`, through `0x4b3300`'s player leg.
-    CastSpell(u32),
-    /// `CastSpell(id, "pet")`, `0x4b3300`'s `CMSG_PET_ACTION` fork (`0x4b34ce`).
-    CastPetSpell(u32),
+    /// `CastSpell(id, "spell", onSelf)` and `CastSpellByName(name, onSelf)`, through `0x4b3300`'s
+    /// player leg; `onSelf` swaps the target guid for the active player's (`0x4b4afa`, `0x4b4345`).
+    CastSpell { spell_id: u32, on_self: bool },
+    /// `CastSpell(id, "pet", onSelf)`, `0x4b3300`'s `CMSG_PET_ACTION` fork (`0x4b34ce`), with the
+    /// same guid swap.
+    CastPetSpell { spell_id: u32, on_self: bool },
     /// `CastShapeshiftForm(index)` (`0x4b4810`), as the form's spell.
     CastShapeshiftForm(u32),
     /// `UseAction(slot, …)` (`0x4e7140` → `0x4e5ee0`); a macro slot runs its lines inside it.

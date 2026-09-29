@@ -168,16 +168,17 @@ fn slot_view(
     }
 }
 
-/// `CastSpell(id, "pet")`: cancel first, as on the bar (`0x4b33af`-`0x4b3461`), a spell whose
-/// aura is on the pet sending `CMSG_PET_CANCEL_AURA` (0x26B) instead of the order; else
-/// `CMSG_PET_ACTION` at the selection as the calls before it left it.
-pub(crate) fn cast_pet_spell(p: &mut crate::ui_pet::PetPress, spell_id: u32) {
+/// `CastSpell(id, "pet", onSelf)`: cancel first, as on the bar (`0x4b33af`-`0x4b3461`), a spell
+/// whose aura is on the pet sending `CMSG_PET_CANCEL_AURA` (0x26B) instead of the order; else
+/// `CMSG_PET_ACTION` at the selection as the calls before it left it, or with `onSelf` at the
+/// player.
+pub(crate) fn cast_pet_spell(p: &mut crate::ui_pet::PetPress, spell_id: u32, on_self: bool) {
     let pet_guid = p.bar.spells.pet_guid;
     if pet_guid == 0 {
         debug!("ui_pet_book: dropping a queued pet book cast — the bar is gone");
         return;
     }
-    let target_guid = p.selection.guid.unwrap_or(0);
+    let target_guid = p.spell_target(on_self);
     let display = p.spells.as_ref().and_then(|s| s.catalog.get(spell_id));
     if let (Some(d), Some(store)) = (display, p.pet.store(pet_guid)) {
         if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {

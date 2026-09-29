@@ -43,6 +43,14 @@ impl PetPress<'_, '_> {
         }
     }
 
+    /// The guid the pet book's `CastSpell(id, "pet", onSelf)` aims at: the selection, or with
+    /// `onSelf` the active player (`0x4b4345`). A zero guid falls back to the selection
+    /// (`0x4b34af`), so a missing player leaves it.
+    pub(crate) fn spell_target(&self, on_self: bool) -> u64 {
+        let caster = if on_self { self.pet.self_guid.0 } else { None };
+        caster.or(self.selection.guid).unwrap_or(0)
+    }
+
     /// `PetAttack` and the other one-shot orders, as their slot's packed word. A slot press and
     /// an order are one press: both reach the reference's one dispatcher (`0x4bd1d0`). The slot
     /// number only labels logs.
