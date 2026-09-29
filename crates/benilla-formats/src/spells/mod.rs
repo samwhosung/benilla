@@ -104,6 +104,9 @@ const COL_ATTRIBUTES: usize = 6;
 const COL_ATTRIBUTES_EX: usize = 7;
 const COL_ATTRIBUTES_EX2: usize = 8;
 const COL_ATTRIBUTES_EX3: usize = 9;
+/// `AttributesEx4` (`+0x28`), the dword after `AttributesEx3`: the pet-bar spell arm tests its
+/// `0x20` at `0x4bd355`.
+const COL_ATTRIBUTES_EX4: usize = 10;
 const COL_SPEED: usize = 37;
 const COL_EFFECT_1: usize = 61;
 /// `EffectMiscValue[0]`, `61 + 15 × 3`: the 16th `[3]` array from `Effect`.
@@ -176,6 +179,10 @@ const COL_EFFECT_ITEM_TYPE_1: usize = 103;
 
 /// `SPELL_ATTR3_NORMAL_RANGED_ATTACK`: damage floats melee white (`0x6128b0`).
 const ATTR_EX3_NORMAL_RANGED_ATTACK: u32 = 0x8000;
+/// `SPELL_ATTR_EX4_ALLOW_CLIENT_TARGETING` (vmangos `SpellDefines.h:953`): a pet-bar press casts
+/// through the generic entry `0x6e4b60` (`0x4bd355`, `0x4bd378`) instead of sending the pet
+/// action.
+const ATTR_EX4_ALLOW_CLIENT_TARGETING: u32 = 0x20;
 /// `SPELL_ATTR_EX3_NO_CASTING_BAR_TEXT` (vmangos `SpellDefines.h:907`).
 const ATTR_EX3_NO_CASTING_BAR_TEXT: u32 = 0x4;
 /// `AttributesEx3` bit 13: `0x6e7595` tests it as `0x20` in the word's second byte.
@@ -485,6 +492,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 attributes_ex: u32_at(r, COL_ATTRIBUTES_EX).unwrap_or(0),
                 attributes_ex2: u32_at(r, COL_ATTRIBUTES_EX2).unwrap_or(0),
                 attributes_ex3: u32_at(r, COL_ATTRIBUTES_EX3).unwrap_or(0),
+                attributes_ex4: u32_at(r, COL_ATTRIBUTES_EX4).unwrap_or(0),
                 school: u32_at(r, COL_SCHOOL).unwrap_or(0),
                 mechanic: u32_at(r, COL_MECHANIC).unwrap_or(0),
                 effect_mechanic: std::array::from_fn(|i| {

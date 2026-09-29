@@ -38,6 +38,8 @@ pub struct SpellDisplay {
     /// `AttributesEx3` (column 9). Bits `0x400` and `0x1000000` limit the equipped-item search to
     /// the main or the off hand (`0x5f0c50`).
     pub attributes_ex3: u32,
+    /// `AttributesEx4` (column 10, `+0x28`).
+    pub attributes_ex4: u32,
     /// `SpellFamilyName` (column 160): `GetSpellModifiers` (`0x6e6b30`) applies nothing unless it
     /// is nonzero and equals the local player's class family (`[0xcecaac]`, `0x6e6b46`).
     pub spell_family: u32,
@@ -208,6 +210,7 @@ impl Default for SpellDisplay {
             attributes_ex2: 0,
             modal_next_spell: 0,
             attributes_ex3: 0,
+            attributes_ex4: 0,
             spell_family: 0,
             spell_family_flags: 0,
             prevention_type: 0,
@@ -353,6 +356,12 @@ impl SpellDisplay {
     /// (`0x6e593b`), which drives the shooter's Load/Hold idle. Throw is ranged, not auto-repeat.
     pub fn auto_repeat(&self) -> bool {
         self.attributes_ex2 & ATTR_EX2_AUTO_REPEAT != 0
+    }
+
+    /// `AttributesEx4 & 0x20` (`0x4bd355`): a pet-bar spell press takes the generic cast entry
+    /// `0x6e4b60` and returns, sending no pet action and starting no GCD of its own.
+    pub fn allows_client_targeting(&self) -> bool {
+        self.attributes_ex4 & ATTR_EX4_ALLOW_CLIENT_TARGETING != 0
     }
 
     /// `AttributesEx3 & 0x400000`: a running auto-repeat with this bit ends when any new cast

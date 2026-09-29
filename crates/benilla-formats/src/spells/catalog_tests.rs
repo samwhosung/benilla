@@ -1448,3 +1448,48 @@ fn real_spell_family_columns_carry_the_modifier_gate() {
         assert_eq!(set, bits, "{id} {:?} family bits", d.name);
     }
 }
+
+/// The pet bar's GCD starts from the pressed spell's `StartRecoveryCategory`/`StartRecoveryTime`
+/// pair (`0x6e2de0`), which every learnable pet ability carries as category 133, and its press
+/// route branches on `AttributesEx4 & 0x20` (`0x4bd355`), the dword at `+0x28`, column 10.
+#[test]
+fn real_pet_spells_carry_the_gcd_pair_and_ex4_reads_column_10() {
+    let data = crate::wow_data_or_skip!();
+    let mut chain = crate::open_chain(&data).expect("open chain");
+    let cat = load_spell_catalog(&mut chain).expect("load Spell/SpellIcon");
+
+    // (id, name, startRecoveryCategory, startRecoveryTime): the ranks a pet learns, one per
+    // ability, with Claw's first rank and every Firebolt rank on 1 s and the rest on 1.5 s.
+    for (id, name, gcd_category, gcd_ms) in [
+        (1082u32, "Claw", 133u32, 1000u32),
+        (3010, "Claw", 133, 1500),
+        (17258, "Bite", 133, 1500),
+        (3110, "Firebolt", 133, 1000),
+        (11763, "Firebolt", 133, 1000),
+        (7814, "Lash of Pain", 133, 1500),
+        (3716, "Torment", 133, 1500),
+        (17735, "Suffering", 133, 1500),
+    ] {
+        let d = cat.get(id).unwrap_or_else(|| panic!("{name} {id}"));
+        assert_eq!(d.name, name);
+        assert_eq!(
+            (d.start_recovery_category, d.start_recovery_ms),
+            (gcd_category, gcd_ms),
+            "{name} {id}"
+        );
+        assert!(
+            !d.allows_client_targeting(),
+            "{name} {id} is an ordinary press"
+        );
+    }
+    // Bite's own timer is its category's, beside the GCD.
+    let bite = cat.get(17258).expect("Bite");
+    assert_eq!((bite.category, bite.category_recovery_ms), (19, 10_000));
+
+    // The rows with the bit are Flamestrike and Rain of Fire, the ground-targeted casts.
+    for id in [11829u32, 19474] {
+        let d = cat.get(id).expect("a ground-targeted row");
+        assert_eq!(d.attributes_ex4, 0x20, "{} {id}", d.name);
+        assert!(d.allows_client_targeting());
+    }
+}
