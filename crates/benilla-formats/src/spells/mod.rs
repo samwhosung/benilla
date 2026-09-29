@@ -20,6 +20,7 @@ mod duration;
 mod forms;
 mod radius;
 mod ranges;
+mod soft_float;
 mod tokens;
 
 pub use cast_times::{load_spell_cast_times, SpellCastTime, SpellCastTimeCatalog};
@@ -34,7 +35,8 @@ pub use ranges::{
     load_spell_ranges, min_max_range, SpellRange, SpellRangeCatalog, COMBAT_REACH_ADD,
     MELEE_RANGE_FLOOR, ON_NEXT_SWING_RANGE,
 };
-pub use tokens::{substitute, TokenContext, TokenNumber};
+pub use soft_float::modify as soft_modify;
+pub use tokens::{substitute, SpellMods, TokenContext, TokenNumber};
 
 use std::collections::HashMap;
 

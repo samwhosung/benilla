@@ -1,17 +1,23 @@
 //! The spell-description `$`-token engine the 1.12 client runs over `Spell.dbc` description and
-//! aura text (`0x5075f0` → `0x507710`), effect values from `0x6e3800`. Values are the flat term:
-//! the reference's per-level terms (`DicePerLevel·max(0, casterLevel − baseLevel)` on the dice,
-//! and `RealPointsPerLevel`) are not applied. Values print unsigned, as the client's do, and an
-//! `EffectAmplitude` of 0 is the reference's 5000 ms period (`$t`, `$o`). `$g` always takes the
-//! first form, as there is no gender input, and `$u` and any unknown or unresolved token
-//! stay raw.
+//! aura text (`0x5075f0` → `0x507710`), effect values from `GetEffectPoints 0x6e3800`. Values are
+//! the flat term: the reference's per-level terms (`DicePerLevel·max(0, casterLevel − baseLevel)`
+//! on the dice, and `RealPointsPerLevel`) are not applied. Values print unsigned, as the client's
+//! do. `$g` always takes the first form, as there is no gender input, and `$u` and any unknown or
+//! unresolved token stay raw.
 
+use super::soft_float;
 use super::{SpellDisplay, SpellDurationCatalog, SpellRadiusCatalog, SpellRangeCatalog};
 
-type IntModifier<'a> = &'a dyn Fn(&SpellDisplay, u8, i32) -> i32;
-type FloatModifier<'a> = &'a dyn Fn(&SpellDisplay, u8, f32) -> f32;
+/// The caster's spell-modifier appliers over its tables (`GetSpellModifiers 0x6e6b30`): the
+/// integer `0x6e6af0`, the FPU float `0x6e6bf0` and the software float `0x6e6c30`
+/// ([`super::soft_modify`]), each returning `value` unchanged when no modifier matches.
+pub trait SpellMods {
+    fn apply_int(&self, d: &SpellDisplay, op: u8, value: i32) -> i32;
+    fn apply_float(&self, d: &SpellDisplay, op: u8, value: f32) -> f32;
+    fn apply_soft(&self, d: &SpellDisplay, op: u8, value: f32) -> f32;
+}
 
-/// A value supplied to a spell-description `GlobalStrings` template.
+/// A value supplied to a `%` hole.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TokenNumber {
     Int(i64),
@@ -24,40 +30,73 @@ pub struct TokenContext<'a> {
     pub radii: &'a SpellRadiusCatalog,
     pub ranges: Option<&'a SpellRangeCatalog>,
     pub lookup: &'a dyn Fn(u32) -> Option<&'a SpellDisplay>,
-    /// The caller's live spell-modifier tables; absent for contexts without a caster.
-    pub modify_int: Option<IntModifier<'a>>,
-    pub modify_float: Option<FloatModifier<'a>>,
+    /// The caster's live spell-modifier tables; absent for contexts without a caster.
+    pub mods: Option<&'a dyn SpellMods>,
+    /// `0x5075f0`'s last argument, set only by the aura tooltip `0x52f880` (`52f940`): the effect
+    /// points skip their modifiers (`6e3925`), and so does the duration of `$d` and `$o`
+    /// (`0x6ea000`'s flag, pushed at `507ccd` and `507917`).
+    pub unmodified_points: bool,
     /// The `$z` token: the home-bind area's name, from `SMSG_BINDPOINTUPDATE`'s area id through
     /// `AreaTable.dbc`; `None` leaves the token raw.
     pub home_area: Option<&'a str>,
-    /// Resolves a `GlobalStrings` key and fills its numeric holes. `None` leaves the token raw.
-    pub text: &'a dyn Fn(&str, &[TokenNumber]) -> Option<String>,
+    /// `GetText 0x703bf0`: a `GlobalStrings` template by key. `None` leaves the token raw.
+    pub global: &'a dyn Fn(&str) -> Option<String>,
+    /// `SStrPrintf 0x64a7f0`: a template's `%` holes filled, as the CRT formats them.
+    pub printf: &'a dyn Fn(&str, &[TokenNumber]) -> String,
 }
 
-/// The effect's `(min, max)`, flat term only (`0x6e3800`).
-fn effect_bounds(d: &SpellDisplay, slot: usize, ctx: &TokenContext) -> (i64, i64) {
-    let base = i64::from(*d.effect_base_points.get(slot).unwrap_or(&0));
-    let dice = i64::from(*d.effect_base_dice.get(slot).unwrap_or(&0));
-    let sides = i64::from(*d.effect_die_sides.get(slot).unwrap_or(&0));
-    let (mut min, mut max) = ((base + dice) as f32, (base + sides * dice) as f32);
-    // `GetEffectPoints 0x6e3800`: all effects (op 8), then its effect/aura-specific ops.
-    for op in [Some(8), damage_op(d, slot), aura_op(d, slot)]
-        .into_iter()
-        .flatten()
-    {
-        min = modify_float(ctx, d, op, min);
-        max = modify_float(ctx, d, op, max);
+/// A `GlobalStrings` template, filled.
+fn keyed(ctx: &TokenContext, key: &str, args: &[TokenNumber]) -> Option<String> {
+    Some((ctx.printf)(&(ctx.global)(key)?, args))
+}
+
+/// `"%.1f"` (`0x84f398`).
+fn tenths(ctx: &TokenContext, v: f32) -> String {
+    (ctx.printf)("%.1f", &[TokenNumber::Float(f64::from(v))])
+}
+
+/// `0x6e3b80`'s verdict on an effect: whether its points round to whole numbers (its out-byte)
+/// and whether it takes a damage op (its return).
+fn classify(effect: u32, aura: u32) -> (bool, bool) {
+    match effect {
+        2 | 9 | 17 | 31 | 58 | 121 => (true, true),
+        6 | 27 | 35 | 119 | 128 | 129 => match aura {
+            3 | 15 | 43 | 53 | 89 => (true, true),
+            8 | 20 | 21 | 24 | 62 | 63 | 64 | 162 => (true, false),
+            _ => (false, false),
+        },
+        8 | 10 | 30 | 62 | 67 | 75 => (true, false),
+        _ => (false, false),
     }
-    (min.trunc() as i64, max.trunc() as i64)
 }
 
-fn damage_op(d: &SpellDisplay, slot: usize) -> Option<u8> {
-    let effect = d.effects[slot];
+/// `GetEffectPoints 0x6e3800`: the effect's `(min, max)` as the soft floats it returns. The
+/// bounds start as the flat term, `BasePoints + BaseDice` and `BasePoints + DieSides·BaseDice`
+/// (the per-level terms at `6e3863`-`6e391a` are not applied). Unless the context is the aura
+/// tooltip's, op 8, then a damage effect's op (22 for aura 3, else 0), then the aura's
+/// ([`aura_op`]) apply to each bound through `0x6e6c30`. The tail quantizes both to 1/128, and a
+/// rounding effect floors the minimum and ceils the maximum (`6e3a67`).
+fn effect_points(d: &SpellDisplay, slot: usize, ctx: &TokenContext) -> (f32, f32) {
+    let base = d.effect_base_points[slot];
+    let dice = d.effect_base_dice[slot];
+    let sides = d.effect_die_sides[slot];
+    let mut min = soft_float::int_to_float(base.wrapping_add(dice));
+    let mut max = soft_float::int_to_float(base.wrapping_add(sides.wrapping_mul(dice)));
     let aura = d.effect_apply_aura[slot];
-    let direct = matches!(effect, 2 | 9 | 17 | 31 | 58 | 121);
-    let aura_damage =
-        matches!(effect, 6 | 27 | 35 | 119 | 128 | 129) && matches!(aura, 3 | 15 | 43 | 53 | 89);
-    (direct || aura_damage).then_some(if aura == 3 { 22 } else { 0 })
+    let (rounds, damage) = classify(d.effects[slot], aura);
+    if let Some(mods) = ctx.mods.filter(|_| !ctx.unmodified_points) {
+        let damage_op = damage.then_some(if aura == 3 { 22 } else { 0 });
+        for op in [Some(8), damage_op, aura_op(d, slot)].into_iter().flatten() {
+            min = mods.apply_soft(d, op, min);
+            max = mods.apply_soft(d, op, max);
+        }
+    }
+    let (min, max) = (soft_float::quantize(min), soft_float::quantize(max));
+    if rounds {
+        soft_float::floor_ceil(min, max)
+    } else {
+        (min, max)
+    }
 }
 
 /// The aura's own op (`0x6e397e`, jump table `0x6e3ab8` over the byte table `0x6e3ad0`, indexed
@@ -75,30 +114,31 @@ fn aura_op(d: &SpellDisplay, slot: usize) -> Option<u8> {
 }
 
 fn modify_int(ctx: &TokenContext, d: &SpellDisplay, op: u8, value: i32) -> i32 {
-    ctx.modify_int.map_or(value, |f| f(d, op, value))
+    ctx.mods.map_or(value, |m| m.apply_int(d, op, value))
 }
 
 fn modify_float(ctx: &TokenContext, d: &SpellDisplay, op: u8, value: f32) -> f32 {
-    ctx.modify_float.map_or(value, |f| f(d, op, value))
+    ctx.mods.map_or(value, |m| m.apply_float(d, op, value))
 }
 
-/// A spell's duration in ms, flat term only. `GetSpellDuration 0x6ea000` applies op 1
-/// after resolving and capping the DBC row; `$d` and `$o` both call it.
+/// A spell's duration in ms, flat term only. `GetSpellDuration 0x6ea000` applies op 1 after
+/// resolving and capping the DBC row, unless its flag says not to (`6ea064`); `$d` and `$o` both
+/// call it.
 fn duration_ms(d: &SpellDisplay, ctx: &TokenContext) -> Option<i64> {
     let row = ctx.durations.get(d.duration_index)?;
-    Some(i64::from(modify_int(
-        ctx,
-        d,
-        1,
-        row.base_ms.min(row.max_ms),
-    )))
+    let resolved = row.base_ms.min(row.max_ms);
+    Some(i64::from(if ctx.unmodified_points {
+        resolved
+    } else {
+        modify_int(ctx, d, 1, resolved)
+    }))
 }
 
 /// The duration formatter at `0x52f980` selects the integer ladder (`0x52fa50`) for whole
 /// units and the floating ladder (`0x52fbd0`) for fractional units. Both use the largest unit.
 fn duration_text(ms: i64, ctx: &TokenContext) -> Option<String> {
     if ms < 0 {
-        return (ctx.text)("SPELL_DURATION_UNTIL_CANCELLED", &[]);
+        return keyed(ctx, "SPELL_DURATION_UNTIL_CANCELLED", &[]);
     }
     let (unit, unit_ms) = if ms < 60_000 {
         ("SEC", 1_000)
@@ -111,7 +151,8 @@ fn duration_text(ms: i64, ctx: &TokenContext) -> Option<String> {
     };
     let amount = ms as f64 / unit_ms as f64;
     if (amount - amount.trunc()).abs() >= 0.01 {
-        return (ctx.text)(
+        return keyed(
+            ctx,
             &format!("SPELL_DURATION_{unit}"),
             &[TokenNumber::Float(amount)],
         );
@@ -119,38 +160,99 @@ fn duration_text(ms: i64, ctx: &TokenContext) -> Option<String> {
     let n = ms / unit_ms;
     let key = format!("INT_SPELL_DURATION_{unit}");
     (n != 1)
-        .then(|| (ctx.text)(&format!("{key}_P1"), &[TokenNumber::Int(n)]))
+        .then(|| keyed(ctx, &format!("{key}_P1"), &[TokenNumber::Int(n)]))
         .flatten()
-        .or_else(|| (ctx.text)(&key, &[TokenNumber::Int(n)]))
+        .or_else(|| keyed(ctx, &key, &[TokenNumber::Int(n)]))
 }
 
-/// `INT_SPELL_POINTS_SPREAD_TEMPLATE` ("%d to %d"), not the float `SPELL_POINTS_SPREAD_TEMPLATE`,
-/// which would print "14.0 to 22.0" where Fireball rank 1 says "14 to 22".
-fn spread_text(min: i64, max: i64, ctx: &TokenContext) -> Option<String> {
-    (ctx.text)(
-        "INT_SPELL_POINTS_SPREAD_TEMPLATE",
-        &[TokenNumber::Int(min), TokenNumber::Int(max)],
-    )
-}
-
-/// Trim a float to the client's terse style (no trailing zeros: 2.5 → "2.5", 3.0 → "3").
-fn trim_float(v: f64) -> String {
-    if (v - v.round()).abs() < 1e-9 {
-        format!("{}", v.round() as i64)
+/// The expander's integer read of a scaled bound (`5079cc`-`507b04`): the bound truncated, and
+/// whether it counts as whole, within 0.001 (`[0x801360]`) of its floor or its ceiling. A bound
+/// just under its ceiling reads as the ceiling.
+fn whole(v: f32) -> (i32, bool) {
+    let x = f64::from(v);
+    let eps = f64::from(0.001f32);
+    let truncated = x.floor() as i32;
+    let near_ceil = x.ceil() - x < eps;
+    if x - x.floor() < eps || near_ceil {
+        let up = near_ceil && truncated != x.ceil() as i32;
+        (truncated + i32::from(up), true)
     } else {
-        format!("{v:.1}")
+        (truncated, false)
     }
 }
 
-/// The 1.12 token formatter prints fractional points with `%.1f` for `$S`, `$m`, and `$M`.
-/// Lowercase `$s` takes its integer arm instead.
-fn scaled_effect_text(value: i64, scale: f64) -> (String, f64) {
-    if scale == 1.0 {
-        (value.to_string(), value as f64)
-    } else {
-        let scaled = value as f64 * scale;
-        (trim_float(scaled), scaled)
+/// The `$s $S $m $M $o $O` arm (`0x5078b4`): the effect points, spread over the duration for `$o`
+/// (`507926`: duration × points / period, 0 without a positive period or duration, a period of
+/// 0 read as 5000), then made positive and scaled (`507952`) and printed by the letter's rule
+/// (`507b1a`-`507c4a`). The text and the integer the `$l` plural picker keys on (`[0xbe0b84]`).
+fn points_text(
+    letter: char,
+    slot: usize,
+    d: &SpellDisplay,
+    ctx: &TokenContext,
+    scale: f32,
+) -> Option<(String, f64)> {
+    // The expander multiplies both by its integer argument here (`5078d1`), which is 1 but in
+    // the aura tooltip's stack count; no caller passes a count.
+    let (mut min, mut max) = effect_points(d, slot, ctx);
+    if letter.eq_ignore_ascii_case(&'o') {
+        let amplitude = d.effect_amplitude[slot] as i32;
+        let period = if amplitude == 0 { 5000 } else { amplitude };
+        let duration = if period > 0 {
+            duration_ms(d, ctx).unwrap_or(0)
+        } else {
+            0
+        };
+        (min, max) = if duration > 0 {
+            let over = |v: f32| (duration as f64 * f64::from(v) / f64::from(period)) as f32;
+            (over(min), over(max))
+        } else {
+            (0.0, 0.0)
+        };
     }
+    let scaled = |v: f32| (f64::from(v.abs()) * f64::from(scale)) as f32;
+    let (lo, hi) = (scaled(min), scaled(max));
+    let ((lo_int, lo_whole), (hi_int, hi_whole)) = (whole(lo), whole(hi));
+    let plural = match letter {
+        'm' if lo_whole => lo_int,
+        'm' => 2,
+        _ if hi_whole => hi_int,
+        _ => 2,
+    };
+    let int = |n: i32| TokenNumber::Int(i64::from(n));
+    let text = match letter {
+        'm' if lo_whole => lo_int.to_string(),
+        'm' => tenths(ctx, lo),
+        'M' if hi_whole => hi_int.to_string(),
+        'M' => tenths(ctx, hi),
+        // Equal bounds print one number, `%d` unless `$S` holds a fraction (`507ba3`).
+        _ if min == max && (lo_whole || letter != 'S') => lo_int.to_string(),
+        _ if min == max => tenths(ctx, lo),
+        _ if lo_whole && hi_whole => keyed(
+            ctx,
+            "INT_SPELL_POINTS_SPREAD_TEMPLATE",
+            &[int(lo_int), int(hi_int)],
+        )?,
+        'S' => keyed(
+            ctx,
+            "SPELL_POINTS_SPREAD_TEMPLATE",
+            &[
+                TokenNumber::Float(f64::from(lo)),
+                TokenNumber::Float(f64::from(hi)),
+            ],
+        )?,
+        // A fractional spread under `s`/`o`/`O`: the minimum truncated, a fractional maximum
+        // truncated plus one (`507c2a`-`507c4a`).
+        _ => {
+            let top = if hi_whole { hi_int } else { hi as i32 + 1 };
+            keyed(
+                ctx,
+                "INT_SPELL_POINTS_SPREAD_TEMPLATE",
+                &[int(lo as i32), int(top)],
+            )?
+        }
+    };
+    Some((text, f64::from(plural)))
 }
 
 /// One token's text and the numeric value the `$l` plural picker keys on.
@@ -159,53 +261,10 @@ fn token_value(
     slot: usize,
     d: &SpellDisplay,
     ctx: &TokenContext,
-    scale: f64,
+    scale: f32,
 ) -> Option<(String, f64)> {
-    let scaled = |v: i64| -> i64 {
-        if scale == 1.0 {
-            v
-        } else {
-            (v as f64 * scale).round() as i64
-        }
-    };
     match letter.to_ascii_lowercase() {
-        's' => {
-            let (min, max) = effect_bounds(d, slot, ctx);
-            let (min, max) = (min.abs(), max.abs());
-            Some(if min == max {
-                if letter == 's' {
-                    let value = scaled(min);
-                    (value.to_string(), value as f64)
-                } else {
-                    scaled_effect_text(min, scale)
-                }
-            } else {
-                let (min, max) = (scaled(min), scaled(max));
-                (spread_text(min, max, ctx)?, max as f64)
-            })
-        }
-        'm' if letter == 'm' => {
-            let (min, _) = effect_bounds(d, slot, ctx);
-            Some(scaled_effect_text(min.abs(), scale))
-        }
-        'm' => {
-            // 'M'
-            let (_, max) = effect_bounds(d, slot, ctx);
-            Some(scaled_effect_text(max.abs(), scale))
-        }
-        'o' => {
-            let (min, max) = effect_bounds(d, slot, ctx);
-            let period = i64::from(*d.effect_amplitude.get(slot).unwrap_or(&0)).max(0);
-            let period = if period == 0 { 5000 } else { period };
-            let dur = duration_ms(d, ctx).unwrap_or(0).max(0);
-            let total = |v: i64| scaled((v.abs() * dur / period).max(0));
-            let (tmin, tmax) = (total(min), total(max));
-            Some(if tmin == tmax {
-                (tmin.to_string(), tmin as f64)
-            } else {
-                (spread_text(tmin, tmax, ctx)?, tmax as f64)
-            })
-        }
+        's' | 'm' | 'o' => points_text(letter, slot, d, ctx, scale),
         'd' => {
             let ms = duration_ms(d, ctx)?;
             let v = if ms < 0 { 0.0 } else { ms as f64 / 1000.0 };
@@ -259,6 +318,64 @@ fn token_value(
     }
 }
 
+/// Trim a float to a terse style (no trailing zeros: 2.5 → "2.5", 3.0 → "3").
+fn trim_float(v: f64) -> String {
+    if (v - v.round()).abs() < 1e-9 {
+        format!("{}", v.round() as i64)
+    } else {
+        format!("{v:.1}")
+    }
+}
+
+/// `$/N;` or `$*N;` just after the `$` (`507738`-`507790`): the text up to the `;` (at most seven
+/// characters) read by `atoi` (`0x64ac60`), the scale its value or, for `/`, its reciprocal in
+/// single precision (`507784`); a zero leaves 1.0 (`507774`). Returns the scale and the index past
+/// the `;`, or `None` without a `;`, where the reference consumes nothing.
+fn scale_prefix(text: &str, at: usize) -> Option<(f32, usize)> {
+    let op = *text.as_bytes().get(at)?;
+    if op != b'/' && op != b'*' {
+        return None;
+    }
+    let semi = at + text[at..].find(';')?;
+    let digits = &text.as_bytes()[at + 1..semi.min(at + 8)];
+    let n = atoi(digits);
+    let scale = match (n, op) {
+        (0, _) => 1.0,
+        (n, b'/') => (1.0 / f64::from(n)) as f32,
+        (n, _) => n as f32,
+    };
+    Some((scale, semi + 1))
+}
+
+/// The CRT's `atoi`: leading whitespace, an optional sign, then decimal digits up to the first
+/// other character; nothing parsed is 0.
+fn atoi(bytes: &[u8]) -> i32 {
+    let mut rest = bytes
+        .iter()
+        .copied()
+        .skip_while(u8::is_ascii_whitespace)
+        .peekable();
+    let negative = match rest.peek() {
+        Some(b'-') => {
+            rest.next();
+            true
+        }
+        Some(b'+') => {
+            rest.next();
+            false
+        }
+        _ => false,
+    };
+    let n = rest.take_while(u8::is_ascii_digit).fold(0i32, |n, b| {
+        n.wrapping_mul(10).wrapping_add(i32::from(b - b'0'))
+    });
+    if negative {
+        n.wrapping_neg()
+    } else {
+        n
+    }
+}
+
 /// Substitute every `$`-token in `text` against `spell`.
 pub fn substitute(text: &str, spell: &SpellDisplay, ctx: &TokenContext) -> String {
     let bytes = text.as_bytes();
@@ -274,22 +391,10 @@ pub fn substitute(text: &str, spell: &SpellDisplay, ctx: &TokenContext) -> Strin
         }
         let start = i;
         i += 1;
-        // `$/N;` or `$*N;` scales the next token.
-        let mut scale = 1.0f64;
-        if i < bytes.len() && (bytes[i] == b'/' || bytes[i] == b'*') {
-            let op = bytes[i];
-            let mut j = i + 1;
-            let num_start = j;
-            while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b'.') {
-                j += 1;
-            }
-            if let Ok(n) = text[num_start..j].parse::<f64>() {
-                if j < bytes.len() && bytes[j] == b';' {
-                    j += 1;
-                }
-                scale = if op == b'/' { 1.0 / n } else { n };
-                i = j;
-            }
+        let mut scale = 1.0f32;
+        if let Some((s, next)) = scale_prefix(text, i) {
+            scale = s;
+            i = next;
         }
         // Optional cross-spell id digits.
         let id_start = i;
@@ -383,26 +488,80 @@ mod tests {
     use crate::spells::SpellDisplay;
 
     /// Deliberately unlike the shipped wording, so a wrong key cannot pass by reading the same.
-    fn text(key: &str, args: &[TokenNumber]) -> Option<String> {
-        let n = |i: usize| match args.get(i) {
-            Some(TokenNumber::Int(n)) => *n,
-            _ => 0,
-        };
-        let f = |i: usize| match args.get(i) {
-            Some(TokenNumber::Float(n)) => *n,
-            _ => 0.0,
-        };
-        Some(match key {
-            "SPELL_DURATION_UNTIL_CANCELLED" => "<forever>".into(),
-            "INT_SPELL_DURATION_SEC" => format!("<{}sec>", n(0)),
-            "INT_SPELL_DURATION_MIN" => format!("<{}min>", n(0)),
-            "INT_SPELL_DURATION_HOURS" => format!("<{}hour>", n(0)),
-            "INT_SPELL_DURATION_HOURS_P1" => format!("<{}hrs>", n(0)),
-            "INT_SPELL_DURATION_DAYS" => format!("<{}days>", n(0)),
-            "SPELL_DURATION_MIN" => format!("<{:.2}min>", f(0)),
-            "INT_SPELL_POINTS_SPREAD_TEMPLATE" => format!("<{}..{}>", n(0), n(1)),
-            _ => return None,
-        })
+    fn global(key: &str) -> Option<String> {
+        Some(
+            match key {
+                "SPELL_DURATION_UNTIL_CANCELLED" => "<forever>",
+                "INT_SPELL_DURATION_SEC" => "<%dsec>",
+                "INT_SPELL_DURATION_MIN" => "<%dmin>",
+                "INT_SPELL_DURATION_HOURS" => "<%dhour>",
+                "INT_SPELL_DURATION_HOURS_P1" => "<%dhrs>",
+                "INT_SPELL_DURATION_DAYS" => "<%ddays>",
+                "SPELL_DURATION_MIN" => "<%.2fmin>",
+                "INT_SPELL_POINTS_SPREAD_TEMPLATE" => "<%d..%d>",
+                "SPELL_POINTS_SPREAD_TEMPLATE" => "<%.1f to %.1f>",
+                _ => return None,
+            }
+            .into(),
+        )
+    }
+
+    /// `%d`, `%.Nf` and `%%` in order; the tests keep clear of the CRT's rounding ties.
+    fn printf(template: &str, args: &[TokenNumber]) -> String {
+        let mut out = String::new();
+        let mut args = args.iter();
+        let mut chars = template.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c != '%' {
+                out.push(c);
+                continue;
+            }
+            let mut spec = String::new();
+            while let Some(&n) = chars.peek() {
+                chars.next();
+                spec.push(n);
+                if n.is_ascii_alphabetic() || n == '%' {
+                    break;
+                }
+            }
+            match (spec.as_str(), args.next()) {
+                ("d", Some(TokenNumber::Int(n))) => out.push_str(&n.to_string()),
+                (f, Some(TokenNumber::Float(x))) if f.starts_with('.') => {
+                    let p: usize = f[1..f.len() - 1].parse().unwrap();
+                    out.push_str(&format!("{x:.p$}"));
+                }
+                (s, a) => panic!("printf: %{s} with {a:?}"),
+            }
+        }
+        out
+    }
+
+    /// A caster's table: `(op, flat, pct)` rows through the three appliers' arithmetic.
+    struct Mods(Vec<(u8, i32, i32)>);
+
+    impl Mods {
+        fn find(&self, op: u8) -> Option<(i32, i32)> {
+            self.0
+                .iter()
+                .find(|m| m.0 == op)
+                .map(|&(_, flat, pct)| (flat, pct))
+        }
+    }
+
+    impl SpellMods for Mods {
+        fn apply_int(&self, _: &SpellDisplay, op: u8, value: i32) -> i32 {
+            self.find(op)
+                .map_or(value, |(flat, pct)| (value + flat) * pct / 100)
+        }
+        fn apply_float(&self, _: &SpellDisplay, op: u8, value: f32) -> f32 {
+            self.find(op).map_or(value, |(flat, pct)| {
+                ((f64::from(value) + f64::from(flat)) * f64::from(pct) * f64::from(0.01f32)) as f32
+            })
+        }
+        fn apply_soft(&self, _: &SpellDisplay, op: u8, value: f32) -> f32 {
+            self.find(op)
+                .map_or(value, |(flat, pct)| crate::soft_modify(value, flat, pct))
+        }
     }
 
     fn ctx<'a>(
@@ -416,9 +575,34 @@ mod tests {
             radii,
             ranges: None,
             lookup,
-            modify_int: None,
-            modify_float: None,
-            text: &text,
+            mods: None,
+            unmodified_points: false,
+            global: &global,
+            printf: &printf,
+        }
+    }
+
+    fn none_lookup<'a>(_: u32) -> Option<&'a SpellDisplay> {
+        None
+    }
+
+    /// A flat effect of `points` in slot 0 (base `points − 1`, one one-sided die).
+    fn points(points: i32) -> SpellDisplay {
+        SpellDisplay {
+            effect_base_points: [points - 1, 0, 0],
+            effect_base_dice: [1, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            ..Default::default()
+        }
+    }
+
+    /// An effect rolling `min..=max` in slot 0.
+    fn spread(min: i32, max: i32) -> SpellDisplay {
+        SpellDisplay {
+            effect_base_points: [min - 1, 0, 0],
+            effect_base_dice: [1, 0, 0],
+            effect_die_sides: [max - min + 1, 0, 0],
+            ..Default::default()
         }
     }
 
@@ -460,30 +644,15 @@ mod tests {
         let mut durations = SpellDurationCatalog::default();
         durations.insert_for_tests(1, 120_000);
         let radii = SpellRadiusCatalog::default();
-        let modified = |_: &SpellDisplay, op: u8, value: i32| {
-            if op == 1 {
-                value * 3 / 2
-            } else {
-                value
-            }
-        };
+        let mods = Mods(vec![(1, 0, 150)]);
         let c = TokenContext {
-            durations: &durations,
-            radii: &radii,
-            ranges: None,
-            lookup: &none_lookup,
-            modify_int: Some(&modified),
-            modify_float: None,
-            home_area: None,
-            text: &text,
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
         };
         let d = SpellDisplay {
             duration_index: 1,
-            effect_base_points: [2, 0, 0],
-            effect_base_dice: [1, 0, 0],
-            effect_die_sides: [1, 0, 0],
             effect_amplitude: [3_000, 0, 0],
-            ..Default::default()
+            ..points(3)
         };
         assert_eq!(
             substitute("Lasts $d; deals $o1 total.", &d, &c),
@@ -503,15 +672,9 @@ mod tests {
         let lookup = |id| spells.get(id);
         let base = ctx(&durations, &radii, &lookup);
         assert!(substitute(description, d, &base).contains("<2min>"));
-        let extended = |_: &SpellDisplay, op: u8, value: i32| {
-            if op == 1 {
-                value * 3 / 2
-            } else {
-                value
-            }
-        };
+        let mods = Mods(vec![(1, 0, 150)]);
         let modified = TokenContext {
-            modify_int: Some(&extended),
+            mods: Some(&mods),
             ..base
         };
         assert!(substitute(description, d, &modified).contains("<3min>"));
@@ -534,23 +697,13 @@ mod tests {
             (4, "<2.80min>"),
             (5, "<3min>"),
         ] {
-            let modify = |_: &SpellDisplay, op: u8, ms: i32| {
-                if op == 1 {
-                    ms + ms * rank / 10
-                } else {
-                    ms
-                }
-            };
+            let mods = Mods(vec![(1, 0, 100 + rank * 10)]);
             let ctx = TokenContext {
-                modify_int: Some(&modify),
+                mods: Some(&mods),
                 ..ctx(&durations, &radii, &none_lookup)
             };
             assert_eq!(substitute("$d", &spell, &ctx), expected, "rank {rank}");
         }
-    }
-
-    fn none_lookup<'a>(_: u32) -> Option<&'a SpellDisplay> {
-        None
     }
 
     /// Base 13 and one 9-sided die give "14 to 22", Fireball rank 1's shape; a diceless effect
@@ -585,13 +738,8 @@ mod tests {
         let durations = SpellDurationCatalog::default();
         let radii = SpellRadiusCatalog::default();
         let c = ctx(&durations, &radii, &none_lookup);
-        for (points, expected) in [(100, "0.1"), (200, "0.2"), (500, "0.5")] {
-            let d = SpellDisplay {
-                effect_base_points: [points - 1, 0, 0],
-                effect_base_dice: [1, 0, 0],
-                effect_die_sides: [1, 0, 0],
-                ..Default::default()
-            };
+        for (n, expected) in [(100, "0.1"), (200, "0.2"), (500, "0.5")] {
+            let d = points(n);
             assert_eq!(
                 substitute("$/1000;S1 sec.", &d, &c),
                 format!("{expected} sec.")
@@ -601,23 +749,181 @@ mod tests {
                 format!("{expected} sec.")
             );
         }
+        // A whole scaled value prints `%d` under any letter.
+        assert_eq!(substitute("$/1000;S1", &points(1000), &c), "1");
     }
 
+    /// Flametongue Weapon's shape (`$/77;8026m1 to $/25;8026M1` over 326): `m`/`M` print a
+    /// fraction at one decimal. The scale is `atoi`'s, so a decimal `$*` reads its integer part
+    /// and `$*0.04;` is no scale at all.
     #[test]
-    fn scaled_effect_points_round_damage_to_tenths() {
+    fn scaled_m_tokens_print_tenths_and_the_scale_is_an_integer() {
         let durations = SpellDurationCatalog::default();
         let radii = SpellRadiusCatalog::default();
         let c = ctx(&durations, &radii, &none_lookup);
-        let d = SpellDisplay {
-            effect_base_points: [325, 0, 0],
-            effect_base_dice: [1, 0, 0],
-            effect_die_sides: [1, 0, 0],
-            ..Default::default()
-        };
+        let d = points(326);
         assert_eq!(
-            substitute("$/77;m1 to $*0.04;M1 additional Fire damage", &d, &c),
+            substitute("$/77;m1 to $/25;M1 additional Fire damage", &d, &c),
             "4.2 to 13.0 additional Fire damage"
         );
+        assert_eq!(substitute("$*0.04;M1", &d, &c), "326");
+        assert_eq!(substitute("$*2;M1", &d, &c), "652");
+        assert_eq!(substitute("$/0;M1", &d, &c), "326", "atoi 0 leaves 1.0");
+        assert_eq!(
+            substitute("$/2 x;M1", &d, &c),
+            "163",
+            "atoi stops at the space"
+        );
+        assert_eq!(substitute("$/2 M1", &d, &c), "$/2 M1", "no `;`, no token");
+    }
+
+    /// `$/2;s1` of 3 truncates to 1 (`507b28`), where `$/2;S1` keeps its fraction.
+    #[test]
+    fn a_fractional_single_value_truncates_under_s_and_keeps_tenths_under_capital_s() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        let d = points(3);
+        assert_eq!(substitute("$/2;s1", &d, &c), "1");
+        assert_eq!(
+            substitute("$/2;o1", &d, &c),
+            "0",
+            "no duration spreads nothing"
+        );
+        assert_eq!(substitute("$/2;S1", &d, &c), "1.5");
+        assert_eq!(substitute("$/2;m1 $/2;M1", &d, &c), "1.5 1.5");
+    }
+
+    /// The spread arms (`507bc2`-`507c4a`): both whole takes the integer template; else `$S`
+    /// takes the float one, and `s` the integer one over the truncated minimum and a fractional
+    /// maximum truncated plus one.
+    #[test]
+    fn a_spread_picks_its_template_by_letter_and_wholeness() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        assert_eq!(substitute("$/2;s1", &spread(4, 6), &c), "<2..3>");
+        assert_eq!(substitute("$/2;s1", &spread(3, 5), &c), "<1..3>");
+        assert_eq!(substitute("$/2;S1", &spread(3, 5), &c), "<1.5 to 2.5>");
+        assert_eq!(substitute("$/2;s1", &spread(4, 5), &c), "<2..3>");
+        assert_eq!(substitute("$/2;S1", &spread(4, 5), &c), "<2.0 to 2.5>");
+        assert_eq!(substitute("$/2;O1", &spread(4, 5), &c), "0");
+    }
+
+    /// The plural value `[0xbe0b84]`: `m` keys on its whole minimum, the others on the whole
+    /// maximum, and a fraction keys as 2 (`507aa2`-`507b10`).
+    #[test]
+    fn the_plural_keys_on_the_whole_bound_or_two() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let c = ctx(&durations, &radii, &none_lookup);
+        let plural = |text: &str, d: &SpellDisplay| substitute(text, d, &c);
+        assert_eq!(plural("$m1 $lpoint:points;", &spread(1, 3)), "1 point");
+        assert_eq!(
+            plural("$s1 $lpoint:points;", &spread(1, 3)),
+            "<1..3> points"
+        );
+        assert_eq!(plural("$M1 $lpoint:points;", &points(1)), "1 point");
+        assert_eq!(plural("$/2;m1 $lpoint:points;", &points(2)), "1 point");
+        assert_eq!(plural("$/4;S1 $lpoint:points;", &points(2)), "0.5 points");
+    }
+
+    /// `0x6e3b80`'s rounding set: School Damage floors the minimum and ceils the maximum after
+    /// its modifiers, where an unrounded effect keeps the quantized fraction; a zero maximum
+    /// ceils to 1 (`0x761040`).
+    #[test]
+    fn a_rounding_effect_floors_and_ceils_its_modified_bounds() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let mods = Mods(vec![(0, 0, 110)]);
+        let c = TokenContext {
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        let school = SpellDisplay {
+            effects: [2, 0, 0],
+            ..spread(14, 22)
+        };
+        assert_eq!(substitute("$s1", &school, &c), "<15..25>");
+        assert_eq!(substitute("$m1 $M1", &school, &c), "15 25");
+        let zero = SpellDisplay {
+            effects: [2, 0, 0],
+            ..points(0)
+        };
+        assert_eq!(
+            substitute("$s1", &zero, &ctx(&durations, &radii, &none_lookup)),
+            "<0..1>"
+        );
+        // A dummy effect is not in the set: op 0 does not reach it, and nothing rounds.
+        let dummy = SpellDisplay {
+            effects: [3, 0, 0],
+            ..spread(14, 22)
+        };
+        assert_eq!(substitute("$s1", &dummy, &c), "<14..22>");
+    }
+
+    /// The damage op is 22 for aura 3 and 0 for the other damage auras (`6e394a`).
+    #[test]
+    fn a_periodic_damage_aura_takes_op_22() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let mods = Mods(vec![(22, 0, 200)]);
+        let c = TokenContext {
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        let aura = |aura| SpellDisplay {
+            effects: [6, 0, 0],
+            effect_apply_aura: [aura, 0, 0],
+            ..points(10)
+        };
+        assert_eq!(substitute("$s1", &aura(3), &c), "20");
+        assert_eq!(substitute("$s1", &aura(15), &c), "10");
+    }
+
+    /// `GetEffectPoints` modifies through the software-float applier `0x6e6c30`, whose truncating
+    /// steps land 269 × 1.01 × 1.33 on 361.34375 after the 1/128 quantizer, where the FPU applier
+    /// would reach 361.3515625 and print "361.4".
+    #[test]
+    fn effect_points_take_the_software_float_applier() {
+        let durations = SpellDurationCatalog::default();
+        let radii = SpellRadiusCatalog::default();
+        let mods = Mods(vec![(8, 0, 101), (2, 0, 133)]);
+        let c = TokenContext {
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        let d = SpellDisplay {
+            effects: [6, 0, 0],
+            effect_apply_aura: [10, 0, 0],
+            ..points(269)
+        };
+        assert_eq!(substitute("$M1", &d, &c), "361.3");
+    }
+
+    /// The aura tooltip's context skips the effect points' modifiers and `$d`'s op 1, and keeps
+    /// the other tokens' ops.
+    #[test]
+    fn the_aura_tooltip_context_leaves_points_and_duration_unmodified() {
+        let mut durations = SpellDurationCatalog::default();
+        durations.insert_for_tests(1, 60_000);
+        let radii = SpellRadiusCatalog::default();
+        let mods = Mods(vec![(8, 0, 125), (1, 0, 200), (18, 10, 100)]);
+        let modified = TokenContext {
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
+        };
+        let aura = TokenContext {
+            unmodified_points: true,
+            ..modified
+        };
+        let d = SpellDisplay {
+            duration_index: 1,
+            proc_chance: 5,
+            ..points(40)
+        };
+        assert_eq!(substitute("$s1 $d $h", &d, &modified), "50 <2min> 15");
+        assert_eq!(substitute("$s1 $d $h", &d, &aura), "40 <1min> 15");
     }
 
     #[test]
@@ -631,7 +937,10 @@ mod tests {
         let c = ctx(&durations, &radii, &lookup);
         for (id, expected) in [
             (8024, "4.2 to 13.0 additional Fire damage"),
-            (20154, "1 to 4 Holy damage"),
+            (20154, "an additional 1 to 4 Holy damage"),
+            // `$/1000;s1` of 1500 and of 600: lowercase `s` truncates a fraction (`507b28`).
+            (21854, "Enslave Demon spell by 1 sec."),
+            (24271, "Raptor Strike by 0 sec."),
         ] {
             let d = spells.get(id).expect("spell");
             let description = substitute(d.description.as_deref().unwrap(), d, &c);
@@ -672,11 +981,8 @@ mod tests {
         let radii = SpellRadiusCatalog::default();
         let d = SpellDisplay {
             duration_index: 1,
-            effect_base_points: [2, 0, 0],
-            effect_base_dice: [1, 0, 0],
-            effect_die_sides: [1, 0, 0],
             effect_amplitude: [3000, 0, 0],
-            ..Default::default()
+            ..points(3)
         };
         let c = ctx(&durations, &radii, &none_lookup);
         assert_eq!(
@@ -688,33 +994,18 @@ mod tests {
             // Uppercase S keeps 3/2 fractional; the plural picks "points".
             "Restores 1.5 health: points.".to_string()
         );
-        assert_eq!(
-            substitute("Restores $/2;s1 health.", &d, &c),
-            "Restores 2 health."
-        );
     }
 
     #[test]
     fn cross_spell_and_unknown_tokens() {
         let durations = SpellDurationCatalog::default();
         let radii = SpellRadiusCatalog::default();
-        let other = SpellDisplay {
-            effect_base_points: [99, 0, 0],
-            effect_base_dice: [1, 0, 0],
-            effect_die_sides: [1, 0, 0],
-            ..Default::default()
-        };
+        let other = points(100);
         let lookup = |id: u32| -> Option<&SpellDisplay> { (id == 1234).then_some(&other) };
         let d = SpellDisplay::default();
         let c = TokenContext {
             home_area: Some("Goldshire"),
-            durations: &durations,
-            radii: &radii,
-            ranges: None,
-            lookup: &lookup,
-            modify_int: None,
-            modify_float: None,
-            text: &text,
+            ..ctx(&durations, &radii, &lookup)
         };
         assert_eq!(
             substitute("as strong as $1234s1 hits", &d, &c),
@@ -725,57 +1016,34 @@ mod tests {
             substitute("Returns you to $z.", &d, &c),
             "Returns you to Goldshire."
         );
-        let unbound = TokenContext {
-            home_area: None,
-            durations: &durations,
-            radii: &radii,
-            ranges: None,
-            lookup: &lookup,
-            modify_int: None,
-            modify_float: None,
-            text: &text,
-        };
+        let unbound = ctx(&durations, &radii, &lookup);
         assert_eq!(
             substitute("Returns you to $z.", &d, &unbound),
             "Returns you to $z."
         );
     }
 
+    /// Devotion Aura rank 1's shape: 55 armor, and Improved Devotion Aura's +25% on op 8 through
+    /// the soft applier and the 1/128 quantizer is 68.75, which `$s1` truncates and `$M1` prints
+    /// at one decimal.
     #[test]
-    fn effect_value_tokens_take_the_all_effects_modifier_before_integer_display() {
-        // Devotion Aura rank 1: 54 base plus one die is 55. Improved Devotion Aura 5/5
-        // supplies +25% to op 8; the effect-value path truncates 68.75 to 68.
+    fn effect_value_tokens_take_the_all_effects_modifier() {
         let d = SpellDisplay {
             effects: [35, 0, 0],
             effect_apply_aura: [22, 0, 0],
-            effect_base_points: [54, 0, 0],
-            effect_base_dice: [1, 0, 0],
-            effect_die_sides: [1, 0, 0],
-            ..Default::default()
+            ..points(55)
         };
         let durations = SpellDurationCatalog::default();
         let radii = SpellRadiusCatalog::default();
-        let modified = |_: &SpellDisplay, op: u8, value: f32| {
-            if op == 8 {
-                value * 1.25
-            } else {
-                value
-            }
-        };
+        let mods = Mods(vec![(8, 0, 125)]);
         let ctx = TokenContext {
-            durations: &durations,
-            radii: &radii,
-            ranges: None,
-            lookup: &none_lookup,
-            modify_int: None,
-            modify_float: Some(&modified),
-            home_area: None,
-            text: &text,
+            mods: Some(&mods),
+            ..ctx(&durations, &radii, &none_lookup)
         };
         assert_eq!(substitute("Gives $s1 armor.", &d, &ctx), "Gives 68 armor.");
         assert_eq!(
             substitute("Increases armor by $M1.", &d, &ctx),
-            "Increases armor by 68."
+            "Increases armor by 68.8."
         );
     }
 
@@ -797,6 +1065,16 @@ mod tests {
             };
             assert_eq!(aura_op(&d, 0), expected, "aura {aura}");
         }
+    }
+
+    /// Whole within 0.001 of either neighbour, a near-ceiling value reading as the ceiling.
+    #[test]
+    fn a_bound_is_whole_within_a_thousandth() {
+        assert_eq!(whole(3.0), (3, true));
+        assert_eq!(whole(2.9995), (3, true));
+        assert_eq!(whole(3.0005), (3, true));
+        assert_eq!(whole(2.5), (2, false));
+        assert_eq!(whole(0.0), (0, true));
     }
 
     #[test]

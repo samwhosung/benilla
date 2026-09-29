@@ -60,28 +60,23 @@ fn spell_desc_text(
     home_area: Option<&str>,
     mods: Option<&crate::spell::SpellModifiers>,
     // The VM's strings for the keyed `$d`/`$s` tokens.
-    text: &dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>,
+    global: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
     let sp = spells?;
     let d = sp.catalog.get(id)?;
     match d.description.as_deref().filter(|t| !t.is_empty()) {
         // The builder tests the expanded text, which can be empty from a non-empty template.
         Some(desc) => {
-            let modify_int = |d: &benilla_formats::SpellDisplay, op, value| {
-                mods.map_or(value, |m| m.apply(d, op, value))
-            };
-            let modify_float = |d: &benilla_formats::SpellDisplay, op, value| {
-                mods.map_or(value, |m| m.apply_float(d, op, value))
-            };
             let ctx = benilla_formats::TokenContext {
                 durations: &sp.durations,
                 radii: &sp.radii,
                 ranges: Some(&sp.ranges),
                 lookup: &|i| sp.catalog.get(i),
-                modify_int: Some(&modify_int),
-                modify_float: Some(&modify_float),
+                mods: mods.map(|m| m as &dyn benilla_formats::SpellMods),
+                unmodified_points: false,
                 home_area,
-                text,
+                global,
+                printf: &crate::ui_script::token_printf,
             };
             Some(benilla_formats::substitute(desc, d, &ctx)).filter(|t| !t.is_empty())
         }
@@ -142,17 +137,16 @@ fn template_view(
     sub_classes: Option<&benilla_formats::ItemSubClassCatalog>,
     classes: Option<&benilla_formats::ItemClassCatalog>,
     icons: Option<&ItemDisplays>,
-    // The VM's own `GlobalStrings.lua`, for the reputation-requirement line.
+    // The VM's own `GlobalStrings.lua`, for the reputation-requirement line and the `$`-engine's
+    // keyed tokens.
     get: &dyn Fn(&str) -> Option<String>,
-    // The same table, for the `$`-engine's keyed tokens.
-    text: &dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>,
 ) -> benilla_ui::script::ItemTemplateView {
     let spell_name = |id: u32| -> Option<String> {
         spells
             .and_then(|s| s.catalog.get(id))
             .map(|sd| sd.name.clone())
     };
-    let spell_text = |id: u32| spell_desc_text(spells, id, home_area, mods, text);
+    let spell_text = |id: u32| spell_desc_text(spells, id, home_area, mods, get);
     benilla_ui::script::ItemTemplateView {
         name: t.name.clone(),
         quality: t.quality,
@@ -279,8 +273,8 @@ pub(super) fn feed_item_sets(
     let skill_catalog = skill_lines.as_deref().map(|s| &s.catalog);
     let mut done: Vec<u32> = Vec::new();
     let mut push: Vec<(u32, benilla_ui::script::ItemSetView)> = Vec::new();
-    // Dropped before the push, which needs the VM mutably.
-    let token_text = crate::ui_script::token_text(&script);
+    // Its borrow of the VM ends before the push, which needs the VM mutably.
+    let global = |key: &str| benilla_ui::strings::global(script.lua(), key);
     for (&set_id, last) in pending.iter_mut() {
         let Some(row) = sets.0.set(set_id) else {
             done.push(set_id); // no such row: drop the ask
@@ -302,7 +296,7 @@ pub(super) fn feed_item_sets(
                 .bonuses
                 .iter()
                 .filter_map(|&(n, spell)| {
-                    spell_desc_text(spell_res, spell, None, Some(&spell_mods), &token_text)
+                    spell_desc_text(spell_res, spell, None, Some(&spell_mods), &global)
                         .map(|desc| (n, desc))
                 })
                 .collect(),
@@ -325,7 +319,6 @@ pub(super) fn feed_item_sets(
             push.push((set_id, view));
         }
     }
-    drop(token_text);
     for (id, view) in push {
         script.set_item_set(id, view);
     }
@@ -452,7 +445,6 @@ pub(super) fn feed_item_stats(
                         classes.as_deref().map(|c| &c.0),
                         icons.as_deref(),
                         &get,
-                        &crate::ui_script::token_text(&script),
                     ),
                 ))
             })
@@ -1910,7 +1902,7 @@ mod tests {
         };
 
         // No string table: Fireball's description reaches no keyed token.
-        let no_strings = |_: &str, _: &[benilla_formats::TokenNumber]| None;
+        let no_strings = |_: &str| None;
 
         // The lock chain's Opening and Closing spells, none with a description.
         for id in [3365u32, 3366, 6246, 6247, 6477, 21651] {

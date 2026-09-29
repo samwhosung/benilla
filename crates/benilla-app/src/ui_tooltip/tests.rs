@@ -8,40 +8,26 @@ struct TestCtx {
     items: Items,
     commands: NetCommands,
     _rx: crossbeam_channel::Receiver<crate::net::ClientCommand>,
-    /// The builder's two lookups, over the shipped `GlobalStrings.lua`: a stub would pass on
-    /// wording the client never shows.
+    /// The builder's lookup over the shipped `GlobalStrings.lua`: a stub would pass on wording
+    /// the client never shows.
     get: Box<Getter>,
-    text: Box<Filler>,
     /// Empty by default; modifier tests populate it explicitly.
     spell_mods: crate::spell::SpellModifiers,
 }
 
 type Getter = dyn Fn(&str) -> Option<String>;
-type Filler = dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>;
 
 impl TestCtx {
     fn new() -> Self {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let vm = std::rc::Rc::new(benilla_ui::script::UiScript::new().expect("VM"));
+        let vm = benilla_ui::script::UiScript::new().expect("VM");
         crate::ui_script::load_ui_for_test(&vm, "Interface\\FrameXML\\GlobalStrings.lua");
-        let (for_get, for_text) = (vm.clone(), vm);
         Self {
             items: Items::default(),
             commands: NetCommands(tx),
             _rx: rx,
-            get: Box::new(move |key| benilla_ui::strings::global(for_get.lua(), key)),
+            get: Box::new(move |key| benilla_ui::strings::global(vm.lua(), key)),
             spell_mods: crate::spell::SpellModifiers::default(),
-            text: Box::new(move |key, args: &[benilla_formats::TokenNumber]| {
-                let template = benilla_ui::strings::global(for_text.lua(), key)?;
-                let args: Vec<_> = args
-                    .iter()
-                    .map(|n| match n {
-                        benilla_formats::TokenNumber::Int(v) => benilla_ui::strings::Arg::D(*v),
-                        benilla_formats::TokenNumber::Float(v) => benilla_ui::strings::Arg::F(*v),
-                    })
-                    .collect();
-                Some(benilla_ui::strings::fill(&template, &args))
-            }),
         }
     }
 
@@ -84,7 +70,6 @@ impl TestCtx {
             sub_classes,
             spell_mods: &self.spell_mods,
             get: self.get.as_ref(),
-            text: self.text.as_ref(),
         }
     }
 }
@@ -180,8 +165,11 @@ fn fireball_view_on_real_data() {
     }
 }
 
+/// Improved Devotion Aura's +25% on op 8 reaches the spell's description, 55 armor to 68; the
+/// aura text expands as the aura tooltip `0x52f880` expands it, with the points' modifiers off
+/// (`52f940`), so it keeps 55.
 #[test]
-fn improved_devotion_aura_updates_spell_and_aura_description() {
+fn improved_devotion_aura_updates_the_description_but_not_the_aura_text() {
     let data = benilla_formats::wow_data_or_skip!();
     let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let mut spells = Spells::empty_for_tests();
@@ -203,7 +191,7 @@ fn improved_devotion_aura_updates_spell_and_aura_description() {
     t.spell_mods.set(false, bit, 8, 25);
     let improved = spell_tooltip_view(465, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
     assert!(improved.description.contains("68 additional armor"));
-    assert!(improved.aura_description.contains("68"));
+    assert_eq!(improved.aura_description, base.aura_description);
 }
 
 /// Fire Blast rank 1's 8 s is its category recovery, its own recovery 0; Improved Fire Blast's

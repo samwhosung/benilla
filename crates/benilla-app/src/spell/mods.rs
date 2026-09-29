@@ -189,6 +189,14 @@ impl SpellModifiers {
         })
     }
 
+    /// The software-float applier `0x6e6c30` that `GetEffectPoints` calls
+    /// ([`benilla_formats::soft_modify`]).
+    pub(crate) fn apply_soft(&self, d: &SpellDisplay, op: u8, value: f32) -> f32 {
+        self.modifiers(d, op).map_or(value, |m| {
+            benilla_formats::soft_modify(value, m.flat, m.pct)
+        })
+    }
+
     /// `GetMinMaxRange` modifies only the maximum at its common tail. The on-next-swing
     /// `Attributes & 0x404` arm returns before that tail (`0x6e350f`).
     pub(crate) fn min_max_range(
@@ -207,6 +215,19 @@ impl SpellModifiers {
                 self.apply_float(d, OP_RANGE, max)
             },
         ))
+    }
+}
+
+/// The description expander's view of the tables.
+impl benilla_formats::SpellMods for SpellModifiers {
+    fn apply_int(&self, d: &SpellDisplay, op: u8, value: i32) -> i32 {
+        self.apply(d, op, value)
+    }
+    fn apply_float(&self, d: &SpellDisplay, op: u8, value: f32) -> f32 {
+        SpellModifiers::apply_float(self, d, op, value)
+    }
+    fn apply_soft(&self, d: &SpellDisplay, op: u8, value: f32) -> f32 {
+        SpellModifiers::apply_soft(self, d, op, value)
     }
 }
 

@@ -57,10 +57,8 @@ struct ViewCtx<'a, 'w, 's> {
     sub_classes: Option<&'a benilla_formats::ItemSubClassCatalog>,
     /// The talent spell-modifier tables: the cost cell shows the modified cost (`power_cost`).
     spell_mods: &'a crate::spell::SpellModifiers,
-    /// The VM's `GlobalStrings.lua`, where the keyed cells resolve; `text` is the `%d`-filling form
-    /// the `$` tokens take.
+    /// The VM's `GlobalStrings.lua`, where the keyed cells and the `$` tokens' templates resolve.
     get: &'a dyn Fn(&str) -> Option<String>,
-    text: &'a dyn Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String>,
 }
 
 /// Fill a key's template from the VM's `GlobalStrings.lua`; no string shows nothing.
@@ -81,20 +79,21 @@ fn spell_tooltip_view(
     let d = spells.catalog.get(spell_id)?;
     let home_area = vctx.home_area;
     let form = vctx.form;
-    let modify_int =
-        |spell: &benilla_formats::SpellDisplay, op, value| vctx.spell_mods.apply(spell, op, value);
-    let modify_float = |spell: &benilla_formats::SpellDisplay, op, value| {
-        vctx.spell_mods.apply_float(spell, op, value)
-    };
     let ctx = benilla_formats::TokenContext {
         durations: &spells.durations,
         radii: &spells.radii,
         ranges: Some(&spells.ranges),
         lookup: &|id| spells.catalog.get(id),
-        modify_int: Some(&modify_int),
-        modify_float: Some(&modify_float),
+        mods: Some(vctx.spell_mods),
+        unmodified_points: false,
         home_area,
-        text: vctx.text,
+        global: vctx.get,
+        printf: &crate::ui_script::token_printf,
+    };
+    // The aura tooltip `0x52f880` expands the aura text with the points' modifiers off (`52f940`).
+    let aura_ctx = benilla_formats::TokenContext {
+        unmodified_points: true,
+        ..ctx
     };
     // The cost cell (`0x52e8ad`): the resolved `power_cost`, named by power type (keys at
     // `0x85416c`) and Health for a type outside 0..=4 (`0x52e8fc`: Bloodrage's -2), never a
@@ -291,7 +290,7 @@ fn spell_tooltip_view(
         aura_description: d
             .aura_description
             .as_deref()
-            .map(|t| benilla_formats::substitute(t, d, &ctx))
+            .map(|t| benilla_formats::substitute(t, d, &aura_ctx))
             .unwrap_or_default(),
     })
 }
@@ -503,7 +502,6 @@ fn feed_spell_tooltips(
     let mut built: Vec<(u32, benilla_ui::script::SpellTooltipView)> = Vec::new();
     {
         let get = |key: &str| benilla_ui::strings::global(script.lua(), key);
-        let text = crate::ui_script::token_text(&script);
         let mut vctx = ViewCtx {
             home_area: home_area.as_deref(),
             form,
@@ -516,7 +514,6 @@ fn feed_spell_tooltips(
             sub_classes: sub_classes.as_deref().map(|c| &c.0),
             spell_mods,
             get: &get,
-            text: &text,
         };
         for id in wanted {
             if let Some(view) = spell_tooltip_view(id, spells, &mut vctx) {

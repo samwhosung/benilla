@@ -660,21 +660,16 @@ pub(crate) fn fire_chat_login(s: &mut benilla_ui::script::UiScript) {
     }
 }
 
-/// The `benilla_formats::TokenContext::text` seam: a `GlobalStrings` key and numeric arguments.
-pub(crate) fn token_text(
-    script: &benilla_ui::script::UiScript,
-) -> impl Fn(&str, &[benilla_formats::TokenNumber]) -> Option<String> + '_ {
-    |key: &str, args: &[benilla_formats::TokenNumber]| {
-        let template = benilla_ui::strings::global(script.lua(), key)?;
-        let args: Vec<_> = args
-            .iter()
-            .map(|n| match n {
-                benilla_formats::TokenNumber::Int(v) => benilla_ui::strings::Arg::D(*v),
-                benilla_formats::TokenNumber::Float(v) => benilla_ui::strings::Arg::F(*v),
-            })
-            .collect();
-        Some(benilla_ui::strings::fill(&template, &args))
-    }
+/// The `benilla_formats::TokenContext::printf` seam: `SStrPrintf` over the template filler.
+pub(crate) fn token_printf(template: &str, args: &[benilla_formats::TokenNumber]) -> String {
+    let args: Vec<_> = args
+        .iter()
+        .map(|n| match n {
+            benilla_formats::TokenNumber::Int(v) => benilla_ui::strings::Arg::D(*v),
+            benilla_formats::TokenNumber::Float(v) => benilla_ui::strings::Arg::F(*v),
+        })
+        .collect();
+    benilla_ui::strings::fill(template, &args)
 }
 
 /// [`test_ui::load_ui`] for a test module outside `ui_script`, such as `ui_action::feed_tests`.
