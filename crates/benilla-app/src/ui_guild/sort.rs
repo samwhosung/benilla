@@ -85,8 +85,8 @@ fn icmp(a: &str, b: &str) -> Ordering {
         .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
 }
 
-/// [`icmp`] with an empty value (the zone and class arms' DBC miss) after every name; two misses tie.
-/// Deviation: the reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), which is no total order.
+/// [`icmp`] with an empty value (the zone and class arms' DBC miss) after every name; two misses
+/// tie. Deviation: the reference ties a miss with a hit (`0x4d0e27`, `0x4d0ea1`), no total order.
 fn misses_last(a: &str, b: &str) -> Ordering {
     match (a.is_empty(), b.is_empty()) {
         (true, true) => Ordering::Equal,
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn the_online_tiebreak_and_the_dbc_miss_abstention() {
+    fn the_online_tiebreak_and_the_dbc_miss_order() {
         let mut sort = SortStack::default();
         sort.select(SortField::Online);
         let recent = RosterRow {
