@@ -226,6 +226,18 @@ pub(crate) fn current_speed(s: &MoveSpeeds, flags: u32) -> f32 {
 #[derive(Component, Clone, Default)]
 pub(crate) struct ObjectStore(pub(crate) ObjectFields);
 
+impl ObjectStore {
+    /// The object manager's unit lookup (`0x468460`, `ecx = 8`): a unit or a player, which share
+    /// the unit block; a game object, corpse or item is not one.
+    pub(crate) fn is_unit(&self) -> bool {
+        use benilla_protocol::messages::ObjectType;
+        matches!(
+            self.0.object_type(),
+            Some(ObjectType::Unit | ObjectType::Player)
+        )
+    }
+}
+
 /// One descriptor dword moved on a streamed object, the reference's `CMirrorHandler` edge: the
 /// values notifier (`0x465330`) diffs live against a shadow copy and passes the old value
 /// (`0x465570`). A first create fires nothing; a re-create of a live guid fires like a delta.

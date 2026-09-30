@@ -649,17 +649,11 @@ struct LootSourceObjects<'w, 's> {
 
 impl LootSourceObjects<'_, '_> {
     fn is_unit(&self, guid: u64) -> bool {
-        use benilla_protocol::messages::ObjectType;
         self.index
             .as_ref()
             .and_then(|index| index.0.get(&guid))
             .and_then(|&e| self.stores.get(e).ok())
-            .is_some_and(|s| {
-                matches!(
-                    s.0.object_type(),
-                    Some(ObjectType::Unit | ObjectType::Player)
-                )
-            })
+            .is_some_and(|s| s.is_unit())
     }
 }
 

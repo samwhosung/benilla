@@ -9,7 +9,6 @@
 use std::collections::hash_map::{Entry, HashMap};
 
 use benilla_formats::SpellCatalog;
-use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{AuraState, UiScript, UnitGuids};
 
 use super::{aura_list, other_unit_inputs, record_inputs, AuraInput};
@@ -79,14 +78,6 @@ fn fill_group<'a>(
             .iter()
             .map(|&m| group.raid_pet_guid(m, live(m)).unwrap_or(0)),
     );
-}
-
-/// The object manager's unit lookup (`0x468460`, `ecx = 8`): a held unit or player.
-fn is_unit(store: &ObjectStore) -> bool {
-    matches!(
-        store.0.object_type(),
-        Some(ObjectType::Unit | ObjectType::Player)
-    )
 }
 
 /// What [`UnitAuras::feed`] reads this frame.
@@ -194,7 +185,7 @@ impl UnitAuras {
                 continue;
             }
             let store = held(guid);
-            if let Some(unit) = store.filter(|s| is_unit(s)) {
+            if let Some(unit) = store.filter(|s| s.is_unit()) {
                 let next = unit.0.unit_target().unwrap_or(0);
                 g.held.insert(guid, next);
                 walk.push((next, false));
