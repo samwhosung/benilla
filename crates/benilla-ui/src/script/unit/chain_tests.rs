@@ -132,14 +132,24 @@ fn a_chain_answers_the_snapshot_of_the_unit_it_ends_on() {
     ));
 }
 
-/// A chain that names a unit the client holds no snapshot of, or nobody, answers what the getter
-/// answers for no unit: nil, 0 and nil.
+/// A chain that names nobody answers what the getter answers for no unit: nil, 0 and nil. A chain
+/// to a guid nothing holds reads 0 and nil too, but its name is the reference's name-cache leg
+/// (`0x5171eb`, else `UNKNOWNOBJECT` at `0x517216`), which is not built, so it is not asserted.
 #[test]
 fn a_chain_to_a_unit_nobody_holds_answers_nothing() {
     let s = world();
+    // `BOSS` targets `GONE`, which is not held.
+    for (lua, want) in [
+        (r#"UnitHealth("party1targettarget")"#, "0"),
+        (r#"UnitExists("party1targettarget")"#, "nil"),
+    ] {
+        assert_eq!(
+            eval::<String>(&s, &format!("return tostring({lua})")),
+            want,
+            "{lua}"
+        );
+    }
     for token in [
-        // `BOSS` targets `GONE`, which is not held.
-        "party1targettarget",
         // `party2` is not held, so a hop off it names nobody.
         "party2target",
         // `SILENT` is held, and nothing pushed its snapshot.

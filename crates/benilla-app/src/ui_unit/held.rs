@@ -36,8 +36,8 @@ pub(super) struct HeldUnits<'a> {
 
 impl HeldUnits<'_> {
     /// The snapshot of the held unit `guid`, whose descriptor is `store`, as a token naming a unit
-    /// other than the player carries it. It has no guild leg: nothing asks a chain's unit for
-    /// one, and the lazy guild cache sends a query on a miss.
+    /// other than the player carries it. It has no guild leg, so `GetGuildInfo` on a chain answers
+    /// nothing, where the reference resolves the token and reads the object's guild (`0x4c9330`).
     pub(super) fn state(&self, store: &ObjectStore, guid: u64) -> UnitState {
         let name = self
             .names
@@ -82,9 +82,10 @@ pub(super) struct ChainMemo {
 /// (`0x515970` resolves the token, then each getter reads the guid's object, `0x468460`). The
 /// guids are the resolver's own inputs ([`UiScript::chain_end_guids`]), which the aura feed pushes
 /// each frame, so this runs after it. A guid the object manager does not hold, or holds as
-/// anything but a unit, gets no snapshot, so the getters answer nobody for it. The reference also
-/// answers a group member with no object from its roster record (`0x496400`), which a chain's end
-/// does not get here. A token without a hop reads its own push, not these.
+/// anything but a unit, gets no snapshot. The reference still answers such a guid: `UnitExists`
+/// from the roster (`0x491900`), `UnitHealth` from the roster or pet record (`0x496400`,
+/// `0x496420`), and `UnitName` from the pet record or the name cache, else `UNKNOWNOBJECT`
+/// (`0x5171da`-`0x517216`); those legs are not built for a chain's end. A token without a hop reads its own push, not these.
 pub(super) fn feed_chain_units(
     script: Option<NonSendMut<UiScript>>,
     tables: super::SnapshotTables,
@@ -388,13 +389,12 @@ mod tests {
             &app,
             r#"UnitIsUnit("raid2target", "raid3target") == nil"#
         ));
-        // `BOSS` targets `GONE`, which nobody holds; `C` targets nobody; party4 is nobody.
-        for token in [
-            "party1targettarget",
-            "raid4target",
-            "party4target",
-            "raid9target",
-        ] {
+        // `BOSS` targets `GONE`, which nobody holds: 0 and nil, and a name the unbuilt name-cache leg
+        // would give (`0x5171eb`), so it is not asserted.
+        assert_eq!(health(&app, "party1targettarget"), 0);
+        assert!(holds(&app, r#"UnitExists("party1targettarget") == nil"#));
+        // `C` targets nobody; party4 is nobody.
+        for token in ["raid4target", "party4target", "raid9target"] {
             assert_eq!(name(&app, token), None, "UnitName({token})");
             assert_eq!(health(&app, token), 0, "UnitHealth({token})");
             assert!(
@@ -454,7 +454,7 @@ mod tests {
         let add = app.world_mut().resource_mut::<GuidIndex>().0.remove(&ADD);
         app.world_mut().despawn(add.unwrap());
         app.update();
-        assert_eq!(name(&app, "raid3target"), None);
+        // The name would be the name cache's (`0x5171eb`), which a chain's end does not read yet.
         assert_eq!(health(&app, "raid3target"), 0);
     }
 
