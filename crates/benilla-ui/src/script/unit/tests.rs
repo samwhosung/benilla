@@ -1,6 +1,6 @@
 //! The `Unit*` binding tests.
 
-use crate::script::{PartyState, PlayerRecord, UiScript, UnitState};
+use crate::script::{PartyState, PlayerRecord, UiScript, UnitGuids, UnitState};
 
 fn player() -> UnitState {
     UnitState {
@@ -61,7 +61,13 @@ fn spell_target_unit_checks_in_the_references_order() {
 #[test]
 fn spell_can_target_unit_answers_per_validated_token() {
     let mut s = UiScript::new().unwrap();
-    s.set_spell_targetable_units(["player", "party1"]);
+    s.set_unit_guids(&UnitGuids {
+        player: 0x10,
+        party: [0x21, 0, 0, 0],
+        target: 0x30,
+        ..Default::default()
+    });
+    s.set_spell_targetable_units([0x10, 0x21]);
     assert!(s
         .eval::<bool>(r#"return SpellCanTargetUnit("player") == true"#)
         .unwrap());

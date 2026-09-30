@@ -21,6 +21,8 @@ use crate::net::{
 use crate::target::{ring_reaction, Factions, Selection};
 use crate::ui_script::{gate, UiInput};
 
+mod held;
+
 /// The unit-feed pass, gated so none of its login one-shots or per-VM memos runs before the in-game
 /// interface exists; the demo override orders itself after it.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -152,6 +154,8 @@ impl Plugin for UiUnitPlugin {
                 feed_units,
                 // After the aura feed, whose resolver inputs it measures.
                 feed_unit_reach.after(crate::ui_aura::AuraEvents),
+                // After the same feed, whose guids it covers.
+                held::feed_chain_units.after(crate::ui_aura::AuraEvents),
                 feed_player_control,
                 feed_farsight_focus,
                 melee_unit_combat,
@@ -681,17 +685,6 @@ impl UnitTokens<'_, '_> {
         };
         self.held(pet?)
     }
-}
-
-/// The tokens the `SpellCanTargetUnit` feed answers for, `"player"` included: the bases and one
-/// hop off the target, not the chains a script can spell.
-pub(crate) fn reach_tokens() -> impl Iterator<Item = &'static str> {
-    ["player", "target", "targettarget", "mouseover", "pet"]
-        .into_iter()
-        .chain(crate::ui_party::PARTY_TOKENS)
-        .chain(crate::ui_party::PARTY_PET_TOKENS)
-        .chain(crate::ui_party::RAID_TOKENS)
-        .chain(crate::ui_party::RAID_PET_TOKENS)
 }
 
 /// Squared distance as the reference sums it: `f32` widened to `f64`, `(dz² + dx²) + dy²`
@@ -1297,37 +1290,21 @@ fn feed_units(
         }
         feed.warned_sideless = sideless;
     }
+    // What the three snapshots below (target, target-of-target, NPC) read besides a descriptor.
+    let held = held::HeldUnits {
+        names: &names,
+        commands: &commands,
+        factions: factions.as_deref(),
+        reputations: &reputations,
+        group: &group,
+        self_store: self_pair.map(|(s, _)| s),
+        classes: chr,
+        types,
+    };
     let target = selection.target.zip(selection.guid).and_then(|(e, guid)| {
         let store = stores.all.get(e).ok()?;
-        let name = names
-            .resolve_unit(guid, Some(store), &commands)
-            .map(str::to_string);
-        let reaction = unit_reaction(
-            factions.as_deref(),
-            &reputations,
-            store,
-            self_pair.map(|(s, _)| s),
-        );
-        let mut s = snapshot(store, guid, name, reaction, chr, types);
-        s.raid_target = group.raid_target_index(guid);
-        s.faction_group = faction_group(store, factions.as_deref());
-        s.faction_group_localized = faction_group_localized(store, factions.as_deref());
-        // `CanAttack` (`0x606980`); `UnitCanAttack` gates the target frame's level colour.
-        s.can_attack = crate::target::can_attack(
-            Some(store),
-            factions.as_deref(),
-            &reputations,
-            self_pair.map(|(s, _)| s),
-        );
+        let mut s = held.state(store, guid);
         s.guild = crate::ui_guild::unit_guild(&store.0, &mut guild, &commands);
-        enrich_unit(
-            &mut s,
-            guid,
-            &names,
-            store,
-            factions.as_deref(),
-            self_pair.map(|(s, _)| s),
-        );
         Some(s)
     });
 
@@ -1339,37 +1316,7 @@ fn feed_units(
         .and_then(|s| s.0.unit_target())
         .filter(|guid| *guid != 0)
         .and_then(|guid| Some((*index.as_ref()?.0.get(&guid)?, guid)))
-        .and_then(|(entity, guid)| {
-            let store = stores.all.get(entity).ok()?;
-            let name = names
-                .resolve_unit(guid, Some(store), &commands)
-                .map(str::to_string);
-            let reaction = unit_reaction(
-                factions.as_deref(),
-                &reputations,
-                store,
-                self_pair.map(|(s, _)| s),
-            );
-            let mut s = snapshot(store, guid, name, reaction, chr, types);
-            s.raid_target = group.raid_target_index(guid);
-            s.faction_group = faction_group(store, factions.as_deref());
-            s.faction_group_localized = faction_group_localized(store, factions.as_deref());
-            s.can_attack = crate::target::can_attack(
-                Some(store),
-                factions.as_deref(),
-                &reputations,
-                self_pair.map(|(s, _)| s),
-            );
-            enrich_unit(
-                &mut s,
-                guid,
-                &names,
-                store,
-                factions.as_deref(),
-                self_pair.map(|(s, _)| s),
-            );
-            Some(s)
-        });
+        .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
 
     // `"player"` is pushed only while its descriptor exists: the roster seat stands in before
     // arrival, and `PLAYER_LOGOUT` handlers still read `UnitName("player")`, as the reference's do.
@@ -1405,37 +1352,7 @@ fn feed_units(
     let npc = interact
         .as_deref()
         .and_then(|i| Some((i.0?, i.1?)))
-        .and_then(|(entity, guid)| {
-            let store = stores.all.get(entity).ok()?;
-            let name = names
-                .resolve_unit(guid, Some(store), &commands)
-                .map(str::to_string);
-            let reaction = unit_reaction(
-                factions.as_deref(),
-                &reputations,
-                store,
-                self_pair.map(|(s, _)| s),
-            );
-            let mut s = snapshot(store, guid, name, reaction, chr, types);
-            s.raid_target = group.raid_target_index(guid);
-            s.faction_group = faction_group(store, factions.as_deref());
-            s.faction_group_localized = faction_group_localized(store, factions.as_deref());
-            s.can_attack = crate::target::can_attack(
-                Some(store),
-                factions.as_deref(),
-                &reputations,
-                self_pair.map(|(s, _)| s),
-            );
-            enrich_unit(
-                &mut s,
-                guid,
-                &names,
-                store,
-                factions.as_deref(),
-                self_pair.map(|(s, _)| s),
-            );
-            Some(s)
-        });
+        .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
     // Closing the window must clear the token, so the memo is written here, not only read. No
     // `fire_transitions`: nothing draws `"npc"` as a unit frame.
     let npc_dirty = match (&npc, memo.last.get("npc")) {
@@ -2006,20 +1923,6 @@ mod tests {
             // Row 2 and party slot 1 are the same member.
             assert_eq!(resolve(&mut app, "raidpet2"), Some((held, pet(1))));
             assert_eq!(resolve(&mut app, "partypet1"), None);
-        }
-
-        /// The `SpellCanTargetUnit` feed walks [`reach_tokens`], so a token it should answer for
-        /// must be in it, or `SpellCanTargetUnit("partypet1")` answers nil.
-        #[test]
-        fn the_reach_tokens_cover_every_group_pet() {
-            let tokens: Vec<_> = reach_tokens().collect();
-            assert_eq!(tokens.len(), 5 + 4 + 4 + 40 + 40);
-            for i in 1..=4 {
-                assert!(tokens.contains(&format!("partypet{i}").as_str()));
-            }
-            for i in 1..=40 {
-                assert!(tokens.contains(&format!("raidpet{i}").as_str()));
-            }
         }
 
         /// A party pet in view gets a distance, so the range verbs answer for it: the feed measures

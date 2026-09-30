@@ -403,10 +403,11 @@ impl super::UiScript {
         self.model_mut().item_pick_armed = armed;
     }
 
-    /// Push the unit tokens for which the armed word's unit checks all pass.
-    pub fn set_spell_targetable_units<'a>(&mut self, tokens: impl IntoIterator<Item = &'a str>) {
-        self.model_mut().spell_targetable_units =
-            tokens.into_iter().map(str::to_ascii_lowercase).collect();
+    /// Push the guids of the units for which the armed word's unit checks all pass.
+    /// `SpellCanTargetUnit` resolves its token to a guid, as `0x515970` does, and asks this set,
+    /// so a chain such as `"party1target"` reads the unit it ends on.
+    pub fn set_spell_targetable_units(&mut self, guids: impl IntoIterator<Item = u64>) {
+        self.model_mut().spell_targetable_units = guids.into_iter().collect();
     }
 
     /// Drain the `(bag, slot)` picks since the last call; a paper-doll pick reports as

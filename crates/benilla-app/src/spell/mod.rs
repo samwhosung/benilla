@@ -88,10 +88,12 @@ impl Plugin for SpellPlugin {
                     // The state push runs before the input pass's `ToggleGameMenu`, whose
                     // `SpellStopTargeting` lands with the script calls after it. After the
                     // old-target clear, the pet bar's writer in the feed: `"pet"` resolves off
-                    // the bar.
+                    // the bar. After the aura feed, whose resolver inputs list the units the
+                    // hover verdict is asked for.
                     targeting::feed_targeting_to_vm
                         .in_set(UnitFeed)
-                        .after(crate::ui_pet::pet_stop_on_old_target_clear),
+                        .after(crate::ui_pet::pet_stop_on_old_target_clear)
+                        .after(crate::ui_aura::AuraEvents),
                     (
                         targeting::publish_picks_self,
                         targeting::publish_corpse_pick,

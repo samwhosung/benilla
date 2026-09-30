@@ -6,10 +6,10 @@ use crate::widget::{FrameHandle, RegionHandle, WidgetArena};
 use super::{
     auction, backdrop, bank, bind_confirm, camera_view, char_stats, chat_window, colorselect,
     container, craft, cursor, death, duel, follow, gossip, guild, inspect, item_text, loot,
-    loot_roll, macros, mail, merchant, party, petition, pvp, quest, quest_log, reputation, session,
-    simplehtml, skills, slider, social, spellbook, stable, taxi, trade, tradeskill, trainer,
-    weapon_enchant, ActionSlot, AuraState, FontObject, ItemTemplateView, MusicRequest,
-    PlayerReqState, RegionData, ScriptValue, SoundRequest, UnitState,
+    loot_roll, macros, mail, merchant, parse_unit_token, party, petition, pvp, quest, quest_log,
+    reputation, session, simplehtml, skills, slider, social, spellbook, stable, taxi, trade,
+    tradeskill, trainer, weapon_enchant, ActionSlot, AuraState, FontObject, ItemTemplateView,
+    MusicRequest, PlayerReqState, RegionData, ScriptValue, SoundRequest, UnitState, UnitTokenParse,
 };
 
 // ── The Rust-side model ──
@@ -238,6 +238,10 @@ pub(crate) struct Model {
     /// Each unit token's state as pushed this frame, keyed lowercased because 1.12's resolver
     /// (`0x515970`) matches with `SStrCmpI`: read it only through `unit`, where the fold lives.
     pub(crate) units_by_lower: HashMap<String, UnitState>,
+    /// The snapshot of each unit a `target` chain can end on, by guid, which the app pushes for
+    /// [`super::UnitGuids::chain_ends`]: a token with a hop that no push names reads its
+    /// resolved guid's entry here.
+    pub(crate) units_by_guid: HashMap<u64, UnitState>,
     /// The player's auras in the reference cache's insertion order (`0xbc6040`), durations joined:
     /// the `GetPlayerBuff` family's list, and any token naming the player's.
     pub(crate) player_auras: Vec<AuraState>,
@@ -453,9 +457,10 @@ pub(crate) struct Model {
     /// Spell targeting is on (`SpellIsTargeting`, `0x6e6cd0`); it gates `SpellStopTargeting()`,
     /// whose nil the ESC chain falls through on (`UIParent.lua:1490`).
     pub(crate) spell_targeting: bool,
-    /// Tokens for which `SpellCanTargetUnit`'s armed unit word clears fully, used by stock unit
-    /// frames before they call `SpellTargetUnit`.
-    pub(crate) spell_targetable_units: HashSet<String>,
+    /// The units, by guid, for which `SpellCanTargetUnit`'s armed unit word clears fully, which
+    /// stock unit frames ask before they call `SpellTargetUnit`; a token resolves to its guid
+    /// through [`Self::unit_guids`].
+    pub(crate) spell_targetable_units: HashSet<u64>,
 
     pub(crate) talents: super::talent::TalentUiState,
     /// `LearnTalent(tab, index)` calls queued.
@@ -999,13 +1004,34 @@ impl Model {
         self.warnings.push(msg);
     }
 
-    /// A unit token's state, folded as 1.12's resolver `0x515970` folds (`_strnicmp`: `A`..`Z`
-    /// only, never a byte of 0x80 or more), so `to_ascii_lowercase`, never `to_lowercase`.
+    /// The state of the unit `token` names, as the `Unit*` getters read it: the snapshot the app
+    /// pushed under the token, else, for a token with a `target` hop, the chain's end.
     pub(crate) fn unit(&self, token: &str) -> Option<&UnitState> {
+        self.pushed_unit(token).or_else(|| self.chained_unit(token))
+    }
+
+    /// The snapshot pushed under `token` itself, folded as 1.12's resolver `0x515970` folds
+    /// (`_strnicmp`: `A`..`Z` only, never a byte of 0x80 or more), so `to_ascii_lowercase`, never
+    /// `to_lowercase`.
+    pub(crate) fn pushed_unit(&self, token: &str) -> Option<&UnitState> {
         if token.bytes().any(|b| b.is_ascii_uppercase()) {
             self.units_by_lower.get(&token.to_ascii_lowercase())
         } else {
             self.units_by_lower.get(token)
+        }
+    }
+
+    /// The unit a token with a `target` hop and no push of its own names: the resolver's guid
+    /// (`0x515970`, which the getters call before their own object lookup, `0x468460`), then that
+    /// guid's snapshot. A token without a hop is the app's to push, base by base, and reads
+    /// nothing here.
+    fn chained_unit(&self, token: &str) -> Option<&UnitState> {
+        match parse_unit_token(token) {
+            UnitTokenParse::Unit { base, hops } if hops > 0 => {
+                let guid = self.unit_guids.resolve_unit(base, hops)?;
+                self.units_by_guid.get(&guid)
+            }
+            _ => None,
         }
     }
 
@@ -1083,6 +1109,7 @@ impl Model {
             // 1024x768 until the host calls `set_screen_size`; y-up `[bottom, left, top, right]`.
             screen: Rect::new(0.0, 0.0, 768.0, 1024.0),
             units_by_lower: HashMap::new(),
+            units_by_guid: HashMap::new(),
             player_auras: Vec::new(),
             unit_auras: HashMap::new(),
             unit_guids: Default::default(),

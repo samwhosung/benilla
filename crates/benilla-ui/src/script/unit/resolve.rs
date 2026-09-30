@@ -172,11 +172,15 @@ impl UnitGuids {
     /// match, where the reference raises `Unknown unit name: %s` (`0x515c14`). An empty token is
     /// nobody (`0x51599d`).
     pub(crate) fn resolve(&self, token: &str) -> Result<Option<u64>, ()> {
-        let (base, hops) = match parse_unit_token(token) {
-            UnitTokenParse::Unknown => return Err(()),
-            UnitTokenParse::Nobody => return Ok(None),
-            UnitTokenParse::Unit { base, hops } => (base, hops),
-        };
+        match parse_unit_token(token) {
+            UnitTokenParse::Unknown => Err(()),
+            UnitTokenParse::Nobody => Ok(None),
+            UnitTokenParse::Unit { base, hops } => Ok(self.resolve_unit(base, hops)),
+        }
+    }
+
+    /// The guid a parsed token names: its base's guid, then each `target` hop. `None` is nobody.
+    pub(crate) fn resolve_unit(&self, base: UnitBase, hops: usize) -> Option<u64> {
         // The indexed bases: the table's row for the parsed number.
         let at = |table: &[u64], row: u32| {
             usize::try_from(row)
@@ -187,7 +191,7 @@ impl UnitGuids {
         };
         let guid = match base {
             UnitBase::Player => self.player,
-            UnitBase::Pet if self.player == 0 => return Ok(None),
+            UnitBase::Pet if self.player == 0 => return None,
             UnitBase::Pet => self.pet,
             UnitBase::Target => self.target,
             UnitBase::Npc => self.npc,
@@ -199,10 +203,19 @@ impl UnitGuids {
             // Capped at the roster count (`0x491940`, `0x491960`).
             UnitBase::RaidPet(row) => at(&self.raid_pets, row),
             UnitBase::Raid(row) => at(&self.raid, row),
-            UnitBase::Mouseover if !self.held.contains_key(&self.mouseover) => return Ok(None),
+            UnitBase::Mouseover if !self.held.contains_key(&self.mouseover) => return None,
             UnitBase::Mouseover => self.mouseover,
         };
-        Ok(self.follow(guid, hops))
+        self.follow(guid, hops)
+    }
+
+    /// The guids a `target` hop can end on: each held unit's target, when it names one. `held`
+    /// holds the bases' units and each unit a hop reaches from them, so a token with a hop names
+    /// one of these or nobody, and a per-guid feed over them covers the chains a script can spell.
+    /// A guid repeats when two units share a target, and the last hop's unit need not be held: the
+    /// lookup that finds its object is the reader's.
+    pub(crate) fn chain_ends(&self) -> impl Iterator<Item = u64> + '_ {
+        self.held.values().copied().filter(|&guid| guid != 0)
     }
 
     /// [`Self::resolve`] with the raise as the Lua error it is.

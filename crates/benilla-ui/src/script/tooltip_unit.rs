@@ -235,7 +235,7 @@ fn update_bar(lua: &Lua, h: FrameHandle, unit: Option<&UnitState>) {
 pub(super) fn on_unit_push(lua: &Lua, token: &str) {
     let (unit, hits): (UnitState, Vec<FrameHandle>) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
-        let Some(unit) = model.unit(token).filter(|u| u.exists && u.guid != 0) else {
+        let Some(unit) = model.pushed_unit(token).filter(|u| u.exists && u.guid != 0) else {
             return;
         };
         // Registered frames only, as `update_bar` writes layout.

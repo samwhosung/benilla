@@ -369,7 +369,6 @@ pub(crate) fn feed_targeting_to_vm(
     targeting: Res<SpellTargeting>,
     checks: BindChecks,
     tokens: crate::ui_unit::UnitTokens,
-    selection: Res<crate::target::Selection>,
     mut last: Local<crate::ui_script::VmMemo<Option<u32>>>,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
 ) {
@@ -377,12 +376,19 @@ pub(crate) fn feed_targeting_to_vm(
         let last = last.get(&script);
         script.set_spell_targeting(targeting.active());
         script.set_item_pick_armed(targeting.wants(TargetingWants::Item));
-        // `SpellCanTargetUnit(unit)`: resolve each token and ask `0x6e6460`'s unit leg.
-        script.set_spell_targetable_units(crate::ui_unit::reach_tokens().filter(|token| {
-            tokens
-                .resolve(token, &selection)
-                .is_some_and(|(entity, _)| targeting.can_target_unit(entity, &checks))
-        }));
+        // `SpellCanTargetUnit(unit)`: the VM resolves the token to a guid (`0x6e6d3a`), and
+        // `0x6e6460`'s unit leg answers for that guid. The units to ask are the held ones the
+        // resolver's inputs list, the `target` chains' included.
+        let targetable: Vec<u64> = script
+            .held_unit_guids()
+            .into_iter()
+            .filter(|&guid| {
+                tokens
+                    .held(guid)
+                    .is_some_and(|(entity, _)| targeting.can_target_unit(entity, &checks))
+            })
+            .collect();
+        script.set_spell_targetable_units(targetable);
         if *last != targeting.spell() {
             *last = targeting.spell();
             script.fire_event("CURRENT_SPELL_CAST_CHANGED", vec![]);
@@ -565,6 +571,33 @@ mod tests {
         );
     }
 
+    /// What the aura feed pushes each frame for the units this world holds, us and the selection:
+    /// the resolver's inputs, and the object manager's index of them. `SpellCanTargetUnit`
+    /// resolves its token through the inputs, and the feed asks the verdict of each unit they list.
+    fn publish_guids(world: &mut World) {
+        let me = world
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(world)
+            .expect("the player");
+        let selection = world.resource::<crate::target::Selection>();
+        let selected = selection.target.zip(selection.guid);
+        let mut guids = benilla_ui::script::UnitGuids {
+            player: ME,
+            held: HashMap::from([(ME, 0)]),
+            ..Default::default()
+        };
+        let mut index = world.resource_mut::<crate::net::GuidIndex>();
+        index.0.insert(ME, me);
+        if let Some((entity, guid)) = selected {
+            index.0.insert(guid, entity);
+            guids.target = guid;
+            guids.held.insert(guid, 0);
+        }
+        world
+            .non_send_resource_mut::<UiScript>()
+            .set_unit_guids(&guids);
+    }
+
     /// Queue `SpellTargetUnit(token)` in the VM, then apply it.
     fn spell_target_unit(world: &mut World, token: &str) {
         world
@@ -714,6 +747,68 @@ mod tests {
             assert!(rx.try_recv().is_err(), "{token}: no send");
             assert_eq!(errors(&mut world), fail, "{token}");
             assert!(!world.resource::<SpellTargeting>().active(), "{token}");
+        }
+    }
+
+    /// `SpellCanTargetUnit` resolves a chain as `SpellTargetUnit` does and answers the verdict of
+    /// the unit it ends on (`0x6e6d3a` into `0x515970`, then `0x6e6460`): the ally we and our pet
+    /// target, in range of the spell or not, and nobody past a unit with no target.
+    #[test]
+    fn spell_can_target_unit_follows_a_target_chain() {
+        const PET: u64 = 0xF140_0000_0000_0077;
+        // `OBJECT_FIELD_TYPE`, `UNIT_FIELD_HEALTH` and `UNIT_FIELD_TARGET`, the last a 2-field guid.
+        let unit = |kind: u32, target: u64| {
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, kind),
+                (22, 100),
+                (16, target as u32),
+                (17, (target >> 32) as u32),
+            ]))
+        };
+        let can = |distance: f32, token: &str| {
+            let (mut world, _rx, ally) = unit_world(distance);
+            // We and our pet target the ally; the ally targets nobody.
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(&world)
+                .unwrap();
+            world.entity_mut(me).insert(unit(0x19, ALLY));
+            world.entity_mut(ally).insert(unit(0x09, 0));
+            let pet = world
+                .spawn((Guid(PET), GlobalTransform::default(), unit(0x09, ALLY)))
+                .id();
+            let mut bar = crate::ui_pet::PetBar::default();
+            bar.spells.pet_guid = PET;
+            world.insert_resource(bar);
+            let mut index = world.resource_mut::<crate::net::GuidIndex>();
+            index.0.insert(PET, pet);
+            arm(&mut world, HEAL, 0x0002);
+            // The index of us and the ally, then the aura feed's inputs with the chain's units:
+            // each held unit and the target it names.
+            publish_guids(&mut world);
+            world.non_send_resource_mut::<UiScript>().set_unit_guids(
+                &benilla_ui::script::UnitGuids {
+                    player: ME,
+                    pet: PET,
+                    target: ALLY,
+                    held: HashMap::from([(ME, ALLY), (PET, ALLY), (ALLY, 0)]),
+                    ..Default::default()
+                },
+            );
+            world
+                .run_system_cached(feed_targeting_to_vm)
+                .expect("the feed runs");
+            world
+                .non_send_resource::<UiScript>()
+                .eval::<bool>(&format!("return SpellCanTargetUnit({token:?}) == true"))
+                .expect("a boolean")
+        };
+        for token in ["pettarget", "playertarget", "PETTARGET", "target"] {
+            assert!(can(10.0, token), "{token}: the ally in range");
+            assert!(!can(40.0, token), "{token}: the ally out of range");
+        }
+        for token in ["pettargettarget", "playertargettarget", "party1target"] {
+            assert!(!can(10.0, token), "{token}: past the ally, nobody");
         }
     }
 
@@ -887,6 +982,7 @@ mod tests {
             arm(&mut world, SPELL, word);
 
             // The hover verdict.
+            publish_guids(&mut world);
             world
                 .run_system_cached(feed_targeting_to_vm)
                 .expect("the feed runs");
@@ -1124,6 +1220,7 @@ mod tests {
                 arm(&mut world, SPELL, word);
 
                 // The hover verdict.
+                publish_guids(&mut world);
                 world
                     .run_system_cached(feed_targeting_to_vm)
                     .expect("the feed runs");
@@ -1176,6 +1273,7 @@ mod tests {
         let can = |distance: f32, spell: u32, token: &str| {
             let (mut world, _rx, _) = unit_world(distance);
             arm(&mut world, spell, 0x0002);
+            publish_guids(&mut world);
             world
                 .run_system_cached(feed_targeting_to_vm)
                 .expect("the feed runs");

@@ -617,17 +617,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellCanTargetUnit("unit") (`0x6e6d00`) asks `0x6e6460`'s unit leg whether the standing
-    // word clears against that resolved unit.
+    // SpellCanTargetUnit("unit") (`0x6e6d00`): the argument is a string or a number (`0x6e6d0e`,
+    // else `Usage:`), resolved through `0x515970` (`0x6e6d3a`), which raises for a token it does
+    // not know; a token naming nobody answers nil (`0x6e6d43`), and a guid asks `0x6e6460`'s unit
+    // leg whether the standing word clears against it.
     g.set(
         "SpellCanTargetUnit",
-        lua.create_function(|lua, unit: Option<String>| {
+        lua.create_function(|lua, unit: Value| {
+            let token = crate::script::binding_abi::string_arg(
+                lua,
+                unit,
+                r#"Usage: SpellCanTargetUnit("unit")"#,
+            )?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let can = unit.is_some_and(|unit| {
-                model
-                    .spell_targetable_units
-                    .contains(&unit.to_ascii_lowercase())
-            });
+            let can = model
+                .unit_guids
+                .guid_of(&token)?
+                .is_some_and(|guid| model.spell_targetable_units.contains(&guid));
             if can {
                 Ok(Value::Boolean(true))
             } else {
