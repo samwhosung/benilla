@@ -8,9 +8,10 @@
 
 use std::fmt;
 
-use benilla_world::layout_keys::LayoutChars;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::KeyCode;
+
+use super::layout::LayoutChars;
 
 /// A key's 1.12 name: one character (`Z`, `1`, `ù`), or a word from the reference's name table
 /// (`F1`, `NUMPAD7`, `SPACE`).
@@ -648,7 +649,8 @@ mod tests {
         );
     }
 
-    /// A layout as `layout_keys` records it from the OS: each key's unshifted character.
+    /// A layout as `layout::record_layout_chars` records it from the OS: each key's unshifted
+    /// character.
     fn layout(keys: &[(KeyCode, &str)]) -> LayoutChars {
         use bevy::input::keyboard::Key;
         let mut chars = LayoutChars::default();

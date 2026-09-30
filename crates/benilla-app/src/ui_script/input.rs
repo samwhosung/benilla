@@ -93,7 +93,7 @@ pub(super) fn feed_ui_input(
         NonSendMut<HostClipboard>,
     ),
     // The characters the active layout makes, which name a key for a keyboard frame.
-    layout: Res<benilla_world::layout_keys::LayoutChars>,
+    layout: Res<crate::bindings::LayoutChars>,
     // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
 ) {

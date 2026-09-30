@@ -25,16 +25,17 @@ use bevy::prelude::*;
 
 use benilla_ui::script::keybind::KeybindRequest;
 use benilla_ui::script::UiScript;
-use benilla_world::layout_keys::LayoutChars;
 
 use crate::char_select::InWorldGated;
 use crate::ui_script::{PlayerUiHover, PointerOverUiPanel, UiKeyboardCapture};
 
 pub(crate) mod chord;
+mod layout;
 mod script_input;
 mod store;
 
 use chord::{BindKey, Chord};
+pub(crate) use layout::LayoutChars;
 pub(crate) use script_input::Input;
 
 /// The chord-to-command map, rebuilt whenever the engine table's generation moves. Probe it
@@ -150,7 +151,8 @@ pub(crate) struct BindingsPlugin;
 
 impl Plugin for BindingsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<BindingDispatch>()
+        app.add_plugins(layout::plugin)
+            .init_resource::<BindingDispatch>()
             .init_resource::<BindingsState>()
             .init_resource::<BindingFiles>()
             .add_systems(
@@ -1196,8 +1198,8 @@ mod tests {
         assert!(!state(&app).fired(Input::ToggleSheath));
     }
 
-    /// The layout's unshifted character on `k`, as `layout_keys` records it from the key's own
-    /// OS message, ahead of the press.
+    /// The layout's unshifted character on `k`, as `layout::record_layout_chars` records it from
+    /// the key's own OS message, ahead of the press.
     fn layout_key(app: &mut App, k: KeyCode, unshifted: &str) {
         app.world_mut()
             .resource_mut::<LayoutChars>()

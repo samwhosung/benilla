@@ -50,6 +50,9 @@ toml = "0.8"
 avian3d = "0.6"
 # Shapes and rasterizes `FontString` text standalone (`ui_text`), at bevy_text's own 0.16.
 cosmic-text = "0.16"
+# The layout's unshifted character per key (`KeyEventExtModifierSupplement`), which bevy's
+# `KeyboardInput` drops; bevy_winit's own 0.30, whose features it sets.
+winit = { version = "0.30", default-features = false }
 # `cosmic-text`'s font database, named by `ui_text`; must stay the version it depends on.
 fontdb = "0.23"
 # The mixer. Its `cpal` backend stays off on every target: `sound::output` is our own backend.
