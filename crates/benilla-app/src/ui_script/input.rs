@@ -85,20 +85,19 @@ pub(super) fn feed_ui_input(
     // The wheel travel and its carried notch fraction, one param for clippy's argument ceiling.
     (scroll, mut notches): (Res<AccumulatedMouseScroll>, ResMut<WheelNotches>),
     mut pointer: PointerFeed,
-    // One param for clippy's argument ceiling, with the pasteboard the clipboard chords use and
-    // the layout that names a key for a keyboard frame.
+    // One param for clippy's argument ceiling, with the pasteboard the clipboard chords use.
     mut kbd: (
         MessageReader<KeyboardInput>,
         Res<ButtonInput<KeyCode>>,
         ResMut<UiKeyboardCapture>,
         NonSendMut<HostClipboard>,
-        Res<benilla_world::layout_keys::LayoutChars>,
     ),
+    // The characters the active layout makes, which name a key for a keyboard frame.
+    layout: Res<benilla_world::layout_keys::LayoutChars>,
     // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
 ) {
-    let (keyboard, keys, capture, clipboard, layout) =
-        (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3, &kbd.4);
+    let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
     let world_pick = pointer.world_pick();
     // The OS pointer is not ours while a probe drives a gesture through the real pointer path or a
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
@@ -268,7 +267,7 @@ pub(super) fn feed_ui_input(
         // (`0x765df0`), so the stack-split spinner still gets a digit its `OnKeyDown` ate, and it
         // is not a focus change, so it releases nothing held.
         else if named.is_none() {
-            if let Some(token) = crate::bindings::chord::key_token(ev.key_code, layout) {
+            if let Some(token) = crate::bindings::chord::key_token(ev.key_code, &layout) {
                 if script.frame_key_input(&token.to_string()) {
                     capture.consumed.push(ev.key_code);
                 }
