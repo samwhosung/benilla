@@ -879,19 +879,30 @@ impl UiScript {
     }
 
     /// Resolve and cache every frame's rect, which `GetWidth`/`GetHeight`/`extract` read, then fire
-    /// `OnSizeChanged` for frames whose size moved ([`event::fire_size_changes`]).
+    /// `OnSizeChanged` for frames whose size moved ([`event::fire_size_changes`]) and re-seat the
+    /// text of every resized EditBox.
     pub fn resolve(&mut self) {
+        self.resolve_and_measure();
+        event::fire_size_changes(&self.lua);
+        // The EditBox's own `OnSizeChanged` (`0x77a8d0`) runs after the script fire and re-seats a
+        // resized box's text, which the reference's drain resolves in the same pass.
+        let reseated = editbox::reseat_resized(&mut self.model_mut());
+        if reseated {
+            self.resolve_and_measure();
+        }
+    }
+
+    /// Resolve, and with a font engine installed ([`Self::set_text_measurer`]) measure what the
+    /// solve revealed and solve again, so a FontString's box is right in the frame its text was set.
+    fn resolve_and_measure(&mut self) {
         {
             let mut model = self.model_mut();
             Self::resolve_layout(&mut model);
         }
-        // With a font engine installed ([`Self::set_text_measurer`]), measure what the solve
-        // revealed and solve again, so a FontString's box is right in the frame its text was set.
         if self.fill_measures() {
             let mut model = self.model_mut();
             Self::resolve_layout(&mut model);
         }
-        event::fire_size_changes(&self.lua);
     }
 
     /// Store host measurements `(id, w, h, natural_w, key)` for [`MeasureRequest`]s; the next

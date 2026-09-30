@@ -1,5 +1,5 @@
-//! A multi-line box's own height (`0x77d4d0` @`0x77d8ad`) and its text region's rect
-//! (`0x77b8c0`), driven through the Lua methods and the tick.
+//! The text region's rect (`0x77b8c0`, re-seated on every resize by `0x77a8d0`) and a multi-line
+//! box's own height (`0x77d4d0` @`0x77d8ad`), driven through the Lua methods and the tick.
 
 use crate::script::{MeasureRequest, QuadContent, TextMeasure, UiScript};
 
@@ -313,4 +313,89 @@ fn a_scroll_frame_ranges_over_the_whole_text_of_a_multi_line_box() {
         want
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The text quad's rect as `(left, right, top, bottom)`, `None` when it draws nowhere.
+fn text_rect(s: &UiScript, text: &str) -> Option<(f32, f32, f32, f32)> {
+    s.extract().into_iter().find_map(|q| match &q.content {
+        QuadContent::Text { text: Some(t), .. } if t == text => {
+            q.rect.map(|r| (r.left, r.right, r.top, r.bottom))
+        }
+        _ => None,
+    })
+}
+
+/// A box built in Lua, with no `<FontString>` and no `SetTextInsets`, has its text seated at its
+/// first resolve: `ApplyRect` (`0x76b580`) sees it resized from the ctor's zero rect and the
+/// override `0x77a8d0` runs `0x77b8c0` (`0x77a8e7`).
+#[test]
+fn a_lua_box_with_a_font_seats_its_text_at_its_first_resolve() {
+    let mut s = script();
+    s.run(
+        r#"
+        E = CreateFrame("EditBox", "E")
+        E:SetAutoFocus(false)
+        E:SetPoint("BOTTOMLEFT", 100, 50)
+        E:SetWidth(200); E:SetHeight(32)
+        E:SetFont("Fonts\\FRIZQT__.TTF", 14)
+        E:SetText("hello")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(text_rect(&s, "hello"), Some((100.0, 300.0, 82.0, 50.0)));
+}
+
+/// A later resize re-seats the text of any box: a multi-line box re-wraps at its new width, and a
+/// single-line box's moved text region is put back between its insets.
+#[test]
+fn a_resized_box_re_seats_its_text() {
+    let mut s = script();
+    inset_box(&mut s);
+    // 30 characters are 210 wide: two rows in 200 less the side insets, one row in 300 less them.
+    s.run(r#"E:SetText(string.rep("x", 30))"#).unwrap();
+    frame(&mut s);
+    frame(&mut s);
+    assert_eq!(height(&s, "E"), f64::from(5.0 + 2.0 * LH));
+    s.run("E:SetWidth(300)").unwrap();
+    frame(&mut s);
+    frame(&mut s);
+    assert_eq!(
+        text_rect(&s, &"x".repeat(30)).map(|r| (r.0, r.1)),
+        Some((115.0, 387.0)),
+        "the text region takes the new width less the side insets"
+    );
+    assert_eq!(
+        height(&s, "E"),
+        f64::from(5.0 + LH),
+        "and the text re-wraps in it"
+    );
+
+    s.run(
+        r#"
+        S = CreateFrame("EditBox", "S")
+        S:SetAutoFocus(false)
+        S:SetPoint("BOTTOMLEFT", 100, 200)
+        S:SetWidth(200); S:SetHeight(32)
+        S:SetText("single")
+    "#,
+    )
+    .unwrap();
+    frame(&mut s);
+    s.run(
+        r#"
+        local text = S:GetRegions()
+        text:ClearAllPoints(); text:SetPoint("TOPLEFT", S, "TOPLEFT", 40, 40)
+    "#,
+    )
+    .unwrap();
+    frame(&mut s);
+    assert_ne!(
+        text_rect(&s, "single").map(|r| r.0),
+        Some(100.0),
+        "the script moved the text region"
+    );
+    s.run("S:SetWidth(250)").unwrap();
+    frame(&mut s);
+    assert_eq!(text_rect(&s, "single"), Some((100.0, 350.0, 232.0, 200.0)));
 }

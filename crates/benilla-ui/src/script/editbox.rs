@@ -126,7 +126,7 @@ mod seam;
 pub(super) use interact::{
     click, copy_selection, cut_selection, drag_end, drag_update, tick_blink,
 };
-pub(in crate::script) use relayout::relayout_multi_line;
+pub(in crate::script) use relayout::{relayout_multi_line, reseat_resized};
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Focus model
@@ -395,6 +395,11 @@ pub(crate) fn adopt_text_region(lua: &Lua, frame: &Table, region: &Table) -> mlu
 /// Get or create the box's text FontString; an XML-declared one is wired by [`adopt_text_region`].
 pub(super) fn ensure_text_region(lua: &Lua, h: FrameHandle) -> Option<RegionHandle> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    ensure_text_region_in(&mut model, h)
+}
+
+/// [`ensure_text_region`] on a borrowed model.
+fn ensure_text_region_in(model: &mut Model, h: FrameHandle) -> Option<RegionHandle> {
     let (existing, multi_line) = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::EditBox(eb)) => (eb.text_region, eb.multi_line),
         _ => return None,
@@ -546,7 +551,7 @@ mod methods;
 pub(super) use methods::install;
 
 #[cfg(test)]
-mod multi_line_tests;
+mod relayout_tests;
 #[cfg(test)]
 mod tests;
 

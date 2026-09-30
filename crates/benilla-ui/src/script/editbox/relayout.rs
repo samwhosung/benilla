@@ -3,7 +3,7 @@
 
 use mlua::Lua;
 
-use crate::layout::{Anchor, Point};
+use crate::layout::{Anchor, Point, Rect};
 use crate::script::{MeasureRequest, Model};
 use crate::widget::{FrameHandle, KindState, RegionHandle};
 
@@ -54,6 +54,37 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
     }
 }
 
+/// The EditBox's `OnSizeChanged` override (`0x77a8d0`, vtable `0x81c910` slot `+0x48`): after the
+/// base script fire (`0x77a8e0`), `0x77a8e7` re-seats the text region (`0x77b8c0`) on every resize
+/// of any box. `ApplyRect` (`0x76b580`) calls it when the width or height moved by the resize
+/// epsilon, the first resolve included, against the ctor's zero rect. `true` when a re-seat moved
+/// a layout input, for the caller to resolve it in the same pass, as the reference's drain does.
+pub(in crate::script) fn reseat_resized(model: &mut Model) -> bool {
+    let epoch = model.layout_epoch;
+    for i in 0..model.arena.editbox_kinds().len() {
+        let h = model.arena.editbox_kinds()[i];
+        let Some(&now) = model.resolved.get(&h) else {
+            continue; // no rect, no `ApplyRect`
+        };
+        let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state)
+        else {
+            continue;
+        };
+        let before = eb
+            .notified_rect
+            .replace(now)
+            .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+        if !crate::layout::size_changed(before, now) {
+            continue;
+        }
+        // The ctor built the text region; its data is seeded here if nothing has touched it.
+        if super::ensure_text_region_in(model, h).is_some() {
+            seat_text_region(model, h);
+        }
+    }
+    model.layout_epoch != epoch
+}
+
 /// A multi-line box's text width in its own units, `boxW − (right + left)`, from the rect the
 /// last resolve gave it; `None` before it has one.
 fn multi_line_text_width(model: &Model, h: FrameHandle, [l, r]: [f32; 2]) -> Option<f32> {
@@ -66,8 +97,8 @@ fn multi_line_text_width(model: &Model, h: FrameHandle, [l, r]: [f32; 2]) -> Opt
 /// The box's own height becomes `(insetTop + insetBottom) + h`, `h` its text's measured wrapped
 /// height (`0x7729b0`), or one line's (`0x7727b0(fs, 1)`) when that is exactly 0, as for empty
 /// text. It reads neither the authored height nor the rect, so the box grows and shrinks with its
-/// text and a `SetHeight` lasts until the next tick; a single-line box is never sized. The box's
-/// resize re-seats its text (`0x77a8d0` → `0x77b8c0`), done here when the box's width has moved.
+/// text and a `SetHeight` lasts until the next tick; a single-line box is never sized. The text
+/// region's width is the one the box's last resize seated ([`reseat_resized`]).
 ///
 /// Each tick relayouts every shown multi-line box, where the reference relayouts a box whose dirty
 /// bit 0 is set; every input of the height sets it (an edit, a resize, the insets, the font,
@@ -93,19 +124,6 @@ pub(in crate::script) fn relayout_multi_line(lua: &Lua) {
         let Some(rh) = super::ensure_text_region(lua, h) else {
             continue;
         };
-        {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let insets = match model.arena.frame(h).map(|f| &f.kind_state) {
-                Some(KindState::EditBox(eb)) => eb.text_insets,
-                _ => continue,
-            };
-            let seated = model.region_data.get(&rh).and_then(|d| d.size);
-            let width = multi_line_text_width(&model, h, [insets[0], insets[1]]);
-            let moved = width.is_some_and(|w| seated.is_none_or(|s| s.0.to_bits() != w.to_bits()));
-            if moved {
-                seat_text_region(&mut model, h);
-            }
-        }
         // `0x7729b0` measures in the call; with no engine installed the measure lands a tick later.
         crate::script::measure::ensure_measured(lua, rh);
         let Some(text_h) = text_height(lua, h, rh) else {

@@ -85,6 +85,9 @@ pub struct EditBoxState {
     /// One line's measured height in the text region's font (`0x7727b0(fs, 1)`), the height of an
     /// empty multi-line box's text, with the measure key it was taken under.
     pub line_height: Option<(u64, f32)>,
+    /// The box's rect when its resize was last checked, `ApplyRect`'s old rect (`0x76b580`);
+    /// `None` before its first resolve, which compares against the ctor's zero rect.
+    pub notified_rect: Option<crate::layout::Rect>,
     /// The host-measured width of `display[..i]` per byte `i`, a continuation byte repeating its
     /// lead's; hit-testing (`0x77d0d0`) and the scroll window read it. Empty until answered.
     pub advances: Vec<f32>,
@@ -165,6 +168,7 @@ impl Default for EditBoxState {
             history_draft: None,
             text_insets: [0.0; 4],
             line_height: None,
+            notified_rect: None,
             advances: Vec::new(),
             advances_key: 0,
             rows: vec![0],
