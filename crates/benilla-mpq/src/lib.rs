@@ -1,5 +1,6 @@
-//! A read-only MPQ reader for the 1.12.1 `Data/` chain: format V1/V2, every file `COMPRESS`-flagged
-//! and sectored, no encrypted or single-unit files, no PTCH patches. Anything else is a hard error.
+//! A read-only MPQ reader for the 1.12.1 `Data/` chain: format V1/V2, every file stored whole or
+//! `COMPRESS`-flagged and sectored, no encrypted or single-unit files, no PTCH patches. Anything
+//! else is a hard error.
 //!
 //! The patch archives carry delete markers (flag `0x02000000`, size 0): the path is deleted from
 //! the composite chain. [`Archive::contains`] reports one present and [`Archive::read_file`]
@@ -311,8 +312,7 @@ impl ArchiveFile {
         self.size as u64
     }
 
-    /// The whole file from its start, sector by sector; a sector that inflates short leaves the
-    /// file short rather than failing it.
+    /// The whole file from its start, sector by sector.
     fn read_all(mut self) -> Result<Vec<u8>> {
         if self.offsets.is_none() {
             self.file.seek(SeekFrom::Start(self.base))?;
@@ -323,16 +323,16 @@ impl ArchiveFile {
         let sector_count = self.size.div_ceil(self.sector_size);
         let mut out = Vec::with_capacity(capped(self.size, 1, self.avail));
         for i in 0..sector_count {
-            // Each earlier sector yielded at most its own `want` (`decompress` is bounded), so
-            // `out.len() <= size` and this cannot wrap.
-            let want = (self.size - out.len()).min(self.sector_size); // last sector may be short
-            out.extend_from_slice(&self.decode_sector(i, want)?);
+            out.extend_from_slice(&self.decode_sector(i)?);
         }
         Ok(out)
     }
 
-    /// Sector `i` of a sectored file, read and decompressed to at most `want` bytes.
-    fn decode_sector(&mut self, i: usize, want: usize) -> Result<Vec<u8>> {
+    /// Sector `i` of a sectored file, read and decompressed to exactly its share of the file:
+    /// the sector size, or the remainder for the last. One that inflates short is refused, since
+    /// every later byte would shift into the gap.
+    fn decode_sector(&mut self, i: usize) -> Result<Vec<u8>> {
+        let want = (self.size - i * self.sector_size).min(self.sector_size);
         let name = &self.name;
         let offsets = self.offsets.as_deref().unwrap_or_default();
         let (Some(&start), Some(&end)) = (offsets.get(i), offsets.get(i + 1)) else {
@@ -359,18 +359,26 @@ impl ArchiveFile {
         let mut raw = vec![0u8; comp_len]; // proven <= avail above
         self.file.read_exact(&mut raw)?;
 
-        if comp_len >= want {
+        let out = if comp_len >= want {
             // A sector that would not shrink is stored verbatim.
             raw.truncate(want);
-            Ok(raw)
+            raw
         } else if self.implode_only {
             // IMPLODE sectors carry no method byte; 1.12.1 data has none.
-            decompress(0x08, &raw, want, name)
+            decompress(0x08, &raw, want, name)?
         } else {
             // COMPRESS: the leading byte is the codec mask, the rest the payload.
             let method = raw[0]; // non-empty: refused above
-            decompress(method, &raw[1..], want, name)
+            decompress(method, &raw[1..], want, name)?
+        };
+        // `decompress` stops at `want`, so only a short sector is left to refuse.
+        if out.len() != want {
+            return Err(Error::Decompress(format!(
+                "{name}: sector {i} inflates to {} bytes, not {want}",
+                out.len()
+            )));
         }
+        Ok(out)
     }
 
     /// Stored bytes at `pos` into `buf`, straight from the archive file.
@@ -385,17 +393,7 @@ impl ArchiveFile {
     fn read_sectored(&mut self, buf: &mut [u8]) -> Result<usize> {
         let i = self.pos as usize / self.sector_size;
         if self.sector.as_ref().is_none_or(|(at, _)| *at != i) {
-            let want = (self.size - i * self.sector_size).min(self.sector_size);
-            let bytes = self.decode_sector(i, want)?;
-            // A short sector would shift every later byte: refused here, where `read_all`
-            // shortens the file instead.
-            if bytes.len() != want {
-                return Err(Error::Corrupt(format!(
-                    "{}: sector {i} inflates to {} bytes, not {want}",
-                    self.name,
-                    bytes.len()
-                )));
-            }
+            let bytes = self.decode_sector(i)?;
             self.sector = Some((i, bytes));
         }
         let sector = self
@@ -936,9 +934,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// A stream cannot shorten the file the way a whole read does: every later byte would shift.
+    /// A sector that inflates short would shift every later byte into the gap: a whole read and
+    /// a stream both refuse it.
     #[test]
-    fn an_open_file_refuses_a_sector_that_inflates_short() {
+    fn a_sector_that_inflates_short_is_refused() {
         let plain = three_sector_plain();
         // Sector 0 claims 512 bytes but its stream holds 500.
         let mut short = plain.clone();
@@ -970,7 +969,12 @@ mod tests {
                 plain.len() as u32,
             ),
         );
-        assert_eq!(arc.read_file("a.bin").unwrap().len(), plain.len() - 12);
+        match arc.read_file("a.bin") {
+            Err(Error::Decompress(e)) => {
+                assert!(e.contains("sector 0 inflates to 500 bytes, not 512"), "{e}")
+            }
+            other => panic!("expected Error::Decompress for a short sector, got {other:?}"),
+        }
         let mut f = arc.open_file("a.bin").unwrap();
         let err = f.read(&mut [0u8; 16]).unwrap_err().to_string();
         assert!(
