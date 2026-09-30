@@ -796,10 +796,42 @@ fn detail_text(s: &UiScript) -> String {
         .unwrap()
 }
 
+/// The kit's stand-in font (`trainer_script`'s `FixedWidthFont(7.0)`): every character this wide,
+/// every wrapped line this tall.
+const CHAR_W: f64 = 7.0;
+const LINE_H: f64 = 12.0;
+/// The detail box's `<TextInsets>` (left, right, top, bottom) and width, from the XML.
+const DETAIL_INSETS: (f64, f64, f64, f64) = (6.0, 20.0, 6.0, 20.0);
+const DETAIL_WIDTH: f64 = 296.0;
+
+/// The height the reference gives a multi-line box (`0x77d4d0` @`0x77d8ad`): its insets plus its
+/// text, wrapped at the box's width less its side insets, one line when short or empty.
+fn detail_box_height(chars: usize) -> f64 {
+    let wrap = DETAIL_WIDTH - (DETAIL_INSETS.0 + DETAIL_INSETS.1);
+    let natural = chars as f64 * CHAR_W;
+    let lines = if natural > wrap {
+        (natural / wrap).ceil()
+    } else {
+        1.0
+    };
+    DETAIL_INSETS.2 + DETAIL_INSETS.3 + lines * LINE_H
+}
+
+fn detail_geometry(s: &UiScript) -> (f64, f64, f64, f64, f64) {
+    s.eval(
+        "return BenillaScriptLogDetailText:GetWidth(), BenillaScriptLogDetailText:GetHeight(), \
+                BenillaScriptLogDetailScrollChild:GetHeight(), \
+                BenillaScriptLogDetailScroll:GetHeight(), \
+                BenillaScriptLogDetailScroll:GetVerticalScrollRange()",
+    )
+    .unwrap()
+}
+
 /// The selected error's text is in a multi-line EditBox, whole: no `letters` cap, no change to a
 /// newline or a `|`. Opening the window takes no focus, so the movement keys keep working until a
-/// click (the stock mail body's `autoFocus="false"`, `MailFrame.xml:616`), and the box keeps its
-/// text in view: it is as tall as the wrapped text, which the scroll child then covers.
+/// click (the stock mail body's `autoFocus="false"`, `MailFrame.xml:616`). The box is as tall as
+/// its insets and its text, so the scroll frame ranges over the whole traceback and shows its bar;
+/// the text draws once, where the FontString drew it.
 #[test]
 fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
     benilla_formats::wow_data_or_skip!();
@@ -817,10 +849,30 @@ fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
         "no letters cap"
     );
 
-    // The text draws once, from where the FontString drew it: the ruler is in the tree but unseen.
+    // Nothing took the keyboard on its own: a key with no box focused is not consumed.
+    assert!(!s.has_keyboard_focus());
+    assert!(!s.char_input("w"), "no autoFocus box waits for a key");
+    assert!(!s.has_keyboard_focus());
+
+    // The box sizes itself: insets plus the wrapped text, which is taller than the pane.
+    let want = detail_box_height(msg.chars().count());
+    let (width, height, child, pane, range) = detail_geometry(&s);
+    assert_eq!(width, DETAIL_WIDTH);
+    assert!(want > pane, "sanity: the text is taller than the pane");
+    assert_eq!(height, want, "insets + lines * line height");
+    // The scroll child stays the pane's size; the range is the box's overhang, 20 below the text.
+    assert_eq!(child, pane, "the child is not sized to the text");
+    assert_eq!(range, want - pane, "the range covers the whole traceback");
+    assert!(
+        s.eval::<bool>("return BenillaScriptLogDetailScrollBar:IsShown()")
+            .unwrap(),
+        "the bar shows for a range"
+    );
+
+    // The text draws once, at the 6-in, 6-down seat the FontString had.
     let (left, top) = s
         .eval::<(f64, f64)>(
-            "return BenillaScriptLogDetailText:GetLeft(), BenillaScriptLogDetailText:GetTop()",
+            "return BenillaScriptLogDetailScroll:GetLeft(), BenillaScriptLogDetailScroll:GetTop()",
         )
         .unwrap();
     let drawn: Vec<_> = s
@@ -828,67 +880,85 @@ fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
         .into_iter()
         .filter(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if *t == msg))
         .collect();
-    let seen: Vec<_> = drawn.iter().filter(|q| q.alpha > 0.0).collect();
-    assert_eq!(seen.len(), 1, "the message draws once: {drawn:#?}");
-    let rect = seen[0].rect.expect("the drawn text has a rect");
+    assert_eq!(drawn.len(), 1, "the message draws once: {drawn:#?}");
+    let rect = drawn[0].rect.expect("the drawn text has a rect");
     assert_eq!(
-        (rect.left, rect.top),
-        (left as f32, top as f32),
-        "at the box's top left, the inset the FontString had"
+        (f64::from(rect.left), f64::from(rect.top)),
+        (left + DETAIL_INSETS.0, top - DETAIL_INSETS.2),
+        "6 in and 6 down from the pane's corner"
+    );
+    assert_eq!(
+        f64::from(rect.right - rect.left),
+        DETAIL_WIDTH - (DETAIL_INSETS.0 + DETAIL_INSETS.1),
+        "wrapped at 270"
     );
 
-    // Nothing took the keyboard on its own: a key with no box focused is not consumed.
-    assert!(!s.has_keyboard_focus());
-    assert!(!s.char_input("w"), "no autoFocus box waits for a key");
-    assert!(!s.has_keyboard_focus());
+    // The wheel over the box scrolls the pane, a step a notch.
+    let (x, y) = (left + 40.0, top - 40.0);
+    s.mouse_wheel(x as f32, y as f32, -1.0);
+    assert_eq!(
+        s.eval::<f64>("return BenillaScriptLogDetailScroll:GetVerticalScroll()")
+            .unwrap(),
+        20.0
+    );
 
-    // The text fits its box, and the scroll child reaches the box's bottom.
-    let (box_top, box_bottom, ruler_height, child_bottom, range, pane) = s
-        .eval::<(f64, f64, f64, f64, f64, f64)>(
-            "return BenillaScriptLogDetailText:GetTop(), BenillaScriptLogDetailText:GetBottom(), \
-                    BenillaScriptLogDetailRuler:GetHeight(), \
-                    BenillaScriptLogDetailScrollChild:GetBottom(), \
-                    BenillaScriptLogDetailScroll:GetVerticalScrollRange(), \
-                    BenillaScriptLogDetailScroll:GetHeight()",
-        )
-        .unwrap();
-    assert!(
-        ruler_height > pane,
-        "sanity: the wrapped text is taller than the pane ({ruler_height} vs {pane})"
-    );
-    assert!(
-        box_top - box_bottom >= ruler_height - 0.5,
-        "the box {} is as tall as its text {ruler_height}",
-        box_top - box_bottom
-    );
-    assert!(
-        child_bottom <= box_bottom + 0.5,
-        "the child reaches the box's bottom"
-    );
-    assert!(range > 0.0, "a traceback taller than the pane scrolls");
-
-    // A short text leaves the box the pane's height, so a click anywhere in the pane is in it.
+    // Another error's text resizes it: one short line, no range, no bar.
     s.run("BenillaScriptLog_Record('short') BenillaScriptLogRow2:Click()")
         .unwrap();
     settle(&mut s);
     assert_eq!(detail_text(&s), "short");
-    let (h, pane) = s
-        .eval::<(f64, f64)>(
-            "return BenillaScriptLogDetailText:GetHeight(), BenillaScriptLogDetailScroll:GetHeight()",
-        )
+    let (_, height, child, pane, range) = detail_geometry(&s);
+    assert_eq!(height, detail_box_height(5));
+    assert_eq!(height, 38.0, "sanity: 6 + 12 + 20");
+    assert_eq!((child, range), (pane, 0.0));
+    assert!(
+        !s.eval::<bool>("return BenillaScriptLogDetailScrollBar:IsShown()")
+            .unwrap(),
+        "no range, no bar"
+    );
+}
+
+/// A click anywhere in the pane focuses the box and selects all of it, as a click on the text
+/// does: below a short text the click lands on the scroll child, which hands focus to the box
+/// (`SendMailScrollChildFrame`'s `OnMouseUp`, `MailFrame.xml:651`).
+#[test]
+fn a_click_below_the_detail_text_focuses_the_box_and_selects_it_all() {
+    benilla_formats::wow_data_or_skip!();
+    let (mut s, _) = error_log_selected();
+    s.run("BenillaScriptLog_Record('short') BenillaScriptLogRow2:Click()")
         .unwrap();
-    assert_eq!(h, pane - 6.0, "the box fills the pane below its inset");
-    // A click at the pane's foot, far below the one line, is still in the box.
+    settle(&mut s);
+    assert_eq!(detail_text(&s), "short");
+    assert_eq!(
+        detail_geometry(&s).1,
+        38.0,
+        "a box far shorter than the pane"
+    );
+    // The pane's foot, 6 up from its bottom edge: well below the box.
     let (x, y) = s
         .eval::<(f64, f64)>(
             "return BenillaScriptLogDetailScroll:GetLeft() + 40, BenillaScriptLogDetailScroll:GetBottom() + 6",
         )
         .unwrap();
+    assert!(
+        y < s
+            .eval::<f64>("return BenillaScriptLogDetailText:GetBottom()")
+            .unwrap(),
+        "sanity: the click is below the box"
+    );
+    assert!(!s.has_keyboard_focus());
     s.mouse_button(x as f32, y as f32, "LeftButton", true);
     s.mouse_button(x as f32, y as f32, "LeftButton", false);
+    settle(&mut s);
     assert_eq!(
         s.focused_editbox_name().as_deref(),
-        Some("BenillaScriptLogDetailText")
+        Some("BenillaScriptLogDetailText"),
+        "the pane's foot focused the box"
+    );
+    assert_eq!(
+        s.editbox_copy().as_deref(),
+        Some("short"),
+        "all of it selected"
     );
 }
 
