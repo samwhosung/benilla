@@ -187,3 +187,52 @@ fn toggling_the_window_opens_it_and_asks_for_the_queue_status() {
     s.run("ToggleHelpFrame()").unwrap();
     assert!(!s.eval::<bool>("return HelpFrame:IsVisible()").unwrap());
 }
+
+/// The ticket text is a multi-line box and the scroll child itself (`HelpFrame.xml`, 541×357 in
+/// the 378-tall `HelpFrameOpenTicketScrollFrame`): the box sizes itself to its wrapped text
+/// (`0x77d4d0` @`0x77d8ad`), so `ScrollingEdit_OnTextChanged`'s recompute ranges over all of it.
+#[test]
+fn the_ticket_text_grows_with_its_lines_and_its_scroll_frame_ranges_over_them() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = setup();
+    // Wide glyphs, 12 per line: the box's 500-letter cap must still wrap past the frame.
+    const GLYPH: f64 = 60.0;
+    s.set_text_measurer(Box::new(super::FixedWidthFont(GLYPH as f32)));
+    s.run("ShowUIPanel(HelpFrame) HelpFrame_ShowFrame(\"OpenTicket\")")
+        .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    s.resolve();
+    assert_eq!(
+        s.eval::<f64>("return HelpFrameOpenTicketText:GetHeight()")
+            .unwrap(),
+        12.0,
+        "empty, the box is one line: the authored 357 lasts until the first flush"
+    );
+
+    s.run(r#"HelpFrameOpenTicketText:SetText(string.rep("x", 400))"#)
+        .unwrap();
+    s.tick(0.016);
+    s.resolve();
+    // Wrapped at the box's own 541: no insets.
+    let height = (400.0 * GLYPH / 541.0).ceil() * 12.0;
+    assert_eq!(
+        s.eval::<f64>("return HelpFrameOpenTicketText:GetHeight()")
+            .unwrap(),
+        height
+    );
+    assert_eq!(
+        s.eval::<f64>("return HelpFrameOpenTicketScrollFrame:GetVerticalScrollRange()")
+            .unwrap(),
+        height - 378.0
+    );
+    assert_eq!(
+        s.eval::<f64>(
+            "local _, max = HelpFrameOpenTicketScrollFrameScrollBar:GetMinMaxValues() return max"
+        )
+        .unwrap(),
+        height - 378.0,
+        "the range reached the scroll bar through OnScrollRangeChanged"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

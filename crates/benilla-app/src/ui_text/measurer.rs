@@ -66,3 +66,52 @@ impl TextMeasure for AtlasMeasurer {
         measure_request(&mut e, self.seam, req)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use benilla_ui::script::UiScript;
+
+    use super::AtlasMeasurer;
+
+    /// A multi-line EditBox is its text's measured height tall (`0x77d4d0` @`0x77d8ad`), one
+    /// line's when empty, and the line law the host measures by (`0x5c2070`) folds a trailing
+    /// break into the line it ends, so the break alone adds no line.
+    #[test]
+    fn a_multi_line_boxs_trailing_newline_adds_no_line() {
+        benilla_formats::wow_data_or_skip!();
+        let engine = super::super::engine::test_engine(1.0).expect("the client faces open");
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        s.set_text_measurer(Box::new(AtlasMeasurer::new(
+            Arc::new(Mutex::new(engine)),
+            1.0,
+        )));
+        s.run(
+            r#"
+            E = CreateFrame("EditBox", "E")
+            E:SetAutoFocus(false); E:SetMultiLine(true)
+            E:SetPoint("TOPLEFT", 100, -100); E:SetWidth(270); E:SetHeight(200)
+            E:SetFont("Fonts\\MORPHEUS.TTF", 15)
+        "#,
+        )
+        .unwrap();
+        s.resolve();
+        let mut height = |text: &str| {
+            s.run(&format!("E:SetText({text:?})")).unwrap();
+            s.tick(0.016);
+            s.resolve();
+            s.eval::<f32>("return E:GetHeight()").unwrap()
+        };
+        let empty = height("");
+        let one = height("abc");
+        assert_eq!(one, empty, "an empty box is one line tall");
+        assert_eq!(height("abc\n"), one, "the break alone");
+        let two = height("abc\nd");
+        assert!(
+            (two - 2.0 * one).abs() < 1e-4,
+            "the first character on the new line: {two} against {one}"
+        );
+    }
+}
