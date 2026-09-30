@@ -10,7 +10,7 @@ use bevy::prelude::*;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
 
-use super::GroupState;
+use super::{GroupState, GROUPTYPE_RAID};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, NetHandlerApp, ObjectStore, SelfGuid};
 use crate::sound::MessageSounds;
@@ -238,6 +238,9 @@ fn leader_changed(
 /// `SMSG_GROUP_LIST`: apply the roster, seat new members' records and re-ask the questgiver sweep
 /// (shared-quest availability follows the roster). Every member is name-queried once: the
 /// answer's race, class and gender are the only source of them for a member we never see streamed.
+/// A raid's rebuild counts the rows whose name is still to come (`0x4ba9b6`-`0x4ba9d0`), ours
+/// among them once others are listed (`0x5e6e73`), and signals `RAID_ROSTER_UPDATE` only with none
+/// (`0x4babdf`-`0x4babef`).
 fn list(
     group: &mut GroupState,
     errors: &mut UiErrorKeys,
@@ -253,8 +256,14 @@ fn list(
     index: &GuidIndex,
     net_commands: &NetCommands,
 ) {
+    let mut names_pending = false;
     for m in &members {
-        let _ = names.resolve(m.guid, net_commands);
+        names_pending |= names.resolve(m.guid, net_commands).is_none();
+    }
+    if group_type == GROUPTYPE_RAID && !members.is_empty() {
+        if let Some(own) = self_guid.0 {
+            names_pending |= names.resolve(own, net_commands).is_none();
+        }
     }
     // Taken before `apply_list` consumes the list; `seat_new_records` then treats a member with
     // no record as new, the reference's `srcRec == 0`.
@@ -262,7 +271,15 @@ fn list(
         .iter()
         .map(|m| (m.guid, m.status & member_status::ONLINE != 0))
         .collect();
-    let shown = group.apply_list(group_type, own_flags, members, leader, loot, self_guid.0);
+    let shown = group.apply_list_awaiting(
+        group_type,
+        own_flags,
+        members,
+        leader,
+        loot,
+        self_guid.0,
+        names_pending,
+    );
     push_group_lines(errors, shown.lines);
     if shown.invite_accept {
         sounds.push_cue(INVITE_ACCEPT_SOUND);
@@ -446,6 +463,69 @@ mod tests {
             "a re-sent roster re-asks nothing"
         );
         assert_eq!(names.player_traits(leader), Some((1, 4, 1)));
+    }
+
+    /// The rebuild counts the rows whose name has not landed (`0x4ba9b6`-`0x4ba9d0`), ours among
+    /// them once others are listed (`0x5e6e73`), and the roster event waits for none (`0x4babdf`).
+    #[test]
+    fn a_raid_list_signals_the_roster_only_once_every_name_is_held() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let (mut group, mut errors, mut quest) = (
+            GroupState::default(),
+            UiErrorKeys::default(),
+            QuestGiver::default(),
+        );
+        let mut names = NameCache::default();
+        let player_guid = |counter: u64| counter | (u64::from(guid::HIGH_PLAYER) << 48);
+        let (me, a, b) = (player_guid(1), player_guid(7), player_guid(8));
+        let mut raid = |group: &mut GroupState, names: &NameCache, group_type: u8| {
+            list(
+                group,
+                &mut errors,
+                &mut MessageSounds::default(),
+                &mut quest,
+                group_type,
+                0,
+                vec![member(a, "Aldwyn"), member(b, "Brisca")],
+                a,
+                None,
+                &SelfGuid(Some(me)),
+                names,
+                &GuidIndex::default(),
+                &net,
+            );
+            group.roster_updates
+        };
+
+        assert_eq!(raid(&mut group, &names, 1), 0, "no name held");
+        names.insert_player(a, "Aldwyn".into(), Some((1, 4, 1)));
+        assert_eq!(
+            raid(&mut group, &names, 1),
+            0,
+            "one member's name still to come"
+        );
+        names.insert_player(b, "Brisca".into(), Some((1, 5, 0)));
+        assert_eq!(
+            raid(&mut group, &names, 1),
+            0,
+            "our own row's name still to come"
+        );
+        names.insert_player(me, "Me".into(), None);
+        assert_eq!(raid(&mut group, &names, 1), 1, "every name held");
+        assert_eq!(raid(&mut group, &names, 1), 2, "and the same list again");
+
+        // A party's list runs no roster writer; it names nothing, and drops the raid it finds.
+        assert_eq!(
+            raid(&mut group, &NameCache::default(), 0),
+            3,
+            "the raid dropped"
+        );
+        assert_eq!(
+            raid(&mut group, &NameCache::default(), 0),
+            3,
+            "a party's list"
+        );
     }
 
     #[test]

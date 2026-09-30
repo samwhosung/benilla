@@ -56,6 +56,12 @@ pub struct GroupState {
     /// reference signals `PARTY_MEMBERS_CHANGED` after each (`0x5e6c61`), with no compare against
     /// the roster it holds, and an empty list reaches it too (`0x5e6b3c`).
     pub lists_applied: u32,
+    /// How many `RAID_ROSTER_UPDATE`s the lists signalled, which the feed answers one for one. A raid
+    /// list signals after its roster rebuild once no member name is pending (`0x4babef`), with no
+    /// compare against the roster it replaces; a list that is not a raid signals once for the roster
+    /// it drops (`0x4ba57b`). A raid list with a name pending signals nothing then, and the name
+    /// answer signals later (`0x4bada6`).
+    pub roster_updates: u32,
     /// The leave ack, `SMSG_GROUP_UNINVITE` and `SMSG_GROUP_DESTROYED` empty the reference's party
     /// slots and leader (`0x4e84a0`, `0x4e8250(0)`) and keep its raid roster; the next list then
     /// finds no slot held.
@@ -97,7 +103,8 @@ pub struct ListOutcome {
 impl GroupState {
     /// Apply one `SMSG_GROUP_LIST` and return what it shows, in the reference's order: the party
     /// slots' joins, the new-group line, the party slots' leaves, then the raid roster's lines.
-    /// Kick, leave (`0x5e690b`) and disband lines come from their opcodes.
+    /// Kick, leave (`0x5e690b`) and disband lines come from their opcodes. Every name is taken as
+    /// held: [`Self::apply_list_awaiting`] is the one that says otherwise.
     pub fn apply_list(
         &mut self,
         group_type: u8,
@@ -106,6 +113,24 @@ impl GroupState {
         leader: u64,
         loot: Option<GroupLootInfo>,
         self_guid: Option<u64>,
+    ) -> ListOutcome {
+        self.apply_list_awaiting(
+            group_type, own_flags, members, leader, loot, self_guid, false,
+        )
+    }
+
+    /// [`Self::apply_list`] told what the name cache holds: `names_pending` when a row of a raid
+    /// list has no cached name yet, the reference's pending count (`[0xb713f0]`, raised at `0x4ba9d0`
+    /// for each row whose name lookup misses), which holds `RAID_ROSTER_UPDATE` back (`0x4babdf`).
+    pub fn apply_list_awaiting(
+        &mut self,
+        group_type: u8,
+        own_flags: u8,
+        members: Vec<GroupMemberEntry>,
+        leader: u64,
+        loot: Option<GroupLootInfo>,
+        self_guid: Option<u64>,
+        names_pending: bool,
     ) -> ListOutcome {
         // Every path of the handler reaches the event, the leave list and a party's list alike.
         self.count_list();
@@ -173,9 +198,15 @@ impl GroupState {
             } else {
                 out.lines.push(UiError::key("ERR_RAID_YOU_JOINED"));
             }
+            // The rebuild ends in the signal unless a name is pending (`0x4babdf`-`0x4babef`).
+            if !names_pending {
+                self.count_roster_update();
+            }
         } else if raid_held {
-            // `0x4ba550`: a list that is not a raid drops the held roster (`0x4ba55f`).
+            // `0x4ba550`: a list that is not a raid drops the held roster (`0x4ba55f`), and says so
+            // (`0x4ba57b`). With no roster held it signals nothing.
             out.lines.push(UiError::key("ERR_RAID_YOU_LEFT"));
+            self.count_roster_update();
         }
 
         // The all-zero list means "not in a group" (vmangos `Server/Packets/Group.h:257`); only
@@ -210,6 +241,11 @@ impl GroupState {
     /// list.
     pub(super) fn count_list(&mut self) {
         self.lists_applied = self.lists_applied.wrapping_add(1);
+    }
+
+    /// Count one `RAID_ROSTER_UPDATE` a list signals, which the feed answers with one.
+    pub(super) fn count_roster_update(&mut self) {
+        self.roster_updates = self.roster_updates.wrapping_add(1);
     }
 
     /// The `party1..party4` slots: our own subgroup in packet order, at most four (`0x5e6baa`
@@ -389,6 +425,7 @@ impl GroupState {
             pending_invite,
             // Session state the feed fires edges on: kept until `clear_session`.
             lists_applied: _,
+            roster_updates: _,
             saved_instances: _,
             saved_instances_answers: _,
             ready_check: _,
@@ -517,6 +554,118 @@ mod tests {
         assert_eq!(g.lists_applied, 7, "leaving is not a list");
         g.clear_session();
         assert_eq!(g.lists_applied, 0);
+    }
+
+    /// The raid roster writer signals after each rebuild (`0x4babef`) and compares nothing with the
+    /// roster it replaces, so a list that moves a member's status alone, or nothing, counts.
+    #[test]
+    fn every_raid_list_counts_a_roster_update_whatever_it_changes() {
+        use benilla_protocol::messages::member_status;
+        let mut g = GroupState::default();
+        let raid = |g: &mut GroupState, members: Vec<GroupMemberEntry>| {
+            g.apply_list(1, 0, members, 1, None, Some(ME));
+            g.roster_updates
+        };
+        assert_eq!(g.roster_updates, 0, "no list yet");
+
+        let (alice, bob) = (sub("Alice", 1, 0), sub("Bob", 2, 1));
+        assert_eq!(
+            raid(&mut g, vec![alice.clone(), bob.clone()]),
+            1,
+            "seats the raid"
+        );
+        assert_eq!(
+            raid(&mut g, vec![alice.clone(), bob.clone()]),
+            2,
+            "the same list again"
+        );
+        let dead = GroupMemberEntry {
+            status: member_status::ONLINE | member_status::DEAD,
+            ..bob
+        };
+        assert_eq!(raid(&mut g, vec![alice.clone(), dead]), 3, "a status alone");
+        assert_eq!(raid(&mut g, vec![alice]), 4, "a member gone");
+        assert_eq!(
+            raid(&mut g, vec![]),
+            5,
+            "a raid list naming nobody still rebuilds"
+        );
+
+        g.leave_group();
+        assert_eq!(g.roster_updates, 5, "leaving is not a list");
+        g.clear_session();
+        assert_eq!(g.roster_updates, 0);
+    }
+
+    /// A list that is not a raid runs no roster writer, so a party's list signals nothing; one that
+    /// finds a raid held drops it and signals once (`0x4ba57b`), the all-zero list among them, and
+    /// with none held there is nothing to say.
+    #[test]
+    fn a_list_that_is_not_a_raid_counts_a_roster_update_only_for_the_raid_it_drops() {
+        let mut g = GroupState::default();
+        let list = |g: &mut GroupState, group_type: u8, members: Vec<GroupMemberEntry>, leader| {
+            g.apply_list(group_type, 0, members, leader, None, Some(ME));
+            g.roster_updates
+        };
+        let party = vec![sub("Alice", 1, 0)];
+
+        assert_eq!(list(&mut g, 0, party.clone(), 1), 0, "a party's list");
+        assert_eq!(list(&mut g, 0, party.clone(), 1), 0, "and again");
+        assert_eq!(
+            list(&mut g, 0, vec![], 0),
+            0,
+            "the all-zero list with no raid held"
+        );
+
+        assert_eq!(
+            list(&mut g, 1, party.clone(), 1),
+            1,
+            "the party becomes a raid"
+        );
+        assert_eq!(
+            list(&mut g, 0, party.clone(), 1),
+            2,
+            "the raid becomes a party"
+        );
+        assert_eq!(list(&mut g, 0, party.clone(), 1), 2, "nothing held to drop");
+
+        assert_eq!(list(&mut g, 1, party, 1), 3);
+        assert_eq!(
+            list(&mut g, 0, vec![], 0),
+            4,
+            "the all-zero list ends the raid"
+        );
+        assert_eq!(
+            list(&mut g, 0, vec![], 0),
+            4,
+            "and a second has none to end"
+        );
+    }
+
+    /// The rebuild counts the rows whose name is still to come and signals only with none
+    /// (`0x4babdf`); the list lands all the same, and a list that drops a raid asks no name.
+    #[test]
+    fn a_raid_list_with_a_name_pending_counts_no_roster_update() {
+        let mut g = GroupState::default();
+        let raid = vec![sub("Alice", 1, 0), sub("Bob", 2, 1)];
+        let awaiting = |g: &mut GroupState, group_type: u8, pending: bool| {
+            g.apply_list_awaiting(group_type, 0, raid.clone(), 1, None, Some(ME), pending);
+            g.roster_updates
+        };
+
+        assert_eq!(awaiting(&mut g, 1, true), 0, "a name pending");
+        assert_eq!(
+            g.group_type, GROUPTYPE_RAID,
+            "the roster is rebuilt regardless"
+        );
+        assert_eq!(g.members.len(), 2);
+        assert_eq!(awaiting(&mut g, 1, false), 1, "every name held");
+        assert_eq!(awaiting(&mut g, 1, true), 1, "pending again");
+        assert_eq!(
+            awaiting(&mut g, 0, true),
+            2,
+            "the drop does not wait on a name"
+        );
     }
 
     #[test]

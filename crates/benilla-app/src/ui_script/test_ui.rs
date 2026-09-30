@@ -811,7 +811,7 @@ fn world_point(s: &mut UiScript) -> (f32, f32) {
 
 /// Seat one of the reference's LoadOnDemand Blizzard addons off the chain, so a harness's
 /// `UIParentLoadAddOn(name)` loads it as the app does. Needs client data.
-pub(super) fn seat_chain_addon(s: &mut UiScript, name: &str) {
+pub(crate) fn seat_chain_addon(s: &mut UiScript, name: &str) {
     let toc = super::reference_ui::read(&format!("Interface/AddOns/{name}/{name}.toc"))
         .map(|b| benilla_ui::toc::Toc::parse(&benilla_ui::source::decode(&b)))
         .unwrap_or_else(|| panic!("{name}: no toc off the chain"));

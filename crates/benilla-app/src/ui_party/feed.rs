@@ -44,7 +44,10 @@ pub(super) struct FedParty {
     raid_units: Vec<Option<UnitState>>,
     /// `partypet1..4` and `raidpet1..40`, with the `UNIT_PET` edges (see [`pets`]).
     pets: pets::FedPets,
-    /// The raid roster's identity (guid, rank, subgroup, online): `RAID_ROSTER_UPDATE`'s edge.
+    /// The group lists' `RAID_ROSTER_UPDATE`s the feed has answered.
+    roster_updates: u32,
+    /// The raid roster's identity (guid, rank, subgroup, online): the edge that stands in for the
+    /// `RAID_ROSTER_UPDATE` sites no list carries.
     raid_key: Vec<(u64, u32, u32, bool)>,
     saved: Vec<SavedInstanceInfo>,
     saved_answers: u32,
@@ -75,6 +78,17 @@ fn members_changed_owed(applied: u32, seen: u32, fresh_vm: bool) -> u32 {
         (false, Some(owed)) => owed,
         (false, None) => applied,
     }
+}
+
+/// The `RAID_ROSTER_UPDATE`s the lists applied since the feed's last look owe: one each, as the
+/// reference signals once per list (`0x4babef`, `0x4ba57b`). A fresh VM is owed none, since the
+/// roster edge gives the raid it finds its one catch-up; a count that ran backwards is a new
+/// session's, all of whose lists are new.
+fn roster_updates_owed(applied: u32, seen: u32, fresh_vm: bool) -> u32 {
+    if fresh_vm {
+        return 0;
+    }
+    applied.checked_sub(seen).unwrap_or(applied)
 }
 
 /// The `raid1..raid40` unit tokens, one per `MAX_RAID_MEMBERS` (40, `RaidFrame.lua:2`).
@@ -471,14 +485,26 @@ pub(super) fn feed_party(
     }
     // ── RAID_ROSTER_UPDATE ──────────────────────────────────────────────────
     //
-    // Fired when the roster's identity moves (members, order, rank, subgroup, online), not on
-    // level or health, which `RaidGroupFrame_OnEvent` re-reads on `UNIT_LEVEL` and `UNIT_HEALTH`.
-    // The reference fires it after each raid `SMSG_GROUP_LIST` rebuild (`0x4babef`, or `0x4bada6`
-    // once the member names it waits on land), on leaving a raid (`0x4ba57b`) and when world entry
-    // fills in our own row (`0x4ba1a2`).
-    if raid_key != fed.raid_key {
+    // The reference signals it from four places, and `GroupState` counts the two that a list
+    // drives; each list in this drain fires its own. A raid list's roster rebuild signals with no
+    // member name pending, whatever the list changed (`0x4babef`, no compare with the old roster),
+    // and a list that is not a raid signals for the roster it drops (`0x4ba57b`). The other two
+    // have no list behind them: the last pending name's answer (`0x4bada6`) and world entry filling
+    // in our own row (`0x4ba1a2`). The roster's identity (members, order, rank, subgroup, online)
+    // stands in for them when no list signalled: it moves as our own row arrives, and a list held
+    // back by a pending name fires on it when it moves. Level and health are not in it, which
+    // `RaidGroupFrame_OnEvent` re-reads on `UNIT_LEVEL` and `UNIT_HEALTH`.
+    let owed = roster_updates_owed(group.roster_updates, fed.roster_updates, vm_reset);
+    fed.roster_updates = group.roster_updates;
+    let roster_moved = raid_key != fed.raid_key;
+    fed.raid_key = raid_key;
+    if owed != 0 {
+        gate.audit("feed_party", "a raid roster list");
+        for _ in 0..owed {
+            script.fire_event("RAID_ROSTER_UPDATE", vec![]);
+        }
+    } else if roster_moved {
         gate.audit("feed_party", "the raid-roster edge");
-        fed.raid_key = raid_key;
         script.fire_event("RAID_ROSTER_UPDATE", vec![]);
     }
 
@@ -1026,8 +1052,12 @@ fn test_apply_local(
     self_guid: Option<u64>,
     target_guid: Option<u64>,
 ) -> bool {
+    let was_raid = group.group_type == GROUPTYPE_RAID;
+    let handled = apply_test_intent(group, req, self_guid, target_guid);
     // The server answers each of these with a fresh `SMSG_GROUP_LIST`, which the reference signals
-    // `PARTY_MEMBERS_CHANGED` for whether or not it changed anything (`0x5e6c61`).
+    // `PARTY_MEMBERS_CHANGED` for whether or not it changed anything (`0x5e6c61`). A raid's list
+    // also signals `RAID_ROSTER_UPDATE` (`0x4babef`), and the one that ends a raid for the roster
+    // it drops (`0x4ba57b`).
     if matches!(
         req,
         PartyRequest::Leave
@@ -1043,7 +1073,20 @@ fn test_apply_local(
             | PartyRequest::AssistantLeader { .. }
     ) {
         group.count_list();
+        if was_raid || group.group_type == GROUPTYPE_RAID {
+            group.count_roster_update();
+        }
     }
+    handled
+}
+
+/// [`test_apply_local`]'s mirror edit: the intent's effect on the group, whatever list answers it.
+fn apply_test_intent(
+    group: &mut GroupState,
+    req: &PartyRequest,
+    self_guid: Option<u64>,
+    target_guid: Option<u64>,
+) -> bool {
     match req {
         PartyRequest::Leave => {
             // The all-zero list's reset: the group facts and sandbox flag, not the session state.
@@ -1440,6 +1483,9 @@ pub(crate) fn synthetic_raid(
     group.test = true;
     lines
 }
+
+#[cfg(test)]
+mod roster_update_tests;
 
 #[cfg(test)]
 mod tests {
