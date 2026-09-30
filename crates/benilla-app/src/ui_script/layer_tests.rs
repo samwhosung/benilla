@@ -3,7 +3,7 @@
 //! row, as 1.12.1 loads FrameXML (`UI_Init 0x48fbf0`: `FrameXML.toc` at `0x48ffed`, the addons at
 //! `0x4900a3`, only the latter through `AddOn_Load`); and a dev build boots without it.
 
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{ScriptValue, UiScript};
 
 use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
 
@@ -611,4 +611,130 @@ fn with_the_layer_plates_turned_on_stay_on_after_entry_and_reload() {
     assert_eq!(plates(&app), (true, true), "both on after the reload");
     assert_eq!(plate_globals(&app), (Some(1), Some(1)));
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A frame's rect from its window's top-left corner, y down: `(left, top, right, bottom)`.
+fn window_rect(s: &UiScript, window: &str, frame: &str) -> (f32, f32, f32, f32) {
+    s.eval(&format!(
+        "local w, f = {window}, {frame} \
+         return f:GetLeft() - w:GetLeft(), w:GetTop() - f:GetTop(), \
+                f:GetRight() - w:GetLeft(), w:GetTop() - f:GetBottom()"
+    ))
+    .unwrap_or_else(|e| panic!("{frame} in {window}: {e}"))
+}
+
+/// The `/errors` window wears the ClassTrainer art, so its frames sit where the class trainer's own
+/// do on it (`Blizzard_TrainerUI.xml`, resized by `ClassTrainer_SetToClassTrainer`,
+/// `Blizzard_TrainerUI.lua:469-475`): the rows, the list, the detail under it, and the two buttons
+/// in the art's sockets (`ClassTrainerTrainButton` and `ClassTrainerCancelButton`, 80x22 centred
+/// at 224 and 305, -420). The detail ends above the buttons, as the trainer's does at -407.
+#[test]
+fn the_error_log_lays_out_on_the_trainer_art_as_the_class_trainer_does() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = super::trainer_tests::trainer_script();
+    // The file registers its commands in the stock table, which `ChatFrame.lua` declares and this
+    // kit stops short of.
+    s.run("SlashCmdList = {}").unwrap();
+    super::test_ui::load_ui_strict(&s, "ScriptLogFrame.xml");
+
+    // The class trainer's layout, read off its own frames once it has laid itself out.
+    s.set_money(50);
+    s.set_trainer(Some(super::trainer_tests::menu()));
+    s.fire_event(
+        "TRAINER_SHOW",
+        vec![ScriptValue::Str("Sana Winterhoof".into())],
+    );
+    s.resolve();
+    let trainer = |s: &UiScript, frame: &str| window_rect(s, "ClassTrainerFrame", frame);
+    let ref_rows = s
+        .eval::<i64>("return CLASS_TRAINER_SKILLS_DISPLAYED")
+        .unwrap();
+    let ref_list = trainer(&s, "ClassTrainerListScrollFrame");
+    let ref_detail = trainer(&s, "ClassTrainerDetailScrollFrame");
+    let ref_buttons = [
+        trainer(&s, "ClassTrainerTrainButton"),
+        trainer(&s, "ClassTrainerCancelButton"),
+    ];
+    let ref_rows_rects: Vec<_> = (1..=ref_rows)
+        .map(|i| trainer(&s, &format!("ClassTrainerSkill{i}")))
+        .collect();
+    // The reference's own numbers, so a drifted harness cannot pass this against itself.
+    assert_eq!(ref_rows, 11);
+    assert_eq!(ref_list, (21.0, 96.0, 317.0, 280.0));
+    assert_eq!(ref_detail, (21.0, 288.0, 317.0, 407.0));
+    assert_eq!(ref_buttons[0], (184.0, 409.0, 264.0, 431.0));
+    assert_eq!(ref_buttons[1], (265.0, 409.0, 345.0, 431.0));
+
+    s.set_trainer(None);
+    s.fire_event("TRAINER_CLOSED", vec![]);
+    s.run("ShowUIPanel(BenillaScriptLogFrame)").unwrap();
+    // Enough rows to fill the list, so every row shows.
+    s.run("for i = 1, 30 do BenillaScriptLog_Record('error ' .. i) end")
+        .unwrap();
+    for _ in 0..4 {
+        s.resolve();
+        s.tick(0.016);
+    }
+    s.resolve();
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+    let ours = |s: &UiScript, frame: &str| window_rect(s, "BenillaScriptLogFrame", frame);
+
+    let window = ours(&s, "BenillaScriptLogFrame");
+    assert_eq!(window, (0.0, 0.0, 384.0, 512.0), "the standard panel size");
+    let clear = ours(&s, "BenillaScriptLogClearButton");
+    let close = ours(&s, "BenillaScriptLogCloseBottomButton");
+    let detail = ours(&s, "BenillaScriptLogDetailScroll");
+    let list = ours(&s, "BenillaScriptLogListScrollFrame");
+
+    // The buttons take the trainer's two sockets, at its size, inside the window's rect.
+    assert_eq!(clear, ref_buttons[0], "Clear sits where Train does");
+    assert_eq!(close, ref_buttons[1], "Close sits where Exit does");
+    for (name, b) in [("Clear", clear), ("Close", close)] {
+        assert!(
+            b.0 >= window.0 && b.1 >= window.1 && b.2 <= window.2 && b.3 <= window.3,
+            "{name} {b:?} lies inside the {window:?} window"
+        );
+    }
+    // The detail pane is the trainer's, and its bottom clears both buttons' tops.
+    assert_eq!(
+        detail, ref_detail,
+        "the detail sits where the trainer's does"
+    );
+    assert!(
+        detail.3 < clear.1 && detail.3 < close.1,
+        "the detail's bottom {} is above the buttons' top {}",
+        detail.3,
+        clear.1.min(close.1)
+    );
+    // The list is the trainer's, with its rows.
+    assert_eq!(list, ref_list, "the list sits where the trainer's does");
+    assert_eq!(
+        s.eval::<i64>("return BENILLA_SCRIPTLOG_ROWS").unwrap(),
+        ref_rows,
+        "as many rows as the trainer's list"
+    );
+    assert!(
+        s.eval::<bool>(&format!(
+            "return getglobal('BenillaScriptLogRow{}') == nil",
+            ref_rows + 1
+        ))
+        .unwrap(),
+        "no row beyond the list"
+    );
+    for (i, want) in ref_rows_rects.iter().enumerate() {
+        let row = ours(&s, &format!("BenillaScriptLogRow{}", i + 1));
+        // The trainer widens a row to 323 while its scroll bar is hidden and keeps the template's
+        // 293 beside it (`Blizzard_TrainerUI.lua:133-137`); the log's rows are the 293.
+        assert_eq!(
+            (row.0, row.1, row.2, row.3),
+            (want.0, want.1, want.0 + 293.0, want.3),
+            "row {} sits where the trainer's does",
+            i + 1
+        );
+        assert!(
+            row.1 >= list.1 && row.3 <= list.3,
+            "row {} {row:?} lies inside the list {list:?}",
+            i + 1
+        );
+    }
 }

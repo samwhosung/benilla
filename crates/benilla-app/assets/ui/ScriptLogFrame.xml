@@ -1,16 +1,20 @@
 <Ui>
     <!--
         The script error log, which 1.12 does not have, so every name carries the `Benilla` prefix;
-        the stock `ScriptErrors` dialog shows one message, this keeps the log. Shaped like the
-        reference's CraftFrame. It collects as a 1.12 error-log addon does: it wraps the handler
-        `geterrorhandler` holds, the stock `_ERRORMESSAGE` (BasicControls.xml:16), which still runs
-        after it. An addon that later calls `seterrorhandler` replaces the chain, as in 1.12.
+        the stock `ScriptErrors` dialog shows one message, this keeps the log. Laid out on the
+        ClassTrainer panel art as the class trainer lays itself out (Blizzard_TrainerUI.xml:214-356
+        and :481-513, Blizzard_TrainerUI.lua:469-474): its rows, its list, its detail under the
+        list and its two buttons in the art's sockets. It collects as a 1.12 error-log addon does:
+        it wraps the handler `geterrorhandler` holds, the stock `_ERRORMESSAGE`
+        (BasicControls.xml:16), which still runs after it. An addon that later calls
+        `seterrorhandler` replaces the chain, as in 1.12.
     -->
     <Script><![CDATA[
         -- A pushable above every stock panel's, so a game window opening pushes the log aside.
         UIPanelWindows["BenillaScriptLogFrame"] = { area = "left", pushable = 9, whileDead = 1 }
 
-        BENILLA_SCRIPTLOG_ROWS = 13
+        -- The class trainer's rows (`CLASS_TRAINER_SKILLS_DISPLAYED`, Blizzard_TrainerUI.lua:470).
+        BENILLA_SCRIPTLOG_ROWS = 11
         BENILLA_SCRIPTLOG_ROW_HEIGHT = 16
         -- A wrapped row would break the faux kit's fixed rows.
         BENILLA_SCRIPTLOG_ROW_CHARS = 52
@@ -254,8 +258,9 @@
                 </Layer></Layers>
             </Frame>
 
+            <!-- The class trainer's first row (ClassTrainerSkill1, Blizzard_TrainerUI.xml:214-222). -->
             <Button name="BenillaScriptLogRow1" inherits="BenillaScriptLogRowTemplate">
-                <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="22" y="-94"/></Offset></Anchor></Anchors>
+                <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="22" y="-100"/></Offset></Anchor></Anchors>
             </Button>
             <Button name="BenillaScriptLogRow2" inherits="BenillaScriptLogRowTemplate"><Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogRow1" relativePoint="BOTTOMLEFT"/></Anchors></Button>
             <Button name="BenillaScriptLogRow3" inherits="BenillaScriptLogRowTemplate"><Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogRow2" relativePoint="BOTTOMLEFT"/></Anchors></Button>
@@ -267,23 +272,24 @@
             <Button name="BenillaScriptLogRow9" inherits="BenillaScriptLogRowTemplate"><Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogRow8" relativePoint="BOTTOMLEFT"/></Anchors></Button>
             <Button name="BenillaScriptLogRow10" inherits="BenillaScriptLogRowTemplate"><Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogRow9" relativePoint="BOTTOMLEFT"/></Anchors></Button>
             <Button name="BenillaScriptLogRow11" inherits="BenillaScriptLogRowTemplate"><Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogRow10" relativePoint="BOTTOMLEFT"/></Anchors></Button>
-            <Button name="BenillaScriptLogRow12" inherits="BenillaScriptLogRowTemplate"><Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogRow11" relativePoint="BOTTOMLEFT"/></Anchors></Button>
-            <Button name="BenillaScriptLogRow13" inherits="BenillaScriptLogRowTemplate"><Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogRow12" relativePoint="BOTTOMLEFT"/></Anchors></Button>
 
-            <!-- Only the faux kit's right-hand Slider renders. -->
+            <!-- The class trainer's list frame (Blizzard_TrainerUI.xml:313-322, 184 tall as its .lua:471
+                 sets it). Only the faux kit's right-hand Slider renders. -->
             <ScrollFrame name="BenillaScriptLogListScrollFrame" inherits="FauxScrollFrameTemplate">
-                <Size><AbsDimension x="293" y="208"/></Size>
-                <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="22" y="-94"/></Offset></Anchor></Anchors>
-                            <Scripts>
+                <Size><AbsDimension x="296" y="184"/></Size>
+                <Anchors><Anchor point="TOPRIGHT" relativePoint="TOPRIGHT"><Offset><AbsDimension x="-67" y="-96"/></Offset></Anchor></Anchors>
+                <Scripts>
                     <!-- The stock kit has no `updateFunc`, so the repaint is wired here. -->
                     <OnVerticalScroll>FauxScrollFrame_OnVerticalScroll(BENILLA_SCRIPTLOG_ROW_HEIGHT, BenillaScriptLog_Update)</OnVerticalScroll>
                 </Scripts>
-</ScrollFrame>
+            </ScrollFrame>
 
-            <!-- The real-scroll kit: a message with its traceback has variable height. -->
+            <!-- The class trainer's detail pane, 8 under its list and 119 tall (Blizzard_TrainerUI.xml:
+                 346-356, .lua:472), so it ends above the buttons' sockets. The real-scroll kit: a
+                 message with its traceback has variable height. -->
             <ScrollFrame name="BenillaScriptLogDetailScroll">
-                <Size><AbsDimension x="293" y="128"/></Size>
-                <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="22" y="-314"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="296" y="119"/></Size>
+                <Anchors><Anchor point="TOPLEFT" relativeTo="BenillaScriptLogListScrollFrame" relativePoint="BOTTOMLEFT"><Offset><AbsDimension x="0" y="-8"/></Offset></Anchor></Anchors>
                 <Scripts>
                     <OnLoad>this:SetScrollChild(getglobal(this:GetName() .. "Child"))</OnLoad>
                     <OnMouseWheel>BenillaScroll_OnMouseWheel(this, arg1)</OnMouseWheel>
@@ -299,7 +305,7 @@
                         <Scripts><OnValueChanged>BenillaScrollBar_OnValueChanged(this, arg1)</OnValueChanged></Scripts>
                     </Slider>
                     <Frame name="$parentChild">
-                        <Size><AbsDimension x="293" y="128"/></Size>
+                        <Size><AbsDimension x="296" y="119"/></Size>
                         <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"/></Anchors>
                         <Layers>
                             <Layer level="ARTWORK">
@@ -314,14 +320,16 @@
                 </Frames>
             </ScrollFrame>
 
+            <!-- The art's two button sockets, where the class trainer's Train and Exit sit
+                 (Blizzard_TrainerUI.xml:481-513). -->
             <Button name="BenillaScriptLogClearButton" inherits="UIPanelButtonTemplate" text="Clear">
-                <Size><AbsDimension x="96" y="22"/></Size>
-                <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="22" y="-455"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="80" y="22"/></Size>
+                <Anchors><Anchor point="CENTER" relativePoint="TOPLEFT"><Offset><AbsDimension x="224" y="-420"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>BenillaScriptLog_Clear()</OnClick></Scripts>
             </Button>
             <Button name="BenillaScriptLogCloseBottomButton" inherits="UIPanelButtonTemplate" text="Close">
-                <Size><AbsDimension x="96" y="22"/></Size>
-                <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="219" y="-455"/></Offset></Anchor></Anchors>
+                <Size><AbsDimension x="80" y="22"/></Size>
+                <Anchors><Anchor point="CENTER" relativePoint="TOPLEFT"><Offset><AbsDimension x="305" y="-420"/></Offset></Anchor></Anchors>
                 <Scripts><OnClick>HideUIPanel(getglobal("BenillaScriptLogFrame"))</OnClick></Scripts>
             </Button>
         </Frames>

@@ -9,7 +9,7 @@ use benilla_ui::script::{
 use super::test_ui::load_ui as load_xml;
 
 /// The trainer window with every state filter on, for the full tree at fixed indices.
-fn trainer_script() -> UiScript {
+pub(super) fn trainer_script() -> UiScript {
     let mut s = trainer_script_base();
     load_xml(
         &s,
@@ -148,7 +148,7 @@ fn service(
 /// A two-line warrior menu. Groups sort by name, services by level then name, so the tree is:
 ///   1 H:Arms · 2 Heroic Strike(avail,10c,l1) · 3 Cleave(unavail,l20,skill+ability) ·
 ///   4 H:Fury · 5 Rend(used,30c) · 6 Thunder Clap(avail,500c)
-fn menu() -> TrainerState {
+pub(super) fn menu() -> TrainerState {
     TrainerState {
         greeting: "Well met. Let me show you the way of the warrior.".into(),
         trainer_type: 0,
