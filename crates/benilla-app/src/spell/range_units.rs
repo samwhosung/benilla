@@ -23,8 +23,8 @@ pub(crate) const DEFAULT_REACH: f32 = 1.5;
 /// is the movement word (`[[unit+0x118]+0x40]`), and the current speed is 0 with no direction bit
 /// (`0x7c4c99`), then the live server spline's speed, its length over its duration (`0x7c4caa`),
 /// then the swim, walk, run or run-back speed the flags pick ([`current_speed`]). A unit with no
-/// speeds streamed has none of the three: the reference's are zero until the movement block
-/// applies, and it is never running.
+/// speeds streamed reads no current speed here, so it is not running; every unit's create block
+/// applies its speeds, so none is seen that way.
 pub(crate) fn unit_motion(
     flags: u32,
     speeds: Option<&MoveSpeeds>,
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(unit_motion(0, Some(&s), Some(&spline(16.0, 2))).speed, 0.0);
     }
 
-    /// No speeds streamed: never running.
+    /// No speeds streamed: not running.
     #[test]
     fn a_unit_without_speeds_is_not_running() {
         assert!(!unit_motion(f::FORWARD, None, Some(&spline(16.0, 2))).moves_at_run_speed());

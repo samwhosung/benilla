@@ -130,7 +130,8 @@ impl BindChecks<'_, '_> {
 
     /// The same compare against a corpse. `GetMinMaxRange 0x6e3480` pads a corpse's bounds as a
     /// unit's (`6e35fe`), but with no unit to read the second reach from it reads the caster's
-    /// again (`6e3605`–`6e361e`), and with no unit it has no motion for the moving bonus.
+    /// again (`6e3605`–`6e361e`). On the ranged arm, which the corpse spells use, no unit means no
+    /// moving bonus; a melee row would fall back to the auto-attack target (`0x6e3580`).
     fn corpse_range_refusal(&self, spell_id: u32, entity: Entity) -> Option<u8> {
         let mut range = self.range_inputs(entity);
         range.target = Some(benilla_formats::RangeUnit::still(range.caster.reach));

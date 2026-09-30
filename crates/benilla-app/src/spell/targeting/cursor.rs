@@ -850,9 +850,9 @@ mod tests {
         );
     }
 
-    /// The unit leg's range compare is `IsTargetInRange 0x6e47b0` (`0x6e6063`), which hands
-    /// `GetMinMaxRange` the hovered unit: a melee spell is in range to 7.667 yards while the
-    /// caster and that unit both run, and to the 5.0 floor otherwise.
+    /// The unit leg's range compare, the tail of `SpellCanTargetUnit 0x6e6460`, hands
+    /// `GetMinMaxRange` the hovered unit (`0x6e679b`, `0x6e67d1`): a melee spell is in range to
+    /// 7.667 yards while the caster and that unit both run, and to the 5.0 floor otherwise.
     #[test]
     fn the_unit_leg_takes_the_moving_bonus_on_the_melee_row() {
         use bevy::ecs::system::RunSystemOnce;
