@@ -161,8 +161,14 @@ impl PetPress<'_, '_> {
 /// 0x6e2de0(spellId, 1)` before the send (`0x4bd444`): the spell's own `StartRecovery*` pair,
 /// under op 21, into the pet's list (`0xcecaec + 0x18`). The insert moves the list's generation,
 /// which carries the flush that follows it (`0x6e2e77`, `0x6e2e8e`) to
-/// `bar::fire_pet_cooldown_events`. This is the only place the pet's GCD starts: the
-/// `SMSG_SPELL_GO` pet leg inserts the spell's own timers and no GCD (`0x6e85f7`).
+/// `bar::fire_pet_cooldown_events`.
+///
+/// The pet's GCD starts in three places, and this arm is one. A `SMSG_SPELL_COOLDOWN` addressed
+/// to the pet's guid inserts the same pair for every entry whose spell lacks `Attributes` bit 25
+/// (`0x6e9553`-`0x6e9598`, `Cooldowns::apply_wire_cooldown`). The generic cast send starts it too
+/// (`0x6e58fb`), with the list picked by the caster's charmed-by, else summoned-by, guid
+/// (`0x6e58c2`-`0x6e58f3`); the possessed and client-targeted presses above reach it through
+/// `0x6e4b60`. The `SMSG_SPELL_GO` pet leg inserts the spell's own timers and no GCD (`0x6e85f7`).
 pub(super) fn arm_pet_gcd(
     bar: &mut PetBar,
     spell_id: u32,
