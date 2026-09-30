@@ -72,7 +72,7 @@ pub fn fade_band(radius: f32) -> Option<(f32, f32)> {
 /// behind ([`DespawnFade`]). The interior classifier keeps the light law through either.
 #[derive(Component, Clone)]
 pub struct RenderFade {
-    /// `Time::elapsed_secs` at arming.
+    /// `Time::elapsed_secs` the ramp runs from: its arming, or an appear ramp's arrival.
     pub started: f32,
     /// Seconds; both reference ramps are 2000 ms (`FadeTo`'s `0x7d0`, the pump's `age > 0x7d0`).
     pub duration: f32,
@@ -498,7 +498,8 @@ pub fn apply_render_fade(
 /// becoming visible (`0x4651a0`), not at stream-in, so it never plays behind a loading screen.
 #[derive(Component, Clone)]
 pub struct PendingAppearFade {
-    /// `Time::elapsed_secs` at attach, the backstop timeout's origin.
+    /// `Time::elapsed_secs` at the unit's arrival: the ramp's origin once the world is shown, and
+    /// the backstop timeout's.
     pub since: f32,
 }
 
@@ -510,7 +511,7 @@ const PENDING_TIMEOUT_SECS: f32 = 8.0;
 /// the ramp ends, after which a new part spawns steady.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub enum UnitAppearFade {
-    /// Waiting for the world to be shown.
+    /// Waiting for the world to be shown; `since` is the unit's arrival.
     Pending { since: f32 },
     /// A joiner copies `started`, which reproduces the same curve.
     Live { started: f32 },
@@ -548,9 +549,22 @@ pub(crate) fn arm_appear_fade(
         Has<crate::billboard::BillboardCard>,
     )>,
     mut units: Query<&mut UnitAppearFade>,
+    // When the cover last lifted; `None` while it is up.
+    mut shown_at: Local<Option<f32>>,
 ) {
     let now = time.elapsed_secs();
     let shown = !viewer.world_covered;
+    if shown {
+        shown_at.get_or_insert(now);
+    } else {
+        *shown_at = None;
+    }
+    // The ramp runs from the unit's arrival, whatever its model and composite waited on: the
+    // create block's appear handler stamps it (`0x465c50` → `0x613af0` → `0x614f80`, `obj+0xec`)
+    // and the per-frame ramp is `t³` of the wall time since (`0x614a90`, called at `0x60800c`
+    // whether or not the body draws). Never from behind a cover: an arrival under the loading
+    // screen starts when it lifts, and a timeout arm starts now.
+    let origin = |since: f32| shown_at.map_or(now, |lifted| since.max(lifted));
     let mut armed = 0usize;
     // Counted apart: a world-root billboard card arms only through its own spawn.
     let mut armed_cards = 0usize;
@@ -562,14 +576,16 @@ pub(crate) fn arm_appear_fade(
             // can land between this query and its commands.
             commands
                 .entity(entity)
-                .try_insert(RenderFade::appear(now))
+                .try_insert(RenderFade::appear(origin(pending.since)))
                 .try_remove::<PendingAppearFade>();
         }
     }
     for mut unit_fade in &mut units {
         if let UnitAppearFade::Pending { since } = *unit_fade {
             if shown || now - since > PENDING_TIMEOUT_SECS {
-                *unit_fade = UnitAppearFade::Live { started: now };
+                *unit_fade = UnitAppearFade::Live {
+                    started: origin(since),
+                };
             }
         }
     }
@@ -939,6 +955,48 @@ mod tests {
         assert_eq!(state.get(&world).get(a), 1.0);
     }
 
+    /// The ramp runs from the unit's arrival once the world is shown, so a body that waited on its
+    /// model or composite shows it already advanced, and never from behind the loading cover: an
+    /// arrival under it starts when the cover lifts.
+    #[test]
+    fn an_appear_ramp_runs_from_arrival_never_from_behind_the_cover() {
+        let mut app = App::new();
+        app.init_resource::<Time>()
+            .init_resource::<crate::view::Viewer>()
+            .add_systems(Update, arm_appear_fade);
+        let frame = |app: &mut App, secs: f32, covered: bool| {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_to(std::time::Duration::from_secs_f32(secs));
+            app.world_mut()
+                .resource_mut::<crate::view::Viewer>()
+                .world_covered = covered;
+            app.update();
+        };
+        let unit = |app: &App, e: Entity| *app.world().get::<UnitAppearFade>(e).unwrap();
+
+        // Arrived at 1 s under the loading cover, which lifts at 5 s.
+        let early = app
+            .world_mut()
+            .spawn(UnitAppearFade::Pending { since: 1.0 })
+            .id();
+        frame(&mut app, 2.0, true);
+        assert_eq!(unit(&app, early), UnitAppearFade::Pending { since: 1.0 });
+        frame(&mut app, 5.0, false);
+        assert_eq!(unit(&app, early), UnitAppearFade::Live { started: 5.0 });
+
+        // Arrived at 6 s in view and built at 6.5 s: its ramp is half a second in.
+        let late = app
+            .world_mut()
+            .spawn(UnitAppearFade::Pending { since: 6.0 })
+            .id();
+        let part = app.world_mut().spawn(PendingAppearFade { since: 6.0 }).id();
+        frame(&mut app, 6.5, false);
+        assert_eq!(unit(&app, late), UnitAppearFade::Live { started: 6.0 });
+        let fade = app.world().get::<RenderFade>(part).expect("the part armed");
+        assert_eq!(fade.started, 6.0, "the part rides the same ramp");
+    }
+
     /// `SystemState::apply` after a manual despawn recreates a wire destroy landing between the
     /// system's query and its commands.
     #[test]
@@ -962,9 +1020,10 @@ mod tests {
                 Has<crate::billboard::BillboardCard>,
             )>,
             Query<&mut UnitAppearFade>,
+            Local<Option<f32>>,
         )> = SystemState::new(&mut world);
-        let (time, viewer, commands, q, units) = state.get_mut(&mut world);
-        arm_appear_fade(time, viewer, commands, q, units);
+        let (time, viewer, commands, q, units, shown_at) = state.get_mut(&mut world);
+        arm_appear_fade(time, viewer, commands, q, units, shown_at);
 
         world.despawn(doomed);
         state.apply(&mut world); // would panic without the `try_*` contract

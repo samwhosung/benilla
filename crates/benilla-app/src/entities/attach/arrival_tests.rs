@@ -24,7 +24,8 @@ const SETS: [[u32; 8]; 4] = [
     [0, 34081, 34078, 34084, 34083, 34079, 34082, 0],
 ];
 
-/// One synthetic batch, so a built body has a child to show.
+/// One synthetic batch that can feather, so a built body has a child to show and joins its
+/// appear ramp.
 fn body_part() -> super::super::EntityPart {
     super::super::EntityPart {
         mesh: Handle::default(),
@@ -36,7 +37,7 @@ fn body_part() -> super::super::EntityPart {
         material_interior: None,
         material_interior_bake: None,
         material_interior_bake_blend: None,
-        fade_blend: None,
+        fade_blend: Some(Handle::default()),
         zfill: None,
         blend: benilla_formats::ModelBlend::Opaque,
         additive: false,
@@ -96,7 +97,12 @@ fn app() -> Option<App> {
         .insert_resource(ItemDisplays::icons_for_tests(items))
         .add_systems(
             Update,
-            (land_skin_composites, attach_entity_visuals).chain(),
+            (
+                super::super::stamp_arrivals,
+                land_skin_composites,
+                attach_entity_visuals,
+            )
+                .chain(),
         );
     Some(app)
 }
@@ -222,6 +228,52 @@ fn a_crowd_composites_off_the_main_thread_and_each_body_waits_for_its_atlas() {
     app.update();
     assert!(built(&app, twin), "a cached look builds on its first frame");
     assert_eq!(app.world().resource::<SkinComposites>().running(), 0);
+}
+
+/// A body that waited on its composite joins the appear ramp its arrival started: the reference's
+/// fade is stamped by the create block's appear handler (`0x613af0` → `0x614f80`) and ramps on the
+/// wall clock whatever ShouldRender answers (`0x614a90` at `0x60800c`).
+#[test]
+fn a_body_that_waited_for_its_atlas_fades_from_its_arrival() {
+    let Some(mut app) = app() else { return };
+    app.world_mut().insert_resource(Creatures {
+        catalog: Default::default(),
+        models: HashMap::from([(BODY, body_display(None))]),
+    });
+    let look = Look {
+        race: 1,
+        sex: 0,
+        face: 0,
+        hair: 0,
+        equip: SETS[0],
+    };
+    let player = arrive(&mut app, look);
+    app.update();
+    let arrived = app
+        .world()
+        .get::<super::super::Arrival>(player)
+        .expect("stamped the frame it arrived")
+        .0;
+    assert!(!built(&app, player), "the body waits for its atlas");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !built(&app, player) {
+        assert!(Instant::now() < deadline, "the composite lands");
+        std::thread::sleep(Duration::from_millis(1));
+        app.update();
+    }
+    let built_at = app.world().resource::<Time>().elapsed_secs();
+    assert!(
+        built_at > arrived,
+        "the body was built frames after it arrived"
+    );
+    assert_eq!(
+        app.world()
+            .get::<benilla_world::model_fade::UnitAppearFade>(player)
+            .copied(),
+        Some(benilla_world::model_fade::UnitAppearFade::Pending { since: arrived }),
+        "its ramp runs from its arrival, not from its build"
+    );
 }
 
 /// A creature display with a baked atlas loads it as is and is never waited on (`0x477866`); one

@@ -379,6 +379,24 @@ struct Characters(CharacterGeosets);
 #[derive(Resource)]
 pub(crate) struct CharCreate(pub(crate) CharCreateCatalog);
 
+/// When a net entity arrived, on the appear fade's clock: the reference stamps its fade as the
+/// create block's appear handler runs (`0x465c50` → `0x613af0` → `0x614f80`), before its model or
+/// composite is ready, so the ramp runs from here however long the visual waits.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct Arrival(pub(crate) f32);
+
+/// Stamp each net entity's [`Arrival`] the frame it streams in.
+fn stamp_arrivals(
+    mut commands: Commands,
+    time: Res<Time>,
+    arrived: Query<Entity, (Added<NetEntity>, Without<Arrival>)>,
+) {
+    let now = time.elapsed_secs();
+    for entity in &arrived {
+        commands.entity(entity).insert(Arrival(now));
+    }
+}
+
 /// Marks a net entity whose visual is attached; the `waterfx` rig pre-marks its dummy unit.
 #[derive(Component)]
 pub(crate) struct VisualAttached;
@@ -571,6 +589,13 @@ impl Plugin for EntitiesPlugin {
         .add_message::<live_display::DisplaySwapped>()
         .add_systems(Startup, setup_entities.after(AssetSet::Open))
         .add_systems(Update, (evict_display_caches, scope_entity_art))
+        // An arrival is stamped the frame it streams in, before its visual is asked for.
+        .add_systems(
+            Update,
+            stamp_arrivals
+                .after(WorldStage::Net)
+                .before(EntityVisualsSet),
+        )
         // Finished body composites land before the frame's bodies ask for their atlas.
         .add_systems(
             Update,

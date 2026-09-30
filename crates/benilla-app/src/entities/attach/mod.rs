@@ -234,6 +234,7 @@ pub(super) fn attach_entity_visuals(
             Option<&super::mount::MountChild>,
             Option<&super::mount::MountBody>,
             Has<crate::transport::TransportAnchor>,
+            Option<&super::Arrival>,
         ),
         // A torn-down unit gets no model: the reference frees it at once (`0x464920`).
         (
@@ -284,7 +285,10 @@ pub(super) fn attach_entity_visuals(
         mut anim_table,
     ) = skin_build;
     let now = time.elapsed_secs();
-    for (entity, net, equipment, reattached, mount_child, mount_body, anchored) in &pending {
+    for (entity, net, equipment, reattached, mount_child, mount_body, anchored, arrival) in &pending
+    {
+        // The appear ramp's origin: the unit's arrival, however long its visual waited to build.
+        let arrived = arrival.map_or(now, |a| a.0);
         // A player attaches once its equipment settles, so it never flashes naked.
         if net.kind == EntityKind::Player && !equipment.is_some_and(|e| e.settled) {
             continue;
@@ -644,7 +648,7 @@ pub(super) fn attach_entity_visuals(
                 fade: if reattached {
                     JoinedFade::Steady
                 } else {
-                    JoinedFade::Pending { since: now }
+                    JoinedFade::Pending { since: arrived }
                 },
             };
             // The shown batches spawn as material groups (`merge`).
@@ -674,7 +678,7 @@ pub(super) fn attach_entity_visuals(
             if unit_will_fade {
                 commands
                     .entity(entity)
-                    .insert(benilla_world::model_fade::UnitAppearFade::Pending { since: now });
+                    .insert(benilla_world::model_fade::UnitAppearFade::Pending { since: arrived });
             } else if reattached {
                 commands
                     .entity(entity)
