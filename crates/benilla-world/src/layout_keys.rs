@@ -1,33 +1,99 @@
-//! The keyboard layout's named keys. The Windows client reads a key as the virtual-key code the
-//! OS layout produced from the scancode (the WndProc's key arm `0x42d21e` hands `wParam` to the
-//! translator `0x42d800`, which never reads the scancode), so a layout that gives a key another
-//! named function (X11's `caps:escape`, `caps:swapescape`, `ctrl:nocaps`, Colemak's Caps Lock as
-//! Backspace) moves that function in 1.12; under Wine the same keysym becomes the same virtual
-//! key. Bevy's `KeyCode` is the physical key, which such a layout does not move: Caps Lock mapped
-//! to Escape arrives as `CapsLock` with the logical key `Escape`.
+//! The keyboard layout, as the reference reads it. The Windows client names a key from the
+//! virtual-key code the OS layout produced from the scancode: the WndProc's key arm `0x42d21e`
+//! hands `wParam` to the translator `0x42d800`, which never reads the scancode. The translator has
+//! two tiers, a fixed table for the named keys and the digits, and for every letter and
+//! `VK_OEM_*` key the layout's own unshifted character, `MapVirtualKeyA(vk, MAPVK_VK_TO_CHAR)`
+//! (`0x42da39`). Bevy's `KeyCode` is the physical key, which a layout moves in neither tier.
 //!
-//! Off macOS, each keyboard message whose logical key is a named key other than its physical one
-//! takes that named key's code, before Bevy's input collection, so every reader (the bindings,
-//! the text boxes, the glue screens, `ButtonInput<KeyCode>`) sees the layout's key. The Mac client
-//! reads its non-character keys off a fixed table on the physical keycode (`0x5bf320`), so macOS
-//! keeps them physical. Character keys stay physical, and so do the numpad keys, whose Num Lock
-//! navigation meanings are not remaps.
+//! Named keys: a layout that gives a key another named function (X11's `caps:escape`,
+//! `caps:swapescape`, `ctrl:nocaps`, Colemak's Caps Lock as Backspace) moves that function in 1.12;
+//! under Wine the same keysym becomes the same virtual key. Caps Lock mapped to Escape arrives as
+//! `CapsLock` with the logical key `Escape`. Off macOS, each keyboard message whose logical key is
+//! a named key other than its physical one takes that named key's code, before Bevy's input
+//! collection, so every reader (the bindings, the text boxes, the glue screens,
+//! `ButtonInput<KeyCode>`) sees the layout's key. The Mac client reads its non-character keys off
+//! a fixed table on the physical keycode (`0x5bf320`), so macOS keeps them physical, and every
+//! platform keeps the numpad keys, whose Num Lock navigation meanings are not remaps.
+//!
+//! Character keys: [`LayoutChars`] holds the character each key makes under the active layout
+//! with no modifier held, which Bevy's `KeyboardInput` drops (its `logical_key` carries Shift, so
+//! Shift+1 arrives as `!`). Each key message refreshes its own key before any `Update` reader, so
+//! a press is named under the layout it was typed in. The Mac client fills the same keys from the
+//! live layout: `KeyTranslate` (`0x8a3c3`) on the current `KCHR`, re-read whenever it changes
+//! (`0x8a345`).
 
-#[cfg(any(not(target_os = "macos"), test))]
+use std::collections::HashMap;
+
 use bevy::input::keyboard::{Key, KeyCode};
 use bevy::prelude::*;
 
-/// Rewrites remapped named keys before Bevy's input collection (all but macOS).
+/// Records each key's layout character (every platform) and rewrites remapped named keys before
+/// Bevy's input collection (all but macOS).
 pub struct LayoutKeysPlugin;
 
 impl Plugin for LayoutKeysPlugin {
-    #[cfg(not(target_os = "macos"))]
     fn build(&self, app: &mut App) {
+        app.init_resource::<LayoutChars>();
+        // A headless build has no winit to register it.
+        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+        app.add_message::<bevy::winit::RawWinitWindowEvent>()
+            .add_systems(PreUpdate, record_layout_chars);
+        #[cfg(not(target_os = "macos"))]
         app.add_systems(PreUpdate, remap.before(bevy::input::InputSystems));
     }
+}
 
-    #[cfg(target_os = "macos")]
-    fn build(&self, _app: &mut App) {}
+/// The character the active layout makes on each physical key with no modifier held, as the OS
+/// last reported it: an entry changes with the next message of its key after a layout switch.
+/// Empty, every key reads as unreported, where no winit feeds it (a headless run, a test).
+#[derive(Resource, Default, Debug)]
+pub struct LayoutChars(HashMap<KeyCode, char>);
+
+impl LayoutChars {
+    /// The layout's unshifted character on the physical key `key`, when it makes exactly one
+    /// printable character.
+    pub fn get(&self, key: KeyCode) -> Option<char> {
+        self.0.get(&key).copied()
+    }
+
+    /// What the layout makes on `key` with no modifier held: a dead key counts as its character
+    /// (the reference's `and eax,0xffff` at `0x42da42` drops `MapVirtualKeyA`'s dead-key bit), and
+    /// anything but one printable character clears the entry.
+    pub fn record(&mut self, key: KeyCode, unshifted: &Key) {
+        let one = |s: &str| {
+            let mut chars = s.chars();
+            chars.next().filter(|_| chars.next().is_none())
+        };
+        let c = match unshifted {
+            Key::Character(s) => one(s),
+            Key::Dead(c) => *c,
+            _ => None,
+        };
+        match c.filter(|c| !c.is_control() && !c.is_whitespace()) {
+            Some(c) => self.0.insert(key, c),
+            None => self.0.remove(&key),
+        };
+    }
+}
+
+/// Refreshes [`LayoutChars`] from each raw key message: winit's `key_without_modifiers` reads the
+/// live layout on all three platforms (`ToUnicodeEx` on Windows, `UCKeyTranslate` on macOS, the
+/// first level of the key's xkb group on Linux).
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+fn record_layout_chars(
+    mut raw: MessageReader<bevy::winit::RawWinitWindowEvent>,
+    mut chars: ResMut<LayoutChars>,
+) {
+    use bevy::winit::converters::{convert_logical_key, convert_physical_key_code};
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    for ev in raw.read() {
+        if let winit::event::WindowEvent::KeyboardInput { event, .. } = &ev.event {
+            chars.record(
+                convert_physical_key_code(event.physical_key),
+                &convert_logical_key(&event.key_without_modifiers()),
+            );
+        }
+    }
 }
 
 /// Gives each new keyboard message the code of the named key its layout made it.
@@ -165,8 +231,8 @@ mod tests {
     }
 
     #[test]
-    fn characters_and_the_numpad_stay_physical() {
-        // An azerty A: the key where a qwerty Q sits.
+    fn characters_and_the_numpad_keep_their_codes() {
+        // An azerty A, the key where a qwerty Q sits: named by `LayoutChars`, not moved.
         assert_eq!(
             layout_code(KeyCode::KeyQ, &Key::Character("a".into())),
             None
@@ -176,5 +242,41 @@ mod tests {
         assert_eq!(layout_code(KeyCode::NumpadEnter, &Key::Enter), None);
         // AltGr has no code of its own.
         assert_eq!(layout_code(KeyCode::AltRight, &Key::AltGraph), None);
+    }
+
+    #[test]
+    fn a_key_records_the_one_character_its_layout_makes_unshifted() {
+        let mut chars = LayoutChars::default();
+        // An azerty Z: the key where a qwerty W sits.
+        chars.record(KeyCode::KeyW, &Key::Character("z".into()));
+        assert_eq!(chars.get(KeyCode::KeyW), Some('z'));
+        // A dead key names its accent, as `MapVirtualKeyA` with its dead bit masked off.
+        chars.record(KeyCode::BracketLeft, &Key::Dead(Some('^')));
+        assert_eq!(chars.get(KeyCode::BracketLeft), Some('^'));
+        chars.record(KeyCode::Quote, &Key::Character("ù".into()));
+        assert_eq!(chars.get(KeyCode::Quote), Some('ù'));
+        // No single printable character: the key is unreported.
+        chars.record(KeyCode::Slash, &Key::Character("ch".into()));
+        chars.record(KeyCode::Comma, &Key::Character(" ".into()));
+        chars.record(KeyCode::Period, &Key::Dead(None));
+        for k in [KeyCode::Slash, KeyCode::Comma, KeyCode::Period] {
+            assert_eq!(chars.get(k), None, "{k:?}");
+        }
+        assert_eq!(chars.get(KeyCode::KeyQ), None, "never pressed");
+    }
+
+    #[test]
+    fn a_layout_switch_renames_a_key_at_its_next_message() {
+        let mut chars = LayoutChars::default();
+        chars.record(KeyCode::KeyW, &Key::Character("z".into()));
+        chars.record(KeyCode::KeyW, &Key::Character("w".into()));
+        assert_eq!(
+            chars.get(KeyCode::KeyW),
+            Some('w'),
+            "back on a qwerty layout"
+        );
+        // A layout that makes no character there clears what the last one made.
+        chars.record(KeyCode::KeyW, &Key::Escape);
+        assert_eq!(chars.get(KeyCode::KeyW), None);
     }
 }

@@ -26,6 +26,9 @@ benilla-wmo = { path = "../benilla-wmo" }
 bevy.workspace = true
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# The layout's unshifted character per key (`KeyEventExtModifierSupplement`), which bevy's
+# `KeyboardInput` drops; bevy_winit's own 0.30, whose features it sets.
+winit = { version = "0.30", default-features = false }
 
 # macOS AppKit calls, at `benilla-app`'s pins so the graph has one objc2.
 [target.'cfg(target_os = "macos")'.dependencies]

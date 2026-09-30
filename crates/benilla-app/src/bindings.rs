@@ -25,6 +25,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::keybind::KeybindRequest;
 use benilla_ui::script::UiScript;
+use benilla_world::layout_keys::LayoutChars;
 
 use crate::char_select::InWorldGated;
 use crate::ui_script::{PlayerUiHover, PointerOverUiPanel, UiKeyboardCapture};
@@ -69,10 +70,10 @@ impl BindingDispatch {
 /// [`Input`]s the running bodies' Lua calls set.
 #[derive(Resource, Default)]
 pub(crate) struct BindingsState {
-    /// Live latches, (base key, command): a press not yet released, whose release runs the
+    /// Live latches, (base input, command): a press not yet released, whose release runs the
     /// command's `runOnUp` half. The reference replays the press-time chord at key-up (`0x483bd0`);
     /// latching the resolved command is equivalent.
-    latched: Vec<(BindKey, String)>,
+    latched: Vec<(Held, String)>,
     /// The held bits a Start set and no Stop has cleared.
     held: Vec<Input>,
     /// Inputs whose Start, or whose one-shot, came this frame (the press edge).
@@ -87,6 +88,15 @@ pub(crate) struct BindingsState {
     /// pass, so a window deactivate empties it and a key held across an alt-tab resumes, as in
     /// the reference. Keyboard only: mouse edges cannot repeat.
     down: Vec<KeyCode>,
+}
+
+/// The physical input a latch waits on: a keyboard key by its code, not its name, so its release
+/// ends the latch whatever the layout names it by then.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Held {
+    Key(KeyCode),
+    Mouse(MouseButton),
+    Wheel,
 }
 
 impl BindingsState {
@@ -308,6 +318,8 @@ impl WheelNotches {
 fn latch_and_dispatch(
     mut script: Option<NonSendMut<UiScript>>,
     mut keyboard: MessageReader<KeyboardInput>,
+    // The characters the active layout makes, which name a letter or punctuation press.
+    layout: Res<LayoutChars>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     scroll: Res<AccumulatedMouseScroll>,
@@ -374,7 +386,7 @@ fn latch_and_dispatch(
     // reference's `0x424790` wipe, so a key held across an alt-tab re-latches on its next repeat.
     state
         .down
-        .retain(|&kc| physically_down(BindKey::Key(kc), &keys, &buttons));
+        .retain(|&kc| physically_down(Held::Key(kc), &keys, &buttons));
 
     // ── Keyboard ── press edges run their command, gated on ownership and the capture arm;
     // release edges unlatch and run the `runOnUp` up-half.
@@ -405,22 +417,27 @@ fn latch_and_dispatch(
                 if (typing && !arrow_exempt) || eaten || sup || repeat {
                     continue;
                 }
-                if state.latched.iter().any(|(k, _)| *k == BindKey::Key(key)) {
+                if state.latched.iter().any(|(k, _)| *k == Held::Key(key)) {
                     continue; // already latched (missed release would double-latch)
                 }
+                // Named under the layout this press was typed in; a key 1.12 cannot name binds
+                // nothing.
+                let Some(name) = chord::key_token(ev.key_code, &layout) else {
+                    continue;
+                };
                 let chord = Chord {
                     alt,
                     ctrl,
                     shift,
-                    key: BindKey::Key(key),
+                    key: BindKey::Key(name),
                 };
                 if let Some(command) = dispatch.resolve(chord, dev_plane) {
-                    press(&mut state, &mut script, command, BindKey::Key(key));
+                    press(&mut state, &mut script, command, Held::Key(key));
                 }
             }
             ButtonState::Released => {
                 state.down.retain(|&kc| kc != key);
-                release(&mut state, &mut script, BindKey::Key(key));
+                release(&mut state, &mut script, Held::Key(key));
             }
         }
     }
@@ -437,7 +454,7 @@ fn latch_and_dispatch(
         if buttons.just_pressed(b)
             && !sup
             && hover.0.is_none()
-            && !state.latched.iter().any(|(k, _)| *k == BindKey::Mouse(b))
+            && !state.latched.iter().any(|(k, _)| *k == Held::Mouse(b))
         {
             let chord = Chord {
                 alt,
@@ -446,11 +463,11 @@ fn latch_and_dispatch(
                 key: BindKey::Mouse(b),
             };
             if let Some(command) = dispatch.resolve(chord, false) {
-                press(&mut state, &mut script, command, BindKey::Mouse(b));
+                press(&mut state, &mut script, command, Held::Mouse(b));
             }
         }
         if buttons.just_released(b) {
-            release(&mut state, &mut script, BindKey::Mouse(b));
+            release(&mut state, &mut script, Held::Mouse(b));
         }
     }
 
@@ -476,8 +493,8 @@ fn latch_and_dispatch(
         };
         if let Some(command) = dispatch.resolve(chord, false) {
             for _ in 0..steps.unsigned_abs() {
-                press(&mut state, &mut script, command, key);
-                release(&mut state, &mut script, key);
+                press(&mut state, &mut script, command, Held::Wheel);
+                release(&mut state, &mut script, Held::Wheel);
             }
         }
     }
@@ -486,7 +503,7 @@ fn latch_and_dispatch(
     // unlatches now and runs its up-half. The reference's two bulk clears land here too, since
     // bevy zeroes `ButtonInput` for both (see the clears above). UI keyboard focus never reaches
     // here.
-    let mut stuck: Vec<BindKey> = Vec::new();
+    let mut stuck: Vec<Held> = Vec::new();
     for (k, _) in &state.latched {
         if !physically_down(*k, &keys, &buttons) && !stuck.contains(k) {
             stuck.push(*k);
@@ -504,32 +521,32 @@ fn latch_and_dispatch(
     }
 }
 
-/// Is this base key physically down, per bevy's button planes? The stuck-latch sweep and the
+/// Is this input physically down, per bevy's button planes? The stuck-latch sweep and the
 /// pressed-key reconcile must agree, so both ask here. `ENTER` is down while either physical
 /// key is, since [`chord::normalize_key`] folds `NUMPADENTER` into it.
 fn physically_down(
-    key: BindKey,
+    key: Held,
     keys: &ButtonInput<KeyCode>,
     buttons: &ButtonInput<MouseButton>,
 ) -> bool {
     match key {
-        BindKey::Key(KeyCode::Enter) => {
+        Held::Key(KeyCode::Enter) => {
             keys.pressed(KeyCode::Enter) || keys.pressed(KeyCode::NumpadEnter)
         }
-        BindKey::Key(kc) => keys.pressed(kc),
-        BindKey::Mouse(b) => buttons.pressed(b),
+        Held::Key(kc) => keys.pressed(kc),
+        Held::Mouse(b) => buttons.pressed(b),
         // A notch is a press and a release in one frame; it is never "held".
-        BindKey::WheelUp | BindKey::WheelDown => false,
+        Held::Wheel => false,
     }
 }
 
-/// One matching press: the command's body with `keystate = "down"`, and a latch on its base key
-/// so the release can run the up-half.
+/// One matching press: the command's body with `keystate = "down"`, and a latch on its input so
+/// the release can run the up-half.
 fn press(
     state: &mut BindingsState,
     script: &mut Option<NonSendMut<UiScript>>,
     command: &str,
-    key: BindKey,
+    key: Held,
 ) {
     if let Some(s) = script.as_mut() {
         if let Err(e) = s.execute_binding(command, true) {
@@ -541,7 +558,7 @@ fn press(
 
 /// A base key's release: drop its latch and run the command's `runOnUp` up-half, even while
 /// typing (the reference completes a pressed binding's release regardless of focus).
-fn release(state: &mut BindingsState, script: &mut Option<NonSendMut<UiScript>>, key: BindKey) {
+fn release(state: &mut BindingsState, script: &mut Option<NonSendMut<UiScript>>, key: Held) {
     let mut i = 0;
     while i < state.latched.len() {
         if state.latched[i].0 == key {
@@ -684,6 +701,7 @@ mod tests {
             .init_resource::<PointerOverUiPanel>()
             .init_resource::<BindingsState>()
             .init_resource::<BindingDispatch>()
+            .init_resource::<LayoutChars>()
             .add_systems(Update, (sync_dispatch, latch_and_dispatch).chain());
         app.insert_non_send_resource(script);
         app
@@ -1175,6 +1193,89 @@ mod tests {
         press_key(&mut app, KeyCode::SuperLeft);
         press_key(&mut app, KeyCode::KeyZ);
         app.update();
+        assert!(!state(&app).fired(Input::ToggleSheath));
+    }
+
+    /// The layout's unshifted character on `k`, as `layout_keys` records it from the key's own
+    /// OS message, ahead of the press.
+    fn layout_key(app: &mut App, k: KeyCode, unshifted: &str) {
+        app.world_mut()
+            .resource_mut::<LayoutChars>()
+            .record(k, &Key::Character(unshifted.into()));
+    }
+
+    /// A press with the logical key the OS reports, modifiers applied.
+    fn type_key(app: &mut App, k: KeyCode, logical: &str) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code: k,
+            logical_key: Key::Character(logical.into()),
+            state: bevy::input::ButtonState::Pressed,
+            text: Some(logical.into()),
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+    }
+
+    /// 1.12 binds a letter or punctuation key by the character its layout prints there
+    /// (`MapVirtualKeyA` at `0x42da39`): on AZERTY the key where a US W sits runs `Z`'s binding,
+    /// and `W`'s moves to the key labelled W. Shift is a prefix, never part of the character.
+    #[test]
+    fn a_key_runs_the_binding_of_the_character_its_layout_prints_on_it() {
+        let script = core_script();
+        script
+            .run(r#"SetBinding("SHIFT-Z", "TOGGLEUI"); SetBinding("SHIFT-1", "TARGETPREVIOUSENEMY")"#)
+            .expect("bind");
+        let mut app = vm_harness(script);
+        layout_key(&mut app, KeyCode::KeyW, "z");
+        layout_key(&mut app, KeyCode::KeyZ, "w");
+        type_key(&mut app, KeyCode::KeyW, "z");
+        app.update();
+        assert!(
+            state(&app).fired(Input::ToggleSheath),
+            "the key labelled Z is Z"
+        );
+        assert!(!state(&app).pressed(Input::MoveForward));
+        release_key(&mut app, KeyCode::KeyW);
+        type_key(&mut app, KeyCode::KeyZ, "w");
+        app.update();
+        assert!(
+            state(&app).pressed(Input::MoveForward),
+            "the key labelled W is W"
+        );
+        release_key(&mut app, KeyCode::KeyZ);
+        app.update();
+        assert!(
+            !state(&app).pressed(Input::MoveForward),
+            "its release ends it"
+        );
+        // Shift makes the character `Z`, and the chord `SHIFT-Z`.
+        press_key(&mut app, KeyCode::ShiftLeft);
+        type_key(&mut app, KeyCode::KeyW, "Z");
+        app.update();
+        assert_eq!(lua_count(&app, "UITOGGLES"), 1, "SHIFT-Z");
+        release_key(&mut app, KeyCode::KeyW);
+        // Shift+1 makes `!` on a US layout, and is `SHIFT-1`.
+        type_key(&mut app, KeyCode::Digit1, "!");
+        app.update();
+        assert_eq!(lua_count(&app, "STABS"), 1, "SHIFT-1, never SHIFT-!");
+    }
+
+    /// A key's name follows a layout switch while running: its next press is named under the
+    /// layout it was typed in.
+    #[test]
+    fn a_layout_switch_renames_a_key_at_its_next_press() {
+        let mut app = harness();
+        layout_key(&mut app, KeyCode::KeyW, "z");
+        type_key(&mut app, KeyCode::KeyW, "z");
+        app.update();
+        assert!(state(&app).fired(Input::ToggleSheath));
+        release_key(&mut app, KeyCode::KeyW);
+        app.update();
+        // Back on a US layout, the key's next message reports `w`.
+        layout_key(&mut app, KeyCode::KeyW, "w");
+        type_key(&mut app, KeyCode::KeyW, "w");
+        app.update();
+        assert!(state(&app).pressed(Input::MoveForward));
         assert!(!state(&app).fired(Input::ToggleSheath));
     }
 

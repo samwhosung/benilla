@@ -85,17 +85,20 @@ pub(super) fn feed_ui_input(
     // The wheel travel and its carried notch fraction, one param for clippy's argument ceiling.
     (scroll, mut notches): (Res<AccumulatedMouseScroll>, ResMut<WheelNotches>),
     mut pointer: PointerFeed,
-    // One param for clippy's argument ceiling, with the pasteboard the clipboard chords use.
+    // One param for clippy's argument ceiling, with the pasteboard the clipboard chords use and
+    // the layout that names a key for a keyboard frame.
     mut kbd: (
         MessageReader<KeyboardInput>,
         Res<ButtonInput<KeyCode>>,
         ResMut<UiKeyboardCapture>,
         NonSendMut<HostClipboard>,
+        Res<benilla_world::layout_keys::LayoutChars>,
     ),
     // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
 ) {
-    let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
+    let (keyboard, keys, capture, clipboard, layout) =
+        (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3, &kbd.4);
     let world_pick = pointer.world_pick();
     // The OS pointer is not ours while a probe drives a gesture through the real pointer path or a
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
@@ -258,14 +261,15 @@ pub(super) fn feed_ui_input(
         }
         // Every other key reaches a keyboard frame by name too: the reference's key-down walk
         // takes its `arg1` from the table the binding chord uses (`0x4b66b0`), `chord::key_token`
-        // here, and the gate is existence, not handling: a shown keyboard frame with an
-        // `OnKeyDown` swallows the key whatever its script does (`0x76b7d0`, `0x76ba25`).
+        // under the active layout here, so the Key Bindings window stores the name the key's
+        // press dispatches by. The gate is existence, not handling: a shown keyboard frame with
+        // an `OnKeyDown` swallows the key whatever its script does (`0x76b7d0`, `0x76ba25`).
         // Consumption suppresses only the key's binding: `OnChar` is a separate dispatcher
         // (`0x765df0`), so the stack-split spinner still gets a digit its `OnKeyDown` ate, and it
         // is not a focus change, so it releases nothing held.
         else if named.is_none() {
-            if let Some(token) = crate::bindings::chord::key_token(ev.key_code) {
-                if script.frame_key_input(token) {
+            if let Some(token) = crate::bindings::chord::key_token(ev.key_code, layout) {
+                if script.frame_key_input(&token.to_string()) {
                     capture.consumed.push(ev.key_code);
                 }
             }

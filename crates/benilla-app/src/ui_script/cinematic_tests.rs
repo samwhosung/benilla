@@ -97,8 +97,8 @@ fn the_host_has_a_reference_name_for_the_keys_it_now_delivers() {
         (KeyCode::F1, "F1"),
     ] {
         assert_eq!(
-            key_token(code),
-            Some(name),
+            key_token(code, &Default::default()).map(|n| n.to_string()),
+            Some(name.to_string()),
             "{code:?} must reach a keyboard frame under the reference's own name"
         );
     }
