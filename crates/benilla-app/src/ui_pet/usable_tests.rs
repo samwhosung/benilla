@@ -363,6 +363,36 @@ fn each_exit_alone_stops_the_pet_books_autocast_toggle() {
     }
 }
 
+/// `0x4bd6e0`: the pet menu's Dismiss hands its command word to the dispatcher, so it is refused
+/// at `0x4bd1f2` like any other order.
+#[test]
+fn each_exit_alone_stops_the_menus_dismiss() {
+    const DISMISS: u32 = 0x0700_0003;
+    for Case {
+        name,
+        apply,
+        usable,
+        ..
+    } in all_cases()
+    {
+        let mut rig = scene();
+        apply(&mut rig);
+        rig.frame();
+
+        ui(&mut rig, |s| s.run("PetDismiss()").unwrap());
+        rig.app
+            .world_mut()
+            .run_system_once(super::menu::drain_pet_menu)
+            .expect("the drain runs");
+
+        let went = rig
+            .sent()
+            .iter()
+            .any(|c| matches!(c, ClientCommand::PetAction { packed, .. } if *packed == DISMISS));
+        assert_eq!(went, usable, "{name}: Dismiss sends only on a usable pet");
+    }
+}
+
 /// `0x4bc9d0`, from the drop `0x4bce33` and the pickup's blank `0x4be27f`: lifting Claw and
 /// dropping it on the next slot writes and sends nothing on an unusable pet, and two writes on a
 /// usable one.

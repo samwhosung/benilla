@@ -2,7 +2,8 @@
 //! `PetCanBeAbandoned()`, Rename when `PetCanBeRenamed()` too, and Dismiss otherwise. `PetAbandon`
 //! (`0x4be4c0`, `0x4bd740`) sends `CMSG_PET_ABANDON`; `PetDismiss` (`0x4be4d0`) sends no packet
 //! itself but hands the Dismiss command word to the bar's dispatcher (`0x4bd1d0`), so it leaves as
-//! `CMSG_PET_ACTION`. vmangos unsummons a summon on either, so sending the wrong one goes unseen.
+//! `CMSG_PET_ACTION`, and only past the dispatcher's usability predicate (`0x4bd1f2`). vmangos
+//! unsummons a summon on either, so sending the wrong one goes unseen.
 
 use bevy::prelude::*;
 
@@ -56,6 +57,7 @@ pub(super) fn drain_pet_menu(
     bar: Res<PetBar>,
     commands: Res<NetCommands>,
     mut ui_errors: ResMut<UiErrorKeys>,
+    pet: PetUnit,
 ) {
     let Some(mut script) = script else {
         return;
@@ -76,9 +78,14 @@ pub(super) fn drain_pet_menu(
         debug!("ui_pet: abandoning pet {pet_guid:#x}");
         let _ = commands.0.send(ClientCommand::PetAbandon { pet_guid });
     }
-    // `0x4bd6e0` stages `0x07000003` at target 0.
+    // `0x4bd6e0` stages `0x07000003` at target 0 and enters the dispatcher, whose first act is the
+    // usability predicate (`0x4bd1f2`): a pet that fails it is not sent the word.
     let dismiss_word = PET_COMMAND_DISMISS | (u32::from(PET_ACT_COMMAND) << 24);
     for _ in 0..dismisses {
+        if !pet.actions_usable(&bar) {
+            debug!("ui_pet: dismiss refused, the pet's actions are not usable — no packet");
+            continue;
+        }
         debug!("ui_pet: dismissing pet {pet_guid:#x} ({dismiss_word:#010x})");
         let _ = commands.0.send(ClientCommand::PetAction {
             pet_guid,
