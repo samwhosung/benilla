@@ -369,9 +369,7 @@ pub(super) fn feed_party(
     // the roster event whose handler asks `UnitExists("partypetN")` (`PartyMemberFrame.lua:73`).
     for (i, token) in PARTY_PET_TOKENS.iter().enumerate() {
         let owner = slots.get(i).map_or(0, |m| m.guid);
-        let now = (owner != 0)
-            .then(|| pets::member_pet(&look, &group, owner, look.store(owner), Roster::Party))
-            .flatten();
+        let now = pets::member_pet(&look, &group, owner, look.store(owner), Roster::Party);
         pets::feed_token(
             &mut script,
             &gate,
@@ -445,9 +443,7 @@ pub(super) fn feed_party(
         } else {
             look.store(owner)
         };
-        let now = (owner != 0)
-            .then(|| pets::member_pet(&look, &group, owner, held, Roster::Raid))
-            .flatten();
+        let now = pets::member_pet(&look, &group, owner, held, Roster::Raid);
         pets::feed_token(
             &mut script,
             &gate,
@@ -789,10 +785,11 @@ fn member_unit_state(
             // Divided as on the live leg (`UnitMana`'s record path, `0x517744`-`0x51775e`).
             power: stats.map_or(0, PartyMemberStatsInfo::shown_power),
             max_power: stats.map_or(0, PartyMemberStatsInfo::shown_max_power),
-            // Connected is the roster byte's online bit, the one `0x4e82d0` writes into the
-            // record's bit 0 (`0x4e836e`-`0x4e837b`) for `UnitIsConnected` to read (`0x517dd3`);
-            // a held member never gets here, its 1 is `snapshot`'s (`0x517daf`).
-            is_connected: m.status & member_status::ONLINE != 0,
+            // Connected is the record's own online bit (`+0x08 & 1`, `0x517dd3`), which each list
+            // rewrites from its row's status (`0x4e836e`-`0x4e837b`) and a stats packet's status
+            // moves alone, so the roster byte is not read. A held member never gets here, its 1 is
+            // `snapshot`'s (`0x517daf`); a member with no record has no bit to read.
+            is_connected: stats.is_some_and(PartyMemberStatsInfo::is_online),
             // Dead and ghost from the record, as the reference's `UnitIsDead` (`0x517b5d`,
             // `+0x08 & 4`) and `UnitIsGhost` (`0x517c32`, `& 8`) read it: fresher than the roster
             // byte, which only `SMSG_GROUP_LIST` moves. 1.12 has no AFK or DND predicate to feed.
@@ -1339,11 +1336,17 @@ pub(crate) fn synthetic_roster(
         (0xF003, 0, 1105, 31, 0, seat(-300.0, 0.0)),
         (0xF004, 0, 0, 0, 0, None),
     ] {
+        // A server's full stats carry the status, which the record's online bit is read from.
+        let status = group
+            .members
+            .iter()
+            .find(|m| m.guid == guid)
+            .map(|m| m.status);
         group.apply_stats(
             guid,
             true,
             PartyMemberStatsInfo {
-                status: None,
+                status,
                 cur_hp: Some(hp),
                 max_hp: Some(max),
                 level: Some(level),
@@ -1439,11 +1442,16 @@ pub(crate) fn synthetic_raid(
     for (i, _) in ROSTER.iter().enumerate() {
         let guid = 0xF100 + i as u64;
         let dead = i == 3;
+        let status = group
+            .members
+            .iter()
+            .find(|m| m.guid == guid)
+            .map(|m| m.status);
         group.apply_stats(
             guid,
             true,
             PartyMemberStatsInfo {
-                status: None,
+                status,
                 cur_hp: Some(if dead {
                     0
                 } else {
@@ -1501,6 +1509,7 @@ mod tests {
             flags: 0,
         };
         let record = PartyMemberStatsInfo {
+            status: Some(member_status::ONLINE),
             cur_hp: Some(2400),
             max_hp: Some(3000),
             level: Some(41),
@@ -1608,8 +1617,8 @@ mod tests {
         assert!(s.dead);
     }
 
-    /// Seat member 1 alone in the party or raid roster with `status`, on the wire and in its
-    /// record, as [`party`] does.
+    /// Send member 1 alone as the party or raid roster with `status`, as a server's list does: the
+    /// member's record, which [`party`] seated, takes its online bit from the list.
     fn seat(app: &mut App, group_type: u8, status: u8) {
         let mut group = app.world_mut().resource_mut::<GroupState>();
         group.apply_list(
@@ -1625,7 +1634,6 @@ mod tests {
             None,
             Some(ME),
         );
-        group.stats.get_mut(&member(1)).unwrap().status = Some(status);
     }
 
     /// `UnitIsConnected` (`0x517d50`) answers 1 for any unit the object manager holds
@@ -1708,6 +1716,57 @@ mod tests {
         seat(&mut app, GROUPTYPE_RAID, member_status::ONLINE);
         frame(&mut app);
         assert_eq!(flag(&mut app, "UnitIsConnected('raid1')"), Some(1.0));
+    }
+
+    /// The answer is the record's bit, not the roster byte the list also carries: a stats packet's
+    /// status moves the record alone (`0x5e5519`), and `UnitIsConnected` reads the record
+    /// (`0x517dca`-`0x517dd3`), so the two can disagree between lists.
+    #[test]
+    fn an_unheld_members_connected_follows_the_record_when_only_a_stats_packet_moves_it() {
+        let mut app = app();
+        party(&mut app, 1, true);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), Some(1.0));
+
+        let status = |app: &mut App, status: u8| {
+            app.world_mut().resource_mut::<GroupState>().apply_stats(
+                member(1),
+                false,
+                PartyMemberStatsInfo {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            );
+            frame(app);
+        };
+        status(&mut app, member_status::OFFLINE);
+        assert_eq!(
+            flag(&mut app, "UnitIsConnected('party1')"),
+            None,
+            "the record went offline, the roster byte still says online"
+        );
+        status(&mut app, member_status::ONLINE);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), Some(1.0));
+
+        // The list writes the same bit, so the next one agrees with the byte it carries.
+        seat(&mut app, 0, member_status::OFFLINE);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), None);
+        status(&mut app, member_status::ONLINE);
+        assert_eq!(
+            flag(&mut app, "UnitIsConnected('party1')"),
+            Some(1.0),
+            "the record online again, the roster byte still offline"
+        );
+
+        seat(&mut app, GROUPTYPE_RAID, member_status::ONLINE);
+        frame(&mut app);
+        status(&mut app, member_status::OFFLINE);
+        assert_eq!(
+            flag(&mut app, "UnitIsConnected('raid1')"),
+            None,
+            "the raid row"
+        );
     }
 
     /// A frame that counts the `PARTY_MEMBERS_CHANGED`s the VM is told of; [`changed`] takes them.

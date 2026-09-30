@@ -3,9 +3,7 @@
 //! catalog row gives the text, the surface and the sound. [`member_deactivated`] and
 //! [`roster_deactivated`] are the object layer's hooks on a roster member's stream-out.
 
-use benilla_protocol::messages::{
-    member_status, GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo,
-};
+use benilla_protocol::messages::{GroupLootInfo, GroupMemberEntry, PartyMemberStatsInfo};
 use bevy::prelude::*;
 
 use benilla_protocol::{SessionEvent, SessionEventKind};
@@ -269,7 +267,7 @@ fn list(
     // no record as new, the reference's `srcRec == 0`.
     let seats: Vec<(u64, bool)> = members
         .iter()
-        .map(|m| (m.guid, m.status & member_status::ONLINE != 0))
+        .map(|m| (m.guid, m.listed_online()))
         .collect();
     let shown = group.apply_list_awaiting(
         group_type,
@@ -289,9 +287,10 @@ fn list(
 }
 
 /// `SMSG_GROUP_LIST`'s record leg (`0x4e82d0`, raid twin `0x4ba5f0`): a known member's record
-/// carries over and nothing is sent; a new member gets the 1/1 placeholder and, when we hold no
-/// object for them, a stats request (`0x4e83f1`, raid `0x4bab6e`). Every member therefore owns a
-/// record, so an unseen one shows full bars, not 0/0, until their stats land.
+/// carries over, its online bit rewritten by [`GroupState::apply_list`], and nothing is sent; a new
+/// member gets the 1/1 placeholder and, when we hold no object for them, a stats request
+/// (`0x4e83f1`, raid `0x4bab6e`). A listed member therefore owns a record, so an unseen one shows
+/// full bars, not 0/0, until their stats land.
 fn seat_new_records(
     group: &mut GroupState,
     seats: &[(u64, bool)],
@@ -387,6 +386,7 @@ mod tests {
     use super::*;
     use crate::net::ClientCommand;
     use benilla_protocol::guid;
+    use benilla_protocol::messages::member_status;
 
     fn member(g: u64, name: &str) -> GroupMemberEntry {
         GroupMemberEntry {
@@ -810,5 +810,67 @@ mod tests {
             Some((Some(900), Some(1100))),
             "and the record it already had survives the resync"
         );
+    }
+
+    /// A re-sent list that moves only a member's status rewrites the online bit of the record the
+    /// member already owns (`0x4e82d0`), asks nothing, and leaves the rest of the record.
+    #[test]
+    fn a_resent_list_moves_a_known_members_online_bit_and_keeps_its_record() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let net = NetCommands(tx);
+        let (mut group, mut errors, mut quest) = (
+            GroupState::default(),
+            UiErrorKeys::default(),
+            QuestGiver::default(),
+        );
+        let names = NameCache::default();
+        let far = 0x22u64;
+        let mut send = |group: &mut GroupState, status: u8| {
+            let row = GroupMemberEntry {
+                status,
+                ..member(far, "Brisca")
+            };
+            list(
+                group,
+                &mut errors,
+                &mut MessageSounds::default(),
+                &mut quest,
+                0,
+                0,
+                vec![row],
+                far,
+                None,
+                &SelfGuid::default(),
+                &names,
+                &GuidIndex::default(),
+                &net,
+            );
+        };
+
+        send(&mut group, member_status::ONLINE);
+        group.apply_stats(
+            far,
+            false,
+            PartyMemberStatsInfo {
+                cur_hp: Some(900),
+                pet_guid: Some(0xF140_0000_0000_0077),
+                ..PartyMemberStatsInfo::default()
+            },
+        );
+        assert!(group.stats[&far].is_online(), "seated from the row");
+        let _ = asked(&rx);
+
+        send(&mut group, member_status::OFFLINE);
+        let rec = &group.stats[&far];
+        assert!(!rec.is_online(), "the row's byte moved the record's bit");
+        assert_eq!(
+            (rec.cur_hp, rec.pet_guid),
+            (Some(900), Some(0xF140_0000_0000_0077)),
+            "and nothing else"
+        );
+        assert!(asked(&rx).is_empty(), "no stats request for a known member");
+
+        send(&mut group, member_status::ONLINE);
+        assert!(group.stats[&far].is_online());
     }
 }

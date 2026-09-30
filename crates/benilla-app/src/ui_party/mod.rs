@@ -71,7 +71,8 @@ pub struct GroupState {
     pub loot: Option<GroupLootInfo>,
     /// The inviter's name while the invite popup is up.
     pub pending_invite: Option<String>,
-    /// Each member's record by guid, seated at 1/1 and patched by `SMSG_PARTY_MEMBER_STATS`.
+    /// Each member's record by guid, seated at 1/1, patched by `SMSG_PARTY_MEMBER_STATS`, and given
+    /// its online bit again by each `SMSG_GROUP_LIST` that lists the member.
     pub stats: HashMap<u64, PartyMemberStatsInfo>,
     /// The marked guid per raid-target icon 0-7 (star to skull), 0 when unset.
     pub raid_targets: [u64; 8],
@@ -223,6 +224,16 @@ impl GroupState {
 
         self.stats
             .retain(|guid, _| members.iter().any(|m| m.guid == *guid));
+        // Each listed member's record takes its online bit from the row's status byte and keeps the
+        // rest: a known member's record is passed back to `0x4e82d0` (`0x5e6ddb`-`0x5e6de8`), which
+        // writes the bit last (`0x4e8361`-`0x4e837b`), and the raid roster's twin does the same to
+        // its row's record (`0x4ba947`-`0x4ba960`). A member new to the roster has no record yet;
+        // `net::list` seats its placeholder.
+        for m in &members {
+            if let Some(record) = self.stats.get_mut(&m.guid) {
+                record.set_online(m.listed_online());
+            }
+        }
 
         self.in_group = true;
         self.group_type = group_type;

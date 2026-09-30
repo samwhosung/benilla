@@ -506,6 +506,60 @@ mod tests {
         assert!(listed(&mut app, "party1", true).is_empty());
     }
 
+    /// The list writes the record's online bit too (`0x4e8361`-`0x4e837b`), so a status-only
+    /// `SMSG_GROUP_LIST` for a member out of view takes their last auras: `UnitBuff` and
+    /// `UnitDebuff` answer nil behind a clear bit (`0x519741`), and an online list brings them back.
+    #[test]
+    fn a_status_only_list_takes_an_out_of_view_members_auras_and_an_online_one_returns_them() {
+        let mut app = party_app();
+        stats(
+            &mut app,
+            true,
+            PartyMemberStatsInfo {
+                status: Some(member_status::ONLINE),
+                auras: Some(vec![(0, 1126)]),
+                auras_negative: Some(vec![(33, 589)]),
+                ..Default::default()
+            },
+        );
+        app.update();
+        assert_eq!(listed(&mut app, "party1", false), [1126]);
+        assert_eq!(listed(&mut app, "party1", true), [589]);
+
+        let relist = |app: &mut App, status: u8| {
+            let member = GroupMemberEntry {
+                name: "Brisca".into(),
+                guid: MEMBER,
+                status,
+                flags: 0,
+            };
+            app.world_mut().resource_mut::<GroupState>().apply_list(
+                0,
+                0,
+                vec![member],
+                ME,
+                None,
+                Some(ME),
+            );
+            app.update();
+        };
+        relist(&mut app, member_status::OFFLINE);
+        let nil = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<bool>(
+                r#"return UnitBuff("party1", 1) == nil and UnitDebuff("party1", 1) == nil"#,
+            )
+            .unwrap();
+        assert!(nil, "the record kept the auras, the clear bit hides them");
+        assert!(listed(&mut app, "party1", false).is_empty());
+        assert!(listed(&mut app, "party1", true).is_empty());
+
+        relist(&mut app, member_status::ONLINE);
+        assert_eq!(listed(&mut app, "party1", false), [1126]);
+        assert_eq!(listed(&mut app, "party1", true), [589]);
+    }
+
     /// The record is slot-indexed: deltas patch named slots, the halves split at slot 32, and each
     /// walk is ascending slot whatever order the slots filled in.
     #[test]
@@ -638,28 +692,34 @@ mod tests {
     /// in subgroup 3, in wire order, none streamed and none with a record.
     fn raid_app() -> App {
         let mut app = party_app();
-        let member = |name: &str, guid, subgroup| GroupMemberEntry {
+        relist_raid(&mut app, member_status::ONLINE);
+        app.update();
+        let _ = seen(&mut app);
+        app
+    }
+
+    /// The raid's list as `raid_app` sends it, with `MATE`'s status byte as given.
+    fn relist_raid(app: &mut App, mate: u8) {
+        let member = |name: &str, guid, status, subgroup| GroupMemberEntry {
             name: name.into(),
             guid,
-            status: member_status::ONLINE,
+            status,
             flags: subgroup,
         };
+        let online = member_status::ONLINE;
         app.world_mut().resource_mut::<GroupState>().apply_list(
             crate::ui_party::GROUPTYPE_RAID,
             0,
             vec![
-                member("Mate", MATE, 0),
-                member("Two", 0x2002, 1),
-                member("Three", 0x2003, 1),
-                member("Far", FAR, 2),
+                member("Mate", MATE, mate, 0),
+                member("Two", 0x2002, online, 1),
+                member("Three", 0x2003, online, 1),
+                member("Far", FAR, online, 2),
             ],
             ME,
             None,
             Some(ME),
         );
-        app.update();
-        let _ = seen(&mut app);
-        app
     }
 
     fn online(auras_negative: Vec<(u8, u16)>) -> PartyMemberStatsInfo {
@@ -759,6 +819,28 @@ mod tests {
         );
         app.update();
         assert!(seen(&mut app).is_empty());
+    }
+
+    /// The raid roster's twin of the list write (`0x4ba947`-`0x4ba960`): a status-only raid list
+    /// hides an out-of-view row's auras under `raidN` and its party slot alike, and an online list
+    /// returns them.
+    #[test]
+    fn a_status_only_raid_list_takes_an_out_of_view_rows_auras_and_an_online_one_returns_them() {
+        let mut app = raid_app();
+        stats_of(&mut app, MATE, true, online(vec![(32, 589)]));
+        app.update();
+        assert_eq!(listed(&mut app, "raid2", true), [589]);
+        assert_eq!(listed(&mut app, "party1", true), [589]);
+
+        relist_raid(&mut app, member_status::OFFLINE);
+        app.update();
+        assert!(listed(&mut app, "raid2", true).is_empty());
+        assert!(listed(&mut app, "party1", true).is_empty());
+
+        relist_raid(&mut app, member_status::ONLINE);
+        app.update();
+        assert_eq!(listed(&mut app, "raid2", true), [589]);
+        assert_eq!(listed(&mut app, "party1", true), [589]);
     }
 
     /// A raid token past the roster, a raid token outside a raid, and an offline member's pet

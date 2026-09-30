@@ -57,6 +57,16 @@ pub struct GroupMemberEntry {
     pub flags: u8,
 }
 
+impl GroupMemberEntry {
+    /// Whether the row's status byte marks the member online for the record write: a non-zero byte,
+    /// the client's own test for a party slot (`0x5e6c3b`) and a raid row (`0x4ba951`), where bit 0
+    /// alone is not asked. vmangos sends 0 for an absent member and a byte with bit 0 set for a
+    /// present one (`Group/Group.cpp:45-63`), so the two tests agree on its lists.
+    pub fn listed_online(&self) -> bool {
+        self.status != 0
+    }
+}
+
 /// The loot tail `SMSG_GROUP_LIST` carries only when it lists members (`Group.cpp:170-179`);
 /// `threshold` is an item quality, 2 to 4 in practice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,6 +222,26 @@ impl PartyMemberStatsInfo {
             max_power: Some(1),
             ..Self::default()
         }
+    }
+
+    /// The record's online bit (`[rec+8] & 1`), the bit the readers test (`0x4e8227`, `0x4e816b`,
+    /// `0x4e8884`, `0x519741`, `UnitIsConnected`'s `0x517dd3`). A record with no status yet reads
+    /// as the zeroed byte of a fresh one, offline.
+    pub fn is_online(&self) -> bool {
+        self.status.unwrap_or(0) & member_status::ONLINE != 0
+    }
+
+    /// Set or clear the record's online bit (`[rec+8] & 1`), the other bits of its status byte as
+    /// they were: the write `SMSG_GROUP_LIST` makes to a member it lists, from that row's status
+    /// (`0x4e8361`-`0x4e837b`, raid `0x4ba947`-`0x4ba960`). A record with no status yet reads as
+    /// the zeroed byte of a fresh one.
+    pub fn set_online(&mut self, online: bool) {
+        let status = self.status.unwrap_or(0);
+        self.status = Some(if online {
+            status | member_status::ONLINE
+        } else {
+            status & !member_status::ONLINE
+        });
     }
 
     /// Snapshot a member's live descriptor as the 1.12 client does (`0x5f0880`) when the member's

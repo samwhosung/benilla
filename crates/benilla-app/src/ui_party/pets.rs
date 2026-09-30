@@ -111,16 +111,35 @@ pub(super) fn store_changed(
             && own.is_some_and(|(guid, store)| moved(guid, Some(store))))
 }
 
-/// One member's pet: the guid its token names and the snapshot the getters read, or `None` for a
-/// member with no pet the roster or the descriptor names.
+/// One pet token's inputs for a frame: the guid `UNIT_PET` keys on, and the token's own guid and
+/// snapshot. The two differ for a party slot whose owner has no object and reads offline: the
+/// record's pet guid is still what the owner's stats named, while `partypetN` names nobody
+/// (`0x4e8227`).
+#[derive(Default)]
+pub(super) struct PetNow {
+    /// The owner's pet guid as the stats handler's diff sees it ([`GroupState::pet_edge_guid`]).
+    edge: Option<u64>,
+    /// The guid the token names and the snapshot the getters read, or `None` for a member with no
+    /// pet the roster or the descriptor names ([`GroupState::party_pet_guid`],
+    /// [`GroupState::raid_pet_guid`]).
+    token: Option<(u64, UnitState)>,
+}
+
+/// One member's pet for its token and its `UNIT_PET` edge; nothing for an empty slot, `owner` 0.
 pub(super) fn member_pet(
     look: &Lookup<'_, '_, '_, '_>,
     group: &GroupState,
     owner: u64,
     held: Option<&ObjectStore>,
     roster: Roster,
-) -> Option<(u64, UnitState)> {
-    let guid = pet_guid(group, owner, held, roster)?;
+) -> PetNow {
+    if owner == 0 {
+        return PetNow::default();
+    }
+    let edge = group.pet_edge_guid(owner, held.map(|s| &s.0));
+    let Some(guid) = pet_guid(group, owner, held, roster) else {
+        return PetNow { edge, token: None };
+    };
     let mut state = match look.store(guid) {
         // A held pet is a live unit like any: every getter reads its descriptor (`0x468460`), and
         // `UnitIsConnected` answers 1 for any object (`0x517daf`), as `snapshot` does. No
@@ -141,7 +160,10 @@ pub(super) fn member_pet(
     };
     // Judged by guid alone, with no object needed.
     state.raid_target = group.raid_target_index(guid);
-    Some((guid, state))
+    PetNow {
+        edge,
+        token: Some((guid, state)),
+    }
 }
 
 /// A pet with no object, off the pet record that names it (`0x496420`); with no record, a bare
@@ -174,12 +196,13 @@ fn record_state(group: &GroupState, guid: u64, owner: u64, exists: bool) -> Unit
     }
 }
 
-/// What one pet token last pushed: the owner and the pet guid it named, `UNIT_PET`'s trigger, and
-/// the snapshot, [`fire_transitions`](crate::ui_unit::fire_transitions)' per-field diff.
+/// What one pet token last pushed: the owner and the pet guid the edge keyed on, `UNIT_PET`'s
+/// trigger, and the snapshot, [`fire_transitions`](crate::ui_unit::fire_transitions)' per-field
+/// diff.
 #[derive(Default)]
 pub(super) struct FedPet {
     owner: u64,
-    pet: Option<u64>,
+    edge: Option<u64>,
     state: Option<UnitState>,
 }
 
@@ -193,8 +216,10 @@ pub(super) struct FedPets {
 /// Push one pet token's snapshot and fire what moved, in the reference's order (`0x5e5720`):
 /// `UNIT_PET` for the owner's token, then the pet's own `UNIT_*` events for its own.
 ///
-/// `UNIT_PET` fires when the same owner's pet guid changes: a pet arriving, going or being
-/// replaced, off the record or the descriptor alike. An owner that changes is the roster's edge
+/// `UNIT_PET` fires when the same owner's pet guid changes ([`PetNow::edge`]): a pet arriving,
+/// going or being replaced, off the record or the descriptor alike. The token's own guid and
+/// snapshot are not that edge, so a member going online or offline with the same pet moves the
+/// snapshot and fires no `UNIT_PET`. An owner that changes is the roster's edge
 /// (`PARTY_MEMBERS_CHANGED`), which the party frame answers by rereading, and the first look is
 /// no edge. `owner_token` is `None` where the owner's own feed fires it.
 pub(super) fn feed_token(
@@ -205,13 +230,11 @@ pub(super) fn feed_token(
     token: &str,
     owner_token: Option<&str>,
     owner: u64,
-    now: Option<(u64, UnitState)>,
+    now: PetNow,
 ) {
-    let (pet, state) = match now {
-        Some((guid, state)) => (Some(guid), Some(state)),
-        None => (None, None),
-    };
-    let moved = owner != 0 && fed.owner == owner && fed.pet != pet;
+    let PetNow { edge, token: now } = now;
+    let state = now.map(|(_, state)| state);
+    let moved = owner != 0 && fed.owner == owner && fed.edge != edge;
     let changed = fed.state != state;
     if changed {
         gate.audit("feed_party", "a group pet-token snapshot");
@@ -224,7 +247,7 @@ pub(super) fn feed_token(
     if let Some(cur) = state.as_ref().filter(|_| changed) {
         crate::ui_unit::fire_transitions(script, token, fed.state.as_ref(), cur, edges);
     }
-    *fed = FedPet { owner, pet, state };
+    *fed = FedPet { owner, edge, state };
 }
 
 #[cfg(test)]
@@ -334,6 +357,29 @@ pub(in crate::ui_party) mod tests {
                 },
             );
         }
+    }
+
+    /// `SMSG_GROUP_LIST` re-sent with only the members' status bytes moved: members `1..` of the
+    /// party or raid, one per status.
+    fn relist(app: &mut App, group_type: u8, statuses: &[u8]) {
+        let list = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, &status)| GroupMemberEntry {
+                name: format!("M{}", i + 1),
+                guid: member(i as u64 + 1),
+                status,
+                flags: 0,
+            })
+            .collect();
+        app.world_mut().resource_mut::<GroupState>().apply_list(
+            group_type,
+            0,
+            list,
+            ME,
+            None,
+            Some(ME),
+        );
     }
 
     /// Hold `guid` in the object manager.
@@ -553,6 +599,131 @@ pub(in crate::ui_party) mod tests {
             .pet_guid = Some(pet(1));
         assert!(frame(&mut app).contains(&"UNIT_PET:party1".to_string()));
         assert_eq!(flag(&mut app, "UnitExists('partypet1')"), Some(1.0));
+    }
+
+    /// The reported shape: a member with a pet logs off out of view, and the server sends the list
+    /// again with their status alone moved. The list rewrites the record's online bit
+    /// (`0x4e8361`-`0x4e837b`), so the pet is nobody at once (`0x4e8227`) and comes back with the
+    /// next list; the pet guid did not move, so neither list fires `UNIT_PET` (`0x5e55fb`).
+    #[test]
+    fn a_status_only_list_takes_an_out_of_view_members_pet_and_fires_no_unit_pet() {
+        let mut app = app();
+        party(&mut app, 2, true);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitExists('partypet1')"), Some(1.0));
+
+        relist(
+            &mut app,
+            0,
+            &[member_status::OFFLINE, member_status::ONLINE],
+        );
+        let offline = frame(&mut app);
+        assert!(
+            !offline.iter().any(|e| e.starts_with("UNIT_PET:")),
+            "{offline:?}"
+        );
+        assert_eq!(flag(&mut app, "UnitExists('partypet1')"), None);
+        assert_eq!(text(&mut app, "UnitName('partypet1')"), None);
+        assert_eq!(num(&mut app, "UnitHealth('partypet1')"), 0.0);
+        assert_eq!(
+            flag(&mut app, "UnitExists('partypet2')"),
+            Some(1.0),
+            "the member still listed online keeps theirs"
+        );
+        assert_eq!(
+            app.world().resource::<GroupState>().stats[&member(1)].pet_guid,
+            Some(pet(1)),
+            "the list keeps the rest of the record"
+        );
+
+        relist(&mut app, 0, &[member_status::ONLINE, member_status::ONLINE]);
+        let online = frame(&mut app);
+        assert!(
+            !online.iter().any(|e| e.starts_with("UNIT_PET:")),
+            "{online:?}"
+        );
+        assert_eq!(flag(&mut app, "UnitExists('partypet1')"), Some(1.0));
+        assert_eq!(
+            text(&mut app, "UnitName('partypet1')").as_deref(),
+            Some("Whelp")
+        );
+        assert_eq!(num(&mut app, "UnitHealth('partypet1')"), 400.0);
+    }
+
+    /// The edge is the record's own pet guid, whatever the online bit: a stats packet that moves
+    /// an offline out-of-view owner's pet guid fires `UNIT_PET` for it (`0x5e55fb`-`0x5e5617`,
+    /// `0x5e57e9`), though `partypetN` still names nobody behind the bit.
+    #[test]
+    fn unit_pet_fires_when_an_offline_owners_pet_guid_moves() {
+        let mut app = app();
+        party(&mut app, 1, false);
+        frame(&mut app);
+        assert!(frame(&mut app).is_empty(), "a steady frame is silent");
+
+        app.world_mut().resource_mut::<GroupState>().apply_stats(
+            member(1),
+            false,
+            PartyMemberStatsInfo {
+                pet_guid: Some(pet(9)),
+                ..Default::default()
+            },
+        );
+        let changed = frame(&mut app);
+        assert_eq!(
+            changed.iter().filter(|e| *e == "UNIT_PET:party1").count(),
+            1,
+            "{changed:?}"
+        );
+        assert_eq!(flag(&mut app, "UnitExists('partypet1')"), None);
+
+        app.world_mut().resource_mut::<GroupState>().apply_stats(
+            member(1),
+            false,
+            PartyMemberStatsInfo {
+                pet_guid: Some(0),
+                ..Default::default()
+            },
+        );
+        assert!(
+            frame(&mut app).contains(&"UNIT_PET:party1".to_string()),
+            "the pet dismissed"
+        );
+    }
+
+    /// A raid's rows take the same list: the record's bit moves, the offline row's pet does not
+    /// exist (`0x4bb040`) and its party slot's is nobody, and no `UNIT_PET` fires for either token.
+    #[test]
+    fn a_status_only_raid_list_takes_an_offline_rows_pet_and_fires_no_unit_pet() {
+        let mut app = app();
+        party(&mut app, 2, true);
+        let (on, off) = (member_status::ONLINE, member_status::OFFLINE);
+        relist(&mut app, super::super::GROUPTYPE_RAID, &[on, on]);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitExists('raidpet2')"), Some(1.0));
+
+        relist(&mut app, super::super::GROUPTYPE_RAID, &[on, off]);
+        let offline = frame(&mut app);
+        assert!(
+            !offline.iter().any(|e| e.starts_with("UNIT_PET:")),
+            "{offline:?}"
+        );
+        assert_eq!(flag(&mut app, "UnitExists('raidpet2')"), None);
+        assert_eq!(num(&mut app, "UnitHealth('raidpet2')"), 0.0);
+        assert_eq!(flag(&mut app, "UnitExists('partypet2')"), None);
+        assert_eq!(
+            flag(&mut app, "UnitExists('raidpet1')"),
+            Some(1.0),
+            "the row listed online keeps its pet"
+        );
+
+        relist(&mut app, super::super::GROUPTYPE_RAID, &[on, on]);
+        let online = frame(&mut app);
+        assert!(
+            !online.iter().any(|e| e.starts_with("UNIT_PET:")),
+            "{online:?}"
+        );
+        assert_eq!(flag(&mut app, "UnitExists('raidpet2')"), Some(1.0));
+        assert_eq!(flag(&mut app, "UnitExists('partypet2')"), Some(1.0));
     }
 
     /// The same edge off a held member's descriptor (`SUMMON`), where no stats packet moves.

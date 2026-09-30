@@ -2,7 +2,7 @@
 //! (`0x496400`), the pet record (`0x496420`) and the party and raid pets' guids (`0x4e81d0`,
 //! `0x491960`).
 
-use benilla_protocol::messages::{member_status, ObjectFields, PartyMemberStatsInfo};
+use benilla_protocol::messages::{ObjectFields, PartyMemberStatsInfo};
 
 use super::GroupState;
 
@@ -17,7 +17,7 @@ impl GroupState {
     pub(crate) fn pet_record(&self, guid: u64) -> Option<&PartyMemberStatsInfo> {
         self.stats
             .values()
-            .find(|r| guid != 0 && r.pet_guid == Some(guid) && online(r))
+            .find(|r| guid != 0 && r.pet_guid == Some(guid) && r.is_online())
     }
 
     /// Whether the roster fallback of `UnitExists` (`0x491900`) names `member`'s pet, which the
@@ -27,7 +27,10 @@ impl GroupState {
     /// is the party pet's own online gate already, but not the raid pet's guid, which the resolver
     /// reads off the record with none (`0x4919ae`).
     pub(crate) fn roster_names_pet(&self, member: u64, member_held: bool) -> bool {
-        member_held || self.member_record(member).is_some_and(online)
+        member_held
+            || self
+                .member_record(member)
+                .is_some_and(PartyMemberStatsInfo::is_online)
     }
 
     /// `partypetN`'s guid for the member `member` (`0x4e81d0`): `CHARM`, else `SUMMON`, off the
@@ -44,6 +47,16 @@ impl GroupState {
         self.pet_guid_of(member, live, false)
     }
 
+    /// The guid `UNIT_PET` for the owner `member` keys on, party or raid: `CHARM`, else `SUMMON`, off
+    /// the member's descriptor while it is held, else the record's pet guid, with no online test.
+    /// The stats handler's diff fires it on a moved pet guid (`0x5e55fb`-`0x5e5617`, `0x5e57e9`); a
+    /// moved status byte sets another bit (`0x5e5519`-`0x5e552a`), which is health and power events,
+    /// and the list's own write of the online bit fires nothing (`0x4e8361`). A `partypetN` that
+    /// appears or vanishes behind the bit is therefore no move of this guid.
+    pub(crate) fn pet_edge_guid(&self, member: u64, live: Option<&ObjectFields>) -> Option<u64> {
+        self.pet_guid_of(member, live, false)
+    }
+
     fn pet_guid_of(
         &self,
         member: u64,
@@ -54,7 +67,7 @@ impl GroupState {
             Some(fields) => fields.unit_pet_guid(),
             None => self
                 .member_record(member)
-                .filter(|r| !online_only || online(r))
+                .filter(|r| !online_only || r.is_online())
                 .and_then(|r| r.pet_guid)
                 .filter(|&g| g != 0),
         }
@@ -66,7 +79,7 @@ impl GroupState {
     /// (`0x519741`); on a miss, the block of the pet record naming the guid (`+0xe4`, `0x519760`).
     pub(crate) fn roster_aura_slots(&self, guid: u64) -> impl Iterator<Item = (u8, u16)> + '_ {
         let blocks = match self.member_record(guid) {
-            Some(r) if !online(r) => None,
+            Some(r) if !r.is_online() => None,
             Some(r) => Some((&r.auras, &r.auras_negative)),
             None => self
                 .pet_record(guid)
@@ -78,15 +91,10 @@ impl GroupState {
     }
 }
 
-/// The record's status bit 0 (`[rec+8] & 1`), the online bit.
-fn online(r: &PartyMemberStatsInfo) -> bool {
-    r.status.unwrap_or(0) & member_status::ONLINE != 0
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use benilla_protocol::messages::GroupMemberEntry;
+    use benilla_protocol::messages::{member_status, GroupMemberEntry};
 
     const MEMBER: u64 = 0x1234;
     const PET: u64 = 0xF140_0000_0000_0077;
@@ -140,6 +148,62 @@ mod tests {
             slots(&g, PET).is_empty(),
             "an offline owner's pet is not found"
         );
+    }
+
+    /// `0x4e82d0` copies the saved record back and then sets or clears bit 0 of its status byte
+    /// from the row's (`0x4e8361`-`0x4e837b`); the raid roster's twin does the same to its row's
+    /// record (`0x4ba947`-`0x4ba960`). Both test the row's byte as non-zero.
+    #[test]
+    fn a_list_rewrites_a_known_members_online_bit_and_keeps_the_rest_of_the_record() {
+        use crate::ui_party::GROUPTYPE_RAID;
+        for group_type in [0, GROUPTYPE_RAID] {
+            let mut g = group_with(record(
+                member_status::ONLINE | member_status::DEAD | member_status::PVP,
+            ));
+            let relist = |g: &mut GroupState, status: u8| {
+                let row = |guid, name: &str| GroupMemberEntry {
+                    name: name.into(),
+                    guid,
+                    status,
+                    flags: 0,
+                };
+                g.apply_list(
+                    group_type,
+                    0,
+                    vec![row(MEMBER, "Brisca"), row(0x5678, "Aldwyn")],
+                    MEMBER,
+                    None,
+                    None,
+                );
+            };
+
+            relist(&mut g, member_status::OFFLINE);
+            assert_eq!(
+                g.stats[&MEMBER],
+                record(member_status::DEAD | member_status::PVP),
+                "the bit clears and the rest of the record stays as it was"
+            );
+            assert!(g.roster_aura_slots(MEMBER).next().is_none());
+            assert_eq!(g.party_pet_guid(MEMBER, None), None);
+
+            relist(&mut g, member_status::ONLINE | member_status::AFK);
+            assert_eq!(
+                g.stats[&MEMBER],
+                record(member_status::ONLINE | member_status::DEAD | member_status::PVP),
+                "the bit sets, and the row's other bits are not copied"
+            );
+            assert_eq!(g.party_pet_guid(MEMBER, None), Some(PET));
+
+            relist(&mut g, member_status::AFK);
+            assert!(
+                g.stats[&MEMBER].is_online(),
+                "a non-zero byte is online, bit 0 or not"
+            );
+            assert!(
+                !g.stats.contains_key(&0x5678),
+                "a member new to the roster gets its record from the seat, not here"
+            );
+        }
     }
 
     #[test]
