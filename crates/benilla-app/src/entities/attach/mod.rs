@@ -7,7 +7,6 @@ use benilla_assets::ModelAnimations;
 use benilla_protocol::EntityKind;
 use bevy::prelude::*;
 
-use benilla_assets::WorldAssets;
 use bevy::animation::transition::AnimationTransitions;
 
 use crate::creature_anim::AnimDriver;
@@ -19,13 +18,17 @@ use benilla_world::model_fade::JoinedFade;
 use benilla_world::model_render::ModelKind;
 use benilla_world::particles;
 
+use super::skin_composite::BodyAtlas;
 use super::{
     Characters, Creatures, CubeAssets, DisplayModel, GameObjects, ModelHandle, SkinComposites,
     SkinSections, VisualAttached,
 };
 
 mod char_skin;
-use char_skin::{build_char_skin_materials, equip_geosets, resolve_char_look, resolve_worn_equip};
+use char_skin::{
+    body_atlas, build_char_skin_materials, equip_geosets, resolve_char_look, resolve_worn_equip,
+    skin_key,
+};
 mod dress;
 mod merge;
 use dress::{spawn_group, PartDress};
@@ -33,6 +36,8 @@ pub(super) use merge::MergedFormsCache;
 mod preview;
 pub(crate) use preview::equip_slot;
 pub(super) use preview::{build_dressup_preview, build_glue_pet, build_glue_preview};
+#[cfg(test)]
+mod arrival_tests;
 mod redress;
 
 /// One body's drawn parts as `WOW_DRESS_CENSUS` prints them: index, merge group, blend, material.
@@ -254,8 +259,6 @@ pub(super) fn attach_entity_visuals(
     // The character-skin build chain, nested for Bevy's 16-param system limit.
     skin_build: (
         Option<Res<SkinSections>>,
-        Option<Res<WorldAssets>>,
-        ResMut<Assets<Image>>,
         ResMut<SkinComposites>,
         Res<AssetServer>,
         benilla_world::model_render::M2BatchMaterials,
@@ -271,8 +274,6 @@ pub(super) fn attach_entity_visuals(
 ) {
     let (
         sections,
-        world_assets,
-        mut images,
         mut skin_composites,
         asset_server,
         mut mats,
@@ -324,6 +325,28 @@ pub(super) fn attach_entity_visuals(
             Some(d) => match &d.parts {
                 None => continue,
                 Some(parts) => named_a_model.then_some(parts.as_slice()),
+            },
+            None => None,
+        };
+
+        // A character model carries every hair, facial and body geoset, and is shared by its
+        // display, so the entity's own look picks which show.
+        let look = model.and_then(|_| resolve_char_look(net, dm, entity, &stores));
+        // A body whose composite is still running is not built: nothing of it draws, its mount
+        // included, until it can draw dressed, as the reference's ShouldRender answers the
+        // composite driver's 0 (`0x607e7c` → `0x481749`). Retried each frame, with the look of
+        // that frame.
+        let body_tex = match look.as_ref() {
+            Some(l) => match body_atlas(
+                l,
+                skin_key(l, equip, worn.emblem, worn.tabard_preview),
+                displays.as_deref(),
+                sections.as_deref(),
+                &mut skin_composites,
+                &asset_server,
+            ) {
+                BodyAtlas::Ready(tex) => tex,
+                BodyAtlas::Pending => continue,
             },
             None => None,
         };
@@ -529,9 +552,6 @@ pub(super) fn attach_entity_visuals(
                         .insert(crate::creature_anim::BodyTwist::new(spine, head));
                 }
             }
-            // A character model carries every hair, facial and body geoset, and is shared by its
-            // display, so the entity's own look picks which show.
-            let look = resolve_char_look(net, dm, entity, &stores);
             // The worn geoset selectors, the helm's hide-mask rows included (`0x4799a0`).
             let equip_geosets = equip_geosets(
                 displays.as_deref(),
@@ -553,16 +573,11 @@ pub(super) fn attach_entity_visuals(
             let char_mats = match look.as_ref() {
                 Some(l) => build_char_skin_materials(
                     l,
-                    equip,
+                    body_tex,
                     worn.cloak,
-                    worn.emblem,
-                    worn.tabard_preview,
                     displays.as_deref(),
                     sections.as_deref(),
-                    world_assets.as_deref(),
                     parts,
-                    &mut images,
-                    &mut skin_composites.0,
                     &asset_server,
                     &mut mats,
                 ),

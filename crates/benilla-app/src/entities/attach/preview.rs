@@ -17,7 +17,6 @@ use crate::portrait::{
     PreviewRider,
 };
 use benilla_assets::materials::WowModelMaterial;
-use benilla_assets::WorldAssets;
 
 use super::super::equipment::{attach_id, ensure_item_model, placement, ItemModelKind};
 use super::super::item_glow::{self, ItemGlows};
@@ -102,7 +101,6 @@ pub(in crate::entities) struct PreviewCtx<'a, 'w> {
     /// nobody wears.
     pub(in crate::entities) glows: Option<&'a mut ItemGlows>,
     pub(in crate::entities) sections: Option<&'a SkinSections>,
-    pub(in crate::entities) world_assets: Option<&'a WorldAssets>,
     pub(in crate::entities) images: &'a mut Assets<Image>,
     pub(in crate::entities) skin_composites: &'a mut SkinComposites,
     pub(in crate::entities) asset_server: &'a AssetServer,
@@ -120,7 +118,6 @@ pub(in crate::entities) fn build_glue_preview(
     mut displays: Option<ResMut<ItemDisplays>>,
     mut glows: Option<ResMut<ItemGlows>>,
     sections: Option<Res<SkinSections>>,
-    world_assets: Option<Res<WorldAssets>>,
     mut images: ResMut<Assets<Image>>,
     mut skin_composites: ResMut<SkinComposites>,
     asset_server: Res<AssetServer>,
@@ -208,7 +205,6 @@ pub(in crate::entities) fn build_glue_preview(
             displays: displays.as_deref_mut(),
             glows: glows.as_deref_mut(),
             sections: sections.as_deref(),
-            world_assets: world_assets.as_deref(),
             images: &mut images,
             skin_composites: &mut skin_composites,
             asset_server: &asset_server,
@@ -286,7 +282,6 @@ pub(in crate::entities) fn build_dressup_preview(
     mut displays: Option<ResMut<ItemDisplays>>,
     mut glows: Option<ResMut<ItemGlows>>,
     sections: Option<Res<SkinSections>>,
-    world_assets: Option<Res<WorldAssets>>,
     mut images: ResMut<Assets<Image>>,
     mut skin_composites: ResMut<SkinComposites>,
     asset_server: Res<AssetServer>,
@@ -342,7 +337,6 @@ pub(in crate::entities) fn build_dressup_preview(
             displays: displays.as_deref_mut(),
             glows: glows.as_deref_mut(),
             sections: sections.as_deref(),
-            world_assets: world_assets.as_deref(),
             images: &mut images,
             skin_composites: &mut skin_composites,
             asset_server: &asset_server,
@@ -574,18 +568,22 @@ fn assemble(spec: &PreviewSpec, ctx: &mut PreviewCtx<'_, '_>) -> Option<Assemble
     let visible = ctx.characters.map(|c| {
         c.0.visible_geosets(race, sex, char_look.hair_style, char_look.facial_hair, &eg)
     });
-    let char_mats = super::char_skin::build_char_skin_materials(
+    let body_tex = super::char_skin::forced_body_atlas(
         &char_look,
-        bodyslots,
-        cloak,
-        spec.emblem,
-        false,
+        super::char_skin::skin_key(&char_look, bodyslots, spec.emblem, false),
         ctx.displays.as_deref(),
         ctx.sections,
-        ctx.world_assets,
-        parts,
+        ctx.skin_composites,
+        ctx.asset_server,
         ctx.images,
-        &mut ctx.skin_composites.0,
+    );
+    let char_mats = super::char_skin::build_char_skin_materials(
+        &char_look,
+        body_tex,
+        cloak,
+        ctx.displays.as_deref(),
+        ctx.sections,
+        parts,
         ctx.asset_server,
         ctx.mats,
     );

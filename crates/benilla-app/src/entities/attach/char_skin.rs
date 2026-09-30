@@ -7,9 +7,9 @@ use bevy::prelude::*;
 
 use crate::net::{NetEntity, ObjectStore};
 use benilla_assets::materials::WowModelMaterial;
-use benilla_assets::{repeat_texture_authored, LockRecover, WorldAssets};
 
-use super::super::{DisplayModel, EntityPart, SkinKey, SkinSections};
+use super::super::skin_composite::BodyAtlas;
+use super::super::{DisplayModel, EntityPart, SkinComposites, SkinKey, SkinSections};
 
 /// A character-model body's appearance, from the wire or from its display's
 /// CreatureDisplayInfoExtra row; it drives both the geoset selection and the skin materials.
@@ -214,24 +214,131 @@ fn shared_skin_probe() -> bool {
     *ON.get_or_init(|| std::env::var_os("WOW_PROBE_SHARED_SKIN").is_some())
 }
 
-/// Build a character body's per-appearance materials: the body atlas (composited live, or an NPC's
-/// baked BLP), the hair, the cape and the extra skin, each at its batches' own blend and
-/// sidedness from `parts`. Without the tables or the light buffer, parts keep their built material.
-#[allow(clippy::type_complexity)]
-pub(super) fn build_char_skin_materials(
+/// The composite a look wears: `None` for a baked NPC atlas, which is never composited.
+pub(super) fn skin_key(
     look: &CharLook,
     // The armor ids paint only a live composite; a baked NPC atlas already carries its gear.
     equip: [u32; 8],
-    cloak: u32,
     // Painted over a tabard whose display asks for it; `None` leaves the tabard's own art.
     emblem: Option<benilla_formats::GuildEmblem>,
     tabard_preview: bool,
+) -> Option<SkinKey> {
+    let BodySkin::Composite { face } = look.body else {
+        return None;
+    };
+    // `WOW_PROBE_SHARED_SKIN` prices a shared body material and is never a look: one key for every
+    // body lets Bevy's batcher instance them.
+    if shared_skin_probe() {
+        return Some(SkinKey {
+            race: 1,
+            sex: 0,
+            skin: 0,
+            face: 0,
+            facial_hair: 0,
+            hair_style: 0,
+            hair_color: 0,
+            equip: [0; 8],
+            emblem: None,
+            tabard_preview: false,
+        });
+    }
+    Some(SkinKey {
+        race: look.race,
+        sex: look.sex,
+        skin: look.skin,
+        face,
+        facial_hair: look.facial_hair,
+        hair_style: look.hair_style,
+        hair_color: look.hair_color,
+        equip,
+        emblem,
+        tabard_preview,
+    })
+}
+
+/// What `key`'s composite reads, from the tables and the worn displays' rows.
+fn composite_plan(
+    key: &SkinKey,
+    sections: &SkinSections,
+    displays: Option<&super::super::ItemDisplays>,
+) -> Option<benilla_formats::CompositePlan> {
+    let mut worn: [Option<&benilla_formats::ItemDisplay>; 8] = [None; 8];
+    if let Some(catalog) = displays.map(|d| &d.catalog) {
+        for (i, id) in key.equip.iter().enumerate() {
+            if *id != 0 {
+                worn[i] = catalog.get(*id);
+            }
+        }
+    }
+    sections.tables.composite_plan(
+        key.race,
+        key.sex,
+        key.skin,
+        key.face,
+        key.facial_hair,
+        key.hair_style,
+        key.hair_color,
+        worn,
+        key.emblem,
+        key.tabard_preview,
+    )
+}
+
+/// A world body's atlas. A baked NPC skin loads as is and is never waited on (the fork at
+/// `0x477866`); a composited one is cached, or running off the main thread, started here on a
+/// miss. Without the tables the body stays untextured.
+pub(super) fn body_atlas(
+    look: &CharLook,
+    key: Option<SkinKey>,
     displays: Option<&super::super::ItemDisplays>,
     sections: Option<&SkinSections>,
-    world_assets: Option<&WorldAssets>,
-    parts: &[EntityPart],
+    composites: &mut SkinComposites,
+    asset_server: &AssetServer,
+) -> BodyAtlas {
+    if let BodySkin::Baked(name) = &look.body {
+        return BodyAtlas::Ready(Some(asset_server.load::<Image>(baked_npc_url(name))));
+    }
+    match (key, sections) {
+        (Some(key), Some(sections)) => {
+            composites.request(key, sections, || composite_plan(&key, sections, displays))
+        }
+        _ => BodyAtlas::Ready(None),
+    }
+}
+
+/// [`body_atlas`] for the previews: a miss composites on this thread, as their forced composite
+/// waits on its loads.
+pub(super) fn forced_body_atlas(
+    look: &CharLook,
+    key: Option<SkinKey>,
+    displays: Option<&super::super::ItemDisplays>,
+    sections: Option<&SkinSections>,
+    composites: &mut SkinComposites,
+    asset_server: &AssetServer,
     images: &mut Assets<Image>,
-    skin_cache: &mut benilla_assets::SpatialCache<SkinKey, Handle<Image>>,
+) -> Option<Handle<Image>> {
+    if let BodySkin::Baked(name) = &look.body {
+        return Some(asset_server.load::<Image>(baked_npc_url(name)));
+    }
+    let (key, sections) = (key?, sections?);
+    composites.force(
+        key,
+        sections,
+        || composite_plan(&key, sections, displays),
+        images,
+    )
+}
+
+/// Build a character body's per-appearance materials: the body atlas ([`body_atlas`]), the hair,
+/// the cape and the extra skin, each at its batches' own blend and sidedness from `parts`. Without
+/// the tables or the light buffer, parts keep their built material.
+pub(super) fn build_char_skin_materials(
+    look: &CharLook,
+    body_tex: Option<Handle<Image>>,
+    cloak: u32,
+    displays: Option<&super::super::ItemDisplays>,
+    sections: Option<&SkinSections>,
+    parts: &[EntityPart],
     asset_server: &AssetServer,
     mats: &mut benilla_world::model_render::M2BatchMaterials,
 ) -> CharSkinMaterials {
@@ -250,80 +357,6 @@ pub(super) fn build_char_skin_materials(
         )
     };
 
-    // The composite reads its BLPs synchronously off the shared chain, once per look behind the
-    // cache.
-    let body_tex: Option<Handle<Image>> = match &look.body {
-        BodySkin::Baked(name) => Some(asset_server.load::<Image>(baked_npc_url(name))),
-        BodySkin::Composite { face } => world_assets.and_then(|world| {
-            let mut key = SkinKey {
-                race: look.race,
-                sex: look.sex,
-                skin: look.skin,
-                face: *face,
-                facial_hair: look.facial_hair,
-                hair_style: look.hair_style,
-                hair_color: look.hair_color,
-                equip,
-                emblem,
-                tabard_preview,
-            };
-            // `WOW_PROBE_SHARED_SKIN` prices a shared body material and is never a look: one key
-            // for every body lets Bevy's batcher instance them.
-            if shared_skin_probe() {
-                key = SkinKey {
-                    race: 1,
-                    sex: 0,
-                    skin: 0,
-                    face: 0,
-                    facial_hair: 0,
-                    hair_style: 0,
-                    hair_color: 0,
-                    equip: [0; 8],
-                    emblem: None,
-                    tabard_preview: false,
-                };
-            }
-            match skin_cache.fetch(&key) {
-                Some(handle) => Some(handle),
-                None => {
-                    let catalog = displays.map(|d| &d.catalog);
-                    let mut worn: [Option<&benilla_formats::ItemDisplay>; 8] = [None; 8];
-                    if let Some(catalog) = catalog {
-                        for (i, id) in equip.iter().enumerate() {
-                            if *id != 0 {
-                                worn[i] = catalog.get(*id);
-                            }
-                        }
-                    }
-                    let chain = &mut world.chain.lock_recover();
-                    let composed = sections
-                        .0
-                        .composite_body(
-                            chain,
-                            key.race,
-                            key.sex,
-                            key.skin,
-                            key.face,
-                            key.facial_hair,
-                            key.hair_style,
-                            key.hair_color,
-                            worn,
-                            key.emblem,
-                            key.tabard_preview,
-                        )
-                        .ok()??;
-                    // Through the upload gate like every texture: a no-op on this RGBA8
-                    // composite, but it keeps the format and the bytes in agreement.
-                    let handle = images.add(repeat_texture_authored(
-                        benilla_assets::for_upload(composed),
-                        (true, true),
-                    ));
-                    skin_cache.insert(key, handle.clone());
-                    Some(handle)
-                }
-            }
-        }),
-    };
     // A single-sided and a two-sided set, chosen per batch by its own M2 `0x04`: the robe skirt
     // (geoset 1302) is authored two-sided, the closed body is not.
     let body = body_tex.map(|tex| {
@@ -342,7 +375,7 @@ pub(super) fn build_char_skin_materials(
     // The hair texture (M2 type 6) also dresses the facial hair of races whose beards are
     // geometry, so it resolves through `hair_mesh_texture`'s bald fallback: a bald orc has a beard.
     let hair = sections
-        .0
+        .tables
         .hair_mesh_texture(look.race, look.sex, look.hair_style, look.hair_color)
         .and_then(|path| {
             let hair_part = parts
@@ -377,7 +410,7 @@ pub(super) fn build_char_skin_materials(
     // skinColor, loaded plain as the reference does, never composited. Its batches are an opaque
     // single-sided core and alpha-cut two-sided fringe cards, so one set per sidedness.
     let skin_extra = sections
-        .0
+        .tables
         .skin_extra_texture(look.race, look.sex, look.skin)
         .map_or((None, None), |path| {
             let tex = asset_server.load::<Image>(format!(
