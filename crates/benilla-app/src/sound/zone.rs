@@ -137,8 +137,8 @@ pub(super) struct ZoneAudio {
     /// The Lua `PlayMusic` slot, the reference's `[0xb06ccc]`: a second music stream beside the
     /// zone track's `[0xb06cc4]`, driven only by `PlayMusic`/`StopMusic`.
     lua_music: Option<StreamingSoundHandle<kira::sound::FromFileError>>,
-    /// The file on that slot, kept to restart it: `0x7a5620` opens it with `SetLoopCount(-1)`
-    /// (`0x7a5592`), and kira cannot loop a decode-stream.
+    /// The file on that slot, kept to reopen it at its natural end: `0x7a5620` opens it with
+    /// `SetLoopCount(-1)` (`0x7a5592`), where this slot restarts it.
     lua_music_path: Option<String>,
     lua_music_watch: mixer::StreamWatch,
     /// When the next zone track starts (`Time::elapsed_secs_f64`); `None` while one plays or the
@@ -327,6 +327,7 @@ fn zone_audio(
     // ---- ambience: the reference's selector (`0x460bd0`) ranks ghost > submerged > weather >
     // interior/zone day/night; the ghost bed is the kit named "Ghost", its swap the 5.0 s
     // crossfade (`0x458680` → `0x460c20`) ----
+    reap_stopped_bed(zone);
     let ghost = self_store
         .single()
         .is_ok_and(|store| store.0.player_is_ghost());
@@ -709,8 +710,10 @@ fn drop_lua_music(zone: &mut ZoneAudio) {
 }
 
 /// Crossfade the looping ambience bed to a new kit (0 = stop) over `fade_ms`. The new bed opens
-/// on the IO pool ([`open_bed`]) and both legs start the frame it lands ([`land_ambience`]); a
-/// newer swap drops an open still in flight, so the latest kit wins.
+/// on the IO pool ([`open_bed`]) and both legs start the frame it lands ([`land_ambience`]), a
+/// frame or more after the swap, where the reference fades out and opens in the one call
+/// (`0x460b31`, `0x460b54`): a cold open can take far longer than a frame. A newer swap drops an
+/// open still in flight, so the latest kit wins.
 fn swap_ambience(
     zone: &mut ZoneAudio,
     out: &SoundOutput,
@@ -793,9 +796,9 @@ fn poll_bed_open(zone: &mut ZoneAudio) -> Option<OpenedBed> {
 }
 
 /// Open `path` as a looping ambience stream, read from its archive a sector at a time as it
-/// plays: the reference opens a bed with `FSOUND_Stream_Open` in mode `0x82002`
-/// (`FSOUND_LOOP_NORMAL`) and loop count −1 (`0x458900` → `0x7a5620` → `0x7a54d0`, `0x7a5592`),
-/// reading through its MPQ file callbacks. The chain's lock covers the archive lookup alone.
+/// plays: the reference opens a bed with `FSOUND_Stream_Open` in mode `0x82002`, its `0x2` the
+/// loop bit, and loop count −1 (`0x458900` → `0x7a5620` → `0x7a54d0`, `0x7a5592`), reading
+/// through its MPQ file callbacks. The chain's lock covers the archive lookup alone.
 fn open_bed(chain: &Mutex<Chain>, path: &str) -> anyhow::Result<StreamingSoundData<FromFileError>> {
     let archive = chain.lock_recover().archive_for(path)?;
     let file = archive
@@ -855,6 +858,32 @@ fn start_bed(
         }
         Err(e) => warn!("ambience: {path} — {e:#}"),
     }
+}
+
+/// Drop a bed that stopped by itself, which a looping stream does only on a read or decode
+/// error, and clear its kit so the selection reopens it next; whether one was reaped. An open in
+/// flight replaces it anyway, so its kit is kept.
+fn reap_stopped_bed(zone: &mut ZoneAudio) -> bool {
+    let Some(h) = zone.ambience.as_mut() else {
+        return false;
+    };
+    if h.state() != kira::sound::PlaybackState::Stopped {
+        return false;
+    }
+    let error = h
+        .pop_error()
+        .map_or_else(|| "no error reported".to_owned(), |e| e.to_string());
+    warn!(
+        "ambience: kit {} stopped mid-play — {error}",
+        zone.ambience_kit
+    );
+    zone.ambience = None;
+    zone.ambience_fade_in = None;
+    zone.ambience_watch.reset();
+    if zone.ambience_opening.is_none() {
+        zone.ambience_kit = 0;
+    }
+    true
 }
 
 /// Release the playing bed to fade out over `fade_ms` on the backend; `0` cuts it.
@@ -1086,9 +1115,9 @@ pub(super) fn plugin(app: &mut App) {
 mod tests {
     use super::{
         apply_music_suppression, begin_bed_open, begin_zone_music, first_unplayable, open_bed,
-        poll_bed_open, pump_zone_music, slot_holds, start_bed, stop_world_soundscape,
-        take_lua_music_slot, OpenedBed, ZoneAudio, CINEMATIC_MUSIC_RESUME_SECS,
-        LUA_MUSIC_SCHEDULE_SECS,
+        poll_bed_open, pump_zone_music, reap_stopped_bed, slot_holds, start_bed,
+        stop_world_soundscape, take_lua_music_slot, OpenedBed, ZoneAudio,
+        CINEMATIC_MUSIC_RESUME_SECS, LUA_MUSIC_SCHEDULE_SECS,
     };
     use crate::sound::mixer;
     use kira::sound::streaming::StreamingSoundData;
@@ -1614,5 +1643,51 @@ mod tests {
             summary(&mut after),
             summary(&mut worker),
         );
+    }
+
+    /// A source whose reads fail past `limit` bytes, as a bad archive sector would mid-play.
+    struct FailsAfter(std::io::Cursor<Vec<u8>>, u64);
+
+    impl std::io::Read for FailsAfter {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let left = self.1.saturating_sub(self.0.position());
+            if left == 0 {
+                return Err(std::io::Error::other("unreadable sector"));
+            }
+            let n = buf.len().min(left as usize);
+            self.0.read(&mut buf[..n])
+        }
+    }
+
+    impl std::io::Seek for FailsAfter {
+        fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(to)
+        }
+    }
+
+    /// A bed that a read error stops mid-play is reaped and its kit cleared, so the selection
+    /// reopens it the next frame instead of leaving silence until the kit changes.
+    #[test]
+    fn a_bed_that_stops_mid_play_is_reaped() {
+        let wav = mixer::tests::pcm16_wav(22_050, 2, 4, 20_000, |i| i as i16);
+        let len = wav.len() as u64;
+        let bed = mixer::stream_from_source(FailsAfter(std::io::Cursor::new(wav), 60_000), len)
+            .expect("the header reads")
+            .loop_region(..);
+        let mut manager = mixer::tests::mock_manager();
+        let h = manager.play(bed).expect("play");
+        let mut zone = ZoneAudio {
+            ambience_kit: 7,
+            ..Default::default()
+        };
+        zone.ambience = Some(h);
+        assert!(!reap_stopped_bed(&mut zone), "a playing bed stays");
+        assert!(
+            mixer::tests::plays_out(&mut manager, zone.ambience.as_ref().unwrap()),
+            "the read error stops the bed"
+        );
+        assert!(reap_stopped_bed(&mut zone));
+        assert!(zone.ambience.is_none());
+        assert_eq!(zone.ambience_kit, 0, "the selection reopens it");
     }
 }
