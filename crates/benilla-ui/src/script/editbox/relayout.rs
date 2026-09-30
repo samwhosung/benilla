@@ -5,13 +5,14 @@ use mlua::Lua;
 
 use crate::layout::{Anchor, Point, Rect};
 use crate::script::{MeasureRequest, Model};
-use crate::widget::{FrameHandle, KindState, RegionHandle};
+use crate::widget::{EditBoxState, FrameHandle, KindState, RegionHandle};
 
 /// `0x77b8c0`, the text FontString's rect. The reference writes nothing while the box's rect is
 /// unresolved (`0x77b8c7`); then it clears the points (`0x77b8da`), sets the width
 /// `boxW − (right + left)` for either kind (`0x77b905`), the height 0 multi-line (`0x77b91e`) or
 /// `boxH − (top + bottom)` single-line (`0x77b940`), and one `TOPLEFT` point at `(left, −top)`
-/// (`0x77b96b`).
+/// (`0x77b96b`), and raises dirty bits 0-2 (`0x77ba7f or eax,7`): the box's next flush fires
+/// `OnTextChanged` again, with the text unchanged.
 ///
 /// Multi-line, benilla writes that shape, the width once the box has a rect: until then only the
 /// point is written, and the size is kept.
@@ -23,9 +24,13 @@ use crate::widget::{FrameHandle, KindState, RegionHandle};
 /// region answers two points where the reference answers one, and `GetWidth`/`GetHeight` answer
 /// the text's measure where the reference answers the explicit size.
 pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
-    let Some(KindState::EditBox(eb)) = model.arena.frame(h).map(|f| &f.kind_state) else {
+    let resolved = model.resolved.contains_key(&h);
+    let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) else {
         return;
     };
+    if resolved {
+        eb.dirty |= EditBoxState::DIRTY_TEXT | EditBoxState::DIRTY_CURSOR;
+    }
     let (Some(rh), [l, r, t, b], multi_line) = (eb.text_region, eb.text_insets, eb.multi_line)
     else {
         return;
@@ -102,57 +107,47 @@ fn multi_line_text_width(model: &Model, h: FrameHandle, [l, r]: [f32; 2]) -> Opt
     Some(rect.width() / crate::script::object::eff_scale(model, h) - (r + l))
 }
 
-/// The flush's relayout tail (`0x77d4d0` @`0x77d863`–`0x77d8ad`) for every shown multi-line box,
-/// run from the tick ahead of the `OnTextChanged` drain, as the flush relayouts before it fires.
-/// The box's own height becomes `(insetTop + insetBottom) + h`, `h` its text's measured wrapped
-/// height (`0x7729b0`), or one line's (`0x7727b0(fs, 1)`) when that is exactly 0, as for empty
-/// text. It reads neither the authored height nor the rect, so the box grows and shrinks with its
-/// text and a `SetHeight` lasts until the next tick; a single-line box is never sized. The text
-/// region's width is the one [`seat_text_region`] last wrote, on a resize ([`reseat_resized`]),
-/// `SetTextInsets`, `GetTextInsets`, `SetMultiLine` or a font change.
+/// The flush's relayout tail (`0x77d4d0` @`0x77d863`–`0x77d8ad`), run on dirty bit 0 by the
+/// box's flush ([`super::flush`]): a multi-line box's own height becomes
+/// `(insetTop + insetBottom) + h`, `h` its text's measured wrapped height (`0x7729b0`), or one
+/// line's (`0x7727b0(fs, 1)`) when that is exactly 0, as for empty text. It reads neither the
+/// authored height nor the rect, so the box grows and shrinks with its text and a `SetHeight`
+/// lasts until the flush after its resize re-seats the text; a single-line box is never sized
+/// (`0x77d86a`). The text region's width is the one [`seat_text_region`] last wrote.
 ///
-/// Each tick relayouts every shown multi-line box, where the reference relayouts a box whose dirty
-/// bit 0 is set; every input of the height sets it (an edit, a resize, the insets, the font,
-/// `SetMultiLine`, the ctor), so both write the same height.
-pub(in crate::script) fn relayout_multi_line(lua: &Lua) {
-    let boxes: Vec<FrameHandle> = {
+/// `false` when the text's measure is pending, for the flush to retry.
+pub(super) fn relayout(lua: &Lua, h: FrameHandle) -> bool {
+    let multi_line = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        // The flush runs from the box's own update, pumped for shown frames only.
-        model
-            .arena
-            .editbox_kinds()
-            .iter()
-            .copied()
-            .filter(|&h| {
-                model.arena.frame(h).is_some_and(|f| {
-                    f.effective_visible
-                        && matches!(&f.kind_state, KindState::EditBox(eb) if eb.multi_line)
-                })
-            })
-            .collect()
+        matches!(
+            model.arena.frame(h).map(|f| &f.kind_state),
+            Some(KindState::EditBox(eb)) if eb.multi_line
+        )
     };
-    for h in boxes {
-        let Some(rh) = super::ensure_text_region(lua, h) else {
-            continue;
-        };
-        // `0x7729b0` measures in the call; with no engine installed the measure lands a tick later.
-        crate::script::measure::ensure_measured(lua, rh);
-        let Some(text_h) = text_height(lua, h, rh) else {
-            continue; // the measure is pending: the height waits for it
-        };
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let [_, _, top, bottom] = match model.arena.frame(h).map(|f| &f.kind_state) {
-            Some(KindState::EditBox(eb)) => eb.text_insets,
-            _ => continue,
-        };
-        // `fld top; fadd bottom; fadd st, st(1)`.
-        let height = (top + bottom) + text_h;
-        let input = model.layout_inputs.entry(h).or_default();
-        if input.height.to_bits() != height.to_bits() {
-            input.height = height;
-            model.touch_layout_frame(h);
-        }
+    if !multi_line {
+        return true;
     }
+    let Some(rh) = super::ensure_text_region(lua, h) else {
+        return true;
+    };
+    // `0x7729b0` measures in the call; with no engine installed the measure lands a tick later.
+    crate::script::measure::ensure_measured(lua, rh);
+    let Some(text_h) = text_height(lua, h, rh) else {
+        return false;
+    };
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let [_, _, top, bottom] = match model.arena.frame(h).map(|f| &f.kind_state) {
+        Some(KindState::EditBox(eb)) => eb.text_insets,
+        _ => return true,
+    };
+    // `fld top; fadd bottom; fadd st, st(1)`.
+    let height = (top + bottom) + text_h;
+    let input = model.layout_inputs.entry(h).or_default();
+    if input.height.to_bits() != height.to_bits() {
+        input.height = height;
+        model.touch_layout_frame(h);
+    }
+    true
 }
 
 /// The text's height for the box: its measure under the current key, or one line's when that is

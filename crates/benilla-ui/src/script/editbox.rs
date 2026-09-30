@@ -10,6 +10,9 @@
 //!   unfocused box that is not `autoFocus` ignores input.
 //! - Editing: an insert replaces the selection; `numeric` aborts a whole insert on any non-digit;
 //!   caps trim from the end (`maxBytes`, then `maxLetters`).
+//! - Events: an edit, a caret move, a focus change or a re-seat of the text only raises the box's
+//!   dirty bits (`[E+0x31c]`); the box's flush, run after its own `OnUpdate` in the tick's walk,
+//!   fires `OnCursorChanged` and then `OnTextChanged` ([`update`]).
 //!
 //! Mouse, selection and caret (click to index `0x77d0d0`, drag `0x77a860`) live in [`interact`]
 //! and [`seam`]; the OS clipboard is host-side, [`paste`] in and `UiScript::editbox_copy` or
@@ -18,7 +21,7 @@
 //! Deviation: word and edge deletes (`Delete{Word,Edge}`), which 1.12 does not have, exist because
 //! the host's OS-native chords (Option/Cmd+Backspace, Ctrl+Backspace/Delete) expect them.
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, Table};
 
 use super::object::frame_handle_of;
 use super::types::{EditAction, EditUnit};
@@ -58,7 +61,6 @@ pub(super) fn paste(lua: &Lua, text: &str) -> bool {
     };
     if with_eb(lua, h, |eb| eb.paste(text)).is_some_and(|o| o.text_changed) {
         sync_text_region(lua, h);
-        mark_text_changed(lua, h);
     }
     true
 }
@@ -118,15 +120,16 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
     true
 }
 
-// Mouse, selection, clipboard and blink (`interact`); the host's advance round trip and text
-// geometry (`seam`); the text region's rect and a multi-line box's height (`relayout`).
+// Mouse, selection and clipboard (`interact`); the host's advance round trip and text geometry
+// (`seam`); the text region's rect and a multi-line box's height (`relayout`); the per-frame
+// update and its flush (`flush`).
+mod flush;
 mod interact;
 mod relayout;
 mod seam;
-pub(super) use interact::{
-    click, copy_selection, cut_selection, drag_end, drag_update, tick_blink,
-};
-pub(in crate::script) use relayout::{relayout_multi_line, reseat_resized};
+pub(in crate::script) use flush::update;
+pub(super) use interact::{click, copy_selection, cut_selection, drag_end, drag_update};
+pub(in crate::script) use relayout::reseat_resized;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Focus model
@@ -182,6 +185,10 @@ fn set_focus_handle(lua: &Lua, h: FrameHandle) {
         }
         let old = model.focused_editbox;
         model.focused_editbox = Some(h);
+        if let Some(o) = old {
+            raise_cursor(&mut model, o);
+        }
+        raise_cursor(&mut model, h);
         // A focus gain ends history browsing (`SetText` keeps it for the chat parser's rewrite).
         if let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
             eb.end_history_browse();
@@ -192,6 +199,14 @@ fn set_focus_handle(lua: &Lua, h: FrameHandle) {
         fire_script(lua, oid, "OnEditFocusLost");
     }
     fire_script(lua, new_id, "OnEditFocusGained");
+}
+
+/// The focus transition's caret write (`0x77afa8`, `or 4`), on the box that gains the keyboard
+/// and on the one that loses it, whose next flush places or hides the caret.
+fn raise_cursor(model: &mut Model, h: FrameHandle) {
+    if let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        eb.dirty |= EditBoxState::DIRTY_CURSOR;
+    }
 }
 
 /// The EditBox's OnShow/OnHide vtable overrides (`0x81c910` slots +0x30/+0x34), run after the
@@ -227,6 +242,7 @@ fn clear_focus_handle(lua: &Lua, h: FrameHandle) {
             return;
         }
         model.focused_editbox = None;
+        raise_cursor(&mut model, h);
         model.frame_id(h)
     };
     fire_script(lua, id, "OnEditFocusLost");
@@ -237,7 +253,8 @@ fn clear_focus_handle(lua: &Lua, h: FrameHandle) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /// `Insert` (`0x77bee0`): replace the selection, abort on a non-digit when `numeric`, splice,
-/// enforce caps, mark `OnTextChanged`, and with `fire_space` fire one `OnSpacePressed` per space.
+/// enforce caps, raise the dirty bits for the flush, and with `fire_space` fire one
+/// `OnSpacePressed` per space.
 fn insert(lua: &Lua, h: FrameHandle, ins: &str, fire_space: bool) {
     let Some(out) = with_eb(lua, h, |eb| eb.insert(ins)) else {
         return; // not an EditBox
@@ -248,7 +265,7 @@ fn insert(lua: &Lua, h: FrameHandle, ins: &str, fire_space: bool) {
     sync_text_region(lua, h);
     let id = frame_id_of(lua, h);
     // Insert fires the generic `OnChar` with the spliced string as `arg1` (`0x77c13c`, through the
-    // varargs firer `0x7026f0`), before the deferred `OnTextChanged`; `SetText` does not.
+    // varargs firer `0x7026f0`), ahead of the flush's `OnTextChanged`; `SetText` does not.
     let on_char = lua
         .create_string(ins)
         .and_then(|s| event::fire_widget_handler(lua, id, "OnChar", vec![mlua::Value::String(s)]));
@@ -257,7 +274,6 @@ fn insert(lua: &Lua, h: FrameHandle, ins: &str, fire_space: bool) {
             .expect("model app_data")
             .record_script_error(e.to_string());
     }
-    mark_text_changed(lua, h);
     if fire_space {
         for _ in 0..out.spaces {
             fire_script(lua, id, "OnSpacePressed");
@@ -266,14 +282,13 @@ fn insert(lua: &Lua, h: FrameHandle, ins: &str, fire_space: bool) {
 }
 
 /// `SetText` (`0x77be00`): nothing when unchanged; else clear the selection, replace, cursor to
-/// the end, enforce caps, fire `OnTextSet` and mark `OnTextChanged`.
+/// the end, enforce caps, raise the dirty bits for the flush and fire `OnTextSet`.
 fn set_text(lua: &Lua, h: FrameHandle, s: &str) {
     let changed = with_eb(lua, h, |eb| eb.set_text(s));
     if changed == Some(true) {
         sync_text_region(lua, h);
         let id = frame_id_of(lua, h);
         fire_script(lua, id, "OnTextSet");
-        mark_text_changed(lua, h);
     }
 }
 
@@ -286,7 +301,6 @@ fn delete_span(lua: &Lua, h: FrameHandle, target_of: impl FnOnce(&EditBoxState) 
     });
     if changed == Some(true) {
         sync_text_region(lua, h);
-        mark_text_changed(lua, h);
     }
 }
 
@@ -295,7 +309,6 @@ fn delete_dir(lua: &Lua, h: FrameHandle, forward: bool) {
     let changed = with_eb(lua, h, |eb| eb.delete_dir(forward));
     if changed == Some(true) {
         sync_text_region(lua, h);
-        mark_text_changed(lua, h);
     }
 }
 
@@ -488,67 +501,8 @@ fn fire_script(lua: &Lua, id: u32, name: &str) {
     }
 }
 
-/// `OnCursorChanged(x, y, w, h)` from the caret flush (`0x77da80`, in UI units via `0x77dd5f`): `x`
-/// is the caret's advance along its line, `y` minus the row index times the row pitch, `w` the
-/// constant 4.0 and `h` the line height. It fires only when the caret moved: the flush's one
-/// caller, `0x77d475`, is gated on dirty bit 2.
-///
-/// Deviation: `h` is the row pitch, which is taller than the line height only for a font with
-/// extra spacing (none in the stock UI), because the host's advance answer carries one measure.
-///
-/// Deviation: only the focused box fires, where the reference flushes any dirty box, because only
-/// the focused box gets an advance table from the host.
-pub(in crate::script) fn drain_cursor_changed(lua: &Lua) {
-    let fire = {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let Some(h) = model.focused_editbox else {
-            return;
-        };
-        if !model.arena.frame(h).is_some_and(|f| f.effective_visible) {
-            return;
-        }
-        let id = model.frame_id(h);
-        let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state)
-        else {
-            return;
-        };
-        // No advance table yet: the tick after the host answers reports it.
-        let display = eb.display();
-        if eb.advances.len() != display.len() + 1 {
-            return;
-        }
-        let cursor_d = eb.text_to_display(eb.cursor).min(display.len());
-        let (row, x) = if eb.multi_line {
-            eb.caret_row_x(cursor_d)
-        } else {
-            (0, eb.advances[cursor_d])
-        };
-        if eb.cursor_fired == Some((row, x)) {
-            return;
-        }
-        eb.cursor_fired = Some((row, x));
-        let pitch = eb.cell_h;
-        (id, x, -(row as f32) * pitch, pitch)
-    };
-    let (id, x, y, h) = fire;
-    if let Err(e) = event::fire_widget_handler(
-        lua,
-        id,
-        "OnCursorChanged",
-        vec![
-            Value::Number(f64::from(x)),
-            Value::Number(f64::from(y)),
-            Value::Number(f64::from(CARET_WIDTH)),
-            Value::Number(f64::from(h)),
-        ],
-    ) {
-        lua.app_data_mut::<Model>()
-            .expect("model app_data")
-            .record_script_error(e.to_string());
-    }
-}
-
-/// The caret width `OnCursorChanged` reports, a constant in the reference.
+/// The caret width `OnCursorChanged` reports: 4.0 UI units on every raster (`0x77b8c0` sets it,
+/// `0x77ba67`).
 const CARET_WIDTH: f32 = 4.0;
 
 // The EditBox Lua methods, consulted before the shared frame table for EditBox frames.
@@ -556,45 +510,8 @@ mod methods;
 pub(super) use methods::install;
 
 #[cfg(test)]
+mod flush_tests;
+#[cfg(test)]
 mod relayout_tests;
 #[cfg(test)]
 mod tests;
-
-/// Raise the `textChanged` dirty bit (`[E+0x31c]` bit 0): the reference's edits only mark it, and
-/// its one fire site (`0x77d498`) is in the drain `0x77d3e0`, so a Lua caller gets control back
-/// before the handler runs and repeated changes coalesce into one fire with the final text.
-pub(super) fn mark_text_changed(lua: &Lua, h: FrameHandle) {
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    if !model.dirty_editboxes.contains(&h) {
-        model.dirty_editboxes.push(h);
-    }
-}
-
-/// The dirty-word drain (`0x77d3e0`): fire the pending `OnTextChanged`s from the frame tick, as the
-/// box's `OnUpdate` (`0x77a790`) does. A hidden box stays pending until shown: `Hide` unlinks it
-/// from the update chain (that it then gets no `OnUpdate` is inferred). The list is taken before
-/// any Lua runs, so a box a handler re-marks fires on the next drain, as the reference clears its
-/// bit before the fire.
-///
-/// Deviation: not drained from `OnKeyDown` (`0x77b160`) or `OnMouseDown` (`0x77b800`), because
-/// those only bring the fire sooner within a frame and our key and mouse paths reach the tick.
-pub(in crate::script) fn drain_text_changed(lua: &Lua) {
-    let pending = {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        if model.dirty_editboxes.is_empty() {
-            return;
-        }
-        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut model.dirty_editboxes)
-            .into_iter()
-            .partition(|&h| model.arena.frame(h).is_some_and(|f| f.effective_visible));
-        // A frame that has been destroyed drops out of both halves.
-        model.dirty_editboxes = waiting
-            .into_iter()
-            .filter(|&h| model.arena.frame(h).is_some())
-            .collect();
-        ready
-    };
-    for h in pending {
-        fire_script(lua, frame_id_of(lua, h), "OnTextChanged");
-    }
-}

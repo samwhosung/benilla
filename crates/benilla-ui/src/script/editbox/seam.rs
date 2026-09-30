@@ -1,76 +1,20 @@
 //! The EditBox seam the host drives each frame: the advance-table round trip, the caret,
 //! selection and scroll geometry derived from it, and the clipboard pair.
 
-use crate::script::{types, UiScript};
-use crate::widget::KindState;
+use mlua::Lua;
+
+use crate::script::{types, Model, UiScript};
+use crate::widget::{EditBoxState, FrameHandle, KindState, RegionHandle};
 
 impl UiScript {
     /// The focused EditBox's request to measure its display string's per-byte cumulative widths,
     /// when its text, font, scale or wrap width changed; an empty display needs no trip. Answer it
     /// with [`Self::set_editbox_advances`] before [`Self::focused_editbox_text_ui`].
     pub fn editbox_advances_request(&mut self) -> Option<types::EditBoxAdvanceRequest> {
-        use std::hash::{Hash, Hasher};
         let h = self.model_mut().focused_editbox?;
         // The lazy text region first: its font keys the table, and a new box has none until now.
         let rh = super::ensure_text_region(self.lua(), h)?;
-        let mut model = self.model_mut();
-        let (display, multi_line) = match model.arena.frame(h).map(|f| &f.kind_state) {
-            Some(KindState::EditBox(eb)) => (eb.display(), eb.multi_line),
-            _ => return None,
-        };
-        let d = model.region_data.get(&rh);
-        let font = d.and_then(|d| d.font_path.clone());
-        let height = d.and_then(|d| d.font_height);
-        let outline = d.map(|d| d.outline).unwrap_or_default();
-        // The host measures at the drawn raster size, so the advances land on the drawn glyphs.
-        let scale = model
-            .arena
-            .frame(h)
-            .map(|f| f.effective_scale)
-            .unwrap_or(1.0);
-        // A multi-line box wraps at the text region's width, as the draw does; a resize re-keys.
-        let wrap_width = multi_line
-            .then(|| {
-                model
-                    .region_resolved
-                    .get(&rh)
-                    .or_else(|| model.resolved.get(&h))
-                    .map(|r| r.right - r.left)
-            })
-            .flatten()
-            .filter(|w| *w > 0.0);
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        display.hash(&mut hasher);
-        font.hash(&mut hasher);
-        height.map(f32::to_bits).hash(&mut hasher);
-        (outline as u8).hash(&mut hasher);
-        wrap_width.map(f32::to_bits).hash(&mut hasher);
-        scale.to_bits().hash(&mut hasher);
-        let key = hasher.finish();
-        let id = model.frame_id(h);
-        let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state)
-        else {
-            return None;
-        };
-        if eb.advances_key == key && eb.advances.len() == display.len() + 1 {
-            return None; // cache warm
-        }
-        if display.is_empty() {
-            eb.advances = vec![0.0];
-            eb.rows = vec![0];
-            eb.advances_key = key;
-            return None;
-        }
-        Some(types::EditBoxAdvanceRequest {
-            id,
-            font,
-            height,
-            outline,
-            scale,
-            text: display,
-            wrap_width,
-            key,
-        })
+        stale_advances(&mut self.model_mut(), h, rh)
     }
 
     /// Answer an [`Self::editbox_advances_request`]: the cumulative widths (len+1 entries from 0),
@@ -88,10 +32,7 @@ impl UiScript {
             return;
         };
         if let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
-            eb.advances = cum;
-            eb.rows = if rows.is_empty() { vec![0] } else { rows };
-            eb.cell_h = cell_h;
-            eb.advances_key = key;
+            store_advances(eb, key, cum, rows, cell_h);
         }
     }
 
@@ -205,4 +146,103 @@ impl UiScript {
         };
         super::with_eb(lua, h, |eb| eb.add_history_line(line)).is_some()
     }
+}
+
+/// Box `h`'s advance-table request, `None` when its table is current for the display string,
+/// font, raster scale and, multi-line, wrap width; an empty display needs no trip and is settled
+/// here.
+fn stale_advances(
+    model: &mut Model,
+    h: FrameHandle,
+    rh: RegionHandle,
+) -> Option<types::EditBoxAdvanceRequest> {
+    use std::hash::{Hash, Hasher};
+    let (display, multi_line) = match model.arena.frame(h).map(|f| &f.kind_state) {
+        Some(KindState::EditBox(eb)) => (eb.display(), eb.multi_line),
+        _ => return None,
+    };
+    let d = model.region_data.get(&rh);
+    let font = d.and_then(|d| d.font_path.clone());
+    let height = d.and_then(|d| d.font_height);
+    let outline = d.map(|d| d.outline).unwrap_or_default();
+    // The host measures at the drawn raster size, so the advances land on the drawn glyphs.
+    let scale = model
+        .arena
+        .frame(h)
+        .map(|f| f.effective_scale)
+        .unwrap_or(1.0);
+    // A multi-line box wraps at the text region's width, as the draw does; a resize re-keys.
+    let wrap_width = multi_line
+        .then(|| {
+            model
+                .region_resolved
+                .get(&rh)
+                .or_else(|| model.resolved.get(&h))
+                .map(|r| r.right - r.left)
+        })
+        .flatten()
+        .filter(|w| *w > 0.0);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    display.hash(&mut hasher);
+    font.hash(&mut hasher);
+    height.map(f32::to_bits).hash(&mut hasher);
+    (outline as u8).hash(&mut hasher);
+    wrap_width.map(f32::to_bits).hash(&mut hasher);
+    scale.to_bits().hash(&mut hasher);
+    let key = hasher.finish();
+    let id = model.frame_id(h);
+    let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) else {
+        return None;
+    };
+    if eb.advances_key == key && eb.advances.len() == display.len() + 1 {
+        return None; // cache warm
+    }
+    if display.is_empty() {
+        let cell_h = eb.cell_h;
+        store_advances(eb, key, vec![0.0], vec![0], cell_h);
+        return None;
+    }
+    Some(types::EditBoxAdvanceRequest {
+        id,
+        font,
+        height,
+        outline,
+        scale,
+        text: display,
+        wrap_width,
+        key,
+    })
+}
+
+fn store_advances(eb: &mut EditBoxState, key: u64, cum: Vec<f32>, rows: Vec<usize>, cell_h: f32) {
+    eb.advances = cum;
+    eb.rows = if rows.is_empty() { vec![0] } else { rows };
+    eb.cell_h = cell_h;
+    eb.advances_key = key;
+}
+
+/// Whether box `h`'s advance table is current, measured here by the installed font engine when
+/// its text or font moved, as the caret leg measures in the call (`0x772ae0`). `false` with no
+/// engine, or one that leaves the table to the host's round trip.
+pub(super) fn advances_current(lua: &Lua, h: FrameHandle) -> bool {
+    let Some(rh) = super::ensure_text_region(lua, h) else {
+        return false;
+    };
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let Some(req) = stale_advances(&mut model, h, rh) else {
+        return true;
+    };
+    // Taken out and put back, as `ensure_measured` does: the engine cannot re-enter the VM.
+    let Some(mut engine) = model.measurer.take() else {
+        return false;
+    };
+    let answer = engine.editbox_advances(&req);
+    model.measurer = Some(engine);
+    let Some((cum, rows, cell_h)) = answer else {
+        return false;
+    };
+    if let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        store_advances(eb, req.key, cum, rows, cell_h);
+    }
+    true
 }

@@ -258,9 +258,9 @@ pub use trainer::{
     TrainerState, TrainerTooltip, TRAINER_GROUP_KNOWN,
 };
 pub use types::{
-    BlendMode, EditAction, EditBoxTextUi, EditOutcome, EditUnit, ExtractedQuad, FontObject,
-    FontShadow, Gradient, JustifyH, JustifyV, LineMeasureRequest, MeasureRequest, Outline,
-    QuadContent, ScriptValue, TexCoords,
+    BlendMode, EditAction, EditBoxAdvanceRequest, EditBoxTextUi, EditOutcome, EditUnit,
+    ExtractedQuad, FontObject, FontShadow, Gradient, JustifyH, JustifyV, LineMeasureRequest,
+    MeasureRequest, Outline, QuadContent, ScriptValue, TexCoords,
 };
 pub(crate) use types::{FontExplicit, MeasuredText, RegionData};
 pub use unit::{
@@ -422,8 +422,8 @@ const SCRIPT_KINDS: [&str; 39] = [
     "OnTabPressed",
     "OnTextChanged",
     "OnTextSet",
-    // The caret flush's own (`0x77da80`), fired by the tick's `drain_cursor_changed` when the
-    // caret moved: the edge `ScrollingEdit_OnCursorChanged` scrolls a multiline box by.
+    // The caret leg's own (`0x77da80`), fired by the box's flush when the caret moved: the edge
+    // `ScrollingEdit_OnCursorChanged` scrolls a multiline box by.
     "OnCursorChanged",
     "OnEditFocusGained",
     "OnEditFocusLost",
@@ -972,6 +972,9 @@ impl UiScript {
                 KindState::EditBox(eb) => {
                     eb.advances_key = eb.advances_key.wrapping_add(1);
                     eb.line_height = None;
+                    // A multi-line box's height is its text's measure: owed again on the new
+                    // raster, which moves no rect here to re-seat it.
+                    eb.relayout_owed = true;
                 }
                 _ => {}
             }

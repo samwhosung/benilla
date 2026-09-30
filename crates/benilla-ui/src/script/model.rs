@@ -186,10 +186,6 @@ pub(crate) struct Model {
     pub(crate) model_facts: HashMap<String, std::sync::Arc<crate::widget::ModelFileFacts>>,
     /// Model files still waiting for their facts, for the host to load; deduplicated.
     pub(crate) model_facts_wanted: Vec<String>,
-    /// Edit boxes owed `OnTextChanged`: the reference's dirty bit (`[E+0x31c]` bit 0), set by
-    /// `SetText`/`Insert`, cleared only by `0x77d3e0`: one fire per drain, with the final text, as
-    /// `MoneyInputFrame_SetCopper` needs. A hidden box's fire waits for a show, key or mouse-down.
-    pub(crate) dirty_editboxes: Vec<FrameHandle>,
     /// Event name to its frames in registration order, never a set: `SignalEvent` (`0x703e50`)
     /// dispatches in that order across frames. Re-registering keeps a frame's position.
     pub(crate) event_to_frames: HashMap<String, Vec<FrameHandle>>,
@@ -1091,7 +1087,6 @@ impl Model {
             on_update_model_frames: Vec::new(),
             model_facts: HashMap::new(),
             model_facts_wanted: Vec::new(),
-            dirty_editboxes: Vec::new(),
             event_to_frames: HashMap::new(),
             frame_events: HashMap::new(),
             all_event_frames: Vec::new(),

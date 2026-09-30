@@ -24,7 +24,7 @@ pub(crate) use engine::{UiFontAtlas, UiTextPlugin};
 
 use benilla_ui::script::Outline;
 use benilla_ui::widget::RegionHandle;
-pub(crate) use measurer::{measure_request, AtlasMeasurer};
+pub(crate) use measurer::{editbox_advances, measure_request, AtlasMeasurer};
 
 pub(crate) use layout::{
     ellipsize_to_fit, layout_text_quads, layout_text_quads_links, line_advances, line_origin,

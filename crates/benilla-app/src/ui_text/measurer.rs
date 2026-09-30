@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use benilla_ui::script::{MeasureRequest, TextMeasure};
+use benilla_ui::script::{EditBoxAdvanceRequest, MeasureRequest, TextMeasure};
 
 use super::engine::TextEngine;
 
@@ -41,6 +41,32 @@ pub(crate) fn measure_request(
     (w / rs, h / rs, natural / rs)
 }
 
+/// Answer one EditBox advance table as `(cumulative widths, row starts, row pitch)` in screen UI
+/// units: measured at the drawn size, the seam times the box's scale, and divided by the seam
+/// alone, like the mouse feed. A multi-line box also gets the draw's row starts and pitch. The one
+/// body for the extract's round trip and [`AtlasMeasurer`]'s inline answer.
+pub(crate) fn editbox_advances(
+    e: &mut TextEngine,
+    seam: f32,
+    req: &EditBoxAdvanceRequest,
+) -> (Vec<f32>, Vec<usize>, f32) {
+    let spec = super::FontSpec {
+        path: req.font.as_deref(),
+        height: super::drawn_px(req.height, None, seam * req.scale),
+        outline: req.outline,
+        alpha_gradient: None, // alpha never changes metrics
+    };
+    let cum = super::line_advances(e, &req.text, spec)
+        .iter()
+        .map(|a| a / seam)
+        .collect();
+    let (rows, cell_h) = match req.wrap_width {
+        Some(w) => super::line_rows(e, &req.text, w * seam, spec),
+        None => (vec![0], 0.0),
+    };
+    (cum, rows, cell_h / seam)
+}
+
 /// The measurer installed into the VM: the shared engine and the host's screen seam. It answers
 /// only for the seam it was built under, so the host installs a fresh one when the seam moves
 /// (`ui_script::extract::seat_text_measurer`).
@@ -64,6 +90,17 @@ impl TextMeasure for AtlasMeasurer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         measure_request(&mut e, self.seam, req)
+    }
+
+    fn editbox_advances(
+        &mut self,
+        req: &EditBoxAdvanceRequest,
+    ) -> Option<(Vec<f32>, Vec<usize>, f32)> {
+        let mut e = self
+            .engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some(editbox_advances(&mut e, self.seam, req))
     }
 }
 

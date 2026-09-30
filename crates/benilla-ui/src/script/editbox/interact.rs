@@ -1,4 +1,4 @@
-//! EditBox mouse and clipboard interaction: click, drag-select, copy, cut and the caret blink.
+//! EditBox mouse and clipboard interaction: click, drag-select, copy and cut.
 
 use mlua::Lua;
 
@@ -85,24 +85,7 @@ pub(in crate::script) fn cut_selection(lua: &Lua) -> Option<String> {
     let h = focused(lua)?;
     let copied = with_eb(lua, h, |eb| eb.cut_selection()).flatten()?;
     sync_text_region(lua, h);
-    super::mark_text_changed(lua, h);
     Some(copied)
-}
-
-/// The caret blink (`0x77a790`), each frame: past the period (0.5 s by default) the focused box's
-/// caret toggles and the accumulator resets; a non-positive period keeps the caret solid.
-pub(in crate::script) fn tick_blink(lua: &Lua, dt: f32) {
-    if let Some(h) = focused(lua) {
-        with_eb(lua, h, |eb| {
-            if eb.blink_period > 0.0 {
-                eb.blink_accum += dt;
-                if eb.blink_accum > eb.blink_period {
-                    eb.caret_shown = !eb.caret_shown;
-                    eb.blink_accum = 0.0;
-                }
-            }
-        });
-    }
 }
 
 fn focused(lua: &Lua) -> Option<FrameHandle> {

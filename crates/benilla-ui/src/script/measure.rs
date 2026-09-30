@@ -16,6 +16,20 @@ pub trait TextMeasure {
     /// unwrapped width, is what `GetStringWidth` reports. It runs with the model mutably borrowed,
     /// so it must not re-enter Lua.
     fn measure(&mut self, req: &MeasureRequest) -> (f32, f32, f32);
+
+    /// An EditBox's advance table, answered inline as
+    /// [`UiScript::set_editbox_advances`](super::UiScript::set_editbox_advances) answers it a
+    /// frame later: the cumulative widths, the wrapped-row starts and the row pitch, as the draw
+    /// measures them. The box's flush reads it for `OnCursorChanged`, whose position the caret
+    /// leg measures in the call (`0x77da80` → `0x772ae0`). `None`, the default, leaves the table
+    /// to the host.
+    fn editbox_advances(
+        &mut self,
+        req: &super::EditBoxAdvanceRequest,
+    ) -> Option<(Vec<f32>, Vec<usize>, f32)> {
+        let _ = req;
+        None
+    }
 }
 
 /// Measure region `rh` now if a measurer is installed and its stored measure is stale; a current

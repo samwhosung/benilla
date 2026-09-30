@@ -98,9 +98,13 @@ pub struct EditBoxState {
     pub rows: Vec<usize>,
     /// The row pitch in pixels (the snapped font em), answered with the advances; 0 until then.
     pub cell_h: f32,
-    /// The `(row, x)` of the last `OnCursorChanged`, fired per change (`0x77da80`, dirty bit 2 at
-    /// `0x77d475`); `None` lets the first flush after focus fire with the caret at home.
-    pub cursor_fired: Option<(usize, f32)>,
+    /// The dirty word (`[E+0x31c]`) the box's flush (`0x77d3e0`) drains: [`Self::DIRTY_TEXT`] and
+    /// [`Self::DIRTY_CURSOR`]. The ctor sets bit 0 (`0x779a34`), so a box fires `OnTextChanged` at
+    /// its first flush once shown.
+    pub dirty: u8,
+    /// A multi-line relayout that found its text's measure pending, retried at each flush until it
+    /// lands; with no font engine installed the measure arrives from the host a tick later.
+    pub relayout_owed: bool,
     /// The first visible display byte of a single-line box (`E+0x348`), scrolled by whole chars
     /// to keep the caret in view; `0x77da80` hides a caret outside the window.
     pub scroll_start: usize,
@@ -126,6 +130,13 @@ impl EditBoxState {
     pub const JUSTIFY_H_MASK: u32 = crate::justify::H_MASK;
     /// The vertical justify bits (3-5).
     pub const JUSTIFY_V_MASK: u32 = crate::justify::V_MASK;
+    /// Dirty bit 0, the text changed: every edit raises it, and the flush relayouts (`0x77d447`)
+    /// and fires `OnTextChanged` (`0x77d498`).
+    pub const DIRTY_TEXT: u8 = 1;
+    /// Dirty bit 2, the caret moved: every cursor write raises it (`0x77e380`), and the flush runs
+    /// the caret leg (`0x77d475` → `0x77da80`), which fires `OnCursorChanged`. Bit 1, the
+    /// highlight's (`0x77d950`), has no counterpart: the host paints the selection each frame.
+    pub const DIRTY_CURSOR: u8 = 4;
 
     /// A justify token's bit; `None` makes the caller raise the reference's
     /// `Usage: %s:SetJustifyH("justify")`.
@@ -173,7 +184,8 @@ impl Default for EditBoxState {
             advances_key: 0,
             rows: vec![0],
             cell_h: 0.0,
-            cursor_fired: None,
+            dirty: Self::DIRTY_TEXT,
+            relayout_owed: false,
             scroll_start: 0,
             drag_active: false,
             blink_period: 0.5,
@@ -508,6 +520,7 @@ impl EditBoxState {
         self.collapse();
         self.enforce_caps();
         self.reset_blink();
+        self.dirty |= Self::DIRTY_TEXT | Self::DIRTY_CURSOR; // `0x77c033 or edx,5`
         EditOutcome {
             text_changed: true,
             spaces: ins.matches(' ').count(),
@@ -546,6 +559,7 @@ impl EditBoxState {
         self.collapse();
         self.enforce_caps();
         self.reset_blink();
+        self.dirty |= Self::DIRTY_TEXT | Self::DIRTY_CURSOR;
         true
     }
 
@@ -584,7 +598,11 @@ impl EditBoxState {
         }
         self.sel_start = snap_down(&self.text, s as usize);
         self.sel_end = snap_down(&self.text, e as usize);
-        self.cursor = self.sel_end;
+        // The caret goes to the selection's end, a cursor write when it moves.
+        if self.cursor != self.sel_end {
+            self.cursor = self.sel_end;
+            self.dirty |= Self::DIRTY_CURSOR;
+        }
         self.reset_blink();
     }
 
@@ -656,6 +674,7 @@ impl EditBoxState {
             self.collapse();
         }
         self.reset_blink();
+        self.dirty |= Self::DIRTY_CURSOR;
     }
 
     /// Ctrl/Option+arrow: the caret to the [`word_boundary`](Self::word_boundary) by single atomic
@@ -698,6 +717,7 @@ impl EditBoxState {
             self.collapse();
         }
         self.reset_blink();
+        self.dirty |= Self::DIRTY_CURSOR; // the setter `0x77e360`, `or 4` at `0x77e380`
     }
 
     fn delete_selection(&mut self) {
@@ -718,6 +738,7 @@ impl EditBoxState {
         self.cursor = span.start;
         self.text.replace_range(span, "");
         self.collapse();
+        self.dirty |= Self::DIRTY_TEXT | Self::DIRTY_CURSOR; // `0x77c683 or ecx,5`
     }
 
     /// Collapse the selection onto the caret (`0x77ccf0`), as every delete does and as a screen

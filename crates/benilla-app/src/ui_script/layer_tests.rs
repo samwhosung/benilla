@@ -988,7 +988,8 @@ fn a_click_on_the_detail_selects_all_and_copy_returns_the_whole_error() {
 }
 
 /// Typing, pasting, Enter, Backspace and cut leave the text as it was, the selection is put back
-/// so a copy still takes it all, and the restore's own change stops after one more round.
+/// so a copy still takes it all, and the restore's own change stops after one more round, bar the
+/// box's resize, whose re-seat fires once more with the text unchanged (`0x77ba7f`).
 #[test]
 fn an_edit_of_the_detail_box_is_undone() {
     benilla_formats::wow_data_or_skip!();
@@ -1010,10 +1011,12 @@ fn an_edit_of_the_detail_box_is_undone() {
     );
     settle(&mut s);
     assert_eq!(detail_text(&s), msg, "typing");
+    // The edit shrank the multi-line box to one line and the restore grows it back, and each
+    // resize re-seats the text, raising the text bit again.
     assert_eq!(
         s.eval::<i64>("return CHANGES").unwrap(),
-        2,
-        "the edit, then its restore"
+        3,
+        "the edit, its restore, then the restore's resize"
     );
     assert_eq!(
         s.editbox_copy().as_deref(),

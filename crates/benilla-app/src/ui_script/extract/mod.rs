@@ -663,23 +663,8 @@ pub(super) fn paint_script(
     // The focused editbox's per-byte advances, measured as it draws, for click and scroll.
     if let Some(atlas) = font_atlas.as_deref_mut() {
         if let Some(req) = script.editbox_advances_request() {
-            let spec = crate::ui_text::FontSpec {
-                path: req.font.as_deref(),
-                // At the drawn size, divided by the seam alone: screen UI units, like the mouse.
-                height: crate::ui_text::drawn_px(req.height, None, s * req.scale),
-                outline: req.outline,
-                alpha_gradient: None, // alpha never changes metrics
-            };
-            let cum: Vec<f32> = crate::ui_text::line_advances(&mut atlas.lock(), &req.text, spec)
-                .iter()
-                .map(|a| a / s)
-                .collect();
-            // A multiline box also gets the draw's row starts and pitch, in UI units.
-            let (rows, cell_h) = match req.wrap_width {
-                Some(w) => crate::ui_text::line_rows(&mut atlas.lock(), &req.text, w * s, spec),
-                None => (vec![0], 0.0),
-            };
-            script.set_editbox_advances(req.id, req.key, cum, rows, cell_h / s);
+            let (cum, rows, cell_h) = crate::ui_text::editbox_advances(&mut atlas.lock(), s, &req);
+            script.set_editbox_advances(req.id, req.key, cum, rows, cell_h);
         }
     }
     // The focused editbox's text UI: its Text quad, scroll window, caret and selection spans,
