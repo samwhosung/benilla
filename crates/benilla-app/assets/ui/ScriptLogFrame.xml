@@ -18,6 +18,8 @@
         BENILLA_SCRIPTLOG_ROW_HEIGHT = 16
         -- A wrapped row would break the faux kit's fixed rows.
         BENILLA_SCRIPTLOG_ROW_CHARS = 52
+        -- The detail box's inset from its pane's top, which its anchor in the child sets.
+        BENILLA_SCRIPTLOG_DETAIL_INSET = 6
 
         -- A `seq`, not an index: indices shift when the cap evicts.
         BenillaScriptLogSelected = nil
@@ -127,7 +129,10 @@
             BenillaScriptLog_UpdateDetail()
         end
 
-        -- The selected message in full, traceback and all.
+        -- The selected message in full, traceback and all, in a box a player can select and copy
+        -- from. A text that has not changed is left alone: `SetText` collapses the selection, so a
+        -- new error arriving must not undo one about to be copied. A different text takes the
+        -- keyboard from the box, as a click on another row does.
         function BenillaScriptLog_UpdateDetail()
             local text = ""
             if BenillaScriptLogSelected then
@@ -141,12 +146,39 @@
             if text == "" then
                 text = "Select a row above to read it in full."
             end
-            getglobal("BenillaScriptLogDetailText"):SetText(text)
+            local box = getglobal("BenillaScriptLogDetailText")
+            if text ~= box.shown then
+                box.shown = text
+                box:ClearFocus()
+                box:SetText(text)
+                getglobal("BenillaScriptLogDetailRuler"):SetText(text)
+            end
         end
 
-        -- Text rects resolve after Lua runs, so the detail child is re-measured every frame.
+        -- The box is read-only: a player's edit is undone. The restore's own `SetText` raises
+        -- another change, which finds the text equal and stops; `SetText` of an equal text does
+        -- nothing. The selection an edit replaced is put back, so Ctrl+C still copies it all.
+        function BenillaScriptLogDetail_OnTextChanged()
+            local shown = this.shown or ""
+            if this:GetText() ~= shown then
+                this:SetText(shown)
+                this:HighlightText()
+            end
+            ScrollingEdit_OnTextChanged(getglobal("BenillaScriptLogDetailScroll"))
+        end
+
+        -- A multi-line box keeps the height it is given, and its own text region is pinned to its
+        -- corners, so the ruler, a FontString of the same font and width, measures the wrapped
+        -- text. The box takes that height, or the pane's when the text is shorter, so a click
+        -- anywhere in the pane lands in it. Rects resolve after Lua runs, so this is re-measured
+        -- every frame, and the child is sized to the ruler, as it was to the text before.
         function BenillaScriptLogFrame_OnUpdate()
-            BenillaScroll_ResizeChild("BenillaScriptLogDetailScroll", { "BenillaScriptLogDetailText" })
+            BenillaScroll_ResizeChild("BenillaScriptLogDetailScroll", { "BenillaScriptLogDetailRuler" })
+            local box = getglobal("BenillaScriptLogDetailText")
+            local height = getglobal("BenillaScriptLogDetailRuler"):GetHeight()
+            local pane = getglobal("BenillaScriptLogDetailScroll"):GetHeight() - BENILLA_SCRIPTLOG_DETAIL_INSET
+            if height < pane then height = pane end
+            if math.abs(box:GetHeight() - height) >= 1 then box:SetHeight(height) end
         end
 
         function BenillaScriptLogRow_OnClick(button)
@@ -163,6 +195,8 @@
             -- Masks the square icon to the portrait ring.
             SetPortraitToTexture("BenillaScriptLogFramePortrait",
                 "Interface\\Icons\\INV_Misc_Note_01")
+            -- The ruler only measures; the box draws the text.
+            getglobal("BenillaScriptLogDetailRuler"):SetAlpha(0)
         end
 
         -- The list frame's OnVerticalScroll repaints.
@@ -309,13 +343,33 @@
                         <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"/></Anchors>
                         <Layers>
                             <Layer level="ARTWORK">
-                                <!-- 270 wide so the traceback wraps rather than clips. -->
-                                <FontString name="BenillaScriptLogDetailText" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP" text="">
+                                <!-- Unseen: sizes the box (BenillaScriptLogFrame_OnUpdate). 270 wide so the
+                                     traceback wraps rather than clips. -->
+                                <FontString name="BenillaScriptLogDetailRuler" inherits="GameFontHighlightSmall" justifyH="LEFT" justifyV="TOP" text="">
                                     <Size><AbsDimension x="270" y="0"/></Size>
                                     <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="6" y="-6"/></Offset></Anchor></Anchors>
                                 </FontString>
                             </Layer>
                         </Layers>
+                        <Frames>
+                            <!-- A multi-line box in a scroll frame as MailFrame.xml:616-649 hosts the mail
+                                 body: `autoFocus="false"`, so the keyboard stays with the game until a
+                                 click, and Escape clears the focus. No `letters`, so the whole error
+                                 goes in. Read-only through OnTextChanged; a click selects it all, so
+                                 Ctrl+C copies the error. Not wired: the stock scroll-to-caret
+                                 (UIPanelTemplates.lua:314-342), since selecting all leaves the caret at
+                                 the end and a click would scroll a long traceback to its bottom. -->
+                            <EditBox name="BenillaScriptLogDetailText" multiLine="true" autoFocus="false">
+                                <Size><AbsDimension x="270" y="113"/></Size>
+                                <Anchors><Anchor point="TOPLEFT" relativePoint="TOPLEFT"><Offset><AbsDimension x="6" y="-6"/></Offset></Anchor></Anchors>
+                                <Scripts>
+                                    <OnTextChanged>BenillaScriptLogDetail_OnTextChanged()</OnTextChanged>
+                                    <OnEditFocusGained>this:HighlightText()</OnEditFocusGained>
+                                    <OnEscapePressed>this:ClearFocus()</OnEscapePressed>
+                                </Scripts>
+                                <FontString inherits="GameFontHighlightSmall"/>
+                            </EditBox>
+                        </Frames>
                     </Frame>
                 </Frames>
             </ScrollFrame>

@@ -3,7 +3,7 @@
 //! row, as 1.12.1 loads FrameXML (`UI_Init 0x48fbf0`: `FrameXML.toc` at `0x48ffed`, the addons at
 //! `0x4900a3`, only the latter through `AddOn_Load`); and a dev build boots without it.
 
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::{EditAction, EditUnit, QuadContent, ScriptValue, UiScript};
 
 use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
 
@@ -737,4 +737,250 @@ fn the_error_log_lays_out_on_the_trainer_art_as_the_class_trainer_does() {
             i + 1
         );
     }
+}
+
+/// A traceback long enough to wrap the detail box and to pass any small `letters` cap, with a
+/// newline and a lone `|` in it, which the box must hold byte for byte.
+const LONG_ERROR: &str = "Interface/AddOns/Boom/Boom.lua:12: bad argument | #1\\nStack:\\n";
+
+/// The `/errors` window open on the trainer's kit with `LONG_ERROR` logged and its row selected,
+/// settled a few frames. Returns the script and the message as Lua holds it.
+fn error_log_selected() -> (UiScript, String) {
+    let mut s = super::trainer_tests::trainer_script();
+    s.run("SlashCmdList = {}").unwrap();
+    super::test_ui::load_ui_strict(&s, "ScriptLogFrame.xml");
+    s.run("ShowUIPanel(BenillaScriptLogFrame)").unwrap();
+    s.run(&format!(
+        "MSG = \"{LONG_ERROR}\" .. string.rep(\"  [C]: in function `Boom'\\n\", 60)"
+    ))
+    .unwrap();
+    s.run("BenillaScriptLog_Record(MSG)").unwrap();
+    settle(&mut s);
+    s.run("BenillaScriptLogRow1:Click()").unwrap();
+    settle(&mut s);
+    let msg = s.eval::<String>("return MSG").unwrap();
+    assert!(msg.len() > 1500, "a message past any small letters cap");
+    (s, msg)
+}
+
+/// A few frames: the layout resolves after Lua runs, and an edit's `OnTextChanged` fires on the tick.
+fn settle(s: &mut UiScript) {
+    for _ in 0..5 {
+        s.resolve();
+        s.tick(0.016);
+    }
+    s.resolve();
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// A left click near the detail box's top left, inside its pane whatever the text's height, which
+/// focuses it as the game's mouse does.
+fn click_detail(s: &mut UiScript) {
+    let (x, y) = s
+        .eval::<(f64, f64)>(
+            "return BenillaScriptLogDetailText:GetLeft() + 20, BenillaScriptLogDetailText:GetTop() - 8",
+        )
+        .unwrap();
+    s.mouse_button(x as f32, y as f32, "LeftButton", true);
+    s.mouse_button(x as f32, y as f32, "LeftButton", false);
+    settle(s);
+    assert_eq!(
+        s.focused_editbox_name().as_deref(),
+        Some("BenillaScriptLogDetailText"),
+        "the click focused the detail box"
+    );
+}
+
+fn detail_text(s: &UiScript) -> String {
+    s.eval("return BenillaScriptLogDetailText:GetText()")
+        .unwrap()
+}
+
+/// The selected error's text is in a multi-line EditBox, whole: no `letters` cap, no change to a
+/// newline or a `|`. Opening the window takes no focus, so the movement keys keep working until a
+/// click (the stock mail body's `autoFocus="false"`, `MailFrame.xml:616`), and the box keeps its
+/// text in view: it is as tall as the wrapped text, which the scroll child then covers.
+#[test]
+fn the_error_logs_detail_is_a_box_holding_the_whole_error() {
+    benilla_formats::wow_data_or_skip!();
+    let (mut s, msg) = error_log_selected();
+    assert_eq!(
+        s.eval::<String>("return BenillaScriptLogDetailText:GetObjectType()")
+            .unwrap(),
+        "EditBox"
+    );
+    assert_eq!(detail_text(&s), msg, "the full message, traceback and all");
+    assert_eq!(
+        s.eval::<i64>("return BenillaScriptLogDetailText:GetMaxLetters()")
+            .unwrap(),
+        0,
+        "no letters cap"
+    );
+
+    // The text draws once, from where the FontString drew it: the ruler is in the tree but unseen.
+    let (left, top) = s
+        .eval::<(f64, f64)>(
+            "return BenillaScriptLogDetailText:GetLeft(), BenillaScriptLogDetailText:GetTop()",
+        )
+        .unwrap();
+    let drawn: Vec<_> = s
+        .extract()
+        .into_iter()
+        .filter(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if *t == msg))
+        .collect();
+    let seen: Vec<_> = drawn.iter().filter(|q| q.alpha > 0.0).collect();
+    assert_eq!(seen.len(), 1, "the message draws once: {drawn:#?}");
+    let rect = seen[0].rect.expect("the drawn text has a rect");
+    assert_eq!(
+        (rect.left, rect.top),
+        (left as f32, top as f32),
+        "at the box's top left, the inset the FontString had"
+    );
+
+    // Nothing took the keyboard on its own: a key with no box focused is not consumed.
+    assert!(!s.has_keyboard_focus());
+    assert!(!s.char_input("w"), "no autoFocus box waits for a key");
+    assert!(!s.has_keyboard_focus());
+
+    // The text fits its box, and the scroll child reaches the box's bottom.
+    let (box_top, box_bottom, ruler_height, child_bottom, range, pane) = s
+        .eval::<(f64, f64, f64, f64, f64, f64)>(
+            "return BenillaScriptLogDetailText:GetTop(), BenillaScriptLogDetailText:GetBottom(), \
+                    BenillaScriptLogDetailRuler:GetHeight(), \
+                    BenillaScriptLogDetailScrollChild:GetBottom(), \
+                    BenillaScriptLogDetailScroll:GetVerticalScrollRange(), \
+                    BenillaScriptLogDetailScroll:GetHeight()",
+        )
+        .unwrap();
+    assert!(
+        ruler_height > pane,
+        "sanity: the wrapped text is taller than the pane ({ruler_height} vs {pane})"
+    );
+    assert!(
+        box_top - box_bottom >= ruler_height - 0.5,
+        "the box {} is as tall as its text {ruler_height}",
+        box_top - box_bottom
+    );
+    assert!(
+        child_bottom <= box_bottom + 0.5,
+        "the child reaches the box's bottom"
+    );
+    assert!(range > 0.0, "a traceback taller than the pane scrolls");
+
+    // A short text leaves the box the pane's height, so a click anywhere in the pane is in it.
+    s.run("BenillaScriptLog_Record('short') BenillaScriptLogRow2:Click()")
+        .unwrap();
+    settle(&mut s);
+    assert_eq!(detail_text(&s), "short");
+    let (h, pane) = s
+        .eval::<(f64, f64)>(
+            "return BenillaScriptLogDetailText:GetHeight(), BenillaScriptLogDetailScroll:GetHeight()",
+        )
+        .unwrap();
+    assert_eq!(h, pane - 6.0, "the box fills the pane below its inset");
+    // A click at the pane's foot, far below the one line, is still in the box.
+    let (x, y) = s
+        .eval::<(f64, f64)>(
+            "return BenillaScriptLogDetailScroll:GetLeft() + 40, BenillaScriptLogDetailScroll:GetBottom() + 6",
+        )
+        .unwrap();
+    s.mouse_button(x as f32, y as f32, "LeftButton", true);
+    s.mouse_button(x as f32, y as f32, "LeftButton", false);
+    assert_eq!(
+        s.focused_editbox_name().as_deref(),
+        Some("BenillaScriptLogDetailText")
+    );
+}
+
+/// A click selects the whole error, so Ctrl+C (`UiScript::editbox_copy`) copies all of it; an
+/// error arriving meanwhile leaves that selection alone, and another row takes the keyboard off
+/// the box with the new text.
+#[test]
+fn a_click_on_the_detail_selects_all_and_copy_returns_the_whole_error() {
+    benilla_formats::wow_data_or_skip!();
+    let (mut s, msg) = error_log_selected();
+    assert_eq!(s.editbox_copy(), None, "nothing to copy before a click");
+    click_detail(&mut s);
+    assert_eq!(s.editbox_copy().as_deref(), Some(msg.as_str()));
+
+    // The window's update repaints on every new error, and must not collapse the selection.
+    s.run("BenillaScriptLog_Record('another error')").unwrap();
+    settle(&mut s);
+    assert_eq!(s.editbox_copy().as_deref(), Some(msg.as_str()));
+
+    // Another row: the text changes and the box lets go of the keyboard.
+    s.run("BenillaScriptLogRow2:Click()").unwrap();
+    settle(&mut s);
+    assert_eq!(detail_text(&s), "another error");
+    assert!(!s.has_keyboard_focus());
+    click_detail(&mut s);
+    assert_eq!(s.editbox_copy().as_deref(), Some("another error"));
+}
+
+/// Typing, pasting, Enter, Backspace and cut leave the text as it was, the selection is put back
+/// so a copy still takes it all, and the restore's own change stops after one more round.
+#[test]
+fn an_edit_of_the_detail_box_is_undone() {
+    benilla_formats::wow_data_or_skip!();
+    let (mut s, msg) = error_log_selected();
+    click_detail(&mut s);
+    s.run(
+        "CHANGES = 0 \
+         local handler = BenillaScriptLogDetail_OnTextChanged \
+         BenillaScriptLogDetail_OnTextChanged = function() CHANGES = CHANGES + 1 handler() end",
+    )
+    .unwrap();
+
+    // With everything selected, a typed letter replaces the whole text until the tick restores it.
+    assert!(s.char_input("x"));
+    assert_eq!(
+        detail_text(&s),
+        "x",
+        "the edit lands first, as in the reference"
+    );
+    settle(&mut s);
+    assert_eq!(detail_text(&s), msg, "typing");
+    assert_eq!(
+        s.eval::<i64>("return CHANGES").unwrap(),
+        2,
+        "the edit, then its restore"
+    );
+    assert_eq!(
+        s.editbox_copy().as_deref(),
+        Some(msg.as_str()),
+        "still all selected"
+    );
+
+    assert!(s.paste("pasted\nlines"));
+    settle(&mut s);
+    assert_eq!(detail_text(&s), msg, "pasting");
+
+    assert!(s.key_input("ENTER"));
+    settle(&mut s);
+    assert_eq!(detail_text(&s), msg, "Enter");
+
+    s.editbox_action(EditAction::Delete {
+        unit: EditUnit::Char,
+        back: true,
+    });
+    settle(&mut s);
+    assert_eq!(detail_text(&s), msg, "Backspace");
+
+    // A cut still copies, then the box takes the text back.
+    assert_eq!(s.editbox_cut().as_deref(), Some(msg.as_str()));
+    settle(&mut s);
+    assert_eq!(detail_text(&s), msg, "cut");
+    assert_eq!(s.editbox_copy().as_deref(), Some(msg.as_str()));
+}
+
+/// Escape clears the box's focus (`MailFrame.xml:644`), and leaves its text.
+#[test]
+fn escape_clears_the_detail_boxs_focus() {
+    benilla_formats::wow_data_or_skip!();
+    let (mut s, msg) = error_log_selected();
+    click_detail(&mut s);
+    assert!(s.key_input("ESCAPE"));
+    settle(&mut s);
+    assert!(!s.has_keyboard_focus(), "Escape let go of the keyboard");
+    assert_eq!(detail_text(&s), msg);
 }
