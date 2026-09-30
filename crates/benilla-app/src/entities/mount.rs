@@ -44,6 +44,8 @@ pub(super) fn spawn_mount_child(
     display: u32,
     scale: f32,
     fade_skip: bool,
+    // The rider's arrival, so the mount rides the rider's appear ramp.
+    arrival: Option<super::Arrival>,
 ) -> Entity {
     let child = commands
         .spawn((
@@ -57,6 +59,9 @@ pub(super) fn spawn_mount_child(
             Visibility::default(),
         ))
         .id();
+    if let Some(arrival) = arrival {
+        commands.entity(child).insert(arrival);
+    }
     if fade_skip {
         commands.entity(child).insert(super::equipment::Reattached);
     }
@@ -120,13 +125,21 @@ pub(super) fn seat_or_spawn_mount(
     child: Option<Entity>,
     mount_display: u32,
     fade_skip: bool,
+    arrival: Option<super::Arrival>,
 ) -> Seat {
     // `0x607a75`: `SCALE_X` × `creatureModelScale` alone, without `CreatureModelData.modelScale`.
     let mount_scale = creatures
         .and_then(|c| c.catalog.display_scale(mount_display))
         .unwrap_or(1.0);
     let Some(child) = child else {
-        spawn_mount_child(commands, unit, mount_display, mount_scale, fade_skip);
+        spawn_mount_child(
+            commands,
+            unit,
+            mount_display,
+            mount_scale,
+            fade_skip,
+            arrival,
+        );
         return Seat::Wait;
     };
     // Built for a display the field has left, or gone: drop it and start over next pass.
@@ -226,6 +239,7 @@ pub(super) fn reseat_mounts(
             &ObjectStore,
             Option<&AppliedMount>,
             Option<&MountChild>,
+            Option<&super::Arrival>,
         ),
         // A torn-down unit is freed, not re-seated (`0x464920`).
         (
@@ -239,7 +253,7 @@ pub(super) fn reseat_mounts(
     conforms: Query<(), With<super::conform::ConformNode>>,
     creatures: Option<Res<super::Creatures>>,
 ) {
-    for (entity, net, store, applied, child) in &units {
+    for (entity, net, store, applied, child, arrival) in &units {
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
             continue;
         }
@@ -297,6 +311,7 @@ pub(super) fn reseat_mounts(
             child,
             live,
             true,
+            arrival.copied(),
         ) {
             Seat::Wait => {}
             Seat::Frame(anchor) => {

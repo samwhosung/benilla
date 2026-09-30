@@ -410,6 +410,7 @@ pub(super) fn attach_entity_visuals(
                     mount_child.map(|&super::mount::MountChild(c)| c),
                     mount_display,
                     reattached,
+                    arrival.copied(),
                 ) {
                     super::mount::Seat::Wait => continue,
                     super::mount::Seat::Frame(anchor) => rider_root = anchor,
@@ -678,7 +679,10 @@ pub(super) fn attach_entity_visuals(
                 fade: if reattached {
                     JoinedFade::Steady
                 } else {
-                    JoinedFade::Pending { since: arrived }
+                    JoinedFade::Pending {
+                        since: now,
+                        arrived,
+                    }
                 },
             };
             // The shown batches spawn as material groups (`merge`).
@@ -706,9 +710,12 @@ pub(super) fn attach_entity_visuals(
             }
             // A `Reattached` rebuild drops any in-flight fade, as its parts spawned steady.
             if unit_will_fade {
-                commands
-                    .entity(entity)
-                    .insert(benilla_world::model_fade::UnitAppearFade::Pending { since: arrived });
+                commands.entity(entity).insert(
+                    benilla_world::model_fade::UnitAppearFade::Pending {
+                        since: now,
+                        arrived,
+                    },
+                );
             } else if reattached {
                 commands
                     .entity(entity)

@@ -271,8 +271,11 @@ fn a_body_that_waited_for_its_atlas_fades_from_its_arrival() {
         app.world()
             .get::<benilla_world::model_fade::UnitAppearFade>(player)
             .copied(),
-        Some(benilla_world::model_fade::UnitAppearFade::Pending { since: arrived }),
-        "its ramp runs from its arrival, not from its build"
+        Some(benilla_world::model_fade::UnitAppearFade::Pending {
+            since: built_at,
+            arrived,
+        }),
+        "its ramp runs from its arrival, its backstop from its build"
     );
 }
 

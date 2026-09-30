@@ -660,7 +660,10 @@ mod tests {
             bake_center: Vec3::ZERO,
             idle_aabb: None,
             now: 0.0,
-            fade: JoinedFade::Pending { since: SINCE },
+            fade: JoinedFade::Pending {
+                since: SINCE,
+                arrived: SINCE,
+            },
         };
         let mut own = TestOwn::default();
         let mut queue = bevy::ecs::world::CommandQueue::default();

@@ -1253,7 +1253,10 @@ mod tests {
                 items,
                 bones,
                 Transform::default(),
-                UnitAppearFade::Pending { since: SINCE },
+                UnitAppearFade::Pending {
+                    since: SINCE,
+                    arrived: SINCE,
+                },
             ))
             .id();
         let pose = benilla_world::testing::test_rig_pose(wearer, &[Vec3::ZERO; 4]);
@@ -1341,7 +1344,10 @@ mod tests {
                 items,
                 bones,
                 Transform::default(),
-                UnitAppearFade::Pending { since: SINCE },
+                UnitAppearFade::Pending {
+                    since: SINCE,
+                    arrived: SINCE,
+                },
             ))
             .id();
         let pose = benilla_world::testing::test_rig_pose(wearer, &[Vec3::ZERO; 4]);

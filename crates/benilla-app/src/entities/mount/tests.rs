@@ -286,3 +286,35 @@ fn a_mount_without_a_seat_leaves_the_body_at_the_unit_matrix() {
     assert_eq!(s.frame(), s.rider);
     assert!(s.attachments_alive());
 }
+
+/// A mount child rides its rider's appear ramp: it carries the rider's arrival, which the arrival
+/// stamp leaves alone, as the reference writes the unit's one fade onto the mount model
+/// (`0x614ae6`–`0x614af4`, `0x614b9e`–`0x614bba`).
+#[test]
+fn a_mount_child_carries_its_riders_arrival() {
+    use crate::entities::Arrival;
+    use bevy::ecs::world::CommandQueue;
+
+    let mut app = App::new();
+    app.init_resource::<Time>()
+        .add_systems(Update, crate::entities::stamp_arrivals);
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_to(std::time::Duration::from_secs(5));
+    let rider = app
+        .world_mut()
+        .spawn((Transform::default(), Visibility::default(), Arrival(1.0)))
+        .id();
+    let mut queue = CommandQueue::default();
+    let child = {
+        let mut commands = Commands::new(&mut queue, app.world());
+        spawn_mount_child(&mut commands, rider, 7, 1.0, false, Some(Arrival(1.0)))
+    };
+    queue.apply(app.world_mut());
+    app.update();
+    assert_eq!(
+        app.world().get::<Arrival>(child),
+        Some(&Arrival(1.0)),
+        "the mount fades on its rider's clock, not from its own spawn"
+    );
+}

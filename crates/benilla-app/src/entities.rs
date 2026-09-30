@@ -379,10 +379,12 @@ struct Characters(CharacterGeosets);
 #[derive(Resource)]
 pub(crate) struct CharCreate(pub(crate) CharCreateCatalog);
 
-/// When a net entity arrived, on the appear fade's clock: the reference stamps its fade as the
-/// create block's appear handler runs (`0x465c50` → `0x613af0` → `0x614f80`), before its model or
-/// composite is ready, so the ramp runs from here however long the visual waits.
-#[derive(Component, Clone, Copy)]
+/// When a net entity arrived, on the appear fade's clock: the reference stamps a unit's fade as its
+/// create block is processed (`0x465c50` → `0x5fb880`, a player's through `0x5debe0` →
+/// `0x613af0` at `0x5fb956` → `0x614f80`), before its model or composite is ready, so the ramp runs
+/// from here however long the visual waits. A mount child carries its rider's, as the reference
+/// writes the unit's one fade onto the mount model (`0x614ae6`–`0x614af4`, `0x614b9e`–`0x614bba`).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Arrival(pub(crate) f32);
 
 /// Stamp each net entity's [`Arrival`] the frame it streams in.
