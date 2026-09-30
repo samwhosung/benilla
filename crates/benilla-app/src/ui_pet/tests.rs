@@ -162,28 +162,6 @@ fn a_disabled_bar_reads_passive_and_lights_no_command() {
 }
 
 #[test]
-fn usability_is_the_disabled_bit_and_the_pets_crowd_control() {
-    let mut bar = PetBar {
-        spells: state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE),
-        ..Default::default()
-    };
-    assert!(actions_usable(&bar, Some(0)));
-    assert!(
-        actions_usable(&bar, None),
-        "a missing descriptor is not a no"
-    );
-
-    for flag in [0x0004_0000, 0x0040_0000, 0x0080_0000] {
-        assert!(!actions_usable(&bar, Some(flag)), "flag {flag:#x} disables");
-    }
-    // Those three are stunned, confused, fleeing; POSSESSED is not among them.
-    assert!(actions_usable(&bar, Some(0x0100_0000)));
-
-    bar.spells.state |= PET_STATE_BAR_DISABLED;
-    assert!(!actions_usable(&bar, Some(0)));
-}
-
-#[test]
 fn spell_slots_read_their_autocast_off_bits_31_and_30() {
     let bar = state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE);
     let claw = spell("Claw", Some("Rank 3"));
@@ -781,6 +759,7 @@ fn a_cooldown_alone_is_pushed_with_no_event_from_the_bar_feed() {
     let mut app = App::new();
     app.init_resource::<crate::ui_script::UiClock>()
         .init_resource::<crate::net::GuidIndex>()
+        .init_resource::<crate::net::SelfGuid>()
         .insert_resource(crate::ui_action::Spells {
             catalog: benilla_formats::SpellCatalog::from_displays(HashMap::from([(CLAW, claw())])),
             ..crate::ui_action::Spells::empty_for_tests()

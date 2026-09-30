@@ -23,7 +23,7 @@ use benilla_ui::script::{PetBookState, SpellSlotView, UiScript};
 
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_action::Spells;
-use crate::ui_pet::PetBar;
+use crate::ui_pet::{PetBar, PetUnit};
 use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
@@ -173,7 +173,8 @@ fn slot_view(
 /// `CastSpell(id, "pet", onSelf)`: cancel first, as on the bar (`0x4b33af`-`0x4b3461`), a spell
 /// whose aura is on the pet sending `CMSG_PET_CANCEL_AURA` (0x26B) instead of the order; else
 /// `CMSG_PET_ACTION` at the selection as the calls before it left it, or with `onSelf` at the
-/// player.
+/// player. Unlike the bar's press it asks no usability predicate: no call site of `0x4bcf70` is
+/// in this path.
 pub(crate) fn cast_pet_spell(p: &mut crate::ui_pet::PetPress, spell_id: u32, on_self: bool) {
     let pet_guid = p.bar.spells.pet_guid;
     if pet_guid == 0 {
@@ -203,11 +204,14 @@ pub(crate) fn cast_pet_spell(p: &mut crate::ui_pet::PetPress, spell_id: u32, on_
     });
 }
 
-/// Drains the pet book's `ToggleSpellAutocast` intents.
-fn drain_pet_book(
+/// Drains the pet book's `ToggleSpellAutocast` intents. Each asks the usability predicate before
+/// it looks anything up (`0x4bccce`), so an unusable pet's toggle flips, repaints and sends
+/// nothing.
+pub(crate) fn drain_pet_book(
     script: Option<NonSendMut<UiScript>>,
     mut bar: ResMut<PetBar>,
     commands: Res<NetCommands>,
+    pet: PetUnit,
 ) {
     let Some(mut script) = script else {
         return;
@@ -222,6 +226,10 @@ fn drain_pet_book(
         return;
     }
     for spell_id in autocasts {
+        if !pet.actions_usable(&bar) {
+            debug!("ui_pet_book: autocast {spell_id} refused, the pet's actions are not usable");
+            continue;
+        }
         let Some(on) = flip_autocast(&mut bar.spells, spell_id) else {
             continue;
         };

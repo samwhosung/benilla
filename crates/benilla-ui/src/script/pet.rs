@@ -104,7 +104,8 @@ pub struct PetStats {
 pub(crate) struct PetBarState {
     /// `PetHasActionBar()`: there is a bar, even one of ten empty slots.
     pub(crate) has_bar: bool,
-    /// `GetPetActionsUsable()`: false desaturates the whole bar.
+    /// `GetPetActionsUsable()` (`0x4bcf70`): false desaturates the whole bar, and refuses the
+    /// drag's bar writes with it (`0x4bc9d0`).
     pub(crate) actions_usable: bool,
     pub(crate) slots: Vec<StoredPetAction>,
     /// `HasPetUI`'s first return: a pet with a nonzero `UNIT_FIELD_PETNUMBER` (`0x4be697`). Not
@@ -113,7 +114,8 @@ pub(crate) struct PetBarState {
     pub(crate) stats: PetStats,
     /// `PickupPetAction`'s gate, `UNIT_FLAG_POSSESSED` clear (`0x4be1c1`), which blocks the drop
     /// as well as the pick-up. Not `actions_usable`: possession does not grey the bar, and the
-    /// flags that grey it do not block a drag.
+    /// pick-up itself does not ask it. The writes at both ends do (`0x4bc9d0`), so a greyed bar
+    /// still lifts an action onto the cursor and then writes nothing.
     pub(crate) pickup_allowed: bool,
     /// `PetCanBeAbandoned()`: a kept pet rather than a summon. It forks the pet menu: paperdoll,
     /// rename and abandon show when true, dismiss only when false (`UnitPopup.lua:402-417`).

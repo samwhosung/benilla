@@ -62,7 +62,8 @@ impl PetPress<'_, '_> {
     /// Send under [`PetBar`]'s pet guid, never one from the VM, so a press queued as the pet
     /// leaves dies here. `CMSG_PET_ACTION` echoes the slot's word, which the server dispatches on
     /// its type, with our selection as the target; `HandlePetAction` drops a target the spell
-    /// does not want.
+    /// does not want. The dispatcher's first act is the usability predicate (`0x4bd1f2`), and a
+    /// zero answer leaves for the epilogue (`0x4bd1f9`) ahead of everything below it.
     fn press(&mut self, slot: u32, entry: PetActionEntry) {
         let Self {
             bar,
@@ -75,20 +76,19 @@ impl PetPress<'_, '_> {
             pick,
             seam,
         } = self;
-        let pet_guid = bar.spells.pet_guid;
-        if pet_guid == 0 {
-            debug!("ui_pet: dropping a queued pet press — the bar is gone");
+        let Some(pet_store) = pet.usable_pet(bar) else {
+            debug!("ui_pet: slot {slot} refused, the pet's actions are not usable — no packet");
             return;
-        }
-        let pet_store = pet.store(pet_guid);
-        let possessing = possessing(pet_store, pet.self_guid.0);
+        };
+        let pet_guid = bar.spells.pet_guid;
+        let possessing = possessing(Some(pet_store), pet.self_guid.0);
         // A press on a spell the pet is running cancels its aura and sends no `CMSG_PET_ACTION`
         // (`0x4bd240`-`0x4bd2ad`); nothing latches, the icon follows the pet's aura field.
         let display = entry
             .is_spell()
             .then(|| spells.as_ref().and_then(|s| s.catalog.get(entry.action())))
             .flatten();
-        if let Some(spell_id) = active_aura_press(entry, pet_store, display) {
+        if let Some(spell_id) = active_aura_press(entry, Some(pet_store), display) {
             debug!("ui_pet: slot {slot} cancels its own aura (spell {spell_id}) — no PetAction");
             let _ = commands
                 .0
@@ -96,15 +96,15 @@ impl PetPress<'_, '_> {
             return;
         }
         // The spell arm leaves for the epilogue, before its GCD and its send, unless the slot's
-        // `Spell.dbc` record, the active player and the pet's object all resolve (`0x4bd2e7`-
-        // `0x4bd2fe`, `0x4bd31a`-`0x4bd324`, `0x4bd346`-`0x4bd34f`); an id past the table's
-        // maximum has no record. Commands and reactions have no such exit (`0x4bd391`, `0x4bd3a3`).
+        // `Spell.dbc` record resolves (`0x4bd2e7`-`0x4bd2fe`); an id past the table's maximum has
+        // none. Its lookups of the active player and the pet (`0x4bd31a`-`0x4bd324`,
+        // `0x4bd346`-`0x4bd34f`) repeat the predicate's, on the same guids and typemasks, and
+        // cannot fail past it. Commands and reactions have no exit of their own (`0x4bd391`,
+        // `0x4bd3a3`).
         let spell = if entry.is_spell() {
-            let Some(spell) =
-                display.filter(|_| pet_store.is_some() && pet.player_store().is_some())
-            else {
+            let Some(spell) = display else {
                 debug!(
-                    "ui_pet: slot {slot} (spell {}) has no record, player or pet object — no packet",
+                    "ui_pet: slot {slot} (spell {}) has no record — no packet",
                     entry.action()
                 );
                 return;
@@ -117,7 +117,7 @@ impl PetPress<'_, '_> {
         // pick can move the selection; every other press sends the selection as is (`0x4bd212`).
         let mut target_guid = selection.guid.unwrap_or(0);
         let refused = if is_attack_order(entry) {
-            crate::ui_action::attack_actor_refusal(pet_store, pet.self_guid.0, ui_errors)
+            crate::ui_action::attack_actor_refusal(Some(pet_store), pet.self_guid.0, ui_errors)
                 || match pick.target(None, selection, seam, ui_errors) {
                     Some(guid) => {
                         target_guid = guid;
@@ -155,9 +155,9 @@ impl PetPress<'_, '_> {
     }
 }
 
-/// The spell arm's tail (`0x4bd355`-`0x4bd36e`) for a press whose record, player and pet object
-/// resolved: one that neither cancels an aura nor takes the generic cast entry `0x6e4b60`
-/// (`AttributesEx4 & 0x20`, or the bar's unit possessed) calls `StartGlobalCooldown
+/// The spell arm's tail (`0x4bd355`-`0x4bd36e`) for a press past the usability gate whose
+/// `Spell.dbc` record resolved: one that neither cancels an aura nor takes the generic cast entry
+/// `0x6e4b60` (`AttributesEx4 & 0x20`, or the bar's unit possessed) calls `StartGlobalCooldown
 /// 0x6e2de0(spellId, 1)` before the send (`0x4bd444`): the spell's own `StartRecovery*` pair,
 /// under op 21, into the pet's list (`0xcecaec + 0x18`). The insert moves the list's generation,
 /// which carries the flush that follows it (`0x6e2e77`, `0x6e2e8e`) to
@@ -183,11 +183,14 @@ pub(super) fn arm_pet_gcd(
 }
 
 /// Send the bar's other intents under [`PetBar`]'s pet guid: the autocast toggles, the stops and
-/// the drag writes.
+/// the drag writes. A toggle asks the usability predicate first (`0x4bcbcf`), so on an unusable
+/// pet it flips nothing and sends nothing. The stops do not (`0x4bd650`); the drag's writes were
+/// gated where the VM applied them (`0x4bc9d0`), on the answer the bar last pushed.
 pub(super) fn drain_pet_actions(
     script: Option<NonSendMut<UiScript>>,
     mut bar: ResMut<PetBar>,
     commands: Res<NetCommands>,
+    pet: PetUnit,
 ) {
     let Some(mut script) = script else {
         return;
@@ -207,6 +210,12 @@ pub(super) fn drain_pet_actions(
     // (`0x4bcbf7`: any right-click on a token) signals nothing, so after `OnClick`'s
     // `SetChecked(0)` that button stays unlit until the next repaint, as in the reference.
     for slot in toggles {
+        if !pet.actions_usable(&bar) {
+            debug!(
+                "ui_pet: autocast toggle on slot {slot} refused, the pet's actions are not usable"
+            );
+            continue;
+        }
         let Some(flipped) = toggle_slot_autocast(&mut bar, slot) else {
             continue;
         };

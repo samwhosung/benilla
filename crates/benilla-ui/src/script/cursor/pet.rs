@@ -3,6 +3,9 @@
 //! payload, a word carried verbatim (`0x4bce00`), so a drag only rearranges the bar the server
 //! sent. A drop clears the cursor before deciding (`0x495190`) and only a write that relocated
 //! nothing refills it (`0x4bce38`), so a refused drop loses the payload, as in the reference.
+//! Both bar writes, the drop's (`0x4bce33`) and the pickup's blank (`0x4be27f`), ask the pet's
+//! usability predicate first (`0x4bc9d0`): on an unusable pet the drop writes nothing and refills
+//! nothing, and the pickup holds its action with the slot left as it was.
 
 use mlua::Lua;
 
@@ -166,8 +169,14 @@ fn slot_index(model: &Model, slot: u32) -> Option<usize> {
 }
 
 /// Run [`assign`] on the engine's optimistic mirror of the ten words and queue the send; the
-/// pickup's blank goes through it too, as in the reference (`0x4be268`).
+/// pickup's blank goes through it too, as in the reference (`0x4be268`). `0x4bc9a0` takes its
+/// send flag from both callers as 1, which makes it ask `0x4bcf70` before anything else
+/// (`0x4bc9c7`-`0x4bc9d7`); the app's answer, the one the bar's `GetPetActionsUsable` reads, is
+/// `PetBarState::actions_usable`.
 fn write_slot(model: &mut Model, target: usize, source: u32, passive: bool) -> Option<Assigned> {
+    if !model.pet_bar.actions_usable {
+        return None;
+    }
     let mut words: Vec<u32> = model.pet_bar.slots.iter().map(|s| s.view.packed).collect();
     let assigned = assign(&mut words, target, source, passive)?;
 
@@ -367,6 +376,64 @@ mod tests {
             panic!("still picked up")
         };
         assert_eq!(p.texture, None);
+    }
+
+    /// `0x4bc9d0`: the write asks the pet's usability predicate first, and the app's answer is the
+    /// one the bar last pushed. The pickup still lifts its action (`0x4be25d`), but its blank
+    /// (`0x4be27f`) is refused, so the slot keeps the word and nothing is sent; the drop clears the
+    /// cursor before it decides (`0x4be220`), and its refused write refills nothing (`0x4bce38`).
+    #[test]
+    fn an_unusable_bar_writes_nothing_at_either_end() {
+        let mut s = UiScript::new().unwrap();
+        s.set_pet_actions(true, false, true, hunter_bar());
+
+        assert!(s.eval::<bool>("return PickupPetAction(4)").unwrap());
+        assert!(
+            matches!(s.cursor_payload(), Some(crate::script::CursorPayload::PetAction(c))
+                if c.src_slot == 4 && c.packed == CLAW),
+            "the pickup lifted Claw: {:?}",
+            s.cursor_payload()
+        );
+        assert!(
+            s.take_pet_set_actions().is_empty(),
+            "but its blank was refused, so nothing is sent"
+        );
+
+        s.run("PickupPetAction(5)").unwrap();
+        assert!(
+            s.cursor_payload().is_none(),
+            "the drop cleared the cursor and nothing refilled it"
+        );
+        assert!(s.take_pet_set_actions().is_empty(), "and wrote nothing");
+
+        // Slot 4 was never blanked: a second pickup lifts the whole word, autocast bits and all,
+        // where a blanked slot would give the type with id 0.
+        s.run("PickupPetAction(4)").unwrap();
+        assert!(
+            matches!(s.cursor_payload(), Some(crate::script::CursorPayload::PetAction(c))
+                if c.packed == CLAW),
+            "{:?}",
+            s.cursor_payload()
+        );
+        // Growl kept its slot too: the refused drop never displaced it.
+        s.run("ClearCursor() PickupPetAction(5)").unwrap();
+        assert!(matches!(
+            s.cursor_payload(),
+            Some(crate::script::CursorPayload::PetAction(c)) if c.packed == GROWL
+        ));
+        assert!(s.take_pet_set_actions().is_empty());
+    }
+
+    /// The same bar made usable takes the same two writes, which is what the test above stops.
+    #[test]
+    fn a_usable_bar_takes_both_writes() {
+        let mut s = bar_script();
+        s.run("PickupPetAction(4) PickupPetAction(5)").unwrap();
+        assert_eq!(
+            s.take_pet_set_actions().len(),
+            2,
+            "the pickup's blank and the drop"
+        );
     }
 
     #[test]

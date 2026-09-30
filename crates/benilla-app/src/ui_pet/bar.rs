@@ -11,18 +11,11 @@ use benilla_protocol::messages::{
 };
 use benilla_ui::script::{PetActionView, UiScript};
 
-use crate::net::{GuidIndex, ObjectStore};
+use crate::net::ObjectStore;
 use crate::target::UNIT_FLAG_POSSESSED;
 use crate::ui_action::Spells;
 
-use super::PetBar;
-
-/// `GetPetActionsUsable()` (`0x4bcf70`): false while the state's bit 27 is set or the pet is
-/// stunned, confused or fleeing. Its other four steps test ownership, which a held bar implies.
-pub(super) fn actions_usable(bar: &PetBar, pet_flags: Option<u32>) -> bool {
-    !bar.spells.bar_disabled()
-        && pet_flags.is_none_or(|f| f & benilla_protocol::messages::PET_UNUSABLE_UNIT_FLAGS == 0)
-}
+use super::{PetBar, PetUnit};
 
 /// What the feed last pushed, so `PET_BAR_UPDATE` fires on a change; the key's leading `u32` is
 /// [`PetBar::bar_signals`], so a press that changes nothing still repaints.
@@ -182,8 +175,7 @@ pub(super) fn feed_pet_bar(
     bar: Res<PetBar>,
     spells: Option<Res<Spells>>,
     clock: Res<crate::ui_script::UiClock>,
-    index: Res<GuidIndex>,
-    stores: Query<&ObjectStore>,
+    pet: PetUnit,
     mut memory: Local<crate::ui_script::VmMemo<PetBarMemory>>,
 ) {
     let Some(mut script) = script else {
@@ -193,13 +185,10 @@ pub(super) fn feed_pet_bar(
     let now = Instant::now();
     let (anchor, ui_now) = (clock.anchor, clock.ui_now);
     let has_bar = bar.has_bar();
-    // An unstreamed pet leaves usability to bit 27 alone, and no slot shows active.
-    let pet_store = index
-        .0
-        .get(&bar.spells.pet_guid)
-        .and_then(|&e| stores.get(e).ok());
+    // An unstreamed pet is not usable (`0x4bd034`), and no slot shows active.
+    let pet_store = pet.store(bar.spells.pet_guid);
     let pet_flags = pet_store.map(|s| s.0.unit_flags());
-    let usable = actions_usable(&bar, pet_flags);
+    let usable = pet.actions_usable(&bar);
     // `PickupPetAction`'s gate alone (`0x4be1c1`): a possessed unit's bar cannot be rearranged,
     // but its buttons work, so possession stays out of `usable`.
     let pickup_allowed = pet_flags.unwrap_or(0) & UNIT_FLAG_POSSESSED == 0;

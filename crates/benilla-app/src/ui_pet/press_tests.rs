@@ -26,13 +26,15 @@ use super::PetBar;
 
 pub(super) const ME: u64 = 0x10;
 pub(super) const PET: u64 = 0x2A;
-/// `UNIT_FIELD_CHARMEDBY` and `UNIT_FIELD_CREATEDBY`, low words; the high words stay 0.
+/// `UNIT_FIELD_CHARMEDBY`, `UNIT_FIELD_SUMMONEDBY` and `UNIT_FIELD_CREATEDBY`, low words; the high
+/// words stay 0.
 pub(super) const CHARMEDBY: u16 = 10;
+pub(super) const SUMMONEDBY: u16 = 12;
 pub(super) const CREATEDBY: u16 = 14;
 pub(super) const FLAGS: u16 = 46;
 /// `UNIT_FIELD_AURA` slot 0 and `UNIT_FIELD_AURAFLAGS`, a nibble per slot.
-const AURA: u16 = 47;
-const AURAFLAGS: u16 = 95;
+pub(super) const AURA: u16 = 47;
+pub(super) const AURAFLAGS: u16 = 95;
 
 pub(super) const CLAW: u32 = 16829;
 pub(super) const BITE: u32 = 17258;
@@ -70,7 +72,7 @@ pub(super) fn growl() -> SpellDisplay {
 }
 
 /// Cower's shape here: a toggle with an active icon, so a press with its aura up cancels it.
-fn cower() -> SpellDisplay {
+pub(super) fn cower() -> SpellDisplay {
     SpellDisplay {
         name: "Cower".into(),
         active_icon_id: 122,
@@ -78,28 +80,42 @@ fn cower() -> SpellDisplay {
     }
 }
 
-/// Our own pet: `CREATEDBY` us, no flags.
+/// Our own pet as vmangos fills it, `SUMMONEDBY` and `CREATEDBY` us (`Pet.cpp:264`, `:287`), no
+/// flags: the predicate's owner test reads `SUMMONEDBY` (`0x4bd054`).
 pub(super) fn owned_pet() -> ObjectStore {
-    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+    owned_pet_with(&[])
+}
+
+/// [`owned_pet`] with more fields set, which win over its own.
+pub(super) fn owned_pet_with(extra: &[(u16, u32)]) -> ObjectStore {
+    let mut pairs = vec![
+        (SUMMONEDBY, ME as u32),
+        (SUMMONEDBY + 1, 0),
         (CREATEDBY, ME as u32),
         (CREATEDBY + 1, 0),
-    ]))
+    ];
+    pairs.retain(|(index, _)| !extra.iter().any(|(set, _)| set == index));
+    pairs.extend_from_slice(extra);
+    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&pairs))
 }
 
 /// Our own player: `OBJECT_FIELD_TYPE` 0x19, alive.
-fn player() -> ObjectStore {
-    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-        (2, 0x19),
-        (22, 100),
-        (28, 100),
-    ]))
+pub(super) fn player() -> ObjectStore {
+    player_with(&[])
+}
+
+/// [`player`] with more fields set.
+pub(super) fn player_with(extra: &[(u16, u32)]) -> ObjectStore {
+    let mut pairs = vec![(2, 0x19), (22, 100), (28, 100)];
+    pairs.extend_from_slice(extra);
+    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&pairs))
 }
 
 pub(super) struct Rig {
     pub(super) app: App,
     commands: Receiver<ClientCommand>,
     /// The pet's feeds as a schedule of their own, so their `Local` memory lives across runs.
-    feed: Schedule,
+    pub(super) feed: Schedule,
 }
 
 /// A VM whose listener records every event the pet's lists fire into `SEEN`, in order.
@@ -200,8 +216,16 @@ impl Rig {
             .expect("the press applies as a one-shot system");
     }
 
+    /// `PetAttack` and the other one-shot orders, as their slot's packed word, applied.
+    pub(super) fn order(&mut self, packed: u32) {
+        self.app
+            .world_mut()
+            .run_system_once(move |mut press: PetPress| press.order(packed))
+            .expect("the order applies as a one-shot system");
+    }
+
     /// The commands sent so far.
-    fn sent(&self) -> Vec<ClientCommand> {
+    pub(super) fn sent(&self) -> Vec<ClientCommand> {
         self.commands.try_iter().collect()
     }
 
@@ -226,7 +250,7 @@ impl Rig {
     }
 
     /// Whether the pet's own list took no record at all, whichever category a reader asks in.
-    fn pet_list_untouched(&self) -> bool {
+    pub(super) fn pet_list_untouched(&self) -> bool {
         self.app.world().resource::<PetBar>().cooldowns.generation == 0
     }
 
@@ -236,7 +260,7 @@ impl Rig {
     }
 }
 
-fn pet_actions(sent: &[ClientCommand]) -> usize {
+pub(super) fn pet_actions(sent: &[ClientCommand]) -> usize {
     sent.iter()
         .filter(|c| matches!(c, ClientCommand::PetAction { .. }))
         .count()
@@ -342,12 +366,7 @@ fn a_client_targeted_spell_press_starts_no_pet_gcd() {
 /// `0x4bd24f`: a press on a running aura cancels it and returns before the arm.
 #[test]
 fn an_aura_cancel_press_starts_no_pet_gcd() {
-    let running = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-        (CREATEDBY, ME as u32),
-        (CREATEDBY + 1, 0),
-        (AURA, COWER),
-        (AURAFLAGS, 0x3),
-    ]));
+    let running = owned_pet_with(&[(AURA, COWER), (AURAFLAGS, 0x3)]);
     let mut rig = rig(vec![(COWER, cower())], &[COWER], Some(running));
 
     rig.press(1);
@@ -371,23 +390,23 @@ fn an_aura_cancel_press_starts_no_pet_gcd() {
 }
 
 /// What a press latched: the mode word, its signal count and the attack latch.
-fn latched(rig: &Rig) -> (u32, u32, bool) {
+pub(super) fn latched(rig: &Rig) -> (u32, u32, bool) {
     let bar = rig.app.world().resource::<PetBar>();
     (bar.spells.state, bar.bar_signals, bar.attacking)
 }
 
 /// Everything a refused spell press leaves untouched: no command on the wire, nothing latched, no
 /// GCD on the pet's list, no event.
-fn assert_press_refused(rig: &mut Rig, before: (u32, u32, bool)) {
+pub(super) fn assert_press_refused(rig: &mut Rig, before: (u32, u32, bool)) {
     assert!(rig.sent().is_empty(), "no packet of any kind");
     assert_eq!(latched(rig), before, "nothing latched");
     assert!(rig.pet_list_untouched(), "no GCD armed");
     assert!(rig.frame().is_empty(), "no event");
 }
 
-/// `0x4bd346`-`0x4bd34f`: the arm leaves for the epilogue, before its GCD and its send, when the
-/// pet's object does not resolve, as it is while the pet is out of view and the bar stands on its
-/// guid.
+/// `0x4bd1f2`: the dispatcher leaves for the epilogue, before the arm, its GCD and its send, when
+/// the pet's object does not resolve, as it is while the pet is out of view and the bar stands on
+/// its guid.
 #[test]
 fn a_spell_press_with_no_pet_object_sends_nothing_and_arms_nothing() {
     let mut rig = rig(vec![(CLAW, claw())], &[CLAW], None);
@@ -420,8 +439,7 @@ fn a_spell_press_with_no_catalog_row_sends_nothing() {
     assert_eq!(pet_actions(&rig.sent()), 1, "the control sends");
 }
 
-/// `0x4bd31a`-`0x4bd324`: the arm also needs the active player's object, between the record and
-/// the pet.
+/// `0x4bd1f2`: the predicate also needs the active player's object (`0x4bcf92`).
 #[test]
 fn a_spell_press_with_no_player_object_sends_nothing() {
     let mut rig = rig(vec![(CLAW, claw())], &[CLAW], Some(owned_pet()));
@@ -430,6 +448,8 @@ fn a_spell_press_with_no_player_object_sends_nothing() {
         .resource_mut::<GuidIndex>()
         .0
         .remove(&ME);
+    // The bar greys as the player leaves, which is its own repaint.
+    assert_eq!(rig.frame(), ["PET_BAR_UPDATE"]);
     let before = latched(&rig);
 
     rig.press(1);
@@ -437,68 +457,43 @@ fn a_spell_press_with_no_player_object_sends_nothing() {
     assert_press_refused(&mut rig, before);
 }
 
-/// `0x4bd24a`: the aura leg comes first and needs neither the player nor a record beyond its own,
-/// so a running aura is cancelled with the player unresolved.
+/// `0x4bd1f2`: the aura leg (`0x4bd240`) sits behind the predicate, so with the active player
+/// unresolved a running aura is not cancelled either.
 #[test]
-fn an_aura_cancel_press_needs_no_player_object() {
-    let running = ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-        (CREATEDBY, ME as u32),
-        (CREATEDBY + 1, 0),
-        (AURA, COWER),
-        (AURAFLAGS, 0x3),
-    ]));
+fn an_aura_cancel_press_with_no_player_object_sends_nothing() {
+    let running = owned_pet_with(&[(AURA, COWER), (AURAFLAGS, 0x3)]);
     let mut rig = rig(vec![(COWER, cower())], &[COWER], Some(running));
     rig.app
         .world_mut()
         .resource_mut::<GuidIndex>()
         .0
         .remove(&ME);
+    assert_eq!(rig.frame(), ["PET_BAR_UPDATE"], "the bar greys");
+    let before = latched(&rig);
 
     rig.press(1);
 
-    let sent = rig.sent();
-    assert_eq!(pet_actions(&sent), 0);
-    assert!(sent
-        .iter()
-        .any(|c| matches!(c, ClientCommand::PetCancelAura { .. })));
+    assert_press_refused(&mut rig, before);
 }
 
-/// `0x4bd391`, `0x4bd3a3`: a reaction and the Follow and Stay commands have no exit before the
-/// send, so with the pet's object unresolved each still latches and sends.
+/// `0x4bd1f2`: a reaction and the Follow and Stay commands have no exit of their own (`0x4bd391`,
+/// `0x4bd3a3`), only the predicate's, so with the pet's object unresolved none latches or sends.
 #[test]
-fn a_command_or_reaction_press_with_no_pet_object_still_sends() {
+fn a_command_or_reaction_press_with_no_pet_object_sends_nothing() {
     let word = |kind: u8, action: u32| action | (u32::from(kind) << 24);
     let mut rig = rig(vec![(CLAW, claw())], &[CLAW], None);
-    for (packed, state) in [
-        (
-            word(PET_ACT_COMMAND, PET_COMMAND_FOLLOW),
-            PET_COMMAND_FOLLOW << 8,
-        ),
-        (
-            word(PET_ACT_COMMAND, PET_COMMAND_STAY),
-            PET_COMMAND_STAY << 8,
-        ),
-        (
-            word(PET_ACT_REACTION, PET_REACT_AGGRESSIVE),
-            PET_REACT_AGGRESSIVE,
-        ),
+    for packed in [
+        word(PET_ACT_COMMAND, PET_COMMAND_FOLLOW),
+        word(PET_ACT_COMMAND, PET_COMMAND_STAY),
+        word(PET_ACT_REACTION, PET_REACT_AGGRESSIVE),
     ] {
         rig.app.world_mut().resource_mut::<PetBar>().spells.bar[0] = PetActionEntry::from(packed);
-        let signals = latched(&rig).1;
+        rig.frame();
+        let before = latched(&rig);
 
         rig.press(1);
 
-        let sent = rig.sent();
-        assert!(
-            matches!(
-                sent.as_slice(),
-                [ClientCommand::PetAction { pet_guid: PET, packed: p, .. }] if *p == packed
-            ),
-            "{packed:#010x} sends: {sent:?}"
-        );
-        let (mode, now, _) = latched(&rig);
-        assert_eq!(mode, state, "{packed:#010x} latches");
-        assert_eq!(now, signals + 1, "{packed:#010x} signals the bar");
+        assert_press_refused(&mut rig, before);
     }
 }
 
@@ -526,10 +521,12 @@ fn the_pets_gcd_takes_the_players_op_21() {
     assert_eq!(rig.pet_reads(CLAW, &shaved()).1, 1000);
 }
 
-/// `0x4bd3c3`-`0x4bd405`: the Attack command resolves the pet before it validates, and with none
-/// jumps to the send (`0x4bd444`), the selection as its target.
+/// `0x4bd1f2`: the Attack command's own null-pet branch (`0x4bd403`-`0x4bd405`) repeats the lookup
+/// the predicate made (`0x4bd034`) on the same guid and typemask, so it never runs: with the pet's
+/// object unresolved the press leaves at the gate and sends nothing, at the selection or any
+/// other target.
 #[test]
-fn an_attack_press_with_no_pet_object_still_sends_at_the_selection() {
+fn an_attack_press_with_no_pet_object_sends_nothing() {
     const FOE: u64 = 0x77;
     let mut rig = rig(vec![(CLAW, claw())], &[CLAW], None);
     let world = rig.app.world_mut();
@@ -561,6 +558,20 @@ fn an_attack_press_with_no_pet_object_still_sends_at_the_selection() {
     };
     let attack = PET_COMMAND_ATTACK | (u32::from(PET_ACT_COMMAND) << 24);
     world.resource_mut::<PetBar>().spells.bar[0] = PetActionEntry::from(attack);
+    rig.frame();
+    let before = latched(&rig);
+
+    rig.press(1);
+
+    assert_press_refused(&mut rig, before);
+
+    // The same press with the pet streamed in goes out at the selection, and an ordinary pet's
+    // Attack raises no latch.
+    let world = rig.app.world_mut();
+    let pet = world
+        .spawn((Guid(PET), owned_pet_with(&[(22, 100), (28, 100)])))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(PET, pet);
 
     rig.press(1);
 

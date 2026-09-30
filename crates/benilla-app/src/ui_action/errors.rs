@@ -352,7 +352,8 @@ pub(crate) fn attack_actor_blocked(
     actor: Option<&ObjectStore>,
     self_guid: Option<u64>,
 ) -> Option<&'static str> {
-    // An unresolved actor skips the chain, as in the reference (`0x4bd403`).
+    // An unresolved actor skips the chain, as in the reference (`0x4bd403`), though the pet bar's
+    // own gate (`0x4bd1f2`) never lets an unresolved pet reach it.
     let fields = &actor?.0;
     // `0x605f30` (`0x612e10`): dead, or a player's ghost flag, since a ghost has health 1.
     let key = if fields.is_dead_or_ghost() {

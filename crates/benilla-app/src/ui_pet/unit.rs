@@ -39,7 +39,9 @@ pub(super) const UNIT_FLAG_PET_IN_COMBAT: u32 = 0x0000_0800;
 pub(super) fn feed_pet_unit(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
-    mut pet: PetUnit,
+    pet: PetUnit,
+    // The per-field edges, for `fire_transitions`' watch-bridge arms.
+    mut field_edges: MessageReader<crate::net::FieldChanged>,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
     mut names: ResMut<NameCache>,
@@ -52,7 +54,7 @@ pub(super) fn feed_pet_unit(
         return;
     };
     let (memory, vm_reset) = memory.get_reset(&script);
-    let edges = crate::net::FieldEdges::collect(&mut pet.edges);
+    let edges = crate::net::FieldEdges::collect(&mut field_edges);
     let names_moved = memory.names_generation.moved(names.generation());
     let bar_changed = bar.is_changed();
     let stores_changed = !changed_stores.is_empty();

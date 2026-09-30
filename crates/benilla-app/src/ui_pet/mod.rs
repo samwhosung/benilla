@@ -20,6 +20,7 @@ mod drain;
 mod menu;
 mod net;
 mod unit;
+mod usable;
 
 use bar::{feed_pet_bar, fire_pet_cooldown_events};
 use drain::drain_pet_actions;
@@ -35,6 +36,8 @@ mod flush_tests;
 mod press_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod usable_tests;
 
 /// The pet action bar's state. A zero `spells.pet_guid` means no bar: the teardown packet carries
 /// only that guid.
@@ -121,14 +124,13 @@ impl Plugin for UiPetPlugin {
 }
 
 /// The unit behind [`PetBar`]'s cached guid, plus our own guid for the ownership tests the
-/// reference makes before trusting the pet's fields (`0x5ff780`, `0x612e33`).
+/// reference makes before trusting the pet's fields (`0x5ff780`, `0x612e33`), and the usability
+/// predicate every pet-bar verb the reference guards asks of them ([`PetUnit::usable_pet`]).
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct PetUnit<'w, 's> {
     index: Res<'w, GuidIndex>,
     stores: Query<'w, 's, &'static ObjectStore>,
     self_guid: Res<'w, crate::net::SelfGuid>,
-    /// The per-field edges, for `fire_transitions`' watch-bridge arms.
-    pub(super) edges: MessageReader<'w, 's, crate::net::FieldChanged>,
 }
 
 impl PetUnit<'_, '_> {
@@ -139,7 +141,7 @@ impl PetUnit<'_, '_> {
     }
 
     /// The active player's descriptor, `None` while its object is not streamed: the lookup the
-    /// pet bar's spell arm makes on the client's player guid (`0x4bd31a`, typemask `0x10`).
+    /// usability predicate makes on the client's player guid (`0x4bcf89`, typemask `0x10`).
     pub(crate) fn player_store(&self) -> Option<&ObjectStore> {
         self.store(self.self_guid.0?)
     }
