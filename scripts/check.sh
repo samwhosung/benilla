@@ -92,7 +92,7 @@ esac
 pflags=""
 for p in $pkgs; do pflags="$pflags -p $p"; done
 echo "check: scope = $pkgs"
-echo "check:   (changed crates + everything that depends on them; full chain still runs at sync→land)"
+echo "check:   (changed crates + everything that depends on them; the full chain runs once, at land)"
 
 log="$(mktemp "${TMPDIR:-/tmp}/benilla-check.XXXXXX")"
 skips="$(mktemp "${TMPDIR:-/tmp}/benilla-check-skips.XXXXXX")"
@@ -120,4 +120,4 @@ if [ -s "$skips" ]; then
 fi
 
 echo "CHECK GREEN (scoped: $pkgs)"
-echo "  (land still pays the full chain once: scripts/gates.sh — memoized, so an already-gated tree is free)"
+echo "  (the full chain, scripts/gates.sh, runs once on the tree that lands; a run before it repeats it)"

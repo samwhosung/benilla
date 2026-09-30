@@ -48,7 +48,5 @@ jobs:
         run: scripts/doc-links.py
       - name: pass-span-lint
         run: scripts/pass-span-lint.py
-      - name: player-build
-        run: cargo build -p benilla --no-default-features
       - name: player-tests
         run: cargo test -p benilla-formats -p benilla-app --no-default-features --lib
