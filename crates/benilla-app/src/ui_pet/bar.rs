@@ -189,9 +189,10 @@ pub(super) fn feed_pet_bar(
     let pet_store = pet.store(bar.spells.pet_guid);
     let pet_flags = pet_store.map(|s| s.0.unit_flags());
     let usable = pet.actions_usable(&bar);
-    // `PickupPetAction`'s gate alone (`0x4be1c1`): a possessed unit's bar cannot be rearranged,
-    // but its buttons work, so possession stays out of `usable`.
-    let pickup_allowed = pet_flags.unwrap_or(0) & UNIT_FLAG_POSSESSED == 0;
+    // `PickupPetAction`'s gate alone: the pet's object must resolve (`0x4be1f7`) and not be
+    // possessed (`0x4be20a`). A possessed unit's bar cannot be rearranged but its buttons work,
+    // so possession stays out of `usable`; an unstreamed pet has no flags to test and lifts nothing.
+    let pickup_allowed = pet_flags.is_some_and(|flags| flags & UNIT_FLAG_POSSESSED == 0);
     let pet_attacking = bar.attacking;
     // `GetPetTimeRemaining`'s expiry on the VM clock, signed both ways around the anchor sample.
     script.set_pet_expiry(bar.expires.map(|t| match t.checked_duration_since(anchor) {

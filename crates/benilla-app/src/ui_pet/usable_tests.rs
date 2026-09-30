@@ -90,8 +90,9 @@ struct Case {
     apply: fn(&mut Rig),
     /// What `0x4bcf70` answers.
     usable: bool,
-    /// Whether `PickupPetAction`'s own gate lets the drag start: `UNIT_FLAG_POSSESSED` blocks it
-    /// (`0x4be1c1`), which is no exit of the predicate.
+    /// Whether `PickupPetAction`'s own gate lets the drag start: the pet's object must resolve
+    /// (`0x4be1f7`) and not be `UNIT_FLAG_POSSESSED` (`0x4be20a`), which is no exit of the
+    /// predicate, whose possession never blocks and whose unresolved pet is one of its exits.
     draggable: bool,
 }
 
@@ -179,7 +180,8 @@ fn all_cases() -> impl Iterator<Item = Case> {
         name,
         apply,
         usable: false,
-        draggable: true,
+        // Every other exit still lifts the action; only a pet that does not resolve returns first.
+        draggable: !name.starts_with("the pet does not resolve"),
     });
     usable.chain(exits)
 }
@@ -434,6 +436,76 @@ fn each_exit_alone_stops_the_drags_writes() {
             "{name}: the bar's words move only when usable"
         );
     }
+}
+
+/// `0x4be1f7`-`0x4be20a`: `PickupPetAction` looks the pet up and returns at once with no object,
+/// then again on `UNIT_FLAG_POSSESSED`, so a drag from an unstreamed or a possessed pet's bar lifts
+/// nothing. Every other state lifts the action, an unusable pet included: `0x4bc9d0` refuses only
+/// the pickup's blank, never the lift (`0x4be25d`).
+#[test]
+fn the_pickup_lifts_only_with_the_pets_object_held_and_not_possessed() {
+    for Case {
+        name,
+        apply,
+        draggable,
+        ..
+    } in all_cases()
+    {
+        let mut rig = scene();
+        apply(&mut rig);
+        rig.frame();
+
+        ui(&mut rig, |s| s.run("PickupPetAction(1)").unwrap());
+        let held = ui(&mut rig, |s| {
+            matches!(
+                s.cursor_payload(),
+                Some(benilla_ui::script::CursorPayload::PetAction(c)) if c.src_slot == 1
+            )
+        });
+        assert_eq!(
+            held, draggable,
+            "{name}: the action is lifted onto the cursor"
+        );
+    }
+}
+
+/// The same lookup sits above the cursor fork, so a held action is neither dropped nor cleared
+/// while the pet's object is gone: the drop's `ClearCursor` (`0x4be220`) is past it.
+#[test]
+fn a_held_action_stays_held_while_the_pet_is_out_of_view() {
+    let mut rig = scene();
+    ui(&mut rig, |s| s.run("PickupPetAction(1)").unwrap());
+    rig.app
+        .world_mut()
+        .resource_mut::<GuidIndex>()
+        .0
+        .remove(&PET);
+    rig.frame();
+    rig.app
+        .world_mut()
+        .run_system_once(super::drain::drain_pet_actions)
+        .expect("the drain runs");
+    let _ = rig.sent();
+
+    ui(&mut rig, |s| s.run("PickupPetAction(2)").unwrap());
+    rig.app
+        .world_mut()
+        .run_system_once(super::drain::drain_pet_actions)
+        .expect("the drain runs");
+
+    assert!(
+        matches!(
+            ui(&mut rig, |s| s.cursor_payload()),
+            Some(benilla_ui::script::CursorPayload::PetAction(c)) if c.src_slot == 1
+        ),
+        "the payload is still on the cursor"
+    );
+    assert!(
+        !rig.sent()
+            .iter()
+            .any(|c| matches!(c, ClientCommand::PetSetAction { .. })),
+        "and nothing was written"
+    );
 }
 
 /// The whole default UI on the rig's world in place of its listening VM: the stock pet bar, and

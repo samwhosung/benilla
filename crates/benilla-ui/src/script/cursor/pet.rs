@@ -92,8 +92,9 @@ fn assign(slots: &mut [u32], target: usize, source: u32, passive: bool) -> Optio
     })
 }
 
-/// `PickupPetAction(slot)` (`0x4be180`), 1-based. `UNIT_FLAG_POSSESSED` blocks both ends, its
-/// gate sitting above the cursor fork (`0x4be20a`). Another payload stays held here, where the
+/// `PickupPetAction(slot)` (`0x4be180`), 1-based. A pet whose object does not resolve
+/// (`0x4be1f7`) or is `UNIT_FLAG_POSSESSED` (`0x4be20a`) blocks both ends, the gate sitting above
+/// the cursor fork, so the cursor is left as it was. Another payload stays held here, where the
 /// reference clears it (`0x4be220`) and picks the slot up. A pickup blanks only a spell slot
 /// (`0x4be268`), so a dragged token is copied, not moved.
 pub(super) fn pickup_pet_action(model: &mut Model, slot: u32) -> bool {
@@ -511,7 +512,7 @@ mod tests {
         assert!(s.cursor_payload().is_none());
     }
 
-    /// The third flag, `pickup_allowed`, is false under `UNIT_FLAG_POSSESSED`.
+    /// The third flag, `pickup_allowed`, is false for a pet that is out of view or possessed.
     #[test]
     fn a_possessed_bar_takes_no_drag_at_all() {
         let mut s = UiScript::new().unwrap();

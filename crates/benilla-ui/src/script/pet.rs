@@ -112,10 +112,11 @@ pub(crate) struct PetBarState {
     /// `has_bar`, whose gate is the cached guid alone.
     pub(crate) has_ui: bool,
     pub(crate) stats: PetStats,
-    /// `PickupPetAction`'s gate, `UNIT_FLAG_POSSESSED` clear (`0x4be1c1`), which blocks the drop
-    /// as well as the pick-up. Not `actions_usable`: possession does not grey the bar, and the
-    /// pick-up itself does not ask it. The writes at both ends do (`0x4bc9d0`), so a greyed bar
-    /// still lifts an action onto the cursor and then writes nothing.
+    /// `PickupPetAction`'s gate: the pet's object resolves (`0x4be1f7`) and `UNIT_FLAG_POSSESSED`
+    /// is clear (`0x4be20a`), which blocks the drop as well as the pick-up. Not `actions_usable`:
+    /// possession does not grey the bar, and the pick-up itself does not ask it. The writes at
+    /// both ends do (`0x4bc9d0`), so a greyed bar with its pet in view still lifts an action onto
+    /// the cursor and then writes nothing.
     pub(crate) pickup_allowed: bool,
     /// `PetCanBeAbandoned()`: a kept pet rather than a summon. It forks the pet menu: paperdoll,
     /// rename and abandon show when true, dismiss only when false (`UnitPopup.lua:402-417`).
