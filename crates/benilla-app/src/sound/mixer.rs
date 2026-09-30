@@ -310,7 +310,7 @@ impl Mixer {
         Ok((track, handle))
     }
 
-    /// Decode-stream a long sound (music, ambience MP3s) on the main track.
+    /// Decode-stream a long sound (music, an ambience bed) on the main track.
     pub(crate) fn play_stream(
         &mut self,
         data: StreamingSoundData<FromFileError>,
@@ -486,22 +486,50 @@ pub(crate) fn sfx_from_bytes(bytes: Vec<u8>) -> Result<StaticSoundData> {
     StaticSoundData::from_cursor(std::io::Cursor::new(bytes)).context("decoding sfx")
 }
 
-/// Decode a looping bed whole: kira's streaming decoder reads these 22050 Hz PCM WAVs at twice
-/// their length, so a streamed loop falls silent past EOF.
-pub(crate) fn loop_from_bytes(bytes: Vec<u8>) -> Result<StaticSoundData> {
-    Ok(sfx_from_bytes(bytes)?.loop_region(..))
-}
-
-/// Wrap compressed audio bytes for decode-streaming, behind [`PromotingSource`].
+/// Wrap compressed audio bytes for decode-streaming ([`stream_from_source`]).
 pub(crate) fn stream_from_bytes(bytes: Vec<u8>) -> Result<StreamingSoundData<FromFileError>> {
-    StreamingSoundData::from_media_source(PromotingSource(std::io::Cursor::new(bytes)))
-        .context("opening stream")
+    let len = bytes.len() as u64;
+    stream_from_source(std::io::Cursor::new(bytes), len)
 }
 
-/// Compressed-audio source whose first read on a thread promotes it to user-interactive QoS:
-/// kira's decode thread starts at default QoS, below the world-entry burst, and a starved decoder
-/// crackles without tripping any [`MixHealth`] meter.
-struct PromotingSource(std::io::Cursor<Vec<u8>>);
+/// Open a decode-stream over `len` bytes of `source`: its header is read here, on the calling
+/// thread, and the rest on kira's decode thread as it plays, behind [`PromotingSource`].
+pub(crate) fn stream_from_source<R>(
+    source: R,
+    len: u64,
+) -> Result<StreamingSoundData<FromFileError>>
+where
+    R: std::io::Read + std::io::Seek + Send + Sync + 'static,
+{
+    let source = PcmFrameSize::new(source).context("reading the header")?;
+    let armed = Arc::new(AtomicBool::new(false));
+    let data = StreamingSoundData::from_media_source(PromotingSource {
+        inner: source,
+        len,
+        armed: armed.clone(),
+    })
+    .context("opening stream")?;
+    armed.store(true, Ordering::Relaxed);
+    Ok(data)
+}
+
+/// A stream's bytes, whose first read on a thread once the stream is built promotes that thread
+/// to user-interactive QoS: kira's decode thread starts at default QoS, below the world-entry
+/// burst, and a starved decoder crackles without tripping any [`MixHealth`] meter.
+struct PromotingSource<R> {
+    inner: R,
+    len: u64,
+    /// Set once the stream is built, so the thread that read its header keeps its own QoS.
+    armed: Arc<AtomicBool>,
+}
+
+impl<R> PromotingSource<R> {
+    fn promote(&self) {
+        if self.armed.load(Ordering::Relaxed) {
+            promote_decode_thread();
+        }
+    }
+}
 
 /// Once-per-thread promotion latch for [`PromotingSource`].
 fn promote_decode_thread() {
@@ -522,26 +550,118 @@ fn promote_decode_thread() {
     });
 }
 
-impl std::io::Read for PromotingSource {
+impl<R: std::io::Read> std::io::Read for PromotingSource<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        promote_decode_thread();
-        self.0.read(buf)
+        self.promote();
+        self.inner.read(buf)
     }
 }
 
-impl std::io::Seek for PromotingSource {
+impl<R: std::io::Seek> std::io::Seek for PromotingSource<R> {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        promote_decode_thread();
-        self.0.seek(pos)
+        self.promote();
+        self.inner.seek(pos)
     }
 }
 
-impl symphonia::core::io::MediaSource for PromotingSource {
+impl<R> symphonia::core::io::MediaSource for PromotingSource<R>
+where
+    R: std::io::Read + std::io::Seek + Send + Sync,
+{
     fn is_seekable(&self) -> bool {
         true
     }
     fn byte_len(&self) -> Option<u64> {
-        Some(self.0.get_ref().len() as u64)
+        Some(self.len)
+    }
+}
+
+/// A source whose PCM WAV header reads with `nBlockAlign` equal to the frame its channels and
+/// sample width make. 98 of the install's stereo 16-bit WAVs, 79 of them ambience beds, store 2,
+/// a mono frame. symphonia-format-riff 0.5 takes the frame size from that field
+/// (`WaveFormatChunk::packet_info`), so it counts such a file at twice its frames and a stream
+/// of it fails at the real end; 0.6 derives it from the channels and width, and kira 0.12 pins
+/// 0.5. The field is redundant for PCM, so reading it corrected changes no sample.
+struct PcmFrameSize<R> {
+    inner: R,
+    /// The inner read position.
+    pos: u64,
+    /// The `nBlockAlign` field's offset and its corrected bytes, when the header needs it.
+    patch: Option<(u64, [u8; 2])>,
+}
+
+impl<R: std::io::Read + std::io::Seek> PcmFrameSize<R> {
+    /// Reads the head of `inner` once to find the field, then rewinds it.
+    fn new(mut inner: R) -> std::io::Result<Self> {
+        let mut head = [0u8; WAV_HEAD_SCAN];
+        let mut n = 0;
+        while n < head.len() {
+            match inner.read(&mut head[n..])? {
+                0 => break,
+                k => n += k,
+            }
+        }
+        inner.seek(std::io::SeekFrom::Start(0))?;
+        Ok(Self {
+            inner,
+            pos: 0,
+            patch: pcm_block_align_fix(&head[..n]),
+        })
+    }
+}
+
+/// How far into a file [`PcmFrameSize`] looks for the `fmt ` chunk, which leads a WAV's data.
+const WAV_HEAD_SCAN: usize = 512;
+
+/// Where a RIFF/WAVE header's PCM `nBlockAlign` disagrees with channels × bytes per sample: the
+/// field's offset and the value it should hold. `None` for anything else, compressed WAVs
+/// included, whose block size is real.
+fn pcm_block_align_fix(head: &[u8]) -> Option<(u64, [u8; 2])> {
+    const WAVE_FORMAT_PCM: u16 = 1;
+    let u16_at = |at: usize| Some(u16::from_le_bytes(head.get(at..at + 2)?.try_into().ok()?));
+    let u32_at = |at: usize| Some(u32::from_le_bytes(head.get(at..at + 4)?.try_into().ok()?));
+    if head.get(0..4)? != b"RIFF" || head.get(8..12)? != b"WAVE" {
+        return None;
+    }
+    let mut at = 12usize;
+    loop {
+        let id = head.get(at..at + 4)?;
+        let len = u32_at(at + 4)? as usize;
+        let body = at + 8;
+        if id == b"fmt " {
+            let (format, channels) = (u16_at(body)?, u16_at(body + 2)?);
+            let (align, bits) = (u16_at(body + 12)?, u16_at(body + 14)?);
+            if format != WAVE_FORMAT_PCM || bits == 0 || bits % 8 != 0 {
+                return None;
+            }
+            let frame = channels.checked_mul(bits / 8)?;
+            return (align != frame).then(|| ((body + 12) as u64, frame.to_le_bytes()));
+        }
+        // Chunks are word-aligned: an odd length carries a pad byte.
+        at = body.checked_add(len)?.checked_add(len & 1)?;
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for PcmFrameSize<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        if let Some((at, bytes)) = self.patch {
+            for (k, b) in bytes.into_iter().enumerate() {
+                let p = at + k as u64;
+                if (self.pos..self.pos + n as u64).contains(&p) {
+                    buf[(p - self.pos) as usize] = b;
+                }
+            }
+        }
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl<R: std::io::Seek> std::io::Seek for PcmFrameSize<R> {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.pos = self.inner.seek(to)?;
+        Ok(self.pos)
     }
 }
 
@@ -707,8 +827,8 @@ impl StreamWatch {
                 last_pos,
                 window_start,
             } => {
-                // A backwards jump is a new stream swapped onto the slot (no watched stream
-                // loops), so it re-enters its own spin-up.
+                // A backwards jump is a new stream swapped onto the slot or an ambience bed's
+                // loop wrapping; either re-enters the spin-up, uncounted.
                 if pos < last_pos {
                     self.phase = Phase::Starting {
                         since: now,
@@ -744,7 +864,7 @@ impl StreamWatch {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn preset(decay: f32, hf_ratio: f32, room: i32, room_hf: i32, reverb: i32) -> SoundProvider {
@@ -1472,5 +1592,191 @@ mod tests {
             midband >= 3,
             "the fade is gradual, not an instant cut — needs blocks mid-ramp ({series:?})"
         );
+    }
+
+    /// A 16-bit PCM WAV in memory with `block_align` as given: 2 on a stereo file is the header
+    /// of the install's ambience beds.
+    pub(in crate::sound) fn pcm16_wav(
+        rate: u32,
+        channels: u16,
+        block_align: u16,
+        frames: usize,
+        sample: impl Fn(usize) -> i16,
+    ) -> Vec<u8> {
+        let data_len = (frames * channels as usize * 2) as u32;
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * u32::from(channels) * 2).to_le_bytes());
+        wav.extend_from_slice(&block_align.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..frames {
+            for _ in 0..channels {
+                wav.extend_from_slice(&sample(i).to_le_bytes());
+            }
+        }
+        wav
+    }
+
+    #[test]
+    fn the_pcm_frame_size_is_read_from_the_channels_and_width() {
+        let stereo_bad = pcm16_wav(22_050, 2, 2, 4, |_| 0);
+        assert_eq!(pcm_block_align_fix(&stereo_bad), Some((32, [4, 0])));
+        assert_eq!(
+            pcm_block_align_fix(&pcm16_wav(22_050, 2, 4, 4, |_| 0)),
+            None
+        );
+        assert_eq!(
+            pcm_block_align_fix(&pcm16_wav(22_050, 1, 2, 4, |_| 0)),
+            None
+        );
+
+        // IMA ADPCM's block align is its real block size: untouched.
+        let mut adpcm = stereo_bad.clone();
+        adpcm[20..22].copy_from_slice(&0x11u16.to_le_bytes());
+        assert_eq!(pcm_block_align_fix(&adpcm), None);
+
+        // A chunk ahead of `fmt `, odd-sized and so padded, is walked past.
+        let mut listed = b"RIFF\0\0\0\0WAVELIST\x03\0\0\0abc\0".to_vec();
+        listed.extend_from_slice(&stereo_bad[12..]);
+        assert_eq!(pcm_block_align_fix(&listed), Some((44, [4, 0])));
+
+        assert_eq!(pcm_block_align_fix(b"ID3\x03"), None);
+        assert_eq!(pcm_block_align_fix(&stereo_bad[..30]), None, "a cut header");
+    }
+
+    /// The install's bed header: 22050 Hz stereo, `nBlockAlign` 2.
+    #[test]
+    fn a_stereo_bed_streams_its_true_length() {
+        let frames = 3000;
+        let bed = pcm16_wav(22_050, 2, 2, frames, |i| i as i16);
+        let data = stream_from_bytes(bed).expect("opens");
+        assert_eq!(data.num_frames(), frames, "the frames in the data chunk");
+    }
+
+    /// Rendered through kira at the bed's own rate, a streamed loop wraps from its last frame to
+    /// its first and plays on, where one sized from the stored `nBlockAlign` stops at the end.
+    #[test]
+    fn a_streamed_bed_loops_seamlessly() {
+        use kira::backend::{Backend, Renderer};
+        use std::sync::Mutex;
+
+        const RATE: u32 = 22_050;
+        const FRAMES: usize = 3000;
+        const STEP: i16 = 8;
+        struct Capture(Arc<Mutex<Option<Renderer>>>);
+        impl Backend for Capture {
+            type Settings = ();
+            type Error = ();
+            fn setup(_: (), _buf: usize) -> Result<(Self, u32), ()> {
+                Ok((Capture(Arc::new(Mutex::new(None))), RATE))
+            }
+            fn start(&mut self, renderer: Renderer) -> Result<(), ()> {
+                *self.0.lock().unwrap() = Some(renderer);
+                Ok(())
+            }
+        }
+
+        // A sawtooth that names its own frame: sample `i` is `1000 + STEP·i`, never silent.
+        let bed = pcm16_wav(RATE, 2, 2, FRAMES, |i| 1000 + STEP * i as i16);
+        let data = stream_from_bytes(bed).expect("opens").loop_region(..);
+        let mut manager =
+            AudioManager::<Capture>::new(AudioManagerSettings::default()).expect("manager");
+        let slot = manager.backend_mut().0.clone();
+        let _h = manager.play(data).expect("play");
+
+        // Let the decode thread fill its ring, then render two and a half loops in one go.
+        let render = |n: usize| -> Vec<f32> {
+            let mut guard = slot.lock().unwrap();
+            let r = guard.as_mut().expect("renderer started");
+            r.on_start_processing();
+            let mut out = vec![0.0f32; n * 2];
+            r.process(&mut out, 2);
+            out.iter().step_by(2).copied().collect()
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut lead = render(1);
+        while lead[0] == 0.0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            lead = render(1);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let heard = render(FRAMES * 5 / 2);
+
+        let frame_of = |v: f32| ((v * 32768.0 - 1000.0) / f32::from(STEP)).round() as i64;
+        let silent = heard.iter().filter(|v| v.abs() < 1e-4).count();
+        assert_eq!(silent, 0, "no silence once playing");
+        let frames: Vec<i64> = heard.iter().map(|&v| frame_of(v)).collect();
+        let wraps = frames.windows(2).filter(|w| w[1] < w[0]).count();
+        assert_eq!(wraps, 2, "two wraps in two and a half loops");
+        for (k, w) in frames.windows(2).enumerate() {
+            let next = (w[0] + 1) % FRAMES as i64;
+            assert_eq!(w[1], next, "frame {k}: {} follows {}", w[1], w[0]);
+        }
+    }
+
+    /// Every bed in the install streams at its data chunk's length: the census that found 79
+    /// stereo beds with a mono `nBlockAlign`, the inn's `Tavern.wav` among them.
+    #[test]
+    fn real_beds_stream_their_data_chunks_frames() {
+        use std::io::Read;
+        let data = benilla_formats::wow_data_or_skip!();
+        let Ok(chain) = benilla_formats::open_chain(&data) else {
+            eprintln!("skipping: no client data at {}", data.display());
+            return;
+        };
+        let beds: Vec<String> = chain
+            .list()
+            .expect("listing")
+            .into_iter()
+            .map(|e| e.name)
+            .filter(|n| {
+                let n = n.to_ascii_lowercase();
+                n.starts_with("sound\\ambience\\") && n.ends_with(".wav")
+            })
+            .collect();
+        assert!(beds.len() > 100, "the install's beds: {}", beds.len());
+        let mut mono_align = 0;
+        for path in &beds {
+            let archive = chain.archive_for(path).expect("in the chain");
+            let mut head = vec![0u8; 4096];
+            let n = archive.open_file(path).unwrap().read(&mut head).unwrap();
+            head.truncate(n);
+            let (frame, data_len) = wav_frame_and_data_len(&head).expect(path);
+            mono_align += usize::from(pcm_block_align_fix(&head).is_some());
+
+            let file = archive.open_file(path).expect("opens");
+            let len = file.size();
+            let streamed = stream_from_source(file, len).expect(path).num_frames();
+            assert_eq!(streamed, data_len / frame, "{path}: streamed frames");
+        }
+        assert!(mono_align > 0, "no bed carries the mono nBlockAlign");
+
+        let forest = "Sound\\Ambience\\ZoneAmbience\\ForestNormalDay.wav";
+        let decoded = sfx_from_bytes(chain.read(forest).unwrap()).unwrap();
+        assert_eq!(decoded.num_frames(), 60 * 22_050, "decoded whole, 60 s");
+    }
+
+    /// A PCM WAV header's frame size (channels × bytes per sample) and data chunk length.
+    fn wav_frame_and_data_len(head: &[u8]) -> Option<(usize, usize)> {
+        let u16_at = |at: usize| Some(u16::from_le_bytes(head.get(at..at + 2)?.try_into().ok()?));
+        let u32_at = |at: usize| Some(u32::from_le_bytes(head.get(at..at + 4)?.try_into().ok()?));
+        let (mut at, mut frame) = (12usize, None);
+        loop {
+            let (id, len) = (head.get(at..at + 4)?, u32_at(at + 4)? as usize);
+            if id == b"fmt " {
+                frame = Some(usize::from(u16_at(at + 10)?) * usize::from(u16_at(at + 22)? / 8));
+            } else if id == b"data" {
+                return Some((frame?, len));
+            }
+            at += 8 + len + (len & 1);
+        }
     }
 }
