@@ -5,9 +5,21 @@
 use std::collections::HashMap;
 
 use benilla_ui::script::{
-    InspectView, InvSlotView, InventorySlots, QuadContent, SoundRequest, UiScript, UnitReach,
-    UnitState,
+    InspectView, InvSlotView, InventorySlots, QuadContent, SoundRequest, UiScript, UnitGuids,
+    UnitReach, UnitState,
 };
+
+/// The inspected player's guid, which `"target"` resolves to and the reach map is keyed by.
+const TARGET: u64 = 0x0000_0001_0000_2AB3;
+
+/// The resolver's inputs with `"target"` a held unit, so a verb's token reaches [`TARGET`]'s entry.
+fn target_guids() -> UnitGuids {
+    UnitGuids {
+        target: TARGET,
+        held: HashMap::from([(TARGET, 0)]),
+        ..Default::default()
+    }
+}
 
 /// A live, inspectable unit at squared distance `dist_sq`. `inspectable` carries the server's
 /// non-distance refusals and only `CanInspect` reads it; these tests are about distance.
@@ -117,9 +129,10 @@ fn armed() -> UiScript {
     super::test_ui::seat_chain_addon(&mut s, "Blizzard_InspectUI");
     s.run("InspectFrame_LoadUI()").unwrap();
     s.set_unit("target", Some(target_unit()));
+    s.set_unit_guids(&target_guids());
     s.set_inspect(Some(inspect_view("target")));
     // 4 yards away (d² = 16), inside the 10-yard gate (100.0).
-    s.set_unit_reach(HashMap::from([("target".to_string(), reach(16.0))]));
+    s.set_unit_reach(HashMap::from([(TARGET, reach(16.0))]));
     s
 }
 
@@ -169,7 +182,7 @@ fn inspect_unit_refuses_out_of_range() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = armed();
     // 11 yards (d² = 121), past the 100.0 threshold.
-    s.set_unit_reach(HashMap::from([("target".to_string(), reach(121.0))]));
+    s.set_unit_reach(HashMap::from([(TARGET, reach(121.0))]));
 
     s.run(r#"InspectUnit("target")"#).unwrap();
     assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
@@ -182,7 +195,7 @@ fn inspect_unit_refuses_out_of_range() {
         "out of range: no CMSG_INSPECT request is queued"
     );
 
-    s.set_unit_reach(HashMap::from([("target".to_string(), reach(99.9))]));
+    s.set_unit_reach(HashMap::from([(TARGET, reach(99.9))]));
     s.run(r#"InspectUnit("target")"#).unwrap();
     assert!(
         s.eval::<bool>("return InspectFrame:IsVisible()").unwrap(),
@@ -206,7 +219,7 @@ fn range_predicates_transcribe_the_verified_thresholds() {
         (100.0, true, false),
         (100.1, false, false),
     ] {
-        s.set_unit_reach(HashMap::from([("target".to_string(), reach(d2))]));
+        s.set_unit_reach(HashMap::from([(TARGET, reach(d2))]));
         assert_eq!(
             s.eval::<bool>(r#"return CanInspect("target") ~= nil"#)
                 .unwrap(),
@@ -221,7 +234,7 @@ fn range_predicates_transcribe_the_verified_thresholds() {
         );
     }
     // Type 4 is the 30-yard row (900.0).
-    s.set_unit_reach(HashMap::from([("target".to_string(), reach(899.0))]));
+    s.set_unit_reach(HashMap::from([(TARGET, reach(899.0))]));
     assert!(s
         .eval::<bool>(r#"return CheckInteractDistance("target", 4) ~= nil"#)
         .unwrap());
@@ -244,7 +257,7 @@ fn range_predicates_transcribe_the_verified_thresholds() {
     );
 
     // The `type` argument's degenerate arms, each the reference's answer.
-    s.set_unit_reach(HashMap::from([("target".to_string(), reach(1.0))]));
+    s.set_unit_reach(HashMap::from([(TARGET, reach(1.0))]));
     for bad in ["0", "5", "-1", "0.5"] {
         assert!(
             s.eval::<bool>(&format!(

@@ -655,6 +655,68 @@ mod tests {
         assert_eq!((selection.target, selection.guid), (Some(ally), Some(ALLY)));
     }
 
+    /// `SpellTargetUnit` takes a `target` chain as the resolver does (`0x6e6de1` into `0x515970`):
+    /// `"pettarget"` and `"playertarget"` bind the unit our pet and we target, where a chain that
+    /// names no unit still ends the cast with "Out of range.".
+    #[test]
+    fn spell_target_unit_follows_a_target_chain() {
+        const PET: u64 = 0xF140_0000_0000_0077;
+        // `OBJECT_FIELD_TYPE` and `UNIT_FIELD_TARGET`, the latter a 2-field guid.
+        let unit = |kind: u32, target: u64| {
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, kind),
+                (16, target as u32),
+                (17, (target >> 32) as u32),
+            ]))
+        };
+        let seat = |world: &mut World, ally: Entity| {
+            // We and our pet target the ally; the ally targets nobody.
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(world)
+                .unwrap();
+            world.entity_mut(me).insert(unit(0x19, ALLY));
+            let pet = world.spawn((Guid(PET), unit(0x09, ALLY))).id();
+            let mut bar = crate::ui_pet::PetBar::default();
+            bar.spells.pet_guid = PET;
+            world.insert_resource(bar);
+            let mut index = world.resource_mut::<crate::net::GuidIndex>();
+            index.0.insert(ME, me);
+            index.0.insert(ALLY, ally);
+            index.0.insert(PET, pet);
+        };
+        let fail = vec![crate::ui_action::CastFail::local(HEAL, 0x59)];
+        for token in ["pettarget", "playertarget", "PETTARGET"] {
+            let (mut world, rx, ally) = unit_world(10.0);
+            seat(&mut world, ally);
+            arm(&mut world, HEAL, 0x0002);
+            spell_target_unit(&mut world, token);
+            assert!(
+                matches!(
+                    rx.try_recv(),
+                    Ok(ClientCommand::CastSpell {
+                        spell_id: HEAL,
+                        target: Some(ALLY),
+                    })
+                ),
+                "{token} binds the ally"
+            );
+            assert!(errors(&mut world).is_empty(), "{token}");
+            assert!(!world.resource::<SpellTargeting>().active(), "{token}");
+        }
+
+        // The ally targets nobody, so a hop off it names no unit: the cast ends.
+        for token in ["pettargettarget", "party1target", "pettargetfoo"] {
+            let (mut world, rx, ally) = unit_world(10.0);
+            seat(&mut world, ally);
+            arm(&mut world, HEAL, 0x0002);
+            spell_target_unit(&mut world, token);
+            assert!(rx.try_recv().is_err(), "{token}: no send");
+            assert_eq!(errors(&mut world), fail, "{token}");
+            assert!(!world.resource::<SpellTargeting>().active(), "{token}");
+        }
+    }
+
     /// The press (`resolve_cast_target`), the click and `SpellTargetUnit` ([`bind_target_unit`]) and
     /// the hover verdict (`SpellCanTargetUnit`) all ask [`crate::spell::cast_target::unit_binds`],
     /// so one table of units decides all three: `BindTarget`'s gates refuse the same units at

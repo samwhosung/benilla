@@ -8,7 +8,10 @@ use bevy::prelude::*;
 
 use benilla_formats::ChrClasses;
 use benilla_protocol::messages::ObjectType;
-use benilla_ui::script::{power_token, ScriptValue, UiScript, UnitState, WornDisplay};
+use benilla_ui::script::{
+    parse_unit_token, power_token, ScriptValue, UiScript, UnitBase, UnitState, UnitTokenParse,
+    WornDisplay,
+};
 
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
@@ -147,7 +150,8 @@ impl Plugin for UiUnitPlugin {
                 // raises for the same port.
                 fire_leaving_world_on_worldport,
                 feed_units,
-                feed_unit_reach,
+                // After the aura feed, whose resolver inputs it measures.
+                feed_unit_reach.after(crate::ui_aura::AuraEvents),
                 feed_player_control,
                 feed_farsight_focus,
                 melee_unit_combat,
@@ -599,59 +603,67 @@ impl UnitTokens<'_, '_> {
         Some((*self.index.as_ref()?.0.get(&guid)?, guid))
     }
 
-    /// Resolve `token` case-insensitively (`_strnicmp`); the first matching prefix wins.
+    /// Resolve `token` as `0x515970` does: its base, then a hop for each `target` after it. The
+    /// text is read by [`parse_unit_token`], which the VM's resolver shares, so both take the same
+    /// tokens; a token that names nobody, or a base or hop the object manager does not hold, is
+    /// `None`.
     pub(crate) fn resolve(&self, token: &str, selection: &Selection) -> Option<(Entity, u64)> {
-        // Only a token with a capital pays for the fold: the reach feeds resolve every group token
-        // each frame, all of them already lowercase.
-        let folded;
-        let token = if token.bytes().any(|b| b.is_ascii_uppercase()) {
-            folded = token.to_ascii_lowercase();
-            folded.as_str()
-        } else {
-            token
+        let UnitTokenParse::Unit { base, hops } = parse_unit_token(token) else {
+            return None;
         };
-        match token {
-            "player" => self.me(),
-            "target" => selection.target.zip(selection.guid),
-            // One hop off the target's `UNIT_FIELD_TARGET`, the read `/assist` runs.
-            "targettarget" => selection
-                .target
-                .and_then(|e| self.stores.get(e).ok())
-                .and_then(|s| s.0.unit_target())
-                .filter(|g| *g != 0)
-                .and_then(|g| self.held(g)),
+        let mut unit = self.base(base, selection)?;
+        for _ in 0..hops {
+            unit = self.target_of(unit.0)?;
+        }
+        Some(unit)
+    }
+
+    /// The held unit a token's base names, before any `target` hop.
+    fn base(&self, base: UnitBase, selection: &Selection) -> Option<(Entity, u64)> {
+        match base {
+            UnitBase::Player => self.me(),
+            UnitBase::Target => selection.target.zip(selection.guid),
             // The same pick `ui_tooltip` pushes `"mouseover"` from.
-            "mouseover" => self
+            UnitBase::Mouseover => self
                 .hovered
                 .as_ref()?
                 .mouseover(&self.hovered_go.as_deref().copied().unwrap_or_default()),
             // Off the pet bar's cached guid, as the `"pet"` snapshot reads it.
-            "pet" => {
+            UnitBase::Pet => {
                 let guid = self.pet.as_ref()?.spells.pet_guid;
                 (guid != 0).then(|| self.held(guid)).flatten()
             }
-            // `partypet` and `raidpet` before `party` and `raid` (`0x515a9a`, `0x515b1c`): the
-            // shorter literal is a prefix of the longer.
-            t if t.starts_with("partypet") => slot_number(&t["partypet".len()..], 4)
-                .and_then(|n| self.group.party_slots().nth(n - 1).map(|m| m.guid))
+            UnitBase::PartyPet(row) => self
+                .party_member(row)
                 .and_then(|member| self.pet_of(member, false)),
-            t if t.starts_with("raidpet") => slot_number(&t["raidpet".len()..], 40)
-                .and_then(|n| self.raid_member(n))
+            UnitBase::RaidPet(row) => self
+                .raid_member(row)
                 .and_then(|member| self.pet_of(member, true)),
-            t if t.starts_with("raid") => slot_number(&t["raid".len()..], 40)
-                .and_then(|n| self.raid_member(n))
-                .and_then(|g| self.held(g)),
-            t => t
-                .strip_prefix("party")
-                .and_then(|n| slot_number(n, 4))
-                .and_then(|n| self.group.party_slots().nth(n - 1).map(|m| m.guid))
-                .and_then(|g| self.held(g)),
+            UnitBase::Raid(row) => self.raid_member(row).and_then(|guid| self.held(guid)),
+            UnitBase::Party(row) => self.party_member(row).and_then(|guid| self.held(guid)),
+            // The interaction NPC is unresolved here, a quiet nil.
+            UnitBase::Npc => None,
         }
     }
 
-    /// The guid on 1-based raid row `n`, the one `raidN` and `GetRaidRosterInfo` share.
-    fn raid_member(&self, n: usize) -> Option<u64> {
-        crate::ui_party::raid_row_guid(&self.group, self.me().map(|(_, g)| g), n)
+    /// One `target` hop (`0x515a0f`-`0x515a25`): the held unit's `UNIT_FIELD_TARGET`, held in turn.
+    /// The lookup takes the unit typemask, so a hop off any other object, or off a unit with no
+    /// target, is nobody.
+    fn target_of(&self, unit: Entity) -> Option<(Entity, u64)> {
+        let store = self.stores.get(unit).ok().filter(|s| s.is_unit())?;
+        self.held(store.0.unit_target()?)
+    }
+
+    /// The guid in 0-based party slot `row`, the one `partyN` and `partypetN` share.
+    fn party_member(&self, row: u32) -> Option<u64> {
+        let slot = usize::try_from(row).ok()?;
+        self.group.party_slots().nth(slot).map(|m| m.guid)
+    }
+
+    /// The guid on 0-based raid row `row`, the one `raidN` and `GetRaidRosterInfo` share.
+    fn raid_member(&self, row: u32) -> Option<u64> {
+        let index = usize::try_from(row).ok()?.checked_add(1)?;
+        crate::ui_party::raid_row_guid(&self.group, self.me().map(|(_, g)| g), index)
     }
 
     /// A group member's pet, held: `CHARM`, else `SUMMON`, off the member's descriptor while it is
@@ -671,18 +683,8 @@ impl UnitTokens<'_, '_> {
     }
 }
 
-/// The number after a group token's prefix, `0x515970`'s inline digit parse read 1-based:
-/// `1..=max`, so `"partypet"`, `"partypet0"`, `"partypetX"` and a number past the table name no
-/// slot. Digits only, as the reference's parse: `"raid+3"` is no row. The reference's own
-/// `partypetN` has no bound and reads past its four-slot table; here it is nobody, as `partyN`.
-fn slot_number(digits: &str, max: usize) -> Option<usize> {
-    if !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse().ok().filter(|n| (1..=max).contains(n))
-}
-
-/// Every token [`UnitTokens`] resolves, `"player"` included (the reference answers d² = 0).
+/// The tokens the `SpellCanTargetUnit` feed answers for, `"player"` included: the bases and one
+/// hop off the target, not the chains a script can spell.
 pub(crate) fn reach_tokens() -> impl Iterator<Item = &'static str> {
     ["player", "target", "targettarget", "mouseover", "pet"]
         .into_iter()
@@ -747,14 +749,16 @@ fn feed_farsight_focus(
     }
 }
 
-/// Feed the unit reach map: per token naming a live unit, its squared distance and whether it
+/// Feed the unit reach map: per held unit a token can name, its squared distance and whether it
 /// passes inspect's two other refusals, a non-player and an attackable one (vmangos
 /// `MiscHandler.cpp:945-956`; that the client checks them is inferred, `0x48a1b0` being partly
-/// undecoded). Ungated: distances move every frame, and no event keys off the map.
+/// undecoded). The guids are the resolver's own inputs, which the aura feed pushes each frame
+/// ([`UiScript::held_unit_guids`], so this runs after it): the bases and each unit a `target`
+/// chain reaches, and the VM resolves a verb's token to one of them. Ungated: distances move every
+/// frame, and no event keys off the map.
 fn feed_unit_reach(
     script: Option<NonSendMut<UiScript>>,
     tokens: UnitTokens,
-    selection: Res<Selection>,
     self_q: Query<(&Transform, &ObjectStore), With<SelfPlayer>>,
     transforms: Query<&Transform>,
     factions: Option<Res<Factions>>,
@@ -765,8 +769,8 @@ fn feed_unit_reach(
     };
     let mut reach = HashMap::new();
     if let Some((self_tf, self_store)) = self_q.iter().next() {
-        for token in reach_tokens() {
-            let Some((entity, guid)) = tokens.resolve(token, &selection) else {
+        for guid in script.held_unit_guids() {
+            let Some((entity, _)) = tokens.held(guid) else {
                 continue;
             };
             let Ok(tf) = transforms.get(entity) else {
@@ -781,7 +785,7 @@ fn feed_unit_reach(
                     Some(self_store),
                 );
             reach.insert(
-                token.to_string(),
+                guid,
                 benilla_ui::script::UnitReach {
                     dist_sq: dist_sq(tf.translation, self_tf.translation),
                     inspectable,
@@ -2004,20 +2008,8 @@ mod tests {
             assert_eq!(resolve(&mut app, "partypet1"), None);
         }
 
-        #[test]
-        fn a_slot_number_is_digits_within_the_table() {
-            assert_eq!(slot_number("1", 4), Some(1));
-            assert_eq!(slot_number("4", 4), Some(4));
-            assert_eq!(slot_number("40", 40), Some(40));
-            assert_eq!(slot_number("41", 40), None);
-            assert_eq!(slot_number("0", 4), None);
-            for bad in ["", "x", "+1", "-1", "1 ", "1x"] {
-                assert_eq!(slot_number(bad, 40), None, "{bad:?}");
-            }
-        }
-
-        /// The reach and `SpellCanTargetUnit` feeds walk [`reach_tokens`], so a token the
-        /// resolver names must be in it, or `CheckInteractDistance("partypet1", …)` answers nil.
+        /// The `SpellCanTargetUnit` feed walks [`reach_tokens`], so a token it should answer for
+        /// must be in it, or `SpellCanTargetUnit("partypet1")` answers nil.
         #[test]
         fn the_reach_tokens_cover_every_group_pet() {
             let tokens: Vec<_> = reach_tokens().collect();
@@ -2030,7 +2022,8 @@ mod tests {
             }
         }
 
-        /// A party pet in view gets a distance, so the range verbs answer for it.
+        /// A party pet in view gets a distance, so the range verbs answer for it: the feed measures
+        /// the held units the resolver's inputs list, and the VM resolves the token to one of them.
         #[test]
         fn the_reach_feed_measures_a_party_pet() {
             let mut app = party(1, true, false);
@@ -2046,6 +2039,15 @@ mod tests {
             app.init_resource::<Reputations>();
             app.insert_resource(Selection::default());
             app.insert_non_send_resource(UiScript::new().unwrap());
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .set_unit_guids(&benilla_ui::script::UnitGuids {
+                    player: ME,
+                    party: [member(1), 0, 0, 0],
+                    party_pets: [pet(1), 0, 0, 0],
+                    held: HashMap::from([(ME, 0), (pet(1), 0)]),
+                    ..Default::default()
+                });
             app.world_mut().run_system_once(feed_unit_reach).unwrap();
             let answer = |app: &App, expr: &str| {
                 app.world()
@@ -2072,6 +2074,437 @@ mod tests {
                 "no second member"
             );
         }
+    }
+
+    /// The `target` chain through the one resolver (`0x5159d3`-`0x515a2c`): a base, then a hop off
+    /// each held unit's `UNIT_FIELD_TARGET`, so `party1target`, `pettarget` and `raid3target` name
+    /// the unit at the end of the chain and any break in it names nobody.
+    mod target_chain_tokens {
+        use super::*;
+        use crate::net::GuidIndex;
+        use crate::target::{Hovered, HoveredObject};
+        use crate::ui_party::{GroupState, GROUPTYPE_RAID};
+        use benilla_protocol::messages::{member_status, GroupMemberEntry};
+        use benilla_protocol::ObjectFields;
+        use bevy::ecs::system::RunSystemOnce;
+
+        const ME: u64 = 0x10;
+        /// party1 and raid2, party2 and raid3, party3 and raid4.
+        const A: u64 = 0x1001;
+        const B: u64 = 0x1002;
+        const C: u64 = 0x1003;
+        const MOB: u64 = 0xF130_0000_0000_0001;
+        /// A unit with no target, the mouseover.
+        const LONELY: u64 = 0xF130_0000_0000_0002;
+        const MY_PET: u64 = 0xF140_0000_0000_0010;
+        const A_PET: u64 = 0xF140_0000_0000_1001;
+        /// A game object that still carries a value where a unit keeps its target.
+        const CHEST: u64 = 0xF110_0000_0000_0003;
+        /// Named by `C`'s target and held by no one.
+        const GONE: u64 = 0xF130_0000_0000_0099;
+
+        /// `OBJECT_FIELD_TYPE`, and the masks the object manager's typemask test reads.
+        const OBJECT_TYPE: u16 = 2;
+        const PLAYER: u32 = 0x19;
+        const UNIT: u32 = 0x09;
+        const GAME_OBJECT: u32 = 0x21;
+        /// `UNIT_FIELD_SUMMON` and `UNIT_FIELD_TARGET`, each a two-field guid.
+        const SUMMON: u16 = 8;
+        const TARGET: u16 = 16;
+
+        fn fields(kind: u32, summon: u64, target: u64) -> ObjectStore {
+            let mut pairs = vec![(OBJECT_TYPE, kind)];
+            for (field, guid) in [(SUMMON, summon), (TARGET, target)] {
+                pairs.push((field, guid as u32));
+                pairs.push((field + 1, (guid >> 32) as u32));
+            }
+            ObjectStore(ObjectFields::from_pairs(&pairs))
+        }
+
+        fn entry(guid: u64) -> GroupMemberEntry {
+            GroupMemberEntry {
+                name: format!("M{guid:x}"),
+                guid,
+                status: member_status::ONLINE,
+                flags: 0,
+            }
+        }
+
+        /// The world's targets: we target the mob and so does `A`, the mob targets `B`, `B` targets
+        /// `A`, our pet targets the mob and `A`'s targets `B`, `C` targets a unit nobody holds, and
+        /// `LONELY` targets nobody. We select the mob and hover `LONELY`. The group is a raid of
+        /// us, `A`, `B` and `C`, all in our subgroup, so the three are also party slots 1 to 3.
+        fn app() -> App {
+            let mut app = App::new();
+            app.init_resource::<GuidIndex>()
+                .init_resource::<GroupState>()
+                .init_resource::<HoveredObject>();
+            let spawn = |app: &mut App, guid: u64, store: ObjectStore| {
+                let e = app.world_mut().spawn((Guid(guid), store)).id();
+                app.world_mut()
+                    .resource_mut::<GuidIndex>()
+                    .0
+                    .insert(guid, e);
+                e
+            };
+            let me = spawn(&mut app, ME, fields(PLAYER, MY_PET, MOB));
+            app.world_mut().entity_mut(me).insert(SelfPlayer);
+            spawn(&mut app, A, fields(PLAYER, A_PET, MOB));
+            spawn(&mut app, B, fields(PLAYER, 0, A));
+            spawn(&mut app, C, fields(PLAYER, 0, GONE));
+            let mob = spawn(&mut app, MOB, fields(UNIT, 0, B));
+            let lonely = spawn(&mut app, LONELY, fields(UNIT, 0, 0));
+            spawn(&mut app, MY_PET, fields(UNIT, 0, MOB));
+            spawn(&mut app, A_PET, fields(UNIT, 0, B));
+            app.world_mut().resource_mut::<GroupState>().apply_list(
+                GROUPTYPE_RAID,
+                0,
+                vec![entry(A), entry(B), entry(C)],
+                ME,
+                None,
+                Some(ME),
+            );
+            app.insert_resource(Selection {
+                target: Some(mob),
+                guid: Some(MOB),
+                ..Default::default()
+            });
+            app.insert_resource(Hovered {
+                target: Some(lonely),
+                guid: Some(LONELY),
+                distance: 5.0,
+                ..Default::default()
+            });
+            let mut bar = crate::ui_pet::PetBar::default();
+            bar.spells.pet_guid = MY_PET;
+            app.insert_resource(bar);
+            app
+        }
+
+        fn resolve(app: &mut App, token: &str) -> Option<(Entity, u64)> {
+            let token = token.to_string();
+            app.world_mut()
+                .run_system_once(move |tokens: UnitTokens, selection: Res<Selection>| {
+                    tokens.resolve(&token, &selection)
+                })
+                .unwrap()
+        }
+
+        fn guid_of(app: &mut App, token: &str) -> Option<u64> {
+            resolve(app, token).map(|(_, guid)| guid)
+        }
+
+        /// Every base takes hops, and each hop reads the current unit's own target, so the answer
+        /// is the unit the chain ends on, its entity the one the object manager holds.
+        #[test]
+        fn a_target_suffix_names_the_unit_at_the_end_of_the_chain() {
+            let mut app = app();
+            for (token, want) in [
+                ("party1target", MOB),
+                ("party2target", A),
+                ("party1targettarget", B),
+                ("party1targettargettarget", A),
+                ("playertarget", MOB),
+                ("playertargettarget", B),
+                ("partypet1target", B),
+                ("pettarget", MOB),
+                ("pettargettarget", B),
+                ("target", MOB),
+                ("targettarget", B),
+                ("targettargettarget", A),
+                ("raid1target", MOB),
+                ("raid2target", MOB),
+                ("raid3target", A),
+                ("raid2targettarget", B),
+                ("raidpet1target", MOB),
+                ("raidpet2target", B),
+                ("mouseover", LONELY),
+            ] {
+                assert_eq!(guid_of(&mut app, token), Some(want), "{token}");
+            }
+            let (entity, guid) = resolve(&mut app, "party2targettarget").unwrap();
+            assert_eq!(guid, MOB);
+            assert_eq!(
+                app.world().get::<Guid>(entity).map(|g| g.0),
+                Some(MOB),
+                "the entity is the mob's"
+            );
+        }
+
+        /// A unit with no target ends the chain (`0x515a2e`), as does a target the object manager
+        /// does not hold (`0x515a16`), a hop off anything but a unit (`0x515a0f`, typemask 8) and
+        /// a base that names no one.
+        #[test]
+        fn a_chain_that_breaks_names_nobody() {
+            let mut app = app();
+            for token in [
+                // The mouseover targets nobody, and so nothing follows it.
+                "mouseovertarget",
+                "mouseovertargettarget",
+                // `C` targets a guid nobody holds.
+                "party3target",
+                "raid4target",
+                // Nor does a further hop go past the break.
+                "party3targettarget",
+                // A base no one holds: party4 is nobody, raid5 is past the roster, a missing or
+                // zero number names no row, and `B` has no pet.
+                "party4target",
+                "raid5target",
+                "raid0target",
+                "partytarget",
+                "partypet2target",
+                "raidpet3target",
+            ] {
+                assert_eq!(resolve(&mut app, token), None, "{token}");
+            }
+
+            // A hop off a game object is nobody, whatever its descriptor holds where a unit
+            // keeps its target.
+            let chest = app
+                .world_mut()
+                .spawn((Guid(CHEST), fields(GAME_OBJECT, 0, A)))
+                .id();
+            app.world_mut()
+                .resource_mut::<GuidIndex>()
+                .0
+                .insert(CHEST, chest);
+            app.insert_resource(Selection {
+                target: Some(chest),
+                guid: Some(CHEST),
+                ..Default::default()
+            });
+            assert_eq!(guid_of(&mut app, "target"), Some(CHEST), "the base is held");
+            assert_eq!(resolve(&mut app, "targettarget"), None);
+        }
+
+        /// Text after the base, or after a hop, that is not `target` names nobody, and `npc` is
+        /// an exact compare with no chain.
+        #[test]
+        fn text_that_is_not_a_target_hop_names_nobody() {
+            let mut app = app();
+            for token in [
+                "party1foo",
+                "party1targetfoo",
+                "party1targettarge",
+                "party1 target",
+                "playerfoo",
+                "playertargets",
+                "pettarge",
+                "targetfoo",
+                "mouseoverx",
+                "raid3targettargetfoo",
+                "npc",
+                "npctarget",
+                "bogus",
+                "",
+            ] {
+                assert_eq!(resolve(&mut app, token), None, "{token}");
+            }
+            // The control: the same tokens without the tail resolve.
+            assert_eq!(guid_of(&mut app, "party1"), Some(A));
+            assert_eq!(guid_of(&mut app, "player"), Some(ME));
+        }
+
+        /// The compares fold ASCII case, the hops' included (`_strnicmp`, `0x5159f1`), and the
+        /// chain has no depth limit: three hops round `A`, the mob and `B` come back to `A`.
+        #[test]
+        fn a_chain_folds_case_and_has_no_depth_limit() {
+            let mut app = app();
+            for token in [
+                "PARTY1TARGET",
+                "Party1Target",
+                "party1TARGET",
+                "PartY1tArGeT",
+            ] {
+                assert_eq!(guid_of(&mut app, token), Some(MOB), "{token}");
+            }
+            assert_eq!(guid_of(&mut app, "PlayerTarget"), Some(MOB));
+            assert_eq!(guid_of(&mut app, "TargetTargetTarget"), Some(A));
+            assert_eq!(guid_of(&mut app, "RaidPet1Target"), Some(MOB));
+            for hops in [3, 30, 3000] {
+                let token = format!("party1{}", "target".repeat(hops));
+                assert_eq!(guid_of(&mut app, &token), Some(A), "{hops} hops round A");
+            }
+            let token = format!("party1{}", "target".repeat(3001));
+            assert_eq!(guid_of(&mut app, &token), Some(MOB));
+        }
+
+        /// A number wraps in 32 bits as the reference's inline parse does (`0x515ab3`): 2^32 + 1
+        /// is row 1, and digits stop at the first letter.
+        #[test]
+        fn a_row_number_wraps_as_the_reference_parse_does() {
+            let mut app = app();
+            assert_eq!(guid_of(&mut app, "party4294967297target"), Some(MOB));
+            assert_eq!(guid_of(&mut app, "party01target"), Some(MOB));
+            assert_eq!(guid_of(&mut app, "party1x"), None);
+        }
+    }
+
+    /// The range verbs end to end, with the aura feed that pushes the resolver's inputs and the
+    /// reach feed that measures the units they hold: `CheckInteractDistance` and `CanInspect`
+    /// answer for a `target` chain (`0x48ba00` and `0x48a1b0` resolve their token through
+    /// `0x515970`), on the unit the chain names and not on the base.
+    #[test]
+    fn the_range_verbs_answer_for_a_target_chain() {
+        use benilla_protocol::messages::{member_status, GroupMemberEntry, ObjectFields};
+
+        const ME: u64 = 0x10;
+        const A: u64 = 0x1001;
+        const B: u64 = 0x1002;
+        const MOB: u64 = 0xF130_0000_0000_0001;
+        const A_PET: u64 = 0xF140_0000_0000_1001;
+        /// `OBJECT_FIELD_TYPE`, `UNIT_FIELD_SUMMON`, `UNIT_FIELD_TARGET` and `UNIT_FIELD_FLAGS`.
+        const OBJECT_TYPE: u16 = 2;
+        const SUMMON: u16 = 8;
+        const TARGET: u16 = 16;
+        const FLAGS: u16 = 46;
+        /// `UNIT_FIELD_FLAGS` bit 1 (NON_ATTACKABLE), which `can_attack` refuses.
+        const NON_ATTACKABLE: u32 = 1 << 1;
+
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(crate::char_select::ClientState::InWorld)
+            .init_resource::<Selection>()
+            .init_resource::<crate::ui_pet::PetBar>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Reputations>()
+            .init_resource::<crate::ui_party::GroupState>()
+            .insert_resource(NetCommands(tx))
+            .add_plugins(crate::ui_aura::UiAuraPlugin)
+            .add_systems(Update, feed_unit_reach.after(crate::ui_aura::AuraEvents));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+
+        // We at the origin, party1 (`A`) 5 yards off with a pet 15 yards off, the mob 20 yards
+        // off, and `B` 3 yards off. We and `A` target the mob, the mob targets `B`, the pet
+        // targets `B`, and `B` targets nobody. The players are not attackable, so inspectable.
+        let mut spawn = |guid: u64, kind: u32, summon: u64, target: u64, yards: f32| {
+            let mut pairs = vec![(OBJECT_TYPE, kind), (FLAGS, NON_ATTACKABLE)];
+            for (field, guid) in [(SUMMON, summon), (TARGET, target)] {
+                pairs.push((field, guid as u32));
+                pairs.push((field + 1, (guid >> 32) as u32));
+            }
+            let e = app
+                .world_mut()
+                .spawn((
+                    Guid(guid),
+                    ObjectStore(ObjectFields::from_pairs(&pairs)),
+                    // Along one axis, so d² is exactly yards².
+                    Transform::from_xyz(yards, 0.0, 0.0),
+                ))
+                .id();
+            app.world_mut()
+                .resource_mut::<crate::net::GuidIndex>()
+                .0
+                .insert(guid, e);
+            e
+        };
+        let me = spawn(ME, 0x19, 0, MOB, 0.0);
+        spawn(A, 0x19, A_PET, MOB, 5.0);
+        spawn(A_PET, 0x09, 0, B, 15.0);
+        let mob = spawn(MOB, 0x09, 0, B, 20.0);
+        spawn(B, 0x19, 0, 0, 3.0);
+        app.world_mut().entity_mut(me).insert(SelfPlayer);
+        app.world_mut()
+            .resource_mut::<crate::ui_party::GroupState>()
+            .apply_list(
+                0,
+                0,
+                vec![GroupMemberEntry {
+                    name: "Brisca".into(),
+                    guid: A,
+                    status: member_status::ONLINE,
+                    flags: 0,
+                }],
+                ME,
+                None,
+                Some(ME),
+            );
+        app.insert_resource(Selection {
+            target: Some(mob),
+            guid: Some(MOB),
+            ..Default::default()
+        });
+        app.update();
+
+        let answers = |app: &App, expr: &str| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<bool>(&format!("return {expr} ~= nil"))
+                .unwrap()
+        };
+        // The base and each hop, at their own distances: the 10-yard row is `1`, the 30-yard `4`.
+        for (token, kind, want) in [
+            ("player", 1, true),
+            ("target", 1, false),
+            ("target", 4, true),
+            ("playertarget", 1, false),
+            ("playertarget", 4, true),
+            ("party1target", 1, false),
+            ("party1target", 4, true),
+            ("PARTY1TARGET", 4, true),
+            ("party1targettarget", 1, true),
+            ("targettarget", 1, true),
+            ("partypet1", 1, false),
+            ("partypet1", 4, true),
+            ("partypet1target", 1, true),
+            // `B` targets nobody, so the chain ends there.
+            ("party1targettargettarget", 4, false),
+            ("party2target", 4, false),
+            ("party1foo", 4, false),
+            ("npctarget", 4, false),
+        ] {
+            assert_eq!(
+                answers(
+                    &app,
+                    &format!(r#"CheckInteractDistance("{token}", {kind})"#)
+                ),
+                want,
+                "CheckInteractDistance({token}, {kind})"
+            );
+        }
+        // `CanInspect`: a player within 10 yards, so `B` and not the mob 20 yards off.
+        for (token, want) in [
+            ("party1targettarget", true),
+            ("targettarget", true),
+            ("party1", true),
+            ("party1target", false),
+            ("target", false),
+            ("party1targettargettarget", false),
+        ] {
+            assert_eq!(
+                answers(&app, &format!(r#"CanInspect("{token}")"#)),
+                want,
+                "CanInspect({token})"
+            );
+        }
+    }
+
+    /// The reach feed measures the guids the aura feed pushes, so a frame's feeds must run in that
+    /// order: read off the declared graph, the aura feed's set comes before the reach feed.
+    #[test]
+    fn the_reach_feed_runs_after_the_aura_feed_it_reads() {
+        use crate::game_plugins::schedule_tests::{census, headless_client, SyncPoints};
+
+        let mut app = headless_client();
+        let c = census(&mut app, Update, SyncPoints::Declared);
+        if !c.systems.values().any(|s| s.name.contains("benilla_app::")) {
+            eprintln!("skipped: this build carries no type names");
+            return;
+        }
+        let one = |suffix: &str| {
+            let mut hits = c.systems.iter().filter(|(_, s)| s.name.ends_with(suffix));
+            match (hits.next(), hits.next()) {
+                (Some((k, _)), None) => *k,
+                _ => panic!("exactly one system named `…{suffix}` in Update"),
+            }
+        };
+        let aura = one("::ui_aura::feed_auras");
+        let reach = one("::ui_unit::feed_unit_reach");
+        assert!(
+            c.dependencies.contains(&(aura, reach)),
+            "feed_unit_reach is declared after feed_auras"
+        );
     }
 
     /// The team digit comes off the race byte, whatever template sits beside it (a GM's 35).
@@ -2644,6 +3077,15 @@ mod tests {
                 guid: Some(guid),
                 ..Default::default()
             });
+            // The resolver's inputs the aura feed would push: us and the target, both held.
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .set_unit_guids(&benilla_ui::script::UnitGuids {
+                    player: ME,
+                    target: guid,
+                    held: HashMap::from([(ME, 0), (guid, 0)]),
+                    ..Default::default()
+                });
 
             app.world_mut().run_system_once(feed_unit_reach).unwrap();
             app.world_mut()

@@ -304,6 +304,9 @@ fn the_real_global_strings_name_the_rank() {
 use benilla_ui::script::InspectHonorData;
 use std::collections::HashMap;
 
+/// The inspected player's guid, which `"target"` resolves to and the reach map is keyed by.
+const TARGET: u64 = 0x0000_0001_0000_2AB3;
+
 /// A live, inspectable unit at squared distance `d2`.
 fn reach(d2: f64) -> benilla_ui::script::UnitReach {
     benilla_ui::script::UnitReach {
@@ -366,11 +369,16 @@ fn shown_inspect_honor_page() -> UiScript {
     super::test_ui::seat_chain_addon(&mut s, "Blizzard_InspectUI");
     s.run("InspectFrame_LoadUI()").unwrap();
     s.set_unit("target", Some(alliance_player()));
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        target: TARGET,
+        held: HashMap::from([(TARGET, 0)]),
+        ..Default::default()
+    });
     // The player is needed too: the page titles the target through `GetPVPRankInfo`
     // (`InspectHonorFrame.lua:50`), which keys off the local player's side and sex.
     s.set_unit("player", Some(alliance_player()));
     // 4 yards (d² = 16), inside `CanInspect`'s d² of 100; the window refuses to open otherwise.
-    s.set_unit_reach(HashMap::from([("target".to_string(), reach(16.0))]));
+    s.set_unit_reach(HashMap::from([(TARGET, reach(16.0))]));
     s.set_inspect_honor(Some(inspect_reply()));
     s.run(r#"InspectUnit("target")"#).unwrap();
     s.run(r#"ToggleInspect("InspectHonorFrame")"#).unwrap();

@@ -876,8 +876,8 @@ pub(crate) struct Model {
     pub(crate) tabard_intents: Vec<super::tabard::TabardIntent>,
     /// The `WorldFrame` type's one-shot record: true once the first is made.
     pub(crate) world_frame_made: bool,
-    /// Per lowercased live-unit token, reach for `CanInspect`/`CheckInteractDistance`; absent: nil.
-    pub(crate) unit_reach: HashMap<String, super::UnitReach>,
+    /// Per live-unit guid, reach for `CanInspect`/`CheckInteractDistance`; absent: nil.
+    pub(crate) unit_reach: HashMap<u64, super::UnitReach>,
 
     /// The skills pane's snapshot and the display tree built from it.
     pub(crate) skills: skills::SkillsState,

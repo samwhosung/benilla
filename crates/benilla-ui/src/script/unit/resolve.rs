@@ -61,6 +61,36 @@ const PREFIXES: [(&str, Base); 8] = [
     ("mouseover", Base::Mouseover),
 ];
 
+/// The unit a token starts from, before any `target` hop. A numbered base carries its 0-based
+/// row, [`index_of`]'s: a table lookup that fails on the reserved `u32::MAX` of a missing or zero
+/// number names nobody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitBase {
+    Player,
+    Pet,
+    Target,
+    Mouseover,
+    /// The interaction NPC; an exact compare, so it takes no `target` hop (`0x515bec`).
+    Npc,
+    Party(u32),
+    PartyPet(u32),
+    Raid(u32),
+    RaidPet(u32),
+}
+
+/// What `0x515970` makes of a token's text, before it reads any state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitTokenParse {
+    /// None of the nine compares match: the reference raises `Unknown unit name` (`0x515c14`).
+    Unknown,
+    /// Recognised, and names nobody whatever the state: the empty token (`0x51599d`), or text
+    /// after the base, and after each hop, that is not `target` (`0x515c2d`).
+    Nobody,
+    /// A base and the `target` hops after it, each off the current unit's `UNIT_FIELD_TARGET`
+    /// (`0x515a1c`-`0x515a25`); the loop has no depth limit.
+    Unit { base: UnitBase, hops: usize },
+}
+
 /// `_strnicmp(s, lit, strlen(lit)) == 0`: ASCII fold only, bytes of 0x80 and up exact.
 fn has_prefix(s: &[u8], lit: &str) -> bool {
     s.len() >= lit.len() && s[..lit.len()].eq_ignore_ascii_case(lit.as_bytes())
@@ -91,46 +121,88 @@ fn index_of(s: &[u8]) -> (u32, usize) {
     (n.wrapping_sub(1), digits)
 }
 
+/// Read `token`'s text as `0x515970` does, before any state: the base by the compares in their
+/// order, a numbered base's row, then `target` hops to the end of the text. `"party1target"` is
+/// party1 and one hop, `"targettarget"` the target and one, and `"npctarget"` is none of the nine
+/// compares, as `npc` is one full-string compare.
+pub fn parse_unit_token(token: &str) -> UnitTokenParse {
+    let bytes = token.as_bytes();
+    if bytes.is_empty() {
+        return UnitTokenParse::Nobody;
+    }
+    let Some((base, len)) = base_of(bytes) else {
+        return if token.eq_ignore_ascii_case("npc") {
+            UnitTokenParse::Unit {
+                base: UnitBase::Npc,
+                hops: 0,
+            }
+        } else {
+            UnitTokenParse::Unknown
+        };
+    };
+    let mut rest = &bytes[len..];
+    let mut numbered = |make: fn(u32) -> UnitBase| {
+        let (row, digits) = index_of(rest);
+        rest = &rest[digits..];
+        make(row)
+    };
+    let base = match base {
+        Base::Player => UnitBase::Player,
+        Base::Pet => UnitBase::Pet,
+        Base::Target => UnitBase::Target,
+        Base::Mouseover => UnitBase::Mouseover,
+        Base::PartyPet => numbered(UnitBase::PartyPet),
+        Base::Party => numbered(UnitBase::Party),
+        Base::RaidPet => numbered(UnitBase::RaidPet),
+        Base::Raid => numbered(UnitBase::Raid),
+    };
+    let mut hops = 0;
+    while !rest.is_empty() {
+        if !has_prefix(rest, "target") {
+            return UnitTokenParse::Nobody;
+        }
+        rest = &rest[6..];
+        hops += 1;
+    }
+    UnitTokenParse::Unit { base, hops }
+}
+
 impl UnitGuids {
     /// The guid `token` names, or `None` for nobody; `Err` for a token none of the nine compares
     /// match, where the reference raises `Unknown unit name: %s` (`0x515c14`). An empty token is
     /// nobody (`0x51599d`).
     pub(crate) fn resolve(&self, token: &str) -> Result<Option<u64>, ()> {
-        let bytes = token.as_bytes();
-        if bytes.is_empty() {
-            return Ok(None);
-        }
-        let (guid, rest) = if let Some((base, len)) = base_of(bytes) {
-            let rest = &bytes[len..];
-            // The indexed bases: the table's row for the parsed number, and what follows it.
-            let at = |table: &[u64]| {
-                let (i, digits) = index_of(rest);
-                let row = usize::try_from(i).ok().and_then(|i| table.get(i));
-                (row.copied().unwrap_or(0), &rest[digits..])
-            };
-            match base {
-                Base::Player => (self.player, rest),
-                Base::Pet if self.player == 0 => return Ok(None),
-                Base::Pet => (self.pet, rest),
-                Base::Target => (self.target, rest),
-                // Deviation: `0x4e81d0` has no bound and reads past its four-entry table, which
-                // is stale memory, not a mechanism; past it, nobody.
-                Base::PartyPet => at(&self.party_pets),
-                // Capped at 4 (`0x4e81b0`).
-                Base::Party => at(&self.party),
-                // Capped at the roster count (`0x491940`, `0x491960`).
-                Base::RaidPet => at(&self.raid_pets),
-                Base::Raid => at(&self.raid),
-                Base::Mouseover if !self.held.contains_key(&self.mouseover) => return Ok(None),
-                Base::Mouseover => (self.mouseover, rest),
-            }
-        } else if token.eq_ignore_ascii_case("npc") {
-            // The full-string compare leaves nothing to chain (`0x515bec`): `"npctarget"` raises.
-            (self.npc, &bytes[bytes.len()..])
-        } else {
-            return Err(());
+        let (base, hops) = match parse_unit_token(token) {
+            UnitTokenParse::Unknown => return Err(()),
+            UnitTokenParse::Nobody => return Ok(None),
+            UnitTokenParse::Unit { base, hops } => (base, hops),
         };
-        Ok(self.follow(guid, rest))
+        // The indexed bases: the table's row for the parsed number.
+        let at = |table: &[u64], row: u32| {
+            usize::try_from(row)
+                .ok()
+                .and_then(|row| table.get(row))
+                .copied()
+                .unwrap_or(0)
+        };
+        let guid = match base {
+            UnitBase::Player => self.player,
+            UnitBase::Pet if self.player == 0 => return Ok(None),
+            UnitBase::Pet => self.pet,
+            UnitBase::Target => self.target,
+            UnitBase::Npc => self.npc,
+            // Deviation: `0x4e81d0` has no bound and reads past its four-entry table, which is
+            // stale memory, not a mechanism; past it, nobody.
+            UnitBase::PartyPet(row) => at(&self.party_pets, row),
+            // Capped at 4 (`0x4e81b0`).
+            UnitBase::Party(row) => at(&self.party, row),
+            // Capped at the roster count (`0x491940`, `0x491960`).
+            UnitBase::RaidPet(row) => at(&self.raid_pets, row),
+            UnitBase::Raid(row) => at(&self.raid, row),
+            UnitBase::Mouseover if !self.held.contains_key(&self.mouseover) => return Ok(None),
+            UnitBase::Mouseover => self.mouseover,
+        };
+        Ok(self.follow(guid, hops))
     }
 
     /// [`Self::resolve`] with the raise as the Lua error it is.
@@ -139,23 +211,16 @@ impl UnitGuids {
             .map_err(|()| mlua::Error::runtime(format!("Unknown unit name: {token}")))
     }
 
-    /// The `target` loop (`0x5159d3`-`0x515a2c`): nobody stays nobody, the end of the token answers
-    /// the guid, and each `target` hops to the held unit's `UNIT_FIELD_TARGET`. Anything else
-    /// after a base, or a hop off a unit not held, is a quiet nobody (`0x5159f8`, `0x515a16`).
-    fn follow(&self, mut guid: u64, mut rest: &[u8]) -> Option<u64> {
-        loop {
+    /// The `target` loop (`0x5159d3`-`0x515a2c`): nobody stays nobody, and each hop goes to the held
+    /// unit's `UNIT_FIELD_TARGET`; a hop off a unit not held is a quiet nobody (`0x515a16`).
+    fn follow(&self, mut guid: u64, hops: usize) -> Option<u64> {
+        for _ in 0..hops {
             if guid == 0 {
                 return None;
             }
-            if rest.is_empty() {
-                return Some(guid);
-            }
-            if !has_prefix(rest, "target") {
-                return None;
-            }
-            rest = &rest[6..];
             guid = *self.held.get(&guid)?;
         }
+        Some(guid).filter(|&g| g != 0)
     }
 }
 
@@ -239,6 +304,71 @@ mod tests {
         assert_eq!(at("pettarget"), None);
         assert_eq!(at("party2target"), None);
         assert!(guids().resolve("npctarget").is_err());
+    }
+
+    /// The parse reads the text alone: the base by the resolver's compares, a numbered base's
+    /// 0-based row, then `target` hops to the end, whatever the depth.
+    #[test]
+    fn a_token_parses_to_a_base_and_its_hops() {
+        use UnitBase::*;
+        let unit = |base, hops| UnitTokenParse::Unit { base, hops };
+        for (token, want) in [
+            ("player", unit(Player, 0)),
+            ("pet", unit(Pet, 0)),
+            ("target", unit(Target, 0)),
+            ("mouseover", unit(Mouseover, 0)),
+            ("npc", unit(Npc, 0)),
+            ("party1", unit(Party(0), 0)),
+            ("partypet4", unit(PartyPet(3), 0)),
+            ("raid40", unit(Raid(39), 0)),
+            ("raidpet2", unit(RaidPet(1), 0)),
+            ("targettarget", unit(Target, 1)),
+            ("targettargettargettarget", unit(Target, 3)),
+            ("playertarget", unit(Player, 1)),
+            ("pettarget", unit(Pet, 1)),
+            ("mouseovertarget", unit(Mouseover, 1)),
+            ("party1target", unit(Party(0), 1)),
+            ("partypet1target", unit(PartyPet(0), 1)),
+            ("raid12targettargettarget", unit(Raid(11), 3)),
+            ("raidpet3target", unit(RaidPet(2), 1)),
+            // A missing or zero number is the row every bound rejects.
+            ("party", unit(Party(u32::MAX), 0)),
+            ("raid0target", unit(Raid(u32::MAX), 1)),
+            // The compares fold case, the hops too.
+            ("PARTY1TARGET", unit(Party(0), 1)),
+            ("PartyPet2TargetTarget", unit(PartyPet(1), 2)),
+        ] {
+            assert_eq!(parse_unit_token(token), want, "{token}");
+        }
+        let deep = format!("player{}", "target".repeat(1000));
+        assert_eq!(
+            parse_unit_token(&deep),
+            unit(Player, 1000),
+            "no depth limit"
+        );
+    }
+
+    /// Text after the base, or after any hop, that is not `target` names nobody; a token none of
+    /// the nine compares match is the raise, `npc` being an exact compare with no chain.
+    #[test]
+    fn a_token_that_is_not_base_then_hops_parses_to_nobody_or_the_raise() {
+        for token in [
+            "",
+            "party1foo",
+            "playerfoo",
+            "player1",
+            "pet1",
+            "party1targetfoo",
+            "party1targettarge",
+            "party1 target",
+            "targetfoo",
+            "raid3x",
+        ] {
+            assert_eq!(parse_unit_token(token), UnitTokenParse::Nobody, "{token}");
+        }
+        for token in ["npctarget", "npc1", "bogus", "tar", "focus", "5", "targe"] {
+            assert_eq!(parse_unit_token(token), UnitTokenParse::Unknown, "{token}");
+        }
     }
 
     #[test]

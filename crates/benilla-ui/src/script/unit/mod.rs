@@ -496,6 +496,6 @@ mod resolve;
 #[cfg(test)]
 mod tests;
 
-pub use resolve::UnitGuids;
+pub use resolve::{parse_unit_token, UnitBase, UnitGuids, UnitTokenParse};
 
 pub(super) use bindings::install;
