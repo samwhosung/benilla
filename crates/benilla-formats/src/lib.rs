@@ -25,8 +25,8 @@ pub use install::{
 mod characters;
 pub use characters::{
     equip_blits, equip_column, equip_region_candidates, equip_tex_dir, equip_tile, forearm_dressed,
-    BlitSource, CharCreateCatalog, CharSections, CharacterGeosets, DialRanges, EmblemLayer,
-    EquipBlit, EquipGeosets, GuildEmblem, StartOutfitItem, VisibleGeosets,
+    BlitSource, CharCreateCatalog, CharSections, CharacterGeosets, CompositePlan, DialRanges,
+    EmblemLayer, EquipBlit, EquipGeosets, GuildEmblem, StartOutfitItem, VisibleGeosets,
 };
 mod camera_shakes;
 mod cinematics;

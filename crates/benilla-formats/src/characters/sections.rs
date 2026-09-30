@@ -142,12 +142,8 @@ impl CharSections {
             .filter(|s| !s.is_empty())
     }
 
-    /// The body-skin atlas as one mip pyramid: the 256² base skin, the head overlays, the
-    /// underwear, the equipment by bodyslot − 2 and the guild emblem ([`equip_blits`]), each at its
-    /// tile per authored mip level (`0x475c50`, `0x4770f0`); `Ok(None)` without a base skin row.
-    ///
-    /// Deviation: blends in 8-bit RGBA, not the client's RGB565 with 2-bit coverage, because that
-    /// format only saves texture memory and loses precision.
+    /// The body-skin atlas as one mip pyramid, read off `chain` on this thread:
+    /// [`Self::composite_plan`] run by [`CompositePlan::run`]; `Ok(None)` without a base skin row.
     pub fn composite_body(
         &self,
         chain: &mut Chain,
@@ -162,11 +158,43 @@ impl CharSections {
         emblem: Option<GuildEmblem>,
         tabard_preview: bool,
     ) -> Result<Option<BlpMipChain>> {
-        let Some(base_path) = self.skin_texture(race, sex, skin) else {
+        let Some(plan) = self.composite_plan(
+            race,
+            sex,
+            skin,
+            face,
+            facial_hair,
+            hair_style,
+            hair_color,
+            equipment,
+            emblem,
+            tabard_preview,
+        ) else {
             return Ok(None);
         };
-        let mut atlas = read_texture_mip_chain(chain, base_path)
-            .with_context(|| format!("reading base skin '{base_path}'"))?;
+        plan.run(|path| read_texture_mip_chain(chain, path))
+            .map(Some)
+    }
+
+    /// What a body composite reads and where each file lands, from the tables alone: the 256²
+    /// base skin, the head overlays, the underwear, the equipment by bodyslot − 2 and the guild
+    /// emblem ([`equip_blits`]), in blit order; `None` without a base skin row. It owns its paths,
+    /// so [`CompositePlan::run`] can read and blit on any thread.
+    pub fn composite_plan(
+        &self,
+        race: u8,
+        sex: u8,
+        skin: u8,
+        face: u8,
+        facial_hair: u8,
+        hair_style: u8,
+        hair_color: u8,
+        equipment: [Option<&ItemDisplay>; 8],
+        emblem: Option<GuildEmblem>,
+        tabard_preview: bool,
+    ) -> Option<CompositePlan> {
+        let base = self.skin_texture(race, sex, skin)?.to_owned();
+        let mut layers = Vec::new();
         // The head overlays `(sectionType, variation, color, column, tile)` of `0x4782e0`, in order
         // face, facial hair, hair; face and facial hair use columns 0/1, hair 1/2.
         let overlays: [(u8, u8, u8, usize, Tile); 6] = [
@@ -178,11 +206,8 @@ impl CharSections {
             (SECTION_HAIR, hair_style, hair_color, 2, TILE_G8),
         ];
         for (ty, var, color, col, tile) in overlays {
-            let Some(path) = self.tex(race, sex, ty, var, color, col) else {
-                continue;
-            };
-            if let Ok(overlay) = read_texture_mip_chain(chain, path) {
-                blit_over(&mut atlas, &overlay, tile);
+            if let Some(path) = self.tex(race, sex, ty, var, color, col) {
+                layers.push((vec![path.to_owned()], tile));
             }
         }
         // One plan gates the underwear and drives the equipment blits.
@@ -193,24 +218,15 @@ impl CharSections {
             if plan.iter().any(|s| s.layer == layer && s.column < tested) {
                 continue;
             }
-            let Some(path) = self.tex(race, sex, SECTION_UNDERWEAR, 0, skin, col) else {
-                continue;
-            };
-            if let Ok(overlay) = read_texture_mip_chain(chain, path) {
-                blit_over(&mut atlas, &overlay, EQUIP_TILES[layer]);
+            if let Some(path) = self.tex(race, sex, SECTION_UNDERWEAR, 0, skin, col) {
+                layers.push((vec![path.to_owned()], EQUIP_TILES[layer]));
             }
         }
         // The equipment and emblem layers in plan order, each from its first decodable candidate.
         for step in &plan {
-            if let Some(overlay) = step
-                .candidates(sex)
-                .iter()
-                .find_map(|path| read_texture_mip_chain(chain, path).ok())
-            {
-                blit_over(&mut atlas, &overlay, EQUIP_TILES[step.layer]);
-            }
+            layers.push((step.candidates(sex), EQUIP_TILES[step.layer]));
         }
-        Ok(Some(atlas))
+        Some(CompositePlan { base, layers })
     }
 
     /// Load CharSections.dbc from the patch chain.
@@ -246,6 +262,32 @@ impl CharSections {
             }
         }
         Ok(Self { sections })
+    }
+}
+
+/// One body composite's reads in blit order ([`CharSections::composite_plan`]): the base skin, then
+/// each overlay's candidate paths, the first that decodes winning, with its atlas tile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompositePlan {
+    base: String,
+    layers: Vec<(Vec<String>, Tile)>,
+}
+
+impl CompositePlan {
+    /// Read, decode and blit: each overlay at its tile per authored mip level (`0x475c50`,
+    /// `0x4770f0`). An overlay that reads nowhere is skipped; a base skin that does not read fails.
+    ///
+    /// Deviation: blends in 8-bit RGBA, not the client's RGB565 with 2-bit coverage, because that
+    /// format only saves texture memory and loses precision.
+    pub fn run(&self, mut read: impl FnMut(&str) -> Result<BlpMipChain>) -> Result<BlpMipChain> {
+        let mut atlas =
+            read(&self.base).with_context(|| format!("reading base skin '{}'", self.base))?;
+        for (candidates, tile) in &self.layers {
+            if let Some(overlay) = candidates.iter().find_map(|path| read(path).ok()) {
+                blit_over(&mut atlas, &overlay, *tile);
+            }
+        }
+        Ok(atlas)
     }
 }
 
