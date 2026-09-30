@@ -77,9 +77,11 @@ impl super::UiScript {
         self.model_mut().now += f64::from(elapsed);
         // The focused edit box's caret blink (`0x77a790`, on the client's frame tick).
         editbox::tick_blink(&self.lua, elapsed);
-        // Then `0x77a790`'s flush: a multi-line box's relayout sizes it to its text (`0x77d4d0`),
-        // then the `OnTextChanged`s an edit only marked fire (`0x77a7a1`), before the OnUpdate
-        // sweep, as in the reference.
+        // Then the flush (`0x77d3e0`): a multi-line box's relayout sizes it to its text
+        // (`0x77d4d0`), then the `OnTextChanged`s an edit only marked fire. benilla hoists it ahead
+        // of the OnUpdate sweep; the reference runs it per box inside the pump's walk, from the
+        // box's update (`0x77a790`, vtable `+0x38`), after that box's own Lua `OnUpdate`
+        // (`0x77a79a`, then `0x77a7a1`).
         editbox::relayout_multi_line(&self.lua);
         editbox::drain_text_changed(&self.lua);
         // Then the caret flush (`0x77d3e0` → `0x77da80`): `OnCursorChanged` when the caret moved,

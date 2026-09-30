@@ -249,7 +249,8 @@ pub struct WidgetArena {
     tooltip_kinds: Vec<FrameHandle>,
     /// The live Minimaps, kept the same way, for the containment, zoom and arrow-facing feeds.
     minimap_kinds: Vec<FrameHandle>,
-    /// The live EditBoxes, kept the same way, for the per-tick relayout of multi-line boxes.
+    /// The live EditBoxes, kept the same way, for the resize re-seat (`reseat_resized`) and the
+    /// per-tick relayout of multi-line boxes.
     editbox_kinds: Vec<FrameHandle>,
 }
 

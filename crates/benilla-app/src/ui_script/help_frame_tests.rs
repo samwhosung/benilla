@@ -195,7 +195,8 @@ fn toggling_the_window_opens_it_and_asks_for_the_queue_status() {
 fn the_ticket_text_grows_with_its_lines_and_its_scroll_frame_ranges_over_them() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
-    // Wide glyphs, 12 per line: the box's 500-letter cap must still wrap past the frame.
+    // Wide glyphs and the stand-in's 12-unit line: the box's 500-letter cap must still wrap
+    // past the frame.
     const GLYPH: f64 = 60.0;
     s.set_text_measurer(Box::new(super::FixedWidthFont(GLYPH as f32)));
     s.run("ShowUIPanel(HelpFrame) HelpFrame_ShowFrame(\"OpenTicket\")")

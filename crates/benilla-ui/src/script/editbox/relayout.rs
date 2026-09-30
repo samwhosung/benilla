@@ -7,11 +7,21 @@ use crate::layout::{Anchor, Point, Rect};
 use crate::script::{MeasureRequest, Model};
 use crate::widget::{FrameHandle, KindState, RegionHandle};
 
-/// `0x77b8c0`: the text FontString `TOPLEFT` at `(left, −top)` on the box. Multi-line, it gets
-/// the explicit width `boxW − (right + left)` from the box's resolved rect (`0x77b8df`), which
-/// waits while the box has none (`0x77b8c7`), and height 0, so it spans its measured text.
-/// Single-line, the two inset corners pin the width and the height `boxH − (top + bottom)` it
-/// writes, so no explicit size is kept.
+/// `0x77b8c0`, the text FontString's rect. The reference writes nothing while the box's rect is
+/// unresolved (`0x77b8c7`); then it clears the points (`0x77b8da`), sets the width
+/// `boxW − (right + left)` for either kind (`0x77b905`), the height 0 multi-line (`0x77b91e`) or
+/// `boxH − (top + bottom)` single-line (`0x77b940`), and one `TOPLEFT` point at `(left, −top)`
+/// (`0x77b96b`).
+///
+/// Multi-line, benilla writes that shape, the width once the box has a rect: until then only the
+/// point is written, and the size is kept.
+///
+/// Single-line, benilla pins `TOPLEFT` and `BOTTOMRIGHT` at the inset corners and keeps no
+/// explicit size. That is a gap: it covers the same rect, but an explicit width here would be a
+/// wrap width, since benilla's single-line region holds the whole text where the reference's holds
+/// only the window's substring (`0x77d858`). A script sees the difference: `GetPoint` on the
+/// region answers two points where the reference answers one, and `GetWidth`/`GetHeight` answer
+/// the text's measure where the reference answers the explicit size.
 pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
     let Some(KindState::EditBox(eb)) = model.arena.frame(h).map(|f| &f.kind_state) else {
         return;
@@ -98,7 +108,8 @@ fn multi_line_text_width(model: &Model, h: FrameHandle, [l, r]: [f32; 2]) -> Opt
 /// height (`0x7729b0`), or one line's (`0x7727b0(fs, 1)`) when that is exactly 0, as for empty
 /// text. It reads neither the authored height nor the rect, so the box grows and shrinks with its
 /// text and a `SetHeight` lasts until the next tick; a single-line box is never sized. The text
-/// region's width is the one the box's last resize seated ([`reseat_resized`]).
+/// region's width is the one [`seat_text_region`] last wrote, on a resize ([`reseat_resized`]),
+/// `SetTextInsets`, `GetTextInsets`, `SetMultiLine` or a font change.
 ///
 /// Each tick relayouts every shown multi-line box, where the reference relayouts a box whose dirty
 /// bit 0 is set; every input of the height sets it (an edit, a resize, the insets, the font,
