@@ -23,8 +23,8 @@ use super::super::{
     VisualAttached,
 };
 use super::char_skin::{
-    body_atlas, build_char_skin_materials, equip_geosets, forced_body_atlas, resolve_char_look,
-    resolve_worn_equip, skin_key, CharSkinMaterials,
+    body_atlas, build_char_skin_materials, equip_geosets, resolve_char_look, resolve_worn_equip,
+    skin_key, CharSkinMaterials,
 };
 use super::dress::{part_materials, spawn_group, DressedPart, PartDress};
 use super::merge::{self, DressedGroup, MergedFormsCache};
@@ -86,8 +86,6 @@ pub(in crate::entities) fn redress_player_looks(
         benilla_world::model_render::M2BatchMaterials,
         ResMut<Assets<Mesh>>,
         ResMut<MergedFormsCache>,
-        // The forced composite's upload.
-        ResMut<Assets<Image>>,
     ),
     // The own-material lane `spawn_part` takes; no character batch in the shipped data uses it.
     mut own_lane: (
@@ -97,7 +95,7 @@ pub(in crate::entities) fn redress_player_looks(
     ),
     time: Res<Time>,
 ) {
-    let (sections, mut skin_composites, asset_server, mut mats, mut meshes, mut merged, mut images) =
+    let (sections, mut skin_composites, asset_server, mut mats, mut meshes, mut merged) =
         skin_build;
     let now = time.elapsed_secs();
     for (entity, net, live, mut applied, children, rig, bones, mut pose, bake_center, unit_fade) in
@@ -119,43 +117,24 @@ pub(in crate::entities) fn redress_player_looks(
 
         let worn = resolve_worn_equip(net, Some(live), Some(dm));
         let look = resolve_char_look(net, Some(dm), entity, &stores);
-        // Opening the tabard designer is the one forced re-dress: `0x4f5874` → `0x5e07d0` sets the
-        // preview flag and composites at once (`0x477860(cc, 1)` at `0x5e0808`), waiting on its
-        // loads, so the preview lands the frame the designer opens.
-        let opens_designer = live.tabard_preview && !applied.0.tabard_preview;
-        // Any other change composites off the main thread while the standing look keeps drawing:
-        // a re-dress is the reference's incremental composite, never gated or hidden
+        // The new atlas composites off the main thread while the standing look keeps drawing: a
+        // re-dress is the reference's incremental composite, never gated or hidden
         // (`0x47789c`–`0x4778c3`). The reference shows the new geosets at once and blits each
         // region as its load lands; here the change lands whole with its atlas, a frame or two
         // later, so gear geometry never shows over the old body. Retried each frame against the
         // live gear, so the latest look wins.
         let body_tex = match look.as_ref() {
-            Some(l) => {
-                let key = skin_key(l, worn.bodyslots, worn.emblem, worn.tabard_preview);
-                if opens_designer {
-                    forced_body_atlas(
-                        l,
-                        key,
-                        displays.as_deref(),
-                        sections.as_deref(),
-                        &mut skin_composites,
-                        &asset_server,
-                        &mut images,
-                    )
-                } else {
-                    match body_atlas(
-                        l,
-                        key,
-                        displays.as_deref(),
-                        sections.as_deref(),
-                        &mut skin_composites,
-                        &asset_server,
-                    ) {
-                        BodyAtlas::Ready(tex) => tex,
-                        BodyAtlas::Pending => continue,
-                    }
-                }
-            }
+            Some(l) => match body_atlas(
+                l,
+                skin_key(l, worn.bodyslots, worn.emblem, worn.tabard_preview),
+                displays.as_deref(),
+                sections.as_deref(),
+                &mut skin_composites,
+                &asset_server,
+            ) {
+                BodyAtlas::Ready(tex) => tex,
+                BodyAtlas::Pending => continue,
+            },
             None => None,
         };
         applied.0 = *live;
@@ -688,34 +667,5 @@ mod tests {
         assert_ne!(s.applied(), first, "the first look is still compositing");
         s.wear(last);
         s.settle_on(last, Some(first));
-    }
-
-    /// Opening the tabard designer dresses the preview the frame it opens, as the reference's
-    /// forced composite does (`0x5e07d0` → `0x477860(cc, 1)` at `0x5e0808`); benilla's entry is
-    /// the live gear's `tabard_preview`, set while the designer is open on our own body.
-    #[test]
-    fn opening_the_tabard_designer_dresses_the_preview_in_the_same_frame() {
-        let mut s = stand(&[0], &[0], None);
-        if !s.with_skin_data() {
-            return;
-        }
-        let designer = Equipment {
-            emblem: Some(benilla_formats::GuildEmblem {
-                emblem_style: 1,
-                emblem_color: 1,
-                border_style: 1,
-                border_color: 1,
-                background_color: 1,
-            }),
-            tabard_preview: true,
-            settled: true,
-            ..Default::default()
-        };
-        s.wear(designer);
-        assert_eq!(
-            s.applied(),
-            designer,
-            "the preview is on in the opening frame"
-        );
     }
 }
