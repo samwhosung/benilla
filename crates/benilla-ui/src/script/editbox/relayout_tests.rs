@@ -399,3 +399,86 @@ fn a_resized_box_re_seats_its_text() {
     frame(&mut s);
     assert_eq!(text_rect(&s, "single"), Some((100.0, 350.0, 232.0, 200.0)));
 }
+
+/// A single-line box at `(100, 200)`, 200×32 with insets (10, 20, 3, 5), whose text region a
+/// script has moved to `TOPLEFT (40, 40)`; `SEATED` is where `0x77b8c0` puts it.
+fn moved_text_region(s: &mut UiScript) {
+    s.run(
+        r#"
+        S = CreateFrame("EditBox", "S")
+        S:SetAutoFocus(false)
+        S:SetPoint("BOTTOMLEFT", 100, 200)
+        S:SetWidth(200); S:SetHeight(32)
+        S:SetTextInsets(10, 20, 3, 5)
+        S:SetText("single")
+    "#,
+    )
+    .unwrap();
+    frame(s);
+    assert_eq!(text_rect(s, "single"), Some(SEATED));
+    move_text_region(s);
+}
+
+const SEATED: (f32, f32, f32, f32) = (110.0, 280.0, 229.0, 205.0);
+
+fn move_text_region(s: &mut UiScript) {
+    s.run(
+        r#"
+        local text = S:GetRegions()
+        text:ClearAllPoints(); text:SetPoint("TOPLEFT", S, "TOPLEFT", 40, 40)
+    "#,
+    )
+    .unwrap();
+    frame(s);
+    assert_eq!(
+        text_rect(s, "single").map(|r| r.0),
+        Some(140.0),
+        "the script moved the text region"
+    );
+}
+
+/// `GetTextInsets` (`0x77a710`) copies the insets out, then re-seats (`0x77a73f` → `0x77b8c0`).
+#[test]
+fn get_text_insets_puts_a_moved_text_region_back() {
+    let mut s = script();
+    moved_text_region(&mut s);
+    let insets = s
+        .eval::<(f32, f32, f32, f32)>("return S:GetTextInsets()")
+        .unwrap();
+    assert_eq!(insets, (10.0, 20.0, 3.0, 5.0));
+    frame(&mut s);
+    assert_eq!(text_rect(&s, "single"), Some(SEATED));
+}
+
+/// A new face or size notifies the box (`0x79f342` → `0x77e2a0`), which re-seats its text
+/// (`0x77e2b5`); the same font again sets no change bit (`0x79f2ef`), so it does not.
+#[test]
+fn set_font_puts_a_moved_text_region_back_when_the_font_changes() {
+    let mut s = script();
+    moved_text_region(&mut s);
+    s.run(r#"S:SetFont("Fonts\\FRIZQT__.TTF", 14)"#).unwrap();
+    frame(&mut s);
+    assert_eq!(text_rect(&s, "single"), Some(SEATED));
+
+    move_text_region(&mut s);
+    s.run(r#"S:SetFont("Fonts\\FRIZQT__.TTF", 14)"#).unwrap();
+    frame(&mut s);
+    assert_eq!(
+        text_rect(&s, "single").map(|r| r.0),
+        Some(140.0),
+        "the same font changes nothing"
+    );
+}
+
+/// Linking another font object propagates into the box's font (`0x770c60` → `0x77e4b0`), whose
+/// notify re-seats the text (`0x77e4d7` → `0x77e2a0`).
+#[test]
+fn set_font_object_puts_a_moved_text_region_back() {
+    let mut s = script();
+    s.run(r#"F = CreateFont("ScratchFont") F:SetFont("Fonts\\FRIZQT__.TTF", 12)"#)
+        .unwrap();
+    moved_text_region(&mut s);
+    s.run("S:SetFontObject(F)").unwrap();
+    frame(&mut s);
+    assert_eq!(text_rect(&s, "single"), Some(SEATED));
+}

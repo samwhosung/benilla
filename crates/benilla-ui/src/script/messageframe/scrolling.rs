@@ -243,6 +243,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .ok_or_else(|| mlua::Error::runtime("not a ScrollingMessageFrame"))
         },
         "ScrollingMessageFrame",
+        None,
     )?;
 
     lua.set_named_registry_value(REG_SCROLLINGMESSAGEFRAME_METHODS, m)?;

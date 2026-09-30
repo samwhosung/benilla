@@ -7,8 +7,8 @@ use crate::script::object::frame_handle_of;
 use crate::widget::EditBoxState;
 
 use super::{
-    clear_focus_handle, highlight_text, insert, set_focus_handle, set_text, set_text_insets,
-    with_eb, REG_EDITBOX_METHODS,
+    clear_focus_handle, highlight_text, insert, reseat_text_region, set_focus_handle, set_text,
+    set_text_insets, with_eb, REG_EDITBOX_METHODS,
 };
 
 fn with_editbox<T>(
@@ -243,10 +243,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             },
         )?,
     )?;
+    // GetTextInsets (`0x798c30` → `0x77a710`) copies the four out, then re-seats the text region
+    // (`0x77a73f` → `0x77b8c0`), so the getter puts a script-moved region back.
     m.set(
         "GetTextInsets",
         lua.create_function(|lua, this: Table| {
             let ins = with_editbox(lua, &this, |eb| eb.text_insets)?;
+            reseat_text_region(lua, frame_handle_of(lua, &this)?);
             Ok((ins[0], ins[1], ins[2], ins[3]))
         })?,
     )?;
@@ -326,6 +329,12 @@ fn install_font_block(lua: &Lua, m: &Table) -> mlua::Result<()> {
             super::ensure_text_region(lua, h).ok_or_else(|| mlua::Error::runtime("not an EditBox"))
         },
         "EditBox",
+        // The box listens on its font (vtable `0x81c8dc` slot 0, `0x77e2a0`): a change of face or
+        // spacing (mask `0x11`) re-seats its text region (`0x77e2b5` → `0x77b8c0`).
+        Some(|lua, this| {
+            reseat_text_region(lua, frame_handle_of(lua, this)?);
+            Ok(())
+        }),
     )?;
 
     // SetJustifyH/SetJustifyV return nothing. An unknown token raises `Usage:` (`0x87c77c`); a

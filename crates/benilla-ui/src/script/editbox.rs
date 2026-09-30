@@ -352,6 +352,11 @@ fn set_text_insets(lua: &Lua, h: FrameHandle, l: f32, r: f32, t: f32, b: f32) {
     if with_eb(lua, h, |eb| eb.text_insets = [l, r, t, b]).is_none() {
         return;
     }
+    reseat_text_region(lua, h);
+}
+
+/// Run `0x77b8c0` on the box's text region, creating the region's data if nothing has yet.
+fn reseat_text_region(lua: &Lua, h: FrameHandle) {
     if ensure_text_region(lua, h).is_none() {
         return;
     }

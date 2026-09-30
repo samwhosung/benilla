@@ -164,6 +164,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .ok_or_else(|| mlua::Error::runtime("not a MessageFrame"))
         },
         "MessageFrame",
+        None,
     )?;
 
     lua.set_named_registry_value(REG_MESSAGEFRAME_METHODS, m)?;

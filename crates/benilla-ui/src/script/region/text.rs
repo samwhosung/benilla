@@ -200,5 +200,5 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     //
     // The font object, font, text colour and shadow getters and setters are type-guard shims over
     // one implementation each (`0x79f210` SetFont, `0x79f3b0` GetFont), shared with EditBox.
-    super::super::font_block::install(lua, m, region_handle_of, "FontString")
+    super::super::font_block::install(lua, m, region_handle_of, "FontString", None)
 }

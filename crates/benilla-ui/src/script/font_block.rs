@@ -24,6 +24,11 @@ use crate::widget::RegionHandle;
 /// `EditBox` creates its own on demand. An error means the wrong receiver.
 pub(super) type ResolveRegion = fn(&Lua, &Table) -> mlua::Result<RegionHandle>;
 
+/// A widget's listener on its font instance, run after `SetFont` loads a new face or size and
+/// after `SetFontObject` links another object: the notify `[vt+0x14]` that `0x79f342` and
+/// `0x77e4d7` call, which the EditBox answers (`0x77e2a0`).
+pub(super) type FontChanged = fn(&Lua, &Table) -> mlua::Result<()>;
+
 /// `SetFont`'s shared argument gate (`0x79f210`, reached from Font `0x7a0270`, FontString
 /// `0x79d4f0` and EditBox `0x797210`): arg 2 must pass `lua_isstring` and arg 3 `lua_isnumber`,
 /// both coercing, else it raises `Usage: %s:SetFont("font", fontHeight [, flags])` (`0x87c69c`).
@@ -58,6 +63,7 @@ pub(super) fn install(
     m: &Table,
     resolve: ResolveRegion,
     widget: &'static str,
+    on_font_change: Option<FontChanged>,
 ) -> mlua::Result<()> {
     // ── the font object ──
     // SetFontObject(font | "font" | nil) → nothing (`0x79ef10`, usage string `0x87c5cc`). Any
@@ -67,23 +73,37 @@ pub(super) fn install(
         lua.create_function(move |lua, (this, font): (Table, Value)| {
             let name = super::font::resolve("SetFontObject", &font)?;
             let rh = resolve(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            // nil severs the link and keeps the paint; the reference only nulls the parent.
-            let Some(name) = name else {
-                model.region_data.entry(rh).or_default().font_object = None;
-                return Ok(());
+            let relinked = {
+                let mut model = lua.app_data_mut::<Model>().expect("model");
+                // nil severs the link and keeps the paint; the reference only nulls the parent.
+                let Some(name) = name else {
+                    model.region_data.entry(rh).or_default().font_object = None;
+                    return Ok(());
+                };
+                let Some(fo) = model.font_object(&name).cloned() else {
+                    return Err(mlua::Error::runtime(format!(
+                        "SetFontObject: no font object named '{name}' is registered"
+                    )));
+                };
+                let d = model.region_data.entry(rh).or_default();
+                // The same object again changes nothing (`0x770c6a`).
+                let relinked = d
+                    .font_object
+                    .as_deref()
+                    .is_none_or(|old| !old.eq_ignore_ascii_case(&name));
+                d.font_object = Some(name);
+                // The inherit mask stays: each local setter clears its bit (`FONTINSTANCE+0x2c`)
+                // and nothing restores it, so a property set locally survives a later
+                // `SetFontObject`.
+                super::font::repaint(d, &fo);
+                model.touch_measure(rh);
+                relinked
             };
-            let Some(fo) = model.font_object(&name).cloned() else {
-                return Err(mlua::Error::runtime(format!(
-                    "SetFontObject: no font object named '{name}' is registered"
-                )));
-            };
-            let d = model.region_data.entry(rh).or_default();
-            d.font_object = Some(name);
-            // The inherit mask stays: each local setter clears its bit (`FONTINSTANCE+0x2c`) and
-            // nothing restores it, so a property set locally survives a later `SetFontObject`.
-            super::font::repaint(d, &fo);
-            model.touch_measure(rh);
+            if relinked {
+                if let Some(changed) = on_font_change {
+                    changed(lua, &this)?;
+                }
+            }
             Ok(())
         })?,
     )?;
@@ -118,6 +138,10 @@ pub(super) fn install(
                 let (path, height) = set_font_args(&file, &height, widget)?;
                 let rh = resolve(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
+                let before = model
+                    .region_data
+                    .get(&rh)
+                    .map(|d| (d.font_path.clone(), d.font_height, d.outline));
                 // A failed load (`0x5c1ae0` under the `0x44d040` font cache) is the host's probe to
                 // judge, as only the store knows the files; with no probe, a non-empty path loads.
                 let ok =
@@ -137,7 +161,16 @@ pub(super) fn install(
                     d.outline = Outline::flags(&f);
                     d.font_explicit.outline = true;
                 }
+                let after = (d.font_path.clone(), d.font_height, d.outline);
                 model.touch_measure(rh);
+                drop(model);
+                // A loaded face that changed the path, height or flags notifies (`0x79f32f` sets
+                // the change bits, `0x79f342` calls the notify); a failed load does not.
+                if ok && before.as_ref() != Some(&after) {
+                    if let Some(changed) = on_font_change {
+                        changed(lua, &this)?;
+                    }
+                }
                 Ok(if ok { Value::Number(1.0) } else { Value::Nil })
             },
         )?,
