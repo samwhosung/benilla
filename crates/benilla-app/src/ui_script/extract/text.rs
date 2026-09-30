@@ -107,8 +107,13 @@ pub(super) fn emit(
         let (x0, top, cell_h) =
             crate::ui_text::line_origin(&mut atlas.lock(), drawn, host.rect, draw_justify, spec);
         ebox_geom = Some((x0, top, cell_h));
-        text_clip = Some(host.clip.map_or(host.rect, |c| c.intersect(host.rect)));
+        // A single-line box shows only what fits its text region (`0x77d858` sets the window's
+        // substring), so the whole string drawn here is cut at the region. A multi-line region is
+        // only as tall as its text, and the reference clips neither it nor the caret texture
+        // (`E+0x368`), which after a trailing break stands a line below it: only a ScrollFrame's
+        // clip applies.
         if !ui.multi_line {
+            text_clip = Some(host.clip.map_or(host.rect, |c| c.intersect(host.rect)));
             draw_text = drawn;
             draw_rect = Rect::new(x0, host.rect.min.y, x0 + 100_000.0, host.rect.max.y);
             draw_justify = crate::ui_text::Justify {
@@ -417,5 +422,135 @@ mod tests {
             })
             .collect();
         assert_eq!(gaps, [1, 2].into_iter().collect());
+    }
+}
+
+/// The focused multi-line box's caret through the whole UI pass, on the client faces: the region
+/// that draws its text is only as tall as that text, and the caret must not be cut to it.
+#[cfg(test)]
+mod caret_tests {
+    use bevy::prelude::*;
+    use bevy::window::PrimaryWindow;
+
+    use benilla_ui::script::UiScript;
+
+    use super::super::{paint_script, tick_script, UiQuad, UiQuads};
+    use crate::portrait::PortraitImages;
+    use crate::ui_text::UiFontAtlas;
+
+    /// A focused 270-wide multi-line box at 14 px on a 1024×768 window (`s = 1`), holding `text`.
+    fn app_with_focused_box(text: &str) -> App {
+        let script = UiScript::new().unwrap();
+        script
+            .run(&format!(
+                r#"
+            E = CreateFrame("EditBox", "E")
+            E:SetPoint("TOPLEFT", 100, -100)
+            E:SetWidth(270); E:SetHeight(200)
+            E:SetFont("Fonts\\FRIZQT__.TTF", 14)
+            E:SetMultiLine(true)
+            E:SetFocus()
+            E:SetText({text:?})
+        "#
+            ))
+            .unwrap();
+        let mut app = App::new();
+        app.insert_non_send_resource(script);
+        app.insert_resource(UiFontAtlas::for_test(1.0).expect("the client faces open"));
+        app.init_resource::<UiQuads>();
+        app.init_resource::<crate::ui_script::UiPassState>();
+        app.init_resource::<Assets<Image>>();
+        app.init_resource::<PortraitImages>();
+        app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::ui_models::UiModelTiles>();
+        app.init_resource::<crate::minimap::MinimapWidget>();
+        app.init_resource::<crate::ui_script::UiFrameCost>();
+        app.init_resource::<crate::ui_script::UiCostWanted>();
+        app.init_resource::<Time>();
+        app.init_resource::<Time<Real>>();
+        app.init_resource::<crate::ui_script::UiClock>();
+        app.init_resource::<crate::ui_script::UiScaleCvar>();
+        app.world_mut().spawn((
+            Window {
+                resolution: UVec2::new(1024, 768).into(),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.add_systems(Update, (tick_script, paint_script).chain());
+        // The box seats and sizes itself, the host answers the advances, then the caret draws.
+        for _ in 0..4 {
+            app.update();
+        }
+        app
+    }
+
+    /// The caret: the one untextured white quad.
+    fn caret(app: &App) -> UiQuad {
+        let quads = &app.world().resource::<UiQuads>().quads;
+        let mut carets = quads
+            .iter()
+            .filter(|q| q.texture.is_none() && q.color[..3] == [1.0, 1.0, 1.0]);
+        let c = carets
+            .next()
+            .expect("the focused box draws its caret")
+            .clone();
+        assert!(carets.next().is_none(), "one caret");
+        c
+    }
+
+    /// Whole and visible: a line tall, and no clip cuts any of it.
+    fn assert_whole(c: &UiQuad) {
+        assert!(c.rect.height() >= 10.0, "a line tall: {:?}", c.rect);
+        if let Some(clip) = c.clip {
+            assert_eq!(
+                clip.intersect(c.rect),
+                c.rect,
+                "the clip cuts the caret: {clip:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_focused_multi_line_box_draws_its_whole_caret() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let app = app_with_focused_box("");
+        assert_whole(&caret(&app));
+    }
+
+    /// After a trailing break the caret stands on the line the break opened, below the text.
+    #[test]
+    fn a_caret_after_a_trailing_newline_is_drawn_whole_below_the_text() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let one = caret(&app_with_focused_box("abc"));
+        let after = caret(&app_with_focused_box("abc\n"));
+        assert_whole(&after);
+        assert_eq!(
+            after.rect.min.y,
+            one.rect.min.y + one.rect.height(),
+            "one line down: {:?} against {:?}",
+            after.rect,
+            one.rect
+        );
+    }
+
+    /// The last line's descenders hang below its measured line, as a drop shadow would: no clip
+    /// cuts them.
+    #[test]
+    fn a_focused_multi_line_boxs_last_line_keeps_its_descenders() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let app = app_with_focused_box("gjpqy");
+        let quads = &app.world().resource::<UiQuads>().quads;
+        let glyphs: Vec<&UiQuad> = quads.iter().filter(|q| q.texture.is_some()).collect();
+        assert_eq!(glyphs.len(), 5, "the five glyphs draw");
+        for g in glyphs {
+            if let Some(clip) = g.clip {
+                assert_eq!(
+                    clip.intersect(g.rect),
+                    g.rect,
+                    "a clip cuts a glyph: {clip:?}"
+                );
+            }
+        }
     }
 }

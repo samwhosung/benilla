@@ -654,6 +654,18 @@ pub(super) fn test_engine(dpi: f32) -> Option<TextEngine> {
 pub(super) const TEST_FACES: &[&str] = CLIENT_FONTS;
 
 #[cfg(test)]
+impl UiFontAtlas {
+    /// [`test_engine`] as the app holds it, for a host test that draws text; `None` as there.
+    pub(crate) fn for_test(dpi: f32) -> Option<Self> {
+        Some(UiFontAtlas {
+            engine: Arc::new(Mutex::new(test_engine(dpi)?)),
+            generation: 0,
+            ellipsis: crate::ui_text::EllipsisMemo::default(),
+        })
+    }
+}
+
+#[cfg(test)]
 mod differential_tests {
     use super::*;
 
