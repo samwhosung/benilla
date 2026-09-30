@@ -104,8 +104,8 @@ impl SkinComposites {
     /// An atlas composited on this thread on a miss, or waited for if it is already running, as
     /// the reference's forced composite waits on its section loads (`0x44ad50`) and passes no
     /// admission test: the glue model's (`0x477860(cc, 1)` at `0x470c59`, `0x471308`, `0x4731b6`)
-    /// and the dressing room's (`0x504485`, in `0x504470`). A re-dress of a standing body comes
-    /// here too.
+    /// and the dressing room's (`0x504485`, in `0x504470`). A re-dress of a standing body and a
+    /// rig-heal rebuild come here too, so neither drops out for a frame.
     pub(super) fn force(
         &mut self,
         key: SkinKey,

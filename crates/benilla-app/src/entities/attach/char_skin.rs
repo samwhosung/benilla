@@ -306,8 +306,8 @@ pub(super) fn body_atlas(
     }
 }
 
-/// [`body_atlas`] for the previews: a miss composites on this thread, as their forced composite
-/// waits on its loads.
+/// [`body_atlas`] composited on this thread on a miss ([`SkinComposites::force`]): the previews, whose
+/// composite the reference forces, a re-dress of a standing body and a rig-heal rebuild.
 pub(super) fn forced_body_atlas(
     look: &CharLook,
     key: Option<SkinKey>,
