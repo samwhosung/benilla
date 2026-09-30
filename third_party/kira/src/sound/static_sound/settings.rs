@@ -21,8 +21,8 @@ pub struct StaticSoundSettings {
 	/// Changing the playback rate will change both the speed
 	/// and the pitch of the sound.
 	pub playback_rate: Value<PlaybackRate>,
-	/// The panning of the sound, where 0 is hard left
-	/// and 1 is hard right.
+	/// The panning of the sound, where -1.0 is hard left
+	/// and 1.0 is hard right.
 	pub panning: Value<Panning>,
 	/// An optional fade-in from silence.
 	pub fade_in_tween: Option<Tween>,
@@ -101,8 +101,8 @@ impl StaticSoundSettings {
 	}
 
 	/**
-	Sets the panning of the sound, where 0 is hard left
-	and 1 is hard right.
+	Sets the panning of the sound, where -1.0 is hard left
+	and 1.0 is hard right.
 	*/
 	#[must_use = "This method consumes self and returns a modified StaticSoundSettings, so the return value should be used"]
 	pub fn panning(self, panning: impl Into<Value<Panning>>) -> Self {

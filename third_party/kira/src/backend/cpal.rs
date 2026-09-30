@@ -3,8 +3,11 @@
 #![cfg_attr(docsrs, doc(cfg(feature = "cpal")))]
 
 mod error;
-use cpal::{Device, StreamConfig};
+
+pub use cpal;
 pub use error::*;
+
+use cpal::{Device, StreamConfig};
 
 /// Settings for the cpal backend.
 #[derive(Clone, Default)]

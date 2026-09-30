@@ -125,9 +125,9 @@ Features I'd like to have:
 
 ## Contributing
 
-I'd love for other people to get involved with development! Since the library is
-still in the early stages, I'm open to all kinds of input - bug reports, feature
-requests, design critiques, etc. Feel free to open an issue or pull request!
+I'd love for other people to get involved with development! I'm open to all kinds of
+input - bug reports, feature requests, design critiques, etc. Feel free to open an
+issue or pull request!
 
 ## License
 

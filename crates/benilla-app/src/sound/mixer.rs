@@ -501,7 +501,6 @@ pub(crate) fn stream_from_source<R>(
 where
     R: std::io::Read + std::io::Seek + Send + Sync + 'static,
 {
-    let source = PcmFrameSize::new(source).context("reading the header")?;
     let armed = Arc::new(AtomicBool::new(false));
     let data = StreamingSoundData::from_media_source(PromotingSource {
         inner: source,
@@ -573,95 +572,6 @@ where
     }
     fn byte_len(&self) -> Option<u64> {
         Some(self.len)
-    }
-}
-
-/// A source whose PCM WAV header reads with `nBlockAlign` equal to the frame its channels and
-/// sample width make. 98 of the install's stereo 16-bit WAVs, 79 of them ambience beds, store 2,
-/// a mono frame. symphonia-format-riff 0.5 takes the frame size from that field
-/// (`WaveFormatChunk::packet_info`), so it counts such a file at twice its frames and a stream
-/// of it fails at the real end; 0.6 derives it from the channels and width, and kira 0.12 pins
-/// 0.5. The field is redundant for PCM, so reading it corrected changes no sample.
-struct PcmFrameSize<R> {
-    inner: R,
-    /// The inner read position.
-    pos: u64,
-    /// The `nBlockAlign` field's offset and its corrected bytes, when the header needs it.
-    patch: Option<(u64, [u8; 2])>,
-}
-
-impl<R: std::io::Read + std::io::Seek> PcmFrameSize<R> {
-    /// Reads the head of `inner` once to find the field, then rewinds it.
-    fn new(mut inner: R) -> std::io::Result<Self> {
-        let mut head = [0u8; WAV_HEAD_SCAN];
-        let mut n = 0;
-        while n < head.len() {
-            match inner.read(&mut head[n..])? {
-                0 => break,
-                k => n += k,
-            }
-        }
-        inner.seek(std::io::SeekFrom::Start(0))?;
-        Ok(Self {
-            inner,
-            pos: 0,
-            patch: pcm_block_align_fix(&head[..n]),
-        })
-    }
-}
-
-/// How far into a file [`PcmFrameSize`] looks for the `fmt ` chunk, which leads a WAV's data.
-const WAV_HEAD_SCAN: usize = 512;
-
-/// Where a RIFF/WAVE header's PCM `nBlockAlign` disagrees with channels × bytes per sample: the
-/// field's offset and the value it should hold. `None` for anything else, compressed WAVs
-/// included, whose block size is real.
-fn pcm_block_align_fix(head: &[u8]) -> Option<(u64, [u8; 2])> {
-    const WAVE_FORMAT_PCM: u16 = 1;
-    let u16_at = |at: usize| Some(u16::from_le_bytes(head.get(at..at + 2)?.try_into().ok()?));
-    let u32_at = |at: usize| Some(u32::from_le_bytes(head.get(at..at + 4)?.try_into().ok()?));
-    if head.get(0..4)? != b"RIFF" || head.get(8..12)? != b"WAVE" {
-        return None;
-    }
-    let mut at = 12usize;
-    loop {
-        let id = head.get(at..at + 4)?;
-        let len = u32_at(at + 4)? as usize;
-        let body = at + 8;
-        if id == b"fmt " {
-            let (format, channels) = (u16_at(body)?, u16_at(body + 2)?);
-            let (align, bits) = (u16_at(body + 12)?, u16_at(body + 14)?);
-            if format != WAVE_FORMAT_PCM || bits == 0 || bits % 8 != 0 {
-                return None;
-            }
-            let frame = channels.checked_mul(bits / 8)?;
-            return (align != frame).then(|| ((body + 12) as u64, frame.to_le_bytes()));
-        }
-        // Chunks are word-aligned: an odd length carries a pad byte.
-        at = body.checked_add(len)?.checked_add(len & 1)?;
-    }
-}
-
-impl<R: std::io::Read> std::io::Read for PcmFrameSize<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        if let Some((at, bytes)) = self.patch {
-            for (k, b) in bytes.into_iter().enumerate() {
-                let p = at + k as u64;
-                if (self.pos..self.pos + n as u64).contains(&p) {
-                    buf[(p - self.pos) as usize] = b;
-                }
-            }
-        }
-        self.pos += n as u64;
-        Ok(n)
-    }
-}
-
-impl<R: std::io::Seek> std::io::Seek for PcmFrameSize<R> {
-    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.pos = self.inner.seek(to)?;
-        Ok(self.pos)
     }
 }
 
@@ -1625,33 +1535,6 @@ pub(super) mod tests {
         wav
     }
 
-    #[test]
-    fn the_pcm_frame_size_is_read_from_the_channels_and_width() {
-        let stereo_bad = pcm16_wav(22_050, 2, 2, 4, |_| 0);
-        assert_eq!(pcm_block_align_fix(&stereo_bad), Some((32, [4, 0])));
-        assert_eq!(
-            pcm_block_align_fix(&pcm16_wav(22_050, 2, 4, 4, |_| 0)),
-            None
-        );
-        assert_eq!(
-            pcm_block_align_fix(&pcm16_wav(22_050, 1, 2, 4, |_| 0)),
-            None
-        );
-
-        // IMA ADPCM's block align is its real block size: untouched.
-        let mut adpcm = stereo_bad.clone();
-        adpcm[20..22].copy_from_slice(&0x11u16.to_le_bytes());
-        assert_eq!(pcm_block_align_fix(&adpcm), None);
-
-        // A chunk ahead of `fmt `, odd-sized and so padded, is walked past.
-        let mut listed = b"RIFF\0\0\0\0WAVELIST\x03\0\0\0abc\0".to_vec();
-        listed.extend_from_slice(&stereo_bad[12..]);
-        assert_eq!(pcm_block_align_fix(&listed), Some((44, [4, 0])));
-
-        assert_eq!(pcm_block_align_fix(b"ID3\x03"), None);
-        assert_eq!(pcm_block_align_fix(&stereo_bad[..30]), None, "a cut header");
-    }
-
     /// The install's bed header: 22050 Hz stereo, `nBlockAlign` 2.
     #[test]
     fn a_stereo_bed_streams_its_true_length() {
@@ -1722,8 +1605,9 @@ pub(super) mod tests {
         }
     }
 
-    /// Every bed in the install streams at its data chunk's length: the census that found 79
-    /// stereo beds with a mono `nBlockAlign`, the inn's `Tavern.wav` among them.
+    /// Every bed in the install streams at its data chunk's length, the 79 under `Sound\Ambience`
+    /// whose stereo header stores a mono `nBlockAlign` (2) among them, the inn's `Tavern.wav` too:
+    /// symphonia 0.5 sized its frames from that field and counted them twice.
     #[test]
     fn real_beds_stream_their_data_chunks_frames() {
         use std::io::Read;
@@ -1749,8 +1633,8 @@ pub(super) mod tests {
             let mut head = vec![0u8; 4096];
             let n = archive.open_file(path).unwrap().read(&mut head).unwrap();
             head.truncate(n);
-            let (frame, data_len) = wav_frame_and_data_len(&head).expect(path);
-            mono_align += usize::from(pcm_block_align_fix(&head).is_some());
+            let (frame, data_len, align) = wav_frame_and_data_len(&head).expect(path);
+            mono_align += usize::from(align < frame);
 
             let file = archive.open_file(path).expect("opens");
             let len = file.size();
@@ -1764,19 +1648,106 @@ pub(super) mod tests {
         assert_eq!(decoded.num_frames(), 60 * 22_050, "decoded whole, 60 s");
     }
 
-    /// A PCM WAV header's frame size (channels × bytes per sample) and data chunk length.
-    fn wav_frame_and_data_len(head: &[u8]) -> Option<(usize, usize)> {
+    /// A PCM WAV header's frame size (channels × bytes per sample), data chunk length and stored
+    /// `nBlockAlign`.
+    fn wav_frame_and_data_len(head: &[u8]) -> Option<(usize, usize, usize)> {
         let u16_at = |at: usize| Some(u16::from_le_bytes(head.get(at..at + 2)?.try_into().ok()?));
         let u32_at = |at: usize| Some(u32::from_le_bytes(head.get(at..at + 4)?.try_into().ok()?));
-        let (mut at, mut frame) = (12usize, None);
+        let (mut at, mut fmt) = (12usize, None);
         loop {
             let (id, len) = (head.get(at..at + 4)?, u32_at(at + 4)? as usize);
             if id == b"fmt " {
-                frame = Some(usize::from(u16_at(at + 10)?) * usize::from(u16_at(at + 22)? / 8));
+                let frame = usize::from(u16_at(at + 10)?) * usize::from(u16_at(at + 22)? / 8);
+                fmt = Some((frame, usize::from(u16_at(at + 20)?)));
             } else if id == b"data" {
-                return Some((frame?, len));
+                let (frame, align) = fmt?;
+                return Some((frame, len, align));
             }
             at += 8 + len + (len & 1);
         }
+    }
+
+    /// Silent MPEG-1 Layer III frames, 44.1 kHz mono, one per `(bitrate index, padding)`: a
+    /// header over an all-zero body, whose side info asks for no data and decodes to silence.
+    fn silent_mp3(frames: &[(u8, bool)]) -> Vec<u8> {
+        const KBPS: [u32; 15] = [
+            0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+        ];
+        let mut mp3 = Vec::new();
+        for &(bitrate, pad) in frames {
+            let len = 144 * KBPS[usize::from(bitrate)] * 1000 / 44_100 + u32::from(pad);
+            mp3.extend_from_slice(&[0xFF, 0xFB, bitrate << 4 | u8::from(pad) << 1, 0xC0]);
+            mp3.resize(mp3.len() + len as usize - 4, 0);
+        }
+        mp3
+    }
+
+    /// Pump `h` on a mock device until it stops, for at most 5 s; whether it did.
+    pub(in crate::sound) fn plays_out(
+        manager: &mut AudioManager<kira::backend::mock::MockBackend>,
+        h: &StreamingSoundHandle<FromFileError>,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let backend = manager.backend_mut();
+        while h.state() != kira::sound::PlaybackState::Stopped
+            && std::time::Instant::now() < deadline
+        {
+            backend.on_start_processing();
+            backend.process();
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
+        h.state() == kira::sound::PlaybackState::Stopped
+    }
+
+    pub(in crate::sound) fn mock_manager() -> AudioManager<kira::backend::mock::MockBackend> {
+        use kira::backend::mock::{MockBackend, MockBackendSettings};
+        AudioManager::<MockBackend>::new(AudioManagerSettings {
+            backend_settings: MockBackendSettings {
+                sample_rate: 44_100,
+            },
+            ..Default::default()
+        })
+        .expect("mock backend")
+    }
+
+    /// A stream that runs out of packets before the length its container reported stops there.
+    /// With no Xing header, symphonia 0.6 estimates an MP3's length from its first 17 frames'
+    /// mean size; small frames ahead of large ones make it over-count, as it does
+    /// `ZulGurubVooDoo.mp3` by one frame. kira 0.12.4 answers the missing packets with empty
+    /// chunks, and its decode thread spins on them forever with the sound never ending.
+    #[test]
+    fn a_stream_that_runs_out_before_its_reported_length_stops() {
+        let mut frames = vec![(1, false); 17];
+        frames.extend([(9, false); 3]);
+        let data = stream_from_bytes(silent_mp3(&frames)).expect("opens");
+        assert!(
+            data.num_frames() > 20 * 1152,
+            "the estimate over-counts: {}",
+            data.num_frames()
+        );
+        let mut manager = mock_manager();
+        let h = manager.play(data).expect("play");
+        assert!(
+            plays_out(&mut manager, &h),
+            "the stream ends at its last packet"
+        );
+    }
+
+    /// The install's one track that symphonia 0.6 over-counts ends, played from its last second.
+    #[test]
+    fn the_over_counted_install_track_ends() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let Ok(chain) = benilla_formats::open_chain(&data) else {
+            eprintln!("skipping: no client data at {}", data.display());
+            return;
+        };
+        let path = "Sound\\Music\\Musical Moments\\ZulGurubVooDoo.mp3";
+        let stream = stream_from_bytes(chain.read(path).expect("in the chain")).expect("opens");
+        let secs = stream.duration().as_secs_f64();
+        let mut manager = mock_manager();
+        let h = manager
+            .play(stream.start_position(secs - 1.0))
+            .expect("play");
+        assert!(plays_out(&mut manager, &h), "{path} ends");
     }
 }

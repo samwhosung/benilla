@@ -56,7 +56,7 @@ kira = { version = "0.12", default-features = false, features = ["mp3", "wav", "
 # Aborts a debug build on an allocation in the audio IO callback or render pass; off in release.
 assert_no_alloc = "1.1"
 # `MediaSource`: our source raises kira's decode thread's QoS; must stay kira's version.
-symphonia = { version = "0.5", default-features = false }
+symphonia = { version = "0.6", default-features = false }
 # The audio threads' lock-free SPSC rings (output, mix tap); kira's version, so the graph has one.
 rtrb = "0.3"
 mint = "0.5"

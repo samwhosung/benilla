@@ -5,15 +5,15 @@ use crate::{
 	sound::{FromFileError, symphonia::load_frames_from_buffer_ref},
 };
 use symphonia::core::{
-	codecs::Decoder,
-	formats::{FormatReader, SeekMode, SeekTo},
+	codecs::{CodecParameters, audio::AudioDecoder},
+	formats::{FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
 	io::{MediaSource, MediaSourceStream},
-	probe::Hint,
+	units::Timestamp,
 };
 
 pub(crate) struct SymphoniaDecoder {
 	format_reader: Box<dyn FormatReader>,
-	decoder: Box<dyn Decoder>,
+	decoder: Box<dyn AudioDecoder>,
 	sample_rate: u32,
 	num_frames: usize,
 	track_id: u32,
@@ -24,28 +24,28 @@ impl SymphoniaDecoder {
 		let codecs = symphonia::default::get_codecs();
 		let probe = symphonia::default::get_probe();
 		let mss = MediaSourceStream::new(media_source, Default::default());
-		let format_reader = probe
-			.format(
-				&Hint::default(),
-				mss,
-				&Default::default(),
-				&Default::default(),
-			)?
-			.format;
+		let format_reader = probe.probe(
+			&Hint::default(),
+			mss,
+			Default::default(),
+			Default::default(),
+		)?;
 		let default_track = format_reader
-			.default_track()
+			.default_track(TrackType::Audio)
 			.ok_or(FromFileError::NoDefaultTrack)?;
-		let sample_rate = default_track
-			.codec_params
+		let audio_params = match default_track.codec_params.as_ref() {
+			Some(CodecParameters::Audio(p)) => p,
+			_ => return Err(FromFileError::NoDefaultTrack),
+		};
+		let sample_rate = audio_params
 			.sample_rate
 			.ok_or(FromFileError::UnknownSampleRate)?;
 		let num_frames = default_track
-			.codec_params
-			.n_frames
+			.num_frames
 			.ok_or(FromFileError::UnknownSampleRate)?
 			.try_into()
 			.expect("could not convert u64 into usize");
-		let decoder = codecs.make(&default_track.codec_params, &Default::default())?;
+		let decoder = codecs.make_audio_decoder(audio_params, &Default::default())?;
 		let track_id = default_track.id;
 		Ok(Self {
 			format_reader,
@@ -70,9 +70,13 @@ impl super::Decoder for SymphoniaDecoder {
 
 	fn decode(&mut self) -> Result<Vec<Frame>, Self::Error> {
 		let packet = loop {
-			let packet = self.format_reader.next_packet()?;
-			if self.track_id == packet.track_id() {
-				break packet;
+			match self.format_reader.next_packet()? {
+				Some(packet) if packet.track_id == self.track_id => break packet,
+				Some(_) => continue,
+				// benilla: the end of the packets is an error, as it was on symphonia 0.5, so a
+				// stream whose reported length runs past its last packet stops there. An empty
+				// chunk instead leaves `DecodeScheduler::frame_at_index` looping on it forever.
+				None => return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof).into()),
 			}
 		};
 		let buffer = self.decoder.decode(&packet)?;
@@ -82,14 +86,16 @@ impl super::Decoder for SymphoniaDecoder {
 	fn seek(&mut self, index: usize) -> Result<usize, Self::Error> {
 		let seeked_to = self.format_reader.seek(
 			SeekMode::Accurate,
-			SeekTo::TimeStamp {
-				ts: index.try_into().expect("could not convert usize into u64"),
+			SeekTo::Timestamp {
+				ts: Timestamp::new(index as i64),
 				track_id: self.track_id,
 			},
 		)?;
-		Ok(seeked_to
-			.actual_ts
-			.try_into()
-			.expect("could not convert u64 into usize"))
+		let actual = seeked_to.actual_ts.get();
+		Ok(if actual < 0 {
+			0
+		} else {
+			(actual as usize).min(self.num_frames)
+		})
 	}
 }

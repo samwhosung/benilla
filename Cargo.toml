@@ -39,7 +39,7 @@ sha1 = "0.10.6"
 # the hunks and the command that checks them: `third_party/lua-src/BENILLA.md`.
 [patch.crates-io]
 lua-src = { path = "third_party/lua-src" }
-# kira 0.12.1, patched to compute spatial gains and the volume tween per output chunk and
+# kira 0.12.4, patched to compute spatial gains and the volume tween per output chunk and
 # interpolate them, not per sample frame (`third_party/kira/BENILLA.md`).
 kira = { path = "third_party/kira" }
 

@@ -123,6 +123,9 @@ The Kira crate has the following feature flags:
 - `cpal` (enabled by default) - enables the cpal backend and makes it the default for
   audio managers. This allows Kira to talk to the operating system to output audio. Most
   users should leave this enabled.
+	- `cpal-realtime` and `cpal-realtime-dbus` (enabled by default) - correspond to
+	`cpal`'s `realtime` and `realtime-dbus` features to run the audio thread at a higher priority.
+	See the [cpal readme](https://github.com/RustAudio/cpal#optional-features) for details.
 - `symphonia` (enabled by default) - allows loading and streaming audio from common
   audio formats, like MP3 and WAV.
 	- Audio formats: `aiff`, `caf`, `isomp4`, `mkv`, `ogg`, `wav` - these correspond to the

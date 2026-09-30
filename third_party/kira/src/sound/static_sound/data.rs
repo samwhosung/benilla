@@ -229,8 +229,8 @@ impl StaticSoundData {
 	}
 
 	/**
-	Sets the panning of the sound, where 0 is hard left
-	and 1 is hard right.
+	Sets the panning of the sound, where -1.0 is hard left
+	and 1.0 is hard right.
 
 	# Examples
 
