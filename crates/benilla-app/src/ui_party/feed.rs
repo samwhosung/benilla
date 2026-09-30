@@ -1719,7 +1719,7 @@ mod tests {
     }
 
     /// The answer is the record's bit, not the roster byte the list also carries: a stats packet's
-    /// status moves the record alone (`0x5e5519`), and `UnitIsConnected` reads the record
+    /// status moves the record alone (`0x5e54b7`-`0x5e54d8`), and `UnitIsConnected` reads the record
     /// (`0x517dca`-`0x517dd3`), so the two can disagree between lists.
     #[test]
     fn an_unheld_members_connected_follows_the_record_when_only_a_stats_packet_moves_it() {

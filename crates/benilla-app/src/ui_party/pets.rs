@@ -604,7 +604,8 @@ pub(in crate::ui_party) mod tests {
     /// The reported shape: a member with a pet logs off out of view, and the server sends the list
     /// again with their status alone moved. The list rewrites the record's online bit
     /// (`0x4e8361`-`0x4e837b`), so the pet is nobody at once (`0x4e8227`) and comes back with the
-    /// next list; the pet guid did not move, so neither list fires `UNIT_PET` (`0x5e55fb`).
+    /// next list; no list reaches the stats diff (`0x5e5510`'s callers are `0x5e54a8` and `0x5f0c1c`), so
+    /// neither fires `UNIT_PET`.
     #[test]
     fn a_status_only_list_takes_an_out_of_view_members_pet_and_fires_no_unit_pet() {
         let mut app = app();

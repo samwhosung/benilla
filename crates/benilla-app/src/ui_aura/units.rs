@@ -508,7 +508,7 @@ mod tests {
 
     /// The list writes the record's online bit too (`0x4e8361`-`0x4e837b`), so a status-only
     /// `SMSG_GROUP_LIST` for a member out of view takes their last auras: `UnitBuff` and
-    /// `UnitDebuff` answer nil behind a clear bit (`0x519741`), and an online list brings them back.
+    /// `UnitDebuff` answer nil behind a clear bit (`0x519741`, `0x519b31`), and an online list brings them back.
     #[test]
     fn a_status_only_list_takes_an_out_of_view_members_auras_and_an_online_one_returns_them() {
         let mut app = party_app();
