@@ -5,7 +5,7 @@
 //! the greying walk `0x6e3d60`.
 
 use super::SpellModifiers;
-use benilla_formats::{SpellDisplay, SpellRange};
+use benilla_formats::{RangeUnit, SpellDisplay, SpellRange};
 
 /// The range refusals `CanTargetUnit 0x6e4440` emits: "Out of range." and "Target too close".
 pub(super) const ERR_OUT_OF_RANGE: u8 = 0x59;
@@ -14,23 +14,23 @@ pub(super) const ERR_TOO_CLOSE: u8 = 0x76;
 /// The range refusal, before `ArmCast`/`SendCast`, so an out-of-range press never runs the commit
 /// tail (the ranged sheath snap `0x6e5930` included): squared 3D distance against
 /// [`benilla_formats::min_max_range`], beyond max² out of range, inside a nonzero min² too close.
-/// `target_reach` is the bound unit's, the target `IsTargetInRange 0x6e47b0` hands
-/// `GetMinMaxRange` (`0x6e47ca`). The function looks the auto-attack target up only when that
-/// target is no unit, which a bound unit never is, so none is passed. No range row or no
-/// distance passes; the server judges.
+/// `target` is the bound unit, the target `IsTargetInRange 0x6e47b0` hands `GetMinMaxRange`
+/// (`0x6e47ca`): its reach pads a ranged row and its motion, with the caster's, earns the moving
+/// bonus. The function looks the auto-attack target up only when that target is no unit, which a
+/// bound unit never is, so none is passed. No range row or no distance passes; the server judges.
 pub(super) fn cast_range_refusal(
     spell: &SpellDisplay,
     row: Option<&SpellRange>,
-    self_reach: f32,
-    target_reach: Option<f32>,
+    caster: RangeUnit,
+    target: Option<RangeUnit>,
     dist_sq: Option<f32>,
     mods: &SpellModifiers,
 ) -> Option<u8> {
     let targets = benilla_formats::RangeTargets {
-        target: target_reach,
+        target,
         attack_target: None,
     };
-    let (min, max) = mods.min_max_range(spell, row, self_reach, targets)?;
+    let (min, max) = mods.min_max_range(spell, row, caster, targets)?;
     let d2 = dist_sq?;
     if d2 > max * max {
         return Some(ERR_OUT_OF_RANGE);
@@ -251,10 +251,10 @@ mod tests {
             max: 35.0,
             flags: 0,
         };
-        let reach = Some(1.5);
+        let me = RangeUnit::still(1.5);
+        let reach = Some(RangeUnit::still(1.5));
         // Both bounds carry the bare reach pad (self 1.5 + target 1.5): min = 11, max = 38.
-        let refuse =
-            |d2: f32| cast_range_refusal(&d, Some(&auto_shot), 1.5, reach, Some(d2), &mods);
+        let refuse = |d2: f32| cast_range_refusal(&d, Some(&auto_shot), me, reach, Some(d2), &mods);
         assert_eq!(refuse(3.0 * 3.0), Some(ERR_TOO_CLOSE));
         assert_eq!(refuse(20.0 * 20.0), None);
         assert_eq!(refuse(60.0 * 60.0), Some(ERR_OUT_OF_RANGE));
@@ -265,7 +265,7 @@ mod tests {
             max: 35.0,
             flags: 0,
         };
-        let refuse = |d2: f32| cast_range_refusal(&d, Some(&fireball), 1.5, reach, Some(d2), &mods);
+        let refuse = |d2: f32| cast_range_refusal(&d, Some(&fireball), me, reach, Some(d2), &mods);
         assert_eq!(refuse(0.1), None);
         assert_eq!(refuse(60.0 * 60.0), Some(ERR_OUT_OF_RANGE));
         // The bound target is the pad's second reach (`0x6e47ca`): 35 + 1.5 + 1.5 = 38.
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(refuse(39.0 * 39.0), Some(ERR_OUT_OF_RANGE));
         // With no unit bound the row stands as it is: 35.
         assert_eq!(
-            cast_range_refusal(&d, Some(&fireball), 1.5, None, Some(37.0 * 37.0), &mods),
+            cast_range_refusal(&d, Some(&fireball), me, None, Some(37.0 * 37.0), &mods),
             Some(ERR_OUT_OF_RANGE)
         );
 
@@ -285,14 +285,14 @@ mod tests {
         };
         let melee_spell = spell_with_range(2, 0);
         assert_eq!(
-            cast_range_refusal(&melee_spell, Some(&melee), 1.5, reach, Some(0.1), &mods),
+            cast_range_refusal(&melee_spell, Some(&melee), me, reach, Some(0.1), &mods),
             None
         );
         assert_eq!(
             cast_range_refusal(
                 &melee_spell,
                 Some(&melee),
-                1.5,
+                me,
                 reach,
                 Some(15.0 * 15.0),
                 &mods
@@ -302,13 +302,53 @@ mod tests {
 
         // No row or no distance passes.
         assert_eq!(
-            cast_range_refusal(&d, None, 1.5, reach, Some(1.0), &mods),
+            cast_range_refusal(&d, None, me, reach, Some(1.0), &mods),
             None
         );
         assert_eq!(
-            cast_range_refusal(&d, Some(&auto_shot), 1.5, reach, None, &mods),
+            cast_range_refusal(&d, Some(&auto_shot), me, reach, None, &mods),
             None
         );
+    }
+
+    /// A warrior running after a running mob presses Hamstring (the melee row) at 7 yards:
+    /// `GetMinMaxRange` adds the moving bonus to the 5.0 floor (`0x6e3648`-`0x6e36a2`), so the
+    /// press goes out to 7.667, and a standing pair is refused at the same distance.
+    #[test]
+    fn cast_range_refusal_lets_two_running_units_reach_the_moving_bonus() {
+        let mods = SpellModifiers::default();
+        let hamstring = spell_with_range(2, 0);
+        let melee = SpellRange {
+            min: 0.0,
+            max: 5.0,
+            flags: 1,
+        };
+        let running = RangeUnit {
+            motion: benilla_formats::UnitMotion {
+                flags: 1,
+                speed: 7.0,
+                walk_speed: 2.5,
+            },
+            ..RangeUnit::still(1.5)
+        };
+        let press = |caster, target, yards: f32| {
+            cast_range_refusal(
+                &hamstring,
+                Some(&melee),
+                caster,
+                Some(target),
+                Some(yards * yards),
+                &mods,
+            )
+        };
+        let standing = RangeUnit::still(1.5);
+        assert_eq!(press(running, running, 7.0), None);
+        assert_eq!(press(running, running, 7.5), None);
+        assert_eq!(press(running, running, 8.0), Some(ERR_OUT_OF_RANGE));
+        assert_eq!(press(standing, standing, 7.0), Some(ERR_OUT_OF_RANGE));
+        assert_eq!(press(running, standing, 7.0), Some(ERR_OUT_OF_RANGE));
+        assert_eq!(press(standing, running, 7.0), Some(ERR_OUT_OF_RANGE));
+        assert_eq!(press(standing, standing, 5.0), None);
     }
 
     /// The mounted refusal (`0x609c6c`) and its bit-24 exemption (`0x609c6f`).

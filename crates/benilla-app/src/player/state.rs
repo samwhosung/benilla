@@ -486,6 +486,15 @@ pub(super) struct PendingKnockback {
 }
 
 impl Player {
+    /// A player whose last streamed movement word is `flags`, for the gates that read it.
+    #[cfg(test)]
+    pub(crate) fn with_move_flags(flags: u32) -> Self {
+        Self {
+            move_flags: flags,
+            ..Self::default()
+        }
+    }
+
     /// Take the jump a hover grant owes, clearing the latch: `Jump(0)` refuses only ROOT and
     /// FALLING (`0x7c625c`), skipping the hover test (`0x7c6236`), and a refused jump is dropped,
     /// not retried.

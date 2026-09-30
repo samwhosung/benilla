@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 
-use benilla_formats::{RangeTargets, SpellDisplay, SpellRange};
+use benilla_formats::{RangeTargets, RangeUnit, SpellDisplay, SpellRange};
 
 use crate::net::SelfPlayer;
 use crate::spell::SpellModifiers;
@@ -17,15 +17,16 @@ use super::{SpellTargeting, TargetingWants};
 /// What `GetMinMaxRange 0x6e3480` reads for the cursor's two range verdicts: the ground point
 /// (`CheckGroundPointInRange 0x6e6810`, a null target at `0x6e6879`) and the GameObject leg of
 /// `0x6e6460` (the object as target at `0x6e679b`). Neither passes a unit, which the function
-/// tests for at `0x6e34e1`-`0x6e34f9`: the ranged arm pads nothing, and the melee arm sums the
-/// caster's reach with its auto-attack target's.
+/// tests for at `0x6e34e1`-`0x6e34f9`: the ranged arm pads nothing and takes no moving bonus,
+/// and the melee arm sums the caster's reach with its auto-attack target's and asks that unit's
+/// motion, with the caster's, for the bonus.
 #[derive(Clone, Copy)]
 struct RangeCall<'a> {
     spell: &'a SpellDisplay,
     row: &'a SpellRange,
     mods: &'a SpellModifiers,
-    self_reach: f32,
-    attack_target_reach: Option<f32>,
+    caster: RangeUnit,
+    attack_target: Option<RangeUnit>,
 }
 
 /// The call's inputs, or `None` where the data is absent (no catalog, an unknown spell, a row
@@ -37,8 +38,8 @@ fn range_call<'a>(checks: &'a super::BindChecks, spell_id: u32) -> Option<RangeC
         spell,
         row: spells.ranges.get(spell.range_index)?,
         mods: &checks.spell_mods,
-        self_reach: checks.self_reach(),
-        attack_target_reach: checks.attack_target_reach(),
+        caster: checks.range_units.caster(),
+        attack_target: checks.range_units.caster_attack_target(),
     })
 }
 
@@ -54,13 +55,13 @@ fn ground_point_in_range(call: Option<RangeCall>, self_pos: Vec3, point: Vec3) -
     };
     let targets = RangeTargets {
         target: None,
-        attack_target: call.attack_target_reach,
+        attack_target: call.attack_target,
     };
     // The self row is `{0, 0}` (`0x6e35dd`, `0x6e35ea`) and `min_max_range` answers `None` for it:
     // only the caster's own spot passes it here.
     let (min, max) = call
         .mods
-        .min_max_range(call.spell, Some(call.row), call.self_reach, targets)
+        .min_max_range(call.spell, Some(call.row), call.caster, targets)
         .unwrap_or_default();
     let dist_sq = self_pos.distance_squared(point);
     min * min <= dist_sq && dist_sq <= max * max
@@ -249,8 +250,8 @@ mod tests {
             spell,
             row,
             mods,
-            self_reach: 1.5,
-            attack_target_reach: None,
+            caster: RangeUnit::still(1.5),
+            attack_target: None,
         })
     }
 
@@ -350,8 +351,8 @@ mod tests {
                 spell: &spell,
                 row: &melee,
                 mods: &mods,
-                self_reach,
-                attack_target_reach,
+                caster: RangeUnit::still(self_reach),
+                attack_target: attack_target_reach.map(RangeUnit::still),
             };
             ground_point_in_range(Some(call), Vec3::ZERO, Vec3::new(d, 0.0, 0.0))
         };
@@ -364,6 +365,55 @@ mod tests {
         // An auto-attack target's 4.0 in place of the second: 1.5 + 4.0 + 1.3333 = 6.83.
         assert!(ground(1.5, Some(4.0), 6.7));
         assert!(!ground(1.5, Some(4.0), 7.0));
+    }
+
+    /// The moving bonus (`0x6e3648`-`0x6e36a2`) on the ground verdict: with no unit passed, only
+    /// the melee arm has a unit for it, the auto-attack target, and both must run. The ranged arm
+    /// has none, whoever the caster's auto-attack target is.
+    #[test]
+    fn the_ground_verdict_takes_the_moving_bonus_on_the_melee_row_alone() {
+        let running = RangeUnit {
+            // A player, which would earn a ranged target the bonus, were one passed.
+            player: true,
+            motion: benilla_formats::UnitMotion {
+                flags: 1,
+                speed: 7.0,
+                walk_speed: 2.5,
+            },
+            ..RangeUnit::still(1.5)
+        };
+        let melee = SpellRange {
+            min: 0.0,
+            max: 5.0,
+            flags: 1,
+        };
+        let blizzard = SpellRange {
+            min: 0.0,
+            max: 30.0,
+            flags: 0,
+        };
+        let spell = SpellDisplay::default();
+        let mods = SpellModifiers::default();
+        let ground = |row: &SpellRange, caster, attack_target, d: f32| {
+            let call = RangeCall {
+                spell: &spell,
+                row,
+                mods: &mods,
+                caster,
+                attack_target,
+            };
+            ground_point_in_range(Some(call), Vec3::ZERO, Vec3::new(d, 0.0, 0.0))
+        };
+        // 5.0 floor + 2.6667 = 7.667 for two runners.
+        assert!(ground(&melee, running, Some(running), 7.5));
+        assert!(!ground(&melee, running, Some(running), 7.8));
+        // One of them standing, or no auto-attack target, and the floor stands.
+        let still = RangeUnit::still(1.5);
+        assert!(!ground(&melee, running, Some(still), 7.5));
+        assert!(!ground(&melee, still, Some(running), 7.5));
+        assert!(!ground(&melee, running, None, 7.5));
+        // The ranged arm never reads the auto-attack target: 30, not 32.67.
+        assert!(!ground(&blizzard, running, Some(running), 31.0));
     }
 
     /// Fixture rows mirror the real table: row 14 is 8.0 (Blizzard), row 8 is 5.0 (Flamestrike).
@@ -798,6 +848,108 @@ mod tests {
             !verdict_for(SHOT, 0x0002, 5.0),
             "inside the minimum → UnableCast"
         );
+    }
+
+    /// The unit leg's range compare is `IsTargetInRange 0x6e47b0` (`0x6e6063`), which hands
+    /// `GetMinMaxRange` the hovered unit: a melee spell is in range to 7.667 yards while the
+    /// caster and that unit both run, and to the 5.0 floor otherwise.
+    #[test]
+    fn the_unit_leg_takes_the_moving_bonus_on_the_melee_row() {
+        use bevy::ecs::system::RunSystemOnce;
+        use std::collections::HashMap;
+
+        const HAMSTRING: u32 = 1715;
+        let verdict = |caster_runs: bool, unit_runs: bool, distance: f32| {
+            let mut world = World::new();
+            world.init_resource::<WorldCursor>();
+            world.init_resource::<SpellTargeting>();
+            world.init_resource::<crate::target::HoveredObject>();
+            world.init_resource::<crate::go_templates::GameObjectTemplates>();
+            world.init_resource::<crate::items::Items>();
+            world.init_resource::<crate::net::GuidIndex>();
+            world.init_resource::<crate::spell::SpellModifiers>();
+            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.init_resource::<PickOcclusion>();
+            world.insert_resource(crate::player::Player::with_move_flags(if caster_runs {
+                crate::creature_anim::move_flags::FORWARD
+            } else {
+                0
+            }));
+            let mut spells = Spells::empty_for_tests();
+            spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([(
+                HAMSTRING,
+                benilla_formats::SpellDisplay {
+                    range_index: 2,
+                    ..Default::default()
+                },
+            )]));
+            spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(HashMap::from([(
+                2,
+                SpellRange {
+                    min: 0.0,
+                    max: 5.0,
+                    flags: 1,
+                },
+            )]));
+            world.insert_resource(spells);
+            let speeds = crate::net::UnitSpeeds(benilla_protocol::MoveSpeeds {
+                walk: 2.5,
+                run: 7.0,
+                run_back: 4.5,
+                swim: 4.7,
+                swim_back: 2.5,
+                turn_rate: 3.1,
+            });
+            let live = || {
+                crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(22, 100)]))
+            };
+            world.spawn((
+                SelfPlayer,
+                crate::net::Embodied,
+                speeds,
+                Transform::default(),
+                GlobalTransform::default(),
+                live(),
+            ));
+            let unit = world
+                .spawn((
+                    speeds,
+                    GlobalTransform::from_translation(Vec3::new(distance, 0.0, 0.0)),
+                    live(),
+                ))
+                .id();
+            if unit_runs {
+                world.entity_mut(unit).insert(crate::net::Spline {
+                    points: vec![[distance, 0.0, 0.0], [distance + 16.0, 0.0, 0.0]],
+                    start: std::time::Instant::now(),
+                    duration: std::time::Duration::from_secs(2),
+                    id: 1,
+                    grounded: true,
+                    run_mode: true,
+                    deck: None,
+                });
+            }
+            world.insert_resource(crate::target::Hovered {
+                target: Some(unit),
+                guid: Some(0xF130_0000_0000_0001),
+                distance: 5.0,
+                ..Default::default()
+            });
+            world.resource_mut::<SpellTargeting>().enter(
+                HAMSTRING,
+                crate::spell::CastCommit::Spell,
+                0x0002,
+            );
+            world
+                .run_system_once(drive_targeting_cursor)
+                .expect("the targeting cursor drives");
+            !world.resource::<WorldCursor>().unable
+        };
+        assert!(verdict(true, true, 7.5), "both running: inside 7.667");
+        assert!(!verdict(true, true, 8.0), "past it");
+        assert!(!verdict(false, true, 7.5), "the caster stands");
+        assert!(!verdict(true, false, 7.5), "the unit stands");
+        assert!(verdict(false, false, 4.9), "the floor");
     }
 
     /// `0x6e6460`'s corpse leg over a hovered corpse: bones, a hostile corpse under the ally bit

@@ -197,15 +197,17 @@ impl CastContext<'_> {
     }
 }
 
-/// Positions and combat reaches for the pre-send range refusal: the client's cast runs
+/// Positions and the two units for the pre-send range refusal: the client's cast runs
 /// `CanTargetUnit 0x6e4440` and `IsTargetInRange 0x6e47b0` before the commit, so an out-of-range
 /// press refuses locally and none of the commit tail runs.
 #[derive(Clone, Copy)]
 pub(crate) struct RangeInputs {
     pub(crate) self_pos: Option<Vec3>,
     pub(crate) target_pos: Option<Vec3>,
-    pub(crate) self_reach: f32,
-    pub(crate) target_reach: Option<f32>,
+    /// The caster's combat reach and motion.
+    pub(crate) caster: benilla_formats::RangeUnit,
+    /// The bound unit, which `GetMinMaxRange` reads for the ranged pad and the moving bonus.
+    pub(crate) target: Option<benilla_formats::RangeUnit>,
 }
 
 impl RangeInputs {
@@ -223,14 +225,7 @@ impl RangeInputs {
             .self_pos
             .zip(self.target_pos)
             .map(|(a, b)| a.distance_squared(b));
-        super::validator::cast_range_refusal(
-            def,
-            row,
-            self.self_reach,
-            self.target_reach,
-            dist_sq,
-            mods,
-        )
+        super::validator::cast_range_refusal(def, row, self.caster, self.target, dist_sq, mods)
     }
 }
 
@@ -239,9 +234,8 @@ impl Default for RangeInputs {
         Self {
             self_pos: None,
             target_pos: None,
-            // The descriptor's default combat reach.
-            self_reach: 1.5,
-            target_reach: None,
+            caster: benilla_formats::RangeUnit::still(super::DEFAULT_REACH),
+            target: None,
         }
     }
 }
@@ -268,6 +262,8 @@ pub(crate) struct CastTargeting<'w, 's> {
     /// `Option`: the body exists only in world, and the cast-result handler must fetch this param
     /// anywhere. With no body the moving gate passes and the server decides.
     player: Option<Res<'w, crate::player::Player>>,
+    /// The caster's and the selection's reach and motion, for the range gate.
+    range_units: super::RangeUnits<'w, 's>,
 }
 
 impl CastTargeting<'_, '_> {
@@ -304,12 +300,8 @@ impl CastTargeting<'_, '_> {
                     .target
                     .and_then(|e| self.transforms.get(e).ok())
                     .map(|t| t.translation),
-                self_reach: self
-                    .self_store
-                    .iter()
-                    .next()
-                    .map_or(1.5, |s| s.0.unit_combat_reach()),
-                target_reach: target_store.map(|s| s.0.unit_combat_reach()),
+                caster: self.range_units.caster(),
+                target: self.selection.target.and_then(|e| self.range_units.unit(e)),
             },
             main_hand_item: self
                 .self_store

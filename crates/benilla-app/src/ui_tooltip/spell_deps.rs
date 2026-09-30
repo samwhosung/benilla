@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use benilla_formats::RangeUnit;
 use benilla_protocol::ObjectFields;
 
 use crate::items::Items;
@@ -124,9 +125,9 @@ pub(super) struct Deps {
     pub(super) home: bool,
     /// The required-form test read the shapeshift form.
     pub(super) form: bool,
-    /// The range cell's melee arm read the caster's or the auto-attack target's combat reach;
-    /// the ranged arm, given no target, reads neither.
-    pub(super) reach: bool,
+    /// The range cell's melee arm read the caster's and the auto-attack target's combat reach and
+    /// motion; the ranged arm, given no target, reads neither.
+    pub(super) range_units: bool,
     /// The chance line read these percentages, a [`Chance`] bit each.
     pub(super) avoidance: u8,
     /// The equipped-item search read these equipment slots, a bit each.
@@ -183,7 +184,7 @@ impl Deps {
         changes.everything
             || (changes.home && self.home)
             || (changes.form && self.form)
-            || (changes.reach && self.reach)
+            || (changes.range_units && self.range_units)
             || changes.avoidance & self.avoidance != 0
             || changes.worn & self.worn != 0
             || (changes.disarm && self.disarm)
@@ -207,7 +208,7 @@ pub(super) struct Changes {
     pub(super) everything: bool,
     pub(super) home: bool,
     pub(super) form: bool,
-    pub(super) reach: bool,
+    pub(super) range_units: bool,
     /// A [`Chance`] bit each.
     pub(super) avoidance: u8,
     /// The equipment slots whose item moved in a way the search can tell, a bit each.
@@ -226,7 +227,7 @@ impl Changes {
         !self.everything
             && !self.home
             && !self.form
-            && !self.reach
+            && !self.range_units
             && self.avoidance == 0
             && self.worn == 0
             && !self.disarm
@@ -259,6 +260,29 @@ impl Changes {
 /// inline red, `0x854120`).
 pub(super) type Reagents = BTreeMap<u32, (u32, bool)>;
 
+/// What the range cell's melee arm reads of two units: the caster's combat reach and its
+/// auto-attack target's, as bit patterns (`None` with none engaged, where the arm reads the
+/// caster's reach twice), and whether the moving bonus applies, the one fact of the units' motion
+/// the cell's number follows: both move at run speed
+/// ([`benilla_formats::UnitMotion::moves_at_run_speed`]) with a target engaged to read.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(super) struct RangeSeen {
+    caster_reach: u32,
+    attack_target_reach: Option<u32>,
+    bonus: bool,
+}
+
+impl RangeSeen {
+    pub(super) fn of(caster: &RangeUnit, attack_target: Option<&RangeUnit>) -> Self {
+        Self {
+            caster_reach: caster.reach.to_bits(),
+            attack_target_reach: attack_target.map(|u| u.reach.to_bits()),
+            bonus: caster.motion.moves_at_run_speed()
+                && attack_target.is_some_and(|u| u.motion.moves_at_run_speed()),
+        }
+    }
+}
+
 /// The player-side inputs one frame saw, which the pushed views were built against.
 #[derive(Clone, PartialEq)]
 pub(super) struct Seen {
@@ -275,8 +299,8 @@ pub(super) struct Seen {
     disarmed: bool,
     /// The [`Chance`] percentages as bit patterns.
     avoidance: [Option<u32>; 4],
-    /// The caster's and its auto-attack target's combat reach as bit patterns.
-    reach: (Option<u32>, Option<u32>),
+    /// The caster's and its auto-attack target's reach, and whether the moving bonus applies.
+    range_units: RangeSeen,
     /// The unit fields the cost, cast and cooldown cells read.
     unit: UnitFields,
 }
@@ -285,7 +309,7 @@ impl Seen {
     pub(super) fn of(
         player: Option<&ObjectStore>,
         home: Option<&str>,
-        attack_target_reach: Option<f32>,
+        range_units: RangeSeen,
         objects: &Objects,
         items: &Items,
     ) -> Self {
@@ -298,10 +322,7 @@ impl Seen {
             disarmed: player.is_some_and(crate::items::is_disarmed),
             avoidance: Chance::ALL
                 .map(|which| player.and_then(|s| which.read(&s.0)).map(f32::to_bits)),
-            reach: (
-                player.map(|s| s.0.unit_combat_reach().to_bits()),
-                attack_target_reach.map(f32::to_bits),
-            ),
+            range_units,
             unit: UnitFields::of(player),
         }
     }
@@ -311,7 +332,7 @@ impl Seen {
         let mut changes = Changes {
             home: self.home != prev.home,
             form: self.form != prev.form,
-            reach: self.reach != prev.reach,
+            range_units: self.range_units != prev.range_units,
             disarm: self.disarmed != prev.disarmed,
             unit: self.unit.diff(&prev.unit),
             ..Changes::default()

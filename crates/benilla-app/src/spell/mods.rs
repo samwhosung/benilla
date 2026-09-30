@@ -227,16 +227,17 @@ impl SpellModifiers {
         })
     }
 
-    /// `GetMinMaxRange` modifies only the maximum at its common tail. The on-next-swing
-    /// `Attributes & 0x404` arm returns before that tail (`0x6e350f`).
+    /// `GetMinMaxRange` modifies only the maximum at its common tail, after the moving bonus
+    /// (`0x6e3648`-`0x6e36a2`, then op 5 at `0x6e3746`). The on-next-swing `Attributes & 0x404` arm
+    /// returns before that tail (`0x6e350f`).
     pub(crate) fn min_max_range(
         &self,
         d: &SpellDisplay,
         row: Option<&SpellRange>,
-        caster_reach: f32,
+        caster: benilla_formats::RangeUnit,
         targets: benilla_formats::RangeTargets,
     ) -> Option<(f32, f32)> {
-        let (min, max) = benilla_formats::min_max_range(d, row, caster_reach, targets)?;
+        let (min, max) = benilla_formats::min_max_range(d, row, caster, targets)?;
         Some((
             min,
             if d.on_next_swing() {
@@ -521,23 +522,58 @@ mod tests {
             flags: 0,
         };
         mods.set(false, 5, OP_RANGE, 20);
+        let caster = benilla_formats::RangeUnit::still(1.5);
         let target = benilla_formats::RangeTargets {
-            target: Some(1.5),
+            target: Some(benilla_formats::RangeUnit::still(1.5)),
             attack_target: None,
         };
-        let (min, max) = mods.min_max_range(&d, Some(&row), 1.5, target).unwrap();
+        let (min, max) = mods.min_max_range(&d, Some(&row), caster, target).unwrap();
         assert_eq!(min, 11.0);
         assert!((max - 45.6).abs() < 0.001, "38 yards with +20% range");
-        assert_eq!(mods.min_max_range(&d, None, 1.5, target), None);
+        assert_eq!(mods.min_max_range(&d, None, caster, target), None);
 
         let on_next_swing = SpellDisplay {
             attributes: 0x404,
             ..d
         };
         assert_eq!(
-            mods.min_max_range(&on_next_swing, Some(&row), 1.5, target),
-            benilla_formats::min_max_range(&on_next_swing, Some(&row), 1.5, target),
+            mods.min_max_range(&on_next_swing, Some(&row), caster, target),
+            benilla_formats::min_max_range(&on_next_swing, Some(&row), caster, target),
             "the reference's early return bypasses op 5"
+        );
+    }
+
+    /// The moving bonus is part of the max before op 5 scales it (`0x6e3648`-`0x6e36a2`, then
+    /// `0x6e3746`): a +20% talent on the melee row of two running units scales 5 + 2.6667.
+    #[test]
+    fn range_modifier_scales_the_moving_bonus() {
+        let mut mods = mage_tables();
+        let d = mage(&[5]);
+        let melee = SpellRange {
+            min: 0.0,
+            max: 5.0,
+            flags: 1,
+        };
+        mods.set(false, 5, OP_RANGE, 20);
+        let runner = benilla_formats::RangeUnit {
+            motion: benilla_formats::UnitMotion {
+                flags: 1,
+                speed: 7.0,
+                walk_speed: 2.5,
+            },
+            ..benilla_formats::RangeUnit::still(1.5)
+        };
+        let targets = benilla_formats::RangeTargets {
+            target: Some(runner),
+            attack_target: None,
+        };
+        let (_, max) = mods
+            .min_max_range(&d, Some(&melee), runner, targets)
+            .unwrap();
+        let bonus = benilla_formats::MOVING_RANGE_BONUS;
+        assert!(
+            (max - (5.0 + bonus) * 1.2).abs() < 1e-4,
+            "the modifier scales the bonused max, not the bare 5.0: {max}"
         );
     }
 }

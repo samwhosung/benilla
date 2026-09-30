@@ -667,12 +667,20 @@ pub(crate) mod schedule_tests {
     ///   over the `CastLadder`, the selection and the unit-token resolver: the class
     ///   `drop_item_on_unit` and the world click's legs already carry, as none of those drains
     ///   orders against the target chain. Such a gesture and a script call in one frame take
-    ///   either order.
+    ///   either order;
+    /// - the range compare's readers (`ui_action::state::feed_action_state`,
+    ///   `ui_tooltip::spell_feed::feed_spell_tooltips`, `spell::targeting::feed_targeting_to_vm`,
+    ///   the targeting cursor and the object-click commit) against the writers of `Player` and
+    ///   `RemoteMotion` (`camera_saved::load_camera_pose`, `world_focus`'s focus publish and settle
+    ///   release, `transport::compose_riders` and `ground_deck_riders`): the readers take the
+    ///   movement flags of the caster (`Player::move_flags`) and its target
+    ///   (`RemoteMotion::flags`), and those writers touch `login_pitch`, the settle fields and a
+    ///   rider's pose, never the flags.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 4_849;
+    const UPDATE_ACTIONABLE_CEILING: usize = 4_860;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

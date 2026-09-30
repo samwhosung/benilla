@@ -62,7 +62,7 @@ impl TestCtx {
         target_reach: f32,
     ) -> ViewCtx<'a, 'w, 's> {
         let mut ctx = self.ctx_for(objects, 0, None, store);
-        ctx.attack_target_reach = Some(target_reach);
+        ctx.attack_target = Some(benilla_formats::RangeUnit::still(target_reach));
         ctx
     }
 
@@ -78,8 +78,10 @@ impl TestCtx {
             form,
             store,
             caster: ViewCaster::Player,
-            combat_reach: store.map_or(1.5, |s| s.0.unit_combat_reach()),
-            attack_target_reach: None,
+            range_caster: benilla_formats::RangeUnit::still(
+                store.map_or(1.5, |s| s.0.unit_combat_reach()),
+            ),
+            attack_target: None,
             objects,
             items: &mut self.items,
             commands: &self.commands,
@@ -611,6 +613,33 @@ fn range_cell_on_real_data() {
     )
     .expect("Sinister Strike view");
     assert_eq!(v.range.as_deref(), Some("7 yd range"));
+
+    // Both units running: the moving bonus goes on the floor, 5.0 + 2.6667 = 7.667, rounded to 8.
+    let running = benilla_formats::UnitMotion {
+        flags: 1,
+        speed: 7.0,
+        walk_speed: 2.5,
+    };
+    let runner = benilla_formats::RangeUnit {
+        motion: running,
+        ..benilla_formats::RangeUnit::still(1.5)
+    };
+    let mut ctx = t.ctx_for(&objects, 0, None, Some(&store));
+    ctx.range_caster = runner;
+    ctx.attack_target = Some(runner);
+    let v = spell_tooltip_view(1752, &spells, &mut ctx).expect("Sinister Strike view");
+    assert_eq!(v.range.as_deref(), Some("8 yd range"));
+    // One of them standing, or no auto-attack target to read: the floor.
+    ctx.attack_target = Some(benilla_formats::RangeUnit::still(1.5));
+    let v = spell_tooltip_view(1752, &spells, &mut ctx).expect("Sinister Strike view");
+    assert_eq!(v.range.as_deref(), Some("5 yd range"));
+    ctx.attack_target = None;
+    let v = spell_tooltip_view(1752, &spells, &mut ctx).expect("Sinister Strike view");
+    assert_eq!(v.range.as_deref(), Some("5 yd range"));
+    // The ranged arm passes no target, so the bonus never reaches an authored row: Fireball's 35.
+    ctx.attack_target = Some(runner);
+    let v = spell_tooltip_view(133, &spells, &mut ctx).expect("Fireball view");
+    assert_eq!(v.range.as_deref(), Some("35 yd range"));
 
     // An authored row: Fireball's 0-35.
     let v = spell_tooltip_view(

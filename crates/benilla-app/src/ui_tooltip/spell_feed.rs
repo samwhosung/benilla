@@ -12,7 +12,7 @@ use benilla_ui::script::UiScript;
 use benilla_ui::strings::Arg;
 
 use super::keyed;
-use super::spell_deps::{Chance, Changes, Deps, Reagents, Seen, UnitField};
+use super::spell_deps::{Chance, Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::spell::usable::{self, CostBasis};
@@ -53,11 +53,13 @@ pub(super) struct ViewCtx<'a, 'w, 's> {
     /// Whom the level terms and the cost read: the player or its pet. The form and the reaches
     /// are that same unit's.
     pub(super) caster: ViewCaster<'a>,
-    /// The caster's `UNIT_FIELD_COMBATREACH`; 1.5 is the descriptor default.
-    pub(super) combat_reach: f32,
-    /// The caster's auto-attack target's reach, which `0x6e3480` looks up itself
-    /// (`[caster+0xc48]`) for its melee arm alone; with none, the caster's reach counts twice.
-    pub(super) attack_target_reach: Option<f32>,
+    /// The caster as `0x6e3480` reads it: its `UNIT_FIELD_COMBATREACH` (1.5 is the descriptor
+    /// default) and its motion.
+    pub(super) range_caster: benilla_formats::RangeUnit,
+    /// The caster's auto-attack target, which `0x6e3480` looks up itself (`[caster+0xc48]`) for
+    /// its melee arm alone, reading its reach and motion; with none, the caster's reach counts
+    /// twice and there is no moving bonus.
+    pub(super) attack_target: Option<benilla_formats::RangeUnit>,
     /// The object index the worn-item search and each reagent's carried count resolve through.
     pub(super) objects: &'a Objects<'w, 's>,
     pub(super) items: &'a mut Items,
@@ -186,19 +188,19 @@ pub(super) fn build_view(
             let row = spells.ranges.get(d.range_index);
             // The pet views read the pet's reaches, which are among the pet's own inputs.
             if matches!(caster, ViewCaster::Player)
-                && benilla_formats::min_max_range_reads_reach(d, row)
+                && benilla_formats::min_max_range_reads_units(d, row)
             {
-                deps.borrow_mut().reach = true;
+                deps.borrow_mut().range_units = true;
             }
             // The call passes a null target (`0x52e9c2`): the auto-attack target is the melee arm's
             // own lookup, and the ranged arm, with no target, pads nothing.
             let targets = benilla_formats::RangeTargets {
                 target: None,
-                attack_target: vctx.attack_target_reach,
+                attack_target: vctx.attack_target,
             };
             let (min, max) = vctx
                 .spell_mods
-                .min_max_range(d, row, vctx.combat_reach, targets)?;
+                .min_max_range(d, row, vctx.range_caster, targets)?;
             if max <= 0.0 {
                 return None;
             }
@@ -477,7 +479,7 @@ pub(super) fn reagent_state(
 }
 
 /// The pet unit's fields a pet view reads (`0x52e610` with the unit selector set): its level, the
-/// cost bases `0x612c50` reads, its form, and its and its melee target's reach, as bit patterns.
+/// cost bases `0x612c50` reads, its form, and its and its melee target's reach and motion.
 #[derive(Clone, Copy, PartialEq, Default)]
 pub(super) struct PetInputs {
     guid: Option<u64>,
@@ -486,15 +488,14 @@ pub(super) struct PetInputs {
     max_health: u32,
     max_power: [u32; 5],
     form: u8,
-    combat_reach: u32,
-    attack_target_reach: Option<u32>,
+    range_units: RangeSeen,
 }
 
 impl PetInputs {
     pub(super) fn of(
         guid: Option<u64>,
         pet: Option<&benilla_protocol::ObjectFields>,
-        attack_target_reach: Option<f32>,
+        range_units: RangeSeen,
     ) -> Self {
         let Some(p) = pet else {
             return Self {
@@ -509,8 +510,7 @@ impl PetInputs {
             max_health: p.unit_max_health().unwrap_or(0),
             max_power: std::array::from_fn(|i| p.unit_max_power(i as u8).unwrap_or(0)),
             form: p.unit_shapeshift_form(),
-            combat_reach: p.unit_combat_reach().to_bits(),
-            attack_target_reach: attack_target_reach.map(f32::to_bits),
+            range_units,
         }
     }
 }
@@ -532,9 +532,9 @@ pub(super) fn feed_spell_tooltips(
     actions: Option<Res<PlayerActions>>,
     spell_sources: SpellTooltipSources,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    // The player's and the pet's auto-attack target, the melee range cell's second reach.
-    engaged_q: Query<&crate::creature_anim::Engaged, With<SelfPlayer>>,
-    engaged_units: Query<&crate::creature_anim::Engaged>,
+    // The caster's and the pet's reach and motion and each one's auto-attack target, which the
+    // melee range cell reads.
+    range_units: crate::spell::RangeUnits,
     objects: Objects,
     home_bind: Option<Res<crate::net::HomeBind>>,
     area_names: Option<Res<crate::ui_quest_log::QuestHeaderNamesRes>>,
@@ -625,17 +625,16 @@ pub(super) fn feed_spell_tooltips(
         .and_then(|id| area_names.as_deref()?.0.resolve(id as i32))
         .map(str::to_string);
     let self_store = self_q.single().ok();
-    let target_reach =
-        |e: &crate::creature_anim::Engaged| objects.object(e.0).map(|f| f.unit_combat_reach());
-    let attack_target_reach = engaged_q.single().ok().and_then(target_reach);
+    let caster_unit = range_units.caster();
+    let attack_target = range_units.caster_attack_target();
     // What moved since the last frame, which each pushed view is checked against: the bind
     // point (Astral Recall's `$z`), the form, the skills, what the equipped-item search learns of
     // each equipment slot and the disarm flag, the level, cost bases and ranged attack time, the
-    // block, dodge, parry and crit percentages, and the two combat reaches.
+    // block, dodge, parry and crit percentages, and the two units the melee range cell reads.
     let seen = Seen::of(
         self_store,
         home_area.as_deref(),
-        attack_target_reach,
+        RangeSeen::of(&caster_unit, attack_target.as_ref()),
         &objects,
         &items,
     );
@@ -667,15 +666,19 @@ pub(super) fn feed_spell_tooltips(
     changes = changes.with_reagents(&memory.reagents, &reagent_state);
     memory.reagents = reagent_state;
     memory.requeue(&changes, &mut wanted, &mut wanted_pet);
-    // The pet's inputs: a new pet, or its level, bases, form or reach moving, rebuilds the pet
-    // views alone.
+    // The pet's inputs: a new pet, or its level, bases, form, reach or motion moving, rebuilds the
+    // pet views alone.
     let pet_guid = self_store.and_then(|s| s.0.unit_pet_guid());
     let pet = pet_guid.and_then(|g| objects.object(g));
-    let pet_target_reach = pet_guid
-        .and_then(|g| objects.entity(g))
-        .and_then(|e| engaged_units.get(e).ok())
-        .and_then(target_reach);
-    let pet_inputs = PetInputs::of(pet_guid, pet, pet_target_reach);
+    let pet_entity = pet_guid.and_then(|g| objects.entity(g));
+    let pet_unit =
+        pet_entity
+            .and_then(|e| range_units.unit(e))
+            .unwrap_or(benilla_formats::RangeUnit::still(
+                crate::spell::DEFAULT_REACH,
+            ));
+    let pet_target = pet_entity.and_then(|e| range_units.attack_target(e));
+    let pet_inputs = PetInputs::of(pet_guid, pet, RangeSeen::of(&pet_unit, pet_target.as_ref()));
     if memory.pet != Some(pet_inputs) {
         memory.pet = Some(pet_inputs);
         wanted_pet.extend(memory.pet_pushed.drain().map(|(id, _)| id));
@@ -693,8 +696,8 @@ pub(super) fn feed_spell_tooltips(
             form: self_store.map_or(0, |s| s.0.unit_shapeshift_form()),
             store: self_store,
             caster: ViewCaster::Player,
-            combat_reach: self_store.map_or(1.5, |s| s.0.unit_combat_reach()),
-            attack_target_reach,
+            range_caster: caster_unit,
+            attack_target,
             objects: &objects,
             items: &mut items,
             commands: &commands,
@@ -707,8 +710,8 @@ pub(super) fn feed_spell_tooltips(
         // The pet views read the pet's form and reach where the player's read the player's.
         vctx.caster = ViewCaster::Pet(pet);
         vctx.form = pet.map_or(0, |p| p.unit_shapeshift_form());
-        vctx.combat_reach = pet.map_or(1.5, |p| p.unit_combat_reach());
-        vctx.attack_target_reach = pet_target_reach;
+        vctx.range_caster = pet_unit;
+        vctx.attack_target = pet_target;
         let built_pet = build_views(wanted_pet, spells, &mut vctx, memory, true);
         (built, built_pet)
     };

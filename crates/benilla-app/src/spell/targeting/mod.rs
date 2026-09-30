@@ -74,8 +74,9 @@ pub(crate) struct BindChecks<'w, 's> {
     poses: Query<'w, 's, &'static GlobalTransform, Without<benilla_world::view::WorldCamera>>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     spell_mods: Res<'w, super::SpellModifiers>,
-    /// The caster's auto-attack target guid, `[caster+0xc48]`, which `GetMinMaxRange` looks up.
-    engaged: Query<'w, 's, &'static crate::creature_anim::Engaged, With<crate::net::SelfPlayer>>,
+    /// The caster, a unit and the caster's auto-attack target (`[caster+0xc48]`, which
+    /// `GetMinMaxRange` looks up) as the range compare reads them.
+    range_units: super::RangeUnits<'w, 's>,
 }
 
 impl BindChecks<'_, '_> {
@@ -123,28 +124,24 @@ impl BindChecks<'_, '_> {
     /// unknown spell or a missing row passes.
     fn range_refusal(&self, spell_id: u32, entity: Entity) -> Option<u8> {
         let mut range = self.range_inputs(entity);
-        range.target_reach = self
-            .stores
-            .get(entity)
-            .ok()
-            .map(|s| s.0.unit_combat_reach());
+        range.target = self.range_units.unit(entity);
         self.refusal(spell_id, range)
     }
 
     /// The same compare against a corpse. `GetMinMaxRange 0x6e3480` pads a corpse's bounds as a
     /// unit's (`6e35fe`), but with no unit to read the second reach from it reads the caster's
-    /// again (`6e3605`–`6e361e`).
+    /// again (`6e3605`–`6e361e`), and with no unit it has no motion for the moving bonus.
     fn corpse_range_refusal(&self, spell_id: u32, entity: Entity) -> Option<u8> {
         let mut range = self.range_inputs(entity);
-        range.target_reach = Some(range.self_reach);
+        range.target = Some(benilla_formats::RangeUnit::still(range.caster.reach));
         self.refusal(spell_id, range)
     }
 
-    /// Our position and reach and the candidate's position, each position the pose the hover
-    /// picks against.
+    /// Our position, reach and motion and the candidate's position, each position the pose the
+    /// hover picks against.
     fn range_inputs(&self, entity: Entity) -> super::cast_target::RangeInputs {
         let me = self.self_q.iter().next();
-        let mut range = super::cast_target::RangeInputs {
+        super::cast_target::RangeInputs {
             self_pos: me
                 .and_then(|(e, _)| self.poses.get(e).ok())
                 .map(GlobalTransform::translation),
@@ -153,30 +150,9 @@ impl BindChecks<'_, '_> {
                 .get(entity)
                 .ok()
                 .map(GlobalTransform::translation),
-            ..Default::default()
-        };
-        range.self_reach = self.self_reach();
-        range
-    }
-
-    /// The caster's combat reach, the descriptor's default until its store streams.
-    fn self_reach(&self) -> f32 {
-        self.self_q
-            .iter()
-            .next()
-            .and_then(|(_, store)| store)
-            .map_or(super::cast_target::RangeInputs::default().self_reach, |s| {
-                s.0.unit_combat_reach()
-            })
-    }
-
-    /// The reach of the caster's auto-attack target, the unit `GetMinMaxRange 0x6e3480` looks up
-    /// itself for its melee arm when no unit is passed (`6e3552`-`6e3584`). `None` with no target
-    /// engaged or before it streams, where the arm reads the caster's own reach (`6e3594`).
-    fn attack_target_reach(&self) -> Option<f32> {
-        let guid = self.engaged.single().ok()?.0;
-        let entity = *self.index.as_ref()?.0.get(&guid)?;
-        Some(self.stores.get(entity).ok()?.0.unit_combat_reach())
+            caster: self.range_units.caster(),
+            target: None,
+        }
     }
 
     fn refusal(&self, spell_id: u32, range: super::cast_target::RangeInputs) -> Option<u8> {

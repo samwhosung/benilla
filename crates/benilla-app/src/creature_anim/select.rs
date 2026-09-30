@@ -705,7 +705,7 @@ pub(super) fn scaled_rate(clip: &AnimClip, speed: f32, model_scale: f32) -> Opti
 /// remote's relayed flags ([`RemoteMotion`]), a creature's spline, else still.
 /// `creature_swimming` supplies the `SWIMMING` the wire never sends for a creature; `modes`, the
 /// `SMSG_SPLINE_MOVE_*` grants, join the remote and creature flags (one word in the reference).
-pub(super) fn unify(
+pub(crate) fn unify(
     movement: Option<&MovementState>,
     remote: Option<&RemoteMotion>,
     spline: Option<&Spline>,

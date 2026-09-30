@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::SpellTooltipView;
 
-use super::spell_deps::{Changes, Deps, Reagents, Seen, UnitField};
+use super::spell_deps::{Changes, Deps, RangeSeen, Reagents, Seen, UnitField};
 use super::spell_feed::{build_view, reagent_state, PetInputs, ViewCaster, ViewCtx};
 use super::tests::{real_spells, TestCtx};
 use crate::items::Items;
@@ -23,17 +23,23 @@ use crate::spell::usable::{
 use crate::spell::{ModsDiff, SpellModifiers};
 use crate::ui_action::Spells;
 use crate::ui_items::TestObjects;
+use benilla_formats::{RangeUnit, UnitMotion};
 
 /// One side of each input group, so that moving an input is an xor: `false` is the empty side (no
-/// bind point, form 0, no percentages, default reach, nothing worn, no skills, zero cells), `true`
-/// the populated one.
+/// bind point, form 0, no percentages, default reach, no auto-attack target, both units standing,
+/// nothing worn, no skills, zero cells), `true` the populated one.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
 struct Inputs {
     home: bool,
     form: bool,
     /// A `Chance` bit each: block, dodge, parry, crit.
     avoid: u8,
+    /// The caster's reach and, with a target engaged, its reach.
     reach: bool,
+    /// An auto-attack target: the melee range cell's second unit.
+    engaged: bool,
+    /// The caster and the auto-attack target run: with a target engaged, the moving bonus.
+    pace: bool,
     /// The equipment slots holding an item that meets the view's requirement.
     worn: u32,
     /// The disarm flag.
@@ -58,6 +64,8 @@ impl Inputs {
         form: true,
         avoid: 0xf,
         reach: true,
+        engaged: true,
+        pace: true,
         worn: EQUIPMENT_MASK,
         disarm: true,
         unit: 0x1ff,
@@ -72,6 +80,8 @@ impl Inputs {
             form: self.form ^ o.form,
             avoid: self.avoid ^ o.avoid,
             reach: self.reach ^ o.reach,
+            engaged: self.engaged ^ o.engaged,
+            pace: self.pace ^ o.pace,
             worn: self.worn ^ o.worn,
             disarm: self.disarm ^ o.disarm,
             unit: self.unit ^ o.unit,
@@ -117,6 +127,24 @@ impl Inputs {
                 "a combat reach".to_string(),
                 Inputs {
                     reach: true,
+                    ..alone
+                },
+            ));
+        }
+        if self.engaged {
+            parts.push((
+                "the auto-attack target".to_string(),
+                Inputs {
+                    engaged: true,
+                    ..alone
+                },
+            ));
+        }
+        if self.pace {
+            parts.push((
+                "the units' run".to_string(),
+                Inputs {
+                    pace: true,
                     ..alone
                 },
             ));
@@ -182,7 +210,9 @@ impl Inputs {
             home: !deps.home,
             form: !deps.form,
             avoid: !deps.avoidance & 0xf,
-            reach: !deps.reach,
+            reach: !deps.range_units,
+            engaged: !deps.range_units,
+            pace: !deps.range_units,
             worn: EQUIPMENT_MASK & !deps.worn,
             disarm: !deps.disarm,
             unit: !deps.unit & 0x1ff,
@@ -264,7 +294,10 @@ struct Mat {
     store: ObjectStore,
     mods: SpellModifiers,
     home: Option<&'static str>,
-    target_reach: Option<f32>,
+    /// The caster as the range cell reads it: the store's reach, and running or not.
+    caster: RangeUnit,
+    /// The auto-attack target, when one is engaged.
+    attack_target: Option<RangeUnit>,
     form: u8,
 }
 
@@ -323,6 +356,15 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
     if inputs.reach {
         pairs.push((130, 4.0f32.to_bits()));
     }
+    let motion = if inputs.pace {
+        UnitMotion {
+            flags: 1,
+            speed: 7.0,
+            walk_speed: 2.5,
+        }
+    } else {
+        UnitMotion::default()
+    };
     let mut slot = 0;
     for (i, &line) in layout.lines.iter().enumerate() {
         if inputs.lines >> i & 1 == 1 {
@@ -352,15 +394,29 @@ fn mat(layout: &Layout, inputs: Inputs, p: Params) -> Mat {
         store: ObjectStore(ObjectFields::from_pairs(&pairs)),
         mods,
         home: inputs.home.then_some("Zzz"),
-        // The two reaches move together: the caster's 1.5 to 4.0, and an auto-attack target at 3.0.
-        target_reach: inputs.reach.then_some(3.0),
+        // The two reaches move together: the caster's 1.5 to 4.0, and an auto-attack target's 4.0
+        // to 6.0, which needs one engaged to read. The target's start clears the melee row's 5.0
+        // floor beside the caster's 1.5, so its presence moves the range cell.
+        caster: RangeUnit {
+            reach: if inputs.reach { 4.0 } else { 1.5 },
+            motion,
+            ..RangeUnit::still(1.5)
+        },
+        attack_target: inputs.engaged.then_some(RangeUnit {
+            reach: if inputs.reach { 6.0 } else { 4.0 },
+            motion,
+            ..RangeUnit::still(1.5)
+        }),
         form,
     }
 }
 
 /// What differs between two scenarios, through the feed's own diffs.
 fn changes(before: &Mat, now: &Mat, objects: &Objects, items: &Items) -> Changes {
-    let seen = |m: &Mat| Seen::of(Some(&m.store), m.home, m.target_reach, objects, items);
+    let seen = |m: &Mat| {
+        let range = RangeSeen::of(&m.caster, m.attack_target.as_ref());
+        Seen::of(Some(&m.store), m.home, range, objects, items)
+    };
     seen(now)
         .changes_since(&seen(before))
         .with_mods(now.mods.diff(&before.mods))
@@ -466,7 +522,8 @@ fn build(
     t.spell_mods = m.mods.clone();
     let mut ctx = t.ctx_for(objects, m.form, None, Some(&m.store));
     ctx.home_area = m.home;
-    ctx.attack_target_reach = m.target_reach;
+    ctx.range_caster = m.caster;
+    ctx.attack_target = m.attack_target;
     build_view(id, spells, &mut ctx)
 }
 
@@ -664,6 +721,26 @@ fn every_view_that_moves_with_an_input_is_requeued_by_that_input() {
     assert_covered("the combat reaches", &s);
     assert!(s.moved >= 100, "only {} views read a reach", s.moved);
     row("combat reach", &s);
+    // The melee range cell's second unit, engaged; and, with it engaged, both units running.
+    let engaged = Inputs {
+        engaged: true,
+        ..empty
+    };
+    let s = sweep(&mut rig, empty, &any, &own, &cause(engaged));
+    assert_covered("the auto-attack target", &s);
+    assert!(s.moved >= 100, "only {} views read the target", s.moved);
+    row("auto-attack target", &s);
+    let pace = Inputs {
+        pace: true,
+        ..empty
+    };
+    let s = sweep(&mut rig, engaged, &any, &own, &cause(pace));
+    assert_covered("the units' run", &s);
+    assert!(s.moved >= 100, "only {} views read the run", s.moved);
+    row("both units running", &s);
+    // With no target engaged the melee arm has no unit for the bonus: nothing moves.
+    let s = sweep(&mut rig, empty, &any, &own, &cause(pace));
+    assert_eq!(s.moved, 0, "the moving bonus needs a unit to read");
     let all_worn = Inputs {
         worn: EQUIPMENT_MASK,
         ..empty
@@ -813,7 +890,8 @@ fn a_reagent_moving_requeues_the_views_that_list_it() {
         store,
         mods: mods.clone(),
         home: None,
-        target_reach: None,
+        caster: RangeUnit::still(1.5),
+        attack_target: None,
         form: 0,
     };
 
@@ -917,7 +995,7 @@ fn a_pet_view_reads_no_player_form_equipment_reach_or_unit_field_but_the_ranged_
         };
         assert!(
             !deps.form
-                && !deps.reach
+                && !deps.range_units
                 && deps.worn == 0
                 && !deps.disarm
                 && deps.unit & !UnitField::RangedTime.bit() == 0,
@@ -980,8 +1058,13 @@ fn no_pet_field_moves_a_pet_view_unwatched() {
             Some(&player.store),
         );
         ctx.caster = ViewCaster::Pet(Some(pet));
-        ctx.combat_reach = pet.unit_combat_reach();
+        ctx.range_caster = RangeUnit::still(pet.unit_combat_reach());
         build_view(id, spells, &mut ctx).map(|(view, _)| view)
+    };
+    // The feed reads the pet's reach off its entity's store, which these fields stand in for.
+    let pet_inputs = |pet: &ObjectFields| {
+        let unit = RangeUnit::still(pet.unit_combat_reach());
+        PetInputs::of(None, Some(pet), RangeSeen::of(&unit, None))
     };
     let base = pet_with(0..0);
     let before: Vec<_> = ids.iter().map(|&id| build_one(t, id, &base)).collect();
@@ -993,7 +1076,7 @@ fn no_pet_field_moves_a_pet_view_unwatched() {
                 continue;
             }
             moved += 1;
-            if PetInputs::of(None, Some(&pet), None) != PetInputs::of(None, Some(&base), None) {
+            if pet_inputs(&pet) != pet_inputs(&base) {
                 continue;
             }
             let culprits: Vec<u16> = (first..first + 48)
@@ -1184,8 +1267,8 @@ fn the_search_answers_the_same_wherever_the_watched_state_is_the_same() {
                             form: 0,
                             store: Some(&store),
                             caster: ViewCaster::Player,
-                            combat_reach: 1.5,
-                            attack_target_reach: None,
+                            range_caster: RangeUnit::still(1.5),
+                            attack_target: None,
                             objects: &objects,
                             items: &mut items,
                             commands: &commands,
@@ -1261,13 +1344,30 @@ fn the_seen_diff_names_each_input_it_saw_move() {
     let objects = objs.get();
     let items = Items::default();
     let player = |pairs: &[(u16, u32)]| ObjectStore(ObjectFields::from_pairs(pairs));
-    let seen = |s: &ObjectStore| Seen::of(Some(s), None, None, &objects, &items);
+    // The feed reads the caster's reach off its store, and passes the units it read.
+    let seen_with = |s: &ObjectStore, caster_motion: UnitMotion, attack: Option<&RangeUnit>| {
+        let caster = RangeUnit {
+            motion: caster_motion,
+            ..RangeUnit::still(s.0.unit_combat_reach())
+        };
+        Seen::of(
+            Some(s),
+            None,
+            RangeSeen::of(&caster, attack),
+            &objects,
+            &items,
+        )
+    };
+    let seen = |s: &ObjectStore| seen_with(s, UnitMotion::default(), None);
     let base = player(&[(22, 100)]);
     for (i, field) in [1106u16, 1107, 1108, 1109].into_iter().enumerate() {
         let now = player(&[(22, 100), (field, 4.5f32.to_bits())]);
         let c = seen(&now).changes_since(&seen(&base));
         assert_eq!(c.avoidance, 1 << i, "percentage field {field}");
-        assert_eq!((c.worn, c.form, c.reach, c.home), (0, false, false, false));
+        assert_eq!(
+            (c.worn, c.form, c.range_units, c.home),
+            (0, false, false, false)
+        );
         assert_eq!((c.unit, c.disarm), (0, false));
     }
     // A guid the object index does not hold is an unresolved item: the slot moved.
@@ -1282,12 +1382,59 @@ fn the_seen_diff_names_each_input_it_saw_move() {
     let now = player(&[(22, 100), (138, 1 << 16)]);
     assert!(seen(&now).changes_since(&seen(&base)).form);
     let now = player(&[(22, 100), (130, 3.0f32.to_bits())]);
-    assert!(seen(&now).changes_since(&seen(&base)).reach);
-    let engaged = Seen::of(Some(&base), None, Some(2.0), &objects, &items);
-    assert!(engaged.changes_since(&seen(&base)).reach);
-    let bound = Seen::of(Some(&base), Some("Ironforge"), None, &objects, &items);
+    assert!(seen(&now).changes_since(&seen(&base)).range_units);
+    // The auto-attack target: engaged, its reach, then each unit starting to run on its own.
+    let target = RangeUnit::still(2.0);
+    let engaged = seen_with(&base, UnitMotion::default(), Some(&target));
+    assert!(engaged.changes_since(&seen(&base)).range_units);
+    let target_reach = RangeUnit::still(3.0);
+    let wider = seen_with(&base, UnitMotion::default(), Some(&target_reach));
+    assert!(wider.changes_since(&engaged).range_units);
+    let running = UnitMotion {
+        flags: 1,
+        speed: 7.0,
+        walk_speed: 2.5,
+    };
+    let target_runs = RangeUnit {
+        motion: running,
+        ..target
+    };
+    // The moving bonus needs both units running with a target engaged: a run of either one alone
+    // moves nothing a melee row shows.
+    let caster_runs = seen_with(&base, running, Some(&target));
+    assert!(caster_runs.changes_since(&engaged).is_empty());
+    let target_run = seen_with(&base, UnitMotion::default(), Some(&target_runs));
+    assert!(target_run.changes_since(&engaged).is_empty());
+    let both_run = seen_with(&base, running, Some(&target_runs));
+    assert!(
+        both_run.changes_since(&caster_runs).range_units,
+        "the target starts running beside a running caster"
+    );
+    assert!(
+        both_run.changes_since(&target_run).range_units,
+        "the caster starts running beside a running target"
+    );
+    // With no target engaged there is no unit for the bonus.
+    let alone = seen_with(&base, running, None);
+    assert!(alone.changes_since(&seen(&base)).is_empty());
+    // A walk is not a run: the answer a melee row follows does not move.
+    let walking = UnitMotion {
+        flags: 1,
+        speed: 2.5,
+        walk_speed: 2.5,
+    };
+    let caster_walk = seen_with(&base, walking, Some(&target_runs));
+    assert!(caster_walk.changes_since(&target_run).is_empty());
+    assert!(both_run.changes_since(&caster_walk).range_units);
+    let bound = Seen::of(
+        Some(&base),
+        Some("Ironforge"),
+        RangeSeen::default(),
+        &objects,
+        &items,
+    );
     assert!(bound.changes_since(&seen(&base)).home);
-    let gone = Seen::of(None, None, None, &objects, &items);
+    let gone = Seen::of(None, None, RangeSeen::default(), &objects, &items);
     assert_eq!(gone.changes_since(&seen(&base)).worn, EQUIPMENT_MASK);
     assert!(seen(&base).changes_since(&seen(&base)).is_empty());
     // The disarm flag, and no other flag.
