@@ -7,6 +7,7 @@
 //! stops there.
 //!
 //! [`Archive`] is a cheap `Arc` handle; each read opens its own file handle, so reads need no lock.
+//! [`Archive::open_file`] reads one file in place, a sector at a time, for a stream.
 //! Every allocation sized from a header count or a sector length is capped by the file's size, so
 //! a lying header fails with [`Error::Corrupt`].
 
@@ -197,6 +198,14 @@ impl Archive {
 
     /// Read and decompress a file by its internal path (`/` or `\`, case-insensitive).
     pub fn read_file(&self, name: &str) -> Result<Vec<u8>> {
+        self.open_file(name)?.read_all()
+    }
+
+    /// Open a file for reading in place: its own OS handle, its sectors decompressed one at a
+    /// time as they are read, so a long sound streams without the whole file read first, as the
+    /// reference's FMOD streams read the archive through the file callbacks it registers
+    /// (`FSOUND_File_SetCallbacks` at `0x7a45e4`).
+    pub fn open_file(&self, name: &str) -> Result<ArchiveFile> {
         let idx = &self.index;
         let block = idx.find(name).ok_or_else(|| Error::NotFound(name.into()))?;
 
@@ -215,7 +224,7 @@ impl Archive {
             return Err(Error::Unsupported(format!("single-unit file {name}")));
         }
 
-        let mut file = File::open(&idx.path)?;
+        let file = File::open(&idx.path)?;
         let file_pos = idx.archive_offset + block.file_pos as u64;
         let file_size = block.file_size as usize;
         let compressed = block.flags & (FLAG_COMPRESS | FLAG_IMPLODE) != 0;
@@ -224,6 +233,18 @@ impl Archive {
         let file_len = file.metadata()?.len();
         let avail = avail_from(file_len, file_pos);
 
+        let mut open = ArchiveFile {
+            file,
+            name: name.to_owned(),
+            base: file_pos,
+            size: file_size,
+            sector_size: idx.sector_size,
+            offsets: None,
+            implode_only,
+            avail,
+            pos: 0,
+            sector: None,
+        };
         if !compressed {
             // Stored: exactly `file_size` raw bytes, refused up front if the file cannot hold them.
             if capped(file_size, 1, avail) < file_size {
@@ -231,10 +252,7 @@ impl Archive {
                     "{name}: stored size ({file_size}) larger than the archive"
                 )));
             }
-            file.seek(SeekFrom::Start(file_pos))?;
-            let mut out = vec![0u8; file_size]; // proven <= avail above
-            file.read_exact(&mut out)?;
-            return Ok(out);
+            return Ok(open);
         }
 
         // Sectored: `sector_count + 1` offsets at `file_pos`, measured from it, so the patch
@@ -249,10 +267,10 @@ impl Archive {
                 "{name}: sector offset table ({otab_len} entries) larger than the archive"
             )));
         }
-        file.seek(SeekFrom::Start(file_pos))?;
+        open.file.seek(SeekFrom::Start(file_pos))?;
         let mut otab = vec![0u8; otab_cap * 4]; // == otab_len * 4, proven <= avail above
-        file.read_exact(&mut otab)?;
-        let offsets: Vec<u32> = otab
+        open.file.read_exact(&mut otab)?;
+        let offsets = otab
             .as_chunks::<4>()
             .0
             .iter()
@@ -261,45 +279,173 @@ impl Archive {
                     .ok_or_else(|| Error::Corrupt(format!("{name}: corrupt sector offset table")))
             })
             .collect::<Result<Vec<u32>>>()?;
+        open.offsets = Some(offsets);
+        Ok(open)
+    }
+}
 
-        let mut out = Vec::with_capacity(capped(file_size, 1, avail));
+/// A file opened in an archive ([`Archive::open_file`]): `Read + Seek` over its uncompressed
+/// bytes, holding the one decompressed sector under the read position.
+pub struct ArchiveFile {
+    file: File,
+    name: String,
+    /// The file's first byte in the archive file.
+    base: u64,
+    /// The uncompressed size, from the block table.
+    size: usize,
+    sector_size: usize,
+    /// The sector offset table, relative to `base`; `None` for a stored file.
+    offsets: Option<Vec<u32>>,
+    implode_only: bool,
+    /// Bytes from `base` to the archive's end: the cap on every length read from a header.
+    avail: usize,
+    /// The read position in the uncompressed file.
+    pos: u64,
+    /// The decompressed sector under `pos`, by index.
+    sector: Option<(usize, Vec<u8>)>,
+}
+
+impl ArchiveFile {
+    /// The uncompressed size.
+    pub fn size(&self) -> u64 {
+        self.size as u64
+    }
+
+    /// The whole file from its start, sector by sector; a sector that inflates short leaves the
+    /// file short rather than failing it.
+    fn read_all(mut self) -> Result<Vec<u8>> {
+        if self.offsets.is_none() {
+            self.file.seek(SeekFrom::Start(self.base))?;
+            let mut out = vec![0u8; self.size]; // proven <= avail by `open_file`
+            self.file.read_exact(&mut out)?;
+            return Ok(out);
+        }
+        let sector_count = self.size.div_ceil(self.sector_size);
+        let mut out = Vec::with_capacity(capped(self.size, 1, self.avail));
         for i in 0..sector_count {
-            let start = offsets[i] as u64;
-            let end = offsets[i + 1] as u64;
-            let comp_len = end
-                .checked_sub(start)
-                .ok_or_else(|| Error::Decompress(format!("{name}: sector {i} offsets reversed")))?
-                as usize;
-            let comp_cap = capped(comp_len, 1, avail);
-            if comp_cap < comp_len {
-                return Err(Error::Corrupt(format!(
-                    "{name}: sector {i} length ({comp_len}) larger than the archive"
-                )));
-            }
             // Each earlier sector yielded at most its own `want` (`decompress` is bounded), so
-            // `out.len() <= file_size` and this cannot wrap.
-            let want = (file_size - out.len()).min(idx.sector_size); // last sector may be short
-            if comp_len == 0 {
-                return Err(Error::Corrupt(format!("{name}: sector {i} is empty")));
-            }
-
-            file.seek(SeekFrom::Start(file_pos + start))?;
-            let mut raw = vec![0u8; comp_len]; // proven <= avail above
-            file.read_exact(&mut raw)?;
-
-            if comp_len >= want {
-                // A sector that would not shrink is stored verbatim.
-                out.extend_from_slice(&raw[..want]);
-            } else if implode_only {
-                // IMPLODE sectors carry no method byte; 1.12.1 data has none.
-                out.extend_from_slice(&decompress(0x08, &raw, want, name)?);
-            } else {
-                // COMPRESS: the leading byte is the codec mask, the rest the payload.
-                let method = raw[0]; // non-empty: refused above
-                out.extend_from_slice(&decompress(method, &raw[1..], want, name)?);
-            }
+            // `out.len() <= size` and this cannot wrap.
+            let want = (self.size - out.len()).min(self.sector_size); // last sector may be short
+            out.extend_from_slice(&self.decode_sector(i, want)?);
         }
         Ok(out)
+    }
+
+    /// Sector `i` of a sectored file, read and decompressed to at most `want` bytes.
+    fn decode_sector(&mut self, i: usize, want: usize) -> Result<Vec<u8>> {
+        let name = &self.name;
+        let offsets = self.offsets.as_deref().unwrap_or_default();
+        let (Some(&start), Some(&end)) = (offsets.get(i), offsets.get(i + 1)) else {
+            return Err(Error::Corrupt(format!(
+                "{name}: sector {i} past the offset table"
+            )));
+        };
+        let comp_len = u64::from(end)
+            .checked_sub(u64::from(start))
+            .ok_or_else(|| Error::Decompress(format!("{name}: sector {i} offsets reversed")))?
+            as usize;
+        let comp_cap = capped(comp_len, 1, self.avail);
+        if comp_cap < comp_len {
+            return Err(Error::Corrupt(format!(
+                "{name}: sector {i} length ({comp_len}) larger than the archive"
+            )));
+        }
+        if comp_len == 0 {
+            return Err(Error::Corrupt(format!("{name}: sector {i} is empty")));
+        }
+
+        self.file
+            .seek(SeekFrom::Start(self.base + u64::from(start)))?;
+        let mut raw = vec![0u8; comp_len]; // proven <= avail above
+        self.file.read_exact(&mut raw)?;
+
+        if comp_len >= want {
+            // A sector that would not shrink is stored verbatim.
+            raw.truncate(want);
+            Ok(raw)
+        } else if self.implode_only {
+            // IMPLODE sectors carry no method byte; 1.12.1 data has none.
+            decompress(0x08, &raw, want, name)
+        } else {
+            // COMPRESS: the leading byte is the codec mask, the rest the payload.
+            let method = raw[0]; // non-empty: refused above
+            decompress(method, &raw[1..], want, name)
+        }
+    }
+
+    /// Stored bytes at `pos` into `buf`, straight from the archive file.
+    fn read_stored(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let n = buf.len().min(self.size - self.pos as usize);
+        self.file.seek(SeekFrom::Start(self.base + self.pos))?;
+        self.file.read_exact(&mut buf[..n])?;
+        Ok(n)
+    }
+
+    /// Sectored bytes at `pos` into `buf`, from the sector under it, decompressed on first touch.
+    fn read_sectored(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let i = self.pos as usize / self.sector_size;
+        if self.sector.as_ref().is_none_or(|(at, _)| *at != i) {
+            let want = (self.size - i * self.sector_size).min(self.sector_size);
+            let bytes = self.decode_sector(i, want)?;
+            // A short sector would shift every later byte: refused here, where `read_all`
+            // shortens the file instead.
+            if bytes.len() != want {
+                return Err(Error::Corrupt(format!(
+                    "{}: sector {i} inflates to {} bytes, not {want}",
+                    self.name,
+                    bytes.len()
+                )));
+            }
+            self.sector = Some((i, bytes));
+        }
+        let sector = self
+            .sector
+            .as_ref()
+            .map(|(_, b)| b.as_slice())
+            .unwrap_or_default();
+        let off = self.pos as usize - i * self.sector_size;
+        let n = buf.len().min(sector.len() - off);
+        buf[..n].copy_from_slice(&sector[off..off + n]);
+        Ok(n)
+    }
+}
+
+impl Read for ArchiveFile {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if buf.is_empty() || self.pos >= self.size as u64 {
+            return Ok(0);
+        }
+        let n = if self.offsets.is_some() {
+            self.read_sectored(buf)
+        } else {
+            self.read_stored(buf)
+        }
+        .map_err(|e| match e {
+            Error::Io(e) => e,
+            other => io::Error::other(other),
+        })?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+}
+
+impl Seek for ArchiveFile {
+    /// Moves the read position only; the sector under it is read by the next `read`. A position
+    /// past the end reads as EOF.
+    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+        let pos = match to {
+            SeekFrom::Start(p) => Some(p),
+            SeekFrom::End(d) => (self.size as u64).checked_add_signed(d),
+            SeekFrom::Current(d) => self.pos.checked_add_signed(d),
+        }
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{}: seek before the start", self.name),
+            )
+        })?;
+        self.pos = pos;
+        Ok(pos)
     }
 }
 
@@ -667,5 +813,174 @@ mod tests {
             other => panic!("expected Error::Corrupt for a lying stored size, got {other:?}"),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// A sectored COMPRESS file as stored, 512-byte sectors (shift 0): a zlib sector where it
+    /// shrinks, the raw bytes where it would not, as the archive writer leaves them.
+    fn sectored(plain: &[u8]) -> Vec<u8> {
+        use flate2::{write::ZlibEncoder, Compression};
+        use std::io::Write;
+        let sectors: Vec<Vec<u8>> = plain
+            .chunks(512)
+            .map(|raw| {
+                let mut e = ZlibEncoder::new(vec![0x02u8], Compression::default());
+                e.write_all(raw).unwrap();
+                let z = e.finish().unwrap();
+                if z.len() < raw.len() {
+                    z
+                } else {
+                    raw.to_vec()
+                }
+            })
+            .collect();
+        let mut at = (sectors.len() as u32 + 1) * 4;
+        let mut out = at.to_le_bytes().to_vec();
+        for s in &sectors {
+            at += s.len() as u32;
+            out.extend_from_slice(&at.to_le_bytes());
+        }
+        for s in &sectors {
+            out.extend_from_slice(s);
+        }
+        out
+    }
+
+    /// Three sectors: a compressible run, an incompressible one stored verbatim, and a short tail.
+    fn three_sector_plain() -> Vec<u8> {
+        let mut rng = 0x1234_5678u32;
+        (0..1300u32)
+            .map(|i| match i {
+                0..512 => (i / 7) as u8,
+                512..1024 => {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 17;
+                    rng ^= rng << 5;
+                    rng as u8
+                }
+                _ => (i % 3) as u8,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_open_file_reads_what_read_file_reads_from_any_position() {
+        let plain = three_sector_plain();
+        let stored = sectored(&plain);
+        let (arc, path) = open_temp_kept(
+            "open_file",
+            &archive_with_one_block(
+                "Sound\\bed.wav",
+                FLAG_EXISTS | FLAG_COMPRESS,
+                &stored,
+                plain.len() as u32,
+            ),
+        );
+        assert_eq!(arc.read_file("Sound\\bed.wav").unwrap(), plain);
+
+        let mut f = arc.open_file("Sound\\bed.wav").unwrap();
+        assert_eq!(f.size(), plain.len() as u64);
+        let mut all = Vec::new();
+        f.read_to_end(&mut all).unwrap();
+        assert_eq!(all, plain, "a sequential read is the whole file");
+
+        // Reads straddling each sector boundary, backwards and forwards.
+        for (at, len) in [
+            (1000, 100),
+            (500, 30),
+            (0, 1300),
+            (1290, 64),
+            (511, 2),
+            (1023, 1),
+        ] {
+            f.seek(SeekFrom::Start(at)).unwrap();
+            let mut got = vec![0u8; len];
+            let n = {
+                let mut n = 0;
+                while n < len {
+                    match f.read(&mut got[n..]).unwrap() {
+                        0 => break,
+                        k => n += k,
+                    }
+                }
+                n
+            };
+            let end = (at as usize + len).min(plain.len());
+            assert_eq!(&got[..n], &plain[at as usize..end], "read {len} at {at}");
+        }
+
+        assert_eq!(f.seek(SeekFrom::End(-4)).unwrap(), 1296);
+        assert_eq!(f.seek(SeekFrom::Current(10)).unwrap(), 1306);
+        assert_eq!(
+            f.read(&mut [0u8; 8]).unwrap(),
+            0,
+            "past the end reads as EOF"
+        );
+        assert!(
+            f.seek(SeekFrom::Current(-2000)).is_err(),
+            "before the start"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_open_stored_file_reads_in_place() {
+        let (arc, path) = open_temp_kept(
+            "open_stored",
+            &archive_with_one_entry("a.txt", FLAG_EXISTS, b"hello world"),
+        );
+        let mut f = arc.open_file("a.txt").unwrap();
+        f.seek(SeekFrom::Start(6)).unwrap();
+        let mut got = String::new();
+        f.read_to_string(&mut got).unwrap();
+        assert_eq!(got, "world");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A stream cannot shorten the file the way a whole read does: every later byte would shift.
+    #[test]
+    fn an_open_file_refuses_a_sector_that_inflates_short() {
+        let plain = three_sector_plain();
+        // Sector 0 claims 512 bytes but its stream holds 500.
+        let mut short = plain.clone();
+        short.drain(500..512);
+        let mut stored = sectored(&short[..500]);
+        let tail = sectored(&plain[512..]);
+        // Splice: sector 0 from the short build, sectors 1 and 2 from the full one.
+        let (s0_start, s0_end) = (u32_at(&stored, 0), u32_at(&stored, 4));
+        let s0 = stored[s0_start as usize..s0_end as usize].to_vec();
+        let (t0, t1, t2) = (u32_at(&tail, 0), u32_at(&tail, 4), u32_at(&tail, 8));
+        stored = Vec::new();
+        let base = 16u32;
+        for off in [
+            base,
+            base + s0.len() as u32,
+            base + s0.len() as u32 + (t1 - t0),
+            base + s0.len() as u32 + (t2 - t0),
+        ] {
+            stored.extend_from_slice(&off.to_le_bytes());
+        }
+        stored.extend_from_slice(&s0);
+        stored.extend_from_slice(&tail[t0 as usize..]);
+        let (arc, path) = open_temp_kept(
+            "short_sector",
+            &archive_with_one_block(
+                "a.bin",
+                FLAG_EXISTS | FLAG_COMPRESS,
+                &stored,
+                plain.len() as u32,
+            ),
+        );
+        assert_eq!(arc.read_file("a.bin").unwrap().len(), plain.len() - 12);
+        let mut f = arc.open_file("a.bin").unwrap();
+        let err = f.read(&mut [0u8; 16]).unwrap_err().to_string();
+        assert!(
+            err.contains("sector 0 inflates to 500 bytes, not 512"),
+            "{err}"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn u32_at(b: &[u8], at: usize) -> u32 {
+        u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
     }
 }

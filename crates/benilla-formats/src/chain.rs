@@ -115,6 +115,15 @@ impl Chain {
 
     /// Read a file by internal path (`/` or `\`) from its winning archive.
     pub fn read(&self, name: &str) -> Result<Vec<u8>> {
+        let archive = self.archive_for(name)?;
+        archive
+            .read_file(name)
+            .with_context(|| format!("reading {name} from {}", archive.path().display()))
+    }
+
+    /// The archive `name` reads from, as a cheap handle: a caller holding the chain behind a lock
+    /// looks the file up under it and reads (`Archive::open_file`) after releasing it. No I/O.
+    pub fn archive_for(&self, name: &str) -> Result<Archive> {
         let archive = self
             .resolve(name)
             .ok_or_else(|| anyhow!("file not in patch chain: {name}"))?;
@@ -125,9 +134,7 @@ impl Chain {
                 archive.path().display()
             );
         }
-        archive
-            .read_file(name)
-            .with_context(|| format!("reading {name} from {}", archive.path().display()))
+        Ok(archive.clone())
     }
 
     /// `&mut` alias of [`Chain::read`] for call sites that thread a `&mut Chain`.
