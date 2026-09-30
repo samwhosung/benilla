@@ -754,7 +754,7 @@ fn feed_farsight_focus(
 /// `MiscHandler.cpp:945-956`; that the client checks them is inferred, `0x48a1b0` being partly
 /// undecoded). The guids are the resolver's own inputs, which the aura feed pushes each frame
 /// ([`UiScript::held_unit_guids`], so this runs after it): the bases and each unit a `target`
-/// chain reaches, and the VM resolves a verb's token to one of them. Ungated: distances move every
+/// chain reaches, and the VM resolves a verb's token to one of them or to a guid with no entry. Ungated: distances move every
 /// frame, and no event keys off the map.
 fn feed_unit_reach(
     script: Option<NonSendMut<UiScript>>,
@@ -2329,7 +2329,7 @@ mod tests {
             assert_eq!(guid_of(&mut app, &token), Some(MOB));
         }
 
-        /// A number wraps in 32 bits as the reference's inline parse does (`0x515ab3`): 2^32 + 1
+        /// A number wraps in 32 bits as the reference's inline parse does (`0x515af4`): 2^32 + 1
         /// is row 1, and digits stop at the first letter.
         #[test]
         fn a_row_number_wraps_as_the_reference_parse_does() {

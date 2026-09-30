@@ -56,8 +56,8 @@ impl super::UiScript {
     /// Push the squared distance of every live unit a token can name this frame, creature
     /// included; both range verbs read the same d². A verb resolves its token to a guid through
     /// [`super::UnitGuids`], so `"party1target"` and `"PLAYER"` read the unit they name, and a
-    /// guid absent from the map answers nil from both, the reference's null-object arm
-    /// (`0x48babe`). It changes every frame, so it stays off [`super::UnitState`], whose diffs
+    /// guid absent from the map answers nil from both, the reference's null-object arms
+    /// (`0x48babe` for `CheckInteractDistance`, `0x48a1fa` for `CanInspect`). It changes every frame, so it stays off [`super::UnitState`], whose diffs
     /// fire `UNIT_*` events.
     pub fn set_unit_reach(&mut self, reach: HashMap<u64, UnitReach>) {
         self.model_mut().unit_reach = reach;

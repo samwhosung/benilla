@@ -11,7 +11,7 @@ use super::scan;
 /// Everything the selection calls read and write.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ScriptSelect<'w, 's> {
-    /// The one unit-token resolver. The VM's own reads the same grammar
+    /// The app's unit-token resolver. The VM's own reads the same grammar
     /// ([`benilla_ui::script::parse_unit_token`]), so `TargetUnit("party1target")` and
     /// `CheckInteractDistance("party1target", …)` name the same unit.
     tokens: crate::ui_unit::UnitTokens<'w, 's>,
