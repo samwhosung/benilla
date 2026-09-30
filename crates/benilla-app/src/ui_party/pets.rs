@@ -262,7 +262,7 @@ pub(in crate::ui_party) mod tests {
 
     /// The frames of a group feed running [`super::super::feed::feed_party`] on a VM whose one
     /// spy frame logs the unit events pets raise, as `"EVENT:token"`.
-    fn app_with(script: UiScript) -> App {
+    pub(in crate::ui_party) fn app_with(script: UiScript) -> App {
         let mut app = App::new();
         app.add_message::<FieldChanged>()
             .init_resource::<GroupState>()

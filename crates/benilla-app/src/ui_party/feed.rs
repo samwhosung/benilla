@@ -27,7 +27,8 @@ use super::GroupState;
 /// What the feed last pushed: the values its event edges fire on.
 #[derive(Default)]
 pub(super) struct FedParty {
-    roster: Vec<u64>,
+    /// The group lists the feed has answered with `PARTY_MEMBERS_CHANGED`.
+    lists_applied: u32,
     leader: u64,
     loot: Option<GroupLootInfo>,
     invite: Option<String>,
@@ -62,6 +63,18 @@ pub(crate) const PARTY_PET_TOKENS: [&str; 4] = ["partypet1", "partypet2", "party
 /// `UPDATE_INSTANCE_INFO`, which an unchanging empty list reaches only through the answer count.
 fn saved_instances_moved(saved: &[SavedInstanceInfo], answers: u32, fed: &FedParty) -> bool {
     saved != fed.saved || answers != fed.saved_answers
+}
+
+/// The `PARTY_MEMBERS_CHANGED`s the lists applied since the feed's last look owe: one each, as the
+/// reference signals once per packet (`0x5e6c61`). A fresh VM saw none of them, so it gets one
+/// catch-up for a group whose list landed before it, never the history; a count that ran backwards
+/// is a new session's, all of whose lists are new.
+fn members_changed_owed(applied: u32, seen: u32, fresh_vm: bool) -> u32 {
+    match (fresh_vm, applied.checked_sub(seen)) {
+        (true, _) => u32::from(applied != 0),
+        (false, Some(owed)) => owed,
+        (false, None) => applied,
+    }
 }
 
 /// The `raid1..raid40` unit tokens, one per `MAX_RAID_MEMBERS` (40, `RaidFrame.lua:2`).
@@ -433,11 +446,18 @@ pub(super) fn feed_party(
         );
     }
 
-    let roster: Vec<u64> = group.members.iter().map(|m| m.guid).collect();
-    if roster != fed.roster {
-        gate.audit("feed_party", "the roster edge");
+    // ── PARTY_MEMBERS_CHANGED ───────────────────────────────────────────────
+    //
+    // Signalled after every `SMSG_GROUP_LIST`'s member loop (`0x5e6c61`), whatever the list changed:
+    // a status, the flags, the leader or nothing at all, and an empty list reaches it too
+    // (`0x5e6b3c`). Each list in this drain fires its own, after the snapshots above.
+    let owed = members_changed_owed(group.lists_applied, fed.lists_applied, vm_reset);
+    fed.lists_applied = group.lists_applied;
+    if owed != 0 {
+        gate.audit("feed_party", "a group list");
+    }
+    for _ in 0..owed {
         script.fire_event("PARTY_MEMBERS_CHANGED", vec![]);
-        fed.roster = roster;
     }
     if group.leader != fed.leader {
         gate.audit("feed_party", "the leader edge");
@@ -1006,6 +1026,24 @@ fn test_apply_local(
     self_guid: Option<u64>,
     target_guid: Option<u64>,
 ) -> bool {
+    // The server answers each of these with a fresh `SMSG_GROUP_LIST`, which the reference signals
+    // `PARTY_MEMBERS_CHANGED` for whether or not it changed anything (`0x5e6c61`).
+    if matches!(
+        req,
+        PartyRequest::Leave
+            | PartyRequest::UninviteUnit(_)
+            | PartyRequest::PromoteUnit(_)
+            | PartyRequest::LootMethod { .. }
+            | PartyRequest::LootThreshold(_)
+            | PartyRequest::ConvertToRaid
+            | PartyRequest::SetSubgroup { .. }
+            | PartyRequest::SwapSubgroup { .. }
+            | PartyRequest::UninviteRaid(_)
+            | PartyRequest::PromoteName(_)
+            | PartyRequest::AssistantLeader { .. }
+    ) {
+        group.count_list();
+    }
     match req {
         PartyRequest::Leave => {
             // The all-zero list's reset: the group facts and sandbox flag, not the session state.
@@ -1405,7 +1443,7 @@ pub(crate) fn synthetic_raid(
 
 #[cfg(test)]
 mod tests {
-    use super::super::pets::tests::{app, flag, frame, member, party, stream, ME};
+    use super::super::pets::tests::{app, app_with, flag, frame, member, party, stream, ME};
     use super::*;
 
     #[test]
@@ -1624,6 +1662,262 @@ mod tests {
         seat(&mut app, GROUPTYPE_RAID, member_status::ONLINE);
         frame(&mut app);
         assert_eq!(flag(&mut app, "UnitIsConnected('raid1')"), Some(1.0));
+    }
+
+    /// A frame that counts the `PARTY_MEMBERS_CHANGED`s the VM is told of; [`changed`] takes them.
+    fn watch_members_changed(app: &mut App) {
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script
+            .run(
+                r#"
+                CHANGED = 0
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("PARTY_MEMBERS_CHANGED")
+                f:SetScript("OnEvent", function() CHANGED = CHANGED + 1 end)
+                "#,
+            )
+            .unwrap();
+    }
+
+    /// Run a frame and count the `PARTY_MEMBERS_CHANGED`s it fired.
+    fn changed(app: &mut App) -> u32 {
+        frame(app);
+        let script = app.world_mut().non_send_resource_mut::<UiScript>();
+        let fired: f64 = script.eval("return CHANGED").unwrap();
+        script.run("CHANGED = 0").unwrap();
+        fired as u32
+    }
+
+    /// `SMSG_GROUP_LIST` as the server re-sends it: party members `1..` with their status byte,
+    /// under `leader` and `loot`, and nothing else told to the client.
+    fn resend(app: &mut App, statuses: &[u8], leader: u64, loot: Option<GroupLootInfo>) {
+        let list = statuses
+            .iter()
+            .enumerate()
+            .map(|(i, &status)| GroupMemberEntry {
+                name: format!("M{}", i + 1),
+                guid: member(i as u64 + 1),
+                status,
+                flags: 0,
+            })
+            .collect();
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_list(0, 0, list, leader, loot, Some(ME));
+    }
+
+    const ON: u8 = member_status::ONLINE;
+    const OFF: u8 = member_status::OFFLINE;
+
+    /// The reported shape: a member out of view logs off, and the server sends the list again with
+    /// their status alone moved. The reference signals after every list (`0x5e6c61`), so the party
+    /// frame rereads them.
+    #[test]
+    fn a_list_that_moves_only_a_members_status_fires_party_members_changed() {
+        let mut app = app();
+        watch_members_changed(&mut app);
+        party(&mut app, 2, true);
+        assert_eq!(changed(&mut app), 1, "the first look answers the list");
+        assert_eq!(changed(&mut app), 0, "a steady frame is silent");
+
+        resend(&mut app, &[OFF, ON], ME, None);
+        assert_eq!(changed(&mut app), 1, "member 1 went offline");
+        resend(&mut app, &[OFF, ON | member_status::AFK], ME, None);
+        assert_eq!(changed(&mut app), 1, "member 2 went away");
+        assert_eq!(changed(&mut app), 0);
+    }
+
+    /// The leader and the loot method ride the same list, and neither moves a guid.
+    #[test]
+    fn a_list_that_moves_only_the_leader_or_the_loot_method_fires_party_members_changed() {
+        let mut app = app();
+        watch_members_changed(&mut app);
+        party(&mut app, 2, true);
+        changed(&mut app);
+
+        resend(&mut app, &[ON, ON], member(1), None);
+        assert_eq!(changed(&mut app), 1, "a new leader");
+        let master = GroupLootInfo {
+            method: 2,
+            master: member(1),
+            threshold: 3,
+        };
+        resend(&mut app, &[ON, ON], member(1), Some(master));
+        assert_eq!(changed(&mut app), 1, "a new loot method");
+        let raised = GroupLootInfo {
+            threshold: 4,
+            ..master
+        };
+        resend(&mut app, &[ON, ON], member(1), Some(raised));
+        assert_eq!(changed(&mut app), 1, "a new threshold");
+    }
+
+    /// The handler has no compare against the roster it holds (`0x5e6a40`): a list that says what
+    /// the last one said is signalled all the same.
+    #[test]
+    fn an_identical_list_fires_party_members_changed_again() {
+        let mut app = app();
+        watch_members_changed(&mut app);
+        party(&mut app, 2, true);
+        changed(&mut app);
+
+        resend(&mut app, &[ON, ON], ME, None);
+        assert_eq!(changed(&mut app), 1);
+        resend(&mut app, &[ON, ON], ME, None);
+        assert_eq!(changed(&mut app), 1);
+    }
+
+    /// Each packet signals, so the lists one drain applies fire once apiece, after the snapshots
+    /// the last of them left.
+    #[test]
+    fn each_list_of_one_drain_fires_its_own_party_members_changed() {
+        let mut app = app();
+        watch_members_changed(&mut app);
+        party(&mut app, 2, true);
+        changed(&mut app);
+
+        resend(&mut app, &[OFF, ON], ME, None);
+        resend(&mut app, &[OFF, OFF], ME, None);
+        resend(&mut app, &[ON, ON], ME, None);
+        assert_eq!(changed(&mut app), 3);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), Some(1.0));
+    }
+
+    /// An empty list jumps straight to the signal (`0x5e6b3c`), the all-zero "you left" list and a
+    /// solo leader's alike, and a second one to a group already empty is not skipped.
+    #[test]
+    fn an_empty_list_fires_party_members_changed() {
+        let mut app = app();
+        watch_members_changed(&mut app);
+        party(&mut app, 1, true);
+        changed(&mut app);
+
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_list(0, 0, vec![], 0, None, Some(ME));
+        assert_eq!(changed(&mut app), 1, "the leave list");
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_list(0, 0, vec![], 0, None, Some(ME));
+        assert_eq!(
+            changed(&mut app),
+            1,
+            "and again, with nobody left to change"
+        );
+        app.world_mut()
+            .resource_mut::<GroupState>()
+            .apply_list(0, 0, vec![], ME, None, Some(ME));
+        assert_eq!(changed(&mut app), 1, "a leader with no one yet");
+    }
+
+    /// A VM minted after the lists landed was told of none of them: one catch-up for a group, not
+    /// the history, and silence for a player who never had one.
+    #[test]
+    fn a_fresh_vm_answers_the_lists_that_landed_before_it_once() {
+        let mut app = app();
+        watch_members_changed(&mut app);
+        party(&mut app, 2, true);
+        resend(&mut app, &[OFF, ON], ME, None);
+        resend(&mut app, &[OFF, OFF], ME, None);
+        assert_eq!(changed(&mut app), 1);
+        assert_eq!(changed(&mut app), 0);
+
+        let mut solo = self::app();
+        watch_members_changed(&mut solo);
+        assert_eq!(changed(&mut solo), 0, "no list, no event");
+    }
+
+    #[test]
+    fn the_lists_owed_are_the_count_since_the_last_look() {
+        assert_eq!(members_changed_owed(3, 3, false), 0, "nothing landed");
+        assert_eq!(members_changed_owed(5, 3, false), 2, "one apiece");
+        assert_eq!(
+            members_changed_owed(2, 4, false),
+            2,
+            "the session ended and began again"
+        );
+        assert_eq!(members_changed_owed(0, 4, false), 0);
+        assert_eq!(
+            members_changed_owed(7, 0, true),
+            1,
+            "a fresh VM: the group, once"
+        );
+        assert_eq!(members_changed_owed(0, 0, true), 0);
+    }
+
+    /// The sandbox stands in for the server, whose echo of each group intent is a list.
+    #[test]
+    fn the_sandbox_answers_a_group_intent_with_a_party_members_changed() {
+        let mut app = app();
+        watch_members_changed(&mut app);
+        synthetic_roster(&mut app.world_mut().resource_mut::<GroupState>(), None);
+        assert_eq!(changed(&mut app), 1);
+
+        let (me, mob) = (Some(ME), None);
+        let intents = [
+            PartyRequest::UninviteUnit("party2".into()),
+            PartyRequest::PromoteUnit("party1".into()),
+            PartyRequest::LootThreshold(4),
+            PartyRequest::Leave,
+        ];
+        for req in intents {
+            let mut group = app.world_mut().resource_mut::<GroupState>();
+            assert!(test_apply_local(&mut group, &req, me, mob));
+            assert_eq!(changed(&mut app), 1, "{req:?}");
+        }
+        let mut group = app.world_mut().resource_mut::<GroupState>();
+        let mark = PartyRequest::SetRaidTarget {
+            unit: "player".into(),
+            index: 1,
+        };
+        assert!(test_apply_local(&mut group, &mark, me, mob));
+        assert_eq!(changed(&mut app), 0, "a mark is no list");
+    }
+
+    /// The stock party frame, loaded whole off the player's own chain: a member out of view logs
+    /// off, and the server sends the list again with their status alone moved. The stock frame
+    /// repaints on the event that list signals: `UnitFrameManaBar_Update` greys the bar for a
+    /// member who is not connected, and `PartyMemberFrame_UpdatePet` hides their pet frame
+    /// (`PartyMemberFrame.lua:73`).
+    #[test]
+    fn the_stock_party_frame_greys_a_member_who_logs_off_out_of_view() {
+        benilla_formats::wow_data_or_skip!();
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let failures = crate::ui_script::load_default_ui(&script);
+        assert!(failures.is_empty(), "load failures: {failures:?}");
+        let mut app = app_with(script);
+        let bar = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource::<UiScript>()
+                .eval::<(f64, f64, f64)>("return PartyMemberFrame1ManaBar:GetStatusBarColor()")
+                .unwrap()
+        };
+
+        party(&mut app, 1, true);
+        frame(&mut app);
+        assert_eq!(bar(&mut app), (0.0, 0.0, 1.0), "the mana colour");
+        assert_eq!(
+            flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"),
+            Some(1.0)
+        );
+
+        // The list alone, as the server sends it: the member's record is not touched.
+        resend(&mut app, &[OFF], ME, None);
+        frame(&mut app);
+        assert_eq!(flag(&mut app, "UnitIsConnected('party1')"), None);
+        assert_eq!(bar(&mut app), (0.5, 0.5, 0.5), "the disconnected grey");
+        assert_eq!(flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"), None);
+
+        resend(&mut app, &[ON], ME, None);
+        frame(&mut app);
+        assert_eq!(bar(&mut app), (0.0, 0.0, 1.0), "back online");
+        assert_eq!(
+            flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"),
+            Some(1.0)
+        );
+        let errors = app.world().non_send_resource::<UiScript>().errors();
+        assert!(errors.is_empty(), "script errors: {errors:?}");
     }
 
     #[test]

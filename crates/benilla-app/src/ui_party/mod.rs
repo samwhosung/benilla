@@ -52,6 +52,10 @@ pub struct GroupState {
     pub own_flags: u8,
     /// The other members in wire order; the list never contains the recipient.
     pub members: Vec<GroupMemberEntry>,
+    /// How many `SMSG_GROUP_LIST`s landed, the all-zero and an unchanged one included. The
+    /// reference signals `PARTY_MEMBERS_CHANGED` after each (`0x5e6c61`), with no compare against
+    /// the roster it holds, and an empty list reaches it too (`0x5e6b3c`).
+    pub lists_applied: u32,
     /// The leave ack, `SMSG_GROUP_UNINVITE` and `SMSG_GROUP_DESTROYED` empty the reference's party
     /// slots and leader (`0x4e84a0`, `0x4e8250(0)`) and keep its raid roster; the next list then
     /// finds no slot held.
@@ -103,6 +107,8 @@ impl GroupState {
         loot: Option<GroupLootInfo>,
         self_guid: Option<u64>,
     ) -> ListOutcome {
+        // Every path of the handler reaches the event, the leave list and a party's list alike.
+        self.count_list();
         let mut out = ListOutcome::default();
         let raid = group_type == GROUPTYPE_RAID;
         // The two stores as this list finds them: the party slots unless an opcode emptied them,
@@ -197,6 +203,13 @@ impl GroupState {
         // A real list ends the sandbox; `synthetic_roster` re-raises the flag after its own call.
         self.test = false;
         out
+    }
+
+    /// Count one `SMSG_GROUP_LIST`, which the feed answers with one `PARTY_MEMBERS_CHANGED`. The
+    /// `/partytest` sandbox calls it for each group intent whose echo the server would send as a
+    /// list.
+    pub(super) fn count_list(&mut self) {
+        self.lists_applied = self.lists_applied.wrapping_add(1);
     }
 
     /// The `party1..party4` slots: our own subgroup in packet order, at most four (`0x5e6baa`
@@ -375,6 +388,7 @@ impl GroupState {
             // nothing on a disband (`Group::RemoveAllInvites`).
             pending_invite,
             // Session state the feed fires edges on: kept until `clear_session`.
+            lists_applied: _,
             saved_instances: _,
             saved_instances_answers: _,
             ready_check: _,
@@ -471,6 +485,38 @@ mod tests {
         g.clear_session();
         assert_eq!(g.saved_instances_answers, 0);
         assert!(g.saved_instances.is_empty());
+    }
+
+    #[test]
+    fn every_list_counts_whatever_it_changes() {
+        let mut g = GroupState::default();
+        let list = |g: &mut GroupState, members: Vec<GroupMemberEntry>, leader| {
+            g.apply_list(0, 0, members, leader, None, Some(ME));
+            g.lists_applied
+        };
+        assert_eq!(g.lists_applied, 0, "no list yet");
+
+        let alice = member("Alice", 0xA11CE);
+        assert_eq!(list(&mut g, vec![alice.clone()], 0xA11CE), 1);
+        assert_eq!(
+            list(&mut g, vec![alice.clone()], 0xA11CE),
+            2,
+            "the same list again"
+        );
+        let away = GroupMemberEntry {
+            status: 0,
+            ..alice.clone()
+        };
+        assert_eq!(list(&mut g, vec![away], 0xA11CE), 3, "a status alone");
+        assert_eq!(list(&mut g, vec![alice], ME), 4, "a leader alone");
+        assert_eq!(list(&mut g, vec![], ME), 5, "a leader with no members");
+        assert_eq!(list(&mut g, vec![], 0), 6, "the all-zero list");
+        assert_eq!(list(&mut g, vec![], 0), 7, "and another, with nobody held");
+
+        g.leave_group();
+        assert_eq!(g.lists_applied, 7, "leaving is not a list");
+        g.clear_session();
+        assert_eq!(g.lists_applied, 0);
     }
 
     #[test]
