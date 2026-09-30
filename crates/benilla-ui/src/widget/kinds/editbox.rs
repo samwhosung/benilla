@@ -79,8 +79,12 @@ pub struct EditBoxState {
     pub history_pos: Option<usize>,
     /// The live line stashed when browsing starts, restored when DOWN walks past the newest entry.
     pub history_draft: Option<String>,
-    /// `SetTextInsets(l, r, t, b)`, applied as the text region's two corner anchors.
+    /// `SetTextInsets(l, r, t, b)` (`+0x3ec`, `+0x3f4`, `+0x3f0`, `+0x3e8`), which seat the text
+    /// region and pad a multi-line box's height.
     pub text_insets: [f32; 4],
+    /// One line's measured height in the text region's font (`0x7727b0(fs, 1)`), the height of an
+    /// empty multi-line box's text, with the measure key it was taken under.
+    pub line_height: Option<(u64, f32)>,
     /// The host-measured width of `display[..i]` per byte `i`, a continuation byte repeating its
     /// lead's; hit-testing (`0x77d0d0`) and the scroll window read it. Empty until answered.
     pub advances: Vec<f32>,
@@ -160,6 +164,7 @@ impl Default for EditBoxState {
             history_pos: None,
             history_draft: None,
             text_insets: [0.0; 4],
+            line_height: None,
             advances: Vec::new(),
             advances_key: 0,
             rows: vec![0],

@@ -470,11 +470,16 @@ impl RegionData {
     /// read treats a measure under another key as absent; the layout keeps the old box until the
     /// new one lands, except for empty text, which is never measured.
     pub(crate) fn measure_key(&self, scale: f32) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         // By reference: `String` hashes as `str` does, and this runs for every FontString every
         // frame, so a clone would allocate for nothing.
-        self.text.as_deref().unwrap_or("").hash(&mut hasher);
+        self.measure_key_of(self.text.as_deref().unwrap_or(""), scale)
+    }
+
+    /// [`Self::measure_key`] with `text` in place of the region's own.
+    pub(crate) fn measure_key_of(&self, text: &str, scale: f32) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        text.hash(&mut hasher);
         self.font_path.hash(&mut hasher);
         self.font_height.map(f32::to_bits).hash(&mut hasher);
         self.text_height.map(f32::to_bits).hash(&mut hasher);

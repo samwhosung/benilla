@@ -960,6 +960,7 @@ impl UiScript {
                 }
                 KindState::EditBox(eb) => {
                     eb.advances_key = eb.advances_key.wrapping_add(1);
+                    eb.line_height = None;
                 }
                 _ => {}
             }

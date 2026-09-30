@@ -23,7 +23,6 @@ use mlua::{Lua, Table, Value};
 use super::object::frame_handle_of;
 use super::types::{EditAction, EditUnit};
 use super::{event, Model, RegionData};
-use crate::layout::{Anchor, Point};
 use crate::order::{self, DrawLayer, ZTarget};
 use crate::widget::{EditBoxState, FrameHandle, FrameKind, KindState, RegionHandle, RegionKind};
 
@@ -120,12 +119,14 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
 }
 
 // Mouse, selection, clipboard and blink (`interact`); the host's advance round trip and text
-// geometry (`seam`).
+// geometry (`seam`); the text region's rect and a multi-line box's height (`relayout`).
 mod interact;
+mod relayout;
 mod seam;
 pub(super) use interact::{
     click, copy_selection, cut_selection, drag_end, drag_update, tick_blink,
 };
+pub(in crate::script) use relayout::relayout_multi_line;
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // Focus model
@@ -345,37 +346,17 @@ fn sync_text_region(lua: &Lua, h: FrameHandle) {
     }
 }
 
-/// `SetTextInsets(l, r, t, b)`: store the insets and re-anchor the text region by them.
+/// `SetTextInsets(l, r, t, b)` (`0x77a6e0`): store the insets and re-seat the text region by
+/// them (`0x77a707` → `0x77b8c0`).
 fn set_text_insets(lua: &Lua, h: FrameHandle, l: f32, r: f32, t: f32, b: f32) {
     if with_eb(lua, h, |eb| eb.text_insets = [l, r, t, b]).is_none() {
         return;
     }
-    let Some(rh) = ensure_text_region(lua, h) else {
+    if ensure_text_region(lua, h).is_none() {
         return;
-    };
-    write_inset_anchors(lua, h, rh, [l, r, t, b]);
-}
-
-/// Pin the text region's corners inside the box by the insets (y-up: the top inset moves its top
-/// down, the bottom inset its bottom up).
-fn write_inset_anchors(lua: &Lua, h: FrameHandle, rh: RegionHandle, [l, r, t, b]: [f32; 4]) {
-    let owner = frame_id_of(lua, h);
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let pair = [
-        Anchor::new(Point::TopLeft, owner, Point::TopLeft, l, -t),
-        Anchor::new(Point::BottomRight, owner, Point::BottomRight, -r, b),
-    ];
-    let data = model.region_data.entry(rh).or_default();
-    let same = data.anchors.len() == 2
-        && data
-            .anchors
-            .iter()
-            .zip(&pair)
-            .all(|(a, b)| super::object::anchor_bits_eq(a, b));
-    if !same {
-        data.anchors = pair.to_vec();
-        model.touch_layout();
     }
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    relayout::seat_text_region(&mut model, h);
 }
 
 /// The wrapper for an EditBox's embedded text FontString, built by its ctor (`0x779bee`). The
@@ -396,15 +377,15 @@ pub(crate) fn editbox_text_region_wrapper(lua: &Lua, frame: &Table) -> Option<Ta
 pub(crate) fn adopt_text_region(lua: &Lua, frame: &Table, region: &Table) -> mlua::Result<()> {
     let h = frame_handle_of(lua, frame)?;
     let rh = super::region::region_handle_of(lua, region)?;
-    let Some((insets, multi_line)) = with_eb(lua, h, |eb| {
+    let Some(multi_line) = with_eb(lua, h, |eb| {
         eb.text_region = Some(rh);
-        (eb.text_insets, eb.multi_line)
+        eb.multi_line
     }) else {
         return Ok(()); // not an EditBox
     };
-    write_inset_anchors(lua, h, rh, insets);
-    // Always `Some` text: an empty box still emits its Text quad for the host's caret.
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    relayout::seat_text_region(&mut model, h);
+    // Always `Some` text: an empty box still emits its Text quad for the host's caret.
     let data = model.region_data.entry(rh).or_default();
     data.text.get_or_insert_with(String::new);
     apply_text_region_justify(data, multi_line);
@@ -443,9 +424,10 @@ pub(super) fn ensure_text_region(lua: &Lua, h: FrameHandle) -> Option<RegionHand
     Some(rh)
 }
 
-/// Re-apply the text region's justify for the current `multiLine` flag: LoadXML adopts the
-/// `<FontString>` before it applies the box's flags.
-pub(super) fn refresh_text_region_justify(lua: &Lua, this: &Table) -> mlua::Result<()> {
+/// Re-apply the text region's justify and rect for the current `multiLine` flag, as
+/// `SetMultiLine` re-seats it (`0x77a63f` → `0x77b8c0`): LoadXML adopts the `<FontString>` before
+/// it applies the box's flags.
+pub(super) fn refresh_text_region(lua: &Lua, this: &Table) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let Some(KindState::EditBox(eb)) = model.arena.frame(h).map(|f| &f.kind_state) else {
@@ -455,6 +437,7 @@ pub(super) fn refresh_text_region_justify(lua: &Lua, this: &Table) -> mlua::Resu
         return Ok(());
     };
     apply_text_region_justify(model.region_data.entry(rh).or_default(), multi_line);
+    relayout::seat_text_region(&mut model, h);
     Ok(())
 }
 
@@ -562,6 +545,8 @@ const CARET_WIDTH: f32 = 4.0;
 mod methods;
 pub(super) use methods::install;
 
+#[cfg(test)]
+mod multi_line_tests;
 #[cfg(test)]
 mod tests;
 

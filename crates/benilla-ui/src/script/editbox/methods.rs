@@ -287,16 +287,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     for (name, set) in flag_setters() {
-        let refresh_justify = name == "SetMultiLine";
+        let refresh_text = name == "SetMultiLine";
         m.set(
             name,
             lua.create_function(move |lua, (this, v): (Table, Value)| {
                 let on = !matches!(v, Value::Nil | Value::Boolean(false));
                 with_editbox(lua, &this, |eb| set(eb, on))?;
-                if refresh_justify {
-                    // A multi-line box anchors its text TOP, else MIDDLE, and the loader wires the
+                if refresh_text {
+                    // A multi-line box seats its text TOP and as tall as the text, a single-line
+                    // one MIDDLE between the inset corners, and the loader wires the
                     // `<FontString>` before the flags, so re-seat it.
-                    super::refresh_text_region_justify(lua, &this)?;
+                    super::refresh_text_region(lua, &this)?;
                 }
                 Ok(())
             })?,
