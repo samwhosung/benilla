@@ -732,10 +732,14 @@ fn near_field(d_sq: f32, cutoff: f32) -> f32 {
 }
 
 impl SoundKits {
-    /// A kit id by its `PlaySoundByName` key (the `0x458030` name registry), such as the ghost
-    /// tracks "Ghost" and "GhostMusic".
-    pub(crate) fn id_by_name(&self, name: &str) -> Option<u32> {
-        self.catalog.by_name(name).map(|k| k.id)
+    /// The ambience kit a ghost hears (`[0xb06d48]`, resolved at init by `0x4609b0`).
+    pub(super) fn ghost_bed(&self) -> Option<u32> {
+        self.catalog.ghost_bed()
+    }
+
+    /// The ambience kit a submerged listener hears (`[0xb06d4c]`, resolved at init by `0x4609b0`).
+    pub(super) fn underwater_bed(&self) -> Option<u32> {
+        self.catalog.underwater_bed()
     }
 
     pub(crate) fn new(catalog: SoundKitCatalog) -> Self {

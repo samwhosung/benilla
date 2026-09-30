@@ -50,11 +50,17 @@ pub struct SoundKit {
     pub eax_def: u32,
 }
 
+/// The names `0x4609b0` finds the two forced ambience beds by (`0x836444`, `0x836428`).
+const GHOST_BED_NAME: &str = "Ghost (DONOTRENAME)";
+const UNDERWATER_BED_NAME: &str = "Underwater (DONOTRENAME)";
+
 /// All kits, resolvable by id or, ignoring case, by name.
 pub struct SoundKitCatalog {
     kits: HashMap<u32, SoundKit>,
     /// Lowercased `Name` to id: the reference's name hash ignores case.
     by_name: HashMap<String, u32>,
+    ghost_bed: Option<u32>,
+    underwater_bed: Option<u32>,
 }
 
 impl SoundKitCatalog {
@@ -69,6 +75,16 @@ impl SoundKitCatalog {
             .and_then(|id| self.kits.get(id))
     }
 
+    /// The ambience bed a ghost hears, the row named `"Ghost (DONOTRENAME)"`: `[0xb06d48]`.
+    pub fn ghost_bed(&self) -> Option<u32> {
+        self.ghost_bed
+    }
+
+    /// The ambience bed under water, the row named `"Underwater (DONOTRENAME)"`: `[0xb06d4c]`.
+    pub fn underwater_bed(&self) -> Option<u32> {
+        self.underwater_bed
+    }
+
     pub fn len(&self) -> usize {
         self.kits.len()
     }
@@ -79,11 +95,67 @@ impl SoundKitCatalog {
 
     /// An empty catalog for consumers' unit tests.
     pub fn empty_for_tests() -> Self {
+        Self::from_kits(Vec::new())
+    }
+
+    /// A catalog of file-less kits, `(id, name)` in row order, for consumers' unit tests.
+    pub fn named_for_tests(rows: &[(u32, &str)]) -> Self {
+        Self::from_kits(
+            rows.iter()
+                .map(|&(id, name)| SoundKit {
+                    id,
+                    sound_type: 0,
+                    name: name.to_owned(),
+                    files: Vec::new(),
+                    volume: 1.0,
+                    flags: 0,
+                    min_distance: 0.0,
+                    distance_cutoff: 0.0,
+                    eax_def: 0,
+                })
+                .collect(),
+        )
+    }
+
+    /// The catalog of `rows` in file order, with the two forced beds resolved once, as the
+    /// reference does at init.
+    fn from_kits(rows: Vec<SoundKit>) -> Self {
+        let (ghost_bed, underwater_bed) = resolve_forced_beds(&rows);
+        let mut kits = HashMap::with_capacity(rows.len());
+        let mut by_name = HashMap::with_capacity(rows.len());
+        for kit in rows {
+            if !kit.name.is_empty() {
+                by_name.insert(kit.name.to_ascii_lowercase(), kit.id);
+            }
+            kits.insert(kit.id, kit);
+        }
         Self {
-            kits: HashMap::new(),
-            by_name: HashMap::new(),
+            kits,
+            by_name,
+            ghost_bed,
+            underwater_bed,
         }
     }
+}
+
+/// `0x4609b0`: the ghost and underwater ambience rows, `(ghost, underwater)`. It walks the table
+/// from the last row down, comparing each name with `0x64a480` at length `0x7fffffff`, which is
+/// `strncmp` (`0x40de80`): exact, case-sensitive, the whole string with its terminator, so neither
+/// a case variant nor a prefix matches (the ignore-case `0x64a4c0` is not used here). A match
+/// stores the row's id, later rows down overwriting, and the walk ends when both are set.
+fn resolve_forced_beds(rows: &[SoundKit]) -> (Option<u32>, Option<u32>) {
+    let (mut ghost, mut underwater) = (None, None);
+    for kit in rows.iter().rev() {
+        if ghost.is_some() && underwater.is_some() {
+            break;
+        }
+        if kit.name == GHOST_BED_NAME {
+            ghost = Some(kit.id);
+        } else if kit.name == UNDERWATER_BED_NAME {
+            underwater = Some(kit.id);
+        }
+    }
+    (ghost, underwater)
 }
 
 fn sound_entries_schema() -> Schema {
@@ -129,8 +201,7 @@ pub fn load_sound_kit_catalog(chain: &mut Chain) -> Result<SoundKitCatalog> {
         .read_file(SOUND_ENTRIES)
         .with_context(|| format!("reading {SOUND_ENTRIES}"))?;
     let rs = parse(&bytes, sound_entries_schema(), "SoundEntries")?;
-    let mut kits = HashMap::with_capacity(rs.records().len());
-    let mut by_name = HashMap::with_capacity(rs.records().len());
+    let mut rows = Vec::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
         let name = str_at(&rs, r, 2).unwrap_or_default();
@@ -144,25 +215,19 @@ pub fn load_sound_kit_catalog(chain: &mut Chain) -> Result<SoundKitCatalog> {
             let path = join_variation(&dir, &file);
             files.push((path, weight));
         }
-        if !name.is_empty() {
-            by_name.insert(name.to_ascii_lowercase(), id);
-        }
-        kits.insert(
+        rows.push(SoundKit {
             id,
-            SoundKit {
-                id,
-                sound_type: u32_at(r, 1).unwrap_or(0),
-                name,
-                files,
-                volume: f32_at(r, 24).unwrap_or(1.0),
-                flags: u32_at(r, 25).unwrap_or(0),
-                min_distance: f32_at(r, 26).unwrap_or(0.0),
-                distance_cutoff: f32_at(r, 27).unwrap_or(0.0),
-                eax_def: u32_at(r, 28).unwrap_or(0),
-            },
-        );
+            sound_type: u32_at(r, 1).unwrap_or(0),
+            name,
+            files,
+            volume: f32_at(r, 24).unwrap_or(1.0),
+            flags: u32_at(r, 25).unwrap_or(0),
+            min_distance: f32_at(r, 26).unwrap_or(0.0),
+            distance_cutoff: f32_at(r, 27).unwrap_or(0.0),
+            eax_def: u32_at(r, 28).unwrap_or(0),
+        });
     }
-    Ok(SoundKitCatalog { kits, by_name })
+    Ok(SoundKitCatalog::from_kits(rows))
 }
 
 #[cfg(test)]
@@ -207,6 +272,87 @@ mod tests {
             bytes.len() > 1000,
             "{path} is a real WAV ({} B)",
             bytes.len()
+        );
+    }
+
+    /// The two forced ambience rows, by the exact names `0x4609b0` compares: row 4160 and row 4209,
+    /// where no row is named plain `Ghost` and 4123 `UnderWaterLoop` is a different row of the
+    /// same file.
+    #[test]
+    fn real_sound_entries_resolve_the_forced_ambience_beds() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let cat = load_sound_kit_catalog(&mut chain).expect("load sound kits");
+
+        assert_eq!(cat.ghost_bed(), Some(4160));
+        assert_eq!(cat.underwater_bed(), Some(4209));
+        let file = |id: u32| cat.get(id).expect("row").files[0].0.clone();
+        assert!(file(4160).ends_with("GhostState.wav"));
+        assert!(file(4209).ends_with("UndwaterLoop.wav"));
+        assert_eq!(cat.get(4123).expect("row").name, "UnderWaterLoop");
+        assert_eq!(file(4123), file(4209), "the same file, its own row");
+
+        // One row of each name, and none named plain `Ghost`.
+        let count = |name: &str| cat.kits.values().filter(|k| k.name == name).count();
+        assert_eq!(count("Ghost (DONOTRENAME)"), 1);
+        assert_eq!(count("Underwater (DONOTRENAME)"), 1);
+        assert!(cat.by_name("Ghost").is_none());
+    }
+
+    /// `0x64a480` at length `0x7fffffff` is `strncmp` over the whole string: a case variant, a
+    /// prefix or an extension of the name is another row, and the ignore-case name registry does
+    /// not decide it.
+    #[test]
+    fn the_forced_beds_match_the_exact_name_only() {
+        let cat = SoundKitCatalog::named_for_tests(&[
+            (1, "ghost (donotrename)"),
+            (2, "Ghost (DONOTRENAME) "),
+            (3, "Ghost"),
+            (4, "Ghost (DONOTRENAM"),
+            (5, "UNDERWATER (DONOTRENAME)"),
+            (6, "Underwater (DONOTRENAME)x"),
+            (7, ""),
+        ]);
+        assert_eq!((cat.ghost_bed(), cat.underwater_bed()), (None, None));
+        assert_eq!(
+            cat.by_name("GHOST").map(|k| k.id),
+            Some(3),
+            "PlaySoundByName folds case"
+        );
+
+        let cat = SoundKitCatalog::named_for_tests(&[
+            (1, "ghost (donotrename)"),
+            (9, "Ghost (DONOTRENAME)"),
+            (10, "Underwater (DONOTRENAME)"),
+        ]);
+        assert_eq!((cat.ghost_bed(), cat.underwater_bed()), (Some(9), Some(10)));
+    }
+
+    /// The walk runs from the last row down and stops once both are set: a duplicate name is
+    /// overwritten by earlier rows only while the other bed is still unfound.
+    #[test]
+    fn the_forced_bed_walk_runs_from_the_last_row_down() {
+        let cat = SoundKitCatalog::named_for_tests(&[
+            (1, "Ghost (DONOTRENAME)"),
+            (2, "Underwater (DONOTRENAME)"),
+            (3, "Ghost (DONOTRENAME)"),
+            (4, "Underwater (DONOTRENAME)"),
+        ]);
+        assert_eq!(
+            (cat.ghost_bed(), cat.underwater_bed()),
+            (Some(3), Some(4)),
+            "both set at rows 4 and 3, the walk ends"
+        );
+
+        let cat = SoundKitCatalog::named_for_tests(&[
+            (1, "Underwater (DONOTRENAME)"),
+            (2, "Ghost (DONOTRENAME)"),
+            (3, "Ghost (DONOTRENAME)"),
+        ]);
+        assert_eq!(
+            (cat.ghost_bed(), cat.underwater_bed()),
+            (Some(2), Some(1)),
+            "row 2 overwrites row 3 while the underwater bed is still unfound"
         );
     }
 

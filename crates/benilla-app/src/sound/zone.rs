@@ -63,8 +63,19 @@ fn phase(clock: &GameClock) -> usize {
     }
 }
 
-/// SoundEntries 4123 `UnderWaterLoop`, the submerged ambience bed.
-const UNDERWATER_LOOP_KIT: u32 = 4123;
+/// The selector's two forced beds (`0x460bd0`), ahead of the weather and zone beds: a ghost's
+/// `[0xb06d48]`, else a submerged listener's `[0xb06d4c]`. The kit is 0 when the row was not
+/// found, and the selector then returns silence rather than falling through, as `0x460bd9` and
+/// `0x460be8` return the global unchecked.
+fn forced_bed(kits: &SoundKits, ghost: bool, submerged: bool) -> Option<u32> {
+    if ghost {
+        Some(kits.ghost_bed().unwrap_or(0))
+    } else if submerged {
+        Some(kits.underwater_bed().unwrap_or(0))
+    } else {
+        None
+    }
+}
 
 /// The outgoing music fade, the only fade on the music slot: `0x4602e0` →
 /// `0x7a5a10(0x40800000 = 4.0f)`.
@@ -325,16 +336,13 @@ fn zone_audio(
     }
 
     // ---- ambience: the reference's selector (`0x460bd0`) ranks ghost > submerged > weather >
-    // interior/zone day/night; the ghost bed is the kit named "Ghost", its swap the 5.0 s
-    // crossfade (`0x458680` → `0x460c20`) ----
+    // interior/zone day/night; a ghost's swap is the 5.0 s crossfade (`0x458680` → `0x460c20`) ----
     reap_stopped_bed(zone);
     let ghost = self_store
         .single()
         .is_ok_and(|store| store.0.player_is_ghost());
-    let desired = if ghost {
-        kits.id_by_name("Ghost").unwrap_or(0)
-    } else if world.submersion().is_water() {
-        UNDERWATER_LOOP_KIT
+    let desired = if let Some(bed) = forced_bed(&kits, ghost, world.submersion().is_water()) {
+        bed
     } else if weather.0 != 0 && world.area_interior().is_none() {
         // `0x460bf7`–`0x460c17`: with the zonetext indoor bit `[0xb06d44]` clear, the weather's
         // SoundEntries is the bed; indoors the selector ignores it, and the swap crossfades.
@@ -1114,12 +1122,14 @@ pub(super) fn plugin(app: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_music_suppression, begin_bed_open, begin_zone_music, first_unplayable, open_bed,
-        poll_bed_open, pump_zone_music, reap_stopped_bed, slot_holds, start_bed,
+        apply_music_suppression, begin_bed_open, begin_zone_music, first_unplayable, forced_bed,
+        open_bed, poll_bed_open, pump_zone_music, reap_stopped_bed, slot_holds, start_bed,
         stop_world_soundscape, take_lua_music_slot, OpenedBed, ZoneAudio,
         CINEMATIC_MUSIC_RESUME_SECS, LUA_MUSIC_SCHEDULE_SECS,
     };
+    use crate::sound::kit::SoundKits;
     use crate::sound::mixer;
+    use benilla_formats::SoundKitCatalog;
     use kira::sound::streaming::StreamingSoundData;
     use kira::sound::{FromFileError, PlaybackState};
     use std::sync::{mpsc, Arc, Mutex};
@@ -1398,6 +1408,61 @@ mod tests {
         assert!(!slot_holds(8440, 8440, Some(PlaybackState::Stopped)));
         assert!(!slot_holds(8440, 8440, None));
         assert!(!slot_holds(8440, 4123, Some(PlaybackState::Playing)));
+    }
+
+    /// A ghost hears its own bed whatever the water does, a swimmer the underwater one, and a
+    /// living dry listener neither. A row named plain `Ghost` or `UnderWaterLoop`, which the
+    /// selector does not look for, is never the bed.
+    #[test]
+    fn a_ghost_selects_the_ghost_bed_ahead_of_the_water_bed() {
+        let kits = SoundKits::new(SoundKitCatalog::named_for_tests(&[
+            (7, "Ghost"),
+            (4123, "UnderWaterLoop"),
+            (4160, "Ghost (DONOTRENAME)"),
+            (4209, "Underwater (DONOTRENAME)"),
+        ]));
+        assert_eq!(forced_bed(&kits, true, false), Some(4160));
+        assert_eq!(
+            forced_bed(&kits, true, true),
+            Some(4160),
+            "ghost outranks water"
+        );
+        assert_eq!(forced_bed(&kits, false, true), Some(4209));
+        assert_eq!(
+            forced_bed(&kits, false, false),
+            None,
+            "the weather and zone beds follow"
+        );
+    }
+
+    /// `0x460bd9` and `0x460be8` return the global unchecked, so an unresolved row is silence
+    /// (kit 0), not the next bed in the ranking.
+    #[test]
+    fn an_unresolved_forced_bed_is_silence() {
+        let kits = SoundKits::new(SoundKitCatalog::named_for_tests(&[(
+            4123,
+            "UnderWaterLoop",
+        )]));
+        assert_eq!(forced_bed(&kits, true, false), Some(0));
+        assert_eq!(forced_bed(&kits, false, true), Some(0));
+        assert_eq!(forced_bed(&kits, false, false), None);
+    }
+
+    /// With the install: the ghost bed is `GhostState.wav` and the water bed the underwater loop
+    /// at its own row's volume, each a file the chain opens.
+    #[test]
+    fn the_install_s_ghost_and_water_beds_are_the_donotrename_rows() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("chain");
+        let catalog = benilla_formats::load_sound_kit_catalog(&mut chain).expect("SoundEntries");
+        let mut kits = SoundKits::new(catalog);
+        assert_eq!(forced_bed(&kits, true, false), Some(4160));
+        assert_eq!(forced_bed(&kits, false, true), Some(4209));
+        for (kit, file) in [(4160, "GhostState.wav"), (4209, "UndwaterLoop.wav")] {
+            let (path, _) = kits.pick_stream(kit).expect("the kit has a bed");
+            assert!(path.ends_with(file), "kit {kit} plays {path}");
+            assert!(chain.contains(&path), "{path} is in the archives");
+        }
     }
 
     fn io_pool() {

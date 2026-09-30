@@ -81,7 +81,7 @@ impl Submersion {
         self != Submersion::Dry
     }
 
-    /// A water kind (water, ocean, rapids), for the `UnderWaterLoop` bed and the underwater reverb;
+    /// A water kind (water, ocean, rapids), for the underwater ambience bed and the reverb;
     /// whether the reference swaps those for magma and slime too is untraced.
     pub fn is_water(self) -> bool {
         matches!(self, Submersion::Water | Submersion::Ocean)
