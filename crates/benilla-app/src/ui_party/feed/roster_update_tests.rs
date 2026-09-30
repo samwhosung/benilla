@@ -104,7 +104,7 @@ fn a_raid_list_that_moves_only_a_members_dead_bit_fires_raid_roster_update() {
     assert_eq!(fired(&mut app), 0);
 }
 
-/// The writer holds no memory of the last roster: a list that says what the last said signals.
+/// Nothing gates the writer's signal on a difference: a list that says what the last said signals.
 #[test]
 fn an_identical_raid_list_fires_raid_roster_update_again() {
     let mut app = app();
@@ -303,8 +303,8 @@ fn the_sandbox_answers_a_raid_intent_with_a_raid_roster_update() {
 /// The stock raid UI, loaded whole off the player's own chain: a raid member dies out of view and
 /// the list that says so moves nothing but their dead bit. The raid tab's grid also repaints on
 /// `PARTY_MEMBERS_CHANGED` (`RaidFrame_OnEvent`), which every list signals, but a group pullout
-/// re-reads its rows on `RAID_ROSTER_UPDATE` alone (`RaidPullout_OnEvent`), and the member's own
-/// `UNIT_HEALTH` never comes for a unit that is not in view.
+/// re-reads its rows on `RAID_ROSTER_UPDATE` alone (`RaidPullout_OnEvent`); this harness sends no
+/// member stats, so no `UNIT_HEALTH` repaints the row in its place.
 #[test]
 fn the_stock_raid_ui_repaints_a_member_who_dies_out_of_view() {
     benilla_formats::wow_data_or_skip!();

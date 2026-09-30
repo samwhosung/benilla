@@ -204,7 +204,7 @@ impl GroupState {
             }
         } else if raid_held {
             // `0x4ba550`: a list that is not a raid drops the held roster (`0x4ba55f`), and says so
-            // (`0x4ba57b`). With no roster held it signals nothing.
+            // (`0x4ba57b`). With no roster held it signals no `RAID_ROSTER_UPDATE`.
             out.lines.push(UiError::key("ERR_RAID_YOU_LEFT"));
             self.count_roster_update();
         }
@@ -556,8 +556,9 @@ mod tests {
         assert_eq!(g.lists_applied, 0);
     }
 
-    /// The raid roster writer signals after each rebuild (`0x4babef`) and compares nothing with the
-    /// roster it replaces, so a list that moves a member's status alone, or nothing, counts.
+    /// The raid roster writer signals after each rebuild (`0x4babef`), and nothing gates the signal
+    /// on a difference from the roster it replaces, so a list that moves a member's status alone, or
+    /// nothing, counts.
     #[test]
     fn every_raid_list_counts_a_roster_update_whatever_it_changes() {
         use benilla_protocol::messages::member_status;

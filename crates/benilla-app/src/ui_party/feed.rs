@@ -487,7 +487,7 @@ pub(super) fn feed_party(
     //
     // The reference signals it from four places, and `GroupState` counts the two that a list
     // drives; each list in this drain fires its own. A raid list's roster rebuild signals with no
-    // member name pending, whatever the list changed (`0x4babef`, no compare with the old roster),
+    // member name pending, whatever the list changed (`0x4babef`; nothing gates the signal on a difference),
     // and a list that is not a raid signals for the roster it drops (`0x4ba57b`). The other two
     // have no list behind them: the last pending name's answer (`0x4bada6`) and world entry filling
     // in our own row (`0x4ba1a2`). The roster's identity (members, order, rank, subgroup, online)
