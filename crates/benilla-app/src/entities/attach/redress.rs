@@ -17,14 +17,13 @@ use benilla_world::model_fade::{
 };
 
 use super::super::equipment::AppliedEquipment;
-use super::super::skin_composite::BodyAtlas;
 use super::super::{
     Characters, Creatures, EntityPart, Equipment, ItemDisplays, SkinComposites, SkinSections,
     VisualAttached,
 };
 use super::char_skin::{
-    body_atlas, build_char_skin_materials, equip_geosets, resolve_char_look, resolve_worn_equip,
-    skin_key, CharSkinMaterials,
+    build_char_skin_materials, equip_geosets, forced_body_atlas, resolve_char_look,
+    resolve_worn_equip, skin_key, CharSkinMaterials,
 };
 use super::dress::{part_materials, spawn_group, DressedPart, PartDress};
 use super::merge::{self, DressedGroup, MergedFormsCache};
@@ -86,6 +85,8 @@ pub(in crate::entities) fn redress_player_looks(
         benilla_world::model_render::M2BatchMaterials,
         ResMut<Assets<Mesh>>,
         ResMut<MergedFormsCache>,
+        // The composite's upload.
+        ResMut<Assets<Image>>,
     ),
     // The own-material lane `spawn_part` takes; no character batch in the shipped data uses it.
     mut own_lane: (
@@ -95,7 +96,7 @@ pub(in crate::entities) fn redress_player_looks(
     ),
     time: Res<Time>,
 ) {
-    let (sections, mut skin_composites, asset_server, mut mats, mut meshes, mut merged) =
+    let (sections, mut skin_composites, asset_server, mut mats, mut meshes, mut merged, mut images) =
         skin_build;
     let now = time.elapsed_secs();
     for (entity, net, live, mut applied, children, rig, bones, mut pose, bake_center, unit_fade) in
@@ -105,39 +106,35 @@ pub(in crate::entities) fn redress_player_looks(
         if net.kind != EntityKind::Player || !live.settled || *live == applied.0 {
             continue;
         }
-        // A model-less player has nothing to re-dress and must not retry every frame.
-        let Some((dm, parts)) = net
+        // Stamp first: a model-less player has nothing to re-dress and must not retry every frame.
+        applied.0 = *live;
+        let Some(dm) = net
             .display_id
             .and_then(|disp| creatures.as_deref()?.models.get(&disp))
-            .and_then(|dm| Some((dm, dm.parts.as_deref()?)))
         else {
-            applied.0 = *live;
+            continue;
+        };
+        let Some(parts) = dm.parts.as_deref() else {
             continue;
         };
 
         let worn = resolve_worn_equip(net, Some(live), Some(dm));
         let look = resolve_char_look(net, Some(dm), entity, &stores);
-        // The new atlas composites off the main thread while the standing look keeps drawing: a
-        // re-dress is the reference's incremental composite, never gated or hidden
-        // (`0x47789c`–`0x4778c3`). The reference shows the new geosets at once and blits each
-        // region as its load lands; here the change lands whole with its atlas, a frame or two
-        // later, so gear geometry never shows over the old body. Retried each frame against the
-        // live gear, so the latest look wins.
-        let body_tex = match look.as_ref() {
-            Some(l) => match body_atlas(
+        // A re-dress is the reference's incremental composite (`0x47789c`–`0x4778c3`): the new
+        // geosets apply at once and the atlas composites that frame when its sections are
+        // resident, never gated or withheld. So it composites here, in the frame, taking over a
+        // running composite of the same look; only an arriving body waits for its atlas.
+        let body_tex = look.as_ref().and_then(|l| {
+            forced_body_atlas(
                 l,
                 skin_key(l, worn.bodyslots, worn.emblem, worn.tabard_preview),
                 displays.as_deref(),
                 sections.as_deref(),
                 &mut skin_composites,
                 &asset_server,
-            ) {
-                BodyAtlas::Ready(tex) => tex,
-                BodyAtlas::Pending => continue,
-            },
-            None => None,
-        };
-        applied.0 = *live;
+                &mut images,
+            )
+        });
         let eg = equip_geosets(
             displays.as_deref(),
             &worn.bodyslots,
@@ -527,19 +524,23 @@ mod tests {
                 .0
         }
 
-        /// Run frames until the player is dressed in `gear`, failing on `never` or after 20 s.
-        fn settle_on(&mut self, gear: Equipment, never: Option<Equipment>) {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-            while self.applied() != gear {
-                assert!(std::time::Instant::now() < deadline, "the composite lands");
-                assert_ne!(
-                    Some(self.applied()),
-                    never,
-                    "a superseded look is never applied"
-                );
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                self.app.update();
-            }
+        /// Whether the atlas of the fixture's look (race 1, sex 0, every dial 0) in `gear` is
+        /// composited and cached.
+        fn composited(&mut self, gear: Equipment) -> bool {
+            let key = super::super::super::SkinKey {
+                race: 1,
+                sex: 0,
+                skin: 0,
+                face: 0,
+                facial_hair: 0,
+                hair_style: 0,
+                hair_color: 0,
+                equip: gear.bodyslots,
+                emblem: None,
+                tabard_preview: false,
+            };
+            let mut lane = self.app.world_mut().resource_mut::<SkinComposites>();
+            matches!(lane.done.fetch(&key), Some(Some(_))) && lane.running() == 0
         }
 
         /// The batch indices currently standing under the player.
@@ -631,32 +632,28 @@ mod tests {
         }
     }
 
-    /// A gear change on a standing body is the reference's incremental composite, never withheld
-    /// (`0x4778a2`–`0x4778c3`): the old look keeps drawing while the new atlas composites off the
-    /// main thread, then the change lands whole.
+    /// A gear change on a standing body is the reference's incremental composite, never gated or
+    /// withheld (`0x47789c`–`0x4778c3`): the new look, atlas included, lands the frame it is seen.
     #[test]
-    fn a_gear_change_keeps_the_body_drawn_until_its_atlas_lands() {
+    fn a_gear_change_composites_in_the_frame_it_is_seen() {
         let mut s = stand(&[0, 401], &[0, 1], None);
         if !s.with_skin_data() {
             return;
         }
-        let before = s.applied();
         let gear = tier2([10840, 33983, 33990, 33986, 33989, 33982, 33984, 0]);
         s.wear(gear);
-        assert_eq!(s.applied(), before, "the new atlas is still compositing");
-        assert_eq!(s.showing(), vec![0, 1], "and the body keeps drawing");
-        assert!(s.app.world().entity(s.player).contains::<VisualAttached>());
-        s.settle_on(gear, None);
+        assert_eq!(s.applied(), gear, "the change lands this frame");
+        assert!(s.composited(gear), "over its own composited atlas");
+        assert_eq!(s.showing(), vec![0, 1], "the body kept drawing");
         assert!(
             s.app.world().get_entity(s.held).is_ok(),
             "the held item never moved"
         );
     }
 
-    /// Gear that changes again while its atlas composites: the live gear wins, and the superseded
-    /// look is never put on.
+    /// Gear that changes again: each change lands its own frame, and the latest is the look worn.
     #[test]
-    fn the_latest_gear_wins_over_a_composite_in_flight() {
+    fn the_latest_gear_wins() {
         let mut s = stand(&[0], &[0], None);
         if !s.with_skin_data() {
             return;
@@ -664,8 +661,9 @@ mod tests {
         let first = tier2([0, 33650, 31110, 31115, 31111, 31127, 33651, 0]);
         let last = tier2([0, 33667, 33665, 33672, 34269, 33666, 33668, 0]);
         s.wear(first);
-        assert_ne!(s.applied(), first, "the first look is still compositing");
+        assert_eq!(s.applied(), first);
         s.wear(last);
-        s.settle_on(last, Some(first));
+        assert_eq!(s.applied(), last, "the latest gear is worn");
+        assert!(s.composited(last));
     }
 }

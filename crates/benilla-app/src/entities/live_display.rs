@@ -192,6 +192,11 @@ pub(super) fn tick_scale_ease(
     }
 }
 
+/// A rebuild of a body that was drawn, benilla's own palette heal: its composite is forced, so the
+/// body never drops out for frames as an arriving one waits, and rebuilds at once as it always has.
+#[derive(Component)]
+pub(super) struct ShownRebuild;
+
 /// Palette headroom the healer waits for, under the doodad reaper's low-water (256) so the reaper
 /// makes room first; rebuilding into a tight table would starve again.
 const HEAL_MIN_HEADROOM: usize = 128;
@@ -246,7 +251,7 @@ pub(super) fn heal_rig_starved(
                 super::equipment::HeldAttached,
                 benilla_world::rig_palette::RigStarved,
             )>()
-            .insert(super::equipment::Reattached);
+            .insert((super::equipment::Reattached, ShownRebuild));
     }
 }
 

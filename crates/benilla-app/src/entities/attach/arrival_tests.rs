@@ -276,6 +276,49 @@ fn a_body_that_waited_for_its_atlas_fades_from_its_arrival() {
     );
 }
 
+/// benilla's own palette heal rebuilds a body that was drawn: its composite is forced, so even a
+/// look the cache has dropped rebuilds in the same frame and never drops out.
+#[test]
+fn a_healed_rig_rebuilds_its_body_in_the_same_frame() {
+    use bevy::ecs::system::RunSystemOnce;
+    let Some(mut app) = app() else { return };
+    app.world_mut().insert_resource(Creatures {
+        catalog: Default::default(),
+        models: HashMap::from([(BODY, body_display(None))]),
+    });
+    let look = Look {
+        race: 2,
+        sex: 1,
+        face: 1,
+        hair: 2,
+        equip: SETS[1],
+    };
+    let player = arrive(&mut app, look);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !built(&app, player) {
+        assert!(Instant::now() < deadline, "the composite lands");
+        std::thread::sleep(Duration::from_millis(1));
+        app.update();
+    }
+
+    // The scope sweep dropped the look, then the rig starved and heals.
+    app.world_mut()
+        .resource_mut::<SkinComposites>()
+        .done
+        .clear();
+    app.world_mut()
+        .entity_mut(player)
+        .insert((crate::net::Guid(7), benilla_world::rig_palette::RigStarved));
+    app.world_mut()
+        .run_system_once(super::super::live_display::heal_rig_starved)
+        .expect("the heal runs");
+    assert!(!built(&app, player), "the heal tore the visual down");
+    app.update();
+    assert!(built(&app, player), "and it rebuilt in the same frame");
+    assert!(children(&app, player) > 0, "drawing");
+    assert_eq!(app.world().resource::<SkinComposites>().running(), 0);
+}
+
 /// A creature display with a baked atlas loads it as is and is never waited on (`0x477866`); one
 /// without composites like a player and waits.
 #[test]

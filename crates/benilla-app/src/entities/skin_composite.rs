@@ -1,8 +1,10 @@
-//! Composited body skins, one 256² atlas per look, built off the main thread. The reference never
-//! blocks its frame on a body's section loads (`0x44b430` polls them when the composite is not
-//! forced) and draws nothing of a unit whose first composite has not finished: its ShouldRender
-//! answers `0x477860(cc, 0)`'s result (`0x607e7c`), which is 0 until every section is resident. So
-//! a world body's composite runs on the async compute pool and the body waits for it.
+//! Composited body skins, one 256² atlas per look. An arriving body's first composite runs off the
+//! main thread: the reference's world composite is unforced, so its section loads poll and never
+//! block the frame (`0x44b430`), and it draws nothing of a unit whose first composite has not
+//! finished, its ShouldRender answering `0x477860(cc, 0)`'s result (`0x607e7c`). Only the forced
+//! callers wait on their loads (`0x44ad50`): the glue model (`0x470c59`, `0x471308`, `0x4731b6`),
+//! the dressing room (`0x504485`), `PlayerModel`'s `SetUnit` (`0x5059be`) and world entry
+//! (`0x49091e`). Here the forced lane ([`SkinComposites::force`]) composites on the calling thread.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -99,9 +101,11 @@ impl SkinComposites {
         BodyAtlas::Pending
     }
 
-    /// The previews' atlas, composited on this thread on a miss, or waited for if it is already
-    /// running: the forced composite (`0x477860(cc, 1)` at `0x470c59`, `0x471308`, `0x4731b6`)
-    /// waits on its section loads (`0x44ad50`) and passes no admission test.
+    /// An atlas composited on this thread on a miss, or waited for if it is already running, as
+    /// the reference's forced composite waits on its section loads (`0x44ad50`) and passes no
+    /// admission test: the glue model's (`0x477860(cc, 1)` at `0x470c59`, `0x471308`, `0x4731b6`)
+    /// and the dressing room's (`0x504485`, in `0x504470`). A re-dress of a standing body comes
+    /// here too.
     pub(super) fn force(
         &mut self,
         key: SkinKey,
@@ -109,12 +113,26 @@ impl SkinComposites {
         plan: impl FnOnce() -> Option<CompositePlan>,
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
+        self.force_with(
+            key,
+            || plan().map(|p| work(p, sections.chain.clone())),
+            images,
+        )
+    }
+
+    /// [`Self::force`] over any work, so the lane is testable without the install.
+    fn force_with(
+        &mut self,
+        key: SkinKey,
+        work: impl FnOnce() -> Option<Work>,
+        images: &mut Assets<Image>,
+    ) -> Option<Handle<Image>> {
         if let Some(done) = self.done.fetch(&key) {
             return done;
         }
         let atlas = match self.running.remove(&key) {
             Some(task) => block_on(task),
-            None => plan().and_then(|p| work(p, sections.chain.clone())()),
+            None => work().and_then(|w| w()),
         };
         self.install(key, atlas, images)
     }
@@ -226,13 +244,14 @@ mod tests {
         }
     }
 
-    /// Work that finishes when the test says so, and counts how many times it ran.
+    /// Work that finishes when the test says so, and counts how many times it ran. It gives up
+    /// after two seconds, so work run inline on the test's thread fails the test, never hangs it.
     fn gated(ran: &Arc<std::sync::atomic::AtomicUsize>) -> (mpsc::Sender<()>, Work) {
         let (tx, rx) = mpsc::channel::<()>();
         let ran = ran.clone();
         let work: Work = Box::new(move || {
             ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            rx.recv().ok()?;
+            rx.recv_timeout(std::time::Duration::from_secs(2)).ok()?;
             Some(atlas())
         });
         (tx, work)
@@ -284,6 +303,29 @@ mod tests {
         );
         assert_eq!(ran.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(c.running(), 0);
+    }
+
+    /// A forced composite of a look already running waits for that composite rather than starting
+    /// a second, and the atlas is the one every later request gets.
+    #[test]
+    fn a_forced_composite_takes_over_the_running_one() {
+        AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        let mut images = Assets::<Image>::default();
+        let mut c = SkinComposites::default();
+        let ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (tx, w) = gated(&ran);
+        let mut w = Some(w);
+        assert_eq!(c.request_with(key(3), || w.take()), BodyAtlas::Pending);
+        tx.send(()).unwrap();
+        let forced = c.force_with(
+            key(3),
+            || panic!("a running look starts no second composite"),
+            &mut images,
+        );
+        assert!(forced.is_some(), "the running composite's atlas");
+        assert_eq!(ran.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(c.running(), 0);
+        assert_eq!(c.request_with(key(3), || None), BodyAtlas::Ready(forced));
     }
 
     /// A look with no atlas is ready at once, as `None`, and never retried.

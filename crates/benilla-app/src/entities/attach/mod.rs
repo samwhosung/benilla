@@ -235,6 +235,7 @@ pub(super) fn attach_entity_visuals(
             Option<&super::mount::MountBody>,
             Has<crate::transport::TransportAnchor>,
             Option<&super::Arrival>,
+            Has<super::live_display::ShownRebuild>,
         ),
         // A torn-down unit gets no model: the reference frees it at once (`0x464920`).
         (
@@ -268,6 +269,8 @@ pub(super) fn attach_entity_visuals(
         ResMut<benilla_world::doodad_anim::UvAnimMaterials>,
         ResMut<benilla_world::doodad_anim::TintAnimMaterials>,
         ResMut<benilla_world::mat_anim_table::MatAnimTable>,
+        // A forced composite's upload.
+        ResMut<Assets<Image>>,
     ),
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
     mut collider_epoch: ResMut<benilla_world::collision::ColliderEpoch>,
@@ -283,9 +286,20 @@ pub(super) fn attach_entity_visuals(
         mut uv_reg,
         mut tint_reg,
         mut anim_table,
+        mut images,
     ) = skin_build;
     let now = time.elapsed_secs();
-    for (entity, net, equipment, reattached, mount_child, mount_body, anchored, arrival) in &pending
+    for (
+        entity,
+        net,
+        equipment,
+        reattached,
+        mount_child,
+        mount_body,
+        anchored,
+        arrival,
+        shown_rebuild,
+    ) in &pending
     {
         // The appear ramp's origin: the unit's arrival, however long its visual waited to build.
         let arrived = arrival.map_or(now, |a| a.0);
@@ -339,19 +353,35 @@ pub(super) fn attach_entity_visuals(
         // A body whose composite is still running is not built: nothing of it draws, its mount
         // included, until it can draw dressed, as the reference's ShouldRender answers the
         // composite driver's 0 (`0x607e7c` → `0x481749`). Retried each frame, with the look of
-        // that frame.
+        // that frame. A display swap waits the same way, a fresh component in the reference
+        // (`0x607da0` → `0x5fb200`); a body benilla rebuilds while it was drawn does not.
         let body_tex = match look.as_ref() {
-            Some(l) => match body_atlas(
-                l,
-                skin_key(l, equip, worn.emblem, worn.tabard_preview),
-                displays.as_deref(),
-                sections.as_deref(),
-                &mut skin_composites,
-                &asset_server,
-            ) {
-                BodyAtlas::Ready(tex) => tex,
-                BodyAtlas::Pending => continue,
-            },
+            Some(l) => {
+                let key = skin_key(l, equip, worn.emblem, worn.tabard_preview);
+                if shown_rebuild {
+                    char_skin::forced_body_atlas(
+                        l,
+                        key,
+                        displays.as_deref(),
+                        sections.as_deref(),
+                        &mut skin_composites,
+                        &asset_server,
+                        &mut images,
+                    )
+                } else {
+                    match body_atlas(
+                        l,
+                        key,
+                        displays.as_deref(),
+                        sections.as_deref(),
+                        &mut skin_composites,
+                        &asset_server,
+                    ) {
+                        BodyAtlas::Ready(tex) => tex,
+                        BodyAtlas::Pending => continue,
+                    }
+                }
+            }
             None => None,
         };
 
@@ -873,7 +903,10 @@ pub(super) fn attach_entity_visuals(
             .insert(VisualAttached)
             // The display the visual was built with, for `refresh_live_display` to diff.
             .insert(super::live_display::AppliedDisplay(net.display_id))
-            .remove::<super::equipment::Reattached>();
+            .remove::<(
+                super::equipment::Reattached,
+                super::live_display::ShownRebuild,
+            )>();
     }
 }
 
