@@ -35,7 +35,10 @@ impl Position {
 /// The keys a layout names: the letters, the digits, the punctuation, the ISO and JIS extras and
 /// the keypad comma. Windows sends `VK_OEM_102`, `VK_ABNT_C2` and `VK_SEPARATOR` to the layout arm
 /// like any `VK_OEM_*` key, and the Mac table leaves the ISO key `0x0A` and the keypad comma
-/// `0x5F` to `KeyTranslate` (`-1` at `0x5bf320`).
+/// `0x5F` to `KeyTranslate` (`-1` at `0x5bf320`). winit 0.30 cannot deliver those on a Mac, as on
+/// main: it reports `0x0A` as `Backquote` (whose scancode it gives back as `0x32`) and leaves
+/// `0x5E` and `0x5F` unidentified, so the `IntlBackslash`, `IntlRo` and `NumpadComma` arms never
+/// fire there.
 pub(crate) fn position(k: KeyCode) -> Option<Position> {
     use KeyCode::*;
     use Position::{Digit, Letter, Punctuation};
@@ -107,11 +110,12 @@ pub(crate) enum LayoutName {
 pub(crate) struct LayoutNames(HashMap<KeyCode, LayoutName>);
 
 impl LayoutNames {
-    /// The name of `key` if a layout names it, `None` for a key the fixed table names.
+    /// The name of `key` if a layout names it, `None` for a key the fixed table names. A key never
+    /// reported (a headless run) keeps its US name.
     ///
-    /// Deviation: a key its platform reports no character for keeps its US name. The reference
-    /// drops such a key, on Windows (`0x42da49`) and on the Mac (`0x8a4aa`); here a key never
-    /// reported (a headless run) and a Linux dead key not yet pressed bare stay bindable.
+    /// Deviation: on the Mac and Linux a key its platform reports no character for keeps its US
+    /// name too, where the Mac reference drops it (`0x8a4aa`), and a Linux dead key not yet pressed
+    /// bare stays bindable.
     pub(crate) fn name(&self, key: KeyCode) -> Option<LayoutName> {
         let position = position(key)?;
         Some(match self.0.get(&key) {
@@ -144,7 +148,7 @@ pub(super) fn plugin(app: &mut App) {
 fn record_layout_names(
     mut raw: MessageReader<bevy::winit::RawWinitWindowEvent>,
     mut names: ResMut<LayoutNames>,
-    #[cfg(target_os = "linux")] mut mods: Local<winit::keyboard::ModifiersState>,
+    #[cfg(target_os = "linux")] mut mods: Local<LinuxMods>,
     _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
     use bevy::winit::converters::convert_physical_key_code;
@@ -156,11 +160,13 @@ fn record_layout_names(
             WindowEvent::KeyboardInput { event, .. } => event,
             #[cfg(target_os = "linux")]
             WindowEvent::ModifiersChanged(m) => {
-                *mods = m.state();
+                mods.state = m.state();
                 continue;
             }
             _ => continue,
         };
+        #[cfg(target_os = "linux")]
+        mods.key(event.physical_key, event.state.is_pressed());
         let key = convert_physical_key_code(event.physical_key);
         let Some(position) = position(key) else {
             continue;
@@ -185,9 +191,7 @@ fn record_layout_names(
         if !matches!(position, Position::Digit(_)) {
             use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
             let unshifted = event.key_without_modifiers();
-            if let Some(name) =
-                linux_name(position, &unshifted, &event.logical_key, mods.is_empty())
-            {
+            if let Some(name) = linux_name(position, &unshifted, &event.logical_key, mods.bare()) {
                 names.set(key, name);
             }
         }
@@ -220,9 +224,16 @@ fn windows_name(vk: u32, to_char: u32) -> Option<LayoutName> {
         0x41..=0x5a | 0x30..=0x39 => Some(LayoutName::Char(char::from(vk as u8))),
         _ if fixed_vk(vk) => None,
         // The dynamic arm: `and eax,0xffff` (`0x42da42`) drops the dead-key bit, and 0 drops the
-        // key (`0x42da49`).
+        // key (`0x42da49`). U+F000-U+F002 are a layout table's `WCH_NONE`, `WCH_DEAD` and
+        // `WCH_LGTR` markers, no character, should the call ever return one.
         _ => Some(match char::from_u32(to_char & 0xffff) {
-            Some(c) if !c.is_control() && !c.is_whitespace() => LayoutName::Char(c),
+            Some(c)
+                if !c.is_control()
+                    && !c.is_whitespace()
+                    && !('\u{f000}'..='\u{f002}').contains(&c) =>
+            {
+                LayoutName::Char(c)
+            }
             _ => LayoutName::Dropped,
         }),
     }
@@ -258,8 +269,9 @@ mod windows {
     pub(super) fn name(physical: winit::keyboard::PhysicalKey) -> Option<super::LayoutName> {
         use winit::platform::scancode::PhysicalKeyExtScancode;
         let scancode = physical.to_scancode()?;
-        // SAFETY: plain Win32 calls with no pointers. The caller runs on the main thread, the
-        // window's, so thread 0's layout is the one the window's key messages were made under.
+        // SAFETY: plain Win32 calls with no pointers. `GetKeyboardLayout(0)` is the calling
+        // thread's layout; the caller runs on the main thread, the window's, so it is the layout
+        // the window's key messages were made under.
         let (vk, to_char) = unsafe {
             let hkl = GetKeyboardLayout(0);
             let vk = MapVirtualKeyExW(scancode, MAPVK_VSC_TO_VK_EX, hkl);
@@ -278,6 +290,12 @@ mod windows {
 /// Deviation: a layout that is not ASCII-capable (Hebrew, Greek, Russian, Arabic, Thai) names its
 /// keys through the ASCII-capable layout macOS pairs with it, as macOS names its own shortcuts. The
 /// reference reads a non-Roman `KCHR`'s byte as MacRoman (`0x8a40f`), which names no real key.
+///
+/// Deviation: a character above U+00FF (Czech `ě`, Polish `ł`, Turkish `ş`) names the key by
+/// itself. The reference reads `KeyTranslate`'s byte as MacRoman (`0x8a40f`) and keeps it only if
+/// it converts to Latin-1 (`CFStringGetBytes`, `0x8a46b`, stored at `0x8a482`), else leaves the
+/// slot `-1`, which `0x8a4aa` drops, so such a key is mislabelled or dropped; named by what it
+/// types, it stays bindable and readable.
 #[cfg(any(target_os = "macos", test))]
 fn mac_name(
     ascii_capable: bool,
@@ -391,6 +409,32 @@ mod mac {
     }
 }
 
+/// The modifiers a Linux key press is made under, from the raw key stream. winit's
+/// `ModifiersState` has no AltGr, so the right Alt key is followed by its own messages: an AltGr
+/// press on a dead key types its AltGr level, never the key's own accent.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Default)]
+struct LinuxMods {
+    state: winit::keyboard::ModifiersState,
+    alt_right: bool,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl LinuxMods {
+    /// Follow the right Alt key through a key message.
+    fn key(&mut self, physical: winit::keyboard::PhysicalKey, pressed: bool) {
+        use winit::keyboard::{KeyCode, PhysicalKey};
+        if physical == PhysicalKey::Code(KeyCode::AltRight) {
+            self.alt_right = pressed;
+        }
+    }
+
+    /// No modifier held, AltGr included.
+    fn bare(&self) -> bool {
+        self.state.is_empty() && !self.alt_right
+    }
+}
+
 /// The Linux name of a letter or punctuation key, `None` to keep what the key had. No 1.12 client
 /// ran on Linux, so this is the closest consistent rule: a letter position takes an ASCII letter or
 /// ASCII punctuation the layout types there, and anything else there (another script's letter, an
@@ -481,6 +525,14 @@ mod tests {
         assert_eq!(windows_name(0xf3, 0), Some(LayoutName::Dropped));
         names.set(KeyCode::Backquote, windows_name(0xf3, 0));
         assert_eq!(names.name(KeyCode::Backquote), Some(LayoutName::Dropped));
+        // A layout table's `WCH_NONE`/`WCH_DEAD`/`WCH_LGTR` marker is no character.
+        for marker in 0xf000..=0xf002 {
+            assert_eq!(
+                windows_name(VK_OEM_1, marker),
+                Some(LayoutName::Dropped),
+                "{marker:#x}"
+            );
+        }
         // A key the fixed table names is no layout key's: F1, Space, Numpad 0.
         for vk in [0x70, 0x20, 0x60] {
             assert_eq!(windows_name(vk, 0), None, "{vk:#x}");
@@ -488,7 +540,7 @@ mod tests {
     }
 
     /// The fixed table is `0x42d800`'s, decoded from its remap bytes: the 60 entries less the
-    /// digits, which take their own arm.
+    /// digits and F1-F12, which take their own arms.
     #[test]
     fn the_fixed_virtual_keys_are_the_translators_table() {
         let fixed: Vec<u32> = (0..=0xffu32)
@@ -588,5 +640,29 @@ mod tests {
             assert_eq!(names.name(key), Some(LayoutName::Dropped), "{key:?}");
         }
         assert_eq!(names.name(KeyCode::F1), None, "the fixed table's");
+    }
+
+    /// Linux: AltGr counts as a modifier for a dead key's bare press, though winit's
+    /// `ModifiersState` has no AltGr; AltGr on a dead-key position keeps the key's own accent.
+    #[test]
+    fn linux_altgr_is_no_bare_press() {
+        use winit::keyboard::{Key, KeyCode, ModifiersState, NativeKey, PhysicalKey};
+        let none = Key::Unidentified(NativeKey::Unidentified);
+        let bracket = position(bevy::input::keyboard::KeyCode::BracketLeft).unwrap();
+        let mut mods = LinuxMods::default();
+        assert!(mods.bare());
+        mods.key(PhysicalKey::Code(KeyCode::AltRight), true);
+        assert!(!mods.bare(), "AltGr held");
+        // AltGr on the French `^` key types `~`: the key keeps its `^`.
+        assert_eq!(
+            linux_name(bracket, &none, &Key::Dead(Some('~')), mods.bare()),
+            None
+        );
+        mods.key(PhysicalKey::Code(KeyCode::AltRight), false);
+        assert!(mods.bare(), "AltGr released");
+        mods.key(PhysicalKey::Code(KeyCode::KeyQ), true);
+        assert!(mods.bare(), "another key is no modifier");
+        mods.state = ModifiersState::SHIFT;
+        assert!(!mods.bare(), "Shift held");
     }
 }
