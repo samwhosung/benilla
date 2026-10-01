@@ -284,14 +284,19 @@ fn the_ticket_texts_caret_moves_by_rows_and_lines() {
     .unwrap();
     s.tick(0.016);
     s.resolve();
-    for (unit, back, extend) in [(EditUnit::Row, true, false), (EditUnit::Line, true, true)] {
+    let mv = |s: &mut UiScript, unit, back, extend| {
         assert!(s.editbox_action(EditAction::Move { unit, back, extend }));
-    }
-    s.char_input("Lost");
+    };
+    // From the end, column 8: the end of "Stuck in".
+    mv(&mut s, EditUnit::Row, true, false);
+    s.char_input(",");
+    mv(&mut s, EditUnit::Edge, false, false);
+    mv(&mut s, EditUnit::Line, true, true);
+    s.char_input("a cave");
     assert_eq!(
         s.eval::<String>("return HelpFrameOpenTicketText:GetText()")
             .unwrap(),
-        "Lost\nthe mine"
+        "Stuck in,\na cave"
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
