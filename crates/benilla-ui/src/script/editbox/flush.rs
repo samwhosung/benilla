@@ -14,11 +14,12 @@ pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, dt: f32) {
 }
 
 /// The flush `0x77d3e0`. It samples bit 0 at entry (`0x77d3f2`); on bit 0 the relayout runs
-/// (`0x77d447`) and the bit clears (`0x77d44c`); on bit 2 the caret leg runs (`0x77d475`), firing
-/// `OnCursorChanged`, and only then does the bit clear (`0x77d47a`); last, `OnTextChanged` fires
-/// if bit 0 was set at entry (`0x77d481`–`0x77d498`). So a handler's edit raises bits for the next
-/// flush, a frame later, and never loops inside one: an `OnTextChanged` that sets its own text
-/// fires once more, next frame, and a caret moved by `OnCursorChanged` is cleared with the bit.
+/// (`0x77d447`) and the bit clears (`0x77d44c`); on bit 2 the caret leg runs (`0x77d475`), with
+/// the blink and `OnCursorChanged`, and only then does the bit clear (`0x77d47a`); last,
+/// `OnTextChanged` fires if bit 0 was set at entry (`0x77d481`–`0x77d498`). So a handler's edit
+/// raises bits for the next flush, a frame later, and never loops inside one: an `OnTextChanged`
+/// that sets its own text fires once more, next frame, and a caret moved by `OnCursorChanged` is
+/// cleared with the bit.
 /// Besides the walk, the box's `OnKeyDown` (`0x77b1e2`) and `OnMouseDown` (`0x77b819`) run it
 /// before the key or click acts.
 ///
@@ -47,17 +48,33 @@ pub(super) fn flush(lua: &Lua, h: FrameHandle) {
     }
 }
 
-/// The caret leg `0x77da80`: `OnCursorChanged(x, y, w, h)` (`0x77de1b`, in UI units via
-/// `0x77dd5f`), `x` the caret's advance along its line, `y` minus the row index times the row
-/// pitch, `w` the constant 4.0 and `h` the line height. The arguments are computed only for a box
-/// with the script (`0x77dd8c`), from the box's advance table, which the installed font engine
-/// measures here when the text or font moved. `false` while that table is pending, with no engine
-/// installed, for the next flush to retry: the host answers the focused box's a tick later.
+/// The caret leg `0x77da80`: it restarts the blink (`0x77dd68`), fires `OnCursorChanged`, then
+/// shows the caret in the focused box (`0x77de35`) and hides it elsewhere (`0x77de51`). So a box
+/// that takes the keyboard, whose focus change raises bit 2 (`0x77afa8`), starts its caret solid.
+/// `false` while the advance table is pending, for the next flush to retry.
+fn caret(lua: &Lua, h: FrameHandle) -> bool {
+    with_eb(lua, h, |eb| eb.blink_accum = 0.0);
+    let placed = cursor_changed(lua, h);
+    let focused = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .focused_editbox
+        == Some(h);
+    with_eb(lua, h, |eb| eb.caret_shown = focused);
+    placed
+}
+
+/// `OnCursorChanged(x, y, w, h)` (`0x77de1b`, in UI units via `0x77dd5f`), `x` the caret's advance
+/// along its line, `y` minus the row index times the row pitch, `w` the constant 4.0 and `h` the
+/// line height. The arguments are computed only for a box with the script (`0x77dd8c`), from the
+/// box's advance table, which the installed font engine measures here when the text or font
+/// moved. `false` while that table is pending, with no engine installed: the host answers the
+/// focused box's a tick later.
 ///
 /// Deviation: `h` is the row pitch the advance answer carries, where the reference passes the line
 /// height (`0x7727b0`): 0 for a single-line box, whose answer has no pitch, and for a multi-line
 /// box taller than the line height only for a font with extra spacing (none in the stock UI).
-fn caret(lua: &Lua, h: FrameHandle) -> bool {
+fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
     let id = frame_id_of(lua, h);
     if !event::has_widget_handler(lua, id, "OnCursorChanged") {
         return true;

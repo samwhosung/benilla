@@ -8,8 +8,8 @@
 //! - Routing: a focused box consumes every key and char and fires only its specialized scripts
 //!   (Enter, Escape, Space, Tab, TextChanged, TextSet, focus), never a generic `OnKeyDown`; an
 //!   unfocused box that is not `autoFocus` ignores input.
-//! - Editing: an insert replaces the selection; `numeric` aborts a whole insert on any non-digit;
-//!   caps trim from the end (`maxBytes`, then `maxLetters`).
+//! - Editing: an insert deletes the selection, then `numeric` aborts a whole insert on any
+//!   non-digit; caps trim from the end (`maxBytes`, then `maxLetters`).
 //! - Events: an edit, a caret move, a focus change or a re-seat of the text only raises the box's
 //!   dirty bits (`[E+0x31c]`); the box's flush, run after its own `OnUpdate` in the tick's walk
 //!   ([`update`]) and before a key or click acts on it, fires `OnCursorChanged` and then
@@ -108,22 +108,32 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
             EditUnit::Char => move_horizontal(lua, h, !back, extend),
             // Ctrl (Option on macOS) moves by word (the client's Ctrl check, `0x41f8f0(1)`).
             EditUnit::Word => interact::move_word(lua, h, !back, extend),
+            EditUnit::Line => {
+                with_eb(lua, h, |eb| eb.move_to_line_edge(!back, extend));
+            }
             EditUnit::Edge => move_to_edge(lua, h, !back, extend),
+            // UP/DOWN fork on `multiLine` (`0x77b64e`, `0x77b675`): a row in a multi-line box,
+            // else history recall (`historyLines`): older, newer, then back to the live draft.
+            // On an alt-arrow box, as the stock chat box is, that is Alt+Up/Down; the reference's
+            // history controller is untraced.
+            EditUnit::Row => {
+                if with_eb(lua, h, |eb| eb.multi_line).unwrap_or(false) {
+                    // The rows the move reads, measured now when an engine is installed.
+                    seam::advances_current(lua, h);
+                    with_eb(lua, h, |eb| eb.move_by_row(!back, extend));
+                } else {
+                    history_step_key(lua, h, back);
+                }
+            }
         },
         EditAction::Delete { unit, back } => match unit {
             EditUnit::Char => delete_dir(lua, h, !back),
             EditUnit::Word => delete_span(lua, h, |eb| eb.word_boundary(!back)),
             EditUnit::Edge => delete_span(lua, h, |eb| if back { 0 } else { eb.text.len() }),
+            // No keymap deletes by line or row.
+            EditUnit::Line | EditUnit::Row => {}
         },
         EditAction::SelectAll => highlight_text(lua, h, 0, -1),
-        // History recall (`historyLines`): older, newer, then back to the live draft. A multiLine
-        // box consumes it inert (it has no vertical caret movement). On an alt-arrow box, as the
-        // stock chat box is, recall is Alt+Up/Down; the reference's history controller is untraced.
-        EditAction::HistoryPrev | EditAction::HistoryNext => {
-            if !with_eb(lua, h, |eb| eb.multi_line).unwrap_or(false) {
-                history_step_key(lua, h, a == EditAction::HistoryPrev);
-            }
-        }
     }
     true
 }
@@ -260,17 +270,21 @@ fn clear_focus_handle(lua: &Lua, h: FrameHandle) {
 // Editing primitives: mutate under one borrow, then sync and fire
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// `Insert` (`0x77bee0`): replace the selection, abort on a non-digit when `numeric`, splice,
+/// `Insert` (`0x77bee0`): delete the selection, abort on a non-digit when `numeric`, splice,
 /// enforce caps, raise the dirty bits for the flush, and with `fire_space` fire one
 /// `OnSpacePressed` per space.
 fn insert(lua: &Lua, h: FrameHandle, ins: &str, fire_space: bool) {
     let Some(out) = with_eb(lua, h, |eb| eb.insert(ins)) else {
         return; // not an EditBox
     };
-    if !out.text_changed {
-        return; // numeric-aborted
+    if out.text_changed {
+        sync_text_region(lua, h);
     }
-    sync_text_region(lua, h);
+    if !out.inserted {
+        // Refused: a numeric abort leaves at most the selection's deletion, whose text bit fires
+        // `OnTextChanged` at the flush, and returns before `OnChar` (`0x77bf6d` → `0x77c1b8`).
+        return;
+    }
     let id = frame_id_of(lua, h);
     // Insert fires the generic `OnChar` with the spliced string as `arg1` (`0x77c13c`, through the
     // varargs firer `0x7026f0`), ahead of the flush's `OnTextChanged`; `SetText` does not.
@@ -329,12 +343,12 @@ fn history_step_key(lua: &Lua, h: FrameHandle, older: bool) {
     }
 }
 
-/// Left/Right: `shift` extends from the anchor, else collapse the selection or move one char.
+/// Left/Right: `shift` extends the selection, else collapse it or move one char.
 fn move_horizontal(lua: &Lua, h: FrameHandle, right: bool, shift: bool) {
     with_eb(lua, h, |eb| eb.move_by_char(right, shift));
 }
 
-/// Home/End; `shift` extends from the anchor.
+/// Ctrl+Home/End and Cmd+arrow, to the text's edge; `shift` extends the selection.
 fn move_to_edge(lua: &Lua, h: FrameHandle, end: bool, shift: bool) {
     with_eb(lua, h, |eb| eb.move_to_edge(end, shift));
 }

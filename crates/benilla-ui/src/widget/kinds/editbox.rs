@@ -7,16 +7,22 @@ pub enum EditUnit {
     Char,
     /// One word run ([`EditBoxState::word_boundary`]): Ctrl/Option+arrow.
     Word,
-    /// Text start going back, text end going forward: Home/End, Cmd+arrow.
+    /// The caret's line, which ends at a newline: HOME/END (`0x77c980`/`0x77c9f0`).
+    Line,
+    /// Text start going back, text end going forward: Ctrl+HOME/END (`0x77ca60`/`0x77cac0`),
+    /// Cmd+arrow.
     Edge,
+    /// One wrapped row up or down: UP/DOWN in a multi-line box (`0x77cb20`). A single-line box
+    /// recalls its history instead (`0x77d030`/`0x77cfd0`), older going back.
+    Row,
 }
 
 /// One semantic editing operation for [`EditBoxState::apply`]: the host's per-OS keymap picks the
 /// action, the reference's edit-box law decides its effect. Clipboard operations stay host-side.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditAction {
-    /// Move the caret one `unit`; `extend` (Shift) drags the selection from its fixed anchor. The
-    /// alt-arrow gate (`0x77b18e`) acts upstream, on the key.
+    /// Move the caret one `unit`; `extend` (Shift) drags the selection by the reference's rule
+    /// ([`EditBoxState::extend_to`]). The alt-arrow gate (`0x77b18e`) acts upstream, on the key.
     Move {
         unit: EditUnit,
         back: bool,
@@ -24,12 +30,8 @@ pub enum EditAction {
     },
     /// Delete one `unit` from the caret, or the selection if any; `Edge` back is Cmd+Backspace.
     Delete { unit: EditUnit, back: bool },
-    /// Ctrl+A: select all, caret to the end (`HighlightText(0, -1)`).
+    /// Ctrl+A: select all (`HighlightText(0, -1)`), the caret left where it is.
     SelectAll,
-    /// Recall the next older submitted line (`historyLines`).
-    HistoryPrev,
-    /// Step back toward the newest line; past it, restore the stashed draft.
-    HistoryNext,
 }
 
 /// A `CSimpleEditBox`'s runtime state; `E+` offsets are from its `CScriptObject` `this`. Byte
@@ -38,9 +40,10 @@ pub enum EditAction {
 pub struct EditBoxState {
     /// The real text (`E+0x32c`); `password` masks only the display (`E+0x334`, `0x77d4d0`).
     pub text: String,
-    /// The caret, a byte offset into the text (`E+0x36c`, clamped to `[0, len]`).
+    /// The caret, a byte offset into the text (`E+0x36c`, clamped to `[0, len]`). It can sit
+    /// anywhere against the selection: `HighlightText` writes only the selection.
     pub cursor: usize,
-    /// Selection start (`E+0x35c`); equal to `sel_end` and the cursor when nothing is selected.
+    /// Selection start (`E+0x35c`); equal to `sel_end` when nothing is selected.
     pub sel_start: usize,
     /// Selection end (`E+0x360`); an insert replaces a non-empty selection first (`0x77cd70`).
     pub sel_end: usize,
@@ -69,8 +72,8 @@ pub struct EditBoxState {
     /// The caret texture (`E+0x368`, ctor `0x779c86`), a solid quad above the text. It paints
     /// nothing: the host draws the caret from `caret_shown`.
     pub caret_region: Option<RegionHandle>,
-    /// The submitted lines, oldest first. UP/DOWN recall and the restored draft are inferred: the
-    /// reference's history controller (`0x77b730`) is untraced.
+    /// The submitted lines, oldest first. UP/DOWN recall in a single-line box and the restored
+    /// draft are inferred: the reference's history controller (`0x77b730`) is untraced.
     pub history: Vec<String>,
     /// `historyLines`, the most lines kept; 0 (the default) is no history.
     pub history_max: usize,
@@ -114,7 +117,9 @@ pub struct EditBoxState {
     pub blink_period: f32,
     /// Blink accumulator (`E+0x374`): grows while focused; crossing the period toggles the caret.
     pub blink_accum: f32,
-    /// The caret shows this half-period; every cursor, text or selection change turns it on.
+    /// The caret shows this half-period. The flush's caret leg, which every caret move, edit and
+    /// focus change raises, turns it on in the focused box (`0x77de35`), off in others
+    /// (`0x77de51`).
     pub caret_shown: bool,
     /// The selection tint (`SetHighlightColor`), RGBA 0..1; the ctor default is `0xFF606060`.
     pub highlight_color: [f32; 4],
@@ -402,7 +407,8 @@ impl EditBoxState {
         }
     }
 
-    /// Show the caret and restart its blink, as the client's dirty flush does on every change.
+    /// Show the caret and restart its blink, as the flush's caret leg does for the focused box
+    /// (`0x77dd68`, `0x77de35`); the glue fields, which have no flush, call it on each change.
     pub fn reset_blink(&mut self) {
         self.caret_shown = true;
         self.blink_accum = 0.0;
@@ -455,16 +461,19 @@ impl EditBoxState {
 pub struct EditOutcome {
     /// The text changed: `OnTextChanged`.
     pub text_changed: bool,
+    /// An insert went in, so `OnChar` fires (`0x77c13c`); a `numeric` abort that only deleted the
+    /// selection did not.
+    pub inserted: bool,
     /// Typed spaces inserted, one `OnSpacePressed` each; a paste reports none.
     pub spaces: usize,
 }
 
 impl EditOutcome {
-    /// An outcome with no typed spaces.
+    /// An outcome with nothing inserted.
     fn changed(text_changed: bool) -> Self {
         EditOutcome {
             text_changed,
-            spaces: 0,
+            ..EditOutcome::default()
         }
     }
 }
@@ -479,7 +488,11 @@ impl EditBoxState {
                     // it becomes an action (`UiScript::editbox_alt_arrow_mode`).
                     EditUnit::Char => self.move_by_char(!back, extend),
                     EditUnit::Word => self.move_by_word(!back, extend),
+                    EditUnit::Line => self.move_to_line_edge(!back, extend),
                     EditUnit::Edge => self.move_to_edge(!back, extend),
+                    EditUnit::Row if self.multi_line => self.move_by_row(!back, extend),
+                    // The caller recalls history through `SetText`, so `OnTextSet` fires.
+                    EditUnit::Row => {}
                 }
                 EditOutcome::default()
             }
@@ -493,29 +506,35 @@ impl EditBoxState {
                     let t = if back { 0 } else { self.text.len() };
                     self.delete_to(t)
                 }
+                // No keymap deletes by line or row.
+                EditUnit::Line | EditUnit::Row => false,
             }),
             EditAction::SelectAll => {
                 self.highlight_text(0, -1);
                 EditOutcome::default()
             }
-            // The caller recalls history through `SetText`, so `OnTextSet` fires.
-            EditAction::HistoryPrev | EditAction::HistoryNext => EditOutcome::default(),
         }
     }
 
-    /// Insert at the cursor (`0x77bee0`), replacing any selection; `numeric` refuses the whole
-    /// insert on any non-digit (`0x77bf41`).
+    /// Insert at the cursor (`0x77bee0`), in its order: the link guard, the selection's deletion
+    /// (`0x77bf13`–`0x77bf23`), then the `numeric` test (`0x77bf41`), which refuses the whole
+    /// insert on any non-digit and leaves the deletion standing.
     pub fn insert(&mut self, ins: &str) -> EditOutcome {
-        if self.numeric && !ins.chars().all(|c| c.is_ascii_digit()) {
-            return EditOutcome::default();
-        }
         // Typing with the caret inside a hyperlink, where only the mouse can put it, is
         // swallowed: the opening guard of `0x77bee0`.
         if !crate::markup::ClassMap::new(&self.text).insert_allowed(self.cursor) {
             return EditOutcome::default();
         }
-        self.end_history_browse();
+        let replaced = self.sel_start != self.sel_end;
         self.delete_selection();
+        if self.numeric && !ins.chars().all(|c| c.is_ascii_digit()) {
+            if replaced {
+                self.end_history_browse();
+                self.reset_blink();
+            }
+            return EditOutcome::changed(replaced);
+        }
+        self.end_history_browse();
         self.text.insert_str(self.cursor, ins);
         self.cursor += ins.len();
         self.collapse();
@@ -524,6 +543,7 @@ impl EditBoxState {
         self.dirty |= Self::DIRTY_TEXT | Self::DIRTY_CURSOR; // `0x77c033 or edx,5`
         EditOutcome {
             text_changed: true,
+            inserted: true,
             spaces: ins.matches(' ').count(),
         }
     }
@@ -589,7 +609,9 @@ impl EditBoxState {
         Some(taken)
     }
 
-    /// `HighlightText` (`0x77cca0`) with the client's clamp, so `(0, -1)` selects all.
+    /// `HighlightText` (`0x77cca0`) with the client's clamp, so `(0, -1)` selects all. It writes
+    /// only the selection (`+0x35c`/`+0x360`) and raises bit 1 (`0x77ccc8`): the caret stays put,
+    /// so no `OnCursorChanged` fires and the blink runs on.
     pub fn highlight_text(&mut self, start: i64, end: i64) {
         let len = self.text.len() as i64;
         let s = start.clamp(0, len);
@@ -599,14 +621,6 @@ impl EditBoxState {
         }
         self.sel_start = snap_down(&self.text, s as usize);
         self.sel_end = snap_down(&self.text, e as usize);
-        // benilla moves the caret to the selection's end where the reference does not:
-        // `0x77cca0` writes only the selection (`+0x35c`/`+0x360`) and raises bit 1 (`0x77ccc8`).
-        // Bit 2 rises here only with that move.
-        if self.cursor != self.sel_end {
-            self.cursor = self.sel_end;
-            self.dirty |= Self::DIRTY_CURSOR;
-        }
-        self.reset_blink();
     }
 
     /// Backspace (`forward = false`) or Delete: the selection if any, else one step.
@@ -657,26 +671,28 @@ impl EditBoxState {
         did
     }
 
-    /// Left or Right one step, `extend` dragging the selection; without it, a selection collapses
-    /// to its edge instead. Bit 2 rises only when the caret moved: the helpers step it only while
-    /// it can (`0x77c750` `cursor < len`, `0x77c870` `cursor > 0`), and the step raises the bit
-    /// (`0x77c73b`).
+    /// Left or Right one step, `extend` dragging the selection ([`Self::extend_to`]). Bit 2 rises
+    /// only when the caret moved: the helpers step it only while it can (`0x77c750`
+    /// `cursor < len`, `0x77c870` `cursor > 0`), and the step raises the bit (`0x77c73b`).
     pub fn move_by_char(&mut self, right: bool, extend: bool) {
         let from = self.cursor;
         // One token step, links atomic (`0x77bb30`, `atomicLinks = 1` at `0x77c6d2`): a press
         // crosses a whole link, never into an escape, and Shift+arrow selects all of it.
-        let step = |s: &str, i: usize| {
-            crate::markup::ClassMap::new(s).advance(i, if right { 1 } else { -1 }, true)
-        };
+        let target = crate::markup::ClassMap::new(&self.text).advance(
+            self.cursor,
+            if right { 1 } else { -1 },
+            true,
+        );
         if extend {
-            let anchor = self.selection_anchor();
-            self.cursor = step(&self.text, self.cursor);
-            self.set_span(anchor, self.cursor);
+            self.extend_to(target);
         } else if self.sel_start != self.sel_end {
+            // Deviation: a plain Left or Right with a selection collapses it to that edge, as
+            // every OS's own text fields do; the reference clears the selection and steps once
+            // from the caret (`0x77c6b0` from `0x77c70b`).
             self.cursor = if right { self.sel_end } else { self.sel_start };
             self.collapse();
         } else {
-            self.cursor = step(&self.text, self.cursor);
+            self.cursor = target;
             self.collapse();
         }
         self.reset_blink();
@@ -689,33 +705,149 @@ impl EditBoxState {
     /// steps (`0x77c8c0`/`0x77c7a0` loop `0x77c6b0`), so it always lands on a reachable stop.
     pub fn move_by_word(&mut self, right: bool, extend: bool) {
         let word = self.word_boundary(right);
-        let mut target = self.cursor;
+        self.walk(right, extend, |_, _, next| {
+            if right {
+                next <= word
+            } else {
+                next >= word
+            }
+        });
+    }
+
+    /// HOME/END: the caret back to its line's start or on to its end, a step at a time while the
+    /// byte before the caret (`0x77c99a`), or at it (`0x77ca0e`), is not a newline. A single-line
+    /// box holds no newline, so there it goes to the text's edge.
+    pub fn move_to_line_edge(&mut self, end: bool, extend: bool) {
+        self.walk(end, extend, |text, at, _| {
+            let bytes = text.as_bytes();
+            if end {
+                bytes.get(at) != Some(&b'\n')
+            } else {
+                at > 0 && bytes[at - 1] != b'\n'
+            }
+        });
+    }
+
+    /// Ctrl+HOME/END and Cmd+arrow: the caret to `0` / `len`, a step at a time (`0x77ca60`,
+    /// `0x77cac0`).
+    pub fn move_to_edge(&mut self, end: bool, extend: bool) {
+        self.walk(end, extend, |_, _, _| true);
+    }
+
+    /// UP/DOWN in a multi-line box (`0x77cb20`, through `0x77cc80`/`0x77cc60`): the caret to the
+    /// same column of the wrapped row above or below. The column is the letters from the row's
+    /// start to the caret (`0x77bc80`), walked out from the target row's start with links not
+    /// atomic (`0x77bb30`, `atomicLinks = 0` pushed at `0x77cba4`). A walk that reaches the next
+    /// row's start, or on the last row the text's end (`0x77d6ef`), steps back one stop
+    /// (`0x77cbc6`–`0x77cbdd`). On the first or last row the caret stays, and without `extend` the
+    /// selection clears (`0x77cb50`). The rows are the draw's ([`Self::rows`]), one while they are
+    /// unmeasured.
+    pub fn move_by_row(&mut self, down: bool, extend: bool) {
+        let len = self.text.len();
+        let display_len = self.display().len();
+        let measured = self.advances.len() == display_len + 1
+            && self.rows.first() == Some(&0)
+            && self.rows.windows(2).all(|w| w[0] < w[1])
+            && self.rows.last().is_some_and(|&r| r <= display_len);
+        // Each row's first text byte, then the text's length.
+        let mut starts: Vec<usize> = if measured {
+            self.rows
+                .iter()
+                .map(|&d| snap_down(&self.text, self.display_to_text(d)))
+                .collect()
+        } else {
+            vec![0]
+        };
+        let rows = starts.len();
+        starts.push(len);
+        // The caret's row (`0x77bd50`): a caret on a row's start heads that row.
+        let mut row = 0;
+        while row + 1 < rows && self.cursor >= starts[row + 1] {
+            row += 1;
+        }
+        let target = if down {
+            (row + 1).min(rows - 1)
+        } else {
+            row.saturating_sub(1)
+        };
+        if target == row {
+            if !extend {
+                self.collapse();
+            }
+            return;
+        }
+        let map = crate::markup::ClassMap::new(&self.text);
+        let column = map.letters(starts[row], self.cursor - starts[row]);
+        let (start, next) = (starts[target], starts[target + 1]);
+        let mut to = map.advance(start, column as isize, false);
+        if next > start && to >= next {
+            to = map.advance(next, -1, false);
+        }
+        if extend {
+            self.extend_to(to);
+        } else {
+            self.cursor = to;
+            self.collapse();
+        }
+        self.reset_blink();
+        self.dirty |= Self::DIRTY_CURSOR; // `0x77cc40`
+    }
+
+    /// The loops of single steps behind the word, line and edge moves (`0x77c6b0`, links atomic):
+    /// the caret steps while `take(text, caret, next)` allows the step to `next`, each extending
+    /// step dragging the selection by [`Self::extend_to`]; a plain move collapses it at the end.
+    fn walk(&mut self, right: bool, extend: bool, take: impl Fn(&str, usize, usize) -> bool) {
+        let from = self.cursor;
+        let map = crate::markup::ClassMap::new(&self.text);
         loop {
-            let next = crate::markup::ClassMap::new(&self.text).advance(
-                target,
-                if right { 1 } else { -1 },
-                true,
-            );
-            if next == target || (right && next > word) || (!right && next < word) {
+            let next = map.advance(self.cursor, if right { 1 } else { -1 }, true);
+            if next == self.cursor || !take(&self.text, self.cursor, next) {
                 break;
             }
-            target = next;
-            if target == word {
-                break;
+            if extend {
+                self.extend_to(next);
+            } else {
+                self.cursor = next;
             }
         }
-        self.move_caret_to(target, extend);
+        if !extend {
+            self.collapse();
+        }
+        if self.cursor != from {
+            self.reset_blink();
+            self.dirty |= Self::DIRTY_CURSOR;
+        }
     }
 
-    /// HOME/END (and Cmd+arrow): the caret to `0` / `len`.
-    pub fn move_to_edge(&mut self, end: bool, extend: bool) {
-        let target = if end { self.text.len() } else { 0 };
-        self.move_caret_to(target, extend);
+    /// One extending caret move to `to`, the Shift leg of `0x77c6b0` and `0x77cb20`: an empty
+    /// selection first collapses onto the caret (`0x77ccf0`), then `0x77cd10` moves one edge by
+    /// the move's delta. A move left past `sel_start` moves `sel_start`, any other move left moves
+    /// `sel_end`, and a move right mirrors that, so a caret inside a selection trims it.
+    pub fn extend_to(&mut self, to: usize) {
+        if self.sel_start == self.sel_end {
+            self.collapse();
+        }
+        if to < self.cursor {
+            if to < self.sel_start {
+                self.sel_start = to;
+            } else {
+                self.sel_end = to;
+            }
+        } else if to > self.cursor {
+            if to > self.sel_end {
+                self.sel_end = to;
+            } else {
+                self.sel_start = to;
+            }
+        }
+        self.cursor = to;
     }
 
-    /// Place the caret at `target`, extending the selection from its anchor when `extend`. Bit 2
-    /// rises only when the caret moved, as for the word and edge helpers, which step it only while
-    /// it can (`0x77c7a0`/`0x77c8c0`, `0x77ca60`/`0x77cac0`); a click raises it on its own.
+    /// Place the caret at `target`, extending the selection from its anchor when `extend`: the
+    /// click (`0x77b800`) and the drag (`0x77a860`). The reference's drag applies `0x77cd10` with
+    /// each mouse move's whole delta, which agrees with the anchor except when one move carries
+    /// the caret across it, where `0x77cd10` keeps the far end selected too. Bit 2 rises only when
+    /// the caret moved; a click raises it on its own.
     pub fn move_caret_to(&mut self, target: usize, extend: bool) {
         let from = self.cursor;
         let target = snap_down(&self.text, target.min(self.text.len()));
@@ -862,3 +994,7 @@ mod row_law_tests {
         assert_eq!(eb.index_at_pos(15.0, 500.0), 2);
     }
 }
+
+#[cfg(test)]
+#[path = "editbox_move_tests.rs"]
+mod move_law_tests;

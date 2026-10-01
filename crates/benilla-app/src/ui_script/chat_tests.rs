@@ -244,7 +244,11 @@ fn chat_box_arrows_edit_and_history_recalls() {
     );
     assert!(s.focus_editbox("ChatFrameEditBox"));
     s.char_input("dra");
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(EditAction::Move {
+        unit: EditUnit::Row,
+        back: true,
+        extend: false,
+    });
     // `ChatEdit_AddHistory` filed "/y hi" (`ChatFrame.lua:1916-1937`); the recall's `OnTextSet`
     // parse (l.2077-2079) turns it back into YELL with "hi".
     assert!(
@@ -258,7 +262,11 @@ fn chat_box_arrows_edit_and_history_recalls() {
         s.eval::<String>("return ChatFrameEditBox:GetText()")
             .unwrap()
     );
-    s.editbox_action(EditAction::HistoryNext);
+    s.editbox_action(EditAction::Move {
+        unit: EditUnit::Row,
+        back: false,
+        extend: false,
+    });
     assert_eq!(
         s.eval::<String>("return ChatFrameEditBox:GetText()")
             .unwrap(),

@@ -1058,7 +1058,7 @@ impl UiScript {
     /// Whether the focused EditBox is in alt-arrow mode (XML `ignoreArrows`, Lua
     /// `SetAltArrowKeyMode`, `[editbox+0x318] & 0x10`): without ALT the reference declines the four
     /// arrows (`0x77b1c4`), so they reach the world's bindings and turn the player while chat has
-    /// focus. The gate is on the key, not the [`EditAction`]: HOME and END also move to an edge.
+    /// focus. The gate is on the key, not the [`EditAction`]: HOME and END also move the caret.
     pub fn editbox_alt_arrow_mode(&self) -> bool {
         let model = self.model_ref();
         model.focused_editbox.is_some_and(|h| {

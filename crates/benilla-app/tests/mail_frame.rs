@@ -3,7 +3,10 @@
 
 mod common;
 
-use benilla_ui::script::{MailInboxRow, MailInvoice, MailState, UiScript};
+use benilla_ui::script::{
+    EditAction, EditBoxAdvanceRequest, EditUnit, MailInboxRow, MailInvoice, MailState,
+    MeasureRequest, TextMeasure, UiScript,
+};
 
 /// The mail window's load prefix, in the app's order.
 const FILES: &[&str] = &[
@@ -814,4 +817,168 @@ fn the_compose_reset_clears_the_subject_and_the_attachment_together() {
         s.eval::<bool>("return GetSendMailItem() == nil").unwrap(),
         "and the attachment is gone with it"
     );
+}
+
+/// A stand-in font engine: each byte 7 wide, each line 14 tall, a multi-line box's rows breaking
+/// after each newline, a trailing one opening none; the texts here never wrap.
+struct Mono;
+
+impl TextMeasure for Mono {
+    fn measure(&mut self, req: &MeasureRequest) -> (f32, f32, f32) {
+        let text = req.text.strip_suffix('\n').unwrap_or(&req.text);
+        let natural = text.split('\n').map(str::len).max().unwrap_or(0) as f32 * 7.0;
+        (natural, text.split('\n').count() as f32 * 14.0, natural)
+    }
+
+    fn editbox_advances(
+        &mut self,
+        req: &EditBoxAdvanceRequest,
+    ) -> Option<(Vec<f32>, Vec<usize>, f32)> {
+        let cum = (0..=req.text.len()).map(|i| i as f32 * 7.0).collect();
+        if req.wrap_width.is_none() {
+            return Some((cum, vec![0], 0.0));
+        }
+        let breaks = req.text.match_indices('\n').map(|(i, _)| i + 1);
+        let rows = std::iter::once(0)
+            .chain(breaks.filter(|&i| i < req.text.len()))
+            .collect();
+        Some((cum, rows, 14.0))
+    }
+}
+
+/// The send tab, open, its boxes measured by [`Mono`].
+fn send_tab() -> UiScript {
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    s.set_text_measurer(Box::new(Mono));
+    load_ui(&s);
+    s.fire_event("MAIL_SHOW", vec![]);
+    s.run("MailFrameTab_OnClick(2)").unwrap();
+    s.resolve();
+    s
+}
+
+fn frames(s: &mut UiScript, n: usize) {
+    for _ in 0..n {
+        s.tick(0.016);
+        s.resolve();
+    }
+}
+
+fn mv(s: &mut UiScript, unit: EditUnit, back: bool) {
+    assert!(s.editbox_action(EditAction::Move {
+        unit,
+        back,
+        extend: false,
+    }));
+}
+
+/// The letter body is multi-line: UP and DOWN move a row at the caret's letter column (`0x77cb20`),
+/// HOME and END stop at the line's newline (`0x77c980`, `0x77c9f0`), and Ctrl+HOME and Ctrl+END
+/// go to the letter's ends (`0x77ca60`, `0x77cac0`).
+#[test]
+fn the_letter_body_moves_its_caret_by_rows_and_lines() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = send_tab();
+    s.run(
+        "SendMailBodyEditBox:SetText('Dear Thrall,\\nthe ore\\nis late.') \
+         SendMailBodyEditBox:SetFocus()",
+    )
+    .unwrap();
+    frames(&mut s, 1);
+    let body = |s: &UiScript| {
+        s.eval::<String>("return SendMailBodyEditBox:GetText()")
+            .unwrap()
+    };
+    // From the end, column 8: past "the ore", so it holds before that line's newline.
+    mv(&mut s, EditUnit::Row, true);
+    s.char_input("!");
+    assert_eq!(body(&s), "Dear Thrall,\nthe ore!\nis late.");
+    mv(&mut s, EditUnit::Line, true);
+    s.char_input("-");
+    assert_eq!(
+        body(&s),
+        "Dear Thrall,\n-the ore!\nis late.",
+        "HOME: this line's start"
+    );
+    mv(&mut s, EditUnit::Line, false);
+    mv(&mut s, EditUnit::Row, false);
+    s.char_input("?");
+    assert_eq!(
+        body(&s),
+        "Dear Thrall,\n-the ore!\nis late?.",
+        "END, then DOWN at column 9: held before the last letter, the text's end counting as \
+         the next row's start"
+    );
+    mv(&mut s, EditUnit::Edge, true);
+    s.char_input(">");
+    assert_eq!(body(&s), ">Dear Thrall,\n-the ore!\nis late?.", "Ctrl+HOME");
+    assert!(s.take_errors().is_empty(), "and nothing raised on the way");
+}
+
+/// Ctrl+A is `HighlightText(0, -1)` (`0x77b239`), which leaves the caret (`0x77cca0`): no
+/// `OnCursorChanged` reaches `ScrollingEdit_OnCursorChanged`, so a long letter scrolled to its top
+/// stays there.
+#[test]
+fn select_all_in_a_long_letter_keeps_its_scroll() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = send_tab();
+    s.run(
+        "SendMailBodyEditBox:SetText(string.rep('line\\n', 29) .. 'end') \
+         SendMailBodyEditBox:SetFocus()",
+    )
+    .unwrap();
+    frames(&mut s, 4);
+    let scroll = |s: &UiScript| {
+        s.eval::<f64>("return SendMailScrollFrame:GetVerticalScroll()")
+            .unwrap()
+    };
+    assert!(
+        scroll(&s) > 0.0,
+        "the caret at the end scrolled the letter down"
+    );
+    mv(&mut s, EditUnit::Edge, true);
+    frames(&mut s, 4);
+    assert_eq!(scroll(&s), 0.0, "Ctrl+HOME scrolled it back to the top");
+    assert!(s.editbox_action(EditAction::SelectAll));
+    frames(&mut s, 4);
+    assert_eq!(
+        scroll(&s),
+        0.0,
+        "Ctrl+A left the caret, and the view, at the top"
+    );
+    s.char_input("x");
+    assert_eq!(
+        s.eval::<String>("return SendMailBodyEditBox:GetText()")
+            .unwrap(),
+        "x",
+        "with all of it selected"
+    );
+    assert!(s.take_errors().is_empty(), "and nothing raised on the way");
+}
+
+/// The money boxes select all on focus (`MoneyInputFrame.xml`, `HighlightText()`), and `Insert`
+/// deletes a selection before its `numeric` test refuses a letter (`0x77bf13`, `0x77bf41`): a
+/// letter typed into the gold box clears the amount.
+#[test]
+fn a_letter_typed_over_the_selected_gold_clears_it() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = send_tab();
+    s.run("SendMailMoneyGold:SetText('12') SendMailMoneyGold:SetFocus()")
+        .unwrap();
+    frames(&mut s, 1);
+    assert!(s.char_input("g"), "the focused box consumes");
+    assert_eq!(
+        s.eval::<String>("return SendMailMoneyGold:GetText()")
+            .unwrap(),
+        ""
+    );
+    frames(&mut s, 1);
+    assert_eq!(
+        s.eval::<f64>("return MoneyInputFrame_GetCopper(SendMailMoney)")
+            .unwrap(),
+        0.0,
+        "OnTextChanged told the money frame"
+    );
+    assert!(s.take_errors().is_empty(), "and nothing raised on the way");
 }

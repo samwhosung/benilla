@@ -140,8 +140,8 @@ impl GlueDialog {
         self.kind = Some(DialogKind::Realmlist);
         self.edit = crate::textinput::field(crate::realmlist::MAX_LETTERS, false);
         self.edit.set_text(current);
-        // `HighlightText(0, -1)`, the reference's select-all (`0x77cca0`), also resets the blink
-        // so the box opens on a solid caret.
+        // `HighlightText(0, -1)`, the reference's select-all (`0x77cca0`); the dialog's spawn
+        // starts the caret solid.
         self.edit.highlight_text(0, -1);
         self.set_text(prompt);
     }

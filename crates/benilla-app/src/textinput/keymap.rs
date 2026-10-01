@@ -1,6 +1,7 @@
 //! The per-OS text-editing keymap: a keypress and modifiers to an engine [`EditAction`] or a
 //! host-side clipboard operation. The Windows/Linux table is the reference's key handler
-//! (`0x77b160`: Ctrl+arrows by word, Ctrl+A/C/X/V, Ctrl/Shift+Insert, Shift+Delete).
+//! (`0x77b160`: Ctrl+arrows by word, Ctrl+HOME/END to the text's edge, Ctrl+A/C/X/V,
+//! Ctrl/Shift+Insert, Shift+Delete).
 //! Deviation: macOS takes the Cocoa text-field chords and Ctrl+Backspace/Delete delete a word,
 //! because editing follows each OS's own text fields.
 
@@ -56,10 +57,10 @@ pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> 
     }
 }
 
-/// macOS, the Cocoa text-field chords: Option is a word, Cmd the line edge; plain Up/Down recall
-/// history. Cocoa's Emacs Ctrl set is left unbound.
+/// macOS, the Cocoa text-field chords: Option is a word, Cmd the line edge; plain Up/Down move a
+/// row, or recall history in a single-line box. Cocoa's Emacs Ctrl set is left unbound.
 fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
-    use EditUnit::{Char, Edge, Word};
+    use EditUnit::{Char, Edge, Row, Word};
     let mv = |unit, back| {
         Some(Chord::Edit(EditAction::Move {
             unit,
@@ -86,10 +87,8 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
                 mv(Edge, back)
             } else if m.alt || m.ctrl {
                 None
-            } else if back {
-                Some(Chord::Edit(EditAction::HistoryPrev))
             } else {
-                Some(Chord::Edit(EditAction::HistoryNext))
+                mv(Row, back)
             }
         }
         KeyCode::Home => mv(Edge, true),
@@ -118,7 +117,7 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
 
 /// Windows/Linux: the reference's chords (`0x77b160`) plus the Ctrl word deletes.
 fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
-    use EditUnit::{Char, Edge, Word};
+    use EditUnit::{Char, Edge, Line, Row, Word};
     let mv = |unit, back| {
         Some(Chord::Edit(EditAction::Move {
             unit,
@@ -137,15 +136,11 @@ fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
                 mv(Char, back)
             }
         }
-        // Plain Up/Down only: history recall.
-        KeyCode::ArrowUp if !(m.ctrl || m.alt || m.shift || m.sup) => {
-            Some(Chord::Edit(EditAction::HistoryPrev))
-        }
-        KeyCode::ArrowDown if !(m.ctrl || m.alt || m.shift || m.sup) => {
-            Some(Chord::Edit(EditAction::HistoryNext))
-        }
-        KeyCode::Home => mv(Edge, true),
-        KeyCode::End => mv(Edge, false),
+        // UP/DOWN read only Shift, as the extend flag (`0x77b65d`, `0x77b684`): a row in a
+        // multi-line box, history in a single-line one.
+        KeyCode::ArrowUp | KeyCode::ArrowDown if !m.sup => mv(Row, key == KeyCode::ArrowUp),
+        // HOME/END stop at a newline; Ctrl goes to the text's edge (`0x77b49e`, `0x77b4de`).
+        KeyCode::Home | KeyCode::End => mv(if m.ctrl { Edge } else { Line }, key == KeyCode::Home),
         // Shift+Delete cuts, as the reference does (`0x77b160`).
         KeyCode::Backspace => {
             if m.ctrl {
@@ -253,7 +248,11 @@ mod tests {
         );
         assert_eq!(
             edit(chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), NONE, true)),
-            HistoryPrev
+            Move {
+                unit: Row,
+                back: true,
+                extend: false
+            }
         );
         assert_eq!(
             edit(chord(
@@ -262,7 +261,11 @@ mod tests {
                 NONE,
                 true
             )),
-            HistoryNext
+            Move {
+                unit: Row,
+                back: false,
+                extend: false
+            }
         );
         assert_eq!(
             edit(chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), SHIFT, true)),
@@ -353,16 +356,29 @@ mod tests {
         );
         assert_eq!(
             edit(chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), NONE, false)),
-            HistoryPrev
+            Move {
+                unit: Row,
+                back: true,
+                extend: false
+            }
         );
         assert_eq!(
-            chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), SHIFT, false),
-            None
+            edit(chord(
+                KeyCode::ArrowDown,
+                us(KeyCode::ArrowDown),
+                SHIFT,
+                false
+            )),
+            Move {
+                unit: Row,
+                back: false,
+                extend: true
+            }
         );
         assert_eq!(
             edit(chord(KeyCode::End, us(KeyCode::End), SHIFT, false)),
             Move {
-                unit: Edge,
+                unit: Line,
                 back: false,
                 extend: true
             }
@@ -411,6 +427,64 @@ mod tests {
             Some(Chord::Cut)
         );
         assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), SUP, false), None);
+    }
+
+    /// The reference's UP and DOWN arms read only Shift (`0x77b64e`, `0x77b675`), so Ctrl and Alt
+    /// reach them too: Alt+Up is how the alt-arrow chat box recalls its history. HOME and END
+    /// stop at a newline and Ctrl+HOME/END go to the text's edge (`0x77b499`, `0x77b4d9`).
+    #[test]
+    fn pc_up_down_take_any_modifier_and_home_end_split_on_ctrl() {
+        use EditAction::Move;
+        use EditUnit::*;
+        for m in [NONE, CTRL, ALT, Mods { shift: true, ..ALT }] {
+            assert_eq!(
+                edit(chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), m, false)),
+                Move {
+                    unit: Row,
+                    back: true,
+                    extend: m.shift
+                }
+            );
+        }
+        assert_eq!(
+            chord(KeyCode::ArrowDown, us(KeyCode::ArrowDown), SUP, false),
+            None
+        );
+        for (key, back) in [(KeyCode::Home, true), (KeyCode::End, false)] {
+            assert_eq!(
+                edit(chord(key, us(key), NONE, false)),
+                Move {
+                    unit: Line,
+                    back,
+                    extend: false
+                }
+            );
+            assert_eq!(
+                edit(chord(
+                    key,
+                    us(key),
+                    Mods {
+                        shift: true,
+                        ..CTRL
+                    },
+                    false
+                )),
+                Move {
+                    unit: Edge,
+                    back,
+                    extend: true
+                }
+            );
+            // macOS keeps the text-field chord: HOME and END go to the text's edge.
+            assert_eq!(
+                edit(chord(key, us(key), NONE, true)),
+                Move {
+                    unit: Edge,
+                    back,
+                    extend: false
+                }
+            );
+        }
     }
 
     /// AltGr arrives as Ctrl+Alt and types letters on European layouts (Polish `ą`, `ć`, `ź`).

@@ -285,7 +285,7 @@ pub(super) fn feed_ui_input(
             }
         } else if let Some(chord) = chord {
             // The gate is on the key, not the action: a gated arrow never reaches the box (the
-            // reference's `return 0`), while HOME/END, which also make `Move { unit: Edge }`, do.
+            // reference's `return 0`), while HOME/END, which also make a `Move`, do.
             let gated_arrow = capture.arrows_fall_through
                 && matches!(
                     ev.key_code,

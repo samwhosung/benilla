@@ -50,7 +50,7 @@ pub(in crate::script) fn click(lua: &Lua, id: u32, x: f32, y: f32) {
 }
 
 /// Mouse move with the button held (`0x77a860`): a dragging focused box extends its selection to
-/// the hovered index through the Shift+arrow helper (`0x77cd10`).
+/// the hovered index ([`crate::widget::EditBoxState::move_caret_to`]).
 pub(in crate::script) fn drag_update(lua: &Lua, x: f32, y: f32) {
     let Some(h) = focused(lua) else { return };
     if with_eb(lua, h, |eb| eb.drag_active) != Some(true) {
@@ -72,7 +72,7 @@ pub(in crate::script) fn drag_end(lua: &Lua) {
 }
 
 /// Ctrl+Left/Right, the word move: the client walks its per-byte class array (`0x41f8f0(1)`),
-/// benilla stops at alphanumeric runs. `shift` extends the selection from its anchor.
+/// benilla stops at alphanumeric runs. `shift` extends the selection.
 pub(in crate::script) fn move_word(lua: &Lua, h: FrameHandle, right: bool, shift: bool) {
     with_eb(lua, h, |eb| eb.move_by_word(right, shift));
 }

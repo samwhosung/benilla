@@ -6,6 +6,18 @@ fn script() -> UiScript {
     UiScript::new().expect("construct UiScript")
 }
 
+/// UP and DOWN, which recall history in a single-line box.
+const UP: EditAction = EditAction::Move {
+    unit: EditUnit::Row,
+    back: true,
+    extend: false,
+};
+const DOWN: EditAction = EditAction::Move {
+    unit: EditUnit::Row,
+    back: false,
+    extend: false,
+};
+
 fn text_quad(s: &UiScript) -> Option<String> {
     s.extract().into_iter().find_map(|q| match q.content {
         QuadContent::Text { text, .. } => text,
@@ -289,6 +301,41 @@ fn numeric_aborts_a_mixed_insert_wholesale() {
     )
     .unwrap();
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "12");
+}
+
+/// `Insert` deletes the selection before its `numeric` test (`0x77bf13`, then `0x77bf41`): a
+/// letter typed over a numeric box's selection empties it, so `OnTextChanged` fires at the flush,
+/// while the abort comes before `OnChar` (`0x77c13c`).
+#[test]
+fn a_non_digit_typed_over_a_numeric_selection_deletes_it() {
+    let mut s = script();
+    s.run(
+        r#"
+        CHARS, CHANGES = 0, 0
+        E = CreateFrame("EditBox", "E")
+        E:SetNumeric(true)
+        E:SetText("125")
+        E:SetScript("OnChar", function() CHARS = CHARS + 1 end)
+        E:SetScript("OnTextChanged", function() CHANGES = CHANGES + 1 end)
+        E:SetFocus()
+        E:HighlightText()
+    "#,
+    )
+    .unwrap();
+    s.tick(0.016);
+    s.run("CHANGES = 0").unwrap();
+    assert!(s.char_input("g"), "focused: consumed");
+    assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "");
+    s.tick(0.016);
+    assert_eq!(
+        s.eval::<(i64, i64)>("return CHARS, CHANGES").unwrap(),
+        (0, 1)
+    );
+    assert_eq!(
+        text_quad(&s).as_deref(),
+        Some(""),
+        "the text region follows"
+    );
 }
 
 #[test]
@@ -687,19 +734,19 @@ fn history_recall_walks_up_and_down_and_restores_the_draft() {
     )
     .unwrap();
     // UP recalls newest-first; a second UP walks older; at the oldest it holds.
-    assert!(s.editbox_action(EditAction::HistoryPrev));
+    assert!(s.editbox_action(UP));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/g two");
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/say one");
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/say one");
     // DOWN walks newer; past the newest the stashed live draft comes back.
-    s.editbox_action(EditAction::HistoryNext);
+    s.editbox_action(DOWN);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/g two");
-    s.editbox_action(EditAction::HistoryNext);
+    s.editbox_action(DOWN);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "draft");
     // Not browsing: DOWN does nothing.
-    s.editbox_action(EditAction::HistoryNext);
+    s.editbox_action(DOWN);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "draft");
 }
 
@@ -716,15 +763,15 @@ fn typing_ends_the_history_browse() {
     "#,
     )
     .unwrap();
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "newer");
     // A typed char turns the recalled line into a draft: the next UP starts a fresh browse from
     // the newest entry, stashing the edited line as the draft.
     s.char_input("!");
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "newer!");
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "newer");
-    s.editbox_action(EditAction::HistoryNext);
+    s.editbox_action(DOWN);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "newer!");
 }
 
@@ -743,14 +790,14 @@ fn programmatic_set_text_keeps_the_browse_and_focus_gain_resets_it() {
     .unwrap();
     // Rewrite the recalled line as the chat parser does ("/g two" → Guild + "two"); the next UP
     // must reach the older entry, not the newest again.
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/g two");
     s.run(r#"E:SetText("two")"#).unwrap();
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/say one");
     // Refocusing starts a fresh session: the stale walk drops, UP recalls the newest again.
     s.run(r#"E:ClearFocus() E:SetFocus()"#).unwrap();
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "/g two");
 }
 
@@ -770,11 +817,11 @@ fn history_caps_at_history_lines_drop_oldest() {
     .unwrap();
     assert_eq!(s.eval::<i64>("return E:GetHistoryLines()").unwrap(), 2);
     // Only b/c survive: two UPs land on 'b', a third holds there.
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "c");
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "b");
-    s.editbox_action(EditAction::HistoryPrev);
+    s.editbox_action(UP);
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "b");
 }
 
@@ -786,7 +833,7 @@ fn history_off_by_default_and_up_is_still_consumed() {
     // No historyLines: AddHistoryLine does nothing, and UP is consumed but inert, since a focused
     // box eats every key (both handlers return 1, `0x77a900`/`0x77b160`).
     s.run(r#"E:AddHistoryLine("x")"#).unwrap();
-    assert!(s.editbox_action(EditAction::HistoryPrev));
+    assert!(s.editbox_action(UP));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "t");
 }
 
@@ -1242,9 +1289,17 @@ fn shift_arrow_selects_the_whole_link_and_typing_replaces_it() {
 
 #[test]
 fn typing_strictly_inside_a_link_is_refused() {
-    // Only the mouse can put the caret there, so place it the way a click would.
-    let mut s = box_with_link("");
-    s.run("E:HighlightText(35, 35)").unwrap(); // mid-"Ironfoe"
+    // Only the mouse can put the caret there: a click, which stops on each visible character.
+    let mut s = script();
+    seam_rig(&mut s, "");
+    s.run(&format!("E:SetWidth(400) E:Insert(\"{LINK}\")"))
+        .unwrap();
+    s.resolve();
+    answer_advances(&mut s);
+    // Byte 35, mid-"Ironfoe", at 7 px per byte from the box's left edge at 100.
+    assert!(s.mouse_button(100.0 + 35.0 * 7.0, 60.0, "LeftButton", true));
+    s.mouse_button(100.0 + 35.0 * 7.0, 60.0, "LeftButton", false);
+    assert_eq!(s.focused_editbox_text_ui().unwrap().caret_x, 245.0);
     s.char_input("x");
     assert_eq!(
         text_of(&s),
@@ -1252,7 +1307,11 @@ fn typing_strictly_inside_a_link_is_refused() {
         "the client swallows it rather than splitting the link"
     );
     // At the link's leading edge the keystroke lands: the guard also tests the previous token.
-    s.run("E:HighlightText(0, 0)").unwrap();
+    s.editbox_action(EditAction::Move {
+        unit: EditUnit::Edge,
+        back: true,
+        extend: false,
+    });
     s.char_input("x");
     assert_eq!(text_of(&s), format!("x{LINK}"));
 }
