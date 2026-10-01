@@ -57,8 +57,9 @@ pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> 
     }
 }
 
-/// macOS, the Cocoa text-field chords: Option is a word, Cmd the line edge; plain Up/Down move a
-/// row, or recall history in a single-line box. Cocoa's Emacs Ctrl set is left unbound.
+/// macOS, the Cocoa text-field chords: Option is a word, Cmd the line edge; Up/Down, plain or with
+/// Option, move a row, or recall history in a single-line box. Cocoa's Emacs Ctrl set is left
+/// unbound.
 fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
     use EditUnit::{Char, Edge, Row, Word};
     let mv = |unit, back| {
@@ -80,12 +81,14 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
                 mv(Char, back)
             }
         }
-        // Cmd+Up/Down is the box's start/end; Shift extends there.
+        // Cmd+Up/Down is the box's start/end; Shift extends there. Option is the reference's Alt,
+        // which its UP and DOWN arms do not read (`0x77b64e`, `0x77b675`), and the one modifier
+        // that keeps the arrows in an alt-arrow box (`0x77b1b3`): the chat box's history recall.
         KeyCode::ArrowUp | KeyCode::ArrowDown => {
             let back = key == KeyCode::ArrowUp;
             if m.sup || m.shift {
                 mv(Edge, back)
-            } else if m.alt || m.ctrl {
+            } else if m.ctrl {
                 None
             } else {
                 mv(Row, back)
@@ -427,6 +430,26 @@ mod tests {
             Some(Chord::Cut)
         );
         assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), SUP, false), None);
+    }
+
+    /// On a Mac, Option is the reference's Alt: Option+Up/Down reach the UP and DOWN arms
+    /// (`0x77b64e`, `0x77b675`), which read only Shift, so the alt-arrow chat box recalls its
+    /// history with them (`0x77b1b3`, then `0x77d030`/`0x77cfd0`). Ctrl stays unbound.
+    #[test]
+    fn mac_option_up_down_move_a_row_or_recall_history() {
+        use EditAction::Move;
+        use EditUnit::Row;
+        for (key, back) in [(KeyCode::ArrowUp, true), (KeyCode::ArrowDown, false)] {
+            assert_eq!(
+                edit(chord(key, us(key), ALT, true)),
+                Move {
+                    unit: Row,
+                    back,
+                    extend: false
+                }
+            );
+            assert_eq!(chord(key, us(key), CTRL, true), None);
+        }
     }
 
     /// The reference's UP and DOWN arms read only Shift (`0x77b64e`, `0x77b675`), so Ctrl and Alt
