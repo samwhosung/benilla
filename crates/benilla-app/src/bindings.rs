@@ -7,13 +7,18 @@
 //! Dispatch ([`latch_and_dispatch`], in [`crate::ui_script::UiInput`] after the UI key feed), as
 //! `CBindings::ExecuteBinding` (`0x4b7990`) and `RunCommand` (`0x4b7b50`) do:
 //! - a press probes its exact chord, then once more with its leftmost modifier dropped
-//!   ([`Chord::fallback`]); Super held matches nothing;
+//!   ([`Chord::fallback`]);
 //! - the resolved command's body runs with `keystate = "down"`, and the base key's release runs a
 //!   `runOnUp` body again with `"up"`. UI focus suppresses presses and releases nothing already
 //!   held; a latch ends only on its base key's release, the stuck-latch sweep (OS focus loss, the
 //!   loading cover) or a VM swap;
 //! - what the bodies call reaches the engine through the Lua binding functions
 //!   ([`benilla_ui::script::BindingInput`]) as [`BindingsState`]'s [`Input`]s.
+//!
+//! Deviation: a press with Super (Cmd) held runs no binding, so a system chord such as Cmd+Tab or
+//! Cmd+Q never acts in game. The reference has no such modifier and runs the bare key's binding:
+//! the Mac enqueues the key with Command held and skips only its text (`0x8a519`), and Windows
+//! hands `VK_LWIN`/`VK_RWIN` to the layout arm (`0x42da39`) like any key.
 //!
 //! Persistence: `benilla-config/bindings/account.txt` and `<Realm>-<Char>.txt` ([`store`]); the
 //! character file's existence is the character-set state, as in the reference.
@@ -371,8 +376,9 @@ fn latch_and_dispatch(
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
     let sup = keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight);
-    // The dev overlays' plane (`modkeys::dev_chord`; the `sup` gate covers its Super arm), which
-    // costs the keyboard its fallback probe (`BindingDispatch::resolve`). Only in a build with dev
+    // The dev overlays' plane, Ctrl+Shift without Alt (`modkeys::dev_chord`, which Super blocks
+    // too, as the `sup` gate below keeps any Super-held press from dispatching), which costs the
+    // keyboard its fallback probe (`BindingDispatch::resolve`). Only in a build with dev
     // affordances: a player build keeps the reference's `CTRL-SHIFT-P` fallback to `SHIFT-P`.
     let dev_plane = ctrl && shift && !alt && crate::run_mode::dev_affordances();
 
@@ -416,6 +422,7 @@ fn latch_and_dispatch(
                 if !repeat {
                     state.down.push(key);
                 }
+                // `sup`: the Super deviation (module doc).
                 if (typing && !arrow_exempt) || eaten || sup || repeat {
                     continue;
                 }
@@ -1190,7 +1197,7 @@ mod tests {
         app.update();
         assert_eq!(lua_count(&app, "STABS"), 1);
         assert_eq!(lua_count(&app, "TABS"), 1);
-        // Super is never a binding modifier: a Super-held press builds no chord, so no fallback.
+        // The Super deviation: a Super-held press runs no binding, not even its bare key's.
         let mut app = harness();
         press_key(&mut app, KeyCode::SuperLeft);
         press_key(&mut app, KeyCode::KeyZ);

@@ -19,7 +19,7 @@ use bevy::prelude::*;
 pub(crate) enum Position {
     Letter(char),
     Digit(char),
-    /// The ISO and JIS extra keys have no US name.
+    /// The ISO and JIS extra keys and the keypad comma have no US name.
     Punctuation(Option<char>),
 }
 
@@ -32,7 +32,10 @@ impl Position {
     }
 }
 
-/// The keys a layout names: the letters, the digits, the punctuation and the ISO and JIS extras.
+/// The keys a layout names: the letters, the digits, the punctuation, the ISO and JIS extras and
+/// the keypad comma. Windows sends `VK_OEM_102`, `VK_ABNT_C2` and `VK_SEPARATOR` to the layout arm
+/// like any `VK_OEM_*` key, and the Mac table leaves the ISO key `0x0A` and the keypad comma
+/// `0x5F` to `KeyTranslate` (`-1` at `0x5bf320`).
 pub(crate) fn position(k: KeyCode) -> Option<Position> {
     use KeyCode::*;
     use Position::{Digit, Letter, Punctuation};
@@ -84,7 +87,7 @@ pub(crate) fn position(k: KeyCode) -> Option<Position> {
         Period => Punctuation(Some('.')),
         Slash => Punctuation(Some('/')),
         Backquote => Punctuation(Some('`')),
-        IntlBackslash | IntlRo | IntlYen => Punctuation(None),
+        IntlBackslash | IntlRo | IntlYen | NumpadComma => Punctuation(None),
         _ => return None,
     })
 }
@@ -462,6 +465,11 @@ mod tests {
             ("french ^", KeyCode::BracketLeft, VK_OEM_6, 0x8000_005e, '^'),
             // Above U+00FF the key is named by what it types (the deviation).
             ("russian ж", KeyCode::Semicolon, VK_OEM_1, 'ж'.into(), 'ж'),
+            // The ISO key, German `VK_OEM_102`; the keypad comma, Brazilian ABNT's `VK_ABNT_C2`
+            // and a `VK_SEPARATOR` keypad.
+            ("german <", KeyCode::IntlBackslash, 0xe2, '<'.into(), '<'),
+            ("abnt keypad .", KeyCode::NumpadComma, 0xc2, '.'.into(), '.'),
+            ("keypad ,", KeyCode::NumpadComma, 0x6c, ','.into(), ','),
         ];
         let mut names = LayoutNames::default();
         for &(what, key, vk, to_char, expected) in rows {
@@ -576,10 +584,9 @@ mod tests {
         // layout reported has no name.
         assert_eq!(named(&names, KeyCode::Digit1), Some('1'));
         assert_eq!(named(&names, KeyCode::Quote), Some('\''));
-        assert_eq!(
-            names.name(KeyCode::IntlBackslash),
-            Some(LayoutName::Dropped)
-        );
+        for key in [KeyCode::IntlBackslash, KeyCode::NumpadComma] {
+            assert_eq!(names.name(key), Some(LayoutName::Dropped), "{key:?}");
+        }
         assert_eq!(names.name(KeyCode::F1), None, "the fixed table's");
     }
 }

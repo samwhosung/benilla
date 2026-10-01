@@ -4,7 +4,8 @@
 //!
 //! Prefix order is ALT-CTRL-SHIFT (`Blizzard_BindingUI.lua:176-182`; the emitter `0x4b6630` walks
 //! the table at `0x846bd0`), and it decides which modifier the fallback drops. Super/Cmd is not a
-//! 1.12 modifier: a chord never carries it and a press with it held never matches.
+//! 1.12 modifier, so a chord never carries it; that a press with it held runs nothing is
+//! `crate::bindings`'s deviation.
 
 use std::fmt;
 
@@ -592,6 +593,7 @@ mod tests {
             (BracketRight, '$'),
             (Backslash, '*'),
             (IntlBackslash, '<'),
+            (NumpadComma, '.'),
             (Digit1, '1'),
         ]);
         // Turkish Q's `VK_OEM_7` names its key `i`, which the lookup folds to `I`.
@@ -613,6 +615,7 @@ mod tests {
             (BracketRight, "$"),
             (Backslash, "*"),
             (IntlBackslash, "<"),
+            (NumpadComma, "."),
             (Digit1, "1"),
             (KeyI, "I"),
             (F1, "F1"),
