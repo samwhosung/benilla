@@ -515,20 +515,52 @@ pub(crate) fn caret_bar<C: Bundle>(
         });
 }
 
-/// Which item of a glue edit box's row `[before][caret][selected][caret][after]` an entity is.
-/// Flex places the caret and selection with no text measuring; an empty `Selected` has zero
-/// width, and the caret slots are zero-width seams, so the text is one unbroken line.
+/// Which item of a glue edit box's row `[before][selected][caret][selected][after]` an entity is.
+/// Flex places the caret and selection with no text measuring: the selection splits at the caret,
+/// an empty run has zero width and the caret is a zero-width seam, so the text is one unbroken line.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GlueFieldPart {
-    /// `display[..sel_start]`
+    /// The text before the selection.
     Before,
-    /// The caret at the selection's start, and whenever nothing is selected.
-    CaretAtStart,
-    /// `display[sel_start..sel_end]`, the highlighted run.
-    Selected,
-    CaretAtEnd,
-    /// `display[sel_end..]`
+    /// The highlighted run from the selection's start to the caret.
+    SelectedHead,
+    /// The caret, which can sit inside the selection: `HighlightText` leaves it (`0x77cca0`).
+    Caret,
+    /// The highlighted run from the caret to the selection's end.
+    SelectedTail,
+    /// The text after the selection.
     After,
+}
+
+/// What `part` of `field`'s row draws: its slice of `display`, for a text run, and whether it
+/// shows. `focused` gates the caret, not the highlight: the reference's caret flush hides when
+/// `E != [0xcf4dc8]` (`0x77da80`), but the selection flush (`0x77d950`, `0x77de70`) never reads
+/// focus, so an unfocused box paints the selection it holds.
+fn glue_field_part<'d>(
+    field: &EditBoxState,
+    display: &'d str,
+    focused: bool,
+    part: GlueFieldPart,
+) -> (Option<&'d str>, bool) {
+    let (mut lo, mut hi) = (
+        field.sel_start.min(field.sel_end),
+        field.sel_start.max(field.sel_end),
+    );
+    // An empty selection has no place of its own: it sits at the caret.
+    if lo == hi {
+        (lo, hi) = (field.cursor, field.cursor);
+    }
+    // A caret outside a selection, which no glue field makes, draws at its nearer end.
+    let caret = field.cursor.clamp(lo, hi);
+    let [lo, caret, hi] = [lo, caret, hi].map(|b| field.text_to_display(b).min(display.len()));
+    match part {
+        GlueFieldPart::Before => (Some(&display[..lo]), true),
+        GlueFieldPart::SelectedHead => (Some(&display[lo..caret]), true),
+        // `caret_shown` is ticked by `textinput::tick_caret`, the chat caret's clock too.
+        GlueFieldPart::Caret => (None, focused && field.caret_shown),
+        GlueFieldPart::SelectedTail => (Some(&display[caret..hi]), true),
+        GlueFieldPart::After => (Some(&display[hi..]), true),
+    }
 }
 
 /// Paint one glue edit box's segments, selection and caret from its [`EditBoxState`].
@@ -543,24 +575,9 @@ pub(crate) fn paint_glue_field<'a>(
         ),
     >,
 ) {
-    // `focused` gates the caret, not the highlight: the reference's caret flush hides when
-    // `E != [0xcf4dc8]` (`0x77da80`), but the selection flush (`0x77d950`, `0x77de70`) never reads
-    // focus, so an unfocused box paints the selection it holds.
     let display = field.display();
-    let lo = field.sel_start.min(field.sel_end);
-    let hi = field.sel_start.max(field.sel_end);
-    let (d_lo, d_hi) = (field.text_to_display(lo), field.text_to_display(hi));
-    let d_cursor = field.text_to_display(field.cursor);
-    // `caret_shown` is ticked by `textinput::tick_caret`, the chat caret's clock too.
-    let caret_on = focused && field.caret_shown;
     for (part, text, mut vis) in parts {
-        let (want_text, want_vis) = match part {
-            GlueFieldPart::Before => (Some(&display[..d_lo]), true),
-            GlueFieldPart::Selected => (Some(&display[d_lo..d_hi]), true),
-            GlueFieldPart::After => (Some(&display[d_hi..]), true),
-            GlueFieldPart::CaretAtStart => (None, caret_on && d_cursor <= d_lo),
-            GlueFieldPart::CaretAtEnd => (None, caret_on && d_cursor > d_lo),
-        };
+        let (want_text, want_vis) = glue_field_part(field, &display, focused, *part);
         if let (Some(want), Some(mut t)) = (want_text, text) {
             if t.0 != want {
                 t.0 = want.to_string();
@@ -650,7 +667,10 @@ pub(crate) fn glue_edit_box<E: Bundle, T: Bundle + Clone>(
                             ..default()
                         },
                     ));
-                    if part == GlueFieldPart::Selected {
+                    if matches!(
+                        part,
+                        GlueFieldPart::SelectedHead | GlueFieldPart::SelectedTail
+                    ) {
                         // `SetHighlightColor`'s default, opaque medium grey, as the chat box.
                         e.insert(BackgroundColor(Color::srgb(
                             96.0 / 255.0,
@@ -660,19 +680,9 @@ pub(crate) fn glue_edit_box<E: Bundle, T: Bundle + Clone>(
                     }
                 };
                 segment(f, GlueFieldPart::Before);
-                caret_bar(
-                    f,
-                    (marker.clone(), GlueFieldPart::CaretAtStart),
-                    EDIT_FONT_SIZE,
-                    s,
-                );
-                segment(f, GlueFieldPart::Selected);
-                caret_bar(
-                    f,
-                    (marker.clone(), GlueFieldPart::CaretAtEnd),
-                    EDIT_FONT_SIZE,
-                    s,
-                );
+                segment(f, GlueFieldPart::SelectedHead);
+                caret_bar(f, (marker.clone(), GlueFieldPart::Caret), EDIT_FONT_SIZE, s);
+                segment(f, GlueFieldPart::SelectedTail);
                 segment(f, GlueFieldPart::After);
             });
     });
@@ -760,6 +770,46 @@ pub(crate) fn glue_button<A: Component>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The selection splits at the caret, so a caret that `HighlightText` left inside the
+    /// selection (`0x77cca0`) draws where it is; an empty selection sits at the caret.
+    #[test]
+    fn the_caret_draws_where_it_is_inside_a_selection() {
+        use GlueFieldPart::*;
+        let mut f = EditBoxState {
+            text: "hello".into(),
+            cursor: 2,
+            ..Default::default()
+        };
+        f.highlight_text(0, -1);
+        let d = f.display();
+        let row = |f: &EditBoxState, focused| {
+            [Before, SelectedHead, Caret, SelectedTail, After]
+                .map(|part| glue_field_part(f, &d, focused, part))
+        };
+        assert_eq!(
+            row(&f, true),
+            [
+                (Some(""), true),
+                (Some("he"), true),
+                (None, true),
+                (Some("llo"), true),
+                (Some(""), true),
+            ]
+        );
+        f.highlight_text(0, 0);
+        assert_eq!(
+            row(&f, false),
+            [
+                (Some("he"), true),
+                (Some(""), true),
+                (None, false),
+                (Some(""), true),
+                (Some("llo"), true),
+            ],
+            "nothing selected, the caret hidden out of focus"
+        );
+    }
 
     #[test]
     fn colour_escapes_become_spans_not_text() {

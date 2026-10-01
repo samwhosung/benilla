@@ -113,9 +113,9 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
             }
             EditUnit::Edge => move_to_edge(lua, h, !back, extend),
             // UP/DOWN fork on `multiLine` (`0x77b64e`, `0x77b675`): a row in a multi-line box,
-            // else history recall (`historyLines`): older, newer, then back to the live draft.
-            // On an alt-arrow box, as the stock chat box is, that is Alt+Up/Down; the reference's
-            // history controller is untraced.
+            // else history recall (`0x77d030`, `0x77cfd0`; benilla's is shell-style, see
+            // `EditBoxState::history_step`). On an alt-arrow box, as the stock chat box is, that is
+            // Alt+Up/Down.
             EditUnit::Row => {
                 if with_eb(lua, h, |eb| eb.multi_line).unwrap_or(false) {
                     // The rows the move reads, measured now when an engine is installed.
@@ -348,7 +348,7 @@ fn move_horizontal(lua: &Lua, h: FrameHandle, right: bool, shift: bool) {
     with_eb(lua, h, |eb| eb.move_by_char(right, shift));
 }
 
-/// Ctrl+Home/End and Cmd+arrow, to the text's edge; `shift` extends the selection.
+/// Ctrl+Home/End and Cmd+Up/Down, to the text's edge; `shift` extends the selection.
 fn move_to_edge(lua: &Lua, h: FrameHandle, end: bool, shift: bool) {
     with_eb(lua, h, |eb| eb.move_to_edge(end, shift));
 }

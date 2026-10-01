@@ -819,8 +819,9 @@ fn the_compose_reset_clears_the_subject_and_the_attachment_together() {
     );
 }
 
-/// A stand-in font engine: each byte 7 wide, each line 14 tall, a multi-line box's rows breaking
-/// after each newline, a trailing one opening none; the texts here never wrap.
+/// A stand-in font engine: each byte 7 wide, each line 14 tall, a multi-line box's rows starting
+/// after each newline, a trailing one opening an empty row as the reference's break routine does
+/// (`0x5c250b`–`0x5c2522`); the texts here never wrap.
 struct Mono;
 
 impl TextMeasure for Mono {
@@ -839,9 +840,7 @@ impl TextMeasure for Mono {
             return Some((cum, vec![0], 0.0));
         }
         let breaks = req.text.match_indices('\n').map(|(i, _)| i + 1);
-        let rows = std::iter::once(0)
-            .chain(breaks.filter(|&i| i < req.text.len()))
-            .collect();
+        let rows = std::iter::once(0).chain(breaks).collect();
         Some((cum, rows, 14.0))
     }
 }

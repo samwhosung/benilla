@@ -57,11 +57,11 @@ pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> 
     }
 }
 
-/// macOS, the Cocoa text-field chords: Option is a word, Cmd the line edge; Up/Down, plain or with
-/// Option, move a row, or recall history in a single-line box. Cocoa's Emacs Ctrl set is left
-/// unbound.
+/// macOS, the Cocoa text-field chords: Option+Left/Right is a word and Cmd+Left/Right the line's
+/// edge; Cmd+Up/Down and Shift+Up/Down go to the text's edge, and Up/Down, plain or with Option,
+/// move a row, or recall history in a single-line box. Cocoa's Emacs Ctrl set is left unbound.
 fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
-    use EditUnit::{Char, Edge, Row, Word};
+    use EditUnit::{Char, Edge, Line, Row, Word};
     let mv = |unit, back| {
         Some(Chord::Edit(EditAction::Move {
             unit,
@@ -74,16 +74,17 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
         KeyCode::ArrowLeft | KeyCode::ArrowRight => {
             let back = key == KeyCode::ArrowLeft;
             if m.sup {
-                mv(Edge, back)
+                mv(Line, back)
             } else if m.alt {
                 mv(Word, back)
             } else {
                 mv(Char, back)
             }
         }
-        // Cmd+Up/Down is the box's start/end; Shift extends there. Option is the reference's Alt,
-        // which its UP and DOWN arms do not read (`0x77b64e`, `0x77b675`), and the one modifier
-        // that keeps the arrows in an alt-arrow box (`0x77b1b3`): the chat box's history recall.
+        // Cmd+Up/Down go to the text's start or end and Shift+Up/Down select to it, as a Cocoa
+        // text field's do. Option is the reference's Alt, which its UP and DOWN arms do not read
+        // (`0x77b64e`, `0x77b675`), and the one modifier that keeps the arrows in an alt-arrow box
+        // (`0x77b1b3`): the chat box's history recall.
         KeyCode::ArrowUp | KeyCode::ArrowDown => {
             let back = key == KeyCode::ArrowUp;
             if m.sup || m.shift {
@@ -231,7 +232,7 @@ mod tests {
         assert_eq!(
             edit(chord(KeyCode::ArrowLeft, us(KeyCode::ArrowLeft), SUP, true)),
             Move {
-                unit: Edge,
+                unit: Line,
                 back: true,
                 extend: false
             }
@@ -430,6 +431,32 @@ mod tests {
             Some(Chord::Cut)
         );
         assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), SUP, false), None);
+    }
+
+    /// On a Mac, Cmd+Left/Right go to the caret's line's start or end, as a Cocoa text view's do;
+    /// in a single-line box, with no newline typed, that is the text's edge.
+    #[test]
+    fn mac_cmd_left_right_go_to_the_lines_edge() {
+        use EditAction::Move;
+        use EditUnit::Line;
+        for (key, back) in [(KeyCode::ArrowLeft, true), (KeyCode::ArrowRight, false)] {
+            assert_eq!(
+                edit(chord(key, us(key), SUP, true)),
+                Move {
+                    unit: Line,
+                    back,
+                    extend: false
+                }
+            );
+            assert_eq!(
+                edit(chord(key, us(key), Mods { shift: true, ..SUP }, true)),
+                Move {
+                    unit: Line,
+                    back,
+                    extend: true
+                }
+            );
+        }
     }
 
     /// On a Mac, Option is the reference's Alt: Option+Up/Down reach the UP and DOWN arms

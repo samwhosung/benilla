@@ -73,6 +73,19 @@ fn a_wrapped_row_is_a_row() {
     assert_eq!(eb.cursor, 2);
 }
 
+/// A trailing newline opens a row of its own (`0x5c250b`–`0x5c2522`), empty and starting at the
+/// text's end: DOWN reaches it, and UP leaves it for column 0 above.
+#[test]
+fn a_trailing_newline_is_a_row_of_its_own() {
+    let mut eb = multi_line("ab\n", vec![0, 3]);
+    eb.cursor = 2;
+    eb.collapse();
+    mv(&mut eb, EditUnit::Row, false, false);
+    assert_eq!(eb.cursor, 3);
+    mv(&mut eb, EditUnit::Row, true, false);
+    assert_eq!(eb.cursor, 0);
+}
+
 /// On the first or last row the caret stays, and a plain UP or DOWN clears the selection there
 /// (`0x77cb50`–`0x77cb8f`) without raising the caret bit.
 #[test]

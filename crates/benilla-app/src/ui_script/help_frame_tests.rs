@@ -241,8 +241,9 @@ fn the_ticket_text_grows_with_its_lines_and_its_scroll_frame_ranges_over_them() 
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A stand-in font engine: each byte 7 wide, each line 14 tall, a multi-line box's rows breaking
-/// after each newline; the texts here never wrap.
+/// A stand-in font engine: each byte 7 wide, each line 14 tall, a multi-line box's rows starting
+/// after each newline, a trailing one opening an empty row as the reference's break routine does
+/// (`0x5c250b`–`0x5c2522`); the texts here never wrap.
 struct Rows;
 
 impl TextMeasure for Rows {
@@ -260,9 +261,7 @@ impl TextMeasure for Rows {
             return Some((cum, vec![0], 0.0));
         }
         let breaks = req.text.match_indices('\n').map(|(i, _)| i + 1);
-        let rows = std::iter::once(0)
-            .chain(breaks.filter(|&i| i < req.text.len()))
-            .collect();
+        let rows = std::iter::once(0).chain(breaks).collect();
         Some((cum, rows, 14.0))
     }
 }

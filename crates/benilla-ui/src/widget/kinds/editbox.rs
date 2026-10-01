@@ -7,10 +7,11 @@ pub enum EditUnit {
     Char,
     /// One word run ([`EditBoxState::word_boundary`]): Ctrl/Option+arrow.
     Word,
-    /// The caret's line, which ends at a newline: HOME/END (`0x77c980`/`0x77c9f0`).
+    /// The caret's line, which ends at a newline: HOME/END (`0x77c980`/`0x77c9f0`), and
+    /// Cmd+Left/Right on a Mac.
     Line,
     /// Text start going back, text end going forward: Ctrl+HOME/END (`0x77ca60`/`0x77cac0`),
-    /// Cmd+arrow.
+    /// and Cmd+Up/Down on a Mac.
     Edge,
     /// One wrapped row up or down: UP/DOWN in a multi-line box (`0x77cb20`). A single-line box
     /// recalls its history instead (`0x77d030`/`0x77cfd0`), older going back.
@@ -72,8 +73,8 @@ pub struct EditBoxState {
     /// The caret texture (`E+0x368`, ctor `0x779c86`), a solid quad above the text. It paints
     /// nothing: the host draws the caret from `caret_shown`.
     pub caret_region: Option<RegionHandle>,
-    /// The submitted lines, oldest first. UP/DOWN recall in a single-line box and the restored
-    /// draft are inferred: the reference's history controller (`0x77b730`) is untraced.
+    /// The submitted lines, oldest first, which UP and DOWN recall in a single-line box
+    /// ([`Self::history_step`]).
     pub history: Vec<String>,
     /// `historyLines`, the most lines kept; 0 (the default) is no history.
     pub history_max: usize,
@@ -225,6 +226,14 @@ impl EditBoxState {
 
     /// One UP (`older`) or DOWN step, returning the text to show: the first UP stashes the draft,
     /// and DOWN past the newest entry restores it.
+    ///
+    /// Deviation: the history browses as a shell's does, a small everyday gain: the first UP
+    /// stashes the line being typed and DOWN past the newest line brings it back, UP holds at the
+    /// oldest, DOWN does nothing when not browsing, typing or a focus gain ends the browse, and an
+    /// empty line is not kept. The reference's history is a ring of `historyLines` slots that
+    /// keeps any line (`0x77cf40`); UP scans back for the previous filled slot, wrapping
+    /// (`0x77d030`), DOWN forward with `idiv` (`0x77cfd0`), each a `SetText` (`0x77be00`), with no
+    /// draft and no stop at either end.
     pub fn history_step(&mut self, older: bool) -> Option<String> {
         if self.history.is_empty() {
             return None;
@@ -716,8 +725,9 @@ impl EditBoxState {
     }
 
     /// HOME/END: the caret back to its line's start or on to its end, a step at a time while the
-    /// byte before the caret (`0x77c99a`), or at it (`0x77ca0e`), is not a newline. A single-line
-    /// box holds no newline, so there it goes to the text's edge.
+    /// byte before the caret (`0x77c99a`), or at it (`0x77ca0e`), is not a newline. With no
+    /// newline it goes to the text's edge, as in a single-line box whose text was typed: typing
+    /// drops a newline there (`0x77c234`–`0x77c240`), though `SetText` keeps one.
     pub fn move_to_line_edge(&mut self, end: bool, extend: bool) {
         self.walk(end, extend, |text, at, _| {
             let bytes = text.as_bytes();
@@ -729,7 +739,7 @@ impl EditBoxState {
         });
     }
 
-    /// Ctrl+HOME/END and Cmd+arrow: the caret to `0` / `len`, a step at a time (`0x77ca60`,
+    /// Ctrl+HOME/END and Cmd+Up/Down: the caret to `0` / `len`, a step at a time (`0x77ca60`,
     /// `0x77cac0`).
     pub fn move_to_edge(&mut self, end: bool, extend: bool) {
         self.walk(end, extend, |_, _, _| true);
@@ -851,9 +861,12 @@ impl EditBoxState {
     /// click (`0x77b800`) and the drag (`0x77a860`). Bit 2 rises only when the caret moved; a
     /// click raises it on its own.
     ///
-    /// Deviation: one mouse move that carries the caret across the anchor selects from the
-    /// anchor, as every OS's own text fields do; the reference's drag applies `0x77cd10` to the
-    /// move's whole delta (`0x77a8a1`), which keeps the far end selected too.
+    /// Deviation: the drag selects from its anchor, as every OS's own text fields do, where the
+    /// reference's applies `0x77cd10` to each mouse move's whole delta (`0x77a8a1`). The two part
+    /// in two cases. One move that carries the caret across the anchor keeps the far end selected
+    /// too in the reference. And a drag that starts with the caret inside a selection, as after a
+    /// focus that selects all, gives `(0, t)` here dragging right to `t`, where the reference
+    /// gives `(t, len)`.
     pub fn move_caret_to(&mut self, target: usize, extend: bool) {
         let from = self.cursor;
         let target = snap_down(&self.text, target.min(self.text.len()));

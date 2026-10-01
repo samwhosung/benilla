@@ -6,7 +6,8 @@ use crate::script::{
 };
 
 /// A stand-in font engine: each byte 7 wide and each line 14 tall, answering the advance table
-/// inline as the host's engine does. A multi-line box's rows break after each newline.
+/// inline as the host's engine does. A multi-line box's rows start after each newline, a trailing
+/// one opening an empty row, as the reference's break routine adds one (`0x5c250b`–`0x5c2522`).
 struct Mono;
 
 impl TextMeasure for Mono {
@@ -24,9 +25,7 @@ impl TextMeasure for Mono {
             return Some((cum, vec![0], 0.0));
         };
         let breaks = req.text.match_indices('\n').map(|(i, _)| i + 1);
-        let rows = std::iter::once(0)
-            .chain(breaks.filter(|&i| i < req.text.len()))
-            .collect();
+        let rows = std::iter::once(0).chain(breaks).collect();
         Some((cum, rows, 14.0))
     }
 }

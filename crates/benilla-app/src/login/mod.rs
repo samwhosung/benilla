@@ -596,21 +596,15 @@ impl Default for LoginForm {
 }
 
 impl LoginForm {
-    /// Give `field` the keyboard, select all its text with the caret at its end and collapse the
-    /// selection in the box left.
-    ///
-    /// Deviation: select on focus and collapse on leaving, because a player entering a login
-    /// field means to replace what is there. The reference's focus gain (`0x77e3f6`) and loss
-    /// (`0x77af50`) leave the selection alone, and its click collapses it (`0x77b800` calls
-    /// `0x77ccf0` before `SetFocus`). The focus change raises the caret bit (`0x77afa8`), whose
-    /// flush restarts the blink (`0x77dd68`, `0x77de35`), so the caret opens solid.
+    /// Give `field` the keyboard as the stock `AccountLogin.xml` boxes take it: the box left drops
+    /// its selection (`OnEditFocusLost`, `HighlightText(0, 0)`), and the box gaining it selects
+    /// all (`OnEditFocusGained`, `HighlightText()`), which leaves its caret where it was
+    /// (`0x77cca0`). The focus change raises the caret bit (`0x77afa8`), whose flush restarts the
+    /// blink (`0x77dd68`, `0x77de35`), so the caret opens solid.
     fn focus(&mut self, field: Field) {
-        self.focused().collapse();
+        self.focused().highlight_text(0, 0);
         self.focus = field;
         let f = self.focused();
-        // `HighlightText` leaves the caret (`0x77cca0`), and the glue row draws it only at an end
-        // of the selection (`GlueFieldPart`).
-        f.cursor = f.text.len();
         f.highlight_text(0, -1);
         f.reset_blink();
     }
@@ -1421,17 +1415,14 @@ mod tests {
         form.account.set_text("remembered");
         form.password.set_text("secret");
 
-        // Mid-blink, caret off and mid-text: the focus restarts it solid, at the end.
+        // Mid-blink, caret off and mid-text: the focus restarts it solid, where it was.
         form.account.caret_shown = false;
         form.account.blink_accum = 0.3;
         form.account.cursor = 3;
         form.focus(Field::Account);
         assert_eq!(form.focus, Field::Account);
         assert_eq!(form.account.selected_text().as_deref(), Some("remembered"));
-        assert_eq!(
-            form.account.cursor, 10,
-            "the glue row draws the caret at an end"
-        );
+        assert_eq!(form.account.cursor, 3, "HighlightText leaves the caret");
         assert!(form.account.caret_shown, "a fresh focus starts solid");
         assert_eq!(form.account.blink_accum, 0.0, "with a full half-period");
 
