@@ -7,6 +7,8 @@
 use benilla_ui::script::{EditAction, EditUnit};
 use bevy::input::keyboard::KeyCode;
 
+use crate::bindings::chord::KeyName;
+
 /// The modifier snapshot a chord is read against; `sup` is Cmd on macOS, the OS key elsewhere.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Mods {
@@ -29,8 +31,24 @@ pub(crate) enum Chord {
     Paste,
 }
 
-/// What `key` under `m` means; `None` falls through to character input.
-pub(crate) fn chord(key: KeyCode, m: Mods, mac: bool) -> Option<Chord> {
+/// What `key`, which the layout names `name`, means under `m`; `None` falls through to character
+/// input.
+pub(crate) fn chord(key: KeyCode, name: Option<KeyName>, m: Mods, mac: bool) -> Option<Chord> {
+    // Ctrl (Cmd on a Mac) with the keys the layout names A, C, X and V: the reference's handler
+    // switches on the key's code (`0x77b1fb`), the name its bindings use, so on AZERTY select-all
+    // is the key labelled A. On the PC `!m.alt` excludes AltGr, which arrives as Ctrl+Alt and types
+    // letters on European layouts (Polish AltGr+A is `ą`); must agree with the char-input branch
+    // in `input.rs`.
+    let held = if mac { m.sup } else { m.ctrl && !m.alt };
+    if let (true, Some(KeyName::Char(letter))) = (held, name) {
+        match letter {
+            'A' => return Some(Chord::Edit(EditAction::SelectAll)),
+            'C' => return Some(Chord::Copy),
+            'X' => return Some(Chord::Cut),
+            'V' => return Some(Chord::Paste),
+            _ => {}
+        }
+    }
     if mac {
         chord_mac(key, m)
     } else {
@@ -94,10 +112,6 @@ fn chord_mac(key: KeyCode, m: Mods) -> Option<Chord> {
                 del(Char, false)
             }
         }
-        KeyCode::KeyA if m.sup => Some(Chord::Edit(EditAction::SelectAll)),
-        KeyCode::KeyC if m.sup => Some(Chord::Copy),
-        KeyCode::KeyX if m.sup => Some(Chord::Cut),
-        KeyCode::KeyV if m.sup => Some(Chord::Paste),
         _ => None,
     }
 }
@@ -152,12 +166,6 @@ fn chord_pc(key: KeyCode, m: Mods) -> Option<Chord> {
         // The reference's other CUA mirrors: Ctrl+Insert copies, Shift+Insert pastes.
         KeyCode::Insert if m.ctrl => Some(Chord::Copy),
         KeyCode::Insert if m.shift => Some(Chord::Paste),
-        // `!m.alt` excludes AltGr, which arrives as Ctrl+Alt and types letters on European
-        // layouts (Polish AltGr+A is `ą`); must agree with the char-input branch in `input.rs`.
-        KeyCode::KeyA if m.ctrl && !m.alt => Some(Chord::Edit(EditAction::SelectAll)),
-        KeyCode::KeyC if m.ctrl && !m.alt => Some(Chord::Copy),
-        KeyCode::KeyX if m.ctrl && !m.alt => Some(Chord::Cut),
-        KeyCode::KeyV if m.ctrl && !m.alt => Some(Chord::Paste),
         _ => None,
     }
 }
@@ -180,6 +188,11 @@ mod tests {
     const ALT: Mods = Mods { alt: true, ..NONE };
     const SUP: Mods = Mods { sup: true, ..NONE };
 
+    /// A key's name on a US layout.
+    fn us(key: KeyCode) -> Option<KeyName> {
+        crate::bindings::chord::key_token(key, &Default::default())
+    }
+
     fn edit(c: Option<Chord>) -> EditAction {
         match c {
             Some(Chord::Edit(a)) => a,
@@ -192,7 +205,12 @@ mod tests {
         use EditAction::*;
         use EditUnit::*;
         assert_eq!(
-            edit(chord(KeyCode::ArrowLeft, NONE, true)),
+            edit(chord(
+                KeyCode::ArrowLeft,
+                us(KeyCode::ArrowLeft),
+                NONE,
+                true
+            )),
             Move {
                 unit: Char,
                 back: true,
@@ -200,7 +218,12 @@ mod tests {
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::ArrowRight, ALT, true)),
+            edit(chord(
+                KeyCode::ArrowRight,
+                us(KeyCode::ArrowRight),
+                ALT,
+                true
+            )),
             Move {
                 unit: Word,
                 back: false,
@@ -208,7 +231,7 @@ mod tests {
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::ArrowLeft, SUP, true)),
+            edit(chord(KeyCode::ArrowLeft, us(KeyCode::ArrowLeft), SUP, true)),
             Move {
                 unit: Edge,
                 back: true,
@@ -218,6 +241,7 @@ mod tests {
         assert_eq!(
             edit(chord(
                 KeyCode::ArrowRight,
+                us(KeyCode::ArrowRight),
                 Mods { shift: true, ..ALT },
                 true
             )),
@@ -227,10 +251,21 @@ mod tests {
                 extend: true
             }
         );
-        assert_eq!(edit(chord(KeyCode::ArrowUp, NONE, true)), HistoryPrev);
-        assert_eq!(edit(chord(KeyCode::ArrowDown, NONE, true)), HistoryNext);
         assert_eq!(
-            edit(chord(KeyCode::ArrowUp, SHIFT, true)),
+            edit(chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), NONE, true)),
+            HistoryPrev
+        );
+        assert_eq!(
+            edit(chord(
+                KeyCode::ArrowDown,
+                us(KeyCode::ArrowDown),
+                NONE,
+                true
+            )),
+            HistoryNext
+        );
+        assert_eq!(
+            edit(chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), SHIFT, true)),
             Move {
                 unit: Edge,
                 back: true,
@@ -238,7 +273,7 @@ mod tests {
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::ArrowDown, SUP, true)),
+            edit(chord(KeyCode::ArrowDown, us(KeyCode::ArrowDown), SUP, true)),
             Move {
                 unit: Edge,
                 back: false,
@@ -246,32 +281,44 @@ mod tests {
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::Backspace, SUP, true)),
+            edit(chord(KeyCode::Backspace, us(KeyCode::Backspace), SUP, true)),
             Delete {
                 unit: Edge,
                 back: true
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::Backspace, ALT, true)),
+            edit(chord(KeyCode::Backspace, us(KeyCode::Backspace), ALT, true)),
             Delete {
                 unit: Word,
                 back: true
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::Delete, ALT, true)),
+            edit(chord(KeyCode::Delete, us(KeyCode::Delete), ALT, true)),
             Delete {
                 unit: Word,
                 back: false
             }
         );
-        assert_eq!(edit(chord(KeyCode::KeyA, SUP, true)), SelectAll);
-        assert_eq!(chord(KeyCode::KeyC, SUP, true), Some(Chord::Copy));
-        assert_eq!(chord(KeyCode::KeyX, SUP, true), Some(Chord::Cut));
-        assert_eq!(chord(KeyCode::KeyV, SUP, true), Some(Chord::Paste));
-        assert_eq!(chord(KeyCode::KeyA, CTRL, true), None);
-        assert_eq!(chord(KeyCode::KeyA, NONE, true), None);
+        assert_eq!(
+            edit(chord(KeyCode::KeyA, us(KeyCode::KeyA), SUP, true)),
+            SelectAll
+        );
+        assert_eq!(
+            chord(KeyCode::KeyC, us(KeyCode::KeyC), SUP, true),
+            Some(Chord::Copy)
+        );
+        assert_eq!(
+            chord(KeyCode::KeyX, us(KeyCode::KeyX), SUP, true),
+            Some(Chord::Cut)
+        );
+        assert_eq!(
+            chord(KeyCode::KeyV, us(KeyCode::KeyV), SUP, true),
+            Some(Chord::Paste)
+        );
+        assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), CTRL, true), None);
+        assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), NONE, true), None);
     }
 
     #[test]
@@ -279,7 +326,12 @@ mod tests {
         use EditAction::*;
         use EditUnit::*;
         assert_eq!(
-            edit(chord(KeyCode::ArrowLeft, CTRL, false)),
+            edit(chord(
+                KeyCode::ArrowLeft,
+                us(KeyCode::ArrowLeft),
+                CTRL,
+                false
+            )),
             Move {
                 unit: Word,
                 back: true,
@@ -287,17 +339,28 @@ mod tests {
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::ArrowRight, SHIFT, false)),
+            edit(chord(
+                KeyCode::ArrowRight,
+                us(KeyCode::ArrowRight),
+                SHIFT,
+                false
+            )),
             Move {
                 unit: Char,
                 back: false,
                 extend: true
             }
         );
-        assert_eq!(edit(chord(KeyCode::ArrowUp, NONE, false)), HistoryPrev);
-        assert_eq!(chord(KeyCode::ArrowUp, SHIFT, false), None);
         assert_eq!(
-            edit(chord(KeyCode::End, SHIFT, false)),
+            edit(chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), NONE, false)),
+            HistoryPrev
+        );
+        assert_eq!(
+            chord(KeyCode::ArrowUp, us(KeyCode::ArrowUp), SHIFT, false),
+            None
+        );
+        assert_eq!(
+            edit(chord(KeyCode::End, us(KeyCode::End), SHIFT, false)),
             Move {
                 unit: Edge,
                 back: false,
@@ -305,26 +368,49 @@ mod tests {
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::Backspace, CTRL, false)),
+            edit(chord(
+                KeyCode::Backspace,
+                us(KeyCode::Backspace),
+                CTRL,
+                false
+            )),
             Delete {
                 unit: Word,
                 back: true
             }
         );
         assert_eq!(
-            edit(chord(KeyCode::Delete, CTRL, false)),
+            edit(chord(KeyCode::Delete, us(KeyCode::Delete), CTRL, false)),
             Delete {
                 unit: Word,
                 back: false
             }
         );
-        assert_eq!(edit(chord(KeyCode::KeyA, CTRL, false)), SelectAll);
-        assert_eq!(chord(KeyCode::KeyC, CTRL, false), Some(Chord::Copy));
-        assert_eq!(chord(KeyCode::KeyV, CTRL, false), Some(Chord::Paste));
-        assert_eq!(chord(KeyCode::Insert, CTRL, false), Some(Chord::Copy));
-        assert_eq!(chord(KeyCode::Insert, SHIFT, false), Some(Chord::Paste));
-        assert_eq!(chord(KeyCode::Delete, SHIFT, false), Some(Chord::Cut));
-        assert_eq!(chord(KeyCode::KeyA, SUP, false), None);
+        assert_eq!(
+            edit(chord(KeyCode::KeyA, us(KeyCode::KeyA), CTRL, false)),
+            SelectAll
+        );
+        assert_eq!(
+            chord(KeyCode::KeyC, us(KeyCode::KeyC), CTRL, false),
+            Some(Chord::Copy)
+        );
+        assert_eq!(
+            chord(KeyCode::KeyV, us(KeyCode::KeyV), CTRL, false),
+            Some(Chord::Paste)
+        );
+        assert_eq!(
+            chord(KeyCode::Insert, us(KeyCode::Insert), CTRL, false),
+            Some(Chord::Copy)
+        );
+        assert_eq!(
+            chord(KeyCode::Insert, us(KeyCode::Insert), SHIFT, false),
+            Some(Chord::Paste)
+        );
+        assert_eq!(
+            chord(KeyCode::Delete, us(KeyCode::Delete), SHIFT, false),
+            Some(Chord::Cut)
+        );
+        assert_eq!(chord(KeyCode::KeyA, us(KeyCode::KeyA), SUP, false), None);
     }
 
     /// AltGr arrives as Ctrl+Alt and types letters on European layouts (Polish `ą`, `ć`, `ź`).
@@ -337,17 +423,48 @@ mod tests {
         };
         for key in [KeyCode::KeyA, KeyCode::KeyC, KeyCode::KeyX, KeyCode::KeyV] {
             assert_eq!(
-                chord(key, ALTGR, false),
+                chord(key, us(key), ALTGR, false),
                 None,
                 "AltGr+{key:?} must reach character input, not act as a clipboard chord"
             );
         }
         assert_eq!(
-            edit(chord(KeyCode::KeyA, CTRL, false)),
+            edit(chord(KeyCode::KeyA, us(KeyCode::KeyA), CTRL, false)),
             EditAction::SelectAll
         );
-        assert_eq!(chord(KeyCode::KeyC, CTRL, false), Some(Chord::Copy));
-        assert_eq!(chord(KeyCode::KeyX, CTRL, false), Some(Chord::Cut));
-        assert_eq!(chord(KeyCode::KeyV, CTRL, false), Some(Chord::Paste));
+        assert_eq!(
+            chord(KeyCode::KeyC, us(KeyCode::KeyC), CTRL, false),
+            Some(Chord::Copy)
+        );
+        assert_eq!(
+            chord(KeyCode::KeyX, us(KeyCode::KeyX), CTRL, false),
+            Some(Chord::Cut)
+        );
+        assert_eq!(
+            chord(KeyCode::KeyV, us(KeyCode::KeyV), CTRL, false),
+            Some(Chord::Paste)
+        );
+    }
+
+    /// Select-all, copy, cut and paste follow the layout's names, as the reference's handler
+    /// switches on the key's code (`0x77b1fb`): on AZERTY they sit on the keys labelled A, C, X
+    /// and V, wherever those are.
+    #[test]
+    fn the_clipboard_chords_sit_on_the_keys_the_layout_names() {
+        let azerty_a = Some(KeyName::Char('A'));
+        let azerty_q = Some(KeyName::Char('Q'));
+        for mac in [false, true] {
+            let held = if mac { SUP } else { CTRL };
+            assert_eq!(
+                edit(chord(KeyCode::KeyQ, azerty_a, held, mac)),
+                EditAction::SelectAll,
+                "the key labelled A (mac: {mac})"
+            );
+            assert_eq!(
+                chord(KeyCode::KeyA, azerty_q, held, mac),
+                None,
+                "the key labelled Q (mac: {mac})"
+            );
+        }
     }
 }

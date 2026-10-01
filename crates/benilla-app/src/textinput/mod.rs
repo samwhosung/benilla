@@ -74,11 +74,13 @@ pub(crate) enum FieldKey {
     Passthrough,
 }
 
-/// Feed one key press to `field`. `wl_display` comes from [`wayland_display`], `None` off Wayland.
+/// Feed one key press to `field`, its letters named by `layout`. `wl_display` comes from
+/// [`wayland_display`], `None` off Wayland.
 pub(crate) fn feed_key(
     field: &mut EditBoxState,
     ev: &KeyboardInput,
     mods: Mods,
+    layout: &crate::bindings::LayoutNames,
     clipboard: &mut HostClipboard,
     wl_display: Option<*mut c_void>,
     filter: CharFilter,
@@ -93,7 +95,8 @@ pub(crate) fn feed_key(
     ) {
         return FieldKey::Passthrough;
     }
-    if let Some(chord) = chord(ev.key_code, mods, cfg!(target_os = "macos")) {
+    let name = crate::bindings::chord::key_token(ev.key_code, layout);
+    if let Some(chord) = chord(ev.key_code, name, mods, cfg!(target_os = "macos")) {
         match chord {
             Chord::Edit(action) => {
                 field.apply(action);

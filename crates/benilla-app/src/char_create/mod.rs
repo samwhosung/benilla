@@ -340,8 +340,9 @@ fn create_input(
     keys: Res<ButtonInput<KeyCode>>,
     catalog: Option<Res<CharCreate>>,
     mut sel: ResMut<CreateSelection>,
-    // The host pasteboard and the window handle its Wayland backend needs.
-    mut clipboard: NonSendMut<HostClipboard>,
+    // The host pasteboard and the window handle its Wayland backend needs, and the layout that
+    // names the clipboard chords' letters.
+    (mut clipboard, layout): (NonSendMut<HostClipboard>, Res<crate::bindings::LayoutNames>),
     raw_handle: Query<&bevy::window::RawHandleWrapper, With<bevy::window::PrimaryWindow>>,
     time: Res<Time>,
     mut preview: ResMut<GluePreview>,
@@ -421,6 +422,7 @@ fn create_input(
             &mut sel.name,
             ev,
             mods,
+            &layout,
             &mut clipboard,
             wl,
             textinput::CharFilter::Letters,

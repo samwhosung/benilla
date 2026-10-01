@@ -92,7 +92,8 @@ pub(super) fn drive_delete_dialog(
         Option<&mut Text>,
         &mut Visibility,
     )>,
-    mut clipboard: NonSendMut<HostClipboard>,
+    // The pasteboard, and the layout that names the clipboard chords' letters.
+    (mut clipboard, layout): (NonSendMut<HostClipboard>, Res<crate::bindings::LayoutNames>),
     // The window drives the glue scale; its raw handle carries the Wayland clipboard's display.
     window: Query<
         (&Window, Option<&bevy::window::RawHandleWrapper>),
@@ -139,6 +140,7 @@ pub(super) fn drive_delete_dialog(
             &mut dialog.typed,
             ev,
             mods,
+            &layout,
             &mut clipboard,
             wl,
             textinput::CharFilter::Any,

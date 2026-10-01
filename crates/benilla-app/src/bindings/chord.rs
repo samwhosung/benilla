@@ -11,7 +11,7 @@ use std::fmt;
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::KeyCode;
 
-use super::layout::LayoutChars;
+use super::layout::{LayoutName, LayoutNames};
 
 /// A key's 1.12 name: one character (`Z`, `1`, `ù`), or a word from the reference's name table
 /// (`F1`, `NUMPAD7`, `SPACE`).
@@ -99,119 +99,25 @@ impl Chord {
     }
 }
 
-/// The 1.12 name a key press gets: a letter or punctuation key its active layout's unshifted
-/// character, every other key its fixed name. `None` for a key the reference names `UNKNOWN`, for
-/// the modifiers, which are only prefixes (`IsKeyPressIgnoredForBinding`), and for an ISO or JIS
-/// extra key its layout reports no character for. Both Enters are `ENTER`.
-pub(crate) fn key_token(k: KeyCode, layout: &LayoutChars) -> Option<KeyName> {
-    match character_key(k) {
-        Some(key) => layout_name(key, layout.get(k)).map(KeyName::Char),
+/// The 1.12 name a key press gets: a letter, digit or punctuation key what the active layout
+/// names it ([`LayoutNames`]), every other key its fixed name. `None` for a key the reference
+/// names `UNKNOWN` or drops, and for the modifiers, which are only prefixes
+/// (`IsKeyPressIgnoredForBinding`). Both Enters are `ENTER`.
+pub(crate) fn key_token(k: KeyCode, layout: &LayoutNames) -> Option<KeyName> {
+    match layout.name(k) {
+        // The lookup folds `a`-`z` up (`0x64b419`), so Turkish `VK_OEM_7`'s `i` is `I`'s key.
+        Some(LayoutName::Char(c)) => Some(KeyName::Char(c.to_ascii_uppercase())),
+        Some(LayoutName::Dropped) => None,
         None => fixed_name(k),
     }
 }
 
-/// A key the reference names by its layout's character: `0x42d800` sends every `VK_A`-`VK_Z` and
-/// `VK_OEM_*` to `MapVirtualKeyA(vk, MAPVK_VK_TO_CHAR)` (`0x42da39`), and the Mac table
-/// (`0x5bf320`) leaves the same keys, `-` and `=` among them, to `KeyTranslate`. The digits are
-/// fixed on both.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CharacterKey {
-    /// A letter position, with the US letter there.
-    Letter(char),
-    /// A punctuation position, with the US character there; the ISO and JIS extras have none.
-    Punctuation(Option<char>),
-}
-
-fn character_key(k: KeyCode) -> Option<CharacterKey> {
-    use CharacterKey::{Letter, Punctuation};
-    use KeyCode::*;
-    Some(match k {
-        KeyA => Letter('A'),
-        KeyB => Letter('B'),
-        KeyC => Letter('C'),
-        KeyD => Letter('D'),
-        KeyE => Letter('E'),
-        KeyF => Letter('F'),
-        KeyG => Letter('G'),
-        KeyH => Letter('H'),
-        KeyI => Letter('I'),
-        KeyJ => Letter('J'),
-        KeyK => Letter('K'),
-        KeyL => Letter('L'),
-        KeyM => Letter('M'),
-        KeyN => Letter('N'),
-        KeyO => Letter('O'),
-        KeyP => Letter('P'),
-        KeyQ => Letter('Q'),
-        KeyR => Letter('R'),
-        KeyS => Letter('S'),
-        KeyT => Letter('T'),
-        KeyU => Letter('U'),
-        KeyV => Letter('V'),
-        KeyW => Letter('W'),
-        KeyX => Letter('X'),
-        KeyY => Letter('Y'),
-        KeyZ => Letter('Z'),
-        Minus => Punctuation(Some('-')),
-        Equal => Punctuation(Some('=')),
-        BracketLeft => Punctuation(Some('[')),
-        BracketRight => Punctuation(Some(']')),
-        Backslash => Punctuation(Some('\\')),
-        Semicolon => Punctuation(Some(';')),
-        Quote => Punctuation(Some('\'')),
-        Comma => Punctuation(Some(',')),
-        Period => Punctuation(Some('.')),
-        Slash => Punctuation(Some('/')),
-        Backquote => Punctuation(Some('`')),
-        // `VK_OEM_102`, and the Mac's ISO section key and JIS keys, are layout keys too.
-        IntlBackslash | IntlRo | IntlYen => Punctuation(None),
-        _ => return None,
-    })
-}
-
-/// The name of a character key whose layout makes `unshifted` there: that character, a letter
-/// uppercased as `MapVirtualKeyA` returns `VK_A`-`VK_Z`, or the US one where the layout reports
-/// none. On AZERTY the key where a US W sits is `Z`.
-///
-/// A letter position that makes a letter of another script keeps its US letter: a Cyrillic,
-/// Greek or Hebrew layout puts `VK_A`-`VK_Z` on the US positions, so the Windows client names
-/// those keys by that letter and the stock `W` `A` `S` `D` still move. Deviation: for a character
-/// outside Latin-1 the Windows key path hands `MapVirtualKeyA`'s ANSI code-page byte to the UTF-8
-/// encoder (`0x41abb0`) as a code point, naming the key by another character, and the Mac drops a
-/// key whose character does not convert to Latin-1 (`0x8a46b`); here it is named by its own.
-fn layout_name(key: CharacterKey, unshifted: Option<char>) -> Option<char> {
-    match (key, unshifted) {
-        (CharacterKey::Letter(us), Some(c)) if c.is_alphabetic() && !is_latin(c) => Some(us),
-        (_, Some(c)) => Some(c.to_ascii_uppercase()),
-        (CharacterKey::Letter(us), None) => Some(us),
-        (CharacterKey::Punctuation(us), None) => us,
-    }
-}
-
-/// Is `c` in a Latin-script block: Basic Latin through the IPA Extensions, or Latin Extended
-/// Additional, -C or -D?
-fn is_latin(c: char) -> bool {
-    c <= '\u{2AF}'
-        || ('\u{1E00}'..='\u{1EFF}').contains(&c)
-        || ('\u{2C60}'..='\u{2C7F}').contains(&c)
-        || ('\u{A720}'..='\u{A7FF}').contains(&c)
-}
-
-/// The fixed half of `0x42d800` and the Mac table: every key that is not a [`character_key`].
+/// The fixed half of `0x42d800` and the Mac table: every key no layout names
+/// ([`super::layout::position`]).
 fn fixed_name(k: KeyCode) -> Option<KeyName> {
     use KeyCode::*;
-    use KeyName::{Char, Word};
+    use KeyName::Word;
     Some(match k {
-        Digit1 => Char('1'),
-        Digit2 => Char('2'),
-        Digit3 => Char('3'),
-        Digit4 => Char('4'),
-        Digit5 => Char('5'),
-        Digit6 => Char('6'),
-        Digit7 => Char('7'),
-        Digit8 => Char('8'),
-        Digit9 => Char('9'),
-        Digit0 => Char('0'),
         F1 => Word("F1"),
         F2 => Word("F2"),
         F3 => Word("F3"),
@@ -330,8 +236,9 @@ fn token_key(t: &str) -> Option<BindKey> {
         "MOUSEWHEELDOWN" => return Some(BindKey::WheelDown),
         _ => {}
     }
-    // One character: a digit, or what some layout's key makes, which the namer writes as UTF-8
-    // (`0x4b66b0`'s `[0x21, 0xff]` arm through `0x41abb0`). It never makes a lowercase letter.
+    // One character: what a layout names some key, which the namer writes as UTF-8 (`0x4b66b0`'s
+    // `[0x21, 0xff]` arm through `0x41abb0`). [`key_token`] folds `a`-`z` up as the lookup does,
+    // so a lowercase letter is no press's name.
     let mut chars = t.chars();
     if let (Some(c), None) = (chars.next(), chars.next()) {
         let pressable = !c.is_control() && !c.is_whitespace() && !c.is_ascii_lowercase();
@@ -434,7 +341,7 @@ mod tests {
                 "{command}: default '{default}' does not parse"
             );
         }
-        let us = LayoutChars::default();
+        let us = LayoutNames::default();
         for k in [
             KeyCode::KeyW,
             KeyCode::Digit0,
@@ -555,7 +462,7 @@ mod tests {
 
     #[test]
     fn the_codec_round_trips_every_keyboard_token() {
-        let us = LayoutChars::default();
+        let us = LayoutNames::default();
         let mut checked = 0;
         for k in [
             KeyCode::KeyW,
@@ -588,7 +495,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn f13_is_print_screen_on_a_mac() {
-        let name = key_token(KeyCode::F13, &LayoutChars::default());
+        let name = key_token(KeyCode::F13, &LayoutNames::default());
         assert_eq!(name, Some(KeyName::Word("PRINTSCREEN")));
         assert_eq!(
             token_key("PRINTSCREEN"),
@@ -649,47 +556,46 @@ mod tests {
         );
     }
 
-    /// A layout as `layout::record_layout_chars` records it from the OS: each key's unshifted
-    /// character.
-    fn layout(keys: &[(KeyCode, &str)]) -> LayoutChars {
-        use bevy::input::keyboard::Key;
-        let mut chars = LayoutChars::default();
+    /// The names a layout gives its keys, as `layout::record_layout_names` keeps them.
+    fn layout(keys: &[(KeyCode, char)]) -> LayoutNames {
+        let mut names = LayoutNames::default();
         for &(k, c) in keys {
-            chars.record(k, &Key::Character(c.into()));
+            names.set(k, Some(LayoutName::Char(c)));
         }
-        chars
+        names
     }
 
-    fn name(k: KeyCode, layout: &LayoutChars) -> Option<String> {
+    fn name(k: KeyCode, layout: &LayoutNames) -> Option<String> {
         key_token(k, layout).map(|n| n.to_string())
     }
 
-    /// 1.12 names a letter or punctuation key by the character the active layout makes on it
-    /// (`MapVirtualKeyA` at `0x42da39`), and every other key by the fixed table.
+    /// 1.12 names a letter, digit or punctuation key what the active layout names it, its ASCII
+    /// letters folded up as the lookup folds them, and every other key by the fixed table. AZERTY
+    /// on Windows: `VK_Z` where a US W sits, `VK_M` on the semicolon key.
     #[test]
-    fn a_letter_or_punctuation_key_is_named_by_its_layouts_character() {
+    fn a_layout_key_is_named_what_its_layout_names_it() {
         use KeyCode::*;
         let mut azerty = layout(&[
-            (KeyW, "z"),
-            (KeyZ, "w"),
-            (KeyQ, "a"),
-            (KeyA, "q"),
-            (Semicolon, "m"),
-            (KeyM, ","),
-            (Comma, ";"),
-            (Period, ":"),
-            (Slash, "!"),
-            (Quote, "ù"),
-            (Backquote, "²"),
-            (Minus, ")"),
-            (BracketRight, "$"),
-            (Backslash, "*"),
-            (IntlBackslash, "<"),
-            // The number row makes `&é"'(-è_çà` unshifted, but its keys are `VK_1`-`VK_0`.
-            (Digit1, "&"),
-            (Digit2, "é"),
+            (KeyW, 'Z'),
+            (KeyZ, 'W'),
+            (KeyQ, 'A'),
+            (KeyA, 'Q'),
+            (Semicolon, 'M'),
+            (KeyM, ','),
+            (Comma, ';'),
+            (Period, ':'),
+            (Slash, '!'),
+            (Quote, 'ù'),
+            (Backquote, '²'),
+            (Minus, ')'),
+            (BracketLeft, '^'),
+            (BracketRight, '$'),
+            (Backslash, '*'),
+            (IntlBackslash, '<'),
+            (Digit1, '1'),
         ]);
-        azerty.record(BracketLeft, &bevy::input::keyboard::Key::Dead(Some('^')));
+        // Turkish Q's `VK_OEM_7` names its key `i`, which the lookup folds to `I`.
+        azerty.set(KeyCode::KeyI, Some(LayoutName::Char('i')));
         for (k, expected) in [
             (KeyW, "Z"),
             (KeyZ, "W"),
@@ -708,7 +614,7 @@ mod tests {
             (Backslash, "*"),
             (IntlBackslash, "<"),
             (Digit1, "1"),
-            (Digit2, "2"),
+            (KeyI, "I"),
             (F1, "F1"),
             (Numpad7, "NUMPAD7"),
             (Space, "SPACE"),
@@ -721,6 +627,9 @@ mod tests {
                 "the stored '{expected}' is that key's chord"
             );
         }
+        // A key its layout drops binds nothing (`0x42da49`).
+        azerty.set(Backquote, Some(LayoutName::Dropped));
+        assert_eq!(name(Backquote, &azerty), None);
     }
 
     /// A US layout, reported or not, names every key as it always has.
@@ -728,14 +637,14 @@ mod tests {
     fn a_us_layout_names_its_keys_as_the_us_positions() {
         use KeyCode::*;
         let reported = layout(&[
-            (KeyW, "w"),
-            (KeyZ, "z"),
-            (Quote, "'"),
-            (Backquote, "`"),
-            (Minus, "-"),
-            (IntlBackslash, "\\"),
+            (KeyW, 'w'),
+            (KeyZ, 'z'),
+            (Quote, '\''),
+            (Backquote, '`'),
+            (Minus, '-'),
+            (IntlBackslash, '\\'),
         ]);
-        let unreported = LayoutChars::default();
+        let unreported = LayoutNames::default();
         for layout in [&reported, &unreported] {
             for (k, expected) in [
                 (KeyW, "W"),
@@ -756,41 +665,10 @@ mod tests {
         );
     }
 
-    /// A non-Latin layout's letter keys keep the US letters Windows gives them as `VK_A`-`VK_Z`,
-    /// so `W` `A` `S` `D` still move; its other keys, and a Latin layout's own letters, are named
-    /// by their characters.
-    #[test]
-    fn a_non_latin_layouts_letter_keys_keep_their_us_letters() {
-        use KeyCode::*;
-        let russian = layout(&[
-            (KeyW, "ц"),
-            (KeyA, "ф"),
-            (KeyS, "ы"),
-            (KeyD, "в"),
-            (Semicolon, "ж"),
-            (Slash, "."),
-            (Period, "ю"),
-        ]);
-        for (k, expected) in [
-            (KeyW, "W"),
-            (KeyA, "A"),
-            (KeyS, "S"),
-            (KeyD, "D"),
-            (Semicolon, "ж"),
-            (Slash, "."),
-            (Period, "ю"),
-        ] {
-            assert_eq!(name(k, &russian).as_deref(), Some(expected), "{k:?}");
-        }
-        let turkish_f = layout(&[(KeyE, "ğ"), (KeyQ, "f")]);
-        assert_eq!(name(KeyE, &turkish_f).as_deref(), Some("ğ"));
-        assert_eq!(name(KeyQ, &turkish_f).as_deref(), Some("F"));
-    }
-
     /// Modifiers are prefixes, never part of the name: Shift+1 is `SHIFT-1`, not `!`.
     #[test]
     fn a_chord_names_its_key_unshifted() {
-        let azerty = layout(&[(KeyCode::KeyW, "z")]);
+        let azerty = layout(&[(KeyCode::KeyW, 'z')]);
         let key = |k| BindKey::Key(key_token(k, &azerty).unwrap());
         assert_eq!(
             Chord::parse("SHIFT-Z").map(|c| (c.shift, c.key)),

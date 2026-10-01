@@ -35,7 +35,7 @@ mod script_input;
 mod store;
 
 use chord::{BindKey, Chord};
-pub(crate) use layout::LayoutChars;
+pub(crate) use layout::LayoutNames;
 pub(crate) use script_input::Input;
 
 /// The chord-to-command map, rebuilt whenever the engine table's generation moves. Probe it
@@ -320,8 +320,8 @@ impl WheelNotches {
 fn latch_and_dispatch(
     mut script: Option<NonSendMut<UiScript>>,
     mut keyboard: MessageReader<KeyboardInput>,
-    // The characters the active layout makes, which name a letter or punctuation press.
-    layout: Res<LayoutChars>,
+    // What the active layout names a letter, digit or punctuation key.
+    layout: Res<LayoutNames>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     scroll: Res<AccumulatedMouseScroll>,
@@ -703,7 +703,7 @@ mod tests {
             .init_resource::<PointerOverUiPanel>()
             .init_resource::<BindingsState>()
             .init_resource::<BindingDispatch>()
-            .init_resource::<LayoutChars>()
+            .init_resource::<LayoutNames>()
             .add_systems(Update, (sync_dispatch, latch_and_dispatch).chain());
         app.insert_non_send_resource(script);
         app
@@ -1198,12 +1198,12 @@ mod tests {
         assert!(!state(&app).fired(Input::ToggleSheath));
     }
 
-    /// The layout's unshifted character on `k`, as `layout::record_layout_chars` records it from
-    /// the key's own OS message, ahead of the press.
-    fn layout_key(app: &mut App, k: KeyCode, unshifted: &str) {
+    /// What the layout names `k`, as `layout::record_layout_names` records it from the key's own
+    /// OS message, ahead of the press.
+    fn layout_key(app: &mut App, k: KeyCode, name: char) {
         app.world_mut()
-            .resource_mut::<LayoutChars>()
-            .record(k, &Key::Character(unshifted.into()));
+            .resource_mut::<LayoutNames>()
+            .set(k, Some(layout::LayoutName::Char(name)));
     }
 
     /// A press with the logical key the OS reports, modifiers applied.
@@ -1218,18 +1218,21 @@ mod tests {
         });
     }
 
-    /// 1.12 binds a letter or punctuation key by the character its layout prints there
-    /// (`MapVirtualKeyA` at `0x42da39`): on AZERTY the key where a US W sits runs `Z`'s binding,
-    /// and `W`'s moves to the key labelled W. Shift is a prefix, never part of the character.
+    /// 1.12 binds a key by what its layout names it: on AZERTY the key where a US W sits is
+    /// `VK_Z` and runs `Z`'s binding, and `W`'s moves to the key labelled W. Shift is a prefix,
+    /// never part of the name.
     #[test]
-    fn a_key_runs_the_binding_of_the_character_its_layout_prints_on_it() {
+    fn a_key_runs_the_binding_of_what_its_layout_names_it() {
         let script = core_script();
         script
-            .run(r#"SetBinding("SHIFT-Z", "TOGGLEUI"); SetBinding("SHIFT-1", "TARGETPREVIOUSENEMY")"#)
+            .run(
+                r#"SetBinding("SHIFT-Z", "TOGGLEUI"); SetBinding("SHIFT-1", "TARGETPREVIOUSENEMY");
+                SetBinding("SHIFT-;", "TARGETNEARESTENEMY")"#,
+            )
             .expect("bind");
         let mut app = vm_harness(script);
-        layout_key(&mut app, KeyCode::KeyW, "z");
-        layout_key(&mut app, KeyCode::KeyZ, "w");
+        layout_key(&mut app, KeyCode::KeyW, 'Z');
+        layout_key(&mut app, KeyCode::KeyZ, 'W');
         type_key(&mut app, KeyCode::KeyW, "z");
         app.update();
         assert!(
@@ -1260,6 +1263,11 @@ mod tests {
         type_key(&mut app, KeyCode::Digit1, "!");
         app.update();
         assert_eq!(lua_count(&app, "STABS"), 1, "SHIFT-1, never SHIFT-!");
+        release_key(&mut app, KeyCode::Digit1);
+        // And Shift+; makes `:`, and is `SHIFT-;`.
+        type_key(&mut app, KeyCode::Semicolon, ":");
+        app.update();
+        assert_eq!(lua_count(&app, "TABS"), 1, "SHIFT-;, never SHIFT-:");
     }
 
     /// A key's name follows a layout switch while running: its next press is named under the
@@ -1267,14 +1275,14 @@ mod tests {
     #[test]
     fn a_layout_switch_renames_a_key_at_its_next_press() {
         let mut app = harness();
-        layout_key(&mut app, KeyCode::KeyW, "z");
+        layout_key(&mut app, KeyCode::KeyW, 'Z');
         type_key(&mut app, KeyCode::KeyW, "z");
         app.update();
         assert!(state(&app).fired(Input::ToggleSheath));
         release_key(&mut app, KeyCode::KeyW);
         app.update();
         // Back on a US layout, the key's next message reports `w`.
-        layout_key(&mut app, KeyCode::KeyW, "w");
+        layout_key(&mut app, KeyCode::KeyW, 'W');
         type_key(&mut app, KeyCode::KeyW, "w");
         app.update();
         assert!(state(&app).pressed(Input::MoveForward));

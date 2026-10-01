@@ -93,7 +93,7 @@ pub(super) fn feed_ui_input(
         NonSendMut<HostClipboard>,
     ),
     // The characters the active layout makes, which name a key for a keyboard frame.
-    layout: Res<crate::bindings::LayoutChars>,
+    layout: Res<crate::bindings::LayoutNames>,
     // The uiScale dial folded into the seam scale.
     ui_scale: Res<super::UiScaleCvar>,
 ) {
@@ -234,8 +234,11 @@ pub(super) fn feed_ui_input(
             KeyCode::Tab => Some("TAB"),
             _ => None,
         };
+        // What the layout names the key: the clipboard chords' letters, and a keyboard frame's
+        // `arg1` below.
+        let token = crate::bindings::chord::key_token(ev.key_code, &layout);
         // Dispatched unconditionally: unfocused, they fall through to the camera and turn keys.
-        let chord = keymap::chord(ev.key_code, mods, mac);
+        let chord = keymap::chord(ev.key_code, token, mods, mac);
         // A keyboard frame gets these by name before their chord runs (a dialog needs BACKSPACE);
         // `frame_key_input` declines at a focused box, so no frame steals its editing keys. `true`
         // suppresses the chord and the key's binding (the reference's existence gate, `0x76b7d0`).
@@ -267,7 +270,7 @@ pub(super) fn feed_ui_input(
         // (`0x765df0`), so the stack-split spinner still gets a digit its `OnKeyDown` ate, and it
         // is not a focus change, so it releases nothing held.
         else if named.is_none() {
-            if let Some(token) = crate::bindings::chord::key_token(ev.key_code, &layout) {
+            if let Some(token) = token {
                 if script.frame_key_input(&token.to_string()) {
                     capture.consumed.push(ev.key_code);
                 }
