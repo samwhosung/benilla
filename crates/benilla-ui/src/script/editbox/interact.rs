@@ -33,13 +33,17 @@ fn index_at_screen_pos(lua: &Lua, h: FrameHandle, x: f32, y: f32) -> usize {
     .unwrap_or(0)
 }
 
-/// A LeftButton press on EditBox `id` (`0x77b800`) places the cursor at the clicked char,
-/// collapsing the selection, starts a drag and takes focus unconditionally; no shift+click branch.
+/// A LeftButton press on EditBox `id` (`0x77b800`) flushes the box first (`0x77b819`), then
+/// places the cursor at the clicked char, collapsing the selection, starts a drag and takes focus
+/// unconditionally; no shift+click branch.
 pub(in crate::script) fn click(lua: &Lua, id: u32, x: f32, y: f32) {
     let Some(h) = editbox_of(lua, id) else { return };
+    super::flush::flush(lua, h);
     let idx = index_at_screen_pos(lua, h, x, y);
     with_eb(lua, h, |eb| {
         eb.move_caret_to(idx, false);
+        // The setter raises bit 2 whether or not the caret moved (`0x77b868` → `0x77e380`).
+        eb.dirty |= crate::widget::EditBoxState::DIRTY_CURSOR;
         eb.drag_active = true;
     });
     set_focus_handle(lua, h);

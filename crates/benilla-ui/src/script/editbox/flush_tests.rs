@@ -1,7 +1,9 @@
 //! The box's flush (`0x77d3e0`) in its place in the tick's walk: after the box's own `OnUpdate`
 //! (`0x77a790`), `OnCursorChanged` then `OnTextChanged`, on the dirty word `[E+0x31c]`.
 
-use crate::script::{EditBoxAdvanceRequest, MeasureRequest, TextMeasure, UiScript};
+use crate::script::{
+    EditAction, EditBoxAdvanceRequest, EditUnit, MeasureRequest, TextMeasure, UiScript,
+};
 
 /// A stand-in font engine: each byte 7 wide and each line 14 tall, answering the advance table
 /// inline as the host's engine does.
@@ -298,5 +300,76 @@ fn a_focus_change_runs_the_caret_leg_of_both_boxes() {
     s.run("B:ClearFocus()").unwrap();
     s.tick(0.016);
     assert_eq!(take_log(&s), "B");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The move helpers step the caret only while it can (`0x77c750` `cursor < len`, `0x77c870`
+/// `cursor > 0`), and only the step raises bit 2 (`0x77c73b`): Right at the end and Home at 0 fire
+/// nothing.
+#[test]
+fn a_caret_move_that_goes_nowhere_raises_nothing() {
+    let mut s = script();
+    logged_box(&mut s);
+    s.run(r#"E:SetText("ab") E:SetFocus()"#).unwrap();
+    s.tick(0.016);
+    take_log(&s);
+    let mut logs = Vec::new();
+    for (what, unit, back) in [
+        ("Right at the end", EditUnit::Char, false),
+        ("Home from the end", EditUnit::Edge, true),
+        ("Home at 0", EditUnit::Edge, true),
+    ] {
+        assert!(s.editbox_action(EditAction::Move {
+            unit,
+            back,
+            extend: false,
+        }));
+        s.tick(0.016);
+        logs.push((what, take_log(&s)));
+    }
+    assert_eq!(
+        logs,
+        [
+            ("Right at the end", "early update late".to_string()),
+            (
+                "Home from the end",
+                "early update cursor@0 late".to_string()
+            ),
+            ("Home at 0", "early update late".to_string()),
+        ]
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// `OnKeyDown` flushes the box before it handles the key (`0x77b1e2`), and a char's key-down comes
+/// before it: keys typed within one frame fire their events per key, ahead of the next key's own
+/// script, so `OnEnterPressed` sees the `OnTextChanged` of the text it ends.
+#[test]
+fn a_key_flushes_the_box_before_it_acts() {
+    let mut s = script();
+    logged_box(&mut s);
+    s.run(
+        r#"
+        E:SetScript("OnEnterPressed", function() table.insert(LOG, "enter") end)
+        E:SetFocus()
+    "#,
+    )
+    .unwrap();
+    s.tick(0.016);
+    take_log(&s);
+    assert!(s.char_input("a"));
+    assert!(s.char_input("b"));
+    assert!(s.key_input("ENTER"));
+    assert_eq!(
+        take_log(&s),
+        "cursor@7 text:a cursor@14 text:ab enter",
+        "one frame, no tick between the keys"
+    );
+    s.tick(0.016);
+    assert_eq!(
+        take_log(&s),
+        "early update late",
+        "nothing left for the walk"
+    );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

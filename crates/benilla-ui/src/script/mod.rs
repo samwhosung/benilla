@@ -422,8 +422,9 @@ const SCRIPT_KINDS: [&str; 39] = [
     "OnTabPressed",
     "OnTextChanged",
     "OnTextSet",
-    // The caret leg's own (`0x77da80`), fired by the box's flush when the caret moved: the edge
-    // `ScrollingEdit_OnCursorChanged` scrolls a multiline box by.
+    // The caret leg's own (`0x77da80`), fired by the box's flush on dirty bit 2, which a caret
+    // move, an edit, a focus change and a re-seat raise: the edge `ScrollingEdit_OnCursorChanged`
+    // scrolls a multiline box by.
     "OnCursorChanged",
     "OnEditFocusGained",
     "OnEditFocusLost",

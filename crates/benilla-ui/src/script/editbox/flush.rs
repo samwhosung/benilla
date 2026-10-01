@@ -19,11 +19,15 @@ pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, dt: f32) {
 /// if bit 0 was set at entry (`0x77d481`–`0x77d498`). So a handler's edit raises bits for the next
 /// flush, a frame later, and never loops inside one: an `OnTextChanged` that sets its own text
 /// fires once more, next frame, and a caret moved by `OnCursorChanged` is cleared with the bit.
+/// Besides the walk, the box's `OnKeyDown` (`0x77b1e2`) and `OnMouseDown` (`0x77b819`) run it
+/// before the key or click acts.
 ///
-/// Deviation: not run from the box's `OnKeyDown` (`0x77b1e2`) or `OnMouseDown` (`0x77b819`),
-/// which flush before the key or click acts, because those only bring a fire sooner within a
-/// frame and every key and click reaches the next walk.
-fn flush(lua: &Lua, h: FrameHandle) {
+/// Deviation: the flush's promotion of bit 2 to bit 0 when the caret has left the display window
+/// (`0x77d3f5`–`0x77d436`), with its IME legs (`0x77d417`–`0x77d431`), and the IME writer's
+/// `or 6` (`0x77acde`, in `0x77ac60`) are not modelled: the promotion only relayouts, which
+/// re-windows a single-line box whose window benilla keeps host-side, and fires nothing, since
+/// bit 0 is sampled before it; benilla has no IME composition.
+pub(super) fn flush(lua: &Lua, h: FrameHandle) {
     let Some((entry, owed)) = with_eb(lua, h, |eb| (eb.dirty, eb.relayout_owed)) else {
         return;
     };
@@ -50,8 +54,9 @@ fn flush(lua: &Lua, h: FrameHandle) {
 /// measures here when the text or font moved. `false` while that table is pending, with no engine
 /// installed, for the next flush to retry: the host answers the focused box's a tick later.
 ///
-/// Deviation: `h` is the row pitch, which is taller than the line height only for a font with
-/// extra spacing (none in the stock UI), because the advance answer carries one measure.
+/// Deviation: `h` is the row pitch the advance answer carries, where the reference passes the line
+/// height (`0x7727b0`): 0 for a single-line box, whose answer has no pitch, and for a multi-line
+/// box taller than the line height only for a font with extra spacing (none in the stock UI).
 fn caret(lua: &Lua, h: FrameHandle) -> bool {
     let id = frame_id_of(lua, h);
     if !event::has_widget_handler(lua, id, "OnCursorChanged") {
@@ -97,7 +102,11 @@ fn caret(lua: &Lua, h: FrameHandle) -> bool {
 }
 
 /// The caret blink (`0x77a7a6`–`0x77a84c`): past the period (0.5 s by default) the focused box's
-/// caret toggles and the accumulator resets; a non-positive period keeps the caret solid.
+/// caret toggles and the accumulator resets; only a period of exactly 0.0 keeps the caret solid
+/// (`0x77a7b4`).
+///
+/// Deviation: not gated on the cursor lying inside the scroll window (`0x77a7bd`–`0x77a7d7`),
+/// which benilla's host keeps around the caret.
 fn blink(lua: &Lua, h: FrameHandle, dt: f32) {
     let focused = lua
         .app_data_ref::<Model>()
@@ -108,7 +117,7 @@ fn blink(lua: &Lua, h: FrameHandle, dt: f32) {
         return;
     }
     with_eb(lua, h, |eb| {
-        if eb.blink_period > 0.0 {
+        if eb.blink_period != 0.0 {
             eb.blink_accum += dt;
             if eb.blink_accum > eb.blink_period {
                 eb.caret_shown = !eb.caret_shown;

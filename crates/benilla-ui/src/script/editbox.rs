@@ -11,8 +11,9 @@
 //! - Editing: an insert replaces the selection; `numeric` aborts a whole insert on any non-digit;
 //!   caps trim from the end (`maxBytes`, then `maxLetters`).
 //! - Events: an edit, a caret move, a focus change or a re-seat of the text only raises the box's
-//!   dirty bits (`[E+0x31c]`); the box's flush, run after its own `OnUpdate` in the tick's walk,
-//!   fires `OnCursorChanged` and then `OnTextChanged` ([`update`]).
+//!   dirty bits (`[E+0x31c]`); the box's flush, run after its own `OnUpdate` in the tick's walk
+//!   ([`update`]) and before a key or click acts on it, fires `OnCursorChanged` and then
+//!   `OnTextChanged`.
 //!
 //! Mouse, selection and caret (click to index `0x77d0d0`, drag `0x77a860`) live in [`interact`]
 //! and [`seam`]; the OS clipboard is host-side, [`paste`] in and `UiScript::editbox_copy` or
@@ -42,6 +43,8 @@ pub(super) fn char_input(lua: &Lua, text: &str) -> bool {
     let Some(h) = route(lua) else {
         return false;
     };
+    // The char's own key-down came first, and `OnKeyDown` flushes (`0x77b1e2`).
+    flush::flush(lua, h);
     if text == "\u{1}" {
         // Ctrl+A selects all (the client's keydown case 0x41/0x61).
         highlight_text(lua, h, 0, -1);
@@ -59,6 +62,7 @@ pub(super) fn paste(lua: &Lua, text: &str) -> bool {
     let Some(h) = route(lua) else {
         return false;
     };
+    flush::flush(lua, h); // Ctrl+V is a key-down (`0x77b1e2`)
     if with_eb(lua, h, |eb| eb.paste(text)).is_some_and(|o| o.text_changed) {
         sync_text_region(lua, h);
     }
@@ -70,6 +74,9 @@ pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
     let Some(h) = route(lua) else {
         return false;
     };
+    // `OnKeyDown` flushes the box before it handles the key (`0x77b1e2`), so the events of the
+    // edits ahead of the key fire first, and per key.
+    flush::flush(lua, h);
     let id = frame_id_of(lua, h);
     match key.to_ascii_uppercase().as_str() {
         // multiLine: Enter inserts a newline (no OnSpacePressed); else fire OnEnterPressed.
@@ -93,6 +100,7 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
     let Some(h) = route(lua) else {
         return false;
     };
+    flush::flush(lua, h); // a key-down (`0x77b1e2`)
     match a {
         EditAction::Move { unit, back, extend } => match unit {
             // The alt-arrow gate lives in the host (`editbox_alt_arrow_mode`), which declines the

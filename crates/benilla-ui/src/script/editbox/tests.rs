@@ -208,29 +208,34 @@ fn click_focuses_regardless_of_autofocus_and_transition_order_is_lost_then_gaine
 
 // ── text buffer + editing + OnTextChanged/OnTextSet ─────────────────────────────────────────
 
-/// An edit only raises the box's `textChanged` bit; `OnTextChanged` fires once, at the drain its
-/// OnUpdate runs (`0x77d3e0`).
+/// An edit only raises the box's `textChanged` bit; `OnTextChanged` fires once, at the flush its
+/// update runs after its `OnUpdate` (`0x77d3e0`), so edits between two flushes coalesce. (A typed
+/// key flushes the box before it acts, `0x77b1e2`, so keys fire per key.)
 #[test]
-fn typing_coalesces_into_one_deferred_ontextchanged() {
+fn edits_between_two_flushes_coalesce_into_one_ontextchanged() {
     let mut s = script();
     s.run(
         r#"
         changed = 0
         E = CreateFrame("EditBox", "E")
         seen = ""
-        E:SetScript("OnTextChanged", function() changed = changed + 1 seen = E:GetText() end)
         E:SetFocus()
     "#,
     )
     .unwrap();
-    assert!(s.char_input("a"));
-    assert!(s.char_input("b"));
-    assert!(s.char_input("c"));
+    s.tick(0.0);
+    s.run(
+        r#"
+        E:SetScript("OnTextChanged", function() changed = changed + 1 seen = E:GetText() end)
+        E:Insert("a") E:Insert("b") E:Insert("c")
+    "#,
+    )
+    .unwrap();
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "abc");
     assert_eq!(
         s.eval::<i64>("return changed").unwrap(),
         0,
-        "the text is already there, but nothing has drained yet"
+        "the text is already there, but nothing has flushed yet"
     );
 
     s.tick(0.0);
@@ -329,20 +334,22 @@ fn paste_inserts_at_the_cursor_and_replaces_the_selection() {
         E:SetScript("OnTextChanged", function() changed = changed + 1 end)
         E:SetText("ab")
         E:SetFocus()
-        changed = 0   -- ignore the setup SetText's fire; count only the pastes below
     "#,
     )
     .unwrap();
-    // SetText leaves the cursor at the end, so the paste appends.
+    s.tick(0.0);
+    s.run("changed = 0").unwrap(); // count only the pastes below
+                                   // SetText leaves the cursor at the end, so the paste appends.
     assert!(s.paste("CD"), "focused box consumes the paste");
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "abCD");
     s.run("E:HighlightText(0, -1)").unwrap();
+    // Ctrl+V is a key-down, which flushes the box before it pastes (`0x77b1e2`): the first
+    // paste's change fires at the second, the second's at the walk.
     assert!(s.paste("xyz"));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "xyz");
-    // Both pastes marked the one box, so the drain fires once.
-    assert_eq!(s.eval::<i64>("return changed").unwrap(), 0);
-    s.tick(0.0);
     assert_eq!(s.eval::<i64>("return changed").unwrap(), 1);
+    s.tick(0.0);
+    assert_eq!(s.eval::<i64>("return changed").unwrap(), 2);
 }
 
 #[test]
@@ -1084,10 +1091,14 @@ fn word_and_edge_deletes() {
     // Inert at the boundary: nothing to delete consumes without firing OnTextChanged.
     s.run("n = 0; E:SetScript('OnTextChanged', function() n = n + 1 end)")
         .unwrap();
+    s.tick(0.0);
+    s.run("n = 0").unwrap(); // the edits above fire at that tick
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
     assert!(s.editbox_action(EditAction::Delete {
         unit: EditUnit::Edge,
         back: true
     }));
+    s.tick(0.0);
     assert_eq!(s.eval::<i64>("return n").unwrap(), 0);
 }
 

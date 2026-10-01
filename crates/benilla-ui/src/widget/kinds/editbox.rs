@@ -133,8 +133,9 @@ impl EditBoxState {
     /// Dirty bit 0, the text changed: every edit raises it, and the flush relayouts (`0x77d447`)
     /// and fires `OnTextChanged` (`0x77d498`).
     pub const DIRTY_TEXT: u8 = 1;
-    /// Dirty bit 2, the caret moved: every cursor write raises it (`0x77e380`), and the flush runs
-    /// the caret leg (`0x77d475` → `0x77da80`), which fires `OnCursorChanged`. Bit 1, the
+    /// Dirty bit 2, the caret: the cursor setter (`0x77e380`), a step that moves it (`0x77c73b`),
+    /// an edit, a focus change and a re-seat of the text raise it, and the flush runs the caret
+    /// leg (`0x77d475` → `0x77da80`), which fires `OnCursorChanged`. Bit 1, the
     /// highlight's (`0x77d950`), has no counterpart: the host paints the selection each frame.
     pub const DIRTY_CURSOR: u8 = 4;
 
@@ -598,7 +599,9 @@ impl EditBoxState {
         }
         self.sel_start = snap_down(&self.text, s as usize);
         self.sel_end = snap_down(&self.text, e as usize);
-        // The caret goes to the selection's end, a cursor write when it moves.
+        // benilla moves the caret to the selection's end where the reference does not:
+        // `0x77cca0` writes only the selection (`+0x35c`/`+0x360`) and raises bit 1 (`0x77ccc8`).
+        // Bit 2 rises here only with that move.
         if self.cursor != self.sel_end {
             self.cursor = self.sel_end;
             self.dirty |= Self::DIRTY_CURSOR;
@@ -655,8 +658,11 @@ impl EditBoxState {
     }
 
     /// Left or Right one step, `extend` dragging the selection; without it, a selection collapses
-    /// to its edge instead.
+    /// to its edge instead. Bit 2 rises only when the caret moved: the helpers step it only while
+    /// it can (`0x77c750` `cursor < len`, `0x77c870` `cursor > 0`), and the step raises the bit
+    /// (`0x77c73b`).
     pub fn move_by_char(&mut self, right: bool, extend: bool) {
+        let from = self.cursor;
         // One token step, links atomic (`0x77bb30`, `atomicLinks = 1` at `0x77c6d2`): a press
         // crosses a whole link, never into an escape, and Shift+arrow selects all of it.
         let step = |s: &str, i: usize| {
@@ -674,7 +680,9 @@ impl EditBoxState {
             self.collapse();
         }
         self.reset_blink();
-        self.dirty |= Self::DIRTY_CURSOR;
+        if self.cursor != from {
+            self.dirty |= Self::DIRTY_CURSOR;
+        }
     }
 
     /// Ctrl/Option+arrow: the caret to the [`word_boundary`](Self::word_boundary) by single atomic
@@ -705,8 +713,11 @@ impl EditBoxState {
         self.move_caret_to(target, extend);
     }
 
-    /// Place the caret at `target`, extending the selection from its anchor when `extend`.
+    /// Place the caret at `target`, extending the selection from its anchor when `extend`. Bit 2
+    /// rises only when the caret moved, as for the word and edge helpers, which step it only while
+    /// it can (`0x77c7a0`/`0x77c8c0`, `0x77ca60`/`0x77cac0`); a click raises it on its own.
     pub fn move_caret_to(&mut self, target: usize, extend: bool) {
+        let from = self.cursor;
         let target = snap_down(&self.text, target.min(self.text.len()));
         if extend {
             let anchor = self.selection_anchor();
@@ -717,7 +728,9 @@ impl EditBoxState {
             self.collapse();
         }
         self.reset_blink();
-        self.dirty |= Self::DIRTY_CURSOR; // the setter `0x77e360`, `or 4` at `0x77e380`
+        if self.cursor != from {
+            self.dirty |= Self::DIRTY_CURSOR;
+        }
     }
 
     fn delete_selection(&mut self) {
