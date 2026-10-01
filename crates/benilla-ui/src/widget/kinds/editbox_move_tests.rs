@@ -31,9 +31,8 @@ fn mv(eb: &mut EditBoxState, unit: EditUnit, back: bool, extend: bool) {
 }
 
 /// UP/DOWN keep the caret's letter column across rows (`0x77bc80` then `0x77bb30`), and a walk
-/// that reaches the next row's start steps back one (`0x77cbcb`–`0x77cbdd`): before the newline
-/// that ends a row, and before the last letter on the last row, whose next start is the text's
-/// length (`0x77d6ef`).
+/// that reaches the next row's start steps back one (`0x77cbc6`–`0x77cbdd`), before the newline
+/// that ends a row. On the last row it may end at the text's end (the declared deviation).
 #[test]
 fn up_and_down_keep_the_letter_column_across_rows() {
     // "abc\n" | "defgh\n" | "ij"
@@ -48,10 +47,7 @@ fn up_and_down_keep_the_letter_column_across_rows() {
     mv(&mut eb, EditUnit::Row, false, false);
     assert_eq!(eb.cursor, 7, "column 3 on the middle row");
     mv(&mut eb, EditUnit::Row, false, false);
-    assert_eq!(
-        eb.cursor, 11,
-        "column 3 on \"ij\": held before its last letter"
-    );
+    assert_eq!(eb.cursor, 12, "column 3 on \"ij\": the text's end");
     assert_eq!(
         eb.dirty & EditBoxState::DIRTY_CURSOR,
         EditBoxState::DIRTY_CURSOR
@@ -195,6 +191,23 @@ fn a_multi_step_shift_move_extends_step_by_step() {
     eb.highlight_text(2, 8);
     mv(&mut eb, EditUnit::Line, false, true);
     assert_eq!((eb.cursor, eb.sel_start, eb.sel_end), (10, 8, 10));
+}
+
+/// Left at the text's start does not step (`0x77c870` tests `cursor > 0`), so neither the caret
+/// bit nor the blink's restart comes; a real step brings both.
+#[test]
+fn a_char_move_that_goes_nowhere_leaves_the_blink() {
+    let mut eb = at("ab", 0);
+    eb.dirty = 0;
+    eb.caret_shown = false;
+    eb.blink_accum = 0.3;
+    mv(&mut eb, EditUnit::Char, true, false);
+    assert_eq!((eb.cursor, eb.dirty, eb.caret_shown), (0, 0, false));
+    assert_eq!(eb.blink_accum, 0.3);
+    mv(&mut eb, EditUnit::Char, false, false);
+    assert_eq!(eb.cursor, 1);
+    assert_eq!(eb.dirty, EditBoxState::DIRTY_CURSOR);
+    assert!(eb.caret_shown && eb.blink_accum == 0.0);
 }
 
 /// A plain Left or Right with a selection collapses it to that edge (the declared deviation).

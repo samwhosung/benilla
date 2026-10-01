@@ -482,3 +482,31 @@ fn up_and_down_move_a_multi_line_boxs_caret_by_rows() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// `OnCursorChanged`'s `y` starts at 0 and loses one row pitch per row above the caret
+/// (`0x77dae1`, `0x77db31`): a single-line box, and a multi-line box's first row, report +0, which
+/// Lua prints as "0", never "-0".
+#[test]
+fn on_cursor_changed_reports_the_first_row_at_plus_zero() {
+    let mut s = script();
+    logged_box(&mut s);
+    s.run(
+        r#"
+        E:SetScript("OnCursorChanged", function() table.insert(LOG, tostring(arg2)) end)
+        E:SetText("ab")
+    "#,
+    )
+    .unwrap();
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "early update 0 text:ab late", "single-line");
+    s.run(r#"E:SetMultiLine(true) E:SetText("a\nb")"#).unwrap();
+    s.tick(0.016);
+    s.run(r#"E:SetText("c")"#).unwrap();
+    s.tick(0.016);
+    assert_eq!(
+        take_log(&s),
+        "early update -14 text:a\nb late early update 0 text:c late",
+        "multi-line, the second row and then the first"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

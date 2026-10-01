@@ -94,7 +94,10 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
             (0, eb.advances[cursor_d])
         };
         let pitch = eb.cell_h;
-        Some((x, -(row as f32) * pitch, pitch))
+        // `y` starts at 0 and loses one pitch per row above the caret (`0x77dae1`, `0x77db31`),
+        // so row 0 reports +0, never the -0 that Lua prints as "-0".
+        let y = 0.0 - row as f32 * pitch;
+        Some((x, y, pitch))
     })
     .flatten();
     let Some((x, y, pitch)) = args else {

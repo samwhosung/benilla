@@ -671,9 +671,10 @@ impl EditBoxState {
         did
     }
 
-    /// Left or Right one step, `extend` dragging the selection ([`Self::extend_to`]). Bit 2 rises
-    /// only when the caret moved: the helpers step it only while it can (`0x77c750`
-    /// `cursor < len`, `0x77c870` `cursor > 0`), and the step raises the bit (`0x77c73b`).
+    /// Left or Right one step, `extend` dragging the selection ([`Self::extend_to`]). Bit 2 and
+    /// the blink's restart come only when the caret moved: the helpers step it only while it can
+    /// (`0x77c750` `cursor < len`, `0x77c870` `cursor > 0`), and the step raises the bit
+    /// (`0x77c73b`), whose flush restarts the blink (`0x77dd68`).
     pub fn move_by_char(&mut self, right: bool, extend: bool) {
         let from = self.cursor;
         // One token step, links atomic (`0x77bb30`, `atomicLinks = 1` at `0x77c6d2`): a press
@@ -695,8 +696,8 @@ impl EditBoxState {
             self.cursor = target;
             self.collapse();
         }
-        self.reset_blink();
         if self.cursor != from {
+            self.reset_blink();
             self.dirty |= Self::DIRTY_CURSOR;
         }
     }
@@ -738,10 +739,13 @@ impl EditBoxState {
     /// same column of the wrapped row above or below. The column is the letters from the row's
     /// start to the caret (`0x77bc80`), walked out from the target row's start with links not
     /// atomic (`0x77bb30`, `atomicLinks = 0` pushed at `0x77cba4`). A walk that reaches the next
-    /// row's start, or on the last row the text's end (`0x77d6ef`), steps back one stop
-    /// (`0x77cbc6`–`0x77cbdd`). On the first or last row the caret stays, and without `extend` the
-    /// selection clears (`0x77cb50`). The rows are the draw's ([`Self::rows`]), one while they are
-    /// unmeasured.
+    /// row's start steps back one stop (`0x77cbc6`–`0x77cbdd`). On the first or last row the caret
+    /// stays, and without `extend` the selection clears (`0x77cb50`). The rows are the draw's
+    /// ([`Self::rows`]), one while they are unmeasured.
+    ///
+    /// Deviation: on the last row a walk may end at the text's end, because the end starts no row;
+    /// the reference steps back from it as from a row's start (its line table ends with the
+    /// text's length, `0x77d6ef`), so DOWN onto a short last line stops before its last letter.
     pub fn move_by_row(&mut self, down: bool, extend: bool) {
         let len = self.text.len();
         let display_len = self.display().len();
@@ -780,7 +784,7 @@ impl EditBoxState {
         let column = map.letters(starts[row], self.cursor - starts[row]);
         let (start, next) = (starts[target], starts[target + 1]);
         let mut to = map.advance(start, column as isize, false);
-        if next > start && to >= next {
+        if target + 1 < rows && next > start && to >= next {
             to = map.advance(next, -1, false);
         }
         if extend {
@@ -844,10 +848,12 @@ impl EditBoxState {
     }
 
     /// Place the caret at `target`, extending the selection from its anchor when `extend`: the
-    /// click (`0x77b800`) and the drag (`0x77a860`). The reference's drag applies `0x77cd10` with
-    /// each mouse move's whole delta, which agrees with the anchor except when one move carries
-    /// the caret across it, where `0x77cd10` keeps the far end selected too. Bit 2 rises only when
-    /// the caret moved; a click raises it on its own.
+    /// click (`0x77b800`) and the drag (`0x77a860`). Bit 2 rises only when the caret moved; a
+    /// click raises it on its own.
+    ///
+    /// Deviation: one mouse move that carries the caret across the anchor selects from the
+    /// anchor, as every OS's own text fields do; the reference's drag applies `0x77cd10` to the
+    /// move's whole delta (`0x77a8a1`), which keeps the far end selected too.
     pub fn move_caret_to(&mut self, target: usize, extend: bool) {
         let from = self.cursor;
         let target = snap_down(&self.text, target.min(self.text.len()));

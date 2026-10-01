@@ -906,13 +906,12 @@ fn the_letter_body_moves_its_caret_by_rows_and_lines() {
     s.char_input("?");
     assert_eq!(
         body(&s),
-        "Dear Thrall,\n-the ore!\nis late?.",
-        "END, then DOWN at column 9: held before the last letter, the text's end counting as \
-         the next row's start"
+        "Dear Thrall,\n-the ore!\nis late.?",
+        "END, then DOWN at column 9: past the last line's letters, to the text's end"
     );
     mv(&mut s, EditUnit::Edge, true);
     s.char_input(">");
-    assert_eq!(body(&s), ">Dear Thrall,\n-the ore!\nis late?.", "Ctrl+HOME");
+    assert_eq!(body(&s), ">Dear Thrall,\n-the ore!\nis late.?", "Ctrl+HOME");
     assert!(s.take_errors().is_empty(), "and nothing raised on the way");
 }
 
