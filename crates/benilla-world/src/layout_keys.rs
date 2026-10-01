@@ -10,9 +10,9 @@
 //! takes that named key's code, before Bevy's input collection, so every reader (the bindings,
 //! the text boxes, the glue screens, `ButtonInput<KeyCode>`) sees the layout's key. The Mac client
 //! reads its non-character keys off a fixed table on the physical keycode (`0x5bf320`), so macOS
-//! keeps them physical. A character key keeps its code too: 1.12 names it by the layout's own
-//! character (`MapVirtualKeyA` at `0x42da39`), which the game's key namer reads, not by a named
-//! key. So do the numpad keys, whose Num Lock navigation meanings are not remaps.
+//! keeps them physical. A letter, digit or punctuation key keeps its code too: 1.12 names it by
+//! what the layout makes it (`MapVirtualKeyA` at `0x42da39`), which the game's key namer reads,
+//! not by a named key. So do the numpad keys, whose Num Lock navigation meanings are not remaps.
 
 #[cfg(any(not(target_os = "macos"), test))]
 use bevy::input::keyboard::{Key, KeyCode};

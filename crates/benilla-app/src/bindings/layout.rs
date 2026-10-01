@@ -391,8 +391,8 @@ mod mac {
 /// The Linux name of a letter or punctuation key, `None` to keep what the key had. No 1.12 client
 /// ran on Linux, so this is the closest consistent rule: a letter position takes an ASCII letter or
 /// ASCII punctuation the layout types there, and anything else there (another script's letter, an
-/// accented letter, a mark) keeps its US letter, as Windows puts `VK_A`-`VK_Z` on the US positions
-/// of such layouts; any other key takes its character. A dead keysym has no character
+/// accented letter, a mark) keeps its US letter, as Windows keeps `VK_A`-`VK_Z` there on nearly
+/// every such layout; any other key takes its character. A dead keysym has no character
 /// (`key_without_modifiers` is `Unidentified`), so it takes the dead key's own character from a
 /// press with no modifier held, and otherwise keeps what it had.
 #[cfg(any(target_os = "linux", test))]
