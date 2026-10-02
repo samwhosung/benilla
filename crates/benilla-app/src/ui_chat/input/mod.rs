@@ -88,7 +88,7 @@ pub(super) struct ChatOut<'w, 's> {
     console: Commands<'w, 's>,
     stand: MessageWriter<'w, crate::player::StandStateRequest>,
     sheath: MessageWriter<'w, crate::creature_anim::SheathRequest>,
-    /// `DoEmote`'s local play (`0x5ef5b6`).
+    /// `DoEmote`'s local play (`0x5ef660`).
     anim: MessageWriter<'w, crate::creature_anim::EmoteAnim>,
     target: MessageWriter<'w, crate::target::TargetByNameRequest>,
     assist: MessageWriter<'w, crate::target::AssistRequest>,
@@ -745,7 +745,7 @@ pub(super) fn drain_chat_input(
                         .stand
                         .write(crate::player::StandStateRequest { state: state as u8 });
                 }
-                // The play (`0x5ef5b6`) is the posture branch's else: a posture emote plays no clip,
+                // The play (`0x5ef660`, `0x5fe2f0` at `0x5ef66f`) is the posture branch's else: a posture emote plays no clip,
                 // and the rest play here only while moving. Its `SMSG_EMOTE` echo then finds the
                 // id armed and is skipped (`0x5fcd56`).
                 else if let (Some(anim), Ok((entity, m, _)), Ok(store)) = (

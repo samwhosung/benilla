@@ -68,8 +68,8 @@ pub(super) fn receive_eligible(stand_state: u8, swimming: bool) -> bool {
 /// The shared player's half, `0x5fcd20`: no play while channeling (`0x5fcd83`) or in combat
 /// (`0x5fcd9d`), and LiftOff (192) and Land (200) skip the combat test alone (`0x5fcd5f`/`0x5fcd67`
 /// set the flag that `0x5fcd90` branches past `0x60ecd0` on; the channel test at `0x5fcd83` runs
-/// first). Its already-armed test (`0x5fcd5d`) is the driver's same-id dedup, and its
-/// `[+0xd58] & 0x400` test (`0x5fcd8e`, a cast in progress) has no counterpart here.
+/// first). Its already-armed test (`0x5fcd5d`) is the driver's `armed_id`, and its
+/// `[+0xd58] & 0x400` test (`0x5fcd8e`, the weapon-visual hold) is [`super::RangedHold`].
 fn player_eligible(anim_id: u32, channeling: bool, in_combat: bool) -> bool {
     let exempt = anim_id == u32::from(select::LIFT_OFF) || anim_id == u32::from(select::LAND);
     !channeling && (exempt || !in_combat)
@@ -117,13 +117,16 @@ pub(crate) struct LocalPlay {
 /// Move flags that void the turn-shuffle test: HOVER, SWIMMING and `0x800` (`0x5fce5d`).
 const SHUFFLE_VOID: u32 = move_flags::HOVER | move_flags::SWIMMING | 0x800;
 
-/// `0x5fd680`, the gate on `DoEmote`'s local play (`0x5ef5b6`): the emote plays at once only while
+/// `0x5fd680`, the gate on `DoEmote`'s local play (`0x5ef660`, then `0x5fe2f0` at `0x5ef66f`): the emote plays at once only while
 /// a direction key is held, and every other case waits for the server's `SMSG_EMOTE`. It refuses
 /// the dead (`0x605f90`), a unit both jumping and falling far (`0x5fd6a9`), a jump with vertical
 /// speed (`0x5fd6c5`), a kneeling looter (`0x5fd6e7`), a channel (`0x5fd701`), an auto-attack
-/// target (`0x5fd721`), a turn shuffle (`0x5fd72c`) and any stand state but 0 (`0x5fd74d`, and
-/// the cached `[+0xc1c]` at `0x5fd757`, which tracks it). The `[+0xd58]` test at `0x5fd711` reads
-/// a cast-in-progress bit with no counterpart here, and the ranged auto-repeat test (`0x5fd735`)
+/// target (`0x5fd721`), a turn shuffle (`0x5fd72c`, approximated) and any stand state but 0 (`0x5fd74d`, and
+/// the cached `[+0xc1c]` at `0x5fd757`, which tracks it). The `[+0xd58]` test at `0x5fd711` refuses
+/// only when both 0x400 ([`super::RangedHold`]) and 0x10000 (unmodelled) are set, and so is not
+/// tested here; the turn-shuffle test approximates `0x5fce30`, which also exempts on the armed id,
+/// exempts on `d58 & 0xc` and fires on the mouse-turn latch `d58 & 0x1800`. The ranged auto-repeat
+/// test (`0x5fd735`)
 /// needs sheath state 2, which the stow `DoEmote` runs first (`0x611cf0(0)`) has cleared.
 pub(crate) fn local_play_eligible(i: &LocalPlay) -> bool {
     let f = i.move_flags;
@@ -295,7 +298,7 @@ mod tests {
         for (n, i) in refused.iter().enumerate() {
             assert!(!local_play_eligible(i), "case {n}");
         }
-        // A jump at its apex, and a turn while swimming or on a flying spline, pass.
+        // A jump whose vertical speed reads exactly 0.0 (a step-off fall's first tick), and a turn while swimming or on a flying spline, pass.
         for i in [
             LocalPlay {
                 move_flags: move_flags::FORWARD | move_flags::FALLING,

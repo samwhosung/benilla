@@ -4159,6 +4159,89 @@ mod routing {
         );
     }
 
+    /// The armed id is the requested one (`0x712090` returns `+0xf8`, op4's raw argument), not
+    /// the clip a fallback plays: Stand runs on bone 0 while 68 is the requested id.
+    #[test]
+    fn the_armed_id_is_the_requested_one_not_the_fallback_clip() {
+        use super::super::super::select::Mode;
+        let mut app = app();
+        let unit = spawn(&mut app, model(vec![clip(0, 1, true)]), 0);
+        app.update();
+        let armed = |app: &App| {
+            let e = app.world().entity(unit);
+            super::super::armed_id(
+                e.get::<AnimDriver>().unwrap(),
+                e.get::<AnimationPlayer>().unwrap(),
+                e.get::<AnimationTransitions>().unwrap(),
+                e.get::<ModelAnimations>().unwrap(),
+            )
+        };
+        assert_eq!(armed(&app), Some(0), "Stand requested, Stand playing");
+        app.world_mut()
+            .entity_mut(unit)
+            .get_mut::<AnimDriver>()
+            .unwrap()
+            .mode = Mode::Swing {
+            id: CHEER,
+            under: None,
+        };
+        assert_eq!(armed(&app), Some(CHEER), "the requested id, not clip 0");
+    }
+
+    /// A mounted rider's mount-set emote is tested once, on the rider: an id the rider has armed
+    /// is not forwarded to the mount child.
+    #[test]
+    fn a_rider_armed_id_stops_the_forward_to_the_mount() {
+        use super::super::super::select::Mode;
+        let mut app = app();
+        let rider = spawn(&mut app, model(vec![clip(0, 1, true)]), 1);
+        let child = app
+            .world_mut()
+            .spawn((
+                model(vec![clip(0, 1, true), clip(SHUFFLE, 2, false)]),
+                AnimationPlayer::default(),
+                AnimationTransitions::new(),
+                AnimDriver::default(),
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(rider)
+            .insert(crate::entities::mount::MountChild(child));
+        app.update();
+        let child_mode = |app: &App| app.world().entity(child).get::<AnimDriver>().unwrap().mode;
+        let send = |app: &mut App, via_player: bool| {
+            app.world_mut().write_message(EmoteAnim {
+                entity: rider,
+                anim_id: SHUFFLE,
+                seq: 1,
+                via_player,
+            });
+            app.update();
+        };
+        // A control: a kit anim (no armed test) is forwarded.
+        send(&mut app, false);
+        assert!(
+            matches!(child_mode(&app), Mode::Swing { id: SHUFFLE, .. }),
+            "the mount-set emote reaches the mount"
+        );
+        app.world_mut()
+            .entity_mut(child)
+            .get_mut::<AnimDriver>()
+            .unwrap()
+            .mode = Mode::Gait;
+        // The rider has it armed: the player's test refuses before the forward.
+        app.world_mut()
+            .entity_mut(rider)
+            .get_mut::<AnimDriver>()
+            .unwrap()
+            .mode = Mode::Swing {
+            id: SHUFFLE,
+            under: None,
+        };
+        send(&mut app, true);
+        assert_eq!(child_mode(&app), Mode::Gait, "not forwarded to the mount");
+    }
+
     /// `DoEmote`'s local play (`0x5fe2f0`) arms the clip at once; the `SMSG_EMOTE` echo that follows
     /// through the emote player finds the id armed (`0x5fcd56`) and leaves it running.
     #[test]
