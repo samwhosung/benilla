@@ -472,13 +472,11 @@ fn ranged_load_idle_selects_by_weapon_and_ranks_below_ready() {
         gait_candidates(&moving_forward(3.0), 2.5, None, Some(105))[0],
         4
     );
-    // It takes the bare-Stand slot, so it also blocks the state-emote idle.
-    assert!(!is_bare_stand(gait_candidates(
-        &standing,
-        2.5,
-        None,
-        Some(105)
-    )));
+    // It outranks the state-emote resolver (`0x5fd460` runs before `0x5fd770`).
+    assert_eq!(
+        base_candidates(&standing, 2.5, None, Some(105), Some(234)).as_slice(),
+        &[105, 25, 0]
+    );
 }
 
 /// `0x5fd460` claims the drawn ranged idle ([`ranged_idle_gate`]) on the ranged sheath
@@ -510,46 +508,83 @@ fn each_ranged_load_promotes_to_its_weapon_familys_hold() {
     assert_eq!(ranged_hold_anim(46), 46); // a fire id is no Load and maps onto no hold
 }
 
+/// The state-emote resolver (`0x5fd770`) runs right after the chair loops and before the idle
+/// fallback (`0x5fd830`, `0x5fd9a1`): a set state outranks the swim idle, the prowl idle and
+/// Stand, and everything ahead of it outranks the state.
 #[test]
-fn state_emote_idle_only_fills_the_bare_stand_slot() {
-    assert!(is_bare_stand(gait_candidates(
-        &MovementState::default(),
-        2.5,
-        None,
-        None
-    )));
-    assert_eq!(state_emote_gait(200), [200, STAND]);
-
-    assert!(!is_bare_stand(gait_candidates(
-        &moving_forward(3.0),
-        2.5,
-        None,
-        None
-    )));
-    let turning = MovementState {
-        flags: move_flags::TURN_LEFT,
-        ..Default::default()
+fn a_set_state_outranks_the_idle_fallbacks_and_nothing_before_them() {
+    let claimed = |state: &MovementState, ready, ranged, anim| {
+        base_candidates(state, 2.5, ready, ranged, anim)
+            .as_slice()
+            .to_vec()
     };
-    assert!(!is_bare_stand(gait_candidates(&turning, 2.5, None, None)));
+    let still = MovementState::default();
+    assert_eq!(claimed(&still, None, None, Some(234)), [234, STAND]);
+    assert_eq!(claimed(&still, None, None, None), [STAND]);
+
+    // Behind it: the swim idle (`/stand`, state 26, plays AnimID 0) and the prowl idle.
     let swimming = MovementState {
         flags: move_flags::SWIMMING,
         ..Default::default()
     };
-    assert!(!is_bare_stand(gait_candidates(&swimming, 2.5, None, None)));
-    assert!(!is_bare_stand(gait_candidates(
-        &MovementState::default(),
-        2.5,
-        Some(26),
-        None
-    )));
-    // The chair stand states 4, 5 and 6 have their own slot, above bare Stand.
-    for stand_state in [4, 5, 6] {
-        let chair = MovementState {
-            stand_state,
-            ..Default::default()
-        };
-        assert!(!is_bare_stand(gait_candidates(&chair, 2.5, None, None)));
-    }
+    assert_eq!(claimed(&swimming, None, None, None), [41, 0]);
+    assert_eq!(claimed(&swimming, None, None, Some(0)), [0, STAND]);
+    assert_eq!(claimed(&swimming, None, None, Some(234)), [234, STAND]);
+    let prowling = MovementState {
+        stealthed: true,
+        ..Default::default()
+    };
+    assert_eq!(claimed(&prowling, None, None, None), [STEALTH_STAND, STAND]);
+    assert_eq!(claimed(&prowling, None, None, Some(234)), [234, STAND]);
+
+    // Ahead of it: locomotion (`0x5fd100`), swimming included, runs on the move bits alone.
+    let swim_forward = MovementState {
+        flags: move_flags::SWIMMING | move_flags::FORWARD,
+        ..Default::default()
+    };
+    assert_eq!(claimed(&swim_forward, None, None, Some(234)), [42, 41, 0]);
+    assert_eq!(claimed(&moving_forward(3.0), None, None, Some(234)), [4, 0]);
+    // The turn shuffle, the Ready idle (a swimmer's is the swim idle), the ranged idle and the
+    // chair loops all come first.
+    let turning = MovementState {
+        flags: move_flags::TURN_LEFT,
+        ..Default::default()
+    };
+    assert_eq!(claimed(&turning, None, None, Some(234)), [11, 0]);
+    assert_eq!(claimed(&still, Some(26), None, Some(234)), [26, 25, 0]);
+    assert_eq!(claimed(&swimming, Some(26), None, Some(234)), [41, 0]);
+    assert_eq!(claimed(&still, None, Some(105), Some(234)), [105, 25, 0]);
+    let chair = MovementState {
+        stand_state: 4,
+        ..Default::default()
+    };
+    assert_eq!(claimed(&chair, None, None, Some(234)), [102, 0]);
+    // A turning swimmer is no shuffle (`0x5fce30` refuses `SWIMMING`) and no mover: the state.
+    let swim_turning = MovementState {
+        flags: move_flags::SWIMMING | move_flags::TURN_LEFT,
+        ..Default::default()
+    };
+    assert_eq!(claimed(&swim_turning, None, None, Some(234)), [234, STAND]);
+    assert_eq!(claimed(&swim_turning, None, None, None), [41, 0]);
+}
+
+/// The resolver's verdict: a row's `AnimID` is taken as it is, 0 included (`0x5fd816`); a missing
+/// row or no state passes over; the interact NPC passes over a row with `0x2000`.
+#[test]
+fn the_state_resolver_claims_a_row_even_when_its_anim_is_stand() {
+    assert_eq!(state_emote_anim(26, Some(0), Some(0), false), Some(0));
+    assert_eq!(
+        state_emote_anim(28, Some(234), Some(0x2000), false),
+        Some(234)
+    );
+    assert_eq!(state_emote_anim(28, Some(234), Some(0x2000), true), None);
+    assert_eq!(state_emote_anim(29, Some(235), Some(0), true), Some(235));
+    assert_eq!(state_emote_anim(30, None, None, false), None, "no row");
+    assert_eq!(
+        state_emote_anim(0, Some(0), Some(0), false),
+        None,
+        "no state"
+    );
 }
 
 // ── The per-play one-shot route ──
@@ -1030,9 +1065,10 @@ fn the_prowl_idle_is_the_lowest_priority_stand() {
         gait_candidates(&idle, 2.5, None, None),
         &[STEALTH_STAND, STAND],
     );
-    assert!(
-        is_bare_stand(gait_candidates(&idle, 2.5, None, None)),
-        "the state-emote idle still owns this slot",
+    assert_eq!(
+        base_candidates(&idle, 2.5, None, None, Some(234)).as_slice(),
+        &[234, STAND],
+        "a set state outranks it",
     );
     let chair = MovementState {
         stand_state: 4,

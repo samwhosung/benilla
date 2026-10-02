@@ -35,6 +35,11 @@ impl EmoteSounds {
         self.0.anim(emote_id)
     }
 
+    /// An `Emotes.dbc` row's raw `AnimID` for the `UNIT_NPC_EMOTESTATE` resolver, `0` included.
+    pub(crate) fn state_anim(&self, emote_id: u32) -> Option<u32> {
+        self.0.state_anim(emote_id)
+    }
+
     /// A text emote's `Emotes.dbc` id (`EmotesText.dbc` `EmoteID`); 0 is chat-only (`/thank`).
     pub(crate) fn text_emote(&self, text_id: u32) -> Option<u32> {
         self.0.text_emote(text_id)

@@ -281,17 +281,82 @@ pub(super) enum Mode {
 
 /// The ids a unit in [`Mode::Gait`] tries, most specific first: the `0x5fd8b0` chain without its
 /// Special states. `ready` is the engaged idle, which locomotion outranks.
+///
+/// The pick without a state emote, which [`base_candidates`] adds.
 pub(super) fn gait_candidates(
     state: &MovementState,
     walk_speed: f32,
     ready: Option<u16>,
     ranged_load: Option<u16>,
 ) -> &'static [u16] {
+    claimed_candidates(state, walk_speed, ready, ranged_load)
+        .unwrap_or_else(|| idle_fallback(state))
+}
+
+/// What the base picks: a fixed candidate list, or the unit's emote state's loop, Stand behind it.
+pub(super) enum BaseCands {
+    Fixed(&'static [u16]),
+    State([u16; 2]),
+}
+
+impl BaseCands {
+    pub(super) fn as_slice(&self) -> &[u16] {
+        match self {
+            Self::Fixed(c) => c,
+            Self::State(c) => c,
+        }
+    }
+}
+
+/// The full pick of the `0x5fd8b0` chain in its byte order: the resolvers [`claimed_candidates`]
+/// covers, then the state-emote resolver (`0x5fd770`, `0x5fd9a1`), then the idle fallback
+/// (`0x5fd830`). `state_anim` is the resolver's verdict ([`state_emote_anim`]); a set state claims
+/// the base over the swim idle, the prowl idle and Stand, so `/stand`'s state 26 holds Stand
+/// against both until the unit moves.
+pub(super) fn base_candidates(
+    state: &MovementState,
+    walk_speed: f32,
+    ready: Option<u16>,
+    ranged_load: Option<u16>,
+    state_anim: Option<u16>,
+) -> BaseCands {
+    if let Some(c) = claimed_candidates(state, walk_speed, ready, ranged_load) {
+        return BaseCands::Fixed(c);
+    }
+    match state_anim {
+        Some(anim) => BaseCands::State([anim, STAND]),
+        None => BaseCands::Fixed(idle_fallback(state)),
+    }
+}
+
+/// The idle fallback (`0x5fd830`), the chain's last resolver: the swim idle on `SWIMMING`
+/// (`0x5fd83c`, `[9e8] & 0x200000`), else the prowl idle, else Stand. The hover idle (193,
+/// `0x5fd88d`) is not modelled.
+fn idle_fallback(state: &MovementState) -> &'static [u16] {
+    if state.flags & move_flags::SWIMMING != 0 {
+        &[41, 0]
+    } else if state.stealthed {
+        &[STEALTH_STAND, STAND]
+    } else {
+        &[STAND]
+    }
+}
+
+/// The resolvers ahead of the state-emote resolver, `None` where none claims the base. The
+/// locomotion resolver (`0x5fd100`) runs on `[9e8] & 0xf` alone, so a stationary swimmer is not
+/// its: it falls through the standing resolvers to the swim idle in [`idle_fallback`].
+fn claimed_candidates(
+    state: &MovementState,
+    walk_speed: f32,
+    ready: Option<u16>,
+    ranged_load: Option<u16>,
+) -> Option<&'static [u16]> {
     use move_flags::*;
     let f = state.flags;
-    // Swimming (`0x5fd100`): turn, then strafe, then backward, then forward.
-    if f & SWIMMING != 0 {
-        return if f & (TURN_LEFT | TURN_RIGHT) != 0 {
+    let swimming = f & SWIMMING != 0;
+    // Swimming locomotion (`0x5fd100`): turn, then strafe, then backward, then forward.
+    if swimming && f & ANY_MOVE != 0 {
+        return Some(if f & (TURN_LEFT | TURN_RIGHT) != 0 {
             &[41, 0]
         } else if f & STRAFE_LEFT != 0 {
             &[43, 42, 41, 0]
@@ -299,57 +364,58 @@ pub(super) fn gait_candidates(
             &[44, 42, 41, 0]
         } else if f & BACKWARD != 0 {
             &[45, 41, 0]
-        } else if f & FORWARD != 0 {
-            &[42, 41, 0]
         } else {
-            &[41, 0]
-        };
+            &[42, 41, 0]
+        });
     }
     // A flying spline, the taxi (`0x5fd19c`): Fly 135 ahead of backward and speed.
     if state.flying {
-        return &[135, 0];
+        return Some(&[135, 0]);
     }
     // Backward dominates strafe (`0x5fd1bc`, `[9e8] & 2` → WalkBackwards 13).
     if f & BACKWARD != 0 {
-        return &[13, 4, 0];
+        return Some(&[13, 4, 0]);
     }
     // Stealthed and moving, the prowl (`0x5fd1d3`); Walk is row 119's AnimationData fallback.
     if state.stealthed && f & ANY_MOVE != 0 {
-        return &[STEALTH_WALK, 4, 0];
+        return Some(&[STEALTH_WALK, 4, 0]);
     }
     // Ground gaits by live speed (`0x5fd202`/`0x5fd224`): Sprint at 11 and above, Run above twice
     // walk, else Walk. Strafe takes these too: the reference has no ground strafe branch.
     if f & ANY_MOVE != 0 {
         let s = state.speed;
-        return if s >= FAST_RUN_SPEED {
+        return Some(if s >= FAST_RUN_SPEED {
             &[143, 5, 4, 0]
         } else if s > 2.0 * walk_speed {
             &[5, 4, 0]
         } else {
             &[4, 0]
-        };
+        });
     }
-    // Turning in place: the shuffle (`0x5fd3f0`, 11 left, 12 right).
-    if f & TURN_LEFT != 0 {
-        return &[SHUFFLE_LEFT, STAND];
+    // Turning in place: the shuffle (`0x5fd3f0`, 11 left, 12 right); the fidget gate (`0x5fce30`)
+    // refuses a swimmer.
+    if !swimming && f & TURN_LEFT != 0 {
+        return Some(&[SHUFFLE_LEFT, STAND]);
     }
-    if f & TURN_RIGHT != 0 {
-        return &[SHUFFLE_RIGHT, STAND];
+    if !swimming && f & TURN_RIGHT != 0 {
+        return Some(&[SHUFFLE_RIGHT, STAND]);
     }
-    // Standing and engaged: the Ready idle (`0x5fd360`), gated on engagement, not the sheath.
+    // Standing and engaged: the Ready idle (`0x5fd360`), gated on engagement, not the sheath; a
+    // swimmer's is the swim idle (`0x5fd3ac`).
     if let Some(r) = ready {
-        return match r {
+        return Some(match r {
+            _ if swimming => &[41, 0],
             26 => &[26, 25, 0],
             27 => &[27, 25, 0],
             28 => &[28, 25, 0],
             _ => &[25, 0],
-        };
+        });
     }
     // Auto-repeat in the ranged stance (`0x5fd460`), ahead of the chair loops (`0x5fd550`).
     if let Some(l) = ranged_load {
         // A finished Load becomes its Hold through the completion dispatch (`0x5fc3f0`, fired at
         // `0x7075af`); each Hold falls back to its Load, so a model without it holds full draw.
-        return match l {
+        return Some(match l {
             105 => &[105, 25, 0],
             106 => &[106, 25, 0],
             109 => &[109, 105, 25, 0],
@@ -357,16 +423,15 @@ pub(super) fn gait_candidates(
             111 => &[111, 25, 0],
             112 => &[112, 25, 0],
             _ => &[25, 0],
-        };
+        });
     }
-    // Standing: a chair loop (4/5/6), else the prowl idle, else Stand; state 2 (`SIT_CHAIR`)
-    // writes no override in the reference (its row declines, `0x5fd644`), so it stands.
+    // Standing: a chair loop (4/5/6); state 2 (`SIT_CHAIR`) writes no override in the reference
+    // (its row declines, `0x5fd644`), so it falls through.
     match state.stand_state {
-        4 => &[102, 0],
-        5 => &[103, 0],
-        6 => &[104, 0],
-        _ if state.stealthed => &[STEALTH_STAND, STAND],
-        _ => &[STAND],
+        4 => Some(&[102, 0]),
+        5 => Some(&[103, 0]),
+        6 => Some(&[104, 0]),
+        _ => None,
     }
 }
 
@@ -453,15 +518,9 @@ pub(super) fn is_cast_anim(id: u16) -> bool {
     matches!(id, 2 | 32 | 33 | 53 | 54)
 }
 
-/// Whether `cands` is bare Stand, the one slot the state-emote idle (`UNIT_NPC_EMOTESTATE`) may
-/// fill. The prowl idle counts as bare: the reference's emote-state resolver (`0x5fd770`) runs
-/// before the fallback idle (`0x5fd830`) that picks it.
-pub(super) fn is_bare_stand(cands: &[u16]) -> bool {
-    cands == [STAND] || cands == [STEALTH_STAND, STAND]
-}
-
 /// The state-emote resolver's verdict (`0x5fd770`): the row's `AnimID` for the unit's
-/// `UNIT_NPC_EMOTESTATE`, `None` when it passes over. A state with no row passes over, and the
+/// `UNIT_NPC_EMOTESTATE`, `None` when it passes over. A state with no row passes over, a row
+/// whose `AnimID` is 0 claims the base for Stand (`0x5fd816` stores `row+8` as it is), and the
 /// current interact NPC passes over a row whose `EmoteFlags` carry `EMOTE_FLAG_INTERACTION`
 /// (`0x5fd7e2`-`0x5fd7fd`), so a vendor stops hammering while his window is open.
 pub(super) fn state_emote_anim(
@@ -474,11 +533,6 @@ pub(super) fn state_emote_anim(
         return None;
     }
     anim.map(|a| a as u16)
-}
-
-/// The state-emote idle's candidates, Stand as the fallback; only for a bare-Stand frame.
-pub(super) fn state_emote_gait(emote_anim: u16) -> [u16; 2] {
-    [emote_anim, STAND]
 }
 
 /// The mainhand swing id (`0x6246a0`); anything but an equipped melee weapon swings unarmed (16).

@@ -9,10 +9,7 @@ use bevy::prelude::*;
 use crate::net::ObjectStore;
 use crate::sound::EmoteSounds;
 
-use super::super::select::{
-    self, gait_candidates, is_bare_stand, playback_rate, ready_anim, state_emote_gait, Mode, DEATH,
-    STAND,
-};
+use super::super::select::{self, base_candidates, playback_rate, ready_anim, Mode, DEATH, STAND};
 use super::super::{find_resolved, move_flags, AnimDriver, CastHold, MovementState, Wielded};
 use super::play::{enter_special, leave_special, oneshot_finished, play, play_clip, roll_loop};
 use super::transplant_up;
@@ -318,7 +315,22 @@ pub(super) fn run(
                             load
                         }
                     });
-                let cands = gait_candidates(&mv, walk, ready, ranged_load);
+                // The looping state-emote idle (`UNIT_NPC_EMOTESTATE`: `/dance`, NPC work loops, and
+                // `/stand`'s state 26) is the resolver `0x5fd770`: it claims the base ahead of the
+                // idle fallbacks (swim, prowl, Stand) and behind everything else in the chain.
+                let state_anim = store.and_then(|s| {
+                    let state = s.0.unit_emote_state();
+                    emote_sounds.and_then(|e| {
+                        select::state_emote_anim(
+                            state,
+                            e.state_anim(state),
+                            e.emote_flags(state),
+                            interacting,
+                        )
+                    })
+                });
+                let base = base_candidates(&mv, walk, ready, ranged_load, state_anim);
+                let cands = base.as_slice();
                 // The stationary cast/channel pin (`[CGUnit+0xb4]`), full-body over the Ready and
                 // state-emote idles; stationary is `[9e8] & 0x20000f`, never the turn bits, so a
                 // turning caster keeps it and a moving one gets the masked hold instead.
@@ -329,31 +341,6 @@ pub(super) fn run(
                         &hold_cands
                     }
                     _ => cands,
-                };
-                // The looping state-emote idle (`UNIT_NPC_EMOTESTATE`: `/dance`, NPC work loops)
-                // fills only the bare-Stand slot; whatever outranks Stand already routed `cands`.
-                let state_emote_cands;
-                let cands: &[u16] = if is_bare_stand(cands) {
-                    let emote_anim = store.and_then(|s| {
-                        let state = s.0.unit_emote_state();
-                        emote_sounds.and_then(|e| {
-                            select::state_emote_anim(
-                                state,
-                                e.anim(state),
-                                e.emote_flags(state),
-                                interacting,
-                            )
-                        })
-                    });
-                    match emote_anim {
-                        Some(id) => {
-                            state_emote_cands = state_emote_gait(id);
-                            &state_emote_cands
-                        }
-                        None => cands,
-                    }
-                } else {
-                    cands
                 };
                 // The loot kneel (Loot 50) of a stationary, unmounted unit with the trigger up,
                 // over the cast pin, the Ready and ranged idles, the chair loops and the state

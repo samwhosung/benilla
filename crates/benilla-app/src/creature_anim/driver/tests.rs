@@ -4154,6 +4154,8 @@ mod emote_state {
     /// does not.
     const YIELDING: u32 = 28;
     const STUBBORN: u32 = 29;
+    /// `/stand`'s state 26 (vmangos `ChatHandler.cpp` `HandleTextEmoteOpcode`): AnimID 0.
+    const STAND_STATE: u32 = 26;
     const FIELD_NPC_EMOTESTATE: u16 = 148;
 
     fn model() -> ModelAnimations {
@@ -4164,6 +4166,8 @@ mod emote_state {
                 clip(234, 2, true),  // the yielding state's loop
                 clip(235, 3, true),  // the other state's loop
                 clip(118, 4, false), // SpecialUnarmed, a one-shot
+                clip(41, 5, true),   // SwimIdle
+                clip(42, 6, true),   // Swim
             ],
             hand_close: [None, None],
             playable_animation_lookup: Vec::new(),
@@ -4180,7 +4184,8 @@ mod emote_state {
         app.insert_resource(EmoteSounds(
             EmoteSoundCatalog::default()
                 .with_row(YIELDING, 234, 0x2000)
-                .with_row(STUBBORN, 235, 0),
+                .with_row(STUBBORN, 235, 0)
+                .with_row(STAND_STATE, 0, 0),
         ));
         app
     }
@@ -4257,5 +4262,30 @@ mod emote_state {
 
         interact(&mut app, Some(npc));
         assert_eq!(gait(&app, npc), Some(0), "the one-shot is cut for Stand");
+    }
+
+    /// State 26 holds Stand over the swim idle until the unit moves (`0x5fd770` before `0x5fd830`).
+    #[test]
+    fn a_set_state_holds_stand_over_the_swim_idle_until_the_unit_moves() {
+        let mut app = app_with_rows();
+        let swimmer = unit(&mut app, STAND_STATE);
+        let bare = unit(&mut app, 0);
+        for u in [swimmer, bare] {
+            app.world_mut().entity_mut(u).insert(MovementState {
+                flags: move_flags::SWIMMING,
+                ..Default::default()
+            });
+        }
+        app.update();
+        assert_eq!(gait(&app, swimmer), Some(0), "state 26 stands in the water");
+        assert_eq!(gait(&app, bare), Some(41), "no state: the swim idle");
+
+        app.world_mut().entity_mut(swimmer).insert(MovementState {
+            speed: 4.7,
+            flags: move_flags::SWIMMING | move_flags::FORWARD,
+            ..Default::default()
+        });
+        app.update();
+        assert_eq!(gait(&app, swimmer), Some(42), "moving, it swims");
     }
 }
