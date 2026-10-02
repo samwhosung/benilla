@@ -630,11 +630,33 @@ pub(super) enum OneShotRoute {
     FullBody,
 }
 
-/// The CLASS_A set (`0x5fed90`), the only ids that may mask; its ranges' interior is inferred,
-/// but only swings, emotes and casts reach [`route_oneshot`].
+/// The CLASS_A set (`0x5fed90`'s byte table over `id - 2`), the only ids that may play on the
+/// key bone; every other id plays full-body.
 fn is_class_a(id: u16) -> bool {
     matches!(id,
-        2 | 8..=10 | 14..=36 | 46..=49 | 51..=90 | 105..=113 | 117..=118 | 122..=138 | 185..=186 | 195)
+        2 | 8..=10 | 14..=36 | 46..=49 | 51..=74 | 76..=78 | 80..=90 | 105..=113 | 117 | 118
+        | 122..=125 | 128..=130 | 133 | 134 | 136..=138 | 185 | 186 | 195)
+}
+
+/// The mount-set (`0x5fec80`'s byte table), the ids a mounted rider's request sends to the mount
+/// model.
+fn is_mount_set(id: u16) -> bool {
+    matches!(id, 0 | 1 | 3..=6 | 8..=13 | 37..=45 | 92..=95 | 119 | 120 | 127 | 131 | 132 | 135 | 143 | 187)
+}
+
+/// Where a request goes while the unit has a mount model (`0x5fe7b5`..`0x5fe803`): a mount-set id
+/// to the mount, a CLASS_A id to the rider's key bone (8-10 are both), anything else nowhere.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct MountedRoute {
+    pub(super) mount: bool,
+    pub(super) rider_upper: bool,
+}
+
+pub(super) fn route_mounted(id: u16) -> MountedRoute {
+    MountedRoute {
+        mount: is_mount_set(id),
+        rider_upper: is_class_a(id),
+    }
 }
 
 /// The COMBAT set (`0x5fcc10`), the ids an airborne unit masks: every swing, no emote and no
@@ -649,10 +671,17 @@ fn is_forced_full_body(id: u16) -> bool {
     matches!(id, 1 | 6 | 131 | 132 | 57 | 58 | 118)
 }
 
-/// Route a one-shot by live state (`0x5fe6c8`..`0x5fe74d`): masked while the lower body is
+/// EmoteEat, the `/eat` and `/drink` loop.
+const EMOTE_EAT: u16 = 61;
+
+/// Route an unmounted one-shot by live state (`0x5fe6c8`..`0x5fe74d`): masked while the lower body is
 /// committed (moving, turning, swimming, a non-zero stand state, or a COMBAT id airborne), else
 /// full-body, so one Attack1H is full-body standing and masked running.
 pub(super) fn route_oneshot(id: u16, flags: u32, stand_state: u8) -> OneShotRoute {
+    // EmoteEat (61) unmounted always takes the key bone, whatever the state (`0x5fe834`).
+    if id == EMOTE_EAT {
+        return OneShotRoute::Masked;
+    }
     if is_forced_full_body(id) || !is_class_a(id) {
         return OneShotRoute::FullBody;
     }

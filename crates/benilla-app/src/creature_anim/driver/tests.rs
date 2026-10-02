@@ -3978,3 +3978,163 @@ mod base_anim_lock {
         );
     }
 }
+
+/// The one-shot routing seams `0x5fe2f0` runs ahead of the clip: the mounted three-way split
+/// (`0x5fe7b5`), and a key-bone play on a model with no split bone (`0x5fdcc4`).
+mod routing {
+    use super::*;
+
+    const FIELD_MOUNTDISPLAYID: u16 = 133;
+    const MOUNT: u16 = 91;
+    const PRAY: u16 = 75; // EmoteKneel, not CLASS_A
+    const CHEER: u16 = 68; // CLASS_A
+    const SHUFFLE: u16 = 12; // mount-set, not CLASS_A
+    const EAT: u16 = 61;
+
+    fn masked(anim_id: u16, node: u32, upper: u32) -> AnimClip {
+        let mut c = clip(anim_id, node, false);
+        c.upper_node = Some(AnimationNodeIndex::new(upper as usize));
+        c
+    }
+
+    fn model(clips: Vec<AnimClip>) -> ModelAnimations {
+        ModelAnimations {
+            graph: Handle::default(),
+            clips,
+            hand_close: [None, None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: Vec::new(),
+            global_bones: Vec::new(),
+            first_seq: None,
+            pose: Default::default(),
+        }
+    }
+
+    fn rider_model() -> ModelAnimations {
+        model(vec![
+            clip(0, 1, true),
+            clip(MOUNT, 2, true),
+            masked(PRAY, 3, 13),
+            masked(CHEER, 4, 14),
+            masked(SHUFFLE, 5, 15),
+        ])
+    }
+
+    fn spawn(app: &mut App, model: ModelAnimations, mount_display: u32) -> Entity {
+        app.world_mut()
+            .spawn((
+                model,
+                AnimationPlayer::default(),
+                AnimationTransitions::new(),
+                AnimDriver::default(),
+                crate::net::ObjectStore(ObjectFields::from_pairs(&[(
+                    FIELD_MOUNTDISPLAYID,
+                    mount_display,
+                )])),
+                MovementState::default(),
+            ))
+            .id()
+    }
+
+    fn emote(app: &mut App, entity: Entity, anim_id: u16) {
+        app.world_mut().write_message(EmoteAnim {
+            entity,
+            anim_id,
+            seq: 1,
+        });
+        app.update();
+    }
+
+    fn drv(app: &App, e: Entity) -> &AnimDriver {
+        app.world().entity(e).get::<AnimDriver>().unwrap()
+    }
+
+    #[test]
+    fn a_mounted_pray_arms_nothing_and_keeps_the_mounted_base() {
+        let mut app = app();
+        let rider = spawn(&mut app, rider_model(), 2404);
+        app.update();
+        assert_eq!(drv(&app, rider).active_anim(), Some(MOUNT));
+        emote(&mut app, rider, PRAY);
+        assert!(drv(&app, rider).overlay.is_none(), "no key-bone play");
+        assert_eq!(drv(&app, rider).active_anim(), Some(MOUNT), "no base play");
+    }
+
+    #[test]
+    fn a_mounted_class_a_id_plays_on_the_riders_upper_body() {
+        let mut app = app();
+        let rider = spawn(&mut app, rider_model(), 2404);
+        app.update();
+        emote(&mut app, rider, CHEER);
+        assert!(drv(&app, rider).overlay.is_some_and(|o| o.id == CHEER));
+        assert_eq!(drv(&app, rider).active_anim(), Some(MOUNT));
+    }
+
+    #[test]
+    fn a_mounted_mount_set_id_goes_to_the_mount_child() {
+        let mut app = app();
+        let rider = spawn(&mut app, rider_model(), 2404);
+        let child = app
+            .world_mut()
+            .spawn((
+                model(vec![clip(0, 1, true), masked(SHUFFLE, 2, 12)]),
+                AnimationPlayer::default(),
+                AnimationTransitions::new(),
+                AnimDriver::default(),
+                crate::entities::mount::MountBody { host: rider },
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(rider)
+            .insert(crate::entities::mount::MountChild(child));
+        app.update();
+        emote(&mut app, rider, SHUFFLE);
+        assert_eq!(
+            drv(&app, child).active_anim(),
+            Some(SHUFFLE),
+            "the mount's bone 0, full-body"
+        );
+        assert!(drv(&app, child).overlay.is_none());
+        assert!(
+            drv(&app, rider).overlay.is_none(),
+            "not CLASS_A: the rider idles"
+        );
+        assert_eq!(drv(&app, rider).active_anim(), Some(MOUNT));
+    }
+
+    #[test]
+    fn standing_eat_takes_the_key_bone() {
+        let mut app = app();
+        let unit = spawn(
+            &mut app,
+            model(vec![clip(0, 1, true), masked(EAT, 2, 12)]),
+            0,
+        );
+        app.update();
+        emote(&mut app, unit, EAT);
+        assert!(drv(&app, unit).overlay.is_some_and(|o| o.id == EAT));
+        assert_eq!(
+            drv(&app, unit).active_anim(),
+            Some(0),
+            "the legs keep Stand"
+        );
+    }
+
+    #[test]
+    fn a_key_bone_play_without_a_split_bone_arms_nothing() {
+        let mut app = app();
+        let unit = spawn(
+            &mut app,
+            model(vec![clip(0, 1, true), clip(EAT, 2, false)]),
+            0,
+        );
+        app.update();
+        emote(&mut app, unit, EAT);
+        assert!(drv(&app, unit).overlay.is_none());
+        assert_eq!(
+            drv(&app, unit).active_anim(),
+            Some(0),
+            "no full-body fallback"
+        );
+    }
+}

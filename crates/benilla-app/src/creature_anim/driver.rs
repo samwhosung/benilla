@@ -19,8 +19,8 @@ use crate::net::{
 use crate::sound::EmoteSounds;
 
 use super::select::{
-    self, current_special, defense_anim, is_swing_id, route_oneshot, swing_anim_main,
-    swing_anim_off, unify, Mode, OneShotRoute, DEATH, DEFAULT_WALK_SPEED, STAND,
+    self, current_special, defense_anim, is_swing_id, route_mounted, route_oneshot,
+    swing_anim_main, swing_anim_off, unify, Mode, OneShotRoute, DEATH, DEFAULT_WALK_SPEED, STAND,
 };
 use super::sheath::{advance_sheath_ceremony, start_sheath_ceremony};
 use super::{
@@ -53,6 +53,7 @@ const ONESHOT_RELEASE_FADE: f32 = 0.150;
 const JUMP_ARC_MIN_UP: f32 = 0.5;
 
 /// A one-shot play request from this frame's messages, resolved to an anim id per unit.
+#[derive(Clone, Copy)]
 enum OneShotReq {
     Swing(u32),
     Emote(u16),
@@ -277,13 +278,15 @@ pub(super) fn drive_animations(
         // Read for `DO_NOT_PLAY_WOUND_ANIM`; a missing cache reads as an unreceived template.
         Option<Res<crate::names::NameCache>>,
         MessageReader<BaseAnimRecompute>,
+        // A rider's mount child, where a mount-set request goes (`0x5fe7c1`).
+        Query<(&ObjectStore, &crate::entities::mount::MountChild)>,
     ),
     // The variation roll's LCG, the reference's single CRT `_rand` stream shared by every play.
     mut rng: ResMut<benilla_assets::AnimRng>,
     // The last anim trace line per traced unit; the trace writes only on change.
     mut anim_trace_last: Local<std::collections::HashMap<Entity, String>>,
 ) {
-    let (emote_sounds, loot_kneel, time, names, mut recomputes) = aux;
+    let (emote_sounds, loot_kneel, time, names, mut recomputes, riders) = aux;
     let dt = time.delta_secs();
     // This frame's one-shot plays per unit, replayed in the reference's call order (`PlaySeq`
     // stamps): a later call overwrites an earlier, and the combat fast path keys on what is playing
@@ -333,6 +336,25 @@ pub(super) fn drive_animations(
             .entry(e.entity)
             .or_default()
             .push((OneShotReq::Emote(e.anim_id), e.seq));
+    }
+    // A mounted rider's mount-set emotes go to the mount model (`0x5fe7c1`); the rider keeps the
+    // request for its own CLASS_A and nowhere routes.
+    let mut to_mount: Vec<(Entity, (OneShotReq, u64))> = Vec::new();
+    for (rider, reqs) in pending.iter() {
+        let Ok((store, child)) = riders.get(*rider) else {
+            continue;
+        };
+        if store.0.unit_mount_display_id() == 0 {
+            continue;
+        }
+        for &(req, seq) in reqs {
+            if matches!(req, OneShotReq::Emote(id) if route_mounted(id).mount) {
+                to_mount.push((child.0, (req, seq)));
+            }
+        }
+    }
+    for (child, req) in to_mount {
+        pending.entry(child).or_default().push(req);
     }
     // Stage-2 base recomputes by unit, last wins: of two in a frame the second's verdict stands.
     let mut pending_recompute: bevy::ecs::entity::EntityHashMap<u16> = default();
@@ -794,13 +816,30 @@ pub(super) fn drive_animations(
                 }
                 continue;
             }
-            // Mounted forces the masked route (`0x5fe2f0`'s mounted branch).
-            let masked =
-                mounted || route_oneshot(id, mv.flags, mv.stand_state) == OneShotRoute::Masked;
+            // A mounted rider plays only its CLASS_A ids, on the key bone, and nothing else
+            // (`0x5fe7b5`); a mount child plays the clip on its own bone 0 (`0x5fe7c1`).
+            let masked = if mounted {
+                if !route_mounted(id).rider_upper {
+                    continue;
+                }
+                true
+            } else {
+                mount_body.is_none()
+                    && route_oneshot(id, mv.flags, mv.stand_state) == OneShotRoute::Masked
+            };
             // Resolve to a clip this model has, roll its variation and its replay budget (a clamp
             // one-shot authored `(min,max)` plays R times).
             let picked =
                 find_resolved(anims, id, catalog).map(|h| roll_oneshot(anims, h, &mut rng));
+            // No split bone (`[+0xd5c] == -1`): a key-bone play arms nothing (`0x5fdcc4`).
+            if masked
+                && match picked {
+                    Some((c, _)) => c.upper_node.is_none(),
+                    None => mounted,
+                }
+            {
+                continue;
+            }
             let upper = masked
                 .then(|| picked.and_then(|(c, r)| c.upper_node.map(|n| (n, r))))
                 .flatten();
@@ -826,7 +865,7 @@ pub(super) fn drive_animations(
                 masked_played = true;
                 played_oneshot = Some(id);
             } else {
-                // Full-body, or a model with no key bone (the −1 sentinel arms bone 0): the clip
+                // Full-body: the clip
                 // replaces the base on bone 0 even over a Special, last writer wins (`0x5fe6c8`).
                 // An airborne arc's own clip freezes first, op4's pose-snapshot decay.
                 if let Some(sp) =

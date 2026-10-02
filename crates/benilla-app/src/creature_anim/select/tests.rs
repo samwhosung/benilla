@@ -631,12 +631,68 @@ fn route_classifier_memberships_are_the_decoded_bytes() {
     for id in [16, 17, 18, 19, 85, 87, 88, 117] {
         assert!(is_combat(id) && is_class_a(id), "swing {id}");
     }
-    for id in [17, 66, 68, 80] {
-        assert!(is_class_a(id), "class-A {id}");
+    // The whole table, member and non-member alike, from the decoded bytes of `0x5fed90`.
+    let class_a: Vec<u16> = [2, 8, 9, 10, 14, 15]
+        .into_iter()
+        .chain(16..=36)
+        .chain(46..=49)
+        .chain(51..=74)
+        .chain(76..=78)
+        .chain(80..=90)
+        .chain(105..=113)
+        .chain([117, 118])
+        .chain(122..=125)
+        .chain(128..=130)
+        .chain([133, 134])
+        .chain(136..=138)
+        .chain([185, 186, 195])
+        .collect();
+    for id in 0..=300u16 {
+        assert_eq!(is_class_a(id), class_a.contains(&id), "CLASS_A {id}");
+    }
+    // The mount-set, `0x5fec80`.
+    let mount: Vec<u16> = [0, 1]
+        .into_iter()
+        .chain(3..=6)
+        .chain(8..=13)
+        .chain(37..=45)
+        .chain(92..=95)
+        .chain([119, 120, 127, 131, 132, 135, 143, 187])
+        .collect();
+    for id in 0..=300u16 {
+        assert_eq!(is_mount_set(id), mount.contains(&id), "mount-set {id}");
     }
     // Forced-full-body carve-outs never mask, even seated.
     for id in [1, 6, 131, 132, 57, 58, 118] {
         assert_eq!(route_oneshot(id, 0, 1), FullBody, "forced full-body {id}");
+    }
+}
+
+#[test]
+fn mounted_routing_sends_each_id_where_the_bytes_do() {
+    let r = |id| route_mounted(id);
+    // EmoteKneel and EmoteBeg are in neither set: they play nowhere.
+    for id in [75, 79] {
+        assert_eq!((r(id).mount, r(id).rider_upper), (false, false), "{id}");
+    }
+    assert_eq!((r(68).mount, r(68).rider_upper), (false, true));
+    assert_eq!((r(12).mount, r(12).rider_upper), (true, false));
+    // Wound ids 8-10 are in both.
+    assert_eq!((r(9).mount, r(9).rider_upper), (true, true));
+}
+
+#[test]
+fn standing_eat_is_masked_whatever_the_state() {
+    assert_eq!(route_oneshot(61, 0, 0), Masked);
+    assert_eq!(route_oneshot(61, move_flags::FORWARD, 0), Masked);
+    assert_eq!(route_oneshot(61, 0, 1), Masked);
+}
+
+#[test]
+fn whirlwind_and_birth_play_full_body_while_moving() {
+    for id in [126, 127] {
+        assert_eq!(route_oneshot(id, move_flags::FORWARD, 0), FullBody, "{id}");
+        assert_eq!(route_oneshot(id, 0, 1), FullBody, "{id}");
     }
 }
 
