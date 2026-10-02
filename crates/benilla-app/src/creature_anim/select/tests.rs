@@ -554,6 +554,8 @@ fn a_set_state_outranks_the_idle_fallbacks_and_nothing_before_them() {
     assert_eq!(claimed(&still, Some(26), None, Some(234)), [26, 25, 0]);
     assert_eq!(claimed(&swimming, Some(26), None, Some(234)), [41, 0]);
     assert_eq!(claimed(&still, None, Some(105), Some(234)), [105, 25, 0]);
+    // `0x5fd460` has no swim gate: a swimmer takes it too.
+    assert_eq!(claimed(&swimming, None, Some(105), Some(234)), [105, 25, 0]);
     let chair = MovementState {
         stand_state: 4,
         ..Default::default()
