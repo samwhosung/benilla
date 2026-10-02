@@ -333,6 +333,7 @@ fn text_emote(
     chat_log: &mut crate::ui_chat::ChatLog,
 ) {
     out.write(EmoteMessage {
+        guid,
         source: index.0.get(&guid).copied(),
         kind: EmoteKind::Text(text_emote),
     });
@@ -342,6 +343,7 @@ fn text_emote(
 /// `SMSG_EMOTE`: an `Emotes.dbc` id to play on a unit (NPC scripts, a `/`-emote's animation).
 fn emote(guid: u64, emote_id: u32, index: &GuidIndex, out: &mut MessageWriter<EmoteMessage>) {
     out.write(EmoteMessage {
+        guid,
         source: index.0.get(&guid).copied(),
         kind: EmoteKind::Anim(emote_id),
     });

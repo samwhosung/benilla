@@ -248,6 +248,14 @@ impl CreatureCatalog {
         })
     }
 
+    /// The `(race, sex)` of a display's `CreatureDisplayInfoExtra` row, the unit's display
+    /// override (`[unit+0xb38]`, `0x60afb0`); `None` for a display with no extra row.
+    pub fn display_race_sex(&self, display_id: u32) -> Option<(u8, u8)> {
+        let extra = self.display.get(&display_id)?.extended_id;
+        let row = (extra != 0).then(|| self.extra.get(&extra)).flatten()?;
+        Some((row.race, row.sex))
+    }
+
     /// Number of display entries (for logging/diagnostics).
     pub fn len(&self) -> usize {
         self.display.len()

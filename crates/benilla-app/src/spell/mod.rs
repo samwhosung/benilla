@@ -16,7 +16,7 @@ mod bind_gates;
 mod cast_send;
 pub(crate) mod cast_target;
 pub(crate) mod cooldowns;
-mod group_relation;
+pub(crate) mod group_relation;
 mod inflight;
 mod mods;
 pub(crate) mod net;

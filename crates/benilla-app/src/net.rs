@@ -2192,6 +2192,8 @@ pub(crate) enum ServerSoundKind {
 /// and sex).
 #[derive(Message, Clone, Copy)]
 pub(crate) struct EmoteMessage {
+    /// The performer's wire guid, known even while its entity has not streamed.
+    pub(crate) guid: u64,
     pub(crate) source: Option<Entity>,
     pub(crate) kind: EmoteKind,
 }

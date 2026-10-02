@@ -24,16 +24,13 @@ use benilla_assets::WorldAssets;
 use benilla_world::schedule::WorldStage;
 
 use super::emitter_pool::AmbientEmitterPool;
-use super::emote::EmoteSounds;
+use super::emote::{play_emote_voice, EmoteSounds, VOICE_ATTACH};
 use super::kit::{play_kit, KitRef, SoundCategory, SoundKits};
 use super::{AudioListener, SoundConfig, SoundOutput};
 
 /// `$TRD`'s height above the unit's origin (`0x62fb3f fadd [0x7ff9d8]`); the arm is handed no
 /// point.
 const TRD_HEIGHT: f32 = 1.0;
-
-/// The attachment the emote voice plays at (`0x623c3a push 0x11`).
-const CSD_ATTACH: u16 = 17;
 
 pub(super) fn route_anim_events(
     mut events: MessageReader<AnimSoundEvent>,
@@ -130,20 +127,24 @@ pub(super) fn route_anim_events(
             b"$SND" | b"$DSO" if ev.data != 0 => {
                 ring(&mut kits, &mut out, ev.data, ev, &mut complained);
             }
-            // `$CSD` plays at attachment 17, never the fired key: the CGUnit dispatcher hands
-            // `0x623c10` no position (`0x5ffeed`), and it reads attachment `0x11` (`0x623b90`),
-            // falling back to the origin + 2.0 z. The reference then binds the handle to follow the
-            // unit (`0x7a57e0`, `[unit+0xb28]`); this is a one-shot at the onset point.
+            // `$CSD` is the emote voice `0x623c10`: attachment 17, never the fired key (the CGUnit
+            // dispatcher hands it no position, `0x5ffeed`; origin + 2.0 z without the
+            // attachment), and it stops the unit's previous emote voice.
             b"$CSD" if ev.data != 0 => {
                 let root = transforms
                     .get(ev.entity)
                     .map_or(Vec3::ZERO, |t| t.translation());
-                let at = attach.point(ev.entity, CSD_ATTACH, root);
-                let voiced = AnimSoundEvent {
-                    pos: Some(at),
-                    ..*ev
-                };
-                ring(&mut kits, &mut out, ev.data, &voiced, &mut complained);
+                let at = attach.point(ev.entity, VOICE_ATTACH, root);
+                if let Err(e) = play_emote_voice(
+                    &mut kits, &assets, &mut out, &config, listener, ev.data, ev.entity, at,
+                ) {
+                    if complained.insert(ev.data) {
+                        warn!(
+                            "anim event kit {}: {e:#} (further reports for this kit suppressed)",
+                            ev.data
+                        );
+                    }
+                }
             }
             b"$ESD" => {
                 let Some(emotes) = emotes.as_deref() else {

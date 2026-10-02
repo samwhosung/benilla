@@ -36,7 +36,7 @@ pub(crate) struct GroupRoster {
 
 impl GroupRoster {
     /// `0x4e7f70`: a nonzero guid that is the active player's (`4e7f84`) or in a party slot.
-    fn in_party(&self, me: Option<u64>, guid: u64) -> bool {
+    pub(crate) fn in_party(&self, me: Option<u64>, guid: u64) -> bool {
         guid != 0 && (me == Some(guid) || self.party.contains(&guid))
     }
 
