@@ -4158,6 +4158,53 @@ mod routing {
             "no full-body fallback"
         );
     }
+
+    /// `DoEmote`'s local play (`0x5fe2f0`) arms the clip at once; the `SMSG_EMOTE` echo that follows
+    /// through the emote player finds the id armed (`0x5fcd56`) and leaves it running.
+    #[test]
+    fn the_echo_of_a_local_emote_does_not_restart_it() {
+        let mut app = app();
+        let unit = spawn(
+            &mut app,
+            model(vec![clip(0, 1, true), masked(CHEER, 2, 12)]),
+            0,
+        );
+        app.world_mut().entity_mut(unit).insert(MovementState {
+            flags: move_flags::FORWARD,
+            ..Default::default()
+        });
+        app.update();
+        let send = |app: &mut App, via_player: bool| {
+            app.world_mut().write_message(EmoteAnim {
+                entity: unit,
+                anim_id: CHEER,
+                seq: 1,
+                via_player,
+            });
+            app.update();
+        };
+        let node = AnimationNodeIndex::new(12);
+        let speed = |app: &App| {
+            app.world()
+                .entity(unit)
+                .get::<AnimationPlayer>()
+                .unwrap()
+                .animation(node)
+                .map(bevy::animation::ActiveAnimation::speed)
+        };
+        send(&mut app, false);
+        assert_eq!(speed(&app), Some(1.0), "the local play armed the key bone");
+        // A fresh arm resets the rate to 1.0, so a marker rate shows a restart.
+        app.world_mut()
+            .entity_mut(unit)
+            .get_mut::<AnimationPlayer>()
+            .unwrap()
+            .animation_mut(node)
+            .unwrap()
+            .set_speed(0.25);
+        send(&mut app, true);
+        assert_eq!(speed(&app), Some(0.25), "the echo did not re-arm the clip");
+    }
 }
 
 /// The `UNIT_NPC_EMOTESTATE` resolver (`0x5fd770`): the current interact NPC passes over a state

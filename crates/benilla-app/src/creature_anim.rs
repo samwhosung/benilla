@@ -516,6 +516,7 @@ mod emote_anim;
 /// The client-local gestures (chat, NPC interact), the reference's `0x60bb30`.
 mod gesture;
 use emote_anim::emote_to_anim;
+pub(crate) use emote_anim::{local_play_eligible, LocalPlay};
 pub(crate) use gesture::{select_gesture, Gesture, GestureQueue};
 
 /// The Bevy systems that execute the state machine `select` picks.
@@ -850,6 +851,8 @@ impl Plugin for CreatureAnimPlugin {
                     // Same frame as the loot kneel: the reference force-plays Loot 50 in the
                     // handler that arms the latch.
                     .after(crate::ui_loot::resolve_loot_kneel)
+                    // `DoEmote`'s local play, written in the chat drain.
+                    .after(crate::ui_chat::ChatDrain)
                     // After Input so a sheath request (the Z toggle) executes the same frame.
                     .after(WorldStage::Input)
                     // `VisualSheath` must land before `resolve_equipment` reads it, or a sheath

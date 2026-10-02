@@ -75,6 +75,9 @@ pub(super) struct ChatProbes<'w, 's> {
     kinds: Query<'w, 's, &'static crate::net::NetEntity>,
     /// `/partytest raid` seats us as the leader, and the wire names a leader by guid.
     self_guid: Res<'w, crate::net::SelfGuid>,
+    /// Our own auto-attack target, a gate of `DoEmote`'s local play.
+    engaged: Query<'w, 's, (), (With<SelfPlayer>, With<crate::creature_anim::Engaged>)>,
+    loot_kneel: Option<Res<'w, crate::ui_loot::LootKneel>>,
 }
 
 /// What the drain hands to another subsystem's setter, bundled for the same ceiling. Chat never
@@ -85,6 +88,8 @@ pub(super) struct ChatOut<'w, 's> {
     console: Commands<'w, 's>,
     stand: MessageWriter<'w, crate::player::StandStateRequest>,
     sheath: MessageWriter<'w, crate::creature_anim::SheathRequest>,
+    /// `DoEmote`'s local play (`0x5ef5b6`).
+    anim: MessageWriter<'w, crate::creature_anim::EmoteAnim>,
     target: MessageWriter<'w, crate::target::TargetByNameRequest>,
     assist: MessageWriter<'w, crate::target::AssistRequest>,
     follow: MessageWriter<'w, crate::player::FollowRequest>,
@@ -187,6 +192,8 @@ pub(super) fn drain_chat_input(
         guids,
         kinds,
         self_guid,
+        engaged,
+        loot_kneel,
     } = &probes;
     let Some(mut script) = script else {
         return;
@@ -737,6 +744,34 @@ pub(super) fn drain_chat_input(
                     chat_out
                         .stand
                         .write(crate::player::StandStateRequest { state: state as u8 });
+                }
+                // The play (`0x5ef5b6`) is the posture branch's else: a posture emote plays no clip,
+                // and the rest play here only while moving. Its `SMSG_EMOTE` echo then finds the
+                // id armed and is skipped (`0x5fcd56`).
+                else if let (Some(anim), Ok((entity, m, _)), Ok(store)) = (
+                    emote_id.and_then(|id| emotes.as_deref()?.anim(id)),
+                    self_player.single(),
+                    self_store.single(),
+                ) {
+                    let fields = &store.0;
+                    let gate = crate::creature_anim::LocalPlay {
+                        reads_dead: fields.unit_reads_dead(),
+                        stand_state: m.stand_state,
+                        move_flags: m.flags,
+                        vertical_speed: m.vertical_speed,
+                        flying: m.flying,
+                        loot_kneel: loot_kneel.as_deref().is_some_and(|k| k.0),
+                        channeling: fields.unit_channel_spell() != 0,
+                        engaged: !engaged.is_empty(),
+                    };
+                    if crate::creature_anim::local_play_eligible(&gate) {
+                        chat_out.anim.write(crate::creature_anim::EmoteAnim {
+                            entity,
+                            anim_id: anim as u16,
+                            seq: play_seq.next(),
+                            via_player: false,
+                        });
+                    }
                 }
                 let target = emote_target(
                     arg.as_deref(),
