@@ -1869,6 +1869,42 @@ fn the_talk_gesture_reads_the_plaintext_not_the_garbled_line() {
     );
 }
 
+/// `0x49d7f7`: a speaker whose `UNIT_FIELD_FLAGS` hold `0x20000000` (Polymorph, Kidney Shot, ...)
+/// plays no talk gesture on the immediate path; the copies behind a name query (`0x49ccc0`,
+/// `0x49d230`) have no such test.
+#[test]
+fn a_speaker_that_cannot_animate_queues_no_talk_gesture() {
+    use super::feed::gesture_prevented;
+    use crate::creature_anim::select_gesture;
+    use benilla_protocol::messages::CHAT_MSG_SAY;
+
+    let laugh_words = |n: u32| (n == 1).then(|| "lol".to_string());
+    let speak = |tries: u16, flags: Option<u32>| {
+        select_gesture(CHAT_MSG_SAY, "lol", laugh_words)
+            .filter(|_| !gesture_prevented(tries, flags))
+            .into_iter()
+            .count()
+    };
+    assert_eq!(speak(0, Some(0x2000_0000)), 0, "a polymorphed speaker");
+    assert_eq!(speak(0, Some(0x2000_0000 | 0x8)), 0, "among other bits");
+    assert_eq!(speak(0, Some(0)), 1, "an unflagged speaker laughs");
+    assert_eq!(
+        speak(0, Some(0x1000_0000 | 0x0100_0000)),
+        1,
+        "neighbouring bits do not gate"
+    );
+    assert_eq!(
+        speak(0, None),
+        1,
+        "an unstreamed speaker is the queue's call, not this gate"
+    );
+    assert_eq!(
+        speak(3, Some(0x2000_0000)),
+        1,
+        "a line held for the name has no such test"
+    );
+}
+
 // ── the combat log reaches addons ────────────────────────────────────────────────────────────
 
 /// Combat-log addons parse arg1 with patterns built from the GlobalStrings, so arg1 is the whole
