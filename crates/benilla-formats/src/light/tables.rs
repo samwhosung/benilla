@@ -12,7 +12,7 @@ use crate::Chain;
 /// Half-minutes in a game day (band time axis); `1440` = noon.
 pub(super) const DAY: u32 = 2880;
 
-/// One band row: parallel (time, value) pairs across the day, ascending in `times`.
+/// One band row: parallel (time, value) pairs across the day, in file order (not always ascending).
 pub(super) struct Band<T> {
     times: Vec<u32>,
     values: Vec<T>,
@@ -41,32 +41,32 @@ fn decode_color(v: u32) -> [f32; 3] {
     ]
 }
 
-/// The `(i0, i1, frac)` segment bracketing `t`, wrapping from the last key to the first; `times`
-/// must be non-empty and ascending.
+/// The `(i0, i1, frac)` segment bracketing `t`, walking `times` as a cycle in file order; `times`
+/// must be non-empty.
 fn segment(times: &[u32], t: u32) -> (usize, usize, f32) {
     let n = times.len();
     if n == 1 {
         return (0, 0, 0.0);
     }
-    // Before the first key or after the last, interpolate last to first across midnight.
-    if t < times[0] || t >= times[n - 1] {
-        let span = times[0] + DAY - times[n - 1];
-        if span == 0 {
-            return (n - 1, 0, 0.0);
-        }
-        let into = if t < times[0] { t + DAY } else { t } - times[n - 1];
-        return (n - 1, 0, into as f32 / span as f32);
-    }
-    for i in 0..n - 1 {
-        if t <= times[i + 1] {
-            let span = times[i + 1] - times[i];
-            let f = if span == 0 {
-                0.0
-            } else {
-                (t - times[i]) as f32 / span as f32
-            };
-            return (i, i + 1, f);
-        }
+    // 0x6d63e0: walk the keys as a cycle in file order; the first pair bracketing `t` wins, and
+    // a pair that does not ascend wraps through midnight.
+    let day = i64::from(DAY);
+    let t = i64::from(t);
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (a, b) = (i64::from(times[i]), i64::from(times[j]));
+        let (b, t) = if b > a {
+            if !(a <= t && t <= b) {
+                continue;
+            }
+            (b, t)
+        } else {
+            if !(t >= a || t <= b) {
+                continue;
+            }
+            (b + day, if t < a { t + day } else { t })
+        };
+        return (i, j, (t - a) as f32 / (b - a) as f32);
     }
     (n - 1, n - 1, 0.0)
 }
@@ -139,6 +139,18 @@ pub(super) fn load_float_bands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segment_walks_unordered_keys_as_a_cycle() {
+        // LightParams 8's rows store [720, 1440, 0]: 09:00 sits between 06:00 and noon.
+        assert_eq!(segment(&[720, 1440, 0], 1080), (0, 1, 0.5));
+        // 18:00 lies on the noon-to-midnight pair.
+        assert_eq!(segment(&[720, 1440, 0], 2160), (1, 2, 0.5));
+        // [2640, 2520, 0, 1440]: the first pair wraps across most of the day and wins.
+        let (i0, i1, f) = segment(&[2640, 2520, 0, 1440], 1440);
+        assert_eq!((i0, i1), (0, 1));
+        assert!((f - (1440.0 + 2880.0 - 2640.0) / 2760.0).abs() < 1e-6);
+    }
 
     #[test]
     fn segment_wraps_across_midnight() {
