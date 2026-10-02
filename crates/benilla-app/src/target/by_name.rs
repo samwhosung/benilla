@@ -255,7 +255,9 @@ impl ByNameScan<'_, '_> {
         mode: Match,
     ) -> Option<(Entity, u64, String)> {
         scan_units(
-            &self.units,
+            self.units
+                .iter()
+                .map(|(e, g, tf, store)| (e, g.0, tf.translation, store)),
             self.origin(),
             &self.names,
             query,
@@ -282,8 +284,8 @@ type UnitQuery<'w, 's> = Query<
 /// ungated since it runs per command: the candidates counted, the winner and on what. `keep` is
 /// the per-candidate filter mode; `origin` is the active player's position, without which the
 /// reference resolves nothing (`0x493ae0`).
-fn scan_units(
-    units: &UnitQuery,
+fn scan_units<'a>(
+    units: impl Iterator<Item = (Entity, u64, Vec3, Option<&'a ObjectStore>)>,
     origin: Option<Vec3>,
     names: &NameCache,
     query: &str,
@@ -302,21 +304,21 @@ fn scan_units(
     let mut considered = 0usize;
     let mut nameless = 0usize;
     let mut best: Option<(Entity, u64, Rank, String)> = None;
-    for (entity, guid, tf, store) in units {
-        if !search.accepts(guid.0) || !keep(store) {
+    for (entity, guid, pos, store) in units {
+        if !search.accepts(guid) || !keep(store) {
             continue;
         }
-        let Some(name) = names.peek(guid.0) else {
+        let Some(name) = names.peek(guid) else {
             nameless += 1;
             continue;
         };
         considered += 1;
-        let dist2 = tf.translation.distance_squared(origin);
+        let dist2 = pos.distance_squared(origin);
         let Some(r) = rank(query, name, dist2, mode) else {
             continue;
         };
         if best.as_ref().is_none_or(|(_, _, b, _)| r.beats(*b)) {
-            best = Some((entity, guid.0, r, name.to_string()));
+            best = Some((entity, guid, r, name.to_string()));
         }
     }
     match &best {
@@ -339,17 +341,21 @@ fn scan_units(
 /// take [`ByNameScan`]: `DoEmote`'s target (`0x49fdb1`).
 #[derive(SystemParam)]
 pub(crate) struct PlayerLookup<'w, 's> {
-    units: UnitQuery<'w, 's>,
-    self_q: Query<'w, 's, &'static Transform, With<SelfPlayer>>,
+    /// World positions, [`GlobalTransform`]: the chat drain already reads it, where `Transform`
+    /// would put it in an undeclared order against every system that moves a unit.
+    units: Query<'w, 's, (Entity, &'static Guid, &'static GlobalTransform)>,
+    self_q: Query<'w, 's, &'static GlobalTransform, With<SelfPlayer>>,
 }
 
 impl PlayerLookup<'_, '_> {
     /// `0x493aa0` with typemask `0x10`, filter mode 0 and no exact-only flag, as `/assist <name>`
     /// calls it: any player in the object list, whole name or longest prefix. Selects nothing.
     pub(crate) fn find(&self, names: &NameCache, name: &str) -> Option<(Entity, u64)> {
-        let origin = self.self_q.single().ok().map(|tf| tf.translation);
+        let origin = self.self_q.single().ok().map(|tf| tf.translation());
         scan_units(
-            &self.units,
+            self.units
+                .iter()
+                .map(|(e, g, tf)| (e, g.0, tf.translation(), None)),
             origin,
             names,
             name,
