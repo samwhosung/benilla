@@ -69,10 +69,10 @@ fn spell_can_target_unit_answers_per_validated_token() {
     });
     s.set_spell_targetable_units([0x10, 0x21]);
     assert!(s
-        .eval::<bool>(r#"return SpellCanTargetUnit("player") == true"#)
+        .eval::<bool>(r#"return SpellCanTargetUnit("player") == 1"#)
         .unwrap());
     assert!(s
-        .eval::<bool>(r#"return SpellCanTargetUnit("PARTY1") == true"#)
+        .eval::<bool>(r#"return SpellCanTargetUnit("PARTY1") == 1"#)
         .unwrap());
     assert!(s
         .eval::<bool>(r#"return SpellCanTargetUnit("target") == nil"#)

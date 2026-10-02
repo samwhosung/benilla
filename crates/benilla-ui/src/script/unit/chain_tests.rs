@@ -272,7 +272,7 @@ fn spell_can_target_unit_answers_the_verdict_of_the_unit_the_token_names() {
     let mut s = world();
     s.set_spell_targetable_units([BOSS, P1]);
     let can = |s: &UiScript, token: &str| {
-        s.eval::<bool>(&format!("return SpellCanTargetUnit({token:?}) == true"))
+        s.eval::<bool>(&format!("return SpellCanTargetUnit({token:?}) == 1"))
             .unwrap()
     };
     let refused = |s: &UiScript, token: &str| {

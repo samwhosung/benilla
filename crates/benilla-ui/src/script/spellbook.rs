@@ -604,23 +604,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SpellIsTargeting() (`0x6e6cd0`): true while the targeting cursor is up, else nil.
+    // SpellIsTargeting() (`0x6e6cd0`): 1 while the targeting cursor is up, else nil.
     g.set(
         "SpellIsTargeting",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if model.spell_targeting {
-                Ok(Value::Boolean(true))
-            } else {
-                Ok(Value::Nil)
-            }
+            Ok(flag(model.spell_targeting))
         })?,
     )?;
 
     // SpellCanTargetUnit("unit") (`0x6e6d00`): the argument is a string or a number (`0x6e6d0e`,
     // else `Usage:`), resolved through `0x515970` (`0x6e6d3a`), which raises for a token it does
     // not know; a token naming nobody answers nil (`0x6e6d43`), and a guid asks `0x6e6460`'s unit
-    // leg whether the standing word clears against it.
+    // leg whether the standing word clears against it, answering 1 or nil.
     g.set(
         "SpellCanTargetUnit",
         lua.create_function(|lua, unit: Value| {
@@ -634,11 +630,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .unit_guids
                 .guid_of(&token)?
                 .is_some_and(|guid| model.spell_targetable_units.contains(&guid));
-            if can {
-                Ok(Value::Boolean(true))
-            } else {
-                Ok(Value::Nil)
-            }
+            Ok(flag(can))
         })?,
     )?;
 
@@ -666,6 +658,16 @@ mod tests {
     use super::{PetBookState, SpellBookState, SpellSlotView, SpellTabView};
     use crate::script::cursor::{CursorAction, CursorPayload};
     use crate::script::UiScript;
+
+    #[test]
+    fn spell_is_targeting_answers_one_or_nil() {
+        let mut s = UiScript::new().unwrap();
+        assert!(s.eval::<bool>("return SpellIsTargeting() == nil").unwrap());
+        s.set_spell_targeting(true);
+        assert!(s.eval::<bool>("return SpellIsTargeting() == 1").unwrap());
+        s.set_spell_targeting(false);
+        assert!(s.eval::<bool>("return SpellIsTargeting() == nil").unwrap());
+    }
 
     /// Two tabs: Fire (Fireball, and Fire Blast marked passive) and Frost (Frost Armor).
     fn book() -> SpellBookState {
