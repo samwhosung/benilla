@@ -170,16 +170,7 @@ fn rank(query: &str, name: &str, dist2: f32, mode: Match) -> Option<Rank> {
 #[allow(clippy::type_complexity)] // one bundled param, the app's convention for big query sets
 pub(crate) struct ByNameScan<'w, 's> {
     /// Every known unit, our own avatar included: the reference has no self-exclusion here.
-    units: Query<
-        'w,
-        's,
-        (
-            Entity,
-            &'static Guid,
-            &'static Transform,
-            Option<&'static ObjectStore>,
-        ),
-    >,
+    units: UnitQuery<'w, 's>,
     self_q: Query<
         'w,
         's,
@@ -255,8 +246,7 @@ impl ByNameScan<'_, '_> {
         )
     }
 
-    /// Resolve a name to a unit, logging one `by-name:` line per call, ungated since it runs per
-    /// command: the candidates counted, the winner and on what.
+    /// Resolve a name to a unit through [`scan_units`], the mode argument deciding the filter.
     fn resolve(
         &self,
         query: &str,
@@ -264,51 +254,110 @@ impl ByNameScan<'_, '_> {
         filter: Filter,
         mode: Match,
     ) -> Option<(Entity, u64, String)> {
-        let query = query.trim();
-        if query.is_empty() {
-            return None;
+        scan_units(
+            &self.units,
+            self.origin(),
+            &self.names,
+            query,
+            search,
+            mode,
+            |store| filter != Filter::AssistableAlive || self.assistable_alive(store),
+        )
+    }
+}
+
+/// One unit query's candidates, shared by [`ByNameScan`] and [`PlayerLookup`].
+type UnitQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static Guid,
+        &'static Transform,
+        Option<&'static ObjectStore>,
+    ),
+>;
+
+/// The resolver's walk (`0x493aa0`): a name to a unit, logging one `by-name:` line per call,
+/// ungated since it runs per command: the candidates counted, the winner and on what. `keep` is
+/// the per-candidate filter mode; `origin` is the active player's position, without which the
+/// reference resolves nothing (`0x493ae0`).
+fn scan_units(
+    units: &UnitQuery,
+    origin: Option<Vec3>,
+    names: &NameCache,
+    query: &str,
+    search: NameSearch,
+    mode: Match,
+    keep: impl Fn(Option<&ObjectStore>) -> bool,
+) -> Option<(Entity, u64, String)> {
+    let query = query.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let Some(origin) = origin else {
+        info!("by-name: \"{query}\" — no active player object; nothing resolves");
+        return None;
+    };
+    let mut considered = 0usize;
+    let mut nameless = 0usize;
+    let mut best: Option<(Entity, u64, Rank, String)> = None;
+    for (entity, guid, tf, store) in units {
+        if !search.accepts(guid.0) || !keep(store) {
+            continue;
         }
-        let Some(origin) = self.origin() else {
-            info!("by-name: \"{query}\" — no active player object; nothing resolves");
-            return None;
+        let Some(name) = names.peek(guid.0) else {
+            nameless += 1;
+            continue;
         };
-        let mut considered = 0usize;
-        let mut nameless = 0usize;
-        let mut best: Option<(Entity, u64, Rank, String)> = None;
-        for (entity, guid, tf, store) in &self.units {
-            if !search.accepts(guid.0) {
-                continue;
-            }
-            if filter == Filter::AssistableAlive && !self.assistable_alive(store) {
-                continue;
-            }
-            let Some(name) = self.names.peek(guid.0) else {
-                nameless += 1;
-                continue;
-            };
-            considered += 1;
-            let dist2 = tf.translation.distance_squared(origin);
-            let Some(r) = rank(query, name, dist2, mode) else {
-                continue;
-            };
-            if best.as_ref().is_none_or(|(_, _, b, _)| r.beats(*b)) {
-                best = Some((entity, guid.0, r, name.to_string()));
-            }
+        considered += 1;
+        let dist2 = tf.translation.distance_squared(origin);
+        let Some(r) = rank(query, name, dist2, mode) else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(_, _, b, _)| r.beats(*b)) {
+            best = Some((entity, guid.0, r, name.to_string()));
         }
-        match &best {
-            Some((_, guid, r, name)) => info!(
-                "by-name: \"{query}\" ({search:?}) -> \"{name}\" guid {guid:#x} \
-                 ({}, prefix {}, {:.1} yd) over {considered} named candidates ({nameless} unnamed)",
-                if r.exact { "exact" } else { "prefix" },
-                r.prefix,
-                r.dist2.sqrt(),
-            ),
-            None => info!(
-                "by-name: \"{query}\" ({search:?}) -> NO MATCH over {considered} named candidates \
-                 ({nameless} unnamed, {mode:?}); target left untouched"
-            ),
-        }
-        best.map(|(e, g, _, name)| (e, g, name))
+    }
+    match &best {
+        Some((_, guid, r, name)) => info!(
+            "by-name: \"{query}\" ({search:?}) -> \"{name}\" guid {guid:#x} \
+             ({}, prefix {}, {:.1} yd) over {considered} named candidates ({nameless} unnamed)",
+            if r.exact { "exact" } else { "prefix" },
+            r.prefix,
+            r.dist2.sqrt(),
+        ),
+        None => info!(
+            "by-name: \"{query}\" ({search:?}) -> NO MATCH over {considered} named candidates \
+             ({nameless} unnamed, {mode:?}); target left untouched"
+        ),
+    }
+    best.map(|(e, g, _, name)| (e, g, name))
+}
+
+/// The player-only name search for a caller that holds the [`NameCache`] mutably and so cannot
+/// take [`ByNameScan`]: `DoEmote`'s target (`0x49fdb1`).
+#[derive(SystemParam)]
+pub(crate) struct PlayerLookup<'w, 's> {
+    units: UnitQuery<'w, 's>,
+    self_q: Query<'w, 's, &'static Transform, With<SelfPlayer>>,
+}
+
+impl PlayerLookup<'_, '_> {
+    /// `0x493aa0` with typemask `0x10`, filter mode 0 and no exact-only flag, as `/assist <name>`
+    /// calls it: any player in the object list, whole name or longest prefix. Selects nothing.
+    pub(crate) fn find(&self, names: &NameCache, name: &str) -> Option<(Entity, u64)> {
+        let origin = self.self_q.single().ok().map(|tf| tf.translation);
+        scan_units(
+            &self.units,
+            origin,
+            names,
+            name,
+            NameSearch::PlayerOnly,
+            Match::PrefixOk,
+            |_| true,
+        )
+        .map(|(e, g, _)| (e, g))
     }
 }
 

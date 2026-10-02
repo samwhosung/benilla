@@ -69,7 +69,7 @@ pub(crate) use relations::{
 // pet bar's; the melee probe's press with nothing selected.
 pub(crate) use scan::{AttackNearestRequest, AttackPick};
 // The chat layer's by-name asks (`/target`, `/assist`).
-pub(crate) use by_name::{AssistRequest, TargetByNameRequest};
+pub(crate) use by_name::{AssistRequest, PlayerLookup, TargetByNameRequest};
 // The reaction decode and its faction catalog, which also tint the target frame
 // (`TargetFrame_CheckFaction`); `duel_rung` is the same walk, for `/reaction`.
 pub(crate) use ring::{duel_rung, ring_reaction, ring_variant, Factions, RingVariant};

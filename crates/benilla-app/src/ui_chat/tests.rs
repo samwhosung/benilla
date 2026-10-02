@@ -165,23 +165,60 @@ fn emoting_at_your_own_selection_sends_an_untargeted_emote() {
         guid: Some(0xdead_beef),
         ..Default::default()
     };
-    assert_eq!(emote_target(&sel, Some(me)), 0);
+    assert_eq!(emote_target(None, &sel, no_name, Some(me)), 0);
 
     let sel = Selection {
         target: Some(them),
         guid: Some(0xdead_beef),
         ..Default::default()
     };
-    assert_eq!(emote_target(&sel, Some(me)), 0xdead_beef);
+    assert_eq!(emote_target(None, &sel, no_name, Some(me)), 0xdead_beef);
 
     // No selection is untargeted, and with no self entity yet a selection goes out untouched.
-    assert_eq!(emote_target(&Selection::default(), Some(me)), 0);
+    assert_eq!(
+        emote_target(None, &Selection::default(), no_name, Some(me)),
+        0
+    );
     let sel = Selection {
         target: Some(them),
         guid: Some(0xdead_beef),
         ..Default::default()
     };
-    assert_eq!(emote_target(&sel, None), 0xdead_beef);
+    assert_eq!(emote_target(None, &sel, no_name, None), 0xdead_beef);
+}
+
+fn no_name(_: &str) -> Option<(bevy::prelude::Entity, u64)> {
+    None
+}
+
+/// `0x49fdb1`: a word not starting with `%` names a player and replaces the selection; a miss is
+/// guid 0; no argument or a `%` word is the selection.
+#[test]
+fn an_emote_argument_targets_the_named_player_and_not_the_selection() {
+    use crate::target::Selection;
+    use bevy::prelude::Entity;
+
+    let me = Entity::from_raw_u32(7).unwrap();
+    let bob = Entity::from_raw_u32(9).unwrap();
+    let sel = Selection {
+        target: Some(Entity::from_raw_u32(11).unwrap()),
+        guid: Some(0x5e1),
+        ..Default::default()
+    };
+    let find = |n: &str| (n == "Bob").then_some((bob, 0xb0b));
+    assert_eq!(emote_target(Some("Bob"), &sel, find, Some(me)), 0xb0b);
+    assert_eq!(
+        emote_target(Some("Nobody"), &sel, find, Some(me)),
+        0,
+        "a miss is untargeted"
+    );
+    for arg in [None, Some(""), Some("%t"), Some("%x")] {
+        let panics = |_: &str| -> Option<(Entity, u64)> { panic!("no search for {arg:?}") };
+        assert_eq!(emote_target(arg, &sel, panics, Some(me)), 0x5e1, "{arg:?}");
+    }
+    // Naming yourself is the self-target edge: untargeted.
+    let own = |_: &str| Some((me, 0x111));
+    assert_eq!(emote_target(Some("Me"), &sel, own, Some(me)), 0);
 }
 
 #[test]
@@ -1188,16 +1225,24 @@ fn action_commands_parse() {
     );
 }
 
+fn emote(text_id: u32, arg: Option<&str>) -> ParsedChat {
+    ParsedChat::TextEmote {
+        text_id,
+        arg: arg.map(str::to_string),
+    }
+}
+
 #[test]
 fn emote_aliases_resolve_through_the_table() {
     let _data = benilla_formats::wow_data_or_skip!();
     let t = stub_table();
     let parse_line = |line: &str| super::input::parse_line(&t, line);
-    assert_eq!(parse_line("/wave"), ParsedChat::TextEmote(101));
+    assert_eq!(parse_line("/wave"), emote(101, None));
     // An alias that is not its token's `EmotesText` name resolves too, as `/lol` (LAUGH) does.
-    assert_eq!(parse_line("/hello"), ParsedChat::TextEmote(101));
+    assert_eq!(parse_line("/hello"), emote(101, None));
     // An emote takes an argument (`DoEmote(token, msg)`): the command is the first word only.
-    assert_eq!(parse_line("/wave Bob"), ParsedChat::TextEmote(101));
+    assert_eq!(parse_line("/wave Bob"), emote(101, Some("Bob")));
+    assert_eq!(parse_line("/wave %t"), emote(101, Some("%t")));
     assert_eq!(parse_line("/nosuch"), ParsedChat::Unknown);
 }
 
@@ -1329,7 +1374,7 @@ fn real_alias_table_resolves_the_shipped_commands() {
     let parse_line = |line: &str| super::input::parse_line(&table, line);
 
     // `/sit` is EmotesText 86, whose `Emotes.dbc` row 13 (STATE_SIT) sets stand state 1.
-    assert_eq!(parse_line("/sit"), ParsedChat::TextEmote(86));
+    assert_eq!(parse_line("/sit"), emote(86, None));
     assert_eq!(
         cat.text_emote(86).and_then(|e| cat.posture_state(e)),
         Some(1)
@@ -1341,7 +1386,7 @@ fn real_alias_table_resolves_the_shipped_commands() {
         ("/liedown", 3),
         ("/kneel", 8),
     ] {
-        let ParsedChat::TextEmote(text_id) = parse_line(line) else {
+        let ParsedChat::TextEmote { text_id, .. } = parse_line(line) else {
             panic!("{line} is an emote");
         };
         let posture = cat.text_emote(text_id).and_then(|e| cat.posture_state(e));
@@ -1363,7 +1408,7 @@ fn real_alias_table_resolves_the_shipped_commands() {
         "/strong",
     ] {
         assert!(
-            matches!(parse_line(line), ParsedChat::TextEmote(_)),
+            matches!(parse_line(line), ParsedChat::TextEmote { .. }),
             "{line} resolves to an emote"
         );
     }

@@ -52,7 +52,7 @@ pub(in crate::ui_chat) enum ParsedChat {
     /// `/help`.
     Help,
     /// An `EmotesText` command (`/wave` is 101), sent as `CMSG_TEXT_EMOTE` at the selection.
-    TextEmote(u32),
+    TextEmote { text_id: u32, arg: Option<String> },
     /// A channel verb the stock handler parsed and the VM queued; never from [`parse_line`].
     Channel(benilla_ui::script::ChannelCommand),
     /// `/castvis`: a locally synthesized [`crate::creature_anim::CastEvent`], at the selection
@@ -128,7 +128,10 @@ pub(in crate::ui_chat) fn parse_line(table: &SlashCommands, line: &str) -> Parse
     match table.lookup(cmd) {
         Some(Command::Slash(index)) => slash_command(index, args),
         // The alias table did the `DoEmote(token)` resolve at boot: `/lol` arrives as LAUGH's id.
-        Some(Command::Emote { text_id }) => ParsedChat::TextEmote(text_id),
+        Some(Command::Emote { text_id }) => ParsedChat::TextEmote {
+            text_id,
+            arg: (!args.is_empty()).then(|| args.to_string()),
+        },
         Some(Command::Dev(dev)) => dev_command(dev, args),
         // `HELP_TEXT_SIMPLE`'s case, after the drain offers the line to `SlashCmdList`.
         None => ParsedChat::Unknown,

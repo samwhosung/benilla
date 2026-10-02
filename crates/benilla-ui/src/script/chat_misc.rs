@@ -8,7 +8,8 @@ use mlua::{Lua, MultiValue, Value};
 use super::Model;
 
 /// `DoEmote(token [, target])`: the `EmotesText.dbc` name token (`"WAVE"`, not `/wave`) and an
-/// optional target name.
+/// optional target string (`0x49fd30` reads arg 2 with `lua_tostring`): a player name, or a `%`
+/// word for the selection. A non-string, non-number second argument reads as none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EmoteRequest {
     pub token: String,
@@ -79,14 +80,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "DoEmote",
-        lua.create_function(|lua, (token, target): (Option<String>, Option<String>)| {
+        lua.create_function(|lua, (token, target): (Option<String>, Value)| {
             let Some(token) = token.filter(|t| !t.is_empty()) else {
                 return Ok(());
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.emote_requests.push(EmoteRequest {
                 token: token.to_ascii_uppercase(),
-                target: target.filter(|t| !t.trim().is_empty()),
+                target: match target {
+                    Value::String(s) => Some(s.to_string_lossy()),
+                    Value::Integer(i) => Some(i.to_string()),
+                    Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                }
+                .filter(|t| !t.is_empty()),
             });
             Ok(())
         })?,
@@ -206,6 +213,24 @@ mod tests {
             ]
         );
         assert!(s.take_emote_requests().is_empty(), "drained");
+    }
+
+    /// The second argument is a string, never a unit token: `"target"` is a name like any other,
+    /// and `%t` reaches the app's selection arm untouched (`0x49fdb1`).
+    #[test]
+    fn do_emote_second_argument_is_passed_as_a_string() {
+        let mut s = UiScript::new().unwrap();
+        s.run("DoEmote('WAVE', 'target') DoEmote('WAVE', '%t') DoEmote('WAVE', {})")
+            .unwrap();
+        let targets: Vec<_> = s
+            .take_emote_requests()
+            .into_iter()
+            .map(|e| e.target)
+            .collect();
+        assert_eq!(
+            targets,
+            vec![Some("target".into()), Some("%t".into()), None]
+        );
     }
 
     #[test]

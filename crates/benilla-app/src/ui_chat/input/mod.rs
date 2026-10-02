@@ -29,12 +29,27 @@ fn target_player_name(
     names.resolve(guid, commands).map(str::to_string)
 }
 
-/// The target guid a `CMSG_TEXT_EMOTE` carries: the selection, except that an emote at yourself
-/// goes out untargeted (`0x5ef611`), so 1.12 has no self-emote sentence. Compared by entity, which
-/// agrees with the guid: [`Selection`]'s one writer sets both from one streamed entity.
-pub(super) fn emote_target(selection: &Selection, me: Option<Entity>) -> u64 {
-    match selection.guid {
-        Some(guid) if !(me.is_some() && selection.target == me) => guid,
+/// The target guid a `CMSG_TEXT_EMOTE` carries (`DoEmote`'s caller, `0x49fdb1`): the selection,
+/// unless the argument is a non-empty word not starting with `%`, which names a player through
+/// `named` (the `0x493aa0` player search) and sends guid 0 on a miss. Either way an emote at
+/// yourself goes out untargeted (`0x5ef611`), so 1.12 has no self-emote sentence. Compared by
+/// entity, which agrees with the guid: [`Selection`]'s one writer sets both from one streamed
+/// entity.
+pub(super) fn emote_target(
+    arg: Option<&str>,
+    selection: &Selection,
+    named: impl FnOnce(&str) -> Option<(Entity, u64)>,
+    me: Option<Entity>,
+) -> u64 {
+    let (entity, guid) = match arg.filter(|a| !a.is_empty() && !a.starts_with('%')) {
+        Some(name) => match named(name) {
+            Some((entity, guid)) => (Some(entity), Some(guid)),
+            None => (None, None),
+        },
+        None => (selection.target, selection.guid),
+    };
+    match guid {
+        Some(guid) if !(me.is_some() && entity == me) => guid,
         _ => 0,
     }
 }
@@ -73,6 +88,8 @@ pub(super) struct ChatOut<'w, 's> {
     target: MessageWriter<'w, crate::target::TargetByNameRequest>,
     assist: MessageWriter<'w, crate::target::AssistRequest>,
     follow: MessageWriter<'w, crate::player::FollowRequest>,
+    /// `/wave <name>`'s player search, which selects nothing.
+    players: crate::target::PlayerLookup<'w, 's>,
     /// `/partytest ping` seats a group member's ping through the wire arm's `seat`.
     ping: ResMut<'w, crate::minimap::MinimapPing>,
     /// The red error line by GlobalStrings key. The system's only `UiErrorKeys` access: a second
@@ -91,7 +108,13 @@ fn engine_verbs(
     for e in script.take_emote_requests() {
         // The token is the `EmotesText.dbc` name (`EMOTE<i>_TOKEN`, "WAVE").
         match emotes.and_then(|c| c.text_id(&e.token)) {
-            Some(id) => out.push((String::new(), ParsedChat::TextEmote(id))),
+            Some(text_id) => out.push((
+                String::new(),
+                ParsedChat::TextEmote {
+                    text_id,
+                    arg: e.target,
+                },
+            )),
             None => warn!(
                 "chat: DoEmote({:?}): no EmotesText row for that token",
                 e.token
@@ -650,7 +673,7 @@ pub(super) fn drain_chat_input(
                 }
             }
             // `DoEmote` (`0x5ef560`): the gates in the client's order, then posture and packet.
-            ParsedChat::TextEmote(text_id) => {
+            ParsedChat::TextEmote { text_id, arg } => {
                 let (stand_state, flags) = self_player
                     .single()
                     .map_or((0, 0), |(_, m, _)| (m.stand_state, m.flags));
@@ -713,7 +736,9 @@ pub(super) fn drain_chat_input(
                         .write(crate::player::StandStateRequest { state: state as u8 });
                 }
                 let target = emote_target(
+                    arg.as_deref(),
                     &selection,
+                    |name| chat_out.players.find(&names, name),
                     self_player.single().ok().map(|(entity, _, _)| entity),
                 );
                 match commands
