@@ -56,7 +56,8 @@ const JUMP_ARC_MIN_UP: f32 = 0.5;
 #[derive(Clone, Copy)]
 enum OneShotReq {
     Swing(u32),
-    Emote(u16),
+    /// The id, and whether it came through the emote player's armed-id test.
+    Emote(u16, bool),
 }
 
 /// The live one-shot the combat fast path tests: the key bone's clip, else bone 0's (`0x5fe422`).
@@ -78,6 +79,26 @@ fn live_oneshot(
         }
     }
     None
+}
+
+/// The id armed on the unit, as `0x5fdb50` reads it: the key bone's clip while one runs, else
+/// bone 0's. A clip that has finished counts as gone: its completion callback re-arms the base.
+fn armed_id(
+    drv: &AnimDriver,
+    player: &AnimationPlayer,
+    tr: &AnimationTransitions,
+    anims: &ModelAnimations,
+) -> Option<u16> {
+    let running = |n| player.animation(n).is_some_and(|a| !a.is_finished());
+    if let Some(ov) = drv.overlay.filter(|ov| running(ov.node)) {
+        return Some(ov.id);
+    }
+    let node = tr.get_main_animation().filter(|&n| running(n))?;
+    anims
+        .clips
+        .iter()
+        .find(|c| c.node == node)
+        .map(|c| c.anim_id)
 }
 
 /// Whether a one-shot is live on the unit; the missile queue polls it to launch a missile whose
@@ -338,7 +359,7 @@ pub(super) fn drive_animations(
         pending
             .entry(e.entity)
             .or_default()
-            .push((OneShotReq::Emote(e.anim_id), e.seq));
+            .push((OneShotReq::Emote(e.anim_id, e.via_player), e.seq));
     }
     // A mounted rider's mount-set emotes go to the mount model (`0x5fe7c1`); the rider keeps the
     // request for its own CLASS_A and nowhere routes.
@@ -351,7 +372,7 @@ pub(super) fn drive_animations(
             continue;
         }
         for &(req, seq) in reqs {
-            if matches!(req, OneShotReq::Emote(id) if route_mounted(id).mount) {
+            if matches!(req, OneShotReq::Emote(id, _) if route_mounted(id).mount) {
                 to_mount.push((child.0, (req, seq)));
             }
         }
@@ -731,7 +752,7 @@ pub(super) fn drive_animations(
         });
         // In `PlaySeq` order, defense last: the reference plays it from the deferred impact scan,
         // after every message handler.
-        let mut requests: Vec<u16> = pending
+        let mut requests: Vec<(u16, Option<u16>)> = pending
             .remove(&entity)
             .map(|mut v| {
                 v.sort_by_key(|&(_, seq)| seq);
@@ -747,19 +768,21 @@ pub(super) fn drive_animations(
                                 swing_anim_main(w.armed_main())
                             };
                             debug!("swing: unit {entity} anim {id} (hitInfo {hit_info:#x})");
-                            id
+                            (id, None)
                         }
-                        OneShotReq::Emote(id) => id,
+                        // The armed-id test compares the record's own AnimID, before the play
+                        // seam's unarmed remap.
+                        OneShotReq::Emote(id, via_player) => (id, via_player.then_some(id)),
                     })
                     .collect()
             })
             .unwrap_or_default();
-        requests.extend(defense);
+        requests.extend(defense.map(|id| (id, None)));
         // At the play seam (`0x5fe2f0`), Special1H/2H with both hands empty becomes
         // SpecialUnarmed(118), for every request.
         {
             let w = wielded.copied().unwrap_or_default();
-            for id in &mut requests {
+            for (id, _) in &mut requests {
                 *id = select::unarmed_special(*id, w.armed_main(), w.armed_off());
             }
         }
@@ -771,9 +794,23 @@ pub(super) fn drive_animations(
             && !airborne_frozen
             && live_oneshot(&drv, &player, &tr, anims, catalog).is_none()
         {
-            requests.extend(drv.deferred.take());
+            requests.extend(drv.deferred.take().map(|id| (id, None)));
         }
-        for id in requests {
+        for (id, armed_test) in requests {
+            // The emote player's own test first (`0x5fcd56`): an id already armed on the key bone
+            // or bone 0 plays nothing, ahead of the lock and the fast path in `0x5fe2f0`.
+            if let Some(raw) = armed_test {
+                let want = find_resolved(anims, raw, catalog).map_or(raw, |c| c.anim_id);
+                if armed_id(&drv, &player, &tr, anims).is_some_and(|a| a == raw || a == want) {
+                    if benilla_assets::trace::enabled() {
+                        benilla_assets::trace::line(
+                            "fct",
+                            &format!("anim armed-skip unit={entity} id={raw}"),
+                        );
+                    }
+                    continue;
+                }
+            }
             // The lock first: `0x5fe2f0`'s head guard returns before routing, the fast path and
             // the dedup, so a locked unit gets no arm and no deferral.
             if drv.base_lock.refuses() {

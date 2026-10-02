@@ -424,6 +424,10 @@ pub(crate) struct EmoteAnim {
     pub(crate) anim_id: u16,
     /// `PlaySeq` stamp; a kit anim inherits its `CastEvent`'s.
     pub(crate) seq: u64,
+    /// Came through the shared one-shot emote player (`0x5fcd20`: `SMSG_EMOTE`, the gesture
+    /// dispatcher), which skips an id already armed on the key bone or bone 0 (`0x5fcd56`). A kit
+    /// anim and `DoEmote`'s local play call `0x5fe2f0` directly and take no such test.
+    pub(crate) via_player: bool,
 }
 
 /// A state kit's `AnimID`, compared and never played: both field-4 callers (`0x5ff4c6`,
@@ -465,6 +469,7 @@ fn flourish_to_anim(
             entity: child.0,
             anim_id: select::MOUNT_SPECIAL,
             seq: play_seq.next(),
+            via_player: false,
         });
     }
 }

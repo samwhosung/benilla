@@ -662,6 +662,7 @@ fn whiff_slowdown_spares_a_non_swing_oneshot() {
         entity: spinner,
         anim_id: 57,
         seq: 1,
+        via_player: false,
     });
     app.world_mut().write_message(SwingMessage {
         attacker: swinger,
@@ -747,12 +748,14 @@ fn same_frame_collision_fast_paths_the_second_combat_clip() {
         entity: spin_last,
         anim_id: 57,
         seq: 2,
+        via_player: false,
     });
     // swing_last: the spin arrives first.
     app.world_mut().write_message(EmoteAnim {
         entity: swing_last,
         anim_id: 57,
         seq: 3,
+        via_player: false,
     });
     app.world_mut().write_message(SwingMessage {
         attacker: swing_last,
@@ -1450,6 +1453,7 @@ fn a_jump_in_place_cast_replaces_the_hang_and_survives_the_arc() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update();
     fn drv(app: &App, unit: Entity) -> &AnimDriver {
@@ -1494,6 +1498,7 @@ fn landing_mid_cast_plays_the_land_pick() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update();
     app.world_mut()
@@ -1525,6 +1530,7 @@ fn a_cast_over_the_fall_loop_holds_until_landing() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update(); // Swing { 54, under: Jump }
     app.world_mut().entity_mut(unit).insert(MovementState {
@@ -1543,6 +1549,7 @@ fn a_cast_over_the_fall_loop_holds_until_landing() {
         entity: unit,
         anim_id: 54,
         seq: 2,
+        via_player: false,
     });
     app.update();
     assert!(
@@ -1597,6 +1604,7 @@ fn a_moving_jump_cast_masks_onto_the_overlay() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update();
     let drv = app.world().entity(unit).get::<AnimDriver>().unwrap();
@@ -1622,6 +1630,7 @@ fn a_jump_over_a_live_cast_transplants_it_to_the_torso() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update();
     {
@@ -1774,6 +1783,7 @@ fn a_finished_masked_cast_fades_out_instead_of_snapping() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update();
     {
@@ -1903,6 +1913,7 @@ fn a_midair_deferred_park_survives_the_level_and_dies_at_the_landing_play() {
         entity: unit,
         anim_id: 57,
         seq: 1,
+        via_player: false,
     });
     app.world_mut().write_message(SwingMessage {
         attacker: unit,
@@ -2226,6 +2237,7 @@ fn a_root_landing_with_the_cast_returns_the_body_to_neutral() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update();
     assert_eq!(
@@ -2252,6 +2264,7 @@ fn a_run_starting_under_a_cast_still_transplants_it_up() {
         entity: unit,
         anim_id: 54,
         seq: 1,
+        via_player: false,
     });
     app.update();
     let mode = |app: &App| app.world().entity(unit).get::<AnimDriver>().unwrap().mode;
@@ -2553,6 +2566,7 @@ fn the_mount_transition_takes_bone_0_back_from_a_full_body_one_shot() {
         entity: unit,
         anim_id: SPELL_CAST_OMNI,
         seq: 1,
+        via_player: false,
     });
     app.update();
     assert_eq!(
@@ -2872,6 +2886,7 @@ fn a_mid_volley_fire_clip_re_pulls_and_the_pull_promotes_to_the_hold() {
         entity: unit,
         anim_id: 46,
         seq: 1,
+        via_player: false,
     });
     app.update();
     assert_eq!(
@@ -3022,6 +3037,7 @@ fn every_shot_of_a_volley_re_arms_the_fire_clip_through_the_emote_lane() {
             entity: unit,
             anim_id: 46,
             seq: shot,
+            via_player: false,
         });
         app.update();
         assert_eq!(mode(&app), FIRING, "shot {shot} takes bone 0");
@@ -3429,6 +3445,7 @@ fn a_special_goes_unarmed_only_when_both_hands_are_empty() {
             entity: unit,
             anim_id: 57,
             seq: 1,
+            via_player: false,
         });
         unit
     };
@@ -3698,6 +3715,7 @@ fn a_gait_change_raises_the_anim_edge_and_a_steady_frame_does_not() {
         entity: unit,
         anim_id: 57,
         seq: 1,
+        via_player: false,
     });
     app.update();
     assert!(edge(&app), "and so does a one-shot");
@@ -3729,6 +3747,7 @@ fn a_combat_over_combat_fast_path_does_not_raise_the_anim_edge() {
         entity: unit,
         anim_id: 57,
         seq: 1,
+        via_player: false,
     });
     app.update();
     assert!(edge(&app), "the first combat play arms normally");
@@ -3806,6 +3825,7 @@ mod base_anim_lock {
             entity: unit,
             anim_id,
             seq: 1,
+            via_player: false,
         });
         app.update();
     }
@@ -4041,6 +4061,7 @@ mod routing {
             entity,
             anim_id,
             seq: 1,
+            via_player: false,
         });
         app.update();
     }
@@ -4303,6 +4324,7 @@ mod emote_state {
             entity: npc,
             anim_id: 118,
             seq: 1,
+            via_player: false,
         });
         app.update();
         assert!(matches!(mode(&app, npc), Mode::Swing { id: 118, .. }));
@@ -4321,6 +4343,7 @@ mod emote_state {
             entity: partner,
             anim_id: 118,
             seq: 1,
+            via_player: false,
         });
         app.update();
         interact_guid(&mut app, Some(partner), PLAYER);
@@ -4391,6 +4414,7 @@ mod emote_state {
             entity: npc,
             anim_id: 118,
             seq: 1,
+            via_player: false,
         });
         app.update();
         assert!(matches!(
@@ -4426,4 +4450,93 @@ mod emote_state {
         app.update();
         assert_eq!(gait(&app, swimmer), Some(42), "moving, it swims");
     }
+}
+
+/// The emote player's armed-id test (`0x5fcd56`, `0x5fdb50`): an id already running on bone 0 is
+/// not played again, whether it is the gait clip or an earlier one-shot; a different id is, and a
+/// kit anim (`0x5fe2f0` directly) takes no such test.
+#[test]
+fn the_emote_player_skips_an_id_already_armed_but_plays_a_different_one() {
+    use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle};
+    use bevy::animation::AnimationClip;
+
+    let mut app = app();
+    let mut asset = |secs: f32| {
+        let mut c = AnimationClip::default();
+        c.set_duration(secs);
+        app.world_mut()
+            .resource_mut::<Assets<AnimationClip>>()
+            .add(c)
+    };
+    let (stand, dance, wave) = (asset(10.0), asset(10.0), asset(10.0));
+    let (graph, nodes) = AnimationGraph::from_clips([stand, dance, wave]);
+    let graph_handle = app
+        .world_mut()
+        .resource_mut::<Assets<AnimationGraph>>()
+        .add(graph);
+    let mut clips = vec![clip(0, 0, true), clip(69, 0, true), clip(67, 0, false)];
+    for (c, n) in clips.iter_mut().zip(nodes.iter().copied()) {
+        c.node = n;
+        c.duration = 10.0;
+    }
+    let unit = app
+        .world_mut()
+        .spawn((
+            ModelAnimations {
+                graph: graph_handle.clone(),
+                clips,
+                hand_close: [None, None],
+                playable_animation_lookup: Vec::new(),
+                animation_lookup: Vec::new(),
+                global_bones: Vec::new(),
+                first_seq: None,
+                pose: Default::default(),
+            },
+            AnimationPlayer::default(),
+            AnimationTransitions::new(),
+            AnimationGraphHandle(graph_handle),
+            AnimDriver::default(),
+        ))
+        .id();
+    app.update(); // settle: Stand holds bone 0
+    let play = |app: &mut App, anim_id: u16, via_player: bool| {
+        app.world_mut().write_message(EmoteAnim {
+            entity: unit,
+            anim_id,
+            seq: 1,
+            via_player,
+        });
+        advance(app, 500);
+    };
+    let swing = |app: &App| match app.world().entity(unit).get::<AnimDriver>().unwrap().mode {
+        super::super::select::Mode::Swing { id, .. } => Some(id),
+        _ => None,
+    };
+    let time = |app: &App, node| {
+        app.world()
+            .entity(unit)
+            .get::<AnimationPlayer>()
+            .unwrap()
+            .animation(node)
+            .map(|a| a.seek_time())
+    };
+
+    // The gait's own id over itself: nothing arms.
+    play(&mut app, 0, true);
+    assert_eq!(swing(&app), None, "Stand over Stand is skipped");
+    // A kit anim has no such test: it arms the same id.
+    play(&mut app, 0, false);
+    assert_eq!(swing(&app), Some(0), "a kit anim is not skipped");
+    // A different id arms and runs.
+    play(&mut app, 69, true);
+    assert_eq!(swing(&app), Some(69), "a different id plays");
+    let t = time(&app, nodes[1]).expect("armed");
+    assert!(t > 0.4, "the dance has run since its arm: {t}");
+    // The same id over itself does not restart: its clip time keeps advancing.
+    play(&mut app, 69, true);
+    let t2 = time(&app, nodes[1]).expect("armed");
+    assert!(t2 > t, "the dance kept advancing, {t} then {t2}");
+    // A different id replaces it.
+    play(&mut app, 67, true);
+    assert_eq!(swing(&app), Some(67));
 }
