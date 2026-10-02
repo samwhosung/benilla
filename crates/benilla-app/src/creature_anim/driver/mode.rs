@@ -36,6 +36,8 @@ pub(super) struct Frame<'a> {
     pub(super) wielded: Option<&'a Wielded>,
     pub(super) store: Option<&'a ObjectStore>,
     pub(super) emote_sounds: Option<&'a EmoteSounds>,
+    /// Whether this unit is the current interact NPC.
+    pub(super) interacting: bool,
     pub(super) walk: f32,
     pub(super) model_scale: f32,
     /// Whether this body's plays go to the anim trace; `subject` labels them (rider or mount).
@@ -68,6 +70,7 @@ pub(super) fn run(
         wielded,
         store,
         emote_sounds,
+        interacting,
         walk,
         model_scale,
         traced,
@@ -331,11 +334,20 @@ pub(super) fn run(
                 // fills only the bare-Stand slot; whatever outranks Stand already routed `cands`.
                 let state_emote_cands;
                 let cands: &[u16] = if is_bare_stand(cands) {
-                    let emote_anim = store
-                        .and_then(|s| emote_sounds.and_then(|e| e.anim(s.0.unit_emote_state())));
+                    let emote_anim = store.and_then(|s| {
+                        let state = s.0.unit_emote_state();
+                        emote_sounds.and_then(|e| {
+                            select::state_emote_anim(
+                                state,
+                                e.anim(state),
+                                e.emote_flags(state),
+                                interacting,
+                            )
+                        })
+                    });
                     match emote_anim {
                         Some(id) => {
-                            state_emote_cands = state_emote_gait(id as u16);
+                            state_emote_cands = state_emote_gait(id);
                             &state_emote_cands
                         }
                         None => cands,

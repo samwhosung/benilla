@@ -11,7 +11,13 @@ use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::dbc::{parse, str_at, u32_at};
 
+/// The `EmoteFlags` bit `0x2000`: a state emote that yields to an interaction. The state
+/// resolver (`0x5fd7fa`) passes over it for the current interact NPC, and the facing chain
+/// (`0x600d98`) lets the unit turn toward the interactor while it is set.
+pub const EMOTE_FLAG_INTERACTION: u32 = 0x2000;
+
 /// The joined emote tables.
+#[derive(Default)]
 pub struct EmoteSoundCatalog {
     /// Uppercased `EmotesText.Name` ("WAVE") to text-emote id.
     by_name: HashMap<String, u32>,
@@ -60,6 +66,22 @@ impl EmoteSoundCatalog {
     /// the looping `UNIT_NPC_EMOTESTATE` idle, which share the id space.
     pub fn anim(&self, emote_id: u32) -> Option<u32> {
         self.anim.get(&emote_id).copied().filter(|&a| a != 0)
+    }
+
+    /// A catalog holding one `Emotes.dbc` row's `AnimID` and `EmoteFlags`, for tests of what
+    /// reads them.
+    #[doc(hidden)]
+    pub fn with_row(mut self, emote_id: u32, anim_id: u32, flags: u32) -> Self {
+        self.anim.insert(emote_id, anim_id);
+        self.emote_flags.insert(emote_id, flags);
+        self
+    }
+
+    /// The raw `AnimID` of an `Emotes.dbc` row, `0` (Stand) included: the state resolver
+    /// (`0x5fd770`) claims the base with whatever the row holds (`0x5fd816`, `row+8`), and a
+    /// missing row claims nothing.
+    pub fn state_anim(&self, emote_id: u32) -> Option<u32> {
+        self.anim.get(&emote_id).copied()
     }
 
     /// The `Emotes.dbc` id in gesture `slot`, the `code` the client's gesture dispatcher

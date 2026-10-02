@@ -36,7 +36,7 @@ const UNIT_FLAG_STUNNED: u32 = 0x0004_0000;
 
 /// The `EmoteFlags` bit that permits the target and interaction facing during a state emote
 /// (`600d98 test ch,0x20`); the name is ours, the tested bit is the reference's.
-const EMOTE_PERMITS_FACING: u32 = 0x2000;
+const EMOTE_PERMITS_FACING: u32 = benilla_formats::EMOTE_FLAG_INTERACTION;
 
 /// A stationary unit's display-facing state, the client's `CGUnit+0xc98` goal and
 /// `+0xc9c..+0xca8` delta ring; present only while [`drive_display_facing`] governs the unit.

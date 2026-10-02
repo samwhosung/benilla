@@ -280,13 +280,16 @@ pub(super) fn drive_animations(
         MessageReader<BaseAnimRecompute>,
         // A rider's mount child, where a mount-set request goes (`0x5fe7c1`).
         Query<(&ObjectStore, &crate::entities::mount::MountChild)>,
+        // The open NPC session's unit (`[0xb4e2d0]`): its state emote is passed over when the
+        // row's `EmoteFlags` carry `0x2000` (`0x5fd7e2`-`0x5fd7fd`).
+        Option<Res<crate::ui_session::InteractNpc>>,
     ),
     // The variation roll's LCG, the reference's single CRT `_rand` stream shared by every play.
     mut rng: ResMut<benilla_assets::AnimRng>,
     // The last anim trace line per traced unit; the trace writes only on change.
     mut anim_trace_last: Local<std::collections::HashMap<Entity, String>>,
 ) {
-    let (emote_sounds, loot_kneel, time, names, mut recomputes, riders) = aux;
+    let (emote_sounds, loot_kneel, time, names, mut recomputes, riders, interact) = aux;
     let dt = time.delta_secs();
     // This frame's one-shot plays per unit, replayed in the reference's call order (`PlaySeq`
     // stamps): a later call overwrites an earlier, and the combat fast path keys on what is playing
@@ -975,6 +978,17 @@ pub(super) fn drive_animations(
             }
         }
 
+        // `SetInteractNPC` re-picks the base at once on open and on clear (`0x5fd9e0(-1)`, sites
+        // `0x493198` and `0x493219`), over a live one-shot as any base arm; in Gait the per-frame
+        // pick already follows.
+        let interacting = interact.as_ref().is_some_and(|i| i.0 == Some(entity));
+        let flipped = std::mem::replace(&mut drv.interacting, interacting) != interacting;
+        if flipped && matches!(drv.mode, Mode::Swing { .. }) {
+            drv.deferred = None;
+            drv.mode = Mode::Gait;
+            drv.gait = None;
+        }
+
         // ── The mode machine: the base track's decision.
         mode::run(
             mode::Frame {
@@ -994,6 +1008,7 @@ pub(super) fn drive_animations(
                 wielded,
                 store,
                 emote_sounds: emote_sounds.as_deref(),
+                interacting,
                 walk,
                 model_scale,
                 traced,

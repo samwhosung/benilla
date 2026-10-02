@@ -460,6 +460,22 @@ pub(super) fn is_bare_stand(cands: &[u16]) -> bool {
     cands == [STAND] || cands == [STEALTH_STAND, STAND]
 }
 
+/// The state-emote resolver's verdict (`0x5fd770`): the row's `AnimID` for the unit's
+/// `UNIT_NPC_EMOTESTATE`, `None` when it passes over. A state with no row passes over, and the
+/// current interact NPC passes over a row whose `EmoteFlags` carry `EMOTE_FLAG_INTERACTION`
+/// (`0x5fd7e2`-`0x5fd7fd`), so a vendor stops hammering while his window is open.
+pub(super) fn state_emote_anim(
+    state: u32,
+    anim: Option<u32>,
+    flags: Option<u32>,
+    interacting: bool,
+) -> Option<u16> {
+    if state == 0 || (interacting && flags? & benilla_formats::EMOTE_FLAG_INTERACTION != 0) {
+        return None;
+    }
+    anim.map(|a| a as u16)
+}
+
 /// The state-emote idle's candidates, Stand as the fallback; only for a bare-Stand frame.
 pub(super) fn state_emote_gait(emote_anim: u16) -> [u16; 2] {
     [emote_anim, STAND]

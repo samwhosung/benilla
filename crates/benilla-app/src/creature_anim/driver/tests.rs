@@ -4138,3 +4138,124 @@ mod routing {
         );
     }
 }
+
+/// The `UNIT_NPC_EMOTESTATE` resolver (`0x5fd770`): the current interact NPC passes over a state
+/// whose `Emotes.dbc` flags carry `0x2000`, and `SetInteractNPC` re-picks its base on open and
+/// on clear.
+mod emote_state {
+    use super::*;
+    use crate::creature_anim::Mode;
+    use crate::net::ObjectStore;
+    use crate::sound::EmoteSounds;
+    use crate::ui_session::InteractNpc;
+    use benilla_formats::EmoteSoundCatalog;
+
+    /// Emote states: 28 plays AnimID 234 and yields to interaction (`0x2000`); 29 plays 235 and
+    /// does not.
+    const YIELDING: u32 = 28;
+    const STUBBORN: u32 = 29;
+    const FIELD_NPC_EMOTESTATE: u16 = 148;
+
+    fn model() -> ModelAnimations {
+        ModelAnimations {
+            graph: Handle::default(),
+            clips: vec![
+                clip(0, 1, true),    // Stand
+                clip(234, 2, true),  // the yielding state's loop
+                clip(235, 3, true),  // the other state's loop
+                clip(118, 4, false), // SpecialUnarmed, a one-shot
+            ],
+            hand_close: [None, None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: Vec::new(),
+            global_bones: Vec::new(),
+            first_seq: None,
+            pose: Default::default(),
+        }
+    }
+
+    fn app_with_rows() -> App {
+        let mut app = app();
+        app.init_resource::<InteractNpc>();
+        app.insert_resource(EmoteSounds(
+            EmoteSoundCatalog::default()
+                .with_row(YIELDING, 234, 0x2000)
+                .with_row(STUBBORN, 235, 0),
+        ));
+        app
+    }
+
+    fn unit(app: &mut App, state: u32) -> Entity {
+        app.world_mut()
+            .spawn((
+                model(),
+                AnimationPlayer::default(),
+                AnimationTransitions::new(),
+                AnimDriver::default(),
+                ObjectStore(ObjectFields::from_pairs(&[(FIELD_NPC_EMOTESTATE, state)])),
+            ))
+            .id()
+    }
+
+    fn gait(app: &App, unit: Entity) -> Option<u16> {
+        app.world().entity(unit).get::<AnimDriver>().unwrap().gait
+    }
+
+    fn interact(app: &mut App, npc: Option<Entity>) {
+        *app.world_mut().resource_mut::<InteractNpc>() = InteractNpc(npc, npc.map(|_| 7));
+        app.update();
+    }
+
+    #[test]
+    fn a_yielding_state_stops_while_its_unit_is_the_interact_npc() {
+        let mut app = app_with_rows();
+        let npc = unit(&mut app, YIELDING);
+        app.update();
+        assert_eq!(gait(&app, npc), Some(234), "the work loop plays");
+
+        interact(&mut app, Some(npc));
+        assert_eq!(gait(&app, npc), Some(0), "the window is open: Stand");
+
+        interact(&mut app, None);
+        assert_eq!(gait(&app, npc), Some(234), "cleared: the loop resumes");
+    }
+
+    #[test]
+    fn a_state_without_the_bit_keeps_playing_while_interacted() {
+        let mut app = app_with_rows();
+        let npc = unit(&mut app, STUBBORN);
+        interact(&mut app, Some(npc));
+        assert_eq!(gait(&app, npc), Some(235));
+    }
+
+    #[test]
+    fn only_the_interact_npc_stops() {
+        let mut app = app_with_rows();
+        let npc = unit(&mut app, YIELDING);
+        let other = unit(&mut app, YIELDING);
+        interact(&mut app, Some(npc));
+        assert_eq!(gait(&app, npc), Some(0));
+        assert_eq!(gait(&app, other), Some(234), "a neighbour keeps working");
+    }
+
+    /// The re-pick overwrites bone 0 like any base arm, so it cuts a live one-shot.
+    #[test]
+    fn opening_the_window_re_picks_over_a_live_one_shot() {
+        let mut app = app_with_rows();
+        let npc = unit(&mut app, YIELDING);
+        app.update();
+        app.world_mut().write_message(EmoteAnim {
+            entity: npc,
+            anim_id: 118,
+            seq: 1,
+        });
+        app.update();
+        assert!(matches!(
+            app.world().entity(npc).get::<AnimDriver>().unwrap().mode,
+            Mode::Swing { id: 118, .. }
+        ));
+
+        interact(&mut app, Some(npc));
+        assert_eq!(gait(&app, npc), Some(0), "the one-shot is cut for Stand");
+    }
+}

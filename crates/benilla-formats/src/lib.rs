@@ -162,7 +162,7 @@ pub use creature_sound::{load_creature_voice_catalog, CreatureVoice, CreatureVoi
 mod npc_greeting;
 pub use npc_greeting::{load_npc_greeting_catalog, NpcGreeting, NpcGreetingCatalog};
 mod emotes;
-pub use emotes::{load_emote_sound_catalog, EmoteSoundCatalog};
+pub use emotes::{load_emote_sound_catalog, EmoteSoundCatalog, EMOTE_FLAG_INTERACTION};
 mod emote_text;
 pub use emote_text::{load_emote_text_catalog, EmoteLine, EmoteTextCatalog};
 mod environmental_damage;
