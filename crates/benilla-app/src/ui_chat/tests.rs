@@ -1,5 +1,5 @@
 use super::event::{default_color, ChatEvent, ChatEventKind as K};
-use super::input::{emote_send_eligible, emote_target, EmoteGate, ParsedChat};
+use super::input::{emote_gate, emote_send_eligible, emote_target, EmoteGate, ParsedChat};
 
 thread_local! {
     /// The shipped `GlobalStrings.lua`, run in a VM once per test thread; built lazily, so a
@@ -1610,6 +1610,52 @@ const APPLAUD: u32 = 0x0000;
 const CHEER: u32 = 0x0800;
 const SALUTE: u32 = 0x0800;
 const LAUGH: u32 = 0x0980;
+
+/// `0x5ef57e`: a unit with `UNIT_FLAG_POSSESSED` (`UNIT_FIELD_FLAGS & 0x01000000`) refuses every
+/// emote, silently; a missing `Emotes.dbc` row returns too (`0x5ef5b1`).
+#[test]
+fn a_possessed_unit_or_a_missing_row_refuses_the_emote() {
+    assert_eq!(emote_gate(Some(0), 0, 0, false, 0), EmoteGate::Send);
+    assert_eq!(
+        emote_gate(Some(0), 0x0100_0000, 0, false, 0),
+        EmoteGate::Suppressed
+    );
+    assert_eq!(
+        emote_gate(Some(0), 0x0100_0008, 0, false, 0),
+        EmoteGate::Suppressed
+    );
+    assert_eq!(
+        emote_gate(Some(0), 0x0200_0000, 0, false, 0),
+        EmoteGate::Send,
+        "a neighbour bit"
+    );
+    assert_eq!(emote_gate(None, 0, 0, false, 0), EmoteGate::Suppressed);
+}
+
+/// A chat-only text emote has `EmoteID` 0, so `DoEmote` reads `Emotes.dbc` row 0 (flags 0), which
+/// lacks `0x200`: dead (7) and asleep (3) refuse it, as they refuse a `/wave` (`0x47db8e`).
+#[test]
+fn a_chat_only_emote_reads_row_zero_and_is_refused_dead_or_asleep() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let cat = benilla_formats::load_emote_sound_catalog(&mut chain).expect("emote catalog");
+    let smile = cat.text_id("smile").expect("SMILE");
+    assert_eq!(cat.text_emote(smile), None, "SMILE is chat-only");
+    let row = cat.emote_flags(cat.text_emote(smile).unwrap_or(0));
+    assert_eq!(row, Some(0), "row 0, no flags");
+    assert_eq!(
+        emote_gate(row, 0, 7, false, 0),
+        EmoteGate::Suppressed,
+        "dead"
+    );
+    assert_eq!(
+        emote_gate(row, 0, 3, false, 0),
+        EmoteGate::Suppressed,
+        "asleep"
+    );
+    assert_eq!(emote_gate(row, 0, 0, false, 0), EmoteGate::Send, "standing");
+    assert_eq!(emote_gate(row, 0, 1, false, 0), EmoteGate::Send, "sitting");
+}
 
 #[test]
 fn seated_stand_required_emotes_are_suppressed() {

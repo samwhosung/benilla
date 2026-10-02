@@ -230,6 +230,14 @@ mod tests {
         let cat = load_emote_sound_catalog(&mut chain).expect("load emote catalog");
         assert_eq!(cat.text_id("wave"), Some(101), "case-insensitive by name");
         assert_eq!(cat.text_emote(101), Some(3), "WAVE plays anim emote 3");
+        // A chat-only text emote has `EmoteID` 0, which `DoEmote` (`0x5ef591`) reads as row 0.
+        assert_eq!(
+            cat.text_emote(cat.text_id("smile").unwrap()),
+            None,
+            "SMILE is chat-only"
+        );
+        assert_eq!(cat.emote_flags(0), Some(0), "row 0 exists with no flags");
+        assert_eq!(cat.spec_proc(0), Some(0), "row 0 is no posture emote");
         assert_eq!(cat.anim(2), Some(66), "ONESHOT_BOW (id 2) plays AnimID 66");
         // The posture-gate rows (`0x47db40`), ids from vmangos `SharedDefines.h`'s `Emote` enum.
         assert_eq!(cat.emote_flags(2), Some(0x4801), "ONESHOT_BOW EmoteFlags");
