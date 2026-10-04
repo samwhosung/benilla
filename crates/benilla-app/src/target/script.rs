@@ -443,4 +443,124 @@ mod tests {
             "THIRD targets nobody: silent, nothing deselected"
         );
     }
+
+    /// `TargetUnit("npc")` and `AssistUnit("npc")` name the interaction NPC, `[0xb4e2d0]`, which
+    /// `0x515970` reads on a whole-token `npc` compare (`0x515bec`-`0x515c00`): the vendor whose
+    /// window is open, and for an assist the unit it targets. With no window open, or the NPC no
+    /// longer held, `npc` names nobody and the selection stays.
+    #[test]
+    fn target_and_assist_unit_name_the_interaction_npc() {
+        use crate::net::{Guid, ObjectStore, SelfPlayer};
+        use crate::ui_session::InteractNpc;
+        use benilla_ui::script::UiScript;
+        use bevy::ecs::system::RunSystemOnce;
+
+        const ME: u64 = 1;
+        const VENDOR: u64 = 0xF130_0000_9800_0001;
+        const GUARD: u64 = 0xF130_0000_0000_0002;
+        // `OBJECT_FIELD_TYPE` 2 and `UNIT_FIELD_TARGET` 16, a 2-field guid.
+        let unit = |target: u64| {
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x09),
+                (16, target as u32),
+                (17, (target >> 32) as u32),
+            ]))
+        };
+
+        let mut world = script_world();
+        world.spawn((SelfPlayer, Guid(ME), unit(0)));
+        let vendor = world.spawn((Guid(VENDOR), unit(GUARD))).id();
+        let guard = world.spawn((Guid(GUARD), unit(0))).id();
+        let index = &mut world.resource_mut::<crate::net::GuidIndex>().0;
+        index.insert(VENDOR, vendor);
+        index.insert(GUARD, guard);
+        world.insert_resource(InteractNpc(Some(vendor), Some(VENDOR)));
+
+        let run = |world: &mut World, lua: &str| {
+            world
+                .non_send_resource_mut::<UiScript>()
+                .eval::<()>(lua)
+                .expect("the binding runs");
+            world
+                .run_system_once(
+                    |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
+                        for request in script.take_selection_requests() {
+                            select.select(request);
+                        }
+                    },
+                )
+                .expect("the applier runs as a one-shot system");
+            world.resource::<super::super::Selection>().guid
+        };
+        let reset = |world: &mut World| {
+            let mut sel = world.resource_mut::<super::super::Selection>();
+            sel.target = None;
+            sel.guid = None;
+        };
+
+        assert_eq!(run(&mut world, r#"TargetUnit("npc")"#), Some(VENDOR));
+        reset(&mut world);
+        assert_eq!(run(&mut world, r#"TargetUnit("NPC")"#), Some(VENDOR));
+        reset(&mut world);
+        assert_eq!(run(&mut world, r#"AssistUnit("npc")"#), Some(GUARD));
+
+        // The NPC streamed out with its window still up: the object manager holds no unit.
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .remove(&VENDOR);
+        assert_eq!(run(&mut world, r#"TargetUnit("npc")"#), Some(GUARD));
+
+        // The window closed: nobody, and the selection stays.
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(VENDOR, vendor);
+        world.insert_resource(InteractNpc::default());
+        assert_eq!(run(&mut world, r#"TargetUnit("npc")"#), Some(GUARD));
+    }
+
+    /// The path a player takes: `/script TargetUnit("npc")` typed into the stock chat box runs
+    /// `SlashCmdList["SCRIPT"]` (`ChatFrame.lua:1074-1075`) and selects the vendor whose window is
+    /// open.
+    #[test]
+    fn typing_target_unit_npc_in_the_stock_chat_box_selects_the_vendor() {
+        benilla_formats::wow_data_or_skip!();
+        use crate::net::{Guid, ObjectStore, SelfPlayer};
+        use crate::ui_session::InteractNpc;
+        use benilla_ui::script::UiScript;
+        use bevy::ecs::system::RunSystemOnce;
+
+        const ME: u64 = 1;
+        const VENDOR: u64 = 0xF130_0000_9800_0001;
+        let unit = || ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(2, 0x09)]));
+
+        let mut world = script_world();
+        world.insert_non_send_resource(crate::ui_script::chat_tests::chat_frame());
+        world.spawn((SelfPlayer, Guid(ME), unit()));
+        let vendor = world.spawn((Guid(VENDOR), unit())).id();
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(VENDOR, vendor);
+        world.insert_resource(InteractNpc(Some(vendor), Some(VENDOR)));
+
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        assert!(script.focus_editbox("ChatFrameEditBox"));
+        script.char_input(r#"/script TargetUnit("npc")"#);
+        assert!(script.key_input("ENTER"), "the box consumes ENTER");
+        world
+            .run_system_once(
+                |mut script: NonSendMut<UiScript>, mut select: ScriptSelect| {
+                    for request in script.take_selection_requests() {
+                        select.select(request);
+                    }
+                },
+            )
+            .expect("the applier runs as a one-shot system");
+        assert_eq!(
+            world.resource::<super::super::Selection>().guid,
+            Some(VENDOR)
+        );
+    }
 }

@@ -750,6 +750,47 @@ mod tests {
         }
     }
 
+    /// `SpellTargetUnit("npc")` binds the interaction NPC (`0x6e6de1` into `0x515970`, whose `npc`
+    /// compare reads `[0xb4e2d0]`), not the selection; with no window open it names no unit and
+    /// the cast ends with "Out of range.".
+    #[test]
+    fn spell_target_unit_binds_the_interaction_npc() {
+        use crate::ui_session::InteractNpc;
+
+        let (mut world, rx, ally) = unit_world(10.0);
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ALLY, ally);
+        world.insert_resource(InteractNpc(Some(ally), Some(ALLY)));
+        arm(&mut world, HEAL, 0x0002);
+        spell_target_unit(&mut world, "npc");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::CastSpell {
+                spell_id: HEAL,
+                target: Some(ALLY),
+            })
+        ));
+        assert!(errors(&mut world).is_empty());
+        assert!(!world.resource::<SpellTargeting>().active());
+
+        let (mut world, rx, ally) = unit_world(10.0);
+        world
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .insert(ALLY, ally);
+        world.init_resource::<InteractNpc>();
+        arm(&mut world, HEAL, 0x0002);
+        spell_target_unit(&mut world, "npc");
+        assert!(rx.try_recv().is_err(), "no window, no send");
+        assert_eq!(
+            errors(&mut world),
+            vec![crate::ui_action::CastFail::local(HEAL, 0x59)]
+        );
+        assert!(!world.resource::<SpellTargeting>().active());
+    }
+
     /// `SpellCanTargetUnit` resolves a chain as `SpellTargetUnit` does and answers the verdict of
     /// the unit it ends on (`0x6e6d3a` into `0x515970`, then `0x6e6460`): the ally we and our pet
     /// target, in range of the spell or not, and nobody past a unit with no target.

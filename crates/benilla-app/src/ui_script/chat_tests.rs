@@ -6,7 +6,7 @@ use benilla_ui::script::{ExtractedQuad, QuadContent, UiScript};
 use super::test_ui::load_ui as load_xml;
 
 /// The chat stack, fonts first so `inherits="ChatFontNormal"` resolves.
-fn chat_frame() -> UiScript {
+pub(crate) fn chat_frame() -> UiScript {
     let mut s = UiScript::new().unwrap();
     load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
     load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
