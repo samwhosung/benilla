@@ -64,9 +64,9 @@ pub(crate) struct CombatTextEvent {
 ///
 /// Deviation: fires with our descriptor present, so `UnitExists("player")` answers true where the
 /// reference's (`0x515970`) misses, because matching it breaks `UnitExists` for no stock reader.
-fn fire_leaving_world_on_worldport(
+pub(crate) fn fire_leaving_world_on_worldport(
     script: Option<NonSendMut<UiScript>>,
-    mut armed: ResMut<crate::ui_script::LeavingWorldArmed>,
+    mut sweep: crate::ui_script::LeaveWorldSweep,
     mut ports: MessageReader<crate::net::WorldportMessage>,
 ) {
     // `needs_ack` false is the initial-login map, an arrival; the whole iterator is read so no
@@ -77,7 +77,7 @@ fn fire_leaving_world_on_worldport(
     }
     // The world latch keeps this producer and the shutdown tail from both claiming one departure;
     // spent even with no VM, as the reference clears it at `0x490a8d`, ahead of the fire.
-    if !armed.spend() {
+    if !sweep.run() {
         return;
     }
     let Some(mut script) = script else {
@@ -145,6 +145,7 @@ impl Plugin for UiUnitPlugin {
         .add_message::<crate::net::WorldportMessage>()
         .add_message::<crate::net::FieldChanged>()
         .init_resource::<crate::ui_script::LeavingWorldArmed>()
+        .add_message::<crate::ui_script::WorldLeaveSweepMessage>()
         .add_systems(
             Update,
             (
@@ -3593,6 +3594,7 @@ mod tests {
         let mut app = App::new();
         app.add_message::<crate::net::WorldportMessage>()
             .init_resource::<crate::ui_script::LeavingWorldArmed>()
+            .add_message::<crate::ui_script::WorldLeaveSweepMessage>()
             .add_systems(Update, fire_leaving_world_on_worldport);
         app.insert_non_send_resource(UiScript::new().expect("VM"));
         app.world_mut()
