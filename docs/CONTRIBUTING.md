@@ -40,11 +40,13 @@ A feature 1.12.1 does not have lives in a crate of its own that adds its Bevy pl
 `benilla_app::run_with`, as `crates/benilla-app/examples/extended_launcher.rs` shows, or in a
 fork. A client started through `run_with` says `extended` in its build line, so its reports read
 apart from stock benilla's. The crate keeps its own settings, never rows in benilla's CVar table,
-which every addon reads.
+which every addon reads, and its files go under `benilla_app::config_dir()`, its own
+`benilla-config/`: an addon it ships is written into that folder's `AddOns/` and loads as any
+addon does.
 
-benilla opens a piece of itself to such a crate only when its own 1.12.1 work creates that piece,
-never for the crate alone, and promises no stable API: a crate pins the benilla revision it
-builds on. What a crate cannot reach stays a fork's.
+Past `run_with` and that folder, benilla opens a piece of itself to such a crate only when its own
+1.12.1 work creates that piece, never for the crate alone, and promises no stable API: a crate
+pins the benilla revision it builds on. What a crate cannot reach stays a fork's.
 
 ## How a change is judged
 

@@ -6,7 +6,8 @@
 //! cargo run -p benilla-app --example extended_launcher
 //! ```
 //!
-//! The banner reads `benilla build … · extended`, and the plugin logs one line at `Startup`.
+//! The banner reads `benilla build … · extended`, and the plugin logs one line at `Startup`: the
+//! `AddOns/` folder in [`benilla_app::config_dir`], where an addon the crate ships is written.
 //!
 //! A crate of its own copies the `benilla` launcher (`crates/benilla`): a build script that stamps
 //! its commit, a `main` like this one that reads the stamp back as `crates/benilla/src/main.rs`
@@ -55,12 +56,16 @@
 use benilla_app::{AppExit, BuildId};
 use bevy::prelude::*;
 
-/// The crate's own plugin: one line at `Startup`, to show it runs inside the client.
+/// The crate's own plugin: one line at `Startup`, to show it runs inside the client and where its
+/// addons go.
 struct HelloPlugin;
 
 impl Plugin for HelloPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, || info!("a plugin on top of benilla is running"));
+        app.add_systems(Startup, || {
+            let addons = benilla_app::config_dir().map(|dir| dir.join("AddOns"));
+            info!("a plugin on top of benilla is running; its addons go in {addons:?}");
+        });
     }
 }
 
