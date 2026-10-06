@@ -6,6 +6,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::OnceLock;
 
 use anyhow::{anyhow, Result};
 use benilla_srp::vanilla_header::{DecrypterHalf, EncrypterHalf};
@@ -47,7 +48,21 @@ pub(super) fn recv_packet(
     messages::parse_server(opcode, &body).map_err(|e| anyhow!("parsing opcode {opcode:#x}: {e}"))
 }
 
+/// What [`observe_sends`] takes: called with a sent packet's opcode and body length.
+pub type SendObserver = fn(opcode: u16, body_len: usize);
+
+static SEND_OBSERVER: OnceLock<SendObserver> = OnceLock::new();
+
+/// Report every client packet that reaches a world socket, from the `CMSG_AUTH_SESSION` of the
+/// handshake through each [`WorldSession`] and [`WorldWriter`] send, on the thread that wrote it
+/// and right after the write. The first observer set is kept for the process; with none set a send
+/// pays one atomic load.
+pub fn observe_sends(observer: SendObserver) {
+    let _ = SEND_OBSERVER.set(observer);
+}
+
 /// Write one client packet: a 6-byte header, its size counting opcode and body, then the body.
+/// The sole write path of the world socket, so the one place [`observe_sends`] reports from.
 pub(super) fn send_packet(
     stream: &mut TcpStream,
     encrypter: Option<&mut EncrypterHalf>,
@@ -70,5 +85,9 @@ pub(super) fn send_packet(
     packet.extend_from_slice(body);
     stream
         .write_all(&packet)
-        .map_err(|e| anyhow!("sending opcode {opcode:#x}: {e}"))
+        .map_err(|e| anyhow!("sending opcode {opcode:#x}: {e}"))?;
+    if let Some(observer) = SEND_OBSERVER.get() {
+        observer(opcode, body.len());
+    }
+    Ok(())
 }

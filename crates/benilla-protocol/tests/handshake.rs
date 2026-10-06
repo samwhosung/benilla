@@ -94,3 +94,50 @@ fn a_warden_server_is_refused_at_the_handshake() {
         "expected WardenRequired, got: {err:#}"
     );
 }
+
+/// Every packet the observer saw, with the thread that wrote it: the tests of this file share one
+/// process, so each filters for its own thread.
+static SEEN: std::sync::Mutex<Vec<(thread::ThreadId, u16, usize)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn record(opcode: u16, len: usize) {
+    SEEN.lock()
+        .unwrap()
+        .push((thread::current().id(), opcode, len));
+}
+
+/// A packet sent before the session splits (the handshake's `CMSG_AUTH_SESSION`, the world entry's
+/// `CMSG_PLAYER_LOGIN`) reaches the observer in write order, ahead of the writer's own.
+#[test]
+fn sends_before_the_split_are_observed_in_order() {
+    benilla_protocol::observe_sends(record);
+    let addr = fake_server(vec![]);
+    let mut session = WorldSession::connect(&addr, "one", SESSION_KEY).unwrap();
+    session.player_login(0x2a).unwrap();
+    let (_reader, mut writer) = session.into_split().unwrap();
+    writer.complete_cinematic().unwrap();
+    let me = thread::current().id();
+    let mine: Vec<(u16, usize)> = SEEN
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(t, ..)| *t == me)
+        .map(|&(_, op, len)| (op, len))
+        .collect();
+    let auth_len = messages::auth_session(
+        u32::from(benilla_protocol::CLIENT_BUILD),
+        "ONE",
+        0,
+        &[0; 20],
+        &messages::STOCK_SECURE_ADDONS,
+    )
+    .len();
+    assert_eq!(
+        mine,
+        [
+            (opcode::CMSG_AUTH_SESSION, auth_len),
+            (opcode::CMSG_PLAYER_LOGIN, messages::full_guid(0x2a).len()),
+            (opcode::CMSG_COMPLETE_CINEMATIC, 0),
+        ]
+    );
+}

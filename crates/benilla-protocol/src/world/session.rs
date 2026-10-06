@@ -778,7 +778,6 @@ impl WorldSession {
                 stream: self.stream,
                 encrypter,
                 chat_language: self.chat_language,
-                sent: None,
             },
         ))
     }
