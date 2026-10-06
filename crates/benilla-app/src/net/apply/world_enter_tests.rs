@@ -2,14 +2,14 @@
 //! none goes out on the login edge alone, which fires before the server seats the player; the
 //! create sends `CMSG_SET_ACTIVE_MOVER`, then the cascade's `CMSG_QUERY_TIME`,
 //! `MSG_QUERY_NEXT_MAIL_TIME`, `CMSG_BATTLEFIELD_STATUS` and `CMSG 0x296`; a worldport's fresh
-//! create sends all five again, and a same-map teleport, which creates nothing, sends none.
+//! create sends all five again.
 
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 
 use crate::net::{
     ClientCommand, EnteredWorldMessage, Guid, NetCommands, NetStatus, SelfGuid, ServerWallClock,
-    TeleportMessage, WorldEnterCascadeMessage,
+    WorldEnterCascadeMessage,
 };
 
 const ME: u64 = 0x0000_0000_0000_0042;
@@ -31,7 +31,6 @@ fn app() -> (App, Receiver<ClientCommand>) {
         .init_resource::<crate::ui_dialog_verbs::MeetingStone>()
         .add_message::<EnteredWorldMessage>()
         .add_message::<WorldEnterCascadeMessage>()
-        .add_message::<TeleportMessage>()
         .add_systems(
             Update,
             (
@@ -124,30 +123,9 @@ fn a_worldport_create_sends_the_five_again() {
     assert_eq!(sent(&rx), the_five());
 }
 
-/// A same-map teleport (`MSG_MOVE_TELEPORT_ACK`, our [`TeleportMessage`]) moves the body we
-/// already have: no create, no cascade, so no send, the meeting stone's included.
-#[test]
-fn a_same_map_teleport_sends_none_of_the_five() {
-    let (mut app, rx) = app();
-    log_in(&mut app);
-    self_create(&mut app);
-    app.update();
-    assert_eq!(sent(&rx), the_five());
-
-    app.world_mut().write_message(TeleportMessage {
-        guid: ME,
-        counter: 0,
-        position: [100.0, 0.0, 0.0],
-        orientation: 0.0,
-    });
-    for _ in 0..3 {
-        app.update();
-    }
-    assert_eq!(sent(&rx), Vec::<String>::new());
-}
-
 /// The production schedule: the self-create edge, then the time, mail, battlefield and meeting
-/// stone sends (`0x4909a1`, `0x4909f6`, `0x4909fb`, `0x490a14`).
+/// stone sends (`0x4909a1`, `0x4909f6`, `0x4909fb`, `0x490a14`); and a `/reload` frame's sweep
+/// drops the stone's text before its cascade resets it (`0x490c20`, then `0x490168`).
 #[test]
 fn the_client_schedules_the_sends_in_the_reference_order() {
     use crate::test_support::runs_before;
@@ -175,6 +153,11 @@ fn the_client_schedules_the_sends_in_the_reference_order() {
     assert!(runs_before(
         &mut app,
         crate::ui_battlefield::reset_on_world_enter,
+        crate::ui_dialog_verbs::meeting_stone_enter_world
+    ));
+    assert!(runs_before(
+        &mut app,
+        crate::ui_dialog_verbs::meeting_stone_leave_world,
         crate::ui_dialog_verbs::meeting_stone_enter_world
     ));
 }

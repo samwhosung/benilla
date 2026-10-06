@@ -636,7 +636,7 @@ fn drain_meeting_stone_joins(
 
 /// The leave-world sweep's meeting-stone leg (`0x490b2f` → `0x4c9f80`): the text dropped, the
 /// area kept.
-fn meeting_stone_leave_world(
+pub(crate) fn meeting_stone_leave_world(
     mut sweeps: MessageReader<WorldLeaveSweepMessage>,
     mut stone: ResMut<MeetingStone>,
 ) {
