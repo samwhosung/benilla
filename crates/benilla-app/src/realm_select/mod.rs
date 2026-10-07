@@ -65,6 +65,9 @@ pub(crate) struct Realms {
     /// `RealmList:IsVisible()`. While set, a published list is a refresh and is never
     /// auto-answered.
     pub(super) shown: bool,
+    /// [`Self::shown`] as this frame's input found it, taken once in `PreUpdate` by
+    /// [`take_input`]; read through [`Self::owns_input`].
+    owns_input: bool,
     /// `GetRealmInfo`'s `currentRealm`, the row highlighted when nothing else is. The reference
     /// case-folds the `realmName` CVar (`0x46ef9e`, via `0x5ab7d0` on the handle from `0x63db90`)
     /// against the realm name, and `ConnectToRealm` (`0x46b217`) writes the CVar before it dials.
@@ -127,6 +130,19 @@ impl Sort {
 }
 
 impl Realms {
+    /// Whether this frame's keys and clicks are the list's, not the screen's beneath it.
+    ///
+    /// The reference walks a key-down once, strata 8 down to 0 (`0x765f10`), and the first frame
+    /// whose `OnKeyDown` slot returns nonzero ends the walk (`0x765f86`, then `0x765f64`), whatever
+    /// that handler did. `RealmList` is a keyboard-enabled `DIALOG` frame with `OnKeyDown` bound,
+    /// so while it is shown `0x76b7d0` consumes every key it is reached with, ahead of
+    /// `AccountLogin` and `CharacterSelect`, which set no strata. So a press has one owner even
+    /// when its handler hides the list: the list and the screens ask this, never [`Self::shown`],
+    /// which the list's own Escape or Enter clears mid-frame.
+    pub(crate) fn owns_input(&self) -> bool {
+        self.owns_input
+    }
+
     /// The rows the screen draws: indices into [`Self::realms`] for the tab in front, sorted per
     /// category (`0x46e750`).
     pub(super) fn rows(&self) -> Vec<usize> {
@@ -243,12 +259,22 @@ pub(super) fn is_invalid(realm: &RealmInfo) -> bool {
     realm.flags & 0x01 != 0
 }
 
+/// Settle who owns this frame's input before the list or any glue screen reads it
+/// ([`Realms::owns_input`]).
+pub(crate) fn take_input(mut realms: ResMut<Realms>) {
+    if realms.owns_input != realms.shown {
+        realms.owns_input = realms.shown;
+    }
+}
+
 /// The realm-selection subsystem: the park's policy plus the screen.
 pub(crate) struct RealmSelectPlugin;
 
 impl Plugin for RealmSelectPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Realms>()
+            // `shown` is written only in `Update`, so any slot here sees the frame's start.
+            .add_systems(PreUpdate, take_input)
             .add_systems(
                 Startup,
                 (category::load_categories, load::load_realm_types)
