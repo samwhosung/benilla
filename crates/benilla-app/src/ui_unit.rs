@@ -2586,6 +2586,43 @@ mod tests {
         );
     }
 
+    /// `UNIT_QUEST_LOG_CHANGED` (id 522) is the player-window watch over the 60 quest-log dwords
+    /// (`0x51bc63`: offset `0x28`, length `0xf0`, callback `0x51bd90`): any of them moving fires it
+    /// once with the token, and a dword either side does not.
+    #[test]
+    fn a_quest_log_change_fires_unit_quest_log_changed_with_the_token() {
+        let fired = |prev: &UnitState, cur: &UnitState, edges: &[(u64, u16)]| -> Vec<String> {
+            let mut s = UiScript::new().unwrap();
+            s.run(
+                r#"
+                SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("UNIT_QUEST_LOG_CHANGED")
+                f:SetScript("OnEvent", function() table.insert(SEEN, event .. ":" .. arg1) end)
+            "#,
+            )
+            .unwrap();
+            fire_transitions(&mut s, "party1", Some(prev), cur, &FieldEdges::of(edges));
+            s.eval::<Vec<String>>("return SEEN").unwrap()
+        };
+        const MATE: u64 = 0x300;
+        const LOG: u16 = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
+        let before = UnitState {
+            exists: true,
+            has_object: true,
+            guid: MATE,
+            ..Default::default()
+        };
+        let mut after = before.clone();
+        after.quest_log[4][0] = 783;
+        let once = vec!["UNIT_QUEST_LOG_CHANGED:party1".to_string()];
+        assert_eq!(fired(&before, &after, &[(MATE, LOG + 12)]), once);
+        // One watch over the window: two slots moving in one pass is one event.
+        assert_eq!(fired(&before, &after, &[(MATE, LOG), (MATE, LOG + 59)]), once);
+        assert!(fired(&before, &after, &[(MATE, LOG - 1), (MATE, LOG + 60)]).is_empty());
+        assert!(fired(&before, &after, &[(MATE + 1, LOG + 12)]).is_empty());
+    }
+
     /// LOST going down, GAINED going up (boot is in control); far sight on every change.
     #[test]
     fn the_control_and_far_sight_edges_fire_once_each_way() {

@@ -1693,3 +1693,113 @@ fn the_stock_title_width_cap_bites_and_is_sticky_per_row_button() {
         "the capped box survives the row going untagged (the ref's own 275 reset never fires)"
     );
 }
+
+// ── The group-mates count ──
+
+/// A party member held with `ids` in their quest-log window, named `name`.
+fn mate_on(guid: u64, name: &str, ids: &[u32]) -> benilla_ui::script::UnitState {
+    let mut quest_log = [[0; 3]; 20];
+    for (slot, &id) in quest_log.iter_mut().zip(ids) {
+        *slot = [id, 0, 0];
+    }
+    benilla_ui::script::UnitState {
+        exists: true,
+        has_object: true,
+        is_player: true,
+        guid,
+        name: Some(name.into()),
+        quest_log,
+        ..Default::default()
+    }
+}
+
+/// Each quest row counts the party members on it as `[n]` (`QuestLogFrame.lua:168-183`), through
+/// `IsUnitOnQuest(questIndex, "partyN")`; the row tooltip names them (`:515-541`), and a mate's
+/// `UNIT_QUEST_LOG_CHANGED` recounts (`:69-72`).
+#[test]
+fn quest_rows_count_the_party_members_on_each_quest() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_xml(&s, "Interface\\FrameXML\\GlobalStrings.lua");
+    load_xml(&s, "Interface\\FrameXML\\Fonts.xml");
+    load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
+    load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
+    load_xml(&s, r"Interface\FrameXML\UIParent.xml");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.lua");
+    load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
+    load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
+    load_xml(&s, "Interface\\FrameXML\\CharacterFrameTemplates.xml");
+    load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
+    load_xml(&s, r"Interface\FrameXML\MainMenuBarMicroButtons.xml");
+    load_xml(&s, "Interface\\FrameXML\\ItemButtonTemplate.xml");
+    load_xml(&s, "Interface\\FrameXML\\QuestFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\QuestLogFrame.xml");
+    load_xml(&s, "Interface\\FrameXML\\MerchantFrame.xml");
+    load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
+
+    s.set_quest_log(eight_entries());
+    s.set_party(party(2));
+    s.set_unit("party1", Some(mate_on(0x300, "Mate0", &[1, 3])));
+    s.set_unit("party2", Some(mate_on(0x301, "Mate1", &[1])));
+    s.run("ToggleQuestLog()").unwrap();
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+
+    let mates = |s: &mut UiScript, row: u32| {
+        s.eval::<String>(&format!("return QuestLogTitle{row}GroupMates:GetText() or ''"))
+            .unwrap()
+    };
+    assert_eq!(mates(&mut s, 1), "[2]", "both mates are on quest 1");
+    assert_eq!(mates(&mut s, 2), "", "nobody is on quest 2");
+    assert_eq!(mates(&mut s, 3), "[1]", "party1 is on quest 3");
+
+    // The row tooltip, as `QuestLogTitleButton_OnEnter` builds it for row 1, then row 2.
+    let line = |s: &mut UiScript, n: u32| {
+        s.eval::<String>(&format!("return GameTooltipTextLeft{n}:GetText() or ''"))
+            .unwrap()
+    };
+    s.run("this = QuestLogTitle1 QuestLog_UpdatePartyInfoTooltip()")
+        .unwrap();
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+    assert_eq!(line(&mut s, 1), "Quest 1");
+    assert!(s
+        .eval::<bool>(
+            "return GameTooltipTextLeft2:GetText() == \
+             HIGHLIGHT_FONT_COLOR_CODE..PARTY_QUEST_STATUS_ON..FONT_COLOR_CODE_CLOSE"
+        )
+        .unwrap());
+    assert!(line(&mut s, 3).contains("Mate0"), "{}", line(&mut s, 3));
+    assert!(line(&mut s, 4).contains("Mate1"), "{}", line(&mut s, 4));
+    s.run("this = QuestLogTitle2 QuestLog_UpdatePartyInfoTooltip()")
+        .unwrap();
+    assert!(s
+        .eval::<bool>(
+            "return GameTooltipTextLeft2:GetText() == \
+             HIGHLIGHT_FONT_COLOR_CODE..PARTY_QUEST_STATUS_NONE..FONT_COLOR_CODE_CLOSE"
+        )
+        .unwrap());
+
+    // party2 takes quest 3: their quest-log event recounts the open log.
+    s.set_unit("party2", Some(mate_on(0x301, "Mate1", &[1, 3])));
+    s.fire_event(
+        "UNIT_QUEST_LOG_CHANGED",
+        vec![benilla_ui::script::ScriptValue::Str("party2".into())],
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+    assert_eq!(mates(&mut s, 3), "[2]");
+
+    // Out of range, a mate counts for nothing, whatever their last window held (`0x468460` finds
+    // no object).
+    s.set_unit(
+        "party1",
+        Some(benilla_ui::script::UnitState {
+            has_object: false,
+            ..mate_on(0x300, "Mate0", &[1, 3])
+        }),
+    );
+    s.run("QuestLog_Update()").unwrap();
+    assert_eq!(mates(&mut s, 1), "[1]");
+    assert_eq!(mates(&mut s, 3), "[1]");
+}
