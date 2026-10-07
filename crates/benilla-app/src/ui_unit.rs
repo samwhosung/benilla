@@ -929,6 +929,13 @@ pub(crate) fn snapshot(
         pvp_team: store.0.unit_race().map_or(-1, race_pvp_team),
         // `PLAYER_BYTES_3` byte 2, the city-protector title (`PVP_MEDAL<n>`), unset by vmangos.
         pvp_medal: store.0.player_pvp_medal().unwrap_or(0),
+        // The quest-log window, off a player alone: `IsUnitOnQuest` looks the guid up with
+        // TYPEMASK_PLAYER (`0x4dfe97`) before it reads `[obj+0xe68]`.
+        quest_log: if matches!(store.0.object_type(), Some(ObjectType::Player)) {
+            store.0.player_quest_log_window()
+        } else {
+            Default::default()
+        },
         // `is_player` and the creature-record fields come from [`enrich_unit`].
         ..Default::default()
     }
@@ -3151,6 +3158,38 @@ mod tests {
             (alive.max_health, alive.max_power, alive.level),
             (feigning.max_health, feigning.max_power, feigning.level),
         );
+    }
+
+    /// The quest-log window rides a player's snapshot whole, and a non-player's is all zero, as
+    /// `IsUnitOnQuest`'s lookup is TYPEMASK_PLAYER (`0x4dfe97`).
+    #[test]
+    fn a_players_snapshot_carries_its_quest_log_window_and_a_creatures_none() {
+        use benilla_protocol::messages::ObjectFields;
+
+        const OBJECT_TYPE: u16 = 2;
+        const QUEST_LOG_1_1: u16 = 198;
+        let log = [
+            (QUEST_LOG_1_1, 783),
+            (QUEST_LOG_1_1 + 1, 0x0100_0003),
+            (QUEST_LOG_1_1 + 57, 7),
+        ];
+        let snap = |type_bits: u32| {
+            snapshot(
+                &ObjectStore(ObjectFields::from_pairs(
+                    &[log.as_slice(), &[(OBJECT_TYPE, type_bits)]].concat(),
+                )),
+                0,
+                None,
+                0,
+                None,
+                Default::default(),
+            )
+        };
+        let player = snap(0x19);
+        assert_eq!(player.quest_log[0], [783, 0x0100_0003, 0]);
+        assert_eq!(player.quest_log[19], [7, 0, 0]);
+        assert_eq!(player.quest_log[1], [0, 0, 0]);
+        assert_eq!(snap(0x09).quest_log, [[0; 3]; 20], "a creature has no PLAYER block");
     }
 
     /// The rank getter's two gates (`0x605620`), through `enrich_unit`'s wiring.

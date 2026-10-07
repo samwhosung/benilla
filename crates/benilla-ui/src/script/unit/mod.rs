@@ -200,6 +200,11 @@ pub struct UnitState {
     /// `UnitAffectingCombat` (`0x517e10`): `UNIT_FIELD_FLAGS` bit `0x00080000`, for every token
     /// including `"player"`; the reference has no separate player combat flag.
     pub in_combat: bool,
+    /// A held player's `PLAYER_QUEST_LOG` window, `[quest id, count-state, timer]` per slot, all
+    /// zero off a player: the 20 slots of 12 bytes at `[player+0xe68]+0x28` that `IsUnitOnQuest`
+    /// scans (`0x4dfebd`) and the `UNIT_QUEST_LOG_CHANGED` watch compares (`0x51bc63`). Whole, so
+    /// a change anywhere in it is a snapshot change; a group mate's carries the ids alone.
+    pub quest_log: [[u32; 3]; 20],
 }
 
 /// The name of a unit whose name is not yet known, as the reference's `UnitName` (`0x517220`) and

@@ -202,6 +202,17 @@ impl ObjectFields {
             timer,
         })
     }
+    /// The whole `PLAYER_QUEST_LOG` window, `[id, count-state, timer]` per slot as the wire left
+    /// it, 0 where absent: a group mate's carries the ids alone, the one dword per slot vmangos
+    /// flags `GROUP_ONLY` (`UpdateFields_1_12_1.h:128-129`).
+    pub fn player_quest_log_window(&self) -> [[u32; 3]; PLAYER_QUEST_LOG_SLOTS as usize] {
+        std::array::from_fn(|slot| {
+            std::array::from_fn(|k| {
+                self.get_u32(FIELD_PLAYER_QUEST_LOG_1_1 + 3 * slot as u16 + k as u16)
+                    .unwrap_or(0)
+            })
+        })
+    }
     /// `PLAYER_EXPLORED_ZONES_1 + i`: bitset dword `i`; bit `n` is `AreaTable` explore flag `n`.
     pub fn player_explored_zone_slot(&self, i: u16) -> u32 {
         if i >= PLAYER_EXPLORED_ZONES_SLOTS {

@@ -135,4 +135,17 @@ mod tests {
         let f = ObjectFields::from_pairs(&[(198, 0), (199, 0), (200, 0)]);
         assert_eq!(f.player_quest_log(0).map(|s| s.quest_id), Some(0));
     }
+
+    #[test]
+    fn quest_log_window_is_every_slot_raw_and_zero_where_absent() {
+        // A group mate's view: ids alone in slots 0 and 19, the private dwords never sent; slot 2
+        // carries a count-state dword, kept as sent rather than unpacked.
+        let f = ObjectFields::from_pairs(&[(198, 783), (198 + 57, 7), (205, 0x0100_0005)]);
+        let w = f.player_quest_log_window();
+        assert_eq!(w.len(), usize::from(PLAYER_QUEST_LOG_SLOTS));
+        assert_eq!(w[0], [783, 0, 0]);
+        assert_eq!(w[1], [0, 0, 0]);
+        assert_eq!(w[2], [0, 0x0100_0005, 0]);
+        assert_eq!(w[19], [7, 0, 0]);
+    }
 }
