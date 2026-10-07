@@ -68,7 +68,7 @@ pub(super) fn clicks(
 }
 
 /// `RealmList_OnKeyDown` (ESCAPE / ENTER), plus arrow-key row cycling and the wheel.
-pub(super) fn keys(
+pub(crate) fn keys(
     keys: Res<ButtonInput<KeyCode>>,
     (mut wheel, mut wheel_carry): (MessageReader<MouseWheel>, Local<WheelNotches>),
     mut realms: ResMut<Realms>,

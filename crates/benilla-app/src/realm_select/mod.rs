@@ -25,6 +25,10 @@ mod load;
 mod screen;
 mod smoke;
 
+/// The list's own keys, for a screen's test to run beside its own input.
+#[cfg(test)]
+pub(crate) use input::keys as list_keys;
+
 use bevy::prelude::*;
 
 use crate::net::{RealmChoice, RealmListMessage, RealmRequest};

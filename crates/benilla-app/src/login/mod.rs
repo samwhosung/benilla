@@ -1006,6 +1006,69 @@ mod tests {
         (app, rx)
     }
 
+    /// Escape on the realm list over this screen closes the list and nothing else: the press is
+    /// the list's (`Realms::owns_input`), so the login screen does not also quit, in either
+    /// order the two run.
+    #[test]
+    fn escape_on_the_realm_list_does_not_also_quit() {
+        for list_first in [true, false] {
+            let (tx, _requests) = crossbeam_channel::unbounded();
+            let (realm_tx, realm_rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .init_resource::<crate::glue::GlueClicks>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<crate::bindings::LayoutNames>()
+                .insert_non_send_resource(HostClipboard::default())
+                .init_resource::<LoginForm>()
+                .init_resource::<LoginIntent>()
+                .init_resource::<GlueDialog>()
+                .init_resource::<crate::realm_select::Realms>()
+                .insert_resource(crate::realmlist::Realmlist::unpinned(
+                    crate::realmlist::DEFAULT_REALMLIST,
+                ))
+                .insert_resource(LoginSubmit(tx))
+                .insert_resource(LoginAbandon(std::sync::Arc::new(
+                    std::sync::atomic::AtomicU64::new(0),
+                )))
+                .insert_resource(crate::net::RealmChoice(realm_tx))
+                .add_message::<KeyboardInput>()
+                .add_message::<GlueSound>()
+                .add_message::<bevy::input::mouse::MouseWheel>()
+                .add_systems(PreUpdate, crate::realm_select::take_input);
+            let list = crate::realm_select::list_keys;
+            if list_first {
+                app.add_systems(Update, (list, login_input).chain());
+            } else {
+                app.add_systems(Update, (login_input, list).chain());
+            }
+            // The list stands over this screen, as the realm park raises it after logon.
+            app.world_mut()
+                .resource_mut::<crate::realm_select::Realms>()
+                .shown = true;
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Escape);
+            app.update();
+
+            let order = if list_first { "list first" } else { "screen first" };
+            assert!(
+                !app.world().resource::<crate::realm_select::Realms>().shown,
+                "{order}: the list's Cancel closed it"
+            );
+            assert!(
+                realm_rx
+                    .try_iter()
+                    .any(|r| matches!(r, crate::net::RealmRequest::Abandon)),
+                "{order}: and answered the park"
+            );
+            assert!(
+                !app.world().contains_resource::<QuitArm>(),
+                "{order}: the press was the list's, so the login screen does not also quit"
+            );
+        }
+    }
+
     /// A lost session does not log itself back in: a displaced client's resubmit would kick the
     /// client that displaced it. `GlueParent.lua` retries nothing.
     #[test]

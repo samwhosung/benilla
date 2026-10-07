@@ -169,3 +169,72 @@ pub(super) fn rotate_model(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::net::{RealmChoice, RealmRequest};
+    use crate::realm_select::{list_keys, take_input, Realms};
+
+    /// Escape on the realm list raised by Change Realm closes the list and nothing else: the
+    /// press is the list's (`Realms::owns_input`), so this screen does not also go back to
+    /// login, in either order the two run.
+    #[test]
+    fn escape_on_the_realm_list_does_not_also_leave_for_login() {
+        for list_first in [true, false] {
+            let (pick_tx, pick_rx) = crossbeam_channel::unbounded();
+            let (realm_tx, realm_rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .insert_state(ClientState::CharSelect)
+                .init_resource::<crate::glue::GlueClicks>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<Roster>()
+                .init_resource::<Realms>()
+                .init_resource::<DeleteDialog>()
+                .init_resource::<super::super::addons::AddonsPanel>()
+                .init_resource::<crate::login::LoginIntent>()
+                .init_resource::<crate::glue::dialog::GlueDialog>()
+                .insert_resource(CharPick(pick_tx))
+                .insert_resource(RealmChoice(realm_tx))
+                .add_message::<GlueSound>()
+                .add_message::<bevy::input::mouse::MouseWheel>()
+                .add_systems(PreUpdate, take_input);
+            if list_first {
+                app.add_systems(Update, (list_keys, select_input).chain());
+            } else {
+                app.add_systems(Update, (select_input, list_keys).chain());
+            }
+            app.world_mut()
+                .resource_scope(|world, mut realms: Mut<Realms>| {
+                    crate::realm_select::open_over_char_select(
+                        &mut realms,
+                        world.resource::<RealmChoice>(),
+                    );
+                });
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Escape);
+            app.update();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            app.update(); // `StateTransition` applies a pending state at the next frame
+
+            let order = if list_first { "list first" } else { "screen first" };
+            assert!(
+                realm_rx
+                    .try_iter()
+                    .any(|r| matches!(r, RealmRequest::Abandon)),
+                "{order}: the list's Cancel ran"
+            );
+            assert_eq!(
+                *app.world().resource::<State<ClientState>>().get(),
+                ClientState::CharSelect,
+                "{order}: the press was the list's, so the screen under it stays"
+            );
+            assert!(
+                pick_rx.try_recv().is_err(),
+                "{order}: and the session is not dropped"
+            );
+        }
+    }
+}
