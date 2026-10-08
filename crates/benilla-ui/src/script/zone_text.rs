@@ -19,7 +19,7 @@ pub struct ZoneTexts {
     /// `GetMinimapZoneText`: the subzone, else the zone.
     pub minimap: String,
     /// `GetZonePVPInfo`'s type, `"friendly"`, `"hostile"` or `"contested"`; `None` when the
-    /// player, the zone or its faction template is missing.
+    /// player, the zone or its faction template is missing, or on a PvE realm outside a capital.
     pub pvp_type: Option<String>,
     /// `GetZonePVPInfo`'s faction, `FactionGroup.dbc`'s name for the zone's mask bit; `None` for
     /// none.

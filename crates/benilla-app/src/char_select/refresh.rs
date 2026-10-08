@@ -18,6 +18,7 @@ use super::{class_name, Roster};
 pub(super) fn refresh_list(
     roster: Res<Roster>,
     areas: Option<Res<AreaTableRes>>,
+    realms: Option<Res<crate::realm_select::Realms>>,
     strings: Option<Res<GlueStrings>>,
     status: Res<NetStatus>,
     mut rows: Query<(&SelectAction, &mut Visibility), (With<Button>, Without<Hilight>)>,
@@ -90,7 +91,10 @@ pub(super) fn refresh_list(
             Some(realm) => {
                 // `GetServerName`'s `isPVP, isRP` pair. A normal realm has no suffix, unlike
                 // the realm list's `Normal`: the reference leaves `serverType = ""`.
-                let suffix = match crate::realm_select::pvp_rp(realm.realm_type) {
+                let pvp_rp = realms
+                    .as_deref()
+                    .map_or((false, false), |r| r.pvp_rp(realm.realm_type));
+                let suffix = match pvp_rp {
                     (true, true) => strings.text("RPPVP_PARENTHESES", "(RPPVP)"),
                     (false, true) => strings.text("RP_PARENTHESES", "(RP)"),
                     (true, false) => strings.text("PVP_PARENTHESES", "(PVP)"),

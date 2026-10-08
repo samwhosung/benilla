@@ -728,7 +728,7 @@ pub(super) fn refresh_list(
             }
             // `RealmListUpdate` turns the selected row's type and load `HIGHLIGHT_FONT_COLOR`.
             Column::Type => {
-                let (key, c) = load::type_column(realm.realm_type);
+                let (key, c) = load::type_column(realms.pvp_rp(realm.realm_type));
                 (text(key), if is_selected { load::HIGHLIGHT } else { c })
             }
             Column::Players => (load::players_text(realm.characters), load::HIGHLIGHT),

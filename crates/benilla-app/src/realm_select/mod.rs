@@ -25,12 +25,10 @@ mod load;
 mod screen;
 mod smoke;
 
-pub(crate) use load::pvp_rp;
-
 use bevy::prelude::*;
 
 use crate::net::{RealmChoice, RealmListMessage, RealmRequest};
-use benilla_formats::RealmCategory;
+use benilla_formats::{RealmCategory, RealmConfigs};
 use benilla_protocol::RealmInfo;
 
 /// The persisted 1.12 CVar naming the last realm connected to (`0x83f2d0`); the SavedVariables
@@ -51,6 +49,9 @@ pub(crate) struct Realms {
     /// The client Region's categories ([`category`]), read once at startup; `None` until then,
     /// and every realm lists untabbed.
     pub(super) categories: Option<Vec<RealmCategory>>,
+    /// `Cfg_Configs.dbc`, the realm types ([`Self::pvp_rp`]), read once at startup; empty until
+    /// then, and every type reads Normal.
+    pub(super) types: RealmConfigs,
     /// The tab in front, `RealmList.selectedCategory`: a 1-based ordinal over the categories
     /// holding a realm.
     pub(super) category: Option<usize>,
@@ -143,7 +144,7 @@ impl Realms {
                         la.total_cmp(&lb)
                     }
                     SortKey::Name => ra.name.to_lowercase().cmp(&rb.name.to_lowercase()),
-                    SortKey::Type => load::pvp_rp(ra.realm_type).cmp(&load::pvp_rp(rb.realm_type)),
+                    SortKey::Type => self.pvp_rp(ra.realm_type).cmp(&self.pvp_rp(rb.realm_type)),
                 };
                 if ord != std::cmp::Ordering::Equal {
                     return if descending { ord.reverse() } else { ord };
@@ -154,6 +155,11 @@ impl Realms {
             std::cmp::Ordering::Equal
         });
         rows
+    }
+
+    /// A realm type's `(pvp, rp)` in `Cfg_Configs.dbc`, `(false, false)` for a type with no row.
+    pub(crate) fn pvp_rp(&self, realm_type: u32) -> (bool, bool) {
+        load::pvp_rp(&self.types, realm_type)
     }
 
     /// The load distribution, over every realm, not the selected category: `0x46e510` walks the
@@ -240,7 +246,8 @@ impl Plugin for RealmSelectPlugin {
         app.init_resource::<Realms>()
             .add_systems(
                 Startup,
-                category::load_categories.after(benilla_assets::AssetSet::Open),
+                (category::load_categories, load::load_realm_types)
+                    .after(benilla_assets::AssetSet::Open),
             )
             .add_systems(
                 Update,

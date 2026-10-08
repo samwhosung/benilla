@@ -9,6 +9,8 @@
 
 use bevy::prelude::*;
 
+use benilla_formats::RealmConfigs;
+
 // ── The six glue font colours (`GlueFonts.xml:4-9`) ─────────────────────────────────────────────
 // `BLUE_FONT_COLOR` exists only in glue; FrameXML's `Fonts.xml` has the other five.
 
@@ -98,10 +100,9 @@ pub(super) fn load_column(down: bool, load: f32) -> (&'static str, Color) {
     }
 }
 
-/// The Type column's key and colour; the Lua tests `pvp and rp`, `rp`, `pvp`, then neither, so
-/// RP-PvP takes `NORMAL`, not the RP green.
-pub(super) fn type_column(realm_type: u32) -> (&'static str, Color) {
-    let (pvp, rp) = pvp_rp(realm_type);
+/// The Type column's key and colour for a realm's `(pvp, rp)`; the Lua tests `pvp and rp`, `rp`,
+/// `pvp`, then neither, so RP-PvP takes `NORMAL`, not the RP green.
+pub(super) fn type_column((pvp, rp): (bool, bool)) -> (&'static str, Color) {
     match (pvp, rp) {
         (true, true) => ("RPPVP_PARENTHESES", NORMAL),
         (false, true) => ("RP_PARENTHESES", GREEN),
@@ -110,18 +111,38 @@ pub(super) fn type_column(realm_type: u32) -> (&'static str, Color) {
     }
 }
 
-/// The realm type as `(pvp, rp)`, shared by `GetRealmInfo` and `GetServerName`. The reference
-/// (`0x46efda`) scans `Cfg_Configs.dbc` for the row whose `RealmType` matches the realm's first
-/// wire dword and reads `PlayerKillingAllowed` and `RoleplayingRealm`; the table is that DBC
-/// transcribed (types 3 and 5 are PvP, 7 is RP), and a type with no row reads neither.
-pub(crate) fn pvp_rp(realm_type: u32) -> (bool, bool) {
-    match realm_type {
-        // RealmType → (PlayerKillingAllowed, RoleplayingRealm)
-        0 | 2 | 4 => (false, false),
-        1 | 3 | 5 => (true, false),
-        6 | 7 => (false, true),
-        8 => (true, true),
-        _ => (false, false),
+/// The realm type as `(pvp, rp)`, shared by `GetRealmInfo`, `GetServerName` and the world-entry
+/// latch: each scans `Cfg_Configs.dbc` for the first row whose `RealmType` is the realm's wire
+/// type and reads `PlayerKillingAllowed` and `RoleplayingRealm` (`0x46efda`); a type with no row
+/// reads neither.
+pub(super) fn pvp_rp(types: &RealmConfigs, realm_type: u32) -> (bool, bool) {
+    types
+        .get(realm_type)
+        .map_or((false, false), |c| (c.pvp, c.rp))
+}
+
+/// Read `Cfg_Configs.dbc` once, after the archive chain opens.
+pub(super) fn load_realm_types(
+    mut realms: ResMut<super::Realms>,
+    assets: Option<Res<benilla_assets::WorldAssets>>,
+) {
+    use benilla_assets::LockRecover;
+    let Some(assets) = assets else {
+        return;
+    };
+    let mut chain = assets.chain.lock_recover();
+    match benilla_formats::load_realm_configs(&mut chain) {
+        Ok(types) => {
+            info!(
+                "realm list: {} Cfg_Configs.dbc realm types",
+                types.rows().len()
+            );
+            realms.types = types;
+        }
+        Err(e) => warn!(
+            "realm list: Cfg_Configs.dbc failed to load, so every realm reads Normal and no realm \
+             is PvP: {e:#}"
+        ),
     }
 }
 
@@ -236,23 +257,37 @@ mod tests {
         assert_eq!(load_column(true, 2.0), ("REALM_DOWN", GRAY));
     }
 
-    /// RP-PvP takes `NORMAL`: the Lua's `pvp and rp` arm sets `NORMAL_FONT_COLOR`.
+    /// The Type column through the install's `Cfg_Configs.dbc`: type 10 is PvP, and RP-PvP takes
+    /// `NORMAL`, as the Lua's `pvp and rp` arm sets `NORMAL_FONT_COLOR`.
     #[test]
-    fn the_type_column_is_the_shipped_cfg_configs_rows() {
-        for t in [0, 2, 4] {
-            assert_eq!(type_column(t), ("GAMETYPE_NORMAL", NORMAL), "type {t}");
+    fn the_type_column_reads_the_shipped_cfg_configs() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("chain");
+        let types = benilla_formats::load_realm_configs(&mut chain).expect("Cfg_Configs.dbc");
+        let column = |t| type_column(pvp_rp(&types, t));
+        for t in [0, 2, 4, 9] {
+            assert_eq!(column(t), ("GAMETYPE_NORMAL", NORMAL), "type {t}");
         }
-        // Cfg_Configs rows 3 and 5 are PvP too.
-        for t in [1, 3, 5] {
-            assert_eq!(type_column(t), ("PVP_PARENTHESES", RED), "type {t}");
+        for t in [1, 3, 5, 10] {
+            assert_eq!(column(t), ("PVP_PARENTHESES", RED), "type {t}");
         }
         for t in [6, 7] {
-            assert_eq!(type_column(t), ("RP_PARENTHESES", GREEN), "type {t}");
+            assert_eq!(column(t), ("RP_PARENTHESES", GREEN), "type {t}");
         }
-        assert_eq!(type_column(8), ("RPPVP_PARENTHESES", NORMAL));
-        assert_eq!(type_column(10), ("PVP_PARENTHESES", RED), "type 10");
-        // No row: the scan reads neither column.
-        assert_eq!(type_column(77), ("GAMETYPE_NORMAL", NORMAL));
+        assert_eq!(column(8), ("RPPVP_PARENTHESES", NORMAL));
+    }
+
+    /// No row: the scan reads neither column, so the type is Normal, as it is with no table.
+    #[test]
+    fn a_type_with_no_row_is_normal() {
+        let types = RealmConfigs::from_rows(vec![benilla_formats::RealmConfig {
+            realm_type: 1,
+            pvp: true,
+            rp: false,
+        }]);
+        assert_eq!(pvp_rp(&types, 1), (true, false));
+        assert_eq!(pvp_rp(&types, 77), (false, false));
+        assert_eq!(pvp_rp(&RealmConfigs::default(), 1), (false, false));
     }
 
     /// The default gold is not `NORMAL_FONT_COLOR`.

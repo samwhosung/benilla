@@ -26,8 +26,8 @@
 //! Deviation: the indoor dedup keys `(WMOID, MOGP uniqueID)`, not the client's raw per-WMO group
 //! index, because the raw index can alias across adjacent buildings.
 //!
-//! The reference's PvP display gate `[0x88272c]` (a cached boolean, not the realm type) is
-//! untraced; ours is always open.
+//! `GetZonePVPInfo`'s type and faction show only on a PvP realm or in one of the six capitals
+//! (zone Flags `0x10`); elsewhere they are nil and the stock zone texts stay uncoloured.
 
 use bevy::ecs::system::NonSendMut;
 use bevy::prelude::*;
@@ -107,6 +107,7 @@ fn feed_zone_events(
     areas: Option<Res<AreaTableRes>>,
     factions: Option<Res<Factions>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
+    realm_pvp: Option<Res<RealmPvp>>,
     mut cache: Local<crate::ui_script::VmMemo<ZoneCache>>,
 ) {
     let (Some(mut script), Some(areas)) = (script, areas) else {
@@ -199,7 +200,8 @@ fn feed_zone_events(
         .zip(self_store.single().ok())
         .and_then(|(f, store)| f.catalog().template(store.0.unit_faction_template()?))
         .map(|t| (t.friend_group_mask, t.enemy_group_mask));
-    let (ty, is_arena) = zone_pvp_info(false, leaf_row, zone_row, template);
+    let realm_pvp = realm_pvp.is_some_and(|r| r.0);
+    let (ty, is_arena) = zone_pvp_info(realm_pvp, leaf_row, zone_row, template);
     // factionName is FactionGroup.dbc's Name for the zone's mask bit.
     let pvp = ty.map(|ty| {
         let mask = zone_row.map_or(0, |r| r.faction_group_mask);
@@ -243,27 +245,54 @@ fn feed_zone_events(
     cache.wmo_group = wmo_group;
 }
 
-/// `GetZonePVPInfo` (`0x48d540`): `(pvpType, isArena)`. isArena is the leaf's Flags `0x80`; the
-/// type is the zone's FactionGroupMask against the player template's `(friend, enemy)` masks,
-/// "contested" when neither, never "arena", and nil only on structural failure.
+/// `GetZonePVPInfo` (`0x48d540`): `(pvpType, isArena)`. isArena is the leaf's Flags `0x80`, read
+/// before any bail. The type is nil with no zone row, no faction template, or the display gate
+/// closed: it opens on a PvP realm ([`RealmPvp`]) or in a zone whose Flags carry `0x10`, the six
+/// capitals (`0x48d5c2`/`0x48d5cc`). Open, it is the zone's FactionGroupMask against the template's
+/// `(friend, enemy)` masks, "contested" when neither, never "arena".
 fn zone_pvp_info(
-    _realm_pvp: bool,
+    realm_pvp: bool,
     leaf: &AreaTableRow,
     zone: Option<&AreaTableRow>,
     template: Option<(u32, u32)>,
 ) -> (Option<&'static str>, bool) {
     let is_arena = leaf.flags & 0x80 != 0;
-    let mask = zone.map_or(0, |r| r.faction_group_mask);
-    let ty = template.map(|(friend, enemy)| {
-        if mask & friend != 0 {
-            "friendly"
-        } else if mask & enemy != 0 {
-            "hostile"
-        } else {
-            "contested"
-        }
-    });
+    let ty = zone
+        .filter(|z| realm_pvp || z.flags & 0x10 != 0)
+        .zip(template)
+        .map(|(z, (friend, enemy))| {
+            let mask = z.faction_group_mask;
+            if mask & friend != 0 {
+                "friendly"
+            } else if mask & enemy != 0 {
+                "hostile"
+            } else {
+                "contested"
+            }
+        });
     (ty, is_arena)
+}
+
+/// `[0x88272c]`, the realm's PvP flag the display gate reads: the selected realm's
+/// `PlayerKillingAllowed` in `Cfg_Configs.dbc`, stored once per world entry from the character
+/// list (`0x4015de` in `0x401570`), so a `/reload` or a far teleport keeps it.
+#[derive(Resource, Default)]
+pub(crate) struct RealmPvp(bool);
+
+/// Latch [`RealmPvp`] from the realm this session entered the world on.
+///
+/// Deviation: a realm type with no `Cfg_Configs.dbc` row reads not PvP. The reference skips the
+/// store and keeps the previous world entry's value (0 on a process's first), so the same realm
+/// would read by what was played before it.
+fn latch_realm_pvp(
+    mut latch: ResMut<RealmPvp>,
+    roster: Option<Res<crate::char_select::Roster>>,
+    realms: Option<Res<crate::realm_select::Realms>>,
+) {
+    let realm_type = roster.and_then(|r| r.realm.as_ref().map(|realm| realm.realm_type));
+    latch.0 = realm_type
+        .zip(realms)
+        .is_some_and(|(t, realms)| realms.pvp_rp(t).0);
 }
 
 /// The shared area catalog and the zone-event feed.
@@ -271,7 +300,12 @@ pub(crate) struct AreaPlugin;
 
 impl Plugin for AreaPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_area_table.after(AssetSet::Open))
+        app.init_resource::<RealmPvp>()
+            .add_systems(Startup, load_area_table.after(AssetSet::Open))
+            .add_systems(
+                OnEnter(crate::char_select::ClientState::InWorld),
+                latch_realm_pvp,
+            )
             .add_systems(
                 Update,
                 // After the leaf authority: leaf, indoor bit and names must come from one frame,
