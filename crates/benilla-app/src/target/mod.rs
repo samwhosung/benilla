@@ -74,9 +74,9 @@ pub(crate) use by_name::{AssistRequest, PlayerLookup, TargetByNameRequest};
 pub(crate) use by_name::SelectCommit;
 // The reaction decode and its faction catalog, which also tint the target frame
 // (`TargetFrame_CheckFaction`); `duel_rung` is the same walk, for `/reaction`.
-pub(crate) use ring::{
-    duel_rung, ring_reaction, ring_variant, selection_variant, Factions, RingVariant,
-};
+pub(crate) use ring::{duel_rung, ring_reaction, selection_variant, Factions, RingVariant};
+#[cfg(test)]
+pub(crate) use ring::{ring_variant, PlayerPath, SelectorInput};
 
 pub(crate) use click::DeselectGuid;
 pub use click::Interact;

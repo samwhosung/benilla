@@ -772,7 +772,7 @@ fn evict_name_meshes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::target::ring_variant;
+    use crate::target::{ring_variant, PlayerPath, SelectorInput};
 
     /// `>` not `>=` at the knee and `0.075*d` beyond: the jump at the knee is the reference's.
     #[test]
@@ -807,12 +807,18 @@ mod tests {
     /// A PvP-flagged friendly player's name is the ring's green, not the soft blue.
     #[test]
     fn name_color_is_the_ring_selector_itself() {
-        let paint = |rank, is_player, is_dead, pvp, in_party| {
-            NamePaint::Variant(ring_variant(rank, is_player, is_dead, pvp, in_party))
+        let player = |attacks_us, attackable, pvp, in_party| {
+            NamePaint::Variant(ring_variant(SelectorInput::Player(PlayerPath {
+                attacks_us,
+                attackable,
+                pvp,
+                in_party,
+            })))
         };
+        let npc = |rank, dead| NamePaint::Variant(ring_variant(SelectorInput::Npc { rank, dead }));
         // Flagged is green, unflagged the soft blue, and the two differ.
-        let flagged = paint(6, true, false, true, false);
-        let unflagged = paint(6, true, false, false, false);
+        let flagged = player(false, false, true, false);
+        let unflagged = player(false, false, false, false);
         assert_eq!(flagged, NamePaint::Variant(RingVariant::Friendly));
         assert_eq!(unflagged, NamePaint::Variant(RingVariant::Player));
         assert_ne!(flagged.color(), unflagged.color());
@@ -822,24 +828,25 @@ mod tests {
             "0xFF00FF00 — the ring's own green, byte for byte"
         );
         assert_eq!(
-            paint(6, true, false, true, true),
+            player(false, false, true, true),
             NamePaint::Variant(RingVariant::PartyPvp)
         );
         assert_eq!(
-            paint(6, true, false, false, true),
+            player(false, false, false, true),
             NamePaint::Variant(RingVariant::Party)
         );
-        assert_eq!(paint(0, false, false, false, false).color(), RED);
+        assert_eq!(npc(0, false).color(), RED);
         assert_eq!(
-            paint(6, true, true, false, false),
-            NamePaint::Variant(RingVariant::Player),
-            "dead player never grays"
+            player(true, true, true, false).color(),
+            RED,
+            "mutual attack"
         );
-        assert_eq!(paint(1, true, false, true, false).color(), RED, "hostile");
         assert_eq!(
-            paint(6, false, true, false, false),
-            NamePaint::Variant(RingVariant::Dead)
+            player(false, true, false, false).color(),
+            Color::linear_rgb(1.0, 1.0, 0.0),
+            "attackable, not attacking: yellow"
         );
+        assert_eq!(npc(6, true), NamePaint::Variant(RingVariant::Dead));
     }
 
     const RED: Color = Color::linear_rgb(1.0, 0.0, 0.0);

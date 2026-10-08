@@ -49,8 +49,8 @@ const RING_TEXTURE: &str = "mpq://textures/unitselecttexture.blp";
 const RING_FALLBACK_RADIUS: f32 = benilla_formats::DEGENERATE_RING_FOOTPRINT;
 /// The selector's own palette (`0x605960`), not the nameplate's, written as each decal vertex's
 /// diffuse: NPCs by reaction rank 0-1 red, 2 orange `0xFFFF8000`, 3 yellow, 4-7 green, dead gray
-/// `0xFF7F7F7F`; players soft blue `0xFF6060FF` or, PvP-flagged, green; party members (the table
-/// `0xbc6f48`) pale blue `0xFFAAAAFF` or pale green `0xFFAAFFAA`.
+/// `0xFF7F7F7F`; players red, yellow, soft blue `0xFF6060FF` or green, and party members (the
+/// table `0xbc6f48`) pale blue `0xFFAAAAFF` or pale green `0xFFAAFFAA` ([`ring_variant`]).
 // `linear_rgb` passes the authored bytes raw: the framebuffer is gamma-encoded.
 const RING_HOSTILE: Color = Color::linear_rgb(1.0, 0.0, 0.0);
 const RING_UNFRIENDLY: Color = Color::linear_rgb(1.0, 0.502, 0.0);
@@ -118,42 +118,52 @@ impl RingVariant {
     }
 }
 
-/// The selector's branch (`0x605960`) on [`ring_reaction`]'s rank `0..=6`. A player never grays:
-/// rank 0-1 reads red, standing in for the reference's attackability matrix, else green when
-/// PvP-flagged and blue when not, paler for a party member; self is not in the party table. An NPC
-/// reads gray when dead, else the rank palette. The reference takes the player branch on
-/// `UNIT_FIELD_FLAGS` bit 3 (`0x605baa`), which a player's pet carries too; callers pass the object
-/// type.
-pub(crate) fn ring_variant(
-    rank: u8,
-    is_player: bool,
-    is_dead: bool,
-    pvp: bool,
-    in_party: bool,
-) -> RingVariant {
-    if is_player {
-        return if rank <= 1 {
-            RingVariant::Hostile
-        } else if pvp {
-            if in_party {
-                RingVariant::PartyPvp
-            } else {
-                RingVariant::Friendly
-            }
-        } else if in_party {
-            RingVariant::Party
-        } else {
-            RingVariant::Player
-        };
-    }
-    if is_dead {
-        return RingVariant::Dead;
-    }
-    match rank {
-        0..=1 => RingVariant::Hostile,
-        2 => RingVariant::Unfriendly,
-        3 => RingVariant::Neutral,
-        _ => RingVariant::Friendly,
+/// The selector's player-path inputs (`0x605bb6`–`0x605cf6`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct PlayerPath {
+    /// X, `CanAttack(unit → player)` (`0x605bb9`).
+    pub(crate) attacks_us: bool,
+    /// Y, `CanAttack(player → unit)` (`0x605bc8`, `0x605c0b`).
+    pub(crate) attackable: bool,
+    /// `IsPvP 0x605ff0`: the unit's `UNIT_FLAG_PVP`; the reference reads its charmer's or
+    /// summoner's when it has one.
+    pub(crate) pvp: bool,
+    /// In the party table `0xbc6f48` (`0x4e7f70`), which never holds yourself.
+    pub(crate) in_party: bool,
+}
+
+/// What the selector (`0x605960`) branches on below the combat flash.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum SelectorInput {
+    /// The player path, which never grays.
+    Player(PlayerPath),
+    /// Any other unit: [`ring_reaction`]'s rank `0..=6`, and whether it is dead.
+    Npc { rank: u8, dead: bool },
+}
+
+/// The selector's colour class. The player path: X∧Y red, X∧¬Y soft blue, ¬X∧Y yellow
+/// (`0x605bb6`–`0x605c2c`), else green when PvP-flagged and blue when not, paler for a party
+/// member. Any other unit: gray when dead, else the rank palette. The reference takes the player
+/// path on `UNIT_FIELD_FLAGS` bit 3 (`0x605baa`), which a player's pet carries too; callers pass
+/// the object type.
+pub(crate) fn ring_variant(input: SelectorInput) -> RingVariant {
+    match input {
+        SelectorInput::Player(p) => match (p.attacks_us, p.attackable, p.pvp, p.in_party) {
+            (true, true, ..) => RingVariant::Hostile,
+            (true, false, ..) => RingVariant::Player,
+            (false, true, ..) => RingVariant::Neutral,
+            (false, false, true, true) => RingVariant::PartyPvp,
+            (false, false, true, false) => RingVariant::Friendly,
+            (false, false, false, true) => RingVariant::Party,
+            (false, false, false, false) => RingVariant::Player,
+        },
+        SelectorInput::Npc { dead: true, .. } => RingVariant::Dead,
+        SelectorInput::Npc { rank, .. } => match rank {
+            0..=1 => RingVariant::Hostile,
+            2 => RingVariant::Unfriendly,
+            3 => RingVariant::Neutral,
+            _ => RingVariant::Friendly,
+        },
     }
 }
 
@@ -167,10 +177,21 @@ pub(crate) fn selection_variant(
     is_player: bool,
     in_party: bool,
 ) -> RingVariant {
-    let rank = ring_reaction(factions, reputations, store, self_store);
-    let is_dead = store.is_some_and(|s| s.0.unit_is_dead());
-    let pvp = store.is_some_and(|s| s.0.unit_flags() & UNIT_FLAG_PVP != 0);
-    ring_variant(rank, is_player, is_dead, pvp, in_party)
+    let attack =
+        |attacker| can_attack_between(factions, reputations, store, self_store, true, attacker);
+    ring_variant(if is_player {
+        SelectorInput::Player(PlayerPath {
+            attacks_us: attack(Attacker::Unit),
+            attackable: attack(Attacker::Player),
+            pvp: store.is_some_and(|s| s.0.unit_flags() & UNIT_FLAG_PVP != 0),
+            in_party,
+        })
+    } else {
+        SelectorInput::Npc {
+            rank: ring_reaction(factions, reputations, store, self_store),
+            dead: store.is_some_and(|s| s.0.unit_is_dead()),
+        }
+    })
 }
 
 /// Load the ring texture and seed the ring record.
@@ -307,7 +328,7 @@ pub(super) fn update_ring(
                             .single()
                             .ok()
                             .and_then(|s| s.0.unit_faction_template()),
-                        if is_player { " [player→blue]" } else { "" },
+                        if is_player { " [player path]" } else { "" },
                         if is_dead { " [dead→gray]" } else { "" },
                     );
                 }
@@ -424,8 +445,9 @@ pub(super) fn push_ring(
 }
 
 /// The target's reaction toward our player as a rank `0..=6`, the direction every NPC colour
-/// uses (`0x605960` and `0x7cbaa0` ask `UnitReaction 0x6061e0` with the unit as `this`). When
-/// both carry `UNIT_FIELD_FLAGS` bit 3, a duel (`0x606296`) or mutual FFA decides first. Then
+/// uses (`0x605960` and `0x7cbaa0` ask `UnitReaction 0x6061e0` with the unit as `this`). One
+/// object toward itself is friendly before any rung (`0x606200`). When both carry
+/// `UNIT_FIELD_FLAGS` bit 3, a duel (`0x606296`) or mutual FFA decides next. Then
 /// `0x606530`: a faction with a reputation slot (`0x605fc0`) answers with our reputation rank
 /// (`0x4d63a0`), even in GM mode; any other goes to the template comparator (`0x606640`). Neutral
 /// when anything is missing. `0x606439` caps that answer at 6, so Revered and Exalted both read 6.
@@ -438,11 +460,8 @@ pub(crate) fn ring_reaction(
     self_store: Option<&ObjectStore>,
 ) -> u8 {
     if let (Some(target), Some(own)) = (target_store, self_store) {
-        if let Some(rank) = duel_reaction(&target.0, &own.0) {
+        if let Some(rank) = leading_rungs(target, own) {
             return rank;
-        }
-        if ffa_reaction(&target.0, &own.0) {
-            return Reaction::Hostile as u8;
         }
     }
     let resolved = (|| {
@@ -469,6 +488,24 @@ pub(crate) fn ring_reaction(
 
 /// Revered, the highest rank `UnitReaction`'s generic leg answers (`0x606439`).
 const REACTION_CAP: u8 = 6;
+
+/// Whether two stores are one object: the reference compares object pointers (`UnitReaction`
+/// `0x606200`, `CanCooperate` `0x606ba6`), and an entity holds one store.
+fn same_object(a: &ObjectStore, b: &ObjectStore) -> bool {
+    std::ptr::eq(a, b)
+}
+
+/// `UnitReaction`'s rungs ahead of the faction legs, the same in both directions: one object
+/// toward itself is friendly (`0x606200`), then the duel and both-FFA rungs.
+fn leading_rungs(target: &ObjectStore, own: &ObjectStore) -> Option<u8> {
+    if same_object(target, own) {
+        return Some(Reaction::Friendly as u8);
+    }
+    if let Some(rank) = duel_reaction(&target.0, &own.0) {
+        return Some(rank);
+    }
+    ffa_reaction(&target.0, &own.0).then_some(Reaction::Hostile as u8)
+}
 
 /// `UNIT_FIELD_FLAGS` bit 3, player-controlled in behaviour: players and their pets carry it, wild
 /// creatures do not. `UnitReaction` needs it on both sides before any player-vs-player rung
@@ -526,13 +563,10 @@ pub(crate) fn reaction_from_player(
     target_store: Option<&ObjectStore>,
     self_store: Option<&ObjectStore>,
 ) -> u8 {
-    // The player-vs-player block (`0x606217`) runs first in both directions.
+    // The identity leg and the player-vs-player block (`0x606217`) run first in both directions.
     if let (Some(target), Some(own)) = (target_store, self_store) {
-        if let Some(rank) = duel_reaction(&target.0, &own.0) {
+        if let Some(rank) = leading_rungs(target, own) {
             return rank;
-        }
-        if ffa_reaction(&target.0, &own.0) {
-            return Reaction::Hostile as u8;
         }
     }
     let resolved = (|| {
@@ -594,6 +628,14 @@ pub(crate) fn can_interact_from_player(
         && reaction_from_player(factions, reputations, target_store, self_store) >= NEUTRAL
 }
 
+/// Which side of `CanAttack 0x606980` (`this` the attacker, the argument the victim) the local
+/// player takes; the selector asks both ways (`0x605bb9`, `0x605bc8`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Attacker {
+    Player,
+    Unit,
+}
+
 /// `CanAttack` from the local player (`0x606980`), every leg in the reference's order; the V-plate
 /// category turns on it. Not a reaction threshold: an unflagged opposite-faction player on a PvE
 /// realm is hostile yet not attackable, a same-faction duel opponent friendly yet attackable.
@@ -604,53 +646,86 @@ pub(crate) fn can_attack_from_player(
     self_store: Option<&ObjectStore>,
     target_is_player: bool,
 ) -> bool {
-    let (Some(target), Some(own)) = (target_store, self_store) else {
+    can_attack_between(
+        factions,
+        reputations,
+        target_store,
+        self_store,
+        target_is_player,
+        Attacker::Player,
+    )
+}
+
+/// `CanAttack 0x606980` between a unit and the local player, the player attacking or attacked.
+fn can_attack_between(
+    factions: Option<&Factions>,
+    reputations: &Reputations,
+    unit_store: Option<&ObjectStore>,
+    self_store: Option<&ObjectStore>,
+    unit_is_player: bool,
+    attacker: Attacker,
+) -> bool {
+    let (Some(unit), Some(own)) = (unit_store, self_store) else {
         return false; // fields not streamed yet; the reference's null path refuses too
     };
-    let (tflags, oflags) = (target.0.unit_flags(), own.0.unit_flags());
+    let player_attacks = attacker == Attacker::Player;
+    let (att, vic, victim_is_player) = if player_attacks {
+        (own, unit, unit_is_player)
+    } else {
+        (unit, own, true)
+    };
+    // `UnitReaction(this → arg)`: [`reaction_from_player`] with the player as `this`,
+    // [`ring_reaction`] with the unit.
+    let reaction = |player_is_this: bool| {
+        if player_is_this {
+            reaction_from_player(factions, reputations, unit_store, self_store)
+        } else {
+            ring_reaction(factions, reputations, unit_store, self_store)
+        }
+    };
+    let forward = || reaction(player_attacks);
+    let (vflags, aflags) = (vic.0.unit_flags(), att.0.unit_flags());
     // (a) The ghost gate (`0x606987`): only a creature whose type flags carry `0x2` may attack a
-    // ghost player, so the local player never can.
+    // ghost player (`0x605f70`); a player has no creature record, and no NPC's flags are held.
     const PLAYER_FLAGS_GHOST: u32 = 0x10;
-    if target_is_player && target.0.player_flags() & PLAYER_FLAGS_GHOST != 0 {
+    if victim_is_player && vic.0.player_flags() & PLAYER_FLAGS_GHOST != 0 {
         return false;
     }
-    // (b) Five target-flag disqualifiers.
-    if tflags & CANNOT_BE_ATTACKED != 0 {
+    // (b) Five victim-flag disqualifiers.
+    if vflags & CANNOT_BE_ATTACKED != 0 {
         return false;
     }
     // (c) The four cross-flag immunity legs.
-    let (t_controlled, o_controlled) = (
-        tflags & UNIT_FLAG_PVP_ATTACKABLE != 0,
-        oflags & UNIT_FLAG_PVP_ATTACKABLE != 0,
+    let (v_controlled, a_controlled) = (
+        vflags & UNIT_FLAG_PVP_ATTACKABLE != 0,
+        aflags & UNIT_FLAG_PVP_ATTACKABLE != 0,
     );
-    if o_controlled && tflags & IMMUNE_TO_PLAYER_CONTROLLED != 0
-        || !o_controlled && tflags & IMMUNE_TO_UNCONTROLLED != 0
-        || oflags & IMMUNE_TO_PLAYER_CONTROLLED != 0 && t_controlled
-        || oflags & IMMUNE_TO_UNCONTROLLED != 0 && !t_controlled
+    if a_controlled && vflags & IMMUNE_TO_PLAYER_CONTROLLED != 0
+        || !a_controlled && vflags & IMMUNE_TO_UNCONTROLLED != 0
+        || aflags & IMMUNE_TO_PLAYER_CONTROLLED != 0 && v_controlled
+        || aflags & IMMUNE_TO_UNCONTROLLED != 0 && !v_controlled
     {
         return false;
     }
     // (d) The three terminal arms, selected by the two bit-3 flags.
-    let toward_target = || reaction_from_player(factions, reputations, target_store, self_store);
-    match (o_controlled, t_controlled) {
+    match (a_controlled, v_controlled) {
         // Neither player-controlled: hostile in either direction suffices.
         (false, false) => {
-            toward_target() <= Reaction::Hostile as u8
-                || ring_reaction(factions, reputations, target_store, self_store)
-                    <= Reaction::Hostile as u8
+            forward() <= Reaction::Hostile as u8
+                || reaction(!player_attacks) <= Reaction::Hostile as u8
         }
-        // Both: a friendly reaction refuses; else a live duel, the target's PvP flag or mutual
+        // Both: a friendly reaction refuses; else a live duel, the victim's PvP flag or mutual
         // FFA. The reference's charm-owner resolve (`0x606170`) is not applied.
         (true, true) => {
-            if toward_target() >= Reaction::Friendly as u8 {
+            if forward() >= Reaction::Friendly as u8 {
                 return false;
             }
-            matches!(duel_rung(&target.0, &own.0), DuelRung::Engaged { .. })
-                || tflags & UNIT_FLAG_PVP != 0
-                || ffa_reaction(&target.0, &own.0)
+            matches!(duel_rung(&vic.0, &att.0), DuelRung::Engaged { .. })
+                || vflags & UNIT_FLAG_PVP != 0
+                || ffa_reaction(&vic.0, &att.0)
         }
-        // Mixed, the player against an ordinary NPC: attackable when worse than friendly.
-        _ => toward_target() < Reaction::Friendly as u8,
+        // Mixed, a player-controlled unit against an ordinary one: worse than friendly.
+        _ => forward() < Reaction::Friendly as u8,
     }
 }
 
@@ -678,8 +753,8 @@ pub(crate) fn can_cooperate_with_player(
     let (Some(target), Some(own)) = (target_store, self_store) else {
         return false;
     };
-    // The first leg: a unit never cooperates with itself (`0x606ba6` compares the objects).
-    if std::ptr::eq(target, own) {
+    // The first leg: a unit never cooperates with itself (`0x606ba6`).
+    if same_object(target, own) {
         return false;
     }
     if target.0.unit_charmed_by().is_some_and(|g| g != 0)
@@ -782,7 +857,8 @@ pub(crate) fn duel_rung(
 mod tests {
     use super::{
         can_attack_from_player, can_cooperate_with_player, plate_is_friendly, ring_reaction,
-        ring_variant, selection_variant, Factions, RingVariant, UNIT_FLAG_PVP_ATTACKABLE,
+        ring_variant, selection_variant, Factions, PlayerPath, RingVariant, SelectorInput,
+        UNIT_FLAG_PVP_ATTACKABLE,
     };
     use crate::net::{ObjectStore, Reputations};
     use benilla_protocol::field::{
@@ -892,48 +968,56 @@ mod tests {
         assert_eq!(variant(&me, &me), RingVariant::Friendly);
     }
 
+    /// The four player-path arms (`0x605bb6`–`0x605cf6`), and the party split on the last.
     #[test]
-    fn player_ring_party_and_pvp_split() {
-        let v = |pvp, in_party| ring_variant(5, true, false, pvp, in_party);
+    fn player_ring_matrix_party_and_pvp_split() {
+        let v = |attacks_us, attackable, pvp, in_party| {
+            ring_variant(SelectorInput::Player(PlayerPath {
+                attacks_us,
+                attackable,
+                pvp,
+                in_party,
+            }))
+        };
+        assert_eq!(v(true, true, true, true), RingVariant::Hostile, "X∧Y red");
+        assert_eq!(v(true, false, true, true), RingVariant::Player, "X∧¬Y blue");
         assert_eq!(
-            v(false, false),
+            v(false, true, true, true),
+            RingVariant::Neutral,
+            "¬X∧Y yellow"
+        );
+        assert_eq!(
+            v(false, false, false, false),
             RingVariant::Player,
-            "friendly solo = soft blue"
+            "solo blue"
         );
         assert_eq!(
-            v(false, true),
+            v(false, false, false, true),
             RingVariant::Party,
-            "friendly party = pale blue"
+            "party pale blue"
         );
-        assert_eq!(v(true, false), RingVariant::Friendly, "pvp solo = green");
+        assert_eq!(v(true, false, false, false), RingVariant::Player);
         assert_eq!(
-            v(true, true),
+            v(false, false, true, false),
+            RingVariant::Friendly,
+            "pvp green"
+        );
+        assert_eq!(
+            v(false, false, true, true),
             RingVariant::PartyPvp,
-            "pvp party = pale green"
+            "pale green"
         );
-        assert_eq!(
-            ring_variant(1, true, false, true, true),
-            RingVariant::Hostile
-        );
-        // A dead player never grays.
-        assert_eq!(ring_variant(5, true, true, false, true), RingVariant::Party);
     }
 
     #[test]
-    fn npc_ring_ignores_party_inputs() {
-        assert_eq!(ring_variant(0, false, true, true, true), RingVariant::Dead);
-        assert_eq!(
-            ring_variant(2, false, false, true, true),
-            RingVariant::Unfriendly
-        );
-        assert_eq!(
-            ring_variant(3, false, false, false, false),
-            RingVariant::Neutral
-        );
-        assert_eq!(
-            ring_variant(5, false, false, true, true),
-            RingVariant::Friendly
-        );
+    fn npc_ring_reads_rank_and_death() {
+        let v = |rank, dead| ring_variant(SelectorInput::Npc { rank, dead });
+        assert_eq!(v(0, true), RingVariant::Dead);
+        assert_eq!(v(5, true), RingVariant::Dead);
+        assert_eq!(v(1, false), RingVariant::Hostile);
+        assert_eq!(v(2, false), RingVariant::Unfriendly);
+        assert_eq!(v(3, false), RingVariant::Neutral);
+        assert_eq!(v(5, false), RingVariant::Friendly);
     }
 
     /// The emissary's rank stays neutral, which paints its bar yellow, while its plate category is
