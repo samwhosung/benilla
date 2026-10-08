@@ -664,8 +664,9 @@ fn login_input(
     time: Res<Time>,
 ) {
     // The reference's `RealmList` is a DIALOG-strata frame over this screen, so while it is up
-    // everything here is inert, Escape included (it is the list's Cancel).
-    if realms.shown {
+    // everything here is inert, Escape included (it is the list's Cancel), through the frame
+    // its own Escape closes it in.
+    if realms.owns_input() {
         return;
     }
     let empty = GlueStrings::default();

@@ -293,13 +293,14 @@ impl Plugin for RealmSelectPlugin {
                     // Input before the row refresh, so a click shows on the frame it landed.
                     smoke::debug_realm_smoke,
                     (
-                        input::clicks,
-                        input::keys,
-                        tick_refresh,
-                        screen::refresh_list,
+                        (input::clicks, input::keys)
+                            .chain()
+                            .run_if(|realms: Res<Realms>| realms.owns_input()),
+                        (tick_refresh, screen::refresh_list)
+                            .chain()
+                            .run_if(|realms: Res<Realms>| realms.shown),
                     )
-                        .chain()
-                        .run_if(|realms: Res<Realms>| realms.shown),
+                        .chain(),
                 )
                     .chain()
                     .after(benilla_world::schedule::WorldStage::Net)

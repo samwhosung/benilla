@@ -41,7 +41,7 @@ pub(super) fn select_input(
 ) {
     // A modal owns the input while it is up: the delete confirm, the AddOns list, the realm list
     // over this screen, or the glue dialog (whose Okay must not double as Enter World or Escape).
-    if dialog.open || panel.open || realms.shown || glue_dialog.is_open() {
+    if dialog.open || panel.open || realms.owns_input() || glue_dialog.is_open() {
         return;
     }
     let now = time.elapsed_secs();
