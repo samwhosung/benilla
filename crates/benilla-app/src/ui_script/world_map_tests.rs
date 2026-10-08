@@ -872,7 +872,20 @@ fn the_fullscreen_quads_follow_a_resize() {
 fn a_reopened_map_shows_the_players_zone_before_its_first_paint() {
     use benilla_ui::script::{WorldMapContinentView, WorldMapZoneView};
     let _data = benilla_formats::wow_data_or_skip!();
-    let mut s = harness();
+    // The whole stock UI: the OnShow's `UpdateMicroButtons` and the full-screen panel slot.
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1600.0, 900.0);
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            name: Some("Probefour".into()),
+            level: 60,
+            ..Default::default()
+        }),
+    );
+    let failures = super::load_default_ui(&s);
+    assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
     s.set_world_map_catalog(vec![WorldMapContinentView {
         name: "Eastern Kingdoms".into(),
         map_file: "Azeroth".into(),
@@ -894,6 +907,7 @@ fn a_reopened_map_shows_the_players_zone_before_its_first_paint() {
 
     s.run("ToggleWorldMap()").unwrap();
     s.tick(0.01);
+    assert!(s.eval::<bool>("return WorldMapFrame:IsVisible()").unwrap());
     assert_eq!(tile(&s), "Interface\\WorldMap\\Elwynn\\Elwynn1");
     // A right-click on the map zooms out to the continent (WorldMapFrame.lua:294).
     s.run("WorldMapZoomOutButton_OnClick()").unwrap();
@@ -902,7 +916,9 @@ fn a_reopened_map_shows_the_players_zone_before_its_first_paint() {
 
     s.run("ToggleWorldMap()").unwrap();
     s.tick(0.01);
+    assert!(!s.eval::<bool>("return WorldMapFrame:IsVisible()").unwrap());
     s.run("ToggleWorldMap()").unwrap();
+    assert!(s.eval::<bool>("return WorldMapFrame:IsVisible()").unwrap());
     assert_eq!(
         tile(&s),
         "Interface\\WorldMap\\Elwynn\\Elwynn1",

@@ -646,7 +646,11 @@ fn the_setter_builds_the_landmarks_before_its_event_fires() {
         "Stormwind:15,Goldshire:15,Edge:7"
     );
     assert_eq!(seen(&s, "SetMapZoom(1)"), "", "off the projection, none");
-    assert_eq!(seen(&s, "SetMapZoom(0)"), "", "and none admitted at world level");
+    assert_eq!(
+        seen(&s, "SetMapZoom(0)"),
+        "",
+        "and none admitted at world level"
+    );
 }
 
 /// Overlays reveal per the pushed explored bitset: none before a push, the matching subset after,

@@ -794,13 +794,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         })
                         .map(|i| (i as i64 + 1, 0))
                 } else {
-                    grid_area(wm, x, y)
-                        .map(|zi| (i64::from(wm.selection.0), i64::from(zi)))
+                    grid_area(wm, x, y).map(|zi| (i64::from(wm.selection.0), i64::from(zi)))
                 }
             };
             // Only a hit reaches the setter (`0x4a75bd`, `0x4a7608`).
             if let Some((c, z)) = target {
-                select(&mut lua.app_data_mut::<Model>().expect("model app_data"), c, z);
+                select(
+                    &mut lua.app_data_mut::<Model>().expect("model app_data"),
+                    c,
+                    z,
+                );
                 fire_world_map_update(lua);
             }
             Ok(())

@@ -624,13 +624,16 @@ fn feed_world_map(
                             landmark_gates_pass(poi, level, &areas.0, &explored, &world_states)
                                 .then(|| landmark_texture_index(poi, level))
                         });
-                        icons.iter().any(Option::is_some).then(|| WorldMapLandmarkSource {
-                            name: poi.name.clone(),
-                            description: poi.description.clone(),
-                            map: poi.continent_id,
-                            pos: (poi.pos[0], poi.pos[1]),
-                            icons,
-                        })
+                        icons
+                            .iter()
+                            .any(Option::is_some)
+                            .then(|| WorldMapLandmarkSource {
+                                name: poi.name.clone(),
+                                description: poi.description.clone(),
+                                map: poi.continent_id,
+                                pos: (poi.pos[0], poi.pos[1]),
+                                icons,
+                            })
                     })
                     .collect()
             })
@@ -926,8 +929,15 @@ mod tests {
             landmark_texture_index(&town, WorldMapLevel::Continent),
             town.icon
         );
-        assert_eq!(landmark_texture_index(&town, WorldMapLevel::World), town.icon);
-        for level in [WorldMapLevel::Zone, WorldMapLevel::Continent, WorldMapLevel::World] {
+        assert_eq!(
+            landmark_texture_index(&town, WorldMapLevel::World),
+            town.icon
+        );
+        for level in [
+            WorldMapLevel::Zone,
+            WorldMapLevel::Continent,
+            WorldMapLevel::World,
+        ] {
             assert_eq!(
                 landmark_texture_index(&tower, level),
                 tower.icon,
@@ -992,7 +1002,13 @@ mod tests {
             "and it still needs the zone discovered"
         );
         assert!(
-            !landmark_gates_pass(tower, WorldMapLevel::Continent, &areas, &explored_epl, &states),
+            !landmark_gates_pass(
+                tower,
+                WorldMapLevel::Continent,
+                &areas,
+                &explored_epl,
+                &states
+            ),
             "a tower is a zone-level row (Flags 0x87 carries no 0x08)"
         );
 
@@ -1010,7 +1026,11 @@ mod tests {
                 u32::MAX,
                 "continent-wide, so no exploration gate"
             );
-            for level in [WorldMapLevel::World, WorldMapLevel::Continent, WorldMapLevel::Zone] {
+            for level in [
+                WorldMapLevel::World,
+                WorldMapLevel::Continent,
+                WorldMapLevel::Zone,
+            ] {
                 assert!(
                     landmark_gates_pass(city, level, &areas, &nothing_explored, &states),
                     "{name} shows at every level on a fresh character"
