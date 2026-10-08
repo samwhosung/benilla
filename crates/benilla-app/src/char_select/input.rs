@@ -216,10 +216,16 @@ mod tests {
                 .resource_mut::<ButtonInput<KeyCode>>()
                 .press(KeyCode::Escape);
             app.update();
-            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .clear();
             app.update(); // `StateTransition` applies a pending state at the next frame
 
-            let order = if list_first { "list first" } else { "screen first" };
+            let order = if list_first {
+                "list first"
+            } else {
+                "screen first"
+            };
             assert!(
                 realm_rx
                     .try_iter()

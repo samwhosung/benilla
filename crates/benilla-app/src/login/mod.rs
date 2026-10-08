@@ -1052,7 +1052,11 @@ mod tests {
                 .press(KeyCode::Escape);
             app.update();
 
-            let order = if list_first { "list first" } else { "screen first" };
+            let order = if list_first {
+                "list first"
+            } else {
+                "screen first"
+            };
             assert!(
                 !app.world().resource::<crate::realm_select::Realms>().shown,
                 "{order}: the list's Cancel closed it"
