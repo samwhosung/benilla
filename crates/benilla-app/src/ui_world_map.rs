@@ -4,7 +4,8 @@
 //!   `AreaTable`, `WorldMapContinent`, `Map` and the `.zmp` bitmaps, built as the reference's
 //!   `0x4a5d00` builds it, with the instance maps no continent owns beside it.
 //! - [`feed_world_map`], every frame: the player's selection (`0x4a6650`), the blips projected
-//!   onto the displayed map, and the landmark list (`0x4a67a0`), rebuilt when its inputs change.
+//!   onto the displayed map, and the landmark sources the setter `0x4a67a0` builds its list
+//!   from, pushed when they change.
 //! - [`dev_map_jump`]: Alt+click the map to go there.
 
 use bevy::ecs::system::NonSendMut;
@@ -16,7 +17,8 @@ use benilla_formats::{
     load_zone_map, WorldMapArea,
 };
 use benilla_ui::script::{
-    UiScript, WorldMapContinentView, WorldMapLandmarkView, WorldMapOverlayView, WorldMapZoneView,
+    UiScript, WorldMapContinentView, WorldMapLandmarkSource, WorldMapLevel, WorldMapOverlayView,
+    WorldMapZoneView,
 };
 
 use crate::net::{ObjectStore, SelfPlayer};
@@ -316,39 +318,11 @@ fn build_catalog_from_world(world: &World) -> Option<(Vec<WorldMapContinentView>
     build_catalog(&mut chain, &areas.0, maps)
 }
 
-/// The displayed level the landmark gates branch on, from the selection cells `[0x84506c]`,
-/// `[0x845070]` and `[0x845074]`. An instance map is `Zone`: both gates treat it as zone level
-/// (`0x4a79de`; `0x4a8856`/`0x4a885f` fall through to `0x4a8868`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum MapLevel {
-    /// Both continents on one sheet (the reference's `continent == -1`).
-    World,
-    /// One continent, no zone selected (`continent >= 0, zone == -1`).
-    Continent,
-    /// One zone (`continent >= 0, zone >= 0`), or an instance map (`continent == -2`).
-    Zone,
-}
-
-impl MapLevel {
-    /// From the engine's selection, the 1-based `(continent, zone)` with 0 for whole plus the
-    /// direct area, which is read first because it shares the world sheet's `(0, 0)`.
-    fn of((continent, zone, direct): (u32, u32, Option<u32>)) -> Self {
-        match (continent, zone, direct) {
-            (_, _, Some(_)) => Self::Zone,
-            (0, _, None) => Self::World,
-            (_, 0, None) => Self::Continent,
-            _ => Self::Zone,
-        }
-    }
-}
-
-/// The inputs the landmark list is a pure function of. `0x4a67a0` rebuilds only on these: a
-/// selection change, a world-state push (`0x48fa0d`), a `PLAYER_EXPLORED_ZONES` change
+/// The inputs the landmark sources are a pure function of. Besides a selection change, `0x4a67a0`
+/// rebuilds the list on these: a world-state push (`0x48fa0d`), a `PLAYER_EXPLORED_ZONES` change
 /// (`0x4a6477`, an UpdateFields callback on byte `0xe6c`) and the gossip marker's set and clear.
 #[derive(PartialEq, Eq)]
 struct LandmarkKey {
-    /// All three selection cells, the direct area's included.
-    selection: (u32, u32, Option<u32>),
     map: u32,
     states: u64,
     explored: Vec<u32>,
@@ -360,27 +334,24 @@ struct LandmarkKey {
 impl LandmarkKey {
     fn matches(
         &self,
-        selection: (u32, u32, Option<u32>),
         map: u32,
         states: u64,
         explored: &[u32],
         marker: Option<(u32, [u32; 3], u32)>,
     ) -> bool {
-        self.selection == selection
-            && self.map == map
+        self.map == map
             && self.states == states
             && self.marker == marker
             && self.explored == explored
     }
 }
 
-/// The builder's near-zero skip (`0x4a6868`/`0x4a687a`, epsilon `2.384e-7`): a UV of 0 on both
-/// axes is off the displayed map, which is how POIs are filtered by continent; a POI on a rect's
-/// edge has one non-zero axis and stays.
-fn is_degenerate(uv: (f32, f32)) -> bool {
-    const EPS: f32 = 2.384e-7;
-    uv.0.abs() < EPS && uv.1.abs() < EPS
-}
+/// [`WorldMapLandmarkSource::icons`]' order.
+const LEVELS: [WorldMapLevel; 3] = [
+    WorldMapLevel::World,
+    WorldMapLevel::Continent,
+    WorldMapLevel::Zone,
+];
 
 /// `0x4a67a0`'s AreaPOI gates, in the reference's order:
 ///
@@ -394,15 +365,15 @@ fn is_degenerate(uv: (f32, f32)) -> bool {
 /// The loop reads no `ContinentID`, `Importance`, `FactionID` or `Icon`.
 fn landmark_gates_pass(
     poi: &benilla_formats::AreaPoi,
-    level: MapLevel,
+    level: WorldMapLevel,
     areas: &benilla_formats::AreaTableCatalog,
     explored: &[u32],
     world_states: &crate::world_state::WorldStates,
 ) -> bool {
     let level_ok = match level {
-        MapLevel::Zone => poi.flags & 0x04 != 0,
-        MapLevel::Continent => poi.flags & 0x08 != 0,
-        MapLevel::World => poi.flags & 0x10 != 0 && poi.flags & 0x08 != 0,
+        WorldMapLevel::Zone => poi.flags & 0x04 != 0,
+        WorldMapLevel::Continent => poi.flags & 0x08 != 0,
+        WorldMapLevel::World => poi.flags & 0x10 != 0 && poi.flags & 0x08 != 0,
     };
     if !level_ok {
         return false;
@@ -429,10 +400,10 @@ fn explored_bit(explored: &[u32], bit: u32) -> bool {
 /// `GetMapLandmarkInfo`'s `textureIndex` (`0x4a8848`-`0x4a8877`): the row's `Icon`, but cell 15
 /// at zone level for a row without `Flags & 0x80`, which the shipped data sets on exactly the
 /// world-state rows.
-fn landmark_texture_index(poi: &benilla_formats::AreaPoi, level: MapLevel) -> u32 {
+fn landmark_texture_index(poi: &benilla_formats::AreaPoi, level: WorldMapLevel) -> u32 {
     /// The generic zone-level POI cell of `Interface\Minimap\POIIcons`.
     const ZONE_SUBSTITUTE: u32 = 15;
-    match poi.flags & 0x80 != 0 || level != MapLevel::Zone {
+    match poi.flags & 0x80 != 0 || level != WorldMapLevel::Zone {
         true => poi.icon,
         false => ZONE_SUBSTITUTE,
     }
@@ -594,6 +565,16 @@ fn feed_world_map(
     let top_zone = world.area().and_then(|aid| areas.0.top_zone(aid));
     let player_sel = resolve_player_selection(&data, map.0, top_zone);
 
+    // `GetWorldLocMapPosition` and the setter's landmark pass project synchronously with the
+    // engine's own selection, so the engine holds the projection over its own copy of the catalog.
+    {
+        let memo = memo.get(&script);
+        if !memo.projector || data.is_changed() {
+            memo.projector = true;
+            install_world_loc_projector(&mut script, &data);
+        }
+    }
+
     // First world enter: the zone updater `0x494780` (`crate::area`), finding the cached zone id
     // 0, selects the player's zone itself through `0x4a6650` and the setter `0x4a67a0` before any
     // Lua asks. Once per VM, each login being a first enter.
@@ -603,16 +584,6 @@ fn feed_world_map(
             memo.map_synced = true;
             let (c, z) = sel.zone.unwrap_or((0, 0));
             script.sync_world_map_to_player_zone(c, z, sel.direct);
-        }
-    }
-
-    // `GetWorldLocMapPosition` projects synchronously with the engine's own selection, so the
-    // engine holds the projection over its own copy of the catalog.
-    {
-        let memo = memo.get(&script);
-        if !memo.projector || data.is_changed() {
-            memo.projector = true;
-            install_world_loc_projector(&mut script, &data);
         }
     }
 
@@ -629,7 +600,8 @@ fn feed_world_map(
         )
     });
 
-    // The landmarks (`GetNumMapLandmarks`), rebuilt only when a `LandmarkKey` input moves.
+    // The landmark sources, rebuilt only when a `LandmarkKey` input moves; the engine projects
+    // them onto each selection it stores.
     let marker = poi_marker
         .on_map(map.0)
         .map(|m| (m.continent_id, m.pos.map(f32::to_bits), m.icon));
@@ -638,53 +610,49 @@ fn feed_world_map(
         .get(&script)
         .landmarks
         .as_ref()
-        .is_some_and(|k| k.matches(selection, map.0, states_gen, &explored, marker));
+        .is_some_and(|k| k.matches(map.0, states_gen, &explored, marker));
     if !unchanged {
-        let level = MapLevel::of(selection);
-        let mut landmarks = Vec::new();
         // The DBC rows first, in file order, the Lua landmark index (`0x4a6819`'s walk of
         // `[0xc0e054]`).
-        if let Some(pois) = pois.as_ref() {
-            for (_, poi) in pois.0.rows() {
-                if !landmark_gates_pass(poi, level, &areas.0, &explored, &world_states) {
-                    continue;
-                }
-                let Some(uv) = project(poi.continent_id, poi.pos[0], poi.pos[1]) else {
-                    continue;
-                };
-                if is_degenerate(uv) {
-                    continue;
-                }
-                landmarks.push(WorldMapLandmarkView {
-                    name: poi.name.clone(),
-                    description: poi.description.clone(),
-                    texture_index: landmark_texture_index(poi, level),
-                    uv,
-                });
-            }
-        }
+        let mut sources: Vec<WorldMapLandmarkSource> = pois
+            .as_ref()
+            .map(|pois| {
+                pois.0
+                    .rows()
+                    .filter_map(|(_, poi)| {
+                        let icons = LEVELS.map(|level| {
+                            landmark_gates_pass(poi, level, &areas.0, &explored, &world_states)
+                                .then(|| landmark_texture_index(poi, level))
+                        });
+                        icons.iter().any(Option::is_some).then(|| WorldMapLandmarkSource {
+                            name: poi.name.clone(),
+                            description: poi.description.clone(),
+                            map: poi.continent_id,
+                            pos: (poi.pos[0], poi.pos[1]),
+                            icons,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         // Then the guard-directions marker, last (`0x4a69c7`): no gate and no icon substitution,
-        // only the degenerate-projection test.
+        // only the near-zero skip.
         if let Some(poi) = poi_marker.on_map(map.0) {
-            if let Some(uv) = project(poi.continent_id, poi.pos[0], poi.pos[1]) {
-                if !is_degenerate(uv) {
-                    landmarks.push(WorldMapLandmarkView {
-                        name: poi.name.clone(),
-                        description: poi.description.clone(),
-                        texture_index: poi.icon,
-                        uv,
-                    });
-                }
-            }
+            sources.push(WorldMapLandmarkSource {
+                name: poi.name.clone(),
+                description: poi.description.clone(),
+                map: poi.continent_id,
+                pos: (poi.pos[0], poi.pos[1]),
+                icons: [Some(poi.icon); 3],
+            });
         }
         memo.get(&script).landmarks = Some(LandmarkKey {
-            selection,
             map: map.0,
             states: states_gen,
             explored: explored.clone(),
             marker,
         });
-        script.set_world_map_landmarks(landmarks);
+        script.set_world_map_landmark_sources(sources);
     }
 
     // The `party1..4` blips: a streamed member's transform, else the `i16` position from
@@ -856,24 +824,24 @@ mod tests {
         };
 
         // A town (0x0d = 0x01|0x04|0x08): zone and continent, not the world sheet.
-        assert!(pass(0x0d, MapLevel::Zone));
-        assert!(pass(0x0d, MapLevel::Continent));
-        assert!(!pass(0x0d, MapLevel::World));
+        assert!(pass(0x0d, WorldMapLevel::Zone));
+        assert!(pass(0x0d, WorldMapLevel::Continent));
+        assert!(!pass(0x0d, WorldMapLevel::World));
 
         // A capital (0x1d = 0x0d|0x10): all three.
-        assert!(pass(0x1d, MapLevel::Zone));
-        assert!(pass(0x1d, MapLevel::Continent));
-        assert!(pass(0x1d, MapLevel::World));
+        assert!(pass(0x1d, WorldMapLevel::Zone));
+        assert!(pass(0x1d, WorldMapLevel::Continent));
+        assert!(pass(0x1d, WorldMapLevel::World));
 
         // An Eastern Plaguelands tower (0x87 = 0x01|0x02|0x04|0x80): zone only.
-        assert!(pass(0x87, MapLevel::Zone));
-        assert!(!pass(0x87, MapLevel::Continent));
-        assert!(!pass(0x87, MapLevel::World));
+        assert!(pass(0x87, WorldMapLevel::Zone));
+        assert!(!pass(0x87, WorldMapLevel::Continent));
+        assert!(!pass(0x87, WorldMapLevel::World));
 
         // `0x10` alone, which 1.12 does not ship: world level still wants `0x08`.
-        assert!(!pass(0x10, MapLevel::World));
-        assert!(!pass(0x10, MapLevel::Continent));
-        assert!(!pass(0x10, MapLevel::Zone));
+        assert!(!pass(0x10, WorldMapLevel::World));
+        assert!(!pass(0x10, WorldMapLevel::Continent));
+        assert!(!pass(0x10, WorldMapLevel::Zone));
     }
 
     #[test]
@@ -885,7 +853,7 @@ mod tests {
         let horde = poi(0x87, 0, 2373);
         let plain = poi(0x87, 0, 0);
         let pass = |p: &AreaPoi, st: &WorldStates| {
-            landmark_gates_pass(p, MapLevel::Zone, &areas, &explored, st)
+            landmark_gates_pass(p, WorldMapLevel::Zone, &areas, &explored, st)
         };
 
         assert!(
@@ -928,8 +896,9 @@ mod tests {
             v[1] = 1 << 8;
             v
         };
-        let pass =
-            |p: &AreaPoi, ex: &[u32]| landmark_gates_pass(p, MapLevel::Zone, &areas, ex, &states);
+        let pass = |p: &AreaPoi, ex: &[u32]| {
+            landmark_gates_pass(p, WorldMapLevel::Zone, &areas, ex, &states)
+        };
 
         assert!(!pass(&poi(0x04, 139, 0), &unexplored), "not discovered yet");
         assert!(pass(&poi(0x04, 139, 0), &explored));
@@ -952,13 +921,13 @@ mod tests {
     fn the_zone_level_icon_substitution_spares_the_world_state_rows() {
         let town = poi(0x0d, 0, 0);
         let tower = poi(0x87, 0, 2372);
-        assert_eq!(landmark_texture_index(&town, MapLevel::Zone), 15);
+        assert_eq!(landmark_texture_index(&town, WorldMapLevel::Zone), 15);
         assert_eq!(
-            landmark_texture_index(&town, MapLevel::Continent),
+            landmark_texture_index(&town, WorldMapLevel::Continent),
             town.icon
         );
-        assert_eq!(landmark_texture_index(&town, MapLevel::World), town.icon);
-        for level in [MapLevel::Zone, MapLevel::Continent, MapLevel::World] {
+        assert_eq!(landmark_texture_index(&town, WorldMapLevel::World), town.icon);
+        for level in [WorldMapLevel::Zone, WorldMapLevel::Continent, WorldMapLevel::World] {
             assert_eq!(
                 landmark_texture_index(&tower, level),
                 tower.icon,
@@ -968,25 +937,16 @@ mod tests {
     }
 
     #[test]
-    fn only_a_both_axes_zero_projection_is_dropped() {
-        assert!(is_degenerate((0.0, 0.0)));
-        assert!(is_degenerate((1e-8, -1e-8)));
-        assert!(!is_degenerate((0.0, 0.5)));
-        assert!(!is_degenerate((0.5, 0.0)));
-        assert!(!is_degenerate((1e-6, 0.0)));
-    }
-
-    #[test]
     fn the_selection_pair_maps_onto_the_reference_levels() {
-        assert_eq!(MapLevel::of((0, 0, None)), MapLevel::World);
+        assert_eq!(WorldMapLevel::of((0, 0, None)), WorldMapLevel::World);
         assert_eq!(
-            MapLevel::of((0, 3, None)),
-            MapLevel::World,
+            WorldMapLevel::of((0, 3, None)),
+            WorldMapLevel::World,
             "continent 0 wins"
         );
-        assert_eq!(MapLevel::of((2, 0, None)), MapLevel::Continent);
-        assert_eq!(MapLevel::of((2, 7, None)), MapLevel::Zone);
-        assert_eq!(MapLevel::of((0, 0, Some(443))), MapLevel::Zone);
+        assert_eq!(WorldMapLevel::of((2, 0, None)), WorldMapLevel::Continent);
+        assert_eq!(WorldMapLevel::of((2, 7, None)), WorldMapLevel::Zone);
+        assert_eq!(WorldMapLevel::of((0, 0, Some(443))), WorldMapLevel::Zone);
     }
 
     #[test]
@@ -1019,7 +979,7 @@ mod tests {
             v
         };
         let tower_shows = |st: &WorldStates, ex: &[u32]| {
-            landmark_gates_pass(tower, MapLevel::Zone, &areas, ex, st)
+            landmark_gates_pass(tower, WorldMapLevel::Zone, &areas, ex, st)
         };
         assert!(
             !tower_shows(&states, &explored_epl),
@@ -1032,7 +992,7 @@ mod tests {
             "and it still needs the zone discovered"
         );
         assert!(
-            !landmark_gates_pass(tower, MapLevel::Continent, &areas, &explored_epl, &states),
+            !landmark_gates_pass(tower, WorldMapLevel::Continent, &areas, &explored_epl, &states),
             "a tower is a zone-level row (Flags 0x87 carries no 0x08)"
         );
 
@@ -1050,19 +1010,19 @@ mod tests {
                 u32::MAX,
                 "continent-wide, so no exploration gate"
             );
-            for level in [MapLevel::World, MapLevel::Continent, MapLevel::Zone] {
+            for level in [WorldMapLevel::World, WorldMapLevel::Continent, WorldMapLevel::Zone] {
                 assert!(
                     landmark_gates_pass(city, level, &areas, &nothing_explored, &states),
                     "{name} shows at every level on a fresh character"
                 );
             }
             assert_eq!(
-                landmark_texture_index(city, MapLevel::Continent),
+                landmark_texture_index(city, WorldMapLevel::Continent),
                 city.icon,
                 "the city icon is its own at continent level"
             );
             assert_eq!(
-                landmark_texture_index(city, MapLevel::Zone),
+                landmark_texture_index(city, WorldMapLevel::Zone),
                 15,
                 "and the generic cell inside a zone map"
             );
@@ -1250,8 +1210,8 @@ mod player_zone_tests {
             None,
             "the world sheet has no continent for map 489 at all"
         );
-        assert_eq!(MapLevel::of(sel), MapLevel::Zone);
-        assert_eq!(MapLevel::of((0, 0, None)), MapLevel::World);
+        assert_eq!(WorldMapLevel::of(sel), WorldMapLevel::Zone);
+        assert_eq!(WorldMapLevel::of((0, 0, None)), WorldMapLevel::World);
     }
 
     /// `0x494780` calls `0x4a6650` at `0x4947ac` when the cached zone id `[0xb4e314]` was 0.

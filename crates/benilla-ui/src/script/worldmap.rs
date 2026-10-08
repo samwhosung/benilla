@@ -6,8 +6,9 @@
 //! world sheet, zone 0 the whole continent; continents in `WorldMapArea` file order (`0x4a5d00`),
 //! zones by case-insensitive name (`0x4a6390`). An instance map is a third state (`0x4a67a0`).
 //!
-//! Deviation: `WORLD_MAP_UPDATE` fires at the next tick, where the reference fires it
-//! synchronously, because it only triggers a repaint and one tick is invisible.
+//! A Lua verb that moves the selection is the reference's setter `0x4a67a0` whole: it stores the
+//! cells, rebuilds the landmark list for the new map, then fires `WORLD_MAP_UPDATE` before it
+//! returns (`0x4a6ce4`), so `WorldMapFrame`'s OnShow repaints the map before its first draw.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -39,6 +40,47 @@ pub struct WorldMapLandmarkView {
     pub texture_index: u32,
     /// Position on the displayed map, UV from its top-left.
     pub uv: (f32, f32),
+}
+
+/// What a landmark depends on besides the displayed map, which the host pushes when it changes:
+/// an `AreaPOI.dbc` row past its exploration and world-state gates, or the guard-directions
+/// marker. The setter projects each onto the selection it stores (`0x4a6819`, `0x4a69c7`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WorldMapLandmarkSource {
+    pub name: String,
+    pub description: String,
+    /// The map id the position is on, the row's `ContinentID`.
+    pub map: u32,
+    /// The world `(x, y)`.
+    pub pos: (f32, f32),
+    /// The `textureIndex` at each [`WorldMapLevel`], `None` where the row's level flag drops it.
+    pub icons: [Option<u32>; 3],
+}
+
+/// The displayed level the landmark gates branch on, from the selection cells `[0x84506c]`,
+/// `[0x845070]` and `[0x845074]`. An instance map is `Zone`: both gates treat it as zone level
+/// (`0x4a79de`; `0x4a8856`/`0x4a885f` fall through to `0x4a8868`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WorldMapLevel {
+    /// Both continents on one sheet (the reference's `continent == -1`).
+    World,
+    /// One continent, no zone selected (`continent >= 0, zone == -1`).
+    Continent,
+    /// One zone (`continent >= 0, zone >= 0`), or an instance map (`continent == -2`).
+    Zone,
+}
+
+impl WorldMapLevel {
+    /// From the engine's selection, the 1-based `(continent, zone)` with 0 for whole plus the
+    /// direct area, which is read first because it shares the world sheet's `(0, 0)`.
+    pub fn of((continent, zone, direct): (u32, u32, Option<u32>)) -> Self {
+        match (continent, zone, direct) {
+            (_, _, Some(_)) => Self::Zone,
+            (0, _, None) => Self::World,
+            (_, 0, None) => Self::Continent,
+            _ => Self::Zone,
+        }
+    }
 }
 
 /// A sub-area's map art, drawn over the base tiles once any of its explore bits is set.
@@ -182,6 +224,9 @@ pub struct WorldMapState {
     pub corpse_uv: Option<(f32, f32)>,
     /// `PLAYER_EXPLORED_ZONES_1`, 64 words, bit n being `AreaTable.dbc` exploreFlag n.
     pub explored: Vec<u32>,
+    /// What the landmark list is built from, pushed by the host when it changes.
+    pub landmark_sources: Vec<WorldMapLandmarkSource>,
+    /// The displayed map's landmarks, built from the sources whenever the selection is stored.
     pub landmarks: Vec<WorldMapLandmarkView>,
 }
 
@@ -380,15 +425,15 @@ impl super::UiScript {
         }
     }
 
-    /// Pushes the displayed map's landmarks; a change queues `WORLD_MAP_UPDATE` to re-seat them.
-    pub fn set_world_map_landmarks(&mut self, landmarks: Vec<WorldMapLandmarkView>) {
+    /// Pushes the landmark sources and rebuilds the displayed map's list from them; a change to
+    /// the list queues `WORLD_MAP_UPDATE` to re-seat it.
+    pub fn set_world_map_landmark_sources(&mut self, sources: Vec<WorldMapLandmarkSource>) {
         let mut model = self.model_mut();
-        if model.worldmap.landmarks != landmarks {
-            model.worldmap.landmarks = landmarks;
-            model
-                .pending_events
-                .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+        if model.worldmap.landmark_sources == sources {
+            return;
         }
+        model.worldmap.landmark_sources = sources;
+        refresh_landmarks(&mut model);
     }
 
     /// Pushes the per-frame feed: the player's zone, the projected positions and the facing.
@@ -418,15 +463,19 @@ impl super::UiScript {
         (wm.selection.0, wm.selection.1, wm.direct_area)
     }
 
-    /// Install the host's world-to-map projection behind `GetWorldLocMapPosition`.
+    /// Install the host's world-to-map projection behind `GetWorldLocMapPosition` and the
+    /// landmark list.
     pub fn set_world_loc_projector(&mut self, projector: super::WorldLocProjector) {
-        self.model_mut().world_loc_projector = Some(projector);
+        let mut model = self.model_mut();
+        model.world_loc_projector = Some(projector);
+        refresh_landmarks(&mut model);
     }
 
     /// Moves the selection from the engine, as the zone updater `0x494780` calls the setter
     /// `0x4a67a0`: a fresh login shows the player's map before any Lua runs, not the world sheet,
     /// whose `GetPlayerMapPosition` is sheet UV (`0x4a7360`). It takes the resolver's whole
-    /// answer, orphan leg included, as `0x4947ac` calls `0x4a6650`.
+    /// answer, orphan leg included, as `0x4947ac` calls `0x4a6650`. Its `WORLD_MAP_UPDATE` is
+    /// queued for this frame's tick, which the feed that calls this precedes.
     pub fn sync_world_map_to_player_zone(
         &mut self,
         continent: u32,
@@ -435,6 +484,9 @@ impl super::UiScript {
     ) {
         let mut model = self.model_mut();
         select_resolved(&mut model, continent, zone, direct_area);
+        model
+            .pending_events
+            .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
     }
 
     /// The map UV at UI point `(x, y)`, or `None` off the art, normalized over `WorldMapButton`
@@ -458,12 +510,55 @@ impl super::UiScript {
 
 /// The one writer of the three selection cells, as the setter `0x4a67a0` is: every leg but
 /// `ecx == -2` clears the direct cell (`0x4a67ea`), and that one stores the id (`0x4a67c1`).
+/// The landmark list follows the new map (`0x4a6819`); the caller fires `WORLD_MAP_UPDATE`.
 fn store_selection(model: &mut Model, selection: (u32, u32), direct_area: Option<u32>) {
     model.worldmap.selection = selection;
     model.worldmap.direct_area = direct_area;
-    model
-        .pending_events
-        .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+    model.worldmap.landmarks = build_landmarks(model);
+}
+
+/// The setter's landmark pass: each source the displayed level admits, projected onto the
+/// displayed map, dropped off it or at the near-zero UV (`0x4a6868`/`0x4a687a`, epsilon
+/// `2.384e-7`), which is how the rows are filtered by continent.
+fn build_landmarks(model: &Model) -> Vec<WorldMapLandmarkView> {
+    const EPS: f32 = 2.384e-7;
+    let wm = &model.worldmap;
+    let Some(project) = model.world_loc_projector.as_ref() else {
+        return Vec::new();
+    };
+    let selection = (wm.selection.0, wm.selection.1, wm.direct_area);
+    let level = WorldMapLevel::of(selection) as usize;
+    wm.landmark_sources
+        .iter()
+        .filter_map(|src| {
+            let texture_index = src.icons[level]?;
+            let uv = project(selection, src.map, src.pos.0, src.pos.1)?;
+            (uv.0.abs() >= EPS || uv.1.abs() >= EPS).then(|| WorldMapLandmarkView {
+                name: src.name.clone(),
+                description: src.description.clone(),
+                texture_index,
+                uv,
+            })
+        })
+        .collect()
+}
+
+/// Rebuilds the list in place for the stored selection, after an input other than the selection
+/// moved; a changed list queues `WORLD_MAP_UPDATE` to re-seat it.
+fn refresh_landmarks(model: &mut Model) {
+    let landmarks = build_landmarks(model);
+    if model.worldmap.landmarks != landmarks {
+        model.worldmap.landmarks = landmarks;
+        model
+            .pending_events
+            .push(("WORLD_MAP_UPDATE".to_string(), Vec::new()));
+    }
+}
+
+/// Fires the setter's `WORLD_MAP_UPDATE` in place (`0x4a6ce4` into `SignalEvent`), for a Lua
+/// verb that has dropped its model borrow.
+fn fire_world_map_update(lua: &Lua) {
+    super::tick::fire_event_into(lua, "WORLD_MAP_UPDATE", Vec::new());
 }
 
 /// Clamps and stores a continent and zone, clearing the direct area: the tail of `SetMapZoom`,
@@ -557,8 +652,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "SetMapZoom",
         lua.create_function(|lua, (c, z): (i64, Option<i64>)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            select(&mut model, c, z.unwrap_or(0));
+            select(
+                &mut lua.app_data_mut::<Model>().expect("model app_data"),
+                c,
+                z.unwrap_or(0),
+            );
+            fire_world_map_update(lua);
             Ok(())
         })?,
     )?;
@@ -568,10 +667,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "SetMapToCurrentZone",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let (c, z) = model.worldmap.player_zone.unwrap_or((0, 0));
-            let direct = model.worldmap.player_direct_area;
-            select_resolved(&mut model, c, z, direct);
+            {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let (c, z) = model.worldmap.player_zone.unwrap_or((0, 0));
+                let direct = model.worldmap.player_direct_area;
+                select_resolved(&mut model, c, z, direct);
+            }
+            fire_world_map_update(lua);
             Ok(())
         })?,
     )?;
@@ -676,23 +778,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ProcessMapClick",
         lua.create_function(|lua, (x, y): (f32, f32)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // An instance map swallows the click (`0x4a7540` opens `cmp esi,-2; je 0x4a760d`),
-            // tested first as it shares the world sheet's `continent == 0`.
-            if model.worldmap.direct_area.is_some() {
-                return Ok(());
-            }
-            if model.worldmap.selection.0 == 0 {
-                let hit = model.worldmap.continents.iter().position(|cont| {
-                    let (u0, v0, u1, v1) = cont.world_rect;
-                    (u0..=u1).contains(&x) && (v0..=v1).contains(&y)
-                });
-                if let Some(i) = hit {
-                    select(&mut model, i as i64 + 1, 0);
+            let target = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let wm = &model.worldmap;
+                // An instance map swallows the click (`0x4a7540` opens `cmp esi,-2; je
+                // 0x4a760d`), tested first as it shares the world sheet's `continent == 0`.
+                if wm.direct_area.is_some() {
+                    None
+                } else if wm.selection.0 == 0 {
+                    wm.continents
+                        .iter()
+                        .position(|cont| {
+                            let (u0, v0, u1, v1) = cont.world_rect;
+                            (u0..=u1).contains(&x) && (v0..=v1).contains(&y)
+                        })
+                        .map(|i| (i as i64 + 1, 0))
+                } else {
+                    grid_area(wm, x, y)
+                        .map(|zi| (i64::from(wm.selection.0), i64::from(zi)))
                 }
-            } else if let Some(zi) = grid_area(&model.worldmap, x, y) {
-                let c = i64::from(model.worldmap.selection.0);
-                select(&mut model, c, i64::from(zi));
+            };
+            // Only a hit reaches the setter (`0x4a75bd`, `0x4a7608`).
+            if let Some((c, z)) = target {
+                select(&mut lua.app_data_mut::<Model>().expect("model app_data"), c, z);
+                fire_world_map_update(lua);
             }
             Ok(())
         })?,

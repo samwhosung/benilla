@@ -193,7 +193,7 @@ fn a_direct_area_is_the_third_selection_state() {
     // (`0x48f9f6`, `0x4a6460`, `0x6d93d8`, `0x6d9a17`, `0x6dac72`); passing the zone alone would
     // drop an instance map to the world view on the next refresh.
     s.set_world_map_explored(vec![u32::MAX; 64]);
-    s.set_world_map_landmarks(Vec::new());
+    s.set_world_map_landmark_sources(Vec::new());
     s.run("SetMapToCurrentZone()").unwrap();
     s.sync_world_map_to_player_zone(0, 0, Some(443));
     assert_eq!(
@@ -594,6 +594,59 @@ fn worldmap_update_fires_inside_the_verb_that_moves_the_selection() {
         1,
         "nothing is left queued to fire again on the next tick"
     );
+}
+
+/// The setter rebuilds the landmark list for the map it stores before its `WORLD_MAP_UPDATE`
+/// (`0x4a6819`, then `0x4a6ce4`): a handler reads the new map's landmarks, each source admitted by
+/// its icon at the displayed level and dropped at the near-zero UV (`0x4a6868`/`0x4a687a`).
+#[test]
+fn the_setter_builds_the_landmarks_before_its_event_fires() {
+    let mut s = script();
+    push_catalog(&mut s);
+    // Map 0's positions project to themselves on Eastern Kingdoms and its zones, and nowhere else.
+    s.set_world_loc_projector(Box::new(|(c, _, _), map, x, y| {
+        (c == 2 && map == 0).then_some((x, y))
+    }));
+    let source = |name: &str, pos: (f32, f32), icons: [Option<u32>; 3]| WorldMapLandmarkSource {
+        name: name.into(),
+        description: String::new(),
+        map: 0,
+        pos,
+        icons,
+    };
+    s.set_world_map_landmark_sources(vec![
+        source("Stormwind", (0.25, 0.5), [None, Some(6), Some(15)]),
+        source("Goldshire", (0.5, 0.75), [None, None, Some(15)]),
+        // On a rect's edge, one axis non-zero: kept.
+        source("Edge", (0.0, 0.5), [None, Some(7), Some(7)]),
+        source("Corner", (1e-8, -1e-8), [Some(1), Some(1), Some(1)]),
+    ]);
+    s.tick(0.01);
+    s.run(
+        r#"
+        f = CreateFrame("Frame")
+        f:RegisterEvent("WORLD_MAP_UPDATE")
+        f:SetScript("OnEvent", function()
+            seen = {}
+            for i = 1, GetNumMapLandmarks() do
+                local name, _, icon = GetMapLandmarkInfo(i)
+                table.insert(seen, name .. ":" .. icon)
+            end
+        end)
+    "#,
+    )
+    .unwrap();
+    let seen = |s: &UiScript, call: &str| {
+        s.eval::<String>(&format!("seen = nil {call} return table.concat(seen, ',')"))
+            .unwrap()
+    };
+    assert_eq!(seen(&s, "SetMapZoom(2)"), "Stormwind:6,Edge:7");
+    assert_eq!(
+        seen(&s, "SetMapZoom(2, 1)"),
+        "Stormwind:15,Goldshire:15,Edge:7"
+    );
+    assert_eq!(seen(&s, "SetMapZoom(1)"), "", "off the projection, none");
+    assert_eq!(seen(&s, "SetMapZoom(0)"), "", "and none admitted at world level");
 }
 
 /// Overlays reveal per the pushed explored bitset: none before a push, the matching subset after,
