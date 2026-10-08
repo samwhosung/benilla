@@ -35,7 +35,7 @@ use benilla_ui::script::{JustifyH, JustifyV, Outline};
 use crate::entities::{overhead_anchor, BoneAttach, OverheadFallback};
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, NetEntity, ObjectStore, Reputations, SelfPlayer};
-use crate::target::{ring_reaction, ring_variant, CombatFlash, Factions, RingVariant, Selection};
+use crate::target::{selection_variant, CombatFlash, Factions, RingVariant, Selection};
 use crate::ui_text::{layout_text_quads, FontSpec, Justify, TextSeat, UiFontAtlas};
 use benilla_world::view::WorldCamera;
 
@@ -209,8 +209,8 @@ pub(crate) fn height_scale(d: f32) -> f32 {
     }
 }
 
-/// What a name line is painted with: the ring's selector ([`ring_variant`]), which the reference's
-/// name render also calls (`0x605960`), or the combat flash.
+/// What a name line is painted with: the ring's selector ([`selection_variant`]), which the
+/// reference's name render also calls (`0x605960`), or the combat flash.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum NamePaint {
     /// The selector's answer.
@@ -513,27 +513,17 @@ pub(crate) fn drive_nameplates(
                 .and_then(|s| crate::ui_guild::unit_guild_name(&s.0, &mut guilds, &net_commands)),
             _ => None,
         };
-        // The colour: the ring's reaction rank and the shared selector.
-        let rank = ring_reaction(
-            factions.as_deref(),
-            &reputations,
-            store,
-            self_store.single().ok(),
-        );
-        let is_dead = store.is_some_and(|s| s.0.unit_is_dead());
-        // The ring's player inputs, for this unit: PvP flag (`UNIT_FIELD_FLAGS` 0x1000) and party.
-        let pvp = store.is_some_and(|s| s.0.unit_flags() & 0x1000 != 0);
-        let in_party = group.members.iter().any(|m| m.guid == guid.0);
         // The selector's first-priority branch: the combat flash while we melee this unit.
         let color = if flash.unit == Some(entity) {
             NamePaint::Flash
         } else {
-            NamePaint::Variant(ring_variant(
-                rank,
+            NamePaint::Variant(selection_variant(
+                factions.as_deref(),
+                &reputations,
+                store,
+                self_store.single().ok(),
                 net.kind == EntityKind::Player,
-                is_dead,
-                pvp,
-                in_party,
+                group.members.iter().any(|m| m.guid == guid.0),
             ))
         };
 
@@ -782,6 +772,7 @@ fn evict_name_meshes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::target::ring_variant;
 
     /// `>` not `>=` at the knee and `0.075*d` beyond: the jump at the knee is the reference's.
     #[test]
