@@ -125,10 +125,11 @@ pub(crate) struct PlayerPath {
     pub(crate) attacks_us: bool,
     /// Y, `CanAttack(player → unit)` (`0x605bc8`, `0x605c0b`).
     pub(crate) attackable: bool,
-    /// `IsPvP 0x605ff0`: the unit's `UNIT_FLAG_PVP`; the reference reads its charmer's or
-    /// summoner's when it has one.
+    /// `IsPvP 0x605ff0`: the unit's `UNIT_FLAG_PVP`; the reference reads its `CHARMEDBY`, else
+    /// `CREATEDBY` owner's when it has one, and answers no for a unit flagged `0x100`.
     pub(crate) pvp: bool,
-    /// In the party table `0xbc6f48` (`0x4e7f70`), which never holds yourself.
+    /// `0x4e7f70`: you or a member of the party table `0xbc6f48`; the selector tests itself first
+    /// (`0x605c46`), so here it is a member.
     pub(crate) in_party: bool,
 }
 
@@ -496,7 +497,8 @@ fn same_object(a: &ObjectStore, b: &ObjectStore) -> bool {
 }
 
 /// `UnitReaction`'s rungs ahead of the faction legs, the same in both directions: one object
-/// toward itself is friendly (`0x606200`), then the duel and both-FFA rungs.
+/// toward itself is friendly (`0x606200`), then the duel and both-FFA rungs. Not built: the
+/// party rung between them (`0x6062b0`).
 fn leading_rungs(target: &ObjectStore, own: &ObjectStore) -> Option<u8> {
     if same_object(target, own) {
         return Some(Reaction::Friendly as u8);
