@@ -9,6 +9,11 @@
 //! A Lua verb that moves the selection is the reference's setter `0x4a67a0` whole: it stores the
 //! cells, rebuilds the landmark list for the new map, then fires `WORLD_MAP_UPDATE` before it
 //! returns (`0x4a6ce4`), so `WorldMapFrame`'s OnShow repaints the map before its first draw.
+//!
+//! Deviation: the engine's own pushes (the world-enter sync, the explored areas, the landmark
+//! sources, the catalog) queue `WORLD_MAP_UPDATE` for the next frame's tick and fire only on a
+//! change, where the reference fires in place from the handler that moved the data: the app's
+//! feeds run after the frame's tick.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -475,7 +480,7 @@ impl super::UiScript {
     /// `0x4a67a0`: a fresh login shows the player's map before any Lua runs, not the world sheet,
     /// whose `GetPlayerMapPosition` is sheet UV (`0x4a7360`). It takes the resolver's whole
     /// answer, orphan leg included, as `0x4947ac` calls `0x4a6650`. Its `WORLD_MAP_UPDATE` is
-    /// queued for this frame's tick, which the feed that calls this precedes.
+    /// queued for the next frame's tick (the module's deviation).
     pub fn sync_world_map_to_player_zone(
         &mut self,
         continent: u32,
@@ -519,9 +524,9 @@ fn store_selection(model: &mut Model, selection: (u32, u32), direct_area: Option
 
 /// The setter's landmark pass: each source the displayed level admits, projected onto the
 /// displayed map, dropped off it or at the near-zero UV (`0x4a6868`/`0x4a687a`, epsilon
-/// `2.384e-7`), which is how the rows are filtered by continent.
+/// `[0x8029d4]` = 2^-22), which is how the rows are filtered by continent.
 fn build_landmarks(model: &Model) -> Vec<WorldMapLandmarkView> {
-    const EPS: f32 = 2.384e-7;
+    const EPS: f32 = f32::from_bits(0x3480_0000);
     let wm = &model.worldmap;
     let Some(project) = model.world_loc_projector.as_ref() else {
         return Vec::new();
