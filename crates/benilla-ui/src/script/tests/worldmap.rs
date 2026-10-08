@@ -1,5 +1,5 @@
-//! The world-map bindings: catalog and feed pushes, the engine-owned selection, and the deferred
-//! `WORLD_MAP_UPDATE` queue.
+//! The world-map bindings: catalog and feed pushes, the engine-owned selection, and the
+//! `WORLD_MAP_UPDATE` the setter fires.
 
 use super::common::script;
 use crate::script::*;
@@ -556,36 +556,43 @@ fn worldmap_zone_level_hover_names_without_highlight() {
     assert!(tx > 0.0 && ty > 0.0);
 }
 
-/// `SetMapZoom` queues `WORLD_MAP_UPDATE` rather than firing it, since a binding cannot re-enter
-/// dispatch; the registered frame hears it on the next tick.
+/// Every Lua verb that moves the selection fires `WORLD_MAP_UPDATE` before it returns: the setter
+/// `0x4a67a0` signals it at its tail (`0x4a6ce4`), and `SignalEvent` (`0x703e50`) runs each
+/// listener in place. The handler already reads the new selection.
 #[test]
-fn worldmap_update_event_fires_on_next_tick() {
+fn worldmap_update_fires_inside_the_verb_that_moves_the_selection() {
     let mut s = script();
     push_catalog(&mut s);
+    s.set_world_map_feed(Some((2, 1)), None, 0.0, None, Vec::new(), Vec::new());
     // Drain the catalog push's own queued event first.
     s.tick(0.01);
     s.run(
         r#"
-        heard = 0
+        heard = {}
         f = CreateFrame("Frame", "MapListener")
         f:RegisterEvent("WORLD_MAP_UPDATE")
-        f:SetScript("OnEvent", function() heard = heard + 1 end)
-        SetMapZoom(1)
+        f:SetScript("OnEvent", function()
+            table.insert(heard, GetCurrentMapContinent() .. "/" .. GetCurrentMapZone())
+        end)
     "#,
     )
     .unwrap();
-    assert_eq!(
-        s.eval::<i64>("return heard").unwrap(),
-        0,
-        "nothing fires inside the SetMapZoom call itself"
-    );
+    let heard = |s: &UiScript, call: &str| {
+        s.eval::<String>(&format!(
+            "heard = {{}} {call} return table.concat(heard, ',')"
+        ))
+        .unwrap()
+    };
+    assert_eq!(heard(&s, "SetMapZoom(1)"), "1/0");
+    assert_eq!(heard(&s, "SetMapToCurrentZone()"), "2/1");
+    // On the Elwynn map, (0.5, 0.5) drills into the Stormwind City peer.
+    s.run("SetMapZoom(2, 1)").unwrap();
+    assert_eq!(heard(&s, "ProcessMapClick(0.5, 0.5)"), "2/2");
     s.tick(0.01);
-    assert_eq!(s.eval::<i64>("return heard").unwrap(), 1);
-    s.tick(0.01);
     assert_eq!(
-        s.eval::<i64>("return heard").unwrap(),
+        s.eval::<i64>("return table.getn(heard)").unwrap(),
         1,
-        "the queue drains — no re-fire"
+        "nothing is left queued to fire again on the next tick"
     );
 }
 

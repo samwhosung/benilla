@@ -859,3 +859,50 @@ fn the_fullscreen_quads_follow_a_resize() {
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
+
+/// Reopening the map after zooming out shows the player's zone from its first paint. The OnShow
+/// calls `SetMapToCurrentZone()` (WorldMapFrame.xml:600), whose setter `0x4a67a0` fires
+/// `WORLD_MAP_UPDATE` before it returns (`0x4a6ce4`, `SignalEvent` dispatching in place), so the
+/// stock `WorldMapFrame_Update` sets the zone's tiles inside the show, before any tick or paint.
+#[test]
+fn a_reopened_map_shows_the_players_zone_before_its_first_paint() {
+    use benilla_ui::script::{WorldMapContinentView, WorldMapZoneView};
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = harness();
+    s.set_world_map_catalog(vec![WorldMapContinentView {
+        name: "Eastern Kingdoms".into(),
+        map_file: "Azeroth".into(),
+        zones: vec![WorldMapZoneView {
+            name: "Elwynn Forest".into(),
+            area_id: 12,
+            map_file: "Elwynn".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }]);
+    // The player stands in Elwynn Forest.
+    s.set_world_map_feed(Some((1, 1)), None, 0.0, None, Vec::new(), Vec::new());
+    s.tick(0.01);
+    let tile = |s: &UiScript| {
+        s.eval::<String>("return WorldMapDetailTile1:GetTexture()")
+            .unwrap()
+    };
+
+    s.run("ToggleWorldMap()").unwrap();
+    s.tick(0.01);
+    assert_eq!(tile(&s), "Interface\\WorldMap\\Elwynn\\Elwynn1");
+    // A right-click on the map zooms out to the continent (WorldMapFrame.lua:294).
+    s.run("WorldMapZoomOutButton_OnClick()").unwrap();
+    s.tick(0.01);
+    assert_eq!(tile(&s), "Interface\\WorldMap\\Azeroth\\Azeroth1");
+
+    s.run("ToggleWorldMap()").unwrap();
+    s.tick(0.01);
+    s.run("ToggleWorldMap()").unwrap();
+    assert_eq!(
+        tile(&s),
+        "Interface\\WorldMap\\Elwynn\\Elwynn1",
+        "the reopened map paints its first frame with the continent it was closed on"
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
