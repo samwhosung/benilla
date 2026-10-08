@@ -250,6 +250,7 @@ mod tests {
             assert_eq!(type_column(t), ("RP_PARENTHESES", GREEN), "type {t}");
         }
         assert_eq!(type_column(8), ("RPPVP_PARENTHESES", NORMAL));
+        assert_eq!(type_column(10), ("PVP_PARENTHESES", RED), "type 10");
         // No row: the scan reads neither column.
         assert_eq!(type_column(77), ("GAMETYPE_NORMAL", NORMAL));
     }
