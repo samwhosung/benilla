@@ -1938,12 +1938,6 @@ mod tests {
             ("SYSMSG", "UIErrorsFrame.lua"),
             ("UNIT_DEFENSE", "PetPaperDollFrame.lua"),
             (
-                "UNIT_QUEST_LOG_CHANGED",
-                "QuestLogFrame.lua — a party member's quest-log fields changing (the reference \
-                 fires it off the unit's PLAYER_QUEST_LOG_* descriptor updates); benilla's unit \
-                 feed does not derive it yet",
-            ),
-            (
                 "UNIT_MODEL_CHANGED",
                 "four files — the paperdoll model refresh",
             ),

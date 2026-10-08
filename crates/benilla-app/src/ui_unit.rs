@@ -1152,6 +1152,15 @@ pub(crate) fn fire_transitions(
     if edges.moved(cur.guid, benilla_protocol::field::FIELD_UNIT_DYNAMIC_FLAGS) {
         script.fire_event("UNIT_DYNAMIC_FLAGS", vec![tok()]);
     }
+    // `UNIT_QUEST_LOG_CHANGED` (id 522), the player-window watch over the quest-log slots
+    // (`0x51bc63`: offset `0x28`, length `0xf0`, callback `0x51bd90`): one compare over the 60
+    // dwords, so one event however many moved. A group mate's ids are all of it on the wire.
+    let log = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
+    if (log..log + 3 * u16::from(benilla_protocol::messages::PLAYER_QUEST_LOG_SLOTS))
+        .any(|i| edges.moved(cur.guid, i))
+    {
+        script.fire_event("UNIT_QUEST_LOG_CHANGED", vec![tok()]);
+    }
     // 1.12 names the power events per resource (`UNIT_MANA`, `UNIT_MAXRAGE`, …;
     // `UnitFrame.lua:190-199`), and `power_token` yields the suffix.
     if changed(|u| u64::from(u.power)) {

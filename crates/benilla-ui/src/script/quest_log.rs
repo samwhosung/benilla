@@ -6,8 +6,9 @@
 //! does (`0x4dfb50` copies the selection `0xbb7480`, a quest id, to `0xbb7484`), so a re-index
 //! before the popup's Yes cannot retarget them.
 //!
-//! Not built: `IsUnitOnQuest` and `GetAbandonQuestItems` answer nil; the first needs the party
-//! members' quest logs.
+//! `IsUnitOnQuest` reads a unit's quest-log window off its snapshot ([`super::UnitState`]).
+//!
+//! Not built: `GetAbandonQuestItems` answers nil.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -598,9 +599,45 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             super::quest::reward_spell_returns(lua, spell)
         })?,
     )?;
+    // `IsUnitOnQuest(index, "unit")` (`0x4dfe10`): 1 when the unit's quest log holds row
+    // `index`'s quest, else nil; the stock rows count `[n]` mates with it (`QuestLogFrame.lua:175`).
     g.set(
         "IsUnitOnQuest",
-        lua.create_function(|_, (_q, _unit): (Value, Value)| Ok(flag(false)))?,
+        lua.create_function(|lua, (index, token): (Value, Value)| {
+            const USAGE: &str = "Usage: IsUnitOnQuest(index, \"unit\")";
+            // Both are checked before either is read: `lua_isnumber` (`0x4dfe1e`), `lua_isstring`
+            // (`0x4dfe32`); the index is `_ftol`'d (`0x4dfe4d`).
+            let n = number_arg(lua, index, USAGE)?;
+            let token = super::binding_abi::string_arg(lua, token, USAGE)?;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            // The row's quest id (`0x4df150`): 0 for a header or a row past the list, which
+            // answers nil before the token is resolved (`0x4dfe5e`).
+            let quest_id = usize::try_from(n)
+                .ok()
+                .and_then(|n| n.checked_sub(1))
+                .and_then(|row| model.quest_log.entries.get(row))
+                .filter(|e| !e.is_header)
+                .map_or(0, |e| e.quest_id);
+            if quest_id == 0 {
+                return Ok(Value::Nil);
+            }
+            // The token's guid (`0x515970`), which raises on an unknown token.
+            super::unit::check_unit_token(&Some(token.clone()))?;
+            let Some(unit) = model.unit(&token) else {
+                return Ok(Value::Nil);
+            };
+            // The active player or one of the four party slots, by guid (`0x4e7f70`): a raid mate
+            // outside our subgroup, a pet or a stranger answers nil.
+            let me = model.unit("player").map_or(0, |p| p.guid);
+            let grouped = unit.guid != 0
+                && (unit.guid == me || model.party.members.iter().any(|m| m.guid == unit.guid));
+            // Held as a player (`0x468460`, typemask `0x10`) and not deactivated (`0x614ea0`, a
+            // state the app's despawn never leaves held), then the 20 slots' ids, stride 12
+            // (`0x4dfebd`-`0x4dfed7`); a non-player's window is all zero.
+            Ok(flag(
+                grouped && unit.has_object && unit.quest_log.iter().any(|s| s[0] == quest_id),
+            ))
+        })?,
     )?;
     // ── The party share and the quest watch ──────────────────────────────────────────────────────
     /// The selected row, which the share verbs read.
