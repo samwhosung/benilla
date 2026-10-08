@@ -162,6 +162,11 @@ impl Realms {
         load::pvp_rp(&self.types, realm_type)
     }
 
+    /// A realm type's `PlayerKillingAllowed`, `None` for a type with no row.
+    pub(crate) fn row_pvp(&self, realm_type: u32) -> Option<bool> {
+        self.types.get(realm_type).map(|c| c.pvp)
+    }
+
     /// The load distribution, over every realm, not the selected category: `0x46e510` walks the
     /// flat all-categories array, so switching tabs moves no band.
     pub(super) fn stats(&self) -> (f32, f32) {

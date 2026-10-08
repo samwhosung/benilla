@@ -280,19 +280,22 @@ fn zone_pvp_info(
 pub(crate) struct RealmPvp(bool);
 
 /// Latch [`RealmPvp`] from the realm this session entered the world on.
-///
-/// Deviation: a realm type with no `Cfg_Configs.dbc` row reads not PvP. The reference skips the
-/// store and keeps the previous world entry's value (0 on a process's first), so the same realm
-/// would read by what was played before it.
 fn latch_realm_pvp(
     mut latch: ResMut<RealmPvp>,
     roster: Option<Res<crate::char_select::Roster>>,
     realms: Option<Res<crate::realm_select::Realms>>,
 ) {
     let realm_type = roster.and_then(|r| r.realm.as_ref().map(|realm| realm.realm_type));
-    latch.0 = realm_type
+    let row = realm_type
         .zip(realms)
-        .is_some_and(|(t, realms)| realms.pvp_rp(t).0);
+        .and_then(|(t, realms)| realms.row_pvp(t));
+    latch.0 = latched_realm_pvp(latch.0, row);
+}
+
+/// A realm type with no `Cfg_Configs.dbc` row skips the store (`0x4015d2`) and keeps the last
+/// world entry's value, which the process starts at 0 (`.data`).
+fn latched_realm_pvp(previous: bool, row_pvp: Option<bool>) -> bool {
+    row_pvp.unwrap_or(previous)
 }
 
 /// The shared area catalog and the zone-event feed.
@@ -448,6 +451,15 @@ mod tests {
             (None, true),
             "no faction template"
         );
+    }
+
+    /// A realm type with no row keeps what the last world entry stored.
+    #[test]
+    fn a_realm_type_with_no_row_keeps_the_last_latch() {
+        assert!(!latched_realm_pvp(false, None));
+        assert!(latched_realm_pvp(true, None));
+        assert!(!latched_realm_pvp(true, Some(false)));
+        assert!(latched_realm_pvp(false, Some(true)));
     }
 
     /// No zone row is a bail, not an ownerless zone.
