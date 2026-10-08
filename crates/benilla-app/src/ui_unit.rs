@@ -2627,7 +2627,10 @@ mod tests {
         let once = vec!["UNIT_QUEST_LOG_CHANGED:party1".to_string()];
         assert_eq!(fired(&before, &after, &[(MATE, LOG + 12)]), once);
         // One watch over the window: two slots moving in one pass is one event.
-        assert_eq!(fired(&before, &after, &[(MATE, LOG), (MATE, LOG + 59)]), once);
+        assert_eq!(
+            fired(&before, &after, &[(MATE, LOG), (MATE, LOG + 59)]),
+            once
+        );
         assert!(fired(&before, &after, &[(MATE, LOG - 1), (MATE, LOG + 60)]).is_empty());
         assert!(fired(&before, &after, &[(MATE + 1, LOG + 12)]).is_empty());
     }
@@ -3235,7 +3238,11 @@ mod tests {
         assert_eq!(player.quest_log[0], [783, 0x0100_0003, 0]);
         assert_eq!(player.quest_log[19], [7, 0, 0]);
         assert_eq!(player.quest_log[1], [0, 0, 0]);
-        assert_eq!(snap(0x09).quest_log, [[0; 3]; 20], "a creature has no PLAYER block");
+        assert_eq!(
+            snap(0x09).quest_log,
+            [[0; 3]; 20],
+            "a creature has no PLAYER block"
+        );
     }
 
     /// The rank getter's two gates (`0x605620`), through `enrich_unit`'s wiring.

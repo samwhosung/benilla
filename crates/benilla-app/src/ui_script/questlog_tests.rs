@@ -1748,8 +1748,10 @@ fn quest_rows_count_the_party_members_on_each_quest() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
     let mates = |s: &mut UiScript, row: u32| {
-        s.eval::<String>(&format!("return QuestLogTitle{row}GroupMates:GetText() or ''"))
-            .unwrap()
+        s.eval::<String>(&format!(
+            "return QuestLogTitle{row}GroupMates:GetText() or ''"
+        ))
+        .unwrap()
     };
     assert_eq!(mates(&mut s, 1), "[2]", "both mates are on quest 1");
     assert_eq!(mates(&mut s, 2), "", "nobody is on quest 2");

@@ -600,7 +600,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // `IsUnitOnQuest(index, "unit")` (`0x4dfe10`): 1 when the unit's quest log holds row
-    // `index`'s quest, else nil; the stock rows count `[n]` mates with it (`QuestLogFrame.lua:175`).
+    // `index`'s quest, else nil; the stock rows count `[n]` mates (`QuestLogFrame.lua:175`).
     g.set(
         "IsUnitOnQuest",
         lua.create_function(|lua, (index, token): (Value, Value)| {
@@ -1542,7 +1542,11 @@ mod tests {
         assert_eq!(on(&mut s, "IsUnitOnQuest(3, 'party1')"), None, "not on 7");
         assert_eq!(on(&mut s, "IsUnitOnQuest(2, 'player')"), Some(1));
         assert_eq!(on(&mut s, "IsUnitOnQuest(3, 'player')"), Some(1));
-        assert_eq!(on(&mut s, "IsUnitOnQuest(2, 'PARTY1')"), Some(1), "tokens fold case");
+        assert_eq!(
+            on(&mut s, "IsUnitOnQuest(2, 'PARTY1')"),
+            Some(1),
+            "tokens fold case"
+        );
         // The guid decides, not the token: `target` names party1 (`0x4e7f70`'s slot compare).
         assert_eq!(on(&mut s, "IsUnitOnQuest(2, 'target')"), Some(1));
     }
@@ -1578,7 +1582,7 @@ mod tests {
     /// unknown token raises only on a quest row (`0x515c14`).
     #[test]
     fn is_unit_on_quest_reads_the_row_before_the_token() {
-        let mut s = on_quest_world();
+        let s = on_quest_world();
         for index in ["1", "0", "-1", "4", "99", "-0.5"] {
             assert!(
                 s.eval::<bool>(&format!("return IsUnitOnQuest({index}, 'party1') == nil"))
@@ -1614,7 +1618,7 @@ mod tests {
     /// `0x4dfe32`), raise the one Usage line (`0x84b564`), an out-of-range index included.
     #[test]
     fn is_unit_on_quest_raises_usage_on_a_bad_argument() {
-        let mut s = on_quest_world();
+        let s = on_quest_world();
         for args in [
             "",
             "2",
