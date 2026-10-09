@@ -76,9 +76,10 @@ fn walk_children(lua: &Lua, parent: FrameHandle, step: fn(&Lua, FrameHandle)) {
 }
 
 /// The hide's de-registration (`0x764920`, at `0x76ad9d`, before the child walk) ends a hover on
-/// this frame: the removal tail (`0x764ba0`) clears the hover and the drag-arm
-/// (`+0x100`/`+0x104`), schedules a re-pick (`0x764cbb`) and calls the leave notify with 1
-/// (`0x764cce`), so the hovered frame's OnLeave runs before its own OnHide and its ancestors'.
+/// this frame: the removal tail (`0x764ba0`) clears the hover, schedules a re-pick (`0x764cbb`)
+/// and calls the leave notify with 1 (`0x764cce`), whose base `0x76b6f0` clears the drag-arm
+/// (`+0x100`/`+0x104`), so the hovered frame's OnLeave runs before its own OnHide and its
+/// ancestors'.
 /// The leave is a virtual call: a disabled Button's own `0x7794e0` skips its OnLeave. This leave is
 /// how a tooltip closes with its window; the reference has no other. The id whose OnLeave fires.
 fn leave_if_hovered(model: &mut Model, h: FrameHandle) -> Option<u32> {
