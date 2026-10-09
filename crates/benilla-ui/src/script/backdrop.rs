@@ -132,7 +132,7 @@ pub fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
     let mut out = Vec::with_capacity(9);
     let e = bd.edge_size * scale;
     // The texcoord divisor, unscaled.
-    let e_uv = e;
+    let e_uv = bd.edge_size;
     let (l, r, b, t) = (frame.left, frame.right, frame.bottom, frame.top);
 
     // ── The background piece ──
@@ -154,7 +154,7 @@ pub fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
         // Untiled, no `SetTexCoord` runs and the background stretches over `[0,1]` (`0x77f0c0`).
         let uvs = if bd.tile {
             let period = if bd.tile_size != 0.0 {
-                bd.tile_size * scale
+                bd.tile_size
             } else {
                 e_uv
             };
