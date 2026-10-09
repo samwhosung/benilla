@@ -376,7 +376,7 @@ fn sync(
                 let free = (0..model.nameplates.plates.len())
                     .find(|i| model.nameplates.plates[*i].last.is_none());
                 let i = free.unwrap_or_else(|| {
-                    let plate = Plate::create(model, world, &mut effects);
+                    let plate = Plate::create(model, world);
                     model.nameplates.plates.push(plate);
                     model.nameplates.plates.len() - 1
                 });
@@ -404,7 +404,7 @@ fn sync(
 impl Plate {
     /// Build one plate: the Button, its six regions in the reference's order, and the health bar.
     /// Written once, so a region an addon blanks stays blank.
-    fn create(model: &mut Model, world: FrameHandle, effects: &mut SyncEffects) -> Plate {
+    fn create(model: &mut Model, world: FrameHandle) -> Plate {
         // Anonymous, as the reference's name is zeroed (`0x76c50b`): plate addons reject a named
         // `WorldFrame` child.
         let frame = model.arena.create(FrameKind::Button, None, Some(world));
