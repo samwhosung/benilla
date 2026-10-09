@@ -635,7 +635,7 @@ pub(super) fn point_in_rect(r: Rect, x: f32, y: f32) -> bool {
 /// over-shrunk rect collapses to empty rather than inverting.
 fn hit_rect(model: &Model, fh: FrameHandle, r: Rect) -> Rect {
     let s = super::object::eff_scale(model, fh);
-    let [left, right, top, bottom] = model.arena.hit_rect_insets(fh).map(|i| i * s);
+    let [left, right, top, bottom] = model.arena.hit_rect_insets(fh).map(|i| i + 0.0 * s);
     Rect {
         left: r.left + left,
         right: (r.right - right).max(r.left + left),

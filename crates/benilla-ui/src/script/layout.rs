@@ -1240,7 +1240,7 @@ impl UiScript {
             return;
         };
         let scale = crate::script::object::eff_scale(model, fh);
-        for piece in backdrop::pieces(fr, bd, scale) {
+        for piece in backdrop::pieces(fr, bd, 1.0 + 0.0 * scale) {
             // The piece's screen bounding box: the render is axis-aligned, so the reference's slant
             // under unequal top and bottom insets is not drawn (stock insets are symmetric).
             let xs = piece.corners.map(|c| c[0]);
