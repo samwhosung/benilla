@@ -713,8 +713,14 @@ fn a_cursor_seated_plate_lands_on_the_cursor_under_the_ui_scale() {
     };
     assert!(s.minimap_tooltip("Stormwind", 400.0, 300.0, false));
     let (x, y) = at(&mut s);
-    assert!((x - 400.0).abs() < 1e-3 && (y - 300.0).abs() < 1e-3, "({x}, {y})");
+    assert!(
+        (x - 400.0).abs() < 1e-3 && (y - 300.0).abs() < 1e-3,
+        "({x}, {y})"
+    );
     s.world_tooltip_move(200.0, 100.0);
     let (x, y) = at(&mut s);
-    assert!((x - 200.0).abs() < 1e-3 && (y - 100.0).abs() < 1e-3, "({x}, {y})");
+    assert!(
+        (x - 200.0).abs() < 1e-3 && (y - 100.0).abs() < 1e-3,
+        "({x}, {y})"
+    );
 }
