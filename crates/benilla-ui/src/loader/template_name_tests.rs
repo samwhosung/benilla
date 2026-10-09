@@ -46,10 +46,10 @@ fn an_unnamed_instance_takes_neither_its_templates_name_nor_its_id() {
         "the unnamed instance published the template's name as a global"
     );
     assert!(s
-        .eval::<bool>("return (select(1, Holder:GetChildren())):GetName() == nil")
+        .eval::<bool>("return ({Holder:GetChildren()})[1]:GetName() == nil")
         .unwrap());
     assert_eq!(
-        s.eval::<i64>("return (select(1, Holder:GetChildren())):GetID()")
+        s.eval::<i64>("return ({Holder:GetChildren()})[1]:GetID()")
             .unwrap(),
         0
     );
@@ -70,7 +70,7 @@ fn an_unnamed_region_takes_no_name_from_its_template() {
     let s = loaded();
     assert!(s.eval::<bool>("return TmpTexTemplate == nil").unwrap());
     assert!(s
-        .eval::<bool>("return (select(1, Holder:GetRegions())):GetName() == nil")
+        .eval::<bool>("return ({Holder:GetRegions()})[1]:GetName() == nil")
         .unwrap());
 }
 
