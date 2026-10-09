@@ -330,3 +330,49 @@ fn an_all_events_listener_runs_after_the_events_own() {
     assert_eq!(s.eval::<String>("return order[2]").unwrap(), "all");
     assert_eq!(s.eval::<i64>("return table.getn(order)").unwrap(), 2);
 }
+
+/// The world-enter cascade (`0x4908c0`) fires `PLAYER_LOGIN` (`0x490959`) only while a load's arm
+/// (`0x49011d`) is unspent, clearing it (`0x49095e`), then `PLAYER_ENTERING_WORLD` (`0x49096a`)
+/// every time, inside its own sound bracket (`0x4908d5` to `0x490a56`).
+#[test]
+fn the_world_enter_cascade_spends_the_login_arm_once_and_plays_nothing() {
+    let mut s = script();
+    s.run(
+        r#"
+        order = ""
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("PLAYER_LOGIN")
+        f:RegisterEvent("PLAYER_ENTERING_WORLD")
+        f:SetScript("OnEvent", function()
+            order = order .. event .. " "
+            PlaySound("igMainMenuOpen")
+        end)
+        "#,
+    )
+    .unwrap();
+    s.fire_world_enter();
+    assert_eq!(
+        s.eval::<String>("return order").unwrap(),
+        "PLAYER_ENTERING_WORLD ",
+        "no load armed it"
+    );
+    s.run(r#"order = """#).unwrap();
+    s.arm_player_login();
+    s.fire_world_enter();
+    s.fire_world_enter();
+    assert_eq!(
+        s.eval::<String>("return order").unwrap(),
+        "PLAYER_LOGIN PLAYER_ENTERING_WORLD PLAYER_ENTERING_WORLD ",
+        "the arm is one-shot"
+    );
+    assert!(
+        s.take_sounds().is_empty(),
+        "the cascade's handlers are silent"
+    );
+    s.run(r#"PlaySound("igMainMenuOpen")"#).unwrap();
+    assert_eq!(
+        s.take_sounds().len(),
+        1,
+        "and the bracket closed behind them"
+    );
+}

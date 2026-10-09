@@ -444,8 +444,8 @@ pub(super) fn auto_join_zone_channels(
     walk.at = Some(zone_id);
 }
 
-/// Feed the VM the zone-less catalog before any interface file runs: world entry runs FrameXML,
-/// the addons and `PLAYER_LOGIN` in one call, ahead of the walk's first tick.
+/// Feed the VM the zone-less catalog before any interface file runs: world entry runs FrameXML
+/// and the addons in one call, ahead of the walk's first tick.
 pub(crate) fn seed_zone_channel_catalog(
     world: &mut World,
     script: &mut benilla_ui::script::UiScript,

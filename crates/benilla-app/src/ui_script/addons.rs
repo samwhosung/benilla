@@ -1692,9 +1692,10 @@ mod tests {
         );
     }
 
-    /// `UI_Init 0x48fbf0` loads the addons at `0x4900a3` (each `ADDON_LOADED` at `0x51f5ad`) and
-    /// fires `VARIABLES_LOADED` at `0x4900b2`; `PLAYER_LOGIN` comes after, on a fresh login from
-    /// the player's create (`0x5deb60` → `0x4908c0`), on a `/reload` from `0x490168`.
+    /// `UI_Init 0x48fbf0` loads the addons at `0x4900a3` (each `ADDON_LOADED` at `0x51f5ad`),
+    /// fires `VARIABLES_LOADED` at `0x4900b2` and arms `PLAYER_LOGIN` (`0x49011d`), which the
+    /// world-enter cascade fires: on a fresh login from the player's create (`0x5deb60` →
+    /// `0x4908c0`), on a `/reload` from `0x490168`.
     #[test]
     fn the_ui_init_events_fire_in_the_reference_order() {
         let _l = crate::local_state::test_env::ENV_LOCK
@@ -1728,6 +1729,12 @@ mod tests {
         let failures = load_third_party(&mut script, None, &[], true);
         assert!(failures.is_empty(), "load errors: {failures:?}");
         crate::ui_script::finish_ui_load(&mut script);
+        assert_eq!(
+            event_log(&script),
+            vec!["ADDON_LOADED:EventProbe", "VARIABLES_LOADED:nil"],
+            "the load only arms PLAYER_LOGIN"
+        );
+        script.fire_world_enter();
 
         assert_eq!(
             event_log(&script),

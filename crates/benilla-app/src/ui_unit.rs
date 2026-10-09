@@ -101,7 +101,7 @@ struct UnitFeedMemo {
     /// The lazy caches' landing counters: their per-frame `&mut` misses would trip `is_changed`.
     names_generation: gate::Watch,
     guild_generation: gate::Watch,
-    /// Whether `PLAYER_ENTERING_WORLD` has fired for this world entry.
+    /// Whether the world-enter events have fired for this world entry.
     entered_world: bool,
     /// Per token, the last snapshot pushed.
     last: HashMap<String, UnitState>,
@@ -1194,6 +1194,75 @@ pub(crate) fn fire_transitions(
     }
 }
 
+/// `"player"`'s snapshot off our own descriptor: no reaction (the unit is ours), the raid icon,
+/// both faction-group spellings and the guild. One builder for [`feed_units`] and for the seat a
+/// `/reload`'s load runs under ([`live_player_seat`]).
+fn player_snapshot(
+    store: &ObjectStore,
+    guid: u64,
+    tables: &SnapshotTables,
+    names: &NameCache,
+    commands: &NetCommands,
+    group: &crate::ui_party::GroupState,
+    factions: Option<&Factions>,
+    guild: &mut crate::ui_guild::GuildState,
+) -> UnitState {
+    let name = names
+        .resolve_unit(guid, Some(store), commands)
+        .map(str::to_string);
+    let mut s = snapshot(store, guid, name, 0, tables.classes(), tables.types(names));
+    s.is_player = true;
+    s.raid_target = group.raid_target_index(guid);
+    s.faction_group = faction_group(store, factions);
+    s.faction_group_localized = faction_group_localized(store, factions);
+    // `GetGuildInfo`: the public guild fields (191/192) joined against the lazy guild cache.
+    s.guild = crate::ui_guild::unit_guild(&store.0, guild, commands);
+    s
+}
+
+/// `UnitXP("player")` and `UnitXPMax("player")` off our own descriptor, zero while unsent.
+fn xp_pair(store: &ObjectStore) -> (u32, u32) {
+    (
+        store.0.player_xp().unwrap_or(0),
+        store.0.player_next_level_xp().unwrap_or(0),
+    )
+}
+
+/// The live player a UI load seats before any file runs: its snapshot and XP pair, as
+/// [`feed_units`] pushes them.
+pub(crate) struct LivePlayerSeat {
+    pub(crate) state: UnitState,
+    pub(crate) xp: (u32, u32),
+}
+
+/// [`LivePlayerSeat`] for an exclusive edge, `None` before our own create. A `/reload` loads with
+/// the player object still in the world, so `UI_Init`'s file scope, `ADDON_LOADED` and
+/// `VARIABLES_LOADED` read it there as `PLAYER_LOGIN` does (`0x490168`).
+pub(crate) fn live_player_seat(
+    tables: SnapshotTables,
+    self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
+    names: Res<NameCache>,
+    commands: Res<NetCommands>,
+    group: Res<crate::ui_party::GroupState>,
+    factions: Option<Res<Factions>>,
+    mut guild: ResMut<crate::ui_guild::GuildState>,
+) -> Option<LivePlayerSeat> {
+    let (store, guid) = self_q.iter().next()?;
+    Some(LivePlayerSeat {
+        state: player_snapshot(
+            store,
+            guid.0,
+            &tables,
+            &names,
+            &commands,
+            &group,
+            factions.as_deref(),
+            &mut guild,
+        ),
+        xp: xp_pair(store),
+    })
+}
+
 fn feed_units(
     script: Option<NonSendMut<UiScript>>,
     tables: SnapshotTables,
@@ -1280,17 +1349,16 @@ fn feed_units(
     // A missing unit is `None`, which `set_unit` clears; a name miss lands on a later frame.
     let self_pair = self_q.iter().next();
     let player = self_pair.map(|(store, guid)| {
-        let name = names
-            .resolve_unit(guid.0, Some(store), &commands)
-            .map(str::to_string);
-        let mut s = snapshot(store, guid.0, name, 0, chr, types);
-        s.is_player = true;
-        s.raid_target = group.raid_target_index(guid.0);
-        s.faction_group = faction_group(store, factions.as_deref());
-        s.faction_group_localized = faction_group_localized(store, factions.as_deref());
-        // `GetGuildInfo`: the public guild fields (191/192) joined against the lazy guild cache.
-        s.guild = crate::ui_guild::unit_guild(&store.0, &mut guild, &commands);
-        s
+        player_snapshot(
+            store,
+            guid.0,
+            &tables,
+            &names,
+            &commands,
+            &group,
+            factions.as_deref(),
+            &mut guild,
+        )
     });
     // Log once when our template names no side, almost always GM mode (vmangos forces template
     // 35, group mask 0): every `UnitFactionGroup` surface loses its side, as in the reference.
@@ -1390,12 +1458,11 @@ fn feed_units(
         }
     }
 
-    // The XP pair and `PLAYER_XP_UPDATE`, ahead of the `PLAYER_ENTERING_WORLD` fire so its
-    // handlers read real values. The event fires on first sight too, at login and after a
-    // `/reload`, where the reference's field watchers stay silent.
+    // The XP pair and `PLAYER_XP_UPDATE`, ahead of the world-enter events so `PLAYER_LOGIN` and
+    // `PLAYER_ENTERING_WORLD` handlers read real values. The event fires on first sight too, at
+    // login and after a `/reload`, where the reference's field watchers stay silent.
     if let Some((store, _)) = self_q.iter().next() {
-        let xp = store.0.player_xp().unwrap_or(0);
-        let next = store.0.player_next_level_xp().unwrap_or(0);
+        let (xp, next) = xp_pair(store);
         if memo.last_xp != Some((xp, next)) {
             gate.audit("feed_units", "the XP pair");
             memo.last_xp = Some((xp, next));
@@ -1404,7 +1471,7 @@ fn feed_units(
         }
     }
 
-    // The rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), ahead of the entering-world fire
+    // The rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), ahead of the world-enter events
     // as the reference's descriptor is. Below `0x5ee990`'s local-GUID gate (`0x5eea93`) each arm
     // tests its own bits: `PLAYER_UPDATE_RESTING` on either edge of `0x20` (`0x5eead0`, fire
     // `0x5eeaf2`), `PLAYTIME_CHANGED` on `0x3000` (`0x5eeb65`, fire `0x5eeb6f`).
@@ -1495,12 +1562,16 @@ fn feed_units(
         }
     }
 
-    // `PLAYER_ENTERING_WORLD` once per world entry, after our descriptor lands, as the reference's.
-    // At world exit, re-arm it and forget the player-global memos so the next character seeds them.
+    // The world-enter cascade's events once per world entry, after our descriptor lands and the
+    // pushes above seat it: the reference runs the cascade from the local player's own create
+    // (`0x5deb60 call 0x4908c0`) and, on a `/reload`, from `UI_Init` (`0x490168`), the player in
+    // the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a worldport's
+    // re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry and forget the
+    // player-global memos so the next character seeds them.
     if self_pair.is_some() {
         if !memo.entered_world {
-            gate.audit("feed_units", "the PLAYER_ENTERING_WORLD arm");
-            script.fire_event("PLAYER_ENTERING_WORLD", vec![]);
+            gate.audit("feed_units", "the world-enter events");
+            script.fire_world_enter();
             memo.entered_world = true;
         }
     } else if memo.entered_world {

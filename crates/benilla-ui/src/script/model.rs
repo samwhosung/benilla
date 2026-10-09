@@ -346,6 +346,9 @@ pub(crate) struct Model {
     pub(crate) camera_view_requests: Vec<camera_view::CameraViewRequest>,
     /// `Logout`, `Quit`, `CancelLogout`, `ForceQuit` calls; Lua sees the countdown only as events.
     pub(crate) session_requests: Vec<session::SessionRequest>,
+    /// `PLAYER_LOGIN`'s one-shot, the reference's `[0xb4e260]`: armed by the UI load, spent by
+    /// the next world-enter cascade ([`super::UiScript::fire_world_enter`]).
+    pub(crate) player_login_armed: bool,
     /// `TogglePVP` calls, a count because `CMSG_TOGGLE_PVP` has no body.
     pub(crate) pvp_toggles: u32,
     /// The player's private honor fields; before the first push the six self getters read zeros.
@@ -1159,6 +1162,7 @@ impl Model {
             follow_requests: Vec::new(),
             camera_view_requests: Vec::new(),
             session_requests: Vec::new(),
+            player_login_armed: false,
             pvp_toggles: 0,
             honor: None,
             inspect_honor: None,

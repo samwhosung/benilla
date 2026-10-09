@@ -623,8 +623,9 @@ pub(crate) fn fold_dying_vm_chat_cache(world: &mut World) {
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<ChatWindowFile>()
-        // The restore runs from the world-entry UI load, not here: its events must precede the
-        // first chat line and `PLAYER_LOGIN`, which no `Update` ordering guarantees.
+        // The restore runs from the world-entry UI load, not here: its events must follow
+        // `VARIABLES_LOADED` inside the load, where the reference registers its reader
+        // (`0x4900d6`), and precede the first chat line and `PLAYER_LOGIN`.
         .add_systems(
             Update,
             // After the tick: every write it watches is Lua's.

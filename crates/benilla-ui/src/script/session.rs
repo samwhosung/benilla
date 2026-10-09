@@ -1,6 +1,7 @@
 //! The session verbs: the game menu's Logout and Exit Game, their dialogs' answers, `ReloadUI`
 //! and the cinematic pair. Each queues a [`SessionRequest`] the app turns into a packet or an
-//! exit; the server decides whether a logout is instant or a 20-second countdown.
+//! exit; the server decides whether a logout is instant or a 20-second countdown. Beside them,
+//! the world-enter cascade's two events and the `PLAYER_LOGIN` arm a UI load sets.
 
 use mlua::Lua;
 
@@ -40,6 +41,28 @@ impl super::UiScript {
     /// parses in Rust rather than through `SlashCmdList`, take their Lua verbs' route this way.
     pub fn queue_session_request(&mut self, request: SessionRequest) {
         self.model_mut().session_requests.push(request);
+    }
+
+    /// Arm `PLAYER_LOGIN`, the UI load's last step: `UI_Init` sets the one-shot `[0xb4e260]` at
+    /// `0x49011d`, unconditionally, and [`Self::fire_world_enter`] spends it. The flag lives in
+    /// this VM, so each load arms its own and a worldport, which loads nothing, re-arms nothing.
+    pub fn arm_player_login(&mut self) {
+        self.model_mut().player_login_armed = true;
+    }
+
+    /// The world-enter cascade's events (`0x4908c0`): `PLAYER_LOGIN` (270, `0x490959`) only if a
+    /// load armed it (read at `0x49094b`, cleared at `0x49095e`), then `PLAYER_ENTERING_WORLD`
+    /// (272, `0x49096a`) every time. The cascade runs with the player object in the world, so its
+    /// caller seats `"player"` first, and inside its own sound-suppression bracket (`0x4908d5` to
+    /// `0x490a56`), so a handler's `PlaySound` is dropped.
+    pub fn fire_world_enter(&mut self) {
+        let armed = std::mem::take(&mut self.model_mut().player_login_armed);
+        self.push_sound_suppression();
+        if armed {
+            self.fire_event("PLAYER_LOGIN", Vec::new());
+        }
+        self.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
+        self.pop_sound_suppression();
     }
 }
 

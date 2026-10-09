@@ -600,9 +600,9 @@ fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<
             },
         ]);
         script.fire_event("UPDATE_SHAPESHIFT_FORMS", vec![]);
-        // 70% XP, set before `PLAYER_ENTERING_WORLD` so the bar's first update reads it.
+        // 70% XP, set before the world-enter events so the bar's first update reads it.
         script.set_player_xp(4200, 6000);
-        script.fire_event("PLAYER_ENTERING_WORLD", vec![]);
+        script.fire_world_enter();
         // The bottom multibars ship off and a capture has no toggle byte, so raise them as the
         // Options rows do; `WOW_DEMO_BOTTOM_BARS=0` leaves them down for the stance shelf art,
         // which `ShapeshiftBar_UpdatePosition` hides under the bottom-left bar.

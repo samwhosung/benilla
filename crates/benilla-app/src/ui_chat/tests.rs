@@ -2397,8 +2397,9 @@ fn the_free_professions_line_is_printed_once() {
 // ───────────── the chat cache restores inside the login ─────────
 
 /// `UPDATE_CHAT_WINDOWS` registers the chat frames for `CHAT_MSG_*`, and the `UPDATE_CHAT_COLOR`
-/// burst repaints id-0 lines through `ChatTypeInfo["REPLY"]`, so both come before `PLAYER_LOGIN`.
-/// The probe is a loose addon, because the entry load builds the VM it runs on.
+/// burst repaints id-0 lines through `ChatTypeInfo["REPLY"]`, so both come before `PLAYER_LOGIN`,
+/// which the load arms and the world-enter cascade fires. The probe is a loose addon, because the
+/// entry load builds the VM it runs on.
 #[test]
 fn the_chat_cache_restore_is_finished_before_player_login() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -2485,6 +2486,10 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
         1,
     ));
     crate::ui_script::load_ingame_ui_on_world_entry(&mut world);
+    // The cascade, as the unit feed runs it once the player is in the world.
+    world
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .fire_world_enter();
 
     let read = |expr: &str| -> String {
         world
@@ -2512,7 +2517,7 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
         read("ChatOrderProbe.loginRegistered")
     );
     // The reference's login order: `ADDON_LOADED` (`0x4900a3`), `VARIABLES_LOADED` (`0x4900b2`),
-    // the chat-cache burst (`0x4900d6`), `PLAYER_LOGIN` (`0x490959`).
+    // the chat-cache burst (`0x4900d6`), the arm (`0x49011d`), `PLAYER_LOGIN` (`0x490959`).
     assert_eq!(
         read("ChatOrderProbe.order"),
         "VARIABLES_LOADED UPDATE_CHAT_WINDOWS UPDATE_CHAT_COLOR PLAYER_LOGIN ",
