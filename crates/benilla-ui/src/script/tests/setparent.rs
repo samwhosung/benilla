@@ -92,8 +92,9 @@ fn a_visible_reparent_refires_onhide_then_onshow() {
     let log: Vec<String> = s.eval("return log").unwrap();
     assert_eq!(
         log,
-        vec!["hide:RTOld", "show:RTNew", "kidshow"],
-        "OnHide observes the OLD parent, OnShow the new, and the refire walks the subtree"
+        vec!["hide:RTOld", "kidshow", "show:RTNew"],
+        "OnHide observes the OLD parent, OnShow the new, and the refire walks the subtree, the \
+         child notified before its parent (`0x76aed5`, then `0x76aef5`)"
     );
     assert_eq!(
         s.eval::<i64>("return RTMover:GetFrameLevel()").unwrap(),
