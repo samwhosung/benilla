@@ -550,13 +550,13 @@ struct ProbeDrag {
     to: (f32, f32),
 }
 
-/// A frame's centre from its live `GetLeft`/`GetRight`/`GetTop`/`GetBottom`, in the space
-/// [`crate::ui_script::input`] feeds the cursor in.
+/// A frame's centre from its live `GetLeft`/`GetRight`/`GetTop`/`GetBottom`, times its effective
+/// scale: the edges answer in the frame's own units, the cursor is fed in the root's.
 fn frame_centre(script: &benilla_ui::script::UiScript, name: &str) -> Option<(f32, f32)> {
     let read = |edge: &str| {
         script
             .eval::<f32>(&format!(
-                "local f = getglobal(\"{name}\") return f and f:Get{edge}()"
+                "local f = getglobal(\"{name}\") return f and f:Get{edge}() * f:GetEffectiveScale()"
             ))
             .ok()
     };

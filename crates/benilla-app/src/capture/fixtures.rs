@@ -1358,15 +1358,23 @@ pub(super) fn seed_ui_fixture(
                 warn!("capture: ui-chat-tabhover select failed: {e}");
             }
             script.resolve();
+            // Each in the root's units the cursor is fed in: the frame's own times its scale.
             let expr = match mode.as_str() {
-                "2" | "3" => "return ChatFrame2Tab:GetCenter()",
+                "2" | "3" => {
+                    "local x, y = ChatFrame2Tab:GetCenter() \
+                        local k = ChatFrame2Tab:GetEffectiveScale() return x * k, y * k"
+                }
                 "0" => {
-                    "return (ChatFrame2:GetLeft() + ChatFrame2:GetRight()) / 2, \
-                        (ChatFrame2:GetBottom() + ChatFrame2:GetTop()) / 2"
+                    "local k = ChatFrame2:GetEffectiveScale() \
+                        return (ChatFrame2:GetLeft() + ChatFrame2:GetRight()) / 2 * k, \
+                        (ChatFrame2:GetBottom() + ChatFrame2:GetTop()) / 2 * k"
                 }
                 // 9: park far away, so the dock conceals itself.
                 "9" => "return 2000, 2000",
-                _ => "return ChatFrame1Tab:GetCenter()",
+                _ => {
+                    "local x, y = ChatFrame1Tab:GetCenter() \
+                        local k = ChatFrame1Tab:GetEffectiveScale() return x * k, y * k"
+                }
             };
             let centre: Result<(f32, f32), _> = script.eval(expr);
             match centre {
