@@ -261,13 +261,13 @@ pub(super) fn thumb_rect(r: Rect, thumb_size: (f32, f32), vertical: bool, fracti
     }
 }
 
-/// The thumb region's width and height, as `0x789ba0` reads them through the texture's geometry
-/// slots (`[vtable+0x1c]`/`+0x20`, `0x770720`/`0x770790`): the authored span, else the art's
-/// texel span, else 0, on screen at the slider's effective scale. `None` without a thumb region:
-/// `0x789ba0` gates the value math on `+0x328`, so a thumbless slider captures a press but never
-/// moves.
+/// The thumb region's own width and height, as `0x789ba0` reads them through the texture's
+/// geometry slots (`[vtable+0x1c]`/`+0x20`, `0x770720`/`0x770790`): the authored span, else the
+/// art's texel span, else 0, in the slider's units, unscaled, though the track it is subtracted
+/// from is the scaled rect (`0x789bd4`–`0x789bfe`). `None` without a thumb region: `0x789ba0`
+/// gates the value math on `+0x328`, so a thumbless slider captures a press but never moves.
 fn thumb_extent(model: &Model, thumb: Option<crate::widget::RegionHandle>) -> Option<(f32, f32)> {
-    Some(super::region::screen_span(model, thumb?))
+    Some(super::region::virtual_span(model, thumb?))
 }
 
 /// The in-flight thumb drag and the grab offset [`slider_grab`] returned, so the thumb tracks the
@@ -304,18 +304,36 @@ pub(super) fn begin_drag(
         });
         return None;
     };
-    let trect = thumb_rect(r, size, vertical, fraction);
+    // The thumb as drawn, at the slider's scale, decides whether the press is on it.
+    let drawn = thumb.map_or(size, |t| super::region::screen_span(model, t));
+    let trect = thumb_rect(r, drawn, vertical, fraction);
     let on_thumb = point_in_rect(trect, x, y);
     // Distances from the track's leading edge, where the thumb sits at `min`: `top - y` on a
     // vertical track in this y-up arena, `x - left` on a horizontal one.
-    let (cursor, thumb_lead, thumb_len) = if vertical {
-        (r.top - y, r.top - trect.top, trect.top - trect.bottom)
+    let (cursor, thumb_lead, drawn_len, own_len) = if vertical {
+        (
+            r.top - y,
+            r.top - trect.top,
+            trect.top - trect.bottom,
+            size.1,
+        )
     } else {
-        (x - r.left, trect.left - r.left, trect.right - trect.left)
+        (
+            x - r.left,
+            trect.left - r.left,
+            trect.right - trect.left,
+            size.0,
+        )
+    };
+    // Off the thumb the cursor takes its centre, half its own unscaled length (`0x789bf5`).
+    let grab_offset = if on_thumb {
+        slider_grab(cursor, thumb_lead, drawn_len)
+    } else {
+        own_len * 0.5
     };
     model.slider_drag = Some(SliderDrag {
         slider: h,
-        grab_offset: slider_grab(cursor, thumb_lead, thumb_len),
+        grab_offset,
     });
     if on_thumb {
         return None; // no value change from the grab itself
