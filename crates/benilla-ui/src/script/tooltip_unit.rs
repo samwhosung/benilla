@@ -350,8 +350,8 @@ impl super::UiScript {
                 if let Ok(t) = tip_mut(&mut model, h) {
                     t.owner = Some(root);
                 }
+                let new = cursor_anchor_at(&model, h, root_id, ui_x, ui_y);
                 let input = model.layout_inputs.entry(h).or_default();
-                let new = Anchor::new(Point::Bottom, root_id, Point::BottomLeft, ui_x, ui_y);
                 let same = input.anchors.len() == 1
                     && super::object::anchor_bits_eq(&input.anchors[0], &new);
                 if !same {
@@ -440,10 +440,10 @@ impl super::UiScript {
         {
             let mut model = self.model_mut();
             clear_content(&mut model, h);
-            let input = model.layout_inputs.entry(h).or_default();
             // Anchor only: the frame's own clamp flag (`Frame::clamped_to_screen`, G flags bit 4)
             // slides a plate near the window edge back on screen.
-            let new = Anchor::new(Point::Bottom, root_id, Point::BottomLeft, ui_x, ui_y);
+            let new = cursor_anchor_at(&model, h, root_id, ui_x, ui_y);
+            let input = model.layout_inputs.entry(h).or_default();
             // Compare-then-touch, so a still cursor does not dirty the layout.
             let same =
                 input.anchors.len() == 1 && super::object::anchor_bits_eq(&input.anchors[0], &new);
@@ -497,8 +497,8 @@ impl super::UiScript {
             return;
         }
         let root_id = model.frame_id(root);
+        let new = cursor_anchor_at(&model, h, root_id, ui_x, ui_y);
         let input = model.layout_inputs.entry(h).or_default();
-        let new = Anchor::new(Point::Bottom, root_id, Point::BottomLeft, ui_x, ui_y);
         // Compare-then-touch: this runs on every pointer event.
         let same =
             input.anchors.len() == 1 && super::object::anchor_bits_eq(&input.anchors[0], &new);
@@ -558,4 +558,18 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     Ok(())
+}
+
+/// The plate's BOTTOM on the cursor: `(ui_x, ui_y)` is in the screen root's units, and an anchor
+/// offset is in the tooltip's own, so it is divided by the tooltip's effective scale, the UI scale
+/// included, as the cursor arm `0x530b20` does ([`super::tooltip`]'s `cursor_anchor`).
+fn cursor_anchor_at(model: &Model, h: FrameHandle, root_id: u32, ui_x: f32, ui_y: f32) -> Anchor {
+    let s = super::object::eff_scale(model, h);
+    Anchor::new(
+        Point::Bottom,
+        root_id,
+        Point::BottomLeft,
+        ui_x / s,
+        ui_y / s,
+    )
 }
