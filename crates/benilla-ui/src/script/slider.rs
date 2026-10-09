@@ -261,12 +261,13 @@ pub(super) fn thumb_rect(r: Rect, thumb_size: (f32, f32), vertical: bool, fracti
     }
 }
 
-/// The thumb region's own width and height, as `0x789ba0` reads them through the texture's
-/// geometry slots (`[vtable+0x1c]`/`+0x20`, `0x770720`/`0x770790`): the authored span, else the
-/// art's texel span, else 0. `None` without a thumb region: `0x789ba0` gates the value math on
-/// `+0x328`, so a thumbless slider captures a press but never moves.
+/// The thumb region's width and height, as `0x789ba0` reads them through the texture's geometry
+/// slots (`[vtable+0x1c]`/`+0x20`, `0x770720`/`0x770790`): the authored span, else the art's
+/// texel span, else 0, on screen at the slider's effective scale. `None` without a thumb region:
+/// `0x789ba0` gates the value math on `+0x328`, so a thumbless slider captures a press but never
+/// moves.
 fn thumb_extent(model: &Model, thumb: Option<crate::widget::RegionHandle>) -> Option<(f32, f32)> {
-    Some(super::region::virtual_span(model, thumb?))
+    Some(super::region::screen_span(model, thumb?))
 }
 
 /// The in-flight thumb drag and the grab offset [`slider_grab`] returned, so the thumb tracks the

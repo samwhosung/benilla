@@ -22,8 +22,9 @@ use super::{button, cursor, editbox, event, Model, UiScript};
 /// each release only has to hit the frame.
 pub(super) const DOUBLE_CLICK_SECS: f64 = 0.300;
 
-/// Install `GetCursorPosition()` and `GetMouseFocus()`. The cursor is in UI units, as 1.12
-/// answers it; the engine's y-up UI space is 1:1 logical pixels, so no scale factor applies.
+/// Install `GetCursorPosition()` and `GetMouseFocus()`. The cursor (`0x48b820`) answers in the
+/// screen root's units, y up, with no scale divided out: a caller divides by its frame's
+/// `GetEffectiveScale()`, which carries the UI scale inside `UIParent`.
 pub(super) fn install(lua: &mlua::Lua) -> mlua::Result<()> {
     lua.globals().set(
         "GetCursorPosition",
@@ -107,7 +108,7 @@ impl UiScript {
                 // tested, so the reticle is placed through it.
                 && !model.nameplates.vetoes(fh)
                 && model.resolved.get(&fh).is_some_and(|r| {
-                    point_in_rect(inset_rect(*r, model.arena.hit_rect_insets(fh)), x, y)
+                    point_in_rect(hit_rect(&model, fh, *r), x, y)
                 })
                 && effective_clip(&model, &scroll_sources, fh)
                     .is_none_or(|c| point_in_rect(c, x, y))
@@ -125,7 +126,7 @@ impl UiScript {
             // passes a frame that only takes the mouse, as a scroll pane's chrome does.
             model.arena.is_mouse_wheel_enabled(fh)
                 && model.resolved.get(&fh).is_some_and(|r| {
-                    point_in_rect(inset_rect(*r, model.arena.hit_rect_insets(fh)), x, y)
+                    point_in_rect(hit_rect(&model, fh, *r), x, y)
                 })
                 && effective_clip(&model, &scroll_sources, fh)
                     .is_none_or(|c| point_in_rect(c, x, y))
@@ -628,9 +629,12 @@ pub(super) fn point_in_rect(r: Rect, x: f32, y: f32) -> bool {
     x >= r.left && x <= r.right && y >= r.bottom && y <= r.top
 }
 
-/// A frame's mouse rect: its resolved rect shrunk by its `[left, right, top, bottom]` hit-rect
-/// insets (y-up); an over-shrunk rect collapses to empty rather than inverting.
-fn inset_rect(r: Rect, [left, right, top, bottom]: [f32; 4]) -> Rect {
+/// A frame's mouse rect (`0x76b580`): its resolved rect shrunk by its `[left, right, top, bottom]`
+/// hit-rect insets times its effective scale (y-up), the insets being in the frame's own units; an
+/// over-shrunk rect collapses to empty rather than inverting.
+fn hit_rect(model: &Model, fh: FrameHandle, r: Rect) -> Rect {
+    let s = super::object::eff_scale(model, fh);
+    let [left, right, top, bottom] = model.arena.hit_rect_insets(fh).map(|i| i * s);
     Rect {
         left: r.left + left,
         right: (r.right - right).max(r.left + left),

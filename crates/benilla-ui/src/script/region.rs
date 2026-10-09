@@ -684,3 +684,15 @@ pub(super) fn virtual_span(model: &Model, rh: RegionHandle) -> (f32, f32) {
         _ => (aw, ah),
     }
 }
+
+/// [`virtual_span`] on screen: the region's own units times its owner's effective scale, as the
+/// layout sizes a region (`0x76ac90`). For the parts the engine seats itself, with no anchors: a
+/// slider's thumb, a colour picker's markers.
+pub(super) fn screen_span(model: &Model, rh: RegionHandle) -> (f32, f32) {
+    let (w, h) = virtual_span(model, rh);
+    let s = model
+        .arena
+        .region(rh)
+        .map_or(1.0, |r| super::object::eff_scale(model, r.owner));
+    (w * s, h * s)
+}

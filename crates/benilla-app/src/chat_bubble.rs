@@ -553,7 +553,7 @@ fn draw_bubble(
         border_color: [1.0; 4],
     };
     let up = GxRect::new(-frame.max.y, frame.min.x, -frame.min.y, frame.max.x);
-    for p in pieces(up, &bd) {
+    for p in pieces(up, &bd, 1.0) {
         // Equal insets keep every piece axis-aligned: a y-down rect from its TL and BR corners.
         let rect = Rect::new(
             p.corners[0][0],

@@ -123,18 +123,20 @@ fn aa_corners(x0: f32, x1: f32, y_bottom: f32, y_top: f32) -> [[f32; 2]; 4] {
 
 /// The drawable pieces for a frame's resolved rect (y-up), in paint order: the background (layer
 /// `BACKGROUND`), then the 8 border pieces (layer `BORDER`). Geometry `0x77e8d0`, UVs `0x77f0c0`.
-pub fn pieces(frame: Rect, bd: &Backdrop) -> Vec<BackdropPiece> {
+/// The pieces are textures anchored and sized in the frame's own units, so the layout multiplies
+/// every length by the frame's effective `scale` (`0x76ac90`), as it does any region's.
+pub fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
     let mut out = Vec::with_capacity(9);
-    let e = bd.edge_size;
+    let e = bd.edge_size * scale;
     let (l, r, b, t) = (frame.left, frame.right, frame.bottom, frame.top);
 
     // ── The background piece ──
     if bd.has_bg() {
         let (il, ir, it, ib) = (
-            bd.insets.left,
-            bd.insets.right,
-            bd.insets.top,
-            bd.insets.bottom,
+            bd.insets.left * scale,
+            bd.insets.right * scale,
+            bd.insets.top * scale,
+            bd.insets.bottom * scale,
         );
         // The four anchors, y-up. Bottom-right takes the top inset, as the reference does
         // (`0x77e9ae` loads `+0x50`, top, not `+0x54`); invisible when the two are equal.
@@ -146,7 +148,11 @@ pub fn pieces(frame: Rect, bd: &Backdrop) -> Vec<BackdropPiece> {
         ];
         // Untiled, no `SetTexCoord` runs and the background stretches over `[0,1]` (`0x77f0c0`).
         let uvs = if bd.tile {
-            let period = if bd.tile_size != 0.0 { bd.tile_size } else { e };
+            let period = if bd.tile_size != 0.0 {
+                bd.tile_size * scale
+            } else {
+                e
+            };
             let bg_w = (r - ir) - (l + il);
             let bg_h = (t - it) - (b + ib);
             let (wt, ht) = (bg_w / period, bg_h / period);
@@ -311,7 +317,7 @@ mod tests {
     fn piece_geometry_200x100_edge16_inset5() {
         let frame = Rect::new(0.0, 0.0, 100.0, 200.0);
         let bd = tooltip_backdrop(16.0, 5.0);
-        let ps = pieces(frame, &bd);
+        let ps = pieces(frame, &bd, 1.0);
         assert_eq!(ps.len(), 9);
 
         // Symmetric insets hide the bottom-right quirk.
@@ -365,7 +371,7 @@ mod tests {
             },
             ..tooltip_backdrop(16.0, 0.0)
         };
-        let bg = pieces(frame, &bd)[0];
+        let bg = pieces(frame, &bd, 1.0)[0];
         assert_eq!(bg.corners[3], [3.0, 9.0]);
         // BR takes the top inset, 7, not the bottom's 9.
         assert_eq!(bg.corners[2], [196.0, 7.0]);
@@ -378,7 +384,7 @@ mod tests {
         // 20/16 - 2 = -0.75.
         let frame = Rect::new(0.0, 0.0, 20.0, 20.0);
         let bd = tooltip_backdrop(16.0, 5.0);
-        let ps = pieces(frame, &bd);
+        let ps = pieces(frame, &bd, 1.0);
         let left = ps[1]; // LEFT edge
         assert_eq!(left.uvs[3][1], 0.0, "h_run clamped to 0"); // BL v
         let top = ps[3]; // TOP edge
@@ -388,16 +394,16 @@ mod tests {
     #[test]
     fn presence_gates_pieces() {
         let frame = Rect::new(0.0, 0.0, 100.0, 100.0);
-        assert!(pieces(frame, &Backdrop::default()).is_empty());
+        assert!(pieces(frame, &Backdrop::default(), 1.0).is_empty());
         let bg_only = Backdrop {
             bg_file: Some("bg".into()),
             ..Default::default()
         };
-        assert_eq!(pieces(frame, &bg_only).len(), 1);
+        assert_eq!(pieces(frame, &bg_only, 1.0).len(), 1);
         let border_only = Backdrop {
             edge_file: Some("edge".into()),
             ..Default::default()
         };
-        assert_eq!(pieces(frame, &border_only).len(), 8);
+        assert_eq!(pieces(frame, &border_only, 1.0).len(), 8);
     }
 }

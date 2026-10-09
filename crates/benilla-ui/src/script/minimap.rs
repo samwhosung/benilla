@@ -114,13 +114,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         "PingLocation",
-        // Centre-relative offsets in UI units, x right and y up, parked for the app to resolve in
-        // the frame it draws the map; one pending click, not one per widget.
+        // Centre-relative offsets in the minimap's own units, x right and y up, which the
+        // reference reads against the widget's own size (`0x4eeca0`); parked in screen units, its
+        // effective scale applied, for the app to resolve in the frame it draws the map. One
+        // pending click, not one per widget.
         lua.create_function(|lua, (this, x, y): (Table, f32, f32)| {
             with_minimap(lua, &this, |_| ())?;
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .minimap_ping_request = Some((x, y));
+            let h = frame_handle_of(lua, &this)?;
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let s = super::object::eff_scale(&model, h);
+            model.minimap_ping_request = Some((x * s, y * s));
             Ok(())
         })?,
     )?;
