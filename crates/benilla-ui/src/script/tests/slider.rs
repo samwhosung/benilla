@@ -628,3 +628,36 @@ fn a_step_before_any_range_is_the_whole_call() {
     let (min, max): (f32, f32) = s.eval("return SlNoRange:GetMinMaxValues()").unwrap();
     assert_eq!((min, max), (0.0, 0.0), "no range was pushed");
 }
+
+/// The thumb is a texture of the slider, sized in its units, so it scales with the slider's
+/// effective scale on screen and in the drag alike.
+#[test]
+fn a_scaled_sliders_thumb_scales_with_it() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        r#"
+        local sl = CreateFrame("Slider", "SlHalf")
+        sl:SetScale(0.5)
+        -- The render test's scrollbar at half scale: on screen 8 wide, 50 tall, from (50, 50).
+        sl:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 100, 100)
+        sl:SetWidth(16); sl:SetHeight(100)
+        sl:SetThumbTexture("Interface\\Buttons\\UI-ScrollBar-Knob")
+        local t = sl:GetThumbTexture()
+        t:SetWidth(16); t:SetHeight(16)
+        sl:SetMinMaxValues(0, 100)
+        sl:SetValue(0)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        thumb_rect(&s.extract(), "Knob"),
+        (50.0, 58.0, 92.0, 100.0),
+        "a 16-unit thumb of a half-scale slider is 8 on screen, flush at the track top"
+    );
+    // A press 40 below the track top seats the thumb's centre there: (40 - 4) of the 42 travel.
+    s.mouse_button(54.0, 60.0, "LeftButton", true);
+    let v = s.eval::<f64>("return SlHalf:GetValue()").unwrap();
+    assert!((v - 100.0 * 36.0 / 42.0).abs() < 1e-3, "value {v}");
+}

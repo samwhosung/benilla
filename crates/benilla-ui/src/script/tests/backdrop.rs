@@ -216,3 +216,48 @@ fn backdrop_colors_coerce_rgb_but_default_alpha_opaque() {
     // Stored as a byte: 0.5 reads back as 128/255.
     assert_eq!(a, 128.0 / 255.0);
 }
+
+/// The pieces are textures anchored and sized in the frame's own units (`0x77e8d0`), so the layout
+/// scales them by its effective scale like any region: a half-scale frame's border is half as
+/// thick and its background inset half as deep.
+#[test]
+fn a_scaled_frames_backdrop_scales_with_it() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local f = CreateFrame("Frame", "Half")
+        f:SetScale(0.5)
+        f:SetPoint("TOPLEFT", nil, "TOPLEFT", 100, -100)
+        f:SetWidth(200); f:SetHeight(100)
+        f:SetBackdrop({
+            bgFile = "bg", edgeFile = "edge", tile = false, edgeSize = 16,
+            insets = { left = 4, right = 4, top = 4, bottom = 4 },
+        })
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let rects: Vec<crate::layout::Rect> = s
+        .extract()
+        .into_iter()
+        .filter(|q| matches!(q.content, QuadContent::Backdrop { .. }))
+        .map(|q| q.rect.expect("piece rect"))
+        .collect();
+    assert_eq!(rects.len(), 9);
+    // The frame on screen: left 50, top 550, 100 × 50.
+    let bg = rects[0];
+    assert_eq!(
+        (bg.left, bg.right, bg.bottom, bg.top),
+        (52.0, 148.0, 502.0, 548.0),
+        "the insets are 4 units of a half-scale frame"
+    );
+    // Every border piece is 16 units, 8 on screen, thick.
+    for r in &rects[1..] {
+        assert_eq!(
+            r.width().min(r.height()),
+            8.0,
+            "a border piece {r:?} is edgeSize units of a half-scale frame"
+        );
+    }
+}

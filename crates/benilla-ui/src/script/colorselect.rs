@@ -798,6 +798,20 @@ mod tests {
         }
     }
 
+    /// The markers are textures of the picker, sized in its units, so a half-scale picker draws
+    /// them at half size: 5 and 24 on screen.
+    #[test]
+    fn the_markers_scale_with_the_picker() {
+        let mut s = picker();
+        s.run("TestPicker:SetScale(0.5); TestPicker:SetColorRGB(1, 0, 0)")
+            .unwrap();
+        s.resolve();
+        let wheel = marker_rect(&s, 5.0).expect("the wheel marker, 10 units at half scale");
+        assert!((wheel.top - wheel.bottom - 5.0).abs() < 0.01, "{wheel:?}");
+        let value = marker_rect(&s, 24.0).expect("the value marker, 48 units at half scale");
+        assert!((value.top - value.bottom - 7.0).abs() < 0.01, "{value:?}");
+    }
+
     /// The extracted rect of the marker `width` wide: the two share one BLP and differ by size, 10
     /// for the wheel's and 48 for the strip's.
     fn marker_rect(s: &UiScript, width: f32) -> Option<crate::layout::Rect> {

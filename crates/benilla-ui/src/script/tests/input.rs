@@ -253,6 +253,27 @@ fn hit_rect_insets_shrink_the_mouse_rect_only() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// The hit rect is the rect less each inset times the frame's effective scale (`0x76b580`), so a
+/// half-scale frame's 20-unit header is 10 on screen.
+#[test]
+fn hit_rect_insets_scale_with_the_frame() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local a = CreateFrame("Frame", "HalfHit")
+        a:SetScale(0.5)
+        a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(100); a:SetHeight(100); a:EnableMouse(true)
+        a:SetHitRectInsets(0, 0, 20, 0)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    // On screen the frame is 50 × 50 from the origin, its header the top 10.
+    assert!(s.hit_test(25.0, 45.0).is_none(), "inside the scaled header");
+    assert!(s.hit_test(25.0, 38.0).is_some(), "below the scaled header");
+}
+
 #[test]
 fn hit_rect_insets_default_to_zero() {
     let mut s = script();

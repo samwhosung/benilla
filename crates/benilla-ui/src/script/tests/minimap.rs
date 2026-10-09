@@ -282,3 +282,18 @@ fn frame_effective_alpha_reads_the_shown_frames_alpha() {
         "hidden through the parent"
     );
 }
+
+/// `Minimap_OnClick` divides the cursor by the minimap's effective scale and hands
+/// `PingLocation` offsets in the minimap's own units; the reference reads them against the
+/// widget's own size (`0x4eeca0`), so they reach the host scaled back to screen units.
+#[test]
+fn ping_location_reaches_the_host_in_screen_units() {
+    let mut s = UiScript::new().unwrap();
+    s.run(
+        r#"m = CreateFrame("Minimap", "HalfMinimap")
+           m:SetScale(0.5)
+           m:PingLocation(10, -20)"#,
+    )
+    .unwrap();
+    assert_eq!(s.take_minimap_ping_request(), Some((5.0, -10.0)));
+}

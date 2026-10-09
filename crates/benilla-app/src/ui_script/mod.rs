@@ -707,6 +707,9 @@ mod chat_resize_tests;
 mod dropdown_tests;
 
 #[cfg(test)]
+mod ui_scale_tests;
+
+#[cfg(test)]
 mod action_bar_tests;
 
 #[cfg(test)]
