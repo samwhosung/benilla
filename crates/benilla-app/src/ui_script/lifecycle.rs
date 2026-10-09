@@ -422,9 +422,19 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
                 crate::ui_chat::restore_chat_looks(world, script);
                 // The UI scale lands on `UIParent` once the files, the addons and
                 // `VARIABLES_LOADED` are done, after the chat reader (`0x4900d6`) and before the
-                // `PLAYER_LOGIN` arm (`0x49011d`): `0x49010e` → `0x492e90` → `0x494550`. So every
-                // `OnLoad` sees `UIParent` at scale 1 and the root's size on screen.
-                script.set_ui_scale(ui_scale);
+                // `PLAYER_LOGIN` arm (`0x49011d`), through the display handler (`0x49010e` →
+                // `0x492e90`). So every `OnLoad` sees `UIParent` at scale 1 and the root's size.
+                let display = {
+                    let mut q =
+                        world.query_filtered::<&Window, With<bevy::window::PrimaryWindow>>();
+                    q.single(world).map_or((0, 0), |w| {
+                        (w.width().round() as u32, w.height().round() as u32)
+                    })
+                };
+                let mut none = None;
+                let mut cache = world.get_resource_mut::<super::UiAutoScaleCache>();
+                let cache = cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
+                script.seat_ui_scale(ui_scale, display, cache);
             },
         );
     });

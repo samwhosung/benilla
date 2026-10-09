@@ -425,8 +425,11 @@ pub(super) fn tick_script(
     mut last_seam: Local<f32>,
     // The `scale_factor` measures were last answered under; 0 until the first frame.
     mut last_dpi: Local<f32>,
-    // The dial, `UIParent`'s scale in the VM.
-    ui_scale: Res<super::UiScaleCvar>,
+    // The dial, `UIParent`'s scale in the VM, and the automatic scale's last display.
+    (ui_scale, mut auto_cache): (
+        Res<super::UiScaleCvar>,
+        Option<ResMut<super::UiAutoScaleCache>>,
+    ),
     mut ui_cost: ResMut<super::UiFrameCost>,
     mut pass: ResMut<super::UiPassState>,
 ) {
@@ -490,7 +493,10 @@ pub(super) fn tick_script(
         // A display change re-applies the UI scale (`0x492e90`), whose narrow-aspect cap follows
         // the window; a moved dial applies once, as its CVar callback does (`0x490770`).
         if resized {
-            script.apply_ui_scale();
+            let display = (w.round() as u32, h.round() as u32);
+            let mut none = None;
+            let cache = auto_cache.as_deref_mut().map_or(&mut none, |c| &mut c.0);
+            script.apply_ui_scale(display, cache);
         }
         let rescaled = script.set_ui_scale(ui_scale.0);
         // Either re-runs what the interface computed from the old `GetScreenHeight()`.

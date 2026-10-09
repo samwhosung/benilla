@@ -216,9 +216,16 @@ impl Default for UiScaleCvar {
 /// The shipped `uiScale`. Deviation: a flat 0.9, because 1.0 reads oversized. With `useUiScale`
 /// off, its default (`0x8430c0`), the reference sets `max(768/H, 0.9)` above 768 px tall and 1.0
 /// at or below (`0x492f70`, on a mode set and from `0x4908ad`), so the two agree from ~853 px up.
-/// benilla never reads `useUiScale`: this CVar always applies, through the ON leg's own ladder
-/// (`0x490770`, `0x492e90`: the narrow-aspect cap and the 0.64 floor), to `UIParent` alone.
+/// benilla never reads `useUiScale`: this CVar always applies to `UIParent` alone, as with it on.
+/// A change goes through the CVar callback (`0x490770`: the narrow-aspect cap, the 0.64 floor);
+/// the load and a display change through the display handler's ON leg (`0x492e90`: the cap, and
+/// below 0.64 the automatic scale `0x492f70` instead of the floor).
 pub(crate) const DEFAULT_UI_SCALE: f32 = 0.9;
+
+/// The display the reference's automatic UI scale last ran for (`0x492f70`'s `[0xb4e304]` and
+/// `[0xb4e308]`), which outlives every UI: the display handler skips a display it already ran for.
+#[derive(Resource, Default)]
+pub(crate) struct UiAutoScaleCache(pub(crate) Option<(u32, u32)>);
 
 /// `WOW_UI_SCALE=` if set, clamped to the dial's range, else [`DEFAULT_UI_SCALE`].
 fn default_ui_scale() -> f32 {
@@ -276,6 +283,7 @@ impl Plugin for UiScriptPlugin {
         // The quit root runs in `Last`: the close button's `AppExit` is written in `PostUpdate`.
         crate::shutdown::on_app_exit(app, shutdown_on_exit.into_configs());
         app.insert_resource(UiScaleCvar(default_ui_scale()))
+            .init_resource::<UiAutoScaleCache>()
             .init_resource::<UiFrameCost>()
             .init_resource::<crate::bindings::WheelNotches>()
             .init_resource::<UiCostWanted>()
