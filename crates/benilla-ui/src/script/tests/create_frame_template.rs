@@ -430,3 +430,37 @@ fn an_empty_scroll_child_is_reported() {
     );
     assert!(s.eval::<bool>("return Hollow ~= nil").unwrap());
 }
+
+/// `CreateFrame` builds through the same instantiator as the XML, `0x6ee280` (called at
+/// `0x70628b`), so its post-load hook `0x76a2f0` fires a visible frame's template OnShow once,
+/// after its OnLoad (`0x76a3b3`); one created under a hidden parent gets none.
+#[test]
+fn a_runtime_template_fires_its_onshow_after_its_onload_when_visible() {
+    let s = script();
+    register(
+        &s,
+        r#"<Ui>
+             <Frame name="ShowProbeTemplate" virtual="true">
+               <Scripts>
+                 <OnLoad>table.insert(LOG, this:GetName() .. ":load")</OnLoad>
+                 <OnShow>table.insert(LOG, this:GetName() .. ":show")</OnShow>
+               </Scripts>
+             </Frame>
+           </Ui>"#,
+    );
+    s.run(
+        r#"
+        LOG = {}
+        CreateFrame("Frame", "Seen", nil, "ShowProbeTemplate")
+        local hidden = CreateFrame("Frame", "HiddenHost")
+        hidden:Hide()
+        CreateFrame("Frame", "Unseen", hidden, "ShowProbeTemplate")
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<String>("return table.concat(LOG, ',')").unwrap(),
+        "Seen:load,Seen:show,Unseen:load"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

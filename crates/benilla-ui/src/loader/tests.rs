@@ -2468,6 +2468,97 @@ mod chunk_name_tests {
             .eval::<bool>("return Named:GetScript(\"OnShow\") == nil")
             .unwrap());
     }
+
+    /// The post-load hook `0x76a2f0` builds the `<Frames>` children (`0x76a36f`, their own hooks
+    /// inside), fires OnLoad (`0x76a387`), then fires OnShow (`0x76a3b3`) when the frame is visible
+    /// (`0x76a38c`) and has the handler (`0x76a396`): a frame visible at the end of its load gets
+    /// one OnShow, after its OnLoad and its children's.
+    #[test]
+    fn a_frame_visible_at_the_end_of_its_load_gets_one_onshow_after_its_onload() {
+        let s = UiScript::new().unwrap();
+        s.run("LOG = {} function Log(tag) table.insert(LOG, tag) end")
+            .unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Frame name="Born">
+                    <Scripts>
+                        <OnLoad>Log("load")</OnLoad>
+                        <OnShow>Log("show")</OnShow>
+                    </Scripts>
+                    <Frames>
+                        <Frame name="BornChild">
+                            <Scripts>
+                                <OnLoad>Log("child-load")</OnLoad>
+                                <OnShow>Log("child-show")</OnShow>
+                            </Scripts>
+                        </Frame>
+                    </Frames>
+                </Frame>
+            </Ui>"#,
+        );
+        let report = load_in(&s, &doc, "Test.xml", &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(
+            s.eval::<String>("return table.concat(LOG, ',')").unwrap(),
+            "child-load,child-show,load,show"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// The post-load OnShow is keyed on the frame's visibility at `0x76a38c`, and nothing records
+    /// an OnShow already given: a frame first shown by its own OnLoad gets that `Show()`'s OnShow
+    /// and then the hook's, while a frame still hidden gets none.
+    #[test]
+    fn a_frame_shown_by_its_onload_gets_two_onshows_and_a_hidden_one_none() {
+        let s = UiScript::new().unwrap();
+        s.run("LOG = {} function Log(tag) table.insert(LOG, tag) end")
+            .unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Frame name="ShownByLoad" hidden="true">
+                    <Scripts>
+                        <OnLoad>Log("a-load") this:Show() Log("a-load-end")</OnLoad>
+                        <OnShow>Log("a-show")</OnShow>
+                    </Scripts>
+                </Frame>
+                <Frame name="StaysHidden" hidden="true">
+                    <Scripts>
+                        <OnLoad>Log("b-load")</OnLoad>
+                        <OnShow>Log("b-show")</OnShow>
+                        <OnHide>Log("b-hide")</OnHide>
+                    </Scripts>
+                </Frame>
+            </Ui>"#,
+        );
+        let report = load_in(&s, &doc, "Test.xml", &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(
+            s.eval::<String>("return table.concat(LOG, ',')").unwrap(),
+            "a-load,a-show,a-load-end,a-show,b-load"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// The post-load OnShow is the script alone (`0x76a3b3` calls the runner `0x702690`, not the
+    /// notify slot `+0x30`), so an `autoFocus` EditBox born visible runs its OnShow and still takes
+    /// no keyboard: the focus is the EditBox notify's (`0x77a750`), which only a transition reaches.
+    #[test]
+    fn the_post_load_onshow_runs_the_script_without_the_editbox_autofocus() {
+        let s = UiScript::new().unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <EditBox name="BornBox" autoFocus="true">
+                    <Size><AbsDimension x="100" y="20"/></Size>
+                    <Scripts><OnShow>BOX_SHOWN = true</OnShow></Scripts>
+                </EditBox>
+            </Ui>"#,
+        );
+        let report = load_in(&s, &doc, "Test.xml", &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(s.eval::<bool>("return BOX_SHOWN == true").unwrap());
+        assert_eq!(s.focused_editbox_name(), None);
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
 }
 
 #[test]
