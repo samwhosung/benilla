@@ -232,8 +232,9 @@
         </Scripts>
     </Button>
 
-    <Frame name="BenillaScriptLogFrame" hidden="true">
-        <!-- The standard left-slot panel size. No <Anchors>: ShowUIPanel seats it. -->
+    <Frame name="BenillaScriptLogFrame" parent="UIParent" hidden="true">
+        <!-- The standard left-slot panel size. No <Anchors>: ShowUIPanel seats it. Under UIParent,
+             as the stock panels are, so it takes the UI scale with them. -->
         <Size><AbsDimension x="384" y="512"/></Size>
         <Layers>
             <Layer level="BACKGROUND">
