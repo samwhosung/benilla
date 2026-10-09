@@ -125,9 +125,10 @@ impl UiScript {
             // The wheel flag alone: the wheel index is separate from the mouse's, so the wheel
             // passes a frame that only takes the mouse, as a scroll pane's chrome does.
             model.arena.is_mouse_wheel_enabled(fh)
-                && model.resolved.get(&fh).is_some_and(|r| {
-                    point_in_rect(hit_rect(&model, fh, *r), x, y)
-                })
+                && model
+                    .resolved
+                    .get(&fh)
+                    .is_some_and(|r| point_in_rect(hit_rect(&model, fh, *r), x, y))
                 && effective_clip(&model, &scroll_sources, fh)
                     .is_none_or(|c| point_in_rect(c, x, y))
         })?;

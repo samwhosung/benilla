@@ -171,7 +171,10 @@ fn the_stock_interface_inside_uiparent_is_unmoved_by_where_the_scale_lives() {
     let mut script = UiScript::new().expect("VM");
     script.set_screen_size(w, h);
     let failures = super::load_default_ui(&script);
-    assert!(failures.is_empty(), "default UI failed to load: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "default UI failed to load: {failures:?}"
+    );
     // Every frame shown, its parents first, so the most geometry the stock files declare draws.
     script
         .run(
