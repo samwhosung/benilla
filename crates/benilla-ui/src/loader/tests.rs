@@ -2468,6 +2468,21 @@ mod chunk_name_tests {
             .eval::<bool>("return Named:GetScript(\"OnShow\") == nil")
             .unwrap());
     }
+}
+
+/// The post-load hook's OnShow (`0x76a2f0`), for a frame visible at the end of its load.
+mod post_load_show_tests {
+    use crate::framexml;
+    use crate::loader::*;
+    use crate::script::UiScript;
+
+    fn no_files(_: &str) -> Option<Vec<u8>> {
+        None
+    }
+
+    fn parse(text: &str) -> framexml::ParsedDocument {
+        framexml::parse(text).expect("valid FrameXML")
+    }
 
     /// The post-load hook `0x76a2f0` builds the `<Frames>` children (`0x76a36f`, their own hooks
     /// inside), fires OnLoad (`0x76a387`), then fires OnShow (`0x76a3b3`) when the frame is visible

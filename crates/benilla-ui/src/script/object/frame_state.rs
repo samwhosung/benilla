@@ -5,7 +5,7 @@ use mlua::{Lua, Table, Value};
 use crate::script::region_map::{set_shared, Side};
 
 use crate::order::Strata;
-use crate::script::{event, Backdrop, Insets, Model};
+use crate::script::{visibility, Backdrop, Insets, Model};
 use crate::widget::FrameKind;
 
 use super::{decode_id, draw_layer_from_str, frame_handle_of, frame_wrapper, strata_from_str};
@@ -248,8 +248,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
     // `SetParent` (`0x7a1550`): a frame, a name (`0x76c760`) or an explicit nil; an absent argument
     // raises like an unknown name (`0x6f3400` gives -1), and so does a cycle (`0x87cb14`). As in
-    // the reference, hide fires before show, between `reparent_begin` and `reparent_finish`,
-    // since `fire_visibility_changes` reads each frame's live state for the direction.
+    // the reference, the hide transition runs between `reparent_begin` and `reparent_finish`, and
+    // the show transition after.
     set_shared(
         lua,
         m,
@@ -330,24 +330,28 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     )));
                 }
             }
-            let hidden = {
+            let was_visible = {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 model.arena.reparent_begin(h, new_parent)
             };
             // None: the same parent, a total no-op (`0x76ab20`), not even a layout touch.
-            let Some(hidden) = hidden else { return Ok(()) };
-            let was_visible = !hidden.is_empty();
-            event::fire_visibility_changes(lua, hidden);
-            let shown = {
+            let Some(was_visible) = was_visible else {
+                return Ok(());
+            };
+            if was_visible {
+                visibility::hide(lua, h);
+            }
+            {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
-                let shown = model.arena.reparent_finish(h, new_parent, was_visible);
+                model.arena.reparent_finish(h, new_parent);
                 // A reparent moves the subtree's effective scale, a layout input and part of every
                 // descendant FontString's measure key.
                 model.touch_layout_reparent(h);
                 model.touch_measure_all();
-                shown
-            };
-            event::fire_visibility_changes(lua, shown);
+            }
+            if was_visible {
+                visibility::show(lua, h);
+            }
             Ok(())
         },
     )?;
@@ -784,11 +788,7 @@ fn strata_name(s: Strata) -> &'static str {
 
 fn set_shown(lua: &Lua, this: &Table, shown: bool) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
-    let changed = {
-        let mut model = lua.app_data_mut::<Model>().expect("model");
-        model.arena.set_shown(h, shown)
-    };
-    event::fire_visibility_changes(lua, changed);
+    visibility::set_shown(lua, h, shown);
     Ok(())
 }
 

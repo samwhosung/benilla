@@ -162,6 +162,10 @@ pub struct Frame {
     pub shown: bool,
     /// `shown` and every ancestor effectively visible (`+0xd4`).
     pub effective_visible: bool,
+    /// The frame's own load window (`+0x114`): set by the pre-load hook (`0x7697c2`), cleared as
+    /// the post-load hook starts (`0x76a2ff`). While it is set the frame's own OnShow and OnHide
+    /// fire nothing (`0x76b270`/`0x76b2a0`); it still transitions and walks its children.
+    pub load_window: bool,
     /// `EnableMouse`: the mouse bit (bit 2) of the input mask `[frame+0xcc]`.
     pub mouse_enabled: bool,
     /// `EnableMouseWheel`, or an `<OnMouseWheel>` script at XML load: the mask's wheel bit (3).
@@ -226,6 +230,14 @@ pub struct Region {
     /// `Region:SetParent(nil)`: unlinked and not drawn, but not destroyed (`0x77fd10` with a null
     /// parent). The owner's `regions` keeps it so `destroy` frees it; `SetParent(frame)` relinks.
     pub detached: bool,
+}
+
+/// A cursor over a frame's child list for [`WidgetArena::next_child`]: the child last returned and
+/// where it stood, so a walk that a handler interrupts resumes from the list as it is now.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ChildWalk {
+    at: usize,
+    last: Option<FrameHandle>,
 }
 
 // ── The arena ────────────────────────────────────────────────────────────────────────────────
@@ -424,6 +436,7 @@ impl WidgetArena {
             effective_alpha,
             shown,
             effective_visible: shown && parent_visible,
+            load_window: false,
             mouse_enabled: mouse_enabled_by_ctor(kind),
             // The WorldFrame ctor takes the wheel (`0x481b1f`); the reference's ScrollFrame and
             // ScrollingMessageFrame ctors do not, and a stock one takes it from `<OnMouseWheel>`.

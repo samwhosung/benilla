@@ -154,11 +154,12 @@ pub struct NamePlateClick {
     pub button: String,
 }
 
-/// What a sync fires outside the model borrow: `OnShow`/`OnHide` for frames whose visibility
-/// flipped and `OnValueChanged` for moved bars (pfUI hooks it, `nameplates.lua:393`).
+/// What a sync runs outside the model borrow: the plates' `Show`/`Hide`, whose transitions fire
+/// handlers, and `OnValueChanged` for moved bars (pfUI hooks it, `nameplates.lua:393`).
 #[derive(Default)]
 struct SyncEffects {
-    visibility: Vec<FrameHandle>,
+    /// `(plate, shown)` in the order the sync issued them.
+    visibility: Vec<(FrameHandle, bool)>,
     values: Vec<(FrameHandle, f32)>,
 }
 
@@ -247,7 +248,7 @@ impl UiScript {
             };
             sync(&mut model, world, geometry, states)
         };
-        super::event::fire_visibility_changes(lua, effects.visibility);
+        apply_visibility(lua, effects.visibility);
         for (bar, value) in effects.values {
             super::statusbar::fire_engine_value_changed(lua, bar, value);
         }
@@ -304,7 +305,7 @@ impl UiScript {
             }
             effects
         };
-        super::event::fire_visibility_changes(lua, effects.visibility);
+        apply_visibility(lua, effects.visibility);
     }
 
     /// How many plate widgets the pool holds.
@@ -312,6 +313,13 @@ impl UiScript {
         let lua = self.lua();
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         model.nameplates.plates.len()
+    }
+}
+
+/// Run the plates' `Show`/`Hide` a sync issued, each a full transition with its handlers.
+fn apply_visibility(lua: &mlua::Lua, verbs: Vec<(FrameHandle, bool)>) {
+    for (frame, shown) in verbs {
+        super::visibility::set_shown(lua, frame, shown);
     }
 }
 
@@ -479,9 +487,8 @@ impl Plate {
         }
 
         // Born retired and hidden: addons tell a live plate from a pooled one by `IsShown()`.
-        effects
-            .visibility
-            .extend(model.arena.set_shown(frame, false));
+        // Silent, since nothing can have set a handler on a frame not yet handed out.
+        model.arena.set_shown(frame, false);
 
         model
             .nameplates
@@ -625,9 +632,7 @@ impl Plate {
         }
 
         if last.is_none() {
-            effects
-                .visibility
-                .extend(model.arena.set_shown(frame, true));
+            effects.visibility.push((frame, true));
         }
         if last.as_ref().is_none_or(|l| l.alpha != state.alpha) {
             model.arena.set_alpha(frame, state.alpha);
@@ -722,9 +727,7 @@ impl Plate {
             return;
         }
         let frame = model.nameplates.plates[i].frame;
-        effects
-            .visibility
-            .extend(model.arena.set_shown(frame, false));
+        effects.visibility.push((frame, false));
         model.nameplates.plates[i].last = None;
     }
 }

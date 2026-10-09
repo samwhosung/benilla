@@ -10,7 +10,6 @@ use mlua::{Function, Lua, Table, Value};
 
 use super::{Model, ScriptValue, REG_SCRIPTS};
 use crate::script::object::frame_wrapper;
-use crate::widget::{ButtonState, FrameHandle};
 
 /// `UiScript::fire_event` for engine code that holds only the Lua context.
 pub(super) fn fire_global(lua: &Lua, event: &str, args: &[ScriptValue]) {
@@ -105,75 +104,6 @@ pub(super) fn fire_size_changes(lua: &Lua) {
                 .expect("model")
                 .record_script_error(e.to_string());
         }
-    }
-}
-
-/// Fire `OnShow`/`OnHide` for the frames whose effective visibility just changed, recording
-/// errors in [`Model::errors`]. A shown `toplevel` frame raises here, after the subtree has
-/// propagated and before its `OnShow` (`0x76ae10` at `0x76aee0`), so a show that does not come
-/// through Lua `Show` raises too.
-pub(super) fn fire_visibility_changes(lua: &Lua, changed: Vec<FrameHandle>) {
-    // Resolve (handle, id, now-visible?) under one short borrow, then fire with no borrow held.
-    let items: Vec<(FrameHandle, u32, bool)> = {
-        let mut model = lua.app_data_mut::<Model>().expect("model");
-        changed
-            .into_iter()
-            .filter_map(|h| {
-                let vis = model.arena.frame(h)?.effective_visible;
-                Some((h, model.frame_id(h), vis))
-            })
-            .collect()
-    };
-    // Hiding the hovered frame, directly or by an ancestor, fires its `OnLeave` inside the hide and
-    // before its `OnHide` (`0x764ba0`'s tail in `0x76ad50`, the leave at `0x764cce`), clears the
-    // hover and the drag-arm (`+0x100`/`+0x104`) and arms the re-pick; a show arms it too
-    // (`0x764b8d`). This leave is how a tooltip closes with its window; the reference has no other.
-    let left: Option<(FrameHandle, u32)> = {
-        let mut model = lua.app_data_mut::<Model>().expect("model");
-        let hidden_hover = model
-            .mouseover
-            .filter(|&m| items.iter().any(|&(h, _, vis)| h == m && !vis));
-        // The leave is a virtual call (`0x764cce`, `[vtable+0x50]`): a disabled Button's own
-        // `0x7794e0` skips its `OnLeave`, while the hover and the drag-arm still clear.
-        let notified = super::button::hover_notify_runs(&model, hidden_hover);
-        if let Some(m) = hidden_hover {
-            model.mouseover = None;
-            if model.drag.as_ref().is_some_and(|d| d.source == m) {
-                model.drag = None;
-            }
-        }
-        model.hover_repick |= hidden_hover.is_some() || items.iter().any(|&(_, _, vis)| vis);
-        hidden_hover
-            .filter(|_| notified)
-            .map(|m| (m, model.frame_id(m)))
-    };
-    if let Some((_, oid)) = left {
-        if let Err(e) = fire_widget_handler(lua, oid, "OnLeave", vec![Value::Boolean(true)]) {
-            lua.app_data_mut::<Model>()
-                .expect("model")
-                .record_script_error(e.to_string());
-        }
-    }
-    for (h, id, visible) in items {
-        if visible {
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            super::object::toplevel::raise_on_show(&mut model, h);
-        } else {
-            // `CSimpleButton`'s hide notify (`+0x34`, `0x7791e0`) un-presses it, unless disabled
-            // or locked, before the base notify, so a button hidden while held comes back unpushed.
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            super::button::edge(&mut model, h, ButtonState::on_hide);
-        }
-        let name = if visible { "OnShow" } else { "OnHide" };
-        if let Err(e) = fire(lua, id, name, None, Vec::new()) {
-            lua.app_data_mut::<Model>()
-                .expect("model")
-                .record_script_error(e.to_string());
-        }
-        // The EditBox show/hide overrides (`0x81c910` `+0x30`/`+0x34`) call the base notify first,
-        // so this runs after the `fire`: an `autoFocus` box takes a free focus, a hidden box
-        // releases its own.
-        super::editbox::visibility_focus(lua, h, visible);
     }
 }
 

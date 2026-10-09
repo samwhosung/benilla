@@ -34,7 +34,8 @@ fn mid_tree_hide_blocks_a_shown_grandchild() {
     assert!(a.frame(grand).unwrap().effective_visible);
 
     let changed = a.set_shown(child, false);
-    assert_eq!(changed, vec![child, grand]); // pre-order
+    // Notify order: post-order, children before their parent (`0x76adee`, then `0x76adfd`).
+    assert_eq!(changed, vec![grand, child]);
     assert!(a.frame(root).unwrap().effective_visible);
     assert!(!a.frame(child).unwrap().effective_visible);
     assert!(!a.frame(grand).unwrap().effective_visible);
@@ -44,7 +45,7 @@ fn mid_tree_hide_blocks_a_shown_grandchild() {
     );
 
     let changed = a.set_shown(child, true);
-    assert_eq!(changed, vec![child, grand]);
+    assert_eq!(changed, vec![grand, child]);
     assert!(a.frame(grand).unwrap().effective_visible);
 }
 
@@ -58,10 +59,10 @@ fn hidden_grandchild_stays_hidden_when_ancestor_reshows() {
     a.set_shown(grand, false);
     let changed = a.set_shown(root, false);
     // grand is already invisible, so the hide does not report it.
-    assert_eq!(changed, vec![root, child]);
+    assert_eq!(changed, vec![child, root]);
 
     let changed = a.set_shown(root, true);
-    assert_eq!(changed, vec![root, child]);
+    assert_eq!(changed, vec![child, root]);
     assert!(a.frame(child).unwrap().effective_visible);
     assert!(!a.frame(grand).unwrap().effective_visible);
 }

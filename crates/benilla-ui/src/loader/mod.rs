@@ -642,7 +642,7 @@ impl Loader<'_> {
     }
 
     /// Everything a frame element does to an existing frame, from `LoadXML` attributes to its
-    /// `OnLoad` (last, bottom-up, `0x76a060`); shared by [`Self::materialize`] and
+    /// `OnLoad` (bottom-up, `0x76a060`) and the post-load OnShow; shared by [`Self::materialize`] and
     /// [`apply_template`]. `$parent` is `self_name` in this frame's contents and `parent_name` in
     /// its own anchors (`0x76c5b0`).
     pub(super) fn decorate(
@@ -655,6 +655,9 @@ impl Loader<'_> {
     ) {
         // This frame's deferred anchors drain before its OnLoad; a nested frame drains its own.
         let deferred_mark = self.deferred_anchors.len();
+        // 1c · the pre-load hook opens the frame's load window (`0x7697c2`): until the post-load
+        //      hook, its own OnShow and OnHide fire nothing.
+        crate::script::visibility::set_load_window(self.lua(), wrapper, true);
         // 2 · LoadXML attributes (`0x769820`).
         self.apply_attrs(el, wrapper, dbg_name);
         // 3 · <Size> and 4 · <Anchors> (the CLayoutFrame geometry base, `0x767800`).
@@ -681,7 +684,9 @@ impl Loader<'_> {
         // 6 · <Scripts> handlers (`0x769ef0`); OnLoad is captured to fire bottom-up below.
         let onload = self.apply_scripts(el, wrapper, dbg_name);
 
-        // 7 · nested <Frames>, whose OnLoads fire before ours (`0x76a060`).
+        // 7 · the post-load hook (`0x76a2f0`): close the window (`0x76a2ff`), then the nested
+        //     <Frames>, whose OnLoads fire before ours (`0x76a060`).
+        crate::script::visibility::set_load_window(self.lua(), wrapper, false);
         for frames_el in children_named(el, "Frames") {
             for child in &frames_el.children {
                 let expanded = self.expand(child);
@@ -717,6 +722,8 @@ impl Loader<'_> {
         if let Some(func) = onload {
             self.fire_onload(wrapper, &func, dbg_name);
         }
+        // 9 · and its OnShow, if it is visible now (`0x76a3b3`).
+        crate::script::visibility::post_load_show(self.lua(), wrapper);
     }
 
     /// Apply one anchor, deferring it (when `may_defer`) while its named `relativeTo` is unbuilt.

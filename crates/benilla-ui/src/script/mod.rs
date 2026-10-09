@@ -138,6 +138,7 @@ mod trainer;
 mod types;
 mod unit;
 mod video_pairs;
+pub(crate) mod visibility;
 mod weapon_enchant;
 mod who_sort;
 mod worldmap;

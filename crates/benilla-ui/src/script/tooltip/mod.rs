@@ -355,13 +355,9 @@ fn now(lua: &Lua) -> f64 {
     crate::script::clock::now(lua)
 }
 
-/// Shows or hides through the arena and fires the visibility events.
+/// Shows or hides as the Lua verbs do, handlers included.
 pub(super) fn set_shown(lua: &Lua, h: FrameHandle, shown: bool) {
-    let changed = {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        model.arena.set_shown(h, shown)
-    };
-    event::fire_visibility_changes(lua, changed);
+    crate::script::visibility::set_shown(lua, h, shown);
 }
 
 /// The default line colour, gold `0xffffd200` (stored at `0xc0d3e8` by `0x528e50`). The zone
