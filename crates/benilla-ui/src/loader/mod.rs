@@ -899,4 +899,6 @@ pub(super) fn font_object_from_element(el: &Element) -> FontObject {
 }
 
 #[cfg(test)]
+mod template_name_tests;
+#[cfg(test)]
 mod tests;
