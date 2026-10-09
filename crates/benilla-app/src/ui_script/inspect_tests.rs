@@ -492,16 +492,19 @@ fn toggle_inspect_reopens_after_a_close_and_raises_like_the_reference() {
         s.eval::<bool>("return InspectFrame:IsVisible()").unwrap(),
         "the window still shows — Show() runs before OnShow raises"
     );
-    // Two raises: `InspectFrame` and `InspectPaperDollFrame` each run their own `OnShow` under
-    // their own pcall, the first dying at the portrait's gate, the second at `UnitLevel`'s.
+    // Two raises: `InspectPaperDollFrame` and `InspectFrame` each run their own `OnShow` under
+    // their own pcall, the page first, since the show cascade notifies children before their
+    // parent (`0x76aed5`, then `0x76aef5`): the page dies at `UnitLevel`'s gate, the window at
+    // the portrait's.
     let errors = s.errors();
     assert_eq!(errors.len(), 2, "one raise per OnShow handler: {errors:?}");
     assert!(
-        errors[0].contains(r#"Usage: SetPortraitTexture(texture, "unit")"#),
-        "the portrait's gate, before the name line is ever reached: {errors:?}"
+        errors[0].contains(r#"Usage: UnitLevel("unit")"#),
+        "the paper doll's own handler, dying at its first getter: {errors:?}"
     );
     assert!(
-        errors[1].contains(r#"Usage: UnitLevel("unit")"#),
-        "and the paper doll's own handler, dying at its first getter: {errors:?}"
+        errors[1].contains(r#"Usage: SetPortraitTexture(texture, "unit")"#),
+        "then the window's, at the portrait's gate, before the name line is ever reached: \
+         {errors:?}"
     );
 }

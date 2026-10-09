@@ -110,7 +110,8 @@
             BenillaOptionsFrame:SetScale(k)
         end
 
-        -- The era tab width, label + 40, measured after OnShow sets the scale.
+        -- The era tab width, label + 40, measured after the window's OnShow sets the scale:
+        -- the tabs' own OnShows run before it, children first.
         function BenillaOptionsTab_FitWidth(tab)
             tab:SetWidth(getglobal(tab:GetName() .. "Text"):GetStringWidth() + 40)
         end
@@ -1341,9 +1342,6 @@
                 <NormalFont inherits="GameFontHighlightSmall"/>
                 <HighlightFont inherits="GameFontHighlightSmall"/>
                 <DisabledFont inherits="GameFontHighlightSmall"/>
-                <Scripts>
-                    <OnShow>BenillaOptionsTab_FitWidth(this)</OnShow>
-                </Scripts>
             </Button>
             <Button name="$parentAddOnsTab">
                 <Size><AbsDimension x="87" y="37"/></Size>
@@ -1371,7 +1369,6 @@
                 <!-- No addon list behind it: disabled, in the era's unselected gold. -->
                 <Scripts>
                     <OnLoad>this:Disable()</OnLoad>
-                    <OnShow>BenillaOptionsTab_FitWidth(this)</OnShow>
                 </Scripts>
             </Button>
 
@@ -3068,6 +3065,8 @@
             <!-- Controls by default; selection persists and the scale re-fits, as the era's. -->
             <OnShow>
                 BenillaOptionsFrame_UpdateScale()
+                BenillaOptionsTab_FitWidth(BenillaOptionsFrameGameTab)
+                BenillaOptionsTab_FitWidth(BenillaOptionsFrameAddOnsTab)
                 BenillaOptionsFrame_SelectCategory(this.selectedCategory or "Controls")
                 if UpdateMicroButtons then UpdateMicroButtons() end
             </OnShow>
