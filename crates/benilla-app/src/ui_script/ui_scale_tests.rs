@@ -146,3 +146,124 @@ fn a_frame_inside_uiparent_lands_where_the_dial_put_it() {
         "got {got:?}"
     );
 }
+
+/// Whether `frame` is `UIParent` or hangs below it.
+fn under_ui_parent(s: &UiScript, frame: benilla_ui::widget::FrameHandle) -> bool {
+    let mut at = Some(frame);
+    while let Some(h) = at {
+        if s.frame_name(h).as_deref() == Some("UIParent") {
+            return true;
+        }
+        at = s.frame_parent(h);
+    }
+    false
+}
+
+/// The whole stock interface, every frame shown: scaling `UIParent` by `S` in the 768-tall root
+/// must place every quad of its subtree, and every hit, exactly where enlarging the root by `1/S`
+/// with `UIParent` at scale 1 placed them, the seam having been the old home of the UI scale. A
+/// frame-local length the engine forgets to scale (a border, an inset, a thumb) shows up here.
+#[test]
+fn the_stock_interface_inside_uiparent_is_unmoved_by_where_the_scale_lives() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    const S: f32 = 0.9;
+    let (w, h) = (768.0 * 16.0 / 9.0, 768.0);
+    let mut script = UiScript::new().expect("VM");
+    script.set_screen_size(w, h);
+    let failures = super::load_default_ui(&script);
+    assert!(failures.is_empty(), "default UI failed to load: {failures:?}");
+    // Every frame shown, its parents first, so the most geometry the stock files declare draws.
+    script
+        .run(
+            r#"
+            local f = EnumerateFrames()
+            while f do
+                pcall(f.Show, f)
+                f = EnumerateFrames(f)
+            end
+            "#,
+        )
+        .unwrap();
+    let _ = script.take_errors();
+
+    // The old home: a root `1/S` larger, `UIParent` at scale 1.
+    script.set_screen_size(w / S, h / S);
+    script.run("UIParent:SetScale(1)").unwrap();
+    script.resolve();
+    let old = script.extract();
+    let grid: Vec<(f32, f32)> = (0..=40)
+        .flat_map(|i| (0..=24).map(move |j| (w * i as f32 / 40.0, h * j as f32 / 24.0)))
+        .collect();
+    let old_hits: Vec<_> = grid
+        .iter()
+        .map(|&(x, y)| script.hit_test_frame(x / S, y / S))
+        .collect();
+
+    // The reference's: a 768-tall root, `UIParent` at scale `S`.
+    script.set_screen_size(w, h);
+    assert!(script.set_ui_scale(S));
+    script.resolve();
+    let new = script.extract();
+    let new_hits: Vec<_> = grid
+        .iter()
+        .map(|&(x, y)| script.hit_test_frame(x, y))
+        .collect();
+
+    assert_eq!(old.len(), new.len(), "the same quads draw");
+    let close = |a: f32, b: f32| (a - b).abs() < 0.02;
+    let mut moved = Vec::new();
+    for (a, b) in old.iter().zip(&new) {
+        assert_eq!(a.target, b.target, "the same paint order");
+        let Some(frame) = script.target_frame(b.target) else {
+            continue;
+        };
+        if !under_ui_parent(&script, frame) {
+            continue;
+        }
+        let same_rect = match (a.rect, b.rect) {
+            (Some(ra), Some(rb)) => {
+                close(ra.left * S, rb.left)
+                    && close(ra.right * S, rb.right)
+                    && close(ra.top * S, rb.top)
+                    && close(ra.bottom * S, rb.bottom)
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_rect || !close(a.scale * S, b.scale) {
+            moved.push(format!(
+                "{:?} {:?}: {:?}×{S} vs {:?}",
+                script.target_owner_name(b.target),
+                std::mem::discriminant(&b.content),
+                a.rect,
+                b.rect
+            ));
+        }
+    }
+    assert!(
+        moved.is_empty(),
+        "{} quads inside UIParent moved, first: {:#?}",
+        moved.len(),
+        &moved[..moved.len().min(20)]
+    );
+
+    let inside = |hit: Option<benilla_ui::widget::FrameHandle>| {
+        hit.is_none_or(|h| under_ui_parent(&script, h))
+    };
+    let mut rehit = Vec::new();
+    for ((&at, a), b) in grid.iter().zip(&old_hits).zip(&new_hits) {
+        if inside(*a) && inside(*b) && a != b {
+            rehit.push(format!(
+                "{at:?}: {:?} vs {:?}",
+                a.and_then(|h| script.frame_name(h)),
+                b.and_then(|h| script.frame_name(h))
+            ));
+        }
+    }
+    assert!(
+        rehit.is_empty(),
+        "{} hits inside UIParent changed, first: {:#?}",
+        rehit.len(),
+        &rehit[..rehit.len().min(20)]
+    );
+}

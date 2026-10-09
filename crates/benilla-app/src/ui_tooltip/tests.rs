@@ -882,7 +882,6 @@ fn mouseover_app() -> (App, Entity, Entity) {
     let mut app = App::new();
     let (tx, _rx) = crossbeam_channel::unbounded();
     app.insert_resource(NetCommands(tx))
-        .insert_resource(crate::ui_script::UiScaleCvar(1.0))
         .init_resource::<Hovered>()
         .init_resource::<HoveredObject>()
         .init_resource::<NameCache>()

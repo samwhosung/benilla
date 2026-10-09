@@ -414,14 +414,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetScale",
         lua.create_function(|lua, (this, scale): (Table, f32)| {
             let h = frame_handle_of(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            let changed = model.arena.frame(h).is_some_and(|f| f.scale != scale);
-            model.arena.set_scale(h, scale);
-            if changed {
-                model.touch_layout();
-                // The owner's effective scale is in every descendant FontString's measure key.
-                model.touch_measure_all();
-            }
+            lua.app_data_mut::<Model>()
+                .expect("model")
+                .set_frame_scale(h, scale);
             Ok(())
         })?,
     )?;

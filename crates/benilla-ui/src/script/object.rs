@@ -352,19 +352,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let create_frame = lua.create_function(create_frame)?;
     lua.globals().set("CreateFrame", create_frame)?;
 
-    // `GetScreenWidth`/`GetScreenHeight`: the screen root's size in UI units.
+    // `GetScreenWidth`/`GetScreenHeight` (`0x48b480`/`0x48b4d0`): the screen root's size divided by
+    // `UIParent`'s scale (`GetUiScale`, `0x494590`), so they answer in `UIParent`'s units.
     lua.globals().set(
         "GetScreenWidth",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.screen.width())
+            Ok(model.screen.width() / super::ui_scale::ui_parent_scale(&model))
         })?,
     )?;
     lua.globals().set(
         "GetScreenHeight",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.screen.height())
+            Ok(model.screen.height() / super::ui_scale::ui_parent_scale(&model))
         })?,
     )?;
 
@@ -393,16 +394,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 fullscreen_scale(model.screen.width() / model.screen.height())
             };
             frame.call_method::<()>("SetScale", scale)
-        })?,
-    )?;
-
-    // `GetCursorPosition()`: the last cursor position the host fed, in screen UI units, y up, as
-    // the reference returns it; a caller in a scaled frame divides by its `GetEffectiveScale()`.
-    lua.globals().set(
-        "GetCursorPosition",
-        lua.create_function(|lua, ()| {
-            let model = lua.app_data_ref::<Model>().expect("model");
-            Ok(model.cursor_pos)
         })?,
     )?;
 

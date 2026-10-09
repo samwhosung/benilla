@@ -425,6 +425,7 @@ pub(super) fn tick_script(
     mut last_seam: Local<f32>,
     // The `scale_factor` measures were last answered under; 0 until the first frame.
     mut last_dpi: Local<f32>,
+    // The dial, `UIParent`'s scale in the VM.
     ui_scale: Res<super::UiScaleCvar>,
     mut ui_cost: ResMut<super::UiFrameCost>,
     mut pass: ResMut<super::UiPassState>,
@@ -442,9 +443,9 @@ pub(super) fn tick_script(
     };
     let (w, h) = (window.width(), window.height());
     // The client's UI space is 768 units tall at every aspect (`f(screenH) = 768`, `0x41ad10`; the
-    // caret's `H_px/192`, `0x77b8c0`), `768/uiScale` with the dial. The VM lives in it: quads
-    // scale ×s out, and the mouse and the measures ÷s in.
-    let s = super::seam_scale(h, ui_scale.0);
+    // caret's `H_px/192`, `0x77b8c0`), the dial being `UIParent`'s scale inside it. The VM lives in
+    // it: quads scale ×s out, and the mouse and the measures ÷s in.
+    let s = super::seam_scale(h);
     // A moved seam scale or DPI stales every text metric the engine caches: integer-stepped
     // advances do not rescale, and the size snap moves a string's width by several percent,
     // enough for the ellipsis to eat fitting text. A monitor hop moves the DPI alone.
@@ -486,8 +487,14 @@ pub(super) fn tick_script(
     {
         let _span = bevy::log::info_span!("ui_script: tick").entered();
         let resized = script.set_screen_size(w / s, if h > 0.0 { h / s } else { 768.0 });
-        // A resize re-runs what the interface computed from the old screen size.
+        // A display change re-applies the UI scale (`0x492e90`), whose narrow-aspect cap follows
+        // the window; a moved dial applies once, as its CVar callback does (`0x490770`).
         if resized {
+            script.apply_ui_scale();
+        }
+        let rescaled = script.set_ui_scale(ui_scale.0);
+        // Either re-runs what the interface computed from the old `GetScreenHeight()`.
+        if resized || rescaled {
             super::manifest::on_screen_resized(&script);
         }
         script.tick(time.delta_secs());
@@ -1713,9 +1720,10 @@ mod clip_plumb_tests {
         );
     }
 
-    /// At dial 0.5 the VM sees a 2048×1536 screen, and every window-px rect halves.
+    /// The dial is `UIParent`'s scale, so a ScrollFrame with no parent keeps its px rect and clip
+    /// at dial 0.5: the root stays 768 units tall.
     #[test]
-    fn the_uiscale_dial_scales_the_extracted_rects() {
+    fn the_uiscale_dial_leaves_a_parentless_frame_alone() {
         let mut app = app_with_scrolled_marker();
         app.insert_resource(crate::ui_script::UiScaleCvar(0.5));
         app.update();
@@ -1726,12 +1734,10 @@ mod clip_plumb_tests {
             .find(|q| q.color[0] == 1.0 && q.color[1] == 0.0 && q.color[2] == 0.0)
             .expect("the colored marker quad extracted");
 
-        // WoW space: top 1536 − 100 = 1436, bottom 1236, right 300; ×0.5 is y-up px 618..718,
-        // and y-down through the 768 window the top is 50 and the bottom 150.
         assert_eq!(
             marker.clip,
-            Some(Rect::new(0.0, 50.0, 150.0, 150.0)),
-            "dial 0.5 halves the px rect and re-hangs the frame from the taller virtual top"
+            Some(Rect::new(0.0, 100.0, 300.0, 300.0)),
+            "dial 0.5 moves nothing outside UIParent"
         );
     }
 

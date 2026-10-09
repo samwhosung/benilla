@@ -130,6 +130,7 @@ mod tooltip_item;
 mod tooltip_spell;
 mod tooltip_unit;
 mod ui_errors;
+mod ui_scale;
 pub use tooltip_unit::TooltipTint;
 mod trade;
 mod tradeskill;
@@ -724,7 +725,8 @@ impl UiScript {
         self.model_mut().minimap_ping = ping;
     }
 
-    /// Drain a `Minimap:PingLocation(x, y)`: centre-relative offsets in UI units, x right, y up.
+    /// Drain a `Minimap:PingLocation(x, y)`: centre-relative offsets in the screen root's units,
+    /// x right, y up.
     pub fn take_minimap_ping_request(&mut self) -> Option<(f32, f32)> {
         self.model_mut().minimap_ping_request.take()
     }

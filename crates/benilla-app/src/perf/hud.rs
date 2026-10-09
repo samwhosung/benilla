@@ -113,9 +113,9 @@ pub(super) fn refresh_hud_snapshot(
 /// clear). The always-up world-state readout (`WorldStateAlwaysUpFrame`, stock
 /// `WorldStateFrame.xml`) shares the band, and the dev pill is the one that yields.
 ///
-/// The layout answers in UI units, a screen `768/uiScale` units tall whatever the window, while
-/// the pill draws in window px, so the chunk returns a fraction of the screen and the caller
-/// scales it by the window height. Reading an edge settles the layout, one graph solve at most.
+/// The layout answers in `UIParent`'s units, a screen `768/uiScale` units tall whatever the
+/// window, while the pill draws in window px, so the chunk returns a fraction of the screen and the
+/// caller scales it by the window height. Reading an edge settles the layout, one graph solve at most.
 pub(crate) fn top_centre_claimed(script: &UiScript, win_h: f32) -> f32 {
     // `WorldStateAlwaysUpFrame` is always shown; the readout occupies its `AlwaysUpFrame<n>` rows,
     // built on demand and hidden when empty, so the claim is the lowest shown row's bottom.

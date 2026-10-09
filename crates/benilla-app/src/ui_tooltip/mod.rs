@@ -114,8 +114,6 @@ fn drive_mouseover_tooltip(
     go_inputs: crate::target::lock::GoLockInputs,
     // The known-spell set the resolver's SKILL arm scans.
     player_actions: Res<crate::ui_action::PlayerActions>,
-    // The cursor seat crosses the VM seam: the anchor below is UI units, not px.
-    ui_scale: Res<crate::ui_script::UiScaleCvar>,
     mut memo: HoverMemo,
     // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input, and the form table the creature type
     // reads.
@@ -229,15 +227,17 @@ fn drive_mouseover_tooltip(
                 .templates
                 .get(guid)
                 .is_some_and(|t| t.floating_tooltip);
-        // Window px to the VM's y-up UI units, as the input seam converts.
+        // Window px to the VM's y-up root units, as the input seam converts.
         let cursor_ui = cursor_seated
             .then(|| {
                 window.iter().next().and_then(|w| {
-                    let s = crate::ui_script::seam_scale(w.height(), ui_scale.0);
                     // The hover probe's aim stands in for a missing cursor; a real pointer wins.
                     w.cursor_position()
                         .or_else(crate::target::hover_probe_point)
-                        .map(|c| (c.x / s, (w.height() - c.y) / s))
+                        .map(|c| {
+                            let at = crate::ui_script::window_to_ui(w.height(), c);
+                            (at.x, at.y)
+                        })
                 })
             })
             .flatten();

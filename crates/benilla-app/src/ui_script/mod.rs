@@ -1,8 +1,9 @@
 //! The UI-engine bridge: hosts [`benilla_ui::script::UiScript`] and feeds its
 //! [`extract`](benilla_ui::script::UiScript::extract) output into the quad pass
 //! ([`crate::ui_pass::UiQuads`]) every frame. The script side is WoW UI space (y-up, origin
-//! bottom-left, a screen `768/uiScale` units tall); [`seam_scale`] carries quads ×s out and the
-//! mouse ÷s in, and extraction flips to y-down window px.
+//! bottom-left, a screen root 768 units tall at scale 1); [`seam_scale`] carries quads ×s out and
+//! the mouse ÷s in, and extraction flips to y-down window px. The UI scale is `UIParent`'s own
+//! frame scale inside the VM ([`UiScaleCvar`]), never part of the seam.
 
 use bevy::prelude::*;
 
@@ -199,8 +200,10 @@ pub(crate) fn run_or_warn(script: &benilla_ui::script::UiScript, chunk: &str) {
     }
 }
 
-/// The reference's `uiScale` CVar: the VM's screen is `768/uiScale` units tall, so
-/// `uiScale = 768/screenH` is pixel-perfect. Tests pin the `Default` 1.0.
+/// The reference's `uiScale` CVar, which the VM makes `UIParent`'s own scale
+/// ([`UiScript::set_ui_scale`]): the screen root stays 768 units tall, so `uiScale = 768/screenH`
+/// is pixel-perfect inside `UIParent`, and a frame outside it is not scaled. Tests pin the
+/// `Default` 1.0.
 #[derive(Resource)]
 pub(crate) struct UiScaleCvar(pub(crate) f32);
 
@@ -213,6 +216,8 @@ impl Default for UiScaleCvar {
 /// The shipped `uiScale`. Deviation: a flat 0.9, because 1.0 reads oversized. With `useUiScale`
 /// off, its default (`0x8430c0`), the reference sets `max(768/H, 0.9)` above 768 px tall and 1.0
 /// at or below (`0x492f70`, on a mode set and from `0x4908ad`), so the two agree from ~853 px up.
+/// benilla never reads `useUiScale`: this CVar always applies, through the ON leg's own ladder
+/// (`0x490770`, `0x492e90`: the narrow-aspect cap and the 0.64 floor), to `UIParent` alone.
 pub(crate) const DEFAULT_UI_SCALE: f32 = 0.9;
 
 /// `WOW_UI_SCALE=` if set, clamped to the dial's range, else [`DEFAULT_UI_SCALE`].
@@ -224,14 +229,22 @@ fn default_ui_scale() -> f32 {
         .unwrap_or(DEFAULT_UI_SCALE)
 }
 
-/// The seam scale `s`, window px per UI unit (`windowH/768 × uiScale`), used at every crossing of
-/// the VM boundary; identity for a degenerate window (h ≤ 0, before winit).
-pub(crate) fn seam_scale(window_h: f32, ui_scale: f32) -> f32 {
+/// The seam scale `s`, window px per screen-root unit (`windowH/768`: the root is 768 units tall at
+/// every aspect, `0x41ad10`), used at every crossing of the VM boundary; identity for a degenerate
+/// window (h ≤ 0, before winit). The UI scale is not in it: it is `UIParent`'s, inside the VM.
+pub(crate) fn seam_scale(window_h: f32) -> f32 {
     if window_h > 0.0 {
-        window_h / 768.0 * ui_scale
+        window_h / 768.0
     } else {
         1.0
     }
+}
+
+/// A window cursor (logical px, y-down from the top left) in the VM's root units, y up: what the
+/// pointer feed hands the engine and `GetCursorPosition` answers (`0x48b820`, no scale divided out).
+pub(crate) fn window_to_ui(window_h: f32, cursor: Vec2) -> Vec2 {
+    let s = seam_scale(window_h);
+    Vec2::new(cursor.x / s, (window_h - cursor.y) / s)
 }
 
 /// The Lua UI host (a `NonSend` resource: an mlua VM is `!Send`) and its per-frame passes.
@@ -989,19 +1002,26 @@ mod world_map_tests;
 
 #[cfg(test)]
 mod seam_scale_tests {
-    use super::seam_scale;
+    use super::{seam_scale, window_to_ui};
+    use bevy::math::Vec2;
 
     #[test]
-    fn seam_scale_is_the_768_base_times_the_dial() {
+    fn seam_scale_is_the_768_tall_root() {
         // Identity at the design height, proportional elsewhere.
-        assert_eq!(seam_scale(768.0, 1.0), 1.0);
-        assert_eq!(seam_scale(1536.0, 1.0), 2.0);
-        // The dial multiplies it.
-        assert_eq!(seam_scale(768.0, 0.9), 0.9);
-        // The reference's pixel-perfect setting: uiScale = 768/screenH → 1 px per UI unit.
-        assert!((seam_scale(1080.0, 768.0 / 1080.0) - 1.0).abs() < 1e-6);
+        assert_eq!(seam_scale(768.0), 1.0);
+        assert_eq!(seam_scale(1536.0), 2.0);
         // A degenerate (pre-winit) window is identity, never a division blow-up.
-        assert_eq!(seam_scale(0.0, 0.9), 1.0);
+        assert_eq!(seam_scale(0.0), 1.0);
+    }
+
+    /// `GetCursorPosition` answers root units whatever the dial: the bottom of a 1080-tall window
+    /// is 0 and its top 768, its middle column `768·a/2`.
+    #[test]
+    fn the_cursor_reaches_the_vm_in_root_units() {
+        let at = window_to_ui(1080.0, Vec2::new(960.0, 108.0));
+        assert!((at.x - 960.0 * 768.0 / 1080.0).abs() < 1e-3, "{at}");
+        assert!((at.y - 972.0 * 768.0 / 1080.0).abs() < 1e-3, "{at}");
+        assert_eq!(window_to_ui(1080.0, Vec2::new(0.0, 1080.0)), Vec2::ZERO);
     }
 }
 

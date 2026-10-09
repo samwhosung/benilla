@@ -160,7 +160,6 @@ pub(super) type BlipInputs<'w, 's> = (
     Query<'w, 's, &'static GlobalTransform, With<NetEntity>>,
     Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     ResMut<'w, MinimapBlipHover>,
-    Res<'w, crate::ui_script::UiScaleCvar>,
     Res<'w, crate::ui_party::GroupState>,
     TrackedCandidates<'w, 's>,
     Query<'w, 's, (&'static ObjectStore, &'static Guid), With<SelfPlayer>>,
@@ -200,11 +199,11 @@ pub(super) struct BlipCtx {
     pub(super) wz: f32,
     /// The cursor in the quads' y-down logical px.
     pub(super) cursor: Option<Vec2>,
-    /// The cursor in y-up UI space; the reference seats the blip tooltip at the cursor, its exact
-    /// offset untraced.
+    /// The cursor in the y-up root units; the reference seats the blip tooltip at the cursor, its
+    /// exact offset untraced.
     pub(super) cursor_ui: Option<Vec2>,
-    /// Window px per UI unit: everything else here is window px, while Lua
-    /// ([`Minimap:PingLocation`](super::ping)) speaks UI units.
+    /// Window px per root unit: everything else here is window px, while Lua
+    /// ([`Minimap:PingLocation`](super::ping)) hands root units.
     pub(super) seam: f32,
 }
 

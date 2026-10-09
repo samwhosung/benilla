@@ -94,8 +94,6 @@ pub(super) fn feed_ui_input(
     ),
     // The characters the active layout makes, which name a key for a keyboard frame.
     layout: Res<crate::bindings::LayoutNames>,
-    // The uiScale dial folded into the seam scale.
-    ui_scale: Res<super::UiScaleCvar>,
 ) {
     let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
     let world_pick = pointer.world_pick();
@@ -139,10 +137,8 @@ pub(super) fn feed_ui_input(
         .or_else(crate::target::hover_probe_point)
         .filter(|_| !synthetic)
     {
-        // The window cursor is logical px, y-down from the top left; the UI is y-up in 768-high
-        // units under uiScale: flip through the window height, then undo the extract seam's scale.
-        let s = super::seam_scale(window.height(), ui_scale.0);
-        let (x, y) = (cursor.x / s, (window.height() - cursor.y) / s);
+        // The window cursor in the root's y-up 768-high units, as `GetCursorPosition` answers it.
+        let Vec2 { x, y } = super::window_to_ui(window.height(), cursor);
         // `WOW_HIT_COST=1` meters this call's per-frame hit-test rebuild, one line a second.
         static HIT_COST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let metering =

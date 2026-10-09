@@ -308,7 +308,6 @@ fn drive_vplates(
     net_commands: Res<NetCommands>,
     // `None` in a run with no UI VM.
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
-    ui_scale: Res<crate::ui_script::UiScaleCvar>,
     anchor_q: (
         Query<&BoneAttach>,
         Query<&benilla_world::rig_anim::RigPose>,
@@ -374,10 +373,8 @@ fn drive_vplates(
 
     let (pw, ph) = (gx(PLATE_W), gx(PLATE_H));
     let scale = window.map_or(1.0, |w| w.scale_factor());
-    // Everything below is in window px, divided by this once for the widget layer's units.
-    let seam = window.map_or(1.0, |w| {
-        crate::ui_script::seam_scale(w.height(), ui_scale.0)
-    });
+    // Everything below is in window px, divided by this once for the widget layer's root units.
+    let seam = window.map_or(1.0, |w| crate::ui_script::seam_scale(w.height()));
     let mut states: Vec<PlateState> = Vec::new();
 
     // Plates seat in squared-distance order from the gx point (0.4, 0.3), Y mirrored from the
@@ -541,9 +538,8 @@ fn drive_vplates(
         }
         // ── The plate's state, handed to the widget layer ──
         //
-        // The reference's plates sit outside the uiScale cascade, but benilla folds uiScale into
-        // one global seam, so dividing by it here keeps plate pixels uiScale-blind.
-        // The raid-target index is 1-based here, 0-based for the atlas cell.
+        // The plates hang off `WorldFrame`, outside `UIParent`'s scale, so root units are their
+        // own. The raid-target index is 1-based here, 0-based for the atlas cell.
         let mark = group.raid_target_index(guid.0);
         let x_units = (plate.min.x + plate.max.x) * 0.5 / seam;
         let y_units = (viewport.y - plate.min.y) / seam;

@@ -230,26 +230,22 @@ pub(crate) fn run_pending_entry_load(world: &mut World) {
     );
 }
 
-/// Seat the VM's screen size and text measurer for the load, under the current window and
-/// `uiScale`: the load-edge half of [`super::extract::tick_script`]'s per-frame pair. A fresh VM
-/// answers 1024×768 until then, and a value computed once at load keeps it: stock
-/// `WorldMapFrame_OnLoad` sizes the full-screen `BlackoutWorld` from `GetScreenWidth()` and
-/// `GetScreenHeight()` and never again (`WorldMapFrame.lua:19-28`). With no atlas yet (it bakes on
-/// the first `Update`) the per-frame pass seats the measurer.
+/// Seat the VM's screen size and text measurer for the load, under the current window: the
+/// load-edge half of [`super::extract::tick_script`]'s per-frame pair. A fresh VM answers 1024×768
+/// until then, and a value computed once at load keeps it: stock `WorldMapFrame_OnLoad` sizes the
+/// full-screen `BlackoutWorld` from `GetScreenWidth()` and `GetScreenHeight()` and never again
+/// (`WorldMapFrame.lua:19-28`), which answer the root while `UIParent` is still at scale 1. With no
+/// atlas yet (it bakes on the first `Update`) the per-frame pass seats the measurer.
 fn seat_raster_seam_for_load(world: &mut World, script: &mut UiScript) {
-    let ui_scale = world
-        .get_resource::<super::UiScaleCvar>()
-        .map_or(1.0, |c| c.0);
     let (w, h) = {
         let mut q = world.query_filtered::<&Window, With<bevy::window::PrimaryWindow>>();
         q.single(world)
             .map_or((0.0, 0.0), |win| (win.width(), win.height()))
     };
-    let s = super::seam_scale(h, ui_scale);
+    let s = super::seam_scale(h);
     if w > 0.0 && h > 0.0 {
-        // The VM lives in 768-tall virtual space, so logical size over the seam scale is its
-        // screen. No `UIParent_ManageFramePositions` here, unlike `tick_script`: nothing is laid
-        // out yet.
+        // The VM lives in a 768-tall root, so logical size over the seam scale is its screen. No
+        // `UIParent_ManageFramePositions` here, unlike `tick_script`: nothing is laid out yet.
         script.set_screen_size(w / s, h / s);
     }
     let Some(atlas) = world.get_resource::<crate::ui_text::UiFontAtlas>() else {
@@ -387,6 +383,9 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // text width, `UIPanelTemplates.xml:370-373`), which answers 0 with no measurer.
     seat_raster_seam_for_load(world, &mut script);
     // Read out of the world first: the bracket below borrows `world` for the chat-cache restore.
+    let ui_scale = world
+        .get_resource::<super::UiScaleCvar>()
+        .map_or(1.0, |c| c.0);
     let zoom = {
         let z = world.resource::<crate::minimap::MinimapZoom>();
         (z.outdoor, z.inside)
@@ -421,6 +420,11 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
             |script| crate::vplates::seat_legacy_settings(script, &legacy_plates),
             |script| {
                 crate::ui_chat::restore_chat_looks(world, script);
+                // The UI scale lands on `UIParent` once the files, the addons and
+                // `VARIABLES_LOADED` are done, after the chat reader (`0x4900d6`) and before the
+                // `PLAYER_LOGIN` arm (`0x49011d`): `0x49010e` → `0x492e90` → `0x494550`. So every
+                // `OnLoad` sees `UIParent` at scale 1 and the root's size on screen.
+                script.set_ui_scale(ui_scale);
             },
         );
     });
@@ -766,10 +770,10 @@ pub(crate) fn finish_ui_load(script: &mut UiScript) {
 
 /// [`finish_ui_load`] with its two host seams. `host_settings` runs between the saved-variables
 /// chunk and `VARIABLES_LOADED`, carrying over a setting `config.toml` held before it moved into
-/// the saved variables. `between` is the chat-cache restore's `UPDATE_CHAT_WINDOWS` +
-/// `UPDATE_CHAT_COLOR` burst, after `VARIABLES_LOADED` and before the `PLAYER_LOGIN` arm (so
-/// before the event too), where the reference registers its reader
-/// (`0x4900d6` → `0x498a20`). On a fresh login the reference's cache (`0x5afe50`) defers that
+/// the saved variables. `between` runs after `VARIABLES_LOADED` and before the `PLAYER_LOGIN` arm
+/// (so before the event too): the chat-cache restore's `UPDATE_CHAT_WINDOWS` +
+/// `UPDATE_CHAT_COLOR` burst, where the reference registers its reader (`0x4900d6` → `0x498a20`),
+/// then the UI scale (`0x49010e`). On a fresh login the reference's cache (`0x5afe50`) defers that
 /// reader until the server's account data reconciles (`0x5afa42`/`0x5afd01`), after `UI_Init` has
 /// returned. Either way a `VARIABLES_LOADED` handler sees the boot chat colours, not the file's.
 pub(crate) fn finish_ui_load_with(

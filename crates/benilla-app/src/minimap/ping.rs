@@ -5,9 +5,10 @@
 //! [`drive_minimap_ping`] republishes against the live view radius, so the marker follows the pan
 //! and the zoom with no second copy to fall out of step.
 //!
-//! - In: the stock `Minimap_OnClick` calls `Minimap:PingLocation(dx, dy)` in UI units from the
-//!   centre; the renderer converts it with the geometry of the frame it draws: UI units × the seam
-//!   scale = window px, ÷ `px_per_yd` = yards.
+//! - In: the stock `Minimap_OnClick` calls `Minimap:PingLocation(dx, dy)` in the minimap's units
+//!   from the centre, which the engine hands over in root units; the renderer converts them with
+//!   the geometry of the frame it draws: root units × the seam scale = window px, ÷ `px_per_yd` =
+//!   yards.
 //! - Across: our ping sends `MSG_MINIMAP_PING` (raw world floats, relayed to the rest of the group
 //!   only, `GroupHandler.cpp:384-391`); a member's seats the same way. A ping seats locally at
 //!   click time, so a solo ping works.
@@ -59,8 +60,8 @@ impl MinimapPing {
     }
 }
 
-/// A `Minimap:PingLocation(x, y)` click to the world point it names: `ui` is centre-relative UI
-/// units (x right, y up), `seam` window px per UI unit ([`crate::ui_script::seam_scale`]), `ctx`
+/// A `Minimap:PingLocation(x, y)` click to the world point it names: `ui` is centre-relative root
+/// units (x right, y up), `seam` window px per root unit ([`crate::ui_script::seam_scale`]), `ctx`
 /// the map as drawn this frame. The inverse of [`BlipCtx::offset`]: screen right is −WoW y, screen
 /// up +WoW x. `None` outside the disc, the stock test (`Minimap.lua:135`) in yards.
 fn click_to_world(ctx: &BlipCtx, ui: (f32, f32), seam: f32) -> Option<(f32, f32)> {
@@ -193,13 +194,13 @@ mod tests {
         }
     }
 
-    /// The click is in UI units and `px_per_yd` in window px: at 0.9 uiScale on a 1080p window the
-    /// seam is ≈1.27, and a conversion that skips it seats every ping ≈27 % too far out.
+    /// The click is in root units and `px_per_yd` in window px: on a 1080p window the seam is
+    /// ≈1.41, and a conversion that skips it seats every ping ≈41 % too far out.
     #[test]
     fn a_click_converts_through_the_seam_scale() {
         let c = ctx();
-        let seam = 1080.0 / 768.0 * 0.9; // the shipped default at 1080p
-                                         // 20 UI units right → 20·seam px → yards west (−y).
+        let seam = 1080.0 / 768.0;
+        // 20 root units right → 20·seam px → yards west (−y).
         let (x, y) = click_to_world(&c, (20.0, 0.0), seam).expect("inside the disc");
         let expect_yd = 20.0 * seam / c.px_per_yd;
         assert!((x - 0.0).abs() < 1e-3, "no northing from a due-east click");

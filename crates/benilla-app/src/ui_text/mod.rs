@@ -52,11 +52,12 @@ pub(crate) fn fontstring_em(height: Option<f32>) -> Option<f32> {
     height.map(|h| h.min(FONTSTRING_EM_CAP))
 }
 
-/// The drawn pixel height of a UI FontString times the seam scale `s = windowH/768 × uiScale`
-/// (`crate::ui_script::seam_scale`), under the reference's two size regimes (getter `0x7727b0`):
-/// one-to-one, the default, draws the raster size ([`FONTSTRING_EM_CAP`] applied in units), and a
-/// `SetTextHeight` size (`text_height`) draws uncapped, the reference magnifying the raster to it
-/// (`0x771600` clears bit `0x200`; the drawn em is `round(size/768·deviceH)`).
+/// The drawn pixel height of a UI FontString at `s`, the seam scale `windowH/768`
+/// (`crate::ui_script::seam_scale`) times the owner's effective scale, the UI scale included,
+/// under the reference's two size regimes (getter `0x7727b0`): one-to-one, the default, draws the
+/// raster size ([`FONTSTRING_EM_CAP`] applied in units), and a `SetTextHeight` size
+/// (`text_height`) draws uncapped, the reference magnifying the raster to it (`0x771600` clears bit
+/// `0x200`; the drawn em is `round(size/768·deviceH)`).
 pub(crate) fn drawn_px(font_height: Option<f32>, text_height: Option<f32>, s: f32) -> Option<f32> {
     match text_height {
         Some(t) => Some(t * s),

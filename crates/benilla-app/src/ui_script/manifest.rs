@@ -68,13 +68,13 @@ pub(super) fn apply_buff_durations(script: &UiScript) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// What a screen-size change re-runs, from `extract::tick_script`'s resize arm: anchors follow the
-/// screen, but not a size or seat computed from the old one. The managed pass re-wraps the open
-/// bags, whose columns `updateContainerFrameAnchors` lays out by `GetScreenHeight()`.
+/// What a screen-size or UI-scale change re-runs, from `extract::tick_script`: anchors follow the
+/// screen, but not a size or seat computed from the old `GetScreenHeight()`. The managed pass
+/// re-wraps the open bags, whose columns `updateContainerFrameAnchors` lays out by it.
 /// Deviation: [`FULLSCREEN_QUADS_RESEAT`] re-sizes the full-screen quads, which the stock files
-/// size only in their OnLoads, because a resize or `uiScale` change here keeps the loaded UI and
-/// the blackout would stop short of the new screen. Host-side, not in the layer: it adapts the
-/// engine's resizable window, and changes nothing the stock UI does at a fixed size.
+/// size only in their OnLoads, because a resize here keeps the loaded UI and the blackout would
+/// stop short of the new screen. Host-side, not in the layer: it adapts the engine's resizable
+/// window, and changes nothing the stock UI does at a fixed size.
 pub(super) fn on_screen_resized(script: &UiScript) {
     let _ = script.run("if UIParent_ManageFramePositions then UIParent_ManageFramePositions() end");
     if let Err(e) = script.run(FULLSCREEN_QUADS_RESEAT) {
@@ -85,11 +85,14 @@ pub(super) fn on_screen_resized(script: &UiScript) {
 /// The sizing arithmetic of `WorldMapFrame_OnLoad` (`WorldMapFrame.lua:19-28`) and
 /// `CinematicFrame_OnLoad` (`CinematicFrame.lua:6-21`), each existence-guarded: the glue screens
 /// have neither. Below 4:3 the bars go back to `CinematicFrame.xml`'s declared 1024 x 128, where
-/// the stock OnLoad leaves them.
+/// the stock OnLoad leaves them. The OnLoads read the screen root's size, `UIParent` being still at
+/// scale 1 then, and their frames hang off the root, so this re-reads the root:
+/// `GetScreenWidth()` times `UIParent`'s scale.
 const FULLSCREEN_QUADS_RESEAT: &str = r#"
+local rootScale = UIParent and UIParent:GetEffectiveScale() or 1
 if BlackoutWorld then
-    local width = GetScreenWidth()
-    local height = GetScreenHeight()
+    local width = GetScreenWidth() * rootScale
+    local height = GetScreenHeight() * rootScale
     if ( width / height < 4 / 3 ) then
         width = width * 1.25
         height = height * 1.25
@@ -98,8 +101,8 @@ if BlackoutWorld then
     BlackoutWorld:SetHeight( height )
 end
 if UpperBlackBar and LowerBlackBar then
-    local width = GetScreenWidth()
-    local height = GetScreenHeight()
+    local width = GetScreenWidth() * rootScale
+    local height = GetScreenHeight() * rootScale
     local barWidth, blackBarHeight = 1024, 128
     if ( width / height > 4 / 3 ) then
         local desiredHeight = width / 2
