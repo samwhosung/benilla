@@ -773,6 +773,28 @@ fn leaving_inside_the_deferral_window_drops_the_load_and_writes_nothing() {
 
 // ───────────── The login one-shots wait for the in-game UI ─────────────
 
+/// An app running the unit feed after `Startup`, with what the feed reads; the receiver is the
+/// wire, kept alive beside it.
+fn unit_feed_app() -> (App, crossbeam_channel::Receiver<crate::net::ClientCommand>) {
+    let mut app = App::new();
+    app.add_plugins(crate::ui_unit::UiUnitPlugin);
+    app.init_resource::<super::AddOnIdentity>();
+    app.init_resource::<crate::minimap::MinimapZoom>();
+    app.init_resource::<super::ReloadUiPending>();
+    app.init_resource::<crate::target::Selection>();
+    app.init_resource::<crate::names::NameCache>();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(crate::net::NetCommands(tx));
+    app.init_resource::<crate::net::Reputations>();
+    app.init_resource::<crate::ui_party::GroupState>();
+    app.init_resource::<crate::ui_chat::ChatLog>();
+    app.init_resource::<crate::ui_guild::GuildState>();
+    app.add_message::<crate::creature_anim::SwingImpact>();
+    app.add_message::<crate::net::WorldEnterCascadeMessage>();
+    super::setup_script(app.world_mut());
+    (app, rx)
+}
+
 /// The unit feed's login one-shots (`PLAYER_ENTERING_WORLD`, the first `PLAYER_XP_UPDATE` and
 /// `UPDATE_EXHAUSTION`) wait for the in-game UI instead of reaching a VM with no frames.
 #[test]
@@ -781,22 +803,7 @@ fn the_login_one_shots_wait_for_the_in_game_ui() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_probe("oneshot");
-
-    let mut app = App::new();
-    app.add_plugins(crate::ui_unit::UiUnitPlugin);
-    app.init_resource::<super::AddOnIdentity>();
-    app.init_resource::<crate::minimap::MinimapZoom>();
-    app.init_resource::<super::ReloadUiPending>();
-    app.init_resource::<crate::target::Selection>();
-    app.init_resource::<crate::names::NameCache>();
-    let (tx, _rx) = crossbeam_channel::unbounded();
-    app.insert_resource(crate::net::NetCommands(tx));
-    app.init_resource::<crate::net::Reputations>();
-    app.init_resource::<crate::ui_party::GroupState>();
-    app.init_resource::<crate::ui_chat::ChatLog>();
-    app.init_resource::<crate::ui_guild::GuildState>();
-    app.add_message::<crate::creature_anim::SwingImpact>();
-    super::setup_script(app.world_mut());
+    let (mut app, _rx) = unit_feed_app();
 
     // A frame registered as FrameXML registers, in the VM that exists before the entry load.
     app.world()
@@ -1574,5 +1581,145 @@ fn a_login_and_a_reload_load_without_the_lost_target_sound() {
     );
 
     drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ───────────── PLAYER_LOGIN fires from the world-enter cascade ─────────────
+
+/// Records what file scope and the two cascade events see of `"player"`, in order.
+const LOGIN_PROBE_LUA: &str = "\
+LoginProbe = { order = \"\", fileExists = tostring(UnitExists(\"player\")),
+    fileLevel = UnitLevel(\"player\") }
+local f = CreateFrame(\"Frame\")
+f:RegisterEvent(\"PLAYER_LOGIN\")
+f:RegisterEvent(\"PLAYER_ENTERING_WORLD\")
+f:SetScript(\"OnEvent\", function()
+    if event == \"PLAYER_LOGIN\" then
+        LoginProbe.order = LoginProbe.order .. \"LOGIN:\" .. tostring(UnitExists(\"player\"))
+            .. \":\" .. UnitLevel(\"player\") .. \":\" .. UnitXP(\"player\") .. \" \"
+    else
+        LoginProbe.order = LoginProbe.order .. \"PEW \"
+    end
+end)
+";
+
+const LOGIN_PROBE_TOC: &str = "## Interface: 11200\nLoginProbe.lua\n";
+
+/// Our own player as its create lands: level 17, 1234 of 5000 XP.
+fn spawn_self_player(world: &mut World) -> Entity {
+    use benilla_protocol::messages::{ObjectFields, ObjectType};
+    // `PLAYER_XP` and `PLAYER_NEXT_LEVEL_XP`, 716 and 717 in the 1.12 descriptor.
+    let fields = ObjectFields::from_pairs(&[
+        (benilla_protocol::field::FIELD_UNIT_LEVEL, 17),
+        (716, 1234),
+        (717, 5000),
+    ])
+    .into_created(ObjectType::Player);
+    world
+        .spawn((
+            crate::net::SelfPlayer,
+            crate::net::Guid(1),
+            crate::net::ObjectStore(fields),
+        ))
+        .id()
+}
+
+/// A probe global off the live VM, as a string.
+fn login_probe(app: &App, field: &str) -> String {
+    app.world()
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .eval::<Option<String>>(&format!("return tostring(LoginProbe.{field})"))
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// `PLAYER_LOGIN` has one fire site, `0x490959` in the world-enter cascade `0x4908c0`, which the
+/// UI load only arms (`0x49011d`). A fresh login skips the load's own entry (`0x490166 je`) and
+/// runs the cascade from the player's create (`0x5deb60`), so its handlers see the player, and
+/// `PLAYER_ENTERING_WORLD` follows at once (`0x49096a`). A worldport loads no UI, so its cascade
+/// finds the arm spent and fires 272 alone.
+#[test]
+fn player_login_fires_from_the_world_entry_with_the_player_seated() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_addon("login", "LoginProbe", LOGIN_PROBE_TOC, LOGIN_PROBE_LUA);
+    let (mut app, _rx) = unit_feed_app();
+    app.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+    app.insert_resource(roster_named("Probelogin", 1));
+    super::load_ingame_ui_on_world_entry(app.world_mut());
+
+    assert_eq!(
+        login_probe(&app, "fileExists"),
+        "nil",
+        "a fresh login's file scope runs before the player object exists"
+    );
+    assert_eq!(
+        login_probe(&app, "order"),
+        "",
+        "the load arms PLAYER_LOGIN; nothing fires it before the player is in the world"
+    );
+
+    let me = spawn_self_player(app.world_mut());
+    app.update();
+    assert_eq!(
+        login_probe(&app, "order"),
+        "LOGIN:1:17:1234 PEW ",
+        "PLAYER_LOGIN sees the player's own unit, then PLAYER_ENTERING_WORLD fires at once"
+    );
+    app.update();
+    assert_eq!(login_probe(&app, "order"), "LOGIN:1:17:1234 PEW ");
+
+    // A cross-map worldport: the player object is destroyed and created again.
+    app.world_mut().despawn(me);
+    app.update();
+    spawn_self_player(app.world_mut());
+    app.update();
+    assert_eq!(
+        login_probe(&app, "order"),
+        "LOGIN:1:17:1234 PEW PEW ",
+        "a worldport re-fires PLAYER_ENTERING_WORLD and not PLAYER_LOGIN"
+    );
+
+    drop(app);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// On a `/reload` the player object stays in the world: `UI_Init` runs its file scope against it
+/// and enters the cascade itself (`0x490168`), so `PLAYER_LOGIN` then `PLAYER_ENTERING_WORLD` fire
+/// once each on the new VM, both seeing the player.
+#[test]
+fn a_reload_fires_player_login_once_against_the_live_player() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_addon("relogin", "LoginProbe", LOGIN_PROBE_TOC, LOGIN_PROBE_LUA);
+    let (mut app, _rx) = unit_feed_app();
+    app.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+    app.insert_resource(roster_named("Probelogin", 1));
+    super::load_ingame_ui_on_world_entry(app.world_mut());
+    spawn_self_player(app.world_mut());
+    app.update();
+    assert_eq!(login_probe(&app, "order"), "LOGIN:1:17:1234 PEW ");
+
+    reload(app.world_mut(), crate::char_select::ClientState::InWorld);
+    assert_eq!(
+        (
+            login_probe(&app, "fileExists"),
+            login_probe(&app, "fileLevel")
+        ),
+        ("1".to_string(), "17".to_string()),
+        "the reloaded file scope runs against the live player"
+    );
+    app.update();
+    app.update();
+    assert_eq!(
+        login_probe(&app, "order"),
+        "LOGIN:1:17:1234 PEW ",
+        "the new VM gets PLAYER_LOGIN then PLAYER_ENTERING_WORLD, once each"
+    );
+
+    drop(app);
     let _ = std::fs::remove_dir_all(&tmp);
 }
