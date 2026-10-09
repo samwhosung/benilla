@@ -509,3 +509,49 @@ fn on_cursor_changed_reports_the_first_row_at_plus_zero() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// [`Mono`] as the host answers a scaled box: glyphs 7 and lines 14 in the box's own units, the
+/// table in root units (measured at the box's scale, divided by the seam alone).
+struct ScaledMono;
+
+impl TextMeasure for ScaledMono {
+    fn measure(&mut self, req: &MeasureRequest) -> (f32, f32, f32) {
+        Mono.measure(req)
+    }
+
+    fn editbox_advances(
+        &mut self,
+        req: &EditBoxAdvanceRequest,
+    ) -> Option<(Vec<f32>, Vec<usize>, f32)> {
+        let (cum, rows, pitch) = Mono.editbox_advances(req)?;
+        let k = req.scale;
+        Some((cum.into_iter().map(|a| a * k).collect(), rows, pitch * k))
+    }
+}
+
+/// `OnCursorChanged` answers in the box's own units: the reference divides by its effective scale
+/// (`0x77db23 fdiv [esi+0x7c]`), so a half-scale box reports what a full-scale one does.
+#[test]
+fn on_cursor_changed_answers_in_the_boxs_own_units() {
+    let mut s = script();
+    s.set_text_measurer(Box::new(ScaledMono));
+    logged_box(&mut s);
+    s.run(
+        r#"
+        E:SetScale(0.5)
+        E:SetScript("OnCursorChanged", function()
+            table.insert(LOG, format("cursor@%g,%g,%g", arg1, arg2, arg4))
+        end)
+        E:SetMultiLine(true)
+        E:SetText("abc\nd")
+    "#,
+    )
+    .unwrap();
+    s.tick(0.016);
+    assert_eq!(
+        take_log(&s),
+        "early update cursor@7,-14,14 text:abc\nd late",
+        "one glyph along the second row, a row pitch down, one pitch tall"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

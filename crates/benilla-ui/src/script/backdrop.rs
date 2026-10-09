@@ -124,10 +124,15 @@ fn aa_corners(x0: f32, x1: f32, y_bottom: f32, y_top: f32) -> [[f32; 2]; 4] {
 /// The drawable pieces for a frame's resolved rect (y-up), in paint order: the background (layer
 /// `BACKGROUND`), then the 8 border pieces (layer `BORDER`). Geometry `0x77e8d0`, UVs `0x77f0c0`.
 /// The pieces are textures anchored and sized in the frame's own units, so the layout multiplies
-/// every length by the frame's effective `scale` (`0x76ac90`), as it does any region's.
+/// their geometry by the frame's effective `scale` (`0x76ac90`), as it does any region's. The
+/// texcoord repeats are not: `0x77f0c0` divides the scaled rect by the stored, unscaled
+/// `edgeSize` and `tileSize` (`0x77f101 fdiv [esi+0x48]`, `0x77f195`), so a scaled frame's edge
+/// and background repeat the art more or less often than at scale 1.
 pub fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
     let mut out = Vec::with_capacity(9);
     let e = bd.edge_size * scale;
+    // The texcoord divisor, unscaled.
+    let e_uv = e;
     let (l, r, b, t) = (frame.left, frame.right, frame.bottom, frame.top);
 
     // ── The background piece ──
@@ -151,7 +156,7 @@ pub fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
             let period = if bd.tile_size != 0.0 {
                 bd.tile_size * scale
             } else {
-                e
+                e_uv
             };
             let bg_w = (r - ir) - (l + il);
             let bg_h = (t - it) - (b + ib);
@@ -171,8 +176,8 @@ pub fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
     // ── The 8 border pieces ──
     if bd.has_border() {
         // Edge strips tile `run` periods between the corners, 0 below two edges (`0x77f0c0`).
-        let w_run = ((r - l) / e - 2.0).max(0.0);
-        let h_run = ((t - b) / e - 2.0).max(0.0);
+        let w_run = ((r - l) / e_uv - 2.0).max(0.0);
+        let h_run = ((t - b) / e_uv - 2.0).max(0.0);
 
         let mut edge = |x0: f32, x1: f32, y0: f32, y1: f32, uvs: [[f32; 2]; 4]| {
             out.push(BackdropPiece {
@@ -405,5 +410,23 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(pieces(frame, &border_only, 1.0).len(), 8);
+    }
+
+    /// A half-scale frame: the geometry halves, but `0x77f0c0` divides the scaled rect by the
+    /// unscaled sizes, so a 100-wide (on screen) edge repeats `100/16 - 2` times and the 96-wide
+    /// background `96/16` times.
+    #[test]
+    fn a_scaled_frames_texcoords_repeat_by_the_unscaled_sizes() {
+        let frame = Rect::new(0.0, 0.0, 50.0, 100.0);
+        let bd = tooltip_backdrop(16.0, 4.0);
+        let ps = pieces(frame, &bd, 0.5);
+        let bg = ps[0];
+        assert_eq!(bg.corners[0], [2.0, 48.0], "inset 4 units, 2 on screen");
+        assert_eq!(bg.uvs[2], [6.0, 46.0 / 16.0]);
+        // TOP, slice 2, rotated: `u` holds the run.
+        let top = ps[3];
+        assert_eq!(top.corners[0][1], 50.0);
+        assert_eq!(top.corners[2][1], 42.0, "8 thick on screen");
+        assert_eq!(top.uvs[0][1], 100.0 / 16.0 - 2.0);
     }
 }

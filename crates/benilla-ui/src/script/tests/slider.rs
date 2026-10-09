@@ -629,8 +629,8 @@ fn a_step_before_any_range_is_the_whole_call() {
     assert_eq!((min, max), (0.0, 0.0), "no range was pushed");
 }
 
-/// The thumb is a texture of the slider, sized in its units, so it scales with the slider's
-/// effective scale on screen and in the drag alike.
+/// The thumb is a texture of the slider, sized in its units, so it draws at the slider's
+/// effective scale; the drag reads its unscaled size against the scaled track, as the bytes do.
 #[test]
 fn a_scaled_sliders_thumb_scales_with_it() {
     let mut s = script();
@@ -656,8 +656,9 @@ fn a_scaled_sliders_thumb_scales_with_it() {
         (50.0, 58.0, 92.0, 100.0),
         "a 16-unit thumb of a half-scale slider is 8 on screen, flush at the track top"
     );
-    // A press 40 below the track top seats the thumb's centre there: (40 - 4) of the 42 travel.
+    // The drag (`0x789ba0`) takes the thumb's own unscaled 16 from the scaled 50-tall track: a
+    // press 40 below the track top is (40 - 8) of the 34 travel.
     s.mouse_button(54.0, 60.0, "LeftButton", true);
     let v = s.eval::<f64>("return SlHalf:GetValue()").unwrap();
-    assert!((v - 100.0 * 36.0 / 42.0).abs() < 1e-3, "value {v}");
+    assert!((v - 100.0 * 32.0 / 34.0).abs() < 1e-3, "value {v}");
 }

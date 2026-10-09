@@ -679,3 +679,42 @@ fn minimap_blip_tooltip_shows_and_fades() {
         .unwrap();
     assert!(s.take_errors().is_empty());
 }
+
+/// A cursor-seated plate sits on the cursor under the UI scale: the cursor is in root units and
+/// the anchor offset in the tooltip's own, so the cursor arm divides by its effective scale
+/// (`0x530b20`).
+#[test]
+fn a_cursor_seated_plate_lands_on_the_cursor_under_the_ui_scale() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local up = CreateFrame("Frame", "UIParent")
+        up:SetPoint("BOTTOMLEFT", 0, 0); up:SetPoint("TOPRIGHT", 0, 0)
+        CreateFrame("GameTooltip", "GameTooltip", UIParent)
+    "#,
+    )
+    .unwrap();
+    assert!(s.set_ui_scale(0.9));
+    let at = |s: &mut crate::script::UiScript| -> (f64, f64) {
+        let answers: Vec<(u32, f32, f32, u64)> = s
+            .fontstrings_needing_measure()
+            .iter()
+            .map(|r| (r.id, 80.0, 10.0, r.key))
+            .collect();
+        s.set_measured_text_unwrapped(&answers);
+        s.resolve();
+        s.eval::<(f64, f64)>(
+            "local k = GameTooltip:GetEffectiveScale() \
+             local x = GameTooltip:GetCenter() \
+             return x * k, GameTooltip:GetBottom() * k",
+        )
+        .unwrap()
+    };
+    assert!(s.minimap_tooltip("Stormwind", 400.0, 300.0, false));
+    let (x, y) = at(&mut s);
+    assert!((x - 400.0).abs() < 1e-3 && (y - 300.0).abs() < 1e-3, "({x}, {y})");
+    s.world_tooltip_move(200.0, 100.0);
+    let (x, y) = at(&mut s);
+    assert!((x - 200.0).abs() < 1e-3 && (y - 100.0).abs() < 1e-3, "({x}, {y})");
+}
