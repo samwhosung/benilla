@@ -64,7 +64,7 @@ fn caret(lua: &Lua, h: FrameHandle) -> bool {
     placed
 }
 
-/// `OnCursorChanged(x, y, w, h)` (`0x77de1b`, in UI units via `0x77dd5f`), `x` the caret's advance
+/// `OnCursorChanged(x, y, w, h)` (`0x77de1b`, in the box's own units via `0x77dd5f`), `x` the caret's advance
 /// along its line, `y` minus the row index times the row pitch, `w` the constant 4.0 and `h` the
 /// line height. The arguments are computed only for a box with the script (`0x77dd8c`), from the
 /// box's advance table, which the installed font engine measures here when the text or font
@@ -103,6 +103,14 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
     let Some((x, y, pitch)) = args else {
         return false;
     };
+    // The advance table is in root units (measured at the box's scale, divided by the seam
+    // alone); the handler gets the box's own, the reference dividing by its effective scale
+    // (`0x77db23 fdiv [esi+0x7c]`).
+    let k = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        crate::script::object::eff_scale(&model, h)
+    };
+    let (x, y, pitch) = (x / k, y / k, pitch / k);
     if let Err(e) = event::fire_widget_handler(
         lua,
         id,
