@@ -1185,11 +1185,20 @@ pub(crate) fn fire_transitions(
     }
     // `UNIT_FACTION`, the PvP-icon repaint, on the fields the icon reads and on the tapped bit: the
     // reference's dynamic-flags watcher (`0x600440`) fires event 29 on bit `0x4` (`0x6005a1` →
-    // `0x6005b0`) and has no arm for `0x8`.
-    if prev.is_none_or(|p| {
-        (p.pvp, p.is_pvp_ffa, &p.faction_group, p.tapped)
-            != (cur.pvp, cur.is_pvp_ffa, &cur.faction_group, cur.tapped)
-    }) {
+    // `0x6005b0`) and has no arm for `0x8`. And on the raw `UNIT_FIELD_FACTIONTEMPLATE` edge: most
+    // creature templates name no side, so a mob a server script turns hostile (35 → 14, both group
+    // mask 0) moved nothing the tuple compares, and the target frame kept its friendly colour
+    // while the selection ring and the overhead name went red.
+    let template_moved = edges.moved(
+        cur.guid,
+        benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE,
+    );
+    if template_moved
+        || prev.is_none_or(|p| {
+            (p.pvp, p.is_pvp_ffa, &p.faction_group, p.tapped)
+                != (cur.pvp, cur.is_pvp_ffa, &cur.faction_group, cur.tapped)
+        })
+    {
         script.fire_event("UNIT_FACTION", vec![tok()]);
     }
 }
