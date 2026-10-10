@@ -16,6 +16,8 @@ dev = ["benilla-assets/dev", "benilla-formats/dev", "benilla-world/dev", "dep:be
 tracy = ["bevy/trace_tracy"]
 # Writes every system's per-run span to `trace-<ts>.json` in the cwd.
 trace_chrome = ["bevy/trace_chrome"]
+# Links Bevy as a shared library so an incremental rebuild relinks faster.
+bevy_dynamic_linking = ["bevy/dynamic_linking"]
 
 [dependencies]
 anyhow.workspace = true
