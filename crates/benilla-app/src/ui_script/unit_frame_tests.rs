@@ -958,6 +958,56 @@ fn an_exalted_npc_target_reads_revered_and_its_plate_is_green() {
     }
 }
 
+/// A target whose faction template the server changes live recolours its plate: template 35
+/// (friendly) to 14 (hostile) names no side either way, so only the template's own edge fires
+/// `UNIT_FACTION`. No edge, or another unit's, leaves the plate as it was.
+#[test]
+fn a_live_faction_template_change_recolours_the_target_plate() {
+    use crate::net::FieldEdges;
+    use benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE;
+
+    const MOB: u64 = 0xF130_0000_3796_0001;
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_unit_frames(&s);
+    let mob = |reaction: u8| UnitState {
+        exists: true,
+        has_object: true,
+        guid: MOB,
+        name: Some("Pusillin".into()),
+        health: 100,
+        max_health: 100,
+        level: 58,
+        reaction,
+        can_attack: reaction < 4,
+        ..UnitState::default()
+    };
+    let is_green = |c: [f32; 4]| c[0].abs() < 1e-6 && (c[1] - 1.0).abs() < 1e-6;
+    let is_red = |c: [f32; 4]| (c[0] - 1.0).abs() < 1e-6 && c[1].abs() < 1e-6;
+
+    let friendly = mob(5);
+    s.set_unit("target", Some(friendly.clone()));
+    s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+    let before = plate_color(&mut s);
+    assert!(is_green(before), "template 35 reads green, got {before:?}");
+
+    let hostile = mob(2);
+    s.set_unit("target", Some(hostile.clone()));
+    let fire = |s: &mut UiScript, prev: &UnitState, edges: &[(u64, u16)]| {
+        crate::ui_unit::fire_transitions(s, "target", Some(prev), &hostile, &FieldEdges::of(edges));
+    };
+    fire(&mut s, &friendly, &[]);
+    let stale = plate_color(&mut s);
+    assert!(is_green(stale), "no edge, no repaint, got {stale:?}");
+    fire(&mut s, &hostile, &[(MOB + 1, FIELD_UNIT_FACTIONTEMPLATE)]);
+    let other = plate_color(&mut s);
+    assert!(is_green(other), "another unit's edge, got {other:?}");
+    fire(&mut s, &hostile, &[(MOB, FIELD_UNIT_FACTIONTEMPLATE)]);
+    let after = plate_color(&mut s);
+    assert!(is_red(after), "template 14 reads red, got {after:?}");
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// Stock `TargetFrame_CheckClassification` (`TargetFrame.lua:205-218`), asserted on the drawn
 /// quads: elite, rare-elite and world boss share the Elite art (1.12 ships no rare-elite border),
 /// and `UNIT_CLASSIFICATION_CHANGED` alone repaints it.
