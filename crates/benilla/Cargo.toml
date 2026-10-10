@@ -15,6 +15,8 @@ dev = ["benilla-app/dev"]
 # Profiling switches, forwarded so `cargo run -p benilla --features tracy` works.
 tracy = ["benilla-app/tracy"]
 trace_chrome = ["benilla-app/trace_chrome"]
+# Forwards to benilla-app's `bevy_dynamic_linking`, which enables bevy/dynamic_linking.
+bevy_dynamic_linking = ["benilla-app/bevy_dynamic_linking"]
 
 [dependencies]
 # `default-features = false`, or `--no-default-features` here still builds benilla-app with `dev`.
