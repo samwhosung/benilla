@@ -273,11 +273,11 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
     let rel_to_id = resolve_rel_target(&model, &p.target, &who, "SetPoint", me, parent)?;
     let (point, rel_point, x, y) = (p.point, p.rel_point, p.x, p.y);
 
-    let eps = model.anchor_eps();
+    let units = model.layout_units();
     let input = model.layout_inputs.entry(h).or_default();
     if input
         .anchors
-        .set(Anchor::new(point, rel_to_id, rel_point, x, y), eps)
+        .set(Anchor::new(point, rel_to_id, rel_point, x, y), units)
     {
         model.touch_layout_frame(h);
     }

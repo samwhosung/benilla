@@ -152,6 +152,33 @@ impl Anchor {
     }
 }
 
+/// The client's aspect globals, both written only by `0x41ad10(a)`: `[0x832a4c] = f32(a · 0.75)`
+/// (`0x41ad24`) and `[0x832a44] = f32(a / √(a² + 1))`, the quotient kept unrounded before its
+/// multiply (`0x41ad3e` `fst`, `0x41ad44`, `0x41ad47`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutUnits {
+    g3: f32,
+    g44: f32,
+}
+
+impl LayoutUnits {
+    /// From the screen aspect `a`, width over height.
+    pub fn from_aspect(a: f32) -> LayoutUnits {
+        let a64 = f64::from(a);
+        LayoutUnits {
+            g3: (a64 * 0.75) as f32,
+            g44: ((1.0 / (a64 * a64 + 1.0).sqrt()) * a64) as f32,
+        }
+    }
+
+    /// A Lua offset as `SetPoint`'s binding stores it, in layout units (`0x7a28a3`..`0x7a28e3`):
+    /// `f32(f32(v / ([0x832a4c] · 1024)) · [0x832a44])`.
+    pub fn store(self, v: f32) -> f32 {
+        let q = (f64::from(v) / (f64::from(self.g3) * 1024.0)) as f32;
+        (f64::from(self.g44) * f64::from(q)) as f32
+    }
+}
+
 /// A region's anchors, one slot per point: the client's `anchorPoints[9]` (`G+0x4`, a frame's
 /// `+0x28`), indexed by point id. Setting a point replaces its slot (`SetPoint` stores at
 /// `0x767d33`), so the order anchors were set in is not kept, and every walk runs in point order,
@@ -177,15 +204,19 @@ impl Anchors {
     }
 
     /// `SetPoint`'s store (`0x767c70`): the anchor held for `a.point` stands when it has the same
-    /// target (`0x767ca9`) and relative point (`0x767cb1`) and both offsets differ by less than
-    /// `eps` (`0x767cb6`..`0x767cde`), and the call then stores nothing; else `a` replaces it.
-    /// Returns whether it stored. A NaN offset never matches, as the client's unordered compare.
-    pub fn set(&mut self, a: Anchor, eps: f64) -> bool {
+    /// target (`0x767ca9`) and relative point (`0x767cb1`) and both offsets, as the client stores
+    /// them ([`LayoutUnits::store`]), differ by less than 2⁻²² (`0x767cb6`..`0x767cde`), and the
+    /// call then stores nothing; else `a` replaces it. Returns whether it stored. A NaN offset
+    /// never matches, as the client's unordered compare.
+    pub fn set(&mut self, a: Anchor, units: LayoutUnits) -> bool {
+        let near = |p: f32, q: f32| {
+            (f64::from(units.store(p)) - f64::from(units.store(q))).abs() < SIZE_EPS
+        };
         let unchanged = self.get(a.point).is_some_and(|h| {
             h.relative_to == a.relative_to
                 && h.relative_point == a.relative_point
-                && (f64::from(h.x_off) - f64::from(a.x_off)).abs() < eps
-                && (f64::from(h.y_off) - f64::from(a.y_off)).abs() < eps
+                && near(h.x_off, a.x_off)
+                && near(h.y_off, a.y_off)
         });
         if !unchanged {
             self.insert(a);
@@ -1000,6 +1031,15 @@ mod tests {
         Rect::new(0.0, 0.0, 600.0, 800.0)
     }
 
+    /// `0x41ad10` at 4:3: `[0x832a4c] = 1.0` and `[0x832a44] = 0.8` (as `f32`), so an offset
+    /// stores as `f32(f32(v / 1024) · 0.8)`.
+    #[test]
+    fn layout_units_at_four_thirds() {
+        let u = LayoutUnits::from_aspect(4.0 / 3.0);
+        assert_eq!(u, LayoutUnits { g3: 1.0, g44: 0.8 });
+        assert_eq!(u.store(1280.0), (1.25_f64 * f64::from(0.8_f32)) as f32);
+    }
+
     fn bits(r: Rect) -> [u32; 4] {
         [
             r.bottom.to_bits(),
@@ -1022,18 +1062,18 @@ mod tests {
         assert_eq!(a.nth(2), None);
     }
 
-    /// `SetPoint`'s compare (`0x767cb6`..`0x767cde`): strictly under the threshold on both axes
-    /// with the same target and relative point stands; at it, past it, NaN, or another target or
-    /// relative point replaces.
+    /// `SetPoint`'s compare (`0x767cb6`..`0x767cde`): under the threshold on both axes with the
+    /// same target and relative point stands; past it, NaN, or another target or relative point
+    /// replaces. At 4:3 a layout unit is 1280 FrameXML units, so 2⁻²² is about 3.05e-4.
     #[test]
     fn anchors_set_keeps_an_anchor_within_the_threshold() {
-        let eps = 0.5;
+        let eps = LayoutUnits::from_aspect(4.0 / 3.0);
         let held = Anchor::new(Point::Center, SCREEN, Point::Center, 10.0, 20.0);
         let mut a = Anchors::from([held]);
         let with = |x: f32, y: f32| Anchor::new(Point::Center, SCREEN, Point::Center, x, y);
-        assert!(!a.set(with(10.25, 19.75), eps));
+        assert!(!a.set(with(10.0001, 19.9999), eps));
         assert_eq!(a.get(Point::Center), Some(&held), "nothing is stored");
-        for (x, y) in [(10.5, 20.0), (10.0, 19.0), (f32::NAN, 20.0)] {
+        for (x, y) in [(10.001, 20.0), (10.0, 19.999), (f32::NAN, 20.0)] {
             let mut b = a;
             assert!(b.set(with(x, y), eps), "({x}, {y})");
             assert!(b.get(Point::Center).unwrap().x_off.to_bits() == x.to_bits());

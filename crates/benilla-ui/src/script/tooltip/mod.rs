@@ -708,10 +708,10 @@ fn cursor_anchor(model: &mut Model, h: FrameHandle) {
         cx / scale,
         cy / scale,
     );
-    let eps = model.anchor_eps();
+    let units = model.layout_units();
     let input = model.layout_inputs.entry(h).or_default();
     // `0x767c70`'s change detect: the BOTTOM slot is replaced only on a real change.
-    if input.anchors.set(new, eps) {
+    if input.anchors.set(new, units) {
         model.touch_layout_frame(h);
     }
 }
@@ -784,7 +784,7 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         model.note_layout_frame_write(h);
         // Right-flush each shown right cell: one `SetPoint(RIGHT, leftCell, LEFT, width, 0)`
         // (`0x530910`..`0x53094f`), which leaves any other point the cell holds alone.
-        let eps = model.anchor_eps();
+        let units = model.layout_units();
         for (i, (_, r)) in rows.iter().enumerate() {
             if r.is_none() {
                 continue;
@@ -796,7 +796,7 @@ pub(super) fn layout_tooltips(model: &mut Model) {
             let stored = model
                 .region_data
                 .get_mut(&rights[i])
-                .is_some_and(|d| d.anchors.set(new, eps));
+                .is_some_and(|d| d.anchors.set(new, units));
             if stored {
                 model.note_layout_region_write(rights[i]);
             }
