@@ -267,3 +267,35 @@ fn random_structural_writes_resolve_as_a_scratch_solve_would() {
         );
     }
 }
+
+/// A frame two ScrollFrames claim takes the derivation, whose override the cached graph cannot
+/// name; the result still equals a scratch solve, and a lone claim stays incremental.
+#[test]
+fn a_child_two_scrollframes_claim_falls_back_to_the_derivation() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        a = CreateFrame("ScrollFrame", "SA"); a:SetWidth(50); a:SetHeight(50)
+        a:SetPoint("TOPLEFT", nil, "TOPLEFT", 10, -10)
+        b = CreateFrame("ScrollFrame", "SB"); b:SetWidth(50); b:SetHeight(50)
+        b:SetPoint("TOPLEFT", nil, "TOPLEFT", 200, -10)
+        c = CreateFrame("Frame", "C"); c:SetWidth(20); c:SetHeight(20)
+        c:SetPoint("CENTER", nil, "CENTER", 0, 0)
+        "#,
+    )
+    .expect("setup");
+    s.resolve();
+    let derived = s.layout_derivations();
+    s.run("a:SetScrollChild(c); a:SetVerticalScroll(5)")
+        .expect("one claim");
+    resolve_matches_scratch(&mut s, "one claim");
+    assert_eq!(s.layout_derivations(), derived, "one claim is named");
+    s.run("b:SetScrollChild(c)").expect("two claims");
+    resolve_matches_scratch(&mut s, "two claims");
+    assert_eq!(
+        s.layout_derivations(),
+        derived + 1,
+        "two claims give up for the derivation"
+    );
+}
