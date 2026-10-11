@@ -11,8 +11,7 @@ use mlua::{Lua, Table, Value};
 use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
 use super::region::{
-    apply_source, install_into_slot, new_texture_region, region_wrapper, set_texture_path,
-    slot_arg, SlotArg, TextureSource,
+    install_into_slot, new_texture_region, region_wrapper, set_texture_path, slot_arg, SlotArg,
 };
 use super::{event, Model};
 use crate::layout::Rect;
@@ -139,22 +138,17 @@ fn install_slot_model(
     Ok(())
 }
 
-/// A ColorSelect element's texture child (`0x78b3f0`): the region the texture adder builds,
+/// A ColorSelect element's texture child (`0x78b3f0`): the texture the texture adder built,
 /// installed as the slot's object. The wheel and the strip are painted by the renderer whatever
-/// the element names, so they take no source; the markers take the file or the colour.
+/// file or colour the element names.
 pub(super) fn install_loaded(
     model: &mut Model,
     h: FrameHandle,
     tag: &str,
-    source: Option<TextureSource>,
+    rh: RegionHandle,
 ) -> mlua::Result<()> {
     let slot = Slot::of_tag(tag)
         .ok_or_else(|| mlua::Error::runtime(format!("not a ColorSelect texture: {tag}")))?;
-    let rh = new_texture_region(model, h, slot.layer())
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    if slot.has_path_leg() {
-        apply_source(model, rh, source);
-    }
     install_slot_model(model, h, slot, Some(rh))
 }
 

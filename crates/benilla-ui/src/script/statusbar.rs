@@ -8,8 +8,7 @@ use mlua::{Lua, Table, Value};
 
 use super::object::{draw_layer_from_str, frame_handle_of};
 use super::region::{
-    apply_source, install_into_slot, new_texture_region, region_wrapper, set_texture_path,
-    slot_arg, SlotArg, TextureSource,
+    install_into_slot, new_texture_region, region_wrapper, set_texture_path, slot_arg, SlotArg,
 };
 use super::{event, Model};
 use crate::order::DrawLayer;
@@ -45,32 +44,6 @@ fn store_value(sb: &mut StatusBarState, v: f32) -> Option<f32> {
         sb.value = clamped;
         clamped
     })
-}
-
-/// Get or create the bar texture region for a caller that needs one before the reference would
-/// make it (`SetStatusBarColor`): a new bar is installed as any is.
-fn ensure_bar(lua: &Lua, this: &Table) -> mlua::Result<u32> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let existing = match &model
-        .arena
-        .frame(h)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?
-        .kind_state
-    {
-        KindState::StatusBar(sb) => sb.bar,
-        _ => return Err(mlua::Error::runtime("not a StatusBar")),
-    };
-    let rh = match existing {
-        Some(rh) => rh,
-        None => {
-            let rh = new_texture_region(&mut model, h, DrawLayer::Artwork)
-                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-            install_bar_model(&mut model, h, Some(rh), DrawLayer::Artwork)?;
-            rh
-        }
-    };
-    Ok(model.region_id(rh))
 }
 
 /// Install `incoming` as the bar texture, or clear it, through `0x7831f0`: the same texture is a
@@ -126,23 +99,15 @@ fn install_bar(
     install_bar_model(&mut model, h, incoming, layer)
 }
 
-/// `<BarTexture>` (`0x782ed4`, `0x782f63`): the region the texture adder builds from the file or
-/// the colour, installed as an object on the element's `drawLayer`, ARTWORK without one. Neither
-/// builds nothing.
+/// `<BarTexture>` (`0x782f63`): the texture the texture adder built, installed as an object on the
+/// element's `drawLayer`, ARTWORK without one.
 pub(super) fn install_loaded(
     model: &mut Model,
     h: crate::widget::FrameHandle,
-    source: Option<TextureSource>,
+    rh: RegionHandle,
     layer: Option<DrawLayer>,
 ) -> mlua::Result<()> {
-    if source.is_none() {
-        return Ok(());
-    }
-    let layer = layer.unwrap_or(DrawLayer::Artwork);
-    let rh = new_texture_region(model, h, layer)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    apply_source(model, rh, source);
-    install_bar_model(model, h, Some(rh), layer)
+    install_bar_model(model, h, Some(rh), layer.unwrap_or(DrawLayer::Artwork))
 }
 
 /// `SetStatusBarTexture`'s path leg (`0x783140`): a bar that exists has its file swapped and
@@ -166,6 +131,8 @@ fn set_bar_path(lua: &Lua, this: &Table, path: &str, layer: DrawLayer) -> mlua::
             let rh = new_texture_region(&mut model, h, layer)
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
             set_texture_path(&mut model, rh, path);
+            // `SetAllPoints` onto the bar (`0x7831bf`).
+            super::region::implicit_creation_anchor(&mut model, rh);
             install_bar_model(&mut model, h, Some(rh), layer)?;
         }
     }
@@ -282,9 +249,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     crate::script::object::as_f32(&g),
                     crate::script::object::as_f32(&b),
                 );
-                let id = ensure_bar(lua, &this)?;
+                // `0x78fc20` hands the colour to the bar (`0x782dd0`), which sets its vertex colour
+                // only if a bar exists and keeps nothing otherwise.
+                let Some(rh) = with_bar(lua, &this, |sb| sb.bar)? else {
+                    return Ok(());
+                };
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let rh = *model.id_to_region.get(&id).expect("bar region id");
                 model.region_data.entry(rh).or_default().vertex_color =
                     Some([r, g, b, a.unwrap_or(1.0)]);
                 Ok(())

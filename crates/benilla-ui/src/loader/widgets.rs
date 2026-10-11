@@ -5,8 +5,7 @@ use crate::script::LabelFont;
 
 use super::regions::FontAttrs;
 use super::{
-    abs_dim, abs_value, children_named, children_named_any, color_of, tex_coords_of,
-    texture_source, Loader,
+    abs_dim, abs_value, children_named, children_named_any, color_of, tex_coords_of, Loader,
 };
 
 impl Loader<'_> {
@@ -47,7 +46,13 @@ impl Loader<'_> {
 
     /// `<StatusBar>` (`0x782ef0`): a reversed `minValue`/`maxValue` pair is swapped, as
     /// `SetMinMaxValues` also does; `drawLayer` is the bar texture's layer, ARTWORK by default.
-    pub(super) fn apply_statusbar(&mut self, el: &Element, wrapper: &Table, dbg: &str) {
+    pub(super) fn apply_statusbar(
+        &mut self,
+        el: &Element,
+        wrapper: &Table,
+        self_name: &str,
+        dbg: &str,
+    ) {
         if !el.tag.eq_ignore_ascii_case("StatusBar") {
             return;
         }
@@ -66,10 +71,12 @@ impl Loader<'_> {
         }
         let layer = el.attr("drawLayer");
         for bar in children_named(el, "BarTexture") {
-            // The file wins over a `<Color>` beside it, which is discarded as on any texture
-            // (`0x76fe20`); `<BarColor>` is the bar's tint.
-            let source = texture_source(bar);
-            self.install_texture(wrapper, "BarTexture", source, layer, dbg);
+            // Built as any texture element is, and installed as the bar on `drawLayer`, ARTWORK
+            // without one (`0x782f12`); `<BarColor>` is the bar's tint.
+            let level = layer.unwrap_or("ARTWORK");
+            if let Some(tex) = self.build_texture_child(bar, wrapper, self_name, level, dbg) {
+                self.install_texture(wrapper, "BarTexture", &tex, layer, dbg);
+            }
         }
         for bc in children_named(el, "BarColor") {
             let c = color_of(bc);
@@ -414,27 +421,12 @@ impl Loader<'_> {
         }
         let layer = el.attr("drawLayer");
         for raw in children_named(el, "ThumbTexture") {
-            // As for a Button's state textures: `inherits=` expands, and a named thumb is
-            // published (`ScrollFrame_OnScrollRangeChanged` reads it by name).
-            let expanded = self.expand_region(raw);
-            let tt = &expanded;
-            self.install_texture(wrapper, "ThumbTexture", texture_source(tt), layer, dbg);
-            if let Ok(region) = wrapper.call_method::<Table>("GetThumbTexture", ()) {
-                if let Some(mode) = tt.attr("alphaMode") {
-                    self.call_region(&region, "SetBlendMode", mode.to_string(), dbg);
-                }
-                self.apply_region_layout(tt, &region, self_name, dbg, FontAttrs::Own);
-                if let Some(tc) = tex_coords_of(tt) {
-                    self.call_region(&region, "SetTexCoord", tc, dbg);
-                }
-                if let Some(rname) = tt.name().map(|raw| framexml::resolve_name(raw, self_name)) {
-                    crate::script::region::publish_region_name(self.lua(), &rname, &region);
-                    if let Err(e) = self.lua().globals().set(rname.clone(), region) {
-                        self.report
-                            .warnings
-                            .push(format!("{dbg}: thumb-texture global '{rname}': {e}"));
-                    }
-                }
+            // Built as any texture element is (a named thumb is published, which
+            // `ScrollFrame_OnScrollRangeChanged` reads by name), then installed as the thumb on
+            // `drawLayer`, OVERLAY without one; the install clears its anchors (`0x789893`).
+            let level = layer.unwrap_or("OVERLAY");
+            if let Some(tex) = self.build_texture_child(raw, wrapper, self_name, level, dbg) {
+                self.install_texture(wrapper, "ThumbTexture", &tex, layer, dbg);
             }
         }
     }
@@ -452,37 +444,18 @@ impl Loader<'_> {
         if !el.tag.eq_ignore_ascii_case("ColorSelect") {
             return;
         }
-        for (tag, getter) in [
-            ("ColorWheelTexture", "GetColorWheelTexture"),
-            ("ColorWheelThumbTexture", "GetColorWheelThumbTexture"),
-            ("ColorValueTexture", "GetColorValueTexture"),
-            ("ColorValueThumbTexture", "GetColorValueThumbTexture"),
+        for (tag, level) in [
+            ("ColorWheelTexture", "ARTWORK"),
+            ("ColorWheelThumbTexture", "OVERLAY"),
+            ("ColorValueTexture", "ARTWORK"),
+            ("ColorValueThumbTexture", "OVERLAY"),
         ] {
             for raw in children_named(el, tag) {
-                let expanded = self.expand_region(raw);
-                let tt = &expanded;
                 // The element has no `drawLayer` (`0x78b3f0` never reads it): the slot links its
-                // texture on its own layer.
-                self.install_texture(wrapper, tag, texture_source(tt), None, dbg);
-                if let Ok(region) = wrapper.call_method::<Table>(getter, ()) {
-                    if let Some(mode) = tt.attr("alphaMode") {
-                        self.call_region(&region, "SetBlendMode", mode.to_string(), dbg);
-                    }
-                    self.apply_region_layout(tt, &region, self_name, dbg, FontAttrs::Own);
-                    if let Some(tc) = tex_coords_of(tt) {
-                        self.call_region(&region, "SetTexCoord", tc, dbg);
-                    }
-                    if let Some(rname) = tt.name().map(|raw| framexml::resolve_name(raw, self_name))
-                    {
-                        // Published both ways: the stock `<ColorValueTexture>` anchors to
-                        // `ColorPickerWheel` by name.
-                        crate::script::region::publish_region_name(self.lua(), &rname, &region);
-                        if let Err(e) = self.lua().globals().set(rname.clone(), region) {
-                            self.report
-                                .warnings
-                                .push(format!("{dbg}: {tag} global '{rname}': {e}"));
-                        }
-                    }
+                // texture on its own layer. The wheel and the strip are painted by the client
+                // whatever file or colour the element names (`0x770300`).
+                if let Some(tex) = self.build_texture_child(raw, wrapper, self_name, level, dbg) {
+                    self.install_texture(wrapper, tag, &tex, None, dbg);
                 }
             }
         }

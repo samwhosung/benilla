@@ -210,46 +210,24 @@ pub(super) fn set_texture_path(model: &mut Model, rh: RegionHandle, path: &str) 
     model.touch_layout_art(rh);
 }
 
-/// What a widget element's texture child supplies the loader: the texture adder (`0x6f26f0`) reads
-/// a file, else a `<Color>` fill, and the widget then installs the object it built.
-pub(crate) enum TextureSource {
-    File(String),
-    Fill([f32; 4]),
-}
-
-/// The loader's install of a `<BarTexture>`, `<ThumbTexture>` or one of ColorSelect's four
-/// textures (`tag`): a new region built from `source` and installed as the widget's object, never
-/// through a Lua setter. `layer` is the element's `drawLayer` for the bar and the thumb. ColorSelect's
-/// wheel and strip are painted by the client whatever the element says (`0x770300`), so they take
-/// no source.
+/// The loader's install of the texture a `<BarTexture>`, `<ThumbTexture>` or ColorSelect texture
+/// element (`tag`) built, as the widget's object, never through a Lua setter. `layer` is the
+/// element's `drawLayer` for the bar and the thumb.
 pub(crate) fn install_loaded_texture(
     lua: &Lua,
     this: &Table,
     tag: &str,
-    source: Option<TextureSource>,
+    texture: &Table,
     layer: Option<&str>,
 ) -> mlua::Result<()> {
     let h = super::object::frame_handle_of(lua, this)?;
+    let rh = texture_object_arg(lua, this, texture, "SetStatusBarTexture")?;
     let layer = layer.and_then(super::object::draw_layer_from_str);
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     match tag {
-        "BarTexture" => super::statusbar::install_loaded(&mut model, h, source, layer),
-        "ThumbTexture" => super::slider::install_loaded(&mut model, h, source, layer),
-        _ => super::colorselect::install_loaded(&mut model, h, tag, source),
-    }
-}
-
-/// Give a new region the loader's source: the file, or the solid fill.
-pub(super) fn apply_source(model: &mut Model, rh: RegionHandle, source: Option<TextureSource>) {
-    match source {
-        Some(TextureSource::File(path)) => set_texture_path(model, rh, &path),
-        Some(TextureSource::Fill(c)) => {
-            let data = model.region_data.entry(rh).or_default();
-            data.texture = None;
-            data.fill = Some(c);
-            model.touch_layout_art(rh);
-        }
-        None => {}
+        "BarTexture" => super::statusbar::install_loaded(&mut model, h, rh, layer),
+        "ThumbTexture" => super::slider::install_loaded(&mut model, h, rh, layer),
+        _ => super::colorselect::install_loaded(&mut model, h, tag, rh),
     }
 }
 

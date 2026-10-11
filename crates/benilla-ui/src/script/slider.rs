@@ -11,8 +11,7 @@ use mlua::{Lua, Table, Value};
 use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
 use super::region::{
-    apply_source, install_into_slot, new_texture_region, region_wrapper, set_texture_path,
-    slot_arg, SlotArg, TextureSource,
+    install_into_slot, new_texture_region, region_wrapper, set_texture_path, slot_arg, SlotArg,
 };
 use super::{event, Model};
 use crate::layout::Rect;
@@ -77,22 +76,15 @@ fn install_thumb_model(
     .map(|_| ())
 }
 
-/// `<ThumbTexture>` (`0x789580`): the region the texture adder builds from the file or the colour,
-/// installed as an object on the element's `drawLayer`, OVERLAY without one. Neither builds nothing.
+/// `<ThumbTexture>` (`0x7895f6`): the texture the texture adder built, installed as an object on
+/// the element's `drawLayer`, OVERLAY without one.
 pub(super) fn install_loaded(
     model: &mut Model,
     h: FrameHandle,
-    source: Option<TextureSource>,
+    rh: RegionHandle,
     layer: Option<DrawLayer>,
 ) -> mlua::Result<()> {
-    if source.is_none() {
-        return Ok(());
-    }
-    let layer = layer.unwrap_or(DrawLayer::Overlay);
-    let rh = new_texture_region(model, h, layer)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    apply_source(model, rh, source);
-    install_thumb_model(model, h, Some(rh), layer)
+    install_thumb_model(model, h, Some(rh), layer.unwrap_or(DrawLayer::Overlay))
 }
 
 /// `SetThumbTexture`'s path leg (`0x7897c0`): a thumb that exists has its file swapped and nothing

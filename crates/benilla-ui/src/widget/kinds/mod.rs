@@ -892,8 +892,11 @@ impl ButtonState {
     /// `CSimpleCheckbox::Refresh` (`0x7854c0`): clears both checked textures' bits, then shows
     /// the one the checked flag and the state pick (`0x785538`), the disabled pair's when DISABLED
     /// and it exists, else the checked texture. `force` is its second argument: without it a flag
-    /// that holds does nothing (`0x7854d0`). Only `SetChecked`, a click, `SetEnabled` and the two
-    /// checked setters reach it; a state switch alone leaves the pair.
+    /// that holds does nothing (`0x7854d0`). Only `SetChecked`, a click, `SetEnabled`, the two
+    /// checked setters and the XML `checked=` attribute (`0x7851a6`) reach it; a state switch alone
+    /// leaves the pair. The reference's `checked=` runs before the checked textures exist, so it
+    /// shows nothing and each setter's refresh shows its texture; benilla's loader calls
+    /// `SetChecked` after the textures, which ends in the same state.
     pub fn refresh_checked(&mut self, checked: bool, force: bool) -> ShownWrites {
         if !force && checked == self.checked {
             return ShownWrites::default();

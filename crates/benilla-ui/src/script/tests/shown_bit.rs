@@ -143,3 +143,96 @@ fn the_highlight_keeps_its_own_bit_through_state_switches() {
     )
     .unwrap();
 }
+
+/// The engine's own edges write the bits the way `SetButtonState` does: a press (`0x779210`) and
+/// the release (`0x7792d0`), and the hide edge (`0x7791e0`) that un-pushes a button.
+#[test]
+fn the_press_release_and_hide_edges_write_the_bits() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        b = CreateFrame("Button", "EdgeBtn")
+        b:SetPoint("BOTTOMLEFT", 0, 0) b:SetWidth(100) b:SetHeight(100)
+        b:SetNormalTexture("n") b:SetPushedTexture("p")
+        n, p = b:GetNormalTexture(), b:GetPushedTexture()
+        assert(n:IsShown() and not p:IsShown())
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(50.0, 50.0);
+    s.mouse_button(50.0, 50.0, "LeftButton", true);
+    s.run(r#"assert(p:IsShown() and not n:IsShown(), "pressed")"#)
+        .unwrap();
+    s.resolve();
+    assert_eq!(drawn(&s), ["p"]);
+    s.mouse_button(50.0, 50.0, "LeftButton", false);
+    s.run(r#"assert(n:IsShown() and not p:IsShown(), "released")"#)
+        .unwrap();
+    s.resolve();
+    assert_eq!(drawn(&s), ["n"]);
+
+    s.run(r#"b:SetButtonState("PUSHED") assert(p:IsShown() and not n:IsShown())"#)
+        .unwrap();
+    s.run(r#"b:Hide() assert(n:IsShown() and not p:IsShown(), "the hide edge un-pushes")"#)
+        .unwrap();
+}
+
+/// An XML `checked="true"` (`0x7851a6`, refresh with force 0) ends with the checked texture shown
+/// and the disabled pair hidden.
+#[test]
+fn an_xml_checked_check_button_shows_its_checked_texture() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <CheckButton name="XmlTicked" checked="true">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <NormalTexture file="Interface\Up"/>
+                <CheckedTexture file="Interface\Check"/>
+                <DisabledCheckedTexture file="Interface\DisabledCheck"/>
+            </CheckButton>
+            <CheckButton name="XmlUnticked">
+                <Size><AbsDimension x="24" y="24"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors>
+                <CheckedTexture file="Interface\Check2"/>
+            </CheckButton>
+        </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_: &str| None);
+    assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+    s.run(
+        r#"
+        assert(XmlTicked:GetCheckedTexture():IsShown(), "checked")
+        assert(not XmlTicked:GetDisabledCheckedTexture():IsShown(), "disabled pair")
+        assert(not XmlUnticked:GetCheckedTexture():IsShown(), "unchecked")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let d = drawn(&s);
+    assert!(d.contains(&"Interface\\Check".to_string()), "{d:?}");
+    assert!(!d.contains(&"Interface\\Check2".to_string()), "{d:?}");
+}
+
+/// The CheckButton override of `SetEnabled` (`0x785490`) refreshes the pair (`0x7854aa`) whether or
+/// not the base changed anything, so an `Enable()` on an enabled button re-shows a checked texture
+/// a script hid.
+#[test]
+fn an_enable_that_changes_nothing_still_refreshes_the_checked_pair() {
+    let mut s = script();
+    button(&mut s, "CheckButton");
+    s.run(
+        r#"
+        b:SetCheckedTexture("c") c = b:GetCheckedTexture()
+        b:SetChecked(1)
+        c:Hide() assert(not c:IsShown())
+        b:Enable()
+        assert(c:IsShown(), "refreshed")
+    "#,
+    )
+    .unwrap();
+}

@@ -708,7 +708,7 @@ impl Loader<'_> {
         self.apply_title_region(el, wrapper, self_name, dbg_name);
         // 5b · per-kind LoadXML extras (EditBox `0x779fb0`), each gated on the element's own tag,
         //      so a Frame wearing a <Button> template skips the Button steps.
-        self.apply_statusbar(el, wrapper, dbg_name);
+        self.apply_statusbar(el, wrapper, self_name, dbg_name);
         self.apply_slider(el, wrapper, self_name, dbg_name);
         self.apply_colorselect(el, wrapper, self_name, dbg_name);
         self.apply_button(el, wrapper, self_name, dbg_name);
@@ -864,17 +864,6 @@ pub(super) fn color_of(el: &Element) -> [f32; 4] {
             .unwrap_or(d)
     };
     [c("r", 0.0), c("g", 0.0), c("b", 0.0), c("a", 1.0)]
-}
-
-/// What a texture element supplies the texture adder (`0x6f26f0`): its `file=`, else a `<Color>`
-/// child's fill. A `<Color>` beside `file=` is discarded, as on any texture (`0x76fe20`).
-pub(super) fn texture_source(el: &Element) -> Option<crate::script::TextureSource> {
-    match el.attr("file") {
-        Some(file) => Some(crate::script::TextureSource::File(file.to_string())),
-        None => children_named(el, "Color")
-            .next()
-            .map(|c| crate::script::TextureSource::Fill(color_of(c))),
-    }
 }
 
 /// A `<TexCoords>` child's UV rect `(l, r, t, b)`; one missing an edge is ignored (full UVs).

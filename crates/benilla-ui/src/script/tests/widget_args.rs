@@ -19,7 +19,7 @@ fn xml(s: &UiScript, text: &str) {
 }
 
 /// `0x7831f0` writes `[texture+0x124] = 1` (`0x783220`) after it links the texture in, on the path
-/// leg (`0x7831cb`), the object leg (`0x78fa27`) and both of `LoadXML`'s (`0x782ed4`, `0x782f63`);
+/// leg (`0x7831cb`), the object leg (`0x78fa27`) and `LoadXML`'s (`0x782f63`);
 /// `GetTexCoordModifiesRect` (`0x79c120`) reads it.
 #[test]
 fn a_bar_texture_answers_one_to_get_tex_coord_modifies_rect() {
@@ -277,4 +277,132 @@ fn the_loader_still_fills_and_creates_what_the_setters_no_longer_take() {
         .collect();
     assert!(fills.contains(&[0.25, 0.5, 0.75, 1.0]), "{fills:?}");
     assert!(fills.contains(&[0.75, 0.5, 0.25, 1.0]), "{fills:?}");
+}
+
+/// The bar's path leg gives a new bar texture all points on its bar (`0x7831bf`), as the XML leg's
+/// post-step does (`0x7701c0`); a texture handed in as an object keeps what it has.
+#[test]
+fn an_installed_bar_texture_has_all_points_on_its_bar() {
+    let s = script();
+    xml(
+        &s,
+        r#"<Ui>
+            <StatusBar name="PtsXmlBar"><BarTexture file="Interface\Bar"/></StatusBar>
+        </Ui>"#,
+    );
+    s.run(
+        r#"
+        local function onbar(t, bar)
+            assert(t:GetNumPoints() == 2, "points: " .. t:GetNumPoints())
+            local _, rel = t:GetPoint(1)
+            assert(rel == bar, "relative to the bar")
+        end
+        onbar(PtsXmlBar:GetStatusBarTexture(), PtsXmlBar)
+
+        local p = CreateFrame("StatusBar", "PtsPathBar")
+        p:SetStatusBarTexture("Interface\\Bar")
+        onbar(p:GetStatusBarTexture(), p)
+
+        local o = CreateFrame("StatusBar", "PtsObjBar")
+        local t = o:CreateTexture(nil, "ARTWORK")
+        assert(t:GetNumPoints() == 0)
+        o:SetStatusBarTexture(t)
+        assert(t:GetNumPoints() == 0, "an object keeps what it has")
+    "#,
+    )
+    .unwrap();
+}
+
+/// An empty `<BarTexture/>` or `<ThumbTexture/>` still installs the texture the texture adder
+/// builds (`0x782f63`, `0x7895f6`), and draws nothing.
+#[test]
+fn an_empty_bar_or_thumb_element_installs_a_texture() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    xml(
+        &s,
+        r#"<Ui>
+            <StatusBar name="EmptyBar"><Size><AbsDimension x="50" y="10"/></Size>
+                <Anchors><Anchor point="CENTER"/></Anchors><BarTexture/></StatusBar>
+            <Slider name="EmptySlider"><Size><AbsDimension x="10" y="50"/></Size>
+                <Anchors><Anchor point="TOPLEFT"/></Anchors><ThumbTexture/></Slider>
+        </Ui>"#,
+    );
+    s.run(
+        r#"
+        assert(EmptyBar:GetStatusBarTexture() ~= nil, "bar")
+        assert(EmptyBar:GetStatusBarTexture():GetTexCoordModifiesRect() == 1)
+        assert(EmptySlider:GetThumbTexture() ~= nil, "thumb")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let textured = s
+        .extract()
+        .iter()
+        .filter(|q| {
+            matches!(
+                q.content,
+                QuadContent::Texture { path: Some(_), .. }
+                    | QuadContent::Texture { color: Some(_), .. }
+            )
+        })
+        .count();
+    assert_eq!(textured, 0, "an empty texture draws nothing");
+}
+
+/// `SetStatusBarColor` (`0x78fc20` → `0x782dd0`) tints the bar only if one exists and keeps
+/// nothing otherwise: no bar, no effect, and a bar installed later is untinted.
+#[test]
+fn set_status_bar_color_with_no_bar_does_nothing() {
+    let s = script();
+    s.run(
+        r#"
+        local sb = CreateFrame("StatusBar", "TintBar")
+        sb:SetStatusBarColor(1, 0, 0)
+        assert(sb:GetStatusBarTexture() == nil, "no bar made")
+        sb:SetStatusBarTexture("p")
+        local r, g, b, a = sb:GetStatusBarColor()
+        assert(r == 1 and g == 1 and b == 1 and a == 1, "untinted: " .. r .. g .. b)
+        sb:SetStatusBarColor(0, 1, 0)
+        r, g, b = sb:GetStatusBarColor()
+        assert(r == 0 and g == 1 and b == 0, "tinted once there is a bar")
+    "#,
+    )
+    .unwrap();
+}
+
+/// `<BarTexture>` and `<ThumbTexture>` go through the texture adder (`0x6f26f0`): a named one is
+/// published under its expanded name, and its `<TexCoords>` and `alphaMode` apply.
+#[test]
+fn a_named_bar_texture_is_published_and_keeps_its_texcoords() {
+    let s = script();
+    xml(
+        &s,
+        r#"<Ui>
+            <StatusBar name="NamedBarFrame">
+                <BarTexture name="$parentBar" file="Interface\Bar" alphaMode="ADD">
+                    <TexCoords left="0.1" right="0.9" top="0.2" bottom="0.8"/>
+                </BarTexture>
+            </StatusBar>
+            <Slider name="NamedSliderFrame">
+                <ThumbTexture name="$parentThumb" file="Interface\Knob">
+                    <TexCoords left="0.25" right="0.75" top="0" bottom="1"/>
+                </ThumbTexture>
+            </Slider>
+        </Ui>"#,
+    );
+    s.run(
+        r#"
+        assert(NamedBarFrameBar == NamedBarFrame:GetStatusBarTexture(), "published")
+        assert(NamedBarFrameBar:GetName() == "NamedBarFrameBar")
+        local ulx, uly = NamedBarFrameBar:GetTexCoord()
+        assert(math.abs(ulx - 0.1) < 1e-5 and math.abs(uly - 0.2) < 1e-5, ulx .. " " .. uly)
+        assert(NamedBarFrameBar:GetBlendMode() == "ADD")
+        assert(NamedSliderFrameThumb == NamedSliderFrame:GetThumbTexture(), "thumb published")
+        ulx = NamedSliderFrameThumb:GetTexCoord()
+        assert(math.abs(ulx - 0.25) < 1e-5)
+    "#,
+    )
+    .unwrap();
 }

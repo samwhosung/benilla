@@ -13,6 +13,7 @@ fn every_shape_c_colour_position_takes_nil_as_zero_and_never_raises() {
         T = F:CreateTexture(nil, "ARTWORK")
         FS = F:CreateFontString(nil, "ARTWORK")
         SB = CreateFrame("StatusBar", "SB")
+        SB:SetStatusBarTexture("bar") -- a bar to tint: with none the call keeps nothing (`0x782dd0`)
         CS = CreateFrame("ColorSelect", "CS")
         "#,
     )
