@@ -654,11 +654,7 @@ fn the_state_filter_survives_a_restart_through_the_saved_variables_file() {
             .map(|b| benilla_ui::toc::Toc::parse(&benilla_ui::source::decode(&b)))
             .expect("the addon's toc off the chain");
     assert!(toc.load_on_demand(), "the reference ships it LoadOnDemand");
-    let info = || {
-        let mut i = super::addons::info_from_toc("Blizzard_TrainerUI", &toc);
-        i.chain = true;
-        i
-    };
+    let info = || super::addons::info_from_toc("Blizzard_TrainerUI", &toc, true);
     let saved_dir =
         std::env::temp_dir().join(format!("benilla-trainer-saved-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&saved_dir);

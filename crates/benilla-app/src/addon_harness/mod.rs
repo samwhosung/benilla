@@ -162,7 +162,7 @@ fn corpus(
             let toc = Toc::parse(&benilla_ui::source::decode(
                 &std::fs::read(manifest_path(root, n)?).unwrap_or_default(),
             ));
-            Some(crate::ui_script::addons::info_from_toc(n, &toc))
+            Some(crate::ui_script::addons::info_from_toc(n, &toc, false))
         })
         .collect();
 
@@ -1400,7 +1400,8 @@ fn load_addon_files(script: &UiScript, root: &Path, name: &str, toc: &Toc) -> Fi
     // Under the addon's own context, as the live walk loads it.
     let outer = script.swap_exec_context(benilla_ui::script::addon_load_context(
         name,
-        crate::ui_script::addons::toc_secure(toc),
+        // The corpus is folder addons, never the chain.
+        crate::ui_script::addons::secure(false, toc),
     ));
     let load = load_addon_files_in_context(script, root, name, toc);
     script.swap_exec_context(outer);

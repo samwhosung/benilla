@@ -88,6 +88,11 @@ impl Addon {
         }
     }
 
+    /// Whether the files come off the player's patch chain.
+    fn from_chain(&self) -> bool {
+        matches!(self.source, Source::Chain)
+    }
+
     /// The base this addon's manifest entries resolve against: `Interface/AddOns/<Folder>` for a
     /// `Dir`, empty for the shipped flat tree and the chain's full paths.
     fn prefix(&self) -> String {
@@ -395,26 +400,34 @@ fn manifest_in(dir: &Path, name: &str) -> Option<String> {
 
 /// The AddOn API's registry row for one discovered addon.
 fn info_for(addon: &Addon) -> benilla_ui::script::AddOnInfo {
-    let mut info = info_from_toc(&addon.name, &addon.toc);
-    info.chain = matches!(addon.source, Source::Chain);
-    info
+    info_from_toc(&addon.name, &addon.toc, addon.from_chain())
 }
 
-/// `## Secure: 1`, which grants nothing: it sets `GetAddOnInfo`'s security answer and the context
-/// the addon loads under ([`benilla_ui::script::addon_load_context`]).
+/// The `## Secure: 1` directive. It grants nothing by itself: the client sends every such addon
+/// in `CMSG_AUTH_SESSION`'s addon block, and only [`secure`] makes one SECURE.
 pub(crate) fn toc_secure(toc: &Toc) -> bool {
     toc.directive("Secure").map(str::trim) == Some("1")
 }
 
+/// Whether an addon is SECURE, the security state `[rec+0x24] == 0`: `GetAddOnInfo`'s security
+/// answer and the context it loads under ([`benilla_ui::script::addon_load_context`]). The
+/// reference sets it only when the `SMSG_ADDON_INFO` handler's `%s.sig` check `0x6f10f0` answers 3
+/// (`0x51dbfb`); the state starts INSECURE (`0x5205b6`). benilla verifies no signature, and the
+/// `.sig` files ship only with Blizzard's own addons in the player's patch chain, so this stands in
+/// for the check: off the chain and `## Secure: 1`. A folder addon claiming it stays INSECURE.
+pub(crate) fn secure(chain: bool, toc: &Toc) -> bool {
+    chain && toc_secure(toc)
+}
+
 /// [`info_for`]'s body, shared with `addon_harness` so its survey seats the registry row
-/// production does.
-pub(crate) fn info_from_toc(name: &str, toc: &Toc) -> benilla_ui::script::AddOnInfo {
+/// production does. `chain` is whether the addon comes off the player's patch chain.
+pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::script::AddOnInfo {
     benilla_ui::script::AddOnInfo {
         name: name.to_owned(),
         title: toc.directive("Title").map(str::to_owned),
         notes: toc.directive("Notes").map(str::to_owned),
         url: toc.directive("URL").map(str::to_owned),
-        secure: toc_secure(toc),
+        secure: secure(chain, toc),
         load_on_demand: toc.load_on_demand(),
         dependencies: toc.dependencies().into_iter().map(str::to_owned).collect(),
         directives: toc.directives.clone(),
@@ -437,7 +450,7 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc) -> benilla_ui::script::AddOnI
         loaded: false,
         // The version gate's dword: the leading integer, 0 when absent (out of date, not unknown).
         interface: toc.interface_version(),
-        chain: false, // `info_for` stamps the chain rows; the harness's rows are folder addons
+        chain,
     }
 }
 
@@ -916,7 +929,7 @@ impl Walk {
         // The files, `Bindings.xml` and the saved variables run under the addon's context.
         let outer = script.swap_exec_context(benilla_ui::script::addon_load_context(
             &addon.name,
-            toc_secure(&addon.toc),
+            secure(addon.from_chain(), &addon.toc),
         ));
         self.failures.extend(addon.load(script, &mut toc));
         let mut own = Status::default();

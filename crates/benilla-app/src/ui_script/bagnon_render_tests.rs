@@ -129,7 +129,7 @@ fn seat(root: &Path, seat: Seat) -> UiScript {
 
     let mut registry: Vec<AddOnInfo> = INSTALLED
         .iter()
-        .map(|n| super::addons::info_from_toc(n, &read_toc(root, n)))
+        .map(|n| super::addons::info_from_toc(n, &read_toc(root, n), false))
         .collect();
     s.register_addons(registry.clone(), Some(root.to_path_buf()), None, None);
     s.set_realm_name("Harness");

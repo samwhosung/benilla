@@ -819,8 +819,7 @@ pub(crate) fn seat_chain_addon(s: &mut UiScript, name: &str) {
     let toc = super::reference_ui::read(&format!("Interface/AddOns/{name}/{name}.toc"))
         .map(|b| benilla_ui::toc::Toc::parse(&benilla_ui::source::decode(&b)))
         .unwrap_or_else(|| panic!("{name}: no toc off the chain"));
-    let mut info = super::addons::info_from_toc(name, &toc);
-    info.chain = true;
+    let info = super::addons::info_from_toc(name, &toc, true);
     s.set_addon_chain_reader(Box::new(super::reference_ui::read));
     s.register_addons(vec![info], None, None, None);
 }

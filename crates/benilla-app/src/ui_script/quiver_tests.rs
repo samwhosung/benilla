@@ -133,7 +133,7 @@ fn seat_a_hunter(root: &Path) -> UiScript {
         });
     }
 
-    let info = super::addons::info_from_toc("Quiver", &read_toc(root, "Quiver"));
+    let info = super::addons::info_from_toc("Quiver", &read_toc(root, "Quiver"), false);
     s.register_addons(vec![info], Some(root.to_path_buf()), None, None);
     // The in-game UI loads on world entry, so a player always exists by then.
     s.set_unit(

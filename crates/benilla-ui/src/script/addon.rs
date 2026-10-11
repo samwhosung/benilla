@@ -28,8 +28,9 @@ pub struct AddOnInfo {
     pub title: Option<String>,
     pub notes: Option<String>,
     pub url: Option<String>,
-    /// `## Secure: 1`, which Blizzard's own addons carry; drives the `security` token and the
-    /// context the addon loads under ([`addon_load_context`]).
+    /// The security state SECURE (`[rec+0x24] == 0`), which the reference sets only for a valid
+    /// `%s.sig` (`0x6f10f0`, `0x51dbfb`); the host stands in for that check. Drives the `security`
+    /// token and the context the addon loads under ([`addon_load_context`]).
     pub secure: bool,
     pub load_on_demand: bool,
     /// `## Dependencies` / `## RequiredDeps`.
