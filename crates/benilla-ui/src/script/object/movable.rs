@@ -359,8 +359,29 @@ fn clamp_resize(model: &Model, h: FrameHandle, w: f32, hgt: f32) -> (f32, f32) {
     (axis(w, min.0, max.0), axis(hgt, min.1, max.1))
 }
 
+/// The hover walk's move/size branch (`0x766164`–`0x766193`): while the drag slot holds a target,
+/// the walk pumps it to `pos` (`0x7655b0`) and returns before any probe. True when one is in
+/// flight, a target whose frame is gone dropped first.
+pub(crate) fn pump_move_or_size(model: &mut Model, pos: (f32, f32)) -> bool {
+    advance_move(model, pos);
+    advance_size(model, pos);
+    model.moving.is_some() || model.sizing.is_some()
+}
+
+/// A hide ends the move or size whose target is the frame going hidden: the hide's de-registration
+/// (`0x76ad9d` → `0x764920`, flag 0) clears the slot when it holds the frame
+/// (`0x76492e`–`0x76493a` → `0x765640`).
+pub(crate) fn cancel_on_hide(model: &mut Model, h: FrameHandle) {
+    if model.moving.is_some_and(|mv| mv.frame == h) {
+        model.moving = None;
+    }
+    if model.sizing.is_some_and(|sz| sz.frame == h) {
+        model.sizing = None;
+    }
+}
+
 /// Pump an in-flight `StartSizing`: the gripped edges follow the cursor, the opposite ones stay.
-pub(crate) fn advance_size(model: &mut Model, pos: (f32, f32)) {
+fn advance_size(model: &mut Model, pos: (f32, f32)) {
     let Some(sz) = model.sizing else { return };
     if model.arena.frame(sz.frame).is_none() {
         model.sizing = None;
@@ -441,10 +462,8 @@ pub(crate) fn advance_size(model: &mut Model, pos: (f32, f32)) {
     model.sizing = Some(FrameSizing { sample: pos, ..sz });
 }
 
-/// Pump an in-flight move to the cursor at `pos` (`0x7655b0`). Called from
-/// [`crate::script::UiScript::mouse_move`] before its hover-boundary early return, since a frame
-/// dragged under the cursor crosses no boundary.
-pub(crate) fn advance_move(model: &mut Model, pos: (f32, f32)) {
+/// Pump an in-flight move to the cursor at `pos` (`0x7655b0`).
+fn advance_move(model: &mut Model, pos: (f32, f32)) {
     let Some(mv) = model.moving else { return };
     if model.arena.frame(mv.frame).is_none() {
         model.moving = None;

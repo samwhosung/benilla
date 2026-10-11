@@ -93,6 +93,9 @@ pub(super) fn base_hide(lua: &Lua, h: FrameHandle) {
         if !model.arena.hide_step(h) {
             return;
         }
+        // The de-registration ends a move or size on this frame before its index removal
+        // (`0x76493a`, then `0x764942`).
+        super::object::cancel_on_hide(&mut model, h);
         leave_mouse_index(&mut model, h)
     };
     if let Some(script) = left {

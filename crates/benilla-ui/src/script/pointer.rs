@@ -180,9 +180,24 @@ impl UiScript {
 
     /// Move the cursor to `(x, y)`. When the hovered frame changes, fires `OnLeave` on the old one
     /// if still live and `OnEnter` on the new, both with the arg globals untouched; a disabled
-    /// Button takes the hover but fires neither ([`button::hover_notify_runs`]). Drags and frame
-    /// moves advance first. Returns the hovered frame id.
+    /// Button takes the hover but fires neither ([`button::hover_notify_runs`]). A frame move or
+    /// size in flight takes the move instead, and nothing else runs. Returns the hovered frame id.
     pub fn mouse_move(&mut self, x: f32, y: f32) -> Option<u32> {
+        {
+            let mut model = self.model_mut();
+            // The walk saves the event before its move/size check (`0x76615f`), so the re-pick's
+            // position follows the cursor through a drag.
+            model.cursor_pos = (x, y);
+            // A move or size in flight is pumped and the walk returns (`0x766164`–`0x7661a0`)
+            // before any probe (`vtbl+0x3c`): no hit test, no drag start (`0x76b320`), no
+            // EditBox, slider or colour thumb drag (`0x77a860`, `0x789ba0`, `0x78bd80`), no
+            // Minimap probe (`0x4eb0c0`), and the hover holds until the drop.
+            if super::object::pump_move_or_size(&mut model, (x, y)) {
+                return model
+                    .mouseover
+                    .and_then(|h| model.frame_to_id.get(&h).copied());
+            }
+        }
         // A drag-active EditBox extends its selection on every move (`0x77a860`).
         editbox::drag_update(&self.lua, x, y);
         let (new_handle, minimap_missed) = self.hover_walk(x, y);
@@ -200,14 +215,11 @@ impl UiScript {
             Option<(u32, f64, f64, f64)>,
         ) = {
             let mut model = self.model_mut();
-            model.cursor_pos = (x, y);
             // Drags advance on every move, before the hover test: a drag within one frame crosses
             // no hover boundary.
             let slider_change = super::slider::drag_move(&mut model, x, y);
             // The colour picker fires on every move, not only on a change: it has no change gate.
             let color_change = super::colorselect::drag_move(&mut model, x, y);
-            super::object::advance_move(&mut model, (x, y));
-            super::object::advance_size(&mut model, (x, y));
             let drag_start = cursor::maybe_start_drag(&mut model, (x, y));
             let new_handle = new_id.and(new_handle);
             if new_handle == model.mouseover {
