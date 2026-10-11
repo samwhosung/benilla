@@ -175,3 +175,38 @@ fn get_num_points_counts_occupied_slots() {
         .unwrap();
     assert_eq!(n, 0);
 }
+
+/// The compare runs on the stored values, each offset quantized to `f32` layout units as the
+/// binding stores it (`0x7a28a3`..`0x7a28e3`), not on the raw difference. At 1280×1024 (aspect
+/// 1.25, about 1229.4 FrameXML units per layout unit) three `f32` ulps above 650 move the stored
+/// value by 2⁻²² or more, though the raw step (1.83e-4) is under the threshold's 2.93e-4.
+#[test]
+fn the_threshold_compares_the_quantized_stored_offsets() {
+    let mut s = script();
+    s.set_screen_size(1280.0, 1024.0);
+    s.run(r#"f = CreateFrame("Frame"); f:SetPoint("TOPLEFT", nil, "TOPLEFT", 650, 0)"#)
+        .unwrap();
+    s.resolve();
+    let before = epoch(&s);
+    s.run(r#"f:SetPoint("TOPLEFT", nil, "TOPLEFT", 650.0001831054688, 0)"#)
+        .unwrap();
+    assert_ne!(
+        epoch(&s),
+        before,
+        "the stored offsets differ by 2^-22 or more"
+    );
+    let x: f64 = s
+        .eval("local _, _, _, x = f:GetPoint(1); return x")
+        .unwrap();
+    assert_eq!(x, 650.0001831054688);
+
+    // And the other way: five ulps above 700 (a raw 3.05e-4, past the raw threshold) store
+    // within 2^-22 of 700's value, so the call is a no-op.
+    s.run(r#"f:SetPoint("TOPLEFT", nil, "TOPLEFT", 700, 0)"#)
+        .unwrap();
+    s.resolve();
+    let before = epoch(&s);
+    s.run(r#"f:SetPoint("TOPLEFT", nil, "TOPLEFT", 700.0003051757812, 0)"#)
+        .unwrap();
+    assert_eq!(epoch(&s), before, "the stored offsets are within 2^-22");
+}
