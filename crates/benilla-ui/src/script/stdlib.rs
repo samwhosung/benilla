@@ -4,10 +4,10 @@
 //!   `loadfile`, `load`, `module`, `newproxy` and `debug` removed), the reference's `debugstack`,
 //!   and a text-only `loadstring`.
 //! - [`install`]: the 1.12 bare globals (string, table and math aliases, the `debug*` family, the
-//!   error-handler pair), `time` and `date`, the clock and zone getters ([`super::clock`],
-//!   [`super::zone_text`]), and a `string.format` that accepts positional `%N$` specs as the 1.12
-//!   client's does, rewriting them into a sequential format. Mixing positional and sequential
-//!   specs raises, as in the reference, whose single argument cursor a positional spec desyncs.
+//!   error-handler pair), `time` and `date`, and a `string.format` that accepts positional `%N$`
+//!   specs as the 1.12 client's does, rewriting them into a sequential format. Mixing positional
+//!   and sequential specs raises, as in the reference, whose single argument cursor a positional
+//!   spec desyncs.
 
 use mlua::{Lua, Value, Variadic};
 
@@ -101,13 +101,37 @@ pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_error_handler(lua)?;
     install_time(lua)?;
-    // Before the Lua layer, whose `debugprofile*` pair keeps its own `GetTime`.
-    super::clock::install(lua)?;
-    super::zone_text::install(lua)?;
+    install_profile(lua)?;
     lua.load(WOW_STDLIB)
         .set_name("=[benilla wow stdlib]")
         .set_mode(mlua::ChunkMode::Text)
         .exec()?;
+    Ok(())
+}
+
+/// `debugprofilestart`/`debugprofilestop` (`0x702840`/`0x702860`), the two real `debug*` verbs (RDTSC
+/// via `0x4293d0`): start latches, stop answers the milliseconds since. Ours read the `GetTime()`
+/// clock ([`super::clock::now`]), the monotonic session seconds the tick advances, as benilla has
+/// no cycle counter; read in Rust, so an addon that replaces the `GetTime` global cannot bend it.
+fn install_profile(lua: &Lua) -> mlua::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let start = std::sync::Arc::new(AtomicU64::new(0f64.to_bits()));
+    let g = lua.globals();
+    let latch = start.clone();
+    g.set(
+        "debugprofilestart",
+        lua.create_function(move |lua, ()| {
+            latch.store(super::clock::now(lua).to_bits(), Ordering::Relaxed);
+            Ok(())
+        })?,
+    )?;
+    g.set(
+        "debugprofilestop",
+        lua.create_function(move |lua, ()| {
+            let since = f64::from_bits(start.load(Ordering::Relaxed));
+            Ok((super::clock::now(lua) - since) * 1000.0)
+        })?,
+    )?;
     Ok(())
 }
 
@@ -223,13 +247,9 @@ ldexp = math.ldexp
 -- That is what lets `BasicControls.xml` stop guarding its `debuginfo()` call and transcribe
 -- `_ERRORMESSAGE` verbatim, which it now does.
 --
--- `debugprofilestart`/`debugprofilestop` are the two that are REAL (RDTSC via `0x4293d0`): start
--- latches, stop answers the elapsed milliseconds since it. Modelled on `GetTime`'s own clock —
--- the same monotonic session seconds the tick advances — because benilla has no cycle counter and
--- an addon uses these to time its own work, which milliseconds answer honestly. The clock is
--- captured, so an addon that replaces the `GetTime` global cannot bend it.
+-- `debugprofilestart`/`debugprofilestop` are the two that are REAL; they are Rust
+-- (`install_profile`).
 do
-    local GetTime = GetTime
     local function noop() end
     debuginfo = noop
     debugload = noop
@@ -237,18 +257,11 @@ do
     debugdump = noop
     debugbreak = noop
     debugtimestamp = noop
-
-    local profileStart = 0
-    function debugprofilestart() profileStart = GetTime() end
-    function debugprofilestop() return (GetTime() - profileStart) * 1000 end
 end
 
 -- ── _G accessors (getglobal/setglobal: _G[name] get/set) ───────────────────────────────
 function getglobal(name) return _G[name] end
 function setglobal(name, value) _G[name] = value end
-
--- ── GetLocale: benilla ships/reads enUS data only (the 5875 MPQs + Spell.dbc enUS column) ──────
-function GetLocale() return "enUS" end
 
 -- ── NOT here: wipe / tostringall / strsplit / strjoin / strconcat / strtrim ────────────────────
 -- Six 2.0+ names benilla used to define. 1.12 has none of them (absent from

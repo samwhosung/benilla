@@ -527,12 +527,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    lua.set_named_registry_value(REG_MODEL_METHODS, m)?;
-    playermodel_install(lua)
+    lua.set_named_registry_value(REG_MODEL_METHODS, m)
 }
 
 /// `PlayerModel`'s own three methods (table `0x84f1fc`); the rest are `Model`'s, reached on a miss.
-fn playermodel_install(lua: &Lua) -> mlua::Result<()> {
+/// Only the in-game state registers it (`0x506230`, from `0x490260`), where `Model`'s is in the
+/// widget set both states install (`0x76f840`, from `0x706350`).
+pub(super) fn install_player_model(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
     // `SetUnit(unit)` (`0x84f1fc[0]` → `0x505d70`) clears the `SetModel` path; the unit token is

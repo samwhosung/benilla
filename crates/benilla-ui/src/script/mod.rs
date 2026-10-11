@@ -64,6 +64,8 @@ mod follow;
 pub(crate) mod font;
 mod font_block;
 mod frame_enum;
+mod glue;
+pub use glue::{VmKind, GLUE_EVENTS};
 mod gm_ticket;
 mod gossip;
 mod guild;
@@ -499,117 +501,167 @@ pub fn addon_chunk_name(folder: &str, file: &str) -> String {
     format!("@Interface\\AddOns\\{folder}\\{}", file.replace('/', "\\"))
 }
 
+/// What both FrameScript states hold: FrameScript's Lua init (`0x7039e0`), which the glue builder
+/// re-runs through its reset (`0x703b80`) and `UI_Init` through its own, and the three registrars
+/// the glue registrar `0x46abb0` shares with `UI_Init`: `0x51bb20` (the clock, `ConsoleExec` and
+/// the file trio), `0x706350` (the frame factory globals and the 17 widget method tables) and
+/// `0x4587f0` (sound).
+fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
+    let lua = Lua::new();
+    let mut model = Model::new();
+    model.vm = vm;
+    lua.set_app_data(model);
+    // Before anything can fire a handler and while no app-data borrow is held, as the
+    // profiler's slot requires.
+    handler_prof::install(&lua);
+
+    // `0x7039e0`: the base array `0x811e28`, the four libraries and the compat chunk `0x8722e8`.
+    stdlib::sandbox(&lua)?;
+    // Before the stdlib layer, so its aliases bind the 5.0-shaped functions.
+    lua50::install(&lua)?;
+    stdlib::install(&lua)?;
+
+    // `0x51bb20` (table `0x8503f4`): `GetTime`, `GetGameTime` and `ConsoleExec`. `ReadFile`,
+    // `DeleteFile` and `AppendToFile` are not built.
+    clock::install(&lua)?;
+    chat_misc::install_console_exec(&lua)?;
+
+    // `0x706350`: `CreateFrame`, `CreateFont`, `GetNumFrames`, `EnumerateFrames` (table
+    // `0x872e74`), then the widget method tables `0x7a2e70`..`0x78dc60`.
+    object::install(&lua)?;
+    frame_enum::install(&lua)?;
+    // After `object`, whose `publish_global` it reuses, and before any FrameXML loads:
+    // `Loader::do_font` publishes into the tables this builds.
+    font::install(&lua)?;
+    messageframe::install(&lua)?;
+    scrollframe::install(&lua)?;
+    simplehtml::install(&lua)?;
+    slider::install(&lua)?;
+    colorselect::install(&lua)?;
+    modelframe::install(&lua)?;
+
+    // `0x4587f0` (table `0x835a50`): `PlaySound`, `PlayMusic`, `PlaySoundFile`, `StopMusic`.
+    sound::install(&lua)?;
+    Ok(lua)
+}
+
+/// The in-game surface: everything `UI_Init` registers past the shared registrars (`0x490250` and
+/// the calls around it), the in-game widget types' method tables among it.
+fn install_in_game(lua: &Lua) -> mlua::Result<()> {
+    addon::install(lua)?;
+    addon_message::install(lua)?;
+    chat_send::install(lua)?;
+    chat_types::install(lua)?;
+    chat_misc::install(lua)?;
+    channel::install(lua)?;
+    chat_window::install(lua)?;
+    client::install(lua)?;
+    screenshot::install(lua)?;
+    zone_text::install(lua)?;
+    object::install_in_game(lua)?;
+    region::install_in_game(lua)?;
+    modelframe::install_player_model(lua)?;
+    unit::install(lua)?;
+    party::install(lua)?;
+    social::install(lua)?;
+    guild::install(lua)?;
+    petition::install(lua)?;
+    binder::install(lua)?;
+    summon::install(lua)?;
+    bind_confirm::install(lua)?;
+    instance::install(lua)?;
+    gm_ticket::install(lua)?;
+    duel::install(lua)?;
+    follow::install(lua)?;
+    camera_view::install(lua)?;
+    input_verbs::install(lua)?;
+    session::install(lua)?;
+    pvp::install(lua)?;
+    worn_display::install(lua)?;
+    death::install(lua)?;
+    aura::install(lua)?;
+    cvars::install(lua)?;
+    nameplate::install_verbs(lua)?;
+    saved::install(lua)?;
+    keybind::install(lua)?;
+    ui_errors::install(lua)?;
+    pointer::install(lua)?;
+    action::install(lua)?;
+    action_bar_toggles::install(lua)?;
+    container::install(lua)?;
+    cursor::install(lua)?;
+    spellbook::install(lua)?;
+    macros::install(lua)?;
+    talent::install(lua)?;
+    dialog_verbs::install(lua)?;
+    battlefield_score::install(lua)?;
+    battlefield_queue::install(lua)?;
+    battlefield_positions::install(lua)?;
+    tutorial::install(lua)?;
+    worldmap_arrow::install(lua)?;
+    shapeshift::install(lua)?;
+    pet::install(lua)?;
+    gossip::install(lua)?;
+    merchant::install(lua)?;
+    bank::install(lua)?;
+    stable::install(lua)?;
+    item_text::install(lua)?;
+    mail::install(lua)?;
+    auction::install(lua)?;
+    trainer::install(lua)?;
+    taxi::install(lua)?;
+    trade::install(lua)?;
+    inspect::install(lua)?;
+    dressup::install(lua)?;
+    tabard::install(lua)?;
+    tradeskill::install(lua)?;
+    craft::install(lua)?;
+    reputation::install(lua)?;
+    skills::install(lua)?;
+    item_stats::install(lua)?;
+    char_stats::install(lua)?;
+    inventory_verbs::install(lua)?;
+    weapon_enchant::install(lua)?;
+    loot::install(lua)?;
+    loot_roll::install(lua)?;
+    quest::install(lua)?;
+    quest_log::install(lua)?;
+    minimap::install(lua)?;
+    tooltip::install(lua)?;
+    worldmap::install(lua)?;
+    worldstate::install(lua)?;
+    net_stats::install(lua)?;
+    Ok(())
+}
+
 impl UiScript {
-    /// Build a fully sandboxed, stdlib- and object-model-equipped host.
+    /// The in-game VM: FrameScript's base set and the registrars both states share
+    /// ([`install_framescript`]), then the in-game surface `UI_Init` (`0x48fbf0`) registers.
     pub fn new() -> mlua::Result<UiScript> {
-        let lua = Lua::new();
-        lua.set_app_data(Model::new());
-        // Before anything can fire a handler and while no app-data borrow is held, as the
-        // profiler's slot requires.
-        handler_prof::install(&lua);
+        let lua = install_framescript(VmKind::InGame)?;
+        install_in_game(&lua)?;
+        Ok(Self::host(lua))
+    }
 
-        addon::install(&lua)?;
-        addon_message::install(&lua)?;
-        chat_send::install(&lua)?;
-        chat_types::install(&lua)?;
-        chat_misc::install(&lua)?;
-        channel::install(&lua)?;
-        chat_window::install(&lua)?;
-        client::install(&lua)?;
-        screenshot::install(&lua)?;
-        stdlib::sandbox(&lua)?;
-        // Before the stdlib layer, so its aliases bind the 5.0-shaped functions.
-        lua50::install(&lua)?;
-        stdlib::install(&lua)?;
-        object::install(&lua)?;
-        frame_enum::install(&lua)?;
-        // After `object`, whose `publish_global` it reuses, and before any FrameXML loads:
-        // `Loader::do_font` publishes into the tables this builds.
-        font::install(&lua)?;
-        unit::install(&lua)?;
-        party::install(&lua)?;
-        social::install(&lua)?;
-        guild::install(&lua)?;
-        petition::install(&lua)?;
-        binder::install(&lua)?;
-        summon::install(&lua)?;
-        bind_confirm::install(&lua)?;
-        instance::install(&lua)?;
-        gm_ticket::install(&lua)?;
-        duel::install(&lua)?;
-        follow::install(&lua)?;
-        camera_view::install(&lua)?;
-        input_verbs::install(&lua)?;
-        session::install(&lua)?;
-        pvp::install(&lua)?;
-        worn_display::install(&lua)?;
-        death::install(&lua)?;
-        aura::install(&lua)?;
-        cvars::install(&lua)?;
-        nameplate::install_verbs(&lua)?;
-        saved::install(&lua)?;
-        keybind::install(&lua)?;
-        sound::install(&lua)?;
-        ui_errors::install(&lua)?;
-        pointer::install(&lua)?;
-        action::install(&lua)?;
-        action_bar_toggles::install(&lua)?;
-        container::install(&lua)?;
-        cursor::install(&lua)?;
-        spellbook::install(&lua)?;
-        macros::install(&lua)?;
-        talent::install(&lua)?;
-        dialog_verbs::install(&lua)?;
-        battlefield_score::install(&lua)?;
-        battlefield_queue::install(&lua)?;
-        battlefield_positions::install(&lua)?;
-        tutorial::install(&lua)?;
-        worldmap_arrow::install(&lua)?;
-        shapeshift::install(&lua)?;
-        pet::install(&lua)?;
-        gossip::install(&lua)?;
-        merchant::install(&lua)?;
-        bank::install(&lua)?;
-        stable::install(&lua)?;
-        item_text::install(&lua)?;
-        mail::install(&lua)?;
-        auction::install(&lua)?;
-        trainer::install(&lua)?;
-        taxi::install(&lua)?;
-        trade::install(&lua)?;
-        inspect::install(&lua)?;
-        dressup::install(&lua)?;
-        tabard::install(&lua)?;
-        tradeskill::install(&lua)?;
-        craft::install(&lua)?;
-        reputation::install(&lua)?;
-        skills::install(&lua)?;
-        item_stats::install(&lua)?;
-        char_stats::install(&lua)?;
-        inventory_verbs::install(&lua)?;
-        weapon_enchant::install(&lua)?;
-        loot::install(&lua)?;
-        loot_roll::install(&lua)?;
-        quest::install(&lua)?;
-        quest_log::install(&lua)?;
-        messageframe::install(&lua)?;
-        scrollframe::install(&lua)?;
-        simplehtml::install(&lua)?;
-        slider::install(&lua)?;
-        colorselect::install(&lua)?;
-        minimap::install(&lua)?;
-        modelframe::install(&lua)?;
-        tooltip::install(&lua)?;
-        worldmap::install(&lua)?;
-        worldstate::install(&lua)?;
-        net_stats::install(&lua)?;
+    /// The glue screens' VM, as the glue builder (`0x46a7b0`) leaves its state before GlueXML
+    /// loads: the base set and the shared registrars, with the glue event table and the glue frame
+    /// types ([`glue`]), and none of the in-game surface. The glue registrar's own four tables
+    /// (`0x46ddf0`, `0x4736c0`, `0x471a20`, `0x46f480`) are not built yet.
+    pub fn new_glue() -> mlua::Result<UiScript> {
+        Ok(Self::host(install_framescript(VmKind::Glue)?))
+    }
 
-        let s = UiScript {
+    fn host(lua: Lua) -> UiScript {
+        UiScript {
             lua,
             instructions: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session: NEXT_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        };
-        Ok(s)
+        }
+    }
+
+    /// Which FrameScript state this VM is.
+    pub fn vm_kind(&self) -> VmKind {
+        self.model_ref().vm
     }
 
     /// The embedded VM, for the app and the loader to add their bindings over this object model.

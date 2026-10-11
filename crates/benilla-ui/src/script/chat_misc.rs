@@ -75,6 +75,35 @@ impl super::UiScript {
     }
 }
 
+/// `ConsoleExec` (`0x515f10`) is in the registrar both states call (`0x51bb20`, from the glue
+/// registrar `0x46abb0` and the in-game `0x51bb60`), so it installs apart from this file's in-game
+/// verbs.
+pub(super) fn install_console_exec(lua: &Lua) -> mlua::Result<()> {
+    // `ConsoleExec("name value")`: a registered CVar with a value is written at once, as `SetCVar`
+    // writes it; anything else, a bare CVar name included (the reference answers it with
+    // `CVar "%s" is "%s"`, `0x63dde0`), goes to the app's command registry.
+    lua.globals().set(
+        "ConsoleExec",
+        lua.create_function(|lua, line: Option<String>| {
+            let Some(line) = line.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()) else {
+                return Ok(());
+            };
+            let (name, value) = line
+                .split_once(char::is_whitespace)
+                .map_or((line.as_str(), ""), |(n, v)| (n, v.trim()));
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let is_cvar = model.cvars.contains_key(&name.to_ascii_lowercase());
+            if is_cvar && !value.is_empty() {
+                super::cvars::write_cvar(&mut model, name, value.to_string());
+            } else {
+                model.console_lines.push(line.clone());
+            }
+            Ok(())
+        })?,
+    )?;
+    Ok(())
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -131,29 +160,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.uninvite_requests.push(name);
-            Ok(())
-        })?,
-    )?;
-
-    // `ConsoleExec("name value")`: a registered CVar with a value is written at once, as `SetCVar`
-    // writes it; anything else, a bare CVar name included (the reference answers it with
-    // `CVar "%s" is "%s"`, `0x63dde0`), goes to the app's command registry.
-    g.set(
-        "ConsoleExec",
-        lua.create_function(|lua, line: Option<String>| {
-            let Some(line) = line.map(|l| l.trim().to_string()).filter(|l| !l.is_empty()) else {
-                return Ok(());
-            };
-            let (name, value) = line
-                .split_once(char::is_whitespace)
-                .map_or((line.as_str(), ""), |(n, v)| (n, v.trim()));
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let is_cvar = model.cvars.contains_key(&name.to_ascii_lowercase());
-            if is_cvar && !value.is_empty() {
-                super::cvars::write_cvar(&mut model, name, value.to_string());
-            } else {
-                model.console_lines.push(line.clone());
-            }
             Ok(())
         })?,
     )?;

@@ -556,10 +556,7 @@ impl WidgetArena {
                 }
                 // `CGCharacterModelBase` extends `CSimpleModel`, adding only a turn-animation pair,
                 // which is not modelled.
-                FrameKind::Model
-                | FrameKind::PlayerModel
-                | FrameKind::DressUpModel
-                | FrameKind::TabardModel => KindState::Model(kinds::ModelState::default()),
+                k if k.is_model() => KindState::Model(kinds::ModelState::default()),
                 FrameKind::Minimap => KindState::Minimap(kinds::MinimapState::default()),
                 FrameKind::GameTooltip => KindState::Tooltip(kinds::TooltipState::default()),
                 _ => KindState::None,
@@ -570,13 +567,7 @@ impl WidgetArena {
         if matches!(kind, FrameKind::Minimap) {
             self.minimap_created += 1;
         }
-        let model_kind = matches!(
-            kind,
-            FrameKind::Model
-                | FrameKind::PlayerModel
-                | FrameKind::DressUpModel
-                | FrameKind::TabardModel
-        );
+        let model_kind = kind.is_model();
         let visible = frame.effective_visible;
         let (strata, level) = (frame.strata, frame.level);
         let (index, generation) = self.frames.insert(frame);

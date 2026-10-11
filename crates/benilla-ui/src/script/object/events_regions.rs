@@ -19,6 +19,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, event): (Table, String)| {
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
+            // A name the VM's event table lacks registers nothing and raises nothing (`0x702140`).
+            let Some(event) = model.vm.event_key(&event).map(str::to_string) else {
+                return Ok(());
+            };
             // Dispatch follows registration order, as the reference's listener list does; a
             // re-register keeps its place and never fires twice.
             let list = model.event_to_frames.entry(event.clone()).or_default();
@@ -34,6 +38,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, event): (Table, String)| {
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
+            // Matched as `RegisterEvent` matches (`0x702280`).
+            let Some(event) = model.vm.event_key(&event).map(str::to_string) else {
+                return Ok(());
+            };
             if let Some(list) = model.event_to_frames.get_mut(&event) {
                 list.retain(|x| x != &h);
             }

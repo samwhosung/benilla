@@ -337,10 +337,24 @@ pub(super) fn region_wrapper(lua: &Lua, id: u32) -> mlua::Result<Table> {
     Ok(t)
 }
 
-/// Install the region method tables and the region globals.
+/// Install the region method tables.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_region_methods(lua)?;
 
+    // `__index` is the method table itself, here and on the leaf metatables, not a function
+    // (~9 ns against ~195 ns per method access); sound while nothing replaces these tables.
+    let region_meta = lua.create_table()?;
+    region_meta.set(
+        "__index",
+        lua.named_registry_value::<Table>(REG_REGION_METHODS)?,
+    )?;
+    lua.set_named_registry_value(REG_REGION_META, region_meta)?;
+    Ok(())
+}
+
+/// The two portrait globals, which only the in-game state registers (`SetPortraitTexture` in
+/// table `0x850438`, `SetPortraitToTexture` in `0x83de68`).
+pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
     // SetPortraitTexture(texture, unit) (`UnitFrame.lua:26`): binds the region to a unit whose
     // model the app bakes off-screen, drawn masked to its inscribed circle; a later `SetTexture`
     // or `SetPortraitToTexture` clears it.
@@ -392,15 +406,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-
-    // `__index` is the method table itself, here and on the leaf metatables, not a function
-    // (~9 ns against ~195 ns per method access); sound while nothing replaces these tables.
-    let region_meta = lua.create_table()?;
-    region_meta.set(
-        "__index",
-        lua.named_registry_value::<Table>(REG_REGION_METHODS)?,
-    )?;
-    lua.set_named_registry_value(REG_REGION_META, region_meta)?;
     Ok(())
 }
 

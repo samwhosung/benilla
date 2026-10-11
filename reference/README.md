@@ -98,4 +98,7 @@ Regenerating: `scripts/gen-reference-glue-surface.py`, from the shapes and globa
 reproduces the committed file from any clone.
 
 Reading them: `crates/benilla-ui/src/script/tests/glue_surface.rs` holds the surface table to the
-shapes table, row for row by `table_va`.
+shapes table, row for row by `table_va`, and the glue VM (`UiScript::new_glue`) to the surface table:
+every function it exposes is a glue-state one, and every glue-state function it lacks is on the
+file's `NOT_YET` list, which only shrinks. The same file holds the VM's event table to
+`1.12-glue-events.tsv`.

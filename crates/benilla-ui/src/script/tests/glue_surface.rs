@@ -1,8 +1,12 @@
 //! The glue screens' Lua surface (`reference/1.12-glue-surface.tsv`) held to its source, the shapes
-//! table: every row of a registrar table the glue builder installs is there, with the same binding
-//! and arity, and nothing else is.
+//! table, and the glue VM ([`UiScript::new_glue`]) held to the surface: every function it puts in
+//! `_G` is a glue-state one, and every glue-state function is there or on [`NOT_YET`]. Then the glue
+//! state's frame types and event table.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use crate::script::{UiScript, GLUE_EVENTS};
+use crate::widget::KindState;
 
 /// A vendored `reference/` table's data rows, split on tabs, the header row dropped.
 fn reference_rows(file: &str, header: &str) -> Vec<Vec<String>> {
@@ -124,4 +128,396 @@ fn the_glue_surface_matches_the_shapes_table() {
             "{scope} rows"
         );
     }
+}
+
+/// Glue-state functions the glue VM does not answer yet, by registrar table, each with why. The
+/// list only shrinks: a verb is absent until built, never stubbed.
+const NOT_YET: &[(&str, &[&str])] = &[
+    (
+        "0x51bb20's file trio, unbuilt in the in-game VM too",
+        &["ReadFile", "DeleteFile", "AppendToFile"],
+    ),
+    (
+        "the glue core (0x46ddf0, table 0x8373b8): login, the notices, the addon list, the cursor \
+         and the glue music; each a binding of its own, the 14 with an in-game namesake included",
+        &[
+            "AcceptContest",
+            "AcceptEULA",
+            "AcceptScanning",
+            "AcceptTOS",
+            "ContestAccepted",
+            "DefaultServerLogin",
+            "DisableAddOn",
+            "DisableAllAddOns",
+            "DisconnectFromServer",
+            "EULAAccepted",
+            "EnableAddOn",
+            "EnableAllAddOns",
+            "EnterWorld",
+            "GetAddOnDependencies",
+            "GetAddOnEnableState",
+            "GetAddOnInfo",
+            "GetBillingPlan",
+            "GetBillingTimeRemaining",
+            "GetBillingTimeRested",
+            "GetBuildInfo",
+            "GetCursorPosition",
+            "GetLocale",
+            "GetMovieResolution",
+            "GetMovieSubtitles",
+            "GetNumAddOns",
+            "GetSavedAccountName",
+            "GetScreenHeight",
+            "GetScreenWidth",
+            "GetScriptMemory",
+            "GetServerName",
+            "HideCursor",
+            "IsAddonVersionCheckEnabled",
+            "IsConnectedToServer",
+            "LaunchAddOnURL",
+            "LaunchURL",
+            "PINEntered",
+            "PatchDownloadApply",
+            "PatchDownloadCancel",
+            "PatchDownloadProgress",
+            "PlayCreditsMusic",
+            "PlayGlueMusic",
+            "QuitGame",
+            "ResetAddOns",
+            "SaveAddOns",
+            "ScanningAccepted",
+            "Screenshot",
+            "SetAddonVersionCheck",
+            "SetCurrentScreen",
+            "SetMovieSubtitles",
+            "SetSavedAccountName",
+            "SetScriptMemory",
+            "ShowContestNotice",
+            "ShowCursor",
+            "ShowEULANotice",
+            "ShowScanningNotice",
+            "ShowTOSNotice",
+            "StatusDialogClick",
+            "StopGlueMusic",
+            "SurveyNotificationDone",
+            "TOSAccepted",
+        ],
+    ),
+    (
+        "character select (0x4736c0, table 0x838578)",
+        &[
+            "DeleteCharacter",
+            "GetCharacterInfo",
+            "GetCharacterListUpdate",
+            "GetCharacterSelectFacing",
+            "GetNumCharacters",
+            "RenameCharacter",
+            "SelectCharacter",
+            "SetCharSelectBackground",
+            "SetCharSelectModelFrame",
+            "SetCharacterSelectFacing",
+            "UpdateSelectionCustomizationScene",
+        ],
+    ),
+    (
+        "character create (0x471a20, table 0x8380f8)",
+        &[
+            "CreateCharacter",
+            "CycleCharCustomization",
+            "GetAvailableRaces",
+            "GetCharacterCreateFacing",
+            "GetClassesForRace",
+            "GetFacialHairCustomization",
+            "GetFactionForRace",
+            "GetHairCustomization",
+            "GetNameForRace",
+            "GetRandomName",
+            "GetSelectedClass",
+            "GetSelectedRace",
+            "GetSelectedSex",
+            "HasCharCustomization",
+            "RandomizeCharCustomization",
+            "ResetCharCustomize",
+            "SetCharCustomizeBackground",
+            "SetCharCustomizeFrame",
+            "SetCharacterCreateFacing",
+            "SetSelectedClass",
+            "SetSelectedRace",
+            "SetSelectedSex",
+            "UpdateCustomizationBackground",
+            "UpdateCustomizationScene",
+        ],
+    ),
+    (
+        "the realm list (0x46f480, table 0x837ea0)",
+        &[
+            "CancelRealmListQuery",
+            "ChangeRealm",
+            "GetNumRealms",
+            "GetRealmCategories",
+            "GetRealmInfo",
+            "GetSelectedCategory",
+            "RealmListDialogCancelled",
+            "RequestRealmList",
+            "SetPreferredInfo",
+            "SortRealms",
+        ],
+    ),
+];
+
+/// The glue VM's globals by Lua type name.
+fn glue_globals() -> BTreeMap<String, String> {
+    UiScript::new_glue()
+        .expect("construct the glue VM")
+        .eval::<Vec<Vec<String>>>(
+            "local out = {} \
+             for k, v in pairs(getfenv(0)) do \
+               if type(k) == 'string' then table.insert(out, {k, type(v)}) end \
+             end \
+             return out",
+        )
+        .expect("dump _G")
+        .into_iter()
+        .map(|kv| (kv[0].clone(), kv[1].clone()))
+        .collect()
+}
+
+/// The glue VM's functions are the glue surface less [`NOT_YET`], exactly.
+#[test]
+fn the_glue_vm_answers_the_glue_surface() {
+    let surface: BTreeSet<String> = glue_surface().into_iter().map(|r| r.name).collect();
+    let not_yet: BTreeSet<&str> = NOT_YET
+        .iter()
+        .flat_map(|(_, n)| n.iter().copied())
+        .collect();
+    let ours: BTreeSet<String> = glue_globals()
+        .into_iter()
+        .filter(|(_, t)| t == "function")
+        .map(|(k, _)| k)
+        .collect();
+
+    let beyond: Vec<&String> = ours.iter().filter(|n| !surface.contains(*n)).collect();
+    assert!(
+        beyond.is_empty(),
+        "the glue VM exposes {} function(s) the glue state does not have: {beyond:?}. The \
+         in-game surface stays out of it (`UiScript::new` installs that).",
+        beyond.len()
+    );
+    let missing: Vec<&String> = surface
+        .iter()
+        .filter(|n| !ours.contains(*n) && !not_yet.contains(n.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "glue-state functions the glue VM lacks and NOT_YET does not name: {missing:?}"
+    );
+    let stale: Vec<&&str> = not_yet
+        .iter()
+        .filter(|n| ours.contains(**n) || !surface.contains(**n))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "NOT_YET names that are built, or that are not glue-state functions; take them off: \
+         {stale:?}"
+    );
+    assert_eq!(
+        not_yet.len(),
+        NOT_YET.iter().map(|(_, n)| n.len()).sum::<usize>(),
+        "a NOT_YET name is listed twice"
+    );
+}
+
+/// Past its functions the glue `_G` holds the four library tables, the frame metatable
+/// `0x7039e0` publishes, and the compat chunk's `PI`; `_G` itself is benilla's, as in-game
+/// (`reference_surface::BEYOND_1_12`).
+#[test]
+fn the_glue_vm_holds_no_other_global() {
+    let others: BTreeMap<String, String> = glue_globals()
+        .into_iter()
+        .filter(|(_, t)| t != "function")
+        .collect();
+    let want: BTreeMap<String, String> = [
+        ("PI", "number"),
+        ("__framescript_meta", "table"),
+        ("_G", "table"),
+        ("bit", "table"),
+        ("math", "table"),
+        ("string", "table"),
+        ("table", "table"),
+    ]
+    .into_iter()
+    .map(|(k, t)| (k.to_string(), t.to_string()))
+    .collect();
+    assert_eq!(others, want);
+}
+
+/// The glue event table in code is `reference/1.12-glue-events.tsv`, by id.
+#[test]
+fn the_glue_event_table_matches_the_reference() {
+    let rows = reference_rows("1.12-glue-events.tsv", "id");
+    assert_eq!(rows.len(), GLUE_EVENTS.len());
+    for (id, row) in rows.iter().enumerate() {
+        assert_eq!(row[0], id.to_string(), "ids run 0..26 in order");
+        assert_eq!(row[1], GLUE_EVENTS[id], "event {id}");
+    }
+}
+
+/// `RegisterEvent` matches a name against the glue table case-insensitively (`0x702140` with
+/// `0x64a4c0`) and drops one the table lacks without raising; `UnregisterEvent` matches the same
+/// way (`0x702280`). An in-game event fired at the glue VM reaches nothing, an all-events frame
+/// included, since the reference fires by id.
+#[test]
+fn glue_events_register_by_the_glue_table() {
+    let mut s = UiScript::new_glue().unwrap();
+    s.run(
+        r#"
+        heard = {}
+        f = CreateFrame("Frame")
+        f:SetScript("OnEvent", function() table.insert(heard, "f:" .. event) end)
+        f:RegisterEvent("set_glue_screen")
+        f:RegisterEvent("PLAYER_LOGIN")
+        all = CreateFrame("Frame")
+        all:SetScript("OnEvent", function() table.insert(heard, "all:" .. event) end)
+        all:RegisterAllEvents()
+        "#,
+    )
+    .expect("an event off the glue table raises nothing");
+    s.fire_event("SET_GLUE_SCREEN", vec![]);
+    s.queue_event("PLAYER_LOGIN", vec![]);
+    // The per-frame advance runs over the glue VM, its queued events included.
+    s.tick(0.016);
+    assert_eq!(
+        s.eval::<Vec<String>>("return heard").unwrap(),
+        ["f:SET_GLUE_SCREEN", "all:SET_GLUE_SCREEN"],
+        "the glue event reaches both frames under the table's spelling; the in-game one neither"
+    );
+    s.run(r#"heard = {} f:UnregisterEvent("Set_Glue_Screen")"#)
+        .unwrap();
+    s.fire_event("SET_GLUE_SCREEN", vec![]);
+    assert_eq!(
+        s.eval::<Vec<String>>("return heard").unwrap(),
+        ["all:SET_GLUE_SCREEN"]
+    );
+}
+
+/// The in-game VM keeps its by-name registry: an in-game event registers and fires there.
+#[test]
+fn the_in_game_vm_keeps_its_events() {
+    let mut s = UiScript::new().unwrap();
+    s.run(
+        r#"heard = 0 f = CreateFrame("Frame") f:RegisterEvent("PLAYER_LOGIN")
+           f:SetScript("OnEvent", function() heard = heard + 1 end)"#,
+    )
+    .unwrap();
+    s.fire_event("PLAYER_LOGIN", vec![]);
+    assert_eq!(s.eval::<i64>("return heard").unwrap(), 1);
+}
+
+/// The frame types: the 13 registered at startup (`0x6ef070`) and `ModelFFX` (`0x46a4fe`) in both
+/// states; `UI_Init`'s eight (`0x495940`) only in-game.
+#[test]
+fn the_glue_vm_makes_the_startup_frame_types_only() {
+    const STARTUP: [&str; 14] = [
+        "Button",
+        "CheckButton",
+        "EditBox",
+        "Frame",
+        "MessageFrame",
+        "Model",
+        "ScrollFrame",
+        "ScrollingMessageFrame",
+        "Slider",
+        "SimpleHTML",
+        "StatusBar",
+        "ColorSelect",
+        "MovieFrame",
+        "ModelFFX",
+    ];
+    const IN_GAME: [&str; 8] = [
+        "WorldFrame",
+        "GameTooltip",
+        "Minimap",
+        "PlayerModel",
+        "DressUpModel",
+        "TabardModel",
+        "LootButton",
+        "TaxiRouteFrame",
+    ];
+    let glue = UiScript::new_glue().unwrap();
+    let world = UiScript::new().unwrap();
+    for t in STARTUP {
+        for (vm, s) in [("glue", &glue), ("in-game", &world)] {
+            s.run(&format!(r#"CreateFrame("{t}")"#))
+                .unwrap_or_else(|e| panic!("{vm} CreateFrame(\"{t}\"): {e}"));
+        }
+    }
+    for t in IN_GAME {
+        let e = glue
+            .run(&format!(r#"CreateFrame("{t}")"#))
+            .expect_err(t)
+            .to_string();
+        assert!(e.contains(&format!("unknown frame type '{t}'")), "{t}: {e}");
+        world.run(&format!(r#"CreateFrame("{t}")"#)).unwrap();
+    }
+}
+
+/// `ModelFFX` is a `Model` to Lua (`0x470030`, `0x46ffd0`) with `Model`'s methods, flagged FFX for
+/// the renderer; its XML is `Model`'s (`0x76cac0`), `file=` and `scale=` included.
+#[test]
+fn model_ffx_is_a_model_flagged_ffx() {
+    let s = UiScript::new_glue().unwrap();
+    s.run(
+        r#"
+        a = CreateFrame("ModelFFX", "FfxPane")
+        b = CreateFrame("Model", "PlainPane")
+        a:SetModel("Test/Scene.mdx")
+        "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<(String, bool, bool, String)>(
+            r#"return a:GetObjectType(), a:IsObjectType("Model") == 1,
+                      a:IsObjectType("ModelFFX") == 1, a:GetModel()"#
+        )
+        .unwrap(),
+        (
+            "Model".to_string(),
+            true,
+            false,
+            "Test/Scene.mdx".to_string()
+        )
+    );
+    let ffx = |name: &str| {
+        let model = s.model_ref();
+        let h = model.arena.lookup(name).unwrap();
+        match &model.arena.frame(h).unwrap().kind_state {
+            KindState::Model(m) => m.ffx,
+            other => panic!("{name}: {other:?}"),
+        }
+    };
+    assert!(ffx("FfxPane"));
+    assert!(!ffx("PlainPane"));
+
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+            <ModelFFX name="XmlFfx" file="Test/Xml.mdx" scale="2"/>
+            <PlayerModel name="XmlPlayer"/>
+        </Ui>"#,
+    )
+    .unwrap();
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w == "Unknown frame type: PlayerModel"),
+        "the glue state has no PlayerModel factory: {:?}",
+        report.warnings
+    );
+    assert!(ffx("XmlFfx"));
+    assert_eq!(
+        s.eval::<(String, f64)>("return XmlFfx:GetModel(), XmlFfx:GetModelScale()")
+            .unwrap(),
+        ("Test/Xml.mdx".to_string(), 2.0)
+    );
 }

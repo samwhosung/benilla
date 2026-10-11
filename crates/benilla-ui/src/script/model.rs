@@ -61,6 +61,8 @@ impl<T: Copy> IdMap<T> {
 /// The Rust-side model behind the Lua VM, in `lua.app_data`. It holds no mlua handles, whose
 /// persistent count the vendored `LUAI_MAXCSTACK` caps.
 pub(crate) struct Model {
+    /// Which FrameScript state this VM is: it picks the event table and the frame types.
+    pub(crate) vm: super::glue::VmKind,
     /// Every discovered addon in load order: the AddOn API's registry, filled at world entry.
     pub(crate) addons: Vec<super::addon::AddOnInfo>,
     /// The Lua index space into `addons`, a title-sorted, hidden-filtered list (`0x51da70`).
@@ -1098,6 +1100,7 @@ impl Model {
 
     pub(crate) fn new() -> Model {
         Model {
+            vm: super::glue::VmKind::InGame,
             addons: Vec::new(),
             addon_index: Vec::new(),
             addon_info_hidden: None,

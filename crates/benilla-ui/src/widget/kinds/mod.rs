@@ -71,6 +71,17 @@ pub enum KindUpdate {
 }
 
 impl FrameKind {
+    /// A `CSimpleModel` kind, carrying a [`ModelState`].
+    pub fn is_model(self) -> bool {
+        matches!(
+            self,
+            FrameKind::Model
+                | FrameKind::PlayerModel
+                | FrameKind::DressUpModel
+                | FrameKind::TabardModel
+        )
+    }
+
     /// The kind's own update, run in the walk after the frame's `OnUpdate`. The reference
     /// overrides the slot on more kinds; benilla models these.
     pub fn kind_update(self) -> Option<KindUpdate> {
@@ -80,10 +91,7 @@ impl FrameKind {
             FrameKind::MessageFrame => Some(KindUpdate::MessageFrame),
             FrameKind::ScrollingMessageFrame => Some(KindUpdate::ScrollingMessageFrame),
             FrameKind::ScrollFrame => Some(KindUpdate::ScrollFrame),
-            FrameKind::Model
-            | FrameKind::PlayerModel
-            | FrameKind::DressUpModel
-            | FrameKind::TabardModel => Some(KindUpdate::Model),
+            k if k.is_model() => Some(KindUpdate::Model),
             _ => None,
         }
     }
@@ -334,6 +342,12 @@ pub struct ModelState {
     pub fog_near: f32,
     /// Fog far (`+0x3b0`), shaped like [`Self::fog_near`]; the ctor's is `1.0`.
     pub fog_far: f32,
+    /// A `ModelFFX`, the glue's `CSimpleModelFFX` (`0x46fa00`). Its vtable differs from
+    /// `CSimpleModel`'s in two slots past the destructor: its OnShow (`0x46fa60`) installs the glue
+    /// glow pass (`0x6cde60` with `[0xb414c4]`) and pins `LightParams.glow` to `*0x8380b4` (0.30),
+    /// and its layer-2 paint callback (`0x46fad0`, registered by `0x46fa90`) brackets the model
+    /// paint `0x76d240` with the full-screen-effect pass pair `0x6cd890`/`0x6cda70`.
+    pub ffx: bool,
 }
 
 /// A model pane's armed fog, all the renderer needs ([`ModelState::armed_fog`]).
@@ -406,6 +420,7 @@ impl Default for ModelState {
             fog: false,
             fog_near: 0.0,
             fog_far: 1.0,
+            ffx: false,
         }
     }
 }
