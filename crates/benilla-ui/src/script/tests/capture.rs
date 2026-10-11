@@ -89,6 +89,30 @@ fn a_frame_mouse_disabled_while_pressed_gets_no_drag_start() {
     assert_eq!(s.eval::<i64>("return drags").unwrap(), 0);
 }
 
+/// The arm goes with the capture even when the frame is not the hover: its threshold poll runs
+/// only through the capture and the index (`0x7661ca`, `0x7661cd`), and the frame is out of both,
+/// for a mouse disable and a hide alike.
+#[test]
+fn a_pressed_frame_out_of_the_index_never_starts_its_drag() {
+    for removal in ["A:EnableMouse(false)", "A:Hide()"] {
+        let mut s = two_frames("Frame");
+        s.run(
+            r#"
+            drags = 0
+            A:RegisterForDrag("LeftButton")
+            A:SetScript("OnDragStart", function() drags = drags + 1 end)
+        "#,
+        )
+        .unwrap();
+        s.mouse_move(299.0, 300.0);
+        s.mouse_button(299.0, 300.0, "LeftButton", true);
+        s.mouse_move(301.0, 300.0); // 2px: the hover left A, the arm is not yet past its threshold
+        s.run(removal).unwrap();
+        s.mouse_move(310.0, 300.0);
+        assert_eq!(s.eval::<i64>("return drags").unwrap(), 0, "{removal}");
+    }
+}
+
 /// The leave is at once: the hover clears and `OnLeave` runs inside the call (`0x764cd4`), the
 /// re-pick it arms (`0x764cbb`) then enters the frame beneath on the next tick.
 #[test]
@@ -272,5 +296,70 @@ fn a_press_after_a_lost_release_goes_to_the_frame_under_the_cursor() {
     assert_eq!(
         log_of(&mut s),
         "A:enter A:down:LeftButton A:leave B:enter B:down:LeftButton B:up:LeftButton"
+    );
+}
+
+// ── The Button click legs on the capture (`0x779210`, `0x7792d0`) ──────────────────────────────
+
+/// The release click tests the pressed button's own rect (`0x779335`), not whether it is the top
+/// frame under the cursor: releasing over a frame that overlaps it still clicks.
+#[test]
+fn a_release_over_an_overlapping_frame_still_clicks_the_pressed_button() {
+    let mut s = two_frames("Button");
+    s.run(
+        r#"
+        A:SetScript("OnClick", function() table.insert(log, "A:click") end)
+        local top = CreateFrame("Frame", "Top")
+        top:SetPoint("BOTTOMLEFT", 200, 200); top:SetWidth(100); top:SetHeight(200)
+        top:EnableMouse(true); top:SetFrameLevel(A:GetFrameLevel() + 5)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(120.0, 300.0);
+    s.mouse_button(120.0, 300.0, "LeftButton", true);
+    s.mouse_move(250.0, 300.0); // inside A, under Top
+    assert_eq!(s.hit_test_name(250.0, 300.0).as_deref(), Some("Top"));
+    s.mouse_button(250.0, 300.0, "LeftButton", false);
+    assert!(
+        log_of(&mut s).ends_with("A:up:LeftButton A:click"),
+        "{}",
+        log_of(&mut s)
+    );
+}
+
+/// The release slot clicks only a PUSHED button (`0x7792fc`): one a script set back to NORMAL
+/// between the edges does not.
+#[test]
+fn a_button_no_longer_pushed_at_the_release_does_not_click() {
+    let mut s = two_frames("Button");
+    s.run(r#"A:SetScript("OnClick", function() table.insert(log, "A:click") end)"#)
+        .unwrap();
+    s.mouse_move(200.0, 300.0);
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    s.run(r#"A:SetButtonState("NORMAL")"#).unwrap();
+    s.mouse_button(200.0, 300.0, "LeftButton", false);
+    assert!(!log_of(&mut s).contains("click"), "{}", log_of(&mut s));
+}
+
+/// The press slot pushes the button last: `OnMouseDown` and a Down `OnClick` see it unpushed
+/// (`0x76bf70`, `0x779285`, then `0x7792b1`), and a state set in `OnMouseDown` is overwritten.
+#[test]
+fn the_press_art_comes_after_on_mouse_down_and_the_down_click() {
+    let mut s = two_frames("Button");
+    s.run(
+        r#"
+        A:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
+        A:SetScript("OnMouseDown", function() table.insert(log, "down:"..A:GetButtonState()) A:SetButtonState("NORMAL") end)
+        A:SetScript("OnClick", function() table.insert(log, "click:"..A:GetButtonState()) end)
+    "#,
+    )
+    .unwrap();
+    s.mouse_move(200.0, 300.0);
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    assert_eq!(log_of(&mut s), "A:enter down:NORMAL click:NORMAL");
+    assert_eq!(
+        s.eval::<String>("return A:GetButtonState()").unwrap(),
+        "PUSHED"
     );
 }

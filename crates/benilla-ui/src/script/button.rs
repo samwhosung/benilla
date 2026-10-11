@@ -920,6 +920,15 @@ pub(super) fn wants_click(model: &Model, h: FrameHandle, name: &str) -> bool {
     }
 }
 
+/// The state half of the release click gate (`0x7792fc`): a Button clicks only while PUSHED, which
+/// the press art sets and a drag start, a hide or a lost press clears; any other kind has no state.
+pub(super) fn release_may_click(model: &Model, h: FrameHandle) -> bool {
+    match model.arena.frame(h).map(|f| &f.kind_state) {
+        Some(KindState::Button(bs)) => bs.button_state() == ButtonVisualState::Pushed,
+        _ => true,
+    }
+}
+
 /// Whether `h` is registered for `button` (`"LeftButton"`, …) as Up or Down, the press-art gate.
 /// `OnMouseDown` (`0x779210`) tests `m | m << 8` against `[this+0x330]` (Down in byte 0, Up in
 /// byte 1, `0x77924b`) before the Down-only `OnClick` test (`0x77926b`), so any registration for

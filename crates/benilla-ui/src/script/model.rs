@@ -209,9 +209,9 @@ pub(crate) struct Model {
     /// reference's `[root+0x1100]` flag (set at `0x764cbb`/`0x764b8d`, pumped at `0x7657a1` into
     /// `0x7660d0`).
     pub(crate) hover_repick: bool,
-    /// Per button held, the frame its press landed on, for `OnClick`'s same-frame release test;
-    /// `None` once that frame hid (the removal tail emptied the capture), so the release has no
-    /// target but the button still counts as held.
+    /// Per button held, the frame its press went to, the capture else the hover (`0x7662c0`), for
+    /// the release; `None` once that frame left the mouse index (hide or mouse disable emptied
+    /// the capture), so the release has no target but the button still counts as held.
     pub(crate) mouse_down_on: HashMap<String, Option<FrameHandle>>,
     /// The client's one mouse-capture slot (`root+0x80`), read by the mouse-down raise. Set at
     /// `0x7663e6` to the capture, else the hovered frame, so a chorded press keeps the capture;
