@@ -1,6 +1,6 @@
 //! The update walk (`0x765650`), each linked frame's per-frame update in the reference's order: the
 //! nine strata from the bottom up (`0x7656c8`–`0x765793`), each stratum's levels from 0 up
-//! (`0x7656e5`, the bound re-read each level), and each level's list of linked frames from its
+//! (the bound re-read after each level, `0x765774`), and each level's list of linked frames from its
 //! tail (`0x7656e5`–`0x765707`). Every link is a head insert (`0x7648c9`), so a level walks oldest
 //! link first: the order of [`Frame::insertion_seq`](crate::widget::Frame::insertion_seq).
 //!

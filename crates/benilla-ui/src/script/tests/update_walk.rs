@@ -1,5 +1,5 @@
 //! The update walk (`0x765650`): strata from the bottom up (`0x7656c8`–`0x765793`), each
-//! stratum's levels from 0 up (`0x7656e5`), and each level's list of linked frames oldest link
+//! stratum's levels from 0 up (`0x765774`), and each level's list of linked frames oldest link
 //! first, the list being head-inserted (`0x7648c9`) and walked from its tail (`0x7656e5`–`0x765707`).
 //! The walk saves the next frame before each call (`0x765707`), a hide repairs that cursor
 //! (`0x76498f`), and a frame linked into the level being walked is staged until the level ends
@@ -83,7 +83,7 @@ fn a_frame_hidden_by_an_earlier_on_update_is_not_updated() {
 }
 
 /// A frame hidden and shown again before its turn relinks into the level being walked, which
-/// stages it: it waits for the next tick.
+/// stages it: it waits for the next tick. (A blink every tick would stage it every tick.)
 #[test]
 fn a_frame_reshown_before_its_turn_in_the_walked_level_waits_a_tick() {
     let mut s = script();
@@ -92,8 +92,11 @@ fn a_frame_reshown_before_its_turn_in_the_walked_level_waits_a_tick() {
         r#"
         Logged("BlinkA", "a"):SetScript("OnUpdate", function()
             table.insert(LOG, "a")
-            BlinkB:Hide()
-            BlinkB:Show()
+            if not BLINKED then
+                BLINKED = 1
+                BlinkB:Hide()
+                BlinkB:Show()
+            end
         end)
         Logged("BlinkB", "b")
     "#,
@@ -182,5 +185,32 @@ fn an_on_update_set_before_the_frames_turn_runs_that_tick() {
     assert_eq!(take_log(&s), "setter later");
     s.tick(0.016);
     assert_eq!(take_log(&s), "earlier setter later");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// "Ahead" is by stratum first: a frame shown into a later stratum is updated that tick even at a
+/// lower level than the one being walked, as the reference walks every stratum after this one.
+#[test]
+fn a_frame_shown_into_a_later_stratum_at_a_lower_level_runs_that_tick() {
+    let mut s = script();
+    s.run(LOGGED).unwrap();
+    s.run(
+        r#"
+        local late = Logged("LateHigh", "high")
+        late:SetFrameStrata("HIGH")
+        late:SetFrameLevel(1)
+        late:Hide()
+        local shower = Logged("ShowerMed", "medium")
+        shower:SetFrameLevel(5)
+        shower:SetScript("OnUpdate", function()
+            table.insert(LOG, "medium")
+            LateHigh:Show()
+        end)
+    "#,
+    )
+    .unwrap();
+    take_log(&s);
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "medium high");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
