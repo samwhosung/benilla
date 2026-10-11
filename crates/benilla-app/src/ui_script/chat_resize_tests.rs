@@ -536,9 +536,13 @@ fn drag_named_tab(s: &mut UiScript, window: &str, dx: f32, dy: f32) {
         Some(tab),
         "the tab is hit"
     );
+    // As a player's mouse runs it: the hover is on the tab before the press, and a frame resolves
+    // the moved layout before the release tests the cursor against the tab.
+    s.mouse_move(tx, ty);
     s.mouse_button(tx, ty, "LeftButton", true);
     s.mouse_move(tx + DRAG_STARTS_AT, ty);
     s.mouse_move(tx + dx, ty + dy);
+    s.resolve();
     s.mouse_button(tx + dx, ty + dy, "LeftButton", false);
     s.resolve();
 }
@@ -571,6 +575,7 @@ fn an_undocked_tab_drags_again_and_a_plain_click_drops_the_window() {
 
     reveal_window(&mut s, "ChatFrame2");
     let (tx, ty) = centre(&mut s, "ChatFrame2Tab");
+    s.mouse_move(tx, ty);
     s.mouse_button(tx, ty, "LeftButton", true);
     assert!(
         s.eval::<bool>("return MOVING_CHATFRAME == ChatFrame2")
