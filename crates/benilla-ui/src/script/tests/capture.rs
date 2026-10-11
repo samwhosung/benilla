@@ -363,3 +363,124 @@ fn the_press_art_comes_after_on_mouse_down_and_the_down_click() {
         "PUSHED"
     );
 }
+
+// ── The release slot's order: OnMouseUp, then the click, then NORMAL (`0x7792d0`) ───────────────
+
+/// A Button `A` that logs the state its `OnClick` and `OnDoubleClick` read.
+fn click_state_probe(s: &mut UiScript, body: &str) {
+    s.run(&format!(
+        r#"
+        A:SetScript("OnClick", function() table.insert(log, "click:"..A:GetButtonState()) {body} end)
+        A:SetScript("OnDoubleClick", function() table.insert(log, "double:"..A:GetButtonState()) end)
+    "#
+    ))
+    .unwrap();
+    s.mouse_move(200.0, 300.0);
+}
+
+fn press_release(s: &mut UiScript) {
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    s.mouse_button(200.0, 300.0, "LeftButton", false);
+}
+
+fn state_of_a(s: &mut UiScript) -> String {
+    s.eval::<String>("return A:GetButtonState()").unwrap()
+}
+
+/// The mouse-up handler fires `OnClick` (`0x7793a9`) and only then sets NORMAL (`0x7793de`), so a
+/// click registered for the release reads PUSHED; one registered for the press reads NORMAL
+/// (`0x779285` before `0x7792b1`).
+#[test]
+fn on_click_reads_pushed_on_a_release_click_and_normal_on_a_press_click() {
+    let mut s = two_frames("Button");
+    click_state_probe(&mut s, "");
+    press_release(&mut s);
+    assert_eq!(
+        log_of(&mut s),
+        "A:enter A:down:LeftButton A:up:LeftButton click:PUSHED"
+    );
+    assert_eq!(
+        state_of_a(&mut s),
+        "NORMAL",
+        "…and the release then un-pushes it"
+    );
+
+    let mut s = two_frames("Button");
+    s.run(r#"A:RegisterForClicks("LeftButtonDown")"#).unwrap();
+    click_state_probe(&mut s, "");
+    press_release(&mut s);
+    assert!(
+        log_of(&mut s).contains("click:NORMAL"),
+        "{}",
+        log_of(&mut s)
+    );
+    assert!(
+        !log_of(&mut s).contains("click:PUSHED"),
+        "{}",
+        log_of(&mut s)
+    );
+
+    let mut s = two_frames("Button");
+    s.run(r#"A:RegisterForClicks("LeftButtonDown", "LeftButtonUp")"#)
+        .unwrap();
+    click_state_probe(&mut s, "");
+    press_release(&mut s);
+    assert!(
+        log_of(&mut s).ends_with("click:NORMAL A:up:LeftButton click:PUSHED"),
+        "{}",
+        log_of(&mut s)
+    );
+}
+
+/// `OnDoubleClick` replaces the second `OnClick` (`0x77938d`) and runs before the same NORMAL
+/// write, so it reads PUSHED too.
+#[test]
+fn on_double_click_reads_pushed() {
+    let mut s = two_frames("Button");
+    click_state_probe(&mut s, "");
+    press_release(&mut s);
+    press_release(&mut s);
+    assert!(
+        log_of(&mut s).ends_with("A:up:LeftButton double:PUSHED"),
+        "{}",
+        log_of(&mut s)
+    );
+    assert_eq!(state_of_a(&mut s), "NORMAL");
+}
+
+/// After the click the handler sets NORMAL only if `[+0x32c]` (the lock) is 0 and `[+0x328]` (the
+/// state) is not DISABLED (`0x7793c2`..`0x7793de`): an `OnClick` that pushes the button unlocked is
+/// released by the tail, one that locks it keeps what it set.
+#[test]
+fn the_tail_after_the_click_honours_what_the_click_set() {
+    let mut s = two_frames("Button");
+    click_state_probe(&mut s, r#"A:SetButtonState("PUSHED")"#);
+    press_release(&mut s);
+    assert_eq!(state_of_a(&mut s), "NORMAL", "unlocked: the tail un-pushes");
+
+    let mut s = two_frames("Button");
+    click_state_probe(&mut s, r#"A:SetButtonState("PUSHED", 1)"#);
+    press_release(&mut s);
+    assert_eq!(state_of_a(&mut s), "PUSHED", "locked: the tail is skipped");
+
+    let mut s = two_frames("Button");
+    click_state_probe(&mut s, "A:Disable()");
+    press_release(&mut s);
+    assert_eq!(
+        state_of_a(&mut s),
+        "DISABLED",
+        "disabled: the tail is skipped"
+    );
+}
+
+/// The state is tested after the base slot's `OnMouseUp` script has run (`0x76c099`, then
+/// `0x7792fc`): an `OnMouseUp` that un-pushes the button cancels the click.
+#[test]
+fn an_on_mouse_up_that_unpushes_the_button_cancels_the_click() {
+    let mut s = two_frames("Button");
+    click_state_probe(&mut s, "");
+    s.run(r#"A:SetScript("OnMouseUp", function() table.insert(log, "up:"..A:GetButtonState()) A:SetButtonState("NORMAL") end)"#)
+        .unwrap();
+    press_release(&mut s);
+    assert_eq!(log_of(&mut s), "A:enter A:down:LeftButton up:PUSHED");
+}
