@@ -1,7 +1,7 @@
 //! Handler firing: the FrameScript calling convention for events, ticks and show/hide. The
 //! reference sets `this` (`0x872e64`), `event` (`0x84b648`) and `arg1..argN` (`0x8722dc`) around
-//! the call, restoring each after, and `pcall`s with no arguments; the handler here also gets the
-//! same values as `(self, event, ...)` arguments, which 1.12 does not pass.
+//! the call, restoring each after, and `pcall`s with no arguments; so does [`invoke_with_globals`],
+//! which sets only the args it is given, so a script fired with none leaves `arg1..argN` as found.
 //! Handler errors return to the caller, which records them in [`super::Model::errors`].
 
 use std::borrow::Cow;
