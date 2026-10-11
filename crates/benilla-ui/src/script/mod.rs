@@ -153,7 +153,7 @@ mod worn_display;
 mod zone_text;
 
 pub use action::{ActionSlot, ActionState, ActionUse};
-pub use addon::AddOnInfo;
+pub use addon::{addon_load_context, AddOnInfo};
 pub use addon_enable::EnableHash;
 pub use addon_message::{AddonDistribution, AddonSend};
 pub use auction::{
@@ -1131,9 +1131,7 @@ impl UiScript {
     /// Whether `name` is a registered FrameXML template, case-folded as the loader resolves it, for
     /// the corpus harness: an addon naming a missing template gets a bare frame and no load error.
     pub fn has_framexml_template(&self, name: &str) -> bool {
-        let model = self.model_ref();
-        let templates = model.framexml_templates.borrow();
-        templates.contains_key(name) || templates.keys().any(|k| k.eq_ignore_ascii_case(name))
+        self.model_ref().framexml_templates.borrow().contains(name)
     }
 
     /// Whether `name` is a registered font object, the other namespace an `inherits=` may name

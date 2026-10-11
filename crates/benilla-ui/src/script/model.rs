@@ -97,8 +97,11 @@ pub(crate) struct Model {
     pub(crate) addons_saved_character: Option<std::path::PathBuf>,
     /// FrameXML templates, global across files as the client's (`0x6ee500`); held here so the
     /// loader runs from a bare `&Lua`, which lets `LoadAddOn` load inside a binding.
-    pub(crate) framexml_templates:
-        std::cell::RefCell<std::collections::HashMap<String, crate::framexml::Element>>,
+    pub(crate) framexml_templates: std::cell::RefCell<crate::framexml::Templates>,
+    /// The script-execution context word `[0xceeac0]`, as far as template registration reads it
+    /// (`0x6ee1ae`): `None` is its resting 0, under which the UI's own files load; an insecure
+    /// addon's load sets its name ([`crate::script::addon_load_context`]).
+    pub(crate) exec_context: std::cell::RefCell<Option<String>>,
     /// `FrameXML_Debug`'s flag (`0x488440` over `[0xceea30]`, boots 0); the loader's trace lines
     /// print while it is greater than 0 (`0x6ee298`), so it is signed.
     pub(crate) framexml_debug: std::cell::Cell<i32>,
@@ -1090,6 +1093,7 @@ impl Model {
             addons_saved_account: None,
             addons_saved_character: None,
             framexml_templates: Default::default(),
+            exec_context: Default::default(),
             framexml_debug: Default::default(),
             load_log: Default::default(),
             framexml_fonts: Default::default(),

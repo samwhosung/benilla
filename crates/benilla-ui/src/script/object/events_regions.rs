@@ -296,11 +296,12 @@ fn apply_region_inherits(lua: &Lua, wrapper: &Table, from: &str) -> mlua::Result
     if wrapper.call_method::<()>("SetFontObject", from).is_ok() {
         return Ok(());
     }
-    let is_template = {
-        let model = lua.app_data_ref::<Model>().expect("model");
-        let templates = model.framexml_templates.borrow();
-        templates.contains_key(from) || templates.keys().any(|k| k.eq_ignore_ascii_case(from))
-    };
+    let is_template = lua
+        .app_data_ref::<Model>()
+        .expect("model")
+        .framexml_templates
+        .borrow()
+        .contains(from);
     if is_template {
         let mut model = lua.app_data_mut::<Model>().expect("model");
         model.record_warning(format!(

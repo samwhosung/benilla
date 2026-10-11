@@ -28,7 +28,8 @@ pub struct AddOnInfo {
     pub title: Option<String>,
     pub notes: Option<String>,
     pub url: Option<String>,
-    /// `## Secure: 1`, which Blizzard's own addons carry; drives the `security` token.
+    /// `## Secure: 1`, which Blizzard's own addons carry; drives the `security` token and the
+    /// context the addon loads under ([`addon_load_context`]).
     pub secure: bool,
     pub load_on_demand: bool,
     /// `## Dependencies` / `## RequiredDeps`.
@@ -417,7 +418,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 /// `AddOn_Load` (`0x51f240`), dependencies first; `Err` is the reason token. Synchronous inside
 /// the Lua call, as stock callers use the addon on the next line (`UIParent.lua:577`).
 fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
-    let (name, root, files, deps, already, chain, chain_reader) = {
+    let (name, root, files, deps, already, chain, secure, chain_reader) = {
         let model = lua.app_data_ref::<Model>().expect("model");
         let a = &model.addons[i];
         (
@@ -427,6 +428,7 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
             a.dependencies.clone(),
             a.loaded,
             a.chain,
+            a.secure,
             model.addons_chain_reader.clone(),
         )
     };
@@ -494,6 +496,8 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
         }
     }
 
+    // The files, `Bindings.xml` and the saved variables run under the addon's context.
+    let outer = swap_exec_context(lua, addon_load_context(&name, secure));
     let mut toc = crate::status::Status::default();
     run_files(lua, &name, &read, &files, &mut toc);
     // The toc's record under its banner, then the add-on's (`0x6eddc8`, `0x51f464`).
@@ -509,6 +513,7 @@ fn load_addon(lua: &Lua, i: usize) -> Result<(), String> {
     // `Bindings.xml` loads between the files and the saved variables.
     load_bindings(lua, &name, &read);
     load_saved_variables(lua, i);
+    swap_exec_context(lua, outer);
     // `ADDON_LOADED` closes the addon's load (`0x51f5ad`).
     super::event::fire_global(lua, "ADDON_LOADED", &[super::ScriptValue::Str(name)]);
     Ok(())
@@ -701,8 +706,30 @@ fn log_error(lua: &Lua, msg: &str, handler: &str) {
     model.errors.push(msg);
 }
 
+/// The script-execution context an addon's load runs under: `AddOn_Load` sets `[0xceeac0]` to the
+/// record's name (`[rec+0x14]`) when its security state `[rec+0x24]` is non-zero, else to 0
+/// (`0x51f37e`-`0x51f387`), so only a secure addon loads under the UI's own context. `None` is 0.
+pub fn addon_load_context(name: &str, secure: bool) -> Option<String> {
+    (!secure).then(|| name.to_owned())
+}
+
+/// Set the context word, returning the one it replaces for the caller to restore, as `AddOn_Load`
+/// saves it (`0x51f36d`) and restores it before `ADDON_LOADED` (`0x51f584`).
+fn swap_exec_context(lua: &Lua, context: Option<String>) -> Option<String> {
+    lua.app_data_ref::<Model>()
+        .expect("model")
+        .exec_context
+        .replace(context)
+}
+
 /// The host's side: the registry, where its files live, and what to write back.
 impl super::UiScript {
+    /// Set the script-execution context for the startup walk's addon loads
+    /// ([`addon_load_context`]), returning the previous one to restore after.
+    pub fn swap_exec_context(&self, context: Option<String>) -> Option<String> {
+        swap_exec_context(self.lua(), context)
+    }
+
     /// Seat the reader chain-sourced addons (`AddOnInfo::chain`) are read through.
     pub fn set_addon_chain_reader(&self, reader: AddonChainReader) {
         self.model_mut().addons_chain_reader = Some(std::rc::Rc::from(reader));

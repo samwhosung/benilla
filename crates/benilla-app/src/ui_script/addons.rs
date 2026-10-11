@@ -400,6 +400,12 @@ fn info_for(addon: &Addon) -> benilla_ui::script::AddOnInfo {
     info
 }
 
+/// `## Secure: 1`, which grants nothing: it sets `GetAddOnInfo`'s security answer and the context
+/// the addon loads under ([`benilla_ui::script::addon_load_context`]).
+pub(crate) fn toc_secure(toc: &Toc) -> bool {
+    toc.directive("Secure").map(str::trim) == Some("1")
+}
+
 /// [`info_for`]'s body, shared with `addon_harness` so its survey seats the registry row
 /// production does.
 pub(crate) fn info_from_toc(name: &str, toc: &Toc) -> benilla_ui::script::AddOnInfo {
@@ -408,8 +414,7 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc) -> benilla_ui::script::AddOnI
         title: toc.directive("Title").map(str::to_owned),
         notes: toc.directive("Notes").map(str::to_owned),
         url: toc.directive("URL").map(str::to_owned),
-        // `## Secure: 1` grants nothing; it only sets `GetAddOnInfo`'s security answer.
-        secure: toc.directive("Secure").map(str::trim) == Some("1"),
+        secure: toc_secure(toc),
         load_on_demand: toc.load_on_demand(),
         dependencies: toc.dependencies().into_iter().map(str::to_owned).collect(),
         directives: toc.directives.clone(),
@@ -908,6 +913,11 @@ impl Walk {
         // (`0x51f464`), merged into the UI load's.
         let debug = script.framexml_debug();
         let mut toc = Status::default();
+        // The files, `Bindings.xml` and the saved variables run under the addon's context.
+        let outer = script.swap_exec_context(benilla_ui::script::addon_load_context(
+            &addon.name,
+            toc_secure(&addon.toc),
+        ));
         self.failures.extend(addon.load(script, &mut toc));
         let mut own = Status::default();
         let toc_path = status::addon_toc_path(&addon.name);
@@ -932,6 +942,7 @@ impl Walk {
         // The saved variables, account then per-character (`0x51f4b5`, `0x51f53b`): after the
         // files set their defaults, before `ADDON_LOADED`.
         script.load_addon_saved_variables(&addon.name);
+        script.swap_exec_context(outer);
         self.loaded.insert(addon.name.clone());
         script.mark_addon_loaded(&addon.name);
         // `arg1` is the addon's own folder name, whatever case a dependent used. Marked loaded

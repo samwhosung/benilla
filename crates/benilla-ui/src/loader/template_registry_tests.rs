@@ -105,7 +105,10 @@ fn a_registration_is_traced_under_framexml_debug() {
     assert!(load_doc(&s, &template("QuietTemplate", 10)).is_empty());
     s.run("FrameXML_Debug(1)").unwrap();
     let lines = load_doc(&s, &template("TracedTemplate", 10));
-    assert_eq!(lines, vec!["-- Added virtual frame TracedTemplate".to_string()]);
+    assert_eq!(
+        lines,
+        vec!["-- Added virtual frame TracedTemplate".to_string()]
+    );
     let lines = load_doc(&s, &template("TracedTemplate", 20));
     assert_eq!(
         lines,

@@ -170,14 +170,8 @@ pub fn apply_template(lua: &mlua::Lua, wrapper: &Table, kind: &str, template: &s
     {
         let model = loader.model();
         let templates = model.framexml_templates.borrow();
-        // Looked up as `framexml::expand` looks it up (exact, then case-folded); keep them in step.
         for name in [template].into_iter().filter(|s| !s.is_empty()) {
-            let Some(el) = templates.get(name).or_else(|| {
-                templates
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case(name))
-                    .map(|(_, v)| v)
-            }) else {
+            let Some(el) = templates.get(name) else {
                 continue;
             };
             any_resolved = true;
@@ -412,19 +406,43 @@ impl Loader<'_> {
                     }
                 }
                 TopLevel::Font(el) => self.do_font(el),
-                TopLevel::Template(el) => {
-                    // Registered raw; `expand` resolves its own `inherits` at instantiation. An
-                    // unnamed one was warned at parse time.
-                    if let Some(name) = el.name() {
-                        self.model()
-                            .framexml_templates
-                            .borrow_mut()
-                            .insert(name.to_string(), el.clone());
-                    }
-                }
+                TopLevel::Template(el) => self.register_template(el),
                 TopLevel::Instance(el) => {
                     let expanded = self.expand(el);
                     self.materialize(&expanded, None, framexml::DEFAULT_PARENT_NAME);
+                }
+            }
+        }
+    }
+
+    /// A top-level `virtual` element, registered raw (`0x6ee500`, called at `0x6ee1bd` under the
+    /// live context word): `expand` resolves its own `inherits` at instantiation. An unnamed one
+    /// was warned at parse time.
+    fn register_template(&mut self, el: &Element) {
+        let Some(name) = el.name().filter(|n| !n.is_empty()) else {
+            return;
+        };
+        let model = self.model();
+        let context = model.exec_context.borrow().clone();
+        let registered =
+            model
+                .framexml_templates
+                .borrow_mut()
+                .register(name, el.clone(), context.as_deref());
+        drop(model);
+        match registered {
+            framexml::Registration::Refused => {
+                // `0x871188` over the refused spelling, at severity 1 into the document's record.
+                let line = format!("Virtual object named {name} already exists");
+                self.report.status.report(status::WARNING, line.clone());
+                self.report.warnings.push(line);
+            }
+            // Either way the entry now holds this node, traced at `0x6ee6dd` (`0x87116c`).
+            framexml::Registration::Added | framexml::Registration::Replaced => {
+                if self.debug() {
+                    let trace = format!("-- Added virtual frame {name}");
+                    self.report.status.report(status::TRACE, trace.clone());
+                    self.report.traces.push(trace);
                 }
             }
         }
@@ -480,17 +498,14 @@ impl Loader<'_> {
     pub(super) fn expand(&mut self, el: &Element) -> Element {
         let model = self.model();
         let templates = model.framexml_templates.borrow();
-        let view: HashMap<&str, &Element> =
-            templates.iter().map(|(k, v)| (k.as_str(), v)).collect();
         // A font object in an inherit chain is skipped, not warned as an unknown template.
         let fonts = model.framexml_fonts.borrow();
         let font_names: std::collections::HashSet<&str> =
             fonts.keys().map(|k| k.as_str()).collect();
         let mut warns = Vec::new();
-        let out = framexml::expand_known(el, &view, &font_names, &mut warns);
+        let out = framexml::expand_known(el, &*templates, &font_names, &mut warns);
         drop(font_names);
         drop(fonts);
-        drop(view);
         drop(templates);
         drop(model);
         self.report.warnings.extend(warns);
@@ -502,11 +517,7 @@ impl Loader<'_> {
     pub(super) fn expand_region(&mut self, el: &Element) -> Element {
         // One verbatim name, matched case-insensitively, as `framexml::expand` looks it up.
         let hit = el.attr("inherits").is_some_and(|name| {
-            let model = self.model();
-            let templates = model.framexml_templates.borrow();
-            !name.is_empty()
-                && (templates.contains_key(name)
-                    || templates.keys().any(|k| k.eq_ignore_ascii_case(name)))
+            !name.is_empty() && self.model().framexml_templates.borrow().contains(name)
         });
         if hit {
             self.expand(el)

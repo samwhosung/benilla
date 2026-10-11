@@ -1397,6 +1397,18 @@ struct FileLoad {
 /// FrameXML, in the install-relative path space (`Interface/AddOns/<Folder>`, as
 /// `ui_script::addons::Addon::prefix`), so chunk names match a live session's.
 fn load_addon_files(script: &UiScript, root: &Path, name: &str, toc: &Toc) -> FileLoad {
+    // Under the addon's own context, as the live walk loads it.
+    let outer = script.swap_exec_context(benilla_ui::script::addon_load_context(
+        name,
+        crate::ui_script::addons::toc_secure(toc),
+    ));
+    let load = load_addon_files_in_context(script, root, name, toc);
+    script.swap_exec_context(outer);
+    load
+}
+
+/// [`load_addon_files`]' body.
+fn load_addon_files_in_context(script: &UiScript, root: &Path, name: &str, toc: &Toc) -> FileLoad {
     let provider = |req: &str| -> Option<Vec<u8>> { read_under(root, req) };
     let base = addon_base(name);
     let mut errors = Vec::new();

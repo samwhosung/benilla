@@ -87,16 +87,119 @@ pub struct ParsedDocument {
 }
 
 impl ParsedDocument {
-    /// The named templates, for [`expand`]; an unnamed one (the reference's "Unnamed virtual
-    /// node" error, `0x6ee500`) is absent.
-    pub fn templates(&self) -> HashMap<&str, &Element> {
-        self.items
-            .iter()
-            .filter_map(|item| match item {
-                TopLevel::Template(el) => el.name().map(|name| (name, el)),
-                _ => None,
-            })
-            .collect()
+    /// The named templates, registered in document order as the loader registers them, for
+    /// [`expand`]; an unnamed one (the reference's "Unnamed virtual node" error, `0x6ee1c4`) is
+    /// absent.
+    pub fn templates(&self) -> Templates {
+        let mut templates = Templates::default();
+        for item in &self.items {
+            if let TopLevel::Template(el) = item {
+                if let Some(name) = el.name().filter(|n| !n.is_empty()) {
+                    templates.register(name, el.clone(), None);
+                }
+            }
+        }
+        templates
+    }
+}
+
+/// What an `inherits=` name resolves against: the template table, or the font namespace.
+pub trait Inheritable {
+    /// The element registered under `name`, compared case-insensitively, ASCII only.
+    fn find(&self, name: &str) -> Option<&Element>;
+}
+
+impl Inheritable for HashMap<&str, &Element> {
+    fn find(&self, name: &str) -> Option<&Element> {
+        self.get(name).copied().or_else(|| {
+            self.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| *v)
+        })
+    }
+}
+
+/// The FrameXML template table (`0x6ee500`), global across a UI load's files. A name registers
+/// once: the hash upper-cases it (`SStrHash 0x64b3f0`) and the bucket walk compares with
+/// `SStrCmpI 0x64a4c0`, so the key is the name with ASCII case folded, and the lookup `0x6ee6f0`
+/// matches the same way. Each entry keeps the script-execution context it was registered under.
+#[derive(Debug, Clone, Default)]
+pub struct Templates {
+    entries: HashMap<String, Template>,
+}
+
+#[derive(Debug, Clone)]
+struct Template {
+    element: Element,
+    /// The context word at registration (`[entry+0x1c]`, `0x6ee6be`); `None` is the reference's 0.
+    context: Option<String>,
+}
+
+/// What [`Templates::register`] did with a definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Registration {
+    /// The name was free.
+    Added,
+    /// The name's entry came from a non-zero context and this one from context 0 (`0x6ee5c1`).
+    Replaced,
+    /// The name was taken: the reference logs `"Virtual object named %s already exists"`
+    /// (`0x871188`, severity 1) and keeps the first (`0x6ee5a4`).
+    Refused,
+}
+
+impl Templates {
+    /// Register `element` under `name` from `context` (`None` is context 0). A taken name is
+    /// replaced only when its entry's context is non-zero and this one is 0 (`0x6ee594`-`0x6ee5a2`);
+    /// every other repeat is refused and leaves the entry as it was.
+    pub fn register(
+        &mut self,
+        name: &str,
+        element: Element,
+        context: Option<&str>,
+    ) -> Registration {
+        let template = Template {
+            element,
+            context: context.map(str::to_owned),
+        };
+        match self.entries.entry(name.to_ascii_lowercase()) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(template);
+                Registration::Added
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => {
+                if slot.get().context.is_some() && context.is_none() {
+                    slot.insert(template);
+                    Registration::Replaced
+                } else {
+                    Registration::Refused
+                }
+            }
+        }
+    }
+
+    /// The template registered under `name`, case-folded (`0x6ee6f0`).
+    pub fn get(&self, name: &str) -> Option<&Element> {
+        self.entries
+            .get(&name.to_ascii_lowercase())
+            .map(|t| &t.element)
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.entries.contains_key(&name.to_ascii_lowercase())
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl Inheritable for Templates {
+    fn find(&self, name: &str) -> Option<&Element> {
+        self.get(name)
     }
 }
 
@@ -177,7 +280,8 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
         } else {
             let el = element_from_node(child);
             if el.attr_bool("virtual") {
-                if el.name().is_none() {
+                // An empty name is no name: the call site tests its first byte (`0x6ee1a9`).
+                if el.name().is_none_or(str::is_empty) {
                     warnings.push(format!(
                         "virtual <{}> without a name — a load error in the real client \
                          (\"Unnamed virtual node\"); kept but unregistered, \
@@ -321,7 +425,7 @@ fn element_from_node(node: roxmltree::Node) -> Element {
 /// registration. A cycle is skipped with a warning.
 pub fn expand(
     element: &Element,
-    templates: &HashMap<&str, &Element>,
+    templates: &dyn Inheritable,
     warnings: &mut Vec<String>,
 ) -> Element {
     expand_known(element, templates, &HashSet::new(), warnings)
@@ -331,7 +435,7 @@ pub fn expand(
 /// `<FontString inherits="GameFontNormalSmall">` takes a font, applied later, not a template.
 pub fn expand_known(
     element: &Element,
-    templates: &HashMap<&str, &Element>,
+    templates: &dyn Inheritable,
     fonts: &HashSet<&str>,
     warnings: &mut Vec<String>,
 ) -> Element {
@@ -341,7 +445,7 @@ pub fn expand_known(
 
 fn expand_inner(
     element: &Element,
-    templates: &HashMap<&str, &Element>,
+    templates: &dyn Inheritable,
     fonts: &HashSet<&str>,
     warnings: &mut Vec<String>,
     active: &mut HashSet<String>,
@@ -362,13 +466,7 @@ fn expand_inner(
             ));
             continue;
         }
-        let hit = templates.get(name).copied().or_else(|| {
-            templates
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(name))
-                .map(|(_, v)| *v)
-        });
-        let Some(template) = hit else {
+        let Some(template) = templates.find(name) else {
             // A font object is not an unknown template; it is applied after this.
             if !fonts.contains(name) {
                 warnings.push(format!(
@@ -608,8 +706,8 @@ print(x)</Script>
             "virtual attribute name/value compare is case-insensitive"
         );
         let templates = doc.templates();
-        assert!(templates.contains_key("MyTemplate"));
-        assert!(templates.contains_key("CasedTemplate"));
+        assert!(templates.contains("MyTemplate"));
+        assert!(templates.contains("CasedTemplate"));
         assert_eq!(templates.len(), 2);
     }
 
