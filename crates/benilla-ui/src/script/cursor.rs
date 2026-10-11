@@ -17,7 +17,7 @@ mod pet;
 
 pub(crate) use bar::place_action;
 pub(crate) use drag::{
-    abandon_drag, arm_drag, maybe_start_drag, take_drag, DragGesture, DragRelease,
+    abandon_drag, maybe_start_drag, press_drag, take_drag, DragGesture, DragRelease,
 };
 
 /// Sentinel bag id for the player's equipped slots, whose `slot` is a 1-based inventory slot id

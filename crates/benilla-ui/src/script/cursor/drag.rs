@@ -16,29 +16,57 @@ pub(crate) struct DragGesture {
     pub(crate) started: bool,
 }
 
-/// A gesture whose button matched the release; [`Model::drag`] is cleared either way.
+/// A gesture whose frame's drag mask held the released button; [`Model::drag`] is cleared either way.
 pub(crate) struct DragRelease {
     /// `OnDragStart` fired; an unstarted release fires nothing and the click proceeds.
     pub(crate) started: bool,
     pub(crate) source: FrameHandle,
 }
 
-/// Arm or clear the gesture on a press, replacing any leftover one; the caller runs
-/// [`abandon_drag`] first so a started gesture still gets its `OnDragStop`.
-pub(crate) fn arm_drag(model: &mut Model, hit: Option<FrameHandle>, button: &str, pos: (f32, f32)) {
-    model.drag = hit
-        .filter(|&h| {
-            model
-                .drag_registered
-                .get(&h)
-                .is_some_and(|set| set.iter().any(|b| b.eq_ignore_ascii_case(button)))
-        })
-        .map(|h| DragGesture {
+/// The press arm `0x76bf70`, run on the frame the press lands on (the capture, else the hover). A
+/// button in the frame's drag mask (`0x76bf7d`) re-arms: armed, not started, this button, this
+/// point (`0x76bf82`..`0x76bfab`), with no `OnDragStop` for a started drag it replaces. Any other
+/// button skips the arm (`0x76bf80` je `0x76bfb1`) and leaves the armed or started drag alone.
+///
+/// The reference keeps this state per frame and benilla has the one [`Model::drag`], which holds
+/// the same thing because a press always lands on the capture, the frame of any live gesture. A
+/// gesture on another frame, or one whose button's release was lost (`release_lost`; the
+/// reference cannot lose one), can no longer be moved or released there, so it is abandoned and
+/// the returned source of a started one must get `OnDragStop`, or a frame it is moving follows the
+/// cursor.
+pub(crate) fn press_drag(
+    model: &mut Model,
+    target: Option<FrameHandle>,
+    button: &str,
+    pos: (f32, f32),
+    release_lost: bool,
+) -> Option<FrameHandle> {
+    let elsewhere = model
+        .drag
+        .as_ref()
+        .is_some_and(|g| Some(g.source) != target);
+    let displaced = if release_lost || elsewhere {
+        abandon_drag(model)
+    } else {
+        None
+    };
+    if let Some(h) = target.filter(|h| is_drag_button(model, *h, button)) {
+        model.drag = Some(DragGesture {
             button: button.to_string(),
             source: h,
             start: pos,
             started: false,
         });
+    }
+    displaced
+}
+
+/// Whether `button` is in the frame's `RegisterForDrag` mask (`[+0xfc]`).
+fn is_drag_button(model: &Model, frame: FrameHandle, button: &str) -> bool {
+    model
+        .drag_registered
+        .get(&frame)
+        .is_some_and(|set| set.iter().any(|b| b.eq_ignore_ascii_case(button)))
 }
 
 /// Start the armed gesture once the cursor passes the threshold, returning the `OnDragStart`
@@ -68,18 +96,22 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
     Some((id, button))
 }
 
-/// Drop a gesture whose release will never come, because the pointer left the window or a second
-/// button was pressed; the reference cannot lose one, as the OS captures the pointer. Returns a
-/// started one's source, which must get `OnDragStop` or a frame it is moving follows the cursor.
+/// Drop a gesture whose release will never come, because the pointer left the window; the
+/// reference cannot lose one, as the OS captures the pointer. Returns a started one's source,
+/// which must get `OnDragStop` or a frame it is moving follows the cursor.
 pub(crate) fn abandon_drag(model: &mut Model) -> Option<FrameHandle> {
     model.drag.take().filter(|g| g.started).map(|g| g.source)
 }
 
-/// Take the gesture whose button matches the release.
+/// Take the gesture a release ends. `0x76c050` tests the released button against the frame's
+/// drag mask, not the armed button `[+0x108]`, so any mask button's release clears the arm
+/// (`0x76c05d`) and, with the drag started, is the drag release (`0x76c06e`).
 pub(crate) fn take_drag(model: &mut Model, button: &str) -> Option<DragRelease> {
-    let g = model
-        .drag
-        .take_if(|g| g.button.eq_ignore_ascii_case(button))?;
+    let source = model.drag.as_ref()?.source;
+    if !is_drag_button(model, source, button) {
+        return None;
+    }
+    let g = model.drag.take()?;
     Some(DragRelease {
         started: g.started,
         source: g.source,
@@ -801,10 +833,7 @@ mod tests {
         );
         // The drag is over: the left release finds it unarmed and is a plain release.
         s.mouse_button(160.0, 300.0, "LeftButton", false);
-        assert_eq!(
-            log(&s),
-            "down dragstart down dragstart dragstop receive up"
-        );
+        assert_eq!(log(&s), "down dragstart down dragstart dragstop receive up");
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 

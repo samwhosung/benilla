@@ -269,14 +269,18 @@ impl UiScript {
         // drag arm, a Button's press art and Down click), runs on that one frame. So a second
         // button pressed over another frame fires on the held one. `mouse_down_on` keeps the
         // frame per button for the release.
+        let mut release_lost = false;
         let press_target: Option<crate::widget::FrameHandle> = if down {
             let mut model = self.model_mut();
             // A press for a button still held means its release never came (a focus loss); the
             // reference's capture never loses one. That frame gets the release edge so it does not
             // stay pushed, and with no other button down the stale capture goes too, so this
             // press is not aimed at it.
-            if let Some(stale) = model.mouse_down_on.remove(button).flatten() {
-                button::edge(&mut model, stale, ButtonState::on_mouse_up);
+            if let Some(entry) = model.mouse_down_on.remove(button) {
+                release_lost = true;
+                if let Some(stale) = entry {
+                    button::edge(&mut model, stale, ButtonState::on_mouse_up);
+                }
             }
             if model.mouse_down_on.is_empty() {
                 model.mouse_capture = None;
@@ -388,10 +392,10 @@ impl UiScript {
                 press_art = inside;
                 // `0x7663e9` stores the target as the capture: the one held, else the hover.
                 model.mouse_capture = press_target;
-                // A press replaces any in-flight gesture; a started one gets its `OnDragStop`
+                // The drag arm `0x76bf70`; a started gesture it displaces gets its `OnDragStop`
                 // below, outside this borrow.
-                let abandoned = cursor::abandon_drag(&mut model);
-                cursor::arm_drag(&mut model, press_target, button, (x, y));
+                let abandoned =
+                    cursor::press_drag(&mut model, press_target, button, (x, y), release_lost);
                 // A left press on a Slider grabs the thumb, or on the track seats the thumb under
                 // the cursor first (the returned value jump).
                 let jump = if button == "LeftButton" {
