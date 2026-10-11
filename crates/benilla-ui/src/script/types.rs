@@ -412,7 +412,8 @@ pub(crate) struct RegionData {
     pub(crate) font_shadow: Option<FontShadow>,
     /// The gap between lines, as set (`SetSpacing`, XML `spacing=` or the font object): a
     /// FontString's own setter clamps it (`0x772240`), the message frames' and the EditBox's font
-    /// stores it raw (`0x79fb40`), and every reader takes [`Self::line_gap`].
+    /// stores it raw (`0x79fb40`). A line string reads it through [`Self::line_gap`]; the plain
+    /// message frame's pitch reads it raw (`0x785f06`).
     pub(crate) spacing: f32,
     /// The host-measured size of a FontString with no explicit height.
     pub(crate) measured: Option<MeasuredText>,
@@ -467,8 +468,8 @@ impl MeasuredText {
 }
 
 impl RegionData {
-    /// The gap a reader lays lines out by: [`Self::spacing`], never negative, as every line string
-    /// the reference draws stores it through the clamping `0x772240`.
+    /// The gap a line string lays its lines out by: [`Self::spacing`] clamped at 0, as a line
+    /// string stores it through `0x772240`.
     pub(crate) fn line_gap(&self) -> f32 {
         self.spacing.max(0.0)
     }

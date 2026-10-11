@@ -347,7 +347,22 @@ fn a_plain_message_frames_pitch_is_the_snapped_raw_spacing() {
     assert_eq!(plain_capacity(42.0, "-4"), 4, "42 / (14 - 4)");
     assert_eq!(plain_capacity(100.0, "2.5"), 5, "100 / (14 + 3)");
     assert_eq!(plain_capacity(42.0, "-2.5"), 3, "42 / (14 - 2)");
-    assert_eq!(plain_capacity(42.0, "-14"), 0, "a zero pitch fits nothing");
+    // A zero pitch fits nothing, so no slot draws.
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        "local f = CreateFrame('MessageFrame', 'NoPitch')\n\
+         f:SetPoint('BOTTOMLEFT', 0, 0)\n\
+         f:SetWidth(400)\n\
+         f:SetHeight(42)\n\
+         f:SetFont('Fonts\\\\FRIZQT__.TTF', 14)\n\
+         f:SetSpacing(-14)\n\
+         f:AddMessage('m', 1, 1, 1)",
+    )
+    .unwrap();
+    s.resolve();
+    s.tick(0.1);
+    assert!(bands(&s).is_empty(), "{:?}", bands(&s));
 }
 
 /// The plain class steps its slots by the same raw, snapped pitch (`0x786184`), so a negative

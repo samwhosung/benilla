@@ -215,11 +215,8 @@ impl Loader<'_> {
             }
             // `spacing=` (`0x771257`) goes through the setter and clears inherit bit `0x10`
             // (`0x771298`), so it outlasts the font object's.
-            if let Some(sp) = region
-                .attr("spacing")
-                .and_then(|v| v.trim().parse::<f32>().ok())
-            {
-                self.call_region(wrapper, "SetSpacing", sp, dbg);
+            if let Some(sp) = region.attr("spacing").filter(|v| !v.is_empty()) {
+                self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
             }
         }
         if region.attr_bool("setAllPoints") {

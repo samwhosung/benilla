@@ -545,6 +545,44 @@ pub fn resolve_name(raw: &str, parent_name: &str) -> String {
     }
 }
 
+/// C's `atof` (`0x64aaa0`), which the reference reads numeric attributes with (SimpleHTML's
+/// `width=` and `height=`, `spacing=`): the longest numeric prefix after leading whitespace, 0 when
+/// there is none, so `"12px"` is 12.
+pub(crate) fn atof(s: &str) -> f32 {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() && (b[i] as char).is_ascii_whitespace() {
+        i += 1;
+    }
+    let start = i;
+    if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
+        i += 1;
+    }
+    while i < b.len() && b[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i < b.len() && b[i] == b'.' {
+        i += 1;
+        while i < b.len() && b[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    // An exponent counts only when complete: `"1e"` is 1, as `strtod` backtracks.
+    if i < b.len() && (b[i] | 0x20) == b'e' {
+        let mut j = i + 1;
+        if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
+            j += 1;
+        }
+        if j < b.len() && b[j].is_ascii_digit() {
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            i = j;
+        }
+    }
+    s[start..i].parse::<f32>().unwrap_or(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -860,5 +898,21 @@ print(x)</Script>
         assert_eq!(child_name, "PlayerFrameHealthBar");
         let grandchild_name = resolve_name("$parentText", &child_name);
         assert_eq!(grandchild_name, "PlayerFrameHealthBarText");
+    }
+}
+
+#[cfg(test)]
+mod atof_tests {
+    use super::atof;
+
+    #[test]
+    fn atof_takes_the_numeric_prefix() {
+        assert_eq!(atof("64"), 64.0);
+        assert_eq!(atof(" 12.5px"), 12.5);
+        assert_eq!(atof("-3"), -3.0);
+        assert_eq!(atof("px"), 0.0);
+        assert_eq!(atof(""), 0.0);
+        assert_eq!(atof("1e2"), 100.0);
+        assert_eq!(atof("1e"), 1.0);
     }
 }
