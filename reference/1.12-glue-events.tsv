@@ -1,0 +1,42 @@
+# The glue screens' FrameScript event table of the 1.12.1 client (WoW.exe build 5875): eventId -> name.
+# Source: the 26 `mov dword [0xb41e70 + 4*id], imm32` writes of 0x46cc60 (0x46cc60-0x46cd5a, called
+#   once at startup from 0x402af8), each imm32 the address of the event's name string. The glue
+#   builder 0x46a7b0 hands the array to 0x703d90 (`mov edx,0x1a; mov ecx,0xb41e70; call 0x703d90`
+#   at 0x46a885-0x46a88f), which rebuilds the runtime dispatch table [0xceef68] from it wholesale,
+#   as UI_Init does with the in-game array 0xbe1198 (`1.12-event-catalog.tsv`). So while the glue
+#   state runs, these 26 are the only events, the id fired by FrameScript_SignalEvent 0x703e50 /
+#   0x703f50 indexes this table, and the same integer names a different event in-game.
+# Registration: `RegisterEvent` 0x774a40 -> 0x702140 walks the table and compares names with
+#   0x64a4c0 (-> 0x414310, case-insensitive); a name off the table matches nothing and is dropped
+#   without an error. `UnregisterEvent` 0x774b30 -> 0x702280 matches the same way.
+# Vendored from the client's bytes; no generator for it lives in this repo.
+#
+# name_va   the name string's address (the imm32).
+# write_va  the instruction in 0x46cc60 that stores it.
+id	name	name_va	write_va
+0	SET_GLUE_SCREEN	0x837bec	0x46cc60
+1	START_GLUE_MUSIC	0x837bd8	0x46cc6a
+2	DISCONNECTED_FROM_SERVER	0x837bbc	0x46cc74
+3	OPEN_STATUS_DIALOG	0x837ba8	0x46cc7e
+4	UPDATE_STATUS_DIALOG	0x837b90	0x46cc88
+5	CLOSE_STATUS_DIALOG	0x837b7c	0x46cc92
+6	ADDON_LIST_UPDATE	0x837b68	0x46cc9c
+7	CHARACTER_LIST_UPDATE	0x837b50	0x46cca6
+8	UPDATE_SELECTED_CHARACTER	0x837b34	0x46ccb0
+9	OPEN_REALM_LIST	0x837b24	0x46ccba
+10	GET_PREFERRED_REALM_INFO	0x837b08	0x46ccc4
+11	UPDATE_SELECTED_RACE	0x837af0	0x46ccce
+12	SELECT_LAST_CHARACTER	0x837ad8	0x46ccd8
+13	SELECT_FIRST_CHARACTER	0x837ac0	0x46cce2
+14	GLUE_SCREENSHOT_SUCCEEDED	0x837aa4	0x46ccec
+15	GLUE_SCREENSHOT_FAILED	0x837a8c	0x46ccf6
+16	PATCH_UPDATE_PROGRESS	0x837a74	0x46cd00
+17	PATCH_DOWNLOADED	0x837a60	0x46cd0a
+18	SUGGEST_REALM	0x837a50	0x46cd14
+19	SUGGEST_REALM_WRONG_PVP	0x837a38	0x46cd1e
+20	SUGGEST_REALM_WRONG_CATEGORY	0x837a18	0x46cd28
+21	SHOW_SERVER_ALERT	0x837a04	0x46cd32
+22	FRAMES_LOADED	0x8379f4	0x46cd3c
+23	FORCE_RENAME_CHARACTER	0x8379dc	0x46cd46
+24	SHOW_SURVEY_NOTIFICATION	0x8379c0	0x46cd50
+25	PLAYER_ENTER_PIN	0x8379ac	0x46cd5a
