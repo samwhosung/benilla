@@ -416,10 +416,14 @@ impl Loader<'_> {
     }
 
     /// A top-level `virtual` element, registered raw (`0x6ee500`, called at `0x6ee1bd` under the
-    /// live context word): `expand` resolves its own `inherits` at instantiation. An unnamed one
-    /// was warned at parse time.
+    /// live context word): `expand` resolves its own `inherits` at instantiation.
     fn register_template(&mut self, el: &Element) {
+        // No name, or an empty one (`0x6ee1a9` tests its first byte): `0x871020` at severity 1
+        // into the document's record (`0x6ee1c4`-`0x6ee1cf`), and nothing registers.
         let Some(name) = el.name().filter(|n| !n.is_empty()) else {
+            let line = "Unnamed virtual node at top level";
+            self.report.status.report(status::WARNING, line);
+            self.report.warnings.push(line.to_string());
             return;
         };
         let model = self.model();

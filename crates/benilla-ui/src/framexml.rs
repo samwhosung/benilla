@@ -81,8 +81,8 @@ pub enum TopLevel {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParsedDocument {
     pub items: Vec<TopLevel>,
-    /// An unnamed virtual, an `<Include>` or `<Font>` missing its attribute, a root that is not
-    /// `<Ui>`: logged, and the file goes on.
+    /// An `<Include>` or `<Font>` missing its attribute, a root that is not `<Ui>`: logged, and the
+    /// file goes on.
     pub warnings: Vec<String>,
 }
 
@@ -280,15 +280,7 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
         } else {
             let el = element_from_node(child);
             if el.attr_bool("virtual") {
-                // An empty name is no name: the call site tests its first byte (`0x6ee1a9`).
-                if el.name().is_none_or(str::is_empty) {
-                    warnings.push(format!(
-                        "virtual <{}> without a name — a load error in the real client \
-                         (\"Unnamed virtual node\"); kept but unregistered, \
-                         so nothing can inherit it",
-                        el.tag
-                    ));
-                }
+                // An unnamed one is kept: the loader reports it where the reference does.
                 items.push(TopLevel::Template(el));
             } else {
                 items.push(TopLevel::Instance(el));
@@ -715,11 +707,8 @@ print(x)</Script>
     fn unnamed_virtual_warns_but_does_not_fail() {
         let doc = parse(r#"<Ui><Frame virtual="true"/></Ui>"#).unwrap();
         assert!(matches!(doc.items[0], TopLevel::Template(_)));
-        assert_eq!(doc.warnings.len(), 1);
-        assert!(
-            doc.warnings[0].contains("Unnamed virtual node")
-                || doc.warnings[0].contains("without a name")
-        );
+        // Reported by the loader into the document's record, not at parse.
+        assert!(doc.warnings.is_empty(), "{:?}", doc.warnings);
         assert!(
             doc.templates().is_empty(),
             "an unnamed template cannot be inherited"
