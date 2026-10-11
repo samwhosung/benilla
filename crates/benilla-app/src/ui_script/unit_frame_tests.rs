@@ -963,6 +963,7 @@ fn an_exalted_npc_target_reads_revered_and_its_plate_is_green() {
 /// `UNIT_FACTION`. No edge, or another unit's, leaves the plate as it was.
 #[test]
 fn a_live_faction_template_change_recolours_the_target_plate() {
+    benilla_formats::wow_data_or_skip!();
     use crate::net::FieldEdges;
     use benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE;
 
