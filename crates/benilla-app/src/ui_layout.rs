@@ -7,8 +7,9 @@
 //! `benilla-config/layout/<realm>-<character>.txt`, keeping `Frame:`, `W:` and `H:`.
 //! Deviation: one `Point: <point> <relativeTo> <relativePoint> <x> <y>` line per anchor, `-` for
 //! the screen root, instead of `X:`/`Y:`. A drag leaves one TOPLEFT against the screen root
-//! (`0x768430`), whose line holds the reference's X and Y; a frame user-placed without a drag
-//! keeps its authored anchors here, where the reference saves its rect's top-left. There is no
+//! (`0x768430`), whose line holds the reference's X and Y unrounded, where the reference saves
+//! integers (`0x490fc4`–`0x490fdf`); a frame user-placed without a drag keeps its authored
+//! anchors here, where the reference saves its rect's top-left. There is no
 //! `FrameLevel:`: the reference saves an undocked window's raise, and benilla's raise does not
 //! persist.
 //!
