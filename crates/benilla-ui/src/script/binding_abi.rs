@@ -22,7 +22,7 @@ use mlua::{Lua, Value};
 pub(crate) fn ftol(n: f64) -> i32 {
     const TWO_63: f64 = 9_223_372_036_854_775_808.0;
     let t = n.trunc();
-    if t >= -TWO_63 && t < TWO_63 {
+    if (-TWO_63..TWO_63).contains(&t) {
         t as i64 as i32
     } else {
         0

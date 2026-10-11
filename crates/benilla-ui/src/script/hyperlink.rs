@@ -82,7 +82,9 @@ fn fire(lua: &Lua, owner: FrameHandle, script: &str, args: &[&str]) {
 /// its pooled buttons in order, a new one built when the pool runs out, and the buttons left over,
 /// or of a text frame with no span now, hide.
 pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String)>) {
-    let mut by_owner: Vec<(FrameHandle, Vec<(Rect, String, String)>)> = Vec::new();
+    // One span: its rect, link and text.
+    type Span = (Rect, String, String);
+    let mut by_owner: Vec<(FrameHandle, Vec<Span>)> = Vec::new();
     for (owner, rect, link, text) in spans {
         match by_owner.iter_mut().find(|(o, _)| *o == owner) {
             Some((_, list)) => list.push((rect, link, text)),
