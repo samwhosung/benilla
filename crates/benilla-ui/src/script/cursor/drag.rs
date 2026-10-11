@@ -473,6 +473,45 @@ mod tests {
         assert!(s.cursor_item().is_some());
     }
 
+    /// A press whose frame hid (the removal cleared the capture, `0x764cad`) reaches no one on the
+    /// release: `0x766420` dispatches to the capture alone, and the world hook `0x492b50` runs
+    /// only in freelook, so the world click `0x495300` never runs.
+    #[test]
+    fn a_press_whose_frame_hid_is_not_a_world_drop() {
+        let mut s = drag_script();
+        s.run(
+            r#"
+            WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()
+            heard = 0
+            local a = CreateFrame("Frame", "A")
+            a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
+            a:SetScript("OnMouseDown", function() A:Hide() end)
+            local f = CreateFrame("Frame", "Listener")
+            f:RegisterEvent("DELETE_ITEM_CONFIRM")
+            f:SetScript("OnEvent", function() heard = heard + 1 end)
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s.set_cursor_for_test(CursorPayload::Item(CursorItem {
+            bar_placeable: true,
+            bag: 0,
+            slot: 1,
+            item_id: 117,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+        }));
+
+        s.mouse_button(100.0, 300.0, "LeftButton", true); // press on A, which hides itself
+        s.mouse_button(600.0, 300.0, "LeftButton", false); // release over the world
+        s.tick(0.01);
+        assert_eq!(s.eval::<i64>("return heard").unwrap(), 0, "no popup");
+        assert!(s.cursor_item().is_some());
+    }
+
     /// A non-item payload's world click clears it silently (`0x495300`); a drag release keeps it.
     #[test]
     fn world_click_with_a_spell_payload_clears_silently() {

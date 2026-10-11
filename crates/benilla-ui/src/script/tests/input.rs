@@ -793,6 +793,59 @@ fn a_press_and_release_on_one_frame_is_unchanged() {
     assert_eq!(log_of(&mut s), "A:down A:up");
 }
 
+/// Hiding a frame runs the input-index removal (`0x764ba0`), whose mouse tail clears the capture
+/// when the frame holds it (`0x764ca5`, `0x764cad`), and `0x766420` delivers `OnMouseUp` to the
+/// capture alone: a frame hidden while pressed gets no `OnMouseUp` on the release, hidden still
+/// or shown again.
+#[test]
+fn a_frame_hidden_while_pressed_gets_no_release() {
+    let mut s = two_frames();
+    s.run(r#"A:SetScript("OnMouseDown", function() table.insert(log, "A:down") A:Hide() end)"#)
+        .unwrap();
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    assert!(
+        s.model_ref().mouse_capture.is_none(),
+        "the hide cleared the capture slot"
+    );
+    s.run("A:Show()").unwrap(); // shown again before the release: the capture stays lost
+    s.mouse_button(200.0, 300.0, "LeftButton", false);
+    assert_eq!(log_of(&mut s), "A:down");
+}
+
+/// The removal runs for a frame that hid because an ancestor did (`0x76ad50` walks its children
+/// through slot `+0x84`, each gated on its own effective visibility).
+#[test]
+fn a_frame_whose_ancestor_hid_while_pressed_gets_no_release() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        local p = CreateFrame("Frame", "P")
+        p:SetPoint("BOTTOMLEFT", 0, 0); p:SetWidth(800); p:SetHeight(600)
+        local c = CreateFrame("Frame", "C", p)
+        c:SetPoint("BOTTOMLEFT", 100, 200); c:SetWidth(200); c:SetHeight(200); c:EnableMouse(true)
+        c:SetScript("OnMouseDown", function() table.insert(log, "C:down") P:Hide() end)
+        c:SetScript("OnMouseUp", function() table.insert(log, "C:up") end)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    s.mouse_button(200.0, 300.0, "LeftButton", false);
+    assert_eq!(log_of(&mut s), "C:down");
+}
+
+/// Only the held frame loses the press: hiding another frame leaves the release on its target.
+#[test]
+fn hiding_another_frame_keeps_the_press() {
+    let mut s = two_frames();
+    s.mouse_button(200.0, 300.0, "LeftButton", true);
+    s.run("B:Hide()").unwrap();
+    s.mouse_button(200.0, 300.0, "LeftButton", false);
+    assert_eq!(log_of(&mut s), "A:down A:up");
+}
+
 /// `Model::mouse_down_on` is keyed by button name, so the capture is per button.
 #[test]
 fn the_capture_is_per_button() {
@@ -864,4 +917,109 @@ fn a_disabled_button_takes_the_hover_but_fires_no_enter_or_leave() {
         "a button disabled under the cursor swallows its own leave"
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+// ── The hover re-pick on a show (`0x764b8d`) ──
+
+/// A mouse-enabled `Mover` hidden-cursor setup: the cursor rests at (150, 150) over nothing, then
+/// `Mover` is moved under it with no mouse move. Whether the next tick enters it is whether a
+/// re-pick was armed.
+fn mover_under_a_still_cursor() -> crate::script::UiScript {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        entered = {}
+        Mover = CreateFrame("Frame", "Mover")
+        Mover:SetPoint("BOTTOMLEFT", 500, 400); Mover:SetWidth(100); Mover:SetHeight(100)
+        Mover:EnableMouse(true)
+        Mover:SetScript("OnEnter", function() table.insert(entered, "mover") end)
+
+        Plain = CreateFrame("Frame", "Plain")
+        Plain:SetPoint("BOTTOMLEFT", 0, 0); Plain:SetWidth(10); Plain:SetHeight(10)
+        Plain:Hide()
+        Plain:SetScript("OnShow", function() table.insert(entered, "plain-shown") end)
+
+        PlainParent = CreateFrame("Frame", "PlainParent")
+        PlainParent:Hide()
+        PlainKid = CreateFrame("Frame", "PlainKid", PlainParent)
+        PlainKid:SetPoint("BOTTOMLEFT", 0, 0); PlainKid:SetWidth(10); PlainKid:SetHeight(10)
+
+        Shown = CreateFrame("Frame", "Shown")
+        Shown:SetPoint("BOTTOMLEFT", 0, 0); Shown:SetWidth(10); Shown:SetHeight(10)
+
+        Taker = CreateFrame("Frame", "Taker")
+        Taker:SetPoint("BOTTOMLEFT", 0, 0); Taker:SetWidth(10); Taker:SetHeight(10)
+        Taker:EnableMouse(true)
+        Taker:Hide()
+
+        MouseParent = CreateFrame("Frame", "MouseParent")
+        MouseParent:Hide()
+        MouseKid = CreateFrame("Frame", "MouseKid", MouseParent)
+        MouseKid:SetPoint("BOTTOMLEFT", 0, 0); MouseKid:SetWidth(10); MouseKid:SetHeight(10)
+        MouseKid:EnableMouse(true)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(150.0, 150.0); // over nothing
+    s.tick(0.016); // drains whatever the setup armed
+    s.run(
+        r#"
+        Mover:ClearAllPoints()
+        Mover:SetPoint("BOTTOMLEFT", 100, 100)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s
+}
+
+fn entered(s: &mut crate::script::UiScript) -> String {
+    s.eval::<String>("return table.concat(entered, ',')").unwrap()
+}
+
+/// A show arms the re-pick only through the input-index insert, which a frame reaches only with
+/// its mouse bit set (`0x76afa0` tests `[frame+0xcc]` per kind), so showing frames that take no
+/// mouse input leaves the hover alone until the mouse moves.
+#[test]
+fn showing_a_frame_that_takes_no_mouse_does_not_re_pick() {
+    let mut s = mover_under_a_still_cursor();
+    s.run("Plain:Show() PlainParent:Show()").unwrap();
+    s.tick(0.016);
+    assert_eq!(
+        entered(&mut s),
+        "plain-shown",
+        "no mouse-enabled frame showed, so no re-pick: Mover is entered on the next move"
+    );
+    s.mouse_move(151.0, 150.0);
+    assert_eq!(entered(&mut s), "plain-shown,mover");
+}
+
+/// `EnableMouse(true)` on a shown frame inserts with flag -1 (`0x76af00`), which does not arm it.
+#[test]
+fn enabling_the_mouse_on_a_shown_frame_does_not_re_pick() {
+    let mut s = mover_under_a_still_cursor();
+    s.run("Shown:EnableMouse(true)").unwrap();
+    s.tick(0.016);
+    assert_eq!(entered(&mut s), "");
+}
+
+/// A shown frame with its mouse bit set enters the index with flag 0 and arms the re-pick.
+#[test]
+fn showing_a_mouse_enabled_frame_re_picks() {
+    let mut s = mover_under_a_still_cursor();
+    s.run("Taker:Show()").unwrap();
+    s.tick(0.016);
+    assert_eq!(entered(&mut s), "mover");
+}
+
+/// A shown parent's children go through their own transitions (`0x76aed5`, slot `+0x88`), so a
+/// mouse-enabled child arms the re-pick whatever its parent takes.
+#[test]
+fn showing_a_parent_re_picks_through_its_mouse_enabled_child() {
+    let mut s = mover_under_a_still_cursor();
+    s.run("MouseParent:Show()").unwrap();
+    s.tick(0.016);
+    assert_eq!(entered(&mut s), "mover");
 }
