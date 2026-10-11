@@ -1008,7 +1008,7 @@ impl UiScript {
             self.fire_drag_stop(source);
         }
         let mut model = self.model_mut();
-        let held: Vec<crate::widget::FrameHandle> = model.mouse_down_on.values().copied().collect();
+        let held: Vec<crate::widget::FrameHandle> = model.mouse_down_on.values().copied().flatten().collect();
         model.mouse_down_on.clear();
         // Every held button gets the release edge never fed (`0x7793de`), else it stays pushed.
         for h in held {

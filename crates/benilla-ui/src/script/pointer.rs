@@ -313,7 +313,9 @@ impl UiScript {
             model
                 .mouse_down_on
                 .get(button)
-                .and_then(|h| model.frame_to_id.get(h).copied())
+                .copied()
+                .flatten()
+                .and_then(|h| model.frame_to_id.get(&h).copied())
         };
         // The `GetTime()` clock for the double-click detector, read before the borrow.
         let now = self.now();
@@ -347,9 +349,10 @@ impl UiScript {
             let hit_handle = hit_id.and_then(|id| model.id_to_frame.get(&id).copied());
             if down {
                 let displaced = match hit_handle {
-                    Some(h) => model.mouse_down_on.insert(button.to_string(), h),
+                    Some(h) => model.mouse_down_on.insert(button.to_string(), Some(h)),
                     None => model.mouse_down_on.remove(button),
-                };
+                }
+                .flatten();
                 // The press edge, `SetButtonState(PUSHED)` (`0x7792b1`), for a button registered
                 // for this mouse button up or down (`0x779210` tests `m | m << 8` at `0x77924b`).
                 if let Some(h) = hit_handle.filter(|&h| button::wants_press_visual(&model, h, button))
@@ -389,7 +392,11 @@ impl UiScript {
                     .and(hit_id);
                 (click, None, false, jump, None, abandoned, color_jump)
             } else {
-                let pressed = model.mouse_down_on.remove(button);
+                let entry = model.mouse_down_on.remove(button);
+                let pressed = entry.flatten();
+                // The pressed frame hid (`None` entry): the capture is gone, so nothing of this
+                // release runs, the world click included (`over_world(None)` would take it).
+                let capture_lost = entry == Some(None);
                 // `0x7664bb` clears the capture only when no button is still held, so a chorded
                 // release keeps it.
                 if model.mouse_down_on.is_empty() {
@@ -418,6 +425,7 @@ impl UiScript {
                     && !started
                     && over_world(&model, hit_handle)
                     && over_world(&model, pressed)
+                    && !capture_lost
                     && cursor::world_drop_click(&mut model);
                 let wants = format!("{button}Up");
                 let click = if started {

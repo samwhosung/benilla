@@ -31,8 +31,14 @@ pub(super) fn show(lua: &Lua, h: FrameHandle) {
         if !model.arena.show_step(h) {
             return;
         }
-        // Entering the mouse index schedules a hover re-pick (`0x764b8d`).
-        model.hover_repick = true;
+        // Only a frame entering the mouse index schedules a hover re-pick: the show's insert
+        // (`0x764780` → `0x76afa0`, flag 0) reaches `0x764aa0` for a kind whose bit is set, and
+        // its tail arms `[root+0x1100]` for the mouse kind alone (`0x764b84`, `0x764b8d`). A
+        // frame that takes no mouse arms nothing; a parent's mouse-enabled children arm it
+        // through their own transitions below.
+        if takes_mouse(&model, h) {
+            model.hover_repick = true;
+        }
     }
     walk_children(lua, h, show);
     super::object::toplevel::raise_on_show(&mut model_mut(lua), h);
@@ -47,6 +53,7 @@ pub(super) fn hide(lua: &Lua, h: FrameHandle) {
         if !model.arena.hide_step(h) {
             return;
         }
+        drop_capture(&mut model, h);
         leave_if_hovered(&mut model, h)
     };
     if let Some(id) = left {
@@ -72,6 +79,32 @@ fn walk_children(lua: &Lua, parent: FrameHandle, step: fn(&Lua, FrameHandle)) {
             .next_child(parent, &mut walk);
         let Some(child) = next else { break };
         step(lua, child);
+    }
+}
+
+/// Whether the frame is in the mouse input index when visible: its mouse bit (`[+0xcc]` bit 2),
+/// or a hyperlink span, which the reference gives a mouse-enabled child of its own (`0x7a3240`).
+fn takes_mouse(model: &Model, h: FrameHandle) -> bool {
+    model.arena.is_mouse_enabled(h)
+        || model
+            .link_spans
+            .get(&h)
+            .is_some_and(|spans| !spans.is_empty())
+}
+
+/// The removal tail's capture clear (`0x764ca5`–`0x764cad`): a frame leaving the mouse index
+/// that holds the capture slot (`root+0x80`) empties it. `0x766420` delivers a release to the
+/// capture alone, so the press this frame took reaches no one: no `OnMouseUp`, no click, and no
+/// world click, since the world hook `0x492b50` runs only in freelook. The button stays held
+/// until its release, which then finds nothing.
+fn drop_capture(model: &mut Model, h: FrameHandle) {
+    if model.mouse_capture == Some(h) {
+        model.mouse_capture = None;
+    }
+    for pressed in model.mouse_down_on.values_mut() {
+        if *pressed == Some(h) {
+            *pressed = None;
+        }
     }
 }
 
