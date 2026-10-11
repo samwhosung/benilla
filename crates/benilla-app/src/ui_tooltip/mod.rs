@@ -122,6 +122,16 @@ fn drive_mouseover_tooltip(
     let chr = tables.classes();
     let types = tables.types(&names);
 
+    // A plate's pick stands for its enter's publish (`0x7cb850`), so it holds only while that plate
+    // holds the hover: a plate retired after the pick was taken has run its leave (`0x7cb8b0`),
+    // which published the loss, and the hover re-picks to the WorldFrame.
+    if hovered.plate && script.hovered_nameplate() != hovered.guid {
+        if std::mem::take(published) {
+            script.set_unit("mouseover", None);
+        }
+        script.publish_world_mouseover(None);
+        return;
+    }
     let unit = hovered.mouseover(&hovered_go).and_then(|(entity, guid)| {
         let store = stores.get(entity).ok()?;
         let name = names
