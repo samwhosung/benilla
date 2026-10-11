@@ -435,13 +435,13 @@ fn an_owner_minted_after_its_region_joined_takes_the_owner_edge() {
             .expect("region");
         let d = m.region_data.entry(rh).or_default();
         d.size = Some((8.0, 8.0));
-        d.anchors = vec![crate::layout::Anchor::new(
+        d.anchors = crate::layout::Anchors::from([crate::layout::Anchor::new(
             crate::layout::Point::TopLeft,
             root_id,
             crate::layout::Point::TopLeft,
             5.0,
             -5.0,
-        )];
+        )]);
         m.touch_layout_region(rh);
         (host, rh)
     };

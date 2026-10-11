@@ -4,13 +4,13 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::object::anchor_args::{parse_set_point, resolve_rel_target, UNNAMED};
-use super::object::{anchor_bits_eq, decode_id, id_to_lud, NamedTarget};
+use super::object::{decode_id, id_to_lud, NamedTarget};
 use super::region_map::{set_shared, Side};
 use super::{
     Model, REG_FONTSTRING_META, REG_FONTSTRING_METHODS, REG_REGION_META, REG_REGION_METHODS,
     REG_TEXTURE_META, REG_TEXTURE_METHODS, REG_TITLE_META, REG_TITLE_METHODS, REG_WRAPPERS, SCREEN,
 };
-use crate::layout::Anchor;
+use crate::layout::{Anchor, Anchors};
 use crate::widget::{RegionHandle, RegionKind};
 
 /// Resolve `self` (a region wrapper) to its live [`RegionHandle`].
@@ -699,14 +699,14 @@ pub(crate) fn implicit_creation_anchor(model: &mut Model, rh: RegionHandle) {
     use crate::layout::Point;
     match kind {
         RegionKind::Texture => {
-            data.anchors = vec![
+            data.anchors = Anchors::from([
                 Anchor::new(Point::TopLeft, owner_id, Point::TopLeft, 0.0, 0.0),
                 Anchor::new(Point::BottomRight, owner_id, Point::BottomRight, 0.0, 0.0),
-            ];
+            ]);
         }
         RegionKind::FontString => {
             let point = justify_anchor_point(data.justify.0);
-            data.anchors = vec![Anchor::new(point, owner_id, point, 0.0, 0.0)];
+            data.anchors = Anchors::from([Anchor::new(point, owner_id, point, 0.0, 0.0)]);
         }
         RegionKind::Title => return,
     }
@@ -738,7 +738,7 @@ pub(crate) fn anchor_unanchored_at(
     if !data.anchors.is_empty() {
         return;
     }
-    data.anchors = vec![Anchor::new(point, owner_id, point, 0.0, 0.0)];
+    data.anchors = Anchors::from([Anchor::new(point, owner_id, point, 0.0, 0.0)]);
     model.touch_layout_region(rh);
 }
 
@@ -791,17 +791,13 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
     let rel_to_id = resolve_rel_target(&model, &p.target, &who, "SetPoint", me, owner)?;
     let (point, rel_point, x, y) = (p.point, p.rel_point, p.x, p.y);
 
+    // The frame's store and its unchanged-anchor test (`0x767c70`).
+    let eps = model.anchor_eps();
     let data = model.region_data.entry(rh).or_default();
-    let new = Anchor::new(point, rel_to_id, rel_point, x, y);
-    // A no-op only when the bit-identical anchor is already the tail and no earlier entry has
-    // this point, as for frames.
-    let same_at_tail = data.anchors.last().is_some_and(|a| anchor_bits_eq(a, &new))
-        && !data.anchors[..data.anchors.len() - 1]
-            .iter()
-            .any(|a| a.point == point);
-    if !same_at_tail {
-        data.anchors.retain(|a| a.point != point);
-        data.anchors.push(new);
+    if data
+        .anchors
+        .set(Anchor::new(point, rel_to_id, rel_point, x, y), eps)
+    {
         model.touch_layout_region(rh);
     }
     Ok(())

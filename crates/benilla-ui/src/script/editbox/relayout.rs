@@ -3,7 +3,7 @@
 
 use mlua::Lua;
 
-use crate::layout::{Anchor, Point, Rect};
+use crate::layout::{Anchor, Anchors, Point, Rect};
 use crate::script::{MeasureRequest, Model};
 use crate::widget::{EditBoxState, FrameHandle, KindState, RegionHandle};
 
@@ -39,18 +39,13 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
     let top_left = Anchor::new(Point::TopLeft, owner, Point::TopLeft, l, -t);
     let (anchors, size) = if multi_line {
         let width = multi_line_text_width(model, h, [l, r]);
-        (vec![top_left], width.map(|w| Some((w, 0.0))))
+        (Anchors::from([top_left]), width.map(|w| Some((w, 0.0))))
     } else {
         let bottom_right = Anchor::new(Point::BottomRight, owner, Point::BottomRight, -r, b);
-        (vec![top_left, bottom_right], Some(None))
+        (Anchors::from([top_left, bottom_right]), Some(None))
     };
     let data = model.region_data.entry(rh).or_default();
-    let same_anchors = data.anchors.len() == anchors.len()
-        && data
-            .anchors
-            .iter()
-            .zip(&anchors)
-            .all(|(a, b)| crate::script::object::anchor_bits_eq(a, b));
+    let same_anchors = data.anchors.bits_eq(&anchors);
     // `None` keeps the size: a multi-line box with no rect yet.
     let size = size.unwrap_or(data.size);
     let size_moved = !crate::script::region::size_bits_eq(data.size, size);

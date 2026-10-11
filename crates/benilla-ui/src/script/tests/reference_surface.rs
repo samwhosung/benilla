@@ -1118,12 +1118,8 @@ fn the_region_map_readers_answer_the_way_the_edges_do() {
     );
     assert_eq!(
         s.arity("RRPlate:GetPoint(7)").unwrap(),
-        5,
-        "an out-of-range index still answers five values, all nil"
-    );
-    assert!(
-        s.eval::<bool>("return RRPlate:GetPoint(7) == nil").unwrap(),
-        "…and the first of them is nil"
+        0,
+        "an out-of-range index pushes no value (`0x7a240d`)"
     );
 }
 

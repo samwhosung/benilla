@@ -39,16 +39,19 @@ impl InputFingerprint {
         self.feed(u64::from(v.to_bits()));
     }
 
+    /// The anchors in point order, then their count.
     #[inline]
-    fn anchors(&mut self, anchors: &[Anchor]) {
-        self.feed(anchors.len() as u64);
+    fn anchors<'a>(&mut self, anchors: impl IntoIterator<Item = &'a Anchor>) {
+        let mut n = 0u64;
         for a in anchors {
             self.feed(u64::from(a.point.id()));
             self.feed(u64::from(a.relative_to));
             self.feed(u64::from(a.relative_point.id()));
             self.f32(a.x_off);
             self.f32(a.y_off);
+            n += 1;
         }
+        self.feed(n);
     }
 
     #[inline]
@@ -505,7 +508,7 @@ impl LayoutScope {
         };
         let over_eq = |a: Option<Anchor>, b: Option<Anchor>| match (a, b) {
             (None, None) => true,
-            (Some(a), Some(b)) => super::object::anchor_bits_eq(&a, &b),
+            (Some(a), Some(b)) => a.bits_eq(&b),
             _ => false,
         };
         let n = self
@@ -1221,8 +1224,7 @@ impl UiScript {
                         }
                     }
                 }
-                scratch.anchors.clear();
-                scratch.anchors.extend_from_slice(&data.anchors);
+                scratch.anchors = data.anchors;
                 scratch.width = width;
                 scratch.height = height;
                 scratch.scale = scale;

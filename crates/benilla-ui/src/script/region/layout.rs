@@ -2,9 +2,11 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::layout::{Anchor, Point};
-use crate::script::object::anchor_args::{parse_set_all_points, resolve_rel_target};
-use crate::script::object::{anchor_bits_eq, frame_wrapper, point_name};
+use crate::layout::{Anchor, Anchors, Point};
+use crate::script::object::anchor_args::{
+    get_point_index, get_point_values, parse_set_all_points, resolve_rel_target,
+};
+use crate::script::object::frame_wrapper;
 use crate::script::region_map::{set_shared, Side};
 use crate::script::{Model, SCREEN};
 
@@ -16,11 +18,8 @@ use super::{
 /// Install the layout methods into `m`.
 /// `ClearAllPoints` on a region (`0x767ed0`): the region leaves the cached graph with its edges.
 pub(in crate::script) fn clear_points(model: &mut Model, rh: crate::widget::RegionHandle) {
-    let d = model.region_data.entry(rh).or_default();
     // Mutates only on a real change; an unanchored region leaves the graph.
-    let cleared = !d.anchors.is_empty();
-    d.anchors.clear();
-    if cleared {
+    if model.region_data.entry(rh).or_default().anchors.clear() {
         model.touch_layout_region(rh);
     }
 }
@@ -145,15 +144,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 Anchor::new(Point::BottomRight, rel_id, Point::BottomRight, 0.0, 0.0),
             ];
             let data = model.region_data.entry(rh).or_default();
-            let same = data.anchors.len() == 2
-                && data
-                    .anchors
-                    .iter()
-                    .zip(&pair)
-                    .all(|(a, b)| anchor_bits_eq(a, b));
-            if !same {
-                data.anchors.clear();
-                data.anchors.extend_from_slice(&pair);
+            // The reference clears and sets both (`0x767db0`); only a bit-identical pair skips.
+            let pair = Anchors::from(pair);
+            if !data.anchors.bits_eq(&pair) {
+                data.anchors = pair;
                 model.touch_layout_region(rh);
             }
             Ok(())
@@ -198,48 +192,38 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             .map_or(0, |d| d.anchors.len() as i64))
     })?;
 
-    // GetPoint([n]): the n-th anchor (1-based, default 1) as point, relativeTo, relativePoint, x
-    // and y, or five nils. Frames and regions share one id space and a region may anchor to a
-    // sibling region, so relativeTo is answered with the matching wrapper kind.
+    // GetPoint([n]): the frame's binding (`0x7a2340`), the n-th anchor in point order. Frames and
+    // regions share one id space and a region may anchor to a sibling region, so relativeTo is
+    // answered with the matching wrapper kind.
     set_shared(
         lua,
         m,
         Side::Region,
         "GetPoint",
-        |lua, (this, n): (Table, Option<i64>)| {
+        |lua, (this, n): (Table, Value)| {
             let rh = region_handle_of(lua, &this)?;
+            let idx = get_point_index(lua, n)?;
             let anchor = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                let idx = (n.unwrap_or(1).max(1) - 1) as usize;
                 model
                     .region_data
                     .get(&rh)
-                    .and_then(|d| d.anchors.get(idx))
-                    .cloned()
+                    .and_then(|d| d.anchors.nth(idx))
+                    .copied()
             };
-            let Some(a) = anchor else {
-                return Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil, Value::Nil));
-            };
-            let rel = {
+            get_point_values(lua, anchor, |rel| {
                 let is_frame = {
                     let model = lua.app_data_ref::<Model>().expect("model");
-                    model.id_to_frame.contains_key(&a.relative_to)
+                    model.id_to_frame.contains_key(&rel)
                 };
-                if a.relative_to == SCREEN {
+                Ok(if rel == SCREEN {
                     Value::Nil
                 } else if is_frame {
-                    Value::Table(frame_wrapper(lua, a.relative_to)?)
+                    Value::Table(frame_wrapper(lua, rel)?)
                 } else {
-                    Value::Table(super::region_wrapper(lua, a.relative_to)?)
-                }
-            };
-            Ok((
-                Value::String(lua.create_string(point_name(a.point))?),
-                rel,
-                Value::String(lua.create_string(point_name(a.relative_point))?),
-                Value::Number(f64::from(a.x_off)),
-                Value::Number(f64::from(a.y_off)),
-            ))
+                    Value::Table(super::region_wrapper(lua, rel)?)
+                })
+            })
         },
     )?;
     Ok(())

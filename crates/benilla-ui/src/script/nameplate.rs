@@ -10,7 +10,7 @@
 
 use mlua::Lua;
 
-use crate::layout::{Anchor, Point};
+use crate::layout::{Anchor, Anchors, Point};
 use crate::order::DrawLayer;
 use crate::widget::{FrameHandle, FrameKind, KindState, RegionHandle, RegionKind};
 
@@ -525,32 +525,32 @@ impl Plate {
         input.height = g.height;
 
         for rh in [border, glow] {
-            model.region_data.entry(rh).or_default().anchors = vec![
+            model.region_data.entry(rh).or_default().anchors = Anchors::from([
                 Anchor::new(Point::TopLeft, plate_id, Point::TopLeft, 0.0, 0.0),
                 Anchor::new(Point::BottomRight, plate_id, Point::BottomRight, 0.0, 0.0),
-            ];
+            ]);
         }
 
         let bar_input = model.layout_inputs.entry(bar).or_default();
-        bar_input.anchors = vec![Anchor::new(
+        bar_input.anchors = Anchors::from([Anchor::new(
             Point::BottomLeft,
             plate_id,
             Point::BottomLeft,
             g.bar_off_x,
             g.bar_off_y,
-        )];
+        )]);
         bar_input.width = g.bar_width;
         bar_input.height = g.bar_height;
 
         // The name's (`0x7cb456`) and level's (`0x7cb7f5`) anchors, which `_Nameplates` checks.
         let name_data = model.region_data.entry(name).or_default();
-        name_data.anchors = vec![Anchor::new(
+        name_data.anchors = Anchors::from([Anchor::new(
             Point::Bottom,
             plate_id,
             Point::Center,
             0.0,
             0.0,
-        )];
+        )]);
         name_data.font_height = Some(g.name_height);
 
         for rh in [name, level] {
@@ -561,29 +561,30 @@ impl Plate {
         }
 
         let level_data = model.region_data.entry(level).or_default();
-        level_data.anchors = vec![Anchor::new(
+        level_data.anchors = Anchors::from([Anchor::new(
             Point::Center,
             plate_id,
             Point::BottomRight,
             -g.level_off_x,
             g.level_off_y,
-        )];
+        )]);
         level_data.font_height = Some(g.level_height);
         level_data.font_explicit.height = true;
         model.touch_measure(level);
 
         let skull_data = model.region_data.entry(skull).or_default();
-        skull_data.anchors = vec![Anchor::new(
+        skull_data.anchors = Anchors::from([Anchor::new(
             Point::Center,
             plate_id,
             Point::BottomRight,
             -g.level_off_x,
             g.level_off_y,
-        )];
+        )]);
         skull_data.size = Some((g.skull_size, g.skull_size));
 
         let raid_data = model.region_data.entry(raid).or_default();
-        raid_data.anchors = vec![Anchor::new(Point::Right, plate_id, Point::Left, 0.0, 0.0)];
+        raid_data.anchors =
+            Anchors::from([Anchor::new(Point::Right, plate_id, Point::Left, 0.0, 0.0)]);
         raid_data.size = Some((g.raid_size, g.raid_size));
 
         // Once per geometry change: each node it wrote re-derives.
@@ -616,13 +617,13 @@ impl Plate {
             .is_none_or(|l| l.top_centre != state.top_centre)
         {
             let input = model.layout_inputs.entry(frame).or_default();
-            input.anchors = vec![Anchor::new(
+            input.anchors = Anchors::from([Anchor::new(
                 Point::Top,
                 world_id,
                 Point::BottomLeft,
                 state.top_centre.0,
                 state.top_centre.1,
-            )];
+            )]);
             model.touch_layout_frame(frame);
         }
 

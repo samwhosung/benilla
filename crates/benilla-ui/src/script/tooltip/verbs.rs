@@ -2,7 +2,7 @@
 
 use mlua::{Lua, Table, Value, Variadic};
 
-use crate::layout::{Anchor, Point};
+use crate::layout::{Anchor, Anchors, Point};
 use crate::script::binding_abi::optional_string;
 use crate::script::object::frame_handle_of;
 use crate::script::region::region_handle_of;
@@ -233,13 +233,14 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 let d = model.region_data.entry(lh).or_default();
                 d.hidden = true;
                 d.justify.set_h(crate::script::JustifyH::Left);
-                d.anchors = vec![anchor];
+                d.anchors = Anchors::from([anchor]);
             }
             {
                 let d = model.region_data.entry(rh).or_default();
                 d.hidden = true;
                 d.justify.set_h(crate::script::JustifyH::Right);
-                d.anchors = vec![Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)];
+                d.anchors =
+                    Anchors::from([Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)]);
             }
             model.touch_layout_region(lh); // two line rows entered the layout graph
             model.touch_layout_region(rh);

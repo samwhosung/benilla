@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::layout::{self, Anchor, Point, Rect};
+use crate::layout::{self, Anchor, Anchors, Point, Rect};
 use crate::order::DrawLayer;
 use crate::widget::{FrameHandle, RegionHandle, RegionKind};
 
@@ -383,7 +383,7 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
 
 /// A piece's anchors on frame `owner` and its explicit size, `None` where the anchors span both
 /// axes.
-fn piece_geometry(owner: u32, (anchors, size): PieceLayout) -> (Vec<Anchor>, Option<(f32, f32)>) {
+fn piece_geometry(owner: u32, (anchors, size): PieceLayout) -> (Anchors, Option<(f32, f32)>) {
     let anchors = anchors
         .into_iter()
         .flatten()

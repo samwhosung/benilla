@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::layout::{Anchor, Point};
+use crate::layout::{Anchor, Anchors, Point};
 use crate::order::DrawLayer;
 use crate::widget::{FrameHandle, FrameKind, RegionHandle, RegionKind};
 
@@ -318,20 +318,20 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
     // A border-unit square, its TOPRIGHT on the frame's BOTTOM lifted a quarter unit.
     let tail_data = model.region_data.entry(tail).or_default();
     tail_data.size = Some((g.border, g.border));
-    tail_data.anchors = vec![Anchor::new(
+    tail_data.anchors = Anchors::from([Anchor::new(
         Point::TopRight,
         frame_id,
         Point::Bottom,
         0.0,
         g.border / 4.0,
-    )];
+    )]);
 
     model.region_data.entry(text).or_default().font_height = Some(g.text_height);
     model.touch_measure(text);
 
     // The frame hugs the text: TOPLEFT and BOTTOMRIGHT on the text's, out by the margin.
     let input = model.layout_inputs.entry(frame).or_default();
-    input.anchors = vec![
+    input.anchors = Anchors::from([
         Anchor::new(Point::TopLeft, text_id, Point::TopLeft, -g.margin, g.margin),
         Anchor::new(
             Point::BottomRight,
@@ -340,7 +340,7 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
             g.margin,
             -g.margin,
         ),
-    ];
+    ]);
     // Once per geometry change: each node it wrote re-derives.
     model.touch_layout_frame(frame);
     model.touch_layout_region(tail);
@@ -450,13 +450,13 @@ fn drive(
     );
     if last_seat != Some(seat) {
         let data = model.region_data.entry(text).or_default();
-        data.anchors = vec![Anchor::new(
+        data.anchors = Anchors::from([Anchor::new(
             Point::Bottom,
             world_id,
             Point::BottomLeft,
             seat.0,
             seat.1,
-        )];
+        )]);
         model.touch_layout_region(text);
         model.chat_bubbles.bubbles[i].seat = Some(seat);
     }

@@ -2,13 +2,16 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::layout::{Anchor, Point};
+use crate::layout::{Anchor, Anchors, Point};
 use crate::script::region_map::{set_shared, Side};
 use crate::script::{Model, SCREEN};
 use crate::widget::FrameHandle;
 
-use super::anchor_args::{parse_set_all_points, parse_set_point, resolve_rel_target, UNNAMED};
-use super::{frame_handle_of, frame_parent_token_base, frame_wrapper, point_name};
+use super::anchor_args::{
+    get_point_index, get_point_values, parse_set_all_points, parse_set_point, resolve_rel_target,
+    UNNAMED,
+};
+use super::{frame_handle_of, frame_parent_token_base, frame_wrapper};
 
 /// The receiver's name for the error strings and its `$parent` base, read under one short `Model`
 /// borrow that ends before the ladder's `_G` read.
@@ -37,51 +40,40 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         let mut model = lua.app_data_mut::<Model>().expect("model");
         // Every layout setter mutates only on a real change, so a per-frame caller setting the
         // same value never reopens the layout gate.
-        let cleared = match model.layout_inputs.get_mut(&h) {
-            Some(input) if !input.anchors.is_empty() => {
-                input.anchors.clear();
-                true
-            }
-            _ => false,
-        };
+        let cleared = model
+            .layout_inputs
+            .get_mut(&h)
+            .is_some_and(|input| input.anchors.clear());
         if cleared {
             model.touch_layout_frame(h);
         }
         Ok(())
     })?;
-    // GetPoint([n]) → point, relativeTo, relativePoint, x, y of the n-th anchor (default 1);
-    // relativeTo is nil for a screen-root anchor, since `SCREEN` has no wrapper.
+    // GetPoint([n]) → point, relativeTo, relativePoint, x, y of the n-th anchor in point order
+    // (`0x7a2340`); relativeTo is nil for a screen-root anchor, since `SCREEN` has no wrapper.
     set_shared(
         lua,
         m,
         Side::Frame,
         "GetPoint",
-        |lua, (this, n): (Table, Option<i64>)| {
+        |lua, (this, n): (Table, Value)| {
             let h = frame_handle_of(lua, &this)?;
+            let idx = get_point_index(lua, n)?;
             let anchor = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                let idx = (n.unwrap_or(1).max(1) - 1) as usize;
                 model
                     .layout_inputs
                     .get(&h)
-                    .and_then(|i| i.anchors.get(idx))
-                    .cloned()
+                    .and_then(|i| i.anchors.nth(idx))
+                    .copied()
             };
-            let Some(a) = anchor else {
-                return Ok((Value::Nil, Value::Nil, Value::Nil, Value::Nil, Value::Nil));
-            };
-            let rel = if a.relative_to == SCREEN {
-                Value::Nil
-            } else {
-                Value::Table(frame_wrapper(lua, a.relative_to)?)
-            };
-            Ok((
-                Value::String(lua.create_string(point_name(a.point))?),
-                rel,
-                Value::String(lua.create_string(point_name(a.relative_point))?),
-                Value::Number(f64::from(a.x_off)),
-                Value::Number(f64::from(a.y_off)),
-            ))
+            get_point_values(lua, anchor, |rel| {
+                Ok(if rel == SCREEN {
+                    Value::Nil
+                } else {
+                    Value::Table(frame_wrapper(lua, rel)?)
+                })
+            })
         },
     )?;
     // GetNumPoints(): on the Region method table (`0x87c9b8`), so every widget answers it.
@@ -115,15 +107,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 Anchor::new(Point::BottomRight, rel_id, Point::BottomRight, 0.0, 0.0),
             ];
             let input = model.layout_inputs.entry(h).or_default();
-            let same = input.anchors.len() == 2
-                && input
-                    .anchors
-                    .iter()
-                    .zip(&pair)
-                    .all(|(a, b)| anchor_bits_eq(a, b));
-            if !same {
-                input.anchors.clear();
-                input.anchors.extend_from_slice(&pair);
+            // The reference clears and sets both (`0x767db0`); only a bit-identical pair skips.
+            let pair = Anchors::from(pair);
+            if !input.anchors.bits_eq(&pair) {
+                input.anchors = pair;
                 model.touch_layout_frame(h);
             }
             Ok(())
@@ -286,32 +273,15 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
     let rel_to_id = resolve_rel_target(&model, &p.target, &who, "SetPoint", me, parent)?;
     let (point, rel_point, x, y) = (p.point, p.rel_point, p.x, p.y);
 
+    let eps = model.anchor_eps();
     let input = model.layout_inputs.entry(h).or_default();
-    let new = Anchor::new(point, rel_to_id, rel_point, x, y);
-    // A no-op only when the identical anchor is already last and no earlier one has this point,
-    // mirroring the retain and push below; bits compared, as the fingerprint tells -0.0 from 0.0.
-    let same_at_tail = input
+    if input
         .anchors
-        .last()
-        .is_some_and(|a| anchor_bits_eq(a, &new))
-        && !input.anchors[..input.anchors.len() - 1]
-            .iter()
-            .any(|a| a.point == point);
-    if !same_at_tail {
-        input.anchors.retain(|a| a.point != point);
-        input.anchors.push(new);
+        .set(Anchor::new(point, rel_to_id, rel_point, x, y), eps)
+    {
         model.touch_layout_frame(h);
     }
     Ok(())
-}
-
-/// Bit-exact anchor equality, as the layout gate's fingerprint compares, so the two always agree.
-pub(crate) fn anchor_bits_eq(a: &Anchor, b: &Anchor) -> bool {
-    a.point == b.point
-        && a.relative_to == b.relative_to
-        && a.relative_point == b.relative_point
-        && a.x_off.to_bits() == b.x_off.to_bits()
-        && a.y_off.to_bits() == b.y_off.to_bits()
 }
 
 /// The default `relativeTo`: the parent, or [`SCREEN`] for a top-level frame (`0x76c6e0`).

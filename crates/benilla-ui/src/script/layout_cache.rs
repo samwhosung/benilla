@@ -7,7 +7,7 @@
 //! root (saved as no target, the `nil` `GetPoint` answers there) or a named frame; a frame anchored
 //! to anything else is skipped whole, never half-restored.
 
-use crate::layout::Anchor;
+use crate::layout::{Anchor, Anchors};
 use crate::widget::FrameHandle;
 
 use super::object::{point_from_str, point_name};
@@ -85,7 +85,7 @@ impl super::UiScript {
             let Some(h) = model.arena.lookup(&l.name) else {
                 continue; // a window this build does not have
             };
-            let mut anchors: Vec<Anchor> = Vec::with_capacity(l.points.len());
+            let mut anchors = Anchors::new();
             let mut usable = true;
             for p in &l.points {
                 // `frame_id` mints the id lazily, so a target nothing has anchored to yet resolves.
@@ -99,7 +99,7 @@ impl super::UiScript {
                     point_from_str(&p.relative_point),
                 ) {
                     (Some(point), Some(rel), Some(rp)) => {
-                        anchors.push(Anchor::new(point, rel, rp, p.x, p.y));
+                        anchors.insert(Anchor::new(point, rel, rp, p.x, p.y));
                     }
                     _ => {
                         usable = false;

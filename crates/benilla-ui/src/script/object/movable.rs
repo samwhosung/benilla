@@ -421,12 +421,12 @@ pub(crate) fn advance_size(model: &mut Model, pos: (f32, f32)) {
     // keeps its opposite edge. The reference instead re-anchors the frame to one TOPLEFT point at
     // `StartSizing` (`0x768430`).
     if !input.anchors.is_empty() && (sz.left || sz.bottom) {
-        for a in &mut input.anchors {
+        for (x_off, y_off) in input.anchors.offsets_mut() {
             if sz.left {
-                a.x_off += dx;
+                *x_off += dx;
             }
             if sz.bottom {
-                a.y_off += dy;
+                *y_off += dy;
             }
         }
         moved |= (sz.left && dx != 0.0) || (sz.bottom && dy != 0.0);
@@ -460,9 +460,9 @@ pub(crate) fn advance_move(model: &mut Model, pos: (f32, f32)) {
     let (dx, dy) = (dx * inv, dy * inv);
     if let Some(input) = model.layout_inputs.get_mut(&mv.frame) {
         if !input.anchors.is_empty() {
-            for a in &mut input.anchors {
-                a.x_off += dx;
-                a.y_off += dy;
+            for (x_off, y_off) in input.anchors.offsets_mut() {
+                *x_off += dx;
+                *y_off += dy;
             }
             // No target moves, so only this node is touched; a zero delta already returned above.
             model.touch_layout_frame(mv.frame);

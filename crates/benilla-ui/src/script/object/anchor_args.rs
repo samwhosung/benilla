@@ -195,3 +195,33 @@ pub(crate) fn resolve_xml_relative_to(lua: &Lua, name: &str) -> Option<Table> {
     // A wrapper, not a name, so the Lua ladder's raise can never reach a loading document.
     nt.wrapper.clone()
 }
+
+/// `GetPoint`'s index (`0x7a2340`), from 0: an `is-number` argument (`0x6f34d0`), truncated
+/// toward zero (`0x40a2b0`), less one; any other argument, or one at or below 1, picks the first
+/// anchor, since the walk takes the first held slot whose count reaches the index (`0x7a23fe`).
+pub(crate) fn get_point_index(lua: &Lua, n: Value) -> mlua::Result<usize> {
+    let idx = match lua.coerce_number(n)? {
+        Some(n) => (n as i64 as i32).wrapping_sub(1),
+        None => 0,
+    };
+    Ok(idx.max(0) as usize)
+}
+
+/// `GetPoint`'s answer for `anchor` (`0x7a2416`..`0x7a24d6`): point, `relativeTo`, relative point
+/// and the two offsets; no anchor at the index pushes no value at all (`0x7a240d`).
+pub(crate) fn get_point_values(
+    lua: &Lua,
+    anchor: Option<crate::layout::Anchor>,
+    rel: impl FnOnce(u32) -> mlua::Result<Value>,
+) -> mlua::Result<MultiValue> {
+    let Some(a) = anchor else {
+        return Ok(MultiValue::new());
+    };
+    Ok(MultiValue::from_vec(vec![
+        Value::String(lua.create_string(super::point_name(a.point))?),
+        rel(a.relative_to)?,
+        Value::String(lua.create_string(super::point_name(a.relative_point))?),
+        Value::Number(f64::from(a.x_off)),
+        Value::Number(f64::from(a.y_off)),
+    ]))
+}

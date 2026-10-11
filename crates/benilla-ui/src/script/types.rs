@@ -1,6 +1,6 @@
 use mlua::{Lua, Value};
 
-use crate::layout::{Anchor, Rect};
+use crate::layout::{Anchors, Rect};
 use crate::order::ZTarget;
 
 /// A value the host passes into Lua, such as a `fire_event` argument, without an mlua handle.
@@ -370,7 +370,7 @@ pub(crate) struct RegionData {
     /// extent, never the owner's rect; one still unset leaves the region unresolved (`0x767a20`).
     /// Empty is a Lua region nobody anchored, which never draws: every other has an authored or
     /// creation-time anchor ([`super::region::implicit_creation_anchor`]).
-    pub(crate) anchors: Vec<Anchor>,
+    pub(crate) anchors: Anchors,
     /// `SetDesaturated` (`0x79c1e0`): the renderer greys the texel, so the binding reports support.
     pub(crate) desaturated: bool,
     /// `SetNonSpaceWrap`/`CanNonSpaceWrap` (`0x79e9f0`/`0x79ead0`), `None` on. Stored, not applied:

@@ -41,6 +41,14 @@ impl Model {
         crate::layout::SIZE_EPS * f64::from(self.layout_unit())
     }
 
+    /// `SetPoint`'s unchanged-anchor threshold on each offset (`0x767cbe`, `0x767cd3`): the same
+    /// 2⁻²² (`[0x8029d4]`) against offsets the binding stored in layout units, a Lua offset over
+    /// the layout unit (`0x7a28ab`..`0x7a28e3`); ours stay in FrameXML units, so it is
+    /// [`Self::size_eps`].
+    pub(crate) fn anchor_eps(&self) -> f64 {
+        self.size_eps()
+    }
+
     /// The drain's keep threshold, 1e-5 in the reference's layout units (`[0x80c5c8]`, tested in
     /// `0x768d20`), in ours: [`crate::layout::RESOLVE_EPS`] times the layout unit.
     pub(crate) fn resolve_eps(&self) -> f64 {
