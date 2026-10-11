@@ -965,8 +965,16 @@ mod tests {
         (selection.target, selection.guid) = (Some(mob), Some(MOB));
         let mut hovered = app.world_mut().resource_mut::<crate::target::Hovered>();
         (hovered.target, hovered.guid) = (Some(add), Some(ADD));
+        publish_mouseover(&mut app, Some(ADD));
         app.update();
         app
+    }
+
+    /// The world mouseover as the publisher (`0x492890`) writes it to `[0xb4e2c8]`.
+    fn publish_mouseover(app: &mut App, guid: Option<u64>) {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .publish_world_mouseover(guid);
     }
 
     /// `UnitDebuff` reads the list of whatever unit the token names, through the resolver
@@ -1036,9 +1044,29 @@ mod tests {
             guid: Some(0xF110_0000_0000_0004),
             distance: 5.0,
         });
+        publish_mouseover(&mut app, Some(0xF110_0000_0000_0004));
         app.update();
         assert!(listed(&mut app, "mouseover", true).is_empty());
         assert!(listed(&mut app, "mouseovertarget", true).is_empty());
+    }
+
+    /// A hovered plate retired after the pick: its leave (`0x7cb8b0`) publishes the empty
+    /// mouseover, while the pick still names the plate's unit. The resolver reads the published
+    /// pair (`0x515bb6`, `0x515bdb`), so in the next frame `"mouseover"` and its chains name
+    /// nobody.
+    #[test]
+    fn a_retired_hovered_plate_names_no_mouseover_in_the_next_frame() {
+        let mut app = chain_app();
+        assert_eq!(listed(&mut app, "mouseover", true), [770]);
+        assert_eq!(listed(&mut app, "mouseovertarget", true), [6788]);
+        app.world_mut()
+            .resource_mut::<crate::target::Hovered>()
+            .plate = true;
+        publish_mouseover(&mut app, None);
+        app.update();
+        assert!(listed(&mut app, "mouseover", true).is_empty());
+        assert!(listed(&mut app, "mouseovertarget", true).is_empty());
+        assert!(listed(&mut app, "mouseovertargettarget", true).is_empty());
     }
 
     /// A raid member's target that is out of view but on the roster reads its record, as
