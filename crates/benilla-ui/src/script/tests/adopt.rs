@@ -311,3 +311,237 @@ fn a_non_texture_object_raises_in_the_widget_setters() {
         assert!(err.contains(want), "`{call}` -> {err}");
     }
 }
+
+/// The third argument of `0x77fd10` is the region's own shown bit (`+0xc4`): a slot that takes a
+/// hidden texture shows it (`0x77fd85`; the label `0x778d49`, the highlight `0x779139`, the bar
+/// `0x78321b`, the thumb `0x789885`, the ColorSelect slots, a current state `0x779037`), and it
+/// draws.
+#[test]
+fn a_slot_shows_the_hidden_texture_it_takes() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        a = CreateFrame("Frame")
+        a:SetPoint("CENTER", 0, 0) a:SetWidth(50) a:SetHeight(50)
+        local function hidden(path)
+            local t = a:CreateTexture(nil, "ARTWORK")
+            t:SetTexture(path) t:SetAllPoints(a) t:Hide()
+            assert(not t:IsShown())
+            return t
+        end
+        sb = CreateFrame("StatusBar", "ShowSB")
+        sb:SetPoint("CENTER", 0, 0) sb:SetWidth(50) sb:SetHeight(50)
+        bar = hidden("bar") sb:SetStatusBarTexture(bar)
+        assert(bar:IsShown(), "bar")
+
+        b = CreateFrame("Button", "ShowBtn")
+        b:SetPoint("CENTER", 0, 0) b:SetWidth(50) b:SetHeight(50)
+        n = hidden("normal") b:SetNormalTexture(n)
+        assert(n:IsShown(), "the current state's texture")
+        h = hidden("hl") b:SetHighlightTexture(h)
+        assert(h:IsShown(), "highlight")
+        fs = a:CreateFontString(nil, "OVERLAY") fs:Hide()
+        b:SetFontString(fs)
+        assert(fs:IsShown(), "label")
+
+        sl = CreateFrame("Slider", "ShowSl")
+        th = hidden("thumb") sl:SetThumbTexture(th)
+        assert(th:IsShown(), "thumb")
+        cs = CreateFrame("ColorSelect", "ShowCS")
+        w, wt = hidden("w"), hidden("wt")
+        cs:SetColorWheelTexture(w) cs:SetColorWheelThumbTexture(wt)
+        assert(w:IsShown() and wt:IsShown(), "ColorSelect slots")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let d = drawn(&s);
+    for p in ["bar", "normal"] {
+        assert!(d.contains(&p.to_string()), "{p} draws: {d:?}");
+    }
+}
+
+/// With flag 0 (`0x77fdc8`..`0x77fddf`, and the state switch behind it) a Button's state texture
+/// that is not the current one ends hidden, and shows when its state comes: a texture already on
+/// the button at the same layer included, and a hidden one adopted into a later state too. The
+/// checked pair follows `SetChecked` (`0x7854c0`).
+#[test]
+fn a_non_current_state_texture_is_hidden_until_its_state_comes() {
+    let s = script();
+    s.run(
+        r#"
+        b = CreateFrame("CheckButton", "StateShownBtn")
+        b:SetNormalTexture("n")
+        own = b:CreateTexture(nil, "ARTWORK")
+        assert(own:IsShown(), "a fresh texture is shown")
+        b:SetPushedTexture(own)
+        assert(not own:IsShown(), "a same-parent same-layer re-slot with flag 0 hides it")
+        gone = b:CreateTexture(nil, "ARTWORK") gone:Hide()
+        b:SetDisabledTexture(gone)
+        assert(not gone:IsShown())
+        b:SetButtonState("PUSHED")
+        assert(own:IsShown() and not b:GetNormalTexture():IsShown(), "the pushed state shows it")
+        b:SetButtonState("NORMAL")
+        assert(not own:IsShown() and b:GetNormalTexture():IsShown())
+        b:Disable()
+        assert(gone:IsShown(), "a hidden texture adopted earlier shows in its state")
+
+        c = b:CreateTexture(nil, "OVERLAY")
+        b:SetCheckedTexture(c)
+        assert(not c:IsShown(), "unchecked")
+        b:SetChecked(1)
+        assert(c:IsShown(), "checked")
+    "#,
+    )
+    .unwrap();
+}
+
+/// `0x77fd9a`: a texture the button already owns still takes the slot's layer.
+#[test]
+fn a_texture_already_on_the_button_takes_the_slots_layer() {
+    let s = script();
+    s.run(
+        r#"
+        b = CreateFrame("Button")
+        t = b:CreateTexture(nil, "BORDER")
+        b:SetNormalTexture(t)
+        assert(t:GetParent() == b and t:GetDrawLayer() == "ARTWORK", t:GetDrawLayer())
+        h = b:CreateTexture(nil, "BACKGROUND")
+        b:SetHighlightTexture(h)
+        assert(h:GetDrawLayer() == "HIGHLIGHT")
+    "#,
+    )
+    .unwrap();
+}
+
+/// `0x78b580` replaces the wheel's image with the generated one (`0x770300`) and `0x78b8a0` the
+/// strip's, so the adopted art loses its file; the same texture again returns first
+/// (`0x78b598`) and keeps what it was set to since. The markers keep their file.
+#[test]
+fn the_wheel_and_strip_lose_their_file_the_markers_keep_theirs() {
+    let s = script();
+    s.run(
+        r#"
+        a = CreateFrame("Frame")
+        cs = CreateFrame("ColorSelect", "FileCS")
+        local function tex(path) local t = a:CreateTexture() t:SetTexture(path) return t end
+        w, v, wt = tex("wheel"), tex("strip"), tex("thumb")
+        cs:SetColorWheelTexture(w) cs:SetColorValueTexture(v) cs:SetColorWheelThumbTexture(wt)
+        assert(w:GetTexture() == nil and v:GetTexture() == nil, "art is generated")
+        assert(wt:GetTexture() == "thumb", "the marker keeps its file")
+        w:SetTexture("since")
+        cs:SetColorWheelTexture(w)
+        assert(w:GetTexture() == "since", "the same texture is a no-op")
+    "#,
+    )
+    .unwrap();
+}
+
+/// `0x779110` and `0x779050` set the highlight's blend through `0x7703f0` on every call: ADD, or the
+/// third argument's name (a name that does not parse leaves ADD, `0x6f1920`). The same texture
+/// (`0x779122`) and nil (`0x779130`) skip it, and no other state has one.
+#[test]
+fn the_highlight_sets_its_blend_on_the_object_leg_and_the_path_leg() {
+    let s = script();
+    s.run(
+        r#"
+        a = CreateFrame("Frame")
+        b = CreateFrame("Button")
+        t = a:CreateTexture() t:SetBlendMode("BLEND")
+        b:SetHighlightTexture(t)
+        assert(t:GetBlendMode() == "ADD", "object leg: " .. t:GetBlendMode())
+        u = a:CreateTexture()
+        b:SetHighlightTexture(u, "MOD")
+        assert(u:GetBlendMode() == "MOD", "the third argument")
+        u:SetBlendMode("BLEND")
+        b:SetHighlightTexture(u, "MOD")
+        assert(u:GetBlendMode() == "BLEND", "the same texture skips it")
+        v = a:CreateTexture() v:SetBlendMode("BLEND")
+        b:SetHighlightTexture(v, "bogus")
+        assert(v:GetBlendMode() == "ADD", "an unparsed name leaves ADD")
+        b:SetHighlightTexture(nil)
+        assert(b:GetHighlightTexture() == nil)
+
+        b:SetHighlightTexture("p")
+        hl = b:GetHighlightTexture()
+        assert(hl:GetBlendMode() == "ADD", "a new region")
+        hl:SetBlendMode("BLEND")
+        b:SetHighlightTexture("p2")
+        assert(hl:GetBlendMode() == "ADD", "path leg, every call")
+        b:SetHighlightTexture("p3", "MOD")
+        assert(hl:GetBlendMode() == "MOD" and hl:GetTexture() == "p3")
+
+        n = a:CreateTexture() n:SetBlendMode("MOD")
+        b:SetNormalTexture(n)
+        assert(n:GetBlendMode() == "MOD", "a state texture's blend is its own")
+    "#,
+    )
+    .unwrap();
+}
+
+/// The Button setters' raises (`0x87a210`/`0x87a1e0`, the highlight's `0x87a2cc`/`0x87a28c`, the
+/// checked pair's `0x87b224`/`0x87b1e8` and `0x87c0e8`/`0x87c0a0`) name the receiver and the
+/// method; a call with no argument raises Usage and clears nothing (`0x781b4f`).
+#[test]
+fn the_button_setters_raise_with_their_own_lines_and_no_argument_clears_nothing() {
+    let s = script();
+    s.run(
+        r#"
+        f = CreateFrame("Frame")
+        b = CreateFrame("CheckButton", "RaiseBtn")
+        b:SetNormalTexture("n") b:SetHighlightTexture("h") b:SetCheckedTexture("c")
+        keep = { b:GetNormalTexture(), b:GetHighlightTexture(), b:GetCheckedTexture() }
+    "#,
+    )
+    .unwrap();
+    for (call, want) in [
+        (
+            "b:SetNormalTexture(f)",
+            "RaiseBtn:SetNormalTexture(): Wrong object type, expected texture",
+        ),
+        (
+            "b:SetPushedTexture({})",
+            "RaiseBtn:SetPushedTexture(): Couldn't find 'this' in texture",
+        ),
+        (
+            "b:SetHighlightTexture(f)",
+            "RaiseBtn:SetHighlightTexture(): Wrong object type, expected texture",
+        ),
+        (
+            "b:SetHighlightTexture({})",
+            "RaiseBtn:SetHighlightTexture(): Couldn't find 'this' in texture",
+        ),
+        (
+            "b:SetCheckedTexture(f)",
+            "RaiseBtn:SetCheckedTexture(): Wrong object type, expected texture",
+        ),
+        (
+            "b:SetDisabledCheckedTexture({})",
+            "RaiseBtn:SetDisabledCheckedTexture(): Couldn't find 'this' in texture",
+        ),
+        (
+            "b:SetNormalTexture()",
+            "Usage: RaiseBtn:SetNormalTexture(texture or \"texture\" or nil)",
+        ),
+        (
+            "b:SetHighlightTexture()",
+            "Usage: RaiseBtn:SetHighlightTexture(texture or \"texture\" or nil [, \"blendmode\")",
+        ),
+        (
+            "b:SetCheckedTexture()",
+            "Usage: RaiseBtn:SetCheckedTexture(texture or \"texture\" or nil)",
+        ),
+    ] {
+        let err = s.run(call).unwrap_err().to_string();
+        assert!(err.contains(want), "`{call}` -> {err}");
+    }
+    s.run(
+        r#"
+        assert(b:GetNormalTexture() == keep[1] and keep[1]:GetTexture() == "n")
+        assert(b:GetHighlightTexture() == keep[2] and keep[2]:GetTexture() == "h")
+        assert(b:GetCheckedTexture() == keep[3] and keep[3]:GetTexture() == "c")
+    "#,
+    )
+    .unwrap();
+}
