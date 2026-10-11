@@ -790,3 +790,66 @@ fn the_bg_bottomright_anchor_answers_the_top_inset() {
     )
     .unwrap();
 }
+
+/// A teardown kills the pieces' layout nodes; whatever anchored to one re-resolves against the
+/// missing rect in the dirty-scope solve, exactly as a from-scratch solve of the same model does.
+#[test]
+fn a_teardown_re_resolves_what_anchored_to_a_piece() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        f = CreateFrame("Frame")
+        f:SetPoint("CENTER", 0, 0)
+        f:SetWidth(100); f:SetHeight(100)
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        local g = CreateFrame("Frame")
+        dep = g:CreateTexture(nil, "ARTWORK")
+        dep:SetTexture("dep")
+        dep:SetWidth(10); dep:SetHeight(10)
+        dep:SetPoint("TOPLEFT", ({ f:GetRegions() })[1], "BOTTOMLEFT", 0, 0)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let drawn = |s: &UiScript| {
+        s.extract().into_iter().any(|q| {
+            q.rect.is_some()
+                && matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p == "dep")
+        })
+    };
+    assert!(drawn(&s), "anchored to the live background");
+    s.run("f:SetBackdrop(nil)").unwrap();
+    s.resolve();
+    let incremental = {
+        let m = s.model_ref();
+        (m.resolved.clone(), m.region_resolved.clone())
+    };
+    {
+        let mut m = s.model_mut();
+        m.layout_scope.invalidate();
+        m.touch_layout();
+    }
+    s.resolve();
+    let full = {
+        let m = s.model_ref();
+        (m.resolved.clone(), m.region_resolved.clone())
+    };
+    assert!(
+        incremental == full,
+        "the dirty-scope solve matches a full one"
+    );
+    eprintln!(
+        "DBG {:?}",
+        s.eval::<(Option<f32>, Option<f32>, i64)>(
+            "return dep:GetLeft(), dep:GetTop(), dep:GetNumPoints()"
+        )
+    );
+    eprintln!(
+        "DBG2 {:?}",
+        s.eval::<(Option<String>, Option<String>)>(
+            "local p, r = dep:GetPoint(1) return p, r and r:GetObjectType()"
+        )
+    );
+    assert!(!drawn(&s), "its anchor target is gone");
+}

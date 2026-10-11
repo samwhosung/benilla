@@ -172,8 +172,6 @@ const REGION_TAG: u32 = 0x8000_0000;
 pub(crate) struct LayoutScope {
     /// Per id: the hash the last converged resolve saw, or [`NO_NODE`]; a mismatch seeds dirty.
     last: Vec<u64>,
-    /// How many ids `last` holds a hash for; a pass matching fewer lost a node: full scope.
-    last_count: usize,
     /// The screen `last` was hashed under, every chain's root, so a move is full scope.
     last_screen: Option<Rect>,
     /// This pass's hash per id (parallel to `last`); swapped into `last` on convergence.
@@ -335,7 +333,7 @@ impl LayoutScope {
         }
     }
 
-    /// Mark every node dirty, for what a per-node diff cannot see (a death, a screen move).
+    /// Mark every node dirty, for what a per-node diff cannot see (no memory, a screen move).
     fn dirty_all(&mut self) {
         for (id, &n) in self.node_of.iter().enumerate() {
             if n != u32::MAX {
@@ -345,14 +343,13 @@ impl LayoutScope {
     }
 
     /// Adopt this pass's hashes as the converged memory.
-    fn commit(&mut self, count: usize, screen: Rect) {
+    fn commit(&mut self, screen: Rect) {
         std::mem::swap(&mut self.last, &mut self.now);
-        self.last_count = count;
         self.last_screen = Some(screen);
     }
 
-    /// [`Self::commit`] for an incremental pass: only the re-hashed slots. `last_count` and
-    /// `last_screen` stay, since a structural change always takes the full path.
+    /// [`Self::commit`] for an incremental pass: only the re-hashed slots. `last_screen` stays,
+    /// since a structural change always takes the derivation.
     fn commit_incremental(&mut self) {
         for &(id, h) in &self.staged {
             self.last[id as usize] = h;
@@ -362,7 +359,6 @@ impl LayoutScope {
 
     /// Forget the memory, so the next resolve derives the graph in full scope.
     pub(crate) fn invalidate(&mut self) {
-        self.last_count = 0;
         self.last_screen = None;
         self.last.clear();
         // The roster and `node_of` too: `has_node` must not vouch for a node the memory forgot.
@@ -605,7 +601,6 @@ impl UiScript {
         // ── The incremental seed ─────────────────────────────────────────────
         // Re-hash only the named nodes and seed those whose hash moved. It runs before the gate
         // because on this path it is the verdict: an empty seed set means nothing moved.
-        let mut scope_nodes = 0usize;
         let mut full_scope = false;
         if let Some(touched) = &touched {
             scope.begin_incremental();
@@ -676,29 +671,24 @@ impl UiScript {
         // ── The scope: which nodes this solve may touch ────
         // A node with unchanged inputs and no moved dependency recomputes to the rect it holds, so
         // the solve runs over the dirty closure and feeds other rects in as externals. Full scope
-        // when there is no memory yet, the screen moved, a node died (fewer nodes match `last`
-        // than `last_count`), or under verify. The incremental pass seeded its closure above.
+        // when there is no memory yet, the screen moved, or under verify. The incremental pass
+        // seeded its closure above.
         if touched.is_none() {
-            let mut matched = 0usize;
-            for (id, &n) in scope.node_of.iter().enumerate() {
-                if n == u32::MAX {
-                    continue;
-                }
-                scope_nodes += 1;
-                if scope.last.get(id).copied().unwrap_or(NO_NODE) != NO_NODE {
-                    matched += 1;
-                }
-            }
-            let a_node_died = matched != scope.last_count;
-            full_scope = scope.last.is_empty()
-                || scope.last_screen != Some(*screen)
-                || a_node_died
-                || gate_skips; // the verify path's re-run: it must reproduce the whole graph
+            full_scope = scope.last.is_empty() || scope.last_screen != Some(*screen) || gate_skips; // the verify path's re-run: it must reproduce the whole graph
             if full_scope {
                 scope.dirty_all();
             } else {
                 for (id, &n) in scope.node_of.iter().enumerate() {
                     if n != u32::MAX && scope.now[id] != scope.last[id] {
+                        scope.stack.push(id as u32);
+                        scope.dirty[id] = true;
+                    }
+                }
+                // A node that died has no hash left to differ, so its id is seeded instead: the
+                // derivation recorded the edges of whatever still anchors to it, and the closure
+                // re-resolves those against its missing rect, as a full scope would.
+                for (id, &h) in scope.last.iter().enumerate() {
+                    if h != NO_NODE && scope.node_of[id] == u32::MAX && !scope.dirty[id] {
                         scope.stack.push(id as u32);
                         scope.dirty[id] = true;
                     }
@@ -939,7 +929,7 @@ impl UiScript {
                 if touched.is_some() {
                     scope.commit_incremental();
                 } else {
-                    scope.commit(scope_nodes, *screen);
+                    scope.commit(*screen);
                 }
                 // ── Re-arm the ledger ─────────────────────────────────────────────────────────
                 // The graph now describes a converged model, so writes may name nodes against it.
