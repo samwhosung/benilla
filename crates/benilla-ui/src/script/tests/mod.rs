@@ -11,6 +11,7 @@ mod button;
 mod capture;
 mod channel;
 mod chat_bubble;
+mod clear_points;
 mod common;
 mod cooldown;
 mod create_frame_template;
