@@ -5,6 +5,7 @@
 
 use mlua::Lua;
 
+use super::binding_abi::flag;
 use super::{Model, ScriptValue};
 
 mod bag_verbs;
@@ -460,14 +461,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CursorHasItem",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(matches!(model.cursor, Some(CursorPayload::Item(_))))
+            Ok(flag(matches!(model.cursor, Some(CursorPayload::Item(_)))))
         })?,
     )?;
     g.set(
         "CursorHasSpell",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(matches!(model.cursor, Some(CursorPayload::Spell(_))))
+            Ok(flag(matches!(model.cursor, Some(CursorPayload::Spell(_)))))
         })?,
     )?;
     g.set(

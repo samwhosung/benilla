@@ -1,11 +1,11 @@
 //! The release, reclaim, resurrect and self-res verbs and the getters the `DEATH`,
 //! `RECOVER_CORPSE`, `RESURRECT` and `XP_LOSS` dialogs call, over a snapshot the app pushes.
-//! The three predicates answer Lua booleans where the reference answers `1` or nil
-//! (`ResurrectHasSickness` `0x48aa00`, `ResurrectHasTimer` `0x48aa30`, `CheckSpiritHealerDist`
-//! `0x48d120`).
+//! The three predicates answer `1` or nil, as the reference does (`ResurrectHasSickness`
+//! `0x48aa00`, `ResurrectHasTimer` `0x48aa30`, `CheckSpiritHealerDist` `0x48d120`).
 
 use mlua::{Lua, Value};
 
+use super::binding_abi::flag;
 use super::Model;
 
 /// The death snapshot the app pushes each frame.
@@ -106,21 +106,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "ResurrectHasSickness",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.death.resurrect_sickness)
+            Ok(flag(model.death.resurrect_sickness))
         })?,
     )?;
     g.set(
         "ResurrectHasTimer",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.death.resurrect_has_timer)
+            Ok(flag(model.death.resurrect_has_timer))
         })?,
     )?;
     g.set(
         "CheckSpiritHealerDist",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.death.spirit_healer_in_range)
+            Ok(flag(model.death.spirit_healer_in_range))
         })?,
     )?;
 

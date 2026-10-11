@@ -6,6 +6,7 @@
 
 use mlua::Lua;
 
+use super::binding_abi::flag;
 use super::Model;
 
 /// `rollType` 0, the one vote the bind-on-pickup gate never intercepts.
@@ -26,9 +27,6 @@ pub struct LootRollEntry {
     pub name: Option<String>,
     /// Icon texture path (`Interface\Icons\…`). `None` only if the display catalog had no icon.
     pub texture: Option<String>,
-    /// The stack size, answered as `GetLootRollItemInfo`'s `count`; the reference answers a literal
-    /// `1.0` there, a group roll being one stack (`0x4c3160`).
-    pub quantity: u32,
     /// Item quality 0..6; `None` while the template is in flight, answered as `CACHE_MISS_QUALITY`.
     pub quality: Option<u32>,
     /// Bind on pickup, which swaps in the gold backdrop; `false` while the template is in flight.
@@ -78,8 +76,10 @@ fn find(model: &Model, roll_id: u32) -> Option<&LootRollEntry> {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // `0x4c3050`, read at `LootFrame.lua:261`. An unknown id takes the reference's miss tail
-    // `nil, nil, 1.0, 1.0, nil` (`0x4c31a3`), as a roll with no item template does there.
+    // `0x4c3050`, read at `LootFrame.lua:261`. `count` is the literal 1.0 (`0x4c3160`) and
+    // `bindOnPickup` 1.0 when `[template+0x194] == 1` else nil (`0x4c317e`). An unknown id takes
+    // the reference's miss tail `nil, nil, 1.0, 1.0, nil` (`0x4c31a3`), as a roll with no item
+    // template does there.
     g.set(
         "GetLootRollItemInfo",
         lua.create_function(|lua, roll_id: u32| {
@@ -97,9 +97,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let vals = (
                 r.texture.clone(),
                 r.name.clone(),
-                r.quantity,
+                1,
                 r.quality.map_or(CACHE_MISS_QUALITY, i64::from),
-                r.bind_on_pickup,
+                flag(r.bind_on_pickup),
                 r.item_id,
             );
             lua.pack_multi(vals)
@@ -182,7 +182,6 @@ mod tests {
                     roll_id: 7,
                     name: Some("Staff of Jordan".into()),
                     texture: Some("Interface\\Icons\\INV_Staff_12".into()),
-                    quantity: 1,
                     quality: Some(4),
                     bind_on_pickup: true,
                     time_left_ms: 42_000,
@@ -195,7 +194,6 @@ mod tests {
                     roll_id: 8,
                     name: None,
                     texture: None,
-                    quantity: 2,
                     quality: None,
                     bind_on_pickup: false,
                     time_left_ms: 60_000,
@@ -218,11 +216,11 @@ mod tests {
         s.set_loot_rolls(rolls());
 
         let (texture, name, count, quality, bop) = s
-            .eval::<(String, String, i64, i64, bool)>("return GetLootRollItemInfo(7)")
+            .eval::<(String, String, i64, i64, i64)>("return GetLootRollItemInfo(7)")
             .unwrap();
         assert_eq!(texture, "Interface\\Icons\\INV_Staff_12");
         assert_eq!(name, "Staff of Jordan");
-        assert_eq!((count, quality, bop), (1, 4, true));
+        assert_eq!((count, quality, bop), (1, 4, 1));
         assert_eq!(
             s.eval::<i64>("return GetLootRollTimeLeft(7)").unwrap(),
             42_000
@@ -233,11 +231,18 @@ mod tests {
             17182
         );
 
-        // In flight: the quality is the miss tail's 1, never nil.
+        // In flight: the quality is the miss tail's 1, never nil; the count is the literal 1
+        // whatever the stack, and a roll that does not bind answers nil, not false.
         assert!(s
             .eval::<bool>(
                 "local t, n, c, q, b = GetLootRollItemInfo(8)\n\
-                 return t == nil and n == nil and q == 1 and c == 2 and b == false",
+                 return t == nil and n == nil and q == 1 and c == 1 and b == nil",
+            )
+            .unwrap());
+        assert!(s
+            .eval::<bool>(
+                "local _, _, _, _, b7 = GetLootRollItemInfo(7)\n\
+                 return type(b7) == 'number' and b7 == 1",
             )
             .unwrap());
 

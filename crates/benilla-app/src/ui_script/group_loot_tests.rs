@@ -99,7 +99,6 @@ fn rolls() -> LootRollsState {
                 roll_id: 7,
                 name: Some("Staff of Jordan".into()),
                 texture: Some("Interface\\Icons\\INV_Staff_12".into()),
-                quantity: 1,
                 quality: Some(4), // Epic -> purple
                 bind_on_pickup: true,
                 time_left_ms: 42_000,
@@ -111,7 +110,6 @@ fn rolls() -> LootRollsState {
                 roll_id: 8,
                 name: Some("Worn Shortsword".into()),
                 texture: Some("Interface\\Icons\\INV_Sword_04".into()),
-                quantity: 1,
                 quality: Some(1), // Common -> white
                 bind_on_pickup: false,
                 time_left_ms: 60_000,
@@ -124,7 +122,6 @@ fn rolls() -> LootRollsState {
                 roll_id: 9,
                 name: None,
                 texture: None,
-                quantity: 1,
                 quality: None,
                 bind_on_pickup: false,
                 time_left_ms: 55_000,

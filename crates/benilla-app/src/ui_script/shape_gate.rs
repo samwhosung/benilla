@@ -5,7 +5,8 @@
 //! are gated with arity. The table says per row what to trust: `arity_conf = exact`, kinds only
 //! where `kinds_conf = agree`, never `argc_conf`. Only query verbs are probed, a call that raises
 //! is skipped, and a name registered from several tables (`GetBuildInfo` is 5 in the glue table
-//! `0x8373b8`, 3 in-game at `0x83de68`) is read at its non-glue row.
+//! `0x8373b8`, 3 in-game at `0x83de68`) is read at its non-glue row. The boolean gate alone reads every `global` row, whatever its
+//! `arity_conf`, and adds each row whose kinds are `(nil) | (number)` to the query verbs.
 
 /// Globals known to answer the wrong arity: a name, the reference's arity and the reason. The
 /// list may only shrink.
@@ -720,6 +721,7 @@ const ARG_LADDER: &[&str] = &[
     "1, 2",
     "2, 1",
     "\"player\", 1",
+    "\"player\", \"player\"",
 ];
 
 /// The kinds a predicate row carries in the table: the `(nil) | (number)` of a flag, which the
@@ -815,7 +817,6 @@ fn seed_boolean_probe_state(s: &mut benilla_ui::script::UiScript) {
                 roll_id: 1,
                 name: Some("Bound".into()),
                 texture: Some("Interface\\Icons\\INV_Misc_QuestionMark".into()),
-                quantity: 1,
                 quality: Some(4),
                 bind_on_pickup: true,
                 item_id: 1,
@@ -823,7 +824,6 @@ fn seed_boolean_probe_state(s: &mut benilla_ui::script::UiScript) {
             },
             LootRollEntry {
                 roll_id: 2,
-                quantity: 2,
                 item_id: 2,
                 ..Default::default()
             },
@@ -849,7 +849,7 @@ fn no_query_binding_answers_a_lua_boolean() {
         .filter(|n| !REFERENCE_BOOLEANS.contains(&n.as_str()))
         .collect();
 
-    let mut checked = 0usize;
+    let mut measured = std::collections::BTreeSet::new();
     let mut booleans: Vec<String> = Vec::new();
     for name in &names {
         for args in ARG_LADDER {
@@ -864,7 +864,7 @@ fn no_query_binding_answers_a_lua_boolean() {
             if got == "?" {
                 continue;
             }
-            checked += 1;
+            measured.insert(name.as_str());
             // One line per binding: the first rung that answers a boolean.
             if got.split(',').any(|k| k == "boolean")
                 && !booleans
@@ -877,8 +877,10 @@ fn no_query_binding_answers_a_lua_boolean() {
     }
 
     assert!(
-        checked >= 300,
-        "the boolean gate measured only {checked} bindings — it has stopped covering anything"
+        // A floor, not a target: raise it when coverage rises, never lower it to fit a change.
+        measured.len() >= 500,
+        "the boolean gate measured only {} bindings — it has stopped covering anything",
+        measured.len()
     );
     assert!(
         booleans.is_empty(),

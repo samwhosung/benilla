@@ -4,6 +4,7 @@
 
 use mlua::Lua;
 
+use super::binding_abi::flag;
 use super::Model;
 
 impl super::UiScript {
@@ -36,13 +37,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `CheckBinderDist()`, polled by the dialog's OnUpdate. This answers a boolean; the
-    // reference (`0x48d210`) answers 1 or nil.
+    // `CheckBinderDist()`, polled by the dialog's OnUpdate: 1 or nil (`0x48d210`).
     g.set(
         "CheckBinderDist",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.binder_pending)
+            Ok(flag(model.binder_pending))
         })?,
     )?;
 

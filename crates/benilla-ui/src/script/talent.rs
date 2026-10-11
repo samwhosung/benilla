@@ -19,6 +19,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
+use super::binding_abi::flag;
 use super::tooltip_spell::{spell_view_of, TalentLines};
 use super::Model;
 
@@ -172,8 +173,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(t.column)),
                 Value::Integer(i64::from(t.rank)),
                 Value::Integer(i64::from(t.max_rank)),
-                Value::Integer(i64::from(t.exceptional)),
-                Value::Boolean(t.meets_prereq),
+                flag(t.exceptional),
+                flag(t.meets_prereq),
             ]))
         })?,
     )?;
@@ -188,7 +189,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 for p in &t.prereqs {
                     out.push(Value::Integer(i64::from(p.tier)));
                     out.push(Value::Integer(i64::from(p.column)));
-                    out.push(Value::Boolean(p.learnable));
+                    out.push(flag(p.learnable));
                 }
             }
             Ok(MultiValue::from_vec(out))
@@ -217,14 +218,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CheckTalentMasterDist(): polled by that dialog's OnUpdate, false hides it. The reference
+    // CheckTalentMasterDist(): polled by that dialog's OnUpdate, nil hides it. The reference
     // re-runs its interact-range test on the latched trainer (`0x5df980`, `d² <= [0xc4c28c]`);
     // no packet either way.
     g.set(
         "CheckTalentMasterDist",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(model.talent_master_pending)
+            Ok(flag(model.talent_master_pending))
         })?,
     )?;
 

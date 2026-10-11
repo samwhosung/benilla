@@ -75,13 +75,13 @@ fn bindings_read_the_pushed_snapshot() {
 
         local n, icon, tier, col, rank, max, exc, meets = GetTalentInfo(1, 1)
         assert(n == "Improved Fireball" and tier == 1 and col == 1)
-        assert(rank == 3 and max == 5 and exc == 0 and meets == true)
+        assert(rank == 3 and max == 5 and exc == nil and meets == 1)
         assert(icon == "Interface\\Icons\\Spell_Fire_FlameBolt")
         assert(GetTalentInfo(1, 9) == nil)
 
         -- The prereq triplets, flat (the reference walks arg[5], arg[6], arg[7], ...).
         local pt, pc, pl = GetTalentPrereqs(1, 2)
-        assert(pt == 1 and pc == 1 and pl == false)
+        assert(pt == 1 and pc == 1 and pl == nil)
         assert(GetTalentPrereqs(1, 1) == nil, "no prereqs is empty")
 
         local cp1, cp2 = UnitCharacterPoints("player")
@@ -89,6 +89,40 @@ fn bindings_read_the_pushed_snapshot() {
     "#,
     )
     .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// `isExceptional` is `1.0` when `[rec+0x4c] & 1` and nil otherwise (`0x4f33e8`): never `0`, which
+/// Lua reads as true, and `meetsPrereq` and each prereq's `isLearnable` are 1 or nil too
+/// (`0x4f3403`-`0x4f3443`, `0x4f3676`, `0x4f3644`). `GetTalentPrereqs` answers three values per edge.
+#[test]
+fn talent_flags_are_one_or_nil() {
+    let mut s = script();
+    let mut state = one_tab_state();
+    state.talents[0][0].exceptional = true;
+    state.talents[0][1].meets_prereq = false;
+    state.talents[0][1].prereqs.push(TalentPrereqView {
+        tier: 1,
+        column: 2,
+        learnable: true,
+    });
+    s.set_talents(state);
+    s.run(
+        r#"
+        local _, _, _, _, _, _, exc, meets = GetTalentInfo(1, 1)
+        assert(exc == 1 and type(exc) == "number" and meets == 1)
+        local _, _, _, _, _, _, exc2, meets2 = GetTalentInfo(1, 2)
+        assert(exc2 == nil, "an ordinary talent is not exceptional")
+        assert(meets2 == nil, "an unmet prerequisite is nil, not false")
+
+        local t1, c1, l1, t2, c2, l2 = GetTalentPrereqs(1, 2)
+        assert(t1 == 1 and c1 == 1 and l1 == nil)
+        assert(t2 == 1 and c2 == 2 and l2 == 1 and type(l2) == "number")
+    "#,
+    )
+    .unwrap();
+    assert_eq!(s.arity("GetTalentInfo(1, 2)").unwrap(), 8);
+    assert_eq!(s.arity("GetTalentPrereqs(1, 2)").unwrap(), 6);
     assert!(s.take_errors().is_empty());
 }
 

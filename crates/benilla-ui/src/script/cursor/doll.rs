@@ -210,7 +210,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CursorCanGoInSlot",
         lua.create_function(|lua, id: u32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(cursor_can_go_in_slot(&model, id))
+            Ok(flag(cursor_can_go_in_slot(&model, id)))
         })?,
     )?;
     g.set(

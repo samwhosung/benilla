@@ -9,7 +9,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::number_arg;
+use super::binding_abi::{flag, number_arg};
 use super::container::UiCursorMode;
 use super::cursor::CursorPayload;
 use super::Model;
@@ -414,21 +414,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetRepairAllCost() → cost, canRepair: whether there is damage to pay for, which enables the
-    // repair-all button (`MerchantFrame.lua:38`); 0 away from a vendor that repairs (`0x4fbd60`).
+    // repair-all button (`MerchantFrame.lua:38`). `canRepair` is 1 or nil (`0x4fbfa8`-`0x4fbfce`).
+    // With no open merchant that repairs (`0x4fadb0`) it answers the one value 0 (`0x4fbd76`).
     g.set(
         "GetRepairAllCost",
         lua.create_function(|lua, ()| {
-            let cost = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                if model.merchant.as_ref().is_some_and(|m| m.can_repair) {
-                    model.repair_all_cost
-                } else {
-                    0
-                }
-            };
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            if !model.merchant.as_ref().is_some_and(|m| m.can_repair) {
+                return Ok(MultiValue::from_vec(vec![Value::Integer(0)]));
+            }
+            let cost = model.repair_all_cost;
             Ok(MultiValue::from_vec(vec![
                 Value::Integer(i64::from(cost)),
-                Value::Boolean(cost > 0),
+                flag(cost > 0),
             ]))
         })?,
     )?;
@@ -783,10 +781,20 @@ mod tests {
             s.eval::<bool>("return GetRepairAllCost() == 0").unwrap(),
             "no vendor"
         );
+        assert_eq!(
+            s.arity("GetRepairAllCost()").unwrap(),
+            1,
+            "no vendor: `0x4fbd76`"
+        );
         s.set_merchant(Some(stock()));
         assert!(
             s.eval::<bool>("return GetRepairAllCost() == 0").unwrap(),
             "a vendor that does not repair"
+        );
+        assert_eq!(
+            s.arity("GetRepairAllCost()").unwrap(),
+            1,
+            "one value, 0, when `0x4fadb0` fails (`0x4fbd76`)"
         );
     }
 
@@ -814,8 +822,14 @@ mod tests {
         s.set_repair_all_cost(1234);
         assert!(s.eval::<bool>("return CanMerchantRepair() == 1").unwrap());
         assert!(s
-            .eval::<bool>("local c, can = GetRepairAllCost()\nreturn c == 1234 and can == true",)
+            .eval::<bool>("local c, can = GetRepairAllCost()\nreturn c == 1234 and can == 1",)
             .unwrap());
+        // No damage: `canRepair` is nil, not false (`0x4fbfce`).
+        s.set_repair_all_cost(0);
+        assert!(s
+            .eval::<bool>("local c, can = GetRepairAllCost()\nreturn c == 0 and can == nil",)
+            .unwrap());
+        assert_eq!(s.arity("GetRepairAllCost()").unwrap(), 2);
 
         s.run("RepairAllItems()").unwrap();
         assert!(s.take_repair_all());

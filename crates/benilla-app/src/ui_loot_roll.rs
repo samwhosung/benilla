@@ -445,9 +445,6 @@ fn snapshot(
                 roll_id: r.roll_id,
                 name: t.map(|t| catalogs.name(&t.name, r.random_property_id)),
                 texture,
-                // The reference's `GetLootRollItemInfo` returns a literal 1 (`0x4c3160`); the
-                // packet carries no count.
-                quantity: 1,
                 quality: t.map(|t| t.quality),
                 bind_on_pickup: t.is_some_and(|t| t.bonding == BIND_WHEN_PICKED_UP),
                 time_left_ms: r.remaining_ms,
