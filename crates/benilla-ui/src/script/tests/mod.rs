@@ -4,6 +4,7 @@
 mod addon_argument_abi;
 mod addon_index_space;
 mod adopt;
+mod anchor_slots;
 mod anchors;
 mod backdrop;
 mod button;
