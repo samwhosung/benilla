@@ -506,8 +506,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let id = ensure_slot(lua, &this, Slot::Text)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let rh = *model.id_to_region.get(&id).expect("text region id");
-            model.region_data.entry(rh).or_default().text = Some(text);
+            let data = model.region_data.entry(rh).or_default();
+            let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());
+            data.text = Some(text);
             model.touch_measure(rh);
+            model.touch_layout_text(rh, was_shown);
             Ok(())
         })?,
     )?;

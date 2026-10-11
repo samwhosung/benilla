@@ -471,6 +471,9 @@ fn up_and_down_move_a_multi_line_boxs_caret_by_rows() {
     "#,
     )
     .unwrap();
+    // The flush sizes the box to its two rows; the drain after the walk resizes it, and the
+    // re-seat that runs fires once more at the next flush (`0x77a8d0` → `0x77b8c0`).
+    s.tick(0.016);
     s.tick(0.016);
     take_log(&s);
     let row = |back| EditAction::Move {

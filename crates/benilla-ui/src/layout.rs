@@ -16,7 +16,9 @@ use std::collections::VecDeque;
 const UNSET: f64 = f64::INFINITY;
 
 /// The least width or height change that fires `OnSizeChanged`: 2^-22, bits `0x34800000` at
-/// `0x8029d4`, tested in `ApplyRect` (`0x76b580`).
+/// `0x8029d4`, tested in `ApplyRect` (`0x76b5e7`, `0x76b602`) in the reference's layout units, the
+/// screen diagonal as 1; in benilla's units that is this times the layout unit
+/// (`Model::size_eps`).
 pub const SIZE_EPS: f64 = 2.384_185_791_015_625e-7;
 
 /// The least edge move against the cached rect for the client to re-store it and `ApplyRect`, 1e-5
@@ -336,14 +338,14 @@ pub fn assemble_rect(edges: [f32; 4], clamp: bool, extent_x: f32, extent_y: f32)
     }
 }
 
-/// `ApplyRect`'s `OnSizeChanged` test (`0x76b580`): width or height moved by at least
-/// [`SIZE_EPS`], the deltas taken in `f64` from the `f32` edges.
-pub fn size_changed(old: Rect, new: Rect) -> bool {
+/// `ApplyRect`'s `OnSizeChanged` test (`0x76b580`): width or height moved by at least `eps`,
+/// [`SIZE_EPS`] in the units the rects are in, the deltas taken in `f64` from the `f32` edges.
+pub fn size_changed(old: Rect, new: Rect, eps: f64) -> bool {
     let dw =
         (f64::from(new.right) - f64::from(new.left)) - (f64::from(old.right) - f64::from(old.left));
     let dh =
         (f64::from(new.top) - f64::from(new.bottom)) - (f64::from(old.top) - f64::from(old.bottom));
-    dw.abs() >= SIZE_EPS || dh.abs() >= SIZE_EPS
+    dw.abs() >= eps || dh.abs() >= eps
 }
 
 // ── The composed resolver: `assemble` over six recursion-guarded edge resolvers ──────────────
@@ -1187,9 +1189,12 @@ mod tests {
         let r = Rect::new(0.0, 0.0, 40.0, 100.0);
         // 1e-7 is under SIZE_EPS.
         let tiny = Rect::new(0.0, 0.0, 40.0, 100.0 + 1e-7);
-        assert!(!size_changed(r, tiny));
+        assert!(!size_changed(r, tiny, SIZE_EPS));
         let big = Rect::new(0.0, 0.0, 40.0, 100.001);
-        assert!(size_changed(r, big));
+        assert!(size_changed(r, big, SIZE_EPS));
+        // In units of 1280 to the reference's one, 1e-4 is under the threshold.
+        let jitter = Rect::new(0.0, 0.0, 40.0, 100.0001);
+        assert!(!size_changed(r, jitter, SIZE_EPS * 1280.0));
     }
 
     /// The buffers live across rounds, so `begin` must leave nothing behind: round 2 anchors to a

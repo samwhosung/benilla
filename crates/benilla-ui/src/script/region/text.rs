@@ -18,12 +18,14 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let data = model.region_data.entry(rh).or_default();
+            let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());
             data.text = text;
             // Fresh text draws whole: an armed write-on gradient belongs to the old string.
             data.alpha_gradient = None;
-            // SetText must not touch the layout, since the extent has not moved yet; it names
-            // itself on the measure ledger.
+            // New text names itself on the measure ledger, and on the layout only when it empties
+            // or fills, which drops or takes up the measure the sweep reads.
             model.touch_measure(rh);
+            model.touch_layout_text(rh, was_shown);
             Ok(())
         })?,
     )?;

@@ -236,8 +236,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 
 /// Resolve the layout now if anything moved, as the reference answers a geometry query against
 /// current layout; a settled tree costs one epoch compare. Deviation: `OnSizeChanged` fires at the
-/// next `UiScript::resolve`, a tick after the reference's (`ApplyRect 0x76b580`), because running
-/// Lua handlers inside a binding risks a borrow panic or unbounded recursion.
+/// next layout drain (`UiScript::resolve`), not inside the getter as the reference's forced
+/// `ApplyRect 0x76b580` does, because running Lua handlers inside a binding risks a borrow panic
+/// or unbounded recursion.
 fn settle(lua: &Lua) {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     crate::script::UiScript::resolve_layout(&mut model);

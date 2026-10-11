@@ -258,6 +258,7 @@ pub(super) fn write_cell(
     color: [f32; 4],
 ) {
     let d = model.region_data.entry(rh).or_default();
+    let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
     d.text = Some(text.to_string());
     d.vertex_color = Some(color);
     // The line's own colour, as if set by `SetTextColor`: a later
@@ -265,6 +266,7 @@ pub(super) fn write_cell(
     d.font_explicit.color = true;
     d.hidden = false;
     model.touch_measure(rh);
+    model.touch_layout_text(rh, was_shown);
 }
 
 /// Blanks every line cell and resets the counters and the subject: the model half of the clear
@@ -276,12 +278,14 @@ fn clear_content(model: &mut Model, h: FrameHandle) {
     };
     for rh in lefts.into_iter().chain(rights) {
         if let Some(d) = model.region_data.get_mut(&rh) {
+            let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
             d.text = None;
             d.hidden = true;
             // `measured` and the wrap pin (`size`) stay: the measure cache is keyed by content
             // ([`RegionData::measure_key`]) and `append_line` rewrites the pin, so the hover
             // loop's per-frame clear and rebuild (`ContainerFrameItemButton_OnUpdate`) re-measures
-            // and re-lays out nothing.
+            // nothing, and its lines' layout re-hashes to the converged node and solves nothing.
+            model.touch_layout_text(rh, was_shown);
         }
     }
     if let Ok(t) = tip_mut(model, h) {

@@ -227,6 +227,9 @@ pub(crate) struct Model {
 
     /// Frames the last resolve resized, `(id, width, height)`, owed `OnSizeChanged` outside it.
     pub(crate) pending_size_changed: Vec<(u32, f32, f32)>,
+    /// Regions whose text emptied or filled since the last resolve, which names each one whose
+    /// node hash moved ([`Model::touch_layout_text`]).
+    pub(crate) text_flips: Vec<RegionHandle>,
 
     /// Script errors caught from `pcall`'d handlers, drained by the host each frame.
     pub(crate) errors: Vec<String>,
@@ -1122,6 +1125,7 @@ impl Model {
             mouse_capture: None,
             last_click: HashMap::new(),
             pending_size_changed: Vec::new(),
+            text_flips: Vec::new(),
             errors: Vec::new(),
             pending_error_dispatch: Vec::new(),
             diagnostics: Default::default(),
@@ -1579,10 +1583,38 @@ impl Model {
     /// anchored region takes an axis authored 0 from it ([`super::layout::content_span`]), and
     /// named only when it moved the node's hash, so a repaint of the same art leaves the gate shut.
     pub(crate) fn touch_layout_art(&mut self, rh: RegionHandle) {
+        if self
+            .region_data
+            .get(&rh)
+            .is_some_and(|d| d.size.is_some_and(|(w, h)| w != 0.0 && h != 0.0))
+        {
+            return;
+        }
+        self.touch_layout_content(rh);
+    }
+
+    /// A write to region `rh`'s text, which was non-empty iff `was_shown`: the sweep reads a
+    /// FontString's measure only while its text is non-empty
+    /// ([`super::layout::effective_measure`]), so a flip between empty and not is noted, and the
+    /// next resolve names it if it moved the node's hash. Checked there, not here, so a clear and
+    /// rebuild of the same text (the hover tooltip's, every frame) leaves the epoch alone. A
+    /// same-side write leaves the layout to the measure ledger.
+    pub(crate) fn touch_layout_text(&mut self, rh: RegionHandle, was_shown: bool) {
+        let shown = self
+            .region_data
+            .get(&rh)
+            .is_some_and(|d| d.text.as_deref().is_some_and(|t| !t.is_empty()));
+        if shown != was_shown {
+            self.text_flips.push(rh);
+        }
+    }
+
+    /// Names anchored region `rh` unless its node still holds its converged hash.
+    pub(crate) fn touch_layout_content(&mut self, rh: RegionHandle) {
         let Some(d) = self.region_data.get(&rh) else {
             return;
         };
-        if d.anchors.is_empty() || d.size.is_some_and(|(w, h)| w != 0.0 && h != 0.0) {
+        if d.anchors.is_empty() {
             return;
         }
         if let Some(&id) = self.region_to_id.get(&rh) {

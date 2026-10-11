@@ -886,7 +886,8 @@ impl UiScript {
             .map(|(_, f)| f.effective_alpha)
     }
 
-    /// Resolve and cache every frame's rect, which `GetWidth`/`GetHeight`/`extract` read, then fire
+    /// The layout drain (`0x768ed0`), which [`Self::tick`] runs before and after its walk: resolve
+    /// and cache every frame's rect, which `GetWidth`/`GetHeight`/`extract` read, then fire
     /// `OnSizeChanged` for frames whose size moved ([`event::fire_size_changes`]) and re-seat the
     /// text of every resized EditBox.
     pub fn resolve(&mut self) {

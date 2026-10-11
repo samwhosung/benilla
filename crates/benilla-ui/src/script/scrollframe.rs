@@ -113,29 +113,6 @@ fn subtree_span(model: &Model, f: FrameHandle, axis: Axis) -> Option<(f32, f32)>
     span
 }
 
-/// Every FontString under `f` (its own regions, then its visible children's), in tree order.
-fn subtree_font_strings(model: &Model, f: FrameHandle) -> Vec<crate::widget::RegionHandle> {
-    let mut out = Vec::new();
-    let Some(frame) = model.arena.frame(f) else {
-        return out;
-    };
-    for &rh in &frame.regions {
-        if model
-            .arena
-            .region(rh)
-            .is_some_and(|r| matches!(r.kind, crate::widget::RegionKind::FontString))
-        {
-            out.push(rh);
-        }
-    }
-    for &ch in &frame.children {
-        if model.arena.frame(ch).is_some_and(|c| c.effective_visible) {
-            out.extend(subtree_font_strings(model, ch));
-        }
-    }
-    out
-}
-
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -302,59 +279,31 @@ fn fire_scroll(lua: &Lua, this: &Table, script: &str, value: f32) -> mlua::Resul
 /// in the reference's units (the screen diagonal as 1) (`0x786ed7`–`0x786efd`), which is that times the
 /// layout unit in ours.
 ///
-/// The reference drains its layout before the walk (`0x7656ba`) and measures text at once; ours
-/// lands both a frame later, so a marked frame measures its child's FontStrings and resolves first
-/// (`QuestLog_UpdateQuestDetails` marks right after its `SetText`s, `QuestLogFrame.lua:458`). An
-/// unmarked frame reads its size as the last resolve left it, so a resize not yet resolved marks
-/// it at the update after that resolve.
+/// The rects it reads are the ones the pump's drain before the walk (`0x7656ba`) resolved: the
+/// recompute reads them through `0x768320`, which never resolves, so a resize made earlier in the
+/// walk counts from the next tick, and the size it notes is the one that drain applied.
 pub(super) fn update(lua: &Lua, h: FrameHandle) {
-    let marked = {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let rect = model.resolved.get(&h).copied();
-        let Some(s) = scroll_state(&mut model, h) else {
-            return;
-        };
-        see_size(s, rect);
-        s.range_dirty
-    };
-    if !marked {
-        return;
-    }
-    let strings = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        match model.arena.frame(h).map(|f| &f.kind_state) {
-            Some(KindState::Scroll(s)) => s
-                .child
-                .map(|c| subtree_font_strings(&model, c))
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        }
-    };
-    for rh in strings {
-        super::measure::ensure_measured(lua, rh);
-    }
-    super::UiScript::resolve_layout(&mut lua.app_data_mut::<Model>().expect("model app_data"));
-    // The reference fires `OnSizeChanged` from its layout drain, ahead of the walk.
-    event::fire_size_changes(lua);
     let notify = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let rect = model.resolved.get(&h).copied();
-        let has_child = matches!(
-            model.arena.frame(h).map(|f| &f.kind_state),
-            Some(KindState::Scroll(s)) if s.child.is_some()
-        );
+        let eps = model.size_eps();
+        let Some(s) = scroll_state(&mut model, h) else {
+            return;
+        };
+        see_size(s, rect, eps);
+        if !s.range_dirty {
+            return;
+        }
+        let has_child = s.child.is_some();
         let measured = (rect.is_some() && has_child).then(|| {
             [
                 scroll_range(&model, h, Axis::Horizontal),
                 scroll_range(&model, h, Axis::Vertical),
             ]
         });
-        let eps = crate::layout::SIZE_EPS * f64::from(model.layout_unit());
         let Some(s) = scroll_state(&mut model, h) else {
             return;
         };
-        // The resolve may have moved the frame: that is the size this update has seen.
-        see_size(s, rect);
         let moved = measured.filter(|new| {
             let old = std::mem::replace(&mut s.range, *new);
             (0..2).any(|i| (f64::from(new[i]) - f64::from(old[i])).abs() >= eps)
@@ -397,13 +346,12 @@ fn scroll_state(model: &mut Model, h: FrameHandle) -> Option<&mut ScrollFrameSta
 }
 
 /// Note the frame's resolved size; a change since the last note marks the range, by the width or
-/// height move that fires `OnSizeChanged` ([`crate::layout::size_changed`]). No rect, no note.
-fn see_size(s: &mut ScrollFrameState, rect: Option<crate::layout::Rect>) {
+/// height move that fires `OnSizeChanged` ([`crate::layout::size_changed`] at `eps`,
+/// [`Model::size_eps`]). No rect, no note.
+fn see_size(s: &mut ScrollFrameState, rect: Option<crate::layout::Rect>, eps: f64) {
     let Some(r) = rect else { return };
     let size = [r.width(), r.height()];
-    let moved = |i: usize| {
-        (f64::from(size[i]) - f64::from(s.seen_size[i])).abs() >= crate::layout::SIZE_EPS
-    };
+    let moved = |i: usize| (f64::from(size[i]) - f64::from(s.seen_size[i])).abs() >= eps;
     if moved(0) || moved(1) {
         s.range_dirty = true;
     }

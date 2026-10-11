@@ -534,7 +534,7 @@ fn an_emptied_fontstring_drops_to_the_floor_and_a_restored_one_regains_its_box()
     "#,
     )
     .unwrap();
-    let mut step = |s: &mut UiScript, lua: &str| -> f32 {
+    let step = |s: &mut UiScript, lua: &str| -> f32 {
         s.run(lua).unwrap();
         s.resolve();
         let mut model = s.model_mut();

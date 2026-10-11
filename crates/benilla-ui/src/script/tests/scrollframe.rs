@@ -312,8 +312,8 @@ fn vertical_scroll_fires_as_given_and_the_marked_range_fires_range_changed() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// The recompute resolves for itself, so a resize earlier in the same tick counts; the app
-/// resolves only once per frame, after the walk.
+/// The pump drains the layout before its walk (`0x7656ba`), so a resize made since the last tick
+/// counts in this tick's recompute, with no resolve of the host's in between.
 #[test]
 fn the_recompute_sees_a_same_tick_resize_with_no_intervening_resolve() {
     let mut s = script();
@@ -346,8 +346,8 @@ fn the_recompute_sees_a_same_tick_resize_with_no_intervening_resolve() {
     assert_eq!(
         s.eval::<f32>("return seen_hi").unwrap(),
         400.0,
-        "the recompute must resolve the JUST-set height itself, not report the stale \
-         (pre-resize) range from the last full UiScript::resolve"
+        "the drain before the walk resolves the JUST-set height, so the recompute does not \
+         report the stale (pre-resize) range from the last full UiScript::resolve"
     );
     assert_eq!(
         s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
@@ -511,7 +511,8 @@ fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() 
     );
 }
 
-/// The reference measures text synchronously, as stock `QuestLog_UpdateQuestDetails` relies on.
+/// The reference measures text synchronously and drains the layout before the walk (`0x7656ba`),
+/// as stock `QuestLog_UpdateQuestDetails` relies on: the text set before the tick is in the range.
 #[test]
 fn the_recompute_measures_the_childs_text_before_it_reads_the_range() {
     struct Rows;

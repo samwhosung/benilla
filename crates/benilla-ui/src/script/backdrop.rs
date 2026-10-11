@@ -490,6 +490,7 @@ pub(crate) fn set_color(model: &mut Model, fh: FrameHandle, border: bool, color:
 /// After a resolve: re-run the texcoords of every backdrop whose frame rect changed size, as the
 /// rect application `0x76b580` calls `0x77f0c0` (at `0x76b61e`); a move alone re-runs nothing.
 pub(crate) fn after_resolve(model: &mut Model) {
+    let eps = model.size_eps();
     let Model {
         backdrops,
         resolved,
@@ -503,7 +504,7 @@ pub(crate) fn after_resolve(model: &mut Model) {
         };
         if inst
             .ran_for
-            .is_some_and(|prev| !layout::size_changed(prev, rect))
+            .is_some_and(|prev| !layout::size_changed(prev, rect, eps))
         {
             continue;
         }

@@ -97,8 +97,18 @@ fn frame_node_hash(input: &LayoutInput, over: Option<Anchor>) -> u64 {
     node.finish()
 }
 
-/// A region's per-node input hash: its anchors, explicit size, measured text extent and owner,
-/// whose effective scale the sweep reads (`None` for an owner with no layout id).
+/// The measured extent the region sweep sizes a FontString by: the stored measure while the text
+/// is non-empty, used without a key check, so changed text keeps its last box while the
+/// re-measure is in flight; empty text is never measured, so it has none, never a stale box.
+#[inline]
+pub(super) fn effective_measure(data: &RegionData) -> Option<super::MeasuredText> {
+    data.measured
+        .filter(|_| data.text.as_deref().is_some_and(|t| !t.is_empty()))
+}
+
+/// A region's per-node input hash: its anchors, explicit size, owner, whose effective scale the
+/// sweep reads (`None` for an owner with no layout id), and, where an axis authored 0 takes its
+/// span from them, its effective measure and its art: exactly what the sweep reads.
 #[inline]
 pub(super) fn region_node_hash(data: &RegionData, owner: Option<u32>) -> u64 {
     let mut node = InputFingerprint::default();
@@ -111,16 +121,17 @@ pub(super) fn region_node_hash(data: &RegionData, owner: Option<u32>) -> u64 {
         }
         None => node.feed(u64::MAX),
     }
-    match data.measured {
+    let unsized_axis = data.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0);
+    match effective_measure(data).filter(|_| unsized_axis) {
         Some(m) => {
             node.f32(m.w);
             node.f32(m.h);
         }
         None => node.feed(u64::MAX),
     }
-    // The art, only where an axis authored 0 takes its span from it (`content_span`): a new
-    // texture moves such a region, while a sized region's art cannot move its rect.
-    if !data.anchors.is_empty() && data.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0) {
+    // The art (`content_span`): a new texture moves such a region, while a sized region's art
+    // cannot move its rect.
+    if !data.anchors.is_empty() && unsized_axis {
         node.feed(data.fill.is_some() as u64);
         match &data.texture {
             Some(path) => {
@@ -752,13 +763,14 @@ impl PreambleProf {
 }
 
 /// `OnSizeChanged`'s "after": queue `(id, width, height)` for each watched frame whose size moved
-/// by the `ApplyRect 0x76b580` test ([`crate::layout::size_changed`], `ε = _DAT_008029d4`), so a
+/// by the `ApplyRect 0x76b580` test ([`crate::layout::size_changed`] at [`Model::size_eps`]), so a
 /// pure move never fires. A frame with no rect at entry compares against the zero rect
 /// `CSimpleFrame`'s ctor leaves; one that loses its rect had no `ApplyRect` and fires nothing.
 fn queue_size_changes(
     watched: &[(FrameHandle, Option<Rect>)],
     resolved: &HashMap<FrameHandle, Rect>,
     frame_to_id: &HashMap<FrameHandle, u32>,
+    eps: f64,
     out: &mut Vec<(u32, f32, f32)>,
 ) {
     for &(h, before) in watched {
@@ -766,7 +778,7 @@ fn queue_size_changes(
             continue;
         };
         let before = before.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
-        if !layout::size_changed(before, now) {
+        if !layout::size_changed(before, now, eps) {
             continue;
         }
         let Some(&id) = frame_to_id.get(&h) else {
@@ -860,6 +872,13 @@ impl UiScript {
     }
 
     fn resolve_layout_inner(model: &mut Model) {
+        // Text that emptied or filled since the last resolve: named now where its node's hash
+        // moved, ahead of the epoch's read, as if named at the write.
+        if !model.text_flips.is_empty() {
+            for rh in std::mem::take(&mut model.text_flips) {
+                model.touch_layout_content(rh);
+            }
+        }
         // ── Tier 1: the mutation epoch ────────────────────────────────────────────────────────
         // No layout touch since the last converged resolve: nothing the fingerprint reads moved,
         // so skip everything. Under verify, fall through so tier 2 checks the claim.
@@ -884,6 +903,7 @@ impl UiScript {
             .iter()
             .map(|&h| (h, model.resolved.get(&h).copied()))
             .collect();
+        let size_eps = model.size_eps();
         pre.watched = pre.lap();
         // ── The graph: the ledger's cache, or a fresh derivation ─────────────────────────────
         // A `Some` ledger claims every write since the graph was built named its node and kept
@@ -1113,12 +1133,8 @@ impl UiScript {
                 // The owner supplies the region's scale and nothing else: no fallback edges.
                 let scale = arena.frame(owner).map(|f| f.effective_scale).unwrap_or(1.0);
                 // An axis authored 0, width or height, takes the host-measured extent: the
-                // reference sizes a zero width to the unwrapped line. The measure is used without
-                // a key check, so changed text keeps its last box while the re-measure is in
-                // flight; empty text is never measured, so it counts as zero, never a stale box.
-                let measured = data
-                    .measured
-                    .filter(|_| data.text.as_deref().is_some_and(|t| !t.is_empty()));
+                // reference sizes a zero width to the unwrapped line.
+                let measured = effective_measure(data);
                 let mut height = data.size.map_or(0.0, |s| s.1);
                 let mut width = data.size.map_or(0.0, |s| s.0);
                 if let Some(m) = &measured {
@@ -1239,7 +1255,13 @@ impl UiScript {
                 // so a touch during this pass (the tooltip pre-pass, a minted id) re-opens it. The
                 // fingerprint hashes inputs only, so the next unmutated resolve would match it.
                 *layout_epoch_resolved = Some(epoch_at_entry);
-                queue_size_changes(&watched, resolved, frame_to_id, pending_size_changed);
+                queue_size_changes(
+                    &watched,
+                    resolved,
+                    frame_to_id,
+                    size_eps,
+                    pending_size_changed,
+                );
                 return;
             }
             if round + 1 == round_cap {
@@ -1256,7 +1278,13 @@ impl UiScript {
         // The cycle bail: its rects are this frame's, so their size changes still fire, and the
         // scope forgets a graph that never settled.
         scope.invalidate();
-        queue_size_changes(&watched, resolved, frame_to_id, pending_size_changed);
+        queue_size_changes(
+            &watched,
+            resolved,
+            frame_to_id,
+            size_eps,
+            pending_size_changed,
+        );
     }
 
     /// Derive the layout graph from scratch: the roster, the reverse edges, the per-node hashes and

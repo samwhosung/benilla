@@ -71,11 +71,13 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
 
 impl super::UiScript {
     /// Advance a frame: the `GetTime()` clock and queued events, then the pump `0x765650` and the
-    /// draw pass `0x7657d0`, in that order (`0x764340`, `0x764347`). The pump is the update walk,
-    /// each linked frame's update in strata, level and link order: its `OnUpdate(self, elapsed)`
-    /// (`0x704f10`) and its kind's own update after it (an EditBox's flush, a tooltip's fade, a
-    /// model pane's clock, a message frame's line fades, a scroll frame's range); then the hover
-    /// re-pick at its tail (`0x7657be`). The draw pass fires `OnUpdateModel`.
+    /// draw pass `0x7657d0`, in that order (`0x764340`, `0x764347`). The pump drains the layout
+    /// queue (`0x768ed0`, at `0x7656ba`), whose rect applications fire `OnSizeChanged`; runs the
+    /// update walk, each linked frame's update in strata, level and link order: its
+    /// `OnUpdate(self, elapsed)` (`0x704f10`) and its kind's own update after it (an EditBox's
+    /// flush, a tooltip's fade, a model pane's clock, a message frame's line fades, a scroll frame's
+    /// range); drains the layout again (`0x765799`); then re-picks the hover against those rects
+    /// (`0x7657be`). The draw pass fires `OnUpdateModel`.
     pub fn tick(&mut self, elapsed: f32) {
         self.model_mut().now += f64::from(elapsed);
         // Events queued since the last tick fire before this tick's OnUpdate.
@@ -83,7 +85,9 @@ impl super::UiScript {
         for (event, args) in pending {
             self.fire_event(&event, args);
         }
+        self.resolve();
         self.update_walk(elapsed);
+        self.resolve();
         // A frame hid or showed under a still cursor: re-run the hover walk at the saved position,
         // as the reference's pump tail does (`0x765650` → `0x7660d0`). The hidden frame's OnLeave
         // already fired, so only the new winner's `OnEnter` fires.
@@ -147,16 +151,13 @@ impl UiScript {
     /// then `0x7658e2`), level 0 up, a level's frames first linked first (`0x765920`). So the
     /// panes are read per stratum when its turn comes, and a pane an earlier handler of that
     /// stratum hid still paints this frame; only the callback's own gates ([`paints`]) are read at
-    /// the call.
-    ///
-    /// The pump drains the layout after the walk (`0x765799`), so the paint reads rects the walk's
-    /// handlers moved: the pass resolves first.
+    /// the call. The rects are the ones the pump's last drain (`0x765799`) left: the paint reads
+    /// them through `0x768320`, which never resolves.
     fn paint_model_panes(&mut self) {
         let mut model = self.model_mut();
         if model.on_update_model_frames.is_empty() {
             return;
         }
-        Self::resolve_layout(&mut model);
         // Kept by `SetScript`; a destroyed frame's handle compacts out on its first miss.
         if model
             .on_update_model_frames

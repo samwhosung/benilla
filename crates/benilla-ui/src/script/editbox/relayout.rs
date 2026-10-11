@@ -74,6 +74,7 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
 /// a layout input, for the caller to resolve it in the same pass, as the reference's drain does.
 pub(in crate::script) fn reseat_resized(model: &mut Model) -> bool {
     let epoch = model.layout_epoch;
+    let eps = model.size_eps();
     for i in 0..model.arena.editbox_kinds().len() {
         let h = model.arena.editbox_kinds()[i];
         let Some(&now) = model.resolved.get(&h) else {
@@ -87,7 +88,7 @@ pub(in crate::script) fn reseat_resized(model: &mut Model) -> bool {
             .notified_rect
             .replace(now)
             .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
-        if !crate::layout::size_changed(before, now) {
+        if !crate::layout::size_changed(before, now, eps) {
             continue;
         }
         // The ctor built the text region; its data is seeded here if nothing has touched it.
