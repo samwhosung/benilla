@@ -265,10 +265,6 @@ pub struct TooltipState {
     /// health watcher (`0x467e70`, registered at `0x52a0a8`) drives the bar; a `set_unit` push of
     /// that unit, under any token, re-drives it.
     pub unit_guid: Option<u64>,
-    /// The plate a world hover put up, set after its build and cleared by the next SetOwner core
-    /// (a Lua `SetOwner`, an engine seat, or any hide's un-own), not by a content re-set. Hover loss
-    /// fades only such a plate.
-    pub world_owned: bool,
     /// Armed for a compare render: the next `SetInventoryItem` prepends "Currently Equipped"
     /// (`[arg+0x18]`, not the compact `[arg+0x14]`), surviving the stock caller's `SetOwner` in
     /// between (`MerchantFrame.xml:67-72`); the reference's route to `0x52b650` is untraced.

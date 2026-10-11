@@ -161,16 +161,6 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     Ok(true)
 }
 
-/// Mark the tooltip as world-hover-owned (the fade-on-loss gate).
-fn set_world_owned(lua: &Lua, h: FrameHandle) {
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    if let Some(f) = model.arena.frame_mut(h) {
-        if let KindState::Tooltip(t) = &mut f.kind_state {
-            t.world_owned = true;
-        }
-    }
-}
-
 /// Remember (or drop) the guid of the unit the tooltip shows, the health watcher's key.
 fn set_subject(lua: &Lua, h: FrameHandle, guid: Option<u64>) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -264,13 +254,12 @@ impl super::UiScript {
     /// fire `UPDATE_MOUSEOVER_UNIT`. Call on a hover-target change; the render's show returns a
     /// fading plate to full alpha. `false` when there is no tooltip frame or no such unit.
     pub fn world_tooltip_unit(&mut self, token: &str) -> bool {
-        let (h, id) = {
+        let id = {
             let mut model = self.model_mut();
             let Some(h) = model.arena.lookup("GameTooltip") else {
                 return false;
             };
-            let id = model.frame_id(h);
-            (h, id)
+            model.frame_id(h)
         };
         if let Err(e) =
             super::event::fire_widget_handler(&self.lua, id, "OnTooltipSetDefaultAnchor", vec![])
@@ -292,7 +281,6 @@ impl super::UiScript {
             }
         };
         if shown {
-            set_world_owned(&self.lua, h);
             self.fire_event("UPDATE_MOUSEOVER_UNIT", vec![]);
         }
         shown
@@ -351,7 +339,6 @@ impl super::UiScript {
             self.push_error(e);
             return false;
         }
-        set_world_owned(&self.lua, h);
         show_or_hide_empty(&self.lua, h);
         true
     }
@@ -360,7 +347,8 @@ impl super::UiScript {
     /// probe `0x4eb0c0`: owned by `Minimap` itself (`0x4eb19c` keeps `this + 0x24`, pushed at
     /// `0x4eb57d`) in mode 6, `ANCHOR_CURSOR` (`0x4eb587`), so the tooltip's own update keeps it on
     /// the cursor; one gold line, faint gold for a cross-interior dot; then the show
-    /// (`0x4eb85f`/`0x4eb869`). Hover loss is [`Self::world_tooltip_hide`].
+    /// (`0x4eb85f`/`0x4eb869`). The blip is held until the probe finds none
+    /// ([`Self::minimap_blip_lost`]) or misses the Minimap.
     pub fn minimap_tooltip(&mut self, text: &str, grey: bool) -> bool {
         let (h, id, root) = {
             let mut model = self.model_mut();
@@ -391,52 +379,9 @@ impl super::UiScript {
             self.push_error(e);
             return false;
         }
-        set_world_owned(&self.lua, h);
+        self.model_mut().minimap_blip = Some(text.to_string());
         show_or_hide_empty(&self.lua, h);
         true
-    }
-
-    /// Whether `GameTooltip` is still the shown plate a world hover put up, with no `SetOwner` or
-    /// hide since; a Lua content re-set (an `UPDATE_MOUSEOVER_UNIT` handler's `SetUnit`) keeps it.
-    pub fn world_tooltip_up(&mut self) -> bool {
-        self.world_plate().is_some()
-    }
-
-    /// The world plate, when [`Self::world_tooltip_up`].
-    fn world_plate(&mut self) -> Option<FrameHandle> {
-        let model = self.model_mut();
-        let h = model.arena.lookup("GameTooltip")?;
-        model
-            .arena
-            .frame(h)
-            .is_some_and(|f| {
-                matches!(&f.kind_state, KindState::Tooltip(t) if t.world_owned) && f.shown
-            })
-            .then_some(h)
-    }
-
-    /// On world hover loss, the fade request (`0x492909` → `0x530ae0`): a cursor-seated plate hides
-    /// at once, any other fades. The reference requests it whenever the previous mouseover goes,
-    /// whoever holds the tooltip. Moving onto a window, its hover walk runs the WorldFrame's leave,
-    /// which publishes the empty mouseover and fades (`0x483b10` → `0x483b46`), before the window's
-    /// enter takes the tooltip (`0x766229` before `0x766239`). The host's world drive runs in the
-    /// feed phase, before the UI input pass, so it learns of the loss only after the window's enter
-    /// has run. So this acts only while the world plate is up ([`Self::world_tooltip_up`]): a
-    /// tooltip re-owned since, by a window or by an addon while the pointer stays on the world, is
-    /// left alone where the reference would fade it, and a hidden one is not touched.
-    pub fn world_tooltip_fade(&mut self) {
-        if let Some(h) = self.world_plate() {
-            super::tooltip::fade_out(&self.lua, h);
-        }
-    }
-
-    /// On minimap blip hover loss, the direct hide (`0x4eb0c0`: shown bit, then the hide slot,
-    /// `0x4eb15e`–`0x4eb166`), with no fade. The reference hides whoever holds the tooltip; as in
-    /// [`Self::world_tooltip_fade`], this acts only while the world plate is still up.
-    pub fn world_tooltip_hide(&mut self) {
-        if let Some(h) = self.world_plate() {
-            super::visibility::set_shown(&self.lua, h, false);
-        }
     }
 }
 

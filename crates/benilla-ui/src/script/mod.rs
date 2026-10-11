@@ -96,6 +96,7 @@ pub mod nameplate;
 pub use nameplate::{PlateBitWrites, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND};
 mod model;
 mod modelframe;
+mod mouseover;
 mod net_stats;
 pub(crate) mod object;
 pub use object::frame_kind_from_tag;

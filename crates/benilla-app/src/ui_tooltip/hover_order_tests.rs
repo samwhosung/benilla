@@ -27,7 +27,7 @@ fn world_and_bag(app: &mut App, anchor: &str) {
             Bag:EnableMouse(true)
             Bag:SetScript("OnEnter", function()
                 entered_mouseover = UnitExists("mouseover")
-                entered_shown = GameTooltip:IsShown()
+                entered_visible = GameTooltip:IsVisible()
                 GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
                 GameTooltip:SetText("Bag slot")
             end)
@@ -67,7 +67,7 @@ fn a_window_entered_from_a_world_unit_keeps_its_tooltip() {
         "the WorldFrame's leave cleared the mouseover before the button's enter"
     );
     assert_eq!(
-        eval(&mut app, "return entered_shown"),
+        eval(&mut app, "return entered_visible"),
         None,
         "the fade request hid the cursor-seated plate before the button's enter"
     );

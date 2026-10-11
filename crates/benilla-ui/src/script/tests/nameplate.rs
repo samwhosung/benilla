@@ -735,3 +735,42 @@ fn a_ground_target_veto_refuses_the_hit_without_disabling_the_mouse() {
         "and the plate takes it back when the cast is gone"
     );
 }
+
+/// A plate's leave (`0x7cb8b0`) publishes the empty mouseover first (`0x7cb8bf`), whose change
+/// requests the fade (`0x492909`), so a window entered from a plate finds the plate's cursor-seated
+/// tooltip gone; a hovered plate retired by its unit leaving takes the same leave (`0x764cce`).
+#[test]
+fn leaving_a_plate_publishes_the_empty_mouseover_before_the_next_enter() {
+    let mut s = vm();
+    let wolf = plate("Wolf", 30.0, 40.0);
+    let key = wolf.key;
+    s.run(
+        r#"
+        CreateFrame("GameTooltip", "GameTooltip"):Hide()
+        Bag = CreateFrame("Button", "Bag")
+        Bag:SetPoint("BOTTOMLEFT", 40, 40); Bag:SetWidth(40); Bag:SetHeight(40)
+        Bag:EnableMouse(true)
+        Bag:SetScript("OnEnter", function() entered_visible = GameTooltip:IsVisible() end)
+        "#,
+    )
+    .unwrap();
+    drive(&mut s, std::slice::from_ref(&wolf));
+    let hover_plate = |s: &mut UiScript| {
+        s.mouse_move(500.0, 384.0);
+        assert!(s.publish_world_mouseover(Some(key)), "the plate's enter");
+        s.run(r#"GameTooltip:SetOwner(WorldFrame, "ANCHOR_CURSOR"); GameTooltip:SetText("Wolf")"#)
+            .unwrap();
+    };
+    hover_plate(&mut s);
+    s.mouse_move(60.0, 60.0);
+    assert!(s.eval::<bool>("return entered_visible == nil").unwrap());
+    assert_eq!(s.world_mouseover(), None);
+
+    hover_plate(&mut s);
+    drive(&mut s, &[]);
+    assert_eq!(s.world_mouseover(), None, "the retired plate's leave");
+    assert!(!s
+        .eval::<bool>("return GameTooltip:IsVisible() == 1")
+        .unwrap());
+    assert!(s.take_errors().is_empty());
+}

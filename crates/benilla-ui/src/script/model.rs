@@ -218,6 +218,13 @@ pub(crate) struct Model {
     /// reference's `[root+0x1100]` flag (set at `0x764cbb`/`0x764b8d`, pumped at `0x7657a1` into
     /// `0x7660d0`).
     pub(crate) hover_repick: bool,
+    /// The world mouseover as last published (`[0xb4e2c8]`, with the WorldFrame's own copy
+    /// `[wf+0x340]`): the pick's change check and the hover leaves read and write it
+    /// ([`super::mouseover`]).
+    pub(crate) world_mouseover: Option<u64>,
+    /// The blip whose tooltip the Minimap's probe put up, its stand-in for the hit set it keeps
+    /// (`0xbc81e4`, `0xbdcbac`), which a probe that misses the Minimap drops (`0x4eb12b`).
+    pub(crate) minimap_blip: Option<String>,
     /// Per button held, the frame its press went to, the capture else the hover (`0x7662c0`), for
     /// the release; `None` once that frame left the mouse index (hide or mouse disable emptied
     /// the capture), so the release has no target but the button still counts as held.
@@ -1129,6 +1136,8 @@ impl Model {
             focused_editbox: None,
             mouseover: None,
             hover_repick: false,
+            world_mouseover: None,
+            minimap_blip: None,
             mouse_down_on: HashMap::new(),
             mouse_capture: None,
             last_click: HashMap::new(),

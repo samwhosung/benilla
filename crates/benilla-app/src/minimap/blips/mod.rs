@@ -399,20 +399,23 @@ pub(super) fn emit_party_arrows(
     }
 }
 
-/// Show the hovered blip's name; a unit's resolves through the name cache. Hover loss hides the
-/// tooltip at once (`0x4eb0c0`). Runs after `UnitFeed`, so a same-frame move from a world hover to
-/// a blip ends on the blip's tooltip.
+/// Show the hovered blip's name; a unit's resolves through the name cache. This is the in-rect
+/// half of the Minimap's probe `0x4eb0c0`, which runs only when the hover walk reaches the
+/// Minimap and makes it the hover, so it acts only while the Minimap holds the hover. A new blip
+/// shows; no blip where one was held hides `GameTooltip`, whoever holds it (`0x4eb55f`). The
+/// cursor leaving the Minimap is the walk's: the probe's miss and the Minimap's leave.
 pub(super) fn drive_blip_tooltip(
     script: Option<NonSendMut<UiScript>>,
     hover: Res<MinimapBlipHover>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    mut last: Local<crate::ui_script::VmMemo<Option<String>>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
-    let last = last.get(&script);
+    if !script.minimap_hovered() {
+        return;
+    }
     let show = match &*hover {
         MinimapBlipHover::None => None,
         MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
@@ -421,18 +424,13 @@ pub(super) fn drive_blip_tooltip(
             .map(|n| (n.to_string(), *grey)),
         MinimapBlipHover::TrackedGo(name, grey) => Some((name.clone(), *grey)),
     };
-    match (&show, &*last) {
+    match (show, script.minimap_blip()) {
         // Same blip: the plate, owned in mode 6, follows the cursor in its own update.
-        (Some((t, _)), Some(lt)) if t == lt => {}
+        (Some((t, _)), Some(held)) if t == held => {}
         (Some((t, grey)), _) => {
-            script.minimap_tooltip(t, *grey);
-            *last = Some(t.clone());
+            script.minimap_tooltip(&t, grey);
         }
-        // No blip hovered: `0x4eb0c0` hides the plate directly, with no fade.
-        (None, Some(_)) => {
-            script.world_tooltip_hide();
-            *last = None;
-        }
+        (None, Some(_)) => script.minimap_blip_lost(),
         (None, None) => {}
     }
 }

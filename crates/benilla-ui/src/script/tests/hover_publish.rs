@@ -21,7 +21,7 @@ fn minimap_and_bag() -> UiScript {
         Bag:SetPoint("BOTTOMLEFT", 100, 100); Bag:SetWidth(40); Bag:SetHeight(40)
         Bag:EnableMouse(true)
         Bag:SetScript("OnEnter", function()
-            entered_shown = GameTooltip:IsShown()
+            entered_visible = GameTooltip:IsVisible()
             GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
             GameTooltip:SetText("Bag slot")
         end)
@@ -42,11 +42,109 @@ fn leaving_the_minimap_hides_the_tooltip_before_the_next_enter() {
     assert!(s.minimap_tooltip("Stormwind", false));
     s.mouse_move(120.0, 120.0);
     assert!(
-        s.eval::<bool>("return entered_shown == nil").unwrap(),
+        s.eval::<bool>("return entered_visible == nil").unwrap(),
         "the blip's tooltip was hidden before the bag's OnEnter"
     );
     assert!(s
-        .eval::<bool>(r#"return GameTooltip:IsShown() == 1 and GameTooltip:IsOwned(Bag) == 1"#)
+        .eval::<bool>(r#"return GameTooltip:IsShown() == 1 and GameTooltip:IsOwned(Bag) and true"#)
+        .unwrap());
+    assert!(s.take_errors().is_empty());
+}
+
+/// The WorldFrame's leave (`0x483b10`) runs the base leave first (`0x483b1d`), so its `OnLeave`
+/// still finds the mouseover, and then publishes the empty one (`0x483b46`): `"mouseover"` names
+/// nobody and the published guid is gone. Its enter is the base one and publishes nothing.
+#[test]
+fn the_world_frames_leave_runs_its_onleave_then_publishes_the_loss() {
+    let mut s = minimap_and_bag();
+    s.run(
+        r#"
+        WorldFrame = CreateFrame("WorldFrame", "WorldFrame"); WorldFrame:SetAllPoints()
+        WorldFrame:SetScript("OnLeave", function() left_mouseover = UnitExists("mouseover") end)
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    const WOLF: u64 = 0xF130_0000_4500_0001;
+    s.mouse_move(400.0, 300.0);
+    assert_eq!(
+        s.world_mouseover(),
+        None,
+        "the WorldFrame's enter publishes nothing"
+    );
+    assert!(s.publish_world_mouseover(Some(WOLF)));
+    s.set_unit(
+        "mouseover",
+        Some(crate::script::UnitState {
+            exists: true,
+            guid: WOLF,
+            ..Default::default()
+        }),
+    );
+    s.mouse_move(120.0, 120.0);
+    assert!(s
+        .eval::<bool>("return left_mouseover == 1 and UnitExists('mouseover') == nil")
+        .unwrap());
+    assert_eq!(s.world_mouseover(), None);
+    assert!(s.take_errors().is_empty());
+}
+
+/// The sweep probes the Minimap only when no frame ahead of it took the hit (`0x76620c`): off it,
+/// the probe drops the blip and hides the tooltip (`0x4eb12b`–`0x4eb166`), so the same blip shows
+/// afresh later; onto a window over it, the probe never runs and the blip stays held, though the
+/// Minimap's leave still hides the tooltip.
+#[test]
+fn the_minimap_probe_drops_its_blip_only_when_the_sweep_reaches_it() {
+    let mut s = minimap_and_bag();
+    s.run(
+        r#"
+        Cover = CreateFrame("Frame", "Cover", UIParent)
+        Cover:SetPoint("BOTTOMLEFT", 700, 500); Cover:SetWidth(40); Cover:SetHeight(40)
+        Cover:SetFrameStrata("DIALOG"); Cover:EnableMouse(true)
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(670.0, 470.0);
+    assert!(s.minimap_tooltip("Stormwind", false));
+    s.mouse_move(720.0, 520.0);
+    assert_eq!(s.minimap_blip().as_deref(), Some("Stormwind"), "not probed");
+    assert!(!s
+        .eval::<bool>("return GameTooltip:IsVisible() == 1")
+        .unwrap());
+    s.mouse_move(670.0, 470.0);
+    assert!(s.minimap_tooltip("Stormwind", false));
+    s.mouse_move(300.0, 300.0);
+    assert_eq!(s.minimap_blip(), None, "probed and missed");
+    assert!(!s
+        .eval::<bool>("return GameTooltip:IsVisible() == 1")
+        .unwrap());
+    assert!(s.take_errors().is_empty());
+}
+
+/// A window shown under a still cursor takes the hover at the pump's re-pick (`0x7657be` →
+/// `0x7660d0`), after the update walk and its drain, and that walk runs the WorldFrame's leave
+/// like a moving one: the loss is published before the window's `OnEnter`, in the same tick.
+#[test]
+fn the_re_pick_onto_a_shown_window_publishes_the_worlds_loss_first() {
+    let mut s = minimap_and_bag();
+    s.run(
+        r#"
+        WorldFrame = CreateFrame("WorldFrame", "WorldFrame"); WorldFrame:SetAllPoints()
+        Bag:Hide()
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(120.0, 120.0);
+    assert!(s.publish_world_mouseover(Some(7)));
+    s.run(r#"GameTooltip:SetOwner(UIParent, "ANCHOR_CURSOR"); GameTooltip:SetText("Wolf")"#)
+        .unwrap();
+    s.run("Bag:Show()").unwrap();
+    s.tick(0.016);
+    assert_eq!(s.world_mouseover(), None);
+    assert!(s
+        .eval::<bool>(r#"return entered_visible == nil and GameTooltip:IsOwned(Bag) and true"#)
         .unwrap());
     assert!(s.take_errors().is_empty());
 }

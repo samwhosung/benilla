@@ -67,6 +67,14 @@ fn is_world_handle(model: &Model, h: FrameHandle) -> bool {
         .is_some_and(|f| f.kind == crate::widget::FrameKind::WorldFrame)
 }
 
+/// Whether `h` is a `Minimap`, whose probe drops its blip on a miss (`0x4eb0c0`).
+fn is_minimap_handle(model: &Model, h: FrameHandle) -> bool {
+    model
+        .arena
+        .frame(h)
+        .is_some_and(|f| f.kind == crate::widget::FrameKind::Minimap)
+}
+
 /// Whether a press or release target is the world: the world frame, the reference's world click
 /// target, or no frame where `WorldFrame.xml` is not loaded (most tests).
 fn over_world(model: &Model, target: Option<FrameHandle>) -> bool {
@@ -96,21 +104,37 @@ impl UiScript {
     /// The handle of the frame that captures `(x, y)`, for a caller that checks it against a
     /// handle set taken earlier (an anonymous frame has no name). Needs [`Self::resolve`] first.
     pub fn hit_test_frame(&self, x: f32, y: f32) -> Option<FrameHandle> {
+        self.hover_walk(x, y).0
+    }
+
+    /// The hover walk's sweep (`0x7661cd`–`0x766213`): the first frame whose probe takes the point,
+    /// and whether the sweep reached a `Minimap` whose probe missed it, which then drops its blip
+    /// (`0x4eb0c0`). A frame that takes the hit ends the sweep, so a window over the Minimap keeps
+    /// it from being probed.
+    fn hover_walk(&self, x: f32, y: f32) -> (Option<FrameHandle>, bool) {
         let model = self.model_ref();
         let sorted = order::traversal(&model.arena);
         let scroll_sources = scroll_clip_sources(&model);
-        order::hit_test(&sorted, |fh| {
+        let blip_held = model.minimap_blip.is_some();
+        let minimap_missed = std::cell::Cell::new(false);
+        let hit = order::hit_test(&sorted, |fh| {
             // Mouse-enabled, or over one of the frame's hyperlink spans. The chat frame takes no
             // mouse (`[+0xcc] = 0`); the reference gives each span a mouse-enabled
             // `CSimpleHyperlinkButton` child (`0x7a3240`) that routes its scripts to the parent, so
             // a chat window hits only over a link and drags by its tab, not its body.
-            (model.arena.is_mouse_enabled(fh) || link_span_hit(&model, fh, x, y))
-                // The nameplate's `+0x3c` veto (`0x7cba30`), not its mouse-enabled bit: while a
-                // ground-targeted spell is armed a plate refuses the hit before its rect is
-                // tested, so the reticle is placed through it.
+            let indexed = model.arena.is_mouse_enabled(fh) || link_span_hit(&model, fh, x, y);
+            // The nameplate's `+0x3c` veto (`0x7cba30`), not its mouse-enabled bit: while a
+            // ground-targeted spell is armed a plate refuses the hit before its rect is tested,
+            // so the reticle is placed through it.
+            let hit = indexed
                 && !model.nameplates.vetoes(fh)
-                && frame_contains(&model, &scroll_sources, fh, x, y)
-        })
+                && frame_contains(&model, &scroll_sources, fh, x, y);
+            if blip_held && indexed && !hit && is_minimap_handle(&model, fh) {
+                minimap_missed.set(true);
+            }
+            hit
+        });
+        (hit, minimap_missed.get())
     }
 
     /// [`Self::hit_test`] over the frames that take the wheel: the same rect and clip rules, gated
@@ -154,10 +178,15 @@ impl UiScript {
     pub fn mouse_move(&mut self, x: f32, y: f32) -> Option<u32> {
         // A drag-active EditBox extends its selection on every move (`0x77a860`).
         editbox::drag_update(&self.lua, x, y);
-        let new_id = self.hit_test(x, y);
+        let (new_handle, minimap_missed) = self.hover_walk(x, y);
+        let new_id = new_handle.and_then(|h| self.model_ref().frame_to_id.get(&h).copied());
+        // The Minimap's probe runs in the sweep, ahead of the leave and the enter.
+        if minimap_missed {
+            super::mouseover::minimap_probe_miss(&self.lua);
+        }
         #[allow(clippy::type_complexity)]
-        let (leave_id, drag_start, enter_id, slider_change, color_change): (
-            Option<u32>,
+        let (leave, drag_start, enter_id, slider_change, color_change): (
+            Option<(FrameHandle, Option<u32>)>,
             Option<(u32, String)>,
             Option<u32>,
             Option<(u32, f32)>,
@@ -173,19 +202,13 @@ impl UiScript {
             super::object::advance_move(&mut model, (x, y));
             super::object::advance_size(&mut model, (x, y));
             let drag_start = cursor::maybe_start_drag(&mut model, (x, y));
-            let new_handle = new_id.and_then(|id| model.id_to_frame.get(&id).copied());
+            let new_handle = new_id.and(new_handle);
             if new_handle == model.mouseover {
                 (None, drag_start, None, slider_change, color_change)
             } else {
-                let old_id = model.mouseover.and_then(|h| {
-                    model
-                        .arena
-                        .frame(h)
-                        .is_some()
-                        .then(|| model.frame_to_id.get(&h).copied())
-                        .flatten()
-                });
-                let old_handle = model.mouseover;
+                // A frame destroyed since it took the hover gets no leave.
+                let old_handle = model.mouseover.filter(|&h| model.arena.frame(h).is_some());
+                let old_id = old_handle.and_then(|h| model.frame_to_id.get(&h).copied());
                 model.mouseover = new_handle;
                 // Crossing a button's boundary changes no button state: the enter/leave notifies
                 // (`0x779490`/`0x7794e0`) read `[+0x328]` only as a disabled guard, so a press
@@ -194,7 +217,8 @@ impl UiScript {
                 // is still the hover: the reference moves `[root+0x7c]` before either notify.
                 let old_id = old_id.filter(|_| button::hover_notify_runs(&model, old_handle));
                 let enter_id = new_id.filter(|_| button::hover_notify_runs(&model, new_handle));
-                (old_id, drag_start, enter_id, slider_change, color_change)
+                let leave = old_handle.map(|h| (h, old_id));
+                (leave, drag_start, enter_id, slider_change, color_change)
             }
         };
         // A thumb drag fires `OnValueChanged`, outside the borrow.
@@ -225,12 +249,10 @@ impl UiScript {
                 self.push_error(e);
             }
         }
-        if let Some(oid) = leave_id {
-            if let Err(e) =
-                event::fire_widget_handler(&self.lua, oid, "OnLeave", vec![Value::Boolean(true)])
-            {
-                self.push_error(e);
-            }
+        // The old frame's leave, its class's engine half included ([`super::mouseover::leave`]),
+        // runs before the new frame's enter (`0x766229`, then `0x766239`).
+        if let Some((h, script)) = leave {
+            super::mouseover::leave(&self.lua, h, script);
         }
         if let Some(nid) = enter_id {
             if let Err(e) =

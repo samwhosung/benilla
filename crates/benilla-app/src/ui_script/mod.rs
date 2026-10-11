@@ -346,6 +346,8 @@ impl Plugin for UiScriptPlugin {
                 (
                     extract::tick_script,
                     input::feed_ui_input.in_set(crate::char_select::InWorldGated),
+                    // Off the walk that just ran, for the pick and the arbiter after the pass.
+                    crate::vplates::seed_plate_hover,
                 )
                     .chain()
                     .in_set(UiInput)
@@ -396,7 +398,7 @@ fn arbitrate_pointer_over_ui(
 ) {
     // No cinematic term: the hit test finds the full-screen, mouse-enabled `CinematicFrame`.
     over.0 = egui.is_some_and(|e| e.0) || hover.0.is_some();
-    // Chrome excludes the plates; the plate hover is last frame's, as the plate driver runs later.
+    // Chrome excludes the plates, whose hover is this frame's walk's.
     panel.0 = over.0 && plate_hover.0.is_none();
 }
 

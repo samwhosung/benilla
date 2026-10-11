@@ -579,6 +579,10 @@ fn world_hover_drive_and_health_watcher() {
     "#,
     )
     .unwrap();
+    assert!(
+        s.publish_world_mouseover(Some(wolf().guid)),
+        "a first hover"
+    );
     assert!(s.world_tooltip_unit("mouseover"), "the hover shows");
     s.run(
         r#"
@@ -614,8 +618,7 @@ fn world_hover_drive_and_health_watcher() {
     .unwrap();
     // Hover lost: the fade arms and `"mouseover"` names nobody (`0x492890` zeroes the pair), yet
     // the fading plate keeps its bar, whose watcher follows the unit's guid, not the token.
-    s.world_tooltip_fade();
-    s.set_unit("mouseover", None);
+    assert!(s.publish_world_mouseover(None));
     s.tick(0.1);
     s.run(
         r#"
@@ -655,7 +658,8 @@ fn minimap_blip_tooltip_shows_follows_and_hides() {
         r#"
         local up = CreateFrame("Frame", "UIParent")
         up:SetPoint("BOTTOMLEFT", 0, 0); up:SetWidth(800); up:SetHeight(600)
-        CreateFrame("Minimap", "Minimap", up)
+        -- The cursor stays on the Minimap, whose probe drops the blip on a miss.
+        CreateFrame("Minimap", "Minimap", up):SetAllPoints(up)
     "#,
     )
     .unwrap();
@@ -690,7 +694,7 @@ fn minimap_blip_tooltip_shows_follows_and_hides() {
     )
     .unwrap();
     // Hover loss hides at once.
-    s.world_tooltip_hide();
+    s.minimap_blip_lost();
     s.run(r#"assert(not GameTooltip:IsShown(), "hidden with no fade")"#)
         .unwrap();
     assert!(s.take_errors().is_empty());
@@ -707,7 +711,8 @@ fn a_cursor_seated_plate_lands_on_the_cursor_under_the_ui_scale() {
         r#"
         local up = CreateFrame("Frame", "UIParent")
         up:SetPoint("BOTTOMLEFT", 0, 0); up:SetPoint("TOPRIGHT", 0, 0)
-        CreateFrame("Minimap", "Minimap", up)
+        -- The cursor stays on the Minimap, whose probe drops the blip on a miss.
+        CreateFrame("Minimap", "Minimap", up):SetAllPoints(up)
         CreateFrame("GameTooltip", "GameTooltip", UIParent)
     "#,
     )
@@ -807,10 +812,11 @@ fn a_cursor_seated_world_plate_hides_at_once_on_hover_loss() {
         "#,
     )
     .unwrap();
+    s.publish_world_mouseover(Some(1));
     assert!(s.world_tooltip_gameobject("Brill", &[], true));
     s.run(r#"assert(GameTooltip:GetAnchorType() == "ANCHOR_CURSOR", "seated in mode 6")"#)
         .unwrap();
-    s.world_tooltip_fade();
+    s.publish_world_mouseover(None);
     s.run(r#"assert(not GameTooltip:IsVisible(), "gone at once")"#)
         .unwrap();
     assert!(s.take_errors().is_empty());
@@ -840,7 +846,7 @@ fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
         "#,
     )
     .unwrap();
-    s.world_tooltip_hide();
+    s.minimap_blip_lost();
     s.run(r#"assert(not GameTooltip:IsShown(), "gone at once")"#)
         .unwrap();
     assert!(s.take_errors().is_empty());
@@ -865,11 +871,12 @@ fn a_cursor_plate_replaced_by_another_hides_then_shows_and_clears_twice_per_seat
         "#,
     )
     .unwrap();
+    s.publish_world_mouseover(Some(1));
     assert!(s.world_tooltip_gameobject("Brill", &[], true));
     s.run(r#"assert(table.concat(log, ",") == "cleared,cleared,show", table.concat(log, ",")) log = {}"#)
         .unwrap();
     // The driver's change: the teardown, then the next seat.
-    s.world_tooltip_fade();
+    s.publish_world_mouseover(Some(2));
     assert!(s.world_tooltip_gameobject("Tirisfal Glades", &[], true));
     s.run(
         r#"
@@ -881,48 +888,47 @@ fn a_cursor_plate_replaced_by_another_hides_then_shows_and_clears_twice_per_seat
     assert!(s.take_errors().is_empty());
 }
 
-/// A Lua content re-set of the world plate (an `UPDATE_MOUSEOVER_UNIT` handler's `SetUnit`) keeps
-/// it the world plate, so hover loss still fades it; a re-own by a window's `SetOwner` does not.
+/// The publisher tears down on every change away from a published mouseover (`0x4928d5`), loss
+/// and replacement alike, and not for a first one or an unchanged one (`0x4820b5`); its fade
+/// request is on `GameTooltip` whoever holds it (`0x492909`), so a tooltip a window took since
+/// fades too.
 #[test]
-fn hover_loss_fades_a_re_set_world_plate_but_not_a_re_owned_one() {
+fn a_mouseover_change_fades_the_tooltip_whoever_holds_it() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    s.set_unit("mouseover", Some(wolf()));
     s.run(
         r#"
         UIParent = CreateFrame("Frame", "UIParent"); UIParent:SetAllPoints()
-        local tt = CreateFrame("GameTooltip", "GameTooltip"); tt:Hide()
-        tt:SetScript("OnTooltipSetDefaultAnchor", function()
-            GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
-        end)
-        tt:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
-        tt:SetScript("OnEvent", function() GameTooltip:SetUnit("mouseover") end)
+        CreateFrame("GameTooltip", "GameTooltip"):Hide()
+        Bag = CreateFrame("Button", "Bag")
+        function bag_tooltip()
+            GameTooltip:SetOwner(Bag, "ANCHOR_RIGHT"); GameTooltip:SetText("Bag slot")
+        end
         "#,
     )
     .unwrap();
-    assert!(s.world_tooltip_unit("mouseover"));
-    assert!(
-        s.world_tooltip_up(),
-        "the re-set plate is still the world's"
-    );
-    s.world_tooltip_fade();
-    s.tick(2.0);
-    s.run(r#"assert(not GameTooltip:IsShown(), "faded out")"#)
-        .unwrap();
-
-    assert!(s.world_tooltip_unit("mouseover"));
-    s.run(
-        r#"
-        GameTooltip:SetOwner(CreateFrame("Button", "Bag1"), "ANCHOR_RIGHT")
-        GameTooltip:SetText("Bag slot")
-        "#,
-    )
-    .unwrap();
-    assert!(!s.world_tooltip_up());
-    s.world_tooltip_fade();
-    s.tick(2.0);
-    s.run(r#"assert(GameTooltip:IsShown() and GameTooltip:GetAlpha() == 1, "the window's tooltip stays")"#)
-        .unwrap();
+    let up = |s: &mut crate::script::UiScript| {
+        s.tick(2.5);
+        s.eval::<bool>("return GameTooltip:IsShown() == 1").unwrap()
+    };
+    // A first publish has nothing to tear down; an unchanged one does nothing.
+    s.run("bag_tooltip()").unwrap();
+    assert!(s.publish_world_mouseover(Some(1)));
+    assert!(!s.publish_world_mouseover(Some(1)));
+    assert!(up(&mut s), "no fade for a first or an unchanged mouseover");
+    // A replacement and a loss each request the fade.
+    for next in [Some(2), None] {
+        s.run("bag_tooltip()").unwrap();
+        assert!(s.publish_world_mouseover(next));
+        assert!(
+            !up(&mut s),
+            "the bag's tooltip faded on the change to {next:?}"
+        );
+    }
+    // From the empty mouseover, a new one tears nothing down.
+    s.run("bag_tooltip()").unwrap();
+    assert!(s.publish_world_mouseover(Some(3)));
+    assert!(up(&mut s));
     assert!(s.take_errors().is_empty());
 }
 

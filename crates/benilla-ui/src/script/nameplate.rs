@@ -138,6 +138,11 @@ pub(crate) struct NamePlates {
 }
 
 impl NamePlates {
+    /// Whether `frame` is a plate, whose leave publishes the empty mouseover (`0x7cb8b0`).
+    pub(crate) fn is_plate(&self, frame: FrameHandle) -> bool {
+        self.by_frame.contains_key(&frame)
+    }
+
     /// Whether the `0x7cba30` veto refuses `frame`: only a plate, only while the veto stands.
     pub(crate) fn vetoes(&self, frame: FrameHandle) -> bool {
         self.hit_test_vetoed && self.by_frame.contains_key(&frame)

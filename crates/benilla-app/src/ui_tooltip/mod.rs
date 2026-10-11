@@ -1,7 +1,11 @@
 //! The world-mouseover tooltip and the spell tooltip views. The world tooltip rebuilds once per
-//! hover-target change and a lost hover arms a fade; the pick is [`Hovered`] or
-//! [`HoveredObject`], arbitrated by [`go_is_nearest`] as the click router does. The spell views
-//! are built and pushed ahead of a hover by [`spell_feed`].
+//! hover-target change, published through the VM ([`UiScript::publish_world_mouseover`]), whose
+//! change requests the fade; the pick is [`Hovered`] or [`HoveredObject`], arbitrated by
+//! [`go_is_nearest`] as the click router does. The pick stands for the WorldFrame's own update
+//! (`0x481790`), which picks only while the WorldFrame holds the hover (`0x4817ae`); the loss when
+//! the cursor moves onto a window is published by the WorldFrame's leave in the UI's walk, before
+//! the window's `OnEnter`. The spell views are built and pushed ahead of a hover by
+//! [`spell_feed`].
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -47,31 +51,11 @@ fn keyed(get: &dyn Fn(&str) -> Option<String>, key: &str, args: &[Arg<'_>]) -> O
     (!text.is_empty()).then_some(text)
 }
 
-/// What the world tooltip was last built for; the reference rebuilds once per hover-target change.
-#[derive(Default, PartialEq, Clone, Copy)]
-enum LastHover {
-    #[default]
-    None,
-    Unit(u64),
-    Go(u64),
-    /// A hovered corpse object, keyed on the corpse's guid.
-    Corpse(u64),
-}
-
-/// The publisher's teardown (`0x4928d5`–`0x492909`): every change of the mouseover away from a
-/// non-null one requests the fade (`0x530ae0`) before the new plate builds, so a cursor-seated
-/// plate hides and the next one shows afresh; a first hover has nothing to tear down.
-fn fades_on_change(last: LastHover, next: LastHover) -> bool {
-    last != LastHover::None && last != next
-}
-
 /// The world-hover driver's memory, one `SystemParam` because the driver is at Bevy's 16-param
-/// ceiling.
+/// ceiling. What it last published is the VM's ([`UiScript::world_mouseover`]), which a hover
+/// leave in the UI's walk also writes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct HoverMemo<'s> {
-    /// Which world plate is up. On an unchanged mouseover the reference makes no call (`0x482090`
-    /// returns at `0x4820b5`), so a plate Lua takes mid-hover stays gone.
-    last: Local<'s, crate::ui_script::VmMemo<LastHover>>,
     /// The line-affecting fields the current unit plate was built from, so a late-arriving name or
     /// creature-info rebuilds it under the same hover.
     last_lines: Local<'s, crate::ui_script::VmMemo<Option<UnitState>>>,
@@ -129,9 +113,10 @@ fn drive_mouseover_tooltip(
     let Some(mut script) = script else {
         return;
     };
-    let (last, last_lines, trace) = (&mut memo.last, &mut memo.last_lines, &mut *memo.trace);
-    let last = last.get(&script);
+    let (last_lines, trace) = (&mut memo.last_lines, &mut *memo.trace);
     let last_lines = last_lines.get(&script);
+    // The publisher's change check (`0x482090`) compares against the VM's last publish.
+    let last = script.world_mouseover();
     let published = memo.published.get(&script);
     let self_store = self_q.iter().next();
     let chr = tables.classes();
@@ -164,18 +149,15 @@ fn drive_mouseover_tooltip(
     });
 
     if let Some((guid, state)) = unit {
-        // Push first: the builder reads the token. Rebuild on a new target or a late name or
-        // creature answer; health and power stay out of the key, since the watcher drives the bar.
+        // Publish, which tears the old hover down, then push: the builder reads the token. Rebuild
+        // on a new target or a late name or creature answer, which rebuilds under the same hover
+        // with no teardown; health and power stay out of the key, since the watcher drives the bar.
         let key = lines_view(&state);
+        let changed = script.publish_world_mouseover(Some(guid));
         script.set_unit("mouseover", Some(state));
         *published = true;
-        if *last != LastHover::Unit(guid) || last_lines.as_ref() != Some(&key) {
-            // A late name rebuilds under the same hover with no teardown.
-            if fades_on_change(*last, LastHover::Unit(guid)) {
-                script.world_tooltip_fade();
-            }
+        if changed || last_lines.as_ref() != Some(&key) {
             script.world_tooltip_unit("mouseover");
-            *last = LastHover::Unit(guid);
             *last_lines = Some(key);
         }
         return;
@@ -200,13 +182,10 @@ fn drive_mouseover_tooltip(
         };
         // A bone pile with nothing to take publishes no mouseover: no plate, no brighten.
         if !crate::target::corpse_mouseover_eligible(store) {
-            if !matches!(*last, LastHover::None) {
-                script.world_tooltip_fade();
-                *last = LastHover::None;
-            }
+            script.publish_world_mouseover(None);
             return;
         }
-        if *last == LastHover::Corpse(guid) {
+        if last == Some(guid) {
             return; // already up; a corner plate never re-seats
         }
         // A corpse carries `CORPSE_FIELD_OWNER`, not a name; the plate waits for the name query.
@@ -224,11 +203,8 @@ fn drive_mouseover_tooltip(
         ) else {
             return;
         };
-        if fades_on_change(*last, LastHover::Corpse(guid)) {
-            script.world_tooltip_fade();
-        }
+        script.publish_world_mouseover(Some(guid));
         script.world_tooltip_gameobject(&plate, &[], false);
-        *last = LastHover::Corpse(guid);
         return;
     }
     if let Some((entity, guid)) = go {
@@ -255,12 +231,9 @@ fn drive_mouseover_tooltip(
                 })
             })
             .flatten();
-        if *last == LastHover::Go(guid) {
+        if last == Some(guid) {
             if crate::target::hover_probe_armed() {
-                let line = format!(
-                    "held Go({guid:#x}) — plate up {}",
-                    script.world_tooltip_up()
-                );
+                let line = format!("held Go({guid:#x})");
                 if *trace != line {
                     info!("hover probe/tooltip: {line}");
                     *trace = line;
@@ -356,18 +329,12 @@ fn drive_mouseover_tooltip(
                 _ => {}
             }
         }
-        if fades_on_change(*last, LastHover::Go(guid)) {
-            script.world_tooltip_fade();
-        }
+        script.publish_world_mouseover(Some(guid));
         script.world_tooltip_gameobject(&template.name, &lines, cursor_seated);
-        *last = LastHover::Go(guid);
         return;
     }
-    if fades_on_change(*last, LastHover::None) {
-        // Hover lost: the same teardown, with no plate after it.
-        script.world_tooltip_fade();
-        *last = LastHover::None;
-    }
+    // Hover lost: the same teardown, with no plate after it.
+    script.publish_world_mouseover(None);
 }
 
 #[cfg(test)]

@@ -424,8 +424,6 @@ pub(in crate::script) fn set_owner_core(
     };
     t.owner = owner;
     t.anchor = TooltipAnchor::None;
-    // A re-own, or the hide's un-own, ends the world plate; a content re-set alone does not.
-    t.world_owned = false;
     if let Some(owner) = owner {
         t.anchor = anchor;
         apply_anchor(&mut model, h, owner, anchor, x, y);

@@ -8,7 +8,7 @@
 //! (`0x76abfd`, `0x76ab41`). [`show`] and [`hide`] are that dispatch, so a kind's override runs
 //! the same however the transition comes.
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, Table};
 
 use super::{event, Model};
 use crate::widget::{ButtonState, ChildWalk, FrameHandle, FrameKind};
@@ -95,9 +95,8 @@ pub(super) fn base_hide(lua: &Lua, h: FrameHandle) {
         }
         leave_mouse_index(&mut model, h)
     };
-    if let Some(id) = left {
-        let fired = event::fire_widget_handler(lua, id, "OnLeave", vec![Value::Boolean(true)]);
-        record(lua, fired);
+    if let Some(script) = left {
+        super::mouseover::leave(lua, h, script);
     }
     walk_children(lua, h, hide);
     // `CSimpleButton`'s hide notify (`+0x34`, `0x7791e0`) un-presses it, unless disabled or
@@ -147,17 +146,16 @@ pub(super) fn set_mouse_enabled(lua: &Lua, h: FrameHandle, enabled: bool) {
         }
         leave_mouse_index(&mut model, h)
     };
-    if let Some(id) = left {
-        let fired = event::fire_widget_handler(lua, id, "OnLeave", vec![Value::Boolean(true)]);
-        record(lua, fired);
+    if let Some(script) = left {
+        super::mouseover::leave(lua, h, script);
     }
     model_mut(lua).arena.set_mouse_enabled(h, false);
 }
 
 /// The mouse kind's removal tail (`0x764ba0`, kind 2, flag 0), shared by the hide and a mouse
-/// disable: the capture and the press it took drop, then the hover ends. The id whose `OnLeave`
-/// the caller fires.
-fn leave_mouse_index(model: &mut Model, h: FrameHandle) -> Option<u32> {
+/// disable: the capture and the press it took drop, then the hover ends. `Some` when the frame
+/// held the hover, holding the id whose `OnLeave` its leave notify fires.
+fn leave_mouse_index(model: &mut Model, h: FrameHandle) -> Option<Option<u32>> {
     drop_capture(model, h);
     leave_if_hovered(model, h)
 }
@@ -188,9 +186,10 @@ fn drop_capture(model: &mut Model, h: FrameHandle) {
 /// and calls the leave notify with 1 (`0x764cce`), whose base `0x76b6f0` clears the drag-arm
 /// (`+0x100`/`+0x104`), so the hovered frame's OnLeave runs before its own OnHide and its
 /// ancestors'.
-/// The leave is a virtual call: a disabled Button's own `0x7794e0` skips its OnLeave. This leave is
-/// how a tooltip closes with its window; the reference has no other. The id whose OnLeave fires.
-fn leave_if_hovered(model: &mut Model, h: FrameHandle) -> Option<u32> {
+/// The leave is a virtual call ([`super::mouseover::leave`]): a disabled Button's own `0x7794e0`
+/// skips its OnLeave. This leave is how a tooltip closes with its window; the reference has no
+/// other. `Some` when the frame held the hover, holding the id whose OnLeave fires.
+fn leave_if_hovered(model: &mut Model, h: FrameHandle) -> Option<Option<u32>> {
     if model.mouseover != Some(h) {
         return None;
     }
@@ -200,7 +199,7 @@ fn leave_if_hovered(model: &mut Model, h: FrameHandle) -> Option<u32> {
         model.drag = None;
     }
     model.hover_repick = true;
-    notified.then(|| model.frame_id(h))
+    Some(notified.then(|| model.frame_id(h)))
 }
 
 /// The notify slot (`+0x30` OnShow, `+0x34` OnHide): the base fires the script unless the frame is

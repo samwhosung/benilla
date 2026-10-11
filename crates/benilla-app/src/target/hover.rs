@@ -791,6 +791,18 @@ mod tests {
     use crate::spell::targeting::corpse_fixture as fx;
     use bevy::ecs::system::RunSystemOnce;
 
+    /// The plate hover the pick reads is this frame's walk's: a plate's leave publishes the loss
+    /// inside the walk (`0x7cb8b0`), so a pick a frame behind would publish the plate again.
+    #[test]
+    fn the_pick_reads_the_plate_hover_of_this_frames_walk() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut app,
+            crate::vplates::seed_plate_hover,
+            update_hover
+        ));
+    }
+
     fn card(bone: u16, owner: Entity) -> BillboardCard {
         let info = benilla_assets::BillboardInfo {
             pivot: Vec3::ZERO,
