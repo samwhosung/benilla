@@ -675,9 +675,10 @@ fn the_wheel_bubbles_from_the_rows_and_the_bar_rides_the_gutter() {
         s.tick(0.016);
         s.resolve();
     }
-    // Only the list's bar shows in the shared gutter. The outer page's range is not 0, as the
-    // reference would measure it: the stock faux list sizes its scroll child to
-    // `numItems * valueStep`, and the range unions the child's whole subtree (`0x786f80`).
+    // Only the list's bar shows in the shared gutter. The outer page's engine range is not 0, as
+    // the reference would measure it: the stock faux list sizes its scroll child to
+    // `numItems * valueStep`, and the range unions the child's whole subtree (`0x786f80`). The
+    // layer's bar follows the body's own overhang, which is 0.
     assert!(
         !s.eval::<bool>("return BenillaOptionsFrameContainerScrollBar:IsVisible()")
             .unwrap(),

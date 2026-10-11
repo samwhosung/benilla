@@ -2114,7 +2114,8 @@ fn hover_label(s: &mut UiScript, frame: &str) {
 
 /// Scroll `frame` into the page's rect: past the fold a row is clipped and cannot be hovered.
 fn scroll_into_view(s: &mut UiScript, frame: &str) {
-    s.resolve();
+    // The page's fit and the range it marks land in the walk.
+    settle(s);
     s.run(&format!(
         "local sf = BenillaOptionsFrameContainerScroll \
          local range = sf:GetVerticalScrollRange() \

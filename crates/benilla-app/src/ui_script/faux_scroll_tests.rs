@@ -337,6 +337,7 @@ fn the_reference_on_vertical_scroll_path_runs_once_a_scroll_child_exists() {
         .unwrap();
     s.resolve();
     s.run("AddonScroll:UpdateScrollChildRect()").unwrap();
+    s.tick(0.016);
     assert_eq!(
         s.eval::<f64>("return AddonScroll:GetVerticalScrollRange()")
             .unwrap(),

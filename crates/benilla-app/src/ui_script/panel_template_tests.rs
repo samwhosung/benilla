@@ -301,6 +301,7 @@ fn a_scroll_frame_from_the_template_wires_its_bar_two_parents_deep() {
     .unwrap();
     s.resolve();
     s.run("MyScroll:UpdateScrollChildRect()").unwrap();
+    s.tick(0.016);
     assert!(
         s.errors().is_empty(),
         "ScrollFrame_OnScrollRangeChanged ran clean: {:?}",

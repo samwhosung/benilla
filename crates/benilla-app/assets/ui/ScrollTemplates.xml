@@ -96,11 +96,18 @@
             BenillaScrollBar_UpdateArrows(bar)
         end
 
+        -- The range the bar follows: the engine's, the reference's union of the child's whole
+        -- subtree, unless the frame measures its own content (`sf.contentRange`).
+        function BenillaScroll_Range(sf)
+            if sf.contentRange then return sf.contentRange(sf) end
+            return sf:GetVerticalScrollRange()
+        end
+
         -- Hides the bar when the content fits (reference: ScrollFrame_OnScrollRangeChanged).
         function BenillaScroll_SyncBar(sf)
             local bar = getglobal(sf:GetName() .. "Bar")
             if not bar then return end
-            local range = sf:GetVerticalScrollRange()
+            local range = BenillaScroll_Range(sf)
             bar:SetValueStep(BENILLA_SCROLL_STEP)
             bar:SetMinMaxValues(0, range)
             bar:SetValue(sf:GetVerticalScroll())
@@ -111,7 +118,7 @@
         -- Clamped here: SetVerticalScroll stores any value, as the reference's does.
         function BenillaScroll_Step(sf, delta)
             local target = sf:GetVerticalScroll() + delta
-            local range = sf:GetVerticalScrollRange()
+            local range = BenillaScroll_Range(sf)
             if target > range then target = range end
             if target < 0 then target = 0 end
             sf:SetVerticalScroll(target)

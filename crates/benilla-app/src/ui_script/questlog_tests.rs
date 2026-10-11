@@ -1052,6 +1052,7 @@ fn wheel_over_the_detail_pane_changes_vertical_scroll() {
     s.resolve();
     answer_measures(&mut s);
     s.resolve(); // the measures reach the scroll range and the bar
+    s.tick(0.016); // the marked range is recomputed in the frame's update
 
     s.resolve();
     let quads = s.extract();
@@ -1109,7 +1110,7 @@ fn selection_change_resets_detail_scroll_but_a_quest_log_update_refresh_does_not
     s.resolve();
     answer_measures(&mut s);
     s.resolve(); // the measures reach the scroll range and the bar
-    s.resolve(); // the range reads resolved rects
+    s.tick(0.016); // the marked range is recomputed in the frame's update
 
     // Scroll through the bar, as the wheel does: a reselect snaps back with the bar's
     // `SetValue(0)`, which changes nothing on a bar already at 0.

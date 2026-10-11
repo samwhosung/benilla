@@ -539,8 +539,12 @@ fn the_list_reaches_its_last_row_at_the_bars_end() {
         .eval::<(f64, f64)>("return SkillListScrollFrameScrollBar:GetMinMaxValues()")
         .unwrap();
     assert_eq!(bar_max, f64::from((n as i32 - 12) * 15));
+    // The overflow as geometry: the stored range is not re-measured for a child's resize.
     let overflow = s
-        .eval::<f64>("return SkillListScrollFrame:GetVerticalScrollRange()")
+        .eval::<f64>(
+            "return SkillListScrollFrameScrollChildFrame:GetHeight() \
+             - SkillListScrollFrame:GetHeight()",
+        )
         .unwrap();
     assert_eq!(overflow, f64::from(n as i32 * 15 - 220));
     assert!(

@@ -263,6 +263,14 @@
             return bottom
         end
 
+        -- The page's range is the body's overhang, the content Fit measures: the engine's range
+        -- also counts the Keybindings list's faux scroll child, which is sized to every row.
+        function BenillaOptionsScroll_Range(sf)
+            local range = BenillaOptionsFrameContainerBody:GetHeight() - sf:GetHeight()
+            if range > 0 then return range end
+            return 0
+        end
+
         -- From OnUpdate, off the previous frame's rects; SetWidth and SetHeight invalidate layout.
         function BenillaOptionsScroll_Fit()
             local sf = BenillaOptionsFrameContainerScroll
@@ -279,6 +287,9 @@
             if math.abs(body:GetHeight() - h) >= 0.5 then
                 body:SetHeight(h)
                 sf:UpdateScrollChildRect()
+                -- The bar follows the body, which the range notify misses when the engine's range,
+                -- a whole-subtree union, does not move.
+                BenillaScroll_SyncBar(sf)
             end
         end
 
@@ -1498,7 +1509,10 @@
                         </Anchors>
                         <Scripts>
                             <!-- The loader fires OnLoad bottom-up, so the body already exists. -->
-                            <OnLoad>this:SetScrollChild(BenillaOptionsFrameContainerBody)</OnLoad>
+                            <OnLoad>
+                                this:SetScrollChild(BenillaOptionsFrameContainerBody)
+                                this.contentRange = BenillaOptionsScroll_Range
+                            </OnLoad>
                             <OnUpdate>BenillaOptionsScroll_Fit()</OnUpdate>
                             <!-- An armed Keybindings capsule binds the wheel, search rows included. -->
                             <OnMouseWheel>
