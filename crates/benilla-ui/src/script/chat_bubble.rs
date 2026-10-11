@@ -345,8 +345,7 @@ fn set_line(
 
 /// The width law (`0x4b16c5`-`0x4b1796`): with width and height cleared, the text's own width;
 /// past the cap the cap, so it wraps, else at least two border units. The height stays cleared,
-/// so it is the wrapped text's. Deviation: the width rounds up to a whole device pixel, so the
-/// frame's right border lands on the grid its left one is snapped to.
+/// so it is the wrapped text's.
 fn fit_width(model: &mut Model, i: usize, g: BubbleGeometry) {
     let text = model.chat_bubbles.bubbles[i].text;
     if let Some(d) = model.region_data.get_mut(&text) {
@@ -356,14 +355,11 @@ fn fit_width(model: &mut Model, i: usize, g: BubbleGeometry) {
     super::measure::ensure_measured_in(model, text);
     let natural = super::region::virtual_span(model, text).0;
     let floor = 2.0 * g.border;
-    let mut width = if natural > g.wrap_cap {
+    let width = if natural > g.wrap_cap {
         g.wrap_cap
     } else {
         natural.max(floor)
     };
-    if g.device_px > 0.0 {
-        width = (width * g.device_px).ceil() / g.device_px;
-    }
     if let Some(d) = model.region_data.get_mut(&text) {
         d.size = Some((width, 0.0));
     }
@@ -403,9 +399,9 @@ fn drive(
     }
 
     // The seat (`0x4b14a0`): the text's BOTTOM on the `WorldFrame`'s BOTTOMLEFT, re-anchored only
-    // when the snapped point moved. Deviation: the reference ceils the point itself onto the
-    // device grid (`0x7666a0`, `0x766750`); here the frame's left and bottom edges round onto it,
-    // so the border art lands on whole pixels.
+    // when the snapped point moved. Deviation: the frame's bottom-left origin is snapped onto the
+    // device grid so the border art blits 1:1; the reference ceils the anchor point itself onto
+    // it (`0x7666a0`, `0x766750`).
     let width = model
         .region_data
         .get(&text)

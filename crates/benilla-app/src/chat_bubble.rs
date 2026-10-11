@@ -423,8 +423,9 @@ fn drive_bubbles(
     let cam = camera.single().ok();
     let window = window.single().ok();
     // The order is the frame levels (`0x4b1360`, stamped `0x4b12d5`-`0x4b1312`): the camera's
-    // distance to the speaker, farthest first. The reference re-sorts only on a change; sorting
-    // every frame gives the same list.
+    // distance to the speaker, farthest first. The reference re-sorts only when the camera moved
+    // or a line spawned (`0x4b10a5`-`0x4b10d3`, `0x4b11c7`); this sorts every frame, so a speaker
+    // moving under a still camera can re-stack here and not there.
     let mut order: Vec<(u64, f32)> = bubbles
         .live
         .keys()
@@ -482,11 +483,11 @@ fn drive_bubbles(
                 alpha: f32::from(b.fade.alpha) / 255.0,
                 seat: match seat {
                     Some((_, p)) => (p.x / seam, (viewport.y - p.y) / seam),
-                    // Deviation: past the near plane the reference's projection writes no point
-                    // (`0x483f7a`) and the bubble seats on the zeroed one (`0x4b14e4`), at the
-                    // screen's bottom-left corner; here it seats a screen below the bottom edge,
-                    // off screen, as the speaker is behind the camera.
-                    None => (0.0, -viewport.y / seam),
+                    // Short of the near plane (behind the camera) the projection writes no point
+                    // (`0x483f7a`) and the placement ignores its verdict, seating the zeroed one
+                    // (`0x4b14e4`): the text's BOTTOM on the screen's bottom-left corner. Bevy's
+                    // reverse-Z projection reports such a point as past either plane.
+                    None => (0.0, 0.0),
                 },
             })
         })
