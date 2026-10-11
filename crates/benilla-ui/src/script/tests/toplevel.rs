@@ -154,6 +154,74 @@ fn a_raise_is_top_occupied_level_plus_one_after_compaction() {
     );
 }
 
+/// `board_and_dialog` plus `Hidden`: overlapping both, hidden before its level is set to 20, and
+/// never shown. The stratum's bound `bucket+0x8` grows only on a visible link (`0x764887`), so it
+/// is 6 here, from `Board`.
+fn board_dialog_and_hidden_twenty() -> UiScript {
+    let mut s = board_and_dialog();
+    s.run(
+        r#"
+        Hidden = CreateFrame("Frame", "Hidden")
+        Hidden:Hide()
+        Hidden:SetFrameLevel(20)
+        Hidden:SetPoint("BOTTOMLEFT", 250, 250)
+        Hidden:SetWidth(300); Hidden:SetHeight(300)
+        Hidden:CreateTexture(nil, "ARTWORK"):SetTexture("Hidden.blp")
+        Dialog:SetToplevel(true)
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    s
+}
+
+/// The compaction examines only the levels below the stratum's bound (`0x764f4c`, `0x764fcf`), so
+/// a hidden frame at level 20, above the visible high-water, is neither counted nor moved: the
+/// raise gives 1, 20, 2, and the frame, shown later, still draws over the dialog.
+#[test]
+fn a_raise_leaves_a_hidden_frame_above_the_visible_high_water_where_it_is() {
+    let mut s = board_dialog_and_hidden_twenty();
+    s.run("Dialog:Show()").unwrap();
+    assert_eq!(
+        (
+            level(&mut s, "Board"),
+            level(&mut s, "Hidden"),
+            level(&mut s, "Dialog")
+        ),
+        (1, 20, 2)
+    );
+    s.run("Hidden:Show()").unwrap();
+    assert_eq!(level(&mut s, "Hidden"), 20, "showing re-levels nothing");
+    assert_eq!(
+        painted(&mut s),
+        vec!["Board.blp", "Dialog.blp", "Hidden.blp"],
+        "the shown frame draws over the dialog"
+    );
+}
+
+/// A visible link at a high level grows the bound (`0x764882`-`0x764887`), so the next compaction
+/// reaches it: `Hidden` shown at 20 is packed with the rest, and the raise lands above it.
+#[test]
+fn a_frame_shown_at_a_high_level_raises_the_bound_for_the_next_raise() {
+    let mut s = board_dialog_and_hidden_twenty();
+    s.run("Dialog:Show()").unwrap();
+    s.run("Hidden:Show()").unwrap();
+    s.run("Dialog:Raise()").unwrap();
+    assert_eq!(
+        (
+            level(&mut s, "Board"),
+            level(&mut s, "Hidden"),
+            level(&mut s, "Dialog")
+        ),
+        (0, 2, 3),
+        "{{1, 2, 20}} pack to [0, 3) and the dialog takes the bound, above Hidden"
+    );
+    assert_eq!(
+        painted(&mut s),
+        vec!["Board.blp", "Hidden.blp", "Dialog.blp"]
+    );
+}
+
 /// The trigger is the effective-visibility transition, not the `Show` call. `Holder` is hidden
 /// before `Dialog:Show()` so that call is no transition; otherwise `Dialog` raises there and has
 /// nothing left to raise over.

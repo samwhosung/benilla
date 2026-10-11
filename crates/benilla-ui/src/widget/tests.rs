@@ -168,6 +168,66 @@ fn compaction_relinks_the_shifted_visible_frames_in_creation_order() {
     assert_eq!(seq(&a, hidden), hidden_seq, "a hidden frame is in no list");
 }
 
+/// Compaction (`0x764eb0`) reads the stratum's bound `bucket+0x8` (`0x764ec2`) and examines only
+/// the levels below it (`0x764f4c`, `0x764fcf`). The bound is the highest visible link plus one,
+/// so a frame hidden above it keeps its level, and one hidden below it is packed with the rest.
+#[test]
+fn compaction_examines_only_the_levels_below_the_bound() {
+    let mut a = arena();
+    let low = a.create(FrameKind::Frame, None, None);
+    let below = a.create(FrameKind::Frame, None, None);
+    let above = a.create(FrameKind::Frame, None, None);
+    let panel = a.create(FrameKind::Frame, None, None);
+    a.set_shown(below, false);
+    a.set_shown(above, false);
+    a.set_frame_level(below, 3, false);
+    a.set_frame_level(above, 6, false);
+    a.set_frame_level(panel, 5, false); // the only high link: the bound is 6
+
+    assert_eq!(
+        a.compact_levels(Strata::Medium),
+        3,
+        "{{0, 3, 5}} pack to [0, 3); level 6 is not below the bound"
+    );
+    let levels = [low, below, panel, above].map(|h| a.frame(h).unwrap().level);
+    assert_eq!(levels, [0, 1, 2, 6]);
+
+    // The compaction set the bound to its count: the stratum's next raise lands at 3.
+    assert_eq!(a.compact_levels(Strata::Medium), 3);
+    assert_eq!(a.frame(above).unwrap().level, 6);
+}
+
+/// The bound grows on a visible link only (`0x764780`): a show, or a level or stratum change of a
+/// visible frame. A hidden frame's level never reaches it.
+#[test]
+fn the_bound_grows_on_a_visible_link_only() {
+    let mut a = arena();
+    let f = a.create(FrameKind::Frame, None, None);
+    let g = a.create(FrameKind::Frame, None, None);
+    a.set_shown(f, false);
+    a.set_frame_level(f, 9, false);
+    assert_eq!(a.compact_levels(Strata::Medium), 1, "only g's level 0");
+    assert_eq!(a.frame(f).unwrap().level, 9);
+
+    a.set_shown(f, true);
+    assert_eq!(
+        a.compact_levels(Strata::Medium),
+        2,
+        "f linked at 9: {{0, 9}}"
+    );
+    assert_eq!(a.frame(f).unwrap().level, 1);
+
+    a.set_frame_level(g, 7, false);
+    a.set_frame_strata(f, Strata::Dialog);
+    assert_eq!(
+        a.compact_levels(Strata::Dialog),
+        1,
+        "f's relink grows the new stratum's bound; the old one is unchanged"
+    );
+    assert_eq!(a.compact_levels(Strata::Medium), 1);
+    assert_eq!(a.frame(g).unwrap().level, 0);
+}
+
 // ── Scale ────────────────────────────────────────────────────────────────────────────────────
 
 #[test]
