@@ -10,7 +10,7 @@ use mlua::{Lua, Table, Value};
 
 use super::object::{draw_layer_from_str, frame_handle_of};
 use super::pointer::point_in_rect;
-use super::region::region_wrapper;
+use super::region::{install_into_slot, region_wrapper, texture_object_arg};
 use super::{event, Model, RegionData};
 use crate::layout::Rect;
 use crate::order::DrawLayer;
@@ -68,6 +68,15 @@ impl Slot {
         *slot = Some(rh);
     }
 
+    fn set_opt(self, s: &mut ColorSelectState, rh: Option<RegionHandle>) {
+        match self {
+            Slot::Wheel => s.wheel = rh,
+            Slot::WheelThumb => s.wheel_thumb = rh,
+            Slot::ValueStrip => s.value_strip = rh,
+            Slot::ValueThumb => s.value_thumb = rh,
+        }
+    }
+
     /// The layer a slot's region is born on: ARTWORK for the art (the wheel's layer 2, through
     /// `0x77fd10`), OVERLAY for the two markers above it.
     fn layer(self) -> DrawLayer {
@@ -118,6 +127,47 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot, layer: Option<DrawLayer>) ->
     Ok(model.region_id(rh))
 }
 
+/// Install `incoming` into `slot`, or clear it, through the slot hooks: the wheel `0x78b580` and
+/// the strip `0x78b8a0` link on ARTWORK and replace the texture's image with the generated one
+/// (`0x770300`), so it ends file-less here, where the renderer paints it; the markers
+/// `0x78b850`/`0x78ba90` link on OVERLAY and clear their anchors (`0x767ed0`).
+fn install_slot(
+    lua: &Lua,
+    this: &Table,
+    slot: Slot,
+    incoming: Option<RegionHandle>,
+) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if !matches!(
+        model.arena.frame(h).map(|f| &f.kind_state),
+        Some(KindState::ColorSelect(_))
+    ) {
+        return Err(mlua::Error::runtime("not a ColorSelect"));
+    }
+    let thumb = matches!(slot, Slot::WheelThumb | Slot::ValueThumb);
+    install_into_slot(
+        &mut model,
+        h,
+        incoming,
+        slot.layer(),
+        thumb,
+        |ks| match ks {
+            KindState::ColorSelect(s) => slot.get(s),
+            _ => None,
+        },
+        |ks, rh| {
+            if let KindState::ColorSelect(s) = ks {
+                slot.set_opt(s, rh);
+            }
+        },
+    )?;
+    if let (Some(rh), false) = (incoming, thumb) {
+        super::region::clear_texture(&mut model, rh);
+    }
+    Ok(())
+}
+
 /// `Set<Slot>Texture([path [, drawLayer]] | r, g, b [, a])`, plus an empty form that only creates
 /// the region: what `<ColorWheelTexture/>` means. A file-less slot is where the app renderer paints
 /// the disc and strip the reference computes (`0x78b580`, `0x78b8a0`).
@@ -128,44 +178,54 @@ fn install_slot_texture(
     setter: &str,
     getter: &str,
 ) -> mlua::Result<()> {
+    let method = setter.to_string();
     m.set(
         setter,
-        lua.create_function(
-            move |lua, (this, a1, a2, a3, a4): (Table, Value, Value, Value, Value)| {
-                let layer = match &a2 {
-                    Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
-                    _ => None,
-                };
-                let id = ensure_slot(lua, &this, slot, layer)?;
-                let rh = {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    *model.id_to_region.get(&id).expect("colorselect region id")
-                };
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let data = model.region_data.entry(rh).or_default();
-                match &a1 {
-                    Value::String(s) => {
-                        data.texture = Some(s.to_str()?.to_string());
-                        data.fill = None;
-                    }
-                    Value::Number(_) | Value::Integer(_) => {
-                        data.texture = None;
-                        data.fill = Some([
-                            num_f32(&a1),
-                            num_f32(&a2),
-                            num_f32(&a3),
-                            match &a4 {
-                                Value::Nil => 1.0,
-                                v => num_f32(v),
-                            },
-                        ]);
-                    }
-                    // The empty form: the region now exists and stays file-less.
-                    _ => {}
+        lua.create_function(move |lua, (this, args): (Table, mlua::MultiValue)| {
+            let nil = Value::Nil;
+            let arg = |i: usize| args.get(i).unwrap_or(&nil);
+            let (a1, a2, a3, a4) = (arg(0), arg(1), arg(2), arg(3));
+            let layer = match a2 {
+                Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
+                _ => None,
+            };
+            match args.front() {
+                Some(Value::Table(t)) => {
+                    let rh = texture_object_arg(lua, &this, t, &method)?;
+                    return install_slot(lua, &this, slot, Some(rh));
                 }
-                Ok(())
-            },
-        )?,
+                Some(Value::Nil) => return install_slot(lua, &this, slot, None),
+                _ => {}
+            }
+            let id = ensure_slot(lua, &this, slot, layer)?;
+            let rh = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                *model.id_to_region.get(&id).expect("colorselect region id")
+            };
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let data = model.region_data.entry(rh).or_default();
+            match a1 {
+                Value::String(s) => {
+                    data.texture = Some(s.to_str()?.to_string());
+                    data.fill = None;
+                }
+                Value::Number(_) | Value::Integer(_) => {
+                    data.texture = None;
+                    data.fill = Some([
+                        num_f32(a1),
+                        num_f32(a2),
+                        num_f32(a3),
+                        match a4 {
+                            Value::Nil => 1.0,
+                            v => num_f32(v),
+                        },
+                    ]);
+                }
+                // The empty form: the region now exists and stays file-less.
+                _ => {}
+            }
+            Ok(())
+        })?,
     )?;
     m.set(
         getter,

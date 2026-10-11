@@ -316,35 +316,40 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot) -> mlua::Result<u32> {
     Ok(model.region_id(rh))
 }
 
-/// Point `slot` at `rh` or at nothing, returning the different region it held for the caller to
-/// free, as the slot store `0x778fd0` destroys the outgoing object.
-fn swap_slot(
-    model: &mut Model,
-    h: FrameHandle,
+/// Install `incoming` (a Texture object) into `slot`, or clear it, as the slot store `0x778fd0`
+/// does: the same texture is a no-op (`0x778fe7`), the displaced one is destroyed (`0x77900a`), and
+/// the incoming one moves into the button on the slot's own draw layer (`0x779017`, `0x779139`
+/// for the highlight) before it is stored.
+fn install_slot(
+    lua: &Lua,
+    this: &Table,
     slot: Slot,
-    rh: Option<RegionHandle>,
-) -> mlua::Result<Option<RegionHandle>> {
-    let frame = model
-        .arena
-        .frame_mut(h)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-    let KindState::Button(bs) = &mut frame.kind_state else {
+    incoming: Option<RegionHandle>,
+) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if !matches!(
+        model.arena.frame(h).map(|f| &f.kind_state),
+        Some(KindState::Button(_))
+    ) {
         return Err(mlua::Error::runtime("not a Button"));
-    };
-    let outgoing = slot.get(bs).filter(|old| Some(*old) != rh);
-    slot.set(bs, rh);
-    model.touch_layout();
-    Ok(outgoing)
-}
-
-/// Free the region a slot gave up, never the one that moved in.
-fn free_outgoing(lua: &Lua, outgoing: Option<RegionHandle>, incoming: RegionHandle) {
-    if let Some(old) = outgoing.filter(|old| *old != incoming) {
-        super::region::free_region(
-            &mut lua.app_data_mut::<Model>().expect("model app_data"),
-            old,
-        );
     }
+    super::region::install_into_slot(
+        &mut model,
+        h,
+        incoming,
+        slot.shape().1,
+        false,
+        |ks| match ks {
+            KindState::Button(bs) => slot.get(bs),
+            _ => None,
+        },
+        |ks, rh| {
+            if let KindState::Button(bs) = ks {
+                slot.set(bs, rh);
+            }
+        },
+    )
 }
 
 /// `Set<State>Texture(texture | "path" | nil)`, forked on the argument's type (`0x781970`). The
@@ -360,36 +365,17 @@ fn set_slot_texture(
     args: &MultiValue,
 ) -> mlua::Result<()> {
     match args.front() {
-        // A Texture object is itself installed into the slot (`0x781b0b` → `0x778fd0`).
+        // A Texture object is itself installed into the slot (`0x781b0b` → `0x778fd0`). Any other
+        // widget raises (`0x781ab1`, message `0x87a1e0`).
         Some(Value::Table(t)) => {
-            let rh = super::region::region_handle_of(lua, t)?;
-            let h = frame_handle_of(lua, this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // Any other widget raises (`0x781ab1`, message `0x87a1e0`).
-            if model.arena.region(rh).map(|r| r.kind) != Some(RegionKind::Texture) {
-                return Err(mlua::Error::runtime("Wrong object type, expected texture"));
-            }
-            let outgoing = swap_slot(&mut model, h, slot, Some(rh))?;
-            drop(model);
-            free_outgoing(lua, outgoing, rh);
-            return Ok(());
+            let method = usage.split('(').next().unwrap_or(usage);
+            let rh = super::region::texture_object_arg(lua, this, t, method)?;
+            return install_slot(lua, this, slot, Some(rh));
         }
         // nil clears the slot and destroys the old region (`0x781b5a` → `0x778fd0`): unhooked but
         // alive, it would draw in every state. No argument is not nil (`0x781b4f`) and clears
         // nothing.
-        Some(Value::Nil) => {
-            let h = frame_handle_of(lua, this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let outgoing = swap_slot(&mut model, h, slot, None)?;
-            drop(model);
-            if let Some(old) = outgoing {
-                super::region::free_region(
-                    &mut lua.app_data_mut::<Model>().expect("model app_data"),
-                    old,
-                );
-            }
-            return Ok(());
-        }
+        Some(Value::Nil) => return install_slot(lua, this, slot, None),
         _ => {}
     }
 
@@ -570,10 +556,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // Destroyed, not orphaned (`0x778d3c`).
                 super::region::free_region(&mut model, dead);
             }
-            model.arena.set_region_owner(rh, Some(owner));
-            if let Some(r) = model.arena.region_mut(rh) {
-                r.draw_layer = DrawLayer::Artwork;
-            }
+            super::region::link_region(&mut model, rh, owner, DrawLayer::Artwork, false);
             adopt_label(&mut model, owner, rh);
             // The layout's read set moved, and `GetTextWidth` reads the new label's extents.
             model.touch_layout();

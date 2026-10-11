@@ -10,12 +10,12 @@ use mlua::{Lua, Table, Value};
 
 use super::object::{draw_layer_from_str, frame_handle_of};
 use super::pointer::point_in_rect;
-use super::region::region_wrapper;
+use super::region::{install_into_slot, region_wrapper, texture_object_arg};
 use super::{event, Model, RegionData};
 use crate::layout::Rect;
 use crate::order::DrawLayer;
 use crate::widget::{
-    slider_fraction, slider_grab, FrameHandle, KindState, RegionKind, SliderState,
+    slider_fraction, slider_grab, FrameHandle, KindState, RegionHandle, RegionKind, SliderState,
 };
 
 pub(super) const REG_SLIDER_METHODS: &str = "__benilla_slider_methods";
@@ -85,6 +85,34 @@ fn ensure_thumb(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Resu
     Ok(model.region_id(rh))
 }
 
+/// Install `incoming` as the thumb, or clear it, through `0x789860`.
+fn install_thumb(lua: &Lua, this: &Table, incoming: Option<RegionHandle>) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if !matches!(
+        model.arena.frame(h).map(|f| &f.kind_state),
+        Some(KindState::Slider(_))
+    ) {
+        return Err(mlua::Error::runtime("not a Slider"));
+    }
+    install_into_slot(
+        &mut model,
+        h,
+        incoming,
+        DrawLayer::Overlay,
+        true,
+        |ks| match ks {
+            KindState::Slider(sl) => sl.thumb,
+            _ => None,
+        },
+        |ks, rh| {
+            if let KindState::Slider(sl) = ks {
+                sl.thumb = rh;
+            }
+        },
+    )
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -151,46 +179,57 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // A 1.12 Slider has no enabled state: `Enable`/`Disable`/`IsEnabled` exist only in the Button
     // table (`0x879d00`: `0x77fef0`, `0x77ffd0`, `0x7800b0`), so a Slider must not answer them.
 
-    // `SetThumbTexture(path [, layer])` or `(r, g, b [, a])`, a region's two `SetTexture` forms, on
-    // the thumb region, created on first use.
+    // `SetThumbTexture(texture)` installs the object as the thumb, linked on OVERLAY (the constant
+    // `0x790431` passes) with its anchors cleared (`0x789893`), displacing the old thumb; nil
+    // clears it (`0x790473`). Otherwise `(path [, layer])` or `(r, g, b [, a])`, a region's two
+    // `SetTexture` forms, on the thumb region, created on first use.
     m.set(
         "SetThumbTexture",
-        lua.create_function(
-            |lua, (this, a1, a2, a3, a4): (Table, Value, Value, Value, Value)| {
-                let layer = match &a2 {
-                    Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
-                    _ => None,
-                };
-                let id = ensure_thumb(lua, &this, layer)?;
-                let rh = {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    *model.id_to_region.get(&id).expect("thumb region id")
-                };
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let data = model.region_data.entry(rh).or_default();
-                match &a1 {
-                    Value::String(s) => {
-                        data.texture = Some(s.to_str()?.to_string());
-                        data.fill = None;
-                    }
-                    // A solid thumb and a path share one slot; each clears the other.
-                    Value::Number(_) | Value::Integer(_) => {
-                        data.texture = None;
-                        data.fill = Some([
-                            num_f32(&a1),
-                            num_f32(&a2),
-                            num_f32(&a3),
-                            match &a4 {
-                                Value::Nil => 1.0,
-                                v => num_f32(v),
-                            },
-                        ]);
-                    }
-                    _ => {}
+        lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
+            let nil = Value::Nil;
+            let arg = |i: usize| args.get(i).unwrap_or(&nil);
+            let (a1, a2, a3, a4) = (arg(0), arg(1), arg(2), arg(3));
+            let layer = match a2 {
+                Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
+                _ => None,
+            };
+            match args.front() {
+                Some(Value::Table(t)) => {
+                    let rh = texture_object_arg(lua, &this, t, "SetThumbTexture")?;
+                    return install_thumb(lua, &this, Some(rh));
                 }
-                Ok(())
-            },
-        )?,
+                Some(Value::Nil) => return install_thumb(lua, &this, None),
+                _ => {}
+            }
+            let id = ensure_thumb(lua, &this, layer)?;
+            let rh = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                *model.id_to_region.get(&id).expect("thumb region id")
+            };
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let data = model.region_data.entry(rh).or_default();
+            match a1 {
+                Value::String(s) => {
+                    data.texture = Some(s.to_str()?.to_string());
+                    data.fill = None;
+                }
+                // A solid thumb and a path share one slot; each clears the other.
+                Value::Number(_) | Value::Integer(_) => {
+                    data.texture = None;
+                    data.fill = Some([
+                        num_f32(a1),
+                        num_f32(a2),
+                        num_f32(a3),
+                        match a4 {
+                            Value::Nil => 1.0,
+                            v => num_f32(v),
+                        },
+                    ]);
+                }
+                _ => {}
+            }
+            Ok(())
+        })?,
     )?;
     m.set(
         "GetThumbTexture",

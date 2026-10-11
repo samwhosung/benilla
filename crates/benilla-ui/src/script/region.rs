@@ -26,6 +26,98 @@ pub(super) fn region_handle_of(lua: &Lua, this: &Table) -> mlua::Result<RegionHa
         .ok_or_else(|| mlua::Error::runtime("stale or invalid region handle"))
 }
 
+/// The Texture object a widget's texture setter was handed, as the setters resolve it: a table
+/// that is no widget raises `Couldn't find 'this' in texture`, a widget that is no Texture
+/// `Wrong object type, expected texture` (`0x781a8c`..`0x781ab1`, the same pair in every setter).
+/// `method` is the name the setter's own format string carries; `who` is the receiver's global
+/// name, or `<unnamed>`.
+pub(super) fn texture_object_arg(
+    lua: &Lua,
+    this: &Table,
+    arg: &Table,
+    method: &str,
+) -> mlua::Result<RegionHandle> {
+    let who = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let name = super::object::frame_handle_of(lua, this)
+            .ok()
+            .and_then(|h| model.arena.frame(h).and_then(|f| f.name.clone()));
+        name.unwrap_or_else(|| "<unnamed>".to_string())
+    };
+    if decode_id(arg).is_err() {
+        return Err(mlua::Error::runtime(format!(
+            "{who}:{method}(): Couldn't find 'this' in texture"
+        )));
+    }
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    let rh = decode_id(arg)
+        .ok()
+        .and_then(|id| model.id_to_region.get(&id).copied())
+        .filter(|&rh| model.arena.region(rh).map(|r| r.kind) == Some(RegionKind::Texture));
+    rh.ok_or_else(|| {
+        mlua::Error::runtime(format!(
+            "{who}:{method}(): Wrong object type, expected texture"
+        ))
+    })
+}
+
+/// The client's re-link `0x77fd10(owner, layer, _)` for a region a widget takes into a slot: out
+/// of the old parent (its region-removed hook runs, `0x77fd55`) and into `owner` on `layer`. The
+/// layer is set whether or not the parent changed (`0x77fd9a`). A thumb marker also loses its
+/// anchors (`0x767ed0`), the widget placing it itself.
+pub(super) fn link_region(
+    model: &mut Model,
+    rh: RegionHandle,
+    owner: crate::widget::FrameHandle,
+    layer: crate::order::DrawLayer,
+    clear_points: bool,
+) {
+    if model.arena.set_region_owner(rh, Some(owner)) {
+        // The owner supplies the region's scale to layout, so a re-link is a layout change.
+        model.touch_layout();
+    }
+    if let Some(r) = model.arena.region_mut(rh) {
+        r.draw_layer = layer;
+    }
+    if clear_points {
+        layout::clear_points(model, rh);
+    }
+}
+
+/// A widget's one-texture slot taking `incoming` (a Texture object, or nothing to clear), as every
+/// slot setter does (`0x778fd0`, `0x7831f0`, `0x789860`, `0x785330`, `0x78b580`..): the same
+/// texture is a no-op, the displaced one is deleted, the incoming one is linked in on `layer`,
+/// then it is stored. `get` and `set` read and write the slot in the widget's own state.
+pub(super) fn install_into_slot(
+    model: &mut Model,
+    owner: crate::widget::FrameHandle,
+    incoming: Option<RegionHandle>,
+    layer: crate::order::DrawLayer,
+    clear_points: bool,
+    get: impl Fn(&crate::widget::KindState) -> Option<RegionHandle>,
+    set: impl Fn(&mut crate::widget::KindState, Option<RegionHandle>),
+) -> mlua::Result<()> {
+    let current = model
+        .arena
+        .frame(owner)
+        .map(|f| get(&f.kind_state))
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+    if incoming == current {
+        return Ok(());
+    }
+    if let Some(old) = current {
+        free_region(model, old);
+    }
+    if let Some(rh) = incoming {
+        link_region(model, rh, owner, layer, clear_points);
+    }
+    if let Some(f) = model.arena.frame_mut(owner) {
+        set(&mut f.kind_state, incoming);
+    }
+    model.touch_layout();
+    Ok(())
+}
+
 /// Argument 1 of a global that takes a Texture as its `this` (`SetLootPortrait` `0x4c2b40`,
 /// `SetInventoryPortaitTexture` `0x4c9150`), with the member prologue's three raises: a non-table
 /// (`0x847ef8`), a table with no object at `[0]` (`0x847ec0`), and any object but a Texture, the

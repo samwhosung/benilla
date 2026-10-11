@@ -14,6 +14,18 @@ use super::{
 };
 
 /// Install the layout methods into `m`.
+/// `ClearAllPoints` on a region (`0x767ed0`): a retarget onto no targets, so the cached graph
+/// unlinks the edges with no re-derive.
+pub(in crate::script) fn clear_points(model: &mut Model, rh: crate::widget::RegionHandle) {
+    let d = model.region_data.entry(rh).or_default();
+    let old: Option<Vec<u32>> =
+        (!d.anchors.is_empty()).then(|| d.anchors.iter().map(|a| a.relative_to).collect());
+    d.anchors.clear();
+    if let Some(old) = old {
+        model.touch_layout_retarget_region(rh, &old, &[]);
+    }
+}
+
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // The explicit size fills the axes the anchors do not pin, so SetAllPoints's two corners
     // leave it unread.
@@ -110,14 +122,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         |lua, this: Table| {
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            let d = model.region_data.entry(rh).or_default();
-            // A retarget onto no targets: the cached graph unlinks the edges, no re-derive.
-            let old: Option<Vec<u32>> =
-                (!d.anchors.is_empty()).then(|| d.anchors.iter().map(|a| a.relative_to).collect());
-            d.anchors.clear();
-            if let Some(old) = old {
-                model.touch_layout_retarget_region(rh, &old, &[]);
-            }
+            clear_points(&mut model, rh);
             Ok(())
         },
     )?;

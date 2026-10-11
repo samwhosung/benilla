@@ -7,10 +7,10 @@
 use mlua::{Lua, Table, Value};
 
 use super::object::{draw_layer_from_str, frame_handle_of};
-use super::region::region_wrapper;
+use super::region::{install_into_slot, region_wrapper, texture_object_arg};
 use super::{event, Model, RegionData};
 use crate::order::DrawLayer;
-use crate::widget::{KindState, RegionKind, StatusBarState};
+use crate::widget::{KindState, RegionHandle, RegionKind, StatusBarState};
 
 /// Registry key of the StatusBar method table.
 pub(super) const REG_STATUSBAR_METHODS: &str = "__benilla_statusbar_methods";
@@ -90,6 +90,39 @@ fn ensure_bar(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result
     Ok(model.region_id(rh))
 }
 
+/// Install `incoming` as the bar texture, or clear it, through `0x7831f0`.
+fn install_bar(
+    lua: &Lua,
+    this: &Table,
+    incoming: Option<RegionHandle>,
+    layer: DrawLayer,
+) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if !matches!(
+        model.arena.frame(h).map(|f| &f.kind_state),
+        Some(KindState::StatusBar(_))
+    ) {
+        return Err(mlua::Error::runtime("not a StatusBar"));
+    }
+    install_into_slot(
+        &mut model,
+        h,
+        incoming,
+        layer,
+        false,
+        |ks| match ks {
+            KindState::StatusBar(sb) => sb.bar,
+            _ => None,
+        },
+        |ks, rh| {
+            if let KindState::StatusBar(sb) = ks {
+                sb.bar = rh;
+            }
+        },
+    )
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -143,46 +176,59 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // A region's two `SetTexture` forms, `(path [, layer])` and `(r, g, b [, a])`, on the bar.
+    // `(texture [, layer])` installs the object as the bar, linked on `layer` (ARTWORK without
+    // one, `0x78f902`) and displacing the old bar (`0x7831f0`); nil clears it (`0x78fa6d`). Its
+    // raises print `SetCheckedTexture`, the client's copy-pasted format strings (`0x87b1e8`,
+    // `0x87b224`). Otherwise a region's two `SetTexture` forms, `(path [, layer])` and
+    // `(r, g, b [, a])`, on the bar.
     m.set(
         "SetStatusBarTexture",
-        lua.create_function(
-            |lua, (this, a1, a2, a3, a4): (Table, Value, Value, Value, Value)| {
-                let layer = match &a2 {
-                    Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
-                    _ => None,
-                };
-                let id = ensure_bar(lua, &this, layer)?;
-                let rh = {
-                    let model = lua.app_data_ref::<Model>().expect("model app_data");
-                    *model.id_to_region.get(&id).expect("bar region id")
-                };
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let data = model.region_data.entry(rh).or_default();
-                match &a1 {
-                    Value::String(s) => {
-                        data.texture = Some(s.to_str()?.to_string());
-                        data.fill = None;
-                    }
-                    // A solid fill and a path clear each other; `SetStatusBarColor` is a separate
-                    // tint that multiplies either.
-                    Value::Number(_) | Value::Integer(_) => {
-                        data.texture = None;
-                        data.fill = Some([
-                            num_f32(&a1),
-                            num_f32(&a2),
-                            num_f32(&a3),
-                            match &a4 {
-                                Value::Nil => 1.0,
-                                v => num_f32(v),
-                            },
-                        ]);
-                    }
-                    _ => {}
+        lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
+            let nil = Value::Nil;
+            let arg = |i: usize| args.get(i).unwrap_or(&nil);
+            let (a1, a2, a3, a4) = (arg(0), arg(1), arg(2), arg(3));
+            let layer = match a2 {
+                Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
+                _ => None,
+            };
+            match args.front() {
+                Some(Value::Table(t)) => {
+                    let rh = texture_object_arg(lua, &this, t, "SetCheckedTexture")?;
+                    return install_bar(lua, &this, Some(rh), layer.unwrap_or(DrawLayer::Artwork));
                 }
-                Ok(())
-            },
-        )?,
+                Some(Value::Nil) => return install_bar(lua, &this, None, DrawLayer::Artwork),
+                _ => {}
+            }
+            let id = ensure_bar(lua, &this, layer)?;
+            let rh = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                *model.id_to_region.get(&id).expect("bar region id")
+            };
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let data = model.region_data.entry(rh).or_default();
+            match a1 {
+                Value::String(s) => {
+                    data.texture = Some(s.to_str()?.to_string());
+                    data.fill = None;
+                }
+                // A solid fill and a path clear each other; `SetStatusBarColor` is a separate
+                // tint that multiplies either.
+                Value::Number(_) | Value::Integer(_) => {
+                    data.texture = None;
+                    data.fill = Some([
+                        num_f32(a1),
+                        num_f32(a2),
+                        num_f32(a3),
+                        match a4 {
+                            Value::Nil => 1.0,
+                            v => num_f32(v),
+                        },
+                    ]);
+                }
+                _ => {}
+            }
+            Ok(())
+        })?,
     )?;
     m.set(
         "GetStatusBarTexture",
