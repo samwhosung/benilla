@@ -1502,8 +1502,22 @@ impl Model {
         self.next_id += 1;
         self.frame_to_id.insert(h, id);
         self.id_to_frame.insert(id, h);
-        // Every creation path mints here, so a new frame always joins the graph.
+        // Every creation path mints here, so a new frame always joins the graph. A region already
+        // a node on it gains its owner edge and the owner's id in its hash, so it re-derives too.
         self.name_layout_node(id);
+        let owned: Vec<u32> = self
+            .arena
+            .frame(h)
+            .map(|f| {
+                f.regions
+                    .iter()
+                    .filter_map(|rh| self.region_to_id.get(rh).copied())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for rid in owned {
+            self.name_layout_node(rid);
+        }
         id
     }
 
