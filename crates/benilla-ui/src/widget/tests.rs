@@ -424,7 +424,7 @@ fn a_region_leaving_its_parent_empties_the_kind_slot_that_held_it() {
     match &mut a.frame_mut(check).unwrap().kind_state {
         KindState::Button(s) => {
             s.checked_tex = Some(c);
-            s.set_state_slot(ButtonVisualState::Normal, Some(n));
+            let _ = s.set_state_slot(ButtonVisualState::Normal, Some(n));
         }
         _ => unreachable!(),
     }

@@ -179,7 +179,7 @@ impl UiScript {
                             });
                         }
                     }
-                    // A Button's non-current state textures emit no quad, and its ButtonText takes
+                    // A Button's state textures draw by their shown bit like any region, and its ButtonText takes
                     // the current state's font instance (disabled > highlighted > normal).
                     let mut state_font: Option<&FontObject> = None;
                     let mut state_color: Option<[f32; 4]> = None;
@@ -191,7 +191,7 @@ impl UiScript {
                         let hovered = owner.is_some() && model.mouseover == owner;
                         // The press is not read here: the state texture latches on the transition
                         // (`ButtonState::set_state`). Only the Highlight, unlatched, reads hover.
-                        if !bs.region_visible(rh, hovered) {
+                        if !bs.highlight_draws(rh, hovered) {
                             continue;
                         }
                         if bs.text == Some(rh) {

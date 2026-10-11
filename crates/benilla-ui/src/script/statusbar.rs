@@ -110,6 +110,7 @@ fn install_bar(
         h,
         incoming,
         layer,
+        true,
         false,
         |ks| match ks {
             KindState::StatusBar(sb) => sb.bar,

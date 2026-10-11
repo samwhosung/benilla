@@ -63,18 +63,19 @@ pub(super) fn texture_object_arg(
 /// out of the old parent (its region-removed hook runs, `0x77fd55`) and into `owner` on `layer`,
 /// the layer set whether or not the parent changed (`0x77fd9a`).
 ///
-/// The third argument is the region's own shown bit (`+0xc4`, what `IsShown` reads): leaving the
-/// old parent clears it (`0x77fd3d`) and `shown` writes it back (`0x77fd85`, `0x77fdc8`). Every
-/// widget that takes a texture calls with 1 (the bar, thumb, highlight, ColorSelect slots, the
-/// label) except a Button's state and checked slots, whose 0 is followed by the state switch
-/// writing the bit for the texture that shows (`0x779037`, `0x7797ea`, `0x785538`). benilla keeps
-/// that state side in [`crate::widget::ButtonState::region_visible`], so those too end with the
-/// script-side bit shown, and `IsShown` reads the state side beside it.
+/// The third argument is the region's own shown bit (`+0xc4`, what `Show`/`Hide` write and
+/// `IsShown` reads): leaving the old parent clears it (`0x77fd3d`) and `shown` writes it back
+/// (`0x77fd85`, `0x77fdc8`, and `0x77fdd9` clears it when the parent and layer stand). Every widget
+/// that takes a texture calls with 1 (the bar, thumb, highlight, ColorSelect slots, the label)
+/// except a Button's state and checked slots, whose 0 is followed by the state switch writing the
+/// bit for the texture that shows (`0x779037`, `0x7797ea`, `0x785538`): the caller applies those
+/// writes after the link.
 pub(super) fn link_region(
     model: &mut Model,
     rh: RegionHandle,
     owner: crate::widget::FrameHandle,
     layer: crate::order::DrawLayer,
+    shown: bool,
 ) {
     if model.arena.set_region_owner(rh, Some(owner)) {
         // The owner supplies the region's scale to layout, so a re-link is a layout change.
@@ -83,20 +84,32 @@ pub(super) fn link_region(
     if let Some(r) = model.arena.region_mut(rh) {
         r.draw_layer = layer;
     }
-    model.region_data.entry(rh).or_default().hidden = false;
+    model.region_data.entry(rh).or_default().hidden = !shown;
+}
+
+/// Apply a Button state machine's writes to the regions' shown bit, the one `Show`/`Hide` write.
+/// A region the machine names that has since been freed is skipped.
+pub(super) fn apply_shown_writes(model: &mut Model, writes: crate::widget::ShownWrites) {
+    for (rh, shown) in writes.0 {
+        if model.arena.region(rh).is_some() {
+            model.region_data.entry(rh).or_default().hidden = !shown;
+        }
+    }
 }
 
 /// A widget's one-texture slot taking `incoming` (a Texture object, or nothing to clear), as every
 /// slot setter does (`0x778fd0`, `0x7831f0`, `0x789860`, `0x785330`, `0x78b580`..): the same
 /// texture is a no-op, the displaced one is deleted, the incoming one is linked in on `layer`
 /// (a thumb marker then loses its anchors, `0x767ed0`, since the widget places it), then it is
-/// stored. `get` and `set` read and write the slot in the widget's own state. Answers whether the
-/// slot changed, for a caller whose hook does more once it has.
+/// stored. `shown` is the link's third argument (see [`link_region`]). `get` and `set` read and
+/// write the slot in the widget's own state. Answers whether the slot changed, for a caller whose
+/// hook does more once it has.
 pub(super) fn install_into_slot(
     model: &mut Model,
     owner: crate::widget::FrameHandle,
     incoming: Option<RegionHandle>,
     layer: crate::order::DrawLayer,
+    shown: bool,
     clear_points: bool,
     get: impl Fn(&crate::widget::KindState) -> Option<RegionHandle>,
     set: impl Fn(&mut crate::widget::KindState, Option<RegionHandle>),
@@ -113,7 +126,7 @@ pub(super) fn install_into_slot(
         free_region(model, old);
     }
     if let Some(rh) = incoming {
-        link_region(model, rh, owner, layer);
+        link_region(model, rh, owner, layer, shown);
         if clear_points {
             layout::clear_points(model, rh);
         }
@@ -129,21 +142,10 @@ pub(super) fn install_into_slot(
     Ok(true)
 }
 
-/// The region's shown bit as `IsShown` reads it (`0x79b9b0`, `[+0xc4]`): its own `Show`/`Hide`,
-/// and for a Button's state and checked textures also the state side that writes the bit for the
-/// one that shows.
+/// The region's shown bit (`+0xc4`) as `IsShown` reads it (`0x79b9b0`): the one bit `Show`/`Hide`
+/// write, and a Button's state switch writes for its state and checked textures.
 fn region_shown(model: &Model, rh: RegionHandle) -> bool {
-    if model.region_data.get(&rh).is_some_and(|d| d.hidden) {
-        return false;
-    }
-    let owner = model.arena.region(rh).map(|r| r.owner);
-    match owner
-        .and_then(|o| model.arena.frame(o))
-        .map(|f| &f.kind_state)
-    {
-        Some(crate::widget::KindState::Button(bs)) => bs.state_region_shown(rh).unwrap_or(true),
-        _ => true,
-    }
+    !model.region_data.get(&rh).is_some_and(|d| d.hidden)
 }
 
 /// Argument 1 of a global that takes a Texture as its `this` (`SetLootPortrait` `0x4c2b40`,

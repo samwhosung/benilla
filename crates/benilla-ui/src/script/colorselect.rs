@@ -151,6 +151,7 @@ fn install_slot(
         h,
         incoming,
         slot.layer(),
+        true,
         thumb,
         |ks| match ks {
             KindState::ColorSelect(s) => slot.get(s),

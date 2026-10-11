@@ -101,6 +101,7 @@ fn install_thumb(lua: &Lua, this: &Table, incoming: Option<RegionHandle>) -> mlu
         incoming,
         DrawLayer::Overlay,
         true,
+        true,
         |ks| match ks {
             KindState::Slider(sl) => sl.thumb,
             _ => None,

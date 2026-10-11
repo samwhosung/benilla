@@ -745,6 +745,23 @@ pub enum ButtonVisualState {
     Pushed,
 }
 
+/// The writes to regions' shown bit (`+0xc4`) a Button's state machine makes, in order. The bit
+/// is the region's own, the one `Show`/`Hide` write and `IsShown` and the draw read, so the
+/// machine hands its writes back for the caller to apply to the regions.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[must_use = "the caller writes these bits into the regions"]
+pub struct ShownWrites(pub Vec<(RegionHandle, bool)>);
+
+impl ShownWrites {
+    fn hide(&mut self, rh: Option<RegionHandle>) {
+        self.0.extend(rh.map(|rh| (rh, false)));
+    }
+
+    fn show(&mut self, rh: Option<RegionHandle>) {
+        self.0.extend(rh.map(|rh| (rh, true)));
+    }
+}
+
 /// A button's state. The drawn state texture is latched, not derived: the shown pointer
 /// (`+0x4c4`) moves only on a transition into a state that has a texture ([`Self::set_state`]).
 #[derive(Clone, Debug, PartialEq)]
@@ -848,22 +865,50 @@ impl ButtonState {
 
     /// `SetState` (`0x779790`): entering a state with no texture keeps the shown one
     /// (`0x7797be`/`0x7797e2`). A button is NORMAL before `LoadXML` adds its art (ctor
-    /// `0x7786a0`), so a press or `Disable()` without its own texture keeps the normal art.
-    fn set_state(&mut self, new: ButtonVisualState) {
+    /// `0x7786a0`), so a press or `Disable()` without its own texture keeps the normal art. The
+    /// hide of the old (`0x7797c0`) runs only when the new state has a texture too, and the show of
+    /// the new (`0x7797ea`) writes its bit.
+    fn set_state(&mut self, new: ButtonVisualState) -> ShownWrites {
         if new == self.state {
-            return;
+            return ShownWrites::default();
         }
         self.state = new;
+        let mut w = ShownWrites::default();
         if let Some(slot) = self.state_slot(new) {
+            w.hide(self.shown);
             self.shown = Some(slot);
+            w.show(Some(slot));
         }
+        w
     }
 
     /// `SetButtonState(state, locked)` (`0x779790`), the one writer: the lock is stored before the
     /// equal-state early-out (`0x77979d`), so it is set or cleared even when the state holds.
-    pub fn set_button_state(&mut self, new: ButtonVisualState, locked: bool) {
+    pub fn set_button_state(&mut self, new: ButtonVisualState, locked: bool) -> ShownWrites {
         self.locked = locked;
-        self.set_state(new);
+        self.set_state(new)
+    }
+
+    /// `CSimpleCheckbox::Refresh` (`0x7854c0`): clears both checked textures' bits, then shows
+    /// the one the checked flag and the state pick (`0x785538`), the disabled pair's when DISABLED
+    /// and it exists, else the checked texture. `force` is its second argument: without it a flag
+    /// that holds does nothing (`0x7854d0`). Only `SetChecked`, a click, `SetEnabled` and the two
+    /// checked setters reach it; a state switch alone leaves the pair.
+    pub fn refresh_checked(&mut self, checked: bool, force: bool) -> ShownWrites {
+        if !force && checked == self.checked {
+            return ShownWrites::default();
+        }
+        self.checked = checked;
+        let mut w = ShownWrites::default();
+        w.hide(self.checked_tex);
+        w.hide(self.disabled_checked);
+        if checked {
+            w.show(match self.disabled_checked {
+                Some(dc) if !self.enabled() => Some(dc),
+                _ => self.checked_tex,
+            });
+        }
+        w
     }
 
     /// `IsEnabled` (`0x7800b0`): the state alone; the class has no enabled flag.
@@ -880,65 +925,89 @@ impl ButtonState {
     // Six of `0x779790`'s seven call sites, all passing `locked = 0`; the seventh is Lua's.
 
     /// `SetEnabled` (`0x779160`): a no-op if nothing changes (`0x779175`/`0x77919c`), so enabling a
-    /// pushed button neither un-pushes nor unlocks it; returns whether it ran.
-    pub fn set_enabled(&mut self, on: bool) -> bool {
-        if on == self.enabled() {
-            return false;
-        }
-        self.set_button_state(
-            if on {
-                ButtonVisualState::Normal
-            } else {
-                ButtonVisualState::Disabled
-            },
-            false,
-        );
-        true
+    /// pushed button neither un-pushes nor unlocks it. A CheckButton's override (`0x785490`) then
+    /// refreshes the checked pair whether or not it changed, which a Button, with no checked
+    /// textures, does not notice.
+    pub fn set_enabled(&mut self, on: bool) -> ShownWrites {
+        let mut w = if on == self.enabled() {
+            ShownWrites::default()
+        } else {
+            self.set_button_state(
+                if on {
+                    ButtonVisualState::Normal
+                } else {
+                    ButtonVisualState::Disabled
+                },
+                false,
+            )
+        };
+        w.0.extend(self.refresh_checked(self.checked, true).0);
+        w
     }
 
     /// The hide edge (`0x7791e0`): an unlocked, enabled button goes NORMAL; `<OnHide>` still fires.
-    pub fn on_hide(&mut self) {
+    pub fn on_hide(&mut self) -> ShownWrites {
         if self.state != ButtonVisualState::Disabled && !self.locked {
-            self.set_button_state(ButtonVisualState::Normal, false);
+            self.set_button_state(ButtonVisualState::Normal, false)
+        } else {
+            ShownWrites::default()
         }
     }
 
     /// The press edge (`0x779210`), past the registration and hit gates, so a registered click
     /// pushes the button even when the click itself does nothing.
-    pub fn on_mouse_down(&mut self) {
+    pub fn on_mouse_down(&mut self) -> ShownWrites {
         if !self.locked && self.state != ButtonVisualState::Disabled {
-            self.set_button_state(ButtonVisualState::Pushed, false);
+            self.set_button_state(ButtonVisualState::Pushed, false)
+        } else {
+            ShownWrites::default()
         }
     }
 
     /// The release edge (`0x7792d0`): a pushed, unlocked button goes NORMAL wherever the cursor
     /// is, even one Lua pushed. The caller skips it when the release ends a drag (`0x7792df`).
-    pub fn on_mouse_up(&mut self) {
+    pub fn on_mouse_up(&mut self) -> ShownWrites {
         if !self.locked && self.state == ButtonVisualState::Pushed {
-            self.set_button_state(ButtonVisualState::Normal, false);
+            self.set_button_state(ButtonVisualState::Normal, false)
+        } else {
+            ShownWrites::default()
         }
     }
 
     /// The drag-start edge (`0x7793f0`), before `<OnDragStart>`: it fires at the drag threshold
     /// (0.01 frame units, `0x81c468`) on a `RegisterForDrag` frame, not at the rect edge.
-    pub fn on_drag_start(&mut self) {
+    pub fn on_drag_start(&mut self) -> ShownWrites {
         if !self.locked && self.state != ButtonVisualState::Disabled {
-            self.set_button_state(ButtonVisualState::Normal, false);
+            self.set_button_state(ButtonVisualState::Normal, false)
+        } else {
+            ShownWrites::default()
         }
     }
 
-    /// `SetNormalTexture` and kin (`0x778fd0`): stores the slot, shown only if it is the current
-    /// state's (`0x779027`). The reference destroys a displaced texture (`0x77900a`); here the
-    /// region is made once and repainted, so a held `GetNormalTexture()` stays live.
-    pub fn set_state_slot(&mut self, state: ButtonVisualState, rh: Option<RegionHandle>) {
-        match state {
-            ButtonVisualState::Disabled => self.disabled = rh,
-            ButtonVisualState::Normal => self.normal = rh,
-            ButtonVisualState::Pushed => self.pushed = rh,
+    /// `SetNormalTexture` and kin (`0x778fd0`): stores the slot; the state it is for being the
+    /// current one, the texture becomes the shown one and its bit is written (`0x779027`..
+    /// `0x779037`). A shown pointer at the displaced texture is dropped first (`0x778fe9`). The
+    /// reference destroys a displaced texture (`0x77900a`); the caller frees it.
+    pub fn set_state_slot(
+        &mut self,
+        state: ButtonVisualState,
+        rh: Option<RegionHandle>,
+    ) -> ShownWrites {
+        let slot = match state {
+            ButtonVisualState::Disabled => &mut self.disabled,
+            ButtonVisualState::Normal => &mut self.normal,
+            ButtonVisualState::Pushed => &mut self.pushed,
+        };
+        let old = std::mem::replace(slot, rh);
+        if self.shown == old {
+            self.shown = None;
         }
-        if state == self.state {
+        let mut w = ShownWrites::default();
+        if state == self.state && rh.is_some() {
             self.shown = rh;
+            w.show(rh);
         }
+        w
     }
 
     /// The region-removed hook: a CheckButton drops its checked pair (`0x785230`, `+0x4e0` and
@@ -961,38 +1030,12 @@ impl ButtonState {
         }
     }
 
-    /// The shown bit (`+0xc4`) of a state or checked texture, which the state switch writes for
-    /// the one that shows (`0x7797ea`, `0x785538`) and clears on the rest: `None` for every other
-    /// region, whose bit is its own `Show`/`Hide` alone.
-    pub fn state_region_shown(&self, rh: RegionHandle) -> Option<bool> {
-        let some = Some(rh);
-        if some == self.normal || some == self.pushed || some == self.disabled {
-            return Some(some == self.shown);
-        }
-        if some == self.checked_tex || some == self.disabled_checked {
-            return Some(self.region_visible(rh, false));
-        }
-        None
-    }
-
-    /// Whether a region of this button draws: a state texture only when shown, the highlight
-    /// while hovered or locked, the checked pair by their rule, anything else always.
-    pub fn region_visible(&self, rh: RegionHandle, hovered: bool) -> bool {
-        let some = Some(rh);
-        if some == self.normal || some == self.pushed || some == self.disabled {
-            return some == self.shown;
-        }
-        if some == self.highlight {
-            // No `enabled` term: `Disable()` turns the whole HIGHLIGHT layer off before this.
-            return hovered || self.locked_highlight;
-        }
-        if some == self.checked_tex {
-            return self.checked && (self.enabled() || self.disabled_checked.is_none());
-        }
-        if some == self.disabled_checked {
-            return self.checked && !self.enabled();
-        }
-        true
+    /// Whether the Highlight region draws: while hovered or locked. The reference gates it by its
+    /// layer's enable (`0x76b6a0`/`0x76b6f0`), not by its shown bit, which it keeps from the
+    /// link (`0x779139`); every other region of a Button draws by its own bit alone.
+    pub fn highlight_draws(&self, rh: RegionHandle, hovered: bool) -> bool {
+        // No `enabled` term: `Disable()` turns the whole HIGHLIGHT layer off before this.
+        Some(rh) != self.highlight || hovered || self.locked_highlight
     }
 }
 

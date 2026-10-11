@@ -127,10 +127,17 @@ fn a_state_with_no_texture_leaves_the_shown_one_standing() {
     );
     s.run("StickyBtn:SetDisabledTexture(\"Interface\\\\D.blp\")")
         .unwrap();
+    // The slot store shows the new texture and moves the shown pointer onto it, but hides nothing
+    // (`0x77902f`..`0x779041`): the normal art keeps its bit until the next switch clears it.
+    let mut both = visible(&s, "StickyBtn");
+    both.sort();
     assert_eq!(
-        visible(&s, "StickyBtn"),
-        vec!["Interface\\D.blp".to_string()],
-        "and real disabled art displaces it on the spot"
+        both,
+        vec![
+            "Interface\\D.blp".to_string(),
+            "Interface\\N.blp".to_string()
+        ],
+        "real disabled art joins it on the spot; the store hides nothing"
     );
     s.run("StickyBtn:Enable()").unwrap();
     assert_eq!(visible(&s, "StickyBtn"), n, "back to normal on Enable");
