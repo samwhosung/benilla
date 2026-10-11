@@ -204,3 +204,88 @@ fn hiding_the_moving_frame_ends_the_move_and_the_walk_resumes() {
         "the move ended with the hide: the later cursor delta did not reach it"
     );
 }
+
+/// The pointer leaving the window ends the hover with the hovered frame's `OnLeave`, and the next
+/// real move walks again.
+#[test]
+fn the_pointer_leaving_the_window_leaves_the_hovered_frame() {
+    let mut s = three_frames();
+    s.pointer_left_hover();
+    s.pointer_left_window();
+    assert_eq!(take_log(&s), "leaveHere");
+    assert_eq!(focus(&s), "nil");
+    s.mouse_move(150.0, 150.0);
+    assert_eq!(take_log(&s), "enterHere");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A move in flight follows real cursor events only (`0x7655b0` adds each event's delta from the
+/// last sample, `[root+0xd08]`/`[root+0xd0c]`): the pointer leaving moves nothing and stamps no
+/// layout, and the first real move back applies its delta from the last real sample.
+#[test]
+fn a_frame_moving_when_the_pointer_leaves_keeps_its_offsets() {
+    let mut s = three_frames();
+    s.run("Far:StartMoving()").unwrap();
+    s.mouse_move(250.0, 150.0);
+    s.resolve();
+    let point = |s: &UiScript| {
+        s.eval::<(f64, f64)>("local _, _, _, x, y = Far:GetPoint() return x, y")
+            .unwrap()
+    };
+    assert_eq!(point(&s), (800.0, 500.0));
+    let saved = s.user_placed_layouts();
+
+    s.pointer_left_hover();
+    s.pointer_left_window();
+    s.resolve();
+    assert_eq!(point(&s), (800.0, 500.0), "the leave moves nothing");
+    assert_eq!(s.eval::<f64>("return Far:GetLeft()").unwrap(), 800.0);
+    assert_eq!(
+        s.user_placed_layouts(),
+        saved,
+        "the layout cache keeps the last real position"
+    );
+    assert_eq!(take_log(&s), "leaveHere", "the hover ends mid-move too");
+
+    // The move is `StartMoving`'s, which only `StopMovingOrSizing` ends: back in the window, the
+    // next real event moves it by its delta from the last real one.
+    s.mouse_move(260.0, 150.0);
+    s.resolve();
+    assert_eq!(point(&s), (810.0, 500.0));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The canonical drag idiom: the pointer leaving mid-drag ends the gesture with `OnDragStop`,
+/// whose `StopMovingOrSizing` keeps the frame where the last real move put it.
+#[test]
+fn a_drag_cut_short_by_the_pointer_leaving_keeps_the_last_real_position() {
+    let mut s = three_frames();
+    s.run(
+        r#"
+        stops = 0
+        Here:SetMovable(true)
+        Here:RegisterForDrag("LeftButton")
+        Here:SetScript("OnDragStart", function() this:StartMoving() end)
+        Here:SetScript("OnDragStop", function() stops = stops + 1 this:StopMovingOrSizing() end)
+    "#,
+    )
+    .unwrap();
+    s.mouse_button(150.0, 150.0, "LeftButton", true);
+    s.mouse_move(170.0, 150.0); // past the threshold: OnDragStart, StartMoving
+    s.mouse_move(200.0, 160.0);
+    s.resolve();
+    assert_eq!(s.eval::<f64>("return Here:GetLeft()").unwrap(), 130.0);
+    s.pointer_left_hover();
+    s.pointer_left_window();
+    s.resolve();
+    assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);
+    assert_eq!(s.eval::<f64>("return Here:GetLeft()").unwrap(), 130.0);
+    assert_eq!(s.eval::<f64>("return Here:GetBottom()").unwrap(), 110.0);
+    let saved = s.user_placed_layouts();
+    let here = saved
+        .iter()
+        .find(|l| l.name == "Here")
+        .expect("Here is saved");
+    assert_eq!((here.points[0].x, here.points[0].y), (130.0, 110.0));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

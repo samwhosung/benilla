@@ -1001,6 +1001,11 @@ impl UiScript {
 
     // ── Input: the pointer leaving the window ────────────────────────────────────────────────────
 
+    /// The OS pointer left the window: the hovered frame loses the hover.
+    pub fn pointer_left_hover(&mut self) {
+        self.mouse_move(f32::MIN, f32::MIN);
+    }
+
     /// The OS pointer left the window, so no release will be fed: clears [`Model::drag`], which
     /// would start a drag on re-entry, and [`Model::mouse_down_on`], which would click the frame
     /// it left. The app calls it where it fires the synthetic `OnLeave`.

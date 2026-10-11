@@ -194,7 +194,7 @@ pub(super) fn feed_ui_input(
         // The OS pointer left: leave the hovered frame once, and disarm any press or drag every
         // frame, since no release ends it and a stale gesture would fire on re-entry.
         if hover.0.take().is_some() {
-            script.mouse_move(f32::MIN, f32::MIN);
+            script.pointer_left_hover();
         }
         script.pointer_left_window();
     }
