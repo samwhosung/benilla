@@ -590,10 +590,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "EnableMouse",
         lua.create_function(|lua, (this, enable): (Table, bool)| {
             let h = frame_handle_of(lua, &this)?;
-            lua.app_data_mut::<Model>()
-                .expect("model")
-                .arena
-                .set_mouse_enabled(h, enable);
+            visibility::set_mouse_enabled(lua, h, enable);
             Ok(())
         })?,
     )?;

@@ -104,6 +104,7 @@ fn a_hovered_frame_mouse_disabled_gets_its_leave_at_once() {
     "#,
     )
     .unwrap();
+    s.resolve();
     s.mouse_move(200.0, 300.0);
     s.run("A:EnableMouse(false) table.insert(log, 'focus:'..tostring(GetMouseFocus()))")
         .unwrap();

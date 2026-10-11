@@ -93,8 +93,7 @@ pub(super) fn base_hide(lua: &Lua, h: FrameHandle) {
         if !model.arena.hide_step(h) {
             return;
         }
-        drop_capture(&mut model, h);
-        leave_if_hovered(&mut model, h)
+        leave_mouse_index(&mut model, h)
     };
     if let Some(id) = left {
         let fired = event::fire_widget_handler(lua, id, "OnLeave", vec![Value::Boolean(true)]);
@@ -132,6 +131,37 @@ fn takes_mouse(model: &Model, h: FrameHandle) -> bool {
             .is_some_and(|spans| !spans.is_empty())
 }
 
+/// The Lua `EnableMouse` (`0x777070`). Enabling inserts with flag -1 and arms nothing
+/// (`0x77710d` → `0x76af00(2, -1)`, gate `0x764b82`). Disabling (`0x77711a` → `0x76af50(2)`) runs
+/// the removal tail for a frame that was in the mouse index, which is a visible one with the bit
+/// set (`0x76af67`, `0x76af6b`); the bit clears after it (`0x76af8e`), so the leave's `OnLeave`
+/// still sees the frame mouse-enabled.
+pub(super) fn set_mouse_enabled(lua: &Lua, h: FrameHandle, enabled: bool) {
+    let left = {
+        let mut model = model_mut(lua);
+        let in_index = model.arena.is_mouse_enabled(h)
+            && model.arena.frame(h).is_some_and(|f| f.effective_visible);
+        if enabled || !in_index {
+            model.arena.set_mouse_enabled(h, enabled);
+            return;
+        }
+        leave_mouse_index(&mut model, h)
+    };
+    if let Some(id) = left {
+        let fired = event::fire_widget_handler(lua, id, "OnLeave", vec![Value::Boolean(true)]);
+        record(lua, fired);
+    }
+    model_mut(lua).arena.set_mouse_enabled(h, false);
+}
+
+/// The mouse kind's removal tail (`0x764ba0`, kind 2, flag 0), shared by the hide and a mouse
+/// disable: the capture and the press it took drop, then the hover ends. The id whose `OnLeave`
+/// the caller fires.
+fn leave_mouse_index(model: &mut Model, h: FrameHandle) -> Option<u32> {
+    drop_capture(model, h);
+    leave_if_hovered(model, h)
+}
+
 /// The removal tail's capture clear (`0x764ca5`–`0x764cad`): a frame leaving the mouse index
 /// that holds the capture slot (`root+0x80`) empties it. `0x766420` delivers a release to the
 /// capture alone, so the press this frame took reaches no one: no `OnMouseUp`, no click, and no
@@ -145,6 +175,11 @@ fn drop_capture(model: &mut Model, h: FrameHandle) {
         if *pressed == Some(h) {
             *pressed = None;
         }
+    }
+    // Its drag arm (`+0x100`) is polled only through the capture and the index
+    // (`0x7661ca`, `0x7661cd`), and the frame is out of both: nothing starts or stops it.
+    if model.drag.as_ref().is_some_and(|d| d.source == h) {
+        model.drag = None;
     }
 }
 
