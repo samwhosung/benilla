@@ -985,15 +985,11 @@ impl Model {
         }
     }
 
-    /// Records a caught script error for the host, the retained log and the Lua error handler; an
-    /// error raised by the handler itself goes to `errors` directly, which stops the recursion.
-    pub(crate) fn record_script_error(&mut self, msg: String) {
-        self.record_script_error_as(msg.clone(), msg);
-    }
-
-    /// [`Self::record_script_error`] for a raise: `log` is the decorated text the host and the
-    /// retained log keep, `handler` the one value the error handler is called with.
-    pub(crate) fn record_script_error_as(&mut self, log: String, handler: String) {
+    /// Records a caught script error for the host, the retained log and the Lua error handler: `log`
+    /// is the decorated text the host and the retained log keep, `handler` the one value the error
+    /// handler is called with. An error raised by the handler itself goes to `errors` directly,
+    /// which stops the recursion.
+    pub(crate) fn record_script_error(&mut self, log: String, handler: String) {
         self.diagnostics
             .record(super::diagnostics::DiagnosticKind::Error, &log);
         self.pending_error_dispatch.push(handler);
@@ -1003,7 +999,7 @@ impl Model {
     /// [`Self::record_script_error`] for an error mlua caught: the log keeps mlua's `Display` (its
     /// word and traceback), the handler gets the bare Lua message `lua_pcall` leaves (`0x703b40`).
     pub(crate) fn record_lua_error(&mut self, e: &mlua::Error) {
-        self.record_script_error_as(e.to_string(), super::stdlib::lua_message(e));
+        self.record_script_error(e.to_string(), super::stdlib::lua_message(e));
     }
 
     /// Records a non-fatal warning for the host's terminal and the retained diagnostic log.

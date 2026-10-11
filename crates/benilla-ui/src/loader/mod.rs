@@ -34,6 +34,19 @@ impl LoadReport {
         self.handler_errors.push(crate::script::lua_message(e));
         self.errors.push(text);
     }
+
+    /// Each of [`Self::errors`] with what the Lua error handler is called with for it.
+    pub fn raised(&self) -> impl Iterator<Item = (&str, &str)> {
+        debug_assert_eq!(
+            self.errors.len(),
+            self.handler_errors.len(),
+            "every error row is written through `fault` or `raise`"
+        );
+        self.errors
+            .iter()
+            .map(String::as_str)
+            .zip(self.handler_errors.iter().map(String::as_str))
+    }
 }
 
 /// The outcome of a [`load`]; nothing aborts a load, as the reference logs and continues.
@@ -45,10 +58,11 @@ pub struct LoadReport {
     /// Failures the reference raises on: a handler that fails to compile, a method call that
     /// errors, a malformed included document.
     pub errors: Vec<String>,
-    /// What the Lua error handler is called with for each of [`Self::errors`], row for row: the
-    /// bare Lua message of a raise, as `lua_pcall` leaves it for the reference's error function
-    /// (`0x703b40`), and the row's own text for a fault that is no script raise.
-    pub handler_errors: Vec<String>,
+    /// What the Lua error handler is called with for each of [`Self::errors`], row for row
+    /// ([`Self::raised`]): the bare Lua message of a raise, as `lua_pcall` leaves it for the
+    /// reference's error function (`0x703b40`), and the row's own text for a fault that is no
+    /// script raise.
+    handler_errors: Vec<String>,
     /// `<Include file=>` and `<Script file=>` paths the provider lacks. The reference logs
     /// `"Couldn't open %s"` (`0x6edaa0`, `0x846ff4`) or `"Error loading %s"` (`0x872e50`) and goes
     /// on (`0x6ee00d`); kept apart from `warnings` so a load that resolved nothing is not clean.
@@ -119,15 +133,17 @@ pub fn load_into_under(
     loader.report
 }
 
-/// Apply a template to an existing frame, `CreateFrame`'s fourth argument. Returns the warnings,
-/// then the errors. The frame always survives: an unknown name leaves it bare, as in the
-/// reference, and only virtual elements are registered. The frame's own name is the `$parent`
+/// Apply a template to an existing frame, `CreateFrame`'s fourth argument. Returns the report:
+/// its errors are script errors for the error handler, as the reference's `CreateFrame` builds the
+/// template through the XML instantiator `0x6ee280`, whose OnLoad runs under the error function
+/// (`0x704d50`). The frame always survives an error, and only virtual elements are registered; an
+/// unknown name never gets here, since the binding raises first. The frame's own name is the `$parent`
 /// base (`MyButton` makes `$parentText` `MyButtonText`). Runs inside the `CreateFrame` binding, so
 /// it enters at [`Loader::decorate`]: [`Loader::materialize`] would recurse.
-pub fn apply_template(lua: &mlua::Lua, wrapper: &Table, kind: &str, template: &str) -> Vec<String> {
+pub fn apply_template(lua: &mlua::Lua, wrapper: &Table, kind: &str, template: &str) -> LoadReport {
     let template = template.trim();
     if template.is_empty() {
-        return Vec::new();
+        return LoadReport::default();
     }
     // A template never reads a file: `<Include>` and `<Script file=>` are top-level only.
     let no_files = |_: &str| -> Option<Vec<u8>> { None };
@@ -197,9 +213,7 @@ pub fn apply_template(lua: &mlua::Lua, wrapper: &Table, kind: &str, template: &s
 
     loader.decorate(&expanded, wrapper, &self_name, &parent_name, &dbg);
 
-    let mut out = loader.report.warnings;
-    out.extend(loader.report.errors);
-    out
+    loader.report
 }
 
 /// Join a FrameXML reference to its file's directory, lexically: `\` and `/` both separate, `..`

@@ -15,7 +15,7 @@ use mlua::{Lua, Value, Variadic};
 /// and what `loadstring` returns. It drops the `syntax error: ` and `runtime error: ` words mlua's
 /// `Display` adds, the `stack traceback:` block mlua's message handler appends to a raise, and the
 /// wrappers a Rust callback's failure arrives in.
-pub(crate) fn lua_message(e: &mlua::Error) -> String {
+pub fn lua_message(e: &mlua::Error) -> String {
     match e {
         mlua::Error::SyntaxError { message, .. } => message.clone(),
         mlua::Error::RuntimeError(m) => m

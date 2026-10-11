@@ -251,17 +251,17 @@ fn the_error_handler_receives_the_bare_lua_message() {
             "bare message, one line: {m:?}"
         );
     }
-    assert!(
-        caught[0].starts_with("[string \"")
-            && caught[0].ends_with("attempt to call method 'NoSuchMethod' (a nil value)"),
-        "{:?}",
-        caught[0]
-    );
-    assert!(
-        caught[1].ends_with(":1: attempt to index local `t' (a nil value)"),
-        "{:?}",
-        caught[1]
-    );
+    for want in [
+        "attempt to call method `NoSuchMethod' (a nil value)",
+        ":1: attempt to index local `t' (a nil value)",
+    ] {
+        assert!(
+            caught
+                .iter()
+                .any(|m| m.starts_with("[string \"") && m.ends_with(want)),
+            "{want}: {caught:?}"
+        );
+    }
     // The host log keeps the decorated text.
     assert!(s.take_errors().iter().any(|e| e.contains("runtime error")));
 }

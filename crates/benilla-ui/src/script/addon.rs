@@ -638,14 +638,14 @@ fn run_files(lua: &Lua, name: &str, read: &Reader, files: &[String], toc: &mut S
                 continue;
             }
         };
-        let report = crate::loader::load_into_under(lua, &doc, &path, &provider, ADDONS_ROOT);
+        let mut report = crate::loader::load_into_under(lua, &doc, &path, &provider, ADDONS_ROOT);
         let banner = crate::status::file_banner(&install);
-        report.status.close_into(toc, framexml_debug(lua), banner);
+        std::mem::take(&mut report.status).close_into(toc, framexml_debug(lua), banner);
         // Warnings take the `<Addon>/<file>` prefix; a bare loader warning names no document.
-        for w in report.warnings {
+        for w in &report.warnings {
             crate::script::diagnostics::record_warning(lua, &format!("{name}/{file}: {w}"));
         }
-        for (e, heard) in report.errors.iter().zip(&report.handler_errors) {
+        for (e, heard) in report.raised() {
             log_error(lua, &format!("{name}/{file}: {e}"), heard);
         }
     }

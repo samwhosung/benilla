@@ -16,7 +16,7 @@ impl super::UiScript {
         // `strsub(text, strlen(cmdString) + 2)`.
         if let Err(e) = handler.call::<()>(args.to_string()) {
             self.model_mut()
-                .record_script_error_as(format!("/{cmd}: {e}"), super::stdlib::lua_message(&e));
+                .record_script_error(format!("/{cmd}: {e}"), super::stdlib::lua_message(&e));
         }
         true
     }

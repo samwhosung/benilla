@@ -600,12 +600,13 @@ pub(super) fn create_frame(
     // this call, so the handler can reach the frame by name.
     let wrapper = frame_wrapper(lua, id)?;
     if let Some(template) = template {
-        let messages = crate::loader::apply_template(lua, &wrapper, &kind, &template);
-        if !messages.is_empty() {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            for m in messages {
-                model.record_warning(m);
-            }
+        let report = crate::loader::apply_template(lua, &wrapper, &kind, &template);
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        for (log, heard) in report.raised() {
+            model.record_script_error(log.to_string(), heard.to_string());
+        }
+        for w in report.warnings {
+            model.record_warning(w);
         }
     }
     Ok(wrapper)

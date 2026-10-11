@@ -210,7 +210,7 @@ impl Addon {
                 script.report_load_failure(&e);
                 failures.push(e);
             }
-            for (e, heard) in report.errors.iter().zip(&report.handler_errors) {
+            for (e, heard) in report.raised() {
                 error!("ui_script({}/{file}): {e}", self.name);
                 // A script error, as in the Lua arm; `_ERRORMESSAGE`'s IsVisible guard shows only
                 // a burst's first, as in the reference.

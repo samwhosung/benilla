@@ -464,3 +464,41 @@ fn a_runtime_template_fires_its_onshow_after_its_onload_when_visible() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A template's OnLoad runs under the error function as a file's does (`CreateFrame` builds through
+/// `0x6ee280`, OnLoad through `0x704d50`): a raise reaches the chosen error handler as the bare
+/// message, and `CreateFrame` still returns the frame.
+#[test]
+fn a_raising_template_onload_reaches_the_error_handler() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    register(
+        &s,
+        r#"<Ui>
+             <Frame name="RaisingTemplate" virtual="true">
+               <Scripts><OnLoad>this:NoSuchMethod()</OnLoad></Scripts>
+             </Frame>
+           </Ui>"#,
+    );
+    s.run(
+        "caught = {} seterrorhandler(function(m) table.insert(caught, m) end) \
+         made = CreateFrame('Frame', 'Raised', UIParent, 'RaisingTemplate')",
+    )
+    .unwrap();
+    s.dispatch_script_errors_to_handler();
+    let caught: Vec<String> = s.eval("return caught").unwrap();
+    assert_eq!(caught.len(), 1, "{caught:?}");
+    assert!(
+        caught[0].ends_with("attempt to call method `NoSuchMethod' (a nil value)")
+            && !caught[0].contains('\n'),
+        "{:?}",
+        caught[0]
+    );
+    let made: bool = s
+        .eval("return made ~= nil and made:GetName() == 'Raised'")
+        .unwrap();
+    assert!(
+        made,
+        "CreateFrame returns the frame after its OnLoad raised"
+    );
+}
