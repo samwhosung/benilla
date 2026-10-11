@@ -46,11 +46,19 @@ kira = { path = "third_party/kira" }
 # Dependencies at opt-level 3 in dev: at opt-level 0, avian/parry collision drops a run to <1 fps.
 [profile.dev.package."*"]
 opt-level = 3
+# One codegen unit each, since `lto = "off"` below drops the ThinLTO that inlines across a crate's
+# units: at 16 units the dependencies cost +1.2 cpu_ms at the leg pin, at one nothing, and a cold
+# build is no slower.
+codegen-units = 1
 
 # Our crates at opt-level 1: Bevy's generic hot paths monomorphize into them, and at opt-level 0
-# Stormwind drops from a pinned 60 fps to ~45; the warm incremental rebuild cost is ~0.
+# Stormwind drops from a pinned 60 fps to ~45.
 [profile.dev]
 opt-level = 1
+# No ThinLTO: above opt-level 0 rustc runs it over a crate's own codegen units by default, and an
+# incremental rebuild of `benilla-app` redoes it whole: a one-line edit took 25 s and 5.3 GB, now
+# 6 s and 2.7 GB. It costs our crates +0.7 cpu_ms (+6 %) at the leg pin.
+lto = "off"
 
 # No debuginfo trimming: `debug = "line-tables-only"` measures no recurring win on macOS + sccache.
 
