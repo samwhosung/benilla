@@ -214,3 +214,42 @@ fn a_frame_shown_into_a_later_stratum_at_a_lower_level_runs_that_tick() {
     assert_eq!(take_log(&s), "medium high");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A raise inside the walk compacts the stratum (`0x764eb0`), relinking each moved frame at its new
+/// level (`0x764fb6` → `0x76a4f0`): a frame ahead that lands in a level already walked misses the
+/// tick, and is walked at its new level from the next.
+#[test]
+fn a_mid_walk_raise_moves_a_frame_ahead_into_a_walked_level_so_it_waits_a_tick() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(LOGGED).unwrap();
+    s.run(
+        r#"
+        Raiser = Logged("Raiser", "r")
+        Raiser:SetFrameLevel(3)
+        Raiser:SetScript("OnUpdate", function()
+            table.insert(LOG, "r")
+            Top:Show()
+        end)
+        Ahead = Logged("Ahead", "w")
+        Ahead:SetFrameLevel(9)
+        Ahead:SetPoint("BOTTOMLEFT", 100, 100)
+        Ahead:SetWidth(100); Ahead:SetHeight(100)
+        Top = CreateFrame("Frame", "Top")   -- level 0, under Ahead
+        Top:SetAllPoints(Ahead)
+        Top:SetToplevel(true)
+        Top:Hide()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "r", "Ahead left level 9 for one the walk had passed");
+    assert!(
+        s.eval::<i64>("return Ahead:GetFrameLevel()").unwrap() <= 3,
+        "at or below the level being walked when it moved"
+    );
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "r w");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

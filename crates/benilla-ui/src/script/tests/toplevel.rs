@@ -705,6 +705,60 @@ fn a_raise_with_a_hidden_child_keeps_the_windows_own_siblings_level() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// The raise's compaction relinks each moved visible frame through `0x76a4f0` (`0x764fb6`), in
+/// creation order (`0x764f80`), so two frames sharing a shifted level swap when the first-created
+/// was linked last: the later link draws on top, and the hit sweep probes the earlier link first.
+#[test]
+fn a_compaction_relinks_a_shared_level_in_creation_order() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        function Square(name, x, y, size)
+            local f = CreateFrame("Frame", name)
+            f:SetPoint("BOTTOMLEFT", x, y)
+            f:SetWidth(size); f:SetHeight(size)
+            f:EnableMouse(true)
+            f:CreateTexture(nil, "ARTWORK"):SetTexture(name .. ".blp")
+            return f
+        end
+        Square("First", 100, 100, 200):SetFrameLevel(3)
+        Square("Second", 150, 150, 200):SetFrameLevel(3)
+        First:Hide(); First:Show()          -- the first-created is linked last
+        Top = Square("Top", 320, 320, 100)  -- overlaps Second alone, under it at level 0
+        Top:SetToplevel(true)
+        Top:Hide()
+        "#,
+    )
+    .unwrap();
+    // Inside First and Second, outside Top.
+    let (x, y) = (200.0, 200.0);
+    assert_eq!(
+        painted(&mut s),
+        vec!["Second.blp", "First.blp"],
+        "before: the later link, First, draws on top"
+    );
+    assert_eq!(s.hit_test_name(x, y).as_deref(), Some("Second"));
+
+    s.run("Top:Show()").unwrap();
+    assert_eq!(
+        (level(&mut s, "First"), level(&mut s, "Second")),
+        (1, 1),
+        "the compaction shifted their level"
+    );
+    assert_eq!(
+        painted(&mut s),
+        vec!["First.blp", "Second.blp", "Top.blp"],
+        "after: relinked in creation order, Second draws on top"
+    );
+    assert_eq!(
+        s.hit_test_name(x, y).as_deref(),
+        Some("First"),
+        "and First, the earlier link now, takes the click"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// `SetFrameLevel` (`0x774560`) calls `0x76a4f0` with `propagate=0`, so the children stay put;
 /// stock `BonusActionBarFrame.xml:13-15` raises a button and then its cooldown by hand.
 #[test]

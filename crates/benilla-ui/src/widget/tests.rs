@@ -121,6 +121,49 @@ fn level_shift_saturates_at_zero() {
     assert_eq!(a.frame(child).unwrap().level, 0);
 }
 
+/// The compaction moves each frame of a shifted level through `0x76a4f0` without propagation
+/// (`0x764faf`/`0x764fb6`), walking the list of every frame in creation order (`0x764f80`), so a
+/// shifted visible frame relinks in that order, while a hidden one and an unshifted one keep
+/// their link. Creation order is not arena order once a destroyed frame's slot is reused.
+#[test]
+fn compaction_relinks_the_shifted_visible_frames_in_creation_order() {
+    let mut a = arena();
+    let low = a.create(FrameKind::Frame, None, None);
+    let doomed = a.create(FrameKind::Frame, None, None);
+    let first = a.create(FrameKind::Frame, None, None);
+    a.destroy(doomed);
+    let second = a.create(FrameKind::Frame, None, None); // reuses `doomed`'s slot, before `first`
+    let hidden = a.create(FrameKind::Frame, None, None);
+    let child = a.create(FrameKind::Frame, None, Some(first));
+    a.set_shown(hidden, false);
+    for h in [first, second, hidden] {
+        a.set_frame_level(h, 3, false);
+    }
+    a.set_frame_level(child, 6, false);
+    // `first` linked last, so it is the newer link of the two.
+    a.set_shown(first, false);
+    a.set_shown(first, true);
+    let seq = |a: &WidgetArena, h| a.frame(h).unwrap().insertion_seq;
+    assert!(seq(&a, second) < seq(&a, first));
+    let (low_seq, hidden_seq) = (seq(&a, low), seq(&a, hidden));
+
+    assert_eq!(a.compact_levels(Strata::Medium), 3, "{{0, 3, 6}} packs to [0, 3)");
+    for h in [first, second, hidden] {
+        assert_eq!(a.frame(h).unwrap().level, 1);
+    }
+    assert_eq!(
+        a.frame(child).unwrap().level,
+        2,
+        "the child moves on its own level's account, not by its parent's delta"
+    );
+    assert!(
+        seq(&a, first) < seq(&a, second),
+        "the shifted level's visible frames relink in creation order"
+    );
+    assert_eq!(seq(&a, low), low_seq, "an unshifted frame keeps its link");
+    assert_eq!(seq(&a, hidden), hidden_seq, "a hidden frame is in no list");
+}
+
 // ── Scale ────────────────────────────────────────────────────────────────────────────────────
 
 #[test]
