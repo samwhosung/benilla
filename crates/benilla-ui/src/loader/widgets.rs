@@ -9,6 +9,41 @@ use super::{
 };
 
 impl Loader<'_> {
+    /// `<ScrollFrame>`'s `<ScrollChild>` (`LoadXML 0x786bc0`): after the base load (`0x769820`) it
+    /// builds the node's one child through `Instantiate 0x6ee280` (`0x786bf4`), a whole frame
+    /// lifecycle with the child's own `<Frames>` and OnLoad, and only then stores it with
+    /// `SetScrollChild` (`0x786ce0`), which gives the frame its scroll range. So the child's OnLoad
+    /// sees no scroll child yet. A template's `<ScrollChild>` was built by its own `LoadXML` level
+    /// (`0x76985c`), ahead of the instance's, which therefore wins. An empty one errors in the
+    /// reference (`0x786c0c`). Other frame kinds do not read the element.
+    pub(super) fn apply_scrollframe(
+        &mut self,
+        el: &Element,
+        wrapper: &Table,
+        self_name: &str,
+        dbg: &str,
+    ) {
+        if !el.tag.eq_ignore_ascii_case("ScrollFrame") {
+            return;
+        }
+        for sc in children_named(el, "ScrollChild") {
+            let Some(child) = sc.children.first() else {
+                self.report.fault(format!(
+                    "{dbg}: <ScrollChild> is empty — the reference errors here, and a \
+                     ScrollFrame with no child has no scroll range at all"
+                ));
+                continue;
+            };
+            let expanded = self.expand(child);
+            let Some(child_wrapper) = self.materialize(&expanded, Some(wrapper), self_name) else {
+                continue; // materialize already reported why
+            };
+            if let Err(e) = wrapper.call_method::<()>("SetScrollChild", child_wrapper) {
+                self.report.fault(format!("{dbg}: <ScrollChild>: {e}"));
+            }
+        }
+    }
+
     /// `<StatusBar>` (`0x782ef0`): a reversed `minValue`/`maxValue` pair is swapped, as
     /// `SetMinMaxValues` also does; `drawLayer` is the bar texture's layer, ARTWORK by default.
     pub(super) fn apply_statusbar(&mut self, el: &Element, wrapper: &Table, dbg: &str) {

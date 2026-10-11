@@ -710,6 +710,9 @@ impl Loader<'_> {
         self.apply_minimap(el, wrapper, dbg_name);
         // 6 · <Scripts> handlers (`0x769ef0`); OnLoad is captured to fire bottom-up below.
         let onload = self.apply_scripts(el, wrapper, dbg_name);
+        // 6b · a ScrollFrame's <ScrollChild> (`0x786bc0`, after the base load `0x769820`): still
+        //      inside the load window, so ahead of every <Frames> child and of our own OnLoad.
+        self.apply_scrollframe(el, wrapper, self_name, dbg_name);
 
         // 7 · the post-load hook (`0x76a2f0`): close the window (`0x76a2ff`), then the nested
         //     <Frames>, whose OnLoads fire before ours (`0x76a060`).
@@ -718,26 +721,6 @@ impl Loader<'_> {
             for child in &frames_el.children {
                 let expanded = self.expand(child);
                 self.materialize(&expanded, Some(wrapper), self_name);
-            }
-        }
-
-        // 7b · <ScrollChild>: its one child is built through `Instantiate 0x6ee280` like
-        //      `<Frames>`, then stored at `+0x318` with `+0x314 = 1`, which is `SetScrollChild`
-        //      and gives the ScrollFrame its scroll range. An empty one errors in the reference.
-        for sc in children_named(el, "ScrollChild") {
-            let Some(child) = sc.children.first() else {
-                self.report.fault(format!(
-                    "{dbg_name}: <ScrollChild> is empty — the reference errors here, and a \
-                     ScrollFrame with no child has no scroll range at all"
-                ));
-                continue;
-            };
-            let expanded = self.expand(child);
-            let Some(child_wrapper) = self.materialize(&expanded, Some(wrapper), self_name) else {
-                continue; // materialize already reported why
-            };
-            if let Err(e) = wrapper.call_method::<()>("SetScrollChild", child_wrapper) {
-                self.report.fault(format!("{dbg_name}: <ScrollChild>: {e}"));
             }
         }
 
