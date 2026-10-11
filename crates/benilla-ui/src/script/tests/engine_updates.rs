@@ -83,30 +83,6 @@ fn a_frame_walked_after_the_tooltip_sees_this_frames_fade() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A tooltip the walk does not reach, hidden under a hidden parent, does not fade: its countdown
-/// (`[+0x3b8]`) runs only in its own update, and resumes when it is walked again.
-#[test]
-fn a_tooltip_under_a_hidden_parent_holds_its_fade() {
-    let mut s = script();
-    s.set_screen_size(800.0, 600.0);
-    s.run(FADING_TIP).unwrap();
-    s.run("FadeTip:FadeOut() FadeRoot:Hide()").unwrap();
-    take_log(&s);
-    s.tick(1.0);
-    s.run("FadeRoot:Show()").unwrap();
-    assert!(
-        s.frame_visible("FadeTip"),
-        "the fade did not run while unwalked"
-    );
-    take_log(&s);
-    s.tick(0.3);
-    assert!(s.frame_visible("FadeTip"));
-    assert_eq!(take_log(&s), "");
-    s.tick(0.3);
-    assert_eq!(take_log(&s), "hide", "the rest of the fade, once walked");
-    assert!(s.errors().is_empty(), "{:?}", s.errors());
-}
-
 /// A pane's update (`0x76d7f0`) runs its `OnUpdate`, then advances its clock, whose completion
 /// test drains `OnAnimFinished` in the same call (`0x7074d8`, `0x7075af`): in the pane's place,
 /// before frames walked after it and before the draw pass fires `OnUpdateModel`.

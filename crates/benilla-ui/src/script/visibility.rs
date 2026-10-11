@@ -2,11 +2,16 @@
 //! frame before anything runs, walks the live child list re-gating each child as the walk reaches
 //! it, and fires its own notify last, so handlers run inside the walk, children before their
 //! parent, and a frame an earlier handler hid is never notified.
+//!
+//! Both are virtual (slots `+0x88` and `+0x84`), and every caller reaches them through the slot:
+//! the Lua `Show`/`Hide`, the parent's child walk (`0x76aed5`, `0x76adee`) and `SetParent`
+//! (`0x76abfd`, `0x76ab41`). [`show`] and [`hide`] are that dispatch, so a kind's override runs
+//! the same however the transition comes.
 
 use mlua::{Lua, Table, Value};
 
 use super::{event, Model};
-use crate::widget::{ButtonState, ChildWalk, FrameHandle};
+use crate::widget::{ButtonState, ChildWalk, FrameHandle, FrameKind};
 
 /// The Lua `Show`/`Hide` (`0x775750`/`0x775810`): write the shown bit (`0x7757f1`/`0x7758b1`),
 /// then dispatch the transition (`0x7757fb`/`0x7758bb`), which gates itself, so `Show()` on a
@@ -23,9 +28,44 @@ pub(super) fn set_shown(lua: &Lua, h: FrameHandle, shown: bool) {
     }
 }
 
-/// The show transition (`0x76ae10`, slot `+0x88`): the frame's own step, its children's
-/// transitions in link order, the toplevel raise (`0x76aeec`), then its own OnShow (`0x76aef5`).
+/// The show slot (`+0x88`): the kind's override, else the base [`base_show`]. GameTooltip's is
+/// `0x530a80`. CharacterModelBase's (`0x505d00`, which rebuilds the doll from its unit or file)
+/// is not modelled.
 pub(super) fn show(lua: &Lua, h: FrameHandle) {
+    match kind(lua, h) {
+        Some(FrameKind::GameTooltip) => super::tooltip::show_override(lua, h),
+        _ => base_show(lua, h),
+    }
+}
+
+/// The hide slot (`+0x84`): the kind's override, else the base [`base_hide`]. GameTooltip's is
+/// `0x530a60`. CharacterModelBase's (`0x505ce0`, which releases the doll's model) is not
+/// modelled.
+pub(super) fn hide(lua: &Lua, h: FrameHandle) {
+    match kind(lua, h) {
+        Some(FrameKind::GameTooltip) => super::tooltip::hide_override(lua, h),
+        _ => base_hide(lua, h),
+    }
+}
+
+fn kind(lua: &Lua, h: FrameHandle) -> Option<FrameKind> {
+    lua.app_data_ref::<Model>()
+        .expect("model app_data")
+        .arena
+        .frame(h)
+        .map(|f| f.kind)
+}
+
+/// The shown bit alone (`[+0xd0]`), which an override writes before it re-dispatches.
+pub(super) fn set_shown_bit(lua: &Lua, h: FrameHandle, shown: bool) {
+    if let Some(f) = model_mut(lua).arena.frame_mut(h) {
+        f.shown = shown;
+    }
+}
+
+/// The base show transition (`0x76ae10`): the frame's own step, its children's transitions in
+/// link order, the toplevel raise (`0x76aeec`), then its own OnShow (`0x76aef5`).
+pub(super) fn base_show(lua: &Lua, h: FrameHandle) {
     {
         let mut model = model_mut(lua);
         if !model.arena.show_step(h) {
@@ -45,9 +85,9 @@ pub(super) fn show(lua: &Lua, h: FrameHandle) {
     notify(lua, h, true);
 }
 
-/// The hide transition (`0x76ad50`, slot `+0x84`): the frame's own step with its hover leave,
-/// its children's transitions in link order, then its own OnHide (`0x76adfd`).
-pub(super) fn hide(lua: &Lua, h: FrameHandle) {
+/// The base hide transition (`0x76ad50`): the frame's own step with its hover leave, its
+/// children's transitions in link order, then its own OnHide (`0x76adfd`).
+pub(super) fn base_hide(lua: &Lua, h: FrameHandle) {
     let left = {
         let mut model = model_mut(lua);
         if !model.arena.hide_step(h) {

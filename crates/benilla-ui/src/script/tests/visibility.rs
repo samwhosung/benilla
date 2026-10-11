@@ -212,3 +212,80 @@ fn show_on_a_shown_but_invisible_frame_makes_it_visible() {
     assert_eq!(s.eval::<i64>("return SHOWS").unwrap(), 1);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A tooltip, owned with a line and fading, under `TipRoot`; its handlers log to `LOG`.
+const OWNED_TIP: &str = r#"
+    LOG = {}
+    local root = CreateFrame("Frame", "TipRoot")
+    local owner = CreateFrame("Button", "TipOwner", root)
+    owner:SetPoint("CENTER", 0, 0); owner:SetWidth(10); owner:SetHeight(10)
+    local tt = CreateFrame("GameTooltip", "CascadeTip", root)
+    tt:SetOwner(owner, "ANCHOR_RIGHT")
+    tt:SetText("Owned")
+    tt:SetScript("OnTooltipCleared", function() table.insert(LOG, "cleared") end)
+    tt:SetScript("OnHide", function() table.insert(LOG, "hide") end)
+    tt:SetScript("OnShow", function() table.insert(LOG, "show") end)
+"#;
+
+fn take_log(s: &crate::script::UiScript) -> String {
+    s.eval::<String>("local l = table.concat(LOG, ' ') LOG = {} return l")
+        .unwrap()
+}
+
+/// A parent's hide reaches the tooltip through its own hide slot (`0x76adee` → `0x530a60`): the
+/// SetOwner core with no owner clears it, fires `OnTooltipCleared` (`0x530263`), restores full
+/// alpha, disarms the fade and drops the owner, and only then does the base hide fire `OnHide`.
+/// The shown bit is the Lua `Hide`'s to clear, so it stays set.
+#[test]
+fn a_parents_hide_un_owns_a_fading_tooltip() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(OWNED_TIP).unwrap();
+    s.run("CascadeTip:FadeOut()").unwrap();
+    s.tick(0.3);
+    take_log(&s);
+    s.run("TipRoot:Hide()").unwrap();
+    assert_eq!(take_log(&s), "cleared hide");
+    s.run(
+        r#"
+        assert(not CascadeTip:IsOwned(TipOwner), "un-owned by its parent's hide")
+        assert(CascadeTip:NumLines() == 0, "cleared")
+        assert(CascadeTip:GetAlpha() == 1, "full alpha, fade disarmed")
+        assert(CascadeTip:IsShown(), "the shown bit is untouched")
+    "#,
+    )
+    .unwrap();
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A parent's show reaches the tooltip through its own show slot (`0x76aed5` → `0x530a80`): one
+/// with an owner and a line shows, one without clears its shown bit and hides itself through its
+/// own hide, so it stays hidden. So a parent hidden and shown again (Alt-Z) drops the tooltip.
+#[test]
+fn a_parents_show_brings_back_only_an_owned_tooltip() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(OWNED_TIP).unwrap();
+    s.run("TipRoot:Hide()").unwrap();
+    take_log(&s);
+    s.run("TipRoot:Show()").unwrap();
+    assert_eq!(take_log(&s), "cleared", "its own hide again; no OnShow");
+    assert!(!s.frame_visible("CascadeTip"));
+    s.run(r#"assert(not CascadeTip:IsShown(), "the show cleared the shown bit")"#)
+        .unwrap();
+
+    // Owned again while the parent is hidden: the parent's show brings it back.
+    s.run(
+        r#"
+        TipRoot:Hide()
+        CascadeTip:SetOwner(TipOwner, "ANCHOR_RIGHT")
+        CascadeTip:SetText("Again")
+    "#,
+    )
+    .unwrap();
+    take_log(&s);
+    s.run("TipRoot:Show()").unwrap();
+    assert_eq!(take_log(&s), "show");
+    assert!(s.frame_visible("CascadeTip"));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

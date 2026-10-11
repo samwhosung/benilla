@@ -15,6 +15,7 @@ use mlua::{Lua, Table, Value};
 use super::event;
 use super::object::{frame_handle_of, publish_global};
 use super::region::region_wrapper;
+use super::visibility;
 use super::{FontObject, Model, RegionData};
 use crate::layout::{Anchor, Point};
 use crate::order::DrawLayer;
@@ -319,7 +320,8 @@ pub(super) fn fire_cleared(lua: &Lua, h: FrameHandle) {
 
 /// A content `Set*`'s tail: shown with lines, hidden without. The reference leaves an uncached
 /// tooltip cleared and collapsed to nothing; this plate keeps its declared size, so it hides. It
-/// hides without [`hide_tooltip`] to keep the owner, which the hover loop's `IsOwned` needs.
+/// takes the base transitions past the tooltip's own ([`hide_override`] would un-own it), to keep
+/// the owner, which the hover loop's `IsOwned` needs.
 pub(super) fn show_or_hide_empty(lua: &Lua, h: FrameHandle) {
     let lines = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -328,7 +330,60 @@ pub(super) fn show_or_hide_empty(lua: &Lua, h: FrameHandle) {
             Err(_) => 0,
         }
     };
-    set_shown(lua, h, lines > 0);
+    visibility::set_shown_bit(lua, h, lines > 0);
+    if lines > 0 {
+        visibility::base_show(lua, h);
+    } else {
+        visibility::base_hide(lua, h);
+    }
+}
+
+/// The tooltip's show (`0x530a80`, slot `+0x88`), however the show comes: with an owner and a line
+/// (`0x530a83`–`0x530a95`) it restores full alpha, disarms the fade (`0x530aa3`) and runs the base
+/// show; else it clears its shown bit and hides through its own hide (`0x530abe`, `0x530ac8`).
+/// So a parent's show brings back only a tooltip that still has an owner.
+pub(in crate::script) fn show_override(lua: &Lua, h: FrameHandle) {
+    let live = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let live = tip_mut(&mut model, h).is_ok_and(|t| t.owner.is_some() && t.num_lines > 0);
+        if live {
+            full_alpha(&mut model, h);
+        }
+        live
+    };
+    if live {
+        visibility::base_show(lua, h);
+    } else {
+        visibility::set_shown_bit(lua, h, false);
+        visibility::hide(lua, h);
+    }
+}
+
+/// The tooltip's hide (`0x530a60`, slot `+0x84`), however the hide comes, its parent's included:
+/// the SetOwner core with no owner (`0x52ffe0`), then the base hide. The core clears the content
+/// and fires `OnTooltipCleared` (`0x530050`, whose last act is the fire at `0x530263`), then
+/// restores full alpha (`0x52fff4`), disarms the fade (`0x530002`) and drops the owner
+/// (`0x53000c`); the mode it leaves at 7 (`0x530012`) is not kept (see `GetAnchorType`). It runs
+/// whether or not the tooltip is shown: only the base hide gates on visibility (`0x76ad5b`).
+pub(in crate::script) fn hide_override(lua: &Lua, h: FrameHandle) {
+    {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if tip_mut(&mut model, h).is_err() {
+            drop(model);
+            visibility::base_hide(lua, h);
+            return;
+        }
+        clear_content(&mut model, h);
+    }
+    fire_cleared(lua, h);
+    {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        full_alpha(&mut model, h);
+        if let Ok(t) = tip_mut(&mut model, h) {
+            t.owner = None;
+        }
+    }
+    visibility::base_hide(lua, h);
 }
 
 /// New content cancels a running fade at full alpha; with no fade running, an alpha the addon set
@@ -514,20 +569,6 @@ pub(super) fn append_line(
 mod verbs;
 pub(super) use verbs::install;
 
-/// The full hide shared by `Hide`, a `Show` with no owner or no lines, and the end of a fade.
-pub(super) fn hide_tooltip(lua: &Lua, h: FrameHandle) {
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        full_alpha(&mut model, h);
-        if let Ok(t) = tip_mut(&mut model, h) {
-            t.owner = None;
-        }
-        clear_content(&mut model, h);
-    }
-    set_shown(lua, h, false);
-    fire_cleared(lua, h);
-}
-
 /// A line cell's measured extent; `None` for a hidden or unmeasured cell, which adds no size and
 /// no gap, so a fresh tooltip keeps its declared size until its lines are measured.
 type Cell = Option<(f32, f32)>;
@@ -666,12 +707,12 @@ pub(super) fn layout_tooltips(model: &mut Model) {
 
 /// The tooltip's own update after its `OnUpdate` (`0x530b20`, from `0x530b9c`): an armed fade
 /// counts down by the elapsed time (`0x530baa`–`0x530bc2`) and ramps the alpha; at zero the full
-/// hide (`0x530bd8` full alpha, `0x530be9` the hide override), whose `OnHide` runs here, in the
+/// hide (`0x530bd8` full alpha, `0x530be9` the hide slot), whose `OnHide` runs here, in the
 /// tooltip's place in the walk. Nothing gates it on shown, owner or lines.
 pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, elapsed: f32) {
     let done = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        // Roster-gated as in `layout_tooltips`, since `hide_tooltip` writes layout.
+        // Roster-gated as in `layout_tooltips`, since the hide writes layout.
         if !model.frame_to_id.contains_key(&h) {
             return;
         }
@@ -690,7 +731,8 @@ pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, elapsed: f32) {
             false
         }
     };
+    // The end: shown bit cleared, then the hide slot, as the Lua `Hide` does.
     if done {
-        hide_tooltip(lua, h);
+        set_shown(lua, h, false);
     }
 }
