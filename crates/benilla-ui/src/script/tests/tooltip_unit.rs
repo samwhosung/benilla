@@ -724,3 +724,104 @@ fn a_cursor_seated_plate_lands_on_the_cursor_under_the_ui_scale() {
         "({x}, {y})"
     );
 }
+
+/// The unit builder shows `<name>StatusBar` with a full show (`0x52a13c`/`0x52a146`), and the
+/// tooltip clear hides it the same way (`0x53009b`/`0x5300a1`) only while the tooltip holds a unit
+/// (`0x530070`), first in the clear, so its `OnHide` runs before `OnTooltipCleared`.
+#[test]
+fn the_health_bar_shows_and_hides_through_its_own_transitions() {
+    let mut s = script();
+    s.set_unit("target", Some(wolf()));
+    s.run(
+        r#"
+        log = {}
+        BarHost = CreateFrame("Frame", "BarHost")
+        BarTip = CreateFrame("GameTooltip", "BarTip")
+        local bar = CreateFrame("StatusBar", "BarTipStatusBar", BarTip)
+        bar:Hide()
+        bar:SetScript("OnShow", function() table.insert(log, "bar show") end)
+        bar:SetScript("OnHide", function() table.insert(log, "bar hide") end)
+        BarTip:SetScript("OnTooltipCleared", function() table.insert(log, "cleared") end)
+        BarTip:SetScript("OnHide", function() table.insert(log, "tip hide") end)
+        BarTip:SetOwner(BarHost, "ANCHOR_RIGHT")
+        log = {}
+        assert(BarTip:SetUnit("target") == 1)
+        assert(BarTipStatusBar:IsShown(), "the unit shows the bar")
+        local n = 0
+        for _, e in ipairs(log) do if e == "bar show" then n = n + 1 end end
+        assert(n == 1, "the bar's OnShow fired once: " .. table.concat(log, ","))
+        log = {}
+        BarTip:ClearLines()
+        assert(not BarTipStatusBar:IsShown(), "the clear hides the bar")
+        assert(table.concat(log, ",") == "bar hide,cleared", "got " .. table.concat(log, ","))
+
+        -- No unit held: the clear leaves the bar alone.
+        BarTip:SetOwner(BarHost, "ANCHOR_RIGHT")
+        BarTip:SetText("Peacebloom")
+        BarTipStatusBar:Show()
+        log = {}
+        BarTip:ClearLines()
+        assert(BarTipStatusBar:IsShown(), "no unit: the bar stays")
+        assert(table.concat(log, ",") == "cleared", "got " .. table.concat(log, ","))
+
+        -- The hide's clear runs before the base hide.
+        BarTip:SetOwner(BarHost, "ANCHOR_RIGHT")
+        BarTip:SetUnit("target")
+        log = {}
+        BarTip:Hide()
+        assert(table.concat(log, ",") == "bar hide,cleared,tip hide", "got " .. table.concat(log, ","))
+        "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// The world handler's fade request is `0x530ae0`, which hides a mode-6 plate at once; a
+/// cursor-seated GameObject plate is owned in mode 6 (`0x492a1e`), so hover loss hides it.
+#[test]
+fn a_cursor_seated_world_plate_hides_at_once_on_hover_loss() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local up = CreateFrame("Frame", "UIParent"); up:SetAllPoints()
+        CreateFrame("GameTooltip", "GameTooltip")
+        "#,
+    )
+    .unwrap();
+    assert!(s.world_tooltip_gameobject("Brill", &[], Some((400.0, 300.0))));
+    s.run(r#"assert(GameTooltip:GetAnchorType() == "ANCHOR_CURSOR", "seated in mode 6")"#)
+        .unwrap();
+    s.world_tooltip_fade();
+    s.run(r#"assert(not GameTooltip:IsVisible(), "gone at once")"#)
+        .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// The minimap blip tooltip is owned in mode 6 (`0x4eb587`), and when no blip is hovered
+/// `0x4eb0c0` hides it directly (`0x4eb12b`–`0x4eb166`), with no fade.
+#[test]
+fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local up = CreateFrame("Frame", "UIParent"); up:SetAllPoints()
+        CreateFrame("GameTooltip", "GameTooltip")
+        "#,
+    )
+    .unwrap();
+    assert!(s.minimap_tooltip("Stormwind", 400.0, 300.0, false));
+    s.run(
+        r#"
+        assert(GameTooltip:IsShown())
+        assert(GameTooltip:IsOwned(UIParent), "owned by UIParent")
+        assert(GameTooltip:GetAnchorType() == "ANCHOR_CURSOR", "seated in mode 6")
+        "#,
+    )
+    .unwrap();
+    s.world_tooltip_fade();
+    s.run(r#"assert(not GameTooltip:IsVisible(), "gone at once")"#)
+        .unwrap();
+    assert!(s.take_errors().is_empty());
+}
