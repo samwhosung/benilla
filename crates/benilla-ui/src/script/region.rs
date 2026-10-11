@@ -689,8 +689,9 @@ pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
                 model.region_by_name.remove(&name);
             }
         }
-        // Its node leaves the cached graph with its edges at the next resolve, and whatever
-        // anchored to it re-resolves without it.
+        // Its node leaves the cached graph with its edges at the next resolve. What anchored to
+        // it is not invalidated (`0x768e20` unhooks each with `0x767e70`, flag 0), so it keeps
+        // its state.
         model.name_layout_node(id);
     }
     model.arena.destroy_region(rh);

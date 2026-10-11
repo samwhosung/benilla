@@ -923,9 +923,10 @@ impl LayoutSolver {
     /// The reference resolves only what is invalidated: by its own write, or by a target's
     /// resolve that stored a new rect (`0x768cf0`). A failed resolve stores nothing and skips that
     /// slot (`0x768d55`), and `ClearAllPoints` invalidates nothing (`0x767620`). So a node not
-    /// reached keeps this state wherever a recompute could differ from it: when its resolve fails,
-    /// or reads a target with no rect. The rect is also what the keep test
-    /// ([`set_keep_eps`](Self::set_keep_eps)) holds a new one against.
+    /// reached keeps this state when its resolve fails or reads a target with no rect. Any other
+    /// node not reached is recomputed, which gives back its state only if every write that moved
+    /// its inputs since also invalidated it; the solver cannot tell one that did not. The rect is
+    /// also what the keep test ([`set_keep_eps`](Self::set_keep_eps)) holds a new one against.
     pub fn set_entry(&mut self, h: Handle, rect: Option<Rect>, invalidated: bool) {
         self.ensure(h);
         self.touch(h);

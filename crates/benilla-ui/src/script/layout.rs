@@ -422,8 +422,9 @@ impl LayoutScope {
             && self.last.get(id as usize) == Some(&hash)
     }
 
-    /// Drop region node `id` from the roster with its edges, seeding it so what read its rect
-    /// re-resolves without it. Returns the row it held.
+    /// Drop region node `id` from the roster with its edges, seeding it so the closure revisits
+    /// what read its rect; nothing invalidates those, so they keep their state. Returns the row
+    /// it held.
     fn remove_region(&mut self, id: u32, n: u32) -> RegionRow {
         let idx = (n & !REGION_TAG) as usize;
         let row = self.regions.swap_remove(idx);
