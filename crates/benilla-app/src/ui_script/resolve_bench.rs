@@ -677,6 +677,11 @@ fn structural_change_costs() {
         r#"
         BenchHost = CreateFrame("Frame", "BenchHost", UIParent)
         BenchHost:SetPoint("CENTER", 0, 0); BenchHost:SetWidth(200); BenchHost:SetHeight(100)
+        BenchText = BenchHost:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+        BenchText:SetPoint("TOPLEFT", BenchHost, "TOPLEFT", 4, -4); BenchText:SetText("bench")
+        BenchArt = BenchHost:CreateTexture(nil, "ARTWORK")
+        BenchArt:SetPoint("BOTTOMLEFT", BenchHost, "BOTTOMLEFT", 4, 4)
+        BenchArt:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
         bench_n = 0
         bench_spec = { bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16,
@@ -687,8 +692,28 @@ fn structural_change_costs() {
     for _ in 0..4 {
         app_frame(&mut s);
     }
-    let cases: [(&str, &str); 5] = [
+    let cases: [(&str, &str); 9] = [
         ("no-op", "bench_n = bench_n + 1"),
+        // Setters an OnUpdate calls every frame with the value already held: each is a write the
+        // reference invalidates for, and must not re-resolve the world.
+        (
+            "SetWidth same",
+            "bench_n = bench_n + 1; BenchHost:SetWidth(200)",
+        ),
+        (
+            "SetPoint same",
+            "bench_n = bench_n + 1; BenchHost:SetPoint('CENTER', 0, 0)",
+        ),
+        (
+            "SetText same",
+            "bench_n = bench_n + 1; BenchText:SetText('bench')",
+        ),
+        (
+            "SetTexture swap",
+            "bench_n = bench_n + 1; BenchArt:SetTexture(math.mod(bench_n, 2) == 0 and \
+             'Interface\\\\Buttons\\\\UI-CheckBox-Check' or \
+             'Interface\\\\Buttons\\\\UI-CheckBox-Up')",
+        ),
         (
             "SetWidth",
             "bench_n = bench_n + 1; BenchHost:SetWidth(200 + math.mod(bench_n, 2))",
@@ -712,17 +737,23 @@ fn structural_change_costs() {
     ];
     const N: u32 = 200;
     for (name, lua) in cases {
-        let d0 = s.layout_derivations();
+        let (d0, s0, r0) = (s.layout_derivations(), s.layout_solves(), s.layout_rounds());
+        let mut widest = (0, 0);
         let t = Instant::now();
         for _ in 0..N {
             s.run(lua).unwrap();
             app_frame(&mut s);
             std::hint::black_box(s.extract());
+            let (f, r) = s.layout_last_scope();
+            widest = (widest.0.max(f), widest.1.max(r));
         }
         println!(
-            "STRUCT {name:<14} {:.3} ms/iter  derivations/iter={:.2}",
+            "STRUCT {name:<15} {:.3} ms/iter  derivations/iter={:.2}  solves/iter={:.2}  \
+             rounds/iter={:.2}  widest scope={widest:?}",
             ms(t) / f64::from(N),
             (s.layout_derivations() - d0) as f64 / f64::from(N),
+            (s.layout_solves() - s0) as f64 / f64::from(N),
+            (s.layout_rounds() - r0) as f64 / f64::from(N),
         );
     }
 }
