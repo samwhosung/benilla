@@ -314,10 +314,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 }
 
 /// The font block, entries #0-#15 of the EditBox's own 48-entry method table (`0x87bb68`, count
-/// at `0x799ab5`); 1.12 has no `FontInstance` class, so each text-bearing kind declares it. Ten
-/// come from [`super::super::font_block`]. `SetSpacing`/`GetSpacing` (#10-#11) are not installed:
-/// nothing renders line spacing, and a missing method raises by name. The justify four (#12-#15)
-/// act on the box's own [`EditBoxState::justify`] word, not its text region.
+/// at `0x799ab5`); 1.12 has no `FontInstance` class, so each text-bearing kind declares it. Twelve
+/// come from [`super::super::font_block`], `SetSpacing`/`GetSpacing` (#10-#11) among them. The
+/// justify four (#12-#15) act on the box's own [`EditBoxState::justify`] word, not its text region.
 fn install_font_block(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Every font method acts on the box's implicit FontString (`[this+0x324]`, our
     // `text_region`), created on demand.
@@ -328,7 +327,7 @@ fn install_font_block(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, this)?;
             super::ensure_text_region(lua, h).ok_or_else(|| mlua::Error::runtime("not an EditBox"))
         },
-        "EditBox",
+        crate::script::font_block::SpacingRead::AsSet,
         // The box listens on its font (vtable `0x81c8dc` slot 0, `0x77e2a0`): a change of face or
         // spacing (mask `0x11`) re-seats its text region (`0x77e2b5` → `0x77b8c0`).
         Some(|lua, this| {

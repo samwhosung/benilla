@@ -550,6 +550,7 @@ pub(super) fn tick_script(
                             path: r.font.as_deref(),
                             height: crate::ui_text::drawn_px(r.height, None, s * r.scale),
                             outline: r.outline, // the outline biases the stepped width
+                            spacing: 0.0,       // the gap moves rows, never counts them
                             alpha_gradient: None,
                         },
                     );
@@ -1414,6 +1415,7 @@ fn convert_entry(
             text_height,
             shadow,
             outline,
+            spacing,
             alpha_gradient,
             world_seat,
         } => {
@@ -1433,6 +1435,7 @@ fn convert_entry(
                     text_height,
                     shadow,
                     outline,
+                    spacing,
                     alpha_gradient,
                     world_seat,
                 },

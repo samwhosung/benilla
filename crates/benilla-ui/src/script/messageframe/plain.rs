@@ -163,7 +163,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             super::ensure_font_region(lua, h)
                 .ok_or_else(|| mlua::Error::runtime("not a MessageFrame"))
         },
-        "MessageFrame",
+        crate::script::font_block::SpacingRead::AsSet,
         None,
     )?;
 

@@ -191,6 +191,8 @@ fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option<f32> {
             text_height: d.text_height,
             wrap_width: None,
             outline: d.outline,
+            // One line has no gap: `0x5c2070` charges `(N−1)·gap`.
+            spacing: d.line_gap(),
             scale,
             text: ONE_LINE.to_string(),
             key,

@@ -226,9 +226,10 @@ fn spacing_steps_the_blocks_apart() {
         "block N+1 sits at block N's BOTTOMLEFT displaced by -spacing"
     );
     assert_eq!(s.eval::<f32>("return Page:GetSpacing()").unwrap(), 4.0);
-    // A negative spacing is clamped to 0 before it is stored (`0x772246`).
+    // The element font keeps a negative as given (`0x79fba2`); only the block FontString's
+    // setter clamps it (`0x772246`), for the next `SetText`.
     s.run("Page:SetSpacing(-9)").unwrap();
-    assert_eq!(s.eval::<f32>("return Page:GetSpacing()").unwrap(), 0.0);
+    assert_eq!(s.eval::<f32>("return Page:GetSpacing()").unwrap(), -9.0);
 
     measure_at_16px(&mut s);
     assert_eq!(

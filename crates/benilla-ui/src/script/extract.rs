@@ -322,6 +322,7 @@ impl UiScript {
                     {
                         art
                     } else if is_text {
+                        let spacing = data.line_gap();
                         QuadContent::Text {
                             text: data.text,
                             color: data.vertex_color,
@@ -334,6 +335,7 @@ impl UiScript {
                             text_height: data.text_height,
                             shadow: data.font_shadow,
                             outline: data.outline,
+                            spacing,
                             alpha_gradient: data.alpha_gradient,
                             // The owner's property: an addon's strings on a plate slide with it.
                             world_seat: owner

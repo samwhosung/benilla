@@ -200,7 +200,14 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 
     // ── the shared font block ───────────────────────────────────────────────────────────────
     //
-    // The font object, font, text colour and shadow getters and setters are type-guard shims over
-    // one implementation each (`0x79f210` SetFont, `0x79f3b0` GetFont), shared with EditBox.
-    super::super::font_block::install(lua, m, region_handle_of, "FontString", None)
+    // The font object, font, text colour, shadow and spacing getters and setters are type-guard
+    // shims over one implementation each (`0x79f210` SetFont, `0x79f3b0` GetFont), shared with
+    // EditBox; the spacing pair is the FontString's own (`0x79e2b0`, `0x79e1d0`), which clamps.
+    super::super::font_block::install(
+        lua,
+        m,
+        region_handle_of,
+        super::super::font_block::SpacingRead::Clamped,
+        None,
+    )
 }

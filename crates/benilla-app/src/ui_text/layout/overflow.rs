@@ -10,34 +10,35 @@ const ELLIPSIS: &str = "...";
 const HEIGHT_EPS: f32 = 0.25;
 
 /// How many wrapped lines a `box_h`-tall box draws, the reference's line stack (`0x5cdc20`: stop
-/// at `accum ≥ +0x40`): the smallest `n` with `n·pitch ≥ box_h`, never 0, `pitch` being the font
-/// height. The render law: fitting by it lets a four-line name overflow a three-line box.
+/// at `accum ≥ +0x40`, `accum` gaining `size + gap` a line): the smallest `n` with `n·pitch ≥
+/// box_h`, never 0, `pitch` being the font height plus the line gap. The render law: fitting by it
+/// lets a four-line name overflow a three-line box.
 pub(super) fn lines_allowed(box_h: f32, pitch: f32) -> usize {
     (((box_h - HEIGHT_EPS) / pitch).ceil() as usize).max(1)
 }
 
 /// How many wrapped lines fit wholly inside a `box_h`-tall box, the ellipsis's law:
 /// `GxuFont_GetMaxCharsWithinHeight` (`0x5c21c0`, via `0x44d960`) stops when
-/// `boxH + 2⁻²⁰ < accumH + lineH`, the largest `n` with `n·pitch ≤ box_h`, so it floors where
-/// [`lines_allowed`] ceils. Its 0 under one line is never acted on ([`ellipsize_in_box`]). The
-/// slack is [`HEIGHT_EPS`], not `2⁻²⁰`: `box_h` is anchor-graph arithmetic, and `12.0 - 1e-6`
-/// must not lose a line.
-pub(super) fn lines_fitting(box_h: f32, pitch: f32) -> usize {
-    ((box_h + HEIGHT_EPS) / pitch).floor().max(0.0) as usize
+/// `boxH + 2⁻²⁰ < accumH + lineH`, `accumH` gaining `lineH + gap` a line (`0x5c22da`), so the
+/// largest `n` with `n·size + (n−1)·gap ≤ box_h`: it floors where [`lines_allowed`] ceils. Its 0
+/// under one line is never acted on ([`ellipsize_in_box`]). The slack is [`HEIGHT_EPS`], not
+/// `2⁻²⁰`: `box_h` is anchor-graph arithmetic, and `12.0 - 1e-6` must not lose a line.
+pub(super) fn lines_fitting(box_h: f32, size: f32, gap: f32) -> usize {
+    ((box_h + gap + HEIGHT_EPS) / (size + gap)).floor().max(0.0) as usize
 }
 
 /// [`ellipsize`] by the fit law ([`lines_fitting`]), chosen here under test as
 /// [`super::ellipsize_to_fit`] needs a real atlas. The box first clamps up to one pitch, as
-/// `0x771ec0` does with `maxLines` 0 (`boxH := max(boxH, lineH+gap)`, `0x771f9e..0x771faa`, gap 0
-/// in shipped UI), so a box under one line still draws it, like the 36×10 action-button hotkey
-/// under a 12 px font.
+/// `0x771ec0` does with `maxLines` 0 (`boxH := max(boxH, lineH+gap)`, `0x771f9e..0x771faa`), so a
+/// box under one line still draws it, like the 36×10 action-button hotkey under a 12 px font.
 pub(super) fn ellipsize_in_box<F: FnMut(&str) -> usize>(
     text: &str,
     box_h: f32,
-    pitch: f32,
+    size: f32,
+    gap: f32,
     rows: F,
 ) -> Option<String> {
-    ellipsize(text, lines_fitting(box_h.max(pitch), pitch), rows)
+    ellipsize(text, lines_fitting(box_h.max(size + gap), size, gap), rows)
 }
 
 /// The height-gated ellipsis truncate (`0x771ec0`): past `allowed` rows, back off one char at a
@@ -84,22 +85,45 @@ mod overflow_tests {
     #[test]
     fn lines_fitting_is_the_height_fit_law() {
         // The loot row's 38-tall item name: 4 lines drawn, 3 fit.
-        assert_eq!(lines_fitting(38.0, 12.0), 3);
+        assert_eq!(lines_fitting(38.0, 12.0, 0.0), 3);
         assert_eq!(lines_allowed(38.0, 12.0), 4, "the render law, for contrast");
 
         // The laws agree on every exact multiple.
         for n in 1..=6 {
             let h = 12.0 * n as f32;
-            assert_eq!(lines_fitting(h, 12.0), n, "exact multiple {h}");
+            assert_eq!(lines_fitting(h, 12.0, 0.0), n, "exact multiple {h}");
             assert_eq!(lines_allowed(h, 12.0), n, "exact multiple {h}");
         }
 
         // Under one line: fit 0, which `ellipsize_in_box` clamps away, render 1.
-        assert_eq!(lines_fitting(6.0, 12.0), 0);
+        assert_eq!(lines_fitting(6.0, 12.0, 0.0), 0);
         assert_eq!(lines_allowed(6.0, 12.0), 1);
 
         // Float noise on a multiple costs no line.
-        assert_eq!(lines_fitting(24.0 - 1e-4, 12.0), 2);
+        assert_eq!(lines_fitting(24.0 - 1e-4, 12.0, 0.0), 2);
+    }
+
+    /// A line gap counts between lines only: `n·size + (n−1)·gap` against the box for the fit,
+    /// `n·(size + gap)` for the render stack.
+    #[test]
+    fn the_line_gap_sits_between_lines() {
+        // 12 px lines 4 apart: 2 lines are 28 tall, 3 are 44.
+        assert_eq!(lines_fitting(28.0, 12.0, 4.0), 2);
+        assert_eq!(lines_fitting(43.0, 12.0, 4.0), 2);
+        assert_eq!(lines_fitting(44.0, 12.0, 4.0), 3);
+        // The stack starts line `k` while `k·16 < box_h`.
+        assert_eq!(lines_allowed(32.0, 16.0), 2);
+        assert_eq!(lines_allowed(33.0, 16.0), 3);
+        // The clamp is one pitch, gap included, which still fits one line.
+        assert_eq!(
+            ellipsize_in_box("Small Brown Pouch", 10.0, 12.0, 4.0, rows10).as_deref(),
+            Some("Small B...")
+        );
+        assert_eq!(
+            ellipsize_in_box("Small Brown Pouch", 28.0, 12.0, 4.0, rows10),
+            None,
+            "two rows fit a 28 px box at 12 px lines 4 apart"
+        );
     }
 
     /// A stub row count: a 10-char-wide box, `ceil(chars / 10)`.
@@ -115,7 +139,7 @@ mod overflow_tests {
         assert_eq!(rows10(LONG), 4, "the string that started this");
 
         assert_eq!(
-            ellipsize_in_box(LONG, 38.0, 12.0, rows10).as_deref(),
+            ellipsize_in_box(LONG, 38.0, 12.0, 0.0, rows10).as_deref(),
             Some("Schematic: Small Seaforium ..."),
             "the fit law allows 3 lines, so it truncates"
         );
@@ -156,12 +180,12 @@ mod overflow_tests {
     #[test]
     fn sub_one_line_boxes_render_their_single_line() {
         // The money purse number: "145" in the 20×13 box at NumberFontNormal's 14px pitch.
-        assert_eq!(ellipsize_in_box("145", 13.0, 14.0, rows10), None);
+        assert_eq!(ellipsize_in_box("145", 13.0, 14.0, 0.0, rows10), None);
         // The action-button hotkey: "1" in the 36×10 box at NumberFontNormalSmallGray's 12px.
-        assert_eq!(ellipsize_in_box("1", 10.0, 12.0, rows10), None);
+        assert_eq!(ellipsize_in_box("1", 10.0, 12.0, 0.0, rows10), None);
         // The clamp admits one line only: longer text truncates to a one-line prefix.
         assert_eq!(
-            ellipsize_in_box("Small Brown Pouch", 10.0, 12.0, rows10).as_deref(),
+            ellipsize_in_box("Small Brown Pouch", 10.0, 12.0, 0.0, rows10).as_deref(),
             Some("Small B...")
         );
     }

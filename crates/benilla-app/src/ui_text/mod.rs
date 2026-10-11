@@ -82,15 +82,16 @@ mod cap_tests {
     }
 }
 // Line pitch has no line-height factor: the reference's `LayoutLines` (`0x5cdc20`) steps
-// `px(size) + spacing`, XML `spacing` defaulting to 0. Cosmic buffers take `size` as their line
+// `px(size) + px(spacing)`, the spacing defaulting to 0. Cosmic buffers take `size` as their line
 // height too, unused: every run shapes single-line (`Wrap::None`).
 
 /// The FontString display string, the ellipsis seam's answer, remembered per region. The reference
 /// builds it once (`0x771ec0`, into `CGxString+0xf8`) and rebuilds it only when the guard
 /// `[fontstring+0x60] & 1` is cleared: by `SetFont` (`0x7715e0`), `SetTextHeight` (`0x771666`),
-/// `SetText` (`0x771ea4`) or a resolved-rect size change (`0x768d20`); nothing per frame reaches
-/// `0x771ec0` or `0x7724a0`. This compares those inputs instead of keeping a dirty flag, sizes at
-/// the reference's `1e-5`, and not position, as a move rebuilds nothing.
+/// `SetText` (`0x771ea4`) or a resolved-rect size change (`0x768d20`), and a spacing change
+/// rebuilds at once (`0x77228f` → `0x7724a0`); nothing per frame reaches `0x771ec0` or `0x7724a0`.
+/// This compares those inputs instead of keeping a dirty flag, sizes at the reference's `1e-5`, and
+/// not position, as a move rebuilds nothing.
 #[derive(Default)]
 pub(crate) struct EllipsisMemo {
     entries: std::collections::HashMap<RegionHandle, Remembered>,
@@ -104,6 +105,8 @@ struct Remembered {
     font: Option<String>,
     height: Option<f32>,
     outline: Outline,
+    /// The line gap moves the fit, so it moves the answer.
+    spacing: f32,
     /// The answer; `None` means the text fits and draws raw, also worth remembering.
     display: Option<String>,
 }
@@ -131,8 +134,9 @@ impl EllipsisMemo {
             && (e.box_h - box_h).abs() < RECT_EPS
             && e.font.as_deref() == font.path
             && e.height == font.height
-            && e.outline == font.outline)
-            .then_some(&e.display)
+            && e.outline == font.outline
+            && e.spacing.to_bits() == font.spacing.to_bits())
+        .then_some(&e.display)
     }
 
     fn put(
@@ -156,6 +160,7 @@ impl EllipsisMemo {
                 font: font.path.map(str::to_string),
                 height: font.height,
                 outline: font.outline,
+                spacing: font.spacing,
                 display,
             },
         );
@@ -178,6 +183,7 @@ mod ellipsis_memo_tests {
             path,
             height,
             outline,
+            spacing: 0.0,
             alpha_gradient: None,
         }
     }

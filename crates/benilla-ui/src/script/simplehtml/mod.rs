@@ -11,10 +11,10 @@
 //! ScrollFrame measures the blocks as regions (`0x786e30`).
 //!
 //! Deviation: the block step is not pixel-snapped (`0x766750`), because layout here is in logical
-//! units; the two differ by under a pixel, and not at all at the default spacing of 0. Line spacing
-//! inside a block is not applied, as nothing here models line spacing; `SetSpacing` sets the step
-//! between blocks. Deviation: a block of width 0, in a frame sized by anchors, gets its text's
-//! natural width where the reference keeps 0, because every width-less FontString here does.
+//! units; the two differ by under a pixel, and not at all at the default spacing of 0. The spacing
+//! is also each block's line gap, as the block FontString inherits it. Deviation: a block of width
+//! 0, in a frame sized by anchors, gets its text's natural width where the reference keeps 0,
+//! because every width-less FontString here does.
 //!
 //! The method table (`0x87ba80`) has 19 entries, all installed; the first sixteen take an optional
 //! leading element name (`0x795d80`). Build 5875 has no `GetText`.
@@ -62,7 +62,8 @@ pub(crate) struct ElementFont {
     pub(crate) shadow: Option<FontShadow>,
     /// `CSimpleFont+0x54`, ctor `0x212` (`0x783a98`): CENTER, MIDDLE and the one-to-one bit.
     pub(crate) justify: Justify,
-    /// `+0x50`, ctor 0 (`0x783a81`): the step between blocks and, in the reference, the line gap.
+    /// `+0x50`, ctor 0 (`0x783a81`), as set, a negative included: the step between blocks and each
+    /// block's line gap, both read through the block FontString's clamp (`0x772240`).
     pub(crate) spacing: f32,
 }
 
@@ -129,6 +130,12 @@ fn resolve_font(model: &Model, ef: &ElementFont) -> BlockPaint {
         if let Some(j) = fo.justify_v {
             p.justify.set_v(j);
         }
+        if let Some(sp) = fo.spacing {
+            p.spacing = sp;
+        }
+    }
+    if ef.explicit.spacing {
+        p.spacing = ef.spacing;
     }
     if ef.explicit.face {
         p.font_path = ef.font_path.clone();
@@ -251,6 +258,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     outline: paint.outline,
                     vertex_color: paint.color,
                     font_shadow: paint.shadow,
+                    spacing: paint.spacing,
                     ..RegionData::default()
                 };
                 // The tag's `align` is written after `SetFontObject` (`0x78ae78`), so it beats
@@ -263,7 +271,8 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                 model.region_data.insert(rh, d);
                 model.touch_measure(rh); // a text block arrives with its text
                 prev_block = Some(id);
-                next_y = -paint.spacing;
+                // The block FontString's field, which its setter clamped (`0x78aeaf`).
+                next_y = -paint.spacing.max(0.0);
                 made.push(rh);
             }
             Block::Image {
@@ -493,6 +502,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     ef.color = p.color;
                     ef.shadow = p.shadow;
                     ef.justify = p.justify;
+                    ef.spacing = p.spacing;
                     ef.explicit = super::FontExplicit {
                         face: ef.font_path.is_some(),
                         height: ef.font_height.is_some(),
@@ -501,6 +511,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         shadow: ef.shadow.is_some(),
                         justify_h: true,
                         justify_v: true,
+                        spacing: true,
                     };
                 }
                 // A re-point keeps the severance mask, as on a region: each local setter clears
@@ -536,25 +547,27 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetFont",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
             let elem = take_element(&mut rest);
-            let (path, height) =
-                super::font_block::set_font_args(&arg(&rest, 0), &arg(&rest, 1), "SimpleHTML")?;
-            let flags = match arg(&rest, 2) {
-                Value::String(s) => Some(s.to_str()?.to_string()),
-                _ => None,
-            };
+            let super::font_block::FontArgs {
+                path,
+                height,
+                flags,
+            } = super::font_block::set_font_args(
+                lua,
+                &this,
+                &arg(&rest, 0),
+                &arg(&rest, 1),
+                &arg(&rest, 2),
+            )?;
             let ok = !path.is_empty();
             edit_font(lua, &this, elem, |ef| {
                 if ok {
                     ef.font_path = Some(path);
                     ef.explicit.face = true;
+                    ef.outline = flags;
+                    ef.explicit.outline = true;
                 }
                 ef.font_height = Some(height);
                 ef.explicit.height = true;
-                if let Some(f) = flags {
-                    // The Lua flags spelling, not XML's `outline=` ([`Outline::flags`]).
-                    ef.outline = Outline::flags(&f);
-                    ef.explicit.outline = true;
-                }
             })?;
             Ok(if ok { Value::Number(1.0) } else { Value::Nil })
         })?,
@@ -650,14 +663,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── 10/11 · spacing ─────────────────────────────────────────────────────────────────────
-    // SetSpacing([element,] n) clamps a negative to 0 (`0x772240`, `0x772246`); it is the only gap
-    // between blocks, which stack flush at the ctor default of 0.
+    // SetSpacing([element,] n) is the shared setter (`0x7965b0` → `0x79fb40`): the number as given,
+    // which the blocks read through their FontString's clamp. It is the only gap between blocks,
+    // which stack flush at the ctor default of 0.
     m.set(
         "SetSpacing",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
             let elem = take_element(&mut rest);
-            let n = f32::from_lua(arg(&rest, 0), lua)?.max(0.0);
-            edit_font(lua, &this, elem, |ef| ef.spacing = n)
+            let n = super::font_block::spacing_arg(lua, &this, &arg(&rest, 0))?;
+            edit_font(lua, &this, elem, |ef| {
+                ef.spacing = n;
+                ef.explicit.spacing = true;
+            })
         })?,
     )?;
     m.set(

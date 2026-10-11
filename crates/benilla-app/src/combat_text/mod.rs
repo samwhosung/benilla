@@ -259,6 +259,7 @@ pub(crate) fn float_combat_text(
                 path: font.as_ref().and_then(|f| f.0.as_deref()),
                 height: Some(target_px),
                 outline: Outline::None,
+                spacing: 0.0, // one line
                 alpha_gradient: None,
             },
             // A world overlay with its own seat; the UI grid does not apply.

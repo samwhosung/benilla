@@ -24,6 +24,16 @@ pub(super) struct Resolved {
     pub(super) radius: u8,
     /// The step law's per-glyph bias ([`super::step_extra_of`]).
     pub(super) step_extra: f32,
+    /// The line gap, whole device pixels in logical px ([`super::line_gap`]).
+    pub(super) gap: f32,
+}
+
+/// `n` lines' height, `n·S + (n−1)·gap` (`0x5c2070`); 0 for none.
+pub(super) fn block_height(n: usize, r: Resolved) -> f32 {
+    if n == 0 {
+        return 0.0;
+    }
+    n as f32 * r.size + (n - 1) as f32 * r.gap
 }
 
 /// Resolve a spec without touching the caches ([`TextEngine::ensure_metrics`] covers the text).
@@ -36,6 +46,7 @@ pub(super) fn resolve(e: &mut TextEngine, font: &FontSpec) -> Resolved {
         size: e.logical_size(ppem),
         radius: super::super::outline::radius_of(font.outline),
         step_extra: super::step_extra_of(font.outline),
+        gap: super::line_gap(font.spacing, e.dpi()),
     }
 }
 
@@ -70,6 +81,7 @@ pub(crate) fn measure_line_width_for_test(
         size: e.logical_size(ppem),
         radius: 0,
         step_extra,
+        gap: 0.0,
     };
     measure_line_width(e, r, step_extra, text)
 }
@@ -131,9 +143,9 @@ pub(crate) fn measure_text(
     }
     // Deviation: one pixel of headroom over the reference's measured width, kept because dropping
     // it narrows every auto-sized FontString, a look change.
-    // Height: N lines at the font em with no outline pad (`0x5c2070`: `N·S + (N-1)·gap`, gap 0 in
-    // shipped UI); an outlined ring pokes past it, as in the reference.
-    (max_w.ceil() + 1.0, render_lines.len() as f32 * r.size)
+    // Height: N lines at the font em with no outline pad, the gap between them (`0x5c2070`:
+    // `N·S + (N-1)·gap`); an outlined ring pokes past it, as in the reference.
+    (max_w.ceil() + 1.0, block_height(render_lines.len(), r))
 }
 
 /// How many rows `text` wraps into at `wrap_width`, by the render's own [`wrap_line`] pass: the
@@ -232,8 +244,8 @@ pub(crate) fn ellipsize_to_fit(
         e.ensure_metrics(r.face, r.ppem, "...");
         let e = &*e;
         // Overflow is decided one row past the box, the reference's bound (`wrapped_rows_capped`).
-        let cap = overflow::lines_fitting(box_h.max(r.size), r.size) + 1;
-        overflow::ellipsize_in_box(text, box_h, r.size, |candidate| {
+        let cap = overflow::lines_fitting(box_h.max(r.size + r.gap), r.size, r.gap) + 1;
+        overflow::ellipsize_in_box(text, box_h, r.size, r.gap, |candidate| {
             wrapped_rows_capped(e, r, candidate, box_w, cap)
         })
     };
@@ -323,8 +335,8 @@ pub(crate) fn line_advances(e: &mut TextEngine, text: &str, font: FontSpec) -> V
 }
 
 /// The multiline EditBox row table: the raw byte where each wrapped row of `text` starts at
-/// `wrap_width`, by the render's own [`wrap_line`] pass, and the row pitch (the font em). Never
-/// empty (`[0]` for empty text).
+/// `wrap_width`, by the render's own [`wrap_line`] pass, and the row pitch, the font em plus the
+/// line gap (`0x77d133`-`0x77d161`). Never empty (`[0]` for empty text).
 pub(crate) fn line_rows(
     e: &mut TextEngine,
     text: &str,
@@ -352,7 +364,7 @@ pub(crate) fn line_rows(
     if rows.is_empty() {
         rows.push(0);
     }
-    (rows, r.size)
+    (rows, r.size + r.gap)
 }
 
 /// [`line_rows`]'s walk for one `\n` segment at `base`: each row starts past the previous row's

@@ -200,6 +200,7 @@ pub(super) fn pill_quads(
                 path: None,
                 height: Some(PILL_QUAD_PX),
                 outline: Outline::None,
+                spacing: 0.0,
                 alpha_gradient: None,
             },
             // Our own dev overlay: measured off a degenerate rect, then shifted into the pill.

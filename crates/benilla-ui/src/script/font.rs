@@ -3,8 +3,7 @@
 //!
 //! The reference's class is `CSimpleFont` (`0x87a454`). Its method table (`0x87c7c8`) has 22
 //! entries (`mov edx,0x16` at `0x7a10d5`), and its lookup `0x7a1100` has no base-class fallback.
-//! All are here but the `SetSpacing` pair ([`install`]); `CopyFontObject` is the one a FontString
-//! lacks. A named font is published by `0x783870` through `SetName 0x784150` and `CreateLuaHandle
+//! All are here; `CopyFontObject` is the one a FontString lacks. A named font is published by `0x783870` through `SetName 0x784150` and `CreateLuaHandle
 //! 0x701bd0`, which leaves a non-nil `_G[name]` alone (`0x701cb8`).
 //!
 //! A setter repaints every FontString that inherits the font. The reference links dependents into
@@ -27,7 +26,7 @@ use super::binding_abi;
 use super::object::publish_global;
 use crate::justify;
 
-use super::{FontObject, FontShadow, Model, Outline, RegionData};
+use super::{FontObject, FontShadow, Model, RegionData};
 
 /// The shared metatable of every font-object handle.
 const REG_FONT_META: &str = "__benilla_font_meta";
@@ -108,8 +107,8 @@ fn resolve_required(verb: &str, v: &Value) -> mlua::Result<String> {
 /// on the source's held-value bits (`+0x38`, the merge `0x770910`), so an empty `CreateFont` font
 /// changes nothing.
 ///
-/// The outline is always copied, as [`Outline`] has no unset state; only an empty `CreateFont` font
-/// on an outlined FontString differs from the reference, clearing the outline.
+/// The outline is always copied, as [`Outline`](super::Outline) has no unset state; only an empty
+/// `CreateFont` font on an outlined FontString differs from the reference, clearing the outline.
 pub(crate) fn repaint(d: &mut RegionData, fo: &FontObject) {
     let ex = d.font_explicit;
     if !ex.face {
@@ -143,6 +142,13 @@ pub(crate) fn repaint(d: &mut RegionData, fo: &FontObject) {
     if !ex.justify_v {
         if let Some(j) = fo.justify_v {
             d.justify.set_v(j);
+        }
+    }
+    // Copied as given: a FontString's reader clamps it, as its setter `0x772240` does at the merge
+    // (`0x7708fd`).
+    if !ex.spacing {
+        if let Some(sp) = fo.spacing {
+            d.spacing = sp;
         }
     }
 }
@@ -185,10 +191,6 @@ fn read(lua: &Lua, this: &Table) -> mlua::Result<FontObject> {
 // ── install: the method table, the metatable and CreateFont ──────────────────────────────────
 
 /// Build the font-object method table and metatable, and register `CreateFont`.
-///
-/// Deviation: `SetSpacing`/`GetSpacing` are absent, because nothing renders line spacing (the line
-/// pitch is the font height): a missing method raises and names itself, where a stored, undrawn
-/// value would fail silently.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.set_named_registry_value(REG_FONT_WRAPPERS, lua.create_table()?)?;
 
@@ -245,21 +247,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetFont",
         lua.create_function(
-            |lua, (this, file, height, flags): (Table, Value, Value, Option<String>)| {
-                // The argument gate the FontString and EditBox tables share (`0x79f210`); a
-                // missing argument raises (`0x87c69c`).
-                let (path, height) = super::font_block::set_font_args(&file, &height, "Font")?;
+            |lua, (this, file, height, flags): (Table, Value, Value, Value)| {
+                // The argument gate every kind shares (`0x79f210`); a bad path or height raises
+                // (`0x87c69c`), and anything but a string or a number is no flags.
+                let super::font_block::FontArgs {
+                    path,
+                    height,
+                    flags,
+                } = super::font_block::set_font_args(lua, &this, &file, &height, &flags)?;
                 let ok = !path.is_empty();
                 edit(lua, &this, |fo| {
                     if ok {
                         fo.font = Some(path);
+                        fo.outline = flags;
                     }
                     fo.height = Some(height);
-                    if let Some(f) = flags {
-                        // The Lua flag spelling (`OUTLINE`, `THICKOUTLINE`), not the XML
-                        // attribute's (`NORMAL`, `THICK`).
-                        fo.outline = Outline::flags(&f);
-                    }
                 })?;
                 Ok(if ok { Value::Number(1.0) } else { Value::Nil })
             },
@@ -368,6 +370,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let o = read(lua, &this)?.shadow.map_or([0.0, 0.0], |s| s.offset);
             Ok((o[0], o[1]))
         })?,
+    )?;
+
+    // ── line spacing ────────────────────────────────────────────────────────────────────────
+    // The shared pair (`0x7a09f0` → `0x79fb40`, `0x7a0ab0` → `0x79fbe0`): `+0x50` as given, a
+    // negative included; a FontString that inherits it clamps it.
+    m.set(
+        "SetSpacing",
+        lua.create_function(|lua, (this, v): (Table, Value)| {
+            let sp = super::font_block::spacing_arg(lua, &this, &v)?;
+            edit(lua, &this, |fo| fo.spacing = Some(sp))
+        })?,
+    )?;
+    m.set(
+        "GetSpacing",
+        lua.create_function(|lua, this: Table| Ok(read(lua, &this)?.spacing.unwrap_or(0.0)))?,
     )?;
 
     // ── justification ───────────────────────────────────────────────────────────────────────

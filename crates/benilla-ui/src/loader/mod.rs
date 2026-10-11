@@ -933,6 +933,10 @@ pub(super) fn font_object_from_element(el: &Element) -> FontObject {
         justify_h,
         justify_v,
         shadow,
+        // `spacing=` (`0x783ee0`), inherited down the flattened chain like the other attributes.
+        spacing: el
+            .attr("spacing")
+            .and_then(|v| v.trim().parse::<f32>().ok()),
     }
 }
 

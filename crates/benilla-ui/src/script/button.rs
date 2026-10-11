@@ -6,7 +6,7 @@
 
 use mlua::{Lua, MultiValue, ObjectLike, Table, Value};
 
-use super::object::{as_f32, frame_handle_of};
+use super::object::frame_handle_of;
 use super::region::region_wrapper;
 use super::{event, JustifyH, Model, RegionData};
 use crate::justify::Justify;
@@ -697,30 +697,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SetFont(file, height [, flags]) (`0x780880`) sets all three embedded fonts and returns
     // nothing, discarding the shared `0x79f210`'s load result. It never touches the label
-    // (`+0x338`), so creates none: extract applies the stored font to whatever label exists. Its
-    // checks are 5.0's coercing `lua_isstring`/`lua_isnumber`, else a usage error (`0x87c69c`).
+    // (`+0x338`), so creates none: extract applies the stored font to whatever label exists. The
+    // arguments pass the shared gate, which names the button in its usage line.
     m.set(
         "SetFont",
         lua.create_function(
-            |lua, (this, file, height, flags): (Table, Value, Value, Option<String>)| {
-                let usage = || {
-                    mlua::Error::runtime(
-                        "Usage: <Button>:SetFont(\"font\", fontHeight [, flags])".to_string(),
-                    )
-                };
-                let path = match &file {
-                    Value::String(s) => s.to_str()?.to_string(),
-                    Value::Number(_) | Value::Integer(_) => as_f32(&file).to_string(),
-                    _ => return Err(usage()),
-                };
-                let height = match &height {
-                    Value::Number(_) | Value::Integer(_) => as_f32(&height),
-                    Value::String(s) => s.to_str()?.parse::<f32>().map_err(|_| usage())?,
-                    _ => return Err(usage()),
-                };
-                let flags = super::Outline::flags(flags.as_deref().unwrap_or(""))
-                    .as_str()
-                    .to_string();
+            |lua, (this, file, height, flags): (Table, Value, Value, Value)| {
+                let super::font_block::FontArgs {
+                    path,
+                    height,
+                    flags,
+                } = super::font_block::set_font_args(lua, &this, &file, &height, &flags)?;
+                let flags = flags.as_str().to_string();
                 with_button(lua, &this, |bs| {
                     bs.font = Some(ButtonFont {
                         path,

@@ -7,7 +7,7 @@ use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, Loader}
 /// Whether a region reads its own font attributes, the reference's `FONTSTRING+0x12c`: set by the
 /// ctor (`0x770de7`) and cleared only on a Button's `<NormalText>` (`0x778b7b`), whose string then
 /// skips them (`0x7710e1`-`0x771467`) for the button's Normal font to take (`0x783c30`). Here it
-/// gates only justify, the one font attribute the button's label pass applies.
+/// gates justify and spacing, the font attributes the button's label pass applies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FontAttrs {
     /// Every other region, a Button's `<ButtonText>` included.
@@ -212,6 +212,14 @@ impl Loader<'_> {
             }
             if let Some(j) = region.attr("justifyV") {
                 self.call_region(wrapper, "SetJustifyV", j.to_string(), dbg);
+            }
+            // `spacing=` (`0x771257`) goes through the setter and clears inherit bit `0x10`
+            // (`0x771298`), so it outlasts the font object's.
+            if let Some(sp) = region
+                .attr("spacing")
+                .and_then(|v| v.trim().parse::<f32>().ok())
+            {
+                self.call_region(wrapper, "SetSpacing", sp, dbg);
             }
         }
         if region.attr_bool("setAllPoints") {

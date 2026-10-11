@@ -114,17 +114,6 @@ const NOT_YET_ANSWERED: &[(&str, &str, &str)] = &[
         "Button CheckButton LootButton",
         "the same family",
     ),
-    // ── Line spacing, on the five classes that carry text ──
-    (
-        "GetSpacing",
-        "EditBox Font FontString MessageFrame ScrollingMessageFrame",
-        "line spacing is not modelled by `ui_text`'s layout; no caller anywhere measured",
-    ),
-    (
-        "SetSpacing",
-        "EditBox Font FontString MessageFrame ScrollingMessageFrame",
-        "the same — the setter is a layout change, not a stored value",
-    ),
     // ── EditBox mode read-backs ──
     (
         "IsAutoFocus",

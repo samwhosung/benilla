@@ -144,6 +144,9 @@ pub enum QuadContent {
         /// 1.12's `MasterFont` sets `(1,-1)` black, so nearly every stock font has one.
         shadow: Option<FontShadow>,
         outline: Outline,
+        /// The gap between lines in logical px, never negative: the line step is the font height
+        /// plus this, rounded up to a whole device pixel (`LayoutLines` `0x5cdc20`).
+        spacing: f32,
         /// `SetAlphaGradient`: before `start` opaque, the next `length` characters fading from 1
         /// to 0, the rest invisible.
         alpha_gradient: Option<(f32, f32)>,
@@ -283,6 +286,8 @@ pub struct FontObject {
     pub outline: Outline,
     pub justify_h: Option<JustifyH>,
     pub justify_v: Option<JustifyV>,
+    /// The gap between lines (`spacing=`, `SetSpacing`), stored as given (`+0x50`).
+    pub spacing: Option<f32>,
 }
 
 /// One entry of [`UiScript::extract`](super::UiScript::extract)'s render list, in the client's
@@ -405,6 +410,10 @@ pub(crate) struct RegionData {
     pub(crate) outline: Outline,
     /// Resolved drop shadow (font object `<Shadow>`), drawn behind the glyphs.
     pub(crate) font_shadow: Option<FontShadow>,
+    /// The gap between lines, as set (`SetSpacing`, XML `spacing=` or the font object): a
+    /// FontString's own setter clamps it (`0x772240`), the message frames' and the EditBox's font
+    /// stores it raw (`0x79fb40`), and every reader takes [`Self::line_gap`].
+    pub(crate) spacing: f32,
     /// The host-measured size of a FontString with no explicit height.
     pub(crate) measured: Option<MeasuredText>,
 }
@@ -429,6 +438,8 @@ pub(crate) struct FontExplicit {
     pub(crate) justify_h: bool,
     /// `SetJustifyV`, or XML `justifyV=`.
     pub(crate) justify_v: bool,
+    /// `SetSpacing`, or XML `spacing=` (inherit bit `0x10`).
+    pub(crate) spacing: bool,
 }
 
 /// A cached host measurement of a FontString's laid-out text.
@@ -456,7 +467,13 @@ impl MeasuredText {
 }
 
 impl RegionData {
-    /// The measure-cache key of the text, font, wrap width, outline and owner scale. A Lua metric
+    /// The gap a reader lays lines out by: [`Self::spacing`], never negative, as every line string
+    /// the reference draws stores it through the clamping `0x772240`.
+    pub(crate) fn line_gap(&self) -> f32 {
+        self.spacing.max(0.0)
+    }
+
+    /// The measure-cache key of the text, font, wrap width, outline, line gap and owner scale. A Lua metric
     /// read treats a measure under another key as absent; the layout keeps the old box until the
     /// new one lands, except for empty text, which is never measured.
     pub(crate) fn measure_key(&self, scale: f32) -> u64 {
@@ -478,6 +495,7 @@ impl RegionData {
         // The outline changes the measure: a THICK one steps each glyph 1 px further
         // (`GlyphStepBase 0x5ca2b0`).
         (self.outline as u8).hash(&mut hasher);
+        self.line_gap().to_bits().hash(&mut hasher);
         scale.to_bits().hash(&mut hasher);
         hasher.finish()
     }
@@ -495,6 +513,9 @@ pub struct EditBoxAdvanceRequest {
     pub height: Option<f32>,
     /// A THICK outline adds 1 px to every glyph step (`GlyphStepBase 0x5ca2b0`).
     pub outline: Outline,
+    /// The gap between a multiline box's rows, in frame-local units: the row pitch is the height
+    /// plus it (`0x77d133`-`0x77d161`).
+    pub spacing: f32,
     /// The box's `effective_scale`. The host measures at `height × scale × seam` but divides by
     /// the seam alone, so advances come back in screen UI units, like the mouse feed and the
     /// box's rect; a [`MeasureRequest`] answer is frame-local instead.
@@ -548,6 +569,9 @@ pub struct MeasureRequest {
     pub wrap_width: Option<f32>,
     /// A THICK outline adds 1 px to every glyph step (`GlyphStepBase 0x5ca2b0`).
     pub outline: Outline,
+    /// The gap between wrapped lines in frame-local units ([`RegionData::line_gap`]), scaled like
+    /// the height: the measure is `N·S + (N−1)·gap` (`0x5c2070`).
+    pub spacing: f32,
     /// The owner's `effective_scale`. The host measures at `font_height × scale × seam` and
     /// divides by that whole product: advances step to whole pixels, so a measure at the
     /// unscaled size is not proportional to the drawn one.

@@ -343,9 +343,9 @@ pub(crate) const TEXTURE_ONLY_METHODS: [&str; 12] = [
     "GetVertexColor",
 ];
 
-/// FontString-only: the font, text, justify and shadow block and the string metrics.
+/// FontString-only: the font, text, justify, shadow and spacing block and the string metrics.
 /// `GetStringHeight`, `SetFormattedText` and `SetSize` are not 1.12 FontString methods.
-pub(crate) const FONTSTRING_ONLY_METHODS: [&str; 21] = [
+pub(crate) const FONTSTRING_ONLY_METHODS: [&str; 23] = [
     "SetFont",
     "GetFont",
     "SetFontObject",
@@ -356,6 +356,8 @@ pub(crate) const FONTSTRING_ONLY_METHODS: [&str; 21] = [
     "GetShadowColor",
     "SetShadowOffset",
     "GetShadowOffset",
+    "SetSpacing",
+    "GetSpacing",
     "SetJustifyH",
     "GetJustifyH",
     "SetJustifyV",

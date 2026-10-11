@@ -57,6 +57,9 @@ pub(crate) struct FontSpec<'a> {
     /// The glyph outline: it picks the ring-and-fill cell and, for THICK only, the step law's
     /// extra `+1` (`GlyphStepBase` `0x5ca2b0`), so it changes measured width too.
     pub outline: Outline,
+    /// The gap between lines in logical px, scaled like [`Self::height`]; the line step adds it
+    /// rounded up to a whole device pixel ([`line_gap`]).
+    pub spacing: f32,
     /// The `SetAlphaGradient` reveal `(start, length)`; on the spec, shadows fade with their fill.
     pub alpha_gradient: Option<(f32, f32)>,
 }
@@ -77,6 +80,17 @@ fn step_extra_of(outline: Outline) -> f32 {
     match outline {
         Outline::Thick => 2.0,
         _ => 1.0,
+    }
+}
+
+/// The line gap a `spacing` of logical px adds to the line step: whole device pixels, rounded up by
+/// the reference's `+0.99999` truncation (`LayoutLines` `0x5cdce4`, the measure `0x5c214b`, the fit
+/// walk `0x5c225a`), and none for a spacing of 0 or less.
+fn line_gap(spacing: f32, dpi: f32) -> f32 {
+    if spacing > 0.0 {
+        (spacing * dpi + 0.999_99).trunc() / dpi
+    } else {
+        0.0
     }
 }
 
@@ -196,16 +210,17 @@ fn layout_text_quads_inner(
     };
     // The line stack (`CGxString+0x40` in `0x5cdc20`): a height-pinned rect stops emitting lines
     // once the pitch sum passes it, even for a caller that skips the ellipsis seam.
+    // The line step (`LayoutLines` `0x5cdc20`): `px(size) + px(spacing)`.
+    let pitch = r.size + r.gap;
     if rect.height() > HEIGHT_LIMIT_MIN {
-        render_lines.truncate(overflow::lines_allowed(rect.height(), r.size));
+        render_lines.truncate(overflow::lines_allowed(rect.height(), pitch));
     }
 
     let mut quads = Vec::new();
-    // `justifyV` seats the block in `rect` at a pitch of the font height (`LayoutLines` `0x5cdc20`:
-    // `px(size) + spacing`, spacing 0 in shipped UI), so `h = N·S`: the outline's `+2r` is only in
-    // the atlas cell (`[font+0x178]`), never the block. A degenerate rect keeps the top.
-    let pitch = r.size;
-    let block_h = render_lines.len() as f32 * pitch;
+    // `justifyV` seats the block in `rect` (`0x5cdf70`): `h = N·S + (N−1)·gap`, the outline's
+    // `+2r` only in the atlas cell (`[font+0x178]`), never the block. A degenerate rect keeps the
+    // top.
+    let block_h = measure::block_height(render_lines.len(), r);
     let v_offset = if rect.height() > f32::EPSILON {
         match justify.v {
             JustifyV::Top => 0.0,
@@ -415,6 +430,7 @@ mod measure_fits_render {
             path: Some(FACE),
             height: Some(h),
             outline: Outline::None,
+            spacing: 0.0,
             alpha_gradient: None,
         }
     }
@@ -493,11 +509,12 @@ mod measure_fits_render {
                     "the row's 10-tall title box stacks exactly one line"
                 );
                 // The ellipsis: the drawn string is a prefix plus "..." that fits that line.
-                let cap_rows = overflow::lines_fitting(BOX_H.max(r.size), r.size) + 1;
-                let display = overflow::ellipsize_in_box(title, BOX_H, r.size, |candidate| {
-                    measure::wrapped_rows_capped_for_test(&e, r, candidate, cap, cap_rows)
-                })
-                .unwrap_or_else(|| panic!("{title:?} at cap {cap} must ellipsize"));
+                let cap_rows = overflow::lines_fitting(BOX_H.max(r.size), r.size, r.gap) + 1;
+                let display =
+                    overflow::ellipsize_in_box(title, BOX_H, r.size, r.gap, |candidate| {
+                        measure::wrapped_rows_capped_for_test(&e, r, candidate, cap, cap_rows)
+                    })
+                    .unwrap_or_else(|| panic!("{title:?} at cap {cap} must ellipsize"));
                 assert!(
                     display.ends_with("..."),
                     "the truncation marker is three dots, got {display:?}"
@@ -560,6 +577,66 @@ mod measure_fits_render {
         assert!(
             grid.windows(2).all(|w| (w[1] - w[0] - 0.5).abs() > 1e-3),
             "a UI-grid seat never lands between two logical pixels: {grid:?}"
+        );
+    }
+
+    /// The draw steps each line by the font height plus the gap rounded up to a whole device pixel
+    /// (`LayoutLines` `0x5cdc20`), and a MIDDLE block seats `N·S + (N−1)·gap` (`0x5cdf70`).
+    #[test]
+    fn the_line_gap_steps_each_drawn_line_by_whole_device_pixels() {
+        let Some(mut e) = test_engine(1.0) else {
+            eprintln!("skipping: no install / font chain");
+            return;
+        };
+        // Each line's ink top: the topmost quad among those of its own glyphs.
+        let tops = |e: &mut TextEngine, spacing: f32, v: JustifyV| -> Vec<f32> {
+            let s = FontSpec {
+                spacing,
+                ..spec(12.0)
+            };
+            let rect = Rect::new(10.0, 20.0, 400.0, 220.0);
+            let quads = layout_text_quads(
+                e,
+                "H\nH\nH",
+                rect,
+                [1.0; 4],
+                Justify {
+                    h: JustifyH::Left,
+                    v,
+                },
+                0,
+                s,
+                TextSeat::UiGrid,
+            );
+            let mut y: Vec<f32> = quads.iter().map(|q| q.rect.min.y).collect();
+            y.sort_by(f32::total_cmp);
+            y.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+            y
+        };
+        for (dpi, spacing, gap) in [(1.0f32, 4.0f32, 4.0f32), (1.0, 2.5, 3.0), (2.0, 2.25, 2.5)] {
+            e.set_dpi_for_test(dpi);
+            let flush = tops(&mut e, 0.0, JustifyV::Top);
+            let spaced = tops(&mut e, spacing, JustifyV::Top);
+            assert_eq!(flush.len(), 3, "three lines at dpi {dpi}: {flush:?}");
+            assert_eq!(spaced.len(), 3, "three lines at dpi {dpi}: {spaced:?}");
+            for (i, (a, b)) in flush.iter().zip(&spaced).enumerate() {
+                let want = i as f32 * gap;
+                assert!(
+                    (b - a - want).abs() < 1e-3,
+                    "dpi {dpi}, spacing {spacing}: line {i} moved {} not {want}",
+                    b - a
+                );
+            }
+            // A negative spacing draws flush.
+            assert_eq!(tops(&mut e, -6.0, JustifyV::Top), flush, "dpi {dpi}");
+        }
+        // MIDDLE: two gaps more of block height lift the first line by one gap.
+        e.set_dpi_for_test(1.0);
+        let flush = tops(&mut e, 0.0, JustifyV::Middle);
+        let spaced = tops(&mut e, 4.0, JustifyV::Middle);
+        assert!(
+            (flush[0] - spaced[0] - 4.0).abs() < 1e-3,
+            "{flush:?} {spaced:?}"
         );
     }
 
@@ -767,10 +844,11 @@ mod ellipsis_cost {
             path: Some(FACE),
             height: Some(SIZE),
             outline: Outline::None,
+            spacing: 0.0,
             alpha_gradient: None,
         };
         let r = measure::resolve(&mut e, &s);
-        let fits = overflow::lines_fitting(BOX_H, r.size);
+        let fits = overflow::lines_fitting(BOX_H, r.size, r.gap);
 
         for (label, page) in [("html 2676", PAGE), ("plain 2880", PLAIN)] {
             let text = page_body(page);
@@ -789,7 +867,7 @@ mod ellipsis_cost {
                 let probes = Cell::new(0usize);
                 let chars = Cell::new(0usize);
                 let t = Instant::now();
-                let got = overflow::ellipsize_in_box(&text, BOX_H, r.size, |candidate| {
+                let got = overflow::ellipsize_in_box(&text, BOX_H, r.size, r.gap, |candidate| {
                     probes.set(probes.get() + 1);
                     chars.set(chars.get() + candidate.chars().count());
                     measure::wrapped_rows_capped_for_test(&e, r, candidate, BOX_W, cap)
