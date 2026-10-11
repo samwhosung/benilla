@@ -839,17 +839,5 @@ fn a_teardown_re_resolves_what_anchored_to_a_piece() {
         incremental == full,
         "the dirty-scope solve matches a full one"
     );
-    eprintln!(
-        "DBG {:?}",
-        s.eval::<(Option<f32>, Option<f32>, i64)>(
-            "return dep:GetLeft(), dep:GetTop(), dep:GetNumPoints()"
-        )
-    );
-    eprintln!(
-        "DBG2 {:?}",
-        s.eval::<(Option<String>, Option<String>)>(
-            "local p, r = dep:GetPoint(1) return p, r and r:GetObjectType()"
-        )
-    );
     assert!(!drawn(&s), "its anchor target is gone");
 }
