@@ -92,6 +92,9 @@ pub struct BackdropPiece {
 
 const SLICE: f32 = 0.125;
 
+/// One piece's texcoords, `[TL, TR, BR, BL]`.
+type Uvs = [[f32; 2]; 4];
+
 /// The eight border pieces in the struct's order, `+0x04` to `+0x20`, which is their creation
 /// order and their atlas slice (`0x77e8d0`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,7 +160,7 @@ fn edge_layout(edge: Edge, e: f32) -> PieceLayout {
 }
 
 /// A corner's texcoords, set once at creation (`0x77e8d0`): its slice, upright.
-fn corner_uvs(edge: Edge) -> [[f32; 2]; 4] {
+fn corner_uvs(edge: Edge) -> Uvs {
     let i = edge as u8 as f32;
     let (u0, u1) = (i * SLICE, (i + 1.0) * SLICE);
     [[u0, 0.0], [u1, 0.0], [u1, 1.0], [u0, 1.0]]
@@ -168,7 +171,7 @@ fn corner_uvs(edge: Edge) -> [[f32; 2]; 4] {
 /// between the corners. The divisors are the stored, unscaled sizes (`0x77f101 fdiv [esi+0x48]`,
 /// `0x77f195`), so a scaled frame repeats its art more or less often than at scale 1. All four
 /// arrays run `[TL, TR, BR, BL]`.
-fn run_uvs(bd: &Backdrop, rect: Rect, scale: f32) -> (Option<[[f32; 2]; 4]>, [[[f32; 2]; 4]; 4]) {
+fn run_uvs(bd: &Backdrop, rect: Rect, scale: f32) -> (Option<Uvs>, [Uvs; 4]) {
     let (l, r, b, t) = (rect.left, rect.right, rect.bottom, rect.top);
     let bg = (bd.has_bg() && bd.tile).then(|| {
         let period = if bd.tile_size != 0.0 {
