@@ -831,9 +831,6 @@ pub struct LayoutSolver {
     has_entry: Vec<bool>,
     /// Per frame, whether it was invalidated (`0x7680e0`) since its entry state.
     pending: Vec<bool>,
-    /// Per node, whether its entry state is final unless the resolve reaches it
-    /// ([`hold_entry`](Self::hold_entry)).
-    held: Vec<bool>,
     /// The keep test's threshold in the rects' units; 0 keeps nothing.
     keep_eps: f64,
     /// Kahn in-degree and reverse edges; each inner `Vec` is cleared, never freed.
@@ -865,7 +862,6 @@ impl LayoutSolver {
             self.cached.resize(need, None);
             self.has_entry.resize(need, false);
             self.pending.resize(need, false);
-            self.held.resize(need, false);
             self.indeg.resize(need, 0);
             self.dependents.resize_with(need, Vec::new);
             self.marked.resize(need, false);
@@ -891,7 +887,6 @@ impl LayoutSolver {
             self.cached[i] = None;
             self.has_entry[i] = false;
             self.pending[i] = false;
-            self.held[i] = false;
             self.indeg[i] = 0;
             self.dependents[i].clear();
             self.marked[i] = false;
@@ -939,13 +934,11 @@ impl LayoutSolver {
     /// and whether it was invalidated since (`0x7680e0`: its own write, a cleared valid bit).
     ///
     /// The reference resolves only what is invalidated: by its own write, or by a target's
-    /// resolve that stored a new rect (`0x768cf0`). A failed resolve stores nothing and skips that
-    /// slot (`0x768d55`), and `ClearAllPoints` invalidates nothing (`0x767620`). So a node not
-    /// reached keeps this state when its resolve fails or reads a target with no rect. Any other
-    /// node not reached is recomputed, which gives back its state only if every write that moved
-    /// its inputs since also invalidated it; the solver cannot tell one that did not, unless the
-    /// caller says so ([`hold_entry`](Self::hold_entry)). The rect is also what the keep test
-    /// ([`set_keep_eps`](Self::set_keep_eps)) holds a new one against.
+    /// resolve that stored a new rect (`0x768cf0`). A node the resolve does not reach keeps this
+    /// state, whatever its inputs now give, as a write that invalidates nothing (`ClearAllPoints`
+    /// `0x767620`, a dying target's unhook `0x767e70`, `SetTexture` `0x770200`) leaves it. The
+    /// rect is also what the keep test ([`set_keep_eps`](Self::set_keep_eps)) holds a new one
+    /// against.
     pub fn set_entry(&mut self, h: Handle, rect: Option<Rect>, invalidated: bool) {
         self.ensure(h);
         self.touch(h);
@@ -953,25 +946,6 @@ impl LayoutSolver {
         self.cached[i] = rect;
         self.has_entry[i] = true;
         self.pending[i] = invalidated;
-        self.held[i] = false;
-    }
-
-    /// Node `h`'s inputs moved since its entry state by a write that invalidated nothing, as a
-    /// dying target's unhook does (`0x767e70` with a zero flag): unless the resolve reaches it,
-    /// it keeps that state, never a recompute. Call after [`set_entry`](Self::set_entry).
-    pub fn hold_entry(&mut self, h: Handle) {
-        self.ensure(h);
-        self.touch(h);
-        self.held[h as usize] = true;
-    }
-
-    /// Whether the resolve reaches node `h`: it has no entry state, it was invalidated, or an
-    /// anchor target stored a new rect (`0x768cf0`). `reads` lists its anchor targets.
-    pub fn reached(&self, h: Handle, mut reads: impl Iterator<Item = Handle>) -> bool {
-        let i = h as usize;
-        !self.has_entry.get(i).copied().unwrap_or(false)
-            || self.pending[i]
-            || reads.any(|t| self.changed(t))
     }
 
     /// Whether `h` now holds a rect it did not hold at entry: a resolve that stored a new rect,
@@ -990,31 +964,16 @@ impl LayoutSolver {
         }
     }
 
-    /// Whether node `h` takes the rect its inputs give it, by the rule [`set_entry`]
-    /// documents: when it was invalidated, when an anchor target stored a new rect, or, unless
-    /// held, when the rect resolved against targets that all hold one. `reads` lists its anchor
-    /// targets.
+    /// Whether the resolve reaches node `h`, by the rule [`set_entry`] documents: it has no entry
+    /// state, it was invalidated, or an anchor target stored a new rect. Only then does it take
+    /// the rect its inputs give it, or fail. `reads` lists its anchor targets.
     ///
     /// [`set_entry`]: Self::set_entry
-    pub fn takes_resolve(
-        &self,
-        h: Handle,
-        resolved: bool,
-        reads: impl Iterator<Item = Handle>,
-    ) -> bool {
+    pub fn reached(&self, h: Handle, mut reads: impl Iterator<Item = Handle>) -> bool {
         let i = h as usize;
-        if !self.has_entry.get(i).copied().unwrap_or(false) || self.pending[i] {
-            return true;
-        }
-        let mut reads_failed = false;
-        for t in reads {
-            if self.rect(t).is_none() {
-                reads_failed = true;
-            } else if self.changed(t) {
-                return true;
-            }
-        }
-        resolved && !reads_failed && !self.held[i]
+        !self.has_entry.get(i).copied().unwrap_or(false)
+            || self.pending[i]
+            || reads.any(|t| self.changed(t))
     }
 
     /// The entry rect of node `h`, which it keeps when the resolve does not reach it.
@@ -1100,14 +1059,8 @@ impl LayoutSolver {
 
     fn resolve_one(&mut self, h: Handle) {
         let i = h as usize;
-        let outcome = {
-            let input = &self.input[i];
-            let rects = &self.rect;
-            resolve_rect(input, |t| rects.get(t as usize).copied().flatten())
-        };
         let anchors = self.input[i].anchors;
-        let resolved = matches!(outcome, ResolveOutcome::Resolved(_));
-        if !self.takes_resolve(h, resolved, anchors.iter().map(|a| a.relative_to)) {
+        if !self.reached(h, anchors.iter().map(|a| a.relative_to)) {
             // Not reached: the entry state stands, rect or none.
             self.rect[i] = self.cached[i];
             if self.rect[i].is_none() {
@@ -1115,6 +1068,11 @@ impl LayoutSolver {
             }
             return;
         }
+        let outcome = {
+            let input = &self.input[i];
+            let rects = &self.rect;
+            resolve_rect(input, |t| rects.get(t as usize).copied().flatten())
+        };
         match outcome {
             ResolveOutcome::Resolved(r) => {
                 let kept = self.cached[i].filter(|&c| keeps_rect(c, r, self.keep_eps));

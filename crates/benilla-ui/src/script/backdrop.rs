@@ -369,8 +369,9 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
             );
         }
     }
+    // Each piece is invalidated after its points are set (`0x77e9ca`..`0x77ec77`, `0x77ed05`..).
     for rh in pieces.iter().flatten() {
-        model.touch_layout_region(*rh);
+        model.invalidate_region(*rh, true);
     }
     model.backdrops.insert(
         fh,
@@ -429,8 +430,9 @@ pub(crate) fn set_metrics(
         };
         (d.anchors, d.size) = piece_geometry(owner, layout);
     }
+    // Set as `0x77e8d0` sets them, so invalidated as there.
     for rh in pieces.iter().flatten() {
-        model.touch_layout_region(*rh);
+        model.invalidate_region(*rh, true);
     }
     if let Some(rect) = model.resolved.get(&fh).copied() {
         run_texcoords(model, fh, rect);

@@ -150,10 +150,12 @@ pub(crate) struct Model {
     /// node nothing invalidated keeps a state a recompute could change
     /// ([`Model::invalidate_frame`]).
     pub(crate) layout_pending: Vec<u32>,
-    /// Layout ids whose anchors a dying target's unhook freed (`0x768e20` → `0x767e70` with a zero
-    /// flag, which invalidates nothing) since their last layout write: each keeps the state it
-    /// holds until the resolve reaches it ([`crate::layout::LayoutSolver::hold_entry`]).
-    pub(crate) layout_held: HashSet<u32>,
+    /// Layout ids whose inputs a write moved without invalidating them since they were last
+    /// invalidated: a dying target's unhook (`0x768e20` → `0x767e70` with a zero flag), new art
+    /// (`SetTexture` `0x770200`), a re-link into another frame (`0x77fd10`). Each holds a state a
+    /// re-resolve need not give back, so a write the reference invalidates for is not skipped as
+    /// a no-op on it ([`Model::invalidate_frame`]).
+    pub(crate) layout_unsettled: HashSet<u32>,
     /// The screen the last converged resolve laid out against: a frame anchored to it is reached
     /// when it moves, as by any target's new rect.
     pub(crate) layout_screen: Option<Rect>,
@@ -198,12 +200,6 @@ pub(crate) struct Model {
     /// drawing, as the failed resolve (`0x768d55`) leaves the quad `0x770670` wrote and its emit
     /// checks only its texture (`0x7706e0`). Dropped when it resolves again.
     pub(crate) region_kept: HashMap<RegionHandle, Rect>,
-    /// Per Texture with an axis sized 0, the texel span its last resolve read, `None` for no art.
-    /// The resolver reads it through the size getter (`0x767579` → `0x770720`) only when it
-    /// resolves the texture, and `SetTexture` invalidates nothing (`0x770200`), so a recompute
-    /// the resolve does not reach reads this, never the art set since. A layout write to the
-    /// region drops it, so its next resolve reads the art afresh.
-    pub(crate) region_art_span: HashMap<RegionHandle, Option<(f32, f32)>>,
 
     /// The next object id to mint; ids start at 1, since 0 is `SCREEN`.
     pub(crate) next_id: u32,
@@ -1155,7 +1151,6 @@ impl Model {
             font_objects_by_lower: HashMap::new(),
             region_resolved: HashMap::new(),
             region_kept: HashMap::new(),
-            region_art_span: HashMap::new(),
             next_id: 1,
             id_to_frame: IdMap::default(),
             frame_to_id: HashMap::new(),
@@ -1184,7 +1179,7 @@ impl Model {
             text_flips: Vec::new(),
             layout_force: Vec::new(),
             layout_pending: Vec::new(),
-            layout_held: HashSet::new(),
+            layout_unsettled: HashSet::new(),
             layout_screen: None,
             errors: Vec::new(),
             pending_error_dispatch: Vec::new(),
@@ -1625,15 +1620,12 @@ impl Model {
     /// A write to region `rh`'s layout inputs or liveness: its anchors, size, measured extent,
     /// art or owner. Its node re-derives at the next resolve, joining or leaving the graph as it
     /// gained or lost its anchors. An id is minted only for an anchored region, the only kind that
-    /// can be a node; an anchorless one with no id has nothing in the graph to move. The region's
-    /// next resolve reads its art afresh, and is no longer held to its state.
+    /// can be a node; an anchorless one with no id has nothing in the graph to move. Naming
+    /// invalidates nothing: a write the reference invalidates for goes through
+    /// [`Self::invalidate_region`].
     pub(crate) fn touch_layout_region(&mut self, rh: RegionHandle) {
-        self.region_art_span.remove(&rh);
         match self.region_to_id.get(&rh) {
-            Some(&id) => {
-                self.layout_held.remove(&id);
-                self.name_layout_node(id);
-            }
+            Some(&id) => self.name_layout_node(id),
             None if self
                 .region_data
                 .get(&rh)
@@ -1661,7 +1653,9 @@ impl Model {
         }
     }
 
-    /// Names anchored region `rh` unless its node still holds its converged hash.
+    /// Text that emptied or filled on anchored region `rh`, which moves the measure its resolve
+    /// reads: a new string clears the valid bit and invalidates (`0x771ea4`), unless the node
+    /// still holds its converged hash, as when a clear and rebuild restored the same text.
     pub(crate) fn touch_layout_content(&mut self, rh: RegionHandle) {
         let Some(d) = self.region_data.get(&rh) else {
             return;
@@ -1681,16 +1675,13 @@ impl Model {
                 return;
             }
         }
-        self.touch_layout_region(rh);
+        self.clear_region_valid(rh);
     }
 
     /// The same for frame `h`: its anchors, size, scale, clamp or scroll override.
     pub(crate) fn touch_layout_frame(&mut self, h: FrameHandle) {
         match self.frame_to_id.get(&h) {
-            Some(&id) => {
-                self.layout_held.remove(&id);
-                self.name_layout_node(id);
-            }
+            Some(&id) => self.name_layout_node(id),
             None if self.arena.frame(h).is_some() => {
                 self.frame_id(h); // mints and names
             }
@@ -1701,7 +1692,8 @@ impl Model {
     /// A write the reference invalidates frame `h` for (`0x7680e0`): `SetPoint`, `SetWidth`,
     /// `SetClampedToScreen` and the like, which pass `changed` for whether it moved an input. One
     /// that moved nothing is skipped, as a re-resolve gives back the rect the frame holds, unless
-    /// the frame holds one a re-resolve would not give it ([`Self::frame_holds_stale`]).
+    /// the frame holds one a re-resolve would not give it ([`Self::frame_holds_stale`]): only an
+    /// invalidated node, or one whose target stored a new rect, takes a new rect.
     pub(crate) fn invalidate_frame(&mut self, h: FrameHandle, changed: bool) {
         if !changed && !self.frame_holds_stale(h) {
             return;
@@ -1735,9 +1727,50 @@ impl Model {
         }
     }
 
-    /// Whether frame `h` holds a rect its inputs would not resolve to now: it has no anchors, or
-    /// reads a target with no rect, so the rect stands only because nothing invalidated it since.
+    /// A write that moved region `rh`'s layout inputs and invalidated nothing (a re-link into
+    /// another frame, `0x77fd10`; a dying target's unhook, `0x767e70`): its node re-derives, and
+    /// it keeps its state until the resolve reaches it.
+    pub(crate) fn unsettle_region(&mut self, rh: RegionHandle) {
+        self.touch_layout_region(rh);
+        if let Some(&id) = self.region_to_id.get(&rh) {
+            self.layout_unsettled.insert(id);
+        }
+    }
+
+    /// [`Self::unsettle_region`] for frame `h`.
+    pub(crate) fn unsettle_frame(&mut self, h: FrameHandle) {
+        self.touch_layout_frame(h);
+        if let Some(&id) = self.frame_to_id.get(&h) {
+            self.layout_unsettled.insert(id);
+        }
+    }
+
+    /// New art on region `rh` (`SetTexture` `0x770200`, the colour form `0x770360`): it marks
+    /// only the draw dirty (`0x77fdf0`), so the layout is not touched. An anchored texture with an
+    /// axis sized 0 reads its art in its next reaching resolve, so until then it holds a state
+    /// that resolve need not give back.
+    pub(crate) fn note_art(&mut self, rh: RegionHandle) {
+        let Some(&id) = self.region_to_id.get(&rh) else {
+            return;
+        };
+        if self.region_data.get(&rh).is_some_and(|d| {
+            !d.anchors.is_empty() && d.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0)
+        }) {
+            self.layout_unsettled.insert(id);
+        }
+    }
+
+    /// Whether frame `h` holds a state its inputs would not resolve to now: a write moved them
+    /// without invalidating it ([`Self::layout_unsettled`]), or it holds a rect with no anchors
+    /// or reading a target with no rect, which stands only because nothing invalidated it since.
     pub(crate) fn frame_holds_stale(&self, h: FrameHandle) -> bool {
+        if self
+            .frame_to_id
+            .get(&h)
+            .is_some_and(|id| self.layout_unsettled.contains(id))
+        {
+            return true;
+        }
         if !self.resolved.contains_key(&h) {
             return false;
         }
@@ -1748,6 +1781,13 @@ impl Model {
 
     /// [`Self::frame_holds_stale`] for region `rh`.
     pub(crate) fn region_holds_stale(&self, rh: RegionHandle) -> bool {
+        if self
+            .region_to_id
+            .get(&rh)
+            .is_some_and(|id| self.layout_unsettled.contains(id))
+        {
+            return true;
+        }
         if !self.region_resolved.contains_key(&rh) {
             return false;
         }

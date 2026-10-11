@@ -78,8 +78,9 @@ pub(super) fn link_region(
     shown: bool,
 ) {
     if model.arena.set_region_owner(rh, Some(owner)) {
-        // The owner supplies the region's scale to layout, so a re-link is a layout change.
-        model.touch_layout_region(rh);
+        // The owner supplies the region's scale to layout; the re-link invalidates nothing, so
+        // the region keeps its rect until the resolve reaches it.
+        model.unsettle_region(rh);
     }
     if let Some(r) = model.arena.region_mut(rh) {
         r.draw_layer = layer;
@@ -207,6 +208,7 @@ pub(super) fn set_texture_path(model: &mut Model, rh: RegionHandle, path: &str) 
     let data = model.region_data.entry(rh).or_default();
     data.texture = (!path.is_empty()).then(|| path.to_string());
     data.fill = None;
+    model.note_art(rh);
 }
 
 /// The loader's install of the texture a `<BarTexture>`, `<ThumbTexture>`, Button state-texture or
@@ -273,6 +275,7 @@ pub(super) fn clear_texture(model: &mut Model, rh: RegionHandle) {
     data.texture = None;
     data.fill = None;
     data.portrait_unit = None;
+    model.note_art(rh);
 }
 
 /// Apply the font parts an XML element supplies (`font=`, `<FontHeight>`, `outline=`), any of
@@ -377,6 +380,7 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
             data.texture = None;
             data.fill = None;
             data.circular = true;
+            model.note_art(rh);
             Ok(())
         })?,
     )?;
@@ -399,6 +403,7 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
             data.texture = Some(path);
             data.circular = true;
             data.portrait_unit = None;
+            model.note_art(rh);
             Ok(())
         })?,
     )?;
@@ -523,8 +528,9 @@ fn install_region_methods(lua: &Lua) -> mlua::Result<()> {
                 _ => return Err(wrong_type()),
             };
             if model.arena.set_region_owner(rh, new_owner) {
-                // The owner supplies the region's scale to layout, so a re-link is a layout change.
-                model.touch_layout_region(rh);
+                // The owner supplies the region's scale to layout; the re-link invalidates nothing
+                // (`0x77fd10`), so the region keeps its rect until the resolve reaches it.
+                model.unsettle_region(rh);
             }
             Ok(())
         },
@@ -691,11 +697,10 @@ pub(crate) fn free_regions(model: &mut Model, dying: &[RegionHandle]) {
         model.region_data.remove(&rh);
         model.region_resolved.remove(&rh);
         model.region_kept.remove(&rh);
-        model.region_art_span.remove(&rh);
         let name = model.arena.region(rh).and_then(|r| r.name.clone());
         if let Some(id) = model.region_to_id.remove(&rh) {
             model.id_to_region.remove(&id);
-            model.layout_held.remove(&id);
+            model.layout_unsettled.remove(&id);
             // The lookup entry goes only if this region is the one it holds; a later holder of the
             // same name was never in it.
             if let Some(name) = name {
@@ -776,18 +781,12 @@ pub(crate) fn free_regions(model: &mut Model, dying: &[RegionHandle]) {
              graph's readers of it or the nodes named since"
         );
     }
-    // Each dependent re-derives its edges, then is held to the state it has.
+    // Each dependent re-derives its edges and keeps the state it has.
     for rh in regions {
-        model.touch_layout_region(rh);
-        if let Some(&id) = model.region_to_id.get(&rh) {
-            model.layout_held.insert(id);
-        }
+        model.unsettle_region(rh);
     }
     for h in frames {
-        model.touch_layout_frame(h);
-        if let Some(&id) = model.frame_to_id.get(&h) {
-            model.layout_held.insert(id);
-        }
+        model.unsettle_frame(h);
     }
 }
 
@@ -827,7 +826,8 @@ pub(crate) fn implicit_creation_anchor(model: &mut Model, rh: RegionHandle) {
         }
         RegionKind::Title => return,
     }
-    model.touch_layout_region(rh);
+    // Both set their points with the invalidate flag (`0x7701ec`, `0x7714bc`).
+    model.invalidate_region(rh, true);
 }
 
 /// The middle-row point a justify word selects, as the FontString post-step (`0x771480`) and the
@@ -856,7 +856,8 @@ pub(crate) fn anchor_unanchored_at(
         return;
     }
     data.anchors = Anchors::from([Anchor::new(point, owner_id, point, 0.0, 0.0)]);
-    model.touch_layout_region(rh);
+    // The adopter's `SetPoint` invalidates (`0x778d96`, flag 1).
+    model.invalidate_region(rh, true);
 }
 
 /// [`implicit_creation_anchor`] for the loader, which holds region wrappers.

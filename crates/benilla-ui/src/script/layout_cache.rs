@@ -140,9 +140,8 @@ impl super::UiScript {
                     f.user_placed = true;
                 }
             }
-            if changed {
-                model.touch_layout_frame(h);
-            }
+            // A row applied invalidates the frame (`0x490710`).
+            model.invalidate_frame(h, changed);
         }
     }
 

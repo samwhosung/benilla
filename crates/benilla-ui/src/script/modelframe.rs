@@ -86,9 +86,8 @@ impl Model {
             input.width.to_bits() != w.to_bits() || input.height.to_bits() != ht.to_bits();
         input.width = w;
         input.height = ht;
-        if changed {
-            self.touch_layout_frame(h);
-        }
+        // The model-ready size write invalidates the frame (`0x76ce70`).
+        self.invalidate_frame(h, changed);
         if let Some(KindState::Model(m)) = self.arena.frame_mut(h).map(|f| &mut f.kind_state) {
             m.implicit_size = true;
         }

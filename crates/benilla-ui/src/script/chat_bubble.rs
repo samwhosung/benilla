@@ -341,10 +341,11 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
             -g.margin,
         ),
     ]);
-    // Once per geometry change: each node it wrote re-derives.
-    model.touch_layout_frame(frame);
-    model.touch_layout_region(tail);
-    model.touch_layout_region(text);
+    // Once per geometry change: each node it wrote is invalidated, as the bubble build's
+    // `SetPoint`s with the invalidate flag do (`0x4b0b6b`, `0x4b0b94`).
+    model.invalidate_frame(frame, true);
+    model.invalidate_region(tail, true);
+    model.invalidate_region(text, true);
     model.chat_bubbles.bubbles[i].laid_out = Some(g);
 }
 
@@ -393,7 +394,8 @@ fn fit_width(model: &mut Model, i: usize, g: BubbleGeometry) {
         d.size = Some((width, 0.0));
     }
     model.touch_measure(text);
-    model.touch_layout_region(text);
+    // `SetWidth`, which invalidates (`0x7683d0`).
+    model.invalidate_region(text, true);
 }
 
 /// The per-frame write, each property only when it moved.
@@ -457,7 +459,8 @@ fn drive(
             seat.0,
             seat.1,
         )]);
-        model.touch_layout_region(text);
+        // `SetPoint` with the invalidate flag (`0x4b157a`).
+        model.invalidate_region(text, true);
         model.chat_bubbles.bubbles[i].seat = Some(seat);
     }
 }

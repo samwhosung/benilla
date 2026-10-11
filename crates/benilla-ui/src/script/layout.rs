@@ -111,9 +111,8 @@ pub(super) fn effective_measure(data: &RegionData) -> Option<super::MeasuredText
 
 /// A region's per-node input hash: its anchors, explicit size, owner, whose effective scale the
 /// sweep reads (`None` for an owner with no layout id), and, where an axis authored 0 takes its
-/// span from it, its effective measure. Not a Texture's art, which a resolve reads only when it
-/// reaches the node and otherwise reads as latched ([`Model::region_art_span`]), so art set since
-/// moves no node, as `SetTexture` invalidates none (`0x770200`).
+/// span from it, its effective measure. Not a Texture's art, which only a resolve that reaches the
+/// node reads, so art set since moves no node, as `SetTexture` invalidates none (`0x770200`).
 #[inline]
 pub(super) fn region_node_hash(data: &RegionData, owner: Option<u32>) -> u64 {
     let mut node = InputFingerprint::default();
@@ -654,12 +653,12 @@ fn node_inputs(model: &Model, id: u32) -> String {
     if let Some(h) = model.id_to_frame.get(&id) {
         let f = model.arena.frame(*h);
         return format!(
-            "frame {:?} {:?}, effective scale {:?}, clamped {:?}, held {}",
+            "frame {:?} {:?}, effective scale {:?}, clamped {:?}, unsettled {}",
             f.and_then(|f| f.name.clone()),
             model.layout_inputs.get(h),
             f.map(|f| f.effective_scale),
             f.map(|f| f.clamped_to_screen),
-            model.layout_held.contains(&id),
+            model.layout_unsettled.contains(&id),
         );
     }
     let Some(rh) = model.id_to_region.get(&id) else {
@@ -670,15 +669,14 @@ fn node_inputs(model: &Model, id: u32) -> String {
     match model.region_data.get(rh) {
         Some(d) => format!(
             "region owner {owner:?} (id {owner_id:?}), anchors {:?}, size {:?}, measured {:?} \
-             (text {} bytes), texture {:?}, fill {}, art latched {:?}, held {}",
+             (text {} bytes), texture {:?}, fill {}, unsettled {}",
             d.anchors,
             d.size,
             d.measured.map(|m| (m.w, m.h)),
             d.text.as_deref().map_or(0, str::len),
             d.texture,
             d.fill.is_some(),
-            model.region_art_span.get(rh),
-            model.layout_held.contains(&id),
+            model.layout_unsettled.contains(&id),
         ),
         None => format!("region owner {owner:?} with no data"),
     }
@@ -969,14 +967,17 @@ impl UiScript {
             texture_size_probe,
             layout_force,
             layout_screen,
-            layout_held,
-            region_art_span,
+            layout_unsettled,
             ..
         } = model;
         let mut full_scope = false;
         // The nodes this resolve stores without the keep test; a write that cleared the resolved
         // bit of no node (an unanchored region's measure) leaves nothing to store.
         let mut forced = std::mem::take(layout_force);
+        // Each is reached now, so it holds what its inputs give again.
+        for id in forced.iter().chain(&pending) {
+            layout_unsettled.remove(id);
+        }
         // An invalidated region with no anchors is no node, and its resolve can only fail
         // (`0x768d55`): its valid bit clears, a Texture keeps its last quad. So does one whose
         // owner's scale moved, which the cascade invalidates (`0x76ad06`).
@@ -1226,11 +1227,7 @@ impl UiScript {
                 solver.set_external(id, r);
             }
             for (&i, &(cached, invalid)) in sweep_regions.iter().zip(&entry_regions) {
-                let id = scope.regions[i as usize].id;
-                solver.set_entry(id, cached, invalid);
-                if layout_held.contains(&id) {
-                    solver.hold_entry(id);
-                }
+                solver.set_entry(scope.regions[i as usize].id, cached, invalid);
             }
             for &i in &seed_frames {
                 let (h, id, _) = scope.plan[i as usize];
@@ -1248,9 +1245,6 @@ impl UiScript {
                     None => solver.set_frame(id, input),
                 }
                 solver.set_entry(id, cached, is_invalid(id));
-                if layout_held.contains(&id) {
-                    solver.hold_entry(id);
-                }
             }
             solver.solve();
             for &i in &solve_frames {
@@ -1292,6 +1286,25 @@ impl UiScript {
                 if prof {
                     n_regions_swept += 1;
                 }
+                // Not reached since its entry: it keeps its state, rect or none (see
+                // `LayoutSolver::set_entry`).
+                if !solver.reached(region_id, data.anchors.iter().map(|a| a.relative_to)) {
+                    match solver.entry(region_id) {
+                        Some(kept) => {
+                            solver.set_external(region_id, kept);
+                            if region_resolved.get(&rh) != Some(&kept) {
+                                region_resolved.insert(rh, kept);
+                                changed = true;
+                            }
+                        }
+                        None => {
+                            if region_resolved.remove(&rh).is_some() {
+                                changed = true;
+                            }
+                        }
+                    }
+                    continue;
+                }
                 // The owner supplies the region's scale and nothing else: no fallback edges.
                 let scale = arena.frame(owner).map(|f| f.effective_scale).unwrap_or(1.0);
                 // An axis authored 0, width or height, takes the host-measured extent: the
@@ -1317,20 +1330,10 @@ impl UiScript {
                 // A texture's unset axis takes its texel extent (`content_span`): the reference's
                 // size getter is virtual for both region classes. It must apply before the
                 // resolve, as `combine_edge` reads a zero span as no size and leaves an edge unset.
-                // The getter runs only in a resolve (`0x767579`, `0x7675e9`), so one that reaches
-                // the node, or its first, reads the art and latches it; any other recompute reads
-                // the latch, the span the texture's state was resolved with.
-                let reads = data.anchors.iter().map(|a| a.relative_to);
+                // The getter runs in the resolve (`0x767579`, `0x7675e9`), loading the art first if
+                // it must (`0x44b3b0`), so only a resolve that reaches the node reads it.
                 if !is_fontstring && (width == 0.0 || height == 0.0) {
-                    let span = match region_art_span.get(&rh) {
-                        Some(&latched) if !solver.reached(region_id, reads.clone()) => latched,
-                        _ => {
-                            let span = content_span(data, texture_size_probe.as_ref());
-                            region_art_span.insert(rh, span);
-                            span
-                        }
-                    };
-                    if let Some((cw, ch)) = span {
+                    if let Some((cw, ch)) = content_span(data, texture_size_probe.as_ref()) {
                         if width == 0.0 {
                             width = cw;
                         }
@@ -1363,25 +1366,6 @@ impl UiScript {
                 let vertical = axis(edges[0], edges[2]);
                 let horizontal = axis(edges[1], edges[3]);
                 let resolved_edges = vertical.zip(horizontal);
-                // Not reached since its entry: it keeps its state, rect or none (see
-                // `LayoutSolver::set_entry`).
-                if !solver.takes_resolve(region_id, resolved_edges.is_some(), reads) {
-                    match solver.entry(region_id) {
-                        Some(kept) => {
-                            solver.set_external(region_id, kept);
-                            if region_resolved.get(&rh) != Some(&kept) {
-                                region_resolved.insert(rh, kept);
-                                changed = true;
-                            }
-                        }
-                        None => {
-                            if region_resolved.remove(&rh).is_some() {
-                                changed = true;
-                            }
-                        }
-                    }
-                    continue;
-                }
                 let Some(((bottom, top), (left, right))) = resolved_edges else {
                     // The failed resolve (`0x768d55`) clears the valid bit, so the getters and a
                     // FontString's draw lose the rect; a Texture keeps the quad its last good
@@ -1501,7 +1485,6 @@ impl UiScript {
             region_data,
             region_resolved,
             region_kept,
-            region_art_span,
             frame_to_id,
             id_to_region,
             region_to_id,
@@ -1582,7 +1565,6 @@ impl UiScript {
         // regions drop. A cleared one keeps its rect until its own next invalidate.
         region_resolved.retain(|rh, _| arena.region(*rh).is_some() && region_data.contains_key(rh));
         region_kept.retain(|rh, _| arena.region(*rh).is_some() && region_data.contains_key(rh));
-        region_art_span.retain(|rh, _| arena.region(*rh).is_some() && region_data.contains_key(rh));
         pre.retain = pre.lap();
 
         // ── The change gate ───────────────────────────────────────────────────────────────────

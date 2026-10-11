@@ -199,6 +199,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     };
                     loaded
                 };
+                // The draw only (`0x77fdf0`); an art-sized texture now holds a state its next
+                // reaching resolve need not give back.
+                lua.app_data_mut::<Model>().expect("model").note_art(rh);
                 Ok(if loaded {
                     Value::Number(1.0)
                 } else {
@@ -480,9 +483,18 @@ impl crate::script::UiScript {
     pub fn set_texture_size_probe(&mut self, probe: crate::script::TextureSizeProbe) {
         let mut model = self.model_mut();
         model.texture_size_probe = Some(probe);
-        // Every art-sized region's span may move, and no per-node hash holds a probe's answer: a
-        // full-scope rebuild, as for a screen move, reading each art afresh.
-        model.region_art_span.clear();
+        // The reference has every art's size at hand (`0x44b3b0` loads it), so a probe installed
+        // late re-resolves each texture that takes a span from its art, as if it had been there.
+        let art_sized: Vec<u32> = model
+            .region_data
+            .iter()
+            .filter(|(_, d)| {
+                !d.anchors.is_empty() && d.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0)
+            })
+            .filter_map(|(rh, _)| model.region_to_id.get(rh).copied())
+            .collect();
+        model.layout_pending.extend(art_sized);
+        // No per-node hash holds a probe's answer: a full-scope rebuild, as for a screen move.
         model.layout_scope.invalidate();
         model.touch_layout();
     }

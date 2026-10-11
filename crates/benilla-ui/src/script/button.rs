@@ -481,6 +481,7 @@ fn set_slot_texture(
     if let Some(blend) = blend {
         data.blend = blend;
     }
+    model.note_art(rh);
     Ok(())
 }
 

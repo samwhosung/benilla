@@ -330,9 +330,10 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
         }
     }
 
-    // Each new block joins the graph; the old ones' frees named theirs.
+    // Each new block's `SetPoint` invalidates it (`0x78ae0c`, flag 1); the old ones' frees named
+    // theirs.
     for &rh in &made {
-        model.touch_layout_region(rh);
+        model.invalidate_region(rh, true);
     }
     model.simple_html.entry(fh).or_default().blocks = made;
 }

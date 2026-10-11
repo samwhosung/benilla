@@ -410,9 +410,8 @@ fn pin_top_left(
     input.anchors = pin;
     input.width = w;
     input.height = ht;
-    if changed {
-        model.touch_layout_frame(h);
-    }
+    // The size setters and a closing `0x7680e0(1)` invalidate (`0x768533`).
+    model.invalidate_frame(h, changed);
     // The size it now carries is explicit, as a `SetWidth`/`SetHeight` would leave it.
     model.note_authored_size(h);
     Some(changed)
@@ -494,7 +493,8 @@ fn drag_step(model: &mut Model, mv: FrameMove, dx: f32, dy: f32) {
                 })
                 .is_some();
             if moved {
-                model.touch_layout_frame(h);
+                // The offsets move and the frame is invalidated (`0x768c31`).
+                model.invalidate_frame(h, true);
                 mark_user_placed_change(model, h);
                 return;
             }

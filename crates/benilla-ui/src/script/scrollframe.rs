@@ -147,15 +147,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 s.range_dirty = true;
                 std::mem::replace(&mut s.child, new_child)
             })?;
+            let h = frame_handle_of(lua, &this)?;
+            let mut model = lua.app_data_mut::<Model>().expect("model");
             if old_child != new_child {
                 // The child takes this frame's override anchor and the old one drops it; the
-                // ScrollFrame's node re-derives its new child with it.
-                let h = frame_handle_of(lua, &this)?;
-                let mut model = lua.app_data_mut::<Model>().expect("model");
+                // ScrollFrame's node re-derives its new child with it. The old child goes back to
+                // its own anchors at once.
                 model.touch_layout_frame(h);
                 if let Some(old) = old_child {
-                    model.touch_layout_frame(old);
+                    model.invalidate_frame(old, true);
                 }
+            }
+            // Every call re-anchors the child, which invalidates it (`0x786d11` → `0x787100`).
+            if let Some(child) = new_child {
+                model.invalidate_frame(child, old_child != new_child);
             }
             Ok(())
         })?,
@@ -192,11 +197,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !changed {
                 return Ok(());
             }
-            // The child's override offset: the ScrollFrame's node re-derives its child.
+            // The child's override offset: the ScrollFrame's node re-derives its child, which the
+            // re-anchor invalidates (`0x787100`).
             let h = frame_handle_of(lua, &this)?;
-            lua.app_data_mut::<Model>()
-                .expect("model")
-                .touch_layout_frame(h);
+            reanchor_child(lua, &this, h)?;
             fire_scroll(lua, &this, "OnVerticalScroll", px)
         })?,
     )?;
@@ -227,9 +231,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             }
             let h = frame_handle_of(lua, &this)?;
-            lua.app_data_mut::<Model>()
-                .expect("model")
-                .touch_layout_frame(h);
+            reanchor_child(lua, &this, h)?;
             fire_scroll(lua, &this, "OnHorizontalScroll", px)
         })?,
     )?;
@@ -356,4 +358,16 @@ fn see_size(s: &mut ScrollFrameState, rect: Option<crate::layout::Rect>, eps: f6
         s.range_dirty = true;
     }
     s.seen_size = size;
+}
+
+/// A scroll offset moved: the ScrollFrame's node re-derives its child's override, and the re-anchor
+/// (`0x787100`, `SetPoint` with the invalidate flag) invalidates the child.
+fn reanchor_child(lua: &Lua, this: &Table, h: crate::widget::FrameHandle) -> mlua::Result<()> {
+    let child = with_scroll(lua, this, |s| s.child)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    model.touch_layout_frame(h);
+    if let Some(child) = child {
+        model.invalidate_frame(child, true);
+    }
+    Ok(())
 }

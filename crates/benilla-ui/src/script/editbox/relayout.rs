@@ -53,9 +53,8 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
         data.anchors = anchors;
     }
     data.size = size;
-    if !same_anchors || size_moved {
-        model.touch_layout_region(rh);
-    }
+    // The seat's `SetPoint`s and its invalidate (`0x77b96b`..`0x77b9f8`).
+    model.invalidate_region(rh, !same_anchors || size_moved);
     if size_moved {
         // The width is the wrap width, which keys the measure.
         model.touch_measure(rh);
@@ -137,10 +136,10 @@ pub(super) fn relayout(lua: &Lua, h: FrameHandle) -> bool {
     // `fld top; fadd bottom; fadd st, st(1)`.
     let height = (top + bottom) + text_h;
     let input = model.layout_inputs.entry(h).or_default();
-    if input.height.to_bits() != height.to_bits() {
-        input.height = height;
-        model.touch_layout_frame(h);
-    }
+    let moved = input.height.to_bits() != height.to_bits();
+    input.height = height;
+    // `SetHeight`, which invalidates (`0x7683f0`).
+    model.invalidate_frame(h, moved);
     true
 }
 

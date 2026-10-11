@@ -596,11 +596,12 @@ impl Plate {
             Anchors::from([Anchor::new(Point::Right, plate_id, Point::Left, 0.0, 0.0)]);
         raid_data.size = Some((g.raid_size, g.raid_size));
 
-        // Once per geometry change: each node it wrote re-derives.
-        model.touch_layout_frame(frame);
-        model.touch_layout_frame(bar);
+        // Once per geometry change: each node it wrote is invalidated, as the plate setup's
+        // `SetPoint`/`SetAllPoints` with the invalidate flag do (`0x7cb456`..`0x7cb806`).
+        model.invalidate_frame(frame, true);
+        model.invalidate_frame(bar, true);
         for rh in [border, glow, name, level, skull, raid] {
-            model.touch_layout_region(rh);
+            model.invalidate_region(rh, true);
         }
         model.nameplates.plates[i].laid_out = Some(g);
     }
@@ -633,7 +634,8 @@ impl Plate {
                 state.top_centre.0,
                 state.top_centre.1,
             )]);
-            model.touch_layout_frame(frame);
+            // `SetPoint` with the invalidate flag (`0x50a044`).
+            model.invalidate_frame(frame, true);
         }
 
         if last.is_none() {
@@ -670,7 +672,8 @@ impl Plate {
         if last.as_ref().is_none_or(|l| l.name != state.name) {
             model.region_data.entry(name).or_default().text = Some(state.name.clone());
             model.touch_measure(name);
-            model.touch_layout_region(name);
+            // A new string clears the valid bit and invalidates (`0x771ea4`).
+            model.clear_region_valid(name);
         }
         if last.as_ref().is_none_or(|l| l.hovered != state.hovered) {
             let c = if state.hovered {
@@ -700,7 +703,7 @@ impl Plate {
                     data.hidden = false;
                     model.region_data.entry(skull).or_default().hidden = true;
                     model.touch_measure(level);
-                    model.touch_layout_region(level);
+                    model.clear_region_valid(level);
                 }
                 // No level yet and no skull: the seat stays empty.
                 (None, false) => {

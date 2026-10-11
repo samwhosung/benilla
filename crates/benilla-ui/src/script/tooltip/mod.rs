@@ -189,7 +189,8 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 }]);
                 model.region_data.insert(left, d);
                 model.touch_measure(left); // an adopted cell can arrive text-in-hand
-                model.touch_layout_region(left); // a line row entered the layout graph
+                                           // A line row's points are set with the invalidate flag (`0x530197`).
+                model.invalidate_region(left, true);
             }
             let left_id = model.region_id(left);
 
@@ -220,7 +221,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                     Anchors::from([Anchor::new(Point::Right, left_id, Point::Left, 0.0, 0.0)]);
                 model.region_data.insert(right, d);
                 model.touch_measure(right); // an adopted cell can arrive text-in-hand
-                model.touch_layout_region(right); // a line row entered the layout graph
+                model.invalidate_region(right, true);
             }
             let right_id = model.region_id(right);
 
@@ -465,11 +466,11 @@ fn apply_anchor(
         let owner_id = model.frame_id(owner);
         let new = Anchors::from([Anchor::new(own, owner_id, rel, x, y)]);
         let input = model.layout_inputs.entry(h).or_default();
-        // No-op when unchanged, so the bag hover's per-frame SetOwner does not dirty the layout.
-        if !input.anchors.bits_eq(&new) {
-            input.anchors = new;
-            model.touch_layout_frame(h);
-        }
+        // No-op when unchanged, so the bag hover's per-frame SetOwner does not dirty the layout;
+        // a real one is `SetPoint` with the invalidate flag (`0x52ff12`..`0x52ffb2`).
+        let changed = !input.anchors.bits_eq(&new);
+        input.anchors = new;
+        model.invalidate_frame(h, changed);
     }
 }
 
@@ -649,9 +650,9 @@ pub(super) fn append_line(
     if let Some(d) = model.region_data.get_mut(&lh) {
         if d.size != pin {
             d.size = pin;
-            // A size-only write takes the named touch: a conservative one would re-derive the
-            // whole layout graph on every hover that turns a line between wrapped and plain.
-            model.touch_layout_region(lh);
+            // `SetWidth`, which invalidates (`0x7683d0`), named: a conservative touch would
+            // re-derive the whole layout graph on every hover that turns a line wrapped or plain.
+            model.invalidate_region(lh, true);
             // The wrap pin is the measure key's wrap-width input.
             model.touch_measure(lh);
         }
@@ -708,9 +709,10 @@ fn cursor_anchor(model: &mut Model, h: FrameHandle) {
     );
     let units = model.layout_units();
     let input = model.layout_inputs.entry(h).or_default();
-    // `0x767c70`'s change detect: the BOTTOM slot is replaced only on a real change.
+    // `0x767c70`'s change detect: the BOTTOM slot is replaced, and the plate invalidated
+    // (`0x530b97`, flag 1), only on a real change.
     if input.anchors.set(new, units) {
-        model.touch_layout_frame(h);
+        model.invalidate_frame(h, true);
     }
 }
 
@@ -783,7 +785,7 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         // that these inputs changed. The size goes through `SetWidth`/`SetHeight` (`0x530a2e`,
         // `0x530a39`), which invalidate the tooltip.
         model.note_layout_frame_write(h);
-        if moved {
+        if moved || model.frame_holds_stale(h) {
             if let Some(&id) = model.frame_to_id.get(&h) {
                 model.layout_pending.push(id);
             }
@@ -805,6 +807,9 @@ pub(super) fn layout_tooltips(model: &mut Model) {
                 .is_some_and(|d| d.anchors.set(new, units));
             if stored {
                 model.note_layout_region_write(rights[i]);
+                if let Some(&id) = model.region_to_id.get(&rights[i]) {
+                    model.layout_pending.push(id);
+                }
             }
         }
     }
