@@ -976,7 +976,8 @@ fn mover_under_a_still_cursor() -> crate::script::UiScript {
 }
 
 fn entered(s: &mut crate::script::UiScript) -> String {
-    s.eval::<String>("return table.concat(entered, ',')").unwrap()
+    s.eval::<String>("return table.concat(entered, ',')")
+        .unwrap()
 }
 
 /// A show arms the re-pick only through the input-index insert, which a frame reaches only with
