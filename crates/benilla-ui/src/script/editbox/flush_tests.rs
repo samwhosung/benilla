@@ -93,6 +93,19 @@ fn the_flush_follows_the_boxs_own_on_update_cursor_then_text() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// The box's place in the walk is its stratum's, not its creation's: a BACKGROUND box updates and
+/// flushes before the MEDIUM frames made around it (`0x7656c8`).
+#[test]
+fn a_box_flushes_after_its_on_update_in_its_strata_place() {
+    let mut s = script();
+    logged_box(&mut s);
+    s.run(r#"E:SetFrameStrata("BACKGROUND") E:SetText("abc")"#)
+        .unwrap();
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "update cursor@21 text:abc early late");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// An edit a box makes in its own `OnUpdate` is flushed by the same update, so its events fire in
 /// the same tick.
 #[test]

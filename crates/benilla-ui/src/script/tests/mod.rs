@@ -52,6 +52,7 @@ mod tooltip_item;
 mod tooltip_spell;
 mod tooltip_unit;
 mod toplevel;
+mod update_walk;
 mod visibility;
 mod widget_surface;
 mod worldframe;
