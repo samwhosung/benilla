@@ -592,11 +592,12 @@ fn node_inputs(model: &Model, id: u32) -> String {
     let owner_id = owner.and_then(|o| model.frame_to_id.get(&o));
     match model.region_data.get(rh) {
         Some(d) => format!(
-            "region owner {owner:?} (id {owner_id:?}), anchors {:?}, size {:?}, measured {:?}, \
-             texture {:?}, fill {}",
+            "region owner {owner:?} (id {owner_id:?}), anchors {:?}, size {:?}, measured {:?} \
+             (text {} bytes), texture {:?}, fill {}",
             d.anchors,
             d.size,
             d.measured.map(|m| (m.w, m.h)),
+            d.text.as_deref().map_or(0, str::len),
             d.texture,
             d.fill.is_some()
         ),
