@@ -42,6 +42,7 @@ mod regions;
 mod resize_bounds;
 mod scrollframe;
 mod setparent;
+mod shown_bit;
 mod simplehtml;
 mod size_changed;
 mod slider;
