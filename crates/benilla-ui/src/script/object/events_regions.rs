@@ -359,9 +359,12 @@ fn create_region(
             crate::framexml::resolve_name(&name, &super::parent_token_base(&model, Some(owner)))
         };
         publish_global(lua, &name, &wrapper)?;
-        // First name wins, as for frames; a sibling's `SetPoint` can then name this region.
+        // The region keeps its own name; the lookup a sibling's `SetPoint` names it by stays
+        // first-come, as `_G` is.
         let mut model = lua.app_data_mut::<Model>().expect("model");
-        model.region_names.entry(name).or_insert(id);
+        if let Some(rh) = model.id_to_region.get(&id).copied() {
+            crate::script::region::set_region_name(&mut model, rh, id, &name);
+        }
     }
     Ok(wrapper)
 }

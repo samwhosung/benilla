@@ -1198,7 +1198,7 @@ impl UiScript {
             });
         }
         // Region leaves publish into their own name table, not the arena's.
-        let id = *model.region_names.get(name)?;
+        let id = *model.region_by_name.get(name)?;
         let h = *model.id_to_region.get(&id)?;
         model.arena.region(h).map(|r| match r.kind {
             crate::widget::RegionKind::Texture => "Texture",

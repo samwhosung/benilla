@@ -378,7 +378,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetPortraitToTexture",
         lua.create_function(|lua, (name, path): (String, String)| {
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            let Some(id) = model.region_names.get(&name).copied() else {
+            let Some(id) = model.region_by_name.get(&name).copied() else {
                 return Ok(());
             };
             let Some(rh) = model.id_to_region.get(&id).copied() else {
@@ -632,25 +632,33 @@ fn install_region_methods(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// This region's global name, or `None` when anonymous: a scan of the region-name registry, the
-/// one authority, linear in named regions.
+/// This region's own name, or `None` when anonymous: the string on the region (`[+0x98]`, read by
+/// `GetName` through vtable `+4`, `0x46ff70`), whether or not it holds the lookup entry.
 pub(super) fn region_name_of(model: &Model, id: u32) -> Option<String> {
-    model
-        .region_names
-        .iter()
-        .find(|&(_, &v)| v == id)
-        .map(|(k, _)| k.clone())
+    let rh = *model.id_to_region.get(&id)?;
+    model.arena.region(rh)?.name.clone()
 }
 
-/// Publish a region's name into the registry a named `relativeTo` resolves through, first name
-/// winning as for frames. For sub-textures a setter creates and the XML loader names later
-/// (`SetThumbTexture`, `SetColorWheelTexture`); `CreateTexture(name)` publishes its own.
+/// `CScriptRegion::SetName` (`0x76c650`): the region keeps its own copy of the (already expanded)
+/// name, replacing the old one, and offers it to the name lookup, where the first holder stays
+/// (`_G`'s `0x701bd0` writes only when the entry is empty, `0x701c8a`).
+pub(crate) fn set_region_name(model: &mut Model, rh: RegionHandle, id: u32, name: &str) {
+    if let Some(region) = model.arena.region_mut(rh) {
+        region.name = Some(name.to_string());
+    }
+    model.region_by_name.entry(name.to_string()).or_insert(id);
+}
+
+/// Name a region the loader or a setter built nameless or under another name, as
+/// [`set_region_name`]. For sub-textures a setter creates and the XML loader names later
+/// (`SetThumbTexture`, `SetColorWheelTexture`); `CreateTexture(name)` names its own.
 pub(crate) fn publish_region_name(lua: &Lua, name: &str, region: &Table) {
-    let Ok(id) = super::object::decode_id(region) else {
+    let Ok(rh) = region_handle_of(lua, region) else {
         return;
     };
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    model.region_names.entry(name.to_string()).or_insert(id);
+    let id = model.region_id(rh);
+    set_region_name(&mut model, rh, id, name);
 }
 
 /// The type `GetObjectType()` answers and `IsObjectType` matches; `"Region"` for a dead handle.
@@ -670,9 +678,16 @@ pub(super) fn region_type_name(model: &Model, rh: RegionHandle) -> &'static str 
 pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
     model.region_data.remove(&rh);
     model.region_resolved.remove(&rh);
+    let name = model.arena.region(rh).and_then(|r| r.name.clone());
     if let Some(id) = model.region_to_id.remove(&rh) {
         model.id_to_region.remove(&id);
-        model.region_names.retain(|_, v| *v != id);
+        // The lookup entry goes only if this region is the one it holds; a later holder of the
+        // same name was never in it.
+        if let Some(name) = name {
+            if model.region_by_name.get(&name) == Some(&id) {
+                model.region_by_name.remove(&name);
+            }
+        }
         // Its node leaves the cached graph with its edges at the next resolve, and whatever
         // anchored to it re-resolves without it.
         model.name_layout_node(id);
@@ -759,13 +774,11 @@ pub(crate) fn implicit_creation_anchor_lua(lua: &Lua, wrapper: &Table) -> mlua::
 /// The receiver's name for error strings and what a leading `$parent` expands to, the owner frame
 /// (`+0x9c`), read under a borrow dropped before the ladder reads `_G`.
 pub(super) fn region_ladder_context(lua: &Lua, rh: RegionHandle) -> (String, String) {
-    let mut model = lua.app_data_mut::<Model>().expect("model");
-    let id = model.region_id(rh);
+    let model = lua.app_data_mut::<Model>().expect("model");
     let who = model
-        .region_names
-        .iter()
-        .find(|(_, &v)| v == id)
-        .map(|(n, _)| n.clone())
+        .arena
+        .region(rh)
+        .and_then(|r| r.name.clone())
         .unwrap_or_else(|| UNNAMED.to_string());
     let owner = model.arena.region(rh).map(|r| r.owner);
     let base = super::object::parent_token_base(&model, owner);

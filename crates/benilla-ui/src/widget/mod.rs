@@ -234,6 +234,10 @@ pub struct Region {
     /// `Region:SetParent(nil)`: unlinked and not drawn, but not destroyed (`0x77fd10` with a null
     /// parent). The owner's `regions` keeps it so `destroy` frees it; `SetParent(frame)` relinks.
     pub detached: bool,
+    /// The region's own name, the expanded string `SetName` keeps at `[+0x98]` (`0x76c650`); `None`
+    /// while anonymous. Only the `_G` entry is first-come (`0x701bd0`), so two regions can hold
+    /// one name, and `GetName` answers each its own.
+    pub name: Option<String>,
 }
 
 /// A cursor over a frame's child list for [`WidgetArena::next_child`]: the child last returned and
@@ -697,6 +701,7 @@ impl WidgetArena {
             sub_level,
             decl_seq,
             detached: false,
+            name: None,
         });
         let handle = RegionHandle { index, generation };
         self.frame_mut(owner)

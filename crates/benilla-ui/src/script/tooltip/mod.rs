@@ -110,7 +110,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                     return None;
                 }
                 let id = model
-                    .region_names
+                    .region_by_name
                     .get(&format!("{frame_name}Text{cell}{i}"))
                     .copied()?;
                 let rh = model.id_to_region.get(&id).copied()?;
@@ -228,12 +228,12 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 // Adopted pairs are already named and published by the loader.
                 if adopted_left.is_none() {
                     let ln = format!("{frame_name}TextLeft{i}");
-                    model.region_names.entry(ln.clone()).or_insert(left_id);
+                    crate::script::region::set_region_name(&mut model, left, left_id, &ln);
                     publish.push((left_id, ln));
                 }
                 if adopted_right.is_none() {
                     let rn = format!("{frame_name}TextRight{i}");
-                    model.region_names.entry(rn.clone()).or_insert(right_id);
+                    crate::script::region::set_region_name(&mut model, right, right_id, &rn);
                     publish.push((right_id, rn));
                 }
             }

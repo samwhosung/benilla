@@ -183,8 +183,10 @@ pub(crate) struct Model {
     pub(crate) frame_to_id: HashMap<FrameHandle, u32>,
     pub(crate) id_to_region: IdMap<RegionHandle>,
     pub(crate) region_to_id: HashMap<RegionHandle, u32>,
-    /// Region name to id, first wins: `SetPoint` anchors to a sibling region by name, after frames.
-    pub(crate) region_names: HashMap<String, u32>,
+    /// Region name to the first region that took it, for name lookups only (`SetPoint` anchoring
+    /// to a sibling by name, after frames): first come, as the `_G` entry is (`0x701bd0`). A
+    /// region's own name, for `GetName` and error strings, is [`crate::widget::Region::name`].
+    pub(crate) region_by_name: HashMap<String, u32>,
 
     /// Which handlers each frame has; the closures themselves live in Lua's `REG_SCRIPTS` table.
     pub(crate) scripts: HashMap<FrameHandle, HashSet<&'static str>>,
@@ -1126,7 +1128,7 @@ impl Model {
             frame_to_id: HashMap::new(),
             id_to_region: IdMap::default(),
             region_to_id: HashMap::new(),
-            region_names: HashMap::new(),
+            region_by_name: HashMap::new(),
             scripts: HashMap::new(),
             on_update_frames: Vec::new(),
             on_update_joins: 0,

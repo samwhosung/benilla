@@ -118,9 +118,9 @@ impl Loader<'_> {
                     continue; // build_texture_child already reported why
                 };
                 this.install_texture(wrapper, tag, &region, None, dbg);
-                // Freeing the displaced region took its name out of the registry `GetName()`
-                // reads, which a replacement of the same name takes back: the reference keeps the
-                // name on the region (`0x76c650`). `_G` keeps its first holder (`0x701c8a`).
+                // Freeing the displaced region took its entry out of the name lookup, which a
+                // replacement of the same name takes back. The replacement's `GetName()` is its
+                // own (`0x76c650`); `_G` keeps its first holder (`0x701c8a`).
                 if let Some(rname) = raw.name().map(|n| framexml::resolve_name(n, self_name)) {
                     crate::script::region::publish_region_name(this.lua(), &rname, &region);
                 }

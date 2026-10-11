@@ -362,11 +362,11 @@ fn freeing_a_region_leaves_a_same_named_siblings_name() {
     {
         let lua = s.lua();
         let mut model = lua.app_data_mut::<crate::script::Model>().expect("model");
-        let id = *model.region_names.get("FreedRegionName").expect("held");
+        let id = *model.region_by_name.get("FreedRegionName").expect("held");
         let rh = *model.id_to_region.get(&id).expect("first region");
         crate::script::region::free_region(&mut model, rh);
         assert!(
-            !model.region_names.contains_key("FreedRegionName"),
+            !model.region_by_name.contains_key("FreedRegionName"),
             "the freed holder's entry is gone"
         );
     }
