@@ -760,11 +760,11 @@ fn font_string(model: &mut Model, frame: FrameHandle, justify_v: JustifyV) -> Re
     rh
 }
 
-/// Whether a text's owner is a plate. A plate's rect snaps to device pixels as it slides, and its
-/// text must follow that rect, not the UI's coarser grid, or it jumps. Asked of the frame so an
-/// addon's strings on the plate get it too; a string on the plate's health bar does not.
+/// Whether a text's owner is a plate or a chat bubble. Their rects snap to device pixels as they
+/// slide, and their text must follow that rect, not the UI's coarser grid, or it jumps. Asked of
+/// the frame so an addon's strings on one get it too; a string on the plate's health bar does not.
 pub(super) fn is_world_seated(model: &Model, frame: FrameHandle) -> bool {
-    model.nameplates.by_frame.contains_key(&frame)
+    model.nameplates.by_frame.contains_key(&frame) || super::chat_bubble::is_bubble(model, frame)
 }
 
 /// Whether this is the plate's own glow art on its ADD mode, which the quad walk

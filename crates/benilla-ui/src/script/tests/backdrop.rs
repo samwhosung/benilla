@@ -2,6 +2,7 @@
 //! `0x77e5f0`, and its pieces, `0x77e8d0`).
 
 use super::common::script;
+use crate::script::backdrop::pieces;
 use crate::script::*;
 
 // SetBackdropColor tints only the bg, SetBackdropBorderColor the 8 border pieces.

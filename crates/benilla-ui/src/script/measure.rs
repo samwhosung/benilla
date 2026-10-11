@@ -36,10 +36,15 @@ pub trait TextMeasure {
 /// one is left alone, so a per-frame poll does not re-measure.
 pub(super) fn ensure_measured(lua: &Lua, rh: RegionHandle) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    ensure_measured_in(&mut model, rh);
+}
+
+/// [`ensure_measured`] on a borrowed model, for the engine's own widgets.
+pub(super) fn ensure_measured_in(model: &mut Model, rh: RegionHandle) {
     if model.measurer.is_none() {
         return;
     }
-    let Some(req) = super::layout::measure_request_for(&mut model, rh) else {
+    let Some(req) = super::layout::measure_request_for(model, rh) else {
         return; // not a FontString, no text, or already current
     };
     // Taken out and put back: the measurer needs `&mut self` while the model is borrowed, and it

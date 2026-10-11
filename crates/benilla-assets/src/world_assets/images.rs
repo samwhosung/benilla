@@ -294,7 +294,7 @@ pub fn portrait_image(width: u32, height: u32, mut rgba: Vec<u8>) -> Image {
 /// argument twice into the load descriptor (`0x770200`), read as U and V wrap but not traced to
 /// the sampler: an edge strip runs UVs `[0..N]` (N = frame side / edgeSize − 2) and a tiled
 /// background `[0..w/period]` (`0x77e8d0`, `0x77f0c0`). The edge strips are atlas crops kept off
-/// the image edge (`inset_atlas_bleed`), so their bounded axis does not bleed.
+/// the image edge by half a texel, so their bounded axis does not bleed.
 pub fn sprite_image_tiled(width: u32, height: u32, rgba: Vec<u8>) -> Image {
     sprite_image_wrapped(width, height, rgba, (true, true))
 }

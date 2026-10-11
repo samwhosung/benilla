@@ -362,15 +362,6 @@ impl WorldAssets {
         made
     }
 
-    /// A UI sprite repeating on both axes, for a frame `Backdrop`'s tiled pieces (`0x77f0c0`).
-    pub fn sprite_texture_tiled(
-        &mut self,
-        path: &str,
-        images: &mut Assets<Image>,
-    ) -> Option<Handle<Image>> {
-        self.sprite_texture_wrapped(path, (true, true), images)
-    }
-
     /// A UI sprite repeating on the axes `wrap` names ([`sprite_image_wrapped`]).
     pub fn sprite_texture_wrapped(
         &mut self,

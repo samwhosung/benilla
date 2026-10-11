@@ -1,13 +1,19 @@
-//! Chat bubbles, `CGChatBubbleFrame`: the speech bubble a chat line spawns over the speaker, a
-//! 2-D overlay like the V-plate ([`crate::vplates`]).
+//! Chat bubbles, `CGChatBubbleFrame`: the speech bubble a chat line spawns over the speaker. This
+//! file owns the world side (gate, lifetime, fade, anchor, projection, stacking order, sizes); the
+//! widgets, real `WorldFrame` children an addon can skin, live in
+//! [`benilla_ui::script::chat_bubble`].
 //!
 //! - Spawn (`0x608ac0`, from the `SMSG_MESSAGECHAT` display path): the sender resolves to a live
 //!   unit, its CVar is on, the text is non-empty, the unit carries no V-plate (`0x608adc`; a live
 //!   bubble in turn hides the overhead name, [`BubblesActive`]), and the local player is within
 //!   20 yd (3-D). Self is not excluded. A new line replaces the old bubble, never queues.
-//! - Anchor (`0x4b0c30`): unit z + height × model scale + 0.7, bottom-seated, growing upward. The
-//!   height is the Stand sequence box's Z extent from the model header (`0x711a20`), not the posed
-//!   attachment the overhead name reads (`0x608640`), latched once per chat line.
+//! - Lifetime and fade (`0x4b0c30`): a 250 ms fade in, the line's [`duration_ms`], a 250 ms fade
+//!   out, then the frame goes back to the pool. Out of range it fades out and hides, and fades back
+//!   in on return.
+//! - Anchor (`0x4b0c30`): unit z + height × model scale + 0.7, the text's BOTTOM on the projected
+//!   point (`0x4b157a`), growing upward. The height is the Stand sequence box's Z extent from the
+//!   model header (`0x711a20`), not the posed attachment the overhead name reads (`0x608640`),
+//!   latched once per chat line.
 //! - Stacking (`0x4b1060`): every frame the bubbles sort farthest-first by camera distance and
 //!   take frame levels 2, 3, 4…, so whole cards stack with the nearest speaker's on top.
 //!
@@ -17,25 +23,21 @@
 //! Deviation: sizes ride the plates' damped diagonal basis ([`plate_basis`]), not the unbounded
 //! reference law, so bubble text and plate text keep one em at every window size.
 //!
-//! Not built: the reference also fades a bubble whose speaker's model data is not resident or whose
-//! scene-entity flag is clear (`0x7103d0`/`0x6704c0`); only distance is re-tested here.
+//! Not built: the reference also ends a bubble whose speaker's model data is not resident
+//! (`0x7103d0`) and fades one whose scene-entity flag is set (`0x6704c0`); only distance is
+//! re-tested here.
 
 use std::collections::HashMap;
 
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 
-use benilla_ui::layout::Rect as GxRect;
-use benilla_ui::script::{inset_atlas_bleed, pieces, Backdrop, Insets};
-use benilla_ui::script::{JustifyH, JustifyV, Outline};
+use benilla_ui::script::{BubbleGeometry, BubbleState};
 
 use crate::entities::StandBoxHeight;
 use crate::net::{Embodied, Guid, NetEntity, SelfGuid};
 use crate::ui_chat::{default_color, ChatEventKind};
-use crate::ui_pass::{overlay_z, UiQuad, UiQuadAppend, UiQuads, UvRect};
-use crate::ui_text::{layout_text_quads, measure_text, FontSpec, Justify, TextSeat, UiFontAtlas};
-use crate::vplates::{device_snap, gx_px, plate_basis, text_px, VPlateSet, VPlates};
-use benilla_assets::{AssetSet, WorldAssets};
+use crate::vplates::{gx_px, plate_basis, text_px, VPlateSet, VPlates};
 use benilla_world::view::WorldCamera;
 
 /// The two bubble CVars (registrar `0x603280`), booting at the reference's defaults.
@@ -56,39 +58,21 @@ impl Default for BubbleConfig {
     }
 }
 
-/// The bubble art (`0x4b0940`).
-const BG_TEXTURE: &str = "Interface\\Tooltips\\ChatBubble-Background";
-const EDGE_TEXTURE: &str = "Interface\\Tooltips\\ChatBubble-Backdrop";
-const TAIL_TEXTURE: &str = "Interface\\Tooltips\\ChatBubble-Tail";
-
 /// The 0.7 yd lift over the anchor height (`[0x7ffd7c]`).
 const LIFT: f32 = 0.7;
-/// The spawn and per-frame range gate, 20 yd squared (`[0x806798]`, the plates' too).
+/// The range gate, 20 yd squared (`[0x806798]`, the plates' too): a spawn passes at or under it
+/// (`0x608ba0`), a live bubble stays in range only under it (`0x4b0cd2`).
 const MAX_DIST_SQ: f32 = 400.0;
-/// The 250 ms linear fade, in and out (`0x4b0ea0`/`0x4b0ee0`).
-const FADE_SECS: f32 = 0.25;
-/// `NAMEPLATE_FONT` at 0.01 gx, the plate name's em.
+/// The linear fade, in and out, in ms (`0x4b0d3e`, `0x4b0d78`).
+const FADE_MS: u64 = 250;
+/// `NAMEPLATE_FONT` at 0.01 gx (`0x4b0b21`), the plate name's em.
 const TEXT_H: f32 = 0.01;
-/// The body margin around the text layout, all four sides (`0x3c23d70a`).
+/// The frame's margin around the text, all four sides (`0x3c23d70a`).
 const MARGIN: f32 = 0.01;
 /// The text wrap hard cap, gx (`[0x80679c]` = 0.2).
 const WRAP_W: f32 = 0.2;
 /// The border unit (edge size, insets, tail side): 16/1024 of the screen width.
 const BORDER_FRAC: f32 = 16.0 / 1024.0;
-
-/// Paint order inside one bubble's level: the tail covers the bottom edge piece and the text draws
-/// last, as the reference's batch drains textures before font strings (`0x76fb00`).
-const Z_BG: u64 = 0;
-const Z_EDGE: u64 = 1;
-const Z_TAIL: u64 = 2;
-const Z_TEXT: u64 = 3;
-
-/// The z base for the bubble at `rank`, farthest first: the reference's per-frame
-/// `SetFrameLevel(2 + i)` walk (`0x4b12d5`-`0x4b1312`), one level per bubble, under the V-plates.
-fn level_z(rank: usize) -> u64 {
-    let level = (rank as u64).min(overlay_z::BUBBLE_MAX_LEVEL);
-    overlay_z::BUBBLE + level * overlay_z::BUBBLE_STRIDE
-}
 
 /// The CVar gating this kind's bubble (`0x608b0d`); `None` for a kind that does not bubble.
 fn bubble_cvar(kind: ChatEventKind, cfg: &BubbleConfig) -> Option<bool> {
@@ -100,92 +84,73 @@ fn bubble_cvar(kind: ChatEventKind, cfg: &BubbleConfig) -> Option<bool> {
     }
 }
 
-/// The word count (`0x4b1810`): maximal runs of characters other than space and tab.
-fn word_count(text: &str) -> u32 {
-    let mut words = 0u32;
-    let mut in_word = false;
-    for b in text.bytes() {
-        let sep = b == b' ' || b == b'\t';
-        if !sep && !in_word {
-            words += 1;
-        }
-        in_word = !sep;
-    }
-    words
-}
-
-/// The lifetime (`0x4b1810`): `base + perWord·(words−1)` ms, 2750/750 for others and 1500/500
-/// for the local player.
-fn duration_secs(words: u32, is_self: bool) -> f32 {
-    if words == 0 {
-        return 0.0;
+/// The lifetime in ms (`0x4b1810`) over the displayed text: the base, plus the per-word step for
+/// each space or tab that ends a word, 2750/750 for others and 1500/500 for the local player. An
+/// empty text lasts 0; separators alone, the base.
+fn duration_ms(text: &str, is_self: bool) -> u64 {
+    if text.is_empty() {
+        return 0;
     }
     let (base, per) = if is_self { (1500, 500) } else { (2750, 750) };
-    (base + per * (words - 1)) as f32 / 1000.0
+    let mut ms = base;
+    // Starts as if after a separator, so a leading run adds nothing.
+    let mut after_sep = true;
+    for b in text.bytes() {
+        let sep = b == b' ' || b == b'\t';
+        if sep && !after_sep {
+            ms += per;
+        }
+        after_sep = sep;
+    }
+    ms
 }
 
-#[cfg(test)]
-fn duration_ms(text: &str, is_self: bool) -> u32 {
-    (duration_secs(word_count(text), is_self) * 1000.0) as u32
-}
-
-/// Bubble text is plain, coloured only by chat type: colour escapes and hyperlink wrappers strip
-/// (their display text stays), and `||` stays escaped for the glyph layout's markup parser.
+/// The bubble's copy of the line (`0x4b1600`, into a 0x800-byte buffer): `||` stays escaped for the
+/// text's markup parser; any other `|` jumps to the next `[`, or ends the text if there is none;
+/// from there the brackets drop, and a `|h` then a `|r` right after the `]` skip. So a link shows
+/// its bare name and a colour code with no link after it cuts the line short.
 fn sanitize(text: &str) -> String {
+    const BUF: usize = 0x800 - 1;
     let b = text.as_bytes();
-    let mut out = String::with_capacity(text.len());
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
     let mut i = 0;
-    while i < b.len() {
+    while i < b.len() && out.len() < BUF {
         if b[i] != b'|' {
-            // Copy the whole non-escape run at once (UTF-8 safe: '|' is single-byte).
-            let start = i;
-            while i < b.len() && b[i] != b'|' {
-                i += 1;
-            }
-            out.push_str(&text[start..i]);
+            out.push(b[i]);
+            i += 1;
             continue;
         }
-        match b.get(i + 1) {
-            Some(b'|') => {
-                out.push_str("||");
-                i += 2;
-            }
-            Some(b'c') | Some(b'C') if i + 10 <= b.len() => i += 10,
-            Some(b'r') | Some(b'R') => i += 2,
-            Some(b'H') => {
-                // Skip the opener through its `|h`; the closing `|h` drops in the arm below.
-                i += 2;
-                while i < b.len() && !(b[i] == b'|' && b.get(i + 1) == Some(&b'h')) {
+        if b.get(i + 1) == Some(&b'|') {
+            out.extend_from_slice(b"||");
+            i += 2;
+            continue;
+        }
+        let Some(open) = b[i..].iter().position(|&c| c == b'[') else {
+            break;
+        };
+        i += open;
+        while i < b.len() {
+            match b[i] {
+                b'[' => i += 1,
+                b']' => {
+                    i += 1;
+                    for skip in [b"|h", b"|r"] {
+                        if b[i..].starts_with(skip) {
+                            i += 2;
+                        }
+                    }
+                    break;
+                }
+                c => {
+                    out.push(c);
                     i += 1;
                 }
-                i += 2;
-            }
-            Some(b'h') => i += 2,
-            // A dangling or unknown escape renders as a literal pipe.
-            _ => {
-                out.push_str("||");
-                i += 1;
             }
         }
     }
-    out
-}
-
-/// The bleed inset for one border piece; zero texels (no patch chain) leaves the UVs alone.
-fn pieces_inset(uvs: [[f32; 2]; 4], texels: Vec2) -> [[f32; 2]; 4] {
-    if texels.x <= 0.0 || texels.y <= 0.0 {
-        return uvs;
-    }
-    inset_atlas_bleed(uvs, texels.x, texels.y)
-}
-
-/// The frame's bottom-left origin, bottom-center on the seat. Deviation: snapped onto the device
-/// pixel grid ([`device_snap`]) so the border art blits 1:1; the reference seats it fractionally.
-fn seat_origin(seat: Vec2, w: f32, scale: f32) -> Vec2 {
-    Vec2::new(
-        device_snap(seat.x - w * 0.5, scale),
-        device_snap(seat.y, scale),
-    )
+    out.truncate(BUF);
+    // Cut only at ASCII bytes, so whole characters, but for the buffer cap.
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// The border unit in logical px: 16/1024 of the screen width, in the damped size basis.
@@ -226,69 +191,134 @@ impl BubbleQueue {
     }
 }
 
+/// `[bubble+0x320]` bit 1: fading in.
+const FADING_IN: u8 = 0x1;
+/// Bit 2: fading out.
+const FADING_OUT: u8 = 0x2;
+/// Bit 4: the fade out is the last, at the end of the line's life.
+const FINAL: u8 = 0x4;
+
+/// A bubble's fade (`0x4b0ea0`, `0x4b0ee0`, the middle of `0x4b0c30`): the flags, the fade's start
+/// time, the frame's alpha byte and its shown bit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Fade {
+    flags: u8,
+    /// `[bubble+0x33c]`, the current fade's start.
+    since: u64,
+    /// The frame's alpha byte (`+0xc8`); a new frame starts opaque.
+    alpha: u8,
+    /// The own-shown bit (`+0xd0`).
+    shown: bool,
+}
+
+impl Fade {
+    /// A line's start (`0x4b17da`, then `0x4b17f7`): the flags reset, then the fade in.
+    fn spawn(now: u64) -> Self {
+        let mut f = Fade {
+            flags: 0,
+            since: now,
+            alpha: 255,
+            shown: true,
+        };
+        f.fade_in(now);
+        f
+    }
+
+    /// `0x4b0ea0`: unless fading in or on the last fade out, start fading in and show.
+    fn fade_in(&mut self, now: u64) {
+        if self.flags & (FADING_IN | FINAL) != 0 {
+            return;
+        }
+        self.flags = (self.flags & !FADING_OUT) | FADING_IN;
+        self.since = now;
+        self.shown = true;
+    }
+
+    /// `0x4b0ee0`: unless on the last fade out, mark it final if asked, and start fading out
+    /// unless already.
+    fn fade_out(&mut self, now: u64, last: bool) {
+        if self.flags & FINAL != 0 {
+            return;
+        }
+        if last {
+            self.flags |= FINAL;
+        }
+        if self.flags & FADING_OUT == 0 {
+            self.flags = (self.flags & !FADING_IN) | FADING_OUT;
+            self.since = now;
+        }
+    }
+
+    /// One frame of `0x4b0c30` past its residency gates; `false` when the last fade out ends and
+    /// the bubble goes back to the pool.
+    fn tick(&mut self, now: u64, in_range: bool, born: u64, duration: u64) -> bool {
+        if !in_range {
+            if self.alpha != 0 {
+                self.fade_out(now, false);
+            }
+        } else if self.alpha != 255 {
+            self.fade_in(now);
+        }
+        if self.flags & FADING_OUT == 0 && now.saturating_sub(born) > duration + FADE_MS {
+            self.fade_out(now, true);
+        }
+        // `elapsed · 255 / 250`, truncated (`0x4b0d5b`-`0x4b0d68`).
+        let ramp = |e: u64| (e * 255 / FADE_MS) as u8;
+        let e = now.saturating_sub(self.since);
+        if self.flags & FADING_IN != 0 {
+            if e > FADE_MS {
+                self.alpha = 255;
+                self.flags &= !FADING_IN;
+            } else {
+                self.alpha = ramp(e);
+            }
+        } else if self.flags & FADING_OUT != 0 {
+            if e > FADE_MS {
+                if self.flags & FINAL != 0 {
+                    return false;
+                }
+                // An out-of-range fade ends hidden (`0x4b0d95`).
+                self.flags &= !(FADING_OUT | FINAL);
+                self.shown = false;
+            } else {
+                self.alpha = 255 - ramp(e);
+            }
+        }
+        true
+    }
+}
+
 /// One live bubble: the `CGChatBubbleFrame` and its `CGUnit+0xe64` handle.
 struct Bubble {
+    /// This line's number, which tells the widget layer a replacement from a repeat.
+    line: u64,
     /// The [`sanitize`]d display text.
     text: String,
     /// The chat-type colour (the 94-entry table), sRGB 0..1.
     color: [f32; 3],
-    /// `Time::elapsed_secs` at spawn.
-    born: f32,
-    /// The steady window after the fade-in ([`duration_secs`]).
-    duration: f32,
+    /// The spawn time in ms (`[bubble+0x338]`).
+    born: u64,
+    /// The steady window after the fade-in ([`duration_ms`], `[bubble+0x340]`).
+    duration: u64,
     /// Stand-box height × model scale, latched at spawn as the reference does (`bubble+0x354`).
     lift: f32,
-    /// Fade alpha 0..1, ramped toward the eligibility verdict.
-    alpha: f32,
+    fade: Fade,
 }
 
-/// The live bubbles by speaker guid, at most one per unit.
+/// The live bubbles by speaker guid, at most one per unit, and the next line's number.
 #[derive(Resource, Default)]
-struct Bubbles(HashMap<u64, Bubble>);
+struct Bubbles {
+    live: HashMap<u64, Bubble>,
+    next_line: u64,
+}
 
 /// Units with a live bubble this frame, whose overhead name is suppressed (`+0xe64` ≠ 0).
 #[derive(Resource, Default)]
 pub(crate) struct BubblesActive(pub(crate) EntityHashSet);
 
-/// The bubble art, loaded at boot. The edge strip tiles UVs past 1 (repeat); bg and tail clamp.
-#[derive(Resource)]
-struct BubbleArt {
-    bg: Handle<Image>,
-    edge: Handle<Image>,
-    tail: Handle<Image>,
-    /// The edge atlas's size in texels, for the half-texel bleed inset.
-    edge_texels: Vec2,
-}
-
-fn load_bubble_art(
-    mut commands: Commands,
-    assets: Option<ResMut<WorldAssets>>,
-    mut images: ResMut<Assets<Image>>,
-) {
-    let Some(mut assets) = assets else {
-        return; // no game data (a bare test app); `drive_bubbles` tolerates the missing art
-    };
-    let bg = assets.sprite_texture(BG_TEXTURE, &mut images);
-    let edge = assets.sprite_texture_tiled(EDGE_TEXTURE, &mut images);
-    let tail = assets.sprite_texture(TAIL_TEXTURE, &mut images);
-    let (Some(bg), Some(edge), Some(tail)) = (bg, edge, tail) else {
-        warn!("chat_bubble: bubble art missing from the patch chain — bubbles will not draw");
-        return;
-    };
-    let edge_texels = images.get(&edge).map_or(Vec2::ZERO, |i| {
-        let s = i.texture_descriptor.size;
-        Vec2::new(s.width as f32, s.height as f32)
-    });
-    commands.insert_resource(BubbleArt {
-        bg,
-        edge,
-        tail,
-        edge_texels,
-    });
-}
-
-/// Every frame: drain the queue through the spawn gate (`0x608ac0`), ramp each bubble's fade
-/// against its lifetime and the 20 yd re-test (`0x4b0c30`), publish [`BubblesActive`], and draw.
+/// Every frame: drain the queue through the spawn gate (`0x608ac0`), run each bubble's fade against
+/// its lifetime and the 20 yd re-test (`0x4b0c30`), publish [`BubblesActive`], and hand the live
+/// set to the widget layer, farthest from the camera first.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn drive_bubbles(
     mut queue: ResMut<BubbleQueue>,
@@ -299,17 +329,14 @@ fn drive_bubbles(
     units: Query<(Entity, &Guid, &Transform), With<NetEntity>>,
     self_q: Query<&Transform, With<Embodied>>,
     camera: Query<(&Camera, &Transform), With<WorldCamera>>,
-    mut atlas: Option<ResMut<UiFontAtlas>>,
-    mut quads: ResMut<UiQuads>,
-    art: Option<Res<BubbleArt>>,
     heights: Query<&StandBoxHeight>,
     time: Res<Time>,
-    // The device scale, for the seat's pixel snap.
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    // `None` in a run with no UI VM.
+    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
 ) {
     active.0.clear();
-    let now = time.elapsed_secs();
-    let step = time.delta_secs() / FADE_SECS;
+    let now = time.elapsed().as_millis() as u64;
     let self_tf = self_q.single().ok();
     // The typed sender lookup (`0x468460`), a linear scan of the small streamed set.
     let find = |guid: u64| units.iter().find(|(_, g, _)| g.0 == guid);
@@ -322,11 +349,11 @@ fn drive_bubbles(
         }
     };
     for (guid, kind, raw) in queue.0.drain(..) {
-        let text = sanitize(&raw);
-        let words = word_count(&text);
-        if words == 0 {
+        // The raw line, not its display copy (`0x608af6`): a line of separators or of a bare
+        // colour code still bubbles.
+        if raw.is_empty() {
             refuse("empty-text", guid);
-            continue; // no words, no lifetime, no bubble
+            continue;
         }
         let Some((entity, _, tf)) = find(guid) else {
             refuse("sender-not-a-live-unit", guid);
@@ -346,15 +373,20 @@ fn drive_bubbles(
             refuse(&format!("out-of-range dist={:.1}yd", d2.sqrt()), guid);
             continue;
         }
+        let text = sanitize(&raw);
         let is_self = self_guid.0 == Some(guid);
         let c = default_color(kind);
         // The one-time height query (`0x4b0e38` calling `0x711a20`, scaled by `[unit+0x90]`). A
         // model with no bounds reads 0 and the bubble sits 0.7 above the feet, as in the reference.
         let lift = heights.get(entity).map_or(0.0, |h| h.0) * tf.scale.y;
-        // Replace, never queue (`0x608c00`): the fresh bubble fades in from 0.
-        bubbles.0.insert(
+        let line = bubbles.next_line;
+        bubbles.next_line += 1;
+        // Replace, never queue (`0x608bb4`): the old line's frame goes back to the pool.
+        bubbles.live.insert(
             guid,
             Bubble {
+                line,
+                duration: duration_ms(&text, is_self),
                 text,
                 color: [
                     f32::from(c[0]) / 255.0,
@@ -362,298 +394,143 @@ fn drive_bubbles(
                     f32::from(c[2]) / 255.0,
                 ],
                 born: now,
-                duration: duration_secs(words, is_self),
                 lift,
-                alpha: 0.0,
+                fade: Fade::spawn(now),
             },
         );
     }
-    if bubbles.0.is_empty() {
-        return;
-    }
 
-    // ── Tick + draw ─────────────────────────────────────────────────────────────────────────
+    // ── The per-frame pass (`0x4b1060` → `0x4b0c30`) ────────────────────────────────────────
+    // A speaker gone (`0x4b117e`), or no local player (`0x4b0c40`), ends the bubble at once.
+    bubbles.live.retain(|guid, b| {
+        let (Some((_, _, tf)), Some(s)) = (find(*guid), self_tf) else {
+            return false;
+        };
+        let in_range = (tf.translation - s.translation).length_squared() < MAX_DIST_SQ;
+        b.fade.tick(now, in_range, b.born, b.duration)
+    });
+
     let cam = camera.single().ok();
-    let art = art.as_deref();
-    let scale = window.single().map_or(1.0, Window::scale_factor);
-    let trace = std::env::var("WOW_BUBBLE_TRACE").as_deref() == Ok("1");
-    let mut dead = Vec::new();
-    let mut pending: Vec<Pending> = Vec::new();
-    for (guid, b) in bubbles.0.iter_mut() {
-        let Some((entity, _, tf)) = find(*guid) else {
-            dead.push(*guid); // the speaker despawned, and its bubble with it
-            continue;
-        };
-        if now >= b.born + b.duration + FADE_SECS {
-            // The permanent fade-out (`0x4b0ee0(1)`); at 0 the frame recycles.
-            b.alpha -= step;
-            if b.alpha <= 0.0 {
-                dead.push(*guid);
-                continue;
-            }
-        } else {
-            // The 20 yd gate, re-tested every frame: out of range fades out, back in fades in.
-            let eligible = self_tf
-                .is_some_and(|s| (tf.translation - s.translation).length_squared() <= MAX_DIST_SQ);
-            b.alpha = if eligible {
-                (b.alpha + step).min(1.0)
-            } else {
-                (b.alpha - step).max(0.0)
-            };
-        }
-        // The name stays suppressed while the bubble exists, faded or not (`+0xe64` ≠ 0).
-        active.0.insert(entity);
-        if b.alpha <= 0.0 {
-            continue;
-        }
-        // No camera, atlas or art: lifetimes tick, nothing draws.
-        let (Some((cam, cam_pose)), true) = (cam, atlas.is_some() && art.is_some()) else {
-            continue;
-        };
-        // The anchor (`0x4b0c30`), from this frame's `Transform` and constants only. A seat behind
-        // the camera draws nothing and keeps its state.
-        let seat_world = tf.translation + Vec3::Y * (b.lift + LIFT);
-        let cam_tf = GlobalTransform::from(*cam_pose);
-        let Ok(seat) = cam.world_to_viewport(&cam_tf, seat_world) else {
-            refuse("not-on-screen (behind the camera)", *guid);
-            continue;
-        };
-        let Some(viewport) = cam.logical_viewport_size() else {
-            refuse("no-viewport", *guid);
-            continue;
-        };
-        // Drawn after the sort: a bubble's level depends on the whole live set ([`level_z`]).
-        pending.push(Pending {
-            guid: *guid,
-            entity,
-            seat,
-            viewport,
-            // The sort key (`0x4b1251`-`0x4b12c0`): the camera's distance, not the player's.
-            cam_dist_sq: cam_pose.translation.distance_squared(tf.translation),
-            anchor: seat_world,
-            unit_pos: tf.translation,
-        });
-    }
-    for g in dead {
-        bubbles.0.remove(&g);
-    }
+    let window = window.single().ok();
+    // The order is the frame levels (`0x4b1360`, stamped `0x4b12d5`-`0x4b1312`): the camera's
+    // distance to the speaker, farthest first. The reference re-sorts only on a change; sorting
+    // every frame gives the same list.
+    let mut order: Vec<(u64, f32)> = bubbles
+        .live
+        .keys()
+        .filter_map(|guid| {
+            let (entity, _, tf) = find(*guid)?;
+            active.0.insert(entity);
+            let d2 = cam.map_or(0.0, |(_, pose)| {
+                pose.translation.distance_squared(tf.translation)
+            });
+            Some((*guid, d2))
+        })
+        .collect();
+    stack_sort(&mut order);
 
-    // ── The frame-level pass (`0x4b12d5`–`0x4b1312`) ─────────────────────────────────────────
-    // Sorted farthest first (`0x4b1360`), levels stamped head to tail (`0x4b1309`). The reference
-    // re-sorts only on a change; sorting every frame gives the same list.
-    stack_sort(&mut pending);
-    let (Some((_, cam_pose)), Some(atlas), Some(art)) = (cam, atlas.as_deref_mut(), art) else {
-        return; // the tick's same gate kept `pending` empty
+    let Some(mut script) = script else {
+        return;
     };
-    for (rank, p) in pending.iter().enumerate() {
-        let Some(b) = bubbles.0.get(&p.guid) else {
-            continue; // despawned between the tick and the draw
-        };
-        draw_bubble(
-            atlas,
-            &mut quads,
-            art,
-            b,
-            p.seat,
-            p.viewport,
-            scale,
-            trace,
-            p.entity,
-            p.anchor,
-            p.unit_pos,
-            cam_pose,
-            level_z(rank),
-        );
-    }
+    // Sizes from the camera's viewport, else the window's; with neither there is nothing to lay
+    // out against.
+    let viewport = cam
+        .and_then(|(c, _)| c.logical_viewport_size())
+        .or_else(|| window.map(|w| Vec2::new(w.width(), w.height())));
+    let Some(viewport) = viewport.filter(|v| v.x > 0.0 && v.y > 0.0) else {
+        return;
+    };
+    // Everything below is in window px, divided by the seam once for the `WorldFrame`'s units.
+    let seam = window.map_or(1.0, |w| crate::ui_script::seam_scale(w.height()));
+    let scale = window.map_or(1.0, Window::scale_factor);
+    let basis = plate_basis(viewport);
+    let geometry = BubbleGeometry {
+        border: border_px(viewport, basis) / seam,
+        margin: gx_px(MARGIN, basis) / seam,
+        wrap_cap: gx_px(WRAP_W, basis) / seam,
+        text_height: text_px(TEXT_H, basis) / seam,
+        device_px: seam * scale,
+    };
+    let states: Vec<BubbleState> = order
+        .iter()
+        .filter_map(|(guid, _)| {
+            let b = bubbles.live.get(guid)?;
+            let (entity, _, tf) = find(*guid)?;
+            // The anchor (`0x4b0c30`), from this frame's `Transform` and the latched lift.
+            let anchor = tf.translation + Vec3::Y * (b.lift + LIFT);
+            let seat = cam.and_then(|(c, pose)| {
+                c.world_to_viewport(&GlobalTransform::from(*pose), anchor)
+                    .ok()
+                    .map(|p| (pose, p))
+            });
+            if benilla_assets::trace::enabled_for("bub") {
+                trace_seat(entity, anchor, tf.translation, seat, viewport, scale);
+            }
+            Some(BubbleState {
+                key: *guid,
+                line: b.line,
+                text: b.text.clone(),
+                colour: b.color,
+                shown: b.fade.shown,
+                alpha: f32::from(b.fade.alpha) / 255.0,
+                seat: match seat {
+                    Some((_, p)) => (p.x / seam, (viewport.y - p.y) / seam),
+                    // Deviation: past the near plane the reference's projection writes no point
+                    // (`0x483f7a`) and the bubble seats on the zeroed one (`0x4b14e4`), at the
+                    // screen's bottom-left corner; here it seats a screen below the bottom edge,
+                    // off screen, as the speaker is behind the camera.
+                    None => (0.0, -viewport.y / seam),
+                },
+            })
+        })
+        .collect();
+    script.sync_chat_bubbles(geometry, &states);
+}
+
+/// The jitter decomposition (`WOW_MOVE_TRACE` tag `bub`): `anchor=` and `pos=` differ by a latched
+/// constant on Y only, so a wobble between them is a defect.
+fn trace_seat(
+    entity: Entity,
+    anchor: Vec3,
+    pos: Vec3,
+    seat: Option<(&Transform, Vec2)>,
+    viewport: Vec2,
+    scale: f32,
+) {
+    let (cp, cf, scr) = match seat {
+        Some((pose, p)) => (pose.translation, *pose.forward(), p),
+        None => (Vec3::NAN, Vec3::NAN, Vec2::NAN),
+    };
+    benilla_assets::trace::line(
+        "bub",
+        &format!(
+            "e={} vp=({:.0},{:.0}) anchor=[{:.4},{:.4},{:.4}] cam=[{:.4},{:.4},{:.4}] \
+             fwd=[{:.4},{:.4},{:.4}] pos=[{:.4},{:.4},{:.4}] scr=({:.3},{:.3}) scale={scale:.2}",
+            entity.index(),
+            viewport.x,
+            viewport.y,
+            anchor.x,
+            anchor.y,
+            anchor.z,
+            cp.x,
+            cp.y,
+            cp.z,
+            cf.x,
+            cf.y,
+            cf.z,
+            pos.x,
+            pos.y,
+            pos.z,
+            scr.x,
+            scr.y,
+        ),
+    );
 }
 
 /// Farthest camera distance first, so the index is the frame level. Ties break on guid, as the
 /// reference keeps its order across an exact tie and a `HashMap` walk cannot.
-fn stack_sort(pending: &mut [Pending]) {
-    pending.sort_by(|a, b| {
-        b.cam_dist_sq
-            .total_cmp(&a.cam_dist_sq)
-            .then(a.guid.cmp(&b.guid))
-    });
-}
-
-/// One projected bubble awaiting the frame-level sort.
-struct Pending {
-    guid: u64,
-    entity: Entity,
-    seat: Vec2,
-    viewport: Vec2,
-    /// |camera − speaker|², the reference's sort key (`[bubble+0x350]`).
-    cam_dist_sq: f32,
-    /// The world seat and the speaker's position, for the `bub` trace.
-    anchor: Vec3,
-    unit_pos: Vec3,
-}
-
-/// Append one bubble's draw list: the backdrop pieces, the tail and the wrapped, centered text.
-fn draw_bubble(
-    atlas: &mut UiFontAtlas,
-    quads: &mut UiQuads,
-    art: &BubbleArt,
-    b: &Bubble,
-    seat: Vec2,
-    viewport: Vec2,
-    scale: f32,
-    trace: bool,
-    // The `bub` trace's inputs.
-    entity: Entity,
-    anchor: Vec3,
-    unit_pos: Vec3,
-    cam_pose: &Transform,
-    // This bubble's frame level as a z base.
-    z: u64,
-) {
-    let basis = plate_basis(viewport);
-    let border = border_px(viewport, basis);
-    let margin = gx_px(MARGIN, basis);
-
-    // Shaped at the exact window-derived em, so the glyphs are never a rescaled bitmap.
-    let px = text_px(TEXT_H, basis);
-    if px <= 0.0 {
-        return;
-    }
-    let mut e = atlas.lock();
-    let spec = FontSpec {
-        path: None, // `NAMEPLATE_FONT`: Friz Quadrata, the engine's default face
-        height: Some(px),
-        outline: Outline::None,
-        alpha_gradient: None,
-    };
-    // The wrap law (`0x4b1600`): wider than 0.2 gx wraps at the cap, else max(width, 2 borders).
-    let cap = gx_px(WRAP_W, basis);
-    let floor = 2.0 * border;
-    let (line_w, _) = measure_text(&mut e, &b.text, None, spec);
-    let box_w = if line_w > cap { cap } else { line_w.max(floor) };
-    let (_, box_h) = measure_text(&mut e, &b.text, Some(box_w), spec);
-    let (text_w, text_h) = (box_w.ceil(), box_h.ceil());
-
-    // The frame hugs the text layout plus the margin, bottom-center on the seat, growing upward.
-    let w = text_w + 2.0 * margin;
-    let h = text_h + 2.0 * margin;
-    let origin = seat_origin(seat, w, scale);
-    let (left, bottom) = (origin.x, origin.y);
-    let frame = Rect::new(left, bottom - h, left + w, bottom);
-    let alpha = b.alpha;
-
-    // The backdrop (`0x4b0a35` into `0x76a5d0`): one value feeds the four insets and both
-    // edge-size fields. `pieces` is y-up, so y negates across the seam.
-    let bd = Backdrop {
-        bg_file: Some(BG_TEXTURE.to_string()),
-        edge_file: Some(EDGE_TEXTURE.to_string()),
-        tile: false,
-        tile_size: 0.0,
-        edge_size: border,
-        insets: Insets {
-            left: border,
-            right: border,
-            top: border,
-            bottom: border,
-        },
-        bg_color: [1.0; 4],
-        border_color: [1.0; 4],
-    };
-    let up = GxRect::new(-frame.max.y, frame.min.x, -frame.min.y, frame.max.x);
-    for p in pieces(up, &bd, 1.0) {
-        // Equal insets keep every piece axis-aligned: a y-down rect from its TL and BR corners.
-        let rect = Rect::new(
-            p.corners[0][0],
-            -p.corners[0][1],
-            p.corners[2][0],
-            -p.corners[2][1],
-        );
-        // The border pieces share one 256×32 atlas: without the half-texel inset, bilinear blends
-        // in the neighbour's column, white at alpha 0 beside the top slice, a pale line.
-        let uvs = if p.is_bg {
-            p.uvs
-        } else {
-            pieces_inset(p.uvs, art.edge_texels)
-        };
-        quads.overlays.push(UiQuad {
-            rect,
-            z_key: z + if p.is_bg { Z_BG } else { Z_EDGE },
-            texture: Some(if p.is_bg {
-                art.bg.clone()
-            } else {
-                art.edge.clone()
-            }),
-            uv: UvRect::from_corners(uvs),
-            color: [1.0, 1.0, 1.0, alpha],
-            ..default()
-        });
-    }
-    // The tail (`0x4b0af1`): a border-unit square, TOPRIGHT on the bottom lifted border/4.
-    let tail_top = frame.max.y - border * 0.25;
-    let cx = (frame.min.x + frame.max.x) * 0.5;
-    quads.overlays.push(UiQuad {
-        rect: Rect::new(cx - border, tail_top, cx, tail_top + border),
-        z_key: z + Z_TAIL,
-        texture: Some(art.tail.clone()),
-        uv: UvRect::FULL,
-        color: [1.0, 1.0, 1.0, alpha],
-        ..default()
-    });
-    // The text, centered in the margin box and wrapped at the cap.
-    let center = Vec2::new(cx, (frame.min.y + frame.max.y) * 0.5);
-    let mut text_quads = layout_text_quads(
-        &mut e,
-        &b.text,
-        Rect::from_center_size(center, Vec2::new(box_w, box_h)),
-        [b.color[0], b.color[1], b.color[2], alpha],
-        Justify {
-            h: JustifyH::Center,
-            v: JustifyV::Middle,
-        },
-        z + Z_TEXT,
-        spec,
-        // Exact, so the text stays rigid against the device-snapped frame.
-        TextSeat::Exact,
-    );
-    drop(e);
-    if trace {
-        eprintln!(
-            "bubble-trace: viewport={viewport:?} frame=({:.1},{:.1})..({:.1},{:.1}) border={border:.1} alpha={alpha:.2} text={:?}",
-            frame.min.x, frame.min.y, frame.max.x, frame.max.y, b.text
-        );
-    }
-    // The jitter decomposition (`WOW_MOVE_TRACE` tag `bub`): `anchor=` and `pos=` differ by a
-    // latched constant on Y only, so a wobble between them is a defect. Not the eprintln above,
-    // whose unbuffered writes would distort frame pacing.
-    if benilla_assets::trace::enabled_for("bub") {
-        let (cp, cf) = (cam_pose.translation, cam_pose.forward());
-        benilla_assets::trace::line(
-            "bub",
-            &format!(
-                "e={} vp=({:.0},{:.0}) anchor=[{:.4},{:.4},{:.4}] cam=[{:.4},{:.4},{:.4}] \
-                 fwd=[{:.4},{:.4},{:.4}] pos=[{:.4},{:.4},{:.4}] scr=({:.3},{:.3}) \
-                 frame=({:.2},{:.2}) scale={scale:.2}",
-                entity.index(),
-                viewport.x,
-                viewport.y,
-                anchor.x,
-                anchor.y,
-                anchor.z,
-                cp.x,
-                cp.y,
-                cp.z,
-                cf.x,
-                cf.y,
-                cf.z,
-                unit_pos.x,
-                unit_pos.y,
-                unit_pos.z,
-                seat.x,
-                seat.y,
-                frame.min.x,
-                frame.max.y,
-            ),
-        );
-    }
-    quads.overlays.append(&mut text_quads);
+fn stack_sort(order: &mut [(u64, f32)]) {
+    order.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
 }
 
 /// The bubble stage; [`crate::nameplates`] orders after it to read [`BubblesActive`].
@@ -678,13 +555,13 @@ impl Plugin for ChatBubblePlugin {
             .init_resource::<BubbleConfig>()
             .init_resource::<Bubbles>()
             .init_resource::<BubblesActive>()
-            .add_systems(Startup, load_bubble_art.after(AssetSet::Open))
-            // After the V-plate drive, whose verdict the spawn gate reads.
+            // After the V-plate drive, whose verdict the spawn gate reads, and before the script
+            // paint, so a bubble draws the frame it moves.
             .add_systems(
                 Update,
                 drive_bubbles
                     .after(VPlateSet)
-                    .in_set(UiQuadAppend)
+                    .before(crate::ui_script::UiPaint)
                     .in_set(BubbleSet),
             );
     }
@@ -694,23 +571,35 @@ impl Plugin for ChatBubblePlugin {
 mod tests {
     use super::*;
 
-    /// Space and tab runs only, not Unicode whitespace.
+    /// `0x4b1810`: the base, plus the per-word step for each space or tab that ends a word; an
+    /// empty buffer lasts 0.
     #[test]
-    fn word_count_is_the_space_tab_run_law() {
-        assert_eq!(word_count(""), 0);
-        assert_eq!(word_count("   \t "), 0);
-        assert_eq!(word_count("hi"), 1);
-        assert_eq!(word_count("  hi   there\tfriend  "), 3);
-        assert_eq!(word_count("a\u{a0}b"), 1, "NBSP is not a separator");
-    }
-
-    #[test]
-    fn duration_matches_the_byte_law() {
-        assert_eq!(duration_secs(0, false), 0.0);
-        assert_eq!(duration_secs(1, false), 2.75);
-        assert_eq!(duration_secs(4, false), 5.0);
-        assert_eq!(duration_secs(1, true), 1.5);
-        assert_eq!(duration_secs(3, true), 2.5);
+    fn duration_is_the_separator_count_law() {
+        assert_eq!(duration_ms("", false), 0);
+        assert_eq!(duration_ms("hi", false), 2750);
+        assert_eq!(duration_ms("hi there", false), 3500);
+        assert_eq!(
+            duration_ms("hi ", false),
+            3500,
+            "a trailing space ends a word"
+        );
+        assert_eq!(
+            duration_ms("hi  \t there", false),
+            3500,
+            "a run counts once"
+        );
+        assert_eq!(
+            duration_ms("   ", false),
+            2750,
+            "separators alone: the base"
+        );
+        assert_eq!(
+            duration_ms("a\u{a0}b", false),
+            2750,
+            "NBSP is not a separator"
+        );
+        assert_eq!(duration_ms("hi", true), 1500);
+        assert_eq!(duration_ms("a b c", true), 2500);
     }
 
     /// The copy loop in `0x4b1600`: `||` stays escaped; any other `|` jumps to the next `[` (or
@@ -736,30 +625,69 @@ mod tests {
         assert_eq!(sanitize("[x] |y [z] w"), "[x] z w");
     }
 
-    /// `0x4b1810`: the base, plus the per-word step for each space or tab that ends a word; an
-    /// empty buffer lasts 0.
+    /// A line in range: 250 ms in, its lifetime, 250 ms out, then back to the pool; the ramp is
+    /// the truncated `elapsed · 255 / 250`.
     #[test]
-    fn duration_is_the_separator_count_law() {
-        assert_eq!(duration_ms("", false), 0);
-        assert_eq!(duration_ms("hi", false), 2750);
-        assert_eq!(duration_ms("hi there", false), 3500);
+    fn a_line_fades_in_holds_fades_out_and_ends() {
+        let (born, life) = (1000, 2750);
+        let mut f = Fade::spawn(born);
+        let at = |f: &mut Fade, t: u64| -> Option<(u8, bool)> {
+            f.tick(t, true, born, life).then_some((f.alpha, f.shown))
+        };
+        assert_eq!(at(&mut f, born), Some((0, true)));
+        assert_eq!(at(&mut f, born + 100), Some((102, true)));
         assert_eq!(
-            duration_ms("hi ", false),
-            3500,
-            "a trailing space ends a word"
+            at(&mut f, born + 250),
+            Some((255, true)),
+            "250 is still the ramp"
         );
+        assert_eq!(at(&mut f, born + 251), Some((255, true)));
+        // The last fade starts once `now − born` passes the lifetime plus one fade.
+        assert_eq!(at(&mut f, born + life + 250), Some((255, true)));
         assert_eq!(
-            duration_ms("hi  \t there", false),
-            3500,
-            "a run counts once"
+            at(&mut f, born + life + 251),
+            Some((255, true)),
+            "starts at 0 elapsed"
         );
+        assert_eq!(at(&mut f, born + life + 351), Some((153, true)));
+        assert_eq!(at(&mut f, born + life + 501), Some((0, true)));
         assert_eq!(
-            duration_ms("   ", false),
-            2750,
-            "separators alone: the base"
+            at(&mut f, born + life + 502),
+            None,
+            "the frame goes back to the pool"
         );
-        assert_eq!(duration_ms("hi", true), 1500);
-        assert_eq!(duration_ms("a b c", true), 2500);
+    }
+
+    /// Out of range a bubble fades out and hides but lives on; back in range it shows and fades
+    /// in, and turning back mid fade-out restarts the ramp from 0 (`0x4b0ea0`). Ticked every
+    /// 10 ms, as frames would.
+    #[test]
+    fn out_of_range_fades_to_hidden_and_back() {
+        let life = 60_000;
+        let mut f = Fade::spawn(0);
+        let run = |f: &mut Fade, from: u64, to: u64, in_range: bool| {
+            for t in (from..=to).step_by(10) {
+                assert!(f.tick(t, in_range, 0, life), "alive at {t}");
+            }
+        };
+        run(&mut f, 0, 300, true);
+        assert_eq!((f.alpha, f.shown), (255, true));
+        run(&mut f, 310, 600, false);
+        assert_eq!(
+            (f.alpha, f.shown, f.flags),
+            (0, false, 0),
+            "hidden, alive, no fade running"
+        );
+        run(&mut f, 610, 790, false);
+        assert!(!f.shown, "out of range it waits hidden");
+        run(&mut f, 800, 900, true);
+        assert_eq!((f.shown, f.flags), (true, FADING_IN));
+        assert_eq!(f.alpha, 102, "100 ms into the fade in");
+        run(&mut f, 910, 1200, true);
+        run(&mut f, 1210, 1310, false);
+        assert_eq!(f.alpha, 153, "100 ms into the fade out");
+        run(&mut f, 1320, 1320, true);
+        assert_eq!(f.alpha, 0, "the fade in starts over");
     }
 
     /// Both switches on, since a kind whose switch is off cannot show whether the gate admits it.
@@ -816,99 +744,16 @@ mod tests {
         );
     }
 
-    /// A logical `round()` would step two physical pixels per axis at 2×.
-    #[test]
-    fn the_bubble_seat_snaps_on_the_device_grid() {
-        // 2×: the grid is every half logical pixel, and every snapped edge is a whole physical px.
-        for (seat_y, want) in [(10.0, 10.0), (10.2, 10.0), (10.3, 10.5), (10.6, 10.5)] {
-            let o = seat_origin(Vec2::new(100.0, seat_y), 40.0, 2.0);
-            assert_eq!(o.y, want, "seat y {seat_y} at 2×");
-            assert_eq!(
-                (o.y * 2.0).fract(),
-                0.0,
-                "{} is a whole physical pixel",
-                o.y
-            );
-        }
-        // The x half snaps the centered left edge (seat − w/2), where the border blit starts.
-        let o = seat_origin(Vec2::new(100.4, 0.0), 41.0, 2.0);
-        assert_eq!(o.x, 80.0);
-        assert_eq!(((100.4_f32 - 20.5) * 2.0).round() / 2.0, o.x);
-        // 1×: identical to a logical round().
-        assert_eq!(seat_origin(Vec2::new(0.0, 10.4), 0.0, 1.0).y, 10.0);
-        assert_eq!(seat_origin(Vec2::new(0.0, 10.6), 0.0, 1.0).y, 11.0);
-        // 1.5×, where a logical round() is never texel-aligned.
-        for v in [10.4, 10.9, 11.2] {
-            let o = seat_origin(Vec2::new(0.0, v), 0.0, 1.5);
-            assert_eq!(
-                (o.y * 1.5).fract(),
-                0.0,
-                "{v} at 1.5× is a whole physical px"
-            );
-        }
-    }
-
-    /// Over a continuous glide the snap displaces any one frame by at most half a device pixel.
-    #[test]
-    fn the_snap_adds_at_most_half_a_device_pixel_of_step() {
-        let scale = 2.0;
-        let mut worst: f32 = 0.0;
-        // A continuous glide across ~40 px at a fractional per-frame speed, like a run.
-        for i in 0..400 {
-            let seat = 137.317 + 0.1013 * i as f32;
-            let snapped = seat_origin(Vec2::new(0.0, seat), 0.0, scale).y;
-            worst = worst.max((snapped - seat).abs());
-        }
-        assert!(
-            worst <= 0.5 / scale + f32::EPSILON,
-            "snap displacement {worst} exceeds half a device pixel"
-        );
-    }
-
-    /// One contiguous band per bubble, ascending with rank, so no two bubbles interleave.
-    #[test]
-    fn each_bubble_gets_its_own_level_band() {
-        // The four pieces of one bubble, in paint order, all inside one level.
-        const { assert!(Z_BG < Z_EDGE && Z_EDGE < Z_TAIL && Z_TAIL < Z_TEXT) };
-        const { assert!(Z_TEXT < overlay_z::BUBBLE_STRIDE) };
-        for rank in 0..8usize {
-            // ...and every piece strictly below the next bubble's background.
-            assert!(level_z(rank) + Z_TEXT < level_z(rank + 1) + Z_BG);
-        }
-        assert!(level_z(1) > level_z(0), "later rank draws later");
-    }
-
-    /// However many bubbles are live, none reaches the V-plates above or the combat text below.
-    #[test]
-    fn the_bubble_band_stays_between_its_neighbours() {
-        for rank in [0, 1, 1_000, usize::MAX] {
-            let z = level_z(rank);
-            assert!(z >= overlay_z::BUBBLE, "over the floating numbers");
-            assert!(z + Z_TEXT < overlay_z::VPLATE, "under the V-plates");
-        }
-    }
-
     /// Farthest camera distance first, guid breaking an exact tie.
     #[test]
     fn the_stack_is_sorted_farthest_first() {
-        let at = |guid: u64, d2: f32| Pending {
-            guid,
-            entity: Entity::PLACEHOLDER,
-            seat: Vec2::ZERO,
-            viewport: Vec2::ONE,
-            cam_dist_sq: d2,
-            anchor: Vec3::ZERO,
-            unit_pos: Vec3::ZERO,
-        };
-        let mut p = vec![at(7, 25.0), at(3, 400.0), at(9, 1.0), at(2, 400.0)];
+        let mut p = vec![(7, 25.0), (3, 400.0), (9, 1.0), (2, 400.0)];
         stack_sort(&mut p);
         assert_eq!(
-            p.iter().map(|q| q.guid).collect::<Vec<_>>(),
+            p.iter().map(|q| q.0).collect::<Vec<_>>(),
             vec![2, 3, 7, 9],
             "farthest first; the 400-yd² pair ordered by guid"
         );
-        // The rank the draw uses is the frame level: the nearest speaker draws last.
-        assert!(level_z(0) < level_z(p.len() - 1));
     }
 
     /// 16 px at 1024-wide 4:3 (width/64), damped past the plate knee.

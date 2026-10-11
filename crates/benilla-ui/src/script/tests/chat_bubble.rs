@@ -328,10 +328,14 @@ fn a_bubble_is_reused_never_reparented_and_hidden_when_done() {
         "no frame was made for the reuse"
     );
 
-    // A new line from the same speaker replaces the bubble: hide, then show, on one frame.
+    // A new line from the same speaker replaces the bubble: its frame goes to the free list's
+    // tail and the line takes the head, here the frame retired before it (`0x608bb4`, `0x608bbf`).
     drive(&mut s, &[say(3, 2, "again")]);
     assert!(s
-        .eval::<bool>(r#"return Hides[3] == "A" and Shows[2] == "A""#)
+        .eval::<bool>(
+            r#"local a, b = WorldFrame:GetChildren()
+               return Hides[3] == "A" and Shows[2] == "B" and not a:IsShown()"#
+        )
         .unwrap());
 
     // Out of range the fade ends hidden; back in range it shows again (`0x4b0d9f`, `0x4b0ea0`).
@@ -339,12 +343,17 @@ fn a_bubble_is_reused_never_reparented_and_hidden_when_done() {
     away.shown = false;
     drive(&mut s, &[away]);
     assert!(s
-        .eval::<bool>(r#"return not (WorldFrame:GetChildren()):IsShown() and Hides[4] == "A""#)
+        .eval::<bool>(
+            r#"local _, b = WorldFrame:GetChildren() return not b:IsShown() and Hides[4] == "B""#
+        )
         .unwrap());
     drive(&mut s, &[say(3, 2, "again")]);
     assert!(s
-        .eval::<bool>(r#"return (WorldFrame:GetChildren()):IsShown() == 1 and Shows[3] == "A""#)
+        .eval::<bool>(
+            r#"local _, b = WorldFrame:GetChildren() return b:IsShown() == 1 and Shows[3] == "B""#
+        )
         .unwrap());
+    assert_eq!(s.chat_bubble_pool_len(), 2);
 }
 
 /// The per-frame pass (`0x4b12d5`-`0x4b1312`): levels 2, 3, … down the list, farthest first,

@@ -926,6 +926,8 @@ pub(crate) struct Model {
     pub(crate) worldmap: super::worldmap::WorldMapState,
     /// Nameplate `Button`s under `WorldFrame`, never shrunk, visible to `GetChildren()`.
     pub(crate) nameplates: super::nameplate::NamePlates,
+    /// Chat bubble `Frame`s under `WorldFrame`, pooled the same way.
+    pub(crate) chat_bubbles: super::chat_bubble::ChatBubbles,
     /// The world-state readout's rows, gated and resolved by the app.
     pub(crate) worldstate: super::worldstate::WorldStateUiState,
     /// Events bindings raise. Deviation: fired at the next tick, not synchronously as in the
@@ -1422,6 +1424,7 @@ impl Model {
             server_unix_time: None,
             worldmap: super::worldmap::WorldMapState::default(),
             nameplates: super::nameplate::NamePlates::default(),
+            chat_bubbles: super::chat_bubble::ChatBubbles::default(),
             worldstate: super::worldstate::WorldStateUiState::default(),
             pending_events: Vec::new(),
             cursor_pos: (0.0, 0.0),

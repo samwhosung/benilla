@@ -3,8 +3,7 @@
 //! Texture regions on the frame from it (`0x77e8d0`), the background on BACKGROUND and the eight
 //! border pieces on BORDER. They are ordinary regions: `GetRegions` returns them, the region draw
 //! path paints them, and every Texture verb works on them. The spec drives them: the colour
-//! setters tint them and a resize re-runs their texcoords (`0x77f0c0`). [`pieces`] is the same
-//! geometry as screen quads, for a backdrop the app draws itself (the chat bubble).
+//! setters tint them and a resize re-runs their texcoords (`0x77f0c0`).
 
 use std::collections::HashMap;
 
@@ -36,7 +35,7 @@ pub struct Backdrop {
     /// The 8-slice border texture (`+0x30`); none or empty builds no border.
     pub edge_file: Option<String>,
     /// Tile the background, else stretch it (`+0x40`).
-    pub tile: bool,
+    pub(crate) tile: bool,
     /// `tileSize` in logical px (`+0x4c`); 0 tiles at `edge_size` (`0x77f0c0`).
     pub tile_size: f32,
     /// `edgeSize` in logical px (`+0x48`): the border piece size and the edge tiling period.
@@ -77,17 +76,18 @@ impl Backdrop {
 /// One drawable piece, the background or one of the 8 border pieces: its corners, axis-aligned,
 /// and per-corner UVs, since the top and bottom edges are rotated 90° (`0x77f0c0`). Both arrays
 /// run `[TL, TR, BR, BL]`, y-up.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BackdropPiece {
+pub(crate) struct BackdropPiece {
     /// Corner positions in screen px.
-    pub corners: [[f32; 2]; 4],
+    pub(crate) corners: [[f32; 2]; 4],
     /// Corner UVs in texture space.
-    pub uvs: [[f32; 2]; 4],
+    pub(crate) uvs: [[f32; 2]; 4],
     /// The texture needs repeat addressing. The corners stay in `[0,1]` but share the edge texture,
     /// so they carry `true` too and the border batches as one texture (`0x77e8d0`).
     pub tile: bool,
     /// Drawn with `bg_file` and `bg_color`, else with `edge_file` and `border_color`.
-    pub is_bg: bool,
+    pub(crate) is_bg: bool,
 }
 
 const SLICE: f32 = 0.125;
@@ -212,36 +212,8 @@ fn run_uvs(bd: &Backdrop, rect: Rect, scale: f32) -> (Option<Uvs>, [Uvs; 4]) {
     (bg, edges)
 }
 
-/// Pull a piece's UVs half a texel inward on every axis that does not tile, so bilinear
-/// magnification cannot sample the neighbouring slice of the shared border atlas (in
-/// `ChatBubble-Backdrop`, a white alpha-0 column: a pale line through the speech bubble). A tiling
-/// axis, a strip's `v` past 1, is left exact, or each period would land short and walk the art.
-#[must_use]
-pub fn inset_atlas_bleed(uvs: [[f32; 2]; 4], tex_w: f32, tex_h: f32) -> [[f32; 2]; 4] {
-    let mut out = uvs;
-    for (axis, tex) in [(0usize, tex_w), (1usize, tex_h)] {
-        if tex < 2.0 {
-            continue; // a 1-texel axis has no interior
-        }
-        let (lo, hi) = uvs.iter().fold((f32::MAX, f32::MIN), |(lo, hi), c| {
-            (lo.min(c[axis]), hi.max(c[axis]))
-        });
-        // A range of exactly 1, the corners' `v`, is bounded and gets the inset.
-        if hi - lo > 1.0 + f32::EPSILON {
-            continue;
-        }
-        let half = 0.5 / tex;
-        if hi - lo <= 2.0 * half {
-            continue; // degenerate: the inset would invert the range
-        }
-        for c in &mut out {
-            c[axis] += if c[axis] <= lo { half } else { -half };
-        }
-    }
-    out
-}
-
 /// Axis-aligned corners `[TL, TR, BR, BL]`, y-up.
+#[cfg(test)]
 fn aa_corners(x0: f32, x1: f32, y_bottom: f32, y_top: f32) -> [[f32; 2]; 4] {
     [
         [x0, y_top],    // TL
@@ -253,9 +225,11 @@ fn aa_corners(x0: f32, x1: f32, y_bottom: f32, y_top: f32) -> [[f32; 2]; 4] {
 
 /// The drawable pieces for a frame's resolved rect (y-up), in paint order: the background (layer
 /// `BACKGROUND`), then the 8 border pieces (layer `BORDER`), as the regions `install` builds
-/// would resolve and draw. Their geometry is in the frame's own units, so it is multiplied by the
-/// frame's effective `scale` (`0x76ac90`), as any region's is.
-pub fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
+/// would resolve and draw, the oracle the region tests check them against. Their geometry is in
+/// the frame's own units, so it is multiplied by the frame's effective `scale` (`0x76ac90`), as
+/// any region's is.
+#[cfg(test)]
+pub(crate) fn pieces(frame: Rect, bd: &Backdrop, scale: f32) -> Vec<BackdropPiece> {
     let mut out = Vec::with_capacity(9);
     let e = bd.edge_size * scale;
     let (l, r, b, t) = (frame.left, frame.right, frame.bottom, frame.top);
@@ -360,12 +334,7 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
         let rh = model
             .arena
             .create_region(fh, RegionKind::Texture, layer, 0)?;
-        let anchors = anchors
-            .into_iter()
-            .flatten()
-            .map(|(p, x, y)| Anchor::new(p, owner, p, x, y))
-            .collect();
-        let size = (size != (0.0, 0.0)).then_some(size);
+        let (anchors, size) = piece_geometry(owner, (anchors, size));
         model.region_data.insert(
             rh,
             RegionData {
@@ -407,6 +376,56 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
             ran_for: None,
         },
     );
+    if let Some(rect) = model.resolved.get(&fh).copied() {
+        run_texcoords(model, fh, rect);
+    }
+}
+
+/// A piece's anchors on frame `owner` and its explicit size, `None` where the anchors span both
+/// axes.
+fn piece_geometry(owner: u32, (anchors, size): PieceLayout) -> (Vec<Anchor>, Option<(f32, f32)>) {
+    let anchors = anchors
+        .into_iter()
+        .flatten()
+        .map(|(p, x, y)| Anchor::new(p, owner, p, x, y))
+        .collect();
+    (anchors, (size != (0.0, 0.0)).then_some(size))
+}
+
+/// Re-size an installed backdrop in place, its nine regions kept: the edge size, the tile period
+/// and the insets, each piece re-anchored as `0x77e8d0` would build it, then the texcoords re-run.
+/// No 1.12 call does this; the engine's chat bubbles take it on a window resize, where the
+/// reference's sizes are window-relative and never need it (`0x4b0940`).
+pub(crate) fn set_metrics(
+    model: &mut Model,
+    fh: FrameHandle,
+    edge_size: f32,
+    tile_size: f32,
+    insets: Insets,
+) {
+    let Some(inst) = model.backdrops.get_mut(&fh) else {
+        return;
+    };
+    if inst.spec.edge_size == edge_size
+        && inst.spec.tile_size == tile_size
+        && inst.spec.insets == insets
+    {
+        return;
+    }
+    inst.spec.edge_size = edge_size;
+    inst.spec.tile_size = tile_size;
+    inst.spec.insets = insets;
+    inst.ran_for = None;
+    let (spec, pieces) = (inst.spec.clone(), inst.pieces);
+    let owner = model.frame_id(fh);
+    let layouts = std::iter::once(bg_layout(&spec)).chain(EDGES.map(|e| edge_layout(e, edge_size)));
+    for (slot, layout) in pieces.into_iter().zip(layouts) {
+        let Some(d) = slot.and_then(|rh| model.region_data.get_mut(&rh)) else {
+            continue;
+        };
+        (d.anchors, d.size) = piece_geometry(owner, layout);
+    }
+    model.touch_layout();
     if let Some(rect) = model.resolved.get(&fh).copied() {
         run_texcoords(model, fh, rect);
     }
@@ -521,52 +540,6 @@ pub(crate) fn after_resolve(model: &mut Model) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// On the `ChatBubble-Backdrop` geometry: 256×32, eight 32-texel slices.
-    #[test]
-    fn the_bleed_inset_lands_on_texel_centres_and_spares_tiling() {
-        const W: f32 = 256.0;
-        const H: f32 = 32.0;
-        let half_u = 0.5 / W;
-
-        let corner = [[0.5, 0.0], [0.625, 0.0], [0.625, 1.0], [0.5, 1.0]];
-        let got = inset_atlas_bleed(corner, W, H);
-        // 128.5 and 159.5 are the centres of the slice's first and last texels.
-        let us: Vec<f32> = got.iter().map(|c| c[0] * W).collect();
-        assert!((us[0] - 128.5).abs() < 1e-3, "left u at {} texels", us[0]);
-        assert!((us[1] - 159.5).abs() < 1e-3, "right u at {} texels", us[1]);
-        let vs: Vec<f32> = got.iter().map(|c| c[1] * H).collect();
-        assert!((vs[0] - 0.5).abs() < 1e-3, "top v at {} texels", vs[0]);
-        assert!((vs[2] - 31.5).abs() < 1e-3, "bottom v at {} texels", vs[2]);
-
-        let strip = [[0.25, 8.0], [0.25, 0.0], [0.375, 0.0], [0.375, 8.0]];
-        let got = inset_atlas_bleed(strip, W, H);
-        for (g, s) in got.iter().zip(strip.iter()) {
-            assert_eq!(g[1], s[1], "the tiling axis must be bit-exact");
-        }
-        assert!((got[0][0] - (0.25 + half_u)).abs() < 1e-6);
-        assert!((got[2][0] - (0.375 - half_u)).abs() < 1e-6);
-
-        for i in 0u8..8 {
-            let (u0, u1) = (f32::from(i) * SLICE, f32::from(i + 1) * SLICE);
-            let piece = [[u0, 0.0], [u1, 0.0], [u1, 1.0], [u0, 1.0]];
-            for c in inset_atlas_bleed(piece, W, H) {
-                assert!(
-                    c[0] > u0 && c[0] < u1,
-                    "slice {i}: u {} escaped ({u0},{u1})",
-                    c[0]
-                );
-            }
-        }
-
-        assert_eq!(inset_atlas_bleed(corner, 0.0, 0.0), corner);
-        let sliver = [[0.0, 0.0], [0.001, 0.0], [0.001, 1.0], [0.0, 1.0]];
-        assert_eq!(
-            inset_atlas_bleed(sliver, W, H)[0][0],
-            0.0,
-            "too thin to inset"
-        );
-    }
 
     fn tooltip_backdrop(edge_size: f32, inset: f32) -> Backdrop {
         Backdrop {

@@ -162,15 +162,6 @@ pub(crate) struct UiQuads {
 pub(crate) mod overlay_z {
     /// Floating combat, XP and honor numbers, drawn by the client in the world scene under all UI.
     pub(crate) const WORLD_TEXT: u64 = 0;
-    /// The chat bubbles: one frame level per live bubble, farthest from the camera first.
-    pub(crate) const BUBBLE: u64 = 1 << 8;
-    /// Keys per bubble level: its bg, edge, tail and text.
-    pub(crate) const BUBBLE_STRIDE: u64 = 4;
-    /// The V-plates, over every bubble; a unit never shows both, so this orders only across units.
-    pub(crate) const VPLATE: u64 = 1 << 16;
-    /// The highest bubble level below [`VPLATE`], a guard rail far past any real count (a bubble
-    /// needs a speaker within 20 yd).
-    pub(crate) const BUBBLE_MAX_LEVEL: u64 = (VPLATE - BUBBLE) / BUBBLE_STRIDE - 1;
 }
 
 /// Clear the append lane at the top of the [`UiQuadAppend`] window, before every appender.
