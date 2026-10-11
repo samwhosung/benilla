@@ -310,3 +310,135 @@ fn simplehtml_keeps_a_negative_spacing_but_steps_its_blocks_by_zero() {
         .y_off;
     assert_eq!(y, 0.0, "the step is the clamped spacing");
 }
+
+/// How many messages a plain frame keeps after a tick: its capacity.
+fn plain_capacity(height: f32, spacing: &str) -> usize {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(&format!(
+        "local f = CreateFrame('MessageFrame', 'CapFrame')\n\
+         f:SetPoint('BOTTOMLEFT', 0, 0)\n\
+         f:SetWidth(400)\n\
+         f:SetHeight({height})\n\
+         f:SetFading(false)\n\
+         f:SetFont('Fonts\\\\FRIZQT__.TTF', 14)\n\
+         f:SetSpacing({spacing})"
+    ))
+    .unwrap();
+    for n in 0..12 {
+        s.run(&format!("CapFrame:AddMessage('m{n}', 1, 1, 1)"))
+            .unwrap();
+    }
+    s.resolve();
+    s.tick(0.1);
+    let m = s.model_ref();
+    let h = m.arena.lookup("CapFrame").expect("named frame");
+    m.arena
+        .frame(h)
+        .and_then(|f| f.kind_state.message_lines())
+        .map_or(0, |l| l.len())
+}
+
+/// The plain class's pitch reads the font's spacing unclamped (`0x785f06`) and pixel-snaps both
+/// terms (`0x766750`, `0x785f13`/`0x785f25`): a negative one truncates toward zero and shortens the
+/// pitch, a fractional positive one rounds up, and a pitch of 0 or less fits nothing (`0x785f8f`).
+#[test]
+fn a_plain_message_frames_pitch_is_the_snapped_raw_spacing() {
+    assert_eq!(plain_capacity(42.0, "-4"), 4, "42 / (14 - 4)");
+    assert_eq!(plain_capacity(100.0, "2.5"), 5, "100 / (14 + 3)");
+    assert_eq!(plain_capacity(42.0, "-2.5"), 3, "42 / (14 - 2)");
+    assert_eq!(plain_capacity(42.0, "-14"), 0, "a zero pitch fits nothing");
+}
+
+/// The plain class steps its slots by the same raw, snapped pitch (`0x786184`), so a negative
+/// spacing overlaps them.
+#[test]
+fn a_plain_message_frames_slots_step_by_the_raw_pitch() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        "local f = CreateFrame('MessageFrame', 'SlotFrame')\n\
+         f:SetPoint('BOTTOMLEFT', 0, 100)\n\
+         f:SetWidth(400)\n\
+         f:SetHeight(60)\n\
+         f:SetInsertMode('BOTTOM')\n\
+         f:SetFont('Fonts\\\\FRIZQT__.TTF', 14)\n\
+         f:SetSpacing(-4)\n\
+         f:AddMessage('one', 1, 1, 1)\n\
+         f:AddMessage('two', 1, 1, 1)",
+    )
+    .unwrap();
+    s.resolve();
+    let mut got = bands(&s);
+    got.sort_by(|a, b| a.1.total_cmp(&b.1));
+    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got[0].0, "two");
+    assert!((got[0].1 - 100.0).abs() < 0.01, "{got:?}");
+    assert_eq!(got[1].0, "one");
+    assert!(
+        (got[1].1 - 110.0).abs() < 0.01,
+        "one slot up is 10: {got:?}"
+    );
+}
+
+/// A scrolling frame charges each message its height plus the line string's spacing rounded up to
+/// a whole pixel (`0x78899e` → `0x766750`), and a wrapped message's inner gap likewise.
+#[test]
+fn a_scrolling_frame_rounds_a_fractional_spacing_up() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        "local f = CreateFrame('ScrollingMessageFrame', 'GapChat2')\n\
+         f:SetPoint('BOTTOMLEFT', 0, 90)\n\
+         f:SetWidth(400)\n\
+         f:SetHeight(100)\n\
+         f:SetFont('Fonts\\\\FRIZQT__.TTF', 14)\n\
+         f:SetSpacing(2.5)\n\
+         f:AddMessage('old', 1, 1, 1)\n\
+         f:AddMessage('wrapped', 1, 1, 1)\n\
+         f:AddMessage('new', 1, 1, 1)",
+    )
+    .unwrap();
+    s.resolve();
+    let answers: Vec<(u32, u32, u16, u64)> = s
+        .message_lines_needing_measure()
+        .iter()
+        .map(|r| (r.frame, r.index, if r.index == 1 { 2 } else { 1 }, r.key))
+        .collect();
+    s.set_message_line_rows(&answers);
+    let got = bands(&s);
+    let want = [
+        ("new", 90.0, 104.0),
+        ("wrapped", 107.0, 138.0),
+        ("old", 141.0, 155.0),
+    ];
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for ((t, b, top), (wt, wb, wtop)) in got.iter().zip(want) {
+        assert_eq!(t, wt);
+        assert!(
+            (b - wb).abs() < 0.01 && (top - wtop).abs() < 0.01,
+            "{t}: [{b}, {top}] against [{wb}, {wtop}]"
+        );
+    }
+}
+
+/// `spacing=` is read with `atof` (`0x64aaa0`): the numeric prefix, 0 for none.
+#[test]
+fn the_spacing_attribute_is_read_with_atof() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+             <Font name="AtofFont" font="Fonts\FRIZQT__.TTF" spacing=" 3px"/>
+             <Frame name="AtofHost">
+               <Layers><Layer level="ARTWORK">
+                 <FontString name="AtofOwn" spacing="2.5em"/>
+               </Layer></Layers>
+             </Frame>
+           </Ui>"#,
+    )
+    .expect("valid FrameXML");
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(spacing(&s, "AtofFont"), 3.0);
+    assert_eq!(spacing(&s, "AtofOwn"), 2.5);
+}

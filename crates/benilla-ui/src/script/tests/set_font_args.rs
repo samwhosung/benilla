@@ -142,3 +142,82 @@ fn the_path_and_height_gates_coerce() {
         assert_eq!(h, 14.0, "{kind}");
     }
 }
+
+/// The kinds behind the shared implementation (`0x79f210`), which answers nil and writes nothing
+/// on a failed load (`0x79f30f` → `0x79f361`, before the stores at `0x79f321`-`0x79f337`) or for a
+/// height of 0 or less, without loading (`0x79f2f1`-`0x79f2ff`).
+#[test]
+fn a_refused_load_or_a_non_positive_height_changes_nothing_on_the_shared_path() {
+    let mut s = receivers();
+    s.set_font_probe(Box::new(|path| {
+        path.eq_ignore_ascii_case("fonts\\frizqt__.ttf")
+    }));
+    for &(obj, kind) in KINDS.iter().filter(|(_, k)| *k != "FontString") {
+        s.run(&format!(
+            "{obj}:SetFont(\"Fonts\\\\FRIZQT__.TTF\", 12, \"OUTLINE\")"
+        ))
+        .unwrap();
+        for bad in [
+            "\"Interface\\\\AddOns\\\\X\\\\gone.ttf\", 30",
+            "\"\", 30",
+            "\"Fonts\\\\FRIZQT__.TTF\", 0",
+            "\"Fonts\\\\FRIZQT__.TTF\", -3",
+        ] {
+            let answer = s
+                .eval::<mlua::MultiValue>(&format!("return {obj}:SetFont({bad})"))
+                .unwrap_or_else(|e| panic!("{kind}: SetFont({bad}) raised {e}"));
+            // Button's binding discards the answer (`0x780880`); the others push nil.
+            if kind != "Button" {
+                assert!(
+                    matches!(answer.iter().next(), Some(mlua::Value::Nil)),
+                    "{kind}: SetFont({bad}) answered {answer:?}"
+                );
+            }
+            let got = s
+                .eval::<(Option<String>, f32, String)>(&format!("return {obj}:GetFont()"))
+                .unwrap();
+            assert_eq!(
+                got,
+                (
+                    Some("Fonts\\FRIZQT__.TTF".to_string()),
+                    12.0,
+                    "OUTLINE".to_string()
+                ),
+                "{kind}: SetFont({bad}) must change nothing"
+            );
+        }
+    }
+}
+
+/// The FontString's own load (`0x7714f0`) returns before its height store (`0x771571`-`0x77157b`)
+/// when the face fails; a height of exactly 0 skips the load, stores 0, frees the font (`0x7715b3`)
+/// and answers 1.
+#[test]
+fn a_fontstrings_refused_load_changes_nothing_and_a_zero_height_frees_its_font() {
+    let mut s = receivers();
+    s.set_font_probe(Box::new(|path| {
+        path.eq_ignore_ascii_case("fonts\\frizqt__.ttf")
+    }));
+    s.run("TFS:SetFont(\"Fonts\\\\FRIZQT__.TTF\", 12, \"OUTLINE\")")
+        .unwrap();
+    assert!(s
+        .eval::<bool>("return TFS:SetFont(\"Interface\\\\AddOns\\\\X\\\\gone.ttf\", 30) == nil")
+        .unwrap());
+    assert_eq!(
+        s.eval::<(Option<String>, f32, String)>("return TFS:GetFont()")
+            .unwrap(),
+        (
+            Some("Fonts\\FRIZQT__.TTF".to_string()),
+            12.0,
+            "OUTLINE".to_string()
+        )
+    );
+    assert!(s
+        .eval::<bool>("return TFS:SetFont(\"Interface\\\\AddOns\\\\X\\\\gone.ttf\", 0) == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<(Option<String>, f32, String)>("return TFS:GetFont()")
+            .unwrap(),
+        (None, 0.0, String::new())
+    );
+}

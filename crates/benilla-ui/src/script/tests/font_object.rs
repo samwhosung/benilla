@@ -953,7 +953,7 @@ fn set_font_answers_the_hosts_load_verdict_when_there_is_a_host() {
         "an addon's own face, spelled in its own case, must load"
     );
     assert!(
-        s.eval::<bool>(r"return FS:SetFont('Interface\\AddOns\\MSBT\\Fonts\\gone.ttf', 18) == nil")
+        s.eval::<bool>(r"return FS:SetFont('Interface\\AddOns\\MSBT\\Fonts\\gone.ttf', 30) == nil")
             .unwrap(),
         "a path the store does not hold is the reference's falsey load failure"
     );
@@ -964,7 +964,10 @@ fn set_font_answers_the_hosts_load_verdict_when_there_is_a_host() {
         face, "Interface\\AddOns\\MSBT\\Fonts\\porky.ttf",
         "the refused face must not replace the one that loaded"
     );
-    assert_eq!(height, 18.0, "…while the height, which never fails, is set");
+    assert_eq!(
+        height, 18.0,
+        "a refused load writes nothing, the height included (`0x771571`)"
+    );
 }
 
 /// MSBT's per-event sequence over the stock `MasterFont` (`Fonts.xml:55`, a `<Shadow>` only): its
