@@ -131,3 +131,32 @@ fn a_resolved_texture_keeps_its_rect_when_its_art_changes() {
     assert_eq!(num(&mut s, "T:GetTop()"), Some(220.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A write the reference invalidates for, though it moves no input, re-resolves a texture whose
+/// art changed since: `SetWidth` always invalidates (`0x7683d0`), so the new art's span lands.
+#[test]
+fn a_same_value_invalidate_after_new_art_takes_the_art() {
+    let mut s = owner();
+    s.run(
+        r#"T = f:CreateTexture("T", "ARTWORK"); T:SetTexture("Art")
+        T:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0); T:SetWidth(0)"#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0));
+    s.run(r#"T:SetTexture("Big")"#).unwrap();
+    resolve_matches_scratch(&mut s, "new art");
+    assert_eq!(
+        num(&mut s, "T:GetRight()"),
+        Some(164.0),
+        "nothing reached it"
+    );
+    s.run("T:SetWidth(0)").unwrap();
+    resolve_matches_scratch(&mut s, "the same width");
+    assert_eq!(
+        num(&mut s, "T:GetRight()"),
+        Some(228.0),
+        "the invalidate read the new art"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

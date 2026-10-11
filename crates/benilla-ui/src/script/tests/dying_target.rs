@@ -168,3 +168,41 @@ fn a_scroll_childs_own_anchor_to_a_destroyed_label_is_freed() {
     assert_eq!(num(&mut s, "c:GetLeft()"), left);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The re-link into another frame (`0x77fd10`) invalidates nothing: a region moved under a frame of
+/// another scale keeps its rect until its own invalidate, which then reads the new owner's scale.
+#[test]
+fn a_region_reowned_keeps_its_rect_until_its_own_invalidate() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        a = CreateFrame("Frame", "A"); a:SetWidth(10); a:SetHeight(10)
+        a:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 0, 0)
+        b = CreateFrame("Frame", "B"); b:SetWidth(10); b:SetHeight(10)
+        b:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 0, 0); b:SetScale(2)
+        x = CreateFrame("Frame", "X"); x:SetWidth(100); x:SetHeight(100)
+        x:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 100, 100)
+        t = a:CreateTexture("T", "ARTWORK"); t:SetTexture(1, 1, 1)
+        t:SetWidth(8); t:SetHeight(8); t:SetPoint("BOTTOMLEFT", x, "BOTTOMLEFT", 0, 0)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(num(&mut s, "T:GetRight()"), Some(108.0));
+    s.run("t:SetParent(b)").unwrap();
+    resolve_matches_scratch(&mut s, "re-owned");
+    assert_eq!(
+        num(&mut s, "T:GetRight()"),
+        Some(54.0),
+        "the rect it had, read in the new owner's units"
+    );
+    s.run("t:SetWidth(8)").unwrap();
+    resolve_matches_scratch(&mut s, "its own invalidate");
+    assert_eq!(
+        num(&mut s, "T:GetRight()"),
+        Some(58.0),
+        "8 units at scale 2, from 100"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
