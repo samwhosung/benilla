@@ -16,16 +16,25 @@
 
 use mlua::{Lua, Value};
 
-/// Shape A: `is-number` (`0x6f34d0`), `tonumber` (`0x6f3620`), then the truncating `0x40a2b0`,
-/// raising the binding's `Usage:` on failure. A missing argument fails like a wrong-typed one
-/// (`0x6f3410` returns NULL past `L->top`); a numeric string passes. `0x40a2b0` stores a qword but
-/// the bindings consume only the low dword, hence `i32`.
-///
-/// Deviation: past ±2^63 Rust saturates where the x87 stores its integer-indefinite pattern,
-/// because no real argument reaches that range.
+/// `_ftol` (`0x40a2b0`) as the bindings consume it: the x87 rounding control set to chop, a
+/// `fistp` to a qword, and its low dword. What the qword cannot hold (an infinity, NaN, ±2^63 and
+/// beyond) stores the integer-indefinite pattern `0x8000_0000_0000_0000`, whose low dword is 0.
+pub(crate) fn ftol(n: f64) -> i32 {
+    const TWO_63: f64 = 9_223_372_036_854_775_808.0;
+    let t = n.trunc();
+    if t >= -TWO_63 && t < TWO_63 {
+        t as i64 as i32
+    } else {
+        0
+    }
+}
+
+/// Shape A: `is-number` (`0x6f34d0`), `tonumber` (`0x6f3620`), then the truncating `0x40a2b0`
+/// ([`ftol`]), raising the binding's `Usage:` on failure. A missing argument fails like a
+/// wrong-typed one (`0x6f3410` returns NULL past `L->top`); a numeric string passes.
 pub(crate) fn number_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<i32> {
     match lua.coerce_number(v)? {
-        Some(n) => Ok(n as i64 as i32),
+        Some(n) => Ok(ftol(n)),
         None => Err(mlua::Error::RuntimeError(usage.into())),
     }
 }
@@ -216,6 +225,20 @@ mod tests {
 
     fn lua() -> Lua {
         Lua::new()
+    }
+
+    /// `_ftol`'s low dword: chopped toward zero, wrapped to 32 bits, and 0 for whatever the qword
+    /// `fistp` cannot hold.
+    #[test]
+    fn ftol_keeps_the_low_dword_of_the_x87_qword() {
+        assert_eq!(ftol(-2.9), -2);
+        assert_eq!(ftol(2.9), 2);
+        assert_eq!(ftol(3e9), 3_000_000_000_i64 as i32);
+        assert_eq!(ftol(4_294_967_301.0), 5);
+        assert_eq!(ftol(-9_223_372_036_854_775_808.0), 0);
+        for none in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 9.3e18, -9.3e18] {
+            assert_eq!(ftol(none), 0, "{none}");
+        }
     }
 
     #[test]
