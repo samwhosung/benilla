@@ -270,17 +270,16 @@ fn start_moving(model: &mut Model, h: FrameHandle) -> mlua::Result<()> {
 
 /// Begin a title-region move, drag mode 2 (`0x7662c0` → `0x765320` → `0x7652b0`), with no movable
 /// check, since nothing on that path reads the bit; `0x765320` asks for grip CENTER when it is not
-/// sizing (`0x765332` → `0x765464`). False when a drag is already in flight or did not start.
+/// sizing (`0x765332` → `0x765464`). Neither reads the slot first, so a drag in flight is displaced
+/// and nothing runs on its frame. False when the frame has no rect, so nothing started.
 pub(crate) fn start_title_move(model: &mut Model, h: FrameHandle) -> bool {
-    if model.moving.is_some() {
-        return false;
-    }
     begin_drag(model, h, Point::Center, true)
 }
 
 /// The drag entry `0x7652b0`: pin the frame (`0x7652c6` → `0x768430`) and, only when it has a rect
 /// to pin (`0x7652cd`), raise it (`0x7652d7`), set userPlaced (`0x7652e5`) and take the slot
-/// (`0x7652f3`–`0x76530f`). False when the frame has no rect, so nothing started.
+/// (`0x7652f3`–`0x76530f`) over whatever held it. False when the frame has no rect, so nothing
+/// started.
 fn begin_drag(model: &mut Model, h: FrameHandle, grip: Point, auto_stop: bool) -> bool {
     let Some(repinned) = pin_top_left(model, h, (0.0, 0.0), (0.0, 0.0)) else {
         return false;

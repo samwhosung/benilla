@@ -309,6 +309,11 @@ impl UiScript {
         // drag arm, a Button's press art and Down click), runs on that one frame. So a second
         // button pressed over another frame fires on the held one. `mouse_down_on` keeps the
         // frame per button for the release.
+        //
+        // The hover is what the last walk left. Every press follows a move to its point, so that
+        // is the frame under it, except while a move or size holds the slot: the walk then pumps
+        // it and returns before its sweep (`0x766164`), and the hover stays the frame it was when
+        // the drag began.
         let mut release_lost = false;
         let press_target: Option<crate::widget::FrameHandle> = if down {
             let mut model = self.model_mut();
@@ -328,7 +333,12 @@ impl UiScript {
             let held = model
                 .mouse_capture
                 .filter(|&c| model.arena.frame(c).is_some());
-            held.or_else(|| hit_id.and_then(|id| model.id_to_frame.get(&id).copied()))
+            let hover = if model.moving.is_some() {
+                model.mouseover.filter(|&h| model.arena.frame(h).is_some())
+            } else {
+                hit_id.and_then(|id| model.id_to_frame.get(&id).copied())
+            };
+            held.or(hover)
         } else {
             None
         };
@@ -357,10 +367,12 @@ impl UiScript {
                 return true;
             }
         }
-        // ── The release ends a title move ───────────────────────────────────────────────────────
+        // ── The release ends a title move, and that is all it does ─────────────────────────────
         //
-        // `0x766420` cancels move modes 1 (modifier drag) and 2 (title region) on release and
-        // leaves mode 3 (`StartMoving`) to the addon's `StopMovingOrSizing`;
+        // `0x766420` tests the drag mode before anything else (`0x76646d`–`0x76647c`): any release
+        // during mode 1 (modifier drag) or 2 (title region) clears the slot (`0x765640`) and
+        // returns consumed, with no `OnMouseUp`, drag stop or click on the capture, which it
+        // leaves held. Mode 3 (`StartMoving`) is left to the addon's `StopMovingOrSizing`;
         // `FrameMove::auto_stop` is that distinction.
         if !down
             && self
@@ -370,6 +382,7 @@ impl UiScript {
                 .is_some_and(|m| m.auto_stop)
         {
             self.model_mut().moving = None;
+            return true;
         }
         // The press this release belongs to, read before the borrow below drains `mouse_down_on`.
         let captured_id: Option<u32> = if down {
