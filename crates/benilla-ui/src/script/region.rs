@@ -716,13 +716,20 @@ pub(crate) fn free_regions(model: &mut Model, dying: &[RegionHandle]) {
     let mut regions: Vec<RegionHandle> = Vec::new();
     let mut frames: Vec<crate::widget::FrameHandle> = Vec::new();
     match &model.layout_touched {
-        // The cached graph's readers of each dying id, and every node a write named since it was
-        // built, are all that can anchor to one.
+        // The cached graph's readers of each dying id, every node a write named since it was
+        // built, and every scroll child, whose own anchors the graph sets aside, are all that can
+        // anchor to one.
         Some(named) => {
             let mut maybe = named.clone();
             for &id in &ids {
                 maybe.extend(model.layout_scope.readers_of(id));
             }
+            maybe.extend(
+                model
+                    .layout_scope
+                    .overridden()
+                    .filter_map(|h| model.frame_to_id.get(&h).copied()),
+            );
             maybe.sort_unstable();
             maybe.dedup();
             for id in maybe {

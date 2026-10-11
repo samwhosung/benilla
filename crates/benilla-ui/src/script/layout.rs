@@ -401,8 +401,14 @@ impl LayoutScope {
         before
     }
 
+    /// The frames a ScrollFrame override holds, whose own anchors this graph does not record.
+    pub(crate) fn overridden(&self) -> impl Iterator<Item = FrameHandle> + '_ {
+        self.claims.keys().copied()
+    }
+
     /// The nodes this graph records reading `id`'s rect. It describes the model while the ledger
-    /// is armed (`Model::layout_touched` is `Some`), but for the nodes named since.
+    /// is armed (`Model::layout_touched` is `Some`), but for the nodes named since and the anchors
+    /// a ScrollFrame override set aside ([`Self::overridden`]).
     pub(crate) fn readers_of(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
         let mut e = self.dep_head.get(id as usize).copied().unwrap_or(u32::MAX);
         std::iter::from_fn(move || {

@@ -133,3 +133,38 @@ fn a_backdrop_teardown_frees_the_anchors_to_its_pieces() {
     assert_eq!(after, before, "no resolve was queued for either");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A ScrollFrame's child is placed by the frame's override, yet its own anchors stand under it:
+/// one to a destroyed label is freed too.
+#[test]
+fn a_scroll_childs_own_anchor_to_a_destroyed_label_is_freed() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        b = CreateFrame("Button", "B")
+        b:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 100, 100)
+        b:SetWidth(200); b:SetHeight(40)
+        b:SetFontString(b:CreateFontString("Old", "ARTWORK"))
+        Old:SetWidth(50); Old:SetHeight(10)
+        sf = CreateFrame("ScrollFrame", "SF")
+        sf:SetPoint("TOPLEFT", nil, "TOPLEFT", 10, -10)
+        sf:SetWidth(50); sf:SetHeight(50)
+        c = CreateFrame("Frame", "Child")
+        c:SetWidth(5); c:SetHeight(5)
+        c:SetPoint("TOPLEFT", Old, "TOPLEFT")
+        sf:SetScrollChild(c)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let left = num(&mut s, "c:GetLeft()");
+    assert_eq!(left, Some(10.0), "placed by the override");
+
+    s.run(r#"b:SetFontString(b:CreateFontString("New", "ARTWORK"))"#)
+        .unwrap();
+    assert_eq!(s.eval::<i64>("return c:GetNumPoints()").unwrap(), 0);
+    resolve_matches_scratch(&mut s, "the label replaced");
+    assert_eq!(num(&mut s, "c:GetLeft()"), left);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
