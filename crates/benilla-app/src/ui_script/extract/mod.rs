@@ -512,7 +512,8 @@ pub(super) fn tick_script(
     let us_tick = lap();
     // ── The FontString measure round-trip, before the resolve ────────────────────────────────
     // A request reads only region data, never a resolved rect, and `resolve` writes no region's
-    // size, so measuring first lets the frame's one resolve see the answers.
+    // size, so measuring first lets the resolve below see the answers. The tick drained the layout
+    // after its walk; this resolve takes the measures and what the tick's tail moved.
     let mut measured_any = false;
     if let Some(atlas) = font_atlas.as_deref_mut() {
         measured_any = measure_fontstrings(&mut script, atlas, s, &mut ui_cost, ui_cost_wanted.0);
