@@ -254,6 +254,10 @@ pub struct WidgetArena {
     regions: Arena<Region>,
     names: HashMap<String, FrameHandle>,
     next_insertion: u32,
+    /// Each stratum's level bound, the reference's `bucket+0x8`: one above the highest level a
+    /// visible frame has linked at since the last compaction set it. It starts at 0 and only a
+    /// visible link grows it ([`Self::link_bound`]); nothing else lowers it but the compaction.
+    level_bound: [u32; Strata::ALL.len()],
     /// The next [`Frame::created`].
     next_created: u64,
     /// How many times the link stamps were renumbered at the cap, so a reader holding stamps can
@@ -316,6 +320,7 @@ impl WidgetArena {
             regions: Arena::new(),
             names: HashMap::new(),
             next_insertion: 0,
+            level_bound: [0; Strata::ALL.len()],
             next_created: 0,
             renumbers: 0,
             link_log: None,
@@ -408,13 +413,26 @@ impl WidgetArena {
             self.renumbers += 1;
         }
         let seq = self.next_insertion;
+        let mut linked = None;
         if let Some(f) = self.frame_mut(h) {
             f.insertion_seq = seq;
+            linked = Some((f.strata, f.level));
             self.next_insertion += 1;
             if let Some(log) = &mut self.link_log {
                 log.push(h);
             }
         }
+        if let Some((strata, level)) = linked {
+            self.link_bound(strata, level);
+        }
+    }
+
+    /// A visible frame linked into `strata` at `level`: the stratum's bound grows to one above it
+    /// (`0x764882`-`0x764887`, inside the bucket add `0x764780`, which the level setter reaches
+    /// only for a visible frame, `0x76a541`). A hidden frame's level never reaches it.
+    fn link_bound(&mut self, strata: Strata, level: u16) {
+        let bound = &mut self.level_bound[strata.index() as usize];
+        *bound = (*bound).max(u32::from(level) + 1);
     }
 
     /// Start recording every link into a bucket, for the update walk (`0x765650`), which must see
@@ -558,9 +576,11 @@ impl WidgetArena {
                 | FrameKind::TabardModel
         );
         let visible = frame.effective_visible;
+        let (strata, level) = (frame.strata, frame.level);
         let (index, generation) = self.frames.insert(frame);
         let handle = FrameHandle { index, generation };
         if visible {
+            self.link_bound(strata, level);
             if let Some(log) = &mut self.link_log {
                 log.push(handle);
             }
