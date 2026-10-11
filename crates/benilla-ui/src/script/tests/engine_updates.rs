@@ -1,9 +1,10 @@
 //! The engine's own per-kind updates, each run in its frame's slot of the update walk (`0x765650`,
 //! `vtable+0x38` at `0x765710`) right after that frame's `OnUpdate`: GameTooltip's fade
-//! (`0x530b20`) and a Model pane's clock and completion (`0x76d7f0`). `OnUpdateModel` fires later,
-//! from the draw pass (`0x7657d0`), in draw order.
+//! (`0x530b20`), a Model pane's clock and completion (`0x76d7f0`) and the message frames' line
+//! fades (`0x788460`, `0x786200`). `OnUpdateModel` fires later, from the draw pass (`0x7657d0`),
+//! in draw order.
 
-use crate::script::UiScript;
+use crate::script::{Model, UiScript};
 use crate::widget::{ModelFileFacts, SequenceFacts};
 
 use super::common::script;
@@ -242,5 +243,97 @@ fn on_update_model_fires_in_draw_order() {
     take_log(&s);
     s.tick(0.016);
     assert_eq!(take_log(&s), "b a low level2 level9 dialog");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// Each line of message frame `name` as `(time_left, alpha)`, oldest first.
+fn lines(s: &UiScript, name: &str) -> Vec<(f32, f32)> {
+    let model = s.lua().app_data_ref::<Model>().expect("model");
+    let fh = model.arena.lookup(name).expect("message frame");
+    model
+        .arena
+        .frame(fh)
+        .and_then(|f| f.kind_state.message_lines())
+        .expect("a message frame")
+        .iter()
+        .map(|l| (l.time_left, l.alpha))
+        .collect()
+}
+
+/// A line's countdown is the frame's own update (`0x788460` for the scrolling class, `0x7884d4`;
+/// `0x786200` for the plain one, `0x786300`), which the walk reaches only for a shown frame: a
+/// docked chat tab hidden behind another keeps its lines' time, and they are still there when it
+/// is shown again.
+#[test]
+fn a_hidden_message_frames_lines_keep_their_time() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        for _, kind in ipairs({ "ScrollingMessageFrame", "MessageFrame" }) do
+            local f = CreateFrame(kind, "Hidden" .. kind)
+            f:SetPoint("CENTER", 0, 0); f:SetWidth(300); f:SetHeight(140)
+            f:SetTimeVisible(10); f:SetFadeDuration(3)
+            f:AddMessage("arrived while hidden")
+            f:Hide()
+        end
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    for _ in 0..30 {
+        s.tick(1.0);
+    }
+    for name in ["HiddenScrollingMessageFrame", "HiddenMessageFrame"] {
+        assert_eq!(lines(&s, name), vec![(10.0, 1.0)], "{name}: no time passed");
+    }
+    s.run("HiddenScrollingMessageFrame:Show() HiddenMessageFrame:Show()")
+        .unwrap();
+    s.tick(4.0);
+    for name in ["HiddenScrollingMessageFrame", "HiddenMessageFrame"] {
+        assert_eq!(lines(&s, name), vec![(6.0, 1.0)], "{name}: shown, it counts again");
+    }
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// `OnUpdateModel` fires from the paint `0x76d240` past three gates (`0x76d5ea`): a model set
+/// (`0x76d24c`), a resolved rect (`0x768320` at `0x76d27d`), and the rect as screen fractions
+/// (`0x41ade0`), each edge clamped to 0..1 (`0x76d473`–`0x76d56d`), at least `[0x8029d4]` wide
+/// and tall (`0x76d574`–`0x76d5a0`). A pane with no size, no anchor or wholly off screen fires
+/// none; one partly on screen does.
+#[test]
+fn on_update_model_needs_a_resolved_rect_on_screen() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_model_facts(COOLDOWN_FILE, cooldown_facts());
+    s.run(&format!(
+        r#"
+        LOG = {{}}
+        function Pane(name, x, y, size, anchored)
+            local p = CreateFrame("Model", name)
+            if anchored then p:SetPoint("BOTTOMLEFT", x, y) end
+            if size then p:SetWidth(size); p:SetHeight(size) end
+            p:SetModel("{}")
+            p:SetScript("OnUpdateModel", function() table.insert(LOG, name) end)
+        end
+        Pane("OnScreen", 100, 100, 64, true)
+        Pane("PartlyOff", 780, 100, 64, true)
+        Pane("NoSize", 100, 100, nil, true)
+        Pane("NoAnchor", 100, 100, 64, false)
+        Pane("OffRight", 900, 100, 64, true)
+        Pane("OffBelow", 100, -200, 64, true)
+    "#,
+        lua_path(COOLDOWN_FILE)
+    ))
+    .unwrap();
+    s.resolve();
+    take_log(&s);
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "OnScreen PartlyOff");
+    // Moved on screen, the off-screen pane fires from the next paint.
+    s.run(r#"OffRight:SetPoint("BOTTOMLEFT", 300, 100)"#).unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "OnScreen PartlyOff OffRight");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

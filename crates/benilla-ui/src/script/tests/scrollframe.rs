@@ -692,3 +692,122 @@ fn update_scroll_child_rect_reports_both_ranges_horizontal_first() {
     );
     assert!(s.take_errors().is_empty());
 }
+
+// ── The stored ranges (`[+0x31c]`, `[+0x320]`), recomputed in the frame's walk slot ──────────
+
+/// A shown 300×200 scroll frame `SF` and a 600-tall `Child`, not yet set; `FIRES` counts
+/// `OnScrollRangeChanged` and `RANGE` keeps its last `(xRange, yRange)`.
+const RANGED: &str = r#"
+    FIRES, RANGE = 0, { -1, -1 }
+    local frame = CreateFrame("ScrollFrame", "SF")
+    frame:SetPoint("TOPLEFT", 0, -100)
+    frame:SetWidth(300); frame:SetHeight(200)
+    frame:SetScript("OnScrollRangeChanged", function()
+        FIRES = FIRES + 1
+        RANGE = { arg1, arg2 }
+    end)
+    local child = CreateFrame("Frame", "Child", frame)
+    child:SetWidth(300); child:SetHeight(600)
+"#;
+
+/// `(FIRES, yRange as fired, GetVerticalScrollRange())`.
+fn ranged(s: &crate::script::UiScript) -> (u32, f32, f32) {
+    s.eval("return FIRES, RANGE[2], SF:GetVerticalScrollRange()")
+        .unwrap()
+}
+
+/// `UpdateScrollChildRect` only marks the range (`0x791943`); the frame's update (`0x787140`)
+/// recomputes a marked range after its `OnUpdate` (`0x787152`–`0x7871a0`) and fires
+/// `OnScrollRangeChanged` only when a range moved by 2⁻²² or more (`0x786ed7`–`0x786efd`).
+#[test]
+fn the_range_is_recomputed_in_the_walk_and_fires_once_per_change() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(RANGED).unwrap();
+    s.run("SF:SetScrollChild(Child)").unwrap();
+    s.resolve();
+    assert_eq!(ranged(&s), (0, -1.0, 0.0), "nothing until the walk");
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0), "SetScrollChild marked it");
+
+    s.run("SF:UpdateScrollChildRect()").unwrap();
+    assert_eq!(ranged(&s).0, 1, "the call fires nothing");
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0), "an unchanged range fires nothing");
+
+    s.run("Child:SetHeight(700) SF:UpdateScrollChildRect()")
+        .unwrap();
+    assert_eq!(ranged(&s), (1, 400.0, 400.0), "stored until the walk");
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (2, 500.0, 500.0));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The getters answer the stored value (`0x7917d0`, `[+0x320]` at `0x791873`), which the ctor
+/// zeroes (`0x786a63`) and only a marked recompute moves: a child resized with no mark leaves it.
+#[test]
+fn the_getters_answer_the_stored_range() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(RANGED).unwrap();
+    s.run("SF:SetScrollChild(Child)").unwrap();
+    s.resolve();
+    assert_eq!(ranged(&s).2, 0.0, "the ctor's zero before the first recompute");
+    s.tick(0.016);
+    assert_eq!(ranged(&s).2, 400.0);
+    s.run("Child:SetHeight(900)").unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0), "a child's resize marks nothing");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The update runs only for a shown frame, so a hidden one keeps its range and fires nothing, and
+/// the mark waits for the show; a resize while hidden is marked the same way.
+#[test]
+fn a_hidden_scroll_frame_keeps_its_range_until_shown() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(RANGED).unwrap();
+    s.run("SF:SetScrollChild(Child)").unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0));
+
+    s.run("SF:Hide() Child:SetHeight(700) SF:UpdateScrollChildRect()")
+        .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0), "hidden: stale, and silent");
+    s.run("SF:Show()").unwrap();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (2, 500.0, 500.0), "the mark held until the show");
+
+    s.run("SF:Hide() SF:SetHeight(300)").unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s).0, 2);
+    s.run("SF:Show()").unwrap();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (3, 400.0, 400.0), "the resize while hidden marked it");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A change in the frame's own size marks the range (`0x7871f0`, `0x787205`), with no
+/// `UpdateScrollChildRect`: a frame whose code never calls it still gets its range.
+#[test]
+fn a_resize_marks_the_range() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(RANGED).unwrap();
+    s.run("SF:SetScrollChild(Child)").unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0));
+    s.run("SF:SetHeight(300)").unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (2, 300.0, 300.0));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
