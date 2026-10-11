@@ -13,6 +13,7 @@ mod create_frame_template;
 mod cvar_bindings;
 mod dispatch_bench;
 mod end_to_end;
+mod engine_updates;
 mod events;
 mod font_object;
 mod frame_api;
