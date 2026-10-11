@@ -412,8 +412,12 @@ impl super::UiScript {
     }
 
     /// On world hover loss, the fade request (`0x492909` → `0x530ae0`): a cursor-seated plate hides
-    /// at once, any other fades. Only a world plate still up is touched; a window's tooltip that
-    /// took `GameTooltip` since is left alone.
+    /// at once, any other fades. The reference requests it whenever the previous mouseover goes,
+    /// whoever holds the tooltip. Moving onto a window, its hover walk runs the WorldFrame's leave,
+    /// which publishes the empty mouseover and fades (`0x483b10` → `0x483b46`), before the window's
+    /// enter takes the tooltip (`0x766229` before `0x766239`). The host's world drive runs in the
+    /// feed phase, before the UI input pass, so it learns of the loss only after the window's enter
+    /// has run; this acts only while the world plate is still up.
     pub fn world_tooltip_fade(&mut self) {
         if let Some(h) = self.world_plate() {
             super::tooltip::fade_out(&self.lua, h);
@@ -421,8 +425,8 @@ impl super::UiScript {
     }
 
     /// On minimap blip hover loss, the direct hide (`0x4eb0c0`: shown bit, then the hide slot,
-    /// `0x4eb15e`–`0x4eb166`), with no fade. As [`Self::world_tooltip_fade`], only a world plate
-    /// still up is touched.
+    /// `0x4eb15e`–`0x4eb166`), with no fade. The reference hides whoever holds the tooltip; as in
+    /// [`Self::world_tooltip_fade`], this acts only while the world plate is still up.
     pub fn world_tooltip_hide(&mut self) {
         if let Some(h) = self.world_plate() {
             super::visibility::set_shown(&self.lua, h, false);

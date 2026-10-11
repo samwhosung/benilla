@@ -336,24 +336,28 @@ pub(super) fn fire_cleared(lua: &Lua, h: FrameHandle) {
     }
 }
 
-/// A content `Set*`'s tail. With lines it is the builders' show: the shown bit and the show slot
-/// (`0x52a711`/`0x52a71b`, `0x52e14e`), whose override restores full alpha and disarms a fade, or
-/// hides an unowned plate. Deviation: with no lines the reference's show override hides and
-/// un-owns (`0x530aba`); this takes the base hide past it to keep the owner, which the hover
-/// loop's `IsOwned` needs to retry an item whose template is still in flight.
+/// A content `Set*`'s tail: the builders' show, the shown bit and the show slot (`0x52a711`/
+/// `0x52a71b`, `0x52e14e`), whose override restores full alpha and disarms a fade, or, for a plate
+/// with no owner or no lines, hides and un-owns it (`0x530aba`). An item builder whose template is
+/// not cached ends the same way, by its own hide (`0x52b735`–`0x52b73f`), and its clear zeroes the
+/// remembered item id (`0x5300dd`) that the cache callback `0x52e530` needs (`0x52e55e`), so the
+/// plate stays down until the next hover.
+///
+/// A spell render still waiting on its view ([`Model::spell_tooltip_waits`], filled by the host
+/// ahead of a hover) is the one exception: the reference reads spells synchronously and has no
+/// such state. That plate takes the base hide, keeping its owner and its wait, so the view's
+/// arrival renders it in place.
 pub(super) fn show_or_hide_empty(lua: &Lua, h: FrameHandle) {
-    let lines = {
+    let waiting = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        match tip_mut(&mut model, h) {
-            Ok(t) => t.num_lines,
-            Err(_) => 0,
-        }
+        let empty = tip_mut(&mut model, h).is_ok_and(|t| t.num_lines == 0);
+        empty && model.spell_tooltip_waits.contains_key(&h)
     };
-    if lines > 0 {
-        visibility::set_shown(lua, h, true);
-    } else {
+    if waiting {
         visibility::set_shown_bit(lua, h, false);
         visibility::base_hide(lua, h);
+    } else {
+        visibility::set_shown(lua, h, true);
     }
 }
 
