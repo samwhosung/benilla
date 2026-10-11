@@ -96,6 +96,7 @@ fn on_anim_finished_fires_in_the_panes_walk_slot() {
         r#"
         LOG = {{}}
         local p = CreateFrame("Model", "SlotPane")
+        p:SetPoint("CENTER", 0, 0); p:SetWidth(36); p:SetHeight(36)
         p:SetFrameStrata("LOW")
         p:SetModel("{}")
         p:SetSequence(1)
@@ -213,6 +214,7 @@ fn on_update_model_fires_in_draw_order() {
         LOG = {{}}
         function Pane(name, tag, strata, level)
             local p = CreateFrame("Model", name)
+            p:SetPoint("CENTER", 0, 0); p:SetWidth(36); p:SetHeight(36)
             p:SetFrameStrata(strata)
             if level then p:SetFrameLevel(level) end
             p:SetModel("{}")
@@ -291,7 +293,11 @@ fn a_hidden_message_frames_lines_keep_their_time() {
         .unwrap();
     s.tick(4.0);
     for name in ["HiddenScrollingMessageFrame", "HiddenMessageFrame"] {
-        assert_eq!(lines(&s, name), vec![(6.0, 1.0)], "{name}: shown, it counts again");
+        assert_eq!(
+            lines(&s, name),
+            vec![(6.0, 1.0)],
+            "{name}: shown, it counts again"
+        );
     }
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
@@ -331,7 +337,8 @@ fn on_update_model_needs_a_resolved_rect_on_screen() {
     s.tick(0.016);
     assert_eq!(take_log(&s), "OnScreen PartlyOff");
     // Moved on screen, the off-screen pane fires from the next paint.
-    s.run(r#"OffRight:SetPoint("BOTTOMLEFT", 300, 100)"#).unwrap();
+    s.run(r#"OffRight:SetPoint("BOTTOMLEFT", 300, 100)"#)
+        .unwrap();
     s.resolve();
     s.tick(0.016);
     assert_eq!(take_log(&s), "OnScreen PartlyOff OffRight");

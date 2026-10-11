@@ -270,10 +270,10 @@ pub struct WidgetArena {
     pub(crate) order_cache: crate::order::OrderCache,
     /// Minimap frames ever created, so the state feed notices a new one without a walk.
     minimap_created: u64,
-    /// The live message frames and model panes, so the host's passes over them (message fades,
-    /// model paint) skip the rest of the arena. Added at creation, as kinds never change;
-    /// `destroy` removes its own.
-    ticked_kinds: Vec<FrameHandle>,
+    /// The live model panes, so the host's passes over them (the paint list, the implicit rects)
+    /// skip the rest of the arena. Added at creation, as kinds never change; `destroy` removes its
+    /// own.
+    model_kinds: Vec<FrameHandle>,
     /// The live frames whose kind has a [`KindUpdate`], kept the same way: the update walk reaches
     /// each one shown, with an `OnUpdate` or without.
     walked_kinds: Vec<FrameHandle>,
@@ -326,7 +326,7 @@ impl WidgetArena {
             link_log: None,
             minimap_created: 0,
             order_cache: Default::default(),
-            ticked_kinds: Vec::new(),
+            model_kinds: Vec::new(),
             walked_kinds: Vec::new(),
             tooltip_kinds: Vec::new(),
             minimap_kinds: Vec::new(),
@@ -339,9 +339,9 @@ impl WidgetArena {
         self.minimap_created
     }
 
-    /// The frames the host advances each tick.
-    pub fn ticked_kinds(&self) -> &[FrameHandle] {
-        &self.ticked_kinds
+    /// The live model panes.
+    pub fn model_kinds(&self) -> &[FrameHandle] {
+        &self.model_kinds
     }
 
     /// The frames whose kind has an update of its own in the walk ([`FrameKind::kind_update`]).
@@ -566,11 +566,9 @@ impl WidgetArena {
         if matches!(kind, FrameKind::Minimap) {
             self.minimap_created += 1;
         }
-        let ticked = matches!(
+        let model_kind = matches!(
             kind,
-            FrameKind::ScrollingMessageFrame
-                | FrameKind::MessageFrame
-                | FrameKind::Model
+            FrameKind::Model
                 | FrameKind::PlayerModel
                 | FrameKind::DressUpModel
                 | FrameKind::TabardModel
@@ -585,8 +583,8 @@ impl WidgetArena {
                 log.push(handle);
             }
         }
-        if ticked {
-            self.ticked_kinds.push(handle);
+        if model_kind {
+            self.model_kinds.push(handle);
         }
         if kind.kind_update().is_some() {
             self.walked_kinds.push(handle);
@@ -659,7 +657,7 @@ impl WidgetArena {
         let parent = frame.parent;
         let name = frame.name.clone();
         // Each recursive call removes its own handle, so the registries hold no dead frame.
-        self.ticked_kinds.retain(|&t| t != h);
+        self.model_kinds.retain(|&t| t != h);
         self.walked_kinds.retain(|&t| t != h);
         self.tooltip_kinds.retain(|&t| t != h);
         self.minimap_kinds.retain(|&t| t != h);

@@ -338,6 +338,8 @@ fn a_scroll_child_element_gives_the_frame_a_real_scroll_range() {
           </Ui>"#,
     );
     s.resolve();
+    // `SetScrollChild` marked the range; the frame's update measures it.
+    s.tick(0.016);
 
     // `$parent` names the child against the scroll frame (`0x76c5b0`).
     assert!(s.eval::<bool>("return RollerChild ~= nil").unwrap());
@@ -387,6 +389,7 @@ fn the_scroll_range_is_the_childs_whole_subtree() {
           </Ui>"#,
     );
     s.resolve();
+    s.tick(0.016);
 
     assert_eq!(
         s.eval::<f64>("return Reader:GetVerticalScrollRange()")
@@ -401,8 +404,9 @@ fn the_scroll_range_is_the_childs_whole_subtree() {
     );
 
     // A hidden branch adds nothing: the reference guards both list walks on visibility.
-    s.run("Page:Hide()").unwrap();
+    s.run("Page:Hide() Reader:UpdateScrollChildRect()").unwrap();
     s.resolve();
+    s.tick(0.016);
     assert_eq!(
         s.eval::<f64>("return Reader:GetVerticalScrollRange()")
             .unwrap(),

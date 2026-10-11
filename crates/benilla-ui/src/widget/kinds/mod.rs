@@ -61,16 +61,25 @@ pub enum KindUpdate {
     /// `CSimpleModel`'s `0x76d7f0`, in the slot of every model kind's vtable (`0x81c608`,
     /// `0x8084f8`, `0x8083a8`, `0x808260`): the scene clock and the completions it reports.
     Model,
+    /// `CSimpleMessageFrame`'s `0x786200` (slot `0x81cca0`): the cap to the lines that fit, then
+    /// the line fades.
+    MessageFrame,
+    /// `CSimpleMessageScrollFrame`'s `0x788460` (slot `0x81ce50`): the line fades.
+    ScrollingMessageFrame,
+    /// `CSimpleScrollFrame`'s `0x787140` (slot `0x81cd78`): a marked range's recompute.
+    ScrollFrame,
 }
 
 impl FrameKind {
     /// The kind's own update, run in the walk after the frame's `OnUpdate`. The reference
-    /// overrides the slot on more kinds; benilla runs the message frames' fades (`0x786200`,
-    /// `0x788460`) after the walk, and models none of the rest there.
+    /// overrides the slot on more kinds; benilla models these.
     pub fn kind_update(self) -> Option<KindUpdate> {
         match self {
             FrameKind::EditBox => Some(KindUpdate::EditBox),
             FrameKind::GameTooltip => Some(KindUpdate::Tooltip),
+            FrameKind::MessageFrame => Some(KindUpdate::MessageFrame),
+            FrameKind::ScrollingMessageFrame => Some(KindUpdate::ScrollingMessageFrame),
+            FrameKind::ScrollFrame => Some(KindUpdate::ScrollFrame),
             FrameKind::Model
             | FrameKind::PlayerModel
             | FrameKind::DressUpModel
@@ -689,11 +698,20 @@ pub const MINIMAP_DEFAULT_ARROW_MODEL: &str = "Interface\\Minimap\\Rotating-Mini
 /// The default `minimapPlayerModel` (`0x8453c0`), applied to engine child 9 alone (`0x4ee260`).
 pub const MINIMAP_DEFAULT_PLAYER_MODEL: &str = "Interface\\Minimap\\MinimapArrow.mdx";
 
-/// A `CSimpleScrollFrame`'s members (`+0x318`/`+0x324`/`+0x328`); the ranges are measured live.
+/// A `CSimpleScrollFrame`'s members (`+0x314`..`+0x328`), all zero from the ctor (`0x786a51`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScrollFrameState {
     /// `SetScrollChild`'s frame, which pans within this frame's rect.
     pub child: Option<FrameHandle>,
+    /// `[+0x31c]`, `[+0x320]`: the horizontal and vertical ranges in the frame's own units, as the
+    /// last recompute stored them (`0x786eaa`, `0x786ed1`); the getters answer these.
+    pub range: [f32; 2],
+    /// `[+0x314]`: the ranges are out of date. `UpdateScrollChildRect`, `SetScrollChild` and a
+    /// change in the frame's size set it; the frame's update recomputes and clears it.
+    pub range_dirty: bool,
+    /// The frame's width and height in px when its update last ran, from which that update sees a
+    /// resize (`0x7871f0`'s mark); the ctor's empty rect until then.
+    pub seen_size: [f32; 2],
     /// `SetHorizontalScroll`'s offset in px, unclamped; `0x787100` anchors the child at
     /// `(+horizontal, +vertical)`, so scrolling right takes a negative offset, down a positive.
     pub horizontal: f32,

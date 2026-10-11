@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::widget::{FrameHandle, KindUpdate};
 
-use super::{editbox, event, tooltip, UiScript};
+use super::{editbox, event, messageframe, scrollframe, tooltip, UiScript};
 
 /// A place in the walk: stratum, level, then within the level the frames linked before the walk
 /// began (0, by link stamp) ahead of those linked during it (1, by the order they linked).
@@ -144,6 +144,12 @@ impl UiScript {
             KindUpdate::Tooltip => tooltip::update(&self.lua, h, elapsed),
             // The scene clock (`0x76d843`), whose completions fire `OnAnimFinished` here.
             KindUpdate::Model => self.advance_pane(h, elapsed),
+            // The line fades (`0x7862b0`, `0x788476`), counted only while the frame is shown.
+            KindUpdate::MessageFrame | KindUpdate::ScrollingMessageFrame => {
+                messageframe::update(&mut self.model_mut(), h, elapsed)
+            }
+            // A marked range's recompute (`0x787152`), whose change fires `OnScrollRangeChanged`.
+            KindUpdate::ScrollFrame => scrollframe::update(&self.lua, h),
         }
     }
 }

@@ -1,4 +1,4 @@
-//! ScrollFrame: the scroll-child layout override, the live scroll ranges, the clip on `extract`
+//! ScrollFrame: the scroll-child layout override, the stored scroll ranges, the clip on `extract`
 //! and the clip-gated `hit_test`.
 
 use super::common::script;
@@ -183,8 +183,10 @@ fn set_vertical_scroll_fires_on_vertical_scroll_only_on_a_change() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// The recompute measures `max(0, child − frame)`, and leaves the stored range alone when the
+/// frame has no rect (`0x787186`) or no scroll child (`0x786e42`).
 #[test]
-fn vertical_scroll_range_is_live_and_zero_when_unresolved_or_childless_or_shorter() {
+fn the_recompute_measures_the_overhang_and_skips_an_unresolved_or_childless_frame() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -198,33 +200,27 @@ fn vertical_scroll_range_is_live_and_zero_when_unresolved_or_childless_or_shorte
     "#,
     )
     .unwrap();
-    assert_eq!(
-        s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
-        0.0,
-        "unresolved -> 0"
-    );
+    let range =
+        |s: &crate::script::UiScript| s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap();
+    assert_eq!(range(&s), 0.0, "the ctor's zero");
 
     s.resolve();
-    assert_eq!(
-        s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
-        400.0,
-        "600 - 200"
-    );
+    s.tick(0.016);
+    assert_eq!(range(&s), 400.0, "600 - 200");
 
-    s.run("Child:SetWidth(300); Child:SetHeight(150)").unwrap();
-    s.resolve();
-    assert_eq!(
-        s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
-        0.0,
-        "child shorter than frame -> 0, not negative"
-    );
+    s.run("Child:SetHeight(150) SF:UpdateScrollChildRect()")
+        .unwrap();
+    s.tick(0.016);
+    assert_eq!(range(&s), 0.0, "a shorter child: 0, not negative");
 
+    s.run("Child:SetHeight(600) SF:UpdateScrollChildRect()")
+        .unwrap();
+    s.tick(0.016);
+    assert_eq!(range(&s), 400.0);
     s.run("SF:SetScrollChild(nil)").unwrap();
-    assert_eq!(
-        s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
-        0.0,
-        "no child -> 0"
-    );
+    s.tick(0.016);
+    assert_eq!(range(&s), 400.0, "no child: the stored range stands");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 /// The range is `child:GetHeight() - self:GetHeight()` in local units, like the offset, which
@@ -246,6 +242,7 @@ fn vertical_scroll_range_is_local_units_on_a_scaled_frame() {
     )
     .unwrap();
     s.resolve();
+    s.tick(0.016);
     assert_eq!(
         s.eval::<f32>("return SF:GetVerticalScrollRange()").unwrap(),
         400.0,
@@ -275,7 +272,7 @@ fn vertical_scroll_range_is_local_units_on_a_scaled_frame() {
 /// `0x786db0` fires `OnVerticalScroll` with the unclamped stored value `[+0x328]`, under the
 /// handler conventions of `0x704f10`.
 #[test]
-fn vertical_scroll_fires_as_given_and_update_rect_fires_range_changed() {
+fn vertical_scroll_fires_as_given_and_the_marked_range_fires_range_changed() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -309,15 +306,16 @@ fn vertical_scroll_fires_as_given_and_update_rect_fires_range_changed() {
     );
 
     s.run("SF:UpdateScrollChildRect()").unwrap();
+    s.tick(0.016);
     let (lo, hi): (f32, f32) = s.eval("return seen_lo, seen_hi").unwrap();
     assert_eq!((lo, hi), (0.0, 400.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `UpdateScrollChildRect` resolves for itself, so a resize earlier in the same tick counts; the
-/// app resolves only once per frame.
+/// The recompute resolves for itself, so a resize earlier in the same tick counts; the app
+/// resolves only once per frame, after the walk.
 #[test]
-fn update_scroll_child_rect_sees_a_same_tick_resize_with_no_intervening_resolve() {
+fn the_recompute_sees_a_same_tick_resize_with_no_intervening_resolve() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -331,7 +329,8 @@ fn update_scroll_child_rect_sees_a_same_tick_resize_with_no_intervening_resolve(
     "#,
     )
     .unwrap();
-    s.resolve(); // the "last frame" resolve, before this tick's resize
+    s.resolve();
+    s.tick(0.016); // the first recompute: 0 stays 0, nothing fires
 
     s.run(
         r#"
@@ -342,11 +341,12 @@ fn update_scroll_child_rect_sees_a_same_tick_resize_with_no_intervening_resolve(
     "#,
     )
     .unwrap();
+    s.tick(0.016);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
     assert_eq!(
         s.eval::<f32>("return seen_hi").unwrap(),
         400.0,
-        "UpdateScrollChildRect must resolve the JUST-set height itself, not report the stale \
+        "the recompute must resolve the JUST-set height itself, not report the stale \
          (pre-resize) range from the last full UiScript::resolve"
     );
     assert_eq!(
@@ -513,7 +513,7 @@ fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() 
 
 /// The reference measures text synchronously, as stock `QuestLog_UpdateQuestDetails` relies on.
 #[test]
-fn update_scroll_child_rect_measures_the_childs_text_before_it_reads_the_range() {
+fn the_recompute_measures_the_childs_text_before_it_reads_the_range() {
     struct Rows;
     impl crate::script::TextMeasure for Rows {
         fn measure(&mut self, req: &crate::script::MeasureRequest) -> (f32, f32, f32) {
@@ -541,11 +541,12 @@ fn update_scroll_child_rect_measures_the_childs_text_before_it_reads_the_range()
         "#,
     )
     .unwrap();
+    s.tick(0.016);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     assert_eq!(
         s.eval::<f64>("return RANGE").unwrap(),
         6.0,
-        "56px of measured text under a 50px frame: the range is known at the call, not a frame later"
+        "56px of measured text under a 50px frame: the recompute measures it, not a frame later"
     );
 }
 
@@ -577,6 +578,7 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
     )
     .unwrap();
     s.resolve();
+    s.tick(0.016);
 
     assert_eq!(
         s.eval::<f32>("return HSF:GetHorizontalScroll()").unwrap(),
@@ -661,7 +663,7 @@ fn scroll_child_left_tracks_horizontal_scroll_unclamped_and_fires_on_change() {
 /// The vertical range leaves `0x786e30` on top of the x87 stack and is `fstp`'d first, so it is
 /// pushed deepest and lands as `arg2`.
 #[test]
-fn update_scroll_child_rect_reports_both_ranges_horizontal_first() {
+fn the_range_notify_reports_both_ranges_horizontal_first() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -679,7 +681,7 @@ fn update_scroll_child_rect_reports_both_ranges_horizontal_first() {
     )
     .unwrap();
     s.resolve();
-    s.run("BSF:UpdateScrollChildRect()").unwrap();
+    s.tick(0.016);
     assert_eq!(
         s.eval::<f32>("return seen[1]").unwrap(),
         200.0,
@@ -733,7 +735,11 @@ fn the_range_is_recomputed_in_the_walk_and_fires_once_per_change() {
     s.run("SF:UpdateScrollChildRect()").unwrap();
     assert_eq!(ranged(&s).0, 1, "the call fires nothing");
     s.tick(0.016);
-    assert_eq!(ranged(&s), (1, 400.0, 400.0), "an unchanged range fires nothing");
+    assert_eq!(
+        ranged(&s),
+        (1, 400.0, 400.0),
+        "an unchanged range fires nothing"
+    );
 
     s.run("Child:SetHeight(700) SF:UpdateScrollChildRect()")
         .unwrap();
@@ -752,13 +758,21 @@ fn the_getters_answer_the_stored_range() {
     s.run(RANGED).unwrap();
     s.run("SF:SetScrollChild(Child)").unwrap();
     s.resolve();
-    assert_eq!(ranged(&s).2, 0.0, "the ctor's zero before the first recompute");
+    assert_eq!(
+        ranged(&s).2,
+        0.0,
+        "the ctor's zero before the first recompute"
+    );
     s.tick(0.016);
     assert_eq!(ranged(&s).2, 400.0);
     s.run("Child:SetHeight(900)").unwrap();
     s.resolve();
     s.tick(0.016);
-    assert_eq!(ranged(&s), (1, 400.0, 400.0), "a child's resize marks nothing");
+    assert_eq!(
+        ranged(&s),
+        (1, 400.0, 400.0),
+        "a child's resize marks nothing"
+    );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -782,7 +796,11 @@ fn a_hidden_scroll_frame_keeps_its_range_until_shown() {
     assert_eq!(ranged(&s), (1, 400.0, 400.0), "hidden: stale, and silent");
     s.run("SF:Show()").unwrap();
     s.tick(0.016);
-    assert_eq!(ranged(&s), (2, 500.0, 500.0), "the mark held until the show");
+    assert_eq!(
+        ranged(&s),
+        (2, 500.0, 500.0),
+        "the mark held until the show"
+    );
 
     s.run("SF:Hide() SF:SetHeight(300)").unwrap();
     s.resolve();
@@ -790,7 +808,11 @@ fn a_hidden_scroll_frame_keeps_its_range_until_shown() {
     assert_eq!(ranged(&s).0, 2);
     s.run("SF:Show()").unwrap();
     s.tick(0.016);
-    assert_eq!(ranged(&s), (3, 400.0, 400.0), "the resize while hidden marked it");
+    assert_eq!(
+        ranged(&s),
+        (3, 400.0, 400.0),
+        "the resize while hidden marked it"
+    );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

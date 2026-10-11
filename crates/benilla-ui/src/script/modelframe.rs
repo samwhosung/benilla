@@ -612,7 +612,7 @@ impl crate::script::UiScript {
         let mut model = self.model_mut();
         let panes: Vec<FrameHandle> = model
             .arena
-            .ticked_kinds()
+            .model_kinds()
             .iter()
             .copied()
             .filter(|&h| {
@@ -643,7 +643,7 @@ impl crate::script::UiScript {
         let model = self.model_ref();
         model
             .arena
-            .ticked_kinds()
+            .model_kinds()
             .iter()
             .filter_map(|&h| {
                 let f = model.arena.frame(h)?;

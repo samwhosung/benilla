@@ -12,7 +12,7 @@ impl Loader<'_> {
     /// `<ScrollFrame>`'s `<ScrollChild>` (`LoadXML 0x786bc0`): after the base load (`0x769820`) it
     /// builds the node's one child through `Instantiate 0x6ee280` (`0x786bf4`), a whole frame
     /// lifecycle with the child's own `<Frames>` and OnLoad, and only then stores it with
-    /// `SetScrollChild` (`0x786ce0`), which gives the frame its scroll range. So the child's OnLoad
+    /// `SetScrollChild` (`0x786ce0`), which marks the frame's scroll range. So the child's OnLoad
     /// sees no scroll child yet. A template's `<ScrollChild>` was built by its own `LoadXML` level
     /// (`0x76985c`), ahead of the instance's, which therefore wins. An empty one errors in the
     /// reference (`0x786c0c`). Other frame kinds do not read the element.

@@ -25,6 +25,24 @@ mod scrolling;
 pub(super) use plain::REG_MESSAGEFRAME_METHODS;
 pub(super) use scrolling::REG_SCROLLINGMESSAGEFRAME_METHODS;
 
+/// A message frame's update after its `OnUpdate`, in its walk slot, so only while shown: a hidden
+/// frame's lines keep their time. The plain class (`0x786200`) first drains its queued messages
+/// against the lines that fit (`0x786247`), which [`MessageFrameState::trim_to_viewport`] stands
+/// for, then fades (`0x7862b0`); the scrolling class (`0x788460`) only fades.
+///
+/// [`MessageFrameState::trim_to_viewport`]: crate::widget::MessageFrameState::trim_to_viewport
+pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
+    let rows = UiScript::message_viewport_rows(model, h);
+    match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+        Some(KindState::Message(mf)) => {
+            mf.trim_to_viewport(rows);
+            mf.tick(elapsed);
+        }
+        Some(KindState::ScrollingMessage(smf)) => smf.tick(elapsed),
+        _ => {}
+    }
+}
+
 /// `AddMessage`'s text; `None` means the whole call does nothing, no line and no error. Both
 /// bindings (`0x795590`, `0x792900`) jump to their epilogue (`0x79582b`, `0x792b81`) when
 /// `lua_isstring` (`0x6f3510`) fails, `lua_tostring` (`0x6f3690`) gives NULL or the string is empty

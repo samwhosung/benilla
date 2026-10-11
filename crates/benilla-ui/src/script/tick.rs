@@ -74,8 +74,8 @@ impl super::UiScript {
     /// draw pass `0x7657d0`, in that order (`0x764340`, `0x764347`). The pump is the update walk,
     /// each linked frame's update in strata, level and link order: its `OnUpdate(self, elapsed)`
     /// (`0x704f10`) and its kind's own update after it (an EditBox's flush, a tooltip's fade, a
-    /// model pane's clock); then the hover re-pick at its tail (`0x7657be`). The draw pass fires
-    /// `OnUpdateModel`.
+    /// model pane's clock, a message frame's line fades, a scroll frame's range); then the hover
+    /// re-pick at its tail (`0x7657be`). The draw pass fires `OnUpdateModel`.
     pub fn tick(&mut self, elapsed: f32) {
         self.model_mut().now += f64::from(elapsed);
         // Events queued since the last tick fire before this tick's OnUpdate.
@@ -84,39 +84,6 @@ impl super::UiScript {
             self.fire_event(&event, args);
         }
         self.update_walk(elapsed);
-        // The engine's line fades, apart from any OnUpdate script: ScrollingMessageFrame's
-        // (`0x788460`) and MessageFrame's (`0x786200`), which also keeps only the lines that fit
-        // its height, so its rows are read from the resolved rect before the mutable walk.
-        let mut model = self.model_mut();
-        let ticked: Vec<FrameHandle> = model.arena.ticked_kinds().to_vec();
-        let message_frames: Vec<(FrameHandle, usize)> = ticked
-            .iter()
-            .copied()
-            .filter(|&h| {
-                model
-                    .arena
-                    .frame(h)
-                    .is_some_and(|f| matches!(f.kind_state, crate::widget::KindState::Message(_)))
-            })
-            .map(|h| (h, Self::message_viewport_rows(&model, h)))
-            .collect();
-        for (h, viewport_rows) in message_frames {
-            if let Some(crate::widget::KindState::Message(mf)) =
-                model.arena.frame_mut(h).map(|f| &mut f.kind_state)
-            {
-                mf.tick(elapsed);
-                mf.trim_to_viewport(viewport_rows);
-            }
-        }
-        for &h in &ticked {
-            let Some(frame) = model.arena.frame_mut(h) else {
-                continue;
-            };
-            if let crate::widget::KindState::ScrollingMessage(smf) = &mut frame.kind_state {
-                smf.tick(elapsed);
-            }
-        }
-        drop(model);
         // A frame hid or showed under a still cursor: re-run the hover walk at the saved position,
         // as the reference's pump tail does (`0x765650` → `0x7660d0`). The hidden frame's OnLeave
         // already fired, so only the new winner's `OnEnter` fires.
@@ -179,13 +146,17 @@ impl UiScript {
     /// go from 0 (`0x7657ff`); a stratum's batches are emitted before any is drained (`0x765896`,
     /// then `0x7658e2`), level 0 up, a level's frames first linked first (`0x765920`). So the
     /// panes are read per stratum when its turn comes, and a pane an earlier handler of that
-    /// stratum hid still paints this frame; only the callback's own gate, a model file set
-    /// (`0x76d24c`), is read at the call.
+    /// stratum hid still paints this frame; only the callback's own gates ([`paints`]) are read at
+    /// the call.
+    ///
+    /// The pump drains the layout after the walk (`0x765799`), so the paint reads rects the walk's
+    /// handlers moved: the pass resolves first.
     fn paint_model_panes(&mut self) {
         let mut model = self.model_mut();
         if model.on_update_model_frames.is_empty() {
             return;
         }
+        Self::resolve_layout(&mut model);
         // Kept by `SetScript`; a destroyed frame's handle compacts out on its first miss.
         if model
             .on_update_model_frames
@@ -221,7 +192,7 @@ impl UiScript {
                 let id = {
                     let mut model = self.model_mut();
                     match model.arena.frame(h) {
-                        Some(f) if has_model_file(f) => model.frame_id(h),
+                        Some(f) if paints(&model, h, f) => model.frame_id(h),
                         _ => continue,
                     }
                 };
@@ -240,4 +211,29 @@ impl UiScript {
 /// `OnUpdateModel` is inert.
 fn has_model_file(f: &crate::widget::Frame) -> bool {
     matches!(&f.kind_state, crate::widget::KindState::Model(m) if m.path.is_some())
+}
+
+/// The paint callback's gates ahead of `OnUpdateModel` (`0x76d240`, firing at `0x76d5ea`): a model
+/// set (`0x76d24c`); a resolved rect (`0x768320`, the rect-resolved bit, `0x76d27d`/`0x76d284`);
+/// and the viewport, that rect as fractions of the screen (`0x41ade0` divides by its extent) with
+/// each edge clamped to 0..1 (`0x76d473`–`0x76d56d`), at least `[0x8029d4]` = 2⁻²² wide and tall
+/// (`0x76d574`–`0x76d5a0`, else to the cleanup `0x76d63e`). So a pane with no size, or wholly off
+/// screen, paints nothing and fires nothing.
+fn paints(model: &super::Model, h: FrameHandle, f: &crate::widget::Frame) -> bool {
+    if !has_model_file(f) {
+        return false;
+    }
+    let Some(r) = model.resolved.get(&h) else {
+        return false;
+    };
+    let screen = model.screen;
+    let (sw, sh) = (screen.width(), screen.height());
+    if sw <= 0.0 || sh <= 0.0 {
+        return false;
+    }
+    let fraction = |v: f32, origin: f32, extent: f32| ((v - origin) / extent).clamp(0.0, 1.0);
+    let wide = fraction(r.right, screen.left, sw) - fraction(r.left, screen.left, sw);
+    let tall = fraction(r.top, screen.bottom, sh) - fraction(r.bottom, screen.bottom, sh);
+    let eps = crate::layout::SIZE_EPS;
+    f64::from(wide.abs()) >= eps && f64::from(tall.abs()) >= eps
 }
