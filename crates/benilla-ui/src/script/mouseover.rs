@@ -9,7 +9,7 @@
 //! mouseover from its own update (`0x481790`), which picks only while the WorldFrame holds the
 //! hover (`0x4817ae`), the app's world drive.
 
-use mlua::{Lua, Value};
+use mlua::Lua;
 
 use crate::widget::{FrameHandle, FrameKind};
 
@@ -35,9 +35,11 @@ fn leave_class(model: &Model, h: FrameHandle) -> LeaveClass {
     }
 }
 
-/// A frame's leave notify, by its class, around its `OnLeave(true)`; `script` is the id whose
-/// `OnLeave` fires, `None` where the notify skips it (a disabled Button's `0x7794e0`). The walk's
-/// motion leave and the removal tail's leave (`0x764cce`) both come here.
+/// A frame's leave notify, by its class, around its `OnLeave`; `script` is the id whose `OnLeave`
+/// fires, `None` where the notify skips it (a disabled Button's `0x7794e0`). The walk's motion
+/// leave and the removal tail's leave (`0x764cce`) both come here. The notify's own argument (0 or
+/// 1) only clears the drag arm (`0x76b725`); `OnLeave` runs through the plain runner (`0x76b753` →
+/// `0x702690`), which sets no arg global.
 pub(super) fn leave(lua: &Lua, h: FrameHandle, script: Option<u32>) {
     let class = leave_class(&model(lua), h);
     match class {
@@ -50,7 +52,7 @@ pub(super) fn leave(lua: &Lua, h: FrameHandle, script: Option<u32>) {
         LeaveClass::World | LeaveClass::Other => {}
     }
     if let Some(id) = script {
-        if let Err(e) = event::fire_widget_handler(lua, id, "OnLeave", vec![Value::Boolean(true)]) {
+        if let Err(e) = event::fire_widget_handler(lua, id, "OnLeave", Vec::new()) {
             model(lua).record_lua_error(&e);
         }
     }

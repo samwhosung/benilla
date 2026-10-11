@@ -178,10 +178,10 @@ impl UiScript {
         model.arena.frame(fh)?.name.clone()
     }
 
-    /// Move the cursor to `(x, y)`. When the hovered frame changes, fires `OnLeave(self, true)` on
-    /// the old one if still live and `OnEnter(self, true)` on the new; a disabled Button takes the
-    /// hover but fires neither ([`button::hover_notify_runs`]). Drags and frame moves advance
-    /// first. Returns the hovered frame id.
+    /// Move the cursor to `(x, y)`. When the hovered frame changes, fires `OnLeave` on the old one
+    /// if still live and `OnEnter` on the new, both with the arg globals untouched; a disabled
+    /// Button takes the hover but fires neither ([`button::hover_notify_runs`]). Drags and frame
+    /// moves advance first. Returns the hovered frame id.
     pub fn mouse_move(&mut self, x: f32, y: f32) -> Option<u32> {
         // A drag-active EditBox extends its selection on every move (`0x77a860`).
         editbox::drag_update(&self.lua, x, y);
@@ -262,9 +262,8 @@ impl UiScript {
             super::mouseover::leave(&self.lua, h, script);
         }
         if let Some(nid) = enter_id {
-            if let Err(e) =
-                event::fire_widget_handler(&self.lua, nid, "OnEnter", vec![Value::Boolean(true)])
-            {
+            // The base enter's plain runner (`0x76b6e5` → `0x702690`) sets no arg global.
+            if let Err(e) = event::fire_widget_handler(&self.lua, nid, "OnEnter", Vec::new()) {
                 self.push_error(e);
             }
         }
