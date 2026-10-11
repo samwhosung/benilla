@@ -939,8 +939,10 @@ impl UiScript {
                 d.measured = Some(new);
             }
             if moved {
-                // Touched per region, so the layout gate need not re-walk the whole roster.
+                // Touched per region, so the layout gate need not re-walk the whole roster; stored
+                // whole, as the reference's `SetText` clears the resolved bit (`0x771ea4`).
                 model.touch_layout_region(rh);
+                model.layout_force.push(id);
             }
         }
     }

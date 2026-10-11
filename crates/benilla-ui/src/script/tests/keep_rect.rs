@@ -137,13 +137,26 @@ fn a_region_keeps_its_rect_under_the_threshold() {
 
 /// An effective-scale move clears the cached rect's resolved bit (`0x768360`, reached from the
 /// scale cascade `0x76acd5`): the next resolve stores the rect without the keep test, so a frame
-/// holding a kept rect lands on its exact edge.
+/// holding a kept rect lands on its exact edge, and so do its regions, which the cascade reaches
+/// (`0x76ad06`).
 #[test]
 fn a_scale_move_stores_the_rect_without_the_keep_test() {
     let mut s = panel();
-    s.run(r#"Panel:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 100.004, 100)"#)
-        .unwrap();
+    s.run(
+        r#"
+        Mark = Panel:CreateTexture("Mark", "ARTWORK")
+        Mark:SetPoint("BOTTOMLEFT", Panel, "BOTTOMLEFT", 0, 0)
+        Mark:SetWidth(10); Mark:SetHeight(10)
+        Panel:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 100.004, 100)
+    "#,
+    )
+    .unwrap();
     s.resolve();
+    assert_eq!(
+        s.eval::<f64>("return Mark:GetLeft()").unwrap(),
+        100.0,
+        "the region reads the kept rect"
+    );
     assert_eq!(
         s.eval::<f64>("return Panel:GetLeft()").unwrap(),
         100.0,
@@ -157,6 +170,8 @@ fn a_scale_move_stores_the_rect_without_the_keep_test() {
         (left - 100.004).abs() < 1e-4,
         "the scale move re-stores the computed rect: {left}"
     );
+    let left = s.eval::<f64>("return Mark:GetLeft()").unwrap();
+    assert!((left - 100.004).abs() < 1e-4, "and the region's: {left}");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

@@ -133,6 +133,12 @@ pub(crate) struct Model {
     pub(crate) msg_swept: std::collections::HashMap<crate::widget::FrameHandle, (u64, u64)>,
     /// Lines the message sweep hashed; a settled second sweep hashes none.
     pub(crate) msg_lines_hashed: u64,
+    /// Layout ids whose next resolve stores the rect without the keep test
+    /// ([`crate::layout::keeps_rect`]), the reference's resolved bit cleared: a frame whose
+    /// effective scale moved (`0x768360`), whose regions follow it, and a FontString whose new
+    /// measure landed, benilla's moment for `SetText` and `SetFont` (`0x771ea4`, `0x7715e0`). Each
+    /// is named on the layout too, so the resolve that drains this list solves it.
+    pub(crate) layout_force: Vec<u32>,
     /// Under `WOW_LAYOUT_VERIFY`, the resolve just taken was incremental and owes a full re-run.
     pub(crate) layout_verify_recheck: bool,
     /// Per-node input hashes and dirty-closure scratch: which nodes a let-through resolve solves.
@@ -1128,6 +1134,7 @@ impl Model {
             last_click: HashMap::new(),
             pending_size_changed: Vec::new(),
             text_flips: Vec::new(),
+            layout_force: Vec::new(),
             errors: Vec::new(),
             pending_error_dispatch: Vec::new(),
             diagnostics: Default::default(),

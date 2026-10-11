@@ -21,8 +21,9 @@ const UNSET: f64 = f64::INFINITY;
 /// (`Model::size_eps`).
 pub const SIZE_EPS: f64 = 2.384_185_791_015_625e-7;
 
-/// The least edge move against the cached rect for the client to re-store it and `ApplyRect`, 1e-5
-/// (`0x80c5c8`, in `0x768d20`). Recorded, not applied: the caller's own dirty gate decides.
+/// The least edge move against the cached rect for the drain's resolve to store the new rect and
+/// `ApplyRect`, 1e-5 (`0x3727c5ac` at `0x80c5c8`, tested in `0x768d20`), in the reference's layout
+/// units; in benilla's, this times the layout unit (`Model::resolve_eps`). See [`keeps_rect`].
 pub const RESOLVE_EPS: f64 = f32::from_bits(0x3727_c5ac) as f64;
 
 /// Point id to X column: left 0, center 1, right 2.
@@ -348,6 +349,18 @@ pub fn size_changed(old: Rect, new: Rect, eps: f64) -> bool {
     dw.abs() >= eps || dh.abs() >= eps
 }
 
+/// The drain's keep test (`0x768d20`, `0x768d6e`–`0x768dc0`): every edge of `new` moved less than
+/// `eps` from the cached rect `old`, the deltas taken in `f64` from the `f32` edges. A kept rect is
+/// not stored and `ApplyRect` does not run (the return at `0x768dc2`); an edge at `eps` or past it,
+/// or a NaN, applies.
+pub fn keeps_rect(old: Rect, new: Rect, eps: f64) -> bool {
+    let near = |a: f32, b: f32| (f64::from(a) - f64::from(b)).abs() < eps;
+    near(new.left, old.left)
+        && near(new.right, old.right)
+        && near(new.bottom, old.bottom)
+        && near(new.top, old.top)
+}
+
 // ── The composed resolver: `assemble` over six recursion-guarded edge resolvers ──────────────
 
 /// An [`Anchor`] with its target's rect looked up, `None` where `GetRect` would fail.
@@ -629,6 +642,11 @@ pub struct LayoutSolver {
     is_frame: Vec<bool>,
     /// Externals as seeded, frames as they resolve.
     rect: Vec<Option<Rect>>,
+    /// Per frame, the rect it held before this round, which [`keeps_rect`] holds a new one against;
+    /// `None` stores the new rect whole, as the reference does while the resolved bit is clear.
+    cached: Vec<Option<Rect>>,
+    /// The keep test's threshold in the rects' units; 0 keeps nothing.
+    keep_eps: f64,
     /// Kahn in-degree and reverse edges; each inner `Vec` is cleared, never freed.
     indeg: Vec<u32>,
     dependents: Vec<Vec<Handle>>,
@@ -655,6 +673,7 @@ impl LayoutSolver {
             self.input.resize_with(need, LayoutInput::default);
             self.is_frame.resize(need, false);
             self.rect.resize(need, None);
+            self.cached.resize(need, None);
             self.indeg.resize(need, 0);
             self.dependents.resize_with(need, Vec::new);
             self.marked.resize(need, false);
@@ -677,6 +696,7 @@ impl LayoutSolver {
             let i = h as usize;
             self.is_frame[i] = false;
             self.rect[i] = None;
+            self.cached[i] = None;
             self.indeg[i] = 0;
             self.dependents[i].clear();
             self.marked[i] = false;
@@ -720,6 +740,19 @@ impl LayoutSolver {
         Self::copy_fields(dst, src);
         self.is_frame[h as usize] = true;
         self.live.push(h);
+    }
+
+    /// Give registered frame `h` the rect it holds, so a new one within the keep threshold
+    /// ([`set_keep_eps`](Self::set_keep_eps)) leaves it standing, for `h` and its dependents alike.
+    pub fn set_cached(&mut self, h: Handle, rect: Rect) {
+        self.ensure(h);
+        self.touch(h);
+        self.cached[h as usize] = Some(rect);
+    }
+
+    /// The keep test's threshold, [`RESOLVE_EPS`] in the rects' units; kept across rounds.
+    pub fn set_keep_eps(&mut self, eps: f64) {
+        self.keep_eps = eps;
     }
 
     fn copy_fields(dst: &mut LayoutInput, src: &LayoutInput) {
@@ -799,7 +832,10 @@ impl LayoutSolver {
             resolve_rect(input, |t| rects.get(t as usize).copied().flatten())
         };
         match outcome {
-            ResolveOutcome::Resolved(r) => self.rect[h as usize] = Some(r),
+            ResolveOutcome::Resolved(r) => {
+                let kept = self.cached[h as usize].filter(|&c| keeps_rect(c, r, self.keep_eps));
+                self.rect[h as usize] = Some(kept.unwrap_or(r));
+            }
             ResolveOutcome::Unresolvable => self.unresolvable.push(h),
         }
     }
@@ -1182,6 +1218,75 @@ mod tests {
         );
         s.solve();
         assert!(s.cycle().contains(&A));
+    }
+
+    /// `0x768d20`'s four strict `<` tests: every edge under `eps` keeps, one at `eps` applies.
+    #[test]
+    fn keeps_rect_is_strict_on_every_edge() {
+        let old = Rect::new(0.0, 0.0, 40.0, 100.0);
+        let eps = 0.5;
+        assert!(keeps_rect(old, Rect::new(0.25, -0.25, 40.25, 99.75), eps));
+        for moved in [
+            Rect::new(0.5, 0.0, 40.0, 100.0),
+            Rect::new(0.0, -0.5, 40.0, 100.0),
+            Rect::new(0.0, 0.0, 40.5, 100.0),
+            Rect::new(0.0, 0.0, 40.0, 100.5),
+            Rect::new(f32::NAN, 0.0, 40.0, 100.0),
+        ] {
+            assert!(!keeps_rect(old, moved, eps), "{moved:?}");
+        }
+        assert!(!keeps_rect(old, old, 0.0), "a zero threshold keeps nothing");
+    }
+
+    /// A frame whose new rect is within the threshold of its cached one resolves to the cached
+    /// rect, and its dependents read that; past it, the new rect stands.
+    #[test]
+    fn the_solver_keeps_a_cached_rect_under_the_threshold() {
+        const A: Handle = 1;
+        const B: Handle = 2;
+        let solve = |x: f32| {
+            let mut s = LayoutSolver::new();
+            s.begin();
+            s.set_keep_eps(0.0128);
+            s.set_external(SCREEN, screen_rect());
+            s.set_frame(
+                A,
+                &LayoutInput::sized(
+                    vec![Anchor::new(
+                        Point::BottomLeft,
+                        SCREEN,
+                        Point::BottomLeft,
+                        x,
+                        0.0,
+                    )],
+                    20.0,
+                    20.0,
+                ),
+            );
+            s.set_cached(A, Rect::new(0.0, 10.0, 20.0, 30.0));
+            s.set_frame(
+                B,
+                &LayoutInput::sized(
+                    vec![Anchor::new(
+                        Point::BottomLeft,
+                        A,
+                        Point::BottomRight,
+                        0.0,
+                        0.0,
+                    )],
+                    5.0,
+                    5.0,
+                ),
+            );
+            s.solve();
+            (s.rect(A).unwrap(), s.rect(B).unwrap())
+        };
+        let (a, b) = solve(10.01);
+        assert_eq!(a, Rect::new(0.0, 10.0, 20.0, 30.0));
+        assert_eq!(b.left, 30.0);
+        let (a, b) = solve(10.02);
+        assert_eq!(a.left, 10.02);
+        assert_eq!(b.left, a.right);
     }
 
     #[test]

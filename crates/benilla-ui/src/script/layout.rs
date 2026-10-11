@@ -904,6 +904,7 @@ impl UiScript {
             .map(|&h| (h, model.resolved.get(&h).copied()))
             .collect();
         let size_eps = model.size_eps();
+        let resolve_eps = model.resolve_eps();
         pre.watched = pre.lap();
         // ── The graph: the ledger's cache, or a fresh derivation ─────────────────────────────
         // A `Some` ledger claims every write since the graph was built named its node and kept
@@ -936,14 +937,26 @@ impl UiScript {
             layout_rounds,
             pending_size_changed,
             texture_size_probe,
+            layout_force,
             ..
         } = model;
         let mut full_scope = false;
+        // The nodes this resolve stores without the keep test; a write that cleared the resolved
+        // bit of no node (an unanchored region's measure) leaves nothing to store.
+        let mut forced = std::mem::take(layout_force);
+        forced.retain(|&id| {
+            scope
+                .node_of
+                .get(id as usize)
+                .is_some_and(|&n| n != u32::MAX)
+        });
         // An incremental pass has no fingerprint; its verdict is `staged`, exactly the seed set.
-        let gate_skips = match fp {
-            Some(_) => *layout_fingerprint == fp,
-            None => scope.staged.is_empty(),
-        };
+        // A forced node is solved even with its inputs unmoved.
+        let gate_skips = forced.is_empty()
+            && match fp {
+                Some(_) => *layout_fingerprint == fp,
+                None => scope.staged.is_empty(),
+            };
         pre.report(gate_skips, scope.plan.len(), scope.regions.len());
         // Under verify, a frame tier 1 judged quiet must pass tier 2 too; a divergence is a write
         // path missing its `touch_layout()`.
@@ -974,7 +987,8 @@ impl UiScript {
             *layout_solves += 1;
         }
         // ── The scope: which nodes this solve may touch ────
-        // A node with unchanged inputs and no moved dependency recomputes to the rect it holds, so
+        // A node with unchanged inputs and no moved dependency recomputes to the rect it holds (the
+        // keep test holds a recompute against the rect it kept, so a re-run is a no-op), so
         // the solve runs over the dirty closure and feeds other rects in as externals. Full scope
         // when there is no memory yet, the screen moved, or under verify. An incremental pass
         // seeded its closure in `rederive_named`.
@@ -1014,6 +1028,19 @@ impl UiScript {
                 scope.close();
             }
         }
+        // A forced node, and whatever reads it, is solved: the store it owes moves its rect.
+        for &id in &forced {
+            scope.seed(id);
+        }
+        scope.close();
+        let mut force_mask: Vec<bool> = Vec::new();
+        if !forced.is_empty() {
+            force_mask.resize(scope.node_of.len(), false);
+            for &id in &forced {
+                force_mask[id as usize] = true;
+            }
+        }
+        let is_forced = |id: u32| force_mask.get(id as usize).copied().unwrap_or(false);
         // A dirty frame is solved, a dirty region swept, and whatever they read is seeded at its
         // cached rect. A dirty region is seeded too, since the frame pass runs before the sweep.
         let mut solve_frames: Vec<u32> = Vec::new();
@@ -1054,6 +1081,32 @@ impl UiScript {
         }
         // This solve's width, beside `layout_solves` (how often) and `layout_rounds` (how deep).
         *layout_last_scope = (solve_frames.len(), sweep_regions.len());
+        // ── The keep test's cached rects ──────────────────────────────────────────────────────
+        // `0x768d20` holds each new rect against the one its last store left (`[+0x40..+0x4c]`)
+        // and keeps that one when every edge moved less than 1e-5 layout units, so a slow drift
+        // builds until it crosses. The cache is the rect at this resolve's entry: a mid-pass round
+        // is our fixpoint's, not a store. A forced node, a frame with no rect, a region whose
+        // owner's scale moved (the cascade reaches its regions, `0x76ad06`), has no cache.
+        let entry_frames: Vec<Option<Rect>> = solve_frames
+            .iter()
+            .map(|&i| {
+                let (h, id, _) = scope.plan[i as usize];
+                (!is_forced(id))
+                    .then(|| resolved.get(&h).copied())
+                    .flatten()
+            })
+            .collect();
+        let entry_regions: Vec<Option<Rect>> = sweep_regions
+            .iter()
+            .map(|&i| {
+                let row = scope.regions[i as usize];
+                let owner_forced = frame_to_id.get(&row.owner).is_some_and(|&o| is_forced(o));
+                (!is_forced(row.id) && !owner_forced)
+                    .then(|| region_resolved.get(&row.rh).copied())
+                    .flatten()
+            })
+            .collect();
+        solver.set_keep_eps(resolve_eps);
         let round_cap = scope.plan.len() + region_data.len() + 2;
         // `WOW_LAYOUT_PROF=1`: rounds, graph size, and the frame-solve and region-sweep split.
         let prof = layout_prof_enabled();
@@ -1080,7 +1133,7 @@ impl UiScript {
                     solver.set_external(id, *r);
                 }
             }
-            for &i in &solve_frames {
+            for (&i, &cached) in solve_frames.iter().zip(&entry_frames) {
                 let (h, id, over) = scope.plan[i as usize];
                 let Some(input) = layout_inputs.get(&h) else {
                     continue;
@@ -1088,6 +1141,9 @@ impl UiScript {
                 match over {
                     Some(a) => solver.set_frame_anchored(id, input, a),
                     None => solver.set_frame(id, input),
+                }
+                if let Some(c) = cached {
+                    solver.set_cached(id, c);
                 }
             }
             solver.solve();
@@ -1116,7 +1172,7 @@ impl UiScript {
             }
             let t_reg = prof.then(std::time::Instant::now);
             let mut scratch = LayoutInput::default();
-            for &ri in &sweep_regions {
+            for (&ri, &cached) in sweep_regions.iter().zip(&entry_regions) {
                 let RegionRow {
                     rh,
                     id: region_id,
@@ -1197,6 +1253,10 @@ impl UiScript {
                     continue;
                 };
                 let rect = Rect::new(bottom, left, top, right);
+                // The keep test, as for a frame: the same `0x768d20` resolves regions.
+                let rect = cached
+                    .filter(|&c| layout::keeps_rect(c, rect, resolve_eps))
+                    .unwrap_or(rect);
                 // Into the solver too: a later region in this sweep that anchors here needs it.
                 solver.set_external(region_id, rect);
                 if region_resolved.get(&rh) != Some(&rect) {
@@ -1302,6 +1362,7 @@ impl UiScript {
             next_id,
             screen,
             layout_scope: scope,
+            layout_force,
             ..
         } = model;
 
@@ -1312,12 +1373,16 @@ impl UiScript {
                 ids.push((h, id));
             }
         }
-        for &(h, _) in &ids {
+        for &(h, id) in &ids {
             let (scale, clamp) = arena
                 .frame(h)
                 .map(|f| (f.effective_scale, f.clamped_to_screen))
                 .unwrap_or((1.0, false));
             let input = layout_inputs.entry(h).or_default();
+            // A moved effective scale clears the resolved bit (`0x768360` from `0x76acd5`).
+            if input.scale.to_bits() != scale.to_bits() {
+                layout_force.push(id);
+            }
             input.scale = scale;
             // Clamp-to-screen is a frame property (geometry flags bit 4), so every placement path
             // clamps alike, against the live window size.
@@ -1366,8 +1431,9 @@ impl UiScript {
         // The reference resolves one graph in which frames and regions anchor each other; ours
         // alternates a frame solve and a region sweep until a round changes no rect, compared
         // exactly. The round cap is the node count, so only a cycle exhausts it, warned like the
-        // reference's resolving-flag bail. Every rect is recomputed from inputs and externals, so
-        // last frame's rects are a legal seed: only dead or unanchored regions drop.
+        // reference's resolving-flag bail. Every rect is recomputed from inputs and externals and
+        // held against its own cached rect, so last frame's rects are a legal seed: only dead or
+        // unanchored regions drop.
         region_resolved.retain(|rh, _| {
             arena.region(*rh).is_some()
                 && region_data.get(rh).is_some_and(|d| !d.anchors.is_empty())
@@ -1378,8 +1444,9 @@ impl UiScript {
         // Fingerprint what the rounds read, to skip them when nothing moved since the last
         // converged resolve: the screen; each live frame's id, synced `LayoutInput` and
         // ScrollFrame override; each anchored region's node hash (anchors, explicit size, measured
-        // extent, the art of an unsized axis, owner) and liveness. Seeded rects are outputs, a pure
-        // function of these, so they are not hashed.
+        // extent, the art of an unsized axis, owner) and liveness. Seeded rects are outputs, a
+        // function of these and of the rects the keep test held them against, which a re-run with
+        // the same inputs keeps again, so they are not hashed.
         // The same walk hashes each node alone into `LayoutScope::now` and records its edges.
         // Sized past `next_id` for the ids the region walk below may mint.
         scope.begin_full(*next_id as usize + region_data.len() + 1);
@@ -1502,6 +1569,7 @@ impl UiScript {
             next_id,
             screen,
             layout_scope: scope,
+            layout_force,
             ..
         } = model;
         scope.begin_incremental(*next_id as usize);
@@ -1573,6 +1641,9 @@ impl UiScript {
                 // The derivation's sync of the arena's scale and clamp into the layout input.
                 let (scale, clamp) = (frame.effective_scale, frame.clamped_to_screen);
                 let input = layout_inputs.entry(h).or_default();
+                if input.scale.to_bits() != scale.to_bits() {
+                    layout_force.push(id);
+                }
                 input.scale = scale;
                 input.clamp = clamp;
                 if clamp {

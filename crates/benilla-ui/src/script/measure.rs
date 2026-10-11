@@ -66,8 +66,9 @@ pub(super) fn ensure_measured_in(model: &mut Model, rh: RegionHandle) {
     }
     if moved {
         // Only a box that moved touches the layout, as in `set_measured_text`: a same-width
-        // re-measure (a countdown tick) must not cost a whole-roster hash.
+        // re-measure (a countdown tick) must not cost a whole-roster hash. Stored whole, as there.
         model.touch_layout_region(rh);
+        model.layout_force.push(req.id);
     }
 }
 
