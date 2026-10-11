@@ -6,6 +6,7 @@ mod addon_index_space;
 mod anchors;
 mod backdrop;
 mod button;
+mod capture;
 mod channel;
 mod common;
 mod cooldown;
