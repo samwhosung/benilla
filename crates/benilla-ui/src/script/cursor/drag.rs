@@ -856,6 +856,38 @@ mod tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
+    /// `OnDragStart`'s button is not the armed one: `0x76c1e0` names the lowest bit of the move
+    /// event's held mask (`[evt+0x18]`, the producer `0x423fe0` stores `ds:0x883f40` there), so
+    /// with Left still held a drag re-armed by Right starts as `LeftButton`.
+    #[test]
+    fn on_drag_start_names_the_lowest_held_button() {
+        let mut s = drag_script();
+        s.run(
+            r#"
+            names = {}
+            local a = CreateFrame("Frame", "A")
+            a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
+            a:RegisterForDrag("LeftButton", "RightButton")
+            a:SetScript("OnDragStart", function() table.insert(names, arg1) end)
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s.mouse_button(100.0, 300.0, "LeftButton", true);
+        s.mouse_move(130.0, 300.0);
+        s.mouse_button(130.0, 300.0, "RightButton", true); // re-arms for Right, Left still held
+        s.mouse_move(160.0, 300.0);
+        s.mouse_button(160.0, 300.0, "RightButton", false);
+        s.mouse_button(160.0, 300.0, "LeftButton", false);
+        s.mouse_button(160.0, 300.0, "RightButton", true); // Right alone
+        s.mouse_move(200.0, 300.0);
+        assert_eq!(
+            s.eval::<String>("return table.concat(names, ' ')").unwrap(),
+            "LeftButton LeftButton RightButton"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
     /// The cursor payload is no part of the arm: a right click during an item drag leaves the
     /// carried item and the drag, and the left release still drops on the frame under the cursor.
     #[test]
