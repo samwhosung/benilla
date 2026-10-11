@@ -34,6 +34,7 @@ mod input;
 mod keep_rect;
 mod keyboard;
 mod layout_gate;
+mod layout_mode;
 mod layout_structure;
 mod line_spacing;
 mod measure;

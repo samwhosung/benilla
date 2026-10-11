@@ -671,3 +671,127 @@ fn the_apply_seats_position_behind_movable_and_size_behind_resizable() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+// ── The drag slot is taken, never refused (`0x7652b0`) ──────────────────────────────────────────
+
+/// A title-region frame `A` at (100, 100) 200×80 and a movable `B` at (500, 100), on 800×600.
+fn title_and_mover() -> UiScript {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        A = CreateFrame("Frame", "A")
+        A:SetPoint("BOTTOMLEFT", 100, 100); A:SetWidth(200); A:SetHeight(80)
+        A:EnableMouse(true)
+        A:SetScript("OnMouseUp", function() table.insert(log, "A:up:"..arg1) end)
+        local title = A:CreateTitleRegion()
+        title:SetPoint("TOPLEFT", A, "TOPLEFT", 0, 0)
+        title:SetPoint("BOTTOMRIGHT", A, "TOPRIGHT", 0, -20)
+        B = CreateFrame("Frame", "B")
+        B:SetPoint("BOTTOMLEFT", 500, 100); B:SetWidth(100); B:SetHeight(100)
+        B:SetMovable(true)
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    s
+}
+
+fn lefts(s: &mut UiScript) -> (f64, f64) {
+    s.resolve();
+    s.eval::<(f64, f64)>("return A:GetLeft(), B:GetLeft()")
+        .unwrap()
+}
+
+/// A title press while a scripted `StartMoving` holds the slot takes it: the drag entry stores the
+/// new frame over the old one with no test of the slot (`0x7652f3`–`0x76530f`), and nothing runs
+/// on the frame it displaced, which simply stops following.
+#[test]
+fn a_title_press_takes_the_slot_from_a_running_move() {
+    let mut s = title_and_mover();
+    s.mouse_move(150.0, 170.0); // the hover: A, in its title strip
+    s.run("B:StartMoving()").unwrap();
+    s.mouse_button(150.0, 170.0, "LeftButton", true);
+    // The slot holds A now, so B's own stop clears nothing (`0x776990` tests the holder).
+    s.run("B:StopMovingOrSizing()").unwrap();
+    s.mouse_move(250.0, 170.0);
+    assert_eq!(
+        lefts(&mut s),
+        (200.0, 500.0),
+        "A follows; B stopped where it was"
+    );
+    assert!(s.eval::<bool>("return A:IsUserPlaced()").unwrap());
+    // The title move is mode 2, which the release ends.
+    s.mouse_button(250.0, 170.0, "LeftButton", false);
+    s.mouse_move(350.0, 170.0);
+    assert_eq!(lefts(&mut s), (200.0, 500.0));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The press goes to the capture, else the hover (`0x76637f`–`0x766389`), and a walk that finds a
+/// move in flight pumps it and returns before its sweep (`0x766164`): the hover stays the frame it
+/// was when the move began. So with a window riding the cursor (as a clicked chat tab leaves it),
+/// a press over another frame's title region reaches the riding window, not that frame.
+#[test]
+fn a_press_during_a_move_goes_to_the_hover_the_move_froze() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        W = CreateFrame("Frame", "W")
+        W:SetPoint("BOTTOMLEFT", 100, 100); W:SetWidth(200); W:SetHeight(100)
+        W:EnableMouse(true); W:SetMovable(true)
+        W:SetScript("OnMouseDown", function() table.insert(log, "W:down"); this:StartMoving() end)
+        T = CreateFrame("Frame", "T")
+        T:SetFrameStrata("HIGH"); T:SetToplevel(true); T:SetMovable(true)
+        T:SetPoint("BOTTOMLEFT", 400, 100); T:SetWidth(200); T:SetHeight(100)
+        T:EnableMouse(true)
+        T:SetScript("OnMouseDown", function() table.insert(log, "T:down") end)
+        T:CreateTitleRegion():SetAllPoints(T)
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(150.0, 150.0);
+    s.mouse_button(150.0, 150.0, "LeftButton", true); // W starts moving (mode 3)
+    s.mouse_button(150.0, 150.0, "LeftButton", false); // which the release does not end
+    s.mouse_move(450.0, 150.0); // W rides to 400, under T
+    assert_eq!(s.hit_test_name(450.0, 150.0).as_deref(), Some("T"));
+    s.mouse_button(450.0, 150.0, "LeftButton", true);
+    s.mouse_button(450.0, 150.0, "LeftButton", false);
+    s.mouse_move(500.0, 150.0);
+    s.resolve();
+    assert_eq!(
+        s.eval::<(f64, f64)>("return W:GetLeft(), T:GetLeft()")
+            .unwrap(),
+        (450.0, 400.0),
+        "W still rides; T never moved"
+    );
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ' ')").unwrap(),
+        "W:down W:down"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A release while a title move (mode 2) holds the slot ends it and does nothing else
+/// (`0x76646d`–`0x76647c` → `0x7664e0`): no `OnMouseUp` on the capture a chorded press left.
+#[test]
+fn a_release_that_ends_a_title_move_fires_nothing() {
+    let mut s = title_and_mover();
+    s.mouse_move(150.0, 120.0); // A, below its title strip
+    s.mouse_button(150.0, 120.0, "RightButton", true); // capture A
+    s.mouse_move(150.0, 170.0);
+    s.mouse_button(150.0, 170.0, "LeftButton", true); // A's title region: mode 2
+    s.mouse_button(150.0, 170.0, "RightButton", false);
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ' ')").unwrap(),
+        "",
+        "the right release ended the move and reached no script"
+    );
+    s.mouse_move(250.0, 170.0);
+    assert_eq!(lefts(&mut s).0, 100.0, "and the move is over");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
