@@ -1980,6 +1980,60 @@ mod tests {
         script.note_addon_info_reply(&hidden);
     }
 
+    /// A folder addon that writes `## Secure: 1` has no signature behind it, so it stays INSECURE
+    /// (`[rec+0x24]` starts 1 at `0x5205b6`; only the `.sig` check `0x6f10f0` answering 3 clears it,
+    /// `0x51dbfb`): it loads under its own context, so it cannot take a name an insecure addon
+    /// registered, and a later context-0 registration replaces its template.
+    #[test]
+    fn a_folder_addon_claiming_secure_loads_insecure() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("claimsecure");
+        let tmpl = |width: u32| {
+            format!(
+                r#"<Ui><Frame name="ClaimTemplate" virtual="true">
+                    <Size><AbsDimension x="{width}" y="5"/></Size>
+                </Frame></Ui>"#
+            )
+        };
+        let (plain, claim) = (tmpl(10), tmpl(20));
+        write_addon(
+            &home,
+            "Plain",
+            "## Interface: 11200\nPlain.xml\n",
+            &[("Plain.xml", &plain)],
+        );
+        write_addon(
+            &home,
+            "Zclaim",
+            "## Interface: 11200\n## Secure: 1\nZclaim.xml\n",
+            &[("Zclaim.xml", &claim)],
+        );
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let _ = load_third_party(&mut script, None, &[], true);
+        seat_stock_addon_reply(&mut script);
+        let width = |s: &UiScript| {
+            s.eval::<f64>("return CreateFrame('Frame', nil, nil, 'ClaimTemplate'):GetWidth()")
+                .unwrap()
+        };
+        assert_eq!(
+            script
+                .eval::<String>("local _, _, _, _, _, _, s = GetAddOnInfo('Zclaim') return s")
+                .ok(),
+            Some("INSECURE".to_string())
+        );
+        assert_eq!(width(&script), 10.0, "the claim replaced Plain's template");
+        // A context-0 registration replaces it, which a SECURE entry would refuse.
+        let doc = benilla_ui::framexml::parse(&tmpl(30)).unwrap();
+        let report = benilla_ui::loader::load(&script, &doc, &|_| None);
+        assert!(report.status.is_empty(), "{:?}", report.status.lines());
+        assert_eq!(width(&script), 30.0);
+        let _ = home;
+    }
+
     /// The in-game `GetAddOnInfo` (`0x48e390`) answers seven values, `name, title, notes, enabled,
     /// loadable, reason, security`; glue's (`0x46d460`) answers eight, with `url` at slot 4.
     #[test]
