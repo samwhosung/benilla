@@ -133,6 +133,7 @@ mod tooltip_spell;
 mod tooltip_unit;
 mod ui_errors;
 mod ui_scale;
+mod update_walk;
 pub use tooltip_unit::TooltipTint;
 mod trade;
 mod tradeskill;

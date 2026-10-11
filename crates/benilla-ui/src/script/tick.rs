@@ -5,7 +5,7 @@ use mlua::Lua;
 
 use crate::widget::FrameHandle;
 
-use super::{editbox, event, tooltip, Model, ScriptValue, UiScript};
+use super::{event, tooltip, Model, ScriptValue, UiScript};
 
 impl UiScript {
     /// Queue an event for the start of the next tick, behind everything queued earlier and before
@@ -70,10 +70,10 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
 }
 
 impl super::UiScript {
-    /// Advance a frame: the `GetTime()` clock and queued events, then the walk (`0x765650`),
-    /// each shown frame's update in turn: its `OnUpdate(self, elapsed)` (`0x704f10`), and for an
-    /// EditBox its flush and caret blink after it; then the engine's own fades, model panes and
-    /// hover.
+    /// Advance a frame: the `GetTime()` clock and queued events, then the update walk
+    /// (`0x765650`), each linked frame's update in strata, level and link order: its
+    /// `OnUpdate(self, elapsed)` (`0x704f10`), and for an EditBox its flush and caret blink after
+    /// it; then the engine's own fades, model panes and hover.
     pub fn tick(&mut self, elapsed: f32) {
         self.model_mut().now += f64::from(elapsed);
         // Events queued since the last tick fire before this tick's OnUpdate.
@@ -81,74 +81,7 @@ impl super::UiScript {
         for (event, args) in pending {
             self.fire_event(&event, args);
         }
-        // Each entry: the frame's id, whether it has an `OnUpdate`, and the box if an EditBox.
-        let walk: Vec<(u32, bool, Option<FrameHandle>)> = {
-            let mut model = self.model_mut();
-            // `SetScript` keeps the OnUpdate list; a destroyed frame's handle compacts out here.
-            let shown = |h: FrameHandle| model.arena.frame(h).is_some_and(|f| f.effective_visible);
-            let mut frames: Vec<(FrameHandle, bool)> = model
-                .on_update_frames
-                .iter()
-                .copied()
-                .filter(|&h| shown(h))
-                .map(|h| (h, false))
-                .collect();
-            // The walk reaches every shown frame, not only those with a script, and an EditBox's
-            // update (`0x77a790`, vtable `+0x38`) flushes it whether or not it has an `OnUpdate`.
-            frames.extend(
-                model
-                    .arena
-                    .editbox_kinds()
-                    .iter()
-                    .copied()
-                    .filter(|&h| shown(h))
-                    .map(|h| (h, true)),
-            );
-            if model
-                .on_update_frames
-                .iter()
-                .any(|&h| model.arena.frame(h).is_none())
-            {
-                let arena = &model.arena;
-                let live: Vec<FrameHandle> = model
-                    .on_update_frames
-                    .iter()
-                    .copied()
-                    .filter(|&h| arena.frame(h).is_some())
-                    .collect();
-                model.on_update_frames = live;
-            }
-            let mut walk: Vec<(u32, bool, Option<FrameHandle>)> = frames
-                .into_iter()
-                .map(|(h, editbox)| (model.frame_id(h), !editbox, editbox.then_some(h)))
-                .collect();
-            // Creation order, by frame id: getters settle on demand, so a handler sees what an
-            // earlier one did this sweep, and the order must be stable. The reference walks each
-            // strata level's list of shown frames (`0x765650`). A box with an `OnUpdate` is
-            // listed twice, and the two entries merge.
-            walk.sort_unstable_by_key(|&(id, ..)| id);
-            walk.dedup_by(|later, earlier| {
-                let same = later.0 == earlier.0;
-                if same {
-                    earlier.1 |= later.1;
-                    earlier.2 = earlier.2.or(later.2);
-                }
-                same
-            });
-            walk
-        };
-        for (id, on_update, editbox) in walk {
-            if on_update {
-                if let Err(e) = event::fire_update_handler(&self.lua, id, elapsed) {
-                    self.push_error(e);
-                }
-            }
-            // The box's own update runs its flush after its `OnUpdate` (`0x77a79a`, then
-            // `0x77a7a1`), so the events an edit raised fire in the box's place in the walk.
-            if let Some(h) = editbox {
-                editbox::update(&self.lua, h, elapsed);
-            }
-        }
+        self.update_walk(elapsed);
         self.tick_model_panes(elapsed);
         // The engine's line fades, apart from any OnUpdate script: ScrollingMessageFrame's
         // (`0x788460`) and MessageFrame's (`0x786200`), which also keeps only the lines that fit
@@ -255,7 +188,7 @@ impl UiScript {
                 })
                 .collect();
             let mut ids: Vec<u32> = frames.into_iter().map(|h| model.frame_id(h)).collect();
-            ids.sort_unstable(); // creation order, as in the OnUpdate sweep
+            ids.sort_unstable(); // creation order
             ids
         };
         for id in update_ids {

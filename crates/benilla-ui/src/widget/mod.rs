@@ -250,6 +250,12 @@ pub struct WidgetArena {
     regions: Arena<Region>,
     names: HashMap<String, FrameHandle>,
     next_insertion: u32,
+    /// How many times the link stamps were renumbered at the cap, so a reader holding stamps can
+    /// tell they are still comparable with the live ones.
+    renumbers: u32,
+    /// While the update walk runs, every frame linked into a bucket since it opened, in link order
+    /// ([`Self::open_link_log`]).
+    link_log: Option<Vec<FrameHandle>>,
     /// The draw list's fingerprint cache ([`crate::order::traversal`]).
     pub(crate) order_cache: crate::order::OrderCache,
     /// Minimap frames ever created, so the state feed notices a new one without a walk.
@@ -301,6 +307,8 @@ impl WidgetArena {
             regions: Arena::new(),
             names: HashMap::new(),
             next_insertion: 0,
+            renumbers: 0,
+            link_log: None,
             minimap_created: 0,
             order_cache: Default::default(),
             ticked_kinds: Vec::new(),
@@ -381,12 +389,40 @@ impl WidgetArena {
                 }
             }
             self.next_insertion = order.len() as u32;
+            self.renumbers += 1;
         }
         let seq = self.next_insertion;
         if let Some(f) = self.frame_mut(h) {
             f.insertion_seq = seq;
             self.next_insertion += 1;
+            if let Some(log) = &mut self.link_log {
+                log.push(h);
+            }
         }
+    }
+
+    /// Start recording every link into a bucket, for the update walk (`0x765650`), which must see
+    /// the frames a handler links while it runs.
+    pub(crate) fn open_link_log(&mut self) {
+        self.link_log = Some(Vec::new());
+    }
+
+    /// The frames linked since the last call, in link order, the log staying open.
+    pub(crate) fn take_linked(&mut self) -> Vec<FrameHandle> {
+        self.link_log
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// Stop recording links.
+    pub(crate) fn close_link_log(&mut self) {
+        self.link_log = None;
+    }
+
+    /// How many times the link stamps have been renumbered; stamps read under one count compare.
+    pub(crate) fn renumbers(&self) -> u32 {
+        self.renumbers
     }
 
     /// The first frame created with `name`; a later duplicate never takes it over (`0x701bd0`).
@@ -502,8 +538,14 @@ impl WidgetArena {
                 | FrameKind::DressUpModel
                 | FrameKind::TabardModel
         );
+        let visible = frame.effective_visible;
         let (index, generation) = self.frames.insert(frame);
         let handle = FrameHandle { index, generation };
+        if visible {
+            if let Some(log) = &mut self.link_log {
+                log.push(handle);
+            }
+        }
         if ticked {
             self.ticked_kinds.push(handle);
         }

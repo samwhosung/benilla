@@ -240,7 +240,10 @@ fn set_script(lua: &Lua, this: &Table, name: &str, func: Option<Function>) -> ml
             // The first handler of a kind joins that kind's list; nothing else writes `scripts`.
             if model.scripts.entry(h).or_default().insert(kind) {
                 match kind {
-                    "OnUpdate" => model.on_update_frames.push(h),
+                    "OnUpdate" => {
+                        model.on_update_frames.push(h);
+                        model.on_update_joins += 1;
+                    }
                     "OnSizeChanged" => model.on_size_changed_frames.push(h),
                     "OnUpdateModel" => model.on_update_model_frames.push(h),
                     _ => {}
