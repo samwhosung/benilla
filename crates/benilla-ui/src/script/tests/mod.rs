@@ -17,6 +17,7 @@ mod cooldown;
 mod create_frame_template;
 mod cvar_bindings;
 mod dispatch_bench;
+mod drag_pin;
 mod drag_threshold;
 mod end_to_end;
 mod engine_updates;

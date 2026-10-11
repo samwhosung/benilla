@@ -62,11 +62,12 @@ fn the_canonical_addon_idiom_moves_a_frame_and_the_position_survives_the_stop() 
     assert_eq!(corner(&mut s), (200.0, 150.0), "no longer following");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 
-    // The reference moves the anchors in place, so GetPoint reads the frame's own point, dragged.
+    // The drag re-anchored it to one TOPLEFT against the screen (`0x768430`), so GetPoint reads
+    // that point, not the authored BOTTOMLEFT: top 230 on a 600 screen is y -370.
     let (point, x, y) = s
         .eval::<(String, f64, f64)>("local p, _, _, x, y = MovePanel:GetPoint() return p, x, y")
         .unwrap();
-    assert_eq!((point.as_str(), x, y), ("BOTTOMLEFT", 200.0, 150.0));
+    assert_eq!((point.as_str(), x, y), ("TOPLEFT", 200.0, -370.0));
 }
 
 /// Each move applies only its own delta: the pump re-centers its sample after every step.
@@ -163,7 +164,8 @@ fn stop_moving_or_sizing_is_harmless_with_nothing_moving_and_stops_only_its_own_
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A move translates every anchor, so a frame sized by two anchors keeps its size.
+/// A frame sized by two anchors keeps its size: the drag pins it to one anchor with the size its
+/// rect had (`0x768430`).
 #[test]
 fn a_frame_stretched_between_two_anchors_moves_rigidly() {
     let mut s = script();
@@ -194,7 +196,7 @@ fn a_frame_stretched_between_two_anchors_moves_rigidly() {
     let size_after = s
         .eval::<(f64, f64)>("return StretchPanel:GetWidth(), StretchPanel:GetHeight()")
         .unwrap();
-    assert_eq!((left, bottom), (130.0, 140.0), "both anchors translated");
+    assert_eq!((left, bottom), (130.0, 140.0), "the pinned anchor moved");
     assert_eq!(size_after, (200.0, 100.0), "and the frame kept its size");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
@@ -324,8 +326,7 @@ fn the_xml_movable_and_resizable_attributes_reach_the_methods() {
 }
 
 /// `StartSizing(grip)` (`0x776830`, called from `FloatingChatFrame.lua:600`) moves the gripped
-/// edges and plants the opposite ones. Which edges a grip moves is untraced in the reference, whose
-/// verb has no inline math; this takes the anchor point's plain meaning, as that caller does.
+/// edges and plants the opposite ones (`0x768710`'s grip cases).
 #[test]
 fn start_sizing_moves_the_gripped_edge_and_plants_the_other() {
     let mut s = crate::script::UiScript::new().unwrap();

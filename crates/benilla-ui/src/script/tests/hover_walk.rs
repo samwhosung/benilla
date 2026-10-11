@@ -232,13 +232,14 @@ fn a_frame_moving_when_the_pointer_leaves_keeps_its_offsets() {
         s.eval::<(f64, f64)>("local _, _, _, x, y = Far:GetPoint() return x, y")
             .unwrap()
     };
-    assert_eq!(point(&s), (800.0, 500.0));
+    // The drag pinned TOPLEFT against the screen (`0x768430`): top 600 on a 768 screen.
+    assert_eq!(point(&s), (800.0, -168.0));
     let saved = s.user_placed_layouts();
 
     s.pointer_left_hover();
     s.pointer_left_window();
     s.resolve();
-    assert_eq!(point(&s), (800.0, 500.0), "the leave moves nothing");
+    assert_eq!(point(&s), (800.0, -168.0), "the leave moves nothing");
     assert_eq!(s.eval::<f64>("return Far:GetLeft()").unwrap(), 800.0);
     assert_eq!(
         s.user_placed_layouts(),
@@ -251,7 +252,7 @@ fn a_frame_moving_when_the_pointer_leaves_keeps_its_offsets() {
     // next real event moves it by its delta from the last real one.
     s.mouse_move(260.0, 150.0);
     s.resolve();
-    assert_eq!(point(&s), (810.0, 500.0));
+    assert_eq!(point(&s), (810.0, -168.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
@@ -286,6 +287,8 @@ fn a_drag_cut_short_by_the_pointer_leaving_keeps_the_last_real_position() {
         .iter()
         .find(|l| l.name == "Here")
         .expect("Here is saved");
-    assert_eq!((here.points[0].x, here.points[0].y), (130.0, 110.0));
+    // Saved as the drag's TOPLEFT pin (`0x768430`): top 210 on a 768 screen.
+    assert_eq!(here.points[0].point, "TOPLEFT");
+    assert_eq!((here.points[0].x, here.points[0].y), (130.0, -558.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
