@@ -33,8 +33,7 @@ pub struct LootRollEntry {
     pub bind_on_pickup: bool,
     /// Milliseconds left, from `SMSG_LOOT_START_ROLL`'s countdown; saturates at 0.
     pub time_left_ms: u32,
-    /// The item id, the key of the hover's item lookup; `GetLootRollItemInfo` also returns it as a
-    /// sixth value, which 1.12 does not.
+    /// The item id, the key of the hover's item lookup.
     pub item_id: u32,
     /// The link `GetLootRollItemLink` answers for the icon's ctrl/shift clicks
     /// (`LootFrame.xml:353-361`); `None` until the item template lands, since it embeds the name.
@@ -91,7 +90,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     1,
                     CACHE_MISS_QUALITY,
                     mlua::Value::Nil,
-                    mlua::Value::Nil,
                 ));
             };
             let vals = (
@@ -100,7 +98,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 1,
                 r.quality.map_or(CACHE_MISS_QUALITY, i64::from),
                 flag(r.bind_on_pickup),
-                r.item_id,
             );
             lua.pack_multi(vals)
         })?,
@@ -225,11 +222,13 @@ mod tests {
             s.eval::<i64>("return GetLootRollTimeLeft(7)").unwrap(),
             42_000
         );
-        assert_eq!(
-            s.eval::<i64>("local _, _, _, _, _, id = GetLootRollItemInfo(7)\nreturn id")
-                .unwrap(),
-            17182
-        );
+        // Five values, a hit and the miss tail alike (`0x4c31a3`).
+        for id in [7, 99] {
+            let vals = s
+                .eval::<mlua::MultiValue>(&format!("return GetLootRollItemInfo({id})"))
+                .unwrap();
+            assert_eq!(vals.len(), 5, "roll {id}");
+        }
 
         // In flight: the quality is the miss tail's 1, never nil; the count is the literal 1
         // whatever the stack, and a roll that does not bind answers nil, not false.
@@ -264,8 +263,8 @@ mod tests {
         assert_eq!((count, quality), (1, 1), "the miss tail is 1, 1");
         assert_eq!(
             s.arity("GetLootRollItemInfo(99)").unwrap(),
-            6,
-            "five reference returns plus benilla's trailing item id"
+            5,
+            "the reference's five returns (`0x4c31a3`)"
         );
         assert!(s
             .eval::<bool>("return GetLootRollItemLink(99) == nil")
