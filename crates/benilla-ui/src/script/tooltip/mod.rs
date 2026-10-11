@@ -189,7 +189,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 }];
                 model.region_data.insert(left, d);
                 model.touch_measure(left); // an adopted cell can arrive text-in-hand
-                model.touch_layout(); // a line row entered the layout graph
+                model.touch_layout_region(left); // a line row entered the layout graph
             }
             let left_id = model.region_id(left);
 
@@ -217,7 +217,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 d.anchors = vec![Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)];
                 model.region_data.insert(right, d);
                 model.touch_measure(right); // an adopted cell can arrive text-in-hand
-                model.touch_layout(); // a line row entered the layout graph
+                model.touch_layout_region(right); // a line row entered the layout graph
             }
             let right_id = model.region_id(right);
 
@@ -447,16 +447,16 @@ fn apply_anchor(
         TooltipAnchor::BottomLeft => Some((Point::TopRight, Point::BottomLeft)),
         TooltipAnchor::Cursor | TooltipAnchor::None | TooltipAnchor::Preserve => None,
     };
-    // The drop is a named retarget to no targets, not a conservative touch.
     if matches!(anchor, TooltipAnchor::Cursor | TooltipAnchor::None) {
-        let dropped: Option<Vec<u32>> = match model.layout_inputs.get_mut(&h) {
+        let dropped = match model.layout_inputs.get_mut(&h) {
             Some(input) if !input.anchors.is_empty() => {
-                Some(input.anchors.drain(..).map(|a| a.relative_to).collect())
+                input.anchors.clear();
+                true
             }
-            _ => None,
+            _ => false,
         };
-        if let Some(old_targets) = dropped {
-            model.touch_layout_retarget_frame(h, &old_targets, &[]);
+        if dropped {
+            model.touch_layout_frame(h);
         }
     }
     if let Some((own, rel)) = pts {
@@ -467,11 +467,8 @@ fn apply_anchor(
         let same = input.anchors.len() == 1
             && crate::script::object::anchor_bits_eq(&input.anchors[0], &new);
         if !same {
-            // A named retarget: the cached layout graph re-points this edge instead of being
-            // rebuilt.
-            let old_targets: Vec<u32> = input.anchors.iter().map(|a| a.relative_to).collect();
             input.anchors = vec![new];
-            model.touch_layout_retarget_frame(h, &old_targets, &[owner_id]);
+            model.touch_layout_frame(h);
         }
     }
 }
@@ -716,9 +713,8 @@ fn cursor_anchor(model: &mut Model, h: FrameHandle) {
     if same {
         return;
     }
-    let old_targets: Vec<u32> = input.anchors.iter().map(|a| a.relative_to).collect();
     input.anchors = vec![new];
-    model.touch_layout_retarget_frame(h, &old_targets, &[super::SCREEN]);
+    model.touch_layout_frame(h);
 }
 
 pub(super) fn layout_tooltips(model: &mut Model) {

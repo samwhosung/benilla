@@ -134,6 +134,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             data.texture = None;
             data.fill = None;
             data.circular = true;
+            model.touch_layout_art(rh);
             Ok(Value::Integer(1))
         })?,
     )?;

@@ -141,8 +141,7 @@ impl super::UiScript {
                 }
             }
             if changed {
-                // The whole graph, not the frame: a restored row may repoint an anchor.
-                model.touch_layout();
+                model.touch_layout_frame(h);
             }
         }
     }

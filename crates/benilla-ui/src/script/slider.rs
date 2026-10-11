@@ -73,7 +73,7 @@ fn ensure_thumb(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Resu
                 )
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
             model.region_data.insert(rh, RegionData::default());
-            model.touch_layout(); // a region entered the layout gate's read set
+            model.touch_layout_region(rh);
             if let Some(frame) = model.arena.frame_mut(h) {
                 if let KindState::Slider(s) = &mut frame.kind_state {
                     s.thumb = Some(rh);
@@ -229,6 +229,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 _ => {}
             }
+            model.touch_layout_art(rh);
             Ok(())
         })?,
     )?;

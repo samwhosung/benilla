@@ -14,15 +14,14 @@ use super::{
 };
 
 /// Install the layout methods into `m`.
-/// `ClearAllPoints` on a region (`0x767ed0`): a retarget onto no targets, so the cached graph
-/// unlinks the edges with no re-derive.
+/// `ClearAllPoints` on a region (`0x767ed0`): the region leaves the cached graph with its edges.
 pub(in crate::script) fn clear_points(model: &mut Model, rh: crate::widget::RegionHandle) {
     let d = model.region_data.entry(rh).or_default();
-    let old: Option<Vec<u32>> =
-        (!d.anchors.is_empty()).then(|| d.anchors.iter().map(|a| a.relative_to).collect());
+    // Mutates only on a real change; an unanchored region leaves the graph.
+    let cleared = !d.anchors.is_empty();
     d.anchors.clear();
-    if let Some(old) = old {
-        model.touch_layout_retarget_region(rh, &old, &[]);
+    if cleared {
+        model.touch_layout_region(rh);
     }
 }
 
@@ -155,7 +154,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if !same {
                 data.anchors.clear();
                 data.anchors.extend_from_slice(&pair);
-                model.touch_layout();
+                model.touch_layout_region(rh);
             }
             Ok(())
         },

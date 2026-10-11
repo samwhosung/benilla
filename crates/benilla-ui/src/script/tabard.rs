@@ -195,6 +195,7 @@ fn emblem_texture(lua: &Lua, this: Value, texture: Value, upper: bool) -> mlua::
     data.fill = None;
     data.portrait_unit = None;
     data.circular = false;
+    model.touch_layout_art(rh);
     Ok(())
 }
 

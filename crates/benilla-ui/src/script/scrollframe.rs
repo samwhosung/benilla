@@ -166,15 +166,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
             };
             // Every call marks the range (`0x786d16`), the same child again included.
-            let changed = with_scroll(lua, &this, |s| {
-                let changed = s.child != new_child;
-                s.child = new_child;
+            let old_child = with_scroll(lua, &this, |s| {
                 s.range_dirty = true;
-                changed
+                std::mem::replace(&mut s.child, new_child)
             })?;
-            if changed {
-                // The child is an input of the layout resolve, so a real change dirties it.
-                lua.app_data_mut::<Model>().expect("model").touch_layout();
+            if old_child != new_child {
+                // The child takes this frame's override anchor and the old one drops it; the
+                // ScrollFrame's node re-derives its new child with it.
+                let h = frame_handle_of(lua, &this)?;
+                let mut model = lua.app_data_mut::<Model>().expect("model");
+                model.touch_layout_frame(h);
+                if let Some(old) = old_child {
+                    model.touch_layout_frame(old);
+                }
             }
             Ok(())
         })?,
@@ -211,7 +215,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !changed {
                 return Ok(());
             }
-            lua.app_data_mut::<Model>().expect("model").touch_layout();
+            // The child's override offset: the ScrollFrame's node re-derives its child.
+            let h = frame_handle_of(lua, &this)?;
+            lua.app_data_mut::<Model>()
+                .expect("model")
+                .touch_layout_frame(h);
             fire_scroll(lua, &this, "OnVerticalScroll", px)
         })?,
     )?;
@@ -241,7 +249,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !changed {
                 return Ok(());
             }
-            lua.app_data_mut::<Model>().expect("model").touch_layout();
+            let h = frame_handle_of(lua, &this)?;
+            lua.app_data_mut::<Model>()
+                .expect("model")
+                .touch_layout_frame(h);
             fire_scroll(lua, &this, "OnHorizontalScroll", px)
         })?,
     )?;

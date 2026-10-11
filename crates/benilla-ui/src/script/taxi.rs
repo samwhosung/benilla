@@ -198,6 +198,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let art = model.taxi.as_ref().map(|t| t.art.clone());
             if let Some(art) = art {
                 model.region_data.entry(rh).or_default().texture = Some(art);
+                model.touch_layout_art(rh);
             }
             Ok(())
         })?,

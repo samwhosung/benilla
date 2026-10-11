@@ -438,8 +438,8 @@ fn a_paint_only_write_leaves_tier_one_closed() {
     assert_eq!(solves(&s), before);
 }
 
-/// A retarget patches one node's edges in the cached graph instead of re-deriving it, so the new
-/// edge must land: moving the new target moves the node, and moving the old one does not.
+/// A retarget re-derives one node's edges in the cached graph instead of the whole graph, so the
+/// new edge must land: moving the new target moves the node, and moving the old one does not.
 #[test]
 fn a_retargeted_anchor_follows_its_new_target() {
     let mut s = script();

@@ -284,7 +284,7 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot) -> mlua::Result<u32> {
                 .create_region(h, kind, layer, 0)
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
             model.region_data.insert(rh, RegionData::default());
-            model.touch_layout(); // a region entered the layout gate's read set
+            model.touch_layout_region(rh);
             if let Some(frame) = model.arena.frame_mut(h) {
                 if let KindState::Button(bs) = &mut frame.kind_state {
                     slot.set(bs, Some(rh));
@@ -418,6 +418,7 @@ fn set_slot_texture(
     if let Some(blend) = blend {
         data.blend = blend;
     }
+    model.touch_layout_art(rh);
     Ok(())
 }
 
@@ -571,8 +572,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             super::region::link_region(&mut model, rh, owner, DrawLayer::Artwork);
             adopt_label(&mut model, owner, rh);
-            // The layout's read set moved, and `GetTextWidth` reads the new label's extents.
-            model.touch_layout();
+            // A new owner, so a new scale for its node, and `GetTextWidth` reads its extents.
+            model.touch_layout_region(rh);
             model.touch_measure(rh);
             Ok(())
         })?,

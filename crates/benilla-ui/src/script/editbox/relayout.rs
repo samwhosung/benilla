@@ -58,9 +58,7 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
         data.anchors = anchors;
     }
     data.size = size;
-    if !same_anchors {
-        model.touch_layout();
-    } else if size_moved {
+    if !same_anchors || size_moved {
         model.touch_layout_region(rh);
     }
     if size_moved {

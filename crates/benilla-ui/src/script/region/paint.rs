@@ -123,7 +123,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let rh = region_handle_of(lua, &this)?;
                 // Scoped so the model borrow ends before the layout touch; the path arm drops it
                 // mid-way to call the host probe.
-                let (loaded, derived) = {
+                let loaded = {
                     let mut model = lua.app_data_mut::<Model>().expect("model");
                     // SetTexture drops any portrait mask and live-unit binding.
                     let data = model.region_data.entry(rh).or_default();
@@ -139,11 +139,6 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     if !same_path && !colour_form {
                         data.desaturated = false;
                     }
-                    // An anchored region with an axis sized 0 takes that span from its art, so a
-                    // new texture moves it; an anchorless region never resolves, so for it this
-                    // is only a paint.
-                    let derived = !data.anchors.is_empty()
-                        && data.size.is_none_or(|(w, h)| w == 0.0 || h == 0.0);
                     // Both forms write the one texture slot (`+0xcc`), a file or an 8×8 solid, so
                     // each clears the other; neither touches the vertex colour (`+0xb8`), so a
                     // tint outlives its art.
@@ -202,15 +197,13 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         }
                         _ => false,
                     };
-                    (loaded, derived)
+                    loaded
                 };
-                // Only the art-sized shape can move; touching the layout on every repaint would
-                // reopen the resolve's change gate each frame.
-                if derived {
-                    lua.app_data_mut::<Model>()
-                        .expect("model")
-                        .touch_layout_region(rh);
-                }
+                // Only the art-sized shape can move, and only a new art: touching the layout on
+                // every repaint would reopen the resolve's change gate each frame.
+                lua.app_data_mut::<Model>()
+                    .expect("model")
+                    .touch_layout_art(rh);
                 Ok(if loaded {
                     Value::Number(1.0)
                 } else {
@@ -490,6 +483,11 @@ impl crate::script::UiScript {
     /// as `CSimpleTexture::GetWidth` (`0x770720`) falls back to the texels; without one such a
     /// region stays where it was.
     pub fn set_texture_size_probe(&mut self, probe: crate::script::TextureSizeProbe) {
-        self.model_mut().texture_size_probe = Some(probe);
+        let mut model = self.model_mut();
+        model.texture_size_probe = Some(probe);
+        // Every art-sized region's span may move, and no per-node hash holds a probe's answer: a
+        // full-scope rebuild, as for a screen move.
+        model.layout_scope.invalidate();
+        model.touch_layout();
     }
 }

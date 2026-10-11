@@ -36,17 +36,16 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         let h = frame_handle_of(lua, &this)?;
         let mut model = lua.app_data_mut::<Model>().expect("model");
         // Every layout setter mutates only on a real change, so a per-frame caller setting the
-        // same value never reopens the layout gate. Clearing is a retarget to no targets.
-        let old: Option<Vec<u32>> = match model.layout_inputs.get_mut(&h) {
+        // same value never reopens the layout gate.
+        let cleared = match model.layout_inputs.get_mut(&h) {
             Some(input) if !input.anchors.is_empty() => {
-                let old = input.anchors.iter().map(|a| a.relative_to).collect();
                 input.anchors.clear();
-                Some(old)
+                true
             }
-            _ => None,
+            _ => false,
         };
-        if let Some(old) = old {
-            model.touch_layout_retarget_frame(h, &old, &[]);
+        if cleared {
+            model.touch_layout_frame(h);
         }
         Ok(())
     })?;
@@ -125,7 +124,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if !same {
                 input.anchors.clear();
                 input.anchors.extend_from_slice(&pair);
-                model.touch_layout();
+                model.touch_layout_frame(h);
             }
             Ok(())
         },
@@ -298,36 +297,11 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
             .iter()
             .any(|a| a.point == point);
     if !same_at_tail {
-        // Target lists are collected only for a retarget: the value-only change is the per-frame
-        // idiom (a dragged window) and must stay allocation-free.
-        let structural = anchor_retarget_is_structural(&input.anchors, &new);
-        let old_targets: Option<Vec<u32>> =
-            structural.then(|| input.anchors.iter().map(|a| a.relative_to).collect());
         input.anchors.retain(|a| a.point != point);
         input.anchors.push(new);
-        match old_targets {
-            None => model.touch_layout_frame(h),
-            Some(old) => {
-                let new_targets: Vec<u32> = model.layout_inputs[&h]
-                    .anchors
-                    .iter()
-                    .map(|a| a.relative_to)
-                    .collect();
-                model.touch_layout_retarget_frame(h, &old, &new_targets);
-            }
-        }
+        model.touch_layout_frame(h);
     }
     Ok(())
-}
-
-/// Whether this `SetPoint` changes the node's anchor targets, mirroring the setters' retain and
-/// push: value-only exactly when one existing anchor has this point and keeps its target.
-pub(crate) fn anchor_retarget_is_structural(anchors: &[Anchor], new: &Anchor) -> bool {
-    let mut same_point = anchors.iter().filter(|a| a.point == new.point);
-    match (same_point.next(), same_point.next()) {
-        (Some(old), None) => old.relative_to != new.relative_to,
-        _ => true,
-    }
 }
 
 /// Bit-exact anchor equality, as the layout gate's fingerprint compares, so the two always agree.

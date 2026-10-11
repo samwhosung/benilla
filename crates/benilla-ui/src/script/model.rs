@@ -119,9 +119,10 @@ pub(crate) struct Model {
     /// Tier 1 of the resolve gate: every layout write bumps it, and a resolve returns at once while
     /// it equals `layout_epoch_resolved`. Never bump it per frame: tier 2 hashes the whole UI.
     pub(crate) layout_epoch: u64,
-    /// Layout ids named by writes since the last converged resolve, each write claiming it left the
-    /// cached graph's shape alone, so a resolve seeds its dirty closure from them. `None` derives
-    /// the graph in full; `WOW_LAYOUT_VERIFY` checks every incremental pass against a full one.
+    /// Layout ids named by writes since the last converged resolve: the resolve re-derives each
+    /// in the cached graph (born, freed, re-pointed or re-valued alike) and seeds its dirty
+    /// closure from them. `None` derives the graph in full; `WOW_LAYOUT_VERIFY` checks every
+    /// incremental pass's rects and graph against a fresh derivation.
     pub(crate) layout_touched: Option<Vec<u32>>,
     /// Regions a write may have re-keyed for text measure (text, font, outline, wrap, scale) since
     /// the last sweep, which asks only these; `None` walks all. A site that forgets to name its
@@ -144,8 +145,9 @@ pub(crate) struct Model {
     /// cost, which `layout_solves` misses. Verify mode walks anyway, so assert on this only from a
     /// crate that depends on `benilla-ui`; inside this crate, assert on `layout_solves`.
     pub(crate) layout_gate_walks: u64,
-    /// Full layout-graph derivations: 0 on a steady UI, so a rise means a write fell back to
-    /// `touch_layout`. The `WOW_LAYOUT_VERIFY` re-run's derivation is not counted.
+    /// Full layout-graph derivations: 0 on a steady UI, births and frees included, so a rise means
+    /// a write named no node (`touch_layout`) or a re-derive gave up. The `WOW_LAYOUT_VERIFY`
+    /// re-run's derivation is not counted.
     pub(crate) layout_derives: u64,
     /// The last solve's width, `(frames solved, regions swept)`.
     pub(crate) layout_last_scope: (usize, usize),
@@ -1500,8 +1502,8 @@ impl Model {
         self.next_id += 1;
         self.frame_to_id.insert(h, id);
         self.id_to_frame.insert(id, h);
-        // Every creation path mints here, so a new frame always opens the layout gate.
-        self.touch_layout();
+        // Every creation path mints here, so a new frame always joins the graph.
+        self.name_layout_node(id);
         id
     }
 
@@ -1514,8 +1516,8 @@ impl Model {
         self.next_id += 1;
         self.region_to_id.insert(h, id);
         self.id_to_region.insert(id, h);
-        // A new region can join the resolve's external set, so it opens the gate too.
-        self.touch_layout();
+        // Named, so an anchored region joins the graph; an unanchored one re-derives to nothing.
+        self.name_layout_node(id);
         id
     }
 
@@ -1527,39 +1529,78 @@ impl Model {
         let changed = self.arena.frame(h).is_some_and(|f| f.scale != scale);
         self.arena.set_scale(h, scale);
         if changed {
-            self.touch_layout();
+            // The effective scale cascades down the subtree, an input of each frame's node.
+            self.touch_layout_subtree(h);
             self.touch_measure_all();
         }
     }
 
-    /// A layout write that names no node. The resolve's tooltip pre-pass must not call this, or
-    /// the gate never closes; a missed call is caught by `WOW_LAYOUT_VERIFY`.
+    /// A layout write that names no node, for what moves every node at once (the screen, every
+    /// measure): the next resolve derives the graph in full. The resolve's tooltip pre-pass must not
+    /// call this, or the gate never closes; a missed call is caught by `WOW_LAYOUT_VERIFY`.
     pub(crate) fn touch_layout(&mut self) {
-        // Naming nothing, the next resolve derives the graph in full: slow, never wrong.
         self.give_up_naming();
         self.bump_layout_epoch();
     }
 
-    /// A write that moved one region's offsets, size or measured extent, not its targets or
-    /// liveness; a region missing from the cached graph falls back to `touch_layout`.
+    /// A write to region `rh`'s layout inputs or liveness: its anchors, size, measured extent,
+    /// art or owner. Its node re-derives at the next resolve, joining or leaving the graph as it
+    /// gained or lost its anchors. An id is minted only for an anchored region, the only kind that
+    /// can be a node; an anchorless one with no id has nothing in the graph to move.
     pub(crate) fn touch_layout_region(&mut self, rh: RegionHandle) {
         match self.region_to_id.get(&rh) {
-            Some(&id) => self.touch_layout_node(id),
-            None => self.touch_layout(),
+            Some(&id) => self.name_layout_node(id),
+            None if self
+                .region_data
+                .get(&rh)
+                .is_some_and(|d| !d.anchors.is_empty()) =>
+            {
+                self.region_id(rh); // mints and names
+            }
+            None => self.bump_layout_epoch(),
         }
     }
 
-    /// The same for a frame: an anchor offset or size, nothing that moves an edge or the roster.
+    /// A write to region `rh`'s art, its texture or solid fill: a layout input only where an
+    /// anchored region takes an axis authored 0 from it ([`super::layout::content_span`]), and
+    /// named only when it moved the node's hash, so a repaint of the same art leaves the gate shut.
+    pub(crate) fn touch_layout_art(&mut self, rh: RegionHandle) {
+        let Some(d) = self.region_data.get(&rh) else {
+            return;
+        };
+        if d.anchors.is_empty() || d.size.is_some_and(|(w, h)| w != 0.0 && h != 0.0) {
+            return;
+        }
+        if let Some(&id) = self.region_to_id.get(&rh) {
+            let owner = self
+                .arena
+                .region(rh)
+                .and_then(|r| self.frame_to_id.get(&r.owner).copied());
+            if self
+                .layout_scope
+                .holds(id, super::layout::region_node_hash(d, owner))
+            {
+                return;
+            }
+        }
+        self.touch_layout_region(rh);
+    }
+
+    /// The same for frame `h`: its anchors, size, scale, clamp or scroll override.
     pub(crate) fn touch_layout_frame(&mut self, h: FrameHandle) {
         match self.frame_to_id.get(&h) {
-            Some(&id) => self.touch_layout_node(id),
-            None => self.touch_layout(),
+            Some(&id) => self.name_layout_node(id),
+            None if self.arena.frame(h).is_some() => {
+                self.frame_id(h); // mints and names
+            }
+            None => self.bump_layout_epoch(),
         }
     }
 
-    /// A `SetParent` under `root`: only the subtree's scale moves, as anchor targets are ids fixed
-    /// at `SetPoint`. Addon pools reparent hundreds of frames a redraw, so this stays precise.
-    pub(crate) fn touch_layout_reparent(&mut self, root: FrameHandle) {
+    /// Every frame under `root`, inclusive, for a write that moves the effective scale down a
+    /// subtree (`SetParent`, `SetScale`); anchor targets are ids fixed at `SetPoint`, so only the
+    /// scale moves. Addon pools reparent hundreds of frames a redraw, so this stays precise.
+    pub(crate) fn touch_layout_subtree(&mut self, root: FrameHandle) {
         let mut subtree = vec![root];
         let mut at = 0;
         while at < subtree.len() {
@@ -1569,50 +1610,8 @@ impl Model {
                 subtree.extend(f.children.iter().copied());
             }
         }
-        // Write the new scale here: only a full derivation syncs it, and a named node skips that.
-        let Model {
-            arena,
-            layout_inputs,
-            ..
-        } = self;
-        for &h in &subtree {
-            if let Some(f) = arena.frame(h) {
-                layout_inputs.entry(h).or_default().scale = f.effective_scale;
-            }
-        }
         for h in subtree {
             self.touch_layout_frame(h);
-        }
-    }
-
-    /// A write changed frame `h`'s anchor targets; `old` and `new` are its full target lists, so
-    /// the cached edges are re-pointed. Falls back to `touch_layout` when the scope refuses.
-    pub(crate) fn touch_layout_retarget_frame(&mut self, h: FrameHandle, old: &[u32], new: &[u32]) {
-        match self.frame_to_id.get(&h).copied() {
-            // Already conservative: the next resolve rebuilds every edge, so patching is wasted.
-            Some(id)
-                if self.layout_touched.is_some() && self.layout_scope.retarget(id, old, new) =>
-            {
-                self.touch_layout_node(id);
-            }
-            _ => self.touch_layout(),
-        }
-    }
-
-    /// `touch_layout_retarget_frame` for a region.
-    pub(crate) fn touch_layout_retarget_region(
-        &mut self,
-        rh: RegionHandle,
-        old: &[u32],
-        new: &[u32],
-    ) {
-        match self.region_to_id.get(&rh).copied() {
-            Some(id)
-                if self.layout_touched.is_some() && self.layout_scope.retarget(id, old, new) =>
-            {
-                self.touch_layout_node(id);
-            }
-            _ => self.touch_layout(),
         }
     }
 
@@ -1633,7 +1632,7 @@ impl Model {
     pub(crate) fn note_layout_frame_write(&mut self, h: FrameHandle) {
         if self.layout_touched.is_some() {
             match self.frame_to_id.get(&h) {
-                Some(&id) if self.layout_scope.has_node(id) => {
+                Some(&id) => {
                     self.layout_touched
                         .as_mut()
                         .expect("checked above")
@@ -1648,7 +1647,7 @@ impl Model {
     pub(crate) fn note_layout_region_write(&mut self, rh: RegionHandle) {
         if self.layout_touched.is_some() {
             match self.region_to_id.get(&rh) {
-                Some(&id) if self.layout_scope.has_node(id) => {
+                Some(&id) => {
                     self.layout_touched
                         .as_mut()
                         .expect("checked above")
@@ -1659,14 +1658,12 @@ impl Model {
         }
     }
 
-    /// Names `id` as what this write moved, if the cached graph has it and naming is still on.
-    fn touch_layout_node(&mut self, id: u32) {
-        let in_graph = self.layout_scope.has_node(id);
-        match &mut self.layout_touched {
-            // Already conservative: a precise touch cannot un-say an imprecise one.
-            None => {}
-            Some(_) if !in_graph => self.give_up_naming(),
-            Some(list) => list.push(id),
+    /// Names layout id `id` as what this write moved, while naming is still on, whether or not
+    /// the cached graph holds it yet: the resolve re-derives it either way.
+    pub(crate) fn name_layout_node(&mut self, id: u32) {
+        // Already conservative: a precise touch cannot un-say an imprecise one.
+        if let Some(list) = &mut self.layout_touched {
+            list.push(id);
         }
         self.bump_layout_epoch();
     }

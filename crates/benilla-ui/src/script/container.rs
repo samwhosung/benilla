@@ -474,6 +474,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             data.texture = path;
             data.circular = true;
             data.portrait_unit = None;
+            model.touch_layout_art(rh);
             Ok(())
         })?,
     )?;

@@ -26,6 +26,7 @@ mod host_state;
 mod input;
 mod keyboard;
 mod layout_gate;
+mod layout_structure;
 mod measure;
 mod minimap;
 mod model_clock;

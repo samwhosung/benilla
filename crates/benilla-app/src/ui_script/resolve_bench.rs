@@ -73,6 +73,19 @@ fn app_frame_ticked(s: &mut UiScript, dt: f32) {
     s.resolve();
 }
 
+/// A forced rebuild counts a derivation: the positive control behind every zero asserted on
+/// `layout_derivations`, now that births derive nothing.
+fn derivations_move(s: &mut UiScript) {
+    let before = s.layout_derivations();
+    s.force_full_layout_resolve();
+    s.resolve();
+    assert!(
+        s.layout_derivations() > before,
+        "a forced rebuild must count a derivation — reading zero means `layout_derivations` never \
+         moves and every zero asserted on it is vacuous"
+    );
+}
+
 /// A tooltip whose lines change width every call, as in a hover sweep across a bag grid.
 fn install_changing_tooltip(s: &UiScript, owner: &str, func: &str) {
     s.run(&format!(
@@ -267,8 +280,7 @@ fn a_region_moving_every_frame_costs_one_gate_walk_on_the_shipped_ui() {
 
 /// Those walks cost zero derivations of the layout graph: a moving region names its node, so the
 /// resolve re-hashes one node, not the roster; a derivation per frame means a write site fell back
-/// to the conservative `touch_layout`. The VM ticks, so the shipped handlers are held to it too,
-/// and a birth must derive, which proves the counter moves.
+/// to the conservative `touch_layout`. The VM ticks, so the shipped handlers are held to it too.
 #[test]
 fn a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui() {
     benilla_formats::wow_data_or_skip!();
@@ -290,18 +302,18 @@ fn a_region_moving_every_frame_costs_no_graph_derivation_on_the_shipped_ui() {
     )
     .unwrap();
 
-    // Positive control: a birth moves the roster, so it must derive.
+    // Births join the cached graph without a derivation.
     let born_at = s.layout_derivations();
     for _ in 0..6 {
         s.run("bench_spark2_frame()").unwrap();
         app_frame_ticked(&mut s, 1.0 / 144.0);
     }
-    assert!(
-        s.layout_derivations() > born_at,
-        "creating a frame and a texture must derive the graph — a birth moves the roster, which \
-         is the one thing the per-node ledger cannot describe. Reading zero here means \
-         `layout_derivations` never moves and the assertion below is vacuous."
+    assert_eq!(
+        s.layout_derivations() - born_at,
+        0,
+        "creating a frame and a texture derived the layout graph: a birth names its nodes, which join the cached graph"
     );
+    derivations_move(&mut s);
 
     let derives_before = s.layout_derivations();
     let walks_before = s.layout_gate_walks();
@@ -435,17 +447,18 @@ fn a_tooltip_line_flipping_wrapped_to_plain_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // Positive control: the owner's birth and the line pool's growth move the roster and derive.
+    // Births join the cached graph without a derivation.
     let born_at = s.layout_derivations();
     for _ in 0..8 {
         s.run("flip_change()").unwrap();
         app_frame(&mut s);
     }
-    assert!(
-        s.layout_derivations() > born_at,
-        "creating the owner and growing the tooltip's line pool must derive the graph — reading \
-         zero here means `layout_derivations` never moves and the assertion below is vacuous."
+    assert_eq!(
+        s.layout_derivations() - born_at,
+        0,
+        "creating the owner and growing the line pool derived the layout graph: a birth names its nodes, which join the cached graph"
     );
+    derivations_move(&mut s);
 
     let derives_before = s.layout_derivations();
     for _ in 0..10 {
@@ -493,17 +506,18 @@ fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // Positive control: twelve births and the line pool's growth move the roster and derive.
+    // Births join the cached graph without a derivation.
     let born_at = s.layout_derivations();
     for _ in 0..40 {
         s.run("sweep_change()").unwrap();
         app_frame(&mut s);
     }
-    assert!(
-        s.layout_derivations() > born_at,
-        "creating twelve owners and growing the line pool must derive the graph — reading zero \
-         here means `layout_derivations` never moves and the assertion below proves nothing."
+    assert_eq!(
+        s.layout_derivations() - born_at,
+        0,
+        "creating twelve owners and growing the line pool derived the layout graph: a birth names its nodes, which join the cached graph"
     );
+    derivations_move(&mut s);
 
     // Two laps of the twelve owners: every step re-hovers a button the graph already knows.
     let derives_before = s.layout_derivations();
@@ -515,9 +529,9 @@ fn a_hover_sweep_across_owners_costs_no_graph_derivation() {
     assert_eq!(
         derives, 0,
         "24 hovers across 12 owners derived the layout graph {derives} times — one per slot \
-         crossed. `SetOwner` re-points ONE node's anchor and must patch that node's edges \
-         (`Model::touch_layout_retarget_frame`); the conservative touch re-derives the whole \
-         roster on every slot the cursor passes over."
+         crossed. `SetOwner` re-points ONE node's anchor and must name that node \
+         (`Model::touch_layout_frame`), whose edges re-derive in the cached graph; the \
+         conservative touch re-derives the whole roster on every slot the cursor passes over."
     );
 }
 
@@ -556,16 +570,18 @@ fn an_action_bar_hover_sweep_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // Positive control: the births and the line pool's growth are structural.
+    // Births join the cached graph without a derivation.
     let born_at = s.layout_derivations();
     for _ in 0..40 {
         s.run("bar_hover()").unwrap();
         app_frame(&mut s);
     }
-    assert!(
-        s.layout_derivations() > born_at,
-        "creating twelve buttons must derive the graph — zero here makes the assertion vacuous."
+    assert_eq!(
+        s.layout_derivations() - born_at,
+        0,
+        "creating twelve buttons derived the layout graph: a birth names its nodes, which join the cached graph"
     );
+    derivations_move(&mut s);
 
     let derives_before = s.layout_derivations();
     for _ in 0..24 {
@@ -623,16 +639,18 @@ fn a_bag_addon_hover_sweep_costs_no_graph_derivation() {
     )
     .unwrap();
 
-    // Positive control: the births and the line pool's growth are structural.
+    // Births join the cached graph without a derivation.
     let born_at = s.layout_derivations();
     for _ in 0..40 {
         s.run("bag_hover()").unwrap();
         app_frame(&mut s);
     }
-    assert!(
-        s.layout_derivations() > born_at,
-        "creating twelve slots must derive the graph — zero here makes the assertion vacuous."
+    assert_eq!(
+        s.layout_derivations() - born_at,
+        0,
+        "creating twelve slots derived the layout graph: a birth names its nodes, which join the cached graph"
     );
+    derivations_move(&mut s);
 
     let derives_before = s.layout_derivations();
     for _ in 0..24 {
@@ -646,4 +664,65 @@ fn a_bag_addon_hover_sweep_costs_no_graph_derivation() {
          `ClearAllPoints` drops a node's whole anchor-target set, which is a retarget onto the \
          EMPTY set and names its node like any other."
     );
+}
+
+/// What one structural change costs on the full shipped UI, per run, resolve and extract: a no-op,
+/// a `SetWidth`, a `CreateTexture`, a `CreateFrame` and a backdrop rebuild, each as the mean of
+/// 200, with the graph derivations it paid beside it.
+#[test]
+#[ignore = "bench, run explicitly"]
+fn structural_change_costs() {
+    let mut s = settled_default_ui();
+    s.run(
+        r#"
+        BenchHost = CreateFrame("Frame", "BenchHost", UIParent)
+        BenchHost:SetPoint("CENTER", 0, 0); BenchHost:SetWidth(200); BenchHost:SetHeight(100)
+        bench_n = 0
+        bench_spec = { bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16,
+            edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 } }
+        "#,
+    )
+    .unwrap();
+    for _ in 0..4 {
+        app_frame(&mut s);
+    }
+    let cases: [(&str, &str); 5] = [
+        ("no-op", "bench_n = bench_n + 1"),
+        (
+            "SetWidth",
+            "bench_n = bench_n + 1; BenchHost:SetWidth(200 + math.mod(bench_n, 2))",
+        ),
+        (
+            "CreateTexture",
+            "bench_n = bench_n + 1; local t = BenchHost:CreateTexture(nil, 'ARTWORK'); \
+             t:SetWidth(4); t:SetHeight(4); t:SetPoint('TOPLEFT', BenchHost, 'TOPLEFT', \
+             math.mod(bench_n, 50), 0)",
+        ),
+        (
+            "CreateFrame",
+            "bench_n = bench_n + 1; local f = CreateFrame('Frame', nil, BenchHost); \
+             f:SetWidth(4); f:SetHeight(4); f:SetPoint('TOPLEFT', BenchHost, 'TOPLEFT', \
+             math.mod(bench_n, 50), 0)",
+        ),
+        (
+            "SetBackdrop",
+            "bench_n = bench_n + 1; BenchHost:SetBackdrop(bench_spec)",
+        ),
+    ];
+    const N: u32 = 200;
+    for (name, lua) in cases {
+        let d0 = s.layout_derivations();
+        let t = Instant::now();
+        for _ in 0..N {
+            s.run(lua).unwrap();
+            app_frame(&mut s);
+            std::hint::black_box(s.extract());
+        }
+        println!(
+            "STRUCT {name:<14} {:.3} ms/iter  derivations/iter={:.2}",
+            ms(t) / f64::from(N),
+            (s.layout_derivations() - d0) as f64 / f64::from(N),
+        );
+    }
 }

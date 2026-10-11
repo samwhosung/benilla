@@ -586,8 +586,12 @@ impl Plate {
         raid_data.anchors = vec![Anchor::new(Point::Right, plate_id, Point::Left, 0.0, 0.0)];
         raid_data.size = Some((g.raid_size, g.raid_size));
 
-        // The first lay-out adds anchor targets, so the full touch; once per geometry change.
-        model.touch_layout();
+        // Once per geometry change: each node it wrote re-derives.
+        model.touch_layout_frame(frame);
+        model.touch_layout_frame(bar);
+        for rh in [border, glow, name, level, skull, raid] {
+            model.touch_layout_region(rh);
+        }
         model.nameplates.plates[i].laid_out = Some(g);
     }
 
@@ -606,16 +610,11 @@ impl Plate {
         let last = p.last.clone();
         let world_id = model.frame_id(world);
 
-        // Re-seated whenever it moves, as the reference does (`0x509ec0`). A moved offset keeps
-        // the graph's edges, so the precise touch; the first seat adds an edge, so the retarget.
+        // Re-seated whenever it moves, as the reference does (`0x509ec0`).
         if last
             .as_ref()
             .is_none_or(|l| l.top_centre != state.top_centre)
         {
-            let fresh = model
-                .layout_inputs
-                .get(&frame)
-                .is_none_or(|i| i.anchors.is_empty());
             let input = model.layout_inputs.entry(frame).or_default();
             input.anchors = vec![Anchor::new(
                 Point::Top,
@@ -624,11 +623,7 @@ impl Plate {
                 state.top_centre.0,
                 state.top_centre.1,
             )];
-            if fresh {
-                model.touch_layout_retarget_frame(frame, &[], &[world_id]);
-            } else {
-                model.touch_layout_frame(frame);
-            }
+            model.touch_layout_frame(frame);
         }
 
         if last.is_none() {

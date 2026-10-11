@@ -152,7 +152,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     let changed = !d.anchors.is_empty();
                     d.anchors.clear();
                     if changed {
-                        model.touch_layout();
+                        model.touch_layout_region(rh);
                     }
                     model.region_id(rh)
                 };

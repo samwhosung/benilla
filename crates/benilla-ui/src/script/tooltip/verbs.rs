@@ -241,7 +241,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 d.justify.set_h(crate::script::JustifyH::Right);
                 d.anchors = vec![Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)];
             }
-            model.touch_layout(); // two line rows entered the layout graph
+            model.touch_layout_region(lh); // two line rows entered the layout graph
+            model.touch_layout_region(rh);
             let t = tip_mut(&mut model, h)?;
             t.left_lines.push(lh);
             t.right_lines.push(rh);

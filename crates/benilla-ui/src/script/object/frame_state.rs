@@ -346,7 +346,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 model.arena.reparent_finish(h, new_parent);
                 // A reparent moves the subtree's effective scale, a layout input and part of every
                 // descendant FontString's measure key.
-                model.touch_layout_reparent(h);
+                model.touch_layout_subtree(h);
                 model.touch_measure_all();
             }
             if was_visible {
@@ -676,7 +676,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let changed = model.arena.is_clamped_to_screen(h) != clamp;
             model.arena.set_clamped_to_screen(h, clamp);
             if changed {
-                model.touch_layout();
+                model.touch_layout_frame(h);
             }
             Ok(())
         })?,

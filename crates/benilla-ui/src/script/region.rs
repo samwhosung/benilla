@@ -4,9 +4,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::object::anchor_args::{parse_set_point, resolve_rel_target, UNNAMED};
-use super::object::{
-    anchor_bits_eq, anchor_retarget_is_structural, decode_id, id_to_lud, NamedTarget,
-};
+use super::object::{anchor_bits_eq, decode_id, id_to_lud, NamedTarget};
 use super::region_map::{set_shared, Side};
 use super::{
     Model, REG_FONTSTRING_META, REG_FONTSTRING_METHODS, REG_REGION_META, REG_REGION_METHODS,
@@ -80,7 +78,7 @@ pub(super) fn link_region(
 ) {
     if model.arena.set_region_owner(rh, Some(owner)) {
         // The owner supplies the region's scale to layout, so a re-link is a layout change.
-        model.touch_layout();
+        model.touch_layout_region(rh);
     }
     if let Some(r) = model.arena.region_mut(rh) {
         r.draw_layer = layer;
@@ -123,7 +121,11 @@ pub(super) fn install_into_slot(
     if let Some(f) = model.arena.frame_mut(owner) {
         set(&mut f.kind_state, incoming);
     }
-    model.touch_layout();
+    // The displaced region's free named its node; the incoming one re-derives with its new owner
+    // and points.
+    if let Some(rh) = incoming {
+        model.touch_layout_region(rh);
+    }
     Ok(true)
 }
 
@@ -175,6 +177,7 @@ pub(super) fn clear_texture(model: &mut Model, rh: RegionHandle) {
     data.texture = None;
     data.fill = None;
     data.portrait_unit = None;
+    model.touch_layout_art(rh);
 }
 
 /// Apply the font parts an XML element supplies (`font=`, `<FontHeight>`, `outline=`), any of
@@ -265,6 +268,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             data.texture = None;
             data.fill = None;
             data.circular = true;
+            model.touch_layout_art(rh);
             Ok(())
         })?,
     )?;
@@ -287,6 +291,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             data.texture = Some(path);
             data.circular = true;
             data.portrait_unit = None;
+            model.touch_layout_art(rh);
             Ok(())
         })?,
     )?;
@@ -421,7 +426,7 @@ fn install_region_methods(lua: &Lua) -> mlua::Result<()> {
             };
             if model.arena.set_region_owner(rh, new_owner) {
                 // The owner supplies the region's scale to layout, so a re-link is a layout change.
-                model.touch_layout();
+                model.touch_layout_region(rh);
             }
             Ok(())
         },
@@ -566,18 +571,14 @@ pub(super) fn region_type_name(model: &Model, rh: RegionHandle) -> &'static str 
 /// wrapper raises as stale; the reference frees too, as `CSimpleButton::SetFontString 0x778d20`
 /// deletes the label it replaces.
 pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
-    release_region(model, rh);
-    // A removed node takes its edges with it: a structural change, so the full touch.
-    model.touch_layout();
-}
-
-/// [`free_region`] without its layout touch, for a caller that frees several and touches once.
-pub(crate) fn release_region(model: &mut Model, rh: RegionHandle) {
     model.region_data.remove(&rh);
     model.region_resolved.remove(&rh);
     if let Some(id) = model.region_to_id.remove(&rh) {
         model.id_to_region.remove(&id);
         model.region_names.retain(|_, v| *v != id);
+        // Its node leaves the cached graph with its edges at the next resolve, and whatever
+        // anchored to it re-resolves without it.
+        model.name_layout_node(id);
     }
     model.arena.destroy_region(rh);
 }
@@ -618,7 +619,7 @@ pub(crate) fn implicit_creation_anchor(model: &mut Model, rh: RegionHandle) {
         }
         RegionKind::Title => return,
     }
-    model.touch_layout();
+    model.touch_layout_region(rh);
 }
 
 /// The middle-row point a justify word selects, as the FontString post-step (`0x771480`) and the
@@ -647,7 +648,7 @@ pub(crate) fn anchor_unanchored_at(
         return;
     }
     data.anchors = vec![Anchor::new(point, owner_id, point, 0.0, 0.0)];
-    model.touch_layout();
+    model.touch_layout_region(rh);
 }
 
 /// [`implicit_creation_anchor`] for the loader, which holds region wrappers.
@@ -708,23 +709,9 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
             .iter()
             .any(|a| a.point == point);
     if !same_at_tail {
-        // The same targets are a value change on this node; a moved target set is a retarget.
-        let structural = anchor_retarget_is_structural(&data.anchors, &new);
-        let old_targets: Option<Vec<u32>> =
-            structural.then(|| data.anchors.iter().map(|a| a.relative_to).collect());
         data.anchors.retain(|a| a.point != point);
         data.anchors.push(new);
-        match old_targets {
-            None => model.touch_layout_region(rh),
-            Some(old) => {
-                let new_targets: Vec<u32> = model.region_data[&rh]
-                    .anchors
-                    .iter()
-                    .map(|a| a.relative_to)
-                    .collect();
-                model.touch_layout_retarget_region(rh, &old, &new_targets);
-            }
-        }
+        model.touch_layout_region(rh);
     }
     Ok(())
 }

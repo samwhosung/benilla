@@ -193,7 +193,7 @@ pub(super) fn ensure_font_region(
     let mut data = crate::script::RegionData::default();
     data.justify.set_h(JustifyH::Left);
     model.region_data.insert(rh, data);
-    model.touch_layout();
+    model.touch_layout_region(rh);
     Some(rh)
 }
 

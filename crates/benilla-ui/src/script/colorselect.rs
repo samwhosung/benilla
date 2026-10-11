@@ -115,7 +115,7 @@ fn ensure_slot(lua: &Lua, this: &Table, slot: Slot, layer: Option<DrawLayer>) ->
                 .create_region(h, RegionKind::Texture, layer.unwrap_or(slot.layer()), 0)
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
             model.region_data.insert(rh, RegionData::default());
-            model.touch_layout(); // a region entered the layout gate's read set
+            model.touch_layout_region(rh);
             if let Some(frame) = model.arena.frame_mut(h) {
                 if let KindState::ColorSelect(s) = &mut frame.kind_state {
                     slot.set(s, rh);
@@ -225,6 +225,7 @@ fn install_slot_texture(
                 // The empty form: the region now exists and stays file-less.
                 _ => {}
             }
+            model.touch_layout_art(rh);
             Ok(())
         })?,
     )?;

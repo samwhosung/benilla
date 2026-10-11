@@ -461,7 +461,7 @@ fn ensure_text_region_in(model: &mut Model, h: FrameHandle) -> Option<RegionHand
         };
         apply_text_region_justify(&mut data, multi_line);
         slot.insert(data);
-        model.touch_layout(); // a region entered the layout gate's read set
+        model.touch_layout_region(rh);
     }
     if let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
         eb.text_region = Some(rh);

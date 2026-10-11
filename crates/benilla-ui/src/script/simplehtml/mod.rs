@@ -318,8 +318,11 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
         }
     }
 
+    // Each new block joins the graph; the old ones' frees named theirs.
+    for &rh in &made {
+        model.touch_layout_region(rh);
+    }
     model.simple_html.entry(fh).or_default().blocks = made;
-    model.touch_layout();
 }
 
 /// A block's anchor (`SetPoint` `0x767c70`): block 0 to the frame, block N to the previous text
