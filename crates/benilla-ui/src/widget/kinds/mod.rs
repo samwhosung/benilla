@@ -943,6 +943,20 @@ impl ButtonState {
         }
     }
 
+    /// The shown bit (`+0xc4`) of a state or checked texture, which the state switch writes for
+    /// the one that shows (`0x7797ea`, `0x785538`) and clears on the rest: `None` for every other
+    /// region, whose bit is its own `Show`/`Hide` alone.
+    pub fn state_region_shown(&self, rh: RegionHandle) -> Option<bool> {
+        let some = Some(rh);
+        if some == self.normal || some == self.pushed || some == self.disabled {
+            return Some(some == self.shown);
+        }
+        if some == self.checked_tex || some == self.disabled_checked {
+            return Some(self.region_visible(rh, false));
+        }
+        None
+    }
+
     /// Whether a region of this button draws: a state texture only when shown, the highlight
     /// while hovered or locked, the checked pair by their rule, anything else always.
     pub fn region_visible(&self, rh: RegionHandle, hovered: bool) -> bool {

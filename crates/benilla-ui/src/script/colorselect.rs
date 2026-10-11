@@ -146,7 +146,7 @@ fn install_slot(
         return Err(mlua::Error::runtime("not a ColorSelect"));
     }
     let thumb = matches!(slot, Slot::WheelThumb | Slot::ValueThumb);
-    install_into_slot(
+    let changed = install_into_slot(
         &mut model,
         h,
         incoming,
@@ -162,7 +162,8 @@ fn install_slot(
             }
         },
     )?;
-    if let (Some(rh), false) = (incoming, thumb) {
+    // The same texture returned at the first compare (`0x78b598`) and keeps what it was set to.
+    if let (true, Some(rh), false) = (changed, incoming, thumb) {
         super::region::clear_texture(&mut model, rh);
     }
     Ok(())

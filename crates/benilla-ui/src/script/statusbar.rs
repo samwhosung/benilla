@@ -121,6 +121,7 @@ fn install_bar(
             }
         },
     )
+    .map(|_| ())
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {

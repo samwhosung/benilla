@@ -111,6 +111,7 @@ fn install_thumb(lua: &Lua, this: &Table, incoming: Option<RegionHandle>) -> mlu
             }
         },
     )
+    .map(|_| ())
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
