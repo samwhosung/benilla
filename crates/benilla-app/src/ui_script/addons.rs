@@ -1233,7 +1233,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         let root = tmp.join("AddOns");
         std::fs::create_dir_all(root.join("!Probe/astrolabe")).unwrap();
-        std::fs::write(root.join("!Probe/astrolabe/astrolabe.lua"), "Astrolabe = {}").unwrap();
+        std::fs::write(
+            root.join("!Probe/astrolabe/astrolabe.lua"),
+            "Astrolabe = {}",
+        )
+        .unwrap();
         let addon = Addon {
             name: "!Probe".into(),
             toc: Toc::default(),
