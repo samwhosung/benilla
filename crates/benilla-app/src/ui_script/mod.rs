@@ -122,6 +122,12 @@ pub(crate) struct UiKeyboardCapture {
 #[derive(Resource, Default)]
 pub(crate) struct PlayerUiClickConsumed(pub(crate) bool);
 
+/// A press the UI consumed this frame, whatever is under the pointer: the layout drag's press
+/// returns at `0x766353`–`0x76635b`, before any frame, the world frame included, sees it, so the
+/// world latch takes no press this frame even with no UI frame hovered.
+#[derive(Resource, Default)]
+pub(crate) struct PlayerUiPressConsumed(pub(crate) bool);
+
 /// Whether the cursor carries a payload, a `Send` mirror. A click on sky with one held never
 /// deselects: the reference gates its nothing-leg `SetSelection(0,0)` on no payload (`0x492d30`).
 #[derive(Resource, Default)]
@@ -298,6 +304,7 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<PlayerUiHover>()
             .init_resource::<UiKeyboardCapture>()
             .init_resource::<PlayerUiClickConsumed>()
+            .init_resource::<PlayerUiPressConsumed>()
             .init_resource::<CursorPayloadHeld>()
             .init_resource::<UiClock>()
             .init_resource::<AddOnIdentity>()

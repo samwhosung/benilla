@@ -708,6 +708,9 @@ pub(super) fn latch_world_mouse(
     // ground-targeting veto (`+0x3c`, `0x7cba30`) arrives through `PointerOverUi`
     // (`UiScript::set_nameplate_hit_test_veto`). The wheel still zooms over a plate.
     pointer_over_ui: Res<crate::ui_script::PointerOverUi>,
+    // A press the UI consumed with nothing hovered, the layout drag's: no frame saw it, the
+    // world's included (`0x766353`).
+    press_consumed: Option<Res<crate::ui_script::PlayerUiPressConsumed>>,
     mut rig: ResMut<CameraControl>,
     cameras: Query<&Camera, With<FlyCam>>,
     window: Single<&Window, With<PrimaryWindow>>,
@@ -721,7 +724,7 @@ pub(super) fn latch_world_mouse(
     let Ok(camera) = cameras.single() else {
         return;
     };
-    let over_ui = pointer_over_ui.0;
+    let over_ui = pointer_over_ui.0 || press_consumed.is_some_and(|c| c.0);
     let world_press = rig.look.is_some() || (cursor_in_viewport(&window, camera) && !over_ui);
     let wm = &mut rig.world_mouse;
     wm.update(&buttons, world_press);

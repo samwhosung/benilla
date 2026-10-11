@@ -9,7 +9,10 @@ use bevy::window::PrimaryWindow;
 
 use benilla_ui::script::UiScript;
 
-use super::{CursorPayloadHeld, PlayerUiClickConsumed, PlayerUiHover, UiKeyboardCapture};
+use super::{
+    CursorPayloadHeld, PlayerUiClickConsumed, PlayerUiHover, PlayerUiPressConsumed,
+    UiKeyboardCapture,
+};
 use crate::bindings::WheelNotches;
 use crate::textinput::{self, keymap, HostClipboard};
 
@@ -20,6 +23,7 @@ use crate::textinput::{self, keymap, HostClipboard};
 pub(super) struct PointerFeed<'w> {
     hover: ResMut<'w, PlayerUiHover>,
     click_consumed: ResMut<'w, PlayerUiClickConsumed>,
+    press_consumed: ResMut<'w, PlayerUiPressConsumed>,
     hovered: Res<'w, crate::target::Hovered>,
     hovered_object: Res<'w, crate::target::HoveredObject>,
     occlusion: Res<'w, crate::target::PickOcclusion>,
@@ -101,12 +105,14 @@ pub(super) fn feed_ui_input(
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
     // would disarm the probe's gesture between its press and release.
     let synthetic = pointer.synthetic.0 || pointer.capture_pinned.0;
-    let (hover, click_consumed, payload_held) = (
+    let (hover, click_consumed, press_consumed, payload_held) = (
         &mut pointer.hover,
         &mut pointer.click_consumed,
+        &mut pointer.press_consumed,
         &mut pointer.payload_held,
     );
     click_consumed.0 = false;
+    press_consumed.0 = false;
     let Some(mut script) = script else {
         capture.typing = false;
         capture.arrows_fall_through = false;
@@ -183,7 +189,8 @@ pub(super) fn feed_ui_input(
                         click_consumed.0 = true;
                     }
                 }
-                script.mouse_button(x, y, name, true);
+                // A press the UI consumed is not the world's, hovered frame or not.
+                press_consumed.0 |= script.mouse_button(x, y, name, true);
             }
             if buttons.just_released(btn) {
                 script.mouse_button(x, y, name, false);
