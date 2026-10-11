@@ -37,9 +37,9 @@ fn leave_class(model: &Model, h: FrameHandle) -> LeaveClass {
 
 /// A frame's leave notify, by its class, around its `OnLeave`; `script` is the id whose `OnLeave`
 /// fires, `None` where the notify skips it (a disabled Button's `0x7794e0`). The walk's motion
-/// leave and the removal tail's leave (`0x764cce`) both come here. The notify's own argument (0 or
-/// 1) only clears the drag arm (`0x76b725`); `OnLeave` runs through the plain runner (`0x76b753` →
-/// `0x702690`), which sets no arg global.
+/// leave and the removal tail's leave (`0x764cce`) both come here. The notify's own argument, 0 for
+/// a motion leave and 1 for a removal, only clears the drag arm (`0x76b725`); `OnLeave` runs
+/// through the plain runner (`0x76b753` → `0x702690`), which sets no arg global.
 pub(super) fn leave(lua: &Lua, h: FrameHandle, script: Option<u32>) {
     let class = leave_class(&model(lua), h);
     match class {
