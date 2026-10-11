@@ -221,3 +221,25 @@ fn the_context_is_restored_after_an_addon_loads() {
     assert!(lines.is_empty(), "{lines:?}");
     assert_eq!(width_through(&s, "DupTemplate"), 20.0);
 }
+
+/// A top-level `virtual` element with no name, or an empty one (the first-byte test at
+/// `0x6ee1a9`), is reported as `"Unnamed virtual node at top level"` (`0x871020`) at severity 1
+/// into the document's record (`0x6ee1c4`-`0x6ee1cf`), in document order, and registers nothing.
+#[test]
+fn an_unnamed_virtual_node_is_reported_into_the_load_log() {
+    let s = script();
+    let xml = r#"<Ui>
+        <Frame virtual="true"/>
+        <Frame name="" virtual="true"/>
+        <Frame name="NamedTemplate" virtual="true"/>
+    </Ui>"#;
+    let report = load(&s, &framexml::parse(xml).unwrap(), &|_| None);
+    let unnamed = "Unnamed virtual node at top level";
+    assert_eq!(report.status.lines(), [unnamed, unnamed]);
+    assert_eq!(report.warnings, [unnamed, unnamed]);
+    let mut parent = crate::status::Status::default();
+    report
+        .status
+        .close_into(&mut parent, false, "++ Loading file X".into());
+    assert_eq!(parent.lines(), ["++ Loading file X", unnamed, unnamed]);
+}
