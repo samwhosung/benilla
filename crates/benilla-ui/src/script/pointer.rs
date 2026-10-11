@@ -464,9 +464,34 @@ impl UiScript {
         // the hover frame, so a press on A released over B fires `OnMouseUp` on A, and a press
         // that captured nothing fires nothing (`0x766498`). A resize grip dragged out from under
         // the cursor still gets its `OnMouseUp`, so its resize ends.
-        let script = if down { "OnMouseDown" } else { "OnMouseUp" };
-        if let Some(id) = if down { press_id } else { captured_id } {
-            if let Err(e) = event::fire_widget_handler(&self.lua, id, script, vec![btn.clone()]) {
+        //
+        // The frame's mouse-up `0x76c040` runs the drag leg first: a release of a button the frame
+        // is registered to drag (`0x76c050`), with the drag started (`0x76c055`), fires
+        // `OnDragStop` (`0x76c06e`) and the hover frame's `OnReceiveDrag` (`0x76c081`) and returns
+        // 1 (`0x76c08f`) before the `OnMouseUp` leg (`0x76c099`). So a drag release fires no
+        // `OnMouseUp`; a release of a button the frame does not drag, or of a drag that never
+        // started, still does.
+        if down {
+            if let Some(id) = press_id {
+                if let Err(e) =
+                    event::fire_widget_handler(&self.lua, id, "OnMouseDown", vec![btn.clone()])
+                {
+                    self.push_error(e);
+                }
+            }
+        } else if let Some(release) = drag_release.as_ref().filter(|r| r.started) {
+            self.fire_drag_stop(release.source);
+            if let Some(id) = hit_id {
+                if let Err(e) =
+                    event::fire_widget_handler(&self.lua, id, "OnReceiveDrag", Vec::new())
+                {
+                    self.push_error(e);
+                }
+            }
+        } else if let Some(id) = captured_id {
+            if let Err(e) =
+                event::fire_widget_handler(&self.lua, id, "OnMouseUp", vec![btn.clone()])
+            {
                 self.push_error(e);
             }
         }
@@ -523,16 +548,6 @@ impl UiScript {
         if let Some(source) = abandoned {
             self.fire_drag_stop(source);
         }
-        if let Some(release) = drag_release.filter(|r| r.started) {
-            self.fire_drag_stop(release.source);
-            if let Some(id) = hit_id {
-                if let Err(e) =
-                    event::fire_widget_handler(&self.lua, id, "OnReceiveDrag", Vec::new())
-                {
-                    self.push_error(e);
-                }
-            }
-        }
         if let Some(id) = click_id {
             // Shared with `Click()`: gated on the Button being enabled; a CheckButton toggles
             // before `OnClick` fires.
@@ -554,7 +569,7 @@ impl UiScript {
     }
 
     /// The Button release slot `0x7792d0` past its base (`0x76c040`: `OnMouseUp`, which the caller
-    /// has fired), on the frame that took the press: a PUSHED button (`0x7792fc`) with the cursor
+    /// has fired; a started drag returns 1 there and never reaches this), on the frame that took the press: a PUSHED button (`0x7792fc`) with the cursor
     /// inside its own rect (`0x779335`), not "the topmost frame under the cursor", and registered
     /// for this button's Up (`0x77934e`) fires `OnDoubleClick` (`0x77938d`) or `OnClick`
     /// (`0x7793a9`); only then does the tail set NORMAL (`0x7793de`) if the button is unlocked and
