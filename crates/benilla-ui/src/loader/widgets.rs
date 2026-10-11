@@ -165,9 +165,7 @@ impl Loader<'_> {
                 self.call_region(&region, "ClearAllPoints", (), dbg);
                 self.apply_region_layout(bt, &region, self_name, dbg, font_attrs);
                 if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region) {
-                    self.report
-                        .errors
-                        .push(format!("{dbg}: implicit anchor: {e}"));
+                    self.report.fault(format!("{dbg}: implicit anchor: {e}"));
                 }
                 // Published both ways, like a named state texture.
                 if let Some(rname) = bt_name {
@@ -232,8 +230,7 @@ impl Loader<'_> {
                                 self.lua, wrapper, which, jh,
                             ) {
                                 self.report
-                                    .errors
-                                    .push(format!("{dbg}: <{}> justifyH: {e}", f.tag));
+                                    .fault(format!("{dbg}: <{}> justifyH: {e}", f.tag));
                             }
                         }
                         // Reported, not modelled: the reference clears the axis on a cross-axis
@@ -561,8 +558,7 @@ impl Loader<'_> {
                     outline,
                 ) {
                     self.report
-                        .errors
-                        .push(format!("{dbg}: <SimpleHTML> {name} font attrs: {e}"));
+                        .fault(format!("{dbg}: <SimpleHTML> {name} font attrs: {e}"));
                 }
             }
             None => {}

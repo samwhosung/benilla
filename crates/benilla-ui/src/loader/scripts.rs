@@ -102,8 +102,7 @@ impl Loader<'_> {
             Ok(f) => Some(f),
             Err(e) => {
                 self.report
-                    .errors
-                    .push(format!("{dbg}: compiling <{name}>: {e}"));
+                    .raise(format!("{dbg}: compiling <{name}>: {e}"), &e);
                 None
             }
         }
@@ -113,7 +112,7 @@ impl Loader<'_> {
     /// (`0x704d50`); an error is recorded, never propagated.
     pub(super) fn fire_onload(&mut self, wrapper: &Table, func: &Function, dbg: &str) {
         if let Err(e) = self.invoke_handler(wrapper, func) {
-            self.report.errors.push(format!("{dbg}: OnLoad: {e}"));
+            self.report.raise(format!("{dbg}: OnLoad: {e}"), &e);
         }
     }
 
@@ -126,7 +125,7 @@ impl Loader<'_> {
         dbg: &str,
     ) {
         if let Err(e) = wrapper.call_method::<()>(method, args) {
-            self.report.errors.push(format!("{dbg}: {method}: {e}"));
+            self.report.fault(format!("{dbg}: {method}: {e}"));
         }
     }
 
@@ -139,9 +138,7 @@ impl Loader<'_> {
         dbg: &str,
     ) {
         if let Err(e) = region.call_method::<()>(method, args) {
-            self.report
-                .errors
-                .push(format!("{dbg}: region {method}: {e}"));
+            self.report.fault(format!("{dbg}: region {method}: {e}"));
         }
     }
 }

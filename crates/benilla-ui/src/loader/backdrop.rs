@@ -15,7 +15,7 @@ impl Loader<'_> {
         let table = match self.build_backdrop_table(bd) {
             Ok(t) => t,
             Err(e) => {
-                self.report.errors.push(format!("{dbg}: <Backdrop>: {e}"));
+                self.report.fault(format!("{dbg}: <Backdrop>: {e}"));
                 return;
             }
         };

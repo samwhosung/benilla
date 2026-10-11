@@ -38,7 +38,7 @@ pub(super) fn fire_all_event_listeners(lua: &Lua, event: &str, args: &[ScriptVal
             if let Err(e) = fire_event_handler(lua, id, event, args) {
                 lua.app_data_mut::<Model>()
                     .expect("model app_data")
-                    .record_script_error(e.to_string());
+                    .record_lua_error(&e);
             }
         }
         at = next;
@@ -102,7 +102,7 @@ pub(super) fn fire_size_changes(lua: &Lua) {
         ) {
             lua.app_data_mut::<Model>()
                 .expect("model")
-                .record_script_error(e.to_string());
+                .record_lua_error(&e);
         }
     }
 }

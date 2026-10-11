@@ -313,7 +313,7 @@ pub(super) fn fire_cleared(lua: &Lua, h: FrameHandle) {
     if let Err(e) = event::fire_widget_handler(lua, id, "OnTooltipCleared", Vec::new()) {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
-            .record_script_error(e.to_string());
+            .record_lua_error(&e);
     }
 }
 

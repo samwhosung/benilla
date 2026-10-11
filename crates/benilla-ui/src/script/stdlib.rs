@@ -11,12 +11,20 @@
 
 use mlua::{Lua, Value, Variadic};
 
-/// An mlua error's bare Lua message, as `loadstring` returns it: without the `syntax error: ` or
-/// `runtime error: ` word mlua's `Display` adds and the reference never does.
-pub(super) fn lua_message(e: &mlua::Error) -> String {
+/// An mlua error's bare Lua message: what `lua_pcall` leaves for a 1.12 error function (`0x703b40`)
+/// and what `loadstring` returns. It drops the `syntax error: ` and `runtime error: ` words mlua's
+/// `Display` adds, the `stack traceback:` block mlua's message handler appends to a raise, and the
+/// wrappers a Rust callback's failure arrives in.
+pub(crate) fn lua_message(e: &mlua::Error) -> String {
     match e {
         mlua::Error::SyntaxError { message, .. } => message.clone(),
-        mlua::Error::RuntimeError(m) => m.clone(),
+        mlua::Error::RuntimeError(m) => m
+            .rfind("\nstack traceback:\n")
+            .map_or(m.as_str(), |at| &m[..at])
+            .to_string(),
+        mlua::Error::CallbackError { cause, .. } | mlua::Error::WithContext { cause, .. } => {
+            lua_message(cause)
+        }
         other => other.to_string(),
     }
 }

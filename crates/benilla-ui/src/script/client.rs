@@ -134,7 +134,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             {
                 lua.app_data_mut::<crate::script::Model>()
                     .expect("model")
-                    .record_script_error(super::stdlib::lua_message(&e));
+                    .record_lua_error(&e);
             }
             Ok(())
         })?,

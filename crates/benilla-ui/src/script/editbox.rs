@@ -294,7 +294,7 @@ fn insert(lua: &Lua, h: FrameHandle, ins: &str, fire_space: bool) {
     if let Err(e) = on_char {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
-            .record_script_error(e.to_string());
+            .record_lua_error(&e);
     }
     if fire_space {
         for _ in 0..out.spaces {
@@ -519,7 +519,7 @@ fn fire_script(lua: &Lua, id: u32, name: &str) {
     if let Err(e) = event::fire_widget_handler(lua, id, name, Vec::new()) {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
-            .record_script_error(e.to_string());
+            .record_lua_error(&e);
     }
 }
 

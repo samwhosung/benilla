@@ -152,6 +152,6 @@ fn model_mut(lua: &Lua) -> mlua::AppDataRefMut<'_, Model> {
 /// A handler error is recorded in [`Model::errors`], never propagated to the verb.
 fn record(lua: &Lua, fired: mlua::Result<()>) {
     if let Err(e) = fired {
-        model_mut(lua).record_script_error(e.to_string());
+        model_mut(lua).record_lua_error(&e);
     }
 }

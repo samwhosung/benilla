@@ -158,11 +158,11 @@ impl Addon {
                 // order, as `AddOn_Load 0x51f240` hands every listed file to `0x6edb90`.
                 match script.run_chunk_named(&bytes, &self.chunk_name(file, &path)) {
                     Ok(()) => info!("ui_script: {}/{file} ran", self.name),
-                    Err(e) => {
-                        let e = format!("{}/{file}: {e}", self.name);
+                    Err(err) => {
+                        let e = format!("{}/{file}: {err}", self.name);
                         error!("ui_script: {e}");
                         // A script error: it reaches the player through the Lua error handler.
-                        script.report_script_error(&e);
+                        script.report_script_error(&e, &benilla_ui::script::lua_message(&err));
                         failures.push(e);
                     }
                 }
@@ -210,11 +210,11 @@ impl Addon {
                 script.report_load_failure(&e);
                 failures.push(e);
             }
-            for e in &report.errors {
+            for (e, heard) in report.errors.iter().zip(&report.handler_errors) {
                 error!("ui_script({}/{file}): {e}", self.name);
                 // A script error, as in the Lua arm; `_ERRORMESSAGE`'s IsVisible guard shows only
                 // a burst's first, as in the reference.
-                script.report_script_error(&format!("{}/{file}: {e}", self.name));
+                script.report_script_error(&format!("{}/{file}: {e}", self.name), heard);
                 failures.push(format!("{}/{file}: {e}", self.name));
             }
             info!(

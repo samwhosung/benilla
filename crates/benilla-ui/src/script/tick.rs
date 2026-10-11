@@ -61,7 +61,7 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
             let id = model.frame_id(h);
             drop(model);
             if let Err(e) = event::fire_event_handler(lua, id, event, &args) {
-                model_mut().record_script_error(e.to_string());
+                model_mut().record_lua_error(&e);
             }
             at = next;
         }

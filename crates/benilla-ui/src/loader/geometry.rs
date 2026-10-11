@@ -146,9 +146,7 @@ impl Loader<'_> {
         let region: Table = match wrapper.call_method("CreateTitleRegion", ()) {
             Ok(r) => r,
             Err(e) => {
-                self.report
-                    .errors
-                    .push(format!("{dbg}: CreateTitleRegion: {e}"));
+                self.report.fault(format!("{dbg}: CreateTitleRegion: {e}"));
                 return;
             }
         };

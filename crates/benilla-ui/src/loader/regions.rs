@@ -53,13 +53,13 @@ impl Loader<'_> {
                         match wrapper.call_method(method, (rname, Some(level.clone()))) {
                             Ok(w) => w,
                             Err(e) => {
-                                self.report.errors.push(format!("{dbg}: {method}: {e}"));
+                                self.report.fault(format!("{dbg}: {method}: {e}"));
                                 continue;
                             }
                         };
                     if region.attr_bool("hidden") {
                         if let Err(e) = region_wrapper.call_method::<()>("Hide", ()) {
-                            self.report.errors.push(format!("{dbg}: region Hide: {e}"));
+                            self.report.fault(format!("{dbg}: region Hide: {e}"));
                         }
                     }
                     if let Some(a) = region
@@ -85,9 +85,7 @@ impl Loader<'_> {
                     if let Err(e) =
                         crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper)
                     {
-                        self.report
-                            .errors
-                            .push(format!("{dbg}: implicit anchor: {e}"));
+                        self.report.fault(format!("{dbg}: implicit anchor: {e}"));
                     }
                 }
             }
@@ -141,8 +139,7 @@ impl Loader<'_> {
                     Ok(w) => w,
                     Err(e) => {
                         self.report
-                            .errors
-                            .push(format!("{dbg}: CreateFontString (special): {e}"));
+                            .fault(format!("{dbg}: CreateFontString (special): {e}"));
                         continue;
                     }
                 },
@@ -152,9 +149,7 @@ impl Loader<'_> {
             self.apply_region_visual(region, &region_wrapper, false, dbg);
             // The implicit creation anchor, as in `apply_layers`; an EditBox's adopt replaces it.
             if let Err(e) = crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper) {
-                self.report
-                    .errors
-                    .push(format!("{dbg}: implicit anchor: {e}"));
+                self.report.fault(format!("{dbg}: implicit anchor: {e}"));
             }
             // It is the EditBox's text region by slot, never found by a search, which could take a
             // `<Layers>` string; the box's insets anchor it.
@@ -163,8 +158,7 @@ impl Loader<'_> {
                     crate::script::adopt_text_region(self.lua(), wrapper, &region_wrapper)
                 {
                     self.report
-                        .errors
-                        .push(format!("{dbg}: adopt special FontString: {e}"));
+                        .fault(format!("{dbg}: adopt special FontString: {e}"));
                 }
             }
         }
@@ -383,9 +377,7 @@ impl Loader<'_> {
                     height,
                     outline,
                 ) {
-                    self.report
-                        .errors
-                        .push(format!("{dbg}: region font attrs: {e}"));
+                    self.report.fault(format!("{dbg}: region font attrs: {e}"));
                 }
             }
             None => {}

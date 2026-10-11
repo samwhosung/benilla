@@ -124,7 +124,7 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
     ) {
         lua.app_data_mut::<Model>()
             .expect("model app_data")
-            .record_script_error(e.to_string());
+            .record_lua_error(&e);
     }
     true
 }

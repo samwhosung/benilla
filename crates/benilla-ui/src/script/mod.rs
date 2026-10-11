@@ -121,6 +121,8 @@ mod spellbook;
 mod stable;
 mod statusbar;
 mod stdlib;
+/// An mlua error's bare Lua message, the one value the error handler is called with.
+pub use stdlib::lua_message;
 mod summon;
 mod talent;
 mod taxi;
@@ -1194,14 +1196,16 @@ impl UiScript {
 
     /// Report a script error the host caught outside the VM's dispatch (an addon file that failed
     /// to compile or raised at file scope): it joins the handler-dispatch queue and the retained
-    /// log, not `errors`, since the caller has already logged it.
-    pub fn report_script_error(&self, msg: &str) {
+    /// log, not `errors`, since the caller has already logged it. `log` is the decorated text the
+    /// log keeps; `handler` is the one value the error handler is called with, the bare Lua
+    /// message as `lua_pcall` leaves it (`0x703b40`).
+    pub fn report_script_error(&self, log: &str, handler: &str) {
         // A Load row, not an Error one: to the player a file scope that raised and a missing file
         // are the same fact, the addon is not running.
-        diagnostics::record_load_failure(&self.lua, msg);
+        diagnostics::record_load_failure(&self.lua, log);
         self.model_mut()
             .pending_error_dispatch
-            .push(msg.to_string());
+            .push(handler.to_string());
     }
 
     /// Hand each queued script error to the Lua error handler, as the reference's catch closure
@@ -1258,7 +1262,7 @@ impl UiScript {
     }
 
     fn push_error(&self, e: mlua::Error) {
-        self.model_mut().record_script_error(e.to_string());
+        self.model_mut().record_lua_error(&e);
     }
 }
 
