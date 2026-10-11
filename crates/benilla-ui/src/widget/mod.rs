@@ -724,7 +724,7 @@ impl WidgetArena {
         Some(d)
     }
 
-    /// Free one region, as `CSimpleHTML::SetText` pool-frees the last parse's blocks (`0x78adc6`)
+    /// Free one region, as `CSimpleHTML::SetText` deletes the last parse's blocks (`0x78a580`)
     /// and a backdrop's teardown its nine pieces (`0x77f4d0`). The caller drops the region's
     /// script-model state too, and never frees a region some state holds by handle.
     pub fn destroy_region(&mut self, h: RegionHandle) -> bool {

@@ -150,6 +150,10 @@ pub(crate) struct Model {
     /// node nothing invalidated keeps a state a recompute could change
     /// ([`Model::invalidate_frame`]).
     pub(crate) layout_pending: Vec<u32>,
+    /// Layout ids whose anchors a dying target's unhook freed (`0x768e20` → `0x767e70` with a zero
+    /// flag, which invalidates nothing) since their last layout write: each keeps the state it
+    /// holds until the resolve reaches it ([`crate::layout::LayoutSolver::hold_entry`]).
+    pub(crate) layout_held: HashSet<u32>,
     /// The screen the last converged resolve laid out against: a frame anchored to it is reached
     /// when it moves, as by any target's new rect.
     pub(crate) layout_screen: Option<Rect>,
@@ -194,6 +198,12 @@ pub(crate) struct Model {
     /// drawing, as the failed resolve (`0x768d55`) leaves the quad `0x770670` wrote and its emit
     /// checks only its texture (`0x7706e0`). Dropped when it resolves again.
     pub(crate) region_kept: HashMap<RegionHandle, Rect>,
+    /// Per Texture with an axis sized 0, the texel span its last resolve read, `None` for no art.
+    /// The resolver reads it through the size getter (`0x767579` → `0x770720`) only when it
+    /// resolves the texture, and `SetTexture` invalidates nothing (`0x770200`), so a recompute
+    /// the resolve does not reach reads this, never the art set since. A layout write to the
+    /// region drops it, so its next resolve reads the art afresh.
+    pub(crate) region_art_span: HashMap<RegionHandle, Option<(f32, f32)>>,
 
     /// The next object id to mint; ids start at 1, since 0 is `SCREEN`.
     pub(crate) next_id: u32,
@@ -1145,6 +1155,7 @@ impl Model {
             font_objects_by_lower: HashMap::new(),
             region_resolved: HashMap::new(),
             region_kept: HashMap::new(),
+            region_art_span: HashMap::new(),
             next_id: 1,
             id_to_frame: IdMap::default(),
             frame_to_id: HashMap::new(),
@@ -1173,6 +1184,7 @@ impl Model {
             text_flips: Vec::new(),
             layout_force: Vec::new(),
             layout_pending: Vec::new(),
+            layout_held: HashSet::new(),
             layout_screen: None,
             errors: Vec::new(),
             pending_error_dispatch: Vec::new(),
@@ -1613,10 +1625,15 @@ impl Model {
     /// A write to region `rh`'s layout inputs or liveness: its anchors, size, measured extent,
     /// art or owner. Its node re-derives at the next resolve, joining or leaving the graph as it
     /// gained or lost its anchors. An id is minted only for an anchored region, the only kind that
-    /// can be a node; an anchorless one with no id has nothing in the graph to move.
+    /// can be a node; an anchorless one with no id has nothing in the graph to move. The region's
+    /// next resolve reads its art afresh, and is no longer held to its state.
     pub(crate) fn touch_layout_region(&mut self, rh: RegionHandle) {
+        self.region_art_span.remove(&rh);
         match self.region_to_id.get(&rh) {
-            Some(&id) => self.name_layout_node(id),
+            Some(&id) => {
+                self.layout_held.remove(&id);
+                self.name_layout_node(id);
+            }
             None if self
                 .region_data
                 .get(&rh)
@@ -1626,20 +1643,6 @@ impl Model {
             }
             None => self.bump_layout_epoch(),
         }
-    }
-
-    /// A write to region `rh`'s art, its texture or solid fill: a layout input only where an
-    /// anchored region takes an axis authored 0 from it ([`super::layout::content_span`]), and
-    /// named only when it moved the node's hash, so a repaint of the same art leaves the gate shut.
-    pub(crate) fn touch_layout_art(&mut self, rh: RegionHandle) {
-        if self
-            .region_data
-            .get(&rh)
-            .is_some_and(|d| d.size.is_some_and(|(w, h)| w != 0.0 && h != 0.0))
-        {
-            return;
-        }
-        self.touch_layout_content(rh);
     }
 
     /// A write to region `rh`'s text, which was non-empty iff `was_shown`: the sweep reads a
@@ -1684,7 +1687,10 @@ impl Model {
     /// The same for frame `h`: its anchors, size, scale, clamp or scroll override.
     pub(crate) fn touch_layout_frame(&mut self, h: FrameHandle) {
         match self.frame_to_id.get(&h) {
-            Some(&id) => self.name_layout_node(id),
+            Some(&id) => {
+                self.layout_held.remove(&id);
+                self.name_layout_node(id);
+            }
             None if self.arena.frame(h).is_some() => {
                 self.frame_id(h); // mints and names
             }

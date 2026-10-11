@@ -307,10 +307,14 @@ impl Installed {
 pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>) {
     // Each freed piece names its node, and each built one below, so the next resolve takes the
     // swap through the cached graph.
-    let old = model.backdrops.remove(&fh);
-    for rh in old.iter().flat_map(|o| o.pieces).flatten() {
-        super::region::free_region(model, rh);
-    }
+    let old: Vec<RegionHandle> = model
+        .backdrops
+        .remove(&fh)
+        .iter()
+        .flat_map(|o| o.pieces)
+        .flatten()
+        .collect();
+    super::region::free_regions(model, &old);
     let Some(spec) = spec.filter(|_| model.arena.frame(fh).is_some()) else {
         return;
     };

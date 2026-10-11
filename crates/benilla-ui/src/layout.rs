@@ -232,6 +232,20 @@ impl Anchors {
         held
     }
 
+    /// Empty every slot naming a target in `dying`, returning whether any did: the unhook a dying
+    /// layout object runs on each dependent (`0x767e70`, from `0x768e20`).
+    #[inline]
+    pub fn release_targets(&mut self, dying: &[u32]) -> bool {
+        let mut freed = false;
+        for slot in &mut self.0 {
+            if slot.is_some_and(|a| dying.contains(&a.relative_to)) {
+                *slot = None;
+                freed = true;
+            }
+        }
+        freed
+    }
+
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.iter().all(Option::is_none)
@@ -817,6 +831,9 @@ pub struct LayoutSolver {
     has_entry: Vec<bool>,
     /// Per frame, whether it was invalidated (`0x7680e0`) since its entry state.
     pending: Vec<bool>,
+    /// Per node, whether its entry state is final unless the resolve reaches it
+    /// ([`hold_entry`](Self::hold_entry)).
+    held: Vec<bool>,
     /// The keep test's threshold in the rects' units; 0 keeps nothing.
     keep_eps: f64,
     /// Kahn in-degree and reverse edges; each inner `Vec` is cleared, never freed.
@@ -848,6 +865,7 @@ impl LayoutSolver {
             self.cached.resize(need, None);
             self.has_entry.resize(need, false);
             self.pending.resize(need, false);
+            self.held.resize(need, false);
             self.indeg.resize(need, 0);
             self.dependents.resize_with(need, Vec::new);
             self.marked.resize(need, false);
@@ -873,6 +891,7 @@ impl LayoutSolver {
             self.cached[i] = None;
             self.has_entry[i] = false;
             self.pending[i] = false;
+            self.held[i] = false;
             self.indeg[i] = 0;
             self.dependents[i].clear();
             self.marked[i] = false;
@@ -924,8 +943,9 @@ impl LayoutSolver {
     /// slot (`0x768d55`), and `ClearAllPoints` invalidates nothing (`0x767620`). So a node not
     /// reached keeps this state when its resolve fails or reads a target with no rect. Any other
     /// node not reached is recomputed, which gives back its state only if every write that moved
-    /// its inputs since also invalidated it; the solver cannot tell one that did not. The rect is
-    /// also what the keep test ([`set_keep_eps`](Self::set_keep_eps)) holds a new one against.
+    /// its inputs since also invalidated it; the solver cannot tell one that did not, unless the
+    /// caller says so ([`hold_entry`](Self::hold_entry)). The rect is also what the keep test
+    /// ([`set_keep_eps`](Self::set_keep_eps)) holds a new one against.
     pub fn set_entry(&mut self, h: Handle, rect: Option<Rect>, invalidated: bool) {
         self.ensure(h);
         self.touch(h);
@@ -933,6 +953,25 @@ impl LayoutSolver {
         self.cached[i] = rect;
         self.has_entry[i] = true;
         self.pending[i] = invalidated;
+        self.held[i] = false;
+    }
+
+    /// Node `h`'s inputs moved since its entry state by a write that invalidated nothing, as a
+    /// dying target's unhook does (`0x767e70` with a zero flag): unless the resolve reaches it,
+    /// it keeps that state, never a recompute. Call after [`set_entry`](Self::set_entry).
+    pub fn hold_entry(&mut self, h: Handle) {
+        self.ensure(h);
+        self.touch(h);
+        self.held[h as usize] = true;
+    }
+
+    /// Whether the resolve reaches node `h`: it has no entry state, it was invalidated, or an
+    /// anchor target stored a new rect (`0x768cf0`). `reads` lists its anchor targets.
+    pub fn reached(&self, h: Handle, mut reads: impl Iterator<Item = Handle>) -> bool {
+        let i = h as usize;
+        !self.has_entry.get(i).copied().unwrap_or(false)
+            || self.pending[i]
+            || reads.any(|t| self.changed(t))
     }
 
     /// Whether `h` now holds a rect it did not hold at entry: a resolve that stored a new rect,
@@ -952,8 +991,9 @@ impl LayoutSolver {
     }
 
     /// Whether node `h` takes the rect its inputs give it, by the rule [`set_entry`]
-    /// documents: when it was invalidated, when an anchor target stored a new rect, or when the
-    /// rect resolved against targets that all hold one. `reads` lists its anchor targets.
+    /// documents: when it was invalidated, when an anchor target stored a new rect, or, unless
+    /// held, when the rect resolved against targets that all hold one. `reads` lists its anchor
+    /// targets.
     ///
     /// [`set_entry`]: Self::set_entry
     pub fn takes_resolve(
@@ -974,7 +1014,7 @@ impl LayoutSolver {
                 return true;
             }
         }
-        resolved && !reads_failed
+        resolved && !reads_failed && !self.held[i]
     }
 
     /// The entry rect of node `h`, which it keeps when the resolve does not reach it.

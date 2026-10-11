@@ -199,11 +199,6 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     };
                     loaded
                 };
-                // Only the art-sized shape can move, and only a new art: touching the layout on
-                // every repaint would reopen the resolve's change gate each frame.
-                lua.app_data_mut::<Model>()
-                    .expect("model")
-                    .touch_layout_art(rh);
                 Ok(if loaded {
                     Value::Number(1.0)
                 } else {
@@ -486,7 +481,8 @@ impl crate::script::UiScript {
         let mut model = self.model_mut();
         model.texture_size_probe = Some(probe);
         // Every art-sized region's span may move, and no per-node hash holds a probe's answer: a
-        // full-scope rebuild, as for a screen move.
+        // full-scope rebuild, as for a screen move, reading each art afresh.
+        model.region_art_span.clear();
         model.layout_scope.invalidate();
         model.touch_layout();
     }

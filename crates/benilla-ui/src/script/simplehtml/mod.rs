@@ -166,16 +166,14 @@ fn resolve_font(model: &Model, ef: &ElementFont) -> BlockPaint {
 /// `CSimpleHTML::SetText` (`0x78a3a0`): free the old blocks, parse, build. Returns `usedMarkup`
 /// (`0x78a519`), which the Lua shim drops.
 pub(crate) fn set_text(model: &mut Model, fh: FrameHandle, raw: &str) -> bool {
-    // Free the previous parse's regions first, as the reference does, or a book's next page
-    // draws over the last.
+    // Free the previous parse's regions first, as the reference does (`0x78a580`), or a book's
+    // next page draws over the last.
     let old = model
         .simple_html
         .get_mut(&fh)
         .map(|s| std::mem::take(&mut s.blocks))
         .unwrap_or_default();
-    for rh in old {
-        free_block(model, rh);
-    }
+    crate::script::region::free_regions(model, &old);
 
     let (frame_name, hyperlink_format) = {
         let name = model
@@ -289,7 +287,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                 else {
                     break; // unreachable, as above
                 };
-                // Minted though nothing anchors to an image; the resolve and `free_block` use it.
+                // Minted though nothing anchors to an image; the resolve and the free use it.
                 model.region_id(rh);
                 // `align` picks the corner; 8, 16 and 32 get no anchor at all (`0x78ac61`, a jump
                 // to `0x78ace8`), so the image draws nothing, here as there.
@@ -354,10 +352,6 @@ fn anchor_for(prev_block: Option<u32>, frame_id: u32, point: Point, next_y: f32)
             Anchor::new(point, prev, rel, 0.0, next_y)
         }
     }
-}
-
-fn free_block(model: &mut Model, rh: RegionHandle) {
-    crate::script::region::free_region(model, rh);
 }
 
 // ── The loader's seam ────────────────────────────────────────────────────────────────────────
