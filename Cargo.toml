@@ -56,8 +56,8 @@ codegen-units = 1
 [profile.dev]
 opt-level = 1
 # No ThinLTO: above opt-level 0 rustc runs it over a crate's own codegen units by default, and an
-# incremental rebuild of `benilla-app` redoes it whole: a one-line edit took 25 s and 5.3 GB, now
-# 6 s and 2.7 GB. It costs our crates +0.7 cpu_ms (+6 %) at the leg pin.
+# incremental rebuild redoes it whole: 19 s of a one-line `benilla-app` edit's 25 s, and half its
+# 5.3 GB. Off, our crates cost +0.7 cpu_ms (+6 %) at the leg pin.
 lto = "off"
 
 # No debuginfo trimming: `debug = "line-tables-only"` measures no recurring win on macOS + sccache.
@@ -79,3 +79,8 @@ incremental = true
 # Not for speed: under `incremental`, thin-local LTO leaves promoted `anon.*.llvm.*` symbols
 # unresolved and the link fails intermittently (rustc #86049).
 lto = "off"
+
+# One codegen unit each, as in dev: at 16 the dependencies cost +1.2 cpu_ms against `release` at
+# the leg pin, at one the profile is +0.5, and a cold build is no slower.
+[profile.play.package."*"]
+codegen-units = 1
