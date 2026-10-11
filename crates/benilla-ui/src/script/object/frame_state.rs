@@ -453,8 +453,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     // `SetBackdrop(table|nil)` (`0x7776e0` → `0x76a5d0`) installs or removes the tiled background
-    // and 8-piece border, both white until tinted; the two colour setters tint the background and
-    // the border respectively (`0x77f410`/`0x77f440`).
+    // and 8-piece border, nine Texture regions on the frame (`script::backdrop::install`), both
+    // white until tinted; the two colour setters tint the background and the border respectively
+    // (`0x77f410`/`0x77f440`).
     m.set(
         "SetBackdrop",
         lua.create_function(|lua, (this, arg): (Table, Value)| {
@@ -470,14 +471,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 }
             };
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            match bd {
-                Some(b) => {
-                    model.backdrops.insert(h, b);
-                }
-                None => {
-                    model.backdrops.remove(&h);
-                }
-            }
+            crate::script::backdrop::install(&mut model, h, bd);
             Ok(())
         })?,
     )?;
@@ -493,7 +487,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // re-enters and would panic on the app-data borrow.
             let bd = {
                 let model = lua.app_data_ref::<Model>().expect("model");
-                model.backdrops.get(&h).cloned()
+                model.backdrops.get(&h).map(|i| i.spec.clone())
             };
             let Some(bd) = bd else {
                 return Ok(mlua::MultiValue::new());
@@ -535,9 +529,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let color = backdrop_color(lua, args);
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            if let Some(bd) = model.backdrops.get_mut(&h) {
-                bd.bg_color = color;
-            }
+            crate::script::backdrop::set_color(&mut model, h, false, color);
             Ok(())
         })?,
     )?;
@@ -547,9 +539,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let color = backdrop_color(lua, args);
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            if let Some(bd) = model.backdrops.get_mut(&h) {
-                bd.border_color = color;
-            }
+            crate::script::backdrop::set_color(&mut model, h, true, color);
             Ok(())
         })?,
     )?;
@@ -558,7 +548,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
-            match model.backdrops.get(&h) {
+            match model.backdrops.get(&h).map(|i| &i.spec) {
                 Some(bd) => Ok((
                     bd.bg_color[0],
                     bd.bg_color[1],
@@ -574,7 +564,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
-            match model.backdrops.get(&h) {
+            match model.backdrops.get(&h).map(|i| &i.spec) {
                 Some(bd) => Ok((
                     bd.border_color[0],
                     bd.border_color[1],

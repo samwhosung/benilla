@@ -12,7 +12,7 @@
 //! tail when shown and when a shown frame's strata or level changes, and the later link draws on
 //! top. [`crate::widget::WidgetArena`] keeps a counter bumped at those moments, which orders the
 //! same within a bucket. The is-region bit is benilla's: the client has no frame drawable, and the
-//! frame's own slot (backdrop, scissor) must precede its regions.
+//! frame's own slot (a minimap or model pane, scissor) must precede its regions.
 //!
 //! Deviation: textures in one layer keep link order where the client sorts them by texture handle
 //! (`0x7731a0`, comparator `0x7731c0`), because benilla allocates its handles differently; no
@@ -127,6 +127,8 @@ const DECL_SHIFT: u32 = 0;
 /// The link-stamp width; the arena renumbers its stamps at the cap.
 pub(crate) const INSERTION_BITS: u32 = 18;
 const DECL_BITS: u32 = 12;
+/// One past the largest declaration seq the key holds; a frame renumbers its regions there.
+pub(crate) const DECL_CAP: u32 = 1 << DECL_BITS;
 
 /// Which of a layer batch's arrays an entry drains from, in `0x76fb00`'s order: quads at `+0x10`
 /// (a texture appends at `0x7706e0`), a `CGxStringBatch` at `+0x18` (a font string at `0x772e50`)
@@ -283,7 +285,7 @@ pub const fn unpack(raw: u64) -> ZParts {
 /// What a [`ZKey`] entry points at.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ZTarget {
-    /// The frame's own slot (backdrop, scissor).
+    /// The frame's own slot (a minimap or model pane, scissor).
     Frame(FrameHandle),
     Region(RegionHandle),
 }

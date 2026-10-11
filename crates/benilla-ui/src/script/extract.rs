@@ -389,10 +389,9 @@ impl UiScript {
             // A ScrollingMessageFrame adds one Text quad per visible ring line, stacked bottom-up
             // with each line's fade alpha; the ring lives in its kind state, not in FontStrings.
             if let (ZTarget::Frame(fh), Some(fr)) = (target, rect) {
-                // The Backdrop draws at the frame slot; the lines take the ARTWORK content key,
-                // where the client's message strings live, over the BACKGROUND (hover box) art.
+                // The lines take the ARTWORK content key, where the client's message strings
+                // live, over the BACKGROUND (hover box) art.
                 let paint = super::layout::FramePaint { alpha, scale };
-                Self::emit_backdrop(&model, fh, fr, zkey.raw(), paint, clip, &mut out);
                 Self::emit_message_lines(
                     &model,
                     fh,

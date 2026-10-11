@@ -41,8 +41,7 @@ fn answer_measures(s: &mut UiScript) {
     s.set_measured_text_unwrapped(&answers);
 }
 
-/// Every texture path drawn: `<Texture>` regions and the `<Backdrop>` plate, which is its own
-/// quad kind (`QuadContent::Backdrop`).
+/// Every texture path drawn: `<Texture>` regions, the `<Backdrop>` plate's nine pieces among them.
 fn drawn_textures(s: &mut UiScript) -> Vec<String> {
     s.resolve();
     answer_measures(s);
@@ -51,7 +50,6 @@ fn drawn_textures(s: &mut UiScript) -> Vec<String> {
         .into_iter()
         .filter_map(|q| match q.content {
             benilla_ui::script::QuadContent::Texture { path: Some(p), .. } => Some(p),
-            benilla_ui::script::QuadContent::Backdrop { path, .. } => Some(path),
             _ => None,
         })
         .collect()

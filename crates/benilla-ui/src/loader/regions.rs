@@ -17,76 +17,68 @@ pub(super) enum FontAttrs {
 }
 
 impl Loader<'_> {
-    /// `<Layers>` (`0x769d70`): each `<Texture>` and `<FontString>`, created on its layer.
+    /// One `<Layers>` (`0x769d70`): each `<Texture>` and `<FontString>`, created on its layer.
     pub(super) fn apply_layers(
         &mut self,
-        el: &Element,
+        layers: &Element,
         wrapper: &Table,
         parent_name: &str,
         dbg: &str,
     ) {
-        for layers in children_named(el, "Layers") {
-            for layer in children_named(layers, "Layer") {
-                let level = layer.attr("level").unwrap_or("ARTWORK").to_string();
-                for region in &layer.children {
-                    // `inherits=` may name a region template, in the frames' one registry
-                    // (`0x6ee500`); a font object's name passes on to `apply_fontstring_font`.
-                    let region = &self.expand_region(region);
-                    let is_texture = region.tag.eq_ignore_ascii_case("Texture");
-                    let is_fontstring = region.tag.eq_ignore_ascii_case("FontString");
-                    if !is_texture && !is_fontstring {
-                        self.report.warnings.push(format!(
-                            "{dbg}: <Layer> child <{}> is not a Texture/FontString; skipped",
-                            region.tag
-                        ));
-                        continue;
-                    }
-                    let rname: Option<String> = region
-                        .name()
-                        .map(|raw| framexml::resolve_name(raw, parent_name));
-                    let method = if is_texture {
-                        "CreateTexture"
-                    } else {
-                        "CreateFontString"
-                    };
-                    let region_wrapper: Table =
-                        match wrapper.call_method(method, (rname, Some(level.clone()))) {
-                            Ok(w) => w,
-                            Err(e) => {
-                                self.report.fault(format!("{dbg}: {method}: {e}"));
-                                continue;
-                            }
-                        };
-                    if region.attr_bool("hidden") {
-                        if let Err(e) = region_wrapper.call_method::<()>("Hide", ()) {
-                            self.report.fault(format!("{dbg}: region Hide: {e}"));
+        for layer in children_named(layers, "Layer") {
+            let level = layer.attr("level").unwrap_or("ARTWORK").to_string();
+            for region in &layer.children {
+                // `inherits=` may name a region template, in the frames' one registry
+                // (`0x6ee500`); a font object's name passes on to `apply_fontstring_font`.
+                let region = &self.expand_region(region);
+                let is_texture = region.tag.eq_ignore_ascii_case("Texture");
+                let is_fontstring = region.tag.eq_ignore_ascii_case("FontString");
+                if !is_texture && !is_fontstring {
+                    self.report.warnings.push(format!(
+                        "{dbg}: <Layer> child <{}> is not a Texture/FontString; skipped",
+                        region.tag
+                    ));
+                    continue;
+                }
+                let rname: Option<String> = region
+                    .name()
+                    .map(|raw| framexml::resolve_name(raw, parent_name));
+                let method = if is_texture {
+                    "CreateTexture"
+                } else {
+                    "CreateFontString"
+                };
+                let region_wrapper: Table =
+                    match wrapper.call_method(method, (rname, Some(level.clone()))) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            self.report.fault(format!("{dbg}: {method}: {e}"));
+                            continue;
                         }
+                    };
+                if region.attr_bool("hidden") {
+                    if let Err(e) = region_wrapper.call_method::<()>("Hide", ()) {
+                        self.report.fault(format!("{dbg}: region Hide: {e}"));
                     }
-                    if let Some(a) = region
-                        .attr("alpha")
-                        .and_then(|v| v.trim().parse::<f32>().ok())
-                    {
-                        self.call_region(&region_wrapper, "SetAlpha", a, dbg);
-                    }
-                    self.apply_region_layout(
-                        region,
-                        &region_wrapper,
-                        parent_name,
-                        dbg,
-                        FontAttrs::Own,
-                    );
-                    if is_fontstring {
-                        // Before the visual pass, so an explicit `<Color>` beats the font object's.
-                        self.apply_fontstring_font(region, &region_wrapper, dbg);
-                    }
-                    self.apply_region_visual(region, &region_wrapper, is_texture, dbg);
-                    // The implicit creation anchor, run after the region's LoadXML as the
-                    // reference does (`0x7701c0`, `0x771480`); an anchored region is left alone.
-                    if let Err(e) =
-                        crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper)
-                    {
-                        self.report.fault(format!("{dbg}: implicit anchor: {e}"));
-                    }
+                }
+                if let Some(a) = region
+                    .attr("alpha")
+                    .and_then(|v| v.trim().parse::<f32>().ok())
+                {
+                    self.call_region(&region_wrapper, "SetAlpha", a, dbg);
+                }
+                self.apply_region_layout(region, &region_wrapper, parent_name, dbg, FontAttrs::Own);
+                if is_fontstring {
+                    // Before the visual pass, so an explicit `<Color>` beats the font object's.
+                    self.apply_fontstring_font(region, &region_wrapper, dbg);
+                }
+                self.apply_region_visual(region, &region_wrapper, is_texture, dbg);
+                // The implicit creation anchor, run after the region's LoadXML as the
+                // reference does (`0x7701c0`, `0x771480`); an anchored region is left alone.
+                if let Err(e) =
+                    crate::script::implicit_creation_anchor_lua(self.lua, &region_wrapper)
+                {
+                    self.report.fault(format!("{dbg}: implicit anchor: {e}"));
                 }
             }
         }

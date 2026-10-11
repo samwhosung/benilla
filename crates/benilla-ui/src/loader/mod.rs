@@ -690,12 +690,20 @@ impl Loader<'_> {
         // 3 · <Size> and 4 · <Anchors> (the CLayoutFrame geometry base, `0x767800`).
         self.apply_size(el, wrapper, dbg_name);
         self.apply_anchors(el, wrapper, parent_name, dbg_name);
-        // 5 · <Layers> regions (`0x769d70`); `$parent` in a region name is this frame.
-        self.apply_layers(el, wrapper, self_name, dbg_name);
+        // 5 · <Layers> regions (`0x769d70`) and the <Backdrop> plate (`0x77e6c0`), whose nine
+        //     pieces are regions too, in document order: both are arms of the one child loop
+        //     (`0x769b1c`), so the order they link into `GetRegions` is the file's. A template's
+        //     children come first, as its LoadXML runs first. `$parent` in a region name is this
+        //     frame.
+        for child in &el.children {
+            if child.tag.eq_ignore_ascii_case("Layers") {
+                self.apply_layers(child, wrapper, self_name, dbg_name);
+            } else if child.tag.eq_ignore_ascii_case("Backdrop") {
+                self.apply_backdrop(child, wrapper, dbg_name);
+            }
+        }
         // 5·b · a direct-child `<FontString>`: the widget's own text font (EditBox, message frame).
         self.apply_special_fontstrings(el, wrapper, self_name, dbg_name);
-        // 5a · <Backdrop> plate (LoadXML `0x77e6c0`): the tiled bg + 8-piece border.
-        self.apply_backdrop(el, wrapper, dbg_name);
         // 5a' · <TitleRegion>: the drag handle, through the API's own CreateTitleRegion.
         self.apply_title_region(el, wrapper, self_name, dbg_name);
         // 5b · per-kind LoadXML extras (EditBox `0x779fb0`), each gated on the element's own tag,

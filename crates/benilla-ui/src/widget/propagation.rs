@@ -354,12 +354,7 @@ impl WidgetArena {
         if let Some(of) = self.frame_mut(old_owner) {
             of.regions.retain(|&r| r != rh);
         }
-        let decl_seq = {
-            let f = self.frame_mut(new_owner).expect("live new owner");
-            let d = f.next_decl;
-            f.next_decl += 1;
-            d
-        };
+        let decl_seq = self.take_decl(new_owner).expect("live new owner");
         if let Some(r) = self.region_mut(rh) {
             r.owner = new_owner;
             r.decl_seq = decl_seq;

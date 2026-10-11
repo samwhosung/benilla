@@ -1,4 +1,5 @@
-//! The backdrop Lua verbs and extract emission (the reference's Backdrop object, `0x77e5f0`).
+//! The backdrop Lua verbs, its nine piece regions and their draw (the reference's Backdrop object,
+//! `0x77e5f0`, and its pieces, `0x77e8d0`).
 
 use super::common::script;
 use crate::script::*;
@@ -28,7 +29,11 @@ fn backdrop_installs_and_extracts_pieces_with_colors() {
         .extract()
         .into_iter()
         .filter_map(|q| match q.content {
-            QuadContent::Backdrop { path, color, .. } => Some((path, color)),
+            QuadContent::Texture {
+                path: Some(path),
+                color: Some(color),
+                ..
+            } => Some((path, color)),
             _ => None,
         })
         .collect();
@@ -146,7 +151,7 @@ fn get_backdrop_round_trips_through_set_backdrop() {
     assert_eq!(
         s.extract()
             .iter()
-            .filter(|q| matches!(q.content, QuadContent::Backdrop { .. }))
+            .filter(|q| matches!(q.content, QuadContent::Texture { .. }))
             .count(),
         9
     );
@@ -170,7 +175,7 @@ fn set_backdrop_nil_tears_down() {
     assert!(s
         .extract()
         .iter()
-        .all(|q| !matches!(q.content, QuadContent::Backdrop { .. })));
+        .all(|q| !matches!(q.content, QuadContent::Texture { .. })));
 }
 
 /// The colour setters (`0x777d30`, `0x7780d0`) read r/g/b with a bare `lua_tonumber` (nil is 0.0)
@@ -241,7 +246,7 @@ fn a_scaled_frames_backdrop_scales_with_it() {
     let rects: Vec<crate::layout::Rect> = s
         .extract()
         .into_iter()
-        .filter(|q| matches!(q.content, QuadContent::Backdrop { .. }))
+        .filter(|q| matches!(q.content, QuadContent::Texture { .. }))
         .map(|q| q.rect.expect("piece rect"))
         .collect();
     assert_eq!(rects.len(), 9);
@@ -622,4 +627,40 @@ fn the_piece_quads_are_the_backdrop_geometry() {
             }
         }
     }
+}
+
+/// Each `SetBackdrop` links nine fresh regions, so a frame re-set on every show runs its link
+/// positions past the draw key's field; they renumber in link order and the draw keeps it.
+#[test]
+fn a_backdrop_set_many_times_keeps_its_frames_draw_order() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        f = CreateFrame("Frame")
+        f:SetPoint("CENTER", 0, 0)
+        f:SetWidth(100); f:SetHeight(100)
+        local first = f:CreateTexture(nil, "ARTWORK")
+        first:SetAllPoints(f); first:SetTexture("first")
+        for i = 1, 600 do f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" }) end
+        local last = f:CreateTexture(nil, "ARTWORK")
+        last:SetAllPoints(f); last:SetTexture("last")
+        local r = { f:GetRegions() }
+        assert(table.getn(r) == 11 and r[1] == first and r[11] == last, "link order kept")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let paths: Vec<String> = s
+        .extract()
+        .into_iter()
+        .filter_map(|q| match q.content {
+            QuadContent::Texture { path: Some(p), .. } => Some(p),
+            _ => None,
+        })
+        .collect();
+    let mut want = vec!["bg".to_string()];
+    want.extend(std::iter::repeat_n("edge".to_string(), 8));
+    want.extend(["first".to_string(), "last".to_string()]);
+    assert_eq!(paths, want);
 }

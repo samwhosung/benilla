@@ -97,7 +97,6 @@ fn content_kind(c: &QuadContent) -> &'static str {
         QuadContent::Texture { .. } => "texture",
         QuadContent::ColorWheel => "colorwheel",
         QuadContent::ColorValue { .. } => "colorvalue",
-        QuadContent::Backdrop { .. } => "backdrop",
         QuadContent::Text { .. } => "text",
     }
 }
@@ -280,7 +279,6 @@ fn span_bounds(spans: &[u32], i: usize) -> (usize, usize) {
 fn splice_simple(eq: &benilla_ui::script::ExtractedQuad) -> bool {
     match &eq.content {
         QuadContent::Frame
-        | QuadContent::Backdrop { .. }
         // At most one quad and one idempotent tile request.
         | QuadContent::ModelPane { .. }
         | QuadContent::ColorWheel
@@ -1400,44 +1398,6 @@ fn convert_entry(
                 texture: Some(handle),
                 uv: UvRect::FULL,
                 color: colorselect::ramp_tint(hue, sat, eq.alpha),
-                clip,
-                ..default()
-            });
-        }
-        QuadContent::Backdrop {
-            path,
-            color,
-            uvs,
-            tile,
-        } => {
-            // A backdrop piece, the bg or one of the 8 border pieces, sampled `Repeat` when `tile`;
-            // its UVs are per-corner, as the TOP and BOTTOM edges are rotated.
-            let handle = assets.as_mut().and_then(|a| {
-                if tile {
-                    a.sprite_texture_tiled(&path, images)
-                } else {
-                    a.sprite_texture(&path, images)
-                }
-            });
-            // A missing BLP draws nothing.
-            let Some(handle) = handle else { return };
-            // The 8 border pieces share one atlas, so a `tile` piece is pulled half a texel in on
-            // its bounded axes; a stretched bg is a whole texture.
-            let uvs = match images.get(&handle) {
-                Some(img) if tile => {
-                    let sz = img.texture_descriptor.size;
-                    benilla_ui::script::inset_atlas_bleed(uvs, sz.width as f32, sz.height as f32)
-                }
-                _ => uvs,
-            };
-            let mut color = color;
-            color[3] *= eq.alpha;
-            out.push(UiQuad {
-                rect,
-                z_key: eq.z,
-                texture: Some(handle),
-                uv: UvRect::from_corners(uvs),
-                color,
                 clip,
                 ..default()
             });

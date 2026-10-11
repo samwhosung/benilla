@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 
 use crate::layout::{self, Anchor, LayoutInput, Point, Rect};
-use crate::order::ZTarget;
 use crate::widget::{FrameHandle, FrameKind, KindState, RegionHandle};
 
-use super::backdrop;
 use super::types::RegionData;
-use super::{ExtractedQuad, MeasureRequest, Model, QuadContent, UiScript, SCREEN};
+use super::{MeasureRequest, Model, UiScript, SCREEN};
 
 /// A frame's `effective_alpha` and `effective_scale`, worn by the quads it emits itself.
 #[derive(Clone, Copy)]
@@ -497,7 +495,12 @@ impl UiScript {
     /// [`UiScript::resolve`]'s body on a bare `Model`, so a Lua binding can force a fresh resolve,
     /// as `UpdateScrollChildRect` must report a range reflecting a same-tick `SetHeight`.
     pub(super) fn resolve_layout(model: &mut Model) {
+        let solves = model.layout_solves;
         Self::resolve_layout_inner(model);
+        // A solve may have resized a frame: its backdrop re-runs its texcoords (`0x76b580`).
+        if model.layout_solves != solves {
+            super::backdrop::after_resolve(model);
+        }
         if !model.layout_verify_recheck {
             return;
         }
@@ -1223,62 +1226,6 @@ impl UiScript {
             }
         }
         out
-    }
-
-    /// Push one [`QuadContent::Backdrop`] per piece of frame `fh`'s backdrop, at the frame slot's
-    /// `z`: behind its regions, and background before border by the stable sort.
-    pub(super) fn emit_backdrop(
-        model: &Model,
-        fh: FrameHandle,
-        fr: Rect,
-        z: u64,
-        paint: FramePaint,
-        clip: Option<Rect>,
-        out: &mut Vec<ExtractedQuad>,
-    ) {
-        let Some(bd) = model.backdrops.get(&fh) else {
-            return;
-        };
-        let scale = crate::script::object::eff_scale(model, fh);
-        for piece in backdrop::pieces(fr, bd, scale) {
-            // The piece's screen bounding box: the render is axis-aligned, so the reference's slant
-            // under unequal top and bottom insets is not drawn (stock insets are symmetric).
-            let xs = piece.corners.map(|c| c[0]);
-            let ys = piece.corners.map(|c| c[1]);
-            let (left, right) = (
-                xs.iter().copied().fold(f32::MAX, f32::min),
-                xs.iter().copied().fold(f32::MIN, f32::max),
-            );
-            let (bottom, top) = (
-                ys.iter().copied().fold(f32::MAX, f32::min),
-                ys.iter().copied().fold(f32::MIN, f32::max),
-            );
-            let path = if piece.is_bg {
-                bd.bg_file.clone()
-            } else {
-                bd.edge_file.clone()
-            };
-            let Some(path) = path else { continue };
-            let color = if piece.is_bg {
-                bd.bg_color
-            } else {
-                bd.border_color
-            };
-            out.push(ExtractedQuad {
-                target: ZTarget::Frame(fh),
-                z,
-                rect: Some(Rect::new(bottom, left, top, right)),
-                alpha: paint.alpha,
-                content: QuadContent::Backdrop {
-                    path,
-                    color,
-                    uvs: piece.uvs,
-                    tile: piece.tile,
-                },
-                clip,
-                scale: paint.scale,
-            });
-        }
     }
 }
 

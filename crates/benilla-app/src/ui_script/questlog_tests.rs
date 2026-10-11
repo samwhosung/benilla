@@ -1262,7 +1262,7 @@ fn popup_children_inherit_the_dialog_stratum() {
     let backdrop_z = quads
         .iter()
         .find_map(|q| match &q.content {
-            QuadContent::Backdrop { path, .. } if path.contains("UI-DialogBox-Background") => {
+            QuadContent::Texture { path: Some(p), .. } if p.contains("UI-DialogBox-Background") => {
                 Some(q.z)
             }
             _ => None,

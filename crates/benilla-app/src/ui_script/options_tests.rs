@@ -311,7 +311,7 @@ fn the_ground_dim_draws_over_the_tile_and_clear_of_the_rope() {
     let ground = quads
         .iter()
         .position(|q| match &q.content {
-            QuadContent::Backdrop { path, .. } => path.contains("UI-DialogBox-Background"),
+            QuadContent::Texture { path: Some(p), .. } => p.contains("UI-DialogBox-Background"),
             _ => false,
         })
         .expect("the window still wears the 1.14 dialog ground");

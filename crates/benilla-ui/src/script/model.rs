@@ -155,8 +155,9 @@ pub(crate) struct Model {
     pub(crate) link_spans: HashMap<FrameHandle, Vec<(Rect, String, String)>>,
     /// Region visuals (texture, colour, text) and layout (anchors, size, justify).
     pub(crate) region_data: HashMap<RegionHandle, RegionData>,
-    /// Each frame's backdrop plate (`<Backdrop>` or `SetBackdrop`, the client's `frame+0x1ac`).
-    pub(crate) backdrops: HashMap<FrameHandle, backdrop::Backdrop>,
+    /// Each frame's backdrop plate (`<Backdrop>` or `SetBackdrop`, the client's `frame+0x1ac`):
+    /// its spec and the nine Texture regions it built.
+    pub(crate) backdrops: HashMap<FrameHandle, backdrop::Installed>,
     /// `CSimpleHTML`'s state: element fonts `+0x350`, link format `+0x360`, content nodes `+0x340`.
     pub(crate) simple_html: simplehtml::SimpleHtmlStates,
     /// Named `<Font>` objects by lowercased name, as 1.12 matches them with `SStrCmpI` (`0x783870`,

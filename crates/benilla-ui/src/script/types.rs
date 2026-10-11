@@ -129,17 +129,6 @@ pub enum QuadContent {
         /// `0..=1`; the widget's value moves only its marker, never the strip.
         sat: f32,
     },
-    /// One `Backdrop` piece, the tiled background or one of the 8 border pieces, drawn in the
-    /// frame's slot behind its regions; per-corner UVs, since the top and bottom edges turn 90°.
-    Backdrop {
-        path: String,
-        /// The `SetBackdropColor` or `SetBackdropBorderColor` tint, pre-alpha.
-        color: [f32; 4],
-        /// `[TL, TR, BR, BL]`, screen order.
-        uvs: [[f32; 2]; 4],
-        /// Sample with repeat (wrap) addressing.
-        tile: bool,
-    },
     /// A `FontString` region with its resolved font; the app measures and draws it.
     Text {
         text: Option<String>,

@@ -671,12 +671,7 @@ impl WidgetArena {
         draw_layer: DrawLayer,
         sub_level: i8,
     ) -> Option<RegionHandle> {
-        let decl_seq = {
-            let f = self.frame_mut(owner)?;
-            let d = f.next_decl;
-            f.next_decl += 1;
-            d
-        };
+        let decl_seq = self.take_decl(owner)?;
         let (index, generation) = self.regions.insert(Region {
             kind,
             owner,
@@ -693,9 +688,31 @@ impl WidgetArena {
         Some(handle)
     }
 
-    /// Free one region, as only `CSimpleHTML::SetText` does in the client, pool-freeing the last
-    /// parse's blocks (`0x78adc6`). The caller drops the region's script-model state too, and never
-    /// frees a region some state holds by handle.
+    /// The next declaration seq on `owner`, the region's link position. At the draw key's cap the
+    /// frame's regions renumber from 0 in link order (`regions` ascends by seq), so a frame that
+    /// rebuilds regions for ever, a backdrop set on every show, keeps its order and never
+    /// outgrows the key.
+    pub(crate) fn take_decl(&mut self, owner: FrameHandle) -> Option<u32> {
+        if self.frame(owner)?.next_decl >= crate::order::DECL_CAP {
+            let regions = self.frame(owner)?.regions.clone();
+            let mut next = 0;
+            for rh in regions {
+                if let Some(r) = self.region_mut(rh) {
+                    r.decl_seq = next;
+                    next += 1;
+                }
+            }
+            self.frame_mut(owner)?.next_decl = next;
+        }
+        let f = self.frame_mut(owner)?;
+        let d = f.next_decl;
+        f.next_decl += 1;
+        Some(d)
+    }
+
+    /// Free one region, as `CSimpleHTML::SetText` pool-frees the last parse's blocks (`0x78adc6`)
+    /// and a backdrop's teardown its nine pieces (`0x77f4d0`). The caller drops the region's
+    /// script-model state too, and never frees a region some state holds by handle.
     pub fn destroy_region(&mut self, h: RegionHandle) -> bool {
         let Some(region) = self.region(h) else {
             return false;
