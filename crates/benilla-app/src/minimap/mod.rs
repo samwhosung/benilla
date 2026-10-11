@@ -901,8 +901,8 @@ impl Plugin for MinimapPlugin {
                         .run_if(crate::ui_script::ingame_ui_up),
                     // Before the script tick, so GameTimeFrame reads this frame's minute.
                     feed_game_time.in_set(crate::ui_script::UiFeed),
-                    // After the world-mouseover drive (UnitFeed): a same-frame world-hover→blip
-                    // transition must end with the blip tooltip shown, not the fade.
+                    // In the feed, off the hover the last walk left; after the world drive only so
+                    // the two VM writers keep one order.
                     blips::drive_blip_tooltip
                         .after(crate::ui_unit::UnitFeed)
                         .in_set(crate::ui_script::UiFeed),
