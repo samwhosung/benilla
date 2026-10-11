@@ -655,8 +655,8 @@ impl crate::script::UiScript {
                 };
                 let path = m.path.as_deref()?;
                 let facts = model.model_facts.get(&model_key(path))?;
-                // A pane whose camera is still pending paints nothing, not even its
-                // `OnUpdateModel` (`0x76d5f0`).
+                // A pane whose camera is still pending draws nothing (`0x76d5f0`); its
+                // `OnUpdateModel` still fires, from the paint hook ahead of that gate (`0x76d5ea`).
                 if m.camera_pending.is_some() {
                     return None;
                 }
