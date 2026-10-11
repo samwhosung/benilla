@@ -25,7 +25,7 @@ pub(crate) use layout_methods::eff_scale;
 pub(in crate::script) use layout_methods::settle;
 pub(crate) mod movable;
 pub(crate) mod toplevel;
-pub(crate) use movable::{cancel_on_hide, pump_move_or_size, FrameMove, FrameSizing};
+pub(crate) use movable::{cancel_on_hide, pump_move_or_size, FrameMove};
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // id ↔ lightuserdata

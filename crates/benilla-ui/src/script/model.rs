@@ -639,11 +639,10 @@ pub(crate) struct Model {
     pub(crate) drag_registered: HashMap<FrameHandle, HashSet<String>>,
     /// The drag gesture, armed by a press on a drag-registered frame, started past the threshold.
     pub(crate) drag: Option<cursor::DragGesture>,
-    /// The one `StartMoving()` in flight, the client's `root+0xcfc` slot, apart from `drag` as in
-    /// the reference: a move outlives the button, since mouse-up's auto-stop skips a Lua drag.
+    /// The one move or size in flight, the client's `root+0xcfc` slot with its grip (`+0xd04`),
+    /// apart from `drag` as in the reference: a `StartMoving` or `StartSizing` outlives the button,
+    /// since mouse-up's auto-stop skips a Lua drag.
     pub(crate) moving: Option<super::object::FrameMove>,
-    /// The `StartSizing` in flight, cleared by `StopMovingOrSizing` (`0x776990`).
-    pub(crate) sizing: Option<super::object::FrameSizing>,
     /// A Slider thumb drag, left press to release or pointer leave, handled here with no Lua.
     pub(crate) slider_drag: Option<slider::SliderDrag>,
     /// A ColorSelect wheel or value-bar drag, press to release.
@@ -1338,7 +1337,6 @@ impl Model {
             drag_registered: HashMap::new(),
             drag: None,
             moving: None,
-            sizing: None,
             slider_drag: None,
             color_drag: None,
             gossip: None,

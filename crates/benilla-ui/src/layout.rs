@@ -249,13 +249,12 @@ impl Anchors {
         self.0.iter().flatten()
     }
 
-    /// Each held anchor's offsets in point order; the point is not writable here, so an anchor
+    /// The offsets of the anchor held for `point`; the point is not writable here, so an anchor
     /// never leaves its slot.
     #[inline]
-    pub fn offsets_mut(&mut self) -> impl Iterator<Item = (&mut f32, &mut f32)> {
-        self.0
-            .iter_mut()
-            .flatten()
+    pub fn offset_mut(&mut self, point: Point) -> Option<(&mut f32, &mut f32)> {
+        self.0[point.id() as usize]
+            .as_mut()
             .map(|a| (&mut a.x_off, &mut a.y_off))
     }
 

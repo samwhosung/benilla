@@ -6,8 +6,9 @@
 //! `FrameLevel:`, `X:`, `Y:`, `W:` and `H:` lines; ours is
 //! `benilla-config/layout/<realm>-<character>.txt`, keeping `Frame:`, `W:` and `H:`.
 //! Deviation: one `Point: <point> <relativeTo> <relativePoint> <x> <y>` line per anchor, `-` for
-//! the screen root, instead of `X:`/`Y:`, because a benilla drag moves the authored anchors
-//! rather than re-anchoring to one TOPLEFT, and a pair would lose them. There is no
+//! the screen root, instead of `X:`/`Y:`. A drag leaves one TOPLEFT against the screen root
+//! (`0x768430`), whose line holds the reference's X and Y; a frame user-placed without a drag
+//! keeps its authored anchors here, where the reference saves its rect's top-left. There is no
 //! `FrameLevel:`: the reference saves an undocked window's raise, and benilla's raise does not
 //! persist.
 //!
@@ -35,8 +36,8 @@ const SCREEN_TOKEN: &str = "-";
 const HEADER: &str = "\
 # benilla window layout — every frame the player has moved or resized (the client's userPlaced
 # bit). A relative of the reference's layout-cache.txt: same scope, same Frame:/W:/H: keys, but
-# anchors instead of its X:/Y: pair, because a benilla drag moves a frame's anchors rather than
-# collapsing it to a screen position. `-` as a Point: target means the screen root.
+# anchors instead of its X:/Y: pair; a dragged window has one, TOPLEFT on the screen's TOPLEFT.
+# `-` as a Point: target means the screen root.
 ";
 
 /// The character's file: its path, the VM it was restored into, and whether a write is owed.
