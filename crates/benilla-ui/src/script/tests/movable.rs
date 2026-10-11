@@ -41,20 +41,20 @@ fn the_canonical_addon_idiom_moves_a_frame_and_the_position_survives_the_stop() 
     assert_eq!(corner(&mut s), (100.0, 100.0), "born where SetPoint put it");
 
     s.mouse_button(150.0, 140.0, "LeftButton", true); // press inside the panel
-    s.mouse_move(152.0, 140.0); // 2 px, under the drag threshold
+    s.mouse_move(152.0, 140.0); // 2 units, under the drag threshold
     assert_eq!(s.eval::<i64>("return starts").unwrap(), 0);
     assert_eq!(corner(&mut s), (100.0, 100.0));
 
-    s.mouse_move(160.0, 140.0); // crosses the threshold ⇒ OnDragStart ⇒ StartMoving
+    s.mouse_move(170.0, 140.0); // crosses the threshold ⇒ OnDragStart ⇒ StartMoving
     assert_eq!(s.eval::<i64>("return starts").unwrap(), 1);
-    s.mouse_move(260.0, 190.0); // +100, +50 from the grab
+    s.mouse_move(270.0, 190.0); // +100, +50 from the grab
     assert_eq!(
         corner(&mut s),
         (200.0, 150.0),
         "the frame follows the cursor delta since StartMoving"
     );
 
-    s.mouse_button(260.0, 190.0, "LeftButton", false); // OnDragStop ⇒ StopMovingOrSizing
+    s.mouse_button(270.0, 190.0, "LeftButton", false); // OnDragStop ⇒ StopMovingOrSizing
     assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);
     assert_eq!(corner(&mut s), (200.0, 150.0), "the position survives");
 
@@ -74,17 +74,17 @@ fn the_canonical_addon_idiom_moves_a_frame_and_the_position_survives_the_stop() 
 fn a_moving_frame_follows_successive_mouse_moves() {
     let mut s = movable_panel();
     s.mouse_button(150.0, 140.0, "LeftButton", true);
-    s.mouse_move(160.0, 140.0); // the move that starts the drag
+    s.mouse_move(170.0, 140.0); // the move that starts the drag
     assert_eq!(
         corner(&mut s),
         (100.0, 100.0),
         "the frame follows from where StartMoving was called, so the starting move moves nothing"
     );
     for (step, want) in [
-        ((170.0, 140.0), (110.0, 100.0)),
-        ((170.0, 160.0), (110.0, 120.0)),
-        ((120.0, 160.0), (60.0, 120.0)), // back left of where it started
-        ((120.0, 160.0), (60.0, 120.0)), // a zero-delta move changes nothing
+        ((180.0, 140.0), (110.0, 100.0)),
+        ((180.0, 160.0), (110.0, 120.0)),
+        ((130.0, 160.0), (60.0, 120.0)), // back left of where it started
+        ((130.0, 160.0), (60.0, 120.0)), // a zero-delta move changes nothing
     ] {
         s.mouse_move(step.0, step.1);
         assert_eq!(corner(&mut s), want, "after moving to {step:?}");

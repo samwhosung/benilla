@@ -3,9 +3,23 @@
 use crate::script::Model;
 use crate::widget::FrameHandle;
 
-/// The drag-start distance in pixels, exceeded strictly; the reference starts at 0.01 frame units
-/// or more from the press (`0x81c468`, squared by `0x76b300`).
-pub(crate) const DRAG_START_THRESHOLD: f32 = 4.0;
+/// The drag-start threshold, 0.01 layout units squared: `0x76b300` stores `0.01f × 0.01f`
+/// (`0x81c468` = `0.01f`) in `[0xcf0c14]` as an f32.
+const DRAG_START_DISTANCE_SQ: f32 = 0.01 * 0.01;
+
+/// Whether `pos` is far enough from the press point `start` to start the drag (`0x76b34c`–`0x76b372`).
+/// The reference measures in layout units, where the screen diagonal is 1 (`0x41ad80`, from the
+/// press and move converters `0x425666`/`0x425766`), so the pointer, in root units, is divided by
+/// [`Model::layout_unit`]: 1% of the diagonal at every screen size and UI scale. The squared
+/// distance is taken in `f64` against the f32 threshold (x87 at 53 bits: `WinMain`'s
+/// `_controlfp(0x9001f)`, `D3DCREATE_FPU_PRESERVE`), and only a smaller one skips (`0x76b372`
+/// `jne`), so a NaN, which also sets the carry flag, skips too.
+fn past_start_distance(model: &Model, start: (f32, f32), pos: (f32, f32)) -> bool {
+    let unit = model.layout_unit();
+    let axis = |a: f32, b: f32| f64::from(a / unit) - f64::from(b / unit);
+    let (dx, dy) = (axis(pos.0, start.0), axis(pos.1, start.1));
+    dx * dx + dy * dy >= f64::from(DRAG_START_DISTANCE_SQ)
+}
 
 /// The event button bits in order, `1`..`0x10` (`0x76bf70`'s name table).
 const HELD_ORDER: [&str; 5] = [
@@ -86,9 +100,7 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
         if g.started {
             return None;
         }
-        let (sx, sy) = g.start;
-        let dist = ((pos.0 - sx).powi(2) + (pos.1 - sy).powi(2)).sqrt();
-        if dist <= DRAG_START_THRESHOLD {
+        if !past_start_distance(model, g.start, pos) {
             return None;
         }
         // `OnDragStart`'s argument is the lowest button of the move event's held mask
@@ -174,17 +186,17 @@ mod tests {
         s.resolve();
 
         s.mouse_button(100.0, 300.0, "LeftButton", true); // press inside A
-        s.mouse_move(102.0, 300.0); // 2px: under the threshold
+        s.mouse_move(102.0, 300.0); // 2 units: under the threshold
         assert_eq!(s.eval::<i64>("return drag_starts").unwrap(), 0);
 
-        s.mouse_move(110.0, 300.0); // 10px from the press: starts
+        s.mouse_move(120.0, 300.0); // 20 units from the press: starts
         assert_eq!(s.eval::<i64>("return drag_starts").unwrap(), 1);
         assert_eq!(
             s.eval::<String>("return drag_button").unwrap(),
             "LeftButton"
         );
 
-        s.mouse_move(120.0, 300.0); // further movement doesn't re-fire
+        s.mouse_move(140.0, 300.0); // further movement doesn't re-fire
         assert_eq!(s.eval::<i64>("return drag_starts").unwrap(), 1);
 
         s.mouse_move(600.0, 300.0); // over B now
@@ -230,7 +242,7 @@ mod tests {
         s.resolve();
 
         s.mouse_button(100.0, 300.0, "LeftButton", true);
-        s.mouse_move(110.0, 300.0); // starts the drag
+        s.mouse_move(120.0, 300.0); // starts the drag
         s.mouse_button(100.0, 300.0, "LeftButton", false); // released back on A
         assert_eq!(s.eval::<i64>("return clicks").unwrap(), 0);
         assert!(s.errors().is_empty(), "{:?}", s.errors());

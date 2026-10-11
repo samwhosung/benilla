@@ -41,6 +41,7 @@ fn unit(s: &UiScript) -> f32 {
 /// drag started.
 fn starts_at(s: &mut UiScript, frac: f32) -> bool {
     let d = frac * unit(s);
+    s.run("starts = 0").unwrap();
     s.mouse_button(0.0, 300.0, "LeftButton", true);
     s.mouse_move(d, 300.0);
     let started = starts(s) == 1;

@@ -576,7 +576,7 @@ fn dragging_a_bagnon_slot_picks_the_item_up() {
     let (dx, dy) = centre_of(&mut s, &empty);
     s.mouse_move(sx, sy);
     s.mouse_button(sx, sy, "LeftButton", true);
-    s.mouse_move(sx + 12.0, sy + 12.0); // past DRAG_START_THRESHOLD ⇒ OnDragStart
+    s.mouse_move(sx + 12.0, sy + 12.0); // past the drag-start distance ⇒ OnDragStart
     s.mouse_move(dx, dy);
     s.mouse_button(dx, dy, "LeftButton", false);
 

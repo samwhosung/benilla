@@ -826,7 +826,7 @@ fn drag_drop_onto_another_button_hops_the_displaced_action() {
     s.resolve();
 
     s.mouse_button(26.0, 22.0, "LeftButton", true);
-    s.mouse_move(40.0, 22.0); // past the 4px drag-start threshold
+    s.mouse_move(40.0, 22.0); // past the drag-start distance
     let consumed = s.mouse_button(68.0, 22.0, "LeftButton", false);
     assert!(consumed, "OnReceiveDrag consumed the release");
 

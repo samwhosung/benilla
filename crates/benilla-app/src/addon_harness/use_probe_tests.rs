@@ -90,7 +90,7 @@ fn the_use_column_can_fail() {
         "#,
         ),
     );
-    // `OnDragStart` fires only past the 4 px threshold, so the drag must actually move.
+    // `OnDragStart` fires only past the drag-start distance, so the drag must actually move.
     fx.addon(
         "RaisesOnDrag",
         &painted_button(

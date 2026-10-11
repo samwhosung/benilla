@@ -315,7 +315,7 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
     s.run("ToggleSpellBook(BOOKTYPE_SPELL)").unwrap();
     s.resolve();
 
-    // Drag Fireball off its book button (press → past the 4px threshold → the payload is up).
+    // Drag Fireball off its book button (press → past the drag-start distance → the payload is up).
     let (l, r, t, b) = (
         s.eval::<f32>("return SpellButton1:GetLeft()").unwrap(),
         s.eval::<f32>("return SpellButton1:GetRight()").unwrap(),

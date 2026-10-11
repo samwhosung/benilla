@@ -91,11 +91,14 @@ fn reveal_window(s: &mut UiScript, window: &str) {
     }
 }
 
+/// A move past the drag-start distance (0.01 of the 1600×900 diagonal, 15.7 root units).
+const DRAG_STARTS_AT: f32 = 20.0;
+
 fn drag_tab(s: &mut UiScript, dx: f32, dy: f32) {
     reveal(s);
     let (tx, ty) = centre(s, "ChatFrame1Tab");
     s.mouse_button(tx, ty, "LeftButton", true);
-    s.mouse_move(tx + 5.0, ty); // past the 4px threshold: OnDragStart -> StartMoving
+    s.mouse_move(tx + DRAG_STARTS_AT, ty); // past the drag-start distance: OnDragStart -> StartMoving
     s.mouse_move(tx + dx, ty + dy);
     s.mouse_button(tx + dx, ty + dy, "LeftButton", false);
     s.resolve();
@@ -284,18 +287,18 @@ fn the_tab_drag_moves_an_unlocked_window_and_a_locked_one_stays_put() {
     reveal(&mut s);
     let (tx, ty) = centre(&mut s, "ChatFrame1Tab");
     s.mouse_button(tx, ty, "LeftButton", true);
-    s.mouse_move(tx + 5.0, ty);
+    s.mouse_move(tx + DRAG_STARTS_AT, ty);
     s.mouse_move(tx + 80.0, ty);
     assert_eq!(
         left(&mut s),
-        start + 75.0,
+        start + 80.0 - DRAG_STARTS_AT,
         "the window followed the cursor from where the drag started"
     );
     s.mouse_button(tx + 80.0, ty, "LeftButton", false);
     s.mouse_move(tx + 400.0, ty);
     assert_eq!(
         left(&mut s),
-        start + 75.0,
+        start + 80.0 - DRAG_STARTS_AT,
         "OnDragStop ended it — a move that outlived the button would keep going"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -318,8 +321,8 @@ fn a_moved_window_is_user_placed_and_the_managed_pass_skips_it() {
     let moved = left(&mut s);
     assert_eq!(
         moved,
-        seated + 115.0,
-        "120 less the 5px spent on the threshold"
+        seated + 120.0 - DRAG_STARTS_AT,
+        "120 less the move spent on the drag-start distance"
     );
     assert!(
         s.eval::<bool>("return ChatFrame1:IsUserPlaced()").unwrap(),
@@ -534,7 +537,7 @@ fn drag_named_tab(s: &mut UiScript, window: &str, dx: f32, dy: f32) {
         "the tab is hit"
     );
     s.mouse_button(tx, ty, "LeftButton", true);
-    s.mouse_move(tx + 5.0, ty);
+    s.mouse_move(tx + DRAG_STARTS_AT, ty);
     s.mouse_move(tx + dx, ty + dy);
     s.mouse_button(tx + dx, ty + dy, "LeftButton", false);
     s.resolve();

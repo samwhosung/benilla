@@ -24,9 +24,9 @@ use super::render::{Painted, RenderBaseline};
 /// it, in painter order, are dropped, so a broken ninth widget reads clean.
 pub const MAX_USE_TARGETS: usize = 8;
 
-/// How far the drag travels: past `cursor::DRAG_START_THRESHOLD` (4 px, strict `>`) so
-/// `OnDragStart` fires, and inside a 16 px item slot so the release lands on the same frame.
-const DRAG_PX: f32 = 5.0;
+/// How far the drag travels: past the drag-start distance (0.01 of the screen diagonal, 12.8 root
+/// units at the 1024×768 these runs use) so `OnDragStart` fires.
+const DRAG_PX: f32 = 14.0;
 
 /// Where the cursor is parked at the end, off-screen so the last `OnLeave` always fires.
 const PARKED: (f32, f32) = (-10_000.0, -10_000.0);
