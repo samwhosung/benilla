@@ -345,6 +345,13 @@ impl WidgetArena {
             None if was_detached => return false,
             _ => {}
         }
+        // Leaving its parent runs the parent's region-removed hook (`0x77fd55`); a detached
+        // region already left.
+        if !was_detached {
+            if let Some(of) = self.frame_mut(old_owner) {
+                of.kind_state.region_removed(rh);
+            }
+        }
         let Some(new_owner) = new_owner else {
             if let Some(r) = self.region_mut(rh) {
                 r.detached = true;

@@ -664,3 +664,129 @@ fn a_backdrop_set_many_times_keeps_its_frames_draw_order() {
     want.extend(["first".to_string(), "last".to_string()]);
     assert_eq!(paths, want);
 }
+
+/// A piece a Button adopts into a slot is still the backdrop's (`+0x00..+0x20`), and its teardown
+/// deletes it; the region-removed hook (`0x778cb0`) empties the slot, so the next
+/// `SetNormalTexture("path")` builds a fresh texture that draws, not a write into the dead one.
+#[test]
+fn a_button_slot_holding_a_piece_lets_go_when_the_backdrop_does() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        b = CreateFrame("Button")
+        b:SetPoint("CENTER", 0, 0)
+        b:SetWidth(100); b:SetHeight(40)
+        b:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        local piece = ({ b:GetRegions() })[1]
+        b:SetNormalTexture(piece)
+        assert(b:GetNormalTexture() == piece, "the slot holds the piece")
+        b:SetBackdrop(nil)
+        assert(b:GetNormalTexture() == nil, "the slot let go of the freed piece")
+        b:SetNormalTexture("fresh")
+        assert(b:GetNormalTexture():GetTexture() == "fresh", "a new texture answers")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let drawn = s
+        .extract()
+        .into_iter()
+        .any(|q| matches!(&q.content, QuadContent::Texture { path: Some(p), .. } if p == "fresh"));
+    assert!(drawn, "the fresh normal texture draws");
+}
+
+/// The border is on BORDER (`0x77e8d0`), and the draw layer outranks the frame within a level
+/// (`0x765920`): a backdrop's edge draws over a later-linked frame's BACKGROUND texture at the
+/// same strata and level, where the frame's own slot drew it under.
+#[test]
+fn a_border_draws_over_another_frames_background_at_its_level() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local a = CreateFrame("Frame")
+        a:SetPoint("CENTER", 0, 0)
+        a:SetWidth(100); a:SetHeight(100)
+        a:SetBackdrop({ edgeFile = "edge" })
+        local b = CreateFrame("Frame")
+        b:SetAllPoints(a)
+        local t = b:CreateTexture(nil, "BACKGROUND")
+        t:SetAllPoints(b); t:SetTexture("under")
+        assert(a:GetFrameLevel() == b:GetFrameLevel(), "one level")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let paths: Vec<String> = s
+        .extract()
+        .into_iter()
+        .filter_map(|q| match q.content {
+            QuadContent::Texture { path: Some(p), .. } => Some(p),
+            _ => None,
+        })
+        .collect();
+    let under = paths.iter().position(|p| p == "under").expect("drawn");
+    let first_edge = paths.iter().position(|p| p == "edge").expect("drawn");
+    assert!(first_edge > under, "the border draws over it: {paths:?}");
+}
+
+/// `0x77f0c0` re-applies both colours after the texcoords (`0x77f3e9`, `0x77f3f4`), so a resize
+/// repaints a piece an addon tinted itself.
+#[test]
+fn a_resize_repaints_a_piece_over_its_own_vertex_colour() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        f = CreateFrame("Frame")
+        f:SetPoint("CENTER", 0, 0)
+        f:SetWidth(100); f:SetHeight(100)
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        f:SetBackdropBorderColor(1, 0, 0)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let left = "local r = { f:GetRegions() } return r[2]:GetVertexColor()";
+    s.run("local r = { f:GetRegions() } r[2]:SetVertexColor(0, 1, 0)")
+        .unwrap();
+    assert_eq!(
+        s.eval::<(f32, f32, f32, f32)>(left).unwrap(),
+        (0.0, 1.0, 0.0, 1.0)
+    );
+    s.run("f:SetWidth(120)").unwrap();
+    s.resolve();
+    assert_eq!(
+        s.eval::<(f32, f32, f32, f32)>(left).unwrap(),
+        (1.0, 0.0, 0.0, 1.0),
+        "the resize put the border colour back"
+    );
+}
+
+/// The background's BOTTOMRIGHT anchor carries the top inset as its y (`0x77e9ae` loads `+0x50`),
+/// which `GetPoint` shows though the drawn rect never does.
+#[test]
+fn the_bg_bottomright_anchor_answers_the_top_inset() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame")
+        f:SetBackdrop({ bgFile = "bg", insets = { left = 3, right = 4, top = 7, bottom = 9 } })
+        local bg = f:GetRegions()
+        local found
+        for i = 1, bg:GetNumPoints() do
+            local point, rel, relPoint, x, y = bg:GetPoint(i)
+            if point == "BOTTOMRIGHT" then
+                assert(rel == f and relPoint == "BOTTOMRIGHT", "on the frame's corner")
+                assert(x == -4 and y == 7, "x " .. x .. ", y " .. y .. ": the top inset")
+                found = true
+            elseif point == "BOTTOMLEFT" then
+                assert(x == 3 and y == 9, "the bottom-left takes the bottom inset")
+            end
+        end
+        assert(found, "a BOTTOMRIGHT anchor")
+    "#,
+    )
+    .unwrap();
+}

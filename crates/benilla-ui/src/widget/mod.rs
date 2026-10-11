@@ -719,6 +719,7 @@ impl WidgetArena {
         };
         let owner = region.owner;
         if let Some(f) = self.frame_mut(owner) {
+            f.kind_state.region_removed(h);
             f.regions.retain(|&r| r != h);
             if f.title_region == Some(h) {
                 f.title_region = None;

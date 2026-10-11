@@ -124,6 +124,34 @@ pub enum KindState {
 }
 
 impl KindState {
+    /// The owner's region-removed hook, frame vtable `+0x2c`, which `0x77fd10` runs on the old
+    /// parent whenever a region leaves it, freed, reparented or detached (`0x77fd55`): a kind
+    /// that keeps a region in a slot drops it there, so no slot names a dead region. Button
+    /// `0x778cb0`, CheckButton `0x785230`, StatusBar `0x783110`, Slider `0x789790` and ColorSelect
+    /// `0x78b530` override it; every other kind keeps the base unlink `0x76a7f0` alone.
+    pub fn region_removed(&mut self, rh: RegionHandle) {
+        let clear = |slot: &mut Option<RegionHandle>| {
+            if *slot == Some(rh) {
+                *slot = None;
+            }
+        };
+        match self {
+            KindState::Button(bs) => bs.region_removed(rh),
+            // The bar texture, `+0x324`.
+            KindState::StatusBar(sb) => clear(&mut sb.bar),
+            // The thumb, `+0x328`.
+            KindState::Slider(sl) => clear(&mut sl.thumb),
+            // The four art slots, `+0x318` to `+0x324`.
+            KindState::ColorSelect(cs) => {
+                clear(&mut cs.wheel);
+                clear(&mut cs.wheel_thumb);
+                clear(&mut cs.value_strip);
+                clear(&mut cs.value_thumb);
+            }
+            _ => {}
+        }
+    }
+
     /// The display lines of either message-frame class, which share the [`MessageLine`] record.
     pub fn message_lines(&self) -> Option<&VecDeque<MessageLine>> {
         match self {
@@ -887,6 +915,26 @@ impl ButtonState {
         }
         if state == self.state {
             self.shown = rh;
+        }
+    }
+
+    /// The region-removed hook: a CheckButton drops its checked pair (`0x785230`, `+0x4e0` and
+    /// `+0x4e4`), then every button its label (`+0x338`), its three state slots (`+0x4b8` to
+    /// `+0x4c0`), the shown one (`+0x4c4`) and its highlight (`+0x4c8`) (`0x778cb0`).
+    fn region_removed(&mut self, rh: RegionHandle) {
+        for slot in [
+            &mut self.checked_tex,
+            &mut self.disabled_checked,
+            &mut self.text,
+            &mut self.disabled,
+            &mut self.normal,
+            &mut self.pushed,
+            &mut self.shown,
+            &mut self.highlight,
+        ] {
+            if *slot == Some(rh) {
+                *slot = None;
+            }
         }
     }
 

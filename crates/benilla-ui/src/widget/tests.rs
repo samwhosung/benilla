@@ -324,3 +324,66 @@ fn the_tooltip_registry_tracks_live_gametooltips() {
     a.destroy(loose);
     assert!(a.tooltip_kinds().is_empty());
 }
+
+// ── The region-removed hook (frame vtable `+0x2c`) ───────────────────────────────────────────
+
+/// Freeing, reparenting or detaching a region runs its parent's hook, and each kind that keeps a
+/// region in a slot lets go of it: StatusBar `0x783110`, Slider `0x789790`, ColorSelect
+/// `0x78b530`, CheckButton `0x785230` over Button `0x778cb0`.
+#[test]
+fn a_region_leaving_its_parent_empties_the_kind_slot_that_held_it() {
+    let mut a = arena();
+    let other = a.create(FrameKind::Frame, None, None);
+    let bar = a.create(FrameKind::StatusBar, None, None);
+    let slider = a.create(FrameKind::Slider, None, None);
+    let wheel = a.create(FrameKind::ColorSelect, None, None);
+    let check = a.create(FrameKind::CheckButton, None, None);
+    let tex = |a: &mut WidgetArena, f| {
+        a.create_region(f, RegionKind::Texture, DrawLayer::Artwork, 0)
+            .unwrap()
+    };
+    let (b, t, w, c, n) = (
+        tex(&mut a, bar),
+        tex(&mut a, slider),
+        tex(&mut a, wheel),
+        tex(&mut a, check),
+        tex(&mut a, check),
+    );
+    match &mut a.frame_mut(bar).unwrap().kind_state {
+        KindState::StatusBar(s) => s.bar = Some(b),
+        _ => unreachable!(),
+    }
+    match &mut a.frame_mut(slider).unwrap().kind_state {
+        KindState::Slider(s) => s.thumb = Some(t),
+        _ => unreachable!(),
+    }
+    match &mut a.frame_mut(wheel).unwrap().kind_state {
+        KindState::ColorSelect(s) => s.value_thumb = Some(w),
+        _ => unreachable!(),
+    }
+    match &mut a.frame_mut(check).unwrap().kind_state {
+        KindState::Button(s) => {
+            s.checked_tex = Some(c);
+            s.set_state_slot(ButtonVisualState::Normal, Some(n));
+        }
+        _ => unreachable!(),
+    }
+    // Freed, reparented, detached, freed, and the shown normal texture freed.
+    assert!(a.destroy_region(b));
+    assert!(a.set_region_owner(t, Some(other)));
+    assert!(a.set_region_owner(w, None));
+    assert!(a.destroy_region(c));
+    assert!(a.destroy_region(n));
+    assert!(
+        matches!(&a.frame(bar).unwrap().kind_state, KindState::StatusBar(s) if s.bar.is_none())
+    );
+    assert!(
+        matches!(&a.frame(slider).unwrap().kind_state, KindState::Slider(s) if s.thumb.is_none())
+    );
+    assert!(matches!(&a.frame(wheel).unwrap().kind_state,
+        KindState::ColorSelect(s) if s.value_thumb.is_none()));
+    let KindState::Button(s) = &a.frame(check).unwrap().kind_state else {
+        unreachable!()
+    };
+    assert_eq!((s.checked_tex, s.normal), (None, None));
+}

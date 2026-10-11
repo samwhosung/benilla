@@ -448,6 +448,13 @@ pub(super) fn region_type_name(model: &Model, rh: RegionHandle) -> &'static str 
 /// wrapper raises as stale; the reference frees too, as `CSimpleButton::SetFontString 0x778d20`
 /// deletes the label it replaces.
 pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
+    release_region(model, rh);
+    // A removed node takes its edges with it: a structural change, so the full touch.
+    model.touch_layout();
+}
+
+/// [`free_region`] without its layout touch, for a caller that frees several and touches once.
+pub(crate) fn release_region(model: &mut Model, rh: RegionHandle) {
     model.region_data.remove(&rh);
     model.region_resolved.remove(&rh);
     if let Some(id) = model.region_to_id.remove(&rh) {
@@ -455,8 +462,6 @@ pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
         model.region_names.retain(|_, v| *v != id);
     }
     model.arena.destroy_region(rh);
-    // A removed node takes its edges with it: a structural change, so the full touch.
-    model.touch_layout();
 }
 
 pub(super) fn region_owner_id(model: &mut Model, rh: RegionHandle) -> u32 {

@@ -331,17 +331,18 @@ impl Installed {
 /// the next resolve runs them. Each piece is a fresh Texture linked at the tail of the region
 /// list, so a second backdrop's pieces come after any region made in between.
 pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>) {
-    if let Some(old) = model.backdrops.remove(&fh) {
-        for rh in old.pieces.into_iter().flatten() {
-            super::region::free_region(model, rh);
-        }
+    // One layout touch for the whole swap, the pieces it frees and the ones it builds: the next
+    // resolve re-derives the graph once either way.
+    let old = model.backdrops.remove(&fh);
+    for rh in old.iter().flat_map(|o| o.pieces).flatten() {
+        super::region::release_region(model, rh);
     }
-    let Some(spec) = spec else {
+    let Some(spec) = spec.filter(|_| model.arena.frame(fh).is_some()) else {
+        if old.is_some() {
+            model.touch_layout();
+        }
         return;
     };
-    if model.arena.frame(fh).is_none() {
-        return;
-    }
     let owner = model.frame_id(fh);
     // `SetTexture 0x770200`: a path that does not load leaves the piece without art.
     let loads = |model: &Model, path: &Option<String>| -> Option<String> {
@@ -406,7 +407,6 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
             ran_for: None,
         },
     );
-    // New anchored regions: a structural change.
     model.touch_layout();
     if let Some(rect) = model.resolved.get(&fh).copied() {
         run_texcoords(model, fh, rect);
