@@ -2091,6 +2091,184 @@ mod loader_tests {
             "blank, not painted"
         );
     }
+
+    /// `LoadXML` re-enters itself for the template before the instance (`0x76985c`), and each
+    /// state-texture element builds a new region through the `<Layers>` adder (`0x6f26f0`) that the
+    /// slot store installs, destroying the one it displaces (`0x778fd0` via `0x77900a`, the
+    /// highlight's `0x779110`, the checked pair's `0x785330`/`0x785440`). So an instance's element
+    /// keeps nothing of the template's: the fresh region's TexCoords, alpha and BLEND (`0x76fc40`;
+    /// the highlight keeps its own, `0x7789a4`), and `SetAllPoints` with no anchors (`0x7701c0`).
+    #[test]
+    fn an_instance_state_texture_replaces_the_templates() {
+        const TAGS: [(&str, &str); 6] = [
+            ("NormalTexture", "GetNormalTexture"),
+            ("PushedTexture", "GetPushedTexture"),
+            ("DisabledTexture", "GetDisabledTexture"),
+            ("HighlightTexture", "GetHighlightTexture"),
+            ("CheckedTexture", "GetCheckedTexture"),
+            ("DisabledCheckedTexture", "GetDisabledCheckedTexture"),
+        ];
+        let template: String = TAGS
+            .iter()
+            .map(|(tag, _)| {
+                format!(
+                    r#"<{tag} name="$parentTmpl{tag}" file="Interface\Tmpl{tag}" alpha="0.5" alphaMode="MOD">
+                        <Size><AbsDimension x="10" y="10"/></Size>
+                        <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="3" y="-3"/></Offset></Anchor></Anchors>
+                        <TexCoords left="0.25" right="0.75" top="0.25" bottom="0.75"/>
+                    </{tag}>"#
+                )
+            })
+            .collect();
+        let instance: String = TAGS
+            .iter()
+            .map(|(tag, _)| format!(r#"<{tag} file="Interface\Inst{tag}"/>"#))
+            .collect();
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(&format!(
+            r#"<Ui>
+                <CheckButton name="StateTmpl" virtual="true">
+                    <Size><AbsDimension x="40" y="20"/></Size>
+                    {template}
+                </CheckButton>
+                <CheckButton name="StateInst" inherits="StateTmpl">
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                    {instance}
+                </CheckButton>
+                <CheckButton name="LaidOutInst" inherits="StateTmpl">
+                    <Anchors><Anchor point="BOTTOMLEFT"/></Anchors>
+                    <NormalTexture file="Interface\Laid" alpha="0.25">
+                        <Size><AbsDimension x="20" y="16"/></Size>
+                        <Anchors><Anchor point="CENTER"/></Anchors>
+                    </NormalTexture>
+                </CheckButton>
+            </Ui>"#
+        ));
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+
+        for (tag, getter) in TAGS {
+            let got: (String, Vec<f32>, String, f32, i64, String, bool, f32, f32) = s
+                .eval(&format!(
+                    r#"local t = StateInst:{getter}()
+                    local p, rel, rp, x, y = t:GetPoint(1)
+                    return t:GetTexture(), {{ t:GetTexCoord() }}, t:GetBlendMode(), t:GetAlpha(),
+                        t:GetNumPoints(), p .. ">" .. rp, rel == StateInst, x, y"#
+                ))
+                .unwrap();
+            assert_eq!(
+                got,
+                (
+                    format!("Interface\\Inst{tag}"),
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0],
+                    "BLEND".to_string(),
+                    1.0,
+                    2,
+                    "TOPLEFT>TOPLEFT".to_string(),
+                    true,
+                    0.0,
+                    0.0,
+                ),
+                "<{tag}>: a fresh region, filling the button"
+            );
+            // The template's region was destroyed: its global is a dead handle, as the
+            // reference's unregister leaves it (`0x701cd0`).
+            assert!(
+                !s.eval::<bool>(&format!(
+                    "return (pcall(StateInstTmpl{tag}.GetTexture, StateInstTmpl{tag}))"
+                ))
+                .unwrap(),
+                "<{tag}>: the template's region is gone"
+            );
+        }
+        assert_eq!(
+            s.eval::<i64>("return table.getn({ StateInst:GetRegions() })")
+                .unwrap(),
+            TAGS.len() as i64,
+            "one region per slot, none of the template's left over"
+        );
+
+        // An instance element's own size, anchors and alpha lay the fresh region out.
+        let laid: (i64, String, f32, f32, f32, Vec<f32>) = s
+            .eval(
+                r#"local t = LaidOutInst:GetNormalTexture()
+                return t:GetNumPoints(), (t:GetPoint(1)), t:GetWidth(), t:GetHeight(),
+                    t:GetAlpha(), { t:GetTexCoord() }"#,
+            )
+            .unwrap();
+        assert_eq!(
+            laid,
+            (
+                1,
+                "CENTER".to_string(),
+                20.0,
+                16.0,
+                0.25,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 1.0]
+            )
+        );
+
+        s.resolve();
+        let drawn: Vec<String> = s
+            .extract()
+            .into_iter()
+            .filter_map(|q| match q.content {
+                QuadContent::Texture { path: Some(p), .. } => Some(p),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !drawn.iter().any(|p| p.contains("Tmpl")),
+            "no template art left drawing: {drawn:?}"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// The Lua path leg (`0x781970` → `0x781b3f` → `0x778f10`) only swaps the file of a slot that
+    /// holds a region (`0x770200`): the region, its TexCoords, blend, alpha and anchors stay.
+    #[test]
+    fn a_lua_path_on_a_loaded_state_texture_keeps_the_region() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                <Button name="PathBtn">
+                    <Size><AbsDimension x="40" y="20"/></Size>
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                    <NormalTexture file="Interface\Before" alphaMode="MOD">
+                        <Size><AbsDimension x="10" y="10"/></Size>
+                        <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                        <TexCoords left="0.25" right="0.75" top="0.25" bottom="0.75"/>
+                    </NormalTexture>
+                </Button>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        let got: (bool, String, Vec<f32>, String, f32, i64, String) = s
+            .eval(
+                r#"local held = PathBtn:GetNormalTexture()
+                held:SetAlpha(0.5)
+                PathBtn:SetNormalTexture("Interface\\After")
+                local t = PathBtn:GetNormalTexture()
+                return t == held, t:GetTexture(), { t:GetTexCoord() }, t:GetBlendMode(),
+                    t:GetAlpha(), t:GetNumPoints(), (t:GetPoint(1))"#,
+            )
+            .unwrap();
+        assert_eq!(
+            got,
+            (
+                true,
+                "Interface\\After".to_string(),
+                vec![0.25, 0.25, 0.25, 0.75, 0.75, 0.25, 0.75, 0.75],
+                "MOD".to_string(),
+                0.5,
+                1,
+                "TOPLEFT".to_string(),
+            )
+        );
+    }
 }
 
 mod layer_blend_tests {
