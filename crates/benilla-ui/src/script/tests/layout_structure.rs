@@ -74,22 +74,58 @@ const POINTS: [&str; 9] = [
     "BOTTOMRIGHT",
 ];
 
-/// The Lua state the steps act on: `N` every node in creation order (an anchor only targets an
-/// earlier one, so the graph stays acyclic), `F` the frames, `R` the regions, `B` the buttons,
-/// `S` the ScrollFrames, `owned[child]` the ScrollFrame that holds it.
+/// The Lua state the steps act on: `N` every node in creation order, `F` the frames, `R` the
+/// regions, `B` the buttons, `S` the ScrollFrames, `owned[child]` the ScrollFrame that holds it.
+/// `deps[o][point]` mirrors each anchor's target and `held[c]` each scroll override, so `target`
+/// picks any node, older or newer, whose rect does not already read `o`'s: the graph stays acyclic.
 const SETUP: &str = r#"
-    N, F, R, B, S, at, owned = {}, {}, {}, {}, {}, {}, {}
-    function add(o) table.insert(N, o); at[o] = table.getn(N) end
-    function earlier(o, k) local i = at[o] or (table.getn(N) + 1); return N[math.mod(k, i - 1) + 1] end
-    root = CreateFrame("Frame", "Root"); root:SetWidth(400); root:SetHeight(300)
+    N, F, R, B, S, at, owned, deps, held = {}, {}, {}, {}, {}, {}, {}, {}, {}
+    function add(o) table.insert(N, o); at[o] = table.getn(N); deps[o] = {} end
+    -- Whether `a`'s rect reads `b`'s, through anchors and scroll overrides.
+    function reaches(a, b)
+        local seen, stack = {}, { a }
+        while table.getn(stack) > 0 do
+            local x = table.remove(stack)
+            if x == b then return true end
+            if not seen[x] then
+                seen[x] = true
+                for _, t in (deps[x] or {}) do table.insert(stack, t) end
+                if held[x] then table.insert(stack, held[x]) end
+            end
+        end
+        return false
+    end
+    -- A node `o` may anchor to: one of a few picks over the whole roster, else the root.
+    function target(o, k)
+        local n = table.getn(N)
+        for i = 0, 7 do
+            local t = N[math.mod(k * 7 + i * 13, n) + 1]
+            if t ~= o and not reaches(t, o) then return t end
+        end
+        return root
+    end
+    newer = 0
+    function point(o, p, t, rp, x, y)
+        o:SetPoint(p, t, rp, x, y); deps[o][p] = t
+        if at[t] and at[t] > at[o] then newer = newer + 1 end
+    end
+    function clear(o) o:ClearAllPoints(); deps[o] = {} end
+    function all(o, t) o:SetAllPoints(t); deps[o] = { TOPLEFT = t, BOTTOMRIGHT = t } end
+    root = CreateFrame("Frame", "UIParent"); root:SetWidth(400); root:SetHeight(300)
     root:SetPoint("CENTER", nil, "CENTER", 0, 0)
     add(root); table.insert(F, root)
     spec = { bgFile = "bg", edgeFile = "edge", edgeSize = 8, insets = { left = 2, right = 2, top = 2, bottom = 2 } }
 "#;
 
-/// One random structural or value write, as a Lua chunk, run under `pcall` (a step may name a
-/// region another step freed, which raises, as it would in the client).
-fn step(rng: &mut Rng) -> String {
+/// One write in a batch: a Lua chunk, run under `pcall` (a step may name a region another step
+/// freed, which raises, as it would in the client), or the host's UI scale.
+enum Write {
+    Lua(String),
+    UiScale(f32),
+}
+
+/// One random structural or value write.
+fn step(rng: &mut Rng) -> Write {
     let p = POINTS[rng.pick(9) - 1];
     let rp = POINTS[rng.pick(9) - 1];
     let (x, y) = (rng.off(), rng.off());
@@ -97,8 +133,8 @@ fn step(rng: &mut Rng) -> String {
     let k2 = rng.next() % 1000;
     let w = if rng.coin(4) { 0 } else { rng.pick(60) };
     let h = if rng.coin(4) { 0 } else { rng.pick(60) };
-    match rng.next() % 16 {
-        // A frame born under any frame, anchored to an earlier node.
+    let lua = match rng.next() % 20 {
+        // A frame born under any frame, anchored to any node it may read.
         0 | 1 => {
             let kind = if rng.coin(3) { "Button" } else { "Frame" };
             format!(
@@ -106,10 +142,10 @@ fn step(rng: &mut Rng) -> String {
                  local f = CreateFrame('{kind}', nil, par); add(f); table.insert(F, f)
                  if '{kind}' == 'Button' then table.insert(B, f) end
                  f:SetWidth({w}); f:SetHeight({h})
-                 f:SetPoint('{p}', earlier(f, {k2}), '{rp}', {x}, {y})"
+                 point(f, '{p}', target(f, {k2}), '{rp}', {x}, {y})"
             )
         }
-        // A texture or font string born on any frame, anchored to one or two earlier nodes.
+        // A texture or font string born on any frame, anchored once or twice.
         2 | 3 => {
             let (make, art) = if rng.coin(3) {
                 ("CreateFontString", "")
@@ -119,7 +155,7 @@ fn step(rng: &mut Rng) -> String {
                 ("CreateTexture", "")
             };
             let second = if rng.coin(2) {
-                format!("t:SetPoint('{rp}', earlier(t, {}), '{p}', {y}, {x})", k2 + 7)
+                format!("point(t, '{rp}', target(t, {}), '{p}', {y}, {x})", k2 + 7)
             } else {
                 String::new()
             };
@@ -127,7 +163,7 @@ fn step(rng: &mut Rng) -> String {
                 "local t = F[math.mod({k}, table.getn(F)) + 1]:{make}(nil, 'ARTWORK')
                  add(t); table.insert(R, t); {art}
                  if {w} > 0 then t:SetWidth({w}) end; if {h} > 0 then t:SetHeight({h}) end
-                 t:SetPoint('{p}', earlier(t, {k2}), '{rp}', {x}, {y}); {second}"
+                 point(t, '{p}', target(t, {k2}), '{rp}', {x}, {y}); {second}"
             )
         }
         // A backdrop built or torn down: nine pieces born or freed at once.
@@ -139,16 +175,20 @@ fn step(rng: &mut Rng) -> String {
         5 => format!(
             "local f = F[math.mod({k}, table.getn(F)) + 1]
              local piece = ({{ f:GetRegions() }})[1]
-             if piece and at[f] then
+             if piece and at[f] and not at[piece] then
+                 deps[piece] = {{ f }}
                  local t = f:CreateTexture(nil, 'OVERLAY'); add(t); table.insert(R, t)
-                 t:SetWidth(5); t:SetHeight(5); t:SetPoint('{p}', piece, '{rp}', {x}, {y})
+                 t:SetWidth(5); t:SetHeight(5); point(t, '{p}', piece, '{rp}', {x}, {y})
              end"
         ),
-        // A button's slot region set, or freed by a nil.
+        // A button's slot region set, or freed by a nil; or two freed in one pass.
         6 => format!(
-            "if table.getn(B) > 0 then
-                 local b = B[math.mod({k}, table.getn(B)) + 1]
-                 if b:GetNormalTexture() and {k2} < 500 then b:SetNormalTexture(nil)
+            "local n = table.getn(B)
+             if n > 0 then
+                 local b = B[math.mod({k}, n) + 1]
+                 if b:GetNormalTexture() and {k2} < 400 then b:SetNormalTexture(nil)
+                 elseif {k2} < 700 then
+                     b:SetNormalTexture(nil); B[math.mod({k2}, n) + 1]:SetNormalTexture(nil)
                  else b:SetNormalTexture('slot' .. {k2}) end
              end"
         ),
@@ -158,49 +198,58 @@ fn step(rng: &mut Rng) -> String {
              local par = F[math.mod({k2}, table.getn(F)) + 1]
              if f ~= root and par ~= f then pcall(f.SetParent, f, par) end"
         ),
-        // A frame's own scale.
+        // A frame's own scale, the root's included: a whole-UI subtree.
         8 => format!(
             "F[math.mod({k}, table.getn(F)) + 1]:SetScale({})",
             [0.5, 0.75, 1.0, 1.25, 2.0][(k2 % 5) as usize]
         ),
-        // A region re-owned.
+        // A region re-owned, and re-anchored in the same pass.
         9 => format!(
             "if table.getn(R) > 0 then
-                 R[math.mod({k}, table.getn(R)) + 1]:SetParent(F[math.mod({k2}, table.getn(F)) + 1])
+                 local t = R[math.mod({k}, table.getn(R)) + 1]
+                 t:SetParent(F[math.mod({k2}, table.getn(F)) + 1])
+                 if {k} < 500 then point(t, '{p}', target(t, {k2}), '{rp}', {x}, {y}) end
              end"
         ),
         // An anchor re-pointed, cleared or set to all points, on a frame or a region.
         10 | 11 => {
             let verb = match k % 4 {
-                0 => "o:ClearAllPoints()".to_string(),
-                1 => format!("o:SetAllPoints(earlier(o, {k2}))"),
-                _ => format!("o:SetPoint('{p}', earlier(o, {k2}), '{rp}', {x}, {y})"),
+                0 => "clear(o)".to_string(),
+                1 => format!("all(o, target(o, {k2}))"),
+                _ => format!("point(o, '{p}', target(o, {k2}), '{rp}', {x}, {y})"),
             };
             format!(
                 "local o = N[math.mod({k2}, table.getn(N)) + 1]
                  if o ~= root then {verb} end"
             )
         }
-        // A size.
+        // A node leaving the graph and rejoining it in one pass.
         12 => format!(
+            "local o = N[math.mod({k}, table.getn(N)) + 1]
+             if o ~= root then clear(o); point(o, '{p}', target(o, {k2}), '{rp}', {x}, {y}) end"
+        ),
+        // A size.
+        13 => format!(
             "local o = N[math.mod({k}, table.getn(N)) + 1]
              if o ~= root then o:SetWidth({w}); o:SetHeight({h}) end"
         ),
-        // A ScrollFrame born, or one taking a newer frame as its child, or scrolling.
-        13 => format!(
+        // A ScrollFrame born, or one taking a frame it does not read as its child, or scrolling.
+        14 | 15 => format!(
             "if {k} < 300 or table.getn(S) == 0 then
                  local par = F[math.mod({k2}, table.getn(F)) + 1]
                  local sf = CreateFrame('ScrollFrame', nil, par); add(sf); table.insert(F, sf)
                  table.insert(S, sf); sf:SetWidth(50); sf:SetHeight(50)
-                 sf:SetPoint('{p}', earlier(sf, {k}), '{rp}', {x}, {y})
+                 point(sf, '{p}', target(sf, {k}), '{rp}', {x}, {y})
              else
                  local sf = S[math.mod({k2}, table.getn(S)) + 1]
                  if {k} < 650 then
-                     for i = table.getn(F), 1, -1 do
-                         local c = F[i]
-                         if at[c] > at[sf] and not owned[c] then
-                             if sf:GetScrollChild() then owned[sf:GetScrollChild()] = nil end
-                             sf:SetScrollChild(c); owned[c] = sf
+                     local n = table.getn(F)
+                     for i = 0, n - 1 do
+                         local c = F[math.mod({k} + i, n) + 1]
+                         if c ~= root and c ~= sf and not owned[c] and not reaches(sf, c) then
+                             local old = sf:GetScrollChild()
+                             if old then owned[old] = nil; held[old] = nil end
+                             sf:SetScrollChild(c); owned[c] = sf; held[c] = sf
                              break
                          end
                      end
@@ -209,28 +258,40 @@ fn step(rng: &mut Rng) -> String {
              end"
         ),
         // Clamped to the screen.
-        14 => format!(
+        16 => format!(
             "F[math.mod({k}, table.getn(F)) + 1]:SetClampedToScreen({})",
             k2.is_multiple_of(2)
         ),
         // Art on a region whose size may take it.
-        _ => format!(
+        17 => format!(
             "if table.getn(R) > 0 then
                  local t = R[math.mod({k}, table.getn(R)) + 1]
                  if t.SetTexture then if {k2} < 500 then t:SetTexture(0, 1, 0) else t:SetTexture(nil) end end
              end"
         ),
-    }
+        // The host's UI scale, `UIParent`'s whole subtree.
+        18 => return Write::UiScale([0.64, 0.8, 1.0][(k % 3) as usize]),
+        // Two backdrops torn down or built in one pass.
+        _ => format!(
+            "local n = table.getn(F)
+             for _, f in {{ F[math.mod({k}, n) + 1], F[math.mod({k2}, n) + 1] }} do
+                 if f:GetBackdrop() then f:SetBackdrop(nil) else f:SetBackdrop(spec) end
+             end"
+        ),
+    };
+    Write::Lua(lua)
 }
 
-/// A random run of births, frees, re-parents, re-owns, retargets and scrolls: after every step the
-/// incremental resolve equals a from-scratch one, and none of them derived the graph.
+/// A random run of births, frees, re-parents, re-owns, retargets, scrolls and scale changes, in
+/// batches of one to four writes per resolve: after every resolve the cached graph and its rects
+/// equal a from-scratch solve, and none of them derived the graph.
 #[test]
 fn random_structural_writes_resolve_as_a_scratch_solve_would() {
     for seed in [
         0x9e37_79b9_7f4a_7c15u64,
         0xdead_beef_cafe_f00d,
         0x0123_4567_89ab_cdef,
+        0x5555_aaaa_1234_9876,
     ] {
         let mut s = script();
         s.set_screen_size(800.0, 600.0);
@@ -239,27 +300,50 @@ fn random_structural_writes_resolve_as_a_scratch_solve_would() {
         s.resolve();
         let derived_at = s.layout_derivations();
         let mut rng = Rng(seed);
-        for n in 0..400 {
-            let chunk = step(&mut rng);
-            s.run(&format!(
-                "if not pcall(function() {chunk} end) then raised = raised + 1 end"
-            ))
-            .unwrap_or_else(|e| panic!("seed {seed:#x} step {n}: {e}\n{chunk}"));
-            resolve_matches_scratch(&mut s, &format!("seed {seed:#x} step {n}:\n{chunk}"));
+        let mut writes = 0;
+        for n in 0..300 {
+            let batch = rng.pick(4);
+            let mut log = String::new();
+            for _ in 0..batch {
+                writes += 1;
+                match step(&mut rng) {
+                    Write::Lua(chunk) => {
+                        s.run(&format!(
+                            "if not pcall(function() {chunk} end) then raised = raised + 1 end"
+                        ))
+                        .unwrap_or_else(|e| panic!("seed {seed:#x} batch {n}: {e}\n{chunk}"));
+                        log.push_str(&chunk);
+                    }
+                    Write::UiScale(v) => {
+                        s.set_ui_scale(v);
+                        log.push_str(&format!("set_ui_scale({v})"));
+                    }
+                }
+                log.push('\n');
+            }
+            resolve_matches_scratch(&mut s, &format!("seed {seed:#x} batch {n}:\n{log}"));
         }
-        let (nodes, raised, live) = s
-            .eval::<(i64, i64, i64)>(
-                "local live = 0
-                 for _, o in N do if pcall(o.GetObjectType, o) then live = live + 1 end end
-                 return table.getn(N), raised, live",
+        let (nodes, raised, frames, regions, newer) = s
+            .eval::<(i64, i64, i64, i64, i64)>(
+                "return table.getn(N), raised, table.getn(F), table.getn(R), newer",
             )
             .expect("count");
-        eprintln!("seed {seed:#x}: {nodes} nodes built, {live} alive, {raised} steps raised");
+        eprintln!(
+            "seed {seed:#x}: {writes} writes, {nodes} nodes ({frames} frames, {regions} \
+             regions), {raised} raised, {newer} anchors to a newer node"
+        );
         assert!(
             nodes > 100,
             "seed {seed:#x}: the run built only {nodes} nodes"
         );
-        assert!(raised < 40, "seed {seed:#x}: {raised} of 400 steps raised");
+        assert!(
+            newer > 20,
+            "seed {seed:#x}: only {newer} anchors pointed at a newer node"
+        );
+        assert!(
+            raised * 10 < writes,
+            "seed {seed:#x}: {raised} of {writes} writes raised"
+        );
         assert_eq!(
             s.layout_derivations(),
             derived_at,
@@ -297,5 +381,69 @@ fn a_child_two_scrollframes_claim_falls_back_to_the_derivation() {
         s.layout_derivations(),
         derived + 1,
         "two claims give up for the derivation"
+    );
+}
+
+/// A frame whose id is minted after a region on it joined the graph (the engine builds some
+/// frames before any id, as the nameplate pool does): the mint re-derives the region, which then
+/// reads the owner's scale.
+#[test]
+fn an_owner_minted_after_its_region_joined_takes_the_owner_edge() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"root = CreateFrame("Frame", "Root"); root:SetWidth(100); root:SetHeight(100)
+        root:SetPoint("CENTER", nil, "CENTER", 0, 0)"#,
+    )
+    .expect("setup");
+    s.resolve();
+    let (host, rh) = {
+        let mut m = s.model_mut();
+        let root = m.arena.lookup("Root").expect("root");
+        let root_id = m.frame_id(root);
+        let host = m
+            .arena
+            .create(crate::widget::FrameKind::Frame, None, Some(root));
+        let rh = m
+            .arena
+            .create_region(
+                host,
+                crate::widget::RegionKind::Texture,
+                crate::order::DrawLayer::Artwork,
+                0,
+            )
+            .expect("region");
+        let d = m.region_data.entry(rh).or_default();
+        d.size = Some((8.0, 8.0));
+        d.anchors = vec![crate::layout::Anchor::new(
+            crate::layout::Point::TopLeft,
+            root_id,
+            crate::layout::Point::TopLeft,
+            5.0,
+            -5.0,
+        )];
+        m.touch_layout_region(rh);
+        (host, rh)
+    };
+    resolve_matches_scratch(&mut s, "a region on an id-less owner");
+    {
+        let mut m = s.model_mut();
+        assert!(
+            !m.frame_to_id.contains_key(&host),
+            "the owner has no id yet"
+        );
+        m.set_frame_scale(host, 2.0);
+        m.frame_id(host);
+    }
+    resolve_matches_scratch(&mut s, "the owner's id minted");
+    let r = s
+        .model_ref()
+        .region_resolved
+        .get(&rh)
+        .copied()
+        .expect("rect");
+    assert!(
+        ((r.right - r.left) - 16.0).abs() < 1e-3,
+        "the region takes its now-known owner's scale: {r:?}"
     );
 }
