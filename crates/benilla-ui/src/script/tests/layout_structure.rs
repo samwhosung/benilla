@@ -2,7 +2,17 @@
 //! every resolve must equal a from-scratch solve of the same model, rects and graph alike.
 
 use super::common::script;
-use crate::script::UiScript;
+use crate::script::{MeasureRequest, TextMeasure, UiScript};
+
+/// A stand-in font engine, so a text-sized FontString takes a box: 6 wide per character, 12 tall.
+struct Block;
+
+impl TextMeasure for Block {
+    fn measure(&mut self, req: &MeasureRequest) -> (f32, f32, f32) {
+        let w = req.text.chars().count() as f32 * 6.0;
+        (w, 12.0, w)
+    }
+}
 
 /// Resolve, then require the cached graph and its rects to equal a from-scratch solve.
 fn resolve_matches_scratch(s: &mut UiScript, what: &str) {
@@ -133,7 +143,7 @@ fn step(rng: &mut Rng) -> Write {
     let k2 = rng.next() % 1000;
     let w = if rng.coin(4) { 0 } else { rng.pick(60) };
     let h = if rng.coin(4) { 0 } else { rng.pick(60) };
-    let lua = match rng.next() % 20 {
+    let lua = match rng.next() % 21 {
         // A frame born under any frame, anchored to any node it may read.
         0 | 1 => {
             let kind = if rng.coin(3) { "Button" } else { "Frame" };
@@ -271,6 +281,15 @@ fn step(rng: &mut Rng) -> Write {
         ),
         // The host's UI scale, `UIParent`'s whole subtree.
         18 => return Write::UiScale([0.64, 0.8, 1.0][(k % 3) as usize]),
+        // A font string's text set, emptied or restored: its measured box comes and goes.
+        20 => format!(
+            "local n = table.getn(R)
+             if n > 0 then
+                 local t = R[math.mod({k}, n) + 1]
+                 if t.SetText then t:SetText(({{ '', 'hello', 'a longer line', nil }})[{}]) end
+             end",
+            k2 % 4 + 1
+        ),
         // Two backdrops torn down or built in one pass.
         _ => format!(
             "local n = table.getn(F)
@@ -282,9 +301,9 @@ fn step(rng: &mut Rng) -> Write {
     Write::Lua(lua)
 }
 
-/// A random run of births, frees, re-parents, re-owns, retargets, scrolls and scale changes, in
-/// batches of one to four writes per resolve: after every resolve the cached graph and its rects
-/// equal a from-scratch solve, and none of them derived the graph.
+/// A random run of births, frees, re-parents, re-owns, retargets, scrolls, scale changes and text
+/// set, emptied and restored, in batches of one to four writes per resolve: after every resolve
+/// the cached graph and its rects equal a from-scratch solve, and none of them derived the graph.
 #[test]
 fn random_structural_writes_resolve_as_a_scratch_solve_would() {
     for seed in [
@@ -295,6 +314,7 @@ fn random_structural_writes_resolve_as_a_scratch_solve_would() {
     ] {
         let mut s = script();
         s.set_screen_size(800.0, 600.0);
+        s.set_text_measurer(Box::new(Block));
         s.run(SETUP).expect("setup");
         s.run("raised = 0").expect("counter");
         s.resolve();
