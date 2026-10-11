@@ -804,6 +804,39 @@ fn anchor_cursor_follows_the_cursor_every_frame() {
     );
 }
 
+/// The cursor update (`0x530b20`) makes one `SetPoint` for BOTTOM (`0x767c70`) and clears
+/// nothing, so a point an addon set after `SetOwner` stays held beside it.
+#[test]
+fn anchor_cursor_keeps_a_point_set_after_set_owner() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        KeepTip = CreateFrame("GameTooltip", "KeepTip")
+        KeepHost = CreateFrame("Frame", "KeepHost")
+        KeepTip:SetOwner(KeepHost, "ANCHOR_CURSOR")
+        KeepTip:AddLine("Copper Ore")
+        KeepTip:SetWidth(120) KeepTip:SetHeight(40)
+        KeepTip:Show()
+        KeepTip:SetPoint("BOTTOMRIGHT", KeepHost, "BOTTOMRIGHT", 0, 0)
+        "#,
+    )
+    .unwrap();
+    for (x, y) in [(300.0, 200.0), (120.0, 480.0)] {
+        s.mouse_move(x, y);
+        s.resolve();
+        assert_eq!(
+            s.eval::<i64>("return KeepTip:GetNumPoints()").unwrap(),
+            2,
+            "BOTTOM and the addon's BOTTOMRIGHT"
+        );
+        let (p1, p2): (String, String) = s
+            .eval("return (KeepTip:GetPoint(1)), (KeepTip:GetPoint(2))")
+            .unwrap();
+        assert_eq!((p1.as_str(), p2.as_str()), ("BOTTOM", "BOTTOMRIGHT"));
+    }
+}
+
 /// `GetAnchorType` (`0x5313e0`, table `0x854198`) answers one string, `[+0x318]` through the name
 /// table `0x531530`; `_Nameplates.lua:479` compares it with what it passed to `SetOwner`.
 #[test]
