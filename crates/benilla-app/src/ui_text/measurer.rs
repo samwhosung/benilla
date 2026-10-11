@@ -151,4 +151,48 @@ mod tests {
             "the first character on the new line: {two} against {one}"
         );
     }
+
+    /// A wrapped FontString is `N·S + (N−1)·gap` tall (`0x5c2070`), the gap being its spacing
+    /// rounded up to a whole device pixel (`0x5c2146`-`0x5c215c`), and a negative spacing 0, as the
+    /// FontString's setter clamps it (`0x772240`).
+    #[test]
+    fn a_wrapped_fontstring_is_its_lines_plus_the_gaps_between_them() {
+        benilla_formats::wow_data_or_skip!();
+        let engine = super::super::engine::test_engine(1.0).expect("the client faces open");
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        s.set_text_measurer(Box::new(AtlasMeasurer::new(
+            Arc::new(Mutex::new(engine)),
+            1.0,
+        )));
+        s.run(
+            r#"
+            FS = CreateFrame("Frame", "GapHost"):CreateFontString("GapText")
+            FS:SetPoint("TOPLEFT", 10, -10)
+            FS:SetWidth(60)
+            FS:SetFont("Fonts\\FRIZQT__.TTF", 12)
+            FS:SetText("one two three four five six")
+        "#,
+        )
+        .unwrap();
+        let mut height = |spacing: f32| {
+            s.run(&format!("FS:SetSpacing({spacing})")).unwrap();
+            s.tick(0.016);
+            s.resolve();
+            s.eval::<f32>("return FS:GetHeight()").unwrap()
+        };
+        let flush = height(0.0);
+        let lines = (flush / 12.0).round();
+        assert!(
+            lines >= 3.0 && (flush - lines * 12.0).abs() < 1e-4,
+            "the text wraps to whole 12 px lines: {flush}"
+        );
+        let gaps = lines - 1.0;
+        assert!((height(4.0) - (flush + gaps * 4.0)).abs() < 1e-4);
+        assert!(
+            (height(2.5) - (flush + gaps * 3.0)).abs() < 1e-4,
+            "the gap rounds up to the device pixel"
+        );
+        assert!((height(-5.0) - flush).abs() < 1e-4, "a negative gap is 0");
+    }
 }

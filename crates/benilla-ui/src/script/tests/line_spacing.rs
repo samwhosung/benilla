@@ -1,0 +1,312 @@
+//! `SetSpacing`/`GetSpacing`, the line gap every text-bearing table carries: one shared
+//! implementation (`0x79fb40`, `0x79fbe0`) for the Font object, EditBox, the two message frames and
+//! SimpleHTML, and the FontString's own pair (`0x79e2b0`, `0x79e1d0`), which clamps.
+
+use super::common::script;
+use crate::script::{QuadContent, UiScript};
+
+/// The six receivers, each named so the usage line can name it, as `(global, kind)`.
+const KINDS: &[(&str, &str)] = &[
+    ("SFont", "Font"),
+    ("SFS", "FontString"),
+    ("SEB", "EditBox"),
+    ("SMF", "MessageFrame"),
+    ("SSMF", "ScrollingMessageFrame"),
+    ("SHTML", "SimpleHTML"),
+];
+
+fn receivers() -> UiScript {
+    let s = script();
+    s.run(
+        r#"
+        CreateFont("SFont")
+        CreateFrame("Frame", "SHost"):CreateFontString("SFS")
+        CreateFrame("EditBox", "SEB")
+        CreateFrame("MessageFrame", "SMF")
+        CreateFrame("ScrollingMessageFrame", "SSMF")
+        CreateFrame("SimpleHTML", "SHTML")
+    "#,
+    )
+    .unwrap();
+    s
+}
+
+fn spacing(s: &UiScript, obj: &str) -> f32 {
+    s.eval::<f32>(&format!("return {obj}:GetSpacing()"))
+        .unwrap_or_else(|e| panic!("{obj}:GetSpacing raised {e}"))
+}
+
+/// Every table carries the pair (`reference/1.12-shapes.tsv`, the `SetSpacing` rows), starting at
+/// the constructors' 0 (`0x783a81`, `0x770d89`), and a number round-trips.
+#[test]
+fn every_text_table_round_trips_its_spacing() {
+    let s = receivers();
+    for &(obj, kind) in KINDS {
+        assert_eq!(spacing(&s, obj), 0.0, "{kind}: the constructor's 0");
+        s.run(&format!("{obj}:SetSpacing(4)"))
+            .unwrap_or_else(|e| panic!("{kind}: SetSpacing(4) raised {e}"));
+        assert_eq!(spacing(&s, obj), 4.0, "{kind}");
+        // The gate is `lua_isnumber` (`0x79fb54`, `0x79e340`): a numeric string passes.
+        s.run(&format!("{obj}:SetSpacing(\"2.5\")")).unwrap();
+        assert_eq!(spacing(&s, obj), 2.5, "{kind}");
+        // Nothing is returned (`0x79fbbe xor eax,eax`).
+        assert_eq!(
+            s.eval::<i64>(&format!(
+                "return (function(...) return arg.n end)({obj}:SetSpacing(1))"
+            ))
+            .unwrap(),
+            0,
+            "{kind}"
+        );
+    }
+}
+
+/// Anything `lua_isnumber` refuses raises `Usage: %s:SetSpacing(spacing)` (`0x87c708`), naming the
+/// receiver or `<unnamed>`.
+#[test]
+fn a_non_number_raises_the_usage_line() {
+    let s = receivers();
+    for &(obj, kind) in KINDS {
+        let want = format!("Usage: {obj}:SetSpacing(spacing)");
+        for bad in ["", "nil", "false", "\"wide\"", "{}"] {
+            let err = s
+                .run(&format!("{obj}:SetSpacing({bad})"))
+                .expect_err("a non-number raises");
+            assert!(
+                err.to_string().contains(&want),
+                "{kind}: SetSpacing({bad}) raised {err}, not {want:?}"
+            );
+        }
+    }
+    s.run("U = CreateFrame('Frame'):CreateFontString()")
+        .unwrap();
+    let err = s.run("U:SetSpacing()").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("Usage: <unnamed>:SetSpacing(spacing)"),
+        "{err}"
+    );
+}
+
+/// Only the FontString clamps: its setter `0x772240` stores 0 for a negative and its getter reads
+/// that field, where the shared setter stores the number as given (`0x79fba2`).
+#[test]
+fn only_the_fontstring_clamps_a_negative_spacing() {
+    let s = receivers();
+    for &(obj, kind) in KINDS {
+        s.run(&format!("{obj}:SetSpacing(-3)")).unwrap();
+        let want = if kind == "FontString" { 0.0 } else { -3.0 };
+        assert_eq!(spacing(&s, obj), want, "{kind}");
+    }
+}
+
+/// A FontString inherits its font object's spacing like the other font fields (the merge
+/// `0x770800` at `0x7708fd`), live, until it sets its own, which clears inherit bit `0x10`
+/// (`0x79e37b`).
+#[test]
+fn a_fontstring_inherits_spacing_from_its_font_object_until_it_sets_its_own() {
+    let s = script();
+    s.run(
+        r#"
+        CreateFont("GapFont")
+        GapFont:SetSpacing(5)
+        local f = CreateFrame("Frame")
+        A = f:CreateFontString()
+        B = f:CreateFontString()
+        A:SetFontObject(GapFont)
+        B:SetFontObject("GapFont")
+        B:SetSpacing(2)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(spacing(&s, "A"), 5.0);
+    assert_eq!(spacing(&s, "B"), 2.0);
+    s.run("GapFont:SetSpacing(6)").unwrap();
+    assert_eq!(spacing(&s, "A"), 6.0, "the link is live");
+    assert_eq!(
+        spacing(&s, "B"),
+        2.0,
+        "a local set survives the font object's change"
+    );
+    s.run("GapFont:SetSpacing(-1)").unwrap();
+    assert_eq!(
+        spacing(&s, "A"),
+        0.0,
+        "inheriting runs through the clamping setter"
+    );
+}
+
+/// `spacing=` is an attribute of `<Font>` (`0x783ee0`) and of `<FontString>` (`0x771257`); the
+/// FontString's beats the one its font object passes down.
+#[test]
+fn the_spacing_attribute_reaches_fonts_and_fontstrings() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+             <Font name="XGapFont" font="Fonts\FRIZQT__.TTF" spacing="3">
+               <FontHeight><AbsValue val="12"/></FontHeight>
+             </Font>
+             <Frame name="XGapHost">
+               <Layers><Layer level="ARTWORK">
+                 <FontString name="XInherit" inherits="XGapFont"/>
+                 <FontString name="XOwn" inherits="XGapFont" spacing="7"/>
+                 <FontString name="XPlain" spacing="2"/>
+               </Layer></Layers>
+             </Frame>
+           </Ui>"#,
+    )
+    .expect("valid FrameXML");
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(spacing(&s, "XGapFont"), 3.0);
+    assert_eq!(spacing(&s, "XInherit"), 3.0);
+    assert_eq!(spacing(&s, "XOwn"), 7.0);
+    assert_eq!(spacing(&s, "XPlain"), 2.0);
+}
+
+/// SpellAlert's alert frame is a ScrollingMessageFrame whose `OnLoad` calls `SetSpacing` before the
+/// rest of its setup; the call no longer aborts the handler.
+#[test]
+fn a_scrolling_message_frames_onload_runs_past_set_spacing() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+             <ScrollingMessageFrame name="AlertProbe">
+               <Scripts><OnLoad>
+                 this:SetSpacing(2)
+                 this:SetMaxLines(3)
+                 this:SetTimeVisible(5)
+                 this:SetFadeDuration(1.5)
+                 this:SetAlpha(0.5)
+                 ALERT_PROBE_DONE = true
+               </OnLoad></Scripts>
+             </ScrollingMessageFrame>
+           </Ui>"#,
+    )
+    .expect("valid FrameXML");
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+    assert!(s.eval::<bool>("return ALERT_PROBE_DONE == true").unwrap());
+    assert_eq!(spacing(&s, "AlertProbe"), 2.0);
+    assert_eq!(s.eval::<i64>("return AlertProbe:GetMaxLines()").unwrap(), 3);
+    assert_eq!(
+        s.eval::<f32>("return AlertProbe:GetFadeDuration()")
+            .unwrap(),
+        1.5
+    );
+}
+
+/// The `(text, bottom, top)` of every message band on screen.
+fn bands(s: &UiScript) -> Vec<(String, f32, f32)> {
+    s.extract()
+        .iter()
+        .filter_map(|q| match (&q.content, q.rect) {
+            (QuadContent::Text { text: Some(t), .. }, Some(r)) => {
+                Some((t.clone(), r.bottom, r.top))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A scrolling frame stacks each message's line string on the previous one's top `spacing` higher
+/// (`0x788954`-`0x788975`), and a wrapped message is `rows·S + (rows−1)·gap` tall (`0x5c2070`), so
+/// every row costs `S + gap` and the newest sits on the bottom edge.
+#[test]
+fn a_scrolling_frame_steps_its_messages_and_rows_by_the_spacing() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        "local f = CreateFrame('ScrollingMessageFrame', 'GapChat')\n\
+         f:SetPoint('BOTTOMLEFT', 0, 90)\n\
+         f:SetWidth(400)\n\
+         f:SetHeight(100)\n\
+         f:SetFont('Fonts\\\\FRIZQT__.TTF', 14)\n\
+         f:SetSpacing(4)\n\
+         f:AddMessage('old', 1, 1, 1)\n\
+         f:AddMessage('wrapped', 1, 1, 1)\n\
+         f:AddMessage('new', 1, 1, 1)",
+    )
+    .unwrap();
+    s.resolve();
+    let answers: Vec<(u32, u32, u16, u64)> = s
+        .message_lines_needing_measure()
+        .iter()
+        .map(|r| (r.frame, r.index, if r.index == 1 { 2 } else { 1 }, r.key))
+        .collect();
+    s.set_message_line_rows(&answers);
+    let got = bands(&s);
+    let want = [
+        ("new", 90.0, 104.0),
+        ("wrapped", 108.0, 140.0),
+        ("old", 144.0, 158.0),
+    ];
+    assert_eq!(got.len(), want.len(), "{got:?}");
+    for ((t, b, top), (wt, wb, wtop)) in got.iter().zip(want) {
+        assert_eq!(t, wt);
+        assert!(
+            (b - wb).abs() < 0.01 && (top - wtop).abs() < 0.01,
+            "{t}: [{b}, {top}] against [{wb}, {wtop}]"
+        );
+    }
+}
+
+/// The plain class fits `h / (S + gap)` lines (`0x785f03`-`0x785f61`).
+#[test]
+fn a_plain_message_frame_fits_rows_at_the_spaced_pitch() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        "local f = CreateFrame('MessageFrame', 'GapErrors')\n\
+         f:SetPoint('BOTTOMLEFT', 0, 0)\n\
+         f:SetWidth(400)\n\
+         f:SetHeight(42)\n\
+         f:SetFading(false)\n\
+         f:SetSpacing(4)",
+    )
+    .unwrap();
+    for n in 0..9 {
+        s.run(&format!("GapErrors:AddMessage('m{n}', 1, 1, 1)"))
+            .unwrap();
+    }
+    s.resolve();
+    s.tick(0.1);
+    let kept = {
+        let m = s.model_ref();
+        let h = m.arena.lookup("GapErrors").expect("named frame");
+        m.arena
+            .frame(h)
+            .and_then(|f| f.kind_state.message_lines())
+            .map_or(0, |l| l.len())
+    };
+    assert_eq!(kept, 2, "42 / (14 + 4) holds two rows");
+}
+
+/// SimpleHTML's element font is a font instance: its getter answers what was set, negative
+/// included, while the block step reads the block FontString's clamped field (`0x78aeaf`).
+#[test]
+fn simplehtml_keeps_a_negative_spacing_but_steps_its_blocks_by_zero() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("SimpleHTML", "GapPage")
+        f:SetWidth(200)
+        f:SetFont("Fonts\\FRIZQT__.TTF", 12)
+        f:SetSpacing(-9)
+        f:SetText("<HTML><BODY><P>one</P><P>two</P></BODY></HTML>")
+    "#,
+    )
+    .unwrap();
+    assert_eq!(spacing(&s, "GapPage"), -9.0);
+    let m = s.model_ref();
+    let fh = m.arena.lookup("GapPage").expect("frame");
+    let blocks = &m.simple_html.get(&fh).expect("state").blocks;
+    let second = m.region_data.get(&blocks[1]).expect("block 1");
+    let y = second
+        .anchors
+        .get(crate::layout::Point::TopLeft)
+        .expect("the TOPLEFT anchor")
+        .y_off;
+    assert_eq!(y, 0.0, "the step is the clamped spacing");
+}
