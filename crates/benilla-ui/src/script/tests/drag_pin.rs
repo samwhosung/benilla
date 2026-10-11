@@ -282,7 +282,7 @@ fn the_layout_cache_round_trips_the_pin() {
         }],
     };
     let saved = s.user_placed_layouts();
-    assert_eq!(saved, [want.clone()]);
+    assert_eq!(saved, std::slice::from_ref(&want));
 
     let mut fresh = centred_box();
     fresh.restore_user_placed_layouts(saved);
