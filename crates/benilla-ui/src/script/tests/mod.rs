@@ -30,6 +30,7 @@ mod handler_prof;
 mod host_state;
 mod hover_publish;
 mod hover_walk;
+mod hyperlink;
 mod input;
 mod keep_rect;
 mod keyboard;

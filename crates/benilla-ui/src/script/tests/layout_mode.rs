@@ -222,5 +222,50 @@ fn a_release_that_ends_a_layout_drag_reaches_no_script() {
     );
     s.mouse_move(220.0, 110.0);
     assert_eq!(rect(&mut s, "Win").0, 100.0, "and ended the drag");
+    // The capture is still Win: the left release, the drag over, goes to it (`0x766498`–
+    // `0x7664a4`) and, with no button held, clears it (`0x7664bb`).
+    s.run("Win:SetScript('OnMouseUp', function() table.insert(log, 'Win:up:'..arg1) end)")
+        .unwrap();
+    s.mouse_button(220.0, 110.0, "LeftButton", false);
+    assert_eq!(log_of(&s), "Win:down Win:up:LeftButton");
+    s.mouse_move(200.0, 150.0);
+    s.mouse_button(200.0, 150.0, "LeftButton", true);
+    s.mouse_button(200.0, 150.0, "LeftButton", false);
+    assert_eq!(
+        log_of(&s),
+        "Win:down Win:up:LeftButton Kid:down Kid:up",
+        "no capture or held button is left behind"
+    );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A layout press is consumed even where it hits nothing: the handler returns before any frame,
+/// the world's included, sees it (`0x766353`–`0x76635b`).
+#[test]
+fn a_layout_press_over_nothing_is_consumed() {
+    let mut s = window();
+    s.set_modifiers(false, false, true);
+    assert!(!s.mouse_button(700.0, 500.0, "RightButton", true), "mode 0");
+    s.mouse_button(700.0, 500.0, "RightButton", false);
+    s.run("SetLayoutMode(1)").unwrap();
+    assert!(s.mouse_button(700.0, 500.0, "RightButton", true));
+}
+
+/// `SetLayoutMode` keeps the low dword of `_ftol` (`0x40a2b0`, `fistp` to a qword): what the x87
+/// cannot hold (an infinity, NaN, 2^63 and up) stores its integer-indefinite pattern, whose low
+/// dword is 0, so those turn the mode off; 2^32 + 1 keeps 1.
+#[test]
+fn set_layout_mode_keeps_the_low_dword_of_ftol() {
+    let mut s = window();
+    let armed = |s: &mut UiScript, arg: &str| {
+        s.run(&format!("log = {{}} SetLayoutMode({arg})")).unwrap();
+        modifier_drag(s, (200.0, 150.0), (0.0, 0.0), (false, true));
+        log_of(s).is_empty()
+    };
+    for off in ["1/0", "-1/0", "0/0", "2^63", "2^64", "2^32", "-2^63"] {
+        assert!(!armed(&mut s, off), "SetLayoutMode({off}) is off");
+    }
+    for on in ["2^32 + 1", "-2^31", "-1.5"] {
+        assert!(armed(&mut s, on), "SetLayoutMode({on}) is on");
+    }
 }
