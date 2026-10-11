@@ -103,10 +103,14 @@ fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
 /// (`0x52a0e0`–`0x52a146`) before any line, and the lines end in the show (`0x52a711`/`0x52a71b`).
 fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
+    // A unit is its object, found by guid (`0x52a021`); guid 0 finds none.
     let (unit, player_level) = {
         let model = lua.app_data_mut::<Model>().expect("model app_data");
         (
-            model.unit(token).cloned().filter(|u| u.exists),
+            model
+                .unit(token)
+                .cloned()
+                .filter(|u| u.exists && u.guid != 0),
             model.player_req.level,
         )
     };
@@ -115,7 +119,6 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
         super::visibility::set_shown(lua, h, false);
         return Ok(false);
     };
-    // A guid of 0 is held too, so the clear still hides the bar; no push matches it.
     set_subject(lua, h, Some(u.guid));
     if let Some(bar) = seed_bar(lua, h, &u) {
         super::visibility::set_shown(lua, bar, true);
@@ -353,8 +356,9 @@ impl super::UiScript {
         true
     }
 
-    /// Show the minimap blip tooltip (`0x4eb0c0`, an `AreaPOI` or quest-dot name): owned by
-    /// `UIParent` in mode 6, `ANCHOR_CURSOR` (`0x4eb587`), so the tooltip's own update keeps it on
+    /// Show the minimap blip tooltip (an `AreaPOI` or quest-dot name), from `Minimap`'s own hover
+    /// probe `0x4eb0c0`: owned by `Minimap` itself (`0x4eb19c` keeps `this + 0x24`, pushed at
+    /// `0x4eb57d`) in mode 6, `ANCHOR_CURSOR` (`0x4eb587`), so the tooltip's own update keeps it on
     /// the cursor; one gold line, faint gold for a cross-interior dot; then the show
     /// (`0x4eb85f`/`0x4eb869`). Hover loss is [`Self::world_tooltip_hide`].
     pub fn minimap_tooltip(&mut self, text: &str, grey: bool) -> bool {
@@ -363,7 +367,7 @@ impl super::UiScript {
             let Some(h) = model.arena.lookup("GameTooltip") else {
                 return false;
             };
-            let Some(root) = model.arena.lookup("UIParent") else {
+            let Some(root) = model.arena.lookup("Minimap") else {
                 return false;
             };
             (h, model.frame_id(h), root)
@@ -392,8 +396,8 @@ impl super::UiScript {
         true
     }
 
-    /// Whether `GameTooltip` is still the shown plate a world hover put up, with no Lua
-    /// `SetOwner`, content `Set*` or `Hide` since.
+    /// Whether `GameTooltip` is still the shown plate a world hover put up, with no `SetOwner` or
+    /// hide since; a Lua content re-set (an `UPDATE_MOUSEOVER_UNIT` handler's `SetUnit`) keeps it.
     pub fn world_tooltip_up(&mut self) -> bool {
         self.world_plate().is_some()
     }
@@ -417,7 +421,9 @@ impl super::UiScript {
     /// which publishes the empty mouseover and fades (`0x483b10` → `0x483b46`), before the window's
     /// enter takes the tooltip (`0x766229` before `0x766239`). The host's world drive runs in the
     /// feed phase, before the UI input pass, so it learns of the loss only after the window's enter
-    /// has run; this acts only while the world plate is still up.
+    /// has run. So this acts only while the world plate is up ([`Self::world_tooltip_up`]): a
+    /// tooltip re-owned since, by a window or by an addon while the pointer stays on the world, is
+    /// left alone where the reference would fade it, and a hidden one is not touched.
     pub fn world_tooltip_fade(&mut self) {
         if let Some(h) = self.world_plate() {
             super::tooltip::fade_out(&self.lua, h);

@@ -289,7 +289,6 @@ fn clear_content(model: &mut Model, h: FrameHandle) {
         t.min_width = 0.0;
         // Clear drops the subject and unregisters its health watcher (`0x5300ad`, `0x53007c`).
         t.unit_guid = None;
-        t.world_owned = false;
     }
     // New content replaces a spell render still waiting on its view.
     model.spell_tooltip_waits.remove(&h);
@@ -418,6 +417,8 @@ pub(in crate::script) fn set_owner_core(
     };
     t.owner = owner;
     t.anchor = TooltipAnchor::None;
+    // A re-own, or the hide's un-own, ends the world plate; a content re-set alone does not.
+    t.world_owned = false;
     if let Some(owner) = owner {
         t.anchor = anchor;
         apply_anchor(&mut model, h, owner, anchor, x, y);
@@ -834,8 +835,13 @@ pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, elapsed: f32) {
             false
         }
     };
-    // The end: shown bit cleared, then the hide slot, as the Lua `Hide` does.
+    // The end: full alpha (`0x530bd8`), then the shown bit cleared and the hide slot (`0x530bdf`,
+    // `0x530be9`), as the Lua `Hide` does, so the hide's `OnTooltipCleared` sees 255.
     if done {
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .arena
+            .set_alpha(h, 1.0);
         set_shown(lua, h, false);
     }
 }

@@ -263,6 +263,7 @@ fn the_tooltip_title_is_the_pvp_name() {
     s.set_unit(
         "target",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0100,
             exists: true,
             name: Some("Defias Civilian".into()),
             level: 20,
@@ -297,6 +298,7 @@ fn faction_line_and_civilian_gate() {
     s.set_unit(
         "target",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0101,
             exists: true,
             name: Some("Marshal McBride".into()),
             level: 20,
@@ -325,6 +327,7 @@ fn faction_line_and_civilian_gate() {
     s.set_unit(
         "target",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0102,
             exists: true,
             name: Some("Defias Civilian".into()),
             level: 20,
@@ -351,6 +354,7 @@ fn faction_line_and_civilian_gate() {
     s.set_unit(
         "target",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0103,
             exists: true,
             name: Some("Defias Civilian".into()),
             level: 25,
@@ -386,6 +390,7 @@ fn level_line_variants() {
     s.set_unit(
         "target",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0104,
             exists: true,
             name: Some("Bandit".into()),
             level: 32,
@@ -411,6 +416,7 @@ fn level_line_variants() {
     s.set_unit(
         "target",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0105,
             exists: true,
             name: Some("Slain Wolf".into()),
             level: 3,
@@ -432,6 +438,7 @@ fn level_line_variants() {
     s.set_unit(
         "target",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0106,
             exists: true,
             name: Some("Kazzak".into()),
             level: 63,
@@ -451,6 +458,7 @@ fn level_line_variants() {
     .unwrap();
     // A hostile unit (reaction 2 or less) 10 levels up reads "??".
     let ten_up = |reaction: u8, is_player: bool| UnitState {
+        guid: 0xF130_0000_0000_0107,
         exists: true,
         name: Some("Elder".into()),
         level: 70,
@@ -512,6 +520,7 @@ fn a_players_level_line_ignores_the_snapshots_creature_type() {
     )
     .unwrap();
     let druid = |reaction: u8, creature_type: Option<&str>| UnitState {
+        guid: 0xF130_0000_0000_0108,
         exists: true,
         name: Some("Fenwick".into()),
         level: 40,
@@ -630,7 +639,7 @@ fn world_hover_drive_and_health_watcher() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The minimap blip tooltip (`minimap_tooltip`): refused without `UIParent`, otherwise one line
+/// The minimap blip tooltip (`minimap_tooltip`): refused without `Minimap`, otherwise one line
 /// seated above the cursor in mode 6, which follows the cursor and hides at once on hover loss.
 #[test]
 fn minimap_blip_tooltip_shows_follows_and_hides() {
@@ -640,12 +649,13 @@ fn minimap_blip_tooltip_shows_follows_and_hides() {
         .unwrap();
     assert!(
         !s.minimap_tooltip("Stormwind", false),
-        "no UIParent yet: the show refuses"
+        "no Minimap yet: the show refuses"
     );
     s.run(
         r#"
         local up = CreateFrame("Frame", "UIParent")
         up:SetPoint("BOTTOMLEFT", 0, 0); up:SetWidth(800); up:SetHeight(600)
+        CreateFrame("Minimap", "Minimap", up)
     "#,
     )
     .unwrap();
@@ -697,6 +707,7 @@ fn a_cursor_seated_plate_lands_on_the_cursor_under_the_ui_scale() {
         r#"
         local up = CreateFrame("Frame", "UIParent")
         up:SetPoint("BOTTOMLEFT", 0, 0); up:SetPoint("TOPRIGHT", 0, 0)
+        CreateFrame("Minimap", "Minimap", up)
         CreateFrame("GameTooltip", "GameTooltip", UIParent)
     "#,
     )
@@ -805,7 +816,7 @@ fn a_cursor_seated_world_plate_hides_at_once_on_hover_loss() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The minimap blip tooltip is owned in mode 6 (`0x4eb587`), and when no blip is hovered
+/// The minimap blip tooltip is owned by `Minimap` in mode 6 (`0x4eb19c`, `0x4eb587`), and when no blip is hovered
 /// `0x4eb0c0` hides it directly (`0x4eb12b`–`0x4eb166`), with no fade.
 #[test]
 fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
@@ -814,6 +825,7 @@ fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
     s.run(
         r#"
         local up = CreateFrame("Frame", "UIParent"); up:SetAllPoints()
+        CreateFrame("Minimap", "Minimap", up)
         CreateFrame("GameTooltip", "GameTooltip")
         "#,
     )
@@ -822,7 +834,8 @@ fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
     s.run(
         r#"
         assert(GameTooltip:IsShown())
-        assert(GameTooltip:IsOwned(UIParent), "owned by UIParent")
+        assert(GameTooltip:IsOwned(Minimap), "owned by the Minimap, whose probe it is")
+        assert(not GameTooltip:IsOwned(UIParent))
         assert(GameTooltip:GetAnchorType() == "ANCHOR_CURSOR", "seated in mode 6")
         "#,
     )
@@ -830,5 +843,104 @@ fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
     s.world_tooltip_hide();
     s.run(r#"assert(not GameTooltip:IsShown(), "gone at once")"#)
         .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// The world handler tears down on every mouseover change (`0x492909`), so moving from one
+/// cursor-seated object straight to another hides the first plate (mode 6, `0x530ae3`) and shows
+/// the second afresh. Each seat clears twice: the SetOwner core's clear (`0x52ffe6`), then the
+/// builder's own (`0x52aa40`).
+#[test]
+fn a_cursor_plate_replaced_by_another_hides_then_shows_and_clears_twice_per_seat() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        local up = CreateFrame("Frame", "UIParent"); up:SetAllPoints()
+        local tt = CreateFrame("GameTooltip", "GameTooltip"); tt:Hide()
+        tt:SetScript("OnTooltipCleared", function() table.insert(log, "cleared") end)
+        tt:SetScript("OnShow", function() table.insert(log, "show") end)
+        tt:SetScript("OnHide", function() table.insert(log, "hide") end)
+        "#,
+    )
+    .unwrap();
+    assert!(s.world_tooltip_gameobject("Brill", &[], true));
+    s.run(r#"assert(table.concat(log, ",") == "cleared,cleared,show", table.concat(log, ",")) log = {}"#)
+        .unwrap();
+    // The driver's change: the teardown, then the next seat.
+    s.world_tooltip_fade();
+    assert!(s.world_tooltip_gameobject("Tirisfal Glades", &[], true));
+    s.run(
+        r#"
+        assert(table.concat(log, ",") == "cleared,hide,cleared,cleared,show", table.concat(log, ","))
+        assert(GameTooltipTextLeft1:GetText() == "Tirisfal Glades")
+        "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// A Lua content re-set of the world plate (an `UPDATE_MOUSEOVER_UNIT` handler's `SetUnit`) keeps
+/// it the world plate, so hover loss still fades it; a re-own by a window's `SetOwner` does not.
+#[test]
+fn hover_loss_fades_a_re_set_world_plate_but_not_a_re_owned_one() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit("mouseover", Some(wolf()));
+    s.run(
+        r#"
+        UIParent = CreateFrame("Frame", "UIParent"); UIParent:SetAllPoints()
+        local tt = CreateFrame("GameTooltip", "GameTooltip"); tt:Hide()
+        tt:SetScript("OnTooltipSetDefaultAnchor", function()
+            GameTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+        end)
+        tt:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+        tt:SetScript("OnEvent", function() GameTooltip:SetUnit("mouseover") end)
+        "#,
+    )
+    .unwrap();
+    assert!(s.world_tooltip_unit("mouseover"));
+    assert!(
+        s.world_tooltip_up(),
+        "the re-set plate is still the world's"
+    );
+    s.world_tooltip_fade();
+    s.tick(2.0);
+    s.run(r#"assert(not GameTooltip:IsShown(), "faded out")"#)
+        .unwrap();
+
+    assert!(s.world_tooltip_unit("mouseover"));
+    s.run(
+        r#"
+        GameTooltip:SetOwner(CreateFrame("Button", "Bag1"), "ANCHOR_RIGHT")
+        GameTooltip:SetText("Bag slot")
+        "#,
+    )
+    .unwrap();
+    assert!(!s.world_tooltip_up());
+    s.world_tooltip_fade();
+    s.tick(2.0);
+    s.run(r#"assert(GameTooltip:IsShown() and GameTooltip:GetAlpha() == 1, "the window's tooltip stays")"#)
+        .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// A unit is found by its guid (`0x52a021`); guid 0 finds no object and the builder hides through
+/// its own hide (`0x52a04e`–`0x52a058`), so `SetUnit` answers nil.
+#[test]
+fn a_unit_with_guid_zero_is_no_unit() {
+    let mut s = script();
+    s.set_unit("target", Some(UnitState { guid: 0, ..wolf() }));
+    s.run(
+        r#"
+        ZeroHost = CreateFrame("Frame", "ZeroHost")
+        ZeroTip = CreateFrame("GameTooltip", "ZeroTip")
+        ZeroTip:SetOwner(ZeroHost, "ANCHOR_RIGHT")
+        assert(ZeroTip:SetUnit("target") == nil, "no object, no plate")
+        assert(not ZeroTip:IsShown() and not ZeroTip:IsOwned(ZeroHost))
+        "#,
+    )
+    .unwrap();
     assert!(s.take_errors().is_empty());
 }

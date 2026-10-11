@@ -889,6 +889,8 @@ pub(super) fn seed_ui_fixture(
                 "mouseover",
                 Some(benilla_ui::script::UnitState {
                     exists: true,
+                    // A unit is found by its guid; the builder hides for guid 0 (`0x52a04e`).
+                    guid: 0xF130_0000_0044_0001,
                     name: Some("Stormwind Guard".into()),
                     health: 38,
                     max_health: 50,
@@ -916,6 +918,7 @@ pub(super) fn seed_ui_fixture(
                 "mouseover",
                 Some(benilla_ui::script::UnitState {
                     exists: true,
+                    guid: 0x0000_0000_0000_0B0B,
                     is_player: true,
                     name: Some("Bob".into()),
                     level: 60,

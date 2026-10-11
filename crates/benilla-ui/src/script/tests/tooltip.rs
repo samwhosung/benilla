@@ -954,6 +954,7 @@ fn fadeout_on_a_cursor_anchored_tooltip_hides_at_once() {
         hid = 0
         CurTip:FadeOut()
         assert(not CurTip:IsVisible(), "mode 6 hides at once")
+        assert(CurTip:IsShown(), "through the hide slot alone: the shown bit stays (0x530aee)")
         assert(hid == 1, "OnHide fired in the call")
         assert(not CurTip:IsOwned(CurHost), "the hide slot un-owns")
         assert(CurTip:NumLines() == 0, "and clears")
@@ -1041,5 +1042,31 @@ fn get_anchor_type_answers_anchor_none_after_a_hide() {
         "#,
     )
     .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// The fade's end sets full alpha (`0x530bd8`) before the hide slot (`0x530be9`), so the hide's
+/// `OnTooltipCleared` reads 255, not the last step of the ramp.
+#[test]
+fn the_fade_end_restores_full_alpha_before_its_hide() {
+    let mut s = script();
+    s.run(
+        r#"
+        seen = nil
+        EndHost = CreateFrame("Frame", "EndHost")
+        EndTip = CreateFrame("GameTooltip", "EndTip")
+        EndTip:SetOwner(EndHost, "ANCHOR_RIGHT")
+        EndTip:SetText("Silverleaf")
+        EndTip:SetScript("OnTooltipCleared", function() seen = EndTip:GetAlpha() end)
+        EndTip:FadeOut()
+        "#,
+    )
+    .unwrap();
+    s.tick(1.5);
+    s.run(r#"assert(seen == nil and EndTip:GetAlpha() < 0.5)"#)
+        .unwrap();
+    s.tick(0.5);
+    s.run(r#"assert(not EndTip:IsShown() and seen == 1, "cleared at alpha " .. tostring(seen))"#)
+        .unwrap();
     assert!(s.take_errors().is_empty());
 }

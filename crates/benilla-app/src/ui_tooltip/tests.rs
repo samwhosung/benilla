@@ -1323,3 +1323,19 @@ fn the_feed_builds_the_pet_views_against_the_pet_and_rebuilds_them_on_its_level(
         )
     );
 }
+
+/// `0x492890` tears down on every change away from a non-null mouseover (`0x4928d5`), loss and
+/// replacement alike, and not for a first hover or an unchanged one.
+#[test]
+fn every_change_away_from_a_hover_requests_the_fade() {
+    let (a, b) = (LastHover::Go(1), LastHover::Go(2));
+    assert!(fades_on_change(a, b), "one object replaced by another");
+    assert!(
+        fades_on_change(a, LastHover::Unit(2)),
+        "an object replaced by a unit"
+    );
+    assert!(fades_on_change(LastHover::Unit(1), LastHover::Corpse(3)));
+    assert!(fades_on_change(a, LastHover::None), "hover lost");
+    assert!(!fades_on_change(LastHover::None, a), "a first hover");
+    assert!(!fades_on_change(a, a), "unchanged");
+}

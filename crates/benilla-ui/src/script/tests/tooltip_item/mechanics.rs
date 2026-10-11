@@ -189,6 +189,7 @@ fn item_render_hides_the_unit_health_bar() {
     s.set_unit(
         "mouseover",
         Some(UnitState {
+            guid: 0xF130_0000_0000_0100,
             exists: true,
             name: Some("Timber Wolf".into()),
             health: 30,
