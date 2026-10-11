@@ -261,3 +261,365 @@ fn a_scaled_frames_backdrop_scales_with_it() {
         );
     }
 }
+
+// ── The pieces are regions (`0x77e8d0`) ──────────────────────────────────────────────────────
+
+/// Installing a backdrop builds nine Textures through the texture constructor and links each into
+/// the frame's region list (`0x76fc40` → `0x77fd10` → `0x76a750`): the background on BACKGROUND,
+/// then LEFT, RIGHT, TOP, BOTTOM, TOPLEFT, TOPRIGHT, BOTTOMLEFT, BOTTOMRIGHT on BORDER, unnamed,
+/// shown, parented to the frame.
+#[test]
+fn a_backdrop_is_nine_texture_regions_in_the_reference_order() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame", "NinePlate")
+        f:SetBackdrop({ bgFile = "Interface\\bg", edgeFile = "Interface\\edge" })
+        assert(f:GetNumRegions() == 9, "nine regions, got " .. f:GetNumRegions())
+        local r = { f:GetRegions() }
+        assert(table.getn(r) == 9, "GetRegions returns the nine")
+        for i = 1, 9 do
+            local p = r[i]
+            assert(p:GetObjectType() == "Texture", "piece " .. i .. " is a Texture")
+            assert(p:GetName() == nil, "piece " .. i .. " is unnamed")
+            assert(p:GetParent() == f, "piece " .. i .. " belongs to the frame")
+            assert(p:IsShown(), "piece " .. i .. " is shown")
+        end
+        assert(r[1]:GetTexture() == "Interface\\bg", "the first is the background")
+        assert(r[1]:GetDrawLayer() == "BACKGROUND", "the background is on BACKGROUND")
+        for i = 2, 9 do
+            assert(r[i]:GetTexture() == "Interface\\edge", "piece " .. i .. " is an edge")
+            assert(r[i]:GetDrawLayer() == "BORDER", "piece " .. i .. " is on BORDER")
+        end
+    "#,
+    )
+    .unwrap();
+}
+
+/// Each piece is gated on its file (`0x77e91f` for the background, the `+0x3c` mask for the edges).
+#[test]
+fn a_background_alone_is_one_region_and_a_border_alone_eight() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame")
+        f:SetBackdrop({ bgFile = "bg" })
+        assert(f:GetNumRegions() == 1, "bg only: " .. f:GetNumRegions())
+        f:SetBackdrop({ edgeFile = "edge" })
+        assert(f:GetNumRegions() == 8, "border only: " .. f:GetNumRegions())
+        f:SetBackdrop({ bgFile = "", edgeFile = "" })
+        assert(f:GetNumRegions() == 0, "empty files: " .. f:GetNumRegions())
+    "#,
+    )
+    .unwrap();
+}
+
+/// The region list is in link order (`0x76a750` appends), so a texture created after the backdrop
+/// is the tenth region; one created before stays first.
+#[test]
+fn a_region_created_after_the_backdrop_comes_tenth() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame")
+        local before = f:CreateTexture(nil, "ARTWORK")
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        local after = f:CreateTexture(nil, "ARTWORK")
+        assert(f:GetNumRegions() == 11, "11 regions, got " .. f:GetNumRegions())
+        local r = { f:GetRegions() }
+        assert(r[1] == before, "the earlier texture stays first")
+        assert(r[2]:GetTexture() == "bg", "then the background")
+        assert(r[11] == after, "the later texture comes after the nine pieces")
+    "#,
+    )
+    .unwrap();
+}
+
+/// `SetBackdrop(nil)` releases all nine (`0x76a5d0` → `0x77f4d0`), and a second `SetBackdrop`
+/// releases the old nine before building new ones, which link at the end of the list.
+#[test]
+fn set_backdrop_nil_leaves_no_pieces_and_a_second_one_relinks_at_the_end() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame")
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        f:SetBackdrop(nil)
+        assert(f:GetNumRegions() == 0, "nil leaves none, got " .. f:GetNumRegions())
+
+        f:SetBackdrop({ bgFile = "old", edgeFile = "edge" })
+        local mine = f:CreateTexture(nil, "ARTWORK")
+        f:SetBackdrop({ bgFile = "new", edgeFile = "edge" })
+        assert(f:GetNumRegions() == 10, "nine pieces and one texture, got " .. f:GetNumRegions())
+        local r = { f:GetRegions() }
+        assert(r[1] == mine, "the texture made between the two is now first")
+        assert(r[2]:GetTexture() == "new", "the new background follows it")
+    "#,
+    )
+    .unwrap();
+}
+
+/// The colours are each piece's vertex colour (`0x77f750`): `SetBackdropColor` writes the
+/// background only (`0x77f410`), `SetBackdropBorderColor` the eight edges only (`0x77f440`).
+#[test]
+fn the_border_colour_tints_the_eight_edges_and_never_the_background() {
+    let s = script();
+    s.run(
+        r#"
+        local f = CreateFrame("Frame")
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        f:SetBackdropBorderColor(1, 0, 0, 0.6)
+        local r = { f:GetRegions() }
+        local function is(p, cr, cg, cb, ca, what)
+            local pr, pg, pb, pa = p:GetVertexColor()
+            assert(math.abs(pr - cr) < 0.01 and math.abs(pg - cg) < 0.01
+                   and math.abs(pb - cb) < 0.01 and math.abs(pa - ca) < 0.01,
+                   what .. ": " .. pr .. "," .. pg .. "," .. pb .. "," .. pa)
+        end
+        is(r[1], 1, 1, 1, 1, "the background keeps white")
+        for i = 2, 9 do is(r[i], 1, 0, 0, 0.6, "edge " .. i) end
+        f:SetBackdropColor(0, 0, 1)
+        is(r[1], 0, 0, 1, 1, "the background takes the backdrop colour")
+        for i = 2, 9 do is(r[i], 1, 0, 0, 0.6, "edge " .. i .. " after SetBackdropColor") end
+    "#,
+    )
+    .unwrap();
+}
+
+/// A piece is an ordinary texture: an addon may hide it or swap its art, and that is what draws.
+#[test]
+fn an_addon_can_hide_or_retexture_a_piece() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local f = CreateFrame("Frame")
+        f:SetPoint("CENTER", 0, 0)
+        f:SetWidth(100); f:SetHeight(100)
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge" })
+        local r = { f:GetRegions() }
+        r[1]:SetTexture("mine")
+        r[2]:Hide()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let paths: Vec<String> = s
+        .extract()
+        .into_iter()
+        .filter_map(|q| match q.content {
+            QuadContent::Texture { path: Some(p), .. } => Some(p),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        paths.len(),
+        8,
+        "the hidden LEFT edge draws nothing: {paths:?}"
+    );
+    assert_eq!(paths[0], "mine", "the background draws its new art");
+}
+
+/// The edges tile along their run, `dim / edgeSize - 2` (`0x77f0c0`), and a resize re-runs the
+/// texcoords (`0x76b580`), which `GetTexCoord` reads back in `SetTexCoord`'s UL, LL, UR, LR order.
+#[test]
+fn a_resize_re_runs_the_edge_texcoords() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        f = CreateFrame("Frame")
+        f:SetPoint("CENTER", 0, 0)
+        f:SetWidth(200); f:SetHeight(100)
+        f:SetBackdrop({ bgFile = "bg", edgeFile = "edge", edgeSize = 16 })
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let left = "local r = { f:GetRegions() } return r[2]:GetTexCoord()";
+    let uv = s
+        .eval::<(f32, f32, f32, f32, f32, f32, f32, f32)>(left)
+        .unwrap();
+    // 100 / 16 - 2 = 4.25 periods down the LEFT edge, slice 0.
+    assert_eq!(uv, (0.0, 0.0, 0.0, 4.25, 0.125, 0.0, 0.125, 4.25));
+    s.run("f:SetHeight(64)").unwrap();
+    s.resolve();
+    let uv = s
+        .eval::<(f32, f32, f32, f32, f32, f32, f32, f32)>(left)
+        .unwrap();
+    assert_eq!(uv, (0.0, 0.0, 0.0, 2.0, 0.125, 0.0, 0.125, 2.0));
+}
+
+/// `<Backdrop>` is one more child of the frame's LoadXML loop (`0x769b1c`), handled in document
+/// order with `<Layers>` (`0x769c38`, `0x769cdb`): a backdrop before the layers links its pieces
+/// first, one after them links them after.
+#[test]
+fn xml_backdrop_and_layers_link_in_document_order() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+             <Frame name="BackdropFirst">
+               <Backdrop bgFile="bg" edgeFile="edge"/>
+               <Layers><Layer level="ARTWORK"><Texture name="$parentArt"/></Layer></Layers>
+             </Frame>
+             <Frame name="LayersFirst">
+               <Layers><Layer level="ARTWORK"><Texture name="$parentArt"/></Layer></Layers>
+               <Backdrop bgFile="bg" edgeFile="edge"/>
+             </Frame>
+           </Ui>"#,
+    )
+    .expect("valid FrameXML");
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    s.run(
+        r#"
+        local a = { BackdropFirst:GetRegions() }
+        assert(table.getn(a) == 10, "ten regions")
+        assert(a[1]:GetTexture() == "bg" and a[10] == BackdropFirstArt, "pieces, then the art")
+        local b = { LayersFirst:GetRegions() }
+        assert(b[1] == LayersFirstArt and b[2]:GetTexture() == "bg", "the art, then the pieces")
+    "#,
+    )
+    .unwrap();
+}
+
+/// The regression check on the draw: each piece's quad (rect, texcoords, colour and order) is the
+/// one the backdrop geometry (`pieces`, `0x77e8d0` and `0x77f0c0`) gives for the frame, on the
+/// stock plates' shapes, at scale 1 and below, after a resize too.
+#[test]
+fn the_piece_quads_are_the_backdrop_geometry() {
+    use crate::layout::Rect;
+    // The tooltip, the dialog box (`UI-DialogBox-Border`, asymmetric 11/12 insets), an untiled
+    // stretch, and a top inset over the bottom one.
+    let shapes = [
+        "{ bgFile = 'bg', edgeFile = 'edge', tile = true, tileSize = 16, edgeSize = 16, \
+           insets = { left = 5, right = 5, top = 5, bottom = 5 } }",
+        "{ bgFile = 'bg', edgeFile = 'edge', tile = true, tileSize = 32, edgeSize = 32, \
+           insets = { left = 11, right = 12, top = 12, bottom = 11 } }",
+        "{ bgFile = 'bg', edgeFile = 'edge', tile = false, edgeSize = 16, \
+           insets = { left = 4, right = 4, top = 4, bottom = 4 } }",
+    ];
+    for (i, shape) in shapes.iter().enumerate() {
+        for scale in [1.0f32, 0.75] {
+            let mut s = script();
+            s.set_screen_size(1024.0, 768.0);
+            s.run(&format!(
+                r#"
+                f = CreateFrame("Frame")
+                f:SetScale({scale})
+                f:SetPoint("TOPLEFT", nil, "TOPLEFT", 100, -100)
+                f:SetWidth(301); f:SetHeight(157)
+                f:SetAlpha(0.5)
+                f:SetBackdrop({shape})
+                f:SetBackdropColor(0.1, 0.2, 0.3, 0.9)
+                f:SetBackdropBorderColor(0.4, 0.5, 0.6)
+            "#
+            ))
+            .unwrap();
+            for (w, h) in [(301.0f32, 157.0f32), (90.0, 40.0)] {
+                s.run(&format!("f:SetWidth({w}); f:SetHeight({h})"))
+                    .unwrap();
+                s.resolve();
+                // The one frame with a backdrop.
+                let (fr, eff) = {
+                    let model = s.model_ref();
+                    let fh = *model.backdrops.keys().next().unwrap();
+                    let fr = model.resolved[&fh];
+                    (fr, crate::script::object::eff_scale(&model, fh))
+                };
+                let quads: Vec<_> = s
+                    .extract()
+                    .into_iter()
+                    .filter_map(|q| match q.content {
+                        QuadContent::Texture {
+                            path: Some(path),
+                            color,
+                            tex_coords,
+                            ..
+                        } => Some((path, q.rect.unwrap(), color, tex_coords, q.alpha)),
+                        _ => None,
+                    })
+                    .collect();
+                let spec = {
+                    let mut b: Backdrop = s
+                        .eval::<mlua::Table>("return f:GetBackdrop()")
+                        .map(|t| Backdrop {
+                            bg_file: t.get("bgFile").ok(),
+                            edge_file: t.get("edgeFile").ok(),
+                            tile: t.get::<Option<f32>>("tile").ok().flatten().is_some(),
+                            tile_size: t.get("tileSize").unwrap(),
+                            edge_size: t.get("edgeSize").unwrap(),
+                            insets: {
+                                let ins: mlua::Table = t.get("insets").unwrap();
+                                Insets {
+                                    left: ins.get("left").unwrap(),
+                                    right: ins.get("right").unwrap(),
+                                    top: ins.get("top").unwrap(),
+                                    bottom: ins.get("bottom").unwrap(),
+                                }
+                            },
+                            ..Default::default()
+                        })
+                        .unwrap();
+                    let c = s
+                        .eval::<(f32, f32, f32, f32)>("return f:GetBackdropColor()")
+                        .unwrap();
+                    b.bg_color = [c.0, c.1, c.2, c.3];
+                    let c = s
+                        .eval::<(f32, f32, f32, f32)>("return f:GetBackdropBorderColor()")
+                        .unwrap();
+                    b.border_color = [c.0, c.1, c.2, c.3];
+                    b
+                };
+                let want = pieces(fr, &spec, eff);
+                let ctx = format!("shape {i} scale {scale} size {w}x{h}");
+                assert_eq!(quads.len(), want.len(), "{ctx}");
+                for (k, (q, p)) in quads.iter().zip(&want).enumerate() {
+                    let (path, rect, color, tc, alpha) = q;
+                    let xs = p.corners.map(|c| c[0]);
+                    let ys = p.corners.map(|c| c[1]);
+                    let bb = Rect::new(
+                        ys.iter().copied().fold(f32::MAX, f32::min),
+                        xs.iter().copied().fold(f32::MAX, f32::min),
+                        ys.iter().copied().fold(f32::MIN, f32::max),
+                        xs.iter().copied().fold(f32::MIN, f32::max),
+                    );
+                    let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+                    // The draw normalizes a rect, so an edge shorter than its two corners, whose
+                    // anchors cross, draws as the same box either way.
+                    let (lo_y, hi_y) = (rect.bottom.min(rect.top), rect.bottom.max(rect.top));
+                    let (lo_x, hi_x) = (rect.left.min(rect.right), rect.left.max(rect.right));
+                    assert!(
+                        close(lo_x, bb.left)
+                            && close(hi_x, bb.right)
+                            && close(hi_y, bb.top)
+                            && close(lo_y, bb.bottom),
+                        "{ctx} piece {k}: rect {rect:?} want {bb:?}"
+                    );
+                    let want_path = if p.is_bg { "bg" } else { "edge" };
+                    assert_eq!(path, want_path, "{ctx} piece {k}");
+                    let want_color = if p.is_bg {
+                        spec.bg_color
+                    } else {
+                        spec.border_color
+                    };
+                    assert_eq!(*color, Some(want_color), "{ctx} piece {k} colour");
+                    assert_eq!(*alpha, 0.5, "{ctx} piece {k}: the frame's alpha");
+                    // An untiled background keeps the whole texture (no `SetTexCoord`).
+                    let uvs = match tc {
+                        Some(TexCoords::Corners(c)) => *c,
+                        None => [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                        Some(other) => panic!("{ctx} piece {k}: {other:?}"),
+                    };
+                    for (a, b) in uvs.iter().zip(p.uvs.iter()) {
+                        assert!(
+                            close(a[0], b[0]) && close(a[1], b[1]),
+                            "{ctx} piece {k}: uvs {uvs:?} want {:?}",
+                            p.uvs
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
