@@ -9,6 +9,7 @@ mod backdrop;
 mod button;
 mod capture;
 mod channel;
+mod chat_bubble;
 mod common;
 mod cooldown;
 mod create_frame_template;

@@ -34,6 +34,8 @@ mod calls;
 mod camera_view;
 mod channel;
 mod char_stats;
+pub mod chat_bubble;
+pub use chat_bubble::{BubbleGeometry, BubbleState};
 mod chat_misc;
 mod chat_send;
 mod chat_types;

@@ -124,6 +124,11 @@ fn duration_secs(words: u32, is_self: bool) -> f32 {
     (base + per * (words - 1)) as f32 / 1000.0
 }
 
+#[cfg(test)]
+fn duration_ms(text: &str, is_self: bool) -> u32 {
+    (duration_secs(word_count(text), is_self) * 1000.0) as u32
+}
+
 /// Bubble text is plain, coloured only by chat type: colour escapes and hyperlink wrappers strip
 /// (their display text stays), and `||` stays escaped for the glyph layout's markup parser.
 fn sanitize(text: &str) -> String {
@@ -708,17 +713,53 @@ mod tests {
         assert_eq!(duration_secs(3, true), 2.5);
     }
 
+    /// The copy loop in `0x4b1600`: `||` stays escaped; any other `|` jumps to the next `[` (or
+    /// ends the text), the bracket pair drops and a closing `|h` then `|r` after it skip.
     #[test]
-    fn sanitize_strips_escapes_keeps_display_text() {
+    fn sanitize_is_the_bubble_copy_loop() {
         assert_eq!(sanitize("hello"), "hello");
         assert_eq!(sanitize("a||b"), "a||b");
-        assert_eq!(sanitize("|cffff0000red|r plain"), "red plain");
         assert_eq!(
-            sanitize("look |Hitem:19019|h[Thunderfury]|h!"),
-            "look [Thunderfury]!"
+            sanitize("look |cffa335ee|Hitem:19019:0:0:0|h[Thunderfury]|h|r!"),
+            "look Thunderfury!"
         );
-        assert_eq!(sanitize("dangling |"), "dangling ||");
-        assert_eq!(sanitize("|x odd"), "||x odd");
+        assert_eq!(
+            sanitize("look |Hitem:19019|h[Thunderfury]|h now"),
+            "look Thunderfury now"
+        );
+        assert_eq!(
+            sanitize("|cffff0000red|r plain"),
+            "",
+            "no bracket: the text ends"
+        );
+        assert_eq!(sanitize("dangling |"), "dangling ");
+        assert_eq!(sanitize("[x] |y [z] w"), "[x] z w");
+    }
+
+    /// `0x4b1810`: the base, plus the per-word step for each space or tab that ends a word; an
+    /// empty buffer lasts 0.
+    #[test]
+    fn duration_is_the_separator_count_law() {
+        assert_eq!(duration_ms("", false), 0);
+        assert_eq!(duration_ms("hi", false), 2750);
+        assert_eq!(duration_ms("hi there", false), 3500);
+        assert_eq!(
+            duration_ms("hi ", false),
+            3500,
+            "a trailing space ends a word"
+        );
+        assert_eq!(
+            duration_ms("hi  \t there", false),
+            3500,
+            "a run counts once"
+        );
+        assert_eq!(
+            duration_ms("   ", false),
+            2750,
+            "separators alone: the base"
+        );
+        assert_eq!(duration_ms("hi", true), 1500);
+        assert_eq!(duration_ms("a b c", true), 2500);
     }
 
     /// Both switches on, since a kind whose switch is off cannot show whether the gate admits it.
