@@ -19,6 +19,7 @@
 
 mod faces;
 mod gpu;
+mod sfnt;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -27,7 +28,7 @@ use bevy::image::Image;
 use bevy::math::Rect;
 use bevy::prelude::*;
 use cosmic_text::{
-    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, Wrap,
+    Attrs, Buffer, CacheKey, CacheKeyFlags, Family, FontSystem, Metrics, Shaping, SwashCache, Wrap,
 };
 
 use benilla_assets::{LockRecover, WorldAssets};
@@ -57,6 +58,9 @@ struct Face {
     stretch: fontdb::Stretch,
     /// `hhea.asc / (asc + |desc|)`; Friz's 0.794 when the tables do not parse.
     ascent_ratio: f32,
+    /// The face's own tables, for FreeType's metrics ([`sfnt::Sfnt::glyph`]); `None` for a font
+    /// with no TrueType outlines, which falls back to the shaper's.
+    sfnt: Option<Arc<sfnt::Sfnt>>,
 }
 
 /// `(face, glyph, ppem, outline radius)`: one bitmap per exact device-pixel size.
@@ -79,18 +83,19 @@ pub(super) struct GlyphRef {
     pub(super) glyph_id: u16,
     /// Swash's raster key at zero subpixel offset, so another outline radius needs no re-shaping.
     key: CacheKey,
-    /// The face's advance in physical px, unfloored; [`super::layout::client_step`] floors it.
-    pub(super) advance: f32,
+    /// The advance in whole physical px, as the reference's FreeType rounds it
+    /// ([`sfnt::GlyphPx::advance`]); the step law adds its bias ([`TextEngine::step`]).
+    pub(super) px: f32,
+    /// The glyph as its line's last, in physical px ([`sfnt::GlyphPx::ink`]).
+    pub(super) ink: f32,
     /// Offset from the baseline in physical px; 0 for every glyph the four client faces shape.
     pub(super) y_off: f32,
 }
 
-/// One character at one `(face, ppem)`. The step law's bias is per glyph, so a character shaping
-/// to two glyphs would take two ([`super::layout::client_step`]); in the client faces none does.
+/// One character at one `(face, ppem)`. The step law is per glyph ([`TextEngine::step`]), so a
+/// character shaping to two glyphs would take two steps; in the client faces none does.
 pub(super) struct CharCell {
     pub(super) glyphs: Vec<GlyphRef>,
-    /// Σ `advance.floor()` over the glyphs in physical px, the width law's per-character term.
-    pub(super) floor_sum: f32,
 }
 
 /// What the cache instrument (`WOW_GLYPH_CACHE=1`) counts.
@@ -168,6 +173,7 @@ impl TextEngine {
                 }
             };
             let ascent_ratio = hhea_ascent_ratio(&bytes).unwrap_or(0.794);
+            let sfnt = sfnt::Sfnt::parse(bytes.clone()).map(Arc::new);
             match register_font(&mut font_system, bytes) {
                 Ok(r) => {
                     path_to_face.insert(path.to_ascii_lowercase(), faces.len());
@@ -179,6 +185,7 @@ impl TextEngine {
                         style: r.style,
                         stretch: r.stretch,
                         ascent_ratio,
+                        sfnt,
                     });
                 }
                 Err(e) => warn!("ui_text: failed to register {path}: {e:#}"),
@@ -247,6 +254,7 @@ impl TextEngine {
         let source = self.source.as_ref()?;
         let bytes = read_font_bytes(source, path)?;
         let ascent_ratio = hhea_ascent_ratio(&bytes).unwrap_or(0.794);
+        let sfnt = sfnt::Sfnt::parse(bytes.clone()).map(Arc::new);
         let r = register_font(&mut self.font_system, bytes)
             .inspect_err(|e| warn!("ui_text: failed to register {path}: {e:#}"))
             .ok()?;
@@ -259,6 +267,7 @@ impl TextEngine {
             style: r.style,
             stretch: r.stretch,
             ascent_ratio,
+            sfnt,
         });
         self.path_to_face.insert(key.to_string(), index);
         info!("ui_text: loaded font face {path}");
@@ -339,8 +348,8 @@ impl TextEngine {
     }
 
     /// One character: shape it alone into its [`CharCell`] and rasterize its glyphs at `radius`.
-    /// Alone, so the width sum holds each face's own advance with no neighbour term (kerning is
-    /// dropped, per the `ui_text` module doc) and one table answers a measure and a draw.
+    /// Alone, so a glyph's metrics hold no neighbour term (the pair kern is [`Self::step`]'s) and
+    /// one table answers a measure and a draw.
     fn ensure_char(&mut self, face: usize, ppem: u16, radius: Option<u8>, ch: char) {
         if let Some(known) = self.chars.get(&(face, ppem, ch)) {
             let Some(radius) = radius else { return };
@@ -357,13 +366,8 @@ impl TextEngine {
         // A control character (`\n`, which the markup parser takes as a line break) has no glyph
         // by design: an empty cell, before any shaping, so it neither re-shapes nor warns.
         if ch.is_control() {
-            self.chars.insert(
-                (face, ppem, ch),
-                CharCell {
-                    glyphs: Vec::new(),
-                    floor_sum: 0.0,
-                },
-            );
+            self.chars
+                .insert((face, ppem, ch), CharCell { glyphs: Vec::new() });
             return;
         }
         let Some(f) = self.faces.get(face) else {
@@ -378,7 +382,6 @@ impl TextEngine {
             .stretch(stretch);
         let px = f32::from(ppem);
         let mut glyphs: Vec<GlyphRef> = Vec::new();
-        let mut floor_sum = 0.0f32;
         let mut shaped_by = None;
         {
             let mut buf = Buffer::new(&mut self.font_system, Metrics::new(px, px));
@@ -400,10 +403,10 @@ impl TextEngine {
                     glyphs.push(GlyphRef {
                         glyph_id: g.glyph_id,
                         key: physical.cache_key,
-                        advance: g.w,
+                        px: g.w.floor(),
+                        ink: 0.0,
                         y_off: g.y,
                     });
-                    floor_sum += g.w.floor();
                 }
             }
         }
@@ -431,24 +434,64 @@ impl TextEngine {
                 warn!("ui_text: no glyph for {ch:?} in any registered face");
             }
             // Cache the miss as an empty cell, or every frame's pre-warm shapes it again.
-            self.chars.insert(
-                (face, ppem, ch),
-                CharCell {
-                    glyphs,
-                    floor_sum: 0.0,
-                },
-            );
+            self.chars.insert((face, ppem, ch), CharCell { glyphs });
             return;
         }
         self.stats.chars_shaped += 1;
+        // The metrics off the face's own tables, as FreeType computes them; a glyph another face
+        // shaped keeps the shaper's advance and reads its ink off the outline.
+        let sfnt = self.faces.get(face).and_then(|f| f.sfnt.clone());
+        for g in &mut glyphs {
+            let own = sfnt
+                .as_deref()
+                .filter(|_| g.key.font_id == face_id)
+                .and_then(|t| t.glyph(g.glyph_id, ppem));
+            match own {
+                Some(m) => (g.px, g.ink) = (m.advance, m.ink),
+                None => g.ink = glyph_ink(&mut self.swash, &mut self.font_system, g.key, ppem),
+            }
+        }
         if let Some(radius) = radius {
             for g in &glyphs {
                 let g = *g;
                 self.ensure_cell(face_id, ppem, radius, &g);
             }
         }
-        self.chars
-            .insert((face, ppem, ch), CharCell { glyphs, floor_sum });
+        self.chars.insert((face, ppem, ch), CharCell { glyphs });
+    }
+
+    /// The step from glyph `left` to the glyph after it in device px, `ComputeStep` (`0x5ca2d0`):
+    /// `ceil(stepBase + min(kern, 0) · x_ppem/upem)`, the sum narrowed to f32 (`0x5ca378`) before
+    /// the ceil (`0x73fdf5`). `stepBase` is the whole-pixel advance plus the law's bias
+    /// (`step_extra`: `0x5d12a9`, and `0x5ca2b0` for THICK); the kern is the face's unscaled pair
+    /// value (`FT_Get_Kerning` mode 2). With no glyph after it, the step is the base.
+    pub(super) fn step(
+        &self,
+        face: usize,
+        ppem: u16,
+        step_extra: f32,
+        left: &GlyphRef,
+        right: Option<&GlyphRef>,
+    ) -> f32 {
+        let base = left.px + step_extra;
+        let Some(right) = right else {
+            return base;
+        };
+        let Some(f) = self.faces.get(face) else {
+            return base;
+        };
+        let Some(t) = f.sfnt.as_deref() else {
+            return base;
+        };
+        if left.key.font_id != f.id || right.key.font_id != f.id {
+            return base;
+        }
+        let kern = t.neg_kern(left.glyph_id, right.glyph_id);
+        if kern == 0 {
+            return base;
+        }
+        let sum = f64::from(base) + f64::from(kern) * f64::from(t.kern_scale(ppem));
+        (sum as f32).ceil()
     }
 
     /// Rasterize and pack one glyph's cell, unless it is already there.
@@ -611,6 +654,7 @@ pub(super) fn test_engine(dpi: f32) -> Option<TextEngine> {
             continue;
         };
         let ascent_ratio = hhea_ascent_ratio(&bytes).unwrap_or(0.794);
+        let sfnt = sfnt::Sfnt::parse(bytes.clone()).map(Arc::new);
         let r = register_font(&mut font_system, bytes).ok()?;
         path_to_face.insert(path.to_ascii_lowercase(), faces.len());
         faces.push(Face {
@@ -621,6 +665,7 @@ pub(super) fn test_engine(dpi: f32) -> Option<TextEngine> {
             style: r.style,
             stretch: r.stretch,
             ascent_ratio,
+            sfnt,
         });
     }
     let default_face = *path_to_face.get(&CLIENT_FONTS[0].to_ascii_lowercase())?;
@@ -665,6 +710,163 @@ impl UiFontAtlas {
     }
 }
 
+/// A glyph's ink as its line's last, in physical px, read off the scaled outline: the fallback for
+/// a glyph another face shaped, whose tables [`sfnt::Sfnt::glyph`] does not hold. The reference
+/// measures a line's last glyph by `ceil(horiBearingX)` plus `out[4]`, the bitmap width plus the
+/// outline's growth (`0x5c6b70` → `0x5cb080`, `0x5c6c24`), both stored by the rasterizer
+/// (`0x5d1120`: `out[6]` the bearing, `out[4] = out[2] + growth`); the growth is the caller's.
+/// FreeType's bitmap spans the outline's control box rounded out, `ceil(xMax) − floor(xMin)`, its
+/// bearing is `xMin`, both on the 26.6 grid; a glyph with no ink gets a blank `(ppem + 3) >> 2` px
+/// wide (`0x5d11da`) and no bearing. The outline is unhinted, as the reference loads every glyph
+/// (`0x5d1300`: both load-flag words carry `FT_LOAD_NO_HINTING`).
+fn glyph_ink(swash: &mut SwashCache, fs: &mut FontSystem, key: CacheKey, ppem: u16) -> f32 {
+    let blank = f32::from((ppem + 3) >> 2);
+    let key = CacheKey {
+        flags: key.flags | CacheKeyFlags::DISABLE_HINTING,
+        ..key
+    };
+    let Some(commands) = swash.get_outline_commands_uncached(fs, key) else {
+        return blank;
+    };
+    let (mut x0, mut x1, mut y0, mut y1) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
+    for c in commands.iter() {
+        let pts = match *c {
+            cosmic_text::Command::MoveTo(p) | cosmic_text::Command::LineTo(p) => {
+                [Some(p), None, None]
+            }
+            cosmic_text::Command::QuadTo(a, p) => [Some(a), Some(p), None],
+            cosmic_text::Command::CurveTo(a, b, p) => [Some(a), Some(b), Some(p)],
+            cosmic_text::Command::Close => [None, None, None],
+        };
+        for p in pts.into_iter().flatten() {
+            (x0, x1) = (x0.min(p.x), x1.max(p.x));
+            (y0, y1) = (y0.min(p.y), y1.max(p.y));
+        }
+    }
+    // FreeType's 26.6 grid, so an edge a float hair past a whole pixel does not round out.
+    let q = |v: f32| (v * 64.0).round() / 64.0;
+    let (x0, x1, y0, y1) = (q(x0), q(x1), q(y0), q(y1));
+    let (width, rows) = (x1.ceil() - x0.floor(), y1.ceil() - y0.floor());
+    if !(width > 0.0 && rows > 0.0) {
+        return blank;
+    }
+    x0.ceil() + width
+}
+
+#[cfg(test)]
+mod line_law_tests {
+    use super::*;
+    use crate::ui_text::{string_width, FontSpec};
+    use benilla_ui::script::Outline;
+
+    const FRIZ: &str = "Fonts\\FRIZQT__.TTF";
+
+    /// `GetStringWidth`'s measure (`0x5c6940`) in device px, computed outside this code base off
+    /// FRIZQT__.TTF's own tables with FreeType 2.1's fixed point (`FT_MulFix` advances and outline,
+    /// `>> 6`, the control box rounded out) and the kernel's law (kerned `ceil` steps, the last
+    /// glyph at `ceil(bearing) + width`, the outline's lead and growth, the shadow's seed, the
+    /// carry across a break): `(text, ppem, outline, shadow px, width px)`.
+    const GOLDEN: &[(&str, u16, Outline, f32, f32)] = &[
+        ("Gold", 12, Outline::None, 0.0, 31.0),
+        ("Gold", 12, Outline::None, 1.0, 32.0),
+        ("1", 12, Outline::None, 0.0, 7.0),
+        ("1", 12, Outline::None, 1.0, 8.0),
+        ("1234", 12, Outline::None, 0.0, 32.0),
+        ("1234", 12, Outline::None, 1.0, 33.0),
+        // `1`→`2` kerns −86 units, −1.03 px: the step is 7, not 8.
+        ("12", 12, Outline::None, 0.0, 16.0),
+        ("Ironforge", 12, Outline::None, 0.0, 59.0),
+        // `f` advances 4.0 px in 26.6, 3.996 to a float shaper.
+        ("fi.", 12, Outline::None, 0.0, 13.0),
+        ("fff", 12, Outline::None, 0.0, 16.0),
+        ("Staff of the Shadow Flame", 12, Outline::None, 0.0, 164.0),
+        ("Stormwind City", 12, Outline::None, 0.0, 98.0),
+        ("i\nIronforge", 12, Outline::None, 0.0, 63.0),
+        ("ab\ncd", 12, Outline::None, 0.0, 24.0),
+        ("1234", 12, Outline::Normal, 0.0, 36.0),
+        ("1234", 12, Outline::Thick, 0.0, 43.0),
+        ("Gold", 14, Outline::Normal, 0.0, 39.0),
+        ("11", 14, Outline::None, 0.0, 15.0),
+        ("1234", 17, Outline::None, 1.0, 45.0),
+        ("Ironforge", 17, Outline::None, 0.0, 79.0),
+    ];
+
+    /// The measure answers the reference's widths to the pixel, at both DPIs.
+    #[test]
+    fn the_measure_answers_the_reference_widths() {
+        benilla_formats::wow_data_or_skip!();
+        let mut e = test_engine(1.0).expect("the client faces open");
+        for dpi in [1.0f32, 2.0] {
+            e.set_dpi_for_test(dpi);
+            for &(text, ppem, outline, shadow, want) in GOLDEN {
+                let spec = FontSpec {
+                    path: Some(FRIZ),
+                    height: Some(f32::from(ppem) / dpi),
+                    outline,
+                    spacing: 0.0,
+                    shadow_x: 0.0,
+                    alpha_gradient: None,
+                };
+                let got = string_width(&mut e, text, spec, shadow / dpi);
+                assert_eq!(
+                    got * dpi,
+                    want,
+                    "{text:?} @{ppem} {outline:?} shadow {shadow}, dpi {dpi}"
+                );
+            }
+        }
+    }
+
+    /// A composite glyph's ink as the reference's FreeType builds it (`0x7d40e6`–`0x7d4246`): its
+    /// components scaled first, each offset scaled alone and, under `ROUND_XY_TO_GRID`, rounded to
+    /// a whole pixel. Every composite in ARIALN carries that flag; these ink widths, a lone
+    /// character's measure, were computed off the font's tables outside this code base.
+    #[test]
+    fn a_composite_glyph_is_built_as_the_reference_builds_it() {
+        benilla_formats::wow_data_or_skip!();
+        let mut e = test_engine(1.0).expect("the client faces open");
+        for &(text, ppem, want) in &[
+            ("ì", 12u16, 4.0f32),
+            ("î", 12, 5.0),
+            ("Î", 12, 5.0),
+            ("í", 13, 5.0),
+            ("Ï", 13, 5.0),
+            ("½", 16, 13.0),
+            ("¾", 16, 13.0),
+            ("í", 18, 6.0),
+            ("ì", 18, 5.0),
+            ("½", 18, 13.0),
+            ("¼", 18, 13.0),
+        ] {
+            let spec = FontSpec {
+                path: Some("Fonts\\ARIALN.TTF"),
+                height: Some(f32::from(ppem)),
+                outline: Outline::None,
+                spacing: 0.0,
+                shadow_x: 0.0,
+                alpha_gradient: None,
+            };
+            assert_eq!(
+                string_width(&mut e, text, spec, 0.0),
+                want,
+                "{text:?} @{ppem}"
+            );
+        }
+    }
+
+    /// The step's advance is FreeType's 26.6 one shifted down (`0x5d1298`), not a float's floor.
+    #[test]
+    fn an_advance_is_the_fixed_point_one() {
+        benilla_formats::wow_data_or_skip!();
+        let mut e = test_engine(1.0).expect("the client faces open");
+        let face = e.face_for(Some(FRIZ));
+        e.ensure_metrics(face, 12, "f");
+        let g = e.char_cell(face, 12, 'f').expect("shaped").glyphs[0];
+        assert_eq!(g.px, 4.0, "`f` at 12 px advances 4.0 in 26.6");
+        assert_eq!(e.step(face, 12, 1.0, &g, None), 5.0);
+    }
+}
+
 #[cfg(test)]
 mod differential_tests {
     use super::*;
@@ -701,7 +903,7 @@ mod differential_tests {
                 // A small and a large size, so a size-dependent substitution cannot hide.
                 for ppem in [10u16, 20] {
                     for text in CORPUS {
-                        let (want, _) = shape_whole(&mut e, &family, ppem, text);
+                        let want = shape_whole(&mut e, &family, ppem, text);
                         e.ensure_metrics(face, ppem, text);
                         let got: Vec<u16> = text
                             .chars()
@@ -724,70 +926,10 @@ mod differential_tests {
         );
     }
 
-    /// The width is the sum of per-glyph steps off each glyph's own advance, and differs from
-    /// whole-string shaping, which kerns: the reference kerns only negative pairs, rounded up
-    /// (`ComputeStep`, `0x5ca2d0`), and this drops even those, so shaping whole runs is no fix.
-    #[test]
-    fn the_width_is_the_unkerned_per_character_sum() {
-        let Some(mut e) = test_engine(1.0) else {
-            eprintln!("skipping: no install / patch chain");
-            return;
-        };
-        let mut kerning_seen = 0usize;
-        for dpi in [1.0f32, 2.0] {
-            e.set_dpi_for_test(dpi);
-            for face in 0..e.faces.len() {
-                let family = e.faces[face].family.clone();
-                for ppem in [10u16, 20] {
-                    // Both step biases: plain/NORMAL (+1) and THICK (+2).
-                    for step_extra in [1.0f32, 2.0] {
-                        for text in CORPUS {
-                            let got = super::super::layout::measure_line_width_for_test(
-                                &mut e, face, ppem, step_extra, text,
-                            );
-                            let by_glyph: f32 = text
-                                .chars()
-                                .filter_map(|c| e.char_cell(face, ppem, c))
-                                .flat_map(|c| c.glyphs.iter())
-                                .map(|g| g.advance.floor() + step_extra)
-                                .sum::<f32>()
-                                / dpi;
-                            assert_eq!(
-                                got, by_glyph,
-                                "{family} @{ppem} dpi {dpi} extra {step_extra}: {text:?} — the \
-                                 pre-summed floor must be the per-glyph sum"
-                            );
-                            let (_, kerned) = shape_whole(&mut e, &family, ppem, text);
-                            let kerned =
-                                kerned + step_extra * kerned_glyphs(&mut e, face, ppem, text) / dpi;
-                            if (kerned - got).abs() > 1e-3 {
-                                kerning_seen += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(
-            kerning_seen > 0,
-            "the corpus is full of kerning pairs — if the shaped sum never differs from ours, \
-             either kerning stopped being dropped or this test stopped measuring it"
-        );
-    }
-
-    /// Glyph count of `text` at `(face, ppem)`, which the step bias multiplies.
-    fn kerned_glyphs(e: &mut TextEngine, face: usize, ppem: u16, text: &str) -> f32 {
-        e.ensure_metrics(face, ppem, text);
-        text.chars()
-            .filter_map(|c| e.char_cell(face, ppem, c))
-            .map(|c| c.glyphs.len() as f32)
-            .sum()
-    }
-
-    /// The whole string shaped in one buffer: its glyph ids and kerned, floored advance sum.
-    fn shape_whole(e: &mut TextEngine, family: &str, ppem: u16, text: &str) -> (Vec<u16>, f32) {
+    /// The whole string shaped in one buffer: its glyph ids.
+    fn shape_whole(e: &mut TextEngine, family: &str, ppem: u16, text: &str) -> Vec<u16> {
         if text.is_empty() {
-            return (Vec::new(), 0.0);
+            return Vec::new();
         }
         let attrs = Attrs::new().family(Family::Name(family));
         let px = f32::from(ppem);
@@ -795,14 +937,9 @@ mod differential_tests {
         buf.set_wrap(&mut e.font_system, Wrap::None);
         buf.set_text(&mut e.font_system, text, &attrs, Shaping::Advanced, None);
         buf.shape_until_scroll(&mut e.font_system, false);
-        let (mut ids, mut w) = (Vec::new(), 0.0f32);
-        for run in buf.layout_runs() {
-            for g in run.glyphs {
-                ids.push(g.glyph_id);
-                w += g.w.floor() / e.dpi;
-            }
-        }
-        (ids, w)
+        buf.layout_runs()
+            .flat_map(|run| run.glyphs.iter().map(|g| g.glyph_id))
+            .collect()
     }
 }
 
@@ -899,7 +1036,7 @@ mod ppem_tests {
         e.ensure_str(face, 14, 0, " ");
         let c = e.char_cell(face, 14, ' ').expect("a space still shapes");
         assert_eq!(c.glyphs.len(), 1);
-        assert!(c.floor_sum > 0.0, "a space is wide");
+        assert!(c.glyphs[0].px > 0.0, "a space is wide");
         assert!(
             e.cell(face, 14, 0, c.glyphs[0].glyph_id).is_none(),
             "…and has no ink"
@@ -922,7 +1059,7 @@ mod ppem_tests {
             .char_cell(face, 14, '\n')
             .expect("the miss is cached, so the second ask short-circuits");
         assert!(c.glyphs.is_empty(), "a newline draws nothing");
-        assert_eq!(c.floor_sum, 0.0, "…and steps nothing");
+        assert!(c.glyphs.is_empty(), "…and steps nothing");
         assert_eq!(
             e.stats.chars_shaped, shaped,
             "a control character is answered before the shape, not by failing one"

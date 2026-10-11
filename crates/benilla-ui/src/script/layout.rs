@@ -1910,6 +1910,7 @@ pub(super) fn measure_request_for(model: &mut Model, rh: RegionHandle) -> Option
     let text_height = d.text_height;
     let outline = d.outline;
     let spacing = d.line_gap();
+    let shadow_x = d.shadow_x();
     let id = model.region_id(rh);
     Some(MeasureRequest {
         id,
@@ -1919,6 +1920,7 @@ pub(super) fn measure_request_for(model: &mut Model, rh: RegionHandle) -> Option
         wrap_width,
         outline,
         spacing,
+        shadow_x,
         scale,
         text,
         key,

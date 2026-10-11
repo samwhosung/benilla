@@ -551,6 +551,8 @@ pub(super) fn tick_script(
                             height: crate::ui_text::drawn_px(r.height, None, s * r.scale),
                             outline: r.outline, // the outline biases the stepped width
                             spacing: 0.0,       // the gap moves rows, never counts them
+                            // The drawn shadow seeds each row, as the draw's does.
+                            shadow_x: r.shadow_x * s * r.scale,
                             alpha_gradient: None,
                         },
                     );

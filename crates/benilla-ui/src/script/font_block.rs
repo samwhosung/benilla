@@ -398,6 +398,8 @@ pub(super) fn install(
                 color,
             });
             d.font_explicit.shadow = true;
+            // The offset seeds `GetStringWidth`'s line, so it is in the measure key.
+            model.touch_measure(rh);
             Ok(())
         })?,
     )?;

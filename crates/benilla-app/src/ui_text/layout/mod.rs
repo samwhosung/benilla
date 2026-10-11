@@ -8,18 +8,16 @@ use benilla_ui::script::{JustifyH, JustifyV, Outline};
 
 use crate::ui_pass::{UiQuad, UvRect};
 
-use super::engine::TextEngine;
+use super::engine::{GlyphRef, TextEngine};
 use super::markup::{fontstring_lines, ColorRun};
 
 mod measure;
 mod overflow;
 mod wrap;
 
-/// The width law, for the engine's differential test against shaped strings.
-#[cfg(test)]
-pub(super) use measure::measure_line_width_for_test;
 pub(crate) use measure::{
     ellipsize_to_fit, line_advances, line_origin, line_rows, measure_text, measure_wrapped_rows,
+    string_width, unwrapped_height,
 };
 
 /// A rect this narrow is no wrap constraint: an unsized single-point `FontString` resolves to ~0.
@@ -60,22 +58,17 @@ pub(crate) struct FontSpec<'a> {
     /// The gap between lines in logical px, scaled like [`Self::height`]; the line step adds it
     /// rounded up to a whole device pixel ([`line_gap`]).
     pub spacing: f32,
+    /// The drawn shadow's x offset in this spec's px, 0 for none: it seeds each laid-out row's pen
+    /// (`0x5cddb1` passes it whenever a shadow is set, `0x5cd650`), so it moves the wrap and the
+    /// justify. The draw scales it with the frame (`0x7726a4`: `[fs+0x108]·[fs+0x7c]`).
+    pub shadow_x: f32,
     /// The `SetAlphaGradient` reveal `(start, length)`; on the spec, shadows fade with their fill.
     pub alpha_gradient: Option<(f32, f32)>,
 }
 
-/// The reference's per-glyph step in device px: the FreeType advance floored plus one (glyph
-/// rasterizer `0x5d1120`, `out[5]`), one more for THICK (`GlyphStepBase` `0x5ca2b0`), both in
-/// `step_extra`. Divided by the DPI once per line: flooring logical px instead over-tracks.
-///
-/// Deviation: `ComputeStep`'s (`0x5ca2d0`) negative-only pair kern is dropped, because at UI sizes
-/// it rounds to 0 almost always.
-fn client_step(raw_physical_advance: f32, step_extra: f32) -> f32 {
-    raw_physical_advance.floor() + step_extra
-}
-
-/// [`client_step`]'s bias: `+1`, or `+2` for THICK, as `GlyphStepBase` (`0x5ca2b0`) tests the THICK
-/// flag alone; a NORMAL outline steps like a plain font, though its cell grows.
+/// The step law's bias over the whole-pixel advance ([`TextEngine::step`]): `+1` (glyph rasterizer
+/// `0x5d1120`, `out[5]`), or `+2` for THICK, as `GlyphStepBase` (`0x5ca2b0`) tests the THICK flag
+/// alone; a NORMAL outline steps like a plain font, though its cell grows.
 fn step_extra_of(outline: Outline) -> f32 {
     match outline {
         Outline::Thick => 2.0,
@@ -199,14 +192,12 @@ fn layout_text_quads_inner(
     // `0x5cd0e1`) against its blit's baked seat; NORMAL cancels exactly.
     let thick_rise = f32::from(u8::from(matches!(font.outline, Outline::Thick)));
 
-    // Wrap only within a pinned width; `rect` is in the pen's own space, so no conversion.
-    let mut render_lines: Vec<Vec<ColorRun>> = if rect.width() > WRAP_MIN_WIDTH {
-        lines
-            .iter()
-            .flat_map(|line| measure::wrap_line(e, r, line, rect.width()))
-            .collect()
+    // Wrap only within a pinned width; `rect` is in the pen's own space, so no conversion. Each
+    // row keeps the source character after it, which prices its last glyph for the justify.
+    let mut render_lines: Vec<(Vec<ColorRun>, Option<char>)> = if rect.width() > WRAP_MIN_WIDTH {
+        measure::wrap_rows(e, r, &lines, rect.width())
     } else {
-        lines
+        lines.into_iter().map(|line| (line, None)).collect()
     };
     // The line stack (`CGxString+0x40` in `0x5cdc20`): a height-pinned rect stops emitting lines
     // once the pitch sum passes it, even for a caller that skips the ellipsis seam.
@@ -257,20 +248,28 @@ fn layout_text_quads_inner(
     // `SetAlphaGradient`'s character index counts drawn characters, markup stripped; it trails the
     // engine's source count by at most the newline count, a frame or two on the reveal's tail.
     let mut char_index: usize = 0;
-    for line in &render_lines {
-        // First pass: lay the line at origin 0 and measure its width.
+    for (line, next) in &render_lines {
+        // First pass: lay the line at origin 0.
         let mut pending: Vec<PendingGlyph> = Vec::new();
         // The line's link x-ranges, one per link: a link's runs are contiguous.
         let mut line_links: Vec<(std::sync::Arc<super::markup::LinkInfo>, f32, f32)> = Vec::new();
         // The pen in device px: every step is an integer, so the logical width is one division.
+        // It walks characters, not a shaped buffer: each glyph steps to the next glyph on the row
+        // ([`TextEngine::step`], kerned), across runs, as the line builder's pen does
+        // (`0x5ccbe0` → `0x5ca2d0`).
         let mut pen_dev = 0.0f32;
+        let row_glyphs: Vec<GlyphRef> = line
+            .iter()
+            .flat_map(|run| run.text.chars())
+            .filter_map(|ch| e.char_cell(r.face, r.ppem, ch))
+            .flat_map(|cc| cc.glyphs.iter().copied())
+            .collect();
+        let mut k = 0usize;
         for run in line {
             if run.text.is_empty() {
                 continue;
             }
             let run_x0 = pen_dev / dpi;
-            // The pen walks characters, not a shaped buffer: with the kern dropped
-            // ([`client_step`]) a run is its characters' steps, the sum `measure_line_width` takes.
             for ch in run.text.chars() {
                 let Some(cc) = e.char_cell(r.face, r.ppem, ch) else {
                     // No face shapes it: it draws and steps nothing, as the measure says.
@@ -292,7 +291,8 @@ fn layout_text_quads_inner(
                             color,
                         });
                     }
-                    pen_dev += client_step(g.advance, r.step_extra);
+                    pen_dev += e.step(r.face, r.ppem, r.step_extra, g, row_glyphs.get(k + 1));
+                    k += 1;
                 }
                 char_index += 1;
             }
@@ -307,8 +307,10 @@ fn layout_text_quads_inner(
             }
         }
 
-        // Second pass: shift the line by the justify offset and emit.
-        let line_width = pen_dev / dpi;
+        // Second pass: shift the line by the justify offset and emit. The offset takes the line
+        // builder's width (`0x5c7470` → `0x5cddf9`), not the pen's: the seed, and the last glyph
+        // at its ink when nothing follows it in the source line.
+        let line_width = measure::row_width(e, r, line, *next);
         let origin_x = match justify.h {
             JustifyH::Left => rect.min.x,
             JustifyH::Center => rect.min.x + (rect.width() - line_width) * 0.5,
@@ -431,6 +433,7 @@ mod measure_fits_render {
             height: Some(h),
             outline: Outline::None,
             spacing: 0.0,
+            shadow_x: 0.0,
             alpha_gradient: None,
         }
     }
@@ -701,16 +704,17 @@ mod measure_fits_render {
         }
     }
 
-    /// The pen and `measure_line_width` sum the same steps, so the ink never passes the measure.
+    /// The measure ends the line on its last glyph's ink, read off the very outline the draw
+    /// rasterizes, so the drawn ink never passes it: with no pixel added, it is the ink's own edge.
     #[test]
-    fn the_drawn_line_is_exactly_as_wide_as_the_measure_says() {
+    fn the_drawn_ink_ends_within_the_measure() {
         let Some(mut e) = test_engine(2.0) else {
             eprintln!("skipping: no install / font chain");
             return;
         };
         for label in LABELS {
             let s = spec(16.0 * ERA);
-            let want = measure_text(&mut e, label, None, s).0 - 1.0; // less the headroom pixel
+            let want = measure_text(&mut e, label, None, s).0;
             let quads = layout_text_quads(
                 &mut e,
                 label,
@@ -726,10 +730,116 @@ mod measure_fits_render {
             );
             let ink = quads.iter().map(|q| q.rect.max.x).fold(0.0f32, f32::max);
             assert!(
-                ink <= want.ceil() + 1e-3,
+                ink <= want + 1e-3,
                 "{label:?}: ink reaches {ink} but the measure promised {want}"
             );
             assert!(!quads.is_empty(), "{label:?} drew nothing");
+        }
+    }
+
+    /// A line in a rect its own measure sized fills it exactly, so CENTER and RIGHT lay it where
+    /// LEFT does: the justify offset (`0x5cddf9`–`0x5cde28`) is taken from the line width the line
+    /// builder sums (`0x5c7470`), its last glyph at its ink as the measure kernel counts it.
+    #[test]
+    fn a_line_in_its_measured_rect_lands_alike_under_every_justify() {
+        benilla_formats::wow_data_or_skip!();
+        let mut e = test_engine(1.0).expect("the client faces open");
+        for dpi in [1.0f32, 2.0] {
+            e.set_dpi_for_test(dpi);
+            // A shadow seeds the measure's line and every drawn row alike (`0x5cddb1`).
+            for (outline, shadow_x) in [
+                (Outline::None, 0.0),
+                (Outline::None, 1.0),
+                (Outline::Normal, 0.0),
+                (Outline::Thick, 1.0),
+            ] {
+                let s = FontSpec {
+                    outline,
+                    shadow_x,
+                    ..spec(16.0 * ERA)
+                };
+                for label in LABELS {
+                    let w = measure_text(&mut e, label, None, s).0;
+                    let rect = Rect::new(10.25, 20.0, 10.25 + w, 40.0);
+                    let at = |e: &mut TextEngine, h: JustifyH| {
+                        layout_text_quads(
+                            e,
+                            label,
+                            rect,
+                            [1.0; 4],
+                            Justify {
+                                h,
+                                v: JustifyV::Middle,
+                            },
+                            0,
+                            s,
+                            TextSeat::UiGrid,
+                        )
+                        .iter()
+                        .map(|q| q.rect)
+                        .collect::<Vec<_>>()
+                    };
+                    let left = at(&mut e, JustifyH::Left);
+                    assert!(!left.is_empty(), "{label:?} drew");
+                    for h in [JustifyH::Center, JustifyH::Right] {
+                        assert_eq!(
+                            at(&mut e, h),
+                            left,
+                            "{label:?} {outline:?} shadow {shadow_x} dpi {dpi}: {h:?} moved the \
+                             line in its own {w}-wide rect"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The pen steps each glyph to the next by the kerned step (`0x5ccbe0` → `0x5ca2d0`): in
+    /// FRIZQT__ at 12 px `1`→`2` kerns −1.03 px, so the `2` of "12" lands 7 px past a lone `2`,
+    /// the reference's `ceil(7 + 1 − 1.03)`, where an unkerned pen puts it 8 px past.
+    #[test]
+    fn the_pen_steps_by_the_kerned_step() {
+        benilla_formats::wow_data_or_skip!();
+        let mut e = test_engine(1.0).expect("the client faces open");
+        let left = Justify {
+            h: JustifyH::Left,
+            v: JustifyV::Top,
+        };
+        let rect = Rect::new(0.0, 0.0, 0.0, 0.0);
+        let mut at = |text: &str| {
+            layout_text_quads(
+                &mut e,
+                text,
+                rect,
+                [1.0; 4],
+                left,
+                0,
+                spec(12.0),
+                TextSeat::UiGrid,
+            )
+            .last()
+            .map(|q| q.rect.min.x)
+            .expect("drew")
+        };
+        assert_eq!(at("12") - at("2"), 7.0);
+        // The reference's widths: "12" is 16 px, a lone "2" 9.
+        assert_eq!(measure_text(&mut e, "12", None, spec(12.0)).0, 16.0);
+        assert_eq!(measure_text(&mut e, "2", None, spec(12.0)).0, 9.0);
+    }
+
+    /// Trailing spaces that do not all fit drop whole, and the row's width looks past its last
+    /// letter to the first space (`0x5c7780` finds no break after whitespace): FRIZQT__ 12 px
+    /// "ab  " in a 20 px box is the row "ab", 15 px wide, as the reference lays it.
+    #[test]
+    fn trailing_spaces_that_do_not_all_fit_drop_whole() {
+        benilla_formats::wow_data_or_skip!();
+        let mut e = test_engine(1.0).expect("the client faces open");
+        for wrap in [19.0f32, 20.0, 21.0] {
+            assert_eq!(
+                measure_text(&mut e, "ab  ", Some(wrap), spec(12.0)),
+                (15.0, 12.0),
+                "in a {wrap} px box"
+            );
         }
     }
 
@@ -845,6 +955,7 @@ mod ellipsis_cost {
             height: Some(SIZE),
             outline: Outline::None,
             spacing: 0.0,
+            shadow_x: 0.0,
             alpha_gradient: None,
         };
         let r = measure::resolve(&mut e, &s);

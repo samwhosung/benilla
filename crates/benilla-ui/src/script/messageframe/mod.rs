@@ -335,6 +335,10 @@ impl UiScript {
                 font.height.map(f32::to_bits).hash(&mut h);
                 wrap_width.to_bits().hash(&mut h);
                 (font.outline as u8).hash(&mut h);
+                font.shadow
+                    .map_or(0.0, |s| s.offset[0])
+                    .to_bits()
+                    .hash(&mut h);
                 scale.to_bits().hash(&mut h);
                 h.finish()
             };
@@ -350,6 +354,10 @@ impl UiScript {
                 font.height.map(f32::to_bits).hash(&mut hasher);
                 wrap_width.to_bits().hash(&mut hasher);
                 (font.outline as u8).hash(&mut hasher);
+                font.shadow
+                    .map_or(0.0, |s| s.offset[0])
+                    .to_bits()
+                    .hash(&mut hasher);
                 scale.to_bits().hash(&mut hasher);
                 let key = hasher.finish();
                 if line.rows_key == key {
@@ -362,6 +370,7 @@ impl UiScript {
                     height: font.height,
                     wrap_width,
                     outline: font.outline,
+                    shadow_x: font.shadow.map_or(0.0, |s| s.offset[0]),
                     scale,
                     text: line.text.clone(),
                     key,

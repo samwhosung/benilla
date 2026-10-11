@@ -3,10 +3,6 @@
 
 use crate::ui_text::markup::ColorRun;
 
-/// Slack on the wrap width: `max_width` can arrive a few ulps under the content it was sized to,
-/// which must not force-break; far below a glyph step (≥ 3 px), far above that dust (≤ 1e-3).
-const WIDTH_EPS: f32 = 0.25;
-
 /// A hyperlink handle, shared by every run or piece the link's visible text splits into.
 type Link = Option<std::sync::Arc<crate::ui_text::markup::LinkInfo>>;
 
@@ -103,76 +99,112 @@ pub(super) fn tokenize_words(line: &[ColorRun]) -> Vec<WrapWord> {
     }
     words
 }
-/// The greedy packer: fill each line left to right, breaking before the first word that would pass
-/// `max_width`; `measure` also prices each separator. Assumes `words` is non-empty.
+/// The fit test's bound in device px: the row's width rounded up to a whole pixel, as the line
+/// builder takes it (`0x5c752a`–`0x5c7530`, a ceil); a row priced within it fits.
+pub(super) fn row_limit(max_width: f32, dpi: f32) -> f32 {
+    (max_width * dpi).ceil()
+}
+
+/// The greedy packer: fill each row left to right, breaking before the first word that would pass
+/// `limit`. Assumes `words` is non-empty.
 ///
-/// A word too wide alone force-breaks at its last fitting glyph, as the reference drops the
-/// exceeding glyph and ends a line with no opportunity (`0x5c7780`; `0x5c7623` `fcomp`, `0x5c762b`
-/// `je`); when not one glyph fits, its builder bails and the rest of the source line drops.
-pub(super) fn greedy_pack<F: FnMut(&str) -> f32>(
+/// `measure(row, next)` prices a candidate row whole, `next` the source character after it, so a
+/// kern across a separator and the last glyph's look-past (`0x5c6b70`) both count. A word too wide
+/// alone force-breaks at its last fitting glyph, as the reference drops the exceeding glyph and
+/// ends a row with no opportunity (`0x5c7623` `fcomp`, `0x5c762b` `je`); when not one glyph fits,
+/// its builder bails and the rest of the source line drops. The line's `trailing` whitespace joins
+/// the last row when all of it fits, each character priced with the one after it; when any does
+/// not, the row ends before the first, the only break among them (`0x5c7780` finds none after
+/// whitespace), and all of it drops, as a new row skips leading whitespace (`0x5c7708`–`0x5c7734`).
+/// Each row comes with the source character after it, `None` at the line's end.
+pub(super) fn greedy_pack<F: FnMut(&str, Option<char>) -> f32>(
     words: Vec<WrapWord>,
-    max_width: f32,
+    limit: f32,
+    trailing: &str,
     mut measure: F,
-) -> Vec<Vec<ColorRun>> {
-    // One slack covers the pack test and the force-break walk.
-    let max_width = max_width + WIDTH_EPS;
-    let mut out: Vec<Vec<WrapWord>> = Vec::new();
+) -> Vec<(Vec<ColorRun>, Option<char>)> {
+    let leads: Vec<Option<char>> = words.iter().map(|w| w.lead.chars().next()).collect();
+    let n = words.len();
+    let mut out: Vec<(Vec<ColorRun>, Option<char>)> = Vec::new();
     let mut cur: Vec<WrapWord> = Vec::new();
-    let mut cur_w = 0.0f32;
-    for word in words {
-        let ww = measure(&word.text());
+    let mut cur_text = String::new();
+    for (i, word) in words.into_iter().enumerate() {
+        let after = if i + 1 < n {
+            leads[i + 1]
+        } else {
+            trailing.chars().next()
+        };
+        let mut text = word.text();
         if !cur.is_empty() {
-            let candidate = cur_w + measure(&word.lead) + ww;
-            if candidate <= max_width {
-                cur_w = candidate;
+            let candidate = format!("{cur_text}{}{text}", word.lead);
+            if measure(&candidate, after) <= limit {
+                cur_text = candidate;
                 cur.push(word);
                 continue;
             }
             // Break before this word, the last opportunity.
-            out.push(std::mem::take(&mut cur));
+            out.push((words_to_runs(&std::mem::take(&mut cur)), leads[i]));
         }
-        // A word too wide alone force-breaks into full-line chunks; the remainder keeps packing.
+        // A word too wide alone force-breaks into full-row chunks; the remainder keeps packing.
         let mut word = word;
-        let mut ww = ww;
-        while ww > max_width {
-            let text = word.text();
-            let Some(at) = split_at_last_fitting_glyph(&text, max_width, &mut measure) else {
+        while measure(&text, after) > limit {
+            let Some(at) = split_at_last_fitting_glyph(&text, limit, after, &mut measure) else {
                 // Not one glyph fits: bail, dropping the rest of the line, as the reference does.
-                return finish_pack(out, cur);
+                return out;
             };
             let (head, rest) = split_pieces(&word.pieces, at);
-            out.push(vec![WrapWord {
+            let head = WrapWord {
                 pieces: head,
                 lead: std::mem::take(&mut word.lead),
-            }]);
+            };
+            out.push((words_to_runs(&[head]), text[at..].chars().next()));
             word.pieces = rest;
-            ww = measure(&word.text());
+            text = word.text();
         }
-        cur_w = ww;
+        cur_text = text;
         cur.push(word);
     }
-    finish_pack(out, cur)
-}
-
-/// Close the packer: flush the open line and rejoin every line's words into runs.
-fn finish_pack(mut out: Vec<Vec<WrapWord>>, cur: Vec<WrapWord>) -> Vec<Vec<ColorRun>> {
-    if !cur.is_empty() {
-        out.push(cur);
+    let mut row = words_to_runs(&cur);
+    let tail: Vec<char> = trailing.chars().collect();
+    let mut kept = String::new();
+    let mut next = None;
+    for (k, &c) in tail.iter().enumerate() {
+        let candidate = format!("{cur_text}{kept}{c}");
+        if measure(&candidate, tail.get(k + 1).copied()) <= limit {
+            kept.push(c);
+        } else {
+            // The only break among them is before the first (`0x5c7780` finds none after
+            // whitespace, `0x5c77c2`–`0x5c77cd`): the row ends there and all of them drop.
+            kept.clear();
+            next = tail.first().copied();
+            break;
+        }
     }
-    out.iter().map(|ws| words_to_runs(ws)).collect()
+    if !kept.is_empty() {
+        let color = row.last().map_or([1.0; 4], |run| run.color);
+        row.push(ColorRun {
+            text: kept,
+            color,
+            link: None,
+        });
+    }
+    out.push((row, next));
+    out
 }
 
-/// The force-break point past the longest glyph prefix within `max_width`, `None` when not even
-/// one glyph fits; re-measuring each prefix agrees with a step sum, as the law is additive.
-fn split_at_last_fitting_glyph<F: FnMut(&str) -> f32>(
+/// The force-break point past the longest glyph prefix within `limit`, `None` when not even one
+/// glyph fits; each prefix is priced with the character after it, `after` past the word's end.
+fn split_at_last_fitting_glyph<F: FnMut(&str, Option<char>) -> f32>(
     text: &str,
-    max_width: f32,
+    limit: f32,
+    after: Option<char>,
     measure: &mut F,
 ) -> Option<usize> {
     let mut fit_end = 0usize;
     for (i, c) in text.char_indices() {
         let end = i + c.len_utf8();
-        if measure(&text[..end]) > max_width {
+        let next = text[end..].chars().next().or(after);
+        if measure(&text[..end], next) > limit {
             break;
         }
         fit_end = end;
@@ -210,7 +242,7 @@ mod wrap_tests {
     const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
     /// A stub measure: every char, space included, is one unit wide.
-    fn char_measure(s: &str) -> f32 {
+    fn char_measure(s: &str, _next: Option<char>) -> f32 {
         s.chars().count() as f32
     }
 
@@ -232,6 +264,18 @@ mod wrap_tests {
     }
 
     /// A wrapped line's text, colours dropped.
+    /// [`greedy_pack`] with no trailing whitespace, rows only.
+    fn pack<F: FnMut(&str, Option<char>) -> f32>(
+        words: Vec<WrapWord>,
+        limit: f32,
+        measure: F,
+    ) -> Vec<Vec<ColorRun>> {
+        greedy_pack(words, limit, "", measure)
+            .into_iter()
+            .map(|(row, _)| row)
+            .collect()
+    }
+
     fn line_text(runs: &[ColorRun]) -> String {
         runs.iter().map(|r| r.text.as_str()).collect()
     }
@@ -240,7 +284,7 @@ mod wrap_tests {
     fn long_line_breaks_at_word_boundaries_within_width() {
         // Width 12: "Refreshing" (10) plus " Spring" (7) passes it; "Spring Water" is exactly 12.
         let w = words(&[("Refreshing", WHITE), ("Spring", WHITE), ("Water", WHITE)]);
-        let lines = greedy_pack(w, 12.0, char_measure);
+        let lines = pack(w, 12.0, char_measure);
         assert_eq!(lines.len(), 2, "wraps to two lines");
         assert_eq!(line_text(&lines[0]), "Refreshing");
         assert_eq!(line_text(&lines[1]), "Spring Water");
@@ -252,7 +296,7 @@ mod wrap_tests {
     #[test]
     fn short_line_stays_single() {
         let w = words(&[("Buy", WHITE), ("now", WHITE)]);
-        let lines = greedy_pack(w, 100.0, char_measure);
+        let lines = pack(w, 100.0, char_measure);
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0]), "Buy now");
     }
@@ -260,7 +304,7 @@ mod wrap_tests {
     #[test]
     fn overlong_word_force_breaks_at_the_last_fitting_glyph() {
         let w = words(&[("Supercalifragilistic", WHITE), ("ok", WHITE)]);
-        let lines = greedy_pack(w, 8.0, char_measure);
+        let lines = pack(w, 8.0, char_measure);
         assert_eq!(lines.len(), 3);
         assert_eq!(line_text(&lines[0]), "Supercal");
         assert_eq!(line_text(&lines[1]), "ifragili");
@@ -277,34 +321,102 @@ mod wrap_tests {
     #[test]
     fn force_break_mid_line_starts_from_the_break_opportunity() {
         let w = words(&[("at", WHITE), ("Supercalifragilistic", WHITE)]);
-        let lines = greedy_pack(w, 8.0, char_measure);
+        let lines = pack(w, 8.0, char_measure);
         assert_eq!(line_text(&lines[0]), "at");
         assert_eq!(line_text(&lines[1]), "Supercal");
         assert_eq!(line_text(&lines[2]), "ifragili");
         assert_eq!(line_text(&lines[3]), "stic");
     }
 
-    /// A box a few ulps under its content does not force-break; one a glyph too narrow does.
+    /// The bound is the width rounded up to a whole device pixel: a box a few ulps under its
+    /// content still fits it, and a half pixel of room counts as a whole one.
     #[test]
-    fn content_exact_width_with_float_dust_does_not_break() {
-        // One "word" of two 5.5-unit glyphs (11.0 total) in a box 15 ulps shy of 11.0.
-        let measure = |s: &str| s.chars().count() as f32 * 5.5;
-        let w = vec![word("34", WHITE, "")];
-        let lines = greedy_pack(w, 11.0 - 0.000015, measure);
-        assert_eq!(lines.len(), 1, "float dust must not split the digits");
-        assert_eq!(line_text(&lines[0]), "34");
+    fn the_bound_rounds_the_width_up_to_a_device_pixel() {
+        assert_eq!(row_limit(11.0 - 0.000015, 1.0), 11.0);
+        assert_eq!(row_limit(10.5, 1.0), 11.0);
+        assert_eq!(row_limit(10.25, 2.0), 21.0);
+        // A real overflow still breaks.
+        let measure = |s: &str, _: Option<char>| s.chars().count() as f32 * 6.0;
+        assert_eq!(pack(vec![word("34", WHITE, "")], 11.0, measure).len(), 2);
+    }
 
-        // One glyph short.
-        let w2 = vec![word("34", WHITE, "")];
-        let lines2 = greedy_pack(w2, 5.5, measure);
-        assert_eq!(lines2.len(), 2, "a real overflow still breaks");
+    /// A stub where a glyph with nothing after it is half a unit narrower, as ink often is.
+    fn ink_measure(s: &str, next: Option<char>) -> f32 {
+        s.chars().count() as f32 - if next.is_none() { 0.5 } else { 0.0 }
+    }
+
+    /// The source line's last word fits by its last glyph's ink (`0x5c6b70` sees nothing after it)…
+    #[test]
+    fn the_source_lines_last_glyph_is_priced_by_its_ink() {
+        let w = words(&[("ab", WHITE), ("cd", WHITE)]);
+        assert_eq!(
+            pack(w, 4.5, ink_measure).len(),
+            1,
+            "\"ab cd\" is 4.5 by its ink"
+        );
+        // Whitespace after the last word is characters after it: the word is priced whole.
+        let w = words(&[("ab", WHITE), ("cd", WHITE)]);
+        let rows = greedy_pack(w, 4.5, " ", ink_measure);
+        let texts: Vec<String> = rows.iter().map(|(r, _)| line_text(r)).collect();
+        assert_eq!(
+            texts,
+            ["ab", "cd "],
+            "the space fits after \"cd\" and rides its row"
+        );
+        assert_eq!(
+            rows[0].1,
+            Some(' '),
+            "a broken row looks past itself to the separator"
+        );
+        assert_eq!(rows[1].1, None);
+    }
+
+    /// …and a word with text after it by every step, even when it ends up last on its row.
+    #[test]
+    fn a_word_before_more_text_is_priced_whole() {
+        let w = words(&[("ab", WHITE), ("cd", WHITE), ("ef", WHITE)]);
+        let texts: Vec<String> = pack(w, 4.6, ink_measure)
+            .iter()
+            .map(|l| line_text(l))
+            .collect();
+        assert_eq!(texts, ["ab", "cd ef"]);
+        // A force-break prices each prefix with the character after it.
+        assert_eq!(
+            pack(vec![word("abcdef", WHITE, "")], 5.5, ink_measure).len(),
+            1
+        );
+        let rows = greedy_pack(vec![word("abcdef", WHITE, "")], 5.5, " ", ink_measure);
+        let texts: Vec<String> = rows.iter().map(|(r, _)| line_text(r)).collect();
+        assert_eq!(texts, ["abcde", "f "]);
+        assert_eq!(rows[0].1, Some('f'));
+    }
+
+    /// Trailing whitespace that does not fit ends the row before its first character and drops
+    /// whole (`0x5c7780`, `0x5c7708`).
+    #[test]
+    fn trailing_whitespace_that_does_not_fit_drops() {
+        let rows = greedy_pack(vec![word("ab", WHITE, "")], 2.0, "  ", char_measure);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(line_text(&rows[0].0), "ab");
+        assert_eq!(rows[0].1, Some(' '));
+        // One space fits and the second does not: the break is before the first, so both drop.
+        let rows = greedy_pack(vec![word("ab", WHITE, "")], 3.0, "  ", char_measure);
+        assert_eq!(line_text(&rows[0].0), "ab");
+        assert_eq!(rows[0].1, Some(' '));
+        let rows = greedy_pack(vec![word("ab", WHITE, "")], 4.0, "  ", char_measure);
+        assert_eq!(
+            line_text(&rows[0].0),
+            "ab  ",
+            "all of it fits and rides the row"
+        );
+        assert_eq!(rows[0].1, None);
     }
 
     #[test]
     fn sub_glyph_width_bails_without_progress() {
         // Not one glyph fits: the builder bails and drops the line, as the reference's does.
         let w = words(&[("ab", WHITE)]);
-        let lines = greedy_pack(w, 0.5, char_measure);
+        let lines = pack(w, 0.5, char_measure);
         assert!(lines.is_empty());
     }
 
@@ -329,13 +441,13 @@ mod wrap_tests {
     #[test]
     fn wrap_preserves_double_space_between_words() {
         let w = vec![word("Hello.", WHITE, ""), word("World", WHITE, "  ")];
-        let lines = greedy_pack(w, 100.0, char_measure);
+        let lines = pack(w, 100.0, char_measure);
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0]), "Hello.  World");
 
         // Width 6 fits "Hello." alone; the separator at the break drops.
         let w2 = vec![word("Hello.", WHITE, ""), word("World", WHITE, "  ")];
-        let lines2 = greedy_pack(w2, 6.0, char_measure);
+        let lines2 = pack(w2, 6.0, char_measure);
         assert_eq!(lines2.len(), 2);
         assert_eq!(line_text(&lines2[0]), "Hello.");
         assert_eq!(line_text(&lines2[1]), "World");
@@ -345,7 +457,7 @@ mod wrap_tests {
     fn color_runs_survive_the_wrap() {
         // Same-colour words merge, a new colour starts a run, and the space joins the run before.
         let w = words(&[("aa", WHITE), ("bb", WHITE), ("cc", RED)]);
-        let lines = greedy_pack(w, 100.0, char_measure);
+        let lines = pack(w, 100.0, char_measure);
         assert_eq!(lines.len(), 1);
         let runs = &lines[0];
         assert_eq!(runs.len(), 2);
@@ -381,7 +493,7 @@ mod wrap_tests {
         assert_eq!(ws[2].text(), "Bearer]dsfsdfsd");
         assert_eq!(ws[2].pieces.len(), 2);
 
-        let lines = greedy_pack(ws, 100.0, char_measure);
+        let lines = pack(ws, 100.0, char_measure);
         assert_eq!(lines.len(), 1);
         let runs = &lines[0];
         assert_eq!(runs.len(), 2, "the color boundary survives the round trip");
@@ -409,7 +521,7 @@ mod wrap_tests {
             },
         ];
         // Width 4: "[Cla" | "w]x2" | ".", the colour boundary inside the middle chunk.
-        let lines = greedy_pack(tokenize_words(&line), 4.0, char_measure);
+        let lines = pack(tokenize_words(&line), 4.0, char_measure);
         assert_eq!(line_text(&lines[0]), "[Cla");
         assert_eq!(lines[0][0].color, RED);
         assert_eq!(line_text(&lines[1]), "w]x2");
@@ -431,7 +543,7 @@ mod wrap_tests {
             ("three", WHITE),
             ("four", RED),
         ]);
-        let lines = greedy_pack(w, 10.0, char_measure); // "one two"=7 fits; +three (13) overflows
+        let lines = pack(w, 10.0, char_measure); // "one two"=7 fits; +three (13) overflows
         assert_eq!(lines.len(), 2);
         assert_eq!(line_text(&lines[0]), "one two");
         assert_eq!(line_text(&lines[1]), "three four");
