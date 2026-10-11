@@ -7,123 +7,79 @@ use crate::script::binding_abi::optional_string;
 use crate::script::object::frame_handle_of;
 use crate::script::region::region_handle_of;
 use crate::script::Model;
-use crate::widget::{KindState, TooltipAnchor, TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
+use crate::widget::{KindState, TooltipAnchor, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
 
 use super::{
-    append_line, bool_arg, clear_content, fire_cleared, full_alpha, parse_line_color,
-    parse_line_tail, set_shown, text_of, tip_mut, with_tip, write_cell, REG_TOOLTIP_METHODS,
+    append_line, bool_arg, clear, parse_line_color, parse_line_tail, set_owner_core, set_shown,
+    text_of, tip_mut, with_tip, write_cell, REG_TOOLTIP_METHODS,
 };
 
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
-    // SetOwner(owner, anchorType [, x, y]): the binding `0x5310d0` calls the core `0x52ffe0`,
-    // which sets full alpha (`0x52fff4`), disarms the fade, stores the owner (`0x53000c`), mode
-    // and offsets, then applies the anchor (`0x52fe90`). The content clears and OnTooltipCleared
-    // fires, so a new owner never inherits the last hover's lines or money.
+    // SetOwner(owner, anchorType [, x, y]) (`0x5310d0`): first the tooltip's own hide, the shown
+    // bit cleared (`0x531179`) and the hide slot (`0x531183`), so a shown tooltip fires
+    // `OnTooltipCleared` and `OnHide` and stays hidden until a content call shows it; then the
+    // core with the new owner ([`set_owner_core`], `0x5313cf`), which clears and fires again.
     //
     // A missing, non-string or unknown anchorType is mode 0, ANCHOR_LEFT, with no error: the
     // binding's local starts at 0 (`0x53120d`). The core's pre-store of 7 (`0x530012`) survives
     // only a NULL owner, the un-own path (`0x530a60`) of every hide.
-    //
-    // The anchor apply returns first for ANCHOR_PRESERVE (8, `0x52fead`), then clears all points
-    // (`0x767ed0` at `0x52fec2`) for modes 0..7; modes 0..5 then set a point (`0x52ffbc`).
     m.set(
         "SetOwner",
         lua.create_function(
-            |lua, (this, owner, anchor, x, y): (Table, Table, Value, Option<f32>, Option<f32>)| {
+            |lua, (this, owner, anchor, x, y): (Table, Value, Value, Option<f32>, Option<f32>)| {
                 let h = frame_handle_of(lua, &this)?;
+                set_shown(lua, h, false);
+                // The owner is read after the hide (`0x531189`), so a bad one raises on a
+                // hidden tooltip.
+                let owner: Table = lua.unpack(owner)?;
                 let owner_h = frame_handle_of(lua, &owner)?;
                 // The gate is `lua_isstring` (`0x6f3510`): a string or number is read, and any
                 // other type counts as absent rather than raising.
                 let anchor = optional_string(lua, &anchor);
+                // The warning on an unknown name is ours; the reference is silent, and Lua sees
+                // no difference.
+                let anchor = match anchor
+                    .as_deref()
+                    .map(str::to_ascii_uppercase)
+                    .as_deref()
+                    .unwrap_or("")
                 {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    clear_content(&mut model, h);
-                    full_alpha(&mut model, h);
-                    tip_mut(&mut model, h)?.owner = Some(owner_h);
-                    let owner_id = model.frame_id(owner_h);
-                    // Resolved once: the placement and `GetAnchorType` both read this value. The
-                    // warning on an unknown name is ours; the reference is silent, and Lua sees no
-                    // difference.
-                    let anchor = match anchor
-                        .as_deref()
-                        .map(str::to_ascii_uppercase)
-                        .as_deref()
-                        .unwrap_or("")
-                    {
-                        "ANCHOR_LEFT" => TooltipAnchor::Left,
-                        "ANCHOR_RIGHT" => TooltipAnchor::Right,
-                        "ANCHOR_BOTTOMLEFT" => TooltipAnchor::BottomLeft,
-                        "ANCHOR_BOTTOMRIGHT" => TooltipAnchor::BottomRight,
-                        "ANCHOR_TOPLEFT" => TooltipAnchor::TopLeft,
-                        "ANCHOR_TOPRIGHT" => TooltipAnchor::TopRight,
-                        "ANCHOR_CURSOR" => TooltipAnchor::Cursor,
-                        "ANCHOR_NONE" => TooltipAnchor::None,
-                        "ANCHOR_PRESERVE" => TooltipAnchor::Preserve,
-                        "" => TooltipAnchor::Left,
-                        other => {
-                            model.record_warning(format!(
+                    "ANCHOR_LEFT" => TooltipAnchor::Left,
+                    "ANCHOR_RIGHT" => TooltipAnchor::Right,
+                    "ANCHOR_BOTTOMLEFT" => TooltipAnchor::BottomLeft,
+                    "ANCHOR_BOTTOMRIGHT" => TooltipAnchor::BottomRight,
+                    "ANCHOR_TOPLEFT" => TooltipAnchor::TopLeft,
+                    "ANCHOR_TOPRIGHT" => TooltipAnchor::TopRight,
+                    "ANCHOR_CURSOR" => TooltipAnchor::Cursor,
+                    "ANCHOR_NONE" => TooltipAnchor::None,
+                    "ANCHOR_PRESERVE" => TooltipAnchor::Preserve,
+                    "" => TooltipAnchor::Left,
+                    other => {
+                        lua.app_data_mut::<Model>()
+                            .expect("model app_data")
+                            .record_warning(format!(
                                 "SetOwner: unknown anchor '{other}' (mode 0, ANCHOR_LEFT)"
                             ));
-                            TooltipAnchor::Left
-                        }
-                    };
-                    tip_mut(&mut model, h)?.anchor = anchor;
-                    let pts = match anchor {
-                        TooltipAnchor::Right => Some((Point::BottomLeft, Point::TopRight)),
-                        TooltipAnchor::Left => Some((Point::BottomRight, Point::TopLeft)),
-                        TooltipAnchor::TopRight => Some((Point::BottomRight, Point::TopRight)),
-                        TooltipAnchor::TopLeft => Some((Point::BottomLeft, Point::TopLeft)),
-                        TooltipAnchor::BottomRight => Some((Point::TopLeft, Point::BottomRight)),
-                        TooltipAnchor::BottomLeft => Some((Point::TopRight, Point::BottomLeft)),
-                        TooltipAnchor::Cursor | TooltipAnchor::None | TooltipAnchor::Preserve => {
-                            None
-                        }
-                    };
-                    // Modes 6 and 7 clear all points and stop. The clear lets
-                    // `GameTooltip_SetDefaultAnchor` (GameTooltip.lua:76-77) set one point with no
-                    // stale owner anchor; mode 6 is then placed per frame by `cursor_anchor`. The
-                    // drop is a named retarget to no targets, not a conservative touch.
-                    if matches!(anchor, TooltipAnchor::Cursor | TooltipAnchor::None) {
-                        let dropped = match model.layout_inputs.get_mut(&h) {
-                            Some(input) if !input.anchors.is_empty() => {
-                                Some(input.anchors.drain(..).map(|a| a.relative_to).collect())
-                            }
-                            _ => None,
-                        };
-                        if let Some(old_targets) = dropped {
-                            let old_targets: Vec<u32> = old_targets;
-                            model.touch_layout_retarget_frame(h, &old_targets, &[]);
-                        }
+                        TooltipAnchor::Left
                     }
-                    if let Some((own, rel)) = pts {
-                        let new =
-                            Anchor::new(own, owner_id, rel, x.unwrap_or(0.0), y.unwrap_or(0.0));
-                        let input = model.layout_inputs.entry(h).or_default();
-                        // No-op when unchanged, so the bag hover's per-frame SetOwner does not
-                        // dirty the layout.
-                        let same = input.anchors.len() == 1
-                            && crate::script::object::anchor_bits_eq(&input.anchors[0], &new);
-                        if !same {
-                            // A named retarget: the cached layout graph re-points this edge
-                            // instead of being rebuilt.
-                            let old_targets: Vec<u32> =
-                                input.anchors.iter().map(|a| a.relative_to).collect();
-                            input.anchors = vec![new];
-                            model.touch_layout_retarget_frame(h, &old_targets, &[owner_id]);
-                        }
-                    }
-                }
-                fire_cleared(lua, h);
+                };
+                set_owner_core(
+                    lua,
+                    h,
+                    Some(owner_h),
+                    anchor,
+                    x.unwrap_or(0.0),
+                    y.unwrap_or(0.0),
+                );
                 Ok(())
             },
         )?,
     )?;
-    // GetAnchorType(): the last SetOwner's mode by name (`0x5313e0`, name table `0x531530`), never
-    // nil; a never-owned tooltip answers "ANCHOR_NONE". The reference also answers it after any
-    // hide, whose un-own leaves mode 7; this keeps the last mode. Addons compare it with what they
-    // passed to SetOwner, so the name must round-trip.
+    // GetAnchorType(): `[+0x318]` by name (`0x5313e0`, name table `0x531530`), never nil. While
+    // owned it is the last SetOwner's mode; a never-owned tooltip, and any tooltip since a hide
+    // (whose un-own stores mode 7, `0x530012`), answers "ANCHOR_NONE".
     m.set(
         "GetAnchorType",
         lua.create_function(|lua, this: Table| {
@@ -166,11 +122,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 _ => 1.0,
             };
             let wrap = bool_arg(args.get(5));
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             append_line(lua, &this, (text, [r, g, b, a]), None, wrap)?;
             set_shown(lua, h, true);
             Ok(())
@@ -235,11 +187,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "ClearLines",
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             Ok(())
         })?,
     )?;
@@ -316,16 +264,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             with_tip(lua, &this, |t| t.padding = w.max(0.0))
         })?,
     )?;
-    // FadeOut(): alpha ramps to 0 over `TOOLTIP_FADE_SECS`, then the full hide; new content or
-    // Show cancels it.
+    // FadeOut() (`0x531f00`): the fade request ([`super::fade_out`]).
     m.set(
         "FadeOut",
         lua.create_function(|lua, this: Table| {
-            with_tip(lua, &this, |tip| {
-                if tip.fade_left.is_none() {
-                    tip.fade_left = Some(TOOLTIP_FADE_SECS);
-                }
-            })
+            let h = frame_handle_of(lua, &this)?;
+            super::fade_out(lua, h);
+            Ok(())
         })?,
     )?;
     // The content methods: items, spells and auras, talents, units.

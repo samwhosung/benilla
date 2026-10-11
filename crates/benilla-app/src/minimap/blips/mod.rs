@@ -144,13 +144,13 @@ const POI_ICON_PX: f32 = 16.0;
 pub(crate) enum MinimapBlipHover {
     #[default]
     None,
-    /// A landmark's name and the cursor's UI-space point, the tooltip's seat.
-    Landmark(String, Vec2),
-    /// A unit dot's guid, resolved through the name cache, the cursor point, and whether the dot
-    /// drew grey; the tooltip line greys the same way (`|cffb0b0b0`).
-    Npc(u64, Vec2, bool),
-    /// A tracked GameObject dot: its template name, the cursor point and the grey flag.
-    TrackedGo(String, Vec2, bool),
+    /// A landmark's name.
+    Landmark(String),
+    /// A unit dot's guid, resolved through the name cache, and whether the dot drew grey; the
+    /// tooltip line greys the same way (`|cffb0b0b0`).
+    Npc(u64, bool),
+    /// A tracked GameObject dot: its template name and the grey flag.
+    TrackedGo(String, bool),
 }
 
 /// The blip layer's system inputs, tupled to keep `emit_minimap` under Bevy's 16-parameter cap.
@@ -199,9 +199,6 @@ pub(super) struct BlipCtx {
     pub(super) wz: f32,
     /// The cursor in the quads' y-down logical px.
     pub(super) cursor: Option<Vec2>,
-    /// The cursor in the y-up root units; the reference seats the blip tooltip at the cursor, its
-    /// exact offset untraced.
-    pub(super) cursor_ui: Option<Vec2>,
     /// Window px per root unit: everything else here is window px, while Lua
     /// ([`Minimap:PingLocation`](super::ping)) hands root units.
     pub(super) seam: f32,
@@ -306,9 +303,9 @@ pub(super) fn emit_landmarks(
                 color: [1.0, 1.0, 1.0, ctx.alpha],
                 ..default()
             });
-            if let (Some(c), Some(ui)) = (ctx.cursor, ctx.cursor_ui) {
+            if let Some(c) = ctx.cursor {
                 if rect.contains(c) {
-                    *hover = MinimapBlipHover::Landmark(poi.name.clone(), ui);
+                    *hover = MinimapBlipHover::Landmark(poi.name.clone());
                 }
             }
         }
@@ -318,9 +315,9 @@ pub(super) fn emit_landmarks(
             continue;
         };
         let rect = push_rim_arrow(ctx, poi.pos, tex, quads);
-        if let (Some(c), Some(ui)) = (ctx.cursor, ctx.cursor_ui) {
+        if let Some(c) = ctx.cursor {
             if rect.contains(c) {
-                *hover = MinimapBlipHover::Landmark(poi.name.clone(), ui);
+                *hover = MinimapBlipHover::Landmark(poi.name.clone());
             }
         }
     }
@@ -402,15 +399,15 @@ pub(super) fn emit_party_arrows(
     }
 }
 
-/// Show the hovered blip's name; a unit's resolves through the name cache. Hover loss fades the
-/// tooltip, never hides it at once. Runs after `UnitFeed`, so a same-frame move from a world
-/// hover to a blip ends on the blip's tooltip.
+/// Show the hovered blip's name; a unit's resolves through the name cache. Hover loss hides the
+/// tooltip at once (`0x4eb0c0`). Runs after `UnitFeed`, so a same-frame move from a world hover to
+/// a blip ends on the blip's tooltip.
 pub(super) fn drive_blip_tooltip(
     script: Option<NonSendMut<UiScript>>,
     hover: Res<MinimapBlipHover>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
-    mut last: Local<crate::ui_script::VmMemo<Option<(String, Vec2)>>>,
+    mut last: Local<crate::ui_script::VmMemo<Option<String>>>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -418,26 +415,22 @@ pub(super) fn drive_blip_tooltip(
     let last = last.get(&script);
     let show = match &*hover {
         MinimapBlipHover::None => None,
-        MinimapBlipHover::Landmark(name, at) => Some((name.clone(), *at, false)),
-        MinimapBlipHover::Npc(npc, at, grey) => names
+        MinimapBlipHover::Landmark(name) => Some((name.clone(), false)),
+        MinimapBlipHover::Npc(npc, grey) => names
             .resolve(*npc, &commands)
-            .map(|n| (n.to_string(), *at, *grey)),
-        MinimapBlipHover::TrackedGo(name, at, grey) => Some((name.clone(), *at, *grey)),
+            .map(|n| (n.to_string(), *grey)),
+        MinimapBlipHover::TrackedGo(name, grey) => Some((name.clone(), *grey)),
     };
     match (&show, &*last) {
-        // Same blip: the reference's blip tooltip follows the cursor.
-        (Some((t, at, _)), Some((lt, lat))) if t == lt => {
-            if at != lat {
-                script.world_tooltip_move(at.x, at.y);
-                *last = Some((t.clone(), *at));
-            }
+        // Same blip: the plate, owned in mode 6, follows the cursor in its own update.
+        (Some((t, _)), Some(lt)) if t == lt => {}
+        (Some((t, grey)), _) => {
+            script.minimap_tooltip(t, *grey);
+            *last = Some(t.clone());
         }
-        (Some((t, at, grey)), _) => {
-            script.minimap_tooltip(t, at.x, at.y, *grey);
-            *last = Some((t.clone(), *at));
-        }
+        // No blip hovered: `0x4eb0c0` hides the plate directly, with no fade.
         (None, Some(_)) => {
-            script.world_tooltip_fade();
+            script.world_tooltip_hide();
             *last = None;
         }
         (None, None) => {}

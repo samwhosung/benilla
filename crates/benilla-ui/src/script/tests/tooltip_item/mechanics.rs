@@ -212,6 +212,8 @@ fn item_render_hides_the_unit_health_bar() {
         local tt = CreateFrame("GameTooltip", "GameTooltip"); tt:Hide()
         local bar = CreateFrame("StatusBar", "GameTooltipStatusBar", tt)
         bar:SetPoint("TOPLEFT", tt, "BOTTOMLEFT", 2, -1); bar:SetWidth(100); bar:SetHeight(8)
+        -- The stock default anchor owns the plate; an unowned one's show hides it.
+        tt:SetScript("OnTooltipSetDefaultAnchor", function() GameTooltip:SetOwner(Slot6, "ANCHOR_NONE") end)
     "#,
     )
     .unwrap();

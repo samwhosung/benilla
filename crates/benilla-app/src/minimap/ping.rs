@@ -189,7 +189,6 @@ mod tests {
             wy: 0.0,
             wz: 0.0,
             cursor: None,
-            cursor_ui: None,
             seam: 1.0,
         }
     }

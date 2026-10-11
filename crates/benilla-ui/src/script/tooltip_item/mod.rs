@@ -13,7 +13,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use super::object::frame_handle_of;
-use super::tooltip::{append_line, clear_content, fire_cleared, show_or_hide_empty};
+use super::tooltip::{append_line, clear, clear_silent, show_or_hide_empty};
 use super::{ItemTemplateView, Model};
 
 mod names;
@@ -151,11 +151,7 @@ pub(super) fn render_by_id(
     fb_q: Option<u32>,
 ) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        clear_content(&mut model, h);
-    }
-    fire_cleared(lua, h);
+    clear(lua, h);
     match view_of(lua, item_id) {
         Some(v) => {
             render_view(lua, this, &v, BuilderFlags::default(), None)?;
@@ -185,10 +181,7 @@ fn set_quest_item_view(
         Some(it) => render_by_id(lua, this, it.item_id, it.name.clone(), Some(it.quality)),
         None => {
             let h = frame_handle_of(lua, this)?;
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
+            clear_silent(lua, h);
             super::tooltip::show_or_hide_empty(lua, h);
             Ok(())
         }
@@ -284,11 +277,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 return Ok(());
             };
             let h = frame_handle_of(lua, &this)?;
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             // The reference's format is `"%s|Hitem:%d:%d:%d:%d|h[%s]|h%s"` (`0x8549c8`), and
             // `SetHyperlink` (`0x532181`) parses it into a block (p6=1): the enchant id to slot 0
             // (`+0x3d0`), the roll to `+0x424` (expanded into slots 2..6 by `0x52b7bf`), the
@@ -393,11 +382,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     currently_equipped,
                     name_only,
                 };
-                {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    clear_content(&mut model, h);
-                }
-                fire_cleared(lua, h);
+                clear(lua, h);
                 match view_of(lua, item_id) {
                     Some(v) => render_view(lua, &this, &v, flags, Some(&inst))?,
                     None => {
@@ -486,11 +471,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     None => return Ok(MultiValue::from_vec(vec![Value::Nil])),
                 }
             };
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             match view_of(lua, item_id) {
                 Some(v) => {
                     render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?;
@@ -551,11 +532,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let Some(item) = item.filter(|i| i.item_id != 0) else {
                     return Ok(());
                 };
-                {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    clear_content(&mut model, h);
-                }
-                fire_cleared(lua, h);
+                clear(lua, h);
                 let inst = render::ItemInstance {
                     name: item.name.clone(),
                     ..Default::default()
@@ -600,11 +577,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let Some(row) = row else {
                 return Ok(());
             };
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             // The row's app-composed name has the suffix joined, as `0x5d8b00` does; the lines
             // come from the roll id, the reference's `+0x424` (`0x52b7bf`).
             let inst = render::ItemInstance {
@@ -653,11 +626,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let Some(entry) = entry else {
                 return Ok(());
             };
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             let inst = render::ItemInstance {
                 name: entry.name.clone(),
                 enchants: roll_enchants(lua, entry.random_property_id),
@@ -832,11 +801,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     list.get(index.saturating_sub(1)).cloned()
                 };
                 let Some(row) = row else { return Ok(()) };
-                {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                    clear_content(&mut model, h);
-                }
-                fire_cleared(lua, h);
+                clear(lua, h);
                 match view_of(lua, row.item_id) {
                     Some(v) => {
                         render_view(lua, &this, &v, BuilderFlags::default(), None)?;
@@ -891,11 +856,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if item_id == 0 {
                 return Ok(());
             }
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             // A block source (`0x5355fa`, p6=1) carrying the attachment's roll: no placeholder.
             let inst = render::ItemInstance {
                 name,
@@ -933,11 +894,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if item_id == 0 {
                 return Ok(());
             }
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             // A block source (`0x5359d9`, p6=1) carrying the listing's roll: no placeholder.
             let inst = render::ItemInstance {
                 name,
@@ -970,11 +927,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if item_id == 0 {
                 return Ok(());
             }
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             if let Some(v) = view_of(lua, item_id) {
                 render_view(lua, &this, &v, BuilderFlags::default(), None)?;
             }
@@ -1000,11 +953,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if item_id == 0 {
                 return Ok(());
             }
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             if let Some(v) = view_of(lua, item_id) {
                 render_view(lua, &this, &v, BuilderFlags::default(), None)?;
             }

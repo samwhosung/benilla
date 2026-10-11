@@ -472,7 +472,7 @@ fn buff_hover_hangs_below_left_of_the_button() {
 fn a_cursor_seated_gameobject_plate_is_owned() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness(&[]);
-    assert!(s.world_tooltip_gameobject("Brill", &[], Some((512.0, 384.0))));
+    assert!(s.world_tooltip_gameobject("Brill", &[], true));
     let owned: bool = s.eval("return GameTooltip:IsOwned(UIParent)").unwrap();
     assert!(
         owned,
@@ -491,7 +491,7 @@ fn a_cursor_seated_gameobject_plate_survives_an_addons_on_show_hook() {
     // Questie's hook, in one line: the plate's own show event calls Show() again.
     s.run(r#"GameTooltip:SetScript("OnShow", function() GameTooltip:Show() end)"#)
         .unwrap();
-    assert!(s.world_tooltip_gameobject("Brill", &[], Some((512.0, 384.0))));
+    assert!(s.world_tooltip_gameobject("Brill", &[], true));
     let shown: bool = s
         .eval("return GameTooltip:IsShown() and true or false")
         .unwrap();
@@ -510,7 +510,7 @@ fn a_cursor_seated_gameobject_plate_survives_an_addons_on_show_hook() {
 fn a_corner_seated_gameobject_plate_is_owned_and_shown() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness(&[]);
-    assert!(s.world_tooltip_gameobject("Ironforge Main Gate", &[], None));
+    assert!(s.world_tooltip_gameobject("Ironforge Main Gate", &[], false));
     let owned: bool = s.eval("return GameTooltip:IsOwned(UIParent)").unwrap();
     assert!(owned, "the corner plate is owned; errors: {:?}", s.errors());
     let shown: bool = s
@@ -526,7 +526,7 @@ fn a_corner_seated_gameobject_plate_survives_an_addons_on_show_hook() {
     let mut s = harness(&[]);
     s.run(r#"GameTooltip:SetScript("OnShow", function() GameTooltip:Show() end)"#)
         .unwrap();
-    assert!(s.world_tooltip_gameobject("Ironforge Main Gate", &[], None));
+    assert!(s.world_tooltip_gameobject("Ironforge Main Gate", &[], false));
     let shown: bool = s
         .eval("return GameTooltip:IsShown() and true or false")
         .unwrap();

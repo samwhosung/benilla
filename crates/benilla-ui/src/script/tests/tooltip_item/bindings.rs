@@ -424,8 +424,12 @@ fn ts_recipe(spell_id: u32, name: &str, group: (u32, u32, &str)) -> TradeSkillRe
 fn set_trade_skill_item_indexes_visible_rows_not_raw_recipes() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    s.run(r#"local tt = CreateFrame("GameTooltip", "TT")"#)
-        .unwrap();
+    // Owned, as the stock hover owns it before the setter; an unowned tooltip's show hides it.
+    s.run(
+        r#"local tt = CreateFrame("GameTooltip", "TT")
+           tt:SetOwner(CreateFrame("Frame", "TTOwner"), "ANCHOR_NONE")"#,
+    )
+    .unwrap();
 
     // Two groups, two recipes each. Visible order: [1] "Bolts" header, [2] Alpha Bolt,
     // [3] Beta Bolt, [4] "Cloak" header, [5] Alpha Cloak, [6] Beta Cloak.
@@ -568,6 +572,11 @@ fn set_merchant_compare_item_answers_one_or_nil_per_candidate_slot() {
         r#"
         CreateFrame("GameTooltip", "ShoppingTooltip1"):Hide()
         CreateFrame("GameTooltip", "ShoppingTooltip2"):Hide()
+        -- Owned, as the stock compare owns them before the setter; an unowned tooltip's show
+        -- hides it.
+        local owner = CreateFrame("Frame", "CompareOwner")
+        ShoppingTooltip1:SetOwner(owner, "ANCHOR_NONE")
+        ShoppingTooltip2:SetOwner(owner, "ANCHOR_NONE")
     "#,
     )
     .unwrap();

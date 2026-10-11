@@ -624,22 +624,22 @@ fn world_hover_drive_and_health_watcher() {
     s.set_unit("target", Some(as_target));
     s.run(r#"assert(GameTooltipStatusBar:GetValue() == 8, "the watcher follows the guid")"#)
         .unwrap();
-    s.tick(0.5);
+    s.tick(2.0);
     s.run(r#"assert(not GameTooltip:IsShown(), "faded out after the ramp")"#)
         .unwrap();
     assert!(s.take_errors().is_empty());
 }
 
 /// The minimap blip tooltip (`minimap_tooltip`): refused without `UIParent`, otherwise one line
-/// seated above the cursor, world-owned so the shared fade hides it on hover loss.
+/// seated above the cursor in mode 6, which follows the cursor and hides at once on hover loss.
 #[test]
-fn minimap_blip_tooltip_shows_and_fades() {
+fn minimap_blip_tooltip_shows_follows_and_hides() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(r#"CreateFrame("GameTooltip", "GameTooltip")"#)
         .unwrap();
     assert!(
-        !s.minimap_tooltip("Stormwind", 700.0, 500.0, false),
+        !s.minimap_tooltip("Stormwind", false),
         "no UIParent yet: the show refuses"
     );
     s.run(
@@ -649,7 +649,8 @@ fn minimap_blip_tooltip_shows_and_fades() {
     "#,
     )
     .unwrap();
-    assert!(s.minimap_tooltip("Stormwind", 795.0, 500.0, false));
+    s.mouse_move(795.0, 500.0);
+    assert!(s.minimap_tooltip("Stormwind", false));
     s.run(
         r#"
         assert(GameTooltipTextLeft1:GetText() == "Stormwind")
@@ -669,13 +670,18 @@ fn minimap_blip_tooltip_shows_and_fades() {
         r#"assert(GameTooltip:GetRight() <= 800, "clamped inside the screen, got " .. tostring(GameTooltip:GetRight()))"#,
     )
     .unwrap();
-    s.world_tooltip_move(400.0, 300.0);
-    s.run(r#"assert(GameTooltipTextLeft1:GetText() == "Stormwind", "content survives a move")"#)
-        .unwrap();
-    // Hover loss rides the shared world fade.
-    s.world_tooltip_fade();
-    s.tick(0.6);
-    s.run(r#"assert(not GameTooltip:IsShown(), "faded out after the ramp")"#)
+    s.mouse_move(400.0, 300.0);
+    s.resolve();
+    s.run(
+        r#"
+        assert(GameTooltipTextLeft1:GetText() == "Stormwind", "content survives a move")
+        assert(GameTooltip:GetBottom() == 300, "the plate follows the cursor")
+        "#,
+    )
+    .unwrap();
+    // Hover loss hides at once.
+    s.world_tooltip_hide();
+    s.run(r#"assert(not GameTooltip:IsShown(), "hidden with no fade")"#)
         .unwrap();
     assert!(s.take_errors().is_empty());
 }
@@ -711,13 +717,14 @@ fn a_cursor_seated_plate_lands_on_the_cursor_under_the_ui_scale() {
         )
         .unwrap()
     };
-    assert!(s.minimap_tooltip("Stormwind", 400.0, 300.0, false));
+    s.mouse_move(400.0, 300.0);
+    assert!(s.minimap_tooltip("Stormwind", false));
     let (x, y) = at(&mut s);
     assert!(
         (x - 400.0).abs() < 1e-3 && (y - 300.0).abs() < 1e-3,
         "({x}, {y})"
     );
-    s.world_tooltip_move(200.0, 100.0);
+    s.mouse_move(200.0, 100.0);
     let (x, y) = at(&mut s);
     assert!(
         (x - 200.0).abs() < 1e-3 && (y - 100.0).abs() < 1e-3,
@@ -789,7 +796,7 @@ fn a_cursor_seated_world_plate_hides_at_once_on_hover_loss() {
         "#,
     )
     .unwrap();
-    assert!(s.world_tooltip_gameobject("Brill", &[], Some((400.0, 300.0))));
+    assert!(s.world_tooltip_gameobject("Brill", &[], true));
     s.run(r#"assert(GameTooltip:GetAnchorType() == "ANCHOR_CURSOR", "seated in mode 6")"#)
         .unwrap();
     s.world_tooltip_fade();
@@ -811,7 +818,7 @@ fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
         "#,
     )
     .unwrap();
-    assert!(s.minimap_tooltip("Stormwind", 400.0, 300.0, false));
+    assert!(s.minimap_tooltip("Stormwind", false));
     s.run(
         r#"
         assert(GameTooltip:IsShown())
@@ -820,8 +827,8 @@ fn a_minimap_blip_plate_hides_at_once_on_hover_loss() {
         "#,
     )
     .unwrap();
-    s.world_tooltip_fade();
-    s.run(r#"assert(not GameTooltip:IsVisible(), "gone at once")"#)
+    s.world_tooltip_hide();
+    s.run(r#"assert(not GameTooltip:IsShown(), "gone at once")"#)
         .unwrap();
     assert!(s.take_errors().is_empty());
 }

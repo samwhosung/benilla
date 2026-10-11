@@ -636,11 +636,6 @@ fn emit_minimap(
             wy: (wy / q).round() * q,
             wz: wow[2],
             cursor,
-            // The cursor in the root's units (y-up, ÷ the seam scale): the tooltip anchor resolves
-            // in them, not window px.
-            cursor_ui: cursor
-                .zip(win)
-                .map(|(c, w)| crate::ui_script::window_to_ui(w.height(), c)),
             seam,
         }
     });

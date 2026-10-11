@@ -7,12 +7,11 @@
 use mlua::{Lua, Table};
 
 use super::object::frame_handle_of;
-use super::tooltip::{append_line, clear_content, fire_cleared, show_or_hide_empty, tip_mut};
+use super::tooltip::{append_line, clear, set_owner_core, show_or_hide_empty};
 use super::unit::{is_civilian_kill, level_reads_unknown, unknownobject};
 use super::{KindState, Model, UnitState};
-use crate::layout::{Anchor, Point};
 use crate::strings::{fill, Arg};
-use crate::widget::{FrameHandle, TOOLTIP_FADE_SECS};
+use crate::widget::{FrameHandle, TooltipAnchor};
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
@@ -98,7 +97,10 @@ fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
     Some(fill(&get(key)?, &args))
 }
 
-/// Render the unit tooltip for `token`'s current snapshot; returns whether the unit existed.
+/// Render the unit tooltip for `token`'s current snapshot (`0x529fe0`); returns whether the unit
+/// existed. The clear first (`0x52a003`); no unit hides the tooltip through its own hide, shown bit
+/// then slot (`0x52a050`/`0x52a058`). A unit is held (`0x52a070`), its bar seeded and shown
+/// (`0x52a0e0`–`0x52a146`) before any line, and the lines end in the show (`0x52a711`/`0x52a71b`).
 fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     let (unit, player_level) = {
@@ -108,16 +110,16 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
             model.player_req.level,
         )
     };
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        clear_content(&mut model, h);
-    }
-    fire_cleared(lua, h);
+    clear(lua, h);
     let Some(u) = unit else {
-        set_subject(lua, h, None);
-        show_or_hide_empty(lua, h);
+        super::visibility::set_shown(lua, h, false);
         return Ok(false);
     };
+    // A guid of 0 is held too, so the clear still hides the bar; no push matches it.
+    set_subject(lua, h, Some(u.guid));
+    if let Some(bar) = seed_bar(lua, h, &u) {
+        super::visibility::set_shown(lua, bar, true);
+    }
     // The name: `CGUnit_C::GetUnitName` `0x609210` (`0x52a187`), whose every miss falls to
     // `UNKNOWNOBJECT`, as `UnitName`'s does, then decorated by `0x609370` with the flag a literal
     // `1` (`0x52a19b`), as `UnitPVPName` does, so no CVar gates it: a ranked player's rank and
@@ -152,9 +154,6 @@ fn render_unit(lua: &Lua, this: &Table, token: &str) -> mlua::Result<bool> {
     if u.racial_leader && u.pvp {
         append_line(lua, this, ("Leader".into(), WHITE), None, false)?;
     }
-    // An unresolved guid (0) is no subject: nothing can push for it.
-    set_subject(lua, h, Some(u.guid).filter(|&g| g != 0));
-    update_bar(lua, h, Some(&u));
     show_or_hide_empty(lua, h);
     Ok(true)
 }
@@ -179,36 +178,27 @@ fn set_subject(lua: &Lua, h: FrameHandle, guid: Option<u64>) {
     }
 }
 
-/// Drive the `<name>StatusBar` child from a unit snapshot (`None` hides it); FrameXML's
-/// `HealthBar_OnValueChanged` colours the fill.
-fn update_bar(lua: &Lua, h: FrameHandle, unit: Option<&UnitState>) {
+/// Seed the `<name>StatusBar` child from a unit snapshot, as the builder (`0x52a0eb` min/max,
+/// `0x52a12e` value) and the health watcher (`0x529560`) do, firing `OnValueChanged` on a change;
+/// FrameXML's `HealthBar_OnValueChanged` colours the fill. Neither shows it. Returns the bar.
+fn seed_bar(lua: &Lua, h: FrameHandle, u: &UnitState) -> Option<FrameHandle> {
     let bar = {
-        let model = lua.app_data_mut::<Model>().expect("model app_data");
-        let name = model.arena.frame(h).and_then(|f| f.name.clone());
-        name.and_then(|n| model.arena.lookup(&format!("{n}StatusBar")))
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        super::tooltip::status_bar(&model, h)?
     };
-    let Some(bar) = bar else { return };
-    let (changed, shown) = {
+    let changed = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let Some(f) = model.arena.frame_mut(bar) else {
-            return;
+        let Some(KindState::StatusBar(sb)) = model.arena.frame_mut(bar).map(|f| &mut f.kind_state)
+        else {
+            return None;
         };
-        match (&mut f.kind_state, unit) {
-            (KindState::StatusBar(sb), Some(u)) => {
-                sb.min = 0.0;
-                sb.max = u.max_health.max(1) as f32;
-                let v = u.health.min(u.max_health.max(1)) as f32;
-                let changed = (sb.value - v).abs() > f32::EPSILON;
-                sb.value = v;
-                (changed, true)
-            }
-            _ => (false, false),
-        }
+        sb.min = 0.0;
+        sb.max = u.max_health.max(1) as f32;
+        let v = u.health.min(u.max_health.max(1)) as f32;
+        let changed = (sb.value - v).abs() > f32::EPSILON;
+        sb.value = v;
+        changed
     };
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        model.arena.set_shown(bar, shown);
-    }
     if changed {
         let (id, value) = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -229,6 +219,7 @@ fn update_bar(lua: &Lua, h: FrameHandle, unit: Option<&UnitState>) {
                 .record_lua_error(&e);
         }
     }
+    Some(bar)
 }
 
 /// A `set_unit` push of the unit a tooltip shows updates its health bar without rebuilding the
@@ -261,16 +252,16 @@ pub(super) fn on_unit_push(lua: &Lua, token: &str) {
         (unit.clone(), hits)
     };
     for h in hits {
-        update_bar(lua, h, Some(&unit));
+        seed_bar(lua, h, &unit);
     }
 }
 
 impl super::UiScript {
     /// Show the world-mouseover unit tooltip: fire `OnTooltipSetDefaultAnchor`, render `token`,
-    /// fire `UPDATE_MOUSEOVER_UNIT`. Call on a hover-target change; a re-show mid-fade returns to
-    /// full alpha. `false` when there is no tooltip frame or no such unit.
+    /// fire `UPDATE_MOUSEOVER_UNIT`. Call on a hover-target change; the render's show returns a
+    /// fading plate to full alpha. `false` when there is no tooltip frame or no such unit.
     pub fn world_tooltip_unit(&mut self, token: &str) -> bool {
-        let h = {
+        let (h, id) = {
             let mut model = self.model_mut();
             let Some(h) = model.arena.lookup("GameTooltip") else {
                 return false;
@@ -278,7 +269,6 @@ impl super::UiScript {
             let id = model.frame_id(h);
             (h, id)
         };
-        let (h, id) = h;
         if let Err(e) =
             super::event::fire_widget_handler(&self.lua, id, "OnTooltipSetDefaultAnchor", vec![])
         {
@@ -300,15 +290,6 @@ impl super::UiScript {
         };
         if shown {
             set_world_owned(&self.lua, h);
-            let mut model = self.model_mut();
-            if let Some(f) = model.arena.frame_mut(h) {
-                if let KindState::Tooltip(t) = &mut f.kind_state {
-                    if t.fade_left.take().is_some() {
-                        model.arena.set_alpha(h, 1.0);
-                    }
-                }
-            }
-            drop(model);
             self.fire_event("UPDATE_MOUSEOVER_UNIT", vec![]);
         }
         shown
@@ -316,17 +297,17 @@ impl super::UiScript {
 
     /// Show the world-mouseover GameObject tooltip (builder `0x52aa20`): the name in gold, then
     /// the caller's lock lines. The anchor forks on the object's `[vtbl+0x5c]`: true (`0x492a01`)
-    /// seats it at the cursor, anchor state 6 (`0x52ffe0(owner, 6, 0, 0)`); false (`0x492a42`)
-    /// keeps the default corner, as units (`0x492983`) always do. `cursor` is that verdict, and
-    /// [`Self::world_tooltip_move`] follows a cursor-seated plate. Hover loss arms the unit flow's
-    /// fade, where the reference's loss path (`0x530ae0`) hides an anchor-state-6 plate at once.
+    /// owns it by `UIParent` in mode 6, `ANCHOR_CURSOR` (`0x52ffe0(UIParent, 6, 0, 0)` at
+    /// `0x492a1e`), which the tooltip's own update then keeps on the cursor; false (`0x492a42`)
+    /// fires `OnTooltipSetDefaultAnchor` for the default corner, as units (`0x492983`) always do.
+    /// `cursor` is that verdict.
     pub fn world_tooltip_gameobject(
         &mut self,
         name: &str,
         lines: &[(String, TooltipTint)],
-        cursor: Option<(f32, f32)>,
+        cursor: bool,
     ) -> bool {
-        let (h, id, root, root_id) = {
+        let (h, id, root) = {
             let mut model = self.model_mut();
             let Some(h) = model.arena.lookup("GameTooltip") else {
                 return false;
@@ -334,42 +315,14 @@ impl super::UiScript {
             let Some(root) = model.arena.lookup("UIParent") else {
                 return false;
             };
-            let (id, root_id) = (model.frame_id(h), model.frame_id(root));
-            (h, id, root, root_id)
+            (h, model.frame_id(h), root)
         };
-        match cursor {
-            // The cursor arm: centred above the pointer; compare-then-touch, so a still pointer
-            // never re-layouts.
-            Some((ui_x, ui_y)) => {
-                let mut model = self.model_mut();
-                // The owner: this arm is the SetOwner core (`0x52ffe0`), which stores it at
-                // `+0x314` (`0x53000c`); the other arms get theirs from FrameXML's
-                // `OnTooltipSetDefaultAnchor`. Without one, any Lua `GameTooltip:Show()` hides the
-                // plate: `0x530a80` shows only when `+0x314` and `+0x31c` are both set, else it
-                // takes `0x530a60`.
-                if let Ok(t) = tip_mut(&mut model, h) {
-                    t.owner = Some(root);
-                }
-                let new = cursor_anchor_at(&model, h, root_id, ui_x, ui_y);
-                let input = model.layout_inputs.entry(h).or_default();
-                let same = input.anchors.len() == 1
-                    && super::object::anchor_bits_eq(&input.anchors[0], &new);
-                if !same {
-                    input.anchors = vec![new];
-                    model.touch_layout();
-                }
-            }
-            // The corner arm: the default-anchor handler the unit flow fires too.
-            None => {
-                if let Err(e) = super::event::fire_widget_handler(
-                    &self.lua,
-                    id,
-                    "OnTooltipSetDefaultAnchor",
-                    vec![],
-                ) {
-                    self.push_error(e);
-                }
-            }
+        if cursor {
+            set_owner_core(&self.lua, h, Some(root), TooltipAnchor::Cursor, 0.0, 0.0);
+        } else if let Err(e) =
+            super::event::fire_widget_handler(&self.lua, id, "OnTooltipSetDefaultAnchor", vec![])
+        {
+            self.push_error(e);
         }
         let wrapper = match super::object::frame_wrapper(&self.lua, id) {
             Ok(w) => w,
@@ -379,11 +332,7 @@ impl super::UiScript {
             }
         };
         let render = || -> mlua::Result<()> {
-            {
-                let mut model = self.lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(&self.lua, h);
+            clear(&self.lua, h);
             append_line(&self.lua, &wrapper, (name.to_string(), GOLD), None, false)?;
             for (text, tint) in lines {
                 let colour = match tint {
@@ -400,26 +349,16 @@ impl super::UiScript {
             return false;
         }
         set_world_owned(&self.lua, h);
-        {
-            let mut model = self.model_mut();
-            if let Some(f) = model.arena.frame_mut(h) {
-                if let KindState::Tooltip(t) = &mut f.kind_state {
-                    if t.fade_left.take().is_some() {
-                        model.arena.set_alpha(h, 1.0);
-                    }
-                }
-            }
-        }
         show_or_hide_empty(&self.lua, h);
         true
     }
 
-    /// Show the minimap blip tooltip (an `AreaPOI` or quest-dot name): one gold line, faint gold
-    /// for a cross-interior dot, its bottom at the given UI point above the cursor.
-    /// [`Self::world_tooltip_move`] follows the pointer, and hover loss arms
-    /// [`Self::world_tooltip_fade`].
-    pub fn minimap_tooltip(&mut self, text: &str, ui_x: f32, ui_y: f32, grey: bool) -> bool {
-        let (h, id, root_id) = {
+    /// Show the minimap blip tooltip (`0x4eb0c0`, an `AreaPOI` or quest-dot name): owned by
+    /// `UIParent` in mode 6, `ANCHOR_CURSOR` (`0x4eb587`), so the tooltip's own update keeps it on
+    /// the cursor; one gold line, faint gold for a cross-interior dot; then the show
+    /// (`0x4eb85f`/`0x4eb869`). Hover loss is [`Self::world_tooltip_hide`].
+    pub fn minimap_tooltip(&mut self, text: &str, grey: bool) -> bool {
+        let (h, id, root) = {
             let mut model = self.model_mut();
             let Some(h) = model.arena.lookup("GameTooltip") else {
                 return false;
@@ -427,8 +366,7 @@ impl super::UiScript {
             let Some(root) = model.arena.lookup("UIParent") else {
                 return false;
             };
-            let (id, root_id) = (model.frame_id(h), model.frame_id(root));
-            (h, id, root_id)
+            (h, model.frame_id(h), root)
         };
         let wrapper = match super::object::frame_wrapper(&self.lua, id) {
             Ok(w) => w,
@@ -437,22 +375,7 @@ impl super::UiScript {
                 return false;
             }
         };
-        {
-            let mut model = self.model_mut();
-            clear_content(&mut model, h);
-            // Anchor only: the frame's own clamp flag (`Frame::clamped_to_screen`, G flags bit 4)
-            // slides a plate near the window edge back on screen.
-            let new = cursor_anchor_at(&model, h, root_id, ui_x, ui_y);
-            let input = model.layout_inputs.entry(h).or_default();
-            // Compare-then-touch, so a still cursor does not dirty the layout.
-            let same =
-                input.anchors.len() == 1 && super::object::anchor_bits_eq(&input.anchors[0], &new);
-            if !same {
-                input.anchors = vec![new];
-                model.touch_layout();
-            }
-        }
-        fire_cleared(&self.lua, h);
+        set_owner_core(&self.lua, h, Some(root), TooltipAnchor::Cursor, 0.0, 0.0);
         // A cross-interior entry's `|cffb0b0b0` wrap modulates the gold: faint gold, not grey.
         let dim = 0xb0 as f32 / 255.0;
         let color = if grey {
@@ -465,76 +388,44 @@ impl super::UiScript {
             return false;
         }
         set_world_owned(&self.lua, h);
-        {
-            let mut model = self.model_mut();
-            if let Some(f) = model.arena.frame_mut(h) {
-                if let KindState::Tooltip(t) = &mut f.kind_state {
-                    if t.fade_left.take().is_some() {
-                        model.arena.set_alpha(h, 1.0);
-                    }
-                }
-            }
-        }
         show_or_hide_empty(&self.lua, h);
         true
-    }
-
-    /// Re-seat the shown world-owned tooltip at a new pointer point, anchor only; else a no-op.
-    pub fn world_tooltip_move(&mut self, ui_x: f32, ui_y: f32) {
-        let mut model = self.model_mut();
-        let Some(h) = model.arena.lookup("GameTooltip") else {
-            return;
-        };
-        let Some(root) = model.arena.lookup("UIParent") else {
-            return;
-        };
-        let owned_shown = model
-            .arena
-            .frame(h)
-            .map(|f| matches!(&f.kind_state, KindState::Tooltip(t) if t.world_owned) && f.shown)
-            .unwrap_or(false);
-        if !owned_shown {
-            return;
-        }
-        let root_id = model.frame_id(root);
-        let new = cursor_anchor_at(&model, h, root_id, ui_x, ui_y);
-        let input = model.layout_inputs.entry(h).or_default();
-        // Compare-then-touch: this runs on every pointer event.
-        let same =
-            input.anchors.len() == 1 && super::object::anchor_bits_eq(&input.anchors[0], &new);
-        if !same {
-            input.anchors = vec![new];
-            model.touch_layout();
-        }
     }
 
     /// Whether `GameTooltip` is still the shown plate a world hover put up, with no Lua
     /// `SetOwner`, content `Set*` or `Hide` since.
     pub fn world_tooltip_up(&mut self) -> bool {
+        self.world_plate().is_some()
+    }
+
+    /// The world plate, when [`Self::world_tooltip_up`].
+    fn world_plate(&mut self) -> Option<FrameHandle> {
         let model = self.model_mut();
-        let Some(h) = model.arena.lookup("GameTooltip") else {
-            return false;
-        };
+        let h = model.arena.lookup("GameTooltip")?;
         model
             .arena
             .frame(h)
-            .map(|f| matches!(&f.kind_state, KindState::Tooltip(t) if t.world_owned) && f.shown)
-            .unwrap_or(false)
+            .is_some_and(|f| {
+                matches!(&f.kind_state, KindState::Tooltip(t) if t.world_owned) && f.shown
+            })
+            .then_some(h)
     }
 
-    /// On hover loss, arm the world tooltip's timed fade (the reference's unit plate fades rather
-    /// than hiding); a no-op unless a world-owned plate is shown.
+    /// On world hover loss, the fade request (`0x492909` → `0x530ae0`): a cursor-seated plate hides
+    /// at once, any other fades. Only a world plate still up is touched; a window's tooltip that
+    /// took `GameTooltip` since is left alone.
     pub fn world_tooltip_fade(&mut self) {
-        let mut model = self.model_mut();
-        let Some(h) = model.arena.lookup("GameTooltip") else {
-            return;
-        };
-        if let Some(f) = model.arena.frame_mut(h) {
-            if let KindState::Tooltip(t) = &mut f.kind_state {
-                if t.world_owned && f.shown && t.fade_left.is_none() {
-                    t.fade_left = Some(TOOLTIP_FADE_SECS);
-                }
-            }
+        if let Some(h) = self.world_plate() {
+            super::tooltip::fade_out(&self.lua, h);
+        }
+    }
+
+    /// On minimap blip hover loss, the direct hide (`0x4eb0c0`: shown bit, then the hide slot,
+    /// `0x4eb15e`–`0x4eb166`), with no fade. As [`Self::world_tooltip_fade`], only a world plate
+    /// still up is touched.
+    pub fn world_tooltip_hide(&mut self) {
+        if let Some(h) = self.world_plate() {
+            super::visibility::set_shown(&self.lua, h, false);
         }
     }
 }
@@ -557,18 +448,4 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     Ok(())
-}
-
-/// The plate's BOTTOM on the cursor: `(ui_x, ui_y)` is in the screen root's units, and an anchor
-/// offset is in the tooltip's own, so it is divided by the tooltip's effective scale, the UI scale
-/// included, as the cursor arm `0x530b20` does ([`super::tooltip`]'s `cursor_anchor`).
-fn cursor_anchor_at(model: &Model, h: FrameHandle, root_id: u32, ui_x: f32, ui_y: f32) -> Anchor {
-    let s = super::object::eff_scale(model, h);
-    Anchor::new(
-        Point::Bottom,
-        root_id,
-        Point::BottomLeft,
-        ui_x / s,
-        ui_y / s,
-    )
 }

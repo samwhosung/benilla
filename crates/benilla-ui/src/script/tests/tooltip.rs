@@ -331,7 +331,7 @@ fn fadeout_ramps_then_hides() {
     )
     .unwrap();
     // Half the ramp: still shown, alpha well below 1.
-    s.tick(0.25);
+    s.tick(1.5);
     s.run(r#"assert(TT5:IsShown(), "still shown mid-fade")"#)
         .unwrap();
     s.resolve();
@@ -366,7 +366,7 @@ fn fadeout_ramps_then_hides() {
     assert_eq!(fresh_alpha, 1.0, "fresh content restored full alpha");
     // A full ramp ends hidden and cleared.
     s.run("TT5:FadeOut()").unwrap();
-    s.tick(0.6);
+    s.tick(2.1);
     s.run(
         r#"
         assert(not TT5:IsShown(), "hidden at ramp end")
@@ -951,6 +951,7 @@ fn fadeout_on_a_cursor_anchored_tooltip_hides_at_once() {
         CurTip:AddLine("Copper Ore")
         CurTip:Show()
         assert(CurTip:IsVisible())
+        hid = 0
         CurTip:FadeOut()
         assert(not CurTip:IsVisible(), "mode 6 hides at once")
         assert(hid == 1, "OnHide fired in the call")
@@ -983,7 +984,7 @@ fn a_line_added_mid_fade_keeps_fading() {
         r#"
         LateTip:AddLine("Sell Price: 1c")
         LateTip:AddDoubleLine("Vendor", "1c")
-        assert(LateTip:GetAlpha() == 127 / 255, "the appends leave the ramp, got " .. LateTip:GetAlpha())
+        assert(math.abs(LateTip:GetAlpha() - 127 / 255) < 1e-6, "the appends leave the ramp, got " .. LateTip:GetAlpha())
         "#,
     )
     .unwrap();

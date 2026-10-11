@@ -107,9 +107,9 @@ pub(in crate::minimap) fn emit_quest_dots(
             color: [tint, tint, tint, ctx.alpha],
             ..default()
         });
-        if let (Some(c), Some(ui)) = (ctx.cursor, ctx.cursor_ui) {
+        if let Some(c) = ctx.cursor {
             if rect.contains(c) {
-                *hover = MinimapBlipHover::Npc(npc, ui, grey);
+                *hover = MinimapBlipHover::Npc(npc, grey);
             }
         }
     }
@@ -200,11 +200,11 @@ pub(in crate::minimap) fn emit_tracking_dots(
             color: [tint, tint, tint, ctx.alpha],
             ..default()
         });
-        if let (Some(c), Some(ui)) = (ctx.cursor, ctx.cursor_ui) {
+        if let Some(c) = ctx.cursor {
             if rect.contains(c) {
                 *hover = match name {
-                    DotName::Guid => MinimapBlipHover::Npc(guid, ui, grey),
-                    DotName::Known(n) => MinimapBlipHover::TrackedGo(n, ui, grey),
+                    DotName::Guid => MinimapBlipHover::Npc(guid, grey),
+                    DotName::Known(n) => MinimapBlipHover::TrackedGo(n, grey),
                 };
             }
         }

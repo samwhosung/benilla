@@ -242,13 +242,15 @@ pub struct TooltipState {
     pub right_lines: Vec<RegionHandle>,
     /// `SetOwner`'s frame, dropped on hide.
     pub owner: Option<FrameHandle>,
-    /// The last `SetOwner`'s mode, read back by `GetAnchorType()`.
+    /// The anchor mode (`+0x318`), read back by `GetAnchorType()`: the last `SetOwner`'s while
+    /// owned, `None` (mode 7) since a hide.
     pub anchor: TooltipAnchor,
     /// `SetMinimumWidth`: a floor on the auto-sized width, cleared with the content.
     pub min_width: f32,
     /// `FadeOut()`'s countdown in seconds (`[+0x3b4]` armed, `[+0x3b8]` left): the tooltip's own
     /// update counts it down by its elapsed, so it stands still while the tooltip is not walked.
-    /// Any fresh content or `Show` cancels it.
+    /// `FadeOut` arms it; the show, the SetOwner core (so every hide) and a cursor-mode `FadeOut`
+    /// disarm it, and nothing else.
     pub fade_left: Option<f32>,
     /// The guid of the unit this tooltip shows (`+0x368`/`+0x36c`, stored at `0x52a070`), whose
     /// health watcher (`0x467e70`, registered at `0x52a0a8`) drives the bar; a `set_unit` push of
@@ -272,8 +274,9 @@ pub const TOOLTIP_PAD: f32 = 10.0;
 pub const TOOLTIP_LINE_GAP: f32 = 2.0;
 /// The least double-line column gap, the stock `TextRightN` offset; the reference's is untraced.
 pub const TOOLTIP_DOUBLE_GAP: f32 = 40.0;
-/// `FadeOut`'s ramp length in seconds; the reference's constant is untraced.
-pub const TOOLTIP_FADE_SECS: f32 = 0.5;
+/// `FadeOut`'s duration in seconds, `[0x808e7c]` = 2.0: the plate holds full alpha for the first
+/// half and ramps over the second.
+pub const TOOLTIP_FADE_SECS: f32 = 2.0;
 /// A wrap-flagged line's width, pinned when it is appended; the reference's column is untraced.
 pub const TOOLTIP_WRAP_WIDTH: f32 = 260.0;
 

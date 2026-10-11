@@ -16,7 +16,7 @@
 use mlua::{Lua, Table, Value};
 
 use super::object::{frame_handle_of, frame_wrapper};
-use super::tooltip::{append_line, clear_content, fire_cleared, tip_mut};
+use super::tooltip::{append_line, clear, clear_silent, tip_mut};
 use super::{CraftTooltip, Model, TrainerTooltip};
 use crate::widget::FrameHandle;
 
@@ -223,9 +223,9 @@ fn answer_wait(lua: &Lua, h: FrameHandle, spell_id: u32, alt_caster: bool) -> ml
             model.spell_tooltip_waits.remove(&h);
             return Ok(());
         }
-        clear_content(&mut model, h);
         (model.frame_id(h), wait)
     };
+    clear_silent(lua, h);
     let this = frame_wrapper(lua, id)?;
     fill_spell(
         lua,
@@ -436,11 +436,7 @@ pub(super) fn set_spell_with_talent(
     talent: TalentLines,
 ) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        clear_content(&mut model, h);
-    }
-    fire_cleared(lua, h);
+    clear(lua, h);
     if talent.next_desc.is_none() {
         super::talent::ask_next_rank(lua, talent.next_spell);
     }
@@ -474,10 +470,7 @@ fn set_reward_spell(
         Some((id, name)) => set_spell_by_id(lua, this, id, name, SpellRenderOpts::default(), None),
         None => {
             let h = frame_handle_of(lua, this)?;
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
+            clear_silent(lua, h);
             super::tooltip::show_or_hide_empty(lua, h);
             Ok(())
         }
@@ -493,11 +486,7 @@ pub(super) fn set_spell_by_id(
     remaining: Option<String>,
 ) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        clear_content(&mut model, h);
-    }
-    fire_cleared(lua, h);
+    clear(lua, h);
     fill_spell(lua, this, h, spell_id, fallback_name, opts, remaining)
 }
 
@@ -721,11 +710,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             };
             let (spell_id, fallback_name) = hit.unwrap_or((0, None));
             let h = frame_handle_of(lua, &this)?;
-            {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                clear_content(&mut model, h);
-            }
-            fire_cleared(lua, h);
+            clear(lua, h);
             match spell_view_of(lua, spell_id, false) {
                 Some(v) => {
                     append_line(lua, &this, (v.name.clone(), GOLD), None, false)?;
@@ -806,14 +791,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 0x80 => super::tooltip_item::render_by_id(lua, &this, a.action, None, None),
                 0x40 => {
                     let h = frame_handle_of(lua, &this)?;
+                    clear(lua, h);
+                    // The same 1..36 lookup as `GetActionText` and the bar icon, so the three
+                    // agree on a slot's macro.
                     let name = {
-                        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                        clear_content(&mut model, h);
-                        // The same 1..36 lookup as `GetActionText` and the bar icon, so the
-                        // three agree on a slot's macro.
+                        let model = lua.app_data_ref::<Model>().expect("model app_data");
                         model.macros.get(a.action as usize).map(|m| m.name.clone())
                     };
-                    fire_cleared(lua, h);
                     if let Some(name) = name {
                         append_line(lua, &this, (name, WHITE), None, false)?;
                     }

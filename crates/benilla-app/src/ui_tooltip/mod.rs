@@ -213,7 +213,7 @@ fn drive_mouseover_tooltip(
         ) else {
             return;
         };
-        script.world_tooltip_gameobject(&plate, &[], None);
+        script.world_tooltip_gameobject(&plate, &[], false);
         *last = LastHover::Corpse(guid);
         return;
     }
@@ -252,10 +252,8 @@ fn drive_mouseover_tooltip(
                     *trace = line;
                 }
             }
-            // The cursor arm follows the pointer; the corner arm has nothing to re-seat.
-            if let Some((x, y)) = cursor_ui {
-                script.world_tooltip_move(x, y);
-            }
+            // A cursor-seated plate follows the pointer in its own update (mode 6); the corner arm
+            // has nothing to re-seat.
             return;
         }
         if cursor_seated && cursor_ui.is_none() {
@@ -344,12 +342,13 @@ fn drive_mouseover_tooltip(
                 _ => {}
             }
         }
-        script.world_tooltip_gameobject(&template.name, &lines, cursor_ui);
+        script.world_tooltip_gameobject(&template.name, &lines, cursor_seated);
         *last = LastHover::Go(guid);
         return;
     }
     if !matches!(*last, LastHover::None) {
-        // Hover lost: arm the fade (`0x492909` → `0x530ae0`).
+        // Hover lost: the fade request (`0x492909` → `0x530ae0`), which hides a cursor-seated
+        // plate at once.
         script.world_tooltip_fade();
         *last = LastHover::None;
     }

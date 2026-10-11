@@ -72,9 +72,9 @@ fn a_frame_walked_after_the_tooltip_sees_this_frames_fade() {
     )
     .unwrap();
     take_log(&s);
-    s.tick(0.3);
-    assert_eq!(take_log(&s), "shown@0.4", "this frame's ramp, not the last");
-    s.tick(0.3);
+    s.tick(1.5);
+    assert_eq!(take_log(&s), "shown@0.5", "this frame's ramp, not the last");
+    s.tick(0.5);
     assert_eq!(
         take_log(&s),
         "hide hidden",
