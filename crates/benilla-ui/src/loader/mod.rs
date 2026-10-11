@@ -866,6 +866,17 @@ pub(super) fn color_of(el: &Element) -> [f32; 4] {
     [c("r", 0.0), c("g", 0.0), c("b", 0.0), c("a", 1.0)]
 }
 
+/// What a texture element supplies the texture adder (`0x6f26f0`): its `file=`, else a `<Color>`
+/// child's fill. A `<Color>` beside `file=` is discarded, as on any texture (`0x76fe20`).
+pub(super) fn texture_source(el: &Element) -> Option<crate::script::TextureSource> {
+    match el.attr("file") {
+        Some(file) => Some(crate::script::TextureSource::File(file.to_string())),
+        None => children_named(el, "Color")
+            .next()
+            .map(|c| crate::script::TextureSource::Fill(color_of(c))),
+    }
+}
+
 /// A `<TexCoords>` child's UV rect `(l, r, t, b)`; one missing an edge is ignored (full UVs).
 pub(super) fn tex_coords_of(el: &Element) -> Option<(f32, f32, f32, f32)> {
     let tc = children_named(el, "TexCoords").next()?;

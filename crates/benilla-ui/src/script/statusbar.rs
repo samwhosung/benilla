@@ -7,10 +7,13 @@
 use mlua::{Lua, Table, Value};
 
 use super::object::{draw_layer_from_str, frame_handle_of};
-use super::region::{install_into_slot, region_wrapper, texture_object_arg};
-use super::{event, Model, RegionData};
+use super::region::{
+    apply_source, install_into_slot, new_texture_region, region_wrapper, set_texture_path,
+    slot_arg, SlotArg, TextureSource,
+};
+use super::{event, Model};
 use crate::order::DrawLayer;
-use crate::widget::{KindState, RegionHandle, RegionKind, StatusBarState};
+use crate::widget::{KindState, RegionHandle, StatusBarState};
 
 /// Registry key of the StatusBar method table.
 pub(super) const REG_STATUSBAR_METHODS: &str = "__benilla_statusbar_methods";
@@ -44,12 +47,11 @@ fn store_value(sb: &mut StatusBarState, v: f32) -> Option<f32> {
     })
 }
 
-/// Get or create the bar texture region, `ARTWORK` by default as in the reference; `layer`
-/// re-layers an existing one.
-fn ensure_bar(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result<u32> {
+/// Get or create the bar texture region for a caller that needs one before the reference would
+/// make it (`SetStatusBarColor`): a new bar is installed as any is.
+fn ensure_bar(lua: &Lua, this: &Table) -> mlua::Result<u32> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-
     let existing = match &model
         .arena
         .frame(h)
@@ -59,54 +61,35 @@ fn ensure_bar(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result
         KindState::StatusBar(sb) => sb.bar,
         _ => return Err(mlua::Error::runtime("not a StatusBar")),
     };
-
     let rh = match existing {
-        Some(rh) => {
-            if let (Some(l), Some(region)) = (layer, model.arena.region_mut(rh)) {
-                region.draw_layer = l;
-            }
-            rh
-        }
+        Some(rh) => rh,
         None => {
-            let rh = model
-                .arena
-                .create_region(
-                    h,
-                    RegionKind::Texture,
-                    layer.unwrap_or(DrawLayer::Artwork),
-                    0,
-                )
+            let rh = new_texture_region(&mut model, h, DrawLayer::Artwork)
                 .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-            model.region_data.insert(rh, RegionData::default());
-            model.touch_layout_region(rh);
-            if let Some(frame) = model.arena.frame_mut(h) {
-                if let KindState::StatusBar(sb) = &mut frame.kind_state {
-                    sb.bar = Some(rh);
-                }
-            }
+            install_bar_model(&mut model, h, Some(rh), DrawLayer::Artwork)?;
             rh
         }
     };
     Ok(model.region_id(rh))
 }
 
-/// Install `incoming` as the bar texture, or clear it, through `0x7831f0`.
-fn install_bar(
-    lua: &Lua,
-    this: &Table,
+/// Install `incoming` as the bar texture, or clear it, through `0x7831f0`: the same texture is a
+/// no-op, the displaced one is deleted, the incoming one is linked in on `layer` shown (`0x78321b`)
+/// and its texcoord-modifies-rect flag is set (`0x783220`).
+fn install_bar_model(
+    model: &mut Model,
+    h: crate::widget::FrameHandle,
     incoming: Option<RegionHandle>,
     layer: DrawLayer,
 ) -> mlua::Result<()> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     if !matches!(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::StatusBar(_))
     ) {
         return Err(mlua::Error::runtime("not a StatusBar"));
     }
-    install_into_slot(
-        &mut model,
+    let changed = install_into_slot(
+        model,
         h,
         incoming,
         layer,
@@ -121,8 +104,72 @@ fn install_bar(
                 sb.bar = rh;
             }
         },
-    )
-    .map(|_| ())
+    )?;
+    if let (true, Some(rh)) = (changed, incoming) {
+        model
+            .region_data
+            .entry(rh)
+            .or_default()
+            .tex_coord_modifies_rect = true;
+    }
+    Ok(())
+}
+
+fn install_bar(
+    lua: &Lua,
+    this: &Table,
+    incoming: Option<RegionHandle>,
+    layer: DrawLayer,
+) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    install_bar_model(&mut model, h, incoming, layer)
+}
+
+/// `<BarTexture>` (`0x782ed4`, `0x782f63`): the region the texture adder builds from the file or
+/// the colour, installed as an object on the element's `drawLayer`, ARTWORK without one. Neither
+/// builds nothing.
+pub(super) fn install_loaded(
+    model: &mut Model,
+    h: crate::widget::FrameHandle,
+    source: Option<TextureSource>,
+    layer: Option<DrawLayer>,
+) -> mlua::Result<()> {
+    if source.is_none() {
+        return Ok(());
+    }
+    let layer = layer.unwrap_or(DrawLayer::Artwork);
+    let rh = new_texture_region(model, h, layer)
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+    apply_source(model, rh, source);
+    install_bar_model(model, h, Some(rh), layer)
+}
+
+/// `SetStatusBarTexture`'s path leg (`0x783140`): a bar that exists has its file swapped and
+/// nothing else, its layer included; with none, a texture is built, given the file and installed
+/// on `layer` (`0x7831cb`).
+fn set_bar_path(lua: &Lua, this: &Table, path: &str, layer: DrawLayer) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let existing = match &model
+        .arena
+        .frame(h)
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?
+        .kind_state
+    {
+        KindState::StatusBar(sb) => sb.bar,
+        _ => return Err(mlua::Error::runtime("not a StatusBar")),
+    };
+    match existing {
+        Some(rh) => set_texture_path(&mut model, rh, path),
+        None => {
+            let rh = new_texture_region(&mut model, h, layer)
+                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+            set_texture_path(&mut model, rh, path);
+            install_bar_model(&mut model, h, Some(rh), layer)?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -178,59 +225,35 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `(texture [, layer])` installs the object as the bar, linked on `layer` (ARTWORK without
-    // one, `0x78f902`) and displacing the old bar (`0x7831f0`); nil clears it (`0x78fa6d`). Its
-    // raises print `SetCheckedTexture`, the client's copy-pasted format strings (`0x87b1e8`,
-    // `0x87b224`). Otherwise a region's two `SetTexture` forms, `(path [, layer])` and
-    // `(r, g, b [, a])`, on the bar.
+    // `SetStatusBarTexture(texture or "texture" or nil [, "layer"])` (`0x78f870`): a Texture object
+    // is installed as the bar, linked on `layer` (ARTWORK without one, `0x78f902`) and displacing
+    // the old bar (`0x7831f0`); a string or a number is the path of the bar (`0x783140`), and nil
+    // clears it (`0x78fa6d`). There is no colour form. The object leg's raises print
+    // `SetCheckedTexture`, the client's copy-pasted format strings (`0x87b1e8`, `0x87b224`).
     m.set(
         "SetStatusBarTexture",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
-            let nil = Value::Nil;
-            let arg = |i: usize| args.get(i).unwrap_or(&nil);
-            let (a1, a2, a3, a4) = (arg(0), arg(1), arg(2), arg(3));
-            let layer = match a2 {
-                Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
+            // `lua_isstring` on the layer (`0x78f909`): a number takes the name parse too, and
+            // finds no layer.
+            let layer = match args.get(1) {
+                Some(v @ (Value::String(_) | Value::Number(_) | Value::Integer(_))) => lua
+                    .coerce_string(v.clone())?
+                    .and_then(|l| draw_layer_from_str(&l.to_string_lossy())),
                 _ => None,
-            };
-            match args.front() {
-                Some(Value::Table(t)) => {
-                    let rh = texture_object_arg(lua, &this, t, "SetCheckedTexture")?;
-                    return install_bar(lua, &this, Some(rh), layer.unwrap_or(DrawLayer::Artwork));
-                }
-                Some(Value::Nil) => return install_bar(lua, &this, None, DrawLayer::Artwork),
-                _ => {}
             }
-            let id = ensure_bar(lua, &this, layer)?;
-            let rh = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                *model.id_to_region.get(&id).expect("bar region id")
-            };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let data = model.region_data.entry(rh).or_default();
-            match a1 {
-                Value::String(s) => {
-                    data.texture = Some(s.to_str()?.to_string());
-                    data.fill = None;
-                }
-                // A solid fill and a path clear each other; `SetStatusBarColor` is a separate
-                // tint that multiplies either.
-                Value::Number(_) | Value::Integer(_) => {
-                    data.texture = None;
-                    data.fill = Some([
-                        num_f32(a1),
-                        num_f32(a2),
-                        num_f32(a3),
-                        match a4 {
-                            Value::Nil => 1.0,
-                            v => num_f32(v),
-                        },
-                    ]);
-                }
-                _ => {}
+            .unwrap_or(DrawLayer::Artwork);
+            match slot_arg(
+                lua,
+                &this,
+                &args,
+                r#"SetStatusBarTexture(texture or "texture" or nil [, "layer"])"#,
+                "SetCheckedTexture",
+                true,
+            )? {
+                SlotArg::Object(rh) => install_bar(lua, &this, Some(rh), layer),
+                SlotArg::Clear => install_bar(lua, &this, None, DrawLayer::Artwork),
+                SlotArg::Path(path) => set_bar_path(lua, &this, &path, layer),
             }
-            model.touch_layout_art(rh);
-            Ok(())
         })?,
     )?;
     m.set(
@@ -259,7 +282,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     crate::script::object::as_f32(&g),
                     crate::script::object::as_f32(&b),
                 );
-                let id = ensure_bar(lua, &this, None)?;
+                let id = ensure_bar(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let rh = *model.id_to_region.get(&id).expect("bar region id");
                 model.region_data.entry(rh).or_default().vertex_color =
@@ -324,13 +347,5 @@ pub(super) fn fire_engine_value_changed(lua: &Lua, bar: crate::widget::FrameHand
         lua.app_data_mut::<Model>()
             .expect("model app_data")
             .record_lua_error(&e);
-    }
-}
-
-fn num_f32(v: &Value) -> f32 {
-    match v {
-        Value::Number(n) => *n as f32,
-        Value::Integer(i) => *i as f32,
-        _ => 0.0,
     }
 }

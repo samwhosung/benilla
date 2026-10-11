@@ -410,14 +410,16 @@ fn set_slot_texture(
             .unwrap_or(crate::script::BlendMode::Add),
         _ => crate::script::BlendMode::Add,
     });
-    match args.front() {
-        // A Texture object is itself installed into the slot (`0x781b0b` → `0x778fd0`; the
-        // highlight's `0x781eb7` → `0x779110`, which also sets its blend, `0x779144`, unless it
-        // is the same texture, `0x779122`). Any other widget raises (`0x781ab1`, message
-        // `0x87a1e0`; the highlight's `0x87a28c`).
-        Some(Value::Table(t)) => {
-            let method = usage.split('(').next().unwrap_or(usage);
-            let rh = super::region::texture_object_arg(lua, this, t, method)?;
+    // A Texture object is itself installed into the slot (`0x781b0b` → `0x778fd0`; the highlight's
+    // `0x781eb7` → `0x779110`, which also sets its blend, `0x779144`, unless it is the same
+    // texture, `0x779122`). Any other widget raises (`0x781ab1`, message `0x87a1e0`; the
+    // highlight's `0x87a28c`). nil clears the slot and destroys the old region (`0x781b5a` →
+    // `0x778fd0`): unhooked but alive, it would draw in every state. A string or a number is a
+    // path (`0x781b33`, `lua_tostring` converting a number as `%.14g`); no argument is not nil
+    // (`0x781b4f`) and raises the usage.
+    let method = usage.split('(').next().unwrap_or(usage);
+    let path = match super::region::slot_arg(lua, this, args, usage, method, true)? {
+        super::region::SlotArg::Object(rh) => {
             if install_slot(lua, this, slot, Some(rh))? {
                 if let Some(blend) = blend {
                     lua.app_data_mut::<Model>()
@@ -430,31 +432,8 @@ fn set_slot_texture(
             }
             return Ok(());
         }
-        // nil clears the slot and destroys the old region (`0x781b5a` → `0x778fd0`): unhooked but
-        // alive, it would draw in every state. No argument is not nil (`0x781b4f`) and clears
-        // nothing.
-        Some(Value::Nil) => return install_slot(lua, this, slot, None).map(|_| ()),
-        _ => {}
-    }
-
-    // `lua_tostring` (`0x781b33`): a number converts as `%.14g`, as the stack's coercion does.
-    let path = match args.front() {
-        Some(v @ (Value::String(_) | Value::Number(_) | Value::Integer(_))) => {
-            lua.coerce_string(v.clone())?.map(|s| s.to_string_lossy())
-        }
-        _ => None,
-    };
-    let Some(path) = path else {
-        let who = {
-            let h = frame_handle_of(lua, this)?;
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            model
-                .arena
-                .frame(h)
-                .and_then(|f| f.name.clone())
-                .unwrap_or_else(|| "<unnamed>".to_string())
-        };
-        return Err(mlua::Error::runtime(format!("Usage: {who}:{usage}")));
+        super::region::SlotArg::Clear => return install_slot(lua, this, slot, None).map(|_| ()),
+        super::region::SlotArg::Path(path) => path,
     };
     let id = ensure_slot(lua, this, slot)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");

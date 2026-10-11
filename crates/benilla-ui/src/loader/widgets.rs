@@ -5,7 +5,8 @@ use crate::script::LabelFont;
 
 use super::regions::FontAttrs;
 use super::{
-    abs_dim, abs_value, children_named, children_named_any, color_of, tex_coords_of, Loader,
+    abs_dim, abs_value, children_named, children_named_any, color_of, tex_coords_of,
+    texture_source, Loader,
 };
 
 impl Loader<'_> {
@@ -63,26 +64,12 @@ impl Loader<'_> {
         if let Some(o) = el.attr("orientation") {
             self.call(wrapper, "SetOrientation", o.to_string(), dbg);
         }
-        let layer = el.attr("drawLayer").map(str::to_string);
+        let layer = el.attr("drawLayer");
         for bar in children_named(el, "BarTexture") {
-            let color = children_named(bar, "Color").next().map(color_of);
-            if let Some(file) = bar.attr("file") {
-                self.call(
-                    wrapper,
-                    "SetStatusBarTexture",
-                    (file.to_string(), layer.clone()),
-                    dbg,
-                );
-                // A `<Color>` beside `file=` is discarded, as on any texture (`0x76fe20`);
-                // `<BarColor>` is the bar's tint.
-            } else if let Some(c) = color {
-                self.call(
-                    wrapper,
-                    "SetStatusBarTexture",
-                    (c[0], c[1], c[2], c[3]),
-                    dbg,
-                );
-            }
+            // The file wins over a `<Color>` beside it, which is discarded as on any texture
+            // (`0x76fe20`); `<BarColor>` is the bar's tint.
+            let source = texture_source(bar);
+            self.install_texture(wrapper, "BarTexture", source, layer, dbg);
         }
         for bc in children_named(el, "BarColor") {
             let c = color_of(bc);
@@ -425,22 +412,13 @@ impl Loader<'_> {
                 self.call(wrapper, "SetValue", v, dbg);
             }
         }
-        let layer = el.attr("drawLayer").map(str::to_string);
+        let layer = el.attr("drawLayer");
         for raw in children_named(el, "ThumbTexture") {
             // As for a Button's state textures: `inherits=` expands, and a named thumb is
             // published (`ScrollFrame_OnScrollRangeChanged` reads it by name).
             let expanded = self.expand_region(raw);
             let tt = &expanded;
-            if let Some(file) = tt.attr("file") {
-                self.call(
-                    wrapper,
-                    "SetThumbTexture",
-                    (file.to_string(), layer.clone()),
-                    dbg,
-                );
-            } else if let Some(c) = children_named(tt, "Color").next().map(color_of) {
-                self.call(wrapper, "SetThumbTexture", (c[0], c[1], c[2], c[3]), dbg);
-            }
+            self.install_texture(wrapper, "ThumbTexture", texture_source(tt), layer, dbg);
             if let Ok(region) = wrapper.call_method::<Table>("GetThumbTexture", ()) {
                 if let Some(mode) = tt.attr("alphaMode") {
                     self.call_region(&region, "SetBlendMode", mode.to_string(), dbg);
@@ -474,39 +452,18 @@ impl Loader<'_> {
         if !el.tag.eq_ignore_ascii_case("ColorSelect") {
             return;
         }
-        let layer = el.attr("drawLayer").map(str::to_string);
-        for (tag, setter, getter) in [
-            (
-                "ColorWheelTexture",
-                "SetColorWheelTexture",
-                "GetColorWheelTexture",
-            ),
-            (
-                "ColorWheelThumbTexture",
-                "SetColorWheelThumbTexture",
-                "GetColorWheelThumbTexture",
-            ),
-            (
-                "ColorValueTexture",
-                "SetColorValueTexture",
-                "GetColorValueTexture",
-            ),
-            (
-                "ColorValueThumbTexture",
-                "SetColorValueThumbTexture",
-                "GetColorValueThumbTexture",
-            ),
+        for (tag, getter) in [
+            ("ColorWheelTexture", "GetColorWheelTexture"),
+            ("ColorWheelThumbTexture", "GetColorWheelThumbTexture"),
+            ("ColorValueTexture", "GetColorValueTexture"),
+            ("ColorValueThumbTexture", "GetColorValueThumbTexture"),
         ] {
             for raw in children_named(el, tag) {
                 let expanded = self.expand_region(raw);
                 let tt = &expanded;
-                if let Some(file) = tt.attr("file") {
-                    self.call(wrapper, setter, (file.to_string(), layer.clone()), dbg);
-                } else if let Some(c) = children_named(tt, "Color").next().map(color_of) {
-                    self.call(wrapper, setter, (c[0], c[1], c[2], c[3]), dbg);
-                } else {
-                    self.call(wrapper, setter, (), dbg);
-                }
+                // The element has no `drawLayer` (`0x78b3f0` never reads it): the slot links its
+                // texture on its own layer.
+                self.install_texture(wrapper, tag, texture_source(tt), None, dbg);
                 if let Ok(region) = wrapper.call_method::<Table>(getter, ()) {
                     if let Some(mode) = tt.attr("alphaMode") {
                         self.call_region(&region, "SetBlendMode", mode.to_string(), dbg);

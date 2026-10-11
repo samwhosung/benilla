@@ -61,18 +61,20 @@ fn a_bar_texture_answers_one_to_get_tex_coord_modifies_rect() {
 }
 
 /// `lua_isstring` accepts a number and `lua_tostring` converts it (`0x78fa35`..`0x78fa51`), so
-/// `1` is the file `"1"`; the `(r, g, b)` form of an older client is the path `"0.2"`.
+/// `1` is the file `"1"`, and the `(r, g, b)` form of an older client is the path `"0.2"` with the
+/// two other numbers read as a layer name that is none. `GetTexture` answers a path without its
+/// extension, so `"0.2"` reads `"0"`; the quad is what shows the whole file name.
 #[test]
 fn a_number_loads_as_its_own_path() {
-    let s = script();
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
     s.run(
         r#"
         local sb = CreateFrame("StatusBar", "NumBar")
+        sb:SetPoint("CENTER", 0, 0) sb:SetWidth(50) sb:SetHeight(50)
+        sb:SetMinMaxValues(0, 1) sb:SetValue(1)
         sb:SetStatusBarTexture(0.2, 0.7, 0.2)
-        assert(sb:GetStatusBarTexture():GetTexture() == "0.2", sb:GetStatusBarTexture():GetTexture())
-        sb:SetStatusBarTexture(1)
-        assert(sb:GetStatusBarTexture():GetTexture() == "1")
-
+        assert(sb:GetStatusBarTexture():GetTexture() ~= "Solid Texture", "no solid fill")
         local sl = CreateFrame("Slider", "NumSlider")
         sl:SetThumbTexture(2, 0.5, 0.5, 1)
         assert(sl:GetThumbTexture():GetTexture() == "2")
@@ -82,9 +84,27 @@ fn a_number_loads_as_its_own_path() {
         cs:SetColorValueThumbTexture(4)
         assert(cs:GetColorWheelThumbTexture():GetTexture() == "3")
         assert(cs:GetColorValueThumbTexture():GetTexture() == "4")
+
+        local one = CreateFrame("StatusBar", "NumBarOne")
+        one:SetStatusBarTexture(1)
+        assert(one:GetStatusBarTexture():GetTexture() == "1")
     "#,
     )
     .unwrap();
+    s.resolve();
+    let paths: Vec<String> = s
+        .extract()
+        .iter()
+        .filter_map(|q| match &q.content {
+            QuadContent::Texture {
+                path: Some(p),
+                color: None,
+                ..
+            } => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(paths.contains(&"0.2".to_string()), "{paths:?}");
 }
 
 /// No argument is not nil (`0x6f3400` answers -1), and any other type is no texture either: the

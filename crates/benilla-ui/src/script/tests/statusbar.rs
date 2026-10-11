@@ -73,7 +73,11 @@ fn statusbar_bar_region_scales_by_fraction_on_extract() {
         local b = CreateFrame("StatusBar", "SbFill")
         b:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 100, 100)
         b:SetWidth(200); b:SetHeight(20)
-        b:SetStatusBarTexture(0.2, 0.7, 0.2)
+        -- A solid bar is a texture filled with a colour, installed as the object: the bar setter
+        -- has no colour form (`0x78f870`).
+        local fill = b:CreateTexture(nil, "ARTWORK")
+        fill:SetTexture(0.2, 0.7, 0.2)
+        b:SetStatusBarTexture(fill)
         b:SetMinMaxValues(0, 100)
         b:SetValue(25)
     "#,

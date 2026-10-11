@@ -8,13 +8,16 @@
 
 use mlua::{Lua, Table, Value};
 
-use super::object::{draw_layer_from_str, frame_handle_of};
+use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
-use super::region::{install_into_slot, region_wrapper, texture_object_arg};
-use super::{event, Model, RegionData};
+use super::region::{
+    apply_source, install_into_slot, new_texture_region, region_wrapper, set_texture_path,
+    slot_arg, SlotArg, TextureSource,
+};
+use super::{event, Model};
 use crate::layout::Rect;
 use crate::order::DrawLayer;
-use crate::widget::{ColorSelectState, FrameHandle, KindState, RegionHandle, RegionKind};
+use crate::widget::{ColorSelectState, FrameHandle, KindState, RegionHandle};
 
 /// Registry key of the ColorSelect method table (the MAXCSTACK discipline: a Lua-side root).
 pub(super) const REG_COLORSELECT_METHODS: &str = "__benilla_colorselect_methods";
@@ -58,16 +61,6 @@ impl Slot {
         }
     }
 
-    fn set(self, s: &mut ColorSelectState, rh: RegionHandle) {
-        let slot = match self {
-            Slot::Wheel => &mut s.wheel,
-            Slot::WheelThumb => &mut s.wheel_thumb,
-            Slot::ValueStrip => &mut s.value_strip,
-            Slot::ValueThumb => &mut s.value_thumb,
-        };
-        *slot = Some(rh);
-    }
-
     fn set_opt(self, s: &mut ColorSelectState, rh: Option<RegionHandle>) {
         match self {
             Slot::Wheel => s.wheel = rh,
@@ -87,58 +80,34 @@ impl Slot {
     }
 }
 
-/// Get-or-create one slot's texture region, `layer` re-layering an existing one; returns its id.
-fn ensure_slot(lua: &Lua, this: &Table, slot: Slot, layer: Option<DrawLayer>) -> mlua::Result<u32> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+impl Slot {
+    /// Whether the slot has a path leg: the markers do (`0x78b7b0`), the wheel and the strip take
+    /// an object or nil alone (`0x78de90`, `0x78e450`).
+    fn has_path_leg(self) -> bool {
+        matches!(self, Slot::WheelThumb | Slot::ValueThumb)
+    }
 
-    let existing = match &model
-        .arena
-        .frame(h)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?
-        .kind_state
-    {
-        KindState::ColorSelect(s) => slot.get(s),
-        _ => return Err(mlua::Error::runtime("not a ColorSelect")),
-    };
-
-    let rh = match existing {
-        Some(rh) => {
-            if let (Some(l), Some(region)) = (layer, model.arena.region_mut(rh)) {
-                region.draw_layer = l;
-            }
-            rh
-        }
-        None => {
-            let rh = model
-                .arena
-                .create_region(h, RegionKind::Texture, layer.unwrap_or(slot.layer()), 0)
-                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-            model.region_data.insert(rh, RegionData::default());
-            model.touch_layout_region(rh);
-            if let Some(frame) = model.arena.frame_mut(h) {
-                if let KindState::ColorSelect(s) = &mut frame.kind_state {
-                    slot.set(s, rh);
-                }
-            }
-            rh
-        }
-    };
-    Ok(model.region_id(rh))
+    fn of_tag(tag: &str) -> Option<Slot> {
+        Some(match tag {
+            "ColorWheelTexture" => Slot::Wheel,
+            "ColorWheelThumbTexture" => Slot::WheelThumb,
+            "ColorValueTexture" => Slot::ValueStrip,
+            "ColorValueThumbTexture" => Slot::ValueThumb,
+            _ => return None,
+        })
+    }
 }
 
 /// Install `incoming` into `slot`, or clear it, through the slot hooks: the wheel `0x78b580` and
 /// the strip `0x78b8a0` link on ARTWORK and replace the texture's image with the generated one
 /// (`0x770300`), so it ends file-less here, where the renderer paints it; the markers
 /// `0x78b850`/`0x78ba90` link on OVERLAY and clear their anchors (`0x767ed0`).
-fn install_slot(
-    lua: &Lua,
-    this: &Table,
+fn install_slot_model(
+    model: &mut Model,
+    h: FrameHandle,
     slot: Slot,
     incoming: Option<RegionHandle>,
 ) -> mlua::Result<()> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     if !matches!(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::ColorSelect(_))
@@ -147,7 +116,7 @@ fn install_slot(
     }
     let thumb = matches!(slot, Slot::WheelThumb | Slot::ValueThumb);
     let changed = install_into_slot(
-        &mut model,
+        model,
         h,
         incoming,
         slot.layer(),
@@ -165,14 +134,61 @@ fn install_slot(
     )?;
     // The same texture returned at the first compare (`0x78b598`) and keeps what it was set to.
     if let (true, Some(rh), false) = (changed, incoming, thumb) {
-        super::region::clear_texture(&mut model, rh);
+        super::region::clear_texture(model, rh);
     }
     Ok(())
 }
 
-/// `Set<Slot>Texture([path [, drawLayer]] | r, g, b [, a])`, plus an empty form that only creates
-/// the region: what `<ColorWheelTexture/>` means. A file-less slot is where the app renderer paints
-/// the disc and strip the reference computes (`0x78b580`, `0x78b8a0`).
+/// A ColorSelect element's texture child (`0x78b3f0`): the region the texture adder builds,
+/// installed as the slot's object. The wheel and the strip are painted by the renderer whatever
+/// the element names, so they take no source; the markers take the file or the colour.
+pub(super) fn install_loaded(
+    model: &mut Model,
+    h: FrameHandle,
+    tag: &str,
+    source: Option<TextureSource>,
+) -> mlua::Result<()> {
+    let slot = Slot::of_tag(tag)
+        .ok_or_else(|| mlua::Error::runtime(format!("not a ColorSelect texture: {tag}")))?;
+    let rh = new_texture_region(model, h, slot.layer())
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+    if slot.has_path_leg() {
+        apply_source(model, rh, source);
+    }
+    install_slot_model(model, h, slot, Some(rh))
+}
+
+/// A marker's path leg (`0x78b7b0`): a marker that exists has its file swapped and nothing else;
+/// with none, a texture is built, given the file and installed.
+fn set_marker_path(lua: &Lua, this: &Table, slot: Slot, path: &str) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let existing = match &model
+        .arena
+        .frame(h)
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?
+        .kind_state
+    {
+        KindState::ColorSelect(s) => slot.get(s),
+        _ => return Err(mlua::Error::runtime("not a ColorSelect")),
+    };
+    match existing {
+        Some(rh) => set_texture_path(&mut model, rh, path),
+        None => {
+            let rh = new_texture_region(&mut model, h, slot.layer())
+                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+            set_texture_path(&mut model, rh, path);
+            install_slot_model(&mut model, h, slot, Some(rh))?;
+        }
+    }
+    Ok(())
+}
+
+/// `Set<Slot>Texture(texture or "texture" or nil)` for the markers (`0x78e160`, `0x78e720`), a
+/// path leg beside the object and nil ones; the wheel and the strip (`0x78de90`, `0x78e450`) have
+/// `(texture or nil)` alone. No argument raises the usage, and there is no colour form. A file-less
+/// wheel or strip is where the app renderer paints the disc and strip the reference computes
+/// (`0x78b580`, `0x78b8a0`).
 fn install_slot_texture(
     lua: &Lua,
     m: &Table,
@@ -181,53 +197,27 @@ fn install_slot_texture(
     getter: &str,
 ) -> mlua::Result<()> {
     let method = setter.to_string();
+    let usage = if slot.has_path_leg() {
+        format!(r#"{setter}(texture or "texture" or nil)"#)
+    } else {
+        format!("{setter}(texture or nil)")
+    };
     m.set(
         setter,
         lua.create_function(move |lua, (this, args): (Table, mlua::MultiValue)| {
-            let nil = Value::Nil;
-            let arg = |i: usize| args.get(i).unwrap_or(&nil);
-            let (a1, a2, a3, a4) = (arg(0), arg(1), arg(2), arg(3));
-            let layer = match a2 {
-                Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
-                _ => None,
-            };
-            match args.front() {
-                Some(Value::Table(t)) => {
-                    let rh = texture_object_arg(lua, &this, t, &method)?;
-                    return install_slot(lua, &this, slot, Some(rh));
+            let arg = slot_arg(lua, &this, &args, &usage, &method, slot.has_path_leg())?;
+            let h = frame_handle_of(lua, &this)?;
+            match arg {
+                SlotArg::Object(rh) => {
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    install_slot_model(&mut model, h, slot, Some(rh))
                 }
-                Some(Value::Nil) => return install_slot(lua, &this, slot, None),
-                _ => {}
+                SlotArg::Clear => {
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    install_slot_model(&mut model, h, slot, None)
+                }
+                SlotArg::Path(path) => set_marker_path(lua, &this, slot, &path),
             }
-            let id = ensure_slot(lua, &this, slot, layer)?;
-            let rh = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                *model.id_to_region.get(&id).expect("colorselect region id")
-            };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let data = model.region_data.entry(rh).or_default();
-            match a1 {
-                Value::String(s) => {
-                    data.texture = Some(s.to_str()?.to_string());
-                    data.fill = None;
-                }
-                Value::Number(_) | Value::Integer(_) => {
-                    data.texture = None;
-                    data.fill = Some([
-                        num_f32(a1),
-                        num_f32(a2),
-                        num_f32(a3),
-                        match a4 {
-                            Value::Nil => 1.0,
-                            v => num_f32(v),
-                        },
-                    ]);
-                }
-                // The empty form: the region now exists and stays file-less.
-                _ => {}
-            }
-            model.touch_layout_art(rh);
-            Ok(())
         })?,
     )?;
     m.set(
@@ -245,14 +235,6 @@ fn install_slot_texture(
         })?,
     )?;
     Ok(())
-}
-
-fn num_f32(v: &Value) -> f32 {
-    match v {
-        Value::Number(n) => *n as f32,
-        Value::Integer(i) => *i as f32,
-        _ => 0.0,
-    }
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {

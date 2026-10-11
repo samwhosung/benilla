@@ -8,14 +8,17 @@
 
 use mlua::{Lua, Table, Value};
 
-use super::object::{draw_layer_from_str, frame_handle_of};
+use super::object::frame_handle_of;
 use super::pointer::point_in_rect;
-use super::region::{install_into_slot, region_wrapper, texture_object_arg};
-use super::{event, Model, RegionData};
+use super::region::{
+    apply_source, install_into_slot, new_texture_region, region_wrapper, set_texture_path,
+    slot_arg, SlotArg, TextureSource,
+};
+use super::{event, Model};
 use crate::layout::Rect;
 use crate::order::DrawLayer;
 use crate::widget::{
-    slider_fraction, slider_grab, FrameHandle, KindState, RegionHandle, RegionKind, SliderState,
+    slider_fraction, slider_grab, FrameHandle, KindState, RegionHandle, SliderState,
 };
 
 pub(super) const REG_SLIDER_METHODS: &str = "__benilla_slider_methods";
@@ -39,56 +42,15 @@ fn with_slider<T>(
     }
 }
 
-/// Get or create the thumb texture region and return its id; `layer` re-layers an existing thumb,
-/// and a new one defaults to OVERLAY (`0x789580`).
-fn ensure_thumb(lua: &Lua, this: &Table, layer: Option<DrawLayer>) -> mlua::Result<u32> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-
-    let existing = match &model
-        .arena
-        .frame(h)
-        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?
-        .kind_state
-    {
-        KindState::Slider(s) => s.thumb,
-        _ => return Err(mlua::Error::runtime("not a Slider")),
-    };
-
-    let rh = match existing {
-        Some(rh) => {
-            if let (Some(l), Some(region)) = (layer, model.arena.region_mut(rh)) {
-                region.draw_layer = l;
-            }
-            rh
-        }
-        None => {
-            let rh = model
-                .arena
-                .create_region(
-                    h,
-                    RegionKind::Texture,
-                    layer.unwrap_or(DrawLayer::Overlay),
-                    0,
-                )
-                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
-            model.region_data.insert(rh, RegionData::default());
-            model.touch_layout_region(rh);
-            if let Some(frame) = model.arena.frame_mut(h) {
-                if let KindState::Slider(s) = &mut frame.kind_state {
-                    s.thumb = Some(rh);
-                }
-            }
-            rh
-        }
-    };
-    Ok(model.region_id(rh))
-}
-
-/// Install `incoming` as the thumb, or clear it, through `0x789860`.
-fn install_thumb(lua: &Lua, this: &Table, incoming: Option<RegionHandle>) -> mlua::Result<()> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+/// Install `incoming` as the thumb on `layer`, or clear it, through `0x789860`: the same texture
+/// is a no-op, the displaced one is deleted, the incoming one is linked in shown and loses its
+/// anchors (`0x789893`), the widget placing it.
+fn install_thumb_model(
+    model: &mut Model,
+    h: FrameHandle,
+    incoming: Option<RegionHandle>,
+    layer: DrawLayer,
+) -> mlua::Result<()> {
     if !matches!(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::Slider(_))
@@ -96,10 +58,10 @@ fn install_thumb(lua: &Lua, this: &Table, incoming: Option<RegionHandle>) -> mlu
         return Err(mlua::Error::runtime("not a Slider"));
     }
     install_into_slot(
-        &mut model,
+        model,
         h,
         incoming,
-        DrawLayer::Overlay,
+        layer,
         true,
         true,
         |ks| match ks {
@@ -113,6 +75,51 @@ fn install_thumb(lua: &Lua, this: &Table, incoming: Option<RegionHandle>) -> mlu
         },
     )
     .map(|_| ())
+}
+
+/// `<ThumbTexture>` (`0x789580`): the region the texture adder builds from the file or the colour,
+/// installed as an object on the element's `drawLayer`, OVERLAY without one. Neither builds nothing.
+pub(super) fn install_loaded(
+    model: &mut Model,
+    h: FrameHandle,
+    source: Option<TextureSource>,
+    layer: Option<DrawLayer>,
+) -> mlua::Result<()> {
+    if source.is_none() {
+        return Ok(());
+    }
+    let layer = layer.unwrap_or(DrawLayer::Overlay);
+    let rh = new_texture_region(model, h, layer)
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+    apply_source(model, rh, source);
+    install_thumb_model(model, h, Some(rh), layer)
+}
+
+/// `SetThumbTexture`'s path leg (`0x7897c0`): a thumb that exists has its file swapped and nothing
+/// else; with none, a texture is built, given the file and installed on OVERLAY (`0x790431`'s
+/// layer).
+fn set_thumb_path(lua: &Lua, this: &Table, path: &str) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let existing = match &model
+        .arena
+        .frame(h)
+        .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?
+        .kind_state
+    {
+        KindState::Slider(s) => s.thumb,
+        _ => return Err(mlua::Error::runtime("not a Slider")),
+    };
+    match existing {
+        Some(rh) => set_texture_path(&mut model, rh, path),
+        None => {
+            let rh = new_texture_region(&mut model, h, DrawLayer::Overlay)
+                .ok_or_else(|| mlua::Error::runtime("stale frame handle"))?;
+            set_texture_path(&mut model, rh, path);
+            install_thumb_model(&mut model, h, Some(rh), DrawLayer::Overlay)?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -181,57 +188,33 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // A 1.12 Slider has no enabled state: `Enable`/`Disable`/`IsEnabled` exist only in the Button
     // table (`0x879d00`: `0x77fef0`, `0x77ffd0`, `0x7800b0`), so a Slider must not answer them.
 
-    // `SetThumbTexture(texture)` installs the object as the thumb, linked on OVERLAY (the constant
-    // `0x790431` passes) with its anchors cleared (`0x789893`), displacing the old thumb; nil
-    // clears it (`0x790473`). Otherwise `(path [, layer])` or `(r, g, b [, a])`, a region's two
-    // `SetTexture` forms, on the thumb region, created on first use.
+    // `SetThumbTexture(texture or "texture" or nil)` (`0x7902b0`): a Texture object is installed as
+    // the thumb, linked on OVERLAY (the constant `0x790431` passes) with its anchors cleared
+    // (`0x789893`), displacing the old thumb; a string or a number is the thumb's path
+    // (`0x790442`), and nil clears it (`0x790473`). It reads no layer and has no colour form.
     m.set(
         "SetThumbTexture",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
-            let nil = Value::Nil;
-            let arg = |i: usize| args.get(i).unwrap_or(&nil);
-            let (a1, a2, a3, a4) = (arg(0), arg(1), arg(2), arg(3));
-            let layer = match a2 {
-                Value::String(s) => s.to_str().ok().and_then(|l| draw_layer_from_str(&l)),
-                _ => None,
-            };
-            match args.front() {
-                Some(Value::Table(t)) => {
-                    let rh = texture_object_arg(lua, &this, t, "SetThumbTexture")?;
-                    return install_thumb(lua, &this, Some(rh));
+            match slot_arg(
+                lua,
+                &this,
+                &args,
+                r#"SetThumbTexture(texture or "texture" or nil)"#,
+                "SetThumbTexture",
+                true,
+            )? {
+                SlotArg::Object(rh) => {
+                    let h = frame_handle_of(lua, &this)?;
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    install_thumb_model(&mut model, h, Some(rh), DrawLayer::Overlay)
                 }
-                Some(Value::Nil) => return install_thumb(lua, &this, None),
-                _ => {}
+                SlotArg::Clear => {
+                    let h = frame_handle_of(lua, &this)?;
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                    install_thumb_model(&mut model, h, None, DrawLayer::Overlay)
+                }
+                SlotArg::Path(path) => set_thumb_path(lua, &this, &path),
             }
-            let id = ensure_thumb(lua, &this, layer)?;
-            let rh = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                *model.id_to_region.get(&id).expect("thumb region id")
-            };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let data = model.region_data.entry(rh).or_default();
-            match a1 {
-                Value::String(s) => {
-                    data.texture = Some(s.to_str()?.to_string());
-                    data.fill = None;
-                }
-                // A solid thumb and a path share one slot; each clears the other.
-                Value::Number(_) | Value::Integer(_) => {
-                    data.texture = None;
-                    data.fill = Some([
-                        num_f32(a1),
-                        num_f32(a2),
-                        num_f32(a3),
-                        match a4 {
-                            Value::Nil => 1.0,
-                            v => num_f32(v),
-                        },
-                    ]);
-                }
-                _ => {}
-            }
-            model.touch_layout_art(rh);
-            Ok(())
         })?,
     )?;
     m.set(
@@ -273,14 +256,6 @@ fn fire_value_changed(lua: &Lua, this: &Table, changed: Option<f32>) -> mlua::Re
             .record_lua_error(&e);
     }
     Ok(())
-}
-
-fn num_f32(v: &Value) -> f32 {
-    match v {
-        Value::Number(n) => *n as f32,
-        Value::Integer(i) => *i as f32,
-        _ => 0.0,
-    }
 }
 
 // ── Thumb geometry and drag ──────────────────────────────────────────────────────────────────

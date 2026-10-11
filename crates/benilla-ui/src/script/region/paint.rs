@@ -309,9 +309,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // SetTexCoordModifiesRect/GetTexCoordModifiesRect (`0x79c080`/`0x79c120`, table `0x87c128`):
-    // the setter is the only writer of `[texture+0x124]`, the getter answers 1 or nil. Stored, not
-    // applied: there a set flag makes `SetTexCoord` re-derive the rect from the UV quad
-    // (`0x770462`).
+    // the setter writes `[texture+0x124]` (`0x79c113`), as does installing the texture as a
+    // StatusBar's bar (`0x783220`); the getter answers 1 or nil. Stored, not applied: there a set
+    // flag makes `SetTexCoord` re-derive the rect from the UV quad (`0x770462`).
     m.set(
         "SetTexCoordModifiesRect",
         lua.create_function(|lua, (this, arg): (Table, Value)| {

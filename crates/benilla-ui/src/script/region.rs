@@ -142,6 +142,117 @@ pub(super) fn install_into_slot(
     Ok(true)
 }
 
+/// What a widget's texture setter was handed (`SetStatusBarTexture` `0x78f870`, `SetThumbTexture`
+/// `0x7902b0`, `SetNormalTexture` `0x781970`, the ColorSelect four): a Texture object, a path, or
+/// nil to clear.
+pub(super) enum SlotArg {
+    Object(RegionHandle),
+    Path(String),
+    Clear,
+}
+
+/// The setter's fork on its first argument. A table is a Texture object (`lua_type` 5), a string
+/// or a number a path where the setter has a path leg (`lua_isstring` `0x6f3510`, then
+/// `lua_tostring` `0x6f3690`, so `1` is the file `"1"`), nil (type 0) clears; anything else, no
+/// argument included (type -1), raises `Usage: <name>:<usage>`. `object_method` names the setter in
+/// the object leg's two raises, as each setter's own format string prints it.
+pub(super) fn slot_arg(
+    lua: &Lua,
+    this: &Table,
+    args: &MultiValue,
+    usage: &str,
+    object_method: &str,
+    path_leg: bool,
+) -> mlua::Result<SlotArg> {
+    match args.front() {
+        Some(Value::Table(t)) => {
+            return texture_object_arg(lua, this, t, object_method).map(SlotArg::Object)
+        }
+        Some(Value::Nil) => return Ok(SlotArg::Clear),
+        Some(v @ (Value::String(_) | Value::Number(_) | Value::Integer(_))) if path_leg => {
+            if let Some(path) = lua.coerce_string(v.clone())? {
+                return Ok(SlotArg::Path(path.to_string_lossy()));
+            }
+        }
+        _ => {}
+    }
+    let who = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        super::object::frame_handle_of(lua, this)
+            .ok()
+            .and_then(|h| model.arena.frame(h).and_then(|f| f.name.clone()))
+            .unwrap_or_else(|| "<unnamed>".to_string())
+    };
+    Err(mlua::Error::runtime(format!("Usage: {who}:{usage}")))
+}
+
+/// A fresh anchorless Texture region of `owner` on `layer`, as the client builds the texture a
+/// path leg loads (`0x76fc40`) before it installs it as an object.
+pub(super) fn new_texture_region(
+    model: &mut Model,
+    owner: crate::widget::FrameHandle,
+    layer: crate::order::DrawLayer,
+) -> Option<RegionHandle> {
+    let rh = model
+        .arena
+        .create_region(owner, RegionKind::Texture, layer, 0)?;
+    model.region_data.insert(rh, super::RegionData::default());
+    model.touch_layout_region(rh);
+    Some(rh)
+}
+
+/// `CSimpleTexture::SetTexture(path)` (`0x770200`) on a region: the file replaces a solid fill, and
+/// `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
+pub(super) fn set_texture_path(model: &mut Model, rh: RegionHandle, path: &str) {
+    let data = model.region_data.entry(rh).or_default();
+    data.texture = (!path.is_empty()).then(|| path.to_string());
+    data.fill = None;
+    model.touch_layout_art(rh);
+}
+
+/// What a widget element's texture child supplies the loader: the texture adder (`0x6f26f0`) reads
+/// a file, else a `<Color>` fill, and the widget then installs the object it built.
+pub(crate) enum TextureSource {
+    File(String),
+    Fill([f32; 4]),
+}
+
+/// The loader's install of a `<BarTexture>`, `<ThumbTexture>` or one of ColorSelect's four
+/// textures (`tag`): a new region built from `source` and installed as the widget's object, never
+/// through a Lua setter. `layer` is the element's `drawLayer` for the bar and the thumb. ColorSelect's
+/// wheel and strip are painted by the client whatever the element says (`0x770300`), so they take
+/// no source.
+pub(crate) fn install_loaded_texture(
+    lua: &Lua,
+    this: &Table,
+    tag: &str,
+    source: Option<TextureSource>,
+    layer: Option<&str>,
+) -> mlua::Result<()> {
+    let h = super::object::frame_handle_of(lua, this)?;
+    let layer = layer.and_then(super::object::draw_layer_from_str);
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    match tag {
+        "BarTexture" => super::statusbar::install_loaded(&mut model, h, source, layer),
+        "ThumbTexture" => super::slider::install_loaded(&mut model, h, source, layer),
+        _ => super::colorselect::install_loaded(&mut model, h, tag, source),
+    }
+}
+
+/// Give a new region the loader's source: the file, or the solid fill.
+pub(super) fn apply_source(model: &mut Model, rh: RegionHandle, source: Option<TextureSource>) {
+    match source {
+        Some(TextureSource::File(path)) => set_texture_path(model, rh, &path),
+        Some(TextureSource::Fill(c)) => {
+            let data = model.region_data.entry(rh).or_default();
+            data.texture = None;
+            data.fill = Some(c);
+            model.touch_layout_art(rh);
+        }
+        None => {}
+    }
+}
+
 /// The region's shown bit (`+0xc4`) as `IsShown` reads it (`0x79b9b0`): the one bit `Show`/`Hide`
 /// write, and a Button's state switch writes for its state and checked textures.
 fn region_shown(model: &Model, rh: RegionHandle) -> bool {
