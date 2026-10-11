@@ -99,6 +99,8 @@ pub(crate) struct ChatBubbles {
     assigned: HashMap<u64, usize>,
     /// Frame to pool slot, never removed.
     by_frame: HashMap<FrameHandle, usize>,
+    /// The active list (`[0xb6f038]`) as the last sync left it: the live slots, farthest first.
+    active: Vec<usize>,
 }
 
 impl UiScript {
@@ -106,13 +108,20 @@ impl UiScript {
     /// each new one, then write each live bubble's level, alpha, visibility and seat.
     pub fn sync_chat_bubbles(&mut self, geometry: BubbleGeometry, states: &[BubbleState]) {
         let lua = self.lua();
+        // The font a new bubble takes: `FrameScript_GetText` on `NAMEPLATE_FONT` (`0x4b0b36` →
+        // `0x703bf0`), whose `_G[key]` arm (`0x703c12`) answers the global's string, else the
+        // shared "" a missing or non-string global gives, which sets no font.
+        let font = || match lua.globals().get::<mlua::Value>("NAMEPLATE_FONT") {
+            Ok(mlua::Value::String(s)) => Some(s.to_string_lossy()).filter(|s| !s.is_empty()),
+            _ => None,
+        };
         let visibility = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // No WorldFrame (no interface loaded), no bubbles: no addon walks an invented root.
             let Some(world) = model.arena.lookup("WorldFrame") else {
                 return;
             };
-            sync(&mut model, world, geometry, states)
+            sync(&mut model, world, geometry, states, &font)
         };
         // Each a full transition with its handlers, in the order the sync issued them.
         for (frame, shown) in visibility {
@@ -139,13 +148,15 @@ fn sync(
     world: FrameHandle,
     geometry: BubbleGeometry,
     states: &[BubbleState],
+    font: &dyn Fn() -> Option<String>,
 ) -> Vec<(FrameHandle, bool)> {
     let mut visibility = Vec::new();
 
-    // Lines that ended, in pool order: the reference destroys them in its list walk (`0x4b1186`,
-    // `0x4b11c0`), before any new line this frame looks for a frame.
+    // Lines that ended, in the active list's order, farthest first, as the reference's walk
+    // (`0x4b1138`) meets and destroys them (`0x4b1186`, `0x4b11c0`), so they join the free list in
+    // that order, before any new line this frame looks for a frame.
     let live = |key: u64, line: u64| states.iter().any(|s| s.key == key && s.line == line);
-    for i in 0..model.chat_bubbles.bubbles.len() {
+    for i in std::mem::take(&mut model.chat_bubbles.active) {
         if let Some((key, line)) = model.chat_bubbles.bubbles[i].line {
             if !live(key, line) {
                 retire(model, i, &mut visibility);
@@ -159,7 +170,7 @@ fn sync(
             Some(&i) => i,
             None => {
                 // A new line: the spawn's acquire (`0x4b1870`), then its text (`0x4b1600`).
-                let i = acquire(model, world, geometry);
+                let i = acquire(model, world, geometry, font);
                 model.chat_bubbles.assigned.insert(state.key, i);
                 if model.chat_bubbles.bubbles[i].laid_out != Some(geometry) {
                     lay_out(model, i, geometry);
@@ -181,16 +192,22 @@ fn sync(
             geometry,
             &mut visibility,
         );
+        model.chat_bubbles.active.push(slot);
     }
     visibility
 }
 
 /// Take a frame for a new line: the free list's head, else a new one at the pool's tail.
-fn acquire(model: &mut Model, world: FrameHandle, geometry: BubbleGeometry) -> usize {
+fn acquire(
+    model: &mut Model,
+    world: FrameHandle,
+    geometry: BubbleGeometry,
+    font: &dyn Fn() -> Option<String>,
+) -> usize {
     if let Some(i) = model.chat_bubbles.free.pop_front() {
         return i;
     }
-    let bubble = create(model, world, geometry);
+    let bubble = create(model, world, geometry, font());
     let i = model.chat_bubbles.bubbles.len();
     model.chat_bubbles.by_frame.insert(bubble.frame, i);
     model.chat_bubbles.bubbles.push(bubble);
@@ -214,7 +231,12 @@ fn retire(model: &mut Model, i: usize, visibility: &mut Vec<(FrameHandle, bool)>
 
 /// Build one bubble (`0x4b0940`): the Frame under the `WorldFrame`, the backdrop's nine regions,
 /// the tail, the text, and the frame's two anchors on the text.
-fn create(model: &mut Model, world: FrameHandle, g: BubbleGeometry) -> Bubble {
+fn create(
+    model: &mut Model,
+    world: FrameHandle,
+    g: BubbleGeometry,
+    font: Option<String>,
+) -> Bubble {
     // Anonymous: the pool passes no name.
     let frame = model.arena.create(FrameKind::Frame, None, Some(world));
     // `SetParent 0x76ab10`: the parent's stratum and its level plus one, until the first level
@@ -230,7 +252,8 @@ fn create(model: &mut Model, world: FrameHandle, g: BubbleGeometry) -> Bubble {
         .set_frame_level(frame, level.saturating_add(1), false);
 
     // The backdrop first (`0x4b0a35` → `0x76a5d0`): edge mask 0xff and tile on (`0x4b09bf`,
-    // `0x4b09c6`), one border unit for the edge size, the tile size and the four insets.
+    // `0x4b09c6`), one border unit for the four insets (`0x4b09ec`-`0x4b09f5`), the edge size
+    // (`0x4b0a12`, `+0x48`) and the tile size (`0x4b0a2f`, `+0x4c`).
     backdrop::install(
         model,
         frame,
@@ -254,9 +277,10 @@ fn create(model: &mut Model, world: FrameHandle, g: BubbleGeometry) -> Bubble {
         .arena
         .create_region(frame, RegionKind::FontString, DrawLayer::Artwork, 0)
         .expect("live bubble");
-    // `NAMEPLATE_FONT` with no flags (`0x4b0b2b`): no outline, no shadow.
+    // The `NAMEPLATE_FONT` global's font with no flags (`0x4b0b2b`-`0x4b0b42`): no outline, no
+    // shadow.
     let data = model.region_data.entry(text).or_default();
-    data.font_path = Some(super::nameplate::PLATE_FONT.to_string());
+    data.font_path = font;
     data.font_explicit.face = true;
     model.touch_layout_frame(frame);
     model.touch_layout_region(tail);

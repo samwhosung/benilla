@@ -423,3 +423,50 @@ fn a_resize_re_sizes_the_live_bubble_in_place() {
     assert_eq!(tail_w, 20.0);
     assert_eq!(edge_w, 20.0, "the corner piece takes the new edge size");
 }
+
+/// Lines that end together go back to the pool in the active list's order, farthest first, as
+/// the reference's walk destroys them (`0x4b1138`); the next line takes the first of them.
+#[test]
+fn ended_lines_retire_farthest_first() {
+    let mut s = vm();
+    // Pooled A then B, but B is the farther, so first in the list.
+    drive(&mut s, &[say(1, 1, "a")]);
+    drive(&mut s, &[say(2, 1, "b"), say(1, 1, "a")]);
+    s.run(r#"local a, b = WorldFrame:GetChildren() a.mark, b.mark = "A", "B""#)
+        .unwrap();
+    drive(&mut s, &[]);
+    drive(&mut s, &[say(3, 1, "c")]);
+    assert_eq!(
+        s.eval::<String>(
+            r#"local a, b = WorldFrame:GetChildren()
+               if a:IsShown() then return a.mark end return b.mark"#
+        )
+        .unwrap(),
+        "B",
+        "the farther bubble retired first, so it is reused first"
+    );
+}
+
+/// The text's font is the `NAMEPLATE_FONT` global's, read when the bubble is built (`0x4b0b36` →
+/// `0x703bf0`); no global, no font.
+#[test]
+fn the_text_takes_the_nameplate_font_global() {
+    let mut s = vm();
+    s.run(r#"NAMEPLATE_FONT = "Fonts\\ARIALN.TTF""#).unwrap();
+    drive(&mut s, &[say(1, 1, "a")]);
+    assert_eq!(
+        s.eval::<String>(
+            "local r = { (WorldFrame:GetChildren()):GetRegions() } return (r[11]:GetFont())"
+        )
+        .unwrap(),
+        "Fonts\\ARIALN.TTF"
+    );
+
+    let mut bare = vm();
+    drive(&mut bare, &[say(1, 1, "a")]);
+    assert!(bare
+        .eval::<bool>(
+            "local r = { (WorldFrame:GetChildren()):GetRegions() } return r[11]:GetFont() == nil"
+        )
+        .unwrap());
+}

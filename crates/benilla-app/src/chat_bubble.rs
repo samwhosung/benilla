@@ -8,8 +8,8 @@
 //!   bubble in turn hides the overhead name, [`BubblesActive`]), and the local player is within
 //!   20 yd (3-D). Self is not excluded. A new line replaces the old bubble, never queues.
 //! - Lifetime and fade (`0x4b0c30`): a 250 ms fade in, the line's [`duration_ms`], a 250 ms fade
-//!   out, then the frame goes back to the pool. Out of range it fades out and hides, and fades back
-//!   in on return.
+//!   out, then the frame goes back to the pool. Out of range, or with the speaker not drawn in the
+//!   last render ([`speaker_drawn`]), it fades out and hides, and fades back in on return.
 //! - Anchor (`0x4b0c30`): unit z + height × model scale + 0.7, the text's BOTTOM on the projected
 //!   point (`0x4b157a`), growing upward. The height is the Stand sequence box's Z extent from the
 //!   model header (`0x711a20`), not the posed attachment the overhead name reads (`0x608640`),
@@ -24,8 +24,7 @@
 //! reference law, so bubble text and plate text keep one em at every window size.
 //!
 //! Not built: the reference also ends a bubble whose speaker's model data is not resident
-//! (`0x7103d0`) and fades one whose scene-entity flag is set (`0x6704c0`); only distance is
-//! re-tested here.
+//! (`0x7103d0`); here a speaker with no model yet only counts as not drawn.
 
 use std::collections::HashMap;
 
@@ -212,7 +211,9 @@ struct Fade {
 }
 
 impl Fade {
-    /// A line's start (`0x4b17da`, then `0x4b17f7`): the flags reset, then the fade in.
+    /// A line's start (`0x4b17da`, then `0x4b17f7`): the flags reset, then the fade in. The alpha
+    /// is a new frame's (`0x7690d2`); a reused frame keeps what its last fade left, which this
+    /// does not track, and which matters only to a line whose first frame fades out.
     fn spawn(now: u64) -> Self {
         let mut f = Fade {
             flags: 0,
@@ -305,6 +306,22 @@ struct Bubble {
     fade: Fade,
 }
 
+/// Whether the speaker was drawn in the last render: the reference's scene-node test `0x6704c0`
+/// (`node && [node+0x94] == 0`, read at `0x4b0cab`). Every frame sets `[node+0x94]` on every node
+/// in the scene list `[0xca7d70]` (`0x698a07`) and clears it only for a node that passes the
+/// frustum test `0x682ef0` and the horizon test `0x686000` (`0x6833dd`-`0x6833ec`, and
+/// `0x68359b`-`0x6835aa` in WMO groups). Here it is any of the unit's meshes passing last frame's
+/// visibility check; benilla has no horizon cull yet, so that is the frustum verdict alone.
+fn speaker_drawn(
+    unit: Entity,
+    children: &Query<&Children>,
+    meshes: &Query<&ViewVisibility, With<Mesh3d>>,
+) -> bool {
+    children
+        .get(unit)
+        .is_ok_and(|kids| kids.iter().any(|c| meshes.get(c).is_ok_and(|v| v.get())))
+}
+
 /// The live bubbles by speaker guid, at most one per unit, and the next line's number.
 #[derive(Resource, Default)]
 struct Bubbles {
@@ -342,6 +359,8 @@ fn drive_bubbles(
     time: Res<Time>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut feed: ResMut<BubbleFeed>,
+    // The speakers' meshes and their last-frame visibility, for [`speaker_drawn`].
+    drawn: (Query<&Children>, Query<&ViewVisibility, With<Mesh3d>>),
 ) {
     active.0.clear();
     feed.states.clear();
@@ -412,11 +431,14 @@ fn drive_bubbles(
 
     // ── The per-frame pass (`0x4b1060` → `0x4b0c30`) ────────────────────────────────────────
     // A speaker gone (`0x4b117e`), or no local player (`0x4b0c40`), ends the bubble at once.
+    // A speaker not drawn in the last render takes the out-of-range leg (`0x4b0cb2` →
+    // `0x4b0cd7`): its bubble fades out and hides, and comes back when the speaker is drawn again.
     bubbles.live.retain(|guid, b| {
-        let (Some((_, _, tf)), Some(s)) = (find(*guid), self_tf) else {
+        let (Some((entity, _, tf)), Some(s)) = (find(*guid), self_tf) else {
             return false;
         };
-        let in_range = (tf.translation - s.translation).length_squared() < MAX_DIST_SQ;
+        let in_range = speaker_drawn(entity, &drawn.0, &drawn.1)
+            && (tf.translation - s.translation).length_squared() < MAX_DIST_SQ;
         b.fade.tick(now, in_range, b.born, b.duration)
     });
 
@@ -486,7 +508,9 @@ fn drive_bubbles(
                     // Short of the near plane (behind the camera) the projection writes no point
                     // (`0x483f7a`) and the placement ignores its verdict, seating the zeroed one
                     // (`0x4b14e4`): the text's BOTTOM on the screen's bottom-left corner. Bevy's
-                    // reverse-Z projection reports such a point as past either plane.
+                    // reverse-Z projection reports such a point as past either plane. Such a
+                    // speaker is not drawn, so the bubble is shown here only while its fade out
+                    // runs, at most 250 ms from the alpha it had, which a fresh line has at 255.
                     None => (0.0, 0.0),
                 },
             })
@@ -699,6 +723,86 @@ mod tests {
         assert_eq!(f.alpha, 153, "100 ms into the fade out");
         run(&mut f, 1320, 1320, true);
         assert_eq!(f.alpha, 0, "the fade in starts over");
+    }
+
+    /// A speaker culled from the last render takes the out-of-range leg: the bubble fades out and
+    /// hides while the speaker is undrawn, and shows again once it is drawn (`0x4b0cab`).
+    #[test]
+    fn a_culled_speaker_fades_its_bubble_out_and_back() {
+        use benilla_protocol::EntityKind;
+        use bevy::camera::visibility::SetViewVisibility;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.init_resource::<BubbleQueue>()
+            .init_resource::<BubbleConfig>()
+            .init_resource::<Bubbles>()
+            .init_resource::<BubblesActive>()
+            .init_resource::<BubbleFeed>()
+            .init_resource::<VPlates>()
+            .init_resource::<SelfGuid>()
+            .init_resource::<Time>()
+            .add_systems(Update, drive_bubbles);
+        let speaker = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                Guid(7),
+                Transform::from_xyz(5.0, 0.0, 0.0),
+            ))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((Mesh3d::default(), ViewVisibility::HIDDEN, ChildOf(speaker)))
+            .id();
+        app.world_mut().spawn((Embodied, Transform::default()));
+        let set_drawn = |app: &mut App, drawn: bool| {
+            let w = app.world_mut();
+            if drawn {
+                w.get_mut::<ViewVisibility>(body).unwrap().set_visible();
+            } else {
+                w.entity_mut(body).insert(ViewVisibility::HIDDEN);
+            }
+        };
+        // Run frames 10 ms apart up to `to` ms, and read the bubble's fade.
+        let mut now = 0u64;
+        let mut run_to = |app: &mut App, to: u64| -> Option<(u8, bool)> {
+            while now < to {
+                now += 10;
+                app.world_mut()
+                    .resource_mut::<Time>()
+                    .advance_by(Duration::from_millis(10));
+                app.update();
+            }
+            let b = app.world().resource::<Bubbles>();
+            b.live.get(&7).map(|b| (b.fade.alpha, b.fade.shown))
+        };
+
+        set_drawn(&mut app, true);
+        let cfg = BubbleConfig::default();
+        app.world_mut().resource_mut::<BubbleQueue>().push(
+            &cfg,
+            7,
+            ChatEventKind::Say,
+            "one two three four five six seven eight",
+        );
+        assert_eq!(run_to(&mut app, 400), Some((255, true)), "drawn: faded in");
+        set_drawn(&mut app, false);
+        assert_eq!(
+            run_to(&mut app, 800),
+            Some((0, false)),
+            "culled in range: faded out and hidden, still alive"
+        );
+        set_drawn(&mut app, true);
+        assert_eq!(
+            run_to(&mut app, 1200),
+            Some((255, true)),
+            "drawn again: shown and faded back in"
+        );
     }
 
     /// Both switches on, since a kind whose switch is off cannot show whether the gate admits it.
