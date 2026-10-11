@@ -1712,6 +1712,17 @@ impl Model {
         }
     }
 
+    /// A write that clears region `rh`'s valid bit and invalidates it, as a FontString's new
+    /// string (`0x771ea4`), font (`0x7715e0`) or spacing (`0x771666`) does: the next resolve stores
+    /// its rect whole, and that store reaches what anchors to it (`0x768cf0`).
+    pub(crate) fn clear_region_valid(&mut self, rh: RegionHandle) {
+        // A region with no id was never anchored, so it holds no rect.
+        self.touch_layout_region(rh);
+        if let Some(&id) = self.region_to_id.get(&rh) {
+            self.layout_force.push(id);
+        }
+    }
+
     /// Whether frame `h` holds a rect its inputs would not resolve to now: it has no anchors, or
     /// reads a target with no rect, so the rect stands only because nothing invalidated it since.
     pub(crate) fn frame_holds_stale(&self, h: FrameHandle) -> bool {

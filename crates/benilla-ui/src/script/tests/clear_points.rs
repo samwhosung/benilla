@@ -210,3 +210,66 @@ fn a_failed_texture_keeps_its_quad_and_a_failed_fontstring_does_not() {
     assert_eq!(drawn(&s, "Tex").map(|r| r.left), Some(130.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// `T` spans from `FS`'s top left to the bottom right of `X`; `X` is then cleared and invalidated,
+/// so it fails, and `T`, not reached, keeps its rect. `FS` is sized, so its text never moves it,
+/// and `T`'s art has no extent here, so it needs both anchors.
+fn stale_reader_of_a_label() -> UiScript {
+    let mut s = host();
+    s.run(
+        r#"
+        FS = Host:CreateFontString("FS", "ARTWORK")
+        FS:SetText("AAAA")
+        FS:SetPoint("BOTTOMLEFT", Host, "BOTTOMLEFT", 10, 10)
+        FS:SetWidth(40); FS:SetHeight(20)
+        X = CreateFrame("Frame", "X")
+        X:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 400, 300)
+        X:SetWidth(20); X:SetHeight(20)
+        T = Host:CreateTexture("T", "ARTWORK")
+        T:SetTexture("Interface\Buttons\WHITE8X8")
+        T:SetPoint("TOPLEFT", FS, "TOPLEFT", 0, 0)
+        T:SetPoint("BOTTOMRIGHT", X, "BOTTOMRIGHT", 0, 0)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(left(&mut s, "T"), Some(110.0));
+    s.run("X:ClearAllPoints(); X:SetWidth(10)").unwrap();
+    s.resolve();
+    assert_eq!(left(&mut s, "X"), None);
+    assert_eq!(left(&mut s, "T"), Some(110.0), "not reached");
+    s
+}
+
+/// A FontString's new string, font or spacing clears its valid bit before it invalidates
+/// (`0x771ea4`, `0x7715e0`, `0x771666`), so its next resolve stores whole and its rect-changed
+/// slot reaches `T`, which fails on `X` and keeps only its quad. The same value reaches nothing.
+#[test]
+fn a_labels_new_text_font_or_spacing_reaches_what_anchors_to_it() {
+    let mut wrong = Vec::new();
+    for (write, reaches) in [
+        (r#"FS:SetText("BBBB")"#, true),
+        (r#"FS:SetText("AAAA")"#, false),
+        (r#"FS:SetFont("Fonts\\ARIALN.TTF", 14)"#, true),
+        ("FS:SetSpacing(2)", true),
+        ("FS:SetSpacing(0)", false),
+    ] {
+        let mut s = stale_reader_of_a_label();
+        let quad = drawn(&s, "T").expect("drawn");
+        s.run(write).unwrap();
+        s.resolve();
+        let want = if reaches { None } else { Some(110.0) };
+        let got = left(&mut s, "T");
+        if got != want {
+            wrong.push(format!("{write}: T:GetLeft() {got:?}, want {want:?}"));
+        }
+        assert_eq!(
+            left(&mut s, "FS"),
+            Some(110.0),
+            "{write}: the label resolves"
+        );
+        assert_eq!(drawn(&s, "T"), Some(quad), "{write}: the quad stays");
+        assert!(s.errors().is_empty(), "{write}: {:?}", s.errors());
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

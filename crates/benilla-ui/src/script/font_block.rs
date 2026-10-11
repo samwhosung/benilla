@@ -264,6 +264,15 @@ pub(super) fn install(
                 d.font_explicit.height = true;
                 let after = (d.font_path.clone(), d.font_height, d.outline);
                 model.touch_measure(rh);
+                // A FontString's load of another face, height or flags clears its valid bit and
+                // invalidates (`0x7715e0`); the same font returns first (`0x771541`), and a freed
+                // one skips it (`0x7715b9`).
+                if kind == FontKind::FontString
+                    && load == Load::Loaded
+                    && before.as_ref() != Some(&after)
+                {
+                    model.clear_region_valid(rh);
+                }
                 drop(model);
                 // A load that changed the path, height or flags notifies (`0x79f32f` sets the
                 // change bits, `0x79f342` calls the notify).
@@ -423,6 +432,11 @@ pub(super) fn install(
                 // Clears inherit bit `0x10` (`0x79e37b`, `0x79fbb1`).
                 d.font_explicit.spacing = true;
                 model.touch_measure(rh);
+                // A FontString's new spacing clears its valid bit and invalidates (`0x771666`);
+                // the same one returns first (`0x77161c`).
+                if changed && kind == FontKind::FontString {
+                    model.clear_region_valid(rh);
+                }
                 changed
             };
             if changed {

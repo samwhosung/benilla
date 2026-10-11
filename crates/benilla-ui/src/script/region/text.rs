@@ -27,10 +27,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // or fills, which drops or takes up the measure the sweep reads.
             model.touch_measure(rh);
             model.touch_layout_text(rh, was_shown);
-            // New text clears the valid bit and invalidates (`0x771ea4`); the measure landing
-            // stands for that, except where a re-resolve would drop a rect the string holds.
+            // A new string clears the valid bit and invalidates (`0x771ea4`); the same one returns
+            // first (`0x771df1`).
             if !same {
-                model.invalidate_region(rh, false);
+                model.clear_region_valid(rh);
             }
             Ok(())
         })?,
