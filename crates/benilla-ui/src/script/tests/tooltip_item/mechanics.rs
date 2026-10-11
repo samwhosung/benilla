@@ -842,3 +842,46 @@ fn random_property_template_hover_shows_the_placeholder() {
         "an instance's known roll replaces the placeholder — got {texts:?}"
     );
 }
+
+/// An item whose template is not cached ends the builder in its own hide (`0x52b72e`–`0x52b73f`),
+/// which un-owns and clears: the clear zeroes the remembered item id (`0x5300dd`), so the cache
+/// callback (`0x52e530`) finds nothing to rebuild (`0x52e55e`), and the stock hover loop's
+/// `IsOwned` refresh (`ContainerFrame.lua:657`) stops. The plate stays down until the next hover.
+#[test]
+fn an_uncached_item_hides_and_un_owns_until_the_next_hover() {
+    let mut s = script();
+    s.run(
+        r#"
+        shows = 0
+        UncSlot = CreateFrame("Button", "UncSlot")
+        UncTip = CreateFrame("GameTooltip", "UncTip")
+        UncTip:SetScript("OnShow", function() shows = shows + 1 end)
+        UncTip:SetOwner(UncSlot, "ANCHOR_RIGHT")
+        SetItemByIdForTest(UncTip, 4242)
+        assert(UncTip:NumLines() == 0, "no line for a template in flight")
+        assert(not UncTip:IsShown(), "the builder's own hide")
+        assert(not UncTip:IsOwned(UncSlot), "and its un-own: the hover loop stops")
+        assert(shows == 0)
+        "#,
+    )
+    .unwrap();
+    s.set_item_template(
+        4242,
+        ItemTemplateView {
+            name: "Copper Bar".into(),
+            quality: 1,
+            ..Default::default()
+        },
+    );
+    s.tick(0.1);
+    s.run(
+        r#"
+        assert(not UncTip:IsShown(), "the template's arrival rebuilds nothing")
+        UncTip:SetOwner(UncSlot, "ANCHOR_RIGHT")
+        SetItemByIdForTest(UncTip, 4242)
+        assert(UncTip:IsShown() and UncTipTextLeft1:GetText() == "Copper Bar", "the next hover")
+        "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
