@@ -335,7 +335,7 @@ pub(super) fn show_or_hide_empty(lua: &Lua, h: FrameHandle) {
 /// stays, since only the paths in [`full_alpha`] reset it.
 fn cancel_fade(model: &mut Model, h: FrameHandle) {
     if let Ok(t) = tip_mut(model, h) {
-        if t.fade_start.take().is_some() {
+        if t.fade_left.take().is_some() {
             model.arena.set_alpha(h, 1.0);
         }
     }
@@ -345,14 +345,9 @@ fn cancel_fade(model: &mut Model, h: FrameHandle) {
 /// Show (`0x530a80`) and its self-hide (`0x530a60`, the core with no owner) reach it too.
 fn full_alpha(model: &mut Model, h: FrameHandle) {
     if let Ok(t) = tip_mut(model, h) {
-        t.fade_start = None;
+        t.fade_left = None;
     }
     model.arena.set_alpha(h, 1.0);
-}
-
-/// The engine's `GetTime` clock, which [`super::UiScript::tick`] advances.
-fn now(lua: &Lua) -> f64 {
-    crate::script::clock::now(lua)
 }
 
 /// Shows or hides as the Lua verbs do, handlers included.
@@ -669,47 +664,33 @@ pub(super) fn layout_tooltips(model: &mut Model) {
     }
 }
 
-/// Advances every fading tooltip: alpha ramps from 1 to 0 over [`TOOLTIP_FADE_SECS`], then the
-/// full hide.
-pub(super) fn tick_fades(lua: &Lua) {
-    let t = now(lua);
-    let mut ramping: Vec<(FrameHandle, f32)> = Vec::new();
-    let mut finished: Vec<FrameHandle> = Vec::new();
-    {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        // Roster-gated as in `layout_tooltips`, since `hide_tooltip` below writes layout.
-        for &h in model.arena.tooltip_kinds() {
-            if !model.frame_to_id.contains_key(&h) {
-                continue;
-            }
-            let Some(frame) = model.arena.frame(h) else {
-                continue;
-            };
-            let KindState::Tooltip(tip) = &frame.kind_state else {
-                continue;
-            };
-            let Some(start) = tip.fade_start else {
-                continue;
-            };
-            if !frame.shown {
-                finished.push(h); // hidden mid-fade by other means: just tidy the state
-                continue;
-            }
-            let a = 1.0 - ((t - start) / TOOLTIP_FADE_SECS) as f32;
-            if a <= 0.0 {
-                finished.push(h);
-            } else {
-                ramping.push((h, a));
-            }
-        }
-    }
-    {
+/// The tooltip's own update after its `OnUpdate` (`0x530b20`, from `0x530b9c`): an armed fade
+/// counts down by the elapsed time (`0x530baa`–`0x530bc2`) and ramps the alpha; at zero the full
+/// hide (`0x530bd8` full alpha, `0x530be9` the hide override), whose `OnHide` runs here, in the
+/// tooltip's place in the walk. Nothing gates it on shown, owner or lines.
+pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, elapsed: f32) {
+    let done = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        for (h, a) in ramping {
-            model.arena.set_alpha(h, a);
+        // Roster-gated as in `layout_tooltips`, since `hide_tooltip` writes layout.
+        if !model.frame_to_id.contains_key(&h) {
+            return;
         }
-    }
-    for h in finished {
+        let Ok(tip) = tip_mut(&mut model, h) else {
+            return;
+        };
+        let Some(left) = tip.fade_left else {
+            return;
+        };
+        let left = left - elapsed;
+        if left <= 0.0 {
+            true
+        } else {
+            tip.fade_left = Some(left);
+            model.arena.set_alpha(h, left / TOOLTIP_FADE_SECS);
+            false
+        }
+    };
+    if done {
         hide_tooltip(lua, h);
     }
 }

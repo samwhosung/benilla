@@ -49,6 +49,37 @@ pub enum FrameKind {
     Minimap,
 }
 
+/// A kind's own per-frame update: the `vtable+0x38` override the update walk calls in the frame's
+/// place (`0x765710`), which fires the frame's `OnUpdate` (`0x76b2c0`) first and then does the
+/// kind's engine work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KindUpdate {
+    /// `CSimpleEditBox`'s `0x77a790`: the flush, then the caret blink.
+    EditBox,
+    /// `CGameTooltip`'s `0x530b20`: the fade.
+    Tooltip,
+    /// `CSimpleModel`'s `0x76d7f0`, in the slot of every model kind's vtable (`0x81c608`,
+    /// `0x8084f8`, `0x8083a8`, `0x808260`): the scene clock and the completions it reports.
+    Model,
+}
+
+impl FrameKind {
+    /// The kind's own update, run in the walk after the frame's `OnUpdate`. The reference
+    /// overrides the slot on more kinds; benilla runs the message frames' fades (`0x786200`,
+    /// `0x788460`) after the walk, and models none of the rest there.
+    pub fn kind_update(self) -> Option<KindUpdate> {
+        match self {
+            FrameKind::EditBox => Some(KindUpdate::EditBox),
+            FrameKind::GameTooltip => Some(KindUpdate::Tooltip),
+            FrameKind::Model
+            | FrameKind::PlayerModel
+            | FrameKind::DressUpModel
+            | FrameKind::TabardModel => Some(KindUpdate::Model),
+            _ => None,
+        }
+    }
+}
+
 /// The kind of a [`Region`] leaf, the client's `CScriptRegion`-derived non-frame objects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RegionKind {
@@ -187,8 +218,10 @@ pub struct TooltipState {
     pub anchor: TooltipAnchor,
     /// `SetMinimumWidth`: a floor on the auto-sized width, cleared with the content.
     pub min_width: f32,
-    /// `FadeOut()`'s start on the `GetTime` clock; any fresh content or `Show` cancels the fade.
-    pub fade_start: Option<f64>,
+    /// `FadeOut()`'s countdown in seconds (`[+0x3b4]` armed, `[+0x3b8]` left): the tooltip's own
+    /// update counts it down by its elapsed, so it stands still while the tooltip is not walked.
+    /// Any fresh content or `Show` cancels it.
+    pub fade_left: Option<f32>,
     /// The guid of the unit this tooltip shows (`+0x368`/`+0x36c`, stored at `0x52a070`), whose
     /// health watcher (`0x467e70`, registered at `0x52a0a8`) drives the bar; a `set_unit` push of
     /// that unit, under any token, re-drives it.
@@ -212,7 +245,7 @@ pub const TOOLTIP_LINE_GAP: f32 = 2.0;
 /// The least double-line column gap, the stock `TextRightN` offset; the reference's is untraced.
 pub const TOOLTIP_DOUBLE_GAP: f32 = 40.0;
 /// `FadeOut`'s ramp length in seconds; the reference's constant is untraced.
-pub const TOOLTIP_FADE_SECS: f64 = 0.5;
+pub const TOOLTIP_FADE_SECS: f32 = 0.5;
 /// A wrap-flagged line's width, pinned when it is appended; the reference's column is untraced.
 pub const TOOLTIP_WRAP_WIDTH: f32 = 260.0;
 

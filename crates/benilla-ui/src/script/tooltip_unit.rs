@@ -12,7 +12,7 @@ use super::unit::{is_civilian_kill, level_reads_unknown, unknownobject};
 use super::{KindState, Model, UnitState};
 use crate::layout::{Anchor, Point};
 use crate::strings::{fill, Arg};
-use crate::widget::FrameHandle;
+use crate::widget::{FrameHandle, TOOLTIP_FADE_SECS};
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const GREEN: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
@@ -303,7 +303,7 @@ impl super::UiScript {
             let mut model = self.model_mut();
             if let Some(f) = model.arena.frame_mut(h) {
                 if let KindState::Tooltip(t) = &mut f.kind_state {
-                    if t.fade_start.take().is_some() {
+                    if t.fade_left.take().is_some() {
                         model.arena.set_alpha(h, 1.0);
                     }
                 }
@@ -404,7 +404,7 @@ impl super::UiScript {
             let mut model = self.model_mut();
             if let Some(f) = model.arena.frame_mut(h) {
                 if let KindState::Tooltip(t) = &mut f.kind_state {
-                    if t.fade_start.take().is_some() {
+                    if t.fade_left.take().is_some() {
                         model.arena.set_alpha(h, 1.0);
                     }
                 }
@@ -469,7 +469,7 @@ impl super::UiScript {
             let mut model = self.model_mut();
             if let Some(f) = model.arena.frame_mut(h) {
                 if let KindState::Tooltip(t) = &mut f.kind_state {
-                    if t.fade_start.take().is_some() {
+                    if t.fade_left.take().is_some() {
                         model.arena.set_alpha(h, 1.0);
                     }
                 }
@@ -525,15 +525,14 @@ impl super::UiScript {
     /// On hover loss, arm the world tooltip's timed fade (the reference's unit plate fades rather
     /// than hiding); a no-op unless a world-owned plate is shown.
     pub fn world_tooltip_fade(&mut self) {
-        let now = self.now();
         let mut model = self.model_mut();
         let Some(h) = model.arena.lookup("GameTooltip") else {
             return;
         };
         if let Some(f) = model.arena.frame_mut(h) {
             if let KindState::Tooltip(t) = &mut f.kind_state {
-                if t.world_owned && f.shown && t.fade_start.is_none() {
-                    t.fade_start = Some(now);
+                if t.world_owned && f.shown && t.fade_left.is_none() {
+                    t.fade_left = Some(TOOLTIP_FADE_SECS);
                 }
             }
         }

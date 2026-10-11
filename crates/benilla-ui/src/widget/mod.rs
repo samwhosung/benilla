@@ -120,12 +120,13 @@ mod kinds;
 pub use kinds::{
     model_key, slider_fraction, slider_grab, slider_set_value, ArmedSequence, ButtonFont,
     ButtonState, ButtonVisualState, ColorSelectState, EditAction, EditBoxState, EditOutcome,
-    EditUnit, FrameKind, InsertMode, KindState, MessageFrameState, MessageLine, MinimapState,
-    ModelFileFacts, ModelFog, ModelLight, ModelPlayHead, ModelState, RegionKind, ScrollFrameState,
-    ScrollingMessageState, SequenceFacts, SliderState, StatusBarState, TooltipAnchor, TooltipState,
-    MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL,
-    MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN, MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP,
-    TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD, TOOLTIP_WRAP_WIDTH,
+    EditUnit, FrameKind, InsertMode, KindState, KindUpdate, MessageFrameState, MessageLine,
+    MinimapState, ModelFileFacts, ModelFog, ModelLight, ModelPlayHead, ModelState, RegionKind,
+    ScrollFrameState, ScrollingMessageState, SequenceFacts, SliderState, StatusBarState,
+    TooltipAnchor, TooltipState, MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK,
+    MINIMAP_DEFAULT_PLAYER_MODEL, MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN,
+    MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP, TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD,
+    TOOLTIP_WRAP_WIDTH,
 };
 
 // ── Frame and Region nodes ───────────────────────────────────────────────────────────────────
@@ -265,15 +266,18 @@ pub struct WidgetArena {
     pub(crate) order_cache: crate::order::OrderCache,
     /// Minimap frames ever created, so the state feed notices a new one without a walk.
     minimap_created: u64,
-    /// The live frames the host ticks (message fades, model scene clocks), so the tick skips the
-    /// rest of the arena. Added at creation, as kinds never change; `destroy` removes its own.
+    /// The live message frames and model panes, so the host's passes over them (message fades,
+    /// model paint) skip the rest of the arena. Added at creation, as kinds never change;
+    /// `destroy` removes its own.
     ticked_kinds: Vec<FrameHandle>,
-    /// The live GameTooltips, kept the same way, for the layout pre-pass, fade tick and unit push.
+    /// The live frames whose kind has a [`KindUpdate`], kept the same way: the update walk reaches
+    /// each one shown, with an `OnUpdate` or without.
+    walked_kinds: Vec<FrameHandle>,
+    /// The live GameTooltips, kept the same way, for the layout pre-pass and unit push.
     tooltip_kinds: Vec<FrameHandle>,
     /// The live Minimaps, kept the same way, for the containment, zoom and arrow-facing feeds.
     minimap_kinds: Vec<FrameHandle>,
-    /// The live EditBoxes, kept the same way, for the resize re-seat (`reseat_resized`) and the
-    /// tick's walk, which flushes every shown box.
+    /// The live EditBoxes, kept the same way, for the resize re-seat (`reseat_resized`).
     editbox_kinds: Vec<FrameHandle>,
 }
 
@@ -318,6 +322,7 @@ impl WidgetArena {
             minimap_created: 0,
             order_cache: Default::default(),
             ticked_kinds: Vec::new(),
+            walked_kinds: Vec::new(),
             tooltip_kinds: Vec::new(),
             minimap_kinds: Vec::new(),
             editbox_kinds: Vec::new(),
@@ -332,6 +337,11 @@ impl WidgetArena {
     /// The frames the host advances each tick.
     pub fn ticked_kinds(&self) -> &[FrameHandle] {
         &self.ticked_kinds
+    }
+
+    /// The frames whose kind has an update of its own in the walk ([`FrameKind::kind_update`]).
+    pub fn walked_kinds(&self) -> &[FrameHandle] {
+        &self.walked_kinds
     }
 
     pub fn tooltip_kinds(&self) -> &[FrameHandle] {
@@ -558,6 +568,9 @@ impl WidgetArena {
         if ticked {
             self.ticked_kinds.push(handle);
         }
+        if kind.kind_update().is_some() {
+            self.walked_kinds.push(handle);
+        }
         if matches!(kind, FrameKind::GameTooltip) {
             self.tooltip_kinds.push(handle);
         }
@@ -627,6 +640,7 @@ impl WidgetArena {
         let name = frame.name.clone();
         // Each recursive call removes its own handle, so the registries hold no dead frame.
         self.ticked_kinds.retain(|&t| t != h);
+        self.walked_kinds.retain(|&t| t != h);
         self.tooltip_kinds.retain(|&t| t != h);
         self.minimap_kinds.retain(|&t| t != h);
         self.editbox_kinds.retain(|&t| t != h);

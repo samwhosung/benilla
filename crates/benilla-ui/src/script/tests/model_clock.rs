@@ -235,7 +235,7 @@ fn the_cooldown_machine_runs_on_the_two_handlers() {
         cd:SetScript("OnAnimFinished", CooldownFrame_OnAnimFinished)
         cd:Hide()
         fired = {{}}
-        cd:SetScript("OnAnimFinished", function() table.insert(fired, "finished") CooldownFrame_OnAnimFinished() end)
+        cd:SetScript("OnAnimFinished", function() table.insert(fired, this.stopping) CooldownFrame_OnAnimFinished() end)
         CooldownFrame_SetTimer(cd, GetTime(), 2, 1)
     "#,
         COOLDOWN_FILE.replace('\\', "\\\\")
@@ -244,25 +244,32 @@ fn the_cooldown_machine_runs_on_the_two_handlers() {
     assert!(s.frame_visible("CD"));
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((0, 0)));
 
+    let fired = |s: &UiScript| s.eval::<String>("return table.concat(fired, ' ')").unwrap();
     s.tick(0.5);
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((0, 250)));
+    // Each scrub is an arm, and the walk reads the one the last paint left: between paints this
+    // scene runs at twice the scrub's rate, so 250 + 1000 ≥ 1000 completes sequence 0. The stock
+    // `stopping` guard ignores it.
     s.tick(1.0);
+    assert_eq!(fired(&s), "0");
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((0, 750)));
     // A scrub is an anchor, not a freeze: between paints the clock runs on from it.
     assert_eq!(pane(&s, "CD").armed.map(|a| a.anchor_ms), Some(1500 - 750));
 
+    // 750 + 600 ≥ 1000 completes sequence 0 again, before this paint moves to sequence 1.
     s.tick(0.6);
+    assert_eq!(fired(&s), "0 0");
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((1, 0)));
     assert!(s.frame_visible("CD"));
     assert_eq!(s.eval::<i64>("return cd.stopping").unwrap(), 1);
 
     s.tick(0.5);
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((1, 500)));
-    assert!(s.eval::<bool>("return table.getn(fired) == 0").unwrap());
+    assert_eq!(fired(&s), "0 0");
     s.tick(0.6);
     assert_eq!(
-        s.eval::<i64>("return table.getn(fired)").unwrap(),
-        1,
+        fired(&s),
+        "0 0 1",
         "OnAnimFinished on the clamped sequence's natural completion"
     );
     assert!(
@@ -270,12 +277,12 @@ fn the_cooldown_machine_runs_on_the_two_handlers() {
         "…which the stock handler turns into Hide()"
     );
     s.tick(1.0);
-    assert_eq!(s.eval::<i64>("return table.getn(fired)").unwrap(), 1);
+    assert_eq!(fired(&s), "0 0 1");
     assert_eq!(play_head(&s, "CD", COOLDOWN_FILE), Some((1, 1000)));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `OnUpdateModel` runs before the completion is read, so re-arming each paint completes nothing.
+/// A paint that re-arms each frame completes nothing: each walk reads the arm the last paint left.
 #[test]
 fn on_update_model_fires_per_visible_paint_with_this() {
     let mut s = script();

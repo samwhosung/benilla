@@ -5,7 +5,7 @@ use mlua::Lua;
 
 use crate::widget::FrameHandle;
 
-use super::{event, tooltip, Model, ScriptValue, UiScript};
+use super::{event, Model, ScriptValue, UiScript};
 
 impl UiScript {
     /// Queue an event for the start of the next tick, behind everything queued earlier and before
@@ -70,10 +70,12 @@ pub(crate) fn fire_event_into(lua: &Lua, event: &str, args: Vec<ScriptValue>) {
 }
 
 impl super::UiScript {
-    /// Advance a frame: the `GetTime()` clock and queued events, then the update walk
-    /// (`0x765650`), each linked frame's update in strata, level and link order: its
-    /// `OnUpdate(self, elapsed)` (`0x704f10`), and for an EditBox its flush and caret blink after
-    /// it; then the engine's own fades, model panes and hover.
+    /// Advance a frame: the `GetTime()` clock and queued events, then the pump `0x765650` and the
+    /// draw pass `0x7657d0`, in that order (`0x764340`, `0x764347`). The pump is the update walk,
+    /// each linked frame's update in strata, level and link order: its `OnUpdate(self, elapsed)`
+    /// (`0x704f10`) and its kind's own update after it (an EditBox's flush, a tooltip's fade, a
+    /// model pane's clock); then the hover re-pick at its tail (`0x7657be`). The draw pass fires
+    /// `OnUpdateModel`.
     pub fn tick(&mut self, elapsed: f32) {
         self.model_mut().now += f64::from(elapsed);
         // Events queued since the last tick fire before this tick's OnUpdate.
@@ -82,7 +84,6 @@ impl super::UiScript {
             self.fire_event(&event, args);
         }
         self.update_walk(elapsed);
-        self.tick_model_panes(elapsed);
         // The engine's line fades, apart from any OnUpdate script: ScrollingMessageFrame's
         // (`0x788460`) and MessageFrame's (`0x786200`), which also keeps only the lines that fit
         // its height, so its rows are read from the resolved rect before the mutable walk.
@@ -116,8 +117,6 @@ impl super::UiScript {
             }
         }
         drop(model);
-        // Tooltip fades: `FadeOut`'s ramp and the hide at its end.
-        tooltip::tick_fades(&self.lua);
         // A frame hid or showed under a still cursor: re-run the hover walk at the saved position,
         // as the reference's pump tail does (`0x765650` → `0x7660d0`). The hidden frame's OnLeave
         // already fired, so only the new winner's `OnEnter` fires.
@@ -130,115 +129,115 @@ impl super::UiScript {
         if let Some((x, y)) = repick {
             self.mouse_move(x, y);
         }
+        self.paint_model_panes();
         // `WOW_UI_HANDLERS=<secs>`: last, so its report covers everything this tick fired.
         self.report_handler_profile(elapsed);
     }
 }
 
 impl UiScript {
-    /// The model panes' per-frame pass, for visible panes, in the reference's order: the pane's
-    /// `OnUpdate` (`0x76d7f0`) advances its clock by `trunc(elapsed · 1000)` ms, the paint
-    /// (`0x76d1a0`) fires `OnUpdateModel`, and the animate fires `OnAnimFinished` (`0x76cdc0`) once
-    /// per arm when the armed sequence completes naturally, a loop's first pass included
-    /// (`0x719370`). A hidden pane's clock stands still. Completion is read after `OnUpdateModel`,
-    /// whose handler may re-arm.
-    fn tick_model_panes(&mut self, elapsed: f32) {
+    /// A model pane's update after its `OnUpdate` (`0x76d7f0`): its scene clock advances by
+    /// `trunc(elapsed · 1000)` ms, no `+0.5` (`0x76d843`–`0x76d863`, `0x7074b0`), and the advance
+    /// tests the armed sequence (`0x7074d8` → `0x719370`) and drains the completions in the same
+    /// call (`0x7075af`), so `OnAnimFinished` (`0x76cdc0`) fires here, once per arm, against the
+    /// arm the last paint left. A zero advance tests nothing (`0x7074b7`).
+    pub(super) fn advance_pane(&mut self, h: FrameHandle, elapsed: f32) {
         let dt_ms = (elapsed * 1000.0).trunc().max(0.0) as u64;
-        let update_ids: Vec<u32> = {
+        let finished = {
             let mut model = self.model_mut();
-            let ticked: Vec<FrameHandle> = model.arena.ticked_kinds().to_vec();
-            for h in ticked {
-                let Some(f) = model.arena.frame_mut(h) else {
-                    continue;
-                };
-                if !f.effective_visible {
-                    continue;
-                }
-                if let crate::widget::KindState::Model(m) = &mut f.kind_state {
-                    m.clock_ms += dt_ms;
-                }
-            }
-            // Kept by `SetScript`; a destroyed frame's handle compacts out on its first miss.
-            if model
-                .on_update_model_frames
-                .iter()
-                .any(|&h| model.arena.frame(h).is_none())
-            {
-                let arena = &model.arena;
-                let live: Vec<FrameHandle> = model
-                    .on_update_model_frames
-                    .iter()
-                    .copied()
-                    .filter(|&h| arena.frame(h).is_some())
-                    .collect();
-                model.on_update_model_frames = live;
-            }
-            // Only visible Model panes with a file set, resident or streaming: the paint that fires
-            // the handler (`0x76d1bc`) is gated on `[widget+0x318] ≠ 0` (`0x76d24c`). On any other
-            // kind the script is inert.
-            let frames: Vec<FrameHandle> = model
-                .on_update_model_frames
-                .iter()
-                .copied()
-                .filter(|&h| {
-                    model.arena.frame(h).is_some_and(|f| {
-                        f.effective_visible
-                            && matches!(&f.kind_state, crate::widget::KindState::Model(m) if m.path.is_some())
-                    })
-                })
-                .collect();
-            let mut ids: Vec<u32> = frames.into_iter().map(|h| model.frame_id(h)).collect();
-            ids.sort_unstable(); // creation order
-            ids
-        };
-        for id in update_ids {
-            if let Err(e) = event::fire_widget_handler(&self.lua, id, "OnUpdateModel", Vec::new()) {
-                self.push_error(e);
-            }
-        }
-        let finished_ids: Vec<u32> = {
-            let mut model = self.model_mut();
-            let ticked: Vec<FrameHandle> = model.arena.ticked_kinds().to_vec();
-            let mut due: Vec<FrameHandle> = Vec::new();
-            for h in ticked {
-                let Some(f) = model.arena.frame(h) else {
-                    continue;
-                };
-                if !f.effective_visible {
-                    continue;
-                }
-                let crate::widget::KindState::Model(m) = &f.kind_state else {
-                    continue;
-                };
-                let Some(path) = m.path.as_deref() else {
-                    continue;
-                };
-                let Some(facts) = model.model_facts.get(&crate::widget::model_key(path)) else {
-                    continue;
-                };
-                if m.completion_due(facts) {
-                    due.push(h);
-                }
-            }
-            let mut ids = Vec::with_capacity(due.len());
-            for h in due {
-                if let Some(crate::widget::KindState::Model(m)) =
-                    model.arena.frame_mut(h).map(|f| &mut f.kind_state)
-                {
+            let model = &mut *model;
+            let Some(crate::widget::KindState::Model(m)) =
+                model.arena.frame_mut(h).map(|f| &mut f.kind_state)
+            else {
+                return;
+            };
+            m.clock_ms += dt_ms;
+            let facts = m
+                .path
+                .as_deref()
+                .and_then(|p| model.model_facts.get(&crate::widget::model_key(p)));
+            match facts {
+                Some(facts) if dt_ms > 0 && m.completion_due(facts) => {
                     if let Some(a) = &mut m.armed {
                         a.finished = true;
                     }
+                    Some(model.frame_id(h))
                 }
-                ids.push(model.frame_id(h));
+                _ => None,
             }
-            ids.sort_unstable();
-            ids
         };
-        for id in finished_ids {
+        if let Some(id) = finished {
             if let Err(e) = event::fire_widget_handler(&self.lua, id, "OnAnimFinished", Vec::new())
             {
                 self.push_error(e);
             }
         }
     }
+
+    /// The draw pass's `OnUpdateModel` (`0x7657d0`): each pane's paint fires it (`0x76d1bc`) from
+    /// the render callback its layer emit adds to its level's ARTWORK batch (`0x76d160`). Strata
+    /// go from 0 (`0x7657ff`); a stratum's batches are emitted before any is drained (`0x765896`,
+    /// then `0x7658e2`), level 0 up, a level's frames first linked first (`0x765920`). So the
+    /// panes are read per stratum when its turn comes, and a pane an earlier handler of that
+    /// stratum hid still paints this frame; only the callback's own gate, a model file set
+    /// (`0x76d24c`), is read at the call.
+    fn paint_model_panes(&mut self) {
+        let mut model = self.model_mut();
+        if model.on_update_model_frames.is_empty() {
+            return;
+        }
+        // Kept by `SetScript`; a destroyed frame's handle compacts out on its first miss.
+        if model
+            .on_update_model_frames
+            .iter()
+            .any(|&h| model.arena.frame(h).is_none())
+        {
+            let arena = &model.arena;
+            let live: Vec<FrameHandle> = model
+                .on_update_model_frames
+                .iter()
+                .copied()
+                .filter(|&h| arena.frame(h).is_some())
+                .collect();
+            model.on_update_model_frames = live;
+        }
+        drop(model);
+        for stratum in crate::order::Strata::ALL {
+            let panes: Vec<FrameHandle> = {
+                let model = self.model_ref();
+                let mut panes: Vec<(u16, u64, FrameHandle)> = model
+                    .on_update_model_frames
+                    .iter()
+                    .filter_map(|&h| {
+                        let f = model.arena.frame(h)?;
+                        (f.strata == stratum && f.effective_visible && has_model_file(f))
+                            .then_some((f.level, u64::from(f.insertion_seq), h))
+                    })
+                    .collect();
+                panes.sort_unstable_by_key(|&(level, seq, _)| (level, seq));
+                panes.into_iter().map(|(_, _, h)| h).collect()
+            };
+            for h in panes {
+                let id = {
+                    let mut model = self.model_mut();
+                    match model.arena.frame(h) {
+                        Some(f) if has_model_file(f) => model.frame_id(h),
+                        _ => continue,
+                    }
+                };
+                if let Err(e) =
+                    event::fire_widget_handler(&self.lua, id, "OnUpdateModel", Vec::new())
+                {
+                    self.push_error(e);
+                }
+            }
+        }
+    }
+}
+
+/// A Model-family pane with a file set, resident or streaming (`[widget+0x318] ≠ 0`), which its
+/// layer emit and its render callback both require (`0x76d24c`); on any other kind
+/// `OnUpdateModel` is inert.
+fn has_model_file(f: &crate::widget::Frame) -> bool {
+    matches!(&f.kind_state, crate::widget::KindState::Model(m) if m.path.is_some())
 }

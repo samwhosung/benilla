@@ -7,12 +7,11 @@ use crate::script::binding_abi::optional_string;
 use crate::script::object::frame_handle_of;
 use crate::script::region::region_handle_of;
 use crate::script::Model;
-use crate::widget::{KindState, TooltipAnchor, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
+use crate::widget::{KindState, TooltipAnchor, TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
 
 use super::{
-    append_line, bool_arg, clear_content, fire_cleared, full_alpha, hide_tooltip, now,
-    parse_line_color, parse_line_tail, set_shown, text_of, tip_mut, with_tip, write_cell,
-    REG_TOOLTIP_METHODS,
+    append_line, bool_arg, clear_content, fire_cleared, full_alpha, hide_tooltip, parse_line_color,
+    parse_line_tail, set_shown, text_of, tip_mut, with_tip, write_cell, REG_TOOLTIP_METHODS,
 };
 
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -322,10 +321,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "FadeOut",
         lua.create_function(|lua, this: Table| {
-            let t = now(lua);
             with_tip(lua, &this, |tip| {
-                if tip.fade_start.is_none() {
-                    tip.fade_start = Some(t);
+                if tip.fade_left.is_none() {
+                    tip.fade_left = Some(TOOLTIP_FADE_SECS);
                 }
             })
         })?,

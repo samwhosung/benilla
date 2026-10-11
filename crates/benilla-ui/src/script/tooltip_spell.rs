@@ -218,7 +218,7 @@ fn answer_wait(lua: &Lua, h: FrameHandle, spell_id: u32, alt_caster: bool) -> ml
         else {
             return Ok(());
         };
-        let fading = tip_mut(&mut model, h)?.fade_start.is_some();
+        let fading = tip_mut(&mut model, h)?.fade_left.is_some();
         if fading || drawn_lines(&mut model, h)? != wait.drawn {
             model.spell_tooltip_waits.remove(&h);
             return Ok(());
