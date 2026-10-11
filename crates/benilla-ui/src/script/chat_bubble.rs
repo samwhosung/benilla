@@ -258,7 +258,9 @@ fn create(model: &mut Model, world: FrameHandle, g: BubbleGeometry) -> Bubble {
     let data = model.region_data.entry(text).or_default();
     data.font_path = Some(super::nameplate::PLATE_FONT.to_string());
     data.font_explicit.face = true;
-    model.touch_layout();
+    model.touch_layout_frame(frame);
+    model.touch_layout_region(tail);
+    model.touch_layout_region(text);
 
     Bubble {
         frame,
@@ -315,7 +317,10 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
             -g.margin,
         ),
     ];
-    model.touch_layout();
+    // Once per geometry change: each node it wrote re-derives.
+    model.touch_layout_frame(frame);
+    model.touch_layout_region(tail);
+    model.touch_layout_region(text);
     model.chat_bubbles.bubbles[i].laid_out = Some(g);
 }
 
@@ -421,7 +426,6 @@ fn drive(
     );
     if last_seat != Some(seat) {
         let data = model.region_data.entry(text).or_default();
-        let fresh = data.anchors.is_empty();
         data.anchors = vec![Anchor::new(
             Point::Bottom,
             world_id,
@@ -429,11 +433,7 @@ fn drive(
             seat.0,
             seat.1,
         )];
-        if fresh {
-            model.touch_layout_retarget_region(text, &[], &[world_id]);
-        } else {
-            model.touch_layout_region(text);
-        }
+        model.touch_layout_region(text);
         model.chat_bubbles.bubbles[i].seat = Some(seat);
     }
 }

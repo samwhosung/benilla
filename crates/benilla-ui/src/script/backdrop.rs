@@ -425,7 +425,9 @@ pub(crate) fn set_metrics(
         };
         (d.anchors, d.size) = piece_geometry(owner, layout);
     }
-    model.touch_layout();
+    for rh in pieces.iter().flatten() {
+        model.touch_layout_region(*rh);
+    }
     if let Some(rect) = model.resolved.get(&fh).copied() {
         run_texcoords(model, fh, rect);
     }

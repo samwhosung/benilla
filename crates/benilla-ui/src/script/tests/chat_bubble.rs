@@ -395,3 +395,31 @@ fn the_bubble_text_carries_the_world_seat() {
         QuadContent::Text { text: Some(t), world_seat: true, .. } if t == "Well met!"
     )));
 }
+
+/// A window resize re-sizes a live bubble in place: the backdrop's unit, the tail, the margin and
+/// the width floor follow, and its eleven regions stay the same objects.
+#[test]
+fn a_resize_re_sizes_the_live_bubble_in_place() {
+    let mut s = vm();
+    drive(&mut s, &[say(7, 1, "hi")]);
+    s.run(r#"local r = { (WorldFrame:GetChildren()):GetRegions() } First, Tail = r[1], r[10]"#)
+        .unwrap();
+    let wider = BubbleGeometry {
+        border: 20.0,
+        margin: 15.0,
+        ..geometry()
+    };
+    s.sync_chat_bubbles(wider, &[say(7, 1, "hi")]);
+    s.resolve();
+    let (same, frame_w, tail_w, edge_w): (bool, f32, f32, f32) = s
+        .eval(
+            r#"local b = WorldFrame:GetChildren() local r = { b:GetRegions() }
+               return r[1] == First and r[10] == Tail, b:GetWidth(), r[10]:GetWidth(),
+                      r[6]:GetWidth()"#,
+        )
+        .unwrap();
+    assert!(same, "the regions are kept, not rebuilt");
+    assert_eq!(frame_w, 2.0 * 20.0 + 2.0 * 15.0, "the new floor and margin");
+    assert_eq!(tail_w, 20.0);
+    assert_eq!(edge_w, 20.0, "the corner piece takes the new edge size");
+}
