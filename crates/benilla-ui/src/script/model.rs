@@ -171,8 +171,9 @@ pub(crate) struct Model {
     pub(crate) layout_last_scope: (usize, usize),
     /// Fixpoint rounds run across all solves.
     pub(crate) layout_rounds: u64,
-    /// Per frame, rasterized links `(y-up rect, link, full |H…|h markup)` for `OnHyperlinkClick`.
-    pub(crate) link_spans: HashMap<FrameHandle, Vec<(Rect, String, String)>>,
+    /// Per text frame, its pool of hyperlink buttons (`[+0x314]`), the shown ones first
+    /// ([`super::hyperlink`]).
+    pub(crate) link_buttons: HashMap<FrameHandle, Vec<FrameHandle>>,
     /// Region visuals (texture, colour, text) and layout (anchors, size, justify).
     pub(crate) region_data: HashMap<RegionHandle, RegionData>,
     /// Each frame's backdrop plate (`<Backdrop>` or `SetBackdrop`, the client's `frame+0x1ac`):
@@ -1134,7 +1135,7 @@ impl Model {
             layout_gate_walks: 0,
             layout_rounds: 0,
             resolved: HashMap::new(),
-            link_spans: HashMap::new(),
+            link_buttons: HashMap::new(),
             region_data: HashMap::new(),
             backdrops: HashMap::new(),
             simple_html: simplehtml::SimpleHtmlStates::new(),

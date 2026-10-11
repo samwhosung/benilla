@@ -300,7 +300,7 @@ impl Default for WidgetArena {
 /// (`0x778771`, CheckButton through it), Slider (`0x789467`), ColorSelect (`0x78b2b5`), EditBox
 /// (`0x779ced`..`0x779d03`, with char and key) and Minimap (`0x4edc38`) set its mouse bit. The
 /// ScrollFrame and ScrollingMessageFrame ctors set none; a chat link takes clicks through a
-/// mouse-enabled child per span (`0x7a3240`), which `script::pointer` models as rects.
+/// mouse-enabled Button child per span (`0x7a3240`), which `script::hyperlink` builds.
 pub fn mouse_enabled_by_ctor(kind: FrameKind) -> bool {
     matches!(
         kind,

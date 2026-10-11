@@ -1006,6 +1006,17 @@ pub(super) fn wants_press_visual(model: &Model, h: FrameHandle, button: &str) ->
 /// (`0x7826c0` passes 1, the mouse `0x779280`/`0x7793a4` pass 0): a LootButton then does nothing at
 /// all, not even its `OnClick` (`0x4c182b`); every other kind ignores it.
 pub(super) fn click_button(lua: &Lua, id: u32, button: &str, down: bool, scripted: bool) {
+    // A hyperlink button's click slot (`+0x94`, `0x7a3510`) is its text frame's
+    // `OnHyperlinkClick`, in place of the Button's `OnClick` firer.
+    let target = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .id_to_frame
+        .get(&id)
+        .copied();
+    if target.is_some_and(|h| super::hyperlink::click(lua, h, button)) {
+        return;
+    }
     let mut take_loot = None;
     let fire = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");

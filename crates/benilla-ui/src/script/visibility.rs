@@ -123,14 +123,9 @@ fn walk_children(lua: &Lua, parent: FrameHandle, step: fn(&Lua, FrameHandle)) {
     }
 }
 
-/// Whether the frame is in the mouse input index when visible: its mouse bit (`[+0xcc]` bit 2),
-/// or a hyperlink span, which the reference gives a mouse-enabled child of its own (`0x7a3240`).
+/// Whether the frame is in the mouse input index when visible: its mouse bit (`[+0xcc]` bit 2).
 fn takes_mouse(model: &Model, h: FrameHandle) -> bool {
     model.arena.is_mouse_enabled(h)
-        || model
-            .link_spans
-            .get(&h)
-            .is_some_and(|spans| !spans.is_empty())
 }
 
 /// The Lua `EnableMouse` (`0x777070`). Enabling inserts with flag -1 and arms nothing

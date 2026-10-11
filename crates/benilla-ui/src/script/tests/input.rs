@@ -590,7 +590,6 @@ fn the_unfired_script_kinds_still_raise_rather_than_silently_accepting() {
         // A 2.0 secure-frame slot; no 1.12 resolver has it.
         "OnAttributeChanged",
         // Real 1.12 slots that benilla does not fire.
-        "OnHyperlinkEnter",
         "OnMessageScrollChanged",
         "OnInputLanguageChanged",
     ] {
@@ -846,18 +845,16 @@ fn hiding_another_frame_keeps_the_press() {
     assert_eq!(log_of(&mut s), "A:down A:up");
 }
 
-/// `Model::mouse_down_on` is keyed by button name, so the capture is per button.
+/// The release handler reads only the capture (`0x76642b`) and its mouse-up (`0x76c040`) fires
+/// `OnMouseUp` with no test of which button pressed, so a release of a button never pressed goes
+/// to the frame another button holds.
 #[test]
-fn the_capture_is_per_button() {
+fn a_release_goes_to_the_capture_whatever_its_button() {
     let mut s = two_frames();
     s.mouse_button(200.0, 300.0, "LeftButton", true); // A holds the left button
     s.mouse_move(500.0, 300.0);
     s.mouse_button(500.0, 300.0, "RightButton", false); // a right release, never pressed
-    assert_eq!(
-        log_of(&mut s),
-        "A:down",
-        "the right button captured nothing, so its release dispatches nothing"
-    );
+    assert_eq!(log_of(&mut s), "A:down A:up");
 }
 
 /// A disabled Button fires neither `OnEnter` nor `OnLeave`: `CSimpleButton::OnEnter` (`0x779490`)

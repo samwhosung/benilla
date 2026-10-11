@@ -770,6 +770,9 @@ pub struct ButtonState {
     pub loot_slot: Option<u32>,
     /// A CheckButton's checked flag (`+0x4dc`, XML `checked`).
     pub checked: bool,
+    /// A `CSimpleHyperlinkButton`'s link (`+0x4dc`) and text (`+0x4e0`), which its enter, leave
+    /// and click hand to its text frame (`script::hyperlink`); `None` on any other Button.
+    pub hyperlink: Option<(String, String)>,
     /// `<NormalTexture>`/`SetNormalTexture` (`+0x4bc`).
     pub normal: Option<RegionHandle>,
     /// `<PushedTexture>` (`+0x4c0`); a button with none keeps what it showed ([`Self::set_state`]).
@@ -824,6 +827,7 @@ impl Default for ButtonState {
             loot_slot: None,
             locked: false,
             checked: false,
+            hyperlink: None,
             normal: None,
             pushed: None,
             disabled: None,

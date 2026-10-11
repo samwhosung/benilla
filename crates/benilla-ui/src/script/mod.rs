@@ -68,6 +68,7 @@ mod gm_ticket;
 mod gossip;
 mod guild;
 mod handler_prof;
+mod hyperlink;
 mod screenshot;
 mod tabard;
 pub use handler_prof::HandlerRow;
@@ -409,7 +410,7 @@ pub const SCREEN: crate::layout::Handle = 0;
 /// ScrollFrame's three scroll kinds are `+0x32c`/`+0x334`/`+0x33c` (script-name map `0x786c40`).
 /// The EditBox's vtable (`0x81c910`) replaces the key and char slots: an EditBox never fires
 /// `OnKeyDown`, and fires `OnChar` only from `Insert`, with the inserted text (`0x77c13c`).
-const SCRIPT_KINDS: [&str; 39] = [
+const SCRIPT_KINDS: [&str; 41] = [
     "OnLoad",
     "OnEvent",
     "OnUpdate",
@@ -445,9 +446,12 @@ const SCRIPT_KINDS: [&str; 39] = [
     "OnDragStart",
     "OnDragStop",
     "OnReceiveDrag",
-    // A release over a message-frame hyperlink span, `OnHyperlinkClick(link, text, button)`;
-    // `ChatFrameTemplate` passes it to `SetItemRef` (`ChatFrame.xml:15`, `ChatFrame.lua:1534`).
+    // A text frame's hyperlink button hands it these ([`hyperlink`]): the click as
+    // `OnHyperlinkClick(link, text, button)`, which `ChatFrameTemplate` passes to `SetItemRef`
+    // (`ChatFrame.xml:15`, `ChatFrame.lua:1534`), and the enter and leave with the link alone.
     "OnHyperlinkClick",
+    "OnHyperlinkEnter",
+    "OnHyperlinkLeave",
     // The GameTooltip's engine-fired scripts: money render, money clear and world-hover default
     // placement, all three wired by the stock template (`GameTooltipTemplate.xml:617-625`).
     "OnTooltipAddMoney",
@@ -860,17 +864,9 @@ impl UiScript {
     }
 
     /// Replace the hyperlink spans `(frame, y-up rect, link, markup)` the app rasterized this
-    /// frame; a release inside one fires `OnHyperlinkClick` on its frame ([`pointer`]).
+    /// frame: each is a hyperlink button over its span, a child of its frame ([`hyperlink`]).
     pub fn set_link_spans(&mut self, spans: Vec<(FrameHandle, Rect, String, String)>) {
-        let mut model = self.model_mut();
-        model.link_spans.clear();
-        for (fh, rect, link, markup) in spans {
-            model
-                .link_spans
-                .entry(fh)
-                .or_default()
-                .push((rect, link, markup));
-        }
+        hyperlink::set_spans(&self.lua, spans);
     }
 
     /// Whether the frame with this global name is shown with every ancestor (`IsVisible()`).
