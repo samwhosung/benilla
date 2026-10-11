@@ -214,8 +214,10 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 };
                 d.hidden = true;
                 d.justify.set_h(super::JustifyH::Right);
+                // RIGHT on the left cell's LEFT, the point the layout re-sets with the plate
+                // width as x (`0x53094f`), as the template's `$parentTextRight1` declares it.
                 d.anchors =
-                    Anchors::from([Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)]);
+                    Anchors::from([Anchor::new(Point::Right, left_id, Point::Left, 0.0, 0.0)]);
                 model.region_data.insert(right, d);
                 model.touch_measure(right); // an adopted cell can arrive text-in-hand
                 model.touch_layout_region(right); // a line row entered the layout graph
@@ -780,20 +782,22 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         // Inside the resolve, so a note and not a touch; the incremental pass still has to hear
         // that these inputs changed.
         model.note_layout_frame_write(h);
-        // Right-flush each double line: left.right + (maxw - left.width) is the text inset.
-        for (i, (l, r)) in rows.iter().enumerate() {
+        // Right-flush each shown right cell: one `SetPoint(RIGHT, leftCell, LEFT, width, 0)`
+        // (`0x530910`..`0x53094f`), which leaves any other point the cell holds alone.
+        let eps = model.anchor_eps();
+        for (i, (_, r)) in rows.iter().enumerate() {
             if r.is_none() {
                 continue;
             }
-            let lw = l.map_or(0.0, |(w, _)| w);
-            let mut wrote = false;
-            if let Some(d) = model.region_data.get_mut(&rights[i]) {
-                if let Some((x_off, _)) = d.anchors.offsets_mut().next() {
-                    *x_off = maxw - lw;
-                    wrote = true;
-                }
-            }
-            if wrote {
+            let Some(&left_id) = model.region_to_id.get(&lefts[i]) else {
+                continue;
+            };
+            let new = Anchor::new(Point::Right, left_id, Point::Left, maxw, 0.0);
+            let stored = model
+                .region_data
+                .get_mut(&rights[i])
+                .is_some_and(|d| d.anchors.set(new, eps));
+            if stored {
                 model.note_layout_region_write(rights[i]);
             }
         }
