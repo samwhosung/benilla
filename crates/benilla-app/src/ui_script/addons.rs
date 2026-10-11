@@ -2950,7 +2950,7 @@ mod tests {
             heard[1]
         );
         assert!(
-            heard[2].ends_with("attempt to call method 'NoSuchMethod' (a nil value)"),
+            heard[2].ends_with("attempt to call method `NoSuchMethod' (a nil value)"),
             "{:?}",
             heard[2]
         );
