@@ -221,6 +221,51 @@ fn a_widget_handler_error_reaches_the_chosen_error_handler() {
     assert!(caught.contains("slide boom"), "OnValueChanged: {caught}");
 }
 
+/// 1.12 calls the error handler with the one value the failed call raised (`0x703b40`: the
+/// handler pushed, inserted below the message, `lua_call` 1 argument): the bare Lua message, no
+/// `runtime error: ` word and no traceback, which only benilla's own log carries.
+#[test]
+fn the_error_handler_receives_the_bare_lua_message() {
+    let mut s = crate::script::UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        "caught = {} seterrorhandler(function(m) table.insert(caught, m) end) \
+         local f = CreateFrame('Frame') \
+         f:RegisterEvent('ERROR_PROBE') \
+         f:SetScript('OnEvent', function() this:NoSuchMethod() end) \
+         local b = CreateFrame('Button') \
+         b:SetScript('OnClick', function() local t = nil; t.x = 1 end) \
+         b:Click() \
+         local c = CreateFrame('Button') \
+         c:SetScript('OnClick', function() SetPortraitTexture() end) \
+         c:Click()",
+    )
+    .unwrap();
+    s.fire_event("ERROR_PROBE", vec![]);
+    s.dispatch_script_errors_to_handler();
+    let caught: Vec<String> = s.eval("return caught").unwrap();
+    assert!(caught.len() >= 3, "{caught:?}");
+    for m in &caught {
+        assert!(
+            !m.contains("runtime error") && !m.contains("stack traceback") && !m.contains('\n'),
+            "bare message, one line: {m:?}"
+        );
+    }
+    assert!(
+        caught[0].starts_with("[string \"")
+            && caught[0].ends_with("attempt to call method 'NoSuchMethod' (a nil value)"),
+        "{:?}",
+        caught[0]
+    );
+    assert!(
+        caught[1].ends_with(":1: attempt to index local `t' (a nil value)"),
+        "{:?}",
+        caught[1]
+    );
+    // The host log keeps the decorated text.
+    assert!(s.take_errors().iter().any(|e| e.contains("runtime error")));
+}
+
 /// `fire_global` carries `UPDATE_FACTION` from the faction-header verbs.
 #[test]
 fn a_self_unregistering_listener_does_not_rob_its_successor_on_the_internal_dispatch() {

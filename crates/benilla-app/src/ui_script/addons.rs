@@ -2891,4 +2891,74 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
+
+    /// The error handler hears what 1.12's `lua_pcall` error function hands it (`0x703b40`, from
+    /// `FS_DoBuffer 0x704ae0` for a file's top level and its syntax error, `0x704f10` for a
+    /// handler): the bare Lua message, with no frame, `OnLoad: `, addon or file word and no
+    /// traceback. The decorated text stays on the failures list and the host log.
+    #[test]
+    fn the_error_handler_hears_the_bare_message_of_every_load_failure() {
+        let tmp = std::env::temp_dir().join(format!("benilla-addon-bare-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let addon = dir_addon(
+            &tmp,
+            "Bare",
+            "## Interface: 11200\ntop.lua\nsyntax.lua\nframe.xml\n",
+        );
+        std::fs::write(tmp.join("Bare/top.lua"), "local t = nil\nt.x = 1\n").unwrap();
+        std::fs::write(tmp.join("Bare/syntax.lua"), "x = = 1\n").unwrap();
+        std::fs::write(
+            tmp.join("Bare/frame.xml"),
+            r#"<Ui><Frame name="BareFrame"><Scripts><OnLoad>this:NoSuchMethod()</OnLoad></Scripts></Frame>
+<Script>local u = nil; u.y = 2</Script></Ui>"#,
+        )
+        .unwrap();
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        script
+            .run("Heard = {} seterrorhandler(function(m) table.insert(Heard, m) end)")
+            .unwrap();
+        let failures = addon.load(&script, &mut Status::default());
+        assert_eq!(failures.len(), 4, "{failures:#?}");
+        script.dispatch_script_errors_to_handler();
+        let heard: Vec<String> = script.eval("return Heard").unwrap();
+        assert_eq!(heard.len(), 4, "{heard:#?}");
+        for m in &heard {
+            assert!(
+                !m.contains("runtime error")
+                    && !m.contains("syntax error")
+                    && !m.contains("stack traceback")
+                    && !m.contains("OnLoad: ")
+                    && !m.contains("Bare/")
+                    && !m.contains('\n'),
+                "{m:?}"
+            );
+        }
+        assert!(
+            heard[0].ends_with("top.lua:2: attempt to index local `t' (a nil value)"),
+            "{:?}",
+            heard[0]
+        );
+        assert!(
+            heard[0].starts_with("Interface\\AddOns\\Bare\\top.lua"),
+            "{:?}",
+            heard[0]
+        );
+        assert!(
+            heard[1].contains("syntax.lua:1:") && heard[1].contains("unexpected symbol"),
+            "{:?}",
+            heard[1]
+        );
+        assert!(
+            heard[2].ends_with("attempt to call method 'NoSuchMethod' (a nil value)"),
+            "{:?}",
+            heard[2]
+        );
+        assert!(
+            heard[3].ends_with("attempt to index local `u' (a nil value)"),
+            "{:?}",
+            heard[3]
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
