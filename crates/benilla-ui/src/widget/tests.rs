@@ -147,7 +147,11 @@ fn compaction_relinks_the_shifted_visible_frames_in_creation_order() {
     assert!(seq(&a, second) < seq(&a, first));
     let (low_seq, hidden_seq) = (seq(&a, low), seq(&a, hidden));
 
-    assert_eq!(a.compact_levels(Strata::Medium), 3, "{{0, 3, 6}} packs to [0, 3)");
+    assert_eq!(
+        a.compact_levels(Strata::Medium),
+        3,
+        "{{0, 3, 6}} packs to [0, 3)"
+    );
     for h in [first, second, hidden] {
         assert_eq!(a.frame(h).unwrap().level, 1);
     }

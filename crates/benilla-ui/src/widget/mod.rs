@@ -212,6 +212,9 @@ pub struct Frame {
     /// The link position in the `(strata, level)` bucket, re-stamped at the tail on each relink.
     /// Drawing puts the later-linked frame on top; the hit test probes the earlier-linked first.
     pub insertion_seq: u32,
+    /// The place on the list of every live frame (`root+0xcc4`), which the constructor appends to
+    /// (`0x76930d` → `0x7646a0`): creation order, which arena order is not once a slot is reused.
+    created: u64,
     pub kind_state: KindState,
     next_decl: u32,
 }
@@ -250,6 +253,8 @@ pub struct WidgetArena {
     regions: Arena<Region>,
     names: HashMap<String, FrameHandle>,
     next_insertion: u32,
+    /// The next [`Frame::created`].
+    next_created: u64,
     /// How many times the link stamps were renumbered at the cap, so a reader holding stamps can
     /// tell they are still comparable with the live ones.
     renumbers: u32,
@@ -307,6 +312,7 @@ impl WidgetArena {
             regions: Arena::new(),
             names: HashMap::new(),
             next_insertion: 0,
+            next_created: 0,
             renumbers: 0,
             link_log: None,
             minimap_created: 0,
@@ -446,6 +452,8 @@ impl WidgetArena {
 
         let insertion_seq = self.next_insertion;
         self.next_insertion += 1;
+        let created = self.next_created;
+        self.next_created += 1;
 
         let shown = true;
         let scale = 1.0f32;
@@ -496,6 +504,7 @@ impl WidgetArena {
             ignore_parent_scale: false,
             wow_id: 0,
             insertion_seq,
+            created,
             kind_state: match kind {
                 FrameKind::StatusBar => KindState::StatusBar(StatusBarState::default()),
                 // `CLootButton` and `CSimpleCheckbox` extend `CSimpleButton` by one field each,

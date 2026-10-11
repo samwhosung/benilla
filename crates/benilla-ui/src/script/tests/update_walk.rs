@@ -244,7 +244,11 @@ fn a_mid_walk_raise_moves_a_frame_ahead_into_a_walked_level_so_it_waits_a_tick()
     .unwrap();
     s.resolve();
     s.tick(0.016);
-    assert_eq!(take_log(&s), "r", "Ahead left level 9 for one the walk had passed");
+    assert_eq!(
+        take_log(&s),
+        "r",
+        "Ahead left level 9 for one the walk had passed"
+    );
     assert!(
         s.eval::<i64>("return Ahead:GetFrameLevel()").unwrap() <= 3,
         "at or below the level being walked when it moved"
