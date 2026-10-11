@@ -25,6 +25,7 @@ mod gm_ticket;
 mod handler_prof;
 mod host_state;
 mod input;
+mod keep_rect;
 mod keyboard;
 mod layout_gate;
 mod layout_structure;
