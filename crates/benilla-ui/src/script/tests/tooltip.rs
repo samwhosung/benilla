@@ -80,6 +80,77 @@ fn line_stack_autosize_and_right_flush() {
     assert_eq!(l2.top, 536.0);
 }
 
+/// The layout re-points each shown right cell by its RIGHT slot alone, `SetPoint(RIGHT, leftCell,
+/// LEFT, width, 0)` (`0x53094f`): a point an addon added beside it keeps its offset, and after a
+/// `ClearAllPoints` the RIGHT point comes back.
+#[test]
+fn the_right_column_write_sets_the_right_slot_only() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local owner = CreateFrame("Button", "SlotR")
+        owner:SetPoint("TOPLEFT", 100, -100); owner:SetWidth(40); owner:SetHeight(40)
+        local tt = CreateFrame("GameTooltip", "TTR")
+        tt:SetOwner(owner, "ANCHOR_RIGHT")
+        tt:AddLine("Tough Jerky", 1, 1, 1)
+        tt:AddDoubleLine("One-Hand", "Sword", 1, 1, 1, 1, 1, 1)
+        tt:Show()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    measure_all(
+        &mut s,
+        &[
+            ("Tough Jerky", 80.0, 14.0),
+            ("One-Hand", 50.0, 12.0),
+            ("Sword", 30.0, 12.0),
+        ],
+    );
+    // maxw = max(80, 50 + 40 + 30) = 120.
+    let right_anchor = r#"
+        local p, rel, rp, x, y = TTRTextRight2:GetPoint(N)
+        return p, rel == TTRTextLeft2, rp, x, y
+    "#;
+
+    // An addon adds LEFT without clearing; LEFT precedes RIGHT in slot order.
+    s.run(r#"TTRTextRight2:SetPoint("LEFT", TTRTextLeft2, "RIGHT", 7, 0)"#)
+        .unwrap();
+    s.resolve();
+    s.resolve();
+    let (p, x): (String, f64) = s
+        .eval("local p, _, _, x = TTRTextRight2:GetPoint(1); return p, x")
+        .unwrap();
+    assert_eq!(
+        (p.as_str(), x),
+        ("LEFT", 7.0),
+        "the addon's point keeps its offset"
+    );
+    let (p, rel, rp, x, y): (String, bool, String, f64, f64) =
+        s.eval(&right_anchor.replace('N', "2")).unwrap();
+    assert_eq!(
+        (p.as_str(), rel, rp.as_str(), x, y),
+        ("RIGHT", true, "LEFT", 120.0, 0.0)
+    );
+
+    s.run("TTRTextRight2:ClearAllPoints()").unwrap();
+    s.resolve();
+    s.resolve();
+    assert_eq!(
+        s.eval::<i64>("return TTRTextRight2:GetNumPoints()")
+            .unwrap(),
+        1,
+        "the layout sets RIGHT again after a ClearAllPoints"
+    );
+    let (p, rel, rp, x, y): (String, bool, String, f64, f64) =
+        s.eval(&right_anchor.replace('N', "1")).unwrap();
+    assert_eq!(
+        (p.as_str(), rel, rp.as_str(), x, y),
+        ("RIGHT", true, "LEFT", 120.0, 0.0)
+    );
+}
+
 /// An empty line is a one-unit row plus its 2 px gap, as the reference's size getters floor a
 /// FontString at one FrameXML unit; the row and the plate read that floor from one constant.
 #[test]
