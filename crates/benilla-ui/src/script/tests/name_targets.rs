@@ -258,3 +258,122 @@ fn a_constructor_name_expands_parent() {
     s.run(r#"Icon:SetPoint("TOPLEFT", "RootKid", "TOPLEFT", 0, 0)"#)
         .unwrap();
 }
+
+/// A region's name lives on the region (`CScriptRegion::SetName 0x76c650` stores its own copy at
+/// `[+0x98]`); only the `_G` entry is first-come (`0x701bd0` writes it only when empty).
+#[test]
+fn two_regions_with_one_name_both_answer_it_and_g_keeps_the_first() {
+    let s = script();
+    s.run(
+        r#"
+        Host = CreateFrame("Frame", "NameHost")
+        First = Host:CreateTexture("SharedRegionName")
+        Second = Host:CreateTexture("SharedRegionName")
+        Third = Host:CreateFontString("SharedRegionName")
+        "#,
+    )
+    .unwrap();
+    for r in ["First", "Second", "Third"] {
+        assert_eq!(
+            s.eval::<Option<String>>(&format!("return {r}:GetName()"))
+                .unwrap()
+                .as_deref(),
+            Some("SharedRegionName"),
+            "{r} keeps the name it was given"
+        );
+    }
+    assert!(
+        s.eval::<bool>(r#"return SharedRegionName == First and SharedRegionName ~= Second"#)
+            .unwrap(),
+        "_G holds the first region only"
+    );
+}
+
+/// The `$parent` expansion reads the owner frame, so two owners that share a name give their
+/// regions one expanded name; both answer it.
+#[test]
+fn parent_named_regions_under_colliding_parents_both_answer_their_name() {
+    let s = script();
+    s.run(
+        r#"
+        PA = CreateFrame("Frame", "CollidingParent")
+        PB = CreateFrame("Frame", "CollidingParent")
+        TextA = PA:CreateFontString("$parentText")
+        TextB = PB:CreateFontString("$parentText")
+        "#,
+    )
+    .unwrap();
+    for r in ["TextA", "TextB"] {
+        assert_eq!(
+            s.eval::<Option<String>>(&format!("return {r}:GetName()"))
+                .unwrap()
+                .as_deref(),
+            Some("CollidingParentText"),
+            "{r} answers its expanded name"
+        );
+    }
+}
+
+/// The receiver in an error string is the region's own name, taken or not.
+#[test]
+fn the_error_string_of_a_region_with_a_taken_name_uses_its_name() {
+    let s = script();
+    s.run(
+        r#"
+        Host = CreateFrame("Frame", "ErrHost")
+        First = Host:CreateTexture("ErrRegionName")
+        Second = Host:CreateTexture("ErrRegionName")
+        "#,
+    )
+    .unwrap();
+    for r in ["First", "Second"] {
+        let err = s
+            .run(&format!(r#"{r}:SetPoint()"#))
+            .expect_err("SetPoint with no arguments raises")
+            .to_string();
+        assert!(
+            err.contains("Usage: ErrRegionName:SetPoint("),
+            "{r}'s error names the region: {err}"
+        );
+        let err = s
+            .run(&format!("{r}:IsObjectType(nil)"))
+            .expect_err("IsObjectType(nil) raises")
+            .to_string();
+        assert!(
+            err.contains(r#"Usage: ErrRegionName:IsObjectType("TYPE")"#),
+            "{r}'s error names the region: {err}"
+        );
+    }
+}
+
+/// A freed region takes its lookup entry with it only when the entry is its own: the first
+/// holder going leaves a later same-named region's `GetName` alone.
+#[test]
+fn freeing_a_region_leaves_a_same_named_siblings_name() {
+    let s = script();
+    s.run(
+        r#"
+        Host = CreateFrame("Frame", "FreeHost")
+        First = Host:CreateTexture("FreedRegionName")
+        Second = Host:CreateTexture("FreedRegionName")
+        "#,
+    )
+    .unwrap();
+    {
+        let lua = s.lua();
+        let mut model = lua.app_data_mut::<crate::script::Model>().expect("model");
+        let id = *model.region_names.get("FreedRegionName").expect("held");
+        let rh = *model.id_to_region.get(&id).expect("first region");
+        crate::script::region::free_region(&mut model, rh);
+        assert!(
+            !model.region_names.contains_key("FreedRegionName"),
+            "the freed holder's entry is gone"
+        );
+    }
+    assert_eq!(
+        s.eval::<Option<String>>("return Second:GetName()")
+            .unwrap()
+            .as_deref(),
+        Some("FreedRegionName")
+    );
+}
