@@ -360,6 +360,40 @@ fn install_slot(
 ) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    install_slot_model(&mut model, h, slot, incoming)
+}
+
+/// The loader's install of the texture a state-texture element built through the `<Layers>`
+/// adder (`0x6f26f0`), never through a Lua setter: `Button::LoadXML` hands each new region to the
+/// slot store (`0x77890e`, `0x778940`, `0x778972`; the highlight's `0x7789a9`; the checked pair's
+/// `0x7851dd`, `0x78520e`), which destroys whatever the slot held, an inherited template's
+/// included, so a handle still held on it goes dead (`0x701cd0` clears its `[0]`). The highlight's
+/// store sets the region's own blend (`0x7789a4`), so it keeps it.
+pub(super) fn install_loaded(
+    model: &mut Model,
+    h: FrameHandle,
+    tag: &str,
+    rh: RegionHandle,
+) -> mlua::Result<()> {
+    let slot = match tag {
+        "NormalTexture" => Slot::Normal,
+        "PushedTexture" => Slot::Pushed,
+        "DisabledTexture" => Slot::Disabled,
+        "HighlightTexture" => Slot::Highlight,
+        "CheckedTexture" => Slot::Checked,
+        "DisabledCheckedTexture" => Slot::DisabledChecked,
+        _ => return Err(mlua::Error::runtime(format!("not a Button texture: {tag}"))),
+    };
+    install_slot_model(model, h, slot, Some(rh)).map(|_| ())
+}
+
+/// [`install_slot`] on the model.
+fn install_slot_model(
+    model: &mut Model,
+    h: FrameHandle,
+    slot: Slot,
+    incoming: Option<RegionHandle>,
+) -> mlua::Result<bool> {
     if !matches!(
         model.arena.frame(h).map(|f| &f.kind_state),
         Some(KindState::Button(_))
@@ -368,7 +402,7 @@ fn install_slot(
     }
     let writes = std::cell::RefCell::new(crate::widget::ShownWrites::default());
     let changed = super::region::install_into_slot(
-        &mut model,
+        model,
         h,
         incoming,
         slot.shape().1,
@@ -384,7 +418,7 @@ fn install_slot(
             }
         },
     )?;
-    super::region::apply_shown_writes(&mut model, writes.into_inner());
+    super::region::apply_shown_writes(model, writes.into_inner());
     Ok(changed)
 }
 

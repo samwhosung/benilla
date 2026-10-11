@@ -210,9 +210,9 @@ pub(super) fn set_texture_path(model: &mut Model, rh: RegionHandle, path: &str) 
     model.touch_layout_art(rh);
 }
 
-/// The loader's install of the texture a `<BarTexture>`, `<ThumbTexture>` or ColorSelect texture
-/// element (`tag`) built, as the widget's object, never through a Lua setter. `layer` is the
-/// element's `drawLayer` for the bar and the thumb.
+/// The loader's install of the texture a `<BarTexture>`, `<ThumbTexture>`, Button state-texture or
+/// ColorSelect texture element (`tag`) built, as the widget's object, never through a Lua setter.
+/// `layer` is the element's `drawLayer` for the bar and the thumb.
 pub(crate) fn install_loaded_texture(
     lua: &Lua,
     this: &Table,
@@ -227,6 +227,12 @@ pub(crate) fn install_loaded_texture(
     match tag {
         "BarTexture" => super::statusbar::install_loaded(&mut model, h, rh, layer),
         "ThumbTexture" => super::slider::install_loaded(&mut model, h, rh, layer),
+        "NormalTexture"
+        | "PushedTexture"
+        | "DisabledTexture"
+        | "HighlightTexture"
+        | "CheckedTexture"
+        | "DisabledCheckedTexture" => super::button::install_loaded(&mut model, h, tag, rh),
         _ => super::colorselect::install_loaded(&mut model, h, tag, rh),
     }
 }

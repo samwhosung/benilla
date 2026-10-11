@@ -2225,6 +2225,45 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
+    /// An instance's state texture named as its template's carries the name: `GetName()` reads the
+    /// region's own (`SetName 0x76c650`, from `0x76fdf0`). The global stays the first holder's, as
+    /// `0x701bd0` publishes only into an empty one (`0x701c8a`), so it is the destroyed template
+    /// region's dead handle.
+    #[test]
+    fn a_same_named_instance_state_texture_keeps_its_name() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                <Button name="NamedTmpl" virtual="true">
+                    <Size><AbsDimension x="40" y="20"/></Size>
+                    <NormalTexture name="$parentNormal" file="Interface\Tmpl"/>
+                </Button>
+                <Button name="NamedInst" inherits="NamedTmpl">
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                    <NormalTexture name="$parentNormal" file="Interface\Inst"/>
+                </Button>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        let got: (String, String, bool) = s
+            .eval(
+                r#"local t = NamedInst:GetNormalTexture()
+                return tostring(t:GetName()), t:GetTexture(),
+                    (pcall(NamedInstNormal.GetTexture, NamedInstNormal))"#,
+            )
+            .unwrap();
+        assert_eq!(
+            got,
+            (
+                "NamedInstNormal".to_string(),
+                "Interface\\Inst".to_string(),
+                false
+            )
+        );
+    }
+
     /// The Lua path leg (`0x781970` → `0x781b3f` → `0x778f10`) only swaps the file of a slot that
     /// holds a region (`0x770200`): the region, its TexCoords, blend, alpha and anchors stay.
     #[test]

@@ -4,9 +4,7 @@ use crate::framexml::{self, Element};
 use crate::script::LabelFont;
 
 use super::regions::FontAttrs;
-use super::{
-    abs_dim, abs_value, children_named, children_named_any, color_of, tex_coords_of, Loader,
-};
+use super::{abs_dim, abs_value, children_named, children_named_any, color_of, Loader};
 
 impl Loader<'_> {
     /// `<ScrollFrame>`'s `<ScrollChild>` (`LoadXML 0x786bc0`): after the base load (`0x769820`) it
@@ -106,52 +104,25 @@ impl Loader<'_> {
         {
             return;
         }
-        let tex = |tag: &str, method: &str, this: &mut Self| {
+        // Each state-texture element is a new region from the `<Layers>` texture adder (`0x6f26f0`,
+        // `0x778903`): named, laid out, painted and given its implicit all-points as any layer
+        // texture is, then handed to the slot store, which destroys the region it displaces. An
+        // instance's element over its template's therefore starts fresh: `LoadXML` runs the
+        // template's level first (`0x76985c`), and nothing of that region survives the instance's.
+        // The Lua path leg differs: it repaints the slot's region and keeps its state (`0x778f10`).
+        let tex = |tag: &str, this: &mut Self| {
             for raw in children_named(el, tag) {
-                // A state texture may inherit a virtual `<Texture>`, the stock button kit's only
-                // form (`UIPanelButtonUpTexture`); it expands like a `<Layers>` region.
-                let expanded = this.expand_region(raw);
-                let t = &expanded;
-                // The reference sends all four state textures through the `<Layers>` texture adder
-                // (`0x6f26f0`, from `0x778903`), so a `<Color>` is the region's own colour fill; the
-                // Lua setter has no colour form (`0x781970`). `""` creates the slot unpainted.
-                let color = children_named(t, "Color").next().map(color_of);
-                match t.attr("file") {
-                    Some(file) => this.call(wrapper, method, file.to_string(), dbg),
-                    None => this.call(wrapper, method, String::new(), dbg),
-                }
-                let getter = method.replacen("Set", "Get", 1);
-                if let Ok(region) = wrapper.call_method::<Table>(getter.as_str(), ()) {
-                    if let (None, Some(c)) = (t.attr("file"), color) {
-                        this.call_region(&region, "SetTexture", (c[0], c[1], c[2], c[3]), dbg);
-                    }
-                    if let Some(mode) = t.attr("alphaMode") {
-                        this.call_region(&region, "SetBlendMode", mode.to_string(), dbg);
-                    }
-                    // The setter gave the region the runtime path's implicit anchors, but the XML
-                    // path places the authored ones first and the implicit step after (`0x778903`):
-                    // clear, lay out, then re-run it, or a leftover implicit corner would pin it.
-                    this.call_region(&region, "ClearAllPoints", (), dbg);
-                    this.apply_region_layout(t, &region, self_name, dbg, FontAttrs::Own);
-                    if let Err(e) = crate::script::implicit_creation_anchor_lua(this.lua, &region) {
-                        this.report
-                            .errors
-                            .push(format!("{dbg}: implicit anchor: {e}"));
-                    }
-                    if let Some(tc) = tex_coords_of(t) {
-                        this.call_region(&region, "SetTexCoord", tc, dbg);
-                    }
-                    // A named state texture is published both ways: the region registry for its
-                    // `GetName()`, `_G` for `getglobal` and a sibling's `relativeTo`.
-                    if let Some(rname) = t.name().map(|raw| framexml::resolve_name(raw, self_name))
-                    {
-                        crate::script::region::publish_region_name(this.lua(), &rname, &region);
-                        if let Err(e) = this.lua().globals().set(rname.clone(), region) {
-                            this.report
-                                .warnings
-                                .push(format!("{dbg}: state-texture global '{rname}': {e}"));
-                        }
-                    }
+                let Some(region) =
+                    this.build_texture_child(raw, wrapper, self_name, "ARTWORK", dbg)
+                else {
+                    continue; // build_texture_child already reported why
+                };
+                this.install_texture(wrapper, tag, &region, None, dbg);
+                // Freeing the displaced region took its name out of the registry `GetName()`
+                // reads, which a replacement of the same name takes back: the reference keeps the
+                // name on the region (`0x76c650`). `_G` keeps its first holder (`0x701c8a`).
+                if let Some(rname) = raw.name().map(|n| framexml::resolve_name(n, self_name)) {
+                    crate::script::region::publish_region_name(this.lua(), &rname, &region);
                 }
             }
         };
@@ -207,13 +178,13 @@ impl Loader<'_> {
                 }
             }
         }
-        tex("NormalTexture", "SetNormalTexture", self);
-        tex("PushedTexture", "SetPushedTexture", self);
-        tex("DisabledTexture", "SetDisabledTexture", self);
-        tex("HighlightTexture", "SetHighlightTexture", self);
+        tex("NormalTexture", self);
+        tex("PushedTexture", self);
+        tex("DisabledTexture", self);
+        tex("HighlightTexture", self);
         if is_check {
-            tex("CheckedTexture", "SetCheckedTexture", self);
-            tex("DisabledCheckedTexture", "SetDisabledCheckedTexture", self);
+            tex("CheckedTexture", self);
+            tex("DisabledCheckedTexture", self);
             if let Some(c) = el.attr("checked") {
                 let checked = c.eq_ignore_ascii_case("true") || c == "1";
                 self.call(wrapper, "SetChecked", checked, dbg);
