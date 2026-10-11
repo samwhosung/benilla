@@ -98,8 +98,9 @@ fn an_offset_within_the_threshold_is_unchanged() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// `GetPoint(n)` answers the n-th occupied slot in point order, TOPLEFT through BOTTOMRIGHT
-/// (`0x811a38`), whatever order the anchors were set in (`0x7a23f5`..`0x7a240b`).
+/// `GetPoint(n)` answers the n-th occupied slot by point id, TOPLEFT 0 through BOTTOMRIGHT 8 (the
+/// ids of the name table `0x811a38`, whose entries run alphabetically), whatever order the anchors
+/// were set in (`0x7a23f5`..`0x7a240b`).
 #[test]
 fn get_point_counts_in_point_order() {
     let mut s = script();
