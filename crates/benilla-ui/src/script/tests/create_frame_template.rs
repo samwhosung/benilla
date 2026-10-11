@@ -502,3 +502,153 @@ fn a_raising_template_onload_reaches_the_error_handler() {
         "CreateFrame returns the frame after its OnLoad raised"
     );
 }
+
+/// The load order the tests below read: a Lua `Order` string the OnLoads append to.
+const LOG: &str = r#"<Script>Order = ""; function Log(w) Order = Order .. w .. ";" end</Script>"#;
+
+/// A ScrollFrame's `LoadXML` (`0x786bc0`) runs the base load (`0x769820`), then builds its
+/// `<ScrollChild>` through `Instantiate 0x6ee280` at `0x786bf4`: the child's whole lifecycle,
+/// its own `<Frames>` and OnLoad included, is over before the post-load hook `0x76a2f0` builds
+/// the ScrollFrame's `<Frames>` (`0x76a36f`) and fires its OnLoad. `SetScrollChild` (`0x786ce0`)
+/// follows the child's return, so the child's own OnLoad sees none and `<Frames>` sees it.
+#[test]
+fn a_scroll_child_is_built_before_the_frames_and_the_scroll_frames_onload() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    register(
+        &s,
+        &format!(
+            r#"<Ui>{LOG}
+            <ScrollFrame name="Roller">
+              <Size><AbsDimension x="200" y="100"/></Size>
+              <Anchors><Anchor point="TOPLEFT"/></Anchors>
+              <Frames>
+                <Frame name="$parentBar">
+                  <Scripts><OnLoad>Log("bar:" .. tostring(this:GetParent():GetScrollChild() ~= nil))</OnLoad></Scripts>
+                </Frame>
+              </Frames>
+              <ScrollChild>
+                <Frame name="$parentChild">
+                  <Size><AbsDimension x="200" y="400"/></Size>
+                  <Frames>
+                    <Frame name="$parentInner">
+                      <Scripts><OnLoad>Log("inner")</OnLoad></Scripts>
+                    </Frame>
+                  </Frames>
+                  <Scripts><OnLoad>Log("child:" .. tostring(this:GetParent():GetScrollChild() ~= nil))</OnLoad></Scripts>
+                </Frame>
+              </ScrollChild>
+              <Scripts>
+                <OnLoad>Log("scroll:" .. tostring(this:GetScrollChild() == RollerChild))</OnLoad>
+              </Scripts>
+            </ScrollFrame>
+          </Ui>"#
+        ),
+    );
+
+    assert_eq!(
+        s.eval::<String>("return Order").unwrap(),
+        "inner;child:false;bar:true;scroll:true;",
+        "the scroll child's subtree, then <Frames>, then the ScrollFrame's own OnLoad"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The same order when the `<Frames>` come from a template, which is how
+/// `UIPanelScrollFrameTemplate`'s ScrollBar meets an instance's `<ScrollChild>`: the template's
+/// `<Frames>` are built by the post-load hook, after every `LoadXML` level (`0x76a060`).
+#[test]
+fn a_templates_frames_load_after_the_instances_scroll_child() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    register(
+        &s,
+        &format!(
+            r#"<Ui>{LOG}
+            <ScrollFrame name="PanelScrollTemplate" virtual="true">
+              <Frames>
+                <Slider name="$parentScrollBar">
+                  <Scripts><OnLoad>Log("bar")</OnLoad></Scripts>
+                </Slider>
+              </Frames>
+              <Scripts><OnLoad>Log("template-scroll")</OnLoad></Scripts>
+            </ScrollFrame>
+            <ScrollFrame name="ViaXml" inherits="PanelScrollTemplate">
+              <Size><AbsDimension x="200" y="100"/></Size>
+              <Anchors><Anchor point="TOPLEFT"/></Anchors>
+              <ScrollChild>
+                <Frame name="$parentChild">
+                  <Size><AbsDimension x="200" y="400"/></Size>
+                  <Scripts><OnLoad>Log("child")</OnLoad></Scripts>
+                </Frame>
+              </ScrollChild>
+            </ScrollFrame>
+          </Ui>"#
+        ),
+    );
+    assert_eq!(
+        s.eval::<String>("return Order").unwrap(),
+        "child;bar;template-scroll;",
+        "through inherits= in XML"
+    );
+    assert!(s
+        .eval::<bool>("return ViaXml:GetScrollChild() == ViaXmlChild")
+        .unwrap());
+
+    // The runtime door builds through the same instantiator.
+    s.run(
+        r#"Order = ""
+           ViaLua = CreateFrame("ScrollFrame", "ViaLua", nil, "PanelScrollTemplate")
+           local c = CreateFrame("Frame", "ViaLuaChild", ViaLua)
+           ViaLua:SetScrollChild(c)"#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<String>("return Order").unwrap(),
+        "bar;template-scroll;"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A `<ScrollChild>` the template declares is built by the template's own `LoadXML` level
+/// (`0x76985c` re-enters the virtual `LoadXML`, which is `0x786bc0` for a ScrollFrame), so it is
+/// also ahead of `<Frames>`; an instance's own follows it and wins `SetScrollChild`.
+#[test]
+fn a_template_scroll_child_loads_ahead_of_the_frames_and_the_instances_wins() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    register(
+        &s,
+        &format!(
+            r#"<Ui>{LOG}
+            <ScrollFrame name="StockishTemplate" virtual="true">
+              <Frames>
+                <Frame name="$parentBar">
+                  <Scripts><OnLoad>Log("bar")</OnLoad></Scripts>
+                </Frame>
+              </Frames>
+              <ScrollChild>
+                <Frame name="$parentFromTemplate">
+                  <Scripts><OnLoad>Log("from-template")</OnLoad></Scripts>
+                </Frame>
+              </ScrollChild>
+            </ScrollFrame>
+            <ScrollFrame name="Both" inherits="StockishTemplate">
+              <ScrollChild>
+                <Frame name="$parentFromInstance">
+                  <Scripts><OnLoad>Log("from-instance")</OnLoad></Scripts>
+                </Frame>
+              </ScrollChild>
+            </ScrollFrame>
+          </Ui>"#
+        ),
+    );
+    assert_eq!(
+        s.eval::<String>("return Order").unwrap(),
+        "from-template;from-instance;bar;"
+    );
+    assert!(s
+        .eval::<bool>("return Both:GetScrollChild() == BothFromInstance")
+        .unwrap());
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
