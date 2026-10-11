@@ -693,18 +693,22 @@ mod tests {
         assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);
     }
 
+    /// Each press runs the arm `0x76bf70` on the capture: a button outside the frame's drag mask
+    /// (`0x76bf7d` je `0x76bfb1`) skips the arm and touches neither `[+0x100]` nor `[+0x104]`, so
+    /// the started left drag runs on and only its own release (`0x76c040`) fires `OnDragStop`.
     #[test]
-    fn a_press_that_replaces_an_in_flight_gesture_stops_it_first() {
+    fn a_press_of_a_button_the_frame_does_not_drag_leaves_the_drag_running() {
         let mut s = drag_script();
         s.run(
             r#"
-            stops, starts = 0, 0
+            stops, starts, ups = 0, 0, 0
             local a = CreateFrame("Frame", "A")
             a:SetPoint("BOTTOMLEFT", 100, 100); a:SetWidth(200); a:SetHeight(100)
             a:EnableMouse(true); a:SetMovable(true)
             a:RegisterForDrag("LeftButton")
             a:SetScript("OnDragStart", function() starts = starts + 1; this:StartMoving() end)
             a:SetScript("OnDragStop", function() stops = stops + 1; this:StopMovingOrSizing() end)
+            a:SetScript("OnMouseUp", function() ups = ups + 1 end)
             "#,
         )
         .unwrap();
@@ -717,13 +721,159 @@ mod tests {
         s.mouse_button(200.0, 200.0, "RightButton", true);
         assert_eq!(
             s.eval::<i64>("return stops").unwrap(),
+            0,
+            "the right press does not touch the left drag"
+        );
+        s.mouse_move(250.0, 250.0);
+        s.mouse_move(300.0, 300.0);
+        s.resolve();
+        assert_eq!(
+            s.eval::<f32>("return A:GetLeft()").unwrap(),
+            200.0,
+            "the frame still follows the cursor"
+        );
+        assert_eq!(
+            s.eval::<i64>("return starts").unwrap(),
             1,
-            "the left drag the right press displaced was stopped, not forgotten"
+            "no second start"
         );
 
-        // Replacing an unstarted press fires nothing, as releasing it would not.
-        s.mouse_button(150.0, 150.0, "LeftButton", true);
-        s.mouse_button(150.0, 150.0, "MiddleButton", true);
+        // The right release is no drag release (`0x76c050` je `0x76c099`): its `OnMouseUp` fires.
+        s.mouse_button(300.0, 300.0, "RightButton", false);
+        assert_eq!(s.eval::<i64>("return stops").unwrap(), 0);
+        assert_eq!(s.eval::<i64>("return ups").unwrap(), 1);
+
+        s.mouse_button(300.0, 300.0, "LeftButton", false);
+        assert_eq!(
+            s.eval::<i64>("return stops").unwrap(),
+            1,
+            "the left release ends the drag"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// A frame registered for both buttons.
+    fn logged_two_button_drag_frame() -> UiScript {
+        let mut s = drag_script();
+        s.run(
+            r#"
+            log = {}
+            local function note(name) return function() table.insert(log, name) end end
+            local a = CreateFrame("Frame", "A")
+            a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
+            a:RegisterForDrag("LeftButton", "RightButton")
+            a:SetScript("OnMouseDown", note("down"))
+            a:SetScript("OnMouseUp", note("up"))
+            a:SetScript("OnDragStart", note("dragstart"))
+            a:SetScript("OnDragStop", note("dragstop"))
+            a:SetScript("OnReceiveDrag", note("receive"))
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s
+    }
+
+    /// A press of a registered button re-arms (`0x76bf82`..`0x76bfab`: armed 1, started 0, the new
+    /// button and start point) and fires no `OnDragStop`. `0x76b320` then starts again from the new
+    /// point (`0x76b34c`), a second `OnDragStart`; the release of a mask button ends a started
+    /// drag whichever button armed it (`0x76c050`..`0x76c06e` read the released button only).
+    #[test]
+    fn a_press_of_a_registered_button_re_arms_without_a_stop() {
+        let mut s = logged_two_button_drag_frame();
+        s.mouse_button(100.0, 300.0, "LeftButton", true);
+        s.mouse_move(130.0, 300.0);
+        assert_eq!(log(&s), "down dragstart");
+
+        s.mouse_button(130.0, 300.0, "RightButton", true);
+        assert_eq!(log(&s), "down dragstart down", "no OnDragStop");
+
+        s.mouse_move(132.0, 300.0); // 2px from the new arm point: under the threshold
+        assert_eq!(log(&s), "down dragstart down");
+        s.mouse_move(160.0, 300.0); // past it: started again
+        assert_eq!(log(&s), "down dragstart down dragstart");
+
+        s.mouse_button(160.0, 300.0, "RightButton", false);
+        assert_eq!(
+            log(&s),
+            "down dragstart down dragstart dragstop receive",
+            "the release ends the started drag, no OnMouseUp"
+        );
+        // The drag is over: the left release finds it unarmed and is a plain release.
+        s.mouse_button(160.0, 300.0, "LeftButton", false);
+        assert_eq!(
+            log(&s),
+            "down dragstart down dragstart dragstop receive up"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// `0x76c050` tests the released button against the mask, not `[+0x108]`: the first button's
+    /// release after the re-arm clears the arm (`0x76c05d`), and with the drag not restarted
+    /// (`[+0x104]` 0, `0x76c067` je `0x76c099`) is a plain `OnMouseUp`. Nothing starts afterwards.
+    #[test]
+    fn the_first_buttons_release_after_a_re_arm_disarms_it() {
+        let mut s = logged_two_button_drag_frame();
+        s.mouse_button(100.0, 300.0, "LeftButton", true);
+        s.mouse_move(130.0, 300.0);
+        s.mouse_button(130.0, 300.0, "RightButton", true);
+        s.mouse_button(130.0, 300.0, "LeftButton", false);
+        assert_eq!(log(&s), "down dragstart down up", "no OnDragStop");
+
+        s.mouse_move(200.0, 300.0); // the arm is cleared: the right button drags nothing
+        assert_eq!(log(&s), "down dragstart down up");
+        s.mouse_button(200.0, 300.0, "RightButton", false);
+        assert_eq!(log(&s), "down dragstart down up up");
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// The cursor payload is no part of the arm: a right click during an item drag leaves the
+    /// carried item and the drag, and the left release still drops on the frame under the cursor.
+    #[test]
+    fn an_item_drag_survives_a_right_click() {
+        let mut s = drag_script();
+        s.run(
+            r#"
+            stops, receives = 0, 0
+            local a = CreateFrame("Frame", "A")
+            a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
+            a:RegisterForDrag("LeftButton")
+            a:SetScript("OnDragStop", function() stops = stops + 1 end)
+            local b = CreateFrame("Frame", "B")
+            b:SetPoint("BOTTOMLEFT", 400, 0); b:SetWidth(400); b:SetHeight(600); b:EnableMouse(true)
+            b:SetScript("OnReceiveDrag", function() receives = receives + 1 end)
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s.set_cursor_for_test(CursorPayload::Item(CursorItem {
+            bar_placeable: true,
+            bag: 0,
+            slot: 1,
+            item_id: 117,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            equip_slots: Vec::new(),
+        }));
+
+        s.mouse_button(100.0, 300.0, "LeftButton", true);
+        s.mouse_move(110.0, 300.0); // the drag starts
+        s.mouse_button(110.0, 300.0, "RightButton", true);
+        s.mouse_button(110.0, 300.0, "RightButton", false);
+        assert_eq!(s.eval::<i64>("return stops").unwrap(), 0);
+        assert!(s.cursor_item().is_some(), "the item is still carried");
+
+        s.mouse_move(600.0, 300.0);
+        s.mouse_button(600.0, 300.0, "LeftButton", false);
         assert_eq!(s.eval::<i64>("return stops").unwrap(), 1);
+        assert_eq!(
+            s.eval::<i64>("return receives").unwrap(),
+            1,
+            "the drop reaches the frame under the cursor"
+        );
+        assert!(s.cursor_item().is_some(), "a drag release never drops");
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 }
