@@ -1562,6 +1562,8 @@ fn status_bar_text_paints_the_player_numerals_but_not_the_targets() {
 
     let alive = |health: u32, power: u32, power_type: u8| UnitState {
         exists: true,
+        // The tooltip builder finds a unit by its guid (`0x52a021`).
+        guid: 0xF130_0000_0000_0B0D,
         name: Some("Somebody".into()),
         health,
         max_health: 100,

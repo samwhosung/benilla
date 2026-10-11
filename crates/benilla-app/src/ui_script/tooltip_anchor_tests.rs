@@ -37,6 +37,7 @@ fn harness(extra: &[&str]) -> UiScript {
 fn wolf() -> UnitState {
     UnitState {
         exists: true,
+        guid: 0xF130_0000_4500_0001,
         name: Some("Timber Wolf".into()),
         health: 30,
         max_health: 50,
@@ -232,6 +233,8 @@ fn your_own_portrait_explains_the_menu_instead_of_showing_your_health() {
     s.set_unit(
         "target",
         Some(UnitState {
+            // Another unit than `player`, so `UnitIsUnit("target", "player")` is false.
+            guid: 0x0000_0000_0000_0C0C,
             is_player: true,
             player_controlled: true,
             name: Some("Someone".into()),
