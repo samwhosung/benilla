@@ -14,6 +14,8 @@ mod ace_gate_tests;
 mod away;
 /// The world broadcasts: `SMSG_ZONE_UNDER_ATTACK`/`_DEFENSE_MESSAGE`/`_SERVER_MESSAGE`.
 mod broadcast;
+/// The chat bubbles' hand-off to their `WorldFrame` widgets.
+pub(crate) mod bubbles;
 mod channels;
 /// The combat log's chat lines: classification, chat type and each sentence's GlobalString key.
 pub(crate) mod combat;

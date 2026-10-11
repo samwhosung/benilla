@@ -312,13 +312,22 @@ struct Bubbles {
     next_line: u64,
 }
 
+/// This frame's live bubbles for the widget layer, farthest from the camera first, and the sizes
+/// the window gives them; `None` with no viewport to lay out against. [`crate::ui_chat::bubbles`]
+/// hands them to the VM.
+#[derive(Resource, Default)]
+pub(crate) struct BubbleFeed {
+    pub(crate) geometry: Option<BubbleGeometry>,
+    pub(crate) states: Vec<BubbleState>,
+}
+
 /// Units with a live bubble this frame, whose overhead name is suppressed (`+0xe64` ≠ 0).
 #[derive(Resource, Default)]
 pub(crate) struct BubblesActive(pub(crate) EntityHashSet);
 
 /// Every frame: drain the queue through the spawn gate (`0x608ac0`), run each bubble's fade against
-/// its lifetime and the 20 yd re-test (`0x4b0c30`), publish [`BubblesActive`], and hand the live
-/// set to the widget layer, farthest from the camera first.
+/// its lifetime and the 20 yd re-test (`0x4b0c30`), publish [`BubblesActive`], and lay out the
+/// live set for the widget layer ([`BubbleFeed`]), farthest from the camera first.
 #[allow(clippy::type_complexity)] // one Bevy system's full input set
 fn drive_bubbles(
     mut queue: ResMut<BubbleQueue>,
@@ -332,10 +341,11 @@ fn drive_bubbles(
     heights: Query<&StandBoxHeight>,
     time: Res<Time>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    // `None` in a run with no UI VM.
-    script: Option<NonSendMut<benilla_ui::script::UiScript>>,
+    mut feed: ResMut<BubbleFeed>,
 ) {
     active.0.clear();
+    feed.states.clear();
+    feed.geometry = None;
     let now = time.elapsed().as_millis() as u64;
     let self_tf = self_q.single().ok();
     // The typed sender lookup (`0x468460`), a linear scan of the small streamed set.
@@ -429,9 +439,6 @@ fn drive_bubbles(
         .collect();
     stack_sort(&mut order);
 
-    let Some(mut script) = script else {
-        return;
-    };
     // Sizes from the camera's viewport, else the window's; with neither there is nothing to lay
     // out against.
     let viewport = cam
@@ -444,14 +451,14 @@ fn drive_bubbles(
     let seam = window.map_or(1.0, |w| crate::ui_script::seam_scale(w.height()));
     let scale = window.map_or(1.0, Window::scale_factor);
     let basis = plate_basis(viewport);
-    let geometry = BubbleGeometry {
+    feed.geometry = Some(BubbleGeometry {
         border: border_px(viewport, basis) / seam,
         margin: gx_px(MARGIN, basis) / seam,
         wrap_cap: gx_px(WRAP_W, basis) / seam,
         text_height: text_px(TEXT_H, basis) / seam,
         device_px: seam * scale,
-    };
-    let states: Vec<BubbleState> = order
+    });
+    feed.states = order
         .iter()
         .filter_map(|(guid, _)| {
             let b = bubbles.live.get(guid)?;
@@ -484,7 +491,6 @@ fn drive_bubbles(
             })
         })
         .collect();
-    script.sync_chat_bubbles(geometry, &states);
 }
 
 /// The jitter decomposition (`WOW_MOVE_TRACE` tag `bub`): `anchor=` and `pos=` differ by a latched
@@ -555,14 +561,18 @@ impl Plugin for ChatBubblePlugin {
             .init_resource::<BubbleConfig>()
             .init_resource::<Bubbles>()
             .init_resource::<BubblesActive>()
+            .init_resource::<BubbleFeed>()
             // After the V-plate drive, whose verdict the spawn gate reads, and before the script
             // paint, so a bubble draws the frame it moves.
             .add_systems(
                 Update,
-                drive_bubbles
+                (
+                    drive_bubbles.in_set(BubbleSet),
+                    crate::ui_chat::bubbles::feed_bubbles,
+                )
+                    .chain()
                     .after(VPlateSet)
-                    .before(crate::ui_script::UiPaint)
-                    .in_set(BubbleSet),
+                    .before(crate::ui_script::UiPaint),
             );
     }
 }
