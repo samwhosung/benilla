@@ -26,12 +26,19 @@ use spell_feed::feed_spell_tooltips;
 
 pub struct UiTooltipPlugin;
 
+/// The frame's world-mouseover publish ([`UiScript::publish_world_mouseover`]), which the readers
+/// of the published guid follow.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct MouseoverPublish;
+
 impl Plugin for UiTooltipPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
             (
-                drive_mouseover_tooltip.in_set(UnitFeed),
+                drive_mouseover_tooltip
+                    .in_set(UnitFeed)
+                    .in_set(MouseoverPublish),
                 // After the trainer and quest feeds, so a list that lands this frame is hoverable
                 // in its tick; outside `UnitFeed`, which the trainer feed follows, so it takes that
                 // set's gate.

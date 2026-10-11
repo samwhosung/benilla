@@ -93,7 +93,14 @@ impl Plugin for UiAuraPlugin {
             .init_resource::<PlayerAuraCache>()
             .init_resource::<AuraFeedMemory>()
             // Feed before the VM dispatch, drain after it.
-            .add_systems(Update, feed_auras.in_set(UnitFeed).in_set(AuraEvents))
+            // After this frame's world publish, so the gain names the unit in the same frame.
+            .add_systems(
+                Update,
+                feed_auras
+                    .in_set(UnitFeed)
+                    .in_set(AuraEvents)
+                    .after(crate::ui_tooltip::MouseoverPublish),
+            )
             .add_systems(Update, drain_aura_cancels.after(UiInput))
             // Torn down only at the session's end, not with the avatar, which a worldport drops.
             .add_systems(OnExit(ClientState::InWorld), end_session_aura_state);
@@ -377,7 +384,8 @@ fn tracking_state_of(
     })
 }
 
-/// The units the resolver's guid globals name, from `UnitTokens`' own sources.
+/// The units the resolver's guid globals name, from `UnitTokens`' own sources; the mouseover is
+/// the VM's published one.
 #[derive(bevy::ecs::system::SystemParam)]
 struct AuraUnits<'w> {
     selection: Res<'w, Selection>,
@@ -385,8 +393,6 @@ struct AuraUnits<'w> {
     // `Option`: a UI-only harness lacks their plugins; without the party's no group token names
     // anyone.
     group: Option<Res<'w, crate::ui_party::GroupState>>,
-    hovered: Option<Res<'w, crate::target::Hovered>>,
-    hovered_go: Option<Res<'w, crate::target::HoveredObject>>,
     interact: Option<Res<'w, crate::ui_session::InteractNpc>>,
 }
 
@@ -530,6 +536,13 @@ fn feed_auras(
             )
     };
     let target_guid = units.selection.guid.unwrap_or(0);
+    // The resolver reads the published pair `[0xb4e2c8]` (`0x515bb6`, `0x515bdb`), not the pick,
+    // and takes it only as a unit (`0x515bca mov ecx,8`, `0x515bd9 je`): a GameObject, a corpse or
+    // nothing names nobody.
+    let mouseover = script
+        .world_mouseover()
+        .filter(|&guid| held(guid).is_some_and(|s| s.is_unit()))
+        .unwrap_or(0);
     let catalog_moved = spells.as_ref().is_some_and(|s| s.is_changed());
     let unit_changed = memo.units.feed(
         &mut script,
@@ -538,14 +551,7 @@ fn feed_auras(
             me: (self_guid.0, changed),
             pet: pet_guid,
             target: target_guid,
-            // The world pick, as `UnitTokens` resolves `"mouseover"`.
-            mouseover: units
-                .hovered
-                .as_deref()
-                .and_then(|h| {
-                    h.mouseover(&units.hovered_go.as_deref().copied().unwrap_or_default())
-                })
-                .map_or(0, |(_, guid)| guid),
+            mouseover,
             npc: units.interact.as_deref().and_then(|i| i.1).unwrap_or(0),
             held,
             buffs_visible,
