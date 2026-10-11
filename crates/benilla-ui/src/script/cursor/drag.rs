@@ -183,6 +183,101 @@ mod tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
+    /// A frame whose every mouse script appends to `log`, registered for a LeftButton drag.
+    fn logged_drag_frame() -> UiScript {
+        let mut s = drag_script();
+        s.run(
+            r#"
+            log = {}
+            local function note(name) return function() table.insert(log, name) end end
+            local a = CreateFrame("Frame", "A")
+            a:SetPoint("BOTTOMLEFT", 0, 0); a:SetWidth(400); a:SetHeight(600); a:EnableMouse(true)
+            a:RegisterForDrag("LeftButton")
+            a:SetScript("OnMouseDown", note("down"))
+            a:SetScript("OnMouseUp", note("up"))
+            a:SetScript("OnDragStart", note("dragstart"))
+            a:SetScript("OnDragStop", note("dragstop"))
+            a:SetScript("OnReceiveDrag", note("receive"))
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s
+    }
+
+    fn log(s: &UiScript) -> String {
+        s.eval::<String>("return table.concat(log, ' ')").unwrap()
+    }
+
+    /// `0x76c040` on a release for a drag-registered button whose drag has started clears the arm,
+    /// fires `OnDragStop` (`0x76c06e`) and the hover frame's drop (`0x76c081`) and returns 1
+    /// (`0x76c08f`), never reaching its `OnMouseUp` (`0x76c099`).
+    #[test]
+    fn a_drag_release_fires_dragstop_and_no_mouseup() {
+        let mut s = logged_drag_frame();
+        s.mouse_button(100.0, 300.0, "LeftButton", true);
+        s.mouse_move(130.0, 300.0); // 30 units: past the threshold
+        s.mouse_button(130.0, 300.0, "LeftButton", false);
+        assert_eq!(log(&s), "down dragstart dragstop receive");
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// A press that never crossed the threshold falls through to `OnMouseUp` (`0x76c067` je).
+    #[test]
+    fn a_plain_click_on_a_drag_frame_fires_mouseup() {
+        let mut s = logged_drag_frame();
+        s.mouse_button(100.0, 300.0, "LeftButton", true);
+        s.mouse_button(100.0, 300.0, "LeftButton", false);
+        assert_eq!(log(&s), "down up");
+    }
+
+    /// The gate `0x76c050` tests the released button against the frame's registered buttons: a
+    /// frame registered for LeftButton drag still gets `OnMouseUp` for a RightButton release.
+    #[test]
+    fn a_button_not_registered_for_drag_still_fires_mouseup() {
+        let mut s = logged_drag_frame();
+        s.mouse_button(100.0, 300.0, "RightButton", true);
+        s.mouse_move(130.0, 300.0);
+        s.mouse_button(130.0, 300.0, "RightButton", false);
+        assert_eq!(log(&s), "down up");
+    }
+
+    /// A stock resize grip starts sizing in `OnMouseDown` and is not drag-registered, so its
+    /// `OnMouseUp` (which stops the sizing) fires even after the cursor left it.
+    #[test]
+    fn a_resize_grip_still_gets_mouseup() {
+        let mut s = drag_script();
+        s.run(
+            r#"
+            ups = 0
+            local f = CreateFrame("Frame", "Sized", UIParent)
+            f:SetResizable(true)
+            f:SetPoint("BOTTOMLEFT", 100, 100); f:SetWidth(200); f:SetHeight(100)
+            local g = CreateFrame("Button", "Grip", f)
+            g:SetPoint("BOTTOMRIGHT", 0, 0); g:SetWidth(16); g:SetHeight(16)
+            g:EnableMouse(true)
+            g:SetScript("OnMouseDown", function() Sized:StartSizing("BOTTOMRIGHT") end)
+            g:SetScript("OnMouseUp", function() ups = ups + 1; Sized:StopMovingOrSizing() end)
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s.mouse_button(295.0, 105.0, "LeftButton", true);
+        s.mouse_move(395.0, 55.0); // dragged 100 right, 50 down, off the grip
+        s.mouse_button(395.0, 55.0, "LeftButton", false);
+        s.resolve();
+        assert_eq!(s.eval::<i64>("return ups").unwrap(), 1);
+        assert_eq!(s.eval::<f32>("return Sized:GetWidth()").unwrap(), 300.0);
+        s.mouse_move(500.0, 300.0);
+        s.resolve();
+        assert_eq!(
+            s.eval::<f32>("return Sized:GetWidth()").unwrap(),
+            300.0,
+            "the sizing ended on the release"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
     #[test]
     fn drag_not_started_leaves_the_ordinary_click_path_untouched() {
         let mut s = drag_script();
