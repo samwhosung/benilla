@@ -288,7 +288,7 @@ fn fire_scroll(lua: &Lua, this: &Table, script: &str, value: f32) -> mlua::Resul
 /// (`0x787186`) or no scroll child (`0x786e42`), and the mark is cleared either way, after the
 /// notify (`0x7871a5`). The recompute stores both ranges (`0x786eaa`, `0x786ed1`) and fires
 /// `OnScrollRangeChanged(self, xRange, yRange)` when either moved by 2⁻²² (`[0x8029d4]`) or more
-/// in the reference's screen-fraction units (`0x786ed7`–`0x786efd`), which is that times the
+/// in the reference's units (the screen diagonal as 1) (`0x786ed7`–`0x786efd`), which is that times the
 /// layout unit in ours.
 ///
 /// The reference drains its layout before the walk (`0x7656ba`) and measures text at once; ours
