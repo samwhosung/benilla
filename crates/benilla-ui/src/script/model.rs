@@ -643,6 +643,9 @@ pub(crate) struct Model {
     /// apart from `drag` as in the reference: a `StartMoving` or `StartSizing` outlives the button,
     /// since mouse-up's auto-stop skips a Lua drag.
     pub(crate) moving: Option<super::object::FrameMove>,
+    /// `SetLayoutMode`'s value, the root's `+0xcf8` (0 at start, `0x7642a5`): while non-zero, a
+    /// press with Control or Alt held is a layout drag (`0x766301`).
+    pub(crate) layout_mode: i32,
     /// A Slider thumb drag, left press to release or pointer leave, handled here with no Lua.
     pub(crate) slider_drag: Option<slider::SliderDrag>,
     /// A ColorSelect wheel or value-bar drag, press to release.
@@ -1337,6 +1340,7 @@ impl Model {
             drag_registered: HashMap::new(),
             drag: None,
             moving: None,
+            layout_mode: 0,
             slider_drag: None,
             color_drag: None,
             gossip: None,

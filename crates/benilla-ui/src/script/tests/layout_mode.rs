@@ -190,6 +190,7 @@ fn the_walk_skips_tooltip_and_a_stratum_whose_hit_has_no_toplevel() {
         "#,
     )
     .unwrap();
+    s.resolve();
     modifier_drag(&mut s, (200.0, 150.0), (60.0, 20.0), (false, true));
     assert_eq!(rect(&mut s, "Win"), (160.0, 120.0, 200.0, 100.0));
     assert_eq!(rect(&mut s, "Tip"), (150.0, 120.0, 100.0, 60.0));

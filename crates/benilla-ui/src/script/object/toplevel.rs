@@ -97,8 +97,12 @@ pub(in crate::script) fn raise_on_show(model: &mut Model, h: FrameHandle) {
     }
 }
 
-/// Step 1: the first frame up `+0x9c` with the toplevel bit (`0x7650fb..0x765135`).
-fn nearest_toplevel(model: &Model, frame: FrameHandle) -> Option<FrameHandle> {
+/// Step 1: the first frame up `+0x9c` with the toplevel bit (`0x7650fb..0x765135`), the walk the
+/// layout drag's lift repeats (`0x766fe0`).
+pub(in crate::script) fn nearest_toplevel(
+    model: &Model,
+    frame: FrameHandle,
+) -> Option<FrameHandle> {
     // A chain longer than the frame count is a cycle, which `SetParent` already refuses.
     let bound = model.arena.iter_frames().count();
     let mut cur = Some(frame);

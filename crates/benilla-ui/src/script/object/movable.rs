@@ -276,6 +276,67 @@ pub(crate) fn start_title_move(model: &mut Model, h: FrameHandle) -> bool {
     begin_drag(model, h, Point::Center, true)
 }
 
+/// Begin the layout-mode modifier drag on the toplevel window `h` that `0x765490`'s walk lifted,
+/// from its flag test on: Control held sizes and needs the window resizable (`0x765570`), else it
+/// moves and needs it movable (`0x765560`). Then `0x765320` with drag mode 1, which the release
+/// ends: grip CENTER for a move, the cell of `grid_grip` for a size. False when nothing started.
+pub(crate) fn start_layout_drag(
+    model: &mut Model,
+    h: FrameHandle,
+    at: (f32, f32),
+    sizing: bool,
+) -> bool {
+    let allowed = model
+        .arena
+        .frame(h)
+        .is_some_and(|f| if sizing { f.resizable } else { f.movable });
+    if !allowed {
+        return false;
+    }
+    let grip = if sizing {
+        grid_grip(model, h, at)
+    } else {
+        Some(Point::Center)
+    };
+    grip.is_some_and(|grip| begin_drag(model, h, grip, true))
+}
+
+/// `0x765320`'s sizing grip: with the layout resolved (`0x76533e` → `0x7680e0`), the cell of a 3×3
+/// grid of the frame's rect (`0x768320`) that `at` falls in, each axis cut at a quarter and three
+/// quarters (`0.25` at `0x8029b0`, `3.0` at `0x80297c`), a cut belonging to the cell past it; the
+/// middle cell is CENTER, a move (`0x765384`–`0x765464`). The x offset and the quarter-width stay
+/// in x87 registers, the y offset and the quarter-height are stored as floats (`0x765390`,
+/// `0x7653ab`). None when the frame has no rect (`0x765379`).
+fn grid_grip(model: &mut Model, h: FrameHandle, (x, y): (f32, f32)) -> Option<Point> {
+    UiScript::resolve_layout(model);
+    let r = *model.resolved.get(&h)?;
+    let dx = f64::from(x) - f64::from(r.left);
+    let quarter_w = (f64::from(r.right) - f64::from(r.left)) * 0.25;
+    let dy = f64::from((f64::from(y) - f64::from(r.bottom)) as f32);
+    let quarter_h = f64::from(((f64::from(r.top) - f64::from(r.bottom)) * 0.25) as f32);
+    // 0 the near cell (left, bottom), 1 the middle, 2 the far.
+    let cell = |d: f64, quarter: f64| {
+        if d < quarter {
+            0
+        } else if d >= quarter * 3.0 {
+            2
+        } else {
+            1
+        }
+    };
+    Some(match (cell(dx, quarter_w), cell(dy, quarter_h)) {
+        (0, 2) => Point::TopLeft,
+        (1, 2) => Point::Top,
+        (2, 2) => Point::TopRight,
+        (0, 1) => Point::Left,
+        (2, 1) => Point::Right,
+        (0, 0) => Point::BottomLeft,
+        (1, 0) => Point::Bottom,
+        (2, 0) => Point::BottomRight,
+        _ => Point::Center,
+    })
+}
+
 /// The drag entry `0x7652b0`: pin the frame (`0x7652c6` → `0x768430`) and, only when it has a rect
 /// to pin (`0x7652cd`), raise it (`0x7652d7`), set userPlaced (`0x7652e5`) and take the slot
 /// (`0x7652f3`–`0x76530f`) over whatever held it. False when the frame has no rect, so nothing

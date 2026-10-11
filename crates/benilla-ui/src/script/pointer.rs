@@ -294,12 +294,53 @@ impl UiScript {
             .is_some_and(|r| point_in_rect(*r, x, y))
     }
 
+    /// `0x765490`'s walk: strata FULLSCREEN_DIALOG down to WORLD, never TOOLTIP (the loop starts
+    /// below `root+0xcf4`, `0x7654a3`), each level high to low and the oldest link first, as the
+    /// hover sweep orders them, probing every shown frame with `0x76b020` alone, whatever its mouse
+    /// bit. The first hit is lifted to its nearest
+    /// toplevel self-or-ancestor (`0x766fe0`); one with none gives up the rest of its stratum and
+    /// the walk goes on in the next below (`0x76554a` → `0x765532`).
+    fn layout_drag_target(&self, x: f32, y: f32) -> Option<FrameHandle> {
+        let model = self.model_ref();
+        let sorted = order::traversal(&model.arena);
+        let scroll_sources = scroll_clip_sources(&model);
+        let mut below = order::Strata::Tooltip;
+        loop {
+            let hit = order::hit_test(&sorted, |fh| {
+                model.arena.frame(fh).is_some_and(|f| f.strata < below)
+                    && frame_contains(&model, &scroll_sources, fh, x, y)
+            })?;
+            if let Some(t) = super::object::toplevel::nearest_toplevel(&model, hit) {
+                return Some(t);
+            }
+            below = model.arena.frame(hit)?.strata;
+        }
+    }
+
     /// A mouse button press or release at `(x, y)`; `button` is the WoW name (`"LeftButton"`, …).
     /// `OnClick` follows `RegisterForClicks` ([`button::wants_click`], default `{"LeftButtonUp"}`):
     /// a press fires it for `"<Button>ButtonDown"`, a release on the pressed frame for
     /// `"<Button>ButtonUp"`. Its `down` argument is not 1.12, whose firer (`0x779540`) passes only
     /// the button name. Returns whether the UI consumed the event.
     pub fn mouse_button(&mut self, x: f32, y: f32, button: &str, down: bool) -> bool {
+        // ── The layout drag, ahead of everything ─────────────────────────────────────────────────
+        //
+        // With `SetLayoutMode` on, a press with Control (`0x41f8f0(1)`) or Alt (`0x41f8f0(2)`) held
+        // goes to `0x765490` as drag mode 1, Control asking for a size, and the handler returns
+        // consumed whatever that started (`0x766301`–`0x76635b`): no raise, title-region test,
+        // capture or press slot.
+        if down {
+            let (_, ctrl, alt) = self.model_ref().modifiers;
+            if self.model_ref().layout_mode != 0 && (ctrl || alt) {
+                let target = self.layout_drag_target(x, y);
+                let mut model = self.model_mut();
+                model.cursor_pos = (x, y);
+                if let Some(h) = target {
+                    crate::script::object::movable::start_layout_drag(&mut model, h, (x, y), ctrl);
+                }
+                return true;
+            }
+        }
         let hit_id = self.hit_test(x, y);
         // ── The press target: the capture, else the hover ──────────────────────────────────────
         //
@@ -357,9 +398,9 @@ impl UiScript {
         // ── The title region swallows the press ─────────────────────────────────────────────────
         //
         // A press inside the target's title region starts a mode-2 move and ends there:
-        // `0x7662c0` tests the region first and only a miss reaches `0x7663e6`, the capture and
-        // `OnMouseDown`. So no `OnMouseDown`, drag arm, `OnClick` or double-click stamp, and the
-        // event is consumed.
+        // `0x7662c0` tests the region before the capture (`0x766397`–`0x7663e5`) and only a miss
+        // reaches `0x7663e6`, the capture and `OnMouseDown`. So no `OnMouseDown`, drag arm,
+        // `OnClick` or double-click stamp, and the event is consumed.
         if let Some(h) = press_target {
             if self.title_region_hit(h, x, y) {
                 self.model_mut().cursor_pos = (x, y);
