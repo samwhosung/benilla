@@ -89,7 +89,7 @@ impl Addon {
     }
 
     /// Whether the files come off the player's patch chain.
-    fn from_chain(&self) -> bool {
+    fn is_chain(&self) -> bool {
         matches!(self.source, Source::Chain)
     }
 
@@ -400,7 +400,7 @@ fn manifest_in(dir: &Path, name: &str) -> Option<String> {
 
 /// The AddOn API's registry row for one discovered addon.
 fn info_for(addon: &Addon) -> benilla_ui::script::AddOnInfo {
-    info_from_toc(&addon.name, &addon.toc, addon.from_chain())
+    info_from_toc(&addon.name, &addon.toc, addon.is_chain())
 }
 
 /// The `## Secure: 1` directive. It grants nothing by itself: the client sends every such addon
@@ -929,7 +929,7 @@ impl Walk {
         // The files, `Bindings.xml` and the saved variables run under the addon's context.
         let outer = script.swap_exec_context(benilla_ui::script::addon_load_context(
             &addon.name,
-            secure(addon.from_chain(), &addon.toc),
+            secure(addon.is_chain(), &addon.toc),
         ));
         self.failures.extend(addon.load(script, &mut toc));
         let mut own = Status::default();
