@@ -819,6 +819,7 @@ impl UiScript {
     pub(super) fn scratch_divergence(model: &mut Model) -> Option<String> {
         let cached = std::mem::take(&mut model.layout_scope);
         let before = (model.resolved.clone(), model.region_resolved.clone());
+        let kept_before = model.region_kept.clone();
         let meters = (
             model.layout_solves,
             model.layout_rounds,
@@ -865,6 +866,14 @@ impl UiScript {
                 graph.as_deref().unwrap_or("same as fresh"),
             ));
         }
+        if kept_before != model.region_kept {
+            return Some(format!(
+                "an INCREMENTAL layout pass kept failed textures' quads {kept_before:?}, a full \
+                 derivation {:?}. Graph: {}",
+                model.region_kept,
+                graph.as_deref().unwrap_or("same as fresh"),
+            ));
+        }
         graph.map(|why| {
             format!(
                 "the cached layout graph diverged from a fresh derivation after an INCREMENTAL \
@@ -897,6 +906,9 @@ impl UiScript {
         // The GameTooltip pre-pass writes tooltip sizes and offsets from cached measures.
         super::tooltip::layout_tooltips(model);
         pre.tooltip = pre.lap();
+        // The invalidations since the last resolve, the pre-pass's included, each answered by this
+        // one, as the reference drains its whole queue (`0x768ed0`).
+        let pending = std::mem::take(&mut model.layout_pending);
         // ── `OnSizeChanged`'s "before" ───────────────────────────────────────────────────────
         // The reference fires it per rect application (`ApplyRect 0x76b580`); our batch fixpoint
         // fires on the entry-vs-convergence diff, never on a half-solved round. Only frames with
@@ -925,7 +937,10 @@ impl UiScript {
             resolved,
             region_data,
             region_resolved,
+            region_kept,
             frame_to_id,
+            id_to_frame,
+            id_to_region,
             screen,
             warnings,
             diagnostics,
@@ -941,21 +956,60 @@ impl UiScript {
             pending_size_changed,
             texture_size_probe,
             layout_force,
+            layout_screen,
             ..
         } = model;
         let mut full_scope = false;
         // The nodes this resolve stores without the keep test; a write that cleared the resolved
         // bit of no node (an unanchored region's measure) leaves nothing to store.
         let mut forced = std::mem::take(layout_force);
+        // An invalidated region with no anchors is no node, and its resolve can only fail
+        // (`0x768d55`): its valid bit clears, a Texture keeps its last quad. So does one whose
+        // owner's scale moved, which the cascade invalidates (`0x76ad06`).
+        let fail_loose = |rh: RegionHandle,
+                          region_resolved: &mut HashMap<RegionHandle, Rect>,
+                          region_kept: &mut HashMap<RegionHandle, Rect>| {
+            let Some(r) = arena.region(rh) else { return };
+            if region_data.get(&rh).is_some_and(|d| !d.anchors.is_empty()) {
+                return;
+            }
+            if let Some(rect) = region_resolved.remove(&rh) {
+                if !matches!(r.kind, crate::widget::RegionKind::FontString) {
+                    region_kept.insert(rh, rect);
+                }
+            }
+        };
+        for &id in &pending {
+            if let Some(&rh) = id_to_region.get(&id) {
+                fail_loose(rh, region_resolved, region_kept);
+            }
+        }
+        for &id in &forced {
+            if let Some(&rh) = id_to_region.get(&id) {
+                fail_loose(rh, region_resolved, region_kept);
+            } else if let Some(f) = id_to_frame.get(&id).and_then(|&h| arena.frame(h)) {
+                for &rh in &f.regions {
+                    fail_loose(rh, region_resolved, region_kept);
+                }
+            }
+        }
         forced.retain(|&id| {
             scope
                 .node_of
                 .get(id as usize)
                 .is_some_and(|&n| n != u32::MAX)
         });
+        let mut pending = pending;
+        pending.retain(|&id| {
+            scope
+                .node_of
+                .get(id as usize)
+                .is_some_and(|&n| n != u32::MAX)
+        });
         // An incremental pass has no fingerprint; its verdict is `staged`, exactly the seed set.
-        // A forced node is solved even with its inputs unmoved.
+        // A forced or invalidated node is solved even with its inputs unmoved.
         let gate_skips = forced.is_empty()
+            && pending.is_empty()
             && match fp {
                 Some(_) => *layout_fingerprint == fp,
                 None => scope.staged.is_empty(),
@@ -1031,19 +1085,28 @@ impl UiScript {
                 scope.close();
             }
         }
-        // A forced node, and whatever reads it, is solved: the store it owes moves its rect.
-        for &id in &forced {
+        // A forced or invalidated node, and whatever reads it, is solved: the store it owes moves
+        // its rect.
+        for &id in forced.iter().chain(&pending) {
             scope.seed(id);
         }
         scope.close();
         let mut force_mask: Vec<bool> = Vec::new();
-        if !forced.is_empty() {
+        let mut invalid_mask: Vec<bool> = Vec::new();
+        if !forced.is_empty() || !pending.is_empty() {
             force_mask.resize(scope.node_of.len(), false);
+            invalid_mask.resize(scope.node_of.len(), false);
             for &id in &forced {
                 force_mask[id as usize] = true;
+                invalid_mask[id as usize] = true;
+            }
+            for &id in &pending {
+                invalid_mask[id as usize] = true;
             }
         }
         let is_forced = |id: u32| force_mask.get(id as usize).copied().unwrap_or(false);
+        // Invalidated since the last resolve (`0x7680e0`): solved from its inputs, never kept.
+        let is_invalid = |id: u32| invalid_mask.get(id as usize).copied().unwrap_or(false);
         // A dirty frame is solved, a dirty region swept, and whatever they read is seeded at its
         // cached rect. A dirty region is seeded too, since the frame pass runs before the sweep.
         let mut solve_frames: Vec<u32> = Vec::new();
@@ -1061,9 +1124,21 @@ impl UiScript {
             }
             false
         };
+        // A cleared region is no node but keeps its rect, which what anchors to it still reads.
+        let mut seed_loose: Vec<(u32, Rect)> = Vec::new();
         for id in 0..scope.node_of.len() {
             let n = scope.node_of[id];
             if n == u32::MAX {
+                #[allow(clippy::cast_possible_truncation)]
+                let id32 = id as u32;
+                if scope.dep_head[id] != u32::MAX && read_by_dirty(scope, id32) {
+                    if let Some(r) = id_to_region
+                        .get(&id32)
+                        .and_then(|rh| region_resolved.get(rh))
+                    {
+                        seed_loose.push((id32, *r));
+                    }
+                }
                 continue;
             }
             let (idx, is_region, dirty) = (n & !REGION_TAG, n & REGION_TAG != 0, scope.dirty[id]);
@@ -1099,14 +1174,15 @@ impl UiScript {
                     .flatten()
             })
             .collect();
-        let entry_regions: Vec<Option<Rect>> = sweep_regions
+        let entry_regions: Vec<(Option<Rect>, bool)> = sweep_regions
             .iter()
             .map(|&i| {
                 let row = scope.regions[i as usize];
                 let owner_forced = frame_to_id.get(&row.owner).is_some_and(|&o| is_forced(o));
-                (!is_forced(row.id) && !owner_forced)
+                let cached = (!is_forced(row.id) && !owner_forced)
                     .then(|| region_resolved.get(&row.rh).copied())
-                    .flatten()
+                    .flatten();
+                (cached, is_invalid(row.id) || owner_forced)
             })
             .collect();
         solver.set_keep_eps(resolve_eps);
@@ -1124,11 +1200,19 @@ impl UiScript {
             // Seed the screen root and every read rect this pass does not recompute.
             solver.begin();
             solver.set_external(SCREEN, *screen);
+            // The screen the last converged resolve read: a move reaches what anchors to it.
+            solver.set_entry(SCREEN, *layout_screen, false);
             for &i in &seed_regions {
                 let n = scope.regions[i as usize];
                 if let Some(r) = region_resolved.get(&n.rh) {
                     solver.set_external(n.id, *r);
                 }
+            }
+            for &(id, r) in &seed_loose {
+                solver.set_external(id, r);
+            }
+            for (&i, &(cached, invalid)) in sweep_regions.iter().zip(&entry_regions) {
+                solver.set_entry(scope.regions[i as usize].id, cached, invalid);
             }
             for &i in &seed_frames {
                 let (h, id, _) = scope.plan[i as usize];
@@ -1145,9 +1229,7 @@ impl UiScript {
                     Some(a) => solver.set_frame_anchored(id, input, a),
                     None => solver.set_frame(id, input),
                 }
-                if let Some(c) = cached {
-                    solver.set_cached(id, c);
-                }
+                solver.set_entry(id, cached, is_invalid(id));
             }
             solver.solve();
             for &i in &solve_frames {
@@ -1175,7 +1257,7 @@ impl UiScript {
             }
             let t_reg = prof.then(std::time::Instant::now);
             let mut scratch = LayoutInput::default();
-            for (&ri, &cached) in sweep_regions.iter().zip(&entry_regions) {
+            for (&ri, &(cached, _)) in sweep_regions.iter().zip(&entry_regions) {
                 let RegionRow {
                     rh,
                     id: region_id,
@@ -1247,10 +1329,36 @@ impl UiScript {
                 };
                 let vertical = axis(edges[0], edges[2]);
                 let horizontal = axis(edges[1], edges[3]);
-                let (Some((bottom, top)), Some((left, right))) = (vertical, horizontal) else {
-                    // Unresolvable: drop its rect, so it stops drawing instead of going stale.
-                    if region_resolved.remove(&rh).is_some() {
+                let resolved_edges = vertical.zip(horizontal);
+                // Not reached since its entry: it keeps its state, rect or none (see
+                // `LayoutSolver::set_entry`).
+                let reads = data.anchors.iter().map(|a| a.relative_to);
+                if !solver.takes_resolve(region_id, resolved_edges.is_some(), reads) {
+                    match solver.entry(region_id) {
+                        Some(kept) => {
+                            solver.set_external(region_id, kept);
+                            if region_resolved.get(&rh) != Some(&kept) {
+                                region_resolved.insert(rh, kept);
+                                changed = true;
+                            }
+                        }
+                        None => {
+                            if region_resolved.remove(&rh).is_some() {
+                                changed = true;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let Some(((bottom, top), (left, right))) = resolved_edges else {
+                    // The failed resolve (`0x768d55`) clears the valid bit, so the getters and a
+                    // FontString's draw lose the rect; a Texture keeps the quad its last good
+                    // resolve wrote (`0x770670`), as its emit checks only its texture (`0x7706e0`).
+                    if let Some(last) = region_resolved.remove(&rh) {
                         changed = true;
+                        if !is_fontstring {
+                            region_kept.insert(rh, last);
+                        }
                     }
                     continue;
                 };
@@ -1265,6 +1373,7 @@ impl UiScript {
                     region_resolved.insert(rh, rect);
                     changed = true;
                 }
+                region_kept.remove(&rh);
             }
 
             if let Some(t) = t_reg {
@@ -1301,6 +1410,7 @@ impl UiScript {
                     );
                 }
                 *layout_fingerprint = fp;
+                *layout_screen = Some(*screen);
                 // Adopted only on convergence; an incremental pass adopts only what it re-hashed.
                 if incremental {
                     scope.commit_incremental();
@@ -1358,6 +1468,7 @@ impl UiScript {
             layout_inputs,
             region_data,
             region_resolved,
+            region_kept,
             frame_to_id,
             id_to_region,
             region_to_id,
@@ -1434,12 +1545,10 @@ impl UiScript {
         // alternates a frame solve and a region sweep until a round changes no rect, compared
         // exactly. The round cap is the node count, so only a cycle exhausts it, warned like the
         // reference's resolving-flag bail. Every rect is recomputed from inputs and externals and
-        // held against its own cached rect, so last frame's rects are a legal seed: only dead or
-        // unanchored regions drop.
-        region_resolved.retain(|rh, _| {
-            arena.region(*rh).is_some()
-                && region_data.get(rh).is_some_and(|d| !d.anchors.is_empty())
-        });
+        // held against its own cached rect, so last frame's rects are a legal seed: only dead
+        // regions drop. A cleared one keeps its rect until its own next invalidate.
+        region_resolved.retain(|rh, _| arena.region(*rh).is_some() && region_data.contains_key(rh));
+        region_kept.retain(|rh, _| arena.region(*rh).is_some() && region_data.contains_key(rh));
         pre.retain = pre.lap();
 
         // ── The change gate ───────────────────────────────────────────────────────────────────
@@ -1565,6 +1674,7 @@ impl UiScript {
             layout_inputs,
             region_data,
             region_resolved,
+            region_kept,
             frame_to_id,
             id_to_frame,
             id_to_region,
@@ -1681,8 +1791,12 @@ impl UiScript {
             });
             let Some((rh, r, data)) = live else {
                 if is_region_node {
+                    // A cleared region leaves the graph but keeps its rect; a dead one drops it.
                     let row = scope.remove_region(id, n);
-                    region_resolved.remove(&row.rh);
+                    if arena.region(row.rh).is_none() || !region_data.contains_key(&row.rh) {
+                        region_resolved.remove(&row.rh);
+                        region_kept.remove(&row.rh);
+                    }
                 } else if n != u32::MAX {
                     scope.targets = targets;
                     return false;

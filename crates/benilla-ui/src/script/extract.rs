@@ -302,20 +302,26 @@ impl UiScript {
                     if let Some(c) = state_color {
                         data.vertex_color = Some(c);
                     }
-                    // A region draws at its resolved rect only: drawable regions carry anchors
-                    // (authored, or `region::implicit_creation_anchor`) and a failed resolve
-                    // latches unresolvable (`0x768d55`), so an unanchored Lua region draws nowhere,
-                    // as in the reference. The bar fill and thumbs keep their fraction geometry.
+                    // A region draws at its resolved rect: drawable regions carry anchors
+                    // (authored, or `region::implicit_creation_anchor`), so a region that never
+                    // resolved draws nowhere, as in the reference. After a failed resolve
+                    // (`0x768d55`) a FontString stops (`0x7730b7` needs the valid bit) and a
+                    // Texture keeps the quad its last good resolve wrote (`0x7706e0`). The bar
+                    // fill and thumbs keep their fraction geometry.
                     if let Some(sb) = bar_fill {
                         data.tex_coords = Some(bar_fill_uv(data.tex_coords, sb));
-                    }
-                    if bar_fill.is_none() && !thumb_fill && !color_thumb {
-                        rect = model.region_resolved.get(&rh).copied();
                     }
                     let is_text = matches!(
                         region.map(|r| r.kind),
                         Some(crate::widget::RegionKind::FontString)
                     );
+                    if bar_fill.is_none() && !thumb_fill && !color_thumb {
+                        rect = model.region_resolved.get(&rh).copied().or_else(|| {
+                            (!is_text)
+                                .then(|| model.region_kept.get(&rh).copied())
+                                .flatten()
+                        });
+                    }
                     // Generated art fills only an empty slot (`ColorPickerFrame.xml` sets none).
                     let content = if let Some(art) =
                         color_art.filter(|_| data.texture.is_none() && data.fill.is_none())

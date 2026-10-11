@@ -170,6 +170,10 @@ fn the_stock_interface_inside_uiparent_is_unmoved_by_where_the_scale_lives() {
     let (w, h) = (768.0 * 16.0 / 9.0, 768.0);
     let mut script = UiScript::new().expect("VM");
     script.set_screen_size(w, h);
+    // Art with an extent, as the app's probe gives it, so a texture sized 0 on an axis (a tab's
+    // middle, sized by its unmeasured label) resolves instead of failing: a failed texture keeps
+    // the quad its last good resolve wrote, which no later scale moves.
+    script.set_texture_size_probe(Box::new(|_| Some((32, 32))));
     let failures = super::load_default_ui(&script);
     assert!(
         failures.is_empty(),

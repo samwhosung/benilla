@@ -809,9 +809,15 @@ pub struct LayoutSolver {
     is_frame: Vec<bool>,
     /// Externals as seeded, frames as they resolve.
     rect: Vec<Option<Rect>>,
-    /// Per frame, the rect it held before this round, which [`keeps_rect`] holds a new one against;
-    /// `None` stores the new rect whole, as the reference does while the resolved bit is clear.
+    /// Per node, the rect it held when this resolve began, its valid bit set, else `None`
+    /// ([`set_entry`](Self::set_entry)): what [`keeps_rect`] holds a new rect against, what a node
+    /// the resolve need not revisit keeps, and what a target's change is measured from.
     cached: Vec<Option<Rect>>,
+    /// Per node, whether [`set_entry`](Self::set_entry) gave its entry state. A frame without one
+    /// is solved from its inputs alone, as if invalidated.
+    has_entry: Vec<bool>,
+    /// Per frame, whether it was invalidated (`0x7680e0`) since its entry state.
+    pending: Vec<bool>,
     /// The keep test's threshold in the rects' units; 0 keeps nothing.
     keep_eps: f64,
     /// Kahn in-degree and reverse edges; each inner `Vec` is cleared, never freed.
@@ -841,6 +847,8 @@ impl LayoutSolver {
             self.is_frame.resize(need, false);
             self.rect.resize(need, None);
             self.cached.resize(need, None);
+            self.has_entry.resize(need, false);
+            self.pending.resize(need, false);
             self.indeg.resize(need, 0);
             self.dependents.resize_with(need, Vec::new);
             self.marked.resize(need, false);
@@ -864,6 +872,8 @@ impl LayoutSolver {
             self.is_frame[i] = false;
             self.rect[i] = None;
             self.cached[i] = None;
+            self.has_entry[i] = false;
+            self.pending[i] = false;
             self.indeg[i] = 0;
             self.dependents[i].clear();
             self.marked[i] = false;
@@ -907,12 +917,70 @@ impl LayoutSolver {
         self.live.push(h);
     }
 
-    /// Give registered frame `h` the rect it holds, so a new one within the keep threshold
-    /// ([`set_keep_eps`](Self::set_keep_eps)) leaves it standing, for `h` and its dependents alike.
-    pub fn set_cached(&mut self, h: Handle, rect: Rect) {
+    /// The state node `h` was in when this resolve began, its rect while its valid bit is set,
+    /// and whether it was invalidated since (`0x7680e0`: its own write, a cleared valid bit).
+    ///
+    /// The reference resolves only what is invalidated: by its own write, or by a target's
+    /// resolve that stored a new rect (`0x768cf0`). A failed resolve stores nothing and skips that
+    /// slot (`0x768d55`), and `ClearAllPoints` invalidates nothing (`0x767620`). So a node not
+    /// reached keeps this state wherever a recompute could differ from it: when its resolve fails,
+    /// or reads a target with no rect. The rect is also what the keep test
+    /// ([`set_keep_eps`](Self::set_keep_eps)) holds a new one against.
+    pub fn set_entry(&mut self, h: Handle, rect: Option<Rect>, invalidated: bool) {
         self.ensure(h);
         self.touch(h);
-        self.cached[h as usize] = Some(rect);
+        let i = h as usize;
+        self.cached[i] = rect;
+        self.has_entry[i] = true;
+        self.pending[i] = invalidated;
+    }
+
+    /// Whether `h` now holds a rect it did not hold at entry: a resolve that stored a new rect,
+    /// which invalidates what anchors to `h`. A frame given no entry counts any rect as new; an
+    /// external given none never changes.
+    #[inline]
+    pub fn changed(&self, h: Handle) -> bool {
+        let i = h as usize;
+        let Some(now) = self.rect.get(i).copied().flatten() else {
+            return false;
+        };
+        if self.has_entry[i] {
+            self.cached[i] != Some(now)
+        } else {
+            self.is_frame[i]
+        }
+    }
+
+    /// Whether node `h` takes the rect its inputs give it, by the rule [`set_entry`]
+    /// documents: when it was invalidated, when an anchor target stored a new rect, or when the
+    /// rect resolved against targets that all hold one. `reads` lists its anchor targets.
+    ///
+    /// [`set_entry`]: Self::set_entry
+    pub fn takes_resolve(
+        &self,
+        h: Handle,
+        resolved: bool,
+        reads: impl Iterator<Item = Handle>,
+    ) -> bool {
+        let i = h as usize;
+        if !self.has_entry.get(i).copied().unwrap_or(false) || self.pending[i] {
+            return true;
+        }
+        let mut reads_failed = false;
+        for t in reads {
+            if self.rect(t).is_none() {
+                reads_failed = true;
+            } else if self.changed(t) {
+                return true;
+            }
+        }
+        resolved && !reads_failed
+    }
+
+    /// The entry rect of node `h`, which it keeps when the resolve does not reach it.
+    #[inline]
+    pub fn entry(&self, h: Handle) -> Option<Rect> {
+        self.cached.get(h as usize).copied().flatten()
     }
 
     /// The keep test's threshold, [`RESOLVE_EPS`] in the rects' units; kept across rounds.
@@ -991,15 +1059,26 @@ impl LayoutSolver {
     }
 
     fn resolve_one(&mut self, h: Handle) {
+        let i = h as usize;
         let outcome = {
-            let input = &self.input[h as usize];
+            let input = &self.input[i];
             let rects = &self.rect;
             resolve_rect(input, |t| rects.get(t as usize).copied().flatten())
         };
+        let anchors = self.input[i].anchors;
+        let resolved = matches!(outcome, ResolveOutcome::Resolved(_));
+        if !self.takes_resolve(h, resolved, anchors.iter().map(|a| a.relative_to)) {
+            // Not reached: the entry state stands, rect or none.
+            self.rect[i] = self.cached[i];
+            if self.rect[i].is_none() {
+                self.unresolvable.push(h);
+            }
+            return;
+        }
         match outcome {
             ResolveOutcome::Resolved(r) => {
-                let kept = self.cached[h as usize].filter(|&c| keeps_rect(c, r, self.keep_eps));
-                self.rect[h as usize] = Some(kept.unwrap_or(r));
+                let kept = self.cached[i].filter(|&c| keeps_rect(c, r, self.keep_eps));
+                self.rect[i] = Some(kept.unwrap_or(r));
             }
             ResolveOutcome::Unresolvable => self.unresolvable.push(h),
         }
@@ -1484,7 +1563,7 @@ mod tests {
                     20.0,
                 ),
             );
-            s.set_cached(A, Rect::new(0.0, 10.0, 20.0, 30.0));
+            s.set_entry(A, Some(Rect::new(0.0, 10.0, 20.0, 30.0)), true);
             s.set_frame(
                 B,
                 &LayoutInput::sized(
@@ -1508,6 +1587,82 @@ mod tests {
         let (a, b) = solve(10.02);
         assert_eq!(a.left, 10.02);
         assert_eq!(b.left, a.right);
+    }
+
+    /// A frame with no anchors keeps the rect it entered with until it is invalidated, and what
+    /// anchors to a frame whose resolve fails keeps its own: a failed resolve reaches nothing.
+    #[test]
+    fn a_node_not_reached_keeps_its_entry_state() {
+        const A: Handle = 1;
+        const B: Handle = 2;
+        let held = Rect::new(0.0, 10.0, 20.0, 30.0);
+        let below = Rect::new(-5.0, 30.0, 0.0, 35.0);
+        let solve = |a_invalidated: bool| {
+            let mut s = LayoutSolver::new();
+            s.begin();
+            s.set_external(SCREEN, screen_rect());
+            s.set_frame(A, &LayoutInput::sized(vec![], 20.0, 20.0));
+            s.set_entry(A, Some(held), a_invalidated);
+            s.set_frame(
+                B,
+                &LayoutInput::sized(
+                    vec![Anchor::new(Point::TopLeft, A, Point::BottomRight, 0.0, 0.0)],
+                    5.0,
+                    5.0,
+                ),
+            );
+            s.set_entry(B, Some(below), false);
+            s.solve();
+            (s.rect(A), s.rect(B))
+        };
+        assert_eq!(solve(false), (Some(held), Some(below)), "nothing reached A");
+        assert_eq!(
+            solve(true),
+            (None, Some(below)),
+            "A fails, and B is not reached"
+        );
+    }
+
+    /// A target that stores a new rect reaches what anchors to it, which resolves again.
+    #[test]
+    fn a_target_with_a_new_rect_reaches_its_dependents() {
+        const A: Handle = 1;
+        const B: Handle = 2;
+        let mut s = LayoutSolver::new();
+        s.begin();
+        s.set_external(SCREEN, screen_rect());
+        s.set_frame(
+            A,
+            &LayoutInput::sized(
+                vec![Anchor::new(
+                    Point::BottomLeft,
+                    SCREEN,
+                    Point::BottomLeft,
+                    10.0,
+                    0.0,
+                )],
+                20.0,
+                20.0,
+            ),
+        );
+        s.set_entry(A, None, true);
+        s.set_frame(
+            B,
+            &LayoutInput::sized(
+                vec![Anchor::new(
+                    Point::BottomLeft,
+                    A,
+                    Point::BottomRight,
+                    0.0,
+                    0.0,
+                )],
+                5.0,
+                5.0,
+            ),
+        );
+        s.set_entry(B, Some(Rect::new(0.0, 0.0, 1.0, 1.0)), false);
+        s.solve();
+        assert_eq!(s.rect(B), Some(Rect::new(0.0, 30.0, 5.0, 35.0)));
     }
 
     #[test]

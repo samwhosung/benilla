@@ -142,6 +142,15 @@ pub(crate) struct Model {
     /// measure landed, benilla's moment for `SetText` and `SetFont` (`0x771ea4`, `0x7715e0`). Each
     /// is named on the layout too, so the resolve that drains this list solves it.
     pub(crate) layout_force: Vec<u32>,
+    /// Layout ids invalidated since the last resolve (`0x7680e0` on the node): a write the
+    /// reference queues a resolve for, `SetPoint`, `SetWidth` and the like, but not
+    /// `ClearAllPoints` (`0x767620`). The next resolve solves each one from its inputs, where a
+    /// node nothing invalidated keeps a state a recompute could change
+    /// ([`Model::invalidate_frame`]).
+    pub(crate) layout_pending: Vec<u32>,
+    /// The screen the last converged resolve laid out against: a frame anchored to it is reached
+    /// when it moves, as by any target's new rect.
+    pub(crate) layout_screen: Option<Rect>,
     /// Under `WOW_LAYOUT_VERIFY`, the resolve just taken was incremental and owes a full re-run.
     pub(crate) layout_verify_recheck: bool,
     /// Per-node input hashes and dirty-closure scratch: which nodes a let-through resolve solves.
@@ -174,8 +183,14 @@ pub(crate) struct Model {
     /// Named `<Font>` objects by lowercased name, as 1.12 matches them with `SStrCmpI` (`0x783870`,
     /// `0x7838c7`); read them only through `font_object`, where the fold lives.
     pub(crate) font_objects_by_lower: HashMap<String, FontObject>,
-    /// Anchored regions' owner-relative rects from the last resolve; anchor-less ones are absent.
+    /// Each region's rect while its valid bit is set: what its getters and a FontString's draw
+    /// read (`GetRect 0x768320`, `0x7730b7`). A cleared region keeps its rect until its own next
+    /// invalidate, as `ClearAllPoints` queues no resolve (`0x767620`).
     pub(crate) region_resolved: HashMap<RegionHandle, Rect>,
+    /// A Texture whose resolve failed: the rect its last good resolve placed it at, which it keeps
+    /// drawing, as the failed resolve (`0x768d55`) leaves the quad `0x770670` wrote and its emit
+    /// checks only its texture (`0x7706e0`). Dropped when it resolves again.
+    pub(crate) region_kept: HashMap<RegionHandle, Rect>,
 
     /// The next object id to mint; ids start at 1, since 0 is `SCREEN`.
     pub(crate) next_id: u32,
@@ -1123,6 +1138,7 @@ impl Model {
             simple_html: simplehtml::SimpleHtmlStates::new(),
             font_objects_by_lower: HashMap::new(),
             region_resolved: HashMap::new(),
+            region_kept: HashMap::new(),
             next_id: 1,
             id_to_frame: IdMap::default(),
             frame_to_id: HashMap::new(),
@@ -1150,6 +1166,8 @@ impl Model {
             pending_size_changed: Vec::new(),
             text_flips: Vec::new(),
             layout_force: Vec::new(),
+            layout_pending: Vec::new(),
+            layout_screen: None,
             errors: Vec::new(),
             pending_error_dispatch: Vec::new(),
             diagnostics: Default::default(),
@@ -1666,6 +1684,69 @@ impl Model {
             }
             None => self.bump_layout_epoch(),
         }
+    }
+
+    /// A write the reference invalidates frame `h` for (`0x7680e0`): `SetPoint`, `SetWidth`,
+    /// `SetClampedToScreen` and the like, which pass `changed` for whether it moved an input. One
+    /// that moved nothing is skipped, as a re-resolve gives back the rect the frame holds, unless
+    /// the frame holds one a re-resolve would not give it ([`Self::frame_holds_stale`]).
+    pub(crate) fn invalidate_frame(&mut self, h: FrameHandle, changed: bool) {
+        if !changed && !self.frame_holds_stale(h) {
+            return;
+        }
+        self.touch_layout_frame(h);
+        if let Some(&id) = self.frame_to_id.get(&h) {
+            self.layout_pending.push(id);
+        }
+    }
+
+    /// [`Self::invalidate_frame`] for region `rh`.
+    pub(crate) fn invalidate_region(&mut self, rh: RegionHandle, changed: bool) {
+        if !changed && !self.region_holds_stale(rh) {
+            return;
+        }
+        // A region with no id was never anchored, so it holds no rect to lose.
+        self.touch_layout_region(rh);
+        if let Some(&id) = self.region_to_id.get(&rh) {
+            self.layout_pending.push(id);
+        }
+    }
+
+    /// Whether frame `h` holds a rect its inputs would not resolve to now: it has no anchors, or
+    /// reads a target with no rect, so the rect stands only because nothing invalidated it since.
+    pub(crate) fn frame_holds_stale(&self, h: FrameHandle) -> bool {
+        if !self.resolved.contains_key(&h) {
+            return false;
+        }
+        self.layout_inputs
+            .get(&h)
+            .is_none_or(|i| self.anchors_hold_stale(&i.anchors, false))
+    }
+
+    /// [`Self::frame_holds_stale`] for region `rh`.
+    pub(crate) fn region_holds_stale(&self, rh: RegionHandle) -> bool {
+        if !self.region_resolved.contains_key(&rh) {
+            return false;
+        }
+        self.region_data
+            .get(&rh)
+            .is_none_or(|d| self.anchors_hold_stale(&d.anchors, true))
+    }
+
+    /// No anchors, or one whose target has no rect; a region reads none at the screen root.
+    fn anchors_hold_stale(&self, anchors: &crate::layout::Anchors, region: bool) -> bool {
+        anchors.is_empty()
+            || anchors.iter().any(|a| {
+                let t = a.relative_to;
+                if t == super::SCREEN {
+                    return region;
+                }
+                match (self.id_to_frame.get(&t), self.id_to_region.get(&t)) {
+                    (Some(f), _) => !self.resolved.contains_key(f),
+                    (_, Some(r)) => !self.region_resolved.contains_key(r),
+                    _ => true,
+                }
+            })
     }
 
     /// Every frame under `root`, inclusive, for a write that moves the effective scale down a

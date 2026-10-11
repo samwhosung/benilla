@@ -678,6 +678,7 @@ pub(super) fn region_type_name(model: &Model, rh: RegionHandle) -> &'static str 
 pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
     model.region_data.remove(&rh);
     model.region_resolved.remove(&rh);
+    model.region_kept.remove(&rh);
     let name = model.arena.region(rh).and_then(|r| r.name.clone());
     if let Some(id) = model.region_to_id.remove(&rh) {
         model.id_to_region.remove(&id);
@@ -810,14 +811,14 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
     let rel_to_id = resolve_rel_target(&model, &p.target, &who, "SetPoint", me, owner)?;
     let (point, rel_point, x, y) = (p.point, p.rel_point, p.x, p.y);
 
-    // The frame's store and its unchanged-anchor test (`0x767c70`).
+    // The frame's store and its unchanged-anchor test (`0x767c70`), which queues no resolve.
     let units = model.layout_units();
     let data = model.region_data.entry(rh).or_default();
     if data
         .anchors
         .set(Anchor::new(point, rel_to_id, rel_point, x, y), units)
     {
-        model.touch_layout_region(rh);
+        model.invalidate_region(rh, true);
     }
     Ok(())
 }

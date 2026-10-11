@@ -38,8 +38,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     set_shared(lua, m, Side::Frame, "ClearAllPoints", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
         let mut model = lua.app_data_mut::<Model>().expect("model");
-        // Every layout setter mutates only on a real change, so a per-frame caller setting the
-        // same value never reopens the layout gate.
+        // `0x767620` frees the anchors and unhooks each from its target, and queues no resolve:
+        // the frame keeps its rect until its own next invalidate. Named, as the graph loses the
+        // edges. Every layout setter mutates only on a real change, so a per-frame caller setting
+        // the same value never reopens the layout gate.
         let cleared = model
             .layout_inputs
             .get_mut(&h)
@@ -107,12 +109,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 Anchor::new(Point::BottomRight, rel_id, Point::BottomRight, 0.0, 0.0),
             ];
             let input = model.layout_inputs.entry(h).or_default();
-            // The reference clears and sets both (`0x767db0`); only a bit-identical pair skips.
+            // The reference clears, sets both and invalidates (`0x767db0`); a bit-identical pair
+            // moves no input.
             let pair = Anchors::from(pair);
-            if !input.anchors.bits_eq(&pair) {
-                input.anchors = pair;
-                model.touch_layout_frame(h);
-            }
+            let changed = !input.anchors.bits_eq(&pair);
+            input.anchors = pair;
+            model.invalidate_frame(h, changed);
             Ok(())
         },
     )?;
@@ -127,10 +129,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let input = model.layout_inputs.entry(h).or_default();
             let changed = input.width.to_bits() != w.to_bits();
             input.width = w;
-            if changed {
-                // A size write moves no edge and no roster membership.
-                model.touch_layout_frame(h);
-            }
+            // A size write moves no edge and no roster membership. It invalidates whether or not
+            // the width moved (`0x7683d0`).
+            model.invalidate_frame(h, changed);
             model.note_authored_size(h);
             Ok(())
         },
@@ -146,9 +147,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let input = model.layout_inputs.entry(h).or_default();
             let changed = input.height.to_bits() != ht.to_bits();
             input.height = ht;
-            if changed {
-                model.touch_layout_frame(h);
-            }
+            model.invalidate_frame(h, changed);
             model.note_authored_size(h);
             Ok(())
         },
@@ -226,7 +225,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 /// next layout drain (`UiScript::resolve`), not inside the getter as the reference's forced
 /// `ApplyRect 0x76b580` does, because running Lua handlers inside a binding risks a borrow panic
 /// or unbounded recursion.
-fn settle(lua: &Lua) {
+pub(in crate::script) fn settle(lua: &Lua) {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     crate::script::UiScript::resolve_layout(&mut model);
 }
@@ -275,11 +274,12 @@ fn set_point(lua: &Lua, this: &Table, args: &MultiValue) -> mlua::Result<()> {
 
     let units = model.layout_units();
     let input = model.layout_inputs.entry(h).or_default();
+    // An unchanged anchor stores nothing and queues no resolve (`0x767cde` → `0x767d5e`).
     if input
         .anchors
         .set(Anchor::new(point, rel_to_id, rel_point, x, y), units)
     {
-        model.touch_layout_frame(h);
+        model.invalidate_frame(h, true);
     }
     Ok(())
 }

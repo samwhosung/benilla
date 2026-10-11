@@ -792,10 +792,12 @@ fn the_bg_bottomright_anchor_answers_the_top_inset() {
     .unwrap();
 }
 
-/// A teardown kills the pieces' layout nodes; whatever anchored to one re-resolves against the
-/// missing rect in the dirty-scope solve, exactly as a from-scratch solve of the same model does.
+/// A teardown kills the pieces' layout nodes. What anchored to one is not invalidated: the
+/// piece's teardown (`0x767720` → `0x768e20`) unhooks it with no resolve queued (`0x767e70` with
+/// a zero flag), so it keeps its rect and draws in place, in the dirty-scope solve exactly as in
+/// a from-scratch solve of the same model.
 #[test]
-fn a_teardown_re_resolves_what_anchored_to_a_piece() {
+fn a_teardown_leaves_what_anchored_to_a_piece_in_place() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -840,5 +842,8 @@ fn a_teardown_re_resolves_what_anchored_to_a_piece() {
         incremental == full,
         "the dirty-scope solve matches a full one"
     );
-    assert!(!drawn(&s), "its anchor target is gone");
+    assert!(
+        drawn(&s),
+        "its anchor target is gone, and nothing re-resolved it"
+    );
 }

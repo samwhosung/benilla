@@ -675,9 +675,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let changed = model.arena.is_clamped_to_screen(h) != clamp;
             model.arena.set_clamped_to_screen(h, clamp);
-            if changed {
-                model.touch_layout_frame(h);
-            }
+            // `0x768cc0` invalidates whether or not the flag moved.
+            model.invalidate_frame(h, changed);
             Ok(())
         })?,
     )?;

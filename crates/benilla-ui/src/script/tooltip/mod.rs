@@ -775,11 +775,19 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         }
         let input = model.layout_inputs.entry(h).or_default();
         // `pad_w` is `SetPadding`'s extra width (ItemRefTooltip's room for its close button).
-        input.width = maxw + 2.0 * TOOLTIP_PAD + pad_w;
-        input.height = totalh + 2.0 * TOOLTIP_PAD;
+        let (w, ht) = (maxw + 2.0 * TOOLTIP_PAD + pad_w, totalh + 2.0 * TOOLTIP_PAD);
+        let moved = input.width.to_bits() != w.to_bits() || input.height.to_bits() != ht.to_bits();
+        input.width = w;
+        input.height = ht;
         // Inside the resolve, so a note and not a touch; the incremental pass still has to hear
-        // that these inputs changed.
+        // that these inputs changed. The size goes through `SetWidth`/`SetHeight` (`0x530a2e`,
+        // `0x530a39`), which invalidate the tooltip.
         model.note_layout_frame_write(h);
+        if moved {
+            if let Some(&id) = model.frame_to_id.get(&h) {
+                model.layout_pending.push(id);
+            }
+        }
         // Right-flush each shown right cell: one `SetPoint(RIGHT, leftCell, LEFT, width, 0)`
         // (`0x530910`..`0x53094f`), which leaves any other point the cell holds alone.
         let units = model.layout_units();
