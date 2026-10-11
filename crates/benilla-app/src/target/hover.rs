@@ -182,7 +182,7 @@ pub(super) fn update_hover(
     rig: Res<CameraControl>,
     pointer_over_ui: Res<PointerOverUi>,
     occlusion: Res<PickOcclusion>,
-    // The unit whose plate holds the pointer, as of last frame's plate layout.
+    // The unit whose plate holds the hover after this frame's UI walk.
     plate_hover: Res<crate::vplates::PlateHover>,
     mut hovered: ResMut<Hovered>,
     mesh_assets: Res<Assets<Mesh>>,
@@ -235,6 +235,7 @@ pub(super) fn update_hover(
     hovered.corpse_guid = None;
     hovered.distance = f32::MAX;
     hovered.refused = false;
+    hovered.plate = false;
     // A plate under the pointer is the mouseover, read before the UI gate below, which the plate
     // itself trips: the reference's plate OnEnter (`0x7cb850`) publishes `[0xb4e2c8]` ungraded,
     // with no world pick behind it. Freelook wins, as the plates hand the mouse back (`0x60f830`).
@@ -243,6 +244,7 @@ pub(super) fn update_hover(
             hovered.target = Some(entity);
             hovered.guid = units.get(entity).ok().map(|(g, _)| g.0);
             hovered.distance = 0.0; // topmost UI: it beats any world GameObject at a tie
+            hovered.plate = true;
             *last_pick = Some(entity);
             return;
         }

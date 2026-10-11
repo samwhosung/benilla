@@ -774,3 +774,33 @@ fn leaving_a_plate_publishes_the_empty_mouseover_before_the_next_enter() {
         .unwrap());
     assert!(s.take_errors().is_empty());
 }
+
+/// Freelook's entry disables every plate's mouse through `0x76af50(2)` (`0x60f830`), whose removal
+/// tail (`0x764ba0`, flag 0, `0x76af7f`) ends the hovered plate's hover and runs its leave
+/// (`0x7cb8b0`): `OnLeave` fires, the mouseover is published empty, and the hover re-picks.
+#[test]
+fn freelook_ends_a_hovered_plates_hover_through_its_leave() {
+    let mut s = vm();
+    let wolf = plate("Wolf", 30.0, 40.0);
+    let key = wolf.key;
+    drive(&mut s, std::slice::from_ref(&wolf));
+    s.run(
+        r#"
+        left = 0
+        local plate = WorldFrame:GetChildren()
+        plate:SetScript("OnLeave", function() left = left + 1 end)
+        "#,
+    )
+    .unwrap();
+    s.mouse_move(500.0, 384.0);
+    assert!(s.publish_world_mouseover(Some(key)), "the plate's enter");
+    s.set_nameplate_mouse(false);
+    assert_eq!(
+        s.eval::<i64>("return left").unwrap(),
+        1,
+        "the plate's OnLeave"
+    );
+    assert_eq!(s.world_mouseover(), None, "published empty");
+    assert_eq!(s.hovered_nameplate(), None);
+    assert!(s.take_errors().is_empty());
+}

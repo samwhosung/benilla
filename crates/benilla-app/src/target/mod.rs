@@ -113,6 +113,9 @@ pub(crate) struct Hovered {
     /// [`Self::distance`] holds the hit, so a chest behind the unit does not inherit the mouseover.
     /// To [`click::select_on_click`] it is an object hit, which clears no selection.
     pub(crate) refused: bool,
+    /// The pick is the hovered plate's unit, the plate's enter publishing it (`0x7cb850`), not the
+    /// world's own pick: it stands only while that plate still holds the hover.
+    pub(crate) plate: bool,
 }
 
 impl Hovered {

@@ -148,3 +148,20 @@ fn the_re_pick_onto_a_shown_window_publishes_the_worlds_loss_first() {
         .unwrap());
     assert!(s.take_errors().is_empty());
 }
+
+/// Before its sweep the walk probes the capture frame (`[root+0x80]`, `0x7661ba`–`0x7661ca`),
+/// unconditionally and for nothing but the probe's own work: a Minimap pressed and dragged off onto
+/// a frame that wins the sweep is still probed, misses, and drops its blip (`0x4eb12b`).
+#[test]
+fn a_captured_minimap_is_probed_though_the_sweep_never_reaches_it() {
+    let mut s = minimap_and_bag();
+    s.run(r#"Bag:SetFrameStrata("DIALOG")"#).unwrap();
+    s.resolve();
+    s.mouse_move(670.0, 470.0);
+    assert!(s.minimap_tooltip("Stormwind", false));
+    s.mouse_button(670.0, 470.0, "LeftButton", true);
+    s.mouse_move(120.0, 120.0);
+    assert_eq!(s.minimap_blip(), None, "the capture's probe missed");
+    s.mouse_button(120.0, 120.0, "LeftButton", false);
+    assert!(s.take_errors().is_empty());
+}

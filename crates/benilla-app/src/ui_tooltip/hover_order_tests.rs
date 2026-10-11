@@ -105,3 +105,95 @@ fn an_addon_tooltip_over_the_world_fades_when_the_mouseover_changes() {
     );
     assert!(script(&mut app).take_errors().is_empty());
 }
+
+/// A hovered plate retired by its unit leaving takes the plate's leave (`0x764cce` → `0x7cb8b0`),
+/// which publishes the empty mouseover and fades the plate's tooltip; the hover then re-picks to
+/// the WorldFrame. The pick taken before the retire still names the plate's unit, and must not
+/// publish it again: no second build, no second `UPDATE_MOUSEOVER_UNIT`, no `"mouseover"`.
+#[test]
+fn a_retired_hovered_plate_is_not_published_again() {
+    use benilla_ui::script::{PlateGeometry, PlateState};
+
+    let (mut app, wolf, _) = mouseover_app();
+    world_and_bag(&mut app, "ANCHOR_CURSOR");
+    let geometry = PlateGeometry {
+        width: 128.0,
+        height: 32.0,
+        bar_off_x: 4.0,
+        bar_off_y: 4.0,
+        bar_width: 103.0,
+        bar_height: 9.0,
+        level_off_x: 11.8,
+        level_off_y: 9.1,
+        skull_size: 12.8,
+        raid_size: 25.6,
+        name_height: 12.8,
+        level_height: 11.0,
+        shadow_offset: 1.0,
+    };
+    let plate = PlateState {
+        key: WOLF,
+        top_centre: (400.0, 400.0),
+        health: 30.0,
+        max_health: 40.0,
+        bar_colour: [1.0, 0.0, 0.0],
+        name: "Wolf".into(),
+        level: Some(12),
+        skull: false,
+        level_colour: [1.0, 1.0, 0.0],
+        raid_icon: None,
+        alpha: 1.0,
+        lit: false,
+        hovered: false,
+    };
+    {
+        let mut s = script(&mut app);
+        s.run(
+            r#"
+            builds, updates = 0, 0
+            GameTooltip:SetScript("OnShow", function() builds = builds + 1 end)
+            GameTooltip:RegisterEvent("UPDATE_MOUSEOVER_UNIT")
+            GameTooltip:SetScript("OnEvent", function() updates = updates + 1 end)
+            "#,
+        )
+        .unwrap();
+        s.sync_nameplates(geometry, std::slice::from_ref(&plate));
+        s.resolve();
+        s.mouse_move(400.0, 384.0);
+        assert_eq!(
+            s.hovered_nameplate(),
+            Some(WOLF),
+            "the plate holds the hover"
+        );
+    }
+    // The plate's pick, as the pick takes it off this frame's walk.
+    let on_plate = Hovered {
+        target: Some(wolf),
+        guid: Some(WOLF),
+        distance: 0.0,
+        plate: true,
+        ..Default::default()
+    };
+    hover(&mut app, on_plate, HoveredObject::default());
+    assert_eq!(eval(&mut app, "return builds"), Some(1));
+    // The plate driver retires it after the pick, in the same frame.
+    script(&mut app).sync_nameplates(geometry, &[]);
+    assert_eq!(
+        eval(&mut app, "return GameTooltip:IsVisible()"),
+        None,
+        "faded"
+    );
+    // The next frame's driver still reads that pick.
+    hover(&mut app, on_plate, HoveredObject::default());
+    hover(&mut app, Hovered::default(), HoveredObject::default());
+    assert_eq!(
+        eval(
+            &mut app,
+            "return builds == 1 and updates == 1 and UnitExists('mouseover') == nil \
+             and not GameTooltip:IsVisible() and 1 or nil"
+        ),
+        Some(1),
+        "built once, announced once, never named again"
+    );
+    assert!(script(&mut app).take_errors().is_empty());
+}
