@@ -26,6 +26,7 @@ mod generic_for;
 mod gm_ticket;
 mod handler_prof;
 mod host_state;
+mod hover_publish;
 mod input;
 mod keep_rect;
 mod keyboard;

@@ -870,13 +870,13 @@ fn the_spell_feed_runs_after_the_trainer_feed() {
     ));
 }
 
-const ME: u64 = 0x77;
-const WOLF: u64 = 0xF130_0000_4500_0001;
-const BOAR: u64 = 0xF130_0000_4600_0002;
+pub(super) const ME: u64 = 0x77;
+pub(super) const WOLF: u64 = 0xF130_0000_4500_0001;
+pub(super) const BOAR: u64 = 0xF130_0000_4600_0002;
 
 /// The world-hover driver over a bare VM holding `"player"` (us) and `"target"` (the wolf), each
 /// with its guid, as the unit feed pushes them; returns the app, the wolf and the boar.
-fn mouseover_app() -> (App, Entity, Entity) {
+pub(super) fn mouseover_app() -> (App, Entity, Entity) {
     use benilla_protocol::ObjectFields;
 
     let mut app = App::new();
@@ -917,13 +917,13 @@ fn mouseover_app() -> (App, Entity, Entity) {
 }
 
 /// Set this frame's pick and run the driver.
-fn hover(app: &mut App, pick: Hovered, object: HoveredObject) {
+pub(super) fn hover(app: &mut App, pick: Hovered, object: HoveredObject) {
     *app.world_mut().resource_mut::<Hovered>() = pick;
     *app.world_mut().resource_mut::<HoveredObject>() = object;
     app.update();
 }
 
-fn hover_unit(app: &mut App, entity: Entity, guid: u64) {
+pub(super) fn hover_unit(app: &mut App, entity: Entity, guid: u64) {
     let pick = Hovered {
         target: Some(entity),
         guid: Some(guid),
@@ -933,7 +933,7 @@ fn hover_unit(app: &mut App, entity: Entity, guid: u64) {
     hover(app, pick, HoveredObject::default());
 }
 
-fn eval(app: &mut App, lua: &str) -> Option<i64> {
+pub(super) fn eval(app: &mut App, lua: &str) -> Option<i64> {
     app.world_mut()
         .non_send_resource_mut::<UiScript>()
         .eval::<Option<i64>>(lua)

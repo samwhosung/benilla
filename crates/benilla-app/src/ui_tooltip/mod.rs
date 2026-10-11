@@ -377,4 +377,6 @@ mod deps_tests;
 #[cfg(test)]
 mod feed_tests;
 #[cfg(test)]
+mod hover_order_tests;
+#[cfg(test)]
 mod tests;

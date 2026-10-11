@@ -438,6 +438,9 @@ pub(super) fn drive_blip_tooltip(
 }
 
 #[cfg(test)]
+mod tooltip_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
