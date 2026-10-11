@@ -514,3 +514,59 @@ fn a_settled_region_is_refound_after_each_measure_input_write() {
     assert_eq!(reqs[0].text, "Go");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A text-sized FontString spans its measure while it has text and the one-unit floor once its
+/// text is empty (`0x772930`); emptying and restoring the text moves its box both ways, and each
+/// resolve equals a from-scratch solve.
+#[test]
+fn an_emptied_fontstring_drops_to_the_floor_and_a_restored_one_regains_its_box() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_text_measurer(Box::new(BlockFont));
+    s.run(
+        r#"
+        local f = CreateFrame("Frame", "Host")
+        f:SetPoint("BOTTOMLEFT", 0, 0); f:SetWidth(400); f:SetHeight(300)
+        Label = f:CreateFontString("Label", "ARTWORK")
+        Label:SetPoint("BOTTOMLEFT", 10, 10)
+        Tail = CreateFrame("Frame", "Tail")
+        Tail:SetPoint("LEFT", Label, "RIGHT", 0, 0); Tail:SetWidth(5); Tail:SetHeight(5)
+    "#,
+    )
+    .unwrap();
+    let mut step = |s: &mut UiScript, lua: &str| -> f32 {
+        s.run(lua).unwrap();
+        s.resolve();
+        let mut model = s.model_mut();
+        if let Some(why) = UiScript::scratch_divergence(&mut model) {
+            panic!("after {lua}: {why}");
+        }
+        drop(model);
+        s.eval::<f32>("return Tail:GetLeft()").unwrap()
+    };
+    assert_eq!(
+        step(&mut s, r#"Label:SetText("hello")"#),
+        10.0 + 5.0 * PER_CHAR
+    );
+    assert_eq!(step(&mut s, r#"Label:SetText("")"#), 11.0, "the floor");
+    // Swept for another reason while empty: still the floor.
+    assert_eq!(
+        step(&mut s, r#"Label:SetPoint("BOTTOMLEFT", 20, 10)"#),
+        21.0
+    );
+    assert_eq!(
+        step(&mut s, r#"Label:SetText("hello")"#),
+        20.0 + 5.0 * PER_CHAR,
+        "the same text again, under its old measure key"
+    );
+    assert_eq!(
+        step(&mut s, r#"Label:SetText(nil)"#),
+        21.0,
+        "nil empties too"
+    );
+    assert_eq!(
+        step(&mut s, r#"Label:SetText("hello")"#),
+        20.0 + 5.0 * PER_CHAR
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

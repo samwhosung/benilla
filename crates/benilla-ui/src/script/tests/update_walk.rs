@@ -257,3 +257,42 @@ fn a_mid_walk_raise_moves_a_frame_ahead_into_a_walked_level_so_it_waits_a_tick()
     assert_eq!(take_log(&s), "r w");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The hover re-pick at the pump's tail (`0x7657be`) follows the drain after the walk
+/// (`0x765799`), so it hits against the rects the walk's handlers just moved: a frame moved under
+/// the still cursor as the hovered one hides gets the `OnEnter`.
+#[test]
+fn the_hover_re_pick_reads_the_rects_the_walk_moved() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        LOG = {}
+        A = CreateFrame("Frame", "PickA")
+        A:SetPoint("BOTTOMLEFT", 0, 0); A:SetWidth(50); A:SetHeight(50)
+        A:EnableMouse(true)
+        A:SetScript("OnEnter", function() table.insert(LOG, "enterA") end)
+        A:SetScript("OnLeave", function() table.insert(LOG, "leaveA") end)
+        B = CreateFrame("Frame", "PickB")
+        B:SetPoint("BOTTOMLEFT", 300, 300); B:SetWidth(50); B:SetHeight(50)
+        B:EnableMouse(true)
+        B:SetScript("OnEnter", function() table.insert(LOG, "enterB") end)
+        Mover = CreateFrame("Frame", "PickMover")
+        Mover:SetScript("OnUpdate", function()
+            if GO then
+                GO = nil
+                A:Hide()
+                B:SetPoint("BOTTOMLEFT", 0, 0)
+            end
+        end)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.mouse_move(25.0, 25.0);
+    assert_eq!(take_log(&s), "enterA");
+    s.run("GO = true").unwrap();
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "leaveA enterB");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

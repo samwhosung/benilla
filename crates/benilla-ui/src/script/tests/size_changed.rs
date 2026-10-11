@@ -184,3 +184,95 @@ fn the_on_size_changed_watch_list_is_exactly_the_frames_carrying_the_script() {
     s.run(r#"Watched:SetScript("OnSizeChanged", nil)"#).unwrap();
     assert_eq!(watched(&s), 0, "clearing the script un-watches the frame");
 }
+
+/// The pump drains the layout before its walk (`0x7656ba` → `0x768ed0`), and the drain's
+/// `ApplyRect` fires `OnSizeChanged`: a resize made in an event handler fires it ahead of that
+/// tick's `OnUpdate`.
+#[test]
+fn a_resize_from_an_event_fires_on_size_changed_before_the_walk() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        LOG = {}
+        P = CreateFrame("Frame", "DrainPanel")
+        P:SetPoint("BOTTOMLEFT", 0, 0)
+        P:SetWidth(10); P:SetHeight(10)
+        P:RegisterEvent("PLAYER_ENTERING_WORLD")
+        P:SetScript("OnEvent", function() this:SetWidth(50) end)
+        P:SetScript("OnSizeChanged", function() table.insert(LOG, "size" .. arg1) end)
+        P:SetScript("OnUpdate", function() table.insert(LOG, "update") end)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    s.run("LOG = {}").unwrap();
+    s.queue_event("PLAYER_ENTERING_WORLD", Vec::new());
+    s.tick(0.016);
+    assert_eq!(
+        s.eval::<String>("return table.concat(LOG, ' ')").unwrap(),
+        "size50 update"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The pump drains again after its walk (`0x765799`), so a resize made in an `OnUpdate` fires
+/// `OnSizeChanged` inside the same tick, before the host reads the frame.
+#[test]
+fn a_resize_from_on_update_fires_on_size_changed_in_the_same_tick() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        LOG = {}
+        P = CreateFrame("Frame", "DrainPanel")
+        P:SetPoint("BOTTOMLEFT", 0, 0)
+        P:SetWidth(10); P:SetHeight(10)
+        P:SetScript("OnSizeChanged", function() table.insert(LOG, "size" .. arg1) end)
+        P:SetScript("OnUpdate", function()
+            table.insert(LOG, "update")
+            if GROW then GROW = nil; this:SetWidth(70) end
+        end)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    s.run("LOG = {} GROW = true").unwrap();
+    s.tick(0.016);
+    assert_eq!(
+        s.eval::<String>("return table.concat(LOG, ' ')").unwrap(),
+        "update size70"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// `ApplyRect` compares the size move against 2⁻²² (`0x76b5e7`, `0x76b602`, `[0x8029d4]`) in the
+/// reference's layout units, where the screen diagonal is 1: in ours, 2⁻²² × the layout unit,
+/// about 3.05e-4 at 4:3. A jitter under it fires nothing; a real move fires.
+#[test]
+fn a_sub_threshold_jitter_fires_nothing_and_a_real_move_fires() {
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
+    s.run(
+        r#"
+        fires = 0
+        P = CreateFrame("Frame", "JitterPanel")
+        P:SetPoint("BOTTOMLEFT", 0, 0)
+        P:SetWidth(100); P:SetHeight(40)
+        P:SetScript("OnSizeChanged", function() fires = fires + 1 end)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(s.eval::<i64>("return fires").unwrap(), 1, "the birth");
+    // 1e-4 is a thousand times 2⁻²² but a third of the reference's threshold here.
+    s.run("P:SetWidth(100.0001); P:SetHeight(40.0001)").unwrap();
+    s.resolve();
+    assert_eq!(s.eval::<i64>("return fires").unwrap(), 1, "a jitter");
+    s.run("P:SetWidth(101)").unwrap();
+    s.resolve();
+    assert_eq!(s.eval::<i64>("return fires").unwrap(), 2, "a real move");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

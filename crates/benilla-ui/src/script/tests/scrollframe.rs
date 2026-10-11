@@ -833,3 +833,27 @@ fn a_resize_marks_the_range() {
     assert_eq!(ranged(&s), (2, 300.0, 300.0));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The mark rides the frame's `OnSizeChanged` override, behind `ApplyRect`'s gate (`0x76b5e7`,
+/// `0x76b602`), which is 2⁻²² in the reference's units, the screen diagonal as 1: a jitter under it
+/// marks nothing, so a child's unmarked resize stays unreported until a real resize.
+#[test]
+fn a_sub_threshold_jitter_does_not_mark_the_range() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(RANGED).unwrap();
+    s.run("SF:SetScrollChild(Child)").unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0));
+    s.run("Child:SetHeight(700) SF:SetHeight(200.0001)")
+        .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (1, 400.0, 400.0), "a jitter marks nothing");
+    s.run("SF:SetHeight(201)").unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(ranged(&s), (2, 499.0, 499.0));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
