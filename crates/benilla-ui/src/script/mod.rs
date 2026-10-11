@@ -408,8 +408,9 @@ const SCRIPT_KINDS: [&str; 39] = [
     "OnLoad",
     "OnEvent",
     "OnUpdate",
-    // The model pane's two, fired by the tick's model pass (`tick_model_panes`): `OnUpdateModel`
-    // at the top of a visible pane's paint, `OnAnimFinished` when the armed sequence completes.
+    // The model pane's two: `OnUpdateModel` from its paint in the draw pass
+    // (`paint_model_panes`), `OnAnimFinished` from its clock advance in the update walk
+    // (`advance_pane`) when the armed sequence completes.
     "OnUpdateModel",
     "OnAnimFinished",
     "OnShow",

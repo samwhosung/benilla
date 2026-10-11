@@ -116,6 +116,63 @@ fn on_anim_finished_fires_in_the_panes_walk_slot() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// One virtual call runs both halves (`0x76d7fa`, then `0x76d843`): a pane that hides itself in
+/// its `OnUpdate` still advances this frame, and a completion its advance reaches still fires.
+/// A tooltip shows nothing here: its hide disarms the fade it would step (`0x530002`).
+#[test]
+fn a_pane_hidden_by_its_own_on_update_still_advances() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_model_facts(COOLDOWN_FILE, cooldown_facts());
+    s.run(&format!(
+        r#"
+        LOG = {{}}
+        local p = CreateFrame("Model", "SelfHide")
+        p:SetModel("{}")
+        p:SetSequence(1)
+        p:SetScript("OnAnimFinished", function() table.insert(LOG, "finished") end)
+    "#,
+        lua_path(COOLDOWN_FILE)
+    ))
+    .unwrap();
+    s.tick(0.6);
+    s.run(r#"SelfHide:SetScript("OnUpdate", function() this:Hide() end)"#)
+        .unwrap();
+    take_log(&s);
+    s.tick(0.6);
+    assert!(!s.frame_visible("SelfHide"));
+    assert_eq!(super::model_clock::pane(&s, "SelfHide").clock_ms, 1200);
+    assert_eq!(take_log(&s), "finished");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A zero advance returns before the completion test and the drain (`0x7074b7`): a sequence
+/// already past its end fires nothing until a frame advances the clock.
+#[test]
+fn a_zero_advance_tests_no_completion() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_model_facts(COOLDOWN_FILE, cooldown_facts());
+    s.run(&format!(
+        r#"
+        LOG = {{}}
+        local p = CreateFrame("Model", "ZeroDt")
+        p:SetModel("{}")
+        p:SetSequenceTime(1, 1000)
+        p:SetScript("OnAnimFinished", function() table.insert(LOG, "finished") end)
+    "#,
+        lua_path(COOLDOWN_FILE)
+    ))
+    .unwrap();
+    take_log(&s);
+    s.tick(0.0009); // trunc(0.9 ms) = 0
+    assert_eq!(super::model_clock::pane(&s, "ZeroDt").clock_ms, 0);
+    assert_eq!(take_log(&s), "", "no advance, no test");
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "finished");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// Completion is judged against the arm the previous paint left: an `OnUpdateModel` that scrubs
 /// the sequence back each paint does not hide the completion the walk already reported.
 #[test]
