@@ -7,6 +7,15 @@ use crate::widget::FrameHandle;
 /// or more from the press (`0x81c468`, squared by `0x76b300`).
 pub(crate) const DRAG_START_THRESHOLD: f32 = 4.0;
 
+/// The event button bits in order, `1`..`0x10` (`0x76bf70`'s name table).
+const HELD_ORDER: [&str; 5] = [
+    "LeftButton",
+    "MiddleButton",
+    "RightButton",
+    "Button4",
+    "Button5",
+];
+
 /// A drag armed at a press on a [`Model::drag_registered`] frame, `started` past the threshold.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DragGesture {
@@ -82,7 +91,19 @@ pub(crate) fn maybe_start_drag(model: &mut Model, pos: (f32, f32)) -> Option<(u3
         if dist <= DRAG_START_THRESHOLD {
             return None;
         }
-        (g.source, g.button.clone())
+        // `OnDragStart`'s argument is the lowest button of the move event's held mask
+        // (`0x76c1e0` over `[evt+0x18]`), not the armed one: a chord re-armed by the later button
+        // starts as the earlier. The held set is the buttons whose press took a frame.
+        let held = HELD_ORDER.iter().find(|name| {
+            model
+                .mouse_down_on
+                .keys()
+                .any(|k| k.eq_ignore_ascii_case(name))
+        });
+        (
+            g.source,
+            held.map_or_else(|| g.button.clone(), |name| (*name).to_string()),
+        )
     };
     model.drag.as_mut().expect("checked Some above").started = true;
     // A dragged button un-presses at the threshold, not on leaving its rect: `CSimpleButton`'s
