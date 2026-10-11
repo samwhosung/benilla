@@ -1244,6 +1244,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// A manifest entry names its file in whatever case its author typed on Windows: Questie's
+    /// `.toc` lists `Astrolabe\Astrolabe.lua` from a folder shipped as `astrolabe`. Every
+    /// component matches case-insensitively, the folder and the file alike, on any filesystem.
+    #[test]
+    fn an_addon_file_is_found_whatever_the_case_of_its_path() {
+        let tmp =
+            std::env::temp_dir().join(format!("benilla-addon-case-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let root = tmp.join("AddOns");
+        std::fs::create_dir_all(root.join("!Probe/astrolabe")).unwrap();
+        std::fs::write(root.join("!Probe/astrolabe/astrolabe.lua"), "Astrolabe = {}").unwrap();
+        let addon = Addon {
+            name: "!Probe".into(),
+            toc: Toc::default(),
+            source: Source::Dir(root),
+        };
+
+        for req in [
+            "Interface/AddOns/!Probe/Astrolabe/Astrolabe.lua",
+            "Interface/AddOns/!PROBE/ASTROLABE/ASTROLABE.LUA",
+            "interface/addons/!probe/astrolabe/astrolabe.lua",
+        ] {
+            assert_eq!(
+                addon.read(req).as_deref(),
+                Some(&b"Astrolabe = {}"[..]),
+                "{req} names the file on disk as the reference's filesystem would"
+            );
+        }
+        assert!(addon
+            .read("Interface/AddOns/!Probe/astrolabe/missing.lua")
+            .is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// A `.toc`-listed `Bindings.xml` is walked as FrameXML, each `<Binding>` an unknown frame
     /// type, which the reference logs and carries on from (`0x6ee356`).
     #[test]
