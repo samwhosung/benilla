@@ -187,13 +187,17 @@ pub fn read_chain_or_loose(
 }
 
 /// Map a normalized `interface\addons\…` path onto a file under the addon root, matching each
-/// component case-insensitively as the Windows reference does; a dot-component is refused, so a
-/// path cannot escape the root.
+/// component case-insensitively as the Windows reference does; a dot-component, or one the host
+/// reads as more than a plain name (a Windows `C:`), is refused, so a path cannot escape the root.
 pub fn loose_addon_file(root: &Path, candidate: &str) -> Option<PathBuf> {
     let rel = candidate.strip_prefix("interface\\addons\\")?;
     let mut at = root.to_path_buf();
     for comp in rel.split('\\') {
-        if comp.is_empty() || comp.starts_with('.') {
+        let plain = matches!(
+            Path::new(comp).components().collect::<Vec<_>>()[..],
+            [std::path::Component::Normal(_)]
+        );
+        if !plain || comp.starts_with('.') {
             return None;
         }
         let direct = at.join(comp);
