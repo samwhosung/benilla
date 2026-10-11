@@ -97,15 +97,49 @@ pub(super) fn spacing_arg(lua: &Lua, this: &Table, v: &Value) -> mlua::Result<f3
     }
 }
 
-/// What a table's `GetSpacing` answers. The shared pair (`0x79fb40`, `0x79fbe0`) stores and reads a
-/// font's `+0x50` as given; the FontString's own (`0x79e2b0`, `0x79e1d0`) goes through `0x772240`,
-/// which stores a negative as 0.
+/// Which implementations a table's font verbs reach: the FontString has its own `SetFont` load
+/// (`0x79d4f0` → `0x7714f0`) and spacing pair (`0x79e2b0`, `0x79e1d0`, through the clamping
+/// `0x772240`); the message frames' and the EditBox's font reach the shared ones (`0x79f210`,
+/// `0x79fb40`, `0x79fbe0`), which keep a spacing as given.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum SpacingRead {
-    /// A FontString: [`RegionData::line_gap`](super::RegionData::line_gap).
-    Clamped,
-    /// The message frames' and the EditBox's font: the number as set.
-    AsSet,
+pub(super) enum FontKind {
+    /// A FontString: its `GetSpacing` reads [`RegionData::line_gap`](super::RegionData::line_gap).
+    FontString,
+    /// A font instance: its `GetSpacing` reads the number as set.
+    Instance,
+}
+
+/// A `SetFont` load's outcome.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Load {
+    Loaded,
+    /// A FontString's height of 0: no load, its font freed, still a success.
+    Freed,
+    Failed,
+}
+
+impl Load {
+    fn verdict(ok: bool) -> Load {
+        if ok {
+            Load::Loaded
+        } else {
+            Load::Failed
+        }
+    }
+}
+
+/// Whether the font load (`0x44d040`, the factory `0x5c1ae0`) finds `path`: never for an empty one
+/// (`0x44d059`), else the host's probe, as only the store knows the files; with no probe, any
+/// non-empty path loads.
+pub(super) fn face_loads(model: &Model, path: &str) -> bool {
+    !path.is_empty() && model.font_probe.as_ref().is_none_or(|probe| probe(path))
+}
+
+/// The shared path's verdict (`0x79f210`): no load for a height of 0 or less
+/// (`0x79f2f1`-`0x79f2ff`), else [`face_loads`]. A failure writes nothing (`0x79f30f` →
+/// `0x79f361`). Borrows the model, so a caller asks before it holds it.
+pub(super) fn instance_loads(lua: &Lua, path: &str, height: f32) -> bool {
+    height > 0.0 && face_loads(&lua.app_data_ref::<Model>().expect("model"), path)
 }
 
 /// Install the twelve font-block methods onto `m`, reading `this` through `resolve`; only for a
@@ -114,7 +148,7 @@ pub(super) fn install(
     lua: &Lua,
     m: &Table,
     resolve: ResolveRegion,
-    spacing_read: SpacingRead,
+    kind: FontKind,
     on_font_change: Option<FontChanged>,
 ) -> mlua::Result<()> {
     // ── the font object ──
@@ -182,7 +216,9 @@ pub(super) fn install(
     // ── the face ──
     // SetFont(path, height [, flags]) → the number 1 (`0x79f345`), or nil on a failed load
     // (`0x79f361`), never a boolean. The EditBox shim passes it through (`0x7972b2` leaves `eax`
-    // alone), unlike `Button:SetFont` (`0x780880`), which returns nothing.
+    // alone), unlike `Button:SetFont` (`0x780880`), which returns nothing. A failed load writes
+    // nothing: the shared path jumps past its stores (`0x79f30f` → `0x79f361`), the FontString's
+    // returns before its own (`0x771571`-`0x77157b`).
     m.set(
         "SetFont",
         lua.create_function(
@@ -198,33 +234,45 @@ pub(super) fn install(
                     .region_data
                     .get(&rh)
                     .map(|d| (d.font_path.clone(), d.font_height, d.outline));
-                // A failed load (`0x5c1ae0` under the `0x44d040` font cache) is the host's probe to
-                // judge, as only the store knows the files; with no probe, a non-empty path loads.
-                let ok =
-                    !path.is_empty() && model.font_probe.as_ref().is_none_or(|probe| probe(&path));
+                let load = match kind {
+                    // A FontString loads for any height but 0 (`0x77154d`-`0x77155b`); 0 skips the
+                    // load and frees its font (`0x7715b3`), which still answers 1. What a negative
+                    // height does inside the load (`0x44d040`) is untraced: the probe judges it.
+                    FontKind::FontString if height == 0.0 => Load::Freed,
+                    FontKind::FontString => Load::verdict(face_loads(&model, &path)),
+                    // The shared path answers nil for a height of 0 or less without loading
+                    // (`0x79f2f1`-`0x79f2ff`).
+                    FontKind::Instance => Load::verdict(height > 0.0 && face_loads(&model, &path)),
+                };
+                if load == Load::Failed {
+                    return Ok(Value::Nil);
+                }
                 let d = model.region_data.entry(rh).or_default();
-                // Each argument is an explicit set, kept through a later font-object change; the
-                // height applies even when the face fails to load. A loaded face takes the flags,
-                // none included: the flags are part of the font the load picks (`0x44d040`).
-                if ok {
+                // Each argument is an explicit set, kept through a later font-object change
+                // (`0x79f33a`, `0x79d625`). The flags are part of the font the load picks
+                // (`0x44d040`), none included, and a freed font has none.
+                if load == Load::Loaded {
                     d.font_path = Some(path);
-                    d.font_explicit.face = true;
                     d.outline = flags;
-                    d.font_explicit.outline = true;
+                } else {
+                    d.font_path = None;
+                    d.outline = Outline::None;
                 }
                 d.font_height = Some(height);
+                d.font_explicit.face = true;
+                d.font_explicit.outline = true;
                 d.font_explicit.height = true;
                 let after = (d.font_path.clone(), d.font_height, d.outline);
                 model.touch_measure(rh);
                 drop(model);
-                // A loaded face that changed the path, height or flags notifies (`0x79f32f` sets
-                // the change bits, `0x79f342` calls the notify); a failed load does not.
-                if ok && before.as_ref() != Some(&after) {
+                // A load that changed the path, height or flags notifies (`0x79f32f` sets the
+                // change bits, `0x79f342` calls the notify).
+                if before.as_ref() != Some(&after) {
                     if let Some(changed) = on_font_change {
                         changed(lua, &this)?;
                     }
                 }
-                Ok(if ok { Value::Number(1.0) } else { Value::Nil })
+                Ok(Value::Number(1.0))
             },
         )?,
     )?;
@@ -359,8 +407,9 @@ pub(super) fn install(
     )?;
 
     // ── the line spacing ──
-    // SetSpacing(spacing) → nothing (`0x79fbbe`). A changed value notifies the widget, as a face
-    // change does (`0x79fbb9`; the EditBox re-seats its text on mask `0x11`, `0x77e2b5`).
+    // SetSpacing(spacing) → nothing (`0x79fbbe`). The reference notifies on every call
+    // (`0x79fbb1`-`0x79fbb9`) and the EditBox acts only on a set change bit (mask `0x11`,
+    // `0x77e2b5`); here the notify runs only when the value changed.
     m.set(
         "SetSpacing",
         lua.create_function(move |lua, (this, v): (Table, Value)| {
@@ -391,9 +440,9 @@ pub(super) fn install(
             let rh = resolve(lua, &this)?;
             let model = lua.app_data_ref::<Model>().expect("model");
             let d = model.region_data.get(&rh);
-            Ok(match spacing_read {
-                SpacingRead::Clamped => d.map_or(0.0, super::RegionData::line_gap),
-                SpacingRead::AsSet => d.map_or(0.0, |d| d.spacing),
+            Ok(match kind {
+                FontKind::FontString => d.map_or(0.0, super::RegionData::line_gap),
+                FontKind::Instance => d.map_or(0.0, |d| d.spacing),
             })
         })?,
     )?;

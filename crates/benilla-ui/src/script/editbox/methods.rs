@@ -327,7 +327,7 @@ fn install_font_block(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, this)?;
             super::ensure_text_region(lua, h).ok_or_else(|| mlua::Error::runtime("not an EditBox"))
         },
-        crate::script::font_block::SpacingRead::AsSet,
+        crate::script::font_block::FontKind::Instance,
         // The box listens on its font (vtable `0x81c8dc` slot 0, `0x77e2a0`): a change of face or
         // spacing (mask `0x11`) re-seats its text region (`0x77e2b5` → `0x77b8c0`).
         Some(|lua, this| {

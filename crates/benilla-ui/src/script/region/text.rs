@@ -207,7 +207,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua,
         m,
         region_handle_of,
-        super::super::font_block::SpacingRead::Clamped,
+        super::super::font_block::FontKind::FontString,
         None,
     )
 }

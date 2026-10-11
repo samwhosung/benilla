@@ -541,8 +541,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── 2/3 · the face ──────────────────────────────────────────────────────────────────────
-    // SetFont([element,] file, height [, flags]) returns 1, or nil on an empty path; the shared
-    // gate (`0x79f210`) takes numeric strings and raises `0x87c69c`'s usage line on anything else.
+    // SetFont([element,] file, height [, flags]) returns 1, or nil, writing nothing, on a failed
+    // load; the shared gate (`0x79f210`) takes numeric strings and raises `0x87c69c`'s usage line
+    // on anything else.
     m.set(
         "SetFont",
         lua.create_function(|lua, (this, mut rest): (Table, MultiValue)| {
@@ -558,18 +559,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 &arg(&rest, 1),
                 &arg(&rest, 2),
             )?;
-            let ok = !path.is_empty();
+            if !super::font_block::instance_loads(lua, &path, height) {
+                return Ok(Value::Nil);
+            }
             edit_font(lua, &this, elem, |ef| {
-                if ok {
-                    ef.font_path = Some(path);
-                    ef.explicit.face = true;
-                    ef.outline = flags;
-                    ef.explicit.outline = true;
-                }
+                ef.font_path = Some(path);
+                ef.explicit.face = true;
+                ef.outline = flags;
+                ef.explicit.outline = true;
                 ef.font_height = Some(height);
                 ef.explicit.height = true;
             })?;
-            Ok(if ok { Value::Number(1.0) } else { Value::Nil })
+            Ok(Value::Number(1.0))
         })?,
     )?;
     // GetFont([element]): path, height and a flags string, `""` rather than nil.

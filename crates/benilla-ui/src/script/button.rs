@@ -708,6 +708,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     height,
                     flags,
                 } = super::font_block::set_font_args(lua, &this, &file, &height, &flags)?;
+                // Each embedded font's load fails alike, writing nothing (`0x79f30f` → `0x79f361`).
+                if !super::font_block::instance_loads(lua, &path, height) {
+                    return Ok(());
+                }
                 let flags = flags.as_str().to_string();
                 with_button(lua, &this, |bs| {
                     bs.font = Some(ButtonFont {

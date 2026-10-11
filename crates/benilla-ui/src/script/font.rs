@@ -241,9 +241,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── face ────────────────────────────────────────────────────────────────────────────────
-    // SetFont(path, height [, flags]) → 1, or nil when the font file fails to load, which does not
-    // raise. Deviation: any non-empty path answers 1, because the atlas falls back per face and no
-    // load fails; an empty one answers nil.
+    // SetFont(path, height [, flags]) → 1, or nil when the font fails to load, which does not raise
+    // and writes nothing: an empty path, one the host's probe refuses, or a height of 0 or less.
     m.set(
         "SetFont",
         lua.create_function(
@@ -255,15 +254,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     height,
                     flags,
                 } = super::font_block::set_font_args(lua, &this, &file, &height, &flags)?;
-                let ok = !path.is_empty();
+                if !super::font_block::instance_loads(lua, &path, height) {
+                    return Ok(Value::Nil);
+                }
                 edit(lua, &this, |fo| {
-                    if ok {
-                        fo.font = Some(path);
-                        fo.outline = flags;
-                    }
+                    fo.font = Some(path);
+                    fo.outline = flags;
                     fo.height = Some(height);
                 })?;
-                Ok(if ok { Value::Number(1.0) } else { Value::Nil })
+                Ok(Value::Number(1.0))
             },
         )?,
     )?;
