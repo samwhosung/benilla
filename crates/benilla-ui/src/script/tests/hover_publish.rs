@@ -89,12 +89,13 @@ fn the_world_frames_leave_runs_its_onleave_then_publishes_the_loss() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The sweep probes the Minimap only when no frame ahead of it took the hit (`0x76620c`): off it,
-/// the probe drops the blip and hides the tooltip (`0x4eb12b`–`0x4eb166`), so the same blip shows
-/// afresh later; onto a window over it, the probe never runs and the blip stays held, though the
-/// Minimap's leave still hides the tooltip.
+/// With no capture held, the walk probes the Minimap only in its sweep, and the sweep only when no
+/// frame ahead of it took the hit (`0x76620c`): off it, the probe drops the blip and hides the
+/// tooltip (`0x4eb12b`–`0x4eb166`), so the same blip shows afresh later; onto a window over it,
+/// the probe never runs and the blip stays held, though the Minimap's leave still hides the
+/// tooltip. A held capture is probed before the sweep (the next test).
 #[test]
-fn the_minimap_probe_drops_its_blip_only_when_the_sweep_reaches_it() {
+fn the_minimap_probe_drops_its_blip_only_when_the_walk_probes_it() {
     let mut s = minimap_and_bag();
     s.run(
         r#"

@@ -102,7 +102,8 @@ fn hide_tooltip(lua: &Lua) {
 
 /// The Minimap's probe (`0x4eb0c0`, its `vtbl+0x3c`) found the cursor outside it: a blip still
 /// held is dropped and `GameTooltip` hidden (`0x4eb0ee`, `0x4eb12b`–`0x4eb166`). The walk probes
-/// the Minimap only when no frame ahead of it took the hit.
+/// the Minimap while it holds the capture (`0x7661ca`), and in the sweep when no frame ahead of it
+/// took the hit.
 pub(super) fn minimap_probe_miss(lua: &Lua) {
     if model(lua).minimap_blip.take().is_some() {
         hide_tooltip(lua);
@@ -126,14 +127,16 @@ impl UiScript {
         publish(&self.lua, guid)
     }
 
-    /// Whether the Minimap holds the hover: its probe, which shows and drops the blip tooltip, runs
-    /// only when the walk reaches it, and a hit inside it makes it the hover.
-    pub fn minimap_hovered(&self) -> bool {
+    /// Whether the walk probes the Minimap with the cursor on it: it holds the hover, which a hit
+    /// in the sweep makes it, or the capture, whose probe runs before the sweep (`0x7661ca`). Its
+    /// probe shows and drops the blip tooltip.
+    pub fn minimap_probed(&self) -> bool {
         let model = self.model_ref();
-        model
-            .mouseover
-            .and_then(|h| model.arena.frame(h))
-            .is_some_and(|f| f.kind == FrameKind::Minimap)
+        [model.mouseover, model.mouse_capture]
+            .into_iter()
+            .flatten()
+            .filter_map(|h| model.arena.frame(h))
+            .any(|f| f.kind == FrameKind::Minimap)
     }
 
     /// The blip whose tooltip [`Self::minimap_tooltip`] put up, while the probe holds it.

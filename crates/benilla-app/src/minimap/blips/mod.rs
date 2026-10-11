@@ -400,10 +400,10 @@ pub(super) fn emit_party_arrows(
 }
 
 /// Show the hovered blip's name; a unit's resolves through the name cache. This is the in-rect
-/// half of the Minimap's probe `0x4eb0c0`, which runs only when the hover walk reaches the
-/// Minimap and makes it the hover, so it acts only while the Minimap holds the hover. A new blip
-/// shows; no blip where one was held hides `GameTooltip`, whoever holds it (`0x4eb55f`). The
-/// cursor leaving the Minimap is the walk's: the probe's miss and the Minimap's leave.
+/// half of the Minimap's probe `0x4eb0c0`, which the hover walk runs on the Minimap while it holds
+/// the hover or the capture ([`UiScript::minimap_probed`]). A new blip shows; no blip where one
+/// was held hides `GameTooltip`, whoever holds it (`0x4eb55f`). The cursor off the Minimap is the
+/// walk's: the probe's miss and the Minimap's leave.
 pub(super) fn drive_blip_tooltip(
     script: Option<NonSendMut<UiScript>>,
     hover: Res<MinimapBlipHover>,
@@ -413,7 +413,7 @@ pub(super) fn drive_blip_tooltip(
     let Some(mut script) = script else {
         return;
     };
-    if !script.minimap_hovered() {
+    if !script.minimap_probed() {
         return;
     }
     let show = match &*hover {

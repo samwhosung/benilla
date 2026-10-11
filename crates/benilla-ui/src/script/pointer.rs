@@ -107,16 +107,23 @@ impl UiScript {
         self.hover_walk(x, y).0
     }
 
-    /// The hover walk's sweep (`0x7661cd`–`0x766213`): the first frame whose probe takes the point,
-    /// and whether the sweep reached a `Minimap` whose probe missed it, which then drops its blip
-    /// (`0x4eb0c0`). A frame that takes the hit ends the sweep, so a window over the Minimap keeps
-    /// it from being probed.
+    /// The hover walk's probes: the capture frame's first (`[root+0x80]`, `0x7661ba`–`0x7661ca`),
+    /// unconditionally and its answer discarded, then the sweep (`0x7661cd`–`0x766213`). Returns the
+    /// first frame whose probe takes the point, and whether a `Minimap` was probed and missed it,
+    /// which then drops its blip (`0x4eb0c0`). A frame that takes the hit ends the sweep, so a
+    /// window over the Minimap keeps it from the sweep's probe; a held capture is probed anyway.
     fn hover_walk(&self, x: f32, y: f32) -> (Option<FrameHandle>, bool) {
         let model = self.model_ref();
         let sorted = order::traversal(&model.arena);
         let scroll_sources = scroll_clip_sources(&model);
         let blip_held = model.minimap_blip.is_some();
-        let minimap_missed = std::cell::Cell::new(false);
+        let minimap_missed = std::cell::Cell::new(
+            blip_held
+                && model.mouse_capture.is_some_and(|c| {
+                    is_minimap_handle(&model, c)
+                        && !frame_contains(&model, &scroll_sources, c, x, y)
+                }),
+        );
         let hit = order::hit_test(&sorted, |fh| {
             // Mouse-enabled, or over one of the frame's hyperlink spans. The chat frame takes no
             // mouse (`[+0xcc] = 0`); the reference gives each span a mouse-enabled
