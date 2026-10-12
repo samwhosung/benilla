@@ -175,11 +175,12 @@ impl super::UiScript {
         self.model_ref().trade_skill_open
     }
 
-    /// The post-cast hook `0x4fd7b0`, run for each of our own `SMSG_SPELL_GO`s without flag
-    /// `0x41` (`0x6e81de`): the armed spell counts down (`0x4fd7ca`) and, while any are left,
-    /// recasts and signals `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`); the last one ends silently
-    /// with the spell still armed (`0x4fd7cf`). Any other cast, or nothing left, disarms
-    /// (`0x4fd7e6` → `0x4fd790`). Returns the spell to recast, which the app sends.
+    /// The post-cast hook `0x4fd7b0`, run for each of our own `SMSG_SPELL_GO`s whose first guid
+    /// is the player and without flag `0x41` (`0x6e81d3`-`0x6e81de`): the armed spell counts down
+    /// (`0x4fd7ca`) and, while any are left, recasts (`0x4fd7d7`); the last one ends silently with
+    /// the spell still armed (`0x4fd7cf`). Any other cast, or nothing left, disarms (`0x4fd7e6` →
+    /// `0x4fd790`). Returns the spell to recast: the app sends it, then signals with
+    /// [`Self::trade_skill_recast_sent`], the reference's order (`0x4fd7dc` after the cast).
     pub fn trade_skill_spell_go(&mut self, spell_id: u32) -> Option<u32> {
         super::tick::verb(&self.lua, |model| {
             let armed = model.trade_skill_repeat_spell;
@@ -188,15 +189,18 @@ impl super::UiScript {
                 return None;
             }
             model.trade_skill_repeat_count -= 1;
-            if model.trade_skill_repeat_count == 0 {
-                return None;
-            }
-            model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
-            Some(armed)
+            (model.trade_skill_repeat_count != 0).then_some(armed)
         })
     }
 
-    /// A failed or interrupted cast of the armed spell disarms the repeat with its own signal
+    /// The hook's tail after its recast: `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`).
+    pub fn trade_skill_recast_sent(&mut self) {
+        super::tick::verb(&self.lua, |model| {
+            model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
+        });
+    }
+
+    /// A refused or failed cast of the armed spell disarms the repeat with its own signal
     /// (`0x6e1a3c`-`0x6e1a55` → `0x4fd790`), so a later close finds nothing to disarm.
     pub fn trade_skill_cast_failed(&mut self, spell_id: u32) {
         super::tick::verb(&self.lua, |model| {
@@ -206,12 +210,35 @@ impl super::UiScript {
         });
     }
 
-    /// Seat the repeat a previous VM left (`0xbde05c`, `0xbde060`), globals no UI init resets, so
-    /// a batch survives a `/reload`.
-    pub fn seed_trade_skill_repeat(&mut self, (spell, count): (u32, u32)) {
+    /// The cast abort with its disarm flag set (`0x6e4940`, `cl != 0`, `0x6e4abc`-`0x6e4ac2` →
+    /// `0x4fd790`): whatever is armed disarms, with its signal.
+    pub fn trade_skill_disarm(&mut self) {
+        super::tick::verb(&self.lua, disarm_repeat);
+    }
+
+    /// The world-enter inits (`0x4908c0` at `0x4909bf` and `0x4909c4`), which a login, a
+    /// cross-map worldport and a `/reload` all run, with no event: the tradeskill init `0x4fc750`
+    /// zeroes the selection (`[0xbde044]`), the visible and held counts (`[0xbde04c]`,
+    /// `[0xbde054]`), the line key (`[0xbde064]`), so the next push resets the filters, and the
+    /// armed spell (`[0xbde05c]`, `0x4fc76b`), keeping the count (`[0xbde060]`) and the open marker
+    /// (`[0xbde040]`); the craft init `0x4f5ee0` zeroes the craft open marker (`[0xbdcfb8]`), its
+    /// selection and its count (`[0xbdcfc8]`).
+    pub fn reset_crafts_on_world_enter(&mut self) {
         let mut model = self.model_mut();
-        model.trade_skill_repeat_spell = spell;
-        model.trade_skill_repeat_count = count;
+        model.trade_skill = None;
+        model.trade_skill_selection = 0;
+        model.trade_skill_selected_spell = 0;
+        model.trade_skill_last_line = 0;
+        model.trade_skill_repeat_spell = 0;
+        model.craft = None;
+        model.craft_open = false;
+        model.craft_selection = 0;
+    }
+
+    /// Seat the repeat count a previous VM left (`[0xbde060]`), which the world-enter init keeps
+    /// while it disarms the spell (`0x4fc76b`).
+    pub fn seed_trade_skill_repeat_count(&mut self, count: u32) {
+        self.model_mut().trade_skill_repeat_count = count;
     }
 
     /// The armed repeat as `(spell, count)`, the reference's `0xbde05c` and `0xbde060`.

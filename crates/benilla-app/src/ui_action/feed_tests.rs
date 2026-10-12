@@ -664,3 +664,52 @@ fn a_tame_failure_composes_the_reason_string_into_err_tame_failed() {
         "an unresolvable reason shows nothing"
     );
 }
+
+/// Every first pass through the failure handler `0x6e1a00`, a local refusal included, disarms the
+/// tradeskill repeat when it names the armed spell (`0x6e1a3c`-`0x6e1a55`); another spell's does
+/// not.
+#[test]
+fn a_refusal_of_the_armed_craft_disarms_the_batch() {
+    let (mut app, _rx) = app_with_food_on_the_bar();
+    {
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_trade_skill(Some(benilla_ui::script::TradeSkillState {
+            line: 197,
+            line_name: "Tailoring".into(),
+            rank: 1,
+            max_rank: 75,
+            recipes: vec![benilla_ui::script::TradeSkillRecipe {
+                group: None,
+                spell_id: 2963,
+                name: "Bolt of Linen Cloth".into(),
+                difficulty: benilla_ui::script::TradeSkillDifficulty::Trivial,
+                num_available: 5,
+                icon: None,
+                min_made: 1,
+                max_made: 1,
+                cooldown_secs: None,
+                product_item: 2996,
+                product_inv_type: 0,
+                product_item_level: 0,
+                reagents: vec![],
+                tools: vec![],
+            }],
+        }));
+        script.run("DoTradeSkill(2, 3)").unwrap();
+    }
+    let repeat = |app: &App| {
+        app.world()
+            .non_send_resource::<UiScript>()
+            .trade_skill_repeat()
+    };
+    app.world_mut()
+        .resource_mut::<CastErrors>()
+        .push_local(133, 0x0c);
+    app.update();
+    assert_eq!(repeat(&app), (2963, 3), "another spell's refusal");
+    app.world_mut()
+        .resource_mut::<CastErrors>()
+        .push_local(2963, 0x0c);
+    app.update();
+    assert_eq!(repeat(&app), (0, 3), "the armed craft's refusal disarms");
+}

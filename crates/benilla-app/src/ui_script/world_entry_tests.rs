@@ -741,7 +741,29 @@ fn a_reload_keeps_the_quest_folds_and_the_repeat() {
         script
             .run("SelectQuestLogEntry(2) CollapseQuestHeader(1)")
             .expect("fold");
-        script.seed_trade_skill_repeat((2963, 3));
+        script.set_trade_skill(Some(benilla_ui::script::TradeSkillState {
+            line: 197,
+            line_name: "Tailoring".into(),
+            rank: 1,
+            max_rank: 75,
+            recipes: vec![benilla_ui::script::TradeSkillRecipe {
+                group: None,
+                spell_id: 2963,
+                name: "Bolt of Linen Cloth".into(),
+                difficulty: benilla_ui::script::TradeSkillDifficulty::Trivial,
+                num_available: 5,
+                icon: None,
+                min_made: 1,
+                max_made: 1,
+                cooldown_secs: None,
+                product_item: 2996,
+                product_inv_type: 0,
+                product_item_level: 0,
+                reagents: vec![],
+                tools: vec![],
+            }],
+        }));
+        script.run("DoTradeSkill(2, 3)").expect("arm the batch");
     }
     assert_eq!(visible(&mut world), 1);
 
@@ -759,8 +781,8 @@ fn a_reload_keeps_the_quest_folds_and_the_repeat() {
         world
             .non_send_resource::<benilla_ui::script::UiScript>()
             .trade_skill_repeat(),
-        (2963, 3),
-        "the reload dropped the batch"
+        (0, 3),
+        "the world-enter init disarms the spell and keeps the count (`0x4fc76b`)"
     );
 
     world.insert_resource(State::new(crate::char_select::ClientState::CharSelect));

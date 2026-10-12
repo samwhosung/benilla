@@ -100,6 +100,17 @@ pub(super) fn feed_actions(
     // formatter `0x62c360`.
     let mut fail_lines: Vec<crate::ui_chat::combat::PendingCombat> = Vec::new();
     let fail_args = name_tables.args(spells.as_deref());
+    // Each first pass through the failure handler `0x6e1a00`, a local refusal or the server's,
+    // disarms the tradeskill repeat when it names the armed spell (`0x6e1a3c`-`0x6e1a55`).
+    let refused: Vec<u32> = cast_errors
+        .0
+        .iter()
+        .filter(|f| f.caster == crate::ui_action::Caster::Player && !f.redisplay)
+        .map(|f| f.spell_id)
+        .collect();
+    for spell_id in refused {
+        script.trade_skill_cast_failed(spell_id);
+    }
     let texts: Vec<cast_fail::CastFailLine> = cast_errors
         .0
         .drain(..)

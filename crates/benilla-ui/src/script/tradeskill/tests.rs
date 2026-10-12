@@ -461,6 +461,10 @@ fn do_trade_skill_drains_spell_id_and_count() {
     s.run("DoTradeSkill(2) DoTradeSkill(2, 0)").unwrap();
     assert_eq!(s.take_trade_skill_dos(), vec![(3919, 0), (3919, 0)]);
 
+    // A count that is no number reads as 1 (`0x5002c5`-`0x5002cc`), never a raise.
+    s.run("DoTradeSkill(3, 'x') DoTradeSkill(3, {})").unwrap();
+    assert_eq!(s.take_trade_skill_dos(), vec![(2963, 1), (2963, 1)]);
+
     s.run("DoTradeSkill(99)").unwrap();
     assert!(s.take_trade_skill_dos().is_empty());
 
@@ -891,21 +895,24 @@ fn the_repeat_counts_down_on_our_casts_and_ends_silently() {
     );
     s.run("DoTradeSkill(2, 3)").unwrap();
     let spell = s.take_trade_skill_dos()[0].0;
-    assert_eq!(s.trade_skill_spell_go(spell), Some(spell));
-    assert_eq!(s.trade_skill_spell_go(spell), Some(spell));
+    // The hook returns the recast silently; the app sends it, then signals (`0x4fd7d7`,
+    // `0x4fd7dc`).
+    assert_eq!(heard::take(&s), ["UPDATE_TRADESKILL_RECAST 3"]);
+    for left in [2, 1] {
+        assert_eq!(s.trade_skill_spell_go(spell), Some(spell));
+        assert!(heard::take(&s).is_empty(), "no signal before the recast");
+        s.trade_skill_recast_sent();
+        assert_eq!(
+            heard::take(&s),
+            [format!("UPDATE_TRADESKILL_RECAST {left}")]
+        );
+    }
     assert_eq!(
         s.trade_skill_spell_go(spell),
         None,
         "the last craft recasts nothing"
     );
-    assert_eq!(
-        heard::take(&s),
-        [
-            "UPDATE_TRADESKILL_RECAST 3",
-            "UPDATE_TRADESKILL_RECAST 2",
-            "UPDATE_TRADESKILL_RECAST 1"
-        ]
-    );
+    assert!(heard::take(&s).is_empty(), "the last craft is silent");
     assert_eq!(s.trade_skill_repeat(), (spell, 0), "still armed at 0");
 
     s.run("DoTradeSkill(2, 3)").unwrap();

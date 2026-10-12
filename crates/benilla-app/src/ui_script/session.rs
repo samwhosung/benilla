@@ -160,6 +160,9 @@ mod tests {
     /// `Local`s in VM-holding systems that are not memory about the VM, keyed
     /// `(path under src/, parameter name)`.
     const EXEMPT: &[(&str, &str)] = &[
+        // The targeting cancels seen, a count over `SpellTargeting`, host state the VM never
+        // holds: a fresh VM starts with nothing armed to disarm.
+        ("ui_tradeskill.rs", "seen_aborts"),
         // A raster fact; a fresh VM re-seats its measurer on `!has_text_measurer()` anyway.
         ("ui_script/extract/mod.rs", "last_seam"),
         // The plate driver's anti-overlap scratch, cleared at the top of every run.

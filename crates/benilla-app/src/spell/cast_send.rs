@@ -362,7 +362,7 @@ fn send_spell_cast(
     // with no packet, and continues down the ladder.
     if ground.active() {
         debug!("ui_action: cast {spell_id} supersedes the targeting cursor");
-        ground.clear();
+        ground.cancel();
     }
     // A ranged shot's record does not guard. An on-next-swing spell (`Attributes & 0x404`) queues
     // on the melee slot ([`crate::spell::QueuedMeleeSpell`]) and does not guard either: `6e4d97`

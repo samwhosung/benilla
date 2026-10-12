@@ -321,7 +321,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // `UPDATE_TRADESKILL_RECAST` before the first cast (`0x500307` → `0x4fd770`).
     g.set(
         "DoTradeSkill",
-        lua.create_function(|lua, (index, count): (usize, Option<i64>)| {
+        lua.create_function(|lua, (index, count): (usize, Option<Value>)| {
+            // A count that is no number reads as 1 (`0x5002c5`-`0x5002cc`).
+            let count = count
+                .and_then(|v| lua.coerce_number(v).ok().flatten())
+                .map_or(1, |n| i64::from(super::super::binding_abi::ftol(n)));
             crate::script::tick::verb(lua, |model| {
                 let Some((spell_id, avail)) =
                     recipe_at(model, index).map(|r| (r.spell_id, r.num_available))
@@ -330,7 +334,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 // The count, compared unsigned, clamps to numAvailable (`0x5002f5`-`0x5002fc`);
                 // above 1 it arms the repeat (`0x500301` → `0x4fd770`).
-                let n = (count.unwrap_or(1) as i32 as u32).min(avail);
+                let n = (count as i32 as u32).min(avail);
                 if n > 1 {
                     model.trade_skill_repeat_spell = spell_id;
                     model.trade_skill_repeat_count = n;

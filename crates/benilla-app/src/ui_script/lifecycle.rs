@@ -767,7 +767,7 @@ pub(crate) fn end_ui_session(world: &mut World) {
     }
     if let Some(mut carry) = world.get_resource_mut::<crate::ui_tradeskill::TradeSkillRepeatCarry>()
     {
-        carry.0 = (0, 0);
+        carry.0 = 0;
     }
     // `0x401ee0`'s glue leg: `"charselect"` after a logout, `"login"` after a disconnect
     // (`0x402084`); the state this exit enters says which.

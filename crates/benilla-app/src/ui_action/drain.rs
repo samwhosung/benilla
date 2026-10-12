@@ -239,7 +239,7 @@ pub(crate) fn use_action(
                     "ui_action: cast {} re-pressed — targeting toggles off",
                     b.action
                 );
-                ladder.ground.clear();
+                ladder.ground.cancel();
                 return UseOutcome::Done;
             }
             // A live `ActiveIconID` spell re-pressed cancels its aura (`0x4e55f0`, cancel

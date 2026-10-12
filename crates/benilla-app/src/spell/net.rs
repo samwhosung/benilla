@@ -667,6 +667,7 @@ fn cast_result(
                 spell_id,
                 kind: CastEventKind::Fail,
                 cast_flags: 0,
+                item_cast: false,
                 seq,
             });
         }
@@ -783,6 +784,7 @@ fn spell_start(
             spell_id,
             kind: CastEventKind::Start,
             cast_flags: 0,
+            item_cast: false,
             seq,
         });
     }
@@ -1063,6 +1065,7 @@ fn spell_go(
             spell_id,
             kind: CastEventKind::Go,
             cast_flags,
+            item_cast: item_caster.is_some(),
             seq,
         });
         // Targets not streamed to us drop out. The miss code picks the victim's dodge or block
@@ -1134,6 +1137,7 @@ fn spell_failed_other(
             spell_id,
             kind: CastEventKind::Fail,
             cast_flags: 0,
+            item_cast: false,
             seq,
         });
     }

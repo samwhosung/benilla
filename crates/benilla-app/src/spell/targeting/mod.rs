@@ -217,7 +217,7 @@ const SELF_PICK_BITS: u16 = 0x850e;
 /// The targeting mode, `Some` while the flag_word is nonzero. Entered by the cast-send path
 /// ([`super::cast_target::CastWireTarget::Targeting`]), cleared by a commit or a cancel.
 #[derive(Resource, Default)]
-pub(crate) struct SpellTargeting(Option<Targeting>);
+pub(crate) struct SpellTargeting(Option<Targeting>, u32);
 
 struct Targeting {
     spell_id: u32,
@@ -317,6 +317,20 @@ impl SpellTargeting {
     pub(crate) fn clear(&mut self) {
         self.0 = None;
     }
+
+    /// A cancel, not a commit: `StopTargeting 0x6e4900`, or `TryCast`'s supersede (`0x6e4d62`),
+    /// both the cast abort with its disarm flag (`0x6e4940(cl=1)`), counted for the tradeskill
+    /// repeat's disarm ([`Self::aborts`]). Nothing up, nothing aborts (`0x6e4907`).
+    pub(crate) fn cancel(&mut self) {
+        if self.0.take().is_some() {
+            self.1 = self.1.wrapping_add(1);
+        }
+    }
+
+    /// The cancels so far, wrapping: only a change is read.
+    pub(crate) fn aborts(&self) -> u32 {
+        self.1
+    }
 }
 
 /// Right-click cancels on the down edge (WorldFrame `OnMouseDown 0x483c40` → `0x492c20` →
@@ -338,7 +352,7 @@ pub(crate) fn cancel_targeting_on_right_press(
         return;
     }
     debug!("ui_action: targeting cancelled (right-click)");
-    targeting.clear();
+    targeting.cancel();
 }
 
 /// [`SpellTargeting::picks_self`] as the frame began, which the world pick reads
@@ -478,7 +492,7 @@ impl ScriptCursor<'_, '_> {
     /// cleared, no packet.
     pub(crate) fn stop_targeting(&mut self) {
         debug!("ui_action: targeting cancelled (ESC chain)");
-        self.ladder.ground.clear();
+        self.ladder.ground.cancel();
     }
 }
 
