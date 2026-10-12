@@ -124,8 +124,8 @@ enum IoPark {
 /// the resubmit timer.
 #[derive(Resource, Default)]
 pub(crate) struct LoginIntent {
-    /// Kept in-world so the logout relist and an unattended reconnect re-authenticate silently;
-    /// cleared by select's Back, a refusal, a Cancel and a lost session.
+    /// Kept in-world so an unattended reconnect re-authenticates silently; cleared by select's
+    /// Back, a refusal, a Cancel and a lost session.
     creds: Option<(String, String)>,
     /// Between our send and its LoginFailed or CharacterList answer.
     in_flight: bool,
@@ -602,8 +602,13 @@ fn drive_policy(
         }
     }
     for msg in disconnects.read() {
-        attempt.intent.park = IoPark::AtLogin;
         attempt.intent.in_flight = false;
+        // A logout or a refused character login keeps the world link: the IO thread is back at
+        // character select on it (`0x5aaeb0`, `0x5aad70`), with nothing to log on again.
+        if msg.end == benilla_protocol::SessionEnd::LoggedOut {
+            continue;
+        }
+        attempt.intent.park = IoPark::AtLogin;
         if msg.session_over {
             // `DISCONNECTED_FROM_SERVER`: `GlueParent.lua` shows the login screen and the
             // `DISCONNECTED` dialog. The credentials go, so nothing takes the account back.
@@ -615,14 +620,9 @@ fn drive_policy(
             dialog.open_error(strings.text("DISCONNECTED", "Disconnected from server"));
             continue;
         }
-        // Otherwise a silent re-auth: at once after a logout, paced after a stream death.
+        // Otherwise an unattended run's silent re-auth, paced after the stream death.
         if attempt.intent.creds.is_some() {
-            let delay = if msg.end == benilla_protocol::SessionEnd::LoggedOut {
-                0.0
-            } else {
-                RETRY_DELAY_SECS
-            };
-            attempt.intent.retry_at = Some(now + delay);
+            attempt.intent.retry_at = Some(now + RETRY_DELAY_SECS);
         }
     }
 
@@ -638,11 +638,11 @@ fn drive_policy(
     }
 }
 
-/// The login's success edge: go to CharSelect, but only from `Login`, since a reconnect's roster
-/// lands while `InWorld`. The native screens take the roster for it, which the IO thread fetches on
-/// reaching the park; the stock screens take the world server's authentication
-/// (`SMSG_AUTH_RESPONSE`, `0x5ab2b8`), since the roster there is the screen's own ask and comes
-/// only once the screen is up.
+/// The login's success edge: go to CharSelect, but only from `Login`, since an unattended
+/// reconnect's roster lands while `InWorld`, and a logout's at character select. The native
+/// screens take the roster for it, which the IO thread fetches on reaching the park; the stock
+/// screens take the world server's authentication (`SMSG_AUTH_RESPONSE`, `0x5ab2b8`), since the
+/// roster there is the screen's own ask and comes only once the screen is up.
 fn to_select_on_roster(
     mut msgs: MessageReader<CharListMessage>,
     mut auths: MessageReader<WorldAuthMessage>,
@@ -684,8 +684,8 @@ fn to_select_on_roster(
     intent.in_flight = false;
     intent.park = IoPark::Active;
     intent.retry_at = None;
-    // Only the dialogs the roster answers: a refused character login's relist brings a roster,
-    // and its `Error` is dismissed by its Okay, never by a packet.
+    // Only the dialogs the roster answers: a refused character login's roster follows it on the
+    // kept link, and its `Error` is dismissed by its Okay, never by a packet.
     if matches!(dialog.kind, Some(DialogKind::Status | DialogKind::Queued)) {
         dialog.close();
     }
@@ -1335,18 +1335,22 @@ mod tests {
         assert_eq!(dialog.text, "Disconnected from server");
     }
 
-    /// A logout rides the same message and keeps its silent relist; its roster is the character
-    /// select the player asked for.
+    /// A logout rides the same message but keeps the world link, so nothing logs on again: the
+    /// IO thread is at character select on that link, and the roster comes on it.
     #[test]
-    fn a_logout_teardown_still_relists_at_once() {
-        let (mut app, _requests) = policy_app();
-        app.world_mut().resource_mut::<LoginIntent>().creds =
-            Some(("player".into(), "secret".into()));
+    fn a_logout_teardown_logs_on_no_more() {
+        let (mut app, requests) = policy_app();
+        {
+            let mut intent = app.world_mut().resource_mut::<LoginIntent>();
+            intent.creds = Some(("player".into(), "secret".into()));
+            intent.park = IoPark::Active;
+        }
         app.world_mut().write_message(DisconnectedMessage {
             reason: "logged out".into(),
             end: benilla_protocol::SessionEnd::LoggedOut,
             session_over: false,
         });
+        app.update();
         app.update();
 
         let intent = app.world().resource::<LoginIntent>();
@@ -1355,9 +1359,12 @@ mod tests {
             "a logout keeps the account signed in"
         );
         assert!(
-            intent.in_flight,
-            "and the same tick resubmits — the delay for a logout is 0, so the roster comes \
-             straight back",
+            intent.park == IoPark::Active && !intent.in_flight && intent.retry_at.is_none(),
+            "and submits nothing: the link it entered by is still up",
+        );
+        assert!(
+            requests.try_recv().is_err(),
+            "no login request reached the IO thread"
         );
         assert!(
             app.world().resource::<GlueDialog>().kind.is_none(),
@@ -1365,8 +1372,8 @@ mod tests {
         );
     }
 
-    /// A refused character login's relist brings a roster a second later; it must not close
-    /// the refusal's `Error`.
+    /// A refused character login's roster comes on the kept link right behind the refusal; it must
+    /// not close the refusal's `Error`.
     #[test]
     fn an_arriving_roster_closes_the_connecting_dialog_but_not_an_error() {
         let mut app = App::new();
@@ -1378,7 +1385,7 @@ mod tests {
             .add_message::<WorldAuthMessage>()
             .add_systems(Update, to_select_on_roster);
 
-        // The refusal's dialog survives its own relist.
+        // The refusal's dialog survives the roster behind it.
         app.world_mut()
             .resource_mut::<GlueDialog>()
             .open_error("World server is down");

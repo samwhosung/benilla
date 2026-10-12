@@ -6,14 +6,16 @@
 //! parks at character select until the app picks a guid; a new login supersedes either park. The
 //! pick closes the realmd link (`0x46b70c`), sends `CMSG_PLAYER_LOGIN` and announces the connection
 //! without waiting for the verdict, as the reference's world is already loading when it sends the
-//! login (`0x46c272`), so the destination's tiles stream a round trip early; a later
-//! `SMSG_CHARACTER_LOGIN_FAILED` ends the cycle like a logout ([`Cycle::LoginRefused`]). A stream
-//! failure emits [`SessionEvent::Disconnected`] with [`SessionEnd::Lost`] and re-parks. All policy
-//! lives in [`crate::login`] and [`crate::char_select`]; this thread only sequences and never
-//! sleeps.
+//! login (`0x46c272`), so the destination's tiles stream a round trip early. A logout or a later
+//! `SMSG_CHARACTER_LOGIN_FAILED` ends the world session, announced as a
+//! [`SessionEvent::Disconnected`] with [`SessionEnd::LoggedOut`], and parks at character select
+//! again on the same link. A stream failure emits it with [`SessionEnd::Lost`] and re-parks for
+//! credentials. All policy lives in [`crate::login`] and [`crate::char_select`]; this thread only
+//! sequences and never sleeps.
 //!
-//! One long-lived write thread drains [`ClientCommand`](super::ClientCommand)s; each connection
-//! hands it the fresh [`WorldWriter`] over a swap channel, so there is only ever one writer.
+//! One long-lived write thread drains [`ClientCommand`](super::ClientCommand)s; each world entry
+//! hands it the [`WorldWriter`] over a swap channel, and a logout takes it back, so there is only
+//! ever one writer.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,7 +26,7 @@ use anyhow::{anyhow, Result};
 use benilla_assets::LockRecover;
 use benilla_protocol::{
     messages, AuthReject, CharAction, LoginStage, Poll, RosterCause, SessionEnd, SessionEvent,
-    WardenRequired, WorldSession, WorldWriter,
+    WardenRequired, WorldReader, WorldSession, WorldWriter,
 };
 use crossbeam_channel::{Receiver, Sender};
 
@@ -182,20 +184,28 @@ enum Parked {
     Exit,
 }
 
-/// How one connection cycle ended; a stream failure is the `Err` of `Result`.
+/// How one connection cycle ended; a stream failure is the `Err` of `Result`. A logout and a
+/// refused character login end no cycle: the link goes back to character select.
 enum Cycle {
     /// The app dropped a channel end: end the read thread.
     Exit,
     /// Back to the pre-logon park with nothing to announce: a pre-roster failure (already
     /// reported), a canceled attempt, or select's Back ([`CharRequest::Abandon`]).
     Repark,
-    /// A clean logout: emit the teardown `Disconnected`, then park; the app's pending credentials
-    /// fetch the roster again.
-    LoggedOut,
-    /// `SMSG_CHARACTER_LOGIN_FAILED`: the announced entry is taken back and the cycle ends like a
-    /// logout. Deviation: the reference keeps its connection, but here the session is already
-    /// split and the writer handed away, so the logout's reconnect and relist are reused.
-    LoginRefused,
+}
+
+/// What the read thread hands the write thread on the swap channel, in order.
+pub(super) enum WriterSwap {
+    /// A world entry's writer. `fresh_link` is the connection's first entry, whose ping block
+    /// starts empty; a later entry on the same link keeps it, as the reference's lives on the
+    /// connection (`conn+0x1a6c`).
+    Install {
+        writer: WorldWriter,
+        fresh_link: bool,
+    },
+    /// The world session is over and the link kept: the writer goes back to the read thread on
+    /// this reply, and commands drop until the next install.
+    Reclaim(Sender<WorldWriter>),
 }
 
 /// Everything [`spawn_net`] hands the app.
@@ -225,8 +235,9 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
     let login_abandon = Arc::new(AtomicU64::new(0));
     let ping_clock = Arc::new(Mutex::new(PingClock::default()));
     if connect {
-        // The writer thread outlives connections; the read thread hands it each new WorldWriter.
-        let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
+        // The writer thread outlives connections; the read thread hands it each world entry's
+        // WorldWriter and takes it back after a logout.
+        let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WriterSwap>();
         let clock = Arc::clone(&ping_clock);
         // `SMSG_PONG` is timed on the read thread, where it lands ([`PingClock`]).
         let read_clock = Arc::clone(&ping_clock);
@@ -268,22 +279,6 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
                     ) {
                         Ok(Cycle::Exit) => return,
                         Ok(Cycle::Repark) => {}
-                        Ok(end @ (Cycle::LoggedOut | Cycle::LoginRefused)) => {
-                            // A refused login tears down what the entry had started to build.
-                            let reason = match end {
-                                Cycle::LoggedOut => "logged out",
-                                _ => "character login refused",
-                            };
-                            if events_tx
-                                .send(SessionEvent::Disconnected {
-                                    reason: reason.into(),
-                                    end: SessionEnd::LoggedOut,
-                                })
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
                         Err(e) => {
                             // A stream failure; a displacement kick arrives as a bare EOF. No
                             // sleep: what follows is the app's policy.
@@ -463,7 +458,7 @@ fn logon_park(
 /// and returns to the logon park; any retry is the app's.
 fn run(
     events_tx: &Sender<SessionEvent>,
-    writer_tx: &Sender<WorldWriter>,
+    writer_tx: &Sender<WriterSwap>,
     parks: &Parks,
     abandon: &AtomicU64,
     ping_clock: &Mutex<PingClock>,
@@ -573,7 +568,7 @@ fn world(
     logon: &mut benilla_protocol::Logon,
     pick: (benilla_protocol::RealmInfo, u64),
     events_tx: &Sender<SessionEvent>,
-    writer_tx: &Sender<WorldWriter>,
+    writer_tx: &Sender<WriterSwap>,
     parks: &Parks,
     abandon: &AtomicU64,
     ping_clock: &Mutex<PingClock>,
@@ -683,7 +678,7 @@ fn world(
         // (`GetCharacterListUpdate`, [`CharRequest::Enumerate`], `0x46c1a7`), as the reference
         // does: the world connect completes with the authentication response (`0x5ab2b8`), and
         // the `CMSG_CHAR_ENUM` is the screen's.
-        let asks = screen_asks_roster.load(Ordering::SeqCst);
+        let mut asks = screen_asks_roster.load(Ordering::SeqCst);
         let mut characters = if asks {
             Vec::new()
         } else {
@@ -704,7 +699,7 @@ fn world(
             return Ok(WorldEnd::Failed);
         }
         // A request or realm answer queued during a dead cycle must not answer this roster: a
-        // logout must land on the list, not bounce back in off a stale pick. The app re-sends
+        // reconnect must land on the list, not bounce back in off a stale pick. The app re-sends
         // its wants.
         while park_rx.try_recv().is_ok() {}
         let epoch = WORLD_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
@@ -732,91 +727,120 @@ fn world(
             return Ok(WorldEnd::Cycle(Cycle::Exit));
         }
 
-        // Park at character select until the app answers. Create and delete are serviced in place.
-        // If the server kicked the parked socket meanwhile, the login below fails, the cycle
-        // restarts and the app re-sends its pick, so the park needs no keepalive.
-        bevy::log::info!("net: parked at character select");
-        let guid = loop {
-            // The realm list's requests and the character screen's share one channel, in the
-            // order they were made: `RealmList.xml` is a `frameStrata="DIALOG"` frame, so Change
-            // Realm raises it over character select and both must be served while it is open,
-            // and a roster ask made before a realm change goes out on this link before the
-            // change drops it (the reference sends at the verb, `0x46b880`, and `ConnectToRealm`
-            // only then closes the link, `0x46b22b`).
-            //
-            // No `break` or `continue` inside the `select!` arms: the macro expands into a loop of
-            // its own, which they would bind to. The arms answer with a [`Parked`].
-            let answer = crossbeam_channel::select! {
-                recv(park_rx) -> msg => match msg {
-                    Err(_) => Parked::Exit,
-                    // `RequestRealmList`: a query on the realmd link, dialled again once Enter
-                    // World has closed it (`0x5b2200`), then the list; also Change Realm's first
-                    // list.
-                    Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
-                        if query(logon, req, events_tx) {
-                            Parked::StayPut
-                        } else {
-                            Parked::Exit
-                        }
-                    }
-                    // `RealmListDialogCancelled` over character select is a no-op (`0x46b810`).
-                    Ok(ParkRequest::Realm(RealmRequest::Close)) => Parked::StayPut,
-                    // `ChangeRealm(category, index)`: dial the chosen realm with the session key
-                    // we hold.
-                    Ok(ParkRequest::Realm(RealmRequest::Enter { realm, generation })) => {
-                        Parked::Realm(realm, generation)
-                    }
-                    // `ConnectToRealm` with the world up drops it first (`0x46b22b`).
-                    Ok(ParkRequest::Realm(RealmRequest::Leave)) => Parked::Leave,
-                    Ok(ParkRequest::Char(CharRequest::Enter(guid))) => Parked::Play(guid),
-                    // Select's Back: drop the parked session, return to the login park.
-                    Ok(ParkRequest::Char(CharRequest::Abandon)) => Parked::Repark,
-                    Ok(ParkRequest::Char(CharRequest::Create(create))) => {
-                        Parked::Acted(CharAction::Create, session.create_character(&create)?)
-                    }
-                    Ok(ParkRequest::Char(CharRequest::Delete(target))) => {
-                        Parked::Acted(CharAction::Delete, session.delete_character(target)?)
-                    }
-                    // `GetCharacterListUpdate` (`0x4723d0` → `0x46b880` → `0x5aabb0` → `0x5b4690`):
-                    // the reference asks the world server again whenever the glue screen wants
-                    // the list. A Warden refusal is the server's answer, as at the park entry.
-                    Ok(ParkRequest::Char(CharRequest::Enumerate)) => match session.char_enum() {
-                        Ok(c) => {
-                            characters = c;
-                            Parked::Listed
-                        }
-                        Err(e) => match e.downcast_ref::<WardenRequired>() {
-                            Some(w) => Parked::Refused(w.to_string()),
-                            // The stream failed under the ask: the screen's query fails
-                            // (`0x5ab300`), and the session ends as a dropped socket does.
-                            None => {
-                                let _ = events_tx.send(SessionEvent::RosterFailed { epoch });
-                                return Err(e);
+        // The link: the character park, the world, and back to the park on the same link after a
+        // logout or a refused character login (`0x5aaeb0`, `0x5aad70`: `0x401ee0` tears the world
+        // down and closes nothing). Its first world entry starts the connection's ping block.
+        let mut fresh_link = true;
+        loop {
+            // Park at character select until the app answers. Create and delete are serviced in place.
+            // If the server kicked the parked socket meanwhile, the login below fails, the cycle
+            // restarts and the app re-sends its pick, so the park needs no keepalive.
+            bevy::log::info!("net: parked at character select");
+            let guid = loop {
+                // The realm list's requests and the character screen's share one channel, in the
+                // order they were made: `RealmList.xml` is a `frameStrata="DIALOG"` frame, so Change
+                // Realm raises it over character select and both must be served while it is open,
+                // and a roster ask made before a realm change goes out on this link before the
+                // change drops it (the reference sends at the verb, `0x46b880`, and `ConnectToRealm`
+                // only then closes the link, `0x46b22b`).
+                //
+                // No `break` or `continue` inside the `select!` arms: the macro expands into a loop of
+                // its own, which they would bind to. The arms answer with a [`Parked`].
+                let answer = crossbeam_channel::select! {
+                    recv(park_rx) -> msg => match msg {
+                        Err(_) => Parked::Exit,
+                        // `RequestRealmList`: a query on the realmd link, dialled again once Enter
+                        // World has closed it (`0x5b2200`), then the list; also Change Realm's
+                        // first list.
+                        Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
+                            if query(logon, req, events_tx) {
+                                Parked::StayPut
+                            } else {
+                                Parked::Exit
                             }
+                        }
+                        // `RealmListDialogCancelled` over character select is a no-op (`0x46b810`).
+                        Ok(ParkRequest::Realm(RealmRequest::Close)) => Parked::StayPut,
+                        // `ChangeRealm(category, index)`: dial the chosen realm with the session key
+                        // we hold.
+                        Ok(ParkRequest::Realm(RealmRequest::Enter { realm, generation })) => {
+                            Parked::Realm(realm, generation)
+                        }
+                        // `ConnectToRealm` with the world up drops it first (`0x46b22b`).
+                        Ok(ParkRequest::Realm(RealmRequest::Leave)) => Parked::Leave,
+                        Ok(ParkRequest::Char(CharRequest::Enter(guid))) => Parked::Play(guid),
+                        // Select's Back: drop the parked session, return to the login park.
+                        Ok(ParkRequest::Char(CharRequest::Abandon)) => Parked::Repark,
+                        Ok(ParkRequest::Char(CharRequest::Create(create))) => {
+                            Parked::Acted(CharAction::Create, session.create_character(&create)?)
+                        }
+                        Ok(ParkRequest::Char(CharRequest::Delete(target))) => {
+                            Parked::Acted(CharAction::Delete, session.delete_character(target)?)
+                        }
+                        // `GetCharacterListUpdate` (`0x4723d0` → `0x46b880` → `0x5aabb0` → `0x5b4690`):
+                        // the reference asks the world server again whenever the glue screen wants
+                        // the list. A Warden refusal is the server's answer, as at the park entry.
+                        Ok(ParkRequest::Char(CharRequest::Enumerate)) => match session.char_enum() {
+                            Ok(c) => {
+                                characters = c;
+                                Parked::Listed
+                            }
+                            Err(e) => match e.downcast_ref::<WardenRequired>() {
+                                Some(w) => Parked::Refused(w.to_string()),
+                                // The stream failed under the ask: the screen's query fails
+                                // (`0x5ab300`), and the session ends as a dropped socket does.
+                                None => {
+                                    let _ = events_tx.send(SessionEvent::RosterFailed { epoch });
+                                    return Err(e);
+                                }
+                            },
                         },
                     },
-                },
-                recv(login_rx) -> msg => msg.map_or(Parked::Exit, Parked::Login),
-            };
-            let (action, code) = match answer {
-                Parked::Exit => return Ok(WorldEnd::Cycle(Cycle::Exit)),
-                Parked::Repark => return Ok(WorldEnd::Cycle(Cycle::Repark)),
-                Parked::Login(next) => return Ok(WorldEnd::Login(next)),
-                Parked::StayPut => continue,
-                Parked::Play(guid) => break guid,
-                Parked::Realm(chosen, asked) => {
-                    (realm, generation) = (chosen, asked);
-                    continue 'realm;
-                }
-                Parked::Leave => return Ok(WorldEnd::Failed),
-                Parked::Refused(reason) => return fail_terminal(reason),
-                Parked::Acted(action, code) => (action, code),
-                Parked::Listed => {
+                    recv(login_rx) -> msg => msg.map_or(Parked::Exit, Parked::Login),
+                };
+                let (action, code) = match answer {
+                    Parked::Exit => return Ok(WorldEnd::Cycle(Cycle::Exit)),
+                    Parked::Repark => return Ok(WorldEnd::Cycle(Cycle::Repark)),
+                    Parked::Login(next) => return Ok(WorldEnd::Login(next)),
+                    Parked::StayPut => continue,
+                    Parked::Play(guid) => break guid,
+                    Parked::Realm(chosen, asked) => {
+                        (realm, generation) = (chosen, asked);
+                        continue 'realm;
+                    }
+                    Parked::Leave => return Ok(WorldEnd::Failed),
+                    Parked::Refused(reason) => return fail_terminal(reason),
+                    Parked::Acted(action, code) => (action, code),
+                    Parked::Listed => {
+                        if events_tx
+                            .send(SessionEvent::CharacterList {
+                                characters: characters.clone(),
+                                realm: Some(realm.clone()),
+                                cause: RosterCause::Asked,
+                                epoch,
+                                generation,
+                            })
+                            .is_err()
+                        {
+                            return Ok(WorldEnd::Cycle(Cycle::Exit));
+                        }
+                        continue;
+                    }
+                };
+                // A success changed the roster: under the native policy re-emit it before the result,
+                // so the screen has the fresh list when it reacts. The stock screen asks again itself
+                // (`0x46c1a7`).
+                let changed = match action {
+                    CharAction::Create => code == messages::CHAR_CREATE_SUCCESS,
+                    CharAction::Delete => code == messages::CHAR_DELETE_SUCCESS,
+                };
+                if changed && !asks {
+                    characters = session.char_enum()?;
                     if events_tx
                         .send(SessionEvent::CharacterList {
                             characters: characters.clone(),
                             realm: Some(realm.clone()),
-                            cause: RosterCause::Asked,
+                            cause: RosterCause::Changed,
                             epoch,
                             generation,
                         })
@@ -824,23 +848,110 @@ fn world(
                     {
                         return Ok(WorldEnd::Cycle(Cycle::Exit));
                     }
-                    continue;
+                }
+                if events_tx
+                    .send(SessionEvent::CharActionResult { action, code })
+                    .is_err()
+                {
+                    return Ok(WorldEnd::Cycle(Cycle::Exit));
                 }
             };
-            // A success changed the roster: under the native policy re-emit it before the result,
-            // so the screen has the fresh list when it reacts. The stock screen asks again itself
-            // (`0x46c1a7`).
-            let changed = match action {
-                CharAction::Create => code == messages::CHAR_CREATE_SUCCESS,
-                CharAction::Delete => code == messages::CHAR_DELETE_SUCCESS,
+            let name = characters
+                .iter()
+                .find(|c| c.guid == guid)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+            // `EnterWorld` closes the realmd link (`CLoginMgr::Cancel`, `0x46b70c` → `0x5b3320`)
+            // and nothing in the world reopens it; back at the park, a realm list query dials it
+            // again ([`query`]).
+            logon.close();
+            // No `CMSG_SET_ACTIVE_MOVER` here: it waits for our own player's create, as the
+            // reference's does (`super::enter_world_on_self_create`); a server may drop it before then.
+            session.player_login(refuse_once(guid))?;
+
+            let billing_time_rested = session.billing_time_rested();
+            let tutorial_flags = session.take_tutorial_flags();
+            // `SMSG_ADDON_INFO` carries no names, so it is paired back against the block we sent. No
+            // reply means no AddOn index space at all, carried as `None`. The link's one reply
+            // answers every login on it.
+            let statuses = session.addon_info().map(<[u8]>::to_vec);
+            let addon_info = statuses.as_deref().map(|statuses| {
+                benilla_protocol::messages::hidden_from_reply(
+                    statuses,
+                    &benilla_protocol::messages::STOCK_SECURE_ADDONS,
+                )
+            });
+            match (&statuses, &addon_info) {
+                (Some(statuses), Some(hidden)) => bevy::log::info!(
+                    "net: SMSG_ADDON_INFO — {} record(s), {} hidden from the AddOn index space",
+                    statuses.len(),
+                    hidden.len()
+                ),
+                _ => bevy::log::warn!(
+                    "net: no SMSG_ADDON_INFO — GetNumAddOns() stays 0, as the reference's would"
+                ),
+            }
+            let (mut reader, writer) = session.into_split()?;
+            // Installed before the entry is announced, so the app's first command finds it.
+            let install = WriterSwap::Install {
+                writer,
+                fresh_link: std::mem::take(&mut fresh_link),
             };
-            if changed && !asks {
-                characters = session.char_enum()?;
+            if writer_tx.send(install).is_err() {
+                // The writer thread ends only on app exit.
+                return Ok(WorldEnd::Cycle(Cycle::Exit));
+            }
+            if events_tx
+                .send(SessionEvent::Connected {
+                    self_guid: guid,
+                    name,
+                    billing_time_rested,
+                    tutorial_flags,
+                    addon_info,
+                })
+                .is_err()
+            {
+                return Ok(WorldEnd::Cycle(Cycle::Exit));
+            }
+            bevy::log::info!("net: connected to {world_addr}");
+
+            let reason = match stream(&mut reader, park_rx, events_tx, ping_clock, tails_announced)?
+            {
+                StreamEnd::Exit => return Ok(WorldEnd::Cycle(Cycle::Exit)),
+                StreamEnd::Back(reason) => reason,
+            };
+            // The world is torn down (`0x401ee0`'s shutdown) and the link kept: the app's teardown
+            // edge, then the session joined again at the character park.
+            if events_tx
+                .send(SessionEvent::Disconnected {
+                    reason: reason.into(),
+                    end: SessionEnd::LoggedOut,
+                })
+                .is_err()
+            {
+                return Ok(WorldEnd::Cycle(Cycle::Exit));
+            }
+            let Some(writer) = reclaim(writer_tx)? else {
+                return Ok(WorldEnd::Cycle(Cycle::Exit));
+            };
+            session = WorldSession::rejoin(reader, writer)?;
+            bevy::log::info!("net: {reason} — back at character select on the same link");
+            // The native screens wait for the park's own enumeration, as on the dial; the stock
+            // screen's `CharacterSelect_OnShow` asks for its roster itself (`0x46b880`).
+            asks = screen_asks_roster.load(Ordering::SeqCst);
+            if !asks {
+                characters = match session.char_enum() {
+                    Ok(c) => c,
+                    Err(e) => match e.downcast_ref::<WardenRequired>() {
+                        Some(w) => return fail_terminal(w.to_string()),
+                        None => return Err(e),
+                    },
+                };
                 if events_tx
                     .send(SessionEvent::CharacterList {
                         characters: characters.clone(),
                         realm: Some(realm.clone()),
-                        cause: RosterCause::Changed,
+                        cause: RosterCause::Park,
                         epoch,
                         generation,
                     })
@@ -849,158 +960,141 @@ fn world(
                     return Ok(WorldEnd::Cycle(Cycle::Exit));
                 }
             }
-            if events_tx
-                .send(SessionEvent::CharActionResult { action, code })
-                .is_err()
-            {
-                return Ok(WorldEnd::Cycle(Cycle::Exit));
-            }
-        };
-        let name = characters
-            .iter()
-            .find(|c| c.guid == guid)
-            .map(|c| c.name.clone())
-            .unwrap_or_default();
-        // `EnterWorld` closes the realmd link (`CLoginMgr::Cancel`, `0x46b70c` → `0x5b3320`) and
-        // nothing in the world reopens it; back at the park, a realm list query dials it again
-        // ([`query`]).
-        logon.close();
-        // No `CMSG_SET_ACTIVE_MOVER` here: it waits for our own player's create, as the
-        // reference's does (`super::enter_world_on_self_create`); a server may drop it before then.
-        session.player_login(refuse_once(guid))?;
-
-        let billing_time_rested = session.billing_time_rested();
-        let tutorial_flags = session.take_tutorial_flags();
-        // `SMSG_ADDON_INFO` carries no names, so it is paired back against the block we sent. No
-        // reply means no AddOn index space at all, carried as `None`.
-        let statuses = session.addon_info().map(<[u8]>::to_vec);
-        let addon_info = statuses.as_deref().map(|statuses| {
-            benilla_protocol::messages::hidden_from_reply(
-                statuses,
-                &benilla_protocol::messages::STOCK_SECURE_ADDONS,
-            )
-        });
-        match (&statuses, &addon_info) {
-            (Some(statuses), Some(hidden)) => bevy::log::info!(
-                "net: SMSG_ADDON_INFO — {} record(s), {} hidden from the AddOn index space",
-                statuses.len(),
-                hidden.len()
-            ),
-            _ => bevy::log::warn!(
-                "net: no SMSG_ADDON_INFO — GetNumAddOns() stays 0, as the reference's would"
-            ),
-        }
-        let (mut reader, writer) = session.into_split()?;
-        if events_tx
-            .send(SessionEvent::Connected {
-                self_guid: guid,
-                name,
-                billing_time_rested,
-                tutorial_flags,
-                addon_info,
-            })
-            .is_err()
-        {
-            return Ok(WorldEnd::Cycle(Cycle::Exit));
-        }
-        if writer_tx.send(writer).is_err() {
-            // The writer thread ends only on app exit.
-            return Ok(WorldEnd::Cycle(Cycle::Exit));
-        }
-        bevy::log::info!("net: connected to {world_addr}");
-
-        // `poll` skips packets it cannot parse; a long run of skips means the stream desynced.
-        let (mut skip_run, mut skip_logged) = (0u32, 0u32);
-        loop {
-            let polled = reader.poll()?;
-            note_inbound(); // parsed or not, the census counts liveness
-            match polled {
-                Poll::Events {
-                    opcode,
-                    events,
-                    tail,
-                    body,
-                } => {
-                    skip_run = 0;
-                    // A body is length-framed, so a decoder shorter than the server's layout
-                    // succeeds silently; report it once per opcode, and never skip the packet.
-                    if tail > 0 && tails_announced.insert(opcode) {
-                        bevy::log::info!(
-                            "net: opcode {} ({opcode:#06x}) left {tail} trailing byte(s) after \
-                             decode (first occurrence; announced once per opcode)",
-                            benilla_protocol::messages::opcode_name(opcode).unwrap_or("?"),
-                        );
-                    }
-                    // Every inbound opcode by name, length and bytes (tag `in`), including one that
-                    // parsed into no event.
-                    if benilla_assets::trace::enabled_for("in") {
-                        benilla_assets::trace::line(
-                            "in",
-                            &wire_trace::in_line(opcode, events.len(), &body),
-                        );
-                    }
-                    for ev in events {
-                        // The pong bypass: the reference's `OnData` (`0x537b10`) hands `SMSG_PONG`
-                        // to `HandlePong` (`0x537d60`) inline, not onto the game thread's queue, so
-                        // it is timed and consumed here.
-                        if let SessionEvent::Pong { sequence } = ev {
-                            if let Some(rtt) = ping_clock.lock_recover().record_pong(sequence) {
-                                bevy::log::debug!("net: pong seq={sequence} rtt={rtt}ms");
-                            }
-                            continue;
-                        }
-                        // A logout or a refused login ends the cycle after the app hears it, so
-                        // the screen has the reason before the teardown.
-                        let ends = match ev {
-                            SessionEvent::LoggedOut => Some(Cycle::LoggedOut),
-                            SessionEvent::CharacterLoginFailed { .. } => Some(Cycle::LoginRefused),
-                            _ => None,
-                        };
-                        // Receiver dropped: the app exited.
-                        if events_tx.send(ev).is_err() {
-                            return Ok(WorldEnd::Cycle(Cycle::Exit));
-                        }
-                        if let Some(cycle) = ends {
-                            return Ok(WorldEnd::Cycle(cycle));
-                        }
-                    }
-                }
-                Poll::Skipped {
-                    opcode,
-                    reason,
-                    body,
-                } => {
-                    skip_run += 1;
-                    // Every skip, uncapped, into the trace (tag `skip`) with its whole body:
-                    // otherwise a packet that failed to parse looks like one that never arrived.
-                    if benilla_assets::trace::enabled_for("skip") {
-                        benilla_assets::trace::line(
-                            "skip",
-                            &wire_trace::skip_line(opcode, &reason, &body),
-                        );
-                    }
-                    // Capped, but enough for a post-teleport burst of unparseable object updates.
-                    if skip_logged < 40 {
-                        bevy::log::warn!("net: skipping unparseable packet — {reason}");
-                        skip_logged += 1;
-                    }
-                    // A parse error feeds the dropped-packet tally like an unknown opcode.
-                    if events_tx
-                        .send(SessionEvent::PacketDropped {
-                            opcode,
-                            unparseable: true,
-                        })
-                        .is_err()
-                    {
-                        return Ok(WorldEnd::Cycle(Cycle::Exit));
-                    }
-                    if skip_run > 1024 {
-                        return Err(anyhow!("world stream desynced after 1024 skipped packets"));
-                    }
-                }
-            }
         }
     } // 'realm
+}
+
+/// How the world stream ended, short of a socket failure.
+enum StreamEnd {
+    /// The app dropped a channel end.
+    Exit,
+    /// `SMSG_LOGOUT_COMPLETE` or `SMSG_CHARACTER_LOGIN_FAILED`, already announced: the world session
+    /// is over and the link goes back to character select. The reason names which.
+    Back(&'static str),
+}
+
+/// The world stream: every packet off the socket into [`SessionEvent`]s until a logout or a refused
+/// character login ends the world session, the socket fails or the app exits.
+fn stream(
+    reader: &mut WorldReader,
+    park_rx: &Receiver<ParkRequest>,
+    events_tx: &Sender<SessionEvent>,
+    ping_clock: &Mutex<PingClock>,
+    tails_announced: &mut std::collections::HashSet<u16>,
+) -> Result<StreamEnd> {
+    // `poll` skips packets it cannot parse; a long run of skips means the stream desynced.
+    let (mut skip_run, mut skip_logged) = (0u32, 0u32);
+    loop {
+        let polled = reader.poll()?;
+        note_inbound(); // parsed or not, the census counts liveness
+        match polled {
+            Poll::Events {
+                opcode,
+                events,
+                tail,
+                body,
+            } => {
+                skip_run = 0;
+                // A body is length-framed, so a decoder shorter than the server's layout succeeds
+                // silently; report it once per opcode, and never skip the packet.
+                if tail > 0 && tails_announced.insert(opcode) {
+                    bevy::log::info!(
+                        "net: opcode {} ({opcode:#06x}) left {tail} trailing byte(s) after \
+                         decode (first occurrence; announced once per opcode)",
+                        benilla_protocol::messages::opcode_name(opcode).unwrap_or("?"),
+                    );
+                }
+                // Every inbound opcode by name, length and bytes (tag `in`), including one that
+                // parsed into no event.
+                if benilla_assets::trace::enabled_for("in") {
+                    benilla_assets::trace::line(
+                        "in",
+                        &wire_trace::in_line(opcode, events.len(), &body),
+                    );
+                }
+                for ev in events {
+                    // The pong bypass: the reference's `OnData` (`0x537b10`) hands `SMSG_PONG` to
+                    // `HandlePong` (`0x537d60`) inline, not onto the game thread's queue, so it is
+                    // timed and consumed here.
+                    if let SessionEvent::Pong { sequence } = ev {
+                        if let Some(rtt) = ping_clock.lock_recover().record_pong(sequence) {
+                            bevy::log::debug!("net: pong seq={sequence} rtt={rtt}ms");
+                        }
+                        continue;
+                    }
+                    // A logout or a refused login ends the world session after the app hears it,
+                    // so the screen has the reason before the teardown.
+                    let back = match ev {
+                        SessionEvent::LoggedOut => Some("logged out"),
+                        SessionEvent::CharacterLoginFailed { .. } => {
+                            Some("character login refused")
+                        }
+                        _ => None,
+                    };
+                    // An ask queued in the world must not answer the park this returns to: a
+                    // logout must land on the list, not bounce back in off a stale pick. Dropped
+                    // before the app hears of the return, so every ask it makes after is served.
+                    if back.is_some() {
+                        while park_rx.try_recv().is_ok() {}
+                    }
+                    // Receiver dropped: the app exited.
+                    if events_tx.send(ev).is_err() {
+                        return Ok(StreamEnd::Exit);
+                    }
+                    if let Some(reason) = back {
+                        return Ok(StreamEnd::Back(reason));
+                    }
+                }
+            }
+            Poll::Skipped {
+                opcode,
+                reason,
+                body,
+            } => {
+                skip_run += 1;
+                // Every skip, uncapped, into the trace (tag `skip`) with its whole body: otherwise
+                // a packet that failed to parse looks like one that never arrived.
+                if benilla_assets::trace::enabled_for("skip") {
+                    benilla_assets::trace::line(
+                        "skip",
+                        &wire_trace::skip_line(opcode, &reason, &body),
+                    );
+                }
+                // Capped, but enough for a post-teleport burst of unparseable object updates.
+                if skip_logged < 40 {
+                    bevy::log::warn!("net: skipping unparseable packet — {reason}");
+                    skip_logged += 1;
+                }
+                // A parse error feeds the dropped-packet tally like an unknown opcode.
+                if events_tx
+                    .send(SessionEvent::PacketDropped {
+                        opcode,
+                        unparseable: true,
+                    })
+                    .is_err()
+                {
+                    return Ok(StreamEnd::Exit);
+                }
+                if skip_run > 1024 {
+                    return Err(anyhow!("world stream desynced after 1024 skipped packets"));
+                }
+            }
+        }
+    }
+}
+
+/// Takes the world writer back from the write thread, the world session over and the link kept.
+/// `None` once the write thread is gone (app exit).
+fn reclaim(writer_tx: &Sender<WriterSwap>) -> Result<Option<WorldWriter>> {
+    let (reply, returned) = crossbeam_channel::bounded(1);
+    if writer_tx.send(WriterSwap::Reclaim(reply)).is_err() {
+        return Ok(None);
+    }
+    // The install went ahead of this on the same channel, so the writer is there to return.
+    returned
+        .recv()
+        .map(Some)
+        .map_err(|_| anyhow!("the write thread held no world writer to return"))
 }
 
 /// `WOW_REFUSE_LOGIN=1` makes the server refuse the run's first character login, which cannot be
@@ -1022,11 +1116,42 @@ fn refuse_once(guid: u64) -> u64 {
     }
 }
 
+/// One [`WriterSwap`] applied to the write thread's writer, its warning count and its keepalive.
+fn apply_swap(
+    swap: WriterSwap,
+    writer: &mut Option<WorldWriter>,
+    warned: &mut u32,
+    ping_tick: &mut Receiver<Instant>,
+    ping_clock: &Mutex<PingClock>,
+) {
+    match swap {
+        WriterSwap::Install {
+            writer: w,
+            fresh_link,
+        } => {
+            *writer = Some(w);
+            *warned = 0;
+            // Sequence 1 is the new socket's first ping, so an old socket's pong cannot match.
+            if fresh_link {
+                ping_clock.lock_recover().clear();
+            }
+            // The first keepalive is a full interval after connect (`0x537bcf`).
+            *ping_tick = crossbeam_channel::after(PING_INTERVAL);
+        }
+        WriterSwap::Reclaim(reply) => {
+            *ping_tick = crossbeam_channel::never();
+            if let Some(w) = writer.take() {
+                let _ = reply.send(w);
+            }
+        }
+    }
+}
+
 /// The write thread: app commands, writer swaps and the [`PING_INTERVAL`] keepalive. With no live
 /// writer, commands drop with a capped warning. Ends when the app drops every command sender.
-fn writer_loop(
+pub(super) fn writer_loop(
     cmd_rx: &Receiver<ClientCommand>,
-    mut writer_rx: Receiver<WorldWriter>,
+    mut writer_rx: Receiver<WriterSwap>,
     ping_clock: &Mutex<PingClock>,
 ) {
     let mut writer: Option<WorldWriter> = None;
@@ -1037,15 +1162,7 @@ fn writer_loop(
     loop {
         crossbeam_channel::select! {
             recv(writer_rx) -> w => match w {
-                Ok(w) => {
-                    writer = Some(w);
-                    warned = 0;
-                    // Sequence 1 is the new socket's first ping, so an old socket's pong cannot
-                    // match.
-                    ping_clock.lock_recover().clear();
-                    // The first keepalive is a full interval after connect (`0x537bcf`).
-                    ping_tick = crossbeam_channel::after(PING_INTERVAL);
-                }
+                Ok(swap) => apply_swap(swap, &mut writer, &mut warned, &mut ping_tick, ping_clock),
                 // The read thread ended (app exit). A disconnected receiver is always ready and
                 // would spin the select, so stop selecting it.
                 Err(_) => writer_rx = crossbeam_channel::never(),
@@ -1078,6 +1195,14 @@ fn writer_loop(
             },
             recv(cmd_rx) -> cmd => {
                 let Ok(cmd) = cmd else { return }; // all app senders dropped → app exit
+                // The read thread installs a writer before it announces the entry, so a command
+                // the app sends on that announcement finds it here even when this wake-up took
+                // the command first.
+                if writer.is_none() {
+                    while let Ok(swap) = writer_rx.try_recv() {
+                        apply_swap(swap, &mut writer, &mut warned, &mut ping_tick, ping_clock);
+                    }
+                }
                 let Some(w) = writer.as_mut() else {
                     // No live writer: the command is dropped, and both lines name it.
                     if benilla_assets::trace::enabled() {

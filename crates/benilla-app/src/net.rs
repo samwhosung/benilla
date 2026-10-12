@@ -2164,7 +2164,7 @@ pub(crate) struct WorldEnterCascadeMessage;
 
 /// `SMSG_ADDON_INFO`: the addons the server hid from the Lua index space, or `None` if it did
 /// not answer. A resource, since it must exist before the world-entry UI load runs any addon;
-/// rewritten on every login.
+/// rewritten on every login from the reply its link got.
 #[derive(Resource, Default)]
 pub(crate) struct AddonInfoReply(pub(crate) Option<Vec<String>>);
 
@@ -2198,7 +2198,9 @@ pub(crate) struct LoginQueuedMessage {
     pub(crate) realm: Option<String>,
 }
 
-/// The session ended; the IO thread is back at its pre-logon park.
+/// The world session ended. After a logout or a refused character login ([`SessionEnd::LoggedOut`](
+/// benilla_protocol::SessionEnd::LoggedOut)) the IO thread is back at character select on the
+/// same link; after a loss, at its pre-logon park.
 #[derive(Message, Clone)]
 pub(crate) struct DisconnectedMessage {
     pub(crate) reason: String,
@@ -2210,8 +2212,8 @@ pub(crate) struct DisconnectedMessage {
 }
 
 impl DisconnectedMessage {
-    /// `session_over` is false after a logout (the relist is the select the player asked for) and
-    /// in a run declared unattended ([`crate::run_mode::unattended`]), which reconnects. Not the
+    /// `session_over` is false after a logout (the link is kept and character select is what the
+    /// player asked for) and in a run declared unattended ([`crate::run_mode::unattended`]), which reconnects. Not the
     /// login env vars: a person's launch line sets them too, and a reconnect would take the
     /// account back from whoever displaced us.
     pub(crate) fn new(reason: String, end: benilla_protocol::SessionEnd) -> Self {

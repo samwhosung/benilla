@@ -92,7 +92,9 @@ pub enum RosterCause {
 /// `GlueParent.lua` returns to the login screen; a logout returns to character select.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionEnd {
-    /// A logout the server confirmed (`SMSG_LOGOUT_COMPLETE`); a fresh roster follows.
+    /// A logout the server confirmed (`SMSG_LOGOUT_COMPLETE`), or a refused character login: the
+    /// world link is kept and the session is back at character select on it, as the reference's
+    /// `0x5aaeb0` and `0x5aad70` close nothing.
     LoggedOut,
     /// The stream died: a socket error, an EOF or a post-roster handshake failure. A displacement
     /// kick is this too: vmangos `WorldSession::KickPlayer` only closes the socket, no packet.
@@ -194,14 +196,16 @@ pub enum SessionEvent {
     /// Our pick was refused (`SMSG_CHARACTER_LOGIN_FAILED`) after [`Self::Connected`] was sent;
     /// `result` is a 1-based index into the reference's six `CHAR_LOGIN_*` strings.
     CharacterLoginFailed { result: u8 },
-    /// Logout confirmed (`SMSG_LOGOUT_COMPLETE`); a fresh [`Self::CharacterList`] follows.
+    /// Logout confirmed (`SMSG_LOGOUT_COMPLETE`); the session returns to character select on the
+    /// same link, where the roster is asked for again.
     LoggedOut,
     /// `SMSG_LOGOUT_RESPONSE`. A non-zero `reason` refuses: 1 in combat, 2 GM-frozen, 3 falling
     /// (vmangos). Zero starts the 20 s camp timer, or with `instant` (resting, taxi, GM) logs out.
     LogoutResponse { reason: u32, instant: bool },
     /// The server dropped a pending logout at our `CMSG_LOGOUT_CANCEL` (`SMSG_LOGOUT_CANCEL_ACK`).
     LogoutCancelled,
-    /// The session ended; `reason` is human-readable.
+    /// The world session ended, and with [`SessionEnd::Lost`] the link with it; `reason` is
+    /// human-readable.
     Disconnected { reason: String, end: SessionEnd },
     /// A placed object entered view, its spawn identity decoded per object type.
     ObjectCreate {

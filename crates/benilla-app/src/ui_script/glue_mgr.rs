@@ -857,9 +857,11 @@ impl GlueMgr {
         self.op.complete(true, STATUS_AUTH_OK);
     }
 
-    /// The session ended. Over (`session_over`), the disconnect handler (`0x46c540`): state 0,
-    /// and `DISCONNECTED_FROM_SERVER` (`0x46c62e`), which the stock screens answer with the login
-    /// screen and the `DISCONNECTED` dialog. A logout's relist or an unattended reconnect is no
+    /// The session ended. A logout or a refused character login ends only the world: the link
+    /// is kept (`0x5aaeb0` and `0x5aad70` reach no close), so the screen's roster ask goes out on
+    /// it (`IsConnectedToServer`, `0x46d380`). Over (`session_over`), the disconnect handler
+    /// (`0x46c540`): state 0, and `DISCONNECTED_FROM_SERVER` (`0x46c62e`), which the stock screens
+    /// answer with the login screen and the `DISCONNECTED` dialog. An unattended reconnect is no
     /// disconnect to the screens.
     ///
     /// Out of state 2 it fires the event (`0x46c618`); in state 2 a completed, failed operation
@@ -867,7 +869,10 @@ impl GlueMgr {
     /// the dropped connection is `ClientServices`' current one (`0x5abd40`, else "Invalid
     /// disconnect"), has no native counterpart: the IO thread holds one session and reports only
     /// its own end.
-    fn on_disconnected(&mut self, session_over: bool) {
+    fn on_disconnected(&mut self, end: benilla_protocol::SessionEnd, session_over: bool) {
+        if end == benilla_protocol::SessionEnd::LoggedOut {
+            return;
+        }
         self.connected = false;
         if !session_over {
             return;
@@ -1250,7 +1255,7 @@ pub(crate) fn drive_glue_mgr(
         mgr.on_roster(msg.characters.clone(), msg.cause, msg.epoch);
     }
     for msg in news.disconnects.read() {
-        mgr.on_disconnected(msg.session_over);
+        mgr.on_disconnected(msg.end, msg.session_over);
     }
     mgr.tick();
     send_asks(&mut mgr, logins, &mut asks);

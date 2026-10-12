@@ -9,7 +9,7 @@
 //! character park, and takes one answer. The policy, in order:
 //!
 //! 1. `WOW_REALM`, matched case-insensitively; a name not on the list falls through.
-//! 2. The realm this session is on, so a logout or a dropped connection returns to it.
+//! 2. The realm this session is on, so an unattended reconnect returns to it.
 //! 3. The remembered realm, the persisted `realmName` CVar.
 //! 4. An unattended run (`crate::run_mode::unattended`) takes the first realm that is up.
 //! 5. Otherwise the dialog.

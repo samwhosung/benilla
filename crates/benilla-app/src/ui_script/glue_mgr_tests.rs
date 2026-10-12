@@ -4,7 +4,7 @@ use std::sync::Arc;
 use super::*;
 use crate::char_select::ClientState;
 use crate::net::{LoginAbandon, LoginRequest, LoginSubmit, RosterFailedMessage, WorldAuthMessage};
-use benilla_protocol::RealmInfo;
+use benilla_protocol::{RealmInfo, SessionEnd};
 
 /// The manager with both agreements accepted, the way a returning player's CVars seed it.
 fn accepted() -> GlueMgr {
@@ -694,29 +694,48 @@ fn status_dialog_click_cancels_by_state() {
     assert!(m.outbox.is_empty(), "a cancelled query reports nothing");
 }
 
-/// A session that is over fires `DISCONNECTED_FROM_SERVER`; a logout's relist does not; in the
-/// world connect, a completed failed operation opens `OKAY` with its text instead
+/// A session that is over fires `DISCONNECTED_FROM_SERVER`; an unattended reconnect does not; in
+/// the world connect, a completed failed operation opens `OKAY` with its text instead
 /// (`0x46c671`-`0x46c68f`), and a running one still fires the event.
 #[test]
 fn a_lost_session_fires_disconnected() {
     let mut m = accepted();
-    m.on_disconnected(false);
+    m.on_disconnected(SessionEnd::Lost, false);
     assert!(m.outbox.is_empty());
-    m.on_disconnected(true);
+    m.on_disconnected(SessionEnd::Lost, true);
     assert_eq!(m.outbox, [Outgoing::Disconnected]);
 
     let mut m = accepted();
     m.state = ScreenState::Connect;
     m.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
-    m.on_disconnected(true);
+    m.on_disconnected(SessionEnd::Lost, true);
     assert_eq!(m.outbox, [Outgoing::Disconnected]);
 
     let mut m = accepted();
     m.state = ScreenState::Connect;
     m.op.complete(false, STATUS_FAILED_TO_CONNECT);
-    m.on_disconnected(true);
+    m.on_disconnected(SessionEnd::Lost, true);
     assert_eq!(m.outbox, [open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT"))]);
     assert_eq!(m.state, ScreenState::Idle);
+}
+
+/// A logout or a refused login keeps the world link (`0x5aaeb0`, `0x5aad70`), so the character
+/// screen that comes back up finds it connected (`0x46d380`) and its `GetCharacterListUpdate`
+/// sends the roster ask on it (`0x46b880` → `0x5aabb0`), with no dialog of a disconnect.
+#[test]
+fn a_logout_keeps_the_link_for_the_screens_roster_ask() {
+    let mut m = accepted();
+    m.connected = true;
+    m.on_disconnected(SessionEnd::LoggedOut, false);
+    assert!(m.connected, "the link is kept");
+    assert!(m.outbox.is_empty());
+    m.get_character_list();
+    let (_, park) = m.take_asks();
+    assert!(
+        matches!(park[..], [ParkRequest::Char(CharRequest::Enumerate)]),
+        "the ask goes out on the link"
+    );
+    assert!(!m.op.done, "and waits for its reply");
 }
 
 // ── The stock screens over the native login, end to end ─────────────────────────────────────────

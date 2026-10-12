@@ -464,8 +464,8 @@ fn character_list(
         "net: character select — {} character(s) on the account",
         characters.len()
     );
-    // A roster means a live link: clear the failure the logout's synthesized `Disconnected`
-    // left, or the select screen keeps its "Server down" note until the next world entry.
+    // A roster means a live link: clear the reason the logout's teardown `Disconnected` left, or
+    // the select screen keeps its "Server down" note until the next world entry.
     status.last_reason = None;
     char_lists.write(CharListMessage {
         characters,
@@ -542,7 +542,8 @@ fn logged_out(
     logged_out.write(LoggedOutMessage);
 }
 
-/// The session ended: tears down the streamed world and clears every session-scoped cache.
+/// The world session ended, the link kept or not: tears down the streamed world and clears every
+/// session-scoped cache.
 fn disconnected(
     reason: String,
     end: benilla_protocol::SessionEnd,

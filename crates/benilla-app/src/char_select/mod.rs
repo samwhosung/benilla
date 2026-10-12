@@ -85,20 +85,7 @@ impl Plugin for CharSelectPlugin {
             .add_systems(
                 Update,
                 (
-                    // Runs in every state: the reconnect auto-answer and the logout edge arrive
-                    // `InWorld`. `back_on_disconnect` runs after the entry: a session that died
-                    // during entry queues both edges into one frame, and the dead one must win.
-                    (
-                        apply_roster_policy,
-                        enter_on_connected,
-                        back_on_logout,
-                        back_on_login_refused,
-                        back_on_disconnect,
-                        // Last and ungated: it mirrors the pick the frame ended with, and world
-                        // entry is reached from the create screen too.
-                        persist_last_character,
-                    )
-                        .chain(),
+                    session_edges(),
                     (
                         screen::materialize_screen,
                         input::select_input.run_if(crate::ui_script::glue::native_glue),
@@ -136,6 +123,26 @@ impl Plugin for CharSelectPlugin {
                     .run_if(in_state(ClientState::CharSelect)),
             );
     }
+}
+
+/// The session's edges, in every state: the reconnect auto-answer and the logout edge arrive
+/// `InWorld`. A logout or a refused login clears the pick before the roster policy reads it: the
+/// roster comes right behind them on the kept link, often in the same drain, and must be shown,
+/// not answered with the pick just left. `back_on_disconnect` runs after the entry: a session that
+/// died during entry queues both edges into one frame, and the dead one must win.
+fn session_edges() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    (
+        back_on_logout,
+        back_on_login_refused,
+        apply_roster_policy,
+        enter_on_connected,
+        back_on_disconnect,
+        // Last and ungated: it mirrors the pick the frame ended with, and world entry is reached
+        // from the create screen too.
+        persist_last_character,
+    )
+        .chain()
+        .into_configs()
 }
 
 // ── The roster and pick policy ──────────────────────────────────────────────────────────────────
@@ -442,7 +449,7 @@ fn back_on_disconnect(
 
 /// `SMSG_CHARACTER_LOGIN_FAILED`: back to select with the refusal in the glue dialog. The IO
 /// thread announces the entry with the pick, so this undoes a half-built one. The pick must be
-/// cleared, or the relist behind the refusal is auto-answered and the refused login loops.
+/// cleared, or the roster behind the refusal is auto-answered and the refused login loops.
 fn back_on_login_refused(
     mut msgs: MessageReader<CharacterLoginFailedMessage>,
     mut roster: ResMut<Roster>,
@@ -1054,6 +1061,56 @@ mod tests {
             "World server is down",
             "a refusal the player cannot see is the bug this whole path exists to end",
         );
+    }
+
+    /// A logout, or a refused login, and the roster the kept link sends right behind it can land
+    /// in one drain: the pick the world was entered with goes first, so the roster is shown and
+    /// not answered with that pick again.
+    #[test]
+    fn a_return_and_its_roster_in_one_drain_show_the_roster() {
+        for refused in [false, true] {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .insert_state(ClientState::InWorld)
+                .insert_resource(Roster::with_pending_pick(vec![character(7, "Seven")], 7))
+                .insert_resource(CharPick(tx.into()))
+                .init_resource::<crate::cvars::Cvars>()
+                .init_resource::<crate::glue::dialog::GlueDialog>()
+                .add_message::<CharListMessage>()
+                .add_message::<EnteredWorldMessage>()
+                .add_message::<LoggedOutMessage>()
+                .add_message::<CharacterLoginFailedMessage>()
+                .add_message::<crate::net::DisconnectedMessage>()
+                .add_systems(Update, session_edges());
+            app.world_mut().resource_mut::<Roster>().env_read = true;
+            if refused {
+                app.world_mut()
+                    .write_message(CharacterLoginFailedMessage { result: 0x01 });
+            } else {
+                app.world_mut().write_message(LoggedOutMessage);
+            }
+            app.world_mut().write_message(CharListMessage {
+                characters: vec![character(7, "Seven")],
+                realm: None,
+                cause: benilla_protocol::RosterCause::Park,
+                epoch: 1,
+                generation: 0,
+            });
+            app.update();
+            app.update();
+
+            assert_eq!(
+                *app.world().resource::<State<ClientState>>().get(),
+                ClientState::CharSelect,
+                "refused: {refused}"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "refused: {refused} — the roster was answered with the pick just left"
+            );
+            assert_eq!(app.world().resource::<Roster>().pending_pick, None);
+        }
     }
 
     /// Every refusal byte resolves to the sentence 1.12 ships, off the player's chain. `4` is

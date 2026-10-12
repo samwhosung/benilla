@@ -10,7 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 use benilla_protocol::messages::{self, opcode};
-use benilla_protocol::{SessionEnd, SessionEvent, WorldWriter};
+use benilla_protocol::{SessionEnd, SessionEvent};
 use benilla_srp::vanilla_header::HeaderCrypto;
 use benilla_srp::{
     password_verifier, NormalizedString, GENERATOR, LARGE_SAFE_PRIME_LITTLE_ENDIAN,
@@ -20,8 +20,8 @@ use crossbeam_channel::{Receiver, Sender};
 use num_bigint::BigUint;
 use sha1::{Digest, Sha1};
 
-use super::{run, Cycle, LoginRequest, Parks, PingClock};
-use crate::net::{CharRequest, ParkRequest, ParkSender, RealmRequest};
+use super::{run, writer_loop, Cycle, LoginRequest, Parks, PingClock, WriterSwap};
+use crate::net::{CharRequest, ClientCommand, ParkRequest, ParkSender, RealmRequest};
 
 pub(crate) const USER: &str = "empty";
 pub(crate) const PASS: &str = "secret";
@@ -334,6 +334,8 @@ pub(crate) struct World {
     warden: Arc<AtomicBool>,
     /// Close the socket on `CMSG_CHAR_ENUM` instead of answering.
     cut: Arc<AtomicBool>,
+    /// Answer `CMSG_PLAYER_LOGIN` with `SMSG_CHARACTER_LOGIN_FAILED`.
+    refuse: Arc<AtomicBool>,
     open: Arc<AtomicUsize>,
 }
 
@@ -356,6 +358,17 @@ impl World {
     /// Have the server cut the connection on the next roster ask.
     pub(crate) fn cut_on_roster_ask(&self) {
         self.cut.store(true, Ordering::SeqCst);
+    }
+
+    /// Have the server refuse every character login from now on (`SMSG_CHARACTER_LOGIN_FAILED`,
+    /// vmangos's result 1).
+    pub(crate) fn refuse_logins(&self) {
+        self.refuse.store(true, Ordering::SeqCst);
+    }
+
+    /// The `CMSG_AUTH_SESSION`s the server admitted: one per world session.
+    pub(crate) fn authentications(&self) -> usize {
+        self.session_packets.lock().unwrap().len()
     }
 
     /// Hold every roster answer back this long.
@@ -394,8 +407,10 @@ impl World {
 }
 
 /// A world server whose account has no characters: it admits each session under the latest key
-/// realmd made, answers every `CMSG_CHAR_ENUM` with its roster (empty until [`World::set_roster`])
-/// and a `CMSG_CHAR_CREATE` with success, and logs every opcode the client sends.
+/// realmd made, answers every `CMSG_CHAR_ENUM` with its roster (empty until [`World::set_roster`]),
+/// a `CMSG_CHAR_CREATE` with success, a `CMSG_LOGOUT_REQUEST` with `SMSG_LOGOUT_COMPLETE` and a
+/// `CMSG_PLAYER_LOGIN` with nothing (or a refusal, [`World::refuse_logins`]), and logs every opcode
+/// the client sends.
 pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&sent);
@@ -411,6 +426,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let warden_flag = Arc::clone(&warden);
     let cut = Arc::new(AtomicBool::new(false));
     let cut_flag = Arc::clone(&cut);
+    let refuse = Arc::new(AtomicBool::new(false));
+    let refuse_flag = Arc::clone(&refuse);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
     thread::spawn(move || {
@@ -451,6 +468,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let enum_wait = Arc::clone(&enum_wait);
             let warden_flag = Arc::clone(&warden_flag);
             let cut_flag = Arc::clone(&cut_flag);
+            let refuse_flag = Arc::clone(&refuse_flag);
             let index = {
                 let mut all = session_log.lock().unwrap();
                 all.push(Vec::new());
@@ -487,6 +505,15 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                             opcode::SMSG_CHAR_CREATE,
                             &[messages::CHAR_CREATE_SUCCESS],
                         ),
+                        opcode::CMSG_PLAYER_LOGIN if refuse_flag.load(Ordering::SeqCst) => send(
+                            &mut s,
+                            Some(&mut crypto),
+                            opcode::SMSG_CHARACTER_LOGIN_FAILED,
+                            &[1],
+                        ),
+                        opcode::CMSG_LOGOUT_REQUEST => {
+                            send(&mut s, Some(&mut crypto), opcode::SMSG_LOGOUT_COMPLETE, &[])
+                        }
                         _ => {}
                     }
                 }
@@ -502,6 +529,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         enum_delay,
         warden,
         cut,
+        refuse,
         open,
     }
 }
@@ -525,14 +553,16 @@ pub(crate) fn dead_address() -> String {
 /// The app's ends of the IO thread's channels.
 pub(crate) struct Cycles {
     pub(crate) events: Receiver<SessionEvent>,
+    /// The app's commands, to the write thread and on to the world socket while in the world.
+    pub(crate) commands: Sender<ClientCommand>,
     pub(crate) login: Sender<LoginRequest>,
     pub(crate) realm: ParkSender<RealmRequest>,
     pub(crate) pick: ParkSender<CharRequest>,
     pub(crate) abandon: Arc<AtomicU64>,
 }
 
-/// The read thread's cycle loop, as [`super::spawn_net`] runs it, with the world writer dropped:
-/// the native screens' policy, the IO thread enumerating on reaching the character park.
+/// The read thread's cycle loop and the write thread, as [`super::spawn_net`] runs them: the native
+/// screens' policy, the IO thread enumerating on reaching the character park.
 pub(crate) fn spawn_cycles() -> Cycles {
     spawn_cycles_for(false)
 }
@@ -544,12 +574,14 @@ pub(crate) fn spawn_cycles_asking() -> Cycles {
 
 fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
     let (events_tx, events) = crossbeam_channel::unbounded();
+    let (commands, cmd_rx) = crossbeam_channel::unbounded::<ClientCommand>();
+    let (writer_tx, writer_rx) = crossbeam_channel::unbounded::<WriterSwap>();
+    thread::spawn(move || writer_loop(&cmd_rx, writer_rx, &Mutex::new(PingClock::default())));
     let (login, login_rx) = crossbeam_channel::unbounded();
     let (park_tx, park_rx) = crossbeam_channel::unbounded::<ParkRequest>();
     let abandon = Arc::new(AtomicU64::new(0));
     let thread_abandon = Arc::clone(&abandon);
     thread::spawn(move || {
-        let (writer_tx, _writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
         let parks = Parks {
             login_rx,
             park_rx,
@@ -568,12 +600,6 @@ fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
             ) {
                 Ok(Cycle::Exit) => return,
                 Ok(Cycle::Repark) => {}
-                Ok(Cycle::LoggedOut | Cycle::LoginRefused) => {
-                    let _ = events_tx.send(SessionEvent::Disconnected {
-                        reason: "logged out".into(),
-                        end: SessionEnd::LoggedOut,
-                    });
-                }
                 Err(e) => {
                     if events_tx
                         .send(SessionEvent::Disconnected {
@@ -590,6 +616,7 @@ fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
     });
     Cycles {
         events,
+        commands,
         login,
         realm: ParkSender::park(park_tx.clone()),
         pick: ParkSender::park(park_tx),
