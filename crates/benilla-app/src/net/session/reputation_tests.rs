@@ -48,11 +48,9 @@ fn app() -> Option<(App, u32)> {
         .init_resource::<crate::net::DroppedOpcodes>()
         .init_resource::<crate::ui_quest::QuestGiver>()
         .init_resource::<crate::ui_chat::ChatLog>()
-        .init_resource::<crate::ui_reputation::StandingLines>()
         .insert_resource(crate::target::Factions::from_catalog(catalog))
         .insert_resource(crate::net::NetCommands(crossbeam_channel::unbounded().0))
-        .insert_non_send_resource(script)
-        .add_systems(Update, crate::ui_reputation::feed_standing_lines);
+        .insert_non_send_resource(script);
     let me = app
         .world_mut()
         .spawn((
@@ -67,9 +65,9 @@ fn app() -> Option<(App, u32)> {
     Some((app, slot))
 }
 
-/// Send one packet's event and run a frame; the lines printed since the last call.
-fn send(app: &mut App, ev: SessionEvent) -> Vec<String> {
-    // The handler `register` binds to the event's kind, run as the bridge runs it.
+/// Run one packet's handler as the bridge runs it, in wire order; nothing drains the chat log.
+fn send(app: &mut App, ev: SessionEvent) {
+    // The handler `register` binds to the event's kind.
     match ev {
         SessionEvent::ReputationVisible { .. } => {
             app.world_mut()
@@ -83,14 +81,39 @@ fn send(app: &mut App, ev: SessionEvent) -> Vec<String> {
         }
         _ => panic!("not a reputation event"),
     }
-    app.update();
-    let lines = app
-        .world()
-        .resource::<crate::ui_chat::ChatLog>()
-        .pending_lines();
+}
+
+fn chat(app: &App) -> &crate::ui_chat::ChatLog {
+    app.world().resource::<crate::ui_chat::ChatLog>()
+}
+
+fn visible(app: &mut App, slot: u32) {
+    send(app, SessionEvent::ReputationVisible { list_id: slot });
+}
+
+fn delta(app: &mut App, slot: u32, standing: i32) {
+    send(
+        app,
+        SessionEvent::ReputationDelta {
+            standings: vec![(slot, standing)],
+        },
+    );
+}
+
+fn xp_gain(app: &mut App) {
+    let xp = benilla_protocol::messages::XpGain {
+        victim: 0,
+        total: 100,
+        base: 100,
+        kill: false,
+    };
     app.world_mut()
-        .insert_resource(crate::ui_chat::ChatLog::default());
-    lines
+        .resource_mut::<crate::ui_chat::ChatLog>()
+        .push_xp_gain(&xp);
+}
+
+fn rank_lines(app: &App) -> Vec<(String, u8, bool)> {
+    chat(app).pending_standing()
 }
 
 #[test]
@@ -98,60 +121,80 @@ fn first_contact_a_rank_change_and_a_repeat_through_the_wire_handlers() {
     let Some((mut app, slot)) = app() else {
         return;
     };
-    let visible = |app: &mut App| send(app, SessionEvent::ReputationVisible { list_id: slot });
-    let delta = |app: &mut App, standing: i32| {
-        send(
-            app,
-            SessionEvent::ReputationDelta {
-                standings: vec![(slot, standing)],
-            },
-        )
-    };
-
     // First contact (what vmangos sends on meeting a faction): the human's base 4000 reads
     // Friendly, and the line names it.
-    assert_eq!(visible(&mut app), ["You are now Friendly with Stormwind."]);
+    visible(&mut app, slot);
+    assert_eq!(rank_lines(&app), [("Stormwind".to_string(), 4, false)]);
     // The same packet again is the dedup return: the slot is already listed.
-    assert!(
-        visible(&mut app).is_empty(),
-        "already listed prints nothing"
-    );
+    visible(&mut app, slot);
+    assert_eq!(rank_lines(&app).len(), 1, "already listed prints nothing");
 
     // 4000 → 4100: still Friendly.
-    assert!(
-        delta(&mut app, 100)
-            .iter()
-            .all(|l| !l.starts_with("You are now")),
-        "no rank change, no line"
-    );
+    delta(&mut app, slot, 100);
+    assert_eq!(rank_lines(&app).len(), 1, "no rank change, no line");
     // 4100 → 9100: Honored, a rank change.
+    delta(&mut app, slot, 5100);
     assert_eq!(
-        delta(&mut app, 5100)
-            .into_iter()
-            .filter(|l| l.starts_with("You are now"))
-            .collect::<Vec<_>>(),
-        ["You are now Honored with Stormwind."]
+        rank_lines(&app).last(),
+        Some(&("Stormwind".to_string(), 5, false))
     );
+    assert_eq!(rank_lines(&app).len(), 2);
 }
 
-/// A faction a standing packet reveals prints once, and not before the self object streams in.
+/// A faction a standing packet reveals prints once, whatever else the rank did.
 #[test]
 fn the_standing_packet_that_lists_a_faction_prints_it_once() {
     let Some((mut app, slot)) = app() else {
         return;
     };
-    let lines = send(
-        &mut app,
-        SessionEvent::ReputationDelta {
-            standings: vec![(slot, 5100)],
-        },
-    );
+    delta(&mut app, slot, 5100);
     assert_eq!(
-        lines
-            .iter()
-            .filter(|l| l.starts_with("You are now"))
-            .collect::<Vec<_>>(),
-        ["You are now Honored with Stormwind."],
+        rank_lines(&app),
+        [("Stormwind".to_string(), 5, false)],
         "one line, the rank after the gain, though the rank also moved"
     );
+}
+
+/// The lines keep wire order against the rest of the chat: a standing packet prints "increased
+/// by" (`0x4d6330`), then the rank (`0x4d5896`), and an XP award that arrives after it in the same
+/// batch prints behind both. On first contact the VISIBLE packet's rank line leads the state's
+/// "increased by" (vmangos `ReputationMgr.cpp:264-266`).
+#[test]
+fn the_rank_line_keeps_its_place_in_the_packet_batch() {
+    let Some((mut app, slot)) = app() else {
+        return;
+    };
+    delta(&mut app, slot, 5100);
+    xp_gain(&mut app);
+    // A rank-moving standing packet for a faction already listed.
+    assert_eq!(chat(&app).pending_kinds(), ["combat", "standing", "xp"]);
+
+    let Some((mut app, slot)) = self::app() else {
+        return;
+    };
+    visible(&mut app, slot);
+    delta(&mut app, slot, 100);
+    assert_eq!(chat(&app).pending_kinds(), ["standing", "combat"]);
+}
+
+/// The wire handlers carry the player's real gender to the line.
+#[test]
+fn a_female_player_asks_for_the_female_label() {
+    let Some((mut app, slot)) = app() else {
+        return;
+    };
+    // `UNIT_FIELD_BYTES_0` byte 2 is the gender; a drunk female is still female.
+    let me = app
+        .world_mut()
+        .query_filtered::<Entity, With<SelfPlayer>>()
+        .single(app.world())
+        .unwrap();
+    app.world_mut()
+        .entity_mut(me)
+        .insert(ObjectStore(ObjectFields::from_pairs(&[(
+            36,
+            HUMAN_WARRIOR | (1 << 16),
+        )])));
+    visible(&mut app, slot);
+    assert_eq!(rank_lines(&app), [("Stormwind".to_string(), 4, true)]);
 }

@@ -98,6 +98,13 @@ enum Pending {
     },
     /// An area discovery (`SMSG_EXPLORATION_EXPERIENCE`), fired at the drain, which holds the VM.
     Discovery { area: String, xp: u32 },
+    /// "You are now <rank> with <faction>." (`0x62c670`), parked by the wire handler in packet
+    /// order and resolved against the VM's strings at the drain.
+    Standing {
+        faction: String,
+        rank: u8,
+        female: bool,
+    },
     /// One combat-log line, classified at the packet, waiting on its two endpoint names; the
     /// reference's deferred queue (`0xc4e208`) waits only on an item name.
     Combat(Box<super::combat::PendingCombat>),
@@ -312,9 +319,55 @@ impl ChatLog {
         });
     }
 
+    /// Queue a reputation rank line (`FACTION_STANDING_CHANGED`) for the drain to fill.
+    pub(crate) fn push_standing(&mut self, faction: &str, rank: u8, female: bool) {
+        self.pending.push(Pending::Standing {
+            faction: faction.to_string(),
+            rank,
+            female,
+        });
+    }
+
     /// Drop every pending item on disconnect.
     pub(crate) fn clear_session(&mut self) {
         self.pending.clear();
+    }
+
+    /// What is parked, in order, by kind: the order a packet batch left the lines in.
+    #[cfg(test)]
+    pub(crate) fn pending_kinds(&self) -> Vec<&'static str> {
+        self.pending
+            .iter()
+            .map(|p| match p {
+                Pending::Wire { .. } => "wire",
+                Pending::Notice { .. } => "notice",
+                Pending::Addon { .. } => "addon",
+                Pending::Roll { .. } => "roll",
+                Pending::XpGain { .. } => "xp",
+                Pending::HonorGain { .. } => "honor",
+                Pending::TextEmote { .. } => "emote",
+                Pending::Discovery { .. } => "discovery",
+                Pending::Standing { .. } => "standing",
+                Pending::Combat(_) => "combat",
+                Pending::Event(_) => "event",
+            })
+            .collect()
+    }
+
+    /// The parked rank lines as `(faction, rank, female)`, in order.
+    #[cfg(test)]
+    pub(crate) fn pending_standing(&self) -> Vec<(String, u8, bool)> {
+        self.pending
+            .iter()
+            .filter_map(|p| match p {
+                Pending::Standing {
+                    faction,
+                    rank,
+                    female,
+                } => Some((faction.clone(), *rank, *female)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The parked addon lines as `(prefix, message, distribution)`.
@@ -1073,6 +1126,21 @@ pub(super) fn feed_chat(
                         &mut script,
                         &mut windows,
                         &ChatEvent::text_only(line.kind, text),
+                    );
+                }
+            }
+            Pending::Standing {
+                faction,
+                rank,
+                female,
+            } => {
+                let line =
+                    crate::ui_reputation::standing_text(&globals(&script), rank, female, &faction);
+                if let Some(text) = line {
+                    route(
+                        &mut script,
+                        &mut windows,
+                        &ChatEvent::text_only(ChatEventKind::System, text),
                     );
                 }
             }

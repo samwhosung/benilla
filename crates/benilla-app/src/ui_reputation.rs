@@ -16,8 +16,9 @@
 //! owed by three events: a faction newly listed by `SMSG_SET_FACTION_VISIBLE` (`0x4d5733`), a
 //! faction listed by the first `SMSG_SET_FACTION_STANDING` that names it (`0x4d5826`), and a
 //! standing change that moves the rank (`0x4d5896`) unless the faction is `HIDDEN`. The wire
-//! handlers queue [`StandingLine`]s ([`visible_line`], [`delta_lines`]) and [`feed_standing_lines`]
-//! resolves them against the VM, which the wire drain cannot reach.
+//! handlers decide the lines ([`visible_line`], [`delta_lines`]) and park them in the chat log in
+//! wire order ([`queue_standing_lines`]); the chat feed resolves their strings against the VM,
+//! which the wire drain cannot reach.
 
 use bevy::prelude::*;
 
@@ -25,7 +26,7 @@ use benilla_ui::script::{FactionEntry, ReputationSend, ReputationState, UiScript
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Reputations, SelfPlayer};
 use crate::target::Factions;
-use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
+use crate::ui_chat::ChatLog;
 use crate::ui_script::{UiFeed, UiInput};
 
 /// Rank `r` spans `RANK_BOUNDS[r]..RANK_BOUNDS[r + 1]`, the client's table at `0x80928c`: vmangos's
@@ -38,13 +39,10 @@ pub(crate) struct UiReputationPlugin;
 
 impl Plugin for UiReputationPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<StandingLines>().add_systems(
+        app.add_systems(
             Update,
             (
                 feed_reputation.in_set(UiFeed),
-                feed_standing_lines
-                    .in_set(UiFeed)
-                    .run_if(crate::ui_script::ingame_ui_up),
                 drain_reputation_sends.after(UiInput),
             ),
         );
@@ -58,16 +56,6 @@ pub(crate) struct StandingLine {
     pub(crate) faction_id: u32,
     /// The rank, 0 Hated to 7 Exalted; the label is `FACTION_STANDING_LABEL<rank + 1>`.
     pub(crate) rank: u8,
-}
-
-/// The lines the wire handlers owe, drained by [`feed_standing_lines`].
-#[derive(Resource, Default)]
-pub(crate) struct StandingLines(Vec<StandingLine>);
-
-impl StandingLines {
-    pub(crate) fn push_all(&mut self, lines: impl IntoIterator<Item = StandingLine>) {
-        self.0.extend(lines);
-    }
 }
 
 /// The faction a wire slot names, with its row, when the player's race and class list it.
@@ -142,22 +130,41 @@ pub(crate) fn delta_lines(
     lines
 }
 
+/// Park the lines in the chat log, after whatever the same packet already queued. The faction's
+/// name is the row's (`0x62c670` reads the name column), and `female` picks the label's gender.
+pub(crate) fn queue_standing_lines(
+    lines: impl IntoIterator<Item = StandingLine>,
+    catalog: &benilla_formats::FactionCatalog,
+    female: bool,
+    chat: &mut ChatLog,
+) {
+    for StandingLine { faction_id, rank } in lines {
+        if let Some(name) = catalog.faction_name(faction_id) {
+            chat.push_standing(name, rank, female);
+        }
+    }
+}
+
 /// `0x62c670`'s sentence: `FACTION_STANDING_CHANGED` filled with the rank label and the faction
 /// name. The label is `FACTION_STANDING_LABEL<rank + 1>` gendered by `0x612bf0`: a female player
-/// takes the `_FEMALE` twin and falls back to the base key on a miss. A missing label or template
-/// prints nothing (`0x62c6eb`, `0x62c70b`).
-fn standing_text(
+/// tries the `_FEMALE` twin and, when that is absent or empty, the bare key (`0x612c36`). A label
+/// absent altogether is an empty string, not a missing line: `0x703bf0` never returns NULL, and
+/// `0x62c670` prints with whatever it gave. Only a missing template prints nothing here, where the
+/// reference would send an empty string to the chat composer.
+pub(crate) fn standing_text(
     get: &dyn Fn(&str) -> Option<String>,
     rank: u8,
     female: bool,
     faction_name: &str,
 ) -> Option<String> {
     let key = format!("FACTION_STANDING_LABEL{}", rank.min(7) + 1);
+    let defined = |k: &str| get(k).filter(|v| !v.is_empty());
     let label = female
-        .then(|| get(&format!("{key}_FEMALE")))
+        .then(|| defined(&format!("{key}_FEMALE")))
         .flatten()
-        .or_else(|| get(&key))?;
-    let template = get("FACTION_STANDING_CHANGED")?;
+        .or_else(|| defined(&key))
+        .unwrap_or_default();
+    let template = defined("FACTION_STANDING_CHANGED")?;
     Some(benilla_ui::strings::fill(
         &template,
         &[
@@ -165,34 +172,6 @@ fn standing_text(
             benilla_ui::strings::Arg::S(faction_name),
         ],
     ))
-}
-
-/// Print the owed lines as `CHAT_MSG_SYSTEM` (`0x62c670` → `0x49a870`, type `0xA`). No local
-/// player object, no line (`0x62c6bf`).
-pub(crate) fn feed_standing_lines(
-    script: Option<NonSend<UiScript>>,
-    mut lines: ResMut<StandingLines>,
-    factions: Option<Res<Factions>>,
-    self_store: Query<&ObjectStore, With<SelfPlayer>>,
-    mut chat: ResMut<ChatLog>,
-) {
-    if lines.0.is_empty() {
-        return;
-    }
-    let owed = std::mem::take(&mut lines.0);
-    let (Some(script), Some(factions), Ok(me)) = (script, factions, self_store.single()) else {
-        return;
-    };
-    let female = me.0.unit_gender() == Some(1);
-    let get = |key: &str| crate::ui_chat::combat::global_string(&script, key);
-    for StandingLine { faction_id, rank } in owed {
-        let Some(name) = factions.catalog().faction_name(faction_id) else {
-            continue;
-        };
-        if let Some(text) = standing_text(&get, rank, female, name) {
-            chat.push_event(ChatEvent::text_only(ChatEventKind::System, text));
-        }
-    }
 }
 
 /// One faction's row, or `None` when it is not in the player's list at all; a row the pane does
@@ -626,7 +605,20 @@ mod tests {
             Some("You are now Friendly with Stormwind."),
             "a missing twin falls back to the base label"
         );
-        assert_eq!(standing_text(&get, 0, false, "Stormwind"), None, "no label");
+        assert_eq!(
+            standing_text(&get, 0, false, "Stormwind").as_deref(),
+            Some("You are now  with Stormwind."),
+            "an absent label is an empty one (`0x703bf0` never returns NULL), not a missing line"
+        );
+        // A `_FEMALE` twin that is defined but empty falls back to the bare key (`0x612c36`).
+        let empty_twin = |k: &str| match k {
+            "FACTION_STANDING_LABEL6_FEMALE" => Some(String::new()),
+            other => get(other),
+        };
+        assert_eq!(
+            standing_text(&empty_twin, 5, true, "Stormwind").as_deref(),
+            Some("You are now Honored with Stormwind.")
+        );
         assert_eq!(
             standing_text(
                 &|k| get(k).filter(|_| k != "FACTION_STANDING_CHANGED"),
