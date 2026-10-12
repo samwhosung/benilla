@@ -234,6 +234,10 @@ pub(crate) struct GluePreview {
     /// Bumped as a glue screen's scene shows: the `ModelFFX`'s OnShow pins the glow back to
     /// 0.30 (`0x46fa60`), which nothing else does ([`sync_glue_ffx`]).
     pub(crate) shown: u64,
+    /// The scene's pane is hidden: the scene stays up, undrawn, and its clock stops, as a hidden
+    /// `ModelFFX` keeps its model and scene and advances its clock only in its `OnUpdate`
+    /// (`0x76d7f0`), which the visible-frame pump (`0x765650`) calls ([`pace_glue_clock`]).
+    pub(crate) hidden: bool,
 }
 
 impl Default for GluePreview {
@@ -246,6 +250,7 @@ impl Default for GluePreview {
             pane: None,
             stage: 0,
             shown: 0,
+            hidden: false,
         }
     }
 }
@@ -312,6 +317,9 @@ pub(crate) struct CreateScene {
     rev: u64,
     /// The requested stage not yet committed ([`PendingSwap`]).
     pending: Option<PendingSwap>,
+    /// The stage's scene clock in seconds, the reference's per-`ModelFFX` scene clock
+    /// (`CSimpleModel+0x314`): it runs only while the pane shows ([`pace_glue_clock`]).
+    clock: f64,
 }
 
 impl CreateScene {
@@ -340,6 +348,7 @@ impl CreateScene {
             variants: default(),
             rev: 0,
             pending: None,
+            clock: 0.0,
         }
     }
 }
@@ -1572,6 +1581,49 @@ fn spawn_glue_effects(
     }
 }
 
+/// Pace the stage's one scene clock ([`CreateScene::clock`]): it runs while the pane shows and
+/// stops while it is hidden, as a `ModelFFX` advances its scene clock only in its `OnUpdate`
+/// (`0x76d7f0`), which the visible-frame pump (`0x765650`) calls. Every model on the stage, the
+/// scene, the character and the pet, reads that clock: its player pauses and resumes with it and
+/// its global-sequence drive samples it, so a return resumes where the hide stopped.
+pub(super) fn pace_glue_clock(
+    mut commands: Commands,
+    preview: Res<GluePreview>,
+    time: Res<Time>,
+    booths: Res<Booths>,
+    scene: Option<ResMut<CreateScene>>,
+) {
+    let Some(mut scene) = scene else {
+        return;
+    };
+    let hidden = preview.hidden;
+    if !hidden {
+        scene.clock += time.delta_secs_f64();
+    }
+    let clock = scene.clock;
+    let character = booths.0.get(GLUE_SLOT).map(|b| b.root);
+    // Through commands, not a query: the stage's three roots are all it touches, and a query of
+    // every player would share its access with each world animation system.
+    for root in [Some(scene.root), character, Some(scene.pet_root)]
+        .into_iter()
+        .flatten()
+    {
+        let mut model = commands.entity(root);
+        model
+            .entry::<AnimationPlayer>()
+            .and_modify(move |mut player| {
+                if hidden && !player.all_paused() {
+                    player.pause_all();
+                } else if !hidden && player.playing_animations().any(|(_, a)| a.is_paused()) {
+                    player.resume_all();
+                }
+            });
+        model
+            .entry::<benilla_world::rig_anim::GlobalSeqDrive>()
+            .and_modify(move |mut drive| drive.set_clock(clock));
+    }
+}
+
 /// Stand the select screen's pet on scene attachment 1 (the reference's secondary model,
 /// `0x47306b`), relit onto the scene's rig, only while a scene is up. It does not yaw: the
 /// reference's facing call (`0x4730e0`) turns the character alone.
@@ -2577,5 +2629,93 @@ mod tests {
             [false, false],
         );
         assert_eq!(stand_at(&app, root), 0.0);
+    }
+
+    // ── The stage's clock ────────────────────────────────────────────────
+
+    /// A `ModelFFX` advances its scene only in its `OnUpdate` (`0x76d7f0`), which the
+    /// visible-frame pump (`0x765650`) calls: hidden, the stage stands still, and shown again it
+    /// runs on from where it stopped.
+    #[test]
+    fn a_hidden_stage_stops_its_clock_and_resumes_where_it_stopped() {
+        use bevy::animation::{graph::AnimationGraph, AnimationClip};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(100),
+            ))
+            .init_resource::<Assets<AnimationClip>>()
+            .init_resource::<Assets<AnimationGraph>>()
+            .init_resource::<GluePreview>()
+            .add_systems(
+                Update,
+                (pace_glue_clock, bevy::animation::advance_animations).chain(),
+            );
+        let mut clip = AnimationClip::default();
+        clip.set_duration(100.0);
+        let clip = app
+            .world_mut()
+            .resource_mut::<Assets<AnimationClip>>()
+            .add(clip);
+        let (graph, stand) = AnimationGraph::from_clip(clip);
+        let graph = app
+            .world_mut()
+            .resource_mut::<Assets<AnimationGraph>>()
+            .add(graph);
+        // The scene, the character and the pet, each with its own player on the one clock.
+        let model = |app: &mut App| {
+            let mut player = AnimationPlayer::default();
+            player.play(stand).repeat();
+            app.world_mut()
+                .spawn((player, AnimationGraphHandle(graph.clone())))
+                .id()
+        };
+        let (scene_root, character, pet) = (model(&mut app), model(&mut app), model(&mut app));
+        app.insert_resource(CreateScene::empty(scene_root, pet));
+        let mut booths = Booths::default();
+        booths
+            .0
+            .insert(GLUE_SLOT.to_string(), glue_booth(character));
+        app.insert_resource(booths);
+        for _ in 0..3 {
+            app.update();
+        }
+
+        let at = |app: &App| {
+            [scene_root, character, pet].map(|e| {
+                app.world()
+                    .get::<AnimationPlayer>(e)
+                    .and_then(|p| p.animation(stand))
+                    .unwrap()
+                    .seek_time()
+            })
+        };
+        let clock = |app: &App| app.world().resource::<CreateScene>().clock;
+        let shown = (at(&app), clock(&app));
+        assert!(
+            shown.1 > 0.0 && shown.0.iter().all(|t| *t > 0.0),
+            "{shown:?}"
+        );
+
+        app.world_mut().resource_mut::<GluePreview>().hidden = true;
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(
+            (at(&app), clock(&app)),
+            shown,
+            "hidden, nothing on the stage advances"
+        );
+
+        app.world_mut().resource_mut::<GluePreview>().hidden = false;
+        app.update();
+        let (t, c) = (at(&app), clock(&app));
+        for (now, then) in t.iter().zip(shown.0) {
+            assert!(
+                (now - then - 0.1).abs() < 1e-4,
+                "shown again, one frame on from the stop: {then} → {now}"
+            );
+        }
+        assert!((c - shown.1 - 0.1).abs() < 1e-9, "{} → {c}", shown.1);
     }
 }

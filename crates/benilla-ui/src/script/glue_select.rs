@@ -209,47 +209,24 @@ impl super::UiScript {
     /// shown; `None` with none shown, or one holding no file.
     pub fn glue_scene(&self) -> Option<GlueScenePane> {
         let model = self.model_ref();
-        let select = model_frame_handle(&model);
-        let create = super::glue_create::create_frame_handle(&model);
-        let (sw, sh) = (model.screen.width(), model.screen.height());
         model
             .arena
             .model_kinds()
             .iter()
+            .filter(|&&h| model.arena.frame(h).is_some_and(|f| f.effective_visible))
             .filter_map(|&h| {
                 let f = model.arena.frame(h)?;
-                let crate::widget::KindState::Model(m) = &f.kind_state else {
-                    return None;
-                };
-                if !m.ffx || !f.effective_visible {
-                    return None;
-                }
-                Some((
-                    (f.strata, f.level),
-                    GlueScenePane {
-                        handle: h,
-                        rect: model
-                            .resolved
-                            .get(&h)
-                            .filter(|_| sw > 0.0 && sh > 0.0)
-                            .map(|r| {
-                                [
-                                    r.left / sw,
-                                    r.right / sw,
-                                    1.0 - r.top / sh,
-                                    1.0 - r.bottom / sh,
-                                ]
-                            }),
-                        instance: m.instance,
-                        path: m.path.clone()?,
-                        fog: m.scene_fog(),
-                        select: select == Some(h),
-                        create: create == Some(h),
-                    },
-                ))
+                Some(((f.strata, f.level), scene_pane(&model, h)?))
             })
             .max_by_key(|(order, _)| *order)
             .map(|(_, pane)| pane)
+    }
+
+    /// The scene of the `ModelFFX` pane `h`, shown or hidden: a hidden pane keeps its model and
+    /// scene, and only its clock stops (its `OnUpdate`, `0x76d7f0`, runs from the visible-frame
+    /// pump `0x765650`). `None` for a frame that is no `ModelFFX` or holds no file.
+    pub fn glue_pane(&self, h: crate::widget::FrameHandle) -> Option<GlueScenePane> {
+        scene_pane(&self.model_ref(), h)
     }
 
     /// The selected character's guid, none off the roster.
@@ -388,6 +365,38 @@ pub(super) fn teardown_roster(lua: &Lua) {
 }
 
 /// `[0xb42174]`'s frame, while the name `SetCharSelectModelFrame` took still names a model pane.
+/// The scene a `ModelFFX` pane `h` holds, visible or not ([`UiScript::glue_scene`]).
+fn scene_pane(model: &Model, h: crate::widget::FrameHandle) -> Option<GlueScenePane> {
+    let f = model.arena.frame(h)?;
+    let crate::widget::KindState::Model(m) = &f.kind_state else {
+        return None;
+    };
+    if !m.ffx {
+        return None;
+    }
+    let (sw, sh) = (model.screen.width(), model.screen.height());
+    Some(GlueScenePane {
+        handle: h,
+        rect: model
+            .resolved
+            .get(&h)
+            .filter(|_| sw > 0.0 && sh > 0.0)
+            .map(|r| {
+                [
+                    r.left / sw,
+                    r.right / sw,
+                    1.0 - r.top / sh,
+                    1.0 - r.bottom / sh,
+                ]
+            }),
+        instance: m.instance,
+        path: m.path.clone()?,
+        fog: m.scene_fog(),
+        select: model_frame_handle(model) == Some(h),
+        create: super::glue_create::create_frame_handle(model) == Some(h),
+    })
+}
+
 fn model_frame_handle(model: &Model) -> Option<crate::widget::FrameHandle> {
     let h = model
         .arena

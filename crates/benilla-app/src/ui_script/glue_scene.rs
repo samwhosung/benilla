@@ -14,7 +14,9 @@
 //! facing (`[0xb420f4]`, `SetCharacterCreateFacing`).
 //!
 //! The scene fills the pane at the pane's own aspect, as the reference frames it, and starts over
-//! with each `SetModel` instance; the pane's showing resets the glue glow (`0x46fa60`).
+//! with each `SetModel` instance; the pane's showing resets the glue glow (`0x46fa60`). A hidden
+//! pane keeps its scene with its clock stopped (`0x76d7f0`), so a screen with none (the credits)
+//! leaves the last one standing hidden, and its return resumes it.
 
 use bevy::prelude::*;
 
@@ -84,8 +86,8 @@ fn stock_preview(
     (scene, look, yaw, fog)
 }
 
-/// What the feeder remembers about the glue VM between frames: the pane shown last and the
-/// instance it held, numbered into [`GluePreview::stage`].
+/// What the feeder remembers about the glue VM between frames: the pane shown last and the pane
+/// and instance the scene stands, numbered into [`GluePreview::stage`].
 #[derive(Default)]
 pub(crate) struct StockFeed {
     shown: Option<benilla_ui::widget::FrameHandle>,
@@ -103,7 +105,18 @@ pub(crate) fn feed_stock_glue_preview(
 ) {
     let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let script = script.filter(|s| s.vm_kind() == VmKind::Glue && !in_world);
-    let pane = script.as_deref().and_then(|s| s.glue_scene());
+    // A new VM's panes are new frames: the memo starts over with it.
+    let feed = feed.get_for(script.as_deref());
+    let visible = script.as_deref().and_then(|s| s.glue_scene());
+    // With none shown, the pane last stood keeps its scene, hidden: a `ModelFFX` holds its model
+    // and scene while hidden, and only its clock stops (`0x76d7f0`, called by `0x765650`).
+    let hidden = match (&visible, script.as_deref(), feed.instance) {
+        (None, Some(s), Some((h, _))) => s.glue_pane(h),
+        _ => None,
+    };
+    let is_hidden = hidden.is_some();
+    let shown = visible.as_ref().map(|p| p.handle);
+    let pane = visible.or(hidden);
     let mgr = mgr.get();
     let (scene, look, yaw, fog) = match script.as_deref() {
         Some(s) => {
@@ -121,19 +134,19 @@ pub(crate) fn feed_stock_glue_preview(
         }
         None => (None, None, 0.0, None),
     };
-    // A new VM's panes are new frames: the memo starts over with it.
-    let feed = feed.get_for(script.as_deref());
     // A pane that was not the one shown last frame has just shown: its OnShow (`0x46fa60`).
-    let shown = pane.as_ref().map(|p| p.handle);
     if shown.is_some() && shown != feed.shown {
         preview.shown = preview.shown.wrapping_add(1);
     }
     feed.shown = shown;
-    // A new instance, or another pane's, is another scene.
+    // A new instance, or another pane's, is another scene; a hidden pane's own is the same one.
     let instance = pane.as_ref().map(|p| (p.handle, p.instance));
     if instance.is_some() && instance != feed.instance {
         feed.instance = instance;
         preview.stage = preview.stage.wrapping_add(1);
+    }
+    if preview.hidden != is_hidden {
+        preview.hidden = is_hidden;
     }
     let rect = pane.as_ref().and_then(|p| p.rect);
     if preview.pane != rect {
@@ -281,5 +294,53 @@ mod tests {
             .0,
             None
         );
+    }
+
+    /// `SetGlueScreen("credits")` hides `AccountLogin` and shows no model (`GlueParent.lua:34-45`):
+    /// the login pane keeps its model and scene while hidden, so the booth keeps standing it,
+    /// hidden; the return shows the same instance, which fires its OnShow (`0x46fa60`) again.
+    #[test]
+    fn a_hidden_pane_keeps_its_scene_and_its_return_is_the_same_scene() {
+        let mut app = App::new();
+        let s = UiScript::new_glue().unwrap();
+        s.run(
+            "CreateFrame('ModelFFX', 'Login')\
+             :SetModel('Interface/Glues/Models/UI_MainMenu/UI_MainMenu.mdx')",
+        )
+        .unwrap();
+        app.insert_non_send_resource(s)
+            .insert_non_send_resource(SharedGlueMgr::default())
+            .init_resource::<GluePreview>()
+            .add_systems(Update, feed_stock_glue_preview);
+        let run = |app: &mut App, chunk: &str| {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.run(chunk).unwrap();
+            s.resolve();
+            app.update();
+            let p = app.world().resource::<GluePreview>();
+            (p.scene, p.hidden, p.stage, p.shown)
+        };
+        let (scene, hidden, stage, shown) = run(&mut app, "");
+        assert_eq!((scene, hidden), (Some(GlueScene::MainMenu), false));
+
+        assert_eq!(
+            run(&mut app, "Login:Hide()"),
+            (Some(GlueScene::MainMenu), true, stage, shown),
+            "hidden, the scene stays up: no teardown, no new instance"
+        );
+        assert_eq!(
+            run(&mut app, "Login:Show()"),
+            (Some(GlueScene::MainMenu), false, stage, shown + 1),
+            "shown again, the same instance resumes, and its OnShow pins the glow"
+        );
+
+        // A new `SetModel` instance while hidden is a new scene when it shows.
+        run(
+            &mut app,
+            "Login:Hide() Login:SetModel('Interface/Glues/Models/UI_Orc/UI_Orc.mdx')",
+        );
+        let (scene, hidden, again, _) = run(&mut app, "Login:Show()");
+        assert_eq!((scene, hidden), (Some(GlueScene::Orc), false));
+        assert_ne!(again, stage);
     }
 }

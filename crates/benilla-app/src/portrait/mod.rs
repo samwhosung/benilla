@@ -804,6 +804,10 @@ impl Plugin for PortraitPlugin {
                     glue_booth::pillarbox_glue_scene,
                     // After the scene: the pet's seat and its light are the scene's to publish.
                     glue_booth::sync_glue_pet,
+                    // After every glue spawn: the stage's clock reaches the players it made.
+                    glue_booth::pace_glue_clock
+                        .after(glue_booth::drive_create_test)
+                        .after(test_bake::dump_booth_target),
                     dressup::sync_dressup_booth,
                     // After the syncs, the only writers of the yaw it spends.
                     booth::drive_booth_turn,
@@ -2111,7 +2115,8 @@ fn gate_booth_cameras(
             booth.pipes_since = None;
             false
         };
-        let live_scene = token.as_str() == GLUE_SLOT && preview.scene.is_some();
+        // A hidden pane's scene stays up but undrawn: its camera sleeps, so its emitters freeze.
+        let live_scene = token.as_str() == GLUE_SLOT && preview.scene.is_some() && !preview.hidden;
         // The glue screens publish no pane and stay on `live_scene`.
         let live_pane = booth.live && panes.0.contains_key(token.as_str());
         let active = test
