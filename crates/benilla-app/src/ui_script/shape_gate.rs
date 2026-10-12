@@ -43,12 +43,7 @@ const NEGATIVE_RAISES: &[(&str, &str)] = &[(
 
 /// The kind gate's list, same rules: a name, the wrong kinds it answers and the reason. An entry
 /// whose binding comes into agreement fails the gate.
-const KINDS_NOT_YET_ASSERTED: &[(&str, &str, &str)] = &[(
-    "CreateMacro",
-    "nil",
-    "answers nil when the macro cannot be made, where the reference raises (0x4f16a8) and \
-     answers nothing else",
-)];
+const KINDS_NOT_YET_ASSERTED: &[(&str, &str, &str)] = &[];
 
 /// The widget kind gate's list, same rules as [`KINDS_NOT_YET_ASSERTED`].
 const WIDGET_KINDS_NOT_YET_ASSERTED: &[(&str, &str, &str)] = &[];
