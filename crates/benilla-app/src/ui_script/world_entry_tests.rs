@@ -1022,8 +1022,8 @@ fn a_repeating_error_is_one_row_with_a_count_not_a_flood() {
 // A `/reload` never leaves `InWorld`, so only a saver in the shutdown tail sees every root.
 
 /// A window the player has placed, made as a drag makes one: `SetUserPlaced` refuses a frame that
-/// is neither movable nor resizable. Parentless, so it anchors to the screen root (the file's `-`
-/// target). Both flags: the cache applies position only to a movable frame, size to a resizable.
+/// is neither movable nor resizable. Both flags: the cache writes `X:`/`Y:` only for a movable
+/// frame and `W:`/`H:` only for a resizable one.
 fn place_a_window(world: &mut World) {
     world
         .get_non_send_resource_mut::<benilla_ui::script::UiScript>()
@@ -1045,12 +1045,7 @@ fn layout_cache(character: &str) -> Option<String> {
 
 /// What a saved window's row has to say for the player to get it back.
 fn assert_probe_row(text: &str) {
-    for want in [
-        "Frame: LayoutProbe",
-        "W: 413",
-        "H: 147",
-        "Point: BOTTOMLEFT - BOTTOMLEFT 61 29",
-    ] {
+    for want in ["Frame: LayoutProbe", "X: 61", "W: 413", "H: 147"] {
         assert!(
             text.contains(want),
             "the saved row is missing `{want}`:\n{text}"
@@ -1128,6 +1123,51 @@ fn each_character_gets_its_own_layout_cache() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A file of benilla's earlier anchor form seats the window through the loader, and the next save
+/// writes it back in the reference's rect form, so a player's windows survive the change.
+#[test]
+fn an_anchor_form_file_is_restored_and_rewritten_as_the_rect() {
+    use bevy::ecs::system::RunSystemOnce;
+
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("layout-anchor-form");
+    let mut world = booted_world();
+    world.init_resource::<crate::ui_layout::LayoutFile>();
+
+    log_in_as(&mut world, "Onehunter", 1);
+    let path = crate::local_state::layout_character_path("Realm", "Onehunter")
+        .expect("a layout path in the hermetic state folder");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "Frame: LayoutProbe\nW: 413\nH: 147\nPoint: BOTTOMLEFT - BOTTOMLEFT 61 29\n",
+    )
+    .unwrap();
+    author_a_window(&mut world);
+    world
+        .run_system_once(crate::ui_layout::load_layout)
+        .expect("the layout loader ran");
+    let (w, h, left, _) = window_geometry(&world);
+    assert_eq!(
+        (w, h, left),
+        (413.0, 147.0, 61.0),
+        "seated from the anchor form"
+    );
+
+    super::end_ui_session(&mut world);
+    let text = layout_cache("Onehunter").expect("the logout wrote the layout cache");
+    assert_probe_row(&text);
+    assert!(
+        !text.contains("Point:"),
+        "rewritten in the rect form:\n{text}"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// The probe window as FrameXML authors it, the fresh tree a relog meets: not user-placed, with the
 /// authored `movable`/`resizable` pair the cache's apply reads off the live frame.
 fn author_a_window(world: &mut World) {
@@ -1143,14 +1183,14 @@ fn author_a_window(world: &mut World) {
         .expect("author the probe window");
 }
 
-/// The probe window's live geometry, as the player sees it.
-fn window_geometry(world: &World) -> (f32, f32, String, f32, f32) {
+/// The probe window's live geometry, as the player sees it: its size, left and top.
+fn window_geometry(world: &World) -> (f32, f32, f32, f32) {
     world
         .get_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("a VM")
-        .eval::<(f32, f32, String, f32, f32)>(
-            "local p, _, _, x, y = LayoutProbe:GetPoint(1) \
-             return LayoutProbe:GetWidth(), LayoutProbe:GetHeight(), p, x, y",
+        .eval::<(f32, f32, f32, f32)>(
+            "return LayoutProbe:GetWidth(), LayoutProbe:GetHeight(), \
+             LayoutProbe:GetLeft(), LayoutProbe:GetTop()",
         )
         .expect("read the probe window back")
 }

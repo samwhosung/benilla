@@ -23,7 +23,7 @@ mod events_regions;
 mod frame_state;
 mod layout_methods;
 pub(crate) use layout_methods::eff_scale;
-pub(in crate::script) use layout_methods::settle_region;
+pub(in crate::script) use layout_methods::{settle_frame, settle_region};
 pub(crate) mod movable;
 pub(crate) mod toplevel;
 pub(crate) use movable::{cancel_on_hide, pump_move_or_size, FrameMove};

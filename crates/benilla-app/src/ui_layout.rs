@@ -2,16 +2,11 @@
 //! (`frame+0xb4 & 0x1000`), restored at the next login. The engine half (snapshot, restore, dirty
 //! bit) is `benilla_ui::script`'s `layout_cache`; this is the file and when it is written.
 //!
-//! The reference writes `WTF/Account/<ACC>/<REALM>/<CHAR>/layout-cache.txt` with `Frame:`,
-//! `FrameLevel:`, `X:`, `Y:`, `W:` and `H:` lines; ours is
-//! `benilla-config/layout/<realm>-<character>.txt`, keeping `Frame:`, `W:` and `H:`.
-//! Deviation: one `Point: <point> <relativeTo> <relativePoint> <x> <y>` line per anchor, `-` for
-//! the screen root, instead of `X:`/`Y:`. A drag leaves one TOPLEFT against the screen root
-//! (`0x768430`), whose line holds the reference's X and Y unrounded, where the reference saves
-//! integers (`0x490fc4`–`0x490fdf`); a frame user-placed without a drag keeps its authored
-//! anchors here, where the reference saves its rect's top-left. There is no
-//! `FrameLevel:`: the reference saves an undocked window's raise, and benilla's raise does not
-//! persist.
+//! The reference writes `WTF/Account/<ACC>/<REALM>/<CHAR>/layout-cache.txt`; ours is
+//! `benilla-config/layout/<realm>-<character>.txt`, in its form: per frame a `Frame:` line, then
+//! `FrameLevel:`, `X:`, `Y:`, `W:` and `H:` (`0x490e60`), each `Name: value` and an integer, the
+//! records back to back. A file of benilla's earlier anchor form, one `Point:` line per anchor, is
+//! read once and rewritten in this form at the next save.
 //!
 //! The reference writes the file only in its UI shutdown tail (`0x490bd0`), at `0x490c79`,
 //! after `PLAYER_LOGOUT` (`0x490c2a`) and before the flat saved file (`0x490c7e`), on logout,
@@ -23,22 +18,19 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{FrameLayout, LayoutPoint, UiScript};
+use benilla_ui::script::{AnchorLayout, FrameLayout, LayoutPoint, UiScript};
 
 use crate::ui_script::VmMemo;
 
 /// How long a moved window sits before the autosave: one gesture coalesced, at most one lost.
 const SAVE_QUIET: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// The screen root in the file, where `GetPoint` answers `nil`; not `UIParent`, a real frame.
+/// The screen root as a target in the anchor form, where `GetPoint` answers `nil`.
 const SCREEN_TOKEN: &str = "-";
 
-/// The file's header, a `#` block the parser skips.
+/// The file's header, a `#` line the parser skips.
 const HEADER: &str = "\
-# benilla window layout — every frame the player has moved or resized (the client's userPlaced
-# bit). A relative of the reference's layout-cache.txt: same scope, same Frame:/W:/H: keys, but
-# anchors instead of its X:/Y: pair; a dragged window has one, TOPLEFT on the screen's TOPLEFT.
-# `-` as a Point: target means the screen root.
+# benilla window layout: every frame the player has moved or resized, as layout-cache.txt has it.
 ";
 
 /// The character's file: its path, the VM it was restored into, and whether a write is owed.
@@ -54,54 +46,126 @@ pub(crate) struct LayoutFile {
     last_change: Option<std::time::Instant>,
 }
 
-/// Render the cache as [`parse`] reads it, frames name-sorted as the engine hands them.
+/// Render the cache as [`parse`] reads it, frames name-sorted as the engine hands them; a field
+/// the row does not carry has no line, as the writer's flag gates leave it (`0x490f99`,
+/// `0x49109f`).
 pub(crate) fn render(frames: &[FrameLayout]) -> String {
     let mut out = String::from(HEADER);
     for f in frames {
         out.push_str(&format!("Frame: {}\n", f.name));
-        out.push_str(&format!("W: {}\n", f.width));
-        out.push_str(&format!("H: {}\n", f.height));
-        for p in &f.points {
-            out.push_str(&format!(
-                "Point: {} {} {} {} {}\n",
-                p.point,
-                p.relative_to.as_deref().unwrap_or(SCREEN_TOKEN),
-                p.relative_point,
-                p.x,
-                p.y
-            ));
+        let fields = [
+            ("FrameLevel", f.level.map(i32::from)),
+            ("X", f.x),
+            ("Y", f.y),
+            ("W", f.width),
+            ("H", f.height),
+        ];
+        for (key, value) in fields {
+            if let Some(v) = value {
+                out.push_str(&format!("{key}: {v}\n"));
+            }
         }
     }
     out
 }
 
-/// Parse the cache: keys match case-insensitively, and an unknown key, a malformed `Point:` or a
-/// value line before any `Frame:` costs only its own line.
-pub(crate) fn parse(text: &str) -> Vec<FrameLayout> {
+/// What a layout file holds.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Layout {
+    /// The reference's rect form.
+    Rect(Vec<FrameLayout>),
+    /// benilla's earlier anchor form, which carries `Point:` lines.
+    Anchors(Vec<AnchorLayout>),
+}
+
+/// Parse the cache: keys match case-insensitively, and an unknown key or a value line before any
+/// `Frame:` costs only its own line. A value reads as `atoi` reads it (`0x64ac60`).
+///
+/// A record's fields start empty. The reference's parser clears X, Y, W and the level at each
+/// `Frame:` (`0x49045b`–`0x490469`) but not H, so a record with no `H:` takes the one before's;
+/// that slip is not reproduced.
+pub(crate) fn parse(text: &str) -> Layout {
+    if lines(text).any(|(key, _)| key.eq_ignore_ascii_case("Point")) {
+        return Layout::Anchors(parse_anchor_form(text));
+    }
     let mut out: Vec<FrameLayout> = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, rest)) = line.split_once(':') else {
-            continue;
-        };
-        let (key, rest) = (key.trim(), rest.trim());
+    for (key, rest) in lines(text) {
         if key.eq_ignore_ascii_case("Frame") {
-            if rest.is_empty() {
-                continue;
+            if !rest.is_empty() {
+                out.push(FrameLayout {
+                    name: rest.to_owned(),
+                    ..FrameLayout::default()
+                });
             }
-            out.push(FrameLayout {
-                name: rest.to_owned(),
-                width: 0.0,
-                height: 0.0,
-                points: Vec::new(),
-            });
             continue;
         }
         let Some(frame) = out.last_mut() else {
             continue; // a value line with no `Frame:` above it owns nothing
+        };
+        let v = atoi(rest);
+        if key.eq_ignore_ascii_case("FrameLevel") {
+            // Below zero is the parser's "none" (`0x490462`), which the apply skips (`0x4905f0`).
+            frame.level = (v >= 0).then(|| u16::try_from(v).unwrap_or(u16::MAX));
+        } else if key.eq_ignore_ascii_case("X") {
+            frame.x = Some(v);
+        } else if key.eq_ignore_ascii_case("Y") {
+            frame.y = Some(v);
+        } else if key.eq_ignore_ascii_case("W") {
+            frame.width = Some(v);
+        } else if key.eq_ignore_ascii_case("H") {
+            frame.height = Some(v);
+        }
+    }
+    Layout::Rect(out)
+}
+
+/// The file's `Key: value` lines, trimmed, with blanks and `#` lines skipped.
+fn lines(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    text.lines().filter_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let (key, rest) = line.split_once(':')?;
+        Some((key.trim(), rest.trim()))
+    })
+}
+
+/// C's `atoi`: an optional sign and the leading digits, zero when there are none.
+fn atoi(s: &str) -> i32 {
+    let (neg, digits) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let n = digits
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0i64, |n, d| {
+            (n * 10 + i64::from(d - b'0')).min(i64::from(i32::MAX) + 1)
+        });
+    let n = if neg { -n } else { n };
+    n.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+/// The anchor form: `W:`, `H:` and one `Point: <point> <relativeTo> <relativePoint> <x> <y>` line
+/// per anchor, `-` for the screen root. A malformed `Point:` costs only its own line.
+fn parse_anchor_form(text: &str) -> Vec<AnchorLayout> {
+    let mut out: Vec<AnchorLayout> = Vec::new();
+    for (key, rest) in lines(text) {
+        if key.eq_ignore_ascii_case("Frame") {
+            if !rest.is_empty() {
+                out.push(AnchorLayout {
+                    name: rest.to_owned(),
+                    width: 0.0,
+                    height: 0.0,
+                    points: Vec::new(),
+                });
+            }
+            continue;
+        }
+        let Some(frame) = out.last_mut() else {
+            continue;
         };
         if key.eq_ignore_ascii_case("W") {
             frame.width = rest.parse().unwrap_or(0.0);
@@ -110,11 +174,11 @@ pub(crate) fn parse(text: &str) -> Vec<FrameLayout> {
         } else if key.eq_ignore_ascii_case("Point") {
             let f: Vec<&str> = rest.split_whitespace().collect();
             if f.len() != 5 {
-                warn!("layout: malformed Point line ignored: {line}");
+                warn!("layout: malformed Point line ignored: {key}: {rest}");
                 continue;
             }
             let (Ok(x), Ok(y)) = (f[3].parse::<f32>(), f[4].parse::<f32>()) else {
-                warn!("layout: Point line with unparsable offsets ignored: {line}");
+                warn!("layout: Point line with unparsable offsets ignored: {key}: {rest}");
                 continue;
             };
             frame.points.push(LayoutPoint {
@@ -161,18 +225,30 @@ pub(crate) fn load_layout(
             return;
         }
     };
-    let frames = parse(&text);
-    if frames.is_empty() {
+    let (count, anchor_form) = match parse(&text) {
+        Layout::Rect(frames) => {
+            let n = frames.len();
+            script.restore_user_placed_layouts(frames);
+            (n, false)
+        }
+        Layout::Anchors(frames) => {
+            let n = frames.len();
+            script.restore_anchor_layouts(frames);
+            (n, true)
+        }
+    };
+    if count == 0 {
         return;
     }
-    info!(
-        "layout: {} frames restored from {}",
-        frames.len(),
-        path.display()
-    );
-    script.restore_user_placed_layouts(frames);
+    info!("layout: {count} frames restored from {}", path.display());
     // Drain the dirty bit the restore set, so the first save does not rewrite what was just read.
     script.take_user_placed_change();
+    if anchor_form {
+        // The anchor form is read once: the autosave rewrites it in the rect form once the
+        // restored windows have settled.
+        *file.dirty.get(&script) = true;
+        file.last_change = Some(std::time::Instant::now());
+    }
 }
 
 /// Drain the engine's user-placed-frame-moved bit into the dirty flag.
@@ -255,13 +331,10 @@ impl Plugin for UiLayoutPlugin {
 mod tests {
     use super::*;
 
-    fn point(p: &str, rel: Option<&str>, rp: &str, x: f32, y: f32) -> LayoutPoint {
-        LayoutPoint {
-            point: p.into(),
-            relative_to: rel.map(str::to_owned),
-            relative_point: rp.into(),
-            x,
-            y,
+    fn rows(layout: Layout) -> Vec<FrameLayout> {
+        match layout {
+            Layout::Rect(rows) => rows,
+            Layout::Anchors(rows) => panic!("read as the anchor form: {rows:?}"),
         }
     }
 
@@ -270,53 +343,152 @@ mod tests {
         let frames = vec![
             FrameLayout {
                 name: "ChatFrame1".into(),
-                width: 512.0,
-                height: 180.5,
-                points: vec![point(
-                    "BOTTOMLEFT",
-                    Some("UIParent"),
-                    "BOTTOMLEFT",
-                    40.0,
-                    120.0,
-                )],
+                level: Some(0),
+                x: Some(38),
+                y: Some(-225),
+                width: Some(431),
+                height: Some(400),
             },
+            // Movable only: no `W:`/`H:`, as the reference writes `KLHTM_Frame`.
             FrameLayout {
                 name: "Floater".into(),
-                width: 0.0,
-                height: 0.0,
-                points: vec![
-                    point("TOPLEFT", None, "TOPLEFT", -1.5, 2.0),
-                    point("BOTTOMRIGHT", Some("ChatFrame1"), "TOPRIGHT", 0.0, 0.0),
-                ],
+                level: Some(4),
+                x: Some(-2),
+                y: Some(0),
+                width: None,
+                height: None,
             },
         ];
-        assert_eq!(parse(&render(&frames)), frames);
+        let text = render(&frames);
+        assert!(
+            text.ends_with(
+                "Frame: ChatFrame1\nFrameLevel: 0\nX: 38\nY: -225\nW: 431\nH: 400\n\
+                 Frame: Floater\nFrameLevel: 4\nX: -2\nY: 0\n"
+            ),
+            "the reference's lines, in its order:\n{text}"
+        );
+        assert_eq!(rows(parse(&text)), frames);
     }
 
     #[test]
     fn the_header_is_skipped_not_parsed() {
         assert!(render(&[]).starts_with('#'));
-        assert_eq!(parse(HEADER), vec![]);
+        assert_eq!(parse(HEADER), Layout::Rect(vec![]));
     }
 
     #[test]
     fn junk_costs_only_its_own_line() {
-        let got = parse(
+        let got = rows(parse(
             "W: 100\n\
              Frame: A\n\
-             FrameLevel: 4\n\
-             Point: TOPLEFT -\n\
-             W: 200\n\
-             point: bottomleft - BOTTOMLEFT 1 2\n",
-        );
+             Shade: 4\n\
+             FrameLevel: -1\n\
+             x: 12.7\n\
+             Y: -3px\n\
+             W: wide\n\
+             H: 200\n",
+        ));
         assert_eq!(
             got,
             vec![FrameLayout {
                 name: "A".into(),
-                width: 200.0,
-                height: 0.0,
-                points: vec![point("bottomleft", None, "BOTTOMLEFT", 1.0, 2.0)],
+                level: None,
+                x: Some(12),
+                y: Some(-3),
+                width: Some(0),
+                height: Some(200),
             }]
         );
+    }
+
+    #[test]
+    fn a_point_line_marks_the_anchor_form() {
+        let text = "\
+# benilla window layout — every frame the player has moved or resized (the client's userPlaced
+Frame: ChatFrame1
+W: 512
+H: 180.5
+Point: BOTTOMLEFT UIParent BOTTOMLEFT 40 120
+Frame: Floater
+W: 0
+H: 0
+Point: TOPLEFT - TOPLEFT -1.5 2
+Point: TOPLEFT -
+";
+        let point = |p: &str, rel: Option<&str>, rp: &str, x: f32, y: f32| LayoutPoint {
+            point: p.into(),
+            relative_to: rel.map(str::to_owned),
+            relative_point: rp.into(),
+            x,
+            y,
+        };
+        assert_eq!(
+            parse(text),
+            Layout::Anchors(vec![
+                AnchorLayout {
+                    name: "ChatFrame1".into(),
+                    width: 512.0,
+                    height: 180.5,
+                    points: vec![point(
+                        "BOTTOMLEFT",
+                        Some("UIParent"),
+                        "BOTTOMLEFT",
+                        40.0,
+                        120.0
+                    )],
+                },
+                AnchorLayout {
+                    name: "Floater".into(),
+                    width: 0.0,
+                    height: 0.0,
+                    points: vec![point("TOPLEFT", None, "TOPLEFT", -1.5, 2.0)],
+                },
+            ])
+        );
+    }
+
+    /// A file of the anchor form seats the windows where they were and saves back in the rect
+    /// form, so a player's windows survive the change of format.
+    #[test]
+    fn an_anchor_form_file_migrates_to_the_rect_form() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        s.run(
+            r#"
+            local b = CreateFrame("Frame", "Base")
+            b:SetPoint("BOTTOMLEFT", 0, 0) b:SetWidth(1024) b:SetHeight(768)
+            local f = CreateFrame("Frame", "Moved")
+            f:SetPoint("CENTER", 0, 0) f:SetWidth(100) f:SetHeight(50)
+            f:SetMovable(true) f:SetResizable(true)
+            local g = CreateFrame("Frame", "Glider")
+            g:SetPoint("CENTER", 0, 0) g:SetWidth(30) g:SetHeight(30)
+            g:SetMovable(true)
+            "#,
+        )
+        .unwrap();
+        let old = "\
+Frame: Glider
+W: 30
+H: 30
+Point: TOPLEFT - TOPLEFT 10.4 -20.6
+Frame: Moved
+W: 213.6
+H: 80
+Point: BOTTOMLEFT Base BOTTOMLEFT 61 29
+";
+        let Layout::Anchors(rows) = parse(old) else {
+            panic!("an old file reads as the anchor form");
+        };
+        s.restore_anchor_layouts(rows);
+        let text = render(&s.user_placed_layouts());
+        assert!(
+            text.contains(
+                "Frame: Glider\nFrameLevel: 0\nX: 10\nY: -21\n\
+                 Frame: Moved\nFrameLevel: 0\nX: 61\nY: -659\nW: 214\nH: 80\n"
+            ),
+            "the same windows, where they were, in the rect form:\n{text}"
+        );
+        assert!(!text.contains("Point:"), "{text}");
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 }

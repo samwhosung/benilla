@@ -608,19 +608,15 @@ fn the_write_filter_is_user_placed_and_movable_or_resizable() {
 /// neither flag is left alone.
 #[test]
 fn the_apply_seats_position_behind_movable_and_size_behind_resizable() {
-    use crate::script::{FrameLayout, LayoutPoint};
+    use crate::script::FrameLayout;
 
     let row = |name: &str| FrameLayout {
         name: name.to_owned(),
-        width: 200.0,
-        height: 80.0,
-        points: vec![LayoutPoint {
-            point: "BOTTOMLEFT".into(),
-            relative_to: None,
-            relative_point: "BOTTOMLEFT".into(),
-            x: 300.0,
-            y: 200.0,
-        }],
+        level: None,
+        x: Some(300),
+        y: Some(-200),
+        width: Some(200),
+        height: Some(80),
     };
     // Three frames, one per flag state, all authored identically.
     let mut s = script();
@@ -668,6 +664,42 @@ fn the_apply_seats_position_behind_movable_and_size_behind_resizable() {
             .collect::<Vec<_>>(),
         ["Movable", "Sizable"],
         "and only the two that took an arm are written back"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The apply sets a saved level of zero or more whatever the flags (`0x4905ee`–`0x4905f5`), and
+/// takes a zero `X` and `Y` for no position (`0x490607`–`0x490613`), so the frame keeps its anchors.
+#[test]
+fn the_apply_sets_the_level_and_reads_a_zero_position_as_none() {
+    use crate::script::FrameLayout;
+
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        F = CreateFrame("Frame", "Corner")
+        F:SetPoint("BOTTOMLEFT", 10, 10); F:SetWidth(50); F:SetHeight(50)
+        F:SetMovable(true)
+        "#,
+    )
+    .unwrap();
+    s.restore_user_placed_layouts([FrameLayout {
+        name: "Corner".into(),
+        level: Some(6),
+        x: Some(0),
+        y: Some(0),
+        width: None,
+        height: None,
+    }]);
+    s.resolve();
+    assert_eq!(
+        s.eval::<(f64, i64, bool)>(
+            "return Corner:GetLeft(), Corner:GetFrameLevel(), Corner:IsUserPlaced()"
+        )
+        .unwrap(),
+        (10.0, 6, false),
+        "levelled, but left on its anchors and unstamped"
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

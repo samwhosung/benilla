@@ -361,7 +361,9 @@ fn the_geometry_round_trips_through_the_save_file() {
     assert_eq!(saved.len(), 1, "one window was placed: {saved:?}");
     assert_eq!(saved[0].name, "ChatFrame1");
     let text = crate::ui_layout::render(&saved);
-    let read_back = crate::ui_layout::parse(&text);
+    let crate::ui_layout::Layout::Rect(read_back) = crate::ui_layout::parse(&text) else {
+        panic!("written in the rect form:\n{text}");
+    };
     assert_eq!(
         read_back, saved,
         "the file expresses what the seam produced"

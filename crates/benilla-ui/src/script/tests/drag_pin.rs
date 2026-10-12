@@ -3,7 +3,7 @@
 //! anchor and size.
 
 use super::common::script;
-use crate::script::{FrameLayout, LayoutPoint, UiScript};
+use crate::script::{FrameLayout, UiScript};
 
 /// A 200×100 frame CENTER-anchored in a full-screen holder on an 800×600 screen: its rect is
 /// left 300, right 500, bottom 250, top 350.
@@ -261,25 +261,22 @@ fn a_frame_with_no_rect_starts_no_drag() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// After a drag the layout cache holds the one TOPLEFT anchor and the size, the reference's `X:`,
-/// `Y:`, `W:` and `H:` (`0x490e60`), and its apply seats that back.
+/// After a drag the layout cache holds the pin as the reference's `X:`, `Y:`, `W:` and `H:`, with
+/// the frame level (`0x490e60`), and its apply seats all of that back (`0x4905e0`).
 #[test]
 fn the_layout_cache_round_trips_the_pin() {
     let mut s = centred_box();
     s.run("Box:StartMoving()").unwrap();
     s.mouse_move(430.0, 280.0);
-    s.run("Box:StopMovingOrSizing()").unwrap();
+    s.run("Box:StopMovingOrSizing() Box:SetFrameLevel(7)")
+        .unwrap();
     let want = FrameLayout {
         name: "Box".into(),
-        width: 200.0,
-        height: 100.0,
-        points: vec![LayoutPoint {
-            point: "TOPLEFT".into(),
-            relative_to: None,
-            relative_point: "TOPLEFT".into(),
-            x: 330.0,
-            y: -270.0,
-        }],
+        level: Some(7),
+        x: Some(330),
+        y: Some(-270),
+        width: Some(200),
+        height: Some(100),
     };
     let saved = s.user_placed_layouts();
     assert_eq!(saved, std::slice::from_ref(&want));
@@ -288,6 +285,64 @@ fn the_layout_cache_round_trips_the_pin() {
     fresh.restore_user_placed_layouts(saved);
     assert_eq!(edges(&mut fresh), (330.0, 530.0, 230.0, 330.0));
     assert_eq!(anchor(&fresh), pinned_at(330.0, -270.0));
+    assert_eq!(
+        fresh.eval::<i64>("return Box:GetFrameLevel()").unwrap(),
+        7,
+        "the level is applied too (`0x4905f5`)"
+    );
     assert_eq!(fresh.user_placed_layouts(), [want]);
+    assert!(fresh.errors().is_empty(), "{:?}", fresh.errors());
+}
+
+/// A drag that leaves the frame off the unit grid saves whole units: `X:`/`Y:` round half away
+/// from zero (`0x490fc4`–`0x490fdf`), and the apply seats the rounded spot.
+#[test]
+fn a_sub_unit_drag_saves_and_restores_rounded() {
+    let mut s = centred_box();
+    s.run("Box:StartMoving()").unwrap();
+    s.mouse_move(430.25, 279.5);
+    s.run("Box:StopMovingOrSizing()").unwrap();
+    assert_eq!(
+        anchor(&s),
+        pinned_at(330.25, -270.5),
+        "the live pin is exact"
+    );
+    let saved = s.user_placed_layouts();
+    assert_eq!(
+        (saved[0].x, saved[0].y),
+        (Some(330), Some(-271)),
+        "330.25 rounds down, -270.5 away from zero"
+    );
+
+    let mut fresh = centred_box();
+    fresh.restore_user_placed_layouts(saved);
+    assert_eq!(anchor(&fresh), pinned_at(330.0, -271.0));
+}
+
+/// A frame set user-placed without a drag keeps its authored anchors while it lives, but its row
+/// is its rect, and the apply clears those anchors (`0x49061a`) and pins TOPLEFT on the screen
+/// (`0x490670`): restored, it no longer follows the frame it was authored against.
+#[test]
+fn a_frame_placed_without_a_drag_restores_at_its_saved_top_left() {
+    let s = centred_box();
+    s.run("Box:SetUserPlaced(true)").unwrap();
+    let saved = s.user_placed_layouts();
+    assert_eq!(
+        (saved[0].x, saved[0].y, saved[0].width, saved[0].height),
+        (Some(300), Some(-250), Some(200), Some(100)),
+        "the rect, not the CENTER anchor"
+    );
+
+    let mut fresh = centred_box();
+    fresh
+        .run("Holder:ClearAllPoints() Holder:SetPoint('BOTTOMLEFT', 100, 0)")
+        .unwrap();
+    fresh.restore_user_placed_layouts(saved);
+    assert_eq!(
+        edges(&mut fresh),
+        (300.0, 500.0, 250.0, 350.0),
+        "where it was saved, though its holder moved"
+    );
+    assert_eq!(anchor(&fresh), pinned_at(300.0, -250.0));
     assert!(fresh.errors().is_empty(), "{:?}", fresh.errors());
 }

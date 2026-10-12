@@ -752,19 +752,15 @@ fn a_stale_layout_row_cannot_seat_a_stock_frame() {
     assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
     s.resolve();
 
-    // The row as `benilla-config/layout/<realm>-<character>.txt` carries it: Cartographer's saved
-    // `LookNFeel` offsets and the size it forces.
+    // The row as the reference's `layout-cache.txt` carries it after Cartographer's `LookNFeel`:
+    // the size it forces, centred by its drag.
     let row = || benilla_ui::script::FrameLayout {
         name: "WorldMapFrame".into(),
-        width: 1024.0,
-        height: 768.0,
-        points: vec![benilla_ui::script::LayoutPoint {
-            point: "CENTER".into(),
-            relative_to: Some("UIParent".into()),
-            relative_point: "CENTER".into(),
-            x: -0.6369222,
-            y: 53.861614,
-        }],
+        level: None,
+        x: Some(307),
+        y: Some(-128),
+        width: Some(1024),
+        height: Some(768),
     };
 
     s.restore_user_placed_layouts([row()]);
@@ -813,7 +809,14 @@ fn a_stale_layout_row_cannot_seat_a_stock_frame() {
     );
     let saved = s.user_placed_layouts();
     assert_eq!(saved.len(), 1, "which is what puts the row back: {saved:?}");
-    assert_eq!(saved[0], row(), "unchanged through the round trip");
+    assert_eq!(
+        benilla_ui::script::FrameLayout {
+            level: None,
+            ..saved[0].clone()
+        },
+        row(),
+        "unchanged through the round trip"
+    );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

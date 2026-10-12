@@ -288,7 +288,6 @@ fn a_drag_cut_short_by_the_pointer_leaving_keeps_the_last_real_position() {
         .find(|l| l.name == "Here")
         .expect("Here is saved");
     // Saved as the drag's TOPLEFT pin (`0x768430`): top 210 on a 768 screen.
-    assert_eq!(here.points[0].point, "TOPLEFT");
-    assert_eq!((here.points[0].x, here.points[0].y), (130.0, -558.0));
+    assert_eq!((here.x, here.y), (Some(130), Some(-558)));
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
