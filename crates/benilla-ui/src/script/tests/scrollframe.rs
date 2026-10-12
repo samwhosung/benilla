@@ -3,7 +3,7 @@
 
 use super::common::script;
 use crate::layout::Rect;
-use crate::script::QuadContent;
+use crate::script::{QuadContent, UiScript};
 
 /// The rect of the first Texture quad whose path is `marker`.
 fn marker_rect(quads: &[crate::script::ExtractedQuad], marker: &str) -> Option<Rect> {
@@ -140,15 +140,64 @@ fn scroll_child_top_tracks_vertical_scroll_unclamped_then_restores_on_clear() {
         "a negative offset lowers the child: frame top 500 - 30"
     );
 
-    // Clearing the child stops the override, and its own untouched anchor applies again.
+    // Clearing the child leaves its one point alone and invalidates nothing (`0x786ce6`): it
+    // stays at the scroll frame's corner, and follows the frame when the frame moves.
     s.run("SF:SetScrollChild(nil)").unwrap();
     s.resolve();
     let quads = s.extract();
     assert_eq!(
         marker_rect(&quads, "marker:child").map(|r| r.top),
-        Some(580.0),
-        "authored anchor survives: screen top 600 - 20"
+        Some(470.0),
+        "the re-anchor's point stands: frame top 500 - 30"
     );
+    s.run(r#"SF:SetPoint("TOPLEFT", 0, -150)"#).unwrap();
+    s.resolve();
+    assert_eq!(
+        marker_rect(&s.extract(), "marker:child").map(|r| r.top),
+        Some(420.0),
+        "still on the frame's corner: frame top 450 - 30"
+    );
+}
+
+/// The re-anchor (`0x787100`) is a real write on the child: its points are cleared (`0x787110`)
+/// and one TOPLEFT on the scroll frame's TOPLEFT is set at the offsets (`0x787136`), at
+/// `SetScrollChild` and at each offset change; the authored points are gone.
+#[test]
+fn the_scroll_child_holds_one_topleft_on_the_scroll_frame() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        sf = CreateFrame("ScrollFrame", "SF")
+        sf:SetPoint("TOPLEFT", 0, -100); sf:SetWidth(300); sf:SetHeight(200)
+        c = CreateFrame("Frame", "Child")
+        c:SetPoint("CENTER", UIParent); c:SetPoint("BOTTOM", 0, 10)
+        c:SetWidth(100); c:SetHeight(400)
+        sf:SetScrollChild(c)
+    "#,
+    )
+    .unwrap();
+    let point = |s: &mut UiScript| {
+        s.eval::<(i64, String, bool, String, f64, f64)>(
+            "local p, r, rp, x, y = c:GetPoint(1); return c:GetNumPoints(), p, r == sf, rp, x, y",
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        point(&mut s),
+        (1, "TOPLEFT".into(), true, "TOPLEFT".into(), 0.0, 0.0)
+    );
+    s.run("sf:SetVerticalScroll(30); sf:SetHorizontalScroll(-12)")
+        .unwrap();
+    assert_eq!(
+        point(&mut s),
+        (1, "TOPLEFT".into(), true, "TOPLEFT".into(), -12.0, 30.0),
+        "scrolling moves the one point"
+    );
+    s.resolve();
+    assert_eq!(s.eval::<f64>("return c:GetTop()").unwrap(), 530.0);
+    assert_eq!(s.eval::<f64>("return c:GetLeft()").unwrap(), -12.0);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 /// `0x786db0` acts only when the offset differs from the stored one; a value past the range is

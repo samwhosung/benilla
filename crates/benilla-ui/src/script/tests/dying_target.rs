@@ -134,10 +134,10 @@ fn a_backdrop_teardown_frees_the_anchors_to_its_pieces() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
-/// A ScrollFrame's child is placed by the frame's override, yet its own anchors stand under it:
-/// one to a destroyed label is freed too.
+/// A ScrollFrame's re-anchor clears its child's points (`0x787110`) and sets one on the frame, so
+/// the child holds no anchor to a label it was placed on, and the label's destruction leaves it be.
 #[test]
-fn a_scroll_childs_own_anchor_to_a_destroyed_label_is_freed() {
+fn a_scroll_child_holds_no_anchor_to_a_label_it_was_placed_on() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -161,9 +161,12 @@ fn a_scroll_childs_own_anchor_to_a_destroyed_label_is_freed() {
     let left = num(&mut s, "c:GetLeft()");
     assert_eq!(left, Some(10.0), "placed by the override");
 
+    assert_eq!(s.eval::<i64>("return c:GetNumPoints()").unwrap(), 1);
     s.run(r#"b:SetFontString(b:CreateFontString("New", "ARTWORK"))"#)
         .unwrap();
-    assert_eq!(s.eval::<i64>("return c:GetNumPoints()").unwrap(), 0);
+    assert!(s
+        .eval::<bool>(r#"local p, r = c:GetPoint(1); return c:GetNumPoints() == 1 and r == sf"#)
+        .unwrap());
     resolve_matches_scratch(&mut s, "the label replaced");
     assert_eq!(num(&mut s, "c:GetLeft()"), left);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
