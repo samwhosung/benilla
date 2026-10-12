@@ -77,7 +77,8 @@ pub struct GlueRealmCells {
     /// `[0x837e98]`, the stored category `GetSelectedCategory` reads; -1 at load.
     pub category: i32,
     /// `[0x837e9c]`, "a realm has been chosen this session": -1 (`None`) at load, then 0 from
-    /// `ChangeRealm` (`0x46f1d1`) or a category id from `SetPreferredInfo` (`0x46ea52`).
+    /// `ChangeRealm` (`0x46f1d1`) or a roster with characters (`0x472556`, the host's), or a
+    /// category id from `SetPreferredInfo` (`0x46ea52`).
     pub chosen: Option<u32>,
     /// The type `SetPreferredInfo` last asked for (`[0xb41fa8]`, `[0xb41fac]`).
     pub preferred: (bool, bool),
@@ -365,10 +366,8 @@ impl GlueRealmList {
         for bucket in &self.buckets {
             let count = bucket.len() as u32;
             if count > residual {
-                found = bucket
-                    .get(residual as usize)
-                    .and_then(|&h| self.realm(h))
-                    .or(found);
+                // Stored unconditionally, a NULL from `GetRealm` included (`0x46eed3`, `0x46f167`).
+                found = bucket.get(residual as usize).and_then(|&h| self.realm(h));
             } else {
                 residual = residual.wrapping_sub(count);
             }
@@ -1119,6 +1118,27 @@ mod tests {
             s.take_glue_requests().as_slice(),
             [GlueRequest::CancelLogon]
         ));
+    }
+
+    /// The flat leg keeps walking after a hit and stores each later hit unconditionally, a NULL
+    /// from `GetRealm` included (`0x46eed3`): a holder that lost the realm since the rebuild
+    /// answers nil, not the earlier hit.
+    #[test]
+    fn the_flat_leg_keeps_the_last_hit_even_when_it_is_gone() {
+        let mut s = vm(vec![
+            realm("Alpha", 1, 0, 0, 0, 1.0),
+            realm("Oz", 5, 0, 0, 0, 1.0),
+            realm("Perth", 5, 0, 0, 0, 1.0),
+        ]);
+        s.rebuild_glue_realms();
+        assert_eq!(
+            info(&s, "GetRealmInfo(1)").0.as_deref(),
+            Some("Oz"),
+            "both categories hold index 0, and the later one answers"
+        );
+        // A reply fills the holder; the categories keep the last rebuild's indices.
+        s.set_glue_realms(vec![realm("Alpha", 1, 0, 0, 0, 1.0)]);
+        assert_eq!(info(&s, "GetRealmInfo(1)").0, None);
     }
 
     /// With no Region rows every realm lists under one category named "UNKNOWN".

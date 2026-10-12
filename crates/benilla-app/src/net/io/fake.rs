@@ -218,8 +218,11 @@ fn serve_realmd(
     let _ = keys.send(key);
     logons.fetch_add(1, Ordering::SeqCst);
 
-    // CMD_REALM_LIST_Client, answered every time, until the client closes the link.
-    while s.read_exact(&mut [0u8; 5]).is_ok() {
+    // CMD_REALM_LIST_Client (0x10 and a u32), answered every time, until the client closes the
+    // link.
+    let mut request = [0u8; 5];
+    while s.read_exact(&mut request).is_ok() {
+        assert_eq!(request[0], 0x10, "a realm list request");
         let mut records = Vec::new();
         for r in realms {
             records.extend_from_slice(&r.realm_type.to_le_bytes());
@@ -233,7 +236,8 @@ fn serve_realmd(
         list.extend_from_slice(&0u32.to_le_bytes());
         list.push(realms.len() as u8);
         list.extend_from_slice(&records);
-        list.extend_from_slice(&0u16.to_le_bytes());
+        // vmangos's trailer (`AuthSocket.cpp:1088`).
+        list.extend_from_slice(&0x0002u16.to_le_bytes());
         if s.write_all(&list).is_err() {
             return;
         }
@@ -265,13 +269,29 @@ fn recv(s: &mut TcpStream, crypto: Option<&mut HeaderCrypto>) -> Option<u16> {
     Some(u16::from_le_bytes([header[2], header[3]]))
 }
 
+/// The fake world server's record: every opcode the client sent, and the sessions still open.
+pub(crate) struct World {
+    pub(crate) sent: Arc<Mutex<Vec<u16>>>,
+    open: Arc<AtomicUsize>,
+}
+
+impl World {
+    /// Sessions the client still holds.
+    pub(crate) fn open(&self) -> usize {
+        self.open.load(Ordering::SeqCst)
+    }
+}
+
 /// A world server whose account has no characters: it admits each session under the latest key
 /// realmd made, answers every `CMSG_CHAR_ENUM` with an empty roster and a `CMSG_CHAR_CREATE` with
 /// success, and logs every opcode the client sends.
-pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> Arc<Mutex<Vec<u16>>> {
+pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&sent);
+    let open = Arc::new(AtomicUsize::new(0));
+    let sessions = Arc::clone(&open);
     thread::spawn(move || {
+        let mut last: Option<Key> = None;
         for stream in listener.incoming() {
             let Ok(mut s) = stream else { return };
             send(
@@ -283,13 +303,17 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> Arc<Mutex<Vec
             if recv(&mut s, None) != Some(opcode::CMSG_AUTH_SESSION) {
                 continue;
             }
-            // The session's own logon is the latest; an abandoned one's key is stale.
-            let Ok(mut key) = keys.recv_timeout(WAIT) else {
+            // The account's latest session key, as realmd stores it for the world server: a newer
+            // logon's replaces it, and a second dial on the same logon reuses it.
+            while let Ok(k) = keys.try_recv() {
+                last = Some(k);
+            }
+            if last.is_none() {
+                last = keys.recv_timeout(WAIT).ok();
+            }
+            let Some(key) = last else {
                 return;
             };
-            while let Ok(k) = keys.try_recv() {
-                key = k;
-            }
             let mut crypto = HeaderCrypto::from_session_key(key);
             send(
                 &mut s,
@@ -298,6 +322,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> Arc<Mutex<Vec
                 &[messages::AUTH_OK],
             );
             let log = Arc::clone(&log);
+            let sessions = Arc::clone(&sessions);
+            sessions.fetch_add(1, Ordering::SeqCst);
             thread::spawn(move || {
                 while let Some(op) = recv(&mut s, Some(&mut crypto)) {
                     log.lock().unwrap().push(op);
@@ -314,17 +340,16 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> Arc<Mutex<Vec
                         _ => {}
                     }
                 }
+                sessions.fetch_sub(1, Ordering::SeqCst);
             });
         }
     });
-    sent
+    World { sent, open }
 }
 
 /// A fake realmd listing `realms` and the world server they point at. `realms` takes the world's
-/// address. Returns realmd and the world's log.
-pub(crate) fn servers(
-    realms: impl FnOnce(&str) -> Vec<FakeRealm>,
-) -> (Realmd, Arc<Mutex<Vec<u16>>>) {
+/// address.
+pub(crate) fn servers(realms: impl FnOnce(&str) -> Vec<FakeRealm>) -> (Realmd, World) {
     let world_listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = world_listener.local_addr().unwrap().to_string();
     let (keys_tx, keys_rx) = crossbeam_channel::unbounded();

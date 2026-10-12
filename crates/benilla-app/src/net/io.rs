@@ -155,8 +155,11 @@ enum Parked {
     Acted(CharAction, u8),
     /// Stay parked: a realm-list refresh, or a Cancel over this screen.
     StayPut,
-    /// Drop the parked world session and dial this realm.
-    Realm(benilla_protocol::RealmInfo),
+    /// Drop the parked world session and dial this realm (the fallback address when `None`) under
+    /// the abandon generation its ask carried.
+    Realm(Option<benilla_protocol::RealmInfo>, u64),
+    /// Drop the parked world session and return to the logon park.
+    Leave,
     /// Select's Back: return to the pre-logon park.
     Repark,
     /// A new login: drop the session and the logon, and run it.
@@ -299,8 +302,9 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
 
 /// What the logon park's wait ended with.
 enum LogonAnswer {
-    /// `ChangeRealm` (`0x46f0e0`): dial this realm with the logon's session key.
-    Enter(benilla_protocol::RealmInfo),
+    /// `ChangeRealm` (`0x46f0e0`): dial this realm (the fallback address when `None`) with the
+    /// logon's session key, under the abandon generation the ask carried.
+    Enter(Option<benilla_protocol::RealmInfo>, u64),
     /// A new login supersedes the logon, as `CGlueMgr::Login` (`0x46afb0`) starts the next logon
     /// whatever link the last one left.
     Login(LoginRequest),
@@ -315,9 +319,10 @@ enum LogonAnswer {
 enum WorldEnd {
     /// The cycle is over.
     Cycle(Cycle),
-    /// It failed before the roster, reported, or was cancelled: the logon park resumes with the
-    /// realmd link up, as the reference's state-2 failure arm (`0x46bea7`-`0x46bf96`) leaves it,
-    /// dropping only the world socket, then raising the realm list.
+    /// It failed before the roster, reported, or was cancelled, or Change Realm left the session at
+    /// character select: the logon park resumes with the realmd link up, as the reference's
+    /// state-2 failure arm (`0x46bea7`-`0x46bf96`) and `ConnectToRealm`'s disconnect (`0x46b22b`)
+    /// drop only the world socket.
     Failed,
     /// A new login superseded the session at character select.
     Login(LoginRequest),
@@ -338,14 +343,19 @@ fn publish(
         .is_ok()
 }
 
-/// A realm list query (`RequestRealmList`, `0x5ab840`) on the realmd link, then the answer
-/// published. A link realmd has closed is dialled again first (`0x5b2200`), as vmangos closes every
-/// one after `MaxSessionDuration`, 300 s by default, while a list may stand longer. False once the
-/// app is gone.
+/// A realm list query on the realmd link, `RequestRealmList`'s (`0x5ab840`) and the connect's
+/// own (`0x5aab6d`), then the answer published. A request that fails for any reason (the link
+/// realmd closed, the 5 s timeout, a reply that does not parse) dials realmd again and asks once
+/// more; vmangos closes every link after `MaxSessionDuration`, 300 s by default, while a list may
+/// stand longer. False once the app is gone.
 ///
-/// Deviation: the re-dial logs on again with the cycle's credentials where the reference sends the
-/// reconnect challenge (`0x5b2134`, `[Logon+0xc]`), because benilla's logon has no reconnect
-/// exchange; the new session key serves the next world dial as the reconnect's would.
+/// Deviation: the reference re-dials only from `RequestRealmList`, and only when the link is down
+/// (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`,
+/// `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise
+/// nothing, leaving the screen on its connecting dialog for good. Here both queries re-dial on
+/// any failure, with a full logon from the cycle's credentials, because benilla's logon has no
+/// reconnect exchange and a connect that can never complete is a dead end, not a behaviour; the
+/// new session key serves the next world dial as the reconnect's would.
 fn query(
     logon: &mut benilla_protocol::Logon,
     req: &LoginRequest,
@@ -411,8 +421,12 @@ fn logon_park(
                 Ok(RealmRequest::Refresh) => {
                     (!query(logon, req, events_tx)).then_some(LogonAnswer::Exit)
                 }
-                Ok(RealmRequest::Enter(realm)) => Some(LogonAnswer::Enter(realm)),
+                Ok(RealmRequest::Enter { realm, generation }) => {
+                    Some(LogonAnswer::Enter(realm, generation))
+                }
                 Ok(RealmRequest::Close) => Some(LogonAnswer::Close),
+                // No world session here to leave.
+                Ok(RealmRequest::Leave) => None,
             },
             recv(login_rx) -> msg => Some(msg.map_or(LogonAnswer::Exit, LogonAnswer::Login)),
         };
@@ -481,32 +495,28 @@ fn run(
 
         // ── The logon park ─────────────────────────────────────────────────────────────────────
         //
-        // The login-side list: `RealmList` is a `frameStrata="DIALOG"` frame over the current glue
-        // screen. Change Realm is served at the character park. A server with no realms skips the
-        // park and dials the fallback address.
+        // The login-side list, an empty one included: `RealmList` is a `frameStrata="DIALOG"`
+        // frame over the current glue screen. Change Realm is served at the character park.
         //
         // An answer queued during a dead cycle must not answer this list.
         while parks.realm_rx.try_recv().is_ok() {}
-        let mut pick = None;
-        if !logon.realms.is_empty() {
-            if !publish(events_tx, &logon.realms, false) {
-                return Ok(Cycle::Exit);
-            }
-            match logon_park(&mut logon, &req, parks, events_tx) {
-                LogonAnswer::Enter(realm) => pick = Some(realm),
-                LogonAnswer::Login(next) => {
-                    req = next;
-                    continue 'logon;
-                }
-                LogonAnswer::Close => return Ok(Cycle::Repark),
-                LogonAnswer::Exit => return Ok(Cycle::Exit),
-            }
+        if !publish(events_tx, &logon.realms, false) {
+            return Ok(Cycle::Exit);
         }
+        let mut pick = match logon_park(&mut logon, &req, parks, events_tx) {
+            LogonAnswer::Enter(realm, generation) => (realm, generation),
+            LogonAnswer::Login(next) => {
+                req = next;
+                continue 'logon;
+            }
+            LogonAnswer::Close => return Ok(Cycle::Repark),
+            LogonAnswer::Exit => return Ok(Cycle::Exit),
+        };
         loop {
             let ended = world(
                 &req,
                 &mut logon,
-                pick.take(),
+                pick.clone(),
                 events_tx,
                 writer_tx,
                 parks,
@@ -521,7 +531,7 @@ fn run(
                     continue 'logon;
                 }
                 WorldEnd::Failed => match logon_park(&mut logon, &req, parks, events_tx) {
-                    LogonAnswer::Enter(realm) => pick = Some(realm),
+                    LogonAnswer::Enter(realm, generation) => pick = (realm, generation),
                     LogonAnswer::Login(next) => {
                         req = next;
                         continue 'logon;
@@ -534,14 +544,15 @@ fn run(
     }
 }
 
-/// One world attempt and, past the roster, its session: the dial to `realm` (the fallback address
-/// when `None`), the roster, the character park, then the world stream. Change Realm at the
-/// character park dials again from here with the same session key.
+/// One world attempt and, past the roster, its session: the dial to `pick`'s realm (the fallback
+/// address when `None`, which only the native policy asks for), the roster, the character park,
+/// then the world stream. Change Realm at the character park dials again from here with the same
+/// session key. A cancel is an abandon generation past the one the pick carried.
 #[allow(clippy::too_many_arguments)]
 fn world(
     req: &LoginRequest,
     logon: &mut benilla_protocol::Logon,
-    mut realm: Option<benilla_protocol::RealmInfo>,
+    pick: (Option<benilla_protocol::RealmInfo>, u64),
     events_tx: &Sender<SessionEvent>,
     writer_tx: &Sender<WorldWriter>,
     parks: &Parks,
@@ -581,11 +592,14 @@ fn world(
     //
     // Change Realm re-enters this loop: the SRP6 session key authenticates against any world
     // server on the account's list, so a switch costs one world dial and no re-authentication.
+    let (mut realm, mut generation) = pick;
     'realm: loop {
-        // A cancel reaches the attempt in flight: the generation is read as it starts, so an
-        // earlier attempt's cancel, already honoured, cannot end this one.
-        let generation = abandon.load(Ordering::SeqCst);
+        // The generation the app held when it asked for this dial: a Cancel after the ask ends
+        // the attempt, however early it lands, and an earlier attempt's cannot.
         let canceled = || abandon.load(Ordering::SeqCst) != generation;
+        if canceled() {
+            return Ok(WorldEnd::Failed);
+        }
         // Named, since the address alone cannot tell a chosen realm from the fallback.
         if let Some(r) = &realm {
             bevy::log::info!(
@@ -706,7 +720,11 @@ fn world(
                     Ok(RealmRequest::Close) => Parked::StayPut,
                     // `ChangeRealm(category, index)`: dial the chosen realm with the session key
                     // we hold.
-                    Ok(RealmRequest::Enter(realm)) => Parked::Realm(realm),
+                    Ok(RealmRequest::Enter { realm, generation }) => {
+                        Parked::Realm(realm, generation)
+                    }
+                    // `ConnectToRealm` with the world up drops it first (`0x46b22b`).
+                    Ok(RealmRequest::Leave) => Parked::Leave,
                 },
                 recv(pick_rx) -> pick => match pick {
                     Err(_) => Parked::Exit,
@@ -728,10 +746,11 @@ fn world(
                 Parked::Login(next) => return Ok(WorldEnd::Login(next)),
                 Parked::StayPut => continue,
                 Parked::Play(guid) => break guid,
-                Parked::Realm(chosen) => {
-                    realm = Some(chosen);
+                Parked::Realm(chosen, asked) => {
+                    (realm, generation) = (chosen, asked);
                     continue 'realm;
                 }
+                Parked::Leave => return Ok(WorldEnd::Failed),
                 Parked::Acted(action, code) => (action, code),
             };
             // A success changed the roster: re-emit it before the result, so the screen has the

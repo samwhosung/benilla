@@ -433,6 +433,8 @@ pub(crate) struct GlueMgr {
     characters: u16,
     /// The realm list's sort and selection cells, carried from one glue VM to the next.
     realm_cells: GlueRealmCells,
+    /// The manager moved [`Self::realm_cells`], for the next seed.
+    cells_moved: bool,
     /// Realm requests for the IO thread, sent at the end of the frame.
     realm_out: Vec<RealmRequest>,
     /// Asks of the login engine the per-frame arms made, sent with the verbs' own.
@@ -534,12 +536,16 @@ impl GlueMgr {
 
     /// `ConnectToRealm` (`0x46b210`) for the realm `ChangeRealm` named, `realmName` already set to
     /// it: the selection (`0x5ab7b0`'s tail, `0x5ab6f0`), state 2, the `GAME_SERVER_LOGIN` dialog
-    /// and the connect. With a world connection up the reference drops it first and dials from the
-    /// disconnect handler (`0x46b22b`, `0x46c5bf`); here the character park drops its session when
-    /// the dial reaches it.
+    /// and the connect. With a world connection up the reference drops it first (`0x46b22b` →
+    /// `0x5ab1a0`) and begins the same connect from the disconnect handler (`0x46c5bf`); here the
+    /// drop is asked first and the connect follows at once, so a failed query finds no session.
     fn connect_to_realm(&mut self, name: &str) {
         if let Some(r) = select_by_name(&self.holder, name) {
             self.selected = Some(r);
+        }
+        if self.connected {
+            // `0x46b22b`: the world connection drops before anything is asked of realmd.
+            self.realm_out.push(RealmRequest::Leave);
         }
         self.connected = false;
         self.state = ScreenState::Connect;
@@ -576,7 +582,11 @@ impl GlueMgr {
                 match &self.selected {
                     Some(r) => {
                         info!("glue: the connect dials {:?}", r.name);
-                        self.realm_out.push(RealmRequest::Enter(r.clone()));
+                        // Stamped with the abandon generation as it is sent.
+                        self.realm_out.push(RealmRequest::Enter {
+                            realm: Some(r.clone()),
+                            generation: 0,
+                        });
                     }
                     None => {
                         info!("glue: realmName {realm_name:?} names no listed realm");
@@ -835,6 +845,20 @@ impl GlueMgr {
             self.op = Operation::default();
             self.queue = QueueEstimate::default();
             self.outbox.push(Outgoing::Screen("charselect"));
+            self.roster_arm();
+        }
+    }
+
+    /// The roster's arm (`0x4724d0`), which the reference reaches from the character list query
+    /// that `charselect` asks for (`0x46c094`); benilla's roster comes with the authentication.
+    /// Characters mark a realm chosen (`0x472556`); an empty roster with no realm chosen asks for
+    /// the list with its dialog (`0x47253d` → `0x46b8d0`), skipping `CHARACTER_LIST_UPDATE`.
+    fn roster_arm(&mut self) {
+        if self.characters != 0 {
+            self.realm_cells.chosen = Some(0);
+            self.cells_moved = true;
+        } else if self.realm_cells.chosen.is_none() {
+            self.request_realm_list(true);
         }
     }
 
@@ -926,6 +950,7 @@ pub(crate) struct GlueAsks<'w> {
     login: MessageWriter<'w, GlueLogin>,
     music: MessageWriter<'w, crate::sound::GlueMusicRequest>,
     realm: Option<Res<'w, crate::net::RealmChoice>>,
+    abandon: Option<Res<'w, crate::net::LoginAbandon>>,
 }
 
 /// The CVars each agreement is read from and written to.
@@ -1082,8 +1107,12 @@ pub(crate) fn drive_glue_mgr(
     for ask in logins.into_iter().chain(arms) {
         asks.login.write(ask);
     }
+    let now = crate::net::LoginAbandon::now(asks.abandon.as_deref());
     if let Some(choice) = asks.realm.as_deref() {
-        for ask in realm_asks {
+        for mut ask in realm_asks {
+            if let RealmRequest::Enter { generation, .. } = &mut ask {
+                *generation = now;
+            }
             let _ = choice.0.send(ask);
         }
     }
@@ -1122,6 +1151,9 @@ fn seed(
         }
     }
     script.set_glue_connected(mgr.connected);
+    if std::mem::take(&mut mgr.cells_moved) {
+        script.set_glue_realm_cells(mgr.realm_cells);
+    }
     if std::mem::take(&mut mgr.holder_moved) {
         script.set_glue_realms(mgr.holder.iter().map(glue_realm).collect());
     }

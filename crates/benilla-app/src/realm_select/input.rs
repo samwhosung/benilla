@@ -64,18 +64,20 @@ pub(super) fn clicks(
         }
     }
     if enter {
-        try_enter(&mut realms, &choice, &mut sounds);
+        try_enter(&mut realms, &choice, &mut sounds, &cancels);
     }
     if let Some(with_sound) = leave {
         do_cancel(&mut realms, &mut cancels, &mut sounds, with_sound);
     }
 }
 
-/// What a Cancel needs: the screen under the list and the login engine's ask.
+/// What Okay and Cancel need beyond the list: the screen under it, the login engine's ask, and
+/// the abandon generation a dial is stamped with.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Cancels<'w> {
     state: Option<Res<'w, State<ClientState>>>,
     login: MessageWriter<'w, GlueLogin>,
+    abandon: Option<Res<'w, crate::net::LoginAbandon>>,
 }
 
 /// `RealmList_OnKeyDown` (ESCAPE / ENTER), plus arrow-key row cycling and the wheel.
@@ -92,7 +94,7 @@ pub(crate) fn keys(
         return;
     }
     if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter) {
-        try_enter(&mut realms, &choice, &mut sounds);
+        try_enter(&mut realms, &choice, &mut sounds, &cancels);
         return;
     }
 
@@ -188,7 +190,12 @@ fn do_cancel(
 ///
 /// Not built: the reference's `REALM_IS_FULL` Yes/No confirm for a `Full` realm with no characters
 /// on it; ours enters directly. `Full` is the `0x80` flag, which vmangos never sets.
-fn try_enter(realms: &mut Realms, choice: &RealmChoice, sounds: &mut MessageWriter<GlueSound>) {
+fn try_enter(
+    realms: &mut Realms,
+    choice: &RealmChoice,
+    sounds: &mut MessageWriter<GlueSound>,
+    cancels: &Cancels,
+) {
     let Some(realm) = realms.selected() else {
         return; // the reference disables Okay with nothing highlighted
     };
@@ -199,7 +206,11 @@ fn try_enter(realms: &mut Realms, choice: &RealmChoice, sounds: &mut MessageWrit
     sounds.write(GlueSound("gsLoginChangeRealmOK"));
     realms.hide();
     realms.store_front_category();
-    realms.enter(choice, name);
+    realms.enter(
+        choice,
+        name,
+        crate::net::LoginAbandon::now(cancels.abandon.as_deref()),
+    );
 }
 
 #[cfg(test)]

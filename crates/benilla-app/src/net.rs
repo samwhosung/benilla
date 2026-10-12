@@ -406,8 +406,14 @@ pub(crate) struct RealmChoice(pub(crate) Sender<RealmRequest>);
 #[derive(Debug)]
 pub(crate) enum RealmRequest {
     /// Dial this realm (`ConnectToRealm`, `0x46b210`), the record as the list held it, as the
-    /// reference dials its copy (`0xc27fb8`) whatever a later list says.
-    Enter(benilla_protocol::RealmInfo),
+    /// reference dials its copy (`0xc27fb8`) whatever a later list says; `None` is the native
+    /// policy's fallback for a server that lists no realm, the realmlist host at the world port.
+    /// `generation` is the abandon generation the app held when it asked: a later Cancel ends the
+    /// dial however early it lands.
+    Enter {
+        realm: Option<benilla_protocol::RealmInfo>,
+        generation: u64,
+    },
     /// Query the realm list (`RequestRealmList`, every 5 s from `RealmList_OnUpdate`); the answer
     /// is a [`RealmListMessage`], failed when the link gave none.
     Refresh,
@@ -415,6 +421,9 @@ pub(crate) enum RealmRequest {
     /// logon's Cancel and `DisconnectFromServer`): the realmd link closes and the thread parks for
     /// credentials. At character select, where `RealmListDialogCancelled` is a no-op, nothing.
     Close,
+    /// `ConnectToRealm` with the world up (`0x46b22b` → `0x5ab1a0`): the session at character
+    /// select drops and the thread returns to the logon park, realmd still up. Elsewhere, nothing.
+    Leave,
 }
 
 /// The credentials channel to the IO thread's pre-logon park, sent by [`crate::login`].
@@ -422,9 +431,16 @@ pub(crate) enum RealmRequest {
 pub(crate) struct LoginSubmit(pub(crate) Sender<io::LoginRequest>);
 
 /// The login abandon generation: Cancel bumps it, and the IO thread drops an
-/// [`io::LoginRequest`] submitted under an older value.
+/// [`io::LoginRequest`] or a [`RealmRequest::Enter`] asked under an older value.
 #[derive(Resource)]
 pub(crate) struct LoginAbandon(pub(crate) std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl LoginAbandon {
+    /// The generation an ask is stamped with now.
+    pub(crate) fn now(abandon: Option<&LoginAbandon>) -> u64 {
+        abandon.map_or(0, |a| a.0.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
 
 /// Guid to entity for every kind, items included, like the reference's one `ClntObjMgr` index.
 /// Written only by `net::objects`.

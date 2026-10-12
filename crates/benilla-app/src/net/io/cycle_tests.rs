@@ -26,6 +26,14 @@ fn next_event(events: &crossbeam_channel::Receiver<SessionEvent>) -> SessionEven
     }
 }
 
+/// A dial of `realm` asked under generation 0, the cycles' start.
+fn enter(realm: RealmInfo) -> RealmRequest {
+    RealmRequest::Enter {
+        realm: Some(realm),
+        generation: 0,
+    }
+}
+
 /// The next realm list, its realms and whether the query failed.
 fn next_list(events: &crossbeam_channel::Receiver<SessionEvent>) -> (Vec<RealmInfo>, bool) {
     match next_event(events) {
@@ -39,7 +47,7 @@ fn next_list(events: &crossbeam_channel::Receiver<SessionEvent>) -> (Vec<RealmIn
 /// an account with no characters parks at select on the empty list and creates nothing.
 #[test]
 fn an_empty_account_parks_at_select_without_creating_a_character() {
-    let (realmd, sent) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
 
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (writer_tx, _writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
@@ -74,9 +82,7 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
     let (realms, failed) = next_list(&events);
     assert!(!failed);
     assert_eq!(realms[0].name, REALM);
-    realm_tx
-        .send(RealmRequest::Enter(realms[0].clone()))
-        .unwrap();
+    realm_tx.send(enter(realms[0].clone())).unwrap();
     match next_event(&events) {
         SessionEvent::CharacterList { characters, .. } => assert!(
             characters.is_empty(),
@@ -87,7 +93,7 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
     // Select's Back ends the cycle, so the socket is done and its log complete.
     pick_tx.send(CharRequest::Abandon).unwrap();
     assert!(cycle.join().unwrap(), "Back returns to the login park");
-    let sent = sent.lock().unwrap().clone();
+    let sent = world.sent.lock().unwrap().clone();
     assert!(
         !sent.contains(&opcode::CMSG_CHAR_CREATE),
         "the login sent CMSG_CHAR_CREATE on its own: {sent:#06x?}"
@@ -143,7 +149,7 @@ fn a_failed_world_dial_keeps_the_logon_for_the_next_realm() {
     let down = realms.iter().find(|r| r.name == "Down").unwrap().clone();
     let up = realms.iter().find(|r| r.name == REALM).unwrap().clone();
 
-    cycles.realm.send(RealmRequest::Enter(down)).unwrap();
+    cycles.realm.send(enter(down)).unwrap();
     loop {
         match cycles
             .events
@@ -164,7 +170,7 @@ fn a_failed_world_dial_keeps_the_logon_for_the_next_realm() {
     cycles.realm.send(RealmRequest::Refresh).unwrap();
     assert!(!next_list(&cycles.events).1, "the link answers the query");
     assert_eq!(realmd.lists(), 2);
-    cycles.realm.send(RealmRequest::Enter(up)).unwrap();
+    cycles.realm.send(enter(up)).unwrap();
     assert!(matches!(
         next_event(&cycles.events),
         SessionEvent::CharacterList { .. }
@@ -197,4 +203,72 @@ fn a_query_on_a_closed_link_dials_again() {
     assert!(!failed, "the re-dial answers");
     assert_eq!(realms[0].name, REALM);
     assert_eq!(realmd.logons(), 2);
+}
+
+/// A Cancel after the dial was asked ends it, however early it lands: the dial carries the
+/// generation the app held when it asked, so the thread drops it and stays at the logon park.
+#[test]
+fn a_cancel_after_the_dial_was_asked_drops_it() {
+    let (realmd, _) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    // The dial was asked under 0, and the Cancel's bump landed before the thread read it.
+    cycles
+        .abandon
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    cycles.realm.send(RealmRequest::Refresh).unwrap();
+    assert!(
+        !next_list(&cycles.events).1,
+        "the logon park answers, with no roster before it"
+    );
+}
+
+/// A server that lists no realm gets its empty list published and the logon parked, so the
+/// screens decide: the stock ones fail the connect and show the empty list, as the reference
+/// does, and the native policy dials the realmlist host itself.
+#[test]
+fn an_empty_realm_list_is_published_and_parked() {
+    let (realmd, _) = fake::servers(|_| Vec::new());
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, failed) = next_list(&cycles.events);
+    assert!(realms.is_empty() && !failed);
+    cycles.realm.send(RealmRequest::Refresh).unwrap();
+    assert!(!next_list(&cycles.events).1, "parked at the logon park");
+    assert_eq!(realmd.lists(), 2);
+}
+
+/// Change Realm with the world up drops the session first (`0x46b22b`) and returns to the logon
+/// park, realmd still up: the world socket closes before any query.
+#[test]
+fn leave_drops_the_world_session_and_keeps_the_logon() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::CharacterList { .. }
+    ));
+    assert_eq!(world.open(), 1);
+    cycles.realm.send(RealmRequest::Leave).unwrap();
+    let deadline = std::time::Instant::now() + WAIT;
+    while world.open() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the world session is still open"
+        );
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cycles.realm.send(RealmRequest::Refresh).unwrap();
+    assert!(!next_list(&cycles.events).1);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::CharacterList { .. }
+    ));
+    assert_eq!(realmd.logons(), 1, "one logon throughout");
 }

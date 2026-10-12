@@ -291,6 +291,7 @@ fn the_world_connect_shows_each_completion() {
         m.outbox.is_empty(),
         "the running authentication's text is empty"
     );
+    m.characters = 2;
     m.on_roster(None);
     m.tick();
     assert_eq!(
@@ -305,25 +306,70 @@ fn the_world_connect_shows_each_completion() {
     );
 }
 
-/// The roster ends the world connect: the status text, state 0, the character screen.
+/// The roster ends the world connect: the status text, state 0, the character screen, then the
+/// roster's arm (`0x4724d0`): characters mark a realm chosen (`0x472556`); an empty roster with
+/// no realm chosen asks for the list (`0x47253d` → `0x46b8d0`); one with a choice asks nothing.
 #[test]
 fn the_roster_puts_the_character_screen_up() {
+    let up = [
+        Outgoing::Update {
+            text: Text::Key("AUTH_OK"),
+            button: None,
+        },
+        Outgoing::Screen("charselect"),
+    ];
+    let mut m = accepted();
+    m.state = ScreenState::Connect;
+    m.characters = 3;
+    m.on_roster(None);
+    m.tick();
+    assert_eq!(m.outbox, up);
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(m.connected);
+    assert_eq!(m.realm_cells.chosen, Some(0));
+    assert!(m.cells_moved && m.realm_out.is_empty());
+
     let mut m = accepted();
     m.state = ScreenState::Connect;
     m.on_roster(None);
     m.tick();
+    let mut want = up.to_vec();
+    want.push(open("CANCEL", Some("REALM_LIST_IN_PROGRESS")));
     assert_eq!(
-        m.outbox,
-        [
-            Outgoing::Update {
-                text: Text::Key("AUTH_OK"),
-                button: None
-            },
-            Outgoing::Screen("charselect")
-        ]
+        m.outbox, want,
+        "an empty roster with no choice asks for the list"
     );
-    assert_eq!(m.state, ScreenState::Idle);
-    assert!(m.connected);
+    assert_eq!(m.state, ScreenState::RealmList);
+    assert!(matches!(m.realm_out.as_slice(), [RealmRequest::Refresh]));
+
+    let mut m = accepted();
+    m.state = ScreenState::Connect;
+    m.realm_cells.chosen = Some(5);
+    m.on_roster(None);
+    m.tick();
+    assert_eq!(m.outbox, up, "a realm was chosen: nothing more");
+    assert!(m.realm_out.is_empty());
+}
+
+/// Change Realm with the world up drops the session before the connect's query (`0x46b22b`).
+#[test]
+fn change_realm_with_the_world_up_leaves_it_first() {
+    let mut m = accepted();
+    m.holder = vec![realm("Fake")];
+    m.connected = true;
+    m.connect_to_realm("fake");
+    assert!(matches!(
+        m.realm_out.as_slice(),
+        [RealmRequest::Leave, RealmRequest::Refresh]
+    ));
+    assert_eq!(m.state, ScreenState::Connect);
+    assert!(!m.connected);
+    assert_eq!(m.selected.as_ref().map(|r| r.name.as_str()), Some("Fake"));
+
+    let mut m = accepted();
+    m.holder = vec![realm("Fake")];
+    m.connect_to_realm("Fake");
+    assert!(matches!(m.realm_out.as_slice(), [RealmRequest::Refresh]));
 }
 
 /// The queue re-texts the dialog every frame while the world connect waits.
@@ -871,4 +917,19 @@ fn closing_the_realm_list_lets_the_next_login_through() {
             .as_deref(),
         Some("Alpha")
     );
+}
+
+/// A server that lists no realm: the connect fails `REALM_LIST_REALM_NOT_FOUND`, the failure arm
+/// finds the holder empty and asks for the list (`0x46bf86` → `0x46c06e`), and the empty reply's
+/// rebuild puts the wizard up; nothing dials a fallback.
+#[test]
+fn an_empty_realm_list_asks_again_and_shows_it() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, realmd) = live_app(|_| Vec::new(), "");
+    log_in(&mut app);
+    until(&mut app, "the realm wizard", |app| {
+        shown(app, "RealmWizard")
+    });
+    assert_eq!(realmd.lists(), 2, "the logon's list and the arm's query");
+    assert!(!app.world().resource::<GlueMgr>().connected);
 }

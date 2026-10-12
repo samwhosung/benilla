@@ -281,11 +281,14 @@ impl Realms {
         self.offset = self.offset.min(max);
     }
 
-    /// Answer a park with a realm, by the record the list holds, and remember it as
-    /// [`Self::current`].
-    pub(super) fn enter(&mut self, choice: &RealmChoice, name: String) {
+    /// Answer a park with a realm, by the record the list holds, stamped with the abandon
+    /// generation `generation` the app holds now, and remember it as [`Self::current`].
+    pub(super) fn enter(&mut self, choice: &RealmChoice, name: String, generation: u64) {
         if let Some(realm) = self.realms.iter().find(|r| r.name == name) {
-            let _ = choice.0.send(RealmRequest::Enter(realm.clone()));
+            let _ = choice.0.send(RealmRequest::Enter {
+                realm: Some(realm.clone()),
+                generation,
+            });
         }
         self.current = Some(name);
     }
@@ -390,7 +393,9 @@ fn apply_realm_policy(
     mut realms: ResMut<Realms>,
     choice: Res<RealmChoice>,
     cvars: Res<crate::cvars::Cvars>,
+    abandon: Option<Res<crate::net::LoginAbandon>>,
 ) {
+    let generation = crate::net::LoginAbandon::now(abandon.as_deref());
     if !realms.env_read {
         realms.env_read = true;
         realms.env_realm = std::env::var("WOW_REALM").ok().filter(|s| !s.is_empty());
@@ -418,6 +423,16 @@ fn apply_realm_policy(
         if realms.shown {
             continue;
         }
+        // A server that lists no realm: this policy dials the realmlist host at the world port.
+        // The reference fails the connect `REALM_LIST_REALM_NOT_FOUND` and, holding no realm,
+        // shows the empty list (`0x46bf86` → `0x46c06e`).
+        if realms.realms.is_empty() {
+            let _ = choice.0.send(RealmRequest::Enter {
+                realm: None,
+                generation,
+            });
+            continue;
+        }
         match auto_answer(
             &realms,
             remembered.as_deref(),
@@ -425,7 +440,7 @@ fn apply_realm_policy(
         ) {
             Some(name) => {
                 realms.select(&name);
-                realms.enter(&choice, name);
+                realms.enter(&choice, name, generation);
             }
             None => realms.open(),
         }
@@ -746,6 +761,35 @@ mod tests {
             Some("Up"),
             "unattended skips the offline row rather than dialing it"
         );
+    }
+
+    /// A server that lists no realm: the native policy dials the realmlist host itself, stamped
+    /// with the abandon generation the app holds.
+    #[test]
+    fn an_empty_list_dials_the_fallback_under_the_live_generation() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<Realms>()
+            .init_resource::<crate::cvars::Cvars>()
+            .insert_resource(RealmChoice(tx))
+            .insert_resource(crate::net::LoginAbandon(std::sync::Arc::new(
+                std::sync::atomic::AtomicU64::new(4),
+            )))
+            .add_message::<RealmListMessage>()
+            .add_systems(Update, apply_realm_policy);
+        app.world_mut().write_message(RealmListMessage {
+            realms: Vec::new(),
+            failed: false,
+        });
+        app.update();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(RealmRequest::Enter {
+                realm: None,
+                generation: 4
+            })
+        ));
+        assert!(!app.world().resource::<Realms>().shown, "no empty dialog");
     }
 
     /// Mode ascending is Normal, PvP, RP, RP-PvP: RP decides before PvP (`0x46e92c`-`0x46e978`).

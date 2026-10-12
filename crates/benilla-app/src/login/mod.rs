@@ -216,23 +216,17 @@ pub(crate) fn answer_glue(
     time: Res<Time>,
     mut commands: Commands,
 ) {
-    let close_logon = |attempt: &mut Attempt| {
-        attempt.abandon.0.fetch_add(1, Ordering::SeqCst);
-        attempt.intent.in_flight = false;
-        attempt.intent.clear();
-        if let Some(realm) = realm.as_deref() {
-            let _ = realm.0.send(crate::net::RealmRequest::Close);
-        }
-    };
     for ask in asks.read() {
         match ask {
             GlueLogin::Submit { account, password } => attempt.send(account, password, true),
-            GlueLogin::Abandon => close_logon(&mut attempt),
+            GlueLogin::Abandon => {
+                close_logon(&attempt.abandon, &mut attempt.intent, realm.as_deref());
+            }
             GlueLogin::CancelWorld => {
                 attempt.abandon.0.fetch_add(1, Ordering::SeqCst);
             }
             GlueLogin::Disconnect => {
-                close_logon(&mut attempt);
+                close_logon(&attempt.abandon, &mut attempt.intent, realm.as_deref());
                 if matches!(
                     state.get(),
                     ClientState::CharSelect | ClientState::CharCreate
@@ -248,6 +242,22 @@ pub(crate) fn answer_glue(
                 commands.insert_resource(QuitArm(Some(time.elapsed_secs())));
             }
         }
+    }
+}
+
+/// `CLoginMgr::Cancel` (`0x5b3320`): the attempt in flight is dropped at its next stage boundary
+/// (a dial asked for under the old generation included), the realmd link closes, and nothing
+/// resubmits.
+fn close_logon(
+    abandon: &LoginAbandon,
+    intent: &mut LoginIntent,
+    realm: Option<&crate::net::RealmChoice>,
+) {
+    abandon.0.fetch_add(1, Ordering::SeqCst);
+    intent.in_flight = false;
+    intent.clear();
+    if let Some(realm) = realm {
+        let _ = realm.0.send(crate::net::RealmRequest::Close);
     }
 }
 
@@ -964,6 +974,7 @@ fn answer_dialog(
     mut realmlist: ResMut<crate::realmlist::Realmlist>,
     mut script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     abandon: Res<LoginAbandon>,
+    realm: Option<Res<crate::net::RealmChoice>>,
 ) {
     for answer in answers.read() {
         match answer.kind {
@@ -983,11 +994,9 @@ fn answer_dialog(
                     dialog.dismiss(&mut commands);
                 }
             }
+            // Cancel, as the reference's state-1 Cancel (`0x46b73d` → `CLoginMgr::Cancel`).
             DialogKind::Status | DialogKind::Queued => {
-                // Cancel: the next stage boundary discards the attempt, and nothing resubmits.
-                abandon.0.fetch_add(1, Ordering::SeqCst);
-                intent.in_flight = false;
-                intent.clear();
+                close_logon(&abandon, &mut intent, realm.as_deref());
                 dialog.dismiss(&mut commands);
             }
         }
@@ -1169,6 +1178,39 @@ mod tests {
                 "{order}: the press was the list's, so the login screen does not also quit"
             );
         }
+    }
+
+    /// The status dialog's Cancel is `CLoginMgr::Cancel` (`0x46b73d` → `0x5b3320`): the attempt
+    /// ends at its next boundary and the logon park closes, so a logon that already finished is
+    /// not left parked.
+    #[test]
+    fn the_status_cancel_closes_the_logon() {
+        let (realm_tx, realm_rx) = crossbeam_channel::unbounded();
+        let abandon = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut app = App::new();
+        app.init_resource::<GlueDialog>()
+            .init_resource::<LoginIntent>()
+            .insert_resource(crate::realmlist::Realmlist::unpinned(
+                crate::realmlist::DEFAULT_REALMLIST,
+            ))
+            .insert_resource(LoginAbandon(abandon.clone()))
+            .insert_resource(crate::net::RealmChoice(realm_tx))
+            .add_message::<crate::glue::dialog::GlueDialogAnswer>()
+            .add_systems(Update, answer_dialog);
+        app.world_mut().resource_mut::<LoginIntent>().in_flight = true;
+        app.world_mut()
+            .write_message(crate::glue::dialog::GlueDialogAnswer {
+                kind: DialogKind::Status,
+                button1: true,
+                button2: false,
+            });
+        app.update();
+        assert_eq!(abandon.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            realm_rx.try_recv(),
+            Ok(crate::net::RealmRequest::Close)
+        ));
+        assert!(!app.world().resource::<LoginIntent>().in_flight);
     }
 
     /// The realm list's Cancel over the login screen ends the attempt (#833): the logon closes
