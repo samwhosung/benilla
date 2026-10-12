@@ -813,12 +813,15 @@ pub(crate) mod schedule_tests {
     ///   `cursor::drive_displayed_cursor` over `SpellTargeting` and
     ///   `creature_anim::spell_visual::route_cast_visuals` over the `CastEvent` messages: both are
     ///   level-triggered readers, so a cancel seen a frame early or late is decided again next
-    ///   frame.
+    ///   frame;
+    /// - the item gate's control-bypass feed (`ui_unit::control_gate::feed_control_bypass`)
+    ///   against `player::camera_saved::load_camera_pose` over `Player`: the feed reads
+    ///   `control_lost` only, and the loader writes the saved camera pose.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 4_691;
+    const UPDATE_ACTIONABLE_CEILING: usize = 4_692;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

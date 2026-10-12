@@ -184,6 +184,8 @@ mod tests {
         // The keys believed down, a fact about the keyboard; an alt-tab wipes it by reconcile.
         ("bindings.rs", "down"),
         ("ui_script/input.rs", "pressed"),
+        // The catalog's bit-15 spells, a fact about the spell catalog, rebuilt when it changes.
+        ("ui_unit/control_gate.rs", "candidates"),
     ];
 
     use crate::test_support::{fn_parameter_lists, rust_files};

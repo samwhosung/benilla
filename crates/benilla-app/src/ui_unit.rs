@@ -21,6 +21,7 @@ use crate::net::{
 use crate::target::{ring_reaction, Factions, Selection};
 use crate::ui_script::{gate, UiInput};
 
+mod control_gate;
 mod held;
 
 /// The unit-feed pass, gated so none of its login one-shots or per-VM memos runs before the in-game
@@ -158,6 +159,8 @@ impl Plugin for UiUnitPlugin {
                 // After the same feed, whose guids it covers.
                 held::feed_chain_units.after(crate::ui_aura::AuraEvents),
                 feed_player_control,
+                // After the control edge, whose flag the exemption is asked for.
+                control_gate::feed_control_bypass,
                 feed_farsight_focus,
                 melee_unit_combat,
                 fire_unit_combat,
