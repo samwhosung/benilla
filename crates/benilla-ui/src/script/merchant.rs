@@ -173,7 +173,6 @@ fn invalid_tuple() -> Vec<Value> {
     ]
 }
 
-/// Register the merchant globals.
 /// The row `PickupMerchantItem(index)` grabs, read before its clear: `None` for each silent
 /// refusal, a non-number (`0x4fb7cb`; a numeric string passes), `index < 1` (`0x4fb7e1`),
 /// `index > count` (`0x4fb7e9`), no merchant (`0x4fb7f7`), a dead row (`0x4fb80b`), or the held
@@ -205,6 +204,7 @@ fn merchant_grab(model: &Model, index: Option<f64>) -> Option<CursorPayload> {
     }))
 }
 
+/// Register the merchant globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 

@@ -186,7 +186,6 @@ fn drag_verb(from: u8, to: u8, state: &StableState) -> Option<StableIntent> {
     }
 }
 
-/// Register the stable globals.
 /// `ClickStablePet(i)`'s one value (`0x4cb420`), keyed only on whether the cursor held a pet: a
 /// plain click selects and answers 1, so the stock window repaints; a drop answers nil, packet or
 /// not, and the repaint comes with the server's next list.
@@ -237,6 +236,7 @@ fn click_stable_pet(model: &mut Model, i: i64) -> Value {
     Value::Number(1.0)
 }
 
+/// Register the stable globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
