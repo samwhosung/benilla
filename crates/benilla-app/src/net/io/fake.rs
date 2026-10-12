@@ -318,6 +318,9 @@ pub(crate) fn char_enum_body(characters: &[benilla_protocol::Character]) -> Vec<
     b
 }
 
+/// Packets, by opcode and body, the fake world sends behind `SMSG_LOGOUT_COMPLETE`.
+type Trail = Arc<Mutex<Vec<(u16, Vec<u8>)>>>;
+
 /// The fake world server's record: every opcode the client sent, and the sessions still open.
 pub(crate) struct World {
     pub(crate) sent: Arc<Mutex<Vec<u16>>>,
@@ -336,6 +339,8 @@ pub(crate) struct World {
     cut: Arc<AtomicBool>,
     /// Answer `CMSG_PLAYER_LOGIN` with `SMSG_CHARACTER_LOGIN_FAILED`.
     refuse: Arc<AtomicBool>,
+    /// Packets sent right behind `SMSG_LOGOUT_COMPLETE`, as the world session leaves them in flight.
+    trail: Trail,
     open: Arc<AtomicUsize>,
 }
 
@@ -364,6 +369,11 @@ impl World {
     /// vmangos's result 1).
     pub(crate) fn refuse_logins(&self) {
         self.refuse.store(true, Ordering::SeqCst);
+    }
+
+    /// Send these packets right behind every `SMSG_LOGOUT_COMPLETE`.
+    pub(crate) fn trail_logouts_with(&self, packets: Vec<(u16, Vec<u8>)>) {
+        *self.trail.lock().unwrap() = packets;
     }
 
     /// The `CMSG_AUTH_SESSION`s the server admitted: one per world session.
@@ -428,6 +438,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let cut_flag = Arc::clone(&cut);
     let refuse = Arc::new(AtomicBool::new(false));
     let refuse_flag = Arc::clone(&refuse);
+    let trail: Trail = Arc::default();
+    let trailing = Arc::clone(&trail);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
     thread::spawn(move || {
@@ -469,6 +481,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let warden_flag = Arc::clone(&warden_flag);
             let cut_flag = Arc::clone(&cut_flag);
             let refuse_flag = Arc::clone(&refuse_flag);
+            let trailing = Arc::clone(&trailing);
             let index = {
                 let mut all = session_log.lock().unwrap();
                 all.push(Vec::new());
@@ -512,7 +525,10 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                             &[1],
                         ),
                         opcode::CMSG_LOGOUT_REQUEST => {
-                            send(&mut s, Some(&mut crypto), opcode::SMSG_LOGOUT_COMPLETE, &[])
+                            send(&mut s, Some(&mut crypto), opcode::SMSG_LOGOUT_COMPLETE, &[]);
+                            for (op, body) in trailing.lock().unwrap().clone() {
+                                send(&mut s, Some(&mut crypto), op, &body);
+                            }
                         }
                         _ => {}
                     }
@@ -530,6 +546,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         warden,
         cut,
         refuse,
+        trail,
         open,
     }
 }

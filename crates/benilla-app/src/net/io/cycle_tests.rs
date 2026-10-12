@@ -726,3 +726,34 @@ fn change_realm_after_a_logout_dials_realmd_again() {
         "the change dials a new world session"
     );
 }
+
+/// Back from the world the link still carries what the world session left in flight: a pong for
+/// a ping sent before the writer came back, a reply vmangos serves an authenticated session. A
+/// packet of a known opcode whose body does not parse is skipped at the park, as the world stream
+/// skips it, and the roster behind it is read; the link is not lost over it.
+#[test]
+fn a_packet_left_in_flight_by_the_world_does_not_cost_the_link() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    world.trail_logouts_with(vec![
+        // An `SMSG_PONG` with no sequence: a known opcode that does not parse.
+        (opcode::SMSG_PONG, Vec::new()),
+        (opcode::SMSG_PONG, 7u32.to_le_bytes().to_vec()),
+    ]);
+    let cycles = fake::spawn_cycles();
+    let epoch = enter_world(&cycles, &realmd, false);
+    cycles
+        .commands
+        .send(crate::net::ClientCommand::Logout)
+        .unwrap();
+    expect_back(&cycles.events, |ev| matches!(ev, SessionEvent::LoggedOut));
+    match next_event(&cycles.events) {
+        SessionEvent::CharacterList {
+            cause, epoch: on, ..
+        } => {
+            assert_eq!(cause, RosterCause::Park);
+            assert_eq!(on, epoch);
+        }
+        other => panic!("expected the roster past the leftovers, got {other:?}"),
+    }
+    assert_eq!(world.open(), 1, "the world link is kept");
+}

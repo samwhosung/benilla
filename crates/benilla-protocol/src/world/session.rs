@@ -233,6 +233,18 @@ impl WorldSession {
         Ok(packet)
     }
 
+    /// The next packet a request at character select reads past, or `None` for one whose body did
+    /// not parse: skipped, as the world stream skips it ([`WorldReader::poll`]), since back from
+    /// the world the link still carries what the world session left in flight (a pong, a reply
+    /// vmangos serves to an authenticated session).
+    fn recv_parsed(&mut self) -> Result<Option<ServerPacket>> {
+        match self.recv() {
+            Ok(packet) => Ok(Some(packet)),
+            Err(e) if e.downcast_ref::<super::Unparsed>().is_some() => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// The `SMSG_ADDON_INFO` statuses this connection received, for every login on it; `None` is
     /// real, as vmangos stays silent when it rejects the addon block (`WorldSocket.cpp:447`).
     pub fn addon_info(&self) -> Option<&[u8]> {
@@ -253,7 +265,10 @@ impl WorldSession {
     pub fn char_enum(&mut self) -> Result<Vec<Character>> {
         self.send(opcode::CMSG_CHAR_ENUM, &[])?;
         loop {
-            match self.recv()? {
+            let Some(packet) = self.recv_parsed()? else {
+                continue;
+            };
+            match packet {
                 ServerPacket::CharEnum { characters } => {
                     self.link.roster_races = characters.iter().map(|c| (c.guid, c.race)).collect();
                     return Ok(characters);
@@ -277,9 +292,8 @@ impl WorldSession {
     pub fn create_character(&mut self, req: &messages::CharCreateReq) -> Result<u8> {
         self.send(opcode::CMSG_CHAR_CREATE, &messages::char_create(req))?;
         loop {
-            match self.recv()? {
-                ServerPacket::CharCreate { result } => return Ok(result),
-                _ => continue,
+            if let Some(ServerPacket::CharCreate { result }) = self.recv_parsed()? {
+                return Ok(result);
             }
         }
     }
@@ -288,9 +302,8 @@ impl WorldSession {
     pub fn delete_character(&mut self, guid: u64) -> Result<u8> {
         self.send(opcode::CMSG_CHAR_DELETE, &messages::full_guid(guid))?;
         loop {
-            match self.recv()? {
-                ServerPacket::CharDelete { result } => return Ok(result),
-                _ => continue,
+            if let Some(ServerPacket::CharDelete { result }) = self.recv_parsed()? {
+                return Ok(result);
             }
         }
     }
