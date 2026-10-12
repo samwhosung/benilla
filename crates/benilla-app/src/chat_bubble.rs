@@ -304,6 +304,9 @@ struct Bubble {
     /// Stand-box height × model scale, latched at spawn as the reference does (`bubble+0x354`).
     lift: f32,
     fade: Fade,
+    /// The squared camera distance the bubble was last stacked by (`[bubble+0x350]`); `None` for
+    /// a new line, which the next pass stacks (the spawn flag, `[bubble+0x320] & 0x8`).
+    depth: Option<f32>,
 }
 
 /// Whether the speaker was drawn in the last render: the reference's scene-node test `0x6704c0`
@@ -322,11 +325,63 @@ fn speaker_drawn(
         .is_ok_and(|kids| kids.iter().any(|c| meshes.get(c).is_ok_and(|v| v.get())))
 }
 
-/// The live bubbles by speaker guid, at most one per unit, and the next line's number.
+/// The live bubbles by speaker guid, at most one per unit, their stacking, and the next line's
+/// number.
 #[derive(Resource, Default)]
 struct Bubbles {
     live: HashMap<u64, Bubble>,
+    /// The stacking, farthest first (the list at `0xb6f038`); the index is the frame level.
+    stack: Vec<u64>,
+    /// The camera position the stack was last sorted from (`0xb6eff0`, held once `0xb6effc` is
+    /// set).
+    eye: Option<Vec3>,
     next_line: u64,
+}
+
+impl Bubbles {
+    /// The stacking step of the bubble pass (`0x4b1060`). The camera moved when any coordinate
+    /// differs from the held one, compared exactly (`0x4b10a5`–`0x4b10d3`); then every bubble is
+    /// re-stacked, else only a new line (`0x4b11c7`), each from the held position to its speaker
+    /// (`pos`), into the stack before the first one nearer (`0x4b1360`). The rest keep their
+    /// place, so a speaker walking under a still camera keeps its stacking.
+    fn restack(&mut self, camera: Option<Vec3>, pos: impl Fn(u64) -> Option<Vec3>) {
+        let moved = camera.is_some() && camera != self.eye;
+        if moved {
+            self.eye = camera;
+        }
+        let Self {
+            live, stack, eye, ..
+        } = self;
+        stack.retain(|g| live.contains_key(g));
+        let mut fresh: Vec<(u64, u64)> = live
+            .iter()
+            .filter(|(g, _)| !stack.contains(g))
+            .map(|(g, b)| (b.line, *g))
+            .collect();
+        fresh.sort_unstable();
+        stack.extend(fresh.into_iter().map(|(_, g)| g));
+        // Pulled out in stack order, then each re-inserted (`0x4b11d7`, `0x4b1220`).
+        let dirty: Vec<u64> = stack
+            .iter()
+            .copied()
+            .filter(|g| moved || live[g].depth.is_none())
+            .collect();
+        stack.retain(|g| !dirty.contains(g));
+        for g in dirty {
+            let Some(at) = pos(g) else {
+                continue;
+            };
+            let d = eye.map_or(0.0, |e| e.distance_squared(at));
+            if let Some(b) = live.get_mut(&g) {
+                b.depth = Some(d);
+            }
+            let slot = stack
+                .iter()
+                .position(|o| live[o].depth.is_some_and(|od| od < d))
+                .unwrap_or(stack.len());
+            stack.insert(slot, g);
+        }
+    }
 }
 
 /// This frame's live bubbles for the widget layer, farthest from the camera first, and the sizes
@@ -425,6 +480,7 @@ fn drive_bubbles(
                 born: now,
                 lift,
                 fade: Fade::spawn(now),
+                depth: None,
             },
         );
     }
@@ -444,23 +500,16 @@ fn drive_bubbles(
 
     let cam = camera.single().ok();
     let window = window.single().ok();
-    // The order is the frame levels (`0x4b1360`, stamped `0x4b12d5`-`0x4b1312`): the camera's
-    // distance to the speaker, farthest first. The reference re-sorts only when the camera moved
-    // or a line spawned (`0x4b10a5`-`0x4b10d3`, `0x4b11c7`); this sorts every frame, so a speaker
-    // moving under a still camera can re-stack here and not there.
-    let mut order: Vec<(u64, f32)> = bubbles
-        .live
-        .keys()
-        .filter_map(|guid| {
-            let (entity, _, tf) = find(*guid)?;
+    // The order is the frame levels (`0x4b1360`, stamped `0x4b12d5`-`0x4b1312`), farthest from
+    // the camera first.
+    bubbles.restack(cam.map(|(_, pose)| pose.translation), |guid| {
+        find(guid).map(|(_, _, tf)| tf.translation)
+    });
+    for guid in &bubbles.stack {
+        if let Some((entity, _, _)) = find(*guid) {
             active.0.insert(entity);
-            let d2 = cam.map_or(0.0, |(_, pose)| {
-                pose.translation.distance_squared(tf.translation)
-            });
-            Some((*guid, d2))
-        })
-        .collect();
-    stack_sort(&mut order);
+        }
+    }
 
     // Sizes from the camera's viewport, else the window's; with neither there is nothing to lay
     // out against.
@@ -481,9 +530,10 @@ fn drive_bubbles(
         text_height: text_px(TEXT_H, basis) / seam,
         device_px: seam * scale,
     });
-    feed.states = order
+    feed.states = bubbles
+        .stack
         .iter()
-        .filter_map(|(guid, _)| {
+        .filter_map(|guid| {
             let b = bubbles.live.get(guid)?;
             let (entity, _, tf) = find(*guid)?;
             // The anchor (`0x4b0c30`), from this frame's `Transform` and the latched lift.
@@ -556,12 +606,6 @@ fn trace_seat(
             scr.y,
         ),
     );
-}
-
-/// Farthest camera distance first, so the index is the frame level. Ties break on guid, as the
-/// reference keeps its order across an exact tie and a `HashMap` walk cannot.
-fn stack_sort(order: &mut [(u64, f32)]) {
-    order.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
 }
 
 /// The bubble stage; [`crate::nameplates`] orders after it to read [`BubblesActive`].
@@ -859,16 +903,62 @@ mod tests {
         );
     }
 
-    /// Farthest camera distance first, guid breaking an exact tie.
-    #[test]
-    fn the_stack_is_sorted_farthest_first() {
-        let mut p = vec![(7, 25.0), (3, 400.0), (9, 1.0), (2, 400.0)];
-        stack_sort(&mut p);
-        assert_eq!(
-            p.iter().map(|q| q.0).collect::<Vec<_>>(),
-            vec![2, 3, 7, 9],
-            "farthest first; the 400-yd² pair ordered by guid"
+    /// A line spoken by `guid` into `b`, as the spawn gate leaves it.
+    fn speak(b: &mut Bubbles, guid: u64) {
+        let line = b.next_line;
+        b.next_line += 1;
+        b.live.insert(
+            guid,
+            Bubble {
+                line,
+                text: String::new(),
+                color: [1.0; 3],
+                born: 0,
+                duration: 0,
+                lift: 0.0,
+                fade: Fade::spawn(0),
+                depth: None,
+            },
         );
+    }
+
+    /// Farthest from the camera first, an exact tie keeping the earlier line in front of the
+    /// later; the stack stands while the camera does, whoever walks, and a camera move re-sorts.
+    #[test]
+    fn the_stack_resorts_on_a_camera_move_or_a_new_line_only() {
+        let mut at: HashMap<u64, Vec3> = HashMap::from([
+            (1, Vec3::new(5.0, 0.0, 0.0)),
+            (2, Vec3::new(20.0, 0.0, 0.0)),
+            (3, Vec3::new(20.0, 0.0, 0.0)),
+        ]);
+        let mut b = Bubbles::default();
+        for g in [1, 2, 3] {
+            speak(&mut b, g);
+        }
+        let mut camera = Vec3::ZERO;
+        b.restack(Some(camera), |g| at.get(&g).copied());
+        assert_eq!(b.stack, [2, 3, 1], "farthest first; the tie in line order");
+
+        // Speaker 1 walks behind the others under a still camera.
+        at.insert(1, Vec3::new(40.0, 0.0, 0.0));
+        b.restack(Some(camera), |g| at.get(&g).copied());
+        assert_eq!(b.stack, [2, 3, 1], "a still camera keeps the stacking");
+
+        // A new line stacks at its own distance; the others keep their stale ones.
+        speak(&mut b, 4);
+        at.insert(4, Vec3::new(10.0, 0.0, 0.0));
+        b.restack(Some(camera), |g| at.get(&g).copied());
+        assert_eq!(b.stack, [2, 3, 4, 1]);
+
+        // The camera moves, by any amount: every bubble re-sorts.
+        camera.y = 1e-3;
+        b.restack(Some(camera), |g| at.get(&g).copied());
+        assert_eq!(b.stack, [1, 2, 3, 4]);
+
+        // A bubble that ends leaves the stack.
+        b.live.remove(&2);
+        b.restack(Some(camera), |g| at.get(&g).copied());
+        assert_eq!(b.stack, [1, 3, 4]);
     }
 
     /// 16 px at 1024-wide 4:3 (width/64), damped past the plate knee.
