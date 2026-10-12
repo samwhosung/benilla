@@ -12,9 +12,11 @@
 //! results 0–2 (the table at `0x46aaac`) log their line, missing, corrupt or modified (`0x836fb8`,
 //! `0x836f98`, `0x836f78`), and load nothing; an MD5 mismatch logs no line, its frames already
 //! built, and skips `FRAMES_LOADED`. Either way the client quits with
-//! error 9 (`0x401560`: the exit code, then the quit post `ForceQuit` makes with code 0). benilla
-//! checks no signature, as for `FrameXML.toc` (`0x48ff4d`): the chain's toc always loads and
-//! `FRAMES_LOADED` follows.
+//! error 9 (`0x401560`: the exit code, then the quit post `ForceQuit` makes with code 0).
+//! Deviation: no signature or digest check (`0x46a90b`, `0x46a9d3`, `0x401560(9)`), so the chain's
+//! toc always loads and `FRAMES_LOADED` follows, because the check verifies Blizzard's signature
+//! with a key carried in the client binary, which benilla does not ship, and a modified interface
+//! file is loaded rather than refused.
 //!
 //! The screen comes after the build: at startup the reference fires `SET_GLUE_SCREEN` with
 //! `"movie"` while the `movie` CVar is 1 (clearing it), else `"login"` (`0x402b3b`–`0x402b65`);

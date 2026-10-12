@@ -167,6 +167,11 @@ pub(crate) fn load_default_ui(script: &UiScript) -> Vec<String> {
 /// reports `"Couldn't open %s"` (`0x846ff4`) at severity 2 (`0x6edc3f`) and returns 0, which
 /// `UI_Init` never reads (`0x48fff2`), going on to `Bindings.xml` and the addons. benilla goes on
 /// the same way and reports it as a load failure, an `ERROR` line and a row in `/errors`.
+///
+/// Deviation: no `FrameXML.toc` signature check, where `UI_Init` loads on a failed one and then
+/// quits (`0x401560(0xa)` at `0x48ff90`), because the check verifies Blizzard's signature with a key
+/// carried in the client binary, which benilla does not ship, and a modified interface file is
+/// loaded rather than refused.
 pub(super) fn load_core(script: &UiScript) -> Vec<String> {
     let Some(core) = reference_ui::core() else {
         let e = format!(
