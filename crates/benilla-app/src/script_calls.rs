@@ -1246,4 +1246,53 @@ mod tests {
         assert_eq!(script.cursor_item().map(|i| i.guid), Some(HELD));
         assert_eq!(script.take_ui_errors(), vec!["ERR_EQUIP_TRADE_ITEM"]);
     }
+
+    /// The bar's item use reaches `CGItem::Use` (`0x4e607b`), whose control gate (`0x5d8eaa`) ends
+    /// it with `ERR_CLIENT_LOCKED_OUT` unless the item's on-use spell is one that passes.
+    #[test]
+    fn a_bar_item_use_meets_the_control_gate() {
+        let mut f = frame(false);
+        with_potion(
+            &mut f,
+            benilla_protocol::messages::ItemInfo {
+                use_spell: Some(benilla_protocol::messages::ItemUseSpell {
+                    spell_id: 4321,
+                    cooldown_ms: -1,
+                    category: 0,
+                    category_cooldown_ms: -1,
+                }),
+                ..crate::items::test_template("A Trinket")
+            },
+        );
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_player_control(false);
+        let _ = f.rx.try_iter().count();
+        run(&mut f, "UseAction(1)");
+        assert_eq!(f.rx.try_iter().count(), 0, "nothing is sent");
+        let keys = |f: &Frame| -> Vec<&'static str> {
+            f.app
+                .world()
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .0
+                .iter()
+                .map(|e| e.key)
+                .collect()
+        };
+        assert_eq!(keys(&f), vec!["ERR_CLIENT_LOCKED_OUT"]);
+
+        // The spell is one the app fed as passing: the gate lets the use on to the cast.
+        f.app
+            .world_mut()
+            .resource_mut::<crate::ui_action::UiErrorKeys>()
+            .0
+            .clear();
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_control_bypass([4321].into());
+        run(&mut f, "UseAction(1)");
+        assert!(keys(&f).is_empty(), "{:?}", keys(&f));
+    }
 }

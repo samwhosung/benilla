@@ -45,6 +45,14 @@ pub(crate) fn item_use_refusal(
 }
 
 impl super::UiScript {
+    /// The dispatcher's requirement and control gates for a use the app sends itself, the bar's
+    /// item (`0x4e607b`), the soulstone (`0x48ae7d`) and a confirmed bind-on-use (`0x5d92c1`), all
+    /// of which call `0x5d8d00` past its quest-starter arm: the plain fork with a cached template.
+    /// `item_id` 0 passes.
+    pub fn item_use_refusal(&self, item_id: u32, use_spell: u32) -> Option<&'static str> {
+        item_use_refusal(&self.model_ref(), UseFork::Plain, item_id, use_spell, true)
+    }
+
     /// The on-use spells that pass the control gate right now (`0x5d8ec0`-`0x5d8f6a`), computed by
     /// the app off the caster's flags and auras; empty with control.
     pub fn set_control_bypass(&mut self, spells: std::collections::HashSet<u32>) {

@@ -887,6 +887,59 @@ mod tests {
             .is_empty());
     }
 
+    /// The soulstone's use is `CGItem::Use` (`0x48ae7d`): without control it meets the control gate
+    /// (`0x5d8eaa`) and ends with `ERR_CLIENT_LOCKED_OUT`, the cancel having run first.
+    #[test]
+    fn the_soulstone_use_meets_the_control_gate() {
+        let (mut app, rx) = soulstone_app();
+        // Not a quest-starter, whose arm runs ahead of the gates.
+        app.world_mut()
+            .resource_mut::<crate::items::Items>()
+            .insert_template(
+                5232,
+                Some(benilla_protocol::messages::ItemInfo {
+                    spells: vec![benilla_protocol::messages::ItemSpellEntry {
+                        index: 0,
+                        spell_id: SELF_RES,
+                        trigger: 0,
+                        charges: -1,
+                        cooldown_ms: -1,
+                        category: 0,
+                        category_cooldown_ms: -1,
+                    }],
+                    use_spell: Some(benilla_protocol::messages::ItemUseSpell {
+                        spell_id: SELF_RES,
+                        cooldown_ms: -1,
+                        category: 0,
+                        category_cooldown_ms: -1,
+                    }),
+                    ..crate::items::test_template("Minor Soulstone")
+                }),
+            );
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_player_control(false);
+        app.world_mut()
+            .resource_mut::<crate::spell::PendingCast>()
+            .arm(FIREBALL, std::time::Instant::now(), true);
+        let _ = rx.try_iter().count();
+        press_soulstone(&mut app);
+
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(
+            matches!(sent[..], [ClientCommand::CancelCast { .. }]),
+            "only the cancel goes out: {sent:?}"
+        );
+        let keys: Vec<_> = app
+            .world()
+            .resource::<crate::ui_action::UiErrorKeys>()
+            .0
+            .iter()
+            .map(|e| e.key)
+            .collect();
+        assert_eq!(keys, vec!["ERR_CLIENT_LOCKED_OUT"]);
+    }
+
     /// The cancel runs before the item use's own gates, so a locked stone still cancels
     /// (`0x48ae6b` precedes `0x5d8d32`).
     #[test]

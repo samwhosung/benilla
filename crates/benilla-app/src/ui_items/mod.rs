@@ -658,6 +658,15 @@ pub(crate) fn send_item_use(
     // Passed in, not carried on `CastLadder`, so no system reaches it twice.
     ui_errors: &mut crate::ui_action::UiErrorKeys,
 ) -> bool {
+    // `0x5d8d00`'s requirement check (`0x5d8e0e`) and control gate (`0x5d8eaa`), past the
+    // quest-starter arm (`0x5d8dcc`), which runs before them.
+    if it.start_quest == 0 {
+        if let Some(key) = script.item_use_refusal(it.entry, it.use_spell.unwrap_or(0)) {
+            debug!("ui_items: item use refused — {key}");
+            ui_errors.0.push(crate::ui_action::UiError::key(key));
+            return false;
+        }
+    }
     // The toggle predicate over the caster's live aura slots.
     let aura_cancels = |spell: u32| {
         let Some(d) = ladder.spells.as_ref().and_then(|s| s.catalog.get(spell)) else {
