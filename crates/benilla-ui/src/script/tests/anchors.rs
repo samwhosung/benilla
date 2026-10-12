@@ -350,3 +350,98 @@ fn geometry_answers_within_the_call_stack_that_moved_it() {
         (Some(250.0), Some(85.0))
     );
 }
+
+/// `GetWidth`/`GetHeight` (`0x7a1e00`, `0x7a2030`) answer the size the object was given, whatever
+/// its anchors span; only a zero size answers the rect's span, which is not divided by the
+/// effective scale (`0x41ad70`/`0x41ae40` only, where `GetLeft` divides at `0x7a1a63`), else 0.
+#[test]
+fn get_width_answers_the_set_size_else_the_rect_span_unscaled() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        SizeBase = CreateFrame("Frame", "SizeBase")
+        SizeBase:SetPoint("BOTTOMLEFT", 0, 0)
+        SizeBase:SetWidth(400); SizeBase:SetHeight(200)
+        SizeSet = CreateFrame("Frame", "SizeSet")
+        SizeSet:SetAllPoints(SizeBase)
+        SizeSet:SetWidth(100)
+        SizeTex = SizeSet:CreateTexture("SizeTex")
+        SizeTex:SetAllPoints(SizeSet)
+        SizeHalf = CreateFrame("Frame", "SizeHalf")
+        SizeHalf:SetScale(0.5)
+        SizeHalf:SetAllPoints(SizeBase)
+        SizeLoose = CreateFrame("Frame", "SizeLoose")
+        SizeLooseTex = SizeLoose:CreateTexture("SizeLooseTex")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let num = |e: &str| s.eval::<f64>(&format!("return {e}")).unwrap();
+    assert_eq!(
+        num("SizeSet:GetWidth()"),
+        100.0,
+        "the set width, not the span"
+    );
+    assert_eq!(num("SizeSet:GetRight() - SizeSet:GetLeft()"), 400.0);
+    assert_eq!(num("SizeSet:GetHeight()"), 200.0, "no set height: the span");
+    assert_eq!(
+        num("SizeTex:GetWidth()"),
+        400.0,
+        "a size-less texture: its rect"
+    );
+    assert_eq!(num("SizeTex:GetHeight()"), 200.0);
+    assert_eq!(
+        num("SizeHalf:GetWidth()"),
+        400.0,
+        "the span, not over the scale"
+    );
+    assert_eq!(num("SizeHalf:GetRight() - SizeHalf:GetLeft()"), 800.0);
+    assert_eq!(num("SizeLoose:GetWidth()"), 0.0, "no size and no rect");
+    assert_eq!(num("SizeLooseTex:GetHeight()"), 0.0);
+}
+
+/// A set size answers without a resolve (`0x7a1e99`–`0x7a1ea5`), so a pending resolve stays
+/// pending and its `OnSizeChanged` waits for the drain; a zero size resolves it inside the read.
+#[test]
+fn get_width_resolves_only_at_a_zero_size() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        SizeAnchor = CreateFrame("Frame", "SizeAnchor")
+        SizeAnchor:SetPoint("BOTTOMLEFT", 0, 0)
+        SizeAnchor:SetWidth(300); SizeAnchor:SetHeight(100)
+        SizeFixed = CreateFrame("Frame", "SizeFixed")
+        SizeFixed:SetPoint("BOTTOMLEFT", 0, 0)
+        SizeFixed:SetWidth(10); SizeFixed:SetHeight(10)
+        SizeSpan = CreateFrame("Frame", "SizeSpan")
+        SizeSpan:SetAllPoints(SizeAnchor)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(
+        r#"
+        SizeFixed:SetScript("OnSizeChanged", function() table.insert(log, "fixed") end)
+        SizeSpan:SetScript("OnSizeChanged", function() table.insert(log, "span") end)
+        SizeFixed:SetWidth(20)
+        table.insert(log, "w " .. SizeFixed:GetWidth())
+        SizeSpan:ClearAllPoints()
+        SizeSpan:SetPoint("BOTTOMLEFT", SizeAnchor, "BOTTOMLEFT", 0, 0)
+        SizeSpan:SetPoint("TOPRIGHT", SizeAnchor, "TOPRIGHT", -100, 0)
+        table.insert(log, "w " .. SizeSpan:GetWidth())
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "w 20,span,w 200"
+    );
+    s.resolve();
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "w 20,span,w 200,fixed"
+    );
+}

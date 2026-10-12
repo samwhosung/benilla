@@ -1907,16 +1907,23 @@ fn a_broad_search_scrolls_the_page_instead_of_overflowing_it() {
             "{f} stays away while the page fits"
         );
     }
-    let page_h: f32 = s
-        .eval("return BenillaOptionsFrameContainerScroll:GetHeight()")
+    // The page rect in the window's units, from its edges: the scroll is sized by its anchors,
+    // so its `GetWidth`/`GetHeight` answer the span before the window's scale divides it.
+    let (page_w, page_h): (f32, f32) = s
+        .eval(
+            "local sf = BenillaOptionsFrameContainerScroll \
+             return sf:GetRight() - sf:GetLeft(), sf:GetTop() - sf:GetBottom()",
+        )
+        .unwrap();
+    let (body_w, body_h): (f32, f32) = s
+        .eval(
+            "return BenillaOptionsFrameContainerBody:GetWidth(), \
+             BenillaOptionsFrameContainerBody:GetHeight()",
+        )
         .unwrap();
     assert!(
-        (s.eval::<f32>("return BenillaOptionsFrameContainerBody:GetHeight()")
-            .unwrap()
-            - page_h)
-            .abs()
-            < 0.5,
-        "the body is the page rect when nothing overflows"
+        (body_w - page_w).abs() < 0.5 && (body_h - page_h).abs() < 0.5,
+        "the body is the page rect when nothing overflows: {body_w}x{body_h} vs {page_w}x{page_h}"
     );
 
     s.run("BenillaOptionsFrameSearchBox:SetText(\"e\")")

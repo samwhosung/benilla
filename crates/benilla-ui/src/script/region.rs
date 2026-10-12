@@ -924,13 +924,13 @@ pub(super) fn region_set_point(lua: &Lua, this: &Table, args: &MultiValue) -> ml
     Ok(())
 }
 
-/// `Region:GetWidth()`/`GetHeight()` (`0x7a1e00`, `0x7a2030`): the geometry-vtable call the rect
-/// resolver also makes (`0x767579`), so the Lua size is the rect's. Per axis, a Texture answers
-/// its authored size unless exactly 0, else its texel extent (`0x770720`, `0x770790`). A
-/// FontString answers its authored size unless 0 (`0x77294a`), else its measure, either floored
-/// at one unit (`0x772930`, `0x772a60`); the width is unwrapped, as `GetStringWidth` gives it
-/// (`0x772890`, `0x79e510`), the height wrapped (`0x7729b0`). A title region answers its field
-/// (`0x768420`, `0x768410`).
+/// A region's own size, the geometry-vtable call (`+0x1c`/`+0x20`) the rect resolver also makes
+/// (`0x767579`), which `GetWidth`/`GetHeight` answer when non-zero (`0x7a1e00`, `0x7a2030`). Per
+/// axis, a Texture answers its authored size unless exactly 0, else its texel extent (`0x770720`,
+/// `0x770790`). A FontString answers its authored size unless 0 (`0x77294a`), else its measure,
+/// either floored at one unit (`0x772930`, `0x772a60`); the width is unwrapped, as
+/// `GetStringWidth` gives it (`0x772890`, `0x79e510`), the height wrapped (`0x7729b0`). A title
+/// region answers its field (`0x768420`, `0x768410`).
 pub(super) fn measured_wh(lua: &Lua, this: &Table) -> mlua::Result<(f32, f32)> {
     let rh = region_handle_of(lua, this)?;
     // Measures this tick when a host font engine is installed; a no-op for a Texture or a
