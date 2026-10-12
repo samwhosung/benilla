@@ -3,9 +3,11 @@
 //! (`0x46b36f`) and the create screen (`0x4711e2`, `0x4719ab`) call it, so it is one function.
 //!
 //! `0x6c9ae0` runs the validator with no extra characters (`0x6c9af5 xor edx,edx`) and all three
-//! list flags set (`0x6c9ae6`-`0x6c9aea`). For the enUS locale (index 0, `0x8558a4`) both of the
-//! locale's charsets are 1 (`0x6c9a70`, table `0x86ca0c`); benilla is enUS-only, so charset 1 is the
-//! only one built, and its cap is 12 units (`0x6c9b07`).
+//! list flags set (`0x6c9ae6`-`0x6c9aea`). The charsets come from `Wow.ini`'s `[WoW Config]`
+//! `Region` when it is 1 to 5 (`0x4024ac` → `[0x882730]`, stored at `0x6c91b8` to `[0x86c9e0]`,
+//! picked from `0x86c9dc`), else from the locale: for enUS (index 0, `0x8558a4`) both are 1
+//! (`0x6c9a70`, table `0x86ca0c`). benilla builds the enUS case with no `Region`, so charset 1 is
+//! the only one built, and its cap is 12 units (`0x6c9b07`).
 //!
 //! The checks, in the order the bytes make them, which decides the code of a name failing two:
 //!
