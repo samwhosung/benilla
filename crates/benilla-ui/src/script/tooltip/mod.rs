@@ -378,6 +378,7 @@ pub(in crate::script) fn show_override(lua: &Lua, h: FrameHandle) {
         let live = tip_mut(&mut model, h).is_ok_and(|t| t.owner.is_some() && t.num_lines > 0);
         if live {
             full_alpha(&mut model, h);
+            owe_relayout(&mut model, h);
         }
         live
     };
@@ -663,7 +664,19 @@ pub(super) fn append_line(
     if let Ok(t) = tip_mut(&mut model, h) {
         t.num_lines = n;
     }
+    owe_relayout(&mut model, h);
     Ok(())
+}
+
+/// A line writer or the show ran the relayout (`0x530640`, from `0x52ad59`, `0x52b029`,
+/// `0x52e5ae`, `0x52f869`, `0x530615`, `0x530aad`), which does nothing without an owner
+/// (`0x530651`) and else ends in an unconditional invalidate (`0x530a52`).
+pub(super) fn owe_relayout(model: &mut Model, h: FrameHandle) {
+    if let Ok(t) = tip_mut(model, h) {
+        if t.owner.is_some() {
+            t.relayout_owed = true;
+        }
+    }
 }
 
 mod verbs;
@@ -735,6 +748,16 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         if cursor_mode {
             cursor_anchor(model, h);
         }
+        // The relayout's closing invalidate (`0x530a52`), whatever it computed. Its own writes
+        // below push when they move the plate; past those, a re-resolve gives back the rect the
+        // plate holds unless that rect is stale, so only then is the invalidate paid here.
+        let owed = tip_mut(model, h).is_ok_and(|t| std::mem::take(&mut t.relayout_owed));
+        if owed && model.frame_holds_stale(h) {
+            model.note_layout_frame_write(h);
+            if let Some(&id) = model.frame_to_id.get(&h) {
+                model.layout_pending.push(id);
+            }
+        }
         let (num, lefts, rights, min_w, pad_w) = match model.arena.frame(h).map(|f| &f.kind_state) {
             Some(KindState::Tooltip(t)) => (
                 t.num_lines,
@@ -785,7 +808,9 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         // that these inputs changed. The size goes through `SetWidth`/`SetHeight` (`0x530a2e`,
         // `0x530a39`), which invalidate the tooltip.
         model.note_layout_frame_write(h);
-        if moved || model.frame_holds_stale(h) {
+        // A size the measures moved since the relayout ran: benilla's measures land a tick after
+        // the line write, where the reference's relayout measured in the call.
+        if moved {
             if let Some(&id) = model.frame_to_id.get(&h) {
                 model.layout_pending.push(id);
             }

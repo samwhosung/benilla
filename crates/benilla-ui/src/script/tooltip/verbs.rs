@@ -151,6 +151,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 None => (String::new(), [1.0, 1.0, 1.0, 1.0]),
             };
             write_cell(&mut model, lh, &(current + &extra), color);
+            super::owe_relayout(&mut model, h);
             Ok(())
         })?,
     )?;

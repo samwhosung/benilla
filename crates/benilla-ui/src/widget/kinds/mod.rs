@@ -281,6 +281,9 @@ pub struct TooltipState {
     pub padding: f32,
     /// Line 1 came from XML (`ShoppingTooltipTemplate`), so later lines clone the previous fonts.
     pub xml_declared_lines: bool,
+    /// A relayout (`0x530640`) is owed: Show and the line writers run it with an owner, and it
+    /// ends by invalidating the plate (`0x530a52`). The layout pre-pass pays it.
+    pub relayout_owed: bool,
 }
 
 /// The plate's text inset: the stock template seats `TextLeft1` at TOPLEFT (10, −10).
