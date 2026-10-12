@@ -285,16 +285,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetTextColor",
         lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
+            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
+                let a = super::object::alpha_f32(lua, &a);
                 let (r, g, b) = (
                     super::object::tonumber_f32(lua, &r),
                     super::object::tonumber_f32(lua, &g),
                     super::object::tonumber_f32(lua, &b),
                 );
-                edit(lua, &this, |fo| {
-                    let keep = fo.color.map_or(1.0, |c| c[3]);
-                    fo.color = Some([r, g, b, a.unwrap_or(keep)]);
-                })
+                // Alpha is staged 1.0 (`0x79f59b`) and never read back, so a bare colour call
+                // resets it.
+                edit(lua, &this, |fo| fo.color = Some([r, g, b, a]))
             },
         )?,
     )?;
@@ -326,7 +326,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetShadowColor",
         lua.create_function(
             // Shape C on r, g, b (`Font:SetShadowColor 0x79f730`): never raises.
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
+            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
+                let a = super::object::alpha_f32(lua, &a);
                 let (r, g, b) = (
                     crate::script::object::tonumber_f32(lua, &r),
                     crate::script::object::tonumber_f32(lua, &g),
@@ -336,7 +337,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let offset = fo.shadow.map_or([0.0, 0.0], |s| s.offset);
                     fo.shadow = Some(FontShadow {
                         offset,
-                        color: [r, g, b, a.unwrap_or(1.0)],
+                        color: [r, g, b, a],
                     });
                 })
             },

@@ -43,6 +43,17 @@ pub(super) fn update(model: &mut Model, h: FrameHandle, elapsed: f32) {
     }
 }
 
+/// `lua_isnumber` (`0x6f34d0`) then `lua_tonumber` (`0x6f3620`): a number, or a string Lua reads
+/// as one. The message-frame verbs gate every colour channel and id on it.
+pub(super) fn is_number(lua: &mlua::Lua, v: &mlua::Value) -> Option<f64> {
+    lua.coerce_number(v.clone()).ok().flatten()
+}
+
+/// A channel the verb has already gated with [`is_number`], as the `f32` it stores.
+pub(super) fn channel(lua: &mlua::Lua, v: &mlua::Value) -> f32 {
+    is_number(lua, v).map_or(0.0, |n| n as f32)
+}
+
 /// `AddMessage`'s text; `None` means the whole call does nothing, no line and no error. Both
 /// bindings (`0x795590`, `0x792900`) jump to their epilogue (`0x79582b`, `0x792b81`) when
 /// `lua_isstring` (`0x6f3510`) fails, `lua_tostring` (`0x6f3690`) gives NULL or the string is empty

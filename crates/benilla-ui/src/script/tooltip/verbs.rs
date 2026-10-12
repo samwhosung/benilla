@@ -10,8 +10,8 @@ use crate::script::Model;
 use crate::widget::{KindState, TooltipAnchor, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
 
 use super::{
-    append_line, clear, parse_line_color, parse_line_tail, set_owner_core, set_shown, text_of,
-    tip_mut, with_tip, wrap_arg, write_cell, REG_TOOLTIP_METHODS,
+    append_line, clear, color_num, parse_line_color, parse_line_tail, set_owner_core, set_shown,
+    text_of, tip_mut, with_tip, wrap_arg, write_cell, REG_TOOLTIP_METHODS,
 };
 
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -115,12 +115,10 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 ));
             }
             let text = text_of(args.first());
-            let [r, g, b, _] = parse_line_color(args.get(1), args.get(2), args.get(3));
-            let a = match args.get(4) {
-                Some(Value::Number(n)) => *n as f32,
-                Some(Value::Integer(i)) => *i as f32,
-                _ => 1.0,
-            };
+            let [r, g, b, _] = parse_line_color(lua, args.get(1), args.get(2), args.get(3));
+            // The alpha is its own `lua_isnumber` gate (`0x531ddc`'s neighbour at idx 6), so a
+            // numeric string counts.
+            let a = color_num(lua, args.get(4)).unwrap_or(1.0);
             let wrap = wrap_arg(args.get(5));
             clear(lua, h);
             append_line(lua, &this, (text, [r, g, b, a]), None, wrap)?;
@@ -161,7 +159,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "AddLine",
         lua.create_function(|lua, (this, args): (Table, Variadic<Value>)| {
             let text = text_of(args.first());
-            let (color, wrap) = parse_line_tail(&args[1.min(args.len())..]);
+            let (color, wrap) = parse_line_tail(lua, &args[1.min(args.len())..]);
             append_line(lua, &this, (text, color), None, wrap)
         })?,
     )?;
@@ -171,8 +169,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "AddDoubleLine",
         lua.create_function(
             |lua, (this, tl, tr, cl): (Table, Value, Value, Variadic<Value>)| {
-                let left_color = parse_line_color(cl.first(), cl.get(1), cl.get(2));
-                let right_color = parse_line_color(cl.get(3), cl.get(4), cl.get(5));
+                let left_color = parse_line_color(lua, cl.first(), cl.get(1), cl.get(2));
+                let right_color = parse_line_color(lua, cl.get(3), cl.get(4), cl.get(5));
                 let right = text_of(Some(&tr));
                 // The line core (`0x530270`) clears the flag when the right text is non-empty
                 // (`0x530284`), so only a double line with an empty right side can wrap.

@@ -757,16 +757,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetTextColor",
         lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
+            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
+                let a = super::object::alpha_f32(lua, &a);
                 // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
                 let (r, g, b) = (
                     super::object::tonumber_f32(lua, &r),
                     super::object::tonumber_f32(lua, &g),
                     super::object::tonumber_f32(lua, &b),
                 );
-                with_button(lua, &this, |bs| {
-                    bs.normal_color = Some([r, g, b, a.unwrap_or(1.0)])
-                })
+                with_button(lua, &this, |bs| bs.normal_color = Some([r, g, b, a]))
             },
         )?,
     )?;
@@ -790,32 +789,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     m.set(
         "SetHighlightTextColor",
         lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
+            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
+                let a = super::object::alpha_f32(lua, &a);
                 // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
                 let (r, g, b) = (
                     super::object::tonumber_f32(lua, &r),
                     super::object::tonumber_f32(lua, &g),
                     super::object::tonumber_f32(lua, &b),
                 );
-                with_button(lua, &this, |bs| {
-                    bs.highlight_color = Some([r, g, b, a.unwrap_or(1.0)])
-                })
+                with_button(lua, &this, |bs| bs.highlight_color = Some([r, g, b, a]))
             },
         )?,
     )?;
     m.set(
         "SetDisabledTextColor",
         lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
+            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
+                let a = super::object::alpha_f32(lua, &a);
                 // Shape C on the channels (`Button:SetTextColor 0x780ee0`, `2=C 3=C 4=C 5=B`).
                 let (r, g, b) = (
                     super::object::tonumber_f32(lua, &r),
                     super::object::tonumber_f32(lua, &g),
                     super::object::tonumber_f32(lua, &b),
                 );
-                with_button(lua, &this, |bs| {
-                    bs.disabled_color = Some([r, g, b, a.unwrap_or(1.0)])
-                })
+                with_button(lua, &this, |bs| bs.disabled_color = Some([r, g, b, a]))
             },
         )?,
     )?;

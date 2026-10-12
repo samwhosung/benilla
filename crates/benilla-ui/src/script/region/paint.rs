@@ -3,7 +3,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::script::object::{draw_layer_from_str, draw_layer_name, tonumber_f32};
+use crate::script::object::{alpha_f32, draw_layer_from_str, draw_layer_name, tonumber_f32};
 use crate::script::{BlendMode, Model, TexCoords};
 
 use super::region_handle_of;
@@ -36,13 +36,17 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // SetVertexColor (`0x79abd0`) reads r, g and b with a bare `lua_tonumber`, so nil or a table is
-    // 0 and never raises; stock `QuestLogFrame.lua:337` can pass three nils. A missing alpha is 1
-    // here; the reference keeps the region's current alpha (read back at `0x79ac81`, copied over
-    // at `0x79adfe`/`0x79ae0a`), so there a three-argument call cannot restore opacity.
+    // 0 and never raises; stock `QuestLogFrame.lua:337` can pass three nils. The alpha is
+    // `lua_isnumber`-gated (`0x79ad4a`): anything else, a table included, stages 1.0 and never
+    // raises. Deviation: a missing alpha is 1 here; the reference re-tests the gate at the end
+    // (`0x79adfe`) and keeps the region's current alpha (read back at `0x79ac81`, copied over at
+    // `0x79ae0a`), so there a three-argument call cannot restore opacity, and stock
+    // `ActionButton_UpdateUsable` relies on it being restored.
     m.set(
         "SetVertexColor",
         lua.create_function(
-            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
+            |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
+                let a = alpha_f32(lua, &a);
                 let (r, g, b) = (
                     tonumber_f32(lua, &r),
                     tonumber_f32(lua, &g),
@@ -51,7 +55,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let rh = region_handle_of(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
-                d.vertex_color = Some([r, g, b, a.unwrap_or(1.0)]);
+                d.vertex_color = Some([r, g, b, a]);
                 // The slot `SetTextColor` writes on a FontString, so it overrides the font object.
                 d.font_explicit.color = true;
                 Ok(())
@@ -138,6 +142,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(
             |lua, (this, arg, g, b, a): (Table, Value, Value, Value, Value)| {
                 let rh = region_handle_of(lua, &this)?;
+                // `lua_isnumber` (`0x79bbd5`) picks the colour form, a numeric string included.
+                let colour_form = lua.coerce_number(arg.clone()).ok().flatten().is_some();
                 // Scoped so the model borrow ends before the layout touch; the path arm drops it
                 // mid-way to call the host probe.
                 let loaded = {
@@ -152,7 +158,6 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // the colour form (`0x770360`) never writes it.
                     let same_path = matches!((&arg, &data.texture),
                     (Value::String(s), Some(cur)) if s.to_str().is_ok_and(|s| *s == **cur));
-                    let colour_form = matches!(&arg, Value::Number(_) | Value::Integer(_));
                     if !same_path && !colour_form {
                         data.desaturated = false;
                     }
@@ -160,6 +165,24 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // each clears the other; neither touches the vertex colour (`+0xb8`), so a
                     // tint outlives its art.
                     let loaded = match &arg {
+                        // The colour form (`lua_isnumber`, `0x79bbd5`, so a numeric string too): g
+                        // and b are a bare `lua_tonumber`, and alpha is `lua_isnumber`-gated with
+                        // default 1.
+                        _ if colour_form => {
+                            let alpha = lua
+                                .coerce_number(a.clone())
+                                .ok()
+                                .flatten()
+                                .map_or(1.0, |n| n as f32);
+                            data.fill = Some([
+                                tonumber_f32(lua, &arg),
+                                tonumber_f32(lua, &g),
+                                tonumber_f32(lua, &b),
+                                alpha,
+                            ]);
+                            data.texture = None;
+                            true
+                        }
                         // "" clears, as nil does (stock `QuestLogFrame.lua:166`), and answers nil
                         // like a failed load; the reference's answer for "" is untraced.
                         Value::String(s) if s.to_str()?.is_empty() => {
@@ -188,24 +211,6 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                 data.fill = None;
                             }
                             resolvable && had_probe
-                        }
-                        // The colour form (`lua_isnumber`, `0x79bbd5`, so a numeric string too): g
-                        // and b are a bare `lua_tonumber`, and alpha is `lua_isnumber`-gated with
-                        // default 1.
-                        Value::Number(_) | Value::Integer(_) => {
-                            let alpha = lua
-                                .coerce_number(a.clone())
-                                .ok()
-                                .flatten()
-                                .map_or(1.0, |n| n as f32);
-                            data.fill = Some([
-                                tonumber_f32(lua, &arg),
-                                tonumber_f32(lua, &g),
-                                tonumber_f32(lua, &b),
-                                alpha,
-                            ]);
-                            data.texture = None;
-                            true
                         }
                         // nil clears, so the region draws nothing, and answers 1 (`0x79bb40`).
                         Value::Nil => {

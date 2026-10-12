@@ -152,3 +152,191 @@ fn texture_colour_form_coerces_numeric_strings() {
         Some([1.0, 0.5, 0.0, 0.25])
     );
 }
+
+/// A frame's message lines as `(text, rgb bytes, id, alpha)`.
+fn lines(s: &crate::script::UiScript, name: &str) -> Vec<(String, [u8; 3], u32, f32)> {
+    let m = s.model_ref();
+    let h = m.arena.lookup(name).expect("named frame");
+    m.arena
+        .frame(h)
+        .and_then(|f| f.kind_state.message_lines())
+        .map(|l| {
+            l.iter()
+                .map(|l| (l.text.clone(), l.color, l.id, l.alpha))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `MessageFrame:AddMessage` (`0x795590`) gates r, g and b with `lua_isnumber` (`0x79565f`-
+/// `0x795687`) and reads the alpha under its own gate (`0x795759`): "abc" or a table is white and
+/// opaque, a numeric string is its number.
+#[test]
+fn message_frame_add_message_gates_its_channels_with_is_number() {
+    let s = script();
+    s.run(r#"CreateFrame("MessageFrame", "MF")"#).unwrap();
+    s.run(
+        r#"
+        MF:AddMessage("a", "abc", 1, 1)
+        MF:AddMessage("b", "0.5", "1", "0", "0.5")
+        MF:AddMessage("c", 1, 1, 1, {})
+        MF:AddMessage("d", {}, 1, 1)
+    "#,
+    )
+    .unwrap();
+    let got = lines(&s, "MF");
+    assert_eq!(got[0].1, [255, 255, 255], "a failed gate is white");
+    assert_eq!(got[1].1, [128, 255, 0]);
+    assert_eq!(
+        got[1].3,
+        128.0 / 255.0,
+        "a numeric alpha string counts, byte-quantized"
+    );
+    assert_eq!(got[2].3, 1.0, "a table alpha stages 1.0");
+    assert_eq!(got[3].1, [255, 255, 255]);
+}
+
+/// `ScrollingMessageFrame:AddMessage` (`0x792900`) gates the same three, then reads the id at 6
+/// (or r's slot at 3 when the gate failed) through `lua_isnumber` and `_ftol`; `UpdateColorByID`
+/// (`0x7932b0`) gates all four and does nothing if any fails.
+#[test]
+fn scrolling_message_frame_gates_colour_and_id_with_is_number() {
+    let s = script();
+    s.run(r#"CreateFrame("ScrollingMessageFrame", "SMF")"#)
+        .unwrap();
+    s.run(
+        r#"
+        SMF:AddMessage("a", "0.5", "1", "0", "7")
+        SMF:AddMessage("b", "abc", 1, 1, 8)
+        SMF:AddMessage("c", "9")
+        SMF:AddMessage("d", 1, 1, 1, 2.9)
+    "#,
+    )
+    .unwrap();
+    let got = lines(&s, "SMF");
+    assert_eq!((got[0].1, got[0].2), ([128, 255, 0], 7), "numeric strings");
+    assert_eq!((got[1].1, got[1].2), ([255, 255, 255], 0), "id is r's slot");
+    assert_eq!((got[2].1, got[2].2), ([255, 255, 255], 9));
+    assert_eq!(got[3].2, 2, "the id is chopped by _ftol");
+    s.run(r#"SMF:UpdateColorByID(7, 0, "abc", 1)"#).unwrap();
+    assert_eq!(
+        lines(&s, "SMF")[0].1,
+        [128, 255, 0],
+        "a failed gate is a no-op"
+    );
+    s.run(r#"SMF:UpdateColorByID("7", "0", "0.5", 0)"#).unwrap();
+    assert_eq!(lines(&s, "SMF")[0].1, [0, 128, 0]);
+}
+
+/// The text-colour alpha is `lua_isnumber`-gated with default 1.0 (`0x781037`, `0x79f5a2`,
+/// `0x78fd77`, `0x79db17`, `0x79de97`, `0x79f802`): a table or a boolean neither raises nor
+/// sticks, and a numeric string is its number.
+#[test]
+fn colour_alphas_are_gated_not_raised() {
+    let s = script();
+    s.run(
+        r#"
+        B = CreateFrame("Button", "B")
+        F = CreateFrame("Frame", "F")
+        FS = F:CreateFontString("FS")
+        CreateFont("Fnt")
+        S = CreateFrame("StatusBar", "S") S:SetStatusBarTexture("Interface\\Bar")
+        T = F:CreateTexture("T")
+    "#,
+    )
+    .unwrap();
+    for (call, get) in [
+        ("B:SetTextColor(1, 1, 1, ARG)", "B:GetTextColor()"),
+        ("FS:SetTextColor(1, 1, 1, ARG)", "FS:GetTextColor()"),
+        ("FS:SetShadowColor(1, 1, 1, ARG)", "FS:GetShadowColor()"),
+        ("Fnt:SetTextColor(1, 1, 1, ARG)", "Fnt:GetTextColor()"),
+        ("Fnt:SetShadowColor(1, 1, 1, ARG)", "Fnt:GetShadowColor()"),
+        ("S:SetStatusBarColor(1, 1, 1, ARG)", "S:GetStatusBarColor()"),
+    ] {
+        for (arg, want) in [
+            (r#""0.5""#, 0.5),
+            ("{}", 1.0),
+            ("true", 1.0),
+            (r#""abc""#, 1.0),
+            ("nil", 1.0),
+            ("0.25", 0.25),
+        ] {
+            s.run(&call.replace("ARG", arg))
+                .unwrap_or_else(|e| panic!("{call} with {arg} raised: {e}"));
+            let a = s
+                .eval::<f64>(&format!("local _, _, _, a = {get} return a"))
+                .unwrap();
+            assert_eq!(a, want, "{call} with {arg}");
+        }
+    }
+    // A Font object's colour is replaced whole (`0x79f5f5`...`0x79f65f`): a bare call resets the
+    // alpha rather than keeping it.
+    s.run("Fnt:SetTextColor(1, 1, 1, 0.25) Fnt:SetTextColor(1, 1, 1)")
+        .unwrap();
+    assert_eq!(
+        s.eval::<f64>("local _, _, _, a = Fnt:GetTextColor() return a")
+            .unwrap(),
+        1.0
+    );
+}
+
+/// `SetVertexColor`'s alpha is `lua_isnumber`-gated (`0x79ad4a`) and stages 1.0: a table or a word
+/// neither raises nor sticks, and a numeric string is its number. (The engine does not keep the
+/// region's old alpha as `0x79adfe` does; see the comment at the binding.)
+#[test]
+fn set_vertex_color_alpha_is_gated_not_raised() {
+    let s = script();
+    s.run(r#"F = CreateFrame("Frame", "F") T = F:CreateTexture("T")"#)
+        .unwrap();
+    let alpha = || {
+        s.eval::<f64>("local _, _, _, a = T:GetVertexColor() return a")
+            .unwrap()
+    };
+    for (arg, want) in [
+        ("0.5", 0.5),
+        (r#""0.25""#, 0.25),
+        ("{}", 1.0),
+        ("true", 1.0),
+        (r#""x""#, 1.0),
+        ("nil", 1.0),
+    ] {
+        s.run(&format!("T:SetVertexColor(0, 0, 0, {arg})"))
+            .unwrap_or_else(|e| panic!("with {arg}: {e}"));
+        assert_eq!(alpha(), want, "SetVertexColor(0, 0, 0, {arg})");
+    }
+}
+
+/// `lua_isnumber` on the first argument picks `SetTexture`'s colour form (`0x79bbd5`), so a
+/// numeric string is a fill, not a path.
+#[test]
+fn set_texture_takes_a_numeric_string_as_a_colour() {
+    let s = script();
+    s.run(r#"F = CreateFrame("Frame", "F") T = F:CreateTexture("T")"#)
+        .unwrap();
+    s.run(r#"T:SetTexture("1", "0.5", 0)"#).unwrap();
+    let t: mlua::Table = s.lua().globals().get("T").unwrap();
+    let rh = crate::script::region::region_handle_of(s.lua(), &t).unwrap();
+    let m = s.model_ref();
+    let d = m.region_data.get(&rh).unwrap();
+    assert_eq!(d.fill, Some([1.0, 0.5, 0.0, 1.0]));
+    assert_eq!(d.texture, None, "a numeric string is not a path");
+}
+
+/// `GameTooltip:SetText`'s alpha (`0x531d23`) is `lua_isnumber`-gated too.
+#[test]
+fn tooltip_set_text_alpha_accepts_a_numeric_string() {
+    let s = script();
+    s.run(r#"TT = CreateFrame("GameTooltip", "TT")"#).unwrap();
+    s.run(r#"TT:SetText("x", 1, 1, 1, "0.5")"#).unwrap();
+    assert_eq!(
+        s.eval::<f64>("local _, _, _, a = TTTextLeft1:GetTextColor() return a")
+            .unwrap(),
+        0.5
+    );
+    s.run(r#"TT:SetText("x", 1, 1, 1, {})"#).unwrap();
+    assert_eq!(
+        s.eval::<f64>("local _, _, _, a = TTTextLeft1:GetTextColor() return a")
+            .unwrap(),
+        1.0
+    );
+}

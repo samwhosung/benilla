@@ -567,14 +567,13 @@ pub(in crate::script) fn plural_template(
     crate::strings::plural(token, Some(n), get)
 }
 
-/// A colour component by `lua_tonumber`'s coercion: a numeric string counts, other strings do not.
-fn color_num(v: Option<&Value>) -> Option<f32> {
-    match v {
-        Some(Value::Number(n)) => Some(*n as f32),
-        Some(Value::Integer(i)) => Some(*i as f32),
-        Some(Value::String(s)) => s.to_str().ok().and_then(|s| s.trim().parse::<f32>().ok()),
-        _ => None,
-    }
+/// A colour component by `lua_tonumber`'s coercion: a number or a string `luaO_str2d` reads as
+/// one, else none.
+fn color_num(lua: &Lua, v: Option<&Value>) -> Option<f32> {
+    lua.coerce_number(v?.clone())
+        .ok()
+        .flatten()
+        .map(|n| n as f32)
 }
 
 /// A line's wrap flag, `GetBoolOrDefault` (`0x6f1c10`) with default 0 at `AddLine`'s sixth
@@ -585,12 +584,17 @@ fn wrap_arg(v: Option<&Value>) -> bool {
 
 /// An `AddLine`-family colour, gated on the r-slot alone (`lua_isnumber`, `0x6f34d0`), else
 /// [`DEFAULT_TEXT_GOLD`]; past the gate a non-number g or b reads 0, and alpha is always opaque.
-fn parse_line_color(r: Option<&Value>, g: Option<&Value>, b: Option<&Value>) -> [f32; 4] {
-    match color_num(r) {
+fn parse_line_color(
+    lua: &Lua,
+    r: Option<&Value>,
+    g: Option<&Value>,
+    b: Option<&Value>,
+) -> [f32; 4] {
+    match color_num(lua, r) {
         Some(r) => [
             r,
-            color_num(g).unwrap_or(0.0),
-            color_num(b).unwrap_or(0.0),
+            color_num(lua, g).unwrap_or(0.0),
+            color_num(lua, b).unwrap_or(0.0),
             1.0,
         ],
         None => DEFAULT_TEXT_GOLD,
@@ -599,9 +603,9 @@ fn parse_line_color(r: Option<&Value>, g: Option<&Value>, b: Option<&Value>) -> 
 
 /// An `AddLine` tail, positional `r, g, b, wrap` (`0x531630`); the wrap flag is read whatever the
 /// colour gate decides.
-fn parse_line_tail(args: &[Value]) -> ([f32; 4], bool) {
+fn parse_line_tail(lua: &Lua, args: &[Value]) -> ([f32; 4], bool) {
     (
-        parse_line_color(args.first(), args.get(1), args.get(2)),
+        parse_line_color(lua, args.first(), args.get(1), args.get(2)),
         wrap_arg(args.get(3)),
     )
 }

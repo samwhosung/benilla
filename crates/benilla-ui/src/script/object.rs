@@ -341,6 +341,15 @@ pub(super) fn tonumber_f32(lua: &Lua, v: &Value) -> f32 {
     super::binding_abi::coerced_number(lua, Some(v.clone())) as f32
 }
 
+/// A colour's alpha argument: `lua_isnumber`-gated (`0x781037`, `0x79f5a2`, ...), so a numeric
+/// string counts and anything else, a table or boolean included, stages 1.0 without raising.
+pub(super) fn alpha_f32(lua: &Lua, v: &Value) -> f32 {
+    lua.coerce_number(v.clone())
+        .ok()
+        .flatten()
+        .map_or(1.0, |n| n as f32)
+}
+
 /// [`tonumber_f32`] in `f64`, for `ColorSelect:SetColorRGB`, whose quantizer an `f32` detour could
 /// push across a rounding boundary.
 pub(super) fn tonumber_f64(lua: &Lua, v: &Value) -> f64 {

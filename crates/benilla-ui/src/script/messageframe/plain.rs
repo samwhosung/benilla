@@ -7,6 +7,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
+use super::{channel, is_number};
 use crate::script::object::frame_handle_of;
 use crate::script::Model;
 use crate::widget::{InsertMode, KindState, MessageFrameState};
@@ -33,15 +34,6 @@ fn with_mf<T>(
     }
 }
 
-/// A colour argument as f32, 0 for anything but a number.
-fn num_f32(v: &Value) -> f32 {
-    match v {
-        Value::Number(n) => *n as f32,
-        Value::Integer(i) => *i as f32,
-        _ => 0.0,
-    }
-}
-
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
@@ -60,18 +52,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let Some(text) = super::message_text(lua, &text) else {
                     return Ok(());
                 };
-                let has_rgb = !matches!(
-                    (&r, &g, &b),
-                    (Value::Nil, _, _) | (_, Value::Nil, _) | (_, _, Value::Nil)
-                );
+                // Each of r, g and b is `lua_isnumber`-gated (`0x79565f`-`0x795687`) and the trio is
+                // all or nothing; a failed gate still adds the line, in white (`0x79581c`).
+                let has_rgb = [&r, &g, &b].iter().all(|v| is_number(lua, v).is_some());
                 let (r, g, b) = if has_rgb {
-                    (num_f32(&r), num_f32(&g), num_f32(&b))
+                    (channel(lua, &r), channel(lua, &g), channel(lua, &b))
                 } else {
                     (1.0, 1.0, 1.0)
                 };
-                // The alpha counts only with the trio, read in the same parse.
-                let a = match (&a, has_rgb) {
-                    (Value::Number(_) | Value::Integer(_), true) => num_f32(&a),
+                // The alpha is its own `lua_isnumber` gate (`0x795759`), default 1.0, read with
+                // the trio.
+                let a = match (is_number(lua, &a), has_rgb) {
+                    (Some(n), true) => n as f32,
                     _ => 1.0,
                 };
                 with_mf(lua, &this, |mf| mf.add(text, r, g, b, a))
