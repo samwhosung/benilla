@@ -636,3 +636,37 @@ fn a_verbs_latch_survives_a_push_of_another_slot() {
     rig.frame();
     assert!(lit(&mut rig), "the stale store unlit it");
 }
+
+/// A latch the VM made but this side never sent (the pet not usable here that frame) does not
+/// outlive the next `SMSG_PET_SPELLS`: its signal (`0x4bc90c`) re-pushes the whole bar and the
+/// state word, equal values included.
+#[test]
+fn a_packet_overwrites_a_latch_this_side_never_sent() {
+    let mut rig = rig(vec![], &[], Some(owned_pet()));
+    {
+        let mut bar = rig.app.world_mut().resource_mut::<PetBar>();
+        bar.spells.bar[0] = PetActionEntry::from(0x0700_0000);
+        bar.spells.state = 1 << 8;
+    }
+    rig.frame();
+    let lit = |rig: &mut Rig| {
+        rig.app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .eval::<bool>("local _, _, _, _, a = GetPetActionInfo(1) return a == 1")
+            .unwrap()
+    };
+    rig.app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run("PetWait()")
+        .unwrap();
+    assert!(lit(&mut rig), "the verb lit Wait");
+    // No order mirrored; the packet repeats the old state.
+    {
+        let mut bar = rig.app.world_mut().resource_mut::<PetBar>();
+        bar.bar_signals = bar.bar_signals.wrapping_add(1);
+    }
+    rig.frame();
+    assert!(!lit(&mut rig), "the packet's state is the bar's");
+}

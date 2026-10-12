@@ -43,10 +43,11 @@ MAX_HELPER_CALLERS = 8
 # each verb's worker re-enters a shared dispatcher that a non-verb (the right-click dispatcher)
 # also calls, so the walk cannot claim it. The pet orders' workers (`0x4bd4f0`..`0x4bd5f0`) and
 # `CastPetAction` enter `0x4bd1d0`, whose reaction arm signals at `0x4bc956` and whose Stay and
-# Follow arm at `0x4bc979`, both before the send at `0x4bd444`. PetAttack's latch (`0x4bd438`)
-# rides the attack validator and is left out.
+# Follow arm at `0x4bc979`, both before the send at `0x4bd444`. The Attack arm's latch (`0x4bd438`,
+# reached by PetAttack and by CastPetAction on the Attack slot) rides the attack validator, which
+# benilla runs outside the VM, so its signal is the feed's and the site is left out.
 TRACED = [
-    ("CastPetAction", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956, 0x4BC979, 0x4BD438)),
+    ("CastPetAction", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956, 0x4BC979)),
     ("PetAggressiveMode", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956,)),
     ("PetDefensiveMode", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956,)),
     ("PetFollow", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC979,)),

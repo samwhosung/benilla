@@ -15,7 +15,7 @@
 verb	event	shape	via	sites
 AddSkillUp	SKILL_LINES_CHANGED	helper	0x4d32d0	0x4d346f
 CancelSkillUps	SKILL_LINES_CHANGED	body	-	0x4d3e3a
-CastPetAction	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc956|0x4bc979|0x4bd438
+CastPetAction	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc956|0x4bc979
 ChangeActionBarPage	ACTIONBAR_PAGE_CHANGED	body	-	0x4e7655
 ChangeChatColor	UPDATE_CHAT_COLOR	body	-	0x4a098b
 CheckInbox	MAIL_INBOX_UPDATE	body	-	0x4aeaf8

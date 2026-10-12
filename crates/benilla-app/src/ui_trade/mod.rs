@@ -825,6 +825,8 @@ fn drain_trade(
         }
         let Some((wire_bag, wire_slot)) = crate::ui_items::wire_pos(bag, slot) else {
             info!(target: "trade", "set item: slot {id} <- bag {bag}/{slot} has no wire position — dropped");
+            // Unsent, so the VM's slot gives the item back.
+            script.return_unsent_trade_item(id);
             continue;
         };
         if let Some(trade_slot) = id.checked_sub(1).and_then(|n| u8::try_from(n).ok()) {
@@ -1362,6 +1364,75 @@ mod tests {
             Some("Linen Cloth"),
             "the click was rolled back"
         );
+    }
+
+    /// A placement whose bag position has no wire form goes unsent, so the VM's slot gives the
+    /// item back, unlocked, and repaints, as the reference's failed send never writes it
+    /// (`0x4bfab1`).
+    #[test]
+    fn an_unsendable_placement_gives_the_item_back() {
+        let (mut app, rx) = feed_app();
+        app.init_resource::<Selection>()
+            .init_resource::<GroupState>()
+            .add_systems(Update, drain_trade.after(feed_trade));
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.begin(0x7);
+            trade.open_window();
+        }
+        app.update();
+        app.update();
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            // Slot 30 of the backpack: no wire position.
+            script.set_container(
+                0,
+                Some(benilla_ui::script::ContainerState {
+                    name: None,
+                    num_slots: 32,
+                    slots: [(
+                        30,
+                        benilla_ui::script::ContainerSlot {
+                            item_id: 2589,
+                            guid: 0x4000_0000_0000_2589,
+                            count: 3,
+                            link: Some("|cffffffff|Hitem:2589|h[Linen Cloth]|h|r".into()),
+                            ..Default::default()
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                }),
+            );
+            script
+                .run(
+                    r#"
+                    SLOT_EVENTS = 0
+                    local f = CreateFrame("Frame")
+                    f:RegisterEvent("TRADE_PLAYER_ITEM_CHANGED")
+                    f:SetScript("OnEvent", function() SLOT_EVENTS = SLOT_EVENTS + 1 end)
+                    PickupContainerItem(0, 30)
+                    ClickTradeButton(1)
+                    "#,
+                )
+                .unwrap();
+        }
+        app.update();
+        assert!(
+            !rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::SetTradeItem { .. })),
+            "nothing to send"
+        );
+        let script = app.world().non_send_resource::<UiScript>();
+        let (events, name, locked): (i64, Option<String>, bool) = script
+            .eval(
+                "local _, _, l = GetContainerItemInfo(0, 30) \
+                 return SLOT_EVENTS, (GetTradePlayerItemInfo(1)), l == 1",
+            )
+            .unwrap();
+        assert_eq!(name, None, "the slot still shows the unsent item");
+        assert!(!locked, "the item comes back unlocked");
+        assert_eq!(events, 2, "the click's signal, then the give-back's");
     }
 
     /// The reference prints the line from its own sender, not on a reply; row `0xb9` is chat.

@@ -251,7 +251,11 @@ pub(super) fn feed_pet_bar(
     let held = script.pet_action_views();
     let key = (bar.bar_signals, has_bar, usable, pickup_allowed);
     let key_changed = memory.pushed.as_ref() != Some(&key);
-    let resized = memory.slots.len() != content.len() || held.len() != content.len();
+    // A signal from this side (`SMSG_PET_SPELLS` through `SetPet`, `0x4bc90c`, or the possessed
+    // Attack latch) is the whole bar's source moving, even with equal values: it overwrites the VM
+    // whole, so a latch the VM made and this side refused to send cannot outlive the packet.
+    let resignalled = memory.pushed.map(|k| k.0) != Some(bar.bar_signals);
+    let resized = resignalled || memory.slots.len() != content.len() || held.len() != content.len();
     let next: Vec<PetActionView> = content
         .iter()
         .enumerate()
@@ -266,7 +270,7 @@ pub(super) fn feed_pet_bar(
     let slots_moved = resized || memory.slots != content;
     let bar_changed = key_changed || next != held;
     let cooldowns_changed = memory.cooldowns != cooldowns;
-    if memory.state != Some(bar.spells.state) {
+    if resignalled || memory.state != Some(bar.spells.state) {
         script.set_pet_state(bar.spells.state);
         memory.state = Some(bar.spells.state);
     }

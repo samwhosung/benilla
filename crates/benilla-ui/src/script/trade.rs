@@ -109,6 +109,32 @@ impl super::UiScript {
         );
     }
 
+    /// A placement the app could not send (its bag position has no wire form): the slot gives
+    /// the item back, unlocked, as the reference's failed send never writes it (`0x4bfab1`), and
+    /// the slot's handler repaints with `TRADE_PLAYER_ITEM_CHANGED`.
+    pub fn return_unsent_trade_item(&mut self, id: u32) {
+        let Some(i) = id
+            .checked_sub(1)
+            .map(|i| i as usize)
+            .filter(|&i| i < TRADE_SLOTS)
+        else {
+            return;
+        };
+        super::tick::verb(&self.lua, |model| {
+            let Some(item) = model.trade_offered[i].take() else {
+                return;
+            };
+            if let Some(trade) = model.trade.as_mut() {
+                trade.player.slots[i] = None;
+            }
+            super::cursor::unlock_item(model, item.guid);
+            model.raise(
+                "TRADE_PLAYER_ITEM_CHANGED",
+                vec![super::ScriptValue::Int(i64::from(id))],
+            );
+        });
+    }
+
     /// Drain the tokens `InitiateTrade` queued; the app sends `CMSG_INITIATE_TRADE` for each.
     pub fn take_trade_initiates(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().trade_initiates)
