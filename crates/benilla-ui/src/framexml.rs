@@ -27,16 +27,27 @@ impl Element {
             .map(|(_, v)| v.as_str())
     }
 
-    /// True only for a case-insensitive `"true"` (`0x6f1b30`); there is no `"false"` branch.
-    pub fn attr_bool(&self, name: &str) -> bool {
+    /// A boolean attribute as the frame loaders read it: `0x6f2cf0` fetches the attribute and a
+    /// missing or empty one is skipped (`0x769891`, `0x77a0b5`), leaving what the constructor set;
+    /// any other goes through the client's string-to-bool `0x6f1b30`
+    /// ([`crate::strings::string_to_bool`]), so `hidden="1"` and `movable="yes"` are true and
+    /// `hidden="false"` is not.
+    pub fn attr_bool_opt(&self, name: &str) -> Option<bool> {
         self.attr(name)
-            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+            .filter(|v| !v.is_empty())
+            .map(crate::strings::string_to_bool)
     }
 
-    /// [`attr_bool`](Self::attr_bool), but `None` when absent, for a flag whose default is on
-    /// (`<EditBox autoFocus="false">`).
-    pub fn attr_bool_opt(&self, name: &str) -> Option<bool> {
-        self.attr(name).map(|v| v.eq_ignore_ascii_case("true"))
+    /// [`attr_bool_opt`](Self::attr_bool_opt) for a flag the constructor leaves off.
+    pub fn attr_bool(&self, name: &str) -> bool {
+        self.attr_bool_opt(name).unwrap_or(false)
+    }
+
+    /// The two attributes the reference compares whole, case-insensitively, against `"true"`
+    /// (`0x862234`) rather than parsing: `virtual` (`0x6ee190`) and `setAllPoints` (`0x767879`).
+    pub fn attr_is_true(&self, name: &str) -> bool {
+        self.attr(name)
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
     }
 
     pub fn name(&self) -> Option<&str> {
@@ -279,7 +290,7 @@ pub fn parse(text: &str) -> Result<ParsedDocument, Error> {
             items.push(TopLevel::Font(el));
         } else {
             let el = element_from_node(child);
-            if el.attr_bool("virtual") {
+            if el.attr_is_true("virtual") {
                 // An unnamed one is kept: the loader reports it where the reference does.
                 items.push(TopLevel::Template(el));
             } else {
@@ -585,6 +596,34 @@ pub(crate) fn atof(s: &str) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    /// The frame loaders' bool attribute (`0x6f2cf0` then `0x6f1b30`, skipped when missing or
+    /// empty), and the two the reference compares against `"true"` alone.
+    #[test]
+    fn bool_attributes_read_through_the_clients_string_to_bool() {
+        let doc = parse(
+            r#"<Ui><Frame a="1" b="yes" c="On" d="false" e="0" f="" g="maybe" h="true" i="Y" j="off"/></Ui>"#,
+        )
+        .unwrap();
+        let TopLevel::Instance(el) = &doc.items[0] else {
+            panic!("an instance");
+        };
+        for yes in ["a", "b", "c", "h", "i"] {
+            assert_eq!(el.attr_bool_opt(yes), Some(true), "{yes}");
+            assert!(el.attr_bool(yes), "{yes}");
+        }
+        for no in ["d", "e", "g", "j"] {
+            assert_eq!(el.attr_bool_opt(no), Some(false), "{no}");
+            assert!(!el.attr_bool(no), "{no}");
+        }
+        assert_eq!(el.attr_bool_opt("f"), None, "an empty value is skipped");
+        assert_eq!(el.attr_bool_opt("absent"), None);
+        assert!(!el.attr_bool("f") && !el.attr_bool("absent"));
+        assert!(el.attr_is_true("h") && !el.attr_is_true("a") && !el.attr_is_true("i"));
+        // `virtual="1"` is no template: its test is the whole word `true` (`0x6ee190`).
+        let doc = parse(r#"<Ui><Frame name="One" virtual="1"/></Ui>"#).unwrap();
+        assert!(matches!(doc.items[0], TopLevel::Instance(_)));
+    }
+
     use super::*;
 
     #[test]

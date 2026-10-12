@@ -9,6 +9,8 @@
 //! `## LoadWith : X` is not that directive; one that does not (`Dep`) is a bare prefix of the key.
 //! That table is [`Kind`], and every typed read here goes through it.
 
+use crate::strings::string_to_bool;
+
 /// A parsed `.toc` manifest.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Toc {
@@ -119,30 +121,6 @@ impl Kind {
 fn starts_with_ci(s: &str, prefix: &str) -> bool {
     let (s, p) = (s.as_bytes(), prefix.as_bytes());
     s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p)
-}
-
-/// The client's string-to-bool `0x6f1b30` for the words it knows, `None` for any other string. A
-/// first byte of `1`-`9`, `T`, `t`, `Y` or `y` is true and `0`, `F`, `f`, `N` or `n` false (the
-/// jump table `0x6f1bc0` over `0x6f1bb4`); every other string, an empty one included, is compared
-/// whole and case-insensitively (`0x64a4c0`): `off` (`0x871460`) and `disabled` (`0x853758`) are
-/// false, `on` (`0x87145c`) and `enabled` (`0x853764`) true.
-pub(crate) fn keyword_bool(bytes: &[u8]) -> Option<bool> {
-    match bytes.first() {
-        Some(b'0' | b'F' | b'N' | b'f' | b'n') => Some(false),
-        Some(b'1'..=b'9' | b'T' | b'Y' | b't' | b'y') => Some(true),
-        _ if bytes.eq_ignore_ascii_case(b"off") || bytes.eq_ignore_ascii_case(b"disabled") => {
-            Some(false)
-        }
-        _ if bytes.eq_ignore_ascii_case(b"on") || bytes.eq_ignore_ascii_case(b"enabled") => {
-            Some(true)
-        }
-        _ => None,
-    }
-}
-
-/// `0x6f1b30` as a `.toc` boolean reads it: anything [`keyword_bool`] does not know is false.
-pub fn string_to_bool(s: &str) -> bool {
-    keyword_bool(s.as_bytes()).unwrap_or(false)
 }
 
 impl Directive {

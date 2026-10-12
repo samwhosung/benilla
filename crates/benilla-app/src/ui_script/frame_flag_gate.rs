@@ -253,7 +253,8 @@ fn reference_takes_mouse(name: &str, frames: &HashMap<String, Element>) -> bool 
     if tag_mouse_enabled_by_ctor(&el.tag) {
         return true;
     }
-    if resolved_attr(name, frames, "enableMouse", 0).is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    if resolved_attr(name, frames, "enableMouse", 0)
+        .is_some_and(benilla_ui::strings::string_to_bool)
     {
         return true;
     }
@@ -347,7 +348,7 @@ fn the_shipped_frames_carry_the_references_flags() {
         compared += 1;
 
         let want_toplevel = resolved_attr(theirs, &reference, "toplevel", 0)
-            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+            .is_some_and(benilla_ui::strings::string_to_bool);
         let want_mouse = reference_takes_mouse(theirs, &reference);
         let want_id: i64 = resolved_attr(theirs, &reference, "id", 0)
             .and_then(|v| v.trim().parse().ok())

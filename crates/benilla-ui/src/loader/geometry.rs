@@ -177,7 +177,7 @@ impl Loader<'_> {
         parent_name: &str,
         dbg: &str,
     ) {
-        if el.attr_bool("setAllPoints") {
+        if el.attr_is_true("setAllPoints") {
             self.call(wrapper, "SetAllPoints", (), dbg);
         }
         for anchors in children_named(el, "Anchors") {

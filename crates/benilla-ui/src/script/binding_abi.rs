@@ -296,7 +296,7 @@ pub(crate) fn bool_or_default(v: Option<&Value>, default: bool) -> bool {
             // The keyword arm is also reached by every byte the remap table cannot index (and
             // by an empty string); a string it does not know takes `default`.
             let bytes = s.as_bytes();
-            crate::toc::keyword_bool(&bytes).unwrap_or(default)
+            crate::strings::keyword_bool(&bytes).unwrap_or(default)
         }
         _ => default,
     }

@@ -107,10 +107,10 @@ fn attr_ci(node: roxmltree::Node, name: &str) -> Option<String> {
         .map(|a| a.value().to_string())
 }
 
-/// True only for a case-insensitive `"true"` (`0x6f1b30` has no `"false"` branch), so
-/// `runOnUp="1"` is false.
+/// A binding's bool attribute (`debug` `0x4b70b6`, `hidden` `0x4b73ce`, `runOnUp` `0x4b7413`)
+/// through the client's string-to-bool `0x6f1b30`, absent being false: `runOnUp="1"` is true.
 fn attr_bool(node: roxmltree::Node, name: &str) -> bool {
-    attr_ci(node, name).is_some_and(|v| v.eq_ignore_ascii_case("true"))
+    attr_ci(node, name).is_some_and(|v| crate::strings::string_to_bool(&v))
 }
 
 /// The node's direct text and CDATA, concatenated: `roxmltree` splits `a &lt; b` into three text
@@ -199,8 +199,8 @@ mod tests {
         assert_eq!(binds[3].body.trim(), "if ( a < b ) then Probe(); end");
 
         assert!(
-            !binds[4].run_on_up,
-            "runOnUp=\"1\" is false: the client's bool compares against \"true\" alone"
+            binds[4].run_on_up,
+            "runOnUp=\"1\" is true: the client's string-to-bool reads the first byte (0x6f1b30)"
         );
     }
 
@@ -222,7 +222,7 @@ mod tests {
 
     /// The loader's three skips beyond a missing name: a `<Binding>` below the root's children is
     /// never walked (`0x4b701f`, the sibling link `0x4b745b`), an empty body is refused
-    /// (`0x4b7093`-`0x4b709e`), and a truthy `debug` skips the row (`0x4b70a4`-`0x4b70bd`), as
+    /// (`0x4b7093`-`0x4b709e`), and a `debug` that 0x6f1b30 reads as true skips the row (`0x4b70a4`-`0x4b70bd`), as
     /// the stock file's nine debug rows are skipped. A whitespace body is not empty.
     #[test]
     fn nested_empty_and_debug_rows_are_not_bindings() {
@@ -237,13 +237,18 @@ mod tests {
     <Binding name="PROBESELFCLOSED"/>
     <Binding name="PROBEDEBUG" hidden="true" debug="true">ToggleStats();</Binding>
     <Binding name="PROBEDEBUGCASE" DEBUG="TRUE">Probe();</Binding>
-    <Binding name="PROBENOTDEBUG" debug="1">Probe();</Binding>
+    <Binding name="PROBEDEBUGONE" debug="1">Probe();</Binding>
+    <Binding name="PROBENOTDEBUG" debug="false">Probe();</Binding>
+    <Binding name="PROBEDEBUGZERO" debug="0">Probe();</Binding>
     <Binding name="PROBEBLANK">  </Binding>
 </Bindings>"#,
         )
         .expect("well-formed");
         let names: Vec<&str> = binds.iter().map(|b| b.name.as_str()).collect();
-        assert_eq!(names, ["PROBEKEPT", "PROBENOTDEBUG", "PROBEBLANK"]);
+        assert_eq!(
+            names,
+            ["PROBEKEPT", "PROBENOTDEBUG", "PROBEDEBUGZERO", "PROBEBLANK"]
+        );
     }
 
     #[test]

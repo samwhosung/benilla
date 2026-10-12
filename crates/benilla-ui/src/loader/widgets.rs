@@ -185,8 +185,8 @@ impl Loader<'_> {
         if is_check {
             tex("CheckedTexture", self);
             tex("DisabledCheckedTexture", self);
-            if let Some(c) = el.attr("checked") {
-                let checked = c.eq_ignore_ascii_case("true") || c == "1";
+            // Read through `0x6f1b30`, a missing or empty one skipped (`0x78518e`-`0x78519d`).
+            if let Some(checked) = el.attr_bool_opt("checked") {
                 self.call(wrapper, "SetChecked", checked, dbg);
             }
         }
@@ -358,8 +358,8 @@ impl Loader<'_> {
                 self.call(wrapper, "SetFadeDuration", s, dbg);
             }
         }
-        if let Some(fade) = el.attr("fade") {
-            let on = fade.eq_ignore_ascii_case("true") || fade == "1";
+        // `0x6f1b30`, a missing or empty one skipped (`0x7859b2`-`0x7859bd`).
+        if let Some(on) = el.attr_bool_opt("fade") {
             self.call(wrapper, "SetFading", on, dbg);
         }
     }

@@ -325,6 +325,43 @@ fn the_xml_movable_and_resizable_attributes_reach_the_methods() {
     );
 }
 
+/// The frame flags read through the client's string-to-bool `0x6f1b30` (`0x769908`, `0x769932`,
+/// `0x769898`): `"yes"` and `"1"` are true, `"off"` and `"0"` false, and an empty value is skipped.
+#[test]
+fn xml_flags_read_the_clients_string_to_bool() {
+    let s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+             <Frame name="YesFrame" movable="yes" resizable="1" hidden="On"/>
+             <Frame name="NoFrame" movable="off" resizable="0" hidden="false"/>
+             <Frame name="EmptyFrame" movable="" resizable="" hidden=""/>
+           </Ui>"#,
+    )
+    .expect("valid FrameXML");
+    crate::loader::load(&s, &doc, &|_| None);
+    assert_eq!(
+        s.eval::<(bool, bool, bool)>(
+            "return YesFrame:IsMovable(), YesFrame:IsResizable(), YesFrame:IsShown()"
+        )
+        .unwrap(),
+        (true, true, false)
+    );
+    assert_eq!(
+        s.eval::<(bool, bool, bool)>(
+            "return NoFrame:IsMovable(), NoFrame:IsResizable(), NoFrame:IsShown()"
+        )
+        .unwrap(),
+        (false, false, true)
+    );
+    assert_eq!(
+        s.eval::<(bool, bool, bool)>(
+            "return EmptyFrame:IsMovable(), EmptyFrame:IsResizable(), EmptyFrame:IsShown()"
+        )
+        .unwrap(),
+        (false, false, true)
+    );
+}
+
 /// `StartSizing(grip)` (`0x776830`, called from `FloatingChatFrame.lua:600`) moves the gripped
 /// edges and plants the opposite ones (`0x768710`'s grip cases).
 #[test]

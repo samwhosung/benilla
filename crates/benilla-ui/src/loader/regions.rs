@@ -219,7 +219,7 @@ impl Loader<'_> {
                 self.call_region(wrapper, "SetSpacing", crate::framexml::atof(sp), dbg);
             }
         }
-        if region.attr_bool("setAllPoints") {
+        if region.attr_is_true("setAllPoints") {
             self.call_region(wrapper, "SetAllPoints", (), dbg);
         }
         for anchors in children_named(region, "Anchors") {
