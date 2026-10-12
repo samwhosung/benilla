@@ -780,9 +780,21 @@ mod tests {
         let path = addons_state_path("Realm", "One").unwrap();
         assert!(path.is_file());
         assert!(root.is_dir(), "the AddOns root is never removed");
-        if !one_folder {
-            assert!(!old.exists(), "the emptied old folder goes");
-        }
+        assert_eq!(old.exists(), one_folder, "an emptied old folder goes");
+
+        // Two folders by any spelling: the emptied one goes, the other stays.
+        let (a, b) = (tmp.join("a"), tmp.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        remove_emptied(&a, &b);
+        assert!(!a.exists() && b.is_dir());
+        // The same folder, or one with something in it, stays.
+        remove_emptied(&b, &b);
+        assert!(b.is_dir());
+        std::fs::create_dir_all(tmp.join("c")).unwrap();
+        std::fs::write(tmp.join("c/keep.txt"), "x").unwrap();
+        remove_emptied(&tmp.join("c"), &b);
+        assert!(tmp.join("c/keep.txt").is_file());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
