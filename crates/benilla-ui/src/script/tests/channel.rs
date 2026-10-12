@@ -248,3 +248,43 @@ fn a_manual_guild_recruitment_verb_resets_the_latch() {
     );
     assert!(!s.take_guild_recruitment_change());
 }
+
+/// `JoinChannelByName` (`0x49ff00`): a name that is neither string nor number raises the usage
+/// text (`0x49ffe7`); a spaced name pushes nothing (`0x49ff5e`); a join pushes two values (the
+/// channel id and the resolved name or nil, `0x49ffcc`, `0x49ffdd`) and sends; a `frameId` may be
+/// a numeric string.
+#[test]
+fn join_channel_by_name_raises_pushes_two_values_or_nothing() {
+    let mut s = script();
+    let count = |s: &crate::script::UiScript, call: &str| -> i64 {
+        s.eval(&format!("return (function(...) return arg.n end)({call})"))
+            .unwrap()
+    };
+    for call in [
+        "JoinChannelByName()",
+        "JoinChannelByName(nil)",
+        "JoinChannelByName({})",
+        "JoinChannelByName(true)",
+    ] {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(
+            err.contains(r#"Usage: JoinChannelByName("name")"#),
+            "{call}: {err}"
+        );
+    }
+    // A spaced name, and an empty one: nothing at all, and nothing sent.
+    assert_eq!(count(&s, "JoinChannelByName('two words')"), 0);
+    assert_eq!(count(&s, "JoinChannelByName('')"), 0);
+    assert!(s.take_channel_commands().is_empty());
+    // A custom channel: two values, the second nil; a number is stringified.
+    assert_eq!(count(&s, "JoinChannelByName('Guildies', 'pw', '2')"), 2);
+    assert_eq!(count(&s, "JoinChannelByName(7)"), 2);
+    let sent = s.take_channel_commands();
+    assert_eq!(sent.len(), 2);
+    // The numeric-string frame id registered the channel in window 2's list.
+    assert!(s
+        .eval::<bool>(
+            "for _, n in ipairs({ GetChatWindowChannels(2) }) do if n == 'Guildies' then return true end end return false"
+        )
+        .unwrap());
+}

@@ -295,20 +295,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // JoinChannelByName(name [, password [, frameId]]) (`0x49ff00` → `0x49eb70`): a DBC row
-    // answers `(ChannelID, resolvedName)` and a custom channel `(0, nil)`, both sending; a name
-    // with a space, or a row whose zone text is empty, answers nil and sends nothing. A `frameId`
-    // that truncates to 1..=10 registers the channel in that window's list, deduplicated by name
+    // JoinChannelByName(name [, password [, frameId]]) (`0x49ff00` → `0x49eb70`): `name` is a
+    // string or number (anything else raises `Usage: JoinChannelByName("name")`, `0x49ffe7`), the
+    // password a string or number, else empty. A DBC row answers `(ChannelID, resolvedName)` and a
+    // custom channel `(ChannelID, nil)`, two values either way (`0x49ffcc`, `0x49ffdd`), both
+    // sending; a name with a space (`0x49ff5e`), a row whose zone text is empty, or a failed join
+    // (`0x49ffaa`) pushes nothing and sends nothing. A `frameId` (a number or numeric string) that
+    // truncates to 1..=10 registers the channel in that window's list, deduplicated by name
     // (`0x49ec24`), which is what brings a `/leave`-stripped channel's lines back to the window.
     g.set(
         "JoinChannelByName",
         lua.create_function(
-            |lua, (name, password, frame): (Option<String>, Option<String>, Value)| {
-                let Some(name) = non_empty(name) else {
-                    return Ok(MultiValue::from_vec(vec![Value::Nil]));
-                };
-                if name.contains(' ') {
-                    return Ok(MultiValue::from_vec(vec![Value::Nil]));
+            |lua, (name, password, frame): (Option<Value>, Option<Value>, Option<Value>)| {
+                let name = super::binding_abi::string_arg(
+                    lua,
+                    name.unwrap_or(Value::Nil),
+                    r#"Usage: JoinChannelByName("name")"#,
+                )?;
+                let password = password
+                    .as_ref()
+                    .and_then(|v| super::binding_abi::optional_string(lua, v))
+                    .unwrap_or_default();
+                if name.is_empty() || name.contains(' ') {
+                    return Ok(MultiValue::new());
                 }
                 let row = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -320,9 +329,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 let (id, resolved, listed_as) = match row {
                     None => (0, None, name.clone()),
-                    Some(ZoneChannelRow { resolved: None, .. }) => {
-                        return Ok(MultiValue::from_vec(vec![Value::Nil]))
-                    }
+                    Some(ZoneChannelRow { resolved: None, .. }) => return Ok(MultiValue::new()),
                     Some(ZoneChannelRow {
                         id,
                         resolved,
@@ -332,11 +339,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 };
                 // `0x49ff6b edi = -1` / `0x49ff8a dec edi`; `0x49ec27 cmp esi,0xa; jae` skips.
                 let window = match frame {
-                    Value::Integer(n) => Some(n as f64),
-                    Value::Number(n) => Some(n),
-                    _ => None,
+                    Some(v) => lua.coerce_number(v)?,
+                    None => None,
                 }
-                .map(|n| n.trunc() as i64 - 1)
+                .map(|n| super::binding_abi::ftol(n).wrapping_sub(1))
                 .and_then(|i| usize::try_from(i).ok())
                 .filter(|i| *i < 10);
                 if let Some(i) = window {
@@ -348,7 +354,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     lua,
                     ChannelCommand::Join {
                         name: resolved.clone().unwrap_or_else(|| name.clone()),
-                        password: password.unwrap_or_default(),
+                        password,
                     },
                 );
                 Ok(MultiValue::from_vec(vec![

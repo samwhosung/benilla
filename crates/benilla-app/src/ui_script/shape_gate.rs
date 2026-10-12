@@ -25,11 +25,6 @@ const NOT_YET_ASSERTED: &[(&str, usize, &str)] = &[
         1,
         "Deviation: the same stack-top return (0x4dcd7c)",
     ),
-    (
-        "JoinChannelByName",
-        2,
-        "pushes one nil for a missing name, where the reference raises its usage error",
-    ),
 ];
 
 /// The query verbs the negative-index rule reads: a verb that acts on its index (`PickupAction`)
