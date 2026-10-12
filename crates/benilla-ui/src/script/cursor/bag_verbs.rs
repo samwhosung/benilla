@@ -325,14 +325,17 @@ mod tests {
         assert!(s.take_bag_autostores().is_empty(), "an equip, not a store");
     }
 
+    /// An empty slot goes to the doll handler (`0x4c7c00` into `0x4c7300`), where an ordinary item
+    /// misfits a bag slot and is auto-equipped (`0x4c78ef`); the answer stays nil.
     #[test]
-    fn an_empty_bag_slot_refuses_an_ordinary_item() {
+    fn an_empty_bag_slot_auto_equips_an_ordinary_item() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(backpack()));
         s.run("PickupContainerItem(0, 2)").unwrap();
 
         assert!(s.eval::<bool>("return PutItemInBag(64) == nil").unwrap());
-        assert!(s.cursor_item().is_some(), "refused, kept");
+        assert!(s.cursor_item().is_none());
+        assert_eq!(s.take_container_autoequips(), vec![(0, 2)]);
         assert!(s.take_container_moves().is_empty());
         assert!(s.take_bag_autostores().is_empty());
     }
