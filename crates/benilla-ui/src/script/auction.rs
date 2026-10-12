@@ -248,9 +248,13 @@ impl super::UiScript {
             .map(|it| (it.bag, it.slot))
     }
 
-    /// Empty the sell slot, once the auction is sent and on session close.
+    /// Empty the sell slot, once the auction is sent and on session close: the sell-slot clear
+    /// (`0x4cd640`), which lifts the attached item's lock with its `ITEM_LOCK_CHANGED`
+    /// (`0x495420` at `0x4cd653`).
     pub fn clear_auction_sell_item(&mut self) {
-        self.model_mut().auction_sell_item = None;
+        if self.model_mut().auction_sell_item.take().is_some() {
+            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
+        }
     }
 }
 
@@ -801,24 +805,23 @@ const AUCTION_INV_TYPES: [(u32, &str); 14] = [
     (23, "INVTYPE_HOLDABLE"),
 ];
 
-/// Attach the cursor's item to the sell slot, or with an empty cursor pick the attached one back
-/// up; any other payload stays on the cursor.
+/// `ClickAuctionSellItemButton` (`0x4ce310`): attach the cursor's item to the sell slot, or with
+/// an empty cursor pick the attached one back up; any other payload stays on the cursor. The
+/// attach clears the cursor with `SetCursorItem(0, …)` (`0x4ce56a`), whose inner
+/// `ClearCursor(0,1)` lifts no lock: the item stays locked in its bag slot until it leaves the
+/// sell slot ([`cursor::client_locked`]), and no `ITEM_LOCK_CHANGED` fires.
 fn click_auction_sell_item(model: &mut Model) {
-    match model.cursor.take() {
+    match model.cursor.clone() {
         Some(CursorPayload::Item(item)) => {
             model.auction_sell_item = Some(item);
             cursor::clear(model, cursor::Clear::KEEP_LOCK);
-            cursor::raise_lock_changed(model);
         }
         None => {
             if let Some(item) = model.auction_sell_item.take() {
                 cursor::put(model, CursorPayload::Item(item));
-                cursor::raise_lock_changed(model);
             }
         }
-        Some(other) => {
-            model.cursor = Some(other);
-        }
+        Some(_) => {}
     }
 }
 
@@ -1114,5 +1117,36 @@ mod tests {
         assert!(list.reversed("quality"), "remembered, and reversed");
         assert!(!list.reversed("level"));
         assert!(!list.reversed("seller"), "never sorted by: not reversed");
+    }
+
+    /// The attach clears with `SetCursorItem(0, …)` (`0x4ce56a`): no unlock and no
+    /// `ITEM_LOCK_CHANGED`, so the item stays locked in its bag and cannot be picked up again,
+    /// until the sell-slot clear lifts the lock with its event (`0x4cd653`).
+    #[test]
+    fn an_item_in_the_sell_slot_keeps_its_lock_until_it_leaves() {
+        use crate::script::cursor::{bag_lock_probe, two_item_bag};
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(two_item_bag()));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        heard::listen(
+            &s,
+            &["ITEM_LOCK_CHANGED", "CURSOR_UPDATE"],
+            Some(&bag_lock_probe(1)),
+        );
+        s.run("ClickAuctionSellItemButton()").unwrap();
+        assert_eq!(heard::take(&s), ["CURSOR_UPDATE 1"]);
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert!(
+            s.cursor_payload().is_none(),
+            "a locked item is not picked up"
+        );
+        s.clear_auction_sell_item();
+        assert_eq!(heard::take(&s), ["ITEM_LOCK_CHANGED nil"]);
+        s.clear_auction_sell_item();
+        assert!(
+            heard::take(&s).is_empty(),
+            "an empty slot's clear signals nothing"
+        );
     }
 }

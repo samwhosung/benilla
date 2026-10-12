@@ -798,29 +798,27 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `ClickSendMailItemButton`: the send slot as a cursor drop target, firing `CURSOR_UPDATE` and
-/// `ITEM_LOCK_CHANGED` like a bag slot.
+/// `ClickSendMailItemButton` (`0x4adef0`): the send slot as a cursor drop target. The attach
+/// clears the cursor with `SetCursorItem(0, …)` (`0x4ae0d2`), whose inner `ClearCursor(0,1)` lifts
+/// no lock: the attached item stays locked in its bag slot until it leaves the attach slot
+/// ([`cursor::client_locked`]), and no `ITEM_LOCK_CHANGED` fires.
 fn click_send_mail_item(model: &mut Model) {
-    match model.cursor.take() {
+    match model.cursor.clone() {
         // A held bag item attaches; it stays in its bag slot until the send.
         Some(CursorPayload::Item(item)) => {
             // An earlier attachment is overwritten, as in the reference; its slot has no lock.
             model.mail_send_item = Some(item);
             cursor::clear(model, cursor::Clear::KEEP_LOCK);
-            cursor::raise_lock_changed(model);
             // `MAIL_SEND_INFO_UPDATE` (`0x4ae0de`): the stock tab re-reads the item and postage.
             model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
         }
         None => {
             if let Some(item) = model.mail_send_item.take() {
                 cursor::put(model, CursorPayload::Item(item));
-                cursor::raise_lock_changed(model);
                 model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
             }
         }
-        Some(other) => {
-            model.cursor = Some(other);
-        }
+        Some(_) => {}
     }
 }
 
@@ -1379,6 +1377,33 @@ mod tests {
         assert!(s.eval::<bool>("return HasNewMail() == 1").unwrap());
         s.set_has_new_mail(false);
         assert!(s.eval::<bool>("return HasNewMail() == nil").unwrap());
+    }
+
+    /// The attach clears with `SetCursorItem(0, …)` (`0x4ae0d2`): no unlock and no
+    /// `ITEM_LOCK_CHANGED`, so the attached item stays locked in its bag and cannot be picked up
+    /// again, until the compose reset lifts the lock with its event (`0x4acdd6`).
+    #[test]
+    fn an_attached_item_keeps_its_lock_until_it_leaves_the_slot() {
+        use crate::script::cursor::{bag_lock_probe, two_item_bag};
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(two_item_bag()));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        heard::listen(
+            &s,
+            &["ITEM_LOCK_CHANGED", "CURSOR_UPDATE"],
+            Some(&bag_lock_probe(1)),
+        );
+        s.run("ClickSendMailItemButton()").unwrap();
+        assert_eq!(heard::take(&s), ["CURSOR_UPDATE 1"]);
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert!(
+            s.cursor_payload().is_none(),
+            "a locked item is not picked up"
+        );
+        assert!(heard::take(&s).is_empty());
+        s.reset_compose_tab();
+        assert_eq!(heard::take(&s), ["ITEM_LOCK_CHANGED nil"]);
     }
 }
 

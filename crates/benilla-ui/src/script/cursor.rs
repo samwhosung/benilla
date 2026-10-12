@@ -330,16 +330,21 @@ pub(crate) fn raise_lock_changed(model: &mut Model) {
 }
 
 /// Whether the client itself holds the item at `(bag, slot)` locked, the reference's `item+0x314`
-/// bit 0 that `LockItem` (`0x4953e0`) sets: while the item is on the cursor or is an armed gift
-/// wrap's paper (`0x5edeb5`). The engine has no item object to carry the bit, so it is read from
-/// the state that holds the item and lifts when the item leaves it. The app's pending operations
-/// are the slot's `locked`.
+/// bit 0 that `LockItem` (`0x4953e0`) sets: while the item is on the cursor, is an armed gift
+/// wrap's paper (`0x5edeb5`), or sits in the mail or auction attach slot, whose attach clears the
+/// cursor with `SetCursorItem(0, …)` (`0x4ae0d2`, `0x4ce56a`) and so keeps the pickup's lock until
+/// the item leaves the slot (`0x495420` at `0x4acdd6`, `0x4cd653`). The engine has no item object
+/// to carry the bit, so it is read from the state that holds the item and lifts when the item
+/// leaves it. The app's pending operations are the slot's `locked`.
 pub(crate) fn client_locked(model: &Model, bag: i64, slot: u32) -> bool {
-    matches!(&model.cursor, Some(CursorPayload::Item(item)) if item.bag == bag && item.slot == slot)
+    let at = |item: &CursorItem| item.bag == bag && item.slot == slot;
+    matches!(&model.cursor, Some(CursorPayload::Item(item)) if at(item))
         || model
             .pending_wrap
             .as_ref()
             .is_some_and(|w| w.bag == bag && w.slot == slot)
+        || model.mail_send_item.as_ref().is_some_and(at)
+        || model.auction_sell_item.as_ref().is_some_and(at)
 }
 
 /// Raise `DELETE_ITEM_CONFIRM(name, quality)` for an item dropped on the world. The payload stays
@@ -647,6 +652,36 @@ pub(crate) fn install_kind_probe(s: &super::UiScript) {
         })
         .unwrap();
     s.lua.globals().set("CursorKind", kind).unwrap();
+}
+
+/// Test-only: a backpack with two items, 117 in slot 1 and 118 in slot 2, both bar-placeable.
+#[cfg(test)]
+pub(crate) fn two_item_bag() -> super::container::ContainerState {
+    let item = |item_id: u32, name: &str| super::container::ContainerSlot {
+        item_id,
+        count: 1,
+        quality: Some(1),
+        bar_placeable: true,
+        texture: Some(format!("Interface\\Icons\\INV_{item_id}")),
+        link: Some(format!("|cffffffff|Hitem:{item_id}|h[{name}]|h|r")),
+        ..Default::default()
+    };
+    super::container::ContainerState {
+        name: Some("Backpack".into()),
+        num_slots: 16,
+        slots: [
+            (1, item(117, "Tough Jerky")),
+            (2, item(118, "Minor Healing Potion")),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+/// Test-only: a Lua expression reading `GetContainerItemInfo(0, slot)`'s `locked`.
+#[cfg(test)]
+pub(crate) fn bag_lock_probe(slot: u32) -> String {
+    format!("(function() local _, _, l = GetContainerItemInfo(0, {slot}) return l end)()")
 }
 
 #[cfg(test)]
