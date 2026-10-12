@@ -494,7 +494,11 @@ pub(super) fn tick_script(
         if script.vm_kind() == benilla_ui::script::VmKind::InGame {
             // A display change re-applies the UI scale (`0x492e90`), whose narrow-aspect cap
             // follows the window; a moved dial applies once, as its CVar callback does
-            // (`0x490770`).
+            // (`0x490770`). Deviation: the reference then re-reads the aspect (`0x492f13`) and on
+            // a change over 0.001 reloads the UI (`0x491380` → `0x494a50(0xa)`); here a resize
+            // re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry` with
+            // it, because the window resizes freely and a reload on each resize would tear down
+            // every addon's state mid-play.
             if resized {
                 let display = (w.round() as u32, h.round() as u32);
                 let mut none = None;
