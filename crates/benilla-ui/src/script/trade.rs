@@ -22,8 +22,9 @@ pub struct TradeSlotItem {
     pub name: Option<String>,
     pub texture: Option<String>,
     pub count: u32,
-    /// `None` while the template is in flight. `GetTradePlayerItemInfo` reports it only when
-    /// `inventory_type` is nonzero (`0x4c059c`), else -1.
+    /// `None` while the template is in flight. `GetTradePlayerItemInfo` and
+    /// `GetTradeTargetItemInfo` report it only when `inventory_type` is nonzero (`0x4c059c`,
+    /// `0x4c0241`), else -1.
     pub quality: Option<u32>,
     /// The template's InventoryType; 0 while the template is in flight and for an item that cannot
     /// be equipped.
@@ -238,7 +239,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         )?;
     }
 
-    // GetTradeTargetItemInfo(id): the six values `TradeFrame.lua:84` reads.
+    // GetTradeTargetItemInfo(id): the six values `TradeFrame.lua:84` reads; an empty slot is
+    // nil, nil, 0, 0, nil, nil (`0x4c02f6`). The fourth is the quality through the same gate as
+    // the player's (`0x4c0241`).
     g.set(
         "GetTradeTargetItemInfo",
         lua.create_function(|lua, id: usize| {
@@ -251,7 +254,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 (slot, usable)
             };
             let Some(s) = slot else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(super::binding_abi::tuple(&[
+                    None,
+                    None,
+                    Some(0),
+                    Some(0),
+                    None,
+                    None,
+                ]));
             };
             let opt_str = |v: &Option<String>| -> mlua::Result<Value> {
                 Ok(match v {
@@ -259,15 +269,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     None => Value::Nil,
                 })
             };
-            let quality = match s.quality {
-                Some(q) => Value::Integer(i64::from(q)),
-                None => Value::Nil,
-            };
             Ok(MultiValue::from_vec(vec![
                 opt_str(&s.name)?,
                 opt_str(&s.texture)?,
                 Value::Integer(i64::from(s.count.max(1))),
-                quality,
+                Value::Integer(super::item_stats::gated_quality(
+                    s.quality,
+                    s.inventory_type,
+                )),
                 flag(usable),
                 opt_str(&s.enchantment)?,
             ]))
@@ -500,12 +509,13 @@ mod tests {
             .eval::<bool>("return GetTradePlayerItemInfo(2) == nil")
             .unwrap());
 
-        // The target side adds quality as the fourth return.
+        // The target side adds the enchant and the usable flag; the fourth is the quality, -1 for
+        // linen cloth (InventoryType 0).
         let (name, _tex, count, quality, usable): (String, String, i64, i64, i64) =
             s.eval("return GetTradeTargetItemInfo(1)").unwrap();
         assert_eq!(
             (name.as_str(), count, quality, usable),
-            ("Linen Cloth", 1, 2, 1)
+            ("Linen Cloth", 1, -1, 1)
         );
         // The enchant slot (7) is filled on the target side.
         assert!(s
@@ -540,6 +550,32 @@ mod tests {
                 "slot {slot}"
             );
         }
+    }
+
+    /// The target side's quality goes through the same gate, and an empty slot pushes the six-value
+    /// miss tuple (`0x4c02f6`): nil, nil, 0, 0, nil, nil.
+    #[test]
+    fn target_item_info_gates_its_quality_and_pushes_six_values_on_a_miss() {
+        let mut s = UiScript::new().unwrap();
+        let mut st = state();
+        let mut weapon = item(1234, 1, 3);
+        weapon.inventory_type = 13;
+        st.target.slots[1] = Some(weapon);
+        s.set_trade(Some(st));
+        let shape = |s: &UiScript, slot: u32| -> String {
+            s.eval(&format!(
+                "local c = function(...) local o = {{}} for i = 1, arg.n do o[i] = tostring(arg[i]) end \
+                 return table.concat(o, ',') end return c(GetTradeTargetItemInfo({slot}))"
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            shape(&s, 2),
+            "Linen Cloth,Interface\\Icons\\INV_Fabric_Linen_01,1,3,1,nil"
+        );
+        assert_eq!(shape(&s, 3), "nil,nil,0,0,nil,nil");
+        assert_eq!(shape(&s, 0), "nil,nil,0,0,nil,nil");
+        assert_eq!(shape(&s, 9), "nil,nil,0,0,nil,nil");
     }
 
     /// The texture is a string for a filled slot: `0x5d8af0` falls back to the question mark while

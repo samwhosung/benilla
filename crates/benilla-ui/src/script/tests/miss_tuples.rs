@@ -23,6 +23,7 @@ const MISSES: &[(&str, &str)] = &[
     ("GetTalentInfo(1, 1)", "nil,nil,1,1,0,0,nil,nil"),
     ("GetTalentTabInfo(1)", "nil,nil,0,nil"),
     ("GetTradePlayerItemInfo(1)", "nil,nil,0,0,nil"),
+    ("GetTradeTargetItemInfo(1)", "nil,nil,0,0,nil,nil"),
     ("GetTradeSkillInfo(1)", "nil,nil,0,nil"),
     ("GetTradeSkillReagentInfo(1, 1)", "nil,nil,nil,nil"),
     ("GetTrainerServiceInfo(1)", "nil,nil,nil,1"),
