@@ -14,7 +14,7 @@
 //! One long-lived write thread drains [`ClientCommand`](super::ClientCommand)s; each connection
 //! hands it the fresh [`WorldWriter`] over a swap channel, so there is only ever one writer.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,7 +27,7 @@ use benilla_protocol::{
 };
 use crossbeam_channel::{Receiver, Sender};
 
-use super::{CharRequest, ClientCommand, RealmRequest};
+use super::{CharRequest, ClientCommand, ParkRequest, ParkSender, RealmRequest};
 
 /// The inbound census: every packet off the world socket, and the unix ms of the latest, which
 /// tell a silent server from a dead socket for the runaway watch ([`crate::net::motion`]).
@@ -69,16 +69,21 @@ pub(crate) struct LoginRequest {
     pub(crate) generation: u64,
 }
 
-/// The park-answer receivers, in the order a cycle blocks on them: credentials, realm, character.
+/// The park-answer receivers: credentials, and the realm and character requests on the one
+/// ordered channel ([`ParkRequest`]).
 pub(super) struct Parks {
     pub(super) login_rx: Receiver<LoginRequest>,
-    pub(super) realm_rx: Receiver<RealmRequest>,
-    pub(super) pick_rx: Receiver<CharRequest>,
+    pub(super) park_rx: Receiver<ParkRequest>,
     /// The screen asks for the roster itself ([`CharRequest::Enumerate`], the stock glue's
     /// `GetCharacterListUpdate`); false is the native screens' policy, the IO thread enumerating
-    /// on reaching the character park. Read as each park is entered.
-    pub(super) screen_asks_roster: bool,
+    /// on reaching the character park and after a create or delete. Read as each world park is
+    /// entered; the app sets it as it installs the VM that runs ([`super::RosterPolicy`]).
+    pub(super) screen_asks_roster: Arc<AtomicBool>,
 }
+
+/// World sessions begun this process, each numbered from 1; the events a session sends carry its
+/// number, so a reply is told from an older link's.
+static WORLD_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// How long a realm-list query waits for realmd; the park serving it is deaf that long.
 const REALM_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -159,6 +164,8 @@ enum Parked {
     Acted(CharAction, u8),
     /// `CMSG_CHAR_ENUM` was serviced in place; the roster is re-emitted, with no result.
     Listed,
+    /// The server refused the roster to a client without Warden: the login fails for good.
+    Refused(String),
     /// Stay parked: a realm-list refresh, or a Cancel over this screen.
     StayPut,
     /// Drop the parked world session and dial this realm under the abandon generation its ask
@@ -194,23 +201,25 @@ enum Cycle {
 pub(super) struct NetHandles {
     pub(super) events: Receiver<SessionEvent>,
     pub(super) commands: Sender<ClientCommand>,
-    pub(super) pick: Sender<CharRequest>,
-    pub(super) realm: Sender<RealmRequest>,
+    pub(super) pick: ParkSender<CharRequest>,
+    pub(super) realm: ParkSender<RealmRequest>,
+    pub(super) screen_asks_roster: Arc<AtomicBool>,
     pub(super) login: Sender<LoginRequest>,
     pub(super) login_abandon: Arc<AtomicU64>,
     pub(super) ping: Arc<Mutex<PingClock>>,
 }
 
 /// Spawns the read thread with its park and cycle loop, and the one long-lived write thread.
-pub(super) fn spawn_net(connect: bool, screen_asks_roster: bool) -> NetHandles {
+pub(super) fn spawn_net(connect: bool) -> NetHandles {
     // The outbound opcode trace (tag `out`), armed before any thread can send.
     if benilla_assets::trace::enabled_for("out") {
         benilla_protocol::observe_sends(wire_trace::trace_out);
     }
     let (events_tx, events_rx) = crossbeam_channel::unbounded();
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
-    let (pick_tx, pick_rx) = crossbeam_channel::unbounded::<CharRequest>();
-    let (realm_tx, realm_rx) = crossbeam_channel::unbounded::<RealmRequest>();
+    let (park_tx, park_rx) = crossbeam_channel::unbounded::<ParkRequest>();
+    let screen_asks_roster = Arc::new(AtomicBool::new(false));
+    let policy = Arc::clone(&screen_asks_roster);
     let (login_tx, login_rx) = crossbeam_channel::unbounded::<LoginRequest>();
     let login_abandon = Arc::new(AtomicU64::new(0));
     let ping_clock = Arc::new(Mutex::new(PingClock::default()));
@@ -239,9 +248,8 @@ pub(super) fn spawn_net(connect: bool, screen_asks_roster: bool) -> NetHandles {
                 );
                 let parks = Parks {
                     login_rx,
-                    realm_rx,
-                    pick_rx,
-                    screen_asks_roster,
+                    park_rx,
+                    screen_asks_roster: policy,
                 };
                 // Opcodes already reported for trailing bytes, once per process.
                 let mut tails_announced = std::collections::HashSet::new();
@@ -299,8 +307,9 @@ pub(super) fn spawn_net(connect: bool, screen_asks_roster: bool) -> NetHandles {
     NetHandles {
         events: events_rx,
         commands: cmd_tx,
-        pick: pick_tx,
-        realm: realm_tx,
+        pick: ParkSender::park(park_tx.clone()),
+        realm: ParkSender::park(park_tx),
+        screen_asks_roster,
         login: login_tx,
         login_abandon,
         ping: ping_clock,
@@ -386,16 +395,18 @@ fn query(
 fn login_park(parks: &Parks, events_tx: &Sender<SessionEvent>) -> Option<LoginRequest> {
     bevy::log::info!("net: parked at the login screen — waiting for credentials");
     let Parks {
-        login_rx, realm_rx, ..
+        login_rx, park_rx, ..
     } = parks;
     loop {
         // No `break` or `continue` inside the `select!` arms: the macro expands into a loop of its
         // own, which they would bind to.
         let answer = crossbeam_channel::select! {
             recv(login_rx) -> req => Some(req.ok()),
-            recv(realm_rx) -> msg => match msg {
+            recv(park_rx) -> msg => match msg {
                 Err(_) => Some(None),
-                Ok(RealmRequest::Refresh) => (!publish(events_tx, &[], true)).then_some(None),
+                Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
+                    (!publish(events_tx, &[], true)).then_some(None)
+                }
                 Ok(_) => None,
             },
         };
@@ -419,21 +430,21 @@ fn logon_park(
         logon.realms.len()
     );
     let Parks {
-        login_rx, realm_rx, ..
+        login_rx, park_rx, ..
     } = parks;
     loop {
         let answer = crossbeam_channel::select! {
-            recv(realm_rx) -> msg => match msg {
+            recv(park_rx) -> msg => match msg {
                 Err(_) => Some(LogonAnswer::Exit),
-                Ok(RealmRequest::Refresh) => {
+                Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
                     (!query(logon, req, events_tx)).then_some(LogonAnswer::Exit)
                 }
-                Ok(RealmRequest::Enter { realm, generation }) => {
+                Ok(ParkRequest::Realm(RealmRequest::Enter { realm, generation })) => {
                     Some(LogonAnswer::Enter(realm, generation))
                 }
-                Ok(RealmRequest::Close) => Some(LogonAnswer::Close),
-                // No world session here to leave.
-                Ok(RealmRequest::Leave) => None,
+                Ok(ParkRequest::Realm(RealmRequest::Close)) => Some(LogonAnswer::Close),
+                // No world session here to leave, and no character screen to ask.
+                Ok(ParkRequest::Realm(RealmRequest::Leave) | ParkRequest::Char(_)) => None,
             },
             recv(login_rx) -> msg => Some(msg.map_or(LogonAnswer::Exit, LogonAnswer::Login)),
         };
@@ -506,7 +517,7 @@ fn run(
         // frame over the current glue screen. Change Realm is served at the character park.
         //
         // An answer queued during a dead cycle must not answer this list.
-        while parks.realm_rx.try_recv().is_ok() {}
+        while parks.park_rx.try_recv().is_ok() {}
         if !publish(events_tx, &logon.realms, false) {
             return Ok(Cycle::Exit);
         }
@@ -568,8 +579,7 @@ fn world(
 ) -> Result<WorldEnd> {
     let Parks {
         login_rx,
-        realm_rx,
-        pick_rx,
+        park_rx,
         screen_asks_roster,
     } = parks;
     let stage = |s: LoginStage| {
@@ -666,11 +676,13 @@ fn world(
         // `CMSG_CHAR_CREATE` in one place (`0x5aac50`), reached only from the create screen.
         // Failures here are still pre-roster.
         //
-        // Only the native screens' policy enumerates here. The stock screen asks for its roster
-        // when it shows (`GetCharacterListUpdate`, [`CharRequest::Enumerate`]), as the reference
-        // does: the world connect completes with the authentication response (`0x5ab2b8`), and the
-        // one `CMSG_CHAR_ENUM` is the screen's.
-        let mut characters = if *screen_asks_roster {
+        // Only the native screens' policy enumerates here and after a create or delete. The stock
+        // screen asks for its roster when it shows and after each action it makes
+        // (`GetCharacterListUpdate`, [`CharRequest::Enumerate`], `0x46c1a7`), as the reference
+        // does: the world connect completes with the authentication response (`0x5ab2b8`), and
+        // the `CMSG_CHAR_ENUM` is the screen's.
+        let asks = screen_asks_roster.load(Ordering::SeqCst);
+        let mut characters = if asks {
             Vec::new()
         } else {
             match session.char_enum() {
@@ -689,59 +701,53 @@ fn world(
         if canceled() {
             return Ok(WorldEnd::Failed);
         }
-        // A pick or realm answer queued during a dead cycle must not answer this roster: a logout
-        // must land on the list, not bounce back in off a stale pick. The app re-sends its wants.
-        while pick_rx.try_recv().is_ok() {}
-        while realm_rx.try_recv().is_ok() {}
+        // A request or realm answer queued during a dead cycle must not answer this roster: a
+        // logout must land on the list, not bounce back in off a stale pick. The app re-sends
+        // its wants.
+        while park_rx.try_recv().is_ok() {}
+        let epoch = WORLD_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
         if events_tx
             .send(SessionEvent::WorldAuthenticated {
                 realm: realm.clone(),
+                epoch,
             })
             .is_err()
         {
             return Ok(WorldEnd::Cycle(Cycle::Exit));
         }
-        if !*screen_asks_roster
+        if !asks
             && events_tx
                 .send(SessionEvent::CharacterList {
                     characters: characters.clone(),
                     realm: Some(realm.clone()),
                     cause: RosterCause::Park,
+                    epoch,
                 })
                 .is_err()
         {
             return Ok(WorldEnd::Cycle(Cycle::Exit));
         }
 
-        // A roster ask the screen made before it left this realm goes out on this link first: the
-        // reference sends `CMSG_CHAR_ENUM` the moment the verb runs (`0x46b880`), and
-        // `ConnectToRealm` only then closes the link (`0x46b22b`). The two asks travel on two
-        // channels, so a realm change that wins the `select!` finds the ask still queued. The reply
-        // completes nothing, so it is read and dropped.
-        let ask_before_leaving = |session: &mut WorldSession| {
-            while let Ok(req) = pick_rx.try_recv() {
-                if matches!(req, CharRequest::Enumerate) {
-                    let _ = session.char_enum();
-                }
-            }
-        };
-
         // Park at character select until the app answers. Create and delete are serviced in place.
         // If the server kicked the parked socket meanwhile, the login below fails, the cycle
         // restarts and the app re-sends its pick, so the park needs no keepalive.
         bevy::log::info!("net: parked at character select");
         let guid = loop {
-            // Two channels, one park: `RealmList.xml` is a `frameStrata="DIALOG"` frame, so Change
-            // Realm raises it over character select and both must be served while it is open.
+            // The realm list's requests and the character screen's share one channel, in the
+            // order they were made: `RealmList.xml` is a `frameStrata="DIALOG"` frame, so Change
+            // Realm raises it over character select and both must be served while it is open,
+            // and a roster ask made before a realm change goes out on this link before the
+            // change drops it (the reference sends at the verb, `0x46b880`, and `ConnectToRealm`
+            // only then closes the link, `0x46b22b`).
             //
             // No `break` or `continue` inside the `select!` arms: the macro expands into a loop of
             // its own, which they would bind to. The arms answer with a [`Parked`].
             let answer = crossbeam_channel::select! {
-                recv(realm_rx) -> msg => match msg {
+                recv(park_rx) -> msg => match msg {
                     Err(_) => Parked::Exit,
                     // `RequestRealmList`: a query on the realmd link this cycle holds, then the
                     // list; also Change Realm's first list.
-                    Ok(RealmRequest::Refresh) => {
+                    Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
                         if query(logon, req, events_tx) {
                             Parked::StayPut
                         } else {
@@ -749,36 +755,36 @@ fn world(
                         }
                     }
                     // `RealmListDialogCancelled` over character select is a no-op (`0x46b810`).
-                    Ok(RealmRequest::Close) => Parked::StayPut,
+                    Ok(ParkRequest::Realm(RealmRequest::Close)) => Parked::StayPut,
                     // `ChangeRealm(category, index)`: dial the chosen realm with the session key
                     // we hold.
-                    Ok(RealmRequest::Enter { realm, generation }) => {
+                    Ok(ParkRequest::Realm(RealmRequest::Enter { realm, generation })) => {
                         Parked::Realm(realm, generation)
                     }
                     // `ConnectToRealm` with the world up drops it first (`0x46b22b`).
-                    Ok(RealmRequest::Leave) => {
-                        ask_before_leaving(&mut session);
-                        Parked::Leave
-                    }
-                },
-                recv(pick_rx) -> pick => match pick {
-                    Err(_) => Parked::Exit,
-                    Ok(CharRequest::Enter(guid)) => Parked::Play(guid),
+                    Ok(ParkRequest::Realm(RealmRequest::Leave)) => Parked::Leave,
+                    Ok(ParkRequest::Char(CharRequest::Enter(guid))) => Parked::Play(guid),
                     // Select's Back: drop the parked session, return to the login park.
-                    Ok(CharRequest::Abandon) => Parked::Repark,
-                    Ok(CharRequest::Create(create)) => {
+                    Ok(ParkRequest::Char(CharRequest::Abandon)) => Parked::Repark,
+                    Ok(ParkRequest::Char(CharRequest::Create(create))) => {
                         Parked::Acted(CharAction::Create, session.create_character(&create)?)
                     }
-                    Ok(CharRequest::Delete(target)) => {
+                    Ok(ParkRequest::Char(CharRequest::Delete(target))) => {
                         Parked::Acted(CharAction::Delete, session.delete_character(target)?)
                     }
                     // `GetCharacterListUpdate` (`0x4723d0` → `0x46b880` → `0x5aabb0` → `0x5b4690`):
                     // the reference asks the world server again whenever the glue screen wants
-                    // the list.
-                    Ok(CharRequest::Enumerate) => {
-                        characters = session.char_enum()?;
-                        Parked::Listed
-                    }
+                    // the list. A Warden refusal is the server's answer, as at the park entry.
+                    Ok(ParkRequest::Char(CharRequest::Enumerate)) => match session.char_enum() {
+                        Ok(c) => {
+                            characters = c;
+                            Parked::Listed
+                        }
+                        Err(e) => match e.downcast_ref::<WardenRequired>() {
+                            Some(w) => Parked::Refused(w.to_string()),
+                            None => return Err(e),
+                        },
+                    },
                 },
                 recv(login_rx) -> msg => msg.map_or(Parked::Exit, Parked::Login),
             };
@@ -793,6 +799,7 @@ fn world(
                     continue 'realm;
                 }
                 Parked::Leave => return Ok(WorldEnd::Failed),
+                Parked::Refused(reason) => return fail_terminal(reason),
                 Parked::Acted(action, code) => (action, code),
                 Parked::Listed => {
                     if events_tx
@@ -800,6 +807,7 @@ fn world(
                             characters: characters.clone(),
                             realm: Some(realm.clone()),
                             cause: RosterCause::Asked,
+                            epoch,
                         })
                         .is_err()
                     {
@@ -808,19 +816,21 @@ fn world(
                     continue;
                 }
             };
-            // A success changed the roster: re-emit it before the result, so the screen has the
-            // fresh list when it reacts.
+            // A success changed the roster: under the native policy re-emit it before the result,
+            // so the screen has the fresh list when it reacts. The stock screen asks again itself
+            // (`0x46c1a7`).
             let changed = match action {
                 CharAction::Create => code == messages::CHAR_CREATE_SUCCESS,
                 CharAction::Delete => code == messages::CHAR_DELETE_SUCCESS,
             };
-            if changed {
+            if changed && !asks {
                 characters = session.char_enum()?;
                 if events_tx
                     .send(SessionEvent::CharacterList {
                         characters: characters.clone(),
                         realm: Some(realm.clone()),
                         cause: RosterCause::Changed,
+                        epoch,
                     })
                     .is_err()
                 {

@@ -32,7 +32,7 @@ use crate::glue::dialog::{DialogKind, GlueDialog};
 use crate::glue_strings::GlueStrings;
 use crate::net::{
     CharListMessage, DisconnectedMessage, LoginAbandon, LoginFailedMessage, LoginQueuedMessage,
-    LoginRequest, LoginStageMessage, LoginSubmit,
+    LoginRequest, LoginStageMessage, LoginSubmit, WorldAuthMessage,
 };
 use crate::portrait::{GluePreview, GlueScene};
 use crate::sound::GlueSound;
@@ -638,16 +638,28 @@ fn drive_policy(
     }
 }
 
-/// The roster is the login's success edge: go to CharSelect, but only from `Login`, since a
-/// reconnect's roster lands while `InWorld`.
+/// The login's success edge: go to CharSelect, but only from `Login`, since a reconnect's roster
+/// lands while `InWorld`. The native screens take the roster for it, which the IO thread fetches on
+/// reaching the park; the stock screens take the world server's authentication
+/// (`SMSG_AUTH_RESPONSE`, `0x5ab2b8`), since the roster there is the screen's own ask and comes
+/// only once the screen is up.
 fn to_select_on_roster(
     mut msgs: MessageReader<CharListMessage>,
+    mut auths: MessageReader<WorldAuthMessage>,
+    stock: Option<Res<crate::ui_script::glue::GlueStock>>,
     mut intent: ResMut<LoginIntent>,
     mut dialog: ResMut<GlueDialog>,
     state: Res<State<ClientState>>,
     mut next: ResMut<NextState<ClientState>>,
 ) {
-    if msgs.read().next().is_none() {
+    let roster = msgs.read().count() > 0;
+    let authenticated = auths.read().count() > 0;
+    let edge = if stock.is_some_and(|s| s.0) {
+        authenticated
+    } else {
+        roster
+    };
+    if !edge {
         return;
     }
     intent.in_flight = false;
@@ -1131,7 +1143,7 @@ mod tests {
                 .insert_resource(LoginAbandon(std::sync::Arc::new(
                     std::sync::atomic::AtomicU64::new(0),
                 )))
-                .insert_resource(crate::net::RealmChoice(realm_tx))
+                .insert_resource(crate::net::RealmChoice(realm_tx.into()))
                 .add_message::<KeyboardInput>()
                 .add_message::<GlueSound>()
                 .add_message::<GlueLogin>()
@@ -1194,7 +1206,7 @@ mod tests {
                 crate::realmlist::DEFAULT_REALMLIST,
             ))
             .insert_resource(LoginAbandon(abandon.clone()))
-            .insert_resource(crate::net::RealmChoice(realm_tx))
+            .insert_resource(crate::net::RealmChoice(realm_tx.into()))
             .add_message::<crate::glue::dialog::GlueDialogAnswer>()
             .add_systems(Update, answer_dialog);
         app.world_mut().resource_mut::<LoginIntent>().in_flight = true;
@@ -1236,7 +1248,7 @@ mod tests {
             .insert_resource(LoginAbandon(std::sync::Arc::new(
                 std::sync::atomic::AtomicU64::new(0),
             )))
-            .insert_resource(crate::net::RealmChoice(realm_tx))
+            .insert_resource(crate::net::RealmChoice(realm_tx.into()))
             .insert_resource(State::new(ClientState::Login))
             .add_message::<KeyboardInput>()
             .add_message::<GlueSound>()
@@ -1344,6 +1356,7 @@ mod tests {
             .init_resource::<LoginIntent>()
             .init_resource::<GlueDialog>()
             .add_message::<CharListMessage>()
+            .add_message::<WorldAuthMessage>()
             .add_systems(Update, to_select_on_roster);
 
         // The refusal's dialog survives its own relist.
@@ -1354,6 +1367,7 @@ mod tests {
             characters: Vec::new(),
             realm: None,
             cause: benilla_protocol::RosterCause::Park,
+            epoch: 0,
         });
         app.update();
         let dialog = app.world().resource::<GlueDialog>();
@@ -1368,9 +1382,81 @@ mod tests {
             characters: Vec::new(),
             realm: None,
             cause: benilla_protocol::RosterCause::Park,
+            epoch: 0,
         });
         app.update();
         assert!(app.world().resource::<GlueDialog>().kind.is_none());
+    }
+
+    /// The login's success edge is the authentication under the stock screens, whose roster comes
+    /// only after the screen is up and asks, and the roster under the native ones. Until the stock
+    /// edge the state stays `Login`, so the screen's Exit still abandons the attempt.
+    #[test]
+    fn the_stock_login_ends_at_the_authentication_and_the_native_at_the_roster() {
+        use crate::net::WorldAuthMessage;
+        let roster = || CharListMessage {
+            characters: Vec::new(),
+            realm: None,
+            cause: benilla_protocol::RosterCause::Asked,
+            epoch: 1,
+        };
+        let auth = || WorldAuthMessage {
+            realm: benilla_protocol::RealmInfo {
+                name: "Fake".into(),
+                address: "127.0.0.1:8085".into(),
+                realm_type: 0,
+                flags: 0,
+                population: 0.0,
+                characters: 0,
+                category: 1,
+                id: 1,
+            },
+            epoch: 1,
+        };
+        for stock in [true, false] {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .insert_state(ClientState::Login)
+                .insert_resource(crate::ui_script::glue::GlueStock(stock))
+                .init_resource::<LoginIntent>()
+                .init_resource::<GlueDialog>()
+                .add_message::<CharListMessage>()
+                .add_message::<WorldAuthMessage>()
+                .add_systems(Update, to_select_on_roster);
+            let (first, second) = (
+                |app: &mut App| {
+                    if stock {
+                        app.world_mut().write_message(roster());
+                    } else {
+                        app.world_mut().write_message(auth());
+                    }
+                },
+                |app: &mut App| {
+                    if stock {
+                        app.world_mut().write_message(auth());
+                    } else {
+                        app.world_mut().write_message(roster());
+                    }
+                },
+            );
+            // The message of the other policy's edge leaves the screen where it is.
+            first(&mut app);
+            app.update();
+            app.update();
+            assert_eq!(
+                *app.world().resource::<State<ClientState>>().get(),
+                ClientState::Login,
+                "stock {stock}"
+            );
+            second(&mut app);
+            app.update();
+            app.update();
+            assert_eq!(
+                *app.world().resource::<State<ClientState>>().get(),
+                ClientState::CharSelect,
+                "stock {stock}"
+            );
+        }
     }
 
     /// An unattended run still reconnects on a lost session; the verdict rides the message.

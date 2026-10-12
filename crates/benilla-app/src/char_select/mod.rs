@@ -921,7 +921,7 @@ pub(crate) fn test_character(guid: u64, name: &str) -> Character {
 pub(crate) fn add_test_systems(app: &mut App, pick: crossbeam_channel::Sender<CharRequest>) {
     app.insert_state(ClientState::CharSelect)
         .init_resource::<Roster>()
-        .insert_resource(CharPick(pick))
+        .insert_resource(CharPick(pick.into()))
         .add_message::<CharListMessage>()
         .add_systems(
             Update,
@@ -1197,7 +1197,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Roster>()
-            .insert_resource(CharPick(tx))
+            .insert_resource(CharPick(tx.into()))
             .insert_resource(match stored {
                 Some(v) => crate::cvars::Cvars::with_value(CVAR_LAST_CHARACTER, v),
                 None => crate::cvars::Cvars::default(),
@@ -1216,6 +1216,7 @@ mod tests {
                 .collect(),
             realm: None,
             cause: benilla_protocol::RosterCause::Park,
+            epoch: 0,
         });
         app.update();
         app.world().resource::<Roster>().selected()
@@ -1310,7 +1311,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Roster>()
-            .insert_resource(CharPick(tx))
+            .insert_resource(CharPick(tx.into()))
             .insert_resource(crate::cvars::Cvars::with_value(CVAR_LAST_CHARACTER, "0"))
             .add_message::<CharListMessage>()
             .add_message::<AppExit>()
@@ -1327,6 +1328,7 @@ mod tests {
             ],
             realm: None,
             cause: benilla_protocol::RosterCause::Park,
+            epoch: 0,
         });
         app.update();
         assert_eq!(
@@ -1363,7 +1365,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<Roster>()
             .init_resource::<crate::cvars::Cvars>()
-            .insert_resource(CharPick(tx))
+            .insert_resource(CharPick(tx.into()))
             .add_systems(Update, persist_last_character);
         {
             let mut roster = app.world_mut().resource_mut::<Roster>();

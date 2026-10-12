@@ -19,14 +19,28 @@ pub(crate) fn setup_script(world: &mut World) {
 
 /// Install the VM the world holds outside the world: the stock glue screens' under
 /// [`super::glue::GlueStock`], put up on `screen`, else a boot VM.
+///
+/// The IO thread's roster policy follows the VM that is up: the screen asks for its roster only
+/// when the stock glue VM was built, so a run whose stock VM failed to build (logged as an error
+/// by [`new_vm`]) falls back to the park's own enumeration instead of waiting on a screen that
+/// never asks.
 fn install_glue_side_vm(world: &mut World, screen: super::glue::GlueScreen) {
-    if world
+    let stock_asked = world
         .get_resource::<super::glue::GlueStock>()
-        .is_some_and(|s| s.0)
-    {
-        install_glue_vm(world, screen);
+        .is_some_and(|s| s.0);
+    let stock_up = if stock_asked {
+        install_glue_vm(world, screen)
     } else {
         install_boot_vm(world);
+        false
+    };
+    if stock_asked && !stock_up {
+        error!("ui_script: WOW_GLUE_STOCK=1 but the stock glue VM did not come up; the roster is fetched at the park");
+    }
+    if let Some(policy) = world.get_resource::<crate::net::RosterPolicy>() {
+        policy
+            .0
+            .store(stock_up, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -54,9 +68,9 @@ pub(crate) fn strings_vm(world: &mut World) -> Option<UiScript> {
 /// builder `0x46a7b0` then `SET_GLUE_SCREEN` (`0x402b65` at startup, `0x402090` back from the
 /// world). It holds what the glue state holds and nothing of the boot VM's: no `GlobalStrings.lua`,
 /// no emote tokens.
-fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) {
+fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
     let Some(mut script) = new_vm(world, UiScript::new_glue) else {
-        return;
+        return false;
     };
     seat_raster_seam_for_load(world, &mut script);
     let start = std::time::Instant::now();
@@ -70,6 +84,7 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) {
         failures.len()
     );
     world.insert_non_send_resource(script);
+    true
 }
 
 /// A fresh VM from `make` on the process clock with the addon asset probes wired, or `None` (the
@@ -1046,6 +1061,23 @@ mod tests {
             0,
             "no cascade before our own player's create"
         );
+    }
+
+    /// The IO thread's roster policy follows the VM that came up: the screen asks only when the
+    /// stock glue VM stands, so a boot VM leaves the park to fetch the roster.
+    #[test]
+    fn the_roster_policy_follows_the_vm_that_stands() {
+        use std::sync::atomic::Ordering;
+        for stock in [true, false] {
+            let mut world = World::new();
+            let policy = crate::net::RosterPolicy(Default::default());
+            policy.0.store(!stock, Ordering::SeqCst);
+            world.insert_resource(policy.clone());
+            world.insert_resource(super::super::glue::GlueStock(stock));
+            world.insert_resource(State::new(crate::char_select::ClientState::Login));
+            setup_script(&mut world);
+            assert_eq!(policy.0.load(Ordering::SeqCst), stock);
+        }
     }
 
     /// Under `WOW_GLUE_STOCK=1` the world holds the glue VM where it holds a boot VM, at startup

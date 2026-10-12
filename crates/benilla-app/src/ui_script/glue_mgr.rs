@@ -69,9 +69,11 @@
 //!    is a `CMSG_CHAR_ENUM` on the parked world session.
 //! 2. The world connect completes with the authentication response (`0x5ab2b8` → `0x5aab80`),
 //!    not with a roster; the IO thread fetches none of its own under the stock screen, so every
-//!    call sends, and only a reply to that request (the roster event's cause) completes the
-//!    query. Any other roster is not this screen's and is dropped, as are the late replies of a
-//!    query that was cancelled or left behind by a realm change.
+//!    call sends, in order with the realm requests on the one park channel. A reply from the
+//!    current link (the world session's epoch) to that request completes the query, as
+//!    `SetStatus` does (`0x5aa920`), so one that lands before the tick that takes a Cancel turns
+//!    it into a load. A roster of another cause or link, or one with no query pending, is dropped
+//!    ([`GlueMgr::on_roster`]).
 //! 3. State 3's frame (`0x46c03a`) re-texts the dialog and acts on the completed query: success
 //!    closes the dialog and loads the roster (`0x4724d0`: the records, `lastCharacterIndex`
 //!    selected, `CHARACTER_LIST_UPDATE`); an empty roster with no realm chosen asks for the realm
@@ -95,7 +97,7 @@ use crate::login::queue::QueueEstimate;
 use crate::login::GlueLogin;
 use crate::net::{
     CharListMessage, CharRequest, DisconnectedMessage, LoginFailedMessage, LoginQueuedMessage,
-    LoginStageMessage, RealmListMessage, RealmRequest, WorldAuthMessage,
+    LoginStageMessage, ParkRequest, RealmListMessage, RealmRequest, WorldAuthMessage,
 };
 
 /// `CGlueMgr`'s `screenState` (`0xb41da0`), named by the functions that set each value: the
@@ -464,16 +466,18 @@ pub(crate) struct GlueMgr {
     /// The roster the last character list reply left in `ClientServices` (`[svc+0x1ae8]`), which
     /// the roster load (`0x4724d0`) walks.
     roster: Vec<Character>,
+    /// The number of the world session the link is (`WorldAuthMessage::epoch`): the roster
+    /// replies of any other are not this link's.
+    link: u64,
     /// The select verbs' cells, carried from one glue VM to the next.
     select_cells: GlueSelectCells,
     /// The realm list's sort and selection cells, carried from one glue VM to the next.
     realm_cells: GlueRealmCells,
     /// The manager moved [`Self::realm_cells`], for the next seed.
     cells_moved: bool,
-    /// Realm requests for the IO thread, sent at the end of the frame.
-    realm_out: Vec<RealmRequest>,
-    /// Character requests for the parked IO thread, sent with them.
-    char_out: Vec<CharRequest>,
+    /// Realm and character requests for the IO thread in the order they were made, sent at the end
+    /// of the frame on its one ordered channel.
+    park_out: Vec<ParkRequest>,
     /// Asks of the login engine the per-frame arms made, sent with the verbs' own.
     login_out: Vec<GlueLogin>,
 }
@@ -547,11 +551,10 @@ impl GlueMgr {
     }
 
     /// The asks the per-frame arms made of the login engine and of the IO thread.
-    fn take_asks(&mut self) -> (Vec<GlueLogin>, Vec<RealmRequest>, Vec<CharRequest>) {
+    fn take_asks(&mut self) -> (Vec<GlueLogin>, Vec<ParkRequest>) {
         (
             std::mem::take(&mut self.login_out),
-            std::mem::take(&mut self.realm_out),
-            std::mem::take(&mut self.char_out),
+            std::mem::take(&mut self.park_out),
         )
     }
 
@@ -567,7 +570,7 @@ impl GlueMgr {
         if !self.connected {
             self.op.complete(false, STATUS_FAILED_TO_CONNECT);
         } else {
-            self.char_out.push(CharRequest::Enumerate);
+            self.park_out.push(CharRequest::Enumerate.into());
         }
     }
 
@@ -579,7 +582,7 @@ impl GlueMgr {
             self.open("CANCEL", Some(Text::Key("REALM_LIST_IN_PROGRESS")));
         }
         self.op = Operation::begin(OpKind::GetRealms, STATUS_REALM_LIST_IN_PROGRESS);
-        self.realm_out.push(RealmRequest::Refresh);
+        self.park_out.push(RealmRequest::Refresh.into());
     }
 
     /// `CancelRealmListQuery` (`0x46b7e0`): in state 4 only, the query completes cancelled and the
@@ -602,7 +605,7 @@ impl GlueMgr {
         }
         if self.connected {
             // `0x46b22b`: the world connection drops before anything is asked of realmd.
-            self.realm_out.push(RealmRequest::Leave);
+            self.park_out.push(RealmRequest::Leave.into());
         }
         self.connected = false;
         self.state = ScreenState::Connect;
@@ -610,7 +613,7 @@ impl GlueMgr {
         self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
         self.queue = QueueEstimate::default();
         // The connect's own query (`0x5aab20` → `0x5b2220`).
-        self.realm_out.push(RealmRequest::Refresh);
+        self.park_out.push(RealmRequest::Refresh.into());
     }
 
     /// A realm list reply: the holder filled (`0x5b2230`), then the pending operation's arm of
@@ -640,10 +643,13 @@ impl GlueMgr {
                     Some(r) => {
                         info!("glue: the connect dials {:?}", r.name);
                         // Stamped with the abandon generation as it is sent.
-                        self.realm_out.push(RealmRequest::Enter {
-                            realm: r.clone(),
-                            generation: 0,
-                        });
+                        self.park_out.push(
+                            RealmRequest::Enter {
+                                realm: r.clone(),
+                                generation: 0,
+                            }
+                            .into(),
+                        );
                     }
                     None => {
                         info!("glue: realmName {realm_name:?} names no listed realm");
@@ -713,7 +719,14 @@ impl GlueMgr {
                     self.cells.result = result;
                 }
             }
-            ScreenState::Connect => {
+            // The character list query's reply never came: the server refused the roster to a
+            // client without Warden (the park's `char_enum`), the one failure it reports. The
+            // query completes failed with the words, and the link is gone.
+            ScreenState::CharList if self.op.kind != OpKind::CharList || self.op.done => {}
+            ScreenState::Connect | ScreenState::CharList => {
+                if self.state == ScreenState::CharList {
+                    self.connected = false;
+                }
                 let status = match msg.refusal {
                     Some(LoginRefusal::World(code)) => code,
                     Some(LoginRefusal::Logon(_) | LoginRefusal::LogonProof(_)) => {
@@ -787,16 +800,21 @@ impl GlueMgr {
         }
     }
 
-    /// The reply to a roster request completes the character list query that is waiting on it
-    /// `CHAR_LIST_RETRIEVED` (`0x5ab300`). It is dropped in any other state, and with no query
-    /// pending (cancelled, left behind by a realm change): the reference's handler completes
-    /// the operation in flight and nothing else (`0x5aabb0` begins it). A roster that nothing of
-    /// the screen asked for is not this screen's either.
-    fn on_roster(&mut self, roster: Vec<Character>, cause: RosterCause) {
+    /// A roster reply from the current link stores the roster and completes the operation
+    /// `CHAR_LIST_RETRIEVED` (`0x5ab300` → `SetStatus`, `0x5aa920`), which overwrites the status
+    /// whatever it was: a reply that lands between a Cancel and the tick that takes it turns the
+    /// cancel into a load, as the reference's does, and a second reply replaces the first.
+    ///
+    /// Deviation: the reference's handler completes whichever operation is current; here only the
+    /// character list's does, in state 3, and a reply of another cause (a roster nothing of the
+    /// screen asked for) or of another link (before a realm change) completes nothing. Those
+    /// replies cannot be told from the operation they would be applied to in the reference, which
+    /// has one link and one request in flight; here the IO thread's park serves several.
+    fn on_roster(&mut self, roster: Vec<Character>, cause: RosterCause, epoch: u64) {
         if cause != RosterCause::Asked
+            || epoch != self.link
             || self.state != ScreenState::CharList
             || self.op.kind != OpKind::CharList
-            || self.op.done
         {
             return;
         }
@@ -808,8 +826,9 @@ impl GlueMgr {
     /// The world server accepted the authentication: the link is up, and in state 2 the
     /// authentication completes `AUTH_OK` (`0x5aab80`), which the tick shows and takes down the
     /// success arm.
-    fn on_world_authenticated(&mut self, realm: benilla_protocol::RealmInfo) {
+    fn on_world_authenticated(&mut self, realm: benilla_protocol::RealmInfo, epoch: u64) {
         self.connected = true;
+        self.link = epoch;
         self.realm = Some(realm);
         if self.state == ScreenState::Logon {
             // A logon whose world half finished inside one frame.
@@ -1044,7 +1063,6 @@ pub(crate) struct GlueAsks<'w> {
     music: MessageWriter<'w, crate::sound::GlueMusicRequest>,
     realm: Option<Res<'w, crate::net::RealmChoice>>,
     abandon: Option<Res<'w, crate::net::LoginAbandon>>,
-    pick: Option<Res<'w, crate::net::CharPick>>,
 }
 
 /// The CVars each agreement is read from and written to.
@@ -1154,6 +1172,10 @@ pub(crate) fn drive_glue_mgr(
                     asks.music.write(crate::sound::GlueMusicRequest::Stop);
                 }
                 GlueRequest::DisconnectFromServer => {
+                    // The disconnect handler zeroes the state (`0x46c55d`), the operation in
+                    // flight with it, so no reply completes on the login screen.
+                    mgr.state = ScreenState::Idle;
+                    mgr.op = Operation::default();
                     mgr.connected = false;
                     logins.push(GlueLogin::Disconnect);
                 }
@@ -1197,10 +1219,10 @@ pub(crate) fn drive_glue_mgr(
         mgr.on_failed(msg);
     }
     for msg in news.world_auths.read() {
-        mgr.on_world_authenticated(msg.realm.clone());
+        mgr.on_world_authenticated(msg.realm.clone(), msg.epoch);
     }
     for msg in news.rosters.read() {
-        mgr.on_roster(msg.characters.clone(), msg.cause);
+        mgr.on_roster(msg.characters.clone(), msg.cause, msg.epoch);
     }
     for msg in news.disconnects.read() {
         mgr.on_disconnected(msg.session_over);
@@ -1237,27 +1259,20 @@ pub(crate) fn drive_glue_mgr(
     send_asks(&mut mgr, Vec::new(), &mut asks);
 }
 
-/// Send the asks of the frame: the login engine's, the character requests, then the realm requests
-/// stamped with the abandon generation. The character requests go first: a roster ask made
-/// before a realm change was sent on the old link at the verb in the reference, and a realm
-/// change before it leaves the link down so the ask is never made (`0x5aabb0`).
+/// Send the asks of the frame: the login engine's, and the park requests in the order they were
+/// made, the realm requests stamped with the abandon generation as they go.
 fn send_asks(mgr: &mut GlueMgr, logins: Vec<GlueLogin>, asks: &mut GlueAsks) {
-    let (arms, realm_asks, char_asks) = mgr.take_asks();
+    let (arms, park_asks) = mgr.take_asks();
     for ask in logins.into_iter().chain(arms) {
         asks.login.write(ask);
     }
-    if let Some(pick) = asks.pick.as_deref() {
-        for ask in char_asks {
-            let _ = pick.0.send(ask);
-        }
-    }
     let now = crate::net::LoginAbandon::now(asks.abandon.as_deref());
     if let Some(choice) = asks.realm.as_deref() {
-        for mut ask in realm_asks {
-            if let RealmRequest::Enter { generation, .. } = &mut ask {
+        for mut ask in park_asks {
+            if let ParkRequest::Realm(RealmRequest::Enter { generation, .. }) = &mut ask {
                 *generation = now;
             }
-            let _ = choice.0.send(ask);
+            let _ = choice.0.send_request(ask);
         }
     }
 }

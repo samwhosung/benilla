@@ -67,11 +67,7 @@ impl Plugin for NetPlugin {
         crate::query_cache::register::<crate::names::NameCache>(app);
         crate::query_cache::register::<crate::go_templates::GameObjectTemplates>(app);
         crate::query_cache::register::<crate::items::Items>(app);
-        // The stock glue screen asks for its roster; the native ones wait for the IO thread's.
-        let handles = io::spawn_net(
-            self.connect,
-            crate::ui_script::glue::GlueStock::from_env().0,
-        );
+        let handles = io::spawn_net(self.connect);
         if !self.connect {
             app.insert_resource(NetOffline);
         }
@@ -88,6 +84,7 @@ impl Plugin for NetPlugin {
             .insert_resource(NetCommands(handles.commands))
             .insert_resource(CharPick(handles.pick))
             .insert_resource(RealmChoice(handles.realm))
+            .insert_resource(RosterPolicy(handles.screen_asks_roster))
             .insert_resource(LoginSubmit(handles.login))
             .insert_resource(LoginAbandon(handles.login_abandon))
             .insert_resource(PingShared(handles.ping))
@@ -384,9 +381,89 @@ pub(crate) struct NetEvents(Receiver<SessionEvent>);
 pub(crate) struct NetCommands(pub(crate) Sender<ClientCommand>);
 
 /// The character-select channel to the IO thread parked at select: create and delete are served
-/// in place, re-emitting the roster, until an [`CharRequest::Enter`] moves into the world.
+/// in place, re-emitting the roster (under the native policy), until an [`CharRequest::Enter`]
+/// moves into the world.
 #[derive(Resource)]
-pub(crate) struct CharPick(pub(crate) Sender<CharRequest>);
+pub(crate) struct CharPick(pub(crate) ParkSender<CharRequest>);
+
+/// A request to the IO thread at a park. The character screen's and the realm list's requests
+/// travel on one channel, in the order the app made them: the reference's verbs act at the call
+/// (`GetCharacterListUpdate` sends its `CMSG_CHAR_ENUM`, `ChangeRealm` then closes the link), so
+/// the IO thread must meet them in that order, which two channels cannot give.
+pub(crate) enum ParkRequest {
+    Char(CharRequest),
+    Realm(RealmRequest),
+}
+
+impl From<CharRequest> for ParkRequest {
+    fn from(r: CharRequest) -> Self {
+        ParkRequest::Char(r)
+    }
+}
+
+impl From<RealmRequest> for ParkRequest {
+    fn from(r: RealmRequest) -> Self {
+        ParkRequest::Realm(r)
+    }
+}
+
+/// The IO thread is gone.
+#[derive(Debug)]
+pub(crate) struct ParkGone;
+
+/// The app's end of the park channel for one kind of request.
+pub(crate) enum ParkSender<T> {
+    /// The shared, ordered channel the IO thread reads.
+    Park(Sender<ParkRequest>, std::marker::PhantomData<fn(T)>),
+    /// A channel of that kind alone, for a test that reads the requests itself.
+    #[cfg(test)]
+    Direct(Sender<T>),
+}
+
+impl<T> Clone for ParkSender<T> {
+    fn clone(&self) -> Self {
+        match self {
+            ParkSender::Park(tx, kind) => ParkSender::Park(tx.clone(), *kind),
+            #[cfg(test)]
+            ParkSender::Direct(tx) => ParkSender::Direct(tx.clone()),
+        }
+    }
+}
+
+impl<T> ParkSender<T> {
+    /// The app's end of the IO thread's park channel.
+    pub(super) fn park(tx: Sender<ParkRequest>) -> Self {
+        ParkSender::Park(tx, std::marker::PhantomData)
+    }
+}
+
+impl<T> ParkSender<T> {
+    /// Send a request of either kind, in the order it is made against the rest.
+    pub(crate) fn send_request(&self, request: ParkRequest) -> Result<(), ParkGone> {
+        match self {
+            ParkSender::Park(tx, _) => tx.send(request).map_err(|_| ParkGone),
+            #[cfg(test)]
+            ParkSender::Direct(_) => Err(ParkGone),
+        }
+    }
+}
+
+impl<T: Into<ParkRequest>> ParkSender<T> {
+    pub(crate) fn send(&self, request: T) -> Result<(), ParkGone> {
+        match self {
+            ParkSender::Park(tx, _) => tx.send(request.into()).map_err(|_| ParkGone),
+            #[cfg(test)]
+            ParkSender::Direct(tx) => tx.send(request).map_err(|_| ParkGone),
+        }
+    }
+}
+
+#[cfg(test)]
+impl<T> From<Sender<T>> for ParkSender<T> {
+    fn from(tx: Sender<T>) -> Self {
+        ParkSender::Direct(tx)
+    }
+}
 
 /// One request to the IO thread parked at character select.
 pub(crate) enum CharRequest {
@@ -403,11 +480,19 @@ pub(crate) enum CharRequest {
     Enumerate,
 }
 
+/// Whether the screen asks for its roster (the stock glue screens' `GetCharacterListUpdate`)
+/// instead of the IO thread fetching it on reaching the character park (the native screens'). Set
+/// by the UI session as it installs the VM that runs: true with the stock glue VM up, false
+/// otherwise, so a run whose stock VM did not build still gets its roster. The IO thread reads it
+/// as each park is entered.
+#[derive(Resource, Clone)]
+pub(crate) struct RosterPolicy(pub(crate) std::sync::Arc<std::sync::atomic::AtomicBool>);
+
 /// The realm channel: the answer to each [`RealmListMessage`]. Two parks listen, the login-side
 /// one and the character one, since the reference's realm list is a dialog over either screen
 /// (`RealmList.xml` is `frameStrata="DIALOG"`).
 #[derive(Resource)]
-pub(crate) struct RealmChoice(pub(crate) Sender<RealmRequest>);
+pub(crate) struct RealmChoice(pub(crate) ParkSender<RealmRequest>);
 
 /// One request to the IO thread about the realm list, served at the logon park and at character
 /// select; at the login park a query fails and the rest are dropped.
@@ -2021,6 +2106,8 @@ pub(crate) struct CharListMessage {
     pub(crate) realm: Option<benilla_protocol::RealmInfo>,
     /// What the roster was fetched for.
     pub(crate) cause: benilla_protocol::RosterCause,
+    /// The world session that sent it ([`WorldAuthMessage::epoch`]).
+    pub(crate) epoch: u64,
 }
 
 /// The world server accepted the authentication: the world connect to `realm` is done and the IO
@@ -2028,6 +2115,8 @@ pub(crate) struct CharListMessage {
 #[derive(Message)]
 pub(crate) struct WorldAuthMessage {
     pub(crate) realm: benilla_protocol::RealmInfo,
+    /// This world session's number, counted per process: what its roster replies carry.
+    pub(crate) epoch: u64,
 }
 
 /// A character create or delete result; a refreshed [`CharListMessage`] precedes a success.

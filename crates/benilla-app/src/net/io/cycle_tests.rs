@@ -11,7 +11,7 @@ use benilla_protocol::{RealmInfo, RosterCause, SessionEvent, WorldWriter};
 
 use super::fake::{self, FakeRealm, WAIT};
 use super::{run, Cycle, LoginRequest, Parks, PingClock};
-use crate::net::{CharRequest, RealmRequest};
+use crate::net::{CharRequest, ParkRequest, RealmRequest};
 
 const REALM: &str = "Fake";
 
@@ -63,14 +63,12 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (writer_tx, _writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
     let (login_tx, login_rx) = crossbeam_channel::unbounded();
-    let (realm_tx, realm_rx) = crossbeam_channel::unbounded();
-    let (pick_tx, pick_rx) = crossbeam_channel::unbounded();
+    let (park_tx, park_rx) = crossbeam_channel::unbounded();
     let cycle = thread::spawn(move || {
         let parks = Parks {
             login_rx,
-            realm_rx,
-            pick_rx,
-            screen_asks_roster: false,
+            park_rx,
+            screen_asks_roster: Default::default(),
         };
         let ended = run(
             &events_tx,
@@ -94,7 +92,9 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
     let (realms, failed) = next_list(&events);
     assert!(!failed);
     assert_eq!(realms[0].name, REALM);
-    realm_tx.send(enter(realms[0].clone())).unwrap();
+    park_tx
+        .send(ParkRequest::Realm(enter(realms[0].clone())))
+        .unwrap();
     assert!(
         matches!(next_event(&events), SessionEvent::WorldAuthenticated { .. }),
         "the world connect completes with the authentication"
@@ -116,7 +116,9 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
         other => panic!("expected the roster at select, got {other:?}"),
     }
     // Select's Back ends the cycle, so the socket is done and its log complete.
-    pick_tx.send(CharRequest::Abandon).unwrap();
+    park_tx
+        .send(ParkRequest::Char(CharRequest::Abandon))
+        .unwrap();
     assert!(cycle.join().unwrap(), "Back returns to the login park");
     let sent = world.sent.lock().unwrap().clone();
     assert!(
@@ -333,4 +335,136 @@ fn leave_drops_the_world_session_and_keeps_the_logon() {
         SessionEvent::CharacterList { .. }
     ));
     assert_eq!(realmd.logons(), 1, "one logon throughout");
+}
+
+/// The character park's requests and the realm list's are met in the order the app made them, on
+/// one channel. Two roster asks and a `Leave` queue while the IO thread is held in an earlier
+/// ask's slow reply: both asks go out on the old link before it leaves, none is dropped, and the
+/// leave is honored after them. The reference sends `CMSG_CHAR_ENUM` at the verb (`0x46b880`) and
+/// `ConnectToRealm` only then closes the link (`0x46b22b`). Two channels left the order to a random
+/// choice among the ready ones, which lost asks about half the time.
+#[test]
+fn the_park_serves_its_requests_in_the_order_they_were_made() {
+    for round in 0..32 {
+        let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+        world.delay_rosters(std::time::Duration::from_millis(15));
+        let cycles = fake::spawn_cycles_asking();
+        fake::login(&cycles, &realmd.addr);
+        let (realms, _) = next_list(&cycles.events);
+        cycles.realm.send(enter(realms[0].clone())).unwrap();
+        assert!(matches!(
+            next_event(&cycles.events),
+            SessionEvent::WorldAuthenticated { .. }
+        ));
+        // The first ask holds the thread; the second and the leave queue behind it together.
+        cycles.pick.send(CharRequest::Enumerate).unwrap();
+        cycles.pick.send(CharRequest::Enumerate).unwrap();
+        cycles.realm.send(RealmRequest::Leave).unwrap();
+        for ask in 1..=2 {
+            match next_event(&cycles.events) {
+                SessionEvent::CharacterList { cause, .. } => {
+                    assert_eq!(cause, RosterCause::Asked, "round {round} ask {ask}")
+                }
+                other => panic!("round {round}: expected the asked-for roster, got {other:?}"),
+            }
+        }
+        assert_eq!(world.enumerations_in(0), 2, "round {round}");
+        let deadline = std::time::Instant::now() + WAIT;
+        while world.open() > 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "round {round}: the leave was lost, the session stays open"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        drop(cycles.pick);
+    }
+}
+
+/// A server that wants Warden answers the stock screen's first ask with `SMSG_WARDEN_DATA`: the
+/// login fails for good with the server's words, as it does at the park under the native policy,
+/// not as a lost stream.
+#[test]
+fn a_warden_demand_at_the_asked_roster_is_a_terminal_login_failure() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    world.demand_warden();
+    let cycles = fake::spawn_cycles_asking();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::WorldAuthenticated { .. }
+    ));
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    loop {
+        match cycles.events.recv_timeout(WAIT).expect("went quiet") {
+            SessionEvent::LoginFailed { terminal, .. } => {
+                assert!(terminal);
+                break;
+            }
+            SessionEvent::LoginStage { .. } => {}
+            other => panic!("expected the terminal login failure, got {other:?}"),
+        }
+    }
+}
+
+/// After a create the native policy re-emits the roster before the result; the stock screen asks
+/// again itself (`0x46c1a7`), so the IO thread sends it nothing and enumerates nothing.
+#[test]
+fn only_the_native_policy_re_enumerates_after_a_create() {
+    let req = benilla_protocol::CharCreateReq {
+        name: "Newone".into(),
+        race: 1,
+        class: 1,
+        gender: 0,
+        skin: 0,
+        face: 0,
+        hair_style: 0,
+        hair_color: 0,
+        facial_hair: 0,
+    };
+    // Native: the park's roster, then the create's, tagged as changed, then the result.
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_roster(&cycles.events),
+        SessionEvent::CharacterList {
+            cause: RosterCause::Park,
+            ..
+        }
+    ));
+    cycles.pick.send(CharRequest::Create(req.clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::CharacterList {
+            cause: RosterCause::Changed,
+            ..
+        }
+    ));
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::CharActionResult { .. }
+    ));
+    assert_eq!(world.enumerations(), 2);
+
+    // Stock: the result alone.
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles_asking();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::WorldAuthenticated { .. }
+    ));
+    cycles.pick.send(CharRequest::Create(req)).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::CharActionResult { .. }
+    ));
+    assert_eq!(world.enumerations(), 0);
 }

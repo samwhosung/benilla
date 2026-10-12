@@ -764,7 +764,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Realms>()
             .init_resource::<crate::cvars::Cvars>()
-            .insert_resource(RealmChoice(tx))
+            .insert_resource(RealmChoice(tx.into()))
             .add_message::<RealmListMessage>()
             .add_systems(Update, apply_realm_policy);
         app.world_mut().write_message(RealmListMessage {

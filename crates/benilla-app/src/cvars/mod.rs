@@ -1830,6 +1830,7 @@ mod tests {
             characters: roster(),
             realm: None,
             cause: benilla_protocol::RosterCause::Park,
+            epoch: 0,
         });
         app.update();
         assert_eq!(
@@ -1858,6 +1859,7 @@ mod tests {
             characters: roster(),
             realm: None,
             cause: benilla_protocol::RosterCause::Park,
+            epoch: 0,
         });
         app.update();
 

@@ -850,7 +850,7 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.init_resource::<Time>()
             .init_resource::<GlueClicks>()
-            .insert_resource(crate::net::RealmChoice(tx))
+            .insert_resource(crate::net::RealmChoice(tx.into()))
             .add_message::<crate::sound::GlueSound>()
             .add_message::<crate::login::GlueLogin>()
             .insert_resource(Realms {

@@ -4,7 +4,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -21,7 +21,7 @@ use num_bigint::BigUint;
 use sha1::{Digest, Sha1};
 
 use super::{run, Cycle, LoginRequest, Parks, PingClock};
-use crate::net::{CharRequest, RealmRequest};
+use crate::net::{CharRequest, ParkRequest, ParkSender, RealmRequest};
 
 pub(crate) const USER: &str = "empty";
 pub(crate) const PASS: &str = "secret";
@@ -330,6 +330,8 @@ pub(crate) struct World {
     rosters: Arc<Mutex<Vec<Vec<u8>>>>,
     /// How long a `CMSG_CHAR_ENUM` waits before its answer.
     enum_delay: Arc<Mutex<Duration>>,
+    /// Answer `CMSG_CHAR_ENUM` with `SMSG_WARDEN_DATA`, as a server does that wants Warden.
+    warden: Arc<AtomicBool>,
     open: Arc<AtomicUsize>,
 }
 
@@ -342,6 +344,11 @@ impl World {
     /// The characters each session sees, by the order the sessions begin.
     pub(crate) fn set_rosters(&self, per_session: &[&[benilla_protocol::Character]]) {
         *self.rosters.lock().unwrap() = per_session.iter().map(|c| char_enum_body(c)).collect();
+    }
+
+    /// Have the server demand Warden in place of the roster from now on.
+    pub(crate) fn demand_warden(&self) {
+        self.warden.store(true, Ordering::SeqCst);
     }
 
     /// Hold every roster answer back this long.
@@ -393,6 +400,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let session_log = Arc::clone(&session_packets);
     let enum_delay = Arc::new(Mutex::new(Duration::ZERO));
     let enum_wait = Arc::clone(&enum_delay);
+    let warden = Arc::new(AtomicBool::new(false));
+    let warden_flag = Arc::clone(&warden);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
     thread::spawn(move || {
@@ -431,6 +440,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let roster_bodies = Arc::clone(&roster_bodies);
             let session_log = Arc::clone(&session_log);
             let enum_wait = Arc::clone(&enum_wait);
+            let warden_flag = Arc::clone(&warden_flag);
             let index = {
                 let mut all = session_log.lock().unwrap();
                 all.push(Vec::new());
@@ -452,6 +462,10 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                             };
                             let wait = *enum_wait.lock().unwrap();
                             thread::sleep(wait);
+                            if warden_flag.load(Ordering::SeqCst) {
+                                send(&mut s, Some(&mut crypto), opcode::SMSG_WARDEN_DATA, &[]);
+                                continue;
+                            }
                             send(&mut s, Some(&mut crypto), opcode::SMSG_CHAR_ENUM, &body);
                         }
                         opcode::CMSG_CHAR_CREATE => send(
@@ -473,6 +487,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         session_packets,
         rosters,
         enum_delay,
+        warden,
         open,
     }
 }
@@ -497,8 +512,8 @@ pub(crate) fn dead_address() -> String {
 pub(crate) struct Cycles {
     pub(crate) events: Receiver<SessionEvent>,
     pub(crate) login: Sender<LoginRequest>,
-    pub(crate) realm: Sender<RealmRequest>,
-    pub(crate) pick: Sender<CharRequest>,
+    pub(crate) realm: ParkSender<RealmRequest>,
+    pub(crate) pick: ParkSender<CharRequest>,
     pub(crate) abandon: Arc<AtomicU64>,
 }
 
@@ -516,17 +531,15 @@ pub(crate) fn spawn_cycles_asking() -> Cycles {
 fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (login, login_rx) = crossbeam_channel::unbounded();
-    let (realm, realm_rx) = crossbeam_channel::unbounded();
-    let (pick, pick_rx) = crossbeam_channel::unbounded();
+    let (park_tx, park_rx) = crossbeam_channel::unbounded::<ParkRequest>();
     let abandon = Arc::new(AtomicU64::new(0));
     let thread_abandon = Arc::clone(&abandon);
     thread::spawn(move || {
         let (writer_tx, _writer_rx) = crossbeam_channel::unbounded::<WorldWriter>();
         let parks = Parks {
             login_rx,
-            realm_rx,
-            pick_rx,
-            screen_asks_roster,
+            park_rx,
+            screen_asks_roster: Arc::new(std::sync::atomic::AtomicBool::new(screen_asks_roster)),
         };
         let clock = Mutex::new(PingClock::default());
         let mut tails = Default::default();
@@ -564,8 +577,8 @@ fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
     Cycles {
         events,
         login,
-        realm,
-        pick,
+        realm: ParkSender::park(park_tx.clone()),
+        pick: ParkSender::park(park_tx),
         abandon,
     }
 }

@@ -101,8 +101,8 @@ pub(crate) struct Bridge<'w, 's> {
 fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
     match ev {
         SessionEvent::LoginStage { stage } => login_stage(stage, &mut e.login_stages),
-        SessionEvent::WorldAuthenticated { realm } => {
-            e.world_auth.write(WorldAuthMessage { realm });
+        SessionEvent::WorldAuthenticated { realm, epoch } => {
+            e.world_auth.write(WorldAuthMessage { realm, epoch });
         }
         SessionEvent::LoginQueued { position, realm } => {
             e.login_queued.write(LoginQueuedMessage { position, realm });
@@ -134,9 +134,17 @@ fn on_character_list(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
         characters,
         realm,
         cause,
+        epoch,
     } = ev
     {
-        character_list(characters, realm, cause, &mut b.status, &mut e.char_lists);
+        character_list(
+            characters,
+            realm,
+            cause,
+            epoch,
+            &mut b.status,
+            &mut e.char_lists,
+        );
     }
 }
 
@@ -431,6 +439,7 @@ fn character_list(
     characters: Vec<Character>,
     realm: Option<benilla_protocol::RealmInfo>,
     cause: benilla_protocol::RosterCause,
+    epoch: u64,
     status: &mut NetStatus,
     char_lists: &mut MessageWriter<CharListMessage>,
 ) {
@@ -445,6 +454,7 @@ fn character_list(
         characters,
         realm,
         cause,
+        epoch,
     });
 }
 

@@ -32,6 +32,7 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             characters,
             realm: None,
             cause: super::RosterCause::Park,
+            epoch: 0,
         }],
         ServerPacket::CharacterLoginFailed { result } => {
             vec![SessionEvent::CharacterLoginFailed { result }]

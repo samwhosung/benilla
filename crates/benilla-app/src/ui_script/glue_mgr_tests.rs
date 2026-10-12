@@ -244,7 +244,7 @@ fn a_world_refusal_opens_its_status_and_url() {
         ]
     );
     assert!(
-        m.realm_out.is_empty(),
+        m.park_out.is_empty(),
         "the held list is raised, not asked for"
     );
 
@@ -263,7 +263,10 @@ fn a_world_refusal_opens_its_status_and_url() {
         ]
     );
     assert_eq!(m.state, ScreenState::RealmList);
-    assert!(matches!(m.realm_out.as_slice(), [RealmRequest::Refresh]));
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Realm(RealmRequest::Refresh)]
+    ));
 }
 
 /// The world connect re-texts the dialog from its operation each frame: nothing while the connect
@@ -294,7 +297,7 @@ fn the_world_connect_shows_each_completion() {
         m.outbox.is_empty(),
         "the running authentication's text is empty"
     );
-    m.on_world_authenticated(realm("Fake"));
+    m.on_world_authenticated(realm("Fake"), 0);
     m.tick();
     assert_eq!(
         m.outbox,
@@ -317,15 +320,15 @@ fn the_authentication_puts_the_character_screen_up() {
     let mut m = accepted();
     m.state = ScreenState::Connect;
     let alpha = || vec![crate::char_select::test_character(7, "Alpha")];
-    m.on_roster(alpha(), RosterCause::Asked);
-    m.on_roster(alpha(), RosterCause::Park);
+    m.on_roster(alpha(), RosterCause::Asked, 0);
+    m.on_roster(alpha(), RosterCause::Park, 0);
     m.tick();
     assert!(
         m.outbox.is_empty() && m.state == ScreenState::Connect,
         "a roster does not complete the connect: {:?}",
         m.outbox
     );
-    m.on_world_authenticated(realm("Fake"));
+    m.on_world_authenticated(realm("Fake"), 0);
     m.tick();
     assert_eq!(
         m.outbox,
@@ -341,7 +344,7 @@ fn the_authentication_puts_the_character_screen_up() {
     assert_eq!(m.state, ScreenState::Idle);
     assert!(m.connected);
     assert_eq!(m.realm.as_ref().map(|r| r.name.as_str()), Some("Fake"));
-    assert!(m.roster.is_empty() && m.realm_out.is_empty() && m.char_out.is_empty());
+    assert!(m.roster.is_empty() && m.park_out.is_empty());
 }
 
 /// `GetCharacterListUpdate`'s host half (`0x46b880`): state 3, the `CHAR_LIST_RETRIEVING` dialog
@@ -363,14 +366,21 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
         m.get_character_list();
         assert_eq!(m.state, ScreenState::CharList);
         assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_LIST_RETRIEVING"))]);
-        assert!(matches!(m.char_out.as_slice(), [CharRequest::Enumerate]));
-        m.char_out.clear();
+        assert!(matches!(
+            m.park_out.as_slice(),
+            [ParkRequest::Char(CharRequest::Enumerate)]
+        ));
+        m.park_out.clear();
         m.outbox.clear();
         m.tick();
         assert!(m.outbox.is_empty(), "a running query shows no text");
         // Rosters nothing asked for are not this screen's.
         for cause in [RosterCause::Park, RosterCause::Changed] {
-            m.on_roster(vec![crate::char_select::test_character(1, "Stray")], cause);
+            m.on_roster(
+                vec![crate::char_select::test_character(1, "Stray")],
+                cause,
+                0,
+            );
         }
         m.tick();
         assert!(m.outbox.is_empty());
@@ -378,6 +388,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
         m.on_roster(
             vec![crate::char_select::test_character(id, name)],
             RosterCause::Asked,
+            0,
         );
         m.tick();
         assert_eq!(m.outbox, done);
@@ -387,54 +398,57 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
     }
 }
 
-/// A reply that comes after its query is over completes nothing: the dialog's Cancel (state 4
-/// next), a realm change (state 2) or no query at all. The next show asks again and waits for its
-/// own.
+/// A reply completes the character list query as `SetStatus` does (`0x5aa920`): a reply that
+/// lands between the Cancel and the tick that takes it turns the cancel into a load, as the
+/// reference's does. One that comes once the query is over (the realm list the cancel raised), or
+/// to an operation that is not the query's (a realm change's connect), or from another link,
+/// completes nothing.
 #[test]
-fn a_late_roster_reply_is_dropped() {
+fn a_late_roster_reply_is_dropped_unless_it_lands_before_the_tick() {
     let late = || vec![crate::char_select::test_character(9, "Late")];
     let mut m = accepted();
     m.connected = true;
     m.get_character_list();
-    m.char_out.clear();
+    m.park_out.clear();
     m.status_dialog_click(&mut Vec::new());
     m.tick();
     assert_eq!(m.state, ScreenState::RealmList);
     m.outbox.clear();
-    m.on_roster(late(), RosterCause::Asked);
+    m.on_roster(late(), RosterCause::Asked, 0);
     m.tick();
-    assert!(m.roster.is_empty(), "no roster after the cancel");
+    assert!(
+        m.roster.is_empty(),
+        "no roster after the tick took the cancel"
+    );
     assert!(
         !m.outbox.iter().any(|o| matches!(o, Outgoing::Roster)),
         "{:?}",
         m.outbox
     );
 
-    // A reply in the frame of the Cancel, before the tick takes it, does not turn it into a
-    // success: the cancel stands and the realm list comes up.
+    // A reply in the frame of the Cancel, before the tick takes it: `SetStatus` overwrites the
+    // cancelled status, so the query succeeds and the roster loads (after the teardown the click
+    // made).
     let mut m = accepted();
     m.connected = true;
     m.get_character_list();
     m.status_dialog_click(&mut Vec::new());
-    m.on_roster(late(), RosterCause::Asked);
+    m.on_roster(late(), RosterCause::Asked, 0);
     m.outbox.clear();
     m.tick();
-    assert!(
-        !m.outbox.iter().any(|o| matches!(o, Outgoing::Roster)) && m.roster.is_empty(),
-        "{:?}",
-        m.outbox
-    );
-    assert_eq!(m.state, ScreenState::RealmList);
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(m.outbox.iter().any(|o| matches!(o, Outgoing::Roster)));
+    assert_eq!(m.roster[0].name, "Late");
 
-    // Back on the screen: the new query is its own, and the late reply of the first (still in
-    // flight) would only be a fresh list; the one asked for after it is dropped as unwanted.
+    // Deviation: the reference's handler completes whichever operation is current; a reply while
+    // a realm change's connect is the operation completes nothing here.
     let mut m = accepted();
     m.connected = true;
     m.holder = vec![realm("Fake")];
     m.get_character_list();
     m.connect_to_realm("fake");
     assert_eq!(m.state, ScreenState::Connect);
-    m.on_roster(late(), RosterCause::Asked);
+    m.on_roster(late(), RosterCause::Asked, 0);
     m.tick();
     assert_eq!(
         m.state,
@@ -447,6 +461,48 @@ fn a_late_roster_reply_is_dropped() {
         "the connect is still waiting on its own answer: {:?}",
         m.op
     );
+
+    // Another link's reply (the world session before a realm change) is not this link's.
+    let mut m = accepted();
+    m.connected = true;
+    m.on_world_authenticated(realm("Fake"), 5);
+    m.get_character_list();
+    m.on_roster(late(), RosterCause::Asked, 4);
+    m.tick();
+    assert!(m.roster.is_empty() && !m.op.done);
+    m.on_roster(late(), RosterCause::Asked, 5);
+    assert!(m.op.done && m.op.ok);
+}
+
+/// A server that wants Warden refuses the roster ask with its words (a terminal login failure):
+/// the query completes failed and the next tick opens `OKAY` with them (`0x46c173`), where state 3
+/// would otherwise stand on its `CANCEL` dialog for ever. The link is gone.
+#[test]
+fn a_terminal_failure_fails_the_character_list_query_with_its_words() {
+    let mut m = accepted();
+    m.connected = true;
+    m.get_character_list();
+    m.park_out.clear();
+    m.outbox.clear();
+    m.on_failed(&failed(None, true));
+    m.tick();
+    let words = || Text::Raw("test".into());
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: words(),
+                button: None,
+            },
+            Outgoing::Open {
+                which: "OKAY",
+                text: Some(words()),
+                data: None,
+            },
+        ]
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(!m.connected);
 }
 
 /// With no world link `0x5aabb0` fails the query `RESPONSE_FAILED_TO_CONNECT` at once, and the
@@ -455,7 +511,7 @@ fn a_late_roster_reply_is_dropped() {
 fn a_character_list_query_with_no_link_fails_okay() {
     let mut m = accepted();
     m.get_character_list();
-    assert!(m.char_out.is_empty());
+    assert!(m.park_out.is_empty());
     m.outbox.clear();
     m.tick();
     assert_eq!(
@@ -479,6 +535,7 @@ fn cancelling_the_character_list_raises_the_realm_list() {
     let mut m = accepted();
     m.connected = true;
     m.get_character_list();
+    m.park_out.clear();
     m.outbox.clear();
     m.status_dialog_click(&mut Vec::new());
     assert_eq!(m.outbox, [Outgoing::Teardown]);
@@ -496,7 +553,10 @@ fn cancelling_the_character_list_raises_the_realm_list() {
         ]
     );
     assert_eq!(m.state, ScreenState::RealmList);
-    assert!(matches!(m.realm_out.as_slice(), [RealmRequest::Refresh]));
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Realm(RealmRequest::Refresh)]
+    ));
 }
 
 /// Change Realm with the world up drops the session before the connect's query (`0x46b22b`).
@@ -507,8 +567,11 @@ fn change_realm_with_the_world_up_leaves_it_first() {
     m.connected = true;
     m.connect_to_realm("fake");
     assert!(matches!(
-        m.realm_out.as_slice(),
-        [RealmRequest::Leave, RealmRequest::Refresh]
+        m.park_out.as_slice(),
+        [
+            ParkRequest::Realm(RealmRequest::Leave),
+            ParkRequest::Realm(RealmRequest::Refresh)
+        ]
     ));
     assert_eq!(m.state, ScreenState::Connect);
     assert!(!m.connected);
@@ -517,7 +580,10 @@ fn change_realm_with_the_world_up_leaves_it_first() {
     let mut m = accepted();
     m.holder = vec![realm("Fake")];
     m.connect_to_realm("Fake");
-    assert!(matches!(m.realm_out.as_slice(), [RealmRequest::Refresh]));
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Realm(RealmRequest::Refresh)]
+    ));
 }
 
 /// The queue re-texts the dialog every frame while the world connect waits.
@@ -671,6 +737,25 @@ fn type_and_login(app: &mut App) {
         )
         .unwrap();
     app.update();
+}
+
+/// `DisconnectFromServer` zeroes the screen state with the operation in flight (`0x46c55d`), so
+/// the roster reply of a query the character screen's Exit left behind cannot complete it on the
+/// login screen and raise the realm list.
+#[test]
+fn disconnecting_from_the_server_ends_the_query_in_flight() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, _abandon) = stock_app();
+    {
+        let mut mgr = app.world_mut().resource_mut::<GlueMgr>();
+        mgr.connected = true;
+        mgr.get_character_list();
+    }
+    vm(&app).run("DisconnectFromServer()").unwrap();
+    app.update();
+    let mgr = app.world().resource::<GlueMgr>();
+    assert_eq!(mgr.state, ScreenState::Idle);
+    assert!(!mgr.connected && mgr.op.kind != OpKind::CharList);
 }
 
 /// The select verbs' cells are C globals in the reference, so a glue rebuild finds them as they
@@ -871,15 +956,17 @@ fn pump(
                 characters,
                 realm,
                 cause,
+                epoch,
             } => {
                 rosters.write(CharListMessage {
                     characters,
                     realm,
                     cause,
+                    epoch,
                 });
             }
-            E::WorldAuthenticated { realm } => {
-                auths.write(WorldAuthMessage { realm });
+            E::WorldAuthenticated { realm, epoch } => {
+                auths.write(WorldAuthMessage { realm, epoch });
             }
             E::LoginQueued { position, realm } => {
                 queued.write(LoginQueuedMessage { position, realm });

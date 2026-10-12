@@ -28,7 +28,12 @@ impl Plugin for ProbeCharCreatePlugin {
             state: ProbeState::AwaitingRoster,
             roster: Vec::new(),
         })
-        .add_systems(Update, drive_charcreate_probe);
+        // The park's own roster and the re-sent one after each action are the native policy's;
+        // under the stock screen nothing fetches them, so the probe would wait for ever.
+        .add_systems(
+            Update,
+            drive_charcreate_probe.run_if(crate::ui_script::glue::native_glue),
+        );
     }
 }
 

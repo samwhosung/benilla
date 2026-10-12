@@ -87,7 +87,11 @@ impl Plugin for ProbeRigPlugin {
             sent: 0,
             next_at: 0.0,
         })
-        .add_systems(Update, drive_rig);
+        // Reads the native policy's rosters (see the create probe).
+        .add_systems(
+            Update,
+            drive_rig.run_if(crate::ui_script::glue::native_glue),
+        );
     }
 }
 
