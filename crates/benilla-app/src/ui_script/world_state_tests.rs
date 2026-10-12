@@ -410,3 +410,55 @@ fn the_visible_ink_sits_beside_its_label_not_adrift_of_it() {
         );
     }
 }
+
+/// The stock score frame's team tab: its `UPDATE_BATTLEFIELD_SCORE` repaints the rows before
+/// `SetBattlefieldScoreFaction` returns, and while a newer board's names are pending the tab only
+/// stores the filter, which the completed board's push then sorts by (`0x4aa216`).
+#[test]
+fn the_score_tab_repaints_in_place_and_waits_on_pending_names() {
+    benilla_formats::wow_data_or_skip!();
+    use benilla_ui::script::{BattlefieldScoreRow, BattlefieldScores};
+    let mut s = harness();
+    s.run("function PlaySound() end").unwrap();
+    let row = |name: &str, faction: i32, kb: u32| BattlefieldScoreRow {
+        name: name.into(),
+        killing_blows: kb,
+        faction,
+        ..Default::default()
+    };
+    s.set_battlefield_scores(BattlefieldScores {
+        rows: vec![row("Hordeone", 0, 9), row("Allyone", 1, 1)],
+        ..Default::default()
+    });
+    s.run("ShowUIPanel(WorldStateScoreFrame)").unwrap();
+    let first = "return WorldStateScoreButton1NameButtonName:GetText()";
+    assert_eq!(s.eval::<String>(first).unwrap(), "Hordeone");
+
+    s.run("WorldStateScoreFrameTab_OnClick(WorldStateScoreFrameTab2)")
+        .unwrap();
+    assert_eq!(
+        s.eval::<String>(first).unwrap(),
+        "Allyone",
+        "the Alliance tab sorts its team first before the click returns"
+    );
+
+    s.set_battlefield_score_names_pending(true);
+    s.run("WorldStateScoreFrameTab_OnClick(WorldStateScoreFrameTab3)")
+        .unwrap();
+    assert_eq!(
+        s.eval::<String>(first).unwrap(),
+        "Allyone",
+        "names pending: the Horde tab stores its filter and nothing repaints"
+    );
+
+    s.set_battlefield_scores(BattlefieldScores {
+        rows: vec![row("Allytwo", 1, 9), row("Hordetwo", 0, 1)],
+        ..Default::default()
+    });
+    s.fire_event("UPDATE_BATTLEFIELD_SCORE", vec![]);
+    assert_eq!(
+        s.eval::<String>(first).unwrap(),
+        "Hordetwo",
+        "the completed board sorts by the stored Horde filter"
+    );
+}

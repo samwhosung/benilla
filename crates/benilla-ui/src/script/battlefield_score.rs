@@ -1,6 +1,7 @@
 //! The battleground scoreboard verbs of `WorldStateFrame.lua`, over a board the app pushes with
-//! every name resolved, as the reference waits for the last name (`0x4aa580`). The filter sorts
-//! its team first rather than compacting, so an index past the filtered count answers a real row.
+//! every name resolved, as the reference waits for the last name (`0x4aa580`); until then the
+//! board's rebuild only stores a filter. The filter sorts its team first rather than compacting,
+//! so an index past the filtered count answers a real row.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -54,6 +55,9 @@ pub(crate) struct ScoreBoard {
     pub(crate) order: Vec<usize>,
     /// The filtered count (`0xb6ebc4`).
     pub(crate) filtered: usize,
+    /// A newer board's names are still being queried (`[0xb6ebd4]` non-zero): the app holds that
+    /// board back, and the rebuild waits for its last name.
+    pub(crate) names_pending: bool,
 }
 
 impl Default for ScoreBoard {
@@ -64,6 +68,7 @@ impl Default for ScoreBoard {
             filter: -1,
             order: Vec::new(),
             filtered: 0,
+            names_pending: false,
         }
     }
 }
@@ -93,6 +98,19 @@ impl ScoreBoard {
         self.order = order;
     }
 
+    /// `0x4aa5a0`: store the filter, then the rebuild `0x4aa200`, which returns without rebuilding
+    /// or signalling while names are pending (`0x4aa216`–`0x4aa224`); the last name's arrival
+    /// rebuilds with the stored filter. Returns whether it rebuilt, when the caller signals
+    /// `UPDATE_BATTLEFIELD_SCORE` (`0x4aa308`).
+    fn set_filter(&mut self, filter: i32) -> bool {
+        self.filter = filter;
+        if self.names_pending {
+            return false;
+        }
+        self.rebuild();
+        true
+    }
+
     fn row(&self, index_1based: i32) -> Option<&BattlefieldScoreRow> {
         let i = usize::try_from(index_1based).ok()?.checked_sub(1)?;
         // Bounded by the wire count (`0xb6ebc0`), not the filtered one.
@@ -107,7 +125,22 @@ impl super::UiScript {
     pub fn set_battlefield_scores(&mut self, scores: BattlefieldScores) {
         let mut model = self.model_mut();
         model.battlefield_board.scores = scores;
+        model.battlefield_board.names_pending = false;
         model.battlefield_board.rebuild();
+    }
+
+    /// Whether a newer board waits on names the app is still resolving (`[0xb6ebd4]`).
+    pub fn set_battlefield_score_names_pending(&mut self, pending: bool) {
+        self.model_mut().battlefield_board.names_pending = pending;
+    }
+
+    /// The status-3 arm's `0x4aa5a0(-1)` (`0x4aaa5a`): the filter back to every team, and the
+    /// rebuild and `UPDATE_BATTLEFIELD_SCORE` at once unless names are pending.
+    pub fn reset_battlefield_score_filter(&mut self) {
+        let rebuilt = self.model_mut().battlefield_board.set_filter(-1);
+        if rebuilt {
+            self.fire_event("UPDATE_BATTLEFIELD_SCORE", Vec::new());
+        }
     }
 
     /// `GetBattlefieldInstanceRunTime()`'s answer in ms, pushed each frame.
@@ -205,7 +238,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // Never raises; a stored filter rebuilds the board and fires `UPDATE_BATTLEFIELD_SCORE` in
-    // place (`0x4abc90` → `0x4aa200`, the signal at `0x4aa308`).
+    // place (`0x4abc90` → `0x4aa5a0` → `0x4aa200`, the signal at `0x4aa308`), or, while names
+    // are pending, is only stored.
     g.set(
         "SetBattlefieldScoreFaction",
         lua.create_function(|lua, faction: Option<Value>| {
@@ -214,9 +248,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             }
             super::tick::verb(lua, |model| {
-                model.battlefield_board.filter = f;
-                model.battlefield_board.rebuild();
-                model.raise("UPDATE_BATTLEFIELD_SCORE", Vec::new());
+                if model.battlefield_board.set_filter(f) {
+                    model.raise("UPDATE_BATTLEFIELD_SCORE", Vec::new());
+                }
             });
             Ok(())
         })?,
@@ -386,6 +420,58 @@ mod tests {
         assert_eq!(
             s.eval::<i64>("return GetNumBattlefieldScores()").unwrap(),
             4
+        );
+    }
+
+    /// `0x4aa216`: while names are pending the verb only stores the filter, and the board the
+    /// last name completes is sorted by it; otherwise the handler runs before the verb returns.
+    #[test]
+    fn the_faction_verb_waits_on_pending_names() {
+        let mut s = board();
+        crate::script::tick::heard::listen(
+            &s,
+            &["UPDATE_BATTLEFIELD_SCORE"],
+            Some("GetNumBattlefieldScores()"),
+        );
+        s.run("SetBattlefieldScoreFaction(1)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["UPDATE_BATTLEFIELD_SCORE 2"]
+        );
+
+        s.set_battlefield_score_names_pending(true);
+        s.run("SetBattlefieldScoreFaction(0)").unwrap();
+        assert!(crate::script::tick::heard::take(&s).is_empty());
+        assert_eq!(
+            s.eval::<i64>("return GetNumBattlefieldScores()").unwrap(),
+            2,
+            "no rebuild: the count is the last one's"
+        );
+        s.reset_battlefield_score_filter();
+        assert!(
+            crate::script::tick::heard::take(&s).is_empty(),
+            "the status-3 reset waits too"
+        );
+        s.run("SetBattlefieldScoreFaction(0)").unwrap();
+
+        s.set_battlefield_scores(BattlefieldScores {
+            rows: vec![row("Eve", 1, 1, 1, 1), row("Finn", 0, 1, 1, 1)],
+            ..Default::default()
+        });
+        assert_eq!(
+            s.eval::<i64>("return GetNumBattlefieldScores()").unwrap(),
+            1,
+            "the stored filter sorts the completed board"
+        );
+        assert_eq!(
+            s.eval::<String>("return (GetBattlefieldScore(1))").unwrap(),
+            "Finn"
+        );
+        s.reset_battlefield_score_filter();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["UPDATE_BATTLEFIELD_SCORE 2"],
+            "the status-3 arm resets to every team and rebuilds at once"
         );
     }
 

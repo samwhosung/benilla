@@ -2,8 +2,10 @@
 //!
 //! The reference holds a `MSG_PVP_LOG_DATA` board until every row's name has resolved, and the last
 //! name arrival rebuilds it (`0x4aa580` → `0x4aa200`); here the board is pushed the frame the last
-//! name lands. `UPDATE_BATTLEFIELD_SCORE` fires on a pushed board and on the status-3 arrival,
-//! before `UPDATE_BATTLEFIELD_STATUS` (`0x4aaa5a` before `0x4aab05`).
+//! name lands, and until then the VM's rebuild waits ([`UiScript::set_battlefield_score_names_pending`]).
+//! `UPDATE_BATTLEFIELD_SCORE` fires on a pushed board and on the status-3 arrival, which resets
+//! the filter and rebuilds unless names are pending, before `UPDATE_BATTLEFIELD_STATUS`
+//! (`0x4aaa5a` before `0x4aab05`).
 
 use std::time::{Duration, Instant};
 
@@ -119,13 +121,14 @@ pub(crate) fn feed_battlefield_score(
         })
     });
     let last = last.get(&script);
-    let status_rebuild = queue.take_score_dirty();
-    let changed = fresh.is_some() && fresh != *last;
-    if changed {
+    // A held-back board is the reference's pending names: the VM's rebuild waits on it.
+    script.set_battlefield_score_names_pending(board.log.is_some() && fresh.is_none());
+    if queue.take_score_dirty() {
+        script.reset_battlefield_score_filter();
+    }
+    if fresh.is_some() && fresh != *last {
         script.set_battlefield_scores(fresh.clone().expect("checked"));
         *last = fresh;
-    }
-    if changed || status_rebuild {
         script.fire_event("UPDATE_BATTLEFIELD_SCORE", vec![]);
     }
 }
