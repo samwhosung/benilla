@@ -142,7 +142,10 @@ fn load_glue_layer(script: &UiScript) -> Vec<String> {
     let files = vec![GLUE_LAYER.to_string()];
     let layer = super::addons::Addon::new(
         "benilla".to_string(),
-        benilla_ui::toc::Toc::with_files(files.clone()),
+        benilla_ui::toc::Toc {
+            directives: Vec::new(),
+            files: files.clone(),
+        },
         super::addons::Source::Builtin,
     );
     layer.load_files(script, &files)

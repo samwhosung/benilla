@@ -406,7 +406,7 @@ fn info_for(addon: &Addon) -> benilla_ui::script::AddOnInfo {
 /// The `## Secure: 1` directive. It grants nothing by itself: the client sends every such addon
 /// in `CMSG_AUTH_SESSION`'s addon block, and only [`secure`] makes one SECURE.
 pub(crate) fn toc_secure(toc: &Toc) -> bool {
-    toc.directive("Secure").map(str::trim) == Some("1")
+    toc.secure()
 }
 
 /// Whether an addon is SECURE, the security state `[rec+0x24] == 0`: `GetAddOnInfo`'s security
@@ -437,15 +437,19 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::s
             .collect(),
         load_with: toc.load_with().into_iter().map(str::to_owned).collect(),
         dependents: Vec::new(), // filled by `register_addons`
-        directives: toc.directives.clone(),
+        directives: toc
+            .directives
+            .iter()
+            .map(|d| (d.key.clone(), d.value.clone()))
+            .collect(),
         files: toc.files.clone(),
         saved_variables: toc
-            .list("SavedVariables")
+            .saved_variables()
             .into_iter()
             .map(str::to_owned)
             .collect(),
         saved_variables_per_character: toc
-            .list("SavedVariablesPerCharacter")
+            .saved_variables_per_character()
             .into_iter()
             .map(str::to_owned)
             .collect(),

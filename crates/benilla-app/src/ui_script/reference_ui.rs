@@ -85,7 +85,14 @@ pub(super) fn addon(files: Vec<String>) -> Addon {
 
 /// [`addon`] under `name`.
 fn named_addon(name: &str, files: Vec<String>) -> Addon {
-    Addon::new(name.to_string(), Toc::with_files(files), Source::Chain)
+    Addon::new(
+        name.to_string(),
+        Toc {
+            directives: Vec::new(),
+            files,
+        },
+        Source::Chain,
+    )
 }
 
 /// One file's bytes off the player's patch chain, by internal path. Bytes, not a string: Lua
