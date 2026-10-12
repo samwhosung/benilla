@@ -1858,6 +1858,9 @@ pub(crate) fn drive_glue_mgr(
                     GlueRequest::StopGlueMusic => {
                         asks.music.write(crate::sound::GlueMusicRequest::Stop);
                     }
+                    GlueRequest::PlayCreditsMusic => {
+                        asks.music.write(crate::sound::GlueMusicRequest::Credits);
+                    }
                     // `0x5abd00`, past the whitelist the verb applied (`0x5abc10`).
                     GlueRequest::LaunchAddonUrl(url) => {
                         asks.launch_addon
