@@ -408,9 +408,9 @@ impl World {
             match url {
                 Some(u) => {
                     body.push(1);
-                    let mut field = u.as_bytes().to_vec();
-                    field.resize(256, 0);
-                    body.extend(field);
+                    // A C string, its NUL included (`0x4191b0`).
+                    body.extend(u.as_bytes());
+                    body.push(0);
                 }
                 None => body.push(0),
             }

@@ -696,26 +696,88 @@ fn the_addon_info_reply_pairs_its_records_back_against_what_we_sent() {
         "{named:?}"
     );
 
-    // A record with a key and a url is 8 + 256 + 256 bytes; the revision and the url, up to its
-    // first NUL, are kept.
+    // A record with a key and a url: the key is 256 bytes, the url a C string that ends at its
+    // NUL (`0x4191b0`), so the next record starts right behind it.
     let mut fat = vec![1u8, 1, 1];
     fat.extend(std::iter::repeat_n(0xABu8, 256)); // modulus
     fat.extend(7u32.to_le_bytes()); // revision
     fat.push(1); // urlProvided
-    let mut url = b"http://example.com/a".to_vec();
-    url.resize(256, 0);
-    url[30] = b'x'; // past the NUL: not part of the string
-    fat.extend(url);
+    fat.extend(b"http://example.com/a\0");
+    fat.extend(hx("0201000000000000")); // a second record, the minimal form
     let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &fat).unwrap();
     let ServerPacket::AddonInfo { records } = packet else {
         panic!("expected AddonInfo");
     };
-    assert_eq!(records.len(), 1, "the fat record parsed whole");
+    assert_eq!(records.len(), 2, "the second record follows the url's NUL");
     let r = &records[0];
     assert_eq!(
         (r.status, r.key_provided, r.revision, r.url.as_deref()),
         (1, true, Some(7), Some("http://example.com/a"))
     );
+    assert_eq!((records[1].status, records[1].url.as_deref()), (2, None));
+
+    // An empty url is a NUL alone; a url of 255 bytes plus its NUL is the longest.
+    let mut edge = vec![1u8, 0, 1, 0];
+    edge.extend(hx("0201000000000000"));
+    let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &edge).unwrap();
+    let ServerPacket::AddonInfo { records } = packet else {
+        panic!("expected AddonInfo");
+    };
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].url.as_deref(), Some(""));
+    let mut long = vec![1u8, 0, 1];
+    long.extend(std::iter::repeat_n(b'x', 255));
+    long.push(0);
+    long.extend(hx("0201000000000000"));
+    let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &long).unwrap();
+    let ServerPacket::AddonInfo { records } = packet else {
+        panic!("expected AddonInfo");
+    };
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].url.as_ref().map(String::len), Some(255));
+
+    // 256 bytes with no NUL are no string: the url reads empty and the walk ends there, though
+    // the record is applied; fewer bytes with no NUL are a truncated record.
+    let mut open = vec![1u8, 0, 1];
+    open.extend(std::iter::repeat_n(b'x', 256));
+    open.extend(hx("0201000000000000"));
+    let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &open).unwrap();
+    let ServerPacket::AddonInfo { records } = packet else {
+        panic!("expected AddonInfo");
+    };
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].url.as_deref(), Some(""));
+    let mut cut = vec![1u8, 0, 1];
+    cut.extend(std::iter::repeat_n(b'x', 100));
+    let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &cut).unwrap();
+    let ServerPacket::AddonInfo { records } = packet else {
+        panic!("expected AddonInfo");
+    };
+    assert!(records.is_empty());
+
+    // Fewer records than addons sent: the rest take the last record's status and nothing else
+    // (`0x418cb0` leaves its outputs alone at the end of the packet).
+    let named = messages::pair_with_sent(
+        &[
+            messages::AddonRecord {
+                status: 1,
+                url: Some("u".into()),
+                ..Default::default()
+            },
+            messages::AddonRecord {
+                status: 2,
+                revision: Some(4),
+                ..Default::default()
+            },
+        ],
+        &messages::STOCK_SECURE_ADDONS,
+    );
+    assert_eq!(named.len(), 12);
+    assert_eq!(named[1].revision, Some(4));
+    for r in &named[2..] {
+        assert_eq!((r.status, r.revision, r.url.as_deref()), (2, None, None));
+    }
+    assert!(messages::pair_with_sent(&[], &messages::STOCK_SECURE_ADDONS).is_empty());
 
     // A status 0 record with no info block and no url: banned, nothing else.
     let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &[0, 0, 0]).unwrap();

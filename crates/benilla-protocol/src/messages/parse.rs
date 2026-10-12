@@ -162,8 +162,13 @@ const fn is_movement_relay(o: u16) -> bool {
 ///     if keyProvided: u8[256] modulus
 ///     u32 revision
 /// u8  urlProvided
-/// if urlProvided: u8[256] url
+/// if urlProvided: char url[]      ; a C string of at most 256 bytes, its NUL included
 /// ```
+///
+/// The url is read by `0x4191b0` with a limit of 0x100: up to and including its NUL, and no
+/// further, so the next record starts right behind it. 256 bytes with no NUL are no string: the
+/// url reads empty and the read position goes past the end, which ends the walk (the record is
+/// still applied, with that empty url).
 ///
 /// Retail sends the minimal form, 12 records of `{2, 1, 0, 0u32, 0}`. A truncated record ends the
 /// walk and keeps the whole records before it, so `records[i]` is always record i's.
@@ -184,15 +189,21 @@ fn read_addon_info(r: &mut &[u8]) -> Vec<AddonRecord> {
         }
         let Ok(url_provided) = read_u8(r) else { break };
         let mut url = None;
+        let mut url_overrun = false;
         if url_provided != 0 {
-            if r.len() < 256 {
-                break;
+            let window = &r[..r.len().min(256)];
+            match window.iter().position(|&b| b == 0) {
+                Some(nul) => {
+                    url = Some(String::from_utf8_lossy(&window[..nul]).into_owned());
+                    *r = &r[nul + 1..];
+                }
+                // A full 256 bytes and no NUL: empty, and the walk ends after this record.
+                None if window.len() == 256 => {
+                    url = Some(String::new());
+                    url_overrun = true;
+                }
+                None => break,
             }
-            let (field, rest) = r.split_at(256);
-            *r = rest;
-            // `0x4191b0` reads the field as a C string.
-            let text = field.split(|&b| b == 0).next().unwrap_or_default();
-            url = Some(String::from_utf8_lossy(text).into_owned());
         }
         records.push(AddonRecord {
             name: String::new(),
@@ -202,6 +213,9 @@ fn read_addon_info(r: &mut &[u8]) -> Vec<AddonRecord> {
             revision,
             url,
         });
+        if url_overrun {
+            break;
+        }
     }
     records
 }

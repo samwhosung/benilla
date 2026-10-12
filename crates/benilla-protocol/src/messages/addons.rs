@@ -36,13 +36,29 @@ pub struct AddonRecord {
 /// Name each record of the reply with the addon we sent in the same position: the reply has no
 /// names, and the reference walks its own secure addons in the order it sent them (`0x51da70`).
 /// A record past the end of what we sent answers nothing and is dropped.
+///
+/// The reference walks the addons, not the records: when the packet runs out, the readers
+/// (`0x418cb0`) leave their outputs alone and the status local keeps the last record's value, so
+/// every addon past the last record takes that status, with no info block and no url.
 pub fn pair_with_sent(records: &[AddonRecord], sent: &[SecureAddon]) -> Vec<AddonRecord> {
-    records
-        .iter()
-        .zip(sent)
-        .map(|(record, addon)| AddonRecord {
-            name: addon.name.to_string(),
-            ..record.clone()
+    let mut status = None;
+    sent.iter()
+        .enumerate()
+        .filter_map(|(i, addon)| {
+            let record = match records.get(i) {
+                Some(record) => {
+                    status = Some(record.status);
+                    record.clone()
+                }
+                None => AddonRecord {
+                    status: status?,
+                    ..AddonRecord::default()
+                },
+            };
+            Some(AddonRecord {
+                name: addon.name.to_string(),
+                ..record
+            })
         })
         .collect()
 }
