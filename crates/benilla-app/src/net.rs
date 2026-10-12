@@ -121,6 +121,7 @@ impl Plugin for NetPlugin {
             .add_message::<CharListMessage>()
             .add_message::<WorldAuthMessage>()
             .add_message::<RosterFailedMessage>()
+            .add_message::<AddonInfoMessage>()
             .add_message::<CharActionResultMessage>()
             .add_message::<CharacterLoginFailedMessage>()
             .add_message::<EnteredWorldMessage>()
@@ -2130,6 +2131,14 @@ pub(crate) struct WorldAuthMessage {
 #[derive(Message)]
 pub(crate) struct RosterFailedMessage {
     pub(crate) epoch: u64,
+}
+
+/// The world session read `SMSG_ADDON_INFO` (the handler `0x5b4260`): the addons it hid from the
+/// Lua index space, at the point the reference's listener fires `ADDON_LIST_UPDATE`
+/// (`0x5b4290` → `0x5ab2f0`). [`AddonInfoReply`] holds the same list for a screen built later.
+#[derive(Message)]
+pub(crate) struct AddonInfoMessage {
+    pub(crate) hidden: Vec<String>,
 }
 
 /// A character create or delete result; a refreshed [`CharListMessage`] precedes a success.

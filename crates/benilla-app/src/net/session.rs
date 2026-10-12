@@ -14,7 +14,7 @@ use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::ecs::system::SystemParam;
 
 use super::{
-    CharActionResultMessage, CharListMessage, CharacterLoginFailedMessage,
+    AddonInfoMessage, CharActionResultMessage, CharListMessage, CharacterLoginFailedMessage,
     CinematicTriggeredMessage, ClientControlMessage, DisconnectedMessage, DroppedOpcodes,
     EnteredWorldMessage, GameTime, GuidIndex, HomeBind, KnockBackMessage, LoggedOutMessage,
     LoginFailedMessage, LoginQueuedMessage, LoginStageMessage, NetCommands, NetHandlerApp,
@@ -29,6 +29,7 @@ pub(super) fn register(app: &mut App) {
     app.net_handler(K::LoginStage, on_login_edge)
         .net_handler(K::WorldAuthenticated, on_login_edge)
         .net_handler(K::RosterFailed, on_login_edge)
+        .net_handler(K::AddonInfo, on_login_edge)
         .net_handler(K::LoginQueued, on_login_edge)
         .net_handler(K::LoginFailed, on_login_edge)
         .net_handler(K::RealmList, on_login_edge)
@@ -73,6 +74,7 @@ pub(crate) struct Edges<'w> {
     login_queued: MessageWriter<'w, LoginQueuedMessage>,
     world_auth: MessageWriter<'w, WorldAuthMessage>,
     roster_failed: MessageWriter<'w, RosterFailedMessage>,
+    addon_info: MessageWriter<'w, AddonInfoMessage>,
     login_failures: MessageWriter<'w, LoginFailedMessage>,
     disconnects: MessageWriter<'w, DisconnectedMessage>,
     client_control: MessageWriter<'w, ClientControlMessage>,
@@ -117,6 +119,11 @@ fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
         }
         SessionEvent::RosterFailed { epoch } => {
             e.roster_failed.write(RosterFailedMessage { epoch });
+        }
+        SessionEvent::AddonInfo { hidden } => {
+            // Held for the screens built after it, and for the world entry's load.
+            e.addon_reply.0 = Some(hidden.clone());
+            e.addon_info.write(AddonInfoMessage { hidden });
         }
         SessionEvent::LoginQueued { position, realm } => {
             e.login_queued.write(LoginQueuedMessage { position, realm });

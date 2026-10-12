@@ -150,6 +150,11 @@ pub enum SessionEvent {
         epoch: u64,
         generation: u64,
     },
+    /// `SMSG_ADDON_INFO` was read (the handler `0x5b4260`, which rebuilds the AddOn index with
+    /// `0x51da70` and then calls the listener slot `0x80a400`, `0x5ab2f0`, whose one effect is
+    /// `ADDON_LIST_UPDATE`): the addons it hid from the Lua index space. Emitted by the IO thread
+    /// once per world session, never wire-decoded.
+    AddonInfo { hidden: Vec<String> },
     /// A roster ask on the parked session failed on the stream (`0x5ab300`'s failure leg,
     /// `SetStatus(0, 0x2c)`, `CHAR_LIST_FAILED`); the session ends after it. Emitted by the IO
     /// thread, never wire-decoded.

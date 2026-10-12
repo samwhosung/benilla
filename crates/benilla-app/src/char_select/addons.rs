@@ -1497,6 +1497,24 @@ fn spawn_tooltip(
     tip.id()
 }
 
+/// The native screen's Okay for another module's test: opened for `chars` on `realm`, then each
+/// `(view, row, on)` pressed (`view` the dropdown's selection, `None` All), then saved.
+#[cfg(test)]
+pub(crate) fn okay_after_clicks(
+    realm: &str,
+    chars: &[String],
+    clicks: &[(Option<usize>, usize, bool)],
+) {
+    let mut panel = AddonsPanel::default();
+    panel.open_for(realm.to_string(), chars.to_vec());
+    for &(view, row, on) in clicks {
+        panel.view = view;
+        panel.set(row, on);
+        panel.reread();
+    }
+    panel.save();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

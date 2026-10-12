@@ -4,6 +4,8 @@
 //! the character last entered as (`lastCharacterIndex`).
 
 mod addons;
+#[cfg(test)]
+pub(crate) use addons::okay_after_clicks;
 mod dialog;
 mod input;
 mod refresh;

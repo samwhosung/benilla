@@ -321,6 +321,9 @@ pub(crate) fn char_enum_body(characters: &[benilla_protocol::Character]) -> Vec<
 /// Packets, by opcode and body, the fake world sends behind `SMSG_LOGOUT_COMPLETE`.
 type Trail = Arc<Mutex<Vec<(u16, Vec<u8>)>>>;
 
+/// The `SMSG_ADDON_INFO` body a fake world sends, and whether it trails the authentication answer.
+type AddonReply = Arc<Mutex<Option<(Vec<u8>, bool)>>>;
+
 /// The fake world server's record: every opcode the client sent, and the sessions still open.
 pub(crate) struct World {
     pub(crate) sent: Arc<Mutex<Vec<u16>>>,
@@ -341,6 +344,9 @@ pub(crate) struct World {
     refuse: Arc<AtomicBool>,
     /// Packets sent right behind `SMSG_LOGOUT_COMPLETE`, as the world session leaves them in flight.
     trail: Trail,
+    /// The `SMSG_ADDON_INFO` body every session is sent, and whether it follows the authentication
+    /// answer (vmangos builds it in the auth handler, so it leads: `WorldSocket.cpp:447`).
+    addon_info: AddonReply,
     open: Arc<AtomicUsize>,
 }
 
@@ -369,6 +375,17 @@ impl World {
     /// vmangos's result 1).
     pub(crate) fn refuse_logins(&self) {
         self.refuse.store(true, Ordering::SeqCst);
+    }
+
+    /// Send `SMSG_ADDON_INFO` with one record per status (`2` hides the addon) to every session
+    /// from now on: ahead of the authentication answer, or behind it with `after`.
+    pub(crate) fn set_addon_info(&self, statuses: &[u8], after: bool) {
+        // `{status, info 1, key 0, u32 revision 0, url 0}`, the shape of a retail reply.
+        let body = statuses
+            .iter()
+            .flat_map(|&s| [s, 1, 0, 0, 0, 0, 0, 0])
+            .collect();
+        *self.addon_info.lock().unwrap() = Some((body, after));
     }
 
     /// Send these packets right behind every `SMSG_LOGOUT_COMPLETE`.
@@ -440,6 +457,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let refuse_flag = Arc::clone(&refuse);
     let trail: Trail = Arc::default();
     let trailing = Arc::clone(&trail);
+    let addon_info: AddonReply = Arc::default();
+    let addon_reply = Arc::clone(&addon_info);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
     thread::spawn(move || {
@@ -467,12 +486,19 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                 return;
             };
             let mut crypto = HeaderCrypto::from_session_key(key);
+            let reply = addon_reply.lock().unwrap().clone();
+            if let Some((body, false)) = &reply {
+                send(&mut s, Some(&mut crypto), opcode::SMSG_ADDON_INFO, body);
+            }
             send(
                 &mut s,
                 Some(&mut crypto),
                 opcode::SMSG_AUTH_RESPONSE,
                 &[messages::AUTH_OK],
             );
+            if let Some((body, true)) = &reply {
+                send(&mut s, Some(&mut crypto), opcode::SMSG_ADDON_INFO, body);
+            }
             let log = Arc::clone(&log);
             let packet_log = Arc::clone(&packet_log);
             let roster_bodies = Arc::clone(&roster_bodies);
@@ -547,6 +573,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         cut,
         refuse,
         trail,
+        addon_info,
         open,
     }
 }
