@@ -20,6 +20,7 @@ pub(crate) mod extract;
 pub(crate) mod glue;
 /// `CGlueMgr`'s screen states over the native login, for the stock glue screens.
 pub(crate) mod glue_mgr;
+pub(crate) mod glue_scene;
 mod input;
 #[cfg(test)]
 pub(crate) use input::feed_keys;

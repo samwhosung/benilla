@@ -485,6 +485,12 @@ pub(crate) struct GlueMgr {
 }
 
 impl GlueMgr {
+    /// The record the last character list reply carried for `guid`: what the scene drive builds
+    /// the selected character from (`0x472950` reads the select record's own copy).
+    pub(crate) fn roster_character(&self, guid: u64) -> Option<&Character> {
+        self.roster.iter().find(|c| c.guid == guid)
+    }
+
     /// The agreements as read at the startup (`0x46a400`).
     pub(super) fn set_notices(&mut self, notices: [NoticeState; 4]) {
         self.notices = Some(notices);

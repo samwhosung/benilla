@@ -81,6 +81,10 @@ impl Plugin for LoginPlugin {
                             .after(crate::ui_script::UiInput)
                             .after(crate::realm_select::RealmSelectSet)
                             .run_if(crate::ui_script::glue::stock_glue),
+                        // Off the roster and the screen the manager and the tick just moved.
+                        crate::ui_script::glue_scene::feed_stock_glue_preview
+                            .run_if(crate::ui_script::glue::stock_glue)
+                            .in_set(crate::portrait::GluePreviewFeed),
                         answer_glue,
                         drive_policy,
                         to_select_on_roster,

@@ -771,7 +771,16 @@ fn stock_app() -> (
         .add_message::<GlueLogin>()
         .add_message::<crate::sound::GlueMusicRequest>()
         .add_message::<AppExit>()
-        .add_systems(Update, (drive_glue_mgr, crate::login::answer_glue).chain());
+        .init_resource::<crate::portrait::GluePreview>()
+        .add_systems(
+            Update,
+            (
+                drive_glue_mgr,
+                super::super::glue_scene::feed_stock_glue_preview,
+                crate::login::answer_glue,
+            )
+                .chain(),
+        );
     let mut s = UiScript::new_glue().unwrap();
     s.set_screen_size(1024.0, 768.0);
     let _ = super::super::glue::load_glue(&mut s);
@@ -1126,9 +1135,16 @@ fn live_app_with(
         .add_message::<GlueLogin>()
         .add_message::<crate::sound::GlueMusicRequest>()
         .add_message::<AppExit>()
+        .init_resource::<crate::portrait::GluePreview>()
         .add_systems(
             Update,
-            (pump, drive_glue_mgr, crate::login::answer_glue).chain(),
+            (
+                pump,
+                drive_glue_mgr,
+                super::super::glue_scene::feed_stock_glue_preview,
+                crate::login::answer_glue,
+            )
+                .chain(),
         );
     let mut s = UiScript::new_glue().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -1585,6 +1601,117 @@ fn an_empty_roster_asks_for_the_realm_list_only_with_no_realm_chosen() {
             .unwrap(),
         (0.0, 0, false)
     );
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+// ── The stock screens' scenes through the glue booth ────────────────────────────────────────────
+
+fn preview(app: &App) -> &crate::portrait::GluePreview {
+    app.world().resource::<crate::portrait::GluePreview>()
+}
+
+/// The stock login's `AccountLogin` pane drives the glue booth: `UI_MainMenu` under the pane's
+/// own fog, `AccountLogin.xml`'s `<FogColor>` and `fogFar`, with nobody standing in it.
+#[test]
+fn the_stock_login_stands_the_main_menu_in_the_glue_booth() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (app, _rx, _abandon) = stock_app();
+    let p = preview(&app);
+    assert_eq!(p.scene, Some(crate::portrait::GlueScene::MainMenu));
+    assert!(p.look.is_none());
+    let fog = p.fog.expect("the main menu fogs");
+    assert_eq!((fog.near, fog.far), (0.0, 1200.0));
+    for (got, want) in fog.rgb.iter().zip([0.25, 0.06, 0.015]) {
+        assert!((got - want).abs() < 1.0 / 255.0, "{:?}", fog.rgb);
+    }
+}
+
+/// The selected character stands in the select scene: the roster load's selection, then a
+/// row's `CharacterSelect_SelectCharacter`, which sets its race's stage unfogged; the yaw is the
+/// facing cell `SetCharacterSelectFacing` writes, and the next select squares it.
+#[test]
+fn the_stock_select_stands_the_selected_character_at_the_cells_facing() {
+    use crate::portrait::{GlueLook, GlueScene, SelectLook};
+    let _ = benilla_formats::wow_data_or_skip!();
+    let roster = roster3();
+    let (mut app, _realmd, _world) = char_select_app(&roster, "1", false);
+    until(&mut app, "the roster", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") >= 2
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    app.update();
+    let p = preview(&app);
+    assert!(
+        p.look == Some(GlueLook::Select(SelectLook::from(&roster[1]))),
+        "lastCharacterIndex 1 stands Bravo"
+    );
+    assert_eq!((p.scene, p.fog), (Some(GlueScene::Human), None));
+    assert_eq!(p.yaw, 0.0);
+
+    vm(&app).run("CharacterSelect_SelectCharacter(1)").unwrap();
+    app.update();
+    let p = preview(&app);
+    assert!(p.look == Some(GlueLook::Select(SelectLook::from(&roster[0]))));
+    assert_eq!((p.scene, p.fog), (Some(GlueScene::NightElf), None));
+
+    vm(&app).run("SetCharacterSelectFacing(90)").unwrap();
+    app.update();
+    let yaw = preview(&app).yaw;
+    assert!((yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "{yaw}");
+    vm(&app).run("CharacterSelect_SelectCharacter(3)").unwrap();
+    app.update();
+    let p = preview(&app);
+    assert_eq!(p.yaw, 0.0, "every select zeroes the facing (`0x472a61`)");
+    assert_eq!(
+        p.scene,
+        Some(GlueScene::Dwarf),
+        "a gnome stands in Dwarf's stage"
+    );
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// #978: an account with no characters shows `CharacterSelect`'s OnLoad scene, `UI_Orc` under
+/// Orc's fog. Once a character has set its stage the scene stays, unfogged, when the roster
+/// empties: an empty roster sets no background.
+#[test]
+fn the_stock_select_fogs_the_empty_roster_and_keeps_the_last_stage() {
+    use crate::portrait::GlueScene;
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _realmd, _world) = char_select_app(&[], "0", true);
+    until(&mut app, "the roster load", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") >= 2
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    app.update();
+    let p = preview(&app);
+    assert_eq!(p.scene, Some(GlueScene::Orc));
+    assert!(p.look.is_none());
+    let fog = p.fog.expect("the empty roster's scene is fogged");
+    assert_eq!((fog.near, fog.far), (0.0, 270.0));
+
+    let mut tauren = crate::char_select::test_character(0x41, "Moo");
+    (tauren.race, tauren.zone) = (6, 12);
+    let (mut app, _realmd, world) = char_select_app(&[tauren], "0", true);
+    until(&mut app, "the roster load", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") >= 2
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    app.update();
+    let p = preview(&app);
+    assert_eq!((p.scene, p.fog), (Some(GlueScene::Tauren), None));
+    assert!(p.look.is_some());
+
+    world.set_roster(&[]);
+    let before = seen(&app, "CHARACTER_LIST_UPDATE");
+    vm(&app).run("GetCharacterListUpdate()").unwrap();
+    until(&mut app, "the empty roster", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") > before
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    app.update();
+    let p = preview(&app);
+    assert_eq!((p.scene, p.fog), (Some(GlueScene::Tauren), None));
+    assert!(p.look.is_none(), "the records are freed and detached");
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
 }
 
