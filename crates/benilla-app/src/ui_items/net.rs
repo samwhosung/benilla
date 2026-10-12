@@ -16,13 +16,16 @@ pub(super) fn register(app: &mut App) {
 }
 
 /// The queued unlocks die with the session, never to fire into a later VM: the reference's lock
-/// is item-object state (`item+0x314`), and the objects are rebuilt at every world entry.
+/// is item-object state (`item+0x314`), and the objects are rebuilt at every world entry. The
+/// refusals queued with theirs go too, lines and all: they were the ended world's.
 fn on_session_end(
     In(_): In<SessionEvent>,
     mut releases: ResMut<ItemReleases>,
+    mut equip_errors: ResMut<EquipErrors>,
     held: Option<ResMut<super::locks::HeldItemLocks>>,
 ) {
     releases.0.clear();
+    equip_errors.0.clear();
     if let Some(mut held) = held {
         *held = Default::default();
     }
@@ -199,6 +202,30 @@ mod tests {
         assert!(!s.item_locked(A) && !s.item_locked(B));
     }
 
+    /// A refusal that lands while no VM is up keeps its line for the next one but drops its
+    /// unlocks, which would otherwise fire into that VM's locks.
+    #[test]
+    fn a_refusal_with_no_vm_drops_its_unlocks_and_keeps_its_line() {
+        use bevy::ecs::system::RunSystemOnce;
+        const A: u64 = 0x4000_0000_0000_00a1;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        app.world_mut()
+            .resource_mut::<EquipErrors>()
+            .0
+            .push(EquipError {
+                reason: 0x16,
+                required_level: None,
+                bag_slot: 0xff,
+                unlocks: [A, 0],
+            });
+        app.world_mut()
+            .run_system_once(super::super::feed::feed_containers)
+            .unwrap();
+        let errs = &app.world().resource::<EquipErrors>().0;
+        assert_eq!(errs.len(), 1, "the line waits");
+        assert_eq!(errs[0].unlocks, [0, 0]);
+    }
+
     /// Driven through the real registration.
     #[test]
     fn the_session_end_drops_every_queued_unlock() {
@@ -212,6 +239,15 @@ mod tests {
         app.world_mut()
             .resource_mut::<ItemReleases>()
             .unlock(0x4000_0000_0000_0007);
+        app.world_mut()
+            .resource_mut::<EquipErrors>()
+            .0
+            .push(EquipError {
+                reason: 0x16,
+                required_level: None,
+                bag_slot: 0xff,
+                unlocks: [0x4000_0000_0000_0008, 0],
+            });
 
         crate::net::handlers::dispatch(
             app.world_mut(),
@@ -224,6 +260,10 @@ mod tests {
         assert!(
             app.world().resource::<ItemReleases>().0.is_empty(),
             "no ITEM_LOCK_CHANGED for the old session's items"
+        );
+        assert!(
+            app.world().resource::<EquipErrors>().0.is_empty(),
+            "nor a refusal's line or unlocks"
         );
     }
 }

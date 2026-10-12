@@ -826,11 +826,16 @@ pub(crate) fn feed_containers(
     ),
     mut memory: Local<crate::ui_script::VmMemo<FeedMemory>>,
 ) {
+    let (mut equip_errors, mut sink) = equip;
     let Some(mut script) = script else {
+        // A refusal's unlocks would fire into a later VM's locks; with none up they are dropped,
+        // as the release queue's are, and the lines wait.
+        for e in &mut equip_errors.0 {
+            e.unlocks = [0; 2];
+        }
         return;
     };
     let (clock, mut petitions) = clock_and_petitions;
-    let (mut equip_errors, mut sink) = equip;
     let (memory, vm_reset) = memory.get_reset(&script);
     // The snapshot is a function of these inputs; the stores' counters stand in for their
     // `is_changed`, which lazy resolves make always true. `UiClock` is not an input: a running
