@@ -552,12 +552,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // The set's copy into the live table (`0x4b8252` → `0x4b6310`, destination 3) signals
-    // `UPDATE_BINDINGS` (`0x4b649d`) before the verb returns.
+    // `UPDATE_BINDINGS` (`0x4b649d`) before the verb returns. The set is read by `tonumber`
+    // alone (`0x4b8228`, a non-number is 0); 3 and above raise the usage (`0x4b8232`-`0x4b823d`).
     lua.globals().set(
         "LoadBindings",
-        lua.create_function(|lua, set: u32| {
+        lua.create_function(|lua, set: Value| {
+            let set = super::binding_abi::ftol(super::binding_abi::coerced_number(lua, Some(set)));
+            if set >= 3 {
+                return Err(mlua::Error::RuntimeError(
+                    "Usage: LoadBindings(0||1||2)".into(),
+                ));
+            }
             super::tick::verb(lua, |model| {
-                if set <= 2 {
+                if let Ok(set) = u32::try_from(set) {
                     model.keybinds.load(set);
                     KeybindState::signal(model);
                 }
@@ -683,6 +690,24 @@ mod tests {
         s.run("LoadBindings(0)").unwrap();
         assert_eq!(crate::script::tick::heard::take(&s), ["UPDATE_BINDINGS "]);
         assert_eq!(s.keybinds_signalled_generation(), s.keybinds_generation());
+    }
+
+    /// `LoadBindings` reads its set with a bare `tonumber` (`0x4b8228`) and raises its usage for
+    /// 3 and above (`0x4b8232`-`0x4b823d`), loading and signalling nothing; a non-number is set 0.
+    #[test]
+    fn load_bindings_raises_its_usage_past_set_two() {
+        let s = script();
+        crate::script::tick::heard::listen(&s, &["UPDATE_BINDINGS"], None);
+        let err = s.run("LoadBindings(3)").unwrap_err().to_string();
+        assert!(err.contains("Usage: LoadBindings(0||1||2)"), "{err}");
+        assert!(crate::script::tick::heard::take(&s).is_empty());
+        s.run(r#"SetBinding("F", "JUMP") LoadBindings("x")"#)
+            .unwrap();
+        assert_eq!(
+            s.eval::<String>(r#"return GetBindingAction("F")"#).unwrap(),
+            "",
+            "a non-number restores the defaults"
+        );
     }
 
     #[test]
