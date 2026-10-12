@@ -26,8 +26,12 @@ pub enum RecruitmentPlan {
     /// outside a capital (`0x49eb33`): the run stays owed.
     #[default]
     Retry,
-    /// No `GuildRecruitment` row or city word to compose the name from: the run is spent.
-    Spent,
+    /// No player object (`0x49eac3`): the cascade returns with nothing done and no run owed.
+    NoPlayer,
+    /// No `GuildRecruitment` row or city word to compose the name from: the reference joins or
+    /// leaves whatever its name buffer holds, which is nothing to send here, and still signals
+    /// `UPDATE_CHAT_WINDOWS` (`0x49eb21`, `0x49eb5f`).
+    Unnamed,
     /// Guilded: leave the composed name (`0x49eb17` → `0x49ee70`).
     Leave(String),
     /// Unguilded in a capital: join the composed name (`0x49eb55` → `0x49eb70`), window 1 taking
@@ -53,7 +57,8 @@ pub enum RecruitmentRun {
 pub(crate) fn run_recruitment_cascade(model: &mut Model) -> bool {
     match model.guild_recruitment_plan.clone() {
         RecruitmentPlan::Retry => return false,
-        RecruitmentPlan::Spent => return true,
+        RecruitmentPlan::NoPlayer => return true,
+        RecruitmentPlan::Unnamed => {}
         RecruitmentPlan::Leave(name) => {
             model
                 .guild_recruitment_runs

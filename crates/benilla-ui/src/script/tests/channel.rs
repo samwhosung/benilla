@@ -276,13 +276,16 @@ fn the_recruitment_cascade_runs_inside_the_verb() {
         [RecruitmentRun::Leave("GuildRecruitment - City".into())]
     );
 
-    for (plan, owed) in [
-        (RecruitmentPlan::Retry, true),
-        (RecruitmentPlan::Spent, false),
+    // The retry owes the run; no player returns before anything (`0x49eac3`); an unnamed
+    // channel still signals the cascade's own event before the verb's.
+    for (plan, events, owed) in [
+        (RecruitmentPlan::Retry, 1, true),
+        (RecruitmentPlan::NoPlayer, 1, false),
+        (RecruitmentPlan::Unnamed, 2, false),
     ] {
         s.set_guild_recruitment_plan(plan);
         s.run("SetGuildRecruitmentMode(1)").unwrap();
-        assert_eq!(crate::script::tick::heard::take(&s).len(), 1);
+        assert_eq!(crate::script::tick::heard::take(&s).len(), events);
         assert!(s.take_guild_recruitment_runs().is_empty());
         assert_eq!(s.take_guild_recruitment_cascade(), owed);
     }

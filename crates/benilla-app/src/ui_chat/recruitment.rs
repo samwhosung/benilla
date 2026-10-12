@@ -105,7 +105,7 @@ fn plan(
     if action == Some(Cascade::Deferred) {
         return RecruitmentPlan::Retry; // `0x49eb33`: the retry stays armed
     }
-    // With no row or city word the run is consumed, not retried.
+    // With no row or city word there is no name to send; the run is consumed, not retried.
     let target = channels
         .channels
         .rows()
@@ -113,7 +113,7 @@ fn plan(
         .find(|r| r.is_guild_recruitment())
         .and_then(|row| Some((row, row.joinable_name("", city_word(&areas.0)?))));
     let Some((row, name)) = target else {
-        return RecruitmentPlan::Spent;
+        return RecruitmentPlan::Unnamed;
     };
     match action {
         Some(Cascade::Leave) => RecruitmentPlan::Leave(name),
@@ -143,9 +143,10 @@ pub(super) fn guild_recruitment_cascade(
     if script.take_guild_recruitment_cascade() {
         state.request();
     }
-    // Only while the avatar is streamed: a despawned body has not "left the guild".
+    // Only while the avatar is streamed: a despawned body has not "left the guild". With no
+    // player object the verb's cascade returns owing nothing (`0x49eac3`).
     let Some(guild_id) = self_q.iter().next().map(|s| s.0.player_guild_id()) else {
-        script.set_guild_recruitment_plan(RecruitmentPlan::Retry);
+        script.set_guild_recruitment_plan(RecruitmentPlan::NoPlayer);
         return;
     };
     state.observe_guild_id(guild_id);
