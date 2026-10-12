@@ -426,7 +426,9 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::s
         name: name.to_owned(),
         title: toc.directive("Title").map(str::to_owned),
         notes: toc.directive("Notes").map(str::to_owned),
-        url: toc.directive("URL").map(str::to_owned),
+        // The `.toc` has no URL: `0x51e180` answers `[rec+0x30]`, which only the server's
+        // `SMSG_ADDON_INFO` writes (`0x51db6a`).
+        url: None,
         secure: secure(chain, toc),
         load_on_demand: toc.load_on_demand(),
         dependencies: toc.dependencies().into_iter().map(str::to_owned).collect(),
@@ -534,7 +536,7 @@ pub(crate) fn installed_rows() -> Vec<InstalledAddOn> {
             default_state: addon.toc.default_state(),
             title: addon.toc.directive("Title").map(str::to_owned),
             notes: addon.toc.directive("Notes").map(str::to_owned),
-            url: addon.toc.directive("URL").map(str::to_owned),
+            url: None, // the server's, never the `.toc`'s (`0x51e180`, `0x51db6a`)
             dependencies: addon
                 .toc
                 .dependencies()
@@ -2119,6 +2121,27 @@ mod tests {
         );
         assert_eq!(failures.len(), 1, "{failures:?}");
         assert!(failures[0].contains("not found"), "{failures:?}");
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// The url getter `0x51e180` answers `[rec+0x30]`, written only by the `SMSG_ADDON_INFO`
+    /// handler (`0x51db6a`): a `## URL` line in the `.toc` gives the glue's list none.
+    #[test]
+    fn the_toc_gives_an_addon_no_url() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("toc-url");
+        write_addon(
+            &home,
+            "Linked",
+            "## Interface: 11200\n## URL: http://example.invalid\nmain.lua\n",
+            &[("main.lua", "")],
+        );
+        let rows = installed_rows();
+        let row = rows.iter().find(|r| r.name == "Linked").unwrap();
+        assert_eq!(row.url, None);
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
