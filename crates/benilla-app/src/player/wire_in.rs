@@ -23,7 +23,7 @@ use super::{movement_net, Player, SETTLE_TIMEOUT};
 
 /// What one `SMSG_CLIENT_CONTROL_UPDATE` means for us. It says whether a unit may move, not who the
 /// mover is: the server revokes a mind-controlled victim's control by naming the victim.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ControlVerdict {
     /// Somebody else drives our body; we stop moving it.
     Revoked,
@@ -64,6 +64,29 @@ fn yield_own_body(net_cmds: &NetCommands, player: &mut Player, self_guid: Option
     });
 }
 
+/// The control flags a verdict sets. `control_lost` is the mover we drive being unable to move:
+/// our body revoked, or our possessed creature released while feared or confused (the possession
+/// standing). `own_control_lost` is only `[0xb4b3e4]` (`0x4958e0`), which `0x5fa600` writes for our
+/// own character alone (`0x5fa6d0`): a grant or a release naming another unit never touches it.
+fn track_control(player: &mut Player, verdict: ControlVerdict) {
+    match verdict {
+        ControlVerdict::Revoked => {
+            player.control_lost = true;
+            player.own_control_lost = true;
+        }
+        ControlVerdict::Restored => {
+            player.control_lost = false;
+            player.own_control_lost = false;
+        }
+        ControlVerdict::Granted(_) => player.control_lost = false,
+        ControlVerdict::Released(guid) => {
+            if player.foreign_mover == Some(guid) {
+                player.control_lost = true;
+            }
+        }
+    }
+}
+
 /// `self_guid` is `None` before login names us, when no update can be about our body.
 fn control_verdict(mover: u64, allow_move: bool, self_guid: Option<u64>) -> ControlVerdict {
     match (self_guid == Some(mover), allow_move) {
@@ -102,15 +125,15 @@ pub(super) fn apply_server_moves(
     // A grant must be claimed: vmangos drops every `MSG_MOVE_*` for an unconfirmed mover
     // (`MovementHandler.cpp:291-293`, `Player.cpp:20257-20272`).
     for c in control_msgs.read() {
-        match control_verdict(c.mover, c.allow_move, self_guid) {
+        let verdict = control_verdict(c.mover, c.allow_move, self_guid);
+        track_control(player, verdict);
+        match verdict {
             // Park, which stops the server extrapolating a run, and say nothing else: the mover has
             // not changed hands, and `CMSG_MOVE_NOT_ACTIVE_MOVER` would strand us.
             ControlVerdict::Revoked => {
-                player.control_lost = true;
                 movement_net::park_mover(&net_cmds.0, player);
             }
             ControlVerdict::Restored => {
-                player.control_lost = false;
                 player.foreign_mover = None;
                 player.reseat = true;
                 // Re-claim ourselves, as login does (after a possession `m_clientMoverGuid` still
@@ -131,7 +154,6 @@ pub(super) fn apply_server_moves(
                 if player.foreign_mover.is_none() {
                     yield_own_body(net_cmds, player, self_guid);
                 }
-                player.control_lost = false;
                 player.foreign_mover = Some(guid);
                 player.reseat = true;
                 super::move_trace::mover_claim("SET_ACTIVE_MOVER", guid);
@@ -141,11 +163,7 @@ pub(super) fn apply_server_moves(
             // feared or confused (`Unit.cpp:11157`). As in the reference (`0x5fa600`), only the
             // unit we drive matters: we keep it but may not move it. Clearing `foreign_mover`
             // would walk our own body while the server applies our steps to the creature.
-            ControlVerdict::Released(guid) => {
-                if player.foreign_mover == Some(guid) {
-                    player.control_lost = true;
-                }
-            }
+            ControlVerdict::Released(_) => {}
         }
     }
     // Cross-map worldport: snap, bump `CurrentMap` for the terrain streamer, ack if required.
@@ -716,6 +734,24 @@ mod control_tests {
             control_verdict(VICTIM, true, Some(VICTIM)),
             ControlVerdict::Restored
         );
+    }
+
+    /// A possessed creature feared or confused is released, so the mover we drive cannot move,
+    /// but `[0xb4b3e4]` is written for our own character alone (`0x5fa6d0`): the item and
+    /// cursor gates still see control.
+    #[test]
+    fn releasing_a_possessed_creature_leaves_our_own_control_alone() {
+        let mut player = Player::default();
+        track_control(&mut player, control_verdict(CREATURE, true, Some(ME)));
+        assert!(!player.control_lost);
+        player.foreign_mover = Some(CREATURE);
+        track_control(&mut player, control_verdict(CREATURE, false, Some(ME)));
+        assert!(player.control_lost, "the creature we drive is stuck");
+        assert!(!player.own_control_lost, "our own control stands");
+        track_control(&mut player, control_verdict(ME, false, Some(ME)));
+        assert!(player.own_control_lost);
+        track_control(&mut player, control_verdict(ME, true, Some(ME)));
+        assert!(!player.own_control_lost && !player.control_lost);
     }
 
     #[test]

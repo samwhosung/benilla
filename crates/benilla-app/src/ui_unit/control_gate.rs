@@ -76,7 +76,7 @@ pub(super) fn feed_control_bypass(
     if spells.as_ref().is_some_and(|s| s.is_changed()) {
         *candidates = None;
     }
-    let want = match (player.control_lost, spells.as_deref(), self_q.single()) {
+    let want = match (player.own_control_lost, spells.as_deref(), self_q.single()) {
         (true, Some(spells), Ok(store)) => {
             let list = candidates.get_or_insert_with(|| bypass_candidates(&spells.catalog));
             control_bypass_spells(&spells.catalog, list, &store.0)
@@ -255,7 +255,7 @@ mod tests {
             .id();
         app.world_mut()
             .resource_mut::<crate::player::Player>()
-            .control_lost = true;
+            .own_control_lost = true;
         app.update();
 
         let calls = |app: &mut App| {

@@ -702,7 +702,7 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
 }
 
 /// `PLAYER_CONTROL_LOST`/`GAINED` on a change of the flag `SMSG_CLIENT_CONTROL_UPDATE` writes
-/// (`0x4958e0`); the boot value, and a fresh VM's memo, is in control (`0x48f626`).
+/// (`0x4958e0`), for our own character only (`0x5fa6d0`); the boot value, and a fresh VM's memo, is in control (`0x48f626`).
 fn feed_player_control(
     script: Option<NonSendMut<UiScript>>,
     player: Option<Res<crate::player::Player>>,
@@ -712,11 +712,11 @@ fn feed_player_control(
         return;
     };
     let lost = lost.get(&script);
-    if *lost != player.control_lost {
-        *lost = player.control_lost;
+    if *lost != player.own_control_lost {
+        *lost = player.own_control_lost;
         // `HasFullControl`'s flag rides the same edge.
-        script.set_player_control(!player.control_lost);
-        let event = if player.control_lost {
+        script.set_player_control(!player.own_control_lost);
+        let event = if player.own_control_lost {
             "PLAYER_CONTROL_LOST"
         } else {
             "PLAYER_CONTROL_GAINED"
@@ -2762,13 +2762,28 @@ mod tests {
         );
         app.world_mut()
             .resource_mut::<crate::player::Player>()
-            .control_lost = true;
+            .own_control_lost = true;
         assert_eq!(seen(&mut app), vec!["PLAYER_CONTROL_LOST".to_string()]);
         assert_eq!(seen(&mut app), Vec::<String>::new(), "held, not repeated");
         app.world_mut()
             .resource_mut::<crate::player::Player>()
-            .control_lost = false;
+            .own_control_lost = false;
         assert_eq!(seen(&mut app), vec!["PLAYER_CONTROL_GAINED".to_string()]);
+
+        // A possessed creature stuck under fear or confusion is not our character losing control:
+        // `0x5fa600` writes `[0xb4b3e4]` for our own guid alone, so no event and no flag.
+        app.world_mut()
+            .resource_mut::<crate::player::Player>()
+            .control_lost = true;
+        assert_eq!(seen(&mut app), Vec::<String>::new());
+        assert!(app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval::<bool>("return HasFullControl() == 1")
+            .unwrap());
+        app.world_mut()
+            .resource_mut::<crate::player::Player>()
+            .control_lost = false;
 
         let set_farsight = |app: &mut App, guid: u64| {
             app.world_mut().entity_mut(me).insert(ObjectStore(
