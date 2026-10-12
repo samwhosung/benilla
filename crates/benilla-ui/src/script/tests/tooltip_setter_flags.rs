@@ -304,3 +304,125 @@ fn the_mail_and_auction_item_setters_answer_one_value() {
     }
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
+
+/// The sell and send-mail slots hold a live item object, so its expiry, temporary enchants and
+/// LOCKED state reach the flag; the trade target's block names a lock of its own.
+#[test]
+fn live_objects_and_blocks_reach_the_flag() {
+    let mut s = fixture();
+    s.run(r#"ITEM_DURATION_HOURS = "[DURATION %d h]" LOCKED = "[LOCKED]""#)
+        .unwrap();
+    s.set_item_template(
+        8300,
+        ItemTemplateView {
+            name: "Strongbox".into(),
+            lock_id: 7,
+            ..Default::default()
+        },
+    );
+    s.set_item_template(
+        8301,
+        ItemTemplateView {
+            name: "Plain".into(),
+            ..Default::default()
+        },
+    );
+    let held = |item_id, flags, duration_ms| ContainerSlot {
+        item_id,
+        count: 1,
+        flags,
+        duration_ms,
+        ..Default::default()
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: Some("Backpack".into()),
+            num_slots: 16,
+            slots: std::collections::HashMap::from([
+                (1, held(8300, 0, None)),
+                (2, held(8300, 0x4, None)),
+                (3, held(8301, 0, Some(3_600_000))),
+                (4, held(8301, 0, None)),
+            ]),
+        }),
+    );
+    let cursor = |slot| CursorItem {
+        bag: 0,
+        slot,
+        item_id: if slot <= 2 { 8300 } else { 8301 },
+        texture: None,
+        link: None,
+        count: None,
+        quality: Some(1),
+        equip_slots: Vec::new(),
+        bar_placeable: false,
+    };
+    for (slot, want) in [
+        (1, "1:number:1"),
+        (2, "1:nil:nil"),
+        (3, "1:number:1"),
+        (4, "1:nil:nil"),
+    ] {
+        {
+            let mut model = s.model_mut();
+            model.mail_send_item = Some(cursor(slot));
+            model.auction_sell_item = Some(cursor(slot));
+        }
+        assert_eq!(show(&s, "TT:SetSendMailItem()"), want, "mail slot {slot}");
+        assert_eq!(
+            show(&s, "TT:SetAuctionSellItem()"),
+            want,
+            "sell slot {slot}"
+        );
+    }
+
+    // The trade target's block carries the partner's lock id: LOCKED with no object, flag set.
+    // The action bar's item word resolves to the player's own item by entry (`0x532490`): the
+    // locked strongbox in the bag sets the flag with no cooldown, a plain one does not.
+    for (id, item) in [(1, 8300), (2, 8301)] {
+        s.set_action(
+            id,
+            Some(ActionSlot {
+                kind: 0x80,
+                action: item,
+                ..Default::default()
+            }),
+        );
+    }
+    assert_eq!(show(&s, "TT:SetAction(1)"), "1:number:1");
+    assert_eq!(show(&s, "TT:SetAction(2)"), "1:number:1", "slot 3 expires");
+    {
+        let mut model = s.model_mut();
+        model.containers.get_mut(&0).unwrap().slots.remove(&3);
+    }
+    assert_eq!(show(&s, "TT:SetAction(2)"), "1:nil:nil");
+
+    let mut st = TradeState::default();
+    for (i, lock_id) in [(0, 9), (1, 0)] {
+        st.target.slots[i] = Some(TradeSlotItem {
+            item_id: 8301,
+            name: Some("Plain".into()),
+            count: 1,
+            lock_id,
+            ..Default::default()
+        });
+    }
+    st.player.slots[0] = st.target.slots[0].clone();
+    s.set_trade(Some(st));
+    let locked = |s: &UiScript, call: &str| {
+        s.eval::<bool>(&format!(
+            "TT:SetOwner(FL, 'ANCHOR_RIGHT') {call} \
+             for i = 1, TT:NumLines() do \
+               if getglobal('TTTextLeft' .. i):GetText() == '[LOCKED]' then return true end \
+             end return false"
+        ))
+        .unwrap()
+    };
+    assert!(locked(&s, "TT:SetTradeTargetItem(1)"));
+    assert!(!locked(&s, "TT:SetTradeTargetItem(2)"));
+    assert!(
+        !locked(&s, "TT:SetTradePlayerItem(1)"),
+        "the player's block has no lock"
+    );
+}

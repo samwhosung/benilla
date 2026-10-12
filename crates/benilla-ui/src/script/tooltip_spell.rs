@@ -867,11 +867,18 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetAction",
         lua.create_function(|lua, (this, slot): (Table, u32)| {
             let now = crate::script::clock::now(lua);
-            let (action, remaining_ms) = {
+            let (action, remaining_ms, owned) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
+                let action = model.actions.get(&slot).cloned();
+                // An item word resolves to the player's own item by entry (`0x532490`).
+                let owned = action
+                    .as_ref()
+                    .filter(|a| a.kind == 0x80)
+                    .and_then(|a| super::tooltip_item::owned_instance(&model, a.action));
                 (
-                    model.actions.get(&slot).cloned(),
+                    action,
                     live_remaining_ms(model.action_states.get(&slot).and_then(|s| s.cooldown), now),
+                    owned,
                 )
             };
             let Some(a) = action else {
@@ -899,8 +906,14 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 // The item builder's block takes the same live cooldown (`0x5324d5`), whose
                 // ITEM_COOLDOWN_TIME line (not built) sets the return value (`0x52e140`).
                 0x80 => Ok(flag(
-                    super::tooltip_item::render_by_id_flagged(lua, &this, a.action, None, None)?
-                        || remaining_ms > 0,
+                    super::tooltip_item::render_by_id_flagged(
+                        lua,
+                        &this,
+                        a.action,
+                        None,
+                        None,
+                        owned.as_ref(),
+                    )? || remaining_ms > 0,
                 )),
                 0x40 => {
                     let h = frame_handle_of(lua, &this)?;

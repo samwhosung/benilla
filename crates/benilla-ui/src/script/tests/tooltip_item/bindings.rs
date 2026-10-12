@@ -760,6 +760,65 @@ fn item_bindings_return_the_pushed_repair_cost() {
     assert!(s.take_errors().is_empty());
 }
 
+/// The LOCKED line is drawn for an item object lacking UNLOCKED `0x4` (`0x52bdb3`..`0x52bdc4`), or
+/// for a block with a lock id of its own (`0x52bdd2`), never for a template source; every lock
+/// path sets the builder's return value (`0x52bfa6`), so the bag setter answers 1 for a locked
+/// item with no cooldown and no expiry.
+#[test]
+fn locked_is_drawn_for_a_locked_object_and_sets_the_builder_flag() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    let slot = |flags| ContainerSlot {
+        item_id: 8300,
+        count: 1,
+        quality: Some(1),
+        link: Some("|cffffffff|Hitem:8300:0:0:0|h[Strongbox]|h|r".into()),
+        flags,
+        ..Default::default()
+    };
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: Some("Backpack".into()),
+            num_slots: 24,
+            slots: HashMap::from([(1, slot(0)), (2, slot(0x4))]),
+        }),
+    );
+    s.set_item_template(
+        8300,
+        ItemTemplateView {
+            name: "Strongbox".into(),
+            quality: 1,
+            lock_id: 7,
+            ..Default::default()
+        },
+    );
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0)
+        a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT")
+        local function locked()
+            for i = 1, tt:NumLines() do
+                if getglobal("TTTextLeft" .. i):GetText() == "[LOCKED]" then return true end
+            end
+            return false
+        end
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        local cd = tt:SetBagItem(0, 1)
+        assert(locked() and cd == 1, "a locked object draws LOCKED and sets the flag")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        cd = tt:SetBagItem(0, 2)
+        assert(not locked() and cd == nil, "UNLOCKED clears both: " .. tostring(cd))
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        SetItemByIdForTest(tt, 8300)
+        assert(not locked(), "a template source has no object and draws none")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
 /// `SetInventoryItem` (`0x532ee0`) and `SetBagItem` (`0x534620`) push `hasCooldown` as the number 1
 /// (`0x5332d3`, `0x534958`) or nil (`0x5332da`, `0x534966`), never a Lua boolean, and the counts
 /// stay 3 and 2.

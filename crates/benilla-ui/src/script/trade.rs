@@ -29,6 +29,9 @@ pub struct TradeSlotItem {
     /// The template's InventoryType; 0 while the template is in flight and for an item that cannot
     /// be equipped.
     pub inventory_type: u32,
+    /// The wire's `lock_id`: the trade target's tooltip draws LOCKED off it (`0x534563`,
+    /// `0x52bdd2`). 0 for none; the player's side ignores it.
+    pub lock_id: u32,
     /// The name of the enchant being applied to slot 7, which stock shows in green
     /// (`TradeFrame.lua:62`); the app always sends `None`.
     pub enchantment: Option<String>,
@@ -413,6 +416,7 @@ mod tests {
             count,
             quality: Some(quality),
             inventory_type: 0,
+            lock_id: 0,
             enchantment: None,
             link: Some(format!(
                 "|cffffffff|Hitem:{item_id}:0:0:0|h[Linen Cloth]|h|r"
@@ -455,6 +459,7 @@ mod tests {
             count: 1,
             quality: None,
             inventory_type: 0,
+            lock_id: 0,
             enchantment: None,
             link: None,
         });

@@ -466,6 +466,7 @@ fn resolve_slot(
         count: item.count.max(1),
         quality,
         inventory_type,
+        lock_id: item.lock_id,
         enchantment: None,
         link,
     }

@@ -18,7 +18,7 @@ use super::tooltip::{append_line, clear, clear_silent, show_or_hide_empty};
 use super::{ItemTemplateView, Model};
 
 mod names;
-mod render;
+pub(in crate::script) mod render;
 
 use names::{quality_color, GRAY, WHITE};
 use render::{render_view, BuilderFlags};
@@ -141,6 +141,69 @@ fn hyperlink_item_fields(link: &str) -> Option<(u32, u32, u32)> {
     (item_id != 0).then_some((item_id, enchant_id, random_property_id))
 }
 
+/// A bag slot's item as the builder's live item object: the name off the link (the reference
+/// builds both from `0x5d8b00`), its fields and the open gate's p6.
+fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> render::ItemInstance {
+    render::ItemInstance {
+        name: s.link.as_deref().and_then(link_name).map(str::to_string),
+        durability: s.durability,
+        creator: s.creator.clone(),
+        has_text: s.readable,
+        flags: s.flags,
+        already_bound: s.already_bound,
+        petition: s.petition.clone(),
+        enchants: s.enchants.clone(),
+        openable_source,
+        duration_ms: s.duration_ms,
+        object: true,
+        block_lock_id: 0,
+    }
+}
+
+/// The worn item `item_id` as the builder's live item object, or the first bag slot holding it
+/// (equipment first, then the bags in id order), which the action bar's item word resolves by
+/// entry (`0x622270` at `0x532490`). `None` when the player holds none (`0x5325bc`).
+pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::ItemInstance> {
+    if let Some(s) = model
+        .inventory_slots
+        .iter()
+        .flatten()
+        .find(|s| s.item_id == item_id)
+    {
+        return Some(render::ItemInstance {
+            name: s.name.clone(),
+            durability: s.durability,
+            creator: s.creator.clone(),
+            flags: s.flags,
+            already_bound: s.already_bound,
+            enchants: s.enchants.clone(),
+            duration_ms: s.duration_ms,
+            object: true,
+            ..Default::default()
+        });
+    }
+    let mut bags: Vec<_> = model.containers.iter().collect();
+    bags.sort_by_key(|(bag, _)| **bag);
+    bags.into_iter()
+        .flat_map(|(_, c)| {
+            let mut slots: Vec<_> = c.slots.iter().collect();
+            slots.sort_by_key(|(n, _)| **n);
+            slots.into_iter().map(|(_, s)| s)
+        })
+        .find(|s| s.item_id == item_id)
+        .map(|s| slot_instance(s, false))
+}
+
+/// The item at `(bag, slot)` in the cursor's numbering, as a live object with no block, for the
+/// sell and send-mail slots (`0x5357c3`, `0x5353a0`).
+fn held_instance(model: &Model, bag: i64, slot: u32) -> Option<render::ItemInstance> {
+    model
+        .containers
+        .get(&bag)
+        .and_then(|c| c.slots.get(&slot))
+        .map(|s| slot_instance(s, true))
+}
+
 /// The id-keyed render; on a miss, the ask and a name-only line, as `SetBagItem`'s miss path. The
 /// engine's own item hovers reach it from Rust (the action bar's, `SetTrainerService`,
 /// `SetCraftSpell`): 1.12's `Set*Item` bindings all name a container, so no Lua method takes an id.
@@ -151,22 +214,23 @@ pub(super) fn render_by_id(
     fb_name: Option<String>,
     fb_q: Option<u32>,
 ) -> mlua::Result<()> {
-    render_by_id_flagged(lua, this, item_id, fb_name, fb_q).map(|_| ())
+    render_by_id_flagged(lua, this, item_id, fb_name, fb_q, None).map(|_| ())
 }
 
 /// [`render_by_id`] answering the item builder's return value (see [`render::render_view_flagged`]);
-/// a template still in flight answers false.
+/// a template still in flight answers false. `inst` is the live object the source holds, if any.
 pub(super) fn render_by_id_flagged(
     lua: &Lua,
     this: &Table,
     item_id: u32,
     fb_name: Option<String>,
     fb_q: Option<u32>,
+    inst: Option<&render::ItemInstance>,
 ) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     clear(lua, h);
     let live = match view_of(lua, item_id) {
-        Some(v) => render::render_view_flagged(lua, this, &v, BuilderFlags::default(), None)?,
+        Some(v) => render::render_view_flagged(lua, this, &v, BuilderFlags::default(), inst)?,
         None => {
             if let Some(name) = fb_name {
                 append_line(
@@ -369,6 +433,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                     // nothing openable is equippable.
                                     openable_source: false,
                                     duration_ms: s.duration_ms,
+                                    // Only the player's own doll holds item objects; an
+                                    // inspected unit's item is a block (`0x532ee0`).
+                                    object: unit.eq_ignore_ascii_case("player"),
+                                    block_lock_id: 0,
                                 },
                             )
                         });
@@ -395,8 +463,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     name_only,
                 };
                 clear(lua, h);
-                match view_of(lua, item_id) {
-                    Some(v) => render_view(lua, &this, &v, flags, Some(&inst))?,
+                let live = match view_of(lua, item_id) {
+                    Some(v) => render::render_view_flagged(lua, &this, &v, flags, Some(&inst))?,
                     None => {
                         // Template in flight: the header and the slot's own name, as
                         // `SetBagItem`'s miss path.
@@ -413,15 +481,17 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             };
                             append_line(lua, &this, (name, color), None, false)?;
                         }
+                        false
                     }
-                }
+                };
                 show_or_hide_empty(lua, h);
                 Ok(MultiValue::from_vec(vec![
                     Value::Integer(1),
-                    // hasCooldown is the builder's `[ebp-0x38]`, set by four lines:
-                    // LOCKED_WITH_ITEM, the temporary-enchant countdown, the item's duration
-                    // (`0x52ce0d`) and ITEM_COOLDOWN_TIME. Only the duration is answered here.
-                    flag(inst.duration_ms.is_some()),
+                    // hasCooldown is the builder's `[ebp-0x38]`, set by four lines: LOCKED, the
+                    // temporary-enchant countdown, the item's duration (`0x52ce0d`) and
+                    // ITEM_COOLDOWN_TIME (not built). A template still in flight draws only the
+                    // name, but the slot's own expiry still counts.
+                    flag(live || inst.duration_ms.is_some()),
                     Value::Integer(i64::from(repair_cost)),
                 ]))
             },
@@ -458,21 +528,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             has_cd,
                             s.link.clone(),
                             s.quality.unwrap_or(1),
-                            render::ItemInstance {
-                                // The link's name: the reference builds both from `0x5d8b00`.
-                                name: s.link.as_deref().and_then(link_name).map(str::to_string),
-                                durability: s.durability,
-                                creator: s.creator.clone(),
-                                has_text: s.readable,
-                                flags: s.flags,
-                                already_bound: s.already_bound,
-                                petition: s.petition.clone(),
-                                enchants: s.enchants.clone(),
-                                // p6 = 0 iff no cooldown runs; mid-cooldown the reference shows
-                                // ITEM_COOLDOWN_TIME instead, which is not built.
-                                openable_source: !has_cd,
-                                duration_ms: s.duration_ms,
-                            },
+                            // p6 = 0 iff no cooldown runs; mid-cooldown the reference shows
+                            // ITEM_COOLDOWN_TIME instead, which is not built.
+                            slot_instance(s, !has_cd),
                             cost.unwrap_or(0),
                         )
                     }
@@ -480,9 +538,15 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 }
             };
             clear(lua, h);
-            match view_of(lua, item_id) {
+            let live = match view_of(lua, item_id) {
                 Some(v) => {
-                    render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?;
+                    let live = render::render_view_flagged(
+                        lua,
+                        &this,
+                        &v,
+                        BuilderFlags::default(),
+                        Some(&inst),
+                    )?;
                     let (merchant_open, repairing) = {
                         let model = lua.app_data_mut::<Model>().expect("model app_data");
                         (model.merchant.is_some(), model.repair_mode)
@@ -494,6 +558,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             append_line(lua, &this, (t, WHITE), None, false)?;
                         }
                     }
+                    live
                 }
                 None => {
                     // Deviation: while the template is in flight the reference leaves the tooltip
@@ -508,12 +573,14 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             false,
                         )?;
                     }
+                    false
                 }
-            }
+            };
             show_or_hide_empty(lua, h);
             Ok(MultiValue::from_vec(vec![
-                // The builder's `[ebp-0x38]`: a running cooldown or the item's duration line.
-                flag(has_cd || inst.duration_ms.is_some()),
+                // The builder's `[ebp-0x38]`: LOCKED, a countdown, the item's duration line, or a
+                // running cooldown (ITEM_COOLDOWN_TIME, not drawn here).
+                flag(has_cd || live || inst.duration_ms.is_some()),
                 Value::Integer(i64::from(repair_cost)),
             ]))
         })?,
@@ -543,6 +610,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 clear(lua, h);
                 let inst = render::ItemInstance {
                     name: item.name.clone(),
+                    // The target side's block carries the partner's lock id (`0x534563`); the
+                    // player's is zero (`0x534341`).
+                    block_lock_id: if player_side { 0 } else { item.lock_id },
                     ..Default::default()
                 };
                 match view_of(lua, item.item_id) {
@@ -941,22 +1011,27 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetAuctionSellItem",
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
-            let item_id = {
+            // The slot's item is a live object (`0x5357b4`, `0x5353a0`), so its LOCKED gate,
+            // expiry and temporary enchants follow the bag slot it came from.
+            let (item_id, inst) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .auction_sell_item
-                    .as_ref()
-                    .map(|it| it.item_id)
-                    .unwrap_or(0)
+                match model.auction_sell_item.as_ref() {
+                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
+                    None => (0, None),
+                }
             };
             if item_id == 0 {
                 return Ok(Value::Nil);
             }
             clear(lua, h);
             let live = match view_of(lua, item_id) {
-                Some(v) => {
-                    render::render_view_flagged(lua, &this, &v, BuilderFlags::default(), None)?
-                }
+                Some(v) => render::render_view_flagged(
+                    lua,
+                    &this,
+                    &v,
+                    BuilderFlags::default(),
+                    inst.as_ref(),
+                )?,
                 None => false,
             };
             show_or_hide_empty(lua, h);
@@ -971,22 +1046,27 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetSendMailItem",
         lua.create_function(|lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
-            let item_id = {
+            // The slot's item is a live object (`0x5357b4`, `0x5353a0`), so its LOCKED gate,
+            // expiry and temporary enchants follow the bag slot it came from.
+            let (item_id, inst) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .mail_send_item
-                    .as_ref()
-                    .map(|it| it.item_id)
-                    .unwrap_or(0)
+                match model.mail_send_item.as_ref() {
+                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
+                    None => (0, None),
+                }
             };
             if item_id == 0 {
                 return Ok(Value::Nil);
             }
             clear(lua, h);
             let live = match view_of(lua, item_id) {
-                Some(v) => {
-                    render::render_view_flagged(lua, &this, &v, BuilderFlags::default(), None)?
-                }
+                Some(v) => render::render_view_flagged(
+                    lua,
+                    &this,
+                    &v,
+                    BuilderFlags::default(),
+                    inst.as_ref(),
+                )?,
                 None => false,
             };
             show_or_hide_empty(lua, h);

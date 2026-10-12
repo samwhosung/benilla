@@ -111,7 +111,7 @@ fn red_lines_track_player_state() {
     assert!(s.take_errors().is_empty());
 }
 
-/// The gated families (`0x52b650`): SIGNABLE green, UNIQUE before STARTS_QUEST, LOCKED red, six
+/// The gated families (`0x52b650`): SIGNABLE green, UNIQUE before STARTS_QUEST, six
 /// equal resistances as one ALL line (Holy never prints alone), a known taught spell's red
 /// "Already known", the gold description, and no openable line: the openable, readable and creator
 /// tail needs an item object (`0x52e1c7`, `0x52e2e0`), and a template has none.
@@ -159,7 +159,7 @@ fn verified_families_signable_locked_resists_known() {
             "[ITEM_SIGNABLE]",
             "[ITEM_UNIQUE]",
             "[ITEM_STARTS_QUEST]",
-            "[LOCKED]",
+            // No LOCKED: a template source has no item object and no block (`0x52bdb3`..`0x52bdd8`).
             "[RESIST_ALL +5]",
             "[ITEM_SPELL_KNOWN]",
             "\"Sign here.\"",
@@ -168,7 +168,6 @@ fn verified_families_signable_locked_resists_known() {
     );
     let color = |needle: &str| lines.iter().find(|(t, _)| t == needle).unwrap().1;
     let red = [1.0, 32.0 / 255.0, 32.0 / 255.0, 1.0];
-    assert_eq!(color("[LOCKED]"), red, "LOCKED is red");
     assert_eq!(
         color("[ITEM_SPELL_KNOWN]"),
         red,

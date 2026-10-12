@@ -16,7 +16,7 @@ use super::names::*;
 /// What a source knows beyond the template: an item object's fields, or a block source's name and
 /// roll. A template source passes `None`.
 #[derive(Default)]
-pub(super) struct ItemInstance {
+pub(in crate::script) struct ItemInstance {
     /// The name with its random suffix joined, which the reference composes in the builder
     /// (`0x52b7bf`, `0x5d8b00` through `ITEM_SUFFIX_TEMPLATE`); `None` takes the template's.
     pub name: Option<String>,
@@ -46,6 +46,14 @@ pub(super) struct ItemInstance {
     /// A timed item's remaining lifetime in ms, from `SMSG_ITEM_TIME_UPDATE`, not
     /// `ITEM_FIELD_DURATION`: the client displays from the packet (`Objects/Item.cpp:1093`).
     pub duration_ms: Option<u64>,
+    /// The source holds a live item object (the guid arguments of `0x52b650`): the LOCKED gate
+    /// reads its UNLOCKED flag (`0x52bdb3`..`0x52bdc4`). A block source, a template source and an
+    /// inspected unit's item have none.
+    pub object: bool,
+    /// The block's lock id (`[this+0x430]`, set by the trade target's setter, `0x534563`), 0 for
+    /// none or no block. With no lock row from the template it names one (`0x52bd78`..`0x52bda9`),
+    /// and a nonzero one draws LOCKED even without an object (`0x52bdd2`).
+    pub block_lock_id: u32,
 }
 
 /// The set block's blank gold line, the reference's literal `0x854b2c`: a space and a newline. An
@@ -69,10 +77,12 @@ pub(super) struct BuilderFlags {
 
 /// Render one item into the tooltip in `0x52b650`'s order, and answer the builder's return value
 /// (`[ebp-0x38]`): whether a line that changes while the tooltip stays up was written, the
-/// temporary enchant's countdown (`0x52ca82`) or the item's own expiry (`0x52ce0d`). The
-/// setters push it as 1 or nil; the stock buttons arm `updateTooltip` from it. Not built:
-/// ITEM_COOLDOWN_TIME, ITEM_WRAPPED_BY and the `LOCKED_WITH_*` line under LOCKED, the last two of
-/// which also set it (`0x52bfa6`, `0x52e140`).
+/// LOCKED line, the temporary enchant's countdown (`0x52ca82`) or the item's own expiry
+/// (`0x52ce0d`). The
+/// setters push it as 1 or nil; the stock buttons arm `updateTooltip` from it. The LOCKED line
+/// sets it on every lock path (`0x52bfa6`, after `0x52be58`, whether or not a `LOCKED_WITH_*`
+/// sub-line follows), as ITEM_COOLDOWN_TIME does (`0x52e140`). Not built: ITEM_COOLDOWN_TIME,
+/// ITEM_WRAPPED_BY and the `LOCKED_WITH_*` sub-line.
 pub(super) fn render_view_flagged(
     lua: &Lua,
     this: &Table,
@@ -184,9 +194,17 @@ pub(super) fn render_view_flagged(
         if v.start_quest != 0 {
             keyed("ITEM_STARTS_QUEST", &[], WHITE, false)?;
         }
-        // LOCKED, red, until the instance carries UNLOCKED `0x4`.
-        if v.lock_id != 0 && inst.is_none_or(|i| i.flags & 0x4 == 0) {
+        // LOCKED, red (`0x52bdde`..`0x52be58`), for a lock row the template or the block names
+        // (`0x52bd57`..`0x52bda9`) and a source that passes the gate (`0x52bdb3`..`0x52bdd8`): an
+        // item object lacking UNLOCKED `0x4`, or a block with a lock id of its own. A template
+        // source has neither, so it draws no LOCKED. Every lock path then sets the builder's
+        // return value (`0x52bfa6`).
+        let block_lock = inst.map_or(0, |i| i.block_lock_id);
+        let has_row = v.lock_id != 0 || block_lock != 0;
+        let passes = block_lock != 0 || inst.is_some_and(|i| i.object && i.flags & 0x4 == 0);
+        if has_row && passes {
             keyed("LOCKED", &[], RED, false)?;
+            live = true;
         }
     }
     // The slot | type line, or for a bag the CONTAINER_SLOTS line in its seat. The type cell is
