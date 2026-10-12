@@ -54,8 +54,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `SetLayoutMode([mode])` (`0x488540`): a number or numeric string (`0x6f34d0`) truncates
-    // (`0x40a2b0`, [`super::binding_abi::ftol`]) into the UI root's `+0xcf8`, anything else stores 1 (`0x488573`); never raises,
-    // returns zero values. The press handler reads it (`0x766301`).
+    // (`0x40a2b0`, [`super::binding_abi::ftol`]) into the UI root's `+0xcf8`, anything else
+    // stores 1 (`0x488573`); never raises, returns zero values. The press handler reads it
+    // (`0x766301`).
     g.set(
         "SetLayoutMode",
         lua.create_function(|lua, v: Value| {
