@@ -57,12 +57,14 @@ pub(crate) fn str_at(rs: &RecordSet, r: &Record, i: usize) -> Option<String> {
     }
 }
 
-/// The name a `Name_Lang` block holds, the eight locale columns from `first`: the first populated
-/// one. The reference reads the column its client's locale picks (`[0xc0e080]`); a client's DBCs
-/// carry their own locale's column alone, so the populated column is that one, and enUS, column 0,
-/// is what the corpus here ships.
+/// The `Name_Lang` column benilla reads, the enUS one (the reference reads its client's locale
+/// slot, `[0xc0e080]`). Other locales are unsupported for now (issue #429).
+pub(crate) const LOCALE_SLOT: usize = 0;
+
+/// The name a `Name_Lang` block holds, the eight locale columns from `first`: the column at
+/// [`LOCALE_SLOT`], `None` when it is empty.
 pub(crate) fn name_lang_at(rs: &RecordSet, r: &Record, first: usize) -> Option<String> {
-    (first..first + 8).find_map(|i| str_at(rs, r, i))
+    str_at(rs, r, first + LOCALE_SLOT)
 }
 
 /// `SpellIcon.dbc`: id → extensionless texture path (`Interface\Icons\…`).

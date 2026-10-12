@@ -136,8 +136,8 @@ impl CharCreateCatalog {
         self.files.get(&race).map(String::as_str)
     }
 
-    /// The ChrRaces `Name_Lang` name for a race (`"Night Elf"`, `"Undead"`), in the install's
-    /// locale: `GetCharacterInfo`'s second return (`0x47332e`).
+    /// The ChrRaces `Name_Lang` name for a race (`"Night Elf"`, `"Undead"`) at the enUS slot:
+    /// `GetCharacterInfo`'s second return (`0x47332e`).
     pub fn race_name(&self, race: u8) -> Option<&str> {
         self.names.get(&race).map(String::as_str)
     }
