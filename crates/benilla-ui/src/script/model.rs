@@ -945,6 +945,8 @@ pub(crate) struct Model {
     pub(crate) quest_log_rows: Vec<quest_log::QuestLogEntryView>,
     /// The collapsed headers by title, the reference's fold mask `0xbb748c`.
     pub(crate) quest_log_collapsed: HashSet<String>,
+    /// A selected quest a previous VM left, placed at the first push.
+    pub(crate) quest_log_selection_seed: Option<u32>,
     /// Watched quest ids in watch order, pruned when a quest leaves the log.
     pub(crate) quest_log_watched: Vec<u32>,
     /// The server's clock in Unix seconds, `None` before `SMSG_QUERY_TIME_RESPONSE`. A quest
@@ -1578,6 +1580,7 @@ impl Model {
             spell_tooltip_waits: HashMap::new(),
             quest_log_rows: Vec::new(),
             quest_log_collapsed: HashSet::new(),
+            quest_log_selection_seed: None,
             quest_log_watched: Vec::new(),
             server_unix_time: None,
             worldmap: super::worldmap::WorldMapState::default(),

@@ -44,6 +44,31 @@ pub(crate) struct TradeSkillOpen {
     pub(crate) line: Option<u32>,
 }
 
+/// The repeat (`0xbde05c`, `0xbde060`) a dying VM left, seated in the next: globals no UI init
+/// resets, so a batch survives a `/reload`. The session end drops it.
+#[derive(Resource, Default)]
+pub(crate) struct TradeSkillRepeatCarry(pub(crate) (u32, u32));
+
+/// Fold the repeat out of the dying VM, with the CVar fold.
+pub(crate) fn fold_dying_vm_repeat(world: &mut World) {
+    let Some(repeat) = world
+        .get_non_send_resource::<UiScript>()
+        .map(UiScript::trade_skill_repeat)
+    else {
+        return;
+    };
+    if let Some(mut carry) = world.get_resource_mut::<TradeSkillRepeatCarry>() {
+        carry.0 = repeat;
+    }
+}
+
+/// Seat the folded repeat in a new in-game VM before its load runs.
+pub(crate) fn seed_repeat(world: &World, script: &mut UiScript) {
+    if let Some(carry) = world.get_resource::<TradeSkillRepeatCarry>() {
+        script.seed_trade_skill_repeat(carry.0);
+    }
+}
+
 /// `SpellFocusObject.dbc`, the names on a "Requires: Anvil" line.
 #[derive(Resource)]
 pub(crate) struct SpellFocus {
@@ -57,6 +82,7 @@ impl Plugin for UiTradeSkillPlugin {
         app.net_handler(SessionEventKind::Disconnected, on_session_end);
         app.init_resource::<TradeSkillOpens>()
             .init_resource::<TradeSkillOpen>()
+            .init_resource::<TradeSkillRepeatCarry>()
             .add_systems(Startup, load_spell_focus.after(AssetSet::Open))
             .add_systems(
                 Update,
@@ -71,14 +97,16 @@ impl Plugin for UiTradeSkillPlugin {
     }
 }
 
-/// The book and any queued opener end with the session; the repeat is the VM's and goes with it.
+/// The book, any queued opener and the carried repeat end with the session.
 fn on_session_end(
     In(_): In<SessionEvent>,
     mut opens: ResMut<TradeSkillOpens>,
     mut open: ResMut<TradeSkillOpen>,
+    mut carry: ResMut<TradeSkillRepeatCarry>,
 ) {
     opens.0.clear();
     open.line = None;
+    carry.0 = (0, 0);
 }
 
 fn load_spell_focus(mut commands: Commands, assets: Option<Res<WorldAssets>>) {

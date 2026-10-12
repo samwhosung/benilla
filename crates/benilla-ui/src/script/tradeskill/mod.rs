@@ -206,6 +206,14 @@ impl super::UiScript {
         });
     }
 
+    /// Seat the repeat a previous VM left (`0xbde05c`, `0xbde060`), globals no UI init resets, so
+    /// a batch survives a `/reload`.
+    pub fn seed_trade_skill_repeat(&mut self, (spell, count): (u32, u32)) {
+        let mut model = self.model_mut();
+        model.trade_skill_repeat_spell = spell;
+        model.trade_skill_repeat_count = count;
+    }
+
     /// The armed repeat as `(spell, count)`, the reference's `0xbde05c` and `0xbde060`.
     pub fn trade_skill_repeat(&self) -> (u32, u32) {
         let model = self.model_ref();

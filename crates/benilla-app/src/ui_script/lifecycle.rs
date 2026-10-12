@@ -477,6 +477,10 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // file-scope `SendChatMessage` names its tongue from.
     crate::ui_chat::seed_zone_channel_catalog(world, &mut script);
     crate::bindings::seed_bindings_for_vm(world, &mut script);
+    // The engine globals a previous VM folded out: the quest log's fold mask and the tradeskill
+    // repeat.
+    crate::ui_quest_log::seed_quest_folds(world, &mut script);
+    crate::ui_tradeskill::seed_repeat(world, &mut script);
     crate::ui_unit::seed_default_language(world, &mut script);
     crate::ui_unit::seed_language_table(world, &mut script);
     // The world map's continent and zone lists: static DBC data in the reference, read at file
@@ -756,6 +760,15 @@ pub(crate) fn shutdown_ui_state(
 /// ([`install_glue_side_vm`]).
 pub(crate) fn end_ui_session(world: &mut World) {
     close_ui_session(world);
+    // The session's end drops what the fold just carried, as the disconnect handler, a frame
+    // earlier, dropped the rest: only a `/reload` seats it again.
+    if let Some(mut log) = world.get_resource_mut::<crate::ui_quest_log::QuestLog>() {
+        log.forget_folds();
+    }
+    if let Some(mut carry) = world.get_resource_mut::<crate::ui_tradeskill::TradeSkillRepeatCarry>()
+    {
+        carry.0 = (0, 0);
+    }
     // `0x401ee0`'s glue leg: `"charselect"` after a logout, `"login"` after a disconnect
     // (`0x402084`); the state this exit enters says which.
     let screen = match world
@@ -792,6 +805,10 @@ fn close_ui_session(world: &mut World) {
     crate::ui_chat::settings::fold_dying_vm_chat_cache(world);
     // The item locks too: the reference keeps them on the item objects, which a `/reload` keeps.
     crate::ui_items::locks::fold_dying_vm_item_locks(world);
+    // So do the engine globals the VM holds for the session: the quest log's fold mask and the
+    // tradeskill repeat, which no UI init resets.
+    crate::ui_quest_log::fold_dying_vm_quest_folds(world);
+    crate::ui_tradeskill::fold_dying_vm_repeat(world);
     world.insert_resource(AddOnIdentity(None));
 
     // Host values taken from the dying frame tree go with it (a `VmMemo` resets on its own): the

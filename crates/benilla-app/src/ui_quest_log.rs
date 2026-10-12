@@ -43,6 +43,9 @@ struct Row {
 pub(crate) struct QuestLog {
     templates: QueryCache<u32, QuestTemplate>,
     row_slots: Vec<(u32, u8)>,
+    /// The fold mask and the selected quest a dying VM left ([`fold_dying_vm_quest_folds`]),
+    /// seated in the next.
+    folds: (std::collections::HashSet<String>, Option<u32>),
 }
 
 impl crate::query_cache::AskOnce for QuestLog {
@@ -73,10 +76,39 @@ impl QuestLog {
         self.templates.insert(template.quest_id, Some(template));
     }
 
-    /// Disconnect: drops everything, the templates included.
+    /// The carry a dying VM left, dropped when the session ends.
+    pub(crate) fn forget_folds(&mut self) {
+        self.folds = Default::default();
+    }
+
+    /// Disconnect: drops everything, the templates and the folds included.
     pub(crate) fn clear_session(&mut self) {
         self.templates.clear();
         self.row_slots.clear();
+        self.folds = Default::default();
+    }
+}
+
+/// The fold mask (`[0xbb748c]`) and the selection (`[0xbb7480]`) out of a dying VM: C globals
+/// the reference writes only at the collapse verbs (`0x4ded88`, `0x4dedab`, `0x4dedc7`), the
+/// rebuild (`0x4de608`, `0x4de793`) and the selection verbs, which no UI init resets, so they
+/// outlive a `/reload`. Called with the CVar fold, before the VM is replaced.
+pub(crate) fn fold_dying_vm_quest_folds(world: &mut World) {
+    let Some(folds) = world
+        .get_non_send_resource::<UiScript>()
+        .map(UiScript::quest_log_carry)
+    else {
+        return;
+    };
+    if let Some(mut log) = world.get_resource_mut::<QuestLog>() {
+        log.folds = folds;
+    }
+}
+
+/// Seat the folded mask in a new in-game VM before its load runs any file or event.
+pub(crate) fn seed_quest_folds(world: &World, script: &mut UiScript) {
+    if let Some(log) = world.get_resource::<QuestLog>() {
+        script.seed_quest_log_carry(log.folds.clone());
     }
 }
 

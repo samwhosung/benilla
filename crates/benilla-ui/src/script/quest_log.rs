@@ -121,7 +121,8 @@ pub(crate) fn fold(model: &mut Model) {
         .checked_sub(1)
         .and_then(|i| model.quest_log.entries.get(i))
         .filter(|e| !e.is_header)
-        .map(|e| e.quest_id);
+        .map(|e| e.quest_id)
+        .or_else(|| model.quest_log_selection_seed.take());
     let mut entries = Vec::with_capacity(model.quest_log_rows.len());
     let mut folded_rows = Vec::new();
     let mut folded = false;
@@ -188,6 +189,31 @@ fn set_collapsed(model: &mut Model, index: u32, collapse: bool) {
 }
 
 impl super::UiScript {
+    /// The engine state the log keeps past its VM: the collapsed headers by title, the fold
+    /// mask (`[0xbb748c]`), and the selected quest's id (`[0xbb7480]`). A `/reload` resets
+    /// neither: only the game init clears the selection (`0x48f5bd` → `0x4de390`), and nothing
+    /// but the verbs and the rebuild writes the mask.
+    pub fn quest_log_carry(&self) -> (std::collections::HashSet<String>, Option<u32>) {
+        let model = self.model_ref();
+        let selected = (model.quest_log_selection as usize)
+            .checked_sub(1)
+            .and_then(|i| model.quest_log.entries.get(i))
+            .filter(|e| !e.is_header)
+            .map(|e| e.quest_id);
+        (model.quest_log_collapsed.clone(), selected)
+    }
+
+    /// Seat what [`Self::quest_log_carry`] read off a previous VM, before any file or event
+    /// runs; the selection lands on its quest at the first push.
+    pub fn seed_quest_log_carry(
+        &mut self,
+        (collapsed, selected): (std::collections::HashSet<String>, Option<u32>),
+    ) {
+        let mut model = self.model_mut();
+        model.quest_log_collapsed = collapsed;
+        model.quest_log_selection_seed = selected;
+    }
+
     /// Push the quest-log snapshot, dropping the watch of a quest that left the log: the
     /// reference's prune (`0x4de7a7` to `0x4de80f`) keeps a watch while any quest row, visible or
     /// folded, carries its id, and a collapse (`0x4ded30`) never prunes.

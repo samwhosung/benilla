@@ -695,6 +695,83 @@ fn saved_variables_round_trip_through_a_reload() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// The quest log's fold mask (`[0xbb748c]`) and selection (`[0xbb7480]`) and the tradeskill
+/// repeat (`0xbde05c`, `0xbde060`) are C globals no UI init resets: they fold out of the dying VM
+/// and seat in the rebuilt one before its load, so a `/reload` keeps a collapsed header folded,
+/// its selected quest selected and a batch armed; the session's end drops them.
+#[test]
+fn a_reload_keeps_the_quest_folds_and_the_repeat() {
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("folds");
+    let mut world = booted_world();
+    world.init_resource::<crate::ui_quest_log::QuestLog>();
+    world.init_resource::<crate::ui_tradeskill::TradeSkillRepeatCarry>();
+    log_in_as(&mut world, "Onehunter", 1);
+
+    let rows = || benilla_ui::script::QuestLogState {
+        entries: vec![
+            benilla_ui::script::QuestLogEntryView {
+                title: "Elwynn Forest".into(),
+                is_header: true,
+                ..Default::default()
+            },
+            benilla_ui::script::QuestLogEntryView {
+                quest_id: 7,
+                title: "Wolves Across the Border".into(),
+                ..Default::default()
+            },
+        ],
+        num_quests: 1,
+        hidden_quest_ids: Vec::new(),
+    };
+    let visible = |world: &mut World| {
+        let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        script.set_quest_log(rows());
+        script
+            .eval::<u32>("return (GetNumQuestLogEntries())")
+            .expect("count")
+    };
+    assert_eq!(visible(&mut world), 2);
+    {
+        let mut script = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        // A selection, so the stock `QuestLog_Update` does not re-select the folded header, which
+        // would open it (`QuestLogFrame.lua:294`, `:323`).
+        script
+            .run("SelectQuestLogEntry(2) CollapseQuestHeader(1)")
+            .expect("fold");
+        script.seed_trade_skill_repeat((2963, 3));
+    }
+    assert_eq!(visible(&mut world), 1);
+
+    reload(&mut world, crate::char_select::ClientState::InWorld);
+    assert_eq!(visible(&mut world), 1, "the reload unfolded the header");
+    assert_eq!(
+        world
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .eval::<u32>("return GetQuestLogSelection()")
+            .expect("selection"),
+        2,
+        "the reload dropped the selection, which the stock update would re-pick and unfold"
+    );
+    assert_eq!(
+        world
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .trade_skill_repeat(),
+        (2963, 3),
+        "the reload dropped the batch"
+    );
+
+    world.insert_resource(State::new(crate::char_select::ClientState::CharSelect));
+    super::end_ui_session(&mut world);
+    log_in_as(&mut world, "Onehunter", 1);
+    assert_eq!(visible(&mut world), 2, "a new session starts unfolded");
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// Dropped, not deferred: the reference's gate (`0x494a50(0xa)`) refuses a reload at the glue.
 #[test]
 fn reload_outside_the_world_is_dropped() {
