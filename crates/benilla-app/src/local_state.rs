@@ -315,19 +315,33 @@ fn character_path(file: CharacterFile, realm: &str, character: &str) -> Option<P
 
 /// A rename's move of the character's state, the reference's `MoveFileW` of its folder from the
 /// old name to the new (`0x4725f0`: `0x47269a` for `WTF\Account\<account>\<realm>\<name>`,
-/// `0x4726f0` for the older `WTF\Account\<account>\<name>`). Each file or folder moves on its
-/// own; one the new name already has stays where it is, as a move onto an existing name fails.
+/// `0x4726f0` for the older `WTF\Account\<account>\<name>`). The reference's folder moves
+/// whole or not at all: a move onto a name that exists fails and leaves everything under the old
+/// name. So when the new name has any per-character file or folder, nothing moves.
 pub(crate) fn move_character_state(realm: &str, old: &str, new: &str) {
-    for file in CharacterFile::ALL {
-        let (Some(from), Some(to)) = (
-            character_path(file, realm, old),
-            character_path(file, realm, new),
-        ) else {
-            return;
-        };
-        if from == to || !from.exists() || to.exists() {
-            continue;
-        }
+    let pairs: Option<Vec<(PathBuf, PathBuf)>> = CharacterFile::ALL
+        .iter()
+        .map(|&file| {
+            Some((
+                character_path(file, realm, old)?,
+                character_path(file, realm, new)?,
+            ))
+        })
+        .collect();
+    let Some(pairs) = pairs else {
+        return;
+    };
+    if pairs.iter().any(|(from, to)| from == to) {
+        return;
+    }
+    if let Some((_, taken)) = pairs.iter().find(|(_, to)| to.exists()) {
+        bevy::log::warn!(
+            "rename: {} exists, so {old}'s files stay under that name",
+            taken.display()
+        );
+        return;
+    }
+    for (from, to) in pairs.into_iter().filter(|(from, _)| from.exists()) {
         match std::fs::rename(&from, &to) {
             Ok(()) => bevy::log::info!("rename: moved {} to {}", from.display(), to.display()),
             Err(e) => bevy::log::warn!("rename: cannot move {}: {e}", from.display()),
@@ -469,7 +483,8 @@ mod tests {
     }
 
     /// A rename moves every per-character file and folder of the realm's character to the new
-    /// name, and none of another realm's or character's; a target already there stays.
+    /// name, and none of another realm's or character's; when the new name has any of its own,
+    /// nothing moves.
     #[test]
     fn a_rename_moves_every_per_character_file() {
         let _l = ENV_LOCK
@@ -520,23 +535,31 @@ mod tests {
         for p in paths("Other Realm", "Old") {
             write(&p, "other realm");
         }
-        // The new name already has a layout: it stays, and the old one with it.
-        write(&layout_character_path("Realm", "New").unwrap(), "kept");
-
         move_character_state("Realm", "Old", "New");
         let (old, new) = (paths("Realm", "Old"), paths("Realm", "New"));
-        for (i, (o, n)) in old.iter().zip(&new).enumerate() {
-            if CharacterFile::ALL[i] == CharacterFile::Layout {
-                assert_eq!(read(n).as_deref(), Some("kept"));
-                assert_eq!(read(o).as_deref(), Some("old"));
-            } else {
-                assert_eq!(read(n).as_deref(), Some("old"), "{}", n.display());
-                assert!(!o.exists(), "{}", o.display());
-            }
+        for (o, n) in old.iter().zip(&new) {
+            assert_eq!(read(n).as_deref(), Some("old"), "{}", n.display());
+            assert!(!o.exists(), "{}", o.display());
         }
         for p in paths("Other Realm", "Old") {
             assert_eq!(read(&p).as_deref(), Some("other realm"));
         }
+
+        // The new name already has a layout: nothing moves, as the reference's one folder move
+        // fails whole onto a name that exists.
+        for p in paths("Realm", "Two") {
+            write(&p, "two");
+        }
+        write(&layout_character_path("Realm", "Three").unwrap(), "taken");
+        move_character_state("Realm", "Two", "Three");
+        for p in paths("Realm", "Two") {
+            assert_eq!(read(&p).as_deref(), Some("two"), "{}", p.display());
+        }
+        assert_eq!(
+            read(&layout_character_path("Realm", "Three").unwrap()).as_deref(),
+            Some("taken")
+        );
+        assert!(!macros_character_path("Realm", "Three").unwrap().exists());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
