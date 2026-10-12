@@ -402,6 +402,22 @@ pub(super) fn drain_chat_input(
                         own_store
                     )
                 ));
+                // The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`): when it names the
+                // unit's faction it answers both directions ahead of every other rule, so a green
+                // ogre under *King of the Gordok* is explained by this line and no other.
+                if let Some(line) = (|| {
+                    let catalog = factions.as_deref()?.catalog();
+                    let tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
+                    let rank = crate::target::ring::forced_rank(reputations, tpl.faction)?;
+                    Some(format!(
+                        "reaction: faction {} is FORCED to rank {rank} by the server's table ({} \
+                         entries); the rules below are not reached",
+                        tpl.faction,
+                        reputations.1.len(),
+                    ))
+                })() {
+                    lines.push(line);
+                }
                 // The at-war bit: the whole of the player-to-unit reaction's leg 3 for a faction
                 // with a reputation slot, which the cursor, the plate and `UnitCanAttack` turn on.
                 let war = (|| {

@@ -517,7 +517,7 @@ fn leading_rungs(target: &ObjectStore, own: &ObjectStore) -> Option<u8> {
 /// `SPELL_AURA_FORCE_REACTION` aura such as *King of the Gordok*'s) as a rank on the ring scale
 /// (`0..=7`); `None` when the faction is not forced. It answers both directions of `UnitReaction`,
 /// ahead of the reputation branch and the template comparator.
-fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
+pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
     reputations
         .1
         .iter()
@@ -1088,10 +1088,18 @@ mod tests {
         // `SMSG_SET_FORCED_REACTIONS` naming the chicken's faction (28) makes it friendly, ahead
         // of the templates — the King of the Gordok's ogres; a table naming another faction does not.
         let forced = Reputations(Vec::new(), vec![(28, 4)]);
-        assert_eq!(rank(&chicken, &forced), 4, "a forced faction answers its forced rank");
+        assert_eq!(
+            rank(&chicken, &forced),
+            4,
+            "a forced faction answers its forced rank"
+        );
         assert!(category(&chicken, &forced), "…and is friendly-category");
         let elsewhere = Reputations(Vec::new(), vec![(29, 4)]);
-        assert_eq!(rank(&chicken, &elsewhere), 3, "another faction's entry changes nothing");
+        assert_eq!(
+            rank(&chicken, &elsewhere),
+            3,
+            "another faction's entry changes nothing"
+        );
 
         // A League of Arathor Emissary, template 1577, reputation slot 53, not at war.
         let emissary = unit(1577);
