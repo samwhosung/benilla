@@ -503,64 +503,80 @@ fn emit_frame(
     }
 }
 
-/// The scroll child `sf`'s callback draws, if any: a ScrollFrame's live, shown child
-/// (`0x787267`).
+/// The scroll child `sf`'s callback draws when it is shown (`0x787267`): a ScrollFrame's live
+/// child still in the scroll draw.
 ///
-/// Deviation: a child that a `SetParent` took out of the scroll draw (`0x76abcb` cleared its
-/// `0x2000`) is drawn once, by the flat pass, where the client's callback, which reads only the
-/// child's visibility, draws it a second time, clipped, at the ScrollFrame's place.
-fn drawn_scroll_child(arena: &WidgetArena, sf: FrameHandle) -> Option<FrameHandle> {
+/// Deviation: a child that left the scroll draw is drawn once, by the flat pass, where the client's
+/// callback, which reads only the child's visibility, draws it a second time, clipped, at the
+/// ScrollFrame's place. A `SetParent` of the child, of the ScrollFrame or of any ancestor of the
+/// child to an unflagged parent clears `0x2000` on the whole moved subtree (`0x76abcb` →
+/// `0x76a400`), so each of those reaches it.
+fn scroll_child(arena: &WidgetArena, sf: FrameHandle) -> Option<FrameHandle> {
     let KindState::Scroll(s) = &arena.frame(sf)?.kind_state else {
         return None;
     };
     let child = s.child?;
-    let c = arena.frame(child)?;
-    (c.effective_visible && c.scroll_member).then_some(child)
+    arena
+        .frame(child)
+        .is_some_and(|c| c.scroll_member)
+        .then_some(child)
 }
 
-/// The recursive draw `0x76b3f0` of `fh` inside the callback slot `slot`, under the ScrollFrame
-/// `scope`: the frame's own entries, then a ScrollFrame's scroll child (its HIGHLIGHT callback,
-/// the last of its batches), then each shown child in link order that is not itself a scroll child
-/// (`0x76b4dd`–`0x76b516`). `drawn` guards a frame from a second visit, which a scroll child
-/// that is its own ScrollFrame's ancestor would otherwise recurse into forever.
-fn emit_nested(
-    arena: &WidgetArena,
-    fh: FrameHandle,
+/// One scroll subtree's walk state.
+struct Nest<'a> {
+    arena: &'a WidgetArena,
+    /// Its outermost ScrollFrame's HIGHLIGHT callback key.
     slot: ZKey,
-    scope: FrameHandle,
-    ordinal: &mut u64,
-    drawn: &mut std::collections::HashSet<FrameHandle>,
-    out: &mut Vec<DrawEntry>,
-) {
-    if !drawn.insert(fh) {
-        return;
-    }
-    *ordinal += 1;
-    emit_frame(
-        arena,
-        fh,
-        FrameTerm::Nested(ZKey::nested_frame(slot, *ordinal)),
-        Some(scope),
-        out,
-    );
-    if let Some(child) = drawn_scroll_child(arena, fh) {
-        emit_nested(arena, child, slot, fh, ordinal, drawn, out);
-    }
-    let Some(frame) = arena.frame(fh) else {
-        return;
-    };
-    for &c in &frame.children {
-        if arena
-            .frame(c)
-            .is_some_and(|cf| cf.effective_visible && !cf.scroll_root)
-        {
-            emit_nested(arena, c, slot, scope, ordinal, drawn, out);
+    /// The last preorder ordinal given out.
+    ordinal: u64,
+    /// The frames on the current path: a scroll child that is its own ScrollFrame's ancestor
+    /// would otherwise recurse forever.
+    path: std::collections::HashSet<FrameHandle>,
+}
+
+impl Nest<'_> {
+    /// The recursive draw `0x76b3f0` of `fh` under the ScrollFrame `scope`: the frame's own
+    /// entries, then a ScrollFrame's scroll child (its HIGHLIGHT callback, the last of its
+    /// batches), then each child in link order that is not itself a scroll child (`0x76b4dd`–
+    /// `0x76b516`). Hidden frames are walked without drawing (`0x76b505` skips them), so they
+    /// keep their ordinals and a Show or Hide renumbers nothing. `drawn` keeps a frame from
+    /// drawing twice.
+    fn frame(
+        &mut self,
+        fh: FrameHandle,
+        scope: FrameHandle,
+        draw: bool,
+        drawn: &mut std::collections::HashSet<FrameHandle>,
+        out: &mut Vec<DrawEntry>,
+    ) {
+        let arena = self.arena;
+        let Some(frame) = arena.frame(fh) else {
+            return;
+        };
+        let draw = draw && frame.effective_visible;
+        if (draw && drawn.contains(&fh)) || !self.path.insert(fh) {
+            return;
         }
+        self.ordinal += 1;
+        if draw {
+            drawn.insert(fh);
+            let key = ZKey::nested_frame(self.slot, self.ordinal);
+            emit_frame(arena, fh, FrameTerm::Nested(key), Some(scope), out);
+        }
+        if let Some(child) = scroll_child(arena, fh) {
+            self.frame(child, fh, draw, drawn, out);
+        }
+        for &c in &frame.children {
+            if arena.frame(c).is_some_and(|cf| !cf.scroll_root) {
+                self.frame(c, scope, draw, drawn, out);
+            }
+        }
+        self.path.remove(&fh);
     }
 }
 
 /// Every [`DrawEntry`] of the draw list: the flat pass in arena order, each ScrollFrame's
-/// subtree after it.
+/// subtree after it. Only frames under a ScrollFrame enter `drawn`.
 fn walk(arena: &WidgetArena, out: &mut Vec<DrawEntry>) {
     let mut drawn = std::collections::HashSet::new();
     for (fh, frame) in arena.iter_frames() {
@@ -574,10 +590,14 @@ fn walk(arena: &WidgetArena, out: &mut Vec<DrawEntry>) {
             insertion: frame.insertion_seq,
         };
         emit_frame(arena, fh, term, None, out);
-        if let Some(child) = drawn_scroll_child(arena, fh) {
-            let slot = term.frame().callback(DrawLayer::Highlight);
-            let mut ordinal = 0;
-            emit_nested(arena, child, slot, fh, &mut ordinal, &mut drawn, out);
+        if let Some(child) = scroll_child(arena, fh) {
+            let mut nest = Nest {
+                arena,
+                slot: term.frame().callback(DrawLayer::Highlight),
+                ordinal: 0,
+                path: std::collections::HashSet::new(),
+            };
+            nest.frame(child, fh, true, &mut drawn, out);
         }
     }
 }
@@ -1066,6 +1086,42 @@ mod tests {
         }
         assert_eq!(nested(&a, born), vec![false]);
         assert_eq!(nested(&a, other), vec![true]);
+    }
+
+    /// A Show or Hide inside a scroll subtree moves no other entry's key: a hidden frame keeps its
+    /// preorder place, so the host's splice still pairs what follows it.
+    #[test]
+    fn a_show_or_hide_in_a_scroll_subtree_keeps_the_other_keys() {
+        let mut a = WidgetArena::new();
+        let sf = a.create(FrameKind::ScrollFrame, None, None);
+        let child = a.create(FrameKind::Frame, None, Some(sf));
+        a.set_scroll_child(sf, Some(child));
+        let first = a.create(FrameKind::Frame, None, Some(child));
+        tex(&mut a, first, DrawLayer::Artwork);
+        let toggled = a.create(FrameKind::Frame, None, Some(child));
+        let under = a.create(FrameKind::Frame, None, Some(toggled));
+        tex(&mut a, under, DrawLayer::Artwork);
+        let last = a.create(FrameKind::Frame, None, Some(child));
+        tex(&mut a, last, DrawLayer::Artwork);
+        let keys = |a: &WidgetArena| {
+            traversal(a)
+                .iter()
+                .filter(|e| {
+                    let owner = match e.target {
+                        ZTarget::Frame(f) => Some(f),
+                        ZTarget::Region(r) => a.region(r).map(|r| r.owner),
+                    };
+                    owner != Some(toggled) && owner != Some(under)
+                })
+                .map(|e| (e.target, e.key))
+                .collect::<Vec<_>>()
+        };
+        let shown = keys(&a);
+        a.set_shown(toggled, false);
+        assert!(!targets(&a).contains(&ZTarget::Frame(under)));
+        assert_eq!(keys(&a), shown, "hidden, the rest keep their keys");
+        a.set_shown(toggled, true);
+        assert_eq!(keys(&a), shown, "shown again, likewise");
     }
 
     /// A scroll child that contains its own ScrollFrame draws nothing rather than recursing:

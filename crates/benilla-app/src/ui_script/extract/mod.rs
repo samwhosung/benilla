@@ -228,9 +228,10 @@ struct Alignment {
 }
 
 /// A merge over `z`, a packed [`benilla_ui::order::ZKey`] that an insertion does not shift, but in
-/// a scroll child's subtree, where a frame shown renumbers the frames drawn after it. Only fully
-/// equal pairs reuse quads, so a mis-pairing costs conversions, never correctness: `z` is not
-/// proven unique or sorted (a ScrollingMessageFrame's line sorts above its BACKGROUND layer).
+/// a scroll child's subtree, where a frame created or moved in renumbers those after it (a Show or
+/// Hide does not). Only fully equal pairs reuse quads, so a mis-pairing costs conversions, never
+/// correctness: `z` is not proven unique or sorted (a ScrollingMessageFrame's line sorts above its
+/// BACKGROUND layer).
 fn align_entries(
     was: &[benilla_ui::script::ExtractedQuad],
     now: &[benilla_ui::script::ExtractedQuad],
