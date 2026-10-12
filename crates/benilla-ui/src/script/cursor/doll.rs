@@ -182,16 +182,17 @@ pub(super) fn cursor_can_go_in_slot(model: &Model, id: u32) -> bool {
 
 /// `AutoEquipCursorItem()` (`0x48a040` into `0x5e1480`), a click or drop on the doll's model
 /// (`PaperDollFrame.lua:31-35`): an item from an equipment or equipped-bag slot, the 0-based slot
-/// below 0x17, goes back with `ClearCursor(1,1)` (`0x5e155a`, `0x5e1567`); a whole stack from a
-/// bag becomes `CMSG_AUTOEQUIP_ITEM`, the server picking the slot and swapping the displaced piece
-/// back (`ItemHandler.cpp:138-228`); a split stays held. Returns whether to repaint.
+/// below 0x17, goes back with `ClearCursor(1,1)` (`0x5e155a`, `0x5e1567`); any other whole stack,
+/// from a bag, the backpack, the bank, a bank bag slot or the keyring, becomes
+/// `CMSG_AUTOEQUIP_ITEM` (`0x5e1575`), the server picking the slot and swapping the displaced
+/// piece back (`ItemHandler.cpp:138-228`); a split stays held. Returns whether to repaint.
 pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     match &model.cursor {
         Some(CursorPayload::Item(item)) if item.bag == EQUIPMENT_BAG && item.slot <= 23 => {
             clear_cursor(model);
             true
         }
-        Some(CursorPayload::Item(item)) if item.bag >= 0 && item.count.is_none() => {
+        Some(CursorPayload::Item(item)) if item.count.is_none() => {
             model.container_autoequips.push((item.bag, item.slot));
             clear(model, Clear::KEEP_LOCK);
             raise_lock_changed(model);
@@ -923,5 +924,48 @@ mod tests {
             assert!(!pickup_inventory_item(&s.lua, 1));
             assert_eq!(s.cursor_payload(), Some(held));
         }
+    }
+
+    /// A bank item or a bank bag on its slot auto-equips too: `0x5e1480` sends for any item at
+    /// a 0-based player slot from 0x17 (bank 39-62, bank bags 63-68) or in a bag.
+    #[test]
+    fn auto_equip_sends_a_bank_item_and_a_bank_bag() {
+        let mut s = UiScript::new().unwrap();
+        let mut vault = std::collections::HashMap::new();
+        vault.insert(
+            3,
+            ContainerSlot {
+                item_id: 2000,
+                count: 1,
+                equip_slots: vec![1],
+                ..Default::default()
+            },
+        );
+        s.set_container(
+            -1,
+            Some(ContainerState {
+                name: None,
+                num_slots: 24,
+                slots: vault,
+            }),
+        );
+        s.run("PickupContainerItem(-1, 3)").unwrap();
+        assert!(auto_equip_cursor_item(&mut s.model_mut()));
+        assert_eq!(s.take_container_autoequips(), vec![(-1, 3)]);
+        assert!(s.cursor_item().is_none());
+
+        s.set_cursor_for_test(CursorPayload::Item(crate::script::cursor::CursorItem {
+            bag: EQUIPMENT_BAG,
+            slot: 64,
+            item_id: 4500,
+            texture: None,
+            link: None,
+            count: None,
+            quality: None,
+            bar_placeable: false,
+            equip_slots: vec![20, 21, 22, 23],
+        }));
+        assert!(auto_equip_cursor_item(&mut s.model_mut()));
+        assert_eq!(s.take_container_autoequips(), vec![(EQUIPMENT_BAG, 64)]);
     }
 }
