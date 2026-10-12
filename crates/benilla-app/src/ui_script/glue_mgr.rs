@@ -411,6 +411,8 @@ enum Outgoing {
     Teardown,
     /// The roster load (`0x4724d0`) over the roster the last reply left.
     Roster,
+    /// `SHOW_SERVER_ALERT(text)` (event 21, `0x46b964`): the alert's text after its prefix.
+    ServerAlert(String),
 }
 
 /// The logon's notification cells: the latest `(state, result)` (`0x836b28`, `0x836b24`) and the
@@ -482,6 +484,12 @@ pub(crate) struct GlueMgr {
     park_out: Vec<ParkRequest>,
     /// Asks of the login engine the per-frame arms made, sent with the verbs' own.
     login_out: Vec<GlueLogin>,
+    /// The server alert's fetch while it runs (`alertPending`, `[0xb41e28]`), started once per
+    /// process at the glue init.
+    alert_fetch: Option<crossbeam_channel::Receiver<Option<Vec<u8>>>>,
+    /// The text a finished fetch left for the next frame (`alertReady`, `[0xb41e2c]`, and the
+    /// buffer `0xb414f8` past its prefix).
+    alert_ready: Option<String>,
 }
 
 impl GlueMgr {
@@ -489,6 +497,37 @@ impl GlueMgr {
     /// the selected character from (`0x472950` reads the select record's own copy).
     pub(crate) fn roster_character(&self, guid: u64) -> Option<&Character> {
         self.roster.iter().find(|c| c.guid == guid)
+    }
+
+    /// The alert fetch the glue init began (`0x46a564`).
+    pub(super) fn set_alert_fetch(&mut self, fetch: crossbeam_channel::Receiver<Option<Vec<u8>>>) {
+        self.alert_fetch = Some(fetch);
+    }
+
+    /// A finished fetch's alert becomes ready (`0x46a5f1`); one that found none, or died, ends the
+    /// wait (`0x46a5fb`).
+    fn poll_alert(&mut self) {
+        let Some(fetch) = &self.alert_fetch else {
+            return;
+        };
+        match fetch.try_recv() {
+            Ok(alert) => {
+                self.alert_fetch = None;
+                self.alert_ready = alert.map(|text| String::from_utf8_lossy(&text).into_owned());
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => {}
+            Err(crossbeam_channel::TryRecvError::Disconnected) => self.alert_fetch = None,
+        }
+    }
+
+    /// The top of `CGlueMgr::Update` (`0x46b939`-`0x46b96c`): a ready alert first runs the status
+    /// dialog's button (`0x46b947` → `0x46b720`, the screen state's cancel), fires
+    /// `SHOW_SERVER_ALERT` with the text, and is spent.
+    fn show_alert(&mut self, asks: &mut Vec<GlueLogin>) {
+        if let Some(text) = self.alert_ready.take() {
+            self.status_dialog_click(asks);
+            self.outbox.push(Outgoing::ServerAlert(text));
+        }
     }
 
     /// The agreements as read at the startup (`0x46a400`).
@@ -1093,6 +1132,7 @@ pub(crate) struct LoginNews<'w, 's> {
 pub(crate) struct GlueAsks<'w> {
     login: MessageWriter<'w, GlueLogin>,
     music: MessageWriter<'w, crate::sound::GlueMusicRequest>,
+    launch: MessageWriter<'w, super::server_alert::LaunchUrl>,
     realm: Option<Res<'w, crate::net::RealmChoice>>,
     abandon: Option<Res<'w, crate::net::LoginAbandon>>,
 }
@@ -1192,8 +1232,14 @@ pub(crate) fn drive_glue_mgr(
         .and_then(|s| s.cvar(crate::realm_select::CVAR_REALM_NAME))
         .unwrap_or_default();
 
-    // The verbs the last tick's Lua called.
+    // The alert a finished fetch left, shown before anything else this frame (`0x46b939`).
     let mut logins = Vec::new();
+    mgr.poll_alert();
+    if glue_up {
+        mgr.show_alert(&mut logins);
+    }
+
+    // The verbs the last tick's Lua called.
     if let Some(s) = script.as_deref_mut() {
         mgr.screen = s.glue_screen();
         for request in s.take_glue_requests() {
@@ -1227,6 +1273,10 @@ pub(crate) fn drive_glue_mgr(
                     logins.push(GlueLogin::Disconnect);
                 }
                 GlueRequest::QuitGame => logins.push(GlueLogin::Quit),
+                // `0x5abd00`, past the whitelist the verb applied (`0x5abc10`).
+                GlueRequest::LaunchUrl(url) => {
+                    asks.launch.write(super::server_alert::LaunchUrl(url));
+                }
                 GlueRequest::RequestRealmList { dialog } => mgr.request_realm_list(dialog),
                 GlueRequest::CancelRealmListQuery => mgr.cancel_realm_list_query(),
                 // `CLoginMgr::Cancel` (`0x5b3320`): nothing else moves, so no dialog shows.
@@ -1494,6 +1544,9 @@ fn flush_one(
             mgr.realm_cells = script.glue_realm_cells();
         }
         Outgoing::Teardown => script.teardown_glue_roster(),
+        Outgoing::ServerAlert(text) => {
+            script.fire_event("SHOW_SERVER_ALERT", vec![ScriptValue::Str(text)]);
+        }
         Outgoing::Roster => {
             let roster = mgr
                 .roster

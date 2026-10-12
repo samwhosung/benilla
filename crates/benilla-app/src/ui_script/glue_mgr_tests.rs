@@ -770,6 +770,7 @@ fn stock_app() -> (
         .add_message::<DisconnectedMessage>()
         .add_message::<GlueLogin>()
         .add_message::<crate::sound::GlueMusicRequest>()
+        .add_message::<crate::ui_script::server_alert::LaunchUrl>()
         .add_message::<AppExit>()
         .init_resource::<crate::portrait::GluePreview>()
         .add_systems(
@@ -1134,6 +1135,7 @@ fn live_app_with(
         .add_message::<DisconnectedMessage>()
         .add_message::<GlueLogin>()
         .add_message::<crate::sound::GlueMusicRequest>()
+        .add_message::<crate::ui_script::server_alert::LaunchUrl>()
         .add_message::<AppExit>()
         .init_resource::<crate::portrait::GluePreview>()
         .add_systems(
@@ -1903,4 +1905,141 @@ fn a_roster_reply_after_the_dialogs_cancel_is_dropped() {
         "and nothing loaded it"
     );
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+// ── The server alert ──
+
+/// A body of the shape the 2007 alert had: the prefix, a dated heading, paragraphs split by blank
+/// lines, a list of realm names one to a line, and a final newline; plain text, about 1 KB.
+fn alert_body() -> String {
+    let mut body = String::from(
+        "SERVERALERT:\n[January 17, 2007 - 5:00PM PST]\n\n\
+         In order to address player queues on highly populated realms, we are offering free \
+         character transfer moves to players on the realms listed below.\n\n\
+         Please note: if the populations of these realms are not reduced by free character \
+         moves, we will be forced to perform realm splits to reduce their population to \
+         acceptable levels.\n\n\
+         For full details, please check the latest forum sticky posts.\n\n",
+    );
+    for realm in [
+        "Alexstrasza",
+        "Aggramar",
+        "Argent Dawn",
+        "Azjol-Nerub",
+        "Blackwater Raiders",
+        "Bloodhoof",
+        "Bronzebeard",
+        "Cenarius",
+        "Doomhammer",
+        "Thunderhorn",
+        "Whisperwind",
+        "Zul'jin",
+    ] {
+        body.push_str(realm);
+        body.push('\n');
+    }
+    body
+}
+
+/// A server that answers the next request with `body` and closes; its URL.
+fn serve_body(body: &str) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut raw = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len()).into_bytes();
+    raw.extend_from_slice(body.as_bytes());
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        if let Ok((mut conn, _)) = listener.accept() {
+            let mut head = [0u8; 1024];
+            let _ = conn.read(&mut head);
+            let _ = conn.write_all(&raw);
+        }
+    });
+    format!("http://127.0.0.1:{port}/alert")
+}
+
+/// A fetched alert reaches the stock login screen: the status dialog's button runs first
+/// (`0x46b947`), so a logon in flight is abandoned, `SHOW_SERVER_ALERT` fires once with the text
+/// after the prefix (`0x46b957`), and the stock handler shows `ServerAlertFrame` with it.
+#[test]
+fn a_fetched_alert_cancels_the_logon_and_shows_the_alert_frame() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let body = alert_body();
+    let url = serve_body(&body);
+    let (mut app, rx, abandon) = stock_app();
+    vm(&app)
+        .run(
+            "probe = CreateFrame('Frame') probe:RegisterEvent('SHOW_SERVER_ALERT') \
+             probe:SetScript('OnEvent', function() ALERT_ARG = arg1 \
+             ALERT_CALLS = (ALERT_CALLS or 0) + 1 end)",
+        )
+        .unwrap();
+    vm(&app).run("AcceptEULA() AcceptTOS()").unwrap();
+    app.update();
+    type_and_login(&mut app);
+    assert!(rx.try_recv().is_ok());
+    assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Logon);
+    assert!(!shown(&app, "ServerAlertFrame"));
+
+    let fetch = crate::ui_script::server_alert::spawn_fetch(url);
+    app.world_mut()
+        .resource_mut::<GlueMgr>()
+        .set_alert_fetch(fetch);
+    until(&mut app, "the alert frame", |app| {
+        shown(app, "ServerAlertFrame")
+    });
+
+    // After the prefix, short of the last byte (`SStrCopy` of the whole body, `0x46a59f`).
+    let want = &body[b"SERVERALERT:".len()..body.len() - 1];
+    assert_eq!(vm(&app).eval::<String>("return ALERT_ARG").unwrap(), want);
+    assert_eq!(abandon.load(Ordering::SeqCst), 1, "the logon was abandoned");
+    assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Idle);
+
+    // Once: nothing refires it.
+    for _ in 0..5 {
+        app.update();
+    }
+    assert_eq!(vm(&app).eval::<f64>("return ALERT_CALLS").unwrap(), 1.0);
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// A body without the prefix, or a fetch that finds none, shows nothing and leaves the logon be.
+#[test]
+fn a_body_without_the_prefix_shows_no_alert() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let url = serve_body("<html>Not an alert.</html>\n");
+    let (mut app, rx, abandon) = stock_app();
+    vm(&app).run("AcceptEULA() AcceptTOS()").unwrap();
+    app.update();
+    type_and_login(&mut app);
+    assert!(rx.try_recv().is_ok());
+    let fetch = crate::ui_script::server_alert::spawn_fetch(url);
+    app.world_mut()
+        .resource_mut::<GlueMgr>()
+        .set_alert_fetch(fetch);
+    until(&mut app, "the fetch to end", |app| {
+        app.world().resource::<GlueMgr>().alert_fetch.is_none()
+    });
+    app.update();
+    assert!(!shown(&app, "ServerAlertFrame"));
+    assert_eq!(abandon.load(Ordering::SeqCst), 0);
+    assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Logon);
+}
+
+/// `LaunchURL` reaches the host as a launch message, for a whitelisted URL only.
+#[test]
+fn launch_url_reaches_the_host_for_a_whitelisted_url() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, _abandon) = stock_app();
+    vm(&app)
+        .run("LaunchURL('http://example.com/') LaunchURL('http://www.worldofwarcraft.com/news')")
+        .unwrap();
+    app.update();
+    let launched: Vec<String> = app
+        .world()
+        .resource::<Messages<crate::ui_script::server_alert::LaunchUrl>>()
+        .iter_current_update_messages()
+        .map(|m| m.0.clone())
+        .collect();
+    assert_eq!(launched, ["http://www.worldofwarcraft.com/news"]);
 }

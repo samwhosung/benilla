@@ -77,6 +77,7 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
     let start = std::time::Instant::now();
     let failures = super::glue::load_glue(&mut script);
     super::glue::finish_glue_load_log(&mut script);
+    start_server_alert(world, &script);
     super::glue::set_glue_screen(&mut script, screen);
     info!(
         "ui_script: stock glue up in {:.0} ms on \"{}\" ({} load failure(s))",
@@ -93,6 +94,19 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
         .unwrap_or(false);
     world.insert_non_send_resource(script);
     charselect
+}
+
+/// Start the server alert's fetch, as the glue manager's init does after the GlueXML load and
+/// before the first screen (`0x46a541`-`0x46a564`, `0x402b36`): the global `SERVER_ALERT_URL` as
+/// the glue files left it, so `GlueLocalization` wins over `GlueStrings`, fetched once per
+/// process ([`super::server_alert::begin_once`]).
+fn start_server_alert(world: &mut World, script: &UiScript) {
+    let url = script.global_text("SERVER_ALERT_URL");
+    if let Some(fetch) = super::server_alert::begin_once(&url) {
+        if let Some(mut mgr) = world.get_resource_mut::<super::glue_mgr::GlueMgr>() {
+            mgr.set_alert_fetch(fetch);
+        }
+    }
 }
 
 /// Read the four agreement CVars into the glue VM and the manager before any screen is set, as

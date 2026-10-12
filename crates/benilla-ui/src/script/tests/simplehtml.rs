@@ -290,6 +290,21 @@ fn the_three_fallback_routes_each_land_on_one_raw_block() {
     }
 }
 
+/// The login screen's server alert (`SHOW_SERVER_ALERT`'s text, `ServerAlertText:SetText(arg1)`)
+/// is plain text with blank lines, brackets, an apostrophe and a final newline: one `P` block of
+/// the raw string, no collapse (`0x78a501`).
+#[test]
+fn a_plain_text_server_alert_is_one_raw_p_block_with_its_newlines() {
+    let s = script();
+    page(&s);
+    let body = "[January 17, 2007 - 5:00PM PST]\n\nPlease note: free moves.\n\n\
+                Aggramar\nArgent Dawn\nZul'jin\n";
+    s.run(&format!("Page:SetText({})", lua_str(body))).unwrap();
+    assert_eq!(texts(&s, "Page"), [body]);
+    assert_eq!(blocks(&s, "Page")[0].justify_h, "LEFT");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 #[test]
 fn malformed_markup_falls_back_rather_than_erroring() {
     let s = script();
