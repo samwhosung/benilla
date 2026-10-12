@@ -55,7 +55,7 @@ impl NoticeState {
 }
 
 /// `atoi`: an optional sign and the leading digits, 0 when there are none.
-fn leading_int(s: &str) -> i64 {
+pub(super) fn leading_int(s: &str) -> i64 {
     let s = s.trim_start();
     let (sign, digits) = match s.as_bytes().first() {
         Some(b'-') => (-1, &s[1..]),
@@ -118,6 +118,10 @@ pub enum GlueRequest {
     /// `ChangeRealm` reaching `ConnectToRealm` (`0x46b210`) with this realm, `realmName` already
     /// set to it (`0x5ab7b0`).
     ChangeRealm(String),
+    /// `GetCharacterListUpdate()` (`0x473270` → `0x4723d0` → `0x46b880`): the roster is already
+    /// cleared in the VM; the host takes screen state 3, the `CHAR_LIST_RETRIEVING` dialog and
+    /// the `CMSG_CHAR_ENUM`.
+    GetCharacterList,
 }
 
 /// The realm `GetServerName` (`0x46d280`) answers: the `realmName` CVar's text, and the
@@ -145,6 +149,8 @@ pub(crate) struct GlueCore {
     pub(super) screen: String,
     /// The realm list the realm verbs read ([`super::glue_realm`]).
     pub(super) realms: super::glue_realm::GlueRealmList,
+    /// The character roster and the select verbs' cells ([`super::glue_select`]).
+    pub(super) roster: super::glue_select::GlueRoster,
 }
 
 /// `SetCurrentScreen`'s buffer, 0x40 bytes with its terminator (`0x46b860`, `SStrCopy`).

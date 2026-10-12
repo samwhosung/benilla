@@ -175,11 +175,7 @@ mod tests {
     /// The glue functions the stock GlueXML calls that benilla has not built yet: each one's call
     /// raises "attempt to call global `X' (a nil value)", at the load or on the login screen. The
     /// list only shrinks: a name built, or no longer reached, comes off it.
-    const UNBUILT_CALLED: &[&str] = &[
-        "GetNumCharacters",
-        "SetCharCustomizeFrame",
-        "SetCharSelectModelFrame",
-    ];
+    const UNBUILT_CALLED: &[&str] = &["SetCharCustomizeFrame"];
 
     /// What the player's own files make the reference report too: their `tos.html` uses `<H4>`,
     /// which 1.12's SimpleHTML does not know (`"Frame %s: Unknown element type: %s"`,

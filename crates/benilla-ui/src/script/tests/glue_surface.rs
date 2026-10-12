@@ -178,20 +178,8 @@ const NOT_YET: &[(&str, &[&str])] = &[
         ],
     ),
     (
-        "character select (0x4736c0, table 0x838578)",
-        &[
-            "DeleteCharacter",
-            "GetCharacterInfo",
-            "GetCharacterListUpdate",
-            "GetCharacterSelectFacing",
-            "GetNumCharacters",
-            "RenameCharacter",
-            "SelectCharacter",
-            "SetCharSelectBackground",
-            "SetCharSelectModelFrame",
-            "SetCharacterSelectFacing",
-            "UpdateSelectionCustomizationScene",
-        ],
+        "character select (0x4736c0, table 0x838578): the delete and the rename",
+        &["DeleteCharacter", "RenameCharacter"],
     ),
     (
         "character create (0x471a20, table 0x8380f8)",

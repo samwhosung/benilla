@@ -210,6 +210,7 @@ fn a_world_refusal_opens_its_status_and_url() {
                 text: Some(Text::Key("AUTH_BANNED")),
                 data: Some("AUTH_BANNED_URL".into()),
             },
+            Outgoing::Teardown,
             Outgoing::Close,
             Outgoing::Rebuild,
         ]
@@ -237,6 +238,7 @@ fn a_world_refusal_opens_its_status_and_url() {
         [
             update("RESPONSE_FAILED_TO_CONNECT"),
             open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")),
+            Outgoing::Teardown,
             Outgoing::Close,
             Outgoing::Rebuild,
         ]
@@ -256,6 +258,7 @@ fn a_world_refusal_opens_its_status_and_url() {
         [
             update("RESPONSE_FAILED_TO_CONNECT"),
             open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")),
+            Outgoing::Teardown,
             open("CANCEL", Some("REALM_LIST_IN_PROGRESS")),
         ]
     );
@@ -291,8 +294,7 @@ fn the_world_connect_shows_each_completion() {
         m.outbox.is_empty(),
         "the running authentication's text is empty"
     );
-    m.characters = 2;
-    m.on_roster(None);
+    m.on_roster(Vec::new(), None);
     m.tick();
     assert_eq!(
         m.outbox,
@@ -301,54 +303,130 @@ fn the_world_connect_shows_each_completion() {
                 text: Text::Key("AUTH_OK"),
                 button: None
             },
+            Outgoing::Teardown,
             Outgoing::Screen("charselect")
         ]
     );
 }
 
-/// The roster ends the world connect: the status text, state 0, the character screen, then the
-/// roster's arm (`0x4724d0`): characters mark a realm chosen (`0x472556`); an empty roster with
-/// no realm chosen asks for the list (`0x47253d` → `0x46b8d0`); one with a choice asks nothing.
+/// The roster ends the world connect: the status text, state 0, the roster torn down
+/// (`0x46c014`) and the character screen up. The roster itself waits for the screen's own
+/// `GetCharacterListUpdate`.
 #[test]
 fn the_roster_puts_the_character_screen_up() {
-    let up = [
+    let mut m = accepted();
+    m.state = ScreenState::Connect;
+    m.on_roster(vec![crate::char_select::test_character(7, "Alpha")], None);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("AUTH_OK"),
+                button: None,
+            },
+            Outgoing::Teardown,
+            Outgoing::Screen("charselect"),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(m.connected && m.unrequested);
+    assert_eq!((m.characters, m.roster.len()), (1, 1));
+    assert!(m.realm_out.is_empty(), "the load comes with the list reply");
+}
+
+/// `GetCharacterListUpdate`'s host half (`0x46b880`): state 3, the `CHAR_LIST_RETRIEVING` dialog,
+/// then the reply completes the query and the next tick closes the dialog and loads the roster
+/// (`0x46c084`-`0x46c094`). The roster the IO thread enumerated on its own is the first call's
+/// reply; later calls ask (`CMSG_CHAR_ENUM`) and wait.
+#[test]
+fn the_character_list_query_loads_the_roster_on_its_reply() {
+    let done = [
         Outgoing::Update {
-            text: Text::Key("AUTH_OK"),
+            text: Text::Key("CHAR_LIST_RETRIEVED"),
             button: None,
         },
-        Outgoing::Screen("charselect"),
+        Outgoing::Close,
+        Outgoing::Roster,
     ];
     let mut m = accepted();
-    m.state = ScreenState::Connect;
-    m.characters = 3;
-    m.on_roster(None);
+    m.connected = true;
+    m.on_roster(vec![crate::char_select::test_character(7, "Alpha")], None);
+    m.get_character_list();
+    assert_eq!(m.state, ScreenState::CharList);
+    assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_LIST_RETRIEVING"))]);
+    assert!(
+        m.char_out.is_empty(),
+        "the held reply answers the first ask"
+    );
+    m.outbox.clear();
     m.tick();
-    assert_eq!(m.outbox, up);
+    assert_eq!(m.outbox, done);
     assert_eq!(m.state, ScreenState::Idle);
-    assert!(m.connected);
-    assert_eq!(m.realm_cells.chosen, Some(0));
-    assert!(m.cells_moved && m.realm_out.is_empty());
 
-    let mut m = accepted();
-    m.state = ScreenState::Connect;
-    m.on_roster(None);
+    // The next ask goes out and waits: a running query shows no text.
+    m.outbox.clear();
+    m.get_character_list();
+    assert!(matches!(m.char_out.as_slice(), [CharRequest::Enumerate]));
+    m.outbox.clear();
     m.tick();
-    let mut want = up.to_vec();
-    want.push(open("CANCEL", Some("REALM_LIST_IN_PROGRESS")));
+    assert!(m.outbox.is_empty());
+    assert_eq!(m.state, ScreenState::CharList);
+    m.on_roster(vec![crate::char_select::test_character(8, "Bravo")], None);
+    m.tick();
+    assert_eq!(m.outbox, done);
+    assert_eq!(m.roster[0].name, "Bravo");
+    assert!(!m.unrequested, "the reply was the query's");
+}
+
+/// With no world link `0x5aabb0` fails the query `RESPONSE_FAILED_TO_CONNECT` at once, and the
+/// arm opens `OKAY` with that text (`0x46c173`) and goes to state 0.
+#[test]
+fn a_character_list_query_with_no_link_fails_okay() {
+    let mut m = accepted();
+    m.get_character_list();
+    assert!(m.char_out.is_empty());
+    m.outbox.clear();
+    m.tick();
     assert_eq!(
-        m.outbox, want,
-        "an empty roster with no choice asks for the list"
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("RESPONSE_FAILED_TO_CONNECT"),
+                button: None,
+            },
+            open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+}
+
+/// The dialog's Cancel in state 3 completes the query cancelled and tears the roster down
+/// (`0x46b754`); the next tick tears it down again and raises the realm list
+/// (`RequestRealmList(1)`, `0x46c069`-`0x46c073`).
+#[test]
+fn cancelling_the_character_list_raises_the_realm_list() {
+    let mut m = accepted();
+    m.connected = true;
+    m.get_character_list();
+    m.outbox.clear();
+    m.status_dialog_click(&mut Vec::new());
+    assert_eq!(m.outbox, [Outgoing::Teardown]);
+    m.outbox.clear();
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("RESPONSE_CANCELLED"),
+                button: None,
+            },
+            Outgoing::Teardown,
+            open("CANCEL", Some("REALM_LIST_IN_PROGRESS")),
+        ]
     );
     assert_eq!(m.state, ScreenState::RealmList);
     assert!(matches!(m.realm_out.as_slice(), [RealmRequest::Refresh]));
-
-    let mut m = accepted();
-    m.state = ScreenState::Connect;
-    m.realm_cells.chosen = Some(5);
-    m.on_roster(None);
-    m.tick();
-    assert_eq!(m.outbox, up, "a realm was chosen: nothing more");
-    assert!(m.realm_out.is_empty());
 }
 
 /// Change Realm with the world up drops the session before the connect's query (`0x46b22b`).
@@ -409,14 +487,16 @@ fn status_dialog_click_cancels_by_state() {
     assert_eq!(
         m.outbox,
         [
+            Outgoing::Teardown,
             Outgoing::Update {
                 text: Text::Key("RESPONSE_CANCELLED"),
                 button: None
             },
+            Outgoing::Teardown,
             Outgoing::Close,
             Outgoing::Rebuild
         ],
-        "no failure dialog for a cancel"
+        "the click and the failure arm tear the roster down; no failure dialog for a cancel"
     );
     assert!(matches!(m.login_out.as_slice(), [GlueLogin::CancelWorld]));
     assert_eq!(m.state, ScreenState::Idle);
@@ -520,6 +600,33 @@ fn type_and_login(app: &mut App) {
         )
         .unwrap();
     app.update();
+}
+
+/// The select verbs' cells are C globals in the reference, so a glue rebuild finds them as they
+/// were: the manager seeds a new VM with the last one's, and keeps the VM's as it moves them.
+#[test]
+fn the_select_cells_outlive_the_glue_vm() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, _abandon) = stock_app();
+    let cells = GlueSelectCells {
+        selected: 2,
+        facing: 0.5,
+        built: true,
+    };
+    {
+        let mut mgr = app.world_mut().resource_mut::<GlueMgr>();
+        mgr.select_cells = cells;
+        mgr.vm = None;
+    }
+    app.update();
+    assert_eq!(vm(&app).glue_select_cells(), cells);
+    vm(&app).run("SetCharacterSelectFacing(90)").unwrap();
+    app.update();
+    let moved = app.world().resource::<GlueMgr>().select_cells;
+    assert!(
+        (moved.facing - 90f32.to_radians()).abs() < 1e-5,
+        "{moved:?}"
+    );
 }
 
 /// The stock login screen's Login reaches the native login with the typed credentials, under the
@@ -702,7 +809,18 @@ fn pump(
 /// The stock login screen, agreements accepted, over the IO thread's cycle and a fake realmd
 /// listing `realms`; `realm_name` is the persisted `realmName`.
 fn live_app(realms: impl FnOnce(&str) -> Vec<FakeRealm>, realm_name: &str) -> (App, fake::Realmd) {
-    let (realmd, _) = fake::servers(realms);
+    let (app, realmd, _) = live_app_with(realms, realm_name, &[]);
+    (app, realmd)
+}
+
+/// [`live_app`] over a world server whose account holds `roster`; also returns the world server.
+fn live_app_with(
+    realms: impl FnOnce(&str) -> Vec<FakeRealm>,
+    realm_name: &str,
+    roster: &[benilla_protocol::Character],
+) -> (App, fake::Realmd, fake::World) {
+    let (realmd, world) = fake::servers(realms);
+    world.set_roster(roster);
     let cycles = fake::spawn_cycles();
     let mut app = App::new();
     app.init_resource::<Time>()
@@ -714,6 +832,12 @@ fn live_app(realms: impl FnOnce(&str) -> Vec<FakeRealm>, realm_name: &str) -> (A
         .insert_resource(crate::net::RealmChoice(cycles.realm.clone()))
         .insert_resource(crate::net::CharPick(cycles.pick.clone()))
         .insert_resource(crate::realm_select::Realms::us_client())
+        .insert_resource(crate::area::AreaTableRes(
+            benilla_formats::AreaTableCatalog::from_rows(vec![
+                (141, area_row("Teldrassil")),
+                (12, area_row("Elwynn Forest")),
+            ]),
+        ))
         .insert_resource(IoEvents(cycles.events.clone()))
         .init_resource::<WorldDials>()
         .insert_resource(State::new(ClientState::Login))
@@ -744,7 +868,20 @@ fn live_app(realms: impl FnOnce(&str) -> Vec<FakeRealm>, realm_name: &str) -> (A
     app.update();
     // The cycles' ends stay alive with the app's resources.
     std::mem::forget(cycles);
-    (app, realmd)
+    (app, realmd, world)
+}
+
+/// An `AreaTable` row named `name`, the columns the roster does not read at their defaults.
+fn area_row(name: &str) -> benilla_formats::AreaTableRow {
+    benilla_formats::AreaTableRow {
+        map_id: 0,
+        zone_id: 0,
+        explore_flag: 0,
+        flags: 0,
+        faction_group_mask: 0,
+        exploration_level: -1,
+        name: name.into(),
+    }
 }
 
 /// Run frames, the VM's own tick between them, until `done` holds.
@@ -945,4 +1082,220 @@ fn an_empty_realm_list_asks_again_and_shows_it() {
         0,
         "no fallback dial"
     );
+}
+
+// ── The character screen's roster over the IO thread and a fake world server ────────────────────
+
+/// Three characters: a living night elf druid in Teldrassil, a ghost human warrior in Elwynn, and
+/// a gnome mage in a zone `AreaTable` has no row for.
+fn roster3() -> Vec<benilla_protocol::Character> {
+    let mut alpha = crate::char_select::test_character(0x11, "Alpha");
+    (
+        alpha.race,
+        alpha.class,
+        alpha.gender,
+        alpha.level,
+        alpha.zone,
+    ) = (4, 11, 1, 12, 141);
+    let mut bravo = crate::char_select::test_character(0x12, "Bravo");
+    (bravo.race, bravo.class, bravo.level, bravo.zone) = (1, 1, 60, 12);
+    bravo.flags = benilla_protocol::CHARACTER_FLAG_GHOST;
+    let mut charlie = crate::char_select::test_character(0x13, "Charlie");
+    (charlie.race, charlie.class, charlie.level, charlie.zone) = (7, 8, 3, 9999);
+    vec![alpha, bravo, charlie]
+}
+
+/// The stock login for `roster`, `lastCharacterIndex` as given, a realm chosen or not, with the
+/// events the roster fires logged into the VM's `EVENTS`.
+///
+/// `GetNumAddOns` is the add-on list's verb, which this screen's `OnShow` reaches first
+/// (`UpdateAddonButton`, `AddonList.lua:4`) and which the glue VM does not have yet; the test
+/// defines it empty, or the show raises there and never asks for the list.
+fn char_select_app(
+    roster: &[benilla_protocol::Character],
+    last: &str,
+    chosen: bool,
+) -> (App, fake::Realmd, fake::World) {
+    let (mut app, realmd, world) = live_app_with(
+        |world| vec![FakeRealm::new("Alpha", world)],
+        "Alpha",
+        roster,
+    );
+    if chosen {
+        app.world_mut().resource_mut::<GlueMgr>().realm_cells.chosen = Some(0);
+        // The fresh VM takes the cells on the next frame.
+        app.world_mut().resource_mut::<GlueMgr>().vm = None;
+    }
+    {
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_cvar_engine("lastCharacterIndex", last);
+        script
+            .run(
+                "function GetNumAddOns() return 0 end \
+                 EVENTS = {} \
+                 local f = CreateFrame('Frame', 'RosterListener') \
+                 f:SetScript('OnEvent', function() \
+                   table.insert(EVENTS, event .. ' ' .. tostring(arg1)) end) \
+                 f:RegisterEvent('CHARACTER_LIST_UPDATE') \
+                 f:RegisterEvent('UPDATE_SELECTED_CHARACTER')",
+            )
+            .unwrap();
+    }
+    app.update();
+    log_in(&mut app);
+    (app, realmd, world)
+}
+
+/// How many times the listener saw `event`.
+fn seen(app: &App, event: &str) -> usize {
+    vm(app)
+        .eval::<usize>(&format!(
+            "local n = 0 for _, e in ipairs(EVENTS) do \
+               if string.find(e, '^{event}') then n = n + 1 end end return n"
+        ))
+        .unwrap()
+}
+
+/// The stock login reaches the character screen, which asks for its list as it shows: the
+/// roster is the reply the IO thread enumerated on its own (one `CMSG_CHAR_ENUM` in all), the
+/// rows read it through `GetCharacterInfo`, `lastCharacterIndex` is the selection (0-based, so
+/// "1" is the second row), and the flow raises no Lua error. A second `GetCharacterListUpdate`
+/// clears the list at the call, shows the retrieving dialog and asks the server again with a
+/// `CMSG_CHAR_ENUM` that is the six bytes the client sends: size 4, opcode 0x37 in four.
+#[test]
+fn the_stock_login_loads_the_roster_into_character_select() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _realmd, world) = char_select_app(&roster3(), "1", false);
+    until(&mut app, "the roster", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") >= 2
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    assert!(shown(&app, "CharacterSelect"));
+    assert_eq!(dialog(&app), None, "the retrieving dialog is closed");
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+    assert_eq!(
+        world.enumerations(),
+        1,
+        "the first ask takes the held reply"
+    );
+
+    let text = |app: &App, name: &str| {
+        vm(app)
+            .eval::<String>(&format!("return {name}:GetText() or ''"))
+            .unwrap()
+    };
+    let row = |app: &App, i: usize| {
+        (
+            text(app, &format!("CharSelectCharacterButton{i}ButtonTextName")),
+            text(app, &format!("CharSelectCharacterButton{i}ButtonTextInfo")),
+            text(
+                app,
+                &format!("CharSelectCharacterButton{i}ButtonTextLocation"),
+            ),
+        )
+    };
+    let s = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+    assert_eq!(row(&app, 1), s("Alpha", "Level 12 Druid", "Teldrassil"));
+    assert_eq!(
+        row(&app, 2),
+        s("Bravo", "Level 60 Warrior (Ghost)", "Elwynn Forest")
+    );
+    assert_eq!(row(&app, 3), s("Charlie", "Level 3 Mage", ""));
+    assert!(!shown(&app, "CharSelectCharacterButton4"));
+    assert_eq!(text(&app, "CharSelectCharacterName"), "Bravo");
+    assert_eq!(
+        vm(&app)
+            .eval::<(i64, f64, String)>(
+                "return CharacterSelect.selectedIndex, GetNumCharacters(), \
+                 CharacterSelect.currentModel"
+            )
+            .unwrap(),
+        (2, 3.0, "Human".to_string()),
+        "lastCharacterIndex 1 selects the second row, and its race file string is the background"
+    );
+    assert_eq!(vm(&app).glue_selected_guid(), Some(0x12));
+    assert_eq!(
+        vm(&app).glue_select_background().as_deref(),
+        Some("Interface\\Glues\\Models\\UI_Human\\UI_Human.mdx"),
+        "SetBackgroundModel reached SetCharSelectBackground for the selected race"
+    );
+
+    // Asked again: the list clears at the call, the dialog shows, the reply reloads it.
+    vm(&app).run("GetCharacterListUpdate()").unwrap();
+    assert_eq!(
+        vm(&app).eval::<f64>("return GetNumCharacters()").unwrap(),
+        0.0
+    );
+    let before = seen(&app, "CHARACTER_LIST_UPDATE");
+    app.update();
+    assert_eq!(
+        dialog(&app),
+        Some(("CANCEL".into(), "Retrieving character list".into()))
+    );
+    until(&mut app, "the second roster", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") > before
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    assert_eq!(dialog(&app), None);
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+    assert_eq!(
+        text(&app, "CharSelectCharacterButton3ButtonTextName"),
+        "Charlie"
+    );
+    assert_eq!(world.enumerations(), 2);
+    let enums: Vec<Vec<u8>> = world
+        .packets
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|p| p[2..4] == [0x37, 0x00])
+        .cloned()
+        .collect();
+    assert_eq!(enums, vec![vec![0x00, 0x04, 0x37, 0x00, 0x00, 0x00]; 2]);
+}
+
+/// An empty roster: the teardown at the connect and the load both select -1, which fires
+/// `UPDATE_SELECTED_CHARACTER` with 1 (`0x472740`). With no realm chosen this session the load
+/// asks for the realm list and fires no `CHARACTER_LIST_UPDATE` (`0x47253d`-`0x47254b`), and the
+/// list's rebuild puts the realm wizard up (an account with no characters); with a realm chosen
+/// it fires the update and the screen stays, with no rows.
+#[test]
+fn an_empty_roster_asks_for_the_realm_list_only_with_no_realm_chosen() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, realmd, _) = char_select_app(&[], "0", false);
+    until(&mut app, "the realm wizard", |app| {
+        shown(app, "RealmWizard")
+    });
+    assert_eq!(
+        seen(&app, "CHARACTER_LIST_UPDATE"),
+        1,
+        "the teardown's, and not the load's"
+    );
+    assert_eq!(seen(&app, "UPDATE_SELECTED_CHARACTER"), 2);
+    assert_eq!(realmd.lists(), 2, "the logon's list and the load's query");
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+
+    let (mut app, realmd, _) = char_select_app(&[], "0", true);
+    until(&mut app, "the roster load", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") >= 2
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    for _ in 0..20 {
+        app.update();
+    }
+    assert!(shown(&app, "CharacterSelect") && !shown(&app, "RealmWizard"));
+    assert!(!shown(&app, "RealmList"));
+    assert_eq!(seen(&app, "CHARACTER_LIST_UPDATE"), 2);
+    assert_eq!(seen(&app, "UPDATE_SELECTED_CHARACTER"), 2);
+    assert_eq!(realmd.lists(), 1, "no realm list was asked for");
+    assert_eq!(
+        vm(&app)
+            .eval::<(f64, i64, bool)>(
+                "return GetNumCharacters(), CharacterSelect.selectedIndex, \
+                 CharSelectCharacterButton1:IsShown() == 1"
+            )
+            .unwrap(),
+        (0.0, 0, false)
+    );
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
 }

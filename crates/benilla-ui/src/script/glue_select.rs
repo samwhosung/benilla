@@ -1,0 +1,759 @@
+//! The character select's glue verbs (`SelectCharacter.cpp`, registrar `0x4736c0`, table
+//! `0x838578`) and the roster they read: the record array (`[0xb42144]`, stride `0x120`) and its
+//! count (`[0xb42140]`), the selection (`[0x83856c]`), the model frame (`[0xb42174]`), the facing
+//! (`[0xb4217c]`) and the build counter (`[0xb42178]`).
+//!
+//! The host seeds the roster where the reference's list reply is walked (`0x4724d0` through
+//! `0x5aabe0` and the appender `0x472300`) and tears it down where `0x472580` does; the verbs that
+//! only read it answer here, and `SelectCharacter` fires `UPDATE_SELECTED_CHARACTER` as it returns,
+//! as `0x472740` does. Indices are 1-based in Lua and 0-based inside, the boundary at `0x473470`.
+//!
+//! The 3-D side of the reference (`0x472950`'s model build into the scene, the attachment detaches
+//! `0x4722c0`/`0x4722e0`, the camera reset `0x76cec0`) is the host's scene drive and lives outside
+//! this module; what a build leaves behind for Lua to see is kept here: the facing reset and the
+//! build counter that gates `SetCharacterSelectFacing`.
+
+use mlua::{Lua, MultiValue, Value};
+
+use super::binding_abi::{flag, number_arg, string_arg};
+use super::glue_core::{leading_int, queue, GlueRequest};
+use super::{Model, ScriptValue};
+
+/// One character of the roster as `GetCharacterInfo` (`0x4732a0`) reads the record. The host
+/// resolves the DBC-backed strings; an absent row is the empty string where the reference pushes
+/// one (`0x882748`) and `None` where it pushes nil.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlueCharacter {
+    /// `+0x00`.
+    pub guid: u64,
+    /// `+0x08`.
+    pub name: String,
+    /// The `ChrRaces` row's `Name_Lang` for the race byte at `+0x100`; empty without a row.
+    pub race: String,
+    /// The `ChrClasses` row's `Name_Lang` for the class byte at `+0x101`; empty without a row.
+    pub class: String,
+    /// `+0x108`.
+    pub level: u8,
+    /// The `AreaTable` row's name for the id at `+0x3c`; `None` without a row.
+    pub zone: Option<String>,
+    /// The race row's file string (`ChrRaces+0x3c`); empty without a row.
+    pub file_string: String,
+    /// `+0x102`.
+    pub gender: u8,
+    /// `+0xfc`: bit `0x2000` is a ghost.
+    pub flags: u32,
+    /// Whether the race and gender have a character model (`0x5ec480` finds a row with a model
+    /// path): the build `0x472950` makes for a record only goes ahead with one.
+    pub model: bool,
+}
+
+/// The selection cells that outlive a glue VM: the reference keeps them in C globals, so a glue
+/// rebuild finds them as they were. The host carries them from one glue VM to the next.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlueSelectCells {
+    /// `[0x83856c]`, 0-based; -1 at load (the image's `.data`), written only by `0x472740`.
+    pub selected: i32,
+    /// `[0xb4217c]`, radians.
+    pub facing: f32,
+    /// `[0xb42178]` is nonzero: a select model has been built this process (`0x472fb2` is its one
+    /// writer), which opens `SetCharacterSelectFacing`'s gate and nothing closes.
+    pub built: bool,
+}
+
+impl Default for GlueSelectCells {
+    fn default() -> Self {
+        GlueSelectCells {
+            selected: -1,
+            facing: 0.0,
+            built: false,
+        }
+    }
+}
+
+/// A record of the array: the character and whether `+0x110`, the built composite, is set.
+#[derive(Clone, Debug)]
+struct Record {
+    character: GlueCharacter,
+    built: bool,
+}
+
+/// The roster and the select screen's cells the verbs read.
+#[derive(Default)]
+pub(crate) struct GlueRoster {
+    records: Vec<Record>,
+    cells: GlueSelectCells,
+    /// `[0xb42174]`: the name of the model frame `SetCharSelectModelFrame` found.
+    model_frame: Option<String>,
+    /// The file `SetCharSelectBackground` last gave the model frame (`0x472110`).
+    background: Option<String>,
+}
+
+/// `rad = deg · 0.017453292` (`0x7ffaac`, a float).
+const DEG_TO_RAD: f32 = f32::from_bits(0x3c8e_fa35);
+/// `deg = rad · 57.29578` (`0x803a78`, a float).
+const RAD_TO_DEG: f32 = f32::from_bits(0x4265_2ee1);
+
+impl GlueRoster {
+    /// `0x473700` on every record and the count to 0 (`0x4723ff`, `0x4725af`).
+    fn clear(&mut self) {
+        self.records.clear();
+    }
+
+    /// `0x472740`: a negative index reads 0, so does one past the end, then the cell is stored and
+    /// `0x472950` runs. Returns the event's argument, the stored index plus one, re-read from the
+    /// cell (`0x47275e`), not the caller's.
+    ///
+    /// The build, for what Lua sees (`0x472950`): an index off the roster exits at `0x472971`
+    /// before touching anything; otherwise the facing is zeroed (`0x472a61`, ahead of the built
+    /// test and not gated), and a record with no composite yet that has a model gets one, which is
+    /// the one place the build counter rises (`0x472fb2`).
+    fn select(&mut self, index: i32) -> i32 {
+        let clamped = if index < 0 { 0 } else { index };
+        let stored = if (clamped as usize) < self.records.len() {
+            clamped
+        } else {
+            0
+        };
+        self.cells.selected = stored;
+        if let Some(record) = self.records.get_mut(stored as usize) {
+            self.cells.facing = 0.0;
+            if !record.built && record.character.model {
+                record.built = true;
+                self.cells.built = true;
+            }
+        }
+        stored + 1
+    }
+
+    /// `SetCharacterSelectFacing`'s body (`0x4730e0`): the store is inside the build counter's
+    /// gate (`0x4730e6`).
+    fn set_facing(&mut self, radians: f32) {
+        if self.cells.built {
+            self.cells.facing = radians;
+        }
+    }
+}
+
+impl super::UiScript {
+    /// The selection cells as the VM holds them.
+    pub fn glue_select_cells(&self) -> GlueSelectCells {
+        self.model_ref().glue.roster.cells
+    }
+
+    /// Carry the selection cells over from the last glue VM.
+    pub fn set_glue_select_cells(&mut self, cells: GlueSelectCells) {
+        self.model_mut().glue.roster.cells = cells;
+    }
+
+    /// The model frame's background file, as `SetCharSelectBackground` last recorded it: what the
+    /// scene drive loads into the select scene.
+    pub fn glue_select_background(&self) -> Option<String> {
+        self.model_ref().glue.roster.background.clone()
+    }
+
+    /// The selected character's guid, none off the roster.
+    pub fn glue_selected_guid(&self) -> Option<u64> {
+        let model = self.model_ref();
+        let roster = &model.glue.roster;
+        usize::try_from(roster.cells.selected)
+            .ok()
+            .and_then(|i| roster.records.get(i))
+            .map(|r| r.character.guid)
+    }
+
+    /// The roster's guids in order.
+    pub fn glue_roster_guids(&self) -> Vec<u64> {
+        self.model_ref()
+            .glue
+            .roster
+            .records
+            .iter()
+            .map(|r| r.character.guid)
+            .collect()
+    }
+
+    /// The roster teardown (`0x472580`): the records freed, the count 0, the selection reset
+    /// through `0x472740(-1)`, which clamps to 0 and fires `UPDATE_SELECTED_CHARACTER` with 1 on
+    /// the empty roster whatever it held, then `CHARACTER_LIST_UPDATE`. The reset of the model
+    /// frame's camera (`0x76cec0`) is the scene drive's.
+    pub fn teardown_glue_roster(&mut self) {
+        self.model_mut().glue.roster.clear();
+        self.select_glue_character(-1);
+        self.fire_event("CHARACTER_LIST_UPDATE", Vec::new());
+    }
+
+    /// The roster load (`0x4724d0`), run when the character list reply completes: the old records
+    /// freed, `roster` appended in order (`0x472300`), then an empty roster selects -1 and, with
+    /// no realm chosen this session (`[0x837e9c]` = -1), skips `CHARACTER_LIST_UPDATE` and asks
+    /// the host to raise the realm list (the return value, `RequestRealmList(1)` at `0x47254b`);
+    /// otherwise the cell is set to 0 (`0x472556`), the `lastCharacterIndex` CVar's integer is
+    /// selected (`0x472550`-`0x472563`) and `CHARACTER_LIST_UPDATE` fires.
+    pub fn load_glue_roster(&mut self, roster: Vec<GlueCharacter>) -> bool {
+        let last = self
+            .cvar("lastCharacterIndex")
+            .map_or(0, |v| i32::try_from(leading_int(&v)).unwrap_or(0));
+        let count = roster.len();
+        {
+            let mut model = self.model_mut();
+            model.glue.roster.records = roster
+                .into_iter()
+                .map(|character| Record {
+                    character,
+                    built: false,
+                })
+                .collect();
+        }
+        if count == 0 {
+            self.select_glue_character(-1);
+            if self.model_ref().glue.realms.cells.chosen.is_none() {
+                return true;
+            }
+        } else {
+            self.model_mut().glue.realms.cells.chosen = Some(0);
+            self.select_glue_character(last);
+        }
+        self.fire_event("CHARACTER_LIST_UPDATE", Vec::new());
+        false
+    }
+
+    /// `0x472740` from the host: the selection stored and `UPDATE_SELECTED_CHARACTER` fired.
+    fn select_glue_character(&mut self, index: i32) {
+        let arg = self.model_mut().glue.roster.select(index);
+        self.fire_event(
+            "UPDATE_SELECTED_CHARACTER",
+            vec![ScriptValue::Number(f64::from(arg))],
+        );
+    }
+}
+
+fn model(lua: &Lua) -> mlua::AppDataRefMut<'_, Model> {
+    lua.app_data_mut::<Model>().expect("model app_data")
+}
+
+fn arg(args: &MultiValue, i: usize) -> Value {
+    args.get(i).cloned().unwrap_or(Value::Nil)
+}
+
+pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
+    let g = lua.globals();
+
+    // `0x4731c0`: a string or number (`0x6f3510`) or the usage error (`0x838720`); the global of
+    // that name castable to the model type (`0x76c760`) becomes the frame (`0x472100`), else the
+    // call changes nothing.
+    g.set(
+        "SetCharSelectModelFrame",
+        lua.create_function(|lua, args: MultiValue| {
+            let name = string_arg(
+                lua,
+                arg(&args, 0),
+                "Usage: SetCharSelectModelFrame(\"frameName\")",
+            )?;
+            let mut m = model(lua);
+            let is_model = m
+                .arena
+                .lookup(&name)
+                .and_then(|h| m.arena.frame(h))
+                .is_some_and(|f| f.kind == crate::widget::FrameKind::Model);
+            if is_model {
+                m.glue.roster.model_frame = Some(name);
+            }
+            Ok(())
+        })?,
+    )?;
+
+    // `0x473230`: the file (`0x6f3510`, else `0x83874c`) into `0x472110`, which needs the frame
+    // set and a non-empty name and hands it to the frame's SetModel (vtable `+0x94`).
+    //
+    // Only the path is recorded: the scene drive loads it into the select scene, and the frame's
+    // own model state, which benilla's widget renders nowhere on the glue, stays as it was.
+    g.set(
+        "SetCharSelectBackground",
+        lua.create_function(|lua, args: MultiValue| {
+            let file = string_arg(
+                lua,
+                arg(&args, 0),
+                "Usage: SetCharSelectBackground(\"filename\")",
+            )?;
+            let mut m = model(lua);
+            if m.glue.roster.model_frame.is_some() && !file.is_empty() {
+                m.glue.roster.background = Some(file);
+            }
+            Ok(())
+        })?,
+    )?;
+
+    // `0x473270` → `0x4723d0`: every record freed and the count 0 (`0x4723ff`) in the call, so a
+    // `GetNumCharacters` straight after reads 0; then `0x46b880`, the host's: state 3, the
+    // dialog and the list request.
+    g.set(
+        "GetCharacterListUpdate",
+        lua.create_function(|lua, _: MultiValue| {
+            model(lua).glue.roster.clear();
+            queue(lua, GlueRequest::GetCharacterList);
+            Ok(())
+        })?,
+    )?;
+
+    // `0x473280`: the count, a number.
+    g.set(
+        "GetNumCharacters",
+        lua.create_function(|lua, _: MultiValue| Ok(model(lua).glue.roster.records.len() as f64))?,
+    )?;
+
+    // `0x4732a0`: one number (`0x6f34d0`) or `Usage: GetCharacterInfo(index)` (`0x838778`), then
+    // eight values on every returning path; off the roster the tuple is nil, nil, nil, 0, nil,
+    // nil, 0, nil (`0x47341e`-`0x473459`).
+    g.set(
+        "GetCharacterInfo",
+        lua.create_function(|lua, args: MultiValue| {
+            let index =
+                number_arg(lua, arg(&args, 0), "Usage: GetCharacterInfo(index)")?.wrapping_sub(1);
+            let m = model(lua);
+            let Some(record) = usize::try_from(index)
+                .ok()
+                .and_then(|i| m.glue.roster.records.get(i))
+            else {
+                return Ok(MultiValue::from_vec(vec![
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Number(0.0),
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Number(0.0),
+                    Value::Nil,
+                ]));
+            };
+            let c = &record.character;
+            let text = |s: &str| lua.create_string(s).map(Value::String);
+            Ok(MultiValue::from_vec(vec![
+                text(&c.name)?,
+                text(&c.race)?,
+                text(&c.class)?,
+                Value::Number(f64::from(c.level)),
+                match &c.zone {
+                    Some(zone) => text(zone)?,
+                    None => Value::Nil,
+                },
+                text(&c.file_string)?,
+                Value::Number(f64::from(c.gender)),
+                flag(c.flags & 0x2000 != 0),
+            ]))
+        })?,
+    )?;
+
+    // `0x473470`: one number or `Usage: SelectCharacter(index)` (`0x838798`), decremented and
+    // clamped to -1 outside `[0, count)` (`0x4734a4`-`0x4734b2`), into `0x472740`, which stores
+    // and fires `UPDATE_SELECTED_CHARACTER` whatever was selected before: the gate against a
+    // repeat is the Lua caller's. The binding's clamp and `0x472740`'s own land on the same 0, so
+    // only the latter is kept.
+    g.set(
+        "SelectCharacter",
+        lua.create_function(|lua, args: MultiValue| {
+            let index =
+                number_arg(lua, arg(&args, 0), "Usage: SelectCharacter(index)")?.wrapping_sub(1);
+            let selected = model(lua).glue.roster.select(index);
+            super::tick::fire_event_into(
+                lua,
+                "UPDATE_SELECTED_CHARACTER",
+                vec![ScriptValue::Number(f64::from(selected))],
+            );
+            Ok(())
+        })?,
+    )?;
+
+    // `0x473640` → `0x473190`: the selected record's composite (`+0x110`) is handed to the
+    // character bake (`0x477860`), once per `OnUpdateModel` (`CharacterSelect.lua:208`). The
+    // composite is the scene drive's, which bakes when the selection or the look changes, so
+    // there is nothing for the call to do on the Lua side.
+    g.set(
+        "UpdateSelectionCustomizationScene",
+        lua.create_function(|_, _: MultiValue| Ok(()))?,
+    )?;
+
+    // `0x473650`: the cell (a float) times 57.29578, pushed as a double.
+    g.set(
+        "GetCharacterSelectFacing",
+        lua.create_function(|lua, _: MultiValue| {
+            let radians = model(lua).glue.roster.cells.facing;
+            Ok(f64::from(radians) * f64::from(RAD_TO_DEG))
+        })?,
+    )?;
+
+    // `0x473670`: one number or `Usage: SetCharacterSelectFacing(degrees)` (`0x838814`), times
+    // 0.017453292 and stored as a float, with no wrap or clamp, once a model has been built.
+    g.set(
+        "SetCharacterSelectFacing",
+        lua.create_function(|lua, args: MultiValue| {
+            let degrees = match lua.coerce_number(arg(&args, 0))? {
+                Some(n) => n,
+                None => {
+                    return Err(mlua::Error::RuntimeError(
+                        "Usage: SetCharacterSelectFacing(degrees)".into(),
+                    ))
+                }
+            };
+            let radians = (degrees * f64::from(DEG_TO_RAD)) as f32;
+            model(lua).glue.roster.set_facing(radians);
+            Ok(())
+        })?,
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::script::UiScript;
+
+    fn character(guid: u64, name: &str) -> GlueCharacter {
+        GlueCharacter {
+            guid,
+            name: name.into(),
+            race: "Night Elf".into(),
+            class: "Druid".into(),
+            level: 12,
+            zone: Some("Teldrassil".into()),
+            file_string: "NightElf".into(),
+            gender: 1,
+            flags: 0,
+            model: true,
+        }
+    }
+
+    /// A VM with the three characters loaded and `FIRED` recording the select events.
+    fn vm(roster: Vec<GlueCharacter>) -> UiScript {
+        let mut s = UiScript::new_glue().unwrap();
+        s.register_cvars([("lastCharacterIndex", "0")]);
+        s.run(
+            "FIRED = {} local f = CreateFrame('Frame', 'Listener') \
+             f:SetScript('OnEvent', function() \
+               table.insert(FIRED, event .. ' ' .. tostring(arg1)) end) \
+             f:RegisterEvent('UPDATE_SELECTED_CHARACTER') \
+             f:RegisterEvent('CHARACTER_LIST_UPDATE')",
+        )
+        .unwrap();
+        let _ = s.load_glue_roster(roster);
+        s.run("FIRED = {}").unwrap();
+        s
+    }
+
+    fn three() -> Vec<GlueCharacter> {
+        vec![
+            character(1, "Alpha"),
+            character(2, "Bravo"),
+            character(3, "Charlie"),
+        ]
+    }
+
+    /// A chunk returning how many values `call` returns.
+    fn count(call: &str) -> String {
+        format!("local function n(...) return arg.n end return n({call})")
+    }
+
+    fn fired(s: &UiScript) -> Vec<String> {
+        s.eval::<Vec<String>>("return FIRED").unwrap()
+    }
+
+    #[test]
+    fn the_count_and_the_eight_values_of_a_character() {
+        let mut roster = three();
+        roster[1].zone = None;
+        roster[1].flags = 0x2000;
+        roster[1].gender = 0;
+        let s = vm(roster);
+        assert_eq!(s.eval::<f64>("return GetNumCharacters()").unwrap(), 3.0);
+        assert_eq!(
+            s.eval::<(
+                String,
+                String,
+                String,
+                f64,
+                String,
+                String,
+                f64,
+                Option<i64>
+            )>("return GetCharacterInfo(1)")
+                .unwrap(),
+            (
+                "Alpha".into(),
+                "Night Elf".into(),
+                "Druid".into(),
+                12.0,
+                "Teldrassil".into(),
+                "NightElf".into(),
+                1.0,
+                None
+            )
+        );
+        // No zone row is nil in the fifth place; a ghost is 1 in the last.
+        assert_eq!(
+            s.eval::<(String, Option<String>, f64, Option<i64>)>(
+                "local n, _, _, _, zone, _, gender, ghost = GetCharacterInfo(2) \
+                 return n, zone, gender, ghost"
+            )
+            .unwrap(),
+            ("Bravo".into(), None, 0.0, Some(1))
+        );
+        assert_eq!(s.eval::<f64>(&count("GetCharacterInfo(3)")).unwrap(), 8.0);
+    }
+
+    /// Off the roster the tuple is nil, nil, nil, 0, nil, nil, 0, nil, and still eight values
+    /// (`0x47341e`).
+    #[test]
+    fn an_index_off_the_roster_answers_the_eight_tuple() {
+        let s = vm(three());
+        for call in [
+            "GetCharacterInfo(0)",
+            "GetCharacterInfo(4)",
+            "GetCharacterInfo(-7)",
+        ] {
+            assert_eq!(
+                s.eval::<(
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    f64,
+                    Option<String>,
+                    Option<String>,
+                    f64,
+                    Option<i64>
+                )>(&format!("return {call}"))
+                    .unwrap(),
+                (None, None, None, 0.0, None, None, 0.0, None),
+                "{call}"
+            );
+            assert_eq!(s.eval::<f64>(&count(call)).unwrap(), 8.0);
+        }
+        // A numeric string passes `is-number`; 2.9 truncates to 2.
+        assert_eq!(
+            s.eval::<String>("return (GetCharacterInfo('2'))").unwrap(),
+            "Bravo"
+        );
+        assert_eq!(
+            s.eval::<String>("return (GetCharacterInfo(2.9))").unwrap(),
+            "Bravo"
+        );
+        for call in ["GetCharacterInfo()", "GetCharacterInfo('x')"] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(err.contains("Usage: GetCharacterInfo(index)"), "{err}");
+        }
+    }
+
+    /// `0x472740` clamps a negative or a past-the-end index to 0 and fires with the STORED index
+    /// plus one, whatever the caller passed or the cell held: a bad index fires 1 (`0x47275e`).
+    #[test]
+    fn select_character_clamps_and_fires_the_stored_index() {
+        let s = vm(three());
+        for (call, want) in [
+            ("SelectCharacter(2)", "UPDATE_SELECTED_CHARACTER 2"),
+            ("SelectCharacter(3)", "UPDATE_SELECTED_CHARACTER 3"),
+            ("SelectCharacter(0)", "UPDATE_SELECTED_CHARACTER 1"),
+            ("SelectCharacter(-5)", "UPDATE_SELECTED_CHARACTER 1"),
+            ("SelectCharacter(4)", "UPDATE_SELECTED_CHARACTER 1"),
+            ("SelectCharacter(1.9)", "UPDATE_SELECTED_CHARACTER 1"),
+        ] {
+            s.run("FIRED = {}").unwrap();
+            s.run(call).unwrap();
+            assert_eq!(fired(&s), [want], "{call}");
+        }
+        // No "already selected" test: the same index fires again.
+        s.run("FIRED = {} SelectCharacter(2) SelectCharacter(2)")
+            .unwrap();
+        assert_eq!(fired(&s), ["UPDATE_SELECTED_CHARACTER 2"; 2]);
+        assert_eq!(s.glue_selected_guid(), Some(2));
+        let err = s.run("SelectCharacter()").unwrap_err().to_string();
+        assert!(err.contains("Usage: SelectCharacter(index)"), "{err}");
+        assert!(fired(&s).len() == 2, "a usage error fires nothing");
+    }
+
+    /// An empty roster still fires, with 1, and stores 0.
+    #[test]
+    fn select_character_on_an_empty_roster_fires_one() {
+        let s = vm(Vec::new());
+        s.run("SelectCharacter(1)").unwrap();
+        assert_eq!(fired(&s), ["UPDATE_SELECTED_CHARACTER 1"]);
+        assert_eq!(s.glue_select_cells().selected, 0);
+        assert_eq!(s.glue_selected_guid(), None);
+    }
+
+    /// The facing store is inside the build counter's gate (`0x4730e6`): nothing before a model
+    /// has been built, and then degrees in, degrees out through the float cell, unwrapped.
+    #[test]
+    fn the_facing_stores_only_once_a_model_has_been_built() {
+        let facing = |s: &UiScript| s.eval::<f64>("return GetCharacterSelectFacing()").unwrap();
+        // A fresh process: nothing built, the gate shut.
+        let s = UiScript::new_glue().unwrap();
+        s.run("SetCharacterSelectFacing(90)").unwrap();
+        assert_eq!(facing(&s), 0.0);
+
+        // No record builds without a model, so selecting one leaves the gate shut.
+        let mut roster = three();
+        for c in &mut roster {
+            c.model = false;
+        }
+        let s = vm(roster);
+        s.run("SelectCharacter(1) SetCharacterSelectFacing(90)")
+            .unwrap();
+        assert_eq!(facing(&s), 0.0);
+        assert!(!s.glue_select_cells().built);
+
+        // The roster load selects the last character, which builds its model.
+        let s = vm(three());
+        assert!(s.glue_select_cells().built);
+        s.run("SetCharacterSelectFacing(90)").unwrap();
+        let got = facing(&s);
+        assert!((got - 90.0).abs() < 1e-4, "{got}");
+        // No wrap or clamp.
+        s.run("SetCharacterSelectFacing(-725.5)").unwrap();
+        let got = facing(&s);
+        assert!((got + 725.5).abs() < 1e-3, "{got}");
+        // Every select zeroes it first (`0x472a61`), already-built records included.
+        s.run("SelectCharacter(1)").unwrap();
+        assert_eq!(facing(&s), 0.0);
+        // The gate stays open: a teardown does not close it.
+        let mut s = s;
+        s.teardown_glue_roster();
+        s.run("SetCharacterSelectFacing(10)").unwrap();
+        assert!((facing(&s) - 10.0).abs() < 1e-4);
+        let err = s
+            .run("SetCharacterSelectFacing('x')")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Usage: SetCharacterSelectFacing(degrees)"),
+            "{err}"
+        );
+    }
+
+    /// An index off the roster exits before the facing reset (`0x472971`), so an empty roster
+    /// keeps the facing the player left.
+    #[test]
+    fn an_empty_select_keeps_the_facing() {
+        let mut s = UiScript::new_glue().unwrap();
+        s.set_glue_select_cells(GlueSelectCells {
+            selected: 0,
+            facing: 1.5,
+            built: true,
+        });
+        s.run("SelectCharacter(1)").unwrap();
+        assert_eq!(s.glue_select_cells().facing, 1.5);
+    }
+
+    #[test]
+    fn the_model_frame_and_the_background() {
+        let s = vm(three());
+        s.run("CreateFrame('Frame', 'Plain') CreateFrame('ModelFFX', 'Scene')")
+            .unwrap();
+        // No frame set yet: the call records nothing.
+        s.run("SetCharSelectBackground('a.mdx')").unwrap();
+        assert_eq!(s.glue_select_background(), None);
+        // A frame that is not a model is not taken, a missing name is not either.
+        s.run("SetCharSelectModelFrame('Plain') SetCharSelectModelFrame('Nope')")
+            .unwrap();
+        s.run("SetCharSelectBackground('a.mdx')").unwrap();
+        assert_eq!(s.glue_select_background(), None);
+        s.run("SetCharSelectModelFrame('Scene') SetCharSelectBackground('a.mdx')")
+            .unwrap();
+        assert_eq!(s.glue_select_background().as_deref(), Some("a.mdx"));
+        // An empty name is ignored (`0x472123`).
+        s.run("SetCharSelectBackground('')").unwrap();
+        assert_eq!(s.glue_select_background().as_deref(), Some("a.mdx"));
+        for (call, usage) in [
+            (
+                "SetCharSelectModelFrame()",
+                "Usage: SetCharSelectModelFrame(\"frameName\")",
+            ),
+            (
+                "SetCharSelectBackground({})",
+                "Usage: SetCharSelectBackground(\"filename\")",
+            ),
+        ] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(err.contains(usage), "{err}");
+        }
+        s.run("UpdateSelectionCustomizationScene()").unwrap();
+    }
+
+    /// `0x4723d0` clears at the call: the count reads 0 straight after, and the host is asked for
+    /// the list.
+    #[test]
+    fn get_character_list_update_clears_and_asks_the_host() {
+        let mut s = vm(three());
+        s.take_glue_requests();
+        s.run("GetCharacterListUpdate()").unwrap();
+        assert_eq!(s.eval::<f64>("return GetNumCharacters()").unwrap(), 0.0);
+        assert!(matches!(
+            s.take_glue_requests().as_slice(),
+            [GlueRequest::GetCharacterList]
+        ));
+        assert!(fired(&s).is_empty(), "the clear fires nothing");
+    }
+
+    /// `0x472580`: whatever the roster held, an empty one is selected through the clamp, which
+    /// fires with 1, then `CHARACTER_LIST_UPDATE`.
+    #[test]
+    fn the_teardown_fires_select_one_then_the_list_update() {
+        let mut s = vm(three());
+        s.run("SelectCharacter(3)").unwrap();
+        s.run("FIRED = {}").unwrap();
+        s.teardown_glue_roster();
+        assert_eq!(
+            fired(&s),
+            ["UPDATE_SELECTED_CHARACTER 1", "CHARACTER_LIST_UPDATE nil"]
+        );
+        assert_eq!(s.eval::<f64>("return GetNumCharacters()").unwrap(), 0.0);
+        assert_eq!(s.glue_select_cells().selected, 0);
+    }
+
+    /// `0x4724d0` with characters: the realm marked chosen, `lastCharacterIndex` selected (0-based
+    /// into the roster, one more in the event), then the list update; out of range reads 0.
+    #[test]
+    fn the_load_selects_the_last_character_then_updates_the_list() {
+        let mut s = UiScript::new_glue().unwrap();
+        s.register_cvars([("lastCharacterIndex", "0")]);
+        s.run(
+            "FIRED = {} local f = CreateFrame('Frame', 'Listener') \
+             f:SetScript('OnEvent', function() table.insert(FIRED, event .. ' ' .. tostring(arg1)) end) \
+             f:RegisterEvent('UPDATE_SELECTED_CHARACTER') f:RegisterEvent('CHARACTER_LIST_UPDATE')",
+        )
+        .unwrap();
+        s.set_cvar_engine("lastCharacterIndex", "2");
+        assert!(!s.load_glue_roster(three()));
+        assert_eq!(
+            fired(&s),
+            ["UPDATE_SELECTED_CHARACTER 3", "CHARACTER_LIST_UPDATE nil"]
+        );
+        assert_eq!(s.glue_realm_cells().chosen, Some(0));
+        assert_eq!(s.glue_selected_guid(), Some(3));
+
+        s.run("FIRED = {}").unwrap();
+        s.set_cvar_engine("lastCharacterIndex", "9");
+        assert!(!s.load_glue_roster(three()));
+        assert_eq!(fired(&s)[0], "UPDATE_SELECTED_CHARACTER 1");
+        s.run("FIRED = {}").unwrap();
+        s.set_cvar_engine("lastCharacterIndex", "-3");
+        assert!(!s.load_glue_roster(three()));
+        assert_eq!(fired(&s)[0], "UPDATE_SELECTED_CHARACTER 1");
+    }
+
+    /// `0x4724d0` with none: -1 is selected (the event carries 1), then with no realm chosen the
+    /// load asks for the realm list and fires no list update; with one it fires the update.
+    #[test]
+    fn an_empty_load_asks_for_the_realm_list_unless_one_is_chosen() {
+        let mut s = vm(Vec::new());
+        assert!(s.load_glue_roster(Vec::new()));
+        assert_eq!(fired(&s), ["UPDATE_SELECTED_CHARACTER 1"]);
+
+        s.run("FIRED = {}").unwrap();
+        let mut cells = s.glue_realm_cells();
+        cells.chosen = Some(4);
+        s.set_glue_realm_cells(cells);
+        assert!(!s.load_glue_roster(Vec::new()));
+        assert_eq!(
+            fired(&s),
+            ["UPDATE_SELECTED_CHARACTER 1", "CHARACTER_LIST_UPDATE nil"]
+        );
+        assert_eq!(s.glue_realm_cells().chosen, Some(4), "a choice stands");
+    }
+}

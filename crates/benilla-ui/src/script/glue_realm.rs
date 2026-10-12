@@ -127,7 +127,7 @@ pub(crate) struct GlueRealmList {
     /// `[0xb41fb0]` and `[0xb41fb4]`, the load band's mean and scaled deviation.
     mean: f32,
     stddev: f32,
-    cells: GlueRealmCells,
+    pub(super) cells: GlueRealmCells,
     /// `[svc+0x1ae4]`, the last `SMSG_CHAR_ENUM`'s character count.
     characters: u16,
 }
