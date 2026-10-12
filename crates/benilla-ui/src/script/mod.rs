@@ -1122,16 +1122,17 @@ impl UiScript {
 
     // ── Keyboard entry ───────────────────────────────────────────────────────────────────────────
     //
-    // Keys arrive by name; the host maps its keycodes. The box routing: a focused box consumes
-    // every event; with none focused, the topmost visible `autoFocus` box takes focus and
+    // Keys arrive by name; the host maps its keycodes. Every EditBox is a frame in the key and
+    // char walks ([`keyboard`]): the focused box consumes every event at its own strata and level;
+    // with none focused, the first visible `autoFocus` box in walk order takes focus and
     // processes that same event; otherwise nothing is consumed.
 
     /// A typed character (UTF-8) from the host: a focused box inserts it (numeric, cap and
     /// password rules apply) or, for Ctrl+A's control code, selects all. `true` if consumed.
     pub fn char_input(&mut self, text: &str) -> bool {
-        // The frame walk first ([`keyboard`]), the focused box a participant at its own strata and
-        // level, as in the reference's one dispatcher; an unconsumed event goes to the box routing.
-        keyboard::char_input(&self.lua, text) || editbox::char_input(&self.lua, text)
+        // The one dispatcher (`0x765df0`): the boxes are frames in the walk, at their own strata
+        // and level.
+        keyboard::char_input(&self.lua, text)
     }
 
     /// Paste host clipboard text into the focused EditBox as one edit: newlines survive only in a
@@ -1143,8 +1144,7 @@ impl UiScript {
     /// A non-character key by name (`"ENTER"`, `"ESCAPE"`, `"TAB"`); editing keys come through
     /// [`Self::editbox_action`]. A focused box consumes a key even when it does nothing with it.
     pub fn key_input(&mut self, key: &str) -> bool {
-        // The same two stages as `char_input`.
-        keyboard::key_input(&self.lua, key) || editbox::key_input(&self.lua, key)
+        keyboard::key_input(&self.lua, key)
     }
 
     /// An editing key (BACKSPACE, DELETE, the arrows, HOME, END) offered to the keyboard frames

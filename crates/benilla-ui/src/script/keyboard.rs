@@ -1,13 +1,15 @@
-//! Frame keyboard delivery. One dispatcher per [`Channel`] calls the keyboard-enabled frames in
-//! [`walk_order`] until one consumes. Consumption is the existence of a script slot, not what the
-//! handler does: a key-down consumes on `OnKeyDown` or `OnKeyUp` and fires only `OnKeyDown`, so a
-//! frame with only `OnKeyUp` swallows key-downs and runs nothing; a char consumes on `OnChar`.
-//! Membership is the keyboard-enabled flag (`0x76af00`), never a script: XML `enableKeyboard` and
-//! an XML `<Scripts>` handler set it, Lua `SetScript` does not.
+//! Frame keyboard delivery. One dispatcher per [`Channel`] calls the frames in that channel's
+//! bucket in [`walk_order`] until one consumes. Consumption is the existence of a script slot, not
+//! what the handler does: a key-down consumes on `OnKeyDown` or `OnKeyUp` and fires only
+//! `OnKeyDown`, so a frame with only `OnKeyUp` swallows key-downs and runs nothing; a char
+//! consumes on `OnChar`. Membership is the frame's char or key bit (`0x76af00`), never a script:
+//! the EditBox ctor, XML `enableKeyboard` and an XML `<Scripts>` handler set it, Lua `SetScript`
+//! does not.
 //!
-//! The focused EditBox is a frame in the same walk, consuming through its own vtable, so a
-//! keyboard frame in a higher stratum pre-empts it and one in a lower stratum does not. A key no
-//! frame consumes falls through to the editbox routing, focus acquisition included.
+//! An EditBox is a frame in the same walk, answering through its own vtable (`0x77a900`,
+//! `0x77b160`): the focused box consumes, an unfocused one declines, and with no box focused an
+//! `autoFocus` one takes the focus and the event at its own position. So a keyboard frame in a
+//! higher stratum or level pre-empts the box, and one below it never sees the key.
 //!
 //! `OnKeyUp` is stored and gates key-downs but never fires: the host feeds no key-up, so the
 //! reference's key-up gate (`0x76bba0`, `OnKeyUp` alone) and its sticky per-code target
@@ -27,14 +29,20 @@ enum Channel {
     KeyDown,
 }
 
-/// The walk order (`0x765f10`): keyboard-enabled, effectively-visible frames, strata TOOLTIP down
-/// to WORLD, then level descending, ties oldest registration first as the inserter keeps them
-/// (`0x764aa0`).
-fn walk_order(model: &Model) -> Vec<FrameHandle> {
+/// The walk order (`0x765f10`): the channel's enabled, effectively-visible frames, strata TOOLTIP
+/// down to WORLD, then level descending, ties oldest registration first as the inserter keeps
+/// them (`0x764aa0`).
+fn walk_order(model: &Model, channel: Channel) -> Vec<FrameHandle> {
     let mut candidates: Vec<(FrameHandle, u8, u16, u32)> = model
         .arena
         .iter_frames()
-        .filter(|(_, f)| f.effective_visible && f.keyboard_enabled)
+        .filter(|(_, f)| {
+            f.effective_visible
+                && match channel {
+                    Channel::Char => f.char_enabled,
+                    Channel::KeyDown => f.key_enabled,
+                }
+        })
         .map(|(h, f)| (h, f.strata as u8, f.level, f.insertion_seq))
         .collect();
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.3.cmp(&b.3)));
@@ -46,11 +54,9 @@ fn has_script(lua: &Lua, id: u32, name: &str) -> bool {
     event::has_widget_handler(lua, id, name)
 }
 
-/// Whether `h` is a `CSimpleEditBox`, which the walk asks about focus, never a script slot: its
-/// ctor (`0x779ce8`) puts it in both buckets, and its vtable `0x81c910` replaces the input slots
-/// (`+0x5c` with `0x77a900`, `+0x60` with `0x77b160`) without chaining to the base, consuming
-/// when focused and otherwise declining unless it takes a free focus as `autoFocus`
-/// (`0x77a952`/`0x77a956`, `0x77b1c7`/`0x77b21e`). So an unfocused box's `OnChar` (`+0x180`)
+/// Whether `h` is a `CSimpleEditBox`, which the walk asks [`super::editbox::takes_event`] about,
+/// never a script slot: its ctor (`0x779ce8`) puts it in both buckets, and its vtable `0x81c910`
+/// replaces the input slots without chaining to the base. So an unfocused box's `OnChar` (`+0x180`)
 /// never runs and never eats a neighbour's keys.
 fn is_editbox(lua: &Lua, h: FrameHandle) -> bool {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -65,15 +71,13 @@ fn is_editbox(lua: &Lua, h: FrameHandle) -> bool {
 fn walk(lua: &Lua, channel: Channel, arg: &str) -> bool {
     let order = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        walk_order(&model)
+        walk_order(&model, channel)
     };
     for h in order {
-        // The focused box answers through its own vtable, at its walk position.
-        let is_focused_box = {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            model.focused_editbox == Some(h)
-        };
-        if is_focused_box {
+        if is_editbox(lua, h) {
+            if !super::editbox::takes_event(lua, h) {
+                continue;
+            }
             let consumed = match channel {
                 Channel::Char => super::editbox::char_input(lua, arg),
                 Channel::KeyDown => super::editbox::key_input(lua, arg),
@@ -81,12 +85,6 @@ fn walk(lua: &Lua, channel: Channel, arg: &str) -> bool {
             if consumed {
                 return true;
             }
-            continue;
-        }
-        // An unfocused box declines here; the topmost `autoFocus` box takes a free focus in
-        // `super::editbox::route` once the whole walk declines, where the reference's takes it
-        // at its own walk position (`0x77a917`, `0x77b1c7`).
-        if is_editbox(lua, h) {
             continue;
         }
         let id = {
@@ -153,17 +151,13 @@ pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
 pub(super) fn frame_key_input(lua: &Lua, key: &str) -> bool {
     let order = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        walk_order(&model)
+        walk_order(&model, Channel::KeyDown)
     };
     for h in order {
-        {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if model.focused_editbox == Some(h) {
+        if is_editbox(lua, h) {
+            if super::editbox::takes_event(lua, h) {
                 return false; // the box's chord path owns this key
             }
-        }
-        // An unfocused box declines rather than gating on `+0x188`/`+0x190`.
-        if is_editbox(lua, h) {
             continue;
         }
         let id = {

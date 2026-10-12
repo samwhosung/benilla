@@ -721,6 +721,8 @@ pub(crate) fn load_ui_for_test(script: &benilla_ui::script::UiScript, entry: &st
 
 #[cfg(test)]
 mod cinematic_tests;
+#[cfg(test)]
+mod glue_input_tests;
 
 #[cfg(test)]
 mod cast_tests;

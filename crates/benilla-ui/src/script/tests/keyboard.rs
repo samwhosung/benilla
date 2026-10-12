@@ -248,3 +248,134 @@ fn an_unfocused_editbox_does_not_swallow_a_focused_boxs_editing_key() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The EditBox ctor enables char and key input (`0x779ced`, `0x779cf8`); `IsKeyboardEnabled`
+/// (`0x776f90`) answers 1 for it and nil for a plain frame, and `EnableKeyboard(false)` takes it
+/// back out of the walk (`0x76af50`), where the box goes deaf.
+#[test]
+fn an_editbox_is_born_keyboard_enabled() {
+    let mut s = script();
+    s.run(
+        r#"
+        box = CreateFrame("EditBox", "KbBorn")
+        box:SetAutoFocus(false)
+        box:SetFocus()
+        plain = CreateFrame("Frame", "KbPlain")
+    "#,
+    )
+    .unwrap();
+    assert!(s
+        .eval::<bool>("return box:IsKeyboardEnabled() == 1")
+        .unwrap());
+    assert!(s
+        .eval::<bool>("return plain:IsKeyboardEnabled() == nil")
+        .unwrap());
+    assert!(s.char_input("a"));
+    s.run("box:EnableKeyboard(false)").unwrap();
+    assert!(
+        !s.char_input("b"),
+        "out of the bucket, the box takes nothing"
+    );
+    assert_eq!(s.eval::<String>("return box:GetText()").unwrap(), "a");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A focused box is a frame in the walk at its own place (`0x765df0`, `0x765f10`): a keyboard
+/// frame in a lower stratum never sees the key, one in a higher stratum takes it first.
+#[test]
+fn a_focused_box_takes_keys_at_its_own_stratum() {
+    let mut s = script();
+    s.run(
+        r#"
+        seen = {}
+        box = CreateFrame("EditBox", "KbPlaced")
+        box:SetAutoFocus(false)
+        box:SetFrameStrata("DIALOG")
+        box:SetFocus()
+        function mk(name, strata)
+            local f = CreateFrame("Frame", name)
+            f:SetFrameStrata(strata)
+            f:EnableKeyboard(true)
+            f:SetScript("OnChar", function() table.insert(seen, name) end)
+            f:SetScript("OnKeyDown", function() table.insert(seen, name .. ":" .. arg1) end)
+            return f
+        end
+        low = mk("KbLower", "MEDIUM")
+    "#,
+    )
+    .unwrap();
+    assert!(s.char_input("x"));
+    assert!(s.key_input("ENTER"));
+    assert_eq!(s.eval::<i64>("return table.getn(seen)").unwrap(), 0);
+    assert_eq!(s.eval::<String>("return box:GetText()").unwrap(), "x");
+
+    s.run(r#"mk("KbUpper", "FULLSCREEN_DIALOG")"#).unwrap();
+    assert!(s.char_input("y"));
+    assert!(s.key_input("ENTER"));
+    assert_eq!(
+        s.eval::<String>("return table.concat(seen, ',')").unwrap(),
+        "KbUpper,KbUpper:ENTER",
+        "a higher stratum pre-empts the box"
+    );
+    assert_eq!(s.eval::<String>("return box:GetText()").unwrap(), "x");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// With no box focused, the first `autoFocus` box in walk order takes the focus and the key at
+/// its own position (`0x77a917`-`0x77a92b`): a keyboard frame below it never sees the key, one
+/// above it does, and at one stratum and level the older registration wins.
+#[test]
+fn an_autofocus_box_takes_its_key_at_its_own_walk_position() {
+    let mut s = script();
+    s.run(
+        r#"
+        seen = {}
+        function mkframe(name, strata)
+            local f = CreateFrame("Frame", name)
+            f:SetFrameStrata(strata)
+            f:EnableKeyboard(true)
+            f:SetScript("OnKeyDown", function() table.insert(seen, name) end)
+            return f
+        end
+        function mkbox(name)
+            local b = CreateFrame("EditBox", name)
+            b:SetAutoFocus(true)
+            b:Hide()
+            b:SetFrameStrata("DIALOG")
+            return b
+        end
+        a = mkbox("KbAutoA")
+        b = mkbox("KbAutoB")
+        mkframe("KbBelowBox", "MEDIUM")
+        a:Show() b:Show()
+        a:ClearFocus() b:ClearFocus()
+    "#,
+    )
+    .unwrap();
+    assert_eq!(s.focused_editbox_name(), None);
+    assert!(s.key_input("ENTER"));
+    assert_eq!(
+        s.focused_editbox_name().as_deref(),
+        Some("KbAutoA"),
+        "the older of two boxes at one position takes the focus"
+    );
+    assert_eq!(
+        s.eval::<i64>("return table.getn(seen)").unwrap(),
+        0,
+        "the frame below saw nothing"
+    );
+
+    s.run("KbAutoA:ClearFocus() mkframe('KbAboveBox', 'TOOLTIP')")
+        .unwrap();
+    assert!(s.key_input("ENTER"));
+    assert_eq!(
+        s.focused_editbox_name(),
+        None,
+        "the frame above took it first"
+    );
+    assert_eq!(
+        s.eval::<String>("return table.concat(seen, ',')").unwrap(),
+        "KbAboveBox"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

@@ -172,6 +172,34 @@ fn route(lua: &Lua) -> Option<FrameHandle> {
     Some(h)
 }
 
+/// Whether the EditBox `h`, reached by the key or char walk, takes the event (its vtable's
+/// `+0x5c`/`+0x60`/`+0x64`, `0x77a900`/`0x77b160`/`0x77b7c0`): with a box focused (`[0xcf4dc8]`,
+/// even a hidden one) only that box does; with none, an `autoFocus` box takes the focus through
+/// `SetFocus` at its own walk position and the event with it; any other box declines.
+pub(super) fn takes_event(lua: &Lua, h: FrameHandle) -> bool {
+    {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if let Some(f) = model.focused_editbox {
+            if model.arena.frame(f).is_some() {
+                return f == h;
+            }
+            model.focused_editbox = None; // stale: no box holds the focus
+        }
+        let auto = matches!(
+            model.arena.frame(h).map(|f| &f.kind_state),
+            Some(KindState::EditBox(eb)) if eb.auto_focus
+        );
+        if !auto {
+            return false;
+        }
+    }
+    set_focus_handle(lua, h);
+    lua.app_data_ref::<Model>()
+        .expect("model app_data")
+        .focused_editbox
+        == Some(h)
+}
+
 /// The topmost-drawn visible `autoFocus` EditBox, the keyboard self-acquire target.
 fn topmost_autofocus(lua: &Lua) -> Option<FrameHandle> {
     let model = lua.app_data_ref::<Model>().expect("model app_data");

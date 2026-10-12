@@ -403,16 +403,18 @@ impl WidgetArena {
         }
     }
 
-    /// `EnableKeyboard` (`0x776ec0`): the char and key bits the key walk filters on.
+    /// `EnableKeyboard` (`0x776ec0`): the char and key bits the key walks filter on, both.
     pub fn set_keyboard_enabled(&mut self, h: FrameHandle, enabled: bool) {
         if let Some(f) = self.frame_mut(h) {
-            f.keyboard_enabled = enabled;
+            f.char_enabled = enabled;
+            f.key_enabled = enabled;
         }
     }
 
-    /// `IsKeyboardEnabled` (`0x776f90`).
+    /// `IsKeyboardEnabled` (`0x776f90`): either bit.
     pub fn is_keyboard_enabled(&self, h: FrameHandle) -> bool {
-        self.frame(h).is_some_and(|f| f.keyboard_enabled)
+        self.frame(h)
+            .is_some_and(|f| f.char_enabled || f.key_enabled)
     }
 
     /// `EnableMouseWheel`, the wheel's own bit, separate from the mouse's.
