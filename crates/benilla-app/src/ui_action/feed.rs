@@ -24,7 +24,7 @@ use super::{
 
 /// An item action's icon when its template has not answered or its display id has no
 /// `ItemDisplayInfo` row: the reference's literal `0x847fe4`, from the resolver's `0x5d8927`.
-pub(super) const MISSING_ITEM_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
+pub(crate) const MISSING_ITEM_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
 
 /// The feed's memory of what it last pushed, for per-slot change events.
 #[derive(Default)]

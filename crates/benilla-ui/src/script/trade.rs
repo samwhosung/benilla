@@ -256,7 +256,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .is_none_or(|s| super::item_stats::item_usable_by_id(&model, s.item_id));
                 (slot, usable)
             };
-            let Some(s) = slot else {
+            // A template the cache lacks takes the miss too (`0x4c019b`, `0x4c02f6`).
+            let Some(s) = slot.filter(|s| s.name.is_some()) else {
                 return Ok(super::binding_abi::tuple(&[
                     None,
                     None,
@@ -274,7 +275,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             Ok(MultiValue::from_vec(vec![
                 opt_str(&s.name)?,
-                opt_str(&s.texture)?,
+                Value::String(
+                    lua.create_string(
+                        s.texture
+                            .as_deref()
+                            .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
+                    )?,
+                ),
                 Value::Integer(i64::from(s.count.max(1))),
                 Value::Integer(super::item_stats::gated_quality(
                     s.quality,
@@ -579,6 +586,15 @@ mod tests {
             "Linen Cloth,Interface\\Icons\\INV_Fabric_Linen_01,1,3,1,nil"
         );
         assert_eq!(shape(&s, 3), "nil,nil,0,0,nil,nil");
+        // A row whose template is still in flight takes the miss too (`0x4c019b`, `0x4c02f6`).
+        let mut st = state();
+        st.target.slots[3] = Some(TradeSlotItem {
+            item_id: 4306,
+            count: 1,
+            ..Default::default()
+        });
+        s.set_trade(Some(st));
+        assert_eq!(shape(&s, 4), "nil,nil,0,0,nil,nil");
         assert_eq!(shape(&s, 0), "nil,nil,0,0,nil,nil");
         assert_eq!(shape(&s, 9), "nil,nil,0,0,nil,nil");
     }

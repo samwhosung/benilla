@@ -451,9 +451,15 @@ fn resolve_slot(
     let name = template.map(|t| t.name.clone());
     let quality = template.map(|t| t.quality);
     let inventory_type = template.map_or(0, |t| t.inventory_type);
-    let texture = icons
-        .and_then(|i| i.catalog.get(item.display_id))
-        .and_then(|d| d.icon.clone());
+    // The icon comes from the template's display, not the wire's (`0x5d88b0([rec+0x18])`,
+    // `0x4c01f0`; `0x5d8af0` on our side, `0x4c0529`); a cached template whose display has no
+    // icon falls to the question mark, and an unanswered one leaves it to the getter.
+    let texture = template.map(|t| {
+        icons
+            .and_then(|i| i.catalog.get(t.display_info_id))
+            .and_then(|d| d.icon.clone())
+            .unwrap_or_else(|| crate::ui_action::MISSING_ITEM_ICON.to_string())
+    });
     // Nil until the template answers: the link embeds the name and the quality colour.
     let link = match (name.as_deref(), quality) {
         (Some(n), Some(q)) => Some(crate::ui_items::item_link(item.entry, n, q)),
@@ -847,6 +853,16 @@ mod tests {
 
         let row = resolve_slot(&wire_item(1234), &items, None, &commands);
         assert_eq!((row.quality, row.inventory_type), (Some(4), 13));
+        // The icon is the template's display's, the question mark when that row is missing, and
+        // left to the getter while the template is unanswered.
+        assert_eq!(
+            row.texture.as_deref(),
+            Some("Interface\\Icons\\INV_Misc_QuestionMark")
+        );
+        assert_eq!(
+            resolve_slot(&wire_item(1236), &items, None, &commands).texture,
+            None
+        );
         let row = resolve_slot(&wire_item(1235), &items, None, &commands);
         assert_eq!((row.quality, row.inventory_type), (Some(1), 0));
         let row = resolve_slot(&wire_item(1236), &items, None, &commands);

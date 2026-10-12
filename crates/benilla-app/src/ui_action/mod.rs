@@ -23,6 +23,7 @@ mod drain_tests;
 pub(crate) mod drop_item;
 mod errors;
 mod feed;
+pub(crate) use feed::MISSING_ITEM_ICON;
 #[cfg(test)]
 mod feed_tests;
 mod net;
