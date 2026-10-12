@@ -12,6 +12,9 @@
 //! Field 5, the class name: the `Name_Lang` block (`+0x14`, eight locale columns), which
 //! `GetCharacterInfo` (`0x4732a0`) returns as the class (`0x473368`).
 //!
+//! Field 14, the class file string (`+0x38`, `"WARRIOR"`), which the create screen's
+//! `GetClassesForRace` (`0x471594`) and `GetSelectedClass` (`0x47171d`) return after the name.
+//!
 //! Field 15, the class spell family: a talent modifier applies to a spell only when its
 //! `SpellFamilyName` (`Spell.dbc` column 160) equals the local player's (`GetSpellModifiers`,
 //! `0x6e6b30`), cached in `[0xcecaac]` by its one non-zeroing writer, `0x6e6ca0` (called from
@@ -49,6 +52,9 @@ const PET_NAME_TOKEN_FIELD: usize = 0x10 / 4;
 /// Field 16, read at `row + 0x40` by `UnitHasRelicSlot` (`0x519ebb`).
 const RELIC_SLOT_FIELD: usize = 0x40 / 4;
 
+/// Field 14, read at `+0x38` by `GetClassesForRace` (`0x471594`).
+const FILE_FIELD: usize = 0x38 / 4;
+
 /// Field 15, read at `+0x3c` by `0x6e6ca0`.
 const SPELL_FAMILY_FIELD: usize = 0x3c / 4;
 
@@ -61,6 +67,7 @@ struct ChrClass {
     damage_bonus_stat: u32,
     pet_name_token: Option<String>,
     name: Option<String>,
+    file: Option<String>,
     has_relic_slot: bool,
     spell_family: u32,
 }
@@ -83,6 +90,17 @@ impl ChrClasses {
     /// row or no name, which that binding answers with the empty string (`0x47336e`).
     pub fn name(&self, class: u32) -> Option<&str> {
         self.0.get(&class)?.name.as_deref()
+    }
+
+    /// The class's file string (`"WARRIOR"`), the create screen's second value per class; `None`
+    /// for a class with no row or an empty string.
+    pub fn file(&self, class: u32) -> Option<&str> {
+        self.0.get(&class)?.file.as_deref()
+    }
+
+    /// Whether the table has a row for `class`.
+    pub fn has_row(&self, class: u32) -> bool {
+        self.0.contains_key(&class)
     }
 
     /// The class's damage bonus stat, 0-based (Strength 0, Agility 1); `None` for a class with
@@ -113,8 +131,11 @@ impl ChrClasses {
 fn schema() -> Schema {
     let mut s = Schema::new("ChrClasses");
     for i in 0..CHR_CLASSES_FIELDS {
-        // The token and the eight name columns are strings; the rest stay opaque dwords.
-        let ty = if i == PET_NAME_TOKEN_FIELD || (NAME_FIELD..NAME_FIELD + 8).contains(&i) {
+        // The token, the file string and the eight name columns are strings; the rest stay opaque dwords.
+        let ty = if i == PET_NAME_TOKEN_FIELD
+            || i == FILE_FIELD
+            || (NAME_FIELD..NAME_FIELD + 8).contains(&i)
+        {
             FieldType::String
         } else {
             FieldType::UInt32
@@ -139,6 +160,7 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
                 damage_bonus_stat: u32_at(r, DAMAGE_BONUS_STAT_FIELD).unwrap_or(0),
                 pet_name_token: str_at(&rs, r, PET_NAME_TOKEN_FIELD),
                 name: name_lang_at(&rs, r, NAME_FIELD),
+                file: str_at(&rs, r, FILE_FIELD),
                 has_relic_slot: u32_at(r, RELIC_SLOT_FIELD).is_some_and(|v| v != 0),
                 spell_family: u32_at(r, SPELL_FAMILY_FIELD).unwrap_or(0),
             },
@@ -191,6 +213,29 @@ mod tests {
         // No row: the reference's nil leg.
         assert!(!t.has_relic_slot(6));
         assert!(!t.has_relic_slot(0));
+    }
+
+    /// Field 14 is the class file string the create screen keys its icons by
+    /// (`CLASS_ICON_TCOORDS`), one column past the name block's flags.
+    #[test]
+    fn the_file_string_is_field_14() {
+        let Some(mut chain) = chain() else { return };
+        let t = load_chr_classes(&mut chain).expect("load ChrClasses.dbc");
+        for (class, file) in [
+            (1, "WARRIOR"),
+            (2, "PALADIN"),
+            (3, "HUNTER"),
+            (4, "ROGUE"),
+            (5, "PRIEST"),
+            (7, "SHAMAN"),
+            (8, "MAGE"),
+            (9, "WARLOCK"),
+            (11, "DRUID"),
+        ] {
+            assert_eq!(t.file(class), Some(file), "class {class}");
+        }
+        assert_eq!(t.file(6), None);
+        assert!(t.has_row(1) && !t.has_row(6));
     }
 
     /// Hunters and Rogues scale their damage off Agility, everyone else off Strength.

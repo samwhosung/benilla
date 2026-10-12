@@ -1,4 +1,4 @@
-//! Character-creation source data from ChrRaces, CharBaseInfo and CharStartOutfit, and the five
+//! Character-creation source data from ChrRaces, CharBaseInfo, CharStartOutfit and NameGen, and the five
 //! appearance-dial ranges per (race, sex), counted from the DBCs: skin colour, face and hair colour
 //! off the CharSections rows the client groups into its grid (`0x476020`), hair and facial-hair
 //! styles off CharHairGeosets and CharacterFacialHairStyles. Every tuple in a (race, sex)'s ranges
@@ -19,6 +19,7 @@ const CHAR_START_OUTFIT: &str = "DBFilesClient\\CharStartOutfit.dbc";
 const CHAR_HAIR_GEOSETS: &str = "DBFilesClient\\CharHairGeosets.dbc";
 const CHAR_FACIAL_HAIR_STYLES: &str = "DBFilesClient\\CharacterFacialHairStyles.dbc";
 const CHAR_SECTIONS: &str = "DBFilesClient\\CharSections.dbc";
+const NAME_GEN: &str = "DBFilesClient\\NameGen.dbc";
 
 // CharSections `SectionType` values the dial ranges read (hair is 3 at `0x4784c0`).
 const SECTION_SKIN: u8 = 0;
@@ -86,6 +87,25 @@ pub struct StartOutfitItem {
     pub inv_type: u8,
 }
 
+/// One `ChrRaces.dbc` row as the create screen's race list reads it (`0x470430`): its id, `Flags`
+/// (column 1, `+0x4`; bit `0x1` keeps a race off the list) and `FactionID` (column 2, `+0x8`, a
+/// `FactionTemplate.dbc` id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChrRaceRow {
+    pub id: u8,
+    pub flags: u32,
+    pub faction: u32,
+}
+
+/// One `NameGen.dbc` row (`[0xc0da78]`, stride 0x10): the name (`+0x4`), race (`+0x8`) and sex
+/// (`+0xc`) the create screen's name generator learns from (`0x475480`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameGenRow {
+    pub name: String,
+    pub race: u32,
+    pub sex: u32,
+}
+
 /// The five appearance-dial counts for one (race, sex); each dial cycles index `0..count-1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DialRanges {
@@ -98,6 +118,13 @@ pub struct DialRanges {
 
 /// Character-creation source data, loaded once from the DBCs ([`Self::load`]).
 pub struct CharCreateCatalog {
+    /// Every ChrRaces row in file order.
+    race_rows: Vec<ChrRaceRow>,
+    /// CharBaseInfo's `(race, class)` rows in file order, the class-list builder's walk
+    /// (`0x4706b0`).
+    base_info: Vec<(u8, u8)>,
+    /// NameGen's rows in file order.
+    name_gen: Vec<NameGenRow>,
     /// race → (male displayId, female displayId), from ChrRaces cols 4/5.
     displays: HashMap<u8, (u32, u32)>,
     /// race → ChrRaces fileString (col 15), the GlueStrings key stem (`RACE_INFO_<FILE>`).
@@ -168,6 +195,26 @@ impl CharCreateCatalog {
         cs
     }
 
+    /// Every ChrRaces row in file order.
+    pub fn race_rows(&self) -> &[ChrRaceRow] {
+        &self.race_rows
+    }
+
+    /// The create screen's class list for `race`, the builder `0x4706b0`: every CharBaseInfo row of
+    /// the race in file order, less the literal `race == 3 && class == 8` (`0x4706e3`, `0x47075b`).
+    pub fn class_list(&self, race: u8) -> Vec<u8> {
+        self.base_info
+            .iter()
+            .filter(|&&(r, c)| r == race && !(r == 3 && c == 8))
+            .map(|&(_, c)| c)
+            .collect()
+    }
+
+    /// NameGen's rows in file order.
+    pub fn name_gen(&self) -> &[NameGenRow] {
+        &self.name_gen
+    }
+
     /// The five appearance-dial counts for a (race, sex).
     pub fn ranges(&self, race: u8, sex: u8) -> Option<DialRanges> {
         self.ranges.get(&(race, sex)).copied()
@@ -183,8 +230,10 @@ impl CharCreateCatalog {
     /// Load the catalog from the patch chain. The misparse guards compare the raw combos, so they
     /// run before `UNUSED_COMBOS` are stripped.
     pub fn load(chain: &mut Chain) -> Result<Self> {
-        let (displays, files, names, custom_tokens) = load_races(chain)?;
-        let combos = load_combos(chain)?;
+        let (race_rows, displays, files, names, custom_tokens) = load_races(chain)?;
+        let base_info = load_base_info(chain)?;
+        let combos: HashSet<(u8, u8)> = base_info.iter().copied().collect();
+        let name_gen = load_name_gen(chain)?;
         let start_outfits = load_start_outfits(chain)?;
         let avail = load_available_sections(chain)?;
         let hair_geo = load_hair_geosets(chain)?;
@@ -201,6 +250,9 @@ impl CharCreateCatalog {
         }
 
         let mut catalog = Self {
+            race_rows,
+            base_info,
+            name_gen,
             displays,
             files,
             names,
@@ -274,12 +326,14 @@ impl CharCreateCatalog {
     }
 }
 
-/// ChrRaces (29 fields, 116-byte records) → per playable race: displayIds (cols 4/5), fileString
-/// (15), facial-hair (26/27) and hair (28) tokens; other string columns are read as ignored `u32`s.
-#[allow(clippy::type_complexity)] // one pass over one DBC → the catalog's three race-keyed maps
+/// ChrRaces (29 fields, 116-byte records) → the rows in order, and per race: displayIds (cols
+/// 4/5), fileString (15), facial-hair (26/27) and hair (28) tokens; other string columns are read
+/// as ignored `u32`s.
+#[allow(clippy::type_complexity)] // one pass over one DBC → the catalog's race-keyed maps
 fn load_races(
     chain: &mut Chain,
 ) -> Result<(
+    Vec<ChrRaceRow>,
     HashMap<u8, (u32, u32)>,
     HashMap<u8, String>,
     HashMap<u8, String>,
@@ -297,6 +351,7 @@ fn load_races(
         schema.add_field(SchemaField::new(format!("f{i}"), ty));
     }
     let rs = parse(&bytes, schema, "ChrRaces")?;
+    let mut rows = Vec::new();
     let mut displays = HashMap::new();
     let mut files = HashMap::new();
     let mut names = HashMap::new();
@@ -304,9 +359,11 @@ fn load_races(
     for r in rs.records() {
         let Some(race) = u32_at(r, 0) else { continue };
         let race = race as u8;
-        if !PLAYABLE_RACES.contains(&race) {
-            continue;
-        }
+        rows.push(ChrRaceRow {
+            id: race,
+            flags: u32_at(r, 1).unwrap_or(0),
+            faction: u32_at(r, 2).unwrap_or(0),
+        });
         if let (Some(male), Some(female)) = (u32_at(r, 4), u32_at(r, 5)) {
             displays.insert(race, (male, female));
         }
@@ -322,11 +379,12 @@ fn load_races(
             tokens.insert(race, ([fm, ff], hair));
         }
     }
-    Ok((displays, files, names, tokens))
+    Ok((rows, displays, files, names, tokens))
 }
 
-/// CharBaseInfo → (race, class) pairs: two one-byte fields, parsed by hand off the record block.
-fn load_combos(chain: &mut Chain) -> Result<HashSet<(u8, u8)>> {
+/// CharBaseInfo → its (race, class) rows in file order: two one-byte fields, parsed by hand off the
+/// record block.
+fn load_base_info(chain: &mut Chain) -> Result<Vec<(u8, u8)>> {
     let bytes = chain
         .read_file(CHAR_BASE_INFO)
         .with_context(|| format!("reading {CHAR_BASE_INFO}"))?;
@@ -340,15 +398,43 @@ fn load_combos(chain: &mut Chain) -> Result<HashSet<(u8, u8)>> {
         bail!("CharBaseInfo: unexpected layout (fields {field_count}, record size {record_size}; expected 2/2)");
     }
     let data = &bytes[20..];
-    let mut combos = HashSet::new();
+    let mut rows = Vec::with_capacity(record_count);
     for i in 0..record_count {
         let off = i * record_size;
         if off + 2 > data.len() {
             bail!("CharBaseInfo: record {i} runs past the file");
         }
-        combos.insert((data[off], data[off + 1]));
+        rows.push((data[off], data[off + 1]));
     }
-    Ok(combos)
+    Ok(rows)
+}
+
+/// NameGen (4 fields: ID, Name, RaceID, Sex) → its rows in file order.
+fn load_name_gen(chain: &mut Chain) -> Result<Vec<NameGenRow>> {
+    let bytes = chain
+        .read_file(NAME_GEN)
+        .with_context(|| format!("reading {NAME_GEN}"))?;
+    let mut schema = Schema::new("NameGen");
+    for (name, ty) in [
+        ("ID", FieldType::UInt32),
+        ("Name", FieldType::String),
+        ("RaceID", FieldType::UInt32),
+        ("Sex", FieldType::UInt32),
+    ] {
+        schema.add_field(SchemaField::new(name, ty));
+    }
+    let rs = parse(&bytes, schema, "NameGen")?;
+    Ok(rs
+        .records()
+        .iter()
+        .filter_map(|r| {
+            Some(NameGenRow {
+                name: str_at(&rs, r, 1).unwrap_or_default(),
+                race: u32_at(r, 2)?,
+                sex: u32_at(r, 3)?,
+            })
+        })
+        .collect())
 }
 
 /// CharStartOutfit → (race, class, sex) → worn items, parsed by hand (41 fields, 152 bytes): `ID`
@@ -591,6 +677,48 @@ mod tests {
             assert!(cat.body_display(race, 0).is_some() && cat.body_display(race, 1).is_some());
             assert_eq!(cat.body_display(race, 2), None, "race {race}");
         }
+    }
+
+    /// The create screen's sources in file order: ChrRaces' rows with their flags and templates
+    /// (Goblin flagged `0x1`), the class lists in CharBaseInfo row order less Dwarf-Mage, and
+    /// NameGen's rows by race then sex, male first.
+    #[test]
+    fn the_create_screens_rows_in_file_order() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let cat = CharCreateCatalog::load(&mut chain).expect("load char-create catalog");
+        let rows: Vec<(u8, u32, u32)> = cat
+            .race_rows()
+            .iter()
+            .map(|r| (r.id, r.flags, r.faction))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (1, 0xc, 1),
+                (2, 0xc, 2),
+                (3, 0xc, 3),
+                (4, 0x4, 4),
+                (5, 0xc, 5),
+                (6, 0xe, 6),
+                (7, 0xc, 115),
+                (8, 0xe, 116),
+                (9, 0x1, 1),
+            ]
+        );
+        assert_eq!(cat.race_name(9), Some("Goblin"), "every row is kept");
+        assert_eq!(cat.class_list(3), [1, 2, 3, 4, 5], "no Dwarf Mage");
+        assert_eq!(cat.class_list(8), [1, 3, 4, 5, 7, 8]);
+        assert!(cat.class_list(9).is_empty());
+        let gen = cat.name_gen();
+        assert_eq!(gen.len(), 1405);
+        assert_eq!(
+            (gen[0].name.as_str(), gen[0].race, gen[0].sex),
+            ("Agamand", 1, 0)
+        );
+        assert!(gen
+            .windows(2)
+            .all(|w| (w[0].race, w[0].sex) <= (w[1].race, w[1].sex)));
     }
 
     #[test]

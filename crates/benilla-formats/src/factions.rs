@@ -205,6 +205,15 @@ impl Reaction {
     }
 }
 
+/// One `FactionGroup.dbc` row: its bit index (`+0x4`), `InternalName` (`+0x8`) and localized
+/// `Name_Lang` (`+0xc`), each string empty where the row's is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FactionGroupRow {
+    pub mask_id: u32,
+    pub internal: String,
+    pub name: String,
+}
+
 /// `FactionTemplate.dbc`, `Faction.dbc` and `FactionGroup.dbc` as id-to-row maps, and each
 /// `ChrRaces.dbc` race's template.
 pub struct FactionCatalog {
@@ -218,6 +227,9 @@ pub struct FactionCatalog {
     /// The same key to `InternalName` (field 2), English on every locale: `UnitFactionGroup`'s
     /// first return, which stock FrameXML concatenates into texture paths (`PlayerFrame.lua:68`).
     group_internal_names: HashMap<u32, String>,
+    /// `FactionGroup.dbc`'s rows in file order, as the create screen walks them (`0x4704b8`,
+    /// `0x471499`).
+    groups: Vec<FactionGroupRow>,
     /// Faction id to localized name, for the item tooltip's "Requires <Faction> - <Standing>".
     names: HashMap<u32, String>,
     /// Faction id to localized description, the reputation pane's detail paragraph; most have none.
@@ -237,6 +249,7 @@ impl FactionCatalog {
             factions: HashMap::new(),
             group_names: HashMap::new(),
             group_internal_names: HashMap::new(),
+            groups: Vec::new(),
             names: HashMap::new(),
             descriptions: HashMap::new(),
         }
@@ -299,6 +312,11 @@ impl FactionCatalog {
             .filter(|bit| mask & bit != 0)
             .find_map(|bit| self.group_names.get(&bit))
             .map(String::as_str)
+    }
+
+    /// `FactionGroup.dbc`'s rows in file order.
+    pub fn faction_groups(&self) -> &[FactionGroupRow] {
+        &self.groups
     }
 
     /// Number of template rows.
@@ -454,6 +472,17 @@ pub fn load_faction_catalog(chain: &mut Chain) -> Result<FactionCatalog> {
     let rs = parse(&bytes, faction_group_schema(), "FactionGroup")?;
     let mut group_names = HashMap::with_capacity(rs.records().len());
     let mut group_internal_names = HashMap::with_capacity(rs.records().len());
+    let groups = rs
+        .records()
+        .iter()
+        .filter_map(|r| {
+            Some(FactionGroupRow {
+                mask_id: u32_at(r, 1)?,
+                internal: crate::dbc::str_at(&rs, r, 2).unwrap_or_default(),
+                name: crate::dbc::str_at(&rs, r, 3).unwrap_or_default(),
+            })
+        })
+        .collect();
     for r in rs.records() {
         let (Some(mask_id), Some(name)) = (u32_at(r, 1), crate::dbc::str_at(&rs, r, 3)) else {
             continue;
@@ -481,6 +510,7 @@ pub fn load_faction_catalog(chain: &mut Chain) -> Result<FactionCatalog> {
         factions,
         group_names,
         group_internal_names,
+        groups,
         names,
         descriptions,
     })
@@ -696,6 +726,21 @@ mod tests {
         assert_eq!(cat.faction_group_name(2), Some("Alliance"));
         assert_eq!(cat.faction_group_name(4), Some("Horde"));
         assert_eq!(cat.faction_group_name(0), None);
+        // The rows in file order, `Player` (bit 0, no name) first.
+        let groups: Vec<(u32, &str, &str)> = cat
+            .faction_groups()
+            .iter()
+            .map(|g| (g.mask_id, g.internal.as_str(), g.name.as_str()))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                (0, "Player", ""),
+                (1, "Alliance", "Alliance"),
+                (2, "Horde", "Horde"),
+                (3, "Monster", "")
+            ]
+        );
     }
 
     #[test]
