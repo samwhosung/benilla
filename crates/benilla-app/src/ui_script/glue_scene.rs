@@ -9,6 +9,9 @@
 //! screen's (`0x472110`), which never fogs. The character is the select record the last
 //! `SelectCharacter` built and attached (`0x472950`), turned by the facing cell (`[0xb4217c]`,
 //! `SetCharacterSelectFacing`).
+//!
+//! The scene fills the pane at the pane's own aspect, as the reference frames it, and starts over
+//! with each `SetModel` instance; the pane's showing resets the glue glow (`0x46fa60`).
 
 use bevy::prelude::*;
 
@@ -52,6 +55,14 @@ fn stock_preview(
     (scene, look, yaw, fog)
 }
 
+/// What the feeder remembers between frames: the pane shown last, by VM session and frame, and
+/// the instance it held, numbered into [`GluePreview::stage`].
+#[derive(Default)]
+pub(crate) struct StockFeed {
+    shown: Option<(u64, benilla_ui::widget::FrameHandle)>,
+    instance: Option<(u64, benilla_ui::widget::FrameHandle, u64)>,
+}
+
 /// Feed the glue booth from the glue VM while the stock glue screens are up, and stand it down
 /// once they are not (the world entered, the VM gone).
 pub(crate) fn feed_stock_glue_preview(
@@ -59,17 +70,35 @@ pub(crate) fn feed_stock_glue_preview(
     mgr: Res<GlueMgr>,
     state: Option<Res<State<crate::char_select::ClientState>>>,
     mut preview: ResMut<GluePreview>,
+    mut feed: Local<StockFeed>,
 ) {
     let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let script = script.filter(|s| s.vm_kind() == VmKind::Glue && !in_world);
+    let pane = script.as_deref().and_then(|s| s.glue_scene());
     let (scene, look, yaw, fog) = match script.as_deref() {
         Some(s) => {
-            let pane = s.glue_scene();
             let standing = s.glue_standing_guid().and_then(|g| mgr.roster_character(g));
             stock_preview(pane.as_ref(), standing, s.glue_select_cells().facing)
         }
         None => (None, None, 0.0, None),
     };
+    let session = script.as_deref().map_or(0, UiScript::session);
+    // A pane that was not the one shown last frame has just shown: its OnShow (`0x46fa60`).
+    let shown = pane.as_ref().map(|p| (session, p.handle));
+    if shown.is_some() && shown != feed.shown {
+        preview.shown = preview.shown.wrapping_add(1);
+    }
+    feed.shown = shown;
+    // A new instance, or another pane's, is another scene.
+    let instance = pane.as_ref().map(|p| (session, p.handle, p.instance));
+    if instance.is_some() && instance != feed.instance {
+        feed.instance = instance;
+        preview.stage = preview.stage.wrapping_add(1);
+    }
+    let rect = pane.as_ref().and_then(|p| p.rect);
+    if preview.pane != rect {
+        preview.pane = rect;
+    }
     if preview.scene != scene {
         preview.scene = scene;
     }
@@ -88,11 +117,16 @@ pub(crate) fn feed_stock_glue_preview(
 mod tests {
     use super::*;
 
+    /// A shown pane's scene as a glue VM reads it, then given `path`, `select` and `fog`.
     fn pane(path: &str, select: bool, fog: Option<benilla_ui::widget::ModelFog>) -> GlueScenePane {
+        let s = UiScript::new_glue().unwrap();
+        s.run("CreateFrame('ModelFFX', 'Pane'):SetModel('x.mdx')")
+            .unwrap();
         GlueScenePane {
             path: path.into(),
             fog,
             select,
+            ..s.glue_scene().unwrap()
         }
     }
 
@@ -122,6 +156,27 @@ mod tests {
         let got = got.expect("fogged");
         assert_eq!((got.near, got.far), (0.0, 1200.0));
         assert_eq!(got.rgb, fog.rgb());
+    }
+
+    /// The stock login's pane is `GlueParent`'s rect, which fills the screen up to 16:9 and is a
+    /// centred 16:9 box past it (`GlueParent.lua:78-84`): the rect the scene is framed in.
+    #[test]
+    fn the_stock_pane_is_glue_parents_rect_at_every_aspect() {
+        let _ = benilla_formats::wow_data_or_skip!();
+        for aspect in [4.0 / 3.0, 16.0 / 10.0, 16.0 / 9.0, 21.0 / 9.0] {
+            let mut s = UiScript::new_glue().unwrap();
+            s.set_screen_size(768.0 * aspect, 768.0);
+            let _ = super::super::glue::load_glue(&mut s);
+            super::super::glue::set_glue_screen(&mut s, super::super::glue::GlueScreen::Login);
+            s.resolve();
+            let pane = s.glue_scene().expect("AccountLogin is shown");
+            assert!(pane.path.ends_with("UI_MainMenu.mdx"), "{}", pane.path);
+            let bar = ((aspect - 16.0 / 9.0) / (2.0 * aspect)).max(0.0);
+            let rect = pane.rect.expect("laid out");
+            for (got, want) in rect.iter().zip([bar, 1.0 - bar, 0.0, 1.0]) {
+                assert!((got - want).abs() < 1e-4, "{aspect}: {rect:?}");
+            }
+        }
     }
 
     #[test]

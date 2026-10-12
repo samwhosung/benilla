@@ -1633,7 +1633,10 @@ fn the_stock_login_stands_the_main_menu_in_the_glue_booth() {
 fn the_stock_select_stands_the_selected_character_at_the_cells_facing() {
     use crate::portrait::{GlueLook, GlueScene, SelectLook};
     let _ = benilla_formats::wow_data_or_skip!();
-    let roster = roster3();
+    let mut roster = roster3();
+    let mut dwarf = crate::char_select::test_character(0x14, "Delta");
+    (dwarf.race, dwarf.zone) = (3, 12);
+    roster.push(dwarf);
     let (mut app, _realmd, _world) = char_select_app(&roster, "1", false);
     until(&mut app, "the roster", |app| {
         seen(app, "CHARACTER_LIST_UPDATE") >= 2
@@ -1667,6 +1670,16 @@ fn the_stock_select_stands_the_selected_character_at_the_cells_facing() {
         Some(GlueScene::Dwarf),
         "a gnome stands in Dwarf's stage"
     );
+    // The dwarf after the gnome: the same stage, set again by its own file string, is a new
+    // instance (`0x76cce0`), so the scene starts over.
+    let gnome_stage = p.stage;
+    vm(&app).run("CharacterSelect_SelectCharacter(4)").unwrap();
+    app.update();
+    let p = preview(&app);
+    assert_eq!(p.scene, Some(GlueScene::Dwarf));
+    assert_ne!(p.stage, gnome_stage);
+    // The pane is GlueParent's, the whole 4:3 screen.
+    assert_eq!(p.pane, Some([0.0, 1.0, 0.0, 1.0]));
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
 }
 

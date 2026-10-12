@@ -170,18 +170,24 @@ pub(super) fn refresh_banner_and_buttons(
     }
 }
 
-/// The select scene's background as `CharacterSelect` holds it for the glue session: `None` while
-/// only its OnLoad has set the scene (`Model:SetModel(UI_Orc)` under Orc's fog,
-/// `CharacterSelect.lua:26-31`), else the stage `SetCharSelectBackground` last gave it for a
-/// selected character (`CharacterSelect.lua:341-344`), drawn unfogged (`0x472110` replaces the fog
-/// callback). An emptied roster selects nothing and calls neither, so the scene stays. The glue
-/// rebuild at world entry restores OnLoad's.
+/// The select scene's background as `CharacterSelect` holds it for the glue session: `race` is
+/// `None` while only its OnLoad has set the scene (`Model:SetModel(UI_Orc)` under Orc's fog,
+/// `CharacterSelect.lua:26-31`), else the race whose file string `SetBackgroundModel` last set
+/// (`CharacterSelect.lua:341-344`), drawn unfogged (`0x472110` replaces the fog callback). The
+/// call is keyed on the race's file string, not its stage, so a gnome after a dwarf loads the
+/// same stage again, a new instance whose scene starts over (`0x76cce0`): `stage` counts them. An
+/// emptied roster selects nothing and calls neither, so the scene stays. The glue rebuild at world
+/// entry restores OnLoad's.
 #[derive(Resource, Default)]
-pub(crate) struct SelectBackground(pub(super) Option<GlueScene>);
+pub(crate) struct SelectBackground {
+    pub(super) race: Option<u8>,
+    pub(super) stage: u64,
+}
 
-/// The glue rebuild (`0x46a7b0`) runs `CharacterSelect`'s OnLoad again.
+/// The glue rebuild (`0x46a7b0`) runs `CharacterSelect`'s OnLoad again, a new instance.
 pub(super) fn reset_select_background(mut background: ResMut<SelectBackground>) {
-    background.0 = None;
+    background.race = None;
+    background.stage = background.stage.wrapping_add(1);
 }
 
 /// Feed the glue booth: the scene is the selected character's stage (`SetBackgroundModel`),
@@ -201,18 +207,21 @@ pub(super) fn feed_glue_preview(
         preview.yaw = 0.0;
     }
     let look = roster.selected_char().map(|c| {
-        let stage = GlueScene::of_race(c.race);
-        if background.0 != Some(stage) {
-            background.0 = Some(stage);
+        if background.race != Some(c.race) {
+            background.race = Some(c.race);
+            background.stage = background.stage.wrapping_add(1);
         }
         GlueLook::Select(SelectLook::from(c))
     });
-    let (scene, fog) = match background.0 {
-        Some(stage) => (stage, None),
+    let (scene, fog) = match background.race {
+        Some(race) => (GlueScene::of_race(race), None),
         None => (GlueScene::Orc, Some(GlueScene::Orc.stock_fog())),
     };
     if preview.scene != Some(scene) {
         preview.scene = Some(scene);
+    }
+    if preview.stage != background.stage {
+        preview.stage = background.stage;
     }
     if preview.fog != fog {
         preview.fog = fog;
@@ -229,6 +238,12 @@ mod tests {
     /// #978: an empty roster's select scene is OnLoad's Orc under Orc's fog; a selected character
     /// sets its stage, unfogged, and that stage stays when the roster empties; the glue rebuild at
     /// world entry restores OnLoad's.
+    fn tauren_again() -> benilla_protocol::Character {
+        let mut c = crate::char_select::test_character(1, "Moo");
+        c.race = 6;
+        c
+    }
+
     #[test]
     fn the_select_scene_fogs_until_a_background_is_set_and_then_stays() {
         let mut app = App::new();
@@ -248,6 +263,50 @@ mod tests {
         {
             let mut roster = app.world_mut().resource_mut::<Roster>();
             roster.chars = vec![tauren];
+            roster.select(Some(0));
+        }
+        app.update();
+        assert_eq!(shown(&app), (Some(GlueScene::Tauren), None, true));
+
+        // A gnome after a dwarf: the same stage, set again, starts over (`0x76cce0`).
+        let stage = |app: &App| app.world().resource::<GluePreview>().stage;
+        let mut dwarf = crate::char_select::test_character(2, "Stone");
+        dwarf.race = 3;
+        let mut gnome = crate::char_select::test_character(3, "Cog");
+        gnome.race = 7;
+        let first = stage(&app);
+        for (c, row) in [(dwarf, 0), (gnome, 1)] {
+            let before = stage(&app);
+            {
+                let mut roster = app.world_mut().resource_mut::<Roster>();
+                roster.chars.insert(row, c);
+                roster.select(Some(row));
+            }
+            app.update();
+            assert_eq!(shown(&app).0, Some(GlueScene::Dwarf));
+            assert_ne!(
+                stage(&app),
+                before,
+                "a new race's background is a new instance"
+            );
+        }
+        // Back to the dwarf, then the same row again: only a race change makes one.
+        {
+            let mut roster = app.world_mut().resource_mut::<Roster>();
+            roster.select(Some(0));
+        }
+        app.update();
+        let dwarf_again = stage(&app);
+        assert!(dwarf_again != first);
+        {
+            let mut roster = app.world_mut().resource_mut::<Roster>();
+            roster.select(Some(0));
+        }
+        app.update();
+        assert_eq!(stage(&app), dwarf_again);
+        {
+            let mut roster = app.world_mut().resource_mut::<Roster>();
+            roster.chars = vec![tauren_again()];
             roster.select(Some(0));
         }
         app.update();

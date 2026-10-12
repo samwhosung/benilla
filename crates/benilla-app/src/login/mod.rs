@@ -793,6 +793,8 @@ fn show_main_menu(mut preview: ResMut<GluePreview>) {
     preview.look = None;
     preview.yaw = 0.0;
     preview.fog = Some(GlueScene::MainMenu.stock_fog());
+    // `AccountLogin`'s OnShow (`0x46fa60`).
+    preview.shown = preview.shown.wrapping_add(1);
 }
 
 /// The screen's input: typing, Tab, Enter submits, Esc quits (an open dialog takes it first),

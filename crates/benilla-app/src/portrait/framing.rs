@@ -43,6 +43,10 @@ pub(super) use benilla_formats::{ArtExtent, GLUE_AUTHORED_ASPECT};
 /// about 3:2. Below 4/3 the authored horizontal extent holds and the view opens upward, up to the
 /// art's `half_h` but never inside the authored box. Continuous at 4/3, where both legs give
 /// `0.6·fov`. A `<PlayerModel>` pane is not the window and keeps its verbatim crop.
+///
+/// The Deviation is the native glue screens' alone. Under the stock screens `GlueParent` caps
+/// every glue screen at 16:9 (`GlueParent.lua:78-84`), so the crop it answers cannot arise, and
+/// the scene is framed as the reference frames it ([`stock_pane_view`]).
 pub(super) fn glue_scene_framing(fov: f32, window_aspect: f32, art: Option<ArtExtent>) -> f32 {
     let authored = diag_to_vert(fov, GLUE_AUTHORED_ASPECT);
     if window_aspect <= 0.0 {
@@ -62,6 +66,36 @@ pub(super) fn glue_scene_framing(fov: f32, window_aspect: f32, art: Option<ArtEx
         let ceiling = art.map_or(f32::INFINITY, |a| a.half_h.max(t0));
         2.0 * (h0 / window_aspect).min(ceiling).atan()
     }
+}
+
+/// A stock glue `ModelFFX` pane's view of its scene, in the booth's window-sized target.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) struct PaneView {
+    /// The viewport, the pane's rect in physical pixels (`0x76d5d7`).
+    pub(super) position: UVec2,
+    pub(super) size: UVec2,
+    /// The projection's aspect, the viewport's `w/h` (`0x7ada40`), which also turns the camera
+    /// record's diagonal fov into the vertical opening (`0x5c3cc0`, [`diag_to_vert`]).
+    pub(super) aspect: f32,
+}
+
+/// The view of a stock pane whose rect is `pane`, `[left, right, top, bottom]` as fractions of a
+/// `full_w`×`full_h` window from its top-left: the scene fills the pane at the pane's own aspect,
+/// with no box of its own. `None` for an empty rect.
+pub(super) fn stock_pane_view(full_w: u32, full_h: u32, pane: [f32; 4]) -> Option<PaneView> {
+    let [l, r, t, b] = pane;
+    let px = |f: f32, full: u32| (f.clamp(0.0, 1.0) * full as f32).round() as u32;
+    let (x0, x1) = (px(l, full_w), px(r, full_w));
+    let (y0, y1) = (px(t, full_h), px(b, full_h));
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let size = UVec2::new(x1 - x0, y1 - y0);
+    Some(PaneView {
+        position: UVec2::new(x0, y0),
+        size,
+        aspect: size.x as f32 / size.y as f32,
+    })
 }
 
 /// The pillarbox aspect for a window: `Some(GLUE_BOX_ASPECT)` when the window is wider, else

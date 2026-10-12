@@ -17,7 +17,7 @@ use benilla_assets::materials::WowModelMaterial;
 
 use super::framing::{
     attachment_point, diag_to_vert, glue_box_aspect, glue_box_physical, glue_scene_framing,
-    ArtExtent, GLUE_AUTHORED_ASPECT, PORTRAIT_ASPECT,
+    stock_pane_view, ArtExtent, GLUE_AUTHORED_ASPECT, PORTRAIT_ASPECT,
 };
 use super::{
     aim, body_frame, new_target_image, spawn_booth_effects, spawn_booth_model, Booth,
@@ -224,6 +224,15 @@ pub(crate) struct GluePreview {
     pub(crate) look: Option<GlueLook>,
     pub(crate) yaw: f32,
     pub(crate) fog: Option<SceneFog>,
+    /// The stock screens' pane the scene fills, `[left, right, top, bottom]` as window fractions
+    /// from the top-left ([`super::framing::stock_pane_view`]); `None` frames the native way.
+    pub(crate) pane: Option<[f32; 4]>,
+    /// The stage's instance: a change starts the scene over, as each `SetModel` makes a new
+    /// instance (`0x76cce0`), the same file included.
+    pub(crate) stage: u64,
+    /// Bumped as a glue screen's scene shows: the `ModelFFX`'s OnShow pins the glow back to
+    /// 0.30 (`0x46fa60`), which nothing else does ([`sync_glue_ffx`]).
+    pub(crate) shown: u64,
 }
 
 impl Default for GluePreview {
@@ -233,6 +242,9 @@ impl Default for GluePreview {
             look: None,
             yaw: 0.0,
             fog: None,
+            pane: None,
+            stage: 0,
+            shown: 0,
         }
     }
 }
@@ -262,9 +274,10 @@ pub(crate) struct CreateScene {
     /// The shipped scene's art extent ([`benilla_formats::shipped_glue_art_extent`]): caps how far
     /// [`glue_scene_framing`] opens upward on a narrow window. `None` with no scene.
     art: Option<ArtExtent>,
-    /// `Some(aspect)` while the window is wider than [`super::framing::GLUE_BOX_ASPECT`]: the
-    /// camera renders into a centred viewport of this aspect ([`pillarbox_glue_scene`]). Set from
-    /// the window, not the scene, so the chrome's canvas never moves on a race change.
+    /// `Some(aspect)` while the window is wider than [`super::framing::GLUE_BOX_ASPECT`] under the
+    /// native screens: the camera renders into a centred viewport of this aspect
+    /// ([`pillarbox_glue_scene`]); a stock pane is its own viewport. Set from the window, not the
+    /// scene, so the chrome's canvas never moves on a race change.
     viewport_aspect: Option<f32>,
     /// The character's stage spot, scene attachment 0 in Bevy model space (`ZERO` with no scene);
     /// the body seats on attachment 0 at select too (`0x473039`).
@@ -285,6 +298,8 @@ pub(crate) struct CreateScene {
     pet_baked: Option<u64>,
     /// The fog the spawn wrote; the scene rebuilds when it changes.
     fog: Option<SceneFog>,
+    /// The [`GluePreview::stage`] the spawn stood; the scene rebuilds when it changes.
+    stage: u64,
     /// Whether the buffer holds the ghost rig ([`ghost_rig`]); a flip rewrites the buffer in
     /// place, like the reference's per-frame fill callback, so the stage's emitters keep running.
     ghost: bool,
@@ -296,6 +311,36 @@ pub(crate) struct CreateScene {
     rev: u64,
     /// The requested stage not yet committed ([`PendingSwap`]).
     pending: Option<PendingSwap>,
+}
+
+impl CreateScene {
+    /// No scene up, over its two roots.
+    fn empty(root: Entity, pet_root: Entity) -> Self {
+        CreateScene {
+            root,
+            token: None,
+            handle: None,
+            spawned: false,
+            cam: None,
+            art: None,
+            viewport_aspect: None,
+            char_spot: Vec3::ZERO,
+            char_facing: Quat::IDENTITY,
+            char_scale: 1.0,
+            pet_root,
+            pet_spot: Vec3::ZERO,
+            pet_facing: Quat::IDENTITY,
+            pet_stage_scale: 1.0,
+            pet_baked: None,
+            fog: None,
+            stage: 0,
+            ghost: false,
+            light: None,
+            variants: default(),
+            rev: 0,
+            pending: None,
+        }
+    }
 }
 
 /// A requested stage swap, held until both halves are ready. The scene M2 and the character's
@@ -586,29 +631,7 @@ pub(super) fn spawn_glue_booth(
     let pet_root = commands
         .spawn((Transform::IDENTITY, Visibility::Visible, layer))
         .id();
-    commands.insert_resource(CreateScene {
-        root: scene_root,
-        token: None,
-        handle: None,
-        spawned: false,
-        cam: None,
-        art: None,
-        viewport_aspect: None,
-        char_spot: Vec3::ZERO,
-        char_facing: Quat::IDENTITY,
-        char_scale: 1.0,
-        pet_root,
-        pet_spot: Vec3::ZERO,
-        pet_facing: Quat::IDENTITY,
-        pet_stage_scale: 1.0,
-        pet_baked: None,
-        fog: None,
-        ghost: false,
-        light: None,
-        variants: default(),
-        rev: 0,
-        pending: None,
-    });
+    commands.insert_resource(CreateScene::empty(scene_root, pet_root));
 }
 
 /// Drive the glue FFX state ([`benilla_world::ffx_glow::GlueFfx`]) off the live look: the pass
@@ -616,29 +639,45 @@ pub(super) fn spawn_glue_booth(
 ///
 /// | look | reference | pass | glow |
 /// |---|---|---|---|
-/// | none (login, empty account) | `CSimpleModelFFX::OnShow 0x46fa60` | glow | `*0x8380b4` 0.30 |
+/// | none, from the show (login) | `CSimpleModelFFX::OnShow 0x46fa60` | glow | `*0x8380b4` 0.30 |
 /// | a create look | same, no select build runs | glow | 0.30 |
 /// | a living select record | `0x472ff7`/`0x473002` | glow | `*0x838574` 0.40 |
 /// | a ghost select record | `0x472fde`/`0x472fe9` | death | `*0x838570` 0.15 |
 ///
-/// An empty account is the OnShow state: `0x472950` is gated `-1 ≤ [0x83856c] < [0xb42140]`.
+/// Only the OnShow and a select build write it. A select scene with nobody standing keeps what
+/// the last build wrote: the list ask (`0x4723d0`), the teardown (`0x472580`) and the load
+/// (`0x4724d0`) never touch it, and an empty account's build exits before it (`0x472950` is gated
+/// `-1 ≤ [0x83856c] < [0xb42140]`). The screen's show ([`GluePreview::shown`]) puts it back.
 pub(super) fn sync_glue_ffx(
     preview: Res<GluePreview>,
     mut ffx: ResMut<benilla_world::ffx_glow::GlueFfx>,
+    mut shown: Local<Option<u64>>,
 ) {
-    use benilla_world::ffx_glow::GlueFfx;
-    let want = match preview.look {
-        Some(GlueLook::Select(l)) => {
-            if l.flags & benilla_protocol::CHARACTER_FLAG_GHOST != 0 {
-                GlueFfx::SelectGhost
-            } else {
-                GlueFfx::SelectLiving
-            }
-        }
-        Some(GlueLook::Create(_)) | None => GlueFfx::Shown,
+    let held = if *shown != Some(preview.shown) {
+        *shown = Some(preview.shown);
+        benilla_world::ffx_glow::GlueFfx::Shown
+    } else {
+        *ffx
     };
+    let want = glue_ffx(preview.look.as_ref(), held);
     if *ffx != want {
         *ffx = want;
+    }
+}
+
+/// The glue FFX state a look leaves, over `held`, the state before it ([`sync_glue_ffx`]).
+fn glue_ffx(
+    look: Option<&GlueLook>,
+    held: benilla_world::ffx_glow::GlueFfx,
+) -> benilla_world::ffx_glow::GlueFfx {
+    use benilla_world::ffx_glow::GlueFfx;
+    match look {
+        Some(GlueLook::Select(l)) if l.flags & benilla_protocol::CHARACTER_FLAG_GHOST != 0 => {
+            GlueFfx::SelectGhost
+        }
+        Some(GlueLook::Select(_)) => GlueFfx::SelectLiving,
+        Some(GlueLook::Create(_)) => GlueFfx::Shown,
+        None => held,
     }
 }
 
@@ -720,7 +759,9 @@ pub(super) fn sync_glue_scene(
             w.physical_width().max(1),
             w.physical_height().max(1),
         );
-        let box_aspect = glue_box_aspect(w.width() / w.height().max(1.0));
+        // A stock pane is its own frame ([`pillarbox_glue_scene`]).
+        let box_aspect =
+            glue_box_aspect(w.width() / w.height().max(1.0)).filter(|_| preview.pane.is_none());
         if scene.viewport_aspect != box_aspect {
             scene.viewport_aspect = box_aspect;
         }
@@ -777,8 +818,9 @@ pub(super) fn sync_glue_scene(
         commands.entity(scene.root).despawn_related::<Children>();
         // The model may still be loading: strip the old rig state off the root now.
         super::clear_booth_rig(&mut commands, scene.root);
-    } else if scene.spawned && scene.fog != fog {
-        // Same scene, other screen: rebuild in place (the handle is cached, so it respawns now).
+    } else if scene.spawned && (scene.fog != fog || scene.stage != preview.stage) {
+        // Same scene, other screen or a new instance of it: rebuild in place (the handle is
+        // cached, so it respawns now).
         scene.spawned = false;
         commands.entity(scene.root).despawn_related::<Children>();
     } else if scene.spawned && scene.ghost != ghost {
@@ -839,6 +881,7 @@ pub(super) fn sync_glue_scene(
         anim_mirrors.0.insert("glue_scene", light.clone());
         blob.write(&queue, &light);
         scene.fog = fog;
+        scene.stage = preview.stage;
         scene.ghost = ghost;
         let dc = blob.probe_dc();
         info!(
@@ -1009,10 +1052,15 @@ pub(super) fn sync_glue_scene(
             .unwrap_or(4.0 / 3.0);
         let fwd = (cam.target - cam.eye).normalize_or_zero();
         let up = Quat::from_axis_angle(fwd, cam.roll) * Vec3::Y;
-        // The record fov is diagonal; [`glue_scene_framing`] holds the authored 4:3 view box
-        // where the reference converts at the display's aspect (the Deviation is stated there).
-        // Far is kept generous (27.8 authored on Orc).
-        let vert_fov = glue_scene_framing(cam.fov, aspect, scene.art);
+        // The record fov is diagonal. A stock pane converts it at the pane's own aspect, as the
+        // reference does; the native screens' [`glue_scene_framing`] holds the authored 4:3 view
+        // box instead (the Deviation is stated there). Far is kept generous (27.8 authored on Orc).
+        let pane = window
+            .single()
+            .ok()
+            .zip(preview.pane)
+            .and_then(|(w, pane)| stock_pane_view(w.physical_width(), w.physical_height(), pane));
+        let vert_fov = scene_vert_fov(cam.fov, aspect, scene.art, pane);
         let rig = (
             Transform::from_translation(cam.eye).looking_at(cam.target, up),
             Projection::from(PerspectiveProjection {
@@ -1026,10 +1074,26 @@ pub(super) fn sync_glue_scene(
     }
 }
 
-/// Pillarbox the glue booth camera to [`CreateScene::viewport_aspect`], black either side;
-/// writes only on change.
+/// The scene camera's vertical opening for its record's diagonal `fov`: at a stock pane's own
+/// aspect by the reference's law (`0x5c3cc0`), else the native screens' [`glue_scene_framing`]
+/// for the window.
+fn scene_vert_fov(
+    fov: f32,
+    window_aspect: f32,
+    art: Option<ArtExtent>,
+    pane: Option<super::framing::PaneView>,
+) -> f32 {
+    match pane {
+        Some(view) => diag_to_vert(fov, view.aspect),
+        None => glue_scene_framing(fov, window_aspect, art),
+    }
+}
+
+/// Set the glue booth camera's viewport: a stock pane's rect ([`stock_pane_view`]), else the
+/// native pillarbox to [`CreateScene::viewport_aspect`], black either side; writes only on change.
 pub(super) fn pillarbox_glue_scene(
     scene: Res<CreateScene>,
+    preview: Res<GluePreview>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut cams: Query<(&BoothCam, &mut Camera)>,
 ) {
@@ -1037,15 +1101,23 @@ pub(super) fn pillarbox_glue_scene(
         return;
     };
     let full_h = w.physical_height().max(1);
-    // The same arithmetic the chrome's canvas insets by ([`glue_box_physical`]).
-    let viewport =
-        glue_box_physical(w.physical_width(), full_h, scene.viewport_aspect).map(|(x, box_w)| {
-            bevy::camera::Viewport {
+    let viewport = match preview.pane {
+        Some(pane) => {
+            stock_pane_view(w.physical_width(), full_h, pane).map(|view| bevy::camera::Viewport {
+                physical_position: view.position,
+                physical_size: view.size,
+                ..default()
+            })
+        }
+        // The same arithmetic the chrome's canvas insets by ([`glue_box_physical`]).
+        None => glue_box_physical(w.physical_width(), full_h, scene.viewport_aspect).map(
+            |(x, box_w)| bevy::camera::Viewport {
                 physical_position: UVec2::new(x, 0),
                 physical_size: UVec2::new(box_w, full_h),
                 ..default()
-            }
-        });
+            },
+        ),
+    };
     for (booth, mut cam) in cams.iter_mut() {
         if booth.0 != GLUE_SLOT {
             continue;
@@ -1584,6 +1656,143 @@ mod tests {
     use super::*;
     use benilla_assets::ModelLight;
     use benilla_formats::M2Light;
+
+    /// `GlueParent`'s rect on a window of `aspect` (`GlueParent.lua:78-84`): the whole screen up to
+    /// 16:9, a centred 16:9 box past it; as window fractions from the top-left.
+    fn glue_parent(aspect: f32) -> [f32; 4] {
+        let bar = ((aspect - 16.0 / 9.0) / (2.0 * aspect)).max(0.0);
+        [bar, 1.0 - bar, 0.0, 1.0]
+    }
+
+    const WINDOWS: [(u32, u32); 4] = [(1024, 768), (1280, 800), (1920, 1080), (2560, 1080)];
+
+    /// Under the stock screens the scene fills the pane, `GlueParent`'s rect, at the pane's
+    /// aspect, `min(window, 16:9)`, through the diagonal law: no box inside it, and the only bars
+    /// are outside `GlueParent`, at 21:9.
+    #[test]
+    fn a_stock_pane_frames_the_scene_at_its_own_aspect() {
+        let fov = 1.0;
+        for (w, h) in WINDOWS {
+            let a = w as f32 / h as f32;
+            let view = super::super::framing::stock_pane_view(w, h, glue_parent(a)).unwrap();
+            let pane_w = (h as f32 * a.min(16.0 / 9.0)).round() as u32;
+            assert_eq!(view.size, UVec2::new(pane_w, h), "{w}x{h}");
+            assert_eq!(view.position, UVec2::new((w - pane_w) / 2, 0), "{w}x{h}");
+            let want = a.min(16.0 / 9.0);
+            assert!(
+                (view.aspect - want).abs() < 1e-3,
+                "{w}x{h}: {}",
+                view.aspect
+            );
+            let vert = scene_vert_fov(fov, a, None, Some(view));
+            let law = fov / (want * want + 1.0).sqrt();
+            assert!((vert - law).abs() < 1e-3, "{w}x{h}: {vert} vs {law}");
+        }
+        // Not the native screens' held box: at 16:10 that opens wider than the law.
+        let native = scene_vert_fov(fov, 1.6, None, None);
+        assert!((native - fov / (1.6f32 * 1.6 + 1.0).sqrt()).abs() > 1e-2);
+    }
+
+    /// The booth camera's viewport is the stock pane's rect, no pillarbox inside it; the native
+    /// screens keep their pillarbox past [`super::super::framing::GLUE_BOX_ASPECT`].
+    #[test]
+    fn the_viewport_is_the_stock_pane_and_the_native_box_otherwise() {
+        for stock in [true, false] {
+            for (w, h) in WINDOWS {
+                let a = w as f32 / h as f32;
+                let mut app = App::new();
+                let root = app.world_mut().spawn_empty().id();
+                let pet = app.world_mut().spawn_empty().id();
+                let mut scene = CreateScene::empty(root, pet);
+                scene.viewport_aspect = glue_box_aspect(a).filter(|_| !stock);
+                let preview = GluePreview {
+                    pane: stock.then(|| glue_parent(a)),
+                    ..GluePreview::default()
+                };
+                app.insert_resource(scene)
+                    .insert_resource(preview)
+                    .add_systems(Update, pillarbox_glue_scene);
+                app.world_mut().spawn((
+                    Window {
+                        resolution: UVec2::new(w, h).into(),
+                        ..default()
+                    },
+                    PrimaryWindow,
+                ));
+                let cam = app
+                    .world_mut()
+                    .spawn((BoothCam(GLUE_SLOT.to_string()), Camera::default()))
+                    .id();
+                app.update();
+                let vp = app
+                    .world()
+                    .get::<Camera>(cam)
+                    .unwrap()
+                    .viewport
+                    .clone()
+                    .map(|v| (v.physical_position, v.physical_size));
+                let want = if stock {
+                    let view = super::super::framing::stock_pane_view(w, h, glue_parent(a));
+                    view.map(|v| (v.position, v.size))
+                } else {
+                    glue_box_physical(w, h, glue_box_aspect(a))
+                        .map(|(x, bw)| (UVec2::new(x, 0), UVec2::new(bw, h)))
+                };
+                assert_eq!(vp, want, "stock {stock} {w}x{h}");
+                if stock && a <= 16.0 / 9.0 {
+                    assert_eq!(
+                        vp,
+                        Some((UVec2::ZERO, UVec2::new(w, h))),
+                        "no bars at {w}x{h}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The glow a look leaves: a select build writes its own, and nobody standing keeps what the
+    /// last build wrote until the screen's show puts the OnShow 0.30 back.
+    #[test]
+    fn an_empty_select_holds_the_last_builds_glow_until_the_screen_shows() {
+        use benilla_world::ffx_glow::GlueFfx;
+        let mut app = App::new();
+        app.init_resource::<GluePreview>()
+            .init_resource::<GlueFfx>()
+            .add_systems(Update, sync_glue_ffx);
+        let mut ghost = benilla_protocol::Character {
+            flags: benilla_protocol::CHARACTER_FLAG_GHOST,
+            ..crate::char_select::test_character(1, "Boo")
+        };
+        let set = |app: &mut App, look: Option<GlueLook>, show: bool| {
+            let mut p = app.world_mut().resource_mut::<GluePreview>();
+            p.look = look;
+            if show {
+                p.shown += 1;
+            }
+            drop(p);
+            app.update();
+            *app.world().resource::<GlueFfx>()
+        };
+        assert_eq!(set(&mut app, None, true), GlueFfx::Shown);
+        let ghost_look = GlueLook::Select(SelectLook::from(&ghost));
+        assert_eq!(set(&mut app, Some(ghost_look), false), GlueFfx::SelectGhost);
+        assert_eq!(
+            set(&mut app, None, false),
+            GlueFfx::SelectGhost,
+            "a reload keeps it"
+        );
+        ghost.flags = 0;
+        let living = GlueLook::Select(SelectLook::from(&ghost));
+        assert_eq!(set(&mut app, Some(living), false), GlueFfx::SelectLiving);
+        assert_eq!(set(&mut app, None, false), GlueFfx::SelectLiving);
+        assert_eq!(
+            set(&mut app, None, true),
+            GlueFfx::Shown,
+            "the show puts 0.30 back"
+        );
+        // A build in the show's own frame wins: it runs after the OnShow.
+        assert_eq!(set(&mut app, Some(living), true), GlueFfx::SelectLiving);
+    }
 
     /// A scene is its model's token, from the path the glue screens give the pane in any case or
     /// extension; `SetBackgroundModel`'s race remap lands on the same scenes.

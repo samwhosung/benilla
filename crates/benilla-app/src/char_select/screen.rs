@@ -75,6 +75,8 @@ const ROW_PITCH: f32 = 57.0;
 pub(super) fn enter_select(mut preview: ResMut<GluePreview>) {
     // The model faces the camera on entry: the reference's facing global defaults to zero.
     preview.yaw = 0.0;
+    // `CharacterSelect`'s OnShow (`0x46fa60`).
+    preview.shown = preview.shown.wrapping_add(1);
 }
 
 /// Spawn the screen tree once the art is loaded, respawn it when art lands after an artless spawn
