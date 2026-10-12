@@ -719,6 +719,7 @@ fn resolve_slot(
         });
     };
     Some(ContainerSlot {
+        use_fork: super::drain::use_fork(&t, flags, fields.item_text_id().unwrap_or(0)),
         item_class: Some(t.class),
         // A charter's guild name and master, keyed by the petition id the server puts in
         // enchantment slot 0 (`PetitionsHandler.cpp:126`), where the reference reads it

@@ -43,8 +43,8 @@ pub enum ScriptCall {
     CastShapeshiftForm(u32),
     /// `UseAction(slot, …)` (`0x4e7140` → `0x4e5ee0`); a macro slot runs its lines inside it.
     UseAction(ActionUse),
-    /// `UseContainerItem(bag, slot)` outside repair mode.
-    UseContainerItem { bag: i64, slot: u32 },
+    /// `UseContainerItem(bag, slot)` outside repair mode, its arm chosen and locked in the call.
+    UseContainerItem(super::ContainerUse),
     /// `UseInventoryItem(id)` outside repair mode.
     UseInventoryItem(u32),
     /// `CastPetAction(slot)`, a 1-based pet bar slot.

@@ -24,11 +24,11 @@ pub(crate) mod feed;
 pub(crate) mod locks;
 mod net;
 
-pub(crate) use drain::send_auto_equip;
 use drain::{
     drain_bag_autostores, drain_container_autoequips, drain_container_destroys,
     drain_container_moves, drain_container_repairs,
 };
+pub(crate) use drain::{send_auto_equip, AutoEquipSent};
 // `UseContainerItem` and `UseInventoryItem`, applied in call order by `crate::script_calls`.
 pub(crate) use drain::ScriptItemUse;
 use feed::{
@@ -629,9 +629,11 @@ pub(crate) fn item_use_route(
     }
 }
 
-/// `CGItem::Use`'s first gate (`0x5d8d32`): a locked item is refused, silently. Its callers each
-/// ask it: the doll (`0x4c7af0`), the bar (`0x4e607b`), the bag (`0x4fa430`, behind
-/// `UseContainerItem`'s own `0x4fa1cd`) and the bind-on-use confirm (`0x5d92c1`).
+/// `CGItem::Use`'s first gate (`0x5d8d32`): a locked item is refused, silently. Of its callers the
+/// doll (`0x4c7af0`) and the bag (`0x4fa430`, behind `UseContainerItem`'s own `0x4fa1cd`) are
+/// refused in their Lua call and the bar (`0x4e607b`) against the locks its call read
+/// ([`benilla_ui::script::ActionUse`]); the soulstone (`0x48ae7d`) and the bind-on-use confirm
+/// (`0x5d92c1`) ask here.
 pub(crate) fn item_use_refused(script: &benilla_ui::script::UiScript, guid: Option<u64>) -> bool {
     guid.is_some_and(|g| script.item_locked(g))
 }
@@ -782,9 +784,6 @@ pub(super) fn item_link(item_id: u32, name: &str, quality: u32) -> String {
     item_link_full(item_id, 0, 0, 0, name, quality)
 }
 
-/// `INVTYPE_AMMO`: loaded with `CMSG_SET_AMMO`, not the equip swap.
-pub(super) const INVTYPE_AMMO: u32 = 24;
-
 /// `ITEM_CLASS_PROJECTILE`, the template class `UseContainerItem` leaves unlocked (`0x4fa40b`).
 pub(super) const ITEM_CLASS_PROJECTILE: u32 = 6;
 
@@ -850,7 +849,7 @@ pub(super) fn find_equip_slot(inventory_type: u32, has_relic_slot: bool) -> Vec<
         21 => vec![MAINHAND],                  // INVTYPE_WEAPONMAINHAND
         22 => vec![OFFHAND],                   // INVTYPE_WEAPONOFFHAND
         23 => vec![OFFHAND],                   // INVTYPE_HOLDABLE
-        24 => vec![AMMO],                      // INVTYPE_AMMO → the ammo slot (loaded via SET_AMMO)
+        24 => vec![AMMO],                      // INVTYPE_AMMO
         25 | 26 if !has_relic_slot => vec![RANGED], // INVTYPE_THROWN / INVTYPE_RANGEDRIGHT
         28 if has_relic_slot => vec![RANGED],  // INVTYPE_RELIC, the same slot
         // NON_EQUIP (0), QUIVER (27), a RANGED-slot type on the wrong side of the relic test, and

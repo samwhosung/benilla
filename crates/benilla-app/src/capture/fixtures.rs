@@ -1019,8 +1019,8 @@ pub(super) fn seed_ui_fixture(
             bow.inventory_type = 15;
             items.insert_template(93_013, Some(bow));
             let mut arrows = template("Rough Arrow", 0);
-            arrows.class = 6; // projectile: the ammo slot's icon and bag-summed count (200)
-            arrows.inventory_type = 24; // INVTYPE_AMMO: the equip drains' SET_AMMO fork
+            arrows.class = 6; // projectile: the ammo icon, the bag-summed count (200), SET_AMMO
+            arrows.inventory_type = 24; // INVTYPE_AMMO
             arrows.display_info_id = DISP_STONE;
             items.insert_template(93_012, Some(arrows));
 
@@ -1577,6 +1577,7 @@ fn seed_cooldown_filmstrip(
         slots.insert(
             slot,
             benilla_ui::script::ContainerSlot {
+                use_fork: Default::default(),
                 item_class: None,
                 petition: None,
                 durability: None,
@@ -1631,6 +1632,7 @@ fn seed_bag_window(
     };
     let slot = |disp: u32, count: u32, id: u32, name: &str, quality: u32| {
         benilla_ui::script::ContainerSlot {
+            use_fork: Default::default(),
             item_class: None,
             petition: None,
             durability: None,
@@ -1719,6 +1721,7 @@ fn seed_equipped_bags(
     };
     let slot =
         |disp: u32, count: u32, name: &str, quality: u32| benilla_ui::script::ContainerSlot {
+            use_fork: Default::default(),
             item_class: None,
             petition: None,
             durability: None,

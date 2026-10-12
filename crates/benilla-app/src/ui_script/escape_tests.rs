@@ -12,6 +12,7 @@ fn one_item_backpack() -> ContainerState {
     slots.insert(
         1,
         ContainerSlot {
+            use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
             petition: None,
@@ -254,6 +255,7 @@ fn escape_closes_an_open_stack_split_frame() {
     slots.insert(
         1,
         ContainerSlot {
+            use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
             petition: None,

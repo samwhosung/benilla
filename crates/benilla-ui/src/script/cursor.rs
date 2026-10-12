@@ -417,6 +417,10 @@ pub(crate) fn raise_lock_changed(model: &mut Model) {
     model.raise("ITEM_LOCK_CHANGED", Vec::new());
 }
 
+/// `ITEM_CLASS_PROJECTILE`, the template class `0x5d9f30` reads: a projectile auto-equips by
+/// entry and unlocks as it goes (`0x5e1704`).
+pub(crate) const ITEM_CLASS_PROJECTILE: u32 = 6;
+
 /// `LockItem` (`0x4953e0`): the client's lock on item `guid`, bit 0 of `item+0x314`
 /// (`0x495409`), with its `ITEM_LOCK_CHANGED` (`0x495415`); a zero guid does nothing
 /// (`0x4953ed`). A pickup, a destination a send will fill, a destroy and the app's sends set it;
@@ -968,6 +972,7 @@ mod tests {
         slots.insert(
             1,
             crate::script::container::ContainerSlot {
+                use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
                 petition: None,

@@ -61,8 +61,8 @@ pub(crate) fn apply_script_calls(
                     appliers.p7().attack_target();
                 }
             }
-            ScriptCall::UseContainerItem { bag, slot } => {
-                appliers.p5().use_container_item(script, bag, slot);
+            ScriptCall::UseContainerItem(call) => {
+                appliers.p5().use_container_item(script, call);
             }
             ScriptCall::UseInventoryItem(id) => appliers.p5().use_inventory_item(script, id),
             ScriptCall::CastPetSpell { spell_id, on_self } => {
@@ -836,12 +836,134 @@ mod tests {
             .is_empty());
     }
 
+    const POTION: u64 = 0x4000_0000_0000_0f07;
+    const POTION_ENTRY: u32 = 929;
+
+    /// Backpack slot 1 holds `POTION`, of a template `t` makes, and bar slot 1 names its entry;
+    /// the VM's backpack shows the slot as the container feed pushes it.
+    fn with_potion(f: &mut Frame, t: benilla_protocol::messages::ItemInfo) {
+        let world = f.app.world_mut();
+        let me = world.resource::<GuidIndex>().0[&ME];
+        world
+            .entity_mut(me)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (22, 100),
+                (28, 100),
+                (46, 0x8),
+                (532, POTION as u32),
+                (533, (POTION >> 32) as u32),
+            ])));
+        crate::items::test_spawn_item(
+            world,
+            POTION,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, POTION_ENTRY)]),
+            false,
+        );
+        world
+            .resource_mut::<crate::items::Items>()
+            .insert_template(POTION_ENTRY, Some(t));
+        world
+            .resource_mut::<crate::ui_action::PlayerActions>()
+            .buttons
+            .insert(
+                0,
+                ActionButton {
+                    slot: 0,
+                    action: POTION_ENTRY,
+                    kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+                },
+            );
+        world.non_send_resource_mut::<UiScript>().set_container(
+            0,
+            Some(benilla_ui::script::ContainerState {
+                num_slots: 16,
+                slots: std::collections::HashMap::from([(
+                    1,
+                    benilla_ui::script::ContainerSlot {
+                        item_id: POTION_ENTRY,
+                        count: 1,
+                        guid: POTION,
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            }),
+        );
+        let _ = f.rx.try_iter().count();
+    }
+
+    /// The bar's item use tests its copy's lock inside the call (`0x4e607b` → `0x5d8d32`): a
+    /// pickup after it in the frame does not stop it, and one before it does, though the cursor
+    /// let the item go again before the frame applied the press.
+    #[test]
+    fn a_bar_item_use_reads_the_lock_as_its_call_found_it() {
+        let mut f = frame(false);
+        with_potion(
+            &mut f,
+            benilla_protocol::messages::ItemInfo {
+                start_quest: 42,
+                ..crate::items::test_template("Questing Potion")
+            },
+        );
+        run(&mut f, "UseAction(1) PickupContainerItem(0, 1)");
+        assert!(
+            f.rx.try_iter().count() > 0,
+            "the use goes out; the pickup came after its call"
+        );
+        run(
+            &mut f,
+            "ClearCursor() PickupContainerItem(0, 1) UseAction(1) ClearCursor()",
+        );
+        assert_eq!(
+            f.rx.try_iter().count(),
+            0,
+            "the copy was locked when the use was called"
+        );
+    }
+
+    /// The bar's equip arm (`0x4e602a` → `0x5e1840` → `0x5e1480`) loads a projectile with
+    /// `CMSG_SET_AMMO`, by its class (`0x5e16ff`, `0x5e1704`), and the arm's `ClearCursor(1,1)`
+    /// unlocks it, signalling `ITEM_LOCK_CHANGED` though nothing held it (`0x5e1763`).
+    #[test]
+    fn a_bar_projectile_loads_by_class_and_signals_its_unlock() {
+        let mut f = frame(false);
+        with_potion(
+            &mut f,
+            benilla_protocol::messages::ItemInfo {
+                class: 6,
+                inventory_type: 24,
+                ..crate::items::test_template("Rough Arrow")
+            },
+        );
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                "SIGNALS = 0 local f = CreateFrame('Frame') f:RegisterEvent('ITEM_LOCK_CHANGED') \
+                 f:SetScript('OnEvent', function() SIGNALS = SIGNALS + 1 end)",
+            )
+            .unwrap();
+        run(&mut f, "UseAction(1)");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        assert!(
+            sent.iter().any(|c| matches!(
+                c,
+                ClientCommand::SetAmmo {
+                    entry: POTION_ENTRY
+                }
+            )),
+            "{sent:?}"
+        );
+        let script = f.app.world().non_send_resource::<UiScript>();
+        assert_eq!(script.eval::<i64>("return SIGNALS").unwrap(), 1);
+        assert!(!script.item_locked(POTION));
+    }
+
     /// The bar's item use reaches `CGItem::Use` (`0x4e607b`), which refuses a locked copy first
     /// (`0x5d8d32`): nothing goes out until the lock lifts.
     #[test]
     fn a_bar_item_use_skips_a_locked_copy() {
-        const POTION: u64 = 0x4000_0000_0000_0f07;
-        const POTION_ENTRY: u32 = 929;
         let mut f = frame(false);
         {
             let world = f.app.world_mut();

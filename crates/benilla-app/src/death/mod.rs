@@ -483,7 +483,14 @@ fn drain_death(
                     )
                 }) {
                     Some(SelfRes::Spell { .. }) => net.0.send(ClientCommand::SelfRes),
-                    // An ordinary item use, `0x5d8d00`, like every bag click.
+                    // An ordinary item use, `0x5d8d00` (called at `0x48ae7d`), like every bag
+                    // click: a locked stone is refused at its first gate (`0x5d8d32`).
+                    Some(SelfRes::Item { guid, .. })
+                        if crate::ui_items::item_use_refused(&script, Some(guid)) =>
+                    {
+                        debug!("death: soulstone {guid:#x} is locked — refused");
+                        Ok(())
+                    }
                     Some(SelfRes::Item {
                         bag_index,
                         slot,
@@ -626,6 +633,87 @@ mod tests {
         assert_eq!(
             offer_announcement(&mut memo, &net, true, name).as_deref(),
             Some("Ptwo")
+        );
+    }
+
+    /// `UseSoulstone`'s item leg is `CGItem::Use` (`0x48ae7d`), whose first gate refuses a
+    /// locked item (`0x5d8d32`): the stone's use goes out only once the lock lifts.
+    #[test]
+    fn a_locked_soulstone_is_not_used() {
+        const STONE: u64 = 0x4000_0000_0000_5232;
+        const STONE_ENTRY: u32 = 5232;
+        const SELF_RES: u32 = 20707;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let world = app.world_mut();
+        // A dead player (health 0 of 100) with the stone in backpack slot 1.
+        world.spawn((
+            SelfPlayer,
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (22, 0),
+                (28, 100),
+                (532, STONE as u32),
+                (533, (STONE >> 32) as u32),
+            ])),
+        ));
+        crate::items::test_spawn_item(
+            world,
+            STONE,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, STONE_ENTRY)]),
+            false,
+        );
+        world.resource_mut::<crate::items::Items>().insert_template(
+            STONE_ENTRY,
+            Some(benilla_protocol::messages::ItemInfo {
+                spells: vec![benilla_protocol::messages::ItemSpellEntry {
+                    index: 0,
+                    spell_id: SELF_RES,
+                    trigger: 0,
+                    charges: -1,
+                    cooldown_ms: -1,
+                    category: 0,
+                    category_cooldown_ms: -1,
+                }],
+                // A quest-starter's arm sends with no cast ladder to satisfy.
+                start_quest: 42,
+                ..crate::items::test_template("Minor Soulstone")
+            }),
+        );
+        let display = benilla_formats::SpellDisplay {
+            effects: [SPELL_EFFECT_SELF_RESURRECT, 0, 0],
+            ..Default::default()
+        };
+        world.insert_resource(crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays([(SELF_RES, display)].into()),
+            ..crate::ui_action::Spells::empty_for_tests()
+        });
+        let mut script = UiScript::new().unwrap();
+        script.lock_item(STONE);
+        world.insert_non_send_resource(script);
+        let press = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run("UseSoulstone()")
+                .unwrap();
+            app.world_mut().run_system_once(drain_death).unwrap();
+        };
+        let _ = rx.try_iter().count();
+        press(&mut app);
+        assert_eq!(rx.try_iter().count(), 0, "a locked stone is not used");
+        assert!(app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .take_ui_errors()
+            .is_empty());
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .unlock_item(STONE);
+        press(&mut app);
+        assert!(
+            rx.try_iter().count() > 0,
+            "unlocked, the stone's use goes out"
         );
     }
 

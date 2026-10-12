@@ -200,8 +200,8 @@ pub use chat_send::ChatSend;
 pub use chat_types::ChatTypeColor;
 pub use chat_window::{message_group_index, ChatWindowLook, MESSAGE_GROUPS};
 pub use container::{
-    BagAutoStore, ContainerMove, ContainerSlot, ContainerState, EnchantView, PendingWrap,
-    PetitionSlotView, RandomPropertyView, UiCursorMode,
+    BagAutoStore, ContainerMove, ContainerSlot, ContainerState, ContainerUse, EnchantView,
+    PendingWrap, PetitionSlotView, RandomPropertyView, UiCursorMode, UseArm, UseFork,
 };
 pub use craft::{CraftReagent, CraftRecipe, CraftState, CraftTooltip};
 pub use cursor::money::coin_icon;

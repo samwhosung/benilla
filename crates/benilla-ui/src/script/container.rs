@@ -69,6 +69,58 @@ pub struct ContainerSlot {
     /// A signable charter's petition, printed between the name and the green `ITEM_SIGNABLE`
     /// line; `None` until the record the hover queries arrives.
     pub petition: Option<PetitionSlotView>,
+    /// The arm a right-click takes past the bank and vendor forks, which the app reads off the
+    /// item object and its template so `UseContainerItem` can take the arm's lock in the call.
+    pub use_fork: UseFork,
+}
+
+/// `UseContainerItem`'s arm past its bank and vendor forks: the equip fork (`0x4fa3b9`), else the
+/// use dispatcher `0x5d8d00`'s arms in its order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UseFork {
+    /// An equippable template (`0x5d9ff0`) whose `StartQuest` is 0 (`0x4fa3bd`) auto-equips.
+    Equip,
+    /// A wrapped gift unwraps with `CMSG_OPEN_ITEM` (`0x5d8d92`), taking no lock.
+    Unwrap,
+    /// Wrapping paper arms the wrap (`0x5edea0`), which locks the paper.
+    WrapPaper,
+    /// A quest-starter offers its quest (`0x5d8dd2`).
+    Quest,
+    /// A template `PageText` book opens the reader (`0x5d8e4c`).
+    Read,
+    /// A mail letter, the instance's `ITEM_FIELD_ITEM_TEXT_ID`, opens the reader.
+    Letter,
+    /// A lootable template sends `CMSG_OPEN_ITEM` (`0x5d8f7c`), locking the item first
+    /// (`0x5edcd9`).
+    Open,
+    /// The plain use, and a slot whose template is still in flight, which `0x5d9ff0` reads as
+    /// not equippable.
+    #[default]
+    Plain,
+}
+
+/// The arm a `UseContainerItem` call took, in `0x4fa0e0`'s order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UseArm {
+    /// A bank-vault or bank-bag item withdraws (`0x4fa305`), the bank flag the slot resolve sets
+    /// for bags -1 and 5..10 (`0x4f98b3`, `0x4f98fc`).
+    Withdraw,
+    /// Any other item deposits while a banker is open (`[0xbdd038]`, `0x4fa33e`).
+    Deposit,
+    /// With a vendor open (`[0xbddfa0]`) the whole stack sells (`0x4fa378`).
+    Sell,
+    /// The item's own fork.
+    Item(UseFork),
+}
+
+/// One `UseContainerItem` call past its gates: the slot, the item it resolved (`0x4fa1a6`) and
+/// the arm it took, whose lock the call has already taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContainerUse {
+    pub bag: i64,
+    pub slot: u32,
+    pub guid: u64,
+    pub arm: UseArm,
 }
 
 /// One enchant slot as the tooltip renders it (`0x52c9f9`..`0x52ca23`); the app resolves the row.
@@ -174,7 +226,7 @@ impl super::UiScript {
     /// Take the `UseContainerItem` calls out of the call stream, as `(bag, slot)`.
     pub fn take_container_uses(&mut self) -> Vec<(i64, u32)> {
         self.take_calls_where(|c| match c {
-            super::ScriptCall::UseContainerItem { bag, slot } => Some((*bag, *slot)),
+            super::ScriptCall::UseContainerItem(u) => Some((u.bag, u.slot)),
             _ => None,
         })
     }
@@ -204,16 +256,7 @@ impl super::UiScript {
     /// cursor takes mode 2 (the cast art, table `0x853b88`), and nothing is sent. The next
     /// left-click on a container slot completes it.
     pub fn arm_gift_wrap(&mut self, bag: i64, slot: u32) {
-        let mut model = self.model_mut();
-        let guid = model
-            .containers
-            .get(&bag)
-            .and_then(|c| c.slots.get(&slot))
-            .map_or(0, |s| s.guid);
-        model.pending_wrap = Some(PendingWrap { bag, slot, guid });
-        model.ui_cursor = Some(UiCursorMode::Cast);
-        model.ui_cursor_dirty = true;
-        cursor::lock_item(&mut model, guid);
+        arm_gift_wrap(&mut self.model_mut(), bag, slot);
     }
 
     /// The armed gift wrap, if any; the app reads it to hold the cursor's base at Cast.
@@ -271,6 +314,72 @@ pub enum UiCursorMode {
     /// UnableCast (22), `SetCursor("CAST_ERROR_CURSOR")`: a unit frame the armed spell cannot
     /// target, and leaving one while still targeting.
     CastError,
+}
+
+/// `UseContainerItem` past its clear. An empty slot or a locked item ends it, repair mode
+/// included (`0x4fa1c7`, `0x4fa1cd`); then repair mode repairs (`0x4fa1da`). Every other arm takes
+/// its lock here, in the call, so a later call reads it as the reference's does: the withdraw and
+/// deposit (`0x4fa312`, `0x4fa34b`), the sale (`0x4fa37f`), the equip unless the item is a
+/// projectile (`0x4fa40b`, `0x4fa418`), the open (`0x5edcd9`) and the wrap paper (`0x5edea0`). An
+/// equipped projectile unlocks instead, `AutoEquipCursorItem`'s `ClearCursor(1,1)` (`0x5e1711`,
+/// `0x5e1763`). The app sends each arm.
+fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) {
+    let Some(s) = model
+        .containers
+        .get(&bag)
+        .and_then(|c| c.slots.get(&slot))
+        .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))
+    else {
+        return;
+    };
+    let (guid, fork, class) = (s.guid, s.use_fork, s.item_class);
+    if model.repair_mode {
+        model.container_repairs.push((bag, slot));
+        return;
+    }
+    let arm = if bag == -1 || (5..=10).contains(&bag) {
+        UseArm::Withdraw
+    } else if model.bank.is_some() {
+        UseArm::Deposit
+    } else if model.merchant.is_some() {
+        UseArm::Sell
+    } else {
+        UseArm::Item(fork)
+    };
+    model
+        .script_calls
+        .push(super::ScriptCall::UseContainerItem(ContainerUse {
+            bag,
+            slot,
+            guid,
+            arm,
+        }));
+    match arm {
+        UseArm::Item(UseFork::Equip) if class == Some(cursor::ITEM_CLASS_PROJECTILE) => {
+            cursor::unlock_item(model, guid);
+        }
+        UseArm::Withdraw
+        | UseArm::Deposit
+        | UseArm::Sell
+        | UseArm::Item(UseFork::Equip)
+        | UseArm::Item(UseFork::Open) => cursor::lock_item(model, guid),
+        UseArm::Item(UseFork::WrapPaper) => arm_gift_wrap(model, bag, slot),
+        UseArm::Item(_) => {}
+    }
+}
+
+/// The wrap arm `0x5edea0`: the paper at `(bag, slot)` locks, the cursor takes mode 2 (the cast
+/// art, table `0x853b88`), and nothing is sent.
+fn arm_gift_wrap(model: &mut super::Model, bag: i64, slot: u32) {
+    let guid = model
+        .containers
+        .get(&bag)
+        .and_then(|c| c.slots.get(&slot))
+        .map_or(0, |s| s.guid);
+    model.pending_wrap = Some(PendingWrap { bag, slot, guid });
+    model.ui_cursor = Some(UiCursorMode::Cast);
+    model.ui_cursor_dirty = true;
+    cursor::lock_item(model, guid);
 }
 
 /// `PickupContainerItem`'s gesture (`0x4f9b30`):
@@ -665,25 +774,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // payload goes back, never placed, and an armed gift wrap is cancelled. The clear's
             // events run first, as the reference's do before it reads the slot.
             super::tick::verb(lua, cursor::clear_cursor);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // An empty slot or a locked item ends it, repair mode included (`0x4fa1c7`,
-            // `0x4fa1cd`).
-            let usable = model
-                .containers
-                .get(&bag)
-                .and_then(|c| c.slots.get(&slot))
-                .is_some_and(|s| s.item_id != 0 && !cursor::item_locked(&model, s.guid));
-            if !usable {
-                return Ok(());
-            }
-            if model.repair_mode {
-                // Then the item in the slot is repaired (`0x4fa1da`).
-                model.container_repairs.push((bag, slot));
-            } else {
-                model
-                    .script_calls
-                    .push(super::ScriptCall::UseContainerItem { bag, slot });
-            }
+            super::tick::verb(lua, |model| use_cleared(model, bag, slot));
             Ok(())
         })?,
     )?;
@@ -793,6 +884,7 @@ mod tests {
         slots.insert(
             1,
             ContainerSlot {
+                use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
                 petition: None,
@@ -1095,6 +1187,45 @@ mod tests {
         assert!(s.take_container_uses().is_empty(), "drained");
     }
 
+    /// The arm is `0x4fa0e0`'s, in its order, and its lock is taken in the call: a bank item
+    /// withdraws whether or not a banker is open (the bank flag, `0x4f98b3`), then an open banker
+    /// deposits ahead of an open vendor's sale; an item with no lock-taking fork (a plain use)
+    /// leaves it unlocked.
+    #[test]
+    fn use_container_item_takes_its_arm_and_the_arms_lock_in_the_call() {
+        let mut s = UiScript::new().unwrap();
+        let arm = |s: &mut UiScript, bag: i64| {
+            s.run(&format!("UseContainerItem({bag}, 1)")).unwrap();
+            let calls = s.take_script_calls();
+            let [crate::script::ScriptCall::UseContainerItem(u)] = calls.as_slice() else {
+                panic!("{calls:?}");
+            };
+            let locked = s.item_locked(u.guid);
+            s.unlock_item(u.guid);
+            (u.arm, locked)
+        };
+        s.set_container(0, Some(backpack()));
+        s.set_container(-1, Some(backpack()));
+        assert_eq!(
+            arm(&mut s, 0),
+            (super::UseArm::Item(super::UseFork::Plain), false)
+        );
+        assert_eq!(
+            arm(&mut s, -1),
+            (super::UseArm::Withdraw, true),
+            "no banker open"
+        );
+        s.set_merchant(Some(super::super::MerchantState::default()));
+        assert_eq!(arm(&mut s, 0), (super::UseArm::Sell, true));
+        s.set_bank(Some(super::super::BankState::default()));
+        assert_eq!(
+            arm(&mut s, 0),
+            (super::UseArm::Deposit, true),
+            "the banker first"
+        );
+        assert_eq!(arm(&mut s, -1), (super::UseArm::Withdraw, true));
+    }
+
     /// An empty slot or a locked item ends `UseContainerItem` past its clear (`0x4fa1c7`,
     /// `0x4fa1cd`), repair mode included: nothing is used or repaired.
     #[test]
@@ -1200,6 +1331,7 @@ mod tests {
         state.slots.insert(
             5,
             ContainerSlot {
+                use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
                 petition: None,

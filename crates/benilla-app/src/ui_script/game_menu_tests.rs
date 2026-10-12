@@ -694,6 +694,7 @@ fn backpack() -> ContainerState {
     slots.insert(
         1,
         ContainerSlot {
+            use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
             petition: None,

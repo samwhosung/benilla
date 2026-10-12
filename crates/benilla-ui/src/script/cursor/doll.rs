@@ -197,7 +197,7 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
             // entry with `CMSG_SET_AMMO` and stays in its bag, so its arm sets `ebx = 1`
             // (`0x5e1704`, `0x5e1711`) and the item unlocks; every other arm keeps the lock for
             // the server's answer (`0x5e1577`). Neither locks anything new.
-            let how = if item.item_class == Some(ITEM_CLASS_PROJECTILE) {
+            let how = if item.item_class == Some(super::ITEM_CLASS_PROJECTILE) {
                 Clear::BOTH
             } else {
                 Clear::KEEP_LOCK
@@ -210,9 +210,6 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     }
 }
 
-/// `ITEM_CLASS_PROJECTILE`, the template class `0x5d9f30` reads.
-const ITEM_CLASS_PROJECTILE: u32 = 6;
-
 /// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): the cursor
 /// clears before the slot is read (`0x4c79a9`), so a held payload goes back, never placed, its
 /// events running first; then the app sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot,
@@ -223,12 +220,19 @@ pub(super) fn use_inventory_item(lua: &Lua, id: u32) {
     verb(lua, |model| use_cleared(model, id));
 }
 
-/// `UseInventoryItem` past its clear.
+/// `UseInventoryItem` past its clear. Outside repair mode a locked worn item is refused in the
+/// call, `CGItem::Use`'s first gate (`0x4c7af0` → `0x5d8d32`), so a later call's lock does not
+/// reach it.
 fn use_cleared(model: &mut Model, id: u32) {
     if !model.repair_mode {
-        model
-            .script_calls
-            .push(crate::script::ScriptCall::UseInventoryItem(id));
+        let locked = model
+            .inv_slot("player", id as usize)
+            .is_some_and(|s| super::item_locked(model, s.guid));
+        if !locked {
+            model
+                .script_calls
+                .push(crate::script::ScriptCall::UseInventoryItem(id));
+        }
         return;
     }
     if (1..=19).contains(&id)
@@ -409,6 +413,7 @@ mod tests {
         slots.insert(
             1,
             ContainerSlot {
+                use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
                 petition: None,
@@ -601,6 +606,7 @@ mod tests {
         slots.insert(
             3,
             ContainerSlot {
+                use_fork: Default::default(),
                 item_class: None,
                 duration_ms: None,
                 petition: None,
@@ -794,6 +800,23 @@ mod tests {
         assert!(!auto_equip_cursor_item(&mut s.model_mut()));
         assert!(s.cursor_item().is_some(), "kept");
         assert!(s.take_container_autoequips().is_empty());
+    }
+
+    /// `UseInventoryItem` tests the worn item's lock in its call (`0x4c7af0` → `0x5d8d32`): a
+    /// locked item queues nothing, and a pickup after the call does not take the use back.
+    #[test]
+    fn use_inventory_item_reads_the_lock_in_its_call() {
+        let mut s = UiScript::new().unwrap();
+        let slots = doll_slots();
+        let head = slots[1].as_ref().unwrap().guid;
+        s.set_inventory_slots(slots);
+        s.lock_item(head);
+        s.run("UseInventoryItem(1)").unwrap();
+        assert!(s.take_inventory_uses().is_empty(), "locked");
+        s.unlock_item(head);
+        s.run("UseInventoryItem(1) PickupInventoryItem(1)").unwrap();
+        assert_eq!(s.take_inventory_uses(), vec![1], "the use was made first");
+        assert!(s.item_locked(head), "then the pickup locked it");
     }
 
     #[test]

@@ -352,6 +352,7 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
     slots.insert(
         1,
         ContainerSlot {
+            use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
             petition: None,

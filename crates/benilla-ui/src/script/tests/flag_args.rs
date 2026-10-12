@@ -340,7 +340,8 @@ fn queued_verbs_read_their_flags_through_get_bool_or_default() {
             s.take_script_calls(),
             vec![ScriptCall::UseAction(ActionUse {
                 action: 1,
-                on_self: want
+                on_self: want,
+                item_locks: Vec::new(),
             })],
             "UseAction(1, 0, {arg})"
         );

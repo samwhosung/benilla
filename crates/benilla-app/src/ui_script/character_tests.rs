@@ -78,6 +78,7 @@ fn backpack_with_fitting_helm() -> benilla_ui::script::ContainerState {
     slots.insert(
         1,
         benilla_ui::script::ContainerSlot {
+            use_fork: Default::default(),
             item_class: None,
             duration_ms: None,
             petition: None,
