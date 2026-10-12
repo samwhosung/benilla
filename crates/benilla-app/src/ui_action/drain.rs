@@ -319,7 +319,11 @@ pub(crate) fn use_action(
             } else {
                 // The shared `CGItem::Use` fork (called at `0x4e607b`): a quest-starter offers
                 // its quest, and the use runs the whole cast ladder. The wire's third byte is
-                // the spell block ordinal, not a flag.
+                // the spell block ordinal, not a flag. A locked copy is refused first.
+                if crate::ui_items::item_use_refused(script, Some(guid)) {
+                    debug!("ui_action: item action {action} on a locked item — refused");
+                    return UseOutcome::Done;
+                }
                 let spell_index = template.use_spell_index().unwrap_or(0);
                 debug!(
                     "ui_action: item action {action} use (wire {bag_index}/{slot0}, spell #{spell_index})"

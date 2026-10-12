@@ -911,7 +911,9 @@ pub(crate) fn feed_containers(
     // prints nothing, as the reference's sink guard (`0x4945b4`) drops it; that silences 59.
     let player = inv.self_store.iter().next();
     let mut refusals = Vec::new();
+    let mut unlocks = Vec::new();
     for e in equip_errors.0.drain(..) {
+        unlocks.extend(e.unlocks);
         // Reason 16 names the bag's family when the bag resolves, as `0x5ede00` does.
         let subclass_fill = (e.reason == 16)
             .then(|| {
@@ -950,6 +952,10 @@ pub(crate) fn feed_containers(
     }
     // Through the one sink, which also plays the error speech 18 of these keys carry.
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_items", refusals);
+    // A refusal's unlocks follow its line (`0x496720`, then `0x5e3ac0`, `0x5e3ad3`).
+    for guid in unlocks {
+        script.unlock_item(guid);
+    }
     // Server-opened bags fire `BAG_OPEN(id)` after the slot push below.
     let opened: Vec<i64> = std::mem::take(&mut opens.0);
 

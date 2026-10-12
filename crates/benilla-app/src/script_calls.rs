@@ -835,4 +835,61 @@ mod tests {
             .0
             .is_empty());
     }
+
+    /// The bar's item use reaches `CGItem::Use` (`0x4e607b`), which refuses a locked copy first
+    /// (`0x5d8d32`): nothing goes out until the lock lifts.
+    #[test]
+    fn a_bar_item_use_skips_a_locked_copy() {
+        const POTION: u64 = 0x4000_0000_0000_0f07;
+        const POTION_ENTRY: u32 = 929;
+        let mut f = frame(false);
+        {
+            let world = f.app.world_mut();
+            let me = world.resource::<GuidIndex>().0[&ME];
+            world
+                .entity_mut(me)
+                .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x19),
+                    (22, 100),
+                    (28, 100),
+                    (46, 0x8),
+                    (532, POTION as u32),
+                    (533, (POTION >> 32) as u32),
+                ])));
+            crate::items::test_spawn_item(
+                world,
+                POTION,
+                benilla_protocol::ObjectFields::from_pairs(&[(3, POTION_ENTRY)]),
+                false,
+            );
+            world.resource_mut::<crate::items::Items>().insert_template(
+                POTION_ENTRY,
+                Some(benilla_protocol::messages::ItemInfo {
+                    start_quest: 42,
+                    ..crate::items::test_template("Questing Potion")
+                }),
+            );
+            world
+                .resource_mut::<crate::ui_action::PlayerActions>()
+                .buttons
+                .insert(
+                    0,
+                    ActionButton {
+                        slot: 0,
+                        action: POTION_ENTRY,
+                        kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+                    },
+                );
+            world.non_send_resource_mut::<UiScript>().lock_item(POTION);
+        }
+        let _ = f.rx.try_iter().count();
+        run(&mut f, "UseAction(1)");
+        assert_eq!(f.rx.try_iter().count(), 0, "a locked copy is not used");
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .unlock_item(POTION);
+        run(&mut f, "UseAction(1)");
+        assert!(f.rx.try_iter().count() > 0, "unlocked, the use goes out");
+    }
 }

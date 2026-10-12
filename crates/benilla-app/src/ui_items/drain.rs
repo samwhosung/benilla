@@ -195,6 +195,10 @@ impl ScriptItemUse<'_, '_> {
                 ))
             })
             .unwrap_or((None, 0, 0, None, None, false));
+        if super::item_use_refused(script, guid) {
+            debug!("ui_items: UseInventoryItem({id}) on a locked item — refused");
+            return;
+        }
         debug!("ui_items: use equipped item, lua slot {id} (wire 255/{slot})");
         super::send_item_use(
             super::ItemUse {
@@ -233,25 +237,32 @@ impl ScriptItemUse<'_, '_> {
             gate,
         } = self;
         let slot0 = u8::try_from(slot.saturating_sub(1)).ok();
+        // The slot's item object, which every arm names (`0x4fa1a6`); none ends the call
+        // (`0x4fa1c7`). The lock gate again (`0x4fa1cd`): the binding asked it at call time, but a
+        // use queued behind another in the same frame must see the lock that one's arm took.
+        let Some(item_guid) = self_q
+            .iter()
+            .next()
+            .and_then(|store| slot_guid(&store.0, bag, slot0.unwrap_or(0), &ladder.objects))
+            .filter(|&g| ladder.objects.object(g).is_some())
+        else {
+            debug!("ui_items: UseContainerItem({bag}, {slot}) on no item object — ignored");
+            return;
+        };
+        if script.item_locked(item_guid) {
+            debug!("ui_items: UseContainerItem({bag}, {slot}) on a locked item — refused");
+            return;
+        }
         // With a merchant open, the click sells the whole stack (`CMSG_SELL_ITEM`, count 0).
         if let (true, Some(vendor)) = (merchant.is_open(), merchant.vendor) {
-            let item_guid = self_q
-                .iter()
-                .next()
-                .and_then(|store| slot_guid(&store.0, bag, slot0.unwrap_or(0), &ladder.objects));
-            match item_guid {
-                Some(guid) => {
-                    debug!("ui_items: sell lua bag {bag} slot {slot} (item {guid:#x})");
-                    let _ = ladder.commands.0.send(ClientCommand::SellItem {
-                        vendor,
-                        item_guid: guid,
-                        count: 0,
-                    });
-                    // `LockItem` after the send (`0x4fa37f`), until `SMSG_SELL_ITEM`.
-                    script.lock_item(guid);
-                }
-                None => debug!("ui_items: sell on empty slot (bag {bag} slot {slot}) — ignored"),
-            }
+            debug!("ui_items: sell lua bag {bag} slot {slot} (item {item_guid:#x})");
+            let _ = ladder.commands.0.send(ClientCommand::SellItem {
+                vendor,
+                item_guid,
+                count: 0,
+            });
+            // `LockItem` after the send (`0x4fa37f`), until `SMSG_SELL_ITEM`.
+            script.lock_item(item_guid);
             return;
         }
         let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
@@ -263,11 +274,6 @@ impl ScriptItemUse<'_, '_> {
         // and 5..10 (`0x4f9820`), picks the opcode (`0x4fa2f2`). Doll clicks come through
         // `use_inventory_item`, so worn gear keeps its plain use.
         if bank.is_open() {
-            let item_guid = self_q
-                .iter()
-                .next()
-                .and_then(|store| slot_guid(&store.0, bag, slot0.unwrap_or(0), &ladder.objects))
-                .unwrap_or(0);
             let withdrawing = bag == super::BANK_CONTAINER || (5..=10).contains(&bag);
             if withdrawing {
                 debug!("ui_items: withdraw (lua bag {bag} → wire {bag_index}/{wire_slot})");
@@ -925,6 +931,66 @@ mod tests {
         );
     }
 
+    /// A slot whose item object has not streamed ends the call before any arm (`0x4fa1c7`): no
+    /// sale goes out and nothing locks, as `LockItem` on an unresolved guid signals nothing.
+    #[test]
+    fn a_use_on_an_unstreamed_item_does_nothing() {
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        const GHOST: u64 = 0x4000_0000_0000_0d0d;
+        let (mut app, rx) = open_the_clam();
+        while rx.try_recv().is_ok() {} // drain the clam's own send
+        let me = app
+            .world_mut()
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .entity_mut(me)
+            .insert(ObjectStore(ObjectFields::from_pairs(&[
+                (F_PACK_SLOT_1, GHOST as u32),
+                (F_PACK_SLOT_1 + 1, (GHOST >> 32) as u32),
+            ])));
+        app.world_mut()
+            .resource_mut::<crate::ui_merchant::MerchantOpen>()
+            .vendor = Some(VENDOR);
+        {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.unlock_item(CLAM);
+            s.run("UseContainerItem(0, 1)").unwrap();
+        }
+        run_container_clicks(app.world_mut());
+        assert!(rx.try_recv().is_err(), "nothing sold");
+        assert!(!app
+            .world()
+            .non_send_resource::<UiScript>()
+            .item_locked(GHOST));
+    }
+
+    /// Two uses queued in one frame: the app's apply re-tests the lock per call, as the
+    /// reference's in-call `LockItem` makes the second click see the first's.
+    #[test]
+    fn two_sales_queued_in_one_frame_send_once() {
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        let (mut app, rx) = open_the_clam();
+        while rx.try_recv().is_ok() {} // drain the clam's own send
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .unlock_item(CLAM);
+        app.world_mut()
+            .resource_mut::<crate::ui_merchant::MerchantOpen>()
+            .vendor = Some(VENDOR);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("UseContainerItem(0, 1) UseContainerItem(0, 1)")
+            .unwrap();
+        run_container_clicks(app.world_mut());
+        assert_eq!(
+            rx.try_iter().count(),
+            1,
+            "the second use sees the first sale's lock (`0x4fa37f`, `0x4fa1cd`)"
+        );
+    }
+
     /// The sale and bank arms lock the clicked item after their send (`0x4fa37f`; `0x4fa312`,
     /// `0x4fa34b`), and a locked item's click stops before any arm (`0x4fa1cd`).
     #[test]
@@ -1014,6 +1080,69 @@ mod tests {
                 "class {class}"
             );
         }
+    }
+
+    /// `CGItem::Use` refuses a locked item first (`0x5d8d32`): a worn item's use from the doll
+    /// (`0x4c7af0`) sends nothing while it is locked.
+    #[test]
+    fn a_locked_worn_item_is_not_used() {
+        const HELM: u64 = 0x4000_0000_0000_0777;
+        const HELM_ENTRY: u32 = 7777;
+        let head = benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+        let (mut app, rx) = open_the_clam();
+        while rx.try_recv().is_ok() {} // drain the clam's own send
+        let me = app
+            .world_mut()
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .entity_mut(me)
+            .insert(ObjectStore(ObjectFields::from_pairs(&[
+                (head, HELM as u32),
+                (head + 1, (HELM >> 32) as u32),
+            ])));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            HELM,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, HELM_ENTRY)]),
+            false,
+        );
+        app.world_mut().resource_mut::<Items>().insert_template(
+            HELM_ENTRY,
+            Some(ItemInfo {
+                start_quest: 42,
+                ..crate::items::test_template("Questing Helm")
+            }),
+        );
+        let use_head = |app: &mut App| {
+            use bevy::ecs::system::RunSystemOnce;
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run("UseInventoryItem(1)")
+                .unwrap();
+            app.world_mut()
+                .run_system_once(
+                    |mut script: NonSendMut<UiScript>, mut items: ScriptItemUse| {
+                        crate::script_calls::in_call_order(&mut script, |script, call| {
+                            if let benilla_ui::script::ScriptCall::UseInventoryItem(id) = call {
+                                items.use_inventory_item(script, id);
+                            }
+                        });
+                    },
+                )
+                .unwrap();
+        };
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .lock_item(HELM);
+        use_head(&mut app);
+        assert!(rx.try_recv().is_err(), "a locked item is not used");
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .unlock_item(HELM);
+        use_head(&mut app);
+        assert!(rx.try_recv().is_ok(), "unlocked, the use goes out");
     }
 
     /// A repair-mode click on a worn item (`0x4c7714`): `ITEM_REPAIR` as it goes out (`0x4c7780`),
@@ -1352,6 +1481,10 @@ pub(super) fn drain_bind_on_use_confirms(
     let Some(it) = gate.on_use.0.take() else {
         return;
     };
+    if super::item_use_refused(&script, it.guid) {
+        debug!("ui_items: bind-on-use confirmed on a locked item — refused");
+        return;
+    }
     debug!(
         "ui_items: bind-on-use confirmed for wire {}/{}",
         it.bag_index, it.slot
@@ -1967,6 +2100,25 @@ mod bind_confirm_tests {
             rx.try_iter().count() > 0,
             "the accept re-issues the use rather than sending a confirm packet"
         );
+    }
+
+    /// The confirm's re-issue goes through `CGItem::Use` (`0x5d92c1`), which refuses an item
+    /// locked meanwhile (`0x5d8d32`).
+    #[test]
+    fn a_bind_on_use_confirm_skips_an_item_locked_meanwhile() {
+        benilla_formats::wow_data_or_skip!();
+        let (mut app, rx) = right_click_a_bind_on_use_item(false);
+        {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.tick(0.01);
+            s.lock_item(AXE_GUID);
+            s.run("StaticPopup_OnClick(StaticPopup_FindVisible(\"USE_BIND\"), 1)")
+                .unwrap();
+        }
+        app.world_mut()
+            .run_system_once(drain_bind_on_use_confirms)
+            .unwrap();
+        assert_eq!(rx.try_iter().count(), 0, "a locked item is not used");
     }
 
     #[test]

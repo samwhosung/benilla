@@ -73,7 +73,6 @@ pub(super) fn container_of(
 fn on_inventory_failure(
     In(ev): In<SessionEvent>,
     mut equip_errors: ResMut<EquipErrors>,
-    mut releases: ResMut<ItemReleases>,
     mut latch: ResMut<LootLatch>,
 ) {
     if let SessionEvent::InventoryFailure {
@@ -90,7 +89,7 @@ fn on_inventory_failure(
             items: [item_guid, item2_guid],
             bag_slot,
         };
-        inventory_failure(failure, &mut equip_errors, &mut releases, &mut latch);
+        inventory_failure(failure, &mut equip_errors, &mut latch);
     }
 }
 
@@ -104,14 +103,10 @@ struct Failure {
 }
 
 /// A refused inventory operation (reason 0 never arrives: `benilla_protocol::events` drops it):
-/// queues the error line, and unlocks both guids the packet names (`0x5e3ac0`, the second only
-/// when nonzero, `0x5e3ad3`), queued in [`ItemReleases`] since this site has no `UiScript`.
-fn inventory_failure(
-    failure: Failure,
-    equip_errors: &mut EquipErrors,
-    releases: &mut ItemReleases,
-    latch: &mut LootLatch,
-) {
+/// queues the error line, and after it the unlock of both guids the packet names (`0x5e3ac0`,
+/// the second only when nonzero, `0x5e3ad3`), which the container feed runs since this site has
+/// no `UiScript`.
+fn inventory_failure(failure: Failure, equip_errors: &mut EquipErrors, latch: &mut LootLatch) {
     let Failure {
         reason,
         required_level,
@@ -122,13 +117,13 @@ fn inventory_failure(
         "net: inventory failure {reason:#04x} (items {item_guid:#x} {item2_guid:#x}, bag slot \
          {bag_slot})"
     );
+    // The line shows first (`0x496720`), then both unlock (the feed runs them after it).
     equip_errors.0.push(EquipError {
         reason,
         required_level,
         bag_slot,
+        unlocks: [item_guid, item2_guid],
     });
-    releases.unlock(item_guid);
-    releases.unlock(item2_guid);
     // A failure whose first item guid is the looted item (a lockbox) ends the loot (`0x5e3a84`).
     if item_guid != 0 {
         latch.clear_for(item_guid);
@@ -143,7 +138,6 @@ mod tests {
     fn an_inventory_failure_on_the_looted_object_clears_the_latch() {
         const LOCKBOX: u64 = 0x4000_0000_0000_0007;
         let mut errs = EquipErrors::default();
-        let mut releases = ItemReleases::default();
         let mut latch = LootLatch(Some(LOCKBOX));
         let failure = |first: u64| Failure {
             reason: 2,
@@ -153,35 +147,58 @@ mod tests {
         };
 
         // An unrelated item's failure must not end the session.
-        inventory_failure(failure(0x1234), &mut errs, &mut releases, &mut latch);
+        inventory_failure(failure(0x1234), &mut errs, &mut latch);
         assert_eq!(latch.0, Some(LOCKBOX));
 
-        inventory_failure(failure(LOCKBOX), &mut errs, &mut releases, &mut latch);
+        inventory_failure(failure(LOCKBOX), &mut errs, &mut latch);
         assert_eq!(latch.0, None);
     }
 
-    /// A refusal unlocks both items it names (`0x5e3ac0`, `0x5e3ad3`); a zero second guid
-    /// unlocks nothing (`0x5e3acf`).
+    /// A refusal shows its line first (`0x496720`), then unlocks both items it names (`0x5e3ac0`,
+    /// `0x5e3ad3`); driven through the real handler and the container feed.
     #[test]
-    fn an_inventory_failure_unlocks_both_items_it_names() {
-        use crate::ui_items::locks::Release;
+    fn an_inventory_failure_shows_its_line_then_unlocks_both_items() {
+        use bevy::ecs::system::RunSystemOnce;
         const A: u64 = 0x4000_0000_0000_00a1;
         const B: u64 = 0x4000_0000_0000_00b2;
-        let mut errs = EquipErrors::default();
-        let mut releases = ItemReleases::default();
-        let mut latch = LootLatch(None);
-        let failure = |items| Failure {
-            reason: 0x16,
-            required_level: None,
-            items,
-            bag_slot: 0xff,
-        };
-        inventory_failure(failure([A, B]), &mut errs, &mut releases, &mut latch);
-        assert_eq!(releases.0, [Release::Item(A), Release::Item(B)]);
-        releases.0.clear();
-        inventory_failure(failure([A, 0]), &mut errs, &mut releases, &mut latch);
-        assert_eq!(releases.0, [Release::Item(A)]);
+        const REASON: u8 = 0x16;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        let key = super::super::equip_error::equip_error_key(REASON);
+        script
+            .run(&format!(
+                "{key} = 'Refused.' SEEN = {{}} local f = CreateFrame('Frame') \
+                 f:RegisterEvent('UI_ERROR_MESSAGE') f:RegisterEvent('ITEM_LOCK_CHANGED') \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)"
+            ))
+            .unwrap();
+        script.lock_item(A);
+        script.lock_item(B);
+        script.run("SEEN = {}").unwrap();
+        app.insert_non_send_resource(script);
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::InventoryFailure {
+                reason: REASON,
+                required_level: None,
+                item_guid: A,
+                item2_guid: B,
+                bag_slot: 0xff,
+            }],
+        );
+        app.world_mut()
+            .run_system_once(super::super::feed::feed_containers)
+            .unwrap();
+        let s = app
+            .world()
+            .non_send_resource::<benilla_ui::script::UiScript>();
+        assert_eq!(
+            s.eval::<Vec<String>>("return SEEN").unwrap(),
+            ["UI_ERROR_MESSAGE", "ITEM_LOCK_CHANGED", "ITEM_LOCK_CHANGED"]
+        );
+        assert!(!s.item_locked(A) && !s.item_locked(B));
     }
+
     /// Driven through the real registration.
     #[test]
     fn the_session_end_drops_every_queued_unlock() {

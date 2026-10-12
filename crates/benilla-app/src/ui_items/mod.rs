@@ -117,6 +117,9 @@ pub(crate) struct EquipError {
     /// Reason 16's `%s` source: the destination bag's player slot (255 names no bag), which the
     /// drain resolves to the bag's `BagFamily` name.
     pub bag_slot: u8,
+    /// The item guids a refused inventory operation unlocks after its line (`0x5e3ac0`,
+    /// `0x5e3ad3`); none for a mail refusal.
+    pub unlocks: [u64; 2],
 }
 
 /// Inventory refusals (`SMSG_INVENTORY_CHANGE_FAILURE`) queued for the UI error line.
@@ -624,6 +627,13 @@ pub(crate) fn item_use_route(
         Some(spell) => ItemUseRoute::Cast(spell),
         None => ItemUseRoute::Nothing,
     }
+}
+
+/// `CGItem::Use`'s first gate (`0x5d8d32`): a locked item is refused, silently. Its callers each
+/// ask it: the doll (`0x4c7af0`), the bar (`0x4e607b`), the bag (`0x4fa430`, behind
+/// `UseContainerItem`'s own `0x4fa1cd`) and the bind-on-use confirm (`0x5d92c1`).
+pub(crate) fn item_use_refused(script: &benilla_ui::script::UiScript, guid: Option<u64>) -> bool {
+    guid.is_some_and(|g| script.item_locked(g))
 }
 
 /// Send what [`item_use_route`] decides; the only place a `CMSG_USE_ITEM` leaves benilla. The

@@ -147,6 +147,7 @@ fn send_mail_result(
     if action == mail_action::SEND {
         if error == mail_error::EQUIP_ERROR {
             equip_errors.0.push(EquipError {
+                unlocks: [0, 0],
                 reason: equip_error.unwrap_or(0) as u8,
                 required_level: None,
                 // The result carries no bag slot: 255 is the wire's "own array" sentinel, so
@@ -188,6 +189,7 @@ fn send_mail_result(
             }
         }
         mail_error::EQUIP_ERROR => equip_errors.0.push(EquipError {
+            unlocks: [0, 0],
             reason: equip_error.unwrap_or(0) as u8,
             required_level: None,
             bag_slot: 255,
