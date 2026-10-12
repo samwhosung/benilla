@@ -230,6 +230,77 @@ fn the_setter_asks_for_the_cascade_on_one_and_fires_update_chat_windows() {
     );
 }
 
+/// `SetGuildRecruitmentMode(1)` runs the cascade in place (`0x49ea70` → `0x49ea90`): the join
+/// takes its slot and window 1's entry, then fires `UPDATE_CHAT_WINDOWS` (`0x49eb5f`), all before
+/// the verb's own (`0x4a00a9`); a leave fires the same pair (`0x49eb21`); an owed run fires the
+/// verb's alone.
+#[test]
+fn the_recruitment_cascade_runs_inside_the_verb() {
+    use crate::script::{RecruitmentPlan, RecruitmentRun};
+    let mut s = script();
+    s.set_joined_channels(vec![Some("General - Orgrimmar".into()), None]);
+    crate::script::tick::heard::listen(
+        &s,
+        &["UPDATE_CHAT_WINDOWS"],
+        Some(
+            "(GetChannelName('GuildRecruitment - City')) .. ',' .. \
+             tostring((GetChatWindowChannels(1)))",
+        ),
+    );
+
+    s.set_guild_recruitment_plan(RecruitmentPlan::Join {
+        name: "GuildRecruitment - City".into(),
+        shortcut: "GuildRecruitment".into(),
+        id: 25,
+    });
+    s.run("SetGuildRecruitmentMode(1)").unwrap();
+    assert_eq!(
+        crate::script::tick::heard::take(&s),
+        [
+            "UPDATE_CHAT_WINDOWS 2,GuildRecruitment",
+            "UPDATE_CHAT_WINDOWS 2,GuildRecruitment"
+        ],
+        "the join fills the free slot and window 1 before either event"
+    );
+    assert_eq!(
+        s.take_guild_recruitment_runs(),
+        [RecruitmentRun::Join("GuildRecruitment - City".into())]
+    );
+    assert!(!s.take_guild_recruitment_cascade(), "the run is spent");
+
+    s.set_guild_recruitment_plan(RecruitmentPlan::Leave("GuildRecruitment - City".into()));
+    s.run("SetGuildRecruitmentMode(1)").unwrap();
+    assert_eq!(crate::script::tick::heard::take(&s).len(), 2);
+    assert_eq!(
+        s.take_guild_recruitment_runs(),
+        [RecruitmentRun::Leave("GuildRecruitment - City".into())]
+    );
+
+    for (plan, owed) in [
+        (RecruitmentPlan::Retry, true),
+        (RecruitmentPlan::Spent, false),
+    ] {
+        s.set_guild_recruitment_plan(plan);
+        s.run("SetGuildRecruitmentMode(1)").unwrap();
+        assert_eq!(crate::script::tick::heard::take(&s).len(), 1);
+        assert!(s.take_guild_recruitment_runs().is_empty());
+        assert_eq!(s.take_guild_recruitment_cascade(), owed);
+    }
+
+    s.set_guild_recruitment_plan(RecruitmentPlan::Join {
+        name: "GuildRecruitment - City".into(),
+        shortcut: "GuildRecruitment".into(),
+        id: 25,
+    });
+    s.run("SetGuildRecruitmentMode(0)").unwrap();
+    assert_eq!(
+        crate::script::tick::heard::take(&s).len(),
+        1,
+        "mode 0 is the latch alone"
+    );
+    assert!(s.take_guild_recruitment_runs().is_empty());
+}
+
 /// A manual join or leave of `GuildRecruitment` calls `0x49ea70(0)` (`0x49ed3d`, `0x49ef8f`): it
 /// dirties the file and, as mode 0, asks for no cascade.
 #[test]

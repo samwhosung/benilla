@@ -426,8 +426,13 @@ pub(crate) struct Model {
     /// The recruitment auto-join latch `[0x843608]`: 0 `STANDARD`, 1 `AUTO` (`0x49ea70` maps any
     /// other word to 1). Boots at 1, as the reference writes `AUTO` for an untouched option.
     pub(crate) guild_recruitment_mode: u8,
-    /// Any `SetGuildRecruitmentMode(1)`, even unchanged: the reference runs the cascade `0x49ea90`.
+    /// A `SetGuildRecruitmentMode(1)` whose cascade could not act: the run stays owed
+    /// (`[0xb6e5e4]`) for the app's retry.
     pub(crate) guild_recruitment_cascade: bool,
+    /// What the cascade `0x49ea90` would do now, pushed by the app.
+    pub(crate) guild_recruitment_plan: super::channel::RecruitmentPlan,
+    /// The cascade's joins and leaves since the last drain, for the app's wire and slot halves.
+    pub(crate) guild_recruitment_runs: Vec<super::channel::RecruitmentRun>,
     /// Lua changed the recruitment mode: the chat cache's dirty signal.
     pub(crate) guild_recruitment_changed: bool,
     /// `DoEmote` calls queued.
@@ -1306,6 +1311,8 @@ impl Model {
             channel_commands: Vec::new(),
             guild_recruitment_mode: 1,
             guild_recruitment_cascade: false,
+            guild_recruitment_plan: Default::default(),
+            guild_recruitment_runs: Vec::new(),
             guild_recruitment_changed: false,
             emote_requests: Vec::new(),
             roll_requests: Vec::new(),

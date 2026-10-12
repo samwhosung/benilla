@@ -1344,3 +1344,27 @@ fn the_docked_tabs_follow_the_dock_through_a_session() {
     check(&mut s, "General selected again");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The stock chat frames re-read window 1's channels on the cascade's `UPDATE_CHAT_WINDOWS`
+/// (`ChatFrame.lua:1272`), so `ChatFrame1` lists `GuildRecruitment` before
+/// `SetGuildRecruitmentMode(1)` returns (`0x49eb70`, then `0x49eb5f` and `0x4a00a9`).
+#[test]
+fn the_recruitment_join_reaches_the_chat_frame_before_the_verb_returns() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = chat_frame();
+    s.set_guild_recruitment_plan(benilla_ui::script::RecruitmentPlan::Join {
+        name: "GuildRecruitment - City".into(),
+        shortcut: "GuildRecruitment".into(),
+        id: 25,
+    });
+    let listed: bool = s
+        .eval(
+            "SetGuildRecruitmentMode(1) \
+             for _, c in ipairs(ChatFrame1.channelList) do \
+               if c == 'GuildRecruitment' then return true end \
+             end return false",
+        )
+        .unwrap();
+    assert!(listed, "ChatFrame1.channelList lacks GuildRecruitment");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

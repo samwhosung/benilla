@@ -1247,8 +1247,6 @@ pub(crate) mod schedule_tests {
          "`SMSG_BINDER_CONFIRM` only answers the innkeeper's gossip line"),
         ("ui_char.rs", "feed_char", Because::MemoLatched,
          "`feed.vm: VmMemo<CharFeedMemo>`; `vm_reset` fires every transition on a fresh memo"),
-        ("ui_chat/recruitment.rs", "guild_recruitment_cascade", Because::SelfHealing,
-         "`pending` is held until the zone mask and zone id are settled, which happens on the entry VM"),
         ("ui_dialog_verbs.rs", "feed_meeting_stone", Because::SelfHealing,
          "the query waits for the world-enter cascade (`meeting_stone_enter_world`), our own create a server round trip past the login edge, and every `/reload` re-asks onto its new VM"),
         ("ui_duel.rs", "feed_duel", Because::PlayerRoundTrip,

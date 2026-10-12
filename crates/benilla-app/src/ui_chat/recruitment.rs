@@ -2,14 +2,15 @@
 //! `GuildRecruitment - City` on its own. On AUTO (`[0x843608]`, the default) a guilded player
 //! leaves it (`0x49ee70`) and an unguilded one in a capital joins it (`0x49eb70`), with no
 //! membership check; otherwise a retry waits for the next zone change. Once joined, the zone walk
-//! owns it as it owns Trade. Triggers: `SetGuildRecruitmentMode(1)` and the `PLAYER_GUILDID`
-//! watcher (`0x5e2770`), whose first sight is the player create (`0x5dec1e`). Deviation: no re-run
+//! owns it as it owns Trade. Triggers: `SetGuildRecruitmentMode(1)`, which runs it inside the verb
+//! on the plan pushed here, and the `PLAYER_GUILDID` watcher (`0x5e2770`), whose first sight is
+//! the player create (`0x5dec1e`). Deviation: no re-run
 //! when a remote player streams in, because the reference's re-run only repeats the join, which
 //! vmangos swallows, or the leave, whose "Not on channel" notice nothing prints.
 
 use bevy::prelude::*;
 
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{RecruitmentPlan, RecruitmentRun, UiScript};
 
 use crate::area::AreaTableRes;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
@@ -81,7 +82,52 @@ pub(crate) fn cascade(auto: bool, guild_id: u32, in_capital: bool) -> Option<Cas
     })
 }
 
+/// The plan `0x49ea90` acts on, the latch taken as AUTO: the verdict, then for an acting verdict
+/// the name, composed against the "City" row whatever the zone (`0x49f140`).
+fn plan(
+    guild_id: u32,
+    channels: &ChannelState,
+    walk: &ZoneChannelWalk,
+    areas: Option<&AreaTableRes>,
+) -> RecruitmentPlan {
+    // Wait for the chat-cache restore, which seats the latch and the mask.
+    if channels.zone_mask.is_none() {
+        return RecruitmentPlan::Retry;
+    }
+    // The zone row: unresolvable ⇒ the retry stays armed (`0x49eaf5`).
+    let Some(areas) = areas else {
+        return RecruitmentPlan::Retry;
+    };
+    let Some(row) = walk.zone_id.and_then(|id| areas.0.get(id)) else {
+        return RecruitmentPlan::Retry;
+    };
+    let action = cascade(true, guild_id, row.flags & AREA_FLAG_CAPITAL != 0);
+    if action == Some(Cascade::Deferred) {
+        return RecruitmentPlan::Retry; // `0x49eb33`: the retry stays armed
+    }
+    // With no row or city word the run is consumed, not retried.
+    let target = channels
+        .channels
+        .rows()
+        .iter()
+        .find(|r| r.is_guild_recruitment())
+        .and_then(|row| Some((row, row.joinable_name("", city_word(&areas.0)?))));
+    let Some((row, name)) = target else {
+        return RecruitmentPlan::Spent;
+    };
+    match action {
+        Some(Cascade::Leave) => RecruitmentPlan::Leave(name),
+        _ => RecruitmentPlan::Join {
+            name,
+            shortcut: row.shortcut.clone(),
+            id: row.id,
+        },
+    }
+}
+
 /// The cascade, chained after the walk: the reference runs it at the walk's tail, on a fresh zone.
+/// The VM runs it on the plan pushed here, inside `SetGuildRecruitmentMode(1)` or for this
+/// system's retry and watcher; its joins and leaves come back for the slot table and the wire.
 pub(super) fn guild_recruitment_cascade(
     script: Option<NonSendMut<UiScript>>,
     mut state: ResMut<GuildRecruitmentCascade>,
@@ -92,83 +138,57 @@ pub(super) fn guild_recruitment_cascade(
     commands: Res<NetCommands>,
 ) {
     let Some(mut script) = script else { return };
-    // `SetGuildRecruitmentMode(1)` runs it even when the value did not move (`0x49ea70`).
+    apply_runs(&mut script, &mut channels, &commands);
+    // A `SetGuildRecruitmentMode(1)` whose cascade could not act leaves the run owed.
     if script.take_guild_recruitment_cascade() {
         state.request();
     }
     // Only while the avatar is streamed: a despawned body has not "left the guild".
     let Some(guild_id) = self_q.iter().next().map(|s| s.0.player_guild_id()) else {
+        script.set_guild_recruitment_plan(RecruitmentPlan::Retry);
         return;
     };
     state.observe_guild_id(guild_id);
+    script.set_guild_recruitment_plan(plan(guild_id, &channels, &walk, areas.as_deref()));
     if !state.pending {
         return;
     }
-    // Wait for the chat-cache restore, which seats the latch and the mask.
-    if channels.zone_mask.is_none() {
+    // STANDARD: nothing, not even the retry (`0x49ea96`).
+    if script.guild_recruitment_mode() == 1 && !script.run_guild_recruitment_cascade() {
         return;
     }
-    // The zone row: unresolvable ⇒ the retry stays armed (`0x49eaf5`).
-    let Some(areas) = areas.as_deref() else {
-        return;
-    };
-    let Some(row) = walk.zone_id.and_then(|id| areas.0.get(id)) else {
-        return;
-    };
-    let auto = script.guild_recruitment_mode() == 1;
-    let verdict = cascade(auto, guild_id, row.flags & AREA_FLAG_CAPITAL != 0);
-    let Some(action) = verdict else {
-        state.pending = false; // STANDARD: nothing, not even the retry
-        return;
-    };
-    if action == Cascade::Deferred {
-        return; // `0x49eb33`: the retry stays armed
-    }
-    // The name is composed against the "City" row whatever the zone (`0x49f140`); with no row or
-    // city word the run is consumed, not retried.
-    let target = channels
-        .channels
-        .rows()
-        .iter()
-        .find(|r| r.is_guild_recruitment())
-        .cloned()
-        .and_then(|row| {
-            let name = row.joinable_name("", city_word(&areas.0)?);
-            Some((row, name))
-        });
-    let Some((row, name)) = target else {
-        state.pending = false;
-        return;
-    };
-    match action {
-        Cascade::Leave => {
-            info!("chat: guild recruitment cascade — guilded, leaving {name:?}");
-            cascade_leave(&mut channels, &commands, name);
-        }
-        Cascade::Join => {
-            info!("chat: guild recruitment cascade — unguilded in a capital, joining {name:?}");
-            // `0x49eb70`: the slot (`0x49b980`, by name), window 1's list, then the send, always.
-            match channels.claim_slot(&name) {
-                Some(n) => {
-                    debug!("chat: {name:?} registered as slot {n}");
-                    script.set_joined_channels(channels.names());
-                }
-                None => warn!(
-                    "chat: no free slot for {name:?} — all {} are taken",
-                    super::edit::MAX_CHANNELS
-                ),
-            }
-            script.register_chat_window_channel(0, &row.shortcut, row.id);
-            let _ = commands.0.send(ClientCommand::JoinChannel {
-                name,
-                password: String::new(),
-            });
-        }
-        Cascade::Deferred => {}
-    }
-    // Both acting arms fire it (`0x49eb21`, `0x49eb5f`); chat frames re-read channels on it.
-    script.fire_event("UPDATE_CHAT_WINDOWS", vec![]);
     state.pending = false;
+    apply_runs(&mut script, &mut channels, &commands);
+}
+
+/// The app's halves of the cascade's runs: a join's slot (`0x49b980`, by name) and its send, which
+/// goes out always; a leave's packet and mask bit.
+fn apply_runs(script: &mut UiScript, channels: &mut ChannelState, commands: &NetCommands) {
+    for run in script.take_guild_recruitment_runs() {
+        match run {
+            RecruitmentRun::Leave(name) => {
+                info!("chat: guild recruitment cascade — guilded, leaving {name:?}");
+                cascade_leave(channels, commands, name);
+            }
+            RecruitmentRun::Join(name) => {
+                info!("chat: guild recruitment cascade — unguilded in a capital, joining {name:?}");
+                match channels.claim_slot(&name) {
+                    Some(n) => {
+                        debug!("chat: {name:?} registered as slot {n}");
+                        script.set_joined_channels(channels.names());
+                    }
+                    None => warn!(
+                        "chat: no free slot for {name:?} — all {} are taken",
+                        super::edit::MAX_CHANNELS
+                    ),
+                }
+                let _ = commands.0.send(ClientCommand::JoinChannel {
+                    name,
+                    password: String::new(),
+                });
+            }
+        }
+    }
 }
 
 /// Leave by the full name (`0x49ee70`): the packet and the mask bit (`0x49f10a`/`0x49f11a`). No

@@ -18,6 +18,74 @@ pub struct ZoneChannelRow {
     pub listed: bool,
 }
 
+/// What the recruitment cascade `0x49ea90` would do now, as the app resolves it from the player,
+/// the zone row and the `GuildRecruitment` row, so `SetGuildRecruitmentMode(1)` runs it in place.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum RecruitmentPlan {
+    /// The zone row or the chat cache is unresolved (`0x49eaf5`), or an unguilded player is
+    /// outside a capital (`0x49eb33`): the run stays owed.
+    #[default]
+    Retry,
+    /// No `GuildRecruitment` row or city word to compose the name from: the run is spent.
+    Spent,
+    /// Guilded: leave the composed name (`0x49eb17` → `0x49ee70`).
+    Leave(String),
+    /// Unguilded in a capital: join the composed name (`0x49eb55` → `0x49eb70`), window 1 taking
+    /// the row's Shortcut and id.
+    Join {
+        name: String,
+        shortcut: String,
+        id: u32,
+    },
+}
+
+/// A cascade's join or leave, drained by the app for the slot table it owns and the wire.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecruitmentRun {
+    Leave(String),
+    Join(String),
+}
+
+/// `0x49ea90`'s acting arms on the pushed plan, the latch already AUTO: a leave, or a join that
+/// takes its slot (`0x49b980`, a held name keeping its number) and registers window 1's entry,
+/// each followed by `UPDATE_CHAT_WINDOWS` (`0x49eb21`, `0x49eb5f`). Returns whether the run is
+/// spent, `false` when it stays owed.
+pub(crate) fn run_recruitment_cascade(model: &mut Model) -> bool {
+    match model.guild_recruitment_plan.clone() {
+        RecruitmentPlan::Retry => return false,
+        RecruitmentPlan::Spent => return true,
+        RecruitmentPlan::Leave(name) => {
+            model
+                .guild_recruitment_runs
+                .push(RecruitmentRun::Leave(name));
+        }
+        RecruitmentPlan::Join { name, shortcut, id } => {
+            let held = model
+                .joined_channels
+                .iter()
+                .any(|c| c.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&name)));
+            if !held {
+                match model.joined_channels.iter().position(Option::is_none) {
+                    Some(i) => model.joined_channels[i] = Some(name.clone()),
+                    None if model.joined_channels.len() < MAX_CHANNELS => {
+                        model.joined_channels.push(Some(name.clone()));
+                    }
+                    None => {}
+                }
+            }
+            model.register_window_channel(0, shortcut, id);
+            model
+                .guild_recruitment_runs
+                .push(RecruitmentRun::Join(name));
+        }
+    }
+    model.raise("UPDATE_CHAT_WINDOWS", Vec::new());
+    true
+}
+
+/// The client's ten channel slots (`0x49b980`).
+const MAX_CHANNELS: usize = 10;
+
 /// A channel verb's ask, drained by the app into its `CMSG_*`: the stock `ChatFrame.lua` slash
 /// handlers' calls, one variant each.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -122,10 +190,26 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().guild_recruitment_changed)
     }
 
-    /// Whether Lua called `SetGuildRecruitmentMode(1)` since the last drain: the cue for the
-    /// cascade (`0x49ea70` → `0x49ea90`).
+    /// Whether a `SetGuildRecruitmentMode(1)` since the last drain left its cascade owed
+    /// (`0x49ea70` → `0x49ea90`, the plan [`RecruitmentPlan::Retry`]).
     pub fn take_guild_recruitment_cascade(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().guild_recruitment_cascade)
+    }
+
+    /// What the cascade would do now; the verb runs it in place.
+    pub fn set_guild_recruitment_plan(&mut self, plan: RecruitmentPlan) {
+        self.model_mut().guild_recruitment_plan = plan;
+    }
+
+    /// The host's own run of the cascade (the retry, the guild-id watcher): as the verb's, its
+    /// `UPDATE_CHAT_WINDOWS` firing before this returns. Returns whether the run is spent.
+    pub fn run_guild_recruitment_cascade(&mut self) -> bool {
+        super::tick::verb(&self.lua, run_recruitment_cascade)
+    }
+
+    /// The cascade's joins and leaves since the last drain, in order.
+    pub fn take_guild_recruitment_runs(&mut self) -> Vec<RecruitmentRun> {
+        std::mem::take(&mut self.model_mut().guild_recruitment_runs)
     }
 
     /// A manual join or leave of `GuildRecruitment` forces the latch to 0 (`0x49ed3d`, `0x49ef8f`)
@@ -184,9 +268,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // ── The `ecx == 1` cascade ──────────────────────────────────────────
-    // For mode 1 only, `0x49ea70` tail-jumps into `0x49ea90`, which acts on the wire (a guilded
-    // player leaves `GuildRecruitment - City`, an unguilded one in a capital joins it); that runs
-    // app-side in `ui_chat::recruitment`, and an acting cascade fires `UPDATE_CHAT_WINDOWS` again.
+    // For mode 1 only, `0x49ea70` tail-jumps into `0x49ea90`: a guilded player leaves
+    // `GuildRecruitment - City`, an unguilded one in a capital joins it, and an acting cascade
+    // fires `UPDATE_CHAT_WINDOWS` before the verb's own. It runs here on the app's plan; the app
+    // sends the packets and keeps its slot table.
     g.set(
         "SetGuildRecruitmentMode",
         // As `0x4a0060`: `lua_isnumber` (`0x6f34d0`, so `"1"` passes), truncation toward zero
@@ -216,7 +301,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     model.guild_recruitment_changed = true;
                 }
                 // `0x49ea79 jne` / `0x49ea7b jmp 0x49ea90`: the cascade, on the new value alone.
-                if mode == 1 {
+                if mode == 1 && !run_recruitment_cascade(model) {
                     model.guild_recruitment_cascade = true;
                 }
                 // `0x4a00a4`/`0x4a00a9`: `UPDATE_CHAT_WINDOWS`, on every successful call, in place.

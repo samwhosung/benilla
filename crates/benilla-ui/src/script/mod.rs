@@ -195,7 +195,7 @@ pub use battlefield_score::{BattlefieldScoreRow, BattlefieldScores, BattlefieldS
 pub use bind_confirm::PendingEquipAnswer;
 pub use calls::{NearestMode, ScriptCall};
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
-pub use channel::{ChannelCommand, ZoneChannelRow};
+pub use channel::{ChannelCommand, RecruitmentPlan, RecruitmentRun, ZoneChannelRow};
 pub use char_stats::{
     weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, UnitCombatStats,
     BANK_BAG_SLOT_COUNT, INVENTORY_SLOT_COUNT, SKILL_DEFENSE, SKILL_UNARMED,
