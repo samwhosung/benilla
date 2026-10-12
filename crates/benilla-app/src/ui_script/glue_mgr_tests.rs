@@ -953,9 +953,11 @@ fn enter_world_on_a_character_flagged_for_rename_asks_for_a_name() {
 }
 
 /// Past the guards: `lastCharacterIndex` takes the index (`0x46b5fa`), the state goes to 8
-/// (`0x46b711`) and the pick goes out behind the asks made before it. The login is sent once per
-/// entry (`0x46c272`), so a second call in state 8 writes the index again and picks nothing; the
-/// dialog's button in state 8 cancels to state 0 (`0x46b776`).
+/// (`0x46b711`) and the pick goes out behind the asks made before it. Every call repoints the
+/// record the first frame of state 8 stashes the login's guid from (`0x46c1d6`-`0x46c1e6`), so the
+/// last call of the frame wins both the index and the pick; once the pick has left, a call writes
+/// the index and picks nothing (`0x46c272` sends once). The dialog's button in state 8 cancels
+/// to state 0 (`0x46b776`).
 #[test]
 fn enter_world_writes_the_index_and_picks_in_state_8() {
     let mut m = on_select();
@@ -973,6 +975,17 @@ fn enter_world_writes_the_index_and_picks_in_state_8() {
             ParkRequest::Char(CharRequest::Enter(0x13))
         ]
     ));
+    // A second call in the same frame: the last record wins both.
+    m.enter_world(1, 0x12, 0);
+    assert_eq!(m.last_character, Some(1));
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [
+            ParkRequest::Char(CharRequest::Enumerate),
+            ParkRequest::Char(CharRequest::Enter(0x12))
+        ]
+    ));
+    // The frame's asks leave.
     m.park_out.clear();
     m.last_character = None;
     m.enter_world(0, 0x11, 0);

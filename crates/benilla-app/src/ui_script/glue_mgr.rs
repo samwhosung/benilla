@@ -671,9 +671,11 @@ impl GlueMgr {
     /// `CGlueMgr::EnterWorld` (`0x46b500`) for the record the VM's selection named (its guard
     /// `0x46b53e`): the realm and link guards (`0x46b50d`, `0x46b56c`), the two flag arms
     /// (`0x46b57e`, `0x46b5b1`), then `lastCharacterIndex` (`0x46b5fa`, saved at `0x46b6f6`), state 8
-    /// (`0x46b711`) and the pick, in order with the park's other requests. The phase that sends the
-    /// login once (`0x46c272`, its guid stashed by the first frame of state 8, `0x46c1dd`) is the
-    /// pick here, so a second call in state 8 sends nothing more.
+    /// (`0x46b711`) and the pick, in order with the park's other requests. Every call repoints the
+    /// selected record (`[0xb41df4]`, `0x46b539`), and the first frame of state 8 stashes the guid
+    /// the login sends from it (`0x46c1d6`-`0x46c1e6`, sent once at `0x46c272`): here the pick
+    /// leaves at the end of the frame, so a later call in the same frame replaces its guid, and
+    /// one after it sends nothing more.
     fn enter_world(&mut self, index: i32, guid: u64, flags: u32) {
         if self.selected.is_none() || !self.connected {
             return;
@@ -693,8 +695,16 @@ impl GlueMgr {
             return;
         }
         self.last_character = Some(index);
-        if self.state != ScreenState::EnterWorld {
-            self.park_out.push(CharRequest::Enter(guid).into());
+        let queued = self.park_out.iter_mut().find_map(|r| match r {
+            ParkRequest::Char(CharRequest::Enter(g)) => Some(g),
+            _ => None,
+        });
+        match queued {
+            Some(g) => *g = guid,
+            None if self.state != ScreenState::EnterWorld => {
+                self.park_out.push(CharRequest::Enter(guid).into());
+            }
+            None => {}
         }
         self.state = ScreenState::EnterWorld;
     }
