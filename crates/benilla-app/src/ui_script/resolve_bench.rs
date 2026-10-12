@@ -140,6 +140,103 @@ fn tooltip_change_costs_a_whole_ui_solve() {
     );
 }
 
+/// What hidden frames cost on the shipped UI, which keeps most of its frames hidden: the load and
+/// settle, a stock panel's first and later shows, and layout writes to hidden frames every frame.
+#[test]
+#[ignore = "bench, run explicitly"]
+fn hidden_frames_cost() {
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1600.0, 900.0);
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            name: Some("Probefour".into()),
+            level: 60,
+            ..Default::default()
+        }),
+    );
+    let t = Instant::now();
+    super::load_default_ui(&s);
+    let load = ms(t);
+    let t = Instant::now();
+    for _ in 0..12 {
+        s.resolve();
+        if answer_measures(&mut s) == 0 {
+            break;
+        }
+    }
+    println!(
+        "BOOT       load {load:.1} ms  settle {:.2} ms  solves={} rounds={}",
+        ms(t),
+        s.layout_solves(),
+        s.layout_rounds()
+    );
+
+    let quiet = |s: &mut UiScript| {
+        for _ in 0..4 {
+            app_frame(s);
+        }
+    };
+    quiet(&mut s);
+    for panel in [
+        "CharacterFrame",
+        "SpellBookFrame",
+        "QuestLogFrame",
+        "FriendsFrame",
+        "GameMenuFrame",
+        "OptionsFrame",
+    ] {
+        let t = Instant::now();
+        s.run(&format!("{panel}:Show()")).unwrap();
+        app_frame(&mut s);
+        let first = ms(t);
+        s.run(&format!("{panel}:Hide()")).unwrap();
+        app_frame(&mut s);
+        quiet(&mut s);
+        let n = 20u32;
+        let t = Instant::now();
+        for _ in 0..n {
+            s.run(&format!("{panel}:Show()")).unwrap();
+            app_frame(&mut s);
+            s.run(&format!("{panel}:Hide()")).unwrap();
+            app_frame(&mut s);
+        }
+        println!(
+            "SHOW       {panel:<15} first {first:.3} ms  later {:.3} ms/show+hide",
+            ms(t) / f64::from(n)
+        );
+    }
+
+    // A layout write to each of the spell book's hidden buttons, every frame.
+    s.run(
+        r#"
+        bench_hidden_n = 0
+        function bench_hidden_frame()
+            bench_hidden_n = bench_hidden_n + 1
+            for i = 1, 12 do
+                getglobal("SpellButton" .. i):SetWidth(30 + math.mod(bench_hidden_n, 2))
+            end
+        end
+        "#,
+    )
+    .unwrap();
+    quiet(&mut s);
+    let (s0, r0) = (s.layout_solves(), s.layout_rounds());
+    let n = 100u32;
+    let t = Instant::now();
+    for _ in 0..n {
+        s.run("bench_hidden_frame()").unwrap();
+        app_frame(&mut s);
+    }
+    println!(
+        "HIDDEN     {:.3} ms/frame  solves/frame={:.2} rounds/frame={:.2}",
+        ms(t) / f64::from(n),
+        (s.layout_solves() - s0) as f64 / f64::from(n),
+        (s.layout_rounds() - r0) as f64 / f64::from(n),
+    );
+}
+
 /// Measuring before resolving makes a tooltip content change cost one layout solve; measured
 /// after, the answers would force a second whole-UI solve.
 #[test]

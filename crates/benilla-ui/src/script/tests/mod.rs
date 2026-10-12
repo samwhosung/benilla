@@ -29,6 +29,7 @@ mod generic_for;
 mod glue_surface;
 mod gm_ticket;
 mod handler_prof;
+mod hidden_defer;
 mod host_state;
 mod hover_publish;
 mod hover_walk;
