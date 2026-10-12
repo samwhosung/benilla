@@ -46,21 +46,34 @@ fn private(opcode: u16) -> bool {
 
 /// A client packet whose body is never traced: `CMSG_AUTH_SESSION` carries the account name and
 /// the proof built from the session key; `CMSG_JOIN_CHANNEL` and `CMSG_CHANNEL_PASSWORD` carry a
-/// channel's password; and a `CMSG_MESSAGECHAT` that types a server account command, such as
-/// `.account password <old> <new>`, carries the account's. Server packets carry none.
+/// channel's password; and a `CMSG_MESSAGECHAT` that is a server command, which vmangos reads when
+/// the text starts with `.` or `!` (`Chat.cpp:2031`, `:2047`) and matches by prefix
+/// (`.acc pass <old> <new>`), may carry the account's. Server packets carry none.
 fn secret(opcode: u16, body: &[u8]) -> bool {
     match opcode {
         opcode::CMSG_AUTH_SESSION | opcode::CMSG_JOIN_CHANNEL | opcode::CMSG_CHANNEL_PASSWORD => {
             true
         }
-        opcode::CMSG_MESSAGECHAT => {
-            let text = body.to_ascii_lowercase();
-            [b".account".as_slice(), b"password"]
-                .iter()
-                .any(|needle| text.windows(needle.len()).any(|w| w == *needle))
-        }
+        opcode::CMSG_MESSAGECHAT => is_command(body),
         _ => false,
     }
+}
+
+/// Whether a `CMSG_MESSAGECHAT` body (type u32, language u32, then for a whisper or channel
+/// message the target's name, then the text) has a message that starts with `.` or `!`. Both
+/// layouts are tried, so a type this does not know still gets the check.
+fn is_command(body: &[u8]) -> bool {
+    let Some(rest) = body.get(8..) else {
+        return false;
+    };
+    let after_target = rest
+        .iter()
+        .position(|&b| b == 0)
+        .map(|nul| &rest[nul + 1..]);
+    [Some(rest), after_target]
+        .into_iter()
+        .flatten()
+        .any(|text| matches!(text.first(), Some(b'.' | b'!')))
 }
 
 /// `body` as lowercase hex with no separators; empty for an empty body.
@@ -135,6 +148,27 @@ fn skip_line_with(opcode: u16, reason: &str, body: &[u8], reveal: bool) -> Strin
     format!("opcode={opcode:#06x} {reason} hex={payload}")
 }
 
+/// A command the writer dropped for want of a session, as the trace's `wire` line and the log name
+/// it. The `Debug` form would print a channel's password and the text of a chat message, a mail or
+/// a ticket, which these lines keep out as the packet lines do.
+pub(super) fn dropped(cmd: &crate::net::ClientCommand) -> String {
+    use crate::net::ClientCommand as C;
+    match cmd {
+        C::JoinChannel { name, .. } => {
+            format!("JoinChannel {{ name: {name:?}, password: {REDACTED} }}")
+        }
+        C::ChannelPassword { name, .. } => {
+            format!("ChannelPassword {{ name: {name:?}, password: {REDACTED} }}")
+        }
+        C::Chat { .. } => format!("Chat {{ text: {WITHHELD} }}"),
+        C::AddonMessage { .. } => format!("AddonMessage {{ text: {WITHHELD} }}"),
+        C::SendMail { .. } => format!("SendMail {{ text: {WITHHELD} }}"),
+        C::GmTicketCreate { .. } => format!("GmTicketCreate {{ text: {WITHHELD} }}"),
+        C::GmTicketUpdate { .. } => format!("GmTicketUpdate {{ text: {WITHHELD} }}"),
+        other => format!("{other:?}"),
+    }
+}
+
 /// The hook [`super::spawn_net`] installs for the `out` tag: one line per client packet written
 /// to the world socket, whichever session or writer sent it, right after the write.
 pub(super) fn trace_out(opcode: u16, body: &[u8]) {
@@ -191,13 +225,25 @@ mod tests {
             }
             // The length stays: it says the packet went out.
             assert!(out_line_with(opcode::CMSG_AUTH_SESSION, secret, reveal).contains("len=10"));
+            // vmangos reads `.` and `!` commands and matches them by prefix.
             for command in [
                 ".account password old new new",
+                ".acc pass old new new",
+                "!acc pass old new new",
                 ".ACCOUNT create a b",
-                "my Password",
             ] {
                 let line = out_line_with(opcode::CMSG_MESSAGECHAT, &chat(command), reveal);
                 assert!(line.ends_with("hex=<redacted>"), "{command}: {line}");
+                // The same text whispered or sent to a channel follows the target's name.
+                let mut targeted = vec![7, 0, 0, 0, 0, 0, 0, 0];
+                targeted.extend_from_slice(b"Alice\0");
+                targeted.extend_from_slice(command.as_bytes());
+                targeted.push(0);
+                let line = out_line_with(opcode::CMSG_MESSAGECHAT, &targeted, reveal);
+                assert!(
+                    line.ends_with("hex=<redacted>"),
+                    "{command} to Alice: {line}"
+                );
             }
         }
         // Inbound traffic carries no credential of ours.
@@ -267,5 +313,26 @@ mod tests {
         assert!(
             skip_line_with(opcode::SMSG_MESSAGECHAT, &reason, &body, true).contains(&hex(&body))
         );
+    }
+
+    /// A command the writer drops for want of a session is named without its secrets or its text.
+    #[test]
+    fn a_dropped_command_is_named_without_its_password_or_text() {
+        use crate::net::ClientCommand as C;
+        let join = dropped(&C::JoinChannel {
+            name: "Trade".into(),
+            password: "hunter2".into(),
+        });
+        assert_eq!(
+            join,
+            "JoinChannel { name: \"Trade\", password: <redacted> }"
+        );
+        let pw = dropped(&C::ChannelPassword {
+            name: "Trade".into(),
+            password: "hunter2".into(),
+        });
+        assert!(pw.contains("<redacted>") && !pw.contains("hunter2"), "{pw}");
+        // Anything else keeps its `Debug` form.
+        assert_eq!(dropped(&C::Logout), "Logout");
     }
 }

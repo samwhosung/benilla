@@ -113,7 +113,8 @@ out of scope is closed with the reason.
     packet header. An `in` line also has `ev=`, the events it decoded to; a server packet that
     failed to parse is a `skip` line with its bytes. Traces get attached to public issues, so two
     kinds of body are kept out. A client packet that carries a secret, the auth session, a channel
-    password or a typed `.account` command, shows `hex=<redacted>` always. Chat in both directions
+    password or any chat text starting with `.` or `!` (a server command), shows
+    `hex=<redacted>` always, and so does a dropped command's log line. Chat in both directions
     and the bulk name lists (`SMSG_WHO`, the friend, ignore, guild roster and channel lists) show
     `hex=<withheld>`, with `len=` kept, unless `WOW_MOVE_TRACE_CHAT=1` is set, for a developer who
     needs those bodies and will read the file before sharing it.

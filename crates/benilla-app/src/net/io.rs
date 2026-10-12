@@ -839,11 +839,14 @@ fn writer_loop(
                     if benilla_assets::trace::enabled() {
                         benilla_assets::trace::line(
                             "wire",
-                            &format!("DROPPED — no live session: {cmd:?}"),
+                            &format!("DROPPED — no live session: {}", wire_trace::dropped(&cmd)),
                         );
                     }
                     if warned < SEND_WARN_CAP {
-                        bevy::log::warn!("net: dropping command — not connected: {cmd:?}");
+                        bevy::log::warn!(
+                            "net: dropping command — not connected: {}",
+                            wire_trace::dropped(&cmd)
+                        );
                         warned += 1;
                     }
                     continue;
