@@ -1197,11 +1197,9 @@ pub(super) fn writer_loop(
                 let Ok(cmd) = cmd else { return }; // all app senders dropped → app exit
                 // The read thread installs a writer before it announces the entry, so a command
                 // the app sends on that announcement finds it here even when this wake-up took
-                // the command first.
-                if writer.is_none() {
-                    while let Ok(swap) = writer_rx.try_recv() {
-                        apply_swap(swap, &mut writer, &mut warned, &mut ping_tick, ping_clock);
-                    }
+                // the command first, whether no writer is held or a lost link's dead one is.
+                while let Ok(swap) = writer_rx.try_recv() {
+                    apply_swap(swap, &mut writer, &mut warned, &mut ping_tick, ping_clock);
                 }
                 let Some(w) = writer.as_mut() else {
                     // No live writer: the command is dropped, and both lines name it.

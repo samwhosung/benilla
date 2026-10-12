@@ -757,3 +757,78 @@ fn a_packet_left_in_flight_by_the_world_does_not_cost_the_link() {
     }
     assert_eq!(world.open(), 1, "the world link is kept");
 }
+
+/// The write thread holds a lost link's dead writer until the next entry installs a new one, and
+/// a command can be ready in the same wake-up as that install. Every pending swap is applied
+/// before a command is judged, so the command goes out on the new link. The write thread is held
+/// inside the first install (on the ping clock's lock) while the second install and the command
+/// queue, so both are ready together; without the drain the pick between them is a coin toss,
+/// and twelve rounds catch it.
+#[test]
+fn a_command_ready_with_an_install_goes_out_on_the_new_writer() {
+    use super::{writer_loop, WriterSwap};
+    use crate::net::ClientCommand;
+    const KEY: [u8; benilla_srp::SESSION_KEY_LENGTH] = [9; benilla_srp::SESSION_KEY_LENGTH];
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let (keys_tx, keys_rx) = crossbeam_channel::unbounded();
+    keys_tx.send(KEY).unwrap();
+    let world = fake::world(listener, keys_rx);
+    let writer = || {
+        benilla_protocol::WorldSession::connect(&addr, fake::USER, KEY)
+            .unwrap()
+            .into_split()
+            .unwrap()
+    };
+
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<ClientCommand>();
+    let (swap_tx, swap_rx) = crossbeam_channel::unbounded::<WriterSwap>();
+    let clock = std::sync::Arc::new(Mutex::new(PingClock::default()));
+    let thread_clock = std::sync::Arc::clone(&clock);
+    thread::spawn(move || writer_loop(&cmd_rx, swap_rx, &thread_clock));
+
+    let played_in = |session: usize| {
+        world
+            .session_packets
+            .lock()
+            .unwrap()
+            .get(session)
+            .is_some_and(|packets| {
+                packets
+                    .iter()
+                    .any(|p| p[2..4] == opcode::CMSG_PLAYED_TIME.to_le_bytes())
+            })
+    };
+    let mut readers = Vec::new();
+    for round in 0..12 {
+        let (old_reader, old) = writer();
+        let (new_reader, new) = writer();
+        readers.extend([old_reader, new_reader]);
+        let held = clock.lock().unwrap();
+        swap_tx
+            .send(WriterSwap::Install {
+                writer: old,
+                fresh_link: true,
+            })
+            .unwrap();
+        // The write thread has taken the old writer and waits on the clock inside the install.
+        thread::sleep(std::time::Duration::from_millis(5));
+        swap_tx
+            .send(WriterSwap::Install {
+                writer: new,
+                fresh_link: true,
+            })
+            .unwrap();
+        cmd_tx.send(ClientCommand::PlayedTime).unwrap();
+        drop(held);
+        let (old_index, new_index) = (2 * round, 2 * round + 1);
+        wait_until(
+            || played_in(old_index) || played_in(new_index),
+            "the command went out",
+        );
+        assert!(
+            played_in(new_index) && !played_in(old_index),
+            "round {round}: the command went out on the writer being replaced"
+        );
+    }
+}
