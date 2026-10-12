@@ -499,7 +499,7 @@ mod tests {
     fn store(slot: u32, flags: u8, standing: i32) -> Reputations {
         let mut v = vec![(0u8, 0i32); slot as usize + 1];
         v[slot as usize] = (flags, standing);
-        Reputations(v)
+        Reputations(v, Vec::new())
     }
 
     /// `0x4d5731` gates the list on `VISIBLE`: an unmet faction prints its rank (base 4000 is

@@ -1434,14 +1434,14 @@ mod tests {
         // Flag 4 on the first entry's slot silences the packet; on a later entry it changes nothing.
         let mut v = vec![(0u8, 0i32); 64];
         v[booty as usize].0 = HIDDEN;
-        assert!(kinds(&Reputations(v), &packet).is_empty());
+        assert!(kinds(&Reputations(v, Vec::new()), &packet).is_empty());
         let mut v = vec![(0u8, 0i32); 64];
         v[gadget as usize].0 = HIDDEN;
-        assert_eq!(kinds(&Reputations(v), &packet), ["combat"]);
+        assert_eq!(kinds(&Reputations(v, Vec::new()), &packet), ["combat"]);
 
         // An unchanged first entry prints nothing, and the entries behind it still stay silent.
         let mut v = vec![(0u8, 0i32); 64];
         v[booty as usize].1 = 100;
-        assert!(kinds(&Reputations(v), &packet).is_empty());
+        assert!(kinds(&Reputations(v, Vec::new()), &packet).is_empty());
     }
 }
