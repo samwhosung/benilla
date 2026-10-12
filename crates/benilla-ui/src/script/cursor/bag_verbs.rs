@@ -64,6 +64,10 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
     if !accepts(live) {
         return false;
     }
+    // Player control, and an open bank for a bank bag slot (`0x4c7c32`, `0x4c7c40`-`0x4c7c55`).
+    if !model.player_control || (BANK_BAG_INV_SLOTS.contains(&live) && model.bank.is_none()) {
+        return false;
+    }
     // An empty or non-item cursor answers nil and sends nothing. At an occupied slot the
     // reference clears such a cursor (`0x4c7ce4`, `0x4c7eaf`), buying a held vendor row first
     // (`0x4c7e66`).
@@ -324,6 +328,7 @@ mod tests {
     #[test]
     fn an_empty_bag_slot_equips_the_held_bag_and_still_answers_nil() {
         let mut s = UiScript::new().unwrap();
+        s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(Default::default());
         s.run("PickupContainerItem(0, 1)").unwrap();
@@ -348,6 +353,7 @@ mod tests {
     #[test]
     fn an_empty_bag_slot_auto_equips_an_ordinary_item() {
         let mut s = UiScript::new().unwrap();
+        s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.run("PickupContainerItem(0, 2)").unwrap();
 
@@ -361,6 +367,7 @@ mod tests {
     #[test]
     fn an_occupied_bag_slot_swaps_with_a_held_bag_and_answers_one() {
         let mut s = UiScript::new().unwrap();
+        s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
         s.run("PickupContainerItem(0, 1)").unwrap();
@@ -382,6 +389,7 @@ mod tests {
     #[test]
     fn an_occupied_bag_slot_auto_stores_an_ordinary_item() {
         let mut s = UiScript::new().unwrap();
+        s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
         s.run("PickupContainerItem(0, 2)").unwrap();
@@ -423,6 +431,7 @@ mod tests {
     #[test]
     fn the_answer_is_the_number_one_not_the_boolean_true() {
         let mut s = UiScript::new().unwrap();
+        s.set_bank(Some(Default::default()));
         s.set_container(0, Some(backpack()));
         s.set_bank_bag_slots(one_bank_bag());
         s.run("PickupContainerItem(0, 2)").unwrap();
@@ -568,5 +577,25 @@ mod tests {
         assert_eq!(s.cursor_payload(), Some(spell), "an empty slot keeps it");
         s.run("PickupBagFromSlot(64)").unwrap();
         assert_eq!(s.cursor_item().map(|i| i.slot), Some(64));
+    }
+
+    /// A bank bag slot answers nil with the bank closed, in `PutItemInBag` (`0x4c7c40`-`0x4c7c55`)
+    /// and in the doll handler it reaches for an empty slot (`0x4c7366`-`0x4c7386`): the held item
+    /// stays, nothing is sent.
+    #[test]
+    fn a_bank_bag_slot_needs_the_bank_open() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.set_bank_bag_slots(one_bank_bag());
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        for live in [64, 65] {
+            assert!(s
+                .eval::<bool>(&format!("return PutItemInBag({live}) == nil"))
+                .unwrap());
+            s.run(&format!("PickupInventoryItem({live})")).unwrap();
+        }
+        assert!(s.cursor_item().is_some(), "kept");
+        assert!(s.take_container_moves().is_empty());
+        assert!(s.take_container_autoequips().is_empty());
     }
 }

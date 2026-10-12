@@ -42,6 +42,10 @@ pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
     if !(1..=23).contains(&id) && !super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&id) {
         return DollClick::Done(false);
     }
+    // A bank bag slot needs the bank open (`0x4c7366`-`0x4c7386`).
+    if super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&id) && model.bank.is_none() {
+        return DollClick::Done(false);
+    }
     // Only a held item (`0x4c769a`) or a held row, a vendor's or the bar's (`0x4c76a5`), takes the
     // click first. Past them an empty slot or a locked item does nothing (`0x4c76af`,
     // `0x4c76d2`), an item-targeting spell binds the item, so a worn weapon can be poisoned
