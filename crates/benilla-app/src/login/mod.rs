@@ -53,6 +53,7 @@ impl Plugin for LoginPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LoginIntent>()
             .init_resource::<LoginForm>()
+            .add_message::<GlueLogin>()
             .add_systems(OnEnter(ClientState::Login), enter_login)
             .add_systems(OnExit(ClientState::Login), screen::exit_login)
             .add_systems(
@@ -60,7 +61,19 @@ impl Plugin for LoginPlugin {
                 (
                     // Every state: the reconnect resubmit fires while `InWorld`, and the roster
                     // edge lands wherever it lands.
-                    (drive_policy, to_select_on_roster, drive_quit).chain(),
+                    // The stock glue screens' manager first, after the tick whose Lua called its
+                    // verbs, so its asks reach the policy in the same frame.
+                    (
+                        crate::ui_script::glue_mgr::drive_glue_mgr
+                            .after(crate::ui_script::UiInput)
+                            .after(crate::realm_select::RealmSelectSet)
+                            .run_if(crate::ui_script::glue::stock_glue),
+                        answer_glue,
+                        drive_policy,
+                        to_select_on_roster,
+                        drive_quit,
+                    )
+                        .chain(),
                     (
                         screen::materialize_screen,
                         login_input.run_if(crate::ui_script::glue::native_glue),
@@ -164,6 +177,69 @@ impl Attempt<'_> {
             host: self.realmlist.address().to_string(),
             generation: self.abandon.0.load(Ordering::SeqCst),
         });
+    }
+}
+
+/// What the stock glue screens ask of the login engine, past the glue manager's own guards
+/// ([`crate::ui_script::glue_mgr`]).
+#[derive(Message)]
+pub(crate) enum GlueLogin {
+    /// `CGlueMgr::Login` (`0x46afb0`) reaching `ClientServices`' logon (`0x5ab4b0`): one attempt,
+    /// typed, with the screen's credentials.
+    Submit { account: String, password: String },
+    /// The status dialog's Cancel during the logon (`0x5b3320`) or the world connect (`0x5aaa50`
+    /// with `RESPONSE_CANCELLED`): the attempt in flight is dropped and nothing resubmits.
+    Abandon,
+    /// `DisconnectFromServer` (`0x46d340`): the world session dropped if there is one, then the
+    /// logon cancelled, as select's Back drops the parked session.
+    Disconnect,
+    /// `QuitGame` (`0x46cea0` → `0x401560(0)`): the process ends, with no grace for a sound.
+    Quit,
+}
+
+/// The glue manager's asks: a submit as the screen's own Login press makes it (the account saving
+/// is the stock Lua's `SetSavedAccountName`), a cancel as the native Cancel, a disconnect as
+/// select's Back, a quit as the native quit with no grace. The screen moves and the quit go
+/// through `Commands`, applied before [`drive_quit`] in this chain.
+pub(crate) fn answer_glue(
+    mut asks: MessageReader<GlueLogin>,
+    mut attempt: Attempt,
+    pick: Option<Res<crate::net::CharPick>>,
+    state: Res<State<ClientState>>,
+    time: Res<Time>,
+    mut commands: Commands,
+) {
+    for ask in asks.read() {
+        match ask {
+            GlueLogin::Submit { account, password } => {
+                if !attempt.intent.in_flight {
+                    attempt.send(account, password, true);
+                }
+            }
+            GlueLogin::Abandon => {
+                attempt.abandon.0.fetch_add(1, Ordering::SeqCst);
+                attempt.intent.in_flight = false;
+                attempt.intent.clear();
+            }
+            GlueLogin::Disconnect => {
+                attempt.abandon.0.fetch_add(1, Ordering::SeqCst);
+                attempt.intent.in_flight = false;
+                attempt.intent.clear();
+                if matches!(
+                    state.get(),
+                    ClientState::CharSelect | ClientState::CharCreate
+                ) {
+                    if let Some(pick) = pick.as_deref() {
+                        let _ = pick.0.send(crate::net::CharRequest::Abandon);
+                    }
+                    commands.set_state(ClientState::Login);
+                }
+            }
+            GlueLogin::Quit => {
+                info!("login: QuitGame");
+                commands.insert_resource(QuitArm(Some(time.elapsed_secs())));
+            }
+        }
     }
 }
 
@@ -862,7 +938,7 @@ fn drive_quit(arm: Option<Res<QuitArm>>, time: Res<Time>, mut exit: MessageWrite
 
 /// The realmlist dialog's prompt for a value that is not an address; the typed text stays for
 /// editing.
-const REALMLIST_BAD: &str =
+pub(crate) const REALMLIST_BAD: &str =
     "That is not a server address.\nTry  logon.example.org  or  127.0.0.1:3724";
 
 /// What a glue-dialog press means on this screen; the widget
@@ -963,14 +1039,14 @@ fn save_account_to(path: &std::path::Path, name: &str) {
 }
 
 /// `GetSavedAccountName`, at [`crate::local_state`]'s path.
-fn load_saved_account() -> String {
+pub(crate) fn load_saved_account() -> String {
     crate::local_state::saved_account_path()
         .map(|p| load_saved_account_from(&p))
         .unwrap_or_default()
 }
 
 /// `SetSavedAccountName`; empty clears.
-fn save_account(name: &str) {
+pub(crate) fn save_account(name: &str) {
     if let Some(path) = crate::local_state::saved_account_path() {
         save_account_to(&path, name);
     }

@@ -720,4 +720,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // "Last character selected": a 0-based row (the selection cell `[0x83856c]` under `"%d"`), so
     // "0" is the first character. It mirrors [`crate::char_select::Roster::pending_index`].
     same(crate::char_select::CVAR_LAST_CHARACTER, "0"),
+    // The four user agreements the login screen walks (`0x402db6`, `0x402dd9`, `0x402dfc`,
+    // `0x402e1f`; "0" `0x82e570`, category 4): "Status of the TOS" (`0x82e8e4`), "... the EULA"
+    // (`0x82e8c8`), "... the Scanning notice" (`0x82e89c`) and "... the Contest notice"
+    // (`0x82e86c`). The glue manager reads them once at startup (`0x46a400`) as accepted (1) and
+    // changed (negative), and its `Accept*` writes "1" (`0x46aef0` and its siblings).
+    same("readTOS", "0"),
+    same("readEULA", "0"),
+    same("readScanning", "0"),
+    same("readContest", "0"),
 ];

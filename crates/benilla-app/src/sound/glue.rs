@@ -29,10 +29,27 @@ const GLUE_MUSIC_FADE_OUT_MS: u64 = 3000;
 #[derive(Message)]
 pub(crate) struct GlueSound(pub(crate) &'static str);
 
+/// The stock glue screens' music verbs, which drive the theme in place of the native screens'
+/// start-on-entry under `WOW_GLUE_STOCK=1`.
+#[derive(Message, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GlueMusicRequest {
+    /// `PlayGlueMusic(file)` (`0x45aeb0`): the same file still streaming plays on; another stops
+    /// the old one over 3.0 s and starts at 0.8; an empty name restarts the remembered file if
+    /// nothing streams.
+    Play(String),
+    /// `StopGlueMusic()` (`0x46cf00`): a 1.0 s fade (`0x45b050(1.0)`), the file still remembered.
+    Stop,
+}
+
+/// `StopGlueMusic`'s fade, `0x3f800000` pushed at `0x46cf00`.
+const STOP_GLUE_MUSIC_FADE_MS: u64 = 1000;
+
 /// The held glue-music stream and its starvation watch. The handle is kept through the stop-fade
 /// so the watch still sees the stream during the world-entry load burst.
 struct GlueMusic {
     handle: Option<mixer::StreamingSoundHandle<kira::sound::FromFileError>>,
+    /// The file `PlayGlueMusic` last started (`0xb060a0`), the stock screens' theme.
+    track: String,
     watch: mixer::StreamWatch,
     /// The stop-fade is running; the per-frame slider feed stands off so it cannot undo the ramp.
     fading: bool,
@@ -42,6 +59,7 @@ impl Default for GlueMusic {
     fn default() -> Self {
         Self {
             handle: None,
+            track: String::new(),
             watch: mixer::StreamWatch::new("glue music"),
             fading: false,
         }
@@ -90,29 +108,103 @@ fn start_glue_music(
     // A theme mid-fade restarts at once: the enter-world stop clears the cached track name
     // (`0x45afec`), so the next `PlayGlueMusic` opens a fresh stream. The old handle drops below
     // with its ramp armed and finishes fading on the backend.
+    open_glue_music(&mut music, &mut out, assets.as_deref(), &config, GLUE_MUSIC);
+}
+
+/// Open `file` off the chain as the held theme at the Music slider times 0.8.
+fn open_glue_music(
+    music: &mut GlueMusic,
+    out: &mut SoundOutput,
+    assets: Option<&WorldAssets>,
+    config: &SoundConfig,
+    file: &str,
+) {
     let (Some(assets), Some(mixer_ref)) = (assets, out.mixer.as_mut()) else {
         return;
     };
     let bytes = {
         let chain = assets.chain.lock_recover();
-        chain.read(GLUE_MUSIC)
+        chain.read(file)
     };
     let data = match bytes.and_then(mixer::stream_from_bytes) {
         Ok(d) => d,
         Err(e) => {
-            debug!("glue music: {GLUE_MUSIC} — {e:#}");
+            debug!("glue music: {file} — {e:#}");
             return;
         }
     };
     let amp = config.category_amp(SoundCategory::Music) * GLUE_MUSIC_VOLUME;
     match mixer_ref.play_stream(data.volume(mixer::amp_to_db(amp))) {
         Ok(h) => {
-            info!("glue music: {GLUE_MUSIC}");
+            info!("glue music: {file}");
             music.handle = Some(h);
             music.fading = false;
             music.watch.reset();
         }
         Err(e) => debug!("glue music: {e:#}"),
+    }
+}
+
+/// Stop the held theme over `fade_ms`; the handle drops once the watch sees it stopped.
+fn fade_glue_music(music: &mut GlueMusic, fade_ms: u64) {
+    if let Some(h) = music.handle.as_mut() {
+        h.stop(mixer::fade(fade_ms));
+        music.fading = true;
+    }
+}
+
+/// What a `PlayGlueMusic(file)` does against the remembered file and whether a stream is live
+/// (`0x45aef9`-`0x45afdb`).
+#[derive(Debug, PartialEq, Eq)]
+enum PlayAction {
+    Nothing,
+    /// Start the remembered file again (an empty name, nothing streaming).
+    Restart,
+    /// Stop what streams over 3.0 s, remember `file` and start it.
+    Switch,
+}
+
+fn play_action(file: &str, remembered: &str, streaming: bool) -> PlayAction {
+    if file.is_empty() {
+        if !streaming && !remembered.is_empty() {
+            PlayAction::Restart
+        } else {
+            PlayAction::Nothing
+        }
+    } else if !remembered.is_empty() && file == remembered && streaming {
+        PlayAction::Nothing
+    } else {
+        PlayAction::Switch
+    }
+}
+
+/// The stock glue screens' music verbs.
+fn drive_glue_music_requests(
+    mut requests: MessageReader<GlueMusicRequest>,
+    mut music: NonSendMut<GlueMusic>,
+    mut out: NonSendMut<SoundOutput>,
+    assets: Option<Res<WorldAssets>>,
+    config: Res<SoundConfig>,
+) {
+    for request in requests.read() {
+        match request {
+            GlueMusicRequest::Play(file) => {
+                let streaming = music.handle.is_some() && !music.fading;
+                match play_action(file, &music.track, streaming) {
+                    PlayAction::Nothing => {}
+                    PlayAction::Restart => {
+                        let track = music.track.clone();
+                        open_glue_music(&mut music, &mut out, assets.as_deref(), &config, &track);
+                    }
+                    PlayAction::Switch => {
+                        fade_glue_music(&mut music, GLUE_MUSIC_FADE_OUT_MS);
+                        music.track = file.clone();
+                        open_glue_music(&mut music, &mut out, assets.as_deref(), &config, file);
+                    }
+                }
+            }
+            GlueMusicRequest::Stop => fade_glue_music(&mut music, STOP_GLUE_MUSIC_FADE_MS),
+        }
     }
 }
 
@@ -188,6 +280,7 @@ fn report_stream_voices(music: NonSend<GlueMusic>, mut out: NonSendMut<super::So
 
 pub(super) fn plugin(app: &mut App) {
     app.add_message::<GlueSound>()
+        .add_message::<GlueMusicRequest>()
         .insert_non_send_resource(GlueMusic::default())
         .add_systems(
             Update,
@@ -196,7 +289,12 @@ pub(super) fn plugin(app: &mut App) {
                 // The theme starts at the login screen (`AccountLogin_OnShow` sets the same
                 // `wow_main_theme`) and keeps across the glue screens.
                 start_glue_music
-                    .run_if(in_state(ClientState::Login).or(in_state(ClientState::CharSelect))),
+                    .run_if(in_state(ClientState::Login).or(in_state(ClientState::CharSelect)))
+                    .run_if(crate::ui_script::glue::native_glue),
+                // The stock screens' `PlayGlueMusic`/`StopGlueMusic` drive it instead.
+                drive_glue_music_requests
+                    .after(crate::ui_script::glue_mgr::drive_glue_mgr)
+                    .before(watch_glue_music),
                 // No run condition: the theme plays into `InWorld`, and the entry load burst is
                 // the window the watch exists for.
                 hand_off_glue_music,
@@ -206,4 +304,23 @@ pub(super) fn plugin(app: &mut App) {
                 report_stream_voices,
             ),
         );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `0x45aeb0`'s three legs: an empty name restarts the remembered file only when nothing
+    /// streams; the remembered file still streaming plays on; anything else switches.
+    #[test]
+    fn play_glue_music_restarts_keeps_or_switches() {
+        let theme = "Sound\\Music\\GlueScreenMusic\\wow_main_theme.mp3";
+        assert_eq!(play_action("", theme, false), PlayAction::Restart);
+        assert_eq!(play_action("", theme, true), PlayAction::Nothing);
+        assert_eq!(play_action("", "", false), PlayAction::Nothing);
+        assert_eq!(play_action(theme, theme, true), PlayAction::Nothing);
+        assert_eq!(play_action(theme, theme, false), PlayAction::Switch);
+        assert_eq!(play_action(theme, "", false), PlayAction::Switch);
+        assert_eq!(play_action("other.mp3", theme, true), PlayAction::Switch);
+    }
 }

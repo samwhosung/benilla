@@ -18,6 +18,8 @@ mod content;
 pub(crate) mod extract;
 /// The stock glue screens behind `WOW_GLUE_STOCK=1`.
 pub(crate) mod glue;
+/// `CGlueMgr`'s screen states over the native login, for the stock glue screens.
+pub(crate) mod glue_mgr;
 mod input;
 #[cfg(test)]
 mod layer_tests;
@@ -292,6 +294,7 @@ impl Plugin for UiScriptPlugin {
         crate::shutdown::on_app_exit(app, shutdown_on_exit.into_configs());
         app.insert_resource(UiScaleCvar(default_ui_scale()))
             .insert_resource(glue::GlueStock::from_env())
+            .init_resource::<glue_mgr::GlueMgr>()
             .init_resource::<UiAutoScaleCache>()
             .init_resource::<UiFrameCost>()
             .init_resource::<crate::bindings::WheelNotches>()

@@ -102,6 +102,9 @@ pub(super) fn read(req: &str) -> Option<Vec<u8>> {
     if let Some(overlaid) = fixture::read(req) {
         return overlaid;
     }
+    if let Some(bytes) = read_loose(req) {
+        return Some(bytes);
+    }
     let chain = chain()?;
     match chain.read(req) {
         Ok(bytes) => Some(bytes),
@@ -110,6 +113,22 @@ pub(super) fn read(req: &str) -> Option<Vec<u8>> {
             None
         }
     }
+}
+
+/// A bare file name off the install's own folders, read-only: Storm's open tries the install
+/// directory (its base path `0xc52418`) and its `Data\` before the archives, which is where the
+/// login screen's agreements (`<SimpleHTML file="eula.html">`) are found, loose in `Data\`. Only a
+/// bare name looks on disk; every chain path keeps reading the archives alone.
+fn read_loose(req: &str) -> Option<Vec<u8>> {
+    if req.is_empty() || req.contains(['\\', '/']) || req.contains("..") {
+        return None;
+    }
+    let data = benilla_formats::wow_data()?;
+    let install = data.parent().map(std::path::Path::to_path_buf);
+    install
+        .into_iter()
+        .chain(std::iter::once(data))
+        .find_map(|dir| std::fs::read(dir.join(req)).ok())
 }
 
 /// The player's patch chain, opened once per process and shared by every VM. Process-local, not

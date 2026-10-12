@@ -1,0 +1,115 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <!-- benilla's realmlist control on the stock login screen: a button over the Cinematics one,
+         the address the next login dials beside it, and the stock GlueDialog with its edit box to
+         change it. The address is the realmList CVar, written through ConsoleExec; the host keeps
+         BENILLA_REALMLIST and BENILLA_REALMLIST_PINNED (set while $WOW_HOST fixes the address),
+         and reopens the dialog with the typed text when it is not an address. -->
+    <Script>
+        GlueDialogTypes["BENILLA_REALMLIST"] = {
+            -- The realmList CVar's registered help text.
+            text = "Address of realm list server",
+            button1 = TEXT(OKAY),
+            button2 = TEXT(CANCEL),
+            hasEditBox = 1,
+            maxLetters = 64,
+            OnShow = function()
+                BenillaRealmlist_TakeEditBox();
+                GlueDialogEditBox:SetText(GlueDialog.data or BENILLA_REALMLIST or "");
+                GlueDialogEditBox:HighlightText();
+                GlueDialogEditBox:SetFocus();
+            end,
+            OnAccept = function()
+                local typed = GlueDialogEditBox:GetText();
+                BenillaRealmlist_ReleaseEditBox();
+                if ( typed and typed ~= "" ) then
+                    ConsoleExec("realmList "..typed);
+                end
+            end,
+            OnCancel = function()
+                BenillaRealmlist_ReleaseEditBox();
+            end,
+        };
+
+        GlueDialogTypes["BENILLA_REALMLIST_PINNED"] = {
+            text = "",
+            button1 = TEXT(OKAY),
+            button2 = nil,
+        };
+
+        -- The stock edit box's Enter and Escape call the in-game StaticPopup functions, which the
+        -- glue does not have: while this dialog owns it, they press its buttons, and it is wide
+        -- enough for a host name.
+        function BenillaRealmlist_TakeEditBox()
+            if ( not BenillaRealmlist_Saved ) then
+                BenillaRealmlist_Saved = {
+                    width = GlueDialogEditBox:GetWidth(),
+                    enter = GlueDialogEditBox:GetScript("OnEnterPressed"),
+                    escape = GlueDialogEditBox:GetScript("OnEscapePressed"),
+                };
+            end
+            GlueDialogEditBox:SetWidth(300);
+            GlueDialogEditBox:SetScript("OnEnterPressed", function() GlueDialogButton1:Click(); end);
+            GlueDialogEditBox:SetScript("OnEscapePressed", function() GlueDialogButton2:Click(); end);
+        end
+
+        function BenillaRealmlist_ReleaseEditBox()
+            local saved = BenillaRealmlist_Saved;
+            if ( saved ) then
+                GlueDialogEditBox:SetWidth(saved.width);
+                GlueDialogEditBox:SetScript("OnEnterPressed", saved.enter);
+                GlueDialogEditBox:SetScript("OnEscapePressed", saved.escape);
+                BenillaRealmlist_Saved = nil;
+            end
+            GlueDialogEditBox:ClearFocus();
+        end
+
+        function BenillaRealmlist_OnClick()
+            if ( GlueDialog:IsVisible() ) then
+                return;
+            end
+            PlaySound("gsLoginNewAccount");
+            if ( BENILLA_REALMLIST_PINNED ) then
+                GlueDialog_Show("BENILLA_REALMLIST_PINNED", format(
+                    "$WOW_HOST is set for this session, so the realmlist is fixed at %s.",
+                    BENILLA_REALMLIST or ""));
+            else
+                GlueDialog_Show("BENILLA_REALMLIST", nil, BENILLA_REALMLIST);
+            end
+        end
+    </Script>
+    <Button name="BenillaRealmlistButton" inherits="GlueButtonSmallTemplate" parent="AccountLoginUI" text="Realmlist">
+        <Anchors>
+            <Anchor point="BOTTOM" relativeTo="AccountLoginCinematicsButton" relativePoint="TOP">
+                <Offset>
+                    <AbsDimension x="0" y="-2"/>
+                </Offset>
+            </Anchor>
+        </Anchors>
+        <Layers>
+            <Layer level="BACKGROUND">
+                <FontString name="BenillaRealmlistText" inherits="GlueFontDisableSmall" justifyH="RIGHT">
+                    <Size>
+                        <AbsDimension x="256" y="0"/>
+                    </Size>
+                    <Anchors>
+                        <Anchor point="RIGHT" relativePoint="LEFT">
+                            <Offset>
+                                <AbsDimension x="-4" y="3"/>
+                            </Offset>
+                        </Anchor>
+                    </Anchors>
+                </FontString>
+            </Layer>
+        </Layers>
+        <Scripts>
+            <OnClick>
+                BenillaRealmlist_OnClick();
+            </OnClick>
+            <OnUpdate>
+                if ( BenillaRealmlistText:GetText() ~= BENILLA_REALMLIST ) then
+                    BenillaRealmlistText:SetText(BENILLA_REALMLIST);
+                end
+            </OnUpdate>
+        </Scripts>
+    </Button>
+</Ui>

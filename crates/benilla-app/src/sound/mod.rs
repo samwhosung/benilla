@@ -48,7 +48,7 @@ pub(crate) use emote::EmoteSounds;
 pub(crate) fn kit_decodes() -> u32 {
     kit::DECODES.load(std::sync::atomic::Ordering::Relaxed)
 }
-pub(crate) use glue::GlueSound;
+pub(crate) use glue::{GlueMusicRequest, GlueSound};
 pub(crate) use greeting::NpcGreetingRequest;
 /// Named by the schedule tests' class table (`game_plugins::schedule_tests::Classes`).
 #[cfg(test)]

@@ -72,47 +72,60 @@ impl QueueEstimate {
         realm: Option<&str>,
         strings: &crate::glue_strings::GlueStrings,
     ) -> String {
-        let position = self.position().unwrap_or(0);
-        let named = realm.filter(|r| !r.is_empty());
+        let (key, remaining) = self.key(now_ms, realm);
+        let fallback = match key {
+            "QUEUE_NAME_TIME_LEFT_UNKNOWN" => {
+                "%s is Full\nPosition in queue: %d\nEstimated time: Calculating..."
+            }
+            "QUEUE_NAME_TIME_LEFT_SECONDS" => {
+                "%s is Full\nPosition in queue: %d\nEstimated time: < 1 minute"
+            }
+            "QUEUE_NAME_TIME_LEFT" => "%s is Full\nPosition in queue: %d\nEstimated time: %d min",
+            "QUEUE_TIME_LEFT_UNKNOWN" => {
+                "Realm is Full\nPosition in queue: %d\nEstimated time: Calculating..."
+            }
+            "QUEUE_TIME_LEFT_SECONDS" => {
+                "Realm is Full\nPosition in queue: %d\nEstimated time: < 1 minute"
+            }
+            _ => "Realm is Full\nPosition in queue: %d\nEstimated time: %d min",
+        };
+        self.fill(strings.text(key, fallback), realm, remaining)
+    }
 
+    /// [`Self::text`] with the `QUEUE_*` template looked up by `lookup(key)`: the stock glue
+    /// screens read it off the glue VM's own `GlueStrings.lua`.
+    pub(crate) fn text_by(
+        &self,
+        now_ms: u32,
+        realm: Option<&str>,
+        lookup: impl Fn(&str) -> String,
+    ) -> String {
+        let (key, remaining) = self.key(now_ms, realm);
+        self.fill(&lookup(key), realm, remaining)
+    }
+
+    /// The `QUEUE_*` key for this state, and the wait left in ms once there is an estimate.
+    fn key(&self, now_ms: u32, realm: Option<&str>) -> (&'static str, Option<i64>) {
+        let named = realm.is_some_and(|r| !r.is_empty());
         let remaining = self.estimate_ms(now_ms).and_then(|est| {
             (est > 0).then(|| i64::from(self.tick_ms[0]) + est - i64::from(now_ms))
         });
-
-        let (key, fallback) = match remaining {
-            None => (
-                "QUEUE_NAME_TIME_LEFT_UNKNOWN",
-                "%s is Full\nPosition in queue: %d\nEstimated time: Calculating...",
-            ),
-            Some(ms) if ms < MINUTE_MS => (
-                "QUEUE_NAME_TIME_LEFT_SECONDS",
-                "%s is Full\nPosition in queue: %d\nEstimated time: < 1 minute",
-            ),
-            Some(_) => (
-                "QUEUE_NAME_TIME_LEFT",
-                "%s is Full\nPosition in queue: %d\nEstimated time: %d min",
-            ),
+        let key = match (named, remaining) {
+            (true, None) => "QUEUE_NAME_TIME_LEFT_UNKNOWN",
+            (true, Some(ms)) if ms < MINUTE_MS => "QUEUE_NAME_TIME_LEFT_SECONDS",
+            (true, Some(_)) => "QUEUE_NAME_TIME_LEFT",
+            (false, None) => "QUEUE_TIME_LEFT_UNKNOWN",
+            (false, Some(ms)) if ms < MINUTE_MS => "QUEUE_TIME_LEFT_SECONDS",
+            (false, Some(_)) => "QUEUE_TIME_LEFT",
         };
-        let (key, fallback) = match named {
-            Some(_) => (key, fallback),
-            None => match remaining {
-                None => (
-                    "QUEUE_TIME_LEFT_UNKNOWN",
-                    "Realm is Full\nPosition in queue: %d\nEstimated time: Calculating...",
-                ),
-                Some(ms) if ms < MINUTE_MS => (
-                    "QUEUE_TIME_LEFT_SECONDS",
-                    "Realm is Full\nPosition in queue: %d\nEstimated time: < 1 minute",
-                ),
-                Some(_) => (
-                    "QUEUE_TIME_LEFT",
-                    "Realm is Full\nPosition in queue: %d\nEstimated time: %d min",
-                ),
-            },
-        };
+        (key, remaining)
+    }
 
-        let mut out = strings.text(key, fallback).to_string();
-        if let Some(realm) = named {
+    /// The template's holes: the realm's name, the position, then the minutes.
+    fn fill(&self, template: &str, realm: Option<&str>, remaining: Option<i64>) -> String {
+        let position = self.position().unwrap_or(0);
+        let mut out = template.to_string();
+        if let Some(realm) = realm.filter(|r| !r.is_empty()) {
             out = out.replacen("%s", realm, 1);
         }
         out = out.replacen("%d", &position.to_string(), 1);

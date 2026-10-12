@@ -60,6 +60,11 @@ pub(crate) fn glue_ui_up(
         && state.is_none_or(|s| *s.get() != crate::char_select::ClientState::InWorld)
 }
 
+/// Run condition: the switch is on, whether or not a character is in the world.
+pub(crate) fn stock_glue(stock: Option<Res<GlueStock>>) -> bool {
+    stock.is_some_and(|s| s.0)
+}
+
 /// Run condition: the native glue screens draw and take input, the switch off.
 pub(crate) fn native_glue(stock: Option<Res<GlueStock>>) -> bool {
     !stock.is_some_and(|s| s.0)
@@ -114,6 +119,9 @@ pub(super) fn load_glue(script: &mut UiScript) -> Vec<String> {
             vec![e]
         }
     };
+    if super::manifest::layer_enabled() {
+        failures.extend(load_glue_layer(script));
+    }
     script.fire_event("FRAMES_LOADED", vec![]);
     failures.extend(
         script
@@ -122,6 +130,25 @@ pub(super) fn load_glue(script: &mut UiScript) -> Vec<String> {
             .map(|e| format!("a handler raised during the glue load: {e}")),
     );
     failures
+}
+
+/// benilla's one glue file, its realmlist control over the stock `AccountLogin`, which loads after
+/// every `GlueXML.toc` row and before `FRAMES_LOADED`, as the in-game layer loads after
+/// `FrameXML.toc` ([`super::manifest::LAYER_MANIFEST`]); `WOW_STOCK_UI=1` drops it with that layer.
+pub(super) const GLUE_LAYER: &str = "AccountLoginRealmlist.xml";
+
+/// Load [`GLUE_LAYER`] off the shipped tree; returns its failures.
+fn load_glue_layer(script: &UiScript) -> Vec<String> {
+    let files = vec![GLUE_LAYER.to_string()];
+    let layer = super::addons::Addon::new(
+        "benilla".to_string(),
+        benilla_ui::toc::Toc {
+            directives: Vec::new(),
+            files: files.clone(),
+        },
+        super::addons::Source::Builtin,
+    );
+    layer.load_files(script, &files)
 }
 
 /// Drain the glue load's record into `Logs\GlueXML.log`, as the builder does after
@@ -149,14 +176,15 @@ mod tests {
     /// raises "attempt to call global `X' (a nil value)", at the load or on the login screen. The
     /// list only shrinks: a name built, or no longer reached, comes off it.
     const UNBUILT_CALLED: &[&str] = &[
-        "EULAAccepted",
-        "GetBuildInfo",
         "GetNumCharacters",
-        "GetSavedAccountName",
         "SetCharCustomizeFrame",
         "SetCharSelectModelFrame",
-        "SetCurrentScreen",
     ];
+
+    /// What the player's own files make the reference report too: their `tos.html` uses `<H4>`,
+    /// which 1.12's SimpleHTML does not know (`"Frame %s: Unknown element type: %s"`,
+    /// `0x87a95c`, and the walk goes on).
+    const INSTALL_WARNINGS: &[&str] = &["Frame TOSText: Unknown element type: H4"];
 
     /// The movie frame's three handlers, which benilla's `MovieFrame` does not take: it plays no
     /// movie. Each is a loader warning, `<frame>: SetScript("<handler>") unsupported`; the list only
@@ -251,6 +279,9 @@ mod tests {
             .filter(|e| {
                 if let Some(name) = nil_call(e).filter(|n| UNBUILT_CALLED.contains(n)) {
                     called.insert(name);
+                    return false;
+                }
+                if INSTALL_WARNINGS.contains(&e.as_str()) {
                     return false;
                 }
                 if let Some(h) = UNBUILT_HANDLERS.iter().find(|(frame, handler)| {
