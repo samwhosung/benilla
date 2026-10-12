@@ -776,6 +776,7 @@ fn stock_app() -> (
         .add_message::<GlueLogin>()
         .add_message::<crate::sound::GlueMusicRequest>()
         .add_message::<crate::ui_script::server_alert::LaunchUrl>()
+        .add_message::<crate::ui_script::server_alert::LaunchAddonUrl>()
         .add_message::<AppExit>()
         .init_resource::<crate::portrait::GluePreview>()
         .add_systems(
@@ -1079,9 +1080,9 @@ fn pump(
             E::LoginQueued { position, realm } => {
                 queued.write(LoginQueuedMessage { position, realm });
             }
-            E::AddonInfo { hidden } => {
-                addon_reply.0 = Some(hidden.clone());
-                addon_infos.write(AddonInfoMessage { hidden });
+            E::AddonInfo { records } => {
+                addon_reply.0 = Some(records.clone());
+                addon_infos.write(AddonInfoMessage { records });
             }
             _ => {}
         }
@@ -1149,6 +1150,7 @@ fn live_app_with(
         .add_message::<GlueLogin>()
         .add_message::<crate::sound::GlueMusicRequest>()
         .add_message::<crate::ui_script::server_alert::LaunchUrl>()
+        .add_message::<crate::ui_script::server_alert::LaunchAddonUrl>()
         .add_message::<AppExit>()
         .init_resource::<crate::portrait::GluePreview>()
         .add_systems(
@@ -2322,4 +2324,126 @@ fn addon_list_update_fires_once_when_the_reply_is_read() {
     assert_eq!(vm(&app).eval::<f64>("return GetNumAddOns()").unwrap(), 0.0);
     assert!(!shown(&app, "CharacterSelectAddonsButton"));
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// The server's `SMSG_ADDON_INFO` records reach the registry the stock list reads (`0x51da70`):
+/// the url and the new-version byte beside a listed addon, BANNED for status 0 (refused, no url),
+/// and SECURE once the reply has run the signature check, which benilla answers 3 for an addon
+/// of the player's own chain that claims `## Secure`. A folder addon the reply never names stays
+/// INSECURE.
+#[test]
+fn the_server_reply_sets_the_security_url_and_new_version() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (home, _guard) = addon_home("reply");
+    three_addons(&home);
+    // The twelve in the order they were sent: the first listed with a url and a revision, the
+    // second banned with a url, the rest hidden.
+    let mut records: Vec<(u8, Option<u32>, Option<&str>)> = vec![(2, Some(0), None); 12];
+    records[0] = (1, Some(9), Some("http://example.com/auc"));
+    records[1] = (0, None, Some("http://example.com/bf"));
+    let (mut app, _realmd, world) = {
+        let (app, realmd, world) = three_addon_app(None);
+        world.set_addon_records(&records, false);
+        (app, realmd, world)
+    };
+    drop(world);
+    at_the_roster(&mut app);
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+    assert_eq!(
+        vm(&app).eval::<f64>("return GetNumAddOns()").unwrap(),
+        5.0,
+        "three folder addons and the two the reply left listed"
+    );
+    type Row = (
+        Option<String>,
+        Option<f64>,
+        Option<String>,
+        String,
+        Option<f64>,
+    );
+    let row = |name: &str| -> Row {
+        vm(&app)
+            .eval::<Row>(&format!(
+                "for i = 1, GetNumAddOns() do \
+                   local n, _, _, url, loadable, reason, security, new = GetAddOnInfo(i) \
+                   if n == '{name}' then return url, loadable, reason, security, new end \
+                 end"
+            ))
+            .unwrap()
+    };
+    assert_eq!(
+        row("Blizzard_AuctionUI"),
+        (
+            Some("http://example.com/auc".into()),
+            Some(1.0),
+            None,
+            "SECURE".into(),
+            Some(1.0)
+        ),
+        "revision 9 is past the installed, and the chain's signed addon passes the check"
+    );
+    assert_eq!(
+        row("Blizzard_BattlefieldMinimap"),
+        (None, None, Some("BANNED".into()), "BANNED".into(), None),
+        "status 0 bans it without the check, and a banned addon has no url"
+    );
+    assert_eq!(row("Alpha").3, "INSECURE");
+
+    // The stock confirm dialog's `LaunchAddOnURL(AddonList.selectedID)`: the listed addon's url
+    // reaches the host's launcher, the banned one's (nil) nothing.
+    let index = |name: &str| {
+        vm(&app)
+            .eval::<f64>(&format!(
+                "for i = 1, GetNumAddOns() do \
+                   if (GetAddOnInfo(i)) == '{name}' then return i end end"
+            ))
+            .unwrap()
+    };
+    let (auction, minimap) = (
+        index("Blizzard_AuctionUI"),
+        index("Blizzard_BattlefieldMinimap"),
+    );
+    vm(&app)
+        .run(&format!(
+            "LaunchAddOnURL({auction}) LaunchAddOnURL({minimap})"
+        ))
+        .unwrap();
+    app.update();
+    let launched: Vec<String> = app
+        .world()
+        .resource::<Messages<crate::ui_script::server_alert::LaunchAddonUrl>>()
+        .iter_current_update_messages()
+        .map(|m| m.0.clone())
+        .collect();
+    assert_eq!(launched, ["http://example.com/auc"]);
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// Until the reply runs the handler, a chain addon that claims `## Secure` is INSECURE as the
+/// constructor leaves it (`0x5205b6`), and loads under its own context; the reply's signature
+/// answer makes it SECURE.
+#[test]
+fn a_secure_claim_reads_insecure_until_the_reply_has_run() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_home, _guard) = addon_home("claim");
+    let mut script = UiScript::new_glue().unwrap();
+    crate::ui_script::addons::seat_glue_addons(&mut script, None);
+    assert!(!script.addon_is_secure("Blizzard_TalentUI"));
+    let all: Vec<_> = benilla_protocol::messages::STOCK_SECURE_ADDONS
+        .iter()
+        .map(|a| benilla_protocol::messages::AddonRecord {
+            name: a.name.to_string(),
+            status: 2,
+            ..Default::default()
+        })
+        .collect();
+    crate::ui_script::addons::seat_glue_addons(&mut script, Some(&all));
+    assert!(script.addon_is_secure("Blizzard_TalentUI"));
+    assert!(!script.addon_is_secure("Alpha"));
 }

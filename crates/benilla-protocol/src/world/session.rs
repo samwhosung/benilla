@@ -80,7 +80,7 @@ pub(super) struct LinkFacts {
     /// vmangos sends it once per connection, after the authentication
     /// (`WorldSocket.cpp:446-448`), and the reference applies it to add-on records that outlive
     /// the world session (`0x5b4260` → `0x51da70`), so every login on the link reads it.
-    addon_info: Option<Vec<u8>>,
+    addon_info: Option<Vec<messages::AddonRecord>>,
 }
 
 /// What a world connect reports on its way to `SMSG_AUTH_RESPONSE`.
@@ -227,8 +227,8 @@ impl WorldSession {
     pub fn recv(&mut self) -> Result<ServerPacket> {
         let packet = recv_packet(&mut self.stream, Some(self.crypto.decrypter()))?;
         // `SMSG_ADDON_INFO` can reach any of the handshake's read loops, so it is caught here.
-        if let ServerPacket::AddonInfo { statuses } = &packet {
-            self.link.addon_info = Some(statuses.clone());
+        if let ServerPacket::AddonInfo { records } = &packet {
+            self.link.addon_info = Some(records.clone());
         }
         Ok(packet)
     }
@@ -245,9 +245,9 @@ impl WorldSession {
         }
     }
 
-    /// The `SMSG_ADDON_INFO` statuses this connection received, for every login on it; `None` is
+    /// The `SMSG_ADDON_INFO` records this connection received, for every login on it; `None` is
     /// real, as vmangos stays silent when it rejects the addon block (`WorldSocket.cpp:447`).
-    pub fn addon_info(&self) -> Option<&[u8]> {
+    pub fn addon_info(&self) -> Option<&[messages::AddonRecord]> {
         self.link.addon_info.as_deref()
     }
 

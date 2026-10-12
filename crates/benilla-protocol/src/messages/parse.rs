@@ -12,8 +12,8 @@ use super::{
     combat_log, death, duel, gameobject, gm_ticket, gossip, group, guild, instance, items, loot,
     mail, meeting_stone, mirror_timer, monster_move, movement, opcode, page_text, pet, petition,
     pose, progression, pvp, quest, social, spellbook, spells, stable, summon, tabard, taxi, trade,
-    trainer, tutorial, update_object, vendor, world_state, AttackSwingError, Character,
-    CreatureQueryInfo, JumpInfo, MoveMode, ServerPacket, SpeedKind, SplineMode,
+    trainer, tutorial, update_object, vendor, world_state, AddonRecord, AttackSwingError,
+    Character, CreatureQueryInfo, JumpInfo, MoveMode, ServerPacket, SpeedKind, SplineMode,
 };
 
 /// Read a `SMSG_FORCE_*_SPEED_CHANGE` body: `[packed guid][u32 counter][f32 speed]` for all six
@@ -166,28 +166,44 @@ const fn is_movement_relay(o: u16) -> bool {
 /// ```
 ///
 /// Retail sends the minimal form, 12 records of `{2, 1, 0, 0u32, 0}`. A truncated record ends the
-/// walk and keeps the whole records before it, so `statuses[i]` is always record i's.
-fn read_addon_info(r: &mut &[u8]) -> Vec<u8> {
-    let mut statuses = Vec::new();
+/// walk and keeps the whole records before it, so `records[i]` is always record i's.
+fn read_addon_info(r: &mut &[u8]) -> Vec<AddonRecord> {
+    let mut records = Vec::new();
     while !r.is_empty() {
         let Ok(status) = read_u8(r) else { break };
         let Ok(info_provided) = read_u8(r) else { break };
+        let (mut key_provided, mut revision) = (false, None);
         if info_provided != 0 {
-            let Ok(key_provided) = read_u8(r) else { break };
-            if key_provided != 0 && skip(r, 256).is_none() {
+            let Ok(key) = read_u8(r) else { break };
+            key_provided = key != 0;
+            if key_provided && skip(r, 256).is_none() {
                 break;
             }
-            if read_u32_le(r).is_err() {
-                break;
-            }
+            let Ok(rev) = read_u32_le(r) else { break };
+            revision = Some(rev);
         }
         let Ok(url_provided) = read_u8(r) else { break };
-        if url_provided != 0 && skip(r, 256).is_none() {
-            break;
+        let mut url = None;
+        if url_provided != 0 {
+            if r.len() < 256 {
+                break;
+            }
+            let (field, rest) = r.split_at(256);
+            *r = rest;
+            // `0x4191b0` reads the field as a C string.
+            let text = field.split(|&b| b == 0).next().unwrap_or_default();
+            url = Some(String::from_utf8_lossy(text).into_owned());
         }
-        statuses.push(status);
+        records.push(AddonRecord {
+            name: String::new(),
+            status,
+            info_provided: info_provided != 0,
+            key_provided,
+            revision,
+            url,
+        });
     }
-    statuses
+    records
 }
 
 fn skip(r: &mut &[u8], n: usize) -> Option<()> {
@@ -1557,7 +1573,7 @@ fn parse_server_body(
             }
         }
         opcode::SMSG_ADDON_INFO => ServerPacket::AddonInfo {
-            statuses: read_addon_info(&mut r),
+            records: read_addon_info(&mut r),
         },
         other => ServerPacket::Other { opcode: other },
     };

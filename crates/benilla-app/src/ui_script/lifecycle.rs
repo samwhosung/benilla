@@ -404,7 +404,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         .get_resource::<crate::net::AddonInfoReply>()
         .and_then(|r| r.0.clone())
     {
-        script.note_addon_info_reply(&reply);
+        script.note_addon_info_records(super::addons::addon_replies(&reply));
     }
     // The CVar table goes in before the UI loads: stock `UIOptionsFrame.xml`'s camera dropdowns
     // read `cameraSmoothStyle` and `cameraSmoothTrackingStyle` in their `OnLoad`, where a nil is a

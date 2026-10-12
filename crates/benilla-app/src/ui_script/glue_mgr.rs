@@ -1308,7 +1308,7 @@ pub(crate) fn drive_glue_mgr(
         // Only the glue VM (`script` is filtered to it above); with none up, `AddonInfoReply`
         // holds the list for the next one.
         if let Some(s) = script.as_deref_mut() {
-            s.note_addon_info_reply(&msg.hidden);
+            s.note_addon_info_records(super::addons::addon_replies(&msg.records));
             s.fire_event("ADDON_LIST_UPDATE", Vec::new());
         }
     }

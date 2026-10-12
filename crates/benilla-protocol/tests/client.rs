@@ -672,44 +672,70 @@ fn ping_body_golden_and_pong_roundtrip() {
 /// retail capture is 12 records of `{status 2, info 1, key 0, u32 revision 0, url 0}`; status 2
 /// hides the addon from the Lua index (reference `0x51db84`).
 #[test]
-fn the_addon_info_reply_pairs_its_statuses_back_against_what_we_sent() {
+fn the_addon_info_reply_pairs_its_records_back_against_what_we_sent() {
     let capture: Vec<u8> = std::iter::repeat_n(hx("0201000000000000"), 12)
         .flatten()
         .collect();
     assert_eq!(capture.len(), 96, "the capture is 12 x 8 bytes");
     let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &capture).unwrap();
-    let ServerPacket::AddonInfo { statuses } = packet else {
+    let ServerPacket::AddonInfo { records } = packet else {
         panic!("expected AddonInfo");
     };
-    assert_eq!(statuses, vec![2u8; 12]);
+    assert_eq!(records.len(), 12);
+    assert!(records.iter().all(|r| r.status == 2
+        && r.info_provided
+        && !r.key_provided
+        && r.revision == Some(0)
+        && r.url.is_none()));
 
-    // Every stock addon comes back hidden, so the reference's AddOns list shows none of Blizzard's.
-    let hidden = messages::hidden_from_reply(&statuses, &messages::STOCK_SECURE_ADDONS);
-    assert_eq!(hidden.len(), 12);
+    // Every stock addon comes back named for what we sent in its place.
+    let named = messages::pair_with_sent(&records, &messages::STOCK_SECURE_ADDONS);
+    assert_eq!(named.len(), 12);
     assert!(
-        hidden.iter().all(|n| n.starts_with("Blizzard_")),
-        "{hidden:?}"
+        named.iter().all(|r| r.name.starts_with("Blizzard_")),
+        "{named:?}"
     );
 
-    // A record with a key and a url is 8 + 256 + 256 bytes; status 1 leaves the addon visible,
-    // only status 2 hides it.
+    // A record with a key and a url is 8 + 256 + 256 bytes; the revision and the url, up to its
+    // first NUL, are kept.
     let mut fat = vec![1u8, 1, 1];
     fat.extend(std::iter::repeat_n(0xABu8, 256)); // modulus
-    fat.extend([0u8; 4]); // revision
+    fat.extend(7u32.to_le_bytes()); // revision
     fat.push(1); // urlProvided
-    fat.extend(std::iter::repeat_n(b'x', 256)); // url
+    let mut url = b"http://example.com/a".to_vec();
+    url.resize(256, 0);
+    url[30] = b'x'; // past the NUL: not part of the string
+    fat.extend(url);
     let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &fat).unwrap();
-    let ServerPacket::AddonInfo { statuses } = packet else {
+    let ServerPacket::AddonInfo { records } = packet else {
         panic!("expected AddonInfo");
     };
-    assert_eq!(statuses, vec![1u8], "the fat record parsed whole");
-    assert!(messages::hidden_from_reply(&statuses, &messages::STOCK_SECURE_ADDONS).is_empty());
+    assert_eq!(records.len(), 1, "the fat record parsed whole");
+    let r = &records[0];
+    assert_eq!(
+        (r.status, r.key_provided, r.revision, r.url.as_deref()),
+        (1, true, Some(7), Some("http://example.com/a"))
+    );
+
+    // A status 0 record with no info block and no url: banned, nothing else.
+    let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &[0, 0, 0]).unwrap();
+    let ServerPacket::AddonInfo { records } = packet else {
+        panic!("expected AddonInfo");
+    };
+    assert_eq!(
+        (
+            records[0].status,
+            records[0].info_provided,
+            records[0].revision
+        ),
+        (0, false, None)
+    );
 
     let mut short = hx("0201000000000000").to_vec();
     short.extend([2u8, 1]); // a second record that stops mid-way
     let packet = messages::parse_server(messages::opcode::SMSG_ADDON_INFO, &short).unwrap();
-    let ServerPacket::AddonInfo { statuses } = packet else {
+    let ServerPacket::AddonInfo { records } = packet else {
         panic!("expected AddonInfo");
     };
-    assert_eq!(statuses, vec![2u8], "only the whole record counted");
+    assert_eq!(records.len(), 1, "only the whole record counted");
 }

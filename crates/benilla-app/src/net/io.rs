@@ -184,13 +184,13 @@ enum Parked {
     Exit,
 }
 
-/// The addons `SMSG_ADDON_INFO` hid from the Lua index space, once the session has read the reply:
-/// `None` is no reply, which leaves the reference's `GetNumAddOns()` at 0. The reply carries no
-/// names, so it is paired back against the block we sent.
-fn hidden_addons(session: &WorldSession) -> Option<Vec<String>> {
-    session.addon_info().map(|statuses| {
-        benilla_protocol::messages::hidden_from_reply(
-            statuses,
+/// The `SMSG_ADDON_INFO` records, once the session has read the reply: `None` is no reply, which
+/// leaves the reference's `GetNumAddOns()` at 0. The reply carries no names, so each record is
+/// paired back with the addon we sent in its place.
+fn addon_records(session: &WorldSession) -> Option<Vec<benilla_protocol::messages::AddonRecord>> {
+    session.addon_info().map(|records| {
+        benilla_protocol::messages::pair_with_sent(
+            records,
             &benilla_protocol::messages::STOCK_SECURE_ADDONS,
         )
     })
@@ -211,11 +211,11 @@ impl AddonNews {
         if self.reported {
             return true;
         }
-        let Some(hidden) = hidden_addons(session) else {
+        let Some(records) = addon_records(session) else {
             return true;
         };
         self.reported = true;
-        events_tx.send(SessionEvent::AddonInfo { hidden }).is_ok()
+        events_tx.send(SessionEvent::AddonInfo { records }).is_ok()
     }
 }
 
@@ -919,11 +919,12 @@ fn world(
             // `SMSG_ADDON_INFO` carries no names, so it is paired back against the block we sent. No
             // reply means no AddOn index space at all, carried as `None`. The link's one reply
             // answers every login on it.
-            let addon_info = hidden_addons(&session);
+            let addon_info = addon_records(&session);
             match &addon_info {
-                Some(hidden) => bevy::log::info!(
-                    "net: SMSG_ADDON_INFO — {} hidden from the AddOn index space",
-                    hidden.len()
+                Some(records) => bevy::log::info!(
+                    "net: SMSG_ADDON_INFO — {} record(s), {} hidden from the AddOn index space",
+                    records.len(),
+                    records.iter().filter(|r| r.status == 2).count()
                 ),
                 None => bevy::log::warn!(
                     "net: no SMSG_ADDON_INFO — GetNumAddOns() stays 0, as the reference's would"

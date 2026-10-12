@@ -388,6 +388,36 @@ impl World {
         *self.addon_info.lock().unwrap() = Some((body, after));
     }
 
+    /// [`Self::set_addon_info`] with each record's revision and url: `(status, revision, url)`, a
+    /// record with neither carrying no info block and no url.
+    pub(crate) fn set_addon_records(
+        &self,
+        records: &[(u8, Option<u32>, Option<&str>)],
+        after: bool,
+    ) {
+        let mut body = Vec::new();
+        for &(status, revision, url) in records {
+            body.push(status);
+            match revision {
+                Some(r) => {
+                    body.extend([1, 0]); // infoProvided, no key
+                    body.extend(r.to_le_bytes());
+                }
+                None => body.push(0),
+            }
+            match url {
+                Some(u) => {
+                    body.push(1);
+                    let mut field = u.as_bytes().to_vec();
+                    field.resize(256, 0);
+                    body.extend(field);
+                }
+                None => body.push(0),
+            }
+        }
+        *self.addon_info.lock().unwrap() = Some((body, after));
+    }
+
     /// Send these packets right behind every `SMSG_LOGOUT_COMPLETE`.
     pub(crate) fn trail_logouts_with(&self, packets: Vec<(u16, Vec<u8>)>) {
         *self.trail.lock().unwrap() = packets;

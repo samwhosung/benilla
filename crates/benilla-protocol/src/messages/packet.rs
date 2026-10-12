@@ -1245,8 +1245,9 @@ pub enum ServerPacket {
     /// order with no count or names, so record i is `STOCK_SECURE_ADDONS[i]`. Status 2 drops the
     /// addon from the client's Lua index, which hides Blizzard's addons from the AddOns list.
     AddonInfo {
-        /// One status per record, in arrival order.
-        statuses: Vec<u8>,
+        /// One record per addon, in arrival order; the names are empty until
+        /// [`super::pair_with_sent`] gives them.
+        records: Vec<super::AddonRecord>,
     },
     Other {
         opcode: u16,

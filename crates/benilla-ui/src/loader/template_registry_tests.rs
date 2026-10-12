@@ -142,7 +142,11 @@ fn with_addons(rows: &[(&'static str, bool, u32)]) -> UiScript {
                 interface: 11200,
                 load_on_demand: true,
                 chain: true,
-                secure,
+                security: if secure {
+                    crate::script::AddonSecurity::Secure
+                } else {
+                    crate::script::AddonSecurity::Insecure
+                },
                 enabled: true,
                 files: vec![format!("{name}.xml")],
                 ..Default::default()

@@ -92,9 +92,10 @@ pub(crate) struct Model {
     pub(crate) addons: Vec<super::addon::AddOnInfo>,
     /// The Lua index space into `addons`, a title-sorted, hidden-filtered list (`0x51da70`).
     pub(crate) addon_index: Vec<usize>,
-    /// Lowercased names `SMSG_ADDON_INFO` marked `status = 2`; `None` until the reply arrives, and
-    /// until then `GetNumAddOns()` is 0, as in the reference (`[0xbe1b90]`, reset at `0x51fad1`).
-    pub(crate) addon_info_hidden: Option<Vec<String>>,
+    /// The `SMSG_ADDON_INFO` records, `None` until the reply arrives, and until then
+    /// `GetNumAddOns()` is 0, as in the reference (`[0xbe1b90]`, reset at `0x51fad1`). Kept so a
+    /// registry seated after it (world entry's) takes the same state.
+    pub(crate) addon_reply: Option<Vec<super::addon::AddonReply>>,
     /// The current character's enable hash, which every enable verb writes through and the
     /// shutdown writer (`0x490c88` into `0x51ef20`) saves only while dirty.
     pub(crate) addon_enable: super::EnableHash,
@@ -1176,7 +1177,7 @@ impl Model {
             vm: super::glue::VmKind::InGame,
             addons: Vec::new(),
             addon_index: Vec::new(),
-            addon_info_hidden: None,
+            addon_reply: None,
             addon_enable: Default::default(),
             addon_enable_saved: Default::default(),
             addons_root: None,

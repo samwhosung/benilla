@@ -7,8 +7,8 @@
 //! reset to none, so force-load falls through to the dependency and demand checks.
 //!
 //! The reason renders once (`0x51e930`): the addon's own token, else `DEP_` and the deepest failing
-//! dependency's token, else nil. `BANNED`, `CORRUPT` and `INSECURE` read the server's
-//! `SMSG_ADDON_INFO` signature state, which is not modelled; they are never produced.
+//! dependency's token, else nil. `BANNED` and `CORRUPT` read the state the server's
+//! `SMSG_ADDON_INFO` left on the record; `INSECURE` is never a reason (`0x51e780` writes no 5).
 
 /// The `## Interface` this client implements, the reference's hard-coded `0x2bc0`.
 pub const CLIENT_INTERFACE: u32 = 11200;
@@ -18,6 +18,10 @@ pub struct GateRow<'a> {
     pub name: &'a str,
     /// This character's enable state (`AddOns.txt`; an addon nobody disabled is enabled).
     pub enabled: bool,
+    /// `[rec+0x24] == 2`: the server banned it (check 4, `0x51e841`).
+    pub banned: bool,
+    /// `[rec+0x2a]`: its signature check answered 2 (check 5, `0x51e85b`).
+    pub corrupt: bool,
     /// `## Interface` as the client parses it ([`crate::toc::Toc::interface_version`]):
     /// the leading integer, `0` when absent.
     pub interface: u32,
@@ -87,7 +91,19 @@ fn walk(
             dep: None,
         };
     }
-    // Checks 4 and 5, banned and corrupt: no signature state, never produced.
+    // Checks 4 and 5: banned (reason 3) and corrupt (reason 4), in that order.
+    if row.banned {
+        return Verdict::Refused {
+            reason: Some("BANNED"),
+            dep: None,
+        };
+    }
+    if row.corrupt {
+        return Verdict::Refused {
+            reason: Some("CORRUPT"),
+            dep: None,
+        };
+    }
     // Check 6: the version gate, exact `==`; with the check off it falls through (`0x51e876`).
     if row.interface != CLIENT_INTERFACE && version_check {
         return Verdict::Refused {
@@ -137,6 +153,8 @@ mod tests {
         GateRow {
             name,
             enabled: true,
+            banned: false,
+            corrupt: false,
             interface: CLIENT_INTERFACE,
             load_on_demand: false,
             loaded: false,
@@ -154,6 +172,41 @@ mod tests {
         assert_eq!(
             can_load(&rows, 0, false, true).token().as_deref(),
             Some("DISABLED")
+        );
+    }
+
+    /// Banned and corrupt come after enabled and before the version gate, and a dependent of
+    /// either reads `DEP_BANNED` / `DEP_CORRUPT` (`0x51e841`-`0x51e86c`).
+    #[test]
+    fn banned_and_corrupt_refuse_and_their_dependents_inherit_it() {
+        let mut a = row("A", vec![]);
+        a.banned = true;
+        a.interface = 0;
+        let mut b = row("B", vec!["A"]);
+        b.corrupt = true;
+        let c = row("C", vec!["B"]);
+        let rows = vec![a, b, c];
+        assert_eq!(
+            can_load(&rows, 0, false, true).token().as_deref(),
+            Some("BANNED"),
+            "before the version gate"
+        );
+        assert_eq!(
+            can_load(&rows, 1, false, true).token().as_deref(),
+            Some("CORRUPT"),
+            "its own check 5 comes before its dependencies"
+        );
+        assert_eq!(
+            can_load(&rows, 2, false, true).token().as_deref(),
+            Some("DEP_CORRUPT")
+        );
+        let mut off = row("D", vec![]);
+        off.enabled = false;
+        off.banned = true;
+        assert_eq!(
+            can_load(&[off], 0, false, true).token().as_deref(),
+            Some("DISABLED"),
+            "enabled is check 3, ahead of banned"
         );
     }
 

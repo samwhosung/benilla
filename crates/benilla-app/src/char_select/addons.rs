@@ -314,6 +314,8 @@ impl AddonsPanel {
             .map(|(i, a)| GateRow {
                 name: &a.name,
                 enabled: self.effective_enabled(i),
+                banned: false,
+                corrupt: false,
                 interface: a.interface,
                 load_on_demand: a.load_on_demand,
                 loaded: false,

@@ -12,14 +12,38 @@
 /// seeing it does not send the 256-byte modulus back in `SMSG_ADDON_INFO`.
 pub const STANDARD_MODULUS_CRC: u32 = 0x4C1C_776D;
 
-/// The addons `SMSG_ADDON_INFO` hides: record i answers `sent[i]` (the reply carries no names),
-/// and status 2 makes the reference set `[rec+0x29] = 1` (`0x51db84`), dropping it from Lua.
-pub fn hidden_from_reply(statuses: &[u8], sent: &[SecureAddon]) -> Vec<String> {
-    statuses
+/// One record of `SMSG_ADDON_INFO` (the handler `0x51da70`), in the order of the addon block we
+/// sent. The reply carries no names, so [`pair_with_sent`] gives each its addon's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AddonRecord {
+    /// The addon this record answers (empty until paired).
+    pub name: String,
+    /// `0` bans the addon (`[rec+0x24] = 2`, `0x51dc0a`); `2` hides it from the Lua index
+    /// (`[rec+0x29] = 1`, `0x51db84`); any other value leaves it listed. The signature check runs
+    /// for every status but `0`.
+    pub status: u8,
+    /// `infoProvided` (`[rec+0xc1]`): a key and a revision follow.
+    pub info_provided: bool,
+    /// A 256-byte modulus followed (`[rec+0xc2]`), which the reference saves to `<Name>.pub`.
+    pub key_provided: bool,
+    /// The server's revision (`0x418eb0`); above the installed `## Revision` (`[rec+0x20]`) it
+    /// marks a new version (`[rec+0xc0] = 1`, `0x51db0d`).
+    pub revision: Option<u32>,
+    /// The `urlProvided` string (`[rec+0x30]`, `0x51db6a`), up to its first NUL.
+    pub url: Option<String>,
+}
+
+/// Name each record of the reply with the addon we sent in the same position: the reply has no
+/// names, and the reference walks its own secure addons in the order it sent them (`0x51da70`).
+/// A record past the end of what we sent answers nothing and is dropped.
+pub fn pair_with_sent(records: &[AddonRecord], sent: &[SecureAddon]) -> Vec<AddonRecord> {
+    records
         .iter()
         .zip(sent)
-        .filter(|(status, _)| **status == 2)
-        .map(|(_, addon)| addon.name.to_string())
+        .map(|(record, addon)| AddonRecord {
+            name: addon.name.to_string(),
+            ..record.clone()
+        })
         .collect()
 }
 

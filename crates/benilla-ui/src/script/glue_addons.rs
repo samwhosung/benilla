@@ -13,15 +13,16 @@ use std::rc::Rc;
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::addon::index_row;
+use super::addon::{index_row, AddonSecurity};
 use super::addon_enable::{AddonStateFiles, EnableStore};
 use super::addon_gate::{can_load, GateRow};
 use super::binding_abi::{bool_or_default, flag, number_arg, string_arg};
-use super::glue_core::leading_int;
+use super::glue_core::{leading_int, queue, GlueRequest};
 use super::Model;
 
 /// `GetNumAddOns` is `0x46d420`; its in-game namesake is `0x48e350` and answers the same count.
 const USAGE_INFO: &str = "Usage: GetAddOnInfo(index)"; // 0x837d9c
+const USAGE_LAUNCH: &str = "Usage: LaunchAddOnURL(index)"; // 0x837db8
 const USAGE_DEPENDENCIES: &str = "Usage: GetAddOnDependencies(index)"; // 0x837dd8
 const USAGE_ENABLE_STATE: &str = "Usage: GetAddOnEnableState(\"character\", index)"; // 0x837dfc
 const USAGE_ENABLE: &str = "Usage: EnableAddOn(\"character\", index)"; // 0x837e2c
@@ -83,6 +84,8 @@ fn gate_rows<'a>(model: &'a Model, store: &EnableStore) -> Vec<GateRow<'a>> {
             enabled: store.enabled_for(&a.name, a.default_state, None),
             interface: a.interface,
             load_on_demand: a.load_on_demand,
+            banned: a.security == AddonSecurity::Banned,
+            corrupt: a.corrupt,
             loaded: a.loaded,
             dependencies: a.dependencies.iter().map(String::as_str).collect(),
         })
@@ -163,19 +166,43 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 lua_str(lua, &a.name)?,
                 opt_str(lua, &a.title)?,
                 opt_str(lua, &a.notes)?,
-                // `0x51e180`: the server's, written only by `SMSG_ADDON_INFO` (`0x51db6a`), and
-                // nil for a banned addon (`0x51e208`). The reply benilla parses carries none.
-                opt_str(lua, &a.url)?,
+                // `0x51e180`: the server's url, written only by `SMSG_ADDON_INFO` (`0x51db6a`); nil
+                // when empty or for a banned addon (`0x51e203`-`0x51e20e`).
+                a.url
+                    .as_ref()
+                    .filter(|u| !u.is_empty() && a.security != AddonSecurity::Banned)
+                    .map_or(Ok(Value::Nil), |u| lua_str(lua, u))?,
                 flag(verdict.loadable()),
                 match verdict.token() {
                     Some(reason) => lua_str(lua, &reason)?,
                     None => Value::Nil,
                 },
-                lua_str(lua, if a.secure { "SECURE" } else { "INSECURE" })?,
-                // `0x51e3e0` (`[rec+0xc0]`, written only at `0x51db0d` when the server advertises
-                // a revision past the installed one): the reply benilla parses carries none.
-                Value::Nil,
+                lua_str(lua, a.security.token())?,
+                // `0x51e3e0`: `[rec+0xc0]`, set when the server's revision is past the installed one
+                // (`0x51db0d`).
+                flag(a.new_version),
             ]))
+        })?,
+    )?;
+
+    // `0x46d5e0`: the index (`Usage: LaunchAddOnURL(index)`, `0x837db8`) and the range error, then
+    // `0x51e180`'s url, nil when empty or banned, straight into the launcher `0x429ff0`: unlike
+    // `LaunchURL` (`0x5abd00`) it asks no whitelist (`0x5abc10`). Nothing returned.
+    g.set(
+        "LaunchAddOnURL",
+        lua.create_function(|lua, args: MultiValue| {
+            let url = {
+                let model = model(lua);
+                let i = row_arg(lua, &model, arg(&args, 0), USAGE_LAUNCH)?;
+                let a = &model.addons[i];
+                a.url
+                    .clone()
+                    .filter(|u| !u.is_empty() && a.security != AddonSecurity::Banned)
+            };
+            if let Some(url) = url.as_deref().and_then(super::glue_core::launch_addon_url) {
+                queue(lua, GlueRequest::LaunchAddonUrl(url));
+            }
+            Ok(())
         })?,
     )?;
 
@@ -335,7 +362,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::super::glue_select::GlueCharacter;
-    use super::super::{AddOnInfo, UiScript};
+    use super::super::{AddOnInfo, AddonReply, UiScript};
     use super::*;
 
     type Rows = Vec<(String, bool)>;
@@ -383,6 +410,14 @@ mod tests {
             default_state: true,
             enabled: true,
             ..AddOnInfo::default()
+        }
+    }
+
+    fn record(name: &str, status: u8) -> AddonReply {
+        AddonReply {
+            name: name.into(),
+            status,
+            ..AddonReply::default()
         }
     }
 
@@ -802,5 +837,193 @@ mod tests {
         assert_eq!(s.eval::<f64>("return GetScriptMemory()").unwrap(), -2.0);
         assert!(raised(&s, "SetScriptMemory('')").contains("Usage: SetScriptMemory(MB)"));
         assert!(raised(&s, "SetScriptMemory()").contains("Usage: SetScriptMemory(MB)"));
+    }
+
+    /// The reply's records land on the rows they name (`0x51da70`): the url and the new-version
+    /// byte the glue returns fourth and eighth, the security string seventh, and BANNED refuses
+    /// the addon and, as `DEP_BANNED`, whatever depends on it. A banned addon's url is nil.
+    #[test]
+    fn the_replys_records_reach_the_glue_verbs() {
+        let files = Files::default();
+        let mut s = vm(&files);
+        // Alpha is banned with a url; Gamma is listed with a newer revision and a url.
+        s.note_addon_info_records(vec![
+            AddonReply {
+                name: "Alpha".into(),
+                status: 0,
+                url: Some("http://example.com/alpha".into()),
+                ..AddonReply::default()
+            },
+            AddonReply {
+                name: "Gamma".into(),
+                status: 1,
+                revision: Some(5),
+                url: Some("http://example.com/gamma".into()),
+            },
+            record("Hidden", 2),
+            // A revision equal to the installed one (0 here) is not a new version (`jbe`, 0x51db0b).
+            AddonReply {
+                name: "Zeta".into(),
+                status: 1,
+                revision: Some(0),
+                ..AddonReply::default()
+            },
+        ]);
+        type Info = (
+            Option<String>,
+            Option<f64>,
+            Option<String>,
+            String,
+            Option<f64>,
+        );
+        let info = |s: &UiScript, i: u32| -> Info {
+            s.eval::<Info>(&format!(
+                "local _, _, _, url, loadable, reason, security, new = GetAddOnInfo({i}) \
+                 return url, loadable, reason, security, new"
+            ))
+            .unwrap()
+        };
+        assert_eq!(s.eval::<f64>("return GetNumAddOns()").unwrap(), 4.0);
+        assert_eq!(
+            info(&s, 1),
+            (None, None, Some("BANNED".into()), "BANNED".into(), None),
+            "banned: refused, security BANNED, and no url (0x51e208)"
+        );
+        assert_eq!(
+            info(&s, 2),
+            (
+                None,
+                None,
+                Some("DEP_BANNED".into()),
+                "INSECURE".into(),
+                None
+            ),
+            "Beta needs the banned Alpha"
+        );
+        assert_eq!(
+            info(&s, 3),
+            (
+                Some("http://example.com/gamma".into()),
+                None,
+                Some("INTERFACE_VERSION".into()),
+                "INSECURE".into(),
+                Some(1.0)
+            ),
+            "a revision past the installed 0 is a new version; the url is the server's"
+        );
+        assert_eq!(s.eval::<f64>(&count("GetAddOnInfo(3)")).unwrap(), 8.0);
+        // Not hidden any more by status 1; the one named with 2 is.
+        assert_eq!(
+            s.eval::<String>("return (GetAddOnInfo(4))").unwrap(),
+            "Zeta"
+        );
+        assert_eq!(info(&s, 4).4, None, "the same revision as installed");
+    }
+
+    /// Status 0 bans without asking the signature; any other status runs it, and the model's
+    /// answer 3 is SECURE, hidden or not. A row the reply never names stays INSECURE.
+    #[test]
+    fn the_signature_answer_makes_secure_and_status_zero_bans() {
+        let files = Files::default();
+        let mut s = vm(&files);
+        s.model_mut().addons.iter_mut().for_each(|a| {
+            if ["Alpha", "Beta", "Gamma"].contains(&a.name.as_str()) {
+                a.signature_ok = true;
+            }
+        });
+        s.note_addon_info_records(vec![
+            record("Alpha", 2),
+            record("Beta", 1),
+            record("Gamma", 0),
+        ]);
+        let security = |s: &UiScript, i: u32| {
+            s.eval::<String>(&format!(
+                "local _, _, _, _, _, _, sec = GetAddOnInfo({i}) return sec"
+            ))
+            .unwrap()
+        };
+        // The index is Beta, Gamma, Hidden, Zeta: Alpha is hidden.
+        assert_eq!(s.eval::<f64>("return GetNumAddOns()").unwrap(), 4.0);
+        assert_eq!(security(&s, 1), "SECURE");
+        assert_eq!(security(&s, 2), "BANNED", "status 0 asks no signature");
+        assert_eq!(security(&s, 4), "INSECURE", "never named");
+        assert!(s.addon_is_secure("Alpha"), "status 2 still runs the check");
+        assert!(!s.addon_is_secure("Gamma") && !s.addon_is_secure("Nowhere"));
+    }
+
+    /// `0x51f180` tests the CVar's integer, not its text: anything that does not read as a number
+    /// is off, and a number other than 0 is on.
+    #[test]
+    fn the_version_check_is_the_cvars_integer() {
+        let files = Files::default();
+        let mut s = vm(&files);
+        let check = |s: &UiScript| {
+            s.eval::<Option<f64>>("return IsAddonVersionCheckEnabled()")
+                .unwrap()
+        };
+        for (value, on) in [
+            ("1", true),
+            ("0", false),
+            ("", false),
+            ("abc", false),
+            ("false", false),
+            ("2", true),
+            ("-1", true),
+            ("0.5", false),
+            ("00", false),
+            ("1x", true),
+        ] {
+            s.set_cvar_engine("checkAddonVersion", value);
+            assert_eq!(check(&s).is_some(), on, "{value:?}");
+        }
+    }
+
+    /// `LaunchAddOnURL` takes one index (`Usage: LaunchAddOnURL(index)`, range error), sends the
+    /// server's url straight to the launcher with no whitelist, and sends nothing for no url or a
+    /// banned addon.
+    #[test]
+    fn launch_addon_url_sends_the_servers_url_ungated_by_the_whitelist() {
+        let files = Files::default();
+        let mut s = vm(&files);
+        s.note_addon_info_records(vec![
+            AddonReply {
+                name: "Alpha".into(),
+                status: 1,
+                url: Some("http://example.com:8080/a%20b?x=1".into()),
+                ..AddonReply::default()
+            },
+            AddonReply {
+                name: "Beta".into(),
+                status: 0,
+                url: Some("http://example.com/banned".into()),
+                ..AddonReply::default()
+            },
+            AddonReply {
+                name: "Gamma".into(),
+                status: 1,
+                url: Some("file:///etc/passwd".into()),
+                ..AddonReply::default()
+            },
+            record("Hidden", 2),
+        ]);
+        // Alpha: not on LaunchURL's list and carrying a query, a port and an escape; Beta banned;
+        // Gamma a file path; Zeta no url at all.
+        s.run("LaunchAddOnURL(1) LaunchAddOnURL(2) LaunchAddOnURL(3) LaunchAddOnURL(4)")
+            .unwrap();
+        let launched: Vec<String> = s
+            .take_glue_requests()
+            .into_iter()
+            .filter_map(|r| match r {
+                GlueRequest::LaunchAddonUrl(u) => Some(u),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            launched,
+            ["http://example.com:8080/a b?x=1"],
+            "Alpha only, its escape decoded as 0x429ff0 does"
+        );
+        assert!(raised(&s, "LaunchAddOnURL('x')").contains("Usage: LaunchAddOnURL(index)"));
+        assert!(raised(&s, "LaunchAddOnURL(9)").contains("range of 1 to 4"));
     }
 }

@@ -403,20 +403,29 @@ fn info_for(addon: &Addon) -> benilla_ui::script::AddOnInfo {
     info_from_toc(&addon.name, &addon.toc, addon.is_chain())
 }
 
-/// The `## Secure: 1` directive. It grants nothing by itself: the client sends every such addon
-/// in `CMSG_AUTH_SESSION`'s addon block, and only [`secure`] makes one SECURE.
-pub(crate) fn toc_secure(toc: &Toc) -> bool {
-    toc.secure()
+/// What the signature check `0x6f10f0` answers for an addon, modelled: 3 (the addon is SECURE,
+/// `0x51dbfb`) for one that claims `## Secure` and is read from the player's own patch chain,
+/// which is where Blizzard's signed twelve live; any other answer for the rest, whose files sit in
+/// benilla's AddOns folder beside no `.sig`. The reference reads `<Name>.toc.sig` and checks the
+/// digest of the `.toc` and `Bindings.xml` against it with the addon's key; benilla ships no key
+/// and verifies nothing, so provenance stands in for the signature.
+pub(crate) fn signature_ok(chain: bool, toc: &Toc) -> bool {
+    chain && toc.secure()
 }
 
-/// Whether an addon is SECURE, the security state `[rec+0x24] == 0`: `GetAddOnInfo`'s security
-/// answer and the context it loads under ([`benilla_ui::script::addon_load_context`]). The
-/// reference sets it only when the `SMSG_ADDON_INFO` handler's `%s.sig` check `0x6f10f0` answers 3
-/// (`0x51dbfb`); the state starts INSECURE (`0x5205b6`). benilla verifies no signature, and the
-/// `.sig` files ship only with Blizzard's own addons in the player's patch chain, so this stands in
-/// for the check: off the chain and `## Secure: 1`. A folder addon claiming it stays INSECURE.
-pub(crate) fn secure(chain: bool, toc: &Toc) -> bool {
-    chain && toc_secure(toc)
+/// The reply's records as the registry takes them.
+pub(crate) fn addon_replies(
+    records: &[benilla_protocol::messages::AddonRecord],
+) -> Vec<benilla_ui::script::AddonReply> {
+    records
+        .iter()
+        .map(|r| benilla_ui::script::AddonReply {
+            name: r.name.clone(),
+            status: r.status,
+            revision: r.revision,
+            url: r.url.clone(),
+        })
+        .collect()
 }
 
 /// [`info_for`]'s body, shared with `addon_harness` so its survey seats the registry row
@@ -430,7 +439,13 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::s
         // The `.toc` has no URL: `0x51e180` answers `[rec+0x30]`, which only the server's
         // `SMSG_ADDON_INFO` writes (`0x51db6a`).
         url: None,
-        secure: secure(chain, toc),
+        claims_secure: toc.secure(),
+        signature_ok: signature_ok(chain, toc),
+        installed_revision: toc.revision(),
+        // INSECURE until the server's reply and the signature check say otherwise (`0x5205b6`).
+        security: benilla_ui::script::AddonSecurity::Insecure,
+        corrupt: false,
+        new_version: false,
         default_state: toc.default_state(),
         load_on_demand: toc.load_on_demand(),
         dependencies: toc.dependencies().into_iter().map(str::to_owned).collect(),
@@ -581,11 +596,14 @@ impl benilla_ui::script::AddonStateFiles for AppAddonFiles {
 /// included, and the server's reply when the session has read one (`0x51da70`). Without a reply
 /// the Lua index space is empty, as in the reference. The enable files are the glue's nodes' to
 /// read and write.
-pub(crate) fn seat_glue_addons(script: &mut UiScript, reply: Option<&[String]>) {
+pub(crate) fn seat_glue_addons(
+    script: &mut UiScript,
+    reply: Option<&[benilla_protocol::messages::AddonRecord]>,
+) {
     let infos = discover().iter().map(info_for).collect();
     script.register_addons(infos, None, None, None);
-    if let Some(hidden) = reply {
-        script.note_addon_info_reply(hidden);
+    if let Some(records) = reply {
+        script.note_addon_info_records(addon_replies(records));
     }
     script.set_addon_state_files(Box::new(AppAddonFiles));
 }
@@ -799,7 +817,7 @@ impl benilla_ui::script::AddonLoad for Walk<'_> {
         // The files, `Bindings.xml` and the saved variables run under the addon's context.
         let outer = script.swap_exec_context(benilla_ui::script::addon_load_context(
             &addon.name,
-            secure(addon.is_chain(), &addon.toc),
+            script.addon_is_secure(&addon.name),
         ));
         self.failures.extend(addon.load(script, &mut toc));
         let mut own = Status::default();
@@ -1862,6 +1880,21 @@ mod tests {
             "a new row appended — {written:?}"
         );
         let _ = home;
+    }
+
+    /// The premise of [`signature_ok`]: the player's chain carries the `.toc.sig` of each of the
+    /// twelve, of the 0x114 bytes `0x6f1143` asks of it, so the reference's check reaches its
+    /// digest comparison for them. benilla stands that comparison in with the chain's provenance.
+    #[test]
+    fn the_chain_carries_a_signature_file_for_each_stock_addon() {
+        let _ = benilla_formats::wow_data_or_skip!();
+        for addon in benilla_protocol::messages::STOCK_SECURE_ADDONS {
+            let name = addon.name;
+            let sig = crate::ui_script::reference_ui::read(&format!(
+                "Interface/AddOns/{name}/{name}.toc.sig"
+            ));
+            assert_eq!(sig.map(|b| b.len()), Some(0x114), "{name}");
+        }
     }
 
     /// Seat the `SMSG_ADDON_INFO` reply hiding the secure addons, as world entry does: the Lua

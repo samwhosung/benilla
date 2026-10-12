@@ -120,10 +120,10 @@ fn on_login_edge(In(ev): In<SessionEvent>, mut e: Edges) {
         SessionEvent::RosterFailed { epoch } => {
             e.roster_failed.write(RosterFailedMessage { epoch });
         }
-        SessionEvent::AddonInfo { hidden } => {
+        SessionEvent::AddonInfo { records } => {
             // Held for the screens built after it, and for the world entry's load.
-            e.addon_reply.0 = Some(hidden.clone());
-            e.addon_info.write(AddonInfoMessage { hidden });
+            e.addon_reply.0 = Some(records.clone());
+            e.addon_info.write(AddonInfoMessage { records });
         }
         SessionEvent::LoginQueued { position, realm } => {
             e.login_queued.write(LoginQueuedMessage { position, realm });
@@ -506,7 +506,7 @@ fn connected(
     name: String,
     billing_time_rested: u32,
     tutorial_flags: Option<Vec<u8>>,
-    addon_info: Option<Vec<String>>,
+    addon_info: Option<Vec<benilla_protocol::messages::AddonRecord>>,
     addon_reply: &mut crate::net::AddonInfoReply,
     self_guid: &mut SelfGuid,
     status: &mut NetStatus,

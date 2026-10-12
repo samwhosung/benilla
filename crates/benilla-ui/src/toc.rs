@@ -289,6 +289,17 @@ impl Toc {
             .unwrap_or(0)
     }
 
+    /// `## Revision:` as `Toc_Parse` keeps it at `[rec+0x20]` (`0x51cd18`), the installed revision
+    /// the server's is compared against (`0x51db08`); 0 without a line.
+    pub fn revision(&self) -> u32 {
+        self.scalar(Kind::Revision)
+            .map(|v| {
+                let digits: String = v.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().unwrap_or(0)
+            })
+            .unwrap_or(0)
+    }
+
     /// `## SavedVariables:`: the account-wide globals.
     pub fn saved_variables(&self) -> Vec<&str> {
         self.list(&[Kind::SavedVariables])

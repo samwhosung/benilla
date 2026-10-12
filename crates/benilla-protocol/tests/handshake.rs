@@ -211,7 +211,11 @@ fn a_rejoined_session_goes_on_on_the_same_connection() {
 
     let mut session = WorldSession::connect(&addr, "one", SESSION_KEY).unwrap();
     assert!(session.char_enum().unwrap().is_empty());
-    assert_eq!(session.addon_info(), Some(&[2u8][..]));
+    let status = |s: &WorldSession| {
+        s.addon_info()
+            .map(|r| r.iter().map(|r| r.status).collect::<Vec<_>>())
+    };
+    assert_eq!(status(&session), Some(vec![2u8]));
     session.player_login(0x2a).unwrap();
     let (mut reader, mut writer) = session.into_split().unwrap();
     writer.logout_request().unwrap();
@@ -226,8 +230,8 @@ fn a_rejoined_session_goes_on_on_the_same_connection() {
         "the roster is asked and answered on the joined session"
     );
     assert_eq!(
-        session.addon_info(),
-        Some(&[2u8][..]),
+        status(&session),
+        Some(vec![2u8]),
         "the connection's add-on statuses stand for the next login"
     );
     drop(session);

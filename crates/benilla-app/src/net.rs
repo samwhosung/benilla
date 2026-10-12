@@ -2135,10 +2135,10 @@ pub(crate) struct RosterFailedMessage {
 
 /// The world session read `SMSG_ADDON_INFO` (the handler `0x5b4260`): the addons it hid from the
 /// Lua index space, at the point the reference's listener fires `ADDON_LIST_UPDATE`
-/// (`0x5b4290` → `0x5ab2f0`). [`AddonInfoReply`] holds the same list for a screen built later.
+/// (`0x5b4290` → `0x5ab2f0`). [`AddonInfoReply`] holds the same records for a screen built later.
 #[derive(Message)]
 pub(crate) struct AddonInfoMessage {
-    pub(crate) hidden: Vec<String>,
+    pub(crate) records: Vec<benilla_protocol::messages::AddonRecord>,
 }
 
 /// A character create or delete result; a refreshed [`CharListMessage`] precedes a success.
@@ -2175,7 +2175,7 @@ pub(crate) struct WorldEnterCascadeMessage;
 /// not answer. A resource, since it must exist before the world-entry UI load runs any addon;
 /// rewritten on every login from the reply its link got.
 #[derive(Resource, Default)]
-pub(crate) struct AddonInfoReply(pub(crate) Option<Vec<String>>);
+pub(crate) struct AddonInfoReply(pub(crate) Option<Vec<benilla_protocol::messages::AddonRecord>>);
 
 /// `SMSG_TRIGGER_CINEMATIC`: a `CinematicSequences.dbc` id; [`crate::cinematic`] plays and acks it.
 #[derive(Message)]
