@@ -819,6 +819,72 @@ fn locked_is_drawn_for_a_locked_object_and_sets_the_builder_flag() {
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 
+/// A bank vault item seen through `SetInventoryItem` keeps its flags and expiry: a picked lockbox
+/// (UNLOCKED) shows no LOCKED, a locked one does, and a timed item keeps its duration line and
+/// the builder flag.
+#[test]
+fn bank_vault_items_keep_their_flags_and_expiry() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run("ITEM_DURATION_HOURS = '[DURATION %d h]' LOCKED = '[LOCKED]'")
+        .unwrap();
+    let slot = |flags, duration_ms| ContainerSlot {
+        item_id: 8300,
+        count: 1,
+        quality: Some(1),
+        flags,
+        duration_ms,
+        ..Default::default()
+    };
+    s.set_container(
+        -1,
+        Some(ContainerState {
+            name: Some("Bank".into()),
+            num_slots: 24,
+            slots: HashMap::from([
+                (1, slot(0, None)),
+                (2, slot(0x4, None)),
+                (3, slot(0x4, Some(3_600_000))),
+            ]),
+        }),
+    );
+    s.set_item_template(
+        8300,
+        ItemTemplateView {
+            name: "Strongbox".into(),
+            quality: 1,
+            lock_id: 7,
+            ..Default::default()
+        },
+    );
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0)
+        a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT")
+        local function text(needle)
+            for i = 1, tt:NumLines() do
+                if getglobal("TTTextLeft" .. i):GetText() == needle then return true end
+            end
+            return false
+        end
+        local function look(id)
+            tt:SetOwner(a, "ANCHOR_RIGHT")
+            local _, cd = tt:SetInventoryItem("player", id)
+            return cd
+        end
+        local cd = look(40)
+        assert(text("[LOCKED]") and cd == 1, "locked vault item")
+        cd = look(41)
+        assert(not text("[LOCKED]") and cd == nil, "picked: " .. tostring(cd))
+        cd = look(42)
+        assert(not text("[LOCKED]") and text("[DURATION 1 h]") and cd == 1, "timed: " .. tostring(cd))
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}
+
 /// `SetInventoryItem` (`0x532ee0`) and `SetBagItem` (`0x534620`) push `hasCooldown` as the number 1
 /// (`0x5332d3`, `0x534958`) or nil (`0x5332da`, `0x534966`), never a Lua boolean, and the counts
 /// stay 3 and 2.

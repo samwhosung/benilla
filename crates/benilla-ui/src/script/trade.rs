@@ -33,6 +33,10 @@ pub struct TradeSlotItem {
     /// The wire's `lock_id`: the trade target's tooltip draws LOCKED off it (`0x534563`,
     /// `0x52bdd2`). 0 for none; the player's side ignores it.
     pub lock_id: u32,
+    /// The player's own side only: the placed item's `ITEM_FIELD_FLAGS`. Its presence means the
+    /// slot holds a live item object, which the tooltip builder's LOCKED gate reads (`0x5342ed`);
+    /// the partner's side has none.
+    pub object_flags: Option<u32>,
     /// The name of the enchant being applied to slot 7, which stock shows in green
     /// (`TradeFrame.lua:62`); the app always sends `None`.
     pub enchantment: Option<String>,
@@ -425,6 +429,7 @@ mod tests {
             quality: Some(quality),
             inventory_type: 0,
             lock_id: 0,
+            object_flags: None,
             enchantment: None,
             link: Some(format!(
                 "|cffffffff|Hitem:{item_id}:0:0:0|h[Linen Cloth]|h|r"
@@ -468,6 +473,7 @@ mod tests {
             quality: None,
             inventory_type: 0,
             lock_id: 0,
+            object_flags: None,
             enchantment: None,
             link: None,
         });

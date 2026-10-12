@@ -399,9 +399,11 @@ pub(super) fn feed_item_stats(
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
     // The caster the `$`-tokens read: its spell modifiers and its skills.
-    (spell_mods, self_q): (
+    (spell_mods, self_q, locks): (
         Res<crate::spell::SpellModifiers>,
         Query<&ObjectStore, With<SelfPlayer>>,
+        // `Lock.dbc`: the LOCKED line needs the item's lock row to exist (`0x52bd6b`).
+        Option<Res<crate::go_templates::Locks>>,
     ),
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     // The `$z` token: the bind point's area (`SMSG_BINDPOINTUPDATE`), named through `AreaTable`.
@@ -479,28 +481,39 @@ pub(super) fn feed_item_stats(
                 } else {
                     mod_sensitive.remove(&id);
                 }
-                Some((
-                    id,
-                    template_view(
-                        &t,
-                        spell_res,
-                        Some(&spell_mods),
-                        &skill,
-                        skill_catalog,
-                        home_area,
-                        &|| gender,
-                        factions.as_deref().map(|f| f.catalog()),
-                        sub_classes.as_deref().map(|s| &s.0),
-                        classes.as_deref().map(|c| &c.0),
-                        icons.as_deref(),
-                        &get,
-                    ),
-                ))
+                let mut view = template_view(
+                    &t,
+                    spell_res,
+                    Some(&spell_mods),
+                    &skill,
+                    skill_catalog,
+                    home_area,
+                    &|| gender,
+                    factions.as_deref().map(|f| f.catalog()),
+                    sub_classes.as_deref().map(|s| &s.0),
+                    classes.as_deref().map(|c| &c.0),
+                    icons.as_deref(),
+                    &get,
+                );
+                // A lock id with no `Lock.dbc` row is no lock to the builder (`0x52bd6b`..
+                // `0x52bda9`); with the catalog unloaded the id stands.
+                view.lock_id = known_lock_id(view.lock_id, locks.as_deref().map(|l| &l.0));
+                Some((id, view))
             })
             .collect()
     };
     for (id, view) in views {
         script.set_item_template(id, view);
+    }
+}
+
+/// The template's lock id when `Lock.dbc` holds its row, else 0: the builder's LOCKED line starts
+/// from that row (`0x52bd57`..`0x52bd76`), and a missing one is no lock. With the catalog not
+/// loaded the id stands.
+fn known_lock_id(lock_id: u32, locks: Option<&benilla_formats::LockCatalog>) -> u32 {
+    match locks {
+        Some(l) if l.slots(lock_id).is_none() => 0,
+        _ => lock_id,
     }
 }
 
@@ -1412,6 +1425,23 @@ mod tests {
         apply_container_source, charges_count, resolve_slot, ContainerSlot, FeedMemory, SlotGuids,
         BANK_CONTAINER, BANK_SLOTS,
     };
+
+    /// A lock id with no `Lock.dbc` row is no lock to the item builder (`0x52bd6b`..`0x52bda9`).
+    #[test]
+    fn a_lock_id_without_a_row_is_no_lock() {
+        use benilla_formats::{LockCatalog, LockSlot, LOCK_KEY_ITEM};
+        let mut slots = [LockSlot::default(); benilla_formats::MAX_LOCK_SLOTS];
+        slots[0].key_type = LOCK_KEY_ITEM;
+        let catalog = LockCatalog::from_rows([(7, slots)]);
+        assert_eq!(super::known_lock_id(7, Some(&catalog)), 7);
+        assert_eq!(super::known_lock_id(8, Some(&catalog)), 0);
+        assert_eq!(
+            super::known_lock_id(8, None),
+            8,
+            "no catalog, the id stands"
+        );
+        assert_eq!(super::known_lock_id(0, Some(&catalog)), 0);
+    }
 
     /// A bag slot carries the template's quality and InventoryType, which `GetContainerItemInfo`
     /// gates its fourth value on (`0x4f9794`); an unanswered template leaves them empty.

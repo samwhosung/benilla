@@ -384,7 +384,7 @@ mod tests {
         {
             let (mut errors, commands, _rx) = sink();
             let mut trade = open_trade();
-            trade.place_own_item(2, item());
+            trade.place_own_item(2, item(), 0);
             trade.set_own_gold(700);
             trade_status(
                 TradeStatus::OnlyConjured { slot },

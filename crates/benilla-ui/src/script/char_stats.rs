@@ -502,6 +502,9 @@ impl InvSlotView {
             locked: slot.locked,
             creator: slot.creator.clone(),
             enchants: slot.enchants.clone(),
+            // The item's own flags (UNLOCKED, WRAPPED) and expiry, which the tooltip builder reads.
+            flags: slot.flags,
+            duration_ms: slot.duration_ms,
             // Slot 20 (`Bag0Slot`) among `equip_slots` marks a container (`INVTYPE_BAG`). The bank
             // vault is past the `0x16` short-circuit, so only `Some` versus `None` matters.
             contents_count: slot.equip_slots.contains(&20).then_some(0),

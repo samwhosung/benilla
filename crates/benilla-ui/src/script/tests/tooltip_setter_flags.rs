@@ -415,7 +415,17 @@ fn live_objects_and_blocks_reach_the_flag() {
             ..Default::default()
         });
     }
-    st.player.slots[0] = st.target.slots[0].clone();
+    // The player's slots are live item objects: the flags decide LOCKED (`0x5342ed`), and the
+    // block's lock id is zeroed (`0x534341`).
+    for (i, flags) in [(0, Some(0)), (1, Some(0x4)), (2, None)] {
+        st.player.slots[i] = Some(TradeSlotItem {
+            item_id: 8300,
+            name: Some("Strongbox".into()),
+            count: 1,
+            object_flags: flags,
+            ..Default::default()
+        });
+    }
     s.set_trade(Some(st));
     let locked = |s: &UiScript, call: &str| {
         s.eval::<bool>(&format!(
@@ -429,7 +439,12 @@ fn live_objects_and_blocks_reach_the_flag() {
     assert!(locked(&s, "TT:SetTradeTargetItem(1)"));
     assert!(!locked(&s, "TT:SetTradeTargetItem(2)"));
     assert!(
-        !locked(&s, "TT:SetTradePlayerItem(1)"),
-        "the player's block has no lock"
+        locked(&s, "TT:SetTradePlayerItem(1)"),
+        "a locked object in the player's slot"
+    );
+    assert!(!locked(&s, "TT:SetTradePlayerItem(2)"), "UNLOCKED");
+    assert!(
+        !locked(&s, "TT:SetTradePlayerItem(3)"),
+        "no object, no block lock"
     );
 }

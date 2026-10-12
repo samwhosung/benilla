@@ -611,8 +611,11 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let inst = render::ItemInstance {
                     name: item.name.clone(),
                     // The target side's block carries the partner's lock id (`0x534563`); the
-                    // player's is zero (`0x534341`).
+                    // player's is zero (`0x534341`), but its slot is a live item object, whose
+                    // flags the LOCKED gate reads (`0x5342ed`, `0x5343da`).
                     block_lock_id: if player_side { 0 } else { item.lock_id },
+                    object: item.object_flags.is_some(),
+                    flags: item.object_flags.unwrap_or(0),
                     ..Default::default()
                 };
                 match view_of(lua, item.item_id) {
