@@ -441,7 +441,7 @@ fn answer_trade_request(
     let dead_or_ghost = initiator_store.is_some_and(|s| s.0.is_dead_or_ghost());
     if dead_or_ghost
         || cinematic.is_playing()
-        || player.control_lost
+        || player.own_control_lost
         || auction.auctioneer.is_some()
     {
         info!(target: "trade", "BEGIN_TRADE from {initiator:#x} refused silently; sending CMSG_BUSY_TRADE");
@@ -1613,6 +1613,22 @@ mod tests {
         }
     }
 
+    /// The leg reads `[0xb4b3e4]` (`0x4bf79c`), written for our own character alone: a possessed
+    /// creature stuck under fear leaves it set, and the request is answered.
+    #[test]
+    fn a_stuck_possessed_creature_does_not_make_us_busy() {
+        let (mut app, rx) = request_app(false, false, true);
+        app.world_mut()
+            .resource_mut::<crate::player::Player>()
+            .control_lost = true;
+        app.world_mut().resource_mut::<TradeSession>().request(0x7);
+        app.update();
+        assert!(
+            matches!(rx.try_recv(), Ok(ClientCommand::BeginTrade)),
+            "auto-accepted, not busy"
+        );
+    }
+
     #[test]
     fn an_open_auction_house_refuses_the_request() {
         let (mut app, rx) = request_app(false, false, true);
@@ -1744,7 +1760,7 @@ mod tests {
             });
         app.world_mut()
             .resource_mut::<crate::player::Player>()
-            .control_lost = !controlled;
+            .own_control_lost = !controlled;
         // Streamed, since leg 3 drops a request from a guid that resolves to nothing.
         for guid in [0x7u64, 0x8] {
             let e = app.world_mut().spawn(ObjectStore::default()).id();

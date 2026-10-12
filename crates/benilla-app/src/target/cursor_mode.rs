@@ -133,11 +133,11 @@ pub(crate) struct AttackFork(pub(crate) bool);
 /// The player's legs of the classifier's attack leg (`0x482648`–`0x4826a2`), in its order: not
 /// dead or a ghost (`0x48264a`), not mounted (`0x482661`), not pacified (`0x48268f`) and in
 /// control (`[0xb4b3e4]`, `0x48269b`). Any failure clears to Point (`0x4826cb`).
-pub(crate) fn player_attack_legs(own: &ObjectStore, control_lost: bool) -> bool {
+pub(crate) fn player_attack_legs(own: &ObjectStore, own_control_lost: bool) -> bool {
     !own.0.is_dead_or_ghost()
         && own.0.unit_mount_display_id() == 0
         && own.0.unit_flags() & UNIT_FLAG_PACIFIED == 0
-        && !control_lost
+        && !own_control_lost
 }
 
 /// NPC-service range, squared: gray beyond 5.5556 yd (`0xb4b32c` = `[0x804328]²`, checked
@@ -540,7 +540,7 @@ pub(super) fn classify_cursor(
 pub(super) struct CursorInputs<'w, 's> {
     factions: Option<Res<'w, Factions>>,
     reputations: Res<'w, Reputations>,
-    // `control_lost` is the attack leg's `[0xb4b3e4]` clear.
+    // `own_control_lost` is the attack leg's `[0xb4b3e4]` clear.
     player: Res<'w, crate::player::Player>,
     approach: Res<'w, crate::player::Approach>,
     #[allow(clippy::type_complexity)]
@@ -705,7 +705,7 @@ pub(super) fn classify(
             return None;
         }
         attack_fork.set(true);
-        player_attack_legs(self_store, player.control_lost)
+        player_attack_legs(self_store, player.own_control_lost)
             .then_some((CursorKind::Attack, dist_sq > ATTACK_RANGE_SQ))
     };
     // The corpse classifier `0x482740`.

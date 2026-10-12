@@ -779,7 +779,7 @@ pub(crate) mod schedule_tests {
     ///   writers of `GluePreview`: the switch runs one side or the other (`stock_glue` against
     ///   `native_glue`), never both;
     /// - the cursor classifier against `world_focus`'s focus publish and settle release over
-    ///   `Player`: it reads `control_lost`, and they write only `settling` and `world_stale`;
+    ///   `Player`: it reads `own_control_lost`, and they write only `settling` and `world_stale`;
     /// - `ui_quest::lines::feed_quest_lines` against `ui_items::feed_item_stats` and
     ///   `ui_tooltip::feed_spell_tooltips` over `Items` and the VM: it only reads templates, which
     ///   those two do not write, and a chat line commutes with their pushes;
