@@ -22,9 +22,13 @@ mod mat_anim;
 pub(crate) use lazy::{LazyRig, SkinnedTwin};
 use mat_anim::tick_anim_materials;
 pub use mat_anim::{
-    playing_seq, register_entity_uv, register_fx_uv, register_tint, sample_mat_anim, AnimMatPart,
-    MatAnim, TintAnimMaterials, TintLoop, UvAnimMaterials, UvLoops,
+    playing_seq, register_entity_uv, register_fx_uv, register_tint, sample_mat_anim, scene_clocked,
+    AnimMatPart, MatAnim, SceneClocks, TintAnimMaterials, TintLoop, UvAnimMaterials, UvLoops,
 };
+
+/// The material tick's set: a scene that owns its clock ([`SceneClocks`]) writes it before this.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MatAnimTick;
 pub(crate) use mat_anim::{register_uv, UvLoop};
 
 /// What a placed doodad model animates, decided per model at spawn.
@@ -440,6 +444,7 @@ impl Plugin for DoodadAnimPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UvAnimMaterials>();
         app.init_resource::<TintAnimMaterials>();
+        app.init_resource::<SceneClocks>();
         // The one `rand()` stream: the reference seeds it once per process before `WinMain`
         // (`srand(GetTickCount())`, `0x5d1c70`); a capture leaves it unseeded.
         app.init_resource::<benilla_assets::AnimRng>();
@@ -462,7 +467,9 @@ impl Plugin for DoodadAnimPlugin {
             Update,
             (
                 sample_mat_anim.before(crate::model_render::ModelVisSet),
-                tick_anim_materials.after(crate::model_render::ModelVisSet),
+                tick_anim_materials
+                    .in_set(MatAnimTick)
+                    .after(crate::model_render::ModelVisSet),
                 // After the tick, so the probe's `row` column is this frame's write.
                 mat_anim::matanim_probe.after(tick_anim_materials),
             ),

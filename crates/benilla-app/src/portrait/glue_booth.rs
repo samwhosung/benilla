@@ -912,6 +912,7 @@ pub(super) fn sync_glue_scene(
         forms.ensure_now_rigged(scene_handle, &model.submeshes, &mut mesh_assets);
         let built = forms.slices(scene_handle);
         let (stat_forms, skin_forms) = (built.stat, built.skin.unwrap_or(&[]));
+        let scene_root = scene.root;
         let scene_parts: Vec<BoothPart> = model
             .submeshes
             .iter()
@@ -946,6 +947,16 @@ pub(super) fn sync_glue_scene(
                         benilla_world::doodad_anim::TintLoop::Shared(rgb.clone()),
                     );
                     mat_anim = true;
+                }
+                // Both lanes run on the stage's own clock ([`pace_glue_clock`]), which stops
+                // while the pane is hidden, as every model in a `ModelFFX`'s scene does.
+                if mat_anim {
+                    benilla_world::doodad_anim::scene_clocked(
+                        &mut uv_reg,
+                        &mut tint_reg,
+                        material.id(),
+                        scene_root,
+                    );
                 }
                 BoothPart {
                     skinned: skin_forms.get(pi).cloned(),
@@ -1588,13 +1599,15 @@ fn spawn_glue_effects(
 /// the step the stock panes' clocks take too. So a hidden pane's stage stands still and resumes
 /// where it stopped, and a shown one runs at or below wall clock, never above. Every model on the
 /// stage, the scene, the character and the pet, reads that clock: each player advances by the
-/// step, and each global-sequence drive samples it.
+/// step, each global-sequence drive samples it, and so do the scene's texture transforms and
+/// colour tracks ([`benilla_world::doodad_anim::SceneClocks`]).
 pub(super) fn pace_glue_clock(
     mut commands: Commands,
     preview: Res<GluePreview>,
     time: Res<Time>,
     booths: Res<Booths>,
     scene: Option<ResMut<CreateScene>>,
+    mut clocks: ResMut<benilla_world::doodad_anim::SceneClocks>,
 ) {
     let Some(mut scene) = scene else {
         return;
@@ -1607,6 +1620,8 @@ pub(super) fn pace_glue_clock(
     };
     scene.clock_ms += step_ms;
     let clock = scene.clock_ms as f64 / 1000.0;
+    // The scene's texture transforms and colour tracks sample it too ([`sync_glue_scene`]).
+    clocks.0.insert(scene.root, clock);
     // A player advances by `delta · speed` (`advance_animations`), so this speed makes it step by
     // the clock's own whole milliseconds, and 0 holds it.
     let speed = if delta > 0.0 {
@@ -2661,6 +2676,7 @@ mod tests {
                 .init_resource::<Assets<AnimationClip>>()
                 .init_resource::<Assets<AnimationGraph>>()
                 .init_resource::<GluePreview>()
+                .init_resource::<benilla_world::doodad_anim::SceneClocks>()
                 .add_systems(
                     Update,
                     (pace_glue_clock, bevy::animation::advance_animations).chain(),
@@ -2698,9 +2714,21 @@ mod tests {
             Stage { app, models, stand }
         }
 
-        /// Each model's Stand position, and the scene clock.
+        /// Each model's Stand position, and the scene clock, which the scene's materials read
+        /// at the same instant.
         fn at(&self) -> ([f32; 3], u64) {
             let world = self.app.world();
+            let clock_ms = world.resource::<CreateScene>().clock_ms;
+            let root = world.resource::<CreateScene>().root;
+            assert_eq!(
+                world
+                    .resource::<benilla_world::doodad_anim::SceneClocks>()
+                    .0
+                    .get(&root)
+                    .copied(),
+                Some(clock_ms as f64 / 1000.0),
+                "the scene's materials run on the stage clock"
+            );
             (
                 self.models.map(|e| {
                     world
