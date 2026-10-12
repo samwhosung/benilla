@@ -655,6 +655,38 @@ impl super::UiScript {
         self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
 
+    /// The guids the client holds locked, sorted: the host keeps them across a `/reload`, as the
+    /// reference keeps the bit on the item object, which outlives its VM.
+    pub fn item_locks(&self) -> Vec<u64> {
+        let mut out: Vec<u64> = self.model_ref().item_locks.iter().copied().collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Seat a fresh VM's locks before anything runs on it, with no event, and the auction sell
+    /// item the dying VM held, which the world-enter cascade unlocks ([`Self::fire_world_enter`]).
+    pub fn seed_item_locks(&mut self, guids: impl IntoIterator<Item = u64>, auction_sell: u64) {
+        let mut model = self.model_mut();
+        model.item_locks = guids.into_iter().filter(|&g| g != 0).collect();
+        model.cascade_unlock = (auction_sell != 0).then_some(auction_sell);
+    }
+
+    /// The mail attachment's item guid, 0 when empty.
+    pub fn mail_send_guid(&self) -> u64 {
+        self.model_ref()
+            .mail_send_item
+            .as_ref()
+            .map_or(0, |it| it.guid)
+    }
+
+    /// The auction sell slot's item guid, 0 when empty.
+    pub fn auction_sell_guid(&self) -> u64 {
+        self.model_ref()
+            .auction_sell_item
+            .as_ref()
+            .map_or(0, |it| it.guid)
+    }
+
     /// Whether the client holds item `guid` locked, the bit every lock read tests.
     pub fn item_locked(&self, guid: u64) -> bool {
         item_locked(&self.model_ref(), guid)

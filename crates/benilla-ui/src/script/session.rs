@@ -63,6 +63,11 @@ impl super::UiScript {
         }
         self.fire_event("PLAYER_ENTERING_WORLD", Vec::new());
         self.pop_sound_suppression();
+        // The cascade's auction reset (`0x490a05` → `0x4cc280` → `0x4cd640`), past the events.
+        let owed = self.model_mut().cascade_unlock.take();
+        if let Some(guid) = owed {
+            self.unlock_item(guid);
+        }
     }
 }
 

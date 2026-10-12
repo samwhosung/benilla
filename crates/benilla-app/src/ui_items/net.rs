@@ -17,8 +17,15 @@ pub(super) fn register(app: &mut App) {
 
 /// The queued unlocks die with the session, never to fire into a later VM: the reference's lock
 /// is item-object state (`item+0x314`), and the objects are rebuilt at every world entry.
-fn on_session_end(In(_): In<SessionEvent>, mut releases: ResMut<ItemReleases>) {
+fn on_session_end(
+    In(_): In<SessionEvent>,
+    mut releases: ResMut<ItemReleases>,
+    held: Option<ResMut<super::locks::HeldItemLocks>>,
+) {
     releases.0.clear();
+    if let Some(mut held) = held {
+        *held = Default::default();
+    }
 }
 
 /// Container ids from `SMSG_OPEN_CONTAINER`, for [`super::feed::feed_containers`] to fire as

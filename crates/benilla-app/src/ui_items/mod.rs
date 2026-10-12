@@ -921,6 +921,7 @@ impl Plugin for UiItemsPlugin {
         // The icons come from the equipment renderer's `ItemDisplays`.
         app.init_resource::<EquipErrors>()
             .init_resource::<crate::ui_items::locks::ItemReleases>()
+            .init_resource::<crate::ui_items::locks::HeldItemLocks>()
             // The soulbind confirmations' pending records: the client's pending-equip array and
             // its one bind-on-use cell.
             .init_resource::<crate::ui_bind_confirm::PendingEquips>()

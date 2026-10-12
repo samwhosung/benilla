@@ -50,6 +50,61 @@ impl ItemReleases {
     }
 }
 
+/// The VM's locks between a VM and the next: the reference's bit lives on the item object
+/// (`item+0x314`), which a `/reload` keeps, while ours lives in the VM it rebuilds.
+/// [`fold_dying_vm_item_locks`] takes them out of the dying VM and [`seed_vm_item_locks`] seats
+/// them in the new one; a world entry builds its item objects afresh and starts with none.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct HeldItemLocks {
+    pub(crate) locks: Vec<u64>,
+    /// The auction sell item the dying VM held, which the new VM's cascade unlocks.
+    pub(crate) auction_sell: u64,
+}
+
+/// Take the dying VM's locks into [`HeldItemLocks`], as the reload's leave-world sweep
+/// (`0x490c20` → `0x490a80`) leaves the item bits. Its loot leg closes the window (`0x490ab2` →
+/// `0x4c1ca0`), unlocking an item source (`0x48f2bd`, `0x4c1d36`), and its mail leg resets the
+/// compose form (`0x490b1b` → `0x4acc00` → `0x4acdc0`), unlocking the attachment (`0x4acdd6`):
+/// neither is carried. Its trade leg only cancels (`0x490adf` → `0x5d4310`), and the cascade
+/// then zeroes the trade tables with no `UnlockItem` (`0x4909b5` → `0x4bf0e0`), so the answer's
+/// `UnlockTradeItems` finds nothing: an offered item stays locked until its seat or stack moves,
+/// the revive's unlock-all or a relog, as in the reference. The auction sell item is carried and
+/// unlocked by the cascade's auction reset ([`UiScript::seed_item_locks`]).
+pub(crate) fn fold_dying_vm_item_locks(world: &mut World) {
+    let loot_item = world
+        .get_resource::<crate::ui_loot::LootState>()
+        .and_then(crate::ui_loot::LootState::source)
+        .filter(|&g| benilla_protocol::guid::is_item(g));
+    let Some(held) = world.get_non_send_resource::<UiScript>().map(|s| {
+        let swept = [Some(s.mail_send_guid()), loot_item];
+        HeldItemLocks {
+            locks: s
+                .item_locks()
+                .into_iter()
+                .filter(|g| !swept.contains(&Some(*g)))
+                .collect(),
+            auction_sell: s.auction_sell_guid(),
+        }
+    }) else {
+        return;
+    };
+    world.insert_resource(held);
+}
+
+/// Seat the new VM's locks before any file or event runs on it: a `/reload`'s are the dying VM's,
+/// a world entry's none.
+pub(crate) fn seed_vm_item_locks(world: &mut World, script: &mut UiScript, reload: bool) {
+    let held = world
+        .get_resource_mut::<HeldItemLocks>()
+        .map(|mut h| std::mem::take(&mut *h))
+        .unwrap_or_default();
+    if reload {
+        script.seed_item_locks(held.locks, held.auction_sell);
+    } else {
+        script.seed_item_locks(Vec::new(), 0);
+    }
+}
+
 /// Where an item sits, as the reference's watchers key it: an index of the player's own array
 /// (`[player+0x1d3c]`), or a slot of a container object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

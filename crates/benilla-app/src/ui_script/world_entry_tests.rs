@@ -414,6 +414,101 @@ fn logging_out_leaves_no_in_game_frames_behind() {
 
 // ───────────────────────────────── ReloadUI ─────────────────────────────────
 
+/// The item lock is the item object's (`item+0x314`), which a `/reload` keeps, save what the
+/// reload's sweep and cascade unlock: the looted clam (its window closes, `0x490ab2`) and the mail
+/// attachment (`0x490b1b`) unlock, the auction sell item unlocks after `PLAYER_ENTERING_WORLD`
+/// (`0x490a05`), and a trade offer stays locked, its table zeroed with no unlock (`0x4909b5`). A
+/// new world entry builds its objects afresh and starts with none.
+#[test]
+fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
+    const CLAM: u64 = 0x4000_0000_0000_0c1a;
+    const MAILED: u64 = 0x4000_0000_0000_0a11;
+    const AUCTIONED: u64 = 0x4000_0000_0000_0a5c;
+    const TRADED: u64 = 0x4000_0000_0000_0a7d;
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_probe("item-locks");
+    let mut world = booted_world();
+    world.init_resource::<crate::ui_items::locks::HeldItemLocks>();
+    let locked = |world: &World, guid: u64| {
+        world
+            .get_non_send_resource::<benilla_ui::script::UiScript>()
+            .expect("in-world VM")
+            .item_locked(guid)
+    };
+
+    log_in_as(&mut world, "Onehunter", 1);
+    {
+        let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        s.lock_item(CLAM); // the open-item send's lock (`0x5edcd9`)
+                           // A letter's attachment and an auction's sell item, each holding its pickup's lock.
+        let slot = |guid: u64| benilla_ui::script::ContainerSlot {
+            item_id: 117,
+            count: 1,
+            guid,
+            ..Default::default()
+        };
+        s.set_container(
+            0,
+            Some(benilla_ui::script::ContainerState {
+                num_slots: 16,
+                slots: std::collections::HashMap::from([
+                    (1, slot(MAILED)),
+                    (2, slot(AUCTIONED)),
+                    (3, slot(TRADED)),
+                ]),
+                ..Default::default()
+            }),
+        );
+        s.run("PickupContainerItem(0, 1) ClickSendMailItemButton()")
+            .unwrap();
+        s.run("PickupContainerItem(0, 2) ClickAuctionSellItemButton()")
+            .unwrap();
+        s.set_trade(Some(Default::default()));
+        s.run("PickupContainerItem(0, 3) ClickTradeButton(1)")
+            .unwrap();
+    }
+    let mut loot = crate::ui_loot::LootState::default();
+    loot.open(CLAM, 1, 0, Vec::new());
+    world.insert_resource(loot);
+    reload(&mut world, crate::char_select::ClientState::InWorld);
+    assert!(!locked(&world, CLAM), "the sweep's loot close unlocks it");
+    assert!(!locked(&world, MAILED), "the sweep's mail reset unlocks it");
+    assert!(locked(&world, TRADED), "nothing unlocks a trade offer");
+    assert!(
+        locked(&world, AUCTIONED),
+        "until the cascade's auction reset"
+    );
+    {
+        let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        s.run(
+            "HEARD = {} local f = CreateFrame('Frame') \
+             f:RegisterEvent('ITEM_LOCK_CHANGED') f:RegisterEvent('PLAYER_ENTERING_WORLD') \
+             f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
+        )
+        .unwrap();
+        s.fire_world_enter();
+        assert_eq!(
+            s.eval::<Vec<String>>("return HEARD").unwrap(),
+            ["PLAYER_ENTERING_WORLD", "ITEM_LOCK_CHANGED"],
+            "the auction reset unlocks after the cascade's events (`0x490a05`)"
+        );
+    }
+    assert!(!locked(&world, AUCTIONED));
+    assert!(locked(&world, TRADED));
+
+    super::end_ui_session(&mut world);
+    log_in_as(&mut world, "Onehunter", 1);
+    assert!(
+        !locked(&world, TRADED),
+        "a new world entry inherits no lock"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 /// `ReloadUI()` is the reference's teardown and rebuild pair (`0x495664`/`0x495669`): the logout
 /// and login edges, run without leaving the world.
 #[test]

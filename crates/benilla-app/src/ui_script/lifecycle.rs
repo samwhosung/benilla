@@ -420,6 +420,9 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
         }
         None => script.register_cvars(crate::cvars::registered_pairs()),
     }
+    // The item locks before any file or event runs: a `/reload`'s survive, as on the reference's
+    // item objects.
+    crate::ui_items::locks::seed_vm_item_locks(world, &mut script, seat == LoadSeat::Live);
     // The realm before the load, since addons read `GetRealmName()` at file scope; the roster
     // carries the realm-list entry this session connected to.
     let realm = world
@@ -787,6 +790,8 @@ fn close_ui_session(world: &mut World) {
     crate::cvars::fold_dying_vm_cvars(world);
     // The chat cache folds here, not in its own `OnExit(InWorld)` system, which a `/reload` skips.
     crate::ui_chat::settings::fold_dying_vm_chat_cache(world);
+    // The item locks too: the reference keeps them on the item objects, which a `/reload` keeps.
+    crate::ui_items::locks::fold_dying_vm_item_locks(world);
     world.insert_resource(AddOnIdentity(None));
 
     // Host values taken from the dying frame tree go with it (a `VmMemo` resets on its own): the
