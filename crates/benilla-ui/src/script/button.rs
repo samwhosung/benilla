@@ -928,24 +928,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     texture_pair(lua, &c, "DisabledChecked", Slot::DisabledChecked)?;
     c.set(
         "SetChecked",
-        lua.create_function(|lua, (this, v): (Table, Value)| {
-            // `SetChecked` (`0x799bf0`) reads its argument through `0x6f1c10` with default 1
-            // (`0x799c77`), not Lua truthiness: a number truncates toward zero (`0x40a2b0`), so
-            // `SetChecked(0)` unchecks, and the stock UI passes `"true"`/`"false"`
-            // (`SpellBookFrame.lua:296-303`). Here a missing argument unchecks and a string checks
-            // only as `"true"` or a nonzero number, where the reference checks for a missing one
-            // and reads a string by its first byte, so `"yes"` checks there.
-            let checked = match v {
-                Value::Boolean(b) => b,
-                Value::Integer(i) => i != 0,
-                Value::Number(n) => n.trunc() != 0.0,
-                Value::String(s) => s.to_str().ok().is_some_and(|s| {
-                    let t = s.trim();
-                    t.eq_ignore_ascii_case("true")
-                        || t.parse::<f64>().is_ok_and(|n| n.trunc() != 0.0)
-                }),
-                _ => false,
-            };
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            // `SetChecked` (`0x799bf0`) reads its argument through `GetBoolOrDefault` (`0x6f1c10`)
+            // with default 1 (`0x799c77`), not Lua truthiness: no argument, `""`, a table or
+            // `"yes"` check, `nil`, `0` and `"0"` uncheck. The stock UI passes `"true"`/`"false"`
+            // (`SpellBookFrame.lua:296-303`).
+            let checked = super::binding_abi::bool_or_default(args.front(), true);
             with_button_shown(lua, &this, |bs| bs.refresh_checked(checked, false))
         })?,
     )?;

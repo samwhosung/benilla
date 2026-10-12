@@ -262,9 +262,10 @@ pub(crate) fn bool_or_default(v: Option<&Value>, default: bool) -> bool {
         Value::Nil => false,
         Value::Boolean(b) => *b,
         Value::LightUserData(_) => default,
-        // Truncated like `0x40a2b0`, testing only the low dword.
+        // Truncated like `0x40a2b0` ([`ftol`]), which keeps only the low dword: 2^32 reads 0, and
+        // an infinity or NaN too.
         Value::Integer(i) => (*i as i32) != 0,
-        Value::Number(n) => (*n as i64 as i32) != 0,
+        Value::Number(n) => ftol(*n) != 0,
         Value::String(s) => {
             let bytes = s.as_bytes();
             match bytes.first() {
@@ -394,6 +395,19 @@ mod tests {
         assert!(!bool_or_default(Some(&Value::Number(-0.999)), true));
         assert!(bool_or_default(Some(&Value::Number(1.5)), false));
         assert!(bool_or_default(Some(&Value::Number(-1.5)), false));
+        // Only the low dword of the truncation counts (`0x40a2b0`): 2^32 reads 0, and so does an
+        // infinity or NaN, which the `fistp` stores as the integer indefinite.
+        assert!(!bool_or_default(
+            Some(&Value::Number(4_294_967_296.0)),
+            true
+        ));
+        assert!(bool_or_default(
+            Some(&Value::Number(4_294_967_297.0)),
+            false
+        ));
+        for n in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 9.3e18] {
+            assert!(!bool_or_default(Some(&Value::Number(n)), true), "{n}");
+        }
         assert!(!bool_or_default(Some(&Value::Integer(0)), true));
         assert!(bool_or_default(Some(&Value::Integer(7)), false));
 

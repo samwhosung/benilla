@@ -346,7 +346,10 @@ fn set_checked_uses_blizzard_bool_coercion() {
         ("\"false\"", false),
         ("\"1\"", true),
         ("\"0\"", false),
-        ("\"junk\"", false),
+        // An unknown first byte takes the default, 1 (`0x6f1c81`-`0x6f1cdc`).
+        ("\"junk\"", true),
+        ("\"off\"", false),
+        ("", true),
     ] {
         let got = s
             .eval::<bool>(&format!(
