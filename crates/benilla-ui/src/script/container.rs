@@ -702,6 +702,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{ContainerMove, ContainerSlot, ContainerState, PendingWrap, UiCursorMode};
+    use crate::script::cursor::split_container_item;
     use crate::script::{MerchantItem, MerchantState, UiScript};
 
     fn backpack() -> ContainerState {
@@ -1061,9 +1062,7 @@ mod tests {
         );
         s.set_container(0, Some(state));
 
-        assert!(s
-            .eval::<bool>("return SplitContainerItem(0, 1, 3)")
-            .unwrap());
+        assert!(split_container_item(&mut s.model_mut(), 0, 1, 3));
         let held = s.cursor_item().expect("the split carry");
         assert_eq!(
             (held.bag, held.slot, held.item_id, held.count),
@@ -1107,15 +1106,11 @@ mod tests {
     fn split_of_the_whole_stack_is_a_plain_pickup() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(backpack())); // slot 1: a 5-stack
-        assert!(s
-            .eval::<bool>("return SplitContainerItem(0, 1, 5)")
-            .unwrap());
+        assert!(split_container_item(&mut s.model_mut(), 0, 1, 5));
         assert_eq!(s.cursor_item().unwrap().count, None);
         // A split of more than the stack is a plain pickup too.
         s.run("ClearCursor()").unwrap();
-        assert!(s
-            .eval::<bool>("return SplitContainerItem(0, 1, 99)")
-            .unwrap());
+        assert!(split_container_item(&mut s.model_mut(), 0, 1, 99));
         assert_eq!(s.cursor_item().unwrap().count, None);
     }
 

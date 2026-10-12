@@ -2,7 +2,7 @@
 //! `ResetChatColors`: the reference's runtime table (`0xb4e518`), which the `COLORS` block of
 //! `chat-cache.txt` overwrites in place at load; the app owns that file.
 
-use mlua::{Lua, MultiValue, Value};
+use mlua::{Lua, MultiValue};
 
 use super::Model;
 
@@ -247,7 +247,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             reset(&mut model.chat_colors);
             model.chat_colors_changed = true;
-            Ok(Value::Nil)
+            // `0x4a09e0` ends `xor eax,eax; ret`: no value.
+            Ok(())
         })?,
     )?;
 

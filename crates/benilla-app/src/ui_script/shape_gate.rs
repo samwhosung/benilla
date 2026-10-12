@@ -724,13 +724,10 @@ const ARG_LADDER: &[&str] = &[
     "\"player\", \"player\"",
 ];
 
-/// The kinds a predicate row carries in the table: the `(nil) | (number)` of a flag, which the
-/// gate probes whatever the binding's name or arity confidence.
-const FLAG_KINDS: &str = "(nil) | (number)";
-
 /// The global bindings the boolean gate probes: every `global` row of the table, whatever its
-/// `arity_conf`, that is named like a query (`Get`, `Is`, `Has`, `Can`, `Unit`, `Num`) or whose
-/// kinds are [`FLAG_KINDS`], whatever its name (`LootSlotIsItem`, `Resurrect*`, `Check*Dist`).
+/// name or `arity_conf`. 1.12 has no boolean-returning global but `IsPetAttackActive`, so a
+/// `Pickup*` or `Place*` verb that hands back whether it moved something fails here as readily as
+/// a predicate that answers `true` (`LootSlotIsItem`, `Resurrect*`, `Check*Dist`).
 fn predicate_names() -> Vec<String> {
     let tsv = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -742,19 +739,24 @@ fn predicate_names() -> Vec<String> {
         .filter(|l| !l.starts_with('#') && !l.starts_with("name\t"))
         .filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            if f.len() < 10 || f[4] != "global" {
-                return None;
-            }
-            let query = ["Get", "Is", "Has", "Can", "Unit", "Num"]
-                .iter()
-                .any(|p| f[0].starts_with(p));
-            (query || f[9] == FLAG_KINDS).then(|| f[0].to_string())
+            (f.len() >= 10 && f[4] == "global" && !NOT_PROBED.contains(&f[0]))
+                .then(|| f[0].to_string())
         })
         .collect();
     names.sort_unstable();
     names.dedup();
     names
 }
+
+/// Globals the boolean gate leaves alone: they end the session or the VM, not answer a value.
+const NOT_PROBED: &[&str] = &[
+    "Quit",
+    "ForceQuit",
+    "Logout",
+    "CancelLogout",
+    "ReloadUI",
+    "RestartGx",
+];
 
 /// The state the predicates that answer only against state read from: a seated player, two
 /// talents (an ordinary one met and learnable, an exceptional one neither), two loot rolls (a
@@ -937,8 +939,17 @@ fn no_widget_method_answers_a_lua_boolean() {
         }
     }
 
-    // A widget predicate takes a script or object-type name more often than a number.
-    const WIDGET_ARGS: &[&str] = &["", "\"OnClick\"", "\"Frame\"", "1", "1, 1"];
+    // A widget predicate takes a script or object-type name more often than a number, and
+    // `IsOwned` a frame; `PGFrame` is the probe frame made above.
+    const WIDGET_ARGS: &[&str] = &[
+        "",
+        "\"OnClick\"",
+        "\"Frame\"",
+        "1",
+        "1, 1",
+        "PGFrame",
+        "1, 5",
+    ];
 
     let mut checked = 0usize;
     let mut booleans: Vec<String> = Vec::new();
@@ -951,13 +962,8 @@ fn no_widget_method_answers_a_lua_boolean() {
             continue;
         }
         let (name, table) = (f[0], f[3]);
-        if !["Get", "Is", "Has", "Can", "Num"]
-            .iter()
-            .any(|p| name.starts_with(p))
-        {
-            continue;
-        }
-        // No widget method answers a boolean in the reference, so none is exempt here.
+        // No widget method answers a boolean in the reference, so none is exempt here, whatever
+        // its name: `AtBottom`, `SetAlphaGradient` and `IsOwned` push 1 or nil.
         let Some(obj) = made.get(table) else { continue };
         for args in WIDGET_ARGS {
             let probe = format!(
@@ -974,8 +980,8 @@ fn no_widget_method_answers_a_lua_boolean() {
             checked += 1;
             if got.split(',').any(|k| k == "boolean") {
                 booleans.push(format!("{obj}:{name}({args}) answers ({got})"));
+                break;
             }
-            break;
         }
     }
 

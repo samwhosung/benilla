@@ -276,8 +276,9 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetAlphaGradient(start, length), a FontString's write-on reveal: answers whether `start` is
-    // still inside the text in chars, and stock `QuestFrame.lua:558` advances until it is not.
+    // SetAlphaGradient(start, length) (`0x79cc80`), a FontString's write-on reveal: answers 1
+    // (`0x79cd58`) or nil (`0x79cd6d`) for whether `start` is still inside the text in chars, and
+    // stock `QuestFrame.lua:558` advances until it is not.
     m.set(
         "SetAlphaGradient",
         lua.create_function(|lua, (this, start, length): (Table, f32, f32)| {
@@ -286,7 +287,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let data = model.region_data.entry(rh).or_default();
             data.alpha_gradient = Some((start, length));
             let chars = data.text.as_deref().map_or(0, |t| t.chars().count());
-            Ok(start < chars as f32)
+            Ok(crate::script::binding_abi::flag(start < chars as f32))
         })?,
     )?;
 

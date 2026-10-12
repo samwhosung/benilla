@@ -221,13 +221,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "PickupPetAction",
         lua.create_function(|lua, slot: u32| {
-            let took = {
+            {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                pickup_pet_action(&mut model, slot)
-            };
+                pickup_pet_action(&mut model, slot);
+            }
             // Both the pickup and a drop's displaced occupant can put a token on the cursor.
             resolve_token_icon(lua);
-            Ok(took)
+            Ok(())
         })?,
     )?;
     Ok(())
@@ -236,6 +236,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::script::cursor::bar::place_action;
     use crate::script::{PetActionView, UiScript};
 
     /// A hunter's bar words. `FILLER` is vmangos's unused slot, `ACT_DISABLED` with spell 0: type
@@ -340,7 +341,7 @@ mod tests {
     #[test]
     fn picking_up_a_spell_blanks_its_slot_and_sends() {
         let mut s = bar_script();
-        assert!(s.eval::<bool>("return PickupPetAction(4)").unwrap());
+        assert!(pickup_pet_action(&mut s.model_mut(), 4));
         assert!(
             matches!(s.cursor_payload(), Some(crate::script::CursorPayload::PetAction(c)) if c.src_slot == 4),
             "{:?}",
@@ -388,7 +389,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_pet_actions(true, false, true, hunter_bar());
 
-        assert!(s.eval::<bool>("return PickupPetAction(4)").unwrap());
+        assert!(pickup_pet_action(&mut s.model_mut(), 4));
         assert!(
             matches!(s.cursor_payload(), Some(crate::script::CursorPayload::PetAction(c))
                 if c.src_slot == 4 && c.packed == CLAW),
@@ -440,7 +441,7 @@ mod tests {
     #[test]
     fn picking_up_a_token_leaves_the_slot_alone() {
         let mut s = bar_script();
-        assert!(s.eval::<bool>("return PickupPetAction(1)").unwrap());
+        assert!(pickup_pet_action(&mut s.model_mut(), 1));
         assert!(
             s.take_pet_set_actions().is_empty(),
             "nothing was written, so nothing is sent"
@@ -506,8 +507,8 @@ mod tests {
     #[test]
     fn slot_eleven_is_refused_rather_than_written_past_the_array() {
         let mut s = bar_script();
-        assert!(!s.eval::<bool>("return PickupPetAction(11)").unwrap());
-        assert!(!s.eval::<bool>("return PickupPetAction(0)").unwrap());
+        assert!(!pickup_pet_action(&mut s.model_mut(), 11));
+        assert!(!pickup_pet_action(&mut s.model_mut(), 0));
         assert!(s.take_pet_set_actions().is_empty());
         assert!(s.cursor_payload().is_none());
     }
@@ -517,7 +518,7 @@ mod tests {
     fn a_possessed_bar_takes_no_drag_at_all() {
         let mut s = UiScript::new().unwrap();
         s.set_pet_actions(true, true, false, hunter_bar());
-        assert!(!s.eval::<bool>("return PickupPetAction(4)").unwrap());
+        assert!(!pickup_pet_action(&mut s.model_mut(), 4));
         assert!(s.take_pet_set_actions().is_empty());
     }
 
@@ -558,7 +559,7 @@ mod tests {
             "the action bar's grid stays down — nothing can land there"
         );
         // PlaceAction refuses it outright and leaves it held.
-        assert!(!s.eval::<bool>("return PlaceAction(1)").unwrap());
+        assert!(!place_action(&mut s.model_mut(), 1));
         assert!(matches!(
             s.cursor_payload(),
             Some(crate::script::CursorPayload::PetAction(_))

@@ -406,7 +406,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "DeleteMacro",
         lua.create_function(|lua, index: usize| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(delete_macro(&mut model, index))
+            delete_macro(&mut model, index);
+            Ok(())
         })?,
     )?;
 
@@ -414,7 +415,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "PickupMacro",
         lua.create_function(|lua, index: usize| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(pickup_macro(&mut model, index))
+            pickup_macro(&mut model, index);
+            Ok(())
         })?,
     )?;
 
@@ -500,7 +502,7 @@ mod tests {
         );
 
         // The character macro keeps its own base after the delete.
-        assert!(s.eval::<bool>("return DeleteMacro(1)").unwrap());
+        assert!(delete_macro(&mut s.model_mut(), 1));
         assert_eq!(
             s.eval::<(i64, i64)>("local a, c = GetNumMacros() return a, c")
                 .unwrap(),
@@ -620,11 +622,8 @@ mod tests {
         s.run(r#"CreateMacro("Ambush", 1, "/cast Ambush")"#)
             .unwrap();
 
-        assert!(
-            !s.eval::<bool>("return PickupMacro(5)").unwrap(),
-            "empty slot"
-        );
-        assert!(s.eval::<bool>("return PickupMacro(1)").unwrap());
+        assert!(!pickup_macro(&mut s.model_mut(), 5), "empty slot");
+        assert!(pickup_macro(&mut s.model_mut(), 1));
         assert_eq!(
             s.cursor_payload(),
             Some(CursorPayload::Macro(CursorMacro {
@@ -633,7 +632,7 @@ mod tests {
             }))
         );
         assert!(
-            !s.eval::<bool>("return PickupMacro(1)").unwrap(),
+            !pickup_macro(&mut s.model_mut(), 1),
             "a macro button is a source, never a drop target"
         );
     }

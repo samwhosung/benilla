@@ -87,14 +87,15 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(anchor.name())
         })?,
     )?;
-    // IsOwned(frame): the hover loop's OnUpdate gate (`ContainerFrame.lua:657`); the owner drops
-    // on hide, so a stale OnUpdate never brings a hidden tooltip back.
+    // IsOwned(frame) (`0x530fe0`): 1 (`0x5310ad`) or nil (`0x5310c0`), the hover loop's OnUpdate
+    // gate (`ContainerFrame.lua:657`); the owner drops on hide, so a stale OnUpdate never brings a
+    // hidden tooltip back.
     m.set(
         "IsOwned",
         lua.create_function(|lua, (this, frame): (Table, Table)| {
             let owner = with_tip(lua, &this, |t| t.owner)?;
             let fh = frame_handle_of(lua, &frame)?;
-            Ok(owner == Some(fh))
+            Ok(crate::script::binding_abi::flag(owner == Some(fh)))
         })?,
     )?;
 

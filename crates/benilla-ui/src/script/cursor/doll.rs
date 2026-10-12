@@ -196,14 +196,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "PickupInventoryItem",
         lua.create_function(|lua, id: u32| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(pickup_inventory_item(&mut model, id))
+            pickup_inventory_item(&mut model, id);
+            Ok(())
         })?,
     )?;
     g.set(
         "EquipCursorItem",
         lua.create_function(|lua, id: u32| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(equip_cursor_item(&mut model, id))
+            equip_cursor_item(&mut model, id);
+            Ok(())
         })?,
     )?;
     g.set(
@@ -217,7 +219,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "AutoEquipCursorItem",
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(auto_equip_cursor_item(&mut model))
+            auto_equip_cursor_item(&mut model);
+            Ok(())
         })?,
     )?;
     g.set(
@@ -241,6 +244,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::{auto_equip_cursor_item, equip_cursor_item, pickup_inventory_item};
     use crate::script::cursor::{CursorAction, CursorPayload, CursorSpell, EQUIPMENT_BAG};
     use crate::script::{ContainerMove, ContainerSlot, ContainerState, InvSlotView, UiScript};
 
@@ -341,7 +345,7 @@ mod tests {
         s.set_inventory_slots(doll_slots());
 
         assert!(!s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
-        assert!(s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(pickup_inventory_item(&mut s.model_mut(), 1));
         let held = s.cursor_item().expect("picked up");
         assert_eq!(
             (held.bag, held.slot, held.item_id),
@@ -356,8 +360,8 @@ mod tests {
     fn pickup_same_doll_slot_cancels_no_move() {
         let mut s = UiScript::new().unwrap();
         s.set_inventory_slots(doll_slots());
-        assert!(s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
-        assert!(s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(pickup_inventory_item(&mut s.model_mut(), 1));
+        assert!(pickup_inventory_item(&mut s.model_mut(), 1));
         assert!(s.cursor_item().is_none());
         assert!(s.take_container_moves().is_empty());
         assert!(!s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
@@ -372,7 +376,7 @@ mod tests {
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(s.cursor_item().unwrap().equip_slots, vec![1]);
 
-        assert!(s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(pickup_inventory_item(&mut s.model_mut(), 1));
         assert!(s.cursor_item().is_none(), "a plain clear, no hop");
         assert_eq!(
             s.take_container_moves(),
@@ -394,7 +398,7 @@ mod tests {
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
 
-        assert!(!s.eval::<bool>("return PickupInventoryItem(2)").unwrap());
+        assert!(!pickup_inventory_item(&mut s.model_mut(), 2));
         let held = s.cursor_item().expect("kept — doesn't fit slot 2");
         assert_eq!(held.item_id, 2000);
         assert!(s.take_container_moves().is_empty());
@@ -405,10 +409,10 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_inventory_slots(doll_slots());
 
-        assert!(s.eval::<bool>("return PickupInventoryItem(11)").unwrap());
+        assert!(pickup_inventory_item(&mut s.model_mut(), 11));
         assert_eq!(s.cursor_item().unwrap().equip_slots, vec![11, 12]);
 
-        assert!(s.eval::<bool>("return PickupInventoryItem(12)").unwrap());
+        assert!(pickup_inventory_item(&mut s.model_mut(), 12));
         assert!(s.cursor_item().is_none());
         assert_eq!(
             s.take_container_moves(),
@@ -434,7 +438,7 @@ mod tests {
         let held = s.cursor_item().expect("a split carry");
         assert_eq!(held.count, Some(2));
 
-        assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(!pickup_inventory_item(&mut s.model_mut(), 1));
         let held = s.cursor_item().expect("kept — can't equip a partial stack");
         assert_eq!(held.count, Some(2));
         assert!(s.take_container_moves().is_empty());
@@ -473,8 +477,8 @@ mod tests {
         s.set_inventory_slots(slots);
 
         // Ammo (0) is refused; Bag0Slot (20) picks up the equipped bag.
-        assert!(!s.eval::<bool>("return PickupInventoryItem(0)").unwrap());
-        assert!(s.eval::<bool>("return PickupInventoryItem(20)").unwrap());
+        assert!(!pickup_inventory_item(&mut s.model_mut(), 0));
+        assert!(pickup_inventory_item(&mut s.model_mut(), 20));
         let held = s.cursor_item().expect("bag picked up from the bar");
         assert_eq!(
             (held.bag, held.slot, held.item_id),
@@ -520,7 +524,7 @@ mod tests {
         s.run("PickupContainerItem(0, 3)").unwrap();
         assert!(s.eval::<bool>("return CursorCanGoInSlot(21)").unwrap());
 
-        assert!(s.eval::<bool>("return PickupInventoryItem(21)").unwrap());
+        assert!(pickup_inventory_item(&mut s.model_mut(), 21));
         assert!(s.cursor_item().is_none(), "a plain clear on place");
         assert_eq!(
             s.take_container_moves(),
@@ -570,7 +574,7 @@ mod tests {
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
 
-        assert!(s.eval::<bool>("return AutoEquipCursorItem()").unwrap());
+        assert!(auto_equip_cursor_item(&mut s.model_mut()));
         assert!(s.cursor_item().is_none());
         assert_eq!(s.take_container_autoequips(), vec![(0, 1)]);
     }
@@ -581,7 +585,7 @@ mod tests {
         s.set_inventory_slots(doll_slots());
 
         s.run("PickupInventoryItem(1)").unwrap();
-        assert!(!s.eval::<bool>("return AutoEquipCursorItem()").unwrap());
+        assert!(!auto_equip_cursor_item(&mut s.model_mut()));
         assert!(s.cursor_item().is_some(), "kept");
         assert!(s.take_container_autoequips().is_empty());
         s.run("ClearCursor()").unwrap();
@@ -590,7 +594,7 @@ mod tests {
         state.slots.get_mut(&1).unwrap().count = 5;
         s.set_container(0, Some(state));
         s.run("SplitContainerItem(0, 1, 2)").unwrap();
-        assert!(!s.eval::<bool>("return AutoEquipCursorItem()").unwrap());
+        assert!(!auto_equip_cursor_item(&mut s.model_mut()));
         assert!(s.cursor_item().is_some(), "kept");
         assert!(s.take_container_autoequips().is_empty());
     }
@@ -633,8 +637,8 @@ mod tests {
         }));
         s.run("ShowRepairCursor()").unwrap();
 
-        assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
-        assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(!pickup_inventory_item(&mut s.model_mut(), 1));
+        assert!(!pickup_inventory_item(&mut s.model_mut(), 1));
         s.run("UseInventoryItem(1)").unwrap();
         assert!(s.cursor_item().is_none());
         assert_eq!(s.take_inventory_repairs(), vec![1, 1, 1]);
@@ -723,7 +727,7 @@ mod tests {
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
 
-        assert!(s.eval::<bool>("return EquipCursorItem(1)").unwrap());
+        assert!(equip_cursor_item(&mut s.model_mut(), 1));
         assert!(s.cursor_item().is_none());
         assert_eq!(
             s.take_container_moves(),
@@ -746,7 +750,7 @@ mod tests {
         s.set_container(0, Some(one_fitting_bag_item()));
 
         // Unarmed, both seams do their ordinary gesture and queue nothing.
-        assert!(s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(pickup_inventory_item(&mut s.model_mut(), 1));
         assert!(s.cursor_item().is_some());
         assert!(s.take_item_picks().is_empty());
 
@@ -761,7 +765,7 @@ mod tests {
         // Armed with an empty cursor: both seams bind and leave the cursor empty.
         s.run("ClearCursor()").unwrap();
         assert!(s.cursor_item().is_none());
-        assert!(!s.eval::<bool>("return PickupInventoryItem(1)").unwrap());
+        assert!(!pickup_inventory_item(&mut s.model_mut(), 1));
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(
             s.take_item_picks(),

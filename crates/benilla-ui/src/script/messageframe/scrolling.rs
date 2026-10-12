@@ -154,13 +154,22 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             scroll(lua, &this, ScrollingMessageState::page_down)
         })?,
     )?;
+    // AtTop (`0x793130`) and AtBottom (`0x7931f0`) push 1 (`0x7931c3`) or nil (`0x7931d6`).
     m.set(
         "AtTop",
-        lua.create_function(|lua, this: Table| with_smf(lua, &this, |smf| smf.at_top()))?,
+        lua.create_function(|lua, this: Table| {
+            with_smf(lua, &this, |smf| {
+                crate::script::binding_abi::flag(smf.at_top())
+            })
+        })?,
     )?;
     m.set(
         "AtBottom",
-        lua.create_function(|lua, this: Table| with_smf(lua, &this, |smf| smf.at_bottom()))?,
+        lua.create_function(|lua, this: Table| {
+            with_smf(lua, &this, |smf| {
+                crate::script::binding_abi::flag(smf.at_bottom())
+            })
+        })?,
     )?;
 
     // SetMaxLines wipes the ring (`0x7938a0`).

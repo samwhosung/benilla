@@ -484,7 +484,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SplitContainerItem",
         lua.create_function(|lua, (bag, slot, count): (i64, u32, i64)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(split_container_item(&mut model, bag, slot, count))
+            split_container_item(&mut model, bag, slot, count);
+            Ok(())
         })?,
     )?;
     g.set(
@@ -507,7 +508,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CursorAction, CursorItem, CursorPayload, CursorSpell};
+    use super::{split_container_item, CursorAction, CursorItem, CursorPayload, CursorSpell};
     use crate::script::UiScript;
 
     /// A backpack holding a five-stack in slot 1.
@@ -761,9 +762,7 @@ mod tests {
     fn split_of_the_whole_stack_degrades_to_a_plain_pickup() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(one_item_backpack())); // slot 1: a 5-stack
-        assert!(s
-            .eval::<bool>("return SplitContainerItem(0, 1, 5)")
-            .unwrap());
+        assert!(split_container_item(&mut s.model_mut(), 0, 1, 5));
         let held = s.cursor_item().expect("picked up");
         assert_eq!(held.count, None, "count>=stack ⇒ whole-stack pickup");
     }

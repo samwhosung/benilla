@@ -582,7 +582,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
             let (id, book_type) = spell_slot_args(id, book_type, "PickupSpell")?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            Ok(pickup_spell(&mut model, id, &book_type))
+            pickup_spell(&mut model, id, &book_type);
+            Ok(())
         })?,
     )?;
 
@@ -655,7 +656,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PetBookState, SpellBookState, SpellSlotView, SpellTabView};
+    use super::{pickup_spell, PetBookState, SpellBookState, SpellSlotView, SpellTabView};
     use crate::script::cursor::{CursorAction, CursorPayload};
     use crate::script::UiScript;
 
@@ -912,8 +913,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_spellbook(book());
 
-        s.run(r#"picked = PickupSpell(1, BOOKTYPE_SPELL)"#).unwrap();
-        assert!(s.eval::<bool>("return picked").unwrap());
+        s.run(r#"PickupSpell(1, BOOKTYPE_SPELL)"#).unwrap();
         assert!(s.cursor_payload().is_some());
         assert!(
             matches!(
@@ -967,9 +967,7 @@ mod tests {
             texture: None,
         }));
 
-        assert!(!s
-            .eval::<bool>(r#"return PickupSpell(1, BOOKTYPE_SPELL)"#)
-            .unwrap());
+        assert!(!pickup_spell(&mut s.model_mut(), 1, "spell"));
         // The original (action) payload survives untouched.
         assert!(
             matches!(
@@ -1093,9 +1091,7 @@ mod tests {
         assert!(s.take_spell_casts().is_empty(), "pet cast is a no-op");
         assert!(s.take_pet_spell_casts().is_empty());
 
-        assert!(!s
-            .eval::<bool>(r#"return PickupSpell(1, BOOKTYPE_PET)"#)
-            .unwrap());
+        assert!(!pickup_spell(&mut s.model_mut(), 1, "pet"));
         assert!(s.cursor_payload().is_none(), "pet pickup is a no-op");
     }
 
@@ -1283,9 +1279,7 @@ mod tests {
         s.set_spellbook(book());
         s.set_pet_book(pet_book());
 
-        assert!(s
-            .eval::<bool>(r#"return PickupSpell(1, BOOKTYPE_PET)"#)
-            .unwrap());
+        assert!(pickup_spell(&mut s.model_mut(), 1, "pet"));
         let Some(CursorPayload::PetAction(p)) = s.cursor_payload() else {
             panic!(
                 "expected a pet action payload, got {:?}",
@@ -1297,9 +1291,7 @@ mod tests {
 
         // The player book still produces a spell payload.
         s.run("ClearCursor()").unwrap();
-        assert!(s
-            .eval::<bool>(r#"return PickupSpell(1, BOOKTYPE_SPELL)"#)
-            .unwrap());
+        assert!(pickup_spell(&mut s.model_mut(), 1, "spell"));
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Spell(_))));
     }
 
