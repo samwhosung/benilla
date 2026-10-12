@@ -301,6 +301,9 @@ pub(crate) struct LockWatch {
     seen: Option<Snapshot>,
     templates: u64,
     arrivals: Vec<u64>,
+    /// The entity behind each locked item, as last seen: the lock is the object's, so one that
+    /// is despawned or rebuilt under the same guid drops it.
+    lock_owners: HashMap<u64, Entity>,
 }
 
 /// Run the frame's releases ahead of the inventory feeds: the watchers compare the incoming guid
@@ -378,6 +381,21 @@ pub(crate) fn apply_item_releases(
             }
         }
     }
+    // A locked item whose object went away, or came back as a new one (a cross-map worldport
+    // rebuilds them all), loses the lock silently: it lived on the old object, and the new one
+    // is built unlocked (`0x5d821f`, `0x5d823e`).
+    let mut owners = HashMap::new();
+    for guid in script.item_locks() {
+        let now = objects.entity(guid);
+        let was = watch.lock_owners.get(&guid).copied();
+        match now {
+            Some(e) if was.is_none_or(|w| w == e) => {
+                owners.insert(guid, e);
+            }
+            _ => script.forget_item_lock(guid),
+        }
+    }
+    watch.lock_owners = owners;
     if moved || answered {
         let mut waiting = Vec::new();
         for guid in std::mem::take(&mut watch.arrivals) {
@@ -698,6 +716,40 @@ mod tests {
         app.update();
         assert_eq!(heard(&mut app), 1, "A's alone");
         assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
+    }
+
+    /// The lock is the item object's: one rebuilt under the same guid (a cross-map worldport)
+    /// comes back unlocked (`0x5d821f`, `0x5d823e`), and one despawned takes its lock with it,
+    /// with no event either way.
+    #[test]
+    fn a_rebuilt_or_despawned_item_loses_its_lock_silently() {
+        let (mut app, _) = arrow_world();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .lock_item(A);
+        app.update();
+        let _ = heard(&mut app);
+        let old = app.world().resource::<crate::net::GuidIndex>().0[&A];
+        app.world_mut().despawn(old);
+        crate::items::test_spawn_item(app.world_mut(), A, arrows(200), false);
+        app.update();
+        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
+        let _ = heard(&mut app); // the new object's own arrival unlock (`0x5d8590`)
+
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .lock_item(A);
+        app.update();
+        let _ = heard(&mut app);
+        let e = app.world().resource::<crate::net::GuidIndex>().0[&A];
+        app.world_mut().despawn(e);
+        app.world_mut()
+            .resource_mut::<crate::net::GuidIndex>()
+            .0
+            .remove(&A);
+        app.update();
+        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
+        assert_eq!(heard(&mut app), 0, "no event for the drop itself");
     }
 
     /// The loot window's owed unlocks run here, ahead of the feeds.

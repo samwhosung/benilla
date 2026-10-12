@@ -691,6 +691,13 @@ impl super::UiScript {
         out
     }
 
+    /// Forget item `guid`'s lock with no event: its item object is gone, and the next object
+    /// with that guid starts unlocked, as the item constructor zeroes the bit (`0x5d821f`,
+    /// `0x5d823e`).
+    pub fn forget_item_lock(&mut self, guid: u64) {
+        self.model_mut().item_locks.remove(&guid);
+    }
+
     /// Seat a fresh VM's locks before anything runs on it, with no event.
     pub fn seed_item_locks(&mut self, guids: impl IntoIterator<Item = u64>) {
         self.model_mut().item_locks = guids.into_iter().filter(|&g| g != 0).collect();
