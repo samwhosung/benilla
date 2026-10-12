@@ -1,6 +1,7 @@
 //! The `.toc` manifest parser, for FrameXML, the `Blizzard_*` addons and third-party ones alike:
-//! `## Key: Value` is a directive, any other `#` line a comment, and any other non-blank line a
-//! file to load, in order. A BOM, `\r\n` and stray whitespace are tolerated.
+//! `## Key: Value` is a directive, any other `#` line a comment, and any other line a file to
+//! load, in order. A BOM and `\r\n` line ends are tolerated; leading whitespace is not (see
+//! [`Toc::parse`]).
 //!
 //! The reference reads a directive by testing the line, after the spaces that follow `##`, against
 //! each directive's own literal in turn (`Toc_Parse 0x51c9b0`, tests `0x51cc69`-`0x51d295`),
@@ -143,14 +144,16 @@ impl Directive {
 
 impl Toc {
     /// Parse manifest text; never fails, since any unrecognized line is a file entry.
+    ///
+    /// Lines split on `\r` and `\n` alike with the empty ones dropped (the tokenizer `0x64ae50`
+    /// with the delimiters `0x82edfc`, `0x6edcb0` and `0x51cc1d`). Nothing else is trimmed: a line
+    /// is a directive only if its first two bytes are `##` (`0x51cc22`, `0x51cc2e`), a comment if
+    /// its first is `#` (`0x6edcd9`), and any other, an indented `## ...` line included, a file
+    /// name, from which only trailing spaces are cut (`0x6edd24`-`0x6edd41`), not tabs.
     pub fn parse(text: &str) -> Self {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut toc = Toc::default();
-        for raw in text.lines() {
-            let line = raw.trim();
-            if line.is_empty() {
-                continue;
-            }
+        for line in text.split(['\r', '\n']).filter(|l| !l.is_empty()) {
             if let Some(directive) = line.strip_prefix("##") {
                 // `##` with no colon is a comment, as the client tolerates it.
                 if let Some((head, value)) = directive.trim_start_matches(' ').split_once(':') {
@@ -164,7 +167,7 @@ impl Toc {
                     }
                 }
             } else if !line.starts_with('#') {
-                toc.files.push(line.to_string());
+                toc.files.push(line.trim_end_matches(' ').to_string());
             }
         }
         toc
@@ -543,6 +546,43 @@ mod tests {
             !Toc::parse("## Title: x\n").load_on_demand(),
             "absent is false"
         );
+    }
+
+    /// Lines split on `\r` and `\n`, and nothing else is trimmed (`0x6edcb0`, `0x6edcd9`,
+    /// `0x6edd24`): a line is a comment or directive only from its first byte, so an indented one
+    /// is a file name, and a file name loses trailing spaces but not tabs.
+    #[test]
+    fn only_the_first_byte_makes_a_comment_or_directive_and_only_trailing_spaces_are_cut() {
+        let toc = Toc::parse(
+            "\u{feff}## Title: T\r\n\
+             \t## Includes: ..\\other\\x.lua\r\n\
+             \x20 ## Title: indented\n\
+             # comment\n\
+             #also a comment\r\n\
+             \n\
+             File.lua   \n\
+             Tab.lua\t\n\
+             \x20\n\
+             A.lua\rB.lua\n",
+        );
+        assert_eq!(
+            toc.files,
+            vec![
+                "\t## Includes: ..\\other\\x.lua",
+                "  ## Title: indented",
+                "File.lua",
+                "Tab.lua\t",
+                "",
+                "A.lua",
+                "B.lua",
+            ]
+        );
+        assert_eq!(
+            toc.directive("Title"),
+            Some("T"),
+            "the indented one is no directive"
+        );
+        assert_eq!(toc.directives.len(), 1);
     }
 
     /// Only the lines the reader hands the metadata map (`0x51d580`) are metadata.

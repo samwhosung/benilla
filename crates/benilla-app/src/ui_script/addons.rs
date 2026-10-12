@@ -2082,6 +2082,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
+    /// The file-list runner (`0x6edb90`) takes any line whose first byte is not `#` as a file
+    /// name, so a tab-indented `## Includes: ..\\other\\x.lua` opens nothing (`0x6ede10` collapses
+    /// a `..` only between separators): the load goes on with a failure on the list, and the
+    /// neighbour's file never runs.
+    #[test]
+    fn an_indented_directive_line_is_a_file_that_does_not_open() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("indented-directive");
+        write_addon(
+            &home,
+            "Other",
+            "## Interface: 11200\nx.lua\n",
+            &[("x.lua", "OtherRan = true")],
+        );
+        write_addon(
+            &home,
+            "Indented",
+            "## Interface: 11200\n\t## Includes: ..\\Other\\x.lua\nmain.lua\n",
+            &[("main.lua", "IndentedRan = true")],
+        );
+        std::fs::remove_dir_all(home.join("AddOns/Other")).unwrap();
+        let mut script = UiScript::new().unwrap();
+        let failures = load_third_party(&mut script, None, &[], true);
+        assert_eq!(
+            script.eval::<bool>("return IndentedRan == true").ok(),
+            Some(true),
+            "the load goes on past the file that did not open"
+        );
+        assert_eq!(
+            script.eval::<bool>("return OtherRan == nil").ok(),
+            Some(true)
+        );
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].contains("not found"), "{failures:?}");
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
     /// `GetAddOnMetadata` (`0x48e530` through `0x51e220`) reads the record's metadata map, which
     /// only `Title`, `Notes`, `Author`, `Version` and `X-*` lines reach (`0x51d580`); the typed
     /// directives jump past it (`0x51d3d0`), so they answer nil.
