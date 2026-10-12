@@ -55,12 +55,12 @@ fn stock_preview(
     (scene, look, yaw, fog)
 }
 
-/// What the feeder remembers between frames: the pane shown last, by VM session and frame, and
-/// the instance it held, numbered into [`GluePreview::stage`].
+/// What the feeder remembers about the glue VM between frames: the pane shown last and the
+/// instance it held, numbered into [`GluePreview::stage`].
 #[derive(Default)]
 pub(crate) struct StockFeed {
-    shown: Option<(u64, benilla_ui::widget::FrameHandle)>,
-    instance: Option<(u64, benilla_ui::widget::FrameHandle, u64)>,
+    shown: Option<benilla_ui::widget::FrameHandle>,
+    instance: Option<(benilla_ui::widget::FrameHandle, u64)>,
 }
 
 /// Feed the glue booth from the glue VM while the stock glue screens are up, and stand it down
@@ -70,7 +70,7 @@ pub(crate) fn feed_stock_glue_preview(
     mgr: Res<GlueMgr>,
     state: Option<Res<State<crate::char_select::ClientState>>>,
     mut preview: ResMut<GluePreview>,
-    mut feed: Local<StockFeed>,
+    mut feed: Local<super::VmMemo<StockFeed>>,
 ) {
     let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let script = script.filter(|s| s.vm_kind() == VmKind::Glue && !in_world);
@@ -82,15 +82,16 @@ pub(crate) fn feed_stock_glue_preview(
         }
         None => (None, None, 0.0, None),
     };
-    let session = script.as_deref().map_or(0, UiScript::session);
+    // A new VM's panes are new frames: the memo starts over with it.
+    let feed = feed.get_for(script.as_deref());
     // A pane that was not the one shown last frame has just shown: its OnShow (`0x46fa60`).
-    let shown = pane.as_ref().map(|p| (session, p.handle));
+    let shown = pane.as_ref().map(|p| p.handle);
     if shown.is_some() && shown != feed.shown {
         preview.shown = preview.shown.wrapping_add(1);
     }
     feed.shown = shown;
     // A new instance, or another pane's, is another scene.
-    let instance = pane.as_ref().map(|p| (session, p.handle, p.instance));
+    let instance = pane.as_ref().map(|p| (p.handle, p.instance));
     if instance.is_some() && instance != feed.instance {
         feed.instance = instance;
         preview.stage = preview.stage.wrapping_add(1);

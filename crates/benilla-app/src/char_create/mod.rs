@@ -63,6 +63,8 @@ impl Plugin for CharCreatePlugin {
                 )
                     .chain()
                     .before(crate::glue::GlueVisuals)
+                    // The create screen writes the glue booth's preview.
+                    .in_set(crate::portrait::GluePreviewFeed)
                     .run_if(in_state(ClientState::CharCreate))
                     .after(benilla_world::schedule::WorldStage::Net),
             );
