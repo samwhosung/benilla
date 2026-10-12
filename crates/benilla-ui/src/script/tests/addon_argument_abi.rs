@@ -209,3 +209,28 @@ fn reset_clears_a_toggle_for_a_name_nothing_installed_answers_to() {
         "the reset took the unknown name's row with it"
     );
 }
+
+/// `GetAddOnMetadata` reads a map whose insert replaces (`0x51d77b`): a key listed twice answers
+/// its last value.
+#[test]
+fn get_addon_metadata_answers_the_last_value_of_a_repeated_key() {
+    let mut s = UiScript::new().unwrap();
+    s.register_addons(
+        vec![AddOnInfo {
+            name: "Twice".into(),
+            directives: vec![
+                ("Version".into(), "1".into()),
+                ("version".into(), "2".into()),
+            ],
+            ..Default::default()
+        }],
+        None,
+        None,
+        None,
+    );
+    assert_eq!(
+        s.eval::<String>("return GetAddOnMetadata('Twice', 'VERSION')")
+            .unwrap(),
+        "2"
+    );
+}

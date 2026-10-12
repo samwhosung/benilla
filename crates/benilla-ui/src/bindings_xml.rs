@@ -108,7 +108,8 @@ fn attr_ci(node: roxmltree::Node, name: &str) -> Option<String> {
 }
 
 /// A binding's bool attribute (`debug` `0x4b70b6`, `hidden` `0x4b73ce`, `runOnUp` `0x4b7413`)
-/// through the client's string-to-bool `0x6f1b30`, absent being false: `runOnUp="1"` is true.
+/// through the client's string-to-bool `0x6f1b30`, absent being false. The three callers test only
+/// for NULL, so an empty value is parsed too, and is false: `runOnUp="1"` is true.
 fn attr_bool(node: roxmltree::Node, name: &str) -> bool {
     attr_ci(node, name).is_some_and(|v| crate::strings::string_to_bool(&v))
 }

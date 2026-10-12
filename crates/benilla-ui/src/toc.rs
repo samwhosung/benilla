@@ -21,18 +21,24 @@ pub struct Toc {
     pub files: Vec<String>,
 }
 
-/// One `## Key: Value` line.
+/// One `## ...` line, as written: after the `##` and the spaces that follow it, with nothing
+/// trimmed (`0x51cc3a`-`0x51cc56`). Its key, value and kind are read from that text on demand, by
+/// the rules the reference applies to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Directive {
-    /// The key with the spaces around it trimmed: the metadata key `0x51d580` stores
-    /// (`GetAddOnMetadata`), where it trims the spaces before the colon (`0x51d600`).
-    pub key: String,
-    /// Everything after the first colon, trimmed.
-    pub value: String,
-    /// The line from after the spaces following `##` up to its first colon, as written: what the
-    /// literals in [`Kind`] are compared against.
-    head: String,
+    line: String,
 }
+
+/// The locale slots the metadata reader knows, in the client's table order (`0x8558a4`): a
+/// metadata key ending `-<locale>` belongs to that locale.
+const LOCALES: [&str; 8] = [
+    "enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "xxYY",
+];
+
+/// The client's locale slot (`[0xc0e080]`). benilla answers `GetLocale()` with `enUS`
+/// (`script/client.rs`) and reads the locale-0 column everywhere, so this is the slot 0; the
+/// install's own locale is not consulted.
+pub const CLIENT_LOCALE: usize = 0;
 
 /// A directive the reference reads, with the literal its reader tests (`SStrCmpI` with the
 /// literal's own `SStrLen`) and that literal's address. Variants are in the order the reader tests
@@ -53,17 +59,17 @@ pub enum Kind {
     Extra,
     /// `Revision:` `0x8537d4` (`0x51cd18`): the number at `[rec+0x20]`.
     Revision,
-    /// `OptionalDep` `0x8537c8` (`0x51cd5f`): the list at `[rec+0x40]`.
+    /// `OptionalDep` `0x8537c8` (`0x51cd5f`): the array at `[rec+0x38]` (count `+0x3c`, data `+0x40`).
     OptionalDep,
-    /// `RequiredDep` `0x8537b8` (`0x51ce6e`): the list at `[rec+0x50]`.
+    /// `RequiredDep` `0x8537b8` (`0x51ce6e`): the array at `[rec+0x48]` (count `+0x4c`, data `+0x50`).
     RequiredDep,
     /// `Dep` `0x8537b4` (`0x51ce8c`): the same list as [`Kind::RequiredDep`].
     Dep,
-    /// `LoadWith:` `0x8537a8` (`0x51ceaa`): the list at `[rec+0x60]`.
+    /// `LoadWith:` `0x8537a8` (`0x51ceaa`): the array at `[rec+0x58]` (count `+0x5c`, data `+0x60`).
     LoadWith,
-    /// `SavedVariables:` `0x853798` (`0x51cfbe`): the list at `[rec+0x70]`.
+    /// `SavedVariables:` `0x853798` (`0x51cfbe`): the array at `[rec+0x68]` (count `+0x6c`, data `+0x70`).
     SavedVariables,
-    /// `SavedVariablesPerCharacter:` `0x85377c` (`0x51d0be`): the list at `[rec+0x80]`.
+    /// `SavedVariablesPerCharacter:` `0x85377c` (`0x51d0be`): the array at `[rec+0x78]` (count `+0x7c`, data `+0x80`).
     SavedVariablesPerCharacter,
     /// `DefaultState:` `0x85376c` (`0x51d1be`): `enabled` `0x853764` or `disabled` `0x853758`
     /// into `[rec+0x2b]`.
@@ -126,19 +132,56 @@ fn starts_with_ci(s: &str, prefix: &str) -> bool {
 
 impl Directive {
     /// Whether the reader claims this line for `kind`: the first literal in [`Kind::ALL`] order
-    /// that prefixes the line. The line is the head and its colon, which is all a literal can
-    /// reach but a list directive's value, and no literal does.
+    /// that prefixes the line itself, so a literal with a colon needs the colon right after the
+    /// key and a line without a colon matches none of those.
     fn kind(&self) -> Option<Kind> {
-        let line = format!("{}:", self.head);
         Kind::ALL
             .into_iter()
-            .find(|k| starts_with_ci(&line, k.literal()))
+            .find(|k| starts_with_ci(&self.line, k.literal()))
+    }
+
+    /// Everything after the first colon, untrimmed; `None` for a line without one, which the
+    /// list and scalar readers ignore (`0x51cd7e`, `0x51d2ec`).
+    fn rest(&self) -> Option<&str> {
+        self.line.split_once(':').map(|(_, rest)| rest)
     }
 
     /// The value as a scalar directive reads it: past any run of colons and spaces
-    /// (`0x51d260`-`0x51d26b`).
-    fn scalar(&self) -> &str {
-        self.value.trim_start_matches([':', ' '])
+    /// (`0x51d260`-`0x51d26b`), the rest untouched.
+    fn scalar(&self) -> Option<&str> {
+        self.rest().map(|r| r.trim_start_matches([':', ' ']))
+    }
+
+    /// The `(key, value)` the metadata reader `0x51d580` stores for this line, or `None` when it
+    /// drops it.
+    ///
+    /// The key runs to the first colon (or the line's end, so `## Title Foo` is the key
+    /// `Title Foo` with no value) and loses its trailing spaces (`0x51d600`). The byte after the
+    /// last `-` before that point starts a locale test (`0x51d5a0`-`0x51d5b8`): four bytes
+    /// compared case-insensitively with the locale table. The client's own locale cuts the key at
+    /// the dash (`0x51d5f0`); another locale drops the line (`0x51d5e7`); no locale keeps the
+    /// key whole. The value is the rest past any colons and spaces (`0x51d610`), trailing
+    /// whitespace and a leading tab kept.
+    fn metadata(&self) -> Option<(String, String)> {
+        let line = self.line.as_bytes();
+        let end = line.iter().position(|&b| b == b':').unwrap_or(line.len());
+        let mut key_end = end;
+        if let Some(dash) = line[..end].iter().rposition(|&b| b == b'-') {
+            if let Some(tag) = line.get(dash + 1..dash + 5) {
+                if let Some(slot) = LOCALES
+                    .iter()
+                    .position(|l| tag.eq_ignore_ascii_case(l.as_bytes()))
+                {
+                    if slot != CLIENT_LOCALE {
+                        return None;
+                    }
+                    key_end = dash;
+                }
+            }
+        }
+        let key = self.line[..key_end].trim_end_matches(' ');
+        let value = self.line[end..].trim_start_matches([':', ' ']);
+        Some((key.to_string(), value.to_string()))
     }
 }
 
@@ -155,17 +198,9 @@ impl Toc {
         let mut toc = Toc::default();
         for line in text.split(['\r', '\n']).filter(|l| !l.is_empty()) {
             if let Some(directive) = line.strip_prefix("##") {
-                // `##` with no colon is a comment, as the client tolerates it.
-                if let Some((head, value)) = directive.trim_start_matches(' ').split_once(':') {
-                    let key = head.trim();
-                    if !key.is_empty() {
-                        toc.directives.push(Directive {
-                            key: key.to_string(),
-                            value: value.trim().to_string(),
-                            head: head.to_string(),
-                        });
-                    }
-                }
+                toc.directives.push(Directive {
+                    line: directive.trim_start_matches(' ').to_string(),
+                });
             } else if !line.starts_with('#') {
                 toc.files.push(line.trim_end_matches(' ').to_string());
             }
@@ -173,35 +208,43 @@ impl Toc {
         toc
     }
 
-    /// The metadata key `key` (`GetAddOnMetadata`, `Title`, `Notes`), case-insensitively, the last
-    /// one when a key repeats: the reference's hash insert into `[rec+0x98]` (`0x51d580`) replaces
-    /// the old value (`0x51d77b`). Not for the typed directives, which [`Kind`] reads.
-    pub fn directive(&self, key: &str) -> Option<&str> {
-        self.directives
-            .iter()
-            .rev()
-            .find(|d| d.key.eq_ignore_ascii_case(key))
-            .map(|d| d.value.as_str())
-    }
-
-    /// What `GetAddOnMetadata` can answer: the lines of the kinds that reach the metadata map
-    /// (`0x51d580`, called from `0x51d3c6`) -- `Title`, `Notes`, `Author`, `Version` and `X-*` --
-    /// as `(key, value)` in file order. The typed directives jump to `0x51d3d0` without it, so
-    /// `GetAddOnMetadata(addon, "Interface")` is nil. The value is read past any colons and
-    /// spaces (`0x51d610`).
-    pub fn metadata(&self) -> Vec<(String, String)> {
-        let kept = [
+    /// The metadata map of the addon in folder `folder`, what `GetAddOnInfo`'s title and notes
+    /// and `GetAddOnMetadata` read: `Toc_Parse` seeds `Title` with the folder name before it
+    /// reads a line (`0x51cb3d`-`0x51cbf3`, `SStrDup` at `0x51cbee`), and each `Title`, `Notes`,
+    /// `Author`, `Version` and `X-*` line then inserts into it (`0x51d580`, from `0x51d3c6`),
+    /// replacing an earlier value of the same key (`0x51d77b`), the key keeping its first spelling.
+    /// The typed directives jump to `0x51d3d0` without it, so `GetAddOnMetadata(addon,
+    /// "Interface")` is nil. Keys compare case-insensitively.
+    pub fn metadata(&self, folder: &str) -> Vec<(String, String)> {
+        let mut map = vec![("Title".to_string(), folder.to_string())];
+        let reaches_the_map = [
             Kind::Title,
             Kind::Notes,
             Kind::Author,
             Kind::Version,
             Kind::Extra,
         ];
-        self.directives
-            .iter()
-            .filter(|d| d.kind().is_some_and(|k| kept.contains(&k)))
-            .map(|d| (d.key.clone(), d.scalar().to_string()))
-            .collect()
+        for d in &self.directives {
+            if !d.kind().is_some_and(|k| reaches_the_map.contains(&k)) {
+                continue;
+            }
+            let Some((key, value)) = d.metadata() else {
+                continue;
+            };
+            match map.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(&key)) {
+                Some(entry) => entry.1 = value,
+                None => map.push((key, value)),
+            }
+        }
+        map
+    }
+
+    /// One metadata entry of [`Self::metadata`].
+    pub fn metadata_value(&self, folder: &str, key: &str) -> Option<String> {
+        self.metadata(folder)
+            .into_iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v)
     }
 
     /// The directives the reader claims for `kind`, in file order.
@@ -213,7 +256,7 @@ impl Toc {
 
     /// A scalar directive's value, the last line winning.
     fn scalar(&self, kind: Kind) -> Option<&str> {
-        self.of(kind).last().map(Directive::scalar)
+        self.of(kind).filter_map(Directive::scalar).last()
     }
 
     /// A list directive's names, every line appending, a space separating like a comma
@@ -222,7 +265,8 @@ impl Toc {
         self.directives
             .iter()
             .filter(|d| d.kind().is_some_and(|k| kinds.contains(&k)))
-            .flat_map(|d| d.value.split([',', ' ']).map(str::trim))
+            .filter_map(Directive::rest)
+            .flat_map(|rest| rest.split([',', ' ']))
             .filter(|s| !s.is_empty())
             .collect()
     }
@@ -256,7 +300,7 @@ impl Toc {
     }
 
     /// Hard dependencies: the lines whose key starts with `Dep` or `RequiredDep`, which the
-    /// reader stores in one array at `[rec+0x50]` (`0x51ce6e`, `0x51ce8c`), so `## Dependencies`
+    /// reader stores in one array at `[rec+0x48]` (`0x51ce6e`, `0x51ce8c`), so `## Dependencies`
     /// and `## RequiredDependencies` both land there.
     pub fn dependencies(&self) -> Vec<&str> {
         self.list(&[Kind::RequiredDep, Kind::Dep])
@@ -268,8 +312,7 @@ impl Toc {
         self.list(&[Kind::OptionalDep])
     }
 
-    /// `## LoadWith:`, the addons whose load loads this one (`0x51ceaa`), into the array at
-    /// `[rec+0x60]`.
+    /// `## LoadWith:`, the addons whose load loads this one (`0x51ceaa`), into the array at `[rec+0x58]`.
     pub fn load_with(&self) -> Vec<&str> {
         self.list(&[Kind::LoadWith])
     }
@@ -294,8 +337,7 @@ impl Toc {
     /// value not at all (`0x51d21a`); the ctor `0x520550` seeds 1 (`0x5205b9`).
     pub fn default_state(&self) -> bool {
         let mut on = true;
-        for d in self.of(Kind::DefaultState) {
-            let v = d.scalar().trim();
+        for v in self.of(Kind::DefaultState).filter_map(Directive::scalar) {
             if v.eq_ignore_ascii_case("enabled") {
                 on = true;
             } else if v.eq_ignore_ascii_case("disabled") {
@@ -309,6 +351,11 @@ impl Toc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A metadata entry of a manifest in the folder `Folder`.
+    fn meta(toc: &Toc, key: &str) -> Option<String> {
+        toc.metadata_value("Folder", key)
+    }
 
     #[test]
     fn parses_directives_files_and_comments() {
@@ -326,16 +373,22 @@ mod tests {
              Frames.xml\r\n",
         );
         assert_eq!(toc.interface_versions(), vec![11507, 11508]);
-        assert_eq!(toc.directive("title"), Some("Probe |cff00ff00Addon|r"));
+        assert_eq!(
+            meta(&toc, "title").as_deref(),
+            Some("Probe |cff00ff00Addon|r")
+        );
         assert_eq!(toc.saved_variables(), vec!["ProbeDB", "ProbeSettings"]);
         // Values keep everything after the first colon.
-        assert_eq!(toc.directive("X-Custom"), Some("anything: with colons"));
+        assert_eq!(
+            meta(&toc, "X-Custom").as_deref(),
+            Some("anything: with colons")
+        );
         assert_eq!(
             toc.files,
             vec!["Libs\\LibStub\\LibStub.lua", "Core.lua", "Frames.xml"]
         );
-        // Comments and malformed directives contribute nothing.
-        assert_eq!(toc.directives.len(), 4);
+        // Comments and a colon-less line contribute nothing.
+        assert_eq!(meta(&toc, "malformed directive without colon"), None);
     }
 
     #[test]
@@ -345,8 +398,12 @@ mod tests {
         assert!(d("## DefaultState: enabled\n"));
         assert!(!d("## DefaultState: disabled\n"));
         assert!(
-            !d("## DefaultState:    DISABLED   \n"),
-            "trimmed, case-folded"
+            !d("## DefaultState:    DISABLED\n"),
+            "past the spaces, case-folded"
+        );
+        assert!(
+            d("## DefaultState: disabled \n"),
+            "the compare is whole-string (0x51d213): a trailing space is no `disabled`"
         );
         assert!(
             d("## DefaultState: maybe\n"),
@@ -371,7 +428,7 @@ mod tests {
              Fonts.xml\n",
         );
         assert_eq!(toc.interface_versions(), vec![11200]);
-        assert_eq!(toc.directive("Secure"), Some("1"));
+        assert!(toc.secure());
         assert!(!toc.load_on_demand());
         assert_eq!(toc.files.len(), 2);
     }
@@ -385,7 +442,7 @@ mod tests {
              ## LoadOnDemand: 1\n",
         );
         assert_eq!(toc.dependencies(), vec!["LibA", "LibB"]);
-        assert_eq!(toc.directive("Title"), Some("second"));
+        assert_eq!(meta(&toc, "Title").as_deref(), Some("second"));
         assert!(toc.load_on_demand());
     }
 
@@ -491,7 +548,7 @@ mod tests {
         // A prefix literal, and a metadata key, take the gap in stride.
         let toc = Toc::parse("## Dependencies : A\n## Title : T\n## Version : 1\n");
         assert_eq!(toc.dependencies(), vec!["A"]);
-        assert_eq!(toc.directive("Title"), Some("T"));
+        assert_eq!(meta(&toc, "Title").as_deref(), Some("T"));
     }
 
     #[test]
@@ -578,7 +635,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            toc.directive("Title"),
+            meta(&toc, "Title").as_deref(),
             Some("T"),
             "the indented one is no directive"
         );
@@ -592,7 +649,7 @@ mod tests {
             "## Interface: 11200\n## Title : T\n## Notes: N\n## Author: A\n## Version: 1\n\
              ## X-Website:: http://x\n## SavedVariables: V\n## Dependencies: D\n## Includes: I\n",
         );
-        let keys: Vec<(String, String)> = toc.metadata();
+        let keys: Vec<(String, String)> = toc.metadata("Folder");
         assert_eq!(
             keys,
             vec![
@@ -603,6 +660,108 @@ mod tests {
                 ("X-Website".into(), "http://x".into()),
             ]
         );
+    }
+
+    /// `Toc_Parse` seeds the map's `Title` with the folder before reading a line (`0x51cbee`), and
+    /// a later line replaces a value, the key keeping its first spelling (`0x51d77b`).
+    #[test]
+    fn title_defaults_to_the_folder_and_the_last_line_wins() {
+        let toc = Toc::parse("## Notes: n\n");
+        assert_eq!(
+            toc.metadata("Fold"),
+            vec![
+                ("Title".into(), "Fold".into()),
+                ("Notes".into(), "n".into()),
+            ]
+        );
+        let toc = Toc::parse("## Title: a\n## TITLE: b\n## notes: x\n## Notes: y\n");
+        assert_eq!(
+            toc.metadata("Fold"),
+            vec![("Title".into(), "b".into()), ("notes".into(), "y".into()),]
+        );
+    }
+
+    /// `0x51d5a0`-`0x51d5f0`: the four bytes after the key's last dash against the locale table.
+    /// The client's own locale cuts the key at the dash, another locale drops the line, and any
+    /// other suffix is part of the key.
+    #[test]
+    fn a_locale_suffix_on_a_metadata_key_follows_the_clients_locale() {
+        let toc = Toc::parse(
+            "## Title-deDE: German\n## Title-enUS: English\n## Notes-xxYY: other\n\
+             ## Notes-ENUS: loud\n## Author-zhCN: x\n## X-Website-Home: h\n## X-Date-2006: d\n\
+             ## X-ab: short\n",
+        );
+        let map = toc.metadata("F");
+        let get = |k: &str| {
+            map.iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get("Title"), Some("English"));
+        assert_eq!(
+            get("Notes"),
+            Some("loud"),
+            "case-insensitive, key cut at the dash"
+        );
+        assert_eq!(get("Author"), None, "another locale's line is dropped");
+        assert_eq!(get("X-Website-Home"), Some("h"));
+        assert_eq!(get("X-Date-2006"), Some("d"));
+        assert_eq!(get("X-ab"), Some("short"));
+        assert_eq!(map.len(), 5, "{map:?}");
+        // A table slot, not the name: the client is slot 0.
+        assert_eq!(LOCALES[CLIENT_LOCALE], "enUS");
+    }
+
+    /// Nothing is trimmed past the reference's own cuts: the key loses trailing spaces
+    /// (`0x51d600`), the value only the run of `:` and ` ` in front (`0x51d610`), and the scalar
+    /// directives hand the rest to `0x6f1b30` or a whole-string compare as it is.
+    #[test]
+    fn values_keep_their_whitespace_beyond_the_references_cuts() {
+        let toc = Toc::parse(
+            "## Version   : 1.0 \n## Notes:\t tab \n## Author:: : a\t\n## Title:\n\
+             ## LoadOnDemand:\t1\n## Secure: on \n",
+        );
+        let get = |k: &str| meta(&toc, k);
+        assert_eq!(get("Version").as_deref(), Some("1.0 "));
+        assert_eq!(get("Notes").as_deref(), Some("\t tab "));
+        assert_eq!(get("Author").as_deref(), Some("a\t"));
+        assert_eq!(
+            get("Title").as_deref(),
+            Some(""),
+            "an empty value replaces the seed"
+        );
+        assert!(!toc.load_on_demand(), "a tab is no `1`");
+        assert!(!toc.secure(), "`on ` is not `on`");
+        assert!(
+            Toc::parse("## LoadOnDemand: 1 \n").load_on_demand(),
+            "first byte 1"
+        );
+        let toc = Toc::parse("## Dependencies: A\tB, C ,D\n");
+        assert_eq!(
+            toc.dependencies(),
+            vec!["A\tB", "C", "D"],
+            "only space and comma split"
+        );
+    }
+
+    /// A metadata line with no colon still reaches the map (`0x51d580` scans to the NUL): the
+    /// key is the whole line and the value empty. The typed readers need their colon.
+    #[test]
+    fn a_metadata_line_without_a_colon_is_stored_and_a_typed_one_is_ignored() {
+        let toc = Toc::parse(
+            "## Title Foo\n## Version\n## Interface 11200\n## Dependencies A\n## LoadOnDemand 1\n",
+        );
+        let map = toc.metadata("F");
+        assert_eq!(
+            map,
+            vec![
+                ("Title".into(), "F".into()),
+                ("Title Foo".into(), "".into()),
+                ("Version".into(), "".into()),
+            ]
+        );
+        assert_eq!(toc.interface_version(), 0);
+        assert!(toc.dependencies().is_empty() && !toc.load_on_demand());
     }
 
     #[test]

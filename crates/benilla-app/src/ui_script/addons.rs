@@ -424,8 +424,9 @@ pub(crate) fn secure(chain: bool, toc: &Toc) -> bool {
 pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::script::AddOnInfo {
     benilla_ui::script::AddOnInfo {
         name: name.to_owned(),
-        title: toc.directive("Title").map(str::to_owned),
-        notes: toc.directive("Notes").map(str::to_owned),
+        // From the metadata map, whose `Title` the reader seeds with the folder (`0x51cb3d`).
+        title: toc.metadata_value(name, "Title"),
+        notes: toc.metadata_value(name, "Notes"),
         // The `.toc` has no URL: `0x51e180` answers `[rec+0x30]`, which only the server's
         // `SMSG_ADDON_INFO` writes (`0x51db6a`).
         url: None,
@@ -439,7 +440,7 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::s
             .collect(),
         load_with: toc.load_with().into_iter().map(str::to_owned).collect(),
         dependents: Vec::new(), // filled by `register_addons`
-        directives: toc.metadata(),
+        directives: toc.metadata(name),
         files: toc.files.clone(),
         saved_variables: toc
             .saved_variables()
@@ -534,8 +535,8 @@ pub(crate) fn installed_rows() -> Vec<InstalledAddOn> {
         .into_iter()
         .map(|addon| InstalledAddOn {
             default_state: addon.toc.default_state(),
-            title: addon.toc.directive("Title").map(str::to_owned),
-            notes: addon.toc.directive("Notes").map(str::to_owned),
+            title: addon.toc.metadata_value(&addon.name, "Title"),
+            notes: addon.toc.metadata_value(&addon.name, "Notes"),
             url: None, // the server's, never the `.toc`'s (`0x51e180`, `0x51db6a`)
             dependencies: addon
                 .toc
@@ -1090,7 +1091,7 @@ mod tests {
             "the archive's copy won"
         );
         assert_ne!(
-            row.toc.directive("Title"),
+            row.toc.metadata_value(&row.name, "Title").as_deref(),
             Some("Impostor"),
             "the loose manifest did not overwrite the archive's"
         );
@@ -2142,6 +2143,59 @@ mod tests {
         let rows = installed_rows();
         let row = rows.iter().find(|r| r.name == "Linked").unwrap();
         assert_eq!(row.url, None);
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// `Toc_Parse` seeds the metadata map's `Title` with the folder (`0x51cbee`), and
+    /// `GetAddOnInfo`'s title and notes (`0x51df20`, `0x51e050`) and `GetAddOnMetadata` read that
+    /// map: an addon that never says `## Title` is titled by its folder. The url (`0x51e180`) is
+    /// `[rec+0x30]`, which only `SMSG_ADDON_INFO` writes (`0x51db6a`), so a `## URL` line gives
+    /// none.
+    #[test]
+    fn an_addon_without_a_title_is_titled_by_its_folder_and_the_toc_gives_no_url() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("folder-title");
+        write_addon(
+            &home,
+            "Plain",
+            "## Interface: 11200\n## URL: http://example.invalid\n## Notes-deDE: Deutsch\n\
+             ## Notes: English\nmain.lua\n",
+            &[("main.lua", "")],
+        );
+        let mut script = UiScript::new().unwrap();
+        let _ = load_third_party(&mut script, None, &[], true);
+        assert_eq!(
+            script
+                .eval::<(String, String, String)>(
+                    "local n, title, notes = GetAddOnInfo('Plain') \
+                     return n, title, notes"
+                )
+                .ok(),
+            Some(("Plain".into(), "Plain".into(), "English".into()))
+        );
+        assert_eq!(
+            script
+                .eval::<String>("return GetAddOnMetadata('Plain', 'Title')")
+                .ok()
+                .as_deref(),
+            Some("Plain")
+        );
+        assert_eq!(
+            script
+                .eval::<Option<String>>("return GetAddOnMetadata('Plain', 'URL')")
+                .unwrap(),
+            None
+        );
+        let rows = installed_rows();
+        let row = rows.iter().find(|r| r.name == "Plain").unwrap();
+        assert_eq!(row.title.as_deref(), Some("Plain"));
+        assert_eq!(
+            row.url, None,
+            "the `.toc` has no URL line the reference reads"
+        );
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
