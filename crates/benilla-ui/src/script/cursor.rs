@@ -708,6 +708,54 @@ mod tests {
         assert!(s.model_ref().pending_events.is_empty());
     }
 
+    /// The bag place arm (`0x4f9e1c`-`0x4f9eb8`): a whole stack locks an occupied destination
+    /// first (`0x4f9e85`), then the swap's clear (`0x5e0fe7`) and the binding's own (`0x4f9eb8`)
+    /// each fire `CURSOR_UPDATE`; an empty destination signals no lock (`0x4953ed`); a split's
+    /// one clear (`0x4f9e4f`) signals no lock either.
+    #[test]
+    fn the_bag_place_arm_locks_the_destination_before_its_two_clears() {
+        let mut s = UiScript::new().unwrap();
+        let mut bag = one_item_backpack();
+        let mut other = bag.slots[&1].clone();
+        other.item_id = 118;
+        bag.slots.insert(2, other);
+        s.set_container(0, Some(bag));
+        heard::listen(
+            &s,
+            &["ITEM_LOCK_CHANGED", "ACTIONBAR_HIDEGRID", "CURSOR_UPDATE"],
+            None,
+        );
+        let place = |s: &UiScript, from: u32, to: u32| {
+            s.run(&format!("PickupContainerItem(0, {from})")).unwrap();
+            heard::take(s);
+            s.run(&format!("PickupContainerItem(0, {to})")).unwrap();
+            heard::take(s)
+        };
+        assert_eq!(
+            place(&s, 1, 2),
+            [
+                "ITEM_LOCK_CHANGED",
+                "ACTIONBAR_HIDEGRID",
+                "CURSOR_UPDATE",
+                "CURSOR_UPDATE"
+            ],
+            "a swap onto an occupied slot"
+        );
+        assert_eq!(
+            place(&s, 1, 3),
+            ["ACTIONBAR_HIDEGRID", "CURSOR_UPDATE", "CURSOR_UPDATE"],
+            "a move onto an empty slot"
+        );
+        s.run("SplitContainerItem(0, 1, 2)").unwrap();
+        heard::take(&s);
+        s.run("PickupContainerItem(0, 4)").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            ["ACTIONBAR_HIDEGRID", "CURSOR_UPDATE"],
+            "a split"
+        );
+    }
+
     /// The clear's shared tail (`0x49529b`) signals on every call: with nothing held, one
     /// `CURSOR_UPDATE` and no grid event.
     #[test]

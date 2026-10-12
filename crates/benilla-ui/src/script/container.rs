@@ -361,12 +361,24 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) {
                 (Some(_), Some(d)) if d.item_id != held.item_id => {
                     model.cursor = Some(CursorPayload::Item(held));
                 }
-                // Anything else queues the move and clears: a split, a merge the server tops up,
-                // or a swap that lands the displaced item in the source slot.
-                (count, _) => {
-                    queue_move(model, &held, bag, slot, count);
+                // A split places and clears (`0x5e1210`, then `ClearCursor(0,1)` at `0x4f9e4f`):
+                // the grid hide and `CURSOR_UPDATE`, and no lock event.
+                (Some(n), _) => {
+                    queue_move(model, &held, bag, slot, Some(n));
                     cursor::raise_cursor_update(model);
-                    cursor::raise_lock_changed(model);
+                }
+                // A whole stack locks the destination's item first (`0x4f9e85`; an empty slot's
+                // zero guid signals nothing, `0x4953ed`), then the swap send clears
+                // (`ClearCursor(0,1)` at `0x5e0fe7`: the grid hide, `CURSOR_UPDATE`) and the
+                // binding clears again (`0x4f9eb8`), a second `CURSOR_UPDATE` on the empty cursor.
+                // The source keeps its lock in both: the clears pass no unlock.
+                (None, dest) => {
+                    queue_move(model, &held, bag, slot, None);
+                    if dest.is_some() {
+                        cursor::raise_lock_changed(model);
+                    }
+                    cursor::raise_cursor_update(model);
+                    model.raise("CURSOR_UPDATE", Vec::new());
                 }
             }
         }
