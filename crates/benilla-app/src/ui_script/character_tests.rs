@@ -55,6 +55,7 @@ fn inventory_with_head_item() -> InventorySlots {
         duration_ms: None,
         already_bound: false,
         bar_placeable: true,
+        consumable: false,
         durability: None,
         flags: 0,
         item_id: 1234,

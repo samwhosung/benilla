@@ -68,6 +68,7 @@ impl CursorPayload {
                 quality: None,
                 equip_slots: Vec::new(),
                 bar_placeable: false,
+                consumable: false,
             }),
             CursorPayload::Spell(_) => CursorPayload::Spell(CursorSpell {
                 spell_id: 0,
@@ -183,6 +184,9 @@ pub struct CursorItem {
     pub equip_slots: Vec<u8>,
     /// Whether `PlaceAction` accepts it, its only item filter.
     pub bar_placeable: bool,
+    /// The source record's `IsConsumableAction` gate (`0x4e5250`), which a place onto the bar
+    /// writes with the slot.
+    pub consumable: bool,
 }
 
 /// How many items the cursor holds. A whole-stack pickup has `count: None`, so the size is read
@@ -571,6 +575,7 @@ pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -
             quality: s.quality,
             count: if whole { None } else { Some(n) },
             bar_placeable: s.bar_placeable,
+            consumable: s.consumable,
             equip_slots: s.equip_slots.clone(),
         }
     };
@@ -1086,6 +1091,7 @@ mod tests {
             item_class: None,
             guid: 0x106,
             bar_placeable: true,
+            consumable: false,
             bag: 0,
             slot: 1,
             item_id: 117,
@@ -1292,6 +1298,7 @@ mod tests {
             item_class: None,
             guid: 0x107,
             bar_placeable: true,
+            consumable: false,
             bag: 0,
             slot: 1,
             item_id: 117,

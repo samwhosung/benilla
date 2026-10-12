@@ -167,6 +167,10 @@ fn slot_view(
         // Off the raw word; `0x4bdd65` also requires a `Spell.dbc` record, which every slot has.
         autocast: Some((entry.autocast_allowed(), entry.autocast_on())),
         packed: entry.packed,
+        // The pet bar paints a running spell's `ActiveIconID`, with no fallback (`0x4bdd2f`), on
+        // the same predicate as `current`.
+        bar_texture: crate::ui_pet::active_aura_press(entry, pet_store, Some(d))
+            .map(|_| d.active_icon.clone()),
     }
 }
 

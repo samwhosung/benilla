@@ -23,7 +23,7 @@ mod drain_tests;
 pub(crate) mod drop_item;
 mod errors;
 mod feed;
-pub(crate) use feed::MISSING_ITEM_ICON;
+pub(crate) use feed::{spell_action_icon, MISSING_ITEM_ICON};
 #[cfg(test)]
 mod feed_tests;
 mod net;
@@ -44,7 +44,7 @@ pub(crate) use errors::{
     show_messages, ui_error_text, CastErrors, CastFail, Caster, FillArg, MessageSink, MountErrors,
     PetTameFailures, Shown, UiError, UiErrorKeys, UiErrorTexts,
 };
-pub(crate) use weapon_icon::{melee_auto_attack_icon, ranged_weapon_icon};
+pub(crate) use weapon_icon::{melee_auto_attack_icon, ranged_weapon_icon, substitutes_weapon_icon};
 
 /// `Attack`, the auto-attack pseudo-spell: it toggles melee rather than casting. The use path
 /// keys on this id; the icon keys on `SPELL_EFFECT_ATTACK`, which only 6603 carries.

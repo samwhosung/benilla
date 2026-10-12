@@ -95,7 +95,7 @@ pub(crate) fn ranged_weapon_icon(
 }
 
 /// Whether `spell` shows a weapon's icon; the per-frame icon refresh keys on it.
-pub(super) fn substitutes_weapon_icon(spell: &SpellDisplay) -> bool {
+pub(crate) fn substitutes_weapon_icon(spell: &SpellDisplay) -> bool {
     spell.is_melee_auto_attack() || spell.ranged_icon_substitution()
 }
 

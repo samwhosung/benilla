@@ -188,18 +188,25 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
             consumable: a.consumable,
             ..slot(a.kind, a.action, &a.texture)
         },
-        // `GetActionCount` counts the carried bags (`0x4e5250` gates the shown count on the
-        // template's consumable test), so the handler reads both off the bags the VM holds.
+        // `GetActionCount` counts the carried bags, off the bags the VM holds; the count gate
+        // (`0x4e5250`) is the template's consumable test, which the held item carries from its
+        // bag or worn record.
         CursorPayload::Item(i) => ActionSlot {
             count: carried_count(model, i.item_id),
-            consumable: model
-                .containers
-                .get(&i.bag)
-                .and_then(|c| c.slots.get(&i.slot))
-                .is_some_and(|s| s.item_id == i.item_id && s.consumable),
+            consumable: i.consumable,
             ..slot(ACTION_KIND_ITEM, i.item_id, &i.texture)
         },
-        CursorPayload::Spell(s) => slot(ACTION_KIND_SPELL, s.spell_id, &s.texture),
+        // The face the bar paints for the spell, which the book carries; the cursor shows the
+        // book's icon.
+        CursorPayload::Spell(s) => {
+            let face = model
+                .spellbook
+                .slots
+                .iter()
+                .find(|b| b.spell_id == s.spell_id)
+                .map_or_else(|| s.texture.clone(), |b| b.bar_face());
+            slot(ACTION_KIND_SPELL, s.spell_id, &face)
+        }
         // `PlaceAction` accepts modes 1, 3, 7 and 8 (`0x4e62e0`): a macro, mode 8, packs its id
         // under the macro tag. Pet actions (4), coins (2), stabled pets (10) and vendor rows (5)
         // are refused and stay held.
@@ -413,6 +420,7 @@ mod tests {
             item_class: None,
             guid: 0x114,
             bar_placeable: true,
+            consumable: false,
             bag: 0,
             slot: 1,
             item_id: 117,
@@ -516,6 +524,7 @@ mod tests {
             item_class: None,
             guid: 0x115,
             bar_placeable: false, // no on-use spell, InventoryType 0
+            consumable: false,
             bag: 0,
             slot: 1,
             item_id: 2589, // Linen Cloth
@@ -585,6 +594,7 @@ mod tests {
             item_class: None,
             guid: 0x116,
             bar_placeable: true, // equippable (BAG), even with no on-use spell
+            consumable: false,
             bag: 0,
             slot: 1,
             item_id: 4496, // Small Brown Pouch
@@ -720,6 +730,7 @@ mod tests {
                 item_class: None,
                 guid: 0x117,
                 bar_placeable: true,
+                consumable: false,
                 bag: 0,
                 slot: 1,
                 item_id: 4540,
@@ -809,5 +820,66 @@ mod tests {
         }));
         assert!(place_action(&s.lua, 1));
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Macro(_))));
+    }
+
+    /// A spell dropped from the book writes the face the bar paints for it (the weapon face, a
+    /// live `ActiveIconID`), not the book's icon the cursor shows, so its in-place
+    /// `ACTIONBAR_SLOT_CHANGED` reads what the bar feed would and the feed adds nothing.
+    #[test]
+    fn a_dropped_spell_writes_its_bar_face() {
+        let mut s = UiScript::new().unwrap();
+        s.set_spellbook(crate::script::SpellBookState {
+            tabs: Vec::new(),
+            slots: vec![crate::script::SpellSlotView {
+                spell_id: 2983,
+                name: "Sprint".into(),
+                texture: Some("BOOK".into()),
+                bar_texture: Some(Some("ACTIVE".into())),
+                ..Default::default()
+            }],
+        });
+        s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
+            spell_id: 2983,
+            texture: Some("BOOK".into()),
+            passive: false,
+        }));
+        crate::script::tick::heard::listen(
+            &s,
+            &["ACTIONBAR_SLOT_CHANGED"],
+            Some("GetActionTexture(arg1)"),
+        );
+        assert!(place_action(&s.lua, 1));
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["ACTIONBAR_SLOT_CHANGED ACTIVE"]
+        );
+    }
+
+    /// A worn thrown weapon carries its count gate (`0x4e5250`) onto the bar: the place writes the
+    /// held item's own, not a bag record it does not have.
+    #[test]
+    fn a_worn_thrown_weapon_places_with_its_count_gate() {
+        let mut s = UiScript::new().unwrap();
+        let mut inv: crate::script::InventorySlots = Default::default();
+        inv[18] = Some(crate::script::InvSlotView {
+            item_id: 3137,
+            bar_placeable: true,
+            consumable: true,
+            count: 200,
+            icon: Some(r"Interface\Icons\INV_ThrowingAxe_02".into()),
+            equip_slots: vec![18],
+            ..Default::default()
+        });
+        s.set_inventory_slots(inv);
+        crate::script::tick::heard::listen(
+            &s,
+            &["ACTIONBAR_SLOT_CHANGED"],
+            Some("IsConsumableAction(arg1)"),
+        );
+        s.run("PickupInventoryItem(18) PlaceAction(1)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["ACTIONBAR_SLOT_CHANGED 1"]
+        );
     }
 }

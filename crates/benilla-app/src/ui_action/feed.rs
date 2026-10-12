@@ -536,7 +536,7 @@ pub(super) fn feed_actions(
 /// the spell's own aura is live and cancelable (`0x4e6bbd`, the `0x4e55f0` predicate of
 /// [`super::toggle::active_action_toggle`]), then the spell's icon. The spellbook's
 /// `GetSpellTexture` (`0x4b3f50`) never serves `ActiveIconID`.
-fn spell_action_icon(
+pub(crate) fn spell_action_icon(
     spell_id: u32,
     d: &benilla_formats::SpellDisplay,
     spells: &super::Spells,

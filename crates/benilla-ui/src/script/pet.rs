@@ -323,7 +323,7 @@ pub(crate) fn book_word_view(book: &super::spellbook::SpellSlotView) -> PetActio
     PetActionView {
         name: Some(book.name.clone()),
         subtext: book.rank.clone(),
-        texture: book.texture.clone(),
+        texture: book.bar_face(),
         spell_id: Some(book.spell_id),
         autocast_allowed: book.packed & 0x8000_0000 != 0,
         autocast_enabled: book.packed & AUTOCAST_ON != 0,
@@ -1087,6 +1087,32 @@ mod tests {
         s.set_pet_actions(true, false, true, bar);
         s.run("PetWait()").unwrap();
         assert!(heard::take(&s).is_empty(), "an unusable bar");
+    }
+
+    /// A pet book word dropped on the bar paints as the bar would: a running spell's
+    /// `ActiveIconID` (`0x4bdd2f`), which the book carries for it, not the book's icon.
+    #[test]
+    fn a_book_word_paints_the_bars_face() {
+        let book = crate::script::SpellSlotView {
+            spell_id: 24450,
+            name: "Prowl".into(),
+            texture: Some("BOOK".into()),
+            bar_texture: Some(Some("ACTIVE".into())),
+            packed: 0x8100_5f82,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::book_word_view(&book).texture.as_deref(),
+            Some("ACTIVE")
+        );
+        let idle = crate::script::SpellSlotView {
+            bar_texture: None,
+            ..book
+        };
+        assert_eq!(
+            super::book_word_view(&idle).texture.as_deref(),
+            Some("BOOK")
+        );
     }
 
     #[test]

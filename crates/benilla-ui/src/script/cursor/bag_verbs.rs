@@ -208,6 +208,7 @@ fn grab_bag(model: &Model, live: u32) -> Option<CursorItem> {
             quality: Some(u32::try_from(s.quality).unwrap_or(0)),
             count: None,
             bar_placeable: s.bar_placeable,
+            consumable: s.consumable,
             equip_slots: s.equip_slots.clone(),
         })
         .filter(is_container)

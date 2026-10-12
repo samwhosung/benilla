@@ -476,6 +476,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
                 quality: s.quality,
                 count: None,
                 bar_placeable: s.bar_placeable,
+                consumable: s.consumable,
                 equip_slots: s.equip_slots.clone(),
             }),
         // The cancel is `ClearCursor(1,1)` (`0x4f9e0e`): the unlock, then `CURSOR_UPDATE`.

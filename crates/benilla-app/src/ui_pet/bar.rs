@@ -158,7 +158,7 @@ pub(super) fn slot_paint(
 /// The spell id when the slot shows active: `0x4bcea0`, the pet-side twin of `0x4e55f0`
 /// ([`crate::ui_action::toggle::active_action_toggle`]). It tests `ActiveIconID != 0` first
 /// (`0x4bcefd`), so a press on a spell without one re-casts rather than cancels.
-pub(super) fn active_aura_press(
+pub(crate) fn active_aura_press(
     entry: PetActionEntry,
     pet: Option<&ObjectStore>,
     spell: Option<&benilla_formats::SpellDisplay>,

@@ -1110,6 +1110,7 @@ mod tests {
             quality: None,
             equip_slots: Vec::new(),
             bar_placeable: false,
+            consumable: false,
         }));
 
         s.run("PickupMerchantItem(0)").unwrap();

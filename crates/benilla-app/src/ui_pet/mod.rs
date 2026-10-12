@@ -16,6 +16,7 @@ use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
 mod bar;
+pub(crate) use bar::active_aura_press;
 mod drain;
 mod menu;
 mod net;

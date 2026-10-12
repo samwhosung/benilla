@@ -169,6 +169,8 @@ pub struct InvSlotView {
     pub item_id: u32,
     /// Whether the item may go on an action bar, by the same filter as a bag slot's.
     pub bar_placeable: bool,
+    /// The action bar's count gate, as a bag slot's ([`super::container::ContainerSlot`]).
+    pub consumable: bool,
     /// Icon texture path (`Interface\Icons\…`); `None` while the template answer is in flight.
     pub icon: Option<String>,
     /// `ITEM_FIELD_STACK_COUNT`, or for the ammo slot the bag-summed carried total.

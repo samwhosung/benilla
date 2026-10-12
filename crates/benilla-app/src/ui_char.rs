@@ -530,7 +530,7 @@ fn slot_view(
     // already in the slots above.
     let roll = obj.item_random_properties_id();
     let t = items.template(entry, guid, commands);
-    let (name, quality, display, link, equip_slots, kind, bar_placeable) = match t {
+    let (name, quality, display, link, equip_slots, kind, bar_placeable, consumable) = match t {
         Some(t) => {
             let name = rolls.name(&t.name, roll);
             (
@@ -543,9 +543,10 @@ fn slot_view(
                 find_equip_slot(t.inventory_type, has_relic_slot),
                 (t.class, t.subclass),
                 t.placeable_on_action_bar(),
+                t.is_consumable(),
             )
         }
-        None => (None, 0, 0, None, Vec::new(), (0, 0), false),
+        None => (None, 0, 0, None, Vec::new(), (0, 0), false, false),
     };
     // A container counts its contents' stacks when its subclass's `DisplayFlags` has 0x4, else 0
     // (`GetInventoryItemCount` `0x4c8680`: `0x4c881a`, summed by `0x622130`); the bit is on Soul
@@ -579,6 +580,7 @@ fn slot_view(
         guid,
         equip_slots,
         bar_placeable,
+        consumable,
         creator,
         enchants,
         duration_ms,
@@ -664,6 +666,7 @@ fn inventory_slots(
             guid: 0,
             equip_slots: Vec::new(),
             bar_placeable: false,
+            consumable: false,
             creator: None,
             // No ammo instance streams, only its template id: no enchants, no countdown.
             enchants: Vec::new(),

@@ -1437,6 +1437,7 @@ fn the_bar_bag_buttons_name_themselves_on_hover() {
         duration_ms: None,
         already_bound: false,
         bar_placeable: true,
+        consumable: false,
         durability: None,
         flags: 0,
         item_id: 4496,

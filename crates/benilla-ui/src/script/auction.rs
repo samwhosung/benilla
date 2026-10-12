@@ -976,6 +976,7 @@ mod tests {
                 quality: None,
                 equip_slots: Vec::new(),
                 bar_placeable: false,
+                consumable: false,
             });
         }
         let count: i64 = s

@@ -58,6 +58,20 @@ pub struct SpellSlotView {
     /// The pet slot's packed word as the server sent it, which `PickupSpell(id, "pet")` puts on the
     /// cursor (`0x4b3260` hands `0x494e20` a pointer to it); 0 in the player book.
     pub packed: u32,
+    /// The face an action bar paints for this spell now, when it is not `texture`: the weapon
+    /// face (`0x4e6870`) or the live `ActiveIconID` (`0x4e6bbd`, the pet bar's `0x4bdd2f`), which
+    /// the book never serves; `Some(None)` paints none. A drop onto a bar writes it, so the slot's
+    /// in-place event reads the face its feed would.
+    pub bar_texture: Option<Option<String>>,
+}
+
+impl SpellSlotView {
+    /// The face an action bar paints for this spell.
+    pub fn bar_face(&self) -> Option<String> {
+        self.bar_texture
+            .clone()
+            .unwrap_or_else(|| self.texture.clone())
+    }
 }
 
 /// The pet's book, the reference's second flat array (`0xb6f098`, count `0xb71174`):
