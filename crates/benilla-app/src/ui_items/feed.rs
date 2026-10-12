@@ -611,7 +611,8 @@ pub(super) fn feed_player_req(
 }
 
 /// One bag slot from its item guid: instance, template, icon and use-spell cooldown. `None` is an
-/// empty slot; an occupied one not yet resolved is `Some` with empty fields.
+/// empty slot or one whose item object has not streamed; an occupied one whose template is not yet
+/// resolved is `Some` with empty fields.
 fn resolve_slot(
     guid: u64,
     objects: &Objects,
@@ -676,8 +677,10 @@ fn resolve_slot(
                     rolls.enchants,
                 ),
             ),
-            // A guid whose create has not landed: occupied, unresolved.
-            None => return Some(ContainerSlot::default()),
+            // A guid whose create has not landed: the reference finds no item object
+            // (`0x6228a0` returns NULL), so `GetContainerItemInfo` pushes nothing
+            // (`0x4f96dc`, `0x4f96e0`, `0x4f9810`) and the slot reads empty.
+            None => return None,
         };
     if entry == 0 {
         return Some(ContainerSlot::default());
@@ -1456,13 +1459,15 @@ mod tests {
                 0.0,
                 false,
             )
-            .expect("an occupied slot")
         };
-        let sword = slot(0xA1);
+        // A guid whose item object has not streamed reads as no item at all (`0x6228a0` finds
+        // none), not as an occupied blank.
+        assert!(slot(0xA9).is_none());
+        let sword = slot(0xA1).expect("an occupied slot");
         assert_eq!((sword.quality, sword.inventory_type), (Some(4), 13));
-        let potion = slot(0xA2);
+        let potion = slot(0xA2).expect("an occupied slot");
         assert_eq!((potion.quality, potion.inventory_type), (Some(1), 0));
-        let pending = slot(0xA3);
+        let pending = slot(0xA3).expect("an occupied slot");
         assert_eq!((pending.quality, pending.inventory_type), (None, 0));
     }
 
