@@ -12,6 +12,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
+use super::binding_abi::flag;
 use super::object::frame_handle_of;
 use super::tooltip::{append_line, clear, clear_silent, show_or_hide_empty};
 use super::{ItemTemplateView, Model};
@@ -409,11 +410,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // hasCooldown is the builder's `[ebp-0x38]`, set by four lines:
                     // LOCKED_WITH_ITEM, the temporary-enchant countdown, the item's duration
                     // (`0x52ce0d`) and ITEM_COOLDOWN_TIME. Only the duration is answered here.
-                    if inst.duration_ms.is_some() {
-                        Value::Boolean(true)
-                    } else {
-                        Value::Nil
-                    },
+                    flag(inst.duration_ms.is_some()),
                     Value::Integer(i64::from(repair_cost)),
                 ]))
             },
@@ -505,7 +502,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             show_or_hide_empty(lua, h);
             Ok(MultiValue::from_vec(vec![
                 // The builder's `[ebp-0x38]`: a running cooldown or the item's duration line.
-                Value::Boolean(has_cd || inst.duration_ms.is_some()),
+                flag(has_cd || inst.duration_ms.is_some()),
                 Value::Integer(i64::from(repair_cost)),
             ]))
         })?,
