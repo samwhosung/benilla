@@ -117,9 +117,13 @@ impl LoginRefusal {
 pub enum SessionEvent {
     /// A login attempt reached `stage`; emitted by the IO thread, never wire-decoded.
     LoginStage { stage: LoginStage },
-    /// The account's realms (`CMD_REALM_LIST`); the IO thread blocks for the app's pick. Re-sent on
-    /// each refresh (the reference re-requests every 5 s) and on a realm change.
-    RealmList { realms: Vec<crate::RealmInfo> },
+    /// The account's realms (`CMD_REALM_LIST`); emitted by the IO thread after the logon and for
+    /// each query (the reference re-requests every 5 s). `failed` is a query that got no answer
+    /// (`REALM_LIST_FAILED`); `realms` is then the list last held, empty with no logon.
+    RealmList {
+        realms: Vec<crate::RealmInfo>,
+        failed: bool,
+    },
     /// Queued for a full realm (`AUTH_WAIT_QUEUE`), per queue packet: a wait, not an outcome.
     LoginQueued {
         position: Option<u32>,

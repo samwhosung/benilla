@@ -2,8 +2,8 @@
 //!
 //! The load word is a band, not the population the auth server sent: the reference takes the
 //! mean and a scaled standard deviation over every realm it knows (all categories) and places each
-//! realm in that distribution. Ports of `CGlue::RealmLoadStats` `0x46e510` and
-//! `CGlue::RealmLoadClassify` `0x46ec60`, with their x87 rounding, since the band edges are where a
+//! realm in that distribution: `realm_load_stats` `0x46e510` and `realm_load_classify` `0x46ec60`,
+//! ported with their x87 rounding in [`benilla_ui::script`], since the band edges are where a
 //! rounding difference flips the word. The band to string to colour mapping is `RealmListUpdate`
 //! in `GlueXML/RealmList.lua`.
 
@@ -27,56 +27,8 @@ pub(super) const RED: Color = Color::srgb(1.0, 0.1, 0.1);
 /// `BLUE_FONT_COLOR`.
 pub(super) const BLUE: Color = Color::srgb(0.0, 0.749, 0.953);
 
-/// The std-dev scale, 0.6 (`[0x8038d8]`).
-const STDDEV_MULT: f32 = f32::from_bits(0x3f19_999a);
-
-/// `CGlue::RealmLoadStats` (`0x46e510`): `(mean, sqrt(Σ(pop − mean)² / (n − 1)) · 0.6)` over every
-/// realm's population. Both accumulators round to `f32` each iteration; the divide, sqrt and scale
-/// run at 53 bits. `n <= 1` gives `(1.0, 0.0)`, so a lone realm is banded against the literal 1.0.
-pub(super) fn realm_load_stats(populations: &[f32]) -> (f32, f32) {
-    let n = populations.len();
-    if n <= 1 {
-        return (1.0, 0.0);
-    }
-    // `fld sum; fadd pop; fstp sum`: stored as f32 each step.
-    let mut sum: f32 = 0.0;
-    for &pop in populations {
-        sum = (f64::from(sum) + f64::from(pop)) as f32;
-    }
-    // `fild n; fdivr sum; fstp mean`.
-    let mean = (f64::from(sum) / n as f64) as f32;
-    // Stored as f32 each step.
-    let mut acc: f32 = 0.0;
-    for &pop in populations {
-        let d = f64::from(pop) - f64::from(mean);
-        acc = (d * d + f64::from(acc)) as f32;
-    }
-    // `fild n-1; fdivr acc; fsqrt; fmul 0.6; fstp stddev`.
-    let stddev = ((f64::from(acc) / (n - 1) as f64).sqrt() * f64::from(STDDEV_MULT)) as f32;
-    (mean, stddev)
-}
-
-/// `CGlue::RealmLoadClassify` (`0x46ec60`): the load indicator `GetRealmInfo` returns. The three
-/// sentinel bits, synthesized by the parser from magic populations as the reference's does, win in
-/// this order; then the band, whose 53-bit comparisons are strict, so an edge reads normal.
-pub(super) fn realm_load_classify(flags: u8, population: f32, mean: f32, stddev: f32) -> f32 {
-    if flags & 0x20 != 0 {
-        return -3.0;
-    }
-    if flags & 0x40 != 0 {
-        return -2.0;
-    }
-    if flags & 0x80 != 0 {
-        return 2.0;
-    }
-    if (f64::from(mean) - f64::from(stddev)) > f64::from(population) {
-        return -1.0;
-    }
-    if (f64::from(mean) + f64::from(stddev)) < f64::from(population) {
-        return 1.0;
-    }
-    0.0
-}
+/// The load band's two primitives, shared with the stock glue's `GetRealmInfo`.
+pub(super) use benilla_ui::script::{realm_load_classify, realm_load_stats};
 
 /// The Population column's key and colour: `RealmListUpdate`'s ladder, offline first, then the
 /// sentinels by exact comparison, then the sign.

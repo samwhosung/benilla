@@ -66,8 +66,13 @@ mod font_block;
 mod frame_enum;
 mod glue;
 mod glue_core;
+mod glue_realm;
 pub use glue::{VmKind, GLUE_EVENTS};
 pub use glue_core::{GlueCredentials, GlueNotice, GlueRequest, GlueServer, NoticeState};
+pub use glue_realm::{
+    realm_load_classify, realm_load_stats, GlueRealm, GlueRealmCategory, GlueRealmCells,
+    GlueRealmType, RealmSortKey,
+};
 mod gm_ticket;
 mod gossip;
 mod guild;
@@ -649,8 +654,8 @@ impl UiScript {
     /// The glue screens' VM, as the glue builder (`0x46a7b0`) leaves its state before GlueXML
     /// loads: the base set and the shared registrars, with the glue event table and the glue frame
     /// types ([`glue`]), and none of the in-game surface. Of the glue registrar's own four tables
-    /// (`0x46ddf0`, `0x4736c0`, `0x471a20`, `0x46f480`) only the screen verbs are built
-    /// ([`glue::install`]).
+    /// (`0x46ddf0`, `0x4736c0`, `0x471a20`, `0x46f480`) the screen verbs and the realm list are
+    /// built ([`glue::install`]).
     pub fn new_glue() -> mlua::Result<UiScript> {
         let lua = install_framescript(VmKind::Glue)?;
         glue::install(&lua)?;

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::*;
 use crate::char_select::ClientState;
 use crate::net::{LoginAbandon, LoginRequest, LoginSubmit};
+use benilla_protocol::RealmInfo;
 
 /// The manager with both agreements accepted, the way a returning player's CVars seed it.
 fn accepted() -> GlueMgr {
@@ -168,13 +169,29 @@ fn a_logon_refusal_opens_its_result_and_ends_the_logon() {
     }
 }
 
+/// One realm, `name`, as realmd lists it.
+fn realm(name: &str) -> RealmInfo {
+    RealmInfo {
+        name: name.into(),
+        address: "127.0.0.1:8085".into(),
+        population: 1.0,
+        characters: 0,
+        realm_type: 0,
+        flags: 0,
+        category: 1,
+        id: 1,
+    }
+}
+
 /// The world connect's failure arm: the status text, `OKAY_WITH_URL` with the URL key for the
-/// five codes of `0x803740`, and `AUTH_FAILED` from the character screen back to login.
+/// five codes of `0x803740`, then the realm list over it (`CLOSE_STATUS_DIALOG` and the rebuild);
+/// `AUTH_FAILED` instead goes from the character screen back to login.
 #[test]
 fn a_world_refusal_opens_its_status_and_url() {
     let connected = || {
         let mut m = accepted();
         m.state = ScreenState::Connect;
+        m.holder = vec![realm("Fake")];
         m
     };
     let update = |key| Outgoing::Update {
@@ -192,7 +209,9 @@ fn a_world_refusal_opens_its_status_and_url() {
                 which: "OKAY_WITH_URL",
                 text: Some(Text::Key("AUTH_BANNED")),
                 data: Some("AUTH_BANNED_URL".into()),
-            }
+            },
+            Outgoing::Close,
+            Outgoing::Rebuild,
         ]
     );
     assert_eq!(m.state, ScreenState::Idle);
@@ -217,9 +236,31 @@ fn a_world_refusal_opens_its_status_and_url() {
         m.outbox,
         [
             update("RESPONSE_FAILED_TO_CONNECT"),
-            open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT"))
+            open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")),
+            Outgoing::Close,
+            Outgoing::Rebuild,
         ]
     );
+    assert!(
+        m.realm_out.is_empty(),
+        "the held list is raised, not asked for"
+    );
+
+    // With no realm held the arm asks for the list (`0x46c06e` → `0x46b8d0` with 1).
+    let mut m = connected();
+    m.holder.clear();
+    m.on_failed(&failed(None, false));
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            update("RESPONSE_FAILED_TO_CONNECT"),
+            open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")),
+            open("CANCEL", Some("REALM_LIST_IN_PROGRESS")),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::RealmList);
+    assert!(matches!(m.realm_out.as_slice(), [RealmRequest::Refresh]));
 }
 
 /// The world connect re-texts the dialog from its operation each frame: nothing while the connect
@@ -296,22 +337,51 @@ fn the_queue_retexts_every_frame() {
     assert_eq!(m.outbox, [Outgoing::Queue, Outgoing::Queue]);
 }
 
-/// `StatusDialogClick` by state: the logon and the world connect are abandoned; idle does nothing.
+/// `StatusDialogClick` by state (`0x46b7a8`): the logon is cancelled; the world connect completes
+/// `RESPONSE_CANCELLED`, whose failure arm shows no dialog, drops the world attempt alone and
+/// raises the realm list; a query is cancelled to state 0; idle does nothing.
 #[test]
 fn status_dialog_click_cancels_by_state() {
     let mut asks = Vec::new();
     let mut m = accepted();
     m.status_dialog_click(&mut asks);
     assert!(asks.is_empty());
-    for state in [ScreenState::Logon, ScreenState::Connect] {
-        m.state = state;
-        m.status_dialog_click(&mut asks);
-        assert_eq!(m.state, ScreenState::Idle);
-    }
-    assert!(matches!(
-        asks.as_slice(),
-        [GlueLogin::Abandon, GlueLogin::Abandon]
-    ));
+    m.state = ScreenState::Logon;
+    m.status_dialog_click(&mut asks);
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(matches!(asks.as_slice(), [GlueLogin::Abandon]));
+
+    let mut asks = Vec::new();
+    let mut m = accepted();
+    m.holder = vec![realm("Fake")];
+    m.state = ScreenState::Connect;
+    m.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING);
+    m.status_dialog_click(&mut asks);
+    assert!(asks.is_empty(), "the logon stays up");
+    assert_eq!(m.state, ScreenState::Connect, "the next tick takes it");
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("RESPONSE_CANCELLED"),
+                button: None
+            },
+            Outgoing::Close,
+            Outgoing::Rebuild
+        ],
+        "no failure dialog for a cancel"
+    );
+    assert!(matches!(m.login_out.as_slice(), [GlueLogin::CancelWorld]));
+    assert_eq!(m.state, ScreenState::Idle);
+
+    let mut m = accepted();
+    m.request_realm_list(false);
+    assert_eq!(m.state, ScreenState::RealmList);
+    m.status_dialog_click(&mut asks);
+    assert_eq!(m.state, ScreenState::Idle);
+    m.tick();
+    assert!(m.outbox.is_empty(), "a cancelled query reports nothing");
 }
 
 /// A session that is over fires `DISCONNECTED_FROM_SERVER`; a logout's relist does not; in the
@@ -524,4 +594,281 @@ fn the_realmlist_button_writes_realmlist() {
         "{changes:?}"
     );
     assert!(vm(&app).errors().is_empty(), "{:?}", vm(&app).errors());
+}
+
+// ── The stock screens over the IO thread and a fake realmd ──────────────────────────────────────
+
+use crate::net::io::fake::{self, FakeRealm};
+
+/// The IO thread's events, pumped into the app's messages as `net::session` does.
+#[derive(Resource)]
+struct IoEvents(crossbeam_channel::Receiver<benilla_protocol::SessionEvent>);
+
+fn pump(
+    events: Res<IoEvents>,
+    mut stages: MessageWriter<LoginStageMessage>,
+    mut lists: MessageWriter<RealmListMessage>,
+    mut failures: MessageWriter<LoginFailedMessage>,
+    mut rosters: MessageWriter<CharListMessage>,
+    mut queued: MessageWriter<LoginQueuedMessage>,
+) {
+    use benilla_protocol::SessionEvent as E;
+    for ev in events.0.try_iter() {
+        match ev {
+            E::LoginStage { stage } => {
+                stages.write(LoginStageMessage { stage });
+            }
+            E::RealmList { realms, failed } => {
+                lists.write(RealmListMessage { realms, failed });
+            }
+            E::LoginFailed {
+                refusal,
+                reason,
+                terminal,
+                dial,
+            } => {
+                failures.write(LoginFailedMessage {
+                    refusal,
+                    reason,
+                    terminal,
+                    dial,
+                });
+            }
+            E::CharacterList { characters, realm } => {
+                rosters.write(CharListMessage { characters, realm });
+            }
+            E::LoginQueued { position, realm } => {
+                queued.write(LoginQueuedMessage { position, realm });
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The stock login screen, agreements accepted, over the IO thread's cycle and a fake realmd
+/// listing `realms`; `realm_name` is the persisted `realmName`.
+fn live_app(realms: impl FnOnce(&str) -> Vec<FakeRealm>, realm_name: &str) -> (App, fake::Realmd) {
+    let (realmd, _) = fake::servers(realms);
+    let cycles = fake::spawn_cycles();
+    let mut app = App::new();
+    app.init_resource::<Time>()
+        .init_resource::<GlueMgr>()
+        .init_resource::<crate::login::LoginIntent>()
+        .insert_resource(crate::realmlist::Realmlist::unpinned(&realmd.addr))
+        .insert_resource(LoginSubmit(cycles.login.clone()))
+        .insert_resource(LoginAbandon(cycles.abandon.clone()))
+        .insert_resource(crate::net::RealmChoice(cycles.realm.clone()))
+        .insert_resource(crate::net::CharPick(cycles.pick.clone()))
+        .insert_resource(crate::realm_select::Realms::us_client())
+        .insert_resource(IoEvents(cycles.events.clone()))
+        .insert_resource(State::new(ClientState::Login))
+        .init_resource::<NextState<ClientState>>()
+        .add_message::<LoginStageMessage>()
+        .add_message::<LoginQueuedMessage>()
+        .add_message::<LoginFailedMessage>()
+        .add_message::<CharListMessage>()
+        .add_message::<RealmListMessage>()
+        .add_message::<DisconnectedMessage>()
+        .add_message::<GlueLogin>()
+        .add_message::<crate::sound::GlueMusicRequest>()
+        .add_message::<AppExit>()
+        .add_systems(
+            Update,
+            (pump, drive_glue_mgr, crate::login::answer_glue).chain(),
+        );
+    let mut s = UiScript::new_glue().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    s.register_cvars(crate::cvars::registered_pairs());
+    s.set_cvar_host(crate::realm_select::CVAR_REALM_NAME, realm_name);
+    let _ = super::super::glue::load_glue(&mut s);
+    super::super::glue::set_glue_screen(&mut s, super::super::glue::GlueScreen::Login);
+    s.run("AcceptEULA() AcceptTOS() AccountLogin_ShowUserAgreements()")
+        .unwrap();
+    let _ = s.take_errors();
+    app.insert_non_send_resource(s);
+    app.update();
+    // The cycles' ends stay alive with the app's resources.
+    std::mem::forget(cycles);
+    (app, realmd)
+}
+
+/// Run frames, the VM's own tick between them, until `done` holds.
+fn until(app: &mut App, what: &str, done: impl Fn(&App) -> bool) {
+    let deadline = std::time::Instant::now() + fake::WAIT;
+    while !done(app) {
+        if std::time::Instant::now() >= deadline {
+            let m = app.world().resource::<GlueMgr>();
+            panic!(
+                "timed out waiting for {what}: state {:?}, op {:?}, holder {}, screen {:?}, \
+                 dialog {:?}, errors {:?}",
+                m.state,
+                m.op,
+                m.holder.len(),
+                m.screen,
+                dialog(app),
+                vm(app).errors()
+            );
+        }
+        app.update();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .tick(0.01);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// Type the fake realmd's account into the stock boxes and press Login.
+fn log_in(app: &mut App) {
+    vm(app)
+        .run(&format!(
+            "AccountLoginAccountEdit:SetText('{}') AccountLoginPasswordEdit:SetText('{}') \
+             AccountLogin_Login()",
+            fake::USER,
+            fake::PASS
+        ))
+        .unwrap();
+    app.update();
+}
+
+fn shown(app: &App, frame: &str) -> bool {
+    vm(app)
+        .eval::<bool>(&format!("return {frame}:IsShown() == 1"))
+        .unwrap()
+}
+
+fn screen_up(app: &App) -> bool {
+    let m = app.world().resource::<GlueMgr>();
+    m.state == ScreenState::Idle && m.connected
+}
+
+/// A launch whose `realmName` names no realm, for an account the session has seen no roster of
+/// and with no realm chosen: the connect fails `REALM_LIST_REALM_NOT_FOUND`, its `OKAY` comes
+/// down, and `GET_PREFERRED_REALM_INFO` puts the realm wizard up (#834). Its location buttons are
+/// the Region's categories holding a realm; Suggest with PvP asks `SetPreferredInfo`, whose
+/// `SUGGEST_REALM` the character screen turns into the suggestion dialog, and Accept connects.
+#[test]
+fn a_fresh_account_is_asked_for_a_realm_and_suggested_one() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, realmd) = live_app(
+        |world| {
+            let mut pvp = FakeRealm::new("Bravo", world);
+            pvp.realm_type = 1;
+            let mut oz = FakeRealm::new("Oz", world);
+            oz.category = 5;
+            vec![FakeRealm::new("Alpha", world), pvp, oz]
+        },
+        "",
+    );
+    log_in(&mut app);
+    until(&mut app, "the realm wizard", |app| {
+        shown(app, "RealmWizard")
+    });
+    assert_eq!(dialog(&app), None, "the not-found OKAY is taken back down");
+    assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Idle);
+    assert_eq!(
+        vm(&app)
+            .eval::<(String, String, bool)>(
+                "return RealmWizardLocationButton1Text:GetText(), \
+                 RealmWizardLocationButton2Text:GetText(), \
+                 RealmWizardLocationButton3:IsShown() == 1"
+            )
+            .unwrap(),
+        ("United States".into(), "Oceanic".into(), false),
+        "one location per category holding a realm"
+    );
+
+    vm(&app)
+        .run(
+            "RealmWizardLocationButton1:Click() RealmWizardGameTypeButton2:Click() \
+             RealmWizardSuggest:Click()",
+        )
+        .unwrap();
+    let (which, text) = dialog(&app).expect("the suggestion dialog");
+    assert_eq!(which, "SUGGEST_REALM");
+    assert!(
+        text.contains("Bravo"),
+        "the PvP realm is suggested: {text:?}"
+    );
+
+    vm(&app).run("GlueDialogButton1:Click()").unwrap();
+    until(&mut app, "the character screen", screen_up);
+    assert_eq!(
+        vm(&app)
+            .cvar(crate::realm_select::CVAR_REALM_NAME)
+            .as_deref(),
+        Some("Bravo"),
+        "ChangeRealm sets realmName"
+    );
+    assert_eq!(
+        realmd.logons(),
+        1,
+        "the realm was dialled on the logon's link"
+    );
+}
+
+/// A launch whose `realmName` names no realm, once a realm has been chosen this session, raises
+/// the realm list over the login screen, its tabs the two categories. Cancel there closes the
+/// realmd link and the next login is taken (#833); the close button leaves the link up, and the
+/// next login is taken too; a row and Okay then reach the character screen.
+#[test]
+fn closing_the_realm_list_lets_the_next_login_through() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, realmd) = live_app(
+        |world| {
+            let mut oz = FakeRealm::new("Oz", world);
+            oz.category = 5;
+            vec![FakeRealm::new("Alpha", world), oz]
+        },
+        "Gone",
+    );
+    app.world_mut().resource_mut::<GlueMgr>().realm_cells.chosen = Some(0);
+    // The fresh VM takes the cells on the next frame.
+    app.world_mut().resource_mut::<GlueMgr>().vm = None;
+    app.update();
+
+    log_in(&mut app);
+    until(&mut app, "the realm list", |app| shown(app, "RealmList"));
+    assert!(
+        shown(&app, "AccountLogin"),
+        "the list stands over the login screen"
+    );
+    assert_eq!(dialog(&app), None);
+    assert_eq!(
+        vm(&app)
+            .eval::<(String, String, bool)>(
+                "return RealmListTab1:GetText(), RealmListTab2:GetText(), \
+                 RealmListTab2:IsShown() == 1"
+            )
+            .unwrap(),
+        ("United States".into(), "Oceanic".into(), true)
+    );
+
+    vm(&app).run("RealmListCancelButton:Click()").unwrap();
+    until(&mut app, "the realmd link to close", |_| realmd.open() == 0);
+    assert!(!shown(&app, "RealmList") && shown(&app, "AccountLogin"));
+    log_in(&mut app);
+    until(&mut app, "the list after the second login", |app| {
+        shown(app, "RealmList")
+    });
+    assert_eq!(realmd.logons(), 2);
+
+    vm(&app).run("RealmListCloseButton:Click()").unwrap();
+    app.update();
+    assert_eq!(realmd.open(), 1, "the close button leaves the link up");
+    log_in(&mut app);
+    until(&mut app, "the list after the third login", |app| {
+        shown(app, "RealmList")
+    });
+    assert_eq!(realmd.logons(), 3);
+
+    vm(&app)
+        .run("RealmListRealmButton1:Click() RealmListOkButton:Click()")
+        .unwrap();
+    until(&mut app, "the character screen", screen_up);
+    assert_eq!(
+        vm(&app)
+            .cvar(crate::realm_select::CVAR_REALM_NAME)
+            .as_deref(),
+        Some("Alpha")
+    );
 }

@@ -115,5 +115,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(model.cursor_pos)
         })?,
     )?;
-    super::glue_core::install(lua)
+    super::glue_core::install(lua)?;
+    super::glue_realm::install(lua)
 }

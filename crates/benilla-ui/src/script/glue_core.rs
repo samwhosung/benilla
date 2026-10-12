@@ -106,6 +106,18 @@ pub enum GlueRequest {
     DisconnectFromServer,
     /// `QuitGame()` (`0x46cea0` → `0x46b870` → `0x401560(0)`).
     QuitGame,
+    /// `RequestRealmList([dialog])` (`0x46ecf0` → `0x46b8d0`): screen state 4, the status dialog
+    /// when `dialog`, and a realm list query (`0x5ab840`).
+    RequestRealmList { dialog: bool },
+    /// `CancelRealmListQuery()` (`0x46ed10` → `0x46b7e0`): in screen state 4 only, the query
+    /// completes cancelled and the state goes to 0; nothing is sent.
+    CancelRealmListQuery,
+    /// `RealmListDialogCancelled()` on the login screen (`0x46b810` → `CLoginMgr::Cancel`
+    /// `0x5b3320`): the realmd link closes, with no dialog and no screen change.
+    CancelLogon,
+    /// `ChangeRealm` reaching `ConnectToRealm` (`0x46b210`) with this realm, `realmName` already
+    /// set to it (`0x5ab7b0`).
+    ChangeRealm(String),
 }
 
 /// The realm `GetServerName` (`0x46d280`) answers: the `realmName` CVar's text, and the
@@ -130,7 +142,9 @@ pub(crate) struct GlueCore {
     server: GlueServer,
     /// The current glue screen's name (`[0xb41478]`), which `SetCurrentScreen` (`0x46ce60` →
     /// `0x46b860`) copies into a 0x40-byte buffer.
-    screen: String,
+    pub(super) screen: String,
+    /// The realm list the realm verbs read ([`super::glue_realm`]).
+    pub(super) realms: super::glue_realm::GlueRealmList,
 }
 
 /// `SetCurrentScreen`'s buffer, 0x40 bytes with its terminator (`0x46b860`, `SStrCopy`).
@@ -180,7 +194,7 @@ impl super::UiScript {
     }
 }
 
-fn queue(lua: &Lua, request: GlueRequest) {
+pub(super) fn queue(lua: &Lua, request: GlueRequest) {
     lua.app_data_mut::<Model>()
         .expect("model app_data")
         .glue

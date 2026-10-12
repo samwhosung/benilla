@@ -6,7 +6,9 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 
 use crate::bindings::WheelNotches;
-use crate::net::{RealmChoice, RealmRequest};
+use crate::char_select::ClientState;
+use crate::login::GlueLogin;
+use crate::net::RealmChoice;
 use crate::sound::GlueSound;
 
 use super::screen::{RealmAction, MAX_ROWS};
@@ -17,12 +19,14 @@ const DOUBLE_CLICK_SECS: f32 = 0.4;
 
 /// Clicks: a row selects (a second one enters), a tab fronts its category, the column headers
 /// sort, Okay enters, Cancel and the close X leave.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn clicks(
     buttons: Query<(Entity, &RealmAction)>,
     hits: Res<crate::glue::GlueClicks>,
     mut realms: ResMut<Realms>,
     choice: Res<RealmChoice>,
     mut sounds: MessageWriter<GlueSound>,
+    mut cancels: Cancels,
     time: Res<Time>,
     mut last_click: Local<Option<(String, f32)>>,
 ) {
@@ -63,8 +67,15 @@ pub(super) fn clicks(
         try_enter(&mut realms, &choice, &mut sounds);
     }
     if let Some(with_sound) = leave {
-        do_cancel(&mut realms, &choice, &mut sounds, with_sound);
+        do_cancel(&mut realms, &mut cancels, &mut sounds, with_sound);
     }
+}
+
+/// What a Cancel needs: the screen under the list and the login engine's ask.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct Cancels<'w> {
+    state: Option<Res<'w, State<ClientState>>>,
+    login: MessageWriter<'w, GlueLogin>,
 }
 
 /// `RealmList_OnKeyDown` (ESCAPE / ENTER), plus arrow-key row cycling and the wheel.
@@ -74,9 +85,10 @@ pub(crate) fn keys(
     mut realms: ResMut<Realms>,
     choice: Res<RealmChoice>,
     mut sounds: MessageWriter<GlueSound>,
+    mut cancels: Cancels,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
-        do_cancel(&mut realms, &choice, &mut sounds, true);
+        do_cancel(&mut realms, &mut cancels, &mut sounds, true);
         return;
     }
     if keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter) {
@@ -146,16 +158,16 @@ fn scroll_into_view(realms: &mut Realms, row: usize, total: usize) {
 }
 
 /// `RealmList_OnCancel`, and the close X without the sound. `RealmListDialogCancelled`
-/// (`0x46ed20` -> `0x46b810`) does nothing off the login screen and there closes the realmd
-/// socket (`0x5b3320`) with no screen change; the character park ignores `Abandon` and the login
-/// park re-parks, dropping the socket.
+/// (`0x46ed20` -> `0x46b810`) does nothing off the login screen and there closes the realmd link
+/// (`CLoginMgr::Cancel`, `0x5b3320`) with no screen change, which ends the attempt: the login
+/// engine closes the logon park and takes the next Login.
 ///
-/// Deviation: the reference's X only cancels the pending realm query (`0x46ed10` -> `0x46b7e0`)
-/// and leaves the realmd link up; ours abandons, because the IO thread blocks at the realm park
-/// until answered.
+/// Deviation: the reference's X only cancels a pending realm query (`0x46ed10` -> `0x46b7e0`) and
+/// leaves the realmd link up; ours closes it as Cancel does, because the native login screen takes
+/// a new Login only once the attempt has ended.
 fn do_cancel(
     realms: &mut Realms,
-    choice: &RealmChoice,
+    cancels: &mut Cancels,
     sounds: &mut MessageWriter<GlueSound>,
     with_sound: bool,
 ) {
@@ -163,7 +175,13 @@ fn do_cancel(
         sounds.write(GlueSound("gsLoginChangeRealmCancel"));
     }
     realms.hide();
-    let _ = choice.0.send(RealmRequest::Abandon);
+    if cancels
+        .state
+        .as_ref()
+        .is_none_or(|s| *s.get() == ClientState::Login)
+    {
+        cancels.login.write(GlueLogin::Abandon);
+    }
 }
 
 /// `RealmList_OnOk`: play the click, hide the frame, answer the park.

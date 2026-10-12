@@ -12,7 +12,7 @@
 use bevy::prelude::*;
 
 use crate::char_select::{ClientState, Roster};
-use crate::net::{RealmChoice, RealmRequest};
+use crate::net::RealmChoice;
 
 use super::Realms;
 
@@ -122,7 +122,7 @@ pub(super) fn debug_realm_smoke(
         // ── 3 · Cancel changes nothing. ──────────────────────────────────────────────────────
         3 if realms.shown && now - walk.mark > DWELL => {
             info!("realm-smoke: dialog up → Cancel");
-            cancel(realms, &choice);
+            cancel(realms);
             (walk.phase, walk.mark) = (4, now);
         }
         4 if !realms.shown && now - walk.mark > DWELL => {
@@ -170,11 +170,10 @@ fn okay(mut realms: ResMut<Realms>, choice: &RealmChoice) {
         return;
     };
     realms.hide();
-    let _ = choice.0.send(RealmRequest::Enter(name));
+    realms.enter(choice, name);
 }
 
-/// `RealmList_OnCancel`.
-fn cancel(mut realms: ResMut<Realms>, choice: &RealmChoice) {
+/// `RealmList_OnCancel` over character select, where it only hides the list.
+fn cancel(mut realms: ResMut<Realms>) {
     realms.hide();
-    let _ = choice.0.send(RealmRequest::Abandon);
 }

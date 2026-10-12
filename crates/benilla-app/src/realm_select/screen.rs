@@ -852,6 +852,7 @@ mod tests {
             .init_resource::<GlueClicks>()
             .insert_resource(crate::net::RealmChoice(tx))
             .add_message::<crate::sound::GlueSound>()
+            .add_message::<crate::login::GlueLogin>()
             .insert_resource(Realms {
                 realms: list.iter().map(|&(n, c)| realm(n, c)).collect(),
                 categories: Some(super::super::category::tests::us()),

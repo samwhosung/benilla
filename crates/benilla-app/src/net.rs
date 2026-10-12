@@ -401,16 +401,20 @@ pub(crate) enum CharRequest {
 #[derive(Resource)]
 pub(crate) struct RealmChoice(pub(crate) Sender<RealmRequest>);
 
-/// One request to the IO thread parked at the realm list.
+/// One request to the IO thread about the realm list, served at the logon park and at character
+/// select; at the login park a query fails and the rest are dropped.
 #[derive(Debug)]
 pub(crate) enum RealmRequest {
-    /// Enter this realm, by name: the list refreshes while open, so an index could shift.
-    Enter(String),
-    /// Re-request the realm list (`RequestRealmList`, every 5 s from `RealmList_OnUpdate`).
+    /// Dial this realm (`ConnectToRealm`, `0x46b210`), the record as the list held it, as the
+    /// reference dials its copy (`0xc27fb8`) whatever a later list says.
+    Enter(benilla_protocol::RealmInfo),
+    /// Query the realm list (`RequestRealmList`, every 5 s from `RealmList_OnUpdate`); the answer
+    /// is a [`RealmListMessage`], failed when the link gave none.
     Refresh,
-    /// Cancel (`RealmList_OnCancel` only hides the frame): the screen underneath stays, login or
-    /// character select.
-    Abandon,
+    /// `CLoginMgr::Cancel` (`0x5b3320`, from `RealmListDialogCancelled` on the login screen, the
+    /// logon's Cancel and `DisconnectFromServer`): the realmd link closes and the thread parks for
+    /// credentials. At character select, where `RealmListDialogCancelled` is a no-op, nothing.
+    Close,
 }
 
 /// The credentials channel to the IO thread's pre-logon park, sent by [`crate::login`].
@@ -1978,10 +1982,12 @@ pub(crate) enum ClientCommand {
     },
 }
 
-/// The realm list (`CMD_REALM_LIST`); the IO thread waits for [`crate::realm_select`] to pick.
+/// The realm list (`CMD_REALM_LIST`); the IO thread waits for a [`RealmRequest`]. `failed` is a
+/// query that got no answer (`REALM_LIST_FAILED`), `realms` then the list last held.
 #[derive(Message)]
 pub(crate) struct RealmListMessage {
     pub(crate) realms: Vec<benilla_protocol::RealmInfo>,
+    pub(crate) failed: bool,
 }
 
 /// The character roster (`SMSG_CHAR_ENUM`); the IO thread waits for [`crate::char_select`] to

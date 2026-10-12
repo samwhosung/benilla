@@ -30,7 +30,35 @@
 //!    for the five codes of `0x803740` (`0x46bf63`), and goes to 0.
 //!
 //! `StatusDialogClick` (`0x46b720`) is the dialog button's verb, a jump on the state: state 1
-//! cancels the logon (`0x5b3320`), state 2 cancels the world operation (`RESPONSE_CANCELLED`).
+//! cancels the logon (`0x5b3320`), states 2 and 4 complete the operation `RESPONSE_CANCELLED`.
+//!
+//! The realm list, the same machine's other half:
+//!
+//! 1. The connect's first act is a realm list query (`0x5aab20`; after the logon the logon's own
+//!    list is the reply). On the reply (`0x5ab800`) a realm already selected this process
+//!    (`[0xc28134]`, the record copied to `0xc27fb8`) is dialled; else the `realmName` CVar names
+//!    one, first match by name, case folded (`0x5ab6f0`); else the connect fails
+//!    `REALM_LIST_REALM_NOT_FOUND`. A query with no answer fails it `REALM_LIST_FAILED`.
+//! 2. State 2's failure arm, for any status but `AUTH_FAILED`, raises the list over the screen
+//!    (`0x46bf1f`-`0x46bf96`): `CLOSE_STATUS_DIALOG`, which takes the failure's `OKAY` back down,
+//!    then the rebuild (`0x46e510`), whose tail fires `GET_PREFERRED_REALM_INFO` (`GlueParent`'s
+//!    `SetGlueScreen("realmwizard")`) for an account with no characters that has chosen no realm
+//!    this session, else `OPEN_REALM_LIST`. With no realm held it asks for the list instead
+//!    (`0x46c06e`). `RESPONSE_CANCELLED` shows no dialog and drops the world socket alone
+//!    (`0x46befd`), so the realmd link stays up for the next pick.
+//! 3. `RequestRealmList` (`0x46b8d0`) is state 4 and a query, with the `CANCEL` dialog
+//!    `REALM_LIST_IN_PROGRESS` when asked. State 4's frame (`0x46c0a5`) re-texts the dialog; a
+//!    success goes to 0, closes the dialog and rebuilds (`0x46c0d2`-`0x46c0e2`), which is how the
+//!    stock list's five-second refresh redraws; a failure opens `OKAY` and goes to 0.
+//! 4. `ChangeRealm` reaches `ConnectToRealm` (`0x46b210`): the realm selected, state 2, the
+//!    `CANCEL` dialog `GAME_SERVER_LOGIN`, and the connect. `RealmListDialogCancelled` closes the
+//!    realmd link on the login screen only; `CancelRealmListQuery` cancels state 4 only.
+//!
+//! The list itself, its categories, sort and the verbs that read it are the glue VM's
+//! ([`benilla_ui::script::GlueRealm`]); the manager fills its holder and runs its rebuild where
+//! `CGlueMgr::Update` does. `SUGGEST_REALM_WRONG_PVP` and `SUGGEST_REALM_WRONG_CATEGORY` are in the
+//! event table (`0xb41ebc`, `0xb41ec0`) but no glue code fires them: no `SignalEvent`
+//! (`0x703e50`, `0x703f50`) site in `[0x46a400, 0x476020)` passes 19 or 20.
 //!
 //! The native login reports a logon as one blocking step, so of the logon's states only
 //! `CONNECTING` and `AUTHENTICATED` are seen; its refusals map through the reference's own
@@ -38,24 +66,24 @@
 
 use bevy::prelude::*;
 
-use benilla_protocol::{LoginRefusal, LoginStage};
+use benilla_protocol::{LoginRefusal, LoginStage, RealmInfo};
 use benilla_ui::script::{
-    GlueNotice, GlueRequest, GlueServer, NoticeState, ScriptValue, UiScript, VmKind,
+    GlueNotice, GlueRealm, GlueRealmCells, GlueRequest, GlueServer, NoticeState, ScriptValue,
+    UiScript, VmKind,
 };
 
 use crate::login::queue::QueueEstimate;
 use crate::login::GlueLogin;
 use crate::net::{
     CharListMessage, DisconnectedMessage, LoginFailedMessage, LoginQueuedMessage,
-    LoginStageMessage, RealmListMessage,
+    LoginStageMessage, RealmListMessage, RealmRequest,
 };
 
 /// `CGlueMgr`'s `screenState` (`0xb41da0`), named by the functions that set each value: the
-/// states the login reaches. The reference's others are the character list (3, `0x46b893`), the
-/// realm list (4, `0x46b8d2`), create, delete and rename (5-7, `0x46b29e`, `0x46b2f8`,
-/// `0x46b3a4`), `EnterWorld` (8, `0x46b711`), a refused character login (9, `0x402075`) and the
-/// patch and survey downloads (10 and 11, `0x473c40`, `0x473da8`), each set by a verb these screens
-/// do not have yet.
+/// states the login and the realm list reach. The reference's others are the character list (3,
+/// `0x46b893`), create, delete and rename (5-7, `0x46b29e`, `0x46b2f8`, `0x46b3a4`), `EnterWorld`
+/// (8, `0x46b711`), a refused character login (9, `0x402075`) and the patch and survey downloads
+/// (10 and 11, `0x473c40`, `0x473da8`), each set by a verb these screens do not have yet.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ScreenState {
     /// No operation (`0x46a7ce`, and every terminal arm).
@@ -65,6 +93,8 @@ pub(crate) enum ScreenState {
     Logon = 1,
     /// The world connect: realm list, dial and authentication (`0x46b1f9`, `0x46b250`).
     Connect = 2,
+    /// A realm list query (`RequestRealmList`, `0x46b8d2`).
+    RealmList = 4,
 }
 
 /// The logon's `LOGIN_STATE_*` keys by login state (`0x836b40`, 13 entries).
@@ -220,6 +250,7 @@ const RESULT_DISCONNECTED: i32 = 0x14;
 
 /// World statuses.
 const STATUS_RESPONSE_FAILURE: u8 = 0x01;
+const STATUS_CANCELLED: u8 = 0x02;
 const STATUS_FAILED_TO_CONNECT: u8 = 0x04;
 const STATUS_RESPONSE_CONNECTED: u8 = 0x05;
 const STATUS_CONNECTING: u8 = 0x07;
@@ -227,6 +258,10 @@ const STATUS_AUTHENTICATING: u8 = 0x0b;
 const STATUS_AUTH_OK: u8 = 0x0c;
 const STATUS_AUTH_FAILED: u8 = 0x0d;
 const STATUS_WAIT_QUEUE: u8 = 0x1b;
+const STATUS_REALM_LIST_IN_PROGRESS: u8 = 0x22;
+const STATUS_REALM_LIST_SUCCESS: u8 = 0x23;
+const STATUS_REALM_LIST_FAILED: u8 = 0x24;
+const STATUS_REALM_LIST_REALM_NOT_FOUND: u8 = 0x26;
 
 /// What a realmd result byte becomes, `(login state, result)`: `Logon::OnAuthResult`'s
 /// dispatch (`0x5b2c90`, byte index `0x5b2ea4`, jumps `0x5b2e78`) after the handlers' clamp of a
@@ -258,7 +293,7 @@ pub(crate) fn realmd_result(byte: u8, reply: benilla_protocol::LogonReply) -> Op
     Some((LOGIN_FAILED_STATE, result))
 }
 
-/// A `ClientServices` operation of state 2 (`[svc+0x1b10]`).
+/// A `ClientServices` operation (`[svc+0x1b10]`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum OpKind {
     /// `COP_CONNECT` (2, `0x5aab20`).
@@ -266,6 +301,8 @@ enum OpKind {
     Connect,
     /// The authentication (3, `0x5aaba0`).
     Auth,
+    /// `COP_GET_REALMS` (9, `0x5ab840`).
+    GetRealms,
 }
 
 /// The operation record (`BeginOperation` `0x5aa400`, `SetStatus` `0x5aa920`): its status code
@@ -278,6 +315,9 @@ struct Operation {
     ok: bool,
     /// The text of a failure the reference has no status for, shown in place of the status's.
     raw: Option<String>,
+    /// A connect or a query whose realm list reply has not come (`0x5abb90` dispatches the reply
+    /// on the operation pending).
+    awaiting_list: bool,
 }
 
 impl Operation {
@@ -285,6 +325,7 @@ impl Operation {
         Operation {
             kind,
             status,
+            awaiting_list: matches!(kind, OpKind::Connect | OpKind::GetRealms),
             ..Default::default()
         }
     }
@@ -331,6 +372,11 @@ enum Outgoing {
     Screen(&'static str),
     /// `DISCONNECTED_FROM_SERVER` (event 2, `0x46c62e`).
     Disconnected,
+    /// `CLOSE_STATUS_DIALOG` (event 5).
+    Close,
+    /// The realm list rebuild (`0x46e510`) over the holder, which fires `OPEN_REALM_LIST` or
+    /// `GET_PREFERRED_REALM_INFO`.
+    Rebuild,
 }
 
 /// The logon's notification cells: the latest `(state, result)` (`0x836b28`, `0x836b24`) and the
@@ -376,6 +422,21 @@ pub(crate) struct GlueMgr {
     outbox: Vec<Outgoing>,
     /// The glue VM this manager last served, by session.
     vm: Option<u64>,
+    /// The realm holder (`[0xc28118]`): the realms the last list reply carried.
+    holder: Vec<RealmInfo>,
+    /// The holder changed since the VM was last seeded.
+    holder_moved: bool,
+    /// `[0xc28134]` and its copy at `0xc27fb8`: the realm the next connect dials, set by the first
+    /// selection and kept for the process.
+    selected: Option<RealmInfo>,
+    /// `[svc+0x1ae4]`: the last roster's character count.
+    characters: u16,
+    /// The realm list's sort and selection cells, carried from one glue VM to the next.
+    realm_cells: GlueRealmCells,
+    /// Realm requests for the IO thread, sent at the end of the frame.
+    realm_out: Vec<RealmRequest>,
+    /// Asks of the login engine the per-frame arms made, sent with the verbs' own.
+    login_out: Vec<GlueLogin>,
 }
 
 impl GlueMgr {
@@ -420,7 +481,7 @@ impl GlueMgr {
         self.open("CANCEL", None);
     }
 
-    /// `StatusDialogClick` (`0x46b720`).
+    /// `StatusDialogClick` (`0x46b720`, jump table `0x46b7a8`).
     fn status_dialog_click(&mut self, asks: &mut Vec<GlueLogin>) {
         match self.state {
             // `0x46b731`: the pending operation's callback; none is pending outside an operation.
@@ -430,15 +491,94 @@ impl GlueMgr {
                 asks.push(GlueLogin::Abandon);
                 self.state = ScreenState::Idle;
             }
-            // `0x46b754`: the operation completes as `RESPONSE_CANCELLED`, which the next tick's
-            // failure arm takes without a dialog (`0x46bef2`), dropping the connection; the realm
-            // list it then raises (`0x46bf8c`, `0x46c073`) is not built on these screens yet.
-            ScreenState::Connect => {
-                asks.push(GlueLogin::Abandon);
-                self.op = Operation::default();
-                self.connected = false;
+            // `0x46b754`: the operation completes `RESPONSE_CANCELLED`, which the next tick's
+            // failure arm takes without a dialog (`0x46bef2`), dropping the world socket and
+            // raising the realm list. Its `0x472580` tears the glue character list down, which
+            // these screens do not have yet.
+            ScreenState::Connect => self.op.complete(false, STATUS_CANCELLED),
+            // `0x46b776`: the query cancelled, state 0, nothing sent.
+            ScreenState::RealmList => {
+                self.op.complete(false, STATUS_CANCELLED);
                 self.state = ScreenState::Idle;
             }
+        }
+    }
+
+    /// The asks the per-frame arms made of the login engine and of the IO thread.
+    fn take_asks(&mut self) -> (Vec<GlueLogin>, Vec<RealmRequest>) {
+        (
+            std::mem::take(&mut self.login_out),
+            std::mem::take(&mut self.realm_out),
+        )
+    }
+
+    /// `0x46b8d0`, `RequestRealmList`'s body: state 4, the dialog when asked, and the query
+    /// (`0x5ab840`, `COP_GET_REALMS` at `REALM_LIST_IN_PROGRESS`).
+    fn request_realm_list(&mut self, dialog: bool) {
+        self.state = ScreenState::RealmList;
+        if dialog {
+            self.open("CANCEL", Some(Text::Key("REALM_LIST_IN_PROGRESS")));
+        }
+        self.op = Operation::begin(OpKind::GetRealms, STATUS_REALM_LIST_IN_PROGRESS);
+        self.realm_out.push(RealmRequest::Refresh);
+    }
+
+    /// `CancelRealmListQuery` (`0x46b7e0`): in state 4 only, the query completes cancelled and the
+    /// state goes to 0; nothing is sent, so a late reply only fills the holder.
+    fn cancel_realm_list_query(&mut self) {
+        if self.state == ScreenState::RealmList {
+            self.op.complete(false, STATUS_CANCELLED);
+            self.state = ScreenState::Idle;
+        }
+    }
+
+    /// `ConnectToRealm` (`0x46b210`) for the realm `ChangeRealm` named, `realmName` already set to
+    /// it: the selection (`0x5ab7b0`'s tail, `0x5ab6f0`), state 2, the `GAME_SERVER_LOGIN` dialog
+    /// and the connect. With a world connection up the reference drops it first and dials from the
+    /// disconnect handler (`0x46b22b`, `0x46c5bf`); here the character park drops its session when
+    /// the dial reaches it.
+    fn connect_to_realm(&mut self, name: &str) {
+        if let Some(r) = select_by_name(&self.holder, name) {
+            self.selected = Some(r);
+        }
+        self.connected = false;
+        self.state = ScreenState::Connect;
+        self.open("CANCEL", Some(Text::Key("GAME_SERVER_LOGIN")));
+        self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+        self.queue = QueueEstimate::default();
+        // The connect's own query (`0x5aab20` → `0x5b2220`).
+        self.realm_out.push(RealmRequest::Refresh);
+    }
+
+    /// A realm list reply: the holder filled (`0x5b2230`), then the pending operation's arm of
+    /// `0x5abb90`. A query's success is `REALM_LIST_SUCCESS`; a connect's dials the selected realm,
+    /// or the one `realm_name` names, and completes only through the dial (`0x5ab823` calls no
+    /// `SetStatus`); no answer fails either `REALM_LIST_FAILED`.
+    fn on_realm_list(&mut self, realms: Vec<RealmInfo>, failed: bool, realm_name: &str) {
+        if !failed {
+            self.holder = realms;
+            self.holder_moved = true;
+        }
+        if !self.op.awaiting_list || self.op.done {
+            return;
+        }
+        self.op.awaiting_list = false;
+        if failed {
+            self.op.complete(false, STATUS_REALM_LIST_FAILED);
+            return;
+        }
+        match self.op.kind {
+            OpKind::GetRealms => self.op.complete(true, STATUS_REALM_LIST_SUCCESS),
+            OpKind::Connect => {
+                if self.selected.is_none() {
+                    self.selected = select_by_name(&self.holder, realm_name);
+                }
+                match &self.selected {
+                    Some(r) => self.realm_out.push(RealmRequest::Enter(r.clone())),
+                    None => self.op.complete(false, STATUS_REALM_LIST_REALM_NOT_FOUND),
+                }
+            }
+            OpKind::Auth => {}
         }
     }
 
@@ -520,27 +660,43 @@ impl GlueMgr {
         }
     }
 
-    /// State 2's failure arm (`0x46bea7`-`0x46bfc8`): the dialog, state 0, and `AUTH_FAILED` from
-    /// the character screen goes back to login. The realm list the arm raises for every other
-    /// code (`0x46bf1f`-`0x46bf96`, `0x46c073`) is not built on these screens yet, so the dialog
-    /// stays.
+    /// State 2's failure arm (`0x46bea7`-`0x46bfc8`): the dialog unless cancelled, state 0, a
+    /// cancel's world socket dropped (`0x46befd`); `AUTH_FAILED` from the character screen goes
+    /// back to login (`0x46bfa7`); every other status raises the realm list (`0x46bf1f`-`0x46bf96`),
+    /// or with no realm held asks for one (`0x46c06e`). The arm's `0x472580` tears the glue
+    /// character list down, which these screens do not have yet.
     fn world_failed(&mut self) {
-        let (text, code) = match self.op.text() {
-            Some(Text::Raw(t)) => (Text::Raw(t), None),
-            _ => status_text(self.op.status),
-        };
-        match code.and_then(|c| URL_STATUSES.iter().find(|(s, _)| *s == c)) {
-            Some((_, url)) => self.outbox.push(Outgoing::Open {
-                which: "OKAY_WITH_URL",
-                text: Some(text),
-                data: Some(url.to_string()),
-            }),
-            None => self.open("OKAY", Some(text)),
+        let status = self.op.status;
+        if status != STATUS_CANCELLED {
+            let (text, code) = match self.op.text() {
+                Some(Text::Raw(t)) => (Text::Raw(t), None),
+                _ => status_text(status),
+            };
+            match code.and_then(|c| URL_STATUSES.iter().find(|(s, _)| *s == c)) {
+                Some((_, url)) => self.outbox.push(Outgoing::Open {
+                    which: "OKAY_WITH_URL",
+                    text: Some(text),
+                    data: Some(url.to_string()),
+                }),
+                None => self.open("OKAY", Some(text)),
+            }
         }
         self.state = ScreenState::Idle;
         self.connected = false;
-        if code == Some(STATUS_AUTH_FAILED) && self.screen.eq_ignore_ascii_case("charselect") {
-            self.outbox.push(Outgoing::Screen("login"));
+        if status == STATUS_CANCELLED {
+            self.login_out.push(GlueLogin::CancelWorld);
+        }
+        if status == STATUS_AUTH_FAILED {
+            if self.screen.eq_ignore_ascii_case("charselect") {
+                self.outbox.push(Outgoing::Screen("login"));
+            }
+            return;
+        }
+        if self.holder.is_empty() {
+            self.request_realm_list(true);
+        } else {
+            self.outbox.push(Outgoing::Close);
+            self.outbox.push(Outgoing::Rebuild);
         }
     }
 
@@ -610,7 +766,8 @@ impl GlueMgr {
                 }
                 if self.auth_final {
                     // `0x46ba8d`-`0x46ba98`, then `0x46b1f0`'s idle test passes and the connect
-                    // begins at `CSTATUS_CONNECTING` (`0x5aab4a`), its ring cleared (`0x5aab30`).
+                    // begins at `CSTATUS_CONNECTING` (`0x5aab4a`), its ring cleared (`0x5aab30`),
+                    // with no dialog of its own; the logon's list is its query's reply.
                     self.state = ScreenState::Connect;
                     self.auth_final = false;
                     self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
@@ -625,7 +782,28 @@ impl GlueMgr {
                 }
             }
             ScreenState::Connect => self.tick_connect(),
-            _ => {}
+            ScreenState::RealmList => self.tick_realm_list(),
+            ScreenState::Idle => {}
+        }
+    }
+
+    /// State 4's frame (`0x46c0a5`): the dialog re-texted, then a completed query's arm, success
+    /// to state 0, the dialog closed and the rebuild (`0x46c0d2`-`0x46c0e2`), failure to `OKAY`
+    /// with its text and state 0 (`0x46c0c9` → `0x46c177`).
+    fn tick_realm_list(&mut self) {
+        if let Some(text) = self.op.text() {
+            self.outbox.push(Outgoing::Update { text, button: None });
+        }
+        if !self.op.done {
+            return;
+        }
+        self.state = ScreenState::Idle;
+        if self.op.ok {
+            self.outbox.push(Outgoing::Close);
+            self.outbox.push(Outgoing::Rebuild);
+        } else {
+            let text = self.op.text();
+            self.open("OKAY", text);
         }
     }
 
@@ -692,6 +870,27 @@ impl GlueMgr {
     }
 }
 
+/// `SelectRealmByName` (`0x5ab6f0`): the first realm in the holder whose name matches, case
+/// folded (`0x64a4c0`), whatever its flags.
+fn select_by_name(holder: &[RealmInfo], name: &str) -> Option<RealmInfo> {
+    holder
+        .iter()
+        .find(|r| r.name.eq_ignore_ascii_case(name))
+        .cloned()
+}
+
+/// A realm record as the glue VM's holder takes it.
+fn glue_realm(r: &RealmInfo) -> GlueRealm {
+    GlueRealm {
+        name: r.name.clone(),
+        realm_type: r.realm_type,
+        flags: r.flags,
+        population: r.population,
+        characters: r.characters,
+        category: r.category,
+    }
+}
+
 /// A world status's text and its code for the URL walk; a code past the table reads
 /// `RESPONSE_FAILURE`.
 fn status_text(code: u8) -> (Text, Option<u8>) {
@@ -720,6 +919,7 @@ pub(crate) struct LoginNews<'w, 's> {
 pub(crate) struct GlueAsks<'w> {
     login: MessageWriter<'w, GlueLogin>,
     music: MessageWriter<'w, crate::sound::GlueMusicRequest>,
+    realm: Option<Res<'w, crate::net::RealmChoice>>,
 }
 
 /// The CVars each agreement is read from and written to.
@@ -768,7 +968,9 @@ pub(crate) fn drive_glue_mgr(
         }
     }
 
-    // A new glue VM is the glue build (`0x46a7b0`): state 0, its slots seeded.
+    // A new glue VM is the glue build (`0x46a7b0`): state 0, its slots seeded, and the realm
+    // list's C globals carried over, which outlive the Lua state.
+    let mut fresh_vm = false;
     if let Some(s) = script.as_deref_mut() {
         if mgr.vm != Some(s.session()) {
             mgr.vm = Some(s.session());
@@ -776,12 +978,26 @@ pub(crate) fn drive_glue_mgr(
             mgr.cells = LoginCells::default();
             mgr.auth_final = false;
             s.set_glue_saved_account(&crate::login::load_saved_account());
+            s.set_glue_realm_cells(mgr.realm_cells);
+            mgr.holder_moved = true;
+            fresh_vm = true;
         }
     } else if in_world {
         // In the world the glue is torn down, and the entry's second phase leaves state 0
         // (`0x46c252`).
         mgr.state = ScreenState::Idle;
     }
+    if let (Some(s), Some(r)) = (script.as_deref_mut(), realms.as_ref()) {
+        if fresh_vm || r.is_changed() {
+            let (categories, types) = r.glue_setup();
+            s.set_glue_realm_setup(categories, types);
+        }
+    }
+    // The name a connect resolves (`0x5ab7d0`).
+    let realm_name = script
+        .as_deref()
+        .and_then(|s| s.cvar(crate::realm_select::CVAR_REALM_NAME))
+        .unwrap_or_default();
 
     // The verbs the last tick's Lua called.
     let mut logins = Vec::new();
@@ -812,15 +1028,27 @@ pub(crate) fn drive_glue_mgr(
                     logins.push(GlueLogin::Disconnect);
                 }
                 GlueRequest::QuitGame => logins.push(GlueLogin::Quit),
+                GlueRequest::RequestRealmList { dialog } => mgr.request_realm_list(dialog),
+                GlueRequest::CancelRealmListQuery => mgr.cancel_realm_list_query(),
+                // `CLoginMgr::Cancel` (`0x5b3320`): nothing else moves, so no dialog shows.
+                GlueRequest::CancelLogon => logins.push(GlueLogin::Abandon),
+                GlueRequest::ChangeRealm(name) => mgr.connect_to_realm(&name),
             }
         }
+        mgr.realm_cells = s.glue_realm_cells();
     }
 
     // The native login's news.
     for msg in news.stages.read() {
         mgr.on_stage(msg.stage, glue_up);
     }
-    for _ in news.realm_lists.read() {
+    // The logon's list ends the logon, then answers the connect its latch begins.
+    let lists: Vec<(Vec<RealmInfo>, bool)> = news
+        .realm_lists
+        .read()
+        .map(|m| (m.realms.clone(), m.failed))
+        .collect();
+    if !lists.is_empty() {
         mgr.on_logon_done();
     }
     for msg in news.queued.read() {
@@ -830,18 +1058,28 @@ pub(crate) fn drive_glue_mgr(
     if mgr.auth_final {
         mgr.tick();
     }
+    for (realms, failed) in lists {
+        mgr.on_realm_list(realms, failed, &realm_name);
+    }
     for msg in news.failures.read() {
         mgr.on_failed(msg);
     }
     for msg in news.rosters.read() {
+        mgr.characters = msg.characters.len().min(usize::from(u16::MAX)) as u16;
         mgr.on_roster(msg.realm.clone());
     }
     for msg in news.disconnects.read() {
         mgr.on_disconnected(msg.session_over);
     }
     mgr.tick();
-    for ask in logins {
+    let (arms, realm_asks) = mgr.take_asks();
+    for ask in logins.into_iter().chain(arms) {
         asks.login.write(ask);
+    }
+    if let Some(choice) = asks.realm.as_deref() {
+        for ask in realm_asks {
+            let _ = choice.0.send(ask);
+        }
     }
 
     let Some(mut script) = script else {
@@ -855,13 +1093,18 @@ pub(crate) fn drive_glue_mgr(
             data: Some(typed),
         });
     }
-    seed(&mgr, &mut script, realms.as_deref(), realmlist.as_deref());
+    seed(
+        &mut mgr,
+        &mut script,
+        realms.as_deref(),
+        realmlist.as_deref(),
+    );
     flush(&mut mgr, &mut script, now_ms);
 }
 
 /// The glue VM's slots, from the manager's state.
 fn seed(
-    mgr: &GlueMgr,
+    mgr: &mut GlueMgr,
     script: &mut UiScript,
     realms: Option<&crate::realm_select::Realms>,
     realmlist: Option<&crate::realmlist::Realmlist>,
@@ -873,6 +1116,10 @@ fn seed(
         }
     }
     script.set_glue_connected(mgr.connected);
+    if std::mem::take(&mut mgr.holder_moved) {
+        script.set_glue_realms(mgr.holder.iter().map(glue_realm).collect());
+    }
+    script.set_glue_realm_characters(mgr.characters);
     // `realmName` names the realm the session dials (`0x5ab7b0` writes it on the connect); the
     // flags come off the connected realm's `Cfg_Configs` row.
     let (name, pvp, rp) = match &mgr.realm {
@@ -962,6 +1209,11 @@ fn flush(mgr: &mut GlueMgr, script: &mut UiScript, now_ms: u32) {
                 script.fire_event("SET_GLUE_SCREEN", vec![ScriptValue::Str(name.to_string())]);
             }
             Outgoing::Disconnected => script.fire_event("DISCONNECTED_FROM_SERVER", Vec::new()),
+            Outgoing::Close => script.fire_event("CLOSE_STATUS_DIALOG", Vec::new()),
+            Outgoing::Rebuild => {
+                script.rebuild_glue_realms();
+                mgr.realm_cells = script.glue_realm_cells();
+            }
         }
     }
 }

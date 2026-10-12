@@ -5,8 +5,8 @@
 //! `GlueScreenInfo` has no entry for it): it is shown over the current screen and hidden again,
 //! and that screen is where the player returns.
 //!
-//! The IO thread publishes the list from two parks (`crate::net::io`), the login-side realm park
-//! and the character park, and takes one answer. The policy, in order:
+//! The IO thread publishes the list from two parks (`crate::net::io`), the logon park and the
+//! character park, and takes one answer. The policy, in order:
 //!
 //! 1. `WOW_REALM`, matched case-insensitively; a name not on the list falls through.
 //! 2. The realm this session is on, so a logout or a dropped connection returns to it.
@@ -18,6 +18,9 @@
 //! begins a realm query on the realmd socket, which stays open until world entry (`0x46b70c`), and
 //! names no screen; only `ConnectToRealm` (`0x46b210`) drops the world connection, once a realm is
 //! chosen. So the character park serves the list in place and Cancel there does nothing.
+//!
+//! Under `WOW_GLUE_STOCK=1` the stock `RealmList` and its verbs take the list instead
+//! ([`crate::ui_script::glue_mgr`]), and this policy stands down.
 
 mod category;
 mod input;
@@ -177,6 +180,36 @@ impl Realms {
         rows
     }
 
+    /// The client Region's categories and the realm types, as the stock glue's realm verbs read
+    /// them; no categories until the DBC is read.
+    pub(crate) fn glue_setup(
+        &self,
+    ) -> (
+        Vec<benilla_ui::script::GlueRealmCategory>,
+        Vec<benilla_ui::script::GlueRealmType>,
+    ) {
+        let categories = self
+            .categories
+            .iter()
+            .flatten()
+            .map(|c| benilla_ui::script::GlueRealmCategory {
+                id: c.id,
+                name: c.name.clone(),
+            })
+            .collect();
+        let types = self
+            .types
+            .rows()
+            .iter()
+            .map(|t| benilla_ui::script::GlueRealmType {
+                realm_type: t.realm_type,
+                pvp: t.pvp,
+                rp: t.rp,
+            })
+            .collect();
+        (categories, types)
+    }
+
     /// A realm type's `(pvp, rp)` in `Cfg_Configs.dbc`, `(false, false)` for a type with no row.
     pub(crate) fn pvp_rp(&self, realm_type: u32) -> (bool, bool) {
         load::pvp_rp(&self.types, realm_type)
@@ -240,15 +273,41 @@ impl Realms {
         self.offset = self.offset.min(max);
     }
 
-    /// Answer a park with a realm and remember it as [`Self::current`].
+    /// Answer a park with a realm, by the record the list holds, and remember it as
+    /// [`Self::current`].
     pub(super) fn enter(&mut self, choice: &RealmChoice, name: String) {
-        self.current = Some(name.clone());
-        let _ = choice.0.send(RealmRequest::Enter(name));
+        if let Some(realm) = self.realms.iter().find(|r| r.name == name) {
+            let _ = choice.0.send(RealmRequest::Enter(realm.clone()));
+        }
+        self.current = Some(name);
     }
 
     /// `RealmList:Hide()`, and nothing else.
     pub(super) fn hide(&mut self) {
         self.shown = false;
+    }
+}
+
+#[cfg(test)]
+impl Realms {
+    /// A US client's state at startup, read without an install: Region 1's two categories and the
+    /// shipped `Cfg_Configs.dbc` types 0, 1, 6 and 8.
+    pub(crate) fn us_client() -> Realms {
+        let ty = |realm_type, pvp, rp| benilla_formats::RealmConfig {
+            realm_type,
+            pvp,
+            rp,
+        };
+        Realms {
+            categories: Some(category::tests::us()),
+            types: RealmConfigs::from_rows(vec![
+                ty(0, false, false),
+                ty(1, true, false),
+                ty(6, false, true),
+                ty(8, true, true),
+            ]),
+            ..Realms::default()
+        }
     }
 }
 
@@ -291,7 +350,7 @@ impl Plugin for RealmSelectPlugin {
             .add_systems(
                 Update,
                 (
-                    apply_realm_policy,
+                    apply_realm_policy.run_if(crate::ui_script::glue::native_glue),
                     // Ungated by state: the dialog stands over login and character select alike.
                     screen::drive_screen,
                     // Input before the row refresh, so a click shows on the frame it landed.
@@ -327,6 +386,10 @@ fn apply_realm_policy(
         realms.env_realm = std::env::var("WOW_REALM").ok().filter(|s| !s.is_empty());
     }
     for msg in msgs.read() {
+        // A query that got no answer leaves the list as it stands.
+        if msg.failed {
+            continue;
+        }
         realms.realms = msg.realms.clone();
         realms.refresh_in = REFRESH_SECS;
         // The registered default is empty: a client that has never connected.

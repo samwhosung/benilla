@@ -47,7 +47,10 @@ pub(super) fn seed_realm_list(
     }
     match *step {
         0 => {
-            lists.write(crate::net::RealmListMessage { realms: fixture() });
+            lists.write(crate::net::RealmListMessage {
+                realms: fixture(),
+                failed: false,
+            });
         }
         2 => crate::realm_select::open_over_char_select(&mut realms, &choice),
         3.. => return,

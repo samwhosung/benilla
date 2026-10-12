@@ -222,21 +222,6 @@ const NOT_YET: &[(&str, &[&str])] = &[
             "UpdateCustomizationScene",
         ],
     ),
-    (
-        "the realm list (0x46f480, table 0x837ea0)",
-        &[
-            "CancelRealmListQuery",
-            "ChangeRealm",
-            "GetNumRealms",
-            "GetRealmCategories",
-            "GetRealmInfo",
-            "GetSelectedCategory",
-            "RealmListDialogCancelled",
-            "RequestRealmList",
-            "SetPreferredInfo",
-            "SortRealms",
-        ],
-    ),
 ];
 
 /// The glue VM's globals by Lua type name.
