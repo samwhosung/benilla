@@ -474,6 +474,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(flag(matches!(model.cursor, Some(CursorPayload::Spell(_)))))
         })?,
     )?;
+    // Deviation: returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4895bc`), so
+    // Lua 5.0 hands back the stack top, the last argument or the function itself: an accident of
+    // the handler, not an API, and copying a stack-top leak would copy a bug.
     g.set(
         "ClearCursor",
         lua.create_function(|lua, ()| {
@@ -648,6 +651,24 @@ mod tests {
         }));
         assert_eq!(ask(&mut s, "CursorHasItem"), NO);
         assert_eq!(ask(&mut s, "CursorHasSpell"), NO);
+    }
+
+    /// Deviation pin: the reference hands back its stack top (`0x4895bc`); `ClearCursor` returns
+    /// nothing, with an empty cursor and a held payload alike.
+    #[test]
+    fn clear_cursor_returns_no_values() {
+        let mut s = UiScript::new().unwrap();
+        let count = "return (function(...) return arg.n end)(ClearCursor())";
+        assert_eq!(s.eval::<i64>(count).unwrap(), 0);
+        s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
+            passive: false,
+            book_slot: 1,
+            book_type: "spell".into(),
+            spell_id: 1,
+            texture: None,
+        }));
+        assert_eq!(s.eval::<i64>(count).unwrap(), 0);
+        assert!(s.cursor_payload().is_none());
     }
 
     #[test]
