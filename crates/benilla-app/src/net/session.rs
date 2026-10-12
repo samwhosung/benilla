@@ -210,8 +210,11 @@ fn on_logged_out(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
             &mut b.self_guid,
             &mut e.logged_out,
         );
-        // The forced-reaction table is the character's: the core sends it only on an aura
-        // change, never at login, so one left here would colour the next character's world.
+        // The reference zeroes the forced table's count only in teardown `0x4d5360` (`0x4d5419`),
+        // whose one caller is `ShutdownGame 0x491180` (`0x4911dc`), never on a worldport. The
+        // session's end stands in for that shutdown: the table is the character's, and one left
+        // here would colour the next character's world. The server resends it at login for a
+        // saved aura (vmangos `Unit.cpp:3511` → `SpellAuras.cpp:2744-2745`).
         b.reputations.clear_forced();
     }
 }
@@ -219,6 +222,7 @@ fn on_logged_out(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
 /// The bridge's half of the session end; each window's own listener runs after it.
 fn on_disconnected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
     if let SessionEvent::Disconnected { reason, end } = ev {
+        // The same teardown as `on_logged_out`'s.
         b.reputations.clear_forced();
         disconnected(
             reason,
@@ -911,5 +915,75 @@ mod teardown_tests {
         assert_eq!(guid, Some(7));
         assert!(reason.is_some());
         assert!(avatar);
+    }
+}
+
+#[cfg(test)]
+mod forced_reaction_tests {
+    use super::*;
+    use crate::net::handlers::dispatch;
+    use benilla_protocol::SessionEnd;
+
+    /// The registered session handlers over the plugin's own resources.
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_plugins(crate::net::NetPlugin { connect: false })
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::ui_chat::ChatLog>();
+        app
+    }
+
+    fn forced(app: &App) -> Vec<(u32, u32)> {
+        app.world().resource::<Reputations>().forced.clone()
+    }
+
+    fn arrive(app: &mut App, table: &[(u32, u32)]) {
+        let ev = SessionEvent::ForcedReactions {
+            reactions: table.to_vec(),
+        };
+        dispatch(app.world_mut(), vec![ev]);
+    }
+
+    /// The server resends the table whole on every change, and an aura's removal sends it empty
+    /// (vmangos `ReputationMgr::SendForceReactions`): each arrival replaces the last, and the
+    /// standings beside it stay.
+    #[test]
+    fn each_arrival_replaces_the_table_and_an_empty_one_clears_it() {
+        let mut app = app();
+        dispatch(
+            app.world_mut(),
+            vec![SessionEvent::Reputations {
+                standings: vec![(0x20, 5)],
+            }],
+        );
+        arrive(&mut app, &[(28, 4), (72, 6)]);
+        assert_eq!(forced(&app), [(28, 4), (72, 6)]);
+        arrive(&mut app, &[(28, 2)]);
+        assert_eq!(forced(&app), [(28, 2)], "replaced, not merged");
+        arrive(&mut app, &[]);
+        assert!(forced(&app).is_empty(), "an empty table clears it");
+        assert_eq!(
+            app.world().resource::<Reputations>().slots,
+            [(0x20, 5)],
+            "the standings are not the table's"
+        );
+    }
+
+    /// The table is the character's: the session's end drops it, on a logout and on a disconnect.
+    #[test]
+    fn the_session_end_clears_the_table() {
+        for end in [
+            SessionEvent::LoggedOut,
+            SessionEvent::Disconnected {
+                reason: "gone".into(),
+                end: SessionEnd::LoggedOut,
+            },
+        ] {
+            let mut app = app();
+            arrive(&mut app, &[(28, 4)]);
+            assert_eq!(forced(&app).len(), 1);
+            dispatch(app.world_mut(), vec![end.clone()]);
+            assert!(forced(&app).is_empty(), "{end:?} left the table");
+        }
     }
 }

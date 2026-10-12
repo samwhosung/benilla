@@ -452,8 +452,9 @@ pub(super) fn push_ring(
 /// `0x606530`: a faction with a reputation slot (`0x605fc0`) answers with our reputation rank
 /// (`0x4d63a0`), even in GM mode; any other goes to the template comparator (`0x606640`). Neutral
 /// when anything is missing. `0x606439` caps that answer at 6, so Revered and Exalted both read 6.
-/// The forced-reaction table ([`forced_rank`]) answers ahead of both. Not applied: the party rung
-/// (`0x6062b0`), the contested guard and the summon tail.
+/// The forced-reaction table ([`forced_rank`]) answers ahead of both, at `0x6065e6`. Not applied:
+/// the party rung (`0x6062b0`), the contested guard (`0x6065be`, ahead of that call) and the summon
+/// tail.
 pub(crate) fn ring_reaction(
     factions: Option<&Factions>,
     reputations: &Reputations,
@@ -469,7 +470,7 @@ pub(crate) fn ring_reaction(
         let catalog = &factions?.0;
         let self_store = self_store?;
         let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
-        // The forced-reaction table (`0x4d6490`), ahead of every faction rule.
+        // The forced-reaction table (`0x4d6490` at `0x6065e6`), ahead of every faction rule.
         if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
             return Some(rank);
         }
@@ -514,9 +515,14 @@ fn leading_rungs(target: &ObjectStore, own: &ObjectStore) -> Option<u8> {
 }
 
 /// The forced reaction the server set for a `Faction.dbc` id (`SMSG_SET_FORCED_REACTIONS`, a
-/// `SPELL_AURA_FORCE_REACTION` aura such as *King of the Gordok*'s) as a rank on the ring scale
-/// (`0..=7`); `None` when the faction is not forced. It answers both directions of `UnitReaction`,
-/// ahead of the reputation branch and the template comparator.
+/// `SPELL_AURA_FORCE_REACTION` aura such as *King of the Gordok*'s); `None` when the faction is not
+/// forced. The lookup `0x4d6490` returns the stored rank verbatim (`0x4d64b3`) and answers both
+/// directions of `UnitReaction` ahead of the reputation branch and the template comparator: the
+/// player toward the unit at `0x6063e0`, returned uncapped (`0x6063e5`), and the unit toward the
+/// player at `0x6065e6`, whose caller caps it at 6 (`0x606439`).
+///
+/// Deviation: the rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the
+/// reference keeps any value; a server rank past 7 would index outside our palette.
 pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
     reputations
         .forced
@@ -574,7 +580,7 @@ const UNIT_FLAG_PVP: u32 = 0x1000;
 /// reaches leg 3 (`0x606372`), which answers a reputation faction by the at-war bit alone, never
 /// the standing, so a not-at-war neutral NPC is friendly here and neutral to [`ring_reaction`]: a
 /// friendly-category plate with a yellow bar. The forced-reaction table ([`forced_rank`]) answers
-/// ahead of both legs. Not applied, each only ever making a unit friendlier: the party rung and
+/// ahead of both legs, at `0x6063e0`. Not applied, each only ever making a unit friendlier: the party rung and
 /// the charmed-player case.
 pub(crate) fn reaction_from_player(
     factions: Option<&Factions>,
@@ -591,7 +597,7 @@ pub(crate) fn reaction_from_player(
     let resolved = (|| {
         let catalog = &factions?.0;
         let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
-        // The forced-reaction table (`0x4d6490`), ahead of every faction rule.
+        // The forced-reaction table (`0x4d6490` at `0x6063e0`), ahead of every faction rule.
         if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
             return Some(rank);
         }
@@ -892,9 +898,9 @@ pub(crate) fn duel_rung(
 #[cfg(test)]
 mod tests {
     use super::{
-        can_attack_from_player, can_cooperate_with_player, plate_is_friendly, ring_reaction,
-        ring_variant, selection_variant, Factions, PlayerPath, RingVariant, SelectorInput,
-        UNIT_FLAG_PVP_ATTACKABLE,
+        can_attack_from_player, can_cooperate_with_player, plate_is_friendly, reaction_from_player,
+        ring_reaction, ring_variant, selection_variant, Factions, PlayerPath, RingVariant,
+        SelectorInput, UNIT_FLAG_PVP_ATTACKABLE,
     };
     use crate::net::{ObjectStore, Reputations};
     use benilla_protocol::field::{
@@ -1133,6 +1139,75 @@ mod tests {
         // A Stormwind guard, template 12, faction 72, slot 19: friendly by both routes.
         assert!(category(&unit(12), &quiet));
         assert_eq!(rank(&unit(12), &quiet), 4);
+    }
+
+    /// The forced table answers ahead of the reputation faction rules in both directions
+    /// (`0x6065e6`, `0x6063e0`): Booty Bay's goblin, whose at-war slot makes the player's reaction
+    /// hostile (leg 3) and leaves the unit's toward the player at our standing, reads 4 both ways
+    /// once the server forces its faction to 4.
+    #[test]
+    fn a_forced_rank_beats_an_at_war_reputation_faction_in_both_directions() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
+        let me = ObjectStore(ObjectFields::from_pairs(&[
+            (FIELD_UNIT_FACTIONTEMPLATE, 1),
+            (FIELD_UNIT_FLAGS, UNIT_FLAG_PVP_ATTACKABLE),
+        ]));
+        // Booty Bay, template 120, reputation slot 1.
+        let goblin = ObjectStore(ObjectFields::from_pairs(&[(
+            FIELD_UNIT_FACTIONTEMPLATE,
+            120,
+        )]));
+        let faction = factions.0.template(120).expect("template 120").faction;
+        let mut slots = vec![(0u8, 0i32); 64];
+        slots[1] = (benilla_formats::faction_flags::AT_WAR, 0);
+        let at_war = Reputations::from_slots(slots.clone());
+        let toward =
+            |reps: &Reputations| ring_reaction(Some(&factions), reps, Some(&goblin), Some(&me));
+        let from = |reps: &Reputations| {
+            reaction_from_player(Some(&factions), reps, Some(&goblin), Some(&me))
+        };
+        assert_eq!(from(&at_war), 1, "at war, the player's leg 3 is hostile");
+        assert_ne!(toward(&at_war), 4, "and its own leg is our standing's");
+
+        let mut forced = Reputations::from_slots(slots);
+        forced.set_forced(vec![(faction, 4)]);
+        assert_eq!(toward(&forced), 4, "unit toward player");
+        assert_eq!(from(&forced), 4, "player toward unit");
+    }
+
+    /// The lookup returns the stored rank verbatim (`0x4d64b3`): the player's own direction
+    /// returns it uncapped (`0x6063e5`) while the unit's is capped at 6 by its caller (`0x606439`),
+    /// so a forced 7 reads 6 from [`ring_reaction`] and 7 from [`reaction_from_player`]. A rank
+    /// past 7 is held to 7, our deviation from the reference's any value.
+    #[test]
+    fn a_forced_seven_reads_six_toward_the_player_and_seven_from_the_player() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let factions = Factions(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
+        let me = ObjectStore(ObjectFields::from_pairs(&[
+            (FIELD_UNIT_FACTIONTEMPLATE, 1),
+            (FIELD_UNIT_FLAGS, UNIT_FLAG_PVP_ATTACKABLE),
+        ]));
+        // A Chicken, template 31, faction 28, no reputation slot.
+        let chicken = ObjectStore(ObjectFields::from_pairs(&[(
+            FIELD_UNIT_FACTIONTEMPLATE,
+            31,
+        )]));
+        for (stored, from_player) in [(6, 6), (7, 7), (200, 7)] {
+            let reps = forced_table(vec![(28, stored)]);
+            assert_eq!(
+                ring_reaction(Some(&factions), &reps, Some(&chicken), Some(&me)),
+                stored.min(6) as u8,
+                "forced {stored}, unit toward player"
+            );
+            assert_eq!(
+                reaction_from_player(Some(&factions), &reps, Some(&chicken), Some(&me)),
+                from_player,
+                "forced {stored}, player toward unit"
+            );
+        }
     }
 
     /// The reputation leg walks the ladder up to Revered and stops: `0x606439` caps the rank at 6,
