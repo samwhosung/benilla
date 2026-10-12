@@ -141,7 +141,7 @@ fn fired(s: &UiScript) -> Vec<String> {
 fn reset_draws_a_sex_a_race_and_five_customizations_in_order() {
     let mut s = vm();
     s.script_glue_create_draws(&[
-        word(1, 2),
+        word(0, 2),
         word(2, 3),
         word(3, 9),
         word(6, 7),
@@ -154,7 +154,7 @@ fn reset_draws_a_sex_a_race_and_five_customizations_in_order() {
         look(&s),
         GlueCreateLook {
             race: 2,
-            sex: 1,
+            sex: 0,
             class: 1,
             skin: 3,
             face: 8,
@@ -166,7 +166,7 @@ fn reset_draws_a_sex_a_race_and_five_customizations_in_order() {
     assert_eq!(
         s.eval::<(f64, f64)>("return GetSelectedRace(), GetSelectedSex()")
             .unwrap(),
-        (3.0, 2.0)
+        (3.0, 1.0)
     );
     // The draws are `(n · word) >> 32` (`0x455c70`).
     assert_eq!(scale(0xffff_ffff, 9), 8);
@@ -614,9 +614,7 @@ fn the_generator_walks_the_trigrams_by_count() {
     // The buffer's cap ends the name at 12 bytes past the `_`.
     let mut words = Words::default();
     words.scripted.extend([word(0, 2)]);
-    words
-        .scripted
-        .extend(std::iter::repeat(word(2, 3)).take(20));
+    words.scripted.extend(std::iter::repeat_n(word(2, 3), 20));
     let long = g.generate(&mut words, NAME_BUFFER);
     assert_eq!(long.len(), NAME_BUFFER - 2);
     // With no table the name is empty.
