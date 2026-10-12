@@ -114,6 +114,46 @@ fn controls_is_the_default_category_and_the_title_reads_it() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// The page body is the ScrollFrame's scroll child, which its HIGHLIGHT callback draws at the
+/// ScrollFrame's level (`0x787220`); the bar's trough sits at that level too, so the body and the
+/// bar, a level up, both draw over it.
+#[test]
+fn the_page_body_and_its_bar_draw_over_the_bar_trough() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = harness();
+    s.run("ShowUIPanel(BenillaOptionsFrame)").unwrap();
+    s.resolve();
+    s.tick(0.05);
+    s.resolve();
+    assert!(
+        s.eval::<bool>("return BenillaOptionsFrameContainerScrollBarTrough:IsVisible() == 1")
+            .unwrap(),
+        "the Controls page scrolls, so its trough shows"
+    );
+    let quads = s.extract();
+    let zs = |pick: &dyn Fn(&str) -> bool| -> Vec<u128> {
+        quads
+            .iter()
+            .filter(|q| s.quad_owner_name(q.target).is_some_and(|n| pick(&n)))
+            .map(|q| q.z)
+            .collect()
+    };
+    let trough = zs(&|n| n == "BenillaOptionsFrameContainerScrollBarTrough");
+    let body = zs(&|n| n.starts_with("BenillaOptionsFrameContainerBody"));
+    let bar =
+        zs(&|n| n.starts_with("BenillaOptionsFrameContainerScrollBar") && !n.ends_with("Trough"));
+    let top = *trough.iter().max().expect("the trough draws");
+    assert!(!body.is_empty() && !bar.is_empty());
+    assert!(
+        body.iter().all(|&z| z > top),
+        "the body draws over the trough"
+    );
+    assert!(
+        bar.iter().all(|&z| z > top),
+        "the bar draws over the trough"
+    );
+}
+
 /// The selection survives a close and reopen: the OnShow re-applies the last category.
 #[test]
 fn clicking_a_row_moves_the_selection_and_the_page_title() {
