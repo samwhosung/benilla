@@ -1,10 +1,11 @@
 //! The server's half of the client's item lock. The lock is the reference's `item+0x314` bit 0,
 //! held in the VM by guid ([`UiScript::lock_item`]): the cursor verbs set and lift it at their own
 //! sites, and the app's sends lock their item. What lifts it from here is the server: a slot whose
-//! guid changes unlocks the item that left it (`0x5ddd50` over the player's array, `0x4f8e15` and
-//! `0x4f912c` over a bag's), an item of ours that arrives or changes its stack count unlocks its
-//! entry (`0x5d85ab`, `0x5d94ca`), and the handlers without a VM queue theirs in
-//! [`ItemReleases`]: a refused operation, a sale, a loot release.
+//! guid changes unlocks the item that left it (`0x5ddd50` and `0x4f8e15` over the player's array,
+//! the latter its backpack and keyring, `0x4f912c` over a container's slots), an item of ours
+//! created or changing its stack count unlocks its entry (the walks `0x5d8590`, `0x5d94af`) or,
+//! when it does not stack, itself (`0x5d85ab`, `0x5d94ca`), and the handlers without a VM queue
+//! theirs in [`ItemReleases`]: a sale, a loot release.
 
 use std::collections::HashMap;
 
@@ -113,52 +114,40 @@ enum Seat {
     Bag(u64, u8),
 }
 
-/// One item as the watchers see it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Item {
-    entry: u32,
-    count: u32,
-    stackable: bool,
-}
-
-/// The player's items as the watchers last saw them.
+/// The player's seats as the watchers last saw them, and the stack count of every item of ours.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Snapshot {
     seats: HashMap<Seat, u64>,
-    /// Each item's entry, stack count and whether its template stacks past 1 (`[rec+0x60]`), for
-    /// the items whose objects and templates have arrived: the arrival unlock waits for the
-    /// template (`0x5d8346` defers to `0x5d8390`).
-    items: HashMap<u64, Item>,
+    counts: HashMap<u64, u32>,
 }
 
-/// The player's array in the reference's numbering: equipment and bags (0-22), the backpack
-/// (23-38), the bank (39-62), its bags (63-68), buyback (69-80) and the keyring (81-112).
-fn player_array(store: &ObjectFields) -> impl Iterator<Item = (u8, u64)> + '_ {
+/// The watched part of the player's array, in the reference's numbering: equipment and bags
+/// (0-22), the bank and its bags (39-68) and the keyring (81-112) under `0x5ddcf0` (installed by
+/// `0x5dd8a0`), the backpack (23-38) and the keyring again under `0x4f8db0` (installed by
+/// `0x4f8cd0`). Buyback (69-80) has no watcher.
+fn watched_array(store: &ObjectFields) -> impl Iterator<Item = (u8, u64)> + '_ {
     let inv = (0..23u8).map(|i| (i, store.player_inv_slot(i)));
     let pack = (0..16u8).map(|i| (23 + i, store.player_pack_slot(i)));
     let bank = (0..24u8).map(|i| (39 + i, store.player_bank_slot(i)));
     let bank_bags = (0..6u8).map(|i| (63 + i, store.player_bank_bag_slot(i)));
-    let buyback = (0..12u8).map(|i| (69 + i, store.player_buyback_slot(i)));
     let keyring = (0..32u8).map(|i| (81 + i, store.player_keyring_slot(i)));
     inv.chain(pack)
         .chain(bank)
         .chain(bank_bags)
-        .chain(buyback)
         .chain(keyring)
         .map(|(i, guid)| (i, guid.unwrap_or(0)))
 }
 
-/// Read the watchers' view off the self descriptor and the item objects; `stackable` answers
-/// from the template cache, `None` while the template is unanswered.
-pub(crate) fn snapshot(
-    store: &ObjectFields,
-    objects: &Objects,
-    stackable: impl Fn(u32, u64) -> Option<bool>,
-) -> Snapshot {
-    let mut seats: HashMap<Seat, u64> = player_array(store)
+/// The keyring, which both watchers cover, so a seat change there unlocks twice.
+const KEYRING: std::ops::RangeInclusive<u8> = 81..=112;
+
+/// Read the watchers' view: the seats, and the stack count of each item object we own
+/// (`0x5d9400`'s owner test, `0x5d9449`).
+pub(crate) fn snapshot(store: &ObjectFields, objects: &Objects, me: u64) -> Snapshot {
+    let mut seats: HashMap<Seat, u64> = watched_array(store)
         .map(|(i, guid)| (Seat::Player(i), guid))
         .collect();
-    // The equipped bags' and the bank bags' contents, keyed by the container object.
+    // A container's slots under `0x4f90d0`, for the equipped and the bank bags.
     let bags: Vec<u64> = (19..23u8)
         .chain(63..69)
         .filter_map(|i| seats.get(&Seat::Player(i)).copied())
@@ -173,77 +162,132 @@ pub(crate) fn snapshot(
             seats.insert(Seat::Bag(bag, j), fields.container_slot(j).unwrap_or(0));
         }
     }
-    let items = seats
-        .values()
-        .filter(|&&g| g != 0)
-        .filter_map(|&guid| {
-            let fields = objects.object(guid)?;
-            let entry = fields.object_entry()?;
-            let item = Item {
-                entry,
-                count: fields.item_stack_count().unwrap_or(1),
-                stackable: stackable(entry, guid)?,
-            };
-            Some((guid, item))
-        })
+    let counts = objects
+        .iter()
+        .filter(|(_, _, f)| f.is_item() && f.item_owner() == Some(me))
+        .map(|(guid, _, f)| (guid, f.item_stack_count().unwrap_or(1)))
         .collect();
-    Snapshot { seats, items }
+    Snapshot { seats, counts }
 }
 
-/// The releases between two looks. A seat whose guid changed unlocks the item that left it
-/// (`0x5ddd50`, `0x4f8e15`, `0x4f912c`); a bag's seats go with it unseen. An item that arrived
-/// (`0x5d8440` into `0x5d85ab`) or whose stack count changed (`0x5d9400` into `0x5d94ca`) unlocks
-/// its whole entry when its template stacks past 1 (`[rec+0x60] > 1`, `0x5d857b`, `0x5d947e`),
-/// and itself otherwise. Sorted, so the event stream is reproducible.
-pub(crate) fn releases(was: &Snapshot, now: &Snapshot) -> Vec<Release> {
-    let mut left: Vec<u64> = was
+/// The scopes of the inventory walk `0x622420` the entry unlocks take (`0x6221e0`): the arrival's
+/// flags 0, which the walk widens to equipment, bags, backpack and keyring (`0x622439`), and the
+/// stack-count write's 8, which adds the bank and its bags. Neither reaches buyback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Walk {
+    Arrival,
+    Stack,
+}
+
+/// The items of `entry` the walk reaches, sorted. A bag reached is walked inside (`0x62256d`). A
+/// broken item, durability 0 of a nonzero maximum on an unwrapped item, and one flagged `0x10`
+/// are passed over (`0x6224f7`-`0x622513`).
+pub(crate) fn kin(store: &ObjectFields, objects: &Objects, walk: Walk, entry: u32) -> Vec<u64> {
+    let in_scope = |i: u8| match i {
+        0..=38 | 81..=112 => true,
+        39..=68 => walk == Walk::Stack,
+        _ => false,
+    };
+    let passed_over = |f: &ObjectFields| {
+        let flags = f.item_flags().unwrap_or(0);
+        let broken = flags & 0x8 == 0
+            && f.item_max_durability().unwrap_or(0) > 0
+            && f.item_durability().unwrap_or(0) == 0;
+        broken || flags & 0x10 != 0
+    };
+    let mut out = Vec::new();
+    fn walk_item(
+        guid: u64,
+        objects: &Objects,
+        entry: u32,
+        passed_over: &dyn Fn(&ObjectFields) -> bool,
+        out: &mut Vec<u64>,
+    ) {
+        let Some(f) = objects.object(guid).filter(|f| !passed_over(f)) else {
+            return;
+        };
+        if f.object_entry() == Some(entry) {
+            out.push(guid);
+        }
+        let n = f.container_num_slots().unwrap_or(0).min(36) as u8;
+        for j in 0..n {
+            if let Some(inner) = f.container_slot(j).filter(|&g| g != 0) {
+                walk_item(inner, objects, entry, passed_over, out);
+            }
+        }
+    }
+    let array: Vec<(u8, u64)> = (0..23u8)
+        .map(|i| (i, store.player_inv_slot(i)))
+        .chain((0..16u8).map(|i| (23 + i, store.player_pack_slot(i))))
+        .chain((0..24u8).map(|i| (39 + i, store.player_bank_slot(i))))
+        .chain((0..6u8).map(|i| (63 + i, store.player_bank_bag_slot(i))))
+        .chain((0..32u8).map(|i| (81 + i, store.player_keyring_slot(i))))
+        .filter_map(|(i, g)| Some((i, g.filter(|&g| g != 0)?)))
+        .collect();
+    for (i, guid) in array {
+        if in_scope(i) {
+            walk_item(guid, objects, entry, &passed_over, &mut out);
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// The seat watchers' unlocks between two looks: a seat whose guid changed unlocks the item that
+/// left it (`0x5ddd50`, `0x4f8e15`, `0x4f912c`), twice on the keyring, which both array watchers
+/// cover; a bag's seats go with it unseen. Sorted, so the event stream is reproducible.
+pub(crate) fn seat_unlocks(was: &Snapshot, now: &Snapshot) -> Vec<u64> {
+    let mut left: Vec<(Seat, u64)> = was
         .seats
         .iter()
         .filter(|&(_, &old)| old != 0)
         .filter(|&(seat, &old)| match now.seats.get(seat) {
             Some(&new) => new != old,
-            // A bag that left takes its seats with it: their watchers never see a write.
             None => matches!(seat, Seat::Player(_)),
         })
-        .map(|(_, &old)| old)
+        .map(|(&seat, &old)| (seat, old))
         .collect();
-    left.sort_unstable();
-    let mut out: Vec<Release> = left.into_iter().map(Release::Item).collect();
-    let mut moved: Vec<(u64, Item)> = now
-        .items
+    left.sort_unstable_by_key(|&(_, g)| g);
+    left.into_iter()
+        .flat_map(|(seat, old)| {
+            let twice = matches!(seat, Seat::Player(i) if KEYRING.contains(&i));
+            std::iter::repeat_n(old, if twice { 2 } else { 1 })
+        })
+        .collect()
+}
+
+/// The items of ours whose stack count changed between two looks (`0x5d9400`), sorted; one that
+/// appeared is a create, the arrival watcher's.
+pub(crate) fn restacked(was: &Snapshot, now: &Snapshot) -> Vec<u64> {
+    let mut out: Vec<u64> = now
+        .counts
         .iter()
-        .filter(|&(guid, item)| was.items.get(guid).is_none_or(|w| w.count != item.count))
-        .map(|(&guid, &item)| (guid, item))
+        .filter(|&(g, &c)| was.counts.get(g).is_some_and(|&w| w != c))
+        .map(|(&g, _)| g)
         .collect();
-    moved.sort_unstable_by_key(|&(guid, _)| guid);
-    for (guid, item) in moved {
-        if item.stackable {
-            let mut kin: Vec<u64> = now
-                .items
-                .iter()
-                .filter(|&(_, i)| i.entry == item.entry)
-                .map(|(&g, _)| g)
-                .collect();
-            kin.sort_unstable();
-            out.push(Release::Entry(kin));
-        } else {
-            out.push(Release::Item(guid));
-        }
-    }
+    out.sort_unstable();
     out
 }
 
 /// The watchers' last look, per VM: a fresh VM, like the reference's game UI coming up
 /// (`0x4908ce`, which the arrival unlock reads at `0x5d84ff`), takes a baseline and releases
-/// nothing for what it finds.
+/// nothing for what it finds. `arrivals` are item objects created since, waiting on their
+/// template as the reference's create waits for its answer (`0x5d8346` → `0x5d8390`).
 #[derive(Default)]
-pub(crate) struct LockWatch(Option<Snapshot>, u64);
+pub(crate) struct LockWatch {
+    seen: Option<Snapshot>,
+    templates: u64,
+    arrivals: Vec<u64>,
+}
 
 /// Run the frame's releases ahead of the inventory feeds: the watchers compare the incoming guid
 /// with the one still in the descriptor (`0x5ddd42`), so a handler reads the slot as it was.
+#[allow(clippy::too_many_arguments)] // the input set
 pub(crate) fn apply_item_releases(
     script: Option<NonSendMut<UiScript>>,
     mut inv: crate::items::Inventory,
+    created: Query<&crate::net::Guid, Added<crate::items::ItemObject>>,
+    me: Res<crate::net::SelfGuid>,
     items: Res<Items>,
     commands: Res<NetCommands>,
     mut queued: ResMut<ItemReleases>,
@@ -253,35 +297,81 @@ pub(crate) fn apply_item_releases(
 ) {
     // Read before taking, so a frame owing nothing leaves the session unchanged for its feed.
     if let Some(mut loot) = loot.filter(|l| l.owes_unlocks()) {
-        queued
-            .0
-            .extend(loot.take_item_unlocks().into_iter().map(Release::Item));
+        queued.0.extend(
+            loot.take_item_unlocks()
+                .into_iter()
+                .filter_map(|(guid, live)| {
+                    let resolves = !live || inv.objects.object(guid).is_some_and(|f| f.is_item());
+                    resolves.then_some(Release::Item(guid))
+                }),
+        );
     }
     let Some(mut script) = script else {
         queued.0.clear();
         return;
     };
     let watch = memo.get(&script);
-    let Some(store) = inv.self_store.iter().next() else {
-        watch.0 = None;
+    let (Some(store), Some(me)) = (inv.self_store.iter().next(), me.0) else {
+        *watch = LockWatch::default();
         queued.apply(&mut script);
         return;
     };
+    // The arrival unlock fires from the item's create (`0x5d8300`), never from a seat a moved bag
+    // brings into view; the VM's first look owns what already exists.
+    if watch.seen.is_some() {
+        watch.arrivals.extend(created.iter().map(|g| g.0));
+    }
     let moved = inv.changes.moved() || !inv.self_changed.is_empty();
-    let mut out = Vec::new();
     // A template answer moves no item object, so the frame it lands has its own trigger.
     let templates = items.template_epoch();
-    let answered = watch.1 != templates;
-    watch.1 = templates;
-    if moved || answered || watch.0.is_none() {
-        let now = snapshot(&store.0, &inv.objects, |entry, guid| {
-            items
-                .template(entry, guid, &commands)
-                .map(|t| t.stackable > 1)
-        });
-        if let Some(was) = watch.0.replace(now) {
-            out = releases(&was, watch.0.as_ref().expect("just stored"));
+    let answered = watch.templates != templates;
+    watch.templates = templates;
+    let mut out = Vec::new();
+    // Whether an entry stacks past 1 (`[rec+0x60] > 1`, `0x5d857b`, `0x5d947e`); `None` while the
+    // template is unanswered.
+    let stackable = |entry: u32, guid: u64| {
+        items
+            .template(entry, guid, &commands)
+            .map(|t| t.stackable > 1)
+    };
+    let objects = &inv.objects;
+    let release = |guid: u64, entry: u32, walk: Walk, stacks: bool| {
+        if stacks {
+            Release::Entry(kin(&store.0, objects, walk, entry))
+        } else {
+            Release::Item(guid)
         }
+    };
+    if moved || watch.seen.is_none() {
+        let now = snapshot(&store.0, objects, me);
+        if let Some(was) = watch.seen.replace(now) {
+            let now = watch.seen.as_ref().expect("just stored");
+            out.extend(seat_unlocks(&was, now).into_iter().map(Release::Item));
+            for guid in restacked(&was, now) {
+                let entry = objects.object(guid).and_then(ObjectFields::object_entry);
+                // An unanswered template unlocks the item alone (`0x5d947c`).
+                let stacks = entry.and_then(|e| stackable(e, guid)).unwrap_or(false);
+                out.push(release(guid, entry.unwrap_or(0), Walk::Stack, stacks));
+            }
+        }
+    }
+    if moved || answered {
+        let mut waiting = Vec::new();
+        for guid in std::mem::take(&mut watch.arrivals) {
+            // Ours only (`0x5d851f`); a vanished object owes nothing.
+            let Some(f) = objects.object(guid).filter(|f| f.item_owner() == Some(me)) else {
+                continue;
+            };
+            let Some(entry) = f.object_entry() else {
+                waiting.push(guid);
+                continue;
+            };
+            match stackable(entry, guid) {
+                Some(stacks) => out.push(release(guid, entry, Walk::Arrival, stacks)),
+                None => waiting.push(guid),
+            }
+        }
+        watch.arrivals = waiting;
     }
     queued.0.splice(0..0, out);
     queued.apply(&mut script);
@@ -291,98 +381,100 @@ pub(crate) fn apply_item_releases(
 mod tests {
     use super::*;
 
-    fn snap(seats: &[(Seat, u64)], items: &[(u64, u32, u32, bool)]) -> Snapshot {
+    fn snap(seats: &[(Seat, u64)], counts: &[(u64, u32)]) -> Snapshot {
         Snapshot {
             seats: seats.iter().copied().collect(),
-            items: items
-                .iter()
-                .map(|&(g, entry, count, stackable)| {
-                    let item = Item {
-                        entry,
-                        count,
-                        stackable,
-                    };
-                    (g, item)
-                })
-                .collect(),
+            counts: counts.iter().copied().collect(),
         }
     }
 
     const A: u64 = 0x4000_0000_0000_00a1;
     const B: u64 = 0x4000_0000_0000_00b2;
+    const C: u64 = 0x4000_0000_0000_00c3;
     const BAG: u64 = 0x4000_0000_0000_0b06;
+    const ME: u64 = 0x2a;
 
     #[test]
     fn a_seat_that_changes_guid_unlocks_the_item_that_left() {
-        let was = snap(
-            &[(Seat::Player(23), A), (Seat::Player(24), 0)],
-            &[(A, 1, 1, false)],
-        );
-        let now = snap(
-            &[(Seat::Player(23), 0), (Seat::Player(24), A)],
-            &[(A, 1, 1, false)],
-        );
+        let was = snap(&[(Seat::Player(23), A), (Seat::Player(24), 0)], &[]);
+        let now = snap(&[(Seat::Player(23), 0), (Seat::Player(24), A)], &[]);
         assert_eq!(
-            releases(&was, &now),
-            [Release::Item(A)],
+            seat_unlocks(&was, &now),
+            [A],
             "the move: only the vacated seat's old guid, the filled seat had none"
         );
         let swapped = snap(&[(Seat::Player(23), B), (Seat::Player(24), A)], &[]);
         let was = snap(&[(Seat::Player(23), A), (Seat::Player(24), B)], &[]);
-        assert_eq!(
-            releases(&was, &swapped),
-            [Release::Item(A), Release::Item(B)],
-            "a swap unlocks both"
-        );
+        assert_eq!(seat_unlocks(&was, &swapped), [A, B], "a swap unlocks both");
+        // The keyring sits under both array watchers (`0x5ddcf0`, `0x4f8db0`).
+        let was = snap(&[(Seat::Player(81), A)], &[]);
+        let now = snap(&[(Seat::Player(81), 0)], &[]);
+        assert_eq!(seat_unlocks(&was, &now), [A, A], "a key unlocks twice");
     }
 
     #[test]
     fn a_bag_that_leaves_takes_its_seats_silently() {
         let was = snap(&[(Seat::Player(19), BAG), (Seat::Bag(BAG, 0), A)], &[]);
         let now = snap(&[(Seat::Player(19), 0)], &[]);
-        assert_eq!(releases(&was, &now), [Release::Item(BAG)]);
+        assert_eq!(seat_unlocks(&was, &now), [BAG]);
     }
 
     #[test]
-    fn an_arrival_or_a_restack_unlocks_its_entry_when_it_stacks() {
-        let was = snap(&[], &[(A, 7, 5, true)]);
-        let now = snap(&[], &[(A, 7, 3, true), (B, 7, 2, true)]);
-        let kin = Release::Entry(vec![A, B]);
+    fn a_restack_is_a_count_change_of_an_item_seen_before() {
+        let was = snap(&[], &[(A, 5)]);
+        let now = snap(&[], &[(A, 3), (B, 2)]);
         assert_eq!(
-            releases(&was, &now),
-            [kin.clone(), kin],
-            "the source's restack and the split's new stack, each the whole entry"
+            restacked(&was, &now),
+            [A],
+            "B appeared: a create, not a restack"
         );
-        let was = snap(&[], &[(A, 9, 1, false)]);
-        let now = snap(&[], &[(A, 9, 1, false), (B, 9, 1, false)]);
-        assert_eq!(
-            releases(&was, &now),
-            [Release::Item(B)],
-            "a template that does not stack unlocks only the arrival"
-        );
-        assert!(releases(&now, &now).is_empty(), "no change, no release");
+        assert!(restacked(&now, &now).is_empty());
     }
 
     /// `PLAYER_FIELD_PACK_SLOT_1`, backpack slot 1's guid pair.
     const F_PACK_SLOT_1: u16 = 532;
+    /// `PLAYER_FIELD_INV_SLOT_HEAD`, slot 0's guid pair; slot 19 is the first bag.
+    const F_INV_SLOT_1: u16 = benilla_protocol::field::FIELD_PLAYER_INV_SLOT_HEAD;
+    /// `PLAYER_FIELD_BANK_SLOT_1`.
+    const F_BANK_SLOT_1: u16 = 564;
+    const F_OBJECT_TYPE: u16 = 2;
     const F_OBJECT_ENTRY: u16 = 3;
+    const F_ITEM_OWNER: u16 = 6;
     const F_ITEM_STACK_COUNT: u16 = 14;
+    const F_ITEM_DURABILITY: u16 = 46;
+    const F_ITEM_MAX_DURABILITY: u16 = 47;
+    const F_CONTAINER_NUM_SLOTS: u16 = 48;
+    const F_CONTAINER_SLOT_1: u16 = 50;
     const ARROWS: u32 = 2512;
 
-    fn pack(slots: &[u64]) -> ObjectFields {
-        let pairs: Vec<(u16, u32)> = slots
+    fn guid_pairs(first: u16, slots: &[u64]) -> Vec<(u16, u32)> {
+        slots
             .iter()
             .enumerate()
             .flat_map(|(i, &g)| {
-                let f = F_PACK_SLOT_1 + 2 * i as u16;
+                let f = first + 2 * i as u16;
                 [(f, g as u32), (f + 1, (g >> 32) as u32)]
             })
-            .collect();
+            .collect()
+    }
+
+    fn pack(slots: &[u64]) -> ObjectFields {
+        ObjectFields::from_pairs(&guid_pairs(F_PACK_SLOT_1, slots))
+    }
+
+    /// An item of ours: type item, owner the player.
+    fn ours(extra: &[(u16, u32)]) -> ObjectFields {
+        let mut pairs = vec![
+            (F_OBJECT_TYPE, 0x3),
+            (F_ITEM_OWNER, ME as u32),
+            (F_ITEM_OWNER + 1, 0),
+        ];
+        pairs.extend_from_slice(extra);
         ObjectFields::from_pairs(&pairs)
     }
 
     fn arrows(count: u32) -> ObjectFields {
-        ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, ARROWS), (F_ITEM_STACK_COUNT, count)])
+        ours(&[(F_OBJECT_ENTRY, ARROWS), (F_ITEM_STACK_COUNT, count)])
     }
 
     /// The release system over a world with arrows in backpack slot 1, its baseline taken.
@@ -392,6 +484,7 @@ mod tests {
         app.init_resource::<Items>()
             .init_resource::<ItemReleases>()
             .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(crate::net::SelfGuid(Some(ME)))
             .insert_resource(NetCommands(tx))
             .add_systems(Update, apply_item_releases);
         let mut items = app.world_mut().resource_mut::<Items>();
@@ -433,6 +526,12 @@ mod tests {
             .unwrap() = crate::net::ObjectStore(fields);
     }
 
+    fn set_store(app: &mut App, me: Entity, fields: ObjectFields) {
+        *app.world_mut()
+            .get_mut::<crate::net::ObjectStore>(me)
+            .unwrap() = crate::net::ObjectStore(fields);
+    }
+
     /// The baseline is silent; a shot's stack-count write unlocks the arrows' entry with one
     /// `ITEM_LOCK_CHANGED` (`0x5d94af`, `0x5d94b9`), an auto-shot timer's only per-shot signal,
     /// and a frame with no change releases nothing.
@@ -452,28 +551,130 @@ mod tests {
         assert_eq!(heard(&mut app), 0);
     }
 
-    /// A move frees the seat it left: the item that left unlocks (`0x5ddd50`), and an arrival of
-    /// a stacking entry unlocks its entry (`0x5d85ab`), one event each.
+    /// A move frees the seat it left (`0x5ddd50`); a created item of a stacking entry unlocks
+    /// its entry (`0x5d8590`), one event each.
     #[test]
-    fn a_move_and_an_arrival_each_unlock() {
+    fn a_move_and_a_create_each_unlock() {
         let (mut app, me) = arrow_world();
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .lock_item(A);
         let _ = heard(&mut app);
-        *app.world_mut()
-            .get_mut::<crate::net::ObjectStore>(me)
-            .unwrap() = crate::net::ObjectStore(pack(&[0, A]));
+        set_store(&mut app, me, pack(&[0, A]));
         app.update();
         assert_eq!(heard(&mut app), 1, "slot 1 lost A");
         assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
 
         crate::items::test_spawn_item(app.world_mut(), B, arrows(20), false);
-        *app.world_mut()
-            .get_mut::<crate::net::ObjectStore>(me)
-            .unwrap() = crate::net::ObjectStore(pack(&[B, A]));
+        set_store(&mut app, me, pack(&[B, A]));
         app.update();
-        assert_eq!(heard(&mut app), 1, "B arrived: one entry unlock");
+        assert_eq!(heard(&mut app), 1, "B created: one entry unlock");
+    }
+
+    /// Buyback has no watcher (`0x5dd8a0` skips 69-80): a sale's item reaching it, and leaving it,
+    /// unlocks nothing there; the backpack seat it left does.
+    #[test]
+    fn buyback_seats_are_not_watched() {
+        const F_BUYBACK_1: u16 = 624;
+        let (mut app, me) = arrow_world();
+        let mut pairs = guid_pairs(F_PACK_SLOT_1, &[0]);
+        pairs.extend(guid_pairs(F_BUYBACK_1, &[A]));
+        set_store(&mut app, me, ObjectFields::from_pairs(&pairs));
+        app.update();
+        assert_eq!(heard(&mut app), 1, "the backpack seat alone");
+        let mut pairs = guid_pairs(F_PACK_SLOT_1, &[0]);
+        pairs.extend(guid_pairs(F_BUYBACK_1, &[0]));
+        set_store(&mut app, me, ObjectFields::from_pairs(&pairs));
+        app.update();
+        assert_eq!(heard(&mut app), 0, "the buyback seat emptying");
+    }
+
+    /// A bag equipped from the backpack brings its seats into view, and nothing in it arrives:
+    /// the arrival unlock is the item's create (`0x5d8300`), not a seat appearing.
+    #[test]
+    fn a_bag_moved_into_view_brings_no_arrival() {
+        let (mut app, me) = arrow_world();
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            BAG,
+            ours(
+                &[(F_CONTAINER_NUM_SLOTS, 4)]
+                    .into_iter()
+                    .chain(guid_pairs(F_CONTAINER_SLOT_1, &[C]))
+                    .collect::<Vec<_>>(),
+            ),
+            true,
+        );
+        crate::items::test_spawn_item(app.world_mut(), C, arrows(5), false);
+        set_store(&mut app, me, pack(&[A, BAG]));
+        app.update();
+        let _ = heard(&mut app); // the two creates' own unlocks
+        let mut pairs = guid_pairs(F_PACK_SLOT_1, &[A, 0]);
+        pairs.extend(guid_pairs(F_INV_SLOT_1 + 2 * 19, &[BAG]));
+        set_store(&mut app, me, ObjectFields::from_pairs(&pairs));
+        app.update();
+        assert_eq!(heard(&mut app), 1, "the backpack seat's unlock alone");
+    }
+
+    /// The arrival's walk skips the bank and the stack-count write's reaches it (`0x622420`
+    /// flags 0 and 8); both pass over a broken item and one flagged `0x10`.
+    #[test]
+    fn the_entry_walks_scope_and_skip_as_the_reference_does() {
+        use bevy::ecs::system::RunSystemOnce;
+        const BROKEN: u64 = 0x4000_0000_0000_0d01;
+        const FLAGGED: u64 = 0x4000_0000_0000_0d02;
+        let (mut app, me) = arrow_world();
+        for (guid, extra) in [
+            (B, vec![]),
+            (C, vec![]),
+            (
+                BROKEN,
+                vec![(F_ITEM_MAX_DURABILITY, 50), (F_ITEM_DURABILITY, 0)],
+            ),
+            (FLAGGED, vec![(21, 0x10)]),
+        ] {
+            let mut f = vec![(F_OBJECT_ENTRY, ARROWS), (F_ITEM_STACK_COUNT, 1)];
+            f.extend(extra);
+            crate::items::test_spawn_item(app.world_mut(), guid, ours(&f), false);
+        }
+        let mut pairs = guid_pairs(F_PACK_SLOT_1, &[A, BROKEN, FLAGGED]);
+        pairs.extend(guid_pairs(F_BANK_SLOT_1, &[B]));
+        pairs.extend(guid_pairs(F_INV_SLOT_1, &[C]));
+        set_store(&mut app, me, ObjectFields::from_pairs(&pairs));
+        let walks = app
+            .world_mut()
+            .run_system_once(
+                |q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
+                 objects: Objects| {
+                    let store = &q.single().unwrap().0;
+                    (
+                        kin(store, &objects, Walk::Arrival, ARROWS),
+                        kin(store, &objects, Walk::Stack, ARROWS),
+                    )
+                },
+            )
+            .unwrap();
+        assert_eq!(walks.0, [A, C], "no bank, nothing broken or flagged");
+        assert_eq!(walks.1, [A, B, C], "the bank too");
+    }
+
+    /// A closed window's source unlocks only while it resolves as a live item object
+    /// (`0x48f299`/`0x48f2ab`): a fully looted box, already destroyed, owes nothing.
+    #[test]
+    fn a_window_sources_unlock_needs_a_live_item() {
+        const GONE: u64 = 0x4000_0000_0000_0dea;
+        let (mut app, _) = arrow_world();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .lock_item(A);
+        let _ = heard(&mut app);
+        let mut loot = crate::ui_loot::LootState::default();
+        loot.unlock_item_source(GONE);
+        loot.unlock_item_source(A);
+        app.insert_resource(loot);
+        app.update();
+        assert_eq!(heard(&mut app), 1, "A's alone");
+        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
     }
 
     /// The loot window's owed unlocks run here, ahead of the feeds.

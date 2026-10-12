@@ -58,8 +58,8 @@ pub(crate) fn send_auto_equip(
     true
 }
 
-/// Sends the auto-equips `AutoEquipCursorItem` queued through [`send_auto_equip`]. It takes no
-/// pending lock, so the source slot does not dim while the equip is in flight.
+/// Sends the auto-equips `AutoEquipCursorItem` queued through [`send_auto_equip`]. The verb's
+/// clear kept the pickup's lock, an arrow's excepted (`0x5e1577`, `0x5e1711`).
 pub(super) fn drain_container_autoequips(
     script: Option<NonSendMut<UiScript>>,
     items: Res<Items>,
@@ -1959,8 +1959,9 @@ mod bind_confirm_tests {
         {
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.tick(0.01);
-            // The first place left the axe locked for its answer (`0x4c78c8`'s send kept it);
-            // the question's cancel would lift it (`0x5e1ca5`).
+            // The first place left the axe locked for its answer, the swap send's
+            // `ClearCursor(0,1)` keeping the pickup's lock (`0x5e0fe7`); the question's cancel
+            // would lift it (`0x5e1ca5`).
             s.unlock_item(AXE_GUID);
             s.run("PickupContainerItem(0, 1)").unwrap();
             s.run("PickupInventoryItem(16)").unwrap();

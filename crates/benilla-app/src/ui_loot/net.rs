@@ -582,7 +582,12 @@ mod tests {
             "…and it is B that gets released"
         );
         assert_eq!(
-            world.resource_mut::<LootState>().take_item_unlocks(),
+            world
+                .resource_mut::<LootState>()
+                .take_item_unlocks()
+                .into_iter()
+                .map(|(g, _)| g)
+                .collect::<Vec<_>>(),
             [CHEST],
             "and `UnlockItem` runs on B's guid, an item or not (`0x5eb9de`)"
         );
@@ -617,7 +622,12 @@ mod tests {
             )
             .expect("the handler runs as a one-shot system");
         assert_eq!(
-            world.resource_mut::<LootState>().take_item_unlocks(),
+            world
+                .resource_mut::<LootState>()
+                .take_item_unlocks()
+                .into_iter()
+                .map(|(g, _)| g)
+                .collect::<Vec<_>>(),
             [LOCKBOX, LOCKBOX]
         );
         // With no window left, a second release unlocks nothing (`0x48f23f`).
@@ -630,6 +640,9 @@ mod tests {
         assert!(world
             .resource_mut::<LootState>()
             .take_item_unlocks()
+            .into_iter()
+            .map(|(g, _)| g)
+            .collect::<Vec<_>>()
             .is_empty());
     }
 
@@ -644,7 +657,12 @@ mod tests {
             super::super::close_interaction(&mut loot, &mut latch, None),
             Some(CORPSE)
         );
-        assert!(loot.take_item_unlocks().is_empty());
+        assert!(loot
+            .take_item_unlocks()
+            .into_iter()
+            .map(|(g, _)| g)
+            .collect::<Vec<_>>()
+            .is_empty());
     }
 
     /// A window replacing one open on an item unlocks the old source once, the teardown's
@@ -654,14 +672,28 @@ mod tests {
         let mut loot = LootState::default();
         loot.open(LOCKBOX, 1, 0, Vec::new());
         assert!(
-            loot.take_item_unlocks().is_empty(),
+            loot.take_item_unlocks()
+                .into_iter()
+                .map(|(g, _)| g)
+                .collect::<Vec<_>>()
+                .is_empty(),
             "the first window replaces nothing"
         );
         loot.open(CORPSE, 1, 0, Vec::new());
-        assert_eq!(loot.take_item_unlocks(), [LOCKBOX]);
+        assert_eq!(
+            loot.take_item_unlocks()
+                .into_iter()
+                .map(|(g, _)| g)
+                .collect::<Vec<_>>(),
+            [LOCKBOX]
+        );
         loot.open(CHEST, 2, 0, Vec::new());
         assert!(
-            loot.take_item_unlocks().is_empty(),
+            loot.take_item_unlocks()
+                .into_iter()
+                .map(|(g, _)| g)
+                .collect::<Vec<_>>()
+                .is_empty(),
             "a corpse source owes nothing"
         );
     }
@@ -1340,6 +1372,9 @@ mod tests {
         assert!(world
             .resource_mut::<LootState>()
             .take_item_unlocks()
+            .into_iter()
+            .map(|(g, _)| g)
+            .collect::<Vec<_>>()
             .is_empty());
         // TOO_FAR (4) does.
         world
@@ -1352,7 +1387,12 @@ mod tests {
             )
             .expect("the handler runs as a one-shot system");
         assert_eq!(
-            world.resource_mut::<LootState>().take_item_unlocks(),
+            world
+                .resource_mut::<LootState>()
+                .take_item_unlocks()
+                .into_iter()
+                .map(|(g, _)| g)
+                .collect::<Vec<_>>(),
             [LOCKBOX]
         );
     }

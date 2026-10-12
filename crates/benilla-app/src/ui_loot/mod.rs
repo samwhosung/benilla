@@ -102,8 +102,9 @@ pub(crate) struct LootState {
     /// The wire `loot_type` (`0x4c2740`); a disenchant window with rows left survives movement.
     loot_type: u8,
     /// The `UnlockItem` (`0x495420`) calls the loot paths owe, run ahead of the inventory feeds
-    /// ([`crate::ui_items::locks::apply_item_releases`]); a window's clear keeps them.
-    item_unlocks: Vec<u64>,
+    /// ([`crate::ui_items::locks::apply_item_releases`]); a window's clear keeps them. The flag
+    /// marks a window source's, owed only while the guid resolves as a live item object.
+    item_unlocks: Vec<(u64, bool)>,
 }
 
 /// The client's candidate array: 40 slots at `0xc4dc38`, bound-checked by the getter `0x61c660`.
@@ -128,8 +129,8 @@ impl LootState {
     pub(crate) fn open(&mut self, source: u64, loot_type: u8, gold: u32, items: Vec<LootItem>) {
         // The frame's teardown of the window it replaces unlocks an item source (`0x5ebc35` →
         // `0x48f3a0` → `0x4c1d36`).
-        if let Some(old) = self.source.filter(|&g| benilla_protocol::guid::is_item(g)) {
-            self.unlock_item(old);
+        if let Some(old) = self.source {
+            self.unlock_item_source(old);
         }
         self.source = Some(source);
         self.gold = gold;
@@ -216,7 +217,16 @@ impl LootState {
     /// names an item we hold (`0x495450`); a zero guid owes nothing (`0x49542d`).
     pub(crate) fn unlock_item(&mut self, guid: u64) {
         if guid != 0 {
-            self.item_unlocks.push(guid);
+            self.item_unlocks.push((guid, false));
+        }
+    }
+
+    /// Owe the window teardown's `UnlockItem` on its source, which runs only when the source
+    /// resolves as a live item object (`0x48f299`/`0x48f2ab`, `0x4c1cdf`/`0x4c1d23`): checked
+    /// where the unlocks run, against the objects.
+    pub(crate) fn unlock_item_source(&mut self, guid: u64) {
+        if benilla_protocol::guid::is_item(guid) {
+            self.item_unlocks.push((guid, true));
         }
     }
 
@@ -225,8 +235,8 @@ impl LootState {
         !self.item_unlocks.is_empty()
     }
 
-    /// The owed unlocks, in order.
-    pub(crate) fn take_item_unlocks(&mut self) -> Vec<u64> {
+    /// The owed unlocks, in order, each flagged when it needs a live item object.
+    pub(crate) fn take_item_unlocks(&mut self) -> Vec<(u64, bool)> {
         std::mem::take(&mut self.item_unlocks)
     }
 
@@ -843,10 +853,8 @@ pub(crate) fn close_interaction(
     // An item source unlocks twice, each with its `ITEM_LOCK_CHANGED`: the close's own
     // `UnlockItem` (`0x48f2bd`), then the frame teardown's (`0x4c1d36`). A move-start close, the
     // one with `dl` set, returns before both and never reaches here with an item.
-    if benilla_protocol::guid::is_item(source) {
-        loot.unlock_item(source);
-        loot.unlock_item(source);
-    }
+    loot.unlock_item_source(source);
+    loot.unlock_item_source(source);
     loot.clear();
     Some(source)
 }

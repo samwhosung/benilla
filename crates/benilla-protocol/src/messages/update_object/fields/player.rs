@@ -8,6 +8,15 @@ impl ObjectFields {
     pub fn object_entry(&self) -> Option<u32> {
         self.get_u32(3)
     }
+    /// `ITEM_FIELD_OWNER` (field 6): the item's owner, which the client's lock watchers compare
+    /// with the active player.
+    pub fn item_owner(&self) -> Option<u64> {
+        self.get_guid(6)
+    }
+    /// `OBJECT_FIELD_TYPE & TYPEMASK_ITEM`: an item, a bag included.
+    pub fn is_item(&self) -> bool {
+        self.get_u32(FIELD_OBJECT_TYPE).unwrap_or(0) & 0x2 != 0
+    }
     /// `ITEM_FIELD_STACK_COUNT`: an item object's stack size.
     pub fn item_stack_count(&self) -> Option<u32> {
         self.get_u32(FIELD_ITEM_STACK_COUNT)
