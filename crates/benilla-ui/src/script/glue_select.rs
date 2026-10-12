@@ -381,7 +381,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `0x473670`: one number or `Usage: SetCharacterSelectFacing(degrees)` (`0x838814`), times
-    // 0.017453292 and stored as a float, with no wrap or clamp, once a model has been built.
+    // 0.017453292 and stored as a float, with no wrap or clamp, once a model has been built. It
+    // returns one value (`0x4736ae`, `mov eax,1`) with nothing pushed since the arguments, so the
+    // value is the top of the stack: the last argument, the degrees as the caller wrote them.
     g.set(
         "SetCharacterSelectFacing",
         lua.create_function(|lua, args: MultiValue| {
@@ -395,7 +397,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let radians = (degrees * f64::from(DEG_TO_RAD)) as f32;
             model(lua).glue.roster.set_facing(radians);
-            Ok(())
+            Ok(args.back().cloned().unwrap_or(Value::Nil))
         })?,
     )?;
     Ok(())
@@ -604,6 +606,16 @@ mod tests {
         s.run("SetCharacterSelectFacing(90)").unwrap();
         let got = facing(&s);
         assert!((got - 90.0).abs() < 1e-4, "{got}");
+        // One value back, the argument itself, as the caller wrote it (`0x4736ae`).
+        assert_eq!(
+            s.eval::<(f64, String, f64)>(
+                "local n = function(...) return arg.n end \
+                 return n(SetCharacterSelectFacing(5)), SetCharacterSelectFacing('45'), \
+                 SetCharacterSelectFacing(1, 7)"
+            )
+            .unwrap(),
+            (1.0, "45".to_string(), 7.0)
+        );
         // No wrap or clamp.
         s.run("SetCharacterSelectFacing(-725.5)").unwrap();
         let got = facing(&s);
