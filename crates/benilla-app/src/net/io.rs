@@ -866,7 +866,7 @@ fn world(
         let tutorial_flags = session.take_tutorial_flags();
         // `SMSG_ADDON_INFO` carries no names, so it is paired back against the block we sent. No
         // reply means no AddOn index space at all, carried as `None`.
-        let statuses = session.take_addon_info();
+        let statuses = session.addon_info().map(<[u8]>::to_vec);
         let addon_info = statuses.as_deref().map(|statuses| {
             benilla_protocol::messages::hidden_from_reply(
                 statuses,

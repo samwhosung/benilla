@@ -149,6 +149,11 @@ impl HeaderCrypto {
         (self.encrypt, self.decrypt)
     }
 
+    /// The halves [`Self::split`] made, joined again with the state each direction reached.
+    pub fn join(encrypt: EncrypterHalf, decrypt: DecrypterHalf) -> Self {
+        Self { encrypt, decrypt }
+    }
+
     /// The cipher from a session key alone, skipping the proof: a server's [`EncrypterHalf`] is
     /// what a client's [`DecrypterHalf`] inverts, so a fake world server speaks real headers.
     pub fn from_session_key(session_key: [u8; SESSION_KEY_LENGTH]) -> Self {

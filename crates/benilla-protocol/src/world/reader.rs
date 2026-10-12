@@ -8,10 +8,13 @@ use crate::messages::{self, ServerPacket};
 
 use super::recv_packet;
 
-/// The read half of a split [`WorldSession`](super::WorldSession): cloned socket and decrypter.
+/// The read half of a split [`WorldSession`](super::WorldSession): cloned socket and decrypter,
+/// and what the connection learned before the split, for
+/// [`WorldSession::rejoin`](super::WorldSession::rejoin).
 pub struct WorldReader {
     pub(super) stream: TcpStream,
     pub(super) decrypter: DecrypterHalf,
+    pub(super) link: super::session::LinkFacts,
 }
 
 impl WorldReader {

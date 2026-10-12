@@ -147,3 +147,97 @@ fn sends_before_the_split_are_observed_in_order() {
     assert_eq!(mine[1].1, messages::full_guid(0x2a));
     assert!(mine[2].1.is_empty());
 }
+
+/// Read one client packet as the server sees it, header decrypted: its opcode.
+fn read_client(stream: &mut TcpStream, crypto: &mut HeaderCrypto) -> Option<u16> {
+    let mut header = [0u8; 6];
+    stream.read_exact(&mut header).ok()?;
+    crypto.decrypter().decrypt(&mut header);
+    let size = u16::from_be_bytes([header[0], header[1]]) as usize;
+    let mut body = vec![0u8; size - 4];
+    stream.read_exact(&mut body).ok()?;
+    Some(u16::from_le_bytes([header[2], header[3]]))
+}
+
+/// A session split for the world and joined again after the logout is the same connection: the
+/// header cipher goes on from where each direction stood, so the next `CMSG_CHAR_ENUM` is read and
+/// answered on it, and the `SMSG_ADDON_INFO` the connection got once still stands for the next
+/// login (vmangos sends it only after the authentication, `WorldSocket.cpp:446-448`).
+#[test]
+fn a_rejoined_session_goes_on_on_the_same_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        send(
+            &mut stream,
+            None,
+            opcode::SMSG_AUTH_CHALLENGE,
+            &SERVER_SEED.to_le_bytes(),
+        );
+        read_auth_session(&mut stream);
+        let mut crypto = HeaderCrypto::from_session_key(SESSION_KEY);
+        send(
+            &mut stream,
+            Some(&mut crypto),
+            opcode::SMSG_AUTH_RESPONSE,
+            &[messages::AUTH_OK],
+        );
+        // One record, status 2, nothing provided.
+        send(
+            &mut stream,
+            Some(&mut crypto),
+            opcode::SMSG_ADDON_INFO,
+            &[2, 0, 0],
+        );
+        let mut seen = Vec::new();
+        while let Some(op) = read_client(&mut stream, &mut crypto) {
+            seen.push(op);
+            match op {
+                opcode::CMSG_CHAR_ENUM => {
+                    send(&mut stream, Some(&mut crypto), opcode::SMSG_CHAR_ENUM, &[0])
+                }
+                opcode::CMSG_LOGOUT_REQUEST => send(
+                    &mut stream,
+                    Some(&mut crypto),
+                    opcode::SMSG_LOGOUT_COMPLETE,
+                    &[],
+                ),
+                _ => {}
+            }
+        }
+        seen
+    });
+
+    let mut session = WorldSession::connect(&addr, "one", SESSION_KEY).unwrap();
+    assert!(session.char_enum().unwrap().is_empty());
+    assert_eq!(session.addon_info(), Some(&[2u8][..]));
+    session.player_login(0x2a).unwrap();
+    let (mut reader, mut writer) = session.into_split().unwrap();
+    writer.logout_request().unwrap();
+    assert!(matches!(
+        reader.recv().unwrap(),
+        messages::ServerPacket::LogoutComplete
+    ));
+
+    let mut session = WorldSession::rejoin(reader, writer).unwrap();
+    assert!(
+        session.char_enum().unwrap().is_empty(),
+        "the roster is asked and answered on the joined session"
+    );
+    assert_eq!(
+        session.addon_info(),
+        Some(&[2u8][..]),
+        "the connection's add-on statuses stand for the next login"
+    );
+    drop(session);
+    assert_eq!(
+        server.join().unwrap(),
+        [
+            opcode::CMSG_CHAR_ENUM,
+            opcode::CMSG_PLAYER_LOGIN,
+            opcode::CMSG_LOGOUT_REQUEST,
+            opcode::CMSG_CHAR_ENUM
+        ]
+    );
+}
