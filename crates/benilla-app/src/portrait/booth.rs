@@ -386,6 +386,11 @@ pub(super) enum BoothMotion {
     Loop,
 }
 
+/// Marks one of a bake's own batches, a direct child of the booth root, so a re-dress
+/// ([`redress_booth_batches`]) tells them from the rig's anchors.
+#[derive(Component)]
+pub(super) struct BoothBatch;
+
 /// Spawns a booth bake under `root`: a fresh throwaway instance posed at Stand (the reference's
 /// instance `0x707400`, pose `0x7121a0`), never the unit's live pose.
 ///
@@ -419,37 +424,9 @@ pub(super) fn spawn_booth_model(
     // A re-bake must not inherit the previous model's animation state, pose buffer or palette slot.
     clear_booth_rig(commands, root);
     let Some((skeleton, ibp, anims)) = rig.filter(|(s, _, _)| !s.joints.is_empty()) else {
+        // No palette slot: every part draws its static twin at bind pose.
         for p in parts {
-            let mut child = commands.spawn((
-                Mesh3d(p.static_mesh.clone()),
-                MeshMaterial3d(instance.material(&p.material, &p.twins)),
-                Transform::IDENTITY,
-                layer.clone(),
-                ChildOf(root),
-            ));
-            mark_mat_anim(&mut child, p);
-            // The batch's material alpha times the instance alpha, the reference's
-            // `model+0x180 × the batch factor` (`0x707680`).
-            if let Some(anim) = &p.alpha_anim {
-                let mat_anim =
-                    benilla_world::doodad_anim::MatAnim::driving_tag(anim.clone(), 0.0, None);
-                child.insert((
-                    bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
-                        0,
-                        mat_anim.current * instance.alpha,
-                    )),
-                    mat_anim,
-                    BoothMatAlpha,
-                ));
-            } else if instance.feathering() {
-                child.insert(bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
-                    0,
-                    instance.alpha,
-                )));
-            }
-            if let Some(fm) = instance.fade_materials(&p.material, &p.twins) {
-                child.insert(fm);
-            }
+            spawn_batch(commands, root, &layer, p, 0, instance);
         }
         return BoothRig {
             root,
@@ -509,59 +486,134 @@ pub(super) fn spawn_booth_model(
         }
     }
     for p in parts {
-        let use_rig = p.skinned.is_some() && rig_slot != 0;
-        let mesh = if use_rig {
-            p.skinned.clone().expect("use_rig ⇒ skinned twin present")
-        } else {
-            p.static_mesh.clone()
-        };
-        let mut child = commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(instance.material(&p.material, &p.twins)),
-            Transform::IDENTITY,
-            layer.clone(),
-            ChildOf(root),
-        ));
-        mark_mat_anim(&mut child, p);
-        // The material alpha drives the tag's alpha field itself (nothing else writes a booth
-        // part's alpha) beside the rig slot. `alpha_bits` floors a true zero just above 0, so the
-        // shader's all-zero "untagged, opaque" sentinel cannot fire on an invisible batch.
-        let tag_slot = if use_rig { rig_slot } else { 0 };
-        if let Some(anim) = &p.alpha_anim {
-            let mat_anim =
-                benilla_world::doodad_anim::MatAnim::driving_tag(anim.clone(), 0.0, None);
-            child.insert((
-                bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
-                    tag_slot,
-                    mat_anim.current * instance.alpha,
-                )),
-                mat_anim,
-                BoothMatAlpha,
-            ));
-        } else if use_rig || instance.feathering() {
-            child.insert(bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
-                tag_slot,
-                instance.alpha,
-            )));
-        }
-        // While translucent, `benilla_world::zfill` keeps a colour-masked z-writing child on it, so
-        // overlapping limbs blend as one layer (the reference's `M2UseZFill`).
-        if let Some(fm) = instance.fade_materials(&p.material, &p.twins) {
-            child.insert(fm);
-        }
-        if use_rig {
-            child.insert(benilla_world::rig_palette::RigPart(root));
-            // A skinned booth part is never frustum-culled: Bevy's bound is the bind-pose box, the
-            // camera frames the Stand pose, and on a model whose rest pose is far from Stand
-            // (`Creature\CarrionBird`, bind z to 1.19, Stand z 0.54 to 6.23) every batch culls.
-            child.insert(bevy::camera::visibility::NoFrustumCulling);
-        }
+        spawn_batch(commands, root, &layer, p, rig_slot, instance);
     }
     let mut booth_rig = BoothRig {
         root,
         rig: Some(pose),
         slot: rig_slot,
     };
+    hang_attachments(
+        commands,
+        &mut booth_rig,
+        &layer,
+        riders,
+        billboards,
+        instance,
+    );
+    // The player is configured before insertion, so the pose lands with the first animation pass;
+    // `ModelAnimations` goes beside it because the rig evaluator reads the player through it.
+    if let Some(anims) = anims {
+        let stand = catalog.map_or(0, |c| anims.resolve(0, c).id);
+        if let Some(clip) = anims.find(stand) {
+            let mut player = AnimationPlayer::default();
+            match motion {
+                BoothMotion::Frozen => {
+                    player.play(clip.node).pause();
+                }
+                BoothMotion::Loop => {
+                    player.play(clip.node).repeat();
+                }
+            }
+            set_grip(&mut player, anims.hand_close, grip);
+            commands.entity(root).insert((
+                player,
+                AnimationGraphHandle(anims.graph.clone()),
+                anims.clone(),
+            ));
+        }
+    }
+    booth_rig
+}
+
+/// The mesh a batch draws against palette slot `rig_slot`: its skinned twin when it skins there,
+/// else its static one (slot 0 is no rig).
+fn batch_mesh(p: &BoothPart, rig_slot: u16) -> &Handle<Mesh> {
+    match &p.skinned {
+        Some(skinned) if rig_slot != 0 => skinned,
+        _ => &p.static_mesh,
+    }
+}
+
+/// Spawns one batch under `root`, skinned against `rig_slot` when it has a skinned twin.
+fn spawn_batch(
+    commands: &mut Commands,
+    root: Entity,
+    layer: &RenderLayers,
+    p: &BoothPart,
+    rig_slot: u16,
+    instance: BoothInstance,
+) -> Entity {
+    let use_rig = p.skinned.is_some() && rig_slot != 0;
+    let mut child = commands.spawn((
+        Mesh3d(batch_mesh(p, rig_slot).clone()),
+        Transform::IDENTITY,
+        layer.clone(),
+        ChildOf(root),
+        BoothBatch,
+    ));
+    dress_batch(&mut child, p, rig_slot, instance);
+    if use_rig {
+        child.insert(benilla_world::rig_palette::RigPart(root));
+        // A skinned booth part is never frustum-culled: Bevy's bound is the bind-pose box, the
+        // camera frames the Stand pose, and on a model whose rest pose is far from Stand
+        // (`Creature\CarrionBird`, bind z to 1.19, Stand z 0.54 to 6.23) every batch culls.
+        child.insert(bevy::camera::visibility::NoFrustumCulling);
+    }
+    child.id()
+}
+
+/// A batch's dressing: its material, its tag (the palette slot beside the instance alpha, or the
+/// material alpha that drives it) and its depth-prime record.
+fn dress_batch(
+    child: &mut bevy::ecs::system::EntityCommands<'_>,
+    p: &BoothPart,
+    rig_slot: u16,
+    instance: BoothInstance,
+) {
+    child.insert(MeshMaterial3d(instance.material(&p.material, &p.twins)));
+    mark_mat_anim(child, p);
+    // The material alpha drives the tag's alpha field itself (nothing else writes a booth part's
+    // alpha) beside the rig slot. `alpha_bits` floors a true zero just above 0, so the shader's
+    // all-zero "untagged, opaque" sentinel cannot fire on an invisible batch.
+    let use_rig = p.skinned.is_some() && rig_slot != 0;
+    let tag_slot = if use_rig { rig_slot } else { 0 };
+    if let Some(anim) = &p.alpha_anim {
+        // The batch's material alpha times the instance alpha, the reference's
+        // `model+0x180 × the batch factor` (`0x707680`).
+        let mat_anim = benilla_world::doodad_anim::MatAnim::driving_tag(anim.clone(), 0.0, None);
+        child.insert((
+            bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
+                tag_slot,
+                mat_anim.current * instance.alpha,
+            )),
+            mat_anim,
+            BoothMatAlpha,
+        ));
+    } else if use_rig || instance.feathering() {
+        child.insert(bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
+            tag_slot,
+            instance.alpha,
+        )));
+    }
+    // While translucent, `benilla_world::zfill` keeps a colour-masked z-writing child on it, so
+    // overlapping limbs blend as one layer (the reference's `M2UseZFill`).
+    if let Some(fm) = instance.fade_materials(&p.material, &p.twins) {
+        child.insert(fm);
+    }
+}
+
+/// Seats the riders on their bones' anchors and the camera-facing cards under theirs; a bone the
+/// rig lacks drops its rider or card.
+fn hang_attachments(
+    commands: &mut Commands,
+    booth_rig: &mut BoothRig,
+    layer: &RenderLayers,
+    riders: &[BoothRider],
+    billboards: &[BoothBillboardSpec],
+    instance: BoothInstance,
+) {
+    let rig_slot = booth_rig.slot;
     for r in riders {
         let Some(anchor) = booth_rig.anchor(commands, r.bone) else {
             continue; // bad bone index: bake the body without this rider
@@ -585,8 +637,7 @@ pub(super) fn spawn_booth_model(
             child.insert(fm);
         }
     }
-    // Camera-facing batches seat under their bone's anchor for `face_booth_billboards` to face;
-    // a bone the rig lacks drops the card, like a rider.
+    // Camera-facing batches seat under their bone's anchor for `face_booth_billboards` to face.
     for bb in billboards {
         let Some(anchor) = booth_rig.anchor(commands, bb.bone) else {
             continue;
@@ -609,37 +660,113 @@ pub(super) fn spawn_booth_model(
             card.insert(fm);
         }
     }
-    // The player is configured before insertion, so the pose lands with the first animation pass;
-    // `ModelAnimations` goes beside it because the rig evaluator reads the player through it.
-    if let Some(anims) = anims {
-        let stand = catalog.map_or(0, |c| anims.resolve(0, c).id);
-        if let Some(clip) = anims.find(stand) {
-            let mut player = AnimationPlayer::default();
-            match motion {
-                BoothMotion::Frozen => {
-                    player.play(clip.node).pause();
-                }
-                BoothMotion::Loop => {
-                    player.play(clip.node).repeat();
-                }
+}
+
+/// Re-dresses the instance standing on `root` without replacing it, as the reference's setters
+/// act on one `CharacterModel`: the skin setter `0x478790` rebinds its textures and raises the
+/// dirty byte `[cm+8]`, and the class re-dress `0x470800` re-equips the same model. The root keeps
+/// its player, global sequences and palette slot `rig_slot`, so its clock runs on. A batch whose
+/// mesh is still worn keeps its entity and takes its new dressing; the others spawn or go, as a
+/// geoset toggles. `standing` is the root's [`BoothBatch`] children by the mesh each draws.
+///
+/// Opaque instances only: a feathering batch's depth-prime twin belongs to the zfill lane, which
+/// does not reap it when the record goes.
+pub(super) fn redress_booth_batches(
+    commands: &mut Commands,
+    root: Entity,
+    layer: &RenderLayers,
+    parts: &[BoothPart],
+    standing: &[(Entity, AssetId<Mesh>)],
+    rig_slot: u16,
+    instance: BoothInstance,
+) {
+    debug_assert!(
+        !instance.feathering(),
+        "a re-dress keeps opaque batches only"
+    );
+    let mut free: Vec<Option<(Entity, AssetId<Mesh>)>> =
+        standing.iter().copied().map(Some).collect();
+    for p in parts {
+        let want = batch_mesh(p, rig_slot).id();
+        let kept = free
+            .iter_mut()
+            .find(|s| s.is_some_and(|(_, mesh)| mesh == want))
+            .and_then(Option::take);
+        match kept {
+            Some((batch, _)) => {
+                let mut child = commands.entity(batch);
+                // Strip the old dressing; `Visibility` too, which the material-alpha writer owns.
+                child
+                    .remove::<(
+                        bevy::mesh::MeshTag,
+                        benilla_world::doodad_anim::MatAnim,
+                        BoothMatAlpha,
+                        benilla_world::doodad_anim::AnimMatPart,
+                    )>()
+                    .insert(Visibility::Inherited);
+                dress_batch(&mut child, p, rig_slot, instance);
             }
-            // A weapon hand plays its `HandsClosed` finger overlay over Stand, repeated because it
-            // is a one-key clamp pose; armed once, since a bake's grip never changes.
-            for (hand, want) in grip.into_iter().enumerate() {
-                if let (true, Some(node)) = (want, anims.hand_close[hand]) {
-                    let active = player.play(node);
-                    active.repeat();
-                    active.set_weight(crate::creature_anim::HAND_GRIP_WEIGHT);
-                }
+            None => {
+                spawn_batch(commands, root, layer, p, rig_slot, instance);
             }
-            commands.entity(root).insert((
-                player,
-                AnimationGraphHandle(anims.graph.clone()),
-                anims.clone(),
-            ));
         }
     }
-    booth_rig
+    for (batch, _) in free.into_iter().flatten() {
+        commands.entity(batch).despawn();
+    }
+}
+
+impl BoothRig {
+    /// A fresh bind-pose buffer for the instance standing on `root`, on its palette slot `slot`:
+    /// a re-dress re-hangs its attachments on new anchors ([`Self::hang`]), and the pose
+    /// evaluator re-poses it from the root's player before it draws.
+    pub(super) fn rehang(
+        root: Entity,
+        skeleton: &benilla_assets::ModelSkeleton,
+        slot: u16,
+    ) -> Self {
+        Self {
+            root,
+            rig: Some(
+                benilla_world::rig_anim::RigPose::new(root, skeleton).without_camera_billboards(),
+            ),
+            slot,
+        }
+    }
+
+    /// Seats `riders` and `billboards` on this rig ([`hang_attachments`]).
+    pub(super) fn hang(
+        &mut self,
+        commands: &mut Commands,
+        layer: &RenderLayers,
+        riders: &[BoothRider],
+        billboards: &[BoothBillboardSpec],
+        instance: BoothInstance,
+    ) {
+        hang_attachments(commands, self, layer, riders, billboards, instance);
+    }
+}
+
+/// Closes each hand whose attach point holds a weapon (`CloseHand` `0x479660`) and opens the
+/// other, as an unequip's detach does (`0x47a380`): the `HandsClosed` finger overlay over Stand,
+/// repeated because it is a one-key clamp pose.
+pub(super) fn set_grip(
+    player: &mut AnimationPlayer,
+    hand_close: [Option<bevy::animation::graph::AnimationNodeIndex>; 2],
+    grip: [bool; 2],
+) {
+    for (hand, want) in grip.into_iter().enumerate() {
+        let Some(node) = hand_close[hand] else {
+            continue;
+        };
+        if !want {
+            player.stop(node);
+        } else if player.animation(node).is_none() {
+            let active = player.play(node);
+            active.repeat();
+            active.set_weight(crate::creature_anim::HAND_GRIP_WEIGHT);
+        }
+    }
 }
 
 /// The ids `PlayerModel:SetRotation` chooses between, from the reference's name table

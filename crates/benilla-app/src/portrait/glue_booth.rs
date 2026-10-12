@@ -15,6 +15,7 @@ use crate::entities::Creatures;
 use benilla_assets::m2_url;
 use benilla_assets::materials::WowModelMaterial;
 
+use super::booth::{redress_booth_batches, set_grip, BoothBatch, BoothRig};
 use super::framing::{
     attachment_point, diag_to_vert, glue_box_aspect, glue_box_physical, glue_scene_framing,
     stock_pane_view, ArtExtent, GLUE_AUTHORED_ASPECT, PORTRAIT_ASPECT,
@@ -1153,8 +1154,75 @@ fn resize_target(images: &mut Assets<Image>, target: &Handle<Image>, w: u32, h: 
     );
 }
 
+/// What [`sync_glue_booth`] keeps between frames.
+#[derive(Default)]
+pub(super) struct GlueStanding {
+    /// The bake revision, yaw and scene revision last committed.
+    last: Option<(u64, f32, u64)>,
+    /// The create character standing as one instance a re-dress keeps: its body display and its
+    /// attachments as hung. `None` for a select record, an empty stage or a boneless bake.
+    create: Option<(u32, Hung)>,
+}
+
+/// The attachments a bake hung, by what each draws and where: a re-dress re-hangs them only when
+/// this changes, so a customization leaves the worn items' models and emitters running, as the
+/// reference's setters touch only the body (`0x478790`), while a class's new outfit re-hangs them
+/// (`0x470800`'s unequip `0x478960` and equip `0x479010`).
+#[derive(PartialEq)]
+struct Hung {
+    riders: Vec<HungSeat>,
+    cards: Vec<(HungSeat, benilla_formats::BillboardKind)>,
+    /// Each effect model by its seat and emitter count; its geometry is among the riders.
+    effects: Vec<(u16, [u32; 3], usize)>,
+    /// The light buffer the effects bind ([`super::booth::spawn_booth_effects`]).
+    light: Option<bevy::render::render_resource::BufferId>,
+}
+
+/// One hung model: its mesh, its material, its bone and its offset's bits.
+type HungSeat = (AssetId<Mesh>, AssetId<WowModelMaterial>, u16, [u32; 3]);
+
+impl Hung {
+    fn of(
+        riders: &[BoothRider],
+        cards: &[BoothBillboardSpec],
+        effects: &[BoothEffects],
+        light: Option<&bevy::render::render_resource::Buffer>,
+    ) -> Self {
+        let at = |v: Vec3| v.to_array().map(f32::to_bits);
+        Hung {
+            riders: riders
+                .iter()
+                .map(|r| (r.mesh.id(), r.material.id(), r.bone, at(r.offset)))
+                .collect(),
+            cards: cards
+                .iter()
+                .map(|c| ((c.mesh.id(), c.material.id(), c.bone, at(c.offset)), c.kind))
+                .collect(),
+            effects: effects
+                .iter()
+                .map(|e| (e.bone, at(e.offset), e.emitters.len()))
+                .collect(),
+            light: light.map(|b| b.id()),
+        }
+    }
+}
+
+/// The standing instance's rig on the booth root, which a re-dress keeps ([`sync_glue_booth`]):
+/// its palette slot, its children, and whether its player stands. The player is reached through
+/// commands, so this system shares no access with the world's animation systems.
+type StandingRig<'a> = (
+    &'a benilla_world::rig_palette::RigSkin,
+    Option<&'a Children>,
+    Has<AnimationPlayer>,
+);
+
 /// Re-bake the glue booth when the parts or the scene's rig change, relit onto the scene's rig
 /// (the reference's glue character is scene-lit) or the studio buffer, and spin it to the yaw.
+///
+/// The create character is one model across its customizations and class re-dresses, which
+/// update it in place (`0x478790` and kin, `0x470800`); only the race and sex builder `0x470b70`
+/// makes a new one. So a create bake on the standing body display re-dresses the standing
+/// instance ([`redress_booth_batches`]) and its clock runs on; anything else spawns afresh.
 pub(super) fn sync_glue_booth(
     mut commands: Commands,
     preview: Res<GluePreview>,
@@ -1169,7 +1237,9 @@ pub(super) fn sync_glue_booth(
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
     // The ghost's whole-model tint, the reference's `cc+0x184..0x18c`.
     mut tints: ResMut<benilla_world::instance_tint::InstanceTints>,
-    mut last: Local<Option<(u64, f32, u64)>>,
+    standing_rigs: Query<StandingRig>,
+    batches: Query<&Mesh3d, With<BoothBatch>>,
+    mut state: Local<GlueStanding>,
 ) {
     let Some(booth) = booths.0.get_mut(GLUE_SLOT) else {
         return;
@@ -1184,7 +1254,7 @@ pub(super) fn sync_glue_booth(
                     (Vec3::ZERO, Quat::IDENTITY, 1.0, s.rev)
                 }
             });
-    let (last_rev, last_yaw, last_scene) = last.unwrap_or((u64::MAX, f32::NAN, u64::MAX));
+    let (last_rev, last_yaw, last_scene) = state.last.unwrap_or((u64::MAX, f32::NAN, u64::MAX));
     // `sync_glue_scene` runs first and commits a stage only beside its character, so a standing
     // stage matching the request means this bake may show ([`PendingSwap`]).
     let staged = scene
@@ -1204,7 +1274,8 @@ pub(super) fn sync_glue_booth(
             super::clear_booth_rig(&mut commands, booth.root);
             booth.rigged = false;
             booth.parked = false;
-            *last = Some((bake.revision, preview.yaw, scene_rev));
+            state.last = Some((bake.revision, preview.yaw, scene_rev));
+            state.create = None;
             apply_yaw(
                 &mut commands,
                 booth.root,
@@ -1303,73 +1374,145 @@ pub(super) fn sync_glue_booth(
                 twins: relight_twins(&b.twins, &mut scene, &mut booth_light, &mut materials),
             })
             .collect();
-        // `WOW_BOOTH_LOG=1`: which display was baked, and whether the look or the scene rig
-        // triggered it.
+        let booth_effects: Vec<BoothEffects> = bake
+            .effects
+            .iter()
+            .map(|fx| BoothEffects {
+                bone: fx.bone,
+                offset: fx.offset,
+                emitters: fx.emitters.clone(),
+            })
+            .collect();
+        let hung = Hung::of(
+            &booth_riders,
+            &booth_billboards,
+            &booth_effects,
+            scene_buf.as_ref(),
+        );
+        // The standing create body, kept when this bake wears the same display ([`GlueStanding`]).
+        let create = matches!(bake.look, Some(GlueLook::Create(_)));
+        let keep = create
+            && !instance.feathering()
+            && state
+                .create
+                .as_ref()
+                .is_some_and(|(display, _)| *display == bake.display_id);
+        let standing = if keep {
+            standing_rigs
+                .get(booth.root)
+                .ok()
+                .filter(|(_, _, player)| *player)
+        } else {
+            None
+        };
+        // `WOW_BOOTH_LOG=1`: which display was baked, whether the look or the scene rig
+        // triggered it, and whether the standing instance was kept.
         if super::booth_log() {
             println!(
-                "[booth] glue rebake display={} parts={} riders={} bake_rev={} scene_rev={scene_rev} by={}",
+                "[booth] glue rebake display={} parts={} riders={} bake_rev={} scene_rev={scene_rev} by={} {}",
                 bake.display_id,
                 bake.parts.len(),
                 bake.riders.len(),
                 bake.revision,
                 if last_rev != bake.revision { "look" } else { "scene" },
+                if standing.is_some() { "redress" } else { "fresh" },
             );
         }
-        commands.entity(booth.root).despawn_related::<Children>();
-        let mut booth_rig = spawn_booth_model(
-            &mut commands,
-            &mut palettes,
-            booth.root,
-            booth.layer.clone(),
-            &booth_parts,
-            &booth_riders,
-            rig.inverse_bindposes
-                .as_ref()
-                .map(|ibp| (rig.skeleton, ibp, rig.animations)),
-            anim_data.as_deref().map(|a| &a.0),
-            BoothMotion::Loop, // the glue preview is a live scene, not a still
-            bake.grip,         // close each hand that holds a weapon
-            &booth_billboards,
-            instance,
-        );
+        let slot = match standing {
+            Some((skin, children, _)) => {
+                let slot = skin.slot;
+                let kids: Vec<Entity> = children.map(|c| c.to_vec()).unwrap_or_default();
+                let worn: Vec<(Entity, AssetId<Mesh>)> = kids
+                    .iter()
+                    .filter_map(|&c| batches.get(c).ok().map(|m| (c, m.0.id())))
+                    .collect();
+                redress_booth_batches(
+                    &mut commands,
+                    booth.root,
+                    &booth.layer,
+                    &booth_parts,
+                    &worn,
+                    slot,
+                    instance,
+                );
+                if state.create.as_ref().is_none_or(|(_, was)| *was != hung) {
+                    // The outfit changed: the old items come off with their anchors, and the new
+                    // ones hang on a fresh pose buffer the root's player re-poses before it draws.
+                    for c in kids.iter().filter(|c| !worn.iter().any(|(w, _)| w == *c)) {
+                        commands.entity(*c).despawn();
+                    }
+                    let mut booth_rig = BoothRig::rehang(booth.root, rig.skeleton, slot);
+                    booth_rig.hang(
+                        &mut commands,
+                        &booth.layer,
+                        &booth_riders,
+                        &booth_billboards,
+                        instance,
+                    );
+                    spawn_glue_effects(
+                        &mut commands,
+                        &mut booth_rig,
+                        &booth.layer,
+                        scene_buf.as_ref(),
+                        &booth_effects,
+                        instance,
+                    );
+                    booth_rig.finish(&mut commands);
+                }
+                // A class's weapons close or open its hands on the same model (`0x479660`).
+                if let Some(hands) = rig.animations.map(|a| a.hand_close) {
+                    let grip = bake.grip;
+                    commands
+                        .entity(booth.root)
+                        .entry::<AnimationPlayer>()
+                        .and_modify(move |mut player| set_grip(&mut player, hands, grip));
+                }
+                slot
+            }
+            None => {
+                commands.entity(booth.root).despawn_related::<Children>();
+                let mut booth_rig = spawn_booth_model(
+                    &mut commands,
+                    &mut palettes,
+                    booth.root,
+                    booth.layer.clone(),
+                    &booth_parts,
+                    &booth_riders,
+                    rig.inverse_bindposes
+                        .as_ref()
+                        .map(|ibp| (rig.skeleton, ibp, rig.animations)),
+                    anim_data.as_deref().map(|a| &a.0),
+                    BoothMotion::Loop, // the glue preview is a live scene, not a still
+                    bake.grip,         // close each hand that holds a weapon
+                    &booth_billboards,
+                    instance,
+                );
+                spawn_glue_effects(
+                    &mut commands,
+                    &mut booth_rig,
+                    &booth.layer,
+                    scene_buf.as_ref(),
+                    &booth_effects,
+                    instance,
+                );
+                // A fresh bake is animated by construction; the park state is the new rig's.
+                booth.rigged = booth_rig.rigged();
+                let slot = booth_rig.slot();
+                booth_rig.finish(&mut commands);
+                booth.parked = false;
+                slot
+            }
+        };
         // The whole-model tint ([`GhostKit::tint`], the reference's `0x472939` → `0x710cf0`),
         // per rig slot, identity when living so a ghost's colour never carries over.
         tints.set(
-            booth_rig.slot(),
+            slot,
             match bake.ghost {
                 Some(g) => benilla_world::instance_tint::pack(g.tint),
                 None => benilla_world::instance_tint::IDENTITY,
             },
         );
-        // The worn items' effects, through the reference's world attach primitive (`0x472c91` →
-        // `0x47a0c0` → `0x4798c0`); the enum carries no enchant, so only intrinsic effects show.
-        let (fx_emitters, fx_frames) = spawn_booth_effects(
-            &mut commands,
-            &mut booth_rig,
-            &booth.layer,
-            scene_buf.as_ref(),
-            &bake
-                .effects
-                .iter()
-                .map(|fx| BoothEffects {
-                    bone: fx.bone,
-                    offset: fx.offset,
-                    emitters: fx.emitters.clone(),
-                })
-                .collect::<Vec<_>>(),
-            instance,
-        );
-        if fx_emitters > 0 {
-            info!(
-                "glue booth: {fx_emitters} item emitter(s) up on {} effect model(s), \
-                 {fx_frames} on a billboard frame",
-                bake.effects.len()
-            );
-        }
-        // A fresh bake is animated by construction; the park state is the new rig's.
-        booth.rigged = booth_rig.rigged();
-        booth_rig.finish(&mut commands);
-        booth.parked = false;
+        state.create = (create && booth.rigged).then_some((bake.display_id, hung));
         // The fallback framing with no scene up: the model's `<PlayerModel>` pane camera, at the
         // bake's aspect, as it shows only for the frames before the scene's camera takes over.
         let (t, _) = body_frame(&anchors, 1.0);
@@ -1401,11 +1544,32 @@ pub(super) fn sync_glue_booth(
         preview.yaw,
     );
     // A yaw-only pass must not record revisions it did not commit, or a held pair never retries.
-    *last = Some((
+    state.last = Some((
         if rebake { bake.revision } else { last_rev },
         preview.yaw,
         if rebake { scene_rev } else { last_scene },
     ));
+}
+
+/// The worn items' effects, through the reference's world attach primitive (`0x472c91` →
+/// `0x47a0c0` → `0x4798c0`); the enum carries no enchant, so only intrinsic effects show.
+fn spawn_glue_effects(
+    commands: &mut Commands,
+    booth_rig: &mut BoothRig,
+    layer: &RenderLayers,
+    light: Option<&bevy::render::render_resource::Buffer>,
+    effects: &[BoothEffects],
+    instance: BoothInstance,
+) {
+    let (fx_emitters, fx_frames) =
+        spawn_booth_effects(commands, booth_rig, layer, light, effects, instance);
+    if fx_emitters > 0 {
+        info!(
+            "glue booth: {fx_emitters} item emitter(s) up on {} effect model(s), \
+             {fx_frames} on a billboard frame",
+            effects.len()
+        );
+    }
 }
 
 /// Stand the select screen's pet on scene attachment 1 (the reference's secondary model,
@@ -2073,5 +2237,345 @@ mod tests {
         // The hold is bounded: a look whose assembly never completes must not freeze the screen.
         assert!(!may_swap(true, true, false, GLUE_SWAP_HOLD_SECS - 0.01));
         assert!(may_swap(true, true, false, GLUE_SWAP_HOLD_SECS));
+    }
+
+    // ── The create body is one instance ───────────────────────────────────
+
+    const HUMAN_MALE: u32 = 49;
+    const HUMAN_FEMALE: u32 = 50;
+
+    fn handle<A: Asset>(n: u128) -> Handle<A> {
+        Handle::Uuid(
+            bevy::asset::uuid::Uuid::from_u128(n),
+            std::marker::PhantomData,
+        )
+    }
+
+    /// Two bones, enough for a pose buffer, an anchor and a palette slot.
+    fn two_bones() -> benilla_assets::ModelSkeleton {
+        let joint = |parent, y| benilla_assets::ModelJoint {
+            parent,
+            local_translation: Vec3::Y * y,
+            billboard: None,
+            parent_arm: None,
+        };
+        benilla_assets::ModelSkeleton {
+            joints: vec![joint(-1, 0.0), joint(0, 1.0)],
+            spine_bone: None,
+            head_bone: None,
+        }
+    }
+
+    /// The node Stand plays on, and the right hand's grip overlay.
+    const STAND_NODE: usize = 1;
+    const GRIP_NODE: usize = 2;
+
+    fn node(n: usize) -> bevy::animation::graph::AnimationNodeIndex {
+        bevy::animation::graph::AnimationNodeIndex::new(n)
+    }
+
+    fn body_anims() -> benilla_assets::ModelAnimations {
+        benilla_assets::ModelAnimations {
+            graph: Handle::default(),
+            clips: vec![benilla_assets::AnimClip {
+                anim_id: 0,
+                seq_index: 0,
+                node: node(STAND_NODE),
+                looping: true,
+                duration: 2.0,
+                move_speed: 0.0,
+                blend_time: 0.0,
+                bounds_center: Vec3::ZERO,
+                bounds_radius: 0.0,
+                bounds_min: Vec3::ZERO,
+                bounds_max: Vec3::ZERO,
+                events: Vec::new().into(),
+                arm_nodes: None,
+                upper_node: None,
+                frequency: 0,
+                replay: (0, 0),
+                poses_bones: true,
+            }],
+            hand_close: [Some(node(GRIP_NODE)), None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: Vec::new(),
+            global_bones: Vec::new(),
+            first_seq: None,
+            pose: Default::default(),
+        }
+    }
+
+    fn create(sex: u8, class: u8, skin: u8, hair_style: u8) -> GlueLook {
+        GlueLook::Create(CreateLook {
+            race: 1,
+            sex,
+            class,
+            skin,
+            face: 0,
+            hair_style,
+            hair_color: 0,
+            facial_hair: 0,
+        })
+    }
+
+    /// One body batch: its static mesh `mesh`, its skinned twin `mesh + 1000`, and `material`.
+    fn part(mesh: u128, material: u128) -> PreviewPart {
+        PreviewPart {
+            static_mesh: handle(mesh),
+            skinned_mesh: Some(handle(mesh + 1000)),
+            material: handle(material),
+            alpha_anim: None,
+            twins: BoothTwins::default(),
+        }
+    }
+
+    /// The glue booth over the character root `root`, as [`spawn_glue_booth`] stands it.
+    fn glue_booth(root: Entity) -> Booth {
+        Booth {
+            layer: RenderLayers::layer(GLUE_LAYER),
+            root,
+            target: Handle::default(),
+            baked: None,
+            baked_guid: None,
+            snap: None,
+            shown: false,
+            show_rev: 0,
+            wake: 0,
+            live: false,
+            pending: Vec::new(),
+            pending_since: None,
+            pipes_settling: false,
+            pipes_since: None,
+            aspect: 1.0,
+            rigged: false,
+            parked: false,
+            turn: super::super::Turn::default(),
+        }
+    }
+
+    fn booth_app() -> (App, Entity) {
+        let mut app = App::new();
+        app.init_resource::<GluePreview>()
+            .init_resource::<GluePreviewBake>()
+            .init_resource::<BoothLight>()
+            .init_resource::<Assets<WowModelMaterial>>()
+            .init_resource::<benilla_world::rig_palette::RigPalettes>()
+            .init_resource::<benilla_world::instance_tint::InstanceTints>()
+            .insert_resource(Creatures::rigged_for_test(vec![
+                (HUMAN_MALE, two_bones(), Some(body_anims())),
+                (HUMAN_FEMALE, two_bones(), Some(body_anims())),
+            ]))
+            .add_systems(Update, sync_glue_booth);
+        let root = app.world_mut().spawn(Transform::IDENTITY).id();
+        let mut booths = Booths::default();
+        booths.0.insert(GLUE_SLOT.to_string(), glue_booth(root));
+        app.insert_resource(booths);
+        (app, root)
+    }
+
+    /// Land a bake of `look` on `display`, as the builder does, and run a frame.
+    fn bake(
+        app: &mut App,
+        look: GlueLook,
+        display_id: u32,
+        parts: Vec<PreviewPart>,
+        riders: Vec<PreviewRider>,
+        grip: [bool; 2],
+    ) {
+        let mut bake = app.world_mut().resource_mut::<GluePreviewBake>();
+        let revision = bake.revision + 1;
+        *bake = GluePreviewBake {
+            look: Some(look),
+            display_id,
+            parts,
+            riders,
+            grip,
+            revision,
+            ..default()
+        };
+        app.update();
+    }
+
+    /// The Stand clock's position on the root's player.
+    fn stand_at(app: &App, root: Entity) -> f32 {
+        app.world()
+            .get::<AnimationPlayer>(root)
+            .and_then(|p| p.animation(node(STAND_NODE)))
+            .expect("Stand plays on the body")
+            .seek_time()
+    }
+
+    fn run_stand_to(app: &mut App, root: Entity, t: f32) {
+        app.world_mut()
+            .get_mut::<AnimationPlayer>(root)
+            .and_then(|mut p| {
+                p.animation_mut(node(STAND_NODE)).map(|a| {
+                    a.seek_to(t);
+                })
+            })
+            .expect("Stand plays on the body");
+    }
+
+    /// The body's batches, `(entity, material)` by static mesh number.
+    fn worn(app: &mut App, root: Entity) -> Vec<(u128, Entity, AssetId<WowModelMaterial>)> {
+        let mut q = app.world_mut().query_filtered::<(
+            Entity,
+            &Mesh3d,
+            &MeshMaterial3d<WowModelMaterial>,
+            &ChildOf,
+        ), With<BoothBatch>>();
+        let mut out: Vec<_> = q
+            .iter(app.world())
+            .filter(|(_, _, _, c)| c.parent() == root)
+            .map(|(e, m, mat, _)| {
+                let AssetId::Uuid { uuid } = m.0.id() else {
+                    panic!("a test mesh");
+                };
+                (uuid.as_u128() - 1000, e, mat.0.id())
+            })
+            .collect();
+        out.sort_by_key(|(n, _, _)| *n);
+        out
+    }
+
+    /// The create body is one `CharacterModel` across its customizations (`0x478790` and kin
+    /// rebind its textures) and class re-dresses (`0x470800` re-equips it); only the race and sex
+    /// builder `0x470b70` makes a new one. So the Stand clock runs on through the first two, and
+    /// only a sex change starts it over.
+    #[test]
+    fn a_customization_or_class_change_keeps_the_create_body_and_its_clock() {
+        let (mut app, root) = booth_app();
+        bake(
+            &mut app,
+            create(0, 1, 0, 0),
+            HUMAN_MALE,
+            vec![part(1, 10), part(2, 11)],
+            Vec::new(),
+            [false, false],
+        );
+        run_stand_to(&mut app, root, 1.25);
+        let before = worn(&mut app, root);
+        assert_eq!(before.len(), 2);
+
+        // Skin: the same batches, a recomposited body texture.
+        bake(
+            &mut app,
+            create(0, 1, 3, 0),
+            HUMAN_MALE,
+            vec![part(1, 20), part(2, 21)],
+            Vec::new(),
+            [false, false],
+        );
+        assert_eq!(stand_at(&app, root), 1.25, "a skin change keeps the clock");
+        let skin = worn(&mut app, root);
+        assert_eq!(
+            skin.iter().map(|(n, e, _)| (*n, *e)).collect::<Vec<_>>(),
+            before.iter().map(|(n, e, _)| (*n, *e)).collect::<Vec<_>>(),
+            "the same batch entities stand"
+        );
+        assert_eq!(
+            skin.iter().map(|(_, _, m)| *m).collect::<Vec<_>>(),
+            vec![handle::<WowModelMaterial>(20).id(), handle(21).id()],
+            "…rebound to the new textures"
+        );
+
+        // Hair style: a geoset toggles, so batch 2 goes and batch 3 comes; batch 1 stays.
+        bake(
+            &mut app,
+            create(0, 1, 3, 2),
+            HUMAN_MALE,
+            vec![part(1, 20), part(3, 22)],
+            Vec::new(),
+            [false, false],
+        );
+        assert_eq!(stand_at(&app, root), 1.25, "a hair change keeps the clock");
+        let hair = worn(&mut app, root);
+        assert_eq!(hair.iter().map(|(n, _, _)| *n).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(hair[0].1, before[0].1, "batch 1 is the same entity");
+        assert!(
+            app.world().get_entity(before[1].1).is_err(),
+            "batch 2's geoset went off, and its entity with it"
+        );
+
+        // Class: a new outfit hangs a weapon in the right hand, which closes on it.
+        let sword = PreviewRider {
+            mesh: handle(30),
+            material: handle(31),
+            bone: 1,
+            offset: Vec3::ZERO,
+            twins: BoothTwins::default(),
+        };
+        bake(
+            &mut app,
+            create(0, 2, 3, 2),
+            HUMAN_MALE,
+            vec![part(1, 40), part(3, 41)],
+            vec![sword],
+            [true, false],
+        );
+        assert_eq!(stand_at(&app, root), 1.25, "a class change keeps the clock");
+        assert_eq!(worn(&mut app, root)[0].1, before[0].1);
+        let mut riders = app.world_mut().query::<(&Mesh3d, &ChildOf)>();
+        let anchor = riders
+            .iter(app.world())
+            .find(|(m, _)| m.0.id() == handle::<Mesh>(30).id())
+            .map(|(_, c)| c.parent())
+            .expect("the weapon hangs");
+        assert!(
+            app.world()
+                .get::<benilla_world::rig_anim::RigAnchor>(anchor)
+                .is_some_and(|a| a.rig == root && a.bone == 1),
+            "on its bone's anchor of the same body"
+        );
+        assert!(
+            app.world()
+                .get::<AnimationPlayer>(root)
+                .unwrap()
+                .animation(node(GRIP_NODE))
+                .is_some(),
+            "the hand that holds it closes (`0x479660`)"
+        );
+
+        // Sex: the builder makes a new body, whose Stand starts from the top.
+        bake(
+            &mut app,
+            create(1, 2, 0, 0),
+            HUMAN_FEMALE,
+            vec![part(5, 50)],
+            Vec::new(),
+            [false, false],
+        );
+        assert_eq!(stand_at(&app, root), 0.0, "a new body is a new instance");
+        assert!(app.world().get_entity(before[0].1).is_err());
+    }
+
+    /// A select record is its own model (`record+0x110`), so another record on the same body
+    /// display is a new instance.
+    #[test]
+    fn another_select_record_is_another_model() {
+        let (mut app, root) = booth_app();
+        let record = |guid| {
+            GlueLook::Select(SelectLook::from(&crate::char_select::test_character(
+                guid, "Rec",
+            )))
+        };
+        bake(
+            &mut app,
+            record(1),
+            HUMAN_MALE,
+            vec![part(1, 10)],
+            Vec::new(),
+            [false, false],
+        );
+        run_stand_to(&mut app, root, 1.25);
+        bake(
+            &mut app,
+            record(2),
+            HUMAN_MALE,
+            vec![part(1, 20)],
+            Vec::new(),
+            [false, false],
+        );
+        assert_eq!(stand_at(&app, root), 0.0);
     }
 }
