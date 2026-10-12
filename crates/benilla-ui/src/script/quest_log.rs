@@ -302,7 +302,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `text, type, finished` of line `i`, for any row as above (`QuestLogFrame.lua:635`).
+    // `text, type, finished` of line `i`, for any row as above (`QuestLogFrame.lua:635`). Three
+    // values on every path (`mov eax,3` at `0x4e02ba`, `0x4e079b`, `0x4e07c8`): `finished` is the
+    // number 1 (`0x4e02ae`, `0x4e078f`) or nil (`0x4e07bc`), and a row or line that does not exist
+    // takes the tail at `0x4e07ac`, which pushes three nils.
     g.set(
         "GetQuestLogLeaderBoard",
         lua.create_function(|lua, (i, quest): (usize, Option<u32>)| {
@@ -316,12 +319,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .cloned()
             };
             let Some(l) = line else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(MultiValue::from_vec(vec![
+                    Value::Nil,
+                    Value::Nil,
+                    Value::Nil,
+                ]));
             };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&l.text)?),
                 Value::String(lua.create_string(&l.kind)?),
-                Value::Boolean(l.finished),
+                flag(l.finished),
             ]))
         })?,
     )?;
@@ -1042,15 +1049,38 @@ mod tests {
         assert!(s
             .eval::<bool>(
                 "local t, k, f = GetQuestLogLeaderBoard(1, 2)\n\
-                 return t == 'Kobold Worker slain: 10/10' and k == 'monster' and f == true"
+                 return t == 'Kobold Worker slain: 10/10' and k == 'monster' and f == 1"
             )
             .unwrap());
         assert!(s
             .eval::<bool>(
                 "local t, k, f = GetQuestLogLeaderBoard(1)\n\
-                 return t == 'Kobold Vermin slain: 3/10' and k == 'monster' and f == false"
+                 return t == 'Kobold Vermin slain: 3/10' and k == 'monster' and f == nil"
             )
             .unwrap());
+        // Three values on every path; a row or line with nothing answers three nils (`0x4e07ac`).
+        for call in [
+            "GetQuestLogLeaderBoard(1)",
+            "GetQuestLogLeaderBoard(1, 2)",
+            "GetQuestLogLeaderBoard(2)",
+            "GetQuestLogLeaderBoard(1, 9)",
+            "GetQuestLogLeaderBoard(0)",
+        ] {
+            assert_eq!(s.arity(call).unwrap(), 3, "{call}");
+        }
+        for call in [
+            "GetQuestLogLeaderBoard(2)",
+            "GetQuestLogLeaderBoard(1, 9)",
+            "GetQuestLogLeaderBoard(0)",
+        ] {
+            assert!(
+                s.eval::<bool>(&format!(
+                    "local a, b, c = {call} return a == nil and b == nil and c == nil"
+                ))
+                .unwrap(),
+                "{call}"
+            );
+        }
         assert_eq!(
             s.eval::<i64>("return GetQuestLogRewardMoney()").unwrap(),
             40

@@ -758,11 +758,12 @@ fn predicate_names() -> Vec<String> {
 
 /// The state the predicates that answer only against state read from: a seated player, two
 /// talents (an ordinary one met and learnable, an exceptional one neither), two loot rolls (a
-/// resolved bind-on-pickup one and one still in flight), a respec question in range. Each carries
-/// both legs of its flags.
+/// resolved bind-on-pickup one and one still in flight), a respec question in range, a quest log
+/// with one finished line. Each carries both legs of its flags.
 fn seed_boolean_probe_state(s: &mut benilla_ui::script::UiScript) {
     use benilla_ui::script::{
-        LootRollEntry, LootRollsState, TalentPrereqView, TalentTabView, TalentUiState, TalentView,
+        LootRollEntry, LootRollsState, QuestLogEntryView, QuestLogObjectiveView, QuestLogState,
+        TalentPrereqView, TalentTabView, TalentUiState, TalentView,
     };
     s.set_unit(
         "player",
@@ -830,6 +831,22 @@ fn seed_boolean_probe_state(s: &mut benilla_ui::script::UiScript) {
         ],
     });
     s.set_talent_master_pending(true);
+    s.set_quest_log(QuestLogState {
+        num_quests: 1,
+        entries: vec![QuestLogEntryView {
+            quest_id: 1,
+            title: "Probe".into(),
+            objectives: vec![QuestLogObjectiveView {
+                text: "Probes slain: 1/1".into(),
+                kind: "monster".into(),
+                finished: true,
+                cur: 1,
+                req: 1,
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
 }
 
 /// 1.12 has no boolean query: of the table's trustworthy rows only `IsPetAttackActive` and Lua's
