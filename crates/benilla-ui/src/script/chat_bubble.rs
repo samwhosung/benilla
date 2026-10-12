@@ -32,7 +32,7 @@ const FIRST_LEVEL: u16 = 2;
 /// The bubble geometry that follows from the window rather than the line, in the `WorldFrame`'s
 /// units. Written into a bubble when it changes, so an addon's own anchors survive between
 /// resizes. A resize re-sizes the live bubbles as part of the live re-layout's deviation, where
-/// the reference reloads the UI on an aspect change (`0x492f13` → `0x491380`); the `Deviation:`
+/// the reference can reload the UI on an aspect change (`0x492f13` → `0x491380`); the `Deviation:`
 /// line is at the resize in `benilla_app`'s `extract::tick_script`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BubbleGeometry {
