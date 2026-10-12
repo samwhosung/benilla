@@ -6,8 +6,10 @@
 The inputs are vendored under `reference/`, so this runs from any clone and reproduces the
 committed table byte for byte.
 
-The glue builder (`0x46a7b0`) resets the Lua state (`0x703b80` -> `0x7039e0`, at `0x46a87b`),
-then calls the glue registrar `0x46abb0`, which installs seven registrar tables and nothing else:
+The glue builder (`0x46a7b0`) starts from the bare base set `0x7039e0`: a rebuild resets the Lua
+state (`0x703b80` -> `0x7039e0`, at `0x46a87b`), and the first build (`0x46a505`, passing 0) skips
+that reset (`je` at `0x46a879`) and takes the state the startup init left (`0x402aee`). It then
+calls the glue registrar `0x46abb0`, which installs seven registrar tables and nothing else:
 
   0x51bb20  table 0x8503f4    6  shared: in-game, `0x51bb60` calls it before its own table
   0x706350  table 0x872e74    4  shared: in-game at `0x490251`; then the 17 widget method tables

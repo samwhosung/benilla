@@ -501,8 +501,9 @@ pub fn addon_chunk_name(folder: &str, file: &str) -> String {
     format!("@Interface\\AddOns\\{folder}\\{}", file.replace('/', "\\"))
 }
 
-/// What both FrameScript states hold: FrameScript's Lua init (`0x7039e0`), which the glue builder
-/// re-runs through its reset (`0x703b80`) and `UI_Init` through its own, and the three registrars
+/// What both FrameScript states hold: FrameScript's Lua init (`0x7039e0`), the bare state the glue
+/// builder starts from (left by startup `0x402aee` on its first build, re-run by its reset
+/// `0x703b80` on a later one) and `UI_Init` rebuilds through its own, and the three registrars
 /// the glue registrar `0x46abb0` shares with `UI_Init`: `0x51bb20` (the clock, `ConsoleExec` and
 /// the file trio), `0x706350` (the frame factory globals and the 17 widget method tables) and
 /// `0x4587f0` (sound).

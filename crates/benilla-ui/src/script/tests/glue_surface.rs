@@ -134,7 +134,8 @@ fn the_glue_surface_matches_the_shapes_table() {
 /// list only shrinks: a verb is absent until built, never stubbed.
 const NOT_YET: &[(&str, &[&str])] = &[
     (
-        "0x51bb20's file trio, unbuilt in the in-game VM too",
+        "0x51bb20's file trio, each only `luaL_error(\"Access Denied\")`; unbuilt in the in-game \
+         VM too, tracked by #338",
         &["ReadFile", "DeleteFile", "AppendToFile"],
     ),
     (

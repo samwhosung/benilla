@@ -1,9 +1,11 @@
 //! The glue screens' FrameScript state, which [`UiScript::new_glue`] builds: what the glue builder
 //! (`0x46a7b0`) gives Lua where `UI_Init` (`0x48fbf0`) gives it the world's surface.
 //!
-//! The reference keeps one Lua state (`0xceef74`) and rebuilds it for each phase. The glue builder
-//! resets it (`0x703b80` at `0x46a87b`, re-running the base init `0x7039e0`), runs the glue
-//! registrar `0x46abb0`, and loads the 26-event table below in place of the in-game one
+//! The reference keeps one Lua state (`0xceef74`). The glue builder starts from the bare base set
+//! (`0x7039e0`): on a rebuild it resets the state (`0x703b80` at `0x46a87b`, re-running the base
+//! init), while the first build (`0x46a505`, passing 0) skips the reset (`je` at `0x46a879`) and
+//! takes the state the startup init left (`0x402aee`). Either way it then runs the glue registrar
+//! `0x46abb0` and loads the 26-event table below in place of the in-game one
 //! (`0x703d90` at `0x46a88f`). The frame types are a process-wide registry instead
 //! ([`super::object::registered_frame_kind`]).
 //!
