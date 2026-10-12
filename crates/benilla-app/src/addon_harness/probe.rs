@@ -6,7 +6,6 @@
 //! after `PLAYER_ENTERING_WORLD` and the ticks, before the render and use probes touch the VM.
 //! An eval can mutate the VM, so a probe is a debugger; the survey is the measurement.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use benilla_ui::script::UiScript;
@@ -71,24 +70,15 @@ pub fn probe(root: &Path, name: &str, steps: &[Step]) -> Option<ProbeOutcome> {
     script.set_screen_size(1024.0, 768.0);
     // No saved-variable roots, so a probe never touches a player's saved variables; the AddOns
     // root is passed as the survey passes it, so `LoadAddOn` resolves.
-    script.register_addons(registry, Some(root.to_path_buf()), None, None);
+    script.register_addons(registry.clone(), Some(root.to_path_buf()), None, None);
     super::seat_a_session(&mut script);
     let _ = crate::ui_script::load_default_ui(&script);
 
-    let mut dep_order: Vec<super::LoadedDep> = Vec::new();
-    super::load_dependencies(
-        &mut script,
-        root,
-        &toc,
-        &installed,
-        &mut BTreeSet::new(),
-        &mut dep_order,
-    );
+    // Marked before its dependencies load (`0x51f313`), as the survey does.
+    script.mark_addon_loaded(name);
+    let _ = super::load_dependencies(&script, root, &registry, &toc);
 
     let load_errors = super::load_addon_files(&script, root, name, &toc).errors;
-    // The registry must agree with the VM, or `IsAddOnLoaded` answers for another session; the
-    // dependency chain stamped itself as it loaded.
-    script.mark_addon_loaded(name);
     let session_errors = super::drive_session_start(&mut script, name, &installed);
 
     let answers = steps

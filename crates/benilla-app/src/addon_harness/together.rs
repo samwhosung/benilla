@@ -16,15 +16,11 @@
 //! `LoadLoadOnDemandPlugins`, Auctioneer's stub), so honouring the flag would model a shorter
 //! session than anyone plays.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use benilla_ui::script::UiScript;
 
-use super::{
-    corpus, load_addon_files, load_dependencies, manifest_path, LoadedDep, ADDON_INSTRUCTION_BUDGET,
-};
-use benilla_ui::toc::Toc;
+use super::{corpus, HarnessLoad, ADDON_INSTRUCTION_BUDGET};
 
 /// How many fresh-VM runs [`survey_together`] makes: three is the fewest that tell "always" from
 /// "sometimes".
@@ -88,47 +84,33 @@ pub fn survey_together(root: &Path) -> Vec<TogetherRow> {
 
 /// One walk in one VM.
 fn survey_together_once(root: &Path) -> Vec<(String, Vec<String>)> {
-    let (names, installed, registry) = corpus(root);
+    let (names, _, registry) = corpus(root);
     let Ok(mut script) = UiScript::new() else {
         return Vec::new();
     };
     script.set_screen_size(1024.0, 768.0);
-    script.register_addons(registry, Some(root.to_path_buf()), None, None);
+    script.register_addons(registry.clone(), Some(root.to_path_buf()), None, None);
     super::seat_a_session(&mut script);
     let _ = crate::ui_script::load_default_ui(&script);
 
-    // `seen` spans the whole walk: a library declared by many dependents loads once.
-    let mut seen: BTreeSet<String> = BTreeSet::new();
-    // `(folder, its load failures)`, kept beside the walk: the VM's diagnostics log caps at 256
-    // distinct rows and evicts.
-    let mut load_errors: Vec<(String, Vec<String>)> = Vec::new();
-    for name in &names {
-        let Some(toc) = manifest_path(root, name)
-            .and_then(|p| std::fs::read(p).ok())
-            .map(|b| Toc::parse(&benilla_ui::source::decode(&b)))
-        else {
-            continue;
-        };
-        if !seen.insert(name.to_ascii_lowercase()) {
-            continue; // already loaded as a dependency
-        }
+    // The live walk: `AddOn_Load` on every addon in order, through the same driver, so a
+    // library loads once under whichever dependent reaches it first and an addon that names
+    // another in `## LoadWith` loads right after it. The corpus is walked whole, LoadOnDemand
+    // included, and past the version check.
+    let mut host = HarnessLoad::new(&script, root, &registry);
+    for row in 0..registry.len() {
         // Re-armed per addon, as the live walk does, so one runaway does not starve the rest.
         script.set_instruction_budget(ADDON_INSTRUCTION_BUDGET);
-        let mut pulled: Vec<LoadedDep> = Vec::new();
-        load_dependencies(&mut script, root, &toc, &installed, &mut seen, &mut pulled);
-        // A dependency's load failures are collected only here: it loads once, under the first
-        // dependent to reach it, and never gets a turn of its own.
-        for dep in pulled {
-            load_errors.push((dep.name, dep.files.errors));
-        }
-        let files = load_addon_files(&script, root, name, &toc);
-        load_errors.push((name.clone(), files.errors));
-        script.mark_addon_loaded(name);
-        script.fire_event(
-            "ADDON_LOADED",
-            vec![benilla_ui::script::ScriptValue::Str(name.clone())],
-        );
+        script.load_addon_row(&mut host, row, false, false);
     }
+    // `(folder, its load failures)`, kept beside the walk: the VM's diagnostics log caps at 256
+    // distinct rows and evicts. A dependency's failures are collected here too: it loads once and
+    // never gets a turn of its own.
+    let load_errors: Vec<(String, Vec<String>)> = host
+        .loaded
+        .into_iter()
+        .map(|l| (l.name, l.files.errors))
+        .collect();
     script.set_instruction_budget(ADDON_INSTRUCTION_BUDGET);
     for event in ["VARIABLES_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD"] {
         script.fire_event(event, Vec::new());

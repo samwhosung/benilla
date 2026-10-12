@@ -264,15 +264,10 @@ fn survey_one(
     // The addon's dependencies, first and recursively, as `AddOn_Load` (`0x51f240`) does in its
     // first two steps. Loaded before `globals_of` below, so a name a dependency provides is not
     // missing.
-    let mut dep_loads: Vec<LoadedDep> = Vec::new();
-    load_dependencies(
-        &mut script,
-        root,
-        &toc,
-        installed,
-        &mut BTreeSet::new(),
-        &mut dep_loads,
-    );
+    // Marked first, as `AddOn_Load` marks an addon before its dependency loops (`0x51f313`): a
+    // dependency that requires the surveyed addon finds it loaded and does not load it here.
+    script.mark_addon_loaded(name);
+    let dep_loads = load_dependencies(&script, root, registry, &toc);
     let dep_order: Vec<String> = dep_loads.into_iter().map(|d| d.name).collect();
     let known = globals_of(&script);
     // The methods the dependency chain defines, read from its source (a method has no VM read).
@@ -289,10 +284,6 @@ fn survey_one(
     let warn_mark = script.diagnostics().last().map_or(0, |d| d.seq);
 
     let files = load_addon_files(&script, root, name, &toc);
-    // The live walk stamps each addon as loaded just before its `ADDON_LOADED` (`0x51f5ad`);
-    // without it `IsAddOnLoaded` answers nil and a LoadOnDemand dependent gets
-    // `DEP_NOT_DEMAND_LOADED`. The dependencies stamped themselves in `load_dependencies`.
-    script.mark_addon_loaded(name);
     let wants = missing_calls(root, name, &toc, &known, &dep_methods);
     // After the addon's files, so a template its own XML declares is registered.
     let missing_templates = missing_templates(&script, root, name, &toc);
@@ -726,54 +717,75 @@ fn drive_ui_probe(script: &mut UiScript) -> Vec<String> {
     out
 }
 
-/// Load an addon's declared dependencies into the VM, depth-first, each at most once.
-///
-/// The 1.12 client's order (`AddOn_Load`, `0x51f240`): optional dependencies first, failures
-/// ignored; required ones next, a failure aborting the dependent; then its own files. The abort is
-/// not reproduced, only the state the dependent's file scope meets; a missing required dependency
-/// is reported ([`AddonReport::missing_deps`]), an absent optional one is silent. Errors inside a
-/// dependency are its own row, never the dependent's.
+/// Load an addon's declared dependencies into the VM through the shared `AddOn_Load` driver
+/// (`0x51f240`): optional ones first, failures ignored, then required ones, each through the gate,
+/// its own dependencies first, its files, then `ADDON_LOADED` with its folder name, then the
+/// addons whose `## LoadWith` names it. The surveyed addon's own gate and abort are not
+/// reproduced, so a survey still measures it when a required dependency is missing; that is
+/// reported ([`AddonReport::missing_deps`]). Errors inside a dependency are its own row, never the
+/// dependent's. The caller marks the surveyed addon loaded first (`0x51f313`).
 fn load_dependencies(
-    script: &mut UiScript,
+    script: &UiScript,
     root: &Path,
+    registry: &[benilla_ui::script::AddOnInfo],
     toc: &Toc,
-    installed: &BTreeSet<String>,
-    seen: &mut BTreeSet<String>,
-    loaded: &mut Vec<LoadedDep>,
-) {
+) -> Vec<LoadedDep> {
     // Optional first, then required: `FuBar_BagFu` lists `FuBarPlugin-2.0.lua` before
     // `AceLibrary.lua`, and FuBarPlugin raises unless the optional `Ace2` loaded first.
-    let deps: Vec<&str> = toc
+    let mut host = HarnessLoad::new(script, root, registry);
+    for dep in toc
         .optional_dependencies()
         .into_iter()
         .chain(toc.dependencies())
-        .collect();
-    for dep in deps {
-        let key = dep.to_ascii_lowercase();
-        if !installed.contains(&key) || !seen.insert(key) {
-            continue; // not installed (already reported), or already in this VM
+    {
+        if let Some(row) = script.addon_row(dep) {
+            // Every addon loads: the harness forces past the version check, as the AddOns screen's
+            // Load out of date AddOns does.
+            script.load_addon_row(&mut host, row, false, false);
         }
-        let Some(dep_toc) = manifest_path(root, dep)
+    }
+    host.loaded
+}
+
+/// The harness's side of `AddOn_Load`: run a registry row's `.toc` files out of the corpus folder
+/// and keep what each did. Rows are the corpus's, in [`corpus`]'s order.
+struct HarnessLoad<'a> {
+    script: &'a UiScript,
+    root: &'a Path,
+    registry: &'a [benilla_ui::script::AddOnInfo],
+    /// Every addon the driver ran, in load order.
+    loaded: Vec<LoadedDep>,
+}
+
+impl<'a> HarnessLoad<'a> {
+    fn new(
+        script: &'a UiScript,
+        root: &'a Path,
+        registry: &'a [benilla_ui::script::AddOnInfo],
+    ) -> Self {
+        HarnessLoad {
+            script,
+            root,
+            registry,
+            loaded: Vec::new(),
+        }
+    }
+}
+
+impl benilla_ui::script::AddonLoad for HarnessLoad<'_> {
+    fn run(&mut self, i: usize) {
+        let name = &self.registry[i].name;
+        let Some(toc) = manifest_path(self.root, name)
             .and_then(|p| std::fs::read(p).ok())
             .map(|b| Toc::parse(&benilla_ui::source::decode(&b)))
         else {
-            continue;
+            return;
         };
-        load_dependencies(script, root, &dep_toc, installed, seen, loaded);
-        let files = load_addon_files(script, root, dep, &dep_toc);
-        // `ADDON_LOADED` fires here, at the 1.12 client's position: `AddOn_Load` (`0x51f240`) runs
-        // an addon's dependencies, its `.toc` files (`0x51f3fa`), `Bindings.xml`, the two
-        // SavedVariables chunks, then `ADDON_LOADED` (event 429, `0x51f5ad`), before the next
-        // addon. The loaded flag is set first (`[rec+0x18]=1` at `0x51f313`), so a handler's
-        // `IsAddOnLoaded` is true. Fired outside the surveyed addon's error mark: a library raising
-        // in its initialiser is its own row.
-        script.mark_addon_loaded(dep);
-        script.fire_event(
-            "ADDON_LOADED",
-            vec![benilla_ui::script::ScriptValue::Str(dep.to_string())],
-        );
-        loaded.push(LoadedDep {
-            name: dep.to_string(),
+        // `ADDON_LOADED` follows from the driver, after the files (`0x51f5ad`); a raise in a
+        // library's initialiser is its own row, outside the surveyed addon's error mark.
+        let files = load_addon_files(self.script, self.root, name, &toc);
+        self.loaded.push(LoadedDep {
+            name: name.clone(),
             files,
         });
     }
@@ -2646,6 +2658,113 @@ mod dependency_tests {
         let orphan = reports.iter().find(|r| r.name == "Orphan").unwrap();
         assert_eq!(orphan.missing_deps, vec!["Nowhere".to_string()]);
 
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A folder of addons under a temp root, `(name, toc, lua body)` each with one file `main.lua`;
+    /// every body starts by appending its folder to `Order`.
+    fn corpus_folder(tag: &str, addons: &[(&str, &str, &str)]) -> PathBuf {
+        let tmp =
+            std::env::temp_dir().join(format!("benilla-harness-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        for (name, toc, body) in addons {
+            let dir = tmp.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(format!("{name}.toc")),
+                format!("## Interface: 11200\n{toc}main.lua\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("main.lua"),
+                format!("Order = (Order or '') .. '{name},'\n{body}"),
+            )
+            .unwrap();
+        }
+        tmp
+    }
+
+    /// What one probe step answers, `= <value>`.
+    fn answer(root: &Path, name: &str, chunk: &str) -> String {
+        let out = probe::probe(root, name, &[probe::Step::Eval(chunk.into())]).unwrap();
+        out.answers[0].1.clone()
+    }
+
+    /// `AddOn_Load` fires `ADDON_LOADED` with the record's folder name (`[rec+0x14]`, `0x51f573`,
+    /// `0x51f5a2`), whatever case the dependent's `.toc` spelled it in.
+    #[test]
+    fn a_dependencys_addon_loaded_carries_its_folder_name() {
+        let tmp = corpus_folder(
+            "deps-spelling",
+            &[
+                (
+                    "Lib",
+                    "",
+                    "Seen = {} Watch = CreateFrame('Frame') Watch:RegisterEvent('ADDON_LOADED') \
+                     Watch:SetScript('OnEvent', function() table.insert(Seen, arg1) end)",
+                ),
+                ("User", "## Dependencies: LIB\n", ""),
+            ],
+        );
+        assert_eq!(
+            answer(&tmp, "User", "return table.concat(Seen, ',')"),
+            "= Lib,User"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The gate runs before anything loads (`0x51f2fa`): a dependency that requires a missing
+    /// addon does not load, its files do not run, and its own dependencies are left alone.
+    #[test]
+    fn a_dependency_the_gate_refuses_does_not_load() {
+        let tmp = corpus_folder(
+            "deps-gate",
+            &[
+                ("Blocked", "## Dependencies: Ghost\n", ""),
+                ("User", "## Dependencies: Blocked\n", ""),
+            ],
+        );
+        assert_eq!(answer(&tmp, "User", "return Order"), "= User,");
+        assert_eq!(
+            answer(&tmp, "User", "return IsAddOnLoaded('Blocked')"),
+            "= nil"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `AddOn_Load` loads the addons whose `## LoadWith` names the loaded one, right after its
+    /// `ADDON_LOADED` (`0x51f5b2`).
+    #[test]
+    fn a_dependencys_load_with_dependents_load_after_it() {
+        let tmp = corpus_folder(
+            "deps-load-with",
+            &[
+                ("Lib", "", ""),
+                ("Tag", "## LoadWith: Lib\n", ""),
+                ("User", "## Dependencies: Lib\n", ""),
+            ],
+        );
+        assert_eq!(answer(&tmp, "User", "return Order"), "= Lib,Tag,User,");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The surveyed addon is loaded (`0x51f313`) before its dependencies, so one that requires it
+    /// back finds it loaded and neither runs twice.
+    #[test]
+    fn a_dependency_cycle_through_the_surveyed_addon_loads_each_once() {
+        let tmp = corpus_folder(
+            "deps-cycle",
+            &[
+                ("Ping", "## Dependencies: Pong\n", ""),
+                (
+                    "Pong",
+                    "## Dependencies: Ping\n",
+                    "PingLoadedForPong = IsAddOnLoaded('Ping')\n",
+                ),
+            ],
+        );
+        assert_eq!(answer(&tmp, "Ping", "return Order"), "= Pong,Ping,");
+        assert_eq!(answer(&tmp, "Ping", "return PingLoadedForPong"), "= 1");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

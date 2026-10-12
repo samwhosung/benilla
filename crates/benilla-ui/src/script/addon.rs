@@ -875,6 +875,11 @@ impl super::UiScript {
         rebuild_index(&mut model);
     }
 
+    /// The registry row a folder name answers to, case-insensitively.
+    pub fn addon_row(&self, name: &str) -> Option<usize> {
+        by_name(&self.model_ref(), name)
+    }
+
     /// `AddOn_Load` (`0x51f240`) on registry row `i` ([`load_row`]) for a host that runs the
     /// addon's files itself, as the startup walk does (`demand` false).
     pub fn load_addon_row(
