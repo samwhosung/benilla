@@ -190,6 +190,16 @@ pub(crate) struct Roster {
 }
 
 impl Roster {
+    /// A rename the server accepted, applied to the record with `guid` as the glue's applier
+    /// renames its own (`0x4725f0`): the new name and the rename flag clear. The in-world files
+    /// are named from this roster ([`crate::ui_macro::identity`]).
+    pub(crate) fn rename(&mut self, guid: u64, name: &str) {
+        if let Some(c) = self.chars.iter_mut().find(|c| c.guid == guid) {
+            c.name = name.to_string();
+            c.flags &= !benilla_protocol::CHARACTER_FLAG_RENAME;
+        }
+    }
+
     /// A roster with a pick in flight, for tests outside this module.
     #[cfg(test)]
     pub(crate) fn with_pending_pick(chars: Vec<Character>, guid: u64) -> Self {

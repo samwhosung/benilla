@@ -2745,6 +2745,9 @@ fn the_stock_rename_renames_the_row_and_moves_its_files() {
     roster[1].flags |= benilla_protocol::CHARACTER_FLAG_RENAME;
     let (mut app, _realmd, world) =
         select_screen(&roster, Some(&|w| w.set_addon_info(&[2; 12], false)));
+    // The select screen's roster, Bravo picked: the in-world files are named from it.
+    app.world_mut()
+        .insert_resource(crate::char_select::Roster::with_pending_pick(roster, 0x12));
     let enable = |app: &App, who: &str| {
         vm(app)
             .eval::<f64>(&format!("return GetAddOnEnableState('{who}', 1)"))
@@ -2818,6 +2821,12 @@ fn the_stock_rename_renames_the_row_and_moves_its_files() {
             )
         });
     assert_eq!(kept, Some(("Newbie".to_string(), 0)));
+    // The world entry names its files by the new name.
+    let picked = app.world().resource::<crate::char_select::Roster>();
+    assert_eq!(
+        crate::ui_macro::identity(picked).map(|(_, name)| name),
+        Some("Newbie".to_string())
+    );
 
     // The files moved, and the AddOn state with them.
     let moved = crate::local_state::macros_character_path("Alpha", "Newbie").unwrap();

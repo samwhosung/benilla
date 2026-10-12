@@ -1173,6 +1173,8 @@ pub(crate) struct GlueAsks<'w> {
     launch_addon: MessageWriter<'w, super::server_alert::LaunchAddonUrl>,
     realm: Option<Res<'w, crate::net::RealmChoice>>,
     abandon: Option<Res<'w, crate::net::LoginAbandon>>,
+    /// The select screen's roster, which names the in-world files: a rename renames it too.
+    roster: Option<ResMut<'w, crate::char_select::Roster>>,
 }
 
 /// The CVars each agreement is read from and written to.
@@ -1429,7 +1431,13 @@ pub(crate) fn drive_glue_mgr(
         classes: classes.as_deref().map(|c| &c.0),
         creatures: creatures.as_deref(),
     };
-    flush(&mut mgr, &mut script, now_ms, &names);
+    flush(
+        &mut mgr,
+        &mut script,
+        now_ms,
+        &names,
+        asks.roster.as_deref_mut(),
+    );
     mgr.select_cells = script.glue_select_cells();
     // What the outbox asked in turn (the roster load's realm list).
     send_asks(&mut mgr, Vec::new(), &mut asks);
@@ -1555,11 +1563,17 @@ fn seed_realmlist(script: &UiScript, realmlist: &crate::realmlist::Realmlist) {
 }
 
 /// Fire the outbox into the glue VM, the texts resolved through its own strings (`0x703bf0`).
-fn flush(mgr: &mut GlueMgr, script: &mut UiScript, now_ms: u32, names: &RosterNames) {
+fn flush(
+    mgr: &mut GlueMgr,
+    script: &mut UiScript,
+    now_ms: u32,
+    names: &RosterNames,
+    mut roster: Option<&mut crate::char_select::Roster>,
+) {
     // The roster load can queue more (the realm list's dialog), which goes out in turn.
     while !mgr.outbox.is_empty() {
         for out in std::mem::take(&mut mgr.outbox) {
-            flush_one(mgr, script, now_ms, names, out);
+            flush_one(mgr, script, now_ms, names, roster.as_deref_mut(), out);
         }
     }
 }
@@ -1569,6 +1583,7 @@ fn flush_one(
     script: &mut UiScript,
     now_ms: u32,
     names: &RosterNames,
+    roster: Option<&mut crate::char_select::Roster>,
     out: Outgoing,
 ) {
     let text = |script: &UiScript, t: &Text| match t {
@@ -1639,6 +1654,9 @@ fn flush_one(
             if let Some(c) = mgr.roster.iter_mut().find(|c| c.guid == guid) {
                 c.name.clone_from(&name);
                 c.flags &= !benilla_protocol::CHARACTER_FLAG_RENAME;
+            }
+            if let Some(roster) = roster {
+                roster.rename(guid, &name);
             }
             script.apply_glue_rename(guid, &name);
         }
