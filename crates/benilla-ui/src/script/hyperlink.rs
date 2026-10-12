@@ -149,7 +149,7 @@ fn build(model: &mut Model, owner: FrameHandle) -> FrameHandle {
         model.arena.set_frame_strata(h, strata);
         model.arena.set_frame_level(h, level + 1, false);
     }
-    model.arena.set_shown(h, false);
+    model.set_shown_silent(h, false);
     if let Some(KindState::Button(bs)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
         bs.registered_clicks = ["LeftButtonUp", "RightButtonUp"]
             .into_iter()

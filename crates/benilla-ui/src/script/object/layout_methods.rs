@@ -155,13 +155,13 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // No `SetSize`: neither 1.12 method table has it.
     set_shared(lua, m, Side::Frame, "GetWidth", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
-        settle(lua);
+        settle_frame(lua, h);
         let model = lua.app_data_ref::<Model>().expect("model");
         Ok(size_read(&model, h, true))
     })?;
     set_shared(lua, m, Side::Frame, "GetHeight", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
-        settle(lua);
+        settle_frame(lua, h);
         let model = lua.app_data_ref::<Model>().expect("model");
         Ok(size_read(&model, h, false))
     })?;
@@ -170,7 +170,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // y-up), as the reference's coordinate getters report; nil before the first resolve.
     set_shared(lua, m, Side::Frame, "GetCenter", |lua, this: Table| {
         let h = frame_handle_of(lua, &this)?;
-        settle(lua);
+        settle_frame(lua, h);
         let model = lua.app_data_ref::<Model>().expect("model");
         let inv = 1.0 / eff_scale(&model, h);
         Ok(match model.resolved.get(&h) {
@@ -204,7 +204,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     ] {
         set_shared(lua, m, Side::Frame, name, move |lua, this: Table| {
             let h = frame_handle_of(lua, &this)?;
-            settle(lua);
+            settle_frame(lua, h);
             let model = lua.app_data_mut::<Model>().expect("model");
             let inv = 1.0 / eff_scale(&model, h);
             Ok(model.resolved.get(&h).map(|r| {
@@ -224,9 +224,22 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 /// current layout; a settled tree costs one epoch compare. Deviation: `OnSizeChanged` fires at the
 /// next layout drain (`UiScript::resolve`), not inside the getter as the reference's forced
 /// `ApplyRect 0x76b580` does, because running Lua handlers inside a binding risks a borrow panic
-/// or unbounded recursion.
-pub(in crate::script) fn settle(lua: &Lua) {
+/// or unbounded recursion. The read frame `h`, pending under its deferral, resolves too, its bit
+/// left set (`0x7a1a0b` → `0x7680e0(1)`).
+pub(in crate::script) fn settle_frame(lua: &Lua, h: FrameHandle) {
     let mut model = lua.app_data_mut::<Model>().expect("model");
+    if let Some(&id) = model.frame_to_id.get(&h) {
+        model.pull_read(id);
+    }
+    crate::script::UiScript::resolve_layout(&mut model);
+}
+
+/// [`settle_frame`] for a region's rect, through the same getters (`0x7a1980`..).
+pub(in crate::script) fn settle_region(lua: &Lua, rh: crate::widget::RegionHandle) {
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    if let Some(&id) = model.region_to_id.get(&rh) {
+        model.pull_read(id);
+    }
     crate::script::UiScript::resolve_layout(&mut model);
 }
 

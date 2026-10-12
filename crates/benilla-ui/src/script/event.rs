@@ -93,17 +93,22 @@ pub(super) fn fire_size_changes(lua: &Lua) {
             .pending_size_changed,
     );
     for (id, w, h) in pending {
-        if let Err(e) = fire(
-            lua,
-            id,
-            "OnSizeChanged",
-            None,
-            vec![Value::Number(f64::from(w)), Value::Number(f64::from(h))],
-        ) {
-            lua.app_data_mut::<Model>()
-                .expect("model")
-                .record_lua_error(&e);
-        }
+        fire_size_changed(lua, id, w, h);
+    }
+}
+
+/// `OnSizeChanged(width, height)` on frame `id`, its error recorded.
+pub(super) fn fire_size_changed(lua: &Lua, id: u32, w: f32, h: f32) {
+    if let Err(e) = fire(
+        lua,
+        id,
+        "OnSizeChanged",
+        None,
+        vec![Value::Number(f64::from(w)), Value::Number(f64::from(h))],
+    ) {
+        lua.app_data_mut::<Model>()
+            .expect("model")
+            .record_lua_error(&e);
     }
 }
 

@@ -153,6 +153,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                     .create_region(h, RegionKind::FontString, DrawLayer::Artwork, 0)
                     .ok_or_else(|| mlua::Error::runtime("dead tooltip frame"))?,
             };
+            let left_drew = model.region_draws(left);
             {
                 let mut d = if adopted_left.is_some() {
                     // Keep the declared faces; the engine owns justify/visibility/anchors.
@@ -188,6 +189,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                     }
                 }]);
                 model.region_data.insert(left, d);
+                model.note_region_draw(left, left_drew);
                 model.touch_measure(left); // an adopted cell can arrive text-in-hand
                                            // A line row's points are set with the invalidate flag (`0x530197`).
                 model.invalidate_region(left, true);
@@ -202,6 +204,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                     .create_region(h, RegionKind::FontString, DrawLayer::Artwork, 0)
                     .ok_or_else(|| mlua::Error::runtime("dead tooltip frame"))?,
             };
+            let right_drew = model.region_draws(right);
             {
                 let mut d = if adopted_right.is_some() {
                     model.region_data.remove(&right).unwrap_or_default()
@@ -220,6 +223,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                 d.anchors =
                     Anchors::from([Anchor::new(Point::Right, left_id, Point::Left, 0.0, 0.0)]);
                 model.region_data.insert(right, d);
+                model.note_region_draw(right, right_drew);
                 model.touch_measure(right); // an adopted cell can arrive text-in-hand
                 model.invalidate_region(right, true);
             }
@@ -268,7 +272,7 @@ pub(super) fn write_cell(
     // The line's own colour, as if set by `SetTextColor`: a later
     // `GameTooltipText:SetTextColor` must not repaint it.
     d.font_explicit.color = true;
-    d.hidden = false;
+    model.set_region_hidden(rh, false);
     model.touch_measure(rh);
     model.touch_layout_text(rh, was_shown);
 }
@@ -281,10 +285,12 @@ fn clear_content(model: &mut Model, h: FrameHandle) {
         _ => return,
     };
     for rh in lefts.into_iter().chain(rights) {
+        let drew = model.region_draws(rh);
         if let Some(d) = model.region_data.get_mut(&rh) {
             let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
             d.text = None;
             d.hidden = true;
+            model.note_region_draw(rh, drew);
             // `measured` and the wrap pin (`size`) stay: the measure cache is keyed by content
             // ([`RegionData::measure_key`]) and `append_line` rewrites the pin, so the hover
             // loop's per-frame clear and rebuild (`ContainerFrameItemButton_OnUpdate`) re-measures
@@ -755,7 +761,7 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         if owed && model.frame_holds_stale(h) {
             model.note_layout_frame_write(h);
             if let Some(&id) = model.frame_to_id.get(&h) {
-                model.layout_pending.push(id);
+                model.queue_invalidate(id);
             }
         }
         let (num, lefts, rights, min_w, pad_w) = match model.arena.frame(h).map(|f| &f.kind_state) {
@@ -812,7 +818,7 @@ pub(super) fn layout_tooltips(model: &mut Model) {
         // the line write, where the reference's relayout measured in the call.
         if moved {
             if let Some(&id) = model.frame_to_id.get(&h) {
-                model.layout_pending.push(id);
+                model.queue_invalidate(id);
             }
         }
         // Right-flush each shown right cell: one `SetPoint(RIGHT, leftCell, LEFT, width, 0)`
@@ -833,7 +839,7 @@ pub(super) fn layout_tooltips(model: &mut Model) {
             if stored {
                 model.note_layout_region_write(rights[i]);
                 if let Some(&id) = model.region_to_id.get(&rights[i]) {
-                    model.layout_pending.push(id);
+                    model.queue_invalidate(id);
                 }
             }
         }

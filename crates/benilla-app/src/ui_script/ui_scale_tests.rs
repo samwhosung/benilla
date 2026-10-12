@@ -192,6 +192,12 @@ fn the_stock_interface_inside_uiparent_is_unmoved_by_where_the_scale_lives() {
         )
         .unwrap();
     let _ = script.take_errors();
+    // Each home is reached through a scale change, which reaches every frame and region below
+    // `UIParent` itself (`0x76acd5`, `0x76ad06`). A root resize reaches only what reads the root,
+    // and a hidden frame already pending passes nothing on (`0x76814b`), so what anchors through
+    // one would keep its rect in one home and not the other.
+    script.run("UIParent:SetScale(0.8)").unwrap();
+    script.resolve();
 
     // The old home: a root `1/S` larger, `UIParent` at scale 1.
     script.set_screen_size(w / S, h / S);

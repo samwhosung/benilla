@@ -64,13 +64,24 @@ pub(super) fn set_shown_bit(lua: &Lua, h: FrameHandle, shown: bool) {
 }
 
 /// The base show transition (`0x76ae10`): the frame's own step, its children's transitions in
-/// link order, the toplevel raise (`0x76aeec`), then its own OnShow (`0x76aef5`).
+/// link order, the toplevel raise (`0x76aeec`), then its own OnShow (`0x76aef5`). Past the gate,
+/// and before it is marked visible, the frame's layout undefers and resolves what it owes
+/// (`0x76ae58`), so its `OnSizeChanged` fires here, ahead of its regions, children and notify.
 pub(super) fn base_show(lua: &Lua, h: FrameHandle) {
-    {
+    let roots = {
         let mut model = model_mut(lua);
-        if !model.arena.show_step(h) {
+        if !model.arena.show_gate(h) {
             return;
         }
+        let owed = model.layout_on_show(h);
+        (owed && model.show_fires(h)).then(|| model.show_roots(h))
+    };
+    if let Some(roots) = roots {
+        resolve_shown(lua, roots);
+    }
+    {
+        let mut model = model_mut(lua);
+        model.arena.show_mark(h);
         // Only a frame entering the mouse index schedules a hover re-pick: the show's insert
         // (`0x764780` → `0x76afa0`, flag 0) reaches `0x764aa0` for a kind whose bit is set, and
         // its tail arms `[root+0x1100]` for the mouse kind alone (`0x764b84`, `0x764b8d`). A
@@ -93,6 +104,7 @@ pub(super) fn base_hide(lua: &Lua, h: FrameHandle) {
         if !model.arena.hide_step(h) {
             return;
         }
+        model.layout_on_hide(h);
         // The de-registration ends a move or size on this frame before its index removal
         // (`0x76493a`, then `0x764942`).
         super::object::cancel_on_hide(&mut model, h);
@@ -106,6 +118,35 @@ pub(super) fn base_hide(lua: &Lua, h: FrameHandle) {
     // locked, before the base notify, so a button hidden while held comes back unpushed.
     super::button::edge(&mut model_mut(lua), h, ButtonState::on_hide);
     notify(lua, h, false);
+}
+
+/// The show's resolve (`0x768060(0)` → `0x7680e0(1)`): what the shown frame and its regions owe
+/// resolves now, with each deferred object an anchor read reaches on the way (`0x7a2fc0`), and
+/// their `OnSizeChanged` fire here, each pulled object's before its reader's, as each one's
+/// `ApplyRect` (`0x76b580`) runs inside the read. Size changes the resolve made elsewhere stay
+/// queued for the drain, as the reference resolves those there. A show with no such handler to
+/// fire leaves its resolve to the next one ([`Model::show_fires`]).
+fn resolve_shown(lua: &Lua, roots: Vec<u32>) {
+    let fire: Vec<(u32, f32, f32)> = {
+        let mut model = model_mut(lua);
+        let mark = model.pending_size_changed.len();
+        model.layout_chain = Some(roots);
+        super::UiScript::resolve_layout(&mut model);
+        let chain = model.layout_chain.take().unwrap_or_default();
+        let mut fire = Vec::new();
+        for id in chain {
+            if let Some(at) = model.pending_size_changed[mark..]
+                .iter()
+                .position(|e| e.0 == id)
+            {
+                fire.push(model.pending_size_changed.remove(mark + at));
+            }
+        }
+        fire
+    };
+    for (id, w, h) in fire {
+        event::fire_size_changed(lua, id, w, h);
+    }
 }
 
 /// Run `step` on each child of `parent` as a live walk reaches it
@@ -226,8 +267,16 @@ pub(crate) fn set_load_window(lua: &Lua, wrapper: &Table, open: bool) {
     let Ok(h) = super::object::frame_handle_of(lua, wrapper) else {
         return;
     };
-    if let Some(f) = model_mut(lua).arena.frame_mut(h) {
+    let mut model = model_mut(lua);
+    if let Some(f) = model.arena.frame_mut(h) {
         f.load_window = open;
+    }
+    // The pre-load hook defers the frame's layout (`0x7697c2`–`0x769807`); the post-load hook,
+    // once the window is down, undefers a visible one (`0x76a2ff`–`0x76a35b`).
+    if open {
+        model.layout_load_begin(h);
+    } else {
+        model.layout_load_end(h);
     }
 }
 

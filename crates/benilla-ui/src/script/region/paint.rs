@@ -493,7 +493,9 @@ impl crate::script::UiScript {
             })
             .filter_map(|(rh, _)| model.region_to_id.get(rh).copied())
             .collect();
-        model.layout_pending.extend(art_sized);
+        for id in art_sized {
+            model.queue_invalidate(id);
+        }
         // No per-node hash holds a probe's answer: a full-scope rebuild, as for a screen move.
         model.layout_scope.invalidate();
         model.touch_layout();

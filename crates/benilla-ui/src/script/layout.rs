@@ -3,8 +3,47 @@ use std::collections::HashMap;
 use crate::layout::{self, Anchor, LayoutInput, Rect};
 use crate::widget::{FrameHandle, RegionHandle};
 
+use super::model::{node_deferred, IdMap, HOLD_FORCE, HOLD_HELD, HOLD_QUEUED, HOLD_QUEUED_FORCE};
 use super::types::RegionData;
 use super::{MeasureRequest, Model, UiScript, SCREEN};
+
+/// Node `id`'s [`Model::layout_hold`] bits, for a caller holding the model destructured.
+#[inline]
+fn hold_get(hold: &[u8], id: u32) -> u8 {
+    hold.get(id as usize).copied().unwrap_or(0)
+}
+
+fn hold_set(hold: &mut Vec<u8>, id: u32, bits: u8) {
+    let i = id as usize;
+    if hold.len() <= i {
+        hold.resize(i + 1, 0);
+    }
+    hold[i] |= bits;
+}
+
+fn hold_clear(hold: &mut [u8], id: u32, bits: u8) {
+    if let Some(b) = hold.get_mut(id as usize) {
+        *b &= !bits;
+    }
+}
+
+/// Node `id`'s anchors: a frame's layout input's, a region's own.
+fn node_anchors(
+    layout_inputs: &HashMap<FrameHandle, LayoutInput>,
+    region_data: &HashMap<RegionHandle, RegionData>,
+    id_to_frame: &IdMap<FrameHandle>,
+    id_to_region: &IdMap<RegionHandle>,
+    id: u32,
+) -> layout::Anchors {
+    if let Some(h) = id_to_frame.get(&id) {
+        return layout_inputs.get(h).map(|i| i.anchors).unwrap_or_default();
+    }
+    id_to_region
+        .get(&id)
+        .and_then(|rh| region_data.get(rh))
+        .map(|d| d.anchors)
+        .unwrap_or_default()
+}
 
 /// A frame's `effective_alpha` and `effective_scale`, worn by the quads it emits itself.
 #[derive(Clone, Copy)]
@@ -87,6 +126,20 @@ impl InputFingerprint {
 
 /// The sentinel in [`LayoutScope::last`] and `now` for an id not in that pass's graph.
 const NO_NODE: u64 = 0;
+
+// A resolve's per-id marks ([`LayoutScope::marks`]).
+/// Invalidated: solved from its inputs (`0x7680e0`).
+const MARK_INVALID: u8 = 1;
+/// Its resolved bit cleared: stored without the keep test.
+const MARK_FORCED: u8 = 2;
+/// Undeferred for this resolve: a show, a load's end, a read or an anchor read pulled it.
+const MARK_PULLED: u8 = 4;
+/// Its invalidate passes to what anchors to it (`0x768178`).
+const MARK_PASSING: u8 = 8;
+/// Resolved for the show that started this resolve ([`Model::layout_chain`]).
+const MARK_CHAIN: u8 = 16;
+/// Collected as a seed already.
+const MARK_SEEN: u8 = 32;
 
 /// A frame's per-node hash; the full derive and the incremental pass must agree bit for bit.
 #[inline]
@@ -192,8 +245,13 @@ pub(crate) struct LayoutScope {
     out: Vec<Vec<u32>>,
     /// Per id: in the dirty closure.
     dirty: Vec<bool>,
+    /// The dirty ids in the order they were marked.
+    dirty_list: Vec<u32>,
     /// The closure's worklist.
     stack: Vec<u32>,
+    /// Per id, this resolve's `MARK_*` bits, cleared through `marked`.
+    marks: Vec<u8>,
+    marked: Vec<u32>,
     /// The cached frame roster, `(handle, id)`, kept across resolves.
     plan: Vec<(FrameHandle, u32)>,
     /// The cached roster of live, anchored regions.
@@ -234,6 +292,7 @@ impl LayoutScope {
         self.out.resize_with(n, Vec::new);
         self.dirty.clear();
         self.dirty.resize(n, false);
+        self.dirty_list.clear();
         self.dep_to.clear();
         self.dep_next.clear();
         self.dep_free.clear();
@@ -256,8 +315,43 @@ impl LayoutScope {
         }
         self.dirty.clear();
         self.dirty.resize(self.node_of.len(), false);
+        self.dirty_list.clear();
         self.stack.clear();
         self.staged.clear();
+    }
+
+    /// Clear the last resolve's marks and size them for `n` ids.
+    fn begin_marks(&mut self, n: usize) {
+        for &id in &self.marked {
+            self.marks[id as usize] = 0;
+        }
+        self.marked.clear();
+        if self.marks.len() < n {
+            self.marks.resize(n, 0);
+        }
+    }
+
+    /// Add `bits` to id `id`'s marks.
+    #[inline]
+    fn mark(&mut self, id: u32, bits: u8) {
+        let i = id as usize;
+        if self.marks.len() <= i {
+            self.marks.resize(i + 1, 0);
+        }
+        if self.marks[i] == 0 {
+            self.marked.push(id);
+        }
+        self.marks[i] |= bits;
+    }
+
+    #[inline]
+    fn has(&self, id: u32, bits: u8) -> bool {
+        self.marks.get(id as usize).is_some_and(|m| m & bits != 0)
+    }
+
+    #[inline]
+    fn is_dirty(&self, id: u32) -> bool {
+        self.dirty.get(id as usize).copied().unwrap_or(false)
     }
 
     /// Record that node `from` reads `to`'s rect, so a change at `to` reaches `from`.
@@ -344,18 +438,22 @@ impl LayoutScope {
             if !*d {
                 *d = true;
                 self.stack.push(id);
+                self.dirty_list.push(id);
             }
         }
     }
 
     /// A re-derived node's verdict: stage and seed it when its hash or its edges moved. Every edge
     /// source (anchor targets, the owner, the override) is in the hash, so `relinked` only guards
-    /// against a hash that stops covering one.
+    /// against a hash that stops covering one. A node `held` under its deferral is staged but not
+    /// seeded: its resolve waits, so its rect stays and nothing reading it moves.
     #[inline]
-    fn note(&mut self, id: u32, hash: u64, relinked: bool) {
+    fn note(&mut self, id: u32, hash: u64, relinked: bool, held: bool) {
         if relinked || hash != self.last.get(id as usize).copied().unwrap_or(NO_NODE) {
             self.staged.push((id, hash));
-            self.seed(id);
+            if !held {
+                self.seed(id);
+            }
         }
     }
 
@@ -416,8 +514,10 @@ impl LayoutScope {
     /// Mark every node dirty, for what a per-node diff cannot see (no memory, a screen move).
     fn dirty_all(&mut self) {
         for (id, &n) in self.node_of.iter().enumerate() {
-            if n != u32::MAX {
+            if n != u32::MAX && !self.dirty[id] {
                 self.dirty[id] = true;
+                #[allow(clippy::cast_possible_truncation)]
+                self.dirty_list.push(id as u32);
             }
         }
     }
@@ -534,6 +634,25 @@ impl LayoutScope {
         }
         None
     }
+}
+
+/// Every frame's and region's deferral bit, for `WOW_LAYOUT_VERIFY`'s re-run to hold against.
+fn deferral_state(model: &Model) -> (Vec<FrameHandle>, Vec<RegionHandle>) {
+    // In arena order, which the re-run does not change.
+    let frames: Vec<FrameHandle> = model
+        .arena
+        .iter_frames()
+        .filter(|(_, f)| f.layout_deferred)
+        .map(|(h, _)| h)
+        .collect();
+    let mut regions: Vec<RegionHandle> = model
+        .region_to_id
+        .keys()
+        .copied()
+        .filter(|&rh| model.arena.region(rh).is_some_and(|r| r.layout_deferred))
+        .collect();
+    regions.sort_unstable_by_key(|rh| rh.fingerprint_bits());
+    (frames, regions)
 }
 
 /// The layout id of the first frame or region whose rect differs between the model and `frames`
@@ -753,12 +872,18 @@ impl UiScript {
             model.layout_derives,
         );
         let (queued, warned) = (model.pending_size_changed.len(), model.warnings.len());
+        // The deferral state the pass left, which a re-run of its converged model must keep: it
+        // reaches nothing, so it holds and pulls nothing.
+        let chain = model.layout_chain.take();
+        let deferral_before = (deferral_state(model), model.layout_hold.clone());
         model.layout_touched = None; // no ledger: derive the graph
         model.layout_epoch_resolved = None; // past tier 1
         model.layout_fingerprint = None; // past tier 2
         Self::resolve_layout_inner(model); // a fresh scope: full scope
         let graph = cached.diverges_from(&model.layout_scope);
         model.layout_scope = cached;
+        model.layout_chain = chain;
+        let deferral_after = (deferral_state(model), model.layout_hold.clone());
         model.pending_size_changed.truncate(queued);
         model.warnings.truncate(warned);
         (
@@ -788,6 +913,13 @@ impl UiScript {
                 report(id),
                 rect(&before.0, &before.1),
                 rect(&model.resolved, &model.region_resolved),
+                graph.as_deref().unwrap_or("same as fresh"),
+            ));
+        }
+        if deferral_before != deferral_after {
+            return Some(format!(
+                "an INCREMENTAL layout pass left deferral state a full derivation of the same \
+                 model moved: a node it should have held or pulled. Graph: {}",
                 graph.as_deref().unwrap_or("same as fresh"),
             ));
         }
@@ -846,6 +978,8 @@ impl UiScript {
         let size_eps = model.size_eps();
         let resolve_eps = model.resolve_eps();
         pre.watched = pre.lap();
+        // The graph's own clears of a resolved bit (a moved effective scale) are writes made now.
+        let forced_mark = model.layout_force.len();
         // ── The graph: the ledger's cache, or a fresh derivation ─────────────────────────────
         // A `Some` ledger claims every write since the graph was built named its node and kept
         // the graph's shape, so the cached roster, edges and hashes stand; `None` derives.
@@ -883,12 +1017,91 @@ impl UiScript {
             layout_force,
             layout_screen,
             layout_unsettled,
+            layout_hold,
+            layout_pass,
+            layout_pull,
+            layout_chain,
+            next_id,
+            region_to_id,
             ..
         } = model;
         let mut full_scope = false;
         // The nodes this resolve stores without the keep test; a write that cleared the resolved
         // bit of no node (an unanchored region's measure) leaves nothing to store.
         let mut forced = std::mem::take(layout_force);
+        let mut pending = pending;
+
+        // ── Deferral (`G+0x3c` bit 2, `0x768060`) ───────────────────────────────────────────
+        // A deferred node's resolve waits, pending, until its show, a read, or an anchor read of
+        // a node that resolves pulls it; the pulled ones are this resolve's to solve.
+        scope.begin_marks((*next_id as usize).max(scope.node_of.len()));
+        let mut passing = std::mem::take(layout_pass);
+        for id in std::mem::take(layout_pull) {
+            scope.mark(id, MARK_PULLED);
+            let f = hold_get(layout_hold, id);
+            if f & HOLD_HELD != 0 {
+                if f & HOLD_FORCE != 0 {
+                    forced.push(id);
+                } else {
+                    pending.push(id);
+                }
+                hold_clear(layout_hold, id, HOLD_HELD | HOLD_FORCE);
+            }
+        }
+        // Queued and deferred since: off the queue, pending (`0x768074`–`0x7680b3`). A resolved bit
+        // the derivation cleared is a write now, so a deferred one passes it on.
+        pending.retain(|&id| {
+            hold_clear(layout_hold, id, HOLD_QUEUED);
+            if scope.has(id, MARK_PULLED) || !node_deferred(arena, id_to_frame, id_to_region, id) {
+                return true;
+            }
+            hold_set(layout_hold, id, HOLD_HELD);
+            false
+        });
+        // A moved effective scale reaches each of the frame's regions itself (`0x76ad06`), which
+        // clears its resolved bit and invalidates it under its own deferral, whatever the frame's.
+        let scaled: Vec<u32> = forced[forced_mark.min(forced.len())..]
+            .iter()
+            .copied()
+            .filter(|id| id_to_frame.contains_key(id))
+            .collect();
+        for &id in &scaled {
+            let Some(f) = id_to_frame.get(&id).and_then(|&h| arena.frame(h)) else {
+                continue;
+            };
+            for rh in &f.regions {
+                if let Some(&rid) = region_to_id.get(rh) {
+                    forced.push(rid);
+                }
+            }
+        }
+        let mut at = 0usize;
+        forced.retain(|&id| {
+            let derived = at >= forced_mark;
+            at += 1;
+            hold_clear(layout_hold, id, HOLD_QUEUED_FORCE);
+            if scope.has(id, MARK_PULLED) || !node_deferred(arena, id_to_frame, id_to_region, id) {
+                return true;
+            }
+            if derived && hold_get(layout_hold, id) & HOLD_HELD == 0 {
+                passing.push(id);
+            }
+            hold_set(layout_hold, id, HOLD_HELD | HOLD_FORCE);
+            false
+        });
+        passing.sort_unstable();
+        passing.dedup();
+        for &id in &passing {
+            scope.mark(id, MARK_PASSING);
+        }
+        // A show's resolve: its roots, and what their reads pull, in `ApplyRect` order.
+        let mut chain = layout_chain.take();
+        if let Some(roots) = &chain {
+            for &id in roots {
+                scope.mark(id, MARK_CHAIN);
+            }
+        }
+
         // Each is reached now, so it holds what its inputs give again.
         for id in forced.iter().chain(&pending) {
             layout_unsettled.remove(id);
@@ -897,6 +1110,7 @@ impl UiScript {
         // (`0x768d55`): its valid bit clears, a Texture keeps its last quad. So does one whose
         // owner's scale moved, which the cascade invalidates (`0x76ad06`).
         let fail_loose = |rh: RegionHandle,
+                          arena: &crate::widget::WidgetArena,
                           region_resolved: &mut HashMap<RegionHandle, Rect>,
                           region_kept: &mut HashMap<RegionHandle, Rect>| {
             let Some(r) = arena.region(rh) else { return };
@@ -911,15 +1125,20 @@ impl UiScript {
         };
         for &id in &pending {
             if let Some(&rh) = id_to_region.get(&id) {
-                fail_loose(rh, region_resolved, region_kept);
+                fail_loose(rh, arena, region_resolved, region_kept);
             }
         }
         for &id in &forced {
             if let Some(&rh) = id_to_region.get(&id) {
-                fail_loose(rh, region_resolved, region_kept);
-            } else if let Some(f) = id_to_frame.get(&id).and_then(|&h| arena.frame(h)) {
+                fail_loose(rh, arena, region_resolved, region_kept);
+            }
+        }
+        for &id in &scaled {
+            if let Some(f) = id_to_frame.get(&id).and_then(|&h| arena.frame(h)) {
                 for &rh in &f.regions {
-                    fail_loose(rh, region_resolved, region_kept);
+                    if !arena.region(rh).is_some_and(|r| r.layout_deferred) {
+                        fail_loose(rh, arena, region_resolved, region_kept);
+                    }
                 }
             }
         }
@@ -929,7 +1148,6 @@ impl UiScript {
                 .get(id as usize)
                 .is_some_and(|&n| n != u32::MAX)
         });
-        let mut pending = pending;
         pending.retain(|&id| {
             scope
                 .node_of
@@ -937,9 +1155,11 @@ impl UiScript {
                 .is_some_and(|&n| n != u32::MAX)
         });
         // An incremental pass has no fingerprint; its verdict is `staged`, exactly the seed set.
-        // A forced or invalidated node is solved even with its inputs unmoved.
+        // A forced or invalidated node is solved even with its inputs unmoved, and an invalidate
+        // passed on reaches what anchors to its node.
         let gate_skips = forced.is_empty()
             && pending.is_empty()
+            && passing.is_empty()
             && match fp {
                 Some(_) => *layout_fingerprint == fp,
                 None => scope.staged.is_empty(),
@@ -959,6 +1179,7 @@ impl UiScript {
             *layout_epoch_resolved = Some(epoch_at_entry);
             // Re-arm the ledger: the graph is as it was, so the cache is still trustworthy.
             *layout_touched = Some(Vec::new());
+            *layout_chain = chain.clone();
             if !verify {
                 return;
             }
@@ -994,97 +1215,106 @@ impl UiScript {
             if full_scope {
                 scope.dirty_all();
             } else {
-                for (id, &n) in scope.node_of.iter().enumerate() {
-                    if n != u32::MAX && scope.now[id] != scope.last[id] {
-                        scope.stack.push(id as u32);
-                        scope.dirty[id] = true;
+                // A node held under its deferral waits whatever moved its inputs.
+                for id in 0..scope.node_of.len() {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let id32 = id as u32;
+                    if scope.node_of[id] != u32::MAX
+                        && scope.now[id] != scope.last[id]
+                        && !(hold_get(layout_hold, id32) & HOLD_HELD != 0
+                            && node_deferred(arena, id_to_frame, id_to_region, id32))
+                    {
+                        scope.seed(id32);
                     }
                 }
                 // A node that died has no hash left to differ, so its id is seeded instead: the
                 // derivation recorded the edges of whatever still anchors to it, and the closure
                 // re-resolves those against its missing rect, as a full scope would.
                 for id in 0..scope.node_of.len() {
-                    if scope.last[id] != NO_NODE
-                        && scope.node_of[id] == u32::MAX
-                        && !scope.dirty[id]
-                    {
-                        scope.stack.push(id as u32);
-                        scope.dirty[id] = true;
+                    if scope.last[id] != NO_NODE && scope.node_of[id] == u32::MAX {
+                        #[allow(clippy::cast_possible_truncation)]
+                        scope.seed(id as u32);
                     }
                 }
                 scope.close();
             }
         }
         // A forced or invalidated node, and whatever reads it, is solved: the store it owes moves
-        // its rect.
-        for &id in forced.iter().chain(&pending) {
+        // its rect. So is what an invalidate passed on reaches.
+        for &id in &forced {
+            scope.mark(id, MARK_INVALID | MARK_FORCED);
+            scope.seed(id);
+        }
+        for &id in &pending {
+            scope.mark(id, MARK_INVALID);
+            scope.seed(id);
+        }
+        for &id in &passing {
             scope.seed(id);
         }
         scope.close();
-        let mut force_mask: Vec<bool> = Vec::new();
-        let mut invalid_mask: Vec<bool> = Vec::new();
-        if !forced.is_empty() || !pending.is_empty() {
-            force_mask.resize(scope.node_of.len(), false);
-            invalid_mask.resize(scope.node_of.len(), false);
-            for &id in &forced {
-                force_mask[id as usize] = true;
-                invalid_mask[id as usize] = true;
-            }
-            for &id in &pending {
-                invalid_mask[id as usize] = true;
+        // A held node an anchor read may pull joins the solve, with what reads it: a node that
+        // resolves reads its targets, and a pulled target resolves first (`0x7a2fc0`).
+        let mut k = 0;
+        while k < scope.dirty_list.len() {
+            let id = scope.dirty_list[k];
+            k += 1;
+            let anchors = node_anchors(layout_inputs, region_data, id_to_frame, id_to_region, id);
+            for t in anchors.iter().map(|a| a.relative_to) {
+                if hold_get(layout_hold, t) & HOLD_HELD != 0 && !scope.is_dirty(t) {
+                    scope.seed(t);
+                    scope.close();
+                }
             }
         }
-        let is_forced = |id: u32| force_mask.get(id as usize).copied().unwrap_or(false);
-        // Invalidated since the last resolve (`0x7680e0`): solved from its inputs, never kept.
-        let is_invalid = |id: u32| invalid_mask.get(id as usize).copied().unwrap_or(false);
         // A dirty frame is solved, a dirty region swept, and whatever they read is seeded at its
         // cached rect. A dirty region is seeded too, since the frame pass runs before the sweep.
         let mut solve_frames: Vec<u32> = Vec::new();
         let mut sweep_regions: Vec<u32> = Vec::new();
         let mut seed_frames: Vec<u32> = Vec::new();
         let mut seed_regions: Vec<u32> = Vec::new();
-        // Whether a node in the closure reads `id`; a rect nothing dirty reads is not seeded.
-        let read_by_dirty = |scope: &LayoutScope, id: u32| -> bool {
-            let mut e = scope.dep_head[id as usize];
-            while e != u32::MAX {
-                if scope.dirty[scope.dep_to[e as usize] as usize] {
-                    return true;
-                }
-                e = scope.dep_next[e as usize];
-            }
-            false
-        };
         // A cleared region is no node but keeps its rect, which what anchors to it still reads.
         let mut seed_loose: Vec<(u32, Rect)> = Vec::new();
-        for id in 0..scope.node_of.len() {
-            let n = scope.node_of[id];
+        scope.dirty_list.sort_unstable();
+        for k in 0..scope.dirty_list.len() {
+            let id = scope.dirty_list[k];
+            let Some(&n) = scope.node_of.get(id as usize) else {
+                continue;
+            };
             if n == u32::MAX {
-                #[allow(clippy::cast_possible_truncation)]
-                let id32 = id as u32;
-                if scope.dep_head[id] != u32::MAX && read_by_dirty(scope, id32) {
-                    if let Some(r) = id_to_region
-                        .get(&id32)
-                        .and_then(|rh| region_resolved.get(rh))
-                    {
-                        seed_loose.push((id32, *r));
-                    }
-                }
                 continue;
             }
-            let (idx, is_region, dirty) = (n & !REGION_TAG, n & REGION_TAG != 0, scope.dirty[id]);
-            #[allow(clippy::cast_possible_truncation)]
-            let id32 = id as u32;
-            if is_region {
-                if dirty {
-                    sweep_regions.push(idx);
-                    seed_regions.push(idx);
-                } else if read_by_dirty(scope, id32) {
-                    seed_regions.push(idx);
-                }
-            } else if dirty {
+            let idx = n & !REGION_TAG;
+            if n & REGION_TAG != 0 {
+                sweep_regions.push(idx);
+                seed_regions.push(idx);
+            } else {
                 solve_frames.push(idx);
-            } else if read_by_dirty(scope, id32) {
-                seed_frames.push(idx);
+            }
+        }
+        // What a dirty node reads that is not dirty itself, each once.
+        for k in 0..scope.dirty_list.len() {
+            let id = scope.dirty_list[k] as usize;
+            for j in 0..scope.out.get(id).map_or(0, Vec::len) {
+                let t = scope.out[id][j];
+                if scope.is_dirty(t) || scope.has(t, MARK_SEEN) {
+                    continue;
+                }
+                scope.mark(t, MARK_SEEN);
+                match scope.node_of.get(t as usize).copied() {
+                    None => {}
+                    Some(u32::MAX) => {
+                        if scope.dep_head.get(t as usize).copied().unwrap_or(u32::MAX) != u32::MAX {
+                            if let Some(r) =
+                                id_to_region.get(&t).and_then(|rh| region_resolved.get(rh))
+                            {
+                                seed_loose.push((t, *r));
+                            }
+                        }
+                    }
+                    Some(n) if n & REGION_TAG != 0 => seed_regions.push(n & !REGION_TAG),
+                    Some(n) => seed_frames.push(n),
+                }
             }
         }
         // This solve's width, beside `layout_solves` (how often) and `layout_rounds` (how deep).
@@ -1094,26 +1324,15 @@ impl UiScript {
         // and keeps that one when every edge moved less than 1e-5 layout units, so a slow drift
         // builds until it crosses. The cache is the rect at this resolve's entry: a mid-pass round
         // is our fixpoint's, not a store. A forced node, a frame with no rect, a region whose
-        // owner's scale moved (the cascade reaches its regions, `0x76ad06`), has no cache.
+        // owner's scale moved (the cascade reaches its regions, `0x76ad06`), has no cache; a
+        // node pulled mid-resolve is forced from then on, so each round applies the marks.
         let entry_frames: Vec<Option<Rect>> = solve_frames
             .iter()
-            .map(|&i| {
-                let (h, id) = scope.plan[i as usize];
-                (!is_forced(id))
-                    .then(|| resolved.get(&h).copied())
-                    .flatten()
-            })
+            .map(|&i| resolved.get(&scope.plan[i as usize].0).copied())
             .collect();
-        let entry_regions: Vec<(Option<Rect>, bool)> = sweep_regions
+        let entry_regions: Vec<Option<Rect>> = sweep_regions
             .iter()
-            .map(|&i| {
-                let row = scope.regions[i as usize];
-                let owner_forced = frame_to_id.get(&row.owner).is_some_and(|&o| is_forced(o));
-                let cached = (!is_forced(row.id) && !owner_forced)
-                    .then(|| region_resolved.get(&row.rh).copied())
-                    .flatten();
-                (cached, is_invalid(row.id) || owner_forced)
-            })
+            .map(|&i| region_resolved.get(&scope.regions[i as usize].rh).copied())
             .collect();
         solver.set_keep_eps(resolve_eps);
         let round_cap = scope.plan.len() + region_data.len() + 2;
@@ -1122,6 +1341,16 @@ impl UiScript {
         let mut t_frames = std::time::Duration::ZERO;
         let mut t_regions = std::time::Duration::ZERO;
         let mut n_regions_swept = 0u64;
+        // Whether node `id` is deferred in this resolve: its bit set and nothing pulled it.
+        let deferral = |scope: &LayoutScope,
+                        arena: &crate::widget::WidgetArena,
+                        layout_hold: &[u8],
+                        id: u32|
+         -> (bool, bool) {
+            let deferred =
+                !scope.has(id, MARK_PULLED) && node_deferred(arena, id_to_frame, id_to_region, id);
+            (deferred, hold_get(layout_hold, id) & HOLD_HELD != 0)
+        };
         for round in 0..round_cap {
             *layout_rounds += 1;
             let t_round = prof.then(std::time::Instant::now);
@@ -1137,26 +1366,49 @@ impl UiScript {
                 if let Some(r) = region_resolved.get(&n.rh) {
                     solver.set_external(n.id, *r);
                 }
+                let (d, held) = deferral(scope, arena, layout_hold, n.id);
+                solver.set_deferral(n.id, d, held);
             }
             for &(id, r) in &seed_loose {
                 solver.set_external(id, r);
+                let (d, held) = deferral(scope, arena, layout_hold, id);
+                solver.set_deferral(id, d, held);
             }
-            for (&i, &(cached, invalid)) in sweep_regions.iter().zip(&entry_regions) {
-                solver.set_entry(scope.regions[i as usize].id, cached, invalid);
+            for (&i, &raw) in sweep_regions.iter().zip(&entry_regions) {
+                let row = scope.regions[i as usize];
+                let owner_forced = frame_to_id
+                    .get(&row.owner)
+                    .is_some_and(|&o| scope.has(o, MARK_FORCED));
+                let cached = (!scope.has(row.id, MARK_FORCED) && !owner_forced)
+                    .then_some(raw)
+                    .flatten();
+                solver.set_entry(
+                    row.id,
+                    cached,
+                    scope.has(row.id, MARK_INVALID) || owner_forced,
+                );
             }
             for &i in &seed_frames {
                 let (h, id) = scope.plan[i as usize];
                 if let Some(r) = resolved.get(&h) {
                     solver.set_external(id, *r);
                 }
+                let (d, held) = deferral(scope, arena, layout_hold, id);
+                solver.set_deferral(id, d, held);
             }
-            for (&i, &cached) in solve_frames.iter().zip(&entry_frames) {
+            for (&i, &raw) in solve_frames.iter().zip(&entry_frames) {
                 let (h, id) = scope.plan[i as usize];
                 let Some(input) = layout_inputs.get(&h) else {
                     continue;
                 };
                 solver.set_frame(id, input);
-                solver.set_entry(id, cached, is_invalid(id));
+                let cached = (!scope.has(id, MARK_FORCED)).then_some(raw).flatten();
+                solver.set_entry(id, cached, scope.has(id, MARK_INVALID));
+                let (d, held) = deferral(scope, arena, layout_hold, id);
+                solver.set_deferral(id, d, held);
+            }
+            for &id in &passing {
+                solver.set_passes(id);
             }
             solver.solve();
             for &i in &solve_frames {
@@ -1184,7 +1436,7 @@ impl UiScript {
             }
             let t_reg = prof.then(std::time::Instant::now);
             let mut scratch = LayoutInput::default();
-            for (&ri, &(cached, _)) in sweep_regions.iter().zip(&entry_regions) {
+            for &ri in &sweep_regions {
                 let RegionRow {
                     rh,
                     id: region_id,
@@ -1198,9 +1450,15 @@ impl UiScript {
                 if prof {
                     n_regions_swept += 1;
                 }
-                // Not reached since its entry: it keeps its state, rect or none (see
+                let (deferred, held) = deferral(scope, arena, layout_hold, region_id);
+                solver.set_deferral(region_id, deferred, held);
+                let reached = solver.reached(region_id, data.anchors.iter().map(|a| a.relative_to));
+                if reached && deferred {
+                    solver.hold_reached(region_id);
+                }
+                // Not reached since its entry, or deferred: it keeps its state, rect or none (see
                 // `LayoutSolver::set_entry`).
-                if !solver.reached(region_id, data.anchors.iter().map(|a| a.relative_to)) {
+                if !reached || deferred {
                     match solver.entry(region_id) {
                         Some(kept) => {
                             solver.set_external(region_id, kept);
@@ -1258,11 +1516,12 @@ impl UiScript {
                 scratch.width = width;
                 scratch.height = height;
                 scratch.scale = scale;
-                let edges = layout::resolve_rect_edges(&scratch, |id| {
+                let (edges, reads) = layout::resolve_rect_edges_reads(&scratch, |id| {
                     // The screen root is a frame-pass external only: a region anchor to id 0 finds
                     // no rect here, though the solver holds one.
                     (id != SCREEN).then(|| solver.rect(id)).flatten()
                 });
+                solver.note_reads(region_id, &data.anchors, reads);
                 // An axis resolves, or the region does not. The reference resolver core
                 // `[0x7671a0, 0x76761f)` reads no parent or owner pointer, only the region's own
                 // anchors and `combineEdge`/`combineCenter` over its own size; `assemble 0x767a20`
@@ -1292,7 +1551,8 @@ impl UiScript {
                 };
                 let rect = Rect::new(bottom, left, top, right);
                 // The keep test, as for a frame: the same `0x768d20` resolves regions.
-                let rect = cached
+                let rect = solver
+                    .entry(region_id)
                     .filter(|&c| layout::keeps_rect(c, rect, resolve_eps))
                     .unwrap_or(rect);
                 // Into the solver too: a later region in this sweep that anchors here needs it.
@@ -1307,6 +1567,58 @@ impl UiScript {
             if let Some(t) = t_reg {
                 t_regions += t.elapsed();
             }
+
+            // ── The round's deferral: what it reached deferred, and what its reads pulled ────
+            // A deferred node reached is pending and passes its invalidate on, once.
+            for k in 0..solver.newly_held().len() {
+                let id = solver.newly_held()[k];
+                hold_set(layout_hold, id, HOLD_HELD);
+                if !scope.has(id, MARK_PASSING) {
+                    scope.mark(id, MARK_PASSING);
+                    passing.push(id);
+                    changed = true;
+                }
+            }
+            // A read of a deferred target clears its bit for good and resolves it first, if it
+            // is pending (`0x7a2fb8` → `0x768060(0)` → `0x7680e0(1)`); here, in the next round,
+            // after which its readers resolve again against it.
+            for k in 0..solver.deferred_reads().len() {
+                let (reader, t) = solver.deferred_reads()[k];
+                if scope.has(t, MARK_PULLED) {
+                    continue;
+                }
+                scope.mark(t, MARK_PULLED);
+                if let Some(f) = id_to_frame.get(&t).and_then(|&h| arena.frame_mut(h)) {
+                    f.layout_deferred = false;
+                } else if let Some(r) = id_to_region.get(&t).and_then(|&rh| arena.region_mut(rh)) {
+                    r.layout_deferred = false;
+                }
+                if scope.has(reader, MARK_CHAIN) {
+                    scope.mark(t, MARK_CHAIN);
+                    if let Some(order) = chain.as_mut() {
+                        let at = order
+                            .iter()
+                            .position(|&c| c == reader)
+                            .unwrap_or(order.len());
+                        order.insert(at, t);
+                    }
+                }
+                let f = hold_get(layout_hold, t);
+                if f & HOLD_HELD == 0 {
+                    continue;
+                }
+                hold_clear(layout_hold, t, HOLD_HELD | HOLD_FORCE);
+                layout_unsettled.remove(&t);
+                scope.mark(
+                    t,
+                    MARK_INVALID | if f & HOLD_FORCE != 0 { MARK_FORCED } else { 0 },
+                );
+                if let Some(&rh) = id_to_region.get(&t) {
+                    fail_loose(rh, arena, region_resolved, region_kept);
+                }
+                changed = true;
+            }
+
             if !changed {
                 if prof {
                     // `anchored` is the sweep's roster, `solved` and `swept` this pass's scope.
@@ -1355,6 +1667,7 @@ impl UiScript {
                 // so a touch during this pass (the tooltip pre-pass, a minted id) re-opens it. The
                 // fingerprint hashes inputs only, so the next unmutated resolve would match it.
                 *layout_epoch_resolved = Some(epoch_at_entry);
+                *layout_chain = chain;
                 queue_size_changes(
                     &watched,
                     resolved,
@@ -1378,6 +1691,7 @@ impl UiScript {
         // The cycle bail: its rects are this frame's, so their size changes still fire, and the
         // scope forgets a graph that never settled.
         scope.invalidate();
+        *layout_chain = chain;
         queue_size_changes(
             &watched,
             resolved,
@@ -1562,8 +1876,14 @@ impl UiScript {
             screen,
             layout_scope: scope,
             layout_force,
+            layout_hold,
             ..
         } = model;
+        // Pending under its deferral: its resolve waits, whatever moved its inputs.
+        let held = |layout_hold: &[u8], arena: &crate::widget::WidgetArena, id: u32| {
+            hold_get(layout_hold, id) & HOLD_HELD != 0
+                && node_deferred(arena, id_to_frame, id_to_region, id)
+        };
         scope.begin_incremental(*next_id as usize);
         named.sort_unstable();
         named.dedup();
@@ -1616,7 +1936,8 @@ impl UiScript {
                 } else {
                     scope.relink(id, &targets)
                 };
-                scope.note(id, hash, relinked);
+                let held = held(layout_hold, arena, id);
+                scope.note(id, hash, relinked, held);
                 continue;
             }
             // A region: a node while it lives and has an anchor.
@@ -1666,7 +1987,8 @@ impl UiScript {
                 scope.regions[(n & !REGION_TAG) as usize] = row;
                 scope.relink(id, &targets)
             };
-            scope.note(id, hash, relinked);
+            let held = held(layout_hold, arena, id);
+            scope.note(id, hash, relinked, held);
         }
         scope.targets = targets;
         scope.close();

@@ -905,7 +905,7 @@ impl UiScript {
         ) {
             return false;
         }
-        model.arena.set_shown(h, true);
+        model.set_shown_silent(h, true);
         model.focused_editbox = Some(h);
         true
     }
@@ -999,7 +999,7 @@ impl UiScript {
                 // Touched per region, so the layout gate need not re-walk the whole roster; stored
                 // whole, as the reference's `SetText` clears the resolved bit (`0x771ea4`).
                 model.touch_layout_region(rh);
-                model.layout_force.push(id);
+                model.queue_force(id);
             }
         }
     }

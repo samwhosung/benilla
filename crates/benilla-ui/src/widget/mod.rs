@@ -167,6 +167,11 @@ pub struct Frame {
     /// the post-load hook starts (`0x76a2ff`). While it is set the frame's own OnShow and OnHide
     /// fire nothing (`0x76b270`/`0x76b2a0`); it still transitions and walks its children.
     pub load_window: bool,
+    /// The layout object's deferral bit (`G+0x3c` bit 2, written only by `0x768060`): set by a
+    /// hide (`0x76ad70`) and a load's start (`0x7697cc`), cleared by a show (`0x76ae58`), a load's
+    /// end while visible (`0x76a310`) and an anchor read (`0x7a2fc0`). While it is set the frame's
+    /// resolve waits; [`crate::script::Model`] keeps what it owes.
+    pub layout_deferred: bool,
     /// `EnableMouse`: the mouse bit (bit 2) of the input mask `[frame+0xcc]`.
     pub mouse_enabled: bool,
     /// `EnableMouseWheel`, or an `<OnMouseWheel>` script at XML load: the mask's wheel bit (3).
@@ -238,6 +243,10 @@ pub struct Region {
     /// while anonymous. Only the `_G` entry is first-come (`0x701bd0`), so two regions can hold
     /// one name, and `GetName` answers each its own.
     pub name: Option<String>,
+    /// The layout object's deferral bit, as [`Frame::layout_deferred`]: set when the region stops
+    /// drawing (`0x77fc82`) and at its owner's load (`0x769807`), cleared when it starts
+    /// (`0x77fce6`) and by an anchor read.
+    pub layout_deferred: bool,
 }
 
 /// A cursor over a frame's child list for [`WidgetArena::next_child`]: the child last returned and
@@ -513,6 +522,8 @@ impl WidgetArena {
             shown,
             effective_visible: shown && parent_visible,
             load_window: false,
+            // The ctor zeroes the layout flags (`0x767680`); the load sets the bit.
+            layout_deferred: false,
             mouse_enabled: mouse_enabled_by_ctor(kind),
             // The WorldFrame ctor takes the wheel (`0x481b1f`); the reference's ScrollFrame and
             // ScrollingMessageFrame ctors do not, and a stock one takes it from `<OnMouseWheel>`.
@@ -685,6 +696,11 @@ impl WidgetArena {
         sub_level: i8,
     ) -> Option<RegionHandle> {
         let decl_seq = self.take_decl(owner)?;
+        // The link takes the owner's bit (`0x77fd1e`), and the shown region's start clears it on a
+        // visible owner out of its load (`0x77fcb0`).
+        let layout_deferred = self
+            .frame(owner)
+            .is_some_and(|f| f.layout_deferred && !(f.effective_visible && !f.load_window));
         let (index, generation) = self.regions.insert(Region {
             kind,
             owner,
@@ -693,6 +709,7 @@ impl WidgetArena {
             decl_seq,
             detached: false,
             name: None,
+            layout_deferred,
         });
         let handle = RegionHandle { index, generation };
         self.frame_mut(owner)

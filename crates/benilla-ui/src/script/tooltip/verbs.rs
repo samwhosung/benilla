@@ -230,6 +230,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
             };
             let left_id = model.region_id(lh);
+            let (left_drew, right_drew) = (model.region_draws(lh), model.region_draws(rh));
             {
                 let d = model.region_data.entry(lh).or_default();
                 d.hidden = true;
@@ -243,6 +244,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 d.anchors =
                     Anchors::from([Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)]);
             }
+            model.note_region_draw(lh, left_drew);
+            model.note_region_draw(rh, right_drew);
             // Two line rows, their points set with the invalidate flag.
             model.invalidate_region(lh, true);
             model.invalidate_region(rh, true);

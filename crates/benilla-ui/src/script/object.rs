@@ -23,7 +23,7 @@ mod events_regions;
 mod frame_state;
 mod layout_methods;
 pub(crate) use layout_methods::eff_scale;
-pub(in crate::script) use layout_methods::settle;
+pub(in crate::script) use layout_methods::settle_region;
 pub(crate) mod movable;
 pub(crate) mod toplevel;
 pub(crate) use movable::{cancel_on_hide, pump_move_or_size, FrameMove};
@@ -637,6 +637,10 @@ pub(super) fn create_frame(
         }
         let id = model.frame_id(h);
         model.layout_inputs.entry(h).or_default();
+        // The builder's pre-load and post-load hooks (`0x6ee4d6`, `0x6ee4ea`): a frame born hidden
+        // is deferred, as a hidden parent leaves it. A template's load opens its own window.
+        model.layout_load_begin(h);
+        model.layout_load_end(h);
         id
     };
 

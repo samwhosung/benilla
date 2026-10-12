@@ -274,3 +274,120 @@ fn a_region_of_a_hidden_frame_waits_with_it() {
     assert_eq!(num(&s, "DeferArt:GetRight() - DeferArt:GetLeft()"), 80.0);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The show resolves the frame before its children show, and an anchor read on the way resolves
+/// the hidden frame it reads first: each `OnSizeChanged` fires where its `ApplyRect` runs.
+#[test]
+fn a_show_fires_each_size_change_where_its_resolve_runs() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        function note(tag) return function() table.insert(log, tag) end end
+        DeferHost = CreateFrame("Frame", "DeferHost")
+        DeferHost:SetPoint("BOTTOMLEFT", 10, 10)
+        DeferHost:SetWidth(100); DeferHost:SetHeight(50)
+        DeferKid = CreateFrame("Frame", "DeferKid", DeferHost)
+        DeferKid:SetPoint("TOPLEFT", DeferHost, "TOPLEFT", 0, 0)
+        DeferKid:SetWidth(10); DeferKid:SetHeight(10)
+        DeferSide = CreateFrame("Frame", "DeferSide")
+        DeferSide:SetPoint("TOPLEFT", 300, -10)
+        DeferSide:SetWidth(40); DeferSide:SetHeight(40)
+        DeferNext = CreateFrame("Frame", "DeferNext")
+        DeferNext:SetPoint("TOPLEFT", DeferSide, "TOPRIGHT", 0, 0)
+        DeferNext:SetWidth(10); DeferNext:SetHeight(10)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(
+        r#"
+        DeferHost:Hide(); DeferSide:Hide(); DeferNext:Hide()
+        DeferHost:SetScript("OnSizeChanged", note("host size"))
+        DeferHost:SetScript("OnShow", note("host show"))
+        DeferKid:SetScript("OnSizeChanged", note("kid size"))
+        DeferKid:SetScript("OnShow", note("kid show"))
+        DeferSide:SetScript("OnSizeChanged", note("side size"))
+        DeferNext:SetScript("OnSizeChanged", note("next size"))
+        DeferHost:SetWidth(120); DeferKid:SetWidth(12)
+        DeferSide:SetWidth(44); DeferNext:SetWidth(11)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        s.eval::<i64>("return table.getn(log)").unwrap(),
+        0,
+        "all of them wait"
+    );
+    s.run("DeferHost:Show(); DeferNext:Show()").unwrap();
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "host size,kid size,kid show,host show,side size,next size",
+        "the frame before its child and notifies, and a read target before its reader"
+    );
+    s.resolve();
+    assert_eq!(s.eval::<i64>("return table.getn(log)").unwrap(), 6);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A frame created under a hidden parent is deferred from its creation, as the builder's load
+/// leaves a hidden frame; under a visible one it resolves at the drain.
+#[test]
+fn a_frame_created_under_a_hidden_parent_waits() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        fires = {}
+        local function count(tag) return function() fires[tag] = (fires[tag] or 0) + 1 end end
+        DeferShut = CreateFrame("Frame", "DeferShut")
+        DeferOpen = CreateFrame("Frame", "DeferOpen")
+        for _, p in ipairs({ DeferShut, DeferOpen }) do
+            p:SetPoint("CENTER", 0, 0); p:SetWidth(100); p:SetHeight(100)
+        end
+        DeferShut:Hide()
+        for _, p in ipairs({ DeferShut, DeferOpen }) do
+            local f = CreateFrame("Frame", nil, p)
+            f:SetPoint("CENTER", 0, 0); f:SetWidth(30); f:SetHeight(30)
+            f:SetScript("OnSizeChanged", count(p:GetName()))
+        end
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(s.eval::<i64>("return fires.DeferOpen or 0").unwrap(), 1);
+    assert_eq!(s.eval::<i64>("return fires.DeferShut or 0").unwrap(), 0);
+    s.run("DeferShut:Show()").unwrap();
+    assert_eq!(s.eval::<i64>("return fires.DeferShut or 0").unwrap(), 1);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A region shown on a visible owner undefers and resolves; one hidden on it defers and waits.
+#[test]
+fn a_region_hidden_on_a_visible_frame_waits_and_its_show_resolves_it() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        DeferBase = CreateFrame("Frame", "DeferBase")
+        DeferBase:SetPoint("BOTTOMLEFT", 10, 10)
+        DeferBase:SetWidth(100); DeferBase:SetHeight(50)
+        DeferMark = DeferBase:CreateTexture(nil, "ARTWORK")
+        DeferMark:SetPoint("BOTTOMLEFT", DeferBase, "BOTTOMLEFT", 0, 0)
+        DeferMark:SetWidth(10); DeferMark:SetHeight(10)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run("DeferMark:Hide(); DeferMark:SetPoint('BOTTOMLEFT', DeferBase, 'BOTTOMLEFT', 7, 0)")
+        .unwrap();
+    s.resolve();
+    let held = s.extract().len();
+    s.run("DeferMark:Show()").unwrap();
+    s.resolve();
+    assert_eq!(num(&s, "DeferMark:GetLeft() - DeferBase:GetLeft()"), 7.0);
+    assert!(s.extract().len() > held, "it draws again");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

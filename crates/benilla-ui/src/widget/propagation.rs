@@ -12,16 +12,28 @@ impl WidgetArena {
     /// yet (`0x76ae43`); otherwise it marks itself visible (`0x76ae7b`), before any child or
     /// handler runs, and relinks at its bucket's tail (`0x764780`). Whether it transitioned.
     pub fn show_step(&mut self, h: FrameHandle) -> bool {
-        match self.frame(h) {
-            Some(f) if f.shown && !f.effective_visible => {}
-            _ => return false,
-        }
-        if !self.parent_visible(h) {
+        if !self.show_gate(h) {
             return false;
         }
-        self.frame_mut(h).unwrap().effective_visible = true;
-        self.resequence_to_tail(h);
+        self.show_mark(h);
         true
+    }
+
+    /// [`Self::show_step`]'s gate (`0x76ae1d`, `0x76ae35`, `0x76ae43`): shown, on a visible or
+    /// absent parent, and not visible yet.
+    pub fn show_gate(&self, h: FrameHandle) -> bool {
+        matches!(self.frame(h), Some(f) if f.shown && !f.effective_visible)
+            && self.parent_visible(h)
+    }
+
+    /// [`Self::show_step`]'s mark (`0x76ae7b`, `0x764780`), which follows the gate whatever ran
+    /// between them.
+    pub fn show_mark(&mut self, h: FrameHandle) {
+        let Some(f) = self.frame_mut(h) else {
+            return;
+        };
+        f.effective_visible = true;
+        self.resequence_to_tail(h);
     }
 
     /// The hide transition's own step (`0x76ad50` up to its child walk): nothing unless the frame

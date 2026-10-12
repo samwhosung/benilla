@@ -58,6 +58,31 @@ impl<T: Copy> IdMap<T> {
     }
 }
 
+/// [`Model::layout_hold`]: the node is in [`Model::layout_pending`].
+pub(crate) const HOLD_QUEUED: u8 = 1;
+/// The node is in [`Model::layout_force`].
+pub(crate) const HOLD_QUEUED_FORCE: u8 = 2;
+/// The node is pending under its deferral bit, its resolve waiting.
+pub(crate) const HOLD_HELD: u8 = 4;
+/// The held node's resolved bit was cleared, so its resolve stores without the keep test.
+pub(crate) const HOLD_FORCE: u8 = 8;
+
+/// Whether layout node `id`'s deferral bit is set, on its frame or region.
+pub(crate) fn node_deferred(
+    arena: &WidgetArena,
+    id_to_frame: &IdMap<FrameHandle>,
+    id_to_region: &IdMap<RegionHandle>,
+    id: u32,
+) -> bool {
+    match id_to_frame.get(&id) {
+        Some(&h) => arena.frame(h).is_some_and(|f| f.layout_deferred),
+        None => id_to_region
+            .get(&id)
+            .and_then(|&rh| arena.region(rh))
+            .is_some_and(|r| r.layout_deferred),
+    }
+}
+
 /// The Rust-side model behind the Lua VM, in `lua.app_data`. It holds no mlua handles, whose
 /// persistent count the vendored `LUAI_MAXCSTACK` caps.
 pub(crate) struct Model {
@@ -156,6 +181,24 @@ pub(crate) struct Model {
     /// re-resolve need not give back, so a write the reference invalidates for is not skipped as
     /// a no-op on it ([`Model::invalidate_frame`]).
     pub(crate) layout_unsettled: HashSet<u32>,
+    /// Per layout id, what its resolve owes beside the deferral bit itself (which the frame and
+    /// region carry, [`crate::widget::Frame::layout_deferred`]): `HOLD_*` bits. A node in
+    /// [`Self::layout_pending`] or [`Self::layout_force`] is queued; a deferred node pending is
+    /// held, the reference's bit 4 under bit 2, whose resolve waits until its show, a read or a
+    /// reader's anchor read.
+    pub(crate) layout_hold: Vec<u8>,
+    /// Layout ids invalidated while deferred since the last resolve: each passes the invalidate to
+    /// what anchors to it, as the reference does at the write (`0x768178`–`0x76819c`), which the
+    /// next resolve applies.
+    pub(crate) layout_pass: Vec<u32>,
+    /// Layout ids the next resolve takes as undeferred: a show or a load's end cleared the bit of
+    /// a pending one, which resolves at once (`0x7680c4` → `0x7680e0(1)`), or a getter reads a
+    /// pending one, resolving it without clearing the bit (`0x7a1a1d`).
+    pub(crate) layout_pull: Vec<u32>,
+    /// A show's resolve: the ids it resolves as it shows them going in, and the ids resolved for
+    /// them coming out, each pulled by an anchor read of one before it was, in the order their
+    /// `ApplyRect` runs, so the show fires their `OnSizeChanged` ([`super::visibility`]).
+    pub(crate) layout_chain: Option<Vec<u32>>,
     /// The screen the last converged resolve laid out against: a frame anchored to it is reached
     /// when it moves, as by any target's new rect.
     pub(crate) layout_screen: Option<Rect>,
@@ -1182,6 +1225,10 @@ impl Model {
             layout_force: Vec::new(),
             layout_pending: Vec::new(),
             layout_unsettled: HashSet::new(),
+            layout_hold: Vec::new(),
+            layout_pass: Vec::new(),
+            layout_pull: Vec::new(),
+            layout_chain: None,
             layout_screen: None,
             errors: Vec::new(),
             pending_error_dispatch: Vec::new(),
@@ -1703,7 +1750,7 @@ impl Model {
         }
         self.touch_layout_frame(h);
         if let Some(&id) = self.frame_to_id.get(&h) {
-            self.layout_pending.push(id);
+            self.queue_invalidate(id);
         }
     }
 
@@ -1715,7 +1762,7 @@ impl Model {
         // A region with no id was never anchored, so it holds no rect to lose.
         self.touch_layout_region(rh);
         if let Some(&id) = self.region_to_id.get(&rh) {
-            self.layout_pending.push(id);
+            self.queue_invalidate(id);
         }
     }
 
@@ -1726,7 +1773,399 @@ impl Model {
         // A region with no id was never anchored, so it holds no rect.
         self.touch_layout_region(rh);
         if let Some(&id) = self.region_to_id.get(&rh) {
+            self.queue_force(id);
+        }
+    }
+
+    /// Invalidate node `id` (`0x7680e0(0)`): queued for the next resolve, or, while it is deferred,
+    /// held pending, its invalidate passing to what anchors to it once (`0x768169`–`0x76819c`).
+    pub(crate) fn queue_invalidate(&mut self, id: u32) {
+        if self.node_deferred(id) {
+            self.hold_invalidated(id, false);
+        } else {
+            self.layout_pending.push(id);
+            self.hold_set(id, HOLD_QUEUED);
+        }
+    }
+
+    /// [`Self::queue_invalidate`] for a write that also clears the node's resolved bit, whose
+    /// resolve then stores without the keep test ([`Self::layout_force`]).
+    pub(crate) fn queue_force(&mut self, id: u32) {
+        if self.node_deferred(id) {
+            self.hold_invalidated(id, true);
+        } else {
             self.layout_force.push(id);
+            self.hold_set(id, HOLD_QUEUED_FORCE);
+        }
+    }
+
+    /// A deferred node's invalidate: pending, and the first one passes on (`0x76814b`).
+    pub(super) fn hold_invalidated(&mut self, id: u32, force: bool) {
+        if self.hold_flags(id) & HOLD_HELD == 0 {
+            self.layout_pass.push(id);
+        }
+        self.hold_set(id, HOLD_HELD | if force { HOLD_FORCE } else { 0 });
+    }
+
+    /// Node `id`'s `HOLD_*` bits.
+    #[inline]
+    pub(crate) fn hold_flags(&self, id: u32) -> u8 {
+        self.layout_hold.get(id as usize).copied().unwrap_or(0)
+    }
+
+    pub(super) fn hold_set(&mut self, id: u32, bits: u8) {
+        let i = id as usize;
+        if self.layout_hold.len() <= i {
+            self.layout_hold.resize(i + 1, 0);
+        }
+        self.layout_hold[i] |= bits;
+    }
+
+    /// Whether node `id`'s deferral bit is set.
+    pub(crate) fn node_deferred(&self, id: u32) -> bool {
+        node_deferred(&self.arena, &self.id_to_frame, &self.id_to_region, id)
+    }
+
+    /// The queued resolve of node `id`, just deferred, leaves the queue and waits with it, pending
+    /// (`0x768074`–`0x7680b3`).
+    fn hold_queued(&mut self, id: u32) {
+        let f = self.hold_flags(id);
+        if f & (HOLD_QUEUED | HOLD_QUEUED_FORCE) != 0 {
+            let force = if f & HOLD_QUEUED_FORCE != 0 {
+                HOLD_FORCE
+            } else {
+                0
+            };
+            self.hold_set(id, HOLD_HELD | force);
+        }
+    }
+
+    /// `0x768060(1)` on frame `h`'s layout object.
+    pub(crate) fn defer_frame(&mut self, h: FrameHandle) {
+        let Some(f) = self.arena.frame_mut(h) else {
+            return;
+        };
+        f.layout_deferred = true;
+        if let Some(&id) = self.frame_to_id.get(&h) {
+            self.hold_queued(id);
+        }
+    }
+
+    /// `0x768060(1)` on region `rh`'s layout object.
+    pub(crate) fn defer_region(&mut self, rh: RegionHandle) {
+        let Some(r) = self.arena.region_mut(rh) else {
+            return;
+        };
+        r.layout_deferred = true;
+        if let Some(&id) = self.region_to_id.get(&rh) {
+            self.hold_queued(id);
+        }
+    }
+
+    /// `0x768060(0)` on frame `h`'s layout object: clear the bit, and a pending resolve runs now
+    /// (`0x7680c4` → `0x7680e0(1)`), here at the next resolve. Whether one is owed.
+    pub(crate) fn undefer_frame(&mut self, h: FrameHandle) -> bool {
+        let Some(f) = self.arena.frame_mut(h) else {
+            return false;
+        };
+        f.layout_deferred = false;
+        match self.frame_to_id.get(&h) {
+            Some(&id) => self.pull_pending(id),
+            None => false,
+        }
+    }
+
+    /// `0x768060(0)` on region `rh`'s layout object.
+    pub(crate) fn undefer_region(&mut self, rh: RegionHandle) -> bool {
+        let Some(r) = self.arena.region_mut(rh) else {
+            return false;
+        };
+        r.layout_deferred = false;
+        match self.region_to_id.get(&rh) {
+            Some(&id) => self.pull_pending(id),
+            None => false,
+        }
+    }
+
+    /// Node `id` resolves at the next resolve if it is pending, held or queued; whether it is.
+    pub(crate) fn pull_pending(&mut self, id: u32) -> bool {
+        let f = self.hold_flags(id);
+        if f & HOLD_HELD != 0 {
+            self.layout_pull.push(id);
+            self.name_layout_node(id);
+        }
+        f & (HOLD_HELD | HOLD_QUEUED | HOLD_QUEUED_FORCE) != 0
+    }
+
+    /// A getter's read of node `id` (`0x7a1a0b` → `0x7680e0(1)` while pending): a held node
+    /// resolves in the read's resolve, and its bit stays set.
+    pub(crate) fn pull_read(&mut self, id: u32) {
+        if self.hold_flags(id) & HOLD_HELD != 0 && self.node_deferred(id) {
+            self.layout_pull.push(id);
+            self.name_layout_node(id);
+        }
+    }
+
+    /// The hide transition's layout step (`0x76ad50`): out of its load window, the frame and its
+    /// title region defer (`0x76ad70`, `0x76ad84`), and each region it drew stops drawing and defers
+    /// (`0x76adbf` → `0x77fc82`).
+    pub(crate) fn layout_on_hide(&mut self, h: FrameHandle) {
+        let Some(f) = self.arena.frame(h) else {
+            return;
+        };
+        if f.load_window {
+            return;
+        }
+        let title = f.title_region;
+        let regions: Vec<RegionHandle> = f.regions.clone();
+        self.defer_frame(h);
+        if let Some(t) = title {
+            self.defer_region(t);
+        }
+        // The frame was visible until this transition, so each shown region drew.
+        for rh in regions {
+            if Some(rh) != title && self.region_shown_bit(rh) {
+                self.defer_region(rh);
+            }
+        }
+    }
+
+    /// The show transition's layout step (`0x76ae10`): out of its load window, the frame and its
+    /// title region undefer, resolving first (`0x76ae58`, `0x76ae6c`), and each shown region
+    /// starts drawing and undefers (`0x76aeac` → `0x77fce6`). Whether any of them owes a resolve
+    /// now, or an invalidate passed while deferred is yet to reach what it may.
+    pub(crate) fn layout_on_show(&mut self, h: FrameHandle) -> bool {
+        let Some(f) = self.arena.frame(h) else {
+            return false;
+        };
+        if f.load_window {
+            return false;
+        }
+        let title = f.title_region;
+        let regions: Vec<RegionHandle> = f.regions.clone();
+        let mut owed = self.undefer_frame(h);
+        if let Some(t) = title {
+            owed |= self.undefer_region(t);
+        }
+        for rh in regions {
+            if Some(rh) != title && self.region_shown_bit(rh) {
+                owed |= self.undefer_region(rh);
+            }
+        }
+        owed || !self.layout_pass.is_empty()
+    }
+
+    /// Whether the show of frame `h` must resolve before it goes on: a resolve the show owes fires
+    /// `OnSizeChanged` inside it for the frame and for each deferred, pending frame an anchor read
+    /// on the way resolves (`0x7a2fc0`). With no such handler the resolve shows nothing here, and
+    /// the next resolve, a getter's or the drain's, gives the same rects.
+    pub(crate) fn show_fires(&self, h: FrameHandle) -> bool {
+        let fires = |f: FrameHandle| {
+            self.scripts
+                .get(&f)
+                .is_some_and(|s| s.contains("OnSizeChanged"))
+        };
+        if fires(h) {
+            return true;
+        }
+        let Some(f) = self.arena.frame(h) else {
+            return false;
+        };
+        let mut stack: Vec<u32> = Vec::new();
+        let mut seen: Vec<u32> = Vec::new();
+        let push_anchors = |anchors: &crate::layout::Anchors, stack: &mut Vec<u32>| {
+            stack.extend(anchors.iter().map(|a| a.relative_to));
+        };
+        if let Some(i) = self.layout_inputs.get(&h) {
+            push_anchors(&i.anchors, &mut stack);
+        }
+        for &rh in &f.regions {
+            if Some(rh) == f.title_region || self.region_shown_bit(rh) {
+                if let Some(d) = self.region_data.get(&rh) {
+                    push_anchors(&d.anchors, &mut stack);
+                }
+            }
+        }
+        while let Some(t) = stack.pop() {
+            if seen.contains(&t) || self.hold_flags(t) & HOLD_HELD == 0 || !self.node_deferred(t) {
+                continue;
+            }
+            seen.push(t);
+            if let Some(&th) = self.id_to_frame.get(&t) {
+                if fires(th) {
+                    return true;
+                }
+                if let Some(i) = self.layout_inputs.get(&th) {
+                    push_anchors(&i.anchors, &mut stack);
+                }
+            } else if let Some(d) = self
+                .id_to_region
+                .get(&t)
+                .and_then(|rh| self.region_data.get(rh))
+            {
+                push_anchors(&d.anchors, &mut stack);
+            }
+        }
+        false
+    }
+
+    /// The layout ids [`Self::layout_on_show`] undeferred: the frame, its title region and its
+    /// shown regions.
+    pub(crate) fn show_roots(&self, h: FrameHandle) -> Vec<u32> {
+        let Some(f) = self.arena.frame(h) else {
+            return Vec::new();
+        };
+        let mut out: Vec<u32> = self.frame_to_id.get(&h).copied().into_iter().collect();
+        for &rh in &f.regions {
+            if Some(rh) == f.title_region || self.region_shown_bit(rh) {
+                out.extend(self.region_to_id.get(&rh).copied());
+            }
+        }
+        out
+    }
+
+    /// The arena's handler-free `Show`/`Hide` ([`WidgetArena::set_shown`]) with each transition's
+    /// layout step; a resolve the shows owe runs at the next resolve.
+    pub(crate) fn set_shown_silent(&mut self, h: FrameHandle, shown: bool) {
+        for f in self.arena.set_shown(h, shown) {
+            if shown {
+                self.layout_on_show(f);
+            } else {
+                self.layout_on_hide(f);
+            }
+        }
+    }
+
+    /// The pre-load hook's step (`0x769770`): the frame, its title region and every region defer
+    /// (`0x7697cc`, `0x7697e0`, `0x769807`).
+    pub(crate) fn layout_load_begin(&mut self, h: FrameHandle) {
+        let Some(f) = self.arena.frame(h) else {
+            return;
+        };
+        let regions: Vec<RegionHandle> = f.regions.clone();
+        self.defer_frame(h);
+        for rh in regions {
+            if self.arena.region(rh).is_some_and(|r| !r.detached) {
+                self.defer_region(rh);
+            }
+        }
+    }
+
+    /// The post-load hook's step (`0x76a2f0`): a visible frame undefers, with its title region and
+    /// each region it draws (`0x76a310`, `0x76a324`, `0x76a35b`). A hidden one stays deferred.
+    pub(crate) fn layout_load_end(&mut self, h: FrameHandle) {
+        let Some(f) = self.arena.frame(h) else {
+            return;
+        };
+        if !f.effective_visible {
+            return;
+        }
+        let title = f.title_region;
+        let regions: Vec<RegionHandle> = f.regions.clone();
+        self.undefer_frame(h);
+        if let Some(t) = title {
+            self.undefer_region(t);
+        }
+        for rh in regions {
+            if Some(rh) != title && self.region_draws(rh) {
+                self.undefer_region(rh);
+            }
+        }
+    }
+
+    /// The region's own shown bit (`+0xc4`): not hidden, and linked to its owner.
+    fn region_shown_bit(&self, rh: RegionHandle) -> bool {
+        self.arena.region(rh).is_some_and(|r| !r.detached)
+            && self.region_data.get(&rh).is_none_or(|d| !d.hidden)
+    }
+
+    /// Whether the region draws (`+0xc8`): shown, on a visible owner.
+    pub(crate) fn region_draws(&self, rh: RegionHandle) -> bool {
+        self.region_shown_bit(rh)
+            && self
+                .arena
+                .region(rh)
+                .and_then(|r| self.arena.frame(r.owner))
+                .is_some_and(|f| f.effective_visible)
+    }
+
+    /// Write region `rh`'s shown bit (`Show`/`Hide` and the engine's writes of `+0xc4`), with the
+    /// layout step of its start or stop drawing: out of the owner's load window it undefers
+    /// (`0x77fcb0` → `0x77fce6`) or defers (`0x77fc60` → `0x77fc82`).
+    pub(crate) fn set_region_hidden(&mut self, rh: RegionHandle, hidden: bool) {
+        let was = self.region_draws(rh);
+        self.region_data.entry(rh).or_default().hidden = hidden;
+        self.note_region_draw(rh, was);
+    }
+
+    /// The layout step of a write to region `rh`'s shown bit that `set_region_hidden` could not
+    /// wrap, given whether it drew before.
+    pub(crate) fn note_region_draw(&mut self, rh: RegionHandle, drew: bool) {
+        let now = self.region_draws(rh);
+        if drew == now || self.region_owner_loading(rh) {
+            return;
+        }
+        if now {
+            self.undefer_region(rh);
+        } else {
+            self.defer_region(rh);
+        }
+    }
+
+    pub(crate) fn region_owner_loading(&self, rh: RegionHandle) -> bool {
+        self.arena
+            .region(rh)
+            .and_then(|r| self.arena.frame(r.owner))
+            .is_some_and(|f| f.load_window)
+    }
+
+    /// The layout step of region `rh`'s re-link (`0x77fd10`), given whether it drew under its old
+    /// owner, whether that owner was in its load window and whether the owner changed: the new
+    /// owner's bit is copied (`0x77fd1e`–`0x77fd28`), a stop on the old owner defers (`0x77fd47` →
+    /// `0x77fc60`), and a start on the new one undefers (`0x77fd8f` → `0x77fcb0`). A detach copies
+    /// nothing and only stops.
+    ///
+    /// `shown` is the link's shown argument, written here; `None` keeps the bit, as
+    /// `Region:SetParent` passes the region's own (`0x7733d0`).
+    pub(crate) fn relink_region_layout(
+        &mut self,
+        rh: RegionHandle,
+        drew: bool,
+        old_loading: bool,
+        moved: bool,
+        shown: Option<bool>,
+    ) {
+        let Some(r) = self.arena.region(rh) else {
+            return;
+        };
+        if r.detached {
+            if let Some(shown) = shown {
+                self.region_data.entry(rh).or_default().hidden = !shown;
+            }
+            if drew && !old_loading {
+                self.defer_region(rh);
+            }
+            return;
+        }
+        let owner_bit = self.arena.frame(r.owner).is_some_and(|f| f.layout_deferred);
+        if owner_bit {
+            self.defer_region(rh);
+        } else {
+            self.undefer_region(rh);
+        }
+        if moved && drew && !old_loading {
+            self.defer_region(rh);
+        }
+        if let Some(shown) = shown {
+            self.region_data.entry(rh).or_default().hidden = !shown;
+        }
+        let loading = self.region_owner_loading(rh);
+        if self.region_draws(rh) {
+            if !loading {
+                self.undefer_region(rh);
+            }
+        } else if !moved && drew && !loading {
+            self.defer_region(rh);
         }
     }
 

@@ -93,7 +93,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     ] {
         set_shared(lua, m, Side::Region, name, move |lua, this: Table| {
             let rh = region_handle_of(lua, &this)?;
-            crate::script::object::settle(lua);
+            crate::script::object::settle_region(lua, rh);
             let model = lua.app_data_ref::<Model>().expect("model");
             let inv = 1.0 / owner_scale(&model, rh);
             Ok(model.region_resolved.get(&rh).map(|r| {
@@ -177,7 +177,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // two nils while the valid bit is clear; it resolves first, as the edge readers do.
     set_shared(lua, m, Side::Region, "GetCenter", |lua, this: Table| {
         let rh = region_handle_of(lua, &this)?;
-        crate::script::object::settle(lua);
+        crate::script::object::settle_region(lua, rh);
         let model = lua.app_data_ref::<Model>().expect("model");
         let inv = 1.0 / owner_scale(&model, rh);
         Ok(match model.region_resolved.get(&rh) {
