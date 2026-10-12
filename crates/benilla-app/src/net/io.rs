@@ -5,9 +5,14 @@
 //! or closes the logon; a world attempt that fails returns there. Past the world handshake it
 //! parks at character select until the app picks a guid; a new login supersedes either park. The
 //! pick closes the realmd link (`0x46b70c`), sends `CMSG_PLAYER_LOGIN` and announces the connection
-//! without waiting for the verdict, as the reference's world is already loading when it sends the
-//! login (`0x46c272`), so the destination's tiles stream a round trip early. A logout or a later
-//! `SMSG_CHARACTER_LOGIN_FAILED` ends the world session, announced as a
+//! without waiting for the verdict.
+//!
+//! Deviation: the reference loads the world first and logs in after: the entry's first frame
+//! starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a
+//! later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). Here the two
+//! overlap, so entry is a round trip faster, and a refusal ends the cycle as a logout does.
+//!
+//! A logout or a later `SMSG_CHARACTER_LOGIN_FAILED` ends the world session, announced as a
 //! [`SessionEvent::Disconnected`] with [`SessionEnd::LoggedOut`], and parks at character select
 //! again on the same link. A stream failure emits it with [`SessionEnd::Lost`] and re-parks for
 //! credentials. All policy lives in [`crate::login`] and [`crate::char_select`]; this thread only
