@@ -530,6 +530,7 @@
 - `gen-message-catalog.py` — Generate `crates/benilla-ui/src/messages/catalog.rs` from `reference/1.12-message-catalog.tsv`.
 - `gen-reference-events.py` — Regenerate `reference/1.12-events.tsv`: each 1.12 FrameScript event and the arguments it carries.
 - `gen-reference-globals.py` — Regenerate `reference/1.12-globals.tsv`: the 1.12.1 client's global namespace, by origin.
+- `gen-reference-glue-surface.py` — Regenerate `reference/1.12-glue-surface.tsv`: every Lua function the glue screens' VM has in `_G`.
 - `gen-reference-verb-events.py` — Regenerate `reference/1.12-verb-events.tsv`: the events 1.12 Lua verbs fire, keyed by verb.
 - `mixsum.py` — Read a `$WOW_MIX_TAP` capture and say, in numbers, what the mix was doing when.
 - `pass-span-lint.py` — Refuse a second open `pass_span` on the same render pass (a wgpu validation error on Vulkan).
