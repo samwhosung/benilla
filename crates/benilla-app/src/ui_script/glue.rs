@@ -182,15 +182,6 @@ mod tests {
     /// `0x87a95c`, and the walk goes on).
     const INSTALL_WARNINGS: &[&str] = &["Frame TOSText: Unknown element type: H4"];
 
-    /// The movie frame's three handlers, which benilla's `MovieFrame` does not take: it plays no
-    /// movie. Each is a loader warning, `<frame>: SetScript("<handler>") unsupported`; the list only
-    /// shrinks.
-    const UNBUILT_HANDLERS: &[(&str, &str)] = &[
-        ("MovieFrame", "OnMovieFinished"),
-        ("MovieFrame", "OnMovieHideSubtitle"),
-        ("MovieFrame", "OnMovieShowSubtitle"),
-    ];
-
     /// The frames each stock glue screen and dialog is, which the load must build.
     const SCREENS: [&str; 8] = [
         "GlueParent",
@@ -269,7 +260,6 @@ mod tests {
 
         let surface = glue_surface();
         let mut called = BTreeSet::new();
-        let mut handlers = BTreeSet::new();
         let other: Vec<&String> = errors
             .iter()
             .filter(|e| {
@@ -280,19 +270,13 @@ mod tests {
                 if INSTALL_WARNINGS.contains(&e.as_str()) {
                     return false;
                 }
-                if let Some(h) = UNBUILT_HANDLERS.iter().find(|(frame, handler)| {
-                    e.contains(&format!("{frame}: SetScript(\"{handler}\") unsupported"))
-                }) {
-                    handlers.insert(*h);
-                    return false;
-                }
                 true
             })
             .collect();
         assert!(
             other.is_empty(),
             "the glue load raised {} error(s) or warning(s) that are not a call of an unbuilt \
-             glue function on UNBUILT_CALLED or a handler on UNBUILT_HANDLERS:\n{}",
+             glue function on UNBUILT_CALLED:\n{}",
             other.len(),
             other
                 .iter()
@@ -305,14 +289,6 @@ mod tests {
         assert!(
             stale.is_empty(),
             "UNBUILT_CALLED names no longer called unbuilt; take them off: {stale:?}"
-        );
-        let stale: Vec<&(&str, &str)> = UNBUILT_HANDLERS
-            .iter()
-            .filter(|h| !handlers.contains(*h))
-            .collect();
-        assert!(
-            stale.is_empty(),
-            "UNBUILT_HANDLERS entries the load no longer warns about; take them off: {stale:?}"
         );
         for name in UNBUILT_CALLED {
             assert!(

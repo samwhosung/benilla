@@ -1,6 +1,6 @@
 //! The glue core's login-screen verbs (registrar `0x46ddf0`, table `0x8373b8`): the login, the
 //! status dialog's button, the saved account, the four user agreements, the build, the locale,
-//! the server, the screen name, the glue music and the quit. Each reads a slot the host seeds or
+//! the server, the screen name, the glue music, the movie frame's settings and the quit. Each reads a slot the host seeds or
 //! queues a [`GlueRequest`] the host's glue manager drains; the screen state machine they drive
 //! (`CGlueMgr::Update`, `0x46b930`) is the host's.
 
@@ -147,6 +147,10 @@ pub(crate) struct GlueCore {
     /// The current glue screen's name (`[0xb41478]`), which `SetCurrentScreen` (`0x46ce60` →
     /// `0x46b860`) copies into a 0x40-byte buffer.
     pub(super) screen: String,
+    /// `HideCursor` / `ShowCursor` (`0x46db70`/`0x46db60`, the device's `0x58b590`): whether the
+    /// glue has the pointer hidden. Nothing in the host reads it yet: the one caller, the movie
+    /// frame, hides the pointer for a movie that plays here for no frame at all.
+    cursor_hidden: bool,
     /// The realm list the realm verbs read ([`super::glue_realm`]).
     pub(super) realms: super::glue_realm::GlueRealmList,
     /// The character roster and the select verbs' cells ([`super::glue_select`]).
@@ -185,6 +189,11 @@ impl super::UiScript {
     /// Seed the realm `GetServerName` answers.
     pub fn set_glue_server(&mut self, server: GlueServer) {
         self.model_mut().glue.server = server;
+    }
+
+    /// Whether the glue has hidden the pointer (`HideCursor`) and not shown it again.
+    pub fn glue_cursor_hidden(&self) -> bool {
+        self.model_ref().glue.cursor_hidden
     }
 
     /// The current glue screen's name, as `SetCurrentScreen` last set it.
@@ -430,6 +439,47 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
+
+    // One value (`0x46dbc0`): 1 when the `movieSubtitle` CVar's integer (`[0x882640]+0x28`) is
+    // nonzero, else nil.
+    g.set(
+        "GetMovieSubtitles",
+        lua.create_function(|lua, _: MultiValue| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let on = model
+                .cvars
+                .get("moviesubtitle")
+                .is_some_and(|c| leading_int(&c.value) != 0);
+            Ok(flag(on))
+        })?,
+    )?;
+    // One number (`0x46cf10`): the width of the `gxResolution` CVar's string, scanned as `"%dx%d"`
+    // (`0x837c9c`). A string with no leading integer leaves the scan's stack slot unwritten in the
+    // reference; 0 here.
+    g.set(
+        "GetMovieResolution",
+        lua.create_function(|lua, _: MultiValue| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let width = model
+                .cvars
+                .get("gxresolution")
+                .map_or(0, |c| leading_int(&c.value));
+            Ok(width as f64)
+        })?,
+    )?;
+    // The device's pointer off (`0x46db70` → `0x58b590(0)`) and on (`0x46db60` → `0x58b590(1)`).
+    for (name, hidden) in [("HideCursor", true), ("ShowCursor", false)] {
+        g.set(
+            name,
+            lua.create_function(move |lua, _: MultiValue| {
+                lua.app_data_mut::<Model>()
+                    .expect("model app_data")
+                    .glue
+                    .cursor_hidden = hidden;
+                Ok(())
+            })?,
+        )?;
+    }
     Ok(())
 }
 
@@ -565,5 +615,38 @@ mod tests {
             .unwrap();
         assert_eq!(s.glue_screen().len(), 0x3f);
         assert!(s.run("SetCurrentScreen()").is_err());
+    }
+    /// `GetMovieSubtitles` is 1 or nil off the `movieSubtitle` CVar's integer (`0x46dbc0`),
+    /// `GetMovieResolution` the width of `gxResolution` (`0x46cf10`), and the cursor pair moves
+    /// the hidden flag (`0x46db70`, `0x46db60`).
+    #[test]
+    fn the_movie_verbs_read_their_cvars_and_move_the_pointer_flag() {
+        let mut s = UiScript::new_glue().unwrap();
+        s.register_cvars([("movieSubtitle", "0"), ("gxResolution", "1024x768")]);
+        assert!(s.eval::<bool>("return GetMovieSubtitles() == nil").unwrap());
+        s.set_cvar_host("movieSubtitle", "1");
+        assert_eq!(
+            s.eval::<Option<i64>>("return GetMovieSubtitles()").unwrap(),
+            Some(1)
+        );
+        s.set_cvar_host("movieSubtitle", "0");
+        assert!(s.eval::<bool>("return GetMovieSubtitles() == nil").unwrap());
+
+        assert_eq!(
+            s.eval::<f64>("return GetMovieResolution()").unwrap(),
+            1024.0
+        );
+        s.set_cvar_host("gxResolution", "800x600");
+        assert_eq!(s.eval::<f64>("return GetMovieResolution()").unwrap(), 800.0);
+        assert!(s
+            .eval::<bool>("return table.getn({GetMovieResolution()}) == 1")
+            .unwrap());
+
+        assert!(!s.glue_cursor_hidden());
+        s.run("HideCursor()").unwrap();
+        assert!(s.glue_cursor_hidden());
+        s.run("ShowCursor()").unwrap();
+        assert!(!s.glue_cursor_hidden());
+        assert!(s.take_errors().is_empty());
     }
 }

@@ -27,6 +27,7 @@ fn glue_on(screen: GlueScreen) -> UiScript {
 fn type_key(s: &mut UiScript, name: &str, text: &str) {
     s.frame_key_input(name);
     s.char_input(text);
+    s.key_up(name);
 }
 
 fn text(s: &UiScript, frame: &str) -> String {
@@ -65,4 +66,63 @@ fn the_stock_login_boxes_take_typed_keys() {
     assert_eq!(text(&s, "AccountLoginPasswordEdit"), "sec");
     assert_eq!(text(&s, "AccountLoginAccountEdit"), "probe");
     assert!(s.take_errors().is_empty());
+}
+
+/// The login screen's Cinematics button shows `MovieFrame`; no movie plays here, so
+/// `StartMovie` answers nil and the stock `MovieFrame_PlayMovie` hides the frame, whose `OnHide`
+/// puts the login screen back and the pointer with it (`MovieFrame.lua:18-23,40-44`).
+#[test]
+fn the_cinematics_button_comes_back_to_the_login_screen() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let mut s = glue_on(GlueScreen::Login);
+    s.register_cvars([("movieSubtitle", "1"), ("gxResolution", "1024x768")]);
+    s.run("AccountLoginCinematicsButton:Click()").unwrap();
+    s.resolve();
+    let (movie, login, cursor_hidden) = (
+        s.eval::<bool>("return MovieFrame:IsShown() == 1").unwrap(),
+        s.eval::<bool>("return AccountLoginUI:IsVisible() == 1")
+            .unwrap(),
+        s.glue_cursor_hidden(),
+    );
+    assert_eq!(
+        (movie, login, cursor_hidden),
+        (false, true, false),
+        "the movie frame is gone, the login boxes are back and the pointer shows"
+    );
+    assert_eq!(s.take_errors(), Vec::<String>::new());
+}
+
+/// A frame whose only key script is `OnKeyUp` takes the key-down and runs its `OnKeyUp` on the
+/// release (`0x76b7d0`, `0x765fd0`, `0x76bba0`): Escape on a playing movie hides the frame
+/// (`MovieFrame_OnKeyUp`), which returns to login.
+#[test]
+fn escape_on_a_playing_movie_returns_to_login_on_the_key_up() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let mut s = glue_on(GlueScreen::Login);
+    s.register_cvars([("movieSubtitle", "0"), ("gxResolution", "1024x768")]);
+    // A movie that starts, as the reference's player would.
+    s.run("MovieFrame.StartMovie = function() return 1 end SetGlueScreen('movie')")
+        .unwrap();
+    s.resolve();
+    assert!(s.eval::<bool>("return MovieFrame:IsShown() == 1").unwrap());
+    assert!(s.glue_cursor_hidden(), "a playing movie hides the pointer");
+
+    assert!(
+        s.frame_key_input("SPACE"),
+        "the movie swallows the key-down"
+    );
+    assert!(
+        s.eval::<bool>("return MovieFrame:IsShown() == 1").unwrap(),
+        "…and nothing happens until the key is up"
+    );
+    assert!(s.key_input("ESCAPE"));
+    assert!(s.eval::<bool>("return MovieFrame:IsShown() == 1").unwrap());
+    s.key_up("ESCAPE");
+    s.resolve();
+    assert!(!s.eval::<bool>("return MovieFrame:IsShown() == 1").unwrap());
+    assert!(s
+        .eval::<bool>("return AccountLoginUI:IsVisible() == 1")
+        .unwrap());
+    assert!(!s.glue_cursor_hidden());
+    assert_eq!(s.take_errors(), Vec::<String>::new());
 }

@@ -379,3 +379,52 @@ fn an_autofocus_box_takes_its_key_at_its_own_walk_position() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The key-up (`0x765fd0`) goes to the frame that consumed the key's down, as `OnKeyUp` with the
+/// key's name (`0x76bba0`); a key nobody consumed has no target, and the target is not cleared by
+/// a delivered up (`0x76605b` sits on the no-target path).
+#[test]
+fn a_key_up_goes_to_the_frame_that_took_the_down() {
+    let mut s = script();
+    s.run(
+        r#"
+        log = {}
+        f = CreateFrame("Frame", "KbUpA")
+        f:EnableKeyboard(true)
+        f:SetScript("OnKeyDown", function() table.insert(log, "down:" .. arg1) end)
+        f:SetScript("OnKeyUp", function() table.insert(log, "up:" .. arg1) end)
+        g = CreateFrame("Frame", "KbUpB")
+        g:EnableKeyboard(true)
+        g:SetFrameStrata("LOW")
+        g:SetScript("OnKeyUp", function() table.insert(log, "g:" .. arg1) end)
+    "#,
+    )
+    .unwrap();
+    assert!(!s.key_up("ENTER"), "nothing consumed the down: no target");
+    assert!(s.key_input("ENTER"));
+    assert!(s.key_up("ENTER"));
+    assert!(s.key_up("ENTER"), "the target outlives a delivered up");
+    assert!(!s.key_up("TAB"));
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "down:ENTER,up:ENTER,up:ENTER"
+    );
+
+    // The up follows the down's consumer, not whoever would take the key now.
+    s.run("f:Hide()").unwrap();
+    assert!(s.key_up("ENTER"), "a hidden consumer still gets its up");
+    assert_eq!(
+        s.eval::<String>("return log[table.getn(log)]").unwrap(),
+        "up:ENTER"
+    );
+    assert!(
+        s.key_input("ENTER"),
+        "the lower frame's OnKeyUp-only slot takes the next down"
+    );
+    assert!(s.key_up("ENTER"));
+    assert_eq!(
+        s.eval::<String>("return log[table.getn(log)]").unwrap(),
+        "g:ENTER"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

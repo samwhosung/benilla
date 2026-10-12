@@ -507,6 +507,7 @@ fn kind_method_registries(kind: Option<FrameKind>) -> &'static [&'static str] {
         Some(FrameKind::SimpleHtml) => &[super::simplehtml::REG_SIMPLEHTML_METHODS],
         Some(FrameKind::Slider) => &[super::slider::REG_SLIDER_METHODS],
         Some(FrameKind::ColorSelect) => &[super::colorselect::REG_COLORSELECT_METHODS],
+        Some(FrameKind::MovieFrame) => &[super::movieframe::REG_MOVIEFRAME_METHODS],
         Some(FrameKind::Button) => &[super::button::REG_BUTTON_METHODS],
         // Its one method, then `Button`'s: `0x4c1be0` probes its map `0xb71b64`, then `0x782c90`.
         Some(FrameKind::LootButton) => &[

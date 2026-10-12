@@ -104,6 +104,7 @@ mod measure;
 mod merchant;
 mod messageframe;
 mod minimap;
+mod movieframe;
 pub mod nameplate;
 pub use nameplate::{PlateBitWrites, PlateGeometry, PlateState, PLATE_BIT_ENEMY, PLATE_BIT_FRIEND};
 mod model;
@@ -421,7 +422,7 @@ pub const SCREEN: crate::layout::Handle = 0;
 /// ScrollFrame's three scroll kinds are `+0x32c`/`+0x334`/`+0x33c` (script-name map `0x786c40`).
 /// The EditBox's vtable (`0x81c910`) replaces the key and char slots: an EditBox never fires
 /// `OnKeyDown`, and fires `OnChar` only from `Insert`, with the inserted text (`0x77c13c`).
-const SCRIPT_KINDS: [&str; 41] = [
+const SCRIPT_KINDS: [&str; 44] = [
     "OnLoad",
     "OnEvent",
     "OnUpdate",
@@ -475,6 +476,11 @@ const SCRIPT_KINDS: [&str; 41] = [
     "OnDoubleClick",
     // The layout event (base map `0x76a0d0`, `+0x120`), fired by the resolve pass on a size change.
     "OnSizeChanged",
+    // The movie frame's three (script map `0x78c2e0`): fired by its player alone, which does not
+    // exist here ([`movieframe`]), so they are stored and never run.
+    "OnMovieFinished",
+    "OnMovieShowSubtitle",
+    "OnMovieHideSubtitle",
     // The key channels, fired by [`keyboard`]'s walk (`0x765f10`). `OnKeyUp` never fires, as the
     // host feeds no key-up, but a frame carrying only `OnKeyUp` still consumes every key-down and
     // runs nothing, the reference's own asymmetry.
@@ -548,6 +554,7 @@ fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
     simplehtml::install(&lua)?;
     slider::install(&lua)?;
     colorselect::install(&lua)?;
+    movieframe::install(&lua)?;
     modelframe::install(&lua)?;
 
     // `0x4587f0` (table `0x835a50`): `PlaySound`, `PlayMusic`, `PlaySoundFile`, `StopMusic`.
@@ -1145,6 +1152,12 @@ impl UiScript {
     /// [`Self::editbox_action`]. A focused box consumes a key even when it does nothing with it.
     pub fn key_input(&mut self, key: &str) -> bool {
         keyboard::key_input(&self.lua, key)
+    }
+
+    /// A key released, by the name its press went by: the key-up dispatcher (`0x765fd0`) runs
+    /// `OnKeyUp` on the frame that consumed that key's last down. `true` when one was on record.
+    pub fn key_up(&mut self, key: &str) -> bool {
+        keyboard::key_up(&self.lua, key)
     }
 
     /// An editing key (BACKSPACE, DELETE, the arrows, HOME, END) offered to the keyboard frames

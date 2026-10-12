@@ -11,9 +11,9 @@
 //! `autoFocus` one takes the focus and the event at its own position. So a keyboard frame in a
 //! higher stratum or level pre-empts the box, and one below it never sees the key.
 //!
-//! `OnKeyUp` is stored and gates key-downs but never fires: the host feeds no key-up, so the
-//! reference's key-up gate (`0x76bba0`, `OnKeyUp` alone) and its sticky per-code target
-//! (`0x765fd0`, `[root+code*4+0x84]`, the last frame to consume that code's down) are not built.
+//! The key-up (`0x765fd0`) does not walk. It goes to the frame that consumed that key's last
+//! down (`[root+code*4+0x84]`, written at `0x765fa2`), which `key_up` runs through the frame's
+//! `OnKeyUp` slot (`0x76bba0`); the slot is never cleared by a delivered key-up.
 
 use mlua::Lua;
 
@@ -83,6 +83,9 @@ fn walk(lua: &Lua, channel: Channel, arg: &str) -> bool {
                 Channel::KeyDown => super::editbox::key_input(lua, arg),
             };
             if consumed {
+                if channel == Channel::KeyDown {
+                    remember(lua, arg, h);
+                }
                 return true;
             }
             continue;
@@ -103,6 +106,7 @@ fn walk(lua: &Lua, channel: Channel, arg: &str) -> bool {
             Channel::KeyDown => {
                 let down = has_script(lua, id, "OnKeyDown");
                 if down || has_script(lua, id, "OnKeyUp") {
+                    remember(lua, arg, h);
                     if down {
                         fire(lua, id, "OnKeyDown", arg);
                     }
@@ -112,6 +116,47 @@ fn walk(lua: &Lua, channel: Channel, arg: &str) -> bool {
         }
     }
     false
+}
+
+/// The consumer of a key-down, which that key's up goes to (`0x765fa2`).
+fn remember(lua: &Lua, key: &str, h: FrameHandle) {
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .key_consumers
+        .insert(key.to_string(), h);
+}
+
+/// The key-up dispatcher (`0x765fd0`): the key's last consumer gets `OnKeyUp` with the key's name
+/// (`0x76bba0`, gated on that slot alone), wherever it is now, shown or not; with no consumer on
+/// record nothing consumes. The record is never cleared (the clear at `0x76605b` sits on the
+/// no-record path), and an EditBox consumer takes no script: its override (`0x77b7c0`) only
+/// grants an `autoFocus` box the free focus. Returns whether a consumer was on record, which
+/// ends the up event for the rest of the bus (`0x76602d`).
+pub(super) fn key_up(lua: &Lua, key: &str) -> bool {
+    let Some(h) = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .key_consumers
+        .get(key)
+        .copied()
+    else {
+        return false;
+    };
+    if is_editbox(lua, h) {
+        super::editbox::takes_event(lua, h);
+        return true;
+    }
+    let id = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if model.arena.frame(h).is_none() {
+            return true;
+        }
+        model.frame_id(h)
+    };
+    if has_script(lua, id, "OnKeyUp") {
+        fire(lua, id, "OnKeyUp", key);
+    }
+    true
 }
 
 /// Fire one key handler with its one argument, a string on all three channels (`0x7026f0`);
@@ -156,6 +201,7 @@ pub(super) fn frame_key_input(lua: &Lua, key: &str) -> bool {
     for h in order {
         if is_editbox(lua, h) {
             if super::editbox::takes_event(lua, h) {
+                remember(lua, key, h);
                 return false; // the box's chord path owns this key
             }
             continue;
@@ -166,6 +212,7 @@ pub(super) fn frame_key_input(lua: &Lua, key: &str) -> bool {
         };
         let down = has_script(lua, id, "OnKeyDown");
         if down || has_script(lua, id, "OnKeyUp") {
+            remember(lua, key, h);
             if down {
                 fire(lua, id, "OnKeyDown", key);
             }

@@ -229,6 +229,11 @@ pub(super) fn feed_ui_input(
     let mac = cfg!(target_os = "macos");
     for ev in keyboard.read() {
         if ev.state != ButtonState::Pressed {
+            // The release goes to the frame that took the press, under the press's own name: the
+            // key-up dispatcher (`0x765fd0`) reads that frame off the key's record.
+            if let Some(token) = crate::bindings::chord::key_token(ev.key_code, &layout) {
+                script.key_up(&token.to_string());
+            }
             continue;
         }
         let named = match ev.key_code {
