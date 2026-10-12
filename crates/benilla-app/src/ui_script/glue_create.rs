@@ -5,7 +5,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_formats::{CharCreateCatalog, ChrClasses, FactionCatalog, FactionTemplate};
-use benilla_ui::script::{GlueCreateCatalog, GlueCreateClass, GlueCreateRace, GlueNameRow};
+use benilla_ui::script::{
+    GlueCreateCatalog, GlueCreateClass, GlueCreateCounts, GlueCreateRace, GlueNameRow,
+};
 
 /// The catalogs the create screen's verbs and the roster's strings read.
 #[derive(SystemParam)]
@@ -133,7 +135,15 @@ pub(crate) fn create_catalog(
             if let Some(r) = create.ranges(race, sex) {
                 catalog.counts.insert(
                     (race, sex),
-                    [r.skin, r.face, r.hair_style, r.hair_color, r.facial_hair].map(i32::from),
+                    GlueCreateCounts {
+                        skin: i32::from(r.skin),
+                        face: i32::from(r.face),
+                        hair_styles: i32::from(r.hair_style),
+                        hair_colors: (0..r.hair_style)
+                            .map(|style| i32::from(create.hair_colors(race, sex, style)))
+                            .collect(),
+                        facial_hair: i32::from(r.facial_hair),
+                    },
                 );
             }
             let model = create
@@ -215,9 +225,15 @@ mod tests {
         for r in &c.races {
             assert!(c.models.contains(&(r.id, 0)) && c.models.contains(&(r.id, 1)));
             assert!(!c.models.contains(&(r.id, 2)), "no body for sex 2");
-            assert!(c.counts[&(r.id, 0)].iter().all(|&n| n > 0));
+            let male = &c.counts[&(r.id, 0)];
+            assert!(male.skin > 0 && male.face > 0 && male.facial_hair > 0);
+            assert_eq!(male.hair_colors.len(), male.hair_styles as usize);
         }
         assert_eq!(c.names.len(), 1405);
+        // #1073: Orc female's eight hair styles, each with its colours.
+        let orc_female = &c.counts[&(2, 1)];
+        assert_eq!(orc_female.hair_styles, 8);
+        assert_eq!(orc_female.hair_colors, [8; 8]);
         // Without the faction tables the walk finds no race.
         assert!(
             create_catalog(&create, Some(&classes), None, Some(&creatures))

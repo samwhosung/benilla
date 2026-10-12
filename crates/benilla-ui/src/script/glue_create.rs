@@ -80,10 +80,9 @@ pub struct GlueCreateCatalog {
     pub class_lists: HashMap<u8, Vec<u8>>,
     /// `ChrClasses` by id.
     pub classes: HashMap<u8, GlueCreateClass>,
-    /// The five customization counts by (race, sex), in the verbs' order: skin (`0x47a440`), face
-    /// (`0x47a4a0`), hair style (`0x47a3e0`), hair colour (`0x47a400`) and facial hair
-    /// (`0x47a4c0`).
-    pub counts: HashMap<(u8, u8), [i32; 5]>,
+    /// The customization counts by (race, sex), the grid's record `race·2 + sex` (`0x47a3e0` and
+    /// its siblings).
+    pub counts: HashMap<(u8, u8), GlueCreateCounts>,
     /// The (race, sex) pairs whose body has a model (`0x5ec480`'s record with a path): the build
     /// `0x470b70` goes ahead only for one (`0x470b80`-`0x470b8e`).
     pub models: HashSet<(u8, u8)>,
@@ -91,16 +90,47 @@ pub struct GlueCreateCatalog {
     pub names: Vec<GlueNameRow>,
 }
 
+/// One (race, sex)'s customization counts off the CharSections grid.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GlueCreateCounts {
+    /// `0x47a440`.
+    pub skin: i32,
+    /// `0x47a4a0`.
+    pub face: i32,
+    /// `[grid+0x18]`, `0x47a3e0`.
+    pub hair_styles: i32,
+    /// Each hair style's colour count, by style (`0x47a400`: `record[style].field0`).
+    pub hair_colors: Vec<i32>,
+    /// `0x47a4c0`.
+    pub facial_hair: i32,
+}
+
 impl GlueCreateCatalog {
     fn race(&self, id: u32) -> Option<&GlueCreateRace> {
         self.races.iter().find(|r| u32::from(r.id) == id)
     }
 
-    fn count(&self, race: u32, sex: u32, which: usize) -> i32 {
-        let key = (u8::try_from(race), u8::try_from(sex));
-        match key {
-            (Ok(r), Ok(s)) => self.counts.get(&(r, s)).map_or(0, |c| c[which]),
-            _ => 0,
+    /// A customization's count for a race, sex and hair style. The grid's record is
+    /// `race·2 + sex` (`0x47a3e0`), so a sex of 2 reads the next race's male record. A hair
+    /// colour's is the style's own, 0 for a style past the record's (`0x47a41e`-`0x47a425`).
+    fn count(&self, race: u32, sex: u32, which: usize, style: i32) -> i32 {
+        let cell = race.wrapping_mul(2).wrapping_add(sex);
+        let (Ok(race), Ok(sex)) = (u8::try_from(cell / 2), u8::try_from(cell % 2)) else {
+            return 0;
+        };
+        let Some(c) = self.counts.get(&(race, sex)) else {
+            return 0;
+        };
+        match which {
+            SKIN => c.skin,
+            FACE => c.face,
+            HAIR_STYLE => c.hair_styles,
+            HAIR_COLOR => usize::try_from(style)
+                .ok()
+                .and_then(|s| c.hair_colors.get(s))
+                .copied()
+                .unwrap_or(0),
+            _ => c.facial_hair,
         }
     }
 }
@@ -351,20 +381,23 @@ impl GlueCreate {
             .map_or(0, |r| u32::from(r.id))
     }
 
-    fn count(&self, race: u32, sex: u32, which: usize) -> i32 {
-        self.catalog.count(race, sex, which)
-    }
-
     /// `0x4703c0`: the five customizations drawn for `info`'s race and sex, in the order the
-    /// reference draws them: skin, hair style, hair colour (whose count is the hair style's,
-    /// `0x4703f1`), facial hair, face.
+    /// reference draws them: skin, hair style, hair colour (counted for the style just drawn,
+    /// `0x4703ed`), facial hair, face. A sex of 2 draws over the next race's male counts, as the
+    /// grid's index does; its build then fails, so the draws are spent and nothing is kept.
     fn randomize(&mut self, info: &mut Info) {
         let (race, sex) = (info.race, info.sex);
-        info.dials[SKIN] = self.words.draw(self.count(race, sex, SKIN));
-        info.dials[HAIR_STYLE] = self.words.draw(self.count(race, sex, HAIR_STYLE));
-        info.dials[HAIR_COLOR] = self.words.draw(self.count(race, sex, HAIR_COLOR));
-        info.dials[FACIAL_HAIR] = self.words.draw(self.count(race, sex, FACIAL_HAIR));
-        info.dials[FACE] = self.words.draw(self.count(race, sex, FACE));
+        let count = |which: usize, style: i32| self.catalog.count(race, sex, which, style);
+        let skin = count(SKIN, 0);
+        info.dials[SKIN] = self.words.draw(skin);
+        let styles = count(HAIR_STYLE, 0);
+        info.dials[HAIR_STYLE] = self.words.draw(styles);
+        let colors = count(HAIR_COLOR, info.dials[HAIR_STYLE]);
+        info.dials[HAIR_COLOR] = self.words.draw(colors);
+        let facial = count(FACIAL_HAIR, 0);
+        info.dials[FACIAL_HAIR] = self.words.draw(facial);
+        let faces = count(FACE, 0);
+        info.dials[FACE] = self.words.draw(faces);
     }
 
     /// `0x470b70`: a body with a model replaces the character, which keeps the facing
@@ -511,7 +544,10 @@ impl GlueCreate {
         let Some(obj) = self.obj.as_mut() else {
             return;
         };
-        let count = self.catalog.count(obj.race, obj.sex, which);
+        // A hair colour counts the character's current style's (`0x471019`).
+        let count = self
+            .catalog
+            .count(obj.race, obj.sex, which, obj.dials[HAIR_STYLE]);
         if count <= 0 {
             return;
         }
@@ -545,7 +581,8 @@ impl GlueCreate {
         match usize::try_from(which) {
             Ok(w) if w <= 4 => {
                 let obj = self.obj();
-                self.count(obj.race, obj.sex, w)
+                self.catalog
+                    .count(obj.race, obj.sex, w, obj.dials[HAIR_STYLE])
             }
             _ => 0,
         }

@@ -54,11 +54,16 @@ fn catalog() -> GlueCreateCatalog {
         .into_iter()
         .collect(),
         counts: [
-            ((1, 0), [10, 5, 12, 10, 9]),
-            ((1, 1), [10, 15, 19, 10, 7]),
-            ((3, 0), [9, 10, 10, 10, 11]),
-            ((2, 0), [9, 9, 7, 8, 1]),
-            ((2, 1), [9, 9, 7, 8, 1]),
+            ((1, 0), counts([10, 5, 12, 10, 9])),
+            ((1, 1), counts([10, 15, 19, 10, 7])),
+            ((3, 0), {
+                // The Dwarf male's last style has four colours.
+                let mut c = counts([9, 10, 10, 10, 11]);
+                c.hair_colors[9] = 4;
+                c
+            }),
+            ((2, 0), counts([9, 9, 7, 8, 1])),
+            ((2, 1), counts([9, 9, 7, 8, 1])),
         ]
         .into_iter()
         .collect(),
@@ -70,6 +75,17 @@ fn catalog() -> GlueCreateCatalog {
             name_row(1, 1, "Ada"),
             name_row(2, 0, "Bob"),
         ],
+    }
+}
+
+/// Skin, face, hair styles, each style's colours and facial hair.
+fn counts([skin, face, styles, colors, facial_hair]: [i32; 5]) -> GlueCreateCounts {
+    GlueCreateCounts {
+        skin,
+        face,
+        hair_styles: styles,
+        hair_colors: vec![colors; styles as usize],
+        facial_hair,
     }
 }
 
@@ -362,6 +378,54 @@ fn cycle_wraps_a_step_and_lands_a_long_one_on_an_end() {
             "{err}"
         );
     }
+}
+
+/// A hair colour counts its style's colours (`0x47a400`): the draw after the style takes the drawn
+/// style's (`0x4703ed`), the cycle and `HasCharCustomization` the current one's.
+#[test]
+fn a_hair_colour_counts_its_styles_colours() {
+    let mut s = human([0; 5]);
+    // The Dwarf male's tenth style has four colours, the others ten.
+    s.script_glue_create_draws(&[
+        word(0, 9),
+        word(9, 10),
+        word(3, 4),
+        word(0, 11),
+        word(0, 10),
+    ]);
+    s.run("SetSelectedRace(2)").unwrap();
+    let l = look(&s);
+    assert_eq!((l.race, l.hair_style, l.hair_color), (3, 9, 3));
+    s.run("CycleCharCustomization(4, 1)").unwrap();
+    assert_eq!(look(&s).hair_color, 0, "four colours wrap at 4");
+    s.run("CycleCharCustomization(3, -1) CycleCharCustomization(4, -1)")
+        .unwrap();
+    assert_eq!(look(&s).hair_style, 8);
+    assert_eq!(look(&s).hair_color, 9, "the ninth style's ten colours");
+}
+
+/// The grid's record is `race·2 + sex` (`0x47a3e0`): a sex of 2 draws over the next race's male
+/// counts, five words for a Human over the Orc male's, then builds nothing.
+#[test]
+fn sex_two_draws_over_the_next_races_male_counts() {
+    let mut s = human([1, 1, 1, 1, 1]);
+    s.script_glue_create_draws(&[0, 0, 0, 0, 0]);
+    s.script_glue_create_draws(&[
+        word(9, 10),
+        word(11, 12),
+        word(0, 10),
+        word(3, 9),
+        word(4, 5),
+    ]);
+    s.run("SetSelectedSex(3) RandomizeCharCustomization()")
+        .unwrap();
+    let l = look(&s);
+    assert_eq!((l.race, l.sex), (1, 0));
+    assert_eq!(
+        dials(l),
+        [9, 4, 11, 0, 3],
+        "the sex-2 draws took the first five words"
+    );
 }
 
 /// `0x471080`: five fresh draws in `0x4703c0`'s order, the race, sex and class kept.

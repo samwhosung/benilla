@@ -1,9 +1,8 @@
 //! Character-creation source data from ChrRaces, CharBaseInfo, CharStartOutfit and NameGen, and the five
-//! appearance-dial ranges per (race, sex), counted from the DBCs: skin colour, face and hair colour
-//! off the CharSections rows the client groups into its grid (`0x476020`), hair and facial-hair
-//! styles off CharHairGeosets and CharacterFacialHairStyles. Every tuple in a (race, sex)'s ranges
-//! passes vmangos's `Player::ValidateAppearance`, since the shipped grids are complete over each
-//! coupled pair.
+//! appearance-dial ranges per (race, sex), counted from the DBCs: skin colour, face, hair style and
+//! hair colour off the CharSections rows the client groups into its grid (`0x476020`), facial-hair
+//! styles off CharacterFacialHairStyles. Every tuple in a (race, sex)'s ranges passes vmangos's
+//! `Player::ValidateAppearance`, since the shipped grids are complete over each coupled pair.
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,7 +15,6 @@ use crate::Chain;
 const CHR_RACES: &str = "DBFilesClient\\ChrRaces.dbc";
 const CHAR_BASE_INFO: &str = "DBFilesClient\\CharBaseInfo.dbc";
 const CHAR_START_OUTFIT: &str = "DBFilesClient\\CharStartOutfit.dbc";
-const CHAR_HAIR_GEOSETS: &str = "DBFilesClient\\CharHairGeosets.dbc";
 const CHAR_FACIAL_HAIR_STYLES: &str = "DBFilesClient\\CharacterFacialHairStyles.dbc";
 const CHAR_SECTIONS: &str = "DBFilesClient\\CharSections.dbc";
 const NAME_GEN: &str = "DBFilesClient\\NameGen.dbc";
@@ -127,6 +125,9 @@ pub struct CharCreateCatalog {
     name_gen: Vec<NameGenRow>,
     /// Why NameGen did not load, when it did not: only the random name goes without it.
     name_gen_error: Option<String>,
+    /// (race, sex) → each hair style's colour count, by style: the grid's per-style record
+    /// (`0x47a400` reads `record[style].field0`).
+    hair_colors: HashMap<(u8, u8), Vec<u8>>,
     /// race → (male displayId, female displayId), from ChrRaces cols 4/5.
     displays: HashMap<u8, (u32, u32)>,
     /// race → ChrRaces fileString (col 15), the GlueStrings key stem (`RACE_INFO_<FILE>`).
@@ -222,6 +223,16 @@ impl CharCreateCatalog {
         self.name_gen_error.as_deref()
     }
 
+    /// A hair style's colour count for a (race, sex), 0 for a style past the grid's
+    /// (`0x47a400`: `count > 0 && style < count`, else 0).
+    pub fn hair_colors(&self, race: u8, sex: u8, style: u8) -> u8 {
+        self.hair_colors
+            .get(&(race, sex))
+            .and_then(|by_style| by_style.get(usize::from(style)))
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// The five appearance-dial counts for a (race, sex).
     pub fn ranges(&self, race: u8, sex: u8) -> Option<DialRanges> {
         self.ranges.get(&(race, sex)).copied()
@@ -253,16 +264,14 @@ impl CharCreateCatalog {
         };
         let start_outfits = load_start_outfits(chain)?;
         let avail = load_available_sections(chain)?;
-        let hair_geo = load_hair_geosets(chain)?;
         let facial = load_facial_hair_styles(chain)?;
 
         let mut ranges = HashMap::new();
+        let mut hair_colors = HashMap::new();
         for race in PLAYABLE_RACES {
             for sex in [0u8, 1] {
-                ranges.insert(
-                    (race, sex),
-                    derive_ranges(race, sex, &avail, &hair_geo, &facial),
-                );
+                ranges.insert((race, sex), derive_ranges(race, sex, &avail, &facial));
+                hair_colors.insert((race, sex), hair_colors_by_style(race, sex, &avail));
             }
         }
 
@@ -271,6 +280,7 @@ impl CharCreateCatalog {
             base_info,
             name_gen,
             name_gen_error,
+            hair_colors,
             displays,
             files,
             names,
@@ -526,27 +536,6 @@ fn load_available_sections(chain: &mut Chain) -> Result<HashSet<SectionKey>> {
     Ok(avail)
 }
 
-/// CharHairGeosets → (race, sex) → hair-style variations, keyed on cols 1/2/3 as `0x478540` does.
-fn load_hair_geosets(chain: &mut Chain) -> Result<HashMap<(u8, u8), HashSet<u8>>> {
-    let bytes = chain
-        .read_file(CHAR_HAIR_GEOSETS)
-        .with_context(|| format!("reading {CHAR_HAIR_GEOSETS}"))?;
-    let rs = parse(
-        &bytes,
-        all_u32_schema("CharHairGeosets", 6),
-        "CharHairGeosets",
-    )?;
-    let mut map: HashMap<(u8, u8), HashSet<u8>> = HashMap::new();
-    for r in rs.records() {
-        if let (Some(race), Some(sex), Some(var)) = (u32_at(r, 1), u32_at(r, 2), u32_at(r, 3)) {
-            map.entry((race as u8, sex as u8))
-                .or_default()
-                .insert(var as u8);
-        }
-    }
-    Ok(map)
-}
-
 /// CharacterFacialHairStyles → (race, sex) → variations, keyed on cols 0/1/2 as `0x478740` does.
 fn load_facial_hair_styles(chain: &mut Chain) -> Result<HashMap<(u8, u8), HashSet<u8>>> {
     let bytes = chain
@@ -588,20 +577,33 @@ fn derive_ranges(
     race: u8,
     sex: u8,
     avail: &HashSet<SectionKey>,
-    hair_geo: &HashMap<(u8, u8), HashSet<u8>>,
     facial: &HashMap<(u8, u8), HashSet<u8>>,
 ) -> DialRanges {
     DialRanges {
         skin: section_axis_count(avail, race, sex, SECTION_SKIN, false),
         face: section_axis_count(avail, race, sex, SECTION_FACE, true),
-        // Hair styles are CharHairGeosets variations, at least 1 (bald), not CharSections HAIR
-        // variations: Orc female has one HAIR variation with no geoset.
-        hair_style: hair_geo
-            .get(&(race, sex))
-            .map_or(1, |v| v.len().max(1) as u8),
+        // Hair styles are the grid's hair variations, `[grid+0x18]` (`0x47a3e0`), which
+        // `CycleCharCustomization` and the random draw read (`0x470ff5`, `0x4712a0`).
+        // CharHairGeosets is only the style's geoset lookup, whose miss is geoset 1
+        // (`0x478591`-`0x478593`): Orc female has eight styles and seven geoset rows.
+        hair_style: section_axis_count(avail, race, sex, SECTION_HAIR, true),
         hair_color: section_axis_count(avail, race, sex, SECTION_HAIR, false),
         facial_hair: facial.get(&(race, sex)).map_or(0, |v| v.len() as u8),
     }
+}
+
+/// Each hair style's colour count for a (race, sex), by style: the distinct colours of the style's
+/// CharSections rows.
+fn hair_colors_by_style(race: u8, sex: u8, avail: &HashSet<SectionKey>) -> Vec<u8> {
+    let styles = section_axis_count(avail, race, sex, SECTION_HAIR, true);
+    (0..styles)
+        .map(|style| {
+            avail
+                .iter()
+                .filter(|&&(r, s, t, v, _)| (r, s, t, v) == (race, sex, SECTION_HAIR, style))
+                .count() as u8
+        })
+        .collect()
 }
 
 /// `n` `UInt32` fields for a DBC read by index; the parser's field-count check guards the layout.
@@ -737,6 +739,30 @@ mod tests {
         assert!(gen
             .windows(2)
             .all(|w| (w[0].race, w[0].sex) <= (w[1].race, w[1].sex)));
+    }
+
+    /// #1073: hair styles are the grid's CharSections hair variations (`[grid+0x18]`), so Orc
+    /// female has eight though CharHairGeosets lists seven; the eighth draws geoset 1, the
+    /// lookup's miss (`0x478591`), with its own CharSections hair texture. Each style carries its
+    /// own colour count (`0x47a400`), and a style past the grid has none.
+    #[test]
+    fn hair_styles_and_their_colours_come_from_char_sections() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let cat = CharCreateCatalog::load(&mut chain).expect("load char-create catalog");
+        assert_eq!(cat.ranges(2, 1).unwrap().hair_style, 8, "Orc female");
+        assert_eq!(cat.ranges(2, 0).unwrap().hair_style, 7, "Orc male");
+        assert_eq!(cat.ranges(1, 1).unwrap().hair_style, 19, "Human female");
+        assert_eq!(cat.hair_colors(2, 1, 7), 8);
+        assert_eq!(cat.hair_colors(6, 0, 0), 3, "Tauren");
+        assert_eq!(cat.hair_colors(2, 1, 8), 0, "past the grid");
+        assert_eq!(cat.name_gen_error(), None);
+
+        let geosets = super::super::CharacterGeosets::load(&mut chain).expect("geosets");
+        let visible = geosets.visible_geosets(2, 1, 7, 0, &super::super::EquipGeosets::default());
+        assert!(visible.contains(&1), "the eighth style draws geoset 1");
+        let sections = super::super::CharSections::load(&mut chain).expect("sections");
+        assert!(sections.hair_mesh_texture(2, 1, 7, 0).is_some());
     }
 
     /// A NameGen that does not load leaves an empty table and its reason, and the rest of the

@@ -78,8 +78,8 @@ pub use glue_core::{
     GlueCredentials, GlueNotice, GlueRequest, GlueServer, NoticeState, GLUE_STATUS_KEYS,
 };
 pub use glue_create::{
-    GlueCreateCatalog, GlueCreateClass, GlueCreateLook, GlueCreateRace, GlueCreateRequest,
-    GlueNameRow,
+    GlueCreateCatalog, GlueCreateClass, GlueCreateCounts, GlueCreateLook, GlueCreateRace,
+    GlueCreateRequest, GlueNameRow,
 };
 pub use glue_realm::{
     realm_load_classify, realm_load_stats, GlueRealm, GlueRealmCategory, GlueRealmCells,
