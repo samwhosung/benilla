@@ -9,6 +9,17 @@ use crate::net::{
 };
 use benilla_protocol::{RealmInfo, SessionEnd};
 
+/// Run the steps the outbox holds past their signals and drop them, as the frame's flush does
+/// where it reaches them: what a test of the manager alone sees once the frame has run.
+fn settle(m: &mut GlueMgr) {
+    for out in std::mem::take(&mut m.outbox) {
+        match out {
+            Outgoing::Begin(step) => m.run_step(step),
+            out => m.outbox.push(out),
+        }
+    }
+}
+
 /// A manager as the app starts it.
 fn fresh() -> GlueMgr {
     GlueMgr::default()
@@ -81,11 +92,14 @@ fn a_realmd_refusal_maps_through_the_references_table() {
 fn a_proof_0x0a_changes_no_dialog() {
     let mut m = fresh();
     m.login("a".into(), "b".into());
+    settle(&mut m);
     m.on_stage(LoginStage::Connecting, true);
     m.tick();
+    settle(&mut m);
     m.outbox.clear();
     m.on_failed(&failed(Some(LoginRefusal::LogonProof(0x0a)), false));
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "{:?}", m.outbox);
     assert_eq!(m.state, ScreenState::Logon);
 }
@@ -96,14 +110,17 @@ fn a_proof_0x0a_changes_no_dialog() {
 fn login_guards_then_starts_the_logon() {
     let mut m = fresh();
     m.login(String::new(), "b".into());
+    settle(&mut m);
     assert_eq!(m.outbox, [open("OKAY", Some("LOGIN_ENTER_NAME"))]);
     m.outbox.clear();
     m.login("a".into(), String::new());
+    settle(&mut m);
     assert_eq!(m.outbox, [open("OKAY", Some("LOGIN_ENTER_PASSWORD"))]);
     assert!(m.login_out.is_empty());
     m.outbox.clear();
 
     m.login("a".into(), "b".into());
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Logon);
     assert_eq!(m.outbox, [open("CANCEL", None)]);
     assert!(matches!(
@@ -111,6 +128,7 @@ fn login_guards_then_starts_the_logon() {
         [GlueLogin::Submit { account, password }] if account == "a" && password == "b"
     ));
     m.login("a".into(), "b".into());
+    settle(&mut m);
     assert_eq!(m.login_out.len(), 1, "a second login waits for state 0");
 }
 
@@ -120,16 +138,21 @@ fn login_guards_then_starts_the_logon() {
 fn the_logon_shows_each_state_once_then_connects() {
     let mut m = fresh();
     m.login("a".into(), "b".into());
+    settle(&mut m);
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "the cleared cells show nothing");
     m.on_stage(LoginStage::Connecting, true);
     m.tick();
+    settle(&mut m);
     m.tick();
+    settle(&mut m);
     assert_eq!(m.outbox, [open("CANCEL", Some("LOGIN_STATE_CONNECTING"))]);
     m.outbox.clear();
     m.on_logon_done();
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [open("CANCEL", Some("LOGIN_STATE_AUTHENTICATED"))]
@@ -162,9 +185,11 @@ fn a_logon_refusal_opens_its_result_and_ends_the_logon() {
     ] {
         let mut m = fresh();
         m.login("a".into(), "b".into());
+        settle(&mut m);
         m.outbox.clear();
         m.on_failed(&failed(refusal, false));
         m.tick();
+        settle(&mut m);
         assert_eq!(m.outbox, [open(which, Some(key))], "{refusal:?}");
         assert_eq!(m.state, ScreenState::Idle);
     }
@@ -202,6 +227,7 @@ fn a_world_refusal_opens_its_status_and_url() {
     let mut m = connected();
     m.on_failed(&failed(Some(LoginRefusal::World(0x1c)), false));
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -222,6 +248,7 @@ fn a_world_refusal_opens_its_status_and_url() {
     m.screen = "charselect".into();
     m.on_failed(&failed(Some(LoginRefusal::World(0x0d)), false));
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -234,6 +261,7 @@ fn a_world_refusal_opens_its_status_and_url() {
     let mut m = connected();
     m.on_failed(&failed(None, false));
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -254,6 +282,7 @@ fn a_world_refusal_opens_its_status_and_url() {
     m.holder.clear();
     m.on_failed(&failed(None, false));
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -277,14 +306,18 @@ fn a_world_refusal_opens_its_status_and_url() {
 fn the_world_connect_shows_each_completion() {
     let mut m = fresh();
     m.login("a".into(), "b".into());
+    settle(&mut m);
     m.on_logon_done();
     m.tick();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Connect);
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "the running connect's text is empty");
     m.on_stage(LoginStage::WorldConnected, true);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [Outgoing::Update {
@@ -294,12 +327,15 @@ fn the_world_connect_shows_each_completion() {
     );
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert!(
         m.outbox.is_empty(),
         "the running authentication's text is empty"
     );
     m.on_world_authenticated(realm("Fake"), 0);
+    settle(&mut m);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -324,13 +360,16 @@ fn the_authentication_puts_the_character_screen_up() {
     m.on_roster(alpha(), RosterCause::Asked, 0);
     m.on_roster(alpha(), RosterCause::Park, 0);
     m.tick();
+    settle(&mut m);
     assert!(
         m.outbox.is_empty() && m.state == ScreenState::Connect,
         "a roster does not complete the connect: {:?}",
         m.outbox
     );
     m.on_world_authenticated(realm("Fake"), 0);
+    settle(&mut m);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -344,7 +383,7 @@ fn the_authentication_puts_the_character_screen_up() {
     );
     assert_eq!(m.state, ScreenState::Idle);
     assert!(m.connected);
-    assert_eq!(m.realm.as_ref().map(|r| r.name.as_str()), Some("Fake"));
+    assert_eq!(m.selected.as_ref().map(|r| r.name.as_str()), Some("Fake"));
     assert!(m.roster.is_empty() && m.park_out.is_empty());
 }
 
@@ -365,6 +404,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
     m.connected = true;
     for (id, name) in [(7, "Alpha"), (8, "Bravo")] {
         m.get_character_list();
+        settle(&mut m);
         assert_eq!(m.state, ScreenState::CharList);
         assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_LIST_RETRIEVING"))]);
         assert!(matches!(
@@ -374,6 +414,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
         m.park_out.clear();
         m.outbox.clear();
         m.tick();
+        settle(&mut m);
         assert!(m.outbox.is_empty(), "a running query shows no text");
         // Rosters nothing asked for are not this screen's.
         for cause in [RosterCause::Park, RosterCause::Changed] {
@@ -384,6 +425,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
             );
         }
         m.tick();
+        settle(&mut m);
         assert!(m.outbox.is_empty());
         assert!(m.roster.iter().all(|c| c.name != "Stray"));
         m.on_roster(
@@ -392,6 +434,7 @@ fn the_character_list_query_loads_the_roster_on_its_reply() {
             0,
         );
         m.tick();
+        settle(&mut m);
         assert_eq!(m.outbox, done);
         assert_eq!(m.state, ScreenState::Idle);
         assert_eq!((m.roster[0].name.as_str(), m.characters), (name, 1));
@@ -410,13 +453,17 @@ fn a_late_roster_reply_is_dropped_unless_it_lands_before_the_tick() {
     let mut m = fresh();
     m.connected = true;
     m.get_character_list();
+    settle(&mut m);
     m.park_out.clear();
     m.status_dialog_click();
+    settle(&mut m);
     m.tick();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::RealmList);
     m.outbox.clear();
     m.on_roster(late(), RosterCause::Asked, 0);
     m.tick();
+    settle(&mut m);
     assert!(
         m.roster.is_empty(),
         "no roster after the tick took the cancel"
@@ -433,10 +480,13 @@ fn a_late_roster_reply_is_dropped_unless_it_lands_before_the_tick() {
     let mut m = fresh();
     m.connected = true;
     m.get_character_list();
+    settle(&mut m);
     m.status_dialog_click();
+    settle(&mut m);
     m.on_roster(late(), RosterCause::Asked, 0);
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
     assert!(m.outbox.iter().any(|o| matches!(o, Outgoing::Roster)));
     assert_eq!(m.roster[0].name, "Late");
@@ -447,11 +497,15 @@ fn a_late_roster_reply_is_dropped_unless_it_lands_before_the_tick() {
     m.connected = true;
     m.holder = vec![realm("Fake")];
     m.get_character_list();
+    settle(&mut m);
     m.connect_to_realm("fake");
+    settle(&mut m);
     m.reconnect();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Connect);
     m.on_roster(late(), RosterCause::Asked, 0);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.state,
         ScreenState::Connect,
@@ -468,9 +522,12 @@ fn a_late_roster_reply_is_dropped_unless_it_lands_before_the_tick() {
     let mut m = fresh();
     m.connected = true;
     m.on_world_authenticated(realm("Fake"), 5);
+    settle(&mut m);
     m.get_character_list();
+    settle(&mut m);
     m.on_roster(late(), RosterCause::Asked, 4);
     m.tick();
+    settle(&mut m);
     assert!(m.roster.is_empty() && !m.op.done);
     m.on_roster(late(), RosterCause::Asked, 5);
     assert!(m.op.done && m.op.ok);
@@ -484,10 +541,12 @@ fn a_terminal_failure_fails_the_character_list_query_with_its_words() {
     let mut m = fresh();
     m.connected = true;
     m.get_character_list();
+    settle(&mut m);
     m.park_out.clear();
     m.outbox.clear();
     m.on_failed(&failed(None, true));
     m.tick();
+    settle(&mut m);
     let words = || Text::Raw("test".into());
     assert_eq!(
         m.outbox,
@@ -515,13 +574,17 @@ fn a_failed_roster_ask_opens_okay_with_char_list_failed() {
     let mut m = fresh();
     m.connected = true;
     m.on_world_authenticated(realm("Fake"), 3);
+    settle(&mut m);
     m.get_character_list();
+    settle(&mut m);
     m.outbox.clear();
     m.on_roster_failed(2);
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty() && !m.op.done, "another link's failure");
     m.on_roster_failed(3);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -561,9 +624,11 @@ fn an_authentication_behind_the_abandon_generation_is_dropped() {
 fn a_character_list_query_with_no_link_fails_okay() {
     let mut m = fresh();
     m.get_character_list();
+    settle(&mut m);
     assert!(m.park_out.is_empty());
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -585,12 +650,15 @@ fn cancelling_the_character_list_raises_the_realm_list() {
     let mut m = fresh();
     m.connected = true;
     m.get_character_list();
+    settle(&mut m);
     m.park_out.clear();
     m.outbox.clear();
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.outbox, [Outgoing::Teardown]);
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -618,6 +686,7 @@ fn change_realm_with_the_world_up_leaves_it_first() {
     m.holder = vec![realm("Fake")];
     m.connected = true;
     m.connect_to_realm("fake");
+    settle(&mut m);
     assert!(matches!(
         m.park_out.as_slice(),
         [ParkRequest::Realm(RealmRequest::Leave)]
@@ -627,6 +696,7 @@ fn change_realm_with_the_world_up_leaves_it_first() {
     assert!(!m.connected);
     assert_eq!(m.selected.as_ref().map(|r| r.name.as_str()), Some("Fake"));
     m.reconnect();
+    settle(&mut m);
     assert!(matches!(
         m.park_out.as_slice(),
         [
@@ -638,11 +708,13 @@ fn change_realm_with_the_world_up_leaves_it_first() {
     assert_eq!(m.outbox, [open("CANCEL", Some("GAME_SERVER_LOGIN"))]);
     m.outbox.clear();
     m.reconnect();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "the handler's reconnect runs once");
 
     let mut m = fresh();
     m.holder = vec![realm("Fake")];
     m.connect_to_realm("Fake");
+    settle(&mut m);
     assert!(matches!(
         m.park_out.as_slice(),
         [ParkRequest::Realm(RealmRequest::Refresh)]
@@ -656,7 +728,9 @@ fn the_queue_retexts_every_frame() {
     m.state = ScreenState::Connect;
     m.on_queued(Some(40), Some("Realm".into()), 1000);
     m.tick();
+    settle(&mut m);
     m.tick();
+    settle(&mut m);
     assert_eq!(m.outbox, [Outgoing::Queue, Outgoing::Queue]);
 }
 
@@ -667,9 +741,11 @@ fn the_queue_retexts_every_frame() {
 fn status_dialog_click_cancels_by_state() {
     let mut m = fresh();
     m.status_dialog_click();
+    settle(&mut m);
     assert!(m.login_out.is_empty());
     m.state = ScreenState::Logon;
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
     assert!(matches!(m.login_out.as_slice(), [GlueLogin::Abandon]));
 
@@ -678,9 +754,11 @@ fn status_dialog_click_cancels_by_state() {
     m.state = ScreenState::Connect;
     m.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING);
     m.status_dialog_click();
+    settle(&mut m);
     assert!(m.login_out.is_empty(), "the logon stays up");
     assert_eq!(m.state, ScreenState::Connect, "the next tick takes it");
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -700,10 +778,13 @@ fn status_dialog_click_cancels_by_state() {
 
     let mut m = fresh();
     m.request_realm_list(false);
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::RealmList);
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "a cancelled query reports nothing");
 }
 
@@ -716,6 +797,7 @@ fn a_delete_runs_state_6_to_the_list_or_to_okay() {
     let mut m = fresh();
     m.connected = true;
     m.delete_character(0x12);
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Delete);
     assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_DELETE_IN_PROGRESS"))]);
     assert!(matches!(
@@ -725,9 +807,11 @@ fn a_delete_runs_state_6_to_the_list_or_to_okay() {
     m.park_out.clear();
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "no text while the reply is out");
     m.on_char_deleted(0x39);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -749,9 +833,11 @@ fn a_delete_runs_state_6_to_the_list_or_to_okay() {
     let mut m = fresh();
     m.connected = true;
     m.delete_character(0x12);
+    settle(&mut m);
     m.outbox.clear();
     m.on_char_deleted(0x3a);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -772,9 +858,11 @@ fn a_delete_runs_state_6_to_the_list_or_to_okay() {
 fn a_delete_with_no_link_fails_and_a_cancelled_one_shows_nothing() {
     let mut m = fresh();
     m.delete_character(0x12);
+    settle(&mut m);
     assert!(m.park_out.is_empty());
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox.last(),
         Some(&open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")))
@@ -784,11 +872,14 @@ fn a_delete_with_no_link_fails_and_a_cancelled_one_shows_nothing() {
     let mut m = fresh();
     m.connected = true;
     m.delete_character(0x12);
+    settle(&mut m);
     m.outbox.clear();
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
     m.on_char_deleted(0x39);
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty());
 }
 
@@ -816,6 +907,7 @@ fn a_create_runs_state_5_to_the_select_screen_or_to_okay() {
     let mut m = fresh();
     m.connected = true;
     m.create_character(create_request("Newbie"));
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Create);
     assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_CREATE_IN_PROGRESS"))]);
     assert!(matches!(
@@ -828,13 +920,16 @@ fn a_create_runs_state_5_to_the_select_screen_or_to_okay() {
     m.park_out.clear();
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "no text while the reply is out");
     // Another operation's reply is not the create's.
     m.on_char_deleted(0x39);
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty());
     m.on_char_created(0x2e);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -860,9 +955,11 @@ fn a_create_runs_state_5_to_the_select_screen_or_to_okay() {
         let mut m = fresh();
         m.connected = true;
         m.create_character(create_request("Newbie"));
+        settle(&mut m);
         m.outbox.clear();
         m.on_char_created(code);
         m.tick();
+        settle(&mut m);
         assert_eq!(
             m.outbox,
             [
@@ -885,9 +982,11 @@ fn a_create_runs_state_5_to_the_select_screen_or_to_okay() {
 fn a_create_with_no_link_fails_and_a_cancelled_one_shows_nothing() {
     let mut m = fresh();
     m.create_character(create_request("Newbie"));
+    settle(&mut m);
     assert!(m.park_out.is_empty());
     m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox.last(),
         Some(&open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")))
@@ -897,11 +996,14 @@ fn a_create_with_no_link_fails_and_a_cancelled_one_shows_nothing() {
     let mut m = fresh();
     m.connected = true;
     m.create_character(create_request("Newbie"));
+    settle(&mut m);
     m.outbox.clear();
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
     m.on_char_created(0x2e);
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty());
 }
 
@@ -912,6 +1014,7 @@ fn a_rename_takes_state_7_which_only_its_button_leaves() {
     let mut m = fresh();
     m.connected = true;
     m.rename_character(0x12, "Newname".into());
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Rename);
     assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_RENAME_IN_PROGRESS"))]);
     assert!(matches!(
@@ -921,14 +1024,17 @@ fn a_rename_takes_state_7_which_only_its_button_leaves() {
     m.outbox.clear();
     m.park_out.clear();
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty() && m.park_out.is_empty());
     assert_eq!(m.state, ScreenState::Rename);
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
     assert!(m.outbox.is_empty() && m.park_out.is_empty());
 
     let mut m = fresh();
     m.rename_character(0x12, "Newname".into());
+    settle(&mut m);
     assert!(m.park_out.is_empty(), "no link, nothing sent");
 }
 
@@ -1002,6 +1108,7 @@ fn a_logout_keeps_the_link_for_the_screens_roster_ask() {
     assert!(m.connected, "the link is kept");
     assert!(m.outbox.is_empty());
     m.get_character_list();
+    settle(&mut m);
     let (_, park) = m.take_asks();
     assert!(
         matches!(park[..], [ParkRequest::Char(CharRequest::Enumerate)]),
@@ -1038,6 +1145,7 @@ fn enter_world_without_a_realm_or_a_link_does_nothing() {
             }
             m.connected = link;
             m.enter_world(1, 0x12, flags);
+            settle(&mut m);
             assert!(
                 nothing_done(&m),
                 "realm {realm}, link {link}, flags {flags:#x}"
@@ -1054,6 +1162,7 @@ fn enter_world_on_a_character_locked_for_transfer_opens_okay() {
     for flags in [0x4, 0x4004] {
         let mut m = on_select();
         m.enter_world(1, 0x12, flags);
+        settle(&mut m);
         assert_eq!(
             m.outbox,
             [open("OKAY", Some("CHAR_LOGIN_LOCKED_FOR_TRANSFER"))],
@@ -1070,6 +1179,7 @@ fn enter_world_on_a_character_locked_for_transfer_opens_okay() {
 fn enter_world_on_a_character_flagged_for_rename_asks_for_a_name() {
     let mut m = on_select();
     m.enter_world(1, 0x12, 0x4000 | 0x2000);
+    settle(&mut m);
     assert_eq!(m.outbox, [Outgoing::ForceRename("CHAR_RENAME_DESCRIPTION")]);
     assert_eq!(m.state, ScreenState::Idle);
     assert!(m.park_out.is_empty() && m.last_character.is_none());
@@ -1085,12 +1195,22 @@ fn enter_world_on_a_character_flagged_for_rename_asks_for_a_name() {
 fn enter_world_writes_the_index_and_picks_in_state_8() {
     let mut m = on_select();
     m.get_character_list();
+    settle(&mut m);
     m.outbox.clear();
     m.state = ScreenState::Idle;
     m.enter_world(2, 0x13, 0x2000);
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::EnterWorld);
     assert_eq!(m.last_character, Some(2));
-    assert!(m.outbox.is_empty(), "no dialog of its own");
+    assert_eq!(
+        m.outbox,
+        [Outgoing::Cvar {
+            name: "lastCharacterIndex",
+            value: "2".into()
+        }],
+        "the CVar in the call (`0x46b5fa`), and no dialog of its own"
+    );
+    m.outbox.clear();
     assert!(matches!(
         m.park_out.as_slice(),
         [
@@ -1100,6 +1220,7 @@ fn enter_world_writes_the_index_and_picks_in_state_8() {
     ));
     // A second call in the same frame: the last record wins both.
     m.enter_world(1, 0x12, 0);
+    settle(&mut m);
     assert_eq!(m.last_character, Some(1));
     assert!(matches!(
         m.park_out.as_slice(),
@@ -1112,11 +1233,15 @@ fn enter_world_writes_the_index_and_picks_in_state_8() {
     m.park_out.clear();
     m.last_character = None;
     m.enter_world(0, 0x11, 0);
+    settle(&mut m);
     assert_eq!(m.last_character, Some(0));
     assert!(m.park_out.is_empty(), "one login per entry");
+    m.outbox.clear();
     m.tick();
+    settle(&mut m);
     assert!(m.outbox.is_empty(), "no frame arm for state 8 here");
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
     assert!(m.park_out.is_empty());
 }
@@ -1153,19 +1278,25 @@ fn a_refused_login_maps_its_byte_through_the_references_table() {
 fn a_refused_login_takes_state_9_until_its_dialogs_button() {
     let mut m = on_select();
     m.enter_world(1, 0x12, 0);
+    settle(&mut m);
     m.park_out.clear();
+    m.outbox.clear();
     m.on_char_login_failed(1);
     assert_eq!(m.state, ScreenState::EnterWorld, "the rebuild sets it");
     m.state = ScreenState::Idle;
     m.take_refusal();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::LoginRefused);
     m.get_character_list();
+    settle(&mut m);
     assert!(
         m.outbox.is_empty() && m.park_out.is_empty(),
         "no ask in state 9"
     );
     m.tick();
+    settle(&mut m);
     m.tick();
+    settle(&mut m);
     assert_eq!(
         m.outbox,
         [
@@ -1175,6 +1306,7 @@ fn a_refused_login_takes_state_9_until_its_dialogs_button() {
     );
     m.outbox.clear();
     m.status_dialog_click();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::CharList);
     assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_LIST_RETRIEVING"))]);
     assert!(matches!(
@@ -1182,6 +1314,7 @@ fn a_refused_login_takes_state_9_until_its_dialogs_button() {
         [ParkRequest::Char(CharRequest::Enumerate)]
     ));
     m.take_refusal();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::CharList, "a refusal is taken once");
 
     // A session lost before the rebuild leaves no refusal for the next glue.
@@ -1189,6 +1322,7 @@ fn a_refused_login_takes_state_9_until_its_dialogs_button() {
     m.on_char_login_failed(6);
     m.on_disconnected(SessionEnd::Lost, true);
     m.take_refusal();
+    settle(&mut m);
     assert_eq!(m.state, ScreenState::Idle);
 }
 
@@ -1436,8 +1570,16 @@ fn enter_world_runs_its_arms_in_the_call() {
         assert_eq!(heard_in(&s, "EnterWorld()"), [want]);
         assert_eq!(shared.get().state, ScreenState::Idle);
     }
-    s.load_glue_roster(vec![record(2, 0)]);
+    // `lastCharacterIndex` is written in the call (`0x46b5fa`): the selection's 0-based index.
+    s.register_cvars([(crate::char_select::CVAR_LAST_CHARACTER, "0")]);
+    s.load_glue_roster(vec![record(2, 0), record(3, 0)]);
+    s.run("SelectCharacter(2)").unwrap();
     assert!(heard_in(&s, "EnterWorld()").is_empty());
+    assert_eq!(
+        s.cvar(crate::char_select::CVAR_LAST_CHARACTER).as_deref(),
+        Some("1"),
+        "no frame has run"
+    );
     assert_eq!(shared.get().state, ScreenState::EnterWorld);
 }
 
@@ -1463,6 +1605,95 @@ fn the_link_verbs_run_in_the_call() {
         shared.get().login_out.as_slice(),
         [GlueLogin::Disconnect, GlueLogin::Quit, GlueLogin::Abandon]
     ));
+}
+
+/// A handler inside a verb's fan-out that calls another verb runs that verb's call there, and the
+/// first verb's operation begins only after its dialog's handlers have run (`0x46b8b7` after the
+/// signal at `0x46b8af`): the `CANCEL` dialog's button pressed from its own `OPEN_STATUS_DIALOG`
+/// handler cancels the operation before it and tears the roster down (`0x46b754`), and the list
+/// query then begins and is asked, not cancelled.
+#[test]
+fn a_verb_called_inside_another_verbs_fan_out_acts_before_its_operation_begins() {
+    let shared = SharedGlueMgr::default();
+    let s = seated(&shared);
+    {
+        let mut m = shared.get_mut();
+        m.connected = true;
+        m.op = Operation::begin(OpKind::Delete, STATUS_CHAR_DELETE_IN_PROGRESS);
+    }
+    s.run(
+        "local pressed = false local f = CreateFrame('Frame') \
+         f:RegisterEvent('OPEN_STATUS_DIALOG') \
+         f:SetScript('OnEvent', function() \
+           if arg1 == 'CANCEL' and not pressed then pressed = true StatusDialogClick() end end)",
+    )
+    .unwrap();
+    let events: Vec<String> = heard_in(&s, "GetCharacterListUpdate()")
+        .iter()
+        .map(|h| h.split(' ').next().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(
+        events,
+        [
+            "OPEN_STATUS_DIALOG",
+            "UPDATE_SELECTED_CHARACTER",
+            "CHARACTER_LIST_UPDATE"
+        ]
+    );
+    let m = shared.get();
+    assert_eq!(m.state, ScreenState::CharList);
+    assert_eq!(m.op.kind, OpKind::CharList);
+    assert!(!m.op.done, "the query began after the press: {:?}", m.op);
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Char(CharRequest::Enumerate)]
+    ));
+    assert!(m.resumes.is_empty(), "every step ran once");
+}
+
+/// `GetServerName` (`0x46d280`) through the seated manager: the `realmName` CVar's text as it
+/// stands, and the PvP and RP of the realm selected this process, link or no link
+/// (`0x5ab9a0`, the `Cfg_Configs` walk at `0x46d2a5`-`0x46d30d`).
+#[test]
+fn get_server_name_reads_the_cvar_and_the_selected_realm_with_no_link() {
+    let shared = SharedGlueMgr::default();
+    let mut s = seated(&shared);
+    s.register_cvars([(crate::realm_select::CVAR_REALM_NAME, "aLPHA")]);
+    let (categories, types) = crate::realm_select::Realms::us_client().glue_setup();
+    s.set_glue_realm_setup(categories, types);
+    let read = |s: &UiScript| {
+        s.eval::<(String, Option<i64>, Option<i64>)>("return GetServerName()")
+            .unwrap()
+    };
+    assert_eq!(
+        read(&s),
+        ("aLPHA".to_string(), None, None),
+        "nothing selected"
+    );
+    let mut pvp = realm("Alpha");
+    pvp.realm_type = 1;
+    shared.get_mut().selected = Some(pvp);
+    assert!(!shared.get().connected);
+    assert_eq!(read(&s), ("aLPHA".to_string(), Some(1), None));
+    // With the link up the name is still the CVar's, in its own case, not the realm record's.
+    shared.get_mut().connected = true;
+    assert_eq!(read(&s), ("aLPHA".to_string(), Some(1), None));
+    s.set_cvar_host(crate::realm_select::CVAR_REALM_NAME, "Bravo");
+    assert_eq!(read(&s).0, "Bravo", "read as it stands, no frame between");
+}
+
+/// `DisconnectFromServer` with no world link only cancels the logon (`0x46d34d` past the drop):
+/// a connect in flight keeps its state and its operation.
+#[test]
+fn disconnect_with_no_link_leaves_the_connect_in_flight() {
+    let mut m = fresh();
+    m.state = ScreenState::Connect;
+    m.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+    m.disconnect_from_server();
+    assert_eq!(m.state, ScreenState::Connect);
+    assert_eq!(m.op.kind, OpKind::Connect);
+    assert!(!m.op.done);
+    assert!(matches!(m.login_out.as_slice(), [GlueLogin::Disconnect]));
 }
 
 /// A VM the manager has not seated holds its verbs' calls, which the manager runs when it seats
@@ -1594,6 +1825,7 @@ fn disconnecting_from_the_server_ends_the_query_in_flight() {
         let mut mgr = mgr_mut(&app);
         mgr.connected = true;
         mgr.get_character_list();
+        settle(&mut mgr);
     }
     vm(&app).run("DisconnectFromServer()").unwrap();
     app.update();
@@ -1679,6 +1911,35 @@ fn the_stock_login_reaches_the_native_login_and_shows_its_status() {
     assert!(!unknown.is_empty());
     assert_eq!(dialog(&app), Some(("OKAY".into(), unknown)));
     assert_eq!(mgr(&app).state, ScreenState::Idle);
+}
+
+/// The stock select shown with no world link names the realm off `realmName` and its type off the
+/// realm selected this process (`CharacterSelect_OnShow`, `CharacterSelect.lua:48`), as
+/// `GetServerName` (`0x46d280`) answers them link or no link.
+#[test]
+fn the_stock_select_with_no_link_shows_the_selected_realms_pvp() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, _) = stock_app();
+    {
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        s.register_cvars([(crate::realm_select::CVAR_REALM_NAME, "aLPHA")]);
+        let (categories, types) = crate::realm_select::Realms::us_client().glue_setup();
+        s.set_glue_realm_setup(categories, types);
+    }
+    let mut pvp = realm("Alpha");
+    pvp.realm_type = 1;
+    mgr_mut(&app).selected = Some(pvp);
+    vm(&app).run("SetGlueScreen('charselect')").unwrap();
+    assert!(
+        vm(&app)
+            .eval::<bool>(
+                "return CharSelectRealmName:GetText() == \
+                 'aLPHA\\n(' .. TEXT(SERVER_DOWN) .. ') ' .. PVP_PARENTHESES"
+            )
+            .unwrap(),
+        "{:?}",
+        vm(&app).eval::<String>("return CharSelectRealmName:GetText()")
+    );
 }
 
 /// The status dialog's Cancel is `StatusDialogClick`, which abandons the native attempt.

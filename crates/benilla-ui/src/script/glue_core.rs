@@ -171,9 +171,10 @@ pub enum GlueText {
     Raw(String),
 }
 
-/// One thing the glue manager raises in the glue VM: an event of the glue table, or the roster
-/// teardown that fires two. The host's frame and a verb's in-place call fire them through the same
-/// path ([`super::UiScript::fire_glue_signal`]).
+/// One thing the glue manager raises in the glue VM: an event of the glue table, the roster
+/// teardown that fires two, a CVar write, or the point where the manager's own next step runs.
+/// The host's frame and a verb's in-place call fire them through the same path
+/// ([`super::UiScript::fire_glue_signal`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlueSignal {
     /// `OPEN_STATUS_DIALOG(which[, text[, data]])` (event 3), the text resolved at the fire
@@ -205,6 +206,13 @@ pub enum GlueSignal {
     SelectLast,
     /// `FORCE_RENAME_CHARACTER(key)` (event 23): the key, unresolved.
     ForceRename(&'static str),
+    /// A CVar the manager set (`CVar::Set`, `0x63df50`), written to the VM's table as the
+    /// engine's write.
+    Cvar { name: &'static str, value: String },
+    /// The manager's own step that follows the signals before it, run back in the host at this
+    /// point of the fan-out ([`GlueHost::resume`]): an operation begun after its dialog's handlers
+    /// have run, as the reference's verbs begin it after their `SignalEvent`.
+    Resume(u32),
 }
 
 /// The glue manager a glue VM is seated with: the host side of `CGlueMgr` and the parts of
@@ -214,8 +222,13 @@ pub trait GlueHost {
     /// Run `call` and return what it raised, in order, for the VM to fire before the verb
     /// returns. The network half it starts is the host's, sent on its next frame.
     fn call(&self, call: GlueCall) -> Vec<GlueSignal>;
+    /// Run the step a [`GlueSignal::Resume`] names, once.
+    fn resume(&self, step: u32);
     /// The world link's flag (`[svc+0x1b00]`), which `IsConnectedToServer` (`0x46d380`) reads.
     fn connected(&self) -> bool;
+    /// The realm type of the realm selected this process (`0x5ab9a0`: `[0xc28134]`, the record at
+    /// `0xc27fb8`), which `GetServerName` looks up.
+    fn selected_realm_type(&self) -> Option<u32>;
 }
 
 /// The `ClientServices` status keys (`0x85cae8`, 83 entries), the `ResponseCodes` the world
@@ -476,15 +489,6 @@ pub fn launch_addon_url_allowed(url: &str) -> bool {
     true
 }
 
-/// The realm `GetServerName` (`0x46d280`) answers: the `realmName` CVar's text, and the
-/// selected realm's PvP and RP flags off its `Cfg_Configs` row, nil without a selected realm.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct GlueServer {
-    pub name: String,
-    pub pvp: bool,
-    pub rp: bool,
-}
-
 /// The glue core's slots and queue in the VM's model.
 #[derive(Default)]
 pub(crate) struct GlueCore {
@@ -498,7 +502,6 @@ pub(crate) struct GlueCore {
     /// The agreements' flag pairs (`[0xb41df8]`-`[0xb41e14]`): read off their CVars when the glue
     /// starts, set by their accepts, and read by the getters and the login's first two tests.
     notices: [NoticeState; 4],
-    pub(super) server: GlueServer,
     /// The current glue screen's name (`[0xb41478]`), which `SetCurrentScreen` (`0x46ce60` →
     /// `0x46b860`) copies into a 0x40-byte buffer.
     pub(super) screen: String,
@@ -569,11 +572,6 @@ impl super::UiScript {
     /// One agreement's flags as the VM holds them.
     pub fn glue_notice(&self, notice: GlueNotice) -> NoticeState {
         self.model_ref().glue.notices[notice.index()]
-    }
-
-    /// Seed the realm `GetServerName` answers.
-    pub fn set_glue_server(&mut self, server: GlueServer) {
-        self.model_mut().glue.server = server;
     }
 
     /// Whether the glue has hidden the pointer (`HideCursor`) and not shown it again.
@@ -666,6 +664,21 @@ fn fire_signal(lua: &Lua, signal: GlueSignal) {
                 "FORCE_RENAME_CHARACTER",
                 vec![ScriptValue::Str(key.to_string())],
             );
+        }
+        GlueSignal::Cvar { name, value } => {
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            super::cvars::set_from_engine(&mut model, name, value);
+        }
+        GlueSignal::Resume(step) => {
+            let host = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .glue
+                .host
+                .clone();
+            if let Some(host) = host {
+                host.resume(step);
+            }
         }
     }
 }
@@ -842,17 +855,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Three values (`0x46d280`): the `realmName` CVar's string, always a string, then PvP and RP
-    // as 1 or nil.
+    // Three values (`0x46d280`): the `realmName` CVar's string, always a string (`0x46d289` →
+    // `0x5ab7d0`), then PvP and RP as 1 or nil off the selected realm's `Cfg_Configs` row
+    // (`0x46d29c` → `0x5ab9a0`, the walk at `0x46d2a5`-`0x46d30d`: `[row+8]`, `[row+0xc]`), link
+    // or no link; nil, nil with no realm selected or no row for its type.
     g.set(
         "GetServerName",
         lua.create_function(|lua, _: MultiValue| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let server = &model.glue.server;
+            let (name, host) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                (
+                    super::glue_realm::realm_name(&model),
+                    model.glue.host.clone(),
+                )
+            };
+            let selected = host.and_then(|h| h.selected_realm_type());
+            let (pvp, rp) = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                selected.map_or((false, false), |t| model.glue.realms.type_of(t))
+            };
             Ok(MultiValue::from_vec(vec![
-                Value::String(lua.create_string(&server.name)?),
-                flag(server.pvp),
-                flag(server.rp),
+                Value::String(lua.create_string(&name)?),
+                flag(pvp),
+                flag(rp),
             ]))
         })?,
     )?;
@@ -972,6 +997,7 @@ mod tests {
         calls: std::cell::RefCell<Vec<String>>,
         replies: std::cell::RefCell<Vec<(&'static str, Vec<GlueSignal>)>>,
         connected: std::cell::Cell<bool>,
+        selected: std::cell::Cell<Option<u32>>,
     }
 
     impl GlueHost for FakeHost {
@@ -986,8 +1012,16 @@ mod tests {
                 .unwrap_or_default()
         }
 
+        fn resume(&self, step: u32) {
+            self.calls.borrow_mut().push(format!("resume {step}"));
+        }
+
         fn connected(&self) -> bool {
             self.connected.get()
+        }
+
+        fn selected_realm_type(&self) -> Option<u32> {
+            self.selected.get()
         }
     }
 
@@ -1293,24 +1327,36 @@ mod tests {
         );
     }
 
+    /// The name is the `realmName` CVar's text as it stands, whatever its case; the flags are the
+    /// selected realm type's `Cfg_Configs` row, nil, nil with no host, no selection or no row.
     #[test]
-    fn the_server_name_is_always_a_string_with_two_flags() {
-        let mut s = UiScript::new_glue().unwrap();
+    fn the_server_name_is_the_cvar_and_the_flags_the_selected_realms() {
+        let bare = UiScript::new_glue().unwrap();
         assert_eq!(
-            s.eval::<(String, Option<i64>, Option<i64>)>("return GetServerName()")
+            bare.eval::<(String, Option<i64>, Option<i64>)>("return GetServerName()")
                 .unwrap(),
             (String::new(), None, None)
         );
-        s.set_glue_server(GlueServer {
-            name: "Nostalrius".into(),
-            pvp: true,
-            rp: false,
-        });
-        assert_eq!(
-            s.eval::<(String, Option<i64>, Option<i64>)>("return GetServerName()")
-                .unwrap(),
-            ("Nostalrius".to_string(), Some(1), None)
+        let (mut s, host) = seated(Vec::new());
+        s.register_cvars([("realmName", "")]);
+        s.set_glue_realm_setup(
+            Vec::new(),
+            vec![super::super::GlueRealmType {
+                realm_type: 1,
+                pvp: true,
+                rp: false,
+            }],
         );
+        s.set_cvar_host("realmName", "nOSTALRIUS");
+        let read = |s: &UiScript| {
+            s.eval::<(String, Option<i64>, Option<i64>)>("return GetServerName()")
+                .unwrap()
+        };
+        assert_eq!(read(&s), ("nOSTALRIUS".to_string(), None, None));
+        host.selected.set(Some(1));
+        assert_eq!(read(&s), ("nOSTALRIUS".to_string(), Some(1), None));
+        host.selected.set(Some(7));
+        assert_eq!(read(&s), ("nOSTALRIUS".to_string(), None, None), "no row");
     }
 
     #[test]

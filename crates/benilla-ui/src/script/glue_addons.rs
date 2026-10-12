@@ -472,11 +472,7 @@ mod tests {
             None,
         );
         s.set_addon_state_files(Box::new(files.clone()));
-        s.set_glue_server(super::super::glue_core::GlueServer {
-            name: "Realm".into(),
-            pvp: false,
-            rp: false,
-        });
+        s.register_cvars([("realmName", "Realm")]);
         let _ = s.load_glue_roster(vec![character(1, "Ann"), character(2, "Bob")]);
         s
     }

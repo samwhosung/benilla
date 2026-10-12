@@ -73,6 +73,13 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
         return false;
     };
     seat_raster_seam_for_load(world, &mut script);
+    // The CVar table before the load and the first screen, as the in-game build seeds its own:
+    // this VM is born before `cvars::sync_cvars`'s per-VM seed, and the character screen's
+    // `OnShow` names the realm `GetServerName` reads off `realmName` (`0x46d289`).
+    if let Some(cvars) = world.get_resource::<crate::cvars::Cvars>() {
+        script.set_cvar_saved_base(cvars.orphans());
+        script.seed_cvars(cvars.vm_seed());
+    }
     seed_agreements(world, &mut script);
     let start = std::time::Instant::now();
     let failures = super::glue::load_glue(&mut script);

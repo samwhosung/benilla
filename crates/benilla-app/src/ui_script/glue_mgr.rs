@@ -157,8 +157,8 @@ use std::rc::Rc;
 use benilla_protocol::{Character, LoginRefusal, LoginStage, RealmInfo, RosterCause};
 use benilla_ui::script::{
     GlueCall, GlueCharacter, GlueHost, GlueNotice, GlueRealm, GlueRealmCells, GlueRequest,
-    GlueSelectCells, GlueServer, GlueSignal, GlueText as Text, NoticeState, ScriptValue, UiScript,
-    VmKind, GLUE_STATUS_KEYS,
+    GlueSelectCells, GlueSignal, GlueText as Text, NoticeState, ScriptValue, UiScript, VmKind,
+    GLUE_STATUS_KEYS,
 };
 
 use crate::login::queue::QueueEstimate;
@@ -400,7 +400,52 @@ impl Operation {
     }
 }
 
-/// One glue event the manager fires into the glue VM.
+/// What follows a verb's dialog in the reference, run once the dialog's handlers have: the
+/// operation begun and its request asked (`0x46b8b7`, `0x46b2cd`, `0x46b328`, `0x46b902`,
+/// `0x46b274`, the logon at `0x46b05c`), so a handler that presses the dialog's button acts on the
+/// operation before it.
+#[derive(Clone, PartialEq, Eq)]
+enum Step {
+    /// The logon, `0x5ab4b0`.
+    Logon { account: String, password: String },
+    /// The character list query, `0x5aabb0`.
+    CharList,
+    /// The create, `0x5aac50`.
+    Create(benilla_ui::script::GlueCreateRequest),
+    /// The delete, `0x5ab100`.
+    Delete(u64),
+    /// The `CMSG_CHAR_RENAME`, `0x5ab630`.
+    Rename { guid: u64, name: String },
+    /// The realm list query, `0x5ab840`.
+    RealmList,
+    /// The world connect, `0x5aab20`.
+    Connect,
+}
+
+/// Never prints the password.
+impl std::fmt::Debug for Step {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Step::Logon { account, .. } => f
+                .debug_struct("Logon")
+                .field("account", account)
+                .field("password", &"<redacted>")
+                .finish(),
+            Step::CharList => f.write_str("CharList"),
+            Step::Create(r) => f.debug_tuple("Create").field(r).finish(),
+            Step::Delete(g) => f.debug_tuple("Delete").field(g).finish(),
+            Step::Rename { guid, name } => f
+                .debug_struct("Rename")
+                .field("guid", guid)
+                .field("name", name)
+                .finish(),
+            Step::RealmList => f.write_str("RealmList"),
+            Step::Connect => f.write_str("Connect"),
+        }
+    }
+}
+
+/// One glue event the manager fires into the glue VM, or its own step that follows one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Outgoing {
     /// `OPEN_STATUS_DIALOG(which[, text[, data]])` (event 3).
@@ -435,6 +480,10 @@ enum Outgoing {
     SelectLast,
     /// `FORCE_RENAME_CHARACTER(key)` (event 23, `0x46b4a8`, `0x46b4cd`): the key, unresolved.
     ForceRename(&'static str),
+    /// A CVar the manager set.
+    Cvar { name: &'static str, value: String },
+    /// The manager's step that follows the signals before it ([`Step`]).
+    Begin(Step),
     /// The rename applier (`0x4725f0`) for this guid and name.
     Renamed { guid: u64, name: String },
 }
@@ -454,7 +503,9 @@ impl Outgoing {
             Outgoing::SelectFirst => GlueSignal::SelectFirst,
             Outgoing::SelectLast => GlueSignal::SelectLast,
             Outgoing::ForceRename(key) => GlueSignal::ForceRename(key),
-            out @ (Outgoing::Queue
+            Outgoing::Cvar { name, value } => GlueSignal::Cvar { name, value },
+            out @ (Outgoing::Begin(_)
+            | Outgoing::Queue
             | Outgoing::Rebuild
             | Outgoing::Roster
             | Outgoing::Renamed { .. }) => return Err(out),
@@ -497,8 +548,6 @@ pub(crate) struct GlueMgr {
     /// `ChangeRealm` dropped a live world link to connect to another realm (`[0xb41d9c]`, set at
     /// `0x46b235`): the connect waits for the drop's handler (`0x46c56f`-`0x46c5bf`).
     reconnect: bool,
-    /// The realm this session connected to.
-    realm: Option<benilla_protocol::RealmInfo>,
     /// State 2's operation.
     op: Operation,
     queue: QueueEstimate,
@@ -544,6 +593,10 @@ pub(crate) struct GlueMgr {
     refused: Option<u8>,
     /// The index `EnterWorld` writes to `lastCharacterIndex`, for the host's CVar registry.
     last_character: Option<i32>,
+    /// The steps a verb's call left at points of its fan-out ([`GlueSignal::Resume`]), by number.
+    resumes: std::collections::HashMap<u32, Step>,
+    /// The next such number.
+    next_resume: u32,
 }
 
 impl GlueMgr {
@@ -607,15 +660,16 @@ impl GlueMgr {
     }
 
     /// `DisconnectFromServer` (`0x46d340`): with the world link up, its flag goes down in the call
-    /// (`0x5ab1a8`) and the link is dropped; then the logon is cancelled (`0x46d36c`). The drop's
-    /// handler zeroes the state (`0x46c55d`), the operation in flight with it, so no reply
-    /// completes on the login screen; here that is done in the call.
+    /// (`0x5ab1a8`) and the link is dropped; then, link or not, the logon is cancelled
+    /// (`0x46d36c`). Only a real drop reaches the handler (`0x46c540`), which zeroes the state
+    /// (`0x46c55d`), the operation in flight with it, so no reply completes on the login screen;
+    /// the native session reports no such drop, so here the handler's half runs with the drop.
     fn disconnect_from_server(&mut self) {
-        if self.connected || self.state == ScreenState::Connect {
+        if self.connected {
+            self.connected = false;
             self.state = ScreenState::Idle;
             self.op = Operation::default();
         }
-        self.connected = false;
         self.login_out.push(GlueLogin::Disconnect);
     }
 
@@ -642,7 +696,8 @@ impl GlueMgr {
             return;
         }
         self.begin_logon();
-        self.login_out.push(GlueLogin::Submit { account, password });
+        self.outbox
+            .push(Outgoing::Begin(Step::Logon { account, password }));
     }
 
     /// Login's own state edge: the cells cleared, the latch down, state 1, and the `CANCEL`
@@ -710,12 +765,7 @@ impl GlueMgr {
         }
         self.state = ScreenState::CharList;
         self.open("CANCEL", Some(Text::Key("CHAR_LIST_RETRIEVING")));
-        self.op = Operation::begin(OpKind::CharList, STATUS_CHAR_LIST_RETRIEVING);
-        if !self.connected {
-            self.op.complete(false, STATUS_FAILED_TO_CONNECT);
-        } else {
-            self.park_out.push(CharRequest::Enumerate.into());
-        }
+        self.outbox.push(Outgoing::Begin(Step::CharList));
     }
 
     /// `0x46b290`, `CreateCharacter`'s tail past the name check: state 5, the
@@ -726,25 +776,7 @@ impl GlueMgr {
     fn create_character(&mut self, request: benilla_ui::script::GlueCreateRequest) {
         self.state = ScreenState::Create;
         self.open("CANCEL", Some(Text::Key("CHAR_CREATE_IN_PROGRESS")));
-        self.op = Operation::begin(OpKind::Create, STATUS_CHAR_CREATE_IN_PROGRESS);
-        if !self.connected {
-            self.op.complete(false, STATUS_FAILED_TO_CONNECT);
-        } else {
-            self.park_out.push(
-                CharRequest::Create(benilla_protocol::CharCreateReq {
-                    name: request.name,
-                    race: request.race,
-                    class: request.class,
-                    gender: request.sex,
-                    skin: request.skin,
-                    face: request.face,
-                    hair_style: request.hair_style,
-                    hair_color: request.hair_color,
-                    facial_hair: request.facial_hair,
-                })
-                .into(),
-            );
-        }
+        self.outbox.push(Outgoing::Begin(Step::Create(request)));
     }
 
     /// `SMSG_CHAR_CREATE` (`0x5aac30`): the result byte is the create's status, success on
@@ -762,12 +794,7 @@ impl GlueMgr {
     fn delete_character(&mut self, guid: u64) {
         self.state = ScreenState::Delete;
         self.open("CANCEL", Some(Text::Key("CHAR_DELETE_IN_PROGRESS")));
-        self.op = Operation::begin(OpKind::Delete, STATUS_CHAR_DELETE_IN_PROGRESS);
-        if !self.connected {
-            self.op.complete(false, STATUS_FAILED_TO_CONNECT);
-        } else {
-            self.park_out.push(CharRequest::Delete(guid).into());
-        }
+        self.outbox.push(Outgoing::Begin(Step::Delete(guid)));
     }
 
     /// `0x46b340` past the name check (`0x46b39b`): state 7, the `CHAR_RENAME_IN_PROGRESS` dialog
@@ -775,9 +802,71 @@ impl GlueMgr {
     fn rename_character(&mut self, guid: u64, name: String) {
         self.state = ScreenState::Rename;
         self.open("CANCEL", Some(Text::Key("CHAR_RENAME_IN_PROGRESS")));
-        if self.connected {
-            self.park_out
-                .push(CharRequest::Rename { guid, name }.into());
+        self.outbox
+            .push(Outgoing::Begin(Step::Rename { guid, name }));
+    }
+
+    /// A verb's step past its dialog ([`Step`]). Each begins its operation (`BeginOperation`,
+    /// `0x5aa400`) and asks for it; with no link a character operation fails
+    /// `RESPONSE_FAILED_TO_CONNECT` at once (`0x5aabca`, `0x5aac72`, `0x5ab11e`) and the rename
+    /// sends nothing (`0x5ab630`).
+    fn run_step(&mut self, step: Step) {
+        let char_op = |m: &mut Self, kind, status, request: CharRequest| {
+            m.op = Operation::begin(kind, status);
+            if m.connected {
+                m.park_out.push(request.into());
+            } else {
+                m.op.complete(false, STATUS_FAILED_TO_CONNECT);
+            }
+        };
+        match step {
+            Step::Logon { account, password } => {
+                self.login_out.push(GlueLogin::Submit { account, password });
+            }
+            Step::CharList => char_op(
+                self,
+                OpKind::CharList,
+                STATUS_CHAR_LIST_RETRIEVING,
+                CharRequest::Enumerate,
+            ),
+            Step::Create(r) => char_op(
+                self,
+                OpKind::Create,
+                STATUS_CHAR_CREATE_IN_PROGRESS,
+                CharRequest::Create(benilla_protocol::CharCreateReq {
+                    name: r.name,
+                    race: r.race,
+                    class: r.class,
+                    gender: r.sex,
+                    skin: r.skin,
+                    face: r.face,
+                    hair_style: r.hair_style,
+                    hair_color: r.hair_color,
+                    facial_hair: r.facial_hair,
+                }),
+            ),
+            Step::Delete(guid) => char_op(
+                self,
+                OpKind::Delete,
+                STATUS_CHAR_DELETE_IN_PROGRESS,
+                CharRequest::Delete(guid),
+            ),
+            Step::Rename { guid, name } => {
+                if self.connected {
+                    self.park_out
+                        .push(CharRequest::Rename { guid, name }.into());
+                }
+            }
+            Step::RealmList => {
+                self.op = Operation::begin(OpKind::GetRealms, STATUS_REALM_LIST_IN_PROGRESS);
+                self.park_out.push(RealmRequest::Refresh.into());
+            }
+            Step::Connect => {
+                self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+                self.queue = QueueEstimate::default();
+                // The connect's own query (`0x5aab20` → `0x5b2220`).
+                self.park_out.push(RealmRequest::Refresh.into());
+            }
         }
     }
 
@@ -807,6 +896,11 @@ impl GlueMgr {
                 .push(Outgoing::ForceRename("CHAR_RENAME_DESCRIPTION"));
             return;
         }
+        // `0x46b5fa`: the CVar in the call; the save (`0x46b6f6`) is the frame's.
+        self.outbox.push(Outgoing::Cvar {
+            name: crate::char_select::CVAR_LAST_CHARACTER,
+            value: index.to_string(),
+        });
         self.last_character = Some(index);
         let queued = self.park_out.iter_mut().find_map(|r| match r {
             ParkRequest::Char(CharRequest::Enter(g)) => Some(g),
@@ -877,8 +971,7 @@ impl GlueMgr {
         if dialog {
             self.open("CANCEL", Some(Text::Key("REALM_LIST_IN_PROGRESS")));
         }
-        self.op = Operation::begin(OpKind::GetRealms, STATUS_REALM_LIST_IN_PROGRESS);
-        self.park_out.push(RealmRequest::Refresh.into());
+        self.outbox.push(Outgoing::Begin(Step::RealmList));
     }
 
     /// `CancelRealmListQuery` (`0x46b7e0`): in state 4 only, the query completes cancelled and the
@@ -923,10 +1016,7 @@ impl GlueMgr {
     fn begin_connect(&mut self) {
         self.state = ScreenState::Connect;
         self.open("CANCEL", Some(Text::Key("GAME_SERVER_LOGIN")));
-        self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
-        self.queue = QueueEstimate::default();
-        // The connect's own query (`0x5aab20` → `0x5b2220`).
-        self.park_out.push(RealmRequest::Refresh.into());
+        self.outbox.push(Outgoing::Begin(Step::Connect));
     }
 
     /// A realm list reply: the holder filled (`0x5b2230`), then the pending operation's arm of
@@ -1151,11 +1241,14 @@ impl GlueMgr {
 
     /// The world server accepted the authentication: the link is up, and in state 2 the
     /// authentication completes `AUTH_OK` (`0x5aab80`), which the tick shows and takes down the
-    /// success arm.
+    /// success arm. The realm the link reached is the selected one, as the connect dials only
+    /// `[0xc28134]`'s record (`0x5ab823`); a dial the native policy made on its own selects it.
     fn on_world_authenticated(&mut self, realm: benilla_protocol::RealmInfo, epoch: u64) {
         self.connected = true;
         self.link = epoch;
-        self.realm = Some(realm);
+        if self.selected.is_none() {
+            self.selected = Some(realm);
+        }
         if self.state == ScreenState::Logon {
             // A logon whose world half finished inside one frame.
             self.on_logon_done();
@@ -1433,14 +1526,31 @@ impl GlueHost for GlueMgrCell {
         for out in raised {
             match out.into_signal() {
                 Ok(signal) => signals.push(signal),
+                Err(Outgoing::Begin(step)) => {
+                    let id = mgr.next_resume;
+                    mgr.next_resume = id.wrapping_add(1);
+                    mgr.resumes.insert(id, step);
+                    signals.push(GlueSignal::Resume(id));
+                }
                 Err(out) => mgr.outbox.push(out),
             }
         }
         signals
     }
 
+    fn resume(&self, step: u32) {
+        let mut mgr = self.0.borrow_mut();
+        if let Some(step) = mgr.resumes.remove(&step) {
+            mgr.run_step(step);
+        }
+    }
+
     fn connected(&self) -> bool {
         self.0.borrow().connected
+    }
+
+    fn selected_realm_type(&self) -> Option<u32> {
+        self.0.borrow().selected.as_ref().map(|r| r.realm_type)
     }
 }
 
@@ -1731,12 +1841,7 @@ pub(crate) fn drive_glue_mgr(
                 data: Some(typed),
             });
         }
-        seed(
-            &mut mgr,
-            &mut script,
-            realms.as_deref(),
-            realmlist.as_deref(),
-        );
+        seed(&mut mgr, &mut script, realmlist.as_deref());
     }
     let names = RosterNames {
         areas: areas.as_deref().map(|a| &a.0),
@@ -1762,7 +1867,7 @@ pub(crate) fn drive_glue_mgr(
 /// the reference keeps in C globals, which outlive the Lua state: the manager itself as the VM's
 /// host, the saved account, the realm list and select cells, the AddOn registry and the reply the
 /// session has read, the name check's lists, the realm categories, a refused login's state 9
-/// (`0x402075`, set ahead of the screen) and the slots the verbs read live, the server among them.
+/// (`0x402075`, set ahead of the screen) and the slots the verbs read.
 fn seat_glue(
     shared: &SharedGlueMgr,
     s: &mut UiScript,
@@ -1790,7 +1895,7 @@ fn seat_glue(
         s.set_glue_realm_setup(categories, types);
     }
     mgr.take_refusal();
-    seed(&mut mgr, s, realms, realmlist);
+    seed(&mut mgr, s, realmlist);
 }
 
 /// The glue build's seating ([`seat_glue`]) inside the build, before its first `SET_GLUE_SCREEN`:
@@ -1876,12 +1981,7 @@ fn glue_character(c: &Character, names: &RosterNames) -> GlueCharacter {
 }
 
 /// The glue VM's slots, from the manager's state.
-fn seed(
-    mgr: &mut GlueMgr,
-    script: &mut UiScript,
-    realms: Option<&crate::realm_select::Realms>,
-    realmlist: Option<&crate::realmlist::Realmlist>,
-) {
+fn seed(mgr: &mut GlueMgr, script: &mut UiScript, realmlist: Option<&crate::realmlist::Realmlist>) {
     if std::mem::take(&mut mgr.cells_moved) {
         script.set_glue_realm_cells(mgr.realm_cells);
     }
@@ -1889,28 +1989,18 @@ fn seed(
         script.set_glue_realms(mgr.holder.iter().map(glue_realm).collect());
     }
     script.set_glue_realm_characters(mgr.characters);
-    // The flags come off the connected realm's `Cfg_Configs` row.
-    let (pvp, rp) = match &mgr.realm {
-        Some(r) if mgr.connected => realms.map_or((false, false), |x| x.pvp_rp(r.realm_type)),
-        _ => (false, false),
-    };
-    let name = server_name(mgr, script);
-    script.set_glue_server(GlueServer { name, pvp, rp });
     if let Some(r) = realmlist {
         seed_realmlist(script, r);
     }
 }
 
-/// The realm `realmName` names, which the session dials (`0x5ab7b0` writes it on the connect): the
-/// connected realm's name, else the CVar's. The per-character files are kept under it, as the
-/// reference's `WTF\Account\<account>\<realmName>\` (`0x5ab7d0`).
-fn server_name(mgr: &GlueMgr, script: &UiScript) -> String {
-    match &mgr.realm {
-        Some(r) if mgr.connected => r.name.clone(),
-        _ => script
-            .cvar(crate::realm_select::CVAR_REALM_NAME)
-            .unwrap_or_default(),
-    }
+/// The `realmName` CVar (`0x5ab7d0`), which the session's connect wrote (`0x5ab7b0`): the
+/// per-character files are kept under it, as the reference's
+/// `WTF\Account\<account>\<realmName>\`.
+fn server_name(script: &UiScript) -> String {
+    script
+        .cvar(crate::realm_select::CVAR_REALM_NAME)
+        .unwrap_or_default()
 }
 
 /// The realmlist control's two globals (`AccountLoginRealmlist.xml`): the address the next logon
@@ -1986,6 +2076,7 @@ fn flush_one(
                 vec![ScriptValue::Str(body), ScriptValue::Str(button)],
             );
         }
+        Outgoing::Begin(step) => shared.get_mut().run_step(step),
         Outgoing::Rebuild => {
             script.rebuild_glue_realms();
             shared.get_mut().realm_cells = script.glue_realm_cells();
@@ -1996,7 +2087,7 @@ fn flush_one(
             let Some(old) = script.glue_character_name(guid) else {
                 return;
             };
-            let realm = server_name(&shared.get(), script);
+            let realm = server_name(script);
             crate::local_state::move_character_state(&realm, &old, &name);
             if let Some(c) = shared.get_mut().roster.iter_mut().find(|c| c.guid == guid) {
                 c.name.clone_from(&name);

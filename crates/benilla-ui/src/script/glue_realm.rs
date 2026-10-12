@@ -232,7 +232,7 @@ impl GlueRealmList {
 
     /// The first `Cfg_Configs` row of a realm type, `(pvp, rp)`; `(false, false)` with none, as
     /// `GetRealmInfo` (`0x46efda`) and `realm_select` (`0x46ea98`) scan it.
-    fn type_of(&self, realm_type: u32) -> (bool, bool) {
+    pub(super) fn type_of(&self, realm_type: u32) -> (bool, bool) {
         self.types
             .iter()
             .find(|t| t.realm_type == realm_type)
@@ -455,7 +455,7 @@ impl super::UiScript {
 }
 
 /// The `realmName` CVar's value (`0x5ab7d0`), empty when unregistered.
-fn realm_name(model: &Model) -> String {
+pub(super) fn realm_name(model: &Model) -> String {
     model
         .cvars
         .get("realmname")
