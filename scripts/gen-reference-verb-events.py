@@ -39,6 +39,21 @@ UNIT_WINDOW_FIELDS = 0xB6
 # A helper "only verbs call" is trusted up to this many callers; past it, it is a hub.
 MAX_HELPER_CALLERS = 8
 
+# Pairs traced by hand past the one-call reach of `shape=helper`, as (verb, event, via, sites):
+# each verb's worker re-enters a shared dispatcher that a non-verb (the right-click dispatcher)
+# also calls, so the walk cannot claim it. The pet orders' workers (`0x4bd4f0`..`0x4bd5f0`) and
+# `CastPetAction` enter `0x4bd1d0`, whose reaction arm signals at `0x4bc956` and whose Stay and
+# Follow arm at `0x4bc979`, both before the send at `0x4bd444`. PetAttack's latch (`0x4bd438`)
+# rides the attack validator and is left out.
+TRACED = [
+    ("CastPetAction", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956, 0x4BC979, 0x4BD438)),
+    ("PetAggressiveMode", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956,)),
+    ("PetDefensiveMode", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956,)),
+    ("PetFollow", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC979,)),
+    ("PetPassiveMode", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC956,)),
+    ("PetWait", "PET_BAR_UPDATE", "0x4bd1d0", (0x4BC979,)),
+]
+
 LINE = re.compile(r"^\s*([0-9a-f]+):\t(\S+)(?:\s+(.*))?$")
 BRANCH = re.compile(r"^(call|jmp)\s+0x([0-9a-f]+)\s*$")
 SIZE = re.compile(r"\bsize=(\d+)")
@@ -188,6 +203,10 @@ def main():
             for c in cs:
                 add(verbs[c], event, "helper", f"0x{fn:x}", va)
 
+    for verb, event, via, traced_sites in TRACED:
+        for site in traced_sites:
+            add(verb, event, "traced", via, site)
+
     out = os.path.normpath(a.out)
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(
@@ -199,6 +218,8 @@ def main():
             "#        helper = a fire site inside a function that only registered verbs call\n"
             "#                 (at most 8 of them); `via` is that helper. A helper with any\n"
             "#                 non-verb caller produces a state event and is not here.\n"
+            "#        traced = traced by hand through a shared dispatcher; `via` is the\n"
+            "#                 dispatcher (the script's TRACED list).\n"
             "# sites  the fire sites themselves.\n"
             "# A floor, not a census: a verb with no row may still fire an event.\n"
             "# A site past its candidate function's extent is left out rather than mis-filed.\n"

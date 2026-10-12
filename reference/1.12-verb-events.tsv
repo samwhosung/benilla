@@ -6,13 +6,16 @@
 #        helper = a fire site inside a function that only registered verbs call
 #                 (at most 8 of them); `via` is that helper. A helper with any
 #                 non-verb caller produces a state event and is not here.
+#        traced = traced by hand through a shared dispatcher; `via` is the
+#                 dispatcher (the script's TRACED list).
 # sites  the fire sites themselves.
 # A floor, not a census: a verb with no row may still fire an event.
 # A site past its candidate function's extent is left out rather than mis-filed.
-# 43 pairs over 41 verbs and 27 events; 2 site(s) past a verified extent.
+# 49 pairs over 47 verbs and 27 events; 2 site(s) past a verified extent.
 verb	event	shape	via	sites
 AddSkillUp	SKILL_LINES_CHANGED	helper	0x4d32d0	0x4d346f
 CancelSkillUps	SKILL_LINES_CHANGED	body	-	0x4d3e3a
+CastPetAction	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc956|0x4bc979|0x4bd438
 ChangeActionBarPage	ACTIONBAR_PAGE_CHANGED	body	-	0x4e7655
 ChangeChatColor	UPDATE_CHAT_COLOR	body	-	0x4a098b
 CheckInbox	MAIL_INBOX_UPDATE	body	-	0x4aeaf8
@@ -34,7 +37,12 @@ ExpandCraftSkillLine	CRAFT_UPDATE	helper	0x4f6be0	0x4f6bf0
 ExpandQuestHeader	QUEST_LOG_UPDATE	helper	0x4ded30	0x4ded98|0x4dedba|0x4dedd6
 ExpandTradeSkillSubClass	TRADE_SKILL_UPDATE	helper	0x4fd750	0x4fd765
 ExpandTrainerSkillLine	TRAINER_UPDATE	helper	0x4d8cd0	0x4d8ce0
+PetAggressiveMode	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc956
+PetDefensiveMode	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc956
 PetDismiss	PET_DISMISS_START	helper	0x4bd6e0	0x4bd722
+PetFollow	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc979
+PetPassiveMode	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc956
+PetWait	PET_BAR_UPDATE	traced	0x4bd1d0	0x4bc979
 PickupPlayerMoney	PLAYER_MONEY	helper	0x494cc0	0x494d10
 PickupTradeMoney	PLAYER_MONEY	helper	0x494cc0	0x494d10
 RemoveSkillUp	SKILL_LINES_CHANGED	helper	0x4d3480	0x4d3598

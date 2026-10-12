@@ -20,6 +20,8 @@ const PET_COMMAND_ATTACK: u32 = 2;
 const PET_REACT_PASSIVE: u32 = 0;
 const PET_REACT_DEFENSIVE: u32 = 1;
 const PET_REACT_AGGRESSIVE: u32 = 2;
+/// Bit 27 of the pet state word: the server has disabled the bar.
+const PET_STATE_BAR_DISABLED: u32 = 0x0800_0000;
 
 /// A slot word as the server packs it: the type in the top byte, the action in the low bits.
 const fn order(kind: u8, action: u32) -> u32 {
@@ -127,6 +129,52 @@ pub(crate) struct PetBarState {
     /// The charm or possess expiry `[0xb714a8]` on the `GetTime` clock, in seconds: the last
     /// `SMSG_PET_SPELLS` duration past its arrival, `None` for a packet whose duration is 0.
     pub(crate) expiry: Option<f64>,
+    /// The pet's state word (`[0xb71468]`): the reaction in byte 0, the command in bits 8-15 and
+    /// the server's bar-disabled bit 27. A reaction or Stay/Follow press writes it here.
+    pub(crate) state: u32,
+}
+
+/// The press dispatcher's local half (`0x4bd1d0`) for a usable bar (`0x4bd1f2`): a reaction
+/// writes byte 0 (`0x4bd399` → `0x4bc940`) and Stay or Follow bits 8-15 (`0x4bd43f` →
+/// `0x4bc960`), each signalling `PET_BAR_UPDATE` (`0x4bc956`, `0x4bc979`) before the send at
+/// `0x4bd444`, even when nothing moved. The token slots repaint from the word first, so the
+/// handler reads the lit button. Attack's latch rides its validator, which is the app's.
+fn latch_press(model: &mut Model, packed: u32) {
+    let bar = &mut model.pet_bar;
+    if !bar.has_bar || !bar.actions_usable {
+        return;
+    }
+    let kind = ((packed >> 24) & 0x3F) as u8;
+    let action = packed & 0xFFFF;
+    match kind {
+        PET_ACT_REACTION => bar.state = (bar.state & 0xFFFF_FF00) | action,
+        PET_ACT_COMMAND if action <= PET_COMMAND_FOLLOW => {
+            bar.state = (bar.state & 0x0800_00FF) | (action << 8);
+        }
+        _ => return,
+    }
+    repaint_tokens(bar);
+    model.raise("PET_BAR_UPDATE", Vec::new());
+}
+
+/// The token slots' checked ring from the state word, as `GetPetActionInfo` lights them: a
+/// command when the unmasked `state >> 8` equals it or Attack's latch is up (`0x4bdf01`-`0x4bdf22`),
+/// a reaction when byte 0 does, a disabled bar reading as Passive (`0x4bde3c`).
+fn repaint_tokens(bar: &mut PetBarState) {
+    let react = if bar.state & PET_STATE_BAR_DISABLED != 0 {
+        PET_REACT_PASSIVE
+    } else {
+        bar.state & 0xFF
+    };
+    for slot in bar.slots.iter_mut().filter(|s| s.view.is_token) {
+        let kind = ((slot.view.packed >> 24) & 0x3F) as u8;
+        let action = slot.view.packed & 0xFFFF;
+        slot.view.active = match kind {
+            PET_ACT_COMMAND => bar.state >> 8 == action || slot.view.attack_active,
+            PET_ACT_REACTION => react == action,
+            _ => slot.view.active,
+        };
+    }
 }
 
 impl super::UiScript {
@@ -171,6 +219,12 @@ impl super::UiScript {
                 StoredPetAction { view, cooldown }
             })
             .collect();
+    }
+
+    /// Push the pet's state word (`[0xb71468]`), as `SMSG_PET_SPELLS` and the app's latches leave
+    /// it.
+    pub fn set_pet_state(&mut self, state: u32) {
+        self.model_mut().pet_bar.state = state;
     }
 
     /// Push the stat block and `HasPetUI`'s first return, which move on descriptor updates rather
@@ -385,10 +439,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "CastPetAction",
         lua.create_function(|lua, i: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if slot_at(&model, i).is_some_and(|s| s.view.name.is_some()) {
+            super::tick::verb(lua, |model| {
+                let Some(packed) = slot_at(model, i)
+                    .filter(|s| s.view.name.is_some())
+                    .map(|s| s.view.packed)
+                else {
+                    return;
+                };
+                latch_press(model, packed);
                 model.script_calls.push(super::ScriptCall::PetAction(i));
-            }
+            });
             Ok(())
         })?,
     )?;
@@ -574,10 +634,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, ()| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                if model.pet_bar.has_bar {
-                    model.script_calls.push(super::ScriptCall::PetOrder(packed));
-                }
+                super::tick::verb(lua, |model| {
+                    if model.pet_bar.has_bar {
+                        latch_press(model, packed);
+                        model.script_calls.push(super::ScriptCall::PetOrder(packed));
+                    }
+                });
                 Ok(())
             })?,
         )?;
@@ -973,6 +1035,58 @@ mod tests {
             ]
         );
         assert!(s.take_pet_orders().is_empty(), "drained");
+    }
+
+    /// The reaction and Stay/Follow presses write the state word and signal `PET_BAR_UPDATE` in
+    /// the verb (`0x4bc956`, `0x4bc979`), before the send, even when nothing moved; the handler
+    /// reads the lit token. An unusable bar latches and signals nothing (`0x4bd1f9`); Attack's
+    /// latch is the app's.
+    #[test]
+    fn the_reaction_and_command_presses_signal_in_place() {
+        use crate::script::tick::heard;
+        let token = |name: &str, packed: u32| PetActionView {
+            name: Some(name.into()),
+            texture: Some("T".into()),
+            is_token: true,
+            packed,
+            ..Default::default()
+        };
+        let bar = vec![
+            token("PET_ACTION_WAIT", 0x0700_0000),
+            token("PET_ACTION_FOLLOW", 0x0700_0001),
+            token("PET_MODE_PASSIVE", 0x0600_0000),
+            token("PET_MODE_DEFENSIVE", 0x0600_0001),
+            token("PET_ACTION_ATTACK", 0x0700_0002),
+        ];
+        let mut s = UiScript::new().unwrap();
+        s.set_pet_actions(true, true, true, bar.clone());
+        s.set_pet_state(1 << 8 | 1);
+        s.run("function LIT(i) local _, _, _, _, a = GetPetActionInfo(i) return a or 0 end")
+            .unwrap();
+        let lit = "LIT(1) .. LIT(2) .. LIT(3) .. LIT(4)";
+        heard::listen(&s, &["PET_BAR_UPDATE"], Some(lit));
+        s.run("PetWait()").unwrap();
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+        assert_eq!(heard::take(&s), ["PET_BAR_UPDATE 1001"]);
+        s.run("PetWait()").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            ["PET_BAR_UPDATE 1001"],
+            "unmoved, signalled"
+        );
+        s.run("CastPetAction(3)").unwrap();
+        assert_eq!(heard::take(&s), ["PET_BAR_UPDATE 1010"]);
+        s.run("PetFollow() PetDefensiveMode()").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            ["PET_BAR_UPDATE 0110", "PET_BAR_UPDATE 0101"]
+        );
+        s.run("PetAttack() CastPetAction(5)").unwrap();
+        assert!(heard::take(&s).is_empty(), "Attack's latch is the app's");
+
+        s.set_pet_actions(true, false, true, bar);
+        s.run("PetWait()").unwrap();
+        assert!(heard::take(&s).is_empty(), "an unusable bar");
     }
 
     #[test]

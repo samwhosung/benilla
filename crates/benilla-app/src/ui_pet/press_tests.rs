@@ -585,3 +585,54 @@ fn an_attack_press_with_no_pet_object_sends_nothing() {
     );
     assert!(!latched(&rig).2, "an ordinary pet's Attack raises no latch");
 }
+
+/// `PetWait` signals `PET_BAR_UPDATE` in the verb (`0x4bc979`); the app's mirror of the latch and
+/// the bar catching up with it a frame later add no second signal.
+#[test]
+fn a_wait_press_is_signalled_once() {
+    let mut rig = rig(vec![], &[], Some(owned_pet()));
+    rig.app.world_mut().resource_mut::<PetBar>().spells.bar[0] = PetActionEntry::from(0x0700_0000);
+    assert_eq!(rig.frame(), ["PET_BAR_UPDATE"], "the token arrives");
+
+    rig.app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run("PetWait()")
+        .unwrap();
+    rig.order(0x0700_0000);
+    assert_eq!(rig.frame(), ["PET_BAR_UPDATE"], "the verb's own, in place");
+    assert!(rig.frame().is_empty(), "nothing more");
+    assert_eq!(pet_actions(&rig.sent()), 1, "and the order went out");
+}
+
+/// A press the app has not mirrored yet is not rolled back by a push of another slot: only a
+/// slot whose source moved is pushed.
+#[test]
+fn a_verbs_latch_survives_a_push_of_another_slot() {
+    let mut rig = rig(vec![], &[], Some(owned_pet()));
+    {
+        let mut bar = rig.app.world_mut().resource_mut::<PetBar>();
+        bar.spells.bar[0] = PetActionEntry::from(0x0700_0000);
+        // Following: Wait is unlit.
+        bar.spells.state = 1 << 8;
+    }
+    rig.frame();
+
+    let lit = |rig: &mut Rig| {
+        rig.app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .eval::<bool>("local _, _, _, _, a = GetPetActionInfo(1) return a == 1")
+            .unwrap()
+    };
+    assert!(!lit(&mut rig));
+    rig.app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run("PetWait()")
+        .unwrap();
+    assert!(lit(&mut rig), "the verb lit Wait");
+    rig.app.world_mut().resource_mut::<PetBar>().spells.bar[1] = PetActionEntry::from(0x0700_0001);
+    rig.frame();
+    assert!(lit(&mut rig), "the stale store unlit it");
+}

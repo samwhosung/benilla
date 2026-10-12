@@ -312,33 +312,22 @@ fn a_press_latches_the_state_the_server_never_echoes() {
     );
 }
 
-/// `OnClick`'s `SetChecked(0)` unlights every press; `0x4bc940`/`0x4bc960` relight it by
-/// signalling unconditionally, and a hunter's Attack skips the signal at `0x4bd429`.
+/// The reaction and Stay/Follow presses signal in the VM's verb (`0x4bc956`, `0x4bc979`), so the
+/// app's mirror of the latch signals nothing; only the possessed Attack latch, behind the
+/// validator this side runs, still signals from here (`0x4bd438`).
 #[test]
-fn every_press_the_reference_signals_forces_a_repaint() {
+fn only_the_possessed_attack_press_signals_from_the_app() {
     let mut bar = PetBar {
         spells: state(PET_COMMAND_FOLLOW, PET_REACT_DEFENSIVE),
         ..Default::default()
     };
     let signals = |b: &PetBar| b.bar_signals;
 
-    // The mode the pet is already in: the state does not move, the signal still fires.
     let before = signals(&bar);
-    latch_press(&mut bar, packed(PET_COMMAND_FOLLOW, PET_ACT_COMMAND), false);
-    assert_eq!(bar.spells.command_state(), PET_COMMAND_FOLLOW, "unmoved");
-    assert_ne!(signals(&bar), before, "and it repaints anyway");
-
-    let before = signals(&bar);
-    latch_press(
-        &mut bar,
-        packed(PET_REACT_DEFENSIVE, PET_ACT_REACTION),
-        false,
-    );
-    assert_eq!(bar.spells.react_state(), PET_REACT_DEFENSIVE, "unmoved");
-    assert_ne!(signals(&bar), before, "same for the reaction side");
-
-    // The presses the reference leaves silent.
-    let before = signals(&bar);
+    latch_press(&mut bar, packed(PET_COMMAND_STAY, PET_ACT_COMMAND), false);
+    assert_eq!(bar.spells.command_state(), PET_COMMAND_STAY, "mirrored");
+    latch_press(&mut bar, packed(PET_REACT_PASSIVE, PET_ACT_REACTION), false);
+    assert_eq!(bar.spells.react_state(), PET_REACT_PASSIVE, "mirrored");
     latch_press(
         &mut bar,
         packed(PET_COMMAND_DISMISS, PET_ACT_COMMAND),
@@ -346,13 +335,8 @@ fn every_press_the_reference_signals_forces_a_repaint() {
     );
     latch_press(&mut bar, packed(3010, PET_ACT_ENABLED), false);
     latch_press(&mut bar, packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND), false);
-    assert_eq!(
-        signals(&bar),
-        before,
-        "Dismiss, a spell and a pet's Attack all reach 0x4bd444 without signalling"
-    );
+    assert_eq!(signals(&bar), before, "none of these signals from the app");
 
-    // A possessed unit's Attack signals (`0x4bd429`).
     latch_press(&mut bar, packed(PET_COMMAND_ATTACK, PET_ACT_COMMAND), true);
     assert_ne!(signals(&bar), before);
 }

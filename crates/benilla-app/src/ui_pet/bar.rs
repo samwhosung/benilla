@@ -17,11 +17,14 @@ use crate::ui_action::Spells;
 
 use super::{PetBar, PetUnit};
 
-/// The bar-wide half of what the feed last pushed, so `PET_BAR_UPDATE` fires on a change; the
-/// key's leading `u32` is [`PetBar::bar_signals`], so a press that changes nothing still repaints.
+/// What the feed last computed from its own sources, so it pushes only what moved since: the
+/// bar-wide key, whose leading `u32` is [`PetBar::bar_signals`] so a signal that changes nothing
+/// still repaints, the ten slot views without their cooldowns, and the state word.
 #[derive(Default)]
 pub(super) struct PetBarMemory {
     pushed: Option<(u32, bool, bool, bool)>,
+    slots: Vec<PetActionView>,
+    state: Option<u32>,
     /// The ten cooldown triples as last pushed, so a cooldown alone is pushed with no event: its
     /// events are [`fire_pet_cooldown_events`]'s.
     cooldowns: Vec<Option<(i64, u32, bool)>>,
@@ -228,8 +231,9 @@ pub(super) fn feed_pet_bar(
         Vec::new()
     };
 
-    // `bar_signals` in the key repaints a press that moved nothing (`0x4bc940`/`0x4bc960`); the
-    // cooldown triples are keyed apart, since they carry no `PET_BAR_UPDATE`.
+    // `bar_signals` in the key repaints a signal that moved nothing (`SetPet`'s `0x4bc90c`, the
+    // possessed Attack latch's `0x4bd438`); the cooldown triples are keyed apart, since they carry
+    // no `PET_BAR_UPDATE`.
     let cooldowns: Vec<Option<(i64, u32, bool)>> = fresh.iter().map(|s| s.cooldown).collect();
     let content: Vec<PetActionView> = fresh
         .iter()
@@ -239,16 +243,45 @@ pub(super) fn feed_pet_bar(
             s
         })
         .collect();
-    // The slots are diffed against the VM's, not against this feed's last push: the drag and the
-    // autocast toggles write theirs and fire `PET_BAR_UPDATE` in place (`0x4bcb6d`, `0x4bcc81`,
-    // `0x4bcdcb`), so the bar catching up with them is no change.
+    // A slot is pushed only when this feed's own source moved since its last push: the drag, the
+    // autocast toggles and the reaction and Stay/Follow presses write the VM and fire
+    // `PET_BAR_UPDATE` in place (`0x4bcb6d`, `0x4bcc81`, `0x4bcdcb`, `0x4bc956`, `0x4bc979`), so
+    // a store that has not caught up never rolls them back, and one that has is no change. The
+    // event fires only when what is pushed differs from what the VM shows.
     let held = script.pet_action_views();
     let key = (bar.bar_signals, has_bar, usable, pickup_allowed);
-    let bar_changed = memory.pushed.as_ref() != Some(&key) || held != content;
+    let key_changed = memory.pushed.as_ref() != Some(&key);
+    let resized = memory.slots.len() != content.len() || held.len() != content.len();
+    let next: Vec<PetActionView> = content
+        .iter()
+        .enumerate()
+        .map(|(i, view)| {
+            if resized || memory.slots.get(i) != Some(view) {
+                view.clone()
+            } else {
+                held[i].clone()
+            }
+        })
+        .collect();
+    let slots_moved = resized || memory.slots != content;
+    let bar_changed = key_changed || next != held;
     let cooldowns_changed = memory.cooldowns != cooldowns;
-    if bar_changed || cooldowns_changed {
-        script.set_pet_actions(has_bar, usable, pickup_allowed, fresh);
+    if memory.state != Some(bar.spells.state) {
+        script.set_pet_state(bar.spells.state);
+        memory.state = Some(bar.spells.state);
+    }
+    if key_changed || slots_moved || cooldowns_changed {
+        let views = next
+            .iter()
+            .zip(&cooldowns)
+            .map(|(view, &cooldown)| PetActionView {
+                cooldown,
+                ..view.clone()
+            })
+            .collect();
+        script.set_pet_actions(has_bar, usable, pickup_allowed, views);
         memory.cooldowns = cooldowns;
+        memory.slots = content.clone();
     }
     if bar_changed {
         debug!(

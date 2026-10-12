@@ -347,16 +347,17 @@ pub(super) fn commit_press(
 /// Latch a press's state, the half the server never confirms, with the client's masks. A
 /// reaction writes byte 0 (`0x4bc94c`). Stay and Follow, the only commands to reach the write
 /// (`action <= 1` at `0x4bd3b1`), set bits 8-15 and keep byte 0 and bit 27, which only the server
-/// writes (`0x4bc96f`). Attack raises a possessed unit's attack latch instead (`0x4bd42e`).
+/// writes (`0x4bc96f`). Both are the VM's latch mirrored: the verb wrote the word and signalled
+/// `PET_BAR_UPDATE` in place (`0x4bc956`, `0x4bc979`). Attack raises a possessed unit's attack
+/// latch instead (`0x4bd42e`), behind the validator only this side runs, so its signal
+/// (`0x4bd438`) is the feed's.
 pub(super) fn latch_press(bar: &mut PetBar, entry: PetActionEntry, possessing: bool) {
     let action = entry.action();
     match entry.kind() {
         benilla_protocol::messages::PET_ACT_COMMAND
             if action == PET_COMMAND_STAY || action == PET_COMMAND_FOLLOW =>
         {
-            // `0x4bc960` signals `PET_BAR_UPDATE` even when the command is unchanged.
             bar.spells.state = (bar.spells.state & 0x0800_00FF) | (action << 8);
-            bar.bar_signals = bar.bar_signals.wrapping_add(1);
         }
         benilla_protocol::messages::PET_ACT_COMMAND
             if action == PET_COMMAND_ATTACK && possessing =>
@@ -366,9 +367,7 @@ pub(super) fn latch_press(bar: &mut PetBar, entry: PetActionEntry, possessing: b
             bar.bar_signals = bar.bar_signals.wrapping_add(1);
         }
         benilla_protocol::messages::PET_ACT_REACTION => {
-            // `0x4bc940`: the same, on byte 0.
             bar.spells.state = (bar.spells.state & 0xFFFF_FF00) | action;
-            bar.bar_signals = bar.bar_signals.wrapping_add(1);
         }
         // Dismiss, spells and unknown types reach the send (`0x4bd444`) without a signal.
         _ => {}
