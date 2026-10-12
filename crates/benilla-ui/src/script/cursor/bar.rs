@@ -106,8 +106,15 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
 /// after, as `0x4e62e0` writes the slot past the setter, so the cursor's events read the slot as
 /// it was. Returns whether to repaint.
 pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
-    let Some((placed, displaced)) = verb(lua, |model| plan_place(model, id)) else {
-        return false;
+    let (placed, displaced) = match verb(lua, |model| plan_place(model, id)) {
+        Place::Refused => return false,
+        // The held action is already the slot's: `ClearCursor(1,1)` and no write (`0x4e63d4`,
+        // `0x4e65db`, `0x4e673a`).
+        Place::Same => {
+            verb(lua, clear_cursor);
+            return false;
+        }
+        Place::Write(placed, displaced) => (placed, displaced),
     };
     let (kind, action, texture) = placed;
     match displaced {
@@ -134,25 +141,35 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
     true
 }
 
-/// What the slot takes and the action it displaces.
-type PlacePlan = ((u8, u32, Option<String>), Option<Option<CursorPayload>>);
+/// `PlaceAction`'s decision.
+enum Place {
+    /// An accept filter refused: the payload stays held.
+    Refused,
+    /// The held action is already in the slot.
+    Same,
+    /// What the slot takes, and the occupant that hops ([`lift`]).
+    Write((u8, u32, Option<String>), Option<Option<CursorPayload>>),
+}
 
-/// `PlaceAction`'s decision: the accept filters, then what the slot takes from the held payload
-/// and the occupant that hops. `None` is a refusal that leaves the payload held.
-fn plan_place(model: &mut Model, id: u32) -> Option<PlacePlan> {
+/// `PlaceAction`'s decision: the accept filters, then whether the held action is the slot's own,
+/// then what the slot takes from the held payload and the occupant that hops.
+fn plan_place(model: &mut Model, id: u32) -> Place {
     // The two accept filters (`0x4e62e0`) refuse with a bare return: nothing stored or sent, and
     // the payload stays held. An item needs an on-use spell or an equip slot (`0x4e6571`), so a
     // bag is placeable; a passive spell (`Attributes & 0x40`) also raises errorId `0x9e` through
     // `DisplayError` (`0x4e63ad`, `0x496720`), where the item refusal is mute.
     match &model.cursor {
-        Some(CursorPayload::Item(i)) if !i.bar_placeable => return None,
+        Some(CursorPayload::Item(i)) if !i.bar_placeable => return Place::Refused,
         Some(CursorPayload::Spell(s)) if s.passive => {
             model.ui_errors.push(PASSIVE_ON_BAR_ERROR);
-            return None;
+            return Place::Refused;
         }
         _ => {}
     }
-    let placed = match model.cursor.as_ref()? {
+    let Some(held) = model.cursor.as_ref() else {
+        return Place::Refused;
+    };
+    let placed = match held {
         CursorPayload::Action(a) => (a.kind, a.action, a.texture.clone()),
         CursorPayload::Item(i) => (ACTION_KIND_ITEM, i.item_id, i.texture.clone()),
         CursorPayload::Spell(s) => (ACTION_KIND_SPELL, s.spell_id, s.texture.clone()),
@@ -163,9 +180,21 @@ fn plan_place(model: &mut Model, id: u32) -> Option<PlacePlan> {
         CursorPayload::PetAction(_)
         | CursorPayload::StablePet(_)
         | CursorPayload::Money(_)
-        | CursorPayload::Merchant(_) => return None,
+        | CursorPayload::Merchant(_) => return Place::Refused,
     };
-    Some((placed, lift(model, id)))
+    // Each arm compares the held action with the slot's of its own kind: a spell id (`0x4e63d0`),
+    // an item entry, a bag item's or a bar item's alike (`0x4e65cf`), a macro id (`0x4e672f`).
+    // The spell arm also reads a macro or item slot's spell through `0x4e5a50`, which the engine's
+    // slots do not carry.
+    let (kind, action, _) = &placed;
+    if model
+        .actions
+        .get(&id)
+        .is_some_and(|slot| slot.kind == *kind && slot.action == *action)
+    {
+        return Place::Same;
+    }
+    Place::Write(placed, lift(model, id))
 }
 
 /// Register `PickupAction` and `PlaceAction` as globals.
@@ -588,5 +617,55 @@ mod tests {
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Spell(_))));
         assert_eq!(crate::script::tick::heard::take(&s), ["PLAYER_MONEY"]);
         assert_eq!(s.take_action_sets(), vec![(1, 0)]);
+    }
+
+    /// The held action already in the slot: `ClearCursor(1,1)` and return, no write and no send,
+    /// for a spell (`0x4e63c8`-`0x4e63d4`), an item (`0x4e65cf`-`0x4e65db`) and a macro
+    /// (`0x4e672f`-`0x4e673a`).
+    #[test]
+    fn placing_the_slots_own_action_clears_and_writes_nothing() {
+        let mut s = UiScript::new().unwrap();
+        s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 133)));
+        s.set_action(2, Some(action_slot("Interface\\Icons\\INV_A", 0x80, 4540)));
+        s.run(r#"CreateMacro("Ambush", 1, "/cast Ambush")"#)
+            .unwrap();
+        s.set_action(
+            3,
+            Some(action_slot("Interface\\Icons\\Ability_Ambush", 0x40, 1)),
+        );
+        let held = [
+            CursorPayload::Spell(CursorSpell {
+                spell_id: 133,
+                texture: None,
+                passive: false,
+            }),
+            CursorPayload::Item(CursorItem {
+                bar_placeable: true,
+                bag: 0,
+                slot: 1,
+                item_id: 4540,
+                texture: None,
+                link: None,
+                count: None,
+                quality: None,
+                equip_slots: Vec::new(),
+            }),
+            CursorPayload::Macro(crate::script::cursor::CursorMacro {
+                index: 1,
+                texture: None,
+            }),
+        ];
+        for (slot, payload) in [1, 2, 3].into_iter().zip(held) {
+            s.set_cursor_for_test(payload);
+            assert!(!place_action(&s.lua, slot));
+            assert!(
+                s.cursor_payload().is_none(),
+                "slot {slot}: the cursor clears"
+            );
+            assert!(
+                s.take_action_sets().is_empty(),
+                "slot {slot}: nothing written"
+            );
+        }
     }
 }
