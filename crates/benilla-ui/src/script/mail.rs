@@ -1447,9 +1447,10 @@ mod tests {
         assert!(s.take_mail_send().is_some(), "the compose reset lifted it");
     }
 
-    /// The attached item is checked before money and COD (`0x4ae917` ahead of `0x4ae99e`): gone
-    /// from its slot, the send shows `ERR_ITEM_NOT_FOUND`, drops the attachment and signals
-    /// `MAIL_SEND_INFO_UPDATE` (`0x4ae98d`) even with money and COD both set.
+    /// The attached item is checked before money and COD (`0x4ae917` ahead of `0x4ae99e`), by its
+    /// object (`0x4ae92e`): with another item of the same entry in its slot, the send shows
+    /// `ERR_ITEM_NOT_FOUND`, drops the attachment and signals `MAIL_SEND_INFO_UPDATE`
+    /// (`0x4ae98d`) even with money and COD both set.
     #[test]
     fn send_mail_checks_its_item_before_the_money() {
         use crate::script::cursor::two_item_bag;
@@ -1464,7 +1465,9 @@ mod tests {
         s.run("PickupContainerItem(0, 1) ClickSendMailItemButton() SetSendMailMoney(5) SetSendMailCOD(5)")
             .unwrap();
         select_default_stationery(&mut s);
-        s.set_container(0, None);
+        let mut other = two_item_bag();
+        other.slots.get_mut(&1).unwrap().guid += 0x1000;
+        s.set_container(0, Some(other));
         let _ = s.take_ui_errors();
         heard::listen(&s, &["MAIL_SEND_INFO_UPDATE"], None);
         s.run("SendMail('Bob', 'Hi', 'b')").unwrap();
