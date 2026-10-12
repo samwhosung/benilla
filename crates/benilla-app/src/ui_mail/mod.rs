@@ -529,6 +529,8 @@ fn feed_mail(
         };
         let line = key.and_then(|k| crate::ui_action::keyed_line(&script, k));
         crate::ui_action::show_messages(&mut script, &mut sink, "ui_mail", line);
+        // The send's result lifts the send-pending flag (`0x4ad159`), then the compose reset.
+        script.mail_send_resolved();
         if ack.ok {
             script.reset_compose_tab();
         }
@@ -642,13 +644,26 @@ fn drain_mail(
         return;
     };
     let Some(mailbox) = mail.mailbox else {
-        // No session: still honor a stray close (idempotent) and drop everything else.
+        // No session: still honor a stray close (idempotent) and drop everything else. A request
+        // the VM let through took its lock; dropped unsent, it gives the lock back, so no verb
+        // waits on an answer that never comes.
         if script.take_mail_close() {
             mail.clear();
         }
-        let _ = script.take_mail_check_inbox();
         let _ = script.take_mail_opens();
-        let _ = script.take_mail_send();
+        let mut dropped = script.take_mail_check_inbox();
+        dropped |= !script.take_mail_take_items().is_empty();
+        dropped |= !script.take_mail_take_money().is_empty();
+        dropped |= !script.take_mail_deletes().is_empty();
+        dropped |= !script.take_mail_returns().is_empty();
+        dropped |= !script.take_mail_take_texts().is_empty();
+        if script.take_mail_send().is_some() {
+            dropped = true;
+            script.mail_send_resolved();
+        }
+        if dropped {
+            script.mail_request_resolved();
+        }
         return;
     };
 
@@ -685,38 +700,58 @@ fn drain_mail(
     }
 
     for index in script.take_mail_take_items() {
-        if let Some(mail_id) = mail.mail_id_at(index) {
-            let _ = commands
-                .0
-                .send(ClientCommand::MailTakeItem { mailbox, mail_id });
+        match mail.mail_id_at(index) {
+            Some(mail_id) => {
+                let _ = commands
+                    .0
+                    .send(ClientCommand::MailTakeItem { mailbox, mail_id });
+            }
+            // No row behind the VM's index: nothing sent, so the lock it took goes back.
+            None => script.mail_request_resolved(),
         }
     }
     for index in script.take_mail_take_money() {
-        if let Some(mail_id) = mail.mail_id_at(index) {
-            let _ = commands
-                .0
-                .send(ClientCommand::MailTakeMoney { mailbox, mail_id });
+        match mail.mail_id_at(index) {
+            Some(mail_id) => {
+                let _ = commands
+                    .0
+                    .send(ClientCommand::MailTakeMoney { mailbox, mail_id });
+            }
+            // No row behind the VM's index: nothing sent, so the lock it took goes back.
+            None => script.mail_request_resolved(),
         }
     }
     for index in script.take_mail_deletes() {
-        if let Some(mail_id) = mail.mail_id_at(index) {
-            let _ = commands
-                .0
-                .send(ClientCommand::MailDelete { mailbox, mail_id });
+        match mail.mail_id_at(index) {
+            Some(mail_id) => {
+                let _ = commands
+                    .0
+                    .send(ClientCommand::MailDelete { mailbox, mail_id });
+            }
+            // No row behind the VM's index: nothing sent, so the lock it took goes back.
+            None => script.mail_request_resolved(),
         }
     }
     for index in script.take_mail_returns() {
-        if let Some(mail_id) = mail.mail_id_at(index) {
-            let _ = commands
-                .0
-                .send(ClientCommand::MailReturnToSender { mailbox, mail_id });
+        match mail.mail_id_at(index) {
+            Some(mail_id) => {
+                let _ = commands
+                    .0
+                    .send(ClientCommand::MailReturnToSender { mailbox, mail_id });
+            }
+            // No row behind the VM's index: nothing sent, so the lock it took goes back.
+            None => script.mail_request_resolved(),
         }
     }
     for index in script.take_mail_take_texts() {
-        if let Some(mail_id) = mail.mail_id_at(index) {
-            let _ = commands
-                .0
-                .send(ClientCommand::MailCreateTextItem { mailbox, mail_id });
+        match mail.mail_id_at(index) {
+            Some(mail_id) => {
+                let _ = commands
+                    .0
+                    .send(ClientCommand::MailCreateTextItem { mailbox, mail_id });
+            }
+            // No row behind the VM's index: nothing sent, so the lock it took goes back.
+            None => script.mail_request_resolved(),
         }
     }
 
@@ -734,6 +769,7 @@ fn drain_mail(
             mail.errors.push("ERR_ITEM_NOT_FOUND");
             script.drop_send_mail_item();
             script.mail_request_resolved();
+            script.mail_send_resolved();
         } else {
             let _ = commands.0.send(ClientCommand::SendMail {
                 mailbox,
@@ -871,6 +907,51 @@ mod tests {
         assert_eq!(m.mails[0].checked & CHECKED_READ, 0);
         m.mark_read(1);
         assert_eq!(m.mails[0].checked & CHECKED_READ, CHECKED_READ);
+    }
+
+    /// A request the VM let through but the drain cannot send (no mailbox, or no row behind the
+    /// index) gives the lock back, so later verbs are not refused forever.
+    #[test]
+    fn an_unsent_request_gives_the_lock_back() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<MailOpen>()
+            .init_resource::<MailPending>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(NetCommands(tx))
+            .add_systems(Update, drain_mail);
+        let mut script = UiScript::new().unwrap();
+        script.set_mail(Some(MailState {
+            open: true,
+            inbox: vec![Default::default()],
+        }));
+        app.insert_non_send_resource(script);
+        // Any verb past the lock; the delete of an empty player's mail sends.
+        let check = |app: &mut App| {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.run("DeleteInboxItem(1)").unwrap();
+            let went = !script.take_mail_deletes().is_empty();
+            script.mail_request_resolved();
+            went
+        };
+        // No mailbox on the app's side: the query is dropped and the lock comes back.
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("CheckInbox()")
+            .unwrap();
+        app.update();
+        assert!(rx.try_iter().next().is_none());
+        assert!(check(&mut app), "the lock came back");
+
+        // A mailbox, but no row behind index 1: the delete is dropped, the lock comes back.
+        app.world_mut().resource_mut::<MailOpen>().click(0x20);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("DeleteInboxItem(1)")
+            .unwrap();
+        app.update();
+        assert!(rx.try_iter().next().is_none());
+        assert!(check(&mut app), "the lock came back");
     }
 
     /// The world-enter init (`0x4acb10`), which a `/reload` and a worldport reach as well as a

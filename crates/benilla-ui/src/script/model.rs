@@ -841,6 +841,10 @@ pub(crate) struct Model {
     /// A mail request in flight (`[0xb6efc8]`), set by the list query and cleared by its answer
     /// or a send's; `CheckInbox` does nothing while it is set.
     pub(crate) mail_busy: bool,
+    /// A send awaits its result (`[0xb6efac]`): set with the send (`0x4aea76`), lifted only by
+    /// the send's result (`0x4ad159`) or the compose reset (`0x4ace02`); `SendMail` returns while
+    /// it is up (`0x4ae85e`).
+    pub(crate) mail_send_pending: bool,
     pub(crate) mail_opens: Vec<u32>,
     pub(crate) mail_take_items: Vec<u32>,
     pub(crate) mail_take_money: Vec<u32>,
@@ -1516,6 +1520,7 @@ impl Model {
             mail_check_inbox: false,
             mail_list_stamp: None,
             mail_busy: false,
+            mail_send_pending: false,
             mail_opens: Vec::new(),
             mail_take_items: Vec::new(),
             mail_take_money: Vec::new(),
