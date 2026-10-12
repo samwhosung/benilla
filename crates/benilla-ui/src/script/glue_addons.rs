@@ -1020,8 +1020,8 @@ mod tests {
             .collect();
         assert_eq!(
             launched,
-            ["http://example.com:8080/a b?x=1"],
-            "Alpha only, its escape decoded as 0x429ff0 does"
+            ["http://example.com:8080/a%20b?x=1"],
+            "Alpha only, its escape decoded as 0x429ff0 does and the space encoded again"
         );
         assert!(raised(&s, "LaunchAddOnURL('x')").contains("Usage: LaunchAddOnURL(index)"));
         assert!(raised(&s, "LaunchAddOnURL(9)").contains("range of 1 to 4"));

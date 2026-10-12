@@ -196,9 +196,13 @@ pub fn launch_url_allowed(url: &str) -> bool {
 /// non-hex digit reads 0; a `%` with fewer than two bytes after it ends the string), then
 /// `ShellExecute "open"`.
 ///
-/// Deviation: the decoded string must be a web address, `http://` or `https://` (case-folded) and
-/// nothing else, every byte printable ASCII. The reference would open whatever the
-/// server sent, `file:` and program paths included, and the string comes off the wire.
+/// Deviation: benilla keeps that decode and then encodes it again, every byte outside the URL
+/// characters [`URL_SAFE`] as `%XY` (a decoded `%` too), because the opener on some platforms is a
+/// shell script (`xdg-open`) or takes the raw command tail (`rundll32`) and the string comes off
+/// the wire: no space, quote, backtick, `$`, `;`, `<`, `>`, `|`, `^`, `\`, brace or control byte
+/// reaches it. The result must be an `http://` or `https://` (case-folded) address with a host,
+/// and nothing else; the reference would open whatever the server sent, `file:` and program paths
+/// included.
 pub fn launch_addon_url(url: &str) -> Option<String> {
     if url.is_empty() || url.len() >= 0x400 {
         return None;
@@ -212,13 +216,13 @@ pub fn launch_addon_url(url: &str) -> Option<String> {
         }
     };
     let bytes = url.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut decoded = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() && bytes[i] != 0 {
         let c = bytes[i];
         i += 1;
         if c != b'%' {
-            out.push(c);
+            decoded.push(c);
             continue;
         }
         let (Some(&hi), Some(&lo)) = (bytes.get(i), bytes.get(i + 1)) else {
@@ -228,21 +232,63 @@ pub fn launch_addon_url(url: &str) -> Option<String> {
             break;
         }
         i += 2;
-        out.push(hex(hi) << 4 | hex(lo));
+        decoded.push(hex(hi) << 4 | hex(lo));
     }
     // The C string ends at a NUL, a decoded `%00` included.
-    let end = out.iter().position(|&b| b == 0).unwrap_or(out.len());
-    out.truncate(end);
-    launch_addon_url_allowed(std::str::from_utf8(&out).ok()?)
-        .then(|| String::from_utf8_lossy(&out).into_owned())
+    let end = decoded
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(decoded.len());
+    let mut out = String::with_capacity(end);
+    for &b in &decoded[..end] {
+        if b != b'%' && URL_SAFE.contains(&b) || b.is_ascii_alphanumeric() {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    launch_addon_url_allowed(&out).then_some(out)
 }
 
-/// The host's own check of what [`launch_addon_url`] returned: a web address of printable ASCII,
-/// a space included.
+/// The bytes a URL may carry besides letters and digits when it is handed to the opener, the
+/// unreserved set and the reserved ones no shell reads as syntax.
+const URL_SAFE: &[u8] = b"-._~:/?#[]@!&()*+,=";
+
+/// The host's own check of what [`launch_addon_url`] returned, and the whole of its gate: an
+/// `http://` or `https://` address (case-folded) with a host that begins with a letter or digit,
+/// and only letters, digits, [`URL_SAFE`] bytes and well-formed `%XY` escapes.
 pub fn launch_addon_url_allowed(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    (lower.starts_with("http://") || lower.starts_with("https://"))
-        && url.bytes().all(|b| b.is_ascii_graphic() || b == b' ')
+    let bytes = url.as_bytes();
+    let rest = [&b"http://"[..], &b"https://"[..]]
+        .iter()
+        .find_map(|scheme| {
+            bytes
+                .get(..scheme.len())
+                .filter(|head| head.eq_ignore_ascii_case(scheme))
+                .map(|_| &bytes[scheme.len()..])
+        });
+    let Some(rest) = rest else {
+        return false;
+    };
+    if !rest.first().is_some_and(u8::is_ascii_alphanumeric) {
+        return false;
+    }
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        i += 1;
+        if b == b'%' {
+            let (Some(hi), Some(lo)) = (bytes.get(i), bytes.get(i + 1)) else {
+                return false;
+            };
+            if !hi.is_ascii_hexdigit() || !lo.is_ascii_hexdigit() {
+                return false;
+            }
+            i += 2;
+        } else if !(b.is_ascii_alphanumeric() || URL_SAFE.contains(&b)) {
+            return false;
+        }
+    }
+    true
 }
 
 /// The realm `GetServerName` (`0x46d280`) answers: the `realmName` CVar's text, and the
@@ -870,19 +916,41 @@ mod tests {
         for (url, want) in [
             ("http://a.example/x", Some("http://a.example/x")),
             ("HTTPS://a.example/%7Euser", Some("HTTPS://a.example/~user")),
-            ("http://a.example/a%20b", Some("http://a.example/a b")),
+            ("http://a.example/a%20b", Some("http://a.example/a%20b")),
             ("http://a.example/%2f%2F", Some("http://a.example///")),
             ("http://a.example/x%", Some("http://a.example/x")),
             ("http://a.example/x%4", Some("http://a.example/x")),
             ("http://a.example/x%00y", Some("http://a.example/x")),
             ("http://a.example/x%zzy", Some("http://a.example/x")),
+            (
+                "http://a.example/x?a=1&b=2#f",
+                Some("http://a.example/x?a=1&b=2#f"),
+            ),
+            ("%68ttp://a.example/", Some("http://a.example/")),
+            // A decoded `%` is encoded again, so the opener decodes it no further.
+            ("http://a.example/%2541", Some("http://a.example/%2541")),
+            ("http://a.example/50%25", Some("http://a.example/50%25")),
+            // The bytes a shell or a raw command tail would read are escaped, wherever they came
+            // from: typed, or spelled as an escape.
+            (
+                "http://a.example/a b\"c'd`e$f;g<h>i|j^k\\l{m}n",
+                Some("http://a.example/a%20b%22c%27d%60e%24f%3Bg%3Ch%3Ei%7Cj%5Ek%5Cl%7Bm%7Dn"),
+            ),
+            (
+                "http://a.example/%22%27%60%24%3b%3c%3e%7c%5e%5c%7b%7d%20%0d%0a",
+                Some("http://a.example/%22%27%60%24%3B%3C%3E%7C%5E%5C%7B%7D%20%0D%0A"),
+            ),
+            ("http://a.example/\u{e9}", Some("http://a.example/%C3%A9")),
             ("file:///etc/passwd", None),
             ("ftp://a.example/", None),
             ("javascript:alert(1)", None),
-            ("http://a.example/%0d%0a", None),
-            ("http://a.example/\u{e9}", None),
-            ("%68ttp://a.example/", Some("http://a.example/")),
             ("%66ile:///x", None),
+            // A host is required, and begins with a letter or digit.
+            ("http://", None),
+            ("http:///x", None),
+            ("http://?x", None),
+            ("http://.example/", None),
+            ("http://-/", None),
             ("", None),
         ] {
             assert_eq!(launch_addon_url(url).as_deref(), want, "{url:?}");
@@ -893,7 +961,19 @@ mod tests {
             None,
             "0x42a01c refuses 0x400 bytes"
         );
-        assert!(launch_addon_url_allowed("http://a.example/a b"));
-        assert!(!launch_addon_url_allowed("http://a.example/a\tb"));
+        // The host's own check takes only what the verb makes.
+        assert!(launch_addon_url_allowed("http://a.example/a%20b"));
+        for bad in [
+            "http://a.example/a b",
+            "http://a.example/a\tb",
+            "http://a.example/a'b",
+            "http://a.example/a$b",
+            "http://a.example/%2",
+            "http://a.example/%zz",
+            "http:// a.example/",
+            "http://",
+        ] {
+            assert!(!launch_addon_url_allowed(bad), "{bad:?}");
+        }
     }
 }
