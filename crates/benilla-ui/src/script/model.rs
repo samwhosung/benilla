@@ -877,6 +877,10 @@ pub(crate) struct Model {
     /// Items dropped on our slots, `(1-based trade slot, bag, slot)`, and the slots clicks cleared.
     pub(crate) trade_set_items: Vec<(u32, i64, u32)>,
     pub(crate) trade_clear_items: Vec<u32>,
+    /// The item each of our trade slots holds, as the client's own table records it at the click
+    /// (`[0xb716d0]`, written by `0x4bfa70`): the item a later click puts back on the cursor, and
+    /// one the client keeps locked until the trade closes (`0x4bfcf0`).
+    pub(crate) trade_offered: [Option<cursor::CursorItem>; super::trade::TRADE_SLOTS],
 
     /// The open questgiver panel, its greeting-row selects and its button calls.
     pub(crate) quest: Option<quest::QuestState>,
@@ -1520,6 +1524,7 @@ impl Model {
             trade_set_money: None,
             trade_set_items: Vec::new(),
             trade_clear_items: Vec::new(),
+            trade_offered: Default::default(),
             quest: None,
             quest_selects: Vec::new(),
             quest_actions: Vec::new(),

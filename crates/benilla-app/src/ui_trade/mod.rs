@@ -1529,16 +1529,23 @@ mod tests {
             trade.open_window();
         }
 
-        // Our slot 1 filled, then an empty-cursor click on it.
+        // Our slot 1 filled by a click, then an empty-cursor click on it.
         {
             let mut vm = app.world_mut().non_send_resource_mut::<UiScript>();
-            let mut st = benilla_ui::script::TradeState::default();
-            st.player.slots[0] = Some(benilla_ui::script::TradeSlotItem {
-                item_id: 2589,
-                count: 1,
-                ..Default::default()
-            });
-            vm.set_trade(Some(st));
+            vm.set_trade(Some(benilla_ui::script::TradeState::default()));
+            let mut bag = benilla_ui::script::ContainerState::default();
+            bag.slots.insert(
+                1,
+                benilla_ui::script::ContainerSlot {
+                    item_id: 2589,
+                    count: 1,
+                    ..Default::default()
+                },
+            );
+            vm.set_container(0, Some(bag));
+            vm.run("PickupContainerItem(0, 1) ClickTradeButton(1)")
+                .unwrap();
+            assert_eq!(vm.take_trade_set_items(), vec![(1, 0, 1)]);
             vm.run("ClickTradeButton(1)").unwrap();
         }
         app.world_mut().run_system_once(drain_trade).unwrap();

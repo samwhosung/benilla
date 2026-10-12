@@ -338,7 +338,8 @@ pub(crate) fn raise_lock_changed(model: &mut Model) {
 /// bit 0 that `LockItem` (`0x4953e0`) sets: while the item is on the cursor, is an armed gift
 /// wrap's paper (`0x5edeb5`), or sits in the mail or auction attach slot, whose attach clears the
 /// cursor with `SetCursorItem(0, …)` (`0x4ae0d2`, `0x4ce56a`) and so keeps the pickup's lock until
-/// the item leaves the slot (`0x495420` at `0x4acdd6`, `0x4cd653`). The engine has no item object
+/// the item leaves the slot (`0x495420` at `0x4acdd6`, `0x4cd653`), or in one of our trade slots
+/// until the trade closes (`0x4bfd03`). The engine has no item object
 /// to carry the bit, so it is read from the state that holds the item and lifts when the item
 /// leaves it. The app's pending operations are the slot's `locked`.
 pub(crate) fn client_locked(model: &Model, bag: i64, slot: u32) -> bool {
@@ -352,6 +353,7 @@ pub(crate) fn client_locked(model: &Model, bag: i64, slot: u32) -> bool {
             .is_some_and(|w| w.bag == bag && w.slot == slot)
         || model.mail_send_item.as_ref().is_some_and(at)
         || model.auction_sell_item.as_ref().is_some_and(at)
+        || model.trade_offered.iter().flatten().any(at)
 }
 
 /// Raise `DELETE_ITEM_CONFIRM(name, quality)` for an item dropped on the world. The payload stays
