@@ -69,7 +69,9 @@ mod glue_core;
 mod glue_realm;
 mod glue_select;
 pub use glue::{VmKind, GLUE_EVENTS};
-pub use glue_core::{GlueCredentials, GlueNotice, GlueRequest, GlueServer, NoticeState};
+pub use glue_core::{
+    launch_url_allowed, GlueCredentials, GlueNotice, GlueRequest, GlueServer, NoticeState,
+};
 pub use glue_realm::{
     realm_load_classify, realm_load_stats, GlueRealm, GlueRealmCategory, GlueRealmCells,
     GlueRealmType, RealmSortKey,

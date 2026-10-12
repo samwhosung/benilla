@@ -1950,8 +1950,12 @@ fn serve_body(body: &str) -> String {
     std::thread::spawn(move || {
         use std::io::{Read, Write};
         if let Ok((mut conn, _)) = listener.accept() {
-            let mut head = [0u8; 1024];
-            let _ = conn.read(&mut head);
+            // The whole request head first, then the answer.
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && conn.read(&mut byte).unwrap_or(0) == 1 {
+                head.push(byte[0]);
+            }
             let _ = conn.write_all(&raw);
         }
     });

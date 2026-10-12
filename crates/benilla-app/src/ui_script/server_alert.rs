@@ -8,15 +8,23 @@
 //! `GET`, agent `Blizzard Web Client` (`0x87d3b0`), a 5000 ms connect and receive timeout
 //! (`0x7a6ee6`), redirects followed. Only a 2xx status reads the body (`0x7a6a0e`-`0x7a6a21`); each
 //! read of up to 0x4000 bytes (`0x7a6a56`) reaches the callback (`0x46a580`) with its size, and the
-//! callback appends it to the 0x800-byte buffer ([`AlertBuffer`]). When the request handle closes,
-//! the callback runs once more with the done flag (`0x7a6c4b`), and a buffer that begins
-//! `SERVERALERT:` case-folded (`0x836ed8`) sets `alertReady` (`0x46a5f1`). Every failure is
-//! silent, and nothing refetches.
+//! callback appends it to the 0x800-byte buffer ([`AlertBuffer`]). When the connection handle
+//! closes (`[esi+4]` at `0x7a6be3`, the `InternetConnect` handle of `0x7a6ddf`), the callback runs
+//! once more with the done flag (`0x7a6c4b`), and a buffer that begins `SERVERALERT:` case-folded
+//! (`0x836ed8`) sets `alertReady` (`0x46a5f1`). Every failure is silent, and nothing refetches.
 //!
-//! Deviation: an `https://` URL is not fetched, because the reference's WinINet could and benilla
-//! ships no TLS for one optional box; one line is logged. The body is read with 0x4000-byte reads
-//! filled to the end of the body, so what a read returns does not depend on how the network cut
-//! the packets; and the reading stops once the buffer is full, since no later byte can change it.
+//! An `https://` URL shows nothing in the reference either: `InternetConnect` asks for the HTTP
+//! service (`0x7a6dcf`) and `HttpOpenRequest` passes `0x84000200` (`0x7a6e34`), without
+//! `INTERNET_FLAG_SECURE`, so it speaks plain HTTP to the URL's port (443 for `https://`) and gets
+//! no 2xx. benilla does not dial an `https://` URL, with the same result, and logs one line. The
+//! client sets neither redirect flag (`0x4000`, `0x8000`); what WinINet does with an
+//! http-to-https redirect is the OS's, not in the client's bytes, and benilla does not follow one.
+//!
+//! Deviation: the body is read with 0x4000-byte reads filled to the end of the body, so what a
+//! read returns does not depend on how the network cut the packets; and the reading stops once
+//! the buffer is full, since no later byte can change it.
+//! Deviation: the connection is direct. The reference opens its session with access type 0
+//! (`InternetOpenA`, `0x7a6d97`), the system's proxy settings, which benilla does not read.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -317,10 +325,19 @@ impl<R: BufRead> ChunkedReader<R> {
         self.left = u64::from_str_radix(size, 16).map_err(|_| bad("chunk size"))?;
         if self.left == 0 {
             // The trailers, up to the blank line.
-            while read_line(&mut self.inner)
-                .map_err(|_| bad("trailer"))?
-                .is_some_and(|l| !l.is_empty())
-            {}
+            let mut ended = false;
+            for _ in 0..MAX_HEADERS {
+                if read_line(&mut self.inner)
+                    .map_err(|_| bad("trailer"))?
+                    .is_none_or(|l| l.is_empty())
+                {
+                    ended = true;
+                    break;
+                }
+            }
+            if !ended {
+                return Err(bad("trailer"));
+            }
             self.done = true;
         } else {
             self.crlf = true;
@@ -385,6 +402,27 @@ fn stream_body(
     }
 }
 
+/// The request, in one write so the head leaves in one segment. An IPv6 literal is bracketed in
+/// the Host header.
+fn send_request(w: &mut impl Write, url: &Url) -> io::Result<()> {
+    let name = if url.host.contains(':') {
+        format!("[{}]", url.host)
+    } else {
+        url.host.clone()
+    };
+    let host = if url.port == 80 {
+        name
+    } else {
+        format!("{name}:{}", url.port)
+    };
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {AGENT}\r\nAccept: */*\r\n\
+         Cache-Control: no-cache\r\nPragma: no-cache\r\nConnection: close\r\n\r\n",
+        url.target
+    );
+    w.write_all(request.as_bytes())
+}
+
 /// `GET url`, following up to [`MAX_REDIRECTS`] redirects, and the 2xx body to `on_chunk` in reads
 /// of up to 0x4000 bytes. A body that ends in an error has handed over what came before it.
 pub(super) fn download(
@@ -395,17 +433,7 @@ pub(super) fn download(
     let mut url = parse_url(url)?;
     for _ in 0..=MAX_REDIRECTS {
         let mut stream = connect(&url, timeouts)?;
-        let host = if url.port == 80 {
-            url.host.clone()
-        } else {
-            format!("{}:{}", url.host, url.port)
-        };
-        write!(
-            stream,
-            "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {AGENT}\r\nAccept: */*\r\n\
-             Cache-Control: no-cache\r\nPragma: no-cache\r\nConnection: close\r\n\r\n",
-            url.target
-        )?;
+        send_request(&mut stream, &url)?;
         let mut reader = BufReader::with_capacity(CHUNK, stream);
         let head = read_head(&mut reader)?;
         match head.status {
@@ -441,7 +469,7 @@ pub(super) fn fetch_alert(url: &str, timeouts: Timeouts) -> Option<Vec<u8>> {
     });
     match result {
         Err(FetchError::Https) => {
-            info!("server alert: {url} is https, which benilla does not fetch; no alert");
+            info!("server alert: {url} is https; the reference shows nothing for it, nor does benilla");
         }
         Err(e) => debug!("server alert: {url}: {e}"),
         Ok(()) => {}
@@ -490,6 +518,11 @@ pub(crate) struct LaunchUrl(pub(crate) String);
 /// a test or an unattended run.
 pub(crate) fn open_launched(mut urls: MessageReader<LaunchUrl>) {
     for LaunchUrl(url) in urls.read() {
+        // The verb gated it, and the opener does not take the message's word for it.
+        if !benilla_ui::script::launch_url_allowed(url) {
+            warn!("LaunchURL: {url:?} refused");
+            continue;
+        }
         if !allowed() {
             debug!("LaunchURL: {url} not opened in this run");
             continue;
@@ -502,9 +535,15 @@ pub(crate) fn open_launched(mut urls: MessageReader<LaunchUrl>) {
 /// ([`benilla_ui::script::GlueRequest::LaunchUrl`]), so it carries nothing a shell would read.
 fn open_in_browser(url: &str) {
     let mut command = if cfg!(target_os = "macos") {
-        std::process::Command::new("open")
+        std::process::Command::new("/usr/bin/open")
     } else if cfg!(target_os = "windows") {
-        let mut c = std::process::Command::new("rundll32");
+        // By its full path, never a search of the working directory or the PATH.
+        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let mut c = std::process::Command::new(
+            std::path::Path::new(&root)
+                .join("System32")
+                .join("rundll32.exe"),
+        );
         c.arg("url.dll,FileProtocolHandler");
         c
     } else {

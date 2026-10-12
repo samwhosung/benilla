@@ -142,12 +142,21 @@ const LAUNCH_HOSTS: [&str; 10] = [
     "*.wowtaiwan.com.tw",
 ];
 
-/// `0x5abc10`, the gate in front of the browser: the URL begins `http://` (`0x85d6bc`, compared
-/// case-folded), every byte after it is a letter, a digit, `.`, `-` or `/` (so no query, port,
-/// escape or `_`), and its host, the text up to the first `/` (at most 0x80 bytes), is one of
-/// [`LAUNCH_HOSTS`], compared case-folded. The C string ends at an embedded NUL.
-fn launch_url_allowed(url: &str) -> bool {
-    let url = url.split('\0').next().unwrap_or_default().as_bytes();
+/// The gate in front of the browser: `0x5abd00` tests `0x5abc10` and `0x429ff0` takes the URL.
+/// The URL begins `http://` (`0x85d6bc`, compared case-folded), every byte after it is a letter,
+/// a digit, `.`, `-` or `/` (so no query, port, escape or `_`), and its host, the text up to the
+/// first `/`, is one of [`LAUNCH_HOSTS`], compared case-folded. `0x429ff0` refuses a URL of 0x400
+/// bytes or more (`0x42a01c`). The reference works on a C string, so the verb cuts its argument
+/// at a NUL before asking; a URL with a NUL in it is refused here.
+///
+/// Deviation: a host of 0x80 bytes or more is refused. The reference copies the host into a 0x80-byte
+/// buffer (`0x5abc7c`-`0x5abc9c`) and writes its terminator one byte past the end, and the cut
+/// host could end in a whitelisted suffix the real one does not; this takes the safe side.
+pub fn launch_url_allowed(url: &str) -> bool {
+    if url.len() >= 0x400 || url.contains('\0') {
+        return false;
+    }
+    let url = url.as_bytes();
     const SCHEME: &[u8] = b"http://";
     let Some(rest) = url
         .get(..SCHEME.len())
@@ -163,7 +172,9 @@ fn launch_url_allowed(url: &str) -> bool {
         return false;
     }
     let host = rest.split(|&b| b == b'/').next().unwrap_or_default();
-    let host = &host[..host.len().min(0x80)];
+    if host.len() >= 0x80 {
+        return false;
+    }
     LAUNCH_HOSTS
         .iter()
         .any(|entry| match entry.strip_prefix('*') {
@@ -491,8 +502,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "LaunchURL",
         lua.create_function(|lua, url: Value| {
             let url = string_arg(lua, url, "Usage: LaunchURL(\"URL\")")?;
-            if launch_url_allowed(&url) {
-                queue(lua, GlueRequest::LaunchUrl(url));
+            // The C string ends at a NUL (`0x6f3690`), for the gate and for the shell alike.
+            let url = url.split('\0').next().unwrap_or_default();
+            if launch_url_allowed(url) {
+                queue(lua, GlueRequest::LaunchUrl(url.to_string()));
             }
             Ok(())
         })?,
@@ -675,8 +688,18 @@ mod tests {
         for url in refused {
             assert!(!launch_url_allowed(url), "{url:?}");
         }
-        // The C string ends at a NUL, so what follows cannot spoil or smuggle anything.
-        assert!(launch_url_allowed("http://www.blizzard.com/\0?q=1"));
+        // The gate takes a C string: a NUL inside one is refused outright.
+        assert!(!launch_url_allowed("http://www.blizzard.com/\0?q=1"));
+        // 0x400 bytes or more is refused (`0x42a01c`); one byte under is not.
+        let path = |n: usize| format!("http://www.blizzard.com/{}", "a".repeat(n - 24));
+        assert!(launch_url_allowed(&path(0x3ff)));
+        assert!(!launch_url_allowed(&path(0x400)));
+        // A host of 0x80 bytes or more is refused rather than cut to a whitelisted tail.
+        let host = |n: usize| format!("http://{}.blizzard.com/", "a".repeat(n - 13));
+        assert!(launch_url_allowed(&host(0x7f)));
+        assert!(!launch_url_allowed(&host(0x80)));
+        let cut = format!("http://{}.blizzard.com.evil.net/", "a".repeat(0x80 - 13));
+        assert!(!launch_url_allowed(&cut));
     }
 
     #[test]
@@ -685,10 +708,20 @@ mod tests {
         s.run("LaunchURL('http://www.worldofwarcraft.com/')")
             .unwrap();
         s.run("LaunchURL('http://example.com/')").unwrap();
-        assert!(matches!(
-            s.take_glue_requests().as_slice(),
-            [GlueRequest::LaunchUrl(u)] if u == "http://www.worldofwarcraft.com/"
-        ));
+        // The text before a NUL is the argument, for the gate and for the opener.
+        s.run("LaunchURL('http://www.blizzard.com/a\\0?q=1')")
+            .unwrap();
+        s.run("LaunchURL('http://example.com/\\0http://www.blizzard.com/')")
+            .unwrap();
+        let queued = s.take_glue_requests();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [GlueRequest::LaunchUrl(a), GlueRequest::LaunchUrl(b)]
+                    if a == "http://www.worldofwarcraft.com/" && b == "http://www.blizzard.com/a"
+            ),
+            "{queued:?}"
+        );
         let err = s.run("LaunchURL()").unwrap_err().to_string();
         assert!(err.contains("Usage: LaunchURL(\"URL\")"), "{err}");
         assert!(s.take_glue_requests().is_empty());

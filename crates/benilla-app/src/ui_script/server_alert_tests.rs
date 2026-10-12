@@ -355,3 +355,65 @@ fn a_test_run_neither_fetches_nor_opens_a_browser() {
     assert!(!allowed());
     assert!(begin_once("http://127.0.0.1:1/").is_none());
 }
+
+/// A writer that records each call, to see how the request leaves.
+#[derive(Default)]
+struct Calls(Vec<Vec<u8>>);
+
+impl Write for Calls {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.push(buf.to_vec());
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn the_request_head_leaves_in_one_write() {
+    let mut calls = Calls::default();
+    send_request(&mut calls, &parse_url("http://h:81/a?b").unwrap()).unwrap();
+    assert_eq!(calls.0.len(), 1);
+    let head = String::from_utf8(calls.0.remove(0)).unwrap();
+    assert!(
+        head.starts_with("GET /a?b HTTP/1.1\r\nHost: h:81\r\n"),
+        "{head}"
+    );
+    assert!(head.ends_with("\r\n\r\n"));
+}
+
+#[test]
+fn an_ipv6_host_is_bracketed_in_the_host_header() {
+    let mut calls = Calls::default();
+    send_request(&mut calls, &parse_url("http://[::1]/").unwrap()).unwrap();
+    let head = String::from_utf8(calls.0.concat()).unwrap();
+    assert!(head.contains("\r\nHost: [::1]\r\n"), "{head}");
+    calls.0.clear();
+    send_request(&mut calls, &parse_url("http://[::1]:8080/").unwrap()).unwrap();
+    assert!(String::from_utf8(calls.0.concat())
+        .unwrap()
+        .contains("\r\nHost: [::1]:8080\r\n"));
+}
+
+/// A chunked body whose trailers never end is refused, not read forever.
+#[test]
+fn endless_chunked_trailers_are_refused() {
+    let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+    for _ in 0..MAX_HEADERS + 5 {
+        raw.extend_from_slice(b"X-Trailer: y\r\n");
+    }
+    raw.extend_from_slice(b"\r\n");
+    let fake = Fake::start(move |_, _, _| Reply::Raw(raw.clone()));
+    assert!(matches!(
+        download(&fake.url("/"), FAST, &mut |_| true),
+        Err(FetchError::Io(_))
+    ));
+    // The ordinary trailer still ends it.
+    let fake = Fake::start(|_, _, _| {
+        Reply::Raw(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX: y\r\n\r\n".to_vec(),
+        )
+    });
+    assert!(download(&fake.url("/"), FAST, &mut |_| true).is_ok());
+}
