@@ -207,7 +207,8 @@ pub use craft::{CraftReagent, CraftRecipe, CraftState, CraftTooltip};
 pub use cursor::money::coin_icon;
 pub use cursor::{
     CursorAction, CursorItem, CursorMacro, CursorMerchantItem, CursorMoney, CursorPayload,
-    CursorPetAction, CursorSpell, CursorStablePet, EnchantConfirm, WorldPick, EQUIPMENT_BAG,
+    CursorPetAction, CursorSpell, CursorStablePet, EnchantConfirm, HeldCursor, WorldPick,
+    EQUIPMENT_BAG,
 };
 pub use cvars::{small_cull_text, sstr_to_int};
 pub use cvars::{

@@ -134,6 +134,27 @@ pub struct CursorStablePet {
     pub texture: String,
 }
 
+/// The cursor state a dying VM hands its successor ([`super::UiScript::held_cursor`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HeldCursor {
+    payload: Option<CursorPayload>,
+    grid: bool,
+    wrap: Option<super::container::PendingWrap>,
+}
+
+impl HeldCursor {
+    /// The payload, if any.
+    pub fn payload(&self) -> Option<&CursorPayload> {
+        self.payload.as_ref()
+    }
+
+    /// Drop the payload, as a clear that zeroes the mode leaves it; the grid goes with it.
+    pub fn drop_payload(&mut self) {
+        self.payload = None;
+        self.grid = false;
+    }
+}
+
 /// An item held on the cursor: where it was picked from, so the next click routes the swap, and
 /// the icon at the mouse. The server's field updates do the actual move.
 #[derive(Clone, Debug, PartialEq)]
@@ -670,12 +691,34 @@ impl super::UiScript {
         out
     }
 
-    /// Seat a fresh VM's locks before anything runs on it, with no event, and the auction sell
-    /// item the dying VM held, which the world-enter cascade unlocks ([`Self::fire_world_enter`]).
-    pub fn seed_item_locks(&mut self, guids: impl IntoIterator<Item = u64>, auction_sell: u64) {
+    /// Seat a fresh VM's locks before anything runs on it, with no event.
+    pub fn seed_item_locks(&mut self, guids: impl IntoIterator<Item = u64>) {
+        self.model_mut().item_locks = guids.into_iter().filter(|&g| g != 0).collect();
+    }
+
+    /// The cursor's state as the engine holds it: the payload (`[0xb4d900]` and its data), the
+    /// grid a setter showed, and an armed gift wrap's paper (`[0xc4d778]`). None of it is the
+    /// VM's in the reference, so a `/reload` keeps it.
+    pub fn held_cursor(&self) -> HeldCursor {
+        let model = self.model_ref();
+        HeldCursor {
+            payload: model.cursor.clone(),
+            grid: model.cursor_grid,
+            wrap: model.pending_wrap,
+        }
+    }
+
+    /// Seat a fresh VM's cursor before anything runs on it, with no event; an armed wrap takes
+    /// the cast cursor again, as its arm did (`0x5edebf`).
+    pub fn seed_held_cursor(&mut self, held: HeldCursor) {
         let mut model = self.model_mut();
-        model.item_locks = guids.into_iter().filter(|&g| g != 0).collect();
-        model.cascade_unlock = (auction_sell != 0).then_some(auction_sell);
+        model.cursor = held.payload;
+        model.cursor_grid = held.grid;
+        if held.wrap.is_some() {
+            model.ui_cursor = Some(super::container::UiCursorMode::Cast);
+            model.ui_cursor_dirty = true;
+        }
+        model.pending_wrap = held.wrap;
     }
 
     /// The mail attachment's item guid, 0 when empty.

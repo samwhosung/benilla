@@ -1046,10 +1046,6 @@ pub(crate) struct Model {
     /// `LockItem` (`0x4953e0`) and cleared by `UnlockItem` (`0x495420`) and the unlock-all
     /// (`0x495460`) ([`super::cursor::lock_item`]).
     pub(crate) item_locks: std::collections::HashSet<u64>,
-    /// An auction sell item a dying VM held: the world-enter cascade's auction reset
-    /// (`0x490a05` into `0x4cc280`) unlocks it with its event (`0x4cd653`) after
-    /// `PLAYER_ENTERING_WORLD`.
-    pub(crate) cascade_unlock: Option<u64>,
     /// The last cursor position in UI space (logical px, y-up), behind `GetCursorPosition()`.
     pub(crate) cursor_pos: (f32, f32),
 
@@ -1563,7 +1559,6 @@ impl Model {
             pending_events: Vec::new(),
             verb_events: None,
             item_locks: std::collections::HashSet::new(),
-            cascade_unlock: None,
             cursor_pos: (0.0, 0.0),
             minimap_ping_request: None,
             minimap_ping: (0.0, 0.0),

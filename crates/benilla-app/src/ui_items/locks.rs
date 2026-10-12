@@ -58,33 +58,55 @@ impl ItemReleases {
 #[derive(Resource, Default, Debug)]
 pub(crate) struct HeldItemLocks {
     pub(crate) locks: Vec<u64>,
-    /// The auction sell item the dying VM held, which the new VM's cascade unlocks.
-    pub(crate) auction_sell: u64,
+    /// The cursor, which is engine state too: no clear on the reload's path touches an item, a
+    /// spell or coins on it.
+    pub(crate) cursor: benilla_ui::script::HeldCursor,
 }
 
-/// Take the dying VM's locks into [`HeldItemLocks`], as the reload's leave-world sweep
-/// (`0x490c20` → `0x490a80`) leaves the item bits. Its loot leg closes the window (`0x490ab2` →
-/// `0x4c1ca0`), unlocking an item source (`0x48f2bd`, `0x4c1d36`), and its mail leg resets the
-/// compose form (`0x490b1b` → `0x4acc00` → `0x4acdc0`), unlocking the attachment (`0x4acdd6`):
-/// neither is carried. Its trade leg only cancels (`0x490adf` → `0x5d4310`), and the cascade
-/// then zeroes the trade tables with no `UnlockItem` (`0x4909b5` → `0x4bf0e0`), so the answer's
-/// `UnlockTradeItems` finds nothing: an offered item stays locked until its seat or stack moves,
-/// the revive's unlock-all or a relog, as in the reference. The auction sell item is carried and
-/// unlocked by the cascade's auction reset ([`UiScript::seed_item_locks`]).
+/// Take the dying VM's locks and cursor into [`HeldItemLocks`], as the reload's leave-world
+/// sweep (`0x490c20` → `0x490a80`) leaves them. Its legs model here only by their lock and
+/// cursor effects (the windows themselves are not closed yet):
+/// - the loot leg (`0x490ab2` → `0x4c1ca0` → `0x48f200`) unlocks an item source (`0x48f2bd`,
+///   `0x4c1d36`), and clears a mode-6 cursor (`0x48f36e`), which benilla never holds;
+/// - the mail leg (`0x490b1b` → `0x4acc00` → `0x4acdc0`) unlocks the attachment (`0x4acdd6`);
+/// - the auction leg (`0x490b25` → `0x4cc2f0` → `0x4cd5f0`, while an auctioneer is open) fires
+///   `AUCTION_HOUSE_CLOSED` and unlocks the sell item (`0x4cd640`, `0x4cd653`), so the cascade's
+///   own reset (`0x490a05` → `0x4cc280`) finds it already empty;
+/// - the vendor's close, through the interaction close (`0x490b5f` → `0x493310` → `0x4fadf0`),
+///   clears a held vendor row, mode 5 (`0x4fae31`, `0x4fae4a`), which holds no lock;
+/// - the trade leg only cancels (`0x490adf` → `0x5d4310`), and the cascade then zeroes the trade
+///   tables with no `UnlockItem` (`0x4909b5` → `0x4bf0e0`), so the answer's `UnlockTradeItems`
+///   finds nothing: an offered item stays locked until its seat or stack moves, the revive's
+///   unlock-all or a relog, as in the reference.
+///
+/// Nothing on the path writes the cursor otherwise (its setters and `ClearCursor` are the only
+/// writers of `[0xb4d900]` and `[0xb4e248]`), so a held item stays held, with its lock, and an
+/// armed wrap stays armed.
 pub(crate) fn fold_dying_vm_item_locks(world: &mut World) {
     let loot_item = world
         .get_resource::<crate::ui_loot::LootState>()
         .and_then(crate::ui_loot::LootState::source)
         .filter(|&g| benilla_protocol::guid::is_item(g));
     let Some(held) = world.get_non_send_resource::<UiScript>().map(|s| {
-        let swept = [Some(s.mail_send_guid()), loot_item];
+        let swept = [
+            Some(s.mail_send_guid()),    // 0x4acdd6
+            Some(s.auction_sell_guid()), // 0x4cd653
+            loot_item,                   // 0x48f2bd, 0x4c1d36
+        ];
+        let mut cursor = s.held_cursor();
+        if matches!(
+            cursor.payload(),
+            Some(benilla_ui::script::CursorPayload::Merchant(_))
+        ) {
+            cursor.drop_payload(); // 0x4fae4a
+        }
         HeldItemLocks {
             locks: s
                 .item_locks()
                 .into_iter()
                 .filter(|g| !swept.contains(&Some(*g)))
                 .collect(),
-            auction_sell: s.auction_sell_guid(),
+            cursor,
         }
     }) else {
         return;
@@ -92,17 +114,18 @@ pub(crate) fn fold_dying_vm_item_locks(world: &mut World) {
     world.insert_resource(held);
 }
 
-/// Seat the new VM's locks before any file or event runs on it: a `/reload`'s are the dying VM's,
-/// a world entry's none.
+/// Seat the new VM's locks and cursor before any file or event runs on it: a `/reload`'s are the
+/// dying VM's, a world entry's none.
 pub(crate) fn seed_vm_item_locks(world: &mut World, script: &mut UiScript, reload: bool) {
     let held = world
         .get_resource_mut::<HeldItemLocks>()
         .map(|mut h| std::mem::take(&mut *h))
         .unwrap_or_default();
     if reload {
-        script.seed_item_locks(held.locks, held.auction_sell);
+        script.seed_item_locks(held.locks);
+        script.seed_held_cursor(held.cursor);
     } else {
-        script.seed_item_locks(Vec::new(), 0);
+        script.seed_item_locks(Vec::new());
     }
 }
 

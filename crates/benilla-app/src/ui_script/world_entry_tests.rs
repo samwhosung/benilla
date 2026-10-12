@@ -415,16 +415,18 @@ fn logging_out_leaves_no_in_game_frames_behind() {
 // ───────────────────────────────── ReloadUI ─────────────────────────────────
 
 /// The item lock is the item object's (`item+0x314`), which a `/reload` keeps, save what the
-/// reload's sweep and cascade unlock: the looted clam (its window closes, `0x490ab2`) and the mail
-/// attachment (`0x490b1b`) unlock, the auction sell item unlocks after `PLAYER_ENTERING_WORLD`
-/// (`0x490a05`), and a trade offer stays locked, its table zeroed with no unlock (`0x4909b5`). A
-/// new world entry builds its objects afresh and starts with none.
+/// reload's sweep unlocks: the looted clam (`0x490ab2`), the mail attachment (`0x490b1b`) and the
+/// auction sell item (`0x490b25`). A trade offer stays locked, its table zeroed with no unlock
+/// (`0x4909b5`), and the cursor, engine state, keeps a held item and an armed wrap with their
+/// locks. A new world entry builds its objects afresh and starts with none.
 #[test]
 fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     const CLAM: u64 = 0x4000_0000_0000_0c1a;
     const MAILED: u64 = 0x4000_0000_0000_0a11;
     const AUCTIONED: u64 = 0x4000_0000_0000_0a5c;
     const TRADED: u64 = 0x4000_0000_0000_0a7d;
+    const HELD: u64 = 0x4000_0000_0000_0a4e;
+    const PAPER: u64 = 0x4000_0000_0000_0a9a;
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -442,7 +444,8 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     {
         let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
         s.lock_item(CLAM); // the open-item send's lock (`0x5edcd9`)
-                           // A letter's attachment and an auction's sell item, each holding its pickup's lock.
+                           // A letter's attachment, an auction's sell item and a trade offer, each holding its
+                           // pickup's lock, then an item held on the cursor and a wrap armed.
         let slot = |guid: u64| benilla_ui::script::ContainerSlot {
             item_id: 117,
             count: 1,
@@ -457,6 +460,8 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
                     (1, slot(MAILED)),
                     (2, slot(AUCTIONED)),
                     (3, slot(TRADED)),
+                    (4, slot(HELD)),
+                    (5, slot(PAPER)),
                 ]),
                 ..Default::default()
             }),
@@ -468,6 +473,7 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
         s.set_trade(Some(Default::default()));
         s.run("PickupContainerItem(0, 3) ClickTradeButton(1)")
             .unwrap();
+        s.run("PickupContainerItem(0, 4)").unwrap();
     }
     let mut loot = crate::ui_loot::LootState::default();
     loot.open(CLAM, 1, 0, Vec::new());
@@ -477,26 +483,52 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     assert!(!locked(&world, MAILED), "the sweep's mail reset unlocks it");
     assert!(locked(&world, TRADED), "nothing unlocks a trade offer");
     assert!(
-        locked(&world, AUCTIONED),
-        "until the cascade's auction reset"
+        !locked(&world, AUCTIONED),
+        "the sweep's auction close unlocks it (`0x4cd5f0` → `0x4cd640`)"
     );
     {
-        let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
-        s.run(
-            "HEARD = {} local f = CreateFrame('Frame') \
-             f:RegisterEvent('ITEM_LOCK_CHANGED') f:RegisterEvent('PLAYER_ENTERING_WORLD') \
-             f:SetScript('OnEvent', function() table.insert(HEARD, event) end)",
-        )
-        .unwrap();
-        s.fire_world_enter();
+        let s = world.non_send_resource::<benilla_ui::script::UiScript>();
         assert_eq!(
-            s.eval::<Vec<String>>("return HEARD").unwrap(),
-            ["PLAYER_ENTERING_WORLD", "ITEM_LOCK_CHANGED"],
-            "the auction reset unlocks after the cascade's events (`0x490a05`)"
+            s.cursor_item().map(|i| i.guid),
+            Some(HELD),
+            "no clear on the reload's path touches a held item"
+        );
+        assert!(s.item_locked(HELD), "and its pickup's lock stays");
+    }
+    assert!(locked(&world, TRADED));
+    // An armed wrap is engine state too (`[0xc4d778]`): it stays armed, its paper locked.
+    {
+        let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        s.run("ClearCursor()").unwrap();
+        // The bag as the container feed re-pushes it into the new VM.
+        s.set_container(
+            0,
+            Some(benilla_ui::script::ContainerState {
+                num_slots: 16,
+                slots: std::collections::HashMap::from([(
+                    5,
+                    benilla_ui::script::ContainerSlot {
+                        item_id: 117,
+                        count: 1,
+                        guid: PAPER,
+                        ..Default::default()
+                    },
+                )]),
+                ..Default::default()
+            }),
+        );
+        s.arm_gift_wrap(0, 5);
+    }
+    reload(&mut world, crate::char_select::ClientState::InWorld);
+    {
+        let s = world.non_send_resource::<benilla_ui::script::UiScript>();
+        assert_eq!(s.gift_wrap_armed().map(|w| w.guid), Some(PAPER));
+        assert!(s.item_locked(PAPER), "the armed paper stays locked");
+        assert!(
+            !s.item_locked(HELD),
+            "the clear before it unlocked the held item"
         );
     }
-    assert!(!locked(&world, AUCTIONED));
-    assert!(locked(&world, TRADED));
 
     super::end_ui_session(&mut world);
     log_in_as(&mut world, "Onehunter", 1);
