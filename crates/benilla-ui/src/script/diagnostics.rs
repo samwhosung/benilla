@@ -110,7 +110,7 @@ impl super::UiScript {
     }
 
     /// Retain an addon load failure that never raised (a missing file, an unparseable document, a
-    /// dependency cycle or missing dependency, a broken `Bindings.xml`). It is not dispatched to
+    /// missing or failed dependency, a broken `Bindings.xml`). It is not dispatched to
     /// `geterrorhandler()`: the reference logs such a failure and shows nothing. The caller still
     /// writes its own log line.
     pub fn report_load_failure(&self, msg: &str) {

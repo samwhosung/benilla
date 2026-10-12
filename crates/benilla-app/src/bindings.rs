@@ -733,7 +733,7 @@ mod tests {
     }
 
     fn with_addon(bindings: &str) -> UiScript {
-        let mut script = core_script();
+        let script = core_script();
         script.register_addon_bindings(
             "ProbeAddon",
             &benilla_ui::bindings_xml::parse(bindings).expect("well-formed"),

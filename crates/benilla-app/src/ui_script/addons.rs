@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{EnableHash, ScriptValue, UiScript};
+use benilla_ui::script::{EnableHash, UiScript};
 use benilla_ui::status::{self, Status};
 use benilla_ui::toc::Toc;
 
@@ -430,6 +430,11 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::s
         secure: secure(chain, toc),
         load_on_demand: toc.load_on_demand(),
         dependencies: toc.dependencies().into_iter().map(str::to_owned).collect(),
+        optional_dependencies: toc
+            .optional_dependencies()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         directives: toc.directives.clone(),
         files: toc.files.clone(),
         saved_variables: toc
@@ -765,11 +770,6 @@ pub(super) fn load_third_party(
     for (info, addon) in infos.iter_mut().zip(addons.iter()) {
         info.enabled = store.enabled_for(&info.name, addon.toc.default_state(), character);
     }
-    let disabled_names: HashSet<String> = infos
-        .iter()
-        .filter(|i| !i.enabled)
-        .map(|i| i.name.to_ascii_lowercase())
-        .collect();
     script.register_addons(
         infos,
         root(),
@@ -795,12 +795,8 @@ pub(super) fn load_third_party(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let mut state = Walk {
-        disabled: disabled_names,
-        version_check,
-        ..Walk::default()
-    };
-    for addon in &addons {
+    let mut state = Walk::new(script, &addons, version_check);
+    for (i, addon) in addons.iter().enumerate() {
         // `## LoadOnDemand: 1` waits for `LoadAddOn`: `0x51f600` loads only records whose
         // LoadOnDemand byte is 0.
         if addon.toc.load_on_demand() {
@@ -813,7 +809,7 @@ pub(super) fn load_third_party(
         // Re-armed per addon, so one runaway cannot fail every addon after it; a dependency
         // chain loads under its dependent's arming, as in the harness's survey.
         script.set_instruction_budget(LOAD_INSTRUCTION_BUDGET);
-        let _ = state.load(script, &addons, &addon.name);
+        state.load(i);
         let spent = script.instructions_used();
         if spent > 1_000_000 {
             // A heavy load gets a line: this counter is what the budget was chosen from.
@@ -826,102 +822,49 @@ pub(super) fn load_third_party(
     state.failures
 }
 
-/// The recursive load's bookkeeping, for [`Walk::load`].
-#[derive(Default)]
-struct Walk {
-    loaded: HashSet<String>,
-    /// Addons whose load failed, so a later dependent gets the same answer without a rerun.
-    failed: HashSet<String>,
-    /// The current dependency chain, for cycle detection and for naming the cycle when it happens.
-    loading: Vec<String>,
+/// The startup walk's side of `AddOn_Load` (`0x51f240`): the shared loader
+/// ([`UiScript::load_addon_row`]) decides what loads and in what order, and this runs an addon's
+/// files and keeps the load failures the player is told of. `all` is the registry's rows in order.
+struct Walk<'a> {
+    script: &'a UiScript,
+    all: &'a [Addon],
     failures: Vec<String>,
-    /// Addons the player turned off, lowercased; empty means every addon is enabled.
-    disabled: HashSet<String>,
+    /// Rows already reported as blocked by a dependency, so a later attempt does not report it
+    /// again.
+    reported: HashSet<usize>,
     /// `checkAddonVersion`: when on, an addon whose `## Interface` is not exactly the client's is
-    /// skipped like a disabled one, and a dependent gets `Err` (`DEP_INTERFACE_VERSION`).
+    /// skipped like a disabled one, and a dependent is blocked (`DEP_INTERFACE_VERSION`).
     version_check: bool,
 }
 
-impl Walk {
-    /// Load one addon by name; `Err` means it did not load, which a hard dependent propagates. The
-    /// order is `AddOn_Load 0x51f240`'s: optional dependencies (failures ignored), required ones (a
-    /// failure aborts only this addon), the `.toc` files in order (`0x51f3fa`), `Bindings.xml`
-    /// (`0x51f400`), the account then per-character saved variables (`0x51f4b5`, `0x51f53b`), then
-    /// `ADDON_LOADED` (event 429, `0x51f5ad`), whose handlers see the restored values. The
-    /// reference then loads the addons whose `## LoadWith` names this one; this walk does not.
-    fn load(&mut self, script: &mut UiScript, all: &[Addon], name: &str) -> Result<(), ()> {
-        // Key on the addon's own spelling: a `.toc` may name a dependency in any case, and keying
-        // on the caller's would load the same addon twice.
-        let Some(addon) = all.iter().find(|a| a.name.eq_ignore_ascii_case(name)) else {
-            return Err(()); // not installed: the caller decides whether that is fatal
-        };
-        let key = addon.name.as_str();
-        if self.loaded.contains(key) {
-            return Ok(());
+impl<'a> Walk<'a> {
+    fn new(script: &'a UiScript, all: &'a [Addon], version_check: bool) -> Self {
+        Walk {
+            script,
+            all,
+            failures: Vec::new(),
+            reported: HashSet::new(),
+            version_check,
         }
-        if self.failed.contains(key) {
-            return Err(());
-        }
-        // Disabled is the player's choice, not a failure: nothing is pushed to `failures`, and a
-        // dependent still gets `Err` (the reference's `DEP_DISABLED`).
-        if self.disabled.contains(&key.to_ascii_lowercase()) {
-            info!("ui_script: {key} is disabled — not loaded");
-            self.failed.insert(addon.name.clone());
-            return Err(());
-        }
-        // The version gate, `AddOn_CanLoad` check 6: after the enable state, before the dependency
-        // loop, an exact `==` (a missing `## Interface` is 0). Not a failure either: the AddOns
-        // screens show it, and the Load out of date AddOns checkbox loads it anyway.
-        if self.version_check
-            && addon.toc.interface_version() != benilla_ui::script::addon_gate::CLIENT_INTERFACE
-        {
-            info!(
-                "ui_script: {key} is out of date (## Interface: {}, client {}) — not loaded \
-                 (the AddOns screen's 'Load out of date AddOns' loads it anyway)",
-                addon.toc.interface_version(),
-                benilla_ui::script::addon_gate::CLIENT_INTERFACE
-            );
-            self.failed.insert(addon.name.clone());
-            return Err(());
-        }
-        if self.loading.iter().any(|n| n == key) {
-            let chain = self.loading.join(" → ");
-            let e = format!("{key}: dependency cycle ({chain} → {key})");
-            error!("ui_script: {e}");
-            script.report_load_failure(&e);
-            self.failures.push(e);
-            self.failed.insert(addon.name.clone());
-            return Err(());
-        }
-        self.loading.push(addon.name.clone());
+    }
 
-        // Optional dependencies first: a failure is ignored, a present one still loads first.
-        for dep in addon.toc.optional_dependencies() {
-            let _ = self.load(script, all, dep);
-        }
-        // Hard dependencies: a failure aborts this addon and nothing else.
-        let mut blocked = None;
-        for dep in addon.toc.dependencies() {
-            if self.load(script, all, dep).is_err() {
-                blocked = Some(dep.to_string());
-                break;
-            }
-        }
+    /// `AddOn_Load` for row `i` with `dl` 0, the walk's flavour (`0x51f62b`). The order is the
+    /// reference's: optional dependencies (failures ignored), required ones (a failure fails only
+    /// this addon), the `.toc` files in order (`0x51f3fa`), `Bindings.xml` (`0x51f400`), the
+    /// account then per-character saved variables (`0x51f4b5`, `0x51f53b`), then `ADDON_LOADED`
+    /// (event 429, `0x51f5ad`), whose handlers see the restored values. A cycle of required
+    /// dependencies loads both, and nothing here is a failure for the player: disabled and out of
+    /// date are their choice.
+    fn load(&mut self, i: usize) -> bool {
+        let (script, version_check) = (self.script, self.version_check);
+        script.load_addon_row(self, i, false, version_check)
+    }
+}
 
-        self.loading.pop();
-        if let Some(dep) = blocked {
-            let e = format!(
-                "{}: required dependency {dep} is missing or failed",
-                addon.name
-            );
-            error!("ui_script: {e}");
-            // Retained for the player, who can usually fix it by installing the dependency.
-            script.report_load_failure(&e);
-            self.failures.push(e);
-            self.failed.insert(addon.name.clone());
-            return Err(());
-        }
-
+impl benilla_ui::script::AddonLoad for Walk<'_> {
+    fn run(&mut self, i: usize) {
+        let script = self.script;
+        let addon = &self.all[i];
         // The add-on's record: its `.toc`'s under that banner (`0x6eddc8`), then its own banner
         // (`0x51f464`), merged into the UI load's.
         let debug = script.framexml_debug();
@@ -956,13 +899,37 @@ impl Walk {
         // files set their defaults, before `ADDON_LOADED`.
         script.load_addon_saved_variables(&addon.name);
         script.swap_exec_context(outer);
-        self.loaded.insert(addon.name.clone());
-        script.mark_addon_loaded(&addon.name);
-        // `arg1` is the addon's own folder name, whatever case a dependent used. Marked loaded
-        // first: the reference sets `[rec+0x18]` before `0x51f5ad`, so a handler's
-        // `IsAddOnLoaded` about itself is true.
-        script.fire_event("ADDON_LOADED", vec![ScriptValue::Str(addon.name.clone())]);
-        Ok(())
+    }
+
+    /// Disabled is the player's choice, and so is out of date (the AddOns screens show it, and
+    /// the Load out of date AddOns checkbox loads it anyway): a line in the log, no failure.
+    fn refused(&mut self, i: usize, reason: &str) {
+        let addon = &self.all[i];
+        match reason {
+            "DISABLED" => info!("ui_script: {} is disabled — not loaded", addon.name),
+            "INTERFACE_VERSION" => info!(
+                "ui_script: {} is out of date (## Interface: {}, client {}) — not loaded \
+                 (the AddOns screen's 'Load out of date AddOns' loads it anyway)",
+                addon.name,
+                addon.toc.interface_version(),
+                benilla_ui::script::addon_gate::CLIENT_INTERFACE
+            ),
+            other => info!("ui_script: {} is not loaded ({other})", addon.name),
+        }
+    }
+
+    fn dep_failed(&mut self, i: usize, dep: &str) {
+        if !self.reported.insert(i) {
+            return;
+        }
+        let e = format!(
+            "{}: required dependency {dep} is missing or failed",
+            self.all[i].name
+        );
+        error!("ui_script: {e}");
+        // Retained for the player, who can usually fix it by installing the dependency.
+        self.script.report_load_failure(&e);
+        self.failures.push(e);
     }
 }
 
@@ -1181,6 +1148,27 @@ mod tests {
 
     use super::*;
 
+    /// Register `all` as the registry and run the startup walk over it as `load_third_party` does
+    /// (every addon that is not LoadOnDemand, in order), with the version check off; returns the
+    /// failures.
+    fn walk_all(script: &mut UiScript, all: &[Addon]) -> Vec<String> {
+        script.register_addons(all.iter().map(info_for).collect(), None, None, None);
+        let mut w = Walk::new(script, all, false);
+        for (i, a) in all.iter().enumerate() {
+            if !a.toc.load_on_demand() {
+                w.load(i);
+            }
+        }
+        w.failures
+    }
+
+    /// `IsAddOnLoaded(name)` as a script sees it.
+    fn is_loaded(script: &UiScript, name: &str) -> bool {
+        script
+            .eval::<bool>(&format!("return IsAddOnLoaded('{name}') == 1"))
+            .unwrap()
+    }
+
     /// Build an addon over a temp AddOns root, so the walk can be tested without an install.
     fn dir_addon(root: &Path, name: &str, toc: &str) -> Addon {
         let folder = root.join(name);
@@ -1397,24 +1385,20 @@ mod tests {
             dir_addon(&tmp, "WantsGhost", "## OptionalDeps: Ghost\n"),
         ];
         let mut script = UiScript::new().unwrap();
-        let mut w = Walk::default();
-        for a in &all {
-            let _ = w.load(&mut script, &all, &a.name);
-        }
-        assert!(w.loaded.contains("Alone"), "an independent addon loads");
+        let failures = walk_all(&mut script, &all);
+        assert!(is_loaded(&script, "Alone"), "an independent addon loads");
         assert!(
-            w.loaded.contains("WantsGhost"),
+            is_loaded(&script, "WantsGhost"),
             "a MISSING OPTIONAL dependency must not block its dependent"
         );
         assert!(
-            !w.loaded.contains("NeedsGhost"),
+            !is_loaded(&script, "NeedsGhost"),
             "a missing REQUIRED dependency must block its dependent"
         );
         assert_eq!(
-            w.failures.len(),
+            failures.len(),
             1,
-            "and reports exactly that one: {:?}",
-            w.failures
+            "and reports exactly that one: {failures:?}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1547,40 +1531,12 @@ mod tests {
             dir_addon(&tmp, "LowerDep", "## Dependencies: shared\n"),
         ];
         let mut script = UiScript::new().unwrap();
-        let mut w = Walk::default();
-        for a in &all {
-            let _ = w.load(&mut script, &all, &a.name);
-        }
-        assert!(w.failures.is_empty(), "no failures: {:?}", w.failures);
+        let failures = walk_all(&mut script, &all);
+        assert!(failures.is_empty(), "no failures: {failures:?}");
         assert_eq!(
             script.eval::<i64>("return SharedLoads").ok(),
             Some(1),
             "the shared dependency's files ran exactly once"
-        );
-        let _ = std::fs::remove_dir_all(&tmp);
-    }
-
-    /// A dependency cycle is reported once and does not recurse forever.
-    #[test]
-    fn a_dependency_cycle_is_caught() {
-        let tmp =
-            std::env::temp_dir().join(format!("benilla-addon-cycle-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        let all = vec![
-            dir_addon(&tmp, "Ping", "## Dependencies: Pong\n"),
-            dir_addon(&tmp, "Pong", "## Dependencies: Ping\n"),
-        ];
-        let mut script = UiScript::new().unwrap();
-        let mut w = Walk::default();
-        for a in &all {
-            let _ = w.load(&mut script, &all, &a.name);
-        }
-        assert!(w.loaded.is_empty(), "neither side of a cycle loads");
-        assert!(
-            w.failures.iter().any(|f| f.contains("cycle")),
-            "the cycle is named: {:?}",
-            w.failures
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1677,9 +1633,8 @@ mod tests {
         }];
         let mut script = UiScript::new().unwrap();
         script.set_screen_size(1024.0, 768.0);
-        let mut w = Walk::default();
-        let _ = w.load(&mut script, &all, "EventProbe");
-        assert!(w.failures.is_empty(), "load errors: {:?}", w.failures);
+        let failures = walk_all(&mut script, &all);
+        assert!(failures.is_empty(), "load errors: {failures:?}");
 
         assert_eq!(
             event_log(&script),
@@ -1716,8 +1671,7 @@ mod tests {
             toc: Toc::parse(&std::fs::read_to_string(dir.join("EventProbe.toc")).unwrap()),
             source: Source::Dir(tmp.clone()),
         }];
-        let mut w = Walk::default();
-        let _ = w.load(&mut script, &all, "EventProbe");
+        walk_all(&mut script, &all);
         // The core, loaded as production loads it: the chain's own toc, not the walk.
         let _ = super::super::manifest::load_core(&script);
 
@@ -2886,6 +2840,124 @@ mod tests {
             Some(false),
             "the DisableAddOn must still be persisted: {after}"
         );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// An addon whose only file appends its own name to `Order`, so the load order is readable;
+    /// `watch` below records the `ADDON_LOADED` order beside it.
+    fn write_marking_addon(home: &Path, name: &str, directives: &str) {
+        write_addon(
+            home,
+            name,
+            &format!("## Interface: 11200\n{directives}main.lua\n"),
+            &[(
+                "main.lua",
+                &format!(
+                    "Order = (Order or '') .. '{name},' \
+                     Self_{name} = IsAddOnLoaded('{name}')"
+                ),
+            )],
+        );
+    }
+
+    /// Record every `ADDON_LOADED` into `AddonOrder` before anything loads.
+    fn watch_addon_loaded(script: &UiScript) {
+        script
+            .eval::<()>(
+                "AddonOrder = '' \
+                 Watch = CreateFrame('Frame') \
+                 Watch:RegisterEvent('ADDON_LOADED') \
+                 Watch:SetScript('OnEvent', function() AddonOrder = AddonOrder .. arg1 .. ',' end)",
+            )
+            .unwrap();
+    }
+
+    fn string(script: &UiScript, global: &str) -> Option<String> {
+        script.eval::<String>(&format!("return {global}")).ok()
+    }
+
+    /// `AddOn_Load 0x51f240` marks the addon loaded (`0x51f313`) before its dependency loops, and
+    /// `AddOn_CanLoad` answers "can load" for an addon it is already checking (`0x51e812`), so two
+    /// addons that require each other both load at startup: the second one's files and
+    /// `ADDON_LOADED` run first, and `IsAddOnLoaded` is 1 from an addon's own files.
+    #[test]
+    fn a_mutual_requirement_cycle_loads_both_and_the_second_goes_first() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("walk-cycle");
+        write_marking_addon(&home, "Ping", "## Dependencies: Pong\n");
+        write_marking_addon(&home, "Pong", "## Dependencies: Ping\n");
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        watch_addon_loaded(&script);
+        let failures = load_third_party(&mut script, None, &[], true);
+
+        assert!(
+            failures.is_empty(),
+            "a cycle is no load failure: {failures:?}"
+        );
+        assert_eq!(string(&script, "Order").as_deref(), Some("Pong,Ping,"));
+        assert_eq!(string(&script, "AddonOrder").as_deref(), Some("Pong,Ping,"));
+        assert!(is_loaded(&script, "Ping") && is_loaded(&script, "Pong"));
+        assert_eq!(
+            script
+                .eval::<(i64, i64)>("return Self_Ping, Self_Pong")
+                .ok(),
+            Some((1, 1)),
+            "an addon is flagged loaded from its own files, and from its dependencies' files"
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// `OptionalDeps` that name each other end the same way (`0x51f2db`) and report no failure.
+    #[test]
+    fn mutual_optional_dependencies_load_both_and_report_nothing() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("walk-optional-cycle");
+        write_marking_addon(&home, "Left", "## OptionalDeps: Right\n");
+        write_marking_addon(&home, "Right", "## OptionalDeps: Left\n");
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let failures = load_third_party(&mut script, None, &[], true);
+
+        assert!(failures.is_empty(), "no failure to report: {failures:?}");
+        assert_eq!(string(&script, "Order").as_deref(), Some("Right,Left,"));
+        assert_eq!(
+            script
+                .eval::<(i64, i64)>("return Self_Left, Self_Right")
+                .ok(),
+            Some((1, 1))
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// A required dependency the gate refuses blocks its dependent before anything of it runs
+    /// (`AddOn_CanLoad`'s dependency pass, `0x51e8a3`-`0x51e8ec`), so its optional dependencies
+    /// are not pulled in by it either.
+    #[test]
+    fn a_blocked_addon_loads_nothing_on_the_way() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("walk-blocked");
+        write_marking_addon(
+            &home,
+            "Needs",
+            "## OptionalDeps: Extra\n## Dependencies: Ghost\n",
+        );
+        write_marking_addon(&home, "Extra", "## LoadOnDemand: 1\n");
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let failures = load_third_party(&mut script, None, &[], true);
+
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(!is_loaded(&script, "Needs") && !is_loaded(&script, "Extra"));
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 

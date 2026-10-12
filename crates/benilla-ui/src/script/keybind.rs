@@ -321,7 +321,7 @@ impl super::UiScript {
 
     /// Register one addon's parsed `Bindings.xml`, at the reference's point in the addon load:
     /// after its `.toc` files, before its saved variables (`0x51f443`).
-    pub fn register_addon_bindings(&mut self, addon: &str, bindings: &[Binding]) {
+    pub fn register_addon_bindings(&self, addon: &str, bindings: &[Binding]) {
         self.model_mut().keybinds.register(Some(addon), bindings);
     }
 
@@ -760,7 +760,7 @@ mod tests {
 
     #[test]
     fn an_addons_bindings_xml_registers_as_ordinary_rows() {
-        let mut s = script();
+        let s = script();
         let parsed = parse(
             r#"<Bindings>
                 <Binding name="PROBEHOLD" runOnUp="true" header="PROBE">
@@ -849,7 +849,7 @@ mod tests {
     /// stock `platform="mac"` iTunes rows are never commands.
     #[test]
     fn a_binding_for_another_platform_does_not_register() {
-        let mut s = script();
+        let s = script();
         let parsed = parse(
             r#"<Bindings>
                 <Binding name="PROBEHERE" platform="Windows">Here();</Binding>

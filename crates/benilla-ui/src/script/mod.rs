@@ -163,7 +163,7 @@ mod worn_display;
 mod zone_text;
 
 pub use action::{ActionSlot, ActionState, ActionUse};
-pub use addon::{addon_load_context, AddOnInfo};
+pub use addon::{addon_load_context, AddOnInfo, AddonLoad};
 pub use addon_enable::EnableHash;
 pub use addon_message::{AddonDistribution, AddonSend};
 pub use auction::{
