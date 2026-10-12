@@ -2063,10 +2063,22 @@ mod extract_gate_tests {
         script
             .run(
                 r#"
-            local scene = CreateFrame("ModelFFX", "Scene")
+            local holder = CreateFrame("Frame", "Holder")
+            holder:SetPoint("TOPLEFT", 0, 0); holder:SetWidth(1024); holder:SetHeight(768)
+            holder:SetAlpha(0.5)
+            local scene = CreateFrame("ModelFFX", "Scene", holder)
             scene:SetPoint("TOPLEFT", 100, -50)
             scene:SetWidth(400); scene:SetHeight(300)
-            scene:SetModel("Interface\Glues\Models\UI_Orc\UI_Orc.mdx")
+            scene:SetModel("Interface\\Glues\\Models\\UI_Orc\\UI_Orc.mdx")
+            scene:SetAlpha(0.8)
+            local art = scene:CreateTexture(nil, "ARTWORK")
+            art:SetAllPoints(scene); art:SetTexture(1, 0, 0)
+            local over = scene:CreateTexture(nil, "OVERLAY")
+            over:SetAllPoints(scene); over:SetTexture(0, 1, 0)
+            local child = CreateFrame("Frame", "Child", scene)
+            child:SetAllPoints(scene)
+            local under = child:CreateTexture(nil, "BACKGROUND")
+            under:SetAllPoints(child); under:SetTexture(0, 0, 1)
             local plain = CreateFrame("Model", "Plain")
             plain:SetPoint("TOPLEFT", 600, -50)
             plain:SetWidth(64); plain:SetHeight(64)
@@ -2102,6 +2114,28 @@ mod extract_gate_tests {
         assert_eq!(scene.len(), 1, "the pane draws the glue booth's image once");
         let q = scene[0];
         assert!(q.premultiplied);
+        // The widget's own alpha (`0x76d120`); `SetAlpha` writes the raw value down the subtree
+        // with no product, so the holder's earlier 0.5 is gone.
+        assert!((q.color[3] - 0.8).abs() < 1e-3, "{:?}", q.color);
+        // The ARTWORK callback of the pane's own bucket: after its ARTWORK regions, before its
+        // OVERLAY ones and every child frame's (`0x46fa90`, layer 2).
+        let z_of = |rgb: [f32; 3]| {
+            quads
+                .iter()
+                .find(|q| q.texture.is_none() && q.color[..3] == rgb)
+                .map(|q| q.z_key)
+                .expect("the region drew")
+        };
+        let (art, over, child) = (
+            z_of([1.0, 0.0, 0.0]),
+            z_of([0.0, 1.0, 0.0]),
+            z_of([0.0, 0.0, 1.0]),
+        );
+        assert!(
+            art < q.z_key && q.z_key < over && over < child,
+            "{art} {} {over} {child}",
+            q.z_key
+        );
         assert!(q.rect.width() > 0.0 && q.rect.height() > 0.0);
         let (w, h) = (1024.0, 768.0);
         assert!(

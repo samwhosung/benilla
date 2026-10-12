@@ -507,6 +507,125 @@ pub(crate) mod schedule_tests {
         c.systems.values().any(|s| s.name.contains("benilla_app::"))
     }
 
+    /// The systems of one schedule whose declared access writes the resource `T`, each with every
+    /// run condition on it or on a set it is under, by name.
+    fn resource_writers<T: Resource>(
+        app: &mut App,
+        label: impl ScheduleLabel,
+    ) -> Vec<(String, Vec<String>)> {
+        app.world_mut()
+            .schedule_scope(label.intern(), |world, schedule| {
+                schedule.graph_mut().systems.initialize(world);
+                let Some(id) = world.components().get_resource_id(TypeId::of::<T>()) else {
+                    return Vec::new();
+                };
+                let graph = schedule.graph();
+                let mut out = Vec::new();
+                for (key, system, conds) in graph.systems.iter() {
+                    let writes = graph
+                        .systems
+                        .get(key)
+                        .is_some_and(|s| s.access.combined_access().has_resource_write(id));
+                    if !writes {
+                        continue;
+                    }
+                    let mut conditions: Vec<String> = conds
+                        .iter()
+                        .map(|c| c.condition.name().to_string())
+                        .collect();
+                    let mut stack = vec![NodeId::System(key)];
+                    while let Some(node) = stack.pop() {
+                        for parent in graph
+                            .hierarchy()
+                            .graph()
+                            .neighbors_directed(node, Direction::Incoming)
+                        {
+                            if let NodeId::Set(set) = parent {
+                                if let Some((_, set_conds)) = graph
+                                    .system_sets
+                                    .iter()
+                                    .find(|(k, _, _)| *k == set)
+                                    .map(|(_, s, c)| (s, c))
+                                {
+                                    conditions.extend(
+                                        set_conds.iter().map(|c| c.condition.name().to_string()),
+                                    );
+                                }
+                                stack.push(parent);
+                            }
+                        }
+                    }
+                    out.push((system.name().to_string(), conditions));
+                }
+                out
+            })
+    }
+
+    /// The glue booth has one feeder per switch: under `WOW_GLUE_STOCK=1` only the glue VM's
+    /// writes `GluePreview`, and off it only the native screens' do. A writer of neither kind is
+    /// named here with why it cannot run against the other.
+    #[test]
+    fn the_glue_preview_has_one_feeder_per_switch() {
+        use crate::char_select::ClientState;
+        // The create screen's state, which only the native select screen enters, and its
+        // instrument.
+        const EITHER: [&str; 2] = ["benilla_app::char_create::", "drive_create_test"];
+        let mut app = headless_client();
+        let mut writers = Vec::new();
+        writers.extend(resource_writers::<crate::portrait::GluePreview>(
+            &mut app, Update,
+        ));
+        for state in [ClientState::Login, ClientState::CharSelect] {
+            writers.extend(resource_writers::<crate::portrait::GluePreview>(
+                &mut app,
+                OnEnter(state),
+            ));
+            writers.extend(resource_writers::<crate::portrait::GluePreview>(
+                &mut app,
+                OnExit(state),
+            ));
+        }
+        if !writers.iter().any(|(n, _)| n.contains("benilla_app::")) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let has = |conds: &[String], c: &str| conds.iter().any(|n| n.ends_with(c));
+        let mut stock = Vec::new();
+        let mut native = Vec::new();
+        let mut neither = Vec::new();
+        for (name, conds) in &writers {
+            match (has(conds, "::stock_glue"), has(conds, "::native_glue")) {
+                (true, false) => stock.push(name.as_str()),
+                (false, true) => native.push(name.as_str()),
+                _ if EITHER.iter().any(|e| name.contains(e)) => {}
+                _ => neither.push(name.as_str()),
+            }
+        }
+        assert!(
+            neither.is_empty(),
+            "GluePreview writers on neither switch: {neither:?}"
+        );
+        assert_eq!(
+            stock,
+            ["benilla_app::ui_script::glue_scene::feed_stock_glue_preview"],
+            "the stock screens' one feeder"
+        );
+        for want in [
+            "benilla_app::char_select::refresh::feed_glue_preview",
+            "benilla_app::login::show_main_menu",
+            "benilla_app::login::screen::clear_login_scene",
+            "benilla_app::char_select::screen::enter_select",
+            "benilla_app::char_select::screen::clear_select_scene",
+        ] {
+            assert!(
+                native.contains(&want),
+                "{want} is not gated to the native screens: {native:?}"
+            );
+        }
+    }
+
     /// One row of the class table: the type's name for the message, and its `TypeId`.
     type ClassRow = (&'static str, fn() -> TypeId);
 
