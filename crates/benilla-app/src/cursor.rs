@@ -6,6 +6,9 @@
 //! continuously redrawing Metal view, so this builds an `NSCursor` per mode, disables the window's
 //! cursor rects and sets the cursor directly; mouselook uses `NSCursor::hide`/`unhide`. Elsewhere
 //! winit's `CursorIcon::Custom` works and hide-on-look is `CursorOptions.visible`.
+//!
+//! The pointer hides for three callers of the device's `0x58b590(0)`: mouselook, a cinematic, and
+//! the glue's `HideCursor` (the credits and the movie frame), read here as [`GluePointerHidden`].
 
 use benilla_assets::AssetSet;
 use bevy::prelude::*;
@@ -126,6 +129,42 @@ fn cursor_path(stem: &str) -> String {
     format!("Interface\\Cursor\\{stem}.blp")
 }
 
+/// Whether the glue's `HideCursor` has the pointer hidden and `ShowCursor` has not put it back
+/// (`0x46db70`/`0x46db60`, the device's `0x58b590`). Mouselook and a cinematic hide the same
+/// pointer on their own paths.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct GluePointerHidden(pub(crate) bool);
+
+/// Read the glue VM's pointer flag. No VM, or the in-game one, is no hide: the glue verbs do not
+/// exist once the world is entered (`0x46de20` unregisters the table), so nothing can show it
+/// again.
+fn read_glue_pointer(
+    script: Option<NonSend<benilla_ui::script::UiScript>>,
+    mut hidden: ResMut<GluePointerHidden>,
+) {
+    let now = script.is_some_and(|s| s.glue_cursor_hidden());
+    if hidden.0 != now {
+        hidden.0 = now;
+    }
+}
+
+/// `CursorOptions.visible` for a caller that hides the pointer while `hidden` holds, given
+/// whether it hid the pointer itself (`ours`) and what `visible` is now: the value to write, or
+/// `None` to leave it. It puts back only what it took, and writes only on a real change:
+/// `bevy_winit` re-applies `CursorOptions` to AppKit on every change, which can stall the main
+/// thread.
+pub(crate) fn pointer_visibility(hidden: bool, ours: &mut bool, visible: bool) -> Option<bool> {
+    if hidden && visible {
+        *ours = true;
+        Some(false)
+    } else if !hidden && *ours {
+        *ours = false;
+        (!visible).then_some(true)
+    } else {
+        None
+    }
+}
+
 /// The displayed cursor, the client's one sticky mode cell `0xbe2c2c`;
 /// [`crate::target::WorldCursor`] is one of its two writers.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -235,12 +274,13 @@ pub(crate) struct CursorPlugin;
 
 impl Plugin for CursorPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DisplayedCursor>();
+        app.init_resource::<DisplayedCursor>()
+            .init_resource::<GluePointerHidden>();
         #[cfg(target_os = "macos")]
         app.add_systems(Startup, macos::setup.after(AssetSet::Open))
             .add_systems(
                 Update,
-                (drive_displayed_cursor, macos::drive)
+                (read_glue_pointer, drive_displayed_cursor, macos::drive)
                     .chain()
                     // After the tick: a FrameXML `SetCursor` made this frame is read here.
                     .after(crate::ui_script::UiInput),
@@ -250,7 +290,12 @@ impl Plugin for CursorPlugin {
             .add_systems(Startup, other::setup.after(AssetSet::Open))
             .add_systems(
                 Update,
-                (drive_displayed_cursor, other::drive)
+                (
+                    read_glue_pointer,
+                    drive_displayed_cursor,
+                    other::drive,
+                    other::drive_glue_hide,
+                )
                     .chain()
                     // After the tick: a FrameXML `SetCursor` made this frame is read here.
                     .after(crate::ui_script::UiInput),
@@ -363,6 +408,19 @@ mod other {
         *last_set = Some(stem);
     }
 
+    /// The glue's `HideCursor`/`ShowCursor` on the window's pointer.
+    pub(super) fn drive_glue_hide(
+        hidden: Res<super::GluePointerHidden>,
+        mut cursor: Query<&mut bevy::window::CursorOptions, With<PrimaryWindow>>,
+        mut ours: Local<bool>,
+    ) {
+        if let Ok(mut opts) = cursor.single_mut() {
+            if let Some(visible) = super::pointer_visibility(hidden.0, &mut ours, opts.visible) {
+                opts.visible = visible;
+            }
+        }
+    }
+
     /// Insert a custom cursor with hotspot `(0, 0)`, the vanilla cursors' top-left tip.
     fn set_custom_cursor(commands: &mut Commands, window: Entity, handle: Handle<Image>) {
         commands
@@ -442,6 +500,7 @@ mod macos {
         screen: Res<crate::loading_screen::LoadingScreen>,
         rig: Res<CameraControl>,
         cinematic: Option<Res<crate::cinematic::Cinematic>>,
+        glue_hidden: Res<super::GluePointerHidden>,
         mut focus: MessageReader<bevy::window::WindowFocused>,
         // The `Local`s below remember OS state, which outlives the VM, so none is a
         // [`crate::ui_script::VmMemo`].
@@ -481,9 +540,11 @@ mod macos {
                 }
             }
         }
-        // A cinematic hides the pointer too (`0x58b590`); `CursorOptions.visible` is inert here, so
-        // it joins the look's hide/unhide pair, keeping AppKit's hide counter balanced.
-        let looking = rig.holds_cursor() || cinematic.is_some_and(|c| c.is_playing());
+        // A cinematic and the glue's `HideCursor` hide the pointer too (`0x58b590`);
+        // `CursorOptions.visible` is inert here, so they join the look's hide/unhide pair, keeping
+        // AppKit's hide counter balanced.
+        let looking =
+            rig.holds_cursor() || cinematic.is_some_and(|c| c.is_playing()) || glue_hidden.0;
         let stem = mode.0.stem();
         // The key names the chosen cursor, so `NSCursor::set`, a WindowServer round-trip that can
         // stall the main thread for milliseconds, fires only on a change or a drift.
@@ -625,6 +686,57 @@ mod tests {
             .run_system_once(drive_displayed_cursor)
             .expect("the displayed cursor drives");
         app.world().resource::<DisplayedCursor>().0
+    }
+
+    /// One frame of [`read_glue_pointer`] over a glue VM that ran `lua`.
+    fn glue_pointer_after(lua: &str) -> bool {
+        let mut app = App::new();
+        let script = benilla_ui::script::UiScript::new_glue().unwrap();
+        script.run(lua).unwrap();
+        app.insert_non_send_resource(script);
+        app.init_resource::<GluePointerHidden>();
+        app.world_mut()
+            .run_system_once(read_glue_pointer)
+            .expect("the glue pointer flag is read");
+        app.world().resource::<GluePointerHidden>().0
+    }
+
+    /// `0x46db70`/`0x46db60` reach the cursor driver: the credits frame's `HideCursor()` hides
+    /// the pointer until its OnHide `ShowCursor()`.
+    #[test]
+    fn the_glue_hide_cursor_verb_reaches_the_driver() {
+        assert!(!glue_pointer_after(""));
+        assert!(glue_pointer_after("HideCursor()"));
+        assert!(!glue_pointer_after("HideCursor() ShowCursor()"));
+        assert!(glue_pointer_after("HideCursor() ShowCursor() HideCursor()"));
+    }
+
+    /// Without a VM the flag reads down.
+    #[test]
+    fn no_vm_is_no_glue_hide() {
+        let mut app = App::new();
+        app.insert_resource(GluePointerHidden(true));
+        app.world_mut()
+            .run_system_once(read_glue_pointer)
+            .expect("the glue pointer flag is read");
+        assert!(!app.world().resource::<GluePointerHidden>().0);
+    }
+
+    /// A caller puts back only the hide it made, and writes nothing when nothing changes.
+    #[test]
+    fn a_pointer_hide_is_put_back_only_by_its_owner() {
+        let mut ours = false;
+        assert_eq!(pointer_visibility(false, &mut ours, true), None);
+        assert_eq!(pointer_visibility(true, &mut ours, true), Some(false));
+        assert!(ours);
+        assert_eq!(pointer_visibility(true, &mut ours, false), None);
+        assert_eq!(pointer_visibility(false, &mut ours, false), Some(true));
+        assert!(!ours);
+        assert_eq!(pointer_visibility(false, &mut ours, true), None);
+        // Another caller already holds the pointer hidden: not ours to show.
+        assert_eq!(pointer_visibility(true, &mut ours, false), None);
+        assert!(!ours);
+        assert_eq!(pointer_visibility(false, &mut ours, false), None);
     }
 
     /// The reference parks cursor index 1 before the loading screen goes up (`0x6e49f5`).

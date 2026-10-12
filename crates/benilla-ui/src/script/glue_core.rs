@@ -515,8 +515,9 @@ pub(crate) struct GlueCore {
     /// `0x46b860`) copies into a 0x40-byte buffer.
     pub(super) screen: String,
     /// `HideCursor` / `ShowCursor` (`0x46db70`/`0x46db60`, the device's `0x58b590`): whether the
-    /// glue has the pointer hidden. Nothing in the host reads it yet: the one caller, the movie
-    /// frame, hides the pointer for a movie that plays here for no frame at all.
+    /// glue has the pointer hidden. The host feeds it to the cursor driver. Its callers are the
+    /// credits frame (`CreditsFrame.lua:75`, `CreditsFrame.xml:456`) and the movie frame
+    /// (`MovieFrame.lua:36`, `:49`).
     cursor_hidden: bool,
     /// The realm list the realm verbs read ([`super::glue_realm`]).
     pub(super) realms: super::glue_realm::GlueRealmList,

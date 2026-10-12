@@ -211,18 +211,12 @@ fn drive_letterbox(
     // `area = "full"` routes to `SetFullScreenFrame`, which hides `UIParent`.
 
     // The hardware cursor hides at StartCinematic and returns at EndCinematic and the leave-world
-    // teardown (`0x58b590(0)`/`(1)`); nothing else hides it while the view is detached. Written
-    // only on a real change: `bevy_winit` re-applies `CursorOptions` to AppKit on every change,
-    // which can stall the main thread.
+    // teardown (`0x58b590(0)`/`(1)`); nothing else hides it while the view is detached.
     if let Ok(mut opts) = cursor.single_mut() {
-        if playing && opts.visible {
-            opts.visible = false;
-            ours.cursor = true;
-        } else if !playing && ours.cursor {
-            ours.cursor = false;
-            if !opts.visible {
-                opts.visible = true;
-            }
+        if let Some(visible) =
+            crate::cursor::pointer_visibility(playing, &mut ours.cursor, opts.visible)
+        {
+            opts.visible = visible;
         }
     }
 
