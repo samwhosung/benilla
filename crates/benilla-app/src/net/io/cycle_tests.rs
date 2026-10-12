@@ -529,3 +529,32 @@ fn only_the_native_policy_re_enumerates_after_a_create() {
     ));
     assert_eq!(world.enumerations(), 0);
 }
+
+/// The character every entry picks.
+const GUID: u64 = 0x2a;
+
+/// `EnterWorld` closes the realmd link (`CLoginMgr::Cancel`, `0x46b70c` → `0x5b3320`); it stays up
+/// at character select until then.
+#[test]
+fn entering_the_world_closes_the_realmd_link() {
+    let (realmd, _world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_roster(&cycles.events),
+        SessionEvent::CharacterList { .. }
+    ));
+    assert_eq!(
+        realmd.open(),
+        1,
+        "the realmd link is up at character select"
+    );
+    cycles.pick.send(CharRequest::Enter(GUID)).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::Connected { .. }
+    ));
+    wait_until(|| realmd.open() == 0, "the entry closes the realmd link");
+}

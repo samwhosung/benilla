@@ -161,6 +161,12 @@ impl Logon {
     pub fn realmd_live(&self) -> bool {
         self.stream.is_some()
     }
+
+    /// `CLoginMgr::Cancel` (`0x5b3320`): the realmd socket closes; the session key and the last
+    /// list are kept.
+    pub fn close(&mut self) {
+        self.stream = None;
+    }
 }
 
 /// The full SRP6 logon against a vanilla `realmd`, then the realm list.

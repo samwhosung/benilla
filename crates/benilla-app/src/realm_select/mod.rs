@@ -15,8 +15,8 @@
 //! 5. Otherwise the dialog.
 //!
 //! Change Realm costs a world dial, not a login. `RequestRealmList` (`0x46ecf0` -> `0x46b8d0`)
-//! begins a realm query on the realmd socket, which stays open until world entry (`0x46b70c`), and
-//! names no screen; only `ConnectToRealm` (`0x46b210`) drops the world connection, once a realm is
+//! begins a realm query on the realmd socket, which stays open until world entry (`0x46b70c`) and
+//! is dialled again for a query after it (`0x5b2200`), and names no screen; only `ConnectToRealm` (`0x46b210`) drops the world connection, once a realm is
 //! chosen. So the character park serves the list in place and Cancel there does nothing.
 //!
 //! Under `WOW_GLUE_STOCK=1` the stock `RealmList` and its verbs take the list instead

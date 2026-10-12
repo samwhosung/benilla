@@ -515,7 +515,8 @@ pub(crate) enum RealmRequest {
     /// credentials. At character select, where `RealmListDialogCancelled` is a no-op, nothing.
     Close,
     /// `ConnectToRealm` with the world up (`0x46b22b` → `0x5ab1a0`): the session at character
-    /// select drops and the thread returns to the logon park, realmd still up. Elsewhere, nothing.
+    /// select drops and the thread returns to the logon park, the realmd link as it was (closed
+    /// since a world entry). Elsewhere, nothing.
     Leave,
 }
 

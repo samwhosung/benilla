@@ -3,13 +3,14 @@
 //! [`spawn_net`]'s read thread parks pre-logon for a [`LoginRequest`], logs on to realmd, then
 //! holds the realmd link at the logon park, serving realm list queries, until the app names a realm
 //! or closes the logon; a world attempt that fails returns there. Past the world handshake it
-//! parks at character select until the app picks a guid; a new login supersedes either park. The pick sends
-//! `CMSG_PLAYER_LOGIN` and announces the connection without waiting for the verdict, as the
-//! reference's world is already loading when it sends the login (`0x46c272`), so the destination's
-//! tiles stream a round trip early; a later `SMSG_CHARACTER_LOGIN_FAILED` ends the cycle like a
-//! logout ([`Cycle::LoginRefused`]). A stream failure emits
-//! [`SessionEvent::Disconnected`] with [`SessionEnd::Lost`] and re-parks. All policy lives in
-//! [`crate::login`] and [`crate::char_select`]; this thread only sequences and never sleeps.
+//! parks at character select until the app picks a guid; a new login supersedes either park. The
+//! pick closes the realmd link (`0x46b70c`), sends `CMSG_PLAYER_LOGIN` and announces the connection
+//! without waiting for the verdict, as the reference's world is already loading when it sends the
+//! login (`0x46c272`), so the destination's tiles stream a round trip early; a later
+//! `SMSG_CHARACTER_LOGIN_FAILED` ends the cycle like a logout ([`Cycle::LoginRefused`]). A stream
+//! failure emits [`SessionEvent::Disconnected`] with [`SessionEnd::Lost`] and re-parks. All policy
+//! lives in [`crate::login`] and [`crate::char_select`]; this thread only sequences and never
+//! sleeps.
 //!
 //! One long-lived write thread drains [`ClientCommand`](super::ClientCommand)s; each connection
 //! hands it the fresh [`WorldWriter`] over a swap channel, so there is only ever one writer.
@@ -336,9 +337,10 @@ enum WorldEnd {
     /// The cycle is over.
     Cycle(Cycle),
     /// It failed before the roster, reported, or was cancelled, or Change Realm left the session at
-    /// character select: the logon park resumes with the realmd link up, as the reference's
-    /// state-2 failure arm (`0x46bea7`-`0x46bf96`) and `ConnectToRealm`'s disconnect (`0x46b22b`)
-    /// drop only the world socket.
+    /// character select: the logon park resumes with the realmd link as it stands, as the
+    /// reference's state-2 failure arm (`0x46bea7`-`0x46bf96`) and `ConnectToRealm`'s disconnect
+    /// (`0x46b22b`) drop only the world socket. Closed since a world entry, it is dialled again by
+    /// the next query ([`query`]).
     Failed,
     /// A new login superseded the session at character select.
     Login(LoginRequest),
@@ -416,9 +418,9 @@ fn login_park(parks: &Parks, events_tx: &Sender<SessionEvent>) -> Option<LoginRe
     }
 }
 
-/// The logon park: the realmd link is up and the list published. Waits for the app's realm,
-/// answering list queries in place on the link (`RequestRealmList`, `0x5ab840`); a new login
-/// supersedes it and a close ends it.
+/// The logon park: the realmd link is up, or closed since a world entry, and the list published.
+/// Waits for the app's realm, answering list queries on the link (`RequestRealmList`, `0x5ab840`);
+/// a new login supersedes it and a close ends it.
 fn logon_park(
     logon: &mut benilla_protocol::Logon,
     req: &LoginRequest,
@@ -747,8 +749,9 @@ fn world(
             let answer = crossbeam_channel::select! {
                 recv(park_rx) -> msg => match msg {
                     Err(_) => Parked::Exit,
-                    // `RequestRealmList`: a query on the realmd link this cycle holds, then the
-                    // list; also Change Realm's first list.
+                    // `RequestRealmList`: a query on the realmd link, dialled again once Enter
+                    // World has closed it (`0x5b2200`), then the list; also Change Realm's first
+                    // list.
                     Ok(ParkRequest::Realm(RealmRequest::Refresh)) => {
                         if query(logon, req, events_tx) {
                             Parked::StayPut
@@ -858,6 +861,10 @@ fn world(
             .find(|c| c.guid == guid)
             .map(|c| c.name.clone())
             .unwrap_or_default();
+        // `EnterWorld` closes the realmd link (`CLoginMgr::Cancel`, `0x46b70c` → `0x5b3320`) and
+        // nothing in the world reopens it; back at the park, a realm list query dials it again
+        // ([`query`]).
+        logon.close();
         // No `CMSG_SET_ACTIVE_MOVER` here: it waits for our own player's create, as the
         // reference's does (`super::enter_world_on_self_create`); a server may drop it before then.
         session.player_login(refuse_once(guid))?;
