@@ -15,6 +15,22 @@ use bevy::ui::FocusPolicy;
 use art::{tc_rect, GlueArt, BTN_BG, BTN_HOVER, BUTTON_TC, GOLD};
 use widgets::{ArtSwap, GlueBtn, GlueCaption, GlueDisabled, OutlineCopy};
 
+/// The root of a native glue screen or dialog, which [`hide_native_glue`] keeps hidden while the
+/// stock glue screens stand in its place.
+#[derive(Component)]
+pub(crate) struct NativeGlue;
+
+/// Under `WOW_GLUE_STOCK=1`, keep every native glue tree hidden, after any screen system shows one
+/// and before visibility propagates: their state machine still drives the network, unseen, and a
+/// hidden node takes no click.
+pub(crate) fn hide_native_glue(mut roots: Query<&mut Visibility, With<NativeGlue>>) {
+    for mut v in &mut roots {
+        if *v != Visibility::Hidden {
+            *v = Visibility::Hidden;
+        }
+    }
+}
+
 /// The glue widgets' look passes, registered once for every glue screen.
 ///
 /// A screen orders its own refresh `.before(GlueVisuals)` so the flags and captions it writes
@@ -49,6 +65,12 @@ impl Plugin for GluePlugin {
             .add_systems(
                 PostUpdate,
                 fit_glue_canvas.before(bevy::ui::UiSystems::Layout),
+            )
+            .add_systems(
+                PostUpdate,
+                hide_native_glue
+                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                    .run_if(not(crate::ui_script::glue::native_glue)),
             )
             .add_systems(
                 Update,

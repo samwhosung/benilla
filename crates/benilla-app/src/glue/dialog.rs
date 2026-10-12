@@ -196,6 +196,7 @@ pub(crate) fn spawn_dialog(
     let (caption, caption2) = kind.buttons(strings);
     commands
         .spawn((
+            super::NativeGlue,
             GlobalZIndex(1200), // over the screen's 1100
             Node {
                 width: Val::Percent(100.0),

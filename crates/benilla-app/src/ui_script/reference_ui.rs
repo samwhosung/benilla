@@ -47,9 +47,29 @@ pub(super) fn core() -> Option<Addon> {
 /// order, as the runner builds its paths (`0x6edbe5`, `0x6edcf4`, `0x6edd0c`) and dispatches each
 /// in turn (`0x6edd51`).
 pub(super) fn core_from(toc: &str) -> Addon {
-    let dir = TOC.rsplit_once('\\').map_or("", |(d, _)| d);
-    addon(
-        Toc::parse(toc)
+    toc_addon(NAME, TOC, toc)
+}
+
+/// The glue screens' table of contents, which the glue builder (`0x46a7b0`) hands to the same
+/// `.toc` runner (`0x6edb90`) at `0x46a9b3`, once per glue build.
+pub(super) const GLUE_TOC: &str = r"Interface\GlueXML\GlueXML.toc";
+
+/// The name the stock glue files load under, as [`NAME`] is the in-game core's.
+pub(super) const GLUE_NAME: &str = "GlueXML";
+
+/// The glue screens' interface: the chain's own [`GLUE_TOC`] as an [`Addon`] over the chain, or
+/// `None` when the chain has no such file.
+pub(super) fn glue() -> Option<Addon> {
+    read(GLUE_TOC).map(|bytes| toc_addon(GLUE_NAME, GLUE_TOC, &benilla_ui::source::decode(&bytes)))
+}
+
+/// The interface `toc_text` lists, the `.toc` at chain path `toc_path`: its rows under the toc's
+/// own directory, in its order.
+fn toc_addon(name: &str, toc_path: &str, toc_text: &str) -> Addon {
+    let dir = toc_path.rsplit_once('\\').map_or("", |(d, _)| d);
+    named_addon(
+        name,
+        Toc::parse(toc_text)
             .files
             .iter()
             .map(|f| format!("{dir}\\{f}"))
@@ -58,9 +78,15 @@ pub(super) fn core_from(toc: &str) -> Addon {
 }
 
 /// The stock interface as an [`Addon`] over the chain; `files` are full chain paths.
+#[cfg(test)]
 pub(super) fn addon(files: Vec<String>) -> Addon {
+    named_addon(NAME, files)
+}
+
+/// [`addon`] under `name`.
+fn named_addon(name: &str, files: Vec<String>) -> Addon {
     Addon::new(
-        NAME.to_string(),
+        name.to_string(),
         Toc {
             directives: Vec::new(),
             files,

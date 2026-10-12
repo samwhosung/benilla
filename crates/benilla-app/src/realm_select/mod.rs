@@ -295,7 +295,8 @@ impl Plugin for RealmSelectPlugin {
                     (
                         (input::clicks, input::keys)
                             .chain()
-                            .run_if(|realms: Res<Realms>| realms.owns_input()),
+                            .run_if(|realms: Res<Realms>| realms.owns_input())
+                            .run_if(crate::ui_script::glue::native_glue),
                         (tick_refresh, screen::refresh_list)
                             .chain()
                             .run_if(|realms: Res<Realms>| realms.shown),

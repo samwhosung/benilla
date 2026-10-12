@@ -141,6 +141,7 @@ fn spawn_screen(
 
     let root = commands
         .spawn((
+            crate::glue::NativeGlue,
             LoginUi {
                 with_art: art.button_up.is_some(),
                 s,

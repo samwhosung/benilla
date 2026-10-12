@@ -48,11 +48,11 @@ impl Plugin for CharCreatePlugin {
                 Update,
                 (
                     screen::rescale_screen,
-                    create_input,
+                    create_input.run_if(crate::ui_script::glue::native_glue),
                     debug_auto_create,
                     debug_pick,
                     debug_shot,
-                    rotate_model,
+                    rotate_model.run_if(crate::ui_script::glue::native_glue),
                     refresh::refresh_dynamic,
                     refresh_name_box,
                     refresh::refresh_hover,

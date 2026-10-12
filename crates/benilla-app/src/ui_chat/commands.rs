@@ -280,15 +280,26 @@ pub(crate) fn register_dev_commands(script: &benilla_ui::script::UiScript, dev: 
     }
 }
 
-/// Build the table in `PostStartup`, after `Startup` has inserted the VM and the emote catalog.
-pub(crate) fn build_slash_commands(
-    mut commands: Commands,
-    script: Option<NonSend<benilla_ui::script::UiScript>>,
-    emotes: Option<Res<crate::sound::EmoteSounds>>,
-) {
+/// Build the table in `PostStartup`, after `Startup` has inserted the VM and the emote catalog,
+/// off the boot VM's `GlobalStrings.lua` and emote tokens. Where the stock glue screens hold the
+/// world instead, their VM has neither, so a boot VM's contents are built for this read alone
+/// ([`crate::ui_script::strings_vm`]).
+pub(crate) fn build_slash_commands(world: &mut World) {
+    let glue_side = world
+        .get_non_send_resource::<benilla_ui::script::UiScript>()
+        .is_some_and(|s| s.vm_kind() == benilla_ui::script::VmKind::Glue);
+    let own = if glue_side {
+        crate::ui_script::strings_vm(world)
+    } else {
+        None
+    };
+    let script = own
+        .as_ref()
+        .or_else(|| world.get_non_send_resource::<benilla_ui::script::UiScript>());
+    let emotes = world.get_resource::<crate::sound::EmoteSounds>();
     let (Some(script), Some(emotes)) = (script, emotes) else {
         warn!("chat: no UI VM or emote catalog — the slash-command table is EMPTY");
-        commands.insert_resource(SlashCommands::default());
+        world.insert_resource(SlashCommands::default());
         return;
     };
     let globals = script.lua().globals();
@@ -305,5 +316,5 @@ pub(crate) fn build_slash_commands(
     if emote == 0 {
         error!("chat: NO emote aliases — every /wave-style command is dead (GlobalStrings?)");
     }
-    commands.insert_resource(table);
+    world.insert_resource(table);
 }

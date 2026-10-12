@@ -637,8 +637,10 @@ pub(crate) mod schedule_tests {
     }
 
     /// `PostUpdate`'s undeclared-order pairs on the declared graph; `GlobalTransform` and the
-    /// particle `EffectQuads` are most of it.
-    const POST_UPDATE_CEILING: usize = 371;
+    /// particle `EffectQuads` are most of it. Six are `glue::hide_native_glue`'s `Visibility`
+    /// against the world's and the fade cover's writers, populations it never shares an entity
+    /// with (the native glue roots alone).
+    const POST_UPDATE_CEILING: usize = 377;
     const POST_UPDATE_SLACK: usize = 20;
     /// The actionable pairs in `Update`: conflicting access, no declared order, and nothing
     /// [`Classes`] explains, so the executor orders them however the graph falls. The count may

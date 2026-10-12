@@ -101,17 +101,18 @@ impl Plugin for CharSelectPlugin {
                         .chain(),
                     (
                         screen::materialize_screen,
-                        input::select_input,
-                        input::rotate_model,
+                        input::select_input.run_if(crate::ui_script::glue::native_glue),
+                        input::rotate_model.run_if(crate::ui_script::glue::native_glue),
                         debug_select_dialog,
-                        dialog::drive_delete_dialog,
+                        dialog::drive_delete_dialog.run_if(crate::ui_script::glue::native_glue),
                         // Ahead of the dialog driver, so a refused delete shows the frame it lands.
                         delete_result,
                         // The one `GlueDialog`: here, the refused login and the refused delete.
-                        crate::glue::dialog::drive_glue_dialog,
+                        crate::glue::dialog::drive_glue_dialog
+                            .run_if(crate::ui_script::glue::native_glue),
                         debug_select_addons,
                         debug_select_walk,
-                        addons::drive_addons_panel,
+                        addons::drive_addons_panel.run_if(crate::ui_script::glue::native_glue),
                         refresh::refresh_list,
                         refresh::refresh_banner_and_buttons,
                         refresh::feed_glue_preview,

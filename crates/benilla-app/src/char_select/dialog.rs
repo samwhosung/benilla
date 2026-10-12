@@ -223,6 +223,7 @@ fn spawn_dialog(
     commands
         .spawn((
             DialogUi,
+            crate::glue::NativeGlue,
             GlobalZIndex(1200), // over the select screen's 1100
             Node {
                 width: Val::Percent(100.0),

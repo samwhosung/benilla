@@ -63,14 +63,15 @@ impl Plugin for LoginPlugin {
                     (drive_policy, to_select_on_roster, drive_quit).chain(),
                     (
                         screen::materialize_screen,
-                        login_input,
+                        login_input.run_if(crate::ui_script::glue::native_glue),
                         tick_login_caret,
                         screen::refresh_boxes,
                         screen::refresh_checkbox,
                         // The shared glue dialog stays inside this chain: ordering it from outside
                         // would order a shared painter against its own `SystemTypeSet`, which
                         // panics at schedule build, at boot, where no unit test sees it.
-                        crate::glue::dialog::drive_glue_dialog,
+                        crate::glue::dialog::drive_glue_dialog
+                            .run_if(crate::ui_script::glue::native_glue),
                         answer_dialog,
                         // After the driver: it spawns the dialog's edit box, and a realmlist Okay
                         // changes the address repainted here.
