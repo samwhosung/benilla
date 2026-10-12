@@ -18,9 +18,9 @@ pub enum AutoEquip {
     None,
     /// An item from an equipment or equipped-bag slot, put back (`0x5e155a`).
     Back,
-    /// The equip is sent, the item from this Lua `(bag, slot)` cleared off the cursor. A
+    /// The equip is sent, the item `guid` from this Lua `(bag, slot)` cleared off the cursor. A
     /// projectile loads by entry with `CMSG_SET_AMMO`, the app's to tell.
-    Sent { bag: i64, slot: u32 },
+    Sent { bag: i64, slot: u32, guid: u64 },
     /// An unbound bind-on-equip item raised `AUTOEQUIP_BIND_CONFIRM` (`0x5e16c6`) and the call
     /// returned (`0x5e16ce`) with no `ClearCursor`: the item stays on the cursor, with whatever
     /// lock it held, for the question's answer. The app files the record under this `(bag, slot)`
@@ -84,7 +84,7 @@ pub(crate) fn auto_equip_held(model: &mut Model, suppress: bool) -> AutoEquip {
                 Clear::KEEP_LOCK
             };
             clear(model, how);
-            AutoEquip::Sent { bag, slot }
+            AutoEquip::Sent { bag, slot, guid }
         }
         _ => AutoEquip::None,
     }
@@ -95,7 +95,7 @@ pub(crate) fn auto_equip_held(model: &mut Model, suppress: bool) -> AutoEquip {
 /// to repaint.
 pub(crate) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     match auto_equip_held(model, false) {
-        AutoEquip::Sent { bag, slot } => {
+        AutoEquip::Sent { bag, slot, .. } => {
             model.container_autoequips.push((bag, slot));
             true
         }
@@ -108,11 +108,24 @@ pub(crate) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     }
 }
 
+/// `SetCursorItem`'s control gate (`0x494b8d`): without control of the character
+/// (`[0xb4b3e4]`, `SMSG_CLIENT_CONTROL_UPDATE`) the set returns before its clear, unless the
+/// player is on a taxi (`UNIT_FLAG_TAXI_FLIGHT`). The UseContainerItem equip arm tests the same
+/// pair first (`0x4fa3ce`-`0x4fa3ec`).
+pub(crate) fn has_cursor_control(model: &Model) -> bool {
+    model.player_control || model.taxi_riding
+}
+
 /// `0x5e1840`: `SetCursorItem(1, …)` puts the item on the cursor, its inner clear dropping and
 /// unlocking whatever is held (`0x494bb6`), then `AutoEquipCursorItem(suppress)`. The item is not
-/// locked.
+/// locked. A refused set (no control, not on a taxi) clears and sets nothing, and
+/// `AutoEquipCursorItem` runs all the same (`0x5e18c9` falls through to `0x5e18d5` with no test),
+/// on whatever the cursor holds.
 pub(crate) fn auto_equip_from(lua: &Lua, item: CursorItem, suppress: bool) -> AutoEquip {
-    set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
+    let control = has_cursor_control(&lua.app_data_ref::<Model>().expect("model app_data"));
+    if control {
+        set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
+    }
     verb(lua, |model| auto_equip_held(model, suppress))
 }
 
@@ -207,7 +220,11 @@ mod tests {
 
         assert_eq!(
             s.auto_equip_guid(0x12, false),
-            AutoEquip::Sent { bag: 0, slot: 2 }
+            AutoEquip::Sent {
+                bag: 0,
+                slot: 2,
+                guid: 0x12
+            }
         );
         assert!(s.cursor_item().is_none());
         assert!(!s.item_locked(0x11), "the held item went back unlocked");
@@ -227,7 +244,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             s.auto_equip_slot(0, 1, false),
-            AutoEquip::Sent { bag: 0, slot: 1 }
+            AutoEquip::Sent {
+                bag: 0,
+                slot: 1,
+                guid: 0x11
+            }
         );
         assert_eq!(s.eval::<i64>("return SIGNALS").unwrap(), 1);
     }
@@ -386,7 +407,11 @@ mod tests {
 
         assert_eq!(
             s.auto_equip_slot(0, 1, true),
-            AutoEquip::Sent { bag: 0, slot: 1 }
+            AutoEquip::Sent {
+                bag: 0,
+                slot: 1,
+                guid: 0x11
+            }
         );
         assert!(s.cursor_item().is_none());
         assert!(!s.item_locked(0x11), "SetCursorItem's clear unlocked it");

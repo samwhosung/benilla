@@ -1160,4 +1160,71 @@ mod tests {
             "a held item plays no pair; the cursor diff plays its pickup"
         );
     }
+    /// `SetCursorItem` refuses without control of the character (`0x494b8d`, `[0xb4b3e4]` clear
+    /// and no `UNIT_FLAG_TAXI_FLIGHT`) before its clear and its set: the bar's equip puts nothing
+    /// on the cursor and, with it empty, `AutoEquipCursorItem` has nothing to send.
+    #[test]
+    fn a_bar_equip_without_control_does_nothing() {
+        let mut f = frame(false);
+        with_bar_helm(&mut f, 0);
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_player_control(false);
+        run(&mut f, "UseAction(1, 0)");
+        assert_eq!(f.rx.try_iter().count(), 0, "nothing is sent");
+        let script = f.app.world().non_send_resource::<UiScript>();
+        assert!(script.cursor_item().is_none());
+    }
+
+    /// The refused set does not stop `0x5e1840`: `AutoEquipCursorItem` runs on the cursor as it
+    /// stood (`0x5e18c9` falls through to `0x5e18d5`), so a held item is the one sent, the bar's
+    /// never touched.
+    #[test]
+    fn a_refused_bar_set_still_auto_equips_what_is_held() {
+        let mut f = frame(false);
+        with_bar_helm(&mut f, 0);
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_player_control(false);
+        run(&mut f, "PickupContainerItem(0, 1) UseAction(1, 0)");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent[..],
+                [ClientCommand::AutoEquipItem {
+                    bag_index: 255,
+                    slot: 23
+                }]
+            ),
+            "the held item from backpack slot 1 goes, not the helm: {sent:?}"
+        );
+        let script = f.app.world().non_send_resource::<UiScript>();
+        assert!(script.cursor_item().is_none());
+    }
+
+    /// A taxi passenger has no control but passes the gate (`0x494ba6`-`0x494ba9`).
+    #[test]
+    fn a_bar_equip_on_a_taxi_passes_the_control_gate() {
+        let mut f = frame(false);
+        with_bar_helm(&mut f, 0);
+        {
+            let mut script = f.app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_player_control(false);
+            script.set_on_taxi(true);
+        }
+        run(&mut f, "UseAction(1, 0)");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent[..],
+                [ClientCommand::AutoEquipItem {
+                    bag_index: 255,
+                    slot: 24
+                }]
+            ),
+            "{sent:?}"
+        );
+    }
 }

@@ -311,26 +311,32 @@ pub(crate) fn use_action(
                 // which asks first for a bind-on-equip item and keeps it held. Nothing locks it,
                 // and a projectile's clear unlocks (`0x5e1763`).
                 match script.auto_equip_guid(guid, false) {
-                    benilla_ui::script::AutoEquip::Sent { .. } => {
-                        crate::ui_items::send_auto_equip(
-                            script,
-                            &ladder.objects,
-                            &ladder.items,
-                            &ladder.commands,
-                            bag_index,
-                            slot0,
-                            Some(guid),
-                        );
-                        // The set and the send's clear both land inside the call (`0x494c4a`,
-                        // `0x49520a`), so the pair plays here.
-                        if let Some(display_id) = ladder
-                            .objects
-                            .object(guid)
-                            .and_then(|o| o.object_entry())
-                            .and_then(|entry| ladder.items.template(entry, guid, &ladder.commands))
-                            .map(|t| t.display_info_id)
-                        {
-                            equip_sound.write(crate::sound::AutoEquipSound { display_id });
+                    // The item sent is the cursor's: the bar's own, or with no control (the set
+                    // refused) whatever was held (`0x5e18c9`).
+                    benilla_ui::script::AutoEquip::Sent { bag, slot, guid } => {
+                        if let Some((bag_index, wire_slot)) = crate::ui_items::wire_pos(bag, slot) {
+                            crate::ui_items::send_auto_equip(
+                                script,
+                                &ladder.objects,
+                                &ladder.items,
+                                &ladder.commands,
+                                bag_index,
+                                wire_slot,
+                                Some(guid),
+                            );
+                            // The set and the send's clear both land inside the call
+                            // (`0x494c4a`, `0x49520a`), so the pair plays here.
+                            if let Some(display_id) = ladder
+                                .objects
+                                .object(guid)
+                                .and_then(|o| o.object_entry())
+                                .and_then(|entry| {
+                                    ladder.items.template(entry, guid, &ladder.commands)
+                                })
+                                .map(|t| t.display_info_id)
+                            {
+                                equip_sound.write(crate::sound::AutoEquipSound { display_id });
+                            }
                         }
                     }
                     benilla_ui::script::AutoEquip::Asked { bag, slot, guid } => gate.defer_equip(

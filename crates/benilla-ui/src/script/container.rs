@@ -378,7 +378,28 @@ fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) -> Option<CursorIt
         UseArm::Item(fork)
     };
     if let (UseArm::Item(UseFork::Equip), Some(item)) = (arm, equip) {
-        return Some(item);
+        // Without control the equip arm returns before it locks or sends, unless on a taxi
+        // (`0x4fa3ce`-`0x4fa3ec`).
+        return cursor::equip::has_cursor_control(model).then_some(item);
+    }
+    // The use dispatcher's gates ahead of its open arm (`0x5d8d00`): the requirement check
+    // (`0x5d8e0e`), then the control gate (`0x5d8eaa`, error `0x7f`), each showing its line and
+    // ending the call before the arm's lock (`0x5edcd9`). Not built: the control gate's exemption
+    // for an item whose on-use spell breaks fear, confusion or possession (`0x5d8ec0`-`0x5d8f6a`).
+    if arm == UseArm::Item(UseFork::Open) {
+        let item_id = model
+            .containers
+            .get(&bag)
+            .and_then(|c| c.slots.get(&slot))
+            .map_or(0, |s| s.item_id);
+        if let Some(key) = super::item_stats::item_refusal_by_id(model, item_id) {
+            model.ui_errors.push(key);
+            return None;
+        }
+        if !model.player_control {
+            model.ui_errors.push("ERR_CLIENT_LOCKED_OUT");
+            return None;
+        }
     }
     model
         .script_calls
@@ -1271,6 +1292,121 @@ mod tests {
             "the banker first"
         );
         assert_eq!(arm(&mut s, -1), (super::UseArm::Withdraw, true));
+    }
+
+    /// One backpack slot of `fork`, its item entry 871.
+    fn forked_bag(fork: super::UseFork) -> ContainerState {
+        ContainerState {
+            name: Some("Backpack".into()),
+            num_slots: 16,
+            slots: [(
+                1,
+                ContainerSlot {
+                    guid: 0x11,
+                    item_id: 871,
+                    count: 1,
+                    use_fork: fork,
+                    equip_slots: vec![1],
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        }
+    }
+
+    /// The equip arm returns without control of the character, before it locks or sends
+    /// (`0x4fa3ce`-`0x4fa3ec`), unless the player is on a taxi.
+    #[test]
+    fn the_equip_arm_needs_control_or_a_taxi() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(forked_bag(super::UseFork::Equip)));
+        s.set_player_control(false);
+        s.run("UseContainerItem(0, 1)").unwrap();
+        assert!(s.take_script_calls().is_empty(), "no send");
+        assert!(!s.item_locked(0x11), "no lock");
+        assert!(s.cursor_item().is_none(), "nothing set on the cursor");
+
+        s.set_on_taxi(true);
+        s.run("UseContainerItem(0, 1)").unwrap();
+        assert_eq!(s.take_script_calls().len(), 1, "a taxi passenger equips");
+        assert!(s.item_locked(0x11));
+
+        s.unlock_item(0x11);
+        s.set_on_taxi(false);
+        s.set_player_control(true);
+        s.run("UseContainerItem(0, 1)").unwrap();
+        assert_eq!(s.take_script_calls().len(), 1, "and so does a free player");
+    }
+
+    /// The dispatcher's requirement check (`0x5d8e0e`) and control gate (`0x5d8eaa`, error
+    /// `0x7f`) end the call before the open arm's lock (`0x5edcd9`), each with its line, the
+    /// requirement first.
+    #[test]
+    fn the_open_arm_runs_the_requirement_and_control_gates_before_its_lock() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(forked_bag(super::UseFork::Open)));
+
+        s.set_player_control(false);
+        s.run("UseContainerItem(0, 1)").unwrap();
+        assert_eq!(s.take_ui_errors(), vec!["ERR_CLIENT_LOCKED_OUT"]);
+        assert!(s.take_script_calls().is_empty());
+        assert!(!s.item_locked(0x11));
+
+        // A level-60 item for a level-10 player: `ERR_CANT_USE_ITEM` (`0x9c`), ahead of the
+        // control gate.
+        s.set_player_req_state(crate::script::PlayerReqState {
+            level: 10,
+            class_id: 1,
+            race_id: 1,
+            ..Default::default()
+        });
+        let template = |class, subclass, required_level| crate::script::ItemTemplateView {
+            class,
+            subclass,
+            required_level,
+            allowable_class: -1,
+            allowable_race: -1,
+            ..Default::default()
+        };
+        s.set_item_template(871, template(0, 0, 60));
+        s.run("UseContainerItem(0, 1)").unwrap();
+        assert_eq!(s.take_ui_errors(), vec!["ERR_CANT_USE_ITEM"]);
+        assert!(!s.item_locked(0x11));
+
+        // Control back, the requirement met: the open locks and goes out.
+        s.set_player_control(true);
+        s.set_item_template(871, template(0, 0, 5));
+        s.run("UseContainerItem(0, 1)").unwrap();
+        assert!(s.take_ui_errors().is_empty());
+        assert_eq!(s.take_script_calls().len(), 1);
+        assert!(s.item_locked(0x11));
+    }
+
+    /// The proficiency leg's own line is `ERR_PROFICIENCY_NEEDED` (`0x7`, `0x5ea9b3`).
+    #[test]
+    fn a_proficiency_refusal_names_its_own_line() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(forked_bag(super::UseFork::Open)));
+        s.set_player_req_state(crate::script::PlayerReqState {
+            level: 10,
+            class_id: 1,
+            race_id: 1,
+            proficiency: [(4, 0b10)].into(),
+            ..Default::default()
+        });
+        s.set_item_template(
+            871,
+            crate::script::ItemTemplateView {
+                class: 4,
+                subclass: 0,
+                allowable_class: -1,
+                allowable_race: -1,
+                ..Default::default()
+            },
+        );
+        s.run("UseContainerItem(0, 1)").unwrap();
+        assert_eq!(s.take_ui_errors(), vec!["ERR_PROFICIENCY_NEEDED"]);
+        assert!(!s.item_locked(0x11));
     }
 
     /// An empty slot or a locked item ends `UseContainerItem` past its clear (`0x4fa1c7`,

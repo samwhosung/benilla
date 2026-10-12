@@ -1638,8 +1638,8 @@ pub(super) fn drain_bind_confirm_answers(
             // (`0x5e1c23` into `0x5e1840`, `suppress` set): `SetCursorItem`'s clear drops and
             // unlocks the held item, then the equip goes out. A slot emptied under the dialog
             // sends nothing (`0x5e18da`).
-            crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid } => {
-                if let benilla_ui::script::AutoEquip::Sent { .. } =
+            crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, .. } => {
+                if let benilla_ui::script::AutoEquip::Sent { bag, slot, guid } =
                     script.auto_equip_slot(bag, slot, true)
                 {
                     if let Some((bag_index, wire_slot)) = wire_pos(bag, slot) {
