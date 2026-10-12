@@ -79,7 +79,7 @@ pub fn probe(root: &Path, name: &str, steps: &[Step]) -> Option<ProbeOutcome> {
     let _ = super::load_dependencies(&script, root, &registry, &toc);
 
     let load_errors = super::load_addon_files(&script, root, name, &toc).errors;
-    let session_errors = super::drive_session_start(&mut script, name, &installed);
+    let session_errors = super::drive_session_start(&mut script, name, &installed, root, &registry);
 
     let answers = steps
         .iter()

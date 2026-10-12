@@ -884,6 +884,16 @@ impl super::UiScript {
         by_name(&self.model_ref(), name)
     }
 
+    /// The registry rows whose `## LoadWith` names row `i`, in the order `AddOn_Load` loads them
+    /// after its `ADDON_LOADED` (`0x51f5b2`-`0x51f5e1`).
+    pub fn addon_dependents(&self, i: usize) -> Vec<usize> {
+        self.model_ref()
+            .addons
+            .get(i)
+            .map(|a| a.dependents.clone())
+            .unwrap_or_default()
+    }
+
     /// `AddOn_Load` (`0x51f240`) on registry row `i` ([`load_row`]) for a host that runs the
     /// addon's files itself, as the startup walk does (`demand` false).
     pub fn load_addon_row(

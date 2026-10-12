@@ -288,7 +288,7 @@ fn survey_one(
     // After the addon's files, so a template its own XML declares is registered.
     let missing_templates = missing_templates(&script, root, name, &toc);
     let missing_inherits = missing_inherits(&script, root, name, &toc);
-    let session_errors = drive_session_start(&mut script, name, installed);
+    let session_errors = drive_session_start(&mut script, name, installed, root, registry);
     let probe_errors = drive_ui_probe(&mut script);
     // Warnings only; errors have their own columns.
     let warnings: Vec<String> = script
@@ -567,6 +567,8 @@ fn drive_session_start(
     script: &mut UiScript,
     name: &str,
     installed: &BTreeSet<String>,
+    root: &Path,
+    registry: &[benilla_ui::script::AddOnInfo],
 ) -> Vec<String> {
     // Errors are attributed by the raising chunk, not the event window: AceAddon runs every queued
     // consumer's `OnInitialize` on any `ADDON_LOADED` it sees (`AceAddon-2.0.lua:104-105`, `:230`),
@@ -578,6 +580,15 @@ fn drive_session_start(
         "ADDON_LOADED",
         vec![benilla_ui::script::ScriptValue::Str(name.to_string())],
     );
+    // `AddOn_Load` goes on to the addons whose `## LoadWith` names this one (`0x51f5b2`-
+    // `0x51f5e1`), their files and events inside this window; a raise in their own files is
+    // exempted below by its chunk name, like a dependency's.
+    if let Some(row) = script.addon_row(name) {
+        let mut host = HarnessLoad::new(script, root, registry);
+        for dependent in script.addon_dependents(row) {
+            script.load_addon_row(&mut host, dependent, false, false);
+        }
+    }
     for event in ["VARIABLES_LOADED", "PLAYER_LOGIN", "PLAYER_ENTERING_WORLD"] {
         script.fire_event(event, Vec::new());
     }
@@ -2745,6 +2756,27 @@ mod dependency_tests {
             ],
         );
         assert_eq!(answer(&tmp, "User", "return Order"), "= Lib,Tag,User,");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// The surveyed addon's own `AddOn_Load` ends with the addons that name it in `## LoadWith`
+    /// (`0x51f5b2`-`0x51f5e1`): they load right after its `ADDON_LOADED`, before the session events.
+    #[test]
+    fn the_surveyed_addons_load_with_dependents_load_after_its_addon_loaded() {
+        let tmp = corpus_folder(
+            "deps-own-load-with",
+            &[
+                ("Lib", "", ""),
+                (
+                    "Tag",
+                    "## LoadWith: User\n",
+                    "TagSawUser = IsAddOnLoaded('User')",
+                ),
+                ("User", "## Dependencies: Lib\n", ""),
+            ],
+        );
+        assert_eq!(answer(&tmp, "User", "return Order"), "= Lib,User,Tag,");
+        assert_eq!(answer(&tmp, "User", "return TagSawUser"), "= 1");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
