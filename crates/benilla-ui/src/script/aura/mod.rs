@@ -103,7 +103,7 @@ pub(crate) fn auras_of<'m>(model: &'m Model, token: &str) -> mlua::Result<Option
 }
 
 /// The `index`-th (1-based) buff (`helpful`) or debuff of `token`, in pushed order; out of range
-/// answers nothing, the loop terminator.
+/// answers one nil on every miss leg (`0x5195fe`, `0x5197d4`, `0x519a51`), the loop terminator.
 fn nth_aura(
     lua: &Lua,
     token: &Option<String>,
@@ -128,7 +128,7 @@ fn nth_aura(
     };
     match hit {
         Some(a) => returns(lua, &a, !helpful),
-        None => Ok(MultiValue::new()),
+        None => Ok(MultiValue::from_vec(vec![Value::Nil])),
     }
 }
 
@@ -319,11 +319,17 @@ mod tests {
         assert!(s
             .eval::<bool>(r#"return UnitBuff("target", 1) == nil"#)
             .unwrap());
-        assert_eq!(
-            s.arity(r#"UnitBuff("player", 0)"#).unwrap(),
-            0,
-            "a miss answers nothing"
-        );
+        // One nil on every miss leg (`0x5195fe`, `0x5197d4`, `0x519a51`): an index out of range,
+        // zero or negative, and a unit with no list.
+        for call in [
+            r#"UnitBuff("player", 0)"#,
+            r#"UnitBuff("player", 9)"#,
+            r#"UnitDebuff("player", 9)"#,
+            r#"UnitBuff("target", 1)"#,
+            r#"UnitDebuff("target", 1)"#,
+        ] {
+            assert_eq!(s.arity(call).unwrap(), 1, "{call} answers one nil");
+        }
     }
 
     #[test]
