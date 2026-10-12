@@ -1288,15 +1288,29 @@ mod tests {
     }
 
     #[test]
-    fn split_of_the_whole_stack_is_a_plain_pickup() {
+    fn split_of_the_whole_stack_is_a_plain_pickup_and_an_oversized_count_is_refused() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(backpack())); // slot 1: a 5-stack
         assert!(split_container_item(&s.lua, 0, 1, 5));
         assert_eq!(s.cursor_item().unwrap().count, None);
-        // A split of more than the stack is a plain pickup too.
+        // A count above the stack, or below 1, is refused before the clear (`0x4fa06f`,
+        // `0x4fa064`): a held macro stays held.
         s.run("ClearCursor()").unwrap();
-        assert!(split_container_item(&s.lua, 0, 1, 99));
-        assert_eq!(s.cursor_item().unwrap().count, None);
+        let macro_payload =
+            crate::script::cursor::CursorPayload::Macro(crate::script::cursor::CursorMacro {
+                index: 1,
+                texture: None,
+            });
+        s.set_cursor_for_test(macro_payload.clone());
+        for count in [6, 99, 0, -1] {
+            assert!(!split_container_item(&s.lua, 0, 1, count), "{count}");
+        }
+        assert_eq!(s.cursor_payload(), Some(macro_payload));
+        // Past the gates the split stops spell targeting (`0x4fa07d`).
+        s.run("ClearCursor()").unwrap();
+        s.set_spell_targeting(true);
+        assert!(split_container_item(&s.lua, 0, 1, 2));
+        assert!(s.take_stop_targeting());
     }
 
     #[test]

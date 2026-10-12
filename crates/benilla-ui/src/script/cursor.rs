@@ -437,21 +437,25 @@ pub(crate) fn world_drop_click(model: &mut Model) -> bool {
 }
 
 /// `SplitContainerItem(bag, slot, count)` (`0x4f9f70`): an unlocked stack's `count` goes on the
-/// cursor. Past its gates the binding clears with `ClearCursor(1,1)` (`0x4fa078`), whatever is
-/// held, then picks up ([`pick_up_item`], `0x4fa0aa`), so its handlers see two clears and the
-/// set. A count of the whole stack or more is a plain pickup, since vmangos refuses to split a
-/// whole stack or more (`Player.cpp:11139`, `:11147`). Returns whether anything was picked up.
+/// cursor. A count below 1 or above the stack is refused before anything else (`0x4fa064`,
+/// `0x4fa06f`), and the whole stack is a plain pickup (`0x4fa08b`). Past its gates the binding
+/// clears with `ClearCursor(1,1)` (`0x4fa078`), whatever is held, stops spell targeting
+/// (`0x4fa07d`, `0x6e4900`), then picks up ([`pick_up_item`], `0x4fa0aa`), so its handlers see
+/// two clears and the set. Returns whether anything was picked up.
 pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -> bool {
     let item = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         let Some(s) = model.containers.get(&bag).and_then(|c| c.slots.get(&slot)) else {
             return false;
         };
-        if count < 1 || s.item_id == 0 || s.locked || client_locked(&model, bag, slot) {
+        if s.item_id == 0 || s.locked || client_locked(&model, bag, slot) {
             return false;
         }
-        let n = count.min(i64::from(s.count)) as u32;
-        let whole = n >= s.count;
+        if count < 1 || count > i64::from(s.count) {
+            return false;
+        }
+        let n = count as u32;
+        let whole = n == s.count;
         CursorItem {
             bag,
             slot,
@@ -464,7 +468,15 @@ pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -
             equip_slots: s.equip_slots.clone(),
         }
     };
-    verb(lua, clear_cursor);
+    verb(lua, |model| {
+        clear_cursor(model);
+        // `StopTargeting` ends an armed spell's targeting, as `SpellStopTargeting` does.
+        if model.spell_targeting {
+            model
+                .script_calls
+                .push(super::ScriptCall::SpellStopTargeting);
+        }
+    });
     pick_up_item(lua, item);
     true
 }
@@ -1100,7 +1112,7 @@ mod tests {
         s.set_container(0, Some(one_item_backpack())); // slot 1: a 5-stack
         assert!(split_container_item(&s.lua, 0, 1, 5));
         let held = s.cursor_item().expect("picked up");
-        assert_eq!(held.count, None, "count>=stack ⇒ whole-stack pickup");
+        assert_eq!(held.count, None, "count == stack ⇒ whole-stack pickup");
     }
 
     /// `ClearCursor(1,1)`'s coin arm signals `PLAYER_MONEY` (`0x495248`) before the tail's
