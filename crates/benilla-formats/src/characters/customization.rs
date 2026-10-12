@@ -114,10 +114,16 @@ pub struct CharCreateCatalog {
 
 impl CharCreateCatalog {
     /// The body displayId for a (race, sex), resolved through CreatureDisplayInfo like any unit.
+    /// The reference reads the race row's male id for gender 0 and the female for 1 and nothing
+    /// for any other gender byte (`0x5ec4c0`), and a zero id finds no model (`0x5ec485`).
     pub fn body_display(&self, race: u8, sex: u8) -> Option<u32> {
-        self.displays
-            .get(&race)
-            .map(|&(m, f)| if sex == 0 { m } else { f })
+        let &(male, female) = self.displays.get(&race)?;
+        let id = match sex {
+            0 => male,
+            1 => female,
+            _ => return None,
+        };
+        (id != 0).then_some(id)
     }
 
     /// Whether a race may be created as a class (CharBaseInfo less `UNUSED_COMBOS`).
@@ -580,6 +586,11 @@ mod tests {
             assert_eq!(cat.race_file(race), Some(file), "race {race}");
         }
         assert_eq!(cat.race_name(0), None);
+        // The gender byte picks the race row's male (0) or female (1) display and nothing else.
+        for race in PLAYABLE_RACES {
+            assert!(cat.body_display(race, 0).is_some() && cat.body_display(race, 1).is_some());
+            assert_eq!(cat.body_display(race, 2), None, "race {race}");
+        }
     }
 
     #[test]

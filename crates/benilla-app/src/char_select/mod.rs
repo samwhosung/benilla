@@ -1215,6 +1215,7 @@ mod tests {
                 .map(|(i, n)| character(i as u64 + 1, n))
                 .collect(),
             realm: None,
+            cause: benilla_protocol::RosterCause::Park,
         });
         app.update();
         app.world().resource::<Roster>().selected()
@@ -1325,6 +1326,7 @@ mod tests {
                 character(3, "Zzbullone"),
             ],
             realm: None,
+            cause: benilla_protocol::RosterCause::Park,
         });
         app.update();
         assert_eq!(

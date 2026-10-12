@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use benilla_protocol::messages::opcode;
-use benilla_protocol::{RealmInfo, SessionEvent, WorldWriter};
+use benilla_protocol::{RealmInfo, RosterCause, SessionEvent, WorldWriter};
 
 use super::fake::{self, FakeRealm, WAIT};
 use super::{run, Cycle, LoginRequest, Parks, PingClock};
@@ -21,6 +21,17 @@ fn next_event(events: &crossbeam_channel::Receiver<SessionEvent>) -> SessionEven
         match events.recv_timeout(WAIT).expect("the cycle went quiet") {
             SessionEvent::LoginStage { .. } => continue,
             SessionEvent::LoginFailed { reason, .. } => panic!("the login failed: {reason}"),
+            ev => return ev,
+        }
+    }
+}
+
+/// The next event past the world authentication that opens every park: the roster the native
+/// policy fetches.
+fn next_roster(events: &crossbeam_channel::Receiver<SessionEvent>) -> SessionEvent {
+    loop {
+        match next_event(events) {
+            SessionEvent::WorldAuthenticated { .. } => continue,
             ev => return ev,
         }
     }
@@ -59,6 +70,7 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
             login_rx,
             realm_rx,
             pick_rx,
+            screen_asks_roster: false,
         };
         let ended = run(
             &events_tx,
@@ -83,11 +95,24 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
     assert!(!failed);
     assert_eq!(realms[0].name, REALM);
     realm_tx.send(enter(realms[0].clone())).unwrap();
+    assert!(
+        matches!(next_event(&events), SessionEvent::WorldAuthenticated { .. }),
+        "the world connect completes with the authentication"
+    );
     match next_event(&events) {
-        SessionEvent::CharacterList { characters, .. } => assert!(
-            characters.is_empty(),
-            "the roster at select must be the account's, empty: {characters:?}"
-        ),
+        SessionEvent::CharacterList {
+            characters, cause, ..
+        } => {
+            assert!(
+                characters.is_empty(),
+                "the roster at select must be the account's, empty: {characters:?}"
+            );
+            assert_eq!(
+                cause,
+                RosterCause::Park,
+                "the native screens' own enumeration"
+            );
+        }
         other => panic!("expected the roster at select, got {other:?}"),
     }
     // Select's Back ends the cycle, so the socket is done and its log complete.
@@ -98,6 +123,44 @@ fn an_empty_account_parks_at_select_without_creating_a_character() {
         !sent.contains(&opcode::CMSG_CHAR_CREATE),
         "the login sent CMSG_CHAR_CREATE on its own: {sent:#06x?}"
     );
+    assert_eq!(
+        sent.iter()
+            .filter(|&&op| op == opcode::CMSG_CHAR_ENUM)
+            .count(),
+        1,
+        "the native policy enumerates once on reaching the park: {sent:#06x?}"
+    );
+}
+
+/// Under the stock screen's policy the park fetches no roster: the world connect ends with the
+/// authentication, and the one `CMSG_CHAR_ENUM` goes out when the screen asks, its reply tagged as
+/// asked for (`0x5aabb0`).
+#[test]
+fn the_stock_policy_enumerates_only_when_asked() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles_asking();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::WorldAuthenticated { .. }
+    ));
+    assert!(
+        cycles
+            .events
+            .recv_timeout(std::time::Duration::from_millis(400))
+            .is_err(),
+        "the park sent a roster nobody asked for"
+    );
+    assert_eq!(world.enumerations(), 0);
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::CharacterList { cause, .. } => assert_eq!(cause, RosterCause::Asked),
+        other => panic!("expected the asked-for roster, got {other:?}"),
+    }
+    assert_eq!(world.enumerations(), 1);
+    cycles.pick.send(CharRequest::Abandon).unwrap();
 }
 
 /// The logon park takes the next login (#833): closing the list ends the logon and the thread
@@ -172,7 +235,7 @@ fn a_failed_world_dial_keeps_the_logon_for_the_next_realm() {
     assert_eq!(realmd.lists(), 2);
     cycles.realm.send(enter(up)).unwrap();
     assert!(matches!(
-        next_event(&cycles.events),
+        next_roster(&cycles.events),
         SessionEvent::CharacterList { .. }
     ));
     assert_eq!(realmd.logons(), 1, "one logon throughout");
@@ -249,7 +312,7 @@ fn leave_drops_the_world_session_and_keeps_the_logon() {
     let (realms, _) = next_list(&cycles.events);
     cycles.realm.send(enter(realms[0].clone())).unwrap();
     assert!(matches!(
-        next_event(&cycles.events),
+        next_roster(&cycles.events),
         SessionEvent::CharacterList { .. }
     ));
     assert_eq!(world.open(), 1);
@@ -266,7 +329,7 @@ fn leave_drops_the_world_session_and_keeps_the_logon() {
     assert!(!next_list(&cycles.events).1);
     cycles.realm.send(enter(realms[0].clone())).unwrap();
     assert!(matches!(
-        next_event(&cycles.events),
+        next_roster(&cycles.events),
         SessionEvent::CharacterList { .. }
     ));
     assert_eq!(realmd.logons(), 1, "one logon throughout");

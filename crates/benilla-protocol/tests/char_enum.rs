@@ -112,7 +112,9 @@ fn char_enum_roster_parses_and_decodes() {
 
     // The raw decode has no realm; the IO thread's own emit carries the auth realm entry.
     match &decode(p)[..] {
-        [SessionEvent::CharacterList { characters, realm }] => {
+        [SessionEvent::CharacterList {
+            characters, realm, ..
+        }] => {
             assert_eq!(characters.len(), 2);
             assert!(realm.is_none());
         }

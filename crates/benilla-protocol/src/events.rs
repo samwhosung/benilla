@@ -75,6 +75,19 @@ pub enum LoginStage {
     WorldConnected,
 }
 
+/// What a roster was fetched for. The screen takes a reply as its own only when it asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RosterCause {
+    /// The IO thread's own enumeration on reaching the character park, which the native screens
+    /// wait for; the stock screens ask for theirs instead.
+    Park,
+    /// The reply to a roster request from the screen (`CMSG_CHAR_ENUM` for
+    /// `GetCharacterListUpdate`, `0x5aabb0`).
+    Asked,
+    /// A create or delete changed the roster; re-sent before the action's result.
+    Changed,
+}
+
 /// How a world session ended. On a loss the reference fires `DISCONNECTED_FROM_SERVER` and
 /// `GlueParent.lua` returns to the login screen; a logout returns to character select.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +137,11 @@ pub enum SessionEvent {
         realms: Vec<crate::RealmInfo>,
         failed: bool,
     },
+    /// The world server accepted the authentication (`SMSG_AUTH_RESPONSE` `AUTH_OK`, `0x5ab2b8`
+    /// → `0x5aab80`): the world connect is done and the IO thread is at the character park, with
+    /// no roster fetched unless the native policy's enumeration follows. Emitted by the IO thread,
+    /// never wire-decoded.
+    WorldAuthenticated { realm: crate::RealmInfo },
     /// Queued for a full realm (`AUTH_WAIT_QUEUE`), per queue packet: a wait, not an outcome.
     LoginQueued {
         position: Option<u32>,
@@ -143,6 +161,7 @@ pub enum SessionEvent {
     CharacterList {
         characters: Vec<Character>,
         realm: Option<crate::RealmInfo>,
+        cause: RosterCause,
     },
     /// `SMSG_CHAR_CREATE`/`_DELETE`'s raw `WorldResult`; on success a fresh roster comes first.
     CharActionResult { action: CharAction, code: u8 },

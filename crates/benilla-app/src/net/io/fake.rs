@@ -323,15 +323,44 @@ pub(crate) struct World {
     pub(crate) sent: Arc<Mutex<Vec<u16>>>,
     /// Every packet the client sent, header decrypted, as [`recv_packet`] reads it.
     pub(crate) packets: Arc<Mutex<Vec<Vec<u8>>>>,
-    /// The `SMSG_CHAR_ENUM` body each `CMSG_CHAR_ENUM` is answered with: no characters until set.
-    roster: Arc<Mutex<Vec<u8>>>,
+    /// Every session's packets in the order it sent them, by the order the sessions began.
+    pub(crate) session_packets: Arc<Mutex<Vec<Vec<Vec<u8>>>>>,
+    /// The `SMSG_CHAR_ENUM` body each session answers its `CMSG_CHAR_ENUM` with, by the order the
+    /// sessions began (the last repeats): no characters until set.
+    rosters: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// How long a `CMSG_CHAR_ENUM` waits before its answer.
+    enum_delay: Arc<Mutex<Duration>>,
     open: Arc<AtomicUsize>,
 }
 
 impl World {
     /// The characters the account holds from now on.
     pub(crate) fn set_roster(&self, characters: &[benilla_protocol::Character]) {
-        *self.roster.lock().unwrap() = char_enum_body(characters);
+        *self.rosters.lock().unwrap() = vec![char_enum_body(characters)];
+    }
+
+    /// The characters each session sees, by the order the sessions begin.
+    pub(crate) fn set_rosters(&self, per_session: &[&[benilla_protocol::Character]]) {
+        *self.rosters.lock().unwrap() = per_session.iter().map(|c| char_enum_body(c)).collect();
+    }
+
+    /// Hold every roster answer back this long.
+    pub(crate) fn delay_rosters(&self, by: Duration) {
+        *self.enum_delay.lock().unwrap() = by;
+    }
+
+    /// How many `CMSG_CHAR_ENUM` session `index` has sent.
+    pub(crate) fn enumerations_in(&self, index: usize) -> usize {
+        self.session_packets
+            .lock()
+            .unwrap()
+            .get(index)
+            .map_or(0, |packets| {
+                packets
+                    .iter()
+                    .filter(|p| p[2..4] == opcode::CMSG_CHAR_ENUM.to_le_bytes())
+                    .count()
+            })
     }
 
     /// How many `CMSG_CHAR_ENUM` the client has sent.
@@ -358,8 +387,12 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let log = Arc::clone(&sent);
     let packets = Arc::new(Mutex::new(Vec::new()));
     let packet_log = Arc::clone(&packets);
-    let roster = Arc::new(Mutex::new(vec![0u8]));
-    let roster_body = Arc::clone(&roster);
+    let rosters = Arc::new(Mutex::new(vec![vec![0u8]]));
+    let roster_bodies = Arc::clone(&rosters);
+    let session_packets = Arc::new(Mutex::new(Vec::<Vec<Vec<u8>>>::new()));
+    let session_log = Arc::clone(&session_packets);
+    let enum_delay = Arc::new(Mutex::new(Duration::ZERO));
+    let enum_wait = Arc::clone(&enum_delay);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
     thread::spawn(move || {
@@ -395,17 +428,30 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             );
             let log = Arc::clone(&log);
             let packet_log = Arc::clone(&packet_log);
-            let roster_body = Arc::clone(&roster_body);
+            let roster_bodies = Arc::clone(&roster_bodies);
+            let session_log = Arc::clone(&session_log);
+            let enum_wait = Arc::clone(&enum_wait);
+            let index = {
+                let mut all = session_log.lock().unwrap();
+                all.push(Vec::new());
+                all.len() - 1
+            };
             let sessions = Arc::clone(&sessions);
             sessions.fetch_add(1, Ordering::SeqCst);
             thread::spawn(move || {
                 while let Some(packet) = recv_packet(&mut s, Some(&mut crypto)) {
                     let op = u16::from_le_bytes([packet[2], packet[3]]);
                     log.lock().unwrap().push(op);
+                    session_log.lock().unwrap()[index].push(packet.clone());
                     packet_log.lock().unwrap().push(packet);
                     match op {
                         opcode::CMSG_CHAR_ENUM => {
-                            let body = roster_body.lock().unwrap().clone();
+                            let body = {
+                                let all = roster_bodies.lock().unwrap();
+                                all[index.min(all.len() - 1)].clone()
+                            };
+                            let wait = *enum_wait.lock().unwrap();
+                            thread::sleep(wait);
                             send(&mut s, Some(&mut crypto), opcode::SMSG_CHAR_ENUM, &body);
                         }
                         opcode::CMSG_CHAR_CREATE => send(
@@ -424,7 +470,9 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     World {
         sent,
         packets,
-        roster,
+        session_packets,
+        rosters,
+        enum_delay,
         open,
     }
 }
@@ -454,8 +502,18 @@ pub(crate) struct Cycles {
     pub(crate) abandon: Arc<AtomicU64>,
 }
 
-/// The read thread's cycle loop, as [`super::spawn_net`] runs it, with the world writer dropped.
+/// The read thread's cycle loop, as [`super::spawn_net`] runs it, with the world writer dropped:
+/// the native screens' policy, the IO thread enumerating on reaching the character park.
 pub(crate) fn spawn_cycles() -> Cycles {
+    spawn_cycles_for(false)
+}
+
+/// [`spawn_cycles`] under the stock screen's policy: the roster comes only when it is asked for.
+pub(crate) fn spawn_cycles_asking() -> Cycles {
+    spawn_cycles_for(true)
+}
+
+fn spawn_cycles_for(screen_asks_roster: bool) -> Cycles {
     let (events_tx, events) = crossbeam_channel::unbounded();
     let (login, login_rx) = crossbeam_channel::unbounded();
     let (realm, realm_rx) = crossbeam_channel::unbounded();
@@ -468,6 +526,7 @@ pub(crate) fn spawn_cycles() -> Cycles {
             login_rx,
             realm_rx,
             pick_rx,
+            screen_asks_roster,
         };
         let clock = Mutex::new(PingClock::default());
         let mut tails = Default::default();

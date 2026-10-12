@@ -67,7 +67,11 @@ impl Plugin for NetPlugin {
         crate::query_cache::register::<crate::names::NameCache>(app);
         crate::query_cache::register::<crate::go_templates::GameObjectTemplates>(app);
         crate::query_cache::register::<crate::items::Items>(app);
-        let handles = io::spawn_net(self.connect);
+        // The stock glue screen asks for its roster; the native ones wait for the IO thread's.
+        let handles = io::spawn_net(
+            self.connect,
+            crate::ui_script::glue::GlueStock::from_env().0,
+        );
         if !self.connect {
             app.insert_resource(NetOffline);
         }
@@ -118,6 +122,7 @@ impl Plugin for NetPlugin {
             .add_message::<WorldportMessage>()
             .add_message::<RealmListMessage>()
             .add_message::<CharListMessage>()
+            .add_message::<WorldAuthMessage>()
             .add_message::<CharActionResultMessage>()
             .add_message::<CharacterLoginFailedMessage>()
             .add_message::<EnteredWorldMessage>()
@@ -2014,6 +2019,15 @@ pub(crate) struct RealmListMessage {
 pub(crate) struct CharListMessage {
     pub(crate) characters: Vec<benilla_protocol::Character>,
     pub(crate) realm: Option<benilla_protocol::RealmInfo>,
+    /// What the roster was fetched for.
+    pub(crate) cause: benilla_protocol::RosterCause,
+}
+
+/// The world server accepted the authentication: the world connect to `realm` is done and the IO
+/// thread is at the character park (`SMSG_AUTH_RESPONSE` success, `0x5ab2b8`).
+#[derive(Message)]
+pub(crate) struct WorldAuthMessage {
+    pub(crate) realm: benilla_protocol::RealmInfo,
 }
 
 /// A character create or delete result; a refreshed [`CharListMessage`] precedes a success.

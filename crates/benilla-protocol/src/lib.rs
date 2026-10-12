@@ -9,8 +9,8 @@ pub mod wire;
 pub mod world;
 pub use auth::{AuthReject, LogonReply};
 pub use events::{
-    decode, CharAction, EntityKind, LoginRefusal, LoginStage, MoveSpeeds, Poll, SessionEnd,
-    SessionEvent, SessionEventKind,
+    decode, CharAction, EntityKind, LoginRefusal, LoginStage, MoveSpeeds, Poll, RosterCause,
+    SessionEnd, SessionEvent, SessionEventKind,
 };
 pub use messages::field;
 pub use messages::{

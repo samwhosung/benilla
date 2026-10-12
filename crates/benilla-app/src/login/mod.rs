@@ -1353,6 +1353,7 @@ mod tests {
         app.world_mut().write_message(CharListMessage {
             characters: Vec::new(),
             realm: None,
+            cause: benilla_protocol::RosterCause::Park,
         });
         app.update();
         let dialog = app.world().resource::<GlueDialog>();
@@ -1366,6 +1367,7 @@ mod tests {
         app.world_mut().write_message(CharListMessage {
             characters: Vec::new(),
             realm: None,
+            cause: benilla_protocol::RosterCause::Park,
         });
         app.update();
         assert!(app.world().resource::<GlueDialog>().kind.is_none());

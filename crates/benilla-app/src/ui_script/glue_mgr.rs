@@ -67,8 +67,11 @@
 //!    `GetCharacterListUpdate` (`0x4723d0`). The glue VM clears its records in the call; the tail
 //!    (`0x46b880`) is state 3, the `CHAR_LIST_RETRIEVING` dialog and the query (`0x5aabb0`), which
 //!    is a `CMSG_CHAR_ENUM` on the parked world session.
-//! 2. The IO thread enumerates once on reaching the park, where the reference's first ask
-//!    follows the connect, so that first ask takes the reply already held; every later one sends.
+//! 2. The world connect completes with the authentication response (`0x5ab2b8` → `0x5aab80`),
+//!    not with a roster; the IO thread fetches none of its own under the stock screen, so every
+//!    call sends, and only a reply to that request (the roster event's cause) completes the
+//!    query. Any other roster is not this screen's and is dropped, as are the late replies of a
+//!    query that was cancelled or left behind by a realm change.
 //! 3. State 3's frame (`0x46c03a`) re-texts the dialog and acts on the completed query: success
 //!    closes the dialog and loads the roster (`0x4724d0`: the records, `lastCharacterIndex`
 //!    selected, `CHARACTER_LIST_UPDATE`); an empty roster with no realm chosen asks for the realm
@@ -82,7 +85,7 @@
 
 use bevy::prelude::*;
 
-use benilla_protocol::{Character, LoginRefusal, LoginStage, RealmInfo};
+use benilla_protocol::{Character, LoginRefusal, LoginStage, RealmInfo, RosterCause};
 use benilla_ui::script::{
     GlueCharacter, GlueNotice, GlueRealm, GlueRealmCells, GlueRequest, GlueSelectCells, GlueServer,
     NoticeState, ScriptValue, UiScript, VmKind,
@@ -92,7 +95,7 @@ use crate::login::queue::QueueEstimate;
 use crate::login::GlueLogin;
 use crate::net::{
     CharListMessage, CharRequest, DisconnectedMessage, LoginFailedMessage, LoginQueuedMessage,
-    LoginStageMessage, RealmListMessage, RealmRequest,
+    LoginStageMessage, RealmListMessage, RealmRequest, WorldAuthMessage,
 };
 
 /// `CGlueMgr`'s `screenState` (`0xb41da0`), named by the functions that set each value: the
@@ -461,10 +464,6 @@ pub(crate) struct GlueMgr {
     /// The roster the last character list reply left in `ClientServices` (`[svc+0x1ae8]`), which
     /// the roster load (`0x4724d0`) walks.
     roster: Vec<Character>,
-    /// A roster arrived with no query of the screen's behind it: the IO thread enumerates once on
-    /// reaching the character park, as the reference's first `GetCharacterListUpdate` does after
-    /// the connect, so that call takes this reply as its own instead of asking again.
-    unrequested: bool,
     /// The select verbs' cells, carried from one glue VM to the next.
     select_cells: GlueSelectCells,
     /// The realm list's sort and selection cells, carried from one glue VM to the next.
@@ -567,8 +566,6 @@ impl GlueMgr {
         self.op = Operation::begin(OpKind::CharList, STATUS_CHAR_LIST_RETRIEVING);
         if !self.connected {
             self.op.complete(false, STATUS_FAILED_TO_CONNECT);
-        } else if std::mem::take(&mut self.unrequested) {
-            self.op.complete(true, STATUS_CHAR_LIST_RETRIEVED);
         } else {
             self.char_out.push(CharRequest::Enumerate);
         }
@@ -790,22 +787,30 @@ impl GlueMgr {
         }
     }
 
-    /// The roster: the reply the character list query waits on completes it
-    /// `CHAR_LIST_RETRIEVED` (`0x5ab300`); in state 2, the authentication completes `AUTH_OK`
-    /// (`0x5aab80`), which the tick shows and takes down the success arm.
-    fn on_roster(&mut self, roster: Vec<Character>, realm: Option<benilla_protocol::RealmInfo>) {
-        self.characters = roster.len().min(usize::from(u16::MAX)) as u16;
-        self.roster = roster;
-        self.connected = true;
-        if realm.is_some() {
-            self.realm = realm;
-        }
-        if self.state == ScreenState::CharList && self.op.kind == OpKind::CharList && !self.op.done
+    /// The reply to a roster request completes the character list query that is waiting on it
+    /// `CHAR_LIST_RETRIEVED` (`0x5ab300`). It is dropped in any other state, and with no query
+    /// pending (cancelled, left behind by a realm change): the reference's handler completes
+    /// the operation in flight and nothing else (`0x5aabb0` begins it). A roster that nothing of
+    /// the screen asked for is not this screen's either.
+    fn on_roster(&mut self, roster: Vec<Character>, cause: RosterCause) {
+        if cause != RosterCause::Asked
+            || self.state != ScreenState::CharList
+            || self.op.kind != OpKind::CharList
+            || self.op.done
         {
-            self.op.complete(true, STATUS_CHAR_LIST_RETRIEVED);
             return;
         }
-        self.unrequested = true;
+        self.characters = roster.len().min(usize::from(u16::MAX)) as u16;
+        self.roster = roster;
+        self.op.complete(true, STATUS_CHAR_LIST_RETRIEVED);
+    }
+
+    /// The world server accepted the authentication: the link is up, and in state 2 the
+    /// authentication completes `AUTH_OK` (`0x5aab80`), which the tick shows and takes down the
+    /// success arm.
+    fn on_world_authenticated(&mut self, realm: benilla_protocol::RealmInfo) {
+        self.connected = true;
+        self.realm = Some(realm);
         if self.state == ScreenState::Logon {
             // A logon whose world half finished inside one frame.
             self.on_logon_done();
@@ -1027,6 +1032,7 @@ pub(crate) struct LoginNews<'w, 's> {
     failures: MessageReader<'w, 's, LoginFailedMessage>,
     queued: MessageReader<'w, 's, LoginQueuedMessage>,
     rosters: MessageReader<'w, 's, CharListMessage>,
+    world_auths: MessageReader<'w, 's, WorldAuthMessage>,
     realm_lists: MessageReader<'w, 's, RealmListMessage>,
     disconnects: MessageReader<'w, 's, DisconnectedMessage>,
 }
@@ -1064,6 +1070,7 @@ pub(crate) fn drive_glue_mgr(
     areas: Option<Res<crate::area::AreaTableRes>>,
     create: Option<Res<crate::entities::CharCreate>>,
     classes: Option<Res<crate::chr_classes::ChrClassTable>>,
+    creatures: Option<Res<crate::entities::Creatures>>,
     state: Option<Res<State<crate::char_select::ClientState>>>,
     time: Res<Time>,
 ) {
@@ -1189,8 +1196,11 @@ pub(crate) fn drive_glue_mgr(
     for msg in news.failures.read() {
         mgr.on_failed(msg);
     }
+    for msg in news.world_auths.read() {
+        mgr.on_world_authenticated(msg.realm.clone());
+    }
     for msg in news.rosters.read() {
-        mgr.on_roster(msg.characters.clone(), msg.realm.clone());
+        mgr.on_roster(msg.characters.clone(), msg.cause);
     }
     for msg in news.disconnects.read() {
         mgr.on_disconnected(msg.session_over);
@@ -1219,6 +1229,7 @@ pub(crate) fn drive_glue_mgr(
         areas: areas.as_deref().map(|a| &a.0),
         create: create.as_deref().map(|c| &c.0),
         classes: classes.as_deref().map(|c| &c.0),
+        creatures: creatures.as_deref(),
     };
     flush(&mut mgr, &mut script, now_ms, &names);
     mgr.select_cells = script.glue_select_cells();
@@ -1226,12 +1237,19 @@ pub(crate) fn drive_glue_mgr(
     send_asks(&mut mgr, Vec::new(), &mut asks);
 }
 
-/// Send the asks of the frame: the login engine's, the realm requests stamped with the abandon
-/// generation, and the character requests.
+/// Send the asks of the frame: the login engine's, the character requests, then the realm requests
+/// stamped with the abandon generation. The character requests go first: a roster ask made
+/// before a realm change was sent on the old link at the verb in the reference, and a realm
+/// change before it leaves the link down so the ask is never made (`0x5aabb0`).
 fn send_asks(mgr: &mut GlueMgr, logins: Vec<GlueLogin>, asks: &mut GlueAsks) {
     let (arms, realm_asks, char_asks) = mgr.take_asks();
     for ask in logins.into_iter().chain(arms) {
         asks.login.write(ask);
+    }
+    if let Some(pick) = asks.pick.as_deref() {
+        for ask in char_asks {
+            let _ = pick.0.send(ask);
+        }
     }
     let now = crate::net::LoginAbandon::now(asks.abandon.as_deref());
     if let Some(choice) = asks.realm.as_deref() {
@@ -1242,11 +1260,6 @@ fn send_asks(mgr: &mut GlueMgr, logins: Vec<GlueLogin>, asks: &mut GlueAsks) {
             let _ = choice.0.send(ask);
         }
     }
-    if let Some(pick) = asks.pick.as_deref() {
-        for ask in char_asks {
-            let _ = pick.0.send(ask);
-        }
-    }
 }
 
 /// The DBC catalogs the roster's strings come from.
@@ -1254,12 +1267,13 @@ struct RosterNames<'a> {
     areas: Option<&'a benilla_formats::AreaTableCatalog>,
     create: Option<&'a benilla_formats::CharCreateCatalog>,
     classes: Option<&'a benilla_formats::ChrClasses>,
+    creatures: Option<&'a crate::entities::Creatures>,
 }
 
 /// A roster entry as the glue VM's records take it (`0x4732a0`). The race and class names are
 /// the `Name_Lang` of the race and class rows (`ChrRaces` `+0x44`, `ChrClasses` `+0x14`) in the
 /// install's locale, the file string the race row's (`ChrRaces` column 15), and the model flag
-/// whether the race row has a body for the gender. A race, class or zone with no row reads
+/// whether the race row's body for the gender resolves to a model. A race, class or zone with no row reads
 /// empty, empty, nil as the reference's does, and so does one whose catalog did not load.
 fn glue_character(c: &Character, names: &RosterNames) -> GlueCharacter {
     let text = |s: Option<&str>| s.unwrap_or_default().to_string();
@@ -1273,9 +1287,11 @@ fn glue_character(c: &Character, names: &RosterNames) -> GlueCharacter {
         file_string: text(names.create.and_then(|r| r.race_file(c.race))),
         gender: c.gender,
         flags: c.flags,
+        // `0x5ec480`: the race row's display for the gender, then its model rows.
         model: names
             .create
-            .is_some_and(|r| r.body_display(c.race, c.gender).is_some()),
+            .and_then(|r| r.body_display(c.race, c.gender))
+            .is_some_and(|display| names.creatures.is_some_and(|k| k.resolves_model(display))),
     }
 }
 
