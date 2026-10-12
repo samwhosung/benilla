@@ -24,11 +24,11 @@ pub(crate) mod feed;
 pub(crate) mod locks;
 mod net;
 
+pub(crate) use drain::send_auto_equip;
 use drain::{
     drain_bag_autostores, drain_container_autoequips, drain_container_destroys,
     drain_container_moves, drain_container_repairs,
 };
-pub(crate) use drain::{send_auto_equip, AutoEquipSent};
 // `UseContainerItem` and `UseInventoryItem`, applied in call order by `crate::script_calls`.
 pub(crate) use drain::ScriptItemUse;
 use feed::{

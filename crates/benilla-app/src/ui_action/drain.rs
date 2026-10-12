@@ -304,22 +304,22 @@ pub(crate) fn use_action(
                 // No quest guard: the bar tests only `InventoryType` (`0x4e5fdd`), unlike
                 // the bag click (`StartQuest`, `0x4fa3c4`), so a quest-starter equips.
                 debug!("ui_action: item action {action} auto-equip (wire {bag_index}/{slot0})");
-                // The shared auto-equip sender, so a BoE asks before binding, as from a bag. The
-                // bar's arm (`0x4e602a` → `0x5e1840`) neither tests nor takes the lock, but a
-                // projectile's clear unlocks, signalling whether or not it was set (`0x5e1763`).
-                let sent = crate::ui_items::send_auto_equip(
-                    script,
-                    gate,
-                    &ladder.objects,
-                    &ladder.items,
-                    &ladder.commands,
-                    bag_index,
-                    slot0,
-                    Some(guid),
-                    false,
-                );
-                if sent == crate::ui_items::AutoEquipSent::Ammo {
-                    script.unlock_item(guid);
+                // `0x4e602a` runs `0x5e1840`: the bar's item takes the cursor, its inner clear
+                // dropping and unlocking a held item, and goes out through `AutoEquipCursorItem`.
+                // Nothing locks it, and a projectile's clear unlocks (`0x5e1763`).
+                if let benilla_ui::script::AutoEquip::Sent { .. } = script.auto_equip_guid(guid) {
+                    // The shared auto-equip sender, so a BoE asks before binding, as from a bag.
+                    let _ = crate::ui_items::send_auto_equip(
+                        script,
+                        gate,
+                        &ladder.objects,
+                        &ladder.items,
+                        &ladder.commands,
+                        bag_index,
+                        slot0,
+                        Some(guid),
+                        false,
+                    );
                 }
             } else {
                 // The shared `CGItem::Use` fork (called at `0x4e607b`): a quest-starter offers

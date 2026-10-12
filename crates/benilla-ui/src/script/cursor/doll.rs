@@ -9,8 +9,8 @@ use crate::script::tick::verb;
 use crate::script::Model;
 
 use super::{
-    clear, clear_cursor, item_locked, lock_item, pick_up_item, Clear, CursorItem, CursorPayload,
-    EQUIPMENT_BAG,
+    clear, clear_cursor, equip::auto_equip_cursor_item, item_locked, lock_item, pick_up_item,
+    Clear, CursorItem, CursorPayload, EQUIPMENT_BAG,
 };
 
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
@@ -177,36 +177,6 @@ pub(super) fn equip_cursor_item(lua: &Lua, id: u32) -> bool {
 pub(super) fn cursor_can_go_in_slot(model: &Model, id: u32) -> bool {
     match &model.cursor {
         Some(CursorPayload::Item(item)) => super::bag_verbs::fits_slot(item, id),
-        _ => false,
-    }
-}
-
-/// `AutoEquipCursorItem()` (`0x48a040` into `0x5e1480`), a click or drop on the doll's model
-/// (`PaperDollFrame.lua:31-35`): an item from an equipment or equipped-bag slot, the 0-based slot
-/// below 0x17, goes back with `ClearCursor(1,1)` (`0x5e155a`, `0x5e1567`); any other whole stack,
-/// from a bag, the backpack, the bank, a bank bag slot or the keyring, becomes
-/// `CMSG_AUTOEQUIP_ITEM` (`0x5e1575`), the server picking the slot and swapping the displaced
-/// piece back (`ItemHandler.cpp:138-228`); a split stays held. Returns whether to repaint.
-pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
-    match &model.cursor {
-        Some(CursorPayload::Item(item)) if item.bag == EQUIPMENT_BAG && item.slot <= 23 => {
-            clear_cursor(model);
-            true
-        }
-        Some(CursorPayload::Item(item)) if item.count.is_none() => {
-            // The send tail clears with `ClearCursor(ebx,1)` (`0x5e1761`): a projectile loads by
-            // entry with `CMSG_SET_AMMO` and stays in its bag, so its arm sets `ebx = 1`
-            // (`0x5e1704`, `0x5e1711`) and the item unlocks; every other arm keeps the lock for
-            // the server's answer (`0x5e1577`). Neither locks anything new.
-            let how = if item.item_class == Some(super::ITEM_CLASS_PROJECTILE) {
-                Clear::BOTH
-            } else {
-                Clear::KEEP_LOCK
-            };
-            model.container_autoequips.push((item.bag, item.slot));
-            clear(model, how);
-            true
-        }
         _ => false,
     }
 }

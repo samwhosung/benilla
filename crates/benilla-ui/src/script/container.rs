@@ -77,6 +77,26 @@ pub struct ContainerSlot {
     pub use_fork: UseFork,
 }
 
+impl ContainerSlot {
+    /// The whole stack of this slot as a cursor payload, as a pickup sets it.
+    pub(crate) fn cursor_item(&self, bag: i64, slot: u32) -> CursorItem {
+        CursorItem {
+            item_class: self.item_class,
+            guid: self.guid,
+            bag,
+            slot,
+            item_id: self.item_id,
+            texture: self.texture.clone(),
+            link: self.link.clone(),
+            quality: self.quality,
+            count: None,
+            bar_placeable: self.bar_placeable,
+            consumable: self.consumable,
+            equip_slots: self.equip_slots.clone(),
+        }
+    }
+}
+
 /// `UseContainerItem`'s arm past its bank and vendor forks: the equip fork (`0x4fa3b9`), else the
 /// use dispatcher `0x5d8d00`'s arms in its order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -465,20 +485,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
             .get(&bag)
             .and_then(|c| c.slots.get(&slot))
             .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))
-            .map(|s| CursorItem {
-                item_class: s.item_class,
-                guid: s.guid,
-                bag,
-                slot,
-                item_id: s.item_id,
-                texture: s.texture.clone(),
-                link: s.link.clone(),
-                quality: s.quality,
-                count: None,
-                bar_placeable: s.bar_placeable,
-                consumable: s.consumable,
-                equip_slots: s.equip_slots.clone(),
-            }),
+            .map(|s| s.cursor_item(bag, slot)),
         // The cancel is `ClearCursor(1,1)` (`0x4f9e0e`): the unlock, then `CURSOR_UPDATE`.
         Some(CursorPayload::Item(held)) if held.bag == bag && held.slot == slot => {
             cursor::clear_cursor(model);

@@ -860,6 +860,7 @@ mod tests {
             benilla_protocol::ObjectFields::from_pairs(&[(3, POTION_ENTRY)]),
             false,
         );
+        let item_class = Some(t.class);
         world
             .resource_mut::<crate::items::Items>()
             .insert_template(POTION_ENTRY, Some(t));
@@ -882,6 +883,7 @@ mod tests {
                     1,
                     benilla_ui::script::ContainerSlot {
                         item_id: POTION_ENTRY,
+                        item_class,
                         count: 1,
                         guid: POTION,
                         ..Default::default()
@@ -1013,5 +1015,100 @@ mod tests {
             .unlock_item(POTION);
         run(&mut f, "UseAction(1)");
         assert!(f.rx.try_iter().count() > 0, "unlocked, the use goes out");
+    }
+    /// The bar's equip runs `0x5e1840` (`0x4e602a`): `SetCursorItem`'s inner clear drops and
+    /// unlocks a held item (`0x494bb6`), the bar's item takes the cursor and `AutoEquipCursorItem`
+    /// sends it, so a key press leaves the cursor empty and the held item free.
+    #[test]
+    fn a_bar_equip_drops_the_held_item_and_unlocks_it() {
+        const HELD: u64 = 0x4000_0000_0000_0001;
+        const HELD_ENTRY: u32 = 7001;
+        const HELM: u64 = 0x4000_0000_0000_0002;
+        const HELM_ENTRY: u32 = 7002;
+        let mut f = frame(false);
+        {
+            let world = f.app.world_mut();
+            let me = world.resource::<GuidIndex>().0[&ME];
+            // Backpack slots 1 and 2 are the fields at 532 and 534.
+            world
+                .entity_mut(me)
+                .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x19),
+                    (22, 100),
+                    (28, 100),
+                    (46, 0x8),
+                    (532, HELD as u32),
+                    (533, (HELD >> 32) as u32),
+                    (534, HELM as u32),
+                    (535, (HELM >> 32) as u32),
+                ])));
+            for (guid, entry) in [(HELD, HELD_ENTRY), (HELM, HELM_ENTRY)] {
+                crate::items::test_spawn_item(
+                    world,
+                    guid,
+                    benilla_protocol::ObjectFields::from_pairs(&[(3, entry)]),
+                    false,
+                );
+            }
+            let mut items = world.resource_mut::<crate::items::Items>();
+            items.insert_template(HELD_ENTRY, Some(crate::items::test_template("Held Thing")));
+            items.insert_template(
+                HELM_ENTRY,
+                Some(benilla_protocol::messages::ItemInfo {
+                    inventory_type: 1,
+                    ..crate::items::test_template("A Helm")
+                }),
+            );
+            world
+                .resource_mut::<crate::ui_action::PlayerActions>()
+                .buttons
+                .insert(
+                    0,
+                    ActionButton {
+                        slot: 0,
+                        action: HELM_ENTRY,
+                        kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+                    },
+                );
+            let slot = |guid, entry, equip: Vec<u8>| benilla_ui::script::ContainerSlot {
+                guid,
+                item_id: entry,
+                count: 1,
+                equip_slots: equip,
+                ..Default::default()
+            };
+            let mut slots = std::collections::HashMap::new();
+            slots.insert(1, slot(HELD, HELD_ENTRY, vec![]));
+            slots.insert(2, slot(HELM, HELM_ENTRY, vec![1]));
+            world.non_send_resource_mut::<UiScript>().set_container(
+                0,
+                Some(benilla_ui::script::ContainerState {
+                    name: Some("Backpack".into()),
+                    num_slots: 16,
+                    slots,
+                }),
+            );
+        }
+        // Hold the first item, then press the bar key (`checkCursor` 0).
+        run(&mut f, "PickupContainerItem(0, 1) UseAction(1, 0)");
+
+        let script = f.app.world().non_send_resource::<UiScript>();
+        assert!(
+            script.cursor_item().is_none(),
+            "the held item was dropped and the bar's item sent off the cursor"
+        );
+        assert!(!script.item_locked(HELD), "the drop unlocked the held item");
+        assert!(!script.item_locked(HELM), "the bar's pick takes no lock");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        assert!(
+            sent.iter().any(|c| matches!(
+                c,
+                ClientCommand::AutoEquipItem {
+                    bag_index: 255,
+                    slot: 24
+                }
+            )),
+            "and the helm is equipped from backpack slot 2: {sent:?}"
+        );
     }
 }
