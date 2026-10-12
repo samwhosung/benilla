@@ -589,6 +589,7 @@ mod tests {
                 action: 133,
                 count: 0,
                 consumable: false,
+                use_spell: None,
             }),
         );
 

@@ -134,6 +134,7 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
                 // Count and consumable wait for the app's next-frame re-feed, which knows the item.
                 count: 0,
                 consumable: false,
+                use_spell: None,
             },
         );
         model.action_sets.push((id, pack(kind, action)));
@@ -182,19 +183,38 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
         | CursorPayload::Money(_)
         | CursorPayload::Merchant(_) => return Place::Refused,
     };
-    // Each arm compares the held action with the slot's of its own kind: a spell id (`0x4e63d0`),
-    // an item entry, a bag item's or a bar item's alike (`0x4e65cf`), a macro id (`0x4e672f`).
-    // The spell arm also reads a macro or item slot's spell through `0x4e5a50`, which the engine's
-    // slots do not carry.
+    // Each arm compares the held action with the slot's: the spell arm a spell id with the spell
+    // the slot resolves to (`0x4e63d0`, [`resolved_spell`]), so a macro bound to it or an item
+    // casting it matches too; the item arm an item entry, a bag item's or a bar item's alike
+    // (`0x4e65cf`); the macro arm a macro id (`0x4e672f`).
     let (kind, action, _) = &placed;
-    if model
-        .actions
-        .get(&id)
-        .is_some_and(|slot| slot.kind == *kind && slot.action == *action)
-    {
+    let same = match model.actions.get(&id) {
+        Some(_) if *kind == ACTION_KIND_SPELL => resolved_spell(model, id) == Some(*action),
+        Some(slot) => slot.kind == *kind && slot.action == *action,
+        None => false,
+    };
+    if same {
         return Place::Same;
     }
     Place::Write(placed, lift(model, id))
+}
+
+/// The spell slot `id` resolves to (`0x4e5a50`): a spell slot's own; a macro slot's bound spell
+/// (`0x4e5ba0`, the record's `+0x564`), when the macro exists (`0x4e5030`); an item slot's ON_USE
+/// spell (`0x4e5ae0`). `None` for none, an empty slot or an unbound macro.
+fn resolved_spell(model: &Model, id: u32) -> Option<u32> {
+    let slot = model.actions.get(&id)?;
+    let spell = match slot.kind {
+        ACTION_KIND_SPELL => slot.action,
+        ACTION_KIND_MACRO => {
+            model.macros.get(slot.action as usize)?;
+            let bound = model.macro_bindings.get(&slot.action)?.spell;
+            u32::try_from(bound).ok()?
+        }
+        ACTION_KIND_ITEM => slot.use_spell?,
+        _ => return None,
+    };
+    (spell != 0).then_some(spell)
 }
 
 /// Register `PickupAction` and `PlaceAction` as globals.
@@ -232,6 +252,7 @@ mod tests {
             action,
             count: 0,
             consumable: false,
+            use_spell: None,
         }
     }
 
@@ -688,5 +709,47 @@ mod tests {
         assert!(s.cursor_payload().is_none(), "the spell is dropped");
         assert_eq!(crate::script::tick::heard::take(&s), ["CURSOR_UPDATE"]);
         assert_eq!(s.take_action_sets(), vec![(3, 133)]);
+    }
+
+    /// The spell arm compares the held spell with the spell the slot resolves to (`0x4e5a50`): a
+    /// macro bound to it (`0x4e5ba0`) or an item casting it (`0x4e5ae0`) is the same action, and
+    /// the place only clears the cursor.
+    #[test]
+    fn a_spell_dropped_on_a_macro_or_item_casting_it_clears_the_cursor() {
+        let mut s = UiScript::new().unwrap();
+        s.run(r#"CreateMacro("Fire", 1, "/cast Fireball")"#)
+            .unwrap();
+        s.set_macro_bindings(std::collections::HashMap::from([(
+            1,
+            crate::script::MacroBinding {
+                spell: 133,
+                pet_book: false,
+            },
+        )]));
+        s.set_action(1, Some(action_slot("Interface\\Icons\\Fire", 0x40, 1)));
+        let mut item = action_slot("Interface\\Icons\\INV_A", 0x80, 4540);
+        item.use_spell = Some(8690);
+        s.set_action(2, Some(item));
+        for (slot, spell_id) in [(1, 133), (2, 8690)] {
+            s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
+                spell_id,
+                texture: None,
+                passive: false,
+            }));
+            assert!(!place_action(&s.lua, slot));
+            assert!(s.cursor_payload().is_none(), "slot {slot}: cleared");
+            assert!(
+                s.take_action_sets().is_empty(),
+                "slot {slot}: nothing written"
+            );
+        }
+        // Another spell on the macro slot places, the macro hopping onto the cursor.
+        s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
+            spell_id: 116,
+            texture: None,
+            passive: false,
+        }));
+        assert!(place_action(&s.lua, 1));
+        assert!(matches!(s.cursor_payload(), Some(CursorPayload::Macro(_))));
     }
 }

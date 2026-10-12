@@ -31,6 +31,10 @@ pub struct ActionSlot {
     /// `IsConsumableAction`: `0x4e5250` reads only the slot's item template, so this rides the
     /// icon's push, not [`ActionState`]'s.
     pub consumable: bool,
+    /// An item slot's ON_USE spell, the spell `0x4e5a50` resolves it to (`0x4e5ae0`): the
+    /// template's first block with a spell and trigger 0. `None` for no such block or another
+    /// kind; a macro slot's spell is its binding ([`super::MacroBinding`]).
+    pub use_spell: Option<u32>,
 }
 
 /// One action's per-frame state, read by `IsUsableAction`, `IsActionInRange`, `GetActionCooldown`
@@ -531,6 +535,7 @@ mod tests {
                 action: 133,
                 count: 0,
                 consumable: false,
+                use_spell: None,
             }),
         );
         s.set_bonus_bar_offset(1);
@@ -562,6 +567,7 @@ mod tests {
                 action: 117,
                 count: 4,
                 consumable: false,
+                use_spell: None,
             }),
         );
         assert_eq!(s.eval::<i64>("return GetActionCount(5)").unwrap(), 4);
@@ -620,6 +626,7 @@ mod tests {
                 action,
                 count: 0,
                 consumable: false,
+                use_spell: None,
             })
         };
         s.set_action(1, slot(0x40, 1)); // macro "Pull"

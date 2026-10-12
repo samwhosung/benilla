@@ -2729,6 +2729,7 @@ fn the_action_bars_page_locks_the_real_bar() {
             action: 111,
             count: 0,
             consumable: false,
+            use_spell: None,
         }),
     );
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);

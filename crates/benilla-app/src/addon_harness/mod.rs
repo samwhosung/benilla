@@ -1152,6 +1152,7 @@ fn seat_a_session(script: &mut UiScript) {
             action: 100,
             count: 0,
             consumable: false,
+            use_spell: None,
         }),
     );
     script.set_action_state(

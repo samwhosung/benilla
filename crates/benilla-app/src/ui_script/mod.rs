@@ -612,6 +612,7 @@ fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<
                     count,
                     // The seed's only item slot is the food stack, which is consumable.
                     consumable: kind == 0x80,
+                    use_spell: None,
                 }),
             );
             // Server-less a slot has no usable state; a live bar's resting state is usable.
