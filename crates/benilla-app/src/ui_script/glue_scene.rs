@@ -4,11 +4,14 @@
 //! its own bucket (the extract's `ModelPane` arm), so every GlueXML region paints over it.
 //!
 //! The scene is the pane's file: `AccountLogin.xml`'s `UI_MainMenu`, `CharacterSelect`'s OnLoad
-//! `UI_Orc` (`CharacterSelect.lua:26`), or the stage `SetCharSelectBackground` gives it. Its fog is
-//! the pane's own until `SetCharSelectBackground` swaps the fog fill callback for the select
-//! screen's (`0x472110`), which never fogs. The character is the select record the last
+//! `UI_Orc` (`CharacterSelect.lua:26`), or the stage `SetCharSelectBackground` or
+//! `SetCharCustomizeBackground` gives it. Its fog is the pane's own until `SetCharSelectBackground`
+//! swaps the fog fill callback for the select screen's (`0x472110`), which never fogs; the create
+//! screen's keeps the fog (`0x4707b0`). On the select scene the character is the record the last
 //! `SelectCharacter` built and attached (`0x472950`), turned by the facing cell (`[0xb4217c]`,
-//! `SetCharacterSelectFacing`).
+//! `SetCharacterSelectFacing`); on the create scene it is the preview character the create verbs
+//! last built (`0x470b70`), dressed in its class's outfit (`0x470800`) and turned by the create
+//! facing (`[0xb420f4]`, `SetCharacterCreateFacing`).
 //!
 //! The scene fills the pane at the pane's own aspect, as the reference frames it, and starts over
 //! with each `SetModel` instance; the pane's showing resets the glue glow (`0x46fa60`).
@@ -18,15 +21,24 @@ use bevy::prelude::*;
 use benilla_ui::script::{GlueScenePane, UiScript, VmKind};
 
 use super::glue_mgr::GlueMgr;
-use crate::portrait::{GlueLook, GluePreview, GlueScene, SceneFog, SelectLook};
+use crate::portrait::{CreateLook, GlueLook, GluePreview, GlueScene, SceneFog, SelectLook};
+
+/// The create scene's character and facing, as the create verbs left them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct CreateStage {
+    look: Option<benilla_ui::script::GlueCreateLook>,
+    facing: f32,
+}
 
 /// What the booth stands while the stock glue screens are up: `pane` is the shown `ModelFFX`'s
-/// scene, `standing` the character on its attachment 0, `facing` the select facing cell in
-/// radians. A file that names none of the shipped scenes stands nothing.
+/// scene, `standing` the select character on its attachment 0, `facing` the select facing cell in
+/// radians, `create` the create scene's. A file that names none of the shipped scenes stands
+/// nothing.
 fn stock_preview(
     pane: Option<&GlueScenePane>,
     standing: Option<&benilla_protocol::Character>,
     facing: f32,
+    create: CreateStage,
 ) -> (Option<GlueScene>, Option<GlueLook>, f32, Option<SceneFog>) {
     let Some(pane) = pane else {
         return (None, None, 0.0, None);
@@ -38,11 +50,28 @@ fn stock_preview(
             pane.path
         );
     }
-    // The character and the facing are the select frame's scene's alone (`[0xb42174]`).
+    // The character and the facing are the select frame's scene's (`[0xb42174]`) or the
+    // customize frame's (`[0xb420f0]`), each its own.
     let (look, yaw) = if pane.select {
         (
             standing.map(|c| GlueLook::Select(SelectLook::from(c))),
             facing,
+        )
+    } else if pane.create {
+        (
+            create.look.map(|l| {
+                GlueLook::Create(CreateLook {
+                    race: l.race,
+                    sex: l.sex,
+                    class: l.class,
+                    skin: l.skin,
+                    face: l.face,
+                    hair_style: l.hair_style,
+                    hair_color: l.hair_color,
+                    facial_hair: l.facial_hair,
+                })
+            }),
+            create.facing,
         )
     } else {
         (None, 0.0)
@@ -78,7 +107,16 @@ pub(crate) fn feed_stock_glue_preview(
     let (scene, look, yaw, fog) = match script.as_deref() {
         Some(s) => {
             let standing = s.glue_standing_guid().and_then(|g| mgr.roster_character(g));
-            stock_preview(pane.as_ref(), standing, s.glue_select_cells().facing)
+            let create = CreateStage {
+                look: s.glue_create_look(),
+                facing: s.glue_create_facing(),
+            };
+            stock_preview(
+                pane.as_ref(),
+                standing,
+                s.glue_select_cells().facing,
+                create,
+            )
         }
         None => (None, None, 0.0, None),
     };
@@ -148,6 +186,7 @@ mod tests {
             )),
             Some(&c),
             1.0,
+            CreateStage::default(),
         );
         assert_eq!(scene, Some(GlueScene::MainMenu));
         assert!(
@@ -180,14 +219,63 @@ mod tests {
         }
     }
 
+    /// The create pane stands the create verbs' character, dressed as its class, at the create
+    /// facing; the select's character and facing are not its own. With none built the stage is
+    /// empty.
+    #[test]
+    fn the_create_pane_stands_the_create_character_at_its_facing() {
+        let built = benilla_ui::script::GlueCreateLook {
+            race: 2,
+            sex: 1,
+            class: 3,
+            skin: 1,
+            face: 2,
+            hair_style: 3,
+            hair_color: 4,
+            facial_hair: 0,
+        };
+        let mut p = pane("Interface\\Glues\\Models\\UI_Orc\\UI_Orc.mdx", false, None);
+        p.create = true;
+        let c = crate::char_select::test_character(7, "Seven");
+        let (scene, look, yaw, _) = stock_preview(
+            Some(&p),
+            Some(&c),
+            1.0,
+            CreateStage {
+                look: Some(built),
+                facing: -0.25,
+            },
+        );
+        assert_eq!(scene, Some(GlueScene::Orc));
+        assert!(
+            look == Some(GlueLook::Create(CreateLook {
+                race: 2,
+                sex: 1,
+                class: 3,
+                skin: 1,
+                face: 2,
+                hair_style: 3,
+                hair_color: 4,
+                facial_hair: 0,
+            }))
+        );
+        assert_eq!(yaw, -0.25);
+        let (_, look, _, _) = stock_preview(Some(&p), Some(&c), 1.0, CreateStage::default());
+        assert!(look.is_none());
+    }
+
     #[test]
     fn no_shown_pane_and_an_unknown_file_stand_nothing() {
-        assert_eq!(stock_preview(None, None, 0.0).0, None);
+        assert_eq!(
+            stock_preview(None, None, 0.0, CreateStage::default()).0,
+            None
+        );
         assert_eq!(
             stock_preview(
                 Some(&pane("Interface\\Glues\\Models\\Odd.mdx", true, None)),
                 None,
-                0.0
+                0.0,
+                CreateStage::default()
             )
             .0,
             None
