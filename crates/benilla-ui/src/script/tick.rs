@@ -9,10 +9,11 @@ use super::{event, Model, ScriptValue, UiScript};
 
 impl UiScript {
     /// Queue an event for the start of the next tick, behind everything queued earlier and before
-    /// that tick's `OnUpdate` pass. A drain runs a step behind its input, so firing at once would
-    /// overtake events that input already queued: the soulbind confirm for an item placed into a
-    /// worn slot must follow that placement's `CURSOR_UPDATE`, whose handler hides it
-    /// (`UIParent.lua:357-361`).
+    /// that tick's `OnUpdate` pass: the host's lane ([`Model::pending_events`]), for a producer
+    /// outside any Lua verb. A drain runs a step behind its input, so firing at once would
+    /// overtake events the host already queued. A Lua verb's own events never wait here: they
+    /// fire inside it ([`verb`]), so the soulbind confirm for an item placed into a worn slot
+    /// follows that placement's `CURSOR_UPDATE`, whose handler hides it (`UIParent.lua:357-361`).
     pub fn queue_event(&mut self, event: &str, args: Vec<ScriptValue>) {
         self.model_mut()
             .pending_events
@@ -31,6 +32,40 @@ impl UiScript {
     pub fn fire_event(&mut self, event: &str, args: Vec<ScriptValue>) {
         fire_event_into(&self.lua, event, args);
     }
+}
+
+impl Model {
+    /// Raise `event` from engine code. Inside a [`verb`] segment it fires before the verb
+    /// returns, once the segment's borrow drops; anywhere else it joins the host queue
+    /// ([`Model::pending_events`]) for the next tick. So a helper shared by a Lua verb and a host
+    /// path, such as the cursor's clear, fires in place for the one and queues for the other.
+    pub(crate) fn raise(&mut self, event: &str, args: Vec<ScriptValue>) {
+        let raised = (event.to_string(), args);
+        match &mut self.verb_events {
+            Some(segment) => segment.push(raised),
+            None => self.pending_events.push(raised),
+        }
+    }
+}
+
+/// Run one segment of a Lua verb with the model borrowed, then fire every event it raised, in
+/// order, after the borrow drops and before the binding returns, as `SignalEvent` (`0x703e50`)
+/// and `SignalEvent2` (`0x703f50`) walk the listeners in place. A verb whose reference signals
+/// and then changes state a getter reads runs one segment per such step, so each handler sees
+/// the state the reference's sees. A handler that calls another verb runs that verb's segments
+/// inside this fan-out, the reference's synchronous nesting.
+pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
+    let (out, raised) = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
+        let outer = model.verb_events.replace(Vec::new());
+        debug_assert!(outer.is_none(), "a verb segment opened inside another");
+        let out = body(&mut model);
+        (out, model.verb_events.take().unwrap_or_default())
+    };
+    for (event, args) in raised {
+        fire_event_into(lua, &event, args);
+    }
+    out
 }
 
 /// [`UiScript::fire_event`] for a caller holding `&Lua`, such as a Lua binding.
@@ -240,4 +275,82 @@ fn paints(model: &super::Model, h: FrameHandle, f: &crate::widget::Frame) -> boo
     let tall = fraction(r.top, screen.bottom, sh) - fraction(r.bottom, screen.bottom, sh);
     let eps = crate::layout::SIZE_EPS;
     f64::from(wide.abs()) >= eps && f64::from(tall.abs()) >= eps
+}
+
+/// A Lua listener that logs each delivery in order, for the tests that pin when a verb's events
+/// fire and what their handlers read.
+#[cfg(test)]
+pub(crate) mod heard {
+    use super::UiScript;
+
+    /// Register one frame for `events`; each delivery appends `EVENT` or, with a `probe`, `EVENT
+    /// probe-value`, the probe being a Lua expression read inside the handler.
+    pub(crate) fn listen(s: &UiScript, events: &[&str], probe: Option<&str>) {
+        let register: String = events
+            .iter()
+            .map(|e| format!("HEARD_FRAME:RegisterEvent(\"{e}\")\n"))
+            .collect();
+        let line = probe.map_or_else(
+            || "event".to_string(),
+            |p| format!("event .. \" \" .. tostring({p})"),
+        );
+        s.run(&format!(
+            "HEARD = {{}}\n\
+             HEARD_FRAME = HEARD_FRAME or CreateFrame(\"Frame\")\n\
+             {register}\
+             HEARD_FRAME:SetScript(\"OnEvent\", function() table.insert(HEARD, {line}) end)"
+        ))
+        .unwrap();
+    }
+
+    /// The deliveries since the last call, with no tick run: what fired inside the verbs.
+    pub(crate) fn take(s: &UiScript) -> Vec<String> {
+        s.eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+            .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{heard, verb};
+    use crate::script::UiScript;
+
+    /// A verb's events have run their handlers by the verb's next Lua line, in the order raised,
+    /// and none is left for the tick.
+    #[test]
+    fn a_verb_segment_fires_its_events_before_the_binding_returns() {
+        let s = UiScript::new().unwrap();
+        s.lua
+            .globals()
+            .set(
+                "RaiseTwo",
+                s.lua
+                    .create_function(|lua, ()| {
+                        verb(lua, |model| {
+                            model.raise("CURSOR_UPDATE", Vec::new());
+                            model.raise("PLAYER_MONEY", Vec::new());
+                        });
+                        Ok(())
+                    })
+                    .unwrap(),
+            )
+            .unwrap();
+        heard::listen(&s, &["CURSOR_UPDATE", "PLAYER_MONEY"], None);
+        let seen: Vec<String> = s
+            .eval("RaiseTwo() local h = HEARD HEARD = {} return h")
+            .unwrap();
+        assert_eq!(seen, ["CURSOR_UPDATE", "PLAYER_MONEY"]);
+        assert!(s.model_ref().pending_events.is_empty());
+    }
+
+    /// Outside a segment, a raise is the host's and waits for the next tick.
+    #[test]
+    fn a_raise_outside_a_verb_queues_for_the_tick() {
+        let mut s = UiScript::new().unwrap();
+        heard::listen(&s, &["CURSOR_UPDATE"], None);
+        s.model_mut().raise("CURSOR_UPDATE", Vec::new());
+        assert!(heard::take(&s).is_empty());
+        s.tick(0.0);
+        assert_eq!(heard::take(&s), ["CURSOR_UPDATE"]);
+    }
 }
