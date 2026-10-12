@@ -124,6 +124,9 @@ pub(super) struct AddonsPanel {
     /// The live `checkAddonVersion`, true meaning the force-load box is unticked; read off the
     /// boot VM every frame.
     version_check: bool,
+    /// The folder names the server's `SMSG_ADDON_INFO` banned (status 0, `[rec+0x24] == 2`), which
+    /// `AddOn_CanLoad` refuses (`0x51e841`); read off the reply every frame.
+    banned: Vec<String>,
     /// First visible row (`AddonList.offset`).
     offset: usize,
     /// The scroll drag's grab, as a fraction of the band's height. Held here, not read off
@@ -152,6 +155,7 @@ impl Default for AddonsPanel {
             // The registered default, "1"; a `false` would paint out-of-date rows loadable for a
             // frame.
             version_check: true,
+            banned: Vec::new(),
             offset: 0,
             drag: None,
             tip: None,
@@ -314,7 +318,8 @@ impl AddonsPanel {
             .map(|(i, a)| GateRow {
                 name: &a.name,
                 enabled: self.effective_enabled(i),
-                banned: false,
+                banned: self.banned.iter().any(|b| b.eq_ignore_ascii_case(&a.name)),
+                // Set by a signature check answering 2, which benilla never makes.
                 corrupt: false,
                 interface: a.interface,
                 load_on_demand: a.load_on_demand,
@@ -431,6 +436,7 @@ pub(super) fn drive_addons_panel(
     assets: Res<AssetServer>,
     strings: Option<Res<GlueStrings>>,
     script: Option<NonSendMut<UiScript>>,
+    reply: Option<Res<crate::net::AddonInfoReply>>,
     mut cvars: ResMut<crate::cvars::Cvars>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -542,6 +548,19 @@ pub(super) fn drive_addons_panel(
         .is_none_or(|v| v != "0");
     if panel.version_check != version_check {
         panel.version_check = version_check;
+        panel.dirty = true;
+    }
+    // The addons the reply banned (status 0): the registry's BANNED, for the rows that are named.
+    let banned: Vec<String> = reply
+        .as_deref()
+        .and_then(|r| r.0.as_deref())
+        .unwrap_or_default()
+        .iter()
+        .filter(|r| r.status == 0)
+        .map(|r| r.name.clone())
+        .collect();
+    if panel.banned != banned {
+        panel.banned = banned;
         panel.dirty = true;
     }
 
@@ -1698,6 +1717,17 @@ mod tests {
         assert_eq!(p.box_state(0), BoxState::Off);
         set(&mut p, Some(1), 0, true);
         assert_eq!(p.box_state(0), BoxState::On);
+    }
+
+    /// A banned addon (the reply's status 0) is refused, and its dependents with `DEP_BANNED`
+    /// (`0x51e841`).
+    #[test]
+    fn a_banned_addon_is_refused_and_its_dependents_inherit_it() {
+        let mut p = panel_for(1, vec![addon("A", &[], 11200), addon("B", &["A"], 11200)]);
+        assert!(p.verdict(0).loadable() && p.verdict(1).loadable());
+        p.banned = vec!["a".into()];
+        assert_eq!(p.verdict(0).token().as_deref(), Some("BANNED"));
+        assert_eq!(p.verdict(1).token().as_deref(), Some("DEP_BANNED"));
     }
 
     /// In the All view a mixed box counts as checked, so a click disables for every character.
