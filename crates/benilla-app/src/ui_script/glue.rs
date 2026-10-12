@@ -23,9 +23,9 @@
 //! back from the world `0x402090` fires it with `"charselect"` or `"login"`. benilla plays no movie
 //! yet (#968), so its boot screen is `"login"`.
 //!
-//! The screens' `ModelFFX` panes (P4) must drive the glue booth's scene rig, the scene M2's own
-//! point lights (`portrait::glue_booth::scene_rig`) and the `FfxGlow::GLUE_SCENE` pass, never the
-//! `ui_models` tile path, where every lit batch draws black.
+//! The screens' `ModelFFX` panes drive the glue booth ([`super::glue_scene`]): its scene rig, the
+//! scene M2's own point lights and the `FfxGlow::GLUE_SCENE` pass, never the `ui_models` tile
+//! path, where every lit batch draws black.
 
 use bevy::prelude::*;
 

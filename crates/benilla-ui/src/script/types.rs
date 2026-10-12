@@ -93,8 +93,11 @@ pub enum QuadContent {
         /// The embedded `CGLight`, off on every shipped pane; a lit batch under it draws black, as
         /// in the reference.
         light: crate::widget::ModelLight,
-        /// The fog, when armed; a material with the UNFOGGED bit ignores it.
+        /// The fog the scene draws with ([`crate::widget::ModelState::scene_fog`]); a material
+        /// with the UNFOGGED bit ignores it.
         fog: Option<crate::widget::ModelFog>,
+        /// A `ModelFFX` (`0x46fa00`): the glue screens' scene, which the app's glue booth draws.
+        ffx: bool,
     },
     /// A `Texture` region: a BLP path, a solid or vertex colour, or both (a tinted texture).
     Texture {

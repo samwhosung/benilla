@@ -1140,8 +1140,9 @@ fn convert_entry(
             });
         }
         // A `<Model>`/`<PlayerModel>` pane draws itself, as the stock files declare a bare pane
-        // with no Texture: a file pane is a model tile, a unit pane samples its window's body
-        // bake square ([`crate::portrait::model_pane_booth`]), and an unclaimed pane draws nothing.
+        // with no Texture: a glue `ModelFFX` is the glue booth's scene, a file pane is a model
+        // tile, a unit pane samples its window's body bake square
+        // ([`crate::portrait::model_pane_booth`]), and an unclaimed pane draws nothing.
         QuadContent::ModelPane {
             handle,
             name,
@@ -1154,8 +1155,41 @@ fn convert_entry(
             camera,
             light,
             fog,
+            ffx,
         } => {
             use crate::portrait::PortraitSource;
+            // A `ModelFFX`'s scene draws once, at its own bucket's ARTWORK callback (`0x46fa90`
+            // overrides the paint registration `0x76d160`), so every UI region paints over it.
+            // The scene is the glue booth's, which renders the window's view of the stage the
+            // glue VM feeds it (`crate::ui_script::glue_scene`); the pane shows its part of it.
+            if ffx {
+                let Some(PortraitSource::Live(image)) =
+                    booths.images.0.get(crate::portrait::GLUE_SLOT)
+                else {
+                    return;
+                };
+                if w <= 0.0 || h <= 0.0 {
+                    return;
+                }
+                out.push(UiQuad {
+                    rect,
+                    z_key: eq.z,
+                    texture: Some(image.clone()),
+                    uv: UvRect::from_tex_coords([
+                        rect.min.x / w,
+                        rect.max.x / w,
+                        rect.min.y / h,
+                        rect.max.y / h,
+                    ]),
+                    // The scene draws at the widget's own alpha (`0x76d120`).
+                    color: [1.0, 1.0, 1.0, own_alpha],
+                    // The booth's target is premultiplied.
+                    premultiplied: true,
+                    clip,
+                    ..default()
+                });
+                return;
+            }
             // A file pane publishes an idempotent tile request; `ui_models::compose_tiles` draws
             // its quad each frame, so a cell packed later needs no re-conversion.
             if let Some(path) = model.as_deref() {
@@ -1939,6 +1973,11 @@ mod extract_gate_tests {
     fn app_from_script(lua: &str) -> App {
         let script = UiScript::new().unwrap();
         script.run(lua).unwrap();
+        app_over(script)
+    }
+
+    /// [`app_from_script`] over a VM of the caller's.
+    fn app_over(script: UiScript) -> App {
         let mut app = App::new();
         app.insert_non_send_resource(script);
         app.init_resource::<UiQuads>();
@@ -2012,6 +2051,67 @@ mod extract_gate_tests {
         assert!(
             app.world().resource::<UiQuads>().dirty,
             "a moved frame must re-extract"
+        );
+    }
+
+    /// A glue `ModelFFX` draws the glue booth's image over its own rect, sampling the window's
+    /// part of the booth's view, at its bucket's callback rank, and asks the UI model tiles for
+    /// nothing; a plain `Model` beside it is still a tile.
+    #[test]
+    fn a_model_ffx_draws_the_glue_booth_and_asks_for_no_tile() {
+        let script = UiScript::new_glue().unwrap();
+        script
+            .run(
+                r#"
+            local scene = CreateFrame("ModelFFX", "Scene")
+            scene:SetPoint("TOPLEFT", 100, -50)
+            scene:SetWidth(400); scene:SetHeight(300)
+            scene:SetModel("Interface\Glues\Models\UI_Orc\UI_Orc.mdx")
+            local plain = CreateFrame("Model", "Plain")
+            plain:SetPoint("TOPLEFT", 600, -50)
+            plain:SetWidth(64); plain:SetHeight(64)
+            plain:SetModel("Plain.mdx")
+        "#,
+            )
+            .unwrap();
+        let mut app = app_over(script);
+        let image = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        app.world_mut().resource_mut::<PortraitImages>().0.insert(
+            crate::portrait::GLUE_SLOT.to_string(),
+            crate::portrait::PortraitSource::Live(image.clone()),
+        );
+        app.update();
+
+        let paths: Vec<String> = app
+            .world()
+            .resource::<crate::ui_models::UiModelTiles>()
+            .requests
+            .values()
+            .map(|r| r.path.clone())
+            .collect();
+        assert_eq!(paths, ["Plain.mdx"], "the ModelFFX is no tile");
+
+        let quads = &app.world().resource::<UiQuads>().quads;
+        let scene: Vec<_> = quads
+            .iter()
+            .filter(|q| q.texture.as_ref() == Some(&image))
+            .collect();
+        assert_eq!(scene.len(), 1, "the pane draws the glue booth's image once");
+        let q = scene[0];
+        assert!(q.premultiplied);
+        assert!(q.rect.width() > 0.0 && q.rect.height() > 0.0);
+        let (w, h) = (1024.0, 768.0);
+        assert!(
+            q.uv == super::UvRect::from_tex_coords([
+                q.rect.min.x / w,
+                q.rect.max.x / w,
+                q.rect.min.y / h,
+                q.rect.max.y / h,
+            ]),
+            "the pane samples its own part of the window's view"
         );
     }
 

@@ -90,6 +90,7 @@ impl UiScript {
                             camera: m.camera,
                             light: m.light,
                             fog: m.scene_fog(),
+                            ffx: m.ffx,
                         },
                         _ => QuadContent::Frame,
                     };
