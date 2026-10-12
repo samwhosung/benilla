@@ -116,7 +116,7 @@ const MAX_PER_UNIT: usize = 4;
 
 /// World text draws beneath all UI, as the reference draws it in the world scene: the append
 /// lane's bottom band ([`crate::ui_pass::overlay_z`]).
-const Z_WORLD_TEXT: u64 = overlay_z::WORLD_TEXT;
+const Z_WORLD_TEXT: u128 = overlay_z::WORLD_TEXT;
 
 /// The first free of the unit's 4 slots; `None` is a hard drop, no eviction (`0x6c73f0`). The
 /// slot is also the seat-order key.

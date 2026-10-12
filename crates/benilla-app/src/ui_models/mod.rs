@@ -84,7 +84,7 @@ pub(crate) struct TileRequest {
     /// Where the cell composites: the pane's rect in the quad pass's space, y-down logical px.
     pub rect: Rect,
     /// `ZKey::callback(Artwork)`: after every texture and font string of the pane's layer.
-    pub z_key: u64,
+    pub z_key: u128,
     /// The frame's own alpha, which the composite draws at (`0x76d120`).
     pub alpha: f32,
     /// The enclosing ScrollFrame's clip, in the quad pass's space.
@@ -1816,7 +1816,7 @@ mod tests {
                     fog: None,
                     icon: None,
                     rect: Rect::new(0.0, 0.0, 63.0, 63.0),
-                    z_key: 1_000 + i as u64,
+                    z_key: 1_000 + i as u128,
                     alpha: 1.0,
                     clip: None,
                 },
@@ -1831,19 +1831,19 @@ mod tests {
                 );
             }
         }
-        let drawn: std::collections::HashSet<u64> =
+        let drawn: std::collections::HashSet<u128> =
             composite_quads(&bridge).iter().map(|q| q.z_key).collect();
         assert_eq!(drawn.len(), 2, "the packer placed two, so two quads");
         for (i, &h) in panes.iter().enumerate() {
             assert_eq!(
                 draws_this_frame(&bridge, &h),
-                drawn.contains(&(1_000 + i as u64)),
+                drawn.contains(&(1_000 + i as u128)),
                 "pane {i}: the park verdict and the composite must agree"
             );
         }
         // A repack moves texel windows without changing who has a cell.
         bridge.atlas_size = UVec2::splat(1024);
-        let regrown: std::collections::HashSet<u64> =
+        let regrown: std::collections::HashSet<u128> =
             composite_quads(&bridge).iter().map(|q| q.z_key).collect();
         assert_eq!(
             regrown, drawn,

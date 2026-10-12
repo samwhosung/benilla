@@ -430,7 +430,7 @@ impl UiScript {
         model: &Model,
         fh: FrameHandle,
         fr: Rect,
-        z: u64,
+        z: u128,
         paint: FramePaint,
         clip: Option<Rect>,
         out: &mut Vec<ExtractedQuad>,

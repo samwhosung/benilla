@@ -544,10 +544,9 @@ fn the_loot_window_draws_over_the_party_frames() {
         "the loot window's background must draw OVER the party frame art: \
          panel {loot_panel:#x} vs party {party_art:#x}"
     );
-    // The stratum is the draw key's top bits: in sync with `benilla_ui::order`'s `STRATUM_SHIFT`.
-    const STRATUM_SHIFT: u32 = 60;
+    let stratum = |z| benilla_ui::order::unpack(z).strata;
     assert!(
-        (party_art >> STRATUM_SHIFT) < (loot_panel >> STRATUM_SHIFT),
+        stratum(party_art) < stratum(loot_panel),
         "they must differ by STRATUM, not by luck within one"
     );
 }

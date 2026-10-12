@@ -125,7 +125,6 @@ fn an_error_toast_draws_over_an_open_panel_window() {
 
     s.resolve();
     let quads = s.extract();
-    const STRATUM_SHIFT: u32 = 60;
     let toast = quads
         .iter()
         .filter_map(|q| match &q.content {
@@ -158,7 +157,7 @@ fn an_error_toast_draws_over_an_open_panel_window() {
         "nothing may draw over the error toast while a panel is open: {above:?}"
     );
     assert_eq!(
-        toast >> STRATUM_SHIFT,
+        benilla_ui::order::unpack(toast).strata,
         4,
         "HIGH is stratum 4 — the ref's own for UIErrorsFrame"
     );

@@ -192,7 +192,7 @@ pub(super) struct BlipCtx {
     pub(super) px_per_yd: f32,
     /// The live view radius in yards: the in-range split's denominator and the dot cull.
     pub(super) radius_yd: f32,
-    pub(super) z: u64,
+    pub(super) z: u128,
     pub(super) alpha: f32,
     pub(super) wx: f32,
     pub(super) wy: f32,

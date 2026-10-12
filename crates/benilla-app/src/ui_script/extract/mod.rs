@@ -56,7 +56,7 @@ fn ui_pick_point() -> Option<(Vec2, f32)> {
 fn report_ui_pick(eq: &benilla_ui::script::ExtractedQuad, rect: Rect, at: Vec2, r: f32) {
     use std::collections::HashSet;
     use std::sync::Mutex;
-    static SEEN: std::sync::OnceLock<Mutex<HashSet<u64>>> = std::sync::OnceLock::new();
+    static SEEN: std::sync::OnceLock<Mutex<HashSet<u128>>> = std::sync::OnceLock::new();
     if !rect.inflate(r).contains(at) {
         return;
     }
@@ -227,9 +227,10 @@ struct Alignment {
     dropped: Vec<usize>,
 }
 
-/// A merge over `z`, a packed [`benilla_ui::order::ZKey`] that an insertion does not shift. Only
-/// fully equal pairs reuse quads, so a mis-pairing costs conversions, never correctness: `z` is
-/// not proven unique or sorted (a ScrollingMessageFrame's line sorts above its BACKGROUND layer).
+/// A merge over `z`, a packed [`benilla_ui::order::ZKey`] that an insertion does not shift, but in
+/// a scroll child's subtree, where a frame shown renumbers the frames drawn after it. Only fully
+/// equal pairs reuse quads, so a mis-pairing costs conversions, never correctness: `z` is not
+/// proven unique or sorted (a ScrollingMessageFrame's line sorts above its BACKGROUND layer).
 fn align_entries(
     was: &[benilla_ui::script::ExtractedQuad],
     now: &[benilla_ui::script::ExtractedQuad],
@@ -1550,7 +1551,7 @@ fn cursor_icon_quad(pos: Vec2, texture: Handle<Image>) -> UiQuad {
     const SIZE: f32 = 32.0;
     UiQuad {
         rect: Rect::new(pos.x, pos.y, pos.x + SIZE, pos.y + SIZE),
-        z_key: u64::MAX,
+        z_key: u128::MAX,
         texture: Some(texture),
         ..default()
     }
@@ -1657,7 +1658,7 @@ mod cursor_quad_tests {
         );
         assert_eq!(q.rect.width(), 32.0);
         assert_eq!(q.rect.height(), 32.0);
-        assert_eq!(q.z_key, u64::MAX);
+        assert_eq!(q.z_key, u128::MAX);
         assert!(q.texture.is_some());
         assert!(!q.additive);
     }

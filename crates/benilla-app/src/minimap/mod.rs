@@ -145,7 +145,7 @@ fn probe_minimap_widget(mut widget: ResMut<MinimapWidget>, windows: Query<&Windo
     let min = Vec2::new(win.width() - side - margin, margin);
     widget.0 = Some(MinimapSlot {
         rect: Rect::from_corners(min, min + Vec2::splat(side)),
-        z: u64::MAX / 2,
+        z: u128::MAX / 2,
         zoom: 3,
         inside_zoom: 3,
         alpha: 1.0,
@@ -199,7 +199,7 @@ impl Default for MinimapZoom {
 /// One extracted Minimap widget: its rect (y-down logical px), paint key and live state.
 pub(crate) struct MinimapSlot {
     pub(crate) rect: Rect,
-    pub(crate) z: u64,
+    pub(crate) z: u128,
     /// The outdoor zoom index; `inside_zoom` is the indoor one, picked by WMO containment.
     pub(crate) zoom: u8,
     pub(crate) inside_zoom: u8,

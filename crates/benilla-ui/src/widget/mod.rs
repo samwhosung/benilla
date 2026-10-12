@@ -225,6 +225,13 @@ pub struct Frame {
     /// `resizable` `0x200`, all set by `0x76a3c0`). It raises nothing; `CSimpleTop::Raise`
     /// (`0x7650f0`) raises the nearest toplevel self-or-ancestor of a clicked or shown frame.
     pub toplevel: bool,
+    /// Flag `0x2000` of `[frame+0xb4]`: the frame is in a scroll child's subtree, so the flat draw
+    /// pass skips it (`0x7659df`) and its ScrollFrame draws it; the hit test clips it to its first
+    /// ancestor without the flag (`0x76b034`). [`WidgetArena::set_scroll_flags`] writes it.
+    pub scroll_member: bool,
+    /// Flag `0x4000`: the frame is a scroll child itself, so a recursive draw that reaches it
+    /// through its parent skips it (`0x76b509`): its ScrollFrame draws it.
+    pub scroll_root: bool,
     /// This frame's own scale (`ownScale +0xb8`, default 1.0).
     pub scale: f32,
     /// `layoutScale` = `parentEffective * ownScale`, ε-gated (`0x76ac90`).
@@ -523,6 +530,8 @@ impl WidgetArena {
         let parent = parent.filter(|&p| self.frame(p).is_some());
         let parent_visible = parent.is_none_or(|p| self.frame(p).unwrap().effective_visible);
         let parent_scale = parent.map_or(1.0, |p| self.frame(p).unwrap().effective_scale);
+        // The ctor's `SetParent` (`0x769318`) copies the parent's scroll membership (`0x76ab92`).
+        let scroll_member = parent.is_some_and(|p| self.frame(p).unwrap().scroll_member);
 
         let insertion_seq = self.next_insertion;
         self.next_insertion += 1;
@@ -580,6 +589,8 @@ impl WidgetArena {
             max_resize: (0.0, 0.0),
             user_placed: false,
             toplevel: false,
+            scroll_member,
+            scroll_root: false,
             scale,
             effective_scale: parent_scale * scale,
             ignore_parent_scale: false,

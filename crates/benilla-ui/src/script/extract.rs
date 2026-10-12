@@ -5,7 +5,7 @@ use crate::layout::Rect;
 use crate::order::{self, ZTarget};
 use crate::widget::FrameHandle;
 
-use super::clip::{effective_clip, scroll_clip_sources};
+use super::clip::DrawClips;
 use super::{colorselect, slider, ExtractedQuad, FontObject, QuadContent, TexCoords, UiScript};
 
 impl UiScript {
@@ -61,15 +61,23 @@ impl UiScript {
         let model = self.model_ref();
         let list = order::traversal(&model.arena);
         let mut out = Vec::with_capacity(list.len());
-        // Scroll child → its ScrollFrame's rect; a quad clips to every ancestor ScrollFrame's.
-        let scroll_sources = scroll_clip_sources(&model);
-        for &(target, zkey) in list.iter() {
+        // A scroll child's subtree clips to its ScrollFrames' rects, nested ones intersecting.
+        let mut clips = DrawClips::new(&model, &list);
+        for &order::DrawEntry {
+            target,
+            key: zkey,
+            scope,
+        } in list.iter()
+        {
+            // Under a ScrollFrame with no rect the callback draws nothing (`0x787253`).
+            let Some(clip) = clips.clip(scope) else {
+                continue;
+            };
             let (rect, alpha, content, clip, scale) = match target {
                 ZTarget::Frame(fh) => {
                     let frame = model.arena.frame(fh);
                     let alpha = frame.map(|f| f.effective_alpha).unwrap_or(1.0);
                     let scale = frame.map(|f| f.effective_scale).unwrap_or(1.0);
-                    let clip = effective_clip(&model, &scroll_sources, fh);
                     let content = match frame.map(|f| &f.kind_state) {
                         Some(crate::widget::KindState::Minimap(m)) => QuadContent::Minimap {
                             zoom: m.zoom,
@@ -113,7 +121,6 @@ impl UiScript {
                             continue;
                         }
                     }
-                    let clip = owner.and_then(|o| effective_clip(&model, &scroll_sources, o));
                     let mut rect = owner.and_then(|o| model.resolved.get(&o).copied());
                     // A StatusBar's fill has no anchors: `bar_fill_rect` places it.
                     let mut bar_fill: Option<&crate::widget::StatusBarState> = None;

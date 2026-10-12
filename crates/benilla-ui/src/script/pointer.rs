@@ -4,11 +4,10 @@
 //!
 //! A frame captures the cursor when it is in the mouse index, which `0x76af00` enters it into
 //! while it has the mouse bit (`[+0xcc] & 4`) and is visible (`[+0xd4]`), and the probe `0x76b020`
-//! takes the point: its rect is valid, and its hit rect and effective ScrollFrame clip hold the
-//! point. The first such frame in the order of the hover walk (`0x7661cd` in `0x7660d0`) wins,
-//! which [`crate::order::hit_test`] implements.
-
-use std::collections::HashMap;
+//! takes the point: its rect is valid, and its hit rect holds the point, as does, for a frame in a
+//! scroll child's subtree, its first unflagged ancestor's ([`super::clip::hit_clip`]). The first
+//! such frame in the order of the hover walk (`0x7661cd` in `0x7660d0`) wins, which
+//! [`crate::order::hit_test`] implements over [`crate::order::pick_order`].
 
 use mlua::Value;
 
@@ -16,7 +15,7 @@ use crate::layout::Rect;
 use crate::order;
 use crate::widget::{ButtonState, FrameHandle};
 
-use super::clip::{effective_clip, scroll_clip_sources};
+use super::clip::{hit_clip, hit_rect};
 use super::{button, cursor, editbox, event, Model, UiScript};
 
 /// The double-click interval, 300 ms, a constant in the Button mouse-up dispatcher `0x7792d0`
@@ -119,14 +118,12 @@ impl UiScript {
     /// window over the Minimap keeps it from the sweep's probe; a held capture is probed anyway.
     fn hover_walk(&self, x: f32, y: f32) -> (Option<FrameHandle>, bool) {
         let model = self.model_ref();
-        let sorted = order::traversal(&model.arena);
-        let scroll_sources = scroll_clip_sources(&model);
+        let sorted = order::pick_order(&model.arena);
         let blip_held = model.minimap_blip.is_some();
         let minimap_missed = std::cell::Cell::new(
             blip_held
                 && model.mouse_capture.is_some_and(|c| {
-                    is_minimap_handle(&model, c)
-                        && !frame_contains(&model, &scroll_sources, c, x, y)
+                    is_minimap_handle(&model, c) && !frame_contains(&model, c, x, y)
                 }),
         );
         let hit = order::hit_test(&sorted, |fh| {
@@ -137,9 +134,7 @@ impl UiScript {
             // The nameplate's `+0x3c` veto (`0x7cba30`), not its mouse-enabled bit: while a
             // ground-targeted spell is armed a plate refuses the hit before its rect is tested,
             // so the reticle is placed through it.
-            let hit = indexed
-                && !model.nameplates.vetoes(fh)
-                && frame_contains(&model, &scroll_sources, fh, x, y);
+            let hit = indexed && !model.nameplates.vetoes(fh) && frame_contains(&model, fh, x, y);
             if blip_held && indexed && !hit && is_minimap_handle(&model, fh) {
                 minimap_missed.set(true);
             }
@@ -152,18 +147,11 @@ impl UiScript {
     /// on the wheel flag alone.
     fn hit_test_wheel(&self, x: f32, y: f32) -> Option<u32> {
         let model = self.model_ref();
-        let sorted = order::traversal(&model.arena);
-        let scroll_sources = scroll_clip_sources(&model);
+        let sorted = order::pick_order(&model.arena);
         let fh = order::hit_test(&sorted, |fh| {
             // The wheel flag alone: the wheel index is separate from the mouse's, so the wheel
             // passes a frame that only takes the mouse, as a scroll pane's chrome does.
-            model.arena.is_mouse_wheel_enabled(fh)
-                && model
-                    .resolved
-                    .get(&fh)
-                    .is_some_and(|r| point_in_rect(hit_rect(&model, fh, *r), x, y))
-                && effective_clip(&model, &scroll_sources, fh)
-                    .is_none_or(|c| point_in_rect(c, x, y))
+            model.arena.is_mouse_wheel_enabled(fh) && frame_contains(&model, fh, x, y)
         })?;
         model.frame_to_id.get(&fh).copied()
     }
@@ -312,13 +300,12 @@ impl UiScript {
     /// next below (`0x76554a` → `0x765532`).
     fn layout_drag_target(&self, x: f32, y: f32) -> Option<FrameHandle> {
         let model = self.model_ref();
-        let sorted = order::traversal(&model.arena);
-        let scroll_sources = scroll_clip_sources(&model);
+        let sorted = order::pick_order(&model.arena);
         let mut below = order::Strata::Tooltip;
         loop {
             let hit = order::hit_test(&sorted, |fh| {
                 model.arena.frame(fh).is_some_and(|f| f.strata < below)
-                    && frame_contains(&model, &scroll_sources, fh, x, y)
+                    && frame_contains(&model, fh, x, y)
             })?;
             if let Some(t) = super::object::toplevel::nearest_toplevel(&model, hit) {
                 return Some(t);
@@ -486,10 +473,9 @@ impl UiScript {
                 // `m | m << 8`): the Down click for `…ButtonDown`, then the press edge,
                 // `SetButtonState(PUSHED)` (`0x7792b1`), for either registration, applied below
                 // after the scripts as the slot orders them.
-                let sources = scroll_clip_sources(&model);
                 let inside = press_target.filter(|&h| {
                     button::wants_press_visual(&model, h, button)
-                        && frame_contains(&model, &sources, h, x, y)
+                        && frame_contains(&model, h, x, y)
                 });
                 press_art = inside;
                 // `0x7663e9` stores the target as the capture: the one held, else the hover.
@@ -659,9 +645,8 @@ impl UiScript {
             if model.arena.frame(h).is_none() {
                 return;
             }
-            let sources = scroll_clip_sources(&model);
             let clicks = button::release_may_click(&model, h)
-                && frame_contains(&model, &sources, h, x, y)
+                && frame_contains(&model, h, x, y)
                 && button::wants_click(&model, h, &format!("{button}Up"));
             // The double click: `0x77938d` fires `OnDoubleClick` instead of the second `OnClick`
             // (`0x77939d jmp 0x7793b5` skips the single leg), only for a frame with an
@@ -762,39 +747,22 @@ impl UiScript {
     }
 }
 
-/// The probe `0x76b020` alone: whether `(x, y)` is inside the frame's hit rect and its effective
-/// ScrollFrame clip, whatever its mouse bit. The Button click legs test it against the capture
-/// (`0x77925c`, `0x779335`).
-fn frame_contains(
-    model: &Model,
-    scroll_sources: &HashMap<FrameHandle, Rect>,
-    fh: FrameHandle,
-    x: f32,
-    y: f32,
-) -> bool {
+/// The probe `0x76b020` alone: whether `(x, y)` is inside the frame's hit rect and, in a scroll
+/// child's subtree, its [`hit_clip`], whatever its mouse bit. The Button click legs test it
+/// against the capture (`0x77925c`, `0x779335`).
+fn frame_contains(model: &Model, fh: FrameHandle, x: f32, y: f32) -> bool {
+    let Some(clip) = hit_clip(model, fh) else {
+        return false;
+    };
     model
         .resolved
         .get(&fh)
         .is_some_and(|r| point_in_rect(hit_rect(model, fh, *r), x, y))
-        && effective_clip(model, scroll_sources, fh).is_none_or(|c| point_in_rect(c, x, y))
+        && clip.is_none_or(|c| point_in_rect(c, x, y))
 }
 
 /// Point-in-rect in UI space (y-up), inclusive on all four edges, as the reference's probe
 /// `0x76b020` tests it.
 pub(super) fn point_in_rect(r: Rect, x: f32, y: f32) -> bool {
     x >= r.left && x <= r.right && y >= r.bottom && y <= r.top
-}
-
-/// A frame's mouse rect (`0x76b580`): its resolved rect shrunk by its `[left, right, top, bottom]`
-/// hit-rect insets times its effective scale (y-up), the insets being in the frame's own units; an
-/// over-shrunk rect collapses to empty rather than inverting.
-fn hit_rect(model: &Model, fh: FrameHandle, r: Rect) -> Rect {
-    let s = super::object::eff_scale(model, fh);
-    let [left, right, top, bottom] = model.arena.hit_rect_insets(fh).map(|i| i * s);
-    Rect {
-        left: r.left + left,
-        right: (r.right - right).max(r.left + left),
-        top: r.top - top,
-        bottom: (r.bottom + bottom).min(r.top - top),
-    }
 }

@@ -320,6 +320,54 @@ mod tests {
         );
     }
 
+    /// The create screen's three info panels raise their icon frame a level in its `OnLoad`
+    /// (`CharacterCreate.xml:238`, `:399`, `:560`), above the ScrollFrame beside it. The scroll
+    /// child draws in that ScrollFrame's HIGHLIGHT callback (`0x787220`), so the description text
+    /// draws under the icon it runs past, not at the scroll child's own level, which ties the icon
+    /// and would put the text on top.
+    #[test]
+    fn the_create_panels_icons_cover_their_scrolled_text() {
+        let _ = benilla_formats::wow_data_or_skip!();
+        let mut s = UiScript::new_glue().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        let _ = load_glue(&mut s);
+        set_glue_screen(&mut s, GlueScreen::Login);
+        // Shown alone: the screen's art and text need no create catalog.
+        s.run("AccountLogin:Hide() CharacterCreate:Show()").unwrap();
+        let _ = s.take_errors();
+        s.resolve();
+        let quads = s.extract();
+        let owned = |name: &str| {
+            quads
+                .iter()
+                .filter(|q| s.quad_owner_name(q.target).as_deref() == Some(name))
+                .collect::<Vec<_>>()
+        };
+        for panel in ["Faction", "Race", "Class"] {
+            let icon = owned(&format!("CharacterCreate{panel}IconFrame"));
+            let icon = icon
+                .iter()
+                .find(|q| matches!(q.content, benilla_ui::script::QuadContent::Texture { .. }))
+                .unwrap_or_else(|| panic!("the {panel} icon draws"));
+            let text = owned(&format!("CharacterCreate{panel}ScrollChild"));
+            let text: Vec<_> = text
+                .iter()
+                .filter(|q| matches!(q.content, benilla_ui::script::QuadContent::Text { .. }))
+                .collect();
+            assert!(!text.is_empty(), "the {panel} panel's text draws");
+            let icon_rect = icon.rect.expect("the icon is placed");
+            assert!(
+                text.iter().any(|q| q
+                    .rect
+                    .is_some_and(|r| r.left < icon_rect.right && r.top > icon_rect.bottom)),
+                "some {panel} text runs under the icon's corner"
+            );
+            for q in text {
+                assert!(q.z < icon.z, "the {panel} text draws under the raised icon");
+            }
+        }
+    }
+
     /// `GlueParent` fills the screen root, 768 tall and `768·a` wide (`0x41ad10`, from `0x46ab40`),
     /// up to 16:9; past that `GlueParent_OnLoad` centres it 16:9 wide on the root's height.
     #[test]

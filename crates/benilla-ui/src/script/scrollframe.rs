@@ -143,10 +143,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
             };
             // Every call marks the range (`0x786d16`), the same child again included.
-            with_scroll(lua, &this, |s| {
-                s.range_dirty = true;
-                s.child = new_child;
-            })?;
+            with_scroll(lua, &this, |s| s.range_dirty = true)?;
+            {
+                let h = frame_handle_of(lua, &this)?;
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.arena.set_scroll_child(h, new_child);
+            }
             // The old child keeps its point and is not invalidated (`0x786ce6`–`0x786cf4` only
             // flags it); the new one is re-anchored on every call (`0x786d11`).
             reanchor_child(lua, &this)?;

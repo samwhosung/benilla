@@ -532,7 +532,8 @@ fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() 
         frame:SetWidth(300); frame:SetHeight(200)  -- bottom 300
         frame:EnableMouse(false)            -- isolate the button's own clip-gated hit
 
-        local child = CreateFrame("Frame", "Child")
+        -- Under its ScrollFrame, as a `<ScrollChild>` is: its rect is the hit clip.
+        local child = CreateFrame("Frame", "Child", frame)
         child:SetWidth(300); child:SetHeight(600)
         frame:SetScrollChild(child)
 
@@ -558,6 +559,143 @@ fn hit_test_denies_a_button_clipped_out_and_admits_it_once_scrolled_into_view() 
         s.hit_test(25.0, 340.0).is_some(),
         "scrolled into view, the button hits again"
     );
+}
+
+/// The probe `0x76b020` climbs a scroll subtree's parent chain to the first frame without the
+/// scroll flag and clips to its rect; when the chain runs out first (`0x76b063`), as it does for a
+/// scroll child with no parent, nothing in the subtree is hit, though it draws.
+#[test]
+fn a_parentless_scroll_childs_subtree_takes_no_hit() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetPoint("TOPLEFT", 0, -100)
+        frame:SetWidth(300); frame:SetHeight(200)
+        local child = CreateFrame("Frame", "Child")
+        child:SetWidth(300); child:SetHeight(600)
+        frame:SetScrollChild(child)
+        local btn = CreateFrame("Button", "Btn", child)
+        btn:SetPoint("TOPLEFT", "Child", "TOPLEFT", 0, -10)
+        btn:SetWidth(50); btn:SetHeight(20)
+        local t = btn:CreateTexture(nil, "ARTWORK"); t:SetTexture("marker:btn"); t:SetAllPoints()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        marker_clip(&s.extract(), "marker:btn"),
+        Some(Some(Rect::new(300.0, 0.0, 500.0, 300.0))),
+        "it draws, clipped to the ScrollFrame"
+    );
+    assert_eq!(s.hit_test(25.0, 480.0), None);
+    // Parented under the ScrollFrame, the same button hits.
+    s.run("Child:SetParent(SF) SF:SetScrollChild(Child)")
+        .unwrap();
+    s.resolve();
+    assert_eq!(s.hit_test_name(25.0, 480.0).as_deref(), Some("Btn"));
+}
+
+/// The hit clip is one rect, the first unflagged ancestor's (`0x76b069`): inside a nested
+/// ScrollFrame, that is the outer ScrollFrame, so a button past the inner one's edge but inside
+/// the outer one's is hit where it is not drawn. The draw clip intersects both (`0x787220`).
+#[test]
+fn a_nested_scroll_childs_hit_clips_to_the_outer_scroll_frame_alone() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local outer = CreateFrame("ScrollFrame", "Outer")
+        outer:SetPoint("TOPLEFT", 0, 0)
+        outer:SetWidth(400); outer:SetHeight(400)   -- top 600, bottom 200
+        outer:EnableMouse(false)
+        local c1 = CreateFrame("Frame", "C1", outer)
+        c1:SetWidth(400); c1:SetHeight(400)
+        outer:SetScrollChild(c1)
+        local inner = CreateFrame("ScrollFrame", "Inner", c1)
+        inner:SetPoint("TOPLEFT", "C1", "TOPLEFT", 0, 0)
+        inner:SetWidth(100); inner:SetHeight(100)   -- x 0..100, y 500..600
+        local c2 = CreateFrame("Frame", "C2", inner)
+        c2:SetWidth(300); c2:SetHeight(300)
+        inner:SetScrollChild(c2)
+        local btn = CreateFrame("Button", "Btn", c2)
+        btn:SetPoint("TOPLEFT", "C2", "TOPLEFT", 150, -10)  -- x 150..200, y 570..590
+        btn:SetWidth(50); btn:SetHeight(20)
+        local t = btn:CreateTexture(nil, "ARTWORK"); t:SetTexture("marker:btn"); t:SetAllPoints()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        marker_clip(&s.extract(), "marker:btn"),
+        Some(Some(Rect::new(500.0, 0.0, 600.0, 100.0))),
+        "drawn inside the inner ScrollFrame only"
+    );
+    assert_eq!(s.hit_test_name(175.0, 580.0).as_deref(), Some("Btn"));
+    assert_eq!(
+        s.hit_test(175.0, 100.0),
+        None,
+        "outside the outer ScrollFrame"
+    );
+}
+
+/// The callback clips to the ScrollFrame's `[+0xd8]` (`0x76b220`), its mouse rect, which its
+/// hit-rect insets shrink (`0x76b580`).
+#[test]
+fn the_draw_clip_is_the_scroll_frames_mouse_rect() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetPoint("TOPLEFT", 0, -100)
+        frame:SetWidth(300); frame:SetHeight(200)
+        frame:SetHitRectInsets(10, 20, 30, 40)
+        local child = CreateFrame("Frame", "Child", frame)
+        child:SetWidth(300); child:SetHeight(600)
+        frame:SetScrollChild(child)
+        local t = child:CreateTexture(nil, "ARTWORK")
+        t:SetTexture("marker:child"); t:SetAllPoints()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        marker_clip(&s.extract(), "marker:child"),
+        Some(Some(Rect::new(340.0, 10.0, 470.0, 280.0)))
+    );
+}
+
+/// A ScrollFrame whose rect does not resolve draws no scroll child (`0x76b220` fails at
+/// `0x787253`), though the child itself resolves.
+#[test]
+fn a_scroll_frame_with_no_rect_draws_no_scroll_child() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local base = CreateFrame("Frame", "Base")
+        base:SetPoint("TOPLEFT", 0, 0); base:SetWidth(10); base:SetHeight(10)
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetWidth(300); frame:SetHeight(200)
+        local child = CreateFrame("Frame", "Child", frame)
+        child:SetWidth(300); child:SetHeight(600)
+        local t = child:CreateTexture(nil, "ARTWORK")
+        t:SetTexture("marker:child"); t:SetAllPoints()
+        frame:SetScrollChild(child)
+        -- The re-anchor's TOPLEFT on the unplaced ScrollFrame, replaced by a placed one.
+        child:ClearAllPoints(); child:SetPoint("TOPLEFT", "Base", "TOPLEFT")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert!(
+        s.eval::<bool>("return SF:GetLeft() == nil and Child:GetLeft() ~= nil")
+            .unwrap(),
+        "the ScrollFrame has no rect and its child has one"
+    );
+    assert_eq!(marker_clip(&s.extract(), "marker:child"), None);
 }
 
 /// The reference measures text synchronously and drains the layout before the walk (`0x7656ba`),

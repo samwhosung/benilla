@@ -24,8 +24,8 @@ const Q_TEXT: [f32; 4] = [0.92, 0.92, 0.92, 1.0];
 const Q_DIM_MARKUP: &str = "|cffb4b4b4";
 /// Paint order: the background under the glyphs, both above every packed WoW z_key, whose frame
 /// tuples never fill the top bits.
-const Z_PILL_BG: u64 = u64::MAX - 1;
-const Z_PILL: u64 = u64::MAX;
+const Z_PILL_BG: u128 = u128::MAX - 1;
+const Z_PILL: u128 = u128::MAX;
 /// The quad pill's font height (logical px) and box padding.
 const PILL_QUAD_PX: f32 = 12.0;
 const PILL_PAD: Vec2 = Vec2::new(9.0, 4.0);

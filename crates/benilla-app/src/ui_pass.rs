@@ -69,7 +69,7 @@ pub(crate) struct UiQuad {
     /// Screen pixels, y-down, anchor-resolved.
     pub rect: Rect,
     /// Paint order, stable-sorted ascending: higher draws on top.
-    pub z_key: u64,
+    pub z_key: u128,
     /// `None` samples the shared 1×1 white.
     pub texture: Option<Handle<Image>>,
     pub uv: UvRect,
@@ -158,10 +158,10 @@ pub(crate) struct UiQuads {
 }
 
 /// The append lane's z bands, far below the scripted UI's keys (a [`benilla_ui::order::ZKey`]
-/// region sets `1 << 20`), so the whole lane paints under the player UI.
+/// region sets bit 20 of the key's high word), so the whole lane paints under the player UI.
 pub(crate) mod overlay_z {
     /// Floating combat, XP and honor numbers, drawn by the client in the world scene under all UI.
-    pub(crate) const WORLD_TEXT: u64 = 0;
+    pub(crate) const WORLD_TEXT: u128 = 0;
 }
 
 /// Clear the append lane at the top of the [`UiQuadAppend`] window, before every appender.

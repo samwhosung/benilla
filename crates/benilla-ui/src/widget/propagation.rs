@@ -2,7 +2,7 @@
 
 use crate::order::Strata;
 
-use super::{ChildWalk, FrameHandle, RegionHandle, WidgetArena, SCALE_EPS};
+use super::{ChildWalk, FrameHandle, KindState, RegionHandle, WidgetArena, SCALE_EPS};
 
 impl WidgetArena {
     // ── Visibility ───────────────────────────────────────────────────────────────────────────────
@@ -324,6 +324,52 @@ impl WidgetArena {
         self.set_frame_level(h, plevel, false);
         let ps = self.parent_effective_scale(h);
         self.propagate_scale(h, ps);
+        // The subtree takes the new parent's scroll membership, none for no parent; the scroll
+        // child mark stays (`0x76ab8c`–`0x76abcb`: `0x76a400(parent & 0x2000, -1)`).
+        let member = new_parent.is_some_and(|np| self.frame(np).is_some_and(|f| f.scroll_member));
+        self.set_scroll_flags(h, member, None);
+    }
+
+    /// `SetScrollChild` (`0x786ce0`) on the ScrollFrame `sf`: the old child's subtree leaves the
+    /// scroll draw and the new one's joins it, old first, so the same child again stays in
+    /// (`0x786cf4`, `0x786d0a`). Returns the old child; `None` changes nothing on a frame that is
+    /// not a ScrollFrame.
+    pub fn set_scroll_child(
+        &mut self,
+        sf: FrameHandle,
+        child: Option<FrameHandle>,
+    ) -> Option<Option<FrameHandle>> {
+        let KindState::Scroll(s) = &mut self.frame_mut(sf)?.kind_state else {
+            return None;
+        };
+        let old = std::mem::replace(&mut s.child, child);
+        if let Some(old) = old {
+            self.set_scroll_flags(old, false, Some(false));
+        }
+        if let Some(new) = child {
+            self.set_scroll_flags(new, true, Some(true));
+        }
+        Some(old)
+    }
+
+    /// `0x76a400`: set or clear the scroll membership (`0x2000`) on `h` and its whole subtree, and
+    /// when `root` is given, the scroll child mark (`0x4000`) on `h` alone. `SetScrollChild`
+    /// clears both on the old child and sets both on the new one (`0x786cf4`, `0x786d0a`).
+    pub fn set_scroll_flags(&mut self, h: FrameHandle, member: bool, root: Option<bool>) {
+        let Some(f) = self.frame_mut(h) else {
+            return;
+        };
+        f.scroll_member = member;
+        if let Some(root) = root {
+            f.scroll_root = root;
+        }
+        let mut stack = f.children.clone();
+        while let Some(c) = stack.pop() {
+            if let Some(cf) = self.frame_mut(c) {
+                cf.scroll_member = member;
+                stack.extend_from_slice(&cf.children);
+            }
+        }
     }
 
     /// `SetParent` whole, for a caller with no handler to fire: the frames that lost visibility,

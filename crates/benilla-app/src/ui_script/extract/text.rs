@@ -34,7 +34,7 @@ pub(super) struct TextStyle {
 
 /// The extraction loop's context for one Text quad.
 pub(super) struct TextHost<'a> {
-    pub z: u64,
+    pub z: u128,
     pub alpha: f32,
     pub target: ZTarget,
     pub rect: Rect,

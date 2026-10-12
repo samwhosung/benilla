@@ -1,56 +1,105 @@
-//! The ScrollFrame clip, shared by `extract` and the pointer hit-test so drawing and hitting agree.
+//! The ScrollFrame clips: the draw clip of a scroll child's subtree, which `extract` applies, and
+//! the hit clip of a frame in it, which the pointer's probe applies. The two differ in the
+//! reference, and so here.
 
 use std::collections::HashMap;
 
 use crate::layout::Rect;
-use crate::widget::{FrameKind, KindState};
+use crate::order::{DrawEntry, ZTarget};
 
 use super::model::Model;
 use super::FrameHandle;
 
-/// Scroll child → its ScrollFrame's resolved rect, for every live ScrollFrame with a rect and a
-/// live child. Rebuilt per call and never cached, so no scroll change needs invalidating.
-pub(super) fn scroll_clip_sources(model: &Model) -> HashMap<FrameHandle, Rect> {
-    let mut sources = HashMap::new();
-    for (h, frame) in model.arena.iter_frames() {
-        if frame.kind != FrameKind::ScrollFrame {
-            continue;
-        }
-        let KindState::Scroll(state) = &frame.kind_state else {
-            continue;
-        };
-        let Some(child) = state.child else { continue };
-        if model.arena.frame(child).is_none() {
-            continue; // stale child handle
-        }
-        if let Some(&rect) = model.resolved.get(&h) {
-            sources.insert(child, rect);
-        }
+/// A frame's mouse rect (`0x76b580`, `[frame+0xd8]`): its resolved rect shrunk by its `[left,
+/// right, top, bottom]` hit-rect insets times its effective scale (y-up), the insets being in the
+/// frame's own units; an over-shrunk rect collapses to empty rather than inverting.
+pub(super) fn hit_rect(model: &Model, fh: FrameHandle, r: Rect) -> Rect {
+    let s = super::object::eff_scale(model, fh);
+    let [left, right, top, bottom] = model.arena.hit_rect_insets(fh).map(|i| i * s);
+    Rect {
+        left: r.left + left,
+        right: (r.right - right).max(r.left + left),
+        top: r.top - top,
+        bottom: (r.bottom + bottom).min(r.top - top),
     }
-    sources
 }
 
-/// The clip `h` draws and hits within: the intersection of every ScrollFrame rect whose scroll
-/// child is `h` or an ancestor of it, so nested ScrollFrames intersect; `None` is unclipped.
-pub(super) fn effective_clip(
-    model: &Model,
-    sources: &HashMap<FrameHandle, Rect>,
-    mut h: FrameHandle,
-) -> Option<Rect> {
-    let mut clip: Option<Rect> = None;
-    loop {
-        if let Some(&r) = sources.get(&h) {
-            clip = Some(match clip {
-                Some(c) => intersect_rect(c, r),
-                None => r,
-            });
-        }
-        match model.arena.frame(h).and_then(|f| f.parent) {
-            Some(p) => h = p,
-            None => break,
+/// The clip a draw entry under a ScrollFrame takes, per [`DrawEntry::scope`]: the callback
+/// `0x787220` narrows the viewport to the ScrollFrame's rect (`[+0xd8]`, `0x76b220`) intersected
+/// with the viewport it was called in (`0x7873f5`–`0x787441`), so nested ScrollFrames intersect.
+/// It draws nothing for a ScrollFrame whose rect has not resolved (`0x787253`).
+pub(super) struct DrawClips<'a> {
+    model: &'a Model,
+    /// Each listed frame's own scope.
+    scope_of: HashMap<FrameHandle, Option<FrameHandle>>,
+    /// A ScrollFrame's callback clip, `None` when its callback draws nothing.
+    memo: HashMap<FrameHandle, Option<Rect>>,
+}
+
+impl<'a> DrawClips<'a> {
+    pub(super) fn new(model: &'a Model, list: &[DrawEntry]) -> DrawClips<'a> {
+        let scope_of = list
+            .iter()
+            .filter_map(|e| match e.target {
+                ZTarget::Frame(fh) => Some((fh, e.scope)),
+                ZTarget::Region(_) => None,
+            })
+            .collect();
+        DrawClips {
+            model,
+            scope_of,
+            memo: HashMap::new(),
         }
     }
-    clip
+
+    /// The clip of an entry under `scope`: `Some(None)` unclipped, `Some(Some(rect))` clipped, and
+    /// `None` when the entry is not drawn.
+    pub(super) fn clip(&mut self, scope: Option<FrameHandle>) -> Option<Option<Rect>> {
+        match scope {
+            None => Some(None),
+            Some(sf) => self.callback_clip(sf).map(Some),
+        }
+    }
+
+    fn callback_clip(&mut self, sf: FrameHandle) -> Option<Rect> {
+        if let Some(&c) = self.memo.get(&sf) {
+            return c;
+        }
+        let own = self
+            .model
+            .resolved
+            .get(&sf)
+            .map(|&r| hit_rect(self.model, sf, r));
+        let outer = self.scope_of.get(&sf).copied().flatten();
+        let clip = match (own, outer) {
+            (None, _) => None,
+            (Some(r), None) => Some(r),
+            (Some(r), Some(o)) => self.callback_clip(o).map(|oc| intersect_rect(oc, r)),
+        };
+        self.memo.insert(sf, clip);
+        clip
+    }
+}
+
+/// The hit clip of `h`, as the probe `0x76b020` reads it: none for a frame outside every scroll
+/// child's subtree (`0x76b041`); otherwise the mouse rect of its first ancestor without the scroll
+/// flag (`0x76b047`–`0x76b069`), which the point must also be in. `None` is a miss whatever the
+/// point: the parent chain ran out with every ancestor flagged (`0x76b063`), or that ancestor has
+/// no rect.
+pub(super) fn hit_clip(model: &Model, h: FrameHandle) -> Option<Option<Rect>> {
+    let f = model.arena.frame(h)?;
+    if !f.scroll_member {
+        return Some(None);
+    }
+    let mut cur = f.parent;
+    while let Some(p) = cur {
+        let pf = model.arena.frame(p)?;
+        if !pf.scroll_member {
+            return model.resolved.get(&p).map(|&r| Some(hit_rect(model, p, r)));
+        }
+        cur = pf.parent;
+    }
+    None
 }
 
 /// Rect intersection, y-up. Disjoint rects give an inverted rect, which the pointer never hits

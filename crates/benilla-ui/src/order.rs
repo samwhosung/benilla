@@ -8,6 +8,13 @@
 //! layers outside and frames inside, so every frame's BACKGROUND draws before any frame's BORDER.
 //! Within a layer, `0x76fb00` drains every quad, then every string, then the render callbacks.
 //!
+//! A scroll child's subtree is the one tree walk. `SetScrollChild` flags it out of the flat pass
+//! (`0x7659df`), and its ScrollFrame registers a HIGHLIGHT callback (`0x7871c0` → `0x787220`) that
+//! draws it through the recursive draw (`0x78754c` → `0x76b3f0`): each frame's five layers, then
+//! its shown children in link order, strata and level ignored. So the subtree paints at its
+//! ScrollFrame's place, after that bucket's HIGHLIGHT textures and text, and a nested ScrollFrame's
+//! child paints after its own HIGHLIGHT layer, before its children.
+//!
 //! The frame term is the client's live intrusive-list position: a frame relinks at its bucket's
 //! tail when shown and when a shown frame's strata or level changes, and the later link draws on
 //! top. [`crate::widget::WidgetArena`] keeps a counter bumped at those moments, which orders the
@@ -18,7 +25,7 @@
 //! (`0x7731a0`, comparator `0x7731c0`), because benilla allocates its handles differently; no
 //! content may depend on the order of two overlapping textures in one layer.
 
-use crate::widget::{FrameHandle, RegionHandle, RegionKind, WidgetArena};
+use crate::widget::{FrameHandle, KindState, RegionHandle, RegionKind, WidgetArena};
 
 // ── Strata: the top-level draw buckets ───────────────────────────────────────────────────────
 
@@ -96,7 +103,8 @@ impl Default for DrawLayer {
 
 // ── ZKey: the packed total-order key ─────────────────────────────────────────────────────────
 //
-// Most significant first; one ascending sort gives the render list.
+// Two 64-bit words, most significant first; one ascending sort gives the render list. The high
+// word is the flat pass's key:
 //
 //   bits 60..=63 (4)   stratum           Strata::index()
 //   bits 44..=59 (16)  frame level       u16
@@ -114,6 +122,20 @@ impl Default for DrawLayer {
 // The sub-level is the engine's own ordering within a layer, set only for the EditBox caret: 1.12
 // gives Lua and XML none (`0x76a860` takes only region and layer and inserts at the head, and
 // `SetDrawLayer` `0x79a780` reads the layer alone).
+//
+// The low word is 0 for the flat pass. A scroll child's subtree takes its outermost ScrollFrame's
+// HIGHLIGHT callback key as the high word and its recursive-draw order as the low word:
+//
+//   bits 26..=63 (38)  frame ordinal     preorder, from 1, a nested scroll child's subtree right
+//                                        after its ScrollFrame and before that frame's children
+//   bits 23..=25 (3)   draw layer        DrawLayer::index()
+//   bits 21..=22 (2)   batch rank        BatchRank
+//   bit  20      (1)   is-region         as in the high word
+//   bits 12..=19 (8)   sub-level         as in the high word
+//   bits  0..=11 (12)  declaration seq   as in the high word
+//
+// So inside the subtree the frame outranks the layer: `0x76b3f0` submits one frame's five batches
+// (`0x76b4bf`–`0x76b4db`) before it recurses into the children (`0x76b4dd`).
 
 const STRATUM_SHIFT: u32 = 60;
 const LEVEL_SHIFT: u32 = 44;
@@ -123,6 +145,10 @@ const INSERTION_SHIFT: u32 = 21;
 const IS_REGION_SHIFT: u32 = 20;
 const SUBLEVEL_SHIFT: u32 = 12;
 const DECL_SHIFT: u32 = 0;
+
+const NESTED_ORDINAL_SHIFT: u32 = 26;
+const NESTED_LAYER_SHIFT: u32 = 23;
+const NESTED_RANK_SHIFT: u32 = 21;
 
 /// The link-stamp width; the arena renumbers its stamps at the cap.
 pub(crate) const INSERTION_BITS: u32 = 18;
@@ -139,15 +165,54 @@ pub(crate) const DECL_CAP: u32 = 1 << DECL_BITS;
 pub enum BatchRank {
     Quad = 0,
     Text = 1,
-    /// A `Model` frame's scene, registered for ARTWORK only (`0x76d17f`).
+    /// A render callback: a `Model` frame's scene, registered for ARTWORK only (`0x76d17f`), or a
+    /// ScrollFrame's scroll child, for HIGHLIGHT only (`0x7871d5`).
     Callback = 2,
 }
 
-/// The packed draw-order key; its `Ord` is the client's draw order.
+/// The packed draw-order key; its `Ord` is the client's draw order. The high word is the flat
+/// pass's key and the low word a scroll subtree's order inside its ScrollFrame's callback, 0 for a
+/// flat entry (the layout above).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ZKey(u64);
+pub struct ZKey(u128);
+
+/// The fields below the frame term of either word: a region's layer, rank, sub-level and
+/// declaration seq at the given layer and rank shifts.
+const fn entry_bits(
+    layer_shift: u32,
+    rank_shift: u32,
+    layer: DrawLayer,
+    rank: BatchRank,
+    sub_level: i8,
+    decl: u16,
+) -> u64 {
+    // Biased into 0..=255 so a higher sub-level sorts later.
+    let sub_biased = (sub_level as i16 + 128) as u64;
+    (1u64 << IS_REGION_SHIFT)
+        | ((layer.index() as u64) << layer_shift)
+        | ((rank as u64) << rank_shift)
+        | (sub_biased << SUBLEVEL_SHIFT)
+        | ((decl as u64) << DECL_SHIFT)
+}
 
 impl ZKey {
+    #[inline]
+    const fn words(hi: u64, lo: u64) -> ZKey {
+        ZKey(((hi as u128) << 64) | lo as u128)
+    }
+
+    /// The flat pass's word.
+    #[inline]
+    const fn hi(self) -> u64 {
+        (self.0 >> 64) as u64
+    }
+
+    /// The scroll subtree's word, 0 for a flat entry.
+    #[inline]
+    const fn lo(self) -> u64 {
+        self.0 as u64
+    }
+
     /// A frame's own entry; its region fields are zero, so it sorts before its regions.
     pub fn frame(strata: Strata, level: u16, insertion: u32) -> ZKey {
         debug_assert!(
@@ -157,7 +222,7 @@ impl ZKey {
         let bits = (u64::from(strata.index()) << STRATUM_SHIFT)
             | (u64::from(level) << LEVEL_SHIFT)
             | (u64::from(insertion) << INSERTION_SHIFT);
-        ZKey(bits)
+        ZKey::words(bits, 0)
     }
 
     /// A region's key; `strata`, `level` and `insertion` are its owner frame's, and
@@ -172,29 +237,69 @@ impl ZKey {
         decl: u16,
     ) -> ZKey {
         debug_assert!(
-            insertion < (1 << INSERTION_BITS),
-            "frame insertion {insertion} exceeds {INSERTION_BITS} bits"
-        );
-        debug_assert!(
             u32::from(decl) < (1 << DECL_BITS),
             "region decl seq {decl} exceeds {DECL_BITS} bits"
         );
-        // Biased into 0..=255 so a higher sub-level sorts later.
-        let sub_biased = (i16::from(sub_level) + 128) as u64;
-        let bits = (u64::from(strata.index()) << STRATUM_SHIFT)
-            | (u64::from(level) << LEVEL_SHIFT)
-            | (u64::from(insertion) << INSERTION_SHIFT)
-            | (1u64 << IS_REGION_SHIFT)
-            | (u64::from(layer.index()) << LAYER_SHIFT)
-            | (sub_biased << SUBLEVEL_SHIFT)
-            | ((if is_fontstring {
-                BatchRank::Text
-            } else {
-                BatchRank::Quad
-            }) as u64)
-                << RANK_SHIFT
-            | (u64::from(decl) << DECL_SHIFT);
-        ZKey(bits)
+        let rank = if is_fontstring {
+            BatchRank::Text
+        } else {
+            BatchRank::Quad
+        };
+        let bits = ZKey::frame(strata, level, insertion).hi()
+            | entry_bits(LAYER_SHIFT, RANK_SHIFT, layer, rank, sub_level, decl);
+        ZKey::words(bits, 0)
+    }
+
+    /// The frame at preorder `ordinal` (from 1) of the scroll subtree drawn at `slot`, its
+    /// outermost ScrollFrame's HIGHLIGHT callback key.
+    pub fn nested_frame(slot: ZKey, ordinal: u64) -> ZKey {
+        debug_assert!(slot.lo() == 0, "a scroll subtree's slot is a flat key");
+        debug_assert!(
+            (1..1 << (64 - NESTED_ORDINAL_SHIFT)).contains(&ordinal),
+            "scroll subtree ordinal {ordinal} out of range"
+        );
+        ZKey::words(slot.hi(), ordinal << NESTED_ORDINAL_SHIFT)
+    }
+
+    /// A region of the frame [`Self::nested_frame`] keys, ordered as [`Self::region`] orders one
+    /// within its frame.
+    pub fn nested_region(
+        frame: ZKey,
+        layer: DrawLayer,
+        sub_level: i8,
+        is_fontstring: bool,
+        decl: u16,
+    ) -> ZKey {
+        let rank = if is_fontstring {
+            BatchRank::Text
+        } else {
+            BatchRank::Quad
+        };
+        frame.with_entry(layer, rank, sub_level, decl)
+    }
+
+    /// This frame key's entry at `layer` and `rank`, in the word that orders the frame.
+    #[inline]
+    const fn with_entry(self, layer: DrawLayer, rank: BatchRank, sub_level: i8, decl: u16) -> ZKey {
+        if self.lo() == 0 {
+            ZKey::words(
+                self.hi() | entry_bits(LAYER_SHIFT, RANK_SHIFT, layer, rank, sub_level, decl),
+                0,
+            )
+        } else {
+            ZKey::words(
+                self.hi(),
+                self.lo()
+                    | entry_bits(
+                        NESTED_LAYER_SHIFT,
+                        NESTED_RANK_SHIFT,
+                        layer,
+                        rank,
+                        sub_level,
+                        decl,
+                    ),
+            )
+        }
     }
 
     /// The key for a frame's own content, text with no region: its frame slot moved into its
@@ -204,43 +309,38 @@ impl ZKey {
     #[inline]
     #[must_use]
     pub const fn content(self, layer: DrawLayer) -> ZKey {
-        ZKey(
-            self.0
-                | (1u64 << IS_REGION_SHIFT)
-                | ((layer.index() as u64) << LAYER_SHIFT)
-                // Sub-level 0, biased as in `region`.
-                | (128u64 << SUBLEVEL_SHIFT)
-                | ((BatchRank::Text as u64) << RANK_SHIFT),
-        )
+        self.with_entry(layer, BatchRank::Text, 0, 0)
     }
 
-    /// The key for a `Model` frame's scene: its frame slot moved into its region band at `layer`
-    /// with the callback rank, after every texture and font string of the layer, as `0x76d160`
-    /// registers the scene into the layer batch whose callbacks `0x76fb00` drains last.
+    /// The key for a frame's render callback at `layer`: its frame slot moved into its region band
+    /// with the callback rank, after every texture and font string of the layer, as `0x76fb00`
+    /// drains a layer batch's callbacks last. A `Model` frame's scene registers for ARTWORK
+    /// (`0x76d160`) and a ScrollFrame's scroll child for HIGHLIGHT (`0x7871c0`).
     #[inline]
     #[must_use]
     pub const fn callback(self, layer: DrawLayer) -> ZKey {
-        ZKey(
-            self.0
-                | (1u64 << IS_REGION_SHIFT)
-                | ((layer.index() as u64) << LAYER_SHIFT)
-                | (128u64 << SUBLEVEL_SHIFT)
-                | ((BatchRank::Callback as u64) << RANK_SHIFT),
-        )
+        self.with_entry(layer, BatchRank::Callback, 0, 0)
     }
 
     #[inline]
-    pub const fn raw(self) -> u64 {
+    pub const fn raw(self) -> u128 {
         self.0
     }
 
+    /// The flat pass's fields; a scroll subtree's entry gives its ScrollFrame's callback.
     #[inline]
     pub const fn parts(self) -> ZParts {
         unpack(self.0)
     }
+
+    /// The key's `(strata, level)` plane in the flat pass.
+    #[inline]
+    const fn plane(self) -> u64 {
+        self.hi() >> LEVEL_SHIFT
+    }
 }
 
-/// A [`ZKey`]'s fields, most significant first.
+/// A [`ZKey`]'s flat-pass fields, most significant first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZParts {
     /// [`Strata::index`].
@@ -258,25 +358,30 @@ pub struct ZParts {
     pub sub_level: i8,
     /// Declaration order within the owning frame.
     pub decl: u16,
+    /// Whether the key orders an entry of a scroll child's subtree, whose fields above are its
+    /// outermost ScrollFrame's callback.
+    pub in_scroll_child: bool,
 }
 
-/// A raw [`ZKey`]'s fields, as [`crate::script::ExtractedQuad::z`] stores the key.
+/// A raw [`ZKey`]'s flat-pass fields, as [`crate::script::ExtractedQuad::z`] stores the key.
 #[inline]
-pub const fn unpack(raw: u64) -> ZParts {
+pub const fn unpack(raw: u128) -> ZParts {
+    let hi = (raw >> 64) as u64;
     ZParts {
-        strata: ((raw >> STRATUM_SHIFT) & 0xf) as u8,
-        level: ((raw >> LEVEL_SHIFT) & 0xffff) as u16,
-        layer: ((raw >> LAYER_SHIFT) & 0x7) as u8,
-        rank: match (raw >> RANK_SHIFT) & 0x3 {
+        strata: ((hi >> STRATUM_SHIFT) & 0xf) as u8,
+        level: ((hi >> LEVEL_SHIFT) & 0xffff) as u16,
+        layer: ((hi >> LAYER_SHIFT) & 0x7) as u8,
+        rank: match (hi >> RANK_SHIFT) & 0x3 {
             0 => BatchRank::Quad,
             1 => BatchRank::Text,
             _ => BatchRank::Callback,
         },
-        is_fontstring: (raw >> RANK_SHIFT) & 0x3 == 1,
-        insertion: ((raw >> INSERTION_SHIFT) & ((1 << INSERTION_BITS) - 1)) as u32,
-        is_region: (raw >> IS_REGION_SHIFT) & 1 == 1,
-        sub_level: (((raw >> SUBLEVEL_SHIFT) & 0xff) as i16 - 128) as i8,
-        decl: ((raw >> DECL_SHIFT) & ((1 << DECL_BITS) - 1)) as u16,
+        is_fontstring: (hi >> RANK_SHIFT) & 0x3 == 1,
+        insertion: ((hi >> INSERTION_SHIFT) & ((1 << INSERTION_BITS) - 1)) as u32,
+        is_region: (hi >> IS_REGION_SHIFT) & 1 == 1,
+        sub_level: (((hi >> SUBLEVEL_SHIFT) & 0xff) as i16 - 128) as i8,
+        decl: ((hi >> DECL_SHIFT) & ((1 << DECL_BITS) - 1)) as u16,
+        in_scroll_child: raw as u64 != 0,
     }
 }
 
@@ -290,73 +395,243 @@ pub enum ZTarget {
     Region(RegionHandle),
 }
 
+/// One entry of the draw list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DrawEntry {
+    pub target: ZTarget,
+    pub key: ZKey,
+    /// The ScrollFrame whose callback draws this entry, the innermost one for a nested scroll
+    /// child; `None` in the flat pass. Its rect clips the draw (`0x787220`).
+    pub scope: Option<FrameHandle>,
+}
+
 /// The sorted draw list, shared so an unchanged frame hands out the same one.
-pub type DrawList = std::sync::Arc<[(ZTarget, ZKey)]>;
+pub type DrawList = std::sync::Arc<[DrawEntry]>;
 
-/// [`traversal`]'s memo: the last walk, in arena order, and the sorted list built from it.
+/// Every shown frame with its own flat key, sorted: the hit test's planes.
+pub type PickList = std::sync::Arc<[(FrameHandle, ZKey)]>;
+
+/// [`traversal`]'s and [`pick_order`]'s memos.
 #[derive(Default, Debug)]
-pub struct OrderCache(std::cell::RefCell<Option<OrderMemo>>);
+pub struct OrderCache {
+    draw: Memo<DrawEntry>,
+    pick: Memo<(FrameHandle, ZKey)>,
+}
 
-type OrderMemo = (Vec<(ZTarget, ZKey)>, DrawList);
+/// One memo: the last walk, in arena order, and the sorted list built from it.
+type Memo<T> = std::cell::RefCell<Option<(Vec<T>, std::sync::Arc<[T]>)>>;
 
-/// Every `(target, key)` of the draw list, in arena order.
-fn walk(arena: &WidgetArena, mut f: impl FnMut(ZTarget, ZKey)) {
-    for (fh, frame) in arena.iter_frames() {
-        if !frame.effective_visible {
-            continue;
-        }
-        let (strata, level, insertion) = (frame.strata, frame.level, frame.insertion_seq);
-        f(ZTarget::Frame(fh), ZKey::frame(strata, level, insertion));
-        for &rh in &frame.regions {
-            let Some(region) = arena.region(rh) else {
-                continue;
-            };
-            // A region orphaned by `SetParent(nil)` is in no draw layer until re-parented.
-            if region.detached {
-                continue;
-            }
-            let key = ZKey::region(
+/// How one frame's entries are keyed: by its own place in the flat pass, or by its preorder place
+/// in a scroll subtree.
+#[derive(Clone, Copy)]
+enum FrameTerm {
+    Flat {
+        strata: Strata,
+        level: u16,
+        insertion: u32,
+    },
+    Nested(ZKey),
+}
+
+impl FrameTerm {
+    fn frame(self) -> ZKey {
+        match self {
+            FrameTerm::Flat {
                 strata,
                 level,
                 insertion,
-                region.draw_layer,
-                region.sub_level,
-                matches!(region.kind, RegionKind::FontString),
-                region.decl_seq as u16,
-            );
-            f(ZTarget::Region(rh), key);
+            } => ZKey::frame(strata, level, insertion),
+            FrameTerm::Nested(k) => k,
+        }
+    }
+
+    fn region(self, layer: DrawLayer, sub_level: i8, is_fontstring: bool, decl: u16) -> ZKey {
+        match self {
+            FrameTerm::Flat {
+                strata,
+                level,
+                insertion,
+            } => ZKey::region(
+                strata,
+                level,
+                insertion,
+                layer,
+                sub_level,
+                is_fontstring,
+                decl,
+            ),
+            FrameTerm::Nested(k) => ZKey::nested_region(k, layer, sub_level, is_fontstring, decl),
         }
     }
 }
 
-/// The render list in the client's `0x765650` order, sorted by [`ZKey`], with no two keys tied.
-/// Only effective-visible frames contribute, as the client skips a hidden frame's whole subtree
-/// (`0x76ae10`, `0x76ad50`). Every region of such a frame is listed; hidden ones (`region+0xc4`,
-/// set by `0x77fcb0`) are dropped by [`UiScript::extract`](crate::script::UiScript::extract), and
-/// where the client skips them at draw time is untraced. An unchanged walk returns the last list.
-pub fn traversal(arena: &WidgetArena) -> DrawList {
-    let mut cache = arena.order_cache.0.borrow_mut();
-    // An exact compare with the last walk, not a hash: a collision would draw in a wrong order.
-    let (mut walked, last) = match cache.take() {
-        Some((prev, list)) => {
-            let mut scratch = Vec::with_capacity(prev.len());
-            walk(arena, |t, k| scratch.push((t, k)));
-            if scratch == prev {
-                *cache = Some((prev, list.clone()));
-                return list;
-            }
-            (scratch, Some(prev))
-        }
-        None => {
-            let mut scratch = Vec::new();
-            walk(arena, |t, k| scratch.push((t, k)));
-            (scratch, None)
-        }
+/// One frame's slot and regions.
+fn emit_frame(
+    arena: &WidgetArena,
+    fh: FrameHandle,
+    term: FrameTerm,
+    scope: Option<FrameHandle>,
+    out: &mut Vec<DrawEntry>,
+) {
+    let Some(frame) = arena.frame(fh) else {
+        return;
     };
-    drop(last);
+    out.push(DrawEntry {
+        target: ZTarget::Frame(fh),
+        key: term.frame(),
+        scope,
+    });
+    for &rh in &frame.regions {
+        let Some(region) = arena.region(rh) else {
+            continue;
+        };
+        // A region orphaned by `SetParent(nil)` is in no draw layer until re-parented.
+        if region.detached {
+            continue;
+        }
+        let key = term.region(
+            region.draw_layer,
+            region.sub_level,
+            matches!(region.kind, RegionKind::FontString),
+            region.decl_seq as u16,
+        );
+        out.push(DrawEntry {
+            target: ZTarget::Region(rh),
+            key,
+            scope,
+        });
+    }
+}
+
+/// The scroll child `sf`'s callback draws, if any: a ScrollFrame's live, shown child
+/// (`0x787267`).
+///
+/// Deviation: a child that a `SetParent` took out of the scroll draw (`0x76abcb` cleared its
+/// `0x2000`) is drawn once, by the flat pass, where the client's callback, which reads only the
+/// child's visibility, draws it a second time, clipped, at the ScrollFrame's place.
+fn drawn_scroll_child(arena: &WidgetArena, sf: FrameHandle) -> Option<FrameHandle> {
+    let KindState::Scroll(s) = &arena.frame(sf)?.kind_state else {
+        return None;
+    };
+    let child = s.child?;
+    let c = arena.frame(child)?;
+    (c.effective_visible && c.scroll_member).then_some(child)
+}
+
+/// The recursive draw `0x76b3f0` of `fh` inside the callback slot `slot`, under the ScrollFrame
+/// `scope`: the frame's own entries, then a ScrollFrame's scroll child (its HIGHLIGHT callback,
+/// the last of its batches), then each shown child in link order that is not itself a scroll child
+/// (`0x76b4dd`–`0x76b516`). `drawn` guards a frame from a second visit, which a scroll child
+/// that is its own ScrollFrame's ancestor would otherwise recurse into forever.
+fn emit_nested(
+    arena: &WidgetArena,
+    fh: FrameHandle,
+    slot: ZKey,
+    scope: FrameHandle,
+    ordinal: &mut u64,
+    drawn: &mut std::collections::HashSet<FrameHandle>,
+    out: &mut Vec<DrawEntry>,
+) {
+    if !drawn.insert(fh) {
+        return;
+    }
+    *ordinal += 1;
+    emit_frame(
+        arena,
+        fh,
+        FrameTerm::Nested(ZKey::nested_frame(slot, *ordinal)),
+        Some(scope),
+        out,
+    );
+    if let Some(child) = drawn_scroll_child(arena, fh) {
+        emit_nested(arena, child, slot, fh, ordinal, drawn, out);
+    }
+    let Some(frame) = arena.frame(fh) else {
+        return;
+    };
+    for &c in &frame.children {
+        if arena
+            .frame(c)
+            .is_some_and(|cf| cf.effective_visible && !cf.scroll_root)
+        {
+            emit_nested(arena, c, slot, scope, ordinal, drawn, out);
+        }
+    }
+}
+
+/// Every [`DrawEntry`] of the draw list: the flat pass in arena order, each ScrollFrame's
+/// subtree after it.
+fn walk(arena: &WidgetArena, out: &mut Vec<DrawEntry>) {
+    let mut drawn = std::collections::HashSet::new();
+    for (fh, frame) in arena.iter_frames() {
+        // The flat pass skips a scroll child's subtree (`0x7659df`).
+        if !frame.effective_visible || frame.scroll_member {
+            continue;
+        }
+        let term = FrameTerm::Flat {
+            strata: frame.strata,
+            level: frame.level,
+            insertion: frame.insertion_seq,
+        };
+        emit_frame(arena, fh, term, None, out);
+        if let Some(child) = drawn_scroll_child(arena, fh) {
+            let slot = term.frame().callback(DrawLayer::Highlight);
+            let mut ordinal = 0;
+            emit_nested(arena, child, slot, fh, &mut ordinal, &mut drawn, out);
+        }
+    }
+}
+
+/// The render list in the client's order, sorted by [`ZKey`], with no two keys tied: the flat
+/// pass `0x765650` over every shown frame outside a scroll child's subtree, and each such subtree
+/// at its ScrollFrame's HIGHLIGHT callback. Only effective-visible frames contribute, as the
+/// client skips a hidden frame's whole subtree (`0x76ae10`, `0x76ad50`). Every region of such a
+/// frame is listed; hidden ones (`region+0xc4`, set by `0x77fcb0`) are dropped by
+/// [`UiScript::extract`](crate::script::UiScript::extract), and where the client skips them at
+/// draw time is untraced. An unchanged walk returns the last list.
+pub fn traversal(arena: &WidgetArena) -> DrawList {
+    memo(&arena.order_cache.draw, |v| walk(arena, v), |e| e.key)
+}
+
+/// Every shown frame by its own flat key, scroll children included: the mouse index holds a frame
+/// by its strata and level whatever its draw (`0x764aa0`), and only the probe treats the scroll
+/// subtree apart (`0x76b034`).
+pub fn pick_order(arena: &WidgetArena) -> PickList {
+    memo(
+        &arena.order_cache.pick,
+        |v| {
+            for (fh, frame) in arena.iter_frames() {
+                if frame.effective_visible {
+                    v.push((
+                        fh,
+                        ZKey::frame(frame.strata, frame.level, frame.insertion_seq),
+                    ));
+                }
+            }
+        },
+        |&(_, k)| k,
+    )
+}
+
+/// Walk into a scratch vector and return the last sorted list when the walk is unchanged, else
+/// sort the new walk and keep it.
+fn memo<T: Clone + PartialEq>(
+    cache: &Memo<T>,
+    walk: impl FnOnce(&mut Vec<T>),
+    key: impl Fn(&T) -> ZKey,
+) -> std::sync::Arc<[T]> {
+    let mut cache = cache.borrow_mut();
+    let mut walked = Vec::with_capacity(cache.as_ref().map_or(0, |(prev, _)| prev.len()));
+    walk(&mut walked);
+    // An exact compare with the last walk, not a hash: a collision would draw in a wrong order.
+    if let Some((prev, list)) = cache.as_ref() {
+        if *prev == walked {
+            return list.clone();
+        }
+    }
     let mut out = walked.clone();
-    out.sort_by_key(|&(_, k)| k);
-    let list: DrawList = out.into();
+    out.sort_by_key(|e| key(e));
+    let list: std::sync::Arc<[T]> = out.into();
     walked.shrink_to_fit();
     *cache = Some((walked, list.clone()));
     list
@@ -375,27 +650,23 @@ pub fn traversal(arena: &WidgetArena) -> DrawList {
 /// full-area `<Button>` declared first, mouse-enabled by its constructor, swallows its window.
 /// Drawing still puts the later link on top.
 ///
-/// `sorted` is [`traversal`]'s ascending list and `hits` says whether a frame is a candidate at the
-/// cursor; regions never capture.
+/// `sorted` is [`pick_order`]'s ascending list and `hits` says whether a frame is a candidate at
+/// the cursor.
 pub fn hit_test<F: Fn(FrameHandle) -> bool>(
-    sorted: &[(ZTarget, ZKey)],
+    sorted: &[(FrameHandle, ZKey)],
     hits: F,
 ) -> Option<FrameHandle> {
-    // The key's strata and level: one plane of the client's index.
-    let plane = |k: ZKey| k.0 >> LEVEL_SHIFT;
     let mut end = sorted.len();
     while end > 0 {
-        let p = plane(sorted[end - 1].1);
+        let p = sorted[end - 1].1.plane();
         let mut start = end;
-        while start > 0 && plane(sorted[start - 1].1) == p {
+        while start > 0 && sorted[start - 1].1.plane() == p {
             start -= 1;
         }
         // Planes descend; within one, the earlier-linked frame is probed first.
-        for (target, _) in &sorted[start..end] {
-            if let ZTarget::Frame(fh) = *target {
-                if hits(fh) {
-                    return Some(fh);
-                }
+        for &(fh, _) in &sorted[start..end] {
+            if hits(fh) {
+                return Some(fh);
             }
         }
         end = start;
@@ -540,7 +811,7 @@ mod tests {
             .unwrap();
         a.set_shown(hidden, false);
 
-        let list: Vec<ZTarget> = traversal(&a).iter().map(|&(t, _)| t).collect();
+        let list: Vec<ZTarget> = traversal(&a).iter().map(|e| e.target).collect();
 
         // MEDIUM first; the hidden frame is absent.
         assert_eq!(
@@ -565,7 +836,7 @@ mod tests {
         let backdrop = a.create(FrameKind::Frame, Some("Backdrop".into()), None);
 
         let order =
-            |a: &WidgetArena| -> Vec<ZTarget> { traversal(a).iter().map(|&(t, _)| t).collect() };
+            |a: &WidgetArena| -> Vec<ZTarget> { traversal(a).iter().map(|e| e.target).collect() };
         // Declaration order while both start shown: tracking before backdrop.
         assert_eq!(
             order(&a),
@@ -606,20 +877,251 @@ mod tests {
         );
     }
 
+    // ── Scroll children: the ScrollFrame's callback draws them ────────────────────────────────
+
+    fn tex(a: &mut WidgetArena, f: FrameHandle, layer: DrawLayer) -> RegionHandle {
+        a.create_region(f, RegionKind::Texture, layer, 0).unwrap()
+    }
+
+    fn pos(list: &[ZTarget], t: ZTarget) -> usize {
+        list.iter()
+            .position(|&x| x == t)
+            .unwrap_or_else(|| panic!("{t:?} is not drawn"))
+    }
+
+    fn targets(a: &WidgetArena) -> Vec<ZTarget> {
+        traversal(a).iter().map(|e| e.target).collect()
+    }
+
+    /// The create screen's info panel (`CharacterCreate.xml:212`–`:330`): an icon frame and a
+    /// ScrollFrame under one panel, the icon raised one level in its `OnLoad` (`:238`), which ties
+    /// it with the scroll child born one above the ScrollFrame. The scroll child draws in the
+    /// ScrollFrame's HIGHLIGHT callback (`0x7871c0` → `0x787220`), at the ScrollFrame's level, so
+    /// the icon covers the text; by its own level the text would draw over the icon.
+    #[test]
+    fn a_scroll_child_draws_at_its_scroll_frames_place_under_a_raised_sibling() {
+        let mut a = WidgetArena::new();
+        // The arena's ctor leaves level 0; the levels are `SetParent`'s, the parent's plus one.
+        let panel = a.create(FrameKind::Frame, None, None);
+        let icon = a.create(FrameKind::Frame, None, Some(panel));
+        a.set_frame_level(icon, 1, false);
+        let sf = a.create(FrameKind::ScrollFrame, None, Some(panel));
+        a.set_frame_level(sf, 1, false);
+        let sf_art = tex(&mut a, sf, DrawLayer::Background);
+        let sf_highlight = tex(&mut a, sf, DrawLayer::Highlight);
+        let child = a.create(FrameKind::Frame, None, Some(sf));
+        a.set_frame_level(child, 2, false);
+        let text = a
+            .create_region(child, RegionKind::FontString, DrawLayer::Background, 0)
+            .unwrap();
+        // Linked after the ScrollFrame at its level: its HIGHLIGHT quads share the batch whose
+        // callbacks `0x76fb00` drains last.
+        let later = a.create(FrameKind::Frame, None, Some(panel));
+        a.set_frame_level(later, 1, false);
+        let later_highlight = tex(&mut a, later, DrawLayer::Highlight);
+        a.set_scroll_child(sf, Some(child));
+        let icon_art = tex(&mut a, icon, DrawLayer::Background);
+        a.set_frame_level(icon, 2, false);
+        assert_eq!(a.frame(child).unwrap().level, 2, "the tie the raise makes");
+
+        let list = targets(&a);
+        assert!(
+            pos(&list, ZTarget::Region(text)) < pos(&list, ZTarget::Region(icon_art)),
+            "the raised icon covers the scroll child's text"
+        );
+        for under in [sf_art, sf_highlight, later_highlight] {
+            assert!(
+                pos(&list, ZTarget::Region(under)) < pos(&list, ZTarget::Frame(child)),
+                "the callback draws after its bucket's HIGHLIGHT quads"
+            );
+        }
+        let key = traversal(&a)
+            .iter()
+            .find(|e| e.target == ZTarget::Region(text))
+            .map(|e| (e.key, e.scope))
+            .unwrap();
+        assert_eq!(key.1, Some(sf), "the ScrollFrame's rect clips it");
+        let p = key.0.parts();
+        assert!(p.in_scroll_child);
+        assert_eq!((p.level, p.layer, p.rank), (1, 4, BatchRank::Callback));
+    }
+
+    /// Inside the subtree the recursive draw `0x76b3f0` orders frames, not levels or strata: each
+    /// frame's five layers (`0x76b4bf`–`0x76b4db`), then its shown children in link order
+    /// (`0x76b4dd`), a nested ScrollFrame's child at that frame's HIGHLIGHT callback, before its
+    /// other children, and a scroll child reached as a child skipped (`0x76b509`).
+    #[test]
+    fn a_scroll_subtree_keeps_its_recursive_draw_order() {
+        let mut a = WidgetArena::new();
+        let sf = a.create(FrameKind::ScrollFrame, None, None);
+        let child = a.create(FrameKind::Frame, None, Some(sf));
+        a.set_scroll_child(sf, Some(child));
+        let child_overlay = tex(&mut a, child, DrawLayer::Overlay);
+        let child_art = tex(&mut a, child, DrawLayer::Artwork);
+        // Lowered under its parent, and another stratum: neither moves it in the subtree.
+        let first = a.create(FrameKind::Frame, None, Some(child));
+        a.set_frame_level(first, 0, false);
+        let first_bg = tex(&mut a, first, DrawLayer::Background);
+        let grand = a.create(FrameKind::Frame, None, Some(first));
+        let grand_bg = tex(&mut a, grand, DrawLayer::Background);
+        let inner = a.create(FrameKind::ScrollFrame, None, Some(child));
+        let inner_highlight = tex(&mut a, inner, DrawLayer::Highlight);
+        let inner_other = a.create(FrameKind::Frame, None, Some(inner));
+        let inner_other_bg = tex(&mut a, inner_other, DrawLayer::Background);
+        let inner_child = a.create(FrameKind::Frame, None, Some(inner));
+        a.set_scroll_child(inner, Some(inner_child));
+        let inner_child_bg = tex(&mut a, inner_child, DrawLayer::Background);
+        let last = a.create(FrameKind::Frame, None, Some(child));
+        a.set_frame_strata(last, Strata::Background);
+        let last_bg = tex(&mut a, last, DrawLayer::Background);
+        let hidden = a.create(FrameKind::Frame, None, Some(child));
+        tex(&mut a, hidden, DrawLayer::Background);
+        a.set_shown(hidden, false);
+
+        let list = targets(&a);
+        let at = |t| pos(&list, t);
+        let want = [
+            ZTarget::Frame(child),
+            ZTarget::Region(child_art),
+            ZTarget::Region(child_overlay),
+            ZTarget::Frame(first),
+            ZTarget::Region(first_bg),
+            ZTarget::Region(grand_bg),
+            ZTarget::Frame(inner),
+            ZTarget::Region(inner_highlight),
+            ZTarget::Region(inner_child_bg),
+            ZTarget::Region(inner_other_bg),
+            ZTarget::Region(last_bg),
+        ];
+        for w in want.windows(2) {
+            assert!(at(w[0]) < at(w[1]), "{:?} draws before {:?}", w[0], w[1]);
+        }
+        assert!(!list.contains(&ZTarget::Frame(hidden)));
+        assert_eq!(
+            list.iter()
+                .filter(|&&t| t == ZTarget::Frame(inner_child))
+                .count(),
+            1,
+            "the nested scroll child draws once, at its ScrollFrame's callback"
+        );
+        let scope_of = |t| traversal(&a).iter().find(|e| e.target == t).unwrap().scope;
+        assert_eq!(scope_of(ZTarget::Region(inner_child_bg)), Some(inner));
+        assert_eq!(scope_of(ZTarget::Region(inner_other_bg)), Some(sf));
+        assert_eq!(scope_of(ZTarget::Frame(sf)), None);
+    }
+
+    /// The scroll flag's life (`0x76a400`): set on the child's subtree by `SetScrollChild`, cleared
+    /// on the old child when another replaces it (`0x786cf4`), taken from the parent by a frame
+    /// created or re-parented under it (`0x76abcb`), so a child moved out draws by its own level.
+    #[test]
+    fn the_scroll_flag_follows_set_scroll_child_and_set_parent() {
+        let mut a = WidgetArena::new();
+        let sf = a.create(FrameKind::ScrollFrame, None, None);
+        let child = a.create(FrameKind::Frame, None, Some(sf));
+        let kept = a.create(FrameKind::Frame, None, Some(child));
+        a.set_scroll_child(sf, Some(child));
+        let born = a.create(FrameKind::Frame, None, Some(kept));
+        let outside = a.create(FrameKind::Frame, None, None);
+        let joined = a.create(FrameKind::Frame, None, Some(outside));
+        a.set_parent(joined, Some(kept));
+        for f in [child, kept, born, joined] {
+            assert!(a.frame(f).unwrap().scroll_member, "{f:?} is in the subtree");
+        }
+        assert!(a.frame(child).unwrap().scroll_root);
+        assert!(!a.frame(kept).unwrap().scroll_root);
+        let nested = |a: &WidgetArena, f| {
+            traversal(a)
+                .iter()
+                .filter(|e| e.target == ZTarget::Frame(f))
+                .map(|e| e.key.parts().in_scroll_child)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(nested(&a, born), vec![true]);
+
+        // Out by re-parenting: the flat pass draws it, once, though the ScrollFrame still holds it.
+        a.set_parent(joined, Some(outside));
+        assert!(!a.frame(joined).unwrap().scroll_member);
+        assert_eq!(nested(&a, joined), vec![false]);
+        a.set_parent(child, None);
+        assert!(!a.frame(born).unwrap().scroll_member);
+        assert!(
+            a.frame(child).unwrap().scroll_root,
+            "SetParent leaves the 0x4000 mark"
+        );
+        assert_eq!(nested(&a, child), vec![false]);
+        assert_eq!(nested(&a, born), vec![false]);
+
+        // Replaced: the old child's subtree is cleared whatever its parent.
+        a.set_parent(child, Some(sf));
+        a.set_scroll_child(sf, Some(child));
+        assert!(a.frame(born).unwrap().scroll_member);
+        let other = a.create(FrameKind::Frame, None, Some(sf));
+        a.set_scroll_child(sf, Some(other));
+        for f in [child, kept, born] {
+            let fr = a.frame(f).unwrap();
+            assert!(
+                !fr.scroll_member && !fr.scroll_root,
+                "{f:?} left the subtree"
+            );
+        }
+        assert_eq!(nested(&a, born), vec![false]);
+        assert_eq!(nested(&a, other), vec![true]);
+    }
+
+    /// A scroll child that contains its own ScrollFrame draws nothing rather than recursing:
+    /// the flag hides both from the flat pass, and no callback is reached.
+    #[test]
+    fn a_scroll_child_holding_its_scroll_frame_does_not_recurse() {
+        let mut a = WidgetArena::new();
+        let outer = a.create(FrameKind::Frame, None, None);
+        let sf = a.create(FrameKind::ScrollFrame, None, Some(outer));
+        a.set_scroll_child(sf, Some(outer));
+        assert!(targets(&a).is_empty());
+        // A nested ScrollFrame whose child is the outer scroll child: drawn once.
+        let mut a = WidgetArena::new();
+        let sf = a.create(FrameKind::ScrollFrame, None, None);
+        let child = a.create(FrameKind::Frame, None, Some(sf));
+        a.set_scroll_child(sf, Some(child));
+        let inner = a.create(FrameKind::ScrollFrame, None, Some(child));
+        if let Some(KindState::Scroll(s)) = a.frame_mut(inner).map(|f| &mut f.kind_state) {
+            s.child = Some(child);
+        }
+        let list = targets(&a);
+        assert_eq!(
+            list.iter().filter(|&&t| t == ZTarget::Frame(child)).count(),
+            1
+        );
+    }
+
+    /// The hit test's planes are each frame's own strata and level, scroll children included:
+    /// the mouse index (`0x764aa0`) knows nothing of the draw's callback.
+    #[test]
+    fn the_pick_order_keeps_a_scroll_childs_own_level() {
+        let mut a = WidgetArena::new();
+        let sf = a.create(FrameKind::ScrollFrame, None, None);
+        let over = a.create(FrameKind::Frame, None, None);
+        a.set_frame_level(over, 1, false);
+        let child = a.create(FrameKind::Frame, None, Some(sf));
+        a.set_scroll_child(sf, Some(child));
+        let button = a.create(FrameKind::Button, None, Some(child));
+        a.set_frame_level(button, 2, false);
+        let picks = pick_order(&a);
+        assert_eq!(hit_test(&picks, |_| true), Some(button));
+        let list = targets(&a);
+        assert!(pos(&list, ZTarget::Frame(button)) < pos(&list, ZTarget::Frame(over)));
+    }
+
     // ── Hit-testing (pure core) ─────────────────────────────────────────────────────────────────
 
     #[test]
-    fn hit_test_returns_topmost_matching_frame_and_skips_regions() {
+    fn hit_test_returns_topmost_matching_frame() {
         let mut a = WidgetArena::new();
-        // `top` (DIALOG) draws above `bottom` (MEDIUM); `top`'s region must never be returned.
+        // `top` (DIALOG) draws above `bottom` (MEDIUM).
         let bottom = a.create(FrameKind::Frame, None, None);
         let top = a.create(FrameKind::Frame, None, None);
         a.set_frame_strata(top, Strata::Dialog);
-        let _rgn = a
-            .create_region(top, RegionKind::Texture, DrawLayer::Artwork, 0)
-            .unwrap();
 
-        let sorted = traversal(&a);
+        let sorted = pick_order(&a);
         assert_eq!(hit_test(&sorted, |_| true), Some(top));
         // A `top` that does not take the mouse lets `bottom` win.
         assert_eq!(hit_test(&sorted, |fh| fh == bottom), Some(bottom));
