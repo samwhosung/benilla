@@ -193,6 +193,12 @@ pub enum GlueSignal {
     Close,
     /// `SET_GLUE_SCREEN(name)` (event 0, `0x46b840`).
     Screen(&'static str),
+    /// `SET_GLUE_SCREEN(name)` when the current screen (`[0xb41478]`) is `current`, compared
+    /// case-folded as it stands at the fire (`0x46bfa7`, `0x64a4c0`).
+    ScreenFrom {
+        current: &'static str,
+        name: &'static str,
+    },
     /// `DISCONNECTED_FROM_SERVER` (event 2, `0x46c62e`).
     Disconnected,
     /// The roster teardown (`0x472580`): `UPDATE_SELECTED_CHARACTER` with 1, then
@@ -654,6 +660,17 @@ fn fire_signal(lua: &Lua, signal: GlueSignal) {
         GlueSignal::Close => fire("CLOSE_STATUS_DIALOG", Vec::new()),
         GlueSignal::Screen(name) => {
             fire("SET_GLUE_SCREEN", vec![ScriptValue::Str(name.to_string())]);
+        }
+        GlueSignal::ScreenFrom { current, name } => {
+            let here = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .glue
+                .screen
+                .eq_ignore_ascii_case(current);
+            if here {
+                fire("SET_GLUE_SCREEN", vec![ScriptValue::Str(name.to_string())]);
+            }
         }
         GlueSignal::Disconnected => fire("DISCONNECTED_FROM_SERVER", Vec::new()),
         GlueSignal::Teardown => super::glue_select::teardown_roster(lua),

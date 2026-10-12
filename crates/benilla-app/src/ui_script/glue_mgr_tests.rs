@@ -240,7 +240,6 @@ fn a_world_refusal_opens_its_status_and_url() {
     assert_eq!(m.state, ScreenState::Idle);
 
     let mut m = connected();
-    m.screen = "charselect".into();
     m.on_failed(&failed(Some(LoginRefusal::World(0x0d)), false));
     m.tick();
     settle(&mut m);
@@ -249,7 +248,10 @@ fn a_world_refusal_opens_its_status_and_url() {
         [
             update("AUTH_FAILED"),
             open("OKAY", Some("AUTH_FAILED")),
-            Outgoing::Screen("login")
+            Outgoing::ScreenFrom {
+                current: "charselect",
+                name: "login"
+            }
         ]
     );
 
@@ -1769,7 +1771,8 @@ fn a_world_failure_with_no_realm_held_asks_for_the_list_and_its_reply_closes_it(
 
 /// The logon arm's failure: its `OKAY` is pressed by its own `OnShow` while the arm is still in
 /// state 1, which cancels the logon (`0x46b73d`); then the arm cancels it and goes to state 0
-/// (`0x46bbbf`-`0x46bbcb`).
+/// (`0x46bbbf`-`0x46bbcb`). A failed logon has no link left (`0x5b3320` tests `[login+5]`), so
+/// both close only what may stand and leave the credentials and the resubmit alone.
 #[test]
 fn a_failed_logons_dialog_is_pressed_in_state_1() {
     let shared = SharedGlueMgr::default();
@@ -1793,11 +1796,71 @@ fn a_failed_logons_dialog_is_pressed_in_state_1() {
     assert!(
         matches!(
             m.login_out.as_slice(),
-            [GlueLogin::Abandon, GlueLogin::Abandon]
+            [GlueLogin::CloseLink, GlueLogin::CloseLink]
         ),
         "the press's cancel, then the arm's: {:?}",
         m.login_out.len()
     );
+}
+
+/// The logon arm reads the latch and the login state after its dialog's handlers (`0x46ba85`,
+/// `0x46baaa`), not off what it read before: a failure that lands after the dialog was raised is
+/// the one the arm acts on.
+#[test]
+fn the_logon_arm_reads_its_login_state_after_the_dialog() {
+    let mut m = fresh();
+    m.login("a".into(), "b".into());
+    settle(&mut m);
+    m.outbox.clear();
+    m.login_out.clear();
+    m.on_stage(LoginStage::Connecting, true);
+    m.tick();
+    // What a handler of the dialog's dispatch would have seen land.
+    m.cells.state = LOGIN_FAILED_STATE;
+    m.cells.result = RESULT_DISCONNECTED;
+    settle(&mut m);
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(matches!(m.login_out.as_slice(), [GlueLogin::CloseLink]));
+}
+
+/// The world link's flag goes up with the socket's connect (`0x5aaa9c`), so `DisconnectFromServer`
+/// between the connect and the authentication takes state 2 down as the drop's handler does
+/// (`0x46c55d`).
+#[test]
+fn a_disconnect_after_the_world_socket_connects_ends_the_connect() {
+    let mut m = fresh();
+    m.state = ScreenState::Connect;
+    m.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+    m.on_stage(LoginStage::WorldConnected, true);
+    assert!(m.connected, "up with the socket");
+    m.disconnect_from_server();
+    assert_eq!(m.state, ScreenState::Idle);
+    assert_eq!(m.op, Operation::default());
+}
+
+/// `AUTH_FAILED` reads the current screen as it stands after the failure's dialog (`0x46bfa7`):
+/// a handler of that dialog that puts the character screen's name up sends it back to login.
+#[test]
+fn an_auth_failure_reads_the_screen_live() {
+    let shared = SharedGlueMgr::default();
+    let mut s = seated(&shared);
+    s.run(
+        "SetCurrentScreen('login') SCREENS = {} local f = CreateFrame('Frame') \
+         f:RegisterEvent('OPEN_STATUS_DIALOG') f:RegisterEvent('SET_GLUE_SCREEN') \
+         f:SetScript('OnEvent', function() \
+           if event == 'SET_GLUE_SCREEN' then table.insert(SCREENS, arg1) \
+           elseif arg1 == 'OKAY' then SetCurrentScreen('charselect') end end)",
+    )
+    .unwrap();
+    {
+        let mut m = shared.get_mut();
+        m.state = ScreenState::Connect;
+        m.holder = vec![realm("Fake")];
+        m.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING);
+        m.op.complete(false, STATUS_AUTH_FAILED);
+    }
+    frame(&shared, &mut s);
+    assert_eq!(s.eval::<Vec<String>>("return SCREENS").unwrap(), ["login"]);
 }
 
 /// A VM the manager has not seated holds its verbs' calls, which the manager runs when it seats
@@ -2401,7 +2464,7 @@ fn until(app: &mut App, what: &str, done: impl Fn(&App) -> bool) {
                 m.state,
                 m.op,
                 m.holder.len(),
-                m.screen,
+                vm(app).glue_screen(),
                 dialog(app),
                 vm(app).errors()
             );

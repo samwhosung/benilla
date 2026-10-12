@@ -227,6 +227,10 @@ pub(crate) enum GlueLogin {
     Disconnect,
     /// `QuitGame` (`0x46cea0` → `0x401560(0)`): the process ends, with no grace for a sound.
     Quit,
+    /// `CLoginMgr::Cancel` (`0x5b3320`) on a logon that failed: the realmd link closes if one is
+    /// open (`[login+5]`, `0x5b3323`; only the IO thread's logon park holds one), and nothing
+    /// else, so the credentials and an unattended run's paced resubmit stay.
+    CloseLink,
 }
 
 /// The glue manager's asks: a submit as the screen's own Login press makes it (the account saving
@@ -261,6 +265,11 @@ pub(crate) fn answer_glue(
                         let _ = pick.0.send(crate::net::CharRequest::Abandon);
                     }
                     commands.set_state(ClientState::Login);
+                }
+            }
+            GlueLogin::CloseLink => {
+                if let Some(realm) = realm.as_deref() {
+                    let _ = realm.0.send(crate::net::RealmRequest::Close);
                 }
             }
             GlueLogin::Quit => {
@@ -1589,6 +1598,49 @@ mod tests {
             );
             assert!(rx.try_recv().is_err());
         }
+    }
+
+    /// Under the stock glue an unattended run's transport failure is still resubmitted: the
+    /// logon arm's cancel (`0x46bbbf` → `0x5b3320`) closes only a link that is open and keeps the
+    /// credentials and the paced resubmit.
+    #[test]
+    fn the_glue_arms_cancel_keeps_an_unattended_resubmit() {
+        let (mut app, requests) = policy_app();
+        let (realm_tx, realm_rx) = crossbeam_channel::unbounded();
+        app.insert_resource(crate::net::RealmChoice(realm_tx.into()))
+            .insert_resource(State::new(ClientState::Login))
+            .add_message::<GlueLogin>()
+            .add_message::<AppExit>()
+            .add_systems(Update, answer_glue.after(drive_policy));
+        {
+            let mut intent = app.world_mut().resource_mut::<LoginIntent>();
+            intent.creds = Some(("probe1".into(), "secret".into()));
+            intent.in_flight = true;
+        }
+        app.world_mut().write_message(LoginFailedMessage {
+            refusal: None,
+            reason: "connection refused".into(),
+            terminal: false,
+            dial: None,
+        });
+        // The arm's cancel and its dialog's press, as the glue manager asks them.
+        app.world_mut().write_message(GlueLogin::CloseLink);
+        app.world_mut().write_message(GlueLogin::CloseLink);
+        app.update();
+        assert!(matches!(
+            realm_rx.try_recv(),
+            Ok(crate::net::RealmRequest::Close)
+        ));
+        {
+            let intent = app.world().resource::<LoginIntent>();
+            assert!(intent.creds.is_some(), "the credentials stay");
+            assert_eq!(intent.retry_at, Some(RETRY_DELAY_SECS), "and the resubmit");
+        }
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(std::time::Duration::from_secs_f32(RETRY_DELAY_SECS));
+        app.update();
+        assert_eq!(requests.try_recv().expect("resubmitted").user, "probe1");
     }
 
     /// An unattended run still reconnects on a lost session; the verdict rides the message.

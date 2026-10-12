@@ -424,17 +424,20 @@ enum Step {
     Connect,
     /// The screen state, written.
     State(ScreenState),
-    /// The logon arm's authenticated latch (`0x46ba8d`-`0x46ba98`): state 0, then `0x46b1f0`'s
-    /// connect at `CSTATUS_CONNECTING` (`0x5aab4a`), its ring cleared (`0x5aab30`), with no dialog
-    /// of its own; the logon's list is its query's reply.
-    LogonAuthenticated,
-    /// The logon arm's failure (`0x46bbbf`): the logon cancelled, state 0.
-    LogonFailed,
+    /// The logon arm past its dialog, which reads the latch (`0x46ba85`) and the login state
+    /// (`0x46baaa`) as they stand once the dialog's handlers have run: authenticated, state 0 and
+    /// then `0x46b1f0`'s connect at `CSTATUS_CONNECTING` (`0x5aab4a`), its ring cleared
+    /// (`0x5aab30`), with no dialog of its own, the logon's list being its query's reply; failed,
+    /// the logon cancelled and state 0 (`0x46bbbf`-`0x46bbcb`). The patch state (`0x46bb64`)
+    /// waits on a downloader benilla does not have; its dialog's Cancel ends it.
+    LogonPastDialog,
     /// The connect done, the authentication begins (`0x46bfdd` → `0x5aaba0`).
     BeginAuth,
     /// The authentication's success (`0x46c00e`): state 0.
     Authenticated,
-    /// The queue ring cleared after the character screen is up (`0x46c029`).
+    /// The queue position cleared after the character screen is up (`0x46c023`). The reference
+    /// zeroes `pos[0]` alone; the whole ring is cleared here, which is neutral: it is read only in
+    /// state 2, and every connect clears it first (`0x5aab30`).
     ClearQueue,
     /// State 2's failure arm past its dialog, with the status it read (`0x46bef5`-`0x46bfc8`).
     WorldFailed(u8),
@@ -472,6 +475,11 @@ enum Outgoing {
     Queue,
     /// `SET_GLUE_SCREEN(name)` (event 0, `0x46b840`).
     Screen(&'static str),
+    /// `SET_GLUE_SCREEN(name)` when the current screen is `current`, read as it stands.
+    ScreenFrom {
+        current: &'static str,
+        name: &'static str,
+    },
     /// `DISCONNECTED_FROM_SERVER` (event 2, `0x46c62e`).
     Disconnected,
     /// `CLOSE_STATUS_DIALOG` (event 5).
@@ -508,6 +516,7 @@ impl Outgoing {
             Outgoing::Open { which, text, data } => GlueSignal::Open { which, text, data },
             Outgoing::Update { text, button } => GlueSignal::Update { text, button },
             Outgoing::Screen(name) => GlueSignal::Screen(name),
+            Outgoing::ScreenFrom { current, name } => GlueSignal::ScreenFrom { current, name },
             Outgoing::Disconnected => GlueSignal::Disconnected,
             Outgoing::Close => GlueSignal::Close,
             Outgoing::Teardown => GlueSignal::Teardown,
@@ -564,8 +573,6 @@ pub(crate) struct GlueMgr {
     op: Operation,
     queue: QueueEstimate,
     queue_realm: Option<String>,
-    /// The current glue screen's name, as the VM's `SetCurrentScreen` last set it.
-    screen: String,
     outbox: Vec<Outgoing>,
     /// The glue VM this manager last served, by session.
     vm: Option<u64>,
@@ -731,9 +738,17 @@ impl GlueMgr {
         match self.state {
             // `0x46b731`: the pending operation's callback; none is pending outside an operation.
             ScreenState::Idle => {}
-            // `0x46b73d`: the logon cancelled, state 0.
+            // `0x46b73d`: the logon cancelled, state 0. A logon still under way is abandoned; one
+            // that failed has no link left to close (`0x5b3320` tests `[login+5]`), so the press
+            // its failure dialog's `OnShow` makes closes only what may stand, the credentials and
+            // the paced resubmit kept.
             ScreenState::Logon => {
-                self.login_out.push(GlueLogin::Abandon);
+                self.login_out
+                    .push(if self.cells.state == LOGIN_FAILED_STATE {
+                        GlueLogin::CloseLink
+                    } else {
+                        GlueLogin::Abandon
+                    });
                 self.state = ScreenState::Idle;
             }
             // `0x46b754` (states 2 and 3): the operation completes `RESPONSE_CANCELLED` and the
@@ -888,15 +903,16 @@ impl GlueMgr {
                 self.park_out.push(RealmRequest::Refresh.into());
             }
             Step::State(state) => self.state = state,
-            Step::LogonAuthenticated => {
-                self.state = ScreenState::Connect;
-                self.auth_final = false;
-                self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
-                self.queue = QueueEstimate::default();
-            }
-            Step::LogonFailed => {
-                self.login_out.push(GlueLogin::Abandon);
-                self.state = ScreenState::Idle;
+            Step::LogonPastDialog => {
+                if self.auth_final {
+                    self.state = ScreenState::Connect;
+                    self.auth_final = false;
+                    self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+                    self.queue = QueueEstimate::default();
+                } else if self.cells.state == LOGIN_FAILED_STATE {
+                    self.login_out.push(GlueLogin::CloseLink);
+                    self.state = ScreenState::Idle;
+                }
             }
             Step::BeginAuth => self.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING),
             Step::Authenticated => {
@@ -1182,10 +1198,13 @@ impl GlueMgr {
             LoginStage::Authenticating => {}
             // The world dial begins: a logon with no realm list to publish is done.
             LoginStage::Handshaking => self.on_logon_done(),
-            // The connect completes `RESPONSE_CONNECTED` (`0x5aaa90`).
+            // The connect completes `RESPONSE_CONNECTED` and the world link's flag goes up with the
+            // socket, before the authentication (`0x5aaa90`, `0x5aaa9c`): a drop from here reaches
+            // the disconnect handler.
             LoginStage::WorldConnected => {
                 if self.state == ScreenState::Connect && self.op.kind == OpKind::Connect {
                     self.op.complete(true, STATUS_RESPONSE_CONNECTED);
+                    self.connected = true;
                 }
             }
         }
@@ -1282,9 +1301,10 @@ impl GlueMgr {
             self.login_out.push(GlueLogin::CancelWorld);
         }
         if status == STATUS_AUTH_FAILED {
-            if self.screen.eq_ignore_ascii_case("charselect") {
-                self.outbox.push(Outgoing::Screen("login"));
-            }
+            self.outbox.push(Outgoing::ScreenFrom {
+                current: "charselect",
+                name: "login",
+            });
             return;
         }
         self.outbox.push(Outgoing::Teardown);
@@ -1418,16 +1438,7 @@ impl GlueMgr {
                 if self.cells.state != LOGIN_PIN_WAIT {
                     self.show_login_dialog();
                 }
-                if self.auth_final {
-                    self.outbox.push(Outgoing::Begin(Step::LogonAuthenticated));
-                    return;
-                }
-                // `0x46bbbf`: a failed logon is cancelled and the state goes to 0. The patch
-                // state (`0x46bb64`) waits on a downloader benilla does not have; its dialog's
-                // Cancel ends it.
-                if self.cells.state == LOGIN_FAILED_STATE {
-                    self.outbox.push(Outgoing::Begin(Step::LogonFailed));
-                }
+                self.outbox.push(Outgoing::Begin(Step::LogonPastDialog));
             }
             ScreenState::Connect => self.tick_connect(),
             ScreenState::CharList => self.tick_char_list(),
@@ -1535,8 +1546,8 @@ impl GlueMgr {
         } else if op.kind == OpKind::Connect {
             self.outbox.push(Outgoing::Begin(Step::BeginAuth));
         } else {
-            // `0x46c00e`-`0x46c029`: state 0, the roster torn down, `charselect`, the queue ring
-            // cleared. The screen's own `GetCharacterListUpdate` loads the roster.
+            // `0x46c00e`-`0x46c023`: state 0, the roster torn down, `charselect`, the queue
+            // position cleared. The screen's own `GetCharacterListUpdate` loads the roster.
             self.outbox.push(Outgoing::Begin(Step::Authenticated));
             self.outbox.push(Outgoing::Teardown);
             self.outbox.push(Outgoing::Screen("charselect"));
@@ -1835,7 +1846,6 @@ pub(crate) fn drive_glue_mgr(
 
         // What the verbs left for the frame, and the calls a VM made before it was seated.
         if let Some(s) = script.as_deref_mut() {
-            mgr.screen = s.glue_screen();
             for call in s.take_glue_calls() {
                 mgr.call(call);
             }
