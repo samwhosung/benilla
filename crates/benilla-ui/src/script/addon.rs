@@ -189,8 +189,9 @@ fn gate_rows(model: &Model) -> Vec<GateRow<'_>> {
         .collect()
 }
 
-/// `checkAddonVersion`, read per query as `IsAddonVersionCheckEnabled` (`0x51f180`) does; unset,
-/// it is the registered default `"1"`, check on.
+/// `checkAddonVersion`, read per query as `IsAddonVersionCheckEnabled` (`0x51f180`) does: the
+/// record's integer (`+0x28`, `SStrToInt` of the value, `0x63e0b0`) is nonzero, so `""`, `"abc"`
+/// and `"false"` read as off; unset, it is the registered default `"1"`, check on.
 pub(super) fn version_check(model: &Model) -> bool {
     model
         .cvars
