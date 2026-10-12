@@ -1696,15 +1696,13 @@ fn glue_realm(r: &RealmInfo) -> GlueRealm {
     }
 }
 
-/// A world status's text and its code for the URL walk; a code past the table reads
-/// `RESPONSE_FAILURE`.
+/// A world status's text and its code for the URL walk. `GetStatus` (`0x5aa960`) reads a status
+/// outside the table's 0x53 rows (`0x5aa99d`) as the number, `"(%i)"` (`0x85d5b0`) into
+/// `0xc27eb8`; the byte reaches it unclamped (`0x5aa920`), and the URL walk reads it unchanged.
 fn status_text(code: u8) -> (Text, Option<u8>) {
     match GLUE_STATUS_KEYS.get(usize::from(code)) {
         Some(key) => (Text::Key(key), Some(code)),
-        None => (
-            Text::Key(GLUE_STATUS_KEYS[usize::from(STATUS_RESPONSE_FAILURE)]),
-            Some(STATUS_RESPONSE_FAILURE),
-        ),
+        None => (Text::Raw(format!("({code})")), Some(code)),
     }
 }
 

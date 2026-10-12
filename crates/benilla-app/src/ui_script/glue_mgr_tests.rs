@@ -1243,6 +1243,46 @@ fn enter_world_writes_the_index_and_picks_in_state_8() {
     assert!(m.park_out.is_empty());
 }
 
+/// `GetStatus` (`0x5aa960`) formats a status past the 83-row table (`0x5aa99d`) as `"(%i)"`
+/// (`0x85d5b0`), where the last row, 0x52, still reads its key.
+#[test]
+fn a_world_status_past_the_table_reads_its_number() {
+    let refused = |code| {
+        let mut m = fresh();
+        m.state = ScreenState::Connect;
+        m.holder = vec![realm("Fake")];
+        m.on_failed(&failed(Some(LoginRefusal::World(code)), false));
+        m.tick();
+        settle(&mut m);
+        m.outbox
+    };
+    for (code, text) in [(0xc8u8, "(200)"), (0x53, "(83)"), (0xff, "(255)")] {
+        assert_eq!(
+            refused(code),
+            [
+                Outgoing::Update {
+                    text: Text::Raw(text.into()),
+                    button: None,
+                },
+                Outgoing::Open {
+                    which: "OKAY",
+                    text: Some(Text::Raw(text.into())),
+                    data: None,
+                },
+                Outgoing::Teardown,
+                Outgoing::Close,
+                Outgoing::Rebuild,
+            ],
+            "status {code:#x}"
+        );
+    }
+    assert_eq!(
+        status_text(0x52).0,
+        Text::Key(GLUE_STATUS_KEYS[0x52]),
+        "the last row is still a key"
+    );
+}
+
 /// `SMSG_CHARACTER_LOGIN_FAILED`'s byte through `0x5aad70`'s table (`0x5aae08`): 1 to 6 onto
 /// `0x3e 0x3f 0x40 0x42 0x43 0x44`, everything else `CHAR_LOGIN_FAILED`.
 #[test]
