@@ -100,6 +100,9 @@ out of scope is closed with the reason.
   - `WOW_UNATTENDED=1` reconnects instead of waiting at a dialog, and exits non-zero on a login
     it cannot pass. `WOW_NOSOUND=1` runs silent. A capture (`WOW_CAPTURE`) is both, and a rig
     (`WOW_RIG`) is unattended. `WOW_ALLOW_ACCOUNT=1` overrides the account guard.
+  - An unattended run starts from defaults in a fresh state folder of its own, printed at boot
+    (`state:`), so it never reads or overwrites your settings, layout or addons. `BENILLA_HOME`
+    pins a folder, for a run that needs addons, seeded files or state kept across runs.
   - On vmangos, `WOW_RIG="tauren druid 60 gear:heal-preraid-bis spec:heal-preraid-bis
     at:ThunderBluff"` finds or creates that character on the account and applies the server's
     premade sets (`WOW_RIG="gear:?"` lists them). `WOW_PROBE_CHAT="<command>"` sends one GM

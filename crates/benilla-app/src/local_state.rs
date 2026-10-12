@@ -4,9 +4,12 @@
 //!
 //! Resolution, in order, the same shape as [`benilla_formats::wow_data`]:
 //! 1. `$BENILLA_HOME`.
-//! 2. `<project folder>/benilla-config/`, dev builds only ([`benilla_formats::project_folder`], the
+//! 2. An unattended run ([`crate::run_mode::unattended`]): a fresh folder of its own for the run,
+//!    under the system temp folder, so a probe neither reads the player's settings nor writes back
+//!    over them.
+//! 3. `<project folder>/benilla-config/`, dev builds only ([`benilla_formats::project_folder`], the
 //!    launcher's): a shipped binary must not carry the build machine's source tree.
-//! 3. `<exe dir>/benilla-config/`.
+//! 4. `<exe dir>/benilla-config/`.
 //!
 //! With `$WOW_CAPTURE` set every path resolves to `None`: a capture neither reads nor writes
 //! player state.
@@ -22,25 +25,45 @@ const STATE_DIR: &str = "benilla-config";
 /// It may not exist yet: [`write_atomic`] creates it, and a reader treats a missing file as
 /// defaults.
 pub(crate) fn home() -> Option<PathBuf> {
+    home_in(cfg!(test))
+}
+
+/// [`home`], with the unit-test stop as an argument so a test can walk the steps behind it.
+fn home_in(unit_test: bool) -> Option<PathBuf> {
     if std::env::var_os("WOW_CAPTURE").is_some() {
         return None; // hermetic: captures neither read nor write player state
     }
     if let Some(over) = std::env::var_os("BENILLA_HOME") {
         return Some(PathBuf::from(over));
     }
-    if cfg!(test) {
+    if unit_test {
         return None; // a unit test reaches no real state folder unless it pins `$BENILLA_HOME`
+    }
+    if crate::run_mode::unattended() {
+        return Some(run_home().to_path_buf());
     }
     resident_home()
 }
 
-/// Steps 2 and 3 of [`home`]: the folder the build itself lives in.
+/// Step 2 of [`home`]: the unattended run's own folder, one per process, created on first write.
+/// Left behind for whoever reads what the run wrote; the system cleans its temp folder.
+pub(crate) fn run_home() -> &'static Path {
+    static RUN_HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    RUN_HOME.get_or_init(|| run_home_in(&std::env::temp_dir(), std::process::id()))
+}
+
+/// [`run_home`]'s path under `temp` for process `pid`.
+fn run_home_in(temp: &Path, pid: u32) -> PathBuf {
+    temp.join(format!("benilla-run-{pid}")).join(STATE_DIR)
+}
+
+/// Steps 3 and 4 of [`home`]: the folder the build itself lives in.
 fn resident_home() -> Option<PathBuf> {
-    // 2 · the project folder, dev builds only.
+    // 3 · the project folder, dev builds only.
     if let Some(root) = dev_project_root() {
         return Some(root.join(STATE_DIR));
     }
-    // 3 · beside the binary; a dev build never reaches here.
+    // 4 · beside the binary; a dev build never reaches here.
     std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf))
@@ -382,6 +405,46 @@ mod tests {
             "a capture reads no player's window layout"
         );
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// An unattended run keeps its state in a folder of its own, never the player's, unless
+    /// `$BENILLA_HOME` pins one; a capture still resolves none.
+    #[test]
+    fn an_unattended_run_keeps_its_own_state_folder() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _r = EnvGuard::unset("WOW_RIG");
+        let _h = EnvGuard::unset("BENILLA_HOME");
+        let _u = EnvGuard::set("WOW_UNATTENDED", "1");
+        let run = home_in(false).expect("an unattended run has a state folder");
+        assert_eq!(run, run_home());
+        assert_ne!(
+            Some(&run),
+            resident_home().as_ref(),
+            "never the player's folder"
+        );
+        assert_eq!(
+            home_in(false),
+            Some(run.clone()),
+            "one folder for the whole run"
+        );
+        assert_eq!(
+            run_home_in(Path::new("/tmp"), 42),
+            Path::new("/tmp/benilla-run-42/benilla-config")
+        );
+
+        // A rig is unattended too.
+        let _u2 = EnvGuard::unset("WOW_UNATTENDED");
+        let _r2 = EnvGuard::set("WOW_RIG", "tauren druid 60");
+        assert_eq!(home_in(false), Some(run));
+
+        // The override still wins, and a capture still resolves nothing.
+        let _h2 = EnvGuard::set("BENILLA_HOME", "/tmp/benilla-pinned");
+        assert_eq!(home_in(false), Some(PathBuf::from("/tmp/benilla-pinned")));
+        let _c2 = EnvGuard::set("WOW_CAPTURE", "ui-options");
+        assert_eq!(home_in(false), None);
     }
 
     /// A unit test that does not pin `$BENILLA_HOME` resolves no state folder, so no test can write

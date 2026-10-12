@@ -253,6 +253,15 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
     // A dev build's install, state folder and probe identity resolve from the launcher's folder,
     // so a crate on top of benilla keeps them in its own and not in cargo's checkout of benilla.
     benilla_formats::set_project_folder(build.project_dir);
+    if run_mode::unattended() && std::env::var_os("BENILLA_HOME").is_none() {
+        // Before the logger exists; whoever reads what the run wrote needs the folder.
+        if let Some(home) = local_state::home() {
+            println!(
+                "state: an unattended run keeps its own state in {} (BENILLA_HOME pins one)",
+                home.display()
+            );
+        }
+    }
 
     // From here a panic leaves `benilla-config/Diagnostics/crash-<unix>.txt`; armed before the
     // `App` exists, so a panic while plugins build is reported too.
