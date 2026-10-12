@@ -55,6 +55,7 @@ impl Plugin for LoginPlugin {
             .init_resource::<LoginForm>()
             .add_message::<GlueLogin>()
             .add_message::<crate::ui_script::server_alert::LaunchUrl>()
+            .add_message::<crate::ui_script::server_alert::LaunchAddonUrl>()
             .add_systems(
                 OnEnter(ClientState::Login),
                 (
@@ -88,6 +89,9 @@ impl Plugin for LoginPlugin {
                             .in_set(crate::portrait::GluePreviewFeed),
                         crate::ui_script::server_alert::open_launched
                             // Reads only its message, so no state orders it but the sets.
+                            .after(benilla_world::schedule::WorldStage::Stream)
+                            .run_if(crate::ui_script::glue::stock_glue),
+                        crate::ui_script::server_alert::open_addon_launched
                             .after(benilla_world::schedule::WorldStage::Stream)
                             .run_if(crate::ui_script::glue::stock_glue),
                         answer_glue,

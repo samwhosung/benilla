@@ -1135,6 +1135,7 @@ pub(crate) struct GlueAsks<'w> {
     login: MessageWriter<'w, GlueLogin>,
     music: MessageWriter<'w, crate::sound::GlueMusicRequest>,
     launch: MessageWriter<'w, super::server_alert::LaunchUrl>,
+    launch_addon: MessageWriter<'w, super::server_alert::LaunchAddonUrl>,
     realm: Option<Res<'w, crate::net::RealmChoice>>,
     abandon: Option<Res<'w, crate::net::LoginAbandon>>,
 }
@@ -1282,6 +1283,10 @@ pub(crate) fn drive_glue_mgr(
                 }
                 GlueRequest::QuitGame => logins.push(GlueLogin::Quit),
                 // `0x5abd00`, past the whitelist the verb applied (`0x5abc10`).
+                GlueRequest::LaunchAddonUrl(url) => {
+                    asks.launch_addon
+                        .write(super::server_alert::LaunchAddonUrl(url));
+                }
                 GlueRequest::LaunchUrl(url) => {
                     asks.launch.write(super::server_alert::LaunchUrl(url));
                 }

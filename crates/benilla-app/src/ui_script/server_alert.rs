@@ -514,6 +514,27 @@ pub(super) fn begin_once(url: &str) -> Option<crossbeam_channel::Receiver<Option
 #[derive(Message, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaunchUrl(pub(crate) String);
 
+/// `LaunchAddOnURL` reaching the host (`0x429ff0` direct): a decoded web address
+/// ([`benilla_ui::script::launch_addon_url`]).
+#[derive(Message, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LaunchAddonUrl(pub(crate) String);
+
+/// [`open_launched`] for an add-on's URL, which the reference launches with no whitelist
+/// (`0x46d5e0`); the one check here is [`benilla_ui::script::launch_addon_url_allowed`].
+pub(crate) fn open_addon_launched(mut urls: MessageReader<LaunchAddonUrl>) {
+    for LaunchAddonUrl(url) in urls.read() {
+        if !benilla_ui::script::launch_addon_url_allowed(url) {
+            warn!("LaunchAddOnURL: {url:?} refused");
+            continue;
+        }
+        if !allowed() {
+            debug!("LaunchAddOnURL: {url} not opened in this run");
+            continue;
+        }
+        open_in_browser(url);
+    }
+}
+
 /// Open each launched URL in the player's browser (`0x429ff0`'s `ShellExecute "open"`), never in
 /// a test or an unattended run.
 pub(crate) fn open_launched(mut urls: MessageReader<LaunchUrl>) {
@@ -532,7 +553,9 @@ pub(crate) fn open_launched(mut urls: MessageReader<LaunchUrl>) {
 }
 
 /// The platform's opener, detached. The URL is `http://` and letters, digits, `.`, `-` and `/`
-/// ([`benilla_ui::script::GlueRequest::LaunchUrl`]), so it carries nothing a shell would read.
+/// ([`benilla_ui::script::GlueRequest::LaunchUrl`]), or a printable-ASCII web address
+/// ([`benilla_ui::script::GlueRequest::LaunchAddonUrl`]), and goes as one argument to an opener
+/// that is no shell.
 fn open_in_browser(url: &str) {
     let mut command = if cfg!(target_os = "macos") {
         std::process::Command::new("/usr/bin/open")

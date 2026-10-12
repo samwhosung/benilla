@@ -125,6 +125,9 @@ pub enum GlueRequest {
     /// `LaunchURL(url)` (`0x46cf60` → `0x5abd00`) for a URL that passed `launch_url_allowed`
     /// (`0x5abd00` tests `0x5abc10` first): the player's browser opens it (`0x429ff0`).
     LaunchUrl(String),
+    /// `LaunchAddOnURL(index)` (`0x46d5e0` → `0x429ff0`, no whitelist) for a URL that passed
+    /// [`launch_addon_url`]: already decoded, ready for the player's browser.
+    LaunchAddonUrl(String),
 }
 
 /// The hosts `LaunchURL` opens, the 10-entry table at `0x85cc34`: a leading `*` stands for one
@@ -185,6 +188,61 @@ pub fn launch_url_allowed(url: &str) -> bool {
                 .is_some_and(|dot| host[dot..].eq_ignore_ascii_case(suffix.as_bytes())),
             None => host.eq_ignore_ascii_case(entry.as_bytes()),
         })
+}
+
+/// What the browser is given for an add-on's URL, or `None` for one benilla will not open. The
+/// reference hands the server's string to `0x429ff0` with no whitelist (`0x46d5e0`): a C string of
+/// fewer than 0x400 bytes, each `%XY` replaced by the byte it spells (table `0x801490`: a
+/// non-hex digit reads 0; a `%` with fewer than two bytes after it ends the string), then
+/// `ShellExecute "open"`.
+///
+/// Deviation: the decoded string must be a web address, `http://` or `https://` (case-folded) and
+/// nothing else, every byte printable ASCII. The reference would open whatever the
+/// server sent, `file:` and program paths included, and the string comes off the wire.
+pub fn launch_addon_url(url: &str) -> Option<String> {
+    if url.is_empty() || url.len() >= 0x400 {
+        return None;
+    }
+    let hex = |b: u8| -> u8 {
+        match b {
+            b'1'..=b'9' => b - b'0',
+            b'A'..=b'F' => b - b'A' + 10,
+            b'a'..=b'f' => b - b'a' + 10,
+            _ => 0,
+        }
+    };
+    let bytes = url.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] != 0 {
+        let c = bytes[i];
+        i += 1;
+        if c != b'%' {
+            out.push(c);
+            continue;
+        }
+        let (Some(&hi), Some(&lo)) = (bytes.get(i), bytes.get(i + 1)) else {
+            break;
+        };
+        if hi == 0 || lo == 0 {
+            break;
+        }
+        i += 2;
+        out.push(hex(hi) << 4 | hex(lo));
+    }
+    // The C string ends at a NUL, a decoded `%00` included.
+    let end = out.iter().position(|&b| b == 0).unwrap_or(out.len());
+    out.truncate(end);
+    launch_addon_url_allowed(std::str::from_utf8(&out).ok()?)
+        .then(|| String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The host's own check of what [`launch_addon_url`] returned: a web address of printable ASCII,
+/// a space included.
+pub fn launch_addon_url_allowed(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("http://") || lower.starts_with("https://"))
+        && url.bytes().all(|b| b.is_ascii_graphic() || b == b' ')
 }
 
 /// The realm `GetServerName` (`0x46d280`) answers: the `realmName` CVar's text, and the
@@ -802,5 +860,40 @@ mod tests {
         s.run("ShowCursor()").unwrap();
         assert!(!s.glue_cursor_hidden());
         assert!(s.take_errors().is_empty());
+    }
+
+    /// `0x429ff0`'s copy: `%XY` is the byte it spells, a non-hex digit reads 0, a `%` with fewer
+    /// than two bytes after it ends the string, a decoded NUL ends it too; then the web-address
+    /// rule on the result.
+    #[test]
+    fn the_addon_url_is_decoded_as_the_launcher_decodes_it_and_must_be_a_web_address() {
+        for (url, want) in [
+            ("http://a.example/x", Some("http://a.example/x")),
+            ("HTTPS://a.example/%7Euser", Some("HTTPS://a.example/~user")),
+            ("http://a.example/a%20b", Some("http://a.example/a b")),
+            ("http://a.example/%2f%2F", Some("http://a.example///")),
+            ("http://a.example/x%", Some("http://a.example/x")),
+            ("http://a.example/x%4", Some("http://a.example/x")),
+            ("http://a.example/x%00y", Some("http://a.example/x")),
+            ("http://a.example/x%zzy", Some("http://a.example/x")),
+            ("file:///etc/passwd", None),
+            ("ftp://a.example/", None),
+            ("javascript:alert(1)", None),
+            ("http://a.example/%0d%0a", None),
+            ("http://a.example/\u{e9}", None),
+            ("%68ttp://a.example/", Some("http://a.example/")),
+            ("%66ile:///x", None),
+            ("", None),
+        ] {
+            assert_eq!(launch_addon_url(url).as_deref(), want, "{url:?}");
+        }
+        let long = format!("http://a.example/{}", "a".repeat(0x400));
+        assert_eq!(
+            launch_addon_url(&long),
+            None,
+            "0x42a01c refuses 0x400 bytes"
+        );
+        assert!(launch_addon_url_allowed("http://a.example/a b"));
+        assert!(!launch_addon_url_allowed("http://a.example/a\tb"));
     }
 }
