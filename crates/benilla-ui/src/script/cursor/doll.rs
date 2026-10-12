@@ -613,8 +613,6 @@ mod tests {
 
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             passive: false,
-            book_slot: 1,
-            book_type: "spell".into(),
             spell_id: 1,
             texture: None,
         }));

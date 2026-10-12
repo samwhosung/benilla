@@ -116,19 +116,20 @@ pub(super) fn held_count(model: &super::Model, item: &CursorItem) -> u32 {
         .map_or(1, |s| s.count.max(1))
 }
 
-/// A spell payload, mode 3, from `PickupSpell` on the player's spellbook.
+/// A spell payload, mode 3: the spell id the spell setter stores (`[0xb4e2f4]`, `0x494db5`), from
+/// `PickupSpell` on the player's book or a spell lifted off the action bar (`0x4e6254`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CursorSpell {
-    pub book_slot: u32,
-    pub book_type: String,
     pub spell_id: u32,
     pub texture: Option<String>,
     /// `Attributes & 0x40` (`SPELL_ATTR_PASSIVE`): `PlaceAction` refuses a passive (`0x4e63ad`).
     pub passive: bool,
 }
 
-/// An action-bar payload from `PickupAction`: the source slot, the action's type byte as
-/// `CMSG_SET_ACTION_BUTTON` packs it (spell, macro or item) and its id.
+/// Mode 7, an item action lifted off the action bar by the row grab (`0x4e6215`, `0x4e6450`): the
+/// source slot, the action's type byte as `CMSG_SET_ACTION_BUTTON` packs it and its id. A bar
+/// spell or macro lifts with its own setter instead, as a [`CursorSpell`] or [`CursorMacro`]
+/// (`0x4e6254`, `0x4e629d`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct CursorAction {
     pub src_slot: u32,
@@ -241,10 +242,8 @@ pub(crate) fn clear_cursor(model: &mut Model) {
 /// bar item, mode 7 (`0x49513a`), and fires `CURSOR_UPDATE` (`0x49515e`). The spell (`0x494dd1`)
 /// and macro (`0x494fd7`) setters end on the action bar's grid, the pet-action setter on the pet
 /// bar's (`0x494f28`), the money setter on `PLAYER_MONEY` (`0x494d0a`) and the stable grab on
-/// nothing (`0x4950c5`), so no `CURSOR_UPDATE` follows theirs. A bar pickup takes the setter of
-/// its kind (`0x4e6130`): the grab for an item, the spell or macro setter otherwise.
+/// nothing (`0x4950c5`), so no `CURSOR_UPDATE` follows theirs.
 pub(crate) fn put(model: &mut Model, payload: CursorPayload) {
-    use super::action::ACTION_KIND_ITEM;
     /// What a setter fires past its set.
     enum Tail {
         /// `SetCursorItem` and the row grab: the action bar's grid if asked, then `CURSOR_UPDATE`.
@@ -262,11 +261,9 @@ pub(crate) fn put(model: &mut Model, payload: CursorPayload) {
         CursorPayload::Item(item) => Tail::Update {
             grid: item.bar_placeable,
         },
-        CursorPayload::Action(a) if a.kind == ACTION_KIND_ITEM => Tail::Update { grid: true },
+        CursorPayload::Action(_) => Tail::Update { grid: true },
         CursorPayload::Merchant(_) => Tail::Update { grid: false },
-        CursorPayload::Action(_) | CursorPayload::Spell(_) | CursorPayload::Macro(_) => {
-            Tail::BarGrid
-        }
+        CursorPayload::Spell(_) | CursorPayload::Macro(_) => Tail::BarGrid,
         CursorPayload::PetAction(_) => Tail::PetGrid,
         CursorPayload::Money(_) => Tail::Money,
         CursorPayload::StablePet(_) => Tail::Nothing,
@@ -813,8 +810,6 @@ mod tests {
 
         let mut s = UiScript::new().unwrap();
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
-            book_slot: 1,
-            book_type: "spell".into(),
             spell_id: 133,
             texture: None,
             passive: false,
@@ -864,8 +859,6 @@ mod tests {
 
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             passive: false,
-            book_slot: 3,
-            book_type: "spell".into(),
             spell_id: 133,
             texture: None,
         }));
@@ -891,8 +884,6 @@ mod tests {
         assert_eq!(s.eval::<i64>(count).unwrap(), 0);
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             passive: false,
-            book_slot: 1,
-            book_type: "spell".into(),
             spell_id: 1,
             texture: None,
         }));
@@ -905,8 +896,6 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             passive: false,
-            book_slot: 1,
-            book_type: "spell".into(),
             spell_id: 1,
             texture: None,
         }));
@@ -1034,8 +1023,6 @@ mod tests {
         for pick in [WorldPick::Terrain, WorldPick::Nothing] {
             s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
                 passive: false,
-                book_slot: 3,
-                book_type: "spell".into(),
                 spell_id: 133,
                 texture: None,
             }));

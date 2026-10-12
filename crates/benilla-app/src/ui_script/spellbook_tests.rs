@@ -206,7 +206,7 @@ fn shipped_spellbook_drives_end_to_end() {
     assert!(
         matches!(
             s.cursor_payload(),
-            Some(benilla_ui::script::CursorPayload::Spell(c)) if c.book_type == "spell" && c.spell_id == 133
+            Some(benilla_ui::script::CursorPayload::Spell(c)) if c.spell_id == 133
         ),
         "the cursor holds spell 133 from the spell book: {:?}",
         s.cursor_payload()

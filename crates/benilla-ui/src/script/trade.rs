@@ -750,8 +750,6 @@ mod tests {
         // A spell payload is refused and stays on the cursor.
         s.model_mut().cursor = Some(CursorPayload::Spell(crate::script::cursor::CursorSpell {
             passive: false,
-            book_slot: 1,
-            book_type: "spell".into(),
             spell_id: 133,
             texture: None,
         }));

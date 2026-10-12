@@ -1223,8 +1223,6 @@ mod tests {
         cursor::put(
             &mut s.model_mut(),
             CursorPayload::Spell(CursorSpell {
-                book_slot: 1,
-                book_type: "spell".into(),
                 spell_id: 133,
                 texture: None,
                 passive: false,
