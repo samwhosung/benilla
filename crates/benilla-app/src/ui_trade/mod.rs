@@ -1618,6 +1618,7 @@ mod tests {
             1,
             benilla_ui::script::ContainerSlot {
                 item_id: 2589,
+                guid: 0x4000_0000_0000_2589,
                 count: 1,
                 ..Default::default()
             },

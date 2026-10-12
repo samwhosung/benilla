@@ -1170,7 +1170,6 @@ fn bagnon_forevers_records_survive_the_logout_boundary() {
         None,
         Default::default(),
         Vec::new(),
-        Vec::new(),
     );
     s.fire_event("PLAYER_LEAVING_WORLD", Vec::new());
     s.fire_event("PLAYER_LOGOUT", Vec::new());

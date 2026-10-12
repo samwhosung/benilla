@@ -7,7 +7,6 @@ use bevy::prelude::*;
 
 use super::{LootLatch, LootMoveStart, LootState};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp, SelfGuid};
-use crate::pending_item_ops::{LockTransitions, PendingItemOps};
 use crate::ui_action::{UiError, UiErrorKeys};
 
 pub(super) fn register(app: &mut App) {
@@ -45,7 +44,13 @@ fn on_response(
         return;
     };
     let seam = &mut select.seam;
-    if !admit_response(guid, loot_type, &mut seam.loot_latch, &seam.net) {
+    if !admit_response(
+        guid,
+        loot_type,
+        &mut seam.loot_latch,
+        &mut seam.loot,
+        &seam.net,
+    ) {
         return;
     }
     debug!(
@@ -66,15 +71,10 @@ fn on_error(
     In(ev): In<SessionEvent>,
     mut errors: ResMut<UiErrorKeys>,
     mut latch: ResMut<LootLatch>,
-    mut pending: ResMut<PendingItemOps>,
-    mut lock_cleared: ResMut<LockTransitions>,
+    mut loot: ResMut<LootState>,
 ) {
     if let SessionEvent::LootError { guid, error } = ev {
-        let unlock = ItemUnlock {
-            pending: &mut pending,
-            lock_cleared: &mut lock_cleared,
-        };
-        loot_error(guid, error, &mut errors, &mut latch, unlock);
+        loot_error(guid, error, &mut errors, &mut latch, &mut loot);
     }
 }
 
@@ -100,29 +100,10 @@ fn on_release_response(
     In(ev): In<SessionEvent>,
     mut loot: ResMut<LootState>,
     mut latch: ResMut<LootLatch>,
-    mut pending: ResMut<PendingItemOps>,
-    mut lock_cleared: ResMut<LockTransitions>,
     mut dead: super::DeadUnitDeselect,
 ) {
     if let SessionEvent::LootReleaseResponse { guid } = ev {
-        let unlock = ItemUnlock {
-            pending: &mut pending,
-            lock_cleared: &mut lock_cleared,
-        };
-        dead.after_close(loot_release_response(guid, &mut loot, &mut latch, unlock));
-    }
-}
-
-/// `UnlockItem 0x495420` on the loot guid, as the loot closes call it: only an item we locked at
-/// its `CMSG_OPEN_ITEM` send unlocks, and its slot queues for `ITEM_LOCK_CHANGED`.
-struct ItemUnlock<'a> {
-    pending: &'a mut PendingItemOps,
-    lock_cleared: &'a mut LockTransitions,
-}
-
-impl ItemUnlock<'_> {
-    fn unlock(self, guid: u64) {
-        self.lock_cleared.0.extend(self.pending.clear_by_guid(guid));
+        dead.after_close(loot_release_response(guid, &mut loot, &mut latch));
     }
 }
 
@@ -169,9 +150,16 @@ const SERVER_STARTED_LOOT: [u8; 3] = [2, 3, 4];
 /// `SMSG_LOOT_RESPONSE`'s item shape, behind the admission gate `0x5eb924`: it opens when the
 /// latch holds the packet's guid, or when the latch is cold and the type is server-started.
 /// Anything else is refused (`0x5eb963`): no window, a `CMSG_LOOT_RELEASE` for the packet's guid,
-/// and the latch cleared whatever it held. An admitted one writes the latch (`0x5ebb60`) and plays
-/// no anim; a chest already knelt at its `SMSG_SPELL_GO` (`0x6e831b`).
-fn admit_response(guid: u64, loot_type: u8, latch: &mut LootLatch, net: &NetCommands) -> bool {
+/// the latch cleared whatever it held, and `UnlockItem` on the packet's guid (`0x5eb9de`). An
+/// admitted one writes the latch (`0x5ebb60`) and plays no anim; a chest already knelt at its
+/// `SMSG_SPELL_GO` (`0x6e831b`).
+fn admit_response(
+    guid: u64,
+    loot_type: u8,
+    latch: &mut LootLatch,
+    loot: &mut LootState,
+    net: &NetCommands,
+) -> bool {
     let accept = match latch.0 {
         Some(latched) => latched == guid,
         None => SERVER_STARTED_LOOT.contains(&loot_type),
@@ -186,6 +174,7 @@ fn admit_response(guid: u64, loot_type: u8, latch: &mut LootLatch, net: &NetComm
             let _ = net.0.send(ClientCommand::LootRelease { guid });
         }
         latch.0 = None; // not guid-matched: `0x5eb9d2` clears whatever was there
+        loot.unlock_item(guid);
         return false;
     }
     // A fishing bobber first arms here and still does not kneel: `LootKneel` decides the pose.
@@ -247,7 +236,7 @@ fn loot_refusal(reason: u8) -> LootRefusal {
 
 /// `SMSG_LOOT_RESPONSE`'s error shape: the arm's message by key, as `DisplayError(stringId)` takes
 /// its surface and voice from the record; a releasing arm drops the latch and runs
-/// `UnlockItem 0x495420` on the packet's guid (the tail `0x5ebac2`). There is no admission gate
+/// `UnlockItem 0x495420` on the packet's guid (the tail `0x5ebac2`, `0x5ebae0`). There is no admission gate
 /// here: a guid-mismatched error still shows and keeps the latch, where the reference refuses it
 /// at `0x5eb963`, clearing the latch and showing nothing.
 fn loot_error(
@@ -255,7 +244,7 @@ fn loot_error(
     error: u8,
     errors: &mut UiErrorKeys,
     latch: &mut LootLatch,
-    unlock: ItemUnlock,
+    loot: &mut LootState,
 ) {
     let LootRefusal { key, releases } = loot_refusal(error);
     debug!("net: loot error {error} on {guid:#x} → {key} (releases: {releases})");
@@ -263,7 +252,7 @@ fn loot_error(
     if releases {
         // Guid-matched: the tail's store is unconditional, but only a matching latch reaches it.
         latch.clear_for(guid);
-        unlock.unlock(guid);
+        loot.unlock_item(guid);
     }
 }
 
@@ -288,19 +277,13 @@ fn loot_clear_money(loot: &mut LootState) {
 
 /// `SMSG_LOOT_RELEASE_RESPONSE`, idempotent after our own close. The latch clear is guid-matched,
 /// as the reference's (`0x5ec0d4`), so an old window's release keeps a newer request's latch.
-/// It unlocks an opened item (`0x5ec090` → `0x48f200(cl=0, dl=0)` → `UnlockItem 0x495420`): the
-/// only clear a lockbox closed with loot left gets, as vmangos destroys only a fully looted item
-/// (`LootHandler.cpp:558`). The open window takes the shared close without a send (`0x5ec0f3`);
-/// the closed source is returned.
-fn loot_release_response(
-    guid: u64,
-    loot: &mut LootState,
-    latch: &mut LootLatch,
-    unlock: ItemUnlock,
-) -> Option<u64> {
+/// The open window takes the shared close without a send (`0x5ec0f3`), which unlocks an item
+/// source (`0x48f200(cl=0, dl=0)`, [`super::close_interaction`]): a lockbox closed with loot left
+/// keeps its slot, as vmangos destroys only a fully looted item (`LootHandler.cpp:558`). The
+/// closed source is returned.
+fn loot_release_response(guid: u64, loot: &mut LootState, latch: &mut LootLatch) -> Option<u64> {
     debug!("net: loot released {guid:#x}");
     latch.clear_for(guid);
-    unlock.unlock(guid);
     super::close_interaction(loot, latch, None)
 }
 
@@ -341,15 +324,10 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
-    use crate::pending_item_ops::{LockTransitions, PendingItemOps};
-
-    /// An [`ItemUnlock`] over no locks, for a loot source that is not an item.
+    /// A loot session with no window, whose owed unlocks a test may ignore.
     macro_rules! no_item {
         () => {
-            ItemUnlock {
-                pending: &mut PendingItemOps::default(),
-                lock_cleared: &mut LockTransitions::default(),
-            }
+            &mut LootState::default()
         };
     }
 
@@ -603,29 +581,34 @@ mod tests {
             matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CHEST),
             "…and it is B that gets released"
         );
+        assert_eq!(
+            world.resource_mut::<LootState>().take_item_unlocks(),
+            [CHEST],
+            "and `UnlockItem` runs on B's guid, an item or not (`0x5eb9de`)"
+        );
     }
 
     /// An item guid (`HIGHGUID_ITEM` 0x4000 in the high word): a lockbox.
     const LOCKBOX: u64 = 0x4000_0000_0000_0007;
 
-    /// A world with the lockbox at bag 0 slot 3 locked, as its `CMSG_OPEN_ITEM` send leaves it.
+    /// A world with a loot window open on the lockbox, latched, as its `CMSG_OPEN_ITEM` and the
+    /// answer leave it.
     fn opened_lockbox_world() -> World {
         let mut world = World::new();
-        world.init_resource::<LootState>();
+        let mut loot = LootState::default();
+        loot.open(LOCKBOX, 1, 0, Vec::new());
+        world.insert_resource(loot);
         world.insert_resource(LootLatch(Some(LOCKBOX)));
         world.init_resource::<UiErrorKeys>();
-        world.init_resource::<LockTransitions>();
         world.init_resource::<crate::net::GuidIndex>();
         world.init_resource::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>();
-        let mut pending = PendingItemOps::default();
-        pending.add([(0, 3, LOCKBOX, 1)]);
-        world.insert_resource(pending);
         world
     }
 
-    /// With loot left, no field update ever resolves the lock: the release is the clear.
+    /// With loot left, no field update releases the lockbox: the close does, twice, the close's
+    /// own `UnlockItem` (`0x48f2bd`) and the frame teardown's (`0x4c1d36`).
     #[test]
-    fn a_release_for_the_opened_item_unlocks_its_slot() {
+    fn a_release_closing_the_opened_item_unlocks_it_twice() {
         let mut world = opened_lockbox_world();
         world
             .run_system_once_with(
@@ -633,28 +616,54 @@ mod tests {
                 SessionEvent::LootReleaseResponse { guid: LOCKBOX },
             )
             .expect("the handler runs as a one-shot system");
-        assert!(
-            !world.resource::<PendingItemOps>().contains(0, 3),
-            "the lockbox is no longer grey and locked"
-        );
         assert_eq!(
-            world.resource::<LockTransitions>().0,
-            vec![(0, 3)],
-            "…and the container feed fires ITEM_LOCK_CHANGED for it"
+            world.resource_mut::<LootState>().take_item_unlocks(),
+            [LOCKBOX, LOCKBOX]
         );
-    }
-
-    #[test]
-    fn a_release_for_another_guid_leaves_the_lock() {
-        let mut world = opened_lockbox_world();
+        // With no window left, a second release unlocks nothing (`0x48f23f`).
         world
             .run_system_once_with(
                 on_release_response,
-                SessionEvent::LootReleaseResponse { guid: CORPSE },
+                SessionEvent::LootReleaseResponse { guid: LOCKBOX },
             )
             .expect("the handler runs as a one-shot system");
-        assert!(world.resource::<PendingItemOps>().contains(0, 3));
-        assert!(world.resource::<LockTransitions>().0.is_empty());
+        assert!(world
+            .resource_mut::<LootState>()
+            .take_item_unlocks()
+            .is_empty());
+    }
+
+    /// A window on a corpse closes with no unlock: only an item source takes the two
+    /// (`0x48f2ab`, `0x4c1d27`).
+    #[test]
+    fn closing_a_window_on_anything_but_an_item_unlocks_nothing() {
+        let mut loot = LootState::default();
+        let mut latch = LootLatch(Some(CORPSE));
+        loot.open(CORPSE, 1, 0, Vec::new());
+        assert_eq!(
+            super::super::close_interaction(&mut loot, &mut latch, None),
+            Some(CORPSE)
+        );
+        assert!(loot.take_item_unlocks().is_empty());
+    }
+
+    /// A window replacing one open on an item unlocks the old source once, the teardown's
+    /// (`0x5ebc35` → `0x4c1d36`).
+    #[test]
+    fn a_window_replacing_an_items_unlocks_the_old_source() {
+        let mut loot = LootState::default();
+        loot.open(LOCKBOX, 1, 0, Vec::new());
+        assert!(
+            loot.take_item_unlocks().is_empty(),
+            "the first window replaces nothing"
+        );
+        loot.open(CORPSE, 1, 0, Vec::new());
+        assert_eq!(loot.take_item_unlocks(), [LOCKBOX]);
+        loot.open(CHEST, 2, 0, Vec::new());
+        assert!(
+            loot.take_item_unlocks().is_empty(),
+            "a corpse source owes nothing"
+        );
     }
 
     /// The server's release (`0x5ec090` → `0x5ec0f3`) closes the window through the shared close,
@@ -772,8 +781,6 @@ mod tests {
         world.init_resource::<crate::net::Reputations>();
         world.init_resource::<crate::target::AssistAttack>();
         world.init_resource::<crate::target::Selection>();
-        world.init_resource::<PendingItemOps>();
-        world.init_resource::<LockTransitions>();
         world.init_resource::<bevy::ecs::message::Messages<crate::target::DeselectGuid>>();
         world.init_resource::<bevy::ecs::message::Messages<crate::player::StandStateRequest>>();
         world.init_resource::<crate::player::Player>();
@@ -1319,6 +1326,7 @@ mod tests {
     #[test]
     fn a_releasing_loot_error_on_the_opened_item_unlocks_it() {
         let mut world = opened_lockbox_world();
+        world.resource_mut::<LootState>().clear();
         // PLAYER_NOT_FOUND (10) does not reach the tail: nothing unlocks.
         world
             .run_system_once_with(
@@ -1329,7 +1337,10 @@ mod tests {
                 },
             )
             .expect("the handler runs as a one-shot system");
-        assert!(world.resource::<PendingItemOps>().contains(0, 3));
+        assert!(world
+            .resource_mut::<LootState>()
+            .take_item_unlocks()
+            .is_empty());
         // TOO_FAR (4) does.
         world
             .run_system_once_with(
@@ -1340,8 +1351,10 @@ mod tests {
                 },
             )
             .expect("the handler runs as a one-shot system");
-        assert!(!world.resource::<PendingItemOps>().contains(0, 3));
-        assert_eq!(world.resource::<LockTransitions>().0, vec![(0, 3)]);
+        assert_eq!(
+            world.resource_mut::<LootState>().take_item_unlocks(),
+            [LOCKBOX]
+        );
     }
 
     const ME: u64 = 0x0000_0000_0000_002A;

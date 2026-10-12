@@ -1186,7 +1186,7 @@ fn shipped_bag_frame_drives_end_to_end() {
             inventory_type: 0,
             item_id: 117,
             link: None,
-            locked: false,
+            guid: 0x705,
             equip_slots: Vec::new(),
             cooldown: None,
             readable: false,

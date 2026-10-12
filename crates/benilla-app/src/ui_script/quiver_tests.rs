@@ -423,8 +423,12 @@ fn the_hawk_reminder_is_suppressed_only_once_frames_are_locked() {
     );
 }
 
-/// An arrow stack one lighter, pushed through [`crate::ui_items::feed::apply_container_source`]
-/// as a server update is, fires `ITEM_LOCK_CHANGED` and starts Quiver's reload.
+/// The arrows' item guid.
+const ARROW_GUID: u64 = 0x4000_0000_0000_0a12;
+
+/// An arrow stack one lighter, its watcher's release then the bag push through
+/// [`crate::ui_items::feed::apply_container_source`], as a server update is: the release's
+/// `ITEM_LOCK_CHANGED` starts Quiver's reload.
 #[test]
 fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     benilla_formats::wow_data_or_skip!();
@@ -449,6 +453,7 @@ fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
                     ContainerSlot {
                         item_id: 2512, // Rough Arrow
                         count,
+                        guid: ARROW_GUID,
                         ..Default::default()
                     },
                 )]),
@@ -462,7 +467,6 @@ fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
         quiver(200),
         Default::default(),
         Vec::new(),
-        Vec::new(),
     );
 
     s.fire_event("START_AUTOREPEAT_SPELL", Vec::new());
@@ -470,13 +474,18 @@ fn spending_an_arrow_starts_quivers_reload_through_the_real_item_feed() {
     let (_, reloading_before, _, _) = shot_state(&mut s);
     assert!(!reloading_before, "no shot has landed yet");
 
-    // The server's stack count drops by one: a fired shot.
+    // The server's stack count drops by one: a fired shot. Its watcher's entry unlock fires
+    // first (`0x5d94af`), then the feed pushes the bag.
+    let mut releases = crate::ui_items::locks::ItemReleases::default();
+    releases
+        .0
+        .push(crate::ui_items::locks::Release::Entry(vec![ARROW_GUID]));
+    releases.apply(&mut s);
     apply_container_source(
         &mut s,
         &mut memory,
         quiver(199),
         Default::default(),
-        Vec::new(),
         Vec::new(),
     );
     s.tick(0.1);

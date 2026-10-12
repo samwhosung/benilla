@@ -1265,8 +1265,6 @@ pub(crate) mod schedule_tests {
          "page turns and close are Lua intents"),
         ("ui_item_text.rs", "feed_item_text", Because::MemoLatched,
          "`told` is a `VmMemo` inside the session (a fresh VM re-begins), and the open is a player click"),
-        ("ui_items/drain.rs", "drain_container_destroys", Because::FilledByVm,
-         "`take_container_destroys` is a VM-owned queue filled by Lua's `DeleteCursorItem`"),
         ("ui_logout.rs", "feed_logout", Because::PlayerRoundTrip,
          "both packets answer the `CMSG_LOGOUT_REQUEST`/cancel the game menu sent"),
         ("ui_loot/mod.rs", "drain_loot", Because::Deliberate,

@@ -11,14 +11,13 @@ use benilla_ui::script::{ContainerSlot, ContainerState, ScriptValue, UiScript};
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
-use crate::pending_item_ops::{LockTransitions, PendingItemOps};
 use crate::ui_script::gate;
 
 use super::equip_error::equip_error_key;
 use super::{
-    find_equip_slot, has_key, keyring_size, slot_guid_count, EquipErrors, BAGS, BAG_SLOT_FIRST,
-    BANK_BAGS, BANK_BAG_ID_FIRST, BANK_BAG_SLOT_FIRST, BANK_CONTAINER, BANK_SLOTS,
-    KEYRING_CONTAINER, KEYRING_SLOTS, PACK_SLOTS,
+    find_equip_slot, has_key, keyring_size, EquipErrors, BAGS, BAG_SLOT_FIRST, BANK_BAGS,
+    BANK_BAG_ID_FIRST, BANK_BAG_SLOT_FIRST, BANK_CONTAINER, BANK_SLOTS, KEYRING_CONTAINER,
+    KEYRING_SLOTS, PACK_SLOTS,
 };
 
 /// What the container feed last pushed, for per-bag change events.
@@ -745,7 +744,7 @@ fn resolve_slot(
             &rolls.name(&t.name, roll),
             t.quality,
         )),
-        locked: false,
+        guid,
         readable,
         creator,
         flags,
@@ -792,27 +791,6 @@ fn bag_family_name(
     families.name(family).map(str::to_string)
 }
 
-/// The pending locks' resolving clear: releases every op whose slots have moved on and queues the
-/// unlocks for [`feed_containers`] to announce. Ordered ahead of both feeds: `feed_char` pushes the
-/// doll's and bank bags' `locked` from the same set, and a clear after it strands a stale lock.
-pub(crate) fn resolve_item_locks(
-    self_q: Query<&ObjectStore, With<SelfPlayer>>,
-    objects: Objects,
-    mut pending: ResMut<PendingItemOps>,
-    mut transitions: ResMut<LockTransitions>,
-) {
-    if pending.is_empty() {
-        return;
-    }
-    let player = self_q.iter().next();
-    if player.is_none() {
-        return;
-    }
-    transitions
-        .0
-        .extend(pending.resolve(|bag, slot1| slot_guid_count(player, bag, slot1, &objects)));
-}
-
 #[allow(clippy::type_complexity)] // the param list is the input set
 pub(crate) fn feed_containers(
     script: Option<NonSendMut<UiScript>>,
@@ -832,8 +810,7 @@ pub(crate) fn feed_containers(
     equip: (ResMut<EquipErrors>, crate::ui_action::MessageSink),
     // Reason 16's `%s` source; absent, every 16 keeps the generic line.
     bag_families: Option<Res<crate::ui_items::ItemBagFamilies>>,
-    pending: Res<PendingItemOps>,
-    queues: (ResMut<LockTransitions>, ResMut<super::net::BagOpens>),
+    mut opens: ResMut<super::net::BagOpens>,
     names: Res<crate::names::NameCache>,
     // The petition cache is mutable: a charter's hover is what queries it.
     clock_and_petitions: (
@@ -847,7 +824,6 @@ pub(crate) fn feed_containers(
     };
     let (clock, mut petitions) = clock_and_petitions;
     let (mut equip_errors, mut sink) = equip;
-    let (mut lock_cleared, mut opens) = queues;
     let (memory, vm_reset) = memory.get_reset(&script);
     // The snapshot is a function of these inputs; the stores' counters stand in for their
     // `is_changed`, which lazy resolves make always true. `UiClock` is not an input: a running
@@ -872,7 +848,7 @@ pub(crate) fn feed_containers(
     let spells_changed = spells.as_ref().is_some_and(|r| r.is_changed());
     let families_changed = bag_families.as_ref().is_some_and(|r| r.is_changed());
     let errors_held = !equip_errors.0.is_empty();
-    let locks_held = !lock_cleared.0.is_empty() || !pending.is_empty() || !opens.0.is_empty();
+    let opens_held = !opens.0.is_empty();
     gate::trace(
         "feed_containers",
         &[
@@ -890,7 +866,7 @@ pub(crate) fn feed_containers(
             ("spells", spells_changed),
             ("families", families_changed),
             ("errors", errors_held),
-            ("locks", locks_held),
+            ("opens", opens_held),
         ],
     );
     let gate = gate::Gate::new(
@@ -909,7 +885,7 @@ pub(crate) fn feed_containers(
             || spells_changed
             || families_changed
             || errors_held
-            || locks_held,
+            || opens_held,
     );
     if gate.skip() {
         return;
@@ -968,10 +944,7 @@ pub(crate) fn feed_containers(
     }
     // Through the one sink, which also plays the error speech 18 of these keys carry.
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_items", refusals);
-    // The frame's unlocks, from `resolve_item_locks` and the inventory-failure handler, fire
-    // `ITEM_LOCK_CHANGED` after the slot push below and after `feed_char`'s, so a repaint sees
-    // the unlocked slot; server-opened bags fire `BAG_OPEN(id)` then too.
-    let transitioned: Vec<(i64, u32)> = std::mem::take(&mut lock_cleared.0);
+    // Server-opened bags fire `BAG_OPEN(id)` after the slot push below.
     let opened: Vec<i64> = std::mem::take(&mut opens.0);
 
     let mut fresh: HashMap<i64, ContainerState> = HashMap::new();
@@ -987,7 +960,7 @@ pub(crate) fn feed_containers(
         let mut slots = HashMap::new();
         for i in 0..PACK_SLOTS {
             let guid = store.0.player_pack_slot(i).unwrap_or(0);
-            if let Some(mut slot) = resolve_slot(
+            if let Some(slot) = resolve_slot(
                 guid,
                 &inv.objects,
                 &items,
@@ -1002,7 +975,6 @@ pub(crate) fn feed_containers(
                 ui_now,
                 has_relic_slot,
             ) {
-                slot.locked = pending.contains(0, u32::from(i) + 1);
                 slots.insert(u32::from(i) + 1, slot);
             }
         }
@@ -1043,7 +1015,7 @@ pub(crate) fn feed_containers(
                 .flatten();
             let mut slots = HashMap::new();
             for (j, &guid) in slot_guids.iter().enumerate() {
-                if let Some(mut slot) = resolve_slot(
+                if let Some(slot) = resolve_slot(
                     guid,
                     &inv.objects,
                     &items,
@@ -1058,7 +1030,6 @@ pub(crate) fn feed_containers(
                     ui_now,
                     has_relic_slot,
                 ) {
-                    slot.locked = pending.contains(i64::from(bag), j as u32 + 1);
                     slots.insert(j as u32 + 1, slot);
                 }
             }
@@ -1077,7 +1048,7 @@ pub(crate) fn feed_containers(
         let mut slots = HashMap::new();
         for i in 0..BANK_SLOTS {
             let guid = store.0.player_bank_slot(i).unwrap_or(0);
-            if let Some(mut slot) = resolve_slot(
+            if let Some(slot) = resolve_slot(
                 guid,
                 &inv.objects,
                 &items,
@@ -1092,7 +1063,6 @@ pub(crate) fn feed_containers(
                 ui_now,
                 has_relic_slot,
             ) {
-                slot.locked = pending.contains(BANK_CONTAINER, u32::from(i) + 1);
                 slots.insert(u32::from(i) + 1, slot);
             }
         }
@@ -1129,7 +1099,7 @@ pub(crate) fn feed_containers(
                 .flatten();
             let mut slots = HashMap::new();
             for (j, &guid) in slot_guids.iter().enumerate() {
-                if let Some(mut slot) = resolve_slot(
+                if let Some(slot) = resolve_slot(
                     guid,
                     &inv.objects,
                     &items,
@@ -1144,7 +1114,6 @@ pub(crate) fn feed_containers(
                     ui_now,
                     has_relic_slot,
                 ) {
-                    slot.locked = pending.contains(bag_id, j as u32 + 1);
                     slots.insert(j as u32 + 1, slot);
                 }
             }
@@ -1165,7 +1134,7 @@ pub(crate) fn feed_containers(
         let mut slots = HashMap::new();
         for i in 0..size.min(u32::from(KEYRING_SLOTS)) as u8 {
             let guid = store.0.player_keyring_slot(i).unwrap_or(0);
-            if let Some(mut slot) = resolve_slot(
+            if let Some(slot) = resolve_slot(
                 guid,
                 &inv.objects,
                 &items,
@@ -1180,7 +1149,6 @@ pub(crate) fn feed_containers(
                 ui_now,
                 has_relic_slot,
             ) {
-                slot.locked = pending.contains(KEYRING_CONTAINER, u32::from(i) + 1);
                 slots.insert(u32::from(i) + 1, slot);
             }
         }
@@ -1230,46 +1198,31 @@ pub(crate) fn feed_containers(
             bags: std::array::from_fn(|i| player.map_or(0, |s| bag_slot_guid(s, i as i64 + 1))),
             vault: std::array::from_fn(|i| player.map_or(0, |s| vault_slot_guid(s, i as u8))),
         },
-        transitioned,
         opened,
     ) {
-        gate.audit(
-            "feed_containers",
-            "a bag diff, a lock event or a server-opened bag",
-        );
+        gate.audit("feed_containers", "a bag diff or a server-opened bag");
     }
 }
 
 /// Diffs `source` against the last push, pushes each changed bag and fires the reference's events:
-/// `BAG_UPDATE(bagID)` (`PLAYERBANKSLOTS_CHANGED` for the vault), the lock transitions, `BAG_OPEN`.
+/// `BAG_UPDATE(bagID)` (`PLAYERBANKSLOTS_CHANGED` for the vault), then `BAG_OPEN`.
 ///
 /// `None` is an absent self store (before login, or the logout despawn frames before the VM shuts
 /// down), never "no items": the VM keeps its last push, as the reference's UI shutdown
 /// (`0x490bd0`) runs with the inventory intact, where a burst of size-0 `BAG_UPDATE`s would have a
-/// bag-saving addon record empty bags. Lock events still flush, never to fire into a later VM.
+/// bag-saving addon record empty bags. Server-opened bags still flush, never to fire into a later
+/// VM.
 pub(crate) fn apply_container_source(
     script: &mut UiScript,
     memory: &mut FeedMemory,
     source: Option<HashMap<i64, ContainerState>>,
     // Beside the source, since an absent source must leave the guid memory alone too.
     guids: SlotGuids,
-    transitioned: Vec<(i64, u32)>,
     opened: Vec<i64>,
 ) -> bool {
-    // A lock transition also flips a slot's `locked`, so it shows in the diff, but its
-    // `ITEM_LOCK_CHANGED` fires below regardless.
     let mut pushed = false;
     if let Some(fresh) = source {
         pushed |= diff_and_push(script, memory, fresh, guids);
-    }
-    // After the push, so a repaint reads the corrected `locked`.
-    pushed |= !transitioned.is_empty();
-    // No arguments: the reference's five fire sites (`0x495415`, `0x495455`, `0x49557d`,
-    // `0x5d859a`, `0x5d94b9`) call `FrameScript_SignalEvent` (`0x703e50`), which pushes none, and
-    // stock consumers repaint from `this` (`ContainerFrame.lua:39`, `PaperDollFrame.lua:601`,
-    // `BankFrame.lua:209`).
-    for _ in transitioned {
-        script.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
     // The reference fires `BAG_OPEN(id)` from the handler (`0x5e3b35`); here it follows this
     // frame's `BAG_UPDATE`s, so the frame shown paints the bag as it is.
@@ -1361,34 +1314,10 @@ fn diff_and_push(
         .filter(|b| fresh.get(b) != memory.pushed.get(b))
         .collect();
     if !changed.is_empty() {
-        // A stack-count write on an item we own fires `ITEM_LOCK_CHANGED` ahead of `BAG_UPDATE`
-        // (the reference's mirror handler `0x5d9400`, registered at `0x5d9360` via `0x468070`):
-        // an auto-shot timer's only per-shot signal. Computed before `memory.pushed` is replaced.
-        let restacked = {
-            let empty = HashMap::new();
-            let mut v: Vec<(i64, u32)> = Vec::new();
-            for &bag in &changed {
-                let now = fresh.get(&bag).map_or(&empty, |c| &c.slots);
-                let was = memory.pushed.get(&bag).map_or(&empty, |c| &c.slots);
-                for (&slot, n) in now {
-                    // The same item restacked; a changed entry is a create or a swap.
-                    if was.get(&slot).is_some_and(|w| {
-                        w.item_id != 0 && w.item_id == n.item_id && w.count != n.count
-                    }) {
-                        v.push((bag, slot));
-                    }
-                }
-            }
-            // Sorted: an event stream has to be reproducible.
-            v.sort_unstable();
-            v
-        };
+        // A stack-count write's `ITEM_LOCK_CHANGED` (`0x5d94b9`, `0x5d94ca`) fired ahead of this
+        // push, from [`crate::ui_items::locks::apply_item_releases`].
         for &bag in &changed {
             script.set_container(bag, fresh.get(&bag).cloned());
-        }
-        // Ahead of `BAG_UPDATE`, one argless event per restacked slot.
-        for _ in &restacked {
-            script.fire_event("ITEM_LOCK_CHANGED", Vec::new());
         }
         debug!(
             "ui_items: fed {} changed bag(s) — {}",
@@ -1527,7 +1456,6 @@ mod tests {
             &mut memory,
             None,
             NO_BAGS,
-            Vec::new(),
             vec![2]
         ));
         let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
@@ -1539,7 +1467,6 @@ mod tests {
             &mut memory,
             None,
             NO_BAGS,
-            Vec::new(),
             Vec::new()
         ));
         assert!(s.eval::<Vec<String>>("return SEEN").unwrap().is_empty());
@@ -1586,35 +1513,14 @@ mod tests {
 
         // An item arrives in vault slot 1: the descriptor path, no arguments.
         guids.vault[0] = 0xF00D;
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(vault(1, 5)),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(vault(1, 5)), guids, Vec::new());
         assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED nil"]);
 
         // The same item restacks: the item watcher's path, with the unit token.
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(vault(1, 9)),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(vault(1, 9)), guids, Vec::new());
         assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED player"]);
 
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(vault(1, 9)),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(vault(1, 9)), guids, Vec::new());
         assert!(seen(&mut s).is_empty(), "an unchanged vault says nothing");
 
         // Two identical stacks swapped between slots 1 and 2: the guids are the only witness.
@@ -1646,24 +1552,10 @@ mod tests {
             )])
         };
         guids.vault[1] = 0xBEEF;
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(two()),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
         assert_eq!(seen(&mut s), vec!["PLAYERBANKSLOTS_CHANGED nil"]);
         guids.vault.swap(0, 1);
-        let pushed = apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(two()),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        let pushed = apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
         assert_eq!(
             seen(&mut s),
             vec![
@@ -1709,24 +1601,10 @@ mod tests {
 
         // Equipped into an empty slot: `BAG_UPDATE` only (`0x4f9247`).
         guids.bags[0] = 0xAAAA;
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(pouch(6)),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(pouch(6)), guids, Vec::new());
         assert_eq!(seen(&mut s), vec!["BAG_UPDATE 1"]);
 
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(pouch(6)),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(pouch(6)), guids, Vec::new());
         assert!(
             seen(&mut s).is_empty(),
             "an unchanged container says nothing"
@@ -1734,26 +1612,12 @@ mod tests {
 
         // Swapped for another bag: closed, then updated.
         guids.bags[0] = 0xBBBB;
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(pouch(10)),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(pouch(10)), guids, Vec::new());
         assert_eq!(seen(&mut s), vec!["BAG_CLOSED 1", "BAG_UPDATE 1"]);
 
         // Unequipped: closed, and no `BAG_UPDATE`.
         guids.bags[0] = 0;
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(HashMap::new()),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(HashMap::new()), guids, Vec::new());
         assert_eq!(seen(&mut s), vec!["BAG_CLOSED 1"]);
 
         // Two identical empty bags swapped between containers 5 and 6: equal states, both close.
@@ -1781,24 +1645,10 @@ mod tests {
         let mut guids = NO_BAGS;
         guids.bags[4] = 0x1111;
         guids.bags[5] = 0x2222;
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(two()),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
         let _ = seen(&mut s);
         guids.bags.swap(4, 5);
-        let pushed = apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(two()),
-            guids,
-            Vec::new(),
-            Vec::new(),
-        );
+        let pushed = apply_container_source(&mut s, &mut memory, Some(two()), guids, Vec::new());
         assert_eq!(seen(&mut s), vec!["BAG_CLOSED 5", "BAG_CLOSED 6"]);
         assert!(
             pushed,
@@ -1837,13 +1687,12 @@ mod tests {
             Some(HashMap::from([(0, bag0)])),
             NO_BAGS,
             Vec::new(),
-            Vec::new(),
         );
         assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 16);
         assert_eq!(s.eval::<i64>("return BAG_EVENTS").unwrap(), 1);
 
         // The logout despawn frame: the VM keeps its bags and nothing fires.
-        apply_container_source(&mut s, &mut memory, None, NO_BAGS, Vec::new(), Vec::new());
+        apply_container_source(&mut s, &mut memory, None, NO_BAGS, Vec::new());
         assert_eq!(
             s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(),
             16,
@@ -1862,17 +1711,16 @@ mod tests {
             Some(HashMap::new()),
             NO_BAGS,
             Vec::new(),
-            Vec::new(),
         );
         assert_eq!(s.eval::<i64>("return GetContainerNumSlots(0)").unwrap(), 0);
         assert_eq!(s.eval::<i64>("return BAG_EVENTS").unwrap(), 2);
     }
 
-    /// A stack ticking down fires an argless `ITEM_LOCK_CHANGED` before its bag's `BAG_UPDATE`
-    /// (`0x5d94b9`): an auto-shot timer such as Quiver's learns of a shot from it alone. A changed
-    /// entry is a swap and must not fire it, or the timer counts shots never fired.
+    /// The feed fires only the bag's `BAG_UPDATE` for a restack: the stack-count write's
+    /// `ITEM_LOCK_CHANGED` is the lock watcher's, fired ahead of this push
+    /// ([`crate::ui_items::locks::apply_item_releases`]).
     #[test]
-    fn a_stack_ticking_down_fires_item_lock_changed_before_bag_update() {
+    fn a_restack_is_a_bag_update_alone_to_the_feed() {
         use benilla_ui::script::ContainerSlot;
 
         let mut s = UiScript::new().unwrap();
@@ -1886,75 +1734,33 @@ mod tests {
              end)",
         )
         .unwrap();
-
-        let arrows = |count: u32| ContainerSlot {
-            item_id: 2512, // Rough Arrow
-            count,
-            ..Default::default()
-        };
-        let bag = |s: ContainerSlot| {
+        let bag = |count: u32| {
             HashMap::from([(
                 0,
                 ContainerState {
                     name: Some("Backpack".into()),
                     num_slots: 16,
-                    slots: HashMap::from([(1, s)]),
+                    slots: HashMap::from([(
+                        1,
+                        ContainerSlot {
+                            item_id: 2512, // Rough Arrow
+                            count,
+                            ..Default::default()
+                        },
+                    )]),
                 },
             )])
         };
         let mut memory = FeedMemory::default();
-
-        // The quiver arrives full: a create, no lock event.
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(bag(arrows(200))),
-            NO_BAGS,
-            Vec::new(),
-            Vec::new(),
-        );
-        assert_eq!(
-            s.eval::<String>("return table.concat(ORDER, ' ')").unwrap(),
-            "BAG_UPDATE:0,nil",
-            "a slot appearing is a create, not a stack-count field write"
-        );
-
-        // An arrow leaves the quiver.
-        s.run("ORDER = {}").unwrap();
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(bag(arrows(199))),
-            NO_BAGS,
-            Vec::new(),
-            Vec::new(),
-        );
-        assert_eq!(
-            s.eval::<String>("return table.concat(ORDER, ' ')").unwrap(),
-            "ITEM_LOCK_CHANGED:nil,nil BAG_UPDATE:0,nil",
-            "the shot signal fires — with NO arguments, as all five of the reference's fire sites \
-             do — and precedes BAG_UPDATE. The slot it names travels in the fact \
-             that it fired at all, which is enough: every consumer repaints from its own `this`, \
-             and Quiver's shot timer only needs to know that A shot happened"
-        );
-
-        // A different item in the slot, with a different count: a swap, no lock event.
-        s.run("ORDER = {}").unwrap();
-        let mut other = arrows(20);
-        other.item_id = 3033; // Razor Arrow
-        apply_container_source(
-            &mut s,
-            &mut memory,
-            Some(bag(other)),
-            NO_BAGS,
-            Vec::new(),
-            Vec::new(),
-        );
-        assert_eq!(
-            s.eval::<String>("return table.concat(ORDER, ' ')").unwrap(),
-            "BAG_UPDATE:0,nil",
-            "a changed entry is a swap, not a stack-count write"
-        );
+        for count in [200, 199] {
+            s.run("ORDER = {}").unwrap();
+            apply_container_source(&mut s, &mut memory, Some(bag(count)), NO_BAGS, Vec::new());
+            assert_eq!(
+                s.eval::<String>("return table.concat(ORDER, ' ')").unwrap(),
+                "BAG_UPDATE:0,nil",
+                "{count}"
+            );
+        }
     }
 
     fn slot(spell_id: u32, charges: i32) -> ItemSpellEntry {

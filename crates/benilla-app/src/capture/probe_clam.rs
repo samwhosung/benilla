@@ -1,6 +1,7 @@
 //! The openable-item live probe (`WOW_PROBE_CLAM=1`): right-clicks a lootable item in the bags
 //! and checks a loot window opens. The click makes two writes before the send (`0x5edc80`): the
-//! grey lock ([`PendingItemOps`], `0x4953e0` at `0x5edcd9`) and the loot latch ([`LootLatch`],
+//! grey lock (`LockItem`, `0x4953e0` at `0x5edcd9`, read back through `GetContainerItemInfo`) and
+//! the loot latch ([`LootLatch`],
 //! `0x5edcc0`). vmangos answers `CMSG_OPEN_ITEM` with `SendLoot(item guid, LOOT_CORPSE)`, so
 //! `SMSG_LOOT_RESPONSE` comes back type 1 on the item's own guid, which a cold latch refuses.
 //!
@@ -25,7 +26,6 @@ use benilla_ui::script::UiScript;
 use super::probes::ProbeClock;
 use crate::items::Items;
 use crate::net::{ChatKind, ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
-use crate::pending_item_ops::PendingItemOps;
 use crate::ui_loot::{LootConfig, LootLatch, LootState};
 
 /// The default template, Small Barnacled Clam (entry 7973); its `item_loot_template` row (a Zesty
@@ -131,6 +131,15 @@ fn finish(net: &NetCommands, entry: u32, now: f64) -> Phase {
     Phase::Cleanup { since: now }
 }
 
+/// Whether backpack slot `slot` reads locked, as the bag button's `ContainerFrame_Update` asks.
+fn slot_grey(script: &UiScript, slot: u32) -> bool {
+    script
+        .eval::<bool>(&format!(
+            "local _, _, locked = GetContainerItemInfo(0, {slot}) return locked and true or false"
+        ))
+        .unwrap_or(false)
+}
+
 /// Whether the live `LootFrame` is shown, which needs `LOOT_OPENED` to have fired; falls back to
 /// the app-side session when the frame cannot be read.
 fn window_open(script: &UiScript, loot: &LootState) -> bool {
@@ -175,7 +184,6 @@ fn clam_probe(
     mut cfg: ResMut<LootConfig>,
     loot: Res<LootState>,
     latch: Res<LootLatch>,
-    pending: Res<PendingItemOps>,
     net: Res<NetCommands>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -236,7 +244,7 @@ fn clam_probe(
             if window_open(&script, &loot) {
                 let slot = probe.slot;
                 let source = loot.source();
-                let grey = pending.contains(0, slot);
+                let grey = slot_grey(&script, slot);
                 info!(
                     "PROBE_CLAM: round {round} — window up on {:?} (latch {:?}, slot grey {grey})",
                     source.map(|g| format!("{g:#x}")),
@@ -247,7 +255,7 @@ fn clam_probe(
                 let _ = script.eval::<()>("CloseLoot()");
                 probe.phase = Phase::WaitClosed { since: now, round };
             } else if now - since > OPEN_TIMEOUT_SECS {
-                let grey = pending.contains(0, probe.slot);
+                let grey = slot_grey(&script, probe.slot);
                 error!(
                     "PROBE_CLAM: round {round} FAIL — no loot window within {OPEN_TIMEOUT_SECS}s \
                      of the click (latch {:?}, slot grey {grey}). A grey slot with no window is \

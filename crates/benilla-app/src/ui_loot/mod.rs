@@ -101,6 +101,9 @@ pub(crate) struct LootState {
     pending_master_candidates: Vec<u64>,
     /// The wire `loot_type` (`0x4c2740`); a disenchant window with rows left survives movement.
     loot_type: u8,
+    /// The `UnlockItem` (`0x495420`) calls the loot paths owe, run ahead of the inventory feeds
+    /// ([`crate::ui_items::locks::apply_item_releases`]); a window's clear keeps them.
+    item_unlocks: Vec<u64>,
 }
 
 /// The client's candidate array: 40 slots at `0xc4dc38`, bound-checked by the getter `0x61c660`.
@@ -123,6 +126,11 @@ enum LootAction {
 impl LootState {
     /// Opens or replaces the window; quest items ride the same rows at `slot = items.len() + i`.
     pub(crate) fn open(&mut self, source: u64, loot_type: u8, gold: u32, items: Vec<LootItem>) {
+        // The frame's teardown of the window it replaces unlocks an item source (`0x5ebc35` →
+        // `0x48f3a0` → `0x4c1d36`).
+        if let Some(old) = self.source.filter(|&g| benilla_protocol::guid::is_item(g)) {
+            self.unlock_item(old);
+        }
         self.source = Some(source);
         self.gold = gold;
         self.coin_slot = gold > 0; // fixed for the window's lifetime
@@ -197,10 +205,29 @@ impl LootState {
         self.pending_master_candidates.clear();
     }
 
-    /// Session end: drops the window and the queued pushes.
+    /// Session end: drops the window, the queued pushes and the owed unlocks.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
         self.receives.clear();
+        self.item_unlocks.clear();
+    }
+
+    /// Owe `UnlockItem` on `guid`, which fires its `ITEM_LOCK_CHANGED` whether or not the guid
+    /// names an item we hold (`0x495450`); a zero guid owes nothing (`0x49542d`).
+    pub(crate) fn unlock_item(&mut self, guid: u64) {
+        if guid != 0 {
+            self.item_unlocks.push(guid);
+        }
+    }
+
+    /// Whether any unlock is owed.
+    pub(crate) fn owes_unlocks(&self) -> bool {
+        !self.item_unlocks.is_empty()
+    }
+
+    /// The owed unlocks, in order.
+    pub(crate) fn take_item_unlocks(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.item_unlocks)
     }
 
     /// Queued pushes, for the net handler's self-gate test.
@@ -812,6 +839,13 @@ pub(crate) fn close_interaction(
     latch.clear_for(source);
     if let Some(commands) = release {
         let _ = commands.0.send(ClientCommand::LootRelease { guid: source });
+    }
+    // An item source unlocks twice, each with its `ITEM_LOCK_CHANGED`: the close's own
+    // `UnlockItem` (`0x48f2bd`), then the frame teardown's (`0x4c1d36`). A move-start close, the
+    // one with `dl` set, returns before both and never reaches here with an item.
+    if benilla_protocol::guid::is_item(source) {
+        loot.unlock_item(source);
+        loot.unlock_item(source);
     }
     loot.clear();
     Some(source)

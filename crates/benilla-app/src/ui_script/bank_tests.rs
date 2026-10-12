@@ -479,16 +479,19 @@ fn is_greyed(quads: &[ExtractedQuad], needle: &str) -> bool {
     }
 }
 
+/// The bank bag's item guid, which the client's lock names.
+const BAG_GUID: u64 = 0x4000_0000_0000_0b06;
+
 /// A bag in a bank bag slot. `contents_count: Some(_)` makes it a container to
 /// `GetInventoryItemCount`, non-zero so that the binding's slot-`0x16` cutoff does the zeroing.
-fn a_bag(locked: bool) -> benilla_ui::script::InvSlotView {
+fn a_bag() -> benilla_ui::script::InvSlotView {
     benilla_ui::script::InvSlotView {
         item_id: 4500,
         icon: Some(r"Interface\Icons\INV_Misc_Bag_08".into()),
         count: 1,
         contents_count: Some(3),
         name: Some("Traveler's Backpack".into()),
-        locked,
+        guid: BAG_GUID,
         ..Default::default()
     }
 }
@@ -519,10 +522,11 @@ fn a_bank_bag_button_paints_the_drop_and_lets_go_of_the_lock() {
         "no bag in the slot yet"
     );
 
-    // The drop lands and the server has not answered: the send locks both ends.
+    // The drop lands and the server has not answered: the bag's lock holds.
     let mut bags: benilla_ui::script::BankBagSlots = Default::default();
-    bags[0] = Some(a_bag(true));
+    bags[0] = Some(a_bag());
     s.set_bank_bag_slots(bags.clone());
+    s.lock_item(BAG_GUID);
     // The event carries no arguments (`0x703e50`): every bank button repaints its own slot.
     s.fire_event("PLAYERBANKSLOTS_CHANGED", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
@@ -538,11 +542,8 @@ fn a_bank_bag_button_paints_the_drop_and_lets_go_of_the_lock() {
         "a bank bag counts nothing — the count fontstring stays hidden"
     );
 
-    // The lock lets go: `ITEM_LOCK_CHANGED` alone must ungrey it, which holds only because
-    // `ui_items::feed::resolve_item_locks` corrects the snapshot ahead of both feeds.
-    bags[0] = Some(a_bag(false));
-    s.set_bank_bag_slots(bags.clone());
-    s.fire_event("ITEM_LOCK_CHANGED", vec![]);
+    // The lock lets go: its own `ITEM_LOCK_CHANGED` alone must ungrey it.
+    s.unlock_item(BAG_GUID);
     assert!(
         !is_greyed(&s.extract(), "INV_Misc_Bag_08"),
         "the stuck grey: unlocked, the button must come back to full colour"
@@ -550,7 +551,7 @@ fn a_bank_bag_button_paints_the_drop_and_lets_go_of_the_lock() {
 
     // Moved to the next bag slot: only the repaint event takes the icon off the first button.
     bags[0] = None;
-    bags[1] = Some(a_bag(false));
+    bags[1] = Some(a_bag());
     s.set_bank_bag_slots(bags);
     s.fire_event("PLAYERBANKSLOTS_CHANGED", vec![]);
     s.fire_event("PLAYERBANKSLOTS_CHANGED", vec![]);

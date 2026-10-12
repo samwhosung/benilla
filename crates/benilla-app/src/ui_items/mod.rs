@@ -5,9 +5,8 @@
 //! 81.. with no container object, like the bank), the object index and the template cache, and
 //! fires `BAG_UPDATE(bagID)` per changed bag. [`drain`] sends the Lua intents over [`wire_pos`]:
 //! an equippable item that starts no quest goes out as `CMSG_AUTOEQUIP_ITEM`, anything else
-//! through [`send_item_use`]. A move or split locks both ends and a destroy its slot in
-//! [`PendingItemOps`], until the descriptor resolves them or the server answers a non-zero
-//! `SMSG_INVENTORY_CHANGE_FAILURE`.
+//! through [`send_item_use`]. The cursor verbs lock what they pick up and place onto, and the
+//! server's answer lifts it ([`crate::ui_items::locks`]).
 
 use benilla_protocol::messages::{BAG_PLAYER_INVENTORY, SLOT_BAG_FIRST, SLOT_PACK_FIRST};
 use benilla_protocol::ObjectFields;
@@ -16,13 +15,13 @@ use bevy::prelude::*;
 
 use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects};
-use crate::pending_item_ops::{LockTransitions, PendingItemOps};
 use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
 
 mod drain;
 mod equip_error;
 pub(crate) mod feed;
+pub(crate) mod locks;
 mod net;
 
 pub(crate) use drain::send_auto_equip;
@@ -169,7 +168,7 @@ pub(crate) fn slot_guid(
 }
 
 /// `(item guid, stack count)` at a Lua-space `(bag, 1-based slot)`, `(0, 0)` when empty:
-/// [`PendingItemOps`]'s baseline, since a partial split or destroy changes only the count.
+/// the trade window's offered-item view reads both.
 pub(crate) fn slot_guid_count(
     store: Option<&ObjectStore>,
     bag: i64,
@@ -776,6 +775,9 @@ pub(super) fn item_link(item_id: u32, name: &str, quality: u32) -> String {
 /// `INVTYPE_AMMO`: loaded with `CMSG_SET_AMMO`, not the equip swap.
 pub(super) const INVTYPE_AMMO: u32 = 24;
 
+/// `ITEM_CLASS_PROJECTILE`, the template class `UseContainerItem` leaves unlocked (`0x4fa40b`).
+pub(super) const ITEM_CLASS_PROJECTILE: u32 = 6;
+
 /// The `InventoryType` → live-API equip slots map (wire `EQUIPMENT_SLOT_*` + 1, bag icons
 /// 20..23; empty is not equippable), from vmangos `ItemPrototype::GetAllowedEquipSlots`
 /// (`Objects/Item.cpp:577-696`), which `Player::FindEquipSlot` (`Objects/Player.cpp:8440`) walks.
@@ -918,12 +920,11 @@ impl Plugin for UiItemsPlugin {
         net::register(app);
         // The icons come from the equipment renderer's `ItemDisplays`.
         app.init_resource::<EquipErrors>()
-            .init_resource::<PendingItemOps>()
+            .init_resource::<crate::ui_items::locks::ItemReleases>()
             // The soulbind confirmations' pending records: the client's pending-equip array and
             // its one bind-on-use cell.
             .init_resource::<crate::ui_bind_confirm::PendingEquips>()
             .init_resource::<crate::ui_bind_confirm::PendingBindOnUse>()
-            .init_resource::<LockTransitions>()
             .init_resource::<net::BagOpens>()
             // After the chain opens: unordered, it can run first and skip every item DBC.
             .add_systems(
@@ -933,8 +934,10 @@ impl Plugin for UiItemsPlugin {
             .add_systems(
                 Update,
                 (
-                    // The pending-lock clear, ahead of both feeds that push `locked`.
-                    feed::resolve_item_locks
+                    // The server's unlocks, ahead of both inventory feeds: the reference's
+                    // watchers run before the descriptor takes the new guid.
+                    crate::ui_items::locks::apply_item_releases
+                        .in_set(crate::ui_script::UiFeed)
                         .before(feed_containers)
                         .before(crate::ui_char::feed_char),
                     // The slot cooldowns must be in the VM before `feed_action_state`'s

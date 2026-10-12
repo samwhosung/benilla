@@ -71,7 +71,6 @@ mod nameplates;
 mod names;
 mod net;
 mod npc_text;
-mod pending_item_ops;
 /// Ships in part (the FPS journal and the clocks it reads); the rest is `dev`.
 mod perf;
 mod pipe_warm;

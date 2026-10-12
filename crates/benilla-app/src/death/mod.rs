@@ -238,18 +238,7 @@ fn feed_death(
     let memo = feed.vm.get(&script);
     let prev = memo.last.filter(|&(g, ..)| g == guid);
     memo.last = Some((guid, dead, ghost));
-    match (prev, dead, ghost) {
-        (Some((_, false, false)) | None, true, false) => {
-            script.fire_event("PLAYER_DEAD", vec![]);
-        }
-        (Some((_, true, false)), d, g) if g || !d => {
-            script.fire_event("PLAYER_ALIVE", vec![]);
-        }
-        (Some((_, _, true)), false, false) => {
-            script.fire_event("PLAYER_UNGHOST", vec![]);
-        }
-        _ => {}
-    }
+    fire_vm_edges(&mut script, prev.map(|(_, d, g)| (d, g)), dead, ghost);
 
     // ── The offer and confirm announcements ──
     if let Some(name) = offer_announcement(memo, &death_net, store.0.is_dead_or_ghost(), |offer| {
@@ -679,6 +668,64 @@ mod tests {
             feed.died_at.is_none(),
             "the release window is the dead session's, and re-arms at the next login"
         );
+    }
+}
+
+/// The body's VM events between the last `(dead, ghost)` seen, if any, and this one.
+fn fire_vm_edges(script: &mut UiScript, prev: Option<(bool, bool)>, dead: bool, ghost: bool) {
+    match (prev, dead, ghost) {
+        (Some((false, false)) | None, true, false) => {
+            script.fire_event("PLAYER_DEAD", vec![]);
+        }
+        (Some((true, false)), d, g) if g || !d => {
+            // The health edge out of 0 (`0x6047f0`) unlocks every item (`0x5fefae`), then fires
+            // `PLAYER_ALIVE` (`0x5fefb8`).
+            script.unlock_all_items();
+            script.fire_event("PLAYER_ALIVE", vec![]);
+        }
+        (Some((_, true)), false, false) => {
+            script.fire_event("PLAYER_UNGHOST", vec![]);
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod edge_tests {
+    use benilla_ui::script::UiScript;
+
+    /// The revive edge unlocks every item, its one `ITEM_LOCK_CHANGED` ahead of `PLAYER_ALIVE`
+    /// (`0x5fefae`, `0x5fefb8`); the ghost's own revive, no health edge, unlocks nothing.
+    #[test]
+    fn the_revive_edge_unlocks_every_item_before_player_alive() {
+        const ITEM: u64 = 0x4000_0000_0000_0042;
+        let mut s = UiScript::new().unwrap();
+        s.run(
+            "SEEN = {} local f = CreateFrame('Frame') \
+             f:RegisterEvent('ITEM_LOCK_CHANGED') f:RegisterEvent('PLAYER_ALIVE') \
+             f:RegisterEvent('PLAYER_UNGHOST') \
+             f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+        )
+        .unwrap();
+        let seen = |s: &UiScript| {
+            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            out
+        };
+        s.lock_item(ITEM);
+        let _ = seen(&s);
+        super::fire_vm_edges(&mut s, Some((true, false)), true, true);
+        assert_eq!(
+            seen(&s),
+            ["ITEM_LOCK_CHANGED", "PLAYER_ALIVE"],
+            "the release"
+        );
+        assert!(!s.item_locked(ITEM));
+        s.lock_item(ITEM);
+        let _ = seen(&s);
+        super::fire_vm_edges(&mut s, Some((true, true)), false, false);
+        assert_eq!(seen(&s), ["PLAYER_UNGHOST"], "the corpse run's end");
+        assert!(s.item_locked(ITEM));
     }
 }
 

@@ -9,15 +9,13 @@ use bevy::prelude::*;
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use benilla_ui::script::{
     weapon_subclass_skill, BankBagSlots, InvSlotView, InventorySlots, ScriptValue, SkillEntry,
-    SkillsState, UiScript, UnitCombatStats, BANK_BAG_SLOT_COUNT, EQUIPMENT_BAG, SKILL_DEFENSE,
-    SKILL_UNARMED,
+    SkillsState, UiScript, UnitCombatStats, BANK_BAG_SLOT_COUNT, SKILL_DEFENSE, SKILL_UNARMED,
 };
 use benilla_ui::strings::Arg;
 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
-use crate::pending_item_ops::PendingItemOps;
 use crate::portrait::PaperDollBooth;
 use crate::ui_items::{find_equip_slot, item_link};
 use crate::ui_script::{gate, UiFeed, UiInput};
@@ -58,10 +56,6 @@ struct CharFeedMemo {
     names_generation: gate::Watch,
     /// `ItemChanges::countdown_steps`: one step per displayed-second change, the final elapse too.
     enchant_deadlines: gate::Watch,
-    /// `PendingItemOps::epoch`, beside `!is_empty()`: that holds the gate open while an op is in
-    /// flight, this catches the frame a lock clears with no object moving
-    /// (`SMSG_INVENTORY_CHANGE_FAILURE`).
-    pending_epoch: gate::Watch,
 }
 
 /// The character-window feed; its bindings are `benilla-ui`'s `char_stats`.
@@ -485,14 +479,12 @@ fn slot_view(
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
     commands: &NetCommands,
-    pending: &PendingItemOps,
     names: &crate::names::NameCache,
     // `ItemSubClass.dbc`, for the count gate below; absent, every bag counts 0.
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
     // The player's `ChrClasses.dbc` relic flag, which decides `find_equip_slot`'s INVSLOT 17.
     has_relic_slot: bool,
     guid: u64,
-    live_id: u32,
 ) -> Option<InvSlotView> {
     let countdowns = objects.countdowns(guid);
     let enchant_ms: [Option<u64>; crate::items::ENCHANT_SLOTS] =
@@ -584,7 +576,7 @@ fn slot_view(
         durability,
         flags,
         already_bound,
-        locked: pending.contains(EQUIPMENT_BAG, live_id),
+        guid,
         equip_slots,
         bar_placeable,
         creator,
@@ -631,7 +623,6 @@ fn inventory_slots(
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
     commands: &NetCommands,
-    pending: &PendingItemOps,
     names: &crate::names::NameCache,
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
     classes: Option<&benilla_formats::ChrClasses>,
@@ -670,7 +661,7 @@ fn inventory_slots(
             name,
             link,
             // No click or drag path reaches the ammo slot: nothing locks it, it fits nowhere.
-            locked: false,
+            guid: 0,
             equip_slots: Vec::new(),
             bar_placeable: false,
             creator: None,
@@ -691,12 +682,10 @@ fn inventory_slots(
             icons,
             rolls,
             commands,
-            pending,
             names,
             sub_classes,
             has_relic_slot,
             guid,
-            live,
         );
     }
     inv
@@ -712,7 +701,6 @@ fn bank_bag_slots(
     icons: Option<&ItemDisplays>,
     rolls: crate::items::RollCatalogs,
     commands: &NetCommands,
-    pending: &PendingItemOps,
     names: &crate::names::NameCache,
     sub_classes: Option<&crate::ui_items::ItemSubClasses>,
 ) -> BankBagSlots {
@@ -727,20 +715,15 @@ fn bank_bag_slots(
             icons,
             rolls,
             commands,
-            pending,
             names,
             sub_classes,
             // A bank bag slot holds a bag; the relic flag decides INVSLOT 17 alone.
             false,
             guid,
-            BANK_BAG_LIVE_FIRST + i as u32,
         );
     }
     bags
 }
-
-/// `BankButtonIDToInvSlotID(1, isBag)`: the first of the six bank-bag slots' live ids.
-const BANK_BAG_LIVE_FIRST: u32 = 64;
 
 /// Fire the paper doll's repaint events for one unit's snapshot transition, `arg1 = token`: the
 /// eight unit-stat events both pages register (`PaperDollFrame.lua:14-28`,
@@ -850,7 +833,6 @@ pub(crate) fn feed_char(
     commands: Res<NetCommands>,
     mut feed: ResMut<CharFeedState>,
     mut booth: ResMut<PaperDollBooth>,
-    pending: Res<PendingItemOps>,
     names: Res<crate::names::NameCache>,
     // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
@@ -898,8 +880,6 @@ pub(crate) fn feed_char(
     // Both catalogs load once at startup; one input covers the pair.
     let enchants_changed = enchants.as_ref().is_some_and(|r| r.is_changed())
         || props.as_ref().is_some_and(|r| r.is_changed());
-    let pending_held = !pending.is_empty();
-    let pending_moved = memo.pending_epoch.moved(pending.epoch());
     gate::trace(
         "feed_char",
         &[
@@ -911,8 +891,6 @@ pub(crate) fn feed_char(
             ("self", self_changed),
             ("icons", icons_added),
             ("enchants", enchants_changed),
-            ("pending", pending_held),
-            ("pending-epoch", pending_moved),
         ],
     );
     let gate = gate::Gate::new(
@@ -923,9 +901,7 @@ pub(crate) fn feed_char(
             || deadlines_moved
             || self_changed
             || icons_added
-            || enchants_changed
-            || pending_held
-            || pending_moved,
+            || enchants_changed,
     );
     if gate.skip() {
         return;
@@ -951,7 +927,6 @@ pub(crate) fn feed_char(
             props: props.as_deref(),
         },
         &commands,
-        &pending,
         &names,
         sub_classes.as_deref(),
         classes.as_deref().map(|t| &t.0),
@@ -966,7 +941,6 @@ pub(crate) fn feed_char(
             props: props.as_deref(),
         },
         &commands,
-        &pending,
         &names,
         sub_classes.as_deref(),
     );
@@ -982,7 +956,7 @@ pub(crate) fn feed_char(
                 Some(false)
             } else {
                 let was = memo.last_bank_bags.as_ref().and_then(|b| b[i].as_ref());
-                (!same_item(was, bank_bags[i].as_ref())).then_some(true)
+                (was != bank_bags[i].as_ref()).then_some(true)
             }
         })
         .collect();
@@ -1013,21 +987,6 @@ pub(crate) fn feed_char(
             Vec::new()
         };
         script.fire_event("PLAYERBANKSLOTS_CHANGED", args);
-    }
-}
-
-/// Whether two bank-bag views hold the same item; `locked` is `ITEM_LOCK_CHANGED`'s business.
-fn same_item(a: Option<&InvSlotView>, b: Option<&InvSlotView>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => {
-            let unlocked = |v: &InvSlotView| InvSlotView {
-                locked: false,
-                ..v.clone()
-            };
-            unlocked(a) == unlocked(b)
-        }
-        _ => false,
     }
 }
 
@@ -1135,7 +1094,6 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<CharFeedState>()
             .init_resource::<PaperDollBooth>()
-            .init_resource::<PendingItemOps>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::names::NameCache>()
@@ -1266,68 +1224,29 @@ mod tests {
         );
     }
 
-    /// A lock flip is `ITEM_LOCK_CHANGED`'s, not a slot change.
+    /// The lock is the VM's, keyed by the guid this feed pushes: a lock moves no snapshot, and
+    /// `IsInventoryItemLocked` reads it on the bank bag's own guid.
     #[test]
-    fn a_lock_flip_alone_does_not_fire_the_repaint_event() {
+    fn a_bank_bag_reads_the_lock_on_its_own_guid() {
         let mut app = world_with_bank_bag(Some(BAG));
         app.world_mut().run_system_once(feed_char).unwrap();
         let _ = seen(&mut app);
-
-        // The same bag, now locked by an outbound move.
-        app.world_mut().resource_mut::<PendingItemOps>().add([(
-            EQUIPMENT_BAG,
-            BANK_BAG_LIVE_FIRST,
-            BAG,
-            1,
-        )]);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        let events = seen(&mut app);
-        assert!(
-            events.contains(&"UNIT_INVENTORY_CHANGED player".to_string()),
-            "the snapshot did move — `locked` is part of it, got {events:?}"
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|e| e.starts_with("PLAYERBANKSLOTS_CHANGED")),
-            "…but the ITEM did not change, so the repaint event stays quiet, got {events:?}"
-        );
-    }
-
-    /// The frame a lock clears, `!pending.is_empty()` already reads false;
-    /// [`PendingItemOps::epoch`] is what still runs the feed.
-    #[test]
-    fn the_frame_a_lock_clears_still_repushes_the_slot() {
-        let mut app = world_with_bank_bag(Some(BAG));
-        app.world_mut().resource_mut::<PendingItemOps>().add([(
-            EQUIPMENT_BAG,
-            BANK_BAG_LIVE_FIRST,
-            BAG,
-            1,
-        )]);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        let _ = seen(&mut app);
-        assert!(
+        let locked = |app: &mut App| {
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()
                 .eval::<bool>(r#"return IsInventoryItemLocked(64) and true or false"#)
-                .unwrap(),
-            "in flight, the slot reads locked"
-        );
-
-        // A refusal: the lock clears without any object moving.
-        let cleared = app
-            .world_mut()
-            .resource_mut::<PendingItemOps>()
-            .clear_by_failure(BAG);
-        assert_eq!(cleared, vec![(EQUIPMENT_BAG, BANK_BAG_LIVE_FIRST)]);
+                .unwrap()
+        };
+        assert!(!locked(&mut app));
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .lock_item(BAG);
         app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(
-            !app.world_mut()
-                .non_send_resource_mut::<UiScript>()
-                .eval::<bool>(r#"return IsInventoryItemLocked(64) and true or false"#)
-                .unwrap(),
-            "the unlock has to reach the VM in the same frame it happened"
-        );
+        assert!(seen(&mut app).is_empty(), "a lock is no inventory change");
+        assert!(locked(&mut app), "a send's lock on the bag");
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .unlock_item(BAG);
+        assert!(!locked(&mut app), "the server's answer");
     }
 }
