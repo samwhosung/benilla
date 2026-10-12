@@ -1266,7 +1266,7 @@ pub(crate) mod schedule_tests {
         ("ui_item_text.rs", "feed_item_text", Because::MemoLatched,
          "`told` is a `VmMemo` inside the session (a fresh VM re-begins), and the open is a player click"),
         ("ui_items/locks.rs", "apply_item_releases", Because::Deliberate,
-         "the item creates it consumes before the interface is up are the reference's own pre-UI creates, which unlock nothing (`0x5d84ff` reads the UI-up latch): the watch's per-VM memo takes them as its baseline"),
+         "the item creates it consumes before the world-entry interface is up precede the reference's world latch (`[0xb4b424]`, set at `0x4908ce`, cleared at `0x490a8d`), which the arrival unlock reads (`0x5d84ff`): they unlock nothing, and the watch the world entry's seed resets takes them as its baseline"),
         ("ui_logout.rs", "feed_logout", Because::PlayerRoundTrip,
          "both packets answer the `CMSG_LOGOUT_REQUEST`/cancel the game menu sent"),
         ("ui_loot/mod.rs", "drain_loot", Because::Deliberate,

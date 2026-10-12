@@ -115,7 +115,8 @@ pub(crate) fn fold_dying_vm_item_locks(world: &mut World) {
 }
 
 /// Seat the new VM's locks and cursor before any file or event runs on it: a `/reload`'s are the
-/// dying VM's, a world entry's none.
+/// dying VM's, a world entry's none. A world entry's watch starts over ([`LockWatch`]); a
+/// `/reload`'s carries on.
 pub(crate) fn seed_vm_item_locks(world: &mut World, script: &mut UiScript, reload: bool) {
     let held = world
         .get_resource_mut::<HeldItemLocks>()
@@ -126,6 +127,9 @@ pub(crate) fn seed_vm_item_locks(world: &mut World, script: &mut UiScript, reloa
         script.seed_held_cursor(held.cursor);
     } else {
         script.seed_item_locks(Vec::new());
+        if let Some(mut watch) = world.get_resource_mut::<LockWatch>() {
+            *watch = LockWatch::default();
+        }
     }
 }
 
@@ -292,11 +296,14 @@ pub(crate) fn restacked(was: &Snapshot, now: &Snapshot) -> Vec<u64> {
     out
 }
 
-/// The watchers' last look, per VM: a fresh VM, like the reference's game UI coming up
-/// (`0x4908ce`, which the arrival unlock reads at `0x5d84ff`), takes a baseline and releases
-/// nothing for what it finds. `arrivals` are item objects created since, waiting on their
-/// template as the reference's create waits for its answer (`0x5d8346` → `0x5d8390`).
-#[derive(Default)]
+/// The watchers' last look. The arrival unlock reads the world latch (`[0xb4b424]` at `0x5d84ff`),
+/// set in the world-entry cascade (`0x4908ce`) and cleared in the world sweep (`0x490a8d`), so a
+/// world entry's interface takes a baseline and releases nothing for what it finds; a `/reload`
+/// clears and sets the latch inside one call, so the look outlives the VM it replaces, and a
+/// create or a restack the reload's frame brings is compared as any other. `arrivals` are item
+/// objects created since, waiting on their template as the reference's create waits for its
+/// answer (`0x5d8346` → `0x5d8390`).
+#[derive(Default, Resource)]
 pub(crate) struct LockWatch {
     seen: Option<Snapshot>,
     templates: u64,
@@ -319,7 +326,7 @@ pub(crate) fn apply_item_releases(
     mut queued: ResMut<ItemReleases>,
     // The loot window's closes and refusals owe theirs on the session.
     loot: Option<ResMut<crate::ui_loot::LootState>>,
-    mut memo: Local<crate::ui_script::VmMemo<LockWatch>>,
+    mut watch: ResMut<LockWatch>,
 ) {
     // Read before taking, so a frame owing nothing leaves the session unchanged for its feed.
     if let Some(mut loot) = loot.filter(|l| l.owes_unlocks()) {
@@ -336,7 +343,7 @@ pub(crate) fn apply_item_releases(
         queued.0.clear();
         return;
     };
-    let watch = memo.get(&script);
+    let watch = &mut *watch;
     let (Some(store), Some(me)) = (inv.self_store.iter().next(), me.0) else {
         *watch = LockWatch::default();
         queued.apply(&mut script);
@@ -524,6 +531,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Items>()
             .init_resource::<ItemReleases>()
+            .init_resource::<LockWatch>()
             .init_resource::<crate::net::GuidIndex>()
             .insert_resource(crate::net::SelfGuid(Some(ME)))
             .insert_resource(NetCommands(tx))
@@ -590,6 +598,58 @@ mod tests {
         assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
         app.update();
         assert_eq!(heard(&mut app), 0);
+    }
+
+    /// Swap in a fresh VM the way a `/reload` does: the dying VM's locks folded, the new one
+    /// seeded with them before anything runs on it.
+    fn reload_vm(app: &mut App) {
+        let world = app.world_mut();
+        fold_dying_vm_item_locks(world);
+        let mut script = UiScript::new().unwrap();
+        seed_vm_item_locks(world, &mut script, true);
+        script
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') f:RegisterEvent('ITEM_LOCK_CHANGED') \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+            )
+            .unwrap();
+        world.insert_non_send_resource(script);
+    }
+
+    /// A `/reload` keeps the world latch set (`[0xb4b424]`, cleared at `0x490a8d` and set again
+    /// at `0x4908ce` inside the one call), so a restack and a create landing on the reload's
+    /// frame unlock into the new VM, not into its baseline; a world entry's VM starts over.
+    #[test]
+    fn a_reload_frame_swallows_no_restack_or_create() {
+        let (mut app, me) = arrow_world();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .lock_item(A);
+        reload_vm(&mut app);
+        restream(&mut app, A, arrows(199));
+        crate::items::test_spawn_item(app.world_mut(), B, arrows(20), false);
+        set_store(&mut app, me, pack(&[A, B]));
+        app.update();
+        assert_eq!(
+            heard(&mut app),
+            2,
+            "the restack's and the create's entry unlocks"
+        );
+        assert!(!app.world().non_send_resource::<UiScript>().item_locked(A));
+
+        // A world entry's seed: the new VM's first look is a baseline again.
+        let mut fresh = UiScript::new().unwrap();
+        seed_vm_item_locks(app.world_mut(), &mut fresh, false);
+        fresh
+            .run(
+                "SEEN = {} local f = CreateFrame('Frame') f:RegisterEvent('ITEM_LOCK_CHANGED') \
+                 f:SetScript('OnEvent', function() table.insert(SEEN, event) end)",
+            )
+            .unwrap();
+        app.world_mut().insert_non_send_resource(fresh);
+        restream(&mut app, A, arrows(150));
+        app.update();
+        assert_eq!(heard(&mut app), 0, "the world entry's baseline");
     }
 
     /// A move frees the seat it left (`0x5ddd50`); a created item of a stacking entry unlocks
