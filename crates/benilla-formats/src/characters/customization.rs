@@ -123,8 +123,10 @@ pub struct CharCreateCatalog {
     /// CharBaseInfo's `(race, class)` rows in file order, the class-list builder's walk
     /// (`0x4706b0`).
     base_info: Vec<(u8, u8)>,
-    /// NameGen's rows in file order.
+    /// NameGen's rows in file order; empty when the table did not load.
     name_gen: Vec<NameGenRow>,
+    /// Why NameGen did not load, when it did not: only the random name goes without it.
+    name_gen_error: Option<String>,
     /// race → (male displayId, female displayId), from ChrRaces cols 4/5.
     displays: HashMap<u8, (u32, u32)>,
     /// race → ChrRaces fileString (col 15), the GlueStrings key stem (`RACE_INFO_<FILE>`).
@@ -210,9 +212,14 @@ impl CharCreateCatalog {
             .collect()
     }
 
-    /// NameGen's rows in file order.
+    /// NameGen's rows in file order; empty when the table did not load.
     pub fn name_gen(&self) -> &[NameGenRow] {
         &self.name_gen
+    }
+
+    /// Why NameGen did not load, if it did not.
+    pub fn name_gen_error(&self) -> Option<&str> {
+        self.name_gen_error.as_deref()
     }
 
     /// The five appearance-dial counts for a (race, sex).
@@ -230,10 +237,20 @@ impl CharCreateCatalog {
     /// Load the catalog from the patch chain. The misparse guards compare the raw combos, so they
     /// run before `UNUSED_COMBOS` are stripped.
     pub fn load(chain: &mut Chain) -> Result<Self> {
+        let name_gen = load_name_gen(chain);
+        Self::load_with(chain, name_gen)
+    }
+
+    /// [`Self::load`] over NameGen's own load result.
+    fn load_with(chain: &mut Chain, name_gen: Result<Vec<NameGenRow>>) -> Result<Self> {
         let (race_rows, displays, files, names, custom_tokens) = load_races(chain)?;
         let base_info = load_base_info(chain)?;
         let combos: HashSet<(u8, u8)> = base_info.iter().copied().collect();
-        let name_gen = load_name_gen(chain)?;
+        // NameGen feeds the random name alone, so its loss costs that and nothing else.
+        let (name_gen, name_gen_error) = match name_gen {
+            Ok(rows) => (rows, None),
+            Err(e) => (Vec::new(), Some(format!("{e:#}"))),
+        };
         let start_outfits = load_start_outfits(chain)?;
         let avail = load_available_sections(chain)?;
         let hair_geo = load_hair_geosets(chain)?;
@@ -253,6 +270,7 @@ impl CharCreateCatalog {
             race_rows,
             base_info,
             name_gen,
+            name_gen_error,
             displays,
             files,
             names,
@@ -719,6 +737,20 @@ mod tests {
         assert!(gen
             .windows(2)
             .all(|w| (w[0].race, w[0].sex) <= (w[1].race, w[1].sex)));
+    }
+
+    /// A NameGen that does not load leaves an empty table and its reason, and the rest of the
+    /// catalog stands.
+    #[test]
+    fn a_lost_name_gen_costs_only_the_names() {
+        let data = crate::wow_data_or_skip!();
+        let mut chain = crate::open_chain(&data).expect("open chain");
+        let cat = CharCreateCatalog::load_with(&mut chain, Err(anyhow::anyhow!("NameGen gone")))
+            .expect("the catalog loads without NameGen");
+        assert!(cat.name_gen().is_empty());
+        assert_eq!(cat.name_gen_error(), Some("NameGen gone"));
+        assert_eq!(cat.race_name(2), Some("Orc"));
+        assert!(cat.body_display(2, 1).is_some());
     }
 
     #[test]

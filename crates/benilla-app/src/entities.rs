@@ -868,7 +868,12 @@ fn setup_entities(
         Err(e) => warn!("char sections unavailable, player bodies stay untextured: {e:#}"),
     }
     match CharCreateCatalog::load(&mut chain) {
-        Ok(catalog) => commands.insert_resource(CharCreate(catalog)),
+        Ok(catalog) => {
+            if let Some(e) = catalog.name_gen_error() {
+                warn!("NameGen.dbc unavailable, the create screen's random name is empty: {e}");
+            }
+            commands.insert_resource(CharCreate(catalog));
+        }
         Err(e) => warn!("char-create catalog unavailable, the create screen is disabled: {e:#}"),
     }
     match load_item_display_catalog(&mut chain) {
