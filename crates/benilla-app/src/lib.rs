@@ -409,6 +409,8 @@ fn launch(build: BuildId, extend: Option<Extension<'_>>) -> AppExit {
     // macOS `Cmd+Q` goes straight to `terminate:`, which never runs another frame, so the session
     // was never written; re-pointed at the window close, which [`shutdown`] sees.
     .add_plugins(benilla_world::mac_quit::MacQuitPlugin)
+    // Alt+F4 on Windows and Linux, where a tiling window manager binds nothing to it.
+    .add_plugins(shutdown::AltF4Plugin)
     // The engine as one group; `world_plugins.rs` has its load-bearing ordering edges and what it
     // leaves out (`pipe_warm`).
     .add_plugins(benilla_world::world_plugins::WorldPlugins)

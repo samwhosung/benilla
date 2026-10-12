@@ -45,6 +45,50 @@ pub(crate) fn on_app_exit(app: &mut App, systems: ScheduleConfigs<ScheduleSystem
     app.add_systems(Last, systems.in_set(OnAppExit))
 }
 
+/// Alt+F4 closes the primary window on Windows and Linux.
+///
+/// Deviation: the reference leaves it to the OS. Its key arm (`0x42d261`-`0x42d276`) hands Alt+F4
+/// to `DefWindowProc`, whose `SC_CLOSE` becomes the kind-5 event (`0x42d287`, as `WM_CLOSE` posts at
+/// `0x42d292`) and runs the quit at once (`0x423a21` -> `0x423ca0` -> `0x41f5d0` -> `0x422030`),
+/// with no logout timer, at the login screen and in game alike. A tiling window manager (i3,
+/// sway, Hyprland) binds nothing to it, so benilla reads the chord itself and asks for the same
+/// close, which the shutdown tail above already serves. Not on macOS: `Cmd+Q` is
+/// [`benilla_world::mac_quit`].
+pub(crate) struct AltF4Plugin;
+
+impl Plugin for AltF4Plugin {
+    fn build(&self, app: &mut App) {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        // Before the loading cover swallows the input plane, which would eat the key.
+        app.add_systems(
+            PreUpdate,
+            close_on_alt_f4
+                .after(bevy::input::InputSystems)
+                .before(crate::loading_screen::CoverInput),
+        );
+    }
+}
+
+/// F4 pressed with Alt held asks the primary window to close, as a click on its close box does.
+fn close_on_alt_f4(
+    mut keyboard: MessageReader<bevy::input::keyboard::KeyboardInput>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut close: MessageWriter<bevy::window::WindowCloseRequested>,
+) {
+    let alt = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
+    let pressed = keyboard.read().any(|ev| {
+        ev.key_code == KeyCode::F4 && ev.state == bevy::input::ButtonState::Pressed && !ev.repeat
+    });
+    if pressed && alt {
+        if let Ok(window) = windows.single() {
+            close.write(bevy::window::WindowCloseRequested { window });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +214,57 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().resource::<Saw>().0, 2);
+    }
+
+    /// Alt+F4 writes the close request for the primary window; F4 alone and Alt with another key
+    /// do not.
+    #[test]
+    fn alt_f4_asks_the_primary_window_to_close_and_plain_f4_does_not() {
+        use bevy::input::keyboard::{Key, KeyboardInput};
+        use bevy::input::ButtonState;
+        let run = |alt: bool, key: KeyCode| {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .add_plugins(bevy::input::InputPlugin)
+                .add_message::<WindowCloseRequested>()
+                .add_systems(PreUpdate, close_on_alt_f4.after(bevy::input::InputSystems));
+            let window = app
+                .world_mut()
+                .spawn((Window::default(), PrimaryWindow))
+                .id();
+            if alt {
+                app.world_mut().write_message(KeyboardInput {
+                    key_code: KeyCode::AltLeft,
+                    logical_key: Key::Alt,
+                    state: ButtonState::Pressed,
+                    text: None,
+                    repeat: false,
+                    window,
+                });
+            }
+            app.world_mut().write_message(KeyboardInput {
+                key_code: key,
+                logical_key: Key::F4,
+                state: ButtonState::Pressed,
+                text: None,
+                repeat: false,
+                window,
+            });
+            app.update();
+            let sent: Vec<Entity> = app
+                .world_mut()
+                .resource_mut::<Messages<WindowCloseRequested>>()
+                .drain()
+                .map(|c| c.window)
+                .collect();
+            (sent, window)
+        };
+        let (sent, window) = run(true, KeyCode::F4);
+        assert_eq!(sent, [window], "Alt+F4 closes the primary window");
+        assert!(
+            run(false, KeyCode::F4).0.is_empty(),
+            "plain F4 does nothing"
+        );
+        assert!(run(true, KeyCode::F5).0.is_empty(), "Alt+F5 does nothing");
     }
 }
