@@ -638,17 +638,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetOwnerAuctionItems([page]) / GetBidderAuctionItems([page]): unthrottled, page 0 by default.
     g.set(
         "GetOwnerAuctionItems",
-        lua.create_function(|lua, page: Option<Idx32>| {
+        lua.create_function(|lua, page: Option<Value>| {
+            // A page that is not a number is page 0 (`0x4cecaa`, `0x4cecfa`): the query never
+            // raises, and `trunc(n)` is the signed page (`0x40a2b0`).
+            let page = crate::script::binding_abi::coerced_number(lua, page);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.auction_owner_query = Some(page.map_or(0, |p| p.0));
+            model.auction_owner_query = Some(crate::script::binding_abi::ftol(page) as u32);
             Ok(())
         })?,
     )?;
     g.set(
         "GetBidderAuctionItems",
-        lua.create_function(|lua, page: Option<Idx32>| {
+        lua.create_function(|lua, page: Option<Value>| {
+            // A page that is not a number is page 0 (`0x4cecaa`, `0x4cecfa`): the query never
+            // raises, and `trunc(n)` is the signed page (`0x40a2b0`).
+            let page = crate::script::binding_abi::coerced_number(lua, page);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.auction_bidder_query = Some(page.map_or(0, |p| p.0));
+            model.auction_bidder_query = Some(crate::script::binding_abi::ftol(page) as u32);
             Ok(())
         })?,
     )?;
@@ -819,6 +825,29 @@ fn click_auction_sell_item(model: &mut Model) {
 
 #[cfg(test)]
 mod tests {
+    /// The owner and bidder queries (`0x4cec80`, `0x4cecd0`) read `trunc(n)` as the page and take
+    /// anything else for page 0; they never raise.
+    #[test]
+    fn owner_and_bidder_queries_default_to_page_zero_and_never_raise() {
+        let mut s = crate::script::UiScript::new().unwrap();
+        for (call, page) in [
+            ("()", 0),
+            ("(2)", 2),
+            ("(2.9)", 2),
+            ("('x')", 0),
+            ("({})", 0),
+            ("(nil)", 0),
+            ("(-1)", u32::MAX),
+        ] {
+            s.run(&format!(
+                "GetOwnerAuctionItems{call} GetBidderAuctionItems{call}"
+            ))
+            .unwrap_or_else(|e| panic!("{call} raised: {e}"));
+            assert_eq!(s.take_auction_owner_query(), Some(page), "owner {call}");
+            assert_eq!(s.take_auction_bidder_query(), Some(page), "bidder {call}");
+        }
+    }
+
     use super::*;
     use crate::script::UiScript;
 

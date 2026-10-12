@@ -9,7 +9,6 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
-use crate::script::binding_abi::Idx32;
 
 /// The open bank's purchase row, pushed whole by the app.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -68,7 +67,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetBankSlotCost(numSlots): the argument is unread; the pushed state names the next slot.
     g.set(
         "GetBankSlotCost",
-        lua.create_function(|lua, _n: Option<Idx32>| {
+        // Reads no argument at all (`0x4f8630`): any call shape answers.
+        lua.create_function(|lua, _args: mlua::MultiValue| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(model.bank.as_ref().map_or(0, |b| b.next_cost)))
         })?,
@@ -139,6 +139,14 @@ mod tests {
             .eval::<bool>("local n, full = GetNumBankSlots()\nreturn n == 2 and full == nil")
             .unwrap());
         assert_eq!(s.eval::<i64>("return GetBankSlotCost(2)").unwrap(), 100_000);
+        // The argument is never read (`0x4f8630`): none, a string or a table answer all the same.
+        for call in [
+            "GetBankSlotCost()",
+            "GetBankSlotCost('x')",
+            "GetBankSlotCost({})",
+        ] {
+            assert_eq!(s.eval::<i64>(&format!("return {call}")).unwrap(), 100_000);
+        }
 
         // Six purchased: full = 1, and 999999999 is the DBC's sentinel row.
         s.set_bank(Some(BankState {
