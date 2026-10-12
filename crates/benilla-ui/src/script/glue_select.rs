@@ -74,6 +74,14 @@ impl Default for GlueSelectCells {
 /// The scene a shown `ModelFFX` pane draws, as the host's scene drive reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlueScenePane {
+    /// The pane, whose `OnShow` (`0x46fa60`) resets the glue glow when it appears.
+    pub handle: crate::widget::FrameHandle,
+    /// The pane's rect as fractions of the screen, `[left, right, top, bottom]` from the top-left:
+    /// the scene's viewport (`0x76d5d7`), whose `w/h` is the projection's aspect. `None` until the
+    /// layout has placed it.
+    pub rect: Option<[f32; 4]>,
+    /// The instance the pane's last `SetModel` made ([`crate::widget::ModelState::instance`]).
+    pub instance: u64,
     /// The file the pane's last `SetModel` gave it: the XML `file`, `Model:SetModel`, or
     /// `SetCharSelectBackground`'s (`0x472128`, the pane's own `SetModel`).
     pub path: String,
@@ -169,9 +177,12 @@ impl super::UiScript {
     }
 
     /// The character standing on the select scene's attachment 0: the selected record once
-    /// `0x472950` has built its composite (`+0x110`) and attached it (`0x473039`). Every path
-    /// that frees the records detaches it first (`0x4722c0`/`0x4722e0` at `0x472409` and
-    /// `0x4725b9`), and an empty roster has nothing to attach.
+    /// `0x472950` has built its composite (`+0x110`) and attached it (`0x473039`). The list ask
+    /// (`0x4723d0`) and the teardown (`0x472580`) free the records and then detach
+    /// (`0x4722c0`/`0x4722e0` at `0x472409` and `0x4725b9`); the load (`0x4724d0`) frees them at
+    /// `0x4724ee` and detaches later in the same call, through the select's build
+    /// (`0x472740` → `0x472a44`) or, for an empty roster, at `0x472533`. World entry's free
+    /// (`0x472090`) detaches nothing, and the glue screens go with it.
     pub fn glue_standing_guid(&self) -> Option<u64> {
         let model = self.model_ref();
         let roster = &model.glue.roster;
@@ -187,6 +198,7 @@ impl super::UiScript {
     pub fn glue_scene(&self) -> Option<GlueScenePane> {
         let model = self.model_ref();
         let select = model_frame_handle(&model);
+        let (sw, sh) = (model.screen.width(), model.screen.height());
         model
             .arena
             .model_kinds()
@@ -202,6 +214,20 @@ impl super::UiScript {
                 Some((
                     (f.strata, f.level),
                     GlueScenePane {
+                        handle: h,
+                        rect: model
+                            .resolved
+                            .get(&h)
+                            .filter(|_| sw > 0.0 && sh > 0.0)
+                            .map(|r| {
+                                [
+                                    r.left / sw,
+                                    r.right / sw,
+                                    1.0 - r.top / sh,
+                                    1.0 - r.bottom / sh,
+                                ]
+                            }),
+                        instance: m.instance,
                         path: m.path.clone()?,
                         fog: m.scene_fog(),
                         select: select == Some(h),
@@ -807,6 +833,10 @@ mod tests {
         .unwrap();
         let pane = s.glue_scene().unwrap();
         assert_eq!((pane.path.as_str(), pane.fog), ("UI_Human.mdx", None));
+        // Every call makes a new instance, the same file included (`0x76ccf5`-`0x76cd0d`).
+        let first = pane.instance;
+        s.run("SetCharSelectBackground('UI_Human.mdx')").unwrap();
+        assert!(s.glue_scene().unwrap().instance > first);
 
         s.run("Scene:SetModel('UI_Dwarf.mdx')").unwrap();
         let pane = s.glue_scene().unwrap();
@@ -818,7 +848,8 @@ mod tests {
     /// `Model` and a pane with no file are none.
     #[test]
     fn the_scene_is_the_topmost_shown_model_ffx() {
-        let s = UiScript::new_glue().unwrap();
+        let mut s = UiScript::new_glue().unwrap();
+        s.set_screen_size(1024.0, 768.0);
         assert_eq!(s.glue_scene(), None);
         s.run(
             "local low = CreateFrame('ModelFFX', 'Low') low:SetModel('low.mdx') \
@@ -833,6 +864,15 @@ mod tests {
         let pane = s.glue_scene().unwrap();
         assert_eq!(pane.path, "high.mdx");
         assert!(!pane.select && pane.fog.is_none());
+        assert_eq!(pane.rect, None, "not laid out yet");
+        s.run("High:SetPoint('TOPLEFT', 256, -192) High:SetWidth(512) High:SetHeight(384)")
+            .unwrap();
+        s.resolve();
+        assert_eq!(
+            s.glue_scene().unwrap().rect,
+            Some([0.25, 0.75, 0.25, 0.75]),
+            "the rect as screen fractions from the top-left"
+        );
         s.run("High:Hide()").unwrap();
         assert_eq!(s.glue_scene().unwrap().path, "low.mdx");
         s.run("Low:Hide()").unwrap();

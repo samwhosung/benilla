@@ -270,6 +270,8 @@ pub(crate) struct Model {
     pub(crate) model_facts: HashMap<String, std::sync::Arc<crate::widget::ModelFileFacts>>,
     /// Model files still waiting for their facts, for the host to load; deduplicated.
     pub(crate) model_facts_wanted: Vec<String>,
+    /// The model instances `SetModel` has made in this state, the last one's number.
+    pub(crate) model_instances: u64,
     /// Event name to its frames in registration order, never a set: `SignalEvent` (`0x703e50`)
     /// dispatches in that order across frames. Re-registering keeps a frame's position.
     pub(crate) event_to_frames: HashMap<String, Vec<FrameHandle>>,
@@ -1222,6 +1224,7 @@ impl Model {
             on_update_model_frames: Vec::new(),
             model_facts: HashMap::new(),
             model_facts_wanted: Vec::new(),
+            model_instances: 0,
             event_to_frames: HashMap::new(),
             frame_events: HashMap::new(),
             all_event_frames: Vec::new(),

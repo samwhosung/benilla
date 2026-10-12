@@ -356,6 +356,10 @@ pub struct ModelState {
     /// (`0x76cd96` → `0x76d680`): the scene draws unfogged whatever the fog fields hold. The
     /// callback rides the model instance, so the next `SetModel` or `ClearModel` drops it.
     pub select_fill: bool,
+    /// The number of the instance the last `SetModel` made: `0x76cce0` builds a new one on every
+    /// call (`0x76ccf5`-`0x76cd0d`), its scene starting over, even for the file it held. 0 for
+    /// none.
+    pub instance: u64,
 }
 
 /// A model pane's armed fog, all the renderer needs ([`ModelState::armed_fog`]).
@@ -430,6 +434,7 @@ impl Default for ModelState {
             fog_far: 1.0,
             ffx: false,
             select_fill: false,
+            instance: 0,
         }
     }
 }

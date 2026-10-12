@@ -62,10 +62,13 @@ impl Model {
         // The reference's asset-resident test (`0x71d5a3`): the loader's Stand seed runs now, or
         // when the file lands.
         let facts = self.model_facts_for(&path);
+        let instance = self.model_instances + 1;
         let Some(KindState::Model(m)) = self.arena.frame_mut(h).map(|f| &mut f.kind_state) else {
             return;
         };
         m.set_file(path, facts.as_deref());
+        m.instance = instance;
+        self.model_instances = instance;
         // A size-less pane takes the file's rect as soon as the file is known.
         self.apply_implicit_rect(h);
     }
