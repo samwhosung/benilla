@@ -667,6 +667,77 @@ fn the_draw_clip_is_the_scroll_frames_mouse_rect() {
     );
 }
 
+/// A nested ScrollFrame wholly outside its outer one leaves a clip with no positive span, and the
+/// callback then draws nothing (`0x78750e`–`0x787526`), not the strip between the two rects.
+#[test]
+fn a_nested_scroll_frame_outside_its_outer_one_draws_no_child() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local outer = CreateFrame("ScrollFrame", "Outer")
+        outer:SetPoint("TOPLEFT", 0, 0)
+        outer:SetWidth(200); outer:SetHeight(200)   -- x 0..200, y 400..600
+        local c1 = CreateFrame("Frame", "C1", outer)
+        c1:SetWidth(600); c1:SetHeight(600)
+        outer:SetScrollChild(c1)
+        local inner = CreateFrame("ScrollFrame", "Inner", c1)
+        inner:SetPoint("TOPLEFT", "C1", "TOPLEFT", 300, 0)  -- x 300..400: right of Outer
+        inner:SetWidth(100); inner:SetHeight(100)
+        local im = inner:CreateTexture(nil, "ARTWORK"); im:SetTexture("marker:inner")
+        im:SetAllPoints()
+        local c2 = CreateFrame("Frame", "C2", inner)
+        c2:SetWidth(100); c2:SetHeight(100)
+        inner:SetScrollChild(c2)
+        local leaf = c2:CreateTexture(nil, "ARTWORK"); leaf:SetTexture("marker:leaf")
+        leaf:SetAllPoints()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let quads = s.extract();
+    assert_eq!(
+        marker_clip(&quads, "marker:inner"),
+        Some(Some(Rect::new(400.0, 0.0, 600.0, 200.0))),
+        "the inner ScrollFrame itself is Outer's content, clipped away by Outer's rect"
+    );
+    assert_eq!(
+        marker_clip(&quads, "marker:leaf"),
+        None,
+        "its child is not drawn"
+    );
+}
+
+/// The probe reads the unflagged ancestor's `[+0xd8]` without its valid bit (`0x76b069`): under
+/// an ancestor that never resolved, that is the ctor's zero rect, which only the origin is in.
+#[test]
+fn a_hit_under_an_unplaced_ancestor_clips_to_the_zero_rect() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        local holder = CreateFrame("Frame", "Holder")   -- no points: never resolves
+        local frame = CreateFrame("ScrollFrame", "SF")
+        frame:SetPoint("BOTTOMLEFT", 0, 0)
+        frame:SetWidth(100); frame:SetHeight(100)
+        local child = CreateFrame("Frame", "Child", holder)
+        child:SetWidth(100); child:SetHeight(100)
+        frame:SetScrollChild(child)
+        local btn = CreateFrame("Button", "Btn", child)
+        btn:SetPoint("BOTTOMLEFT", "SF", "BOTTOMLEFT", 0, 0)
+        btn:SetWidth(50); btn:SetHeight(50)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert!(
+        s.eval::<bool>("return Holder:GetLeft() == nil").unwrap(),
+        "the holder has no rect"
+    );
+    assert_eq!(s.hit_test_name(0.0, 0.0).as_deref(), Some("Btn"));
+    assert_eq!(s.hit_test(10.0, 10.0), None);
+}
+
 /// A ScrollFrame whose rect does not resolve draws no scroll child (`0x76b220` fails at
 /// `0x787253`), though the child itself resolves.
 #[test]
