@@ -1678,7 +1678,7 @@ impl Model {
         self.clear_region_valid(rh);
     }
 
-    /// The same for frame `h`: its anchors, size, scale, clamp or scroll override.
+    /// The same for frame `h`: its anchors, size, scale or clamp.
     pub(crate) fn touch_layout_frame(&mut self, h: FrameHandle) {
         match self.frame_to_id.get(&h) {
             Some(&id) => self.name_layout_node(id),

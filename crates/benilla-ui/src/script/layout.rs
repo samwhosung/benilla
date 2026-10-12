@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::layout::{self, Anchor, LayoutInput, Point, Rect};
-use crate::widget::{FrameHandle, FrameKind, KindState, RegionHandle};
+use crate::layout::{self, Anchor, LayoutInput, Rect};
+use crate::widget::{FrameHandle, RegionHandle};
 
 use super::types::RegionData;
 use super::{MeasureRequest, Model, UiScript, SCREEN};
@@ -90,13 +90,9 @@ const NO_NODE: u64 = 0;
 
 /// A frame's per-node hash; the full derive and the incremental pass must agree bit for bit.
 #[inline]
-fn frame_node_hash(input: &LayoutInput, over: Option<Anchor>) -> u64 {
+fn frame_node_hash(input: &LayoutInput) -> u64 {
     let mut node = InputFingerprint::default();
     node.input(input);
-    match over {
-        Some(a) => node.anchors(std::slice::from_ref(&a)),
-        None => node.feed(u64::MAX),
-    }
     node.finish()
 }
 
@@ -198,16 +194,10 @@ pub(crate) struct LayoutScope {
     dirty: Vec<bool>,
     /// The closure's worklist.
     stack: Vec<u32>,
-    /// The cached frame roster, `(handle, id, ScrollFrame anchor override)`, kept across resolves.
-    plan: Vec<(FrameHandle, u32, Option<Anchor>)>,
+    /// The cached frame roster, `(handle, id)`, kept across resolves.
+    plan: Vec<(FrameHandle, u32)>,
     /// The cached roster of live, anchored regions.
     regions: Vec<RegionRow>,
-    /// Per ScrollFrame id, the live child it held when last derived: the one frame whose anchors
-    /// its override replaces.
-    scroll_child: HashMap<u32, FrameHandle>,
-    /// Per child, the ScrollFrames holding it, `(handle, id)`: [`Self::scroll_child`] inverted, so
-    /// a re-derived frame finds its override without a scan.
-    claims: HashMap<FrameHandle, Vec<(FrameHandle, u32)>>,
     /// An incremental pass's `(id, hash)` writes to [`Self::last`], applied only on convergence.
     staged: Vec<(u32, u64)>,
     /// A re-derive's target list, reused.
@@ -250,8 +240,6 @@ impl LayoutScope {
         self.stack.clear();
         self.plan.clear();
         self.regions.clear();
-        self.scroll_child.clear();
-        self.claims.clear();
         self.staged.clear();
     }
 
@@ -371,43 +359,8 @@ impl LayoutScope {
         }
     }
 
-    /// Record that ScrollFrame `sid` (`sh`) now holds `child`; the child it held before, if it
-    /// changed, so the caller re-derives both.
-    fn hold(
-        &mut self,
-        sh: FrameHandle,
-        sid: u32,
-        child: Option<FrameHandle>,
-    ) -> Option<FrameHandle> {
-        let before = match child {
-            Some(c) => self.scroll_child.insert(sid, c),
-            None => self.scroll_child.remove(&sid),
-        };
-        if before == child {
-            return None;
-        }
-        if let Some(old) = before {
-            if let Some(v) = self.claims.get_mut(&old) {
-                v.retain(|&(_, s)| s != sid);
-                if v.is_empty() {
-                    self.claims.remove(&old);
-                }
-            }
-        }
-        if let Some(c) = child {
-            self.claims.entry(c).or_default().push((sh, sid));
-        }
-        before
-    }
-
-    /// The frames a ScrollFrame override holds, whose own anchors this graph does not record.
-    pub(crate) fn overridden(&self) -> impl Iterator<Item = FrameHandle> + '_ {
-        self.claims.keys().copied()
-    }
-
     /// The nodes this graph records reading `id`'s rect. It describes the model while the ledger
-    /// is armed (`Model::layout_touched` is `Some`), but for the nodes named since and the anchors
-    /// a ScrollFrame override set aside ([`Self::overridden`]).
+    /// is armed (`Model::layout_touched` is `Some`), but for the nodes named since.
     pub(crate) fn readers_of(&self, id: u32) -> impl Iterator<Item = u32> + '_ {
         let mut e = self.dep_head.get(id as usize).copied().unwrap_or(u32::MAX);
         std::iter::from_fn(move || {
@@ -514,11 +467,6 @@ impl LayoutScope {
             v.sort_unstable();
             v
         };
-        let over_eq = |a: Option<Anchor>, b: Option<Anchor>| match (a, b) {
-            (None, None) => true,
-            (Some(a), Some(b)) => a.bits_eq(&b),
-            _ => false,
-        };
         let n = self
             .node_of
             .len()
@@ -534,10 +482,7 @@ impl LayoutScope {
                         let r = s.regions[(n & !REGION_TAG) as usize];
                         format!("region {:?} owner {:?}", r.rh, r.owner)
                     }
-                    n => format!(
-                        "frame {:?} override {:?}",
-                        s.plan[n as usize].0, s.plan[n as usize].2
-                    ),
+                    n => format!("frame {:?}", s.plan[n as usize].0),
                 }
             };
             let same_node = match (a, b) {
@@ -548,10 +493,7 @@ impl LayoutScope {
                     self.regions[(a & !REGION_TAG) as usize]
                         == fresh.regions[(b & !REGION_TAG) as usize]
                 }
-                (a, b) => {
-                    let (x, y) = (self.plan[a as usize], fresh.plan[b as usize]);
-                    x.0 == y.0 && x.1 == y.1 && over_eq(x.2, y.2)
-                }
+                (a, b) => self.plan[a as usize] == fresh.plan[b as usize],
             };
             if !same_node {
                 return Some((
@@ -590,30 +532,7 @@ impl LayoutScope {
                 ));
             }
         }
-        let held = |s: &LayoutScope| {
-            let mut v: Vec<(u32, FrameHandle)> =
-                s.scroll_child.iter().map(|(&id, &c)| (id, c)).collect();
-            v.sort_unstable_by_key(|e| e.0);
-            v
-        };
-        let (sa, sb) = (held(self), held(fresh));
-        if sa != sb {
-            return Some((0, format!("ScrollFrames hold {sa:?} cached, {sb:?} fresh")));
-        }
-        // The inverse must agree with its source, entry for entry.
-        let claimed: usize = self.claims.values().map(Vec::len).sum();
-        let inverse_ok = claimed == sa.len()
-            && sa.iter().all(|&(id, c)| {
-                self.claims
-                    .get(&c)
-                    .is_some_and(|v| v.iter().any(|&(_, s)| s == id))
-            });
-        (!inverse_ok).then(|| {
-            (
-                0,
-                format!("ScrollFrame claims {:?} disagree with {sa:?}", self.claims),
-            )
-        })
+        None
     }
 }
 
@@ -706,8 +625,6 @@ struct PreambleProf {
     watched: u128,
     /// The ids rebuild and the scale and clamp sync into `layout_inputs`.
     ids: u128,
-    /// The ScrollFrame override map.
-    scroll: u128,
     /// `region_resolved`'s liveness retain.
     retain: u128,
     /// `LayoutScope::begin_full`.
@@ -750,7 +667,6 @@ impl PreambleProf {
         let total = self.tooltip
             + self.watched
             + self.ids
-            + self.scroll
             + self.retain
             + self.begin
             + self.fp_frames
@@ -758,14 +674,13 @@ impl PreambleProf {
             + self.seed;
         eprintln!(
             "[layout-pre] skips={} incr={} frames={frames} anchored={regions} total_us={total} \
-             tooltip={} watched={} ids={} scroll={} retain={} begin={} \
+             tooltip={} watched={} ids={} retain={} begin={} \
              fp_frames={} fp_regions={} seed={}",
             u8::from(skips),
             u8::from(self.incremental),
             self.tooltip,
             self.watched,
             self.ids,
-            self.scroll,
             self.retain,
             self.begin,
             self.fp_frames,
@@ -1183,7 +1098,7 @@ impl UiScript {
         let entry_frames: Vec<Option<Rect>> = solve_frames
             .iter()
             .map(|&i| {
-                let (h, id, _) = scope.plan[i as usize];
+                let (h, id) = scope.plan[i as usize];
                 (!is_forced(id))
                     .then(|| resolved.get(&h).copied())
                     .flatten()
@@ -1230,25 +1145,22 @@ impl UiScript {
                 solver.set_entry(scope.regions[i as usize].id, cached, invalid);
             }
             for &i in &seed_frames {
-                let (h, id, _) = scope.plan[i as usize];
+                let (h, id) = scope.plan[i as usize];
                 if let Some(r) = resolved.get(&h) {
                     solver.set_external(id, *r);
                 }
             }
             for (&i, &cached) in solve_frames.iter().zip(&entry_frames) {
-                let (h, id, over) = scope.plan[i as usize];
+                let (h, id) = scope.plan[i as usize];
                 let Some(input) = layout_inputs.get(&h) else {
                     continue;
                 };
-                match over {
-                    Some(a) => solver.set_frame_anchored(id, input, a),
-                    None => solver.set_frame(id, input),
-                }
+                solver.set_frame(id, input);
                 solver.set_entry(id, cached, is_invalid(id));
             }
             solver.solve();
             for &i in &solve_frames {
-                let (h, id, _) = scope.plan[i as usize];
+                let (h, id) = scope.plan[i as usize];
                 match solver.rect(id) {
                     Some(r) => {
                         if resolved.get(&h) != Some(&r) {
@@ -1523,40 +1435,6 @@ impl UiScript {
         }
         pre.ids = pre.lap();
 
-        // A live ScrollFrame's live child is anchored, for this solve only, TOPLEFT to its TOPLEFT
-        // at the raw, unnegated `(horizontal, vertical)` offsets, as the reference's re-anchor
-        // `0x787100` passes them to `SetPoint`: y up, so a positive vertical lifts the child. Its
-        // authored anchors and size are untouched, so `SetScrollChild(nil)` needs no restore.
-        let mut scroll_child_anchor: HashMap<FrameHandle, Anchor> = HashMap::new();
-        let mut scroll_holds: Vec<(FrameHandle, u32, FrameHandle)> = Vec::new();
-        for &(h, id) in &ids {
-            let Some(frame) = arena.frame(h) else {
-                continue;
-            };
-            if frame.kind != FrameKind::ScrollFrame {
-                continue;
-            }
-            let KindState::Scroll(state) = &frame.kind_state else {
-                continue;
-            };
-            let Some(child) = state.child else { continue };
-            if arena.frame(child).is_none() {
-                continue; // a stale/destroyed child contributes no override
-            }
-            scroll_holds.push((h, id, child));
-            scroll_child_anchor.insert(
-                child,
-                Anchor::new(
-                    Point::TopLeft,
-                    id,
-                    Point::TopLeft,
-                    state.horizontal,
-                    state.vertical,
-                ),
-            );
-        }
-        pre.scroll = pre.lap();
-
         // The reference resolves one graph in which frames and regions anchor each other; ours
         // alternates a frame solve and a region sweep until a round changes no rect, compared
         // exactly. The round cap is the node count, so only a cycle exhausts it, warned like the
@@ -1569,8 +1447,8 @@ impl UiScript {
 
         // ── The change gate ───────────────────────────────────────────────────────────────────
         // Fingerprint what the rounds read, to skip them when nothing moved since the last
-        // converged resolve: the screen; each live frame's id, synced `LayoutInput` and
-        // ScrollFrame override; each anchored region's node hash (anchors, explicit size, measured
+        // converged resolve: the screen; each live frame's id and synced `LayoutInput`; each
+        // anchored region's node hash (anchors, explicit size, measured
         // extent, owner) and liveness. A Texture's art is no input: the sweep reads it afresh only
         // for a node a write named or the resolve reaches. Seeded rects are outputs, a
         // function of these and of the rects the keep test held them against, which a re-run with
@@ -1578,9 +1456,6 @@ impl UiScript {
         // The same walk hashes each node alone into `LayoutScope::now` and records its edges.
         // Sized past `next_id` for the ids the region walk below may mint.
         scope.begin_full(*next_id as usize + region_data.len() + 1);
-        for (h, id, child) in scroll_holds {
-            scope.hold(h, id, Some(child));
-        }
         pre.begin = pre.lap();
         let mut fp = InputFingerprint::default();
         fp.rect(*screen);
@@ -1588,29 +1463,18 @@ impl UiScript {
             let Some(input) = layout_inputs.get(&h) else {
                 continue;
             };
-            let over = scroll_child_anchor.get(&h).copied();
             #[allow(clippy::cast_possible_truncation)]
             let i = scope.plan.len() as u32;
             fp.feed(u64::from(id));
             fp.input(input);
-            match over {
-                Some(a) => fp.anchors(std::slice::from_ref(&a)),
-                None => fp.feed(u64::MAX),
-            }
             if let Some(slot) = scope.now.get_mut(id as usize) {
-                *slot = frame_node_hash(input, over);
+                *slot = frame_node_hash(input);
                 scope.node_of[id as usize] = i;
             }
-            scope.plan.push((h, id, over));
-            // A frame reads its anchor targets' rects, or only its ScrollFrame override's target,
-            // as the round loop's `set_frame_anchored` does.
-            match over {
-                Some(a) => scope.link(id, a.relative_to),
-                None => {
-                    for a in &input.anchors {
-                        scope.link(id, a.relative_to);
-                    }
-                }
+            scope.plan.push((h, id));
+            // A frame reads its anchor targets' rects.
+            for a in &input.anchors {
+                scope.link(id, a.relative_to);
             }
         }
         #[allow(clippy::cast_possible_truncation)]
@@ -1683,8 +1547,7 @@ impl UiScript {
     /// unlinked (a region freed or cleared), or keeps its slot with its edges re-pointed and its
     /// inputs re-synced, exactly as [`Self::derive_layout_graph`] would build it. Each node whose
     /// hash or edges moved is seeded, and the closure taken. `false` gives up for the derivation:
-    /// a frame leaving the roster, or a frame two ScrollFrames claim, whose override the
-    /// derivation picks by map order.
+    /// a frame leaving the roster.
     fn rederive_named(model: &mut Model, mut named: Vec<u32>, pre: &mut PreambleProf) -> bool {
         let Model {
             arena,
@@ -1702,14 +1565,7 @@ impl UiScript {
             ..
         } = model;
         scope.begin_incremental(*next_id as usize);
-        // ScrollFrames first, so a child re-derived after them reads the claims they recorded.
-        let is_scroller = |id: u32| {
-            id_to_frame
-                .get(&id)
-                .and_then(|&h| arena.frame(h))
-                .is_some_and(|f| f.kind == FrameKind::ScrollFrame)
-        };
-        named.sort_unstable_by_key(|&id| (!is_scroller(id), id));
+        named.sort_unstable();
         named.dedup();
         let mut targets = std::mem::take(&mut scope.targets);
         let mut at = 0;
@@ -1734,39 +1590,6 @@ impl UiScript {
                     scope.targets = targets;
                     return false;
                 }
-                // A ScrollFrame records the live child it holds, and that child re-derives after
-                // it, as the override is the child's; so does a child it let go.
-                if frame.kind == FrameKind::ScrollFrame {
-                    let child = match &frame.kind_state {
-                        KindState::Scroll(state) => {
-                            state.child.filter(|&c| arena.frame(c).is_some())
-                        }
-                        _ => None,
-                    };
-                    let let_go = scope.hold(h, id, child);
-                    for c in child.into_iter().chain(let_go) {
-                        named.extend(frame_to_id.get(&c));
-                    }
-                }
-                // The override of the one ScrollFrame holding this frame; a child two hold gives
-                // up, as the derivation picks between them by map order.
-                let over = match scope.claims.get(&h).map(Vec::as_slice) {
-                    None | Some([]) => None,
-                    Some(&[(sh, sid)]) => match arena.frame(sh).map(|f| &f.kind_state) {
-                        Some(KindState::Scroll(state)) => Some(Anchor::new(
-                            Point::TopLeft,
-                            sid,
-                            Point::TopLeft,
-                            state.horizontal,
-                            state.vertical,
-                        )),
-                        _ => None,
-                    },
-                    Some(_) => {
-                        scope.targets = targets;
-                        return false;
-                    }
-                };
                 // The derivation's sync of the arena's scale and clamp into the layout input.
                 let (scale, clamp) = (frame.effective_scale, frame.clamped_to_screen);
                 let input = layout_inputs.entry(h).or_default();
@@ -1780,21 +1603,17 @@ impl UiScript {
                     input.extent_y = screen.top;
                 }
                 targets.clear();
-                match over {
-                    Some(a) => targets.push(a.relative_to),
-                    None => targets.extend(input.anchors.iter().map(|a| a.relative_to)),
-                }
-                let hash = frame_node_hash(input, over);
+                targets.extend(input.anchors.iter().map(|a| a.relative_to));
+                let hash = frame_node_hash(input);
                 let relinked = if n == u32::MAX {
                     #[allow(clippy::cast_possible_truncation)]
                     {
                         scope.node_of[id as usize] = scope.plan.len() as u32;
                     }
-                    scope.plan.push((h, id, over));
+                    scope.plan.push((h, id));
                     scope.relink(id, &targets);
                     true
                 } else {
-                    scope.plan[n as usize].2 = over;
                     scope.relink(id, &targets)
                 };
                 scope.note(id, hash, relinked);

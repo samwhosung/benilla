@@ -143,25 +143,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
             };
             // Every call marks the range (`0x786d16`), the same child again included.
-            let old_child = with_scroll(lua, &this, |s| {
+            with_scroll(lua, &this, |s| {
                 s.range_dirty = true;
-                std::mem::replace(&mut s.child, new_child)
+                s.child = new_child;
             })?;
-            let h = frame_handle_of(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            if old_child != new_child {
-                // The child takes this frame's override anchor and the old one drops it; the
-                // ScrollFrame's node re-derives its new child with it. The old child goes back to
-                // its own anchors at once.
-                model.touch_layout_frame(h);
-                if let Some(old) = old_child {
-                    model.invalidate_frame(old, true);
-                }
-            }
-            // Every call re-anchors the child, which invalidates it (`0x786d11` → `0x787100`).
-            if let Some(child) = new_child {
-                model.invalidate_frame(child, old_child != new_child);
-            }
+            // The old child keeps its point and is not invalidated (`0x786ce6`–`0x786cf4` only
+            // flags it); the new one is re-anchored on every call (`0x786d11`).
+            reanchor_child(lua, &this)?;
             Ok(())
         })?,
     )?;
@@ -197,10 +185,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !changed {
                 return Ok(());
             }
-            // The child's override offset: the ScrollFrame's node re-derives its child, which the
-            // re-anchor invalidates (`0x787100`).
-            let h = frame_handle_of(lua, &this)?;
-            reanchor_child(lua, &this, h)?;
+            // The re-anchor at the new offset (`0x786dd8` → `0x787100`).
+            reanchor_child(lua, &this)?;
             fire_scroll(lua, &this, "OnVerticalScroll", px)
         })?,
     )?;
@@ -230,8 +216,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !changed {
                 return Ok(());
             }
-            let h = frame_handle_of(lua, &this)?;
-            reanchor_child(lua, &this, h)?;
+            reanchor_child(lua, &this)?;
             fire_scroll(lua, &this, "OnHorizontalScroll", px)
         })?,
     )?;
@@ -360,14 +345,31 @@ fn see_size(s: &mut ScrollFrameState, rect: Option<crate::layout::Rect>, eps: f6
     s.seen_size = size;
 }
 
-/// A scroll offset moved: the ScrollFrame's node re-derives its child's override, and the re-anchor
-/// (`0x787100`, `SetPoint` with the invalidate flag) invalidates the child.
-fn reanchor_child(lua: &Lua, this: &Table, h: crate::widget::FrameHandle) -> mlua::Result<()> {
-    let child = with_scroll(lua, this, |s| s.child)?;
+/// The re-anchor (`0x787100`): when the frame holds a child, clear its points (`0x787110` →
+/// `0x767620`) and set one TOPLEFT on the frame's TOPLEFT at the raw `(horizontal, vertical)`
+/// offsets, y up, with the invalidate flag (`0x787136`). A real write on the child: its own
+/// points are gone, and it keeps the new one when the frame lets it go.
+fn reanchor_child(lua: &Lua, this: &Table) -> mlua::Result<()> {
+    let (child, x, y) = with_scroll(lua, this, |s| (s.child, s.horizontal, s.vertical))?;
+    let Some(child) = child else {
+        return Ok(());
+    };
+    let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model");
-    model.touch_layout_frame(h);
-    if let Some(child) = child {
-        model.invalidate_frame(child, true);
+    if model.arena.frame(child).is_none() {
+        return Ok(());
     }
+    let sid = model.frame_id(h);
+    let pin = crate::layout::Anchors::from([crate::layout::Anchor::new(
+        crate::layout::Point::TopLeft,
+        sid,
+        crate::layout::Point::TopLeft,
+        x,
+        y,
+    )]);
+    let input = model.layout_inputs.entry(child).or_default();
+    let changed = !input.anchors.bits_eq(&pin);
+    input.anchors = pin;
+    model.invalidate_frame(child, changed);
     Ok(())
 }

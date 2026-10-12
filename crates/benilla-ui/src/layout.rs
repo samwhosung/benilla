@@ -919,17 +919,6 @@ impl LayoutSolver {
         self.live.push(h);
     }
 
-    /// [`set_frame`](Self::set_frame) with `anchor` as the only anchor: a ScrollFrame child's.
-    pub fn set_frame_anchored(&mut self, h: Handle, src: &LayoutInput, anchor: Anchor) {
-        self.ensure(h);
-        self.touch(h);
-        let dst = &mut self.input[h as usize];
-        dst.anchors = Anchors::from([anchor]);
-        Self::copy_fields(dst, src);
-        self.is_frame[h as usize] = true;
-        self.live.push(h);
-    }
-
     /// The state node `h` was in when this resolve began, its rect while its valid bit is set,
     /// and whether it was invalidated since (`0x7680e0`: its own write, a cleared valid bit).
     ///
@@ -1767,45 +1756,5 @@ mod tests {
             bits(a_first)
         );
         assert!(s.unresolvable().is_empty());
-    }
-
-    /// The override keeps the size and scale but replaces the anchors, and the reused input slot
-    /// must not leak the last round's.
-    #[test]
-    fn set_frame_anchored_replaces_only_the_anchors() {
-        const A: Handle = 1;
-        let mut s = LayoutSolver::new();
-        let input = LayoutInput::sized(
-            vec![
-                Anchor::new(Point::TopLeft, SCREEN, Point::TopLeft, 0.0, 0.0),
-                Anchor::new(Point::BottomRight, SCREEN, Point::BottomRight, 0.0, 0.0),
-            ],
-            100.0,
-            40.0,
-        );
-
-        // Plain: both anchors pin all four edges, so the size is ignored.
-        s.begin();
-        s.set_external(SCREEN, screen_rect());
-        s.set_frame(A, &input);
-        s.solve();
-        assert_eq!(
-            bits(s.rect(A).expect("resolved")),
-            bits(Rect::new(0.0, 0.0, 600.0, 800.0))
-        );
-
-        // Overridden: one TOPLEFT pin at (10, -5), so the 100x40 size decides the other edges.
-        s.begin();
-        s.set_external(SCREEN, screen_rect());
-        s.set_frame_anchored(
-            A,
-            &input,
-            Anchor::new(Point::TopLeft, SCREEN, Point::TopLeft, 10.0, -5.0),
-        );
-        s.solve();
-        assert_eq!(
-            bits(s.rect(A).expect("resolved")),
-            bits(Rect::new(555.0, 10.0, 595.0, 110.0))
-        );
     }
 }

@@ -86,7 +86,7 @@ const POINTS: [&str; 9] = [
 
 /// The Lua state the steps act on: `N` every node in creation order, `F` the frames, `R` the
 /// regions, `B` the buttons, `S` the ScrollFrames, `owned[child]` the ScrollFrame that holds it.
-/// `deps[o][point]` mirrors each anchor's target and `held[c]` each scroll override, so `target`
+/// `deps[o][point]` mirrors each anchor's target and `held[c]` each scroll claim, so `target`
 /// picks any node, older or newer, whose rect does not already read `o`'s: the graph stays acyclic.
 const SETUP: &str = r#"
     N, F, R, B, S, at, owned, deps, held, pieced = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
@@ -270,6 +270,7 @@ fn step(rng: &mut Rng) -> Write {
                              local old = sf:GetScrollChild()
                              if old then owned[old] = nil; held[old] = nil end
                              sf:SetScrollChild(c); owned[c] = sf; held[c] = sf
+                             deps[c] = {{ TOPLEFT = sf }}
                              break
                          end
                      end
@@ -398,10 +399,10 @@ fn random_structural_writes_resolve_as_a_scratch_solve_would() {
     }
 }
 
-/// A frame two ScrollFrames claim takes the derivation, whose override the cached graph cannot
-/// name; the result still equals a scratch solve, and a lone claim stays incremental.
+/// A frame two ScrollFrames claim holds the last one's re-anchor (`0x787100`), one real point,
+/// through the cached graph: no derivation.
 #[test]
-fn a_child_two_scrollframes_claim_falls_back_to_the_derivation() {
+fn a_child_two_scrollframes_claim_holds_the_last_re_anchor() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
     s.run(
@@ -420,14 +421,13 @@ fn a_child_two_scrollframes_claim_falls_back_to_the_derivation() {
     s.run("a:SetScrollChild(c); a:SetVerticalScroll(5)")
         .expect("one claim");
     resolve_matches_scratch(&mut s, "one claim");
-    assert_eq!(s.layout_derivations(), derived, "one claim is named");
     s.run("b:SetScrollChild(c)").expect("two claims");
     resolve_matches_scratch(&mut s, "two claims");
-    assert_eq!(
-        s.layout_derivations(),
-        derived + 1,
-        "two claims give up for the derivation"
-    );
+    assert_eq!(s.layout_derivations(), derived, "every claim is named");
+    assert!(s
+        .eval::<bool>("local p, r = c:GetPoint(1); return c:GetNumPoints() == 1 and r == b")
+        .unwrap());
+    assert_eq!(s.eval::<f64>("return c:GetLeft()").unwrap(), 200.0);
 }
 
 /// A frame whose id is minted after a region on it joined the graph (the engine builds some
