@@ -1259,3 +1259,85 @@ fn the_stock_afk_and_dnd_commands_reach_the_wire() {
         "a real ChatTypeInfo key that is nonetheless not sendable stays None"
     );
 }
+
+/// A session's dock on the whole shipped UI: the login's events, the Combat Log selected and
+/// deselected, and the dock moved by the bars `UIParent_ManageFramePositions` places, with
+/// `FCF_OnUpdate` running every frame. The docked tabs sit on one row on ChatFrame1's background
+/// throughout. The hidden Combat Log's layout waits while it is hidden, and the dock's own reads
+/// (`MouseIsOver`'s getters in `FCF_OnUpdate`) resolve it each frame (`0x7a1980`), so its tab
+/// follows the dock.
+#[test]
+fn the_docked_tabs_follow_the_dock_through_a_session() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(768.0 * 16.0 / 9.0, 768.0);
+    s.set_texture_size_probe(Box::new(|_| Some((32, 32))));
+    s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
+    let failures = super::load_default_ui(&s);
+    assert!(failures.is_empty(), "{failures:?}");
+    super::lifecycle::finish_ui_load_with(&mut s, |_| {}, super::fire_chat_login);
+    s.fire_world_enter();
+    let frames = |s: &mut UiScript, n: usize| {
+        for _ in 0..n {
+            s.tick(0.016);
+            s.resolve();
+        }
+    };
+    let check = |s: &mut UiScript, step: &str| {
+        // Hover the dock, so the tabs show (`FCF_OnUpdate`).
+        let (x, y): (f32, f32) = s
+            .eval(
+                "return (ChatFrame1:GetLeft() + ChatFrame1:GetRight()) / 2, \
+                 (ChatFrame1:GetBottom() + ChatFrame1:GetTop()) / 2",
+            )
+            .unwrap();
+        s.mouse_move(x, y);
+        frames(s, 45);
+        let row: f32 = s.eval("return ChatFrame1Background:GetTop()").unwrap();
+        let quads = s.extract();
+        for tab in ["ChatFrame1Tab", "ChatFrame2Tab"] {
+            let q = quads
+                .iter()
+                .find(|q| {
+                    matches!(q.content, QuadContent::Frame)
+                        && s.target_owner_name(q.target).as_deref() == Some(tab)
+                })
+                .unwrap_or_else(|| panic!("{step}: {tab} draws"));
+            let bottom = q.rect.expect("a placed tab").bottom;
+            assert!(
+                (bottom - row).abs() < 0.01,
+                "{step}: {tab} sits at {bottom}, the dock's row is {row}"
+            );
+        }
+    };
+    let click = |s: &mut UiScript, tab: &str| {
+        s.run(&format!(
+            "this = {tab} FCF_Tab_OnClick('LeftButton') this = nil"
+        ))
+        .unwrap();
+        frames(s, 5);
+    };
+    frames(&mut s, 30);
+    check(&mut s, "login");
+    click(&mut s, "ChatFrame2Tab");
+    check(&mut s, "Combat Log selected");
+    click(&mut s, "ChatFrame1Tab");
+    check(&mut s, "General selected");
+    s.run("SHOW_MULTI_ACTIONBAR_1 = 1 MultiActionBar_Update() UIParent_ManageFramePositions()")
+        .unwrap();
+    frames(&mut s, 5);
+    check(&mut s, "bottom-left bar");
+    s.run("PetActionBarFrame:Show() UIParent_ManageFramePositions()")
+        .unwrap();
+    frames(&mut s, 5);
+    check(&mut s, "pet bar");
+    click(&mut s, "ChatFrame2Tab");
+    check(&mut s, "Combat Log selected over the pet bar");
+    s.run("PetActionBarFrame:Hide() UIParent_ManageFramePositions()")
+        .unwrap();
+    frames(&mut s, 5);
+    check(&mut s, "pet bar gone");
+    click(&mut s, "ChatFrame1Tab");
+    check(&mut s, "General selected again");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
