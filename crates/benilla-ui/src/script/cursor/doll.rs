@@ -199,7 +199,24 @@ fn use_cleared(model: &mut Model, id: u32) {
         let locked = model
             .inv_slot("player", id as usize)
             .is_some_and(|s| super::item_locked(model, s.guid));
-        if !locked {
+        // Then the dispatcher's requirement and control gates (`0x5d8e0e`, `0x5d8eaa`), which an
+        // empty slot never reaches.
+        let refusal = model
+            .inv_slot("player", id as usize)
+            // A container returns ahead of both gates (`0x5d8d26`).
+            .filter(|s| s.item_id != 0 && s.contents_count.is_none())
+            .and_then(|s| {
+                crate::script::use_gates::item_use_refusal(
+                    model,
+                    s.use_fork,
+                    s.item_id,
+                    s.use_spell,
+                    s.link.is_some(),
+                )
+            });
+        if let Some(key) = refusal.filter(|_| !locked) {
+            model.ui_errors.push(key);
+        } else if !locked {
             model
                 .script_calls
                 .push(crate::script::ScriptCall::UseInventoryItem(id));
@@ -326,6 +343,8 @@ mod tests {
             duration_ms: None,
             already_bound: false,
             bonding: 0,
+            use_spell: 0,
+            use_fork: Default::default(),
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -346,6 +365,8 @@ mod tests {
             duration_ms: None,
             already_bound: false,
             bonding: 0,
+            use_spell: 0,
+            use_fork: Default::default(),
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -366,6 +387,8 @@ mod tests {
             duration_ms: None,
             already_bound: false,
             bonding: 0,
+            use_spell: 0,
+            use_fork: Default::default(),
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -396,6 +419,7 @@ mod tests {
                 petition: None,
                 already_bound: false,
                 bonding: 0,
+                use_spell: 0,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,
@@ -551,6 +575,8 @@ mod tests {
             duration_ms: None,
             already_bound: false,
             bonding: 0,
+            use_spell: 0,
+            use_fork: Default::default(),
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -593,6 +619,7 @@ mod tests {
                 petition: None,
                 already_bound: false,
                 bonding: 0,
+                use_spell: 0,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,
@@ -1069,5 +1096,69 @@ mod tests {
         }));
         assert!(auto_equip_cursor_item(&mut s.model_mut()));
         assert_eq!(s.take_container_autoequips(), vec![(EQUIPMENT_BAG, 64)]);
+    }
+
+    /// `UseInventoryItem` reaches the dispatcher too (`0x4c7af0`), so a worn trinket meets its
+    /// requirement and control gates (`0x5d8e0e`, `0x5d8eaa`); a bypass spell passes the latter.
+    #[test]
+    fn a_worn_item_use_meets_the_dispatchers_gates() {
+        let mut s = UiScript::new().unwrap();
+        let mut doll: crate::script::InventorySlots = Default::default();
+        doll[13] = Some(InvSlotView {
+            item_id: 871,
+            guid: 0x31,
+            link: Some("|Hitem:871:0:0:0|h[Trinket]|h".into()),
+            use_spell: 7744,
+            ..Default::default()
+        });
+        s.set_inventory_slots(doll);
+        s.set_player_control(false);
+        s.run("UseInventoryItem(13)").unwrap();
+        assert_eq!(s.take_ui_errors(), vec!["ERR_CLIENT_LOCKED_OUT"]);
+        assert!(s.take_script_calls().is_empty());
+
+        s.set_control_bypass([7744].into());
+        s.run("UseInventoryItem(13)").unwrap();
+        assert!(s.take_ui_errors().is_empty());
+        assert_eq!(s.take_script_calls().len(), 1);
+
+        s.set_control_bypass(Default::default());
+        s.set_player_control(true);
+        s.set_player_req_state(crate::script::PlayerReqState {
+            level: 10,
+            class_id: 1,
+            race_id: 1,
+            ..Default::default()
+        });
+        s.set_item_template(
+            871,
+            crate::script::ItemTemplateView {
+                required_level: 60,
+                allowable_class: -1,
+                allowable_race: -1,
+                ..Default::default()
+            },
+        );
+        s.run("UseInventoryItem(13)").unwrap();
+        assert_eq!(s.take_ui_errors(), vec!["ERR_CANT_USE_ITEM"]);
+        assert!(s.take_script_calls().is_empty());
+    }
+
+    /// `CGItem::Use` returns silently for a container (`0x5d8d26`), ahead of both gates.
+    #[test]
+    fn a_worn_container_meets_no_gate() {
+        let mut s = UiScript::new().unwrap();
+        let mut doll: crate::script::InventorySlots = Default::default();
+        doll[13] = Some(InvSlotView {
+            item_id: 4500,
+            guid: 0x31,
+            link: Some("|Hitem:4500:0:0:0|h[Bag]|h".into()),
+            contents_count: Some(0),
+            ..Default::default()
+        });
+        s.set_inventory_slots(doll);
+        s.set_player_control(false);
+        s.run("UseInventoryItem(13)").unwrap();
+        assert!(s.take_ui_errors().is_empty());
     }
 }

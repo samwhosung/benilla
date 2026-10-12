@@ -24,7 +24,7 @@ pub(crate) mod feed;
 pub(crate) mod locks;
 mod net;
 
-pub(crate) use drain::send_auto_equip;
+pub(crate) use drain::{dispatch_fork, send_auto_equip};
 use drain::{
     drain_bag_autostores, drain_container_autoequips, drain_container_destroys,
     drain_container_moves, drain_container_repairs,

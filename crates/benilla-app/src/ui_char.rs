@@ -568,6 +568,10 @@ fn slot_view(
         .and_then(|d| d.icon.clone());
     Some(InvSlotView {
         bonding: t.map_or(0, |t| t.bonding),
+        use_spell: t.and_then(|t| t.use_spell).map_or(0, |u| u.spell_id),
+        use_fork: t.map_or(Default::default(), |t| {
+            crate::ui_items::dispatch_fork(t, flags, obj.item_text_id().unwrap_or(0))
+        }),
         item_id: entry,
         icon,
         count,
@@ -656,6 +660,8 @@ fn inventory_slots(
             // Ammo has no item object, only its template, so there is no bind to read.
             already_bound: false,
             bonding: 0,
+            use_spell: 0,
+            use_fork: Default::default(),
             item_id: ammo_id,
             icon,
             count: ammo_count(store, objects, ammo_id),

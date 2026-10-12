@@ -553,7 +553,19 @@ pub(crate) fn use_fork(
 ) -> UseFork {
     if t.inventory_type != 0 && t.start_quest == 0 {
         UseFork::Equip
-    } else if t.unwraps_gift(inst_flags) {
+    } else {
+        dispatch_fork(t, inst_flags, item_text_id)
+    }
+}
+
+/// [`use_fork`] past the equip fork: the dispatcher's own arms, which `UseInventoryItem` reaches
+/// directly (`0x4c7af0`).
+pub(crate) fn dispatch_fork(
+    t: &benilla_protocol::ItemInfo,
+    inst_flags: u32,
+    item_text_id: u32,
+) -> UseFork {
+    if t.unwraps_gift(inst_flags) {
         UseFork::Unwrap
     } else if t.begins_gift_wrap(inst_flags) {
         UseFork::WrapPaper
@@ -1749,6 +1761,7 @@ mod bind_confirm_tests {
                 petition: None,
                 already_bound: false,
                 bonding: 2,
+                use_spell: 0,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,
