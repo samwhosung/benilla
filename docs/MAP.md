@@ -51,6 +51,7 @@
 - ProbeFocusPlugin
 - ProbeChatPlugin
 - ProbeLuaPlugin
+- ProbeGlueLuaPlugin
 - ProbeDragPlugin
 - ProbeHoverPlugin
 - ProbeKeyPlugin
@@ -413,6 +414,10 @@
 - `WOW_PROBE_DRAG_LUA` — benilla-app/src/capture/probes/act.rs
 - `WOW_PROBE_DRAG_STEP` — benilla-app/src/capture/probes/act.rs
 - `WOW_PROBE_EXIT_AT` — benilla-app/src/capture/probes/run.rs, benilla-app/src/dev.rs
+- `WOW_PROBE_GLUE_LUA` — benilla-app/src/capture/probes/act.rs, benilla-app/src/dev.rs
+- `WOW_PROBE_GLUE_LUA_AT` — benilla-app/src/capture/probes/act.rs
+- `WOW_PROBE_GLUE_SHOT` — benilla-app/src/capture/probes/act.rs
+- `WOW_PROBE_GLUE_SHOT_AFTER` — benilla-app/src/capture/probes/act.rs
 - `WOW_PROBE_GMTICKET` — benilla-app/src/dev.rs
 - `WOW_PROBE_GOQUEST` — benilla-app/src/capture/probe_goquest.rs, benilla-app/src/dev.rs
 - `WOW_PROBE_HOVER` — benilla-app/src/capture/probes/act.rs, benilla-app/src/dev.rs
