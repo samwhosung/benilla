@@ -60,11 +60,35 @@ fn an_indexed_getter_with_no_row_pushes_the_references_full_tuple() {
         })
         .collect();
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
-    // Zero raises where the reference does.
-    assert!(s
-        .eval::<bool>(
-            "local ok, err = pcall(GetShapeshiftFormInfo, 0) \
-             return not ok and string.find(tostring(err), 'Usage: GetShapeshiftFormInfo', 1, true) ~= nil"
-        )
-        .unwrap());
+    // Zero, an absent index and a non-number raise the usage error where the reference does
+    // (`0x4b45d8`, `0x4b49b4`); a negative or a fractional one falls out of range quietly.
+    for name in ["GetShapeshiftFormInfo", "GetShapeshiftFormCooldown"] {
+        for arg in ["0", "", "nil", "'x'"] {
+            assert!(
+                s.eval::<bool>(&format!(
+                    "local ok, err = pcall({name}{}{arg}) \
+                     return not ok and string.find(tostring(err), 'Usage: {name}(index)', 1, true) ~= nil",
+                    if arg.is_empty() { "" } else { ", " }
+                ))
+                .unwrap(),
+                "{name}({arg}) raises its usage"
+            );
+        }
+        assert_eq!(
+            s.eval::<i64>(&format!(
+                "return (function(...) return arg.n end)({name}(-3))"
+            ))
+            .unwrap(),
+            if name.ends_with("Info") { 4 } else { 3 },
+            "{name}(-3) is a miss"
+        );
+        // 0.5 is not zero (`fcomp` against 0.0), so it reaches the table and truncates to a miss.
+        assert_eq!(
+            s.eval::<i64>(&format!(
+                "return (function(...) return arg.n end)({name}(0.5))"
+            ))
+            .unwrap(),
+            if name.ends_with("Info") { 4 } else { 3 },
+        );
+    }
 }

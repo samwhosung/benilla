@@ -5,7 +5,6 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
-use crate::script::binding_abi::Idx32;
 
 /// One stance-bar button, resolved by the app.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -68,6 +67,17 @@ fn form_at(model: &Model, i: u32) -> Option<&StoredShapeshiftForm> {
         .and_then(|n| model.shapeshift_forms.get(n))
 }
 
+/// The index of the two form getters: `lua_tonumber` (`0x6f3620`) compared with 0.0 (`0x4b45d8`,
+/// `0x4b49b4`), so a zero, an absent or a non-number raises the binding's usage error (`0x846a6c`,
+/// `0x846ab4`) before the table is read; the truncated value is then compared unsigned.
+fn form_index(lua: &Lua, index: Option<Value>, usage: &'static str) -> mlua::Result<u32> {
+    let n = crate::script::binding_abi::coerced_number(lua, index);
+    if n == 0.0 {
+        return Err(mlua::Error::RuntimeError(usage.into()));
+    }
+    Ok(crate::script::binding_abi::ftol(n) as u32)
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -82,15 +92,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GetShapeshiftFormInfo",
         lua.create_function(|lua, index: Option<Value>| {
-            // `lua_tonumber` (`0x6f3620`) compared with 0.0 (`0x4b45d8`): a zero, an absent or
-            // a non-number index raises the usage error (`0x846a6c`) before the table is read.
-            let n = crate::script::binding_abi::coerced_number(lua, index);
-            if n == 0.0 {
-                return Err(mlua::Error::RuntimeError(
-                    "Usage: GetShapeshiftFormInfo(index)".into(),
-                ));
-            }
-            let i = crate::script::binding_abi::ftol(n) as u32;
+            let i = form_index(lua, index, "Usage: GetShapeshiftFormInfo(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(form) = form_at(&model, i) else {
                 // `0x4b47d9`: four nils.
@@ -114,7 +116,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // replays the sweep.
     g.set(
         "GetShapeshiftFormCooldown",
-        lua.create_function(|lua, Idx32(i): Idx32| {
+        lua.create_function(|lua, index: Option<Value>| {
+            let i = form_index(lua, index, "Usage: GetShapeshiftFormCooldown(index)")?;
             let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(match form_at(&model, i).and_then(|f| f.cooldown) {
