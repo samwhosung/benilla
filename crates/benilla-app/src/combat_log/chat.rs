@@ -1139,8 +1139,11 @@ pub(super) fn environmental_damage_log(
 
 /// `SMSG_SET_FACTION_STANDING`: "Your %s reputation has increased by %d.". The wire carries the
 /// new total and the sentence the delta, so this runs before the store is overwritten, and an
-/// unchanged value prints nothing (`0x62c5f0`). No range gate or classifier: the chat type is the
-/// literal `0x55` `COMBAT_FACTION_CHANGE`. The wire's list id is `Faction.dbc`'s `rep_index`.
+/// unchanged value prints nothing (`0x4d6344`). Only the packet's first entry prints, and only if
+/// its faction is not `HIDDEN`: the handler passes `0x4d6330` its print argument as
+/// `index == 0 && !(flags & 4)` (`0x4d57dd`-`0x4d57ea`), so the spill-over entries of one kill
+/// update silently. No range gate or classifier: the chat type is the literal `0x55`
+/// `COMBAT_FACTION_CHANGE`. The wire's list id is `Faction.dbc`'s `rep_index`.
 pub(crate) fn faction_standing(
     deltas: &[(u32, i32)],
     reputations: &Reputations,
@@ -1150,11 +1153,15 @@ pub(crate) fn faction_standing(
     let Some(catalog) = factions.map(|f| f.catalog()) else {
         return;
     };
-    for &(list_id, standing) in deltas {
-        let old = reputations
+    for &(list_id, standing) in deltas.iter().take(1) {
+        let (flags, old) = reputations
             .0
             .get(list_id as usize)
-            .map_or(0, |(_, standing)| *standing);
+            .copied()
+            .unwrap_or((0, 0));
+        if flags & benilla_formats::faction_flags::HIDDEN != 0 {
+            continue;
+        }
         let delta = standing - old;
         if delta == 0 {
             continue;
@@ -1391,5 +1398,50 @@ mod tests {
         );
         // The direct packet takes the same wire number through one divide only.
         assert_eq!(leech_figures(1, 100, 1.0), Some((10, 10)));
+    }
+
+    /// A standing packet prints the "increased by" line for its first entry alone (`0x4d57dd`), and
+    /// not at all when that faction is `HIDDEN`; the factions a kill spills over to update
+    /// silently. On the real DBC, Booty Bay moving with Gadgetzan and Ratchet.
+    #[test]
+    fn a_standing_packet_prints_its_first_entry_only_and_never_a_hidden_one() {
+        use crate::net::Reputations;
+        use crate::target::ring::Factions;
+        use crate::ui_chat::ChatLog;
+        use benilla_formats::faction_flags::HIDDEN;
+
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let catalog = benilla_formats::load_faction_catalog(&mut chain).expect("factions");
+        let slot =
+            |id: u32| u32::try_from(catalog.reputation_faction(id).unwrap().rep_index).unwrap();
+        let (booty, gadget, ratchet) = (slot(21), slot(369), slot(470));
+        let factions = Factions::from_catalog(catalog);
+        let packet = [(booty, 100), (gadget, 50), (ratchet, 50)];
+        let kinds = |reps: &Reputations, deltas: &[(u32, i32)]| {
+            let mut log = ChatLog::default();
+            super::faction_standing(deltas, reps, Some(&factions), &mut log);
+            log.pending_kinds()
+        };
+
+        let quiet = Reputations::default();
+        assert_eq!(
+            kinds(&quiet, &packet),
+            ["combat"],
+            "one line for the packet"
+        );
+
+        // Flag 4 on the first entry's slot silences the packet; on a later entry it changes nothing.
+        let mut v = vec![(0u8, 0i32); 64];
+        v[booty as usize].0 = HIDDEN;
+        assert!(kinds(&Reputations(v), &packet).is_empty());
+        let mut v = vec![(0u8, 0i32); 64];
+        v[gadget as usize].0 = HIDDEN;
+        assert_eq!(kinds(&Reputations(v), &packet), ["combat"]);
+
+        // An unchanged first entry prints nothing, and the entries behind it still stay silent.
+        let mut v = vec![(0u8, 0i32); 64];
+        v[booty as usize].1 = 100;
+        assert!(kinds(&Reputations(v), &packet).is_empty());
     }
 }
