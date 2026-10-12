@@ -650,8 +650,13 @@ use crate::net::io::fake::{self, FakeRealm};
 #[derive(Resource)]
 struct IoEvents(crossbeam_channel::Receiver<benilla_protocol::SessionEvent>);
 
+/// World dials the IO thread began (`LoginStage::Handshaking`).
+#[derive(Resource, Default)]
+struct WorldDials(usize);
+
 fn pump(
     events: Res<IoEvents>,
+    mut dials: ResMut<WorldDials>,
     mut stages: MessageWriter<LoginStageMessage>,
     mut lists: MessageWriter<RealmListMessage>,
     mut failures: MessageWriter<LoginFailedMessage>,
@@ -662,6 +667,9 @@ fn pump(
     for ev in events.0.try_iter() {
         match ev {
             E::LoginStage { stage } => {
+                if stage == LoginStage::Handshaking {
+                    dials.0 += 1;
+                }
                 stages.write(LoginStageMessage { stage });
             }
             E::RealmList { realms, failed } => {
@@ -707,6 +715,7 @@ fn live_app(realms: impl FnOnce(&str) -> Vec<FakeRealm>, realm_name: &str) -> (A
         .insert_resource(crate::net::CharPick(cycles.pick.clone()))
         .insert_resource(crate::realm_select::Realms::us_client())
         .insert_resource(IoEvents(cycles.events.clone()))
+        .init_resource::<WorldDials>()
         .insert_resource(State::new(ClientState::Login))
         .init_resource::<NextState<ClientState>>()
         .add_message::<LoginStageMessage>()
@@ -931,5 +940,9 @@ fn an_empty_realm_list_asks_again_and_shows_it() {
         shown(app, "RealmWizard")
     });
     assert_eq!(realmd.lists(), 2, "the logon's list and the arm's query");
-    assert!(!app.world().resource::<GlueMgr>().connected);
+    assert_eq!(
+        app.world().resource::<WorldDials>().0,
+        0,
+        "no fallback dial"
+    );
 }
