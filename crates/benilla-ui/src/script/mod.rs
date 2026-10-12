@@ -209,7 +209,7 @@ pub use container::{
     PendingWrap, PetitionSlotView, RandomPropertyView, UiCursorMode, UseArm, UseFork,
 };
 pub use craft::{CraftReagent, CraftRecipe, CraftState, CraftTooltip};
-pub use cursor::equip::AutoEquip;
+pub use cursor::equip::{AutoEquip, BIND_WHEN_EQUIPPED};
 pub use cursor::money::coin_icon;
 pub use cursor::{
     CursorAction, CursorItem, CursorMacro, CursorMerchantItem, CursorMoney, CursorPayload,

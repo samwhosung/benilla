@@ -1016,79 +1016,86 @@ mod tests {
         run(&mut f, "UseAction(1)");
         assert!(f.rx.try_iter().count() > 0, "unlocked, the use goes out");
     }
+    const HELD: u64 = 0x4000_0000_0000_0001;
+    const HELD_ENTRY: u32 = 7001;
+    const HELM: u64 = 0x4000_0000_0000_0002;
+    const HELM_ENTRY: u32 = 7002;
+
+    /// Backpack slot 1 holds an ordinary item, slot 2 a helm of `bonding`, and bar slot 1 names
+    /// the helm's entry; the VM's backpack shows both as the container feed pushes them.
+    fn with_bar_helm(f: &mut Frame, bonding: u32) {
+        let world = f.app.world_mut();
+        let me = world.resource::<GuidIndex>().0[&ME];
+        // Backpack slots 1 and 2 are the fields at 532 and 534.
+        world
+            .entity_mut(me)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (2, 0x19),
+                (22, 100),
+                (28, 100),
+                (46, 0x8),
+                (532, HELD as u32),
+                (533, (HELD >> 32) as u32),
+                (534, HELM as u32),
+                (535, (HELM >> 32) as u32),
+            ])));
+        for (guid, entry) in [(HELD, HELD_ENTRY), (HELM, HELM_ENTRY)] {
+            crate::items::test_spawn_item(
+                world,
+                guid,
+                benilla_protocol::ObjectFields::from_pairs(&[(3, entry)]),
+                false,
+            );
+        }
+        let mut items = world.resource_mut::<crate::items::Items>();
+        items.insert_template(HELD_ENTRY, Some(crate::items::test_template("Held Thing")));
+        items.insert_template(
+            HELM_ENTRY,
+            Some(benilla_protocol::messages::ItemInfo {
+                inventory_type: 1,
+                bonding,
+                ..crate::items::test_template("A Helm")
+            }),
+        );
+        world
+            .resource_mut::<crate::ui_action::PlayerActions>()
+            .buttons
+            .insert(
+                0,
+                ActionButton {
+                    slot: 0,
+                    action: HELM_ENTRY,
+                    kind: benilla_protocol::messages::ACTION_KIND_ITEM,
+                },
+            );
+        let slot = |guid, entry, equip: Vec<u8>, bonding| benilla_ui::script::ContainerSlot {
+            guid,
+            item_id: entry,
+            count: 1,
+            bonding,
+            equip_slots: equip,
+            ..Default::default()
+        };
+        let mut slots = std::collections::HashMap::new();
+        slots.insert(1, slot(HELD, HELD_ENTRY, vec![], 0));
+        slots.insert(2, slot(HELM, HELM_ENTRY, vec![1], bonding));
+        world.non_send_resource_mut::<UiScript>().set_container(
+            0,
+            Some(benilla_ui::script::ContainerState {
+                name: Some("Backpack".into()),
+                num_slots: 16,
+                slots,
+            }),
+        );
+    }
+
     /// The bar's equip runs `0x5e1840` (`0x4e602a`): `SetCursorItem`'s inner clear drops and
     /// unlocks a held item (`0x494bb6`), the bar's item takes the cursor and `AutoEquipCursorItem`
     /// sends it, so a key press leaves the cursor empty and the held item free.
     #[test]
     fn a_bar_equip_drops_the_held_item_and_unlocks_it() {
-        const HELD: u64 = 0x4000_0000_0000_0001;
-        const HELD_ENTRY: u32 = 7001;
-        const HELM: u64 = 0x4000_0000_0000_0002;
-        const HELM_ENTRY: u32 = 7002;
         let mut f = frame(false);
-        {
-            let world = f.app.world_mut();
-            let me = world.resource::<GuidIndex>().0[&ME];
-            // Backpack slots 1 and 2 are the fields at 532 and 534.
-            world
-                .entity_mut(me)
-                .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                    (2, 0x19),
-                    (22, 100),
-                    (28, 100),
-                    (46, 0x8),
-                    (532, HELD as u32),
-                    (533, (HELD >> 32) as u32),
-                    (534, HELM as u32),
-                    (535, (HELM >> 32) as u32),
-                ])));
-            for (guid, entry) in [(HELD, HELD_ENTRY), (HELM, HELM_ENTRY)] {
-                crate::items::test_spawn_item(
-                    world,
-                    guid,
-                    benilla_protocol::ObjectFields::from_pairs(&[(3, entry)]),
-                    false,
-                );
-            }
-            let mut items = world.resource_mut::<crate::items::Items>();
-            items.insert_template(HELD_ENTRY, Some(crate::items::test_template("Held Thing")));
-            items.insert_template(
-                HELM_ENTRY,
-                Some(benilla_protocol::messages::ItemInfo {
-                    inventory_type: 1,
-                    ..crate::items::test_template("A Helm")
-                }),
-            );
-            world
-                .resource_mut::<crate::ui_action::PlayerActions>()
-                .buttons
-                .insert(
-                    0,
-                    ActionButton {
-                        slot: 0,
-                        action: HELM_ENTRY,
-                        kind: benilla_protocol::messages::ACTION_KIND_ITEM,
-                    },
-                );
-            let slot = |guid, entry, equip: Vec<u8>| benilla_ui::script::ContainerSlot {
-                guid,
-                item_id: entry,
-                count: 1,
-                equip_slots: equip,
-                ..Default::default()
-            };
-            let mut slots = std::collections::HashMap::new();
-            slots.insert(1, slot(HELD, HELD_ENTRY, vec![]));
-            slots.insert(2, slot(HELM, HELM_ENTRY, vec![1]));
-            world.non_send_resource_mut::<UiScript>().set_container(
-                0,
-                Some(benilla_ui::script::ContainerState {
-                    name: Some("Backpack".into()),
-                    num_slots: 16,
-                    slots,
-                }),
-            );
-        }
+        with_bar_helm(&mut f, 0);
         // Hold the first item, then press the bar key (`checkCursor` 0).
         run(&mut f, "PickupContainerItem(0, 1) UseAction(1, 0)");
 
@@ -1109,6 +1116,48 @@ mod tests {
                 }
             )),
             "and the helm is equipped from backpack slot 2: {sent:?}"
+        );
+        // The set's pickup and the send's put-down both landed inside the call, so the pair is
+        // played here, the held item's own put-down being the cursor diff's.
+        let sounds: Vec<_> = f
+            .app
+            .world_mut()
+            .resource_mut::<Messages<crate::sound::AutoEquipSound>>()
+            .drain()
+            .collect();
+        assert_eq!(sounds.len(), 1, "one pair, for the helm");
+    }
+
+    /// A bind-on-equip helm from the bar asks first (`0x5e16c6`) and stays on the cursor
+    /// (`0x5e16ce`), not locked, since `SetCursorItem` takes no lock; the held item went back.
+    #[test]
+    fn a_bar_equip_of_a_bind_on_equip_item_holds_it_under_the_question() {
+        let mut f = frame(false);
+        with_bar_helm(&mut f, 2);
+        run(&mut f, "PickupContainerItem(0, 1) UseAction(1, 0)");
+
+        let script = f.app.world().non_send_resource::<UiScript>();
+        assert_eq!(script.cursor_item().map(|i| i.guid), Some(HELM));
+        assert!(!script.item_locked(HELM));
+        assert!(!script.item_locked(HELD), "the held item went back");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        assert!(sent.is_empty(), "the question sends nothing: {sent:?}");
+        assert_eq!(
+            f.app
+                .world()
+                .resource::<crate::ui_bind_confirm::PendingEquips>()
+                .live(),
+            1,
+            "and files its record"
+        );
+        assert!(
+            f.app
+                .world_mut()
+                .resource_mut::<Messages<crate::sound::AutoEquipSound>>()
+                .drain()
+                .next()
+                .is_none(),
+            "a held item plays no pair; the cursor diff plays its pickup"
         );
     }
 }

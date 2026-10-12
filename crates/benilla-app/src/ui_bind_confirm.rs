@@ -16,7 +16,7 @@ use crate::items::{Enchants, Items};
 use crate::net::Objects;
 
 /// The equip arms' `item_template.bonding` (vmangos `ItemPrototype.h` `ItemBondingType`).
-pub(crate) const BIND_WHEN_EQUIPPED: u32 = 2;
+pub(crate) const BIND_WHEN_EQUIPPED: u32 = benilla_ui::script::BIND_WHEN_EQUIPPED;
 /// The use arm's value (`0x5d91d6`).
 pub(crate) const BIND_WHEN_USE: u32 = 3;
 
@@ -32,9 +32,9 @@ pub(crate) enum PendingEquip {
         dst_bag: i64,
         dst_slot: u32,
     },
-    /// `AUTOEQUIP_BIND_CONFIRM`, in wire space: the action bar's sender resolves an item entry to
-    /// a position and has no Lua pair. The guid lets the re-issue re-take the ammo fork.
-    AutoEquip { bag_index: u8, slot: u8, guid: u64 },
+    /// `AUTOEQUIP_BIND_CONFIRM`, in Lua space, where the accept re-issues the pick-up and
+    /// auto-equip from the slot as it stands (`0x5e1c23`). The guid is the item the cancel unlocks.
+    AutoEquip { bag: i64, slot: u32, guid: u64 },
 }
 
 /// The client's pending-equip array (`0xc4c290`-`0xc4c29c`, stride `0x20`), allocated by
@@ -95,10 +95,11 @@ pub(crate) struct BindGate<'w> {
 }
 
 impl BindGate<'_> {
-    /// Whether this equip must ask first: not already bound (`0x5da2c0`), `bonding == 2` and
-    /// equippable (`0x5ea930`). `item_guid` is the item that would bind (a swap's non-equip side,
-    /// an auto-equip's clicked slot); an unknown item or uncached template fails open, as the
-    /// reference's cache-hit conjunct does.
+    /// Whether this swap must ask first: not already bound (`0x5da2c0`), `bonding == 2` and
+    /// equippable (`0x5ea930`). `item_guid` is the item that would bind (the swap's non-equip
+    /// side); an unknown item or uncached template fails open, as the reference's cache-hit
+    /// conjunct does. The auto-equip arm asks in the VM, where the item is held
+    /// ([`benilla_ui::script::AutoEquip::Asked`]).
     pub(crate) fn equip_binds(
         &self,
         script: &UiScript,

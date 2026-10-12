@@ -11,56 +11,21 @@ use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
 
 use super::{slot_guid, wire_pos, ITEM_CLASS_PROJECTILE};
 
-/// What [`send_auto_equip`] did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[must_use]
-pub(crate) enum AutoEquipSent {
-    /// Held for `AUTOEQUIP_BIND_CONFIRM`; nothing went out.
-    Deferred,
-    /// `CMSG_AUTOEQUIP_ITEM`.
-    Equip,
-    /// `CMSG_SET_AMMO`, a projectile's arm.
-    Ammo,
-}
-
-impl AutoEquipSent {
-    pub(crate) fn sent(self) -> bool {
-        self != Self::Deferred
-    }
-}
-
-/// The one auto-equip sender, as in the reference (`AutoEquipCursorItem`, `0x5e1480`). A
+/// The one auto-equip sender (`AutoEquipCursorItem`, `0x5e1480`, past its question). A
 /// projectile, the template class `0x5d9f30` reads (`0x5e16ff`, `0x5e1704`), loads by entry with
 /// `CMSG_SET_AMMO` and stays in its bag, and the arm's `ClearCursor(1,1)` unlocks it (`0x5e1711`,
 /// `0x5e1763`): an item the call's clear left locked, picked up before its template landed, is let
-/// go here. An unbound, equippable `bonding == 2` item raises `AUTOEQUIP_BIND_CONFIRM` and sends
-/// nothing (`0x5e163b`) unless `suppress`, the reference's flag, which the accept's re-issue sets.
+/// go here. Anything else is `CMSG_AUTOEQUIP_ITEM`. The bind-on-equip question is the call's, not
+/// the sender's: the VM decided before this ran ([`benilla_ui::script::AutoEquip`]).
 pub(crate) fn send_auto_equip(
     script: &mut UiScript,
-    gate: &mut crate::ui_bind_confirm::BindGate,
     objects: &Objects,
     items: &Items,
     commands: &NetCommands,
     bag_index: u8,
     slot: u8,
     guid: Option<u64>,
-    suppress: bool,
-) -> AutoEquipSent {
-    if !suppress {
-        if let Some(guid) = guid {
-            if gate.equip_binds(script, objects, items, commands, guid) {
-                gate.defer_equip(
-                    script,
-                    crate::ui_bind_confirm::PendingEquip::AutoEquip {
-                        bag_index,
-                        slot,
-                        guid,
-                    },
-                );
-                return AutoEquipSent::Deferred;
-            }
-        }
-    }
+) {
     let ammo = guid.and_then(|guid| {
         let entry = objects.object(guid)?.object_entry()?;
         let t = items.template(entry, guid, commands)?;
@@ -72,18 +37,17 @@ pub(crate) fn send_auto_equip(
         if script.item_locked(guid) {
             script.unlock_item(guid);
         }
-        AutoEquipSent::Ammo
     } else {
         debug!("ui_items: autoequip wire {bag_index}/{slot}");
         let _ = commands
             .0
             .send(ClientCommand::AutoEquipItem { bag_index, slot });
-        AutoEquipSent::Equip
     }
 }
 
-/// Sends the auto-equips `AutoEquipCursorItem` queued through [`send_auto_equip`]. The verb's
-/// clear kept the pickup's lock, an arrow's excepted (`0x5e1577`, `0x5e1711`).
+/// Sends the auto-equips `AutoEquipCursorItem` queued through [`send_auto_equip`], and files the
+/// bind-on-equip questions it raised instead: those items stay held, so nothing is sent. The
+/// verb's clear kept the pickup's lock, an arrow's excepted (`0x5e1577`, `0x5e1711`).
 pub(super) fn drain_container_autoequips(
     script: Option<NonSendMut<UiScript>>,
     items: Res<Items>,
@@ -95,6 +59,12 @@ pub(super) fn drain_container_autoequips(
     let Some(mut script) = script else {
         return;
     };
+    for (bag, slot, guid) in script.take_container_equip_asks() {
+        gate.defer_equip(
+            &mut script,
+            crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid },
+        );
+    }
     for (bag, slot) in script.take_container_autoequips() {
         let Some((bag_index, wire_slot)) = wire_pos(bag, slot) else {
             debug!("ui_items: autoequip ({bag}, {slot}) out of range — ignored");
@@ -105,16 +75,14 @@ pub(super) fn drain_container_autoequips(
             .iter()
             .next()
             .and_then(|store| slot_guid(&store.0, bag, slot0, &objects));
-        let _ = send_auto_equip(
+        send_auto_equip(
             &mut script,
-            &mut gate,
             &objects,
             &items,
             &commands,
             bag_index,
             wire_slot,
             guid,
-            false,
         );
     }
 }
@@ -261,7 +229,22 @@ impl ScriptItemUse<'_, '_> {
             slot,
             guid: item_guid,
             arm,
+            asks,
         } = call;
+        // A bind-on-equip equip the call asked about is filed whatever the slot holds now: the
+        // reference raised the question inside the call (`0x5e16c6`), the item is on the cursor,
+        // and the answer re-judges the slot (`0x5e1c23`) or only unlocks (`0x5e1c50`).
+        if asks {
+            gate.defer_equip(
+                script,
+                crate::ui_bind_confirm::PendingEquip::AutoEquip {
+                    bag,
+                    slot,
+                    guid: item_guid,
+                },
+            );
+            return;
+        }
         let slot0 = u8::try_from(slot.saturating_sub(1)).ok();
         // The slot must still hold the item the call resolved (`0x4fa1a6`). The reference sends
         // inside the call, so nothing moves between; here the frame may have applied a move since,
@@ -332,25 +315,24 @@ impl ScriptItemUse<'_, '_> {
             })
         });
         match (fork, clicked) {
-            // This path never moves the cursor, so it plays the equip sound itself; a deferred
-            // equip plays none, as the reference's sound rides the arm that sends.
+            // The call put the item on the cursor, `SetCursorItem` playing its pickup (`0x494c4a`),
+            // and ran `AutoEquipCursorItem`, whose clear plays the put-down (`0x49520a`). Both
+            // land inside the call, so the frame's cursor-sound diff sees nothing and this path
+            // plays the pair itself. A bind question leaves the item held instead, and the diff
+            // plays its pickup.
             (UseFork::Equip, Some(c)) => {
-                let sent = send_auto_equip(
+                send_auto_equip(
                     script,
-                    gate,
                     &ladder.objects,
                     &ladder.items,
                     &ladder.commands,
                     bag_index,
                     wire_slot,
                     Some(c.guid),
-                    false,
                 );
-                if sent.sent() {
-                    equip_sound.write(crate::sound::AutoEquipSound {
-                        display_id: c.display_info_id,
-                    });
-                }
+                equip_sound.write(crate::sound::AutoEquipSound {
+                    display_id: c.display_info_id,
+                });
             }
             // `CMSG_OPEN_ITEM` (emitter `0x5edd60`); vmangos swaps the entry back from
             // `character_gifts`.
@@ -1593,6 +1575,7 @@ pub(super) fn drain_bind_confirm_answers(
     items: Res<Items>,
     commands: Res<NetCommands>,
     mut gate: crate::ui_bind_confirm::BindGate,
+    mut equip_sound: MessageWriter<crate::sound::AutoEquipSound>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -1651,22 +1634,36 @@ pub(super) fn drain_bind_confirm_answers(
                     true,
                 );
             }
-            crate::ui_bind_confirm::PendingEquip::AutoEquip {
-                bag_index,
-                slot,
-                guid,
-            } => {
-                let _ = send_auto_equip(
-                    &mut script,
-                    &mut gate,
-                    &objects,
-                    &items,
-                    &commands,
-                    bag_index,
-                    slot,
-                    Some(guid),
-                    true,
-                );
+            // The accept re-issues the pick-up and auto-equip from the slot as it stands
+            // (`0x5e1c23` into `0x5e1840`, `suppress` set): `SetCursorItem`'s clear drops and
+            // unlocks the held item, then the equip goes out. A slot emptied under the dialog
+            // sends nothing (`0x5e18da`).
+            crate::ui_bind_confirm::PendingEquip::AutoEquip { bag, slot, guid } => {
+                if let benilla_ui::script::AutoEquip::Sent { .. } =
+                    script.auto_equip_slot(bag, slot, true)
+                {
+                    if let Some((bag_index, wire_slot)) = wire_pos(bag, slot) {
+                        send_auto_equip(
+                            &mut script,
+                            &objects,
+                            &items,
+                            &commands,
+                            bag_index,
+                            wire_slot,
+                            Some(guid),
+                        );
+                        // The re-issue's `SetCursorItem` and send clear play their pair inside
+                        // the answer (`0x494c4a`, `0x49520a`), after the held item's own clear.
+                        if let Some(display_id) = objects
+                            .object(guid)
+                            .and_then(|o| o.object_entry())
+                            .and_then(|entry| items.template(entry, guid, &commands))
+                            .map(|t| t.display_info_id)
+                        {
+                            equip_sound.write(crate::sound::AutoEquipSound { display_id });
+                        }
+                    }
+                }
             }
         }
     }
@@ -1751,6 +1748,7 @@ mod bind_confirm_tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                bonding: 2,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,
@@ -1795,7 +1793,8 @@ mod bind_confirm_tests {
     ) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
-        app.init_resource::<crate::ui_bind_confirm::PendingEquips>()
+        app.add_message::<crate::sound::AutoEquipSound>()
+            .init_resource::<crate::ui_bind_confirm::PendingEquips>()
             .init_resource::<crate::ui_bind_confirm::PendingBindOnUse>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
@@ -2060,7 +2059,8 @@ mod bind_confirm_tests {
         benilla_formats::wow_data_or_skip!();
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
-        app.init_resource::<crate::ui_bind_confirm::PendingEquips>()
+        app.add_message::<crate::sound::AutoEquipSound>()
+            .init_resource::<crate::ui_bind_confirm::PendingEquips>()
             .init_resource::<crate::ui_bind_confirm::PendingBindOnUse>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
@@ -2102,6 +2102,15 @@ mod bind_confirm_tests {
             rx.try_iter().next().is_none(),
             "the deferred equip sends nothing"
         );
+        {
+            let script = app.world().non_send_resource::<UiScript>();
+            assert_eq!(
+                script.cursor_item().map(|i| i.guid),
+                Some(AXE_GUID),
+                "the axe stays on the cursor under the question (`0x5e16ce`)"
+            );
+            assert!(script.item_locked(AXE_GUID), "and locked");
+        }
         app.world_mut()
             .non_send_resource_mut::<UiScript>()
             .tick(0.01);
@@ -2138,6 +2147,89 @@ mod bind_confirm_tests {
                 .live(),
             0
         );
+        let script = app.world().non_send_resource::<UiScript>();
+        assert!(
+            script.cursor_item().is_none(),
+            "the accept's pick-up and send leave the cursor empty"
+        );
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Messages<crate::sound::AutoEquipSound>>()
+                .drain()
+                .count(),
+            1,
+            "and the re-issue's pickup and put-down play"
+        );
+    }
+
+    /// The cancel only unlocks (`0x5e1c50`): the axe stays on the cursor, free, nothing is sent.
+    #[test]
+    fn cancelling_a_boe_auto_equip_leaves_the_item_held_and_unlocked() {
+        benilla_formats::wow_data_or_skip!();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.add_message::<crate::sound::AutoEquipSound>()
+            .init_resource::<crate::ui_bind_confirm::PendingEquips>()
+            .init_resource::<crate::ui_bind_confirm::PendingBindOnUse>()
+            .init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(NetCommands(tx));
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[
+                (F_PACK_SLOT_1, AXE_GUID as u32),
+                (F_PACK_SLOT_1 + 1, (AXE_GUID >> 32) as u32),
+            ])),
+        ));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            AXE_GUID,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, FLURRY_AXE)]),
+            false,
+        );
+        app.world_mut().resource_mut::<Items>().insert_template(
+            FLURRY_AXE,
+            Some(ItemInfo {
+                quality: 4,
+                bonding: 2,
+                ..crate::items::test_template("Flurry Axe")
+            }),
+        );
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        load_ui(&script);
+        script.set_container(0, Some(bag_with_the_axe(4)));
+        script.run("PickupContainerItem(0, 1)").unwrap();
+        script.run("AutoEquipCursorItem()").unwrap();
+        app.insert_non_send_resource(script);
+        app.world_mut()
+            .run_system_once(drain_container_autoequips)
+            .unwrap();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .tick(0.01);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("StaticPopup_OnClick(StaticPopup_FindVisible(\"AUTOEQUIP_BIND\"), 2)")
+            .unwrap();
+        {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            for a in s.take_pending_equip_answers() {
+                s.run(&format!("CancelPendingEquip({})", a.index)).unwrap();
+            }
+        }
+        app.world_mut()
+            .run_system_once(drain_bind_confirm_answers)
+            .unwrap();
+
+        assert!(rx.try_iter().next().is_none(), "a cancel sends nothing");
+        let script = app.world().non_send_resource::<UiScript>();
+        assert_eq!(
+            script.cursor_item().map(|i| i.guid),
+            Some(AXE_GUID),
+            "the axe is still on the cursor"
+        );
+        assert!(!script.item_locked(AXE_GUID), "and free");
     }
 
     /// The `0x5ea930` conjunct, driven by its level leg.
@@ -2312,6 +2404,94 @@ mod bind_confirm_tests {
             rx.try_iter().count() > 0,
             "the accept re-issues the use rather than sending a confirm packet"
         );
+    }
+
+    /// The question the call raised is filed whatever the slot holds by the time the drain runs:
+    /// the reference asked inside the call (`0x5e16c6`), the item is on the cursor, and the answer
+    /// re-judges the slot. A miss here used to unlock the item and leave it held with no record.
+    #[test]
+    fn an_asked_equip_is_filed_though_the_slot_moved_on() {
+        benilla_formats::wow_data_or_skip!();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.add_message::<crate::sound::AutoEquipSound>()
+            .add_message::<crate::creature_anim::SheathRequest>()
+            .init_resource::<crate::ui_merchant::MerchantOpen>()
+            .init_resource::<crate::ui_bank::BankOpen>()
+            .init_resource::<crate::ui_item_text::ItemTextOpen>()
+            .init_resource::<crate::ui_bind_confirm::PendingEquips>()
+            .init_resource::<crate::ui_bind_confirm::PendingBindOnUse>()
+            .init_resource::<crate::ui_loot::LootLatch>()
+            .init_resource::<crate::target::Selection>()
+            .init_resource::<crate::net::SelfGuid>()
+            .init_resource::<crate::spell::cast_target::AutoSelfCast>()
+            .init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::player::Player>()
+            .init_resource::<crate::spell::PendingCast>()
+            .init_resource::<crate::spell::QueuedMeleeSpell>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<crate::spell::SpellModifiers>()
+            .init_resource::<crate::ui_action::CastErrors>()
+            .init_resource::<crate::ui_action::UiErrorKeys>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::spell::AutoRepeatActive>()
+            .init_resource::<crate::ui_tradeskill::TradeSkillOpens>()
+            .init_resource::<crate::spell::targeting::SpellTargeting>()
+            .init_resource::<crate::spell::HeldForPick>()
+            .init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(NetCommands(tx));
+        let me = app
+            .world_mut()
+            .spawn((
+                SelfPlayer,
+                ObjectStore(ObjectFields::from_pairs(&[
+                    (F_PACK_SLOT_1, AXE_GUID as u32),
+                    (F_PACK_SLOT_1 + 1, (AXE_GUID >> 32) as u32),
+                ])),
+            ))
+            .id();
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            AXE_GUID,
+            ObjectFields::from_pairs(&[(F_OBJECT_ENTRY, FLURRY_AXE)]),
+            false,
+        );
+        app.world_mut().resource_mut::<Items>().insert_template(
+            FLURRY_AXE,
+            Some(ItemInfo {
+                quality: 4,
+                bonding: 2,
+                inventory_type: 13,
+                ..crate::items::test_template("Flurry Axe")
+            }),
+        );
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        load_ui(&script);
+        let mut bag = bag_with_the_axe(4);
+        bag.slots.get_mut(&1).unwrap().use_fork = UseFork::Equip;
+        bag.slots.get_mut(&1).unwrap().item_class = Some(2);
+        script.set_container(0, Some(bag));
+        script.run("UseContainerItem(0, 1)").unwrap();
+        app.insert_non_send_resource(script);
+        // The frame applied a move before the drain: the slot is empty now.
+        app.world_mut()
+            .entity_mut(me)
+            .insert(ObjectStore(ObjectFields::default()));
+        run_container_clicks(app.world_mut());
+
+        assert_eq!(
+            app.world()
+                .resource::<crate::ui_bind_confirm::PendingEquips>()
+                .live(),
+            1,
+            "the question is filed"
+        );
+        let script = app.world().non_send_resource::<UiScript>();
+        assert_eq!(script.cursor_item().map(|i| i.guid), Some(AXE_GUID));
+        assert!(script.item_locked(AXE_GUID), "still locked, still held");
     }
 
     /// The confirm's re-issue goes through `CGItem::Use` (`0x5d92c1`), which refuses an item

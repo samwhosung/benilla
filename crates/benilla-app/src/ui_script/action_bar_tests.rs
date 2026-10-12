@@ -1212,6 +1212,7 @@ fn shipped_bag_frame_drives_end_to_end() {
             duration_ms: None,
             petition: None,
             already_bound: false,
+            bonding: 0,
             bar_placeable: true,
             consumable: false,
             durability: None,

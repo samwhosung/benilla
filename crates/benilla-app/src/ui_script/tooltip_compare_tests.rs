@@ -66,6 +66,7 @@ fn seed_items(s: &mut UiScript) {
     inv[1] = Some(InvSlotView {
         duration_ms: None,
         already_bound: false,
+        bonding: 0,
         bar_placeable: true,
         consumable: false,
         durability: None,
@@ -117,6 +118,7 @@ fn seed_items(s: &mut UiScript) {
             duration_ms: None,
             petition: None,
             already_bound: false,
+            bonding: 0,
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -187,6 +189,7 @@ fn doll_hover_renders_the_live_instance() {
     inv[1] = Some(InvSlotView {
         duration_ms: None,
         already_bound: false,
+        bonding: 0,
         bar_placeable: true,
         consumable: false,
         durability: Some((0, 40)),

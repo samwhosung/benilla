@@ -33,6 +33,8 @@ pub struct ContainerSlot {
     pub quality: Option<u32>,
     /// The template's InventoryType; 0 while unresolved and for an item that cannot be equipped.
     pub inventory_type: u32,
+    /// The template's bonding (`[rec+0x194]`), 0 while unresolved: the equip arms ask on 2.
+    pub bonding: u32,
     /// The template's class (`[rec+0x0]`, read by `0x5d9f30`), `None` while unresolved: a
     /// projectile (6) auto-equips by entry and unlocks as it goes (`0x5e1704`).
     pub item_class: Option<u32>,
@@ -144,6 +146,9 @@ pub struct ContainerUse {
     pub slot: u32,
     pub guid: u64,
     pub arm: UseArm,
+    /// The equip arm raised the bind-on-equip question and sent nothing: the item stays on the
+    /// cursor, locked, under the popup (`0x5e16c6`, `0x5e16ce`).
+    pub asks: bool,
 }
 
 /// One enchant slot as the tooltip renders it (`0x52c9f9`..`0x52ca23`); the app resolves the row.
@@ -264,6 +269,12 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().container_autoequips)
     }
 
+    /// Drain the `(bag, slot, guid)` of each `AutoEquipCursorItem` that raised the bind-on-equip
+    /// question: the app files the pending record and the event, the item staying held.
+    pub fn take_container_equip_asks(&mut self) -> Vec<(i64, u32, u64)> {
+        std::mem::take(&mut self.model_mut().container_equip_asks)
+    }
+
     /// Drain the `(bag, slot)` clicks repair mode queued, for `CMSG_REPAIR_ITEM`.
     pub fn take_container_repairs(&mut self) -> Vec<(i64, u32)> {
         std::mem::take(&mut self.model_mut().container_repairs)
@@ -342,23 +353,20 @@ pub enum UiCursorMode {
 /// `UseContainerItem` past its clear. An empty slot or a locked item ends it, repair mode
 /// included (`0x4fa1c7`, `0x4fa1cd`); then repair mode repairs (`0x4fa1da`). Every other arm takes
 /// its lock here, in the call, so a later call reads it as the reference's does: the withdraw and
-/// deposit (`0x4fa312`, `0x4fa34b`), the sale (`0x4fa37f`), the equip unless the item is a
-/// projectile (`0x4fa40b`, `0x4fa418`), the open (`0x5edcd9`) and the wrap paper (`0x5edea0`). An
-/// equipped projectile unlocks instead, `AutoEquipCursorItem`'s `ClearCursor(1,1)` (`0x5e1711`,
-/// `0x5e1763`). The app sends each arm.
-fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) {
-    let Some(s) = model
+/// deposit (`0x4fa312`, `0x4fa34b`), the sale (`0x4fa37f`), the open (`0x5edcd9`) and the wrap
+/// paper (`0x5edea0`). The equip arm is not done here: it returns its item, which the call puts on
+/// the cursor ([`use_equip_arm`]). The app sends each arm.
+fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) -> Option<CursorItem> {
+    let s = model
         .containers
         .get(&bag)
         .and_then(|c| c.slots.get(&slot))
-        .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))
-    else {
-        return;
-    };
-    let (guid, fork, class) = (s.guid, s.use_fork, s.item_class);
+        .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))?;
+    let (guid, fork) = (s.guid, s.use_fork);
+    let equip = (fork == UseFork::Equip).then(|| s.cursor_item(bag, slot));
     if model.repair_mode {
         model.container_repairs.push((bag, slot));
-        return;
+        return None;
     }
     let arm = if bag == -1 || (5..=10).contains(&bag) {
         UseArm::Withdraw
@@ -369,6 +377,9 @@ fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) {
     } else {
         UseArm::Item(fork)
     };
+    if let (UseArm::Item(UseFork::Equip), Some(item)) = (arm, equip) {
+        return Some(item);
+    }
     model
         .script_calls
         .push(super::ScriptCall::UseContainerItem(ContainerUse {
@@ -376,19 +387,40 @@ fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) {
             slot,
             guid,
             arm,
+            asks: false,
         }));
     match arm {
-        UseArm::Item(UseFork::Equip) if class == Some(cursor::ITEM_CLASS_PROJECTILE) => {
-            cursor::unlock_item(model, guid);
+        UseArm::Withdraw | UseArm::Deposit | UseArm::Sell | UseArm::Item(UseFork::Open) => {
+            cursor::lock_item(model, guid);
         }
-        UseArm::Withdraw
-        | UseArm::Deposit
-        | UseArm::Sell
-        | UseArm::Item(UseFork::Equip)
-        | UseArm::Item(UseFork::Open) => cursor::lock_item(model, guid),
         UseArm::Item(UseFork::WrapPaper) => arm_gift_wrap(model, bag, slot),
         UseArm::Item(_) => {}
     }
+    None
+}
+
+/// The equip arm (`0x4fa3b9`): `0x5e1840` puts the item on the cursor and runs
+/// `AutoEquipCursorItem` (`0x4fa3ff`), then the item locks unless it is a projectile
+/// (`0x4fa40b`, `0x4fa418`), whose clear unlocked it instead (`0x5e1711`). A bind-on-equip item
+/// sends nothing: it stays held and locked under the question.
+fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem) {
+    let guid = item.guid;
+    let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
+    let step = cursor::equip::auto_equip_from(lua, item, false);
+    super::tick::verb(lua, |model| {
+        model
+            .script_calls
+            .push(super::ScriptCall::UseContainerItem(ContainerUse {
+                bag,
+                slot,
+                guid,
+                arm: UseArm::Item(UseFork::Equip),
+                asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
+            }));
+        if !projectile {
+            cursor::lock_item(model, guid);
+        }
+    });
 }
 
 /// The wrap arm `0x5edea0`: the paper at `(bag, slot)` locks, the cursor takes mode 2 (the cast
@@ -785,7 +817,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // payload goes back, never placed, and an armed gift wrap is cancelled. The clear's
             // events run first, as the reference's do before it reads the slot.
             super::tick::verb(lua, cursor::clear_cursor);
-            super::tick::verb(lua, |model| use_cleared(model, bag, slot));
+            if let Some(item) = super::tick::verb(lua, |model| use_cleared(model, bag, slot)) {
+                use_equip_arm(lua, bag, slot, item);
+            }
             Ok(())
         })?,
     )?;
@@ -900,6 +934,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                bonding: 0,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,
@@ -1348,6 +1383,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                bonding: 0,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,

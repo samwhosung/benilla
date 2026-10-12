@@ -699,6 +699,7 @@ fn backpack() -> ContainerState {
             duration_ms: None,
             petition: None,
             already_bound: false,
+            bonding: 0,
             bar_placeable: true,
             consumable: false,
             durability: None,

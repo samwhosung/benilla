@@ -567,6 +567,7 @@ fn slot_view(
         .and_then(|i| i.catalog.get(display))
         .and_then(|d| d.icon.clone());
     Some(InvSlotView {
+        bonding: t.map_or(0, |t| t.bonding),
         item_id: entry,
         icon,
         count,
@@ -654,6 +655,7 @@ fn inventory_slots(
             flags: 0,
             // Ammo has no item object, only its template, so there is no bind to read.
             already_bound: false,
+            bonding: 0,
             item_id: ammo_id,
             icon,
             count: ammo_count(store, objects, ammo_id),

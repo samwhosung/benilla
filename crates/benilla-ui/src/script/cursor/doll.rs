@@ -325,6 +325,7 @@ mod tests {
         slots[1] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            bonding: 0,
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -344,6 +345,7 @@ mod tests {
         slots[11] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            bonding: 0,
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -363,6 +365,7 @@ mod tests {
         slots[19] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            bonding: 0,
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -392,6 +395,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                bonding: 0,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,
@@ -546,6 +550,7 @@ mod tests {
         slots[20] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            bonding: 0,
             bar_placeable: true,
             consumable: false,
             durability: None,
@@ -587,6 +592,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                bonding: 0,
                 bar_placeable: true,
                 consumable: false,
                 durability: None,
