@@ -154,7 +154,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             scroll(lua, &this, ScrollingMessageState::page_down)
         })?,
     )?;
-    // AtTop (`0x793130`) and AtBottom (`0x7931f0`) push 1 (`0x7931c3`) or nil (`0x7931d6`).
+    // AtTop (`0x793130`) pushes 1 (`0x7931c3`) or nil (`0x7931d6`); AtBottom (`0x7931f0`) pushes 1
+    // (`0x793283`) or nil (`0x793296`).
     m.set(
         "AtTop",
         lua.create_function(|lua, this: Table| {

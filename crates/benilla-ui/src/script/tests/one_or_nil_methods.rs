@@ -5,7 +5,7 @@
 use super::common::script;
 
 /// `ScrollingMessageFrame:AtTop` (`0x793130`) and `:AtBottom` (`0x7931f0`) test one flag and push
-/// 1 (`0x7931c3`) or nil (`0x7931d6`), one value each.
+/// 1 (`0x7931c3`, `0x793283`) or nil (`0x7931d6`, `0x793296`), one value each.
 #[test]
 fn scrolling_message_frame_at_top_and_bottom_answer_one_or_nil() {
     let mut s = script();

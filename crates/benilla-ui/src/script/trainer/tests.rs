@@ -108,8 +108,8 @@ fn tree_interleaves_headers_and_ordered_services() {
 }
 
 /// `GetTrainerServiceDescription` (`0x4d9b40`) pushes one value, nil (`0x4d9d90`) where there is
-/// no text to show: no row at the index (`0x4d9bd7`, `0x4d9d93`), or a service whose spell has
-/// none (`0x4d9d44`, `0x4d9d49`). A header row has no service either.
+/// no text to show: no row at the index (`0x4d9ba8` to `0x4d9d93`), a service with no spell record
+/// (`0x4d9bd7`), or a service whose spell has none (`0x4d9d44`, `0x4d9d49`). A header row has no service either.
 #[test]
 fn service_description_is_nil_without_text() {
     let mut s = UiScript::new().unwrap();
