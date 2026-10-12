@@ -333,6 +333,7 @@ fn fireball_view_on_real_data() {
         v.cooldown, None,
         "Fireball has no recovery in either column"
     );
+    assert_eq!(v.recovery_ms, 0);
     assert_eq!(v.requires_form, None);
     assert!(
         v.description.starts_with("Hurls a fiery ball that causes"),
@@ -359,6 +360,7 @@ fn fireball_view_on_real_data() {
     assert_eq!(v.range.as_deref(), Some("8-25 yd range"));
     assert_eq!(v.cast_time.as_deref(), Some("Instant"));
     assert_eq!(v.cooldown.as_deref(), Some("15 sec cooldown"));
+    assert_eq!(v.recovery_ms, 15_000, "the same column, in ms");
     assert_eq!(v.requires_form.as_deref(), Some("Requires Battle Stance"));
     assert!(!v.form_met, "form 0 (unshifted) does not satisfy the mask");
     assert_eq!(
@@ -435,12 +437,14 @@ fn improved_fire_blast_shortens_the_cooldown_cell() {
     let objects = objs.get();
     let base = spell_tooltip_view(2136, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
     assert_eq!(base.cooldown.as_deref(), Some("8 sec cooldown"));
+    assert_eq!(base.recovery_ms, 8_000);
 
     t.spell_mods.set_class_family(fire_blast.spell_family);
     t.spell_mods
         .set(true, bit, crate::spell::OP_COOLDOWN, -1_500);
     let improved = spell_tooltip_view(2136, &spells, &mut t.ctx(&objects, 0, None)).unwrap();
     assert_eq!(improved.cooldown.as_deref(), Some("6.5 sec cooldown"));
+    assert_eq!(improved.recovery_ms, 6_500, "the modified column, in ms");
 }
 
 /// The cast cell reads `GetCastTime(1)` (`52eb4b`): op 10 applies and nothing clamps, so a

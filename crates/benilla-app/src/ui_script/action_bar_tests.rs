@@ -320,6 +320,104 @@ fn state_feedback_drives_cooldown_checked_and_usable_through_the_xml() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// `SetAction` answers 1 when the spell tooltip it built holds a line that changes while shown
+/// (the chance line, or the remaining cooldown of a spell whose recovery is a minute or more:
+/// `0x52f68c`, `0x52f581`), else nil, and the stock `ActionButton_SetTooltip` arms `updateTooltip`
+/// from it (`ActionButton.lua:377-381`); `ActionButton_OnUpdate` then rebuilds the hovered
+/// tooltip. Run through the stock bar.
+#[test]
+fn a_spell_tooltip_with_a_live_line_arms_the_stock_refresh() {
+    benilla_formats::wow_data_or_skip!();
+    use benilla_ui::script::{ActionState, SpellTooltipView};
+
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_action_bar(&s);
+    s.set_action(
+        1,
+        Some(ActionSlot {
+            texture: Some("Interface\\Icons\\Ability_Warrior_ShieldWall".into()),
+            kind: 0x00,
+            action: 871,
+            count: 0,
+            consumable: false,
+        }),
+    );
+    s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
+    s.tick(10.0); // a nonzero GetTime epoch
+    let view = |cast: &str, recovery_ms: u32, chance: Option<&str>| SpellTooltipView {
+        name: "Shield Wall".into(),
+        cast_time: Some(cast.into()),
+        recovery_ms,
+        chance: chance.map(str::to_string),
+        ..Default::default()
+    };
+    // The value the stock button saved from the setter's answer.
+    let armed = |s: &mut UiScript| -> Option<f64> {
+        s.eval::<Option<f64>>("return ActionButton1.updateTooltip")
+            .unwrap()
+    };
+    let line2 = |s: &mut UiScript| -> String {
+        s.eval::<String>("return GameTooltipTextLeft2:GetText() or ''")
+            .unwrap()
+    };
+    let running = |duration_ms: u32| ActionState {
+        usable: true,
+        // Started at 9.4 s on the GetTime clock, so it is running at 10 s.
+        cooldown: Some((9_400, duration_ms, true)),
+        ..Default::default()
+    };
+    let leave_and_enter = |s: &mut UiScript| {
+        super::test_ui::unhover(s);
+        s.tick(0.0);
+        super::test_ui::hover(s, "ActionButton1");
+    };
+
+    // No cooldown, no chance line: the setter answers nil, and nothing is armed.
+    s.set_spell_tooltip(871, view("Instant", 1_800_000, None));
+    super::test_ui::hover(&mut s, "ActionButton1");
+    assert!(s.eval::<bool>("return GameTooltip:IsVisible()").unwrap());
+    assert_eq!(armed(&mut s), None);
+
+    // A 30 minute recovery running: 1, so the button arms the stock refresh.
+    s.set_action_state(1, Some(running(1_800_000)));
+    leave_and_enter(&mut s);
+    assert_eq!(
+        armed(&mut s),
+        s.eval::<Option<f64>>("return TOOLTIP_UPDATE_TIME").unwrap()
+    );
+    assert!(armed(&mut s).is_some_and(|t| t > 0.0));
+    assert_eq!(line2(&mut s), "Instant");
+    // The refresh rebuilds the hovered tooltip from the current view.
+    s.set_spell_tooltip(871, view("Next melee", 1_800_000, None));
+    s.tick(0.5);
+    assert_eq!(
+        line2(&mut s),
+        "Next melee",
+        "ActionButton_OnUpdate rebuilt it"
+    );
+
+    // The same cooldown on a spell whose recovery is under a minute: nil.
+    s.set_spell_tooltip(871, view("Instant", 30_000, None));
+    s.set_action_state(1, Some(running(30_000)));
+    leave_and_enter(&mut s);
+    assert_eq!(armed(&mut s), None);
+
+    // A chance line alone arms it (a passive's changing stat), with no cooldown running.
+    s.set_action_state(
+        1,
+        Some(ActionState {
+            usable: true,
+            ..Default::default()
+        }),
+    );
+    s.set_spell_tooltip(871, view("Instant", 0, Some("5.00% chance to parry")));
+    leave_and_enter(&mut s);
+    assert!(armed(&mut s).is_some_and(|t| t > 0.0));
+
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// `CooldownFrame_SetTimer` hides the pane unless `start > 0 and duration > 0 and enable > 0`
 /// (Cooldown.lua:3): a running cooldown whose start predates a restarted `GetTime` never draws.
 #[test]

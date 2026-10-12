@@ -151,12 +151,22 @@ pub(super) fn render_by_id(
     fb_name: Option<String>,
     fb_q: Option<u32>,
 ) -> mlua::Result<()> {
+    render_by_id_flagged(lua, this, item_id, fb_name, fb_q).map(|_| ())
+}
+
+/// [`render_by_id`] answering the item builder's return value (see [`render::render_view_flagged`]);
+/// a template still in flight answers false.
+pub(super) fn render_by_id_flagged(
+    lua: &Lua,
+    this: &Table,
+    item_id: u32,
+    fb_name: Option<String>,
+    fb_q: Option<u32>,
+) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     clear(lua, h);
-    match view_of(lua, item_id) {
-        Some(v) => {
-            render_view(lua, this, &v, BuilderFlags::default(), None)?;
-        }
+    let live = match view_of(lua, item_id) {
+        Some(v) => render::render_view_flagged(lua, this, &v, BuilderFlags::default(), None)?,
         None => {
             if let Some(name) = fb_name {
                 append_line(
@@ -167,10 +177,11 @@ pub(super) fn render_by_id(
                     false,
                 )?;
             }
+            false
         }
-    }
+    };
     show_or_hide_empty(lua, h);
-    Ok(())
+    Ok(live)
 }
 
 fn set_quest_item_view(
@@ -835,7 +846,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     }
 
     // GameTooltip:SetInboxItem(index): the mail item hover (`MailFrame.lua:218`,
-    // `MailFrame.lua:470`). A row with no item does nothing; stock calls it only when there is one.
+    // `MailFrame.lua:470`). A row with no item draws nothing and answers nil; stock calls it only
+    // when there is one. The answer is the builder's return value, 1 or nil (`0x5356bb`).
     m.set(
         "SetInboxItem",
         lua.create_function(|lua, (this, index): (Table, usize)| {
@@ -843,7 +855,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let (item_id, roll, name) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let Some(mail) = &model.mail else {
-                    return Ok(());
+                    return Ok(Value::Nil);
                 };
                 match mail.inbox.get(index.saturating_sub(1)) {
                     Some(r) => (r.item_id, r.item_random_property_id, r.item_name.clone()),
@@ -851,7 +863,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 }
             };
             if item_id == 0 {
-                return Ok(());
+                return Ok(Value::Nil);
             }
             clear(lua, h);
             // A block source (`0x5355fa`, p6=1) carrying the attachment's roll: no placeholder.
@@ -860,17 +872,25 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 enchants: roll_enchants(lua, roll),
                 ..Default::default()
             };
-            if let Some(v) = view_of(lua, item_id) {
-                render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?;
-            }
+            let live = match view_of(lua, item_id) {
+                Some(v) => render::render_view_flagged(
+                    lua,
+                    &this,
+                    &v,
+                    BuilderFlags::default(),
+                    Some(&inst),
+                )?,
+                None => false,
+            };
             show_or_hide_empty(lua, h);
-            Ok(())
+            Ok(flag(live))
         })?,
     )?;
 
     // GameTooltip:SetAuctionItem(type, index): an auction row's hover, `type` "list", "bidder" or
     // "owner". No creator, gift or open line: the reference zeroes the guid arguments
-    // (`0x535a6d`, `0x535a73`), so the item-object gate those lines hang off fails.
+    // (`0x535a6d`, `0x535a73`), so the item-object gate those lines hang off fails. It answers the
+    // builder's return value, 1 or nil; a miss answers nil.
     m.set(
         "SetAuctionItem",
         lua.create_function(|lua, (this, kind, index): (Table, String, usize)| {
@@ -878,10 +898,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let (item_id, roll, name) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let Some(auction) = &model.auction else {
-                    return Ok(());
+                    return Ok(Value::Nil);
                 };
                 let Some(list) = super::auction::list_index_of(&kind) else {
-                    return Ok(());
+                    return Ok(Value::Nil);
                 };
                 match auction.lists[list].rows.get(index.saturating_sub(1)) {
                     Some(r) => (r.item_id, r.random_property_id, r.name.clone()),
@@ -889,7 +909,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 }
             };
             if item_id == 0 {
-                return Ok(());
+                return Ok(Value::Nil);
             }
             clear(lua, h);
             // A block source (`0x5359d9`, p6=1) carrying the listing's roll: no placeholder.
@@ -898,17 +918,25 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 enchants: roll_enchants(lua, roll),
                 ..Default::default()
             };
-            if let Some(v) = view_of(lua, item_id) {
-                render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?;
-            }
+            let live = match view_of(lua, item_id) {
+                Some(v) => render::render_view_flagged(
+                    lua,
+                    &this,
+                    &v,
+                    BuilderFlags::default(),
+                    Some(&inst),
+                )?,
+                None => false,
+            };
             show_or_hide_empty(lua, h);
-            Ok(())
+            Ok(flag(live))
         })?,
     )?;
 
     // GameTooltip:SetAuctionSellItem(): the sell slot's hover (`Blizzard_AuctionUI.xml:1791`); an
-    // empty slot does nothing. The reference resolves the live sell-slot object (`[0xb72608]`,
-    // `[0xb7260c]`, `0x5357b4`), so its creator line can show; this renders the template alone.
+    // empty slot does nothing and answers nil. The reference resolves the live sell-slot object
+    // (`[0xb72608]`, `[0xb7260c]`, `0x5357b4`), so its creator line can show; this renders the
+    // template alone. It answers the builder's return value, 1 or nil (`0x5357da`).
     m.set(
         "SetAuctionSellItem",
         lua.create_function(|lua, this: Table| {
@@ -922,19 +950,23 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .unwrap_or(0)
             };
             if item_id == 0 {
-                return Ok(());
+                return Ok(Value::Nil);
             }
             clear(lua, h);
-            if let Some(v) = view_of(lua, item_id) {
-                render_view(lua, &this, &v, BuilderFlags::default(), None)?;
-            }
+            let live = match view_of(lua, item_id) {
+                Some(v) => {
+                    render::render_view_flagged(lua, &this, &v, BuilderFlags::default(), None)?
+                }
+                None => false,
+            };
             show_or_hide_empty(lua, h);
-            Ok(())
+            Ok(flag(live))
         })?,
     )?;
 
     // GameTooltip:SetSendMailItem(): the attached item's hover (`MailFrame.xml:952`); an empty
-    // slot does nothing.
+    // slot does nothing and answers nil. It answers the builder's return value, 1 or nil
+    // (`0x53548a`).
     m.set(
         "SetSendMailItem",
         lua.create_function(|lua, this: Table| {
@@ -948,14 +980,17 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .unwrap_or(0)
             };
             if item_id == 0 {
-                return Ok(());
+                return Ok(Value::Nil);
             }
             clear(lua, h);
-            if let Some(v) = view_of(lua, item_id) {
-                render_view(lua, &this, &v, BuilderFlags::default(), None)?;
-            }
+            let live = match view_of(lua, item_id) {
+                Some(v) => {
+                    render::render_view_flagged(lua, &this, &v, BuilderFlags::default(), None)?
+                }
+                None => false,
+            };
             show_or_hide_empty(lua, h);
-            Ok(())
+            Ok(flag(live))
         })?,
     )?;
 

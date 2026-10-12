@@ -362,6 +362,7 @@ pub(super) fn build_view(
         range,
         cast_time,
         cooldown,
+        recovery_ms,
         requires_item,
         item_met,
         requires_form,

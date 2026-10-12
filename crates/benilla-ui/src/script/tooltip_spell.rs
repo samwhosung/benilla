@@ -15,6 +15,7 @@
 
 use mlua::{Lua, Table, Value};
 
+use super::binding_abi::flag;
 use super::object::{frame_handle_of, frame_wrapper};
 use super::tooltip::{append_line, clear, clear_silent, tip_mut};
 use super::{CraftTooltip, Model, TrainerTooltip};
@@ -45,6 +46,9 @@ pub struct SpellTooltipView {
     /// The cooldown cell (`SPELL_RECAST_TIME_SEC 0x854ed4`): `max(RecoveryTime,
     /// CategoryRecoveryTime)`, as Charge's 15 s is in the category column.
     pub cooldown: Option<String>,
+    /// The same larger recovery column in milliseconds (the builder's `[ebp-0x38]`, `0x52eb0d`):
+    /// the live "Cooldown remaining" line and the setters' return flag need it at 60 000 or more.
+    pub recovery_ms: u32,
     /// "Requires Wands" (`SPELL_EQUIPPED_ITEM 0x854e94`), from `EquippedItemClass` and
     /// `EquippedItemSubClassMask`.
     pub requires_item: Option<String>,
@@ -236,6 +240,7 @@ fn answer_wait(lua: &Lua, h: FrameHandle, spell_id: u32, alt_caster: bool) -> ml
         wait.opts,
         wait.remaining,
     )
+    .map(|_| ())
 }
 
 /// The view store and its asks for the unit a render is built against: the pet's when the
@@ -309,8 +314,39 @@ pub(super) struct SpellRenderOpts {
     /// lines drop (`0x52ed43`, `0x52f393`). `SetPetAction` sets it (`0x532888`), `SetSpell` on the
     /// pet book (`0x532e23`) and `SetTrainerService` for a `LEARN_PET_SPELL` service (`0x533a7f`).
     pub(super) alt_caster: bool,
+    /// `param4`, the live cooldown left in ms (`start + duration - now`), 0 for none: the setter
+    /// takes it from the cooldown query (`0x6e2ea0`) and passes it only while that cooldown runs
+    /// (enabled, with a start and a duration), as `0x532e55`..`0x532e81` does.
+    pub(super) remaining_ms: u32,
 }
 
+/// The live cooldown left in ms for the builder's `param4`, from a `(start, duration, enabled)`
+/// triple in `GetTime` seconds: nonzero only while the cooldown runs, enabled with a start and a
+/// duration (`0x532e5a`..`0x532e81`, `0x5328aa`), else 0. An item action's block takes the same
+/// number (`0x5324d5`).
+pub(super) fn live_remaining_ms(cooldown: Option<(f64, f64, bool)>, now: f64) -> u32 {
+    let Some((start, duration, true)) = cooldown else {
+        return 0;
+    };
+    if start <= 0.0 || duration <= 0.0 {
+        return 0;
+    }
+    ((start + duration - now) * 1000.0)
+        .round()
+        .clamp(0.0, f64::from(u32::MAX)) as u32
+}
+
+/// The cooldown-remaining leg of the spell builder's return value: the live remaining line is
+/// reached with `param4` nonzero and a recovery column of a minute or more (`0x52f537`..`0x52f581`).
+/// The line itself is not built; only its flag is answered.
+fn cooldown_countdown(v: &SpellTooltipView, opts: SpellRenderOpts) -> bool {
+    !opts.aura && opts.remaining_ms > 0 && v.recovery_ms >= 60_000
+}
+
+/// Renders the spell and answers the builder's return value (`[ebp-0x28]`): whether the tooltip
+/// holds a line that changes while it is shown, the chance line (`0x52f68c`) or the remaining
+/// cooldown (`0x52f581`). The setters push it as 1 or nil, and the stock buttons arm
+/// `updateTooltip` from it.
 fn render_spell(
     lua: &Lua,
     this: &Table,
@@ -318,12 +354,14 @@ fn render_spell(
     opts: SpellRenderOpts,
     remaining: Option<String>,
     talent: Option<&TalentLines>,
-) -> mlua::Result<()> {
+) -> mlua::Result<bool> {
     let SpellRenderOpts {
         aura,
         show_rank,
         alt_caster,
+        ..
     } = opts;
+    let mut live = false;
     // The spell builder writes the name white (`0x530270`), the aura builder gold (`0x530380`).
     let name_color = if aura { GOLD } else { WHITE };
     let right = if aura {
@@ -383,6 +421,7 @@ fn render_spell(
         // The chance line, white and unwrapped, between the reagents and the description.
         if let Some(chance) = &v.chance {
             append_line(lua, this, (chance.clone(), WHITE), None, false)?;
+            live = true;
         }
     }
     let desc = if aura && !v.aura_description.is_empty() {
@@ -424,7 +463,7 @@ fn render_spell(
     if let Some(rem) = remaining {
         append_line(lua, this, (rem, GOLD), None, false)?;
     }
-    Ok(())
+    Ok(live || (!talent_builder && cooldown_countdown(v, opts)))
 }
 
 /// `GameTooltip:SetTalent`'s render: the talent's spell plus its talent lines; a missing next-rank
@@ -441,14 +480,16 @@ pub(super) fn set_spell_with_talent(
         super::talent::ask_next_rank(lua, talent.next_spell);
     }
     match spell_view_of(lua, spell_id, false) {
-        Some(v) => render_spell(
-            lua,
-            this,
-            &v,
-            SpellRenderOpts::default(),
-            None,
-            Some(&talent),
-        )?,
+        Some(v) => {
+            render_spell(
+                lua,
+                this,
+                &v,
+                SpellRenderOpts::default(),
+                None,
+                Some(&talent),
+            )?;
+        }
         None => {
             // No view yet: the rank line alone until the next hover.
             if let Some(rank) = &talent.rank_line {
@@ -485,6 +526,20 @@ pub(super) fn set_spell_by_id(
     opts: SpellRenderOpts,
     remaining: Option<String>,
 ) -> mlua::Result<()> {
+    set_spell_flagged(lua, this, spell_id, fallback_name, opts, remaining).map(|_| ())
+}
+
+/// [`set_spell_by_id`] answering the builder's return value (see [`render_spell`]). A view still
+/// in flight answers false: the wait paints the tooltip when the app answers, and the setter has
+/// returned by then.
+pub(super) fn set_spell_flagged(
+    lua: &Lua,
+    this: &Table,
+    spell_id: u32,
+    fallback_name: Option<String>,
+    opts: SpellRenderOpts,
+    remaining: Option<String>,
+) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
     clear(lua, h);
     fill_spell(lua, this, h, spell_id, fallback_name, opts, remaining)
@@ -499,8 +554,8 @@ fn fill_spell(
     fallback_name: Option<String>,
     opts: SpellRenderOpts,
     remaining: Option<String>,
-) -> mlua::Result<()> {
-    match spell_view_of(lua, spell_id, opts.alt_caster) {
+) -> mlua::Result<bool> {
+    let live = match spell_view_of(lua, spell_id, opts.alt_caster) {
         Some(v) => render_spell(lua, this, &v, opts, remaining, None)?,
         None => {
             if let Some(name) = fallback_name.clone() {
@@ -521,10 +576,11 @@ fn fill_spell(
                     },
                 );
             }
+            false
         }
-    }
+    };
     super::tooltip::show_or_hide_empty(lua, h);
-    Ok(())
+    Ok(live)
 }
 
 /// Register the spell and aura content methods on the GameTooltip method table.
@@ -538,45 +594,76 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         lua.create_function(|lua, (this, book_id, book_type): (Table, u32, Value)| {
             // A non-string `bookType` bails (`0x532dc0`) rather than meaning the player's book.
             let Some(book_type) = book_type.as_string().and_then(|s| s.to_str().ok()) else {
-                return Ok(());
+                return Ok(Value::Nil);
             };
-            let (spell_id, name) = {
+            let now = crate::script::clock::now(lua);
+            let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match super::spellbook::book_slot(&model, book_id, &book_type) {
-                    Some(s) => (s.spell_id, Some(s.name.clone())),
-                    None => return Ok(()),
+                    Some(s) => {
+                        let cooldown = s.cooldown.map(|(start_ms, duration_ms, enabled)| {
+                            (
+                                start_ms as f64 / 1000.0,
+                                f64::from(duration_ms) / 1000.0,
+                                enabled,
+                            )
+                        });
+                        (
+                            s.spell_id,
+                            Some(s.name.clone()),
+                            live_remaining_ms(cooldown, now),
+                        )
+                    }
+                    None => return Ok(Value::Nil),
                 }
             };
             // The pet book's flag is also the builder's unit selector (`0x532e70`).
             let opts = SpellRenderOpts {
                 alt_caster: super::spellbook::is_pet_book(&book_type),
+                remaining_ms,
                 ..Default::default()
             };
-            set_spell_by_id(lua, &this, spell_id, name, opts, None)
+            Ok(flag(set_spell_flagged(
+                lua, &this, spell_id, name, opts, None,
+            )?))
         })?,
     )?;
-    // GameTooltip:SetShapeshift(index): the stance-bar hover, the form's spell tooltip.
+    // GameTooltip:SetShapeshift(index): the stance-bar hover, the form's spell tooltip. It answers
+    // the builder's return value, 1 or nil (`0x5328aa`).
     m.set(
         "SetShapeshift",
         lua.create_function(|lua, (this, index): (Table, usize)| {
-            let (spell_id, name) = {
+            let now = crate::script::clock::now(lua);
+            let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model.shapeshift_forms.get(index.saturating_sub(1)) {
-                    Some(f) => (f.view.spell_id, Some(f.view.name.clone())),
-                    None => return Ok(()),
+                    Some(f) => (
+                        f.view.spell_id,
+                        Some(f.view.name.clone()),
+                        live_remaining_ms(f.cooldown, now),
+                    ),
+                    None => return Ok(Value::Nil),
                 }
             };
-            set_spell_by_id(lua, &this, spell_id, name, SpellRenderOpts::default(), None)
+            let opts = SpellRenderOpts {
+                remaining_ms,
+                ..Default::default()
+            };
+            Ok(flag(set_spell_flagged(
+                lua, &this, spell_id, name, opts, None,
+            )?))
         })?,
     )?;
     // GameTooltip:SetPetAction(index): the pet-bar hover for a spell slot, built against the pet
     // (the unit selector, pushed at `0x532888` and `0x5328d0`); the stock
     // `PetActionButton_OnEnter` builds a token's tooltip itself (`PetActionBarFrame.lua:290`). A
-    // slot with no spell is a no-op.
+    // slot with no spell is a no-op answering nil; a spell slot answers the builder's return value,
+    // 1 or nil (`0x5328aa`).
     m.set(
         "SetPetAction",
         lua.create_function(|lua, (this, index): (Table, usize)| {
-            let (spell_id, name) = {
+            let now = crate::script::clock::now(lua);
+            let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model
                     .pet_bar
@@ -585,17 +672,20 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .filter(|s| !s.view.is_token)
                 {
                     Some(s) => match s.view.spell_id {
-                        Some(id) => (id, s.view.name.clone()),
-                        None => return Ok(()),
+                        Some(id) => (id, s.view.name.clone(), live_remaining_ms(s.cooldown, now)),
+                        None => return Ok(Value::Nil),
                     },
-                    None => return Ok(()),
+                    None => return Ok(Value::Nil),
                 }
             };
             let opts = SpellRenderOpts {
                 alt_caster: true,
+                remaining_ms,
                 ..Default::default()
             };
-            set_spell_by_id(lua, &this, spell_id, name, opts, None)
+            Ok(flag(set_spell_flagged(
+                lua, &this, spell_id, name, opts, None,
+            )?))
         })?,
     )?;
     // GameTooltip:SetPlayerBuff(buffIndex): the aura variant plus the time-remaining line only
@@ -767,28 +857,43 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // GameTooltip:SetAction(slot): the action-bar hover by payload kind (`0x5322a0`): a spell
     // (0x00) to the spell builder `0x52e610`, an item (0x80) to the item builder `0x52b650`, a
     // macro (0x40) to `0x52b040`, which fetches it (`0x4f0f40`) and renders only its name, white
-    // (`0x5303b0` in colour `0xc0cf60`), or hides with none; 1.12 has no `#showtooltip`.
+    // (`0x5303b0` in colour `0xc0cf60`), or hides with none; 1.12 has no `#showtooltip`. It
+    // answers the spell or item builder's return value as 1 or nil (`0x5325a9`), nil for the
+    // macro leg, an empty slot and any other kind; `ActionButton_SetTooltip` arms `updateTooltip`
+    // from it.
     m.set(
         "SetAction",
         lua.create_function(|lua, (this, slot): (Table, u32)| {
-            let action = {
+            let now = crate::script::clock::now(lua);
+            let (action, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.actions.get(&slot).cloned()
+                (
+                    model.actions.get(&slot).cloned(),
+                    live_remaining_ms(model.action_states.get(&slot).and_then(|s| s.cooldown), now),
+                )
             };
-            let Some(a) = action else { return Ok(()) };
+            let Some(a) = action else {
+                return Ok(Value::Nil);
+            };
             match a.kind {
-                0x00 => set_spell_by_id(
+                0x00 => Ok(flag(set_spell_flagged(
                     lua,
                     &this,
                     a.action,
                     None,
                     SpellRenderOpts {
                         show_rank: true,
+                        remaining_ms,
                         ..Default::default()
                     },
                     None,
-                ),
-                0x80 => super::tooltip_item::render_by_id(lua, &this, a.action, None, None),
+                )?)),
+                // The item builder's block takes the same live cooldown (`0x5324d5`), whose
+                // ITEM_COOLDOWN_TIME line (not built) sets the return value (`0x52e140`).
+                0x80 => Ok(flag(
+                    super::tooltip_item::render_by_id_flagged(lua, &this, a.action, None, None)?
+                        || remaining_ms > 0,
+                )),
                 0x40 => {
                     let h = frame_handle_of(lua, &this)?;
                     clear(lua, h);
@@ -802,9 +907,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         append_line(lua, &this, (name, WHITE), None, false)?;
                     }
                     super::tooltip::show_or_hide_empty(lua, h);
-                    Ok(())
+                    // The macro leg's builder return is dropped (`0x5326be`).
+                    Ok(Value::Nil)
                 }
-                _ => Ok(()),
+                _ => Ok(Value::Nil),
             }
         })?,
     )?;

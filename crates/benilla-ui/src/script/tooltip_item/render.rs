@@ -67,16 +67,21 @@ pub(super) struct BuilderFlags {
     pub name_only: bool,
 }
 
-/// Render one item into the tooltip in `0x52b650`'s order. Not built: ITEM_COOLDOWN_TIME,
-/// ITEM_WRAPPED_BY and the `LOCKED_WITH_*` line under LOCKED.
-pub(super) fn render_view(
+/// Render one item into the tooltip in `0x52b650`'s order, and answer the builder's return value
+/// (`[ebp-0x38]`): whether a line that changes while the tooltip stays up was written, the
+/// temporary enchant's countdown (`0x52ca82`) or the item's own expiry (`0x52ce0d`). The
+/// setters push it as 1 or nil; the stock buttons arm `updateTooltip` from it. Not built:
+/// ITEM_COOLDOWN_TIME, ITEM_WRAPPED_BY and the `LOCKED_WITH_*` line under LOCKED, the last two of
+/// which also set it (`0x52bfa6`, `0x52e140`).
+pub(super) fn render_view_flagged(
     lua: &Lua,
     this: &Table,
     v: &ItemTemplateView,
     flags: BuilderFlags,
     // `None`: a template source, with no item object and no instance block.
     inst: Option<&ItemInstance>,
-) -> mlua::Result<()> {
+) -> mlua::Result<bool> {
+    let mut live = false;
     let (req, known_spell, taught_known, set_view, equipped) = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
         let knows = |id: u32| model.spellbook.slots.iter().any(|s| s.spell_id == id);
@@ -410,7 +415,10 @@ pub(super) fn render_view(
                 // A missing template skips the slot, not falling back to the bare name: the
                 // reference formats an empty string, which `AddLine` drops.
                 Some(ms) => match enchant_time_left(&e.name, ms, &get) {
-                    Some(t) => t,
+                    Some(t) => {
+                        live = true;
+                        t
+                    }
                     None => continue,
                 },
                 None => e.name.clone(),
@@ -450,6 +458,7 @@ pub(super) fn render_view(
         let ms = u32::try_from(ms).unwrap_or(u32::MAX);
         if let Some(line) = duration_text(ms, "ITEM_DURATION", true, &get) {
             add((line, WHITE))?;
+            live = true;
         }
     }
     if v.allowable_class > 0
@@ -605,7 +614,7 @@ pub(super) fn render_view(
     // p4's early return (`0x52e147..0x52e14c`): compact falls through to `0x52e14e`, lays out and
     // returns, so nothing from `0x52e170` on runs: flavor text, creator, open or read line, money.
     if flags.name_only {
-        return Ok(());
+        return Ok(live);
     }
     if !v.description.is_empty() {
         addw((format!("\"{}\"", v.description), GOLD))?;
@@ -613,7 +622,7 @@ pub(super) fn render_view(
     // The reference gates the rest on an item object (`0x52e1c7`, `0x52e2e0`). Here only a template
     // source (`None`) stops, so a link, loot, mail or auction hover, which has an instance but no
     // object, still reaches READABLE.
-    let Some(inst) = inst else { return Ok(()) };
+    let Some(inst) = inst else { return Ok(live) };
     // The creator line (`0x52e1b1..0x52e2db`), white `0xc0cf60`: ITEM_WRITTEN_BY for a letter, else
     // ITEM_CREATED_BY, green by its own `|cff00ff00`. A wrapped instance (`0x8`, gate `0x52b7b0`)
     // takes ITEM_WRAPPED_BY off `ITEM_FIELD_GIFTCREATOR` in the reference; that is not built, so a
@@ -640,7 +649,18 @@ pub(super) fn render_view(
     } else if v.page_text != 0 || inst.has_text {
         keyed("ITEM_READABLE", &[], GREEN, false)?;
     }
-    Ok(())
+    Ok(live)
+}
+
+/// [`render_view_flagged`] for a caller that does not answer the flag.
+pub(super) fn render_view(
+    lua: &Lua,
+    this: &Table,
+    v: &ItemTemplateView,
+    flags: BuilderFlags,
+    inst: Option<&ItemInstance>,
+) -> mlua::Result<()> {
+    render_view_flagged(lua, this, v, flags, inst).map(|_| ())
 }
 
 /// A temporary enchant's name with its countdown (`0x52fa50`): `ITEM_ENCHANT_TIME_LEFT_<unit>`, its
@@ -721,6 +741,50 @@ mod tests {
         // The app drops an expired timer, but zero must not panic; it takes the plural arm,
         // `GetPluralIndex`'s rule.
         assert_eq!(t(0).as_deref(), Some("<Rockbiter :: 0 S>"));
+    }
+
+    /// The builder's return value is true when it wrote a line that changes while shown: the item's
+    /// expiry (`0x52ce0d`) or a temporary enchant's countdown (`0x52ca82`), and not for a
+    /// permanent enchant or a source with neither.
+    #[test]
+    fn the_builder_flag_is_true_for_an_expiry_or_an_enchant_countdown() {
+        let s = crate::script::UiScript::new().unwrap();
+        s.run(
+            r#"
+            ITEM_DURATION_HOURS = "[DURATION %d h]"
+            ITEM_ENCHANT_TIME_LEFT_MIN = "<%s :: %d M>"
+            CreateFrame("GameTooltip", "TT")
+        "#,
+        )
+        .unwrap();
+        let tt: Table = s.lua().globals().get("TT").unwrap();
+        let v = ItemTemplateView {
+            name: "Sword".into(),
+            ..Default::default()
+        };
+        let flagged = |inst: Option<&ItemInstance>| {
+            render_view_flagged(s.lua(), &tt, &v, BuilderFlags::default(), inst).unwrap()
+        };
+        let enchant = |slot, remaining_ms| crate::script::EnchantView {
+            slot,
+            name: "Rockbiter".into(),
+            remaining_ms,
+            ..Default::default()
+        };
+        assert!(!flagged(None));
+        assert!(!flagged(Some(&ItemInstance::default())));
+        assert!(flagged(Some(&ItemInstance {
+            duration_ms: Some(3_600_000),
+            ..Default::default()
+        })));
+        assert!(flagged(Some(&ItemInstance {
+            enchants: vec![enchant(1, Some(300_000))],
+            ..Default::default()
+        })));
+        assert!(!flagged(Some(&ItemInstance {
+            enchants: vec![enchant(0, None)],
+            ..Default::default()
+        })));
     }
 
     #[test]
