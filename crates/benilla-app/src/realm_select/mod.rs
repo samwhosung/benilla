@@ -97,7 +97,8 @@ pub(super) enum SortKey {
     Load,
     /// `SortRealms("name")`, case 2: a case-folding compare.
     Name,
-    /// `SortRealms("mode")`, case 3: the `(pvp, rp)` pair.
+    /// `SortRealms("mode")`, case 3: the `Cfg_Configs` pair, RP before PvP, so Normal, PvP, RP,
+    /// RP-PvP ascending.
     Type,
 }
 
@@ -167,7 +168,14 @@ impl Realms {
                         la.total_cmp(&lb)
                     }
                     SortKey::Name => ra.name.to_lowercase().cmp(&rb.name.to_lowercase()),
-                    SortKey::Type => self.pvp_rp(ra.realm_type).cmp(&self.pvp_rp(rb.realm_type)),
+                    // RP decides before PvP (`0x46e92c`-`0x46e978`).
+                    SortKey::Type => {
+                        let rp_pvp = |t: u32| {
+                            let (pvp, rp) = self.pvp_rp(t);
+                            (rp, pvp)
+                        };
+                        rp_pvp(ra.realm_type).cmp(&rp_pvp(rb.realm_type))
+                    }
                 };
                 if ord != std::cmp::Ordering::Equal {
                     return if descending { ord.reverse() } else { ord };
@@ -311,8 +319,10 @@ impl Realms {
     }
 }
 
-/// `GetRealmInfo`'s `realmDown`: flag bit 0x02, greyed and not enterable; the reference's
-/// auto-pick (`0x46ea20`) skips a realm on these low bits.
+/// `GetRealmInfo`'s `realmDown`: flag bit 0x02 of the record's flags byte (`+0x08`, `0x46ef83`),
+/// greyed and not enterable. The reference's own pick, `SetPreferredInfo`'s `0x46ea20`, skips only
+/// bit 0x01 (`0x46ea7c`), so it can suggest a realm that is down; `auto_answer` skipping one is
+/// benilla's policy ladder, not the reference's.
 pub(crate) fn is_down(realm: &RealmInfo) -> bool {
     realm.flags & 0x02 != 0
 }
@@ -736,6 +746,20 @@ mod tests {
             Some("Up"),
             "unattended skips the offline row rather than dialing it"
         );
+    }
+
+    /// Mode ascending is Normal, PvP, RP, RP-PvP: RP decides before PvP (`0x46e92c`-`0x46e978`).
+    #[test]
+    fn the_mode_sort_puts_rp_after_pvp() {
+        let mut r = Realms::us_client();
+        r.realms = vec![
+            realm("RpPvp", 1, 8, 0, 0, 1.0),
+            realm("Rp", 1, 6, 0, 0, 1.0),
+            realm("Pvp", 1, 1, 0, 0, 1.0),
+            realm("Normal", 1, 0, 0, 0, 1.0),
+        ];
+        r.sort.click(SortKey::Type);
+        assert_eq!(names(&r), ["Normal", "Pvp", "Rp", "RpPvp"]);
     }
 
     /// The reference disables an offline realm's Okay.
