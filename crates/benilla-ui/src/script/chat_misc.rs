@@ -159,27 +159,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             name,
             lua.create_function(move |lua, args: MultiValue| {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let slot = if chat {
-                    &mut model.logging_chat
-                } else {
-                    &mut model.logging_combat
-                };
                 // With an argument (`lua_gettop > 0`, `0x49fe57`) the flag is set from
-                // `GetBoolOrDefault` (`0x49fe69`, default 1), so an explicit nil clears it.
-                match args.front().map(|v| bool_or_default(Some(v), true)) {
-                    None => Ok(MultiValue::from_vec(vec![if *slot {
-                        Value::Integer(1)
+                // `GetBoolOrDefault` (`0x49fe69`, default 1), so an explicit nil clears it. Both
+                // paths then answer the flag as it stands, 1 or nil, one value (`0x49feb2`-`0x49fee1`):
+                // the reference re-reads it after the log-open attempt, which can clear it
+                // (`0x49feab`); the app owns that attempt here.
+                if let Some(on) = args.front().map(|v| bool_or_default(Some(v), true)) {
+                    let slot = if chat {
+                        &mut model.logging_chat
                     } else {
-                        Value::Nil
-                    }])),
-                    Some(on) => {
-                        if *slot != on {
-                            *slot = on;
-                            model.logging_changed = true;
-                        }
-                        Ok(MultiValue::new())
+                        &mut model.logging_combat
+                    };
+                    if *slot != on {
+                        *slot = on;
+                        model.logging_changed = true;
                     }
                 }
+                let now = if chat {
+                    model.logging_chat
+                } else {
+                    model.logging_combat
+                };
+                Ok(if now { Value::Integer(1) } else { Value::Nil })
             })?,
         )?;
     }
@@ -281,8 +282,8 @@ mod tests {
         assert!(s.eval::<bool>("return LoggingCombat() == nil").unwrap());
         assert_eq!(
             s.arity("LoggingChat(true)").unwrap(),
-            0,
-            "the setter returns nothing"
+            1,
+            "the setter answers the flag too (`0x49fed3`)"
         );
         assert_eq!(s.eval::<i64>("return LoggingChat()").unwrap(), 1);
         assert_eq!(s.logging_flags(), (true, false));
@@ -295,5 +296,9 @@ mod tests {
             !s.take_logging_changes(),
             "a write that moves nothing cues nothing"
         );
+        // The setter answers the flag it leaves: 1 or nil, one value either way.
+        assert_eq!(s.eval::<i64>("return LoggingChat(true)").unwrap(), 1);
+        assert_eq!(s.arity("LoggingChat(nil)").unwrap(), 1);
+        assert!(s.eval::<bool>("return LoggingChat(nil) == nil").unwrap());
     }
 }

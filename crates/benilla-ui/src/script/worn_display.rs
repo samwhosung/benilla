@@ -4,8 +4,9 @@
 //! `ToggleFlag`), so a set queues a flip only when it differs from a belief that moves at the call
 //! and is overwritten when the wire bit moves.
 
-use mlua::{Lua, Value};
+use mlua::{Lua, MultiValue};
 
+use super::binding_abi::bool_or_default;
 use super::Model;
 
 /// A queued flip: one `CMSG_TOGGLE_HELM` or `CMSG_TOGGLE_CLOAK` for the app to send.
@@ -38,24 +39,6 @@ impl super::UiScript {
     }
 }
 
-/// Numeric, not Lua-truthy: the stock panel passes the string `"0"` for off
-/// (`UIOptionsFrame_Save`), which Lua 5.0 holds truthy. Nil, false, 0 and `"0"` hide.
-fn shown_arg(v: &Value) -> bool {
-    match v {
-        Value::Nil => false,
-        Value::Boolean(b) => *b,
-        Value::Integer(i) => *i != 0,
-        Value::Number(n) => *n != 0.0,
-        // A non-numeric string is never handed to this API; it shows rather than hiding gear.
-        Value::String(s) => s
-            .to_str()
-            .ok()
-            .and_then(|t| t.trim().parse::<f64>().ok())
-            .is_none_or(|n| n != 0.0),
-        _ => true,
-    }
-}
-
 /// Ask for a state, and queue the flip only if we are not already in it.
 fn want(model: &mut Model, which: WornDisplay, show: bool) {
     let held = match which {
@@ -78,9 +61,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     ] {
         g.set(
             name,
-            lua.create_function(move |lua, v: Value| {
+            // `GetBoolOrDefault` (`0x6f1c10`) with default 1 (`0x48de4e`, `0x48de9e`): a bare call
+            // shows, and the stock panel's string `"0"` hides where Lua 5.0 holds it truthy.
+            lua.create_function(move |lua, args: MultiValue| {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                want(&mut model, which, shown_arg(&v));
+                want(&mut model, which, bool_or_default(args.front(), true));
                 Ok(())
             })?,
         )?;
@@ -138,6 +123,33 @@ mod tests {
             s.take_worn_display_toggles(),
             vec![WornDisplay::Cloak, WornDisplay::Cloak, WornDisplay::Cloak]
         );
+    }
+
+    /// The flag is `GetBoolOrDefault` with default 1 (`0x48de4e`): a bare call shows, a table
+    /// takes the default, and a string goes by its first byte.
+    #[test]
+    fn the_setter_takes_the_flag_with_default_one() {
+        let mut s = UiScript::new().unwrap();
+        for (arg, shown) in [
+            ("", true),
+            ("nil", false),
+            ("{}", true),
+            (r#""no""#, false),
+            (r#""yes""#, true),
+            (r#""off""#, false),
+            (r#""""#, true),
+            ("0.5", false),
+        ] {
+            s.run(&format!("ShowHelm({})", if shown { "0" } else { "1" }))
+                .unwrap();
+            s.take_worn_display_toggles();
+            s.run(&format!("ShowHelm({arg})")).unwrap();
+            assert_eq!(
+                s.eval::<bool>("return ShowingHelm() == 1").unwrap(),
+                shown,
+                "ShowHelm({arg})"
+            );
+        }
     }
 
     /// The Options window's Defaults button writes every row, so a flip on no difference would
