@@ -29,7 +29,7 @@ fn next_event(events: &crossbeam_channel::Receiver<SessionEvent>) -> SessionEven
 /// A dial of `realm` asked under generation 0, the cycles' start.
 fn enter(realm: RealmInfo) -> RealmRequest {
     RealmRequest::Enter {
-        realm: Some(realm),
+        realm,
         generation: 0,
     }
 }
@@ -225,9 +225,8 @@ fn a_cancel_after_the_dial_was_asked_drops_it() {
     );
 }
 
-/// A server that lists no realm gets its empty list published and the logon parked, so the
-/// screens decide: the stock ones fail the connect and show the empty list, as the reference
-/// does, and the native policy dials the realmlist host itself.
+/// A server that lists no realm gets its empty list published and the logon parked, and the
+/// screens show it empty, as the reference does.
 #[test]
 fn an_empty_realm_list_is_published_and_parked() {
     let (realmd, _) = fake::servers(|_| Vec::new());

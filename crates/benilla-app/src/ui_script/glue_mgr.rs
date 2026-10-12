@@ -584,7 +584,7 @@ impl GlueMgr {
                         info!("glue: the connect dials {:?}", r.name);
                         // Stamped with the abandon generation as it is sent.
                         self.realm_out.push(RealmRequest::Enter {
-                            realm: Some(r.clone()),
+                            realm: r.clone(),
                             generation: 0,
                         });
                     }

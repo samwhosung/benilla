@@ -286,7 +286,7 @@ impl Realms {
     pub(super) fn enter(&mut self, choice: &RealmChoice, name: String, generation: u64) {
         if let Some(realm) = self.realms.iter().find(|r| r.name == name) {
             let _ = choice.0.send(RealmRequest::Enter {
-                realm: Some(realm.clone()),
+                realm: realm.clone(),
                 generation,
             });
         }
@@ -423,16 +423,9 @@ fn apply_realm_policy(
         if realms.shown {
             continue;
         }
-        // A server that lists no realm: this policy dials the realmlist host at the world port.
-        // The reference fails the connect `REALM_LIST_REALM_NOT_FOUND` and, holding no realm,
-        // shows the empty list (`0x46bf86` → `0x46c06e`).
-        if realms.realms.is_empty() {
-            let _ = choice.0.send(RealmRequest::Enter {
-                realm: None,
-                generation,
-            });
-            continue;
-        }
+        // A server that lists no realm gets the empty list, as the reference shows it once the
+        // connect fails `REALM_LIST_REALM_NOT_FOUND` with no realm held (`0x46bf86` → `0x46c06e`):
+        // no realm answers it.
         match auto_answer(
             &realms,
             remembered.as_deref(),
@@ -763,18 +756,15 @@ mod tests {
         );
     }
 
-    /// A server that lists no realm: the native policy dials the realmlist host itself, stamped
-    /// with the abandon generation the app holds.
+    /// A server that lists no realm: nothing is dialled, and the list goes up empty, as the
+    /// reference shows it (`0x46bf86` → `0x46c06e`).
     #[test]
-    fn an_empty_list_dials_the_fallback_under_the_live_generation() {
+    fn an_empty_list_dials_nothing_and_shows_the_list() {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<Realms>()
             .init_resource::<crate::cvars::Cvars>()
             .insert_resource(RealmChoice(tx))
-            .insert_resource(crate::net::LoginAbandon(std::sync::Arc::new(
-                std::sync::atomic::AtomicU64::new(4),
-            )))
             .add_message::<RealmListMessage>()
             .add_systems(Update, apply_realm_policy);
         app.world_mut().write_message(RealmListMessage {
@@ -782,14 +772,12 @@ mod tests {
             failed: false,
         });
         app.update();
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(RealmRequest::Enter {
-                realm: None,
-                generation: 4
-            })
-        ));
-        assert!(!app.world().resource::<Realms>().shown, "no empty dialog");
+        assert!(rx.try_recv().is_err(), "no dial");
+        assert!(
+            app.world().resource::<Realms>().shown,
+            "the empty list is up"
+        );
+        assert_eq!(auto_answer(&list(Vec::new()), None, true), None);
     }
 
     /// Mode ascending is Normal, PvP, RP, RP-PvP: RP decides before PvP (`0x46e92c`-`0x46e978`).

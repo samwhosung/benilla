@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use benilla_assets::LockRecover;
 use benilla_protocol::{
-    host_port, messages, AuthReject, CharAction, LoginStage, Poll, SessionEnd, SessionEvent,
-    WardenRequired, WorldSession, WorldWriter, WORLD_PORT,
+    messages, AuthReject, CharAction, LoginStage, Poll, SessionEnd, SessionEvent, WardenRequired,
+    WorldSession, WorldWriter,
 };
 use crossbeam_channel::{Receiver, Sender};
 
@@ -155,9 +155,9 @@ enum Parked {
     Acted(CharAction, u8),
     /// Stay parked: a realm-list refresh, or a Cancel over this screen.
     StayPut,
-    /// Drop the parked world session and dial this realm (the fallback address when `None`) under
-    /// the abandon generation its ask carried.
-    Realm(Option<benilla_protocol::RealmInfo>, u64),
+    /// Drop the parked world session and dial this realm under the abandon generation its ask
+    /// carried.
+    Realm(benilla_protocol::RealmInfo, u64),
     /// Drop the parked world session and return to the logon park.
     Leave,
     /// Select's Back: return to the pre-logon park.
@@ -302,9 +302,9 @@ pub(super) fn spawn_net(connect: bool) -> NetHandles {
 
 /// What the logon park's wait ended with.
 enum LogonAnswer {
-    /// `ChangeRealm` (`0x46f0e0`): dial this realm (the fallback address when `None`) with the
-    /// logon's session key, under the abandon generation the ask carried.
-    Enter(Option<benilla_protocol::RealmInfo>, u64),
+    /// `ChangeRealm` (`0x46f0e0`): dial this realm with the logon's session key, under the abandon
+    /// generation the ask carried.
+    Enter(benilla_protocol::RealmInfo, u64),
     /// A new login supersedes the logon, as `CGlueMgr::Login` (`0x46afb0`) starts the next logon
     /// whatever link the last one left.
     Login(LoginRequest),
@@ -544,15 +544,14 @@ fn run(
     }
 }
 
-/// One world attempt and, past the roster, its session: the dial to `pick`'s realm (the fallback
-/// address when `None`, which only the native policy asks for), the roster, the character park,
-/// then the world stream. Change Realm at the character park dials again from here with the same
+/// One world attempt and, past the roster, its session: the dial to `pick`'s realm, the roster,
+/// the character park, then the world stream. Change Realm at the character park dials again from here with the same
 /// session key. A cancel is an abandon generation past the one the pick carried.
 #[allow(clippy::too_many_arguments)]
 fn world(
     req: &LoginRequest,
     logon: &mut benilla_protocol::Logon,
-    pick: (Option<benilla_protocol::RealmInfo>, u64),
+    pick: (benilla_protocol::RealmInfo, u64),
     events_tx: &Sender<SessionEvent>,
     writer_tx: &Sender<WorldWriter>,
     parks: &Parks,
@@ -600,24 +599,17 @@ fn world(
         if canceled() {
             return Ok(WorldEnd::Failed);
         }
-        // Named, since the address alone cannot tell a chosen realm from the fallback.
-        if let Some(r) = &realm {
-            bevy::log::info!(
-                "net: realm {:?} ({} of {})",
-                r.name,
-                r.address,
-                logon.realms.len()
-            );
-        }
-        let world_addr = realm
-            .as_ref()
-            .map(|r| r.address.clone())
-            // The fallback drops any auth `:port` from the realmlist for the world port.
-            .unwrap_or_else(|| format!("{}:{}", host_port(&req.host, WORLD_PORT).0, WORLD_PORT));
+        bevy::log::info!(
+            "net: realm {:?} ({} of {})",
+            realm.name,
+            realm.address,
+            logon.realms.len()
+        );
+        let world_addr = realm.address.clone();
 
         stage(LoginStage::Handshaking);
         // For the queue dialog to name; the roster that carries it comes after the queue.
-        let realm_name = realm.as_ref().map(|r| r.name.clone());
+        let realm_name = Some(realm.name.clone());
         // A queue can last minutes, so it tests the abandon generation itself; otherwise a Cancel
         // would close the dialog while this thread held its place and entered the world anyway.
         let mut on_queue = |event: benilla_protocol::WorldConnectEvent| {
@@ -687,7 +679,7 @@ fn world(
         if events_tx
             .send(SessionEvent::CharacterList {
                 characters: characters.clone(),
-                realm: realm.clone(),
+                realm: Some(realm.clone()),
             })
             .is_err()
         {
@@ -764,7 +756,7 @@ fn world(
                 if events_tx
                     .send(SessionEvent::CharacterList {
                         characters: characters.clone(),
-                        realm: realm.clone(),
+                        realm: Some(realm.clone()),
                     })
                     .is_err()
                 {

@@ -406,12 +406,11 @@ pub(crate) struct RealmChoice(pub(crate) Sender<RealmRequest>);
 #[derive(Debug)]
 pub(crate) enum RealmRequest {
     /// Dial this realm (`ConnectToRealm`, `0x46b210`), the record as the list held it, as the
-    /// reference dials its copy (`0xc27fb8`) whatever a later list says; `None` is the native
-    /// policy's fallback for a server that lists no realm, the realmlist host at the world port.
-    /// `generation` is the abandon generation the app held when it asked: a later Cancel ends the
-    /// dial however early it lands.
+    /// reference dials its copy (`0xc27fb8`) whatever a later list says. `generation` is the
+    /// abandon generation the app held when it asked: a later Cancel ends the dial however early
+    /// it lands.
     Enter {
-        realm: Option<benilla_protocol::RealmInfo>,
+        realm: benilla_protocol::RealmInfo,
         generation: u64,
     },
     /// Query the realm list (`RequestRealmList`, every 5 s from `RealmList_OnUpdate`); the answer
