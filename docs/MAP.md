@@ -325,6 +325,7 @@
 - `WOW_MM_ZOOM` — benilla-app/src/minimap/mod.rs
 - `WOW_MOVE_SPEED` — benilla-app/src/player/setup.rs
 - `WOW_MOVE_TRACE` — benilla-assets/src/trace.rs
+- `WOW_MOVE_TRACE_CHAT` — benilla-app/src/net/io/wire_trace.rs
 - `WOW_MOVE_TRACE_TAGS` — benilla-assets/src/trace.rs
 - `WOW_MSAA` — benilla-app/src/cvars/mod.rs, benilla-world/src/view.rs
 - `WOW_MT_EXTRACT` — benilla-app/src/lib.rs
