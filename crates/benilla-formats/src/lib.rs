@@ -307,7 +307,10 @@ pub use server_messages::{load_server_messages_catalog, ServerMessagesCatalog};
 mod game_tips;
 pub use game_tips::{load_game_tips, GameTipsCatalog};
 mod text_filter_lists;
-pub use text_filter_lists::{load_chat_profanity, load_spam_messages, FilterPattern};
+pub use text_filter_lists::{
+    load_chat_profanity, load_names_profanity, load_names_reserved, load_spam_messages,
+    FilterPattern,
+};
 mod race_sound;
 pub use race_sound::{load_exploration_sound_catalog, ExplorationSoundCatalog};
 
