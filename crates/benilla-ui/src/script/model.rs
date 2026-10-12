@@ -2082,24 +2082,35 @@ impl Model {
 
     /// The post-load hook's step (`0x76a2f0`): a visible frame undefers, with its title region and
     /// each region it draws (`0x76a310`, `0x76a324`, `0x76a35b`). A hidden one stays deferred.
-    pub(crate) fn layout_load_end(&mut self, h: FrameHandle) {
+    /// Whether any owes a resolve now, as [`Self::layout_on_show_frame`]; the caller runs it
+    /// before the frame's `<Frames>` are built.
+    pub(crate) fn layout_load_end(&mut self, h: FrameHandle) -> bool {
         let Some(f) = self.arena.frame(h) else {
-            return;
+            return false;
         };
         if !f.effective_visible {
-            return;
+            return false;
         }
         let title = f.title_region;
         let regions: Vec<RegionHandle> = f.regions.clone();
-        self.undefer_frame(h);
+        let mut owed = self.undefer_frame(h);
         if let Some(t) = title {
-            self.undefer_region(t);
+            owed |= self.undefer_region(t);
         }
         for rh in regions {
             if Some(rh) != title && self.region_draws(rh) {
-                self.undefer_region(rh);
+                owed |= self.undefer_region(rh);
             }
         }
+        owed || !self.layout_pass.is_empty()
+    }
+
+    /// The layout ids [`Self::layout_load_end`] undeferred: the frame, its title region and the
+    /// regions it draws.
+    pub(crate) fn load_end_roots(&self, h: FrameHandle) -> Vec<u32> {
+        let mut out = self.show_frame_roots(h);
+        out.extend(self.show_region_roots(h));
+        out
     }
 
     /// The region's own shown bit (`+0xc4`): not hidden, and linked to its owner.

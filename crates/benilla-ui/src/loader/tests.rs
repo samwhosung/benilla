@@ -2775,6 +2775,87 @@ mod post_load_show_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
+    /// The pre-load hook defers the frame's layout (`0x7697cc`) and the post-load hook undefers a
+    /// visible one first of all (`0x76a310` → `0x768060(0)` → `0x7680e0(1)`), so its rect applies
+    /// and fires `OnSizeChanged` (`0x76b580`) before its `<Frames>` are built (`0x76a36f`), its
+    /// `OnLoad` (`0x76a387`) and its `OnShow` (`0x76a3b3`); a child's own hook does the same
+    /// inside, so the order is parent size, child size, child load, parent load.
+    #[test]
+    fn a_visible_frames_first_onsizechanged_fires_before_its_children_and_onload() {
+        let mut s = UiScript::new().unwrap();
+        s.run("LOG = {} function Log(tag) table.insert(LOG, tag) end")
+            .unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Frame name="SizedBorn">
+                    <Size><AbsDimension x="100" y="50"/></Size>
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                    <Scripts>
+                        <OnSizeChanged>Log(SizedBornChild and "size+child" or "size")</OnSizeChanged>
+                        <OnLoad>Log("load")</OnLoad>
+                        <OnShow>Log("show")</OnShow>
+                    </Scripts>
+                    <Frames>
+                        <Frame name="SizedBornChild">
+                            <Size><AbsDimension x="10" y="10"/></Size>
+                            <Anchors><Anchor point="CENTER"/></Anchors>
+                            <Scripts>
+                                <OnSizeChanged>Log("child-size")</OnSizeChanged>
+                                <OnLoad>Log("child-load")</OnLoad>
+                            </Scripts>
+                        </Frame>
+                    </Frames>
+                </Frame>
+            </Ui>"#,
+        );
+        let report = load_in(&s, &doc, "Test.xml", &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let at_load = s.eval::<String>("return table.concat(LOG, ',')").unwrap();
+        s.resolve();
+        let after_drain = s.eval::<String>("return table.concat(LOG, ',')").unwrap();
+        assert_eq!(
+            at_load, "size,child-size,child-load,load,show",
+            "fired inside the load, not at the next drain"
+        );
+        assert_eq!(after_drain, at_load, "and not again");
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
+    /// A frame hidden at the end of its load stays deferred (`0x76a2f0` undefers only a visible
+    /// one), so its first `OnSizeChanged` is its first show's, ahead of its `OnShow`.
+    #[test]
+    fn a_hidden_frames_first_onsizechanged_waits_for_its_show() {
+        let mut s = UiScript::new().unwrap();
+        s.run("LOG = {} function Log(tag) table.insert(LOG, tag) end")
+            .unwrap();
+        let doc = parse(
+            r#"<Ui>
+                <Frame name="SizedHidden" hidden="true">
+                    <Size><AbsDimension x="100" y="50"/></Size>
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                    <Scripts>
+                        <OnSizeChanged>Log("size")</OnSizeChanged>
+                        <OnLoad>Log("load")</OnLoad>
+                        <OnShow>Log("show")</OnShow>
+                    </Scripts>
+                </Frame>
+            </Ui>"#,
+        );
+        let report = load_in(&s, &doc, "Test.xml", &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        s.resolve();
+        assert_eq!(
+            s.eval::<String>("return table.concat(LOG, ',')").unwrap(),
+            "load"
+        );
+        s.run("SizedHidden:Show()").unwrap();
+        assert_eq!(
+            s.eval::<String>("return table.concat(LOG, ',')").unwrap(),
+            "load,size,show"
+        );
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
     /// The post-load OnShow is keyed on the frame's visibility at `0x76a38c`, and nothing records
     /// an OnShow already given: a frame first shown by its own OnLoad gets that `Show()`'s OnShow
     /// and then the hook's, while a frame still hidden gets none.

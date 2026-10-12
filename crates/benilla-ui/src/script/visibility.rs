@@ -278,20 +278,31 @@ fn notify(lua: &Lua, h: FrameHandle, visible: bool) {
 
 /// Open or close a frame's load window: the pre-load hook's `+0x114 = 1` (`0x7697c2`) and the
 /// post-load hook's first write, `+0x114 = 0` (`0x76a2ff`).
+///
+/// The pre-load hook defers the frame's layout (`0x7697c2`–`0x769807`). The post-load hook, once
+/// the window is down, undefers a visible one (`0x76a2ff`–`0x76a35b`), whose resolve runs there
+/// (`0x76a310` → `0x768060(0)` → `0x7680e0(1)`), so its `OnSizeChanged` fires ahead of its
+/// `<Frames>` (`0x76a36f`), its `OnLoad` (`0x76a387`) and its `OnShow` (`0x76a3b3`), as a show's
+/// does ([`base_show`]).
 pub(crate) fn set_load_window(lua: &Lua, wrapper: &Table, open: bool) {
     let Ok(h) = super::object::frame_handle_of(lua, wrapper) else {
         return;
     };
-    let mut model = model_mut(lua);
-    if let Some(f) = model.arena.frame_mut(h) {
-        f.load_window = open;
-    }
-    // The pre-load hook defers the frame's layout (`0x7697c2`–`0x769807`); the post-load hook,
-    // once the window is down, undefers a visible one (`0x76a2ff`–`0x76a35b`).
-    if open {
-        model.layout_load_begin(h);
-    } else {
-        model.layout_load_end(h);
+    let roots = {
+        let mut model = model_mut(lua);
+        if let Some(f) = model.arena.frame_mut(h) {
+            f.load_window = open;
+        }
+        if open {
+            model.layout_load_begin(h);
+            return;
+        }
+        let owed = model.layout_load_end(h);
+        let roots = model.load_end_roots(h);
+        (owed && model.resolve_fires(&roots)).then_some(roots)
+    };
+    if let Some(roots) = roots {
+        resolve_and_fire(lua, roots);
     }
 }
 

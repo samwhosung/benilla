@@ -643,7 +643,8 @@ pub(super) fn create_frame(
         // The builder's pre-load and post-load hooks (`0x6ee4d6`, `0x6ee4ea`): a frame born hidden
         // is deferred, as a hidden parent leaves it. A template's load opens its own window.
         model.layout_load_begin(h);
-        model.layout_load_end(h);
+        // No handler is bound yet, so the resolve this owes fires nothing.
+        let _ = model.layout_load_end(h);
         id
     };
 
