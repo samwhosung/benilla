@@ -287,7 +287,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetInboxHeaderInfo(index): the 13 values `MailFrame.lua:105` reads; nil out of range.
+    // GetInboxHeaderInfo(index): the 13 values `MailFrame.lua:105` reads. Out of range (or index
+    // 0, which `OpenMail_Update` asks after a letter closes) the reference still returns 13
+    // (`0x4aeff0`..`0x4af05e`): four nils, 0 for money, COD amount and days left, six nils.
     g.set(
         "GetInboxHeaderInfo",
         lua.create_function(|lua, index: usize| {
@@ -296,7 +298,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 row_at(&model, index)
             };
             let Some(r) = row else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                let mut miss = vec![Value::Nil; 4];
+                miss.extend(vec![Value::Integer(0); 3]);
+                miss.extend(vec![Value::Nil; 6]);
+                return Ok(MultiValue::from_vec(miss));
             };
             let opt_str = |s: &Option<String>| -> mlua::Result<Value> {
                 Ok(match s {
@@ -350,8 +355,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 }
                 row
             };
+            // A miss pushes four nils (`0x4af311`..`0x4af334`).
             let Some(r) = row else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(MultiValue::from_vec(vec![Value::Nil; 4]));
             };
             Ok(MultiValue::from_vec(vec![
                 // An invoice's body is nil (`0x4af1cf`): its text is the auction house's
@@ -1038,6 +1044,52 @@ mod tests {
                  return pkg == nil and has == nil",
             )
             .unwrap());
+    }
+
+    /// A row that does not exist still answers the full tuple: `GetInboxHeaderInfo` 13 values,
+    /// four nils, `0` money, COD and days left, six nils (`0x4aeff0`..`0x4af05e`), so a closed
+    /// letter's `GetInboxHeaderInfo(0)` can be compared with `CODAmount > 0` (`MailFrame.lua:399`);
+    /// `GetInboxText` four nils (`0x4af311`..`0x4af334`).
+    #[test]
+    fn a_missing_inbox_row_answers_the_references_miss_tuples() {
+        let mut s = UiScript::new().unwrap();
+        s.set_mail(Some(state()));
+        for index in [0, 3, 99] {
+            assert_eq!(
+                s.arity(&format!("GetInboxHeaderInfo({index})")).unwrap(),
+                13,
+                "header {index}"
+            );
+            assert_eq!(
+                s.arity(&format!("GetInboxText({index})")).unwrap(),
+                4,
+                "text {index}"
+            );
+            assert_eq!(
+                s.eval::<String>(&format!(
+                    "local t = {{GetInboxHeaderInfo({index})}} \
+                     local k = '' \
+                     for i = 1, 13 do k = k .. type(t[i]) .. ',' end \
+                     local _, _, _, _, m, c, d = GetInboxHeaderInfo({index}) \
+                     return k .. m .. ',' .. c .. ',' .. d .. ',' .. tostring(c > 0)"
+                ))
+                .unwrap(),
+                "nil,nil,nil,nil,number,number,number,nil,nil,nil,nil,nil,nil,0,0,0,false",
+                "header {index}"
+            );
+            assert!(
+                s.eval::<bool>(&format!(
+                    "local a, b, c, d = GetInboxText({index}) \
+                     return a == nil and b == nil and c == nil and d == nil"
+                ))
+                .unwrap(),
+                "text {index}"
+            );
+        }
+        assert!(
+            s.take_mail_opens().is_empty(),
+            "a miss opens nothing for the app to fetch"
+        );
     }
 
     #[test]
