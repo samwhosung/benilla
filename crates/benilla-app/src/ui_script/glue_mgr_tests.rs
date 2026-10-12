@@ -2611,3 +2611,247 @@ fn a_secure_claim_reads_insecure_until_the_reply_has_run() {
     assert!(script.addon_is_secure("Blizzard_TalentUI"));
     assert!(!script.addon_is_secure("Alpha"));
 }
+
+// ── The delete and the rename under the stock select (`CharacterSelect.xml`) ──
+
+/// The stock select over `roster` on realm `Alpha`, at the loaded roster, with
+/// `SELECT_FIRST_CHARACTER` and `FORCE_RENAME_CHARACTER` logged into `EVENTS` too; `reply` as
+/// [`char_select_app_on`]'s.
+fn select_screen(
+    roster: &[benilla_protocol::Character],
+    reply: Option<&dyn Fn(&fake::World)>,
+) -> (App, fake::Realmd, fake::World) {
+    let (mut app, realmd, world) = char_select_app_on(
+        |world| vec![FakeRealm::new("Alpha", world)],
+        &[roster],
+        "0",
+        false,
+        reply,
+    );
+    at_the_roster(&mut app);
+    vm(&app)
+        .run(
+            "RosterListener:RegisterEvent('SELECT_FIRST_CHARACTER') \
+             RosterListener:RegisterEvent('FORCE_RENAME_CHARACTER')",
+        )
+        .unwrap();
+    (app, realmd, world)
+}
+
+/// The rows' names as the stock list shows them.
+fn row_names(app: &App) -> Vec<String> {
+    vm(app)
+        .eval::<Vec<String>>(
+            "local t = {} for i = 1, GetNumCharacters() do \
+               t[i] = getglobal('CharSelectCharacterButton'..i..'ButtonTextName'):GetText() end \
+             return t",
+        )
+        .unwrap()
+}
+
+/// The stock delete end to end: the confirm dialog's Okay calls `DeleteCharacter`, which shows the
+/// `CHAR_DELETE_IN_PROGRESS` dialog and sends `CMSG_CHAR_DELETE` with the selected guid; the
+/// reply's success fires `SELECT_FIRST_CHARACTER` and asks for the list again, which comes back
+/// without the character, the first row selected.
+#[test]
+fn the_stock_delete_refetches_the_list_and_selects_the_first_row() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _realmd, world) = select_screen(&roster3(), None);
+    // The confirm box enables Okay from its `OnTextChanged`, which fires at the frame's flush.
+    vm(&app)
+        .run(
+            "CharacterSelect_SelectCharacter(2) CharacterDeleteDialog:Show() \
+             CharacterDeleteEditBox:SetText(DELETE_CONFIRM_STRING)",
+        )
+        .unwrap();
+    app.world_mut()
+        .non_send_resource_mut::<UiScript>()
+        .tick(0.01);
+    vm(&app).run("CharacterDeleteButton1:Click()").unwrap();
+    assert!(!shown(&app, "CharacterDeleteDialog"));
+    let lists = seen(&app, "CHARACTER_LIST_UPDATE");
+    app.update();
+    assert_eq!(
+        dialog(&app),
+        Some(("CANCEL".into(), "Deleting character".into()))
+    );
+    assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Delete);
+    until(&mut app, "the list without Bravo", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") > lists
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    assert_eq!(
+        world.bodies(benilla_protocol::messages::opcode::CMSG_CHAR_DELETE),
+        [0x12u64.to_le_bytes().to_vec()]
+    );
+    assert_eq!(
+        world.enumerations(),
+        2,
+        "the delete's success asked for the list"
+    );
+    assert_eq!(seen(&app, "SELECT_FIRST_CHARACTER"), 1);
+    assert_eq!(row_names(&app), ["Alpha", "Charlie"]);
+    assert_eq!(
+        vm(&app)
+            .eval::<f64>("return CharacterSelect.selectedIndex")
+            .unwrap(),
+        1.0
+    );
+    assert_eq!(vm(&app).glue_selected_guid(), Some(0x11));
+    assert_eq!(dialog(&app), None);
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// A refused delete (vmangos's guild master, `CHAR_DELETE_FAILED`) opens `OKAY` with its text and
+/// asks for no list (`0x46c173`).
+#[test]
+fn a_refused_stock_delete_opens_okay_and_keeps_the_list() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _realmd, world) = select_screen(&roster3(), None);
+    world.answer_deletes(0x3a);
+    vm(&app).run("DeleteCharacter(2)").unwrap();
+    app.update();
+    assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Delete);
+    until(&mut app, "the refusal", |app| {
+        app.world().resource::<GlueMgr>().state == ScreenState::Idle
+    });
+    assert_eq!(
+        dialog(&app),
+        Some(("OKAY".into(), "Character deletion failed".into()))
+    );
+    assert_eq!(world.enumerations(), 1);
+    assert_eq!(seen(&app, "SELECT_FIRST_CHARACTER"), 0);
+    assert_eq!(row_names(&app), ["Alpha", "Bravo", "Charlie"]);
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// The stock rename end to end, on a character the server flagged: a name the check fails
+/// re-shows the rename dialog with the check's text and sends nothing; a passing one hides it,
+/// shows `CHAR_RENAME_IN_PROGRESS` and sends `CMSG_CHAR_RENAME`; the reply closes the dialog and
+/// renames the row in place, with no list asked, the flag clear and the character's files moved
+/// to the new name.
+#[test]
+fn the_stock_rename_renames_the_row_and_moves_its_files() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (home, _guard) = addon_home("rename");
+    three_addons(&home);
+    let macros = crate::local_state::macros_character_path("Alpha", "Bravo").unwrap();
+    crate::local_state::write_atomic(&macros, "MACRO 1 \"M\" Ability_Ambush\n/say hi\nEND\n")
+        .unwrap();
+    let mut roster = roster3();
+    roster[1].flags |= benilla_protocol::CHARACTER_FLAG_RENAME;
+    let (mut app, _realmd, world) =
+        select_screen(&roster, Some(&|w| w.set_addon_info(&[2; 12], false)));
+    let enable = |app: &App, who: &str| {
+        vm(app)
+            .eval::<f64>(&format!("return GetAddOnEnableState('{who}', 1)"))
+            .unwrap()
+    };
+    assert_eq!(enable(&app, "Bravo"), 0.0, "Bravo has Alpha off");
+
+    // A name the check fails: the dialog again, with the check's text, nothing sent.
+    vm(&app)
+        .run(
+            "CharacterSelect_SelectCharacter(2) CharacterRenameDialog:Show() \
+             CharacterRenameEditBox:SetText('X') CharacterRenameButton1:Click()",
+        )
+        .unwrap();
+    assert!(shown(&app, "CharacterRenameDialog"));
+    assert_eq!(
+        vm(&app)
+            .eval::<String>("return CharacterRenameText1:GetText()")
+            .unwrap(),
+        "Names must be at least 2 characters"
+    );
+    assert_eq!(seen(&app, "FORCE_RENAME_CHARACTER CHAR_NAME_TOO_SHORT"), 1);
+    app.update();
+    assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Idle);
+
+    // A passing one.
+    vm(&app)
+        .run("CharacterRenameEditBox:SetText('Newbie') CharacterRenameButton1:Click()")
+        .unwrap();
+    assert!(!shown(&app, "CharacterRenameDialog"));
+    let lists = seen(&app, "CHARACTER_LIST_UPDATE");
+    app.update();
+    assert_eq!(
+        dialog(&app),
+        Some(("CANCEL".into(), "Renaming Character...".into()))
+    );
+    until(&mut app, "the rename's reply", |app| {
+        seen(app, "CHARACTER_LIST_UPDATE") > lists
+    });
+    let mut sent = 0x12u64.to_le_bytes().to_vec();
+    sent.extend(b"Newbie\0");
+    assert_eq!(
+        world.bodies(benilla_protocol::messages::opcode::CMSG_CHAR_RENAME),
+        [sent]
+    );
+    assert_eq!(dialog(&app), None, "the reply closed the dialog");
+    assert_eq!(world.enumerations(), 1, "the record is renamed in place");
+    assert_eq!(row_names(&app), ["Alpha", "Newbie", "Charlie"]);
+    assert_eq!(
+        app.world().resource::<GlueMgr>().state,
+        ScreenState::Rename,
+        "the reply leaves state 7"
+    );
+    // The flag is clear: the verb refuses the record now (`0x4735ab`).
+    assert_eq!(
+        vm(&app)
+            .eval::<f64>(
+                "local function n(...) return arg.n end return n(RenameCharacter(2, 'Other'))"
+            )
+            .unwrap(),
+        0.0
+    );
+    let kept = app
+        .world()
+        .resource::<GlueMgr>()
+        .roster_character(0x12)
+        .map(|c| {
+            (
+                c.name.clone(),
+                c.flags & benilla_protocol::CHARACTER_FLAG_RENAME,
+            )
+        });
+    assert_eq!(kept, Some(("Newbie".to_string(), 0)));
+
+    // The files moved, and the AddOn state with them.
+    let moved = crate::local_state::macros_character_path("Alpha", "Newbie").unwrap();
+    assert!(moved.exists() && !macros.exists());
+    assert_eq!(
+        std::fs::read(home.join("addon-state").join("Alpha-Newbie.txt")).unwrap(),
+        b"Alpha: disabled\n"
+    );
+    assert!(!home.join("addon-state").join("Alpha-Bravo.txt").exists());
+    assert_eq!(enable(&app, "Newbie"), 0.0, "the node came with the file");
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// A rename the server refuses re-shows the dialog with `CHAR_RENAME_FAILED` (`0x46b49c`), and
+/// the row keeps its name.
+#[test]
+fn a_refused_stock_rename_asks_again() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let mut roster = roster3();
+    roster[1].flags |= benilla_protocol::CHARACTER_FLAG_RENAME;
+    let (mut app, _realmd, world) = select_screen(&roster, None);
+    world.answer_renames(0x2f);
+    vm(&app).run("RenameCharacter(2, 'Newbie')").unwrap();
+    until(&mut app, "the refusal", |app| {
+        seen(app, "FORCE_RENAME_CHARACTER CHAR_RENAME_FAILED") == 1
+    });
+    assert!(shown(&app, "CharacterRenameDialog"));
+    assert_eq!(
+        vm(&app)
+            .eval::<String>("return CharacterRenameText1:GetText()")
+            .unwrap(),
+        "Character rename failed"
+    );
+    assert_eq!(dialog(&app), None);
+    assert_eq!(row_names(&app), ["Alpha", "Bravo", "Charlie"]);
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
