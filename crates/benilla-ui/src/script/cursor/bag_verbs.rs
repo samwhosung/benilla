@@ -96,9 +96,20 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
         return true;
     }
 
-    if is_container(&held) || held.bag == EQUIPMENT_BAG {
-        // A swap (`0x5e0c40`); an item from a bag equipment slot enters this fork too, hence the
-        // `||`. A split stack cannot swap and stays held: the reference splits only when storing.
+    // A held item that lives in this very bag cancels (`0x4c7cea`-`0x4c7d11`: its container guid
+    // is the occupant's): `ClearCursor(1,1)`, answer 1, nothing sent.
+    if autostore_container(live) == Some(held.bag) {
+        clear_cursor(model);
+        return true;
+    }
+
+    // The swap fork: the held item comes from the player's own bag slots 19-22 (`0x4c7d44`-
+    // `0x4c7d5e`, 20-23 here) or is a container (`0x4c7dc4`). Any other item, a worn helm
+    // included, is stored.
+    let from_bag_slot = held.bag == EQUIPMENT_BAG && (20..=23).contains(&held.slot);
+    if from_bag_slot || is_container(&held) {
+        // A swap (`0x5e0c40`). A split stack cannot swap and stays held: the reference splits
+        // only when storing.
         if held.count.is_none() {
             model.container_moves.push(ContainerMove {
                 src_bag: held.bag,
@@ -468,6 +479,91 @@ mod tests {
             "the doll's auto-equip of a misfit (`0x4c78ef`)"
         );
         assert!(locked(&s));
+    }
+
+    /// A worn non-bag item dropped on an occupied bag slot is stored in that bag
+    /// (`0x4c7e06` into `0x5e12e0`), not swapped: only an item held from the bag slots 19-22 or a
+    /// container swaps (`0x4c7d44`-`0x4c7d5e`, `0x4c7dc4`).
+    #[test]
+    fn a_worn_item_on_an_occupied_bag_slot_is_stored_not_swapped() {
+        let mut s = UiScript::new().unwrap();
+        let mut doll: InventorySlots = Default::default();
+        doll[1] = Some(InvSlotView {
+            item_id: 1234,
+            icon: Some("Interface\\Icons\\INV_Helmet_01".into()),
+            count: 1,
+            equip_slots: vec![1],
+            guid: 0x301,
+            ..Default::default()
+        });
+        doll[20] = Some(bag_slot_view(4500));
+        s.set_inventory_slots(doll);
+        s.run("PickupInventoryItem(1)").unwrap();
+        assert_eq!(s.cursor_item().map(|i| i.bag), Some(EQUIPMENT_BAG));
+
+        assert_eq!(s.eval::<i64>("return PutItemInBag(20)").unwrap(), 1);
+        assert!(s.take_container_moves().is_empty(), "a store, not a swap");
+        assert_eq!(
+            s.take_bag_autostores(),
+            vec![BagAutoStore {
+                src_bag: EQUIPMENT_BAG,
+                src_slot: 1,
+                dst_bag: 1,
+                count: None,
+            }]
+        );
+        assert!(s.cursor_item().is_none());
+    }
+
+    /// A bag held from its own bag slot still swaps (`0x4c7d44`-`0x4c7d5e`).
+    #[test]
+    fn a_bag_held_from_a_bag_slot_swaps_with_an_occupied_one() {
+        let mut s = UiScript::new().unwrap();
+        let mut doll: InventorySlots = Default::default();
+        doll[20] = Some(bag_slot_view(4500));
+        doll[21] = Some(bag_slot_view(4501));
+        s.set_inventory_slots(doll);
+        s.run("PickupInventoryItem(20)").unwrap();
+
+        assert_eq!(s.eval::<i64>("return PutItemInBag(21)").unwrap(), 1);
+        assert!(s.take_bag_autostores().is_empty());
+        assert_eq!(
+            s.take_container_moves(),
+            vec![ContainerMove {
+                src_bag: EQUIPMENT_BAG,
+                src_slot: 20,
+                dst_bag: EQUIPMENT_BAG,
+                dst_slot: 21,
+                count: None,
+            }]
+        );
+    }
+
+    /// An item dropped on the bag it already lives in is a cancel (`0x4c7cea`-`0x4c7d11`): the
+    /// cursor clears with an unlock and nothing goes out, where a store would name the same bag.
+    #[test]
+    fn an_item_dropped_on_its_own_bag_cancels() {
+        let mut s = UiScript::new().unwrap();
+        let mut doll: InventorySlots = Default::default();
+        doll[20] = Some(bag_slot_view(4500));
+        s.set_inventory_slots(doll);
+        s.set_container(1, Some(backpack()));
+        s.run("PickupContainerItem(1, 2)").unwrap();
+        assert!(s.item_locked(0x202));
+
+        assert_eq!(s.eval::<i64>("return PutItemInBag(20)").unwrap(), 1);
+        assert!(s.cursor_item().is_none());
+        assert!(!s.item_locked(0x202), "ClearCursor(1,1) unlocked it");
+        assert!(s.take_bag_autostores().is_empty());
+        assert!(s.take_container_moves().is_empty());
+
+        // Another bag's button is still a store.
+        let mut doll: InventorySlots = Default::default();
+        doll[21] = Some(bag_slot_view(4501));
+        s.set_inventory_slots(doll);
+        s.run("PickupContainerItem(1, 2)").unwrap();
+        assert_eq!(s.eval::<i64>("return PutItemInBag(21)").unwrap(), 1);
+        assert_eq!(s.take_bag_autostores().len(), 1);
     }
 
     #[test]
