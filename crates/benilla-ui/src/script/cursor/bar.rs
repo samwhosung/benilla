@@ -56,7 +56,9 @@ fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
 }
 
 /// `PickupAction(id)`, the slot's shift-click and drag start (`ActionBarFrame.xml:12-38`). With a
-/// payload held it places instead; a pickup also clears the slot on the wire at once. The cursor
+/// spell, item, macro or bar item held it places instead (`0x4e615d`-`0x4e6194`); with nothing
+/// or anything else held it picks up, the setter's clear dropping coins, a pet action, a stabled
+/// pet or a vendor row. A pickup also clears the slot on the wire at once. The cursor
 /// goes first and the slot after, as `0x4e6130` runs its setter ([`lift`]) before the slot clear
 /// `0x4e5db0`, so the pickup's events still read the action in its slot: the setter's inner
 /// `ClearCursor(1,1)` signals on the empty cursor, then its tail. The slot clears even when no
@@ -64,7 +66,15 @@ fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
 pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
     let picked = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
-        if model.cursor.is_some() {
+        if matches!(
+            model.cursor,
+            Some(
+                CursorPayload::Spell(_)
+                    | CursorPayload::Item(_)
+                    | CursorPayload::Macro(_)
+                    | CursorPayload::Action(_)
+            )
+        ) {
             None
         } else {
             // An empty slot returns before any setter (`0x4e61a3`).
@@ -560,5 +570,23 @@ mod tests {
             "no setter, no clear"
         );
         assert_eq!(s.take_action_sets(), vec![(1, 0), (2, 0), (3, 0)]);
+    }
+
+    /// `PickupAction` places only a held spell, item, macro or bar item (`0x4e615d`-`0x4e6194`);
+    /// with coins held it picks the slot up, the setter's `ClearCursor(1,1)` dropping the coins
+    /// with their `PLAYER_MONEY`. An empty slot does nothing (`0x4e61a3`).
+    #[test]
+    fn pickup_action_lifts_over_a_payload_it_cannot_place() {
+        let mut s = UiScript::new().unwrap();
+        s.set_money(1_000);
+        s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 133)));
+        s.run("PickupPlayerMoney(10)").unwrap();
+        crate::script::tick::heard::listen(&s, &["PLAYER_MONEY"], None);
+        s.run("PickupAction(2)").unwrap();
+        assert!(matches!(s.cursor_payload(), Some(CursorPayload::Money(_))));
+        s.run("PickupAction(1)").unwrap();
+        assert!(matches!(s.cursor_payload(), Some(CursorPayload::Spell(_))));
+        assert_eq!(crate::script::tick::heard::take(&s), ["PLAYER_MONEY"]);
+        assert_eq!(s.take_action_sets(), vec![(1, 0)]);
     }
 }
