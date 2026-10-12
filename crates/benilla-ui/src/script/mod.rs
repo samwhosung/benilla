@@ -94,7 +94,7 @@ mod item_text;
 pub mod keybind;
 mod keyboard;
 pub(crate) use keyboard::enable_for_script;
-pub use keyboard::KeyWalk;
+pub use keyboard::{KeyUp, KeyWalk};
 mod layout;
 mod layout_cache;
 mod loot;
@@ -1167,8 +1167,8 @@ impl UiScript {
     }
 
     /// A key released, by the name its press went by: the key-up dispatcher (`0x765fd0`) runs
-    /// `OnKeyUp` on the frame that consumed that key's last down. `true` when one was on record.
-    pub fn key_up(&mut self, key: &str) -> bool {
+    /// `OnKeyUp` on the frame that consumed that key's last down.
+    pub fn key_up(&mut self, key: &str) -> KeyUp {
         keyboard::key_up(&self.lua, key)
     }
 

@@ -10,7 +10,7 @@ use benilla_ui::script::UiScript;
 use super::bag_tests::open_backpack_with_a_five_stack;
 use super::input::feed_keys;
 use super::UiKeyboardCapture;
-use crate::bindings::LayoutNames;
+use crate::bindings::{KeyDownList, LayoutNames};
 use crate::textinput::{keymap::Mods, HostClipboard};
 
 /// One keyboard event as winit hands it over.
@@ -42,6 +42,8 @@ struct Feed {
     capture: UiKeyboardCapture,
     clipboard: HostClipboard,
     mods: Mods,
+    keys: ButtonInput<KeyCode>,
+    down: KeyDownList,
 }
 
 impl Feed {
@@ -55,15 +57,28 @@ impl Feed {
                 alt: false,
                 sup: false,
             },
+            keys: ButtonInput::default(),
+            down: KeyDownList::default(),
         }
     }
 
+    /// The events as the frame brings them, `ButtonInput` following them as bevy's does.
     fn send(&mut self, script: &mut UiScript, events: &[KeyboardInput]) {
         script.set_alt_down(self.mods.alt);
+        self.keys.clear();
+        for ev in events {
+            match ev.state {
+                ButtonState::Pressed => self.keys.press(ev.key_code),
+                ButtonState::Released => self.keys.release(ev.key_code),
+            }
+        }
         feed_keys(
             script,
             &mut self.capture,
             events.iter(),
+            &self.keys,
+            &mut self.down,
+            true,
             self.mods,
             &LayoutNames::default(),
             &mut self.clipboard,
@@ -164,13 +179,15 @@ fn a_frame_that_took_the_key_keeps_the_paste_from_the_box() {
 
     // The map closes: the walk reaches the box, which pastes.
     s.run("map:Hide()").unwrap();
+    feed.send(&mut s, &[up(KeyCode::KeyV)]);
     feed.send(&mut s, &[down(KeyCode::KeyV, Some("\u{16}"))]);
     assert_eq!(s.eval::<String>("return box:GetText()").unwrap(), "pasted");
     assert!(s.take_errors().is_empty());
 }
 
 /// The modifiers go through the walk as key-downs named `SHIFT`, `CTRL` and `ALT` (`0x76b7d0`'s
-/// table), a code the table does not name as `UNKNOWN`, each with its key-up.
+/// table), the codes it cannot name (ScrollLock) as `UNKNOWN`, each with its key-up; a key the
+/// client drops (Windows, Menu, fn, Command) walks as nothing.
 #[test]
 fn modifiers_and_unnamed_keys_walk_as_keys_with_their_ups() {
     let mut s = UiScript::new().unwrap();
@@ -189,7 +206,11 @@ fn modifiers_and_unnamed_keys_walk_as_keys_with_their_ups() {
         KeyCode::ShiftLeft,
         KeyCode::ControlRight,
         KeyCode::AltLeft,
+        KeyCode::ScrollLock,
+        // The client drops these before any walk (`0x42da39`; the Mac table's -1): no down, no up.
         KeyCode::Fn,
+        KeyCode::SuperLeft,
+        KeyCode::ContextMenu,
     ] {
         feed.send(&mut s, &[down(code, None), up(code)]);
     }
@@ -199,4 +220,69 @@ fn modifiers_and_unnamed_keys_walk_as_keys_with_their_ups() {
     );
     assert!(feed.capture.consumed.contains(&KeyCode::ShiftLeft));
     assert!(s.take_errors().is_empty());
+}
+
+/// A box the walk reached ate the key (`0x77b1db` -> `0x77b35e`; the world frame never sees it), so
+/// an F-key that gave an `autoFocus` box the focus runs no binding; the character walk gates
+/// nothing, so a frame that took a character leaves its key's binding alone.
+#[test]
+fn a_box_that_took_the_key_eats_its_binding_and_a_char_gates_none() {
+    let mut s = UiScript::new().unwrap();
+    s.run(
+        r#"
+        box = CreateFrame("EditBox", "EatBox")
+        box:SetAutoFocus(true)
+        box:Hide() box:Show()
+        box:ClearFocus()
+        chars = CreateFrame("Frame", "CharsOnly")
+        chars:SetFrameStrata("FULLSCREEN_DIALOG")
+        chars:EnableKeyboard(true)
+        chars:SetScript("OnChar", function() end)
+    "#,
+    )
+    .unwrap();
+    let mut feed = Feed::new("");
+    feed.send(&mut s, &[down(KeyCode::F5, None)]);
+    assert_eq!(s.focused_editbox_name().as_deref(), Some("EatBox"));
+    assert!(
+        feed.capture.consumed.contains(&KeyCode::F5),
+        "the box ate F5, so its binding does not run"
+    );
+
+    s.run("box:ClearFocus() box:Hide()").unwrap();
+    feed.send(&mut s, &[up(KeyCode::F5)]);
+    feed.capture.consumed.clear();
+    feed.send(&mut s, &[down(KeyCode::KeyQ, Some("q"))]);
+    assert!(
+        feed.capture.consumed.is_empty(),
+        "OnChar took the character, which is no reason to eat Q's binding"
+    );
+}
+
+/// A key the client drops before any walk (Windows key, Command, fn) gives an `autoFocus` box no
+/// focus and no key-up; the Windows key is `SuperLeft` here.
+#[test]
+fn a_dropped_key_walks_nowhere_and_grants_no_focus() {
+    let mut s = UiScript::new().unwrap();
+    s.run(
+        r#"
+        box = CreateFrame("EditBox", "DropBox")
+        box:SetAutoFocus(true)
+        box:Hide() box:Show()
+        box:ClearFocus()
+    "#,
+    )
+    .unwrap();
+    let mut feed = Feed::new("");
+    feed.send(
+        &mut s,
+        &[down(KeyCode::SuperLeft, None), up(KeyCode::SuperLeft)],
+    );
+    assert_eq!(
+        s.focused_editbox_name(),
+        None,
+        "Cmd+Tab gives no box the focus"
+    );
+    feed.send(&mut s, &[down(KeyCode::KeyA, Some("a"))]);
+    assert_eq!(s.focused_editbox_name().as_deref(), Some("DropBox"));
 }

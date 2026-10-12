@@ -113,21 +113,30 @@ pub(crate) fn key_token(k: KeyCode, layout: &LayoutNames) -> Option<KeyName> {
     }
 }
 
-/// The name the key-down walk's `arg1` carries for a press (`0x76b7d0`): the key's binding name,
-/// the modifiers by their own (`0`, `1`, `2` of the table: `SHIFT`, `CTRL`, `ALT`, `0x846e80`,
-/// `0x846e88`, `0x846e90`), and `UNKNOWN` for a code the table does not name. Unlike
-/// [`key_token`], which is a binding's, a modifier or an unnamed key still gets a down and an up.
-pub(crate) fn walk_name(k: KeyCode, layout: &LayoutNames) -> String {
+/// The name the key-down walk's `arg1` carries for a press (`0x76b7d0`), `None` for a key the
+/// client drops before any walk: the modifiers go by their own names (`0`, `1`, `2` of the table,
+/// `SHIFT`, `CTRL`, `ALT` at `0x846e80`, `0x846e88`, `0x846e90`), and `UNKNOWN` is the name of the
+/// codes the table cannot name, `0x210` and `0x211` (ScrollLock and Pause, and F14 and F15 on a
+/// Mac). Every other key without a name never reaches the walk: the Windows key table drops it
+/// where `MapVirtualKeyA` answers 0 (`0x42da39`: the Windows and Menu keys, media keys, a key the
+/// layout drops), the Mac table `0x5bf320` has -1 for Command and fn. Unlike [`key_token`], which
+/// is a binding's, a modifier still gets a down and an up.
+pub(crate) fn walk_name(k: KeyCode, layout: &LayoutNames) -> Option<String> {
     if let Some(name) = key_token(k, layout) {
-        return name.to_string();
+        return Some(name.to_string());
     }
-    match k {
-        KeyCode::ShiftLeft | KeyCode::ShiftRight => "SHIFT",
-        KeyCode::ControlLeft | KeyCode::ControlRight => "CTRL",
-        KeyCode::AltLeft | KeyCode::AltRight => "ALT",
-        _ => "UNKNOWN",
-    }
-    .to_string()
+    Some(
+        match k {
+            KeyCode::ShiftLeft | KeyCode::ShiftRight => "SHIFT",
+            KeyCode::ControlLeft | KeyCode::ControlRight => "CTRL",
+            KeyCode::AltLeft | KeyCode::AltRight => "ALT",
+            KeyCode::ScrollLock | KeyCode::Pause => "UNKNOWN",
+            #[cfg(target_os = "macos")]
+            KeyCode::F14 | KeyCode::F15 => "UNKNOWN",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 /// The fixed half of `0x42d800` and the Mac table: every key no layout names

@@ -228,12 +228,33 @@ fn linked(lua: &Lua, h: FrameHandle) -> bool {
     model.arena.frame(h).is_some_and(|f| f.effective_visible)
 }
 
+/// What the key-up dispatcher (`0x765fd0`) did with a release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyUp {
+    /// A consumer was on record and got the up (or was gone or hidden, which ends it the same).
+    Delivered,
+    /// No consumer on record, and the release was PRINTSCREEN, which the client runs through the
+    /// key-down walk (`0x76603c`-`0x76604d`): Windows sends that key as an up alone. `Declined`
+    /// leaves the world frame's binding to the host.
+    Walked(KeyWalk),
+    /// No consumer on record: nothing.
+    Unclaimed,
+}
+
+impl KeyUp {
+    /// Whether the release was taken, by a recorded consumer or the PRINTSCREEN walk.
+    pub fn taken(self) -> bool {
+        !matches!(self, KeyUp::Unclaimed | KeyUp::Walked(KeyWalk::Declined))
+    }
+}
+
 /// The key-up dispatcher (`0x765fd0`): the key's last consumer gets `OnKeyUp` with the key's name
 /// (`0x76bba0`, gated on that slot alone, and on being linked), however the key stands now. An
 /// EditBox consumer runs no script: its override (`0x77b7c0`) only grants an `autoFocus` box the
-/// free focus. Returns whether a consumer was on record, which ends the up event for the rest of
-/// the bus (`0x76602d`); a delivered up leaves the record (`0x76605b` is the no-record leg).
-pub(super) fn key_up(lua: &Lua, key: &str) -> bool {
+/// free focus. A delivered up leaves the record. With none on record the release is nothing,
+/// except PRINTSCREEN's, which runs the key-down walk and then clears the record that walk wrote
+/// (`0x76603c`-`0x76605b`).
+pub(super) fn key_up(lua: &Lua, key: &str) -> KeyUp {
     let Some(h) = lua
         .app_data_ref::<Model>()
         .expect("model app_data")
@@ -241,14 +262,22 @@ pub(super) fn key_up(lua: &Lua, key: &str) -> bool {
         .get(key)
         .copied()
     else {
-        return false;
+        if !key.eq_ignore_ascii_case("PRINTSCREEN") {
+            return KeyUp::Unclaimed;
+        }
+        let walked = walk_key(lua, key);
+        lua.app_data_mut::<Model>()
+            .expect("model app_data")
+            .key_consumers
+            .remove(key);
+        return KeyUp::Walked(walked);
     };
     if !linked(lua, h) {
-        return true;
+        return KeyUp::Delivered;
     }
     if is_editbox(lua, h) {
         super::editbox::takes_event(lua, h);
-        return true;
+        return KeyUp::Delivered;
     }
     let id = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
@@ -257,13 +286,15 @@ pub(super) fn key_up(lua: &Lua, key: &str) -> bool {
     if has_script(lua, id, "OnKeyUp") {
         fire(lua, id, "OnKeyUp", key);
     }
-    true
+    KeyUp::Delivered
 }
 
-/// The auto-repeat dispatcher (`0x766070`): the key's consumer's `+0x58`. A plain frame's is a
-/// stub (`0x46ff90`), so the repeat is [`KeyWalk::Frame`] and runs nothing; an EditBox's
-/// (`0x77b770`) is its key-down again, [`KeyWalk::Box`], on the linked box that takes it. No
-/// consumer on record: nothing (`Declined`).
+/// The auto-repeat dispatcher (`0x766070`): the key's consumer's `+0x58`, and any consumer on
+/// record makes the repeat consumed whatever that returns (`0x7660bb`). A plain frame's is a stub
+/// (`0x46ff90`): [`KeyWalk::Frame`], nothing runs. An EditBox's (`0x77b770`) grants an `autoFocus`
+/// box the free focus first (`0x77b799`) and then runs its key-down, which may decline: the
+/// repeat is [`KeyWalk::Box`] only when the box acted, else `Frame`, consumed and inert. No
+/// consumer on record: `Declined`, and nothing happens.
 pub(super) fn key_repeat(lua: &Lua, key: &str) -> KeyWalk {
     let Some(h) = lua
         .app_data_ref::<Model>()
@@ -274,17 +305,15 @@ pub(super) fn key_repeat(lua: &Lua, key: &str) -> KeyWalk {
     else {
         return KeyWalk::Declined;
     };
-    if !is_editbox(lua, h) {
-        return KeyWalk::Frame;
-    }
-    if linked(lua, h)
-        && !box_declines(lua, h, key)
+    if is_editbox(lua, h)
+        && linked(lua, h)
         && super::editbox::takes_event(lua, h)
+        && !box_declines(lua, h, key)
         && super::editbox::key_input(lua, key)
     {
         return KeyWalk::Box;
     }
-    KeyWalk::Declined
+    KeyWalk::Frame
 }
 
 /// Fire one key handler with its one argument, a string on all three channels (`0x7026f0`);

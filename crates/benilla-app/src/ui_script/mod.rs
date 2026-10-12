@@ -22,6 +22,8 @@ pub(crate) mod glue;
 pub(crate) mod glue_mgr;
 mod input;
 #[cfg(test)]
+pub(crate) use input::feed_keys;
+#[cfg(test)]
 mod layer_tests;
 mod load_log;
 mod manifest;

@@ -178,6 +178,9 @@ mod tests {
         ("cursor.rs", "last_ptr"),
         // The wheel's fraction toward its next notch, a fact about the device, not the VM.
         ("bindings.rs", "notches"),
+        // The keys believed down, a fact about the keyboard; an alt-tab wipes it by reconcile.
+        ("bindings.rs", "down"),
+        ("ui_script/input.rs", "pressed"),
     ];
 
     use crate::test_support::{fn_parameter_lists, rust_files};

@@ -96,10 +96,19 @@ pub(super) fn feed_ui_input(
         ResMut<UiKeyboardCapture>,
         NonSendMut<HostClipboard>,
     ),
+    // The keys this feed believes down, a fact about the keyboard and not the VM.
+    mut pressed: Local<crate::bindings::KeyDownList>,
+    // Who sends the key-ups: the bindings pass in the world, this feed on the glue screens.
+    state: Option<Res<State<crate::char_select::ClientState>>>,
     // The characters the active layout makes, which name a key for a keyboard frame.
     layout: Res<crate::bindings::LayoutNames>,
 ) {
     let (keyboard, keys, capture, clipboard) = (&mut kbd.0, &kbd.1, &mut kbd.2, &mut kbd.3);
+    // In the world the bindings pass sends the key-ups, in event order with the presses it
+    // follows; on the glue screens, which have none, this feed does.
+    let releases = !state
+        .as_ref()
+        .is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let world_pick = pointer.world_pick();
     // The OS pointer is not ours while a probe drives a gesture through the real pointer path or a
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
@@ -235,6 +244,9 @@ pub(super) fn feed_ui_input(
         &mut script,
         capture,
         keyboard.read(),
+        keys,
+        &mut pressed,
+        releases,
         mods,
         &layout,
         clipboard,
@@ -250,17 +262,27 @@ pub(super) fn feed_ui_input(
     }
 }
 
-/// The keyboard half of the frame: each event as the key-down, repeat or key-up walk and what a
-/// box the walk reached does with the key.
-pub(super) fn feed_keys<'a>(
+/// The keyboard half of the frame: each event as the key-down or repeat walk and what a box the
+/// walk reached does with the key. `down` is this feed's pressed-key list, which decides repeat
+/// as the bindings' does (`0x4248b3`), never from the OS flag: after an alt-tab wipes it
+/// (`0x424790`, the reconcile against `keys`) the first repeat is a fresh press, and a platform
+/// that never sets the flag still repeats right. `releases` says whether the key-up dispatch is
+/// this feed's: in the world the bindings pass sends it, in order with the press it follows
+/// (`crate::bindings`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn feed_keys<'a>(
     script: &mut UiScript,
     capture: &mut UiKeyboardCapture,
     events: impl Iterator<Item = &'a KeyboardInput>,
+    keys: &ButtonInput<KeyCode>,
+    down: &mut crate::bindings::KeyDownList,
+    releases: bool,
     mods: keymap::Mods,
     layout: &crate::bindings::LayoutNames,
     clipboard: &mut HostClipboard,
     wl_display: Option<*mut std::ffi::c_void>,
 ) {
+    down.reconcile(keys);
     let keymap::Mods {
         shift: _,
         ctrl,
@@ -273,31 +295,37 @@ pub(super) fn feed_keys<'a>(
         // `arg1`, which the Key Bindings window also stores, so a key's press dispatches by the
         // name it was bound under.
         let token = crate::bindings::chord::key_token(ev.key_code, layout);
+        // `None` is a key the client drops before any walk (a Windows or Command key, a media
+        // key): no down, no up, and no focus granted to an `autoFocus` box.
         let name = crate::bindings::chord::walk_name(ev.key_code, layout);
         if ev.state != ButtonState::Pressed {
-            script.key_up(&name);
+            down.release(ev.key_code);
+            if let Some(name) = name.as_deref().filter(|_| releases) {
+                script.key_up(name);
+            }
             continue;
         }
+        let repeat = down.press(ev.key_code);
         let named = matches!(
             ev.key_code,
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Escape | KeyCode::Tab
         );
-        let walk = if ev.repeat {
-            script.key_repeat(&name)
-        } else {
-            script.key_down(&name)
+        let walk = match name.as_deref() {
+            Some(name) if repeat => script.key_repeat(name),
+            Some(name) => script.key_down(name),
+            None => KeyWalk::Declined,
         };
         // The gate is existence, not handling: a shown keyboard frame with an `OnKeyDown` swallows
         // the key whatever its script does (`0x76b7d0`, `0x76ba25`). Consumption suppresses only
         // the key's binding: `OnChar` is a separate dispatcher (`0x765df0`), so the stack-split
         // spinner still gets a digit its `OnKeyDown` ate, and it is not a focus change, so it
-        // releases nothing held. A box's own consumption of ENTER, ESCAPE and TAB counts too: an
-        // unconsumed press is acted on in the binding dispatch (`crate::bindings`), which runs
-        // after this pass and reads the capture gate.
-        match walk {
-            KeyWalk::Frame => capture.consumed.push(ev.key_code),
-            KeyWalk::Box if named => capture.consumed.push(ev.key_code),
-            _ => {}
+        // releases nothing held. A box that took the key counts too: it returned 1 (`0x77b1db`
+        // -> `0x77b35e`) and the world frame, last in the walk, never saw it, so an F-key that
+        // gave an `autoFocus` box the focus runs no binding. An unconsumed press is acted on in
+        // the binding dispatch (`crate::bindings`), which runs after this pass and reads the
+        // capture gate.
+        if walk != KeyWalk::Declined {
+            capture.consumed.push(ev.key_code);
         }
         let editing_key = matches!(
             ev.key_code,
@@ -348,12 +376,10 @@ pub(super) fn feed_keys<'a>(
         } else if chord.is_none() && !(sup || (ctrl && !alt)) {
             // Command-modified chars never insert (Cmd+L must not type "l"), but Ctrl+Alt passes:
             // that is AltGr, and macOS Option+letter arrives with only `alt`.
+            // The char walk gates no binding (`0x765df0` reaches no keybinding), so whether a
+            // frame took the character is not recorded: the key-down already decided that.
             if let Some(text) = &ev.text {
-                // Same suppression as the named keys: the number row is a binding, so a digit typed
-                // into a keyboard frame (the stack-split spinner) must not also fire an action.
-                if script.char_input(text) {
-                    capture.consumed.push(ev.key_code);
-                }
+                script.char_input(text);
             }
         }
     }

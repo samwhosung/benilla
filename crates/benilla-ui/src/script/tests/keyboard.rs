@@ -400,11 +400,17 @@ fn a_key_up_goes_to_the_frame_that_took_the_down() {
     "#,
     )
     .unwrap();
-    assert!(!s.key_up("ENTER"), "nothing consumed the down: no target");
+    assert!(
+        !s.key_up("ENTER").taken(),
+        "nothing consumed the down: no target"
+    );
     assert!(s.key_input("ENTER"));
-    assert!(s.key_up("ENTER"));
-    assert!(s.key_up("ENTER"), "the target outlives a delivered up");
-    assert!(!s.key_up("TAB"));
+    assert!(s.key_up("ENTER").taken());
+    assert!(
+        s.key_up("ENTER").taken(),
+        "the target outlives a delivered up"
+    );
+    assert!(!s.key_up("TAB").taken());
     assert_eq!(
         s.eval::<String>("return table.concat(log, ',')").unwrap(),
         "down:ENTER,up:ENTER,up:ENTER"
@@ -412,7 +418,10 @@ fn a_key_up_goes_to_the_frame_that_took_the_down() {
 
     // The up follows the down's consumer, not whoever would take the key now.
     s.run("f:Hide()").unwrap();
-    assert!(s.key_up("ENTER"), "a hidden consumer still gets its up");
+    assert!(
+        s.key_up("ENTER").taken(),
+        "a hidden consumer still gets its up"
+    );
     assert_eq!(
         s.eval::<String>("return log[table.getn(log)]").unwrap(),
         "up:ENTER"
@@ -421,7 +430,7 @@ fn a_key_up_goes_to_the_frame_that_took_the_down() {
         s.key_input("ENTER"),
         "the lower frame's OnKeyUp-only slot takes the next down"
     );
-    assert!(s.key_up("ENTER"));
+    assert!(s.key_up("ENTER").taken());
     assert_eq!(
         s.eval::<String>("return log[table.getn(log)]").unwrap(),
         "g:ENTER"
@@ -519,10 +528,13 @@ fn a_hidden_consumer_gets_no_key_up() {
     .unwrap();
     assert!(s.key_input("K"));
     s.run("f:Hide()").unwrap();
-    assert!(s.key_up("K"), "the record stands, the up ends there");
+    assert!(
+        s.key_up("K").taken(),
+        "the record stands, the up ends there"
+    );
     assert_eq!(s.eval::<i64>("return ups").unwrap(), 0);
     s.run("f:Show()").unwrap();
-    assert!(s.key_up("K"));
+    assert!(s.key_up("K").taken());
     assert_eq!(
         s.eval::<i64>("return ups").unwrap(),
         1,
@@ -552,7 +564,7 @@ fn a_press_a_binding_took_moves_the_up_to_the_world_frame() {
     assert!(!s.key_input("J"));
     s.note_world_key("J");
     s.run("f:Show()").unwrap();
-    assert!(s.key_up("J"));
+    assert!(s.key_up("J").taken());
     assert_eq!(
         s.eval::<String>("return table.concat(log, ',')").unwrap(),
         "down",
@@ -695,5 +707,75 @@ fn an_xml_handler_enables_only_its_own_kind() {
         !s.key_input("Q"),
         "the chars-only frame is not in the key walk"
     );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A consumer on record makes the repeat consumed whatever its `+0x58` does (`0x7660bb`), and a
+/// box's (`0x77b770`) grants an `autoFocus` box the free focus (`0x77b799`) before its key-down
+/// can decline.
+#[test]
+fn a_repeat_grants_autofocus_before_the_box_may_decline() {
+    use crate::script::KeyWalk;
+    let mut s = script();
+    s.run(
+        r#"
+        box = CreateFrame("EditBox", "KbRepeatAuto")
+        box:SetAutoFocus(true)
+        box:Hide() box:Show()
+        box:ClearFocus()
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.key_down("LEFT"),
+        KeyWalk::Box,
+        "the box takes LEFT, a plain box"
+    );
+    s.run("box:ClearFocus() box:SetAltArrowKeyMode(1)").unwrap();
+    assert_eq!(s.focused_editbox_name(), None);
+    assert_eq!(
+        s.key_repeat("LEFT"),
+        KeyWalk::Frame,
+        "consumed, though the box declines the arrow now"
+    );
+    assert_eq!(
+        s.focused_editbox_name().as_deref(),
+        Some("KbRepeatAuto"),
+        "and the repeat gave it the focus"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// PRINTSCREEN's up with no consumer on record runs the key-down walk (`0x76603c`-`0x76604d`) and
+/// leaves no record (`0x76605b`); any other key's up with none is nothing.
+#[test]
+fn a_printscreen_up_with_no_consumer_walks_as_a_key_down() {
+    use crate::script::{KeyUp, KeyWalk};
+    let mut s = script();
+    assert_eq!(s.key_up("PRINTSCREEN"), KeyUp::Walked(KeyWalk::Declined));
+    assert_eq!(s.key_up("G"), KeyUp::Unclaimed);
+    s.run(
+        r#"
+        got = {}
+        f = CreateFrame("Frame", "KbPrint")
+        f:EnableKeyboard(true)
+        f:SetScript("OnKeyDown", function() table.insert(got, arg1) end)
+        f:SetScript("OnKeyUp", function() table.insert(got, "up") end)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(s.key_up("PRINTSCREEN"), KeyUp::Walked(KeyWalk::Frame));
+    assert_eq!(
+        s.key_up("PRINTSCREEN"),
+        KeyUp::Walked(KeyWalk::Frame),
+        "the record the walk wrote is cleared, so the next up walks again"
+    );
+    assert_eq!(
+        s.eval::<String>("return table.concat(got, ',')").unwrap(),
+        "PRINTSCREEN,PRINTSCREEN"
+    );
+    // With a recorded down, the up is an ordinary delivery.
+    assert!(s.key_input("PRINTSCREEN"));
+    assert_eq!(s.key_up("PRINTSCREEN"), KeyUp::Delivered);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
