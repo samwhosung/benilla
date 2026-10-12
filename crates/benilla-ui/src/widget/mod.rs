@@ -233,6 +233,13 @@ pub struct Frame {
     next_decl: u32,
 }
 
+impl Frame {
+    /// Its place on the list of every live frame (`root+0xcc4`), creation order.
+    pub(crate) fn created(&self) -> u64 {
+        self.created
+    }
+}
+
 /// A region leaf: a texture or font string owned by one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Region {

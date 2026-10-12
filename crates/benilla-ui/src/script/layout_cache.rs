@@ -65,33 +65,48 @@ pub struct AnchorLayout {
 }
 
 impl super::UiScript {
-    /// Snapshot, sorted by name so the file is stable, every frame the reference's writer
-    /// (`0x490e60`) writes: a non-empty name (`0x490e79`, `0x490e82`), `userPlaced` (`0x490e8e`,
-    /// `0x1000`) and `movable` or `resizable` (`0x490e97`, `0x100|0x200`), with a rect to read
-    /// (`0x490edf`, a pending one resolved first, `0x490eed`). Every drag stamps `userPlaced`
-    /// (`0x7652b0` at `0x7652e5`), so the last test is what drops the row of a stock frame an
-    /// addon once moved, once that addon is gone.
+    /// Snapshot, in creation order as the writer walks the list of every frame (`0x490e24`,
+    /// `[root+0xcc4]`, appended by the constructor at `0x76930d`), every frame it writes: a
+    /// non-empty name (`0x490e79`, `0x490e82`), `userPlaced` (`0x490e8e`, `0x1000`) and `movable`
+    /// or `resizable` (`0x490e97`, `0x100|0x200`), with a rect to read. Every drag stamps
+    /// `userPlaced` (`0x7652b0` at `0x7652e5`), so the last test is what drops the row of a stock
+    /// frame an addon once moved, once that addon is gone.
+    ///
+    /// The rect is the one the frame holds, stale or not (`0x768320`, its valid bit): only a frame
+    /// holding none is resolved now (`0x490eed`, `0x7680e0(1)`) and read again, and still none
+    /// writes no row (`0x490f00`). The root's rect is the screen, which is always held, so the
+    /// second bail (`0x490f17`) never takes here. The level and the two flags are read after the
+    /// rect (`0x490f55`, `0x490f93`, `0x491099`), since a resolve can run script.
     ///
     /// `X:`/`Y:` round half away from zero (`0x490fc4`–`0x490fdf`, then `0x40a2b0`'s truncating
     /// `fistp`); `W:`/`H:` add a half and truncate (`0x4910cd`–`0x4910d3`).
     pub fn user_placed_layouts(&self) -> Vec<FrameLayout> {
-        let candidates: Vec<(FrameHandle, String, bool, bool, u16)> = self
+        let mut candidates: Vec<(u64, FrameHandle, String)> = self
             .model_ref()
             .arena
             .iter_frames()
             .filter(|(_, f)| f.user_placed && (f.movable || f.resizable))
             .filter_map(|(h, f)| {
                 let name = f.name.clone().filter(|n| !n.is_empty())?;
-                Some((h, name, f.movable, f.resizable, f.level))
+                Some((f.created(), h, name))
             })
             .collect();
+        candidates.sort_unstable_by_key(|c| c.0);
         let mut out = Vec::with_capacity(candidates.len());
-        for (h, name, movable, resizable, level) in candidates {
-            // The rect read, which resolves a pending frame first (`0x490ee6` → `0x7680e0(1)`).
-            settle_frame(self.lua(), h);
+        for (_, h, name) in candidates {
+            if !self.model_ref().resolved.contains_key(&h) {
+                settle_frame(self.lua(), h);
+            }
             let model = self.model_ref();
             let Some(r) = model.resolved.get(&h).copied() else {
-                continue; // no rect even then: no row (`0x490f00`)
+                continue;
+            };
+            let Some((movable, resizable, level)) = model
+                .arena
+                .frame(h)
+                .map(|f| (f.movable, f.resizable, f.level))
+            else {
+                continue; // the resolve's script destroyed it
             };
             let root = model.screen;
             let scale = f64::from(eff_scale(&model, h));
@@ -121,7 +136,6 @@ impl super::UiScript {
                 height,
             });
         }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
         out
     }
 
@@ -131,58 +145,65 @@ impl super::UiScript {
     /// every anchor (`0x49061a`) and pins TOPLEFT on the screen's TOPLEFT there (`0x490670`). The
     /// size needs `resizable` (`0x490689`) and a non-zero `W` or `H` (`0x49068e`–`0x49069a`), and
     /// sets each non-zero one (`0x4906c7`, `0x4906fa`). Each arm that applies stamps `userPlaced`
-    /// (`0x49067e`, `0x490706`), which keeps `UIParent_ManageFramePositions` off the frame. Marks
-    /// nothing dirty: the values came from the file.
+    /// (`0x49067e`, `0x490706`), which keeps `UIParent_ManageFramePositions` off the frame. Each
+    /// row ends in a forced resolve of its frame, shown or hidden (`0x490710`, `0x7680e0(1)`), so
+    /// its `OnSizeChanged` fires before the next row applies. Marks nothing dirty: the values came
+    /// from the file.
     pub fn restore_user_placed_layouts(&mut self, layouts: impl IntoIterator<Item = FrameLayout>) {
-        let mut model = self.model_mut();
         for l in layouts {
-            let Some(h) = model.arena.lookup(&l.name) else {
-                continue; // a window this session does not have (`0x4905e6`)
-            };
-            if let Some(level) = l.level {
-                model.arena.set_frame_level(h, level, true);
+            if let Some(h) = self.apply_layout_row(l) {
+                settle_frame(self.lua(), h);
             }
-            let Some((movable, resizable)) = model.arena.frame(h).map(|f| (f.movable, f.resizable))
-            else {
-                continue;
-            };
-            // An absent line reads as the reference's cleared accumulator, zero.
-            let (x, y) = (l.x.unwrap_or(0), l.y.unwrap_or(0));
-            let (w, ht) = (l.width.unwrap_or(0), l.height.unwrap_or(0));
-            let seat_position = movable && (x != 0 || y != 0);
-            let seat_size = resizable && (w != 0 || ht != 0);
-            let input = model.layout_inputs.entry(h).or_default();
-            let mut changed = false;
-            if seat_position {
-                let pin = Anchors::from([Anchor::new(
-                    Point::TopLeft,
-                    SCREEN,
-                    Point::TopLeft,
-                    x as f32,
-                    y as f32,
-                )]);
-                changed |= !input.anchors.bits_eq(&pin);
-                input.anchors = pin;
-            }
-            if seat_size && w != 0 {
-                changed |= input.width.to_bits() != (w as f32).to_bits();
-                input.width = w as f32;
-            }
-            if seat_size && ht != 0 {
-                changed |= input.height.to_bits() != (ht as f32).to_bits();
-                input.height = ht as f32;
-            }
-            if seat_size {
-                model.note_authored_size(h);
-            }
-            if seat_position || seat_size {
-                if let Some(f) = model.arena.frame_mut(h) {
-                    f.user_placed = true;
-                }
-            }
-            // Every row that names a frame ends in an invalidate (`0x490710`).
-            model.invalidate_frame(h, changed);
         }
+    }
+
+    /// One row of [`Self::restore_user_placed_layouts`], up to its invalidate; the frame it
+    /// applied to.
+    fn apply_layout_row(&mut self, l: FrameLayout) -> Option<FrameHandle> {
+        let mut model = self.model_mut();
+        // A window this session does not have applies nothing (`0x4905e6`).
+        let h = model.arena.lookup(&l.name)?;
+        if let Some(level) = l.level {
+            model.arena.set_frame_level(h, level, true);
+        }
+        let (movable, resizable) = model.arena.frame(h).map(|f| (f.movable, f.resizable))?;
+        // An absent line reads as the reference's cleared accumulator, zero.
+        let (x, y) = (l.x.unwrap_or(0), l.y.unwrap_or(0));
+        let (w, ht) = (l.width.unwrap_or(0), l.height.unwrap_or(0));
+        let seat_position = movable && (x != 0 || y != 0);
+        let seat_size = resizable && (w != 0 || ht != 0);
+        let input = model.layout_inputs.entry(h).or_default();
+        let mut changed = false;
+        if seat_position {
+            let pin = Anchors::from([Anchor::new(
+                Point::TopLeft,
+                SCREEN,
+                Point::TopLeft,
+                x as f32,
+                y as f32,
+            )]);
+            changed |= !input.anchors.bits_eq(&pin);
+            input.anchors = pin;
+        }
+        if seat_size && w != 0 {
+            changed |= input.width.to_bits() != (w as f32).to_bits();
+            input.width = w as f32;
+        }
+        if seat_size && ht != 0 {
+            changed |= input.height.to_bits() != (ht as f32).to_bits();
+            input.height = ht as f32;
+        }
+        if seat_size {
+            model.note_authored_size(h);
+        }
+        if seat_position || seat_size {
+            if let Some(f) = model.arena.frame_mut(h) {
+                f.user_placed = true;
+            }
+        }
+        // Every row that names a frame ends in an invalidate (`0x490710`).
+        model.invalidate_frame(h, changed);
+        Some(h)
     }
 
     /// Seat rows of benilla's earlier anchor form, each whole or not at all, under the apply's arm

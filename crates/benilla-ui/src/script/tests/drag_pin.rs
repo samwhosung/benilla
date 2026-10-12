@@ -270,6 +270,7 @@ fn the_layout_cache_round_trips_the_pin() {
     s.mouse_move(430.0, 280.0);
     s.run("Box:StopMovingOrSizing() Box:SetFrameLevel(7)")
         .unwrap();
+    s.resolve(); // drawn there before the save reads its held rect
     let want = FrameLayout {
         name: "Box".into(),
         level: Some(7),
@@ -307,6 +308,7 @@ fn a_sub_unit_drag_saves_and_restores_rounded() {
         pinned_at(330.25, -270.5),
         "the live pin is exact"
     );
+    s.resolve();
     let saved = s.user_placed_layouts();
     assert_eq!(
         (saved[0].x, saved[0].y),
@@ -345,4 +347,135 @@ fn a_frame_placed_without_a_drag_restores_at_its_saved_top_left() {
     );
     assert_eq!(anchor(&fresh), pinned_at(300.0, -250.0));
     assert!(fresh.errors().is_empty(), "{:?}", fresh.errors());
+}
+
+/// The rows are written in creation order, the writer's walk of every frame (`0x490e24`), and
+/// applied in file order, each level carried to same-strata children (`0x76a4f0`): the parent's
+/// row lands before its child's, so both come back at their saved levels whatever their names.
+#[test]
+fn a_parent_and_child_restore_their_saved_levels() {
+    let make = || {
+        let mut s = script();
+        s.set_screen_size(800.0, 600.0);
+        s.run(
+            r#"
+            Zed = CreateFrame("Frame", "Zed")
+            Zed:SetPoint("TOPLEFT", 100, -100); Zed:SetWidth(200); Zed:SetHeight(200)
+            Zed:SetMovable(true); Zed:SetUserPlaced(true)
+            Alpha = CreateFrame("Frame", "Alpha", Zed)
+            Alpha:SetPoint("TOPLEFT", 10, -10); Alpha:SetWidth(50); Alpha:SetHeight(50)
+            Alpha:SetMovable(true); Alpha:SetUserPlaced(true)
+            "#,
+        )
+        .unwrap();
+        s.resolve();
+        s
+    };
+    let s = make();
+    s.run("Zed:SetFrameLevel(5) Alpha:SetFrameLevel(9)")
+        .unwrap();
+    let saved = s.user_placed_layouts();
+    assert_eq!(
+        saved.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+        ["Zed", "Alpha"],
+        "creation order, not name order"
+    );
+
+    let mut fresh = make();
+    fresh.restore_user_placed_layouts(saved);
+    assert_eq!(
+        fresh
+            .eval::<(i64, i64)>("return Zed:GetFrameLevel(), Alpha:GetFrameLevel()")
+            .unwrap(),
+        (5, 9)
+    );
+    assert!(fresh.errors().is_empty(), "{:?}", fresh.errors());
+}
+
+/// Each row ends in a forced resolve of its frame (`0x490710`, `0x7680e0(1)`), hidden or not, so
+/// its `OnSizeChanged` runs inside the restore.
+#[test]
+fn the_restore_resolves_each_frame_at_once_even_hidden() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        fires = 0
+        Panel = CreateFrame("Frame", "Panel")
+        Panel:SetPoint("TOPLEFT", 10, -10); Panel:SetWidth(50); Panel:SetHeight(50)
+        Panel:SetResizable(true)
+        "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(
+        r#"
+        Panel:Hide()
+        Panel:SetScript("OnSizeChanged", function() fires = fires + 1; last_w = arg1 end)
+        "#,
+    )
+    .unwrap();
+    s.restore_user_placed_layouts([FrameLayout {
+        name: "Panel".into(),
+        width: Some(120),
+        height: Some(80),
+        ..FrameLayout::default()
+    }]);
+    assert_eq!(
+        s.eval::<(i64, f64)>("return fires, last_w").unwrap(),
+        (1, 120.0),
+        "fired inside the restore, though the frame is hidden"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The writer reads the rect the frame holds, stale or not (`0x768320`, its valid bit), and
+/// resolves only a frame that holds none (`0x490eed`): a size set since the last resolve is not
+/// saved, and the save runs no script.
+#[test]
+fn the_save_reads_the_held_rect_and_runs_no_script() {
+    let mut s = centred_box();
+    s.run(
+        r#"
+        fires = 0
+        Box:SetUserPlaced(true)
+        Box:SetScript("OnSizeChanged", function() fires = fires + 1 end)
+        Box:SetWidth(300)
+        "#,
+    )
+    .unwrap();
+    let saved = s.user_placed_layouts();
+    assert_eq!(
+        (saved[0].x, saved[0].width),
+        (Some(300), Some(200)),
+        "the held rect, from before the width moved"
+    );
+    assert_eq!(s.eval::<i64>("return fires").unwrap(), 0, "nothing fired");
+    s.resolve();
+    assert_eq!(s.user_placed_layouts()[0].width, Some(300));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A frame with no rect is resolved inside the save (`0x490eed`), which can run its script; the
+/// flags are read after that (`0x490f93`, `0x491099`), so what the script set is what is written.
+#[test]
+fn the_save_reads_the_flags_after_the_rect() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        Late = CreateFrame("Frame", "Late")
+        Late:SetMovable(true); Late:SetUserPlaced(true)
+        Late:SetScript("OnSizeChanged", function() this:SetResizable(true) end)
+        Late:SetPoint("TOPLEFT", 40, -60); Late:SetWidth(70); Late:SetHeight(30)
+        "#,
+    )
+    .unwrap();
+    let saved = s.user_placed_layouts();
+    assert_eq!(
+        (saved[0].x, saved[0].y, saved[0].width, saved[0].height),
+        (Some(40), Some(-60), Some(70), Some(30)),
+        "resized by its own OnSizeChanged inside the save, so W and H are written"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

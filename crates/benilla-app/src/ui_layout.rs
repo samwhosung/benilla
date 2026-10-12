@@ -46,7 +46,7 @@ pub(crate) struct LayoutFile {
     last_change: Option<std::time::Instant>,
 }
 
-/// Render the cache as [`parse`] reads it, frames name-sorted as the engine hands them; a field
+/// Render the cache as [`parse`] reads it, frames in the order the engine hands them; a field
 /// the row does not carry has no line, as the writer's flag gates leave it (`0x490f99`,
 /// `0x49109f`).
 pub(crate) fn render(frames: &[FrameLayout]) -> String {
@@ -78,20 +78,26 @@ pub(crate) enum Layout {
     Anchors(Vec<AnchorLayout>),
 }
 
-/// Parse the cache: keys match case-insensitively, and an unknown key or a value line before any
-/// `Frame:` costs only its own line. A value reads as `atoi` reads it (`0x64ac60`).
+/// Parse the cache: keys match case-insensitively, and an unknown key costs only its own line. A
+/// value reads as `atoi` reads it (`0x64ac60`). The value lines before any `Frame:`, or after one
+/// with no name, belong to no frame and are dropped, as the reference applies them to a null frame
+/// (`0x4905e6`); a name no frame has drops its lines at the restore the same way.
 ///
-/// A record's fields start empty. The reference's parser clears X, Y, W and the level at each
-/// `Frame:` (`0x49045b`–`0x490469`) but not H, so a record with no `H:` takes the one before's;
-/// that slip is not reproduced.
+/// Deviation: a record's fields start empty. The reference's parser clears X, Y, W and the level
+/// at each `Frame:` (`ebx`, `edi`, `esi`, `[ebp-0x4]` at `0x49045b`–`0x490469`) but not H
+/// (`[ebp-0xc]`), so a record with no `H:` takes the one before's; benilla writes `H:` whenever it
+/// writes `W:`, so only a hand-edited file reaches the slip, which would size a window from
+/// another window's row.
 pub(crate) fn parse(text: &str) -> Layout {
     if lines(text).any(|(key, _)| key.eq_ignore_ascii_case("Point")) {
         return Layout::Anchors(parse_anchor_form(text));
     }
     let mut out: Vec<FrameLayout> = Vec::new();
+    let mut current = false;
     for (key, rest) in lines(text) {
         if key.eq_ignore_ascii_case("Frame") {
-            if !rest.is_empty() {
+            current = !rest.is_empty();
+            if current {
                 out.push(FrameLayout {
                     name: rest.to_owned(),
                     ..FrameLayout::default()
@@ -99,8 +105,8 @@ pub(crate) fn parse(text: &str) -> Layout {
             }
             continue;
         }
-        let Some(frame) = out.last_mut() else {
-            continue; // a value line with no `Frame:` above it owns nothing
+        let Some(frame) = out.last_mut().filter(|_| current) else {
+            continue; // no frame owns the line
         };
         let v = atoi(rest);
         if key.eq_ignore_ascii_case("FrameLevel") {
@@ -152,9 +158,11 @@ fn atoi(s: &str) -> i32 {
 /// per anchor, `-` for the screen root. A malformed `Point:` costs only its own line.
 fn parse_anchor_form(text: &str) -> Vec<AnchorLayout> {
     let mut out: Vec<AnchorLayout> = Vec::new();
+    let mut current = false;
     for (key, rest) in lines(text) {
         if key.eq_ignore_ascii_case("Frame") {
-            if !rest.is_empty() {
+            current = !rest.is_empty();
+            if current {
                 out.push(AnchorLayout {
                     name: rest.to_owned(),
                     width: 0.0,
@@ -164,7 +172,7 @@ fn parse_anchor_form(text: &str) -> Vec<AnchorLayout> {
             }
             continue;
         }
-        let Some(frame) = out.last_mut() else {
+        let Some(frame) = out.last_mut().filter(|_| current) else {
             continue;
         };
         if key.eq_ignore_ascii_case("W") {
@@ -386,7 +394,10 @@ mod tests {
              x: 12.7\n\
              Y: -3px\n\
              W: wide\n\
-             H: 200\n",
+             H: 200\n\
+             Frame:\n\
+             X: 99\n\
+             H: 7\n",
         ));
         assert_eq!(
             got,
@@ -483,10 +494,10 @@ Point: BOTTOMLEFT Base BOTTOMLEFT 61 29
         let text = render(&s.user_placed_layouts());
         assert!(
             text.contains(
-                "Frame: Glider\nFrameLevel: 0\nX: 10\nY: -21\n\
-                 Frame: Moved\nFrameLevel: 0\nX: 61\nY: -659\nW: 214\nH: 80\n"
+                "Frame: Moved\nFrameLevel: 0\nX: 61\nY: -659\nW: 214\nH: 80\n\
+                 Frame: Glider\nFrameLevel: 0\nX: 10\nY: -21\n"
             ),
-            "the same windows, where they were, in the rect form:\n{text}"
+            "the same windows, where they were, in the rect form, in creation order:\n{text}"
         );
         assert!(!text.contains("Point:"), "{text}");
         assert!(s.errors().is_empty(), "{:?}", s.errors());
