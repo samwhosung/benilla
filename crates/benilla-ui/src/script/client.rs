@@ -7,9 +7,9 @@ use mlua::{Lua, MultiValue, Value};
 use super::Model;
 
 /// The 1.12.1 client's build identity, as the strings in its binary spell it.
-const VERSION: &str = "1.12.1";
-const BUILD: &str = "5875";
-const BUILD_DATE: &str = "Sep 19 2006";
+pub(super) const VERSION: &str = "1.12.1";
+pub(super) const BUILD: &str = "5875";
+pub(super) const BUILD_DATE: &str = "Sep 19 2006";
 
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();

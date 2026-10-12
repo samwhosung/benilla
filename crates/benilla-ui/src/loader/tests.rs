@@ -1957,6 +1957,44 @@ mod loader_tests {
 
     // ── <SimpleHTML> ─────────────────────────────────────────────────────────────────────────
 
+    /// `file=` names a document read verbatim, never joined to the XML's own directory, whose text
+    /// becomes the frame's (`0x78a2a0`, `0x78a2b2`), as the login screen's agreements load
+    /// `eula.html`; a file that does not open leaves the frame empty.
+    #[test]
+    fn simplehtml_file_sets_the_documents_text() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                <Font name="DocFont" font="Fonts\FRIZQT__.TTF"><FontHeight val="12"/></Font>
+                <SimpleHTML name="Doc" file="doc.html">
+                    <Size><AbsDimension x="270" y="304"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                    <FontString inherits="DocFont"/>
+                </SimpleHTML>
+                <SimpleHTML name="Gone" file="gone.html">
+                    <Size><AbsDimension x="270" y="304"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                    <FontString inherits="DocFont"/>
+                </SimpleHTML>
+            </Ui>"#,
+        );
+        let files = |req: &str| -> Option<Vec<u8>> {
+            (req == "doc.html")
+                .then(|| b"\xef\xbb\xbf<html><body><p>Hello</p></body></html>".to_vec())
+        };
+        let report = load_in(&s, &doc, "Interface/GlueXML/Doc.xml", &files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        assert_eq!(
+            s.eval::<(i64, String)>(
+                "local r = Doc:GetRegions(); return Doc:GetNumRegions(), r:GetText()"
+            )
+            .unwrap(),
+            (1, "Hello".to_string())
+        );
+        assert_eq!(s.eval::<i64>("return Gone:GetNumRegions()").unwrap(), 0);
+    }
+
     /// A direct-child `<FontString>` declares `elementFont[0]` and `<FontStringHeader1>`
     /// `elementFont[1]`, neither a region, and `hyperlinkFormat=` lands at `+0x360`; stock
     /// `ItemTextFrame.xml:214` uses the first.
