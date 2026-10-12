@@ -258,7 +258,7 @@ mod tests {
             target_owner_store: owner,
             self_store: Some(me),
             factions: None,
-            reputations: &Reputations(Vec::new()),
+            reputations: &Reputations(Vec::new(), Vec::new()),
             types: Default::default(),
             group: GroupInputs {
                 self_guid: Some(ME),
@@ -302,7 +302,7 @@ mod tests {
             target_owner_store: None,
             self_store: Some(&me),
             factions: None,
-            reputations: &Reputations(Vec::new()),
+            reputations: &Reputations(Vec::new(), Vec::new()),
             types: Default::default(),
             group: GroupInputs {
                 self_guid: Some(ME),
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn the_party_and_raid_bits_clear_for_the_group_and_only_when_assistable() {
         let factions = fx::factions();
-        let reputations = Reputations(Vec::new());
+        let reputations = Reputations(Vec::new(), Vec::new());
         let roster = GroupRoster {
             party: vec![MEMBER, ORC_MEMBER],
             raid: vec![ME, MEMBER, RAIDER, ORC_MEMBER],
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn a_raid_word_spell_pressed_on_a_party_member_binds_him() {
         let factions = fx::factions();
-        let reputations = Reputations(Vec::new());
+        let reputations = Reputations(Vec::new(), Vec::new());
         let roster = GroupRoster {
             party: vec![MEMBER],
             raid: Vec::new(),
@@ -640,7 +640,7 @@ mod tests {
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let catalog = benilla_formats::load_spell_catalog(&mut chain).expect("Spell.dbc");
         let factions = fx::factions();
-        let reputations = Reputations(Vec::new());
+        let reputations = Reputations(Vec::new(), Vec::new());
         let roster = GroupRoster {
             party: vec![MEMBER],
             raid: Vec::new(),

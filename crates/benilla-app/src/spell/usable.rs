@@ -745,7 +745,7 @@ mod tests {
 
     fn walk(d: &SpellDisplay, store: &ObjectStore) -> (bool, bool) {
         let cooldowns = Cooldowns::default();
-        let reputations = Reputations(Vec::new());
+        let reputations = Reputations(Vec::new(), Vec::new());
         let spells = Spells::empty_for_tests();
         let items = Items::default();
         let (tx, _rx) = crossbeam_channel::unbounded();
@@ -976,7 +976,7 @@ mod tests {
     fn target_aura_state_reads_the_current_target() {
         let me = player(&[]);
         let cooldowns = Cooldowns::default();
-        let reputations = Reputations(Vec::new());
+        let reputations = Reputations(Vec::new(), Vec::new());
         let spells = Spells::empty_for_tests();
         let items = Items::default();
         let (tx, _rx) = crossbeam_channel::unbounded();

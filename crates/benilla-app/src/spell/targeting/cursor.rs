@@ -512,7 +512,7 @@ mod tests {
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
             world.init_resource::<crate::spell::SpellModifiers>();
-            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
             world.insert_resource(PickOcclusion {
                 distance: 10.0,
                 point,
@@ -590,7 +590,7 @@ mod tests {
                 world.init_resource::<crate::target::HoveredObject>();
                 world.init_resource::<crate::go_templates::GameObjectTemplates>();
                 world.init_resource::<crate::items::Items>();
-                world.insert_resource(crate::net::Reputations(Vec::new()));
+                world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
                 world.insert_resource(PickOcclusion {
                     distance: 10.0,
                     point: Some(Vec3::new(d, 0.0, 0.0)),
@@ -689,7 +689,7 @@ mod tests {
             world.init_resource::<crate::target::Hovered>();
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
-            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
             world.init_resource::<PickOcclusion>();
             let mut mods = SpellModifiers::default();
             mods.set_class_family(3);
@@ -782,7 +782,7 @@ mod tests {
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
             world.init_resource::<crate::spell::SpellModifiers>();
-            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
             world.init_resource::<PickOcclusion>();
             let display = |range_index| benilla_formats::SpellDisplay {
                 range_index,
@@ -870,7 +870,7 @@ mod tests {
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
             world.init_resource::<crate::spell::SpellModifiers>();
-            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
             world.init_resource::<PickOcclusion>();
             world.insert_resource(crate::player::Player::with_move_flags(if caster_runs {
                 crate::creature_anim::move_flags::FORWARD
@@ -971,7 +971,7 @@ mod tests {
             world.init_resource::<crate::items::Items>();
             world.init_resource::<crate::net::GuidIndex>();
             world.init_resource::<crate::spell::SpellModifiers>();
-            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
             world.init_resource::<PickOcclusion>();
             world.insert_resource(fx::spells());
             world.insert_resource(fx::factions());

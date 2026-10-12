@@ -302,6 +302,11 @@ pub enum ServerPacket {
     SetFactionStanding {
         standings: Vec<(u32, i32)>,
     },
+    /// `SMSG_SET_FORCED_REACTIONS`: the whole forced-reaction table, `(Faction.dbc id, reaction
+    /// rank)` per forced faction, replacing the last one.
+    SetForcedReactions {
+        reactions: Vec<(u32, u32)>,
+    },
     /// `SMSG_SET_FACTION_VISIBLE`: sets `FACTION_FLAG_VISIBLE` on one slot; it carries no standing.
     SetFactionVisible {
         list_id: u32,
@@ -1337,6 +1342,7 @@ impl ServerPacket {
             ServerPacket::SetProficiency { .. } => "SMSG_SET_PROFICIENCY".into(),
             ServerPacket::InitializeFactions { .. } => "SMSG_INITIALIZE_FACTIONS".into(),
             ServerPacket::SetFactionStanding { .. } => "SMSG_SET_FACTION_STANDING".into(),
+            ServerPacket::SetForcedReactions { .. } => "SMSG_SET_FORCED_REACTIONS".into(),
             ServerPacket::SetFactionVisible { .. } => "SMSG_SET_FACTION_VISIBLE".into(),
             ServerPacket::NameQueryResponse { .. } => "SMSG_NAME_QUERY_RESPONSE".into(),
             ServerPacket::CreatureQueryResponse { .. } => "SMSG_CREATURE_QUERY_RESPONSE".into(),

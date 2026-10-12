@@ -823,6 +823,9 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         ServerPacket::SetFactionStanding { standings } => {
             vec![SessionEvent::ReputationDelta { standings }]
         }
+        ServerPacket::SetForcedReactions { reactions } => {
+            vec![SessionEvent::ForcedReactions { reactions }]
+        }
         ServerPacket::SetFactionVisible { list_id } => {
             vec![SessionEvent::ReputationVisible { list_id }]
         }

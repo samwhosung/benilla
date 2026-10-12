@@ -792,7 +792,7 @@ mod tests {
         on_object: None,
     };
 
-    static EMPTY_REPUTATIONS: Reputations = Reputations(Vec::new());
+    static EMPTY_REPUTATIONS: Reputations = Reputations(Vec::new(), Vec::new());
 
     /// A context with nothing selected: every rung that needs world state is inert.
     fn ctx() -> cast_target::CastContext<'static> {

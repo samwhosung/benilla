@@ -70,7 +70,11 @@ pub(crate) fn stormwind_fixture(
     let slot = usize::try_from(info.rep_index).expect("a slot index");
     let mut reps = vec![(0u8, 0i32); slot + 1];
     reps[slot].1 = total - info.base_for(1, 1);
-    (Factions::from_catalog(catalog), template, Reputations(reps))
+    (
+        Factions::from_catalog(catalog),
+        template,
+        Reputations(reps, Vec::new()),
+    )
 }
 
 /// `UNIT_FIELD_BYTES_0` of a human (race 1) warrior (class 1), for [`stormwind_fixture`].

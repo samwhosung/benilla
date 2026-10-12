@@ -935,7 +935,7 @@ mod tests {
         world.init_resource::<crate::spell::PicksSelf>();
         world.init_resource::<crate::spell::CorpsePick>();
         world.init_resource::<crate::spell::targeting::UnitPick>();
-        world.insert_resource(crate::net::Reputations(Vec::new()));
+        world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
         let mut camera = Camera::default();
         camera.computed.clip_from_view = Mat4::perspective_infinite_reverse_rh(1.0, 1.0, 0.1);
         camera.computed.target_info = Some(RenderTargetInfo {
