@@ -123,6 +123,7 @@ impl Plugin for NetPlugin {
             .add_message::<RosterFailedMessage>()
             .add_message::<AddonInfoMessage>()
             .add_message::<CharActionResultMessage>()
+            .add_message::<CharRenameMessage>()
             .add_message::<CharacterLoginFailedMessage>()
             .add_message::<EnteredWorldMessage>()
             .add_message::<WorldEnterCascadeMessage>()
@@ -475,6 +476,9 @@ pub(crate) enum CharRequest {
     Create(benilla_protocol::CharCreateReq),
     /// Delete a character by guid (`CMSG_CHAR_DELETE`), then stay parked at select.
     Delete(u64),
+    /// Rename a character the server flagged for it (`CMSG_CHAR_RENAME`), then stay parked at
+    /// select with the reply.
+    Rename { guid: u64, name: String },
     /// Select's Back: drop the session and return to the pre-logon park.
     Abandon,
     /// Fetch the roster again (`CMSG_CHAR_ENUM`) on the parked session, then stay parked with
@@ -2147,6 +2151,14 @@ pub(crate) struct AddonInfoMessage {
 pub(crate) struct CharActionResultMessage {
     pub(crate) action: benilla_protocol::CharAction,
     pub(crate) code: u8,
+}
+
+/// `SMSG_CHAR_RENAME`: the result byte (0 success) and, when the reply carried them, the renamed
+/// character's guid and new name.
+#[derive(Message, Clone)]
+pub(crate) struct CharRenameMessage {
+    pub(crate) result: u8,
+    pub(crate) renamed: Option<(u64, String)>,
 }
 
 /// `SMSG_CHARACTER_LOGIN_FAILED`: the picked character was refused. `result` is the raw reason,

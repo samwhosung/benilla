@@ -507,6 +507,12 @@ impl benilla_ui::script::NameLists for NameLists {
 #[derive(Resource, Clone)]
 pub(crate) struct NameFilter(pub(crate) Arc<NameLists>);
 
+impl benilla_ui::script::NameLists for NameFilter {
+    fn matches(&self, name: &str) -> bool {
+        benilla_ui::script::NameLists::matches(&*self.0, name)
+    }
+}
+
 /// The chat chokepoint's view of the two filters, one [`SystemParam`] to keep `feed_chat` under
 /// Bevy's sixteen-parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]

@@ -115,8 +115,7 @@ pub(crate) fn macros_account_path() -> Option<PathBuf> {
 /// `benilla-config/macros/<realm>-<character>.txt`: the per-character macro tab (19..=36), the
 /// reference's `WTF/Account/<ACC>/<REALM>/<CHAR>/macros-cache.txt` flattened into one folder.
 pub(crate) fn macros_character_path(realm: &str, character: &str) -> Option<PathBuf> {
-    let key = format!("{}-{}", file_token(realm), file_token(character));
-    home().map(|h| h.join("macros").join(format!("{key}.txt")))
+    character_path(CharacterFile::Macros, realm, character)
 }
 
 /// `benilla-config/bindings/account.txt`: the account-wide key bindings (the `bindings-cache.wtf`
@@ -128,8 +127,7 @@ pub(crate) fn bindings_account_path() -> Option<PathBuf> {
 /// `benilla-config/bindings/<realm>-<character>.txt`: the character-specific binding set. Its
 /// existence is the "character specific key bindings" state; going back to general deletes it.
 pub(crate) fn bindings_character_path(realm: &str, character: &str) -> Option<PathBuf> {
-    let key = format!("{}-{}", file_token(realm), file_token(character));
-    home().map(|h| h.join("bindings").join(format!("{key}.txt")))
+    character_path(CharacterFile::Bindings, realm, character)
 }
 
 /// `benilla-config/saved-variables.lua`: the flat channel our FrameXML saves through
@@ -148,10 +146,8 @@ const ADDON_STATE_DIR: &str = "addon-state";
 /// build before this one kept in `benilla-config/addons/` are moved here the first time a path is
 /// asked for ([`migrate_addon_state`]).
 pub(crate) fn addons_state_path(realm: &str, character: &str) -> Option<PathBuf> {
-    let key = format!("{}-{}", file_token(realm), file_token(character));
-    let home = home()?;
-    migrate_addon_state(&home);
-    Some(home.join(ADDON_STATE_DIR).join(format!("{key}.txt")))
+    migrate_addon_state(&home()?);
+    character_path(CharacterFile::AddonState, realm, character)
 }
 
 /// Move the enable files an earlier build wrote to `<home>/addons/` into [`ADDON_STATE_DIR`], once
@@ -235,15 +231,13 @@ pub(crate) fn addon_saved_account_dir() -> Option<PathBuf> {
 /// `benilla-config/saved/<Realm>-<Character>/`: per-addon saved variables, character scope
 /// (`## SavedVariablesPerCharacter`), loaded after the account file so it wins.
 pub(crate) fn addon_saved_character_dir(realm: &str, character: &str) -> Option<PathBuf> {
-    let key = format!("{}-{}", file_token(realm), file_token(character));
-    home().map(|h| h.join("saved").join(key))
+    character_path(CharacterFile::SavedVariables, realm, character)
 }
 
 /// `benilla-config/camera/<realm>-<character>.txt`: the third-person camera pose (the
 /// `<Char>/camera-settings.txt` analog), two lines in the reference's keys and order.
 pub(crate) fn camera_character_path(realm: &str, character: &str) -> Option<PathBuf> {
-    let key = format!("{}-{}", file_token(realm), file_token(character));
-    home().map(|h| h.join("camera").join(format!("{key}.txt")))
+    character_path(CharacterFile::Camera, realm, character)
 }
 
 /// `benilla-config/account`: the account name the login screen remembers
@@ -255,22 +249,90 @@ pub(crate) fn saved_account_path() -> Option<PathBuf> {
 /// `benilla-config/chat/<realm>-<character>.txt`: the chat windows' tint, alpha, font size and
 /// lock, the four the reference keeps in its per-character `chat-cache.txt`.
 pub(crate) fn chat_character_path(realm: &str, character: &str) -> Option<PathBuf> {
-    Some(home()?.join("chat").join(format!(
-        "{}-{}.txt",
-        file_token(realm),
-        file_token(character)
-    )))
+    character_path(CharacterFile::Chat, realm, character)
 }
 
 /// `benilla-config/layout/<realm>-<character>.txt`: the layout cache, the geometry of every
 /// user-placed frame, as the reference's per-character `layout-cache.txt`; [`crate::ui_layout`]
 /// owns the shape.
 pub(crate) fn layout_character_path(realm: &str, character: &str) -> Option<PathBuf> {
-    Some(home()?.join("layout").join(format!(
-        "{}-{}.txt",
-        file_token(realm),
-        file_token(character)
-    )))
+    character_path(CharacterFile::Layout, realm, character)
+}
+
+/// The state benilla keeps per character, the analog of the reference's per-character folder
+/// `WTF\Account\<account>\<realm>\<character>\`, each a file or folder named
+/// `<realm>-<character>` in a folder of its kind. Every per-character path goes through
+/// [`character_path`], so a rename ([`move_character_state`]) moves all of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CharacterFile {
+    /// [`addons_state_path`].
+    AddonState,
+    /// [`macros_character_path`].
+    Macros,
+    /// [`bindings_character_path`].
+    Bindings,
+    /// [`addon_saved_character_dir`], a folder.
+    SavedVariables,
+    /// [`camera_character_path`].
+    Camera,
+    /// [`chat_character_path`].
+    Chat,
+    /// [`layout_character_path`].
+    Layout,
+}
+
+impl CharacterFile {
+    pub(crate) const ALL: [CharacterFile; 7] = [
+        CharacterFile::AddonState,
+        CharacterFile::Macros,
+        CharacterFile::Bindings,
+        CharacterFile::SavedVariables,
+        CharacterFile::Camera,
+        CharacterFile::Chat,
+        CharacterFile::Layout,
+    ];
+
+    /// The folder under the home, and the suffix of the key (none for a folder).
+    fn place(self) -> (&'static str, &'static str) {
+        match self {
+            CharacterFile::AddonState => (ADDON_STATE_DIR, ".txt"),
+            CharacterFile::Macros => ("macros", ".txt"),
+            CharacterFile::Bindings => ("bindings", ".txt"),
+            CharacterFile::SavedVariables => ("saved", ""),
+            CharacterFile::Camera => ("camera", ".txt"),
+            CharacterFile::Chat => ("chat", ".txt"),
+            CharacterFile::Layout => ("layout", ".txt"),
+        }
+    }
+}
+
+/// `benilla-config/<kind>/<realm>-<character>[.txt]`, the one place a per-character path is made.
+fn character_path(file: CharacterFile, realm: &str, character: &str) -> Option<PathBuf> {
+    let (dir, suffix) = file.place();
+    let key = format!("{}-{}{suffix}", file_token(realm), file_token(character));
+    Some(home()?.join(dir).join(key))
+}
+
+/// A rename's move of the character's state, the reference's `MoveFileW` of its folder from the
+/// old name to the new (`0x4725f0`: `0x47269a` for `WTF\Account\<account>\<realm>\<name>`,
+/// `0x4726f0` for the older `WTF\Account\<account>\<name>`). Each file or folder moves on its
+/// own; one the new name already has stays where it is, as a move onto an existing name fails.
+pub(crate) fn move_character_state(realm: &str, old: &str, new: &str) {
+    for file in CharacterFile::ALL {
+        let (Some(from), Some(to)) = (
+            character_path(file, realm, old),
+            character_path(file, realm, new),
+        ) else {
+            return;
+        };
+        if from == to || !from.exists() || to.exists() {
+            continue;
+        }
+        match std::fs::rename(&from, &to) {
+            Ok(()) => bevy::log::info!("rename: moved {} to {}", from.display(), to.display()),
+            Err(e) => bevy::log::warn!("rename: cannot move {}: {e}", from.display()),
+        }
+    }
 }
 
 /// `benilla-config/cache/<realm>.tsv`: the player, creature and pet names the server has answered,
@@ -404,6 +466,78 @@ mod tests {
             "realm_name",
             "the key's own `-` stays unforgeable"
         );
+    }
+
+    /// A rename moves every per-character file and folder of the realm's character to the new
+    /// name, and none of another realm's or character's; a target already there stays.
+    #[test]
+    fn a_rename_moves_every_per_character_file() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-ls-rename-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _c = EnvGuard::unset("WOW_CAPTURE");
+        let _h = EnvGuard::set("BENILLA_HOME", tmp.to_str().unwrap());
+        let paths = |realm: &str, character: &str| {
+            [
+                addons_state_path(realm, character),
+                macros_character_path(realm, character),
+                bindings_character_path(realm, character),
+                addon_saved_character_dir(realm, character),
+                camera_character_path(realm, character),
+                chat_character_path(realm, character),
+                layout_character_path(realm, character),
+            ]
+            .map(Option::unwrap)
+        };
+        // The public path functions are the enum's, kind for kind.
+        assert_eq!(
+            paths("Realm", "Old").to_vec(),
+            CharacterFile::ALL
+                .iter()
+                .map(|&f| character_path(f, "Realm", "Old").unwrap())
+                .collect::<Vec<_>>()
+        );
+        let write = |p: &Path, what: &str| {
+            if p.extension().is_some() {
+                write_atomic(p, what).unwrap();
+            } else {
+                write_atomic(&p.join("Addon.lua"), what).unwrap();
+            }
+        };
+        let read = |p: &Path| {
+            let p = if p.extension().is_some() {
+                p.to_path_buf()
+            } else {
+                p.join("Addon.lua")
+            };
+            std::fs::read_to_string(p).ok()
+        };
+        for p in paths("Realm", "Old") {
+            write(&p, "old");
+        }
+        for p in paths("Other Realm", "Old") {
+            write(&p, "other realm");
+        }
+        // The new name already has a layout: it stays, and the old one with it.
+        write(&layout_character_path("Realm", "New").unwrap(), "kept");
+
+        move_character_state("Realm", "Old", "New");
+        let (old, new) = (paths("Realm", "Old"), paths("Realm", "New"));
+        for (i, (o, n)) in old.iter().zip(&new).enumerate() {
+            if CharacterFile::ALL[i] == CharacterFile::Layout {
+                assert_eq!(read(n).as_deref(), Some("kept"));
+                assert_eq!(read(o).as_deref(), Some("old"));
+            } else {
+                assert_eq!(read(n).as_deref(), Some("old"), "{}", n.display());
+                assert!(!o.exists(), "{}", o.display());
+            }
+        }
+        for p in paths("Other Realm", "Old") {
+            assert_eq!(read(&p).as_deref(), Some("other realm"));
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// The layout under the override, the one step of [`home`] whose answer a test can state.

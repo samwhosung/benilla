@@ -220,6 +220,32 @@ impl EnableStore {
         }
     }
 
+    /// `0x51f0b0(name)`: the first node of that name, case folded (`0x51f0f5`), dropped with any
+    /// toggle not yet saved; the walk stops there (`0x51f15f`).
+    pub fn drop_node(&mut self, character: &str) {
+        if let Some(i) = self
+            .nodes
+            .iter()
+            .position(|(name, _)| name.eq_ignore_ascii_case(character))
+        {
+            self.nodes.remove(i);
+        }
+    }
+
+    /// `0x51ebe0(name)`: the node of that name read afresh from its file (`0x51ec59`), or, with
+    /// none, a node made for it at the end of the list and read (`0x51ee69`).
+    pub fn load_node(&mut self, character: &str, files: &dyn AddonStateFiles) {
+        let hash = EnableHash::from_rows(files.read(&self.realm, character).unwrap_or_default());
+        match self
+            .nodes
+            .iter_mut()
+            .find(|(name, _)| name.eq_ignore_ascii_case(character))
+        {
+            Some((_, node)) => *node = hash,
+            None => self.nodes.push((character.to_string(), hash)),
+        }
+    }
+
     pub fn node(&self, character: &str) -> Option<&EnableHash> {
         self.nodes
             .iter()
@@ -247,6 +273,29 @@ mod tests {
         assert!(!h.is_dirty());
         assert_eq!(h.rows(), &[("MyAddon".to_string(), false)]);
         assert_eq!(h.get("MYADDON"), Some(false));
+    }
+
+    /// `0x51f0b0(name)` drops the first node of that name and no other; `0x51ebe0(name)` reloads a
+    /// node it has or appends one.
+    #[test]
+    fn a_node_drops_and_loads_by_name() {
+        struct One;
+        impl AddonStateFiles for One {
+            fn read(&self, _: &str, character: &str) -> Option<Vec<(String, bool)>> {
+                (character == "Cat").then(|| vec![("Kept".to_string(), false)])
+            }
+            fn write(&self, _: &str, _: &str, _: &[(String, bool)]) {}
+        }
+        let mut store = EnableStore::blank("Realm", &["Ann".into(), "Bob".into()]);
+        store.set("Kept", Some("Bob"), true);
+        store.drop_node("BOB");
+        store.drop_node("Nobody");
+        assert_eq!(store.characters().collect::<Vec<_>>(), ["Ann"]);
+        store.load_node("Cat", &One);
+        store.load_node("Ann", &One);
+        assert_eq!(store.characters().collect::<Vec<_>>(), ["Ann", "Cat"]);
+        assert_eq!(store.node("cat").and_then(|h| h.get("Kept")), Some(false));
+        assert_eq!(store.node("Ann").and_then(|h| h.get("Kept")), None);
     }
 
     #[test]

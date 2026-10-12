@@ -697,6 +697,152 @@ fn status_dialog_click_cancels_by_state() {
     assert!(m.outbox.is_empty(), "a cancelled query reports nothing");
 }
 
+/// `0x46b2e0` and state 6: the dialog and the `CMSG_CHAR_DELETE`, the dialog re-texted while the
+/// reply is out; a success (`0x39`) fires `SELECT_FIRST_CHARACTER` and asks for the list
+/// (`0x46c19d`-`0x46c1a7`), a failure opens `OKAY` with its status's text and goes to state 0
+/// (`0x46c173`).
+#[test]
+fn a_delete_runs_state_6_to_the_list_or_to_okay() {
+    let mut m = accepted();
+    m.connected = true;
+    m.delete_character(0x12);
+    assert_eq!(m.state, ScreenState::Delete);
+    assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_DELETE_IN_PROGRESS"))]);
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Char(CharRequest::Delete(0x12))]
+    ));
+    m.park_out.clear();
+    m.outbox.clear();
+    m.tick();
+    assert!(m.outbox.is_empty(), "no text while the reply is out");
+    m.on_char_deleted(0x39);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("CHAR_DELETE_SUCCESS"),
+                button: None,
+            },
+            Outgoing::SelectFirst,
+            open("CANCEL", Some("CHAR_LIST_RETRIEVING")),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::CharList);
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Char(CharRequest::Enumerate)]
+    ));
+
+    // vmangos refuses a guild master's delete with `CHAR_DELETE_FAILED` (0x3a).
+    let mut m = accepted();
+    m.connected = true;
+    m.delete_character(0x12);
+    m.outbox.clear();
+    m.on_char_deleted(0x3a);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("CHAR_DELETE_FAILED"),
+                button: None,
+            },
+            open("OKAY", Some("CHAR_DELETE_FAILED")),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+}
+
+/// With no link the delete fails `RESPONSE_FAILED_TO_CONNECT` at once (`0x5ab11e`) and sends
+/// nothing; the dialog's button in state 6 cancels it to state 0 (`0x46b776`), and a reply that
+/// lands after shows nothing.
+#[test]
+fn a_delete_with_no_link_fails_and_a_cancelled_one_shows_nothing() {
+    let mut m = accepted();
+    m.delete_character(0x12);
+    assert!(m.park_out.is_empty());
+    m.outbox.clear();
+    m.tick();
+    assert_eq!(
+        m.outbox.last(),
+        Some(&open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")))
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+
+    let mut m = accepted();
+    m.connected = true;
+    m.delete_character(0x12);
+    m.outbox.clear();
+    m.status_dialog_click(&mut Vec::new());
+    assert_eq!(m.state, ScreenState::Idle);
+    m.on_char_deleted(0x39);
+    m.tick();
+    assert!(m.outbox.is_empty());
+}
+
+/// State 7: the dialog and the `CMSG_CHAR_RENAME` (`0x46b39b`), sent only on a live link; no
+/// frame arm; the button goes to state 0 and sends nothing (`0x46b79d`).
+#[test]
+fn a_rename_takes_state_7_which_only_its_button_leaves() {
+    let mut m = accepted();
+    m.connected = true;
+    m.rename_character(0x12, "Newname".into());
+    assert_eq!(m.state, ScreenState::Rename);
+    assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_RENAME_IN_PROGRESS"))]);
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Char(CharRequest::Rename { guid: 0x12, name })] if name == "Newname"
+    ));
+    m.outbox.clear();
+    m.park_out.clear();
+    m.tick();
+    assert!(m.outbox.is_empty() && m.park_out.is_empty());
+    assert_eq!(m.state, ScreenState::Rename);
+    m.status_dialog_click(&mut Vec::new());
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(m.outbox.is_empty() && m.park_out.is_empty());
+
+    let mut m = accepted();
+    m.rename_character(0x12, "Newname".into());
+    assert!(m.park_out.is_empty(), "no link, nothing sent");
+}
+
+/// `0x46b440`: `CLOSE_STATUS_DIALOG` first, then 0 renames by the reply's guid, `0x31` is
+/// `CHAR_CREATE_NAME_IN_USE`, anything else `CHAR_RENAME_FAILED`; the state stays.
+#[test]
+fn the_rename_reply_closes_the_dialog_then_renames_or_asks_again() {
+    let mut m = accepted();
+    m.state = ScreenState::Rename;
+    for (result, renamed, then) in [
+        (
+            0,
+            Some((0x12, "Newname".to_string())),
+            Outgoing::Renamed {
+                guid: 0x12,
+                name: "Newname".into(),
+            },
+        ),
+        (
+            0,
+            None,
+            Outgoing::Renamed {
+                guid: 0,
+                name: String::new(),
+            },
+        ),
+        (0x31, None, Outgoing::ForceRename("CHAR_CREATE_NAME_IN_USE")),
+        (0x2f, None, Outgoing::ForceRename("CHAR_RENAME_FAILED")),
+        (0x4b, None, Outgoing::ForceRename("CHAR_RENAME_FAILED")),
+    ] {
+        m.outbox.clear();
+        m.on_char_renamed(result, renamed);
+        assert_eq!(m.outbox, [Outgoing::Close, then], "{result:#x}");
+        assert_eq!(m.state, ScreenState::Rename);
+    }
+}
+
 /// A session that is over fires `DISCONNECTED_FROM_SERVER`; an unattended reconnect does not; in
 /// the world connect, a completed failed operation opens `OKAY` with its text instead
 /// (`0x46c671`-`0x46c68f`), and a running one still fires the event.
@@ -770,6 +916,8 @@ fn stock_app() -> (
         .add_message::<WorldAuthMessage>()
         .add_message::<RosterFailedMessage>()
         .add_message::<AddonInfoMessage>()
+        .add_message::<crate::net::CharActionResultMessage>()
+        .add_message::<crate::net::CharRenameMessage>()
         .init_resource::<AddonInfoReply>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
@@ -1010,6 +1158,13 @@ struct IoEvents(crossbeam_channel::Receiver<benilla_protocol::SessionEvent>);
 #[derive(Resource, Default)]
 struct WorldDials(usize);
 
+/// The character verbs' replies, as `net::session` publishes them.
+#[derive(bevy::ecs::system::SystemParam)]
+struct CharWrites<'w> {
+    actions: MessageWriter<'w, crate::net::CharActionResultMessage>,
+    renames: MessageWriter<'w, crate::net::CharRenameMessage>,
+}
+
 fn pump(
     events: Res<IoEvents>,
     mut dials: ResMut<WorldDials>,
@@ -1022,6 +1177,7 @@ fn pump(
     mut queued: MessageWriter<LoginQueuedMessage>,
     mut addon_infos: MessageWriter<AddonInfoMessage>,
     mut addon_reply: ResMut<AddonInfoReply>,
+    mut char_writes: CharWrites,
 ) {
     use benilla_protocol::SessionEvent as E;
     for ev in events.0.try_iter() {
@@ -1084,6 +1240,16 @@ fn pump(
                 addon_reply.0 = Some(records.clone());
                 addon_infos.write(AddonInfoMessage { records });
             }
+            E::CharActionResult { action, code } => {
+                char_writes
+                    .actions
+                    .write(crate::net::CharActionResultMessage { action, code });
+            }
+            E::CharRenamed { result, renamed } => {
+                char_writes
+                    .renames
+                    .write(crate::net::CharRenameMessage { result, renamed });
+            }
             _ => {}
         }
     }
@@ -1144,6 +1310,8 @@ fn live_app_with(
         .add_message::<WorldAuthMessage>()
         .add_message::<RosterFailedMessage>()
         .add_message::<AddonInfoMessage>()
+        .add_message::<crate::net::CharActionResultMessage>()
+        .add_message::<crate::net::CharRenameMessage>()
         .init_resource::<AddonInfoReply>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()

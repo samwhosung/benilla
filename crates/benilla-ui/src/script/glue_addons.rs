@@ -64,6 +64,14 @@ impl GlueAddons {
     pub(super) fn load(&mut self, realm: &str, characters: &[String]) {
         self.store = EnableStore::load(realm, characters, &*self.files());
     }
+
+    /// The rename's carry (`0x4725f0` at `0x4726ff`, `0x472706`): the old name's node dropped
+    /// (`0x51f0b0`), then the new name's read from its file, which the host has moved by now.
+    pub(super) fn rename(&mut self, old: &str, new: &str) {
+        let files = self.files();
+        self.store.drop_node(old);
+        self.store.load_node(new, &*files);
+    }
 }
 
 impl super::UiScript {
@@ -766,6 +774,36 @@ mod tests {
             0.0,
             "what was saved is what a reset returns to"
         );
+    }
+
+    /// The rename's carry (`0x4726ff`, `0x472706`): the old name's node goes, unsaved toggles with
+    /// it, and the new name's comes from its file, which the host moved there first.
+    #[test]
+    fn a_rename_carries_the_node_to_the_new_name() {
+        let files = Files::default();
+        files.put("Bob", &[("Alpha", false)]);
+        let mut s = vm(&files);
+        after_reply(&mut s);
+        let mut bob = character(2, "Bob");
+        bob.flags = 0x4000;
+        let _ = s.load_glue_roster(vec![character(1, "Ann"), bob]);
+        let state = |s: &UiScript, who: &str| {
+            s.eval::<f64>(&format!("return GetAddOnEnableState('{who}', 1)"))
+                .unwrap()
+        };
+        assert_eq!(state(&s, "Bob"), 0.0);
+        // A toggle left unsaved goes with the old node.
+        s.run("EnableAddOn('Bob', 1)").unwrap();
+        // The host's move, then the applier.
+        files.0.borrow_mut().remove(&("Realm".into(), "Bob".into()));
+        files.put("Newname", &[("Alpha", false)]);
+        s.apply_glue_rename(2, "Newname");
+        assert_eq!(state(&s, "Newname"), 0.0, "the moved file's state");
+        assert_eq!(state(&s, "Bob"), 2.0, "no node: the default");
+        // The new node saves under the new name.
+        s.run("EnableAddOn('Newname', 1) SaveAddOns()").unwrap();
+        assert_eq!(files.get("Newname"), Some(vec![("Alpha".into(), true)]));
+        assert_eq!(files.get("Bob"), None);
     }
 
     /// The roster load drops every node and loads the new list (`0x51f0b0(NULL)`, `0x472300`).

@@ -165,6 +165,8 @@ enum Parked {
     Play(u64),
     /// A create or delete was serviced in place; its result byte still has to go out.
     Acted(CharAction, u8),
+    /// A rename was serviced in place; its reply still has to go out.
+    Renamed(u8, Option<(u64, String)>),
     /// `CMSG_CHAR_ENUM` was serviced in place; the roster is re-emitted, with no result.
     Listed,
     /// The server refused the roster to a client without Warden: the login fails for good.
@@ -818,6 +820,10 @@ fn world(
                         Ok(ParkRequest::Char(CharRequest::Delete(target))) => {
                             Parked::Acted(CharAction::Delete, session.delete_character(target)?)
                         }
+                        Ok(ParkRequest::Char(CharRequest::Rename { guid, name })) => {
+                            let (result, renamed) = session.rename_character(guid, &name)?;
+                            Parked::Renamed(result, renamed)
+                        }
                         // `GetCharacterListUpdate` (`0x4723d0` → `0x46b880` → `0x5aabb0` → `0x5b4690`):
                         // the reference asks the world server again whenever the glue screen wants
                         // the list. A Warden refusal is the server's answer, as at the park entry.
@@ -852,6 +858,24 @@ fn world(
                     Parked::Leave => return Ok(WorldEnd::Failed),
                     Parked::Refused(reason) => return fail_terminal(reason),
                     Parked::Acted(action, code) => (action, code),
+                    // The reference renames its record in place (`0x4725f0`) and asks for no
+                    // roster; the park's own copy, which names the character at the world entry,
+                    // follows it.
+                    Parked::Renamed(result, renamed) => {
+                        if let Some((guid, name)) = renamed.as_ref().filter(|_| result == 0) {
+                            if let Some(c) = characters.iter_mut().find(|c| c.guid == *guid) {
+                                c.name.clone_from(name);
+                                c.flags &= !benilla_protocol::CHARACTER_FLAG_RENAME;
+                            }
+                        }
+                        if events_tx
+                            .send(SessionEvent::CharRenamed { result, renamed })
+                            .is_err()
+                        {
+                            return Ok(WorldEnd::Cycle(Cycle::Exit));
+                        }
+                        continue;
+                    }
                     Parked::Listed => {
                         // A reply that trailed the authentication answer was read behind the ask.
                         if !addon_news.announce(&session, events_tx) {

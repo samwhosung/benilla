@@ -8,6 +8,10 @@
 //! only read it answer here, and `SelectCharacter` fires `UPDATE_SELECTED_CHARACTER` as it returns,
 //! as `0x472740` does. Indices are 1-based in Lua and 0-based inside, the boundary at `0x473470`.
 //!
+//! `DeleteCharacter` and `RenameCharacter` check here and hand the host what the reference sends
+//! (`0x46b2e0`, `0x46b340`), whose screen states are the host's; the rename reply's applier
+//! (`0x4725f0`) changes the record here once the host has moved the character's files.
+//!
 //! The 3-D side of the reference (`0x472950`'s model build into the scene) is the host's scene
 //! drive; what it reads is kept here: the shown `ModelFFX` pane's scene ([`GlueScenePane`]), the
 //! character standing on the scene's attachment 0 ([`super::UiScript::glue_standing_guid`]), and
@@ -17,8 +21,12 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{flag, number_arg, string_arg};
-use super::glue_core::{leading_int, queue, GlueRequest};
-use super::{Model, ScriptValue};
+use super::glue_core::{glue_status_key, leading_int, queue, GlueRequest};
+use super::{check_char_name, Model, ScriptValue, CHAR_NAME_SUCCESS};
+
+/// The record flag a server sets on a character it wants renamed (`[rec+0xfc]` bit `0x4000`,
+/// tested at `0x4735ab`, cleared at `0x472722`).
+const FLAG_RENAME: u32 = 0x4000;
 
 /// One character of the roster as `GetCharacterInfo` (`0x4732a0`) reads the record. The host
 /// resolves the DBC-backed strings; an absent row is the empty string where the reference pushes
@@ -248,6 +256,41 @@ impl super::UiScript {
             .map(|r| r.character.guid)
     }
 
+    /// The name of the record with `guid`, none off the roster: the rename reply's applier
+    /// (`0x4725f0`) finds the record by guid (`0x472613`-`0x472620`).
+    pub fn glue_character_name(&self, guid: u64) -> Option<String> {
+        self.model_ref()
+            .glue
+            .roster
+            .records
+            .iter()
+            .find(|r| r.character.guid == guid)
+            .map(|r| r.character.name.clone())
+    }
+
+    /// The rename reply's applier (`0x4725f0`) past the file moves, which are the host's: the
+    /// AddOn state carried from the old name to the new (`0x4726ff`, `0x472706`), the new name
+    /// copied into the record (`0x472718`), the rename flag cleared (`0x472722`) and
+    /// `CHARACTER_LIST_UPDATE` fired (`0x472732`). No record with `guid` is no change at all.
+    pub fn apply_glue_rename(&mut self, guid: u64, name: &str) {
+        {
+            let mut model = self.model_mut();
+            let glue = &mut model.glue;
+            let Some(record) = glue
+                .roster
+                .records
+                .iter_mut()
+                .find(|r| r.character.guid == guid)
+            else {
+                return;
+            };
+            glue.addons.rename(&record.character.name, name);
+            record.character.name = name.to_string();
+            record.character.flags &= !FLAG_RENAME;
+        }
+        self.fire_event("CHARACTER_LIST_UPDATE", Vec::new());
+    }
+
     /// The roster's guids in order.
     pub fn glue_roster_guids(&self) -> Vec<u64> {
         self.model_ref()
@@ -475,6 +518,92 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 vec![ScriptValue::Number(f64::from(selected))],
             );
             Ok(())
+        })?,
+    )?;
+
+    // `0x4734c0`: one number or `Usage: DeleteCharacter(index)` (`0x8387b8`); an index in
+    // `[1, count]` hands its record's guid to `0x46b2e0`, which with a nonzero guid is the host's
+    // (state 6, the dialog and the `CMSG_CHAR_DELETE`). No values on any path (`0x47351b`).
+    g.set(
+        "DeleteCharacter",
+        lua.create_function(|lua, args: MultiValue| {
+            let index =
+                number_arg(lua, arg(&args, 0), "Usage: DeleteCharacter(index)")?.wrapping_sub(1);
+            let guid = {
+                let m = model(lua);
+                usize::try_from(index)
+                    .ok()
+                    .and_then(|i| m.glue.roster.records.get(i))
+                    .map(|r| r.character.guid)
+            };
+            if let Some(guid) = guid.filter(|&g| g != 0) {
+                queue(lua, GlueRequest::DeleteCharacter(guid));
+            }
+            Ok(MultiValue::new())
+        })?,
+    )?;
+
+    // `0x473520`: one number or `Usage: RenameCharacter(index, name)` (`0x8387f0`). No values
+    // when the name is not a string or number (`0x6f3510`) or is empty as a C string
+    // (`0x6f3690`), the index is off the roster, or the record is not flagged for a rename
+    // (`0x4735ab`). A name equal to the old one, ASCII case folded (`0x4735bd`, `0x64a4c0`), fires
+    // `FORCE_RENAME_CHARACTER` with `CHAR_CREATE_NAME_IN_USE` (`0x4735d2`) and returns none.
+    // Otherwise `0x46b340` decides one value: 1, or nil when the name check (`0x5abd50`) fails,
+    // which fires `FORCE_RENAME_CHARACTER` with the check's key (`0x46b388`); a passing name is
+    // the host's (state 7, the dialog and the `CMSG_CHAR_RENAME`).
+    g.set(
+        "RenameCharacter",
+        lua.create_function(|lua, args: MultiValue| {
+            let index = number_arg(lua, arg(&args, 0), "Usage: RenameCharacter(index, name)")?
+                .wrapping_sub(1);
+            let name = match arg(&args, 1) {
+                v @ (Value::String(_) | Value::Integer(_) | Value::Number(_)) => lua
+                    .coerce_string(v)?
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            // A C string ends at its NUL.
+            let name = name.split('\0').next().unwrap_or_default().to_string();
+            if name.is_empty() {
+                return Ok(MultiValue::new());
+            }
+            let (guid, old, lists) = {
+                let m = model(lua);
+                let Some(record) = usize::try_from(index)
+                    .ok()
+                    .and_then(|i| m.glue.roster.records.get(i))
+                    .filter(|r| r.character.flags & FLAG_RENAME != 0)
+                else {
+                    return Ok(MultiValue::new());
+                };
+                (
+                    record.character.guid,
+                    record.character.name.clone(),
+                    m.glue.name_lists(),
+                )
+            };
+            let force_rename = |key: &str| {
+                super::tick::fire_event_into(
+                    lua,
+                    "FORCE_RENAME_CHARACTER",
+                    vec![ScriptValue::Str(key.to_string())],
+                );
+            };
+            if name.eq_ignore_ascii_case(&old) {
+                force_rename("CHAR_CREATE_NAME_IN_USE");
+                return Ok(MultiValue::new());
+            }
+            // `0x46b340`: a zero guid sends nothing and answers 1 (`0x46b355`).
+            if guid != 0 {
+                let status = check_char_name(Some(&name), &*lists);
+                if status != CHAR_NAME_SUCCESS {
+                    force_rename(glue_status_key(i32::from(status)));
+                    return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                }
+                queue(lua, GlueRequest::RenameCharacter { guid, name });
+            }
+            Ok(MultiValue::from_vec(vec![Value::Number(1.0)]))
         })?,
     )?;
 
@@ -996,6 +1125,193 @@ mod tests {
         s.set_cvar_engine("lastCharacterIndex", "-3");
         assert!(!s.load_glue_roster(three()));
         assert_eq!(fired(&s)[0], "UPDATE_SELECTED_CHARACTER 1");
+    }
+
+    /// A VM over `three()` with Bravo flagged for a rename, `FIRED` also logging
+    /// `FORCE_RENAME_CHARACTER`.
+    fn rename_vm() -> UiScript {
+        let mut roster = three();
+        roster[1].flags = FLAG_RENAME | 0x2000;
+        let mut s = vm(roster);
+        s.run("Listener:RegisterEvent('FORCE_RENAME_CHARACTER')")
+            .unwrap();
+        s.take_glue_requests();
+        s
+    }
+
+    /// `0x4734c0`: an index on the roster hands its guid to the host, every path returns nothing,
+    /// and only a non-number raises.
+    #[test]
+    fn delete_character_hands_the_records_guid_to_the_host() {
+        let mut roster = three();
+        roster[2].guid = 0;
+        let mut s = vm(roster);
+        s.take_glue_requests();
+        for call in [
+            "DeleteCharacter(2)",
+            "DeleteCharacter('2')",
+            "DeleteCharacter(0)",
+            "DeleteCharacter(4)",
+            "DeleteCharacter(-1)",
+            "DeleteCharacter(3)",
+        ] {
+            assert_eq!(s.eval::<f64>(&count(call)).unwrap(), 0.0, "{call}");
+        }
+        let queued = s.take_glue_requests();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [
+                    GlueRequest::DeleteCharacter(2),
+                    GlueRequest::DeleteCharacter(2)
+                ]
+            ),
+            "off the roster, or a zero guid (`0x46b2ed`), sends nothing: {queued:?}"
+        );
+        for call in ["DeleteCharacter()", "DeleteCharacter('x')"] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(err.contains("Usage: DeleteCharacter(index)"), "{err}");
+        }
+        assert!(fired(&s).is_empty(), "the verb fires nothing itself");
+    }
+
+    /// `0x473520`'s silent arms: no values, nothing fired, nothing sent.
+    #[test]
+    fn rename_character_returns_nothing_off_its_checks() {
+        let mut s = rename_vm();
+        for call in [
+            "RenameCharacter(2)",
+            "RenameCharacter(2, nil)",
+            "RenameCharacter(2, {})",
+            "RenameCharacter(2, '')",
+            "RenameCharacter(2, '\\0Newname')",
+            "RenameCharacter(0, 'Newname')",
+            "RenameCharacter(4, 'Newname')",
+            // Alpha is not flagged (`0x4735ab`).
+            "RenameCharacter(1, 'Newname')",
+        ] {
+            assert_eq!(s.eval::<f64>(&count(call)).unwrap(), 0.0, "{call}");
+        }
+        assert!(fired(&s).is_empty());
+        assert!(s.take_glue_requests().is_empty());
+        for call in ["RenameCharacter()", "RenameCharacter('x', 'Newname')"] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(err.contains("Usage: RenameCharacter(index, name)"), "{err}");
+        }
+    }
+
+    /// The old name again, case folded, is `CHAR_CREATE_NAME_IN_USE` and no values (`0x4735bd`).
+    #[test]
+    fn rename_character_to_the_same_name_is_name_in_use() {
+        let mut s = rename_vm();
+        assert_eq!(
+            s.eval::<f64>(&count("RenameCharacter(2, 'bRAVO')"))
+                .unwrap(),
+            0.0
+        );
+        assert_eq!(
+            fired(&s),
+            ["FORCE_RENAME_CHARACTER CHAR_CREATE_NAME_IN_USE"]
+        );
+        assert!(s.take_glue_requests().is_empty());
+    }
+
+    /// A name the check fails is `FORCE_RENAME_CHARACTER` with the check's key, one nil and
+    /// nothing sent (`0x46b379`-`0x46b392`); a number is a name too, as its string.
+    #[test]
+    fn rename_character_with_a_failing_name_fires_the_checks_key() {
+        struct Reserved;
+        impl super::super::NameLists for Reserved {
+            fn matches(&self, name: &str) -> bool {
+                name.eq_ignore_ascii_case("thrall")
+            }
+        }
+        let mut s = rename_vm();
+        s.set_glue_name_lists(std::rc::Rc::new(Reserved));
+        for (call, key) in [
+            ("RenameCharacter(2, 'X')", "CHAR_NAME_TOO_SHORT"),
+            ("RenameCharacter(2, 'Abc1')", "CHAR_NAME_INVALID_CHARACTER"),
+            ("RenameCharacter(2, 12)", "CHAR_NAME_INVALID_CHARACTER"),
+            ("RenameCharacter(2, 'Abbbc')", "CHAR_NAME_THREE_CONSECUTIVE"),
+            ("RenameCharacter(2, 'Abcdefghijklm')", "CHAR_NAME_TOO_LONG"),
+            ("RenameCharacter(2, 'Thrall')", "CHAR_NAME_RESERVED"),
+        ] {
+            s.run("FIRED = {}").unwrap();
+            assert_eq!(
+                s.eval::<(f64, Option<f64>)>(&format!(
+                    "local function n(...) return arg.n, arg[1] end return n({call})"
+                ))
+                .unwrap(),
+                (1.0, None),
+                "{call}"
+            );
+            assert_eq!(
+                fired(&s),
+                [format!("FORCE_RENAME_CHARACTER {key}")],
+                "{call}"
+            );
+        }
+        assert!(s.take_glue_requests().is_empty());
+    }
+
+    /// A passing name is the host's, and the verb answers 1 with nothing fired; a C string ends at
+    /// its NUL.
+    #[test]
+    fn rename_character_with_a_passing_name_asks_the_host() {
+        let mut s = rename_vm();
+        assert_eq!(
+            s.eval::<(f64, f64)>(
+                "local function n(...) return arg.n, arg[1] end \
+                 return n(RenameCharacter(2, 'Newname'))"
+            )
+            .unwrap(),
+            (1.0, 1.0)
+        );
+        assert_eq!(
+            s.eval::<f64>("return RenameCharacter('2', 'Zoë\\0Bravo')")
+                .unwrap(),
+            1.0
+        );
+        assert!(fired(&s).is_empty());
+        let queued = s.take_glue_requests();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [
+                    GlueRequest::RenameCharacter { guid: 2, name: a },
+                    GlueRequest::RenameCharacter { guid: 2, name: b },
+                ] if a == "Newname" && b == "Zoë"
+            ),
+            "{queued:?}"
+        );
+    }
+
+    /// `0x4725f0` on the VM's side: the record found by guid takes the name, loses the rename flag
+    /// and keeps the rest, and `CHARACTER_LIST_UPDATE` fires; another guid changes nothing.
+    #[test]
+    fn the_rename_applier_renames_the_record_and_clears_its_flag() {
+        let mut s = rename_vm();
+        assert_eq!(s.glue_character_name(2).as_deref(), Some("Bravo"));
+        s.apply_glue_rename(9, "Nobody");
+        assert!(fired(&s).is_empty(), "no record, no event");
+        s.apply_glue_rename(2, "Newname");
+        assert_eq!(fired(&s), ["CHARACTER_LIST_UPDATE nil"]);
+        assert_eq!(
+            s.eval::<(String, Option<i64>)>(
+                "local n, _, _, _, _, _, _, ghost = GetCharacterInfo(2) return n, ghost"
+            )
+            .unwrap(),
+            ("Newname".to_string(), Some(1)),
+            "the ghost bit stays"
+        );
+        assert_eq!(s.glue_character_name(2).as_deref(), Some("Newname"));
+        // The flag is clear: a second rename is refused at `0x4735ab`.
+        assert_eq!(
+            s.eval::<f64>(&count("RenameCharacter(2, 'Othername')"))
+                .unwrap(),
+            0.0
+        );
+        assert!(s.take_glue_requests().is_empty());
     }
 
     /// `0x4724d0` with none: -1 is selected (the event carries 1), then with no realm chosen the

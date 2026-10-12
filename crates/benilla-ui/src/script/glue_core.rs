@@ -128,6 +128,13 @@ pub enum GlueRequest {
     /// `LaunchAddOnURL(index)` (`0x46d5e0` → `0x429ff0`, no whitelist) for a URL that passed
     /// [`launch_addon_url`]: already decoded, ready for the player's browser.
     LaunchAddonUrl(String),
+    /// `DeleteCharacter(index)` (`0x4734c0` → `0x46b2e0`) for a record with a guid: the host takes
+    /// screen state 6, the `CHAR_DELETE_IN_PROGRESS` dialog and the `CMSG_CHAR_DELETE`.
+    DeleteCharacter(u64),
+    /// `RenameCharacter(index, name)` past its checks and the name check (`0x46b340` at
+    /// `0x46b39b`): the host takes screen state 7, the `CHAR_RENAME_IN_PROGRESS` dialog and the
+    /// `CMSG_CHAR_RENAME`.
+    RenameCharacter { guid: u64, name: String },
 }
 
 /// The `ClientServices` status keys (`0x85cae8`, 83 entries), the `ResponseCodes` the world
@@ -421,6 +428,17 @@ pub(crate) struct GlueCore {
     pub(super) roster: super::glue_select::GlueRoster,
     /// The AddOns screen's enable nodes ([`super::glue_addons`]).
     pub(super) addons: super::glue_addons::GlueAddons,
+    /// The character name check's lists ([`super::char_name`]), as the host seated them.
+    name_lists: Option<std::rc::Rc<dyn super::NameLists>>,
+}
+
+impl GlueCore {
+    /// The name check's lists; with none seated, nothing is reserved.
+    pub(super) fn name_lists(&self) -> std::rc::Rc<dyn super::NameLists> {
+        self.name_lists
+            .clone()
+            .unwrap_or_else(|| std::rc::Rc::new(super::NoNameLists))
+    }
 }
 
 /// `SetCurrentScreen`'s buffer, 0x40 bytes with its terminator (`0x46b860`, `SStrCopy`).
@@ -430,6 +448,11 @@ impl super::UiScript {
     /// Drain the glue verbs' requests since the last call.
     pub fn take_glue_requests(&mut self) -> Vec<GlueRequest> {
         std::mem::take(&mut self.model_mut().glue.requests)
+    }
+
+    /// Seat the lists the character name check searches (`0x6c91a0` compiles them at startup).
+    pub fn set_glue_name_lists(&mut self, lists: std::rc::Rc<dyn super::NameLists>) {
+        self.model_mut().glue.name_lists = Some(lists);
     }
 
     /// Seed the saved account name `GetSavedAccountName` answers.
