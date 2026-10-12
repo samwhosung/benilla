@@ -529,6 +529,32 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
             "the clear before it unlocked the held item"
         );
     }
+    // A held vendor row, mode 5, goes with the sweep's interaction close (`0x4fadf0`, `0x4fae4a`).
+    {
+        let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
+        s.run("ClearCursor()").unwrap();
+        s.set_merchant(Some(benilla_ui::script::MerchantState {
+            items: vec![benilla_ui::script::MerchantItem {
+                name: Some("Refreshing Spring Water".into()),
+                price: 25,
+                quantity: 5,
+                num_available: -1,
+                item_id: 159,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        s.run("PickupMerchantItem(1)").unwrap();
+        assert!(matches!(
+            s.cursor_payload(),
+            Some(benilla_ui::script::CursorPayload::Merchant(_))
+        ));
+    }
+    reload(&mut world, crate::char_select::ClientState::InWorld);
+    assert!(world
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .cursor_payload()
+        .is_none());
 
     super::end_ui_session(&mut world);
     log_in_as(&mut world, "Onehunter", 1);
