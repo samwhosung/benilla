@@ -46,6 +46,14 @@ pub fn string_to_bool(s: &str) -> bool {
 }
 
 impl Toc {
+    /// A manifest of these files and no directives: the interfaces built in code rather than read.
+    pub fn with_files(files: Vec<String>) -> Self {
+        Toc {
+            files,
+            ..Toc::default()
+        }
+    }
+
     /// Parse manifest text; never fails, since any unrecognized line is a file entry.
     pub fn parse(text: &str) -> Self {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
