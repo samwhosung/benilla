@@ -155,10 +155,11 @@ pub(crate) fn addons_state_path(realm: &str, character: &str) -> Option<PathBuf>
 }
 
 /// Move the enable files an earlier build wrote to `<home>/addons/` into [`ADDON_STATE_DIR`], once
-/// per process and home. A file qualifies when it is named `<Realm>-<Character>.txt` and every
-/// non-blank line of it reads `<AddOn>: enabled` or `<AddOn>: disabled`, so a loose `.txt` of the
-/// player's in a folder that is also the AddOns root (case-insensitive filesystems) stays where
-/// it is, and so does a file whose new name is already taken. An old folder left empty goes.
+/// per process and home. A file qualifies when it is named `<Realm>-<Character>.txt`, holds at
+/// least one row and every non-blank line of it reads `<AddOn>: enabled` or `<AddOn>: disabled`,
+/// so a loose `.txt` of the player's in a folder that is also the AddOns root (case-insensitive
+/// filesystems) stays where it is, and so does a file whose new name is already taken. An old
+/// folder left empty goes, unless it is the AddOns root.
 fn migrate_addon_state(home: &Path) {
     static DONE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
     {
@@ -185,17 +186,19 @@ fn migrate_addon_state(home: &Path) {
         if !is_state_name {
             continue;
         }
+        // At least one row, and nothing but rows: an empty file, or a player's note, stays.
         let looks_like_state = std::fs::read(&path).is_ok_and(|bytes| {
-            benilla_ui::source::decode(&bytes).lines().all(|line| {
-                line.trim().is_empty()
-                    || line.split_once(':').is_some_and(|(addon, state)| {
-                        !addon.trim().is_empty()
-                            && matches!(
-                                state.trim().to_ascii_lowercase().as_str(),
-                                "enabled" | "disabled"
-                            )
-                    })
-            })
+            let text = benilla_ui::source::decode(&bytes);
+            let row = |line: &str| {
+                line.split_once(':').is_some_and(|(addon, state)| {
+                    !addon.trim().is_empty()
+                        && matches!(
+                            state.trim().to_ascii_lowercase().as_str(),
+                            "enabled" | "disabled"
+                        )
+                })
+            };
+            text.lines().any(row) && text.lines().all(|l| l.trim().is_empty() || row(l))
         });
         let target = new.join(&name);
         if !looks_like_state || target.exists() {
@@ -205,10 +208,21 @@ fn migrate_addon_state(home: &Path) {
             bevy::log::info!("addons: moved {} to {}", path.display(), target.display());
         }
     }
-    // An emptied folder goes, unless it is the AddOns root under another case (it exists by that
-    // name too), which the player drops addons into.
-    if !home.join("AddOns").exists() {
-        let _ = std::fs::remove_dir(&old);
+    // An emptied folder goes, unless it is the AddOns root under another case, which the player
+    // drops addons into: that is told by the two being one folder, not by `AddOns` existing, as
+    // on a case-sensitive filesystem both can be there.
+    remove_emptied(&old, &home.join("AddOns"));
+}
+
+/// Remove `old` if it is empty and not the same folder as `root`.
+fn remove_emptied(old: &Path, root: &Path) {
+    let same = match (std::fs::canonicalize(old), std::fs::canonicalize(root)) {
+        (Ok(a), Ok(b)) => a == b,
+        (_, Err(_)) => false,
+        (Err(_), _) => true,
+    };
+    if !same {
+        let _ = std::fs::remove_dir(old);
     }
 }
 
@@ -698,6 +712,8 @@ mod tests {
         std::fs::write(old.join("Realm-Two.txt"), "A: disabled\n").unwrap();
         std::fs::write(old.join("Notes-Todo.txt"), "buy milk\n").unwrap();
         std::fs::write(old.join("README.txt"), "A: enabled\n").unwrap();
+        std::fs::write(old.join("Realm-Empty.txt"), "").unwrap();
+        std::fs::write(old.join("Realm-Blank.txt"), "\n  \n").unwrap();
         let _g = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
 
         let path = addons_state_path("Realm", "One").unwrap();
@@ -730,11 +746,43 @@ mod tests {
             old.join("Notes-Todo.txt").is_file() && old.join("README.txt").is_file(),
             "a file that is no enable state stays"
         );
+        assert!(
+            old.join("Realm-Empty.txt").is_file() && old.join("Realm-Blank.txt").is_file(),
+            "a file with no row stays"
+        );
         // Once: a file written to the old place afterwards is not taken, and the new is not
         // overwritten.
         std::fs::write(old.join("Realm-Three.txt"), "A: enabled\n").unwrap();
         let _ = addons_state_path("Realm", "Three");
         assert!(old.join("Realm-Three.txt").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// With nothing but enable files in an `addons/` that is not the AddOns root, the emptied
+    /// folder goes; with `AddOns/` beside it (different folders on a case-sensitive filesystem) it
+    /// goes too, and the root stays whatever its case.
+    #[test]
+    fn an_emptied_old_folder_goes_unless_it_is_the_addons_root() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-enable-rm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let home = tmp.join("benilla-config");
+        let (old, root) = (home.join("addons"), home.join("AddOns"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        // One folder under two spellings, or two folders.
+        let one_folder =
+            std::fs::canonicalize(&old).unwrap() == std::fs::canonicalize(&root).unwrap();
+        std::fs::write(old.join("Realm-One.txt"), "A: disabled\n").unwrap();
+        let _g = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
+        let path = addons_state_path("Realm", "One").unwrap();
+        assert!(path.is_file());
+        assert!(root.is_dir(), "the AddOns root is never removed");
+        if !one_folder {
+            assert!(!old.exists(), "the emptied old folder goes");
+        }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }
