@@ -398,7 +398,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .to_string(),
                 _ => return Err(mlua::Error::runtime(r#"Usage: LeaveChannelByName("name")"#)),
             };
-            if super::chat_window::leading_int(&key) != 0 {
+            if super::binding_abi::s_str_to_int(&key) != 0 {
                 push(lua, ChannelCommand::Leave { name: key });
                 return Ok(());
             }
@@ -710,6 +710,22 @@ mod command_tests {
             s.take_chat_window_changes().is_empty(),
             "…and strips no window: a slot name never equals a window entry"
         );
+
+        // `SStrToInt` takes no `+`: "+2" is a channel name, so its window entry is stripped, which
+        // the numeric leg (a slot, never a window entry) does not do.
+        s.run("AddChatWindowChannel(1, '+2')").unwrap();
+        s.take_channel_commands();
+        s.take_chat_window_changes();
+        s.run("LeaveChannelByName('+2')").unwrap();
+        assert!(
+            !s.chat_window_looks()[0]
+                .channels
+                .iter()
+                .any(|(c, _)| c == "+2"),
+            "a '+'-prefixed key is a name"
+        );
+        s.take_channel_commands();
+        s.take_chat_window_changes();
 
         s.run("LeaveChannelByName('general')").unwrap();
         assert_eq!(

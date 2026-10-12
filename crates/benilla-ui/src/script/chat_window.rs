@@ -205,28 +205,6 @@ impl ChatWindowLook {
     }
 }
 
-/// The leading decimal integer after optional whitespace and a sign, 0 when there is none. The
-/// reference's `SStrToInt` (`0x64ac60`) takes neither the whitespace nor a `+`.
-pub(super) fn leading_int(s: &str) -> i64 {
-    let s = s.trim_start();
-    let (neg, digits) = match s.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, s.strip_prefix('+').unwrap_or(s)),
-    };
-    let n: i64 = digits
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .fold(0i64, |acc, c| {
-            acc.saturating_mul(10)
-                .saturating_add(i64::from(c as u8 - b'0'))
-        });
-    if neg {
-        -n
-    } else {
-        n
-    }
-}
-
 /// The byte `__ftol(x · 255.0)` stores, clamped (the module's deviation); non-finite stores 0.
 fn to_byte(x: f64) -> u8 {
     if !x.is_finite() {
@@ -531,7 +509,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         .map(|s| s.trim().to_ascii_lowercase())
                         .unwrap_or_default();
                     if s.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
-                        leading_int(&s) != 0
+                        crate::script::binding_abi::s_str_to_int(&s) != 0
                     } else {
                         !(s == "off" || s == "disabled")
                     }
@@ -630,7 +608,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let key = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let n = leading_int(&key);
+                let n = crate::script::binding_abi::s_str_to_int(&key);
                 let key = if n > 0 {
                     match usize::try_from(n)
                         .ok()
@@ -1060,6 +1038,29 @@ mod record_tests {
             "a number names a joined slot; with none joined it removes nothing"
         );
         assert_eq!(s.take_chat_window_changes(), vec![0]);
+    }
+
+    /// A channel key is `SStrToInt` (`0x64ac60`, through `0x49e880`): an optional `-` and digits,
+    /// with no whitespace skip and no `+`, so only a plain number names a joined slot.
+    #[test]
+    fn a_channel_key_is_a_slot_only_as_sstrtoint_reads_it() {
+        let mut s = UiScript::new().unwrap();
+        s.set_joined_channels(vec![Some("MyChan".into())]);
+        s.run("AddChatWindowChannel(1, 'MyChan')").unwrap();
+        for key in ["+1", " 1", "x1"] {
+            s.run(&format!("RemoveChatWindowChannel(1, {key:?})"))
+                .unwrap();
+            assert_eq!(
+                s.chat_window_looks()[0].channels,
+                vec![("MyChan".to_string(), 0)],
+                "{key:?} is a name, not slot 1"
+            );
+        }
+        s.run("RemoveChatWindowChannel(1, '1abc')").unwrap();
+        assert!(
+            s.chat_window_looks()[0].channels.is_empty(),
+            "'1abc' reads 1 and frees the channel joined in slot 1"
+        );
     }
 
     #[test]

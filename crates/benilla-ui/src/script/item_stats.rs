@@ -315,33 +315,6 @@ fn equip_loc_token(inventory_type: u32) -> &'static str {
     TOKENS.get(inventory_type as usize).copied().unwrap_or("")
 }
 
-/// The reference's `SStrToInt` (`0x64ac60`) over an `item:` field: an optional `-`, then digits up
-/// to the first non-digit, with no whitespace skip and no `+`. Deviation: an overflow saturates at
-/// `u32::MAX` where the reference wraps, because only a script can overflow it.
-fn reference_atoi(s: &str) -> i64 {
-    let b = s.as_bytes();
-    let (neg, mut i) = match b.first() {
-        Some(b'-') => (true, 1),
-        _ => (false, 0),
-    };
-    let mut n: i64 = 0;
-    while let Some(&c) = b.get(i) {
-        if !c.is_ascii_digit() {
-            break;
-        }
-        n = n
-            .saturating_mul(10)
-            .saturating_add(i64::from(c - b'0'))
-            .min(i64::from(u32::MAX));
-        i += 1;
-    }
-    if neg {
-        -n
-    } else {
-        n
-    }
-}
-
 /// `GetItemInfo`'s argument as the reference parses it (`0x48e0a3`-`0x48e16d`): a number, or a
 /// string `lua_isnumber` (`0x6f34d0`) coerces, is the id alone; another string (`0x6f3510`) must
 /// pass `strnicmp(s, "item:", 5)` (`0x64a4c0`) for its four fields, else it is id 0, so a name or
@@ -372,7 +345,9 @@ fn parse_item_arg(v: &Value) -> mlua::Result<(i64, u32, u32, u32)> {
     else {
         return Ok((0, 0, 0, 0));
     };
-    let mut fields = rest.splitn(4, ':').map(reference_atoi);
+    let mut fields = rest
+        .splitn(4, ':')
+        .map(crate::script::binding_abi::s_str_to_int);
     let id = fields.next().unwrap_or(0);
     let mut next = || u32::try_from(fields.next().unwrap_or(0)).unwrap_or(0);
     Ok((id, next(), next(), next()))
@@ -577,7 +552,7 @@ mod tests {
 
 #[cfg(test)]
 mod get_item_info_tests {
-    use super::{equip_loc_token, reference_atoi, ItemTemplateView};
+    use super::{equip_loc_token, ItemTemplateView};
     use crate::script::UiScript;
 
     /// Worn Shortsword, item 25, as vmangos `item_template` holds it (item level 2).
@@ -805,17 +780,6 @@ mod get_item_info_tests {
         assert_eq!(equip_loc_token(28), "INVTYPE_RELIC", "the last real token");
         assert_eq!(equip_loc_token(29), "", "the array's trailing \"\"");
         assert_eq!(equip_loc_token(9999), "", "past the array");
-    }
-
-    #[test]
-    fn the_field_parser_is_the_references_atoi() {
-        assert_eq!(reference_atoi("2589"), 2589);
-        assert_eq!(reference_atoi("-5"), -5);
-        assert_eq!(reference_atoi(""), 0);
-        assert_eq!(reference_atoi("abc"), 0);
-        assert_eq!(reference_atoi(" 12"), 0, "no leading-whitespace skip");
-        assert_eq!(reference_atoi("+12"), 0, "no unary plus");
-        assert_eq!(reference_atoi("12abc"), 12, "stops at the first non-digit");
     }
 }
 

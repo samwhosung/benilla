@@ -57,13 +57,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // GetNumber: the real text as a number, else 0. The reference (`0x798790`) is atof, which also
-    // reads the leading number of a text like "12abc".
+    // GetNumber (`0x798790`): the real text through Storm's `SStrToFloat` (`0x64aaa0`), a prefix
+    // parse, so "12abc" is 12 and " 12", "+12" and "inf" are 0.
     m.set(
         "GetNumber",
         lua.create_function(|lua, this: Table| {
             let text = with_editbox(lua, &this, |eb| eb.text.clone())?;
-            Ok(text.trim().parse::<f64>().unwrap_or(0.0))
+            Ok(crate::script::binding_abi::s_str_to_float(&text))
         })?,
     )?;
     // Insert: a nil is a no-op, not an error, since the reference reads the argument through

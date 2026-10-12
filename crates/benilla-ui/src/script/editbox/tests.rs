@@ -656,6 +656,35 @@ fn get_number_parses_the_text() {
     assert_eq!(s.eval::<f64>("return E:GetNumber()").unwrap(), 0.0);
 }
 
+/// `GetNumber` pushes `SStrToFloat` of the text (`0x798790` → `0x64aaa0`): a prefix parse with no
+/// whitespace skip and no `+`.
+#[test]
+fn get_number_is_the_references_prefix_parse() {
+    let s = script();
+    s.run(r#"E = CreateFrame("EditBox", "E")"#).unwrap();
+    for (text, want) in [
+        ("12abc", 12.0),
+        (" 12", 0.0),
+        ("+12", 0.0),
+        ("inf", 0.0),
+        ("nan", 0.0),
+        ("-12.5x", -12.5),
+        (".5", 0.5),
+        ("5.", 5.0),
+        ("1e3", 1000.0),
+        ("1E+2", 100.0),
+        ("0x10", 0.0),
+        ("", 0.0),
+    ] {
+        s.run(&format!("E:SetText({text:?})")).unwrap();
+        assert_eq!(
+            s.eval::<f64>("return E:GetNumber()").unwrap(),
+            want,
+            "{text:?}"
+        );
+    }
+}
+
 // ── the generic OnChar and OnKeyDown ─────────────────────────────────────────────────────────
 
 #[test]

@@ -155,6 +155,92 @@ fn trim_g(s: &str) -> &str {
     s.trim_end_matches('0').trim_end_matches('.')
 }
 
+/// Storm's `SStrToInt` (`0x64ac60`): an optional leading `-` (and no `+`), then the decimal digits
+/// up to the first other byte, with no whitespace skip; none is 0. `RemoveChatWindowChannel` and
+/// `LeaveChannelByName` key on it (`0x49e880`), and the `item:` link fields read it.
+///
+/// Deviation: an overflow saturates at `u32::MAX` where the reference wraps in 32 bits, because
+/// only a script can overflow it.
+pub(crate) fn s_str_to_int(s: &str) -> i64 {
+    let b = s.as_bytes();
+    let (neg, mut i) = match b.first() {
+        Some(b'-') => (true, 1),
+        _ => (false, 0),
+    };
+    let mut n: i64 = 0;
+    while let Some(&c) = b.get(i) {
+        if !c.is_ascii_digit() {
+            break;
+        }
+        n = n
+            .saturating_mul(10)
+            .saturating_add(i64::from(c - b'0'))
+            .min(i64::from(u32::MAX));
+        i += 1;
+    }
+    if neg {
+        -n
+    } else {
+        n
+    }
+}
+
+/// Storm's `SStrToFloat` (`0x64aaa0`), which `EditBox:GetNumber` (`0x798790`) pushes: a prefix
+/// parse that stops at the first byte outside its grammar and skips no whitespace.
+///
+/// - an optional `-` (no `+`), then the integer digits, which may be none (`".5"`, `"-"`)
+/// - a `.` is consumed whether or not a digit follows it (`0x64ab9f`: `esi` is advanced before the
+///   test), then any digits are the fraction, so `"5.e3"` is 5000
+/// - `e` or `E`, then an optional `+`, then `SStrToInt` ([`s_str_to_int`]) of what follows scales
+///   the value by `pow(10, exp)` (`0x64ac13`-`0x64ac40`), so `"1e"` is 1, `"1e+-2"` is 0.01, and
+///   `"0e999"` is `0 * inf`, NaN
+///
+/// Deviation: the digits are converted correctly rounded where the reference accumulates them in
+/// x87 extended precision, so a text of more than 15 significant digits can differ in the last
+/// place.
+pub(crate) fn s_str_to_float(s: &str) -> f64 {
+    let b = s.as_bytes();
+    let at = |i: usize| b.get(i).copied().unwrap_or(0);
+    let digits_from = |mut i: usize| {
+        let start = i;
+        while at(i).is_ascii_digit() {
+            i += 1;
+        }
+        (start, i)
+    };
+    let neg = at(0) == b'-';
+    let (int_start, mut i) = digits_from(usize::from(neg));
+    let int_part = &s[int_start..i];
+    let mut frac_part = "";
+    if at(i) == b'.' {
+        let (start, end) = digits_from(i + 1);
+        frac_part = &s[start..end];
+        i = end;
+    }
+    // Only ASCII digits are sliced, so `parse` cannot fail; an empty run reads as 0.
+    let mut value: f64 = format!(
+        "{}.{}",
+        if int_part.is_empty() { "0" } else { int_part },
+        if frac_part.is_empty() { "0" } else { frac_part }
+    )
+    .parse()
+    .unwrap_or(0.0);
+    if matches!(at(i), b'e' | b'E') {
+        i += 1;
+        if at(i) == b'+' {
+            i += 1;
+        }
+        // `SStrToInt` wraps in 32 bits; either way the exponent is past any finite power.
+        let exp = s_str_to_int(&s[i..]).clamp(i64::from(i32::MIN), i64::from(i32::MAX));
+        value *= 10f64.powf(exp as f64);
+    }
+    if neg {
+        -value
+    } else {
+        value
+    }
+}
+
 /// `GetBoolOrDefault` (`0x6f1c10`, jump table `0x6f1ce8`), the reference's boolean argument
 /// coercion, which is not Lua truthiness:
 ///
@@ -229,6 +315,54 @@ mod tests {
 
     /// `_ftol`'s low dword: chopped toward zero, wrapped to 32 bits, and 0 for whatever the qword
     /// `fistp` cannot hold.
+    /// `SStrToInt` (`0x64ac60`): an optional `-`, digits, nothing skipped.
+    #[test]
+    fn s_str_to_int_is_the_references_atoi() {
+        assert_eq!(s_str_to_int("2589"), 2589);
+        assert_eq!(s_str_to_int("-5"), -5);
+        assert_eq!(s_str_to_int(""), 0);
+        assert_eq!(s_str_to_int("abc"), 0);
+        assert_eq!(s_str_to_int(" 12"), 0, "no leading-whitespace skip");
+        assert_eq!(s_str_to_int("+12"), 0, "no unary plus");
+        assert_eq!(s_str_to_int("12abc"), 12, "stops at the first non-digit");
+        assert_eq!(s_str_to_int("-"), 0);
+    }
+
+    /// `SStrToFloat` (`0x64aaa0`): the grammar's quirks, each read off the bytes.
+    #[test]
+    fn s_str_to_float_is_the_references_prefix_parse() {
+        for (text, want) in [
+            ("12", 12.0),
+            ("12abc", 12.0),
+            ("-12.5x", -12.5),
+            (" 12", 0.0),
+            ("+12", 0.0),
+            ("inf", 0.0),
+            ("1e", 1.0),
+            ("1e3", 1000.0),
+            ("1E+3", 1000.0),
+            ("1e-2", 0.01),
+            ("1e+-2", 0.01),
+            ("1e3.5", 1000.0),
+            (".5", 0.5),
+            ("-.5", -0.5),
+            ("5.", 5.0),
+            ("5.e2", 500.0),
+            ("5.5.5", 5.5),
+            ("e5", 0.0),
+            ("0x1f", 0.0),
+            ("1234567890123", 1_234_567_890_123.0),
+        ] {
+            assert_eq!(s_str_to_float(text), want, "{text:?}");
+        }
+        assert!(
+            s_str_to_float("0e999").is_nan(),
+            "0 * pow(10, 999) = 0 * inf"
+        );
+        assert_eq!(s_str_to_float("1e999"), f64::INFINITY);
+        assert!(s_str_to_float("-").is_sign_negative(), "'-' alone is -0");
+    }
+
     #[test]
     fn ftol_keeps_the_low_dword_of_the_x87_qword() {
         assert_eq!(ftol(-2.9), -2);
