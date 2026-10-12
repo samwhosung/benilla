@@ -108,7 +108,11 @@ pub(super) fn pickup_pet_action(lua: &Lua, slot: u32) -> bool {
     });
     match pick {
         PetPick::Refused => false,
-        PetPick::Placed(wrote) => wrote,
+        PetPick::Dropping(held) => verb(lua, |model| {
+            let wrote = place_pet_action(model, slot, &held);
+            resolve_token_icon(lua, model);
+            wrote
+        }),
         PetPick::Picked(blank) => {
             if let Some((index, word)) = blank {
                 verb(lua, |model| {
@@ -123,8 +127,8 @@ pub(super) fn pickup_pet_action(lua: &Lua, slot: u32) -> bool {
 /// What [`pickup_pet_action`]'s cursor half did.
 enum PetPick {
     Refused,
-    /// A held pet action was dropped, writing the bar or not.
-    Placed(bool),
+    /// A held pet action left the cursor, its clear signalled; the drop still owes its write.
+    Dropping(CursorPetAction),
     /// The slot's word went on the cursor; a spell slot still owes its blank, `(index, word)`.
     Picked(Option<(usize, u32)>),
 }
@@ -134,7 +138,14 @@ fn pick_or_place(model: &mut Model, slot: u32) -> PetPick {
         return PetPick::Refused;
     }
     match &model.cursor {
-        Some(CursorPayload::PetAction(_)) => return PetPick::Placed(place_pet_action(model, slot)),
+        Some(CursorPayload::PetAction(held)) => {
+            // `ClearCursor(1,1)` (`0x4be220`), unconditionally, before anything is decided: its
+            // `PET_BAR_HIDEGRID` and `CURSOR_UPDATE` run before the bar write.
+            let held = held.clone();
+            model.cursor = None;
+            raise_cursor_update(model);
+            return PetPick::Dropping(held);
+        }
         Some(_) => return PetPick::Refused,
         None => {}
     }
@@ -158,34 +169,26 @@ fn pick_or_place(model: &mut Model, slot: u32) -> PetPick {
     PetPick::Picked((kind(packed) == 1).then_some((index, packed & 0xFFFF_0000)))
 }
 
-/// The drop: the cursor always empties, and only a homeless occupant refills it (`0x4bce3d`).
-/// Returns whether anything was written; the cursor empties on `false` too.
-fn place_pet_action(model: &mut Model, slot: u32) -> bool {
-    let Some(CursorPayload::PetAction(held)) = model.cursor.clone() else {
-        return false;
-    };
-    // `ClearCursor(1,1)`, unconditionally, before anything is decided.
-    model.cursor = None;
+/// The drop past its clear: the bar write (`0x4bce00`), and only a homeless occupant refills the
+/// cursor (`0x4bce3d`), signalling as a pickup does. Returns whether anything was written.
+fn place_pet_action(model: &mut Model, slot: u32, held: &CursorPetAction) -> bool {
     let Some(index) = slot_index(model, slot) else {
-        raise_cursor_update(model);
         return false;
     };
     // Read before the write: a displaced word's passive bit and icon are its slot's.
     let occupant_view = model.pet_bar.slots[index].view.clone();
     let Some(assigned) = write_slot(model, index, held.packed, held.passive) else {
-        raise_cursor_update(model);
         return false;
     };
-
-    model.cursor = assigned.displaced.map(|packed| {
-        CursorPayload::PetAction(CursorPetAction {
+    if let Some(packed) = assigned.displaced {
+        model.cursor = Some(CursorPayload::PetAction(CursorPetAction {
             src_slot: slot,
             packed,
             passive: occupant_view.passive,
             texture: occupant_view.texture.clone(),
-        })
-    });
-    raise_cursor_update(model);
+        }));
+        raise_cursor_update(model);
+    }
     true
 }
 
@@ -356,6 +359,40 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_pet_actions(true, true, true, hunter_bar());
         s
+    }
+
+    /// A drop clears first (`0x4be220`): its grid hide and `CURSOR_UPDATE` read the bar before the
+    /// write (`0x4bce00`), and the displaced occupant's events after it. The written word is
+    /// engine state, read here through a test global.
+    #[test]
+    fn a_drop_signals_its_clear_before_the_bar_write() {
+        let s = bar_script();
+        let word = s
+            .lua
+            .create_function(|lua, ()| {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                Ok(model.pet_bar.slots[4].view.packed == CLAW)
+            })
+            .unwrap();
+        s.lua.globals().set("SlotFiveIsClaw", word).unwrap();
+        s.run("PickupPetAction(4)").unwrap();
+        crate::script::tick::heard::listen(
+            &s,
+            &["PET_BAR_HIDEGRID", "CURSOR_UPDATE", "PET_BAR_SHOWGRID"],
+            Some("SlotFiveIsClaw()"),
+        );
+        // Growl is displaced and rides the cursor out, signalling after the write.
+        s.run("PickupPetAction(5)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            [
+                "PET_BAR_HIDEGRID false",
+                "CURSOR_UPDATE false",
+                "PET_BAR_SHOWGRID true",
+                "CURSOR_UPDATE true"
+            ]
+        );
+        assert!(s.eval::<bool>("return SlotFiveIsClaw()").unwrap());
     }
 
     #[test]
