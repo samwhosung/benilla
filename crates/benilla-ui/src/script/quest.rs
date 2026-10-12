@@ -7,6 +7,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::Model;
+use crate::script::binding_abi::{Idx, Idx32};
 
 /// Which questgiver panel a [`QuestState`] is for, set from the wire packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -246,7 +247,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     fn install_title(lua: &Lua, name: &str, active: bool) -> mlua::Result<()> {
         lua.globals().set(
             name,
-            lua.create_function(move |lua, i: usize| {
+            lua.create_function(move |lua, Idx(i): Idx| {
                 let title = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     model.quest.as_ref().and_then(|q| {
@@ -447,10 +448,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `RewChoiceItemId` with it.
     g.set(
         "GetQuestReward",
-        lua.create_function(|lua, choice: Option<u32>| {
+        lua.create_function(|lua, choice: Option<Idx32>| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.quest_actions.push(super::QuestAction::Reward(
-                choice.unwrap_or(0).saturating_sub(1),
+                choice.map_or(0, |c| c.0).saturating_sub(1),
             ));
             Ok(())
         })?,

@@ -8,6 +8,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
+use crate::script::binding_abi::Idx32;
 
 // The slot-word values the one-shot orders synthesize, restated from
 // `benilla_protocol::messages::pet` because this crate does not depend on the protocol.
@@ -288,7 +289,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // An out-of-range index answers seven nils (`0x4bdf3e`), which the Lua reads as an empty slot.
     g.set(
         "GetPetActionInfo",
-        lua.create_function(move |lua, i: u32| {
+        lua.create_function(move |lua, Idx32(i): Idx32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(slot) = slot_at(&model, i) else {
                 return Ok(super::binding_abi::tuple(&[None; 7]));
@@ -313,7 +314,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // An elapsed or absent cooldown answers (0, 0, 1), so a re-feed never replays the sweep.
     g.set(
         "GetPetActionCooldown",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, Idx32(i): Idx32| {
             let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(match slot_at(&model, i).and_then(|s| s.cooldown) {
@@ -328,7 +329,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The one pet binding that answers a real boolean (`0x6f39f0`), `false` even out of range.
     g.set(
         "IsPetAttackActive",
-        lua.create_function(move |lua, i: u32| {
+        lua.create_function(move |lua, Idx32(i): Idx32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(slot_at(&model, i).is_some_and(|s| s.view.attack_active))
         })?,

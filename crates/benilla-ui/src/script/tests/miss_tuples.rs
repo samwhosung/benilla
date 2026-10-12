@@ -37,12 +37,34 @@ const MISSES: &[(&str, &str)] = &[
 fn an_indexed_getter_with_no_row_pushes_the_references_full_tuple() {
     let s = script();
     s.run(SHOW).unwrap();
-    let wrong: Vec<String> = MISSES
+    // A negative index truncates, decrements and compares unsigned (`0x4f6ed8`), so it falls out of
+    // range and answers the same miss tuple, as does a fractional one; no getter raises (#1016).
+    // `GetShapeshiftFormInfo` raises for a zero alone (`0x4b45d8`).
+    let calls: Vec<(String, &str)> = MISSES
+        .iter()
+        .flat_map(|(call, want)| {
+            ["(-1", "(-7.5", "(1e10"]
+                .map(|first| (call.replacen("(1", first, 1), *want))
+                .into_iter()
+                .chain([(call.replacen(", 1)", ", -1)", 1), *want)])
+                .chain([(call.to_string(), *want)])
+        })
+        .collect();
+    let wrong: Vec<String> = calls
         .iter()
         .filter_map(|(call, want)| {
-            let got = s.eval::<String>(&format!("return PGShow({call})")).unwrap();
+            let got = s
+                .eval::<String>(&format!("return PGShow({call})"))
+                .unwrap_or_else(|e| format!("raises: {e}"));
             (got != *want).then(|| format!("{call}: pushes ({got}), the reference ({want})"))
         })
         .collect();
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    // Zero raises where the reference does.
+    assert!(s
+        .eval::<bool>(
+            "local ok, err = pcall(GetShapeshiftFormInfo, 0) \
+             return not ok and string.find(tostring(err), 'Usage: GetShapeshiftFormInfo', 1, true) ~= nil"
+        )
+        .unwrap());
 }

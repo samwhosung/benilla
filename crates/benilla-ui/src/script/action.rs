@@ -9,6 +9,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
 use super::Model;
+use crate::script::binding_abi::Idx32;
 
 /// The kind byte, bits 24-31 of the packed slot word (vmangos `Player.h:133`). Must match
 /// `benilla_protocol`'s `ACTION_KIND_*`; this crate has no protocol dependency.
@@ -143,7 +144,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "HasAction",
-        lua.create_function(|lua, action: u32| {
+        lua.create_function(|lua, Idx32(action): Idx32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(model.actions.contains_key(&action)))
         })?,
@@ -193,7 +194,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetActionTexture",
-        lua.create_function(|lua, action: u32| {
+        lua.create_function(|lua, Idx32(action): Idx32| {
             let tex = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.actions.get(&action).and_then(|s| s.texture.clone())
@@ -259,7 +260,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetActionCount",
-        lua.create_function(|lua, action: u32| {
+        lua.create_function(|lua, Idx32(action): Idx32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(model
                 .actions
@@ -300,7 +301,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "IsUsableAction",
-        lua.create_function(|lua, action: u32| {
+        lua.create_function(|lua, Idx32(action): Idx32| {
             Ok((
                 state_flag(lua, action, |s| s.usable),
                 state_flag(lua, action, |s| s.not_enough_mana),
@@ -310,7 +311,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "IsActionInRange",
-        lua.create_function(|lua, action: u32| {
+        lua.create_function(|lua, Idx32(action): Idx32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(
                 match model
@@ -332,20 +333,26 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "IsCurrentAction",
-        lua.create_function(|lua, action: u32| Ok(state_flag(lua, action, |s| s.current)))?,
+        lua.create_function(|lua, Idx32(action): Idx32| {
+            Ok(state_flag(lua, action, |s| s.current))
+        })?,
     )?;
     g.set(
         "IsAutoRepeatAction",
-        lua.create_function(|lua, action: u32| Ok(state_flag(lua, action, |s| s.auto_repeat)))?,
+        lua.create_function(|lua, Idx32(action): Idx32| {
+            Ok(state_flag(lua, action, |s| s.auto_repeat))
+        })?,
     )?;
     g.set(
         "IsAttackAction",
-        lua.create_function(|lua, action: u32| Ok(state_flag(lua, action, |s| s.is_attack)))?,
+        lua.create_function(|lua, Idx32(action): Idx32| {
+            Ok(state_flag(lua, action, |s| s.is_attack))
+        })?,
     )?;
     // From the slot, not the state map: `0x4e5250` depends only on the item template.
     g.set(
         "IsConsumableAction",
-        lua.create_function(|lua, action: u32| {
+        lua.create_function(|lua, Idx32(action): Idx32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             match model.actions.get(&action) {
                 Some(s) if s.consumable => Ok(Value::Integer(1)),
@@ -355,7 +362,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "IsEquippedAction",
-        lua.create_function(|lua, action: u32| Ok(state_flag(lua, action, |s| s.equipped)))?,
+        lua.create_function(|lua, Idx32(action): Idx32| {
+            Ok(state_flag(lua, action, |s| s.equipped))
+        })?,
     )?;
 
     // GetActionCooldown(action) → start, duration, enable, in `GetTime` seconds. An absent or
@@ -363,7 +372,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // replay the sweep and its finish flash.
     g.set(
         "GetActionCooldown",
-        lua.create_function(|lua, action: u32| {
+        lua.create_function(|lua, Idx32(action): Idx32| {
             let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(

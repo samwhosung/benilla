@@ -9,6 +9,7 @@ use crate::script::tick::verb;
 use crate::script::Model;
 
 use super::{raise_cursor_update, raise_lock_changed, CursorItem, CursorPayload, EQUIPMENT_BAG};
+use crate::script::binding_abi::Idx32;
 
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
 /// fitting whole item moves in and the cursor clears, with no hop; a split or a misfit stays
@@ -237,7 +238,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "IsInventoryItemLocked",
-        lua.create_function(|lua, id: u32| {
+        lua.create_function(|lua, Idx32(id): Idx32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(flag(is_inventory_item_locked(&model, id)))
         })?,

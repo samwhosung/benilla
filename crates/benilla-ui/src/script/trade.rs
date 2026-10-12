@@ -8,6 +8,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
+use crate::script::binding_abi::Idx;
 
 /// Slots per side, six traded and the non-traded enchant slot: vmangos `TRADE_SLOT_COUNT`
 /// (`TradeData.h`), kept equal to the protocol crate's, which this crate does not depend on.
@@ -177,7 +178,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // never reads it.
     g.set(
         "GetTradePlayerItemInfo",
-        lua.create_function(|lua, id: usize| {
+        lua.create_function(|lua, Idx(id): Idx| {
             let slot = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 slot_at(&model, id, |t| &t.player)
@@ -224,7 +225,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     ] {
         g.set(
             name,
-            lua.create_function(move |lua, id: usize| {
+            lua.create_function(move |lua, Idx(id): Idx| {
                 let link = {
                     let model = lua.app_data_ref::<Model>().expect("model app_data");
                     let slot = if side {
@@ -247,7 +248,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the player's (`0x4c0241`).
     g.set(
         "GetTradeTargetItemInfo",
-        lua.create_function(|lua, id: usize| {
+        lua.create_function(|lua, Idx(id): Idx| {
             let (slot, usable) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let slot = slot_at(&model, id, |t| &t.target);

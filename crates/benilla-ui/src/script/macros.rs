@@ -11,6 +11,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::cursor::{raise_cursor_update, CursorMacro, CursorPayload};
 use super::Model;
+use crate::script::binding_abi::Idx;
 
 /// Macros per tab (`Blizzard_MacroUI.lua:1`), and so the character tab's base.
 pub const MAX_MACROS: usize = 18;
@@ -303,7 +304,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetMacroInfo",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(m) = model.macros.get(index) else {
                 // `0x4f1829`: four nils.
@@ -344,7 +345,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetMacroIconInfo",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let path = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 index

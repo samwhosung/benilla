@@ -10,6 +10,7 @@ use super::view::{
     build_groups, first_recipe_index, inv_slot_token, num_rows, present_inv_slots, recipe_at, rows,
     select, selected_visible_index, set_collapsed, Row,
 };
+use crate::script::binding_abi::Idx;
 
 /// An optional string as a Lua value (`nil` when absent).
 fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
@@ -115,7 +116,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // numAvailable, nil) for a recipe, nil, nil, 0, nil out of range (`0x4fd8d0`).
     g.set(
         "GetTradeSkillInfo",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let miss = || binding_abi::tuple(&[None, None, Some(0), None]);
             let Some(n) = index.checked_sub(1) else {
@@ -196,7 +197,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetTradeSkillIcon",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             opt_str(lua, recipe_at(&model, index).and_then(|r| r.icon.as_ref()))
         })?,
@@ -204,7 +205,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetTradeSkillNumMade",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let (min_made, max_made) =
                 recipe_at(&model, index).map_or((0, 0), |r| (r.min_made, r.max_made));
@@ -219,7 +220,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // (Blizzard_TradeSkillUI.lua:215).
     g.set(
         "GetTradeSkillCooldown",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(
                 match recipe_at(&model, index).and_then(|r| r.cooldown_secs) {
@@ -232,7 +233,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetTradeSkillNumReagents",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(recipe_at(&model, index).map_or(0, |r| r.reagents.len()) as i64)
         })?,
@@ -242,7 +243,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // icon are nil until the item template arrives.
     g.set(
         "GetTradeSkillReagentInfo",
-        lua.create_function(|lua, (index, reagent_index): (usize, usize)| {
+        lua.create_function(|lua, (Idx(index), Idx(reagent_index)): (Idx, Idx)| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(reagent) = recipe_at(&model, index)
                 .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
@@ -338,7 +339,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // subclass flag (`+0xc`, mask `0x84dd60`) is kept here as hidden group keys.
     g.set(
         "GetTradeSkillSubClassFilter",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(t) = model.trade_skill.as_ref() else {
                 return Ok(binding_abi::flag(false));
@@ -414,7 +415,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x4ffe60`).
     g.set(
         "GetTradeSkillInvSlotFilter",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             if model.trade_skill.is_none() {
                 return Ok(binding_abi::flag(false));

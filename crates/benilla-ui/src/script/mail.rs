@@ -7,6 +7,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
+use crate::script::binding_abi::Idx;
 
 /// One inbox row, resolved by the app from a wire `MailListEntry`; its 1-based index is its
 /// position in [`MailState::inbox`].
@@ -284,7 +285,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x4aeff0`..`0x4af05e`): four nils, 0 for money, COD amount and days left, six nils.
     g.set(
         "GetInboxHeaderInfo",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, index)
@@ -334,7 +335,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`MailFrame.lua:366`), the pair vmangos requires (`MailHandler.cpp:867`).
     g.set(
         "GetInboxText",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let row = {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let row = row_at(&model, index);
@@ -370,7 +371,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // being three nils and four zeros (`0x4af559`).
     g.set(
         "GetInboxInvoiceInfo",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, index)
@@ -405,7 +406,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the shared item-usable gate, true while the template is in flight.
     g.set(
         "GetInboxItem",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let (row, usable) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let row = row_at(&model, index);

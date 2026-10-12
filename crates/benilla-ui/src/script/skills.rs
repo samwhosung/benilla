@@ -18,6 +18,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
 use super::Model;
+use crate::script::binding_abi::Idx;
 
 /// One known skill line off the player's `PLAYER_SKILL_INFO` block, resolved by the app.
 #[derive(Clone, Debug, PartialEq)]
@@ -280,7 +281,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // stock `SkillFrame.lua:211`'s early return.
     g.set(
         "GetSkillLineInfo",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(n) = index.checked_sub(1) else {
                 return out_of_range_tuple(lua);

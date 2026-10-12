@@ -39,6 +39,37 @@ pub(crate) fn number_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resu
     }
 }
 
+/// An index argument read as the reference reads one: a number or numeric string (`0x6f34d0`)
+/// truncated by `_ftol` ([`ftol`]) and then decremented and compared unsigned, so a zero or
+/// negative index is a huge one and falls out of range where a Rust integer parameter would raise
+/// in the conversion (`GetCraftInfo` `0x4f6ed8`). The inner value is the 32-bit pattern, the
+/// negative a value no table holds. A non-number raises, as the reference's usage error does.
+pub(crate) struct Idx(pub usize);
+
+/// [`Idx`] for the parameters the bindings keep as `u32`.
+pub(crate) struct Idx32(pub u32);
+
+fn index_bits(lua: &Lua, v: Value) -> mlua::Result<u32> {
+    match lua.coerce_number(v)? {
+        Some(n) => Ok(ftol(n) as u32),
+        None => Err(mlua::Error::RuntimeError(
+            "bad argument: number expected".into(),
+        )),
+    }
+}
+
+impl mlua::FromLua for Idx {
+    fn from_lua(v: Value, lua: &Lua) -> mlua::Result<Self> {
+        index_bits(lua, v).map(|n| Idx(n as usize))
+    }
+}
+
+impl mlua::FromLua for Idx32 {
+    fn from_lua(v: Value, lua: &Lua) -> mlua::Result<Self> {
+        index_bits(lua, v).map(Idx32)
+    }
+}
+
 /// Shape D: an `is-number`-gated flag whose failure keeps its zero instead of raising. The value
 /// must be strictly `> 0.0` (`0x53303f`), so 0, a negative and NaN are false and `0.5` or `"1"`
 /// true; `SetInventoryItem`'s `nameOnly` is one.

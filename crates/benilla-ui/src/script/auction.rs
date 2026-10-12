@@ -10,6 +10,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
+use crate::script::binding_abi::Idx32;
 
 /// The three list types, in the order the app pushes them.
 pub const LIST: usize = 0;
@@ -627,17 +628,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetOwnerAuctionItems([page]) / GetBidderAuctionItems([page]): unthrottled, page 0 by default.
     g.set(
         "GetOwnerAuctionItems",
-        lua.create_function(|lua, page: Option<u32>| {
+        lua.create_function(|lua, page: Option<Idx32>| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.auction_owner_query = Some(page.unwrap_or(0));
+            model.auction_owner_query = Some(page.map_or(0, |p| p.0));
             Ok(())
         })?,
     )?;
     g.set(
         "GetBidderAuctionItems",
-        lua.create_function(|lua, page: Option<u32>| {
+        lua.create_function(|lua, page: Option<Idx32>| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.auction_bidder_query = Some(page.unwrap_or(0));
+            model.auction_bidder_query = Some(page.map_or(0, |p| p.0));
             Ok(())
         })?,
     )?;
@@ -676,7 +677,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CancelAuction(index), always an "owner" row.
     g.set(
         "CancelAuction",
-        lua.create_function(|lua, index: u32| {
+        lua.create_function(|lua, Idx32(index): Idx32| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.auction_cancels.push(index);
             Ok(())

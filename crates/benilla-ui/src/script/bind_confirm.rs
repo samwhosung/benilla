@@ -6,6 +6,7 @@
 use mlua::Lua;
 
 use super::Model;
+use crate::script::binding_abi::Idx32;
 
 /// One answer to a pending-equip question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +59,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // standing dialog (`exclusive = 1`), and that cancel releases the superseded item's locks.
     g.set(
         "CancelPendingEquip",
-        lua.create_function(|lua, index: u32| {
+        lua.create_function(|lua, Idx32(index): Idx32| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.pending_equip_answers.push(PendingEquipAnswer {
                 index,

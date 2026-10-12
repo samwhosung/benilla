@@ -14,6 +14,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi;
 use super::Model;
+use crate::script::binding_abi::Idx;
 
 /// The synthetic header key for factions the player moved to the inactive bucket.
 const KEY_INACTIVE: i64 = -1;
@@ -270,7 +271,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // isCollapsed, isWatched; eleven wide on every path, a miss included.
     g.set(
         "GetFactionInfo",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(row) = index
                 .checked_sub(1)
@@ -403,7 +404,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // the pane repaints on; the folds survive, as only a server rebuild resets them.
     g.set(
         "IsFactionInactive",
-        lua.create_function(|lua, index: usize| {
+        lua.create_function(|lua, Idx(index): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(binding_abi::flag(
                 entry_at(&model, index).is_some_and(|e| e.inactive),

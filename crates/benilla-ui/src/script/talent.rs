@@ -22,6 +22,7 @@ use mlua::{Lua, MultiValue, Table, Value};
 use super::binding_abi::flag;
 use super::tooltip_spell::{spell_view_of, TalentLines};
 use super::Model;
+use crate::script::binding_abi::Idx;
 
 /// One talent page, a `TalentTab.dbc` row: `GetTalentTabInfo`'s source.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -130,7 +131,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x4f3132`).
     g.set(
         "GetTalentTabInfo",
-        lua.create_function(|lua, i: usize| {
+        lua.create_function(|lua, Idx(i): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(tab) = i.checked_sub(1).and_then(|n| model.talents.tabs.get(n)) else {
                 return Ok(super::binding_abi::tuple(&[None, None, Some(0), None]));
@@ -146,7 +147,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetNumTalents",
-        lua.create_function(|lua, tab: usize| {
+        lua.create_function(|lua, Idx(tab): Idx| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let n = tab
                 .checked_sub(1)
@@ -158,7 +159,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetTalentInfo",
-        lua.create_function(|lua, (tab, i): (usize, usize)| {
+        lua.create_function(|lua, (Idx(tab), Idx(i)): (Idx, Idx)| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(t) = talent_at(&model, tab, i) else {
                 // `0x4f3454`: nil, nil, 1, 1, 0, 0, nil, nil.

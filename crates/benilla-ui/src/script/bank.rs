@@ -9,6 +9,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::Model;
+use crate::script::binding_abi::Idx32;
 
 /// The open bank's purchase row, pushed whole by the app.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -67,7 +68,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetBankSlotCost(numSlots): the argument is unread; the pushed state names the next slot.
     g.set(
         "GetBankSlotCost",
-        lua.create_function(|lua, _n: Option<u32>| {
+        lua.create_function(|lua, _n: Option<Idx32>| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(i64::from(model.bank.as_ref().map_or(0, |b| b.next_cost)))
         })?,
