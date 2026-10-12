@@ -944,8 +944,8 @@ fn drag_drop_onto_another_button_hops_the_displaced_action() {
         "slot 2 now shows the placed action"
     );
     assert!(
-        matches!(s.cursor_payload(), Some(benilla_ui::script::CursorPayload::Action(c)) if c.src_slot == 2),
-        "the displaced action hopped on, sourced from slot 2: {:?}",
+        matches!(s.cursor_payload(), Some(benilla_ui::script::CursorPayload::Spell(c)) if c.spell_id == 222),
+        "the displaced spell hopped on through the spell setter: {:?}",
         s.cursor_payload()
     );
 

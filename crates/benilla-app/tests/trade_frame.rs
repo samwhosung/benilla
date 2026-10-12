@@ -319,8 +319,9 @@ fn player_money_input_reflects_then_offers() {
     assert!(s.take_errors().is_empty());
 }
 
-/// With an empty cursor, clicking our filled slot clears it (`ClickTradeButton`), while the
-/// partner's column calls `ClickTargetTradeButton`, which queues nothing (`TradeFrame.xml:101`).
+/// With an empty cursor, clicking our slot that holds an item we placed clears it and takes the
+/// item back (`ClickTradeButton`), while the partner's column calls `ClickTargetTradeButton`,
+/// which queues nothing (`TradeFrame.xml:101`).
 #[test]
 fn slot_click_routes_player_to_clear_and_recipient_to_inert() {
     let _data = benilla_formats::wow_data_or_skip!();
@@ -328,9 +329,24 @@ fn slot_click_routes_player_to_clear_and_recipient_to_inert() {
     load_ui(&s);
     s.set_trade(Some(state())); // both slot 1s are filled
     s.fire_event("TRADE_SHOW", vec![]);
+    let mut bag = benilla_ui::script::ContainerState::default();
+    bag.slots.insert(
+        1,
+        benilla_ui::script::ContainerSlot {
+            item_id: 2589,
+            count: 1,
+            ..Default::default()
+        },
+    );
+    s.set_container(0, Some(bag));
+    s.run("PickupContainerItem(0, 1) TradePlayerItem1ItemButton:Click()")
+        .unwrap();
+    assert_eq!(s.take_trade_set_items(), vec![(1, 0, 1)]);
     let _ = s.take_trade_clear_items();
 
     s.run("TradePlayerItem1ItemButton:Click()").unwrap();
+    assert_eq!(s.cursor_item().map(|i| i.slot), Some(1), "the item is back");
+    s.run("ClearCursor()").unwrap();
     assert_eq!(
         s.take_trade_clear_items(),
         vec![1],
