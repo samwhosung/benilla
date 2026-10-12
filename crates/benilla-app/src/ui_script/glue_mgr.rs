@@ -1300,6 +1300,8 @@ pub(crate) fn drive_glue_mgr(
     // `SMSG_ADDON_INFO` read (`0x5b4260`): the index rebuilt from the reply (`0x51da70`), then
     // the listener's `ADDON_LIST_UPDATE` (`0x5b4290`).
     for msg in news.addon_infos.read() {
+        // Only the glue VM (`script` is filtered to it above); with none up, `AddonInfoReply`
+        // holds the list for the next one.
         if let Some(s) = script.as_deref_mut() {
             s.note_addon_info_reply(&msg.hidden);
             s.fire_event("ADDON_LIST_UPDATE", Vec::new());

@@ -1289,6 +1289,8 @@ pub(crate) mod schedule_tests {
          "every line answers a charter action of ours; the window edges ride the `fed` memo"),
         ("ui_quest_share.rs", "feed_quest_share", Because::PlayerRoundTrip,
          "a verdict answers our own push and a confirm follows a party member's escort accept, both held until the name resolves (the confirm is another player's act: coincidence-only residual)"),
+        ("ui_script/glue_mgr.rs", "drive_glue_mgr", Because::Deliberate,
+         "it acts only on a glue-kind VM (`script.filter(vm_kind() == Glue)`, documented at the fire sites), never the entry VM the window leaves frameless; news that arrives with no glue VM is held in `AddonInfoReply` for the next one"),
         ("ui_script/extract/mod.rs", "paint_script", Because::Deliberate,
          "per-frame paint and cost state, not a queue"),
         ("ui_social/feed.rs", "feed_social", Because::MemoLatched,

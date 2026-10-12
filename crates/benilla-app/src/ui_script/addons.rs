@@ -2587,9 +2587,14 @@ mod tests {
         // `Stranger` is on no node: each addon answers its own manifest default.
         assert!(store.enabled_for("Shunned", true, Some("Stranger")));
         assert!(!store.enabled_for("OptIn", false, Some("Stranger")));
-        // `None` (nobody picked yet) is the same epilogue.
-        assert!(store.enabled_for("Shunned", true, None));
-        assert!(!store.enabled_for("OptIn", false, None));
+        // The NULL name counts every node (`0x51e547`), so with nodes it is their aggregate: both
+        // rows off for Shunned, on for OptIn, and `Known` inherits each. With no node at all it
+        // is the same epilogue as a stranger's.
+        assert!(!store.enabled_for("Shunned", true, None));
+        assert!(store.enabled_for("OptIn", false, None));
+        let empty = load_store("Realm", &[]);
+        assert!(empty.enabled_for("Shunned", true, None));
+        assert!(!empty.enabled_for("OptIn", false, None));
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
