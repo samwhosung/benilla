@@ -78,6 +78,8 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
     let failures = super::glue::load_glue(&mut script);
     super::glue::finish_glue_load_log(&mut script);
     start_server_alert(world, &script);
+    // What the glue carries across its rebuild, in place before the screen's `OnShow` reads it.
+    super::glue_mgr::seat_glue_build(world, &mut script);
     super::glue::set_glue_screen(&mut script, screen);
     info!(
         "ui_script: stock glue up in {:.0} ms on \"{}\" ({} load failure(s))",

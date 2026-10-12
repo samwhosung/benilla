@@ -3201,7 +3201,8 @@ fn the_stock_enter_world_logs_in_and_the_glue_leaves_with_the_screen() {
 }
 
 /// A refused login (vmangos's result 1) that lands once the client is in the world comes back to
-/// the stock select in state 9: the screen's own list ask sends nothing (`0x46b880`), state 9's frame opens `OKAY` with
+/// the stock select in state 9, on a glue rebuilt with the link and the server carried over: the
+/// screen's own list ask sends nothing (`0x46b880`), state 9's frame opens `OKAY` with
 /// `CHAR_LOGIN_NO_WORLD`'s text (`0x46c283`), and the button the stock `OnShow` presses
 /// (`0x46b767`) asks for the list again on the same session, which comes back with the character
 /// entered selected (`lastCharacterIndex`).
@@ -3228,13 +3229,18 @@ fn a_refused_stock_login_comes_back_to_the_select_and_lists_again() {
     assert_eq!(client_state(&app), ClientState::CharSelect);
     assert!(shown(&app, "CharacterSelect"));
     assert_eq!(
+        realm_label(&app),
+        "Alpha ",
+        "the build carried the link and the server into the screen's OnShow"
+    );
+    assert_eq!(
         dialog(&app),
         Some(("OKAY".into(), "World server is down".into()))
     );
     assert_eq!(
         world.enumerations(),
         1,
-        "nothing asked before the button"
+        "the OnShow's ask, made on the link, sent nothing in state 9"
     );
     until_entry(&mut app, "the list again", |app| {
         app.world().resource::<GlueMgr>().state == ScreenState::Idle
@@ -3291,6 +3297,54 @@ fn the_stock_enter_world_stops_at_a_locked_or_renamed_character() {
     assert!(world
         .bodies(benilla_protocol::messages::opcode::CMSG_PLAYER_LOGIN)
         .is_empty());
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// The realm line `CharacterSelect_OnShow` wrote: the server's name and type, with
+/// `(Server down)` under it when `IsConnectedToServer` said no.
+fn realm_label(app: &App) -> String {
+    vm(app)
+        .eval::<String>("return CharSelectRealmName:GetText() or ''")
+        .unwrap()
+}
+
+/// A logout from the world comes back to the stock select on the glue the build rebuilds with the
+/// link and the server carried over (`0x46a7b0`): its `CharacterSelect_OnShow` finds
+/// `IsConnectedToServer` (`0x46d380`) and names the realm, and its `GetCharacterListUpdate` asks
+/// for the list on the same session (`0x5aaeb0` closes nothing).
+#[test]
+fn a_stock_logout_comes_back_to_the_select_and_asks_for_its_list() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_home, _guard) = addon_home("logout");
+    let (mut app, world) = entry_app(false);
+    vm(&app)
+        .run("CharacterSelect_SelectCharacter(3) CharSelectEnterWorldButton:Click()")
+        .unwrap();
+    until_entry(&mut app, "the world", |app| {
+        client_state(app) == ClientState::InWorld
+    });
+    app.world()
+        .resource::<crate::net::NetCommands>()
+        .0
+        .send(crate::net::ClientCommand::Logout)
+        .unwrap();
+    until_entry(&mut app, "the select's list", |app| {
+        glue_vm(app).is_some()
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+            && vm(app).glue_roster_guids().len() == 3
+    });
+    assert_eq!(client_state(&app), ClientState::CharSelect);
+    assert_eq!(realm_label(&app), "Alpha ");
+    assert_eq!(
+        (world.authentications(), world.enumerations_in(0)),
+        (1, 2),
+        "the screen's own ask, on the same session"
+    );
+    assert_eq!(vm(&app).glue_selected_guid(), Some(0x13));
+    assert_eq!(dialog(&app), None);
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
 }
 

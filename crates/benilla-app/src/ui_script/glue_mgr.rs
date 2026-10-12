@@ -1370,28 +1370,21 @@ pub(crate) fn drive_glue_mgr(
         mgr.on_char_login_failed(msg.result);
     }
 
-    // A new glue VM is the glue build (`0x46a7b0`): state 0, its slots seeded, and the realm
-    // list's C globals carried over, which outlive the Lua state.
+    // A glue VM the glue build did not seat ([`seat_glue_build`]) is seated here.
     let mut fresh_vm = false;
     if let Some(s) = script.as_deref_mut() {
         if mgr.vm != Some(s.session()) {
-            mgr.vm = Some(s.session());
-            mgr.state = ScreenState::Idle;
-            mgr.cells = LoginCells::default();
-            mgr.auth_final = false;
-            s.set_glue_saved_account(&crate::login::load_saved_account());
-            s.set_glue_realm_cells(mgr.realm_cells);
-            s.set_glue_select_cells(mgr.select_cells);
-            // The AddOn registry and the reply the session has read; the reference's C globals
-            // outlive the glue's Lua state.
-            super::addons::seat_glue_addons(
+            seat_glue(
+                &mut mgr,
                 s,
                 news.addon_reply.as_deref().and_then(|r| r.0.as_deref()),
+                news.names.as_deref(),
+                realms.as_deref(),
+                realmlist.as_deref(),
             );
-            mgr.holder_moved = true;
             fresh_vm = true;
         }
-        if let Some(names) = news.names.as_ref().filter(|n| fresh_vm || n.is_changed()) {
+        if let Some(names) = news.names.as_ref().filter(|n| !fresh_vm && n.is_changed()) {
             s.set_glue_name_lists(std::rc::Rc::new((**names).clone()));
         }
     } else if in_world {
@@ -1407,7 +1400,7 @@ pub(crate) fn drive_glue_mgr(
         mgr.take_refusal();
     }
     if let (Some(s), Some(r)) = (script.as_deref_mut(), realms.as_ref()) {
-        if fresh_vm || r.is_changed() {
+        if !fresh_vm && r.is_changed() {
             let (categories, types) = r.glue_setup();
             s.set_glue_realm_setup(categories, types);
         }
@@ -1589,6 +1582,62 @@ pub(crate) fn drive_glue_mgr(
     mgr.select_cells = script.glue_select_cells();
     // What the outbox asked in turn (the roster load's realm list).
     send_asks(&mut mgr, Vec::new(), &mut asks);
+}
+
+/// The glue build (`0x46a7b0`) on a new glue VM: state 0, then everything the manager holds that
+/// the reference keeps in C globals, which outlive the Lua state: the saved account, the realm list
+/// and select cells, the AddOn registry and the reply the session has read, the name check's
+/// lists, the realm categories, a refused login's state 9 (`0x402075`, set ahead of the screen)
+/// and the slots the verbs read live, the world link (`IsConnectedToServer`, `0x46d380` reads
+/// `[svc+0x1b00]`) and the server among them.
+fn seat_glue(
+    mgr: &mut GlueMgr,
+    s: &mut UiScript,
+    addon_reply: Option<&[benilla_protocol::messages::AddonRecord]>,
+    names: Option<&crate::text_filter::NameFilter>,
+    realms: Option<&crate::realm_select::Realms>,
+    realmlist: Option<&crate::realmlist::Realmlist>,
+) {
+    mgr.vm = Some(s.session());
+    mgr.state = ScreenState::Idle;
+    mgr.cells = LoginCells::default();
+    mgr.auth_final = false;
+    s.set_glue_saved_account(&crate::login::load_saved_account());
+    s.set_glue_realm_cells(mgr.realm_cells);
+    s.set_glue_select_cells(mgr.select_cells);
+    super::addons::seat_glue_addons(s, addon_reply);
+    mgr.holder_moved = true;
+    if let Some(names) = names {
+        s.set_glue_name_lists(std::rc::Rc::new(names.clone()));
+    }
+    if let Some(r) = realms {
+        let (categories, types) = r.glue_setup();
+        s.set_glue_realm_setup(categories, types);
+    }
+    mgr.take_refusal();
+    seed(mgr, s, realms, realmlist);
+}
+
+/// The glue build's seating ([`seat_glue`]) inside the build, before its first `SET_GLUE_SCREEN`:
+/// the screen's `OnShow` runs in that event and reads what the build carried over (a logout's
+/// `CharacterSelect_OnShow` asks for its list only on a link `IsConnectedToServer` reports, and
+/// names the realm `GetServerName` does).
+pub(crate) fn seat_glue_build(world: &mut World, script: &mut UiScript) {
+    if !world.contains_resource::<GlueMgr>() {
+        return;
+    }
+    world.resource_scope(|world, mut mgr: Mut<GlueMgr>| {
+        seat_glue(
+            &mut mgr,
+            script,
+            world
+                .get_resource::<AddonInfoReply>()
+                .and_then(|r| r.0.as_deref()),
+            world.get_resource::<crate::text_filter::NameFilter>(),
+            world.get_resource::<crate::realm_select::Realms>(),
+            world.get_resource::<crate::realmlist::Realmlist>(),
+        );
+    });
 }
 
 /// Send the asks of the frame: the login engine's, and the park requests in the order they were
