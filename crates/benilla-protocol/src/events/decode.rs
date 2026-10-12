@@ -1097,6 +1097,7 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
         | ServerPacket::AuthResponse { .. }
         | ServerPacket::CharCreate { .. }
         | ServerPacket::CharDelete { .. }
+        | ServerPacket::CharRename { .. }
         | ServerPacket::AddonInfo { .. } => Vec::new(),
     }
 }

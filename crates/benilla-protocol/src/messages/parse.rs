@@ -220,6 +220,39 @@ fn read_addon_info(r: &mut &[u8]) -> Vec<AddonRecord> {
     records
 }
 
+/// `SMSG_CHAR_RENAME` as `0x46b440` reads it: the result byte, then, only while bytes remain
+/// (`0x46b467`, the store's fully-read test), the guid (`0x4190b0`) and the name, a C string read
+/// by `0x4191b0` with a cap of 0x30.
+///
+/// A guid short of eight bytes overflows the store: the guid stays 0 (the locals are zeroed at
+/// `0x46b450`) and the name reads empty. A name with no NUL in its first 0x30 bytes, or none
+/// before the end, also reads empty (`0x4192be`). The server sends the tail only on success
+/// (`Packets/Character.cpp:61-69`).
+fn read_char_rename(r: &mut &[u8]) -> io::Result<ServerPacket> {
+    let result = read_u8(r)?;
+    let renamed = (!r.is_empty()).then(|| {
+        if r.len() < 8 {
+            *r = &[];
+            return (0, String::new());
+        }
+        let guid = u64::from_le_bytes(r[..8].try_into().expect("eight bytes"));
+        *r = &r[8..];
+        let window = &r[..r.len().min(0x30)];
+        match window.iter().position(|&b| b == 0) {
+            Some(nul) => {
+                let name = String::from_utf8_lossy(&window[..nul]).into_owned();
+                *r = &r[nul + 1..];
+                (guid, name)
+            }
+            None => {
+                *r = &r[window.len()..];
+                (guid, String::new())
+            }
+        }
+    });
+    Ok(ServerPacket::CharRename { result, renamed })
+}
+
 fn skip(r: &mut &[u8], n: usize) -> Option<()> {
     (r.len() >= n).then(|| *r = &r[n..])
 }
@@ -292,6 +325,7 @@ fn parse_server_body(
         opcode::SMSG_CHAR_CREATE => ServerPacket::CharCreate {
             result: read_u8(&mut r)?,
         },
+        opcode::SMSG_CHAR_RENAME => read_char_rename(&mut r)?,
         opcode::SMSG_CHARACTER_LOGIN_FAILED => ServerPacket::CharacterLoginFailed {
             result: read_u8(&mut r)?,
         },

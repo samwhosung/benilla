@@ -99,6 +99,50 @@ fn cinematic_and_char_delete_parse_and_decode() {
     assert!(decode(p).is_empty());
 }
 
+/// `SMSG_CHAR_RENAME` as `0x46b440` reads it: the result byte, and the guid and the name only while
+/// bytes remain, the name a C string capped at 0x30 (`0x4191b0`). It decodes to no event: the IO
+/// thread's rename consumes it.
+#[test]
+fn char_rename_reply_parses_with_and_without_its_tail() {
+    let parse = |body: &[u8]| match messages::parse_server_with_tail(
+        messages::opcode::SMSG_CHAR_RENAME,
+        body,
+    )
+    .unwrap()
+    {
+        (ServerPacket::CharRename { result, renamed }, tail) => (result, renamed, tail),
+        _ => panic!("SMSG_CHAR_RENAME"),
+    };
+    // A success: vmangos sends the guid and the name behind the result (`Character.cpp:61-69`).
+    assert_eq!(
+        parse(&hx("0011000000000000004e6577626965004141")),
+        (0, Some((0x11, "Newbie".to_string())), 2),
+        "the name ends at its NUL; the bytes behind it are left"
+    );
+    // A failure is the byte alone.
+    assert_eq!(parse(&[0x2f]), (0x2f, None, 0));
+    assert_eq!(parse(&[0x31]), (0x31, None, 0));
+    // A guid short of eight bytes overflows the store: guid 0, name empty.
+    assert_eq!(parse(&hx("00112233")), (0, Some((0, String::new())), 0));
+    // A name with no NUL within 0x30 bytes, or none at all, reads empty.
+    let mut long = hx("001100000000000000");
+    long.extend([b'a'; 0x30]);
+    long.push(0);
+    assert_eq!(parse(&long), (0, Some((0x11, String::new())), 1));
+    assert_eq!(
+        parse(&hx("0011000000000000004e6577")),
+        (0, Some((0x11, String::new())), 0)
+    );
+    // 0x2f bytes and the NUL fit the cap.
+    let mut fits = hx("001100000000000000");
+    fits.extend([b'a'; 0x2f]);
+    fits.push(0);
+    assert_eq!(parse(&fits), (0, Some((0x11, "a".repeat(0x2f))), 0));
+    assert!(messages::parse_server(messages::opcode::SMSG_CHAR_RENAME, &[]).is_err());
+    let p = messages::parse_server(messages::opcode::SMSG_CHAR_RENAME, &[0]).unwrap();
+    assert!(decode(p).is_empty());
+}
+
 #[test]
 fn server_sound_trio_parse_and_decode() {
     let body = 8595u32.to_le_bytes();

@@ -24,6 +24,16 @@ pub fn auth_session(
     body
 }
 
+/// `CMSG_CHAR_RENAME` body, as `0x46b340` builds it: the full guid, then the name and its NUL
+/// (`0x418370`, `0x418430`).
+pub fn char_rename(guid: u64, name: &str) -> Vec<u8> {
+    let mut body = Vec::with_capacity(9 + name.len());
+    body.extend_from_slice(&guid.to_le_bytes());
+    body.extend_from_slice(name.as_bytes());
+    body.push(0);
+    body
+}
+
 /// `CMSG_CHAR_CREATE` body: the name cstring then nine bytes (`Packets/Character.cpp:4-19`); the
 /// last, `outfit_id`, is 0 because the server ignores it (`CharacterHandler.cpp:310`).
 pub fn char_create(req: &CharCreateReq) -> Vec<u8> {

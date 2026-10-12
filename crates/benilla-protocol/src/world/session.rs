@@ -308,6 +308,22 @@ impl WorldSession {
         }
     }
 
+    /// Rename a character the server flagged for it, at character select; returns the
+    /// `SMSG_CHAR_RENAME` result byte and the renamed guid and name a success carries. The server
+    /// answers from a query callback (`CharacterHandler.cpp:763-835`), so the reply can trail.
+    pub fn rename_character(
+        &mut self,
+        guid: u64,
+        name: &str,
+    ) -> Result<(u8, Option<(u64, String)>)> {
+        self.send(opcode::CMSG_CHAR_RENAME, &messages::char_rename(guid, name))?;
+        loop {
+            if let Some(ServerPacket::CharRename { result, renamed }) = self.recv_parsed()? {
+                return Ok((result, renamed));
+            }
+        }
+    }
+
     /// Enter the world as `guid`, adopting its faction tongue for chat (Common if not enumerated).
     pub fn player_login(&mut self, guid: u64) -> Result<()> {
         self.chat_language = self

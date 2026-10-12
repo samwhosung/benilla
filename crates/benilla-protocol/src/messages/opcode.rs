@@ -6,6 +6,10 @@ pub const SMSG_CHAR_ENUM: u16 = 0x003B;
 // Character delete: CMSG a full u64 guid, SMSG one result byte (`CHAR_DELETE_SUCCESS` = 0x39).
 pub const CMSG_CHAR_DELETE: u16 = 0x0038;
 pub const SMSG_CHAR_DELETE: u16 = 0x003C;
+// Character rename at select: CMSG a full u64 guid and the new name's cstring, SMSG a result byte
+// then, on success, the guid and the name (`Packets/Character.cpp:31-35`, `:61-69`).
+pub const CMSG_CHAR_RENAME: u16 = 0x02C7;
+pub const SMSG_CHAR_RENAME: u16 = 0x02C8;
 /// The server's refusal of a `CMSG_PLAYER_LOGIN`: one result byte.
 pub const SMSG_CHARACTER_LOGIN_FAILED: u16 = 0x0041;
 pub const SMSG_NAME_QUERY_RESPONSE: u16 = 0x0051; // 81

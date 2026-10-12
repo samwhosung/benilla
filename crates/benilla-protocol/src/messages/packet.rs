@@ -80,6 +80,12 @@ pub enum ServerPacket {
     CharDelete {
         result: u8,
     },
+    /// `SMSG_CHAR_RENAME`: the result byte (0 success, `0x31` name in use, any other a failure)
+    /// and, when the body carries one, the renamed character's guid and new name.
+    CharRename {
+        result: u8,
+        renamed: Option<(u64, String)>,
+    },
     /// `SMSG_CHARACTER_LOGIN_FAILED`: a 1-based reason index, not a `ResponseCodes` value, that
     /// the client maps (`0x5aae08`) 1 to "world server is down" and past 6 to "login failed".
     CharacterLoginFailed {
@@ -1263,6 +1269,7 @@ impl ServerPacket {
             ServerPacket::CharEnum { .. } => "SMSG_CHAR_ENUM".into(),
             ServerPacket::CharCreate { .. } => "SMSG_CHAR_CREATE".into(),
             ServerPacket::CharDelete { .. } => "SMSG_CHAR_DELETE".into(),
+            ServerPacket::CharRename { .. } => "SMSG_CHAR_RENAME".into(),
             ServerPacket::CharacterLoginFailed { .. } => "SMSG_CHARACTER_LOGIN_FAILED".into(),
             ServerPacket::UpdateObject { .. } => "SMSG_UPDATE_OBJECT".into(),
             ServerPacket::CompressedMoves { .. } => "SMSG_COMPRESSED_MOVES".into(),

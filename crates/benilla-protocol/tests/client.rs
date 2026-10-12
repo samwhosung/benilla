@@ -151,6 +151,14 @@ fn client_bodies_golden() {
         hx("f0debc9a78563412"),
         "full guid body"
     );
+    // CMSG_CHAR_RENAME (0x2C7): the full guid, then the name and its NUL (`0x46b340`; vmangos
+    // `Packets/Character.cpp:31-35`).
+    assert_eq!(messages::opcode::CMSG_CHAR_RENAME, 0x02C7);
+    assert_eq!(
+        messages::char_rename(0x0000_0000_0000_0011, "Newbie"),
+        hx("11000000000000004e657762696500"),
+        "CMSG_CHAR_RENAME body"
+    );
     // CMSG_SET_SELECTION is opcode 317 (vmangos `Opcodes_1_12_1.h`).
     assert_eq!(
         messages::opcode::CMSG_SET_SELECTION,
