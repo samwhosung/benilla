@@ -53,7 +53,8 @@ pub(super) fn seat_text_region(model: &mut Model, h: FrameHandle) {
         data.anchors = anchors;
     }
     data.size = size;
-    // The seat's `SetPoint`s and its invalidate (`0x77b96b`..`0x77b9f8`).
+    // The seat's points and size, each set with an invalidate (`0x77b905`, `0x77b91e`/`0x77b940`,
+    // `0x77b96b`).
     model.invalidate_region(rh, !same_anchors || size_moved);
     if size_moved {
         // The width is the wrap width, which keys the measure.

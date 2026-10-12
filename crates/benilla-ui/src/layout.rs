@@ -955,7 +955,9 @@ impl LayoutSolver {
 
     /// Whether the resolve reaches node `h`, by the rule [`set_entry`] documents: it has no entry
     /// state, it was invalidated, or an anchor target stored a new rect. Only then does it take
-    /// the rect its inputs give it, or fail. `reads` lists its anchor targets.
+    /// the rect its inputs give it, or fail. `reads` lists its anchor targets. Not modelled yet:
+    /// invalidating a suspended (hidden) object reaches every dependent at once (`0x768178`–
+    /// `0x76819c`).
     ///
     /// [`set_entry`]: Self::set_entry
     pub fn reached(&self, h: Handle, mut reads: impl Iterator<Item = Handle>) -> bool {
