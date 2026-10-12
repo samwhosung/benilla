@@ -132,7 +132,7 @@ fn service(
         name: Some(name.into()),
         subtext: None,
         texture: Some("Interface\\Icons\\INV_Sword_04".into()),
-        description: String::new(),
+        description: None,
         cost,
         prof_first_rank: false,
         category,

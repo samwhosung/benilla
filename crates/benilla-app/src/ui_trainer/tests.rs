@@ -528,8 +528,37 @@ fn service_description_expands_the_wire_spells_own_text() {
                 &deps.commands,
                 text,
             ),
-            "Increases melee damage by 11."
+            Some("Increases melee damage by 11.".into())
         );
+    });
+}
+
+/// No text to show is `None`, the nil `0x4d9d90` pushes: the wire spell has no record
+/// (`0x4d9bd7`), or no arm found text and its own is empty (`0x4d9d44`, `0x4d9d49`).
+#[test]
+fn service_description_is_none_without_a_record_or_text() {
+    let empty = SpellDisplay {
+        description: Some(String::new()),
+        ..Default::default()
+    };
+    let bare = SpellDisplay::default();
+    let spells = SpellCatalog::from_displays(HashMap::from([(1, empty), (2, bare)]));
+    let deps = Deps::new();
+    with_text(&spells, 0, 0, None, |text| {
+        for spell in [1, 2, 3] {
+            assert_eq!(
+                service_description(
+                    &wire(spell, trainer_spell_state::GREEN, 10, 1, 0),
+                    0,
+                    &spells,
+                    &deps.items,
+                    &deps.commands,
+                    text,
+                ),
+                None,
+                "spell {spell}"
+            );
+        }
     });
 }
 
@@ -562,7 +591,7 @@ fn service_description_hops_to_the_taught_spell() {
                 &deps.commands,
                 text,
             ),
-            "Causes 10 threat."
+            Some("Causes 10 threat.".into())
         );
     });
 }
@@ -597,7 +626,7 @@ fn service_description_takes_the_recipes_product_text_verbatim() {
                 &deps.commands,
                 text,
             ),
-            "Keeps $s1 for later.",
+            Some("Keeps $s1 for later.".into()),
             "the product's text is the item's own, tokens and all"
         );
     });
@@ -633,11 +662,11 @@ fn service_description_skips_the_wire_text_for_a_used_mount_row() {
     };
     assert_eq!(
         description(0, trainer_spell_state::GREEN),
-        "Summons a mount."
+        Some("Summons a mount.".into())
     );
     assert_eq!(
         description(TRAINER_TYPE_MOUNT, trainer_spell_state::GRAY),
-        "Riding skill."
+        Some("Riding skill.".into())
     );
 }
 
@@ -682,7 +711,7 @@ fn service_description_expands_against_the_pet_for_a_learn_pet_row() {
                 &deps.commands,
                 text,
             ),
-            "Causes 11 threat.",
+            Some("Causes 11 threat.".into()),
             "the pet's level drives the taught spell's points"
         );
         assert_eq!(
@@ -694,7 +723,7 @@ fn service_description_expands_against_the_pet_for_a_learn_pet_row() {
                 &deps.commands,
                 text,
             ),
-            "Causes 10 threat.",
+            Some("Causes 10 threat.".into()),
             "the same taught spell under LEARN_SPELL reads the player's"
         );
     });
@@ -724,7 +753,7 @@ fn service_description_expands_z_to_the_bind_area() {
                     &deps.commands,
                     text,
                 ),
-                want
+                Some(want.to_string())
             );
         });
     }
@@ -748,12 +777,14 @@ fn service_description_on_real_data_expands_the_taught_ability() {
     );
     assert!(
         svc.description
+            .as_deref()
+            .unwrap_or_default()
             .starts_with("A strong attack that increases melee damage by "),
         "the taught 78's description, not the wrapper's empty one: {:?}",
         svc.description
     );
     assert!(
-        !svc.description.contains('$'),
+        !svc.description.as_deref().unwrap_or_default().contains('$'),
         "every token resolved: {:?}",
         svc.description
     );
@@ -783,9 +814,11 @@ fn service_description_on_real_data_reads_astral_recalls_bind_area() {
         )
     });
     assert_eq!(
-        svc.description,
-        "Yanks the caster through the twisting nether back to Razor Hill.  Speak to an \
-         Innkeeper in a different place to change your home location."
+        svc.description.as_deref(),
+        Some(
+            "Yanks the caster through the twisting nether back to Razor Hill.  Speak to an \
+             Innkeeper in a different place to change your home location."
+        )
     );
 }
 
@@ -811,9 +844,11 @@ fn service_description_on_real_data_reads_the_profession_learn_row() {
         &BTreeSet::new(),
     );
     assert_eq!(
-        svc.description,
-        "Allows a Blacksmith to make basic weapons and armor up to a maximum potential skill of \
-         75.  Requires stone and metal found with the mining skill."
+        svc.description.as_deref(),
+        Some(
+            "Allows a Blacksmith to make basic weapons and armor up to a maximum potential skill \
+             of 75.  Requires stone and metal found with the mining skill."
+        )
     );
 }
 
@@ -856,7 +891,7 @@ fn service_description_on_real_data_reaches_for_the_recipes_product() {
     let deps = Deps::new();
     assert_eq!(
         describe(&deps),
-        "",
+        None,
         "nothing to show until the product's template lands"
     );
     assert_eq!(
@@ -873,7 +908,7 @@ fn service_description_on_real_data_reaches_for_the_recipes_product() {
         deps.items.insert_template(6338, Some(product));
         deps
     };
-    assert_eq!(describe(&landed), "Needed by Enchanters.");
+    assert_eq!(describe(&landed), Some("Needed by Enchanters.".into()));
 }
 
 #[test]

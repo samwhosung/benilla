@@ -111,7 +111,8 @@ pub struct TrainerService {
     /// The wire spell's rank text, such as "Rank 2".
     pub subtext: Option<String>,
     pub texture: Option<String>,
-    pub description: String,
+    /// The expanded text; `None` answers nil (`0x4d9d90`).
+    pub description: Option<String>,
     /// In copper, already reputation-discounted by the server.
     pub cost: u32,
     /// A primary profession's first rank: the stock window's `cpCost2 > 0`, which asks to confirm.
@@ -510,10 +511,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetTrainerServiceDescription",
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let text = service(&model, index)
-                .map(|s| s.description.clone())
-                .unwrap_or_default();
-            lua.create_string(&text)
+            opt_str(
+                lua,
+                service(&model, index).and_then(|s| s.description.as_ref()),
+            )
         })?,
     )?;
 

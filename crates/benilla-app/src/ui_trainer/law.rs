@@ -111,7 +111,9 @@ pub(super) struct ServiceText<'a> {
 /// never expanded). A used row at a mount trainer skips its own text (`0x4d9c29`), and every
 /// failure falls back to the wire text again (`0x4d9d3b`, probing slot 0 alone for the caster).
 /// The expansion itself is the spell tooltip's description call (`0x52f717`): level override 0,
-/// the Description column, and the modifiers applied.
+/// the Description column, and the modifiers applied. `None` is the nil the binding pushes
+/// (`0x4d9d90`): the wire spell has no record (`0x4d9bd7`), or no arm found text and the wire
+/// spell's own is null or empty (`0x4d9d44`, `0x4d9d49`).
 pub(super) fn service_description(
     wire: &TrainerSpell,
     trainer_type: u32,
@@ -119,10 +121,8 @@ pub(super) fn service_description(
     items: &Items,
     commands: &NetCommands,
     text: &ServiceText,
-) -> String {
-    let Some(d) = spells.get(wire.spell) else {
-        return String::new();
-    };
+) -> Option<String> {
+    let d = spells.get(wire.spell)?;
     let learn = (0..3).find(|&i| {
         matches!(
             d.effects[i],
@@ -139,13 +139,13 @@ pub(super) fn service_description(
     let wire_text = d.description.as_deref().filter(|t| !t.is_empty());
     if !(trainer_type == TRAINER_TYPE_MOUNT && wire.state == trainer_spell_state::GRAY) {
         if let Some(t) = wire_text {
-            return substitute(t, d, learn.map_or(text.player, caster));
+            return Some(substitute(t, d, learn.map_or(text.player, caster)));
         }
     }
     if let Some(slot) = learn {
         if let Some(taught) = spells.get(d.effect_trigger_spell[slot]) {
             if let Some(t) = taught.description.as_deref().filter(|t| !t.is_empty()) {
-                return substitute(t, taught, caster(slot));
+                return Some(substitute(t, taught, caster(slot)));
             }
             // The recipe's product carries the only text a `CREATE_ITEM` spell has.
             if taught.attributes & SPELL_ATTR_IS_TRADESKILL != 0
@@ -156,12 +156,12 @@ pub(super) fn service_description(
                     .map(|item| item.description.clone())
                     .filter(|t| !t.is_empty())
                 {
-                    return t;
+                    return Some(t);
                 }
             }
         }
     }
-    wire_text.map_or_else(String::new, |t| substitute(t, d, caster(0)))
+    wire_text.map(|t| substitute(t, d, caster(0)))
 }
 
 /// The list builder `0x4d7560`'s group key (`0x4d7786`). Type 2 resolves no skill line, so no row
