@@ -102,6 +102,13 @@ impl Toc {
         self.list_where(|k| starts_with_ci(k, "OptionalDep"))
     }
 
+    /// `## LoadWith:`, the addons whose load loads this one: `Toc_Parse` matches the key `LoadWith:`
+    /// whole (`0x51ceaa`, the string `0x8537a8`) and tokenizes the value like the other lists
+    /// (`0x51cee7`), into the array at `[rec+0x60]`.
+    pub fn load_with(&self) -> Vec<&str> {
+        self.list("LoadWith")
+    }
+
     /// `## LoadOnDemand: 1`, which stock 1.12 addons such as `Blizzard_TalentUI` carry.
     pub fn load_on_demand(&self) -> bool {
         self.directive("LoadOnDemand").map(str::trim) == Some("1")
@@ -228,6 +235,19 @@ mod tests {
         );
         // `OptionalDependencies` does not start with `Dep`.
         assert!(!toc.dependencies().contains(&"LibC"));
+    }
+
+    /// `Toc_Parse` matches the whole key `LoadWith:` (`0x51ceaa`), not a prefix as it does `Dep`.
+    #[test]
+    fn load_with_is_a_list_of_its_own_key() {
+        let toc = Toc::parse(
+            "## LoadWith: KLHThreatMeter, Other\n\
+             ## loadwith: Third\n\
+             ## LoadWithAll: Nope\n\
+             ## Dependencies: LibA\n",
+        );
+        assert_eq!(toc.load_with(), vec!["KLHThreatMeter", "Other", "Third"]);
+        assert_eq!(toc.dependencies(), vec!["LibA"]);
     }
 
     #[test]

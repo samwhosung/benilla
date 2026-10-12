@@ -37,6 +37,12 @@ pub struct AddOnInfo {
     pub dependencies: Vec<String>,
     /// `## OptionalDeps`: loaded first by `AddOn_Load`, a failure ignored (`0x51f320`).
     pub optional_dependencies: Vec<String>,
+    /// `## LoadWith`: the addons whose load loads this one (`[rec+0x58]`, `0x51cf0a`-`0x51cf8c`).
+    pub load_with: Vec<String>,
+    /// The registry rows whose `## LoadWith` names this addon, in registry order (`[rec+0x88]`):
+    /// filled by [`super::UiScript::register_addons`], as the reference builds it once the scan
+    /// ends (`0x51c7c0`-`0x51c8c9`). `AddOn_Load` loads each after this one's `ADDON_LOADED`.
+    pub dependents: Vec<usize>,
     /// Every `## Key: Value` in manifest order, for `GetAddOnMetadata`.
     pub directives: Vec<(String, String)>,
     /// The `.toc`'s file list in order: what `LoadAddOn` runs.
@@ -467,7 +473,8 @@ pub trait AddonLoad {
 ///   is 1 from the addon's own files, and the second addon's `ADDON_LOADED` fires first;
 /// - optional dependencies load, failures ignored (`0x51f320`); required ones load, and one that
 ///   fails clears the mark and fails this addon (`0x51f343`-`0x51f357`, `0x51f5ee`);
-/// - the addon's files run and `ADDON_LOADED` fires (`0x51f5ad`).
+/// - the addon's files run, `ADDON_LOADED` fires (`0x51f5ad`), and each addon whose `## LoadWith`
+///   names this one loads (`0x51f5b2`-`0x51f5e1`), failures ignored.
 pub(super) fn load_row(
     lua: &Lua,
     host: &mut dyn AddonLoad,
@@ -475,7 +482,7 @@ pub(super) fn load_row(
     demand: bool,
     version_check: bool,
 ) -> bool {
-    let (name, optional, required) = {
+    let (name, optional, required, dependents) = {
         let model = lua.app_data_ref::<Model>().expect("model");
         let a = &model.addons[i];
         if a.loaded {
@@ -502,6 +509,7 @@ pub(super) fn load_row(
             a.name.clone(),
             a.optional_dependencies.clone(),
             a.dependencies.clone(),
+            a.dependents.clone(),
         )
     };
     if !host.available(i) {
@@ -524,6 +532,9 @@ pub(super) fn load_row(
     }
     host.run(i);
     super::event::fire_global(lua, "ADDON_LOADED", &[super::ScriptValue::Str(name)]);
+    for d in dependents {
+        load_row(lua, host, d, demand, version_check);
+    }
     true
 }
 
@@ -828,6 +839,21 @@ impl super::UiScript {
         // The enable state as registered is the last-saved one, `ResetDisabledAddOns`'s target.
         for a in &mut addons {
             a.saved_enabled = a.enabled;
+        }
+        // The reverse of `## LoadWith`, once the whole list is known (`0x51c7c0`-`0x51c8c9`): each
+        // addon is appended to every addon it names, in list order, a repeat included.
+        for a in &mut addons {
+            a.dependents.clear();
+        }
+        for r in 0..addons.len() {
+            for t in 0..addons[r].load_with.len() {
+                let target = addons
+                    .iter()
+                    .position(|a| a.name.eq_ignore_ascii_case(&addons[r].load_with[t]));
+                if let Some(target) = target {
+                    addons[target].dependents.push(r);
+                }
+            }
         }
         let mut model = self.model_mut();
         model.addons = addons;
