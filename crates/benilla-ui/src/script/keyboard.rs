@@ -12,13 +12,29 @@
 //! higher stratum or level pre-empts the box, and one below it never sees the key.
 //!
 //! The key-up (`0x765fd0`) does not walk. It goes to the frame that consumed that key's last
-//! down (`[root+code*4+0x84]`, written at `0x765fa2`), which `key_up` runs through the frame's
-//! `OnKeyUp` slot (`0x76bba0`); the slot is never cleared by a delivered key-up.
+//! down (`[root+code*4+0x84]`, written at `0x765fa2`), through its `OnKeyUp` slot (`0x76bba0`),
+//! and the auto-repeat (`0x766070`, category `0xa`) to the same frame's `+0x58`: a stub on a plain
+//! frame (`0x46ff90`), the key-down again on an EditBox (`0x77b770`). A delivered up never clears
+//! the record.
 
 use mlua::Lua;
 
 use super::{event, Model};
 use crate::widget::{FrameHandle, FrameKind};
+
+/// What the key-down walk (`0x765f10`) came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyWalk {
+    /// No frame took the key: the world frame's binding is next.
+    Declined,
+    /// A frame took it (`0x76b7d0`'s existence gate): nothing below it, the focused box and the
+    /// keybinding included, sees it.
+    Frame,
+    /// The walk reached an EditBox that took it: focused already or, with none focused, an
+    /// `autoFocus` box that just took the focus (`0x77b1c7`-`0x77b1db`). The key's editing action
+    /// is that box's.
+    Box,
+}
 
 /// The two walks the reference registers separately.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -33,7 +49,7 @@ enum Channel {
 /// down to WORLD, then level descending, ties oldest registration first as the inserter keeps
 /// them (`0x764aa0`).
 fn walk_order(model: &Model, channel: Channel) -> Vec<FrameHandle> {
-    let mut candidates: Vec<(FrameHandle, u8, u16, u32)> = model
+    let mut candidates: Vec<(FrameHandle, u8, u16, u64)> = model
         .arena
         .iter_frames()
         .filter(|(_, f)| {
@@ -43,7 +59,12 @@ fn walk_order(model: &Model, channel: Channel) -> Vec<FrameHandle> {
                     Channel::KeyDown => f.key_enabled,
                 }
         })
-        .map(|(h, f)| (h, f.strata as u8, f.level, f.insertion_seq))
+        .map(|(h, f)| {
+            let stamp = match channel {
+                Channel::Char | Channel::KeyDown => u64::from(f.insertion_seq),
+            };
+            (h, f.strata as u8, f.level, stamp)
+        })
         .collect();
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.3.cmp(&b.3)));
     candidates.into_iter().map(|(h, ..)| h).collect()
@@ -66,59 +87,94 @@ fn is_editbox(lua: &Lua, h: FrameHandle) -> bool {
         .is_some_and(|f| f.kind == FrameKind::EditBox)
 }
 
-/// One channel's walk, gate and fire. Returns whether a frame consumed the event, which is what
-/// suppresses the keybinding; a handler's own return is discarded (`0x7026f0`).
-fn walk(lua: &Lua, channel: Channel, arg: &str) -> bool {
-    let order = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        walk_order(&model, channel)
+/// Whether the EditBox `h` declines `key` before it looks at focus (`0x77b160`): PRINTSCREEN
+/// (`0x77b17f`), and the four arrows on a box in alt-arrow mode (`ignoreArrows`) with ALT up
+/// (`0x77b18e`-`0x77b1c4`), so the walk goes on below it and the world frame's binding can run.
+fn box_declines(lua: &Lua, h: FrameHandle, key: &str) -> bool {
+    if key.eq_ignore_ascii_case("PRINTSCREEN") {
+        return true;
+    }
+    let arrow = ["LEFT", "UP", "RIGHT", "DOWN"]
+        .iter()
+        .any(|a| key.eq_ignore_ascii_case(a));
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    arrow
+        && !model.alt_down
+        && model.arena.frame(h).is_some_and(|f| {
+            matches!(&f.kind_state,
+                crate::widget::KindState::EditBox(eb) if eb.alt_arrow_key_mode)
+        })
+}
+
+/// Whether the frame's own key or char slot takes the event, firing it: the base gates
+/// `0x76b760` (`OnChar` alone) and `0x76b7d0` (either key slot, `OnKeyDown` fired).
+fn frame_takes(lua: &Lua, h: FrameHandle, channel: Channel, arg: &str) -> bool {
+    let id = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        model.frame_id(h)
     };
-    for h in order {
-        if is_editbox(lua, h) {
-            if !super::editbox::takes_event(lua, h) {
-                continue;
-            }
-            let consumed = match channel {
-                Channel::Char => super::editbox::char_input(lua, arg),
-                Channel::KeyDown => super::editbox::key_input(lua, arg),
-            };
-            if consumed {
-                if channel == Channel::KeyDown {
-                    remember(lua, arg, h);
-                }
+    match channel {
+        Channel::Char => {
+            if has_script(lua, id, "OnChar") {
+                fire(lua, id, "OnChar", arg);
                 return true;
             }
-            continue;
         }
-        let id = {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.frame_id(h)
-        };
-        match channel {
-            // `0x76b760`: gates on the OnChar slot alone.
-            Channel::Char => {
-                if has_script(lua, id, "OnChar") {
-                    fire(lua, id, "OnChar", arg);
-                    return true;
+        Channel::KeyDown => {
+            let down = has_script(lua, id, "OnKeyDown");
+            if down || has_script(lua, id, "OnKeyUp") {
+                remember(lua, arg, h);
+                if down {
+                    fire(lua, id, "OnKeyDown", arg);
                 }
-            }
-            // `0x76b7d0`: either key slot consumes, only `OnKeyDown` fires.
-            Channel::KeyDown => {
-                let down = has_script(lua, id, "OnKeyDown");
-                if down || has_script(lua, id, "OnKeyUp") {
-                    remember(lua, arg, h);
-                    if down {
-                        fire(lua, id, "OnKeyDown", arg);
-                    }
-                    return true;
-                }
+                return true;
             }
         }
     }
     false
 }
 
-/// The consumer of a key-down, which that key's up goes to (`0x765fa2`).
+/// The char walk (`0x765df0`): whether a frame or a box took the character.
+fn walk_char(lua: &Lua, text: &str) -> bool {
+    let order = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        walk_order(&model, Channel::Char)
+    };
+    for h in order {
+        if is_editbox(lua, h) {
+            if super::editbox::takes_event(lua, h) && super::editbox::char_input(lua, text) {
+                return true;
+            }
+        } else if frame_takes(lua, h, Channel::Char, text) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The key-down walk (`0x765f10`). A handler's own return is discarded (`0x7026f0`).
+fn walk_key(lua: &Lua, key: &str) -> KeyWalk {
+    let order = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        walk_order(&model, Channel::KeyDown)
+    };
+    for h in order {
+        if is_editbox(lua, h) {
+            if box_declines(lua, h, key) || !super::editbox::takes_event(lua, h) {
+                continue;
+            }
+            if super::editbox::key_input(lua, key) {
+                remember(lua, key, h);
+                return KeyWalk::Box;
+            }
+        } else if frame_takes(lua, h, Channel::KeyDown, key) {
+            return KeyWalk::Frame;
+        }
+    }
+    KeyWalk::Declined
+}
+
+/// The consumer of a key-down, which that key's up and repeats go to (`0x765fa2`).
 fn remember(lua: &Lua, key: &str, h: FrameHandle) {
     lua.app_data_mut::<Model>()
         .expect("model app_data")
@@ -126,12 +182,35 @@ fn remember(lua: &Lua, key: &str, h: FrameHandle) {
         .insert(key.to_string(), h);
 }
 
+/// A binding took the key's press: the world frame's key-down (`0x483b70`) ran it and returned
+/// that, so the world frame is the consumer, and the up and repeats go to it
+/// (`0x483bd0`), not to whichever frame took the key before.
+pub(super) fn note_world_key(lua: &Lua, key: &str) {
+    let world = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let found = model
+            .arena
+            .iter_frames()
+            .find(|(_, f)| f.kind == FrameKind::WorldFrame)
+            .map(|(h, _)| h);
+        found
+    };
+    if let Some(h) = world {
+        remember(lua, key, h);
+    }
+}
+
+/// Whether `h` is linked, the base handlers' first test (`[+0xd4]`, `0x76bba7`, `0x77b7c0`).
+fn linked(lua: &Lua, h: FrameHandle) -> bool {
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    model.arena.frame(h).is_some_and(|f| f.effective_visible)
+}
+
 /// The key-up dispatcher (`0x765fd0`): the key's last consumer gets `OnKeyUp` with the key's name
-/// (`0x76bba0`, gated on that slot alone), wherever it is now, shown or not; with no consumer on
-/// record nothing consumes. The record is never cleared (the clear at `0x76605b` sits on the
-/// no-record path), and an EditBox consumer takes no script: its override (`0x77b7c0`) only
-/// grants an `autoFocus` box the free focus. Returns whether a consumer was on record, which
-/// ends the up event for the rest of the bus (`0x76602d`).
+/// (`0x76bba0`, gated on that slot alone, and on being linked), however the key stands now. An
+/// EditBox consumer runs no script: its override (`0x77b7c0`) only grants an `autoFocus` box the
+/// free focus. Returns whether a consumer was on record, which ends the up event for the rest of
+/// the bus (`0x76602d`); a delivered up leaves the record (`0x76605b` is the no-record leg).
 pub(super) fn key_up(lua: &Lua, key: &str) -> bool {
     let Some(h) = lua
         .app_data_ref::<Model>()
@@ -142,21 +221,48 @@ pub(super) fn key_up(lua: &Lua, key: &str) -> bool {
     else {
         return false;
     };
+    if !linked(lua, h) {
+        return true;
+    }
     if is_editbox(lua, h) {
         super::editbox::takes_event(lua, h);
         return true;
     }
     let id = {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        if model.arena.frame(h).is_none() {
-            return true;
-        }
         model.frame_id(h)
     };
     if has_script(lua, id, "OnKeyUp") {
         fire(lua, id, "OnKeyUp", key);
     }
     true
+}
+
+/// The auto-repeat dispatcher (`0x766070`): the key's consumer's `+0x58`. A plain frame's is a
+/// stub (`0x46ff90`), so the repeat is [`KeyWalk::Frame`] and runs nothing; an EditBox's
+/// (`0x77b770`) is its key-down again, [`KeyWalk::Box`], on the linked box that takes it. No
+/// consumer on record: nothing (`Declined`).
+pub(super) fn key_repeat(lua: &Lua, key: &str) -> KeyWalk {
+    let Some(h) = lua
+        .app_data_ref::<Model>()
+        .expect("model app_data")
+        .key_consumers
+        .get(key)
+        .copied()
+    else {
+        return KeyWalk::Declined;
+    };
+    if !is_editbox(lua, h) {
+        return KeyWalk::Frame;
+    }
+    if linked(lua, h)
+        && !box_declines(lua, h, key)
+        && super::editbox::takes_event(lua, h)
+        && super::editbox::key_input(lua, key)
+    {
+        return KeyWalk::Box;
+    }
+    KeyWalk::Declined
 }
 
 /// Fire one key handler with its one argument, a string on all three channels (`0x7026f0`);
@@ -181,43 +287,11 @@ fn fire(lua: &Lua, id: u32, script: &str, arg: &str) {
 /// The char channel (`0x765df0`): `arg1` is the character in UTF-8, a multi-byte codepoint whole
 /// (`0x41abb0` encodes with no range guard).
 pub(super) fn char_input(lua: &Lua, text: &str) -> bool {
-    walk(lua, Channel::Char, text)
+    walk_char(lua, text)
 }
 
 /// The key-down channel (`0x765f10`): `arg1` is the key name without modifiers, from the same
 /// table as the keybinding chord (`0x76b7d0`, `0x4b66b0`); the host already speaks those names.
-pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
-    walk(lua, Channel::KeyDown, key)
-}
-
-/// The key-down walk for the editing keys a focused box takes as a [`crate::script::EditAction`]
-/// (BACKSPACE, DELETE, the arrows, HOME, END): a frame above the box consumes them, and the walk
-/// stops at the box with `false` for its chord path, so no frame below it takes them.
-pub(super) fn frame_key_input(lua: &Lua, key: &str) -> bool {
-    let order = {
-        let model = lua.app_data_ref::<Model>().expect("model app_data");
-        walk_order(&model, Channel::KeyDown)
-    };
-    for h in order {
-        if is_editbox(lua, h) {
-            if super::editbox::takes_event(lua, h) {
-                remember(lua, key, h);
-                return false; // the box's chord path owns this key
-            }
-            continue;
-        }
-        let id = {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.frame_id(h)
-        };
-        let down = has_script(lua, id, "OnKeyDown");
-        if down || has_script(lua, id, "OnKeyUp") {
-            remember(lua, key, h);
-            if down {
-                fire(lua, id, "OnKeyDown", key);
-            }
-            return true;
-        }
-    }
-    false
+pub(super) fn key_down(lua: &Lua, key: &str) -> KeyWalk {
+    walk_key(lua, key)
 }

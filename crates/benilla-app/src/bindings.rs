@@ -413,6 +413,11 @@ fn latch_and_dispatch(
                             | KeyCode::ArrowUp
                             | KeyCode::ArrowDown
                     );
+                // The box declines PRINTSCREEN before it looks at focus (`0x77b17f`), so the
+                // walk goes on and the world frame's binding runs while typing.
+                let arrow_exempt = arrow_exempt
+                    || chord::key_token(ev.key_code, &layout)
+                        == Some(chord::KeyName::Word("PRINTSCREEN"));
                 // A keyboard frame ate this one key (the world map's `OnKeyDown`, a cinematic);
                 // per key, so every other binding is untouched.
                 let eaten = capture.consumed.contains(&ev.key_code);
@@ -441,6 +446,11 @@ fn latch_and_dispatch(
                     key: BindKey::Key(name),
                 };
                 if let Some(command) = dispatch.resolve(chord, dev_plane) {
+                    // The world frame's key-down ran it and returned that (`0x483b70`), so its
+                    // key-up and repeats are the world frame's, not a stale earlier consumer's.
+                    if let Some(s) = script.as_mut() {
+                        s.note_world_key(&name.to_string());
+                    }
                     press(&mut state, &mut script, command, Held::Key(key));
                 }
             }
@@ -837,6 +847,67 @@ mod tests {
             !state(&app).pressed(Input::MoveForward),
             "only the arrows are exempt — every other key a focused box still eats"
         );
+    }
+
+    /// The box declines PRINTSCREEN before it looks at focus (`0x77b17f`), so the walk goes on and
+    /// the binding runs while typing, with every other key still eaten.
+    #[test]
+    fn printscreen_runs_its_binding_while_a_box_has_focus() {
+        let script = with_addon(PROBE_BINDINGS);
+        script
+            .run(r#"SetBinding("PRINTSCREEN", "PROBEEDGE"); SetBinding("G", "PROBEHOLD")"#)
+            .expect("bind");
+        let mut app = vm_harness(script);
+        app.world_mut().resource_mut::<UiKeyboardCapture>().typing = true;
+
+        press_key(&mut app, KeyCode::KeyG);
+        app.update();
+        assert_eq!(lua_count(&app, "PROBE_DOWN"), 0, "G is eaten by the box");
+
+        press_key(&mut app, KeyCode::PrintScreen);
+        app.update();
+        assert_eq!(
+            lua_count(&app, "PROBE_EDGE"),
+            1,
+            "PRINTSCREEN is declined, so its binding runs"
+        );
+    }
+
+    /// A press that resolved to a binding is the world frame's (`0x483b70`): the key's up goes to
+    /// it, not to the hidden frame that took the key's last press.
+    #[test]
+    fn a_press_that_runs_a_binding_makes_the_world_frame_its_consumer() {
+        let script = with_addon(PROBE_BINDINGS);
+        script
+            .run(
+                r#"
+                SetBinding("G", "PROBEEDGE")
+                CreateFrame("WorldFrame", "WorldFrame")
+                ups = 0
+                stale = CreateFrame("Frame", "StaleG")
+                stale:EnableKeyboard(true)
+                stale:SetScript("OnKeyDown", function() end)
+                stale:SetScript("OnKeyUp", function() ups = ups + 1 end)
+                "#,
+            )
+            .expect("bind");
+        let mut app = vm_harness(script);
+        {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            assert!(s.key_input("G"), "the frame takes G first");
+            s.run("stale:Hide()").unwrap();
+        }
+        press_key(&mut app, KeyCode::KeyG);
+        app.update();
+        assert_eq!(
+            lua_count(&app, "PROBE_EDGE"),
+            1,
+            "the binding took the press"
+        );
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        s.run("stale:Show()").unwrap();
+        assert!(s.key_up("G"));
+        assert_eq!(s.eval::<i64>("return ups").unwrap(), 0);
     }
 
     /// A box taking focus releases nothing already held: the reference's focused box freezes the

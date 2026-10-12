@@ -4,10 +4,11 @@
 //! - Focus: one owner ([`Model::focused_editbox`], the client's `DAT_00cf4dc8`). A left click
 //!   focuses and collapses the selection to the clicked byte (`0x77b86f call 0x77ccf0`, before
 //!   `SetFocus` at `0x77b881`), so it never selects all. An `autoFocus` box takes the focus on show
-//!   when none is held and on the first key, and a hidden box drops it ([`visibility_focus`]).
-//! - Routing: a focused box consumes every key and char and fires only its specialized scripts
-//!   (Enter, Escape, Space, Tab, TextChanged, TextSet, focus), never a generic `OnKeyDown`; an
-//!   unfocused box that is not `autoFocus` ignores input.
+//!   when none is held and on the first key the walk offers it, and a hidden box drops it ([`visibility_focus`]).
+//! - Routing: the key and char walks reach a box at its own place ([`super::keyboard`]); the focused
+//!   one consumes every key and char and fires only its specialized scripts (Enter, Escape, Space,
+//!   Tab, TextChanged, TextSet, focus), never a generic `OnKeyDown`; an unfocused box that is not
+//!   `autoFocus` ignores input.
 //! - Editing: an insert deletes the selection, then `numeric` aborts a whole insert on any
 //!   non-digit; caps trim from the end (`maxBytes`, then `maxLetters`).
 //! - Events: an edit, a caret move, a focus change or a re-seat of the text only raises the box's
@@ -27,7 +28,7 @@ use mlua::{Lua, Table};
 use super::object::frame_handle_of;
 use super::types::{EditAction, EditUnit};
 use super::{event, Model, RegionData};
-use crate::order::{self, DrawLayer, ZTarget};
+use crate::order::DrawLayer;
 use crate::widget::{EditBoxState, FrameHandle, FrameKind, KindState, RegionHandle, RegionKind};
 
 /// Registry key of the EditBox method table (the MAXCSTACK discipline: Lua-side root, named key).
@@ -153,23 +154,21 @@ pub(in crate::script) use relayout::reseat_resized;
 // Focus model
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The box that processes a key or char. A hidden focused box blocks self-acquire (the client's
-/// guard returns 0 with the focus still set); with no focus, the topmost visible `autoFocus` box
-/// takes it and processes this same event.
+/// The box that processes a key or char: the focused one, taken at the walk (`takes_event`). A
+/// hidden focused box blocks (the client's guard returns 0 with the focus still set); with none
+/// focused nothing processes, since an `autoFocus` box takes the focus only where the walk
+/// reaches it.
 fn route(lua: &Lua) -> Option<FrameHandle> {
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        if let Some(h) = model.focused_editbox {
-            match model.arena.frame(h) {
-                Some(f) if f.effective_visible && f.kind == FrameKind::EditBox => return Some(h),
-                Some(_) => return None, // alive but hidden: block self-acquire, don't consume
-                None => model.focused_editbox = None, // stale: drop and self-acquire below
-            }
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let h = model.focused_editbox?;
+    match model.arena.frame(h) {
+        Some(f) if f.effective_visible && f.kind == FrameKind::EditBox => Some(h),
+        Some(_) => None, // alive but hidden: don't consume
+        None => {
+            model.focused_editbox = None; // stale
+            None
         }
     }
-    let h = topmost_autofocus(lua)?;
-    set_focus_handle(lua, h);
-    Some(h)
 }
 
 /// Whether the EditBox `h`, reached by the key or char walk, takes the event (its vtable's
@@ -198,22 +197,6 @@ pub(super) fn takes_event(lua: &Lua, h: FrameHandle) -> bool {
         .expect("model app_data")
         .focused_editbox
         == Some(h)
-}
-
-/// The topmost-drawn visible `autoFocus` EditBox, the keyboard self-acquire target.
-fn topmost_autofocus(lua: &Lua) -> Option<FrameHandle> {
-    let model = lua.app_data_ref::<Model>().expect("model app_data");
-    let sorted = order::traversal(&model.arena);
-    for (target, _) in sorted.iter().rev() {
-        if let ZTarget::Frame(fh) = *target {
-            if let Some(KindState::EditBox(eb)) = model.arena.frame(fh).map(|f| &f.kind_state) {
-                if eb.auto_focus {
-                    return Some(fh);
-                }
-            }
-        }
-    }
-    None
 }
 
 /// `SetFocus` (`0x77e3d0`): needs effective visibility, a no-op when already focused; fires

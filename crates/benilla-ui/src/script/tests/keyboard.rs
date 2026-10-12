@@ -428,3 +428,185 @@ fn a_key_up_goes_to_the_frame_that_took_the_down() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// A box in alt-arrow mode declines the four arrows without ALT, and every box declines
+/// PRINTSCREEN, before it looks at focus (`0x77b17f`, `0x77b18e`-`0x77b1c4`): the walk goes on to
+/// the frames below it, and a declined key gives an `autoFocus` box no focus.
+#[test]
+fn a_box_declines_printscreen_and_unaltered_arrows_and_the_walk_goes_on() {
+    use crate::script::KeyWalk;
+    let mut s = script();
+    s.run(
+        r#"
+        seen = {}
+        box = CreateFrame("EditBox", "KbChatLike")
+        box:SetAutoFocus(false)
+        box:SetAltArrowKeyMode(1)
+        box:SetFrameStrata("DIALOG")
+        box:SetFocus()
+        spin = CreateFrame("Frame", "KbSpinner")
+        spin:SetFrameStrata("MEDIUM")
+        spin:EnableKeyboard(true)
+        spin:SetScript("OnKeyDown", function() table.insert(seen, arg1) end)
+    "#,
+    )
+    .unwrap();
+    for key in ["LEFT", "UP", "RIGHT", "DOWN", "PRINTSCREEN"] {
+        assert_eq!(
+            s.key_down(key),
+            KeyWalk::Frame,
+            "{key} goes on to the frame below"
+        );
+    }
+    assert_eq!(
+        s.eval::<String>("return table.concat(seen, ',')").unwrap(),
+        "LEFT,UP,RIGHT,DOWN,PRINTSCREEN"
+    );
+    // Any other key stops at the focused box, as before.
+    assert_eq!(s.key_down("HOME"), KeyWalk::Box);
+    assert_eq!(s.key_down("A"), KeyWalk::Box);
+    // ALT up is the whole condition: with it down the box takes the arrows.
+    s.set_alt_down(true);
+    assert_eq!(s.key_down("RIGHT"), KeyWalk::Box);
+    assert_eq!(
+        s.key_down("PRINTSCREEN"),
+        KeyWalk::Frame,
+        "PRINTSCREEN is declined whatever ALT does"
+    );
+    s.set_alt_down(false);
+
+    // Nothing below: the world frame's binding is next, and the unfocused autoFocus box gets
+    // no focus from a key it declines.
+    s.run(
+        r#"
+        spin:Hide()
+        box:ClearFocus()
+        box:Hide()
+        auto = CreateFrame("EditBox", "KbAutoChat")
+        auto:SetAutoFocus(true)
+        auto:SetAltArrowKeyMode(1)
+        auto:ClearFocus()
+    "#,
+    )
+    .unwrap();
+    assert_eq!(s.focused_editbox_name(), None);
+    assert_eq!(s.key_down("LEFT"), KeyWalk::Declined);
+    assert_eq!(s.key_down("PRINTSCREEN"), KeyWalk::Declined);
+    assert_eq!(
+        s.focused_editbox_name(),
+        None,
+        "a declined key grants no focus"
+    );
+    assert_eq!(s.key_down("X"), KeyWalk::Box, "any other key does");
+    assert_eq!(s.focused_editbox_name().as_deref(), Some("KbAutoChat"));
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The base key-up (`0x76bba0`) and a box's (`0x77b7c0`) return before anything when the frame is
+/// not linked, so a consumer that has since hidden gets no `OnKeyUp`; the record outlives it.
+#[test]
+fn a_hidden_consumer_gets_no_key_up() {
+    let mut s = script();
+    s.run(
+        r#"
+        ups = 0
+        f = CreateFrame("Frame", "KbUpHidden")
+        f:EnableKeyboard(true)
+        f:SetScript("OnKeyDown", function() end)
+        f:SetScript("OnKeyUp", function() ups = ups + 1 end)
+    "#,
+    )
+    .unwrap();
+    assert!(s.key_input("K"));
+    s.run("f:Hide()").unwrap();
+    assert!(s.key_up("K"), "the record stands, the up ends there");
+    assert_eq!(s.eval::<i64>("return ups").unwrap(), 0);
+    s.run("f:Show()").unwrap();
+    assert!(s.key_up("K"));
+    assert_eq!(
+        s.eval::<i64>("return ups").unwrap(),
+        1,
+        "shown again, it gets it"
+    );
+}
+
+/// A press a binding took is the world frame's (`0x483b70` returns the binding's result), so the
+/// up and repeats go to it, and an earlier consumer of the same key is not reached.
+#[test]
+fn a_press_a_binding_took_moves_the_up_to_the_world_frame() {
+    let mut s = script();
+    s.run(
+        r#"
+        log = {}
+        CreateFrame("WorldFrame", "WorldFrame")
+        f = CreateFrame("Frame", "KbUpStale")
+        f:EnableKeyboard(true)
+        f:SetScript("OnKeyDown", function() table.insert(log, "down") end)
+        f:SetScript("OnKeyUp", function() table.insert(log, "up") end)
+    "#,
+    )
+    .unwrap();
+    assert!(s.key_input("J"));
+    s.run("f:Hide()").unwrap();
+    // The frame is gone from the walk, so the press is the binding's.
+    assert!(!s.key_input("J"));
+    s.note_world_key("J");
+    s.run("f:Show()").unwrap();
+    assert!(s.key_up("J"));
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "down",
+        "the stale frame's OnKeyUp is not run"
+    );
+    assert_eq!(
+        s.key_repeat("J"),
+        crate::script::KeyWalk::Frame,
+        "a stub: nothing runs"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The auto-repeat (`0x766070`) goes to the frame that took the press, whose `+0x58` is a stub on
+/// a plain frame (`0x46ff90`) and the key-down again on a box (`0x77b770`).
+#[test]
+fn a_repeat_goes_to_the_consumer_not_the_walk() {
+    use crate::script::KeyWalk;
+    let mut s = script();
+    s.run(
+        r#"
+        downs = 0
+        f = CreateFrame("Frame", "KbRepeat")
+        f:SetFrameStrata("MEDIUM")
+        f:EnableKeyboard(true)
+        f:SetScript("OnKeyDown", function() downs = downs + 1 end)
+        box = CreateFrame("EditBox", "KbRepeatBox")
+        box:SetAutoFocus(false)
+        box:SetFrameStrata("LOW")
+        box:SetFocus()
+        enters = 0
+        box:SetScript("OnEnterPressed", function() enters = enters + 1 end)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.key_repeat("RIGHT"),
+        KeyWalk::Declined,
+        "no press on record, nothing"
+    );
+    assert_eq!(s.key_down("RIGHT"), KeyWalk::Frame);
+    for _ in 0..3 {
+        assert_eq!(s.key_repeat("RIGHT"), KeyWalk::Frame);
+    }
+    assert_eq!(
+        s.eval::<i64>("return downs").unwrap(),
+        1,
+        "holding the key fires OnKeyDown once, not once per repeat"
+    );
+
+    // A box that took the press gets its key-down again.
+    s.run("f:Hide()").unwrap();
+    assert_eq!(s.key_down("ENTER"), KeyWalk::Box);
+    assert_eq!(s.key_repeat("ENTER"), KeyWalk::Box);
+    assert_eq!(s.eval::<i64>("return enters").unwrap(), 2);
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

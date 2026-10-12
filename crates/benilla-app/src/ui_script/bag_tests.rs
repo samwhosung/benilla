@@ -982,7 +982,7 @@ fn equipped_bag_window_snug_fits_its_row_count() {
 }
 
 /// Open a backpack holding a five-stack in slot 1; returns that slot button's centre.
-fn open_backpack_with_a_five_stack(s: &mut UiScript) -> (f32, f32) {
+pub(super) fn open_backpack_with_a_five_stack(s: &mut UiScript) -> (f32, f32) {
     for file in crate::ui_script::test_ui::production_order(&[
         BAG_UI,
         &[

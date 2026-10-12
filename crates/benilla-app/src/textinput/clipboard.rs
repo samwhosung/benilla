@@ -184,3 +184,27 @@ impl HostClipboard {
         }
     }
 }
+
+/// A clipboard holding `text` in memory, so a test never touches the machine's pasteboard.
+#[cfg(test)]
+impl HostClipboard {
+    pub(crate) fn holding(text: &str) -> Self {
+        struct Memory(String);
+        impl Pasteboard for Memory {
+            fn read_text(&mut self) -> Result<Option<String>, String> {
+                Ok((!self.0.is_empty()).then(|| self.0.clone()))
+            }
+            fn write_text(&mut self, text: &str) -> Result<(), String> {
+                self.0 = text.to_string();
+                Ok(())
+            }
+            fn name(&self) -> &'static str {
+                "memory"
+            }
+        }
+        HostClipboard {
+            backend: Some(Box::new(Memory(text.to_string()))),
+            opened: true,
+        }
+    }
+}

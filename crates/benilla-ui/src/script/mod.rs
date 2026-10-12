@@ -93,6 +93,7 @@ mod item_stats;
 mod item_text;
 pub mod keybind;
 mod keyboard;
+pub use keyboard::KeyWalk;
 mod layout;
 mod layout_cache;
 mod loot;
@@ -481,9 +482,10 @@ const SCRIPT_KINDS: [&str; 44] = [
     "OnMovieFinished",
     "OnMovieShowSubtitle",
     "OnMovieHideSubtitle",
-    // The key channels, fired by [`keyboard`]'s walk (`0x765f10`). `OnKeyUp` never fires, as the
-    // host feeds no key-up, but a frame carrying only `OnKeyUp` still consumes every key-down and
-    // runs nothing, the reference's own asymmetry.
+    // The key channels: `OnChar` and `OnKeyDown` fired by [`keyboard`]'s walks (`0x765df0`,
+    // `0x765f10`), `OnKeyUp` by the key-up dispatcher (`0x765fd0`) on the frame that took the
+    // key's down. A frame carrying only `OnKeyUp` still consumes every key-down and runs nothing
+    // on it, the reference's own asymmetry.
     "OnChar",
     "OnKeyDown",
     "OnKeyUp",
@@ -1148,10 +1150,19 @@ impl UiScript {
         editbox::paste(&self.lua, text)
     }
 
-    /// A non-character key by name (`"ENTER"`, `"ESCAPE"`, `"TAB"`); editing keys come through
-    /// [`Self::editbox_action`]. A focused box consumes a key even when it does nothing with it.
-    pub fn key_input(&mut self, key: &str) -> bool {
-        keyboard::key_input(&self.lua, key)
+    /// A key pressed, by name (`"ENTER"`, `"A"`, `"SHIFT"`, `"UNKNOWN"`): the key-down walk
+    /// (`0x765f10`), which an EditBox joins at its own place. `Box` means the walk reached a box
+    /// that took the key, and the host then runs the key's editing action on it
+    /// ([`Self::editbox_action`], [`Self::paste`]); `Frame`, a frame that took it, and the host
+    /// runs neither the action nor the key's binding (`0x76b7d0`).
+    pub fn key_down(&mut self, key: &str) -> KeyWalk {
+        keyboard::key_down(&self.lua, key)
+    }
+
+    /// A key held down and repeating, by name: the auto-repeat dispatcher (`0x766070`) hands it to
+    /// the frame that took the press, a stub on a plain frame and the key-down again on a box.
+    pub fn key_repeat(&mut self, key: &str) -> KeyWalk {
+        keyboard::key_repeat(&self.lua, key)
     }
 
     /// A key released, by the name its press went by: the key-up dispatcher (`0x765fd0`) runs
@@ -1160,11 +1171,24 @@ impl UiScript {
         keyboard::key_up(&self.lua, key)
     }
 
-    /// An editing key (BACKSPACE, DELETE, the arrows, HOME, END) offered to the keyboard frames
-    /// before the focused box gets it as an [`EditAction`]. On `true` the caller dispatches neither
-    /// the action nor the key's binding (consumption suppresses it, `0x76b7d0`).
+    /// A binding took this key's press: the world frame is its consumer (`0x483b70`).
+    pub fn note_world_key(&mut self, key: &str) {
+        keyboard::note_world_key(&self.lua, key);
+    }
+
+    /// Whether ALT is held, which an alt-arrow EditBox reads for the arrows (`0x77b1b3`).
+    pub fn set_alt_down(&mut self, alt: bool) {
+        self.model_mut().alt_down = alt;
+    }
+
+    /// Whether the key-down walk takes `key`, a frame or a box.
+    pub fn key_input(&mut self, key: &str) -> bool {
+        self.key_down(key) != KeyWalk::Declined
+    }
+
+    /// Whether a frame, not a box, takes `key`.
     pub fn frame_key_input(&mut self, key: &str) -> bool {
-        keyboard::frame_key_input(&self.lua, key)
+        self.key_down(key) == KeyWalk::Frame
     }
 
     /// One text-editing operation on the focused EditBox, from the host's per-OS keymap.
