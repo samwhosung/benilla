@@ -488,19 +488,24 @@ fn back_on_disconnect(
 
 /// `SMSG_CHARACTER_LOGIN_FAILED`: back to select with the refusal in the glue dialog. The IO
 /// thread announces the entry with the pick, so this undoes a half-built one. The pick must be
-/// cleared, or the roster behind the refusal is auto-answered and the refused login loops.
+/// cleared, or the roster behind the refusal is auto-answered and the refused login loops. Under
+/// the stock glue the refusal's dialog is its glue manager's (state 9), not this one.
 fn back_on_login_refused(
     mut msgs: MessageReader<CharacterLoginFailedMessage>,
     mut roster: ResMut<Roster>,
     mut next: ResMut<NextState<ClientState>>,
     mut dialog: ResMut<crate::glue::dialog::GlueDialog>,
     strings: Option<Res<GlueStrings>>,
+    stock: Option<Res<crate::ui_script::glue::GlueStock>>,
 ) {
     let Some(msg) = msgs.read().last().copied() else {
         return;
     };
     roster.pending_pick = None;
     next.set(ClientState::CharSelect);
+    if stock.is_some_and(|s| s.0) {
+        return;
+    }
     let empty = GlueStrings::default();
     let strings = strings.as_deref().unwrap_or(&empty);
     dialog.open_error(char_login_refusal_text(strings, msg.result));
@@ -1133,6 +1138,31 @@ mod tests {
             "World server is down",
             "a refusal the player cannot see is the bug this whole path exists to end",
         );
+    }
+
+    /// Under the stock glue a refusal still leaves for select and drops the pick, but opens no
+    /// native dialog: the stock screen's own (its glue manager's state 9) says why.
+    #[test]
+    fn a_refusal_under_the_stock_glue_opens_no_native_dialog() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(ClientState::InWorld)
+            .insert_resource(Roster::with_pending_pick(vec![character(7, "Seven")], 7))
+            .insert_resource(crate::ui_script::glue::GlueStock(true))
+            .init_resource::<crate::glue::dialog::GlueDialog>()
+            .add_message::<CharacterLoginFailedMessage>()
+            .add_systems(Update, back_on_login_refused);
+        app.world_mut()
+            .write_message(CharacterLoginFailedMessage { result: 0x01 });
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<ClientState>>().get(),
+            ClientState::CharSelect
+        );
+        assert_eq!(app.world().resource::<Roster>().pending_pick, None);
+        let dialog = app.world().resource::<crate::glue::dialog::GlueDialog>();
+        assert!(dialog.kind.is_none() && dialog.text.is_empty());
     }
 
     /// A logout, or a refused login, and the roster the kept link sends right behind it can land
