@@ -464,8 +464,9 @@ mod tests {
 
     /// A bar pickup runs the setter of its slot's kind (`0x4e6130`): a spell's shows the grid and
     /// signals nothing after (`0x494dd1`); an item's row grab shows it and signals after its set
-    /// (`0x49513a`, `0x49515e`). Each inner clear signals first, so a hop hides the grid and
-    /// `CURSOR_UPDATE` reads the emptied cursor before the displaced action goes on.
+    /// (`0x49513a`, `0x49515e`). Each inner clear signals first, so a hop hides the grid, still
+    /// reading the dropped action (`0x4952b3` comes before `0x4952bf`), and `CURSOR_UPDATE` reads
+    /// the emptied cursor before the displaced action goes on.
     #[test]
     fn a_bar_pickup_and_a_hop_signal_as_their_setters() {
         let s = {
@@ -489,7 +490,7 @@ mod tests {
         assert_eq!(
             crate::script::tick::heard::take(&s),
             [
-                "ACTIONBAR_HIDEGRID none",
+                "ACTIONBAR_HIDEGRID action",
                 "CURSOR_UPDATE none",
                 "ACTIONBAR_SHOWGRID action",
                 "CURSOR_UPDATE action"
@@ -499,7 +500,7 @@ mod tests {
         s.run("PlaceAction(3)").unwrap();
         assert_eq!(
             crate::script::tick::heard::take(&s),
-            ["ACTIONBAR_HIDEGRID none", "CURSOR_UPDATE none"]
+            ["ACTIONBAR_HIDEGRID action", "CURSOR_UPDATE none"]
         );
     }
 }

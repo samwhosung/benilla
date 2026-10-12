@@ -714,7 +714,7 @@ mod tests {
         assert_eq!(
             crate::script::tick::heard::take(&s),
             [
-                "ACTIONBAR_HIDEGRID none",
+                "ACTIONBAR_HIDEGRID macro",
                 "CURSOR_UPDATE none",
                 "ACTIONBAR_SHOWGRID macro"
             ]

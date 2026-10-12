@@ -1425,7 +1425,7 @@ mod tests {
         assert_eq!(
             heard::take(&s),
             [
-                "ACTIONBAR_HIDEGRID none Minor Healing Potion",
+                "ACTIONBAR_HIDEGRID item Minor Healing Potion",
                 "CURSOR_UPDATE none Minor Healing Potion",
                 "ACTIONBAR_SHOWGRID item Minor Healing Potion",
                 "CURSOR_UPDATE item Minor Healing Potion",

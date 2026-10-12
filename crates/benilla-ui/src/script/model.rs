@@ -1036,7 +1036,10 @@ pub(crate) struct Model {
     pub(crate) pending_events: Vec<(String, Vec<ScriptValue>)>,
     /// The events the running [`super::tick::verb`] segment has raised, fired in order once its
     /// model borrow drops; `None` outside a segment, where [`Model::raise`] queues instead.
-    pub(crate) verb_events: Option<Vec<(String, Vec<ScriptValue>)>>,
+    pub(crate) verb_events: Option<Vec<super::tick::Raised>>,
+    /// Set while a clear's own events fire with the payload it is dropping still showing
+    /// ([`super::tick::Raised::CursorView`]): whether that clear lifted a held item's lock.
+    pub(crate) cursor_view_unlocked: Option<bool>,
     /// The last cursor position in UI space (logical px, y-up), behind `GetCursorPosition()`.
     pub(crate) cursor_pos: (f32, f32),
 
@@ -1548,6 +1551,7 @@ impl Model {
             worldstate: super::worldstate::WorldStateUiState::default(),
             pending_events: Vec::new(),
             verb_events: None,
+            cursor_view_unlocked: None,
             cursor_pos: (0.0, 0.0),
             minimap_ping_request: None,
             minimap_ping: (0.0, 0.0),

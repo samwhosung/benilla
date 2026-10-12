@@ -40,12 +40,45 @@ impl Model {
     /// ([`Model::pending_events`]) for the next tick. So a helper shared by a Lua verb and a host
     /// path, such as the cursor's clear, fires in place for the one and queues for the other.
     pub(crate) fn raise(&mut self, event: &str, args: Vec<ScriptValue>) {
-        let raised = (event.to_string(), args);
         match &mut self.verb_events {
-            Some(segment) => segment.push(raised),
-            None => self.pending_events.push(raised),
+            Some(segment) => segment.push(Raised::Event(event.to_string(), args)),
+            None => self.pending_events.push((event.to_string(), args)),
         }
     }
+
+    /// Inside a [`verb`] segment, show `payload` on the cursor to the handlers of the events
+    /// raised until [`Model::end_cursor_view`], then put back the state the segment left. A
+    /// clear raises its own events this way, as `ClearCursor` signals before it zeroes the mode
+    /// (`0x4952bf`). `unlocked` says whether that clear lifted a held item's lock. The host queue
+    /// fires a tick later against the state then, so it takes no view.
+    pub(crate) fn view_cursor(
+        &mut self,
+        payload: Option<super::cursor::CursorPayload>,
+        unlocked: bool,
+    ) {
+        if let Some(segment) = &mut self.verb_events {
+            segment.push(Raised::CursorView(payload, unlocked));
+        }
+    }
+
+    /// End the view [`Model::view_cursor`] opened.
+    pub(crate) fn end_cursor_view(&mut self) {
+        if let Some(segment) = &mut self.verb_events {
+            segment.push(Raised::EndCursorView);
+        }
+    }
+}
+
+/// What a [`verb`] segment raised, in order.
+#[derive(Debug)]
+pub(crate) enum Raised {
+    /// An event, with its arguments.
+    Event(String, Vec<ScriptValue>),
+    /// Show this payload on the cursor until the matching [`Raised::EndCursorView`]; the flag says
+    /// whether the clear raising it lifted a held item's lock.
+    CursorView(Option<super::cursor::CursorPayload>, bool),
+    /// Put back the cursor the segment left.
+    EndCursorView,
 }
 
 /// Run one segment of a Lua verb with the model borrowed, then fire every event it raised, in
@@ -62,8 +95,25 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         let out = body(&mut model);
         (out, model.verb_events.take().unwrap_or_default())
     };
-    for (event, args) in raised {
-        fire_event_into(lua, &event, args);
+    // The cursors a view replaced, innermost last, with the flag each view replaced.
+    let mut hidden = Vec::new();
+    for raised in raised {
+        match raised {
+            Raised::Event(event, args) => fire_event_into(lua, &event, args),
+            Raised::CursorView(payload, unlocked) => {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
+                let real = std::mem::replace(&mut model.cursor, payload);
+                let flag = model.cursor_view_unlocked.replace(unlocked);
+                hidden.push((real, flag));
+            }
+            Raised::EndCursorView => {
+                if let Some((real, flag)) = hidden.pop() {
+                    let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
+                    model.cursor = real;
+                    model.cursor_view_unlocked = flag;
+                }
+            }
+        }
     }
     out
 }

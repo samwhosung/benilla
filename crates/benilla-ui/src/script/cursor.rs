@@ -2,8 +2,8 @@
 //! gestures ([`drag`]) that change it. The payload changes through two primitives, as in the
 //! reference: [`clear`], `ClearCursor(unlock, signal)` with its arm's events and its shared tail,
 //! and [`put`], a setter's install and its own tail. Every setter runs its inner clear first
-//! ([`set_cursor`] from a Lua verb, one segment each, so the clear's handlers read the emptied
-//! cursor), and every verb that drops a payload clears through [`clear`].
+//! ([`set_cursor`] from a Lua verb, one segment each, so the clear's `CURSOR_UPDATE` reads the
+//! emptied cursor before the set), and every verb that drops a payload clears through [`clear`].
 
 use mlua::Lua;
 
@@ -196,8 +196,16 @@ impl Clear {
 /// `ITEM_LOCK_CHANGED` when `unlock` (`0x4951d9`, `0x495455`), coins `PLAYER_MONEY` when `signal`
 /// (`0x495248`). Then the shared tail, on every call, an empty cursor included: a grid a setter
 /// showed hides, the pet bar's for a held pet action and the action bar's otherwise (`0x4952ac`,
-/// `0x4952b3`), and `CURSOR_UPDATE` fires on the emptied cursor (`0x4952cc`).
+/// `0x4952b3`). The mode is zeroed only then (`0x4952bf`), so those handlers still read the
+/// payload being dropped, coins already counted out (`0x495234`) and an unlocked item reading
+/// unlocked; `CURSOR_UPDATE` alone reads the emptied cursor (`0x4952cc`).
 pub(crate) fn clear(model: &mut Model, how: Clear) {
+    let held = model.cursor.take();
+    let shown = match &held {
+        Some(CursorPayload::Money(_)) => Some(CursorPayload::Money(CursorMoney { copper: 0 })),
+        other => other.clone(),
+    };
+    model.view_cursor(shown, how.unlock);
     // `0x5edf10`: the wrapping paper unlocks and the cursor mode returns to the base.
     if model.pending_wrap.take().is_some() {
         raise_lock_changed(model);
@@ -206,7 +214,6 @@ pub(crate) fn clear(model: &mut Model, how: Clear) {
     }
     // Coins go back to nothing, as the purse was never debited; a vendor row clears with no
     // packet (`0x49525f`).
-    let held = model.cursor.take();
     match &held {
         Some(CursorPayload::Item(_)) if how.unlock => raise_lock_changed(model),
         Some(CursorPayload::Money(_)) if how.signal_money => money::raise_player_money(model),
@@ -219,6 +226,7 @@ pub(crate) fn clear(model: &mut Model, how: Clear) {
             model.raise("ACTIONBAR_HIDEGRID", Vec::new());
         }
     }
+    model.end_cursor_view();
     model.raise("CURSOR_UPDATE", Vec::new());
 }
 
@@ -286,8 +294,8 @@ pub(crate) fn put(model: &mut Model, payload: CursorPayload) {
 }
 
 /// A cursor setter from a Lua verb. Its inner `ClearCursor(unlock, 1)` runs as one segment, so
-/// that clear's handlers read the emptied cursor as the reference's do; then `payload`, read
-/// past the clear, goes on with its tail as a second ([`put`]). `None` leaves the cursor clear,
+/// that clear's `CURSOR_UPDATE` reads the emptied cursor as the reference's does; then `payload`,
+/// read past the clear, goes on with its tail as a second ([`put`]). `None` leaves the cursor clear,
 /// as `SetCursorItem` with a zero guid (`0x494bc5`) or a stable grab whose slot fails its check
 /// past the clear (`0x49505e`). Only `SetCursorItem` passes `unlock` through; every other setter
 /// clears with `ClearCursor(1,1)`. Returns whether a payload went on.
@@ -338,7 +346,9 @@ pub(crate) fn raise_lock_changed(model: &mut Model) {
 /// leaves it. The app's pending operations are the slot's `locked`.
 pub(crate) fn client_locked(model: &Model, bag: i64, slot: u32) -> bool {
     let at = |item: &CursorItem| item.bag == bag && item.slot == slot;
-    matches!(&model.cursor, Some(CursorPayload::Item(item)) if at(item))
+    // A clear that lifted the lock shows its item to its own handlers unlocked.
+    let held_locked = model.cursor_view_unlocked != Some(true);
+    (held_locked && matches!(&model.cursor, Some(CursorPayload::Item(item)) if at(item)))
         || model
             .pending_wrap
             .as_ref()
@@ -897,7 +907,8 @@ mod tests {
     /// the reference's does: `SetCursorItem`'s inner clear on the empty cursor (`0x4952cc`), then
     /// the grid before `CURSOR_UPDATE` (`0x494c3b`, `0x494c54`), then the lock (`0x495415`). The
     /// same-slot click that puts it back is `ClearCursor(1,1)` (`0x4f9e0e`): the unlock
-    /// (`0x495455`), the grid hide (`0x4952b3`), then `CURSOR_UPDATE` (`0x4952cc`).
+    /// (`0x495455`) and the grid hide (`0x4952b3`) while the mode still holds the item, the slot
+    /// already unlocked, then `CURSOR_UPDATE` (`0x4952cc`) past the mode's zeroing (`0x4952bf`).
     #[test]
     fn a_pickup_fires_its_events_before_it_returns() {
         let mut s = UiScript::new().unwrap();
@@ -910,7 +921,10 @@ mod tests {
                 "CURSOR_UPDATE",
                 "ITEM_LOCK_CHANGED",
             ],
-            Some("CursorHasItem()"),
+            Some(&format!(
+                "tostring(CursorHasItem()) .. ' ' .. tostring({})",
+                super::bag_lock_probe(1)
+            )),
         );
         let seen: Vec<String> = s
             .eval("PickupContainerItem(0, 1) local h = HEARD HEARD = {} return h")
@@ -918,10 +932,10 @@ mod tests {
         assert_eq!(
             seen,
             [
-                "CURSOR_UPDATE nil",
-                "ACTIONBAR_SHOWGRID 1",
-                "CURSOR_UPDATE 1",
-                "ITEM_LOCK_CHANGED 1"
+                "CURSOR_UPDATE nil nil",
+                "ACTIONBAR_SHOWGRID 1 1",
+                "CURSOR_UPDATE 1 1",
+                "ITEM_LOCK_CHANGED 1 1"
             ]
         );
         let seen: Vec<String> = s
@@ -930,9 +944,9 @@ mod tests {
         assert_eq!(
             seen,
             [
-                "ITEM_LOCK_CHANGED nil",
-                "ACTIONBAR_HIDEGRID nil",
-                "CURSOR_UPDATE nil"
+                "ITEM_LOCK_CHANGED 1 nil",
+                "ACTIONBAR_HIDEGRID 1 nil",
+                "CURSOR_UPDATE nil nil"
             ]
         );
         assert!(s.model_ref().pending_events.is_empty());
@@ -1140,8 +1154,8 @@ mod tests {
         assert_eq!(
             heard::take(&s),
             [
-                "ITEM_LOCK_CHANGED none",
-                "ACTIONBAR_HIDEGRID none",
+                "ITEM_LOCK_CHANGED item",
+                "ACTIONBAR_HIDEGRID item",
                 "CURSOR_UPDATE none",
                 "PLAYER_MONEY money"
             ]
