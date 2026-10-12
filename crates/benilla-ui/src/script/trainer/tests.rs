@@ -685,3 +685,19 @@ fn talent_order_sorts_on_state_within_a_group() {
     let got: Vec<String> = visible(&mut s).into_iter().map(|(n, _)| n).collect();
     assert_eq!(got, ["Riding", "Aye", "Bee", "Cee"]);
 }
+
+/// The mask commits fire `TRAINER_UPDATE` inside the verb, after the re-filter (`0x4d8410`, then
+/// `0x4d8ca0`/`0x4d8ce0`): a handler reads the filtered tree before the next Lua line runs.
+#[test]
+fn the_filter_and_collapse_verbs_fire_trainer_update_in_place() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trainer(Some(trainer()));
+    crate::script::tick::heard::listen(&s, &["TRAINER_UPDATE"], Some("GetNumTrainerServices()"));
+    let seen: Vec<String> = s
+        .eval(
+            "SetTrainerServiceTypeFilter('used', 0) local h = HEARD HEARD = {} \
+             CollapseTrainerSkillLine(1) table.insert(h, HEARD[1]) return h",
+        )
+        .unwrap();
+    assert_eq!(seen, ["TRAINER_UPDATE 4", "TRAINER_UPDATE 3"]);
+}

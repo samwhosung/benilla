@@ -80,18 +80,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // `0x48df30` runs the generic cancel-aura (`0x6e7040`): the event, then `0x136` with
-    // `u32 2584`, no guid. Its refusal gate (`AttributesEx` bit 13 set, bit 2 clear, then
-    // `0x5ee290`) never trips for 2584 in the shipped `Spell.dbc` (the app's
-    // `spell_2584_never_trips_the_cancel_gate`), so the send is unconditional.
+    // `0x48df30` runs the generic cancel-aura (`0x4923a0` → `0x6e7040`): the event in place
+    // (`0x6e70c3`), then `0x136` with `u32 2584`, no guid. Its refusal gate (`AttributesEx` bit 13
+    // set, bit 2 clear, then `0x5ee290`) never trips for 2584 in the shipped `Spell.dbc` (the
+    // app's `spell_2584_never_trips_the_cancel_gate`), so the send is unconditional.
     g.set(
         "CancelAreaSpiritHeal",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .pending_events
-                .push(("AREA_SPIRIT_HEALER_OUT_OF_RANGE".to_string(), Vec::new()));
-            model.cancel_aura_requests.push(AREA_SPIRIT_HEALER_SPELL);
+            super::tick::verb(lua, |model| {
+                model.raise("AREA_SPIRIT_HEALER_OUT_OF_RANGE", Vec::new());
+                model.cancel_aura_requests.push(AREA_SPIRIT_HEALER_SPELL);
+            });
             Ok(())
         })?,
     )?;

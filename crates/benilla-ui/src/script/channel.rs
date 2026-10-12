@@ -209,20 +209,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     "SetGuildRecruitmentMode: invalid mode",
                 ));
             }
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let mode = n as u8;
-            if model.guild_recruitment_mode != mode {
-                model.guild_recruitment_mode = mode;
-                model.guild_recruitment_changed = true;
-            }
-            // `0x49ea79 jne` / `0x49ea7b jmp 0x49ea90`: the cascade, on the new value alone.
-            if mode == 1 {
-                model.guild_recruitment_cascade = true;
-            }
-            // `0x4a00a4`/`0x4a00a9`: `UPDATE_CHAT_WINDOWS`, on every successful call.
-            model
-                .pending_events
-                .push(("UPDATE_CHAT_WINDOWS".to_string(), Vec::new()));
+            super::tick::verb(lua, |model| {
+                let mode = n as u8;
+                if model.guild_recruitment_mode != mode {
+                    model.guild_recruitment_mode = mode;
+                    model.guild_recruitment_changed = true;
+                }
+                // `0x49ea79 jne` / `0x49ea7b jmp 0x49ea90`: the cascade, on the new value alone.
+                if mode == 1 {
+                    model.guild_recruitment_cascade = true;
+                }
+                // `0x4a00a4`/`0x4a00a9`: `UPDATE_CHAT_WINDOWS`, on every successful call, in place.
+                model.raise("UPDATE_CHAT_WINDOWS", Vec::new());
+            });
             Ok(())
         })?,
     )?;

@@ -204,8 +204,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Never raises; a stored filter fires `UPDATE_BATTLEFIELD_SCORE` (`0x4abc90`), here on the
-    // next dispatch.
+    // Never raises; a stored filter rebuilds the board and fires `UPDATE_BATTLEFIELD_SCORE` in
+    // place (`0x4abc90` → `0x4aa200`, the signal at `0x4aa308`).
     g.set(
         "SetBattlefieldScoreFaction",
         lua.create_function(|lua, faction: Option<Value>| {
@@ -213,12 +213,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if !(-1..=1).contains(&f) {
                 return Ok(());
             }
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.battlefield_board.filter = f;
-            model.battlefield_board.rebuild();
-            model
-                .pending_events
-                .push(("UPDATE_BATTLEFIELD_SCORE".to_string(), Vec::new()));
+            super::tick::verb(lua, |model| {
+                model.battlefield_board.filter = f;
+                model.battlefield_board.rebuild();
+                model.raise("UPDATE_BATTLEFIELD_SCORE", Vec::new());
+            });
             Ok(())
         })?,
     )?;
