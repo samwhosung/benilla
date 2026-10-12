@@ -629,7 +629,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
     // GameTooltip:SetShapeshift(index): the stance-bar hover, the form's spell tooltip. It answers
-    // the builder's return value, 1 or nil (`0x5328aa`).
+    // the builder's return value, 1 or nil, with a cooldown running (`0x532a89`).
     m.set(
         "SetShapeshift",
         lua.create_function(|lua, (this, index): (Table, usize)| {
@@ -649,16 +649,17 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 remaining_ms,
                 ..Default::default()
             };
-            Ok(flag(set_spell_flagged(
-                lua, &this, spell_id, name, opts, None,
-            )?))
+            // The builder's value is read only on the running-cooldown leg (`0x532a89`); the
+            // other leg builds with a zero remainder and pushes nil (`0x532abe`, `0x532ac3`).
+            let live = set_spell_flagged(lua, &this, spell_id, name, opts, None)?;
+            Ok(flag(remaining_ms > 0 && live))
         })?,
     )?;
     // GameTooltip:SetPetAction(index): the pet-bar hover for a spell slot, built against the pet
     // (the unit selector, pushed at `0x532888` and `0x5328d0`); the stock
     // `PetActionButton_OnEnter` builds a token's tooltip itself (`PetActionBarFrame.lua:290`). A
     // slot with no spell is a no-op answering nil; a spell slot answers the builder's return value,
-    // 1 or nil (`0x5328aa`).
+    // 1 or nil, with a cooldown running (`0x5328ca`).
     m.set(
         "SetPetAction",
         lua.create_function(|lua, (this, index): (Table, usize)| {
@@ -683,9 +684,10 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 remaining_ms,
                 ..Default::default()
             };
-            Ok(flag(set_spell_flagged(
-                lua, &this, spell_id, name, opts, None,
-            )?))
+            // As `SetShapeshift`: the builder's value counts only with a cooldown running
+            // (`0x5328aa`; the other leg builds and pushes nil, `0x5328dc`, `0x5328e1`).
+            let live = set_spell_flagged(lua, &this, spell_id, name, opts, None)?;
+            Ok(flag(remaining_ms > 0 && live))
         })?,
     )?;
     // GameTooltip:SetPlayerBuff(buffIndex): the aura variant plus the time-remaining line only
@@ -858,9 +860,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (0x00) to the spell builder `0x52e610`, an item (0x80) to the item builder `0x52b650`, a
     // macro (0x40) to `0x52b040`, which fetches it (`0x4f0f40`) and renders only its name, white
     // (`0x5303b0` in colour `0xc0cf60`), or hides with none; 1.12 has no `#showtooltip`. It
-    // answers the spell or item builder's return value as 1 or nil (`0x5325a9`), nil for the
-    // macro leg, an empty slot and any other kind; `ActionButton_SetTooltip` arms `updateTooltip`
-    // from it.
+    // answers the spell or item builder's return value as 1 or nil (`0x5325a9`), the spell's only
+    // with a cooldown running, nil for the macro leg, an empty slot and any other kind;
+    // `ActionButton_SetTooltip` arms `updateTooltip` from it.
     m.set(
         "SetAction",
         lua.create_function(|lua, (this, slot): (Table, u32)| {
@@ -876,18 +878,24 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 return Ok(Value::Nil);
             };
             match a.kind {
-                0x00 => Ok(flag(set_spell_flagged(
-                    lua,
-                    &this,
-                    a.action,
-                    None,
-                    SpellRenderOpts {
-                        show_rank: true,
-                        remaining_ms,
-                        ..Default::default()
-                    },
-                    None,
-                )?)),
+                // The builder's value counts only with a cooldown running (`0x532597`); the other
+                // leg builds with a zero remainder and pushes nil (`0x53267c`, `0x532690`), so
+                // Attack, Parry, Block and Dodge answer nil here, whatever their chance line.
+                0x00 => {
+                    let live = set_spell_flagged(
+                        lua,
+                        &this,
+                        a.action,
+                        None,
+                        SpellRenderOpts {
+                            show_rank: true,
+                            remaining_ms,
+                            ..Default::default()
+                        },
+                        None,
+                    )?;
+                    Ok(flag(remaining_ms > 0 && live))
+                }
                 // The item builder's block takes the same live cooldown (`0x5324d5`), whose
                 // ITEM_COOLDOWN_TIME line (not built) sets the return value (`0x52e140`).
                 0x80 => Ok(flag(

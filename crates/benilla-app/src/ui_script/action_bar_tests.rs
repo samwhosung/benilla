@@ -403,7 +403,8 @@ fn a_spell_tooltip_with_a_live_line_arms_the_stock_refresh() {
     leave_and_enter(&mut s);
     assert_eq!(armed(&mut s), None);
 
-    // A chance line alone arms it (a passive's changing stat), with no cooldown running.
+    // A chance line alone does not: `SetAction` reads the builder's value only with a cooldown
+    // running (`0x532597`; the other leg pushes nil, `0x532690`), so a passive answers nil.
     s.set_action_state(
         1,
         Some(ActionState {
@@ -412,6 +413,10 @@ fn a_spell_tooltip_with_a_live_line_arms_the_stock_refresh() {
         }),
     );
     s.set_spell_tooltip(871, view("Instant", 0, Some("5.00% chance to parry")));
+    leave_and_enter(&mut s);
+    assert_eq!(armed(&mut s), None);
+    // With a cooldown running it does, whatever the spell's recovery.
+    s.set_action_state(1, Some(running(30_000)));
     leave_and_enter(&mut s);
     assert!(armed(&mut s).is_some_and(|t| t > 0.0));
 

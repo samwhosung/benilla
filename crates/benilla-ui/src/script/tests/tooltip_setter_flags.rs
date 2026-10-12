@@ -103,6 +103,10 @@ fn set_shapeshift_and_set_pet_action_answer_the_same_flag() {
     let mut s = fixture();
     s.set_spell_tooltip(871, view(1_800_000, None));
     s.set_pet_spell_tooltip(871, view(1_800_000, None));
+    // A chance line is a changing line too, but these setters read the builder's value only with
+    // a cooldown running (`0x532a89`, `0x5328aa`).
+    s.set_spell_tooltip(873, view(0, Some("5.00% chance to parry")));
+    s.set_pet_spell_tooltip(873, view(0, Some("5.00% chance to parry")));
     s.set_shapeshift_forms(vec![
         ShapeshiftFormView {
             spell_id: 871,
@@ -115,6 +119,17 @@ fn set_shapeshift_and_set_pet_action_answer_the_same_flag() {
             name: "Defensive Stance".into(),
             ..Default::default()
         },
+        ShapeshiftFormView {
+            spell_id: 873,
+            name: "Parry".into(),
+            ..Default::default()
+        },
+        ShapeshiftFormView {
+            spell_id: 873,
+            name: "Parry".into(),
+            cooldown: RUNNING_30_MIN,
+            ..Default::default()
+        },
     ]);
     let pet = |cooldown| PetActionView {
         name: Some("Shield Wall".into()),
@@ -122,13 +137,31 @@ fn set_shapeshift_and_set_pet_action_answer_the_same_flag() {
         cooldown,
         ..Default::default()
     };
-    s.set_pet_actions(true, true, true, vec![pet(RUNNING_30_MIN), pet(None)]);
+    let chance_pet = |cooldown| PetActionView {
+        spell_id: Some(873),
+        ..pet(cooldown)
+    };
+    s.set_pet_actions(
+        true,
+        true,
+        true,
+        vec![
+            pet(RUNNING_30_MIN),
+            pet(None),
+            chance_pet(None),
+            chance_pet(RUNNING_30_MIN),
+        ],
+    );
     for (call, want) in [
         ("TT:SetShapeshift(1)", "1:number:1"),
         ("TT:SetShapeshift(2)", "1:nil:nil"),
+        ("TT:SetShapeshift(3)", "1:nil:nil"),
+        ("TT:SetShapeshift(4)", "1:number:1"),
         ("TT:SetShapeshift(9)", "1:nil:nil"),
         ("TT:SetPetAction(1)", "1:number:1"),
         ("TT:SetPetAction(2)", "1:nil:nil"),
+        ("TT:SetPetAction(3)", "1:nil:nil"),
+        ("TT:SetPetAction(4)", "1:number:1"),
         ("TT:SetPetAction(9)", "1:nil:nil"),
     ] {
         assert_eq!(show(&s, call), want, "{call}");
@@ -182,6 +215,10 @@ fn set_action_answers_the_builders_flag_by_kind() {
     put(&mut s, 4, 0x80, 6948, None);
     put(&mut s, 5, 0x40, 1, RUNNING_30_MIN);
     put(&mut s, 6, 0xC0, 1, RUNNING_30_MIN);
+    // Attack, Parry, Block and Dodge carry the chance line: nil without a running cooldown.
+    s.set_spell_tooltip(873, view(0, Some("5.00% chance to parry")));
+    put(&mut s, 8, 0x00, 873, None);
+    put(&mut s, 9, 0x00, 873, RUNNING_30_MIN);
     for (id, want) in [
         (1, "1:number:1"),
         (2, "1:nil:nil"),
@@ -190,6 +227,8 @@ fn set_action_answers_the_builders_flag_by_kind() {
         (5, "1:nil:nil"),
         (6, "1:nil:nil"),
         (7, "1:nil:nil"),
+        (8, "1:nil:nil"),
+        (9, "1:number:1"),
     ] {
         assert_eq!(
             show(&s, &format!("TT:SetAction({id})")),
