@@ -145,6 +145,7 @@ fn load_glue_layer(script: &UiScript) -> Vec<String> {
         benilla_ui::toc::Toc {
             directives: Vec::new(),
             files: files.clone(),
+            ..Default::default()
         },
         super::addons::Source::Builtin,
     );

@@ -333,7 +333,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // One argument, keyed on the logged-in character (`0x48e690`, `0x48e760`, via `0x5abdc0`);
     // the `(character, index)` form is the glue's (`0x46d7b0`, `0x46d8a0`). A name goes to the
     // setter as the caller spelled it (`0x6f3690`), installed or not: the setter never checks the
-    // installed list, and inserts a row for a name its hash lacks (`0x51eb06`-`0x51eb62`).
+    // installed list, and a name its hash lacks gets a new node (`0x51eaf2`, allocated `0x51eb62`,
+    // appended at the tail with the state at `0x51eb6f`).
     for (name, on, usage) in [
         ("EnableAddOn", true, USAGE_ENABLE),
         ("DisableAddOn", false, USAGE_DISABLE),

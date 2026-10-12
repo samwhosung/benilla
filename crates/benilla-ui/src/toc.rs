@@ -9,6 +9,10 @@ pub struct Toc {
     pub directives: Vec<(String, String)>,
     /// Files to load, in order, as written; separators are normalized at load time.
     pub files: Vec<String>,
+    /// Indices into [`Self::directives`] whose key had whitespace before its colon
+    /// (`## LoadWith : X`). A key the reference compares with its colon (`LoadWith:`, `0x8537a8`)
+    /// does not match such a line.
+    gapped: Vec<usize>,
 }
 
 /// Case-insensitive ASCII prefix test, the reference's `SStrCmpI(line, key, SStrLen(key))`.
@@ -30,10 +34,13 @@ impl Toc {
             if let Some(directive) = line.strip_prefix("##") {
                 // `##` with no colon is a comment, as the client tolerates it.
                 if let Some((key, value)) = directive.split_once(':') {
-                    let key = key.trim();
-                    if !key.is_empty() {
+                    let trimmed = key.trim();
+                    if !trimmed.is_empty() {
+                        if key.trim_end().len() != key.len() {
+                            toc.gapped.push(toc.directives.len());
+                        }
                         toc.directives
-                            .push((key.to_string(), value.trim().to_string()));
+                            .push((trimmed.to_string(), value.trim().to_string()));
                     }
                 }
             } else if !line.starts_with('#') {
@@ -102,11 +109,19 @@ impl Toc {
         self.list_where(|k| starts_with_ci(k, "OptionalDep"))
     }
 
-    /// `## LoadWith:`, the addons whose load loads this one: `Toc_Parse` matches the key `LoadWith:`
-    /// whole (`0x51ceaa`, the string `0x8537a8`) and tokenizes the value like the other lists
-    /// (`0x51cee7`), into the array at `[rec+0x60]`.
+    /// `## LoadWith:`, the addons whose load loads this one. `Toc_Parse` compares the 9 bytes
+    /// `LoadWith:` (`0x8537a8`, `SStrCmpI` with `SStrLen`, `0x51ceaa`) against the line once the
+    /// spaces after `##` are skipped (`0x51cc3a`-`0x51cc56`), so the colon must follow the key
+    /// directly: `## LoadWith : X` is not this directive. The value tokenizes like the other lists
+    /// (`0x51cef7`), into the array at `[rec+0x60]`.
     pub fn load_with(&self) -> Vec<&str> {
-        self.list("LoadWith")
+        self.directives
+            .iter()
+            .enumerate()
+            .filter(|(i, (k, _))| k.eq_ignore_ascii_case("LoadWith") && !self.gapped.contains(i))
+            .flat_map(|(_, (_, v))| v.split([',', ' ']).map(str::trim))
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     /// `## LoadOnDemand: 1`, which stock 1.12 addons such as `Blizzard_TalentUI` carry.
@@ -237,12 +252,14 @@ mod tests {
         assert!(!toc.dependencies().contains(&"LibC"));
     }
 
-    /// `Toc_Parse` matches the whole key `LoadWith:` (`0x51ceaa`), not a prefix as it does `Dep`.
+    /// `Toc_Parse` compares the 9 bytes `LoadWith:` (`0x51ceaa`): a longer key, or a space before
+    /// the colon, is not it, where `Dep` is a bare prefix.
     #[test]
     fn load_with_is_a_list_of_its_own_key() {
         let toc = Toc::parse(
             "## LoadWith: KLHThreatMeter, Other\n\
              ## loadwith: Third\n\
+             ## LoadWith : Spaced\n\
              ## LoadWithAll: Nope\n\
              ## Dependencies: LibA\n",
         );

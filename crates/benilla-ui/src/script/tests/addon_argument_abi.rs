@@ -155,8 +155,10 @@ fn an_unknown_name_echoes_itself_rather_than_a_placeholder_literal() {
 
 /// `EnableAddOn 0x48e690` and `DisableAddOn 0x48e760` pass a name to the setter `0x51ea20` as the
 /// caller spelled it, and the setter never looks at the installed list: a name it lacks gets a
-/// row (`0x51eb06`-`0x51eb62`) for the logout writer, while `GetAddOnInfo` still answers the
-/// missing-addon values (`0x51e470` resolves the installed list first).
+/// node (`0x51eaf2`-`0x51eb6f`) for the logout writer. In the session `GetAddOnInfo` still answers
+/// the missing-addon values: its enable query `0x51e470` (called at `0x48e44b`) answers 0 for an
+/// uninstalled name (`0x51e4cb` to `0x51e640`), and `MISSING` comes from `AddOn_CanLoad`'s
+/// registry miss (`0x51e7fe`, `0x51e803`).
 #[test]
 fn a_name_nothing_installed_answers_to_still_gets_its_enable_row() {
     let s = seeded();

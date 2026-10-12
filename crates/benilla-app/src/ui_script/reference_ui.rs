@@ -90,6 +90,7 @@ fn named_addon(name: &str, files: Vec<String>) -> Addon {
         Toc {
             directives: Vec::new(),
             files,
+            ..Default::default()
         },
         Source::Chain,
     )
