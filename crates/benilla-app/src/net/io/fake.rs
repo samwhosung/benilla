@@ -257,25 +257,93 @@ fn send(s: &mut TcpStream, crypto: Option<&mut HeaderCrypto>, op: u16, body: &[u
     let _ = s.write_all(body);
 }
 
-/// A client packet's opcode, reading past its body: `u16` BE size counting the 4-byte opcode.
-fn recv(s: &mut TcpStream, crypto: Option<&mut HeaderCrypto>) -> Option<u16> {
+/// A client packet as it left the client, header decrypted: `u16` BE size counting the 4-byte
+/// opcode, `u32` LE opcode, the body.
+fn recv_packet(s: &mut TcpStream, crypto: Option<&mut HeaderCrypto>) -> Option<Vec<u8>> {
     let mut header = [0u8; 6];
     s.read_exact(&mut header).ok()?;
     if let Some(c) = crypto {
         c.decrypter().decrypt(&mut header);
     }
     let size = usize::from(u16::from_be_bytes([header[0], header[1]]));
-    s.read_exact(&mut vec![0u8; size.saturating_sub(4)]).ok()?;
-    Some(u16::from_le_bytes([header[2], header[3]]))
+    let mut packet = header.to_vec();
+    packet.resize(2 + size, 0);
+    s.read_exact(&mut packet[6..]).ok()?;
+    Some(packet)
+}
+
+/// A client packet's opcode, reading past its body.
+fn recv(s: &mut TcpStream, crypto: Option<&mut HeaderCrypto>) -> Option<u16> {
+    let packet = recv_packet(s, crypto)?;
+    Some(u16::from_le_bytes([packet[2], packet[3]]))
+}
+
+/// An `SMSG_CHAR_ENUM` body for `characters`, in the order the client parses it
+/// (`Character::read`, the reference's `0x5b42a0`).
+pub(crate) fn char_enum_body(characters: &[benilla_protocol::Character]) -> Vec<u8> {
+    let mut b = vec![characters.len() as u8];
+    for c in characters {
+        b.extend_from_slice(&c.guid.to_le_bytes());
+        b.extend_from_slice(c.name.as_bytes());
+        b.push(0);
+        b.extend_from_slice(&[
+            c.race,
+            c.class,
+            c.gender,
+            c.skin,
+            c.face,
+            c.hair_style,
+            c.hair_color,
+            c.facial_hair,
+            c.level,
+        ]);
+        b.extend_from_slice(&c.zone.to_le_bytes());
+        b.extend_from_slice(&c.map.to_le_bytes());
+        for v in [c.position.x, c.position.y, c.position.z] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b.extend_from_slice(&0u32.to_le_bytes()); // guild
+        b.extend_from_slice(&c.flags.to_le_bytes());
+        b.push(0); // first login
+        for v in [c.pet_display_id, c.pet_level, c.pet_family] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        for item in &c.equipment {
+            b.extend_from_slice(&item.display_id.to_le_bytes());
+            b.push(item.inventory_type);
+        }
+        b.extend_from_slice(&0u32.to_le_bytes()); // first bag
+        b.push(0);
+    }
+    b
 }
 
 /// The fake world server's record: every opcode the client sent, and the sessions still open.
 pub(crate) struct World {
     pub(crate) sent: Arc<Mutex<Vec<u16>>>,
+    /// Every packet the client sent, header decrypted, as [`recv_packet`] reads it.
+    pub(crate) packets: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// The `SMSG_CHAR_ENUM` body each `CMSG_CHAR_ENUM` is answered with: no characters until set.
+    roster: Arc<Mutex<Vec<u8>>>,
     open: Arc<AtomicUsize>,
 }
 
 impl World {
+    /// The characters the account holds from now on.
+    pub(crate) fn set_roster(&self, characters: &[benilla_protocol::Character]) {
+        *self.roster.lock().unwrap() = char_enum_body(characters);
+    }
+
+    /// How many `CMSG_CHAR_ENUM` the client has sent.
+    pub(crate) fn enumerations(&self) -> usize {
+        self.sent
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|&&op| op == opcode::CMSG_CHAR_ENUM)
+            .count()
+    }
+
     /// Sessions the client still holds.
     pub(crate) fn open(&self) -> usize {
         self.open.load(Ordering::SeqCst)
@@ -283,11 +351,15 @@ impl World {
 }
 
 /// A world server whose account has no characters: it admits each session under the latest key
-/// realmd made, answers every `CMSG_CHAR_ENUM` with an empty roster and a `CMSG_CHAR_CREATE` with
-/// success, and logs every opcode the client sends.
+/// realmd made, answers every `CMSG_CHAR_ENUM` with its roster (empty until [`World::set_roster`])
+/// and a `CMSG_CHAR_CREATE` with success, and logs every opcode the client sends.
 pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let sent = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&sent);
+    let packets = Arc::new(Mutex::new(Vec::new()));
+    let packet_log = Arc::clone(&packets);
+    let roster = Arc::new(Mutex::new(vec![0u8]));
+    let roster_body = Arc::clone(&roster);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
     thread::spawn(move || {
@@ -322,14 +394,19 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                 &[messages::AUTH_OK],
             );
             let log = Arc::clone(&log);
+            let packet_log = Arc::clone(&packet_log);
+            let roster_body = Arc::clone(&roster_body);
             let sessions = Arc::clone(&sessions);
             sessions.fetch_add(1, Ordering::SeqCst);
             thread::spawn(move || {
-                while let Some(op) = recv(&mut s, Some(&mut crypto)) {
+                while let Some(packet) = recv_packet(&mut s, Some(&mut crypto)) {
+                    let op = u16::from_le_bytes([packet[2], packet[3]]);
                     log.lock().unwrap().push(op);
+                    packet_log.lock().unwrap().push(packet);
                     match op {
                         opcode::CMSG_CHAR_ENUM => {
-                            send(&mut s, Some(&mut crypto), opcode::SMSG_CHAR_ENUM, &[0]);
+                            let body = roster_body.lock().unwrap().clone();
+                            send(&mut s, Some(&mut crypto), opcode::SMSG_CHAR_ENUM, &body);
                         }
                         opcode::CMSG_CHAR_CREATE => send(
                             &mut s,
@@ -344,7 +421,12 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             });
         }
     });
-    World { sent, open }
+    World {
+        sent,
+        packets,
+        roster,
+        open,
+    }
 }
 
 /// A fake realmd listing `realms` and the world server they point at. `realms` takes the world's

@@ -393,6 +393,9 @@ pub(crate) enum CharRequest {
     Delete(u64),
     /// Select's Back: drop the session and return to the pre-logon park.
     Abandon,
+    /// Fetch the roster again (`CMSG_CHAR_ENUM`) on the parked session, then stay parked with
+    /// the fresh roster: `GetCharacterListUpdate`, which the stock screen calls whenever it shows.
+    Enumerate,
 }
 
 /// The realm channel: the answer to each [`RealmListMessage`]. Two parks listen, the login-side

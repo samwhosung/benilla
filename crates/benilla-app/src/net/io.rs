@@ -153,6 +153,8 @@ enum Parked {
     Play(u64),
     /// A create or delete was serviced in place; its result byte still has to go out.
     Acted(CharAction, u8),
+    /// `CMSG_CHAR_ENUM` was serviced in place; the roster is re-emitted, with no result.
+    Listed,
     /// Stay parked: a realm-list refresh, or a Cancel over this screen.
     StayPut,
     /// Drop the parked world session and dial this realm under the abandon generation its ask
@@ -729,6 +731,13 @@ fn world(
                     Ok(CharRequest::Delete(target)) => {
                         Parked::Acted(CharAction::Delete, session.delete_character(target)?)
                     }
+                    // `GetCharacterListUpdate` (`0x4723d0` → `0x46b880` → `0x5aabb0` → `0x5b4690`):
+                    // the reference asks the world server again whenever the glue screen wants
+                    // the list.
+                    Ok(CharRequest::Enumerate) => {
+                        characters = session.char_enum()?;
+                        Parked::Listed
+                    }
                 },
                 recv(login_rx) -> msg => msg.map_or(Parked::Exit, Parked::Login),
             };
@@ -744,6 +753,18 @@ fn world(
                 }
                 Parked::Leave => return Ok(WorldEnd::Failed),
                 Parked::Acted(action, code) => (action, code),
+                Parked::Listed => {
+                    if events_tx
+                        .send(SessionEvent::CharacterList {
+                            characters: characters.clone(),
+                            realm: Some(realm.clone()),
+                        })
+                        .is_err()
+                    {
+                        return Ok(WorldEnd::Cycle(Cycle::Exit));
+                    }
+                    continue;
+                }
             };
             // A success changed the roster: re-emit it before the result, so the screen has the
             // fresh list when it reacts.
