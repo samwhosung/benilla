@@ -107,8 +107,11 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         let out = body(&mut model);
         (out, model.verb_events.take().unwrap_or_default())
     };
-    // The body's lock changes are rolled back, then replayed in place, each as a delta, so a
-    // nested verb's own changes survive.
+    // The body's lock changes are rolled back, then replayed in place as the absolute writes they
+    // were, in the reference's order against the handlers: a nested verb's change to the same item
+    // between two of them is overwritten by the later write, as the reference's later `LockItem`
+    // or `UnlockItem` would overwrite it. What the body cannot match is a read: it ran before any
+    // handler, so it never sees a handler's change.
     {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
         for raised in raised.iter().rev() {

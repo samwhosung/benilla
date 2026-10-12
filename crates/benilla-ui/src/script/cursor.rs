@@ -649,9 +649,14 @@ impl super::UiScript {
         self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
     }
 
-    /// The unlock-all (`0x495460`), on the revive edge (`0x5fefae`): every item lock lifts, then
-    /// one `ITEM_LOCK_CHANGED` (`0x49557d`). The reference's walk of a bag's contents indexes by
-    /// the outer slot (`0x495528`), a bug that reaches one item per bag; every lock lifts here.
+    /// The unlock-all (`0x495460`), on the revive edge (`0x5fefae`): the player array's items
+    /// unlock, then one `ITEM_LOCK_CHANGED` (`0x49557d`).
+    ///
+    /// Deviation: every lock lifts here, bag contents included. The reference's walk of a bag's
+    /// contents indexes the bag by its own player-array index (`0x495528`, `0x495535`), at least
+    /// 19, past a bag's slots in every case but the biggest bags, so it normally unlocks none of
+    /// them; a lock it strands lasts until the item's seat or stack moves, which this does not
+    /// copy.
     pub fn unlock_all_items(&mut self) {
         self.model_mut().item_locks.clear();
         self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
