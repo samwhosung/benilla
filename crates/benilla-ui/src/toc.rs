@@ -181,6 +181,26 @@ impl Toc {
             .map(|d| d.value.as_str())
     }
 
+    /// What `GetAddOnMetadata` can answer: the lines of the kinds that reach the metadata map
+    /// (`0x51d580`, called from `0x51d3c6`) -- `Title`, `Notes`, `Author`, `Version` and `X-*` --
+    /// as `(key, value)` in file order. The typed directives jump to `0x51d3d0` without it, so
+    /// `GetAddOnMetadata(addon, "Interface")` is nil. The value is read past any colons and
+    /// spaces (`0x51d610`).
+    pub fn metadata(&self) -> Vec<(String, String)> {
+        let kept = [
+            Kind::Title,
+            Kind::Notes,
+            Kind::Author,
+            Kind::Version,
+            Kind::Extra,
+        ];
+        self.directives
+            .iter()
+            .filter(|d| d.kind().is_some_and(|k| kept.contains(&k)))
+            .map(|d| (d.key.clone(), d.scalar().to_string()))
+            .collect()
+    }
+
     /// The directives the reader claims for `kind`, in file order.
     fn of(&self, kind: Kind) -> impl Iterator<Item = &Directive> {
         self.directives
@@ -522,6 +542,26 @@ mod tests {
         assert!(
             !Toc::parse("## Title: x\n").load_on_demand(),
             "absent is false"
+        );
+    }
+
+    /// Only the lines the reader hands the metadata map (`0x51d580`) are metadata.
+    #[test]
+    fn metadata_is_what_the_reader_stores_in_its_map() {
+        let toc = Toc::parse(
+            "## Interface: 11200\n## Title : T\n## Notes: N\n## Author: A\n## Version: 1\n\
+             ## X-Website:: http://x\n## SavedVariables: V\n## Dependencies: D\n## Includes: I\n",
+        );
+        let keys: Vec<(String, String)> = toc.metadata();
+        assert_eq!(
+            keys,
+            vec![
+                ("Title".into(), "T".into()),
+                ("Notes".into(), "N".into()),
+                ("Author".into(), "A".into()),
+                ("Version".into(), "1".into()),
+                ("X-Website".into(), "http://x".into()),
+            ]
         );
     }
 

@@ -437,11 +437,7 @@ pub(crate) fn info_from_toc(name: &str, toc: &Toc, chain: bool) -> benilla_ui::s
             .collect(),
         load_with: toc.load_with().into_iter().map(str::to_owned).collect(),
         dependents: Vec::new(), // filled by `register_addons`
-        directives: toc
-            .directives
-            .iter()
-            .map(|d| (d.key.clone(), d.value.clone()))
-            .collect(),
+        directives: toc.metadata(),
         files: toc.files.clone(),
         saved_variables: toc
             .saved_variables()
@@ -2086,6 +2082,52 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
+    /// `GetAddOnMetadata` (`0x48e530` through `0x51e220`) reads the record's metadata map, which
+    /// only `Title`, `Notes`, `Author`, `Version` and `X-*` lines reach (`0x51d580`); the typed
+    /// directives jump past it (`0x51d3d0`), so they answer nil.
+    #[test]
+    fn get_addon_metadata_answers_only_what_enters_the_metadata_map() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("metadata-map");
+        write_addon(
+            &home,
+            "Probe",
+            "## Interface: 11200\n## Title: T\n## Notes: N\n## Author: A\n## Version: 1.2\n\
+             ## X-Website: http://x\n## SavedVariables: V\n## LoadOnDemand: 0\n## Dependencies: D\n\
+             ## Includes: nothing\nmain.lua\n",
+            &[("main.lua", "")],
+        );
+        let mut script = UiScript::new().unwrap();
+        let _ = load_third_party(&mut script, None, &[], true);
+        let meta = |key: &str| -> Option<String> {
+            script
+                .eval::<Option<String>>(&format!("return GetAddOnMetadata('Probe', '{key}')"))
+                .unwrap()
+        };
+        for (key, want) in [
+            ("Title", "T"),
+            ("Notes", "N"),
+            ("Author", "A"),
+            ("Version", "1.2"),
+            ("X-Website", "http://x"),
+        ] {
+            assert_eq!(meta(key).as_deref(), Some(want), "{key}");
+        }
+        for key in [
+            "Interface",
+            "SavedVariables",
+            "LoadOnDemand",
+            "Dependencies",
+            "Includes",
+        ] {
+            assert_eq!(meta(key), None, "{key} never enters the map");
+        }
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
     /// An addon the enable file does not mention loads, so a dropped-in folder just works.
     #[test]
     fn a_disabled_addon_does_not_load_and_an_unlisted_one_does() {
@@ -2285,7 +2327,7 @@ mod tests {
         write_addon(
             &home,
             "BaseOptions",
-            "## Interface: 11200\n## Title: Base Options\n## Dependencies: Base\n             ## LoadOnDemand: 1\nopts.lua\n",
+            "## Interface: 11200\n## Title: Base Options\n## Dependencies: Base\n## LoadOnDemand: 1\nopts.lua\n",
             &[("opts.lua", "OptsRan = BaseRan")],
         );
         let mut script = UiScript::new().unwrap();

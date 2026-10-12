@@ -43,7 +43,8 @@ pub struct AddOnInfo {
     /// filled by [`super::UiScript::register_addons`], as the reference builds it once the scan
     /// ends (`0x51c7c0`-`0x51c8c9`). `AddOn_Load` loads each after this one's `ADDON_LOADED`.
     pub dependents: Vec<usize>,
-    /// Every `## Key: Value` in manifest order, for `GetAddOnMetadata`.
+    /// The lines that reach the reference's metadata map in manifest order ([`crate::toc::Toc::metadata`]):
+    /// all `GetAddOnMetadata` answers from.
     pub directives: Vec<(String, String)>,
     /// The `.toc`'s file list in order: what `LoadAddOn` runs.
     pub files: Vec<String>,
