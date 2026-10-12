@@ -1061,6 +1061,7 @@ fn shipped_bag_frame_drives_end_to_end() {
             texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
             count: 5,
             quality: Some(1),
+            inventory_type: 0,
             item_id: 117,
             link: None,
             locked: false,

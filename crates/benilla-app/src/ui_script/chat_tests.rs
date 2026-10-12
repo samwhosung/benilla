@@ -360,6 +360,7 @@ fn chat_click_dismisses_a_stuck_spell_but_not_an_item() {
             texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
             count: 5,
             quality: Some(1),
+            inventory_type: 0,
             item_id: 117,
             link: None,
             locked: false,

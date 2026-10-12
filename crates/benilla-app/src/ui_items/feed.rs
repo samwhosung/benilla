@@ -717,6 +717,7 @@ fn resolve_slot(
         count,
         durability,
         quality: Some(t.quality),
+        inventory_type: t.inventory_type,
         item_id: entry,
         // The link carries the roll in `randomPropertyId` and in the suffixed name (`0x5d8b00`);
         // the tooltip reads its name back off it.
@@ -1408,9 +1409,62 @@ fn diff_and_push(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_container_source, charges_count, ContainerSlot, FeedMemory, SlotGuids,
+        apply_container_source, charges_count, resolve_slot, ContainerSlot, FeedMemory, SlotGuids,
         BANK_CONTAINER, BANK_SLOTS,
     };
+
+    /// A bag slot carries the template's quality and InventoryType, which `GetContainerItemInfo`
+    /// gates its fourth value on (`0x4f9794`); an unanswered template leaves them empty.
+    #[test]
+    fn a_resolved_slot_carries_the_templates_quality_and_inventory_type() {
+        use crate::items::{test_template, Items, RollCatalogs};
+        use crate::names::NameCache;
+        use crate::net::NetCommands;
+        use crate::ui_items::TestObjects;
+        use benilla_protocol::ObjectFields;
+
+        const ENTRY: u16 = 3; // OBJECT_FIELD_ENTRY
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut objs = TestObjects::new();
+        for (guid, entry) in [(0xA1_u64, 1234_u32), (0xA2, 1235), (0xA3, 1236)] {
+            objs.spawn(guid, ObjectFields::from_pairs(&[(ENTRY, entry)]));
+        }
+        let mut items = Items::default();
+        let mut sword = test_template("Sword");
+        sword.quality = 4;
+        sword.inventory_type = 13;
+        items.insert_template(1234, Some(sword));
+        items.insert_template(1235, Some(test_template("Healing Potion")));
+
+        let names = NameCache::default();
+        let cooldowns = crate::spell::Cooldowns::default();
+        let mut petitions = crate::ui_petition::PetitionState::default();
+        let mut slot = |guid: u64| {
+            resolve_slot(
+                guid,
+                &objs.get(),
+                &items,
+                None,
+                RollCatalogs::NONE,
+                &commands,
+                &cooldowns,
+                None,
+                &names,
+                &mut petitions,
+                std::time::Instant::now(),
+                0.0,
+                false,
+            )
+            .expect("an occupied slot")
+        };
+        let sword = slot(0xA1);
+        assert_eq!((sword.quality, sword.inventory_type), (Some(4), 13));
+        let potion = slot(0xA2);
+        assert_eq!((potion.quality, potion.inventory_type), (Some(1), 0));
+        let pending = slot(0xA3);
+        assert_eq!((pending.quality, pending.inventory_type), (None, 0));
+    }
 
     /// No bags and an empty vault.
     const NO_BAGS: SlotGuids = SlotGuids {

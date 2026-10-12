@@ -119,6 +119,7 @@ fn seed_items(s: &mut UiScript) {
             texture: Some("Interface\\Icons\\INV_Helmet_02".into()),
             count: 1,
             quality: Some(3),
+            inventory_type: 0,
             item_id: 2000,
             link: Some("|cff0070dd|Hitem:2000:0:0:0|h[Another Helm]|h|r".into()),
             locked: false,

@@ -450,6 +450,7 @@ fn resolve_slot(
     let template = items.template(item.entry, 0, commands);
     let name = template.map(|t| t.name.clone());
     let quality = template.map(|t| t.quality);
+    let inventory_type = template.map_or(0, |t| t.inventory_type);
     let texture = icons
         .and_then(|i| i.catalog.get(item.display_id))
         .and_then(|d| d.icon.clone());
@@ -464,6 +465,7 @@ fn resolve_slot(
         texture,
         count: item.count.max(1),
         quality,
+        inventory_type,
         enchantment: None,
         link,
     }
@@ -827,6 +829,27 @@ mod tests {
             max_durability: 0,
             durability: 0,
         }
+    }
+
+    /// The row carries the template's quality and InventoryType, which `GetTradePlayerItemInfo`
+    /// gates its fourth value on; an unanswered template leaves both empty.
+    #[test]
+    fn a_trade_row_carries_the_templates_quality_and_inventory_type() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut items = Items::default();
+        let mut sword = crate::items::test_template("Sword");
+        sword.quality = 4;
+        sword.inventory_type = 13;
+        items.insert_template(1234, Some(sword));
+        items.insert_template(1235, Some(crate::items::test_template("Linen Cloth")));
+
+        let row = resolve_slot(&wire_item(1234), &items, None, &commands);
+        assert_eq!((row.quality, row.inventory_type), (Some(4), 13));
+        let row = resolve_slot(&wire_item(1235), &items, None, &commands);
+        assert_eq!((row.quality, row.inventory_type), (Some(1), 0));
+        let row = resolve_slot(&wire_item(1236), &items, None, &commands);
+        assert_eq!((row.quality, row.inventory_type), (None, 0));
     }
 
     #[test]

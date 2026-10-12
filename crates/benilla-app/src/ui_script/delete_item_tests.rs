@@ -22,6 +22,7 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
             texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
             count: 5,
             quality: Some(quality),
+            inventory_type: 0,
             item_id,
             link: Some(format!("|cffffffff|Hitem:{item_id}|h[{name}]|h|r")),
             locked: false,

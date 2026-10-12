@@ -702,6 +702,7 @@ fn backpack() -> ContainerState {
             texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
             count: 1,
             quality: Some(1),
+            inventory_type: 0,
             item_id: 117,
             link: Some("|cffffffff|Hitem:117|h[Tough Jerky]|h|r".into()),
             locked: false,

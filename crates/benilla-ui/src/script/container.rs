@@ -28,8 +28,11 @@ pub struct ContainerSlot {
     /// Icon texture path (`Interface\Icons\…`); `None` while the template answer is in flight.
     pub texture: Option<String>,
     pub count: u32,
-    /// Item quality 0..6; `None` while unresolved (the API reports `nil`).
+    /// Item quality 0..6; `None` while unresolved. `GetContainerItemInfo` reports it only when
+    /// `inventory_type` is nonzero (`0x4f9794`), else -1.
     pub quality: Option<u32>,
+    /// The template's InventoryType; 0 while unresolved and for an item that cannot be equipped.
+    pub inventory_type: u32,
     /// The item's template entry; 0 while unresolved.
     pub item_id: u32,
     /// An `|Hitem:…|h[Name]|h` link once the name is known.
@@ -589,10 +592,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // A held item's source slot reads locked, derived from the cursor so the app's
                 // re-push cannot wipe it.
                 flag(s.locked || held_here),
-                match s.quality {
-                    Some(q) => Value::Integer(i64::from(q)),
-                    None => Value::Nil,
-                },
+                // A number on every path: -1 unless the template is cached and equippable
+                // (`0x4f9794`).
+                Value::Integer(super::item_stats::gated_quality(
+                    s.quality,
+                    s.inventory_type,
+                )),
                 flag(s.readable),
             ]))
         })?,
@@ -733,6 +738,7 @@ mod tests {
                 texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
                 count: 5,
                 quality: Some(1),
+                inventory_type: 0,
                 item_id: 117,
                 link: Some("|cffffffff|Hitem:117|h[Tough Jerky]|h|r".into()),
                 locked: false,
@@ -841,7 +847,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(icon, "Interface\\Icons\\INV_Misc_Food_16");
-        assert_eq!((count, quality), (5, 1));
+        // Food has InventoryType 0, so its quality is the -1 sentinel (`0x4f9794`).
+        assert_eq!((count, quality), (5, -1));
         assert_eq!(
             s.eval::<i64>(
                 "local _, _, id = string.find(GetContainerItemLink(0, 1), 'item:(%d+)') \
@@ -858,11 +865,11 @@ mod tests {
             .eval::<bool>("local _, _, _, _, readable = GetContainerItemInfo(0, 4) return readable")
             .unwrap());
 
-        // An in-flight slot: texture and quality nil, itemCount real.
+        // An in-flight slot: texture nil, quality the -1 sentinel, itemCount real.
         assert!(s
             .eval::<bool>(
                 "local texture, itemCount, locked, quality = GetContainerItemInfo(0, 3)\n\
-                 return texture == nil and quality == nil and itemCount ~= nil",
+                 return texture == nil and quality == -1 and itemCount ~= nil",
             )
             .unwrap());
         assert!(s
@@ -871,6 +878,52 @@ mod tests {
         assert!(s
             .eval::<bool>("return GetContainerItemInfo(0, 2) == nil")
             .unwrap());
+    }
+
+    /// The fourth value is the template's quality only when the template is cached and its
+    /// InventoryType is nonzero (`0x4f9794`, `0x4f979b`), else the number -1 (`0x4f97a6`): a potion,
+    /// a reagent or conjured food answers -1 with its template in hand, as does an item whose
+    /// template has not arrived. Never nil.
+    #[test]
+    fn container_item_info_quality_is_gated_on_the_inventory_type() {
+        let mut s = UiScript::new().unwrap();
+        let slot = |quality: Option<u32>, inventory_type: u32| ContainerSlot {
+            count: 1,
+            quality,
+            inventory_type,
+            item_id: 25,
+            ..Default::default()
+        };
+        let mut slots = std::collections::HashMap::new();
+        // An equippable epic, two InventoryType 0 items of quality 1 and 3, and an item whose
+        // template is still in flight.
+        slots.insert(1, slot(Some(4), 13));
+        slots.insert(2, slot(Some(1), 0));
+        slots.insert(3, slot(Some(3), 0));
+        slots.insert(4, slot(None, 0));
+        s.set_container(
+            0,
+            Some(ContainerState {
+                slots,
+                ..Default::default()
+            }),
+        );
+        for (index, want) in [
+            (1, "number:4"),
+            (2, "number:-1"),
+            (3, "number:-1"),
+            (4, "number:-1"),
+        ] {
+            assert_eq!(
+                s.eval::<String>(&format!(
+                    "local c = function(...) return arg.n .. ':' .. type(arg[4]) .. ':' .. \
+                     tostring(arg[4]) end return c(GetContainerItemInfo(0, {index}))"
+                ))
+                .unwrap(),
+                format!("5:{want}"),
+                "slot {index}"
+            );
+        }
     }
 
     /// `GetContainerItemInfo` (`0x4f9670`) pushes `locked` and `readable` as the number 1
@@ -1001,6 +1054,7 @@ mod tests {
                 texture: Some("Interface\\Icons\\INV_Misc_Gem_01".into()),
                 count: 1,
                 quality: Some(2),
+                inventory_type: 0,
                 item_id: 200, // item B, a different id
                 link: Some("|Hitem:200|h[Shiny Gem]|h".into()),
                 locked: false,

@@ -1296,6 +1296,7 @@ mod bind_confirm_tests {
                 texture: Some("Interface\\Icons\\INV_Axe_01".into()),
                 count: 1,
                 quality: Some(quality),
+                inventory_type: 0,
                 item_id: FLURRY_AXE,
                 link: Some("|cffa335ee|Hitem:871:0:0:0|h[Flurry Axe]|h|r".into()),
                 locked: false,
