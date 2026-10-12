@@ -12,7 +12,8 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
-use super::cursor::{raise_cursor_update, CursorPayload, CursorSpell};
+use super::cursor::{clear_cursor, set_cursor, CursorPayload, CursorSpell};
+use super::tick::verb;
 use super::{Model, ScriptCall};
 
 const BOOKTYPE_SPELL: &str = "spell";
@@ -287,43 +288,54 @@ fn rank_number(subtext: Option<&str>) -> u32 {
         .fold(0u32, |acc, c| acc * 10 + c.to_digit(10).unwrap_or(0))
 }
 
-/// `PickupSpell(id, bookType)`, the spell button's drag and shift-click
-/// (`SpellBookFrame.lua:266-290`). It refuses while the cursor holds anything, where the
-/// reference's setters clear the cursor first (`0x495190`, called at `0x494dab` and `0x494f00`).
-fn pickup_spell(model: &mut Model, id: u32, book_type: &str) -> bool {
-    if model.cursor.is_some() {
+/// `PickupSpell(id, bookType)` (`0x4b42a0` into `0x4b3260`), the spell button's drag and
+/// shift-click (`SpellBookFrame.lua:266-290`). It reads the held spell, then clears with
+/// `ClearCursor(1,1)` (`0x4b3293`) whatever is held. Picking up the spell already held only puts
+/// it down (`0x4b329a`), and with another spell held the clear is all (`0x4b32aa`). Otherwise the
+/// slot's setter runs, its own inner clear signalling again on the empty cursor: the pet arm puts
+/// the pet's raw word on the cursor (`0x494e20`, cursor mode 4), the player arm a spell id
+/// (`0x494d20`, mode 3); only the pet word drops on the pet bar. Returns whether a payload went
+/// on.
+fn pickup_spell(lua: &Lua, id: u32, book_type: &str) -> bool {
+    let (payload, target, held) = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let held = match &model.cursor {
+            Some(CursorPayload::Spell(s)) => s.spell_id,
+            _ => 0,
+        };
+        let Some(slot) = book_slot(&model, id, book_type) else {
+            drop(model);
+            verb(lua, clear_cursor);
+            return false;
+        };
+        let payload = if is_pet_book(book_type) {
+            // `0x494e20` refuses type 0 and types 8 and up, before its clear.
+            let packed = slot.packed;
+            (1..=7).contains(&((packed >> 24) & 0x3F)).then(|| {
+                CursorPayload::PetAction(super::cursor::CursorPetAction {
+                    // No source slot: the word comes from the book, not the bar.
+                    src_slot: 0,
+                    packed,
+                    passive: slot.passive,
+                    texture: slot.texture.clone(),
+                })
+            })
+        } else {
+            Some(CursorPayload::Spell(CursorSpell {
+                book_slot: id,
+                book_type: book_type.to_string(),
+                spell_id: slot.spell_id,
+                texture: slot.texture.clone(),
+                passive: slot.passive,
+            }))
+        };
+        (payload, slot.spell_id, held)
+    };
+    verb(lua, clear_cursor);
+    if target == held || held != 0 {
         return false;
     }
-    let Some(slot) = book_slot(model, id, book_type) else {
-        return false;
-    };
-    // The pet arm of `0x4b3260` puts the pet's raw word on the cursor (`0x494e20`, cursor mode 4),
-    // the player arm a spell id (`0x494d20`, mode 3); only the pet word drops on the pet bar.
-    let payload = if is_pet_book(book_type) {
-        // `0x494e20` refuses type 0 and types 8 and up.
-        let packed = slot.packed;
-        if !(1..=7).contains(&((packed >> 24) & 0x3F)) {
-            return false;
-        }
-        CursorPayload::PetAction(super::cursor::CursorPetAction {
-            // No source slot: the word comes from the book, not the bar.
-            src_slot: 0,
-            packed,
-            passive: slot.passive,
-            texture: slot.texture.clone(),
-        })
-    } else {
-        CursorPayload::Spell(CursorSpell {
-            book_slot: id,
-            book_type: book_type.to_string(),
-            spell_id: slot.spell_id,
-            texture: slot.texture.clone(),
-            passive: slot.passive,
-        })
-    };
-    model.cursor = Some(payload);
-    raise_cursor_update(model);
-    true
+    payload.is_some_and(|payload| set_cursor(lua, true, |_| Some(payload)))
 }
 
 /// Register the spellbook globals.
@@ -587,7 +599,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "PickupSpell",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
             let (id, book_type) = spell_slot_args(id, book_type, "PickupSpell")?;
-            super::tick::verb(lua, |model| pickup_spell(model, id, &book_type));
+            pickup_spell(lua, id, &book_type);
             Ok(())
         })?,
     )?;
@@ -930,8 +942,7 @@ mod tests {
             s.cursor_payload()
         );
 
-        // Tick first to flush the first pickup's `CURSOR_UPDATE`, so the count below is the
-        // refused call's alone.
+        // The pickup's events fired inside it; the listener below counts the next call's alone.
         s.tick(0.0);
         s.run(
             r#"
@@ -942,46 +953,52 @@ mod tests {
             "#,
         )
         .unwrap();
-        s.run(r#"PickupSpell(3, BOOKTYPE_SPELL)"#).unwrap(); // already holding -> refused, no-op
+        // Another spell held: the binding's clear is all (`0x4b3293`, `0x4b32aa`).
+        s.run(r#"PickupSpell(3, BOOKTYPE_SPELL)"#).unwrap();
         s.tick(0.01);
-        assert_eq!(
-            s.eval::<i64>("return cursorUpdates").unwrap(),
-            0,
-            "refused pickup fires no CURSOR_UPDATE"
-        );
-        // Still holding the first pickup: a refusal never clobbers it.
-        assert!(
-            matches!(
-                s.cursor_payload(),
-                Some(crate::script::CursorPayload::Spell(c))
-                    if c.book_slot == 1 && c.book_type == "spell" && c.spell_id == 133
-            ),
-            "{:?}",
-            s.cursor_payload()
-        );
+        assert_eq!(s.eval::<i64>("return cursorUpdates").unwrap(), 1);
+        assert!(s.cursor_payload().is_none(), "{:?}", s.cursor_payload());
     }
 
     #[test]
-    fn pickup_spell_refuses_while_already_holding_any_payload() {
+    fn pickup_spell_clears_a_held_payload_first() {
         let mut s = UiScript::new().unwrap();
         s.set_spellbook(book());
+        crate::script::tick::heard::listen(
+            &s,
+            &["CURSOR_UPDATE", "ACTIONBAR_SHOWGRID", "ACTIONBAR_HIDEGRID"],
+            Some("CursorHasSpell()"),
+        );
+        // Another payload: the binding's clear (`0x4b3293`) and the setter's (`0x494dab`) drop
+        // it, then the spell goes on with its grid and no `CURSOR_UPDATE` after (`0x494dd1`).
         s.set_cursor_for_test(CursorPayload::Action(CursorAction {
             src_slot: 1,
             kind: 0,
             action: 111,
             texture: None,
         }));
-
-        assert!(!pickup_spell(&mut s.model_mut(), 1, "spell"));
-        // The original (action) payload survives untouched.
-        assert!(
-            matches!(
-                s.cursor_payload(),
-                Some(crate::script::CursorPayload::Action(_))
-            ),
-            "{:?}",
-            s.cursor_payload()
+        assert!(pickup_spell(&s.lua, 1, "spell"));
+        assert!(matches!(s.cursor_payload(), Some(CursorPayload::Spell(_))));
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            [
+                "CURSOR_UPDATE nil",
+                "CURSOR_UPDATE nil",
+                "ACTIONBAR_SHOWGRID 1"
+            ]
         );
+        // The held spell again: put down, nothing picked up (`0x4b329a`).
+        assert!(!pickup_spell(&s.lua, 1, "spell"));
+        assert!(s.cursor_payload().is_none());
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["ACTIONBAR_HIDEGRID nil", "CURSOR_UPDATE nil"]
+        );
+        // Another spell held: the clear is all (`0x4b32aa`).
+        assert!(pickup_spell(&s.lua, 1, "spell"));
+        crate::script::tick::heard::take(&s);
+        assert!(!pickup_spell(&s.lua, 2, "spell"));
+        assert!(s.cursor_payload().is_none());
     }
 
     #[test]
@@ -1096,7 +1113,7 @@ mod tests {
         assert!(s.take_spell_casts().is_empty(), "pet cast is a no-op");
         assert!(s.take_pet_spell_casts().is_empty());
 
-        assert!(!pickup_spell(&mut s.model_mut(), 1, "pet"));
+        assert!(!pickup_spell(&s.lua, 1, "pet"));
         assert!(s.cursor_payload().is_none(), "pet pickup is a no-op");
     }
 
@@ -1284,7 +1301,7 @@ mod tests {
         s.set_spellbook(book());
         s.set_pet_book(pet_book());
 
-        assert!(pickup_spell(&mut s.model_mut(), 1, "pet"));
+        assert!(pickup_spell(&s.lua, 1, "pet"));
         let Some(CursorPayload::PetAction(p)) = s.cursor_payload() else {
             panic!(
                 "expected a pet action payload, got {:?}",
@@ -1296,7 +1313,7 @@ mod tests {
 
         // The player book still produces a spell payload.
         s.run("ClearCursor()").unwrap();
-        assert!(pickup_spell(&mut s.model_mut(), 1, "spell"));
+        assert!(pickup_spell(&s.lua, 1, "spell"));
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Spell(_))));
     }
 

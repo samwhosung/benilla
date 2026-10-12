@@ -354,25 +354,32 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // PickupStablePet(i): the mode-10 cursor grab, returning nothing. The gate is the family icon,
-    // not occupancy (`0x495010`): no icon, no grab.
+    // PickupStablePet(i) (`0x4cb7a0`): the mode-10 cursor grab, returning nothing. The binding
+    // takes an occupied slot only (`0x4cb7f9`); the grab (`0x495010`) clears with
+    // `ClearCursor(1,1)` (`0x495034`) before its own check, the family icon: no icon, no grab, the
+    // cursor left clear. The set fires nothing of its own.
     g.set(
         "PickupStablePet",
         lua.create_function(|lua, i: i64| {
-            super::tick::verb(lua, |model| {
-                let texture = slot_index(i)
+            let occupied = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                slot_index(i)
                     .and_then(|i| model.stable.state.as_ref()?.slots[i].as_ref())
-                    .and_then(|p| p.icon.clone());
-                if let Some(texture) = texture {
-                    model.cursor = Some(super::cursor::CursorPayload::StablePet(
+                    .is_some()
+            };
+            if occupied {
+                super::cursor::set_cursor(lua, true, |model| {
+                    let texture = slot_index(i)
+                        .and_then(|i| model.stable.state.as_ref()?.slots[i].as_ref())
+                        .and_then(|p| p.icon.clone())?;
+                    Some(super::cursor::CursorPayload::StablePet(
                         super::cursor::CursorStablePet {
                             slot: i as u8,
                             texture,
                         },
-                    ));
-                    super::cursor::raise_cursor_update(model);
-                }
-            });
+                    ))
+                });
+            }
             Ok(())
         })?,
     )?;
@@ -734,5 +741,36 @@ mod tests {
     fn the_paperdoll_setter_is_callable() {
         let s = UiScript::new().unwrap();
         s.eval::<()>("SetPetStablePaperdoll(nil)").unwrap();
+    }
+
+    /// The grab clears first (`0x495034`) and only then checks the family icon: a slot without one
+    /// leaves the cursor clear. The set fires nothing of its own, so every `CURSOR_UPDATE` reads
+    /// the emptied cursor.
+    #[test]
+    fn a_stable_grab_clears_before_its_icon_check() {
+        let mut s = UiScript::new().unwrap();
+        let mut iconless = pet(8, "Bruiser", 38);
+        iconless.icon = None;
+        s.set_stable(Some(state([Some(pet(7, "Rex", 41)), Some(iconless), None])));
+        crate::script::cursor::install_kind_probe(&s);
+        crate::script::tick::heard::listen(&s, &["CURSOR_UPDATE"], Some("CursorKind()"));
+        s.set_cursor_for_test(crate::script::cursor::CursorPayload::Macro(
+            crate::script::cursor::CursorMacro {
+                index: 1,
+                texture: None,
+            },
+        ));
+        s.run("PickupStablePet(1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "cleared, and nothing grabbed");
+        assert_eq!(crate::script::tick::heard::take(&s), ["CURSOR_UPDATE none"]);
+        s.run("PickupStablePet(0)").unwrap();
+        assert!(matches!(
+            s.cursor_payload(),
+            Some(crate::script::cursor::CursorPayload::StablePet(_))
+        ));
+        assert_eq!(crate::script::tick::heard::take(&s), ["CURSOR_UPDATE none"]);
+        // An empty slot is the binding's own refusal, ahead of the grab and its clear.
+        s.run("PickupStablePet(2)").unwrap();
+        assert!(crate::script::tick::heard::take(&s).is_empty());
     }
 }

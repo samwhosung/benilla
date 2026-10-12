@@ -6,8 +6,11 @@ use crate::script::container::ContainerMove;
 use crate::script::tick::verb;
 use crate::script::Model;
 
-use super::{clear_cursor, raise_cursor_update, raise_lock_changed, CursorItem, CursorPayload};
-use super::{doll::pickup_inventory_item, EQUIPMENT_BAG};
+use super::doll::{doll_click, DollClick};
+use super::{
+    clear, clear_cursor, client_locked, pick_up_item, raise_lock_changed, Clear, CursorItem,
+    CursorPayload, EQUIPMENT_BAG,
+};
 
 /// The ids `PutItemInBag` and `PickupBagFromSlot` take: what their argument reader (`0x4c8520`)
 /// accepts above each floor gate (`0x4c8f1f`, `0x4c8fbf`), so the equipped bags 20-23, the
@@ -74,17 +77,17 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
 
     if !occupied {
         // An empty slot: the doll handler equips the bag (`0x4c7300`), and the answer is nil
-        // whether or not it went in (`0x4c7cae xor eax,eax`).
-        pickup_inventory_item(model, live);
+        // whether or not it went in (`0x4c7cae xor eax,eax`). With an item held the doll click
+        // only places, so it owes no pickup.
+        let click = doll_click(model, live);
+        debug_assert!(matches!(click, DollClick::Done(_)));
         return false;
     }
 
     // The held bag is this slot's own: a cancel that sends nothing and answers 1.
     if held.bag == EQUIPMENT_BAG && held.slot == live {
-        // `ClearCursor(1,1)`: the unlock, then `CURSOR_UPDATE`.
-        model.cursor = None;
-        raise_lock_changed(model);
-        raise_cursor_update(model);
+        // `ClearCursor(1,1)` (`0x4c7cca`): the unlock, then `CURSOR_UPDATE`.
+        clear_cursor(model);
         return true;
     }
 
@@ -92,7 +95,6 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
         // A swap (`0x5e0c40`); an item from a bag equipment slot enters this fork too, hence the
         // `||`. A split stack cannot swap and stays held: the reference splits only when storing.
         if held.count.is_none() {
-            model.cursor = None;
             model.container_moves.push(ContainerMove {
                 src_bag: held.bag,
                 src_slot: held.slot,
@@ -100,11 +102,10 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
                 dst_slot: live,
                 count: None,
             });
-            raise_cursor_update(model);
+            // The swap send's `ClearCursor(0,1)` (`0x5e0fe7`).
+            clear(model, Clear::KEEP_LOCK);
             raise_lock_changed(model);
-            return true;
         }
-        model.cursor = Some(CursorPayload::Item(held));
         return true;
     }
 
@@ -113,14 +114,14 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
     let Some(dst_bag) = autostore_container(live) else {
         return false;
     };
-    model.cursor = None;
     model.bag_autostores.push(crate::script::BagAutoStore {
         src_bag: held.bag,
         src_slot: held.slot,
         dst_bag,
         count: held.count,
     });
-    raise_cursor_update(model);
+    // `ClearCursor(0,1)` past the send (`0x4c7e55`).
+    clear(model, Clear::KEEP_LOCK);
     raise_lock_changed(model);
     true
 }
@@ -132,14 +133,13 @@ pub(super) fn put_item_in_backpack(model: &mut Model) -> bool {
     let Some(CursorPayload::Item(held)) = model.cursor.clone() else {
         return false;
     };
-    model.cursor = None;
     model.bag_autostores.push(crate::script::BagAutoStore {
         src_bag: held.bag,
         src_slot: held.slot,
         dst_bag: 0,
         count: held.count,
     });
-    raise_cursor_update(model);
+    clear(model, Clear::KEEP_LOCK);
     raise_lock_changed(model);
     true
 }
@@ -159,15 +159,22 @@ pub(super) fn pickup_bag_from_slot(lua: &Lua, live: u32) {
             clear_cursor(model);
         }
     });
-    verb(lua, |model| grab_bag(model, live));
+    let picked = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        grab_bag(&model, live)
+    };
+    if let Some(item) = picked {
+        pick_up_item(lua, item);
+    }
 }
 
-/// `PickupBagFromSlot`'s grab of an unlocked container in `live`.
-fn grab_bag(model: &mut Model, live: u32) {
-    let picked = usize::try_from(live)
+/// `PickupBagFromSlot`'s grab: an unlocked container in `live` (`0x4c7bc1`), which it picks up
+/// with `SetCursorItem(1, …)` and `LockItem` (`0x4c7be2`, `0x4c7be9`).
+fn grab_bag(model: &Model, live: u32) -> Option<CursorItem> {
+    usize::try_from(live)
         .ok()
         .and_then(|slot| model.inv_slot("player", slot))
-        .filter(|s| s.item_id != 0 && !s.locked)
+        .filter(|s| s.item_id != 0 && !s.locked && !client_locked(model, EQUIPMENT_BAG, live))
         .map(|s| CursorItem {
             bag: EQUIPMENT_BAG,
             slot: live,
@@ -179,12 +186,7 @@ fn grab_bag(model: &mut Model, live: u32) {
             bar_placeable: s.bar_placeable,
             equip_slots: s.equip_slots.clone(),
         })
-        .filter(is_container);
-    if let Some(item) = picked {
-        model.cursor = Some(CursorPayload::Item(item));
-        raise_cursor_update(model);
-        raise_lock_changed(model);
-    }
+        .filter(is_container)
 }
 
 /// Register the three verbs as globals.
@@ -455,8 +457,9 @@ mod tests {
     }
 
     /// The clear's events (the unlock `0x495455`, then `0x4952cc`) run before the grab reads the
-    /// slot (`0x4c7be2`), so its handlers see the bag still in place and only the grab's
-    /// (`0x494c54`, then `0x495415`) see it held and locked.
+    /// slot (`0x4c7be2`), so its handlers see the bag still in place; the grab's own inner clear
+    /// signals once more on the empty cursor (`0x494bb6`), and only its set's events (`0x494c54`,
+    /// then `0x495415`) see the bag held and locked.
     #[test]
     fn pickup_bag_from_slot_fires_the_clear_before_the_grab() {
         let mut s = UiScript::new().unwrap();
@@ -473,6 +476,7 @@ mod tests {
             heard::take(&s),
             [
                 "ITEM_LOCK_CHANGED nil",
+                "CURSOR_UPDATE nil",
                 "CURSOR_UPDATE nil",
                 "CURSOR_UPDATE 1",
                 "ITEM_LOCK_CHANGED 1"

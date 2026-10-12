@@ -147,11 +147,14 @@ fn click_trade_button(model: &mut Model, id: u32) {
         cursor::money::add_trade_money(model);
         return;
     }
-    match model.cursor.take() {
+    match model.cursor.clone() {
         Some(CursorPayload::Item(item)) => {
             let (bag, slot) = (item.bag, item.slot);
             model.trade_set_items.push((id, bag, slot));
-            cursor::raise_cursor_update(model);
+            // The reference passes `SetCursorItem` the send's failure as its unlock (`0x4c005f`),
+            // so a sent item's clear is `ClearCursor(0,1)`. The lock event reports the engine's
+            // lock lifting with the cursor ([`cursor::client_locked`]), which holds no trade slot.
+            cursor::clear(model, cursor::Clear::KEEP_LOCK);
             cursor::raise_lock_changed(model);
         }
         None => {
@@ -168,7 +171,7 @@ fn click_trade_button(model: &mut Model, id: u32) {
                 model.trade_clear_items.push(id);
             }
         }
-        Some(other) => model.cursor = Some(other),
+        Some(_) => {}
     }
 }
 

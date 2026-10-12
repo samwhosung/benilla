@@ -334,15 +334,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // refusal, `0x495112` in the grab), not a bare drop: a held spell fires `CURSOR_UPDATE`
             // and hides the bar grid, and an armed gift wrap is cancelled (`0x5edf10`). Its events
             // run before the grab sets the row, so that `CURSOR_UPDATE` reads an empty cursor.
-            super::tick::verb(lua, crate::script::cursor::clear_cursor);
-            if let Some(payload) = grab {
-                // The grab's `SignalEvent(CURSOR_UPDATE)` (`0x49515e`); mode 5 skips the mode-7
-                // `ACTIONBAR_SHOWGRID` branch.
-                super::tick::verb(lua, |model| {
-                    model.cursor = Some(payload);
-                    crate::script::cursor::raise_cursor_update(model);
-                });
-            }
+            // The grab is the setter (`0x4950f0`): its clear, then the row and its
+            // `CURSOR_UPDATE` (`0x49515e`); mode 5 skips the mode-7 `ACTIONBAR_SHOWGRID` branch.
+            crate::script::cursor::set_cursor(lua, true, |_| grab);
             Ok(())
         })?,
     )?;
@@ -1225,21 +1219,24 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_merchant(Some(stock()));
         listen_cursor_events(&mut s);
-        s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
-            book_slot: 1,
-            book_type: "spell".into(),
-            spell_id: 133,
-            texture: None,
-            passive: false,
-        }));
-        cursor::raise_cursor_update(&mut s.model_mut()); // the pickup's own transition
-        assert_eq!(cursor_event_counts(&mut s), (1, 1, 0), "the spell pickup");
+        // The spell setter's set and tail (`0x494dd1`): the grid, no `CURSOR_UPDATE`.
+        cursor::put(
+            &mut s.model_mut(),
+            CursorPayload::Spell(CursorSpell {
+                book_slot: 1,
+                book_type: "spell".into(),
+                spell_id: 133,
+                texture: None,
+                passive: false,
+            }),
+        );
+        assert_eq!(cursor_event_counts(&mut s), (0, 1, 0), "the spell pickup");
 
         s.run("PickupMerchantItem(0)").unwrap();
         assert!(s.cursor_payload().is_none());
         assert_eq!(
             cursor_event_counts(&mut s),
-            (2, 1, 1),
+            (1, 1, 1),
             "(CURSOR_UPDATE, ACTIONBAR_SHOWGRID, ACTIONBAR_HIDEGRID) after the vendor drop"
         );
     }

@@ -1,11 +1,14 @@
 //! The cursor payload: the client's payload-mode global `[0xb4d900]` as a typed enum, and the drag
-//! gestures ([`drag`]) that change it. Bags, the paper doll ([`doll`]), the action bars ([`bar`])
-//! and the spellbook all transition it through [`raise_cursor_update`] and [`raise_lock_changed`],
-//! so sounds, `CURSOR_UPDATE`, grid events and lock display fire from one place.
+//! gestures ([`drag`]) that change it. The payload changes through two primitives, as in the
+//! reference: [`clear`], `ClearCursor(unlock, signal)` with its arm's events and its shared tail,
+//! and [`put`], a setter's install and its own tail. Every setter runs its inner clear first
+//! ([`set_cursor`] from a Lua verb, one segment each, so the clear's handlers read the emptied
+//! cursor), and every verb that drops a payload clears through [`clear`].
 
 use mlua::Lua;
 
 use super::binding_abi::flag;
+use super::tick::verb;
 use super::{Model, ScriptValue};
 
 mod bag_verbs;
@@ -158,47 +161,165 @@ pub struct CursorMacro {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
-// The transition events
+// The two primitives: the clear and the set
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// Raise `CURSOR_UPDATE`, once per payload transition, after a grid event when what the bars can
-/// take changes. Call it after `model.cursor` holds the new payload; an action hop keeps the grid
-/// up rather than hiding and reshowing it. The grid event comes first, hides before shows, as
-/// `ClearCursor`'s tail fires its grid hide (`0x4952ac`/`0x4952b3`) before its `CURSOR_UPDATE`
-/// (`0x4952cc`) and `SetCursorItem` its `ACTIONBAR_SHOWGRID` (`0x494c3b`) before its own
-/// (`0x494c54`).
-pub(crate) fn raise_cursor_update(model: &mut Model) {
-    // The action bar's grid shows for any payload but a pet action, which `PlaceAction` refuses,
-    // or a vendor row, whose grab `0x4950f0` fires `ACTIONBAR_SHOWGRID` for mode 7 only
-    // (`0x495106`, `0x49513a`). The reference fires it (`0x4e58c0`) only from the item, spell and
-    // macro setters and that mode-7 grab, so coins and a stabled pet show it here and not there.
-    // The pet bar's follows the pet action alone (`0x494f28`).
-    let pet_held = matches!(model.cursor, Some(CursorPayload::PetAction(_)));
-    let bar_held = model.cursor.is_some()
-        && !pet_held
-        && !matches!(model.cursor, Some(CursorPayload::Merchant(_)));
-    let bar_flip = (bar_held != model.cursor_grid_shown).then_some(if bar_held {
-        "ACTIONBAR_SHOWGRID"
-    } else {
-        "ACTIONBAR_HIDEGRID"
-    });
-    let pet_flip = (pet_held != model.pet_grid_shown).then_some(if pet_held {
-        "PET_BAR_SHOWGRID"
-    } else {
-        "PET_BAR_HIDEGRID"
-    });
-    model.cursor_grid_shown = bar_held;
-    model.pet_grid_shown = pet_held;
-    // A hop between the bars hides the old grid before it shows the new one.
-    let (first, second) = if pet_held {
-        (bar_flip, pet_flip)
-    } else {
-        (pet_flip, bar_flip)
+/// `ClearCursor`'s two arguments (`0x495190`): `ecx`, whether a held item's lock lifts in the
+/// item arm (`0x4951c2`), and `edx`, whether held coins signal `PLAYER_MONEY` (`0x49523f`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Clear {
+    pub(crate) unlock: bool,
+    pub(crate) signal_money: bool,
+}
+
+impl Clear {
+    /// `ClearCursor(1,1)`: Lua's `ClearCursor()` (`0x4895b0`), every cancel, and the inner clear
+    /// of each setter but `SetCursorItem`, which passes its own `edx` on (`0x494bb4`).
+    pub(crate) const BOTH: Clear = Clear {
+        unlock: true,
+        signal_money: true,
     };
-    for event in [first, second].into_iter().flatten() {
-        model.raise(event, Vec::new());
+    /// `ClearCursor(0,1)`: an item send's clear, the item keeping its lock for the server's answer.
+    pub(crate) const KEEP_LOCK: Clear = Clear {
+        unlock: false,
+        signal_money: true,
+    };
+    /// `ClearCursor(1,0)`: the trade window's money fold, which repaints by its own events.
+    pub(crate) const NO_MONEY_EVENT: Clear = Clear {
+        unlock: true,
+        signal_money: false,
+    };
+}
+
+/// `ClearCursor(unlock, signal)` (`0x495190`), the one way a payload leaves the cursor. An armed
+/// gift wrap is cancelled first (`0x495197`). Then the payload's arm: an item's unlock signals
+/// `ITEM_LOCK_CHANGED` when `unlock` (`0x4951d9`, `0x495455`), coins `PLAYER_MONEY` when `signal`
+/// (`0x495248`). Then the shared tail, on every call, an empty cursor included: a grid a setter
+/// showed hides, the pet bar's for a held pet action and the action bar's otherwise (`0x4952ac`,
+/// `0x4952b3`), and `CURSOR_UPDATE` fires on the emptied cursor (`0x4952cc`).
+pub(crate) fn clear(model: &mut Model, how: Clear) {
+    // `0x5edf10`: the wrapping paper unlocks and the cursor mode returns to the base.
+    if model.pending_wrap.take().is_some() {
+        raise_lock_changed(model);
+        model.ui_cursor = None;
+        model.ui_cursor_dirty = true;
+    }
+    // Coins go back to nothing, as the purse was never debited; a vendor row clears with no
+    // packet (`0x49525f`).
+    let held = model.cursor.take();
+    match &held {
+        Some(CursorPayload::Item(_)) if how.unlock => raise_lock_changed(model),
+        Some(CursorPayload::Money(_)) if how.signal_money => money::raise_player_money(model),
+        _ => {}
+    }
+    if std::mem::take(&mut model.cursor_grid) {
+        if matches!(held, Some(CursorPayload::PetAction(_))) {
+            model.raise("PET_BAR_HIDEGRID", Vec::new());
+        } else {
+            model.raise("ACTIONBAR_HIDEGRID", Vec::new());
+        }
     }
     model.raise("CURSOR_UPDATE", Vec::new());
+}
+
+/// `ClearCursor(1,1)`, Lua's `ClearCursor()` (`0x4895b0`).
+pub(crate) fn clear_cursor(model: &mut Model) {
+    clear(model, Clear::BOTH);
+}
+
+/// A setter past its inner clear: `payload` goes on the cursor, then that setter's own tail.
+/// `SetCursorItem` (`0x494b60`) shows the action bar's grid for an item the bar takes
+/// (`0x494c3b`) and fires `CURSOR_UPDATE` (`0x494c54`); the row grab (`0x4950f0`) shows it for a
+/// bar item, mode 7 (`0x49513a`), and fires `CURSOR_UPDATE` (`0x49515e`). The spell (`0x494dd1`)
+/// and macro (`0x494fd7`) setters end on the action bar's grid, the pet-action setter on the pet
+/// bar's (`0x494f28`), the money setter on `PLAYER_MONEY` (`0x494d0a`) and the stable grab on
+/// nothing (`0x4950c5`), so no `CURSOR_UPDATE` follows theirs. A bar pickup takes the setter of
+/// its kind (`0x4e6130`): the grab for an item, the spell or macro setter otherwise.
+pub(crate) fn put(model: &mut Model, payload: CursorPayload) {
+    use super::action::ACTION_KIND_ITEM;
+    /// What a setter fires past its set.
+    enum Tail {
+        /// `SetCursorItem` and the row grab: the action bar's grid if asked, then `CURSOR_UPDATE`.
+        Update { grid: bool },
+        /// The spell and macro setters.
+        BarGrid,
+        /// The pet-action setter.
+        PetGrid,
+        /// The money setter.
+        Money,
+        /// The stable grab.
+        Nothing,
+    }
+    let tail = match &payload {
+        CursorPayload::Item(item) => Tail::Update {
+            grid: item.bar_placeable,
+        },
+        CursorPayload::Action(a) if a.kind == ACTION_KIND_ITEM => Tail::Update { grid: true },
+        CursorPayload::Merchant(_) => Tail::Update { grid: false },
+        CursorPayload::Action(_) | CursorPayload::Spell(_) | CursorPayload::Macro(_) => {
+            Tail::BarGrid
+        }
+        CursorPayload::PetAction(_) => Tail::PetGrid,
+        CursorPayload::Money(_) => Tail::Money,
+        CursorPayload::StablePet(_) => Tail::Nothing,
+    };
+    model.cursor = Some(payload);
+    match tail {
+        Tail::Update { grid } => {
+            if grid {
+                model.raise("ACTIONBAR_SHOWGRID", Vec::new());
+                model.cursor_grid = true;
+            }
+            model.raise("CURSOR_UPDATE", Vec::new());
+        }
+        Tail::BarGrid => {
+            model.raise("ACTIONBAR_SHOWGRID", Vec::new());
+            model.cursor_grid = true;
+        }
+        Tail::PetGrid => {
+            model.raise("PET_BAR_SHOWGRID", Vec::new());
+            model.cursor_grid = true;
+        }
+        Tail::Money => money::raise_player_money(model),
+        Tail::Nothing => {}
+    }
+}
+
+/// A cursor setter from a Lua verb. Its inner `ClearCursor(unlock, 1)` runs as one segment, so
+/// that clear's handlers read the emptied cursor as the reference's do; then `payload`, read
+/// past the clear, goes on with its tail as a second ([`put`]). `None` leaves the cursor clear,
+/// as `SetCursorItem` with a zero guid (`0x494bc5`) or a stable grab whose slot fails its check
+/// past the clear (`0x49505e`). Only `SetCursorItem` passes `unlock` through; every other setter
+/// clears with `ClearCursor(1,1)`. Returns whether a payload went on.
+pub(crate) fn set_cursor(
+    lua: &Lua,
+    unlock: bool,
+    payload: impl FnOnce(&Model) -> Option<CursorPayload>,
+) -> bool {
+    verb(lua, |model| {
+        clear(
+            model,
+            Clear {
+                unlock,
+                signal_money: true,
+            },
+        );
+    });
+    verb(lua, |model| match payload(model) {
+        Some(payload) => {
+            put(model, payload);
+            true
+        }
+        None => false,
+    })
+}
+
+/// An item pickup: `SetCursorItem(1, …)`, then `LockItem` (`0x4953e0`), whose
+/// `ITEM_LOCK_CHANGED` (`0x495415`) follows the set's `CURSOR_UPDATE`, as the bag (`0x4f9de9`,
+/// `0x4f9df0`), doll (`0x4c7838`) and bag-slot (`0x4c7be2`) pickups and the split (`0x4fa0aa`) do.
+pub(crate) fn pick_up_item(lua: &Lua, item: CursorItem) {
+    set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
+    verb(lua, raise_lock_changed);
 }
 
 /// Raise `ITEM_LOCK_CHANGED` for a slot that a pickup locks or a put-down frees. It carries no
@@ -206,6 +327,19 @@ pub(crate) fn raise_cursor_update(model: &mut Model) {
 /// stock buttons re-read every slot's lock.
 pub(crate) fn raise_lock_changed(model: &mut Model) {
     model.raise("ITEM_LOCK_CHANGED", Vec::new());
+}
+
+/// Whether the client itself holds the item at `(bag, slot)` locked, the reference's `item+0x314`
+/// bit 0 that `LockItem` (`0x4953e0`) sets: while the item is on the cursor or is an armed gift
+/// wrap's paper (`0x5edeb5`). The engine has no item object to carry the bit, so it is read from
+/// the state that holds the item and lifts when the item leaves it. The app's pending operations
+/// are the slot's `locked`.
+pub(crate) fn client_locked(model: &Model, bag: i64, slot: u32) -> bool {
+    matches!(&model.cursor, Some(CursorPayload::Item(item)) if item.bag == bag && item.slot == slot)
+        || model
+            .pending_wrap
+            .as_ref()
+            .is_some_and(|w| w.bag == bag && w.slot == slot)
 }
 
 /// Raise `DELETE_ITEM_CONFIRM(name, quality)` for an item dropped on the world. The payload stays
@@ -227,38 +361,17 @@ pub(super) fn item_link_name(link: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-/// `ClearCursor()` (`0x495190`): drops any payload and frees an item's source slot, then signals
-/// `CURSOR_UPDATE` from its shared tail (`0x49529b`) on every call, an empty cursor included.
-pub(crate) fn clear_cursor(model: &mut Model) {
-    // Any clear first cancels an armed gift wrap, whatever its parameters (`0x495190` opens with
-    // `0x5edf10`): the wrapping paper unlocks and the cursor mode returns to the base.
-    if model.pending_wrap.take().is_some() {
-        raise_lock_changed(model);
-        model.ui_cursor = None;
-        model.ui_cursor_dirty = true;
-    }
-    // Coins go back to nothing, as the purse was never debited; a vendor row clears with no
-    // packet (`0x49525f`). An item's unlock signals in the mode-1 arm (`0x495455`), before the
-    // tail's grid hide and `CURSOR_UPDATE`.
-    if let Some(CursorPayload::Item(_)) = model.cursor.take() {
-        raise_lock_changed(model);
-    }
-    raise_cursor_update(model);
-}
-
-/// The sell fork's clear, `SetCursorItem(0, …)` (`0x494b60`), shared by `PickupMerchantItem`
-/// (`0x4fb760`) and the interact ladder's vendor arm (`0x5df5d0`): unlike [`clear_cursor`] it
-/// leaves the source slot locked, grey until the server removes the item (the mode-1 arm skips
-/// `0x495420`). Any other payload is no sale and stays held (`GetCursorItem`, `0x494c60`).
+/// The sell fork's clear, `SetCursorItem(0, …)` with a zero guid, so its inner `ClearCursor(0,1)`
+/// alone (`0x4fb7ac`, `0x5df5fc`): `PickupMerchantItem` (`0x4fb760`) and the interact ladder's
+/// vendor arm (`0x5df5d0`). Unlike [`clear_cursor`] it lifts no lock, so the source slot stays
+/// grey until the server removes the item. Any other payload is no sale and stays held
+/// (`GetCursorItem`, `0x494c60`).
 pub(crate) fn take_cursor_item_for_sale(model: &mut Model) -> Option<CursorItem> {
-    let item = match model.cursor.take() {
-        Some(CursorPayload::Item(item)) => item,
-        other => {
-            model.cursor = other;
-            return None;
-        }
+    let Some(CursorPayload::Item(item)) = &model.cursor else {
+        return None;
     };
-    raise_cursor_update(model);
+    let item = item.clone();
+    clear(model, Clear::KEEP_LOCK);
     Some(item)
 }
 
@@ -308,50 +421,52 @@ pub(crate) fn world_drop_click(model: &mut Model) -> bool {
     }
 }
 
-/// `SplitContainerItem(bag, slot, count)`: picks up `count` of an unlocked stack onto an empty
-/// cursor. A count of the whole stack or more is a plain pickup, since vmangos refuses to split a
+/// `SplitContainerItem(bag, slot, count)` (`0x4f9f70`): an unlocked stack's `count` goes on the
+/// cursor. Past its gates the binding clears with `ClearCursor(1,1)` (`0x4fa078`), whatever is
+/// held, then picks up ([`pick_up_item`], `0x4fa0aa`), so its handlers see two clears and the
+/// set. A count of the whole stack or more is a plain pickup, since vmangos refuses to split a
 /// whole stack or more (`Player.cpp:11139`, `:11147`). Returns whether anything was picked up.
-pub(crate) fn split_container_item(model: &mut Model, bag: i64, slot: u32, count: i64) -> bool {
-    if model.cursor.is_some() || count < 1 {
-        return false;
-    }
-    let Some(s) = model.containers.get(&bag).and_then(|c| c.slots.get(&slot)) else {
-        return false;
+pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -> bool {
+    let item = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let Some(s) = model.containers.get(&bag).and_then(|c| c.slots.get(&slot)) else {
+            return false;
+        };
+        if count < 1 || s.item_id == 0 || s.locked || client_locked(&model, bag, slot) {
+            return false;
+        }
+        let n = count.min(i64::from(s.count)) as u32;
+        let whole = n >= s.count;
+        CursorItem {
+            bag,
+            slot,
+            item_id: s.item_id,
+            texture: s.texture.clone(),
+            link: s.link.clone(),
+            quality: s.quality,
+            count: if whole { None } else { Some(n) },
+            bar_placeable: s.bar_placeable,
+            equip_slots: s.equip_slots.clone(),
+        }
     };
-    if s.item_id == 0 || s.locked {
-        return false;
-    }
-    let n = count.min(i64::from(s.count)) as u32;
-    let whole = n >= s.count;
-    let item = CursorItem {
-        bag,
-        slot,
-        item_id: s.item_id,
-        texture: s.texture.clone(),
-        link: s.link.clone(),
-        quality: s.quality,
-        count: if whole { None } else { Some(n) },
-        bar_placeable: s.bar_placeable,
-        equip_slots: s.equip_slots.clone(),
-    };
-    model.cursor = Some(CursorPayload::Item(item));
-    raise_cursor_update(model);
-    raise_lock_changed(model);
+    verb(lua, clear_cursor);
+    pick_up_item(lua, item);
     true
 }
 
-/// `DeleteCursorItem()`, the delete popup's accept: a held item queues its `(bag, slot, count)`
-/// destroy, count 0 for the whole stack, and clears; anything else is a no-op.
+/// `DeleteCursorItem()` (`0x4897b0`), the delete popup's accept: a held item queues its
+/// `(bag, slot, count)` destroy, count 0 for the whole stack, then `ClearCursor(1,1)`
+/// (`0x4898af`) and `LockItem` on it again (`0x4898bc`) for the server's answer; anything else is
+/// a no-op.
 pub(crate) fn delete_cursor_item(model: &mut Model) {
     let Some(CursorPayload::Item(item)) = &model.cursor else {
         return;
     };
     let item = item.clone();
-    model.cursor = None;
     model
         .container_destroys
         .push((item.bag, item.slot, item.count.unwrap_or(0)));
-    raise_cursor_update(model);
+    clear_cursor(model);
     raise_lock_changed(model);
 }
 
@@ -488,7 +603,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "SplitContainerItem",
         lua.create_function(|lua, (bag, slot, count): (i64, u32, i64)| {
-            super::tick::verb(lua, |model| split_container_item(model, bag, slot, count));
+            split_container_item(lua, bag, slot, count);
             Ok(())
         })?,
     )?;
@@ -507,6 +622,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     money::install(lua)?;
 
     Ok(())
+}
+
+/// Test-only: a `CursorKind()` global naming the payload a handler reads (`none`, `item`,
+/// `spell`, `action`, `macro`, `pet`, `row`, `stable`, `money`), since 1.12's Lua has no getter for
+/// most modes.
+#[cfg(test)]
+pub(crate) fn install_kind_probe(s: &super::UiScript) {
+    let kind = s
+        .lua
+        .create_function(|lua, ()| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            Ok(match &model.cursor {
+                None => "none",
+                Some(CursorPayload::Item(_)) => "item",
+                Some(CursorPayload::Spell(_)) => "spell",
+                Some(CursorPayload::Action(_)) => "action",
+                Some(CursorPayload::Macro(_)) => "macro",
+                Some(CursorPayload::PetAction(_)) => "pet",
+                Some(CursorPayload::Merchant(_)) => "row",
+                Some(CursorPayload::StablePet(_)) => "stable",
+                Some(CursorPayload::Money(_)) => "money",
+            })
+        })
+        .unwrap();
+    s.lua.globals().set("CursorKind", kind).unwrap();
 }
 
 #[cfg(test)]
@@ -687,7 +827,8 @@ mod tests {
         assert!(s.cursor_payload().is_none());
     }
 
-    /// A pickup's events have run by the verb's next Lua line, each handler reading the held item:
+    /// A pickup's events have run by the verb's next Lua line, each handler reading the cursor as
+    /// the reference's does: `SetCursorItem`'s inner clear on the empty cursor (`0x4952cc`), then
     /// the grid before `CURSOR_UPDATE` (`0x494c3b`, `0x494c54`), then the lock (`0x495415`). The
     /// same-slot click that puts it back is `ClearCursor(1,1)` (`0x4f9e0e`): the unlock
     /// (`0x495455`), the grid hide (`0x4952b3`), then `CURSOR_UPDATE` (`0x4952cc`).
@@ -711,6 +852,7 @@ mod tests {
         assert_eq!(
             seen,
             [
+                "CURSOR_UPDATE nil",
                 "ACTIONBAR_SHOWGRID 1",
                 "CURSOR_UPDATE 1",
                 "ITEM_LOCK_CHANGED 1"
@@ -876,8 +1018,114 @@ mod tests {
     fn split_of_the_whole_stack_degrades_to_a_plain_pickup() {
         let mut s = UiScript::new().unwrap();
         s.set_container(0, Some(one_item_backpack())); // slot 1: a 5-stack
-        assert!(split_container_item(&mut s.model_mut(), 0, 1, 5));
+        assert!(split_container_item(&s.lua, 0, 1, 5));
         let held = s.cursor_item().expect("picked up");
         assert_eq!(held.count, None, "count>=stack ⇒ whole-stack pickup");
+    }
+
+    /// `ClearCursor(1,1)`'s coin arm signals `PLAYER_MONEY` (`0x495248`) before the tail's
+    /// `CURSOR_UPDATE` (`0x4952cc`), both handlers reading the coins gone, so a money frame
+    /// repaints the purse whole: Lua's `ClearCursor()` (`0x4895b0`) and a bag right-click's clear
+    /// (`0x4fa198`) alike.
+    #[test]
+    fn a_clear_with_coins_held_signals_player_money() {
+        let mut s = UiScript::new().unwrap();
+        s.set_money(1_000);
+        s.set_container(0, Some(one_item_backpack()));
+        heard::listen(
+            &s,
+            &["PLAYER_MONEY", "CURSOR_UPDATE"],
+            Some("GetCursorMoney()"),
+        );
+        for clear in ["ClearCursor()", "UseContainerItem(0, 1)"] {
+            s.run("PickupPlayerMoney(10)").unwrap();
+            heard::take(&s);
+            s.run(clear).unwrap();
+            assert_eq!(
+                heard::take(&s),
+                ["PLAYER_MONEY 0", "CURSOR_UPDATE 0"],
+                "{clear}"
+            );
+        }
+    }
+
+    /// `PickupPlayerMoney`'s setter clears with `ClearCursor(1,1)` (`0x494ce0`): a held item
+    /// unlocks (`0x4951d9`) and an armed gift wrap is cancelled (`0x495197`) before the coins go
+    /// on and signal `PLAYER_MONEY` (`0x494d0a`).
+    #[test]
+    fn a_money_pickup_clears_a_held_item_and_an_armed_wrap() {
+        let mut s = UiScript::new().unwrap();
+        s.set_money(1_000);
+        s.set_container(0, Some(one_item_backpack()));
+        super::install_kind_probe(&s);
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        heard::listen(
+            &s,
+            &[
+                "ITEM_LOCK_CHANGED",
+                "ACTIONBAR_SHOWGRID",
+                "ACTIONBAR_HIDEGRID",
+                "CURSOR_UPDATE",
+                "PLAYER_MONEY",
+            ],
+            Some("CursorKind()"),
+        );
+        s.run("PickupPlayerMoney(10)").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            [
+                "ITEM_LOCK_CHANGED none",
+                "ACTIONBAR_HIDEGRID none",
+                "CURSOR_UPDATE none",
+                "PLAYER_MONEY money"
+            ]
+        );
+
+        s.run("ClearCursor()").unwrap();
+        s.model_mut().pending_wrap =
+            Some(crate::script::container::PendingWrap { bag: 0, slot: 1 });
+        heard::take(&s);
+        s.run("PickupPlayerMoney(10)").unwrap();
+        assert!(
+            s.model_ref().pending_wrap.is_none(),
+            "the wrap is cancelled"
+        );
+        assert_eq!(
+            heard::take(&s),
+            [
+                "ITEM_LOCK_CHANGED none",
+                "CURSOR_UPDATE none",
+                "PLAYER_MONEY money"
+            ]
+        );
+    }
+
+    /// The split clears with `ClearCursor(1,1)` (`0x4fa078`) whatever is held, then picks up
+    /// through `SetCursorItem`, whose inner clear signals again (`0x494bb6`), and `LockItem`.
+    #[test]
+    fn a_split_clears_what_is_held_then_picks_up() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(one_item_backpack()));
+        super::install_kind_probe(&s);
+        s.set_cursor_for_test(CursorPayload::Macro(super::CursorMacro {
+            index: 1,
+            texture: None,
+        }));
+        heard::listen(
+            &s,
+            &["CURSOR_UPDATE", "ITEM_LOCK_CHANGED"],
+            Some("CursorKind()"),
+        );
+        s.run("SplitContainerItem(0, 1, 2)").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            [
+                "CURSOR_UPDATE none",
+                "CURSOR_UPDATE none",
+                "CURSOR_UPDATE item",
+                "ITEM_LOCK_CHANGED item"
+            ]
+        );
+        assert_eq!(s.cursor_item().and_then(|i| i.count), Some(2));
     }
 }

@@ -2,7 +2,7 @@
 
 use mlua::{Lua, Value};
 
-use super::{raise_cursor_update, CursorMoney, CursorPayload};
+use super::{clear, clear_cursor, set_cursor, Clear, CursorMoney, CursorPayload};
 use crate::script::binding_abi::{flag, number_arg};
 use crate::script::tick::verb;
 use crate::script::Model;
@@ -25,6 +25,12 @@ pub fn coin_icon(copper: i64) -> &'static str {
     }
 }
 
+/// Raise `PLAYER_MONEY`, which repaints the money frames less the held coins: the coin arm of
+/// `ClearCursor` (`0x495248`) and the money setter's tail (`0x494d0a`).
+pub(super) fn raise_player_money(model: &mut Model) {
+    model.raise("PLAYER_MONEY", Vec::new());
+}
+
 pub(crate) fn cursor_money(model: &Model) -> u32 {
     match &model.cursor {
         Some(CursorPayload::Money(m)) => m.copper,
@@ -32,25 +38,13 @@ pub(crate) fn cursor_money(model: &Model) -> u32 {
     }
 }
 
-/// Raise `PLAYER_MONEY`, which repaints the money frames less the held coins.
-fn raise_player_money(model: &mut Model) {
-    model.raise("PLAYER_MONEY", Vec::new());
-}
-
-/// Put coins on the cursor as `0x494cc0` does, in two steps. Its inner `ClearCursor(1,1)`
-/// (`0x494cd9`) drops coins already held with their `PLAYER_MONEY` (`0x495243`) and fires
+/// Put coins on the cursor as `0x494cc0` does. Its inner `ClearCursor(1,1)` (`0x494cd9`) drops
+/// whatever is held with that arm's events, an item's unlock or coins' `PLAYER_MONEY`, and fires
 /// `CURSOR_UPDATE` (`0x4952cc`) on the empty cursor, so that handler sees no coins; then the coins
 /// land and `PLAYER_MONEY` fires (`0x494d0a`), with no second `CURSOR_UPDATE`.
 fn install_money(lua: &Lua, copper: u32) {
-    verb(lua, |model| {
-        if matches!(model.cursor.take(), Some(CursorPayload::Money(_))) {
-            raise_player_money(model);
-        }
-        raise_cursor_update(model);
-    });
-    verb(lua, |model| {
-        model.cursor = Some(CursorPayload::Money(CursorMoney { copper }));
-        raise_player_money(model);
+    set_cursor(lua, true, |_| {
+        Some(CursorPayload::Money(CursorMoney { copper }))
     });
 }
 
@@ -66,14 +60,13 @@ pub(crate) fn pickup_player_money(lua: &Lua, copper: u32) -> bool {
     allowed
 }
 
-/// `DropCursorMoney`: `PLAYER_MONEY`, then the clear's `CURSOR_UPDATE`, and no packet.
+/// `DropCursorMoney` (`0x48aba0`), `SetCursorMoney(0)`: its `ClearCursor(1,1)` fires the coin
+/// arm's `PLAYER_MONEY`, then `CURSOR_UPDATE`, and no packet.
 pub(crate) fn drop_cursor_money(model: &mut Model) -> bool {
     if !matches!(model.cursor, Some(CursorPayload::Money(_))) || !model.player_control {
         return false;
     }
-    model.cursor = None;
-    raise_player_money(model);
-    raise_cursor_update(model);
+    clear_cursor(model);
     true
 }
 
@@ -94,9 +87,8 @@ pub(crate) fn add_trade_money(model: &mut Model) -> bool {
     if let Some(t) = model.trade.as_mut() {
         t.player.gold = total;
     }
-    // `ClearCursor(1, 0)`: no PLAYER_MONEY, the clear's own CURSOR_UPDATE.
-    model.cursor = None;
-    raise_cursor_update(model);
+    // `ClearCursor(1,0)` (`0x4bfe4b`): no PLAYER_MONEY, the clear's own CURSOR_UPDATE.
+    clear(model, Clear::NO_MONEY_EVENT);
     true
 }
 

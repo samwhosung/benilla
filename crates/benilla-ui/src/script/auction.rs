@@ -807,13 +807,12 @@ fn click_auction_sell_item(model: &mut Model) {
     match model.cursor.take() {
         Some(CursorPayload::Item(item)) => {
             model.auction_sell_item = Some(item);
-            cursor::raise_cursor_update(model);
+            cursor::clear(model, cursor::Clear::KEEP_LOCK);
             cursor::raise_lock_changed(model);
         }
         None => {
             if let Some(item) = model.auction_sell_item.take() {
-                model.cursor = Some(CursorPayload::Item(item));
-                cursor::raise_cursor_update(model);
+                cursor::put(model, CursorPayload::Item(item));
                 cursor::raise_lock_changed(model);
             }
         }

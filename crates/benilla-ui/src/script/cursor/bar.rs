@@ -9,7 +9,7 @@ use crate::script::action::{ACTION_KIND_ITEM, ACTION_KIND_MACRO, ACTION_KIND_SPE
 use crate::script::tick::verb;
 use crate::script::{ActionSlot, Model};
 
-use super::{raise_cursor_update, CursorAction, CursorPayload};
+use super::{clear_cursor, set_cursor, CursorAction, CursorPayload};
 
 /// The passive-spell refusal's error, errorId `0x9e`: entry `0xb4c0f0` of the table at `0xb4b498`
 /// (stride `0x14`) names this key (`0x84133c`).
@@ -23,49 +23,56 @@ fn pack(kind: u8, action: u32) -> u32 {
 /// `PickupAction(id)`, the slot's shift-click and drag start (`ActionBarFrame.xml:12-38`). With a
 /// payload held it places instead; a pickup also clears the slot on the wire at once. The cursor
 /// goes first and the slot after, as `0x4e6130` runs its setter before the slot clear `0x4e5db0`,
-/// so the pickup's `CURSOR_UPDATE` handler still reads the action in its slot. Returns whether to
-/// repaint.
+/// so the pickup's events still read the action in its slot. The setter is the one for the
+/// slot's kind ([`super::put`]): its inner `ClearCursor(1,1)` signals on the empty cursor, then
+/// the grid shows. Returns whether to repaint.
 pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
-    let held = lua
-        .app_data_ref::<Model>()
-        .expect("model app_data")
-        .cursor
-        .is_some();
-    if held {
+    let picked = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        if model.cursor.is_some() {
+            None
+        } else {
+            // An empty slot returns before any setter (`0x4e61a3`).
+            Some(model.actions.get(&id).map(|slot| CursorAction {
+                src_slot: id,
+                kind: slot.kind,
+                action: slot.action,
+                texture: slot.texture.clone(),
+            }))
+        }
+    };
+    let Some(picked) = picked else {
         return place_action(lua, id);
-    }
-    let picked = verb(lua, |model| {
-        let Some(slot) = model.actions.get(&id) else {
-            return false;
-        };
-        let payload = CursorAction {
-            src_slot: id,
-            kind: slot.kind,
-            action: slot.action,
-            texture: slot.texture.clone(),
-        };
-        model.cursor = Some(CursorPayload::Action(payload));
-        raise_cursor_update(model);
-        true
+    };
+    let Some(payload) = picked else {
+        return false;
+    };
+    set_cursor(lua, true, |_| Some(CursorPayload::Action(payload)));
+    verb(lua, |model| {
+        model.actions.remove(&id);
+        model.action_sets.push((id, 0));
     });
-    if picked {
-        verb(lua, |model| {
-            model.actions.remove(&id);
-            model.action_sets.push((id, 0));
-        });
-    }
-    picked
+    true
 }
 
 /// `PlaceAction(id)`, the slot's `OnReceiveDrag` and `UseAction(id, 1)`'s place fork. An occupied
-/// slot's action hops onto the cursor with `id` as its source; an item stays in its bag, since a
-/// bar item is a reference, not a move. The cursor goes first and the slot after, as `0x4e62e0`
-/// puts the displaced action on the cursor (or clears it) before it writes the slot, so the
-/// cursor's events read the slot as it was. Returns whether to repaint.
+/// slot's action hops onto the cursor with `id` as its source, through its setter, whose inner
+/// `ClearCursor(1,1)` drops the held payload, hiding the grid, before the setter shows it again
+/// (`0x4e6450`, `0x4e6494`, `0x4e64e2`); an empty slot's place is that clear alone (`0x4e650f`).
+/// An item stays in its bag, since a bar item is a reference, not a move. The cursor goes first
+/// and the slot after, as `0x4e62e0` writes the slot past the setter, so the cursor's events read
+/// the slot as it was. Returns whether to repaint.
 pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
-    let Some((kind, action, texture)) = verb(lua, |model| take_for_place(model, id)) else {
+    let Some((placed, displaced)) = verb(lua, |model| plan_place(model, id)) else {
         return false;
     };
+    let (kind, action, texture) = placed;
+    match displaced {
+        Some(displaced) => {
+            set_cursor(lua, true, |_| Some(CursorPayload::Action(displaced)));
+        }
+        None => verb(lua, clear_cursor),
+    }
     verb(lua, |model| {
         model.actions.insert(
             id,
@@ -83,9 +90,12 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
     true
 }
 
-/// `PlaceAction`'s cursor half: the accept filters, then the held payload swapped for the slot's
-/// occupant. Returns what the slot takes, or `None` for a refusal that leaves the payload held.
-fn take_for_place(model: &mut Model, id: u32) -> Option<(u8, u32, Option<String>)> {
+/// What the slot takes and the action it displaces.
+type PlacePlan = ((u8, u32, Option<String>), Option<CursorAction>);
+
+/// `PlaceAction`'s decision: the accept filters, then what the slot takes from the held payload
+/// and the occupant that hops. `None` is a refusal that leaves the payload held.
+fn plan_place(model: &mut Model, id: u32) -> Option<PlacePlan> {
     // The two accept filters (`0x4e62e0`) refuse with a bare return: nothing stored or sent, and
     // the payload stays held. An item needs an on-use spell or an equip slot (`0x4e6571`), so a
     // bag is placeable; a passive spell (`Attributes & 0x40`) also raises errorId `0x9e` through
@@ -98,34 +108,26 @@ fn take_for_place(model: &mut Model, id: u32) -> Option<(u8, u32, Option<String>
         }
         _ => {}
     }
-    let held = model.cursor.take()?;
-    let placeable = match &held {
-        CursorPayload::Action(a) => Some((a.kind, a.action, a.texture.clone())),
-        CursorPayload::Item(i) => Some((ACTION_KIND_ITEM, i.item_id, i.texture.clone())),
-        CursorPayload::Spell(s) => Some((ACTION_KIND_SPELL, s.spell_id, s.texture.clone())),
+    let placed = match model.cursor.as_ref()? {
+        CursorPayload::Action(a) => (a.kind, a.action, a.texture.clone()),
+        CursorPayload::Item(i) => (ACTION_KIND_ITEM, i.item_id, i.texture.clone()),
+        CursorPayload::Spell(s) => (ACTION_KIND_SPELL, s.spell_id, s.texture.clone()),
         // `PlaceAction` accepts modes 1, 3, 7 and 8 (`0x4e62e0`): a macro, mode 8, packs its id
         // under the macro tag. Pet actions (4), coins (2), stabled pets (10) and vendor rows (5)
         // are refused and stay held.
-        CursorPayload::Macro(m) => Some((ACTION_KIND_MACRO, m.index, m.texture.clone())),
-        CursorPayload::PetAction(_) => None,
-        CursorPayload::StablePet(_) => None,
-        CursorPayload::Money(_) => None,
-        CursorPayload::Merchant(_) => None,
+        CursorPayload::Macro(m) => (ACTION_KIND_MACRO, m.index, m.texture.clone()),
+        CursorPayload::PetAction(_)
+        | CursorPayload::StablePet(_)
+        | CursorPayload::Money(_)
+        | CursorPayload::Merchant(_) => return None,
     };
-    let Some(placed) = placeable else {
-        model.cursor = Some(held);
-        return None;
-    };
-    model.cursor = model.actions.get(&id).map(|d| {
-        CursorPayload::Action(CursorAction {
-            src_slot: id,
-            kind: d.kind,
-            action: d.action,
-            texture: d.texture.clone(),
-        })
+    let displaced = model.actions.get(&id).map(|d| CursorAction {
+        src_slot: id,
+        kind: d.kind,
+        action: d.action,
+        texture: d.texture.clone(),
     });
-    raise_cursor_update(model);
-    Some(placed)
+    Some((placed, displaced))
 }
 
 /// Register `PickupAction` and `PlaceAction` as globals.
@@ -334,7 +336,9 @@ mod tests {
     }
 
     #[test]
-    fn showgrid_hidegrid_fire_on_gain_and_loss_not_on_a_hop() {
+    /// The setters show the grid (`0x494dd1`) and every clear's tail hides it (`0x4952b3`), so a
+    /// hop's inner clear hides it before the displaced action's setter shows it again.
+    fn showgrid_hidegrid_fire_on_gain_and_loss_and_twice_on_a_hop() {
         let mut s = UiScript::new().unwrap();
         s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
         s.set_action(2, Some(action_slot("Interface\\Icons\\Spell_B", 0x00, 222)));
@@ -357,15 +361,15 @@ mod tests {
         assert_eq!(s.eval::<i64>("return shows").unwrap(), 1);
         assert_eq!(s.eval::<i64>("return hides").unwrap(), 0);
 
-        s.run("PlaceAction(2)").unwrap(); // Some -> Some (hop): neither
+        s.run("PlaceAction(2)").unwrap(); // Some -> Some (hop): HIDE, then SHOW
         s.tick(0.01);
-        assert_eq!(s.eval::<i64>("return shows").unwrap(), 1);
-        assert_eq!(s.eval::<i64>("return hides").unwrap(), 0);
+        assert_eq!(s.eval::<i64>("return shows").unwrap(), 2);
+        assert_eq!(s.eval::<i64>("return hides").unwrap(), 1);
 
         s.run("ClearCursor()").unwrap(); // Some -> None: HIDE
         s.tick(0.01);
-        assert_eq!(s.eval::<i64>("return shows").unwrap(), 1);
-        assert_eq!(s.eval::<i64>("return hides").unwrap(), 1);
+        assert_eq!(s.eval::<i64>("return shows").unwrap(), 2);
+        assert_eq!(s.eval::<i64>("return hides").unwrap(), 2);
     }
 
     #[test]
@@ -456,5 +460,46 @@ mod tests {
 
         assert!(place_action(&s.lua, 4));
         assert_eq!(s.take_action_sets(), vec![(4, 0x8000_0000u32 | 4496)]);
+    }
+
+    /// A bar pickup runs the setter of its slot's kind (`0x4e6130`): a spell's shows the grid and
+    /// signals nothing after (`0x494dd1`); an item's row grab shows it and signals after its set
+    /// (`0x49513a`, `0x49515e`). Each inner clear signals first, so a hop hides the grid and
+    /// `CURSOR_UPDATE` reads the emptied cursor before the displaced action goes on.
+    #[test]
+    fn a_bar_pickup_and_a_hop_signal_as_their_setters() {
+        let s = {
+            let mut s = UiScript::new().unwrap();
+            s.set_action(1, Some(action_slot("Interface\\Icons\\Spell_A", 0x00, 111)));
+            s.set_action(2, Some(action_slot("Interface\\Icons\\INV_A", 0x80, 4540)));
+            s
+        };
+        crate::script::cursor::install_kind_probe(&s);
+        crate::script::tick::heard::listen(
+            &s,
+            &["CURSOR_UPDATE", "ACTIONBAR_SHOWGRID", "ACTIONBAR_HIDEGRID"],
+            Some("CursorKind()"),
+        );
+        s.run("PickupAction(1)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["CURSOR_UPDATE none", "ACTIONBAR_SHOWGRID action"]
+        );
+        s.run("PlaceAction(2)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            [
+                "ACTIONBAR_HIDEGRID none",
+                "CURSOR_UPDATE none",
+                "ACTIONBAR_SHOWGRID action",
+                "CURSOR_UPDATE action"
+            ]
+        );
+        // Onto an empty slot the place is the clear alone (`0x4e650f`).
+        s.run("PlaceAction(3)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["ACTIONBAR_HIDEGRID none", "CURSOR_UPDATE none"]
+        );
     }
 }

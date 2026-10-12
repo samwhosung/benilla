@@ -9,7 +9,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::cursor::{raise_cursor_update, CursorMacro, CursorPayload};
+use super::cursor::{set_cursor, CursorMacro, CursorPayload};
 use super::Model;
 use crate::script::binding_abi::Idx;
 
@@ -255,23 +255,23 @@ fn delete_macro(model: &mut Model, index: usize) -> bool {
     true
 }
 
-/// `PickupMacro(index)`: the macro payload (cursor mode 8, `[0xb4e2fc]`), which `PlaceAction`
-/// (`0x4e62e0`) packs as `macroId | 0x40000000`. Refused while the cursor holds anything; the
-/// reference's setter (`0x494f80`) clears the cursor first instead.
-fn pickup_macro(model: &mut Model, index: usize) -> bool {
-    if model.cursor.is_some() {
-        return false;
-    }
-    let Some(entry) = model.macros.get(index) else {
-        return false;
+/// `PickupMacro(index)` (`0x4f1ae0`): the macro payload (cursor mode 8, `[0xb4e2fc]`), which
+/// `PlaceAction` (`0x4e62e0`) packs as `macroId | 0x40000000`. A missing macro does nothing
+/// (`0x4f1b1e`); otherwise the setter (`0x494f80`) clears whatever is held with its inner
+/// `ClearCursor(1,1)`, then sets the macro and shows the action bar's grid. Returns whether a
+/// macro went on.
+fn pickup_macro(lua: &Lua, index: usize) -> bool {
+    let payload = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        let Some(entry) = model.macros.get(index) else {
+            return false;
+        };
+        CursorMacro {
+            index: index as u32,
+            texture: entry.texture.clone(),
+        }
     };
-    let payload = CursorMacro {
-        index: index as u32,
-        texture: entry.texture.clone(),
-    };
-    model.cursor = Some(CursorPayload::Macro(payload));
-    raise_cursor_update(model);
-    true
+    set_cursor(lua, true, |_| Some(CursorPayload::Macro(payload)))
 }
 
 fn opt_string(v: Option<&Value>) -> Option<String> {
@@ -436,7 +436,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PickupMacro",
         lua.create_function(|lua, index: usize| {
-            super::tick::verb(lua, |model| pickup_macro(model, index));
+            pickup_macro(lua, index);
             Ok(())
         })?,
     )?;
@@ -660,26 +660,24 @@ mod tests {
     }
 
     #[test]
-    fn pickup_macro_loads_the_cursor_and_refuses_while_holding() {
+    fn pickup_macro_loads_the_cursor_over_whatever_is_held() {
         use crate::script::cursor::CursorPayload;
 
         let s = seeded();
         s.run(r#"CreateMacro("Ambush", 1, "/cast Ambush")"#)
             .unwrap();
 
-        assert!(!pickup_macro(&mut s.model_mut(), 5), "empty slot");
-        assert!(pickup_macro(&mut s.model_mut(), 1));
-        assert_eq!(
-            s.cursor_payload(),
-            Some(CursorPayload::Macro(CursorMacro {
-                index: 1,
-                texture: Some("Interface\\Icons\\Ability_Ambush".into()),
-            }))
-        );
-        assert!(
-            !pickup_macro(&mut s.model_mut(), 1),
-            "a macro button is a source, never a drop target"
-        );
+        assert!(!pickup_macro(&s.lua, 5), "empty slot");
+        assert!(s.cursor_payload().is_none());
+        assert!(pickup_macro(&s.lua, 1));
+        let ambush = Some(CursorPayload::Macro(CursorMacro {
+            index: 1,
+            texture: Some("Interface\\Icons\\Ability_Ambush".into()),
+        }));
+        assert_eq!(s.cursor_payload(), ambush);
+        // The setter's inner clear drops what is held, then sets (`0x494fad`).
+        assert!(pickup_macro(&s.lua, 1));
+        assert_eq!(s.cursor_payload(), ambush);
     }
 
     #[test]
@@ -692,5 +690,34 @@ mod tests {
         );
         assert!(s.eval::<bool>("return GetMacroIconInfo(4) == nil").unwrap());
         assert!(s.eval::<bool>("return GetMacroIconInfo(0) == nil").unwrap());
+    }
+
+    /// The macro setter (`0x494f80`) signals only through its inner clear (`0x494fad`): that
+    /// `CURSOR_UPDATE` reads the empty cursor, and the set ends on the grid (`0x494fd7`).
+    #[test]
+    fn a_macro_pickup_signals_its_clear_then_shows_the_grid() {
+        let s = seeded();
+        s.run(r#"CreateMacro("Ambush", 1, "/cast Ambush")"#)
+            .unwrap();
+        crate::script::cursor::install_kind_probe(&s);
+        crate::script::tick::heard::listen(
+            &s,
+            &["CURSOR_UPDATE", "ACTIONBAR_SHOWGRID", "ACTIONBAR_HIDEGRID"],
+            Some("CursorKind()"),
+        );
+        s.run("PickupMacro(1)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["CURSOR_UPDATE none", "ACTIONBAR_SHOWGRID macro"]
+        );
+        s.run("PickupMacro(1)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            [
+                "ACTIONBAR_HIDEGRID none",
+                "CURSOR_UPDATE none",
+                "ACTIONBAR_SHOWGRID macro"
+            ]
+        );
     }
 }

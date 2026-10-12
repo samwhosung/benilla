@@ -806,15 +806,14 @@ fn click_send_mail_item(model: &mut Model) {
         Some(CursorPayload::Item(item)) => {
             // An earlier attachment is overwritten, as in the reference; its slot has no lock.
             model.mail_send_item = Some(item);
-            cursor::raise_cursor_update(model);
+            cursor::clear(model, cursor::Clear::KEEP_LOCK);
             cursor::raise_lock_changed(model);
             // `MAIL_SEND_INFO_UPDATE` (`0x4ae0de`): the stock tab re-reads the item and postage.
             model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
         }
         None => {
             if let Some(item) = model.mail_send_item.take() {
-                model.cursor = Some(CursorPayload::Item(item));
-                cursor::raise_cursor_update(model);
+                cursor::put(model, CursorPayload::Item(item));
                 cursor::raise_lock_changed(model);
                 model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
             }
