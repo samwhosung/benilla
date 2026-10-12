@@ -633,6 +633,75 @@ fn subclass_filter_exclusive_narrows_list_but_not_vocabulary() {
     );
 }
 
+/// Both filter getters read `trunc(n) - 1` as a signed index: anything at or below 0 asks about
+/// the whole list (`0x4ffdcd`, `0x500018`), one past the end raises (`0x4ffe0e`, `0x50006e`), and a
+/// non-number raises the usage error.
+#[test]
+fn filter_getters_treat_a_non_positive_index_as_all_and_raise_past_the_end() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(state()));
+    s.run("SetTradeSkillSubClassFilter(2, 1, 1)").unwrap();
+    for idx in ["0", "-1", "-7.5", "0.5"] {
+        assert_eq!(
+            s.eval::<Option<i64>>(&format!("return GetTradeSkillSubClassFilter({idx})"))
+                .unwrap(),
+            None,
+            "a filtered list is not all shown at {idx}"
+        );
+    }
+    s.run("SetTradeSkillSubClassFilter(0, 1, 1)").unwrap();
+    for idx in ["0", "-1", "-7.5"] {
+        assert_eq!(
+            s.eval::<i64>(&format!("return GetTradeSkillSubClassFilter({idx})"))
+                .unwrap(),
+            1,
+            "all shown at {idx}"
+        );
+        assert_eq!(
+            s.eval::<i64>(&format!("return GetTradeSkillInvSlotFilter({idx})"))
+                .unwrap(),
+            1
+        );
+    }
+    let raises = |s: &UiScript, call: &str, text: &str| {
+        let err = s
+            .eval::<String>(&format!(
+                "local ok, e = pcall(function() return {call} end) return tostring(e)"
+            ))
+            .unwrap();
+        assert!(err.contains(text), "{call}: {err}");
+    };
+    // The state has four groups and two present inventory types.
+    raises(
+        &s,
+        "GetTradeSkillSubClassFilter(5)",
+        "Bad sub class in GetTradeSkillSubClassFilter",
+    );
+    raises(
+        &s,
+        "GetTradeSkillInvSlotFilter(3)",
+        "Bad inv type in GetTradeSkillInvSlotFilter",
+    );
+    raises(
+        &s,
+        "GetTradeSkillSubClassFilter('x')",
+        "Usage: GetTradeSkillSubClassFilter(index)",
+    );
+    raises(
+        &s,
+        "GetTradeSkillInvSlotFilter()",
+        "Usage: GetTradeSkillInvSlotFilter(index)",
+    );
+    // With no skill window open the list is empty: all is shown, and index 1 is past the end.
+    s.set_trade_skill(None);
+    assert_eq!(
+        s.eval::<i64>("return GetTradeSkillSubClassFilter(0)")
+            .unwrap(),
+        1
+    );
+    raises(&s, "GetTradeSkillSubClassFilter(1)", "Bad sub class");
+}
+
 /// Stand-in slot strings named after their tokens (`0x84dd70`): `SECONDARYHANDSLOT`,
 /// `INVTYPE_SHIELD` and `INVTYPE_WEAPONOFFHAND` all read "Off Hand" in enUS, so only the token
 /// shows which one a bit reaches.

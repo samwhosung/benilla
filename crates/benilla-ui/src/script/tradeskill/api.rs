@@ -12,6 +12,13 @@ use super::view::{
 };
 use crate::script::binding_abi::Idx;
 
+/// The index of the two filter getters: `is-number` (raising the usage error), then `_ftol` minus
+/// one as a signed number; negative means the whole list.
+fn filter_index(lua: &Lua, v: Option<Value>, usage: &'static str) -> mlua::Result<i32> {
+    let v = v.unwrap_or(Value::Nil);
+    Ok(number_arg(lua, v, usage)?.wrapping_sub(1))
+}
+
 /// An optional string as a Lua value (`nil` when absent).
 fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
     Ok(match s {
@@ -339,24 +346,28 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // subclass flag (`+0xc`, mask `0x84dd60`) is kept here as hidden group keys.
     g.set(
         "GetTradeSkillSubClassFilter",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Option<Value>| {
+            // `is-number`, then `trunc(n) - 1` as a signed index (`0x4ffdcd`): anything at or below
+            // 0 asks about the whole list, one past the end raises (`0x4ffe0e`, `0x84e738`).
+            let n = filter_index(lua, index, "Usage: GetTradeSkillSubClassFilter(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let Some(t) = model.trade_skill.as_ref() else {
-                return Ok(binding_abi::flag(false));
+            let groups = model
+                .trade_skill
+                .as_ref()
+                .map(|t| build_groups(&t.recipes))
+                .unwrap_or_default();
+            let shown = |g: &super::view::TradeSkillGroup| {
+                !model.trade_skill_subclass_hidden.contains(&g.key)
             };
-            let groups = build_groups(&t.recipes);
-            Ok(match index.checked_sub(1) {
-                None => binding_abi::flag(
-                    !groups
-                        .iter()
-                        .any(|g| model.trade_skill_subclass_hidden.contains(&g.key)),
-                ),
-                Some(n) => binding_abi::flag(
-                    groups
-                        .get(n)
-                        .is_some_and(|g| !model.trade_skill_subclass_hidden.contains(&g.key)),
-                ),
-            })
+            if n < 0 {
+                return Ok(binding_abi::flag(groups.iter().all(shown)));
+            }
+            match groups.get(n as usize) {
+                Some(g) => Ok(binding_abi::flag(shown(g))),
+                None => Err(mlua::Error::RuntimeError(
+                    "Bad sub class in GetTradeSkillSubClassFilter".into(),
+                )),
+            }
         })?,
     )?;
     g.set(
@@ -415,23 +426,27 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // (`0x4ffe60`).
     g.set(
         "GetTradeSkillInvSlotFilter",
-        lua.create_function(|lua, Idx(index): Idx| {
+        lua.create_function(|lua, index: Option<Value>| {
+            // The same shape over the present inventory-type bits (`0x500018`): at or below 0
+            // asks about all of them, past the last present one raises (`0x50006e`, `0x84e838`).
+            let n = filter_index(lua, index, "Usage: GetTradeSkillInvSlotFilter(index)")?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            if model.trade_skill.is_none() {
-                return Ok(binding_abi::flag(false));
+            let bits = if model.trade_skill.is_some() {
+                present_inv_slots(&model)
+            } else {
+                Vec::new()
+            };
+            let shown = |b: &u32| model.trade_skill_invslot_mask & (1 << b) != 0;
+            // Everything shown: (present & mask) == present (`0x4fffd0`).
+            if n < 0 {
+                return Ok(binding_abi::flag(bits.iter().all(shown)));
             }
-            let bits = present_inv_slots(&model);
-            Ok(match index.checked_sub(1) {
-                // Everything shown: (present & mask) == present (`0x4fffd0`).
-                None => binding_abi::flag(
-                    bits.iter()
-                        .all(|&b| model.trade_skill_invslot_mask & (1 << b) != 0),
-                ),
-                Some(n) => binding_abi::flag(
-                    bits.get(n)
-                        .is_some_and(|&b| model.trade_skill_invslot_mask & (1 << b) != 0),
-                ),
-            })
+            match bits.get(n as usize) {
+                Some(b) => Ok(binding_abi::flag(shown(b))),
+                None => Err(mlua::Error::RuntimeError(
+                    "Bad inv type in GetTradeSkillInvSlotFilter".into(),
+                )),
+            }
         })?,
     )?;
     g.set(
