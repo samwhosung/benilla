@@ -252,8 +252,9 @@ impl super::UiScript {
     /// (`0x4cd640`), which lifts the attached item's lock with its `ITEM_LOCK_CHANGED`
     /// (`0x495420` at `0x4cd653`).
     pub fn clear_auction_sell_item(&mut self) {
-        if self.model_mut().auction_sell_item.take().is_some() {
-            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
+        let item = self.model_mut().auction_sell_item.take();
+        if let Some(item) = item {
+            self.unlock_item(item.guid);
         }
     }
 }
@@ -924,6 +925,7 @@ mod tests {
         {
             let mut model = s.model_mut();
             model.auction_sell_item = Some(CursorItem {
+                guid: 0x108,
                 bag: 0,
                 slot: 1,
                 item_id: 2589,

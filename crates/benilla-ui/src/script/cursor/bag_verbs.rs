@@ -8,8 +8,8 @@ use crate::script::Model;
 
 use super::doll::{doll_click, DollClick};
 use super::{
-    clear, clear_cursor, client_locked, pick_up_item, raise_lock_changed, Clear, CursorItem,
-    CursorPayload, EQUIPMENT_BAG,
+    clear, clear_cursor, item_locked, lock_item, pick_up_item, Clear, CursorItem, CursorPayload,
+    EQUIPMENT_BAG,
 };
 
 /// The ids `PutItemInBag` and `PickupBagFromSlot` take: what their argument reader (`0x4c8520`)
@@ -74,10 +74,11 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
     let Some(CursorPayload::Item(held)) = model.cursor.clone() else {
         return false;
     };
-    let occupied = usize::try_from(live)
+    let occupant = usize::try_from(live)
         .ok()
         .and_then(|slot| model.inv_slot("player", slot))
-        .is_some();
+        .map(|s| s.guid);
+    let occupied = occupant.is_some();
 
     if !occupied {
         // An empty slot: the doll handler equips the bag (`0x4c7300`), and the answer is nil
@@ -106,9 +107,10 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
                 dst_slot: live,
                 count: None,
             });
-            // The swap send's `ClearCursor(0,1)` (`0x5e0fe7`).
+            // `LockItem` on the occupant (`0x4c7d62`, `0x4c7dca`), then the swap send's
+            // `ClearCursor(0,1)` (`0x5e0fe7`).
+            lock_item(model, occupant.unwrap_or(0));
             clear(model, Clear::KEEP_LOCK);
-            raise_lock_changed(model);
         }
         return true;
     }
@@ -124,9 +126,8 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
         dst_bag,
         count: held.count,
     });
-    // `ClearCursor(0,1)` past the send (`0x4c7e55`).
+    // `ClearCursor(0,1)` past the send (`0x4c7e55`), locking nothing new.
     clear(model, Clear::KEEP_LOCK);
-    raise_lock_changed(model);
     true
 }
 
@@ -144,7 +145,6 @@ pub(super) fn put_item_in_backpack(model: &mut Model) -> bool {
         count: held.count,
     });
     clear(model, Clear::KEEP_LOCK);
-    raise_lock_changed(model);
     true
 }
 
@@ -196,8 +196,9 @@ fn grab_bag(model: &Model, live: u32) -> Option<CursorItem> {
     usize::try_from(live)
         .ok()
         .and_then(|slot| model.inv_slot("player", slot))
-        .filter(|s| s.item_id != 0 && !s.locked && !client_locked(model, EQUIPMENT_BAG, live))
+        .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
         .map(|s| CursorItem {
+            guid: s.guid,
             bag: EQUIPMENT_BAG,
             slot: live,
             item_id: s.item_id,
@@ -272,6 +273,7 @@ mod tests {
             icon: Some("Interface\\Icons\\INV_Misc_Bag_08".into()),
             count: 1,
             equip_slots: vec![20, 21, 22, 23],
+            guid: 0x8000_0000 | u64::from(item_id),
             ..Default::default()
         }
     }
@@ -286,6 +288,7 @@ mod tests {
                 count: 1,
                 texture: Some("Interface\\Icons\\INV_Misc_Bag_08".into()),
                 equip_slots: vec![20, 21, 22, 23],
+                guid: 0x201,
                 ..Default::default()
             },
         );
@@ -296,6 +299,7 @@ mod tests {
                 count: 1,
                 texture: Some("Interface\\Icons\\INV_Helmet_01".into()),
                 equip_slots: vec![1],
+                guid: 0x202,
                 ..Default::default()
             },
         );
@@ -409,6 +413,61 @@ mod tests {
         );
     }
 
+    /// The swap locks the occupant first (`0x4c7d62`, `0x4c7dca`), its `ITEM_LOCK_CHANGED` ahead
+    /// of the send's clear (`0x5e0fe7`); a store into a bag or the backpack (`0x4c7e55`) and the
+    /// doll's auto-equip clear with no lock event, the held item keeping its lock.
+    #[test]
+    fn only_the_swap_signals_a_lock_and_it_leads_the_clear() {
+        let mut s = UiScript::new().unwrap();
+        s.set_bank(Some(Default::default()));
+        s.set_container(0, Some(backpack()));
+        s.set_bank_bag_slots(one_bank_bag());
+        let place = |s: &UiScript, pick: &str, put: &str| {
+            s.run(pick).unwrap();
+            heard::listen(
+                s,
+                &["ITEM_LOCK_CHANGED", "CURSOR_UPDATE"],
+                Some("IsInventoryItemLocked(64)"),
+            );
+            s.run(put).unwrap();
+            heard::take(s)
+        };
+        assert_eq!(
+            place(&s, "PickupContainerItem(0, 1)", "PutItemInBag(64)"),
+            ["ITEM_LOCK_CHANGED 1", "CURSOR_UPDATE 1"],
+            "the swap"
+        );
+        assert!(s.eval::<bool>("return IsInventoryItemLocked(64)").unwrap());
+        // The server's answer releases both ends.
+        s.unlock_item(0x201);
+        s.unlock_item(0x8000_0000 | 4500);
+        let locked = |s: &UiScript| {
+            s.eval::<bool>("local _, _, l = GetContainerItemInfo(0, 2) return l == 1")
+                .unwrap()
+        };
+        assert_eq!(
+            place(&s, "PickupContainerItem(0, 2)", "PutItemInBag(64)"),
+            ["CURSOR_UPDATE nil"],
+            "the store into the bank bag"
+        );
+        assert!(locked(&s), "the stored item keeps its pickup's lock");
+        s.unlock_item(0x202);
+        assert_eq!(
+            place(&s, "PickupContainerItem(0, 2)", "PutItemInBackpack()"),
+            ["CURSOR_UPDATE nil"],
+            "the backpack store"
+        );
+        assert!(locked(&s));
+        s.unlock_item(0x202);
+        s.set_bank_bag_slots(Default::default());
+        assert_eq!(
+            place(&s, "PickupContainerItem(0, 2)", "PutItemInBag(64)"),
+            ["CURSOR_UPDATE nil"],
+            "the doll's auto-equip of a misfit (`0x4c78ef`)"
+        );
+        assert!(locked(&s));
+    }
+
     #[test]
     fn the_backpack_button_always_auto_stores_even_a_bag() {
         let mut s = UiScript::new().unwrap();
@@ -490,8 +549,9 @@ mod tests {
 
     /// The clear's events (the unlock `0x495455`, then `0x4952cc`) run before the grab reads the
     /// slot (`0x4c7be2`), so its handlers see the bag still in place; the grab's own inner clear
-    /// signals once more on the empty cursor (`0x494bb6`), and only its set's events (`0x494c54`,
-    /// then `0x495415`) see the bag held and locked.
+    /// signals once more on the empty cursor (`0x494bb6`); its set's `CURSOR_UPDATE` (`0x494c54`)
+    /// sees the bag held and still unlocked, and only `LockItem`'s event (`0x495415`) sees it
+    /// locked.
     #[test]
     fn pickup_bag_from_slot_fires_the_clear_before_the_grab() {
         let mut s = UiScript::new().unwrap();
@@ -511,7 +571,7 @@ mod tests {
                 "ITEM_LOCK_CHANGED nil",
                 "CURSOR_UPDATE nil",
                 "CURSOR_UPDATE nil",
-                "CURSOR_UPDATE 1",
+                "CURSOR_UPDATE nil",
                 "ITEM_LOCK_CHANGED 1"
             ]
         );
@@ -544,7 +604,7 @@ mod tests {
 
         let mut bags = one_bank_bag();
         bags[0] = Some(InvSlotView {
-            locked: true,
+            guid: 0x113,
             ..bag_slot_view(4500)
         });
         s.set_bank_bag_slots(bags);

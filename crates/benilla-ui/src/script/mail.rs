@@ -132,8 +132,8 @@ pub struct MailSendRequest {
 /// `0x4acdc0`'s clears: the attachment, whose lock it lifts (`0x495420`, firing an argless
 /// `ITEM_LOCK_CHANGED` at `0x495455`), then money, COD, stationery and package. Returns whether
 /// an attachment was lifted, so the caller fires that event.
-fn clear_compose(model: &mut Model) -> bool {
-    let lock = model.mail_send_item.take().is_some();
+fn clear_compose(model: &mut Model) -> Option<u64> {
+    let lock = model.mail_send_item.take().map(|it| it.guid);
     model.mail_send_money = 0;
     model.mail_send_cod = 0;
     model.mail_stationery = 0;
@@ -214,8 +214,8 @@ impl super::UiScript {
     pub fn reset_compose_tab(&mut self) {
         let lock = clear_compose(&mut self.model_mut());
         // Fired now, not queued: the order against the caller's `MAIL_SHOW`/`MAIL_FAILED` matters.
-        if lock {
-            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
+        if let Some(guid) = lock {
+            self.unlock_item(guid);
         }
         // One literal call each, as the event census (`ui_script::reference_ui`) reads them.
         self.fire_event("SEND_MAIL_MONEY_CHANGED", Vec::new()); // 0x4ace14
@@ -226,8 +226,9 @@ impl super::UiScript {
     /// The close core's silent reset (`0x4acdc0(0)`, from `0x4acd50`): the same clears, and only
     /// the attachment's `ITEM_LOCK_CHANGED`, which `0x495420` fires on either leg.
     pub fn reset_compose_tab_silently(&mut self) {
-        if clear_compose(&mut self.model_mut()) {
-            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
+        let lock = clear_compose(&mut self.model_mut());
+        if let Some(guid) = lock {
+            self.unlock_item(guid);
         }
     }
 
@@ -737,8 +738,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "ClearSendMail",
         lua.create_function(|lua, ()| {
             super::tick::verb(lua, |model| {
-                if clear_compose(model) {
-                    model.raise("ITEM_LOCK_CHANGED", Vec::new());
+                if let Some(guid) = clear_compose(model) {
+                    cursor::unlock_item(model, guid);
                 }
                 model.raise("SEND_MAIL_MONEY_CHANGED", Vec::new());
                 model.raise("SEND_MAIL_COD_CHANGED", Vec::new());
@@ -1190,6 +1191,7 @@ mod tests {
             .unwrap());
 
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            guid: 0x102,
             bar_placeable: true,
             bag: 0,
             slot: 5,
@@ -1223,6 +1225,7 @@ mod tests {
         use crate::script::cursor::{CursorItem, CursorPayload};
         let mut s = UiScript::new().unwrap();
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            guid: 0x103,
             bar_placeable: true,
             bag: 0,
             slot: 1,
@@ -1257,6 +1260,7 @@ mod tests {
         }]);
         s.run("SelectPackage(1)").unwrap();
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            guid: 0x104,
             bar_placeable: true,
             bag: 0,
             slot: 3,

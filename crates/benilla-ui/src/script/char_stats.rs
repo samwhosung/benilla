@@ -191,8 +191,9 @@ pub struct InvSlotView {
     pub already_bound: bool,
     /// An `|Hitem:…|h[Name]|h` link once the name is known.
     pub link: Option<String>,
-    /// Whether a pending item operation covers this slot (`IsInventoryItemLocked`).
-    pub locked: bool,
+    /// The item object's guid, 0 while unresolved: `IsInventoryItemLocked` reads the client's lock
+    /// on it.
+    pub guid: u64,
     /// The 1-based live-API slots this item could be equipped into; empty if none.
     pub equip_slots: Vec<u8>,
     /// The resolved `ITEM_FIELD_CREATOR` name, the tooltip's "<Made by %s>" line.
@@ -499,7 +500,7 @@ impl InvSlotView {
             durability: slot.durability,
             already_bound: slot.already_bound,
             link: slot.link.clone(),
-            locked: slot.locked,
+            guid: slot.guid,
             creator: slot.creator.clone(),
             enchants: slot.enchants.clone(),
             // The item's own flags (UNLOCKED, WRAPPED) and expiry, which the tooltip builder reads.

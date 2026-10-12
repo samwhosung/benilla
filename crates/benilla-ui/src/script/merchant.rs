@@ -1099,6 +1099,7 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_merchant(Some(stock()));
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            guid: 0x101,
             bag: 0,
             slot: 7,
             item_id: 4540,

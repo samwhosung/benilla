@@ -9,8 +9,8 @@ use crate::script::tick::verb;
 use crate::script::Model;
 
 use super::{
-    clear, clear_cursor, client_locked, pick_up_item, raise_lock_changed, Clear, CursorItem,
-    CursorPayload, EQUIPMENT_BAG,
+    clear, clear_cursor, item_locked, lock_item, pick_up_item, Clear, CursorItem, CursorPayload,
+    EQUIPMENT_BAG,
 };
 
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
@@ -59,8 +59,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
     if !placing && (model.item_pick_armed || model.repair_mode) {
         let usable = model
             .inv_slot("player", id as usize)
-            .is_some_and(|s| s.item_id != 0 && !s.locked)
-            && !client_locked(model, EQUIPMENT_BAG, id);
+            .is_some_and(|s| s.item_id != 0 && !item_locked(model, s.guid));
         if usable && model.item_pick_armed {
             model.item_picks.push((EQUIPMENT_BAG, id));
         } else if usable && (1..=19).contains(&id) {
@@ -79,9 +78,9 @@ pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
         ) => {
             let picked = model
                 .inv_slot("player", id as usize)
-                .filter(|s| s.item_id != 0 && !s.locked)
-                .filter(|_| !client_locked(model, EQUIPMENT_BAG, id))
+                .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
                 .map(|s| CursorItem {
+                    guid: s.guid,
                     bag: EQUIPMENT_BAG,
                     slot: id,
                     item_id: s.item_id,
@@ -104,11 +103,11 @@ pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
         }
         Some(CursorPayload::Item(held)) => {
             // A locked occupant refuses the drop, the payload kept (`0x4c787b`).
-            if model
+            let occupant = model
                 .inv_slot("player", id as usize)
-                .is_some_and(|s| s.item_id != 0 && s.locked)
-                || client_locked(model, EQUIPMENT_BAG, id)
-            {
+                .filter(|s| s.item_id != 0)
+                .map_or(0, |s| s.guid);
+            if item_locked(model, occupant) {
                 return DollClick::Done(false);
             }
             // A split stays held, with no event: nothing changed.
@@ -132,10 +131,10 @@ pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
                 dst_slot: id,
                 count: None,
             });
-            // The swap send clears with `ClearCursor(0,1)` (`0x5e0fe7`), then `LockItem`
-            // (`0x4c78c8`).
+            // The swap send clears with `ClearCursor(0,1)` (`0x5e0fe7`), then `LockItem` on the
+            // occupant (`0x4c78c8`), an empty slot's zero guid signalling nothing (`0x4953ed`).
             clear(model, Clear::KEEP_LOCK);
-            raise_lock_changed(model);
+            lock_item(model, occupant);
             DollClick::Done(true)
         }
         // Mode 5, a buy into this slot: `0x4c78fd` sends `CMSG_BUY_ITEM_IN_SLOT` (`0x1a3`) and the
@@ -193,9 +192,9 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
             true
         }
         Some(CursorPayload::Item(item)) if item.count.is_none() => {
+            // `CMSG_AUTOEQUIP_ITEM`'s send clears with `ClearCursor(0,1)` and locks nothing new.
             model.container_autoequips.push((item.bag, item.slot));
             clear(model, Clear::KEEP_LOCK);
-            raise_lock_changed(model);
             true
         }
         _ => false,
@@ -229,16 +228,13 @@ fn use_cleared(model: &mut Model, id: u32) {
     }
 }
 
-/// `IsInventoryItemLocked(id)`: true while the client holds `id` locked ([`client_locked`]) or
-/// the app reports a pending operation on it. Reads [`Model::inv_slot`], since
-/// `BankFrameItemButton_UpdateLock` asks about bank slots too.
+/// `IsInventoryItemLocked(id)`: whether the item in player slot `id` is locked ([`item_locked`]).
+/// Reads [`Model::inv_slot`], since `BankFrameItemButton_UpdateLock` asks about bank slots too.
 pub(super) fn is_inventory_item_locked(model: &Model, id: u32) -> bool {
-    let held_here = client_locked(model, EQUIPMENT_BAG, id);
-    let fed = usize::try_from(id)
+    usize::try_from(id)
         .ok()
         .and_then(|i| model.inv_slot("player", i))
-        .is_some_and(|s| s.locked);
-    held_here || fed
+        .is_some_and(|s| s.item_id != 0 && item_locked(model, s.guid))
 }
 
 /// Register the paper-doll verbs as globals.
@@ -352,7 +348,7 @@ mod tests {
             quality: 2,
             name: Some("Test Helm".into()),
             link: Some("|cff1eff00|Hitem:1234:0:0:0|h[Test Helm]|h|r".into()),
-            locked: false,
+            guid: 0x10c,
             equip_slots: vec![1],
             creator: None,
             enchants: Vec::new(),
@@ -370,7 +366,7 @@ mod tests {
             quality: 1,
             name: Some("Test Ring".into()),
             link: Some("|cffffffff|Hitem:555:0:0:0|h[Test Ring]|h|r".into()),
-            locked: false,
+            guid: 0x10d,
             equip_slots: vec![11, 12], // either finger: the doll-to-doll swap
             creator: None,
             enchants: Vec::new(),
@@ -388,7 +384,7 @@ mod tests {
             quality: 1,
             name: Some("Test Tabard".into()),
             link: Some("|cffffffff|Hitem:999:0:0:0|h[Test Tabard]|h|r".into()),
-            locked: false,
+            guid: 0x10e,
             equip_slots: vec![19],
             creator: None,
             enchants: Vec::new(),
@@ -412,7 +408,7 @@ mod tests {
                 inventory_type: 0,
                 item_id: 2000,
                 link: Some("|cff0070dd|Hitem:2000:0:0:0|h[Another Helm]|h|r".into()),
-                locked: false,
+                guid: 0x10f,
                 equip_slots: vec![1], // fits HeadSlot only
                 cooldown: None,
                 readable: false,
@@ -567,7 +563,7 @@ mod tests {
             quality: 1,
             name: Some("Small Brown Pouch".into()),
             link: Some("|cffffffff|Hitem:4496:0:0:0|h[Small Brown Pouch]|h|r".into()),
-            locked: false,
+            guid: 0x110,
             equip_slots: vec![20, 21, 22, 23],
             creator: None,
             enchants: Vec::new(),
@@ -603,7 +599,7 @@ mod tests {
                 inventory_type: 0,
                 item_id: 4496,
                 link: Some("|cffffffff|Hitem:4496:0:0:0|h[Small Brown Pouch]|h|r".into()),
-                locked: false,
+                guid: 0x111,
                 equip_slots: vec![20, 21, 22, 23], // INVTYPE_BAG → any bag slot
                 cooldown: None,
                 readable: false,
@@ -676,13 +672,51 @@ mod tests {
         assert_eq!(s.take_container_autoequips(), vec![(0, 1)]);
     }
 
+    /// The doll place locks the occupant after the send's clear (`0x5e0fe7`, then `0x4c78c8`); an
+    /// empty slot's zero guid signals nothing (`0x4953ed`), and the moved item keeps its lock
+    /// for the server's answer.
+    #[test]
+    fn a_doll_place_locks_an_occupant_after_its_clear_and_an_empty_slot_signals_nothing() {
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        let slots = doll_slots();
+        let head = slots[1].as_ref().unwrap().guid;
+        let ring = slots[11].as_ref().unwrap().guid;
+        s.set_inventory_slots(slots);
+        s.set_container(0, Some(one_fitting_bag_item()));
+        let helm = one_fitting_bag_item().slots[&1].guid;
+        let place = |s: &UiScript, pick: &str, put: &str| {
+            s.run(pick).unwrap();
+            heard::listen(
+                s,
+                &["ITEM_LOCK_CHANGED", "CURSOR_UPDATE"],
+                Some("IsInventoryItemLocked(1)"),
+            );
+            s.run(put).unwrap();
+            heard::take(s)
+        };
+        assert_eq!(
+            place(&s, "PickupContainerItem(0, 1)", "PickupInventoryItem(1)"),
+            ["CURSOR_UPDATE nil", "ITEM_LOCK_CHANGED 1"],
+            "onto the worn helm"
+        );
+        assert!(s.item_locked(helm) && s.item_locked(head));
+        assert_eq!(
+            place(&s, "PickupInventoryItem(11)", "PickupInventoryItem(12)"),
+            ["CURSOR_UPDATE 1"],
+            "the ring onto the empty finger"
+        );
+        assert!(s.item_locked(ring), "the ring keeps its pickup's lock");
+    }
+
     /// A locked occupant refuses the drop and the payload stays held (`0x4c787b`).
     #[test]
     fn a_drop_on_a_locked_occupant_is_refused() {
         let mut s = UiScript::new().unwrap();
-        let mut slots = doll_slots();
-        slots[1].as_mut().unwrap().locked = true;
+        let slots = doll_slots();
+        let guid = slots[1].as_ref().unwrap().guid;
         s.set_inventory_slots(slots);
+        s.lock_item(guid);
         s.set_container(0, Some(one_fitting_bag_item()));
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(!pickup_inventory_item(&s.lua, 1));
@@ -762,11 +796,10 @@ mod tests {
     fn repair_mode_follows_the_doll_clicks_order() {
         use crate::script::cursor::CursorMoney;
         let mut s = UiScript::new().unwrap();
-        let mut slots = doll_slots();
-        if let Some(head) = slots[1].as_mut() {
-            head.locked = true;
-        }
+        let slots = doll_slots();
+        let guid = slots[1].as_ref().unwrap().guid;
         s.set_inventory_slots(slots);
+        s.lock_item(guid);
         s.model_mut().repair_mode = true;
 
         s.run("PickupInventoryItem(1)").unwrap();
@@ -813,15 +846,16 @@ mod tests {
     }
 
     #[test]
-    fn is_inventory_item_locked_reads_held_or_fed() {
+    fn is_inventory_item_locked_reads_the_item_lock() {
         let mut s = UiScript::new().unwrap();
-        let mut slots = doll_slots();
-        slots[19].as_mut().unwrap().locked = true; // the app's own PendingItemOps feed
+        let slots = doll_slots();
+        let guid = slots[19].as_ref().unwrap().guid;
         s.set_inventory_slots(slots);
+        s.lock_item(guid); // a send's lock, from the host
 
         assert!(
             s.eval::<bool>("return IsInventoryItemLocked(19)").unwrap(),
-            "fed lock"
+            "host lock"
         );
         assert!(!s.eval::<bool>("return IsInventoryItemLocked(1)").unwrap());
 
@@ -873,6 +907,10 @@ mod tests {
             s.take_item_picks().is_empty(),
             "a click while carrying an item is a place, not a bind"
         );
+        // The server's answer to the swap releases both ends.
+        let worn = doll_slots()[1].as_ref().unwrap().guid;
+        s.unlock_item(worn);
+        s.unlock_item(one_fitting_bag_item().slots[&1].guid);
 
         // Armed with an empty cursor: both seams bind and leave the cursor empty.
         s.run("ClearCursor()").unwrap();
@@ -955,6 +993,7 @@ mod tests {
         assert!(s.cursor_item().is_none());
 
         s.set_cursor_for_test(CursorPayload::Item(crate::script::cursor::CursorItem {
+            guid: 0x112,
             bag: EQUIPMENT_BAG,
             slot: 64,
             item_id: 4500,

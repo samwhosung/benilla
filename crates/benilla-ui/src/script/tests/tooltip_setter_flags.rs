@@ -303,6 +303,7 @@ fn the_mail_and_auction_item_setters_answer_one_value() {
     {
         let mut model = s.model_mut();
         let item = CursorItem {
+            guid: 0x120,
             bag: 0,
             slot: 1,
             item_id: 2589,
@@ -371,6 +372,7 @@ fn live_objects_and_blocks_reach_the_flag() {
         }),
     );
     let cursor = |slot| CursorItem {
+        guid: 0x121,
         bag: 0,
         slot,
         item_id: if slot <= 2 { 8300 } else { 8301 },

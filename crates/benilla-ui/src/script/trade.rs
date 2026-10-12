@@ -76,8 +76,8 @@ impl super::UiScript {
     /// `CloseTrade` (`0x4bfdc0`) never runs it; the server's `CANCELED` does.
     pub fn unlock_trade_items(&mut self) {
         let offered = std::mem::take(&mut self.model_mut().trade_offered);
-        for _ in offered.iter().flatten() {
-            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
+        for item in offered.iter().flatten() {
+            self.unlock_item(item.guid);
         }
     }
 
@@ -90,8 +90,9 @@ impl super::UiScript {
         if cell >= TRADE_SLOTS {
             return;
         }
-        if self.model_mut().trade_offered[cell].take().is_some() {
-            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
+        let item = self.model_mut().trade_offered[cell].take();
+        if let Some(item) = item {
+            self.unlock_item(item.guid);
         }
         self.fire_event(
             "TRADE_PLAYER_ITEM_CHANGED",

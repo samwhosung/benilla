@@ -75,7 +75,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
             inventory_type: 0,
             item_id: 7002,
             link: Some("|cff1eff00|Hitem:7002:0:0:0|h[New Loop]|h|r".into()),
-            locked: false,
+            guid: 0x122,
             equip_slots: vec![11, 12],
             cooldown: None,
             readable: false,

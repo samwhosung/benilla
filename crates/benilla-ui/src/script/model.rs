@@ -1042,9 +1042,10 @@ pub(crate) struct Model {
     /// The events the running [`super::tick::verb`] segment has raised, fired in order once its
     /// model borrow drops; `None` outside a segment, where [`Model::raise`] queues instead.
     pub(crate) verb_events: Option<Vec<super::tick::Raised>>,
-    /// Set while a clear's own events fire with the payload it is dropping still showing
-    /// ([`super::tick::Raised::CursorView`]): whether that clear lifted a held item's lock.
-    pub(crate) cursor_view_unlocked: Option<bool>,
+    /// The guids of the items the client holds locked, the reference's `item+0x314` bit 0, set by
+    /// `LockItem` (`0x4953e0`) and cleared by `UnlockItem` (`0x495420`) and the unlock-all
+    /// (`0x495460`) ([`super::cursor::lock_item`]).
+    pub(crate) item_locks: std::collections::HashSet<u64>,
     /// The last cursor position in UI space (logical px, y-up), behind `GetCursorPosition()`.
     pub(crate) cursor_pos: (f32, f32),
 
@@ -1557,7 +1558,7 @@ impl Model {
             worldstate: super::worldstate::WorldStateUiState::default(),
             pending_events: Vec::new(),
             verb_events: None,
-            cursor_view_unlocked: None,
+            item_locks: std::collections::HashSet::new(),
             cursor_pos: (0.0, 0.0),
             minimap_ping_request: None,
             minimap_ping: (0.0, 0.0),

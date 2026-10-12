@@ -62,7 +62,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let sellable = usize::try_from(slot0 + 1)
                 .ok()
                 .and_then(|slot| model.inv_slot("player", slot))
-                .is_some_and(|v| v.item_id != 0 && !v.locked);
+                .is_some_and(|v| v.item_id != 0 && !super::cursor::item_locked(&model, v.guid));
             if sellable {
                 model.ui_cursor = Some(UiCursorMode::Buy);
                 model.ui_cursor_dirty = true;
@@ -217,10 +217,11 @@ mod tests {
         });
         slots[17] = Some(InvSlotView {
             item_id: 2362,
-            locked: true,
+            guid: 0x109,
             ..Default::default()
         });
         s.set_inventory_slots(slots);
+        s.lock_item(0x109);
 
         for quiet in ["0", "1", "17"] {
             s.run(&format!("ShowInventorySellCursor({quiet})")).unwrap();

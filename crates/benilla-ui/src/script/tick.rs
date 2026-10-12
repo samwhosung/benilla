@@ -49,15 +49,26 @@ impl Model {
     /// Inside a [`verb`] segment, show `payload` on the cursor to the handlers of the events
     /// raised until [`Model::end_cursor_view`], then put back the state the segment left. A
     /// clear raises its own events this way, as `ClearCursor` signals before it zeroes the mode
-    /// (`0x4952bf`). `unlocked` says whether that clear lifted a held item's lock. The host queue
-    /// fires a tick later against the state then, so it takes no view.
-    pub(crate) fn view_cursor(
-        &mut self,
-        payload: Option<super::cursor::CursorPayload>,
-        unlocked: bool,
-    ) {
+    /// (`0x4952bf`). The host queue fires a tick later against the state then, so it takes no
+    /// view.
+    pub(crate) fn view_cursor(&mut self, payload: Option<super::cursor::CursorPayload>) {
         if let Some(segment) = &mut self.verb_events {
-            segment.push(Raised::CursorView(payload, unlocked));
+            segment.push(Raised::CursorView(payload));
+        }
+    }
+
+    /// Set or clear the client's lock on item `guid` ([`Model::item_locks`]). Inside a [`verb`]
+    /// segment the change is also recorded, so the segment's handlers see each lock as it stood
+    /// when their event was raised, as `LockItem` and `UnlockItem` set the bit before they signal
+    /// (`0x495409`, `0x495449`).
+    pub(crate) fn set_item_lock(&mut self, guid: u64, locked: bool) {
+        let was = if locked {
+            !self.item_locks.insert(guid)
+        } else {
+            self.item_locks.remove(&guid)
+        };
+        if let Some(segment) = &mut self.verb_events {
+            segment.push(Raised::Lock { guid, locked, was });
         }
     }
 
@@ -74,9 +85,10 @@ impl Model {
 pub(crate) enum Raised {
     /// An event, with its arguments.
     Event(String, Vec<ScriptValue>),
-    /// Show this payload on the cursor until the matching [`Raised::EndCursorView`]; the flag says
-    /// whether the clear raising it lifted a held item's lock.
-    CursorView(Option<super::cursor::CursorPayload>, bool),
+    /// Show this payload on the cursor until the matching [`Raised::EndCursorView`].
+    CursorView(Option<super::cursor::CursorPayload>),
+    /// A lock change on item `guid`: `locked` after it, `was` before it.
+    Lock { guid: u64, locked: bool, was: bool },
     /// Put back the cursor the segment left.
     EndCursorView,
 }
@@ -95,27 +107,48 @@ pub(crate) fn verb<R>(lua: &Lua, body: impl FnOnce(&mut Model) -> R) -> R {
         let out = body(&mut model);
         (out, model.verb_events.take().unwrap_or_default())
     };
-    // The cursors a view replaced, innermost last, with the flag each view replaced.
+    // The body's lock changes are rolled back, then replayed in place, each as a delta, so a
+    // nested verb's own changes survive.
+    {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
+        for raised in raised.iter().rev() {
+            if let Raised::Lock { guid, was, .. } = *raised {
+                set_lock_bit(&mut model, guid, was);
+            }
+        }
+    }
+    // The cursors a view replaced, innermost last.
     let mut hidden = Vec::new();
     for raised in raised {
         match raised {
             Raised::Event(event, args) => fire_event_into(lua, &event, args),
-            Raised::CursorView(payload, unlocked) => {
+            Raised::CursorView(payload) => {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
-                let real = std::mem::replace(&mut model.cursor, payload);
-                let flag = model.cursor_view_unlocked.replace(unlocked);
-                hidden.push((real, flag));
+                hidden.push(std::mem::replace(&mut model.cursor, payload));
             }
             Raised::EndCursorView => {
-                if let Some((real, flag)) = hidden.pop() {
-                    let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
-                    model.cursor = real;
-                    model.cursor_view_unlocked = flag;
+                if let Some(real) = hidden.pop() {
+                    lua.app_data_mut::<Model>()
+                        .expect("model app_data set")
+                        .cursor = real;
                 }
+            }
+            Raised::Lock { guid, locked, .. } => {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data set");
+                set_lock_bit(&mut model, guid, locked);
             }
         }
     }
     out
+}
+
+/// Set item `guid`'s lock bit to `locked`, recording nothing.
+fn set_lock_bit(model: &mut Model, guid: u64, locked: bool) {
+    if locked {
+        model.item_locks.insert(guid);
+    } else {
+        model.item_locks.remove(&guid);
+    }
 }
 
 /// [`UiScript::fire_event`] for a caller holding `&Lua`, such as a Lua binding.
