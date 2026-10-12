@@ -5,6 +5,7 @@
 
 use mlua::{Lua, Table, Value};
 
+use super::binding_abi::flag;
 use super::cursor::{self, CursorItem, CursorPayload};
 use super::Model;
 
@@ -538,6 +539,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetContainerItemInfo(bag, slot) (`0x4f9670`) → texture, itemCount, locked, quality,
     // readable, the five `ContainerFrame.lua:241` reads; no values for an empty or unknown slot.
+    // `locked` and `readable` are 1 or nil (`0x4f975d`/`0x4f976b`, `0x4f97e6`/`0x4f97d3`).
     lua.globals().set(
         "GetContainerItemInfo",
         lua.create_function(|lua, (bag, slot): (i64, u32)| {
@@ -573,12 +575,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(s.count)),
                 // A held item's source slot reads locked, derived from the cursor so the app's
                 // re-push cannot wipe it.
-                Value::Boolean(s.locked || held_here),
+                flag(s.locked || held_here),
                 match s.quality {
                     Some(q) => Value::Integer(i64::from(q)),
                     None => Value::Nil,
                 },
-                Value::Boolean(s.readable),
+                flag(s.readable),
             ]))
         })?,
     )?;
@@ -856,6 +858,35 @@ mod tests {
         assert!(s
             .eval::<bool>("return GetContainerItemInfo(0, 2) == nil")
             .unwrap());
+    }
+
+    /// `GetContainerItemInfo` (`0x4f9670`) pushes `locked` and `readable` as the number 1
+    /// (`0x4f975d`, `0x4f97e6`) or nil (`0x4f976b`, `0x4f97d3`), five values in all.
+    #[test]
+    fn container_item_info_flags_are_one_or_nil() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        // `arg.n` counts the returns (`select` is 5.1's, not a 1.12 global).
+        let shape = |s: &mut UiScript, slot: u32| {
+            s.eval::<String>(&format!(
+                "local function c(...) return arg.n .. ':' .. type(arg[3]) .. ':' .. tostring(arg[3]) \
+                 .. ':' .. type(arg[5]) .. ':' .. tostring(arg[5]) end \
+                 return c(GetContainerItemInfo(0, {slot}))"
+            ))
+            .unwrap()
+        };
+        assert_eq!(shape(&mut s, 1), "5:nil:nil:nil:nil", "a plain item");
+        assert_eq!(
+            shape(&mut s, 4),
+            "5:nil:nil:number:1",
+            "the readable letter"
+        );
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert_eq!(
+            shape(&mut s, 1),
+            "5:number:1:nil:nil",
+            "the held item reads locked"
+        );
     }
 
     #[test]
