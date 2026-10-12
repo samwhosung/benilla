@@ -262,12 +262,13 @@ pub enum UiCursorMode {
 }
 
 /// `PickupContainerItem`'s gesture (`0x4f9b30`):
-/// - an empty cursor picks up a resolved item whose slot is not locked;
+/// - an empty cursor, or one holding a spell, macro, pet action, stabled pet or coins, picks up a
+///   resolved item whose slot is not locked, the pickup's clear dropping that payload;
 /// - a click on the held item's own slot cancels;
 /// - a whole stack placed anywhere else queues the move and clears the cursor; a swap lands the
 ///   displaced item in the source slot, never on the cursor (no `SetCursorItem`, `0x5e0c40`);
 /// - a split carry places onto an empty or same-item slot, and stays held over another item;
-/// - a spell or action payload stays held.
+/// - a vendor row buys into the slot, and an item off the bar is cleared.
 ///
 /// Returns the item a pickup puts on the cursor, which the binding sets past this segment
 /// ([`cursor::pick_up_item`]), so the setter's inner clear signals on its own.
@@ -304,13 +305,14 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
         model.ui_cursor_dirty = true;
         return None;
     }
-    // Only a held item (`0x4f9c38`) or vendor row (`0x4f9c43`) takes the click first. Past them
-    // an empty slot does nothing (`0x4f9c4e`), an armed item-targeting spell binds the item
-    // (`0x4f9c54`) and repair mode repairs it (`0x4f9c7b`), any other payload staying held; the
-    // app's repair drain runs the arm's `ITEM_REPAIR` and send.
+    // Only a held item (`0x4f9c38`) or a held row, a vendor's or the bar's (`0x4f9c43`), takes the
+    // click first. Past them an empty slot does nothing (`0x4f9c4e`), an armed item-targeting
+    // spell binds the item (`0x4f9c54`) and repair mode repairs it (`0x4f9c7b`), any other payload
+    // staying held; the app's repair drain runs the arm's `ITEM_REPAIR` and send. Else the item is
+    // picked up, its setter's clear dropping whatever else is held (`0x4f9de9`).
     let placing = matches!(
         model.cursor,
-        Some(CursorPayload::Item(_) | CursorPayload::Merchant(_))
+        Some(CursorPayload::Item(_) | CursorPayload::Merchant(_) | CursorPayload::Action(_))
     );
     if !placing && (model.item_pick_armed || model.repair_mode) {
         let occupied = model
@@ -327,7 +329,14 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
     }
     match model.cursor.clone() {
         // The lock gate reads the item's own bit (`0x4f9dc4`), the app's or the client's.
-        None => model
+        None
+        | Some(
+            CursorPayload::Spell(_)
+            | CursorPayload::Macro(_)
+            | CursorPayload::PetAction(_)
+            | CursorPayload::StablePet(_)
+            | CursorPayload::Money(_),
+        ) => model
             .containers
             .get(&bag)
             .and_then(|c| c.slots.get(&slot))
@@ -384,8 +393,10 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
         }
         // Mode 5, a held vendor row, buys into this slot whatever it holds (`0x4f9efa` tests
         // `[0xb4d900] == 5`): `CMSG_BUY_ITEM_IN_SLOT` (0x1a3) with count 1, and the cursor clears
-        // either way. Deviation: a row that no longer resolves is refused, as `0x4c7300` does,
-        // because this path dereferences it unchecked (`0x4f9f35`), a latent null deref.
+        // either way; with no vendor open the row stays held (`0x4f9f0f`). Deviation: a row that
+        // no longer resolves is refused, as `0x4c7300` does, because this path dereferences it
+        // unchecked (`0x4f9f35`), a latent null deref.
+        Some(CursorPayload::Merchant(_)) if model.merchant.is_none() => None,
         Some(CursorPayload::Merchant(held)) => {
             let entry = model
                 .merchant
@@ -399,16 +410,11 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
             cursor::clear_cursor(model);
             None
         }
-        Some(
-            CursorPayload::Spell(_)
-            | CursorPayload::Action(_)
-            | CursorPayload::Macro(_)
-            | CursorPayload::PetAction(_)
-            // Mode 10, a stabled pet, stays held for the stable window.
-            | CursorPayload::StablePet(_)
-            // Mode 2, money, stays held for a money frame's DropFunc.
-            | CursorPayload::Money(_),
-        ) => None,
+        // Mode 7, an item off the bar, is a held row too, and only cleared (`0x4f9f41`).
+        Some(CursorPayload::Action(_)) => {
+            cursor::clear_cursor(model);
+            None
+        }
     }
 }
 
@@ -1608,5 +1614,42 @@ mod tests {
                 "{call} must raise, got {err}"
             );
         }
+    }
+
+    /// A bag click over a payload that is neither an item nor a held row picks the item up, its
+    /// setter's clear dropping the payload (`0x4f9de9`); an item off the bar (mode 7) is only
+    /// cleared (`0x4f9f41`); a vendor row with no vendor open stays held (`0x4f9f0f`).
+    #[test]
+    fn a_bag_click_over_another_payload_picks_up_or_clears() {
+        use crate::script::cursor::{CursorAction, CursorMerchantItem, CursorPayload, CursorSpell};
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
+            spell_id: 133,
+            texture: None,
+            passive: false,
+        }));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert_eq!(s.cursor_item().map(|i| i.slot), Some(1));
+
+        s.run("ClearCursor()").unwrap();
+        s.set_cursor_for_test(CursorPayload::Action(CursorAction {
+            src_slot: 1,
+            kind: 0x80,
+            action: 4540,
+            texture: None,
+        }));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert!(s.cursor_payload().is_none(), "the bar item is cleared");
+
+        let row = CursorPayload::Merchant(CursorMerchantItem {
+            item_id: 159,
+            row: 0,
+            texture: None,
+        });
+        s.set_cursor_for_test(row.clone());
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        assert_eq!(s.cursor_payload(), Some(row), "no vendor: kept");
+        assert!(s.take_merchant_slot_buys().is_empty());
     }
 }
