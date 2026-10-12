@@ -1326,8 +1326,9 @@ fn diff_and_push(
         .filter(|b| fresh.get(b) != memory.pushed.get(b))
         .collect();
     if !changed.is_empty() {
-        // A stack-count write's `ITEM_LOCK_CHANGED` (`0x5d94b9`, `0x5d94ca`) fired ahead of this
-        // push, from [`crate::ui_items::locks::apply_item_releases`].
+        // A stack-count write's `ITEM_LOCK_CHANGED` (the entry walk's `0x5d94b9`, or the lone
+        // unlock's `0x5d94ca`) fired ahead of this push, from
+        // [`crate::ui_items::locks::apply_item_releases`].
         for &bag in &changed {
             script.set_container(bag, fresh.get(&bag).cloned());
         }
