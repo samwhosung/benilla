@@ -808,12 +808,17 @@ pub(crate) mod schedule_tests {
     /// - a crate's interaction (`target::click::act_on_interact`) against what
     ///   `act_on_right_click` and the cursor classifier already pair with: it runs the click's
     ///   dispatchers over the classifier's reading of its object, and its attack leg
-    ///   selects as the click does, so it writes `Selection` where the click's drain does.
+    ///   selects as the click does, so it writes `Selection` where the click's drain does;
+    /// - the soulstone's cast cancel (`death::drain_death`, through `spell::SelfCancel`) against
+    ///   `cursor::drive_displayed_cursor` over `SpellTargeting` and
+    ///   `creature_anim::spell_visual::route_cast_visuals` over the `CastEvent` messages: both are
+    ///   level-triggered readers, so a cancel seen a frame early or late is decided again next
+    ///   frame.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 4_689;
+    const UPDATE_ACTIONABLE_CEILING: usize = 4_691;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {

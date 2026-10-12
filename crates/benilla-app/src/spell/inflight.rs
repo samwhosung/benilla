@@ -278,6 +278,7 @@ pub(crate) struct SelfCancel<'w, 's> {
     cast_events: MessageWriter<'w, CastEvent>,
     play_seq: ResMut<'w, PlaySeq>,
     ecs: Commands<'w, 's>,
+    ground: ResMut<'w, super::targeting::SpellTargeting>,
 }
 
 impl SelfCancel<'_, '_> {
@@ -286,30 +287,112 @@ impl SelfCancel<'_, '_> {
         self.cancel(true, false);
     }
 
-    fn cancel(&mut self, esc: bool, moved: bool) {
+    /// `AbortCast(1,1)` (`0x6e4940`) as `UseSoulstone`'s item leg calls it (`0x48ae6b`, reason
+    /// `0x1c`): a pending targeting spell is dropped in place of a cast (`0x6e4955`); else the
+    /// cast or queued strike in flight is cancelled on the wire (`0x6e4970`), whatever its
+    /// `InterruptFlags`. The local event is `SPELLCAST_FAILED` (`0x153`) where the move and Esc
+    /// cancels' `cl=0` fires `SPELLCAST_STOP`. The caller disarms the trade-skill repeat
+    /// (`0x4fd790`), which every branch does.
+    pub(crate) fn abort_cast(&mut self) {
+        if self.ground.active() {
+            // `StopTargeting` counts for the trade-skill disarm watcher; `TryCast` wrote the cast
+            // record (`[0xceac50]`, `0x6e4fb1`) before entering targeting, so the event gate
+            // (`0x6e4a04`-`0x6e4a1e`) fires FAILED here too.
+            self.ground.cancel();
+            self.feed.0.push(CastBarEdge::Failed);
+        } else {
+            let now = Instant::now();
+            let self_e = self
+                .self_guid
+                .0
+                .as_ref()
+                .and_then(|g| self.index.0.get(g))
+                .copied();
+            let started = self_e
+                .and_then(|e| self.casting.get(e).ok())
+                .map(|c| c.spell_id);
+            if let Some(slot) = inflight(&self.pending, &self.queued_melee, started, now) {
+                self.cancel_inflight(slot, self_e, CastBarEdge::Failed, "soulstone");
+            }
+        }
+    }
+
+    /// Cancel the cast or queued strike `slot` on the wire and tear it down locally: `first` is
+    /// the bar edge the client's own event arms (STOP for the move and Esc cancels, FAILED for
+    /// `UseSoulstone`'s), and the echo's INTERRUPTED follows for a cast.
+    fn cancel_inflight(
+        &mut self,
+        slot: Inflight,
+        self_e: Option<Entity>,
+        first: CastBarEdge,
+        why: &str,
+    ) {
         let Self {
             pending,
             queued_melee,
-            channel,
-            auto_repeat,
             feed,
-            spells,
             net,
-            self_guid,
-            index,
             casting,
             cast_events,
             play_seq,
             ecs,
+            ..
         } = self;
+        let spell_id = slot.spell_id();
+        if *crate::net::CAST_TRACE {
+            info!("cast-trace: LOCAL self-cancel — {slot:?} ({why}), CMSG_CANCEL_CAST");
+        }
+        let _ = net.0.send(ClientCommand::CancelCast { spell_id });
+        match slot {
+            Inflight::Cast(_) => {
+                pending.clear_if(spell_id);
+                // The client's own event arms the flash, INTERRUPTED paints red and holds, so the
+                // flash bursts after the hold; an interrupt by an enemy has no STOP and no burst.
+                feed.0.push(first);
+                feed.0.push(CastBarEdge::Interrupted);
+                // `spell_failed_other`'s self reap, run early so the echo finds it done.
+                if let Some(e) = self_e {
+                    if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
+                        ecs.entity(e).remove::<Casting>();
+                    }
+                    cast_events.write(CastEvent {
+                        entity: e,
+                        spell_id,
+                        kind: CastEventKind::Fail,
+                        cast_flags: 0,
+                        item_cast: false,
+                        seq: play_seq.next(),
+                    });
+                }
+            }
+            Inflight::Strike(_) => {
+                // Clearing the slot darkens the checked ring now. `AbortCast` fires its event
+                // here too, inert on a hidden bar; there is no INTERRUPTED.
+                queued_melee.clear_if(spell_id);
+                feed.0.push(first);
+            }
+        }
+    }
+
+    fn cancel(&mut self, esc: bool, moved: bool) {
         let now = Instant::now();
-        let self_e = self_guid.0.as_ref().and_then(|g| index.0.get(g)).copied();
+        let self_e = self
+            .self_guid
+            .0
+            .as_ref()
+            .and_then(|g| self.index.0.get(g))
+            .copied();
         // Esc stops one thing, auto-repeat first (`0x6e6e80`).
-        let esc = if esc && auto_repeat.0.is_some() {
+        let esc = if esc && self.auto_repeat.0.is_some() {
             if *crate::net::CAST_TRACE {
                 info!("cast-trace: LOCAL auto-repeat self-cancel (esc), CMSG_CANCEL_AUTO_REPEAT_SPELL");
             }
-            crate::creature_anim::cancel_auto_repeat_local(self_e, auto_repeat, ecs, net);
+            crate::creature_anim::cancel_auto_repeat_local(
+                self_e,
+                &mut self.auto_repeat,
+                &mut self.ecs,
+                &self.net,
+            );
             false // the press is spent
         } else {
             esc
@@ -317,7 +400,9 @@ impl SelfCancel<'_, '_> {
         if !esc && !moved {
             return;
         }
-        let flags_open = |pick: fn(&benilla_formats::SpellDisplay) -> bool, spell_id: u32| {
+        let flags_open = |spells: &Option<Res<Spells>>,
+                          pick: fn(&benilla_formats::SpellDisplay) -> bool,
+                          spell_id: u32| {
             // An uncataloged spell cancels, as the server interrupts any ordinary cast.
             spells
                 .as_ref()
@@ -325,66 +410,39 @@ impl SelfCancel<'_, '_> {
                 .is_none_or(pick)
         };
         // `AbortCast` treats a cast and a queued strike alike; only the local teardown differs.
-        let started = self_e.and_then(|e| casting.get(e).ok()).map(|c| c.spell_id);
-        if let Some(slot) = inflight(pending, queued_melee, started, now) {
+        let started = self_e
+            .and_then(|e| self.casting.get(e).ok())
+            .map(|c| c.spell_id);
+        if let Some(slot) = inflight(&self.pending, &self.queued_melee, started, now) {
             let spell_id = slot.spell_id();
             // Movement tests `InterruptFlags`, which spares a queued strike: Heroic Strike 78,
             // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`).
             if esc
                 || flags_open(
+                    &self.spells,
                     |d| d.interrupt_flags & SPELL_INTERRUPT_MOVEMENT != 0,
                     spell_id,
                 )
             {
-                if *crate::net::CAST_TRACE {
-                    info!(
-                        "cast-trace: LOCAL self-cancel — {slot:?} ({}), CMSG_CANCEL_CAST",
-                        if esc { "esc" } else { "moved" }
-                    );
-                }
-                let _ = net.0.send(ClientCommand::CancelCast { spell_id });
-                match slot {
-                    Inflight::Cast(_) => {
-                        pending.clear_if(spell_id);
-                        // STOP arms the flash, INTERRUPTED paints red and holds, so the flash bursts
-                        // after the hold; an interrupt by an enemy has no STOP and no burst.
-                        feed.0.push(CastBarEdge::Stop);
-                        feed.0.push(CastBarEdge::Interrupted);
-                        // `spell_failed_other`'s self reap, run early so the echo finds it done.
-                        if let Some(e) = self_e {
-                            if casting.get(e).is_ok_and(|c| c.spell_id == spell_id) {
-                                ecs.entity(e).remove::<Casting>();
-                            }
-                            cast_events.write(CastEvent {
-                                entity: e,
-                                spell_id,
-                                kind: CastEventKind::Fail,
-                                cast_flags: 0,
-                                item_cast: false,
-                                seq: play_seq.next(),
-                            });
-                        }
-                    }
-                    Inflight::Strike(_) => {
-                        // Clearing the slot darkens the checked ring now. `AbortCast` fires 0x152
-                        // here too, inert on a hidden bar; there is no INTERRUPTED.
-                        queued_melee.clear_if(spell_id);
-                        feed.0.push(CastBarEdge::Stop);
-                    }
-                }
+                let why = if esc { "esc" } else { "moved" };
+                self.cancel_inflight(slot, self_e, CastBarEdge::Stop, why);
             }
         }
         // The channel: movement only, and the send only (`0x6e9b70`).
         if moved {
-            if let Some(spell_id) = channel.current(now) {
+            if let Some(spell_id) = self.channel.current(now) {
                 if flags_open(
+                    &self.spells,
                     |d| d.channel_interrupt_flags & CHANNEL_INTERRUPT_MOVING != 0,
                     spell_id,
                 ) {
                     if *crate::net::CAST_TRACE {
                         info!("cast-trace: LOCAL channel self-cancel — spell {spell_id}, CMSG_CANCEL_CHANNELLING");
                     }
-                    let _ = net.0.send(ClientCommand::CancelChannelling { spell_id });
+                    let _ = self
+                        .net
+                        .0
+                        .send(ClientCommand::CancelChannelling { spell_id });
                 }
             }
         }
@@ -533,6 +591,7 @@ mod tests {
                 .init_resource::<QueuedMeleeSpell>()
                 .init_resource::<ActiveChannel>()
                 .init_resource::<AutoRepeatActive>()
+                .init_resource::<crate::spell::targeting::SpellTargeting>()
                 .init_resource::<LocalMoveStart>()
                 .init_resource::<GuidIndex>()
                 .init_resource::<SelfGuid>()
