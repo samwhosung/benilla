@@ -1063,6 +1063,7 @@ pub(crate) fn drive_glue_mgr(
     mut realmlist: Option<ResMut<crate::realmlist::Realmlist>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
     create: Option<Res<crate::entities::CharCreate>>,
+    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
     state: Option<Res<State<crate::char_select::ClientState>>>,
     time: Res<Time>,
 ) {
@@ -1217,6 +1218,7 @@ pub(crate) fn drive_glue_mgr(
     let names = RosterNames {
         areas: areas.as_deref().map(|a| &a.0),
         create: create.as_deref().map(|c| &c.0),
+        classes: classes.as_deref().map(|c| &c.0),
     };
     flush(&mut mgr, &mut script, now_ms, &names);
     mgr.select_cells = script.glue_select_cells();
@@ -1251,36 +1253,29 @@ fn send_asks(mgr: &mut GlueMgr, logins: Vec<GlueLogin>, asks: &mut GlueAsks) {
 struct RosterNames<'a> {
     areas: Option<&'a benilla_formats::AreaTableCatalog>,
     create: Option<&'a benilla_formats::CharCreateCatalog>,
+    classes: Option<&'a benilla_formats::ChrClasses>,
 }
 
 /// A roster entry as the glue VM's records take it (`0x4732a0`). The race and class names are
-/// the English `Name_Lang` of rows 1-8 and 1-11 (benilla is enUS-only), empty for a race or class
-/// the 1.12 tables lack; the file string is the race row's (`ChrRaces` column 15), and a zone is
-/// nil without an `AreaTable` row.
+/// the `Name_Lang` of the race and class rows (`ChrRaces` `+0x44`, `ChrClasses` `+0x14`) in the
+/// install's locale, the file string the race row's (`ChrRaces` column 15), and the model flag
+/// whether the race row has a body for the gender. A race, class or zone with no row reads
+/// empty, empty, nil as the reference's does, and so does one whose catalog did not load.
 fn glue_character(c: &Character, names: &RosterNames) -> GlueCharacter {
-    let race = crate::ui_unit::race_names(c.race);
-    let file_string = match names.create {
-        Some(catalog) => catalog.race_file(c.race).unwrap_or_default().to_string(),
-        None => race.map(|(_, file)| file).unwrap_or_default().to_string(),
-    };
-    let model = match names.create {
-        Some(catalog) => catalog.body_display(c.race, c.gender).is_some(),
-        None => race.is_some(),
-    };
+    let text = |s: Option<&str>| s.unwrap_or_default().to_string();
     GlueCharacter {
         guid: c.guid,
         name: c.name.clone(),
-        race: race.map(|(name, _)| name).unwrap_or_default().to_string(),
-        class: crate::ui_unit::class_names(c.class)
-            .map(|(name, _)| name)
-            .unwrap_or_default()
-            .to_string(),
+        race: text(names.create.and_then(|r| r.race_name(c.race))),
+        class: text(names.classes.and_then(|k| k.name(u32::from(c.class)))),
         level: c.level,
         zone: names.areas.and_then(|a| a.name(c.zone)).map(str::to_string),
-        file_string,
+        file_string: text(names.create.and_then(|r| r.race_file(c.race))),
         gender: c.gender,
         flags: c.flags,
-        model,
+        model: names
+            .create
+            .is_some_and(|r| r.body_display(c.race, c.gender).is_some()),
     }
 }
 

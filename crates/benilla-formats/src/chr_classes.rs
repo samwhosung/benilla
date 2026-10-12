@@ -1,4 +1,4 @@
-//! `ChrClasses.dbc`, the per-class table, narrowed to the three columns the reference reads off
+//! `ChrClasses.dbc`, the per-class table, narrowed to the four columns the reference reads off
 //! its class-indexed record table (`0xc0def4`, max id `0xc0def8`, loader `0x542360`).
 //!
 //! Field 2, the damage bonus stat: `GetDamageBonusStat` (`0x48b520`) reads it at `rec + 8` for the
@@ -8,6 +8,9 @@
 //! Field 4, the pet name token: the second return of `HasPetSpells` (`0x4b4410`), `"PET"` on every
 //! row but the Warlock's `"DEMON"`. FrameXML resolves it with `getglobal("PET_TYPE_"..token)`
 //! (`SpellBookFrame.lua:173`), so the token is a key, never display text, and is not localized.
+//!
+//! Field 5, the class name: the `Name_Lang` block (`+0x14`, eight locale columns), which
+//! `GetCharacterInfo` (`0x4732a0`) returns as the class (`0x473368`).
 //!
 //! Field 15, the class spell family: a talent modifier applies to a spell only when its
 //! `SpellFamilyName` (`Spell.dbc` column 160) equals the local player's (`GetSpellModifiers`,
@@ -25,7 +28,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::chain::Chain;
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{name_lang_at, parse, str_at, u32_at};
 
 const CHR_CLASSES: &str = "DBFilesClient\\ChrClasses.dbc";
 
@@ -36,6 +39,9 @@ const CHR_CLASSES_FIELDS: usize = 17;
 
 /// Field 2, read at `rec + 8` by `GetDamageBonusStat` (`0x48b569`).
 const DAMAGE_BONUS_STAT_FIELD: usize = 0x8 / 4;
+
+/// Field 5, the first of the eight `Name_Lang` columns (`rec + 0x14`, `0x473368`).
+const NAME_FIELD: usize = 0x14 / 4;
 
 /// Field 4, read at `rec + 0x10` by `HasPetSpells` (`0x4b447c`).
 const PET_NAME_TOKEN_FIELD: usize = 0x10 / 4;
@@ -54,6 +60,7 @@ pub const PET_NAME_TOKEN_FALLBACK: &str = "PET";
 struct ChrClass {
     damage_bonus_stat: u32,
     pet_name_token: Option<String>,
+    name: Option<String>,
     has_relic_slot: bool,
     spell_family: u32,
 }
@@ -70,6 +77,12 @@ impl ChrClasses {
             .get(&class)
             .and_then(|c| c.pet_name_token.as_deref())
             .unwrap_or(PET_NAME_TOKEN_FALLBACK)
+    }
+
+    /// The class's `Name_Lang` name, `GetCharacterInfo`'s third return; `None` for a class with no
+    /// row or no name, which that binding answers with the empty string (`0x47336e`).
+    pub fn name(&self, class: u32) -> Option<&str> {
+        self.0.get(&class)?.name.as_deref()
     }
 
     /// The class's damage bonus stat, 0-based (Strength 0, Agility 1); `None` for a class with
@@ -100,9 +113,8 @@ impl ChrClasses {
 fn schema() -> Schema {
     let mut s = Schema::new("ChrClasses");
     for i in 0..CHR_CLASSES_FIELDS {
-        // Only the token is a string; the rest, the class name block from field 5 included, stay
-        // opaque dwords.
-        let ty = if i == PET_NAME_TOKEN_FIELD {
+        // The token and the eight name columns are strings; the rest stay opaque dwords.
+        let ty = if i == PET_NAME_TOKEN_FIELD || (NAME_FIELD..NAME_FIELD + 8).contains(&i) {
             FieldType::String
         } else {
             FieldType::UInt32
@@ -126,6 +138,7 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
             ChrClass {
                 damage_bonus_stat: u32_at(r, DAMAGE_BONUS_STAT_FIELD).unwrap_or(0),
                 pet_name_token: str_at(&rs, r, PET_NAME_TOKEN_FIELD),
+                name: name_lang_at(&rs, r, NAME_FIELD),
                 has_relic_slot: u32_at(r, RELIC_SLOT_FIELD).is_some_and(|v| v != 0),
                 spell_family: u32_at(r, SPELL_FAMILY_FIELD).unwrap_or(0),
             },
@@ -200,6 +213,28 @@ mod tests {
             assert_eq!(t.damage_bonus_stat(class), Some(0), "{who}");
         }
         assert_eq!(t.damage_bonus_stat(6), None);
+    }
+
+    /// `GetCharacterInfo`'s class is the `Name_Lang` block at field 5, one column per locale; a
+    /// class with no row has no name (6 and 10 in 1.12).
+    #[test]
+    fn class_names_are_the_name_lang_column() {
+        let Some(mut chain) = chain() else { return };
+        let t = load_chr_classes(&mut chain).expect("load ChrClasses.dbc");
+        for (class, name) in [
+            (1, "Warrior"),
+            (2, "Paladin"),
+            (3, "Hunter"),
+            (4, "Rogue"),
+            (5, "Priest"),
+            (7, "Shaman"),
+            (8, "Mage"),
+            (9, "Warlock"),
+            (11, "Druid"),
+        ] {
+            assert_eq!(t.name(class), Some(name), "class {class}");
+        }
+        assert_eq!((t.name(6), t.name(10), t.name(0)), (None, None, None));
     }
 
     /// The whole column pins field 15: nine distinct values matching vmangos `SpellFamilyNames`

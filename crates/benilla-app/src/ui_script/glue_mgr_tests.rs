@@ -821,6 +821,9 @@ fn live_app_with(
 ) -> (App, fake::Realmd, fake::World) {
     let (realmd, world) = fake::servers(realms);
     world.set_roster(roster);
+    // The race and class rows the roster's names come from, off the player's own chain.
+    let data = benilla_formats::wow_data().expect("callers skip without an install");
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
     let cycles = fake::spawn_cycles();
     let mut app = App::new();
     app.init_resource::<Time>()
@@ -832,6 +835,12 @@ fn live_app_with(
         .insert_resource(crate::net::RealmChoice(cycles.realm.clone()))
         .insert_resource(crate::net::CharPick(cycles.pick.clone()))
         .insert_resource(crate::realm_select::Realms::us_client())
+        .insert_resource(crate::entities::CharCreate(
+            benilla_formats::CharCreateCatalog::load(&mut chain).expect("ChrRaces"),
+        ))
+        .insert_resource(crate::chr_classes::ChrClassTable(
+            benilla_formats::load_chr_classes(&mut chain).expect("ChrClasses"),
+        ))
         .insert_resource(crate::area::AreaTableRes(
             benilla_formats::AreaTableCatalog::from_rows(vec![
                 (141, area_row("Teldrassil")),
@@ -1298,4 +1307,54 @@ fn an_empty_roster_asks_for_the_realm_list_only_with_no_realm_chosen() {
         (0.0, 0, false)
     );
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// The roster's race and class names are the DBC rows' `Name_Lang`, the file string the race
+/// row's, and a race or class with no row reads empty (`0x473336`, `0x47336e`); with no catalogs
+/// loaded every row is missing.
+#[test]
+fn the_roster_names_come_from_the_dbc_rows() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let create = benilla_formats::CharCreateCatalog::load(&mut chain).expect("ChrRaces");
+    let classes = benilla_formats::load_chr_classes(&mut chain).expect("ChrClasses");
+    let names = RosterNames {
+        areas: None,
+        create: Some(&create),
+        classes: Some(&classes),
+    };
+    let mut c = crate::char_select::test_character(1, "Alpha");
+    (c.race, c.class, c.gender) = (5, 9, 1);
+    let g = glue_character(&c, &names);
+    assert_eq!(
+        (
+            g.race.as_str(),
+            g.class.as_str(),
+            g.file_string.as_str(),
+            g.model
+        ),
+        ("Undead", "Warlock", "Scourge", true)
+    );
+    (c.race, c.class) = (99, 6);
+    let g = glue_character(&c, &names);
+    assert_eq!(
+        (
+            g.race.as_str(),
+            g.class.as_str(),
+            g.file_string.as_str(),
+            g.model
+        ),
+        ("", "", "", false)
+    );
+    let none = RosterNames {
+        areas: None,
+        create: None,
+        classes: None,
+    };
+    c.race = 1;
+    let g = glue_character(&c, &none);
+    assert_eq!(
+        (g.race.as_str(), g.file_string.as_str(), g.model),
+        ("", "", false)
+    );
 }

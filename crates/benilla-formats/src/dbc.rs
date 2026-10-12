@@ -57,6 +57,14 @@ pub(crate) fn str_at(rs: &RecordSet, r: &Record, i: usize) -> Option<String> {
     }
 }
 
+/// The name a `Name_Lang` block holds, the eight locale columns from `first`: the first populated
+/// one. The reference reads the column its client's locale picks (`[0xc0e080]`); a client's DBCs
+/// carry their own locale's column alone, so the populated column is that one, and enUS, column 0,
+/// is what the corpus here ships.
+pub(crate) fn name_lang_at(rs: &RecordSet, r: &Record, first: usize) -> Option<String> {
+    (first..first + 8).find_map(|i| str_at(rs, r, i))
+}
+
 /// `SpellIcon.dbc`: id → extensionless texture path (`Interface\Icons\…`).
 pub(crate) fn load_spell_icon_map(chain: &mut Chain) -> Result<HashMap<u32, String>> {
     let bytes = chain
