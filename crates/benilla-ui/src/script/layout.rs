@@ -1728,6 +1728,9 @@ impl UiScript {
                 ids.push((h, id));
             }
         }
+        // In id order, not the map's: the roster, and every id minted below, are the same each
+        // run.
+        ids.sort_unstable_by_key(|&(_, id)| id);
         for &(h, id) in &ids {
             let (scale, clamp) = arena
                 .frame(h)
@@ -1799,7 +1802,11 @@ impl UiScript {
         let mut fed_regions = 0u64;
         // The region roster, built in the same walk: live, anchored regions only.
         scope.regions.reserve(region_data.len());
-        for (&rh, data) in region_data.iter() {
+        // In handle order, not the map's, so an id minted here is the same each run.
+        let mut rows: Vec<RegionHandle> = region_data.keys().copied().collect();
+        rows.sort_unstable_by_key(|rh| rh.fingerprint_bits());
+        for rh in rows {
+            let data = &region_data[&rh];
             // Anchor-less entries are not layout inputs: hashing them would make a paint-only
             // setter that creates one (`SetTexture`'s `or_default()`) read as a layout change.
             if data.anchors.is_empty() {
@@ -2033,13 +2040,18 @@ impl UiScript {
                 }
                 dirty
             }
-            None => model
-                .region_data
-                .iter()
-                .filter(|(_, d)| d.text.as_deref().is_some_and(|t| !t.is_empty()))
-                .map(|(&rh, _)| rh)
-                .filter(|&rh| stale_measure_key(&model, rh).is_some())
-                .collect(),
+            None => {
+                let mut all: Vec<RegionHandle> = model
+                    .region_data
+                    .iter()
+                    .filter(|(_, d)| d.text.as_deref().is_some_and(|t| !t.is_empty()))
+                    .map(|(&rh, _)| rh)
+                    .filter(|&rh| stale_measure_key(&model, rh).is_some())
+                    .collect();
+                // In handle order, not the map's: a request mints its region's id.
+                all.sort_unstable_by_key(|rh| rh.fingerprint_bits());
+                all
+            }
         };
         // Re-enroll every stale region: a request is not an answer, and nothing else asks again.
         if let Some(list) = &mut model.measure_dirty {

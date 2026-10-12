@@ -781,7 +781,12 @@ pub(crate) fn free_regions(model: &mut Model, dying: &[RegionHandle]) {
              graph's readers of it or the nodes named since"
         );
     }
-    // Each dependent re-derives its edges and keeps the state it has.
+    // Each dependent re-derives its edges and keeps the state it has, in handle order, as a naming
+    // can mint an id.
+    regions.sort_unstable_by_key(|rh| rh.fingerprint_bits());
+    regions.dedup();
+    frames.sort_unstable_by_key(|h| h.fingerprint_bits());
+    frames.dedup();
     for rh in regions {
         model.unsettle_region(rh);
     }
