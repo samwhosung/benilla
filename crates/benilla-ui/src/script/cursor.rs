@@ -50,6 +50,58 @@ pub enum CursorPayload {
     Money(CursorMoney),
 }
 
+impl CursorPayload {
+    /// The payload as `ClearCursor`'s arm leaves it, the mode alone: the arm zeroes the data
+    /// (`0x49520f`, `0x495234`, `0x49524f`, `0x495257`, `0x49526f`, `0x495283`, `0x49528b`) before
+    /// the tail zeroes the mode (`0x4952bf`).
+    fn emptied(&self) -> CursorPayload {
+        match self {
+            CursorPayload::Item(_) => CursorPayload::Item(CursorItem {
+                bag: 0,
+                slot: 0,
+                item_id: 0,
+                texture: None,
+                link: None,
+                count: None,
+                quality: None,
+                equip_slots: Vec::new(),
+                bar_placeable: false,
+            }),
+            CursorPayload::Spell(_) => CursorPayload::Spell(CursorSpell {
+                spell_id: 0,
+                texture: None,
+                passive: false,
+            }),
+            CursorPayload::Action(a) => CursorPayload::Action(CursorAction {
+                src_slot: 0,
+                kind: a.kind,
+                action: 0,
+                texture: None,
+            }),
+            CursorPayload::Macro(_) => CursorPayload::Macro(CursorMacro {
+                index: 0,
+                texture: None,
+            }),
+            CursorPayload::PetAction(_) => CursorPayload::PetAction(CursorPetAction {
+                src_slot: 0,
+                packed: 0,
+                passive: false,
+                texture: None,
+            }),
+            CursorPayload::Merchant(_) => CursorPayload::Merchant(CursorMerchantItem {
+                item_id: 0,
+                row: 0,
+                texture: None,
+            }),
+            CursorPayload::StablePet(_) => CursorPayload::StablePet(CursorStablePet {
+                slot: 0,
+                texture: String::new(),
+            }),
+            CursorPayload::Money(_) => CursorPayload::Money(CursorMoney { copper: 0 }),
+        }
+    }
+}
+
 /// Copper held on the cursor, mode 2 (`[0xb4e2f0]`, set by `PickupPlayerMoney`, `0x48abc0`). The
 /// purse is not debited; the stock money frame subtracts `GetCursorMoney()` (`MoneyFrame.lua:17`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,16 +249,13 @@ impl Clear {
 /// `ITEM_LOCK_CHANGED` when `unlock` (`0x4951d9`, `0x495455`), coins `PLAYER_MONEY` when `signal`
 /// (`0x495248`). Then the shared tail, on every call, an empty cursor included: a grid a setter
 /// showed hides, the pet bar's for a held pet action and the action bar's otherwise (`0x4952ac`,
-/// `0x4952b3`). The mode is zeroed only then (`0x4952bf`), so those handlers still read the
-/// payload being dropped, coins already counted out (`0x495234`) and an unlocked item reading
-/// unlocked; `CURSOR_UPDATE` alone reads the emptied cursor (`0x4952cc`).
+/// `0x4952b3`). The mode is zeroed only then (`0x4952bf`), so those handlers still read it: the
+/// wrap's and the item's unlock see the whole payload, the item reading unlocked, while the coins'
+/// `PLAYER_MONEY` and the grid hide come after the arm zeroed the data
+/// ([`CursorPayload::emptied`]). `CURSOR_UPDATE` alone reads the emptied cursor (`0x4952cc`).
 pub(crate) fn clear(model: &mut Model, how: Clear) {
     let held = model.cursor.take();
-    let shown = match &held {
-        Some(CursorPayload::Money(_)) => Some(CursorPayload::Money(CursorMoney { copper: 0 })),
-        other => other.clone(),
-    };
-    model.view_cursor(shown, how.unlock);
+    model.view_cursor(held.clone(), how.unlock);
     // `0x5edf10`: the wrapping paper unlocks and the cursor mode returns to the base.
     if model.pending_wrap.take().is_some() {
         raise_lock_changed(model);
@@ -215,10 +264,13 @@ pub(crate) fn clear(model: &mut Model, how: Clear) {
     }
     // Coins go back to nothing, as the purse was never debited; a vendor row clears with no
     // packet (`0x49525f`).
-    match &held {
-        Some(CursorPayload::Item(_)) if how.unlock => raise_lock_changed(model),
-        Some(CursorPayload::Money(_)) if how.signal_money => money::raise_player_money(model),
-        _ => {}
+    if matches!(held, Some(CursorPayload::Item(_))) && how.unlock {
+        raise_lock_changed(model);
+    }
+    model.end_cursor_view();
+    model.view_cursor(held.as_ref().map(CursorPayload::emptied), how.unlock);
+    if matches!(held, Some(CursorPayload::Money(_))) && how.signal_money {
+        money::raise_player_money(model);
     }
     if std::mem::take(&mut model.cursor_grid) {
         if matches!(held, Some(CursorPayload::PetAction(_))) {
@@ -1208,5 +1260,31 @@ mod tests {
             ]
         );
         assert_eq!(s.cursor_item().and_then(|i| i.count), Some(2));
+    }
+
+    /// The item arm's unlock fires with the item whole (`0x4951d9`, before `0x49520f` zeroes it);
+    /// the grid hide sees the mode alone, its data zeroed (`0x4952b3`); `CURSOR_UPDATE` the empty
+    /// cursor (`0x4952cc`).
+    #[test]
+    fn a_clears_events_see_the_payload_then_the_mode_alone() {
+        let mut s = UiScript::new().unwrap();
+        let mut bag = one_item_backpack();
+        bag.slots.get_mut(&1).unwrap().equip_slots = vec![1];
+        s.set_container(0, Some(bag));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        heard::listen(
+            &s,
+            &["ITEM_LOCK_CHANGED", "ACTIONBAR_HIDEGRID", "CURSOR_UPDATE"],
+            Some("tostring(CursorHasItem()) .. ' ' .. tostring(CursorCanGoInSlot(1))"),
+        );
+        s.run("ClearCursor()").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            [
+                "ITEM_LOCK_CHANGED 1 1",
+                "ACTIONBAR_HIDEGRID 1 nil",
+                "CURSOR_UPDATE nil nil"
+            ]
+        );
     }
 }
