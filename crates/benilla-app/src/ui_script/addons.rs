@@ -560,7 +560,7 @@ pub(crate) fn installed_rows() -> Vec<InstalledAddOn> {
 
 pub(crate) use benilla_ui::script::EnableStore;
 
-/// The enable files as this host keeps them, `benilla-config/addons/<Realm>-<Char>.txt`, in the
+/// The enable files as this host keeps them, `benilla-config/addon-state/<Realm>-<Char>.txt`, in the
 /// reference's `AddOns.txt` format.
 pub(crate) struct AppAddonFiles;
 
@@ -2188,8 +2188,8 @@ mod tests {
             &[("ran.lua", "OnRan = true")],
         );
         // "On" is absent from the file.
-        std::fs::create_dir_all(home.join("addons")).unwrap();
-        std::fs::write(home.join("addons/Realm-Char.txt"), "Off: disabled\n").unwrap();
+        std::fs::create_dir_all(home.join("addon-state")).unwrap();
+        std::fs::write(home.join("addon-state/Realm-Char.txt"), "Off: disabled\n").unwrap();
 
         let mut script = UiScript::new().unwrap();
         let id = ("Realm".to_string(), "Char".to_string());
@@ -2468,8 +2468,8 @@ mod tests {
             "## Interface: 11200\n## LoadOnDemand: 1\n",
             &[],
         );
-        std::fs::create_dir_all(home.join("addons")).unwrap();
-        std::fs::write(home.join("addons/Realm-Char.txt"), "Off: disabled\n").unwrap();
+        std::fs::create_dir_all(home.join("addon-state")).unwrap();
+        std::fs::write(home.join("addon-state/Realm-Char.txt"), "Off: disabled\n").unwrap();
 
         let mut script = UiScript::new().unwrap();
         let id = ("Realm".to_string(), "Char".to_string());
@@ -2619,7 +2619,7 @@ mod tests {
         script.run("DisableAddOn('Drop')").unwrap();
         save_enable_state(&script, Some(&id));
 
-        let written = std::fs::read_to_string(home.join("addons/Realm-Char.txt")).unwrap();
+        let written = std::fs::read_to_string(home.join("addon-state/Realm-Char.txt")).unwrap();
         assert_eq!(
             written, "Drop: disabled\n",
             "one line per hash entry (`0x51f006`), and the hash holds only the toggled addon: no \
@@ -3149,9 +3149,9 @@ mod tests {
         write_marking_addon(&home, "Host", "## LoadOnDemand: 1\n");
         write_marking_addon(&home, "Plain", "## LoadWith: Host\n");
         write_marking_addon(&home, "OnDemand", "## LoadOnDemand: 1\n## LoadWith: Host\n");
-        std::fs::create_dir_all(home.join("addons")).unwrap();
+        std::fs::create_dir_all(home.join("addon-state")).unwrap();
         std::fs::write(
-            home.join("addons/Realm-Char.txt"),
+            home.join("addon-state/Realm-Char.txt"),
             "Plain: disabled\nOnDemand: disabled\n",
         )
         .unwrap();

@@ -2102,19 +2102,17 @@ fn three_addons(home: &std::path::Path) {
         "## Interface: 11200\n## Dependencies: Alpha\n",
     );
     write_addon(home, "Gamma", "## Interface: 11100\n");
-    let dir = home.join("addons");
+    let dir = home.join("addon-state");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("Alpha-Alpha.txt"), "Alpha: enabled\n").unwrap();
     std::fs::write(dir.join("Alpha-Bravo.txt"), "Alpha: disabled\n").unwrap();
 }
 
-/// Every enable file under `home/addons`, by file name. (On a case-insensitive filesystem that
-/// folder is the AddOns root itself, so the addon folders are skipped.)
+/// Every enable file under `home/addon-state`, by file name.
 fn enable_files(home: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
-    std::fs::read_dir(home.join("addons"))
+    std::fs::read_dir(home.join("addon-state"))
         .map(|d| {
             d.flatten()
-                .filter(|e| e.path().is_file())
                 .map(|e| {
                     (
                         e.file_name().to_string_lossy().into_owned(),

@@ -138,12 +138,78 @@ pub(crate) fn saved_variables_path() -> Option<PathBuf> {
     home().map(|h| h.join("saved-variables.lua"))
 }
 
-/// `benilla-config/addons/<Realm>-<Character>.txt`: the AddOn enable state, per character in the
-/// reference's `AddOns.txt` format (`<AddOnName>: enabled|disabled`), which it writes at the tail
-/// of its UI shutdown (`0x490bd0`). An addon absent from the file is enabled.
+/// The folder of the AddOn enable files. Not `addons`, which names the AddOns root (`AddOns`) on a
+/// case-insensitive filesystem, so the two shared one folder there.
+const ADDON_STATE_DIR: &str = "addon-state";
+
+/// `benilla-config/addon-state/<Realm>-<Character>.txt`: the AddOn enable state, per character in
+/// the reference's `AddOns.txt` format (`<AddOnName>: enabled|disabled`), which it writes at the
+/// tail of its UI shutdown (`0x490bd0`). An addon absent from the file is enabled. The files a
+/// build before this one kept in `benilla-config/addons/` are moved here the first time a path is
+/// asked for ([`migrate_addon_state`]).
 pub(crate) fn addons_state_path(realm: &str, character: &str) -> Option<PathBuf> {
     let key = format!("{}-{}", file_token(realm), file_token(character));
-    home().map(|h| h.join("addons").join(format!("{key}.txt")))
+    let home = home()?;
+    migrate_addon_state(&home);
+    Some(home.join(ADDON_STATE_DIR).join(format!("{key}.txt")))
+}
+
+/// Move the enable files an earlier build wrote to `<home>/addons/` into [`ADDON_STATE_DIR`], once
+/// per process and home. A file qualifies when it is named `<Realm>-<Character>.txt` and every
+/// non-blank line of it reads `<AddOn>: enabled` or `<AddOn>: disabled`, so a loose `.txt` of the
+/// player's in a folder that is also the AddOns root (case-insensitive filesystems) stays where
+/// it is, and so does a file whose new name is already taken. An old folder left empty goes.
+fn migrate_addon_state(home: &Path) {
+    static DONE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+    {
+        let mut done = DONE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if done.iter().any(|h| h == home) {
+            return;
+        }
+        done.push(home.to_path_buf());
+    }
+    let old = home.join("addons");
+    let Ok(entries) = std::fs::read_dir(&old) else {
+        return;
+    };
+    let new = home.join(ADDON_STATE_DIR);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_state_name = path.is_file()
+            && name.strip_suffix(".txt").is_some_and(|stem| {
+                stem.matches('-').count() == 1 && !stem.starts_with('-') && !stem.ends_with('-')
+            });
+        if !is_state_name {
+            continue;
+        }
+        let looks_like_state = std::fs::read(&path).is_ok_and(|bytes| {
+            benilla_ui::source::decode(&bytes).lines().all(|line| {
+                line.trim().is_empty()
+                    || line.split_once(':').is_some_and(|(addon, state)| {
+                        !addon.trim().is_empty()
+                            && matches!(
+                                state.trim().to_ascii_lowercase().as_str(),
+                                "enabled" | "disabled"
+                            )
+                    })
+            })
+        });
+        let target = new.join(&name);
+        if !looks_like_state || target.exists() {
+            continue;
+        }
+        if std::fs::create_dir_all(&new).is_ok() && std::fs::rename(&path, &target).is_ok() {
+            bevy::log::info!("addons: moved {} to {}", path.display(), target.display());
+        }
+    }
+    // An emptied folder goes, unless it is the AddOns root under another case (it exists by that
+    // name too), which the player drops addons into.
+    if !home.join("AddOns").exists() {
+        let _ = std::fs::remove_dir(&old);
+    }
 }
 
 /// `benilla-config/saved/`: per-addon saved variables, account scope, one `<Addon>.lua` per addon
@@ -612,5 +678,63 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a = \"2\"\n");
         assert!(!path.with_extension("tmp").exists(), "tmp renamed away");
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// The enable files live where no AddOns root can be: the old `addons/` folder is the AddOns
+    /// root under another case on a case-insensitive filesystem. A file of the earlier layout is
+    /// moved once; a loose `.txt` of the player's that is no enable state stays, and so does a
+    /// file whose new name is taken.
+    #[test]
+    fn the_enable_files_leave_the_addon_folder_and_old_ones_move_once() {
+        let _l = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tmp = std::env::temp_dir().join(format!("benilla-enable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let home = tmp.join("benilla-config");
+        let old = home.join("addons");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("Realm-One.txt"), "A: disabled\r\nB: enabled\n").unwrap();
+        std::fs::write(old.join("Realm-Two.txt"), "A: disabled\n").unwrap();
+        std::fs::write(old.join("Notes-Todo.txt"), "buy milk\n").unwrap();
+        std::fs::write(old.join("README.txt"), "A: enabled\n").unwrap();
+        let _g = EnvGuard::set("BENILLA_HOME", home.to_str().unwrap());
+
+        let path = addons_state_path("Realm", "One").unwrap();
+        assert_ne!(
+            path.parent()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_ascii_lowercase(),
+            old.to_str().unwrap().to_ascii_lowercase(),
+            "no case spelling of the AddOns root"
+        );
+        assert_ne!(
+            path.parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_ascii_lowercase(),
+            "addons"
+        );
+        let new = path.parent().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "A: disabled\r\nB: enabled\n",
+            "moved whole"
+        );
+        assert!(new.join("Realm-Two.txt").is_file());
+        assert!(!old.join("Realm-One.txt").exists());
+        assert!(
+            old.join("Notes-Todo.txt").is_file() && old.join("README.txt").is_file(),
+            "a file that is no enable state stays"
+        );
+        // Once: a file written to the old place afterwards is not taken, and the new is not
+        // overwritten.
+        std::fs::write(old.join("Realm-Three.txt"), "A: enabled\n").unwrap();
+        let _ = addons_state_path("Realm", "Three");
+        assert!(old.join("Realm-Three.txt").is_file());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
