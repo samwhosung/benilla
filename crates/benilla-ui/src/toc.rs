@@ -21,6 +21,30 @@ fn starts_with_ci(s: &str, prefix: &str) -> bool {
     s.len() >= p.len() && s[..p.len()].eq_ignore_ascii_case(p)
 }
 
+/// The client's string-to-bool `0x6f1b30` for the words it knows, `None` for any other string. A
+/// first byte of `1`-`9`, `T`, `t`, `Y` or `y` is true and `0`, `F`, `f`, `N` or `n` false (the
+/// jump table `0x6f1bc0` over `0x6f1bb4`); every other string, an empty one included, is compared
+/// whole and case-insensitively (`0x64a4c0`): `off` (`0x871460`) and `disabled` (`0x853758`) are
+/// false, `on` (`0x87145c`) and `enabled` (`0x853764`) true.
+pub(crate) fn keyword_bool(bytes: &[u8]) -> Option<bool> {
+    match bytes.first() {
+        Some(b'0' | b'F' | b'N' | b'f' | b'n') => Some(false),
+        Some(b'1'..=b'9' | b'T' | b'Y' | b't' | b'y') => Some(true),
+        _ if bytes.eq_ignore_ascii_case(b"off") || bytes.eq_ignore_ascii_case(b"disabled") => {
+            Some(false)
+        }
+        _ if bytes.eq_ignore_ascii_case(b"on") || bytes.eq_ignore_ascii_case(b"enabled") => {
+            Some(true)
+        }
+        _ => None,
+    }
+}
+
+/// `0x6f1b30` as a `.toc` boolean reads it: anything [`keyword_bool`] does not know is false.
+pub fn string_to_bool(s: &str) -> bool {
+    keyword_bool(s.as_bytes()).unwrap_or(false)
+}
+
 impl Toc {
     /// Parse manifest text; never fails, since any unrecognized line is a file entry.
     pub fn parse(text: &str) -> Self {
@@ -124,9 +148,11 @@ impl Toc {
             .collect()
     }
 
-    /// `## LoadOnDemand: 1`, which stock 1.12 addons such as `Blizzard_TalentUI` carry.
+    /// `## LoadOnDemand:`, which stock 1.12 addons such as `Blizzard_TalentUI` carry as `1`. The
+    /// value goes through `0x6f1b30` (called at `0x51d26f`, stored at `0x51d27c`), so `true`,
+    /// `yes`, `on` and `enabled` count as well.
     pub fn load_on_demand(&self) -> bool {
-        self.directive("LoadOnDemand").map(str::trim) == Some("1")
+        self.directive("LoadOnDemand").is_some_and(string_to_bool)
     }
 
     /// `## DefaultState:`, the byte at `[rec+0x2b]` the enable query `0x51e470` falls back to when
@@ -265,6 +291,27 @@ mod tests {
         );
         assert_eq!(toc.load_with(), vec!["KLHThreatMeter", "Other", "Third"]);
         assert_eq!(toc.dependencies(), vec!["LibA"]);
+    }
+
+    /// `0x6f1b30`: the first byte decides for `0`-`9`, `F`, `N`, `T`, `Y` and their lowercase; the
+    /// other words are compared whole.
+    #[test]
+    fn load_on_demand_reads_the_clients_string_to_bool() {
+        let lod = |v: &str| Toc::parse(&format!("## LoadOnDemand: {v}\n")).load_on_demand();
+        for yes in [
+            "1", "9", "true", "True", "Yes", "yes", "T", "on", "ON", "enabled", "Enabled",
+        ] {
+            assert!(lod(yes), "{yes} is true");
+        }
+        for no in [
+            "0", "false", "no", "No", "off", "disabled", "", "maybe", "onn", "enable", "x",
+        ] {
+            assert!(!lod(no), "{no:?} is false");
+        }
+        assert!(
+            !Toc::parse("## Title: x\n").load_on_demand(),
+            "absent is false"
+        );
     }
 
     #[test]

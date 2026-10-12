@@ -293,25 +293,10 @@ pub(crate) fn bool_or_default(v: Option<&Value>, default: bool) -> bool {
         Value::Integer(i) => (*i as i32) != 0,
         Value::Number(n) => ftol(*n) != 0,
         Value::String(s) => {
+            // The keyword arm is also reached by every byte the remap table cannot index (and
+            // by an empty string); a string it does not know takes `default`.
             let bytes = s.as_bytes();
-            match bytes.first() {
-                Some(b'0' | b'F' | b'N' | b'f' | b'n') => false,
-                Some(b'1'..=b'9' | b'T' | b'Y' | b't' | b'y') => true,
-                // The keyword arm, also reached by every byte the remap table cannot index (and
-                // by an empty string).
-                _ => {
-                    if bytes.eq_ignore_ascii_case(b"off") || bytes.eq_ignore_ascii_case(b"disabled")
-                    {
-                        false
-                    } else if bytes.eq_ignore_ascii_case(b"on")
-                        || bytes.eq_ignore_ascii_case(b"enabled")
-                    {
-                        true
-                    } else {
-                        default
-                    }
-                }
-            }
+            crate::toc::keyword_bool(&bytes).unwrap_or(default)
         }
         _ => default,
     }
