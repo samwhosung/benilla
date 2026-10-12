@@ -530,6 +530,65 @@ fn only_the_native_policy_re_enumerates_after_a_create() {
     assert_eq!(world.enumerations(), 0);
 }
 
+/// The park serves a rename in place: the reply goes out as it came, with no roster asked, and
+/// the park's own copy of the roster takes the new name, so the world entry names the character
+/// by it. A refused rename changes nothing.
+#[test]
+fn the_park_serves_a_rename_and_follows_it() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let mut bravo = crate::char_select::test_character(GUID, "Bravo");
+    bravo.flags = benilla_protocol::CHARACTER_FLAG_RENAME;
+    world.set_roster(&[bravo]);
+    let cycles = fake::spawn_cycles_asking();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::WorldAuthenticated { .. }
+    ));
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::CharacterList { .. }
+    ));
+
+    world.answer_renames(0x2f);
+    cycles
+        .pick
+        .send(CharRequest::Rename {
+            guid: GUID,
+            name: "Newbie".into(),
+        })
+        .unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::CharRenamed { result, renamed } => {
+            assert_eq!((result, renamed), (0x2f, None))
+        }
+        other => panic!("expected the rename's reply, got {other:?}"),
+    }
+    world.answer_renames(0);
+    cycles
+        .pick
+        .send(CharRequest::Rename {
+            guid: GUID,
+            name: "Newbie".into(),
+        })
+        .unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::CharRenamed { result, renamed } => {
+            assert_eq!((result, renamed), (0, Some((GUID, "Newbie".to_string()))));
+        }
+        other => panic!("expected the rename's reply, got {other:?}"),
+    }
+    assert_eq!(world.enumerations(), 1, "no roster behind the rename");
+    cycles.pick.send(CharRequest::Enter(GUID)).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::Connected { name, .. } => assert_eq!(name, "Newbie"),
+        other => panic!("expected the world entry, got {other:?}"),
+    }
+}
+
 /// Logs in, dials the one realm and picks `GUID` at character select: the session's epoch once
 /// the entry is announced. Under the native policy the park's roster comes first.
 fn enter_world(cycles: &fake::Cycles, realmd: &fake::Realmd, asking: bool) -> u64 {
