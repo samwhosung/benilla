@@ -189,8 +189,10 @@ fn place(model: &mut Model, h: FrameHandle, rect: Rect, link: &str, text: &str) 
         input.anchors = pin;
         input.width = w;
         input.height = ht;
-        model.touch_layout_frame(h);
         model.note_authored_size(h);
     }
+    // The points are cleared (`0x7a3415`), one set with the invalidate flag (`0x7a3441`), and the
+    // size set through the setters, which invalidate (`0x7a3457`, `0x7a346b`).
+    model.invalidate_frame(h, changed);
     changed
 }
