@@ -92,9 +92,13 @@ fn trade_status(
         // session is clear), and vmangos ignores it once the trade is gone (`Player.cpp:11739`).
         TradeStatus::Canceled => {
             trade.signal_request_cancel();
+            trade.unlock_items();
             trade.close_window();
         }
-        TradeStatus::Complete | TradeStatus::CloseWindow { .. } => trade.close_window(),
+        TradeStatus::Complete | TradeStatus::CloseWindow { .. } => {
+            trade.unlock_items();
+            trade.close_window();
+        }
         // The placement is bounced, not the window (case 22, `0x4bf9ec` → `0x4bfbd0`).
         TradeStatus::OnlyConjured { slot } => trade.bounce_own_offer(slot),
         // The initiate refusals: the tail's clear alone, each line already queued above.

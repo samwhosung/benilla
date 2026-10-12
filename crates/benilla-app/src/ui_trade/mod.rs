@@ -52,6 +52,12 @@ pub(crate) struct TradeSession {
     /// A `TRADE_REQUEST_CANCEL` owed to [`feed_trade`]. `CANCELED` signals it (`0x4bf832`)
     /// before it clears the window (`0x4bf842`), so it survives [`Self::close_window`].
     request_cancel: bool,
+    /// `UnlockTradeItems` owed to [`feed_trade`]: the `CANCELED`, `COMPLETE` and `CLOSE_WINDOW`
+    /// arms run it before the close (`0x4bf837`, `0x4bf859`, `0x4bf87e`), a local `CloseTrade`
+    /// never (`0x4bfdc0`). It survives [`Self::close_window`].
+    unlock_items: bool,
+    /// Our 0-based slots `InvalidateTradeSlot` (`0x4bfbd0`) runs on, owed to [`feed_trade`].
+    invalidated: Vec<u8>,
     /// Owed lines whose `%s` names a player, parked until [`NameCache`] answers. The reference
     /// prints `ERR_INITIATE_TRADE_S` from its name cache in the sender (`0x5d4031`: `0x5d4042` on
     /// a hit, the query callback `0x5d4080` at `0x5d40ca` on a miss); the lines survive
@@ -117,6 +123,15 @@ impl TradeSession {
 
     /// `SMSG_TRADE_STATUS_EXTENDED`: one side's new offer, which drops both accepts.
     pub(crate) fn set_offer(&mut self, ext: &TradeStatusExtended) {
+        // Our side's slot that held an item and comes back empty is invalidated (`0x5d4ad3`,
+        // `0x5d4b33`).
+        if !ext.their_window {
+            for (i, (old, new)) in self.our.slots.iter().zip(ext.slots.iter()).enumerate() {
+                if old.is_some() && new.is_none() {
+                    self.invalidated.push(i as u8);
+                }
+            }
+        }
         let side = if ext.their_window {
             &mut self.their
         } else {
@@ -203,6 +218,19 @@ impl TradeSession {
         std::mem::take(&mut self.request_cancel)
     }
 
+    /// Owe `UnlockTradeItems` (`0x4bfcf0`): a server-driven close.
+    pub(crate) fn unlock_items(&mut self) {
+        self.unlock_items = true;
+    }
+
+    fn take_unlock_items(&mut self) -> bool {
+        std::mem::take(&mut self.unlock_items)
+    }
+
+    fn take_invalidated(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.invalidated)
+    }
+
     /// Park a line that names a player.
     pub(crate) fn owe_named_line(&mut self, line: NamedLine) {
         self.named_lines.push(line);
@@ -229,6 +257,7 @@ impl TradeSession {
     pub(crate) fn close_window(&mut self) {
         *self = TradeSession {
             request_cancel: self.request_cancel,
+            unlock_items: self.unlock_items,
             named_lines: std::mem::take(&mut self.named_lines),
             ..Default::default()
         };
@@ -262,6 +291,7 @@ impl TradeSession {
             self.our.gold = 0;
         } else if let Some(cell) = self.our.slots.get_mut(usize::from(slot)) {
             *cell = None;
+            self.invalidated.push(slot);
         }
     }
 
@@ -599,6 +629,12 @@ fn feed_trade(
     // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based slot
     // (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player); the reference also fires the
     // full `TRADE_UPDATE` (`0x4c034f`).
+    // `InvalidateTradeSlot` (`0x4bfbd0`) on our slots: the unlock and its own
+    // `TRADE_PLAYER_ITEM_CHANGED`, which the diff below then skips.
+    let invalidated = trade.take_invalidated();
+    for &slot in &invalidated {
+        script.invalidate_trade_slot(slot);
+    }
     if changed && trade.is_open() && !opened {
         let empty = TradeState::default();
         let old = last.as_ref().unwrap_or(&empty);
@@ -613,6 +649,10 @@ fn feed_trade(
                     .collect::<Vec<_>>()
             };
             for slot in changed_slots(&new.player.slots, &old.player.slots) {
+                if matches!(slot, ScriptValue::Int(n) if invalidated.iter().any(|&i| i64::from(i) + 1 == n))
+                {
+                    continue;
+                }
                 script.fire_event("TRADE_PLAYER_ITEM_CHANGED", vec![slot]);
             }
             for slot in changed_slots(&new.target.slots, &old.target.slots) {
@@ -638,6 +678,10 @@ fn feed_trade(
     // `UIParent.lua:395` only hides the never-shown `TRADE` popup on it; addons may listen.
     if trade.take_request_cancel() {
         script.fire_event("TRADE_REQUEST_CANCEL", vec![]);
+    }
+    // Then `UnlockTradeItems` (`0x4bf837`), before the close's `TRADE_CLOSED`.
+    if trade.take_unlock_items() {
+        script.unlock_trade_items();
     }
     if opened {
         // `SetTradePartner`'s open leg (`0x4bf4e0`): coins held on the cursor fold into the offer
@@ -1556,5 +1600,141 @@ mod tests {
             ),
             "clearing our filled UI slot 1 ships CMSG_CLEAR_TRADE_ITEM for wire slot 0"
         );
+    }
+
+    /// An app with the trade window open and the backpack's slot 1 offered in trade slot 1, and
+    /// a spy that lists the trade-close and lock events in order.
+    fn offered_app() -> App {
+        let (mut app, _rx) = feed_app();
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.begin(0x7);
+            trade.open_window();
+        }
+        app.update();
+        let mut vm = app.world_mut().non_send_resource_mut::<UiScript>();
+        let mut bag = benilla_ui::script::ContainerState::default();
+        bag.slots.insert(
+            1,
+            benilla_ui::script::ContainerSlot {
+                item_id: 2589,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        vm.set_container(0, Some(bag));
+        vm.run(
+            r#"PickupContainerItem(0, 1) ClickTradeButton(1)
+               SEEN = {}
+               local f = CreateFrame("Frame")
+               for _, e in { "TRADE_REQUEST_CANCEL", "ITEM_LOCK_CHANGED", "TRADE_CLOSED",
+                             "TRADE_PLAYER_ITEM_CHANGED" } do
+                   f:RegisterEvent(e)
+               end
+               f:SetScript("OnEvent", function() table.insert(SEEN, event) end)"#,
+        )
+        .unwrap();
+        app
+    }
+
+    fn seen(app: &mut App) -> Vec<String> {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("local s = SEEN SEEN = {} return s")
+            .unwrap()
+    }
+
+    fn bag_locked(app: &mut App) -> bool {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("local _, _, l = GetContainerItemInfo(0, 1) return l == 1")
+            .unwrap()
+    }
+
+    /// `CANCELED` fires `TRADE_REQUEST_CANCEL` (`0x4bf832`), then unlocks the offered items
+    /// (`0x4bf837`), then closes with `TRADE_CLOSED` (`0x4bf522`); a local `CloseTrade`
+    /// (`0x4bfdc0`) closes without unlocking, which waits for the server's `CANCELED`.
+    #[test]
+    fn a_canceled_trade_unlocks_between_its_signals_and_a_local_close_does_not() {
+        let mut app = offered_app();
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.signal_request_cancel();
+            trade.unlock_items();
+            trade.close_window();
+        }
+        app.update();
+        assert_eq!(
+            seen(&mut app),
+            ["TRADE_REQUEST_CANCEL", "ITEM_LOCK_CHANGED", "TRADE_CLOSED"]
+        );
+        assert!(!bag_locked(&mut app));
+
+        let mut app = offered_app();
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .close_window();
+        app.update();
+        assert_eq!(seen(&mut app), ["TRADE_CLOSED"]);
+        assert!(bag_locked(&mut app), "held until the server answers");
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.signal_request_cancel();
+            trade.unlock_items();
+            trade.close_window();
+        }
+        app.update();
+        assert_eq!(
+            seen(&mut app),
+            ["TRADE_REQUEST_CANCEL", "ITEM_LOCK_CHANGED"]
+        );
+        assert!(!bag_locked(&mut app));
+    }
+
+    /// `ONLY_CONJURED` invalidates the slot (`0x4bf9fd` into `0x4bfbd0`): the item unlocks and
+    /// `TRADE_PLAYER_ITEM_CHANGED` fires once, not again from the repaint diff.
+    #[test]
+    fn a_bounced_offer_unlocks_its_item_and_signals_the_slot_once() {
+        let mut app = offered_app();
+        // The column the app fills on the placement, as the drain would.
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .place_own_item(1, wire_item(2589), 0);
+        app.update();
+        seen(&mut app);
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .bounce_own_offer(0);
+        app.update();
+        assert_eq!(
+            seen(&mut app),
+            ["ITEM_LOCK_CHANGED", "TRADE_PLAYER_ITEM_CHANGED"]
+        );
+        assert!(!bag_locked(&mut app));
+
+        // An own-side extended status that empties a filled slot does the same (`0x5d4b33`).
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("ClearCursor() PickupContainerItem(0, 1) ClickTradeButton(1)")
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .place_own_item(1, wire_item(2589), 0);
+        app.update();
+        seen(&mut app);
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .set_offer(&TradeStatusExtended {
+                their_window: false,
+                gold: 0,
+                enchant_spell_id: 0,
+                slots: [None; TRADE_SLOT_COUNT],
+            });
+        app.update();
+        assert_eq!(
+            seen(&mut app),
+            ["ITEM_LOCK_CHANGED", "TRADE_PLAYER_ITEM_CHANGED"]
+        );
+        assert!(!bag_locked(&mut app));
     }
 }

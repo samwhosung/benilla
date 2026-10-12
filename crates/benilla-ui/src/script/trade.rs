@@ -66,16 +66,37 @@ pub struct TradeState {
 
 impl super::UiScript {
     /// Push (or clear, with `None`) the open trade window's snapshot.
-    /// A closed trade unlocks every item our slots held (`0x4bfcf0`), one `ITEM_LOCK_CHANGED`
-    /// each (`0x4bfd03`).
     pub fn set_trade(&mut self, state: Option<TradeState>) {
-        let mut model = self.model_mut();
-        if state.is_none() {
-            for _ in std::mem::take(&mut model.trade_offered).iter().flatten() {
-                cursor::raise_lock_changed(&mut model);
-            }
+        self.model_mut().trade = state;
+    }
+
+    /// `UnlockTradeItems` (`0x4bfcf0`), which the `CANCELED`, `COMPLETE` and `CLOSE_WINDOW` status
+    /// arms run before the window closes (`0x4bf837`, `0x4bf859`, `0x4bf87e`): every item our
+    /// slots held unlocks, one `ITEM_LOCK_CHANGED` each (`0x4bfd03`), fired now. A local
+    /// `CloseTrade` (`0x4bfdc0`) never runs it; the server's `CANCELED` does.
+    pub fn unlock_trade_items(&mut self) {
+        let offered = std::mem::take(&mut self.model_mut().trade_offered);
+        for _ in offered.iter().flatten() {
+            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
         }
-        model.trade = state;
+    }
+
+    /// `InvalidateTradeSlot` (`0x4bfbd0`) for our 0-based slot, from the `ONLY_CONJURED` arm
+    /// (`0x4bf9fd`) and an own-side `SMSG_TRADE_STATUS_EXTENDED` that empties it (`0x5d4ad3`,
+    /// `0x5d4b33`): the item it held unlocks (`0x4bfc0a`), the slot empties, and
+    /// `TRADE_PLAYER_ITEM_CHANGED(slot)` fires (`0x4bfc3f`), now.
+    pub fn invalidate_trade_slot(&mut self, slot: u8) {
+        let cell = usize::from(slot);
+        if cell >= TRADE_SLOTS {
+            return;
+        }
+        if self.model_mut().trade_offered[cell].take().is_some() {
+            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
+        }
+        self.fire_event(
+            "TRADE_PLAYER_ITEM_CHANGED",
+            vec![super::ScriptValue::Int(i64::from(slot) + 1)],
+        );
     }
 
     /// Drain the tokens `InitiateTrade` queued; the app sends `CMSG_INITIATE_TRADE` for each.
@@ -150,8 +171,9 @@ fn gold(model: &Model, pick: impl Fn(&TradeState) -> &TradeSideState) -> u32 {
 /// with the slot's (`0x4c0017`): the same, nothing on both sides included, is `ClearCursor(1,1)`
 /// (`0x4c0026`), which drops any other payload. Else the slot takes the held item, a
 /// `CMSG_SET_TRADE_ITEM`, or empties, a `CMSG_CLEAR_TRADE_ITEM` (`0x4bfa70`), and
-/// `SetCursorItem` puts the slot's old item back on the cursor, lifting no lock when the send went
-/// (`0x4c004a`-`0x4c0064`), so a placed item stays locked in its bag. The app fills our column
+/// `SetCursorItem` puts the slot's old item back on the cursor, whole (count 0, `0x4c004e`),
+/// lifting no lock when the send went (`0x4c004a`-`0x4c0064`), so a placed item stays locked in
+/// its bag. The app fills our column
 /// itself, since vmangos echoes a placement only to the partner (`TradeData.cpp:81`).
 fn click_trade_button(lua: &Lua, id: u32) {
     let money = super::tick::verb(lua, |model| {
@@ -182,19 +204,21 @@ fn click_trade_button(lua: &Lua, id: u32) {
         super::tick::verb(lua, cursor::clear_cursor);
         return;
     }
-    // `0x4bfa70`: a slot outside the seven or a placement outside a trade sends nothing.
+    // `0x4bfa70`: a slot outside the seven sends nothing; the set send fails only on a missing
+    // player or item (`0x5d43af`, `0x5d43da`), which a held item never is here. The table keeps
+    // the item whole: what comes back is the stack.
     let sent = super::tick::verb(lua, |model| {
         let Some(i) = index else {
             return false;
         };
         match &held {
-            Some(item) if model.trade.is_some() => {
-                model.trade_set_items.push((id, item.bag, item.slot));
-            }
-            Some(_) => return false,
+            Some(item) => model.trade_set_items.push((id, item.bag, item.slot)),
             None => model.trade_clear_items.push(id),
         }
-        model.trade_offered[i] = held;
+        model.trade_offered[i] = held.map(|item| cursor::CursorItem {
+            count: None,
+            ..item
+        });
         true
     });
     cursor::set_cursor(lua, !sent, |_| old.map(CursorPayload::Item));
@@ -741,9 +765,11 @@ mod tests {
             &["CURSOR_UPDATE", "ITEM_LOCK_CHANGED"],
             Some("CursorHasItem()"),
         );
-        s.run("PickupContainerItem(0, 2) ClickTradeButton(2)")
-            .unwrap();
+        s.run("PickupContainerItem(0, 2)").unwrap();
         heard::take(&s);
+        s.run("ClickTradeButton(2)").unwrap();
+        // `SetCursorItem(0, old)`: its `ClearCursor(0,1)` lifts no lock, then the set.
+        assert_eq!(heard::take(&s), ["CURSOR_UPDATE nil", "CURSOR_UPDATE 1"]);
         assert_eq!(s.take_trade_set_items(), vec![(2, 0, 2)]);
         assert_eq!(
             s.cursor_item().map(|i| i.slot),
@@ -775,11 +801,45 @@ mod tests {
         assert!(s.take_trade_set_items().is_empty());
         assert!(s.eval::<bool>("return CursorHasItem()").unwrap());
 
-        // The close unlocks what the slots held, one event each (`0x4bfd03`).
+        // Closing the window unlocks nothing (`0x4bfdc0`); `UnlockTradeItems` does, one event
+        // each (`0x4bfd03`), and an invalidated slot unlocks with its own event (`0x4bfbd0`).
         s.run("ClickTradeButton(1)").unwrap();
         heard::take(&s);
         s.set_trade(None);
-        assert_eq!(s.model_ref().pending_events.len(), 1);
+        assert!(locked(&s, 1));
+        s.unlock_trade_items();
+        assert_eq!(heard::take(&s), ["ITEM_LOCK_CHANGED nil"]);
         assert!(!locked(&s, 1));
+
+        heard::listen(
+            &s,
+            &["ITEM_LOCK_CHANGED", "TRADE_PLAYER_ITEM_CHANGED"],
+            None,
+        );
+        s.run("PickupContainerItem(0, 2) ClickTradeButton(3)")
+            .unwrap();
+        heard::take(&s);
+        s.invalidate_trade_slot(2);
+        assert_eq!(
+            heard::take(&s),
+            ["ITEM_LOCK_CHANGED", "TRADE_PLAYER_ITEM_CHANGED"]
+        );
+        assert!(!locked(&s, 2));
+    }
+
+    /// The put-back passes count 0 (`0x4c004e`), so a split offered comes back as the whole stack.
+    /// The set send tests no trade (`0x4bfa70`, `0x5d4380`), so it goes out with none open.
+    #[test]
+    fn an_offered_split_comes_back_whole() {
+        let mut s = UiScript::new().unwrap();
+        let mut bag = crate::script::cursor::two_item_bag();
+        bag.slots.get_mut(&1).unwrap().count = 5;
+        s.set_container(0, Some(bag));
+        s.run("SplitContainerItem(0, 1, 2) ClickTradeButton(1)")
+            .unwrap();
+        assert_eq!(s.take_trade_set_items(), vec![(1, 0, 1)]);
+        s.run("ClickTradeButton(1)").unwrap();
+        let back = s.cursor_item().expect("the item is back");
+        assert_eq!((back.slot, back.count), (1, None));
     }
 }
