@@ -110,6 +110,11 @@ impl super::UiScript {
         self.model_ref().actions.clone()
     }
 
+    /// One slot as the VM holds it.
+    pub fn action_slot(&self, action: u32) -> Option<ActionSlot> {
+        self.model_ref().actions.get(&action).cloned()
+    }
+
     /// Push (or clear) one action's state; the cooldown start is already on the `GetTime` clock,
     /// so storing only converts milliseconds to seconds.
     pub fn set_action_state(&mut self, action: u32, state: Option<ActionState>) {

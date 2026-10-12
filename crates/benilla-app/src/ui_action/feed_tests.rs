@@ -221,6 +221,51 @@ fn a_bar_drag_fires_its_slots_in_place_and_the_feed_adds_nothing() {
     assert!(bar.buttons.contains_key(&0) && !bar.buttons.contains_key(&JERKY_SLOT));
 }
 
+/// A verb run after the drain and before the next feed (an addon's `PlaceAction` from a handler)
+/// is not rolled back: the store has not caught up, so a re-resolve in that window pushes nothing
+/// over the verb's write and fires nothing.
+#[test]
+fn a_verbs_bar_write_survives_a_resolve_of_the_stale_store() {
+    let (mut app, _rx) = app_with_food_on_the_bar();
+    let mut info = test_template("Tough Jerky");
+    info.display_info_id = JERKY_DISPLAY;
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(JERKY, Some(info));
+    app.update();
+    app.update();
+
+    fn script(app: &mut App) -> Mut<'_, UiScript> {
+        app.world_mut().non_send_resource_mut::<UiScript>()
+    }
+    script(&mut app)
+        .run(&format!(
+            r#"
+            PickupAction({JERKY_ACTION}) PlaceAction(1)
+            SLOT_EVENTS = {{}}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+            f:SetScript("OnEvent", function() table.insert(SLOT_EVENTS, arg1) end)
+            "#
+        ))
+        .unwrap();
+    // The store has not seen the move; something else asks for a resolve.
+    app.world_mut().resource_mut::<PlayerActions>().dirty = true;
+    app.update();
+    let late: Vec<i64> = script(&mut app).eval("return SLOT_EVENTS").unwrap();
+    assert!(late.is_empty(), "the stale store fired {late:?}");
+    let faces: (Option<String>, Option<String>) = script(&mut app)
+        .eval(&format!(
+            "return GetActionTexture(1), GetActionTexture({JERKY_ACTION})"
+        ))
+        .unwrap();
+    assert_eq!(
+        faces,
+        (Some(JERKY_ICON.to_string()), None),
+        "the verb's write was rolled back"
+    );
+}
+
 /// `IsConsumableAction 0x4e5250`'s two clauses; the item class is neither.
 #[test]
 fn is_consumable_is_ammo_thrown_or_a_negative_charge_use_block() {

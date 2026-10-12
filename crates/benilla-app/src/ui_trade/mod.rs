@@ -623,10 +623,26 @@ fn feed_trade(
     let opened = !*last_open && trade.is_open();
     let closed = *last_open && !trade.is_open();
     let changed = fresh != *last;
-    // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`).
+    // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`). A slot
+    // whose source has not moved since the last push keeps the VM's value, so a click this
+    // feed's store has not caught up with (or never will, when the bag item is not streamed) is
+    // not rolled back.
     let held_player = script.trade_player_slots();
+    let source_moved = |i: usize| {
+        let new = fresh.as_ref().map(|f| &f.player.slots[i]);
+        let old = last.as_ref().map(|l| &l.player.slots[i]);
+        new != old
+    };
     if changed {
-        script.set_trade(fresh.clone());
+        let mut pushed = fresh.clone();
+        if let (Some(p), Some(held), Some(_)) = (pushed.as_mut(), held_player.as_ref(), &*last) {
+            for (i, slot) in p.player.slots.iter_mut().enumerate() {
+                if !source_moved(i) {
+                    *slot = held[i].clone();
+                }
+            }
+        }
+        script.set_trade(pushed);
     }
     // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based slot
     // (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player); the reference also fires the
@@ -650,8 +666,9 @@ fn feed_trade(
                     .map(|(i, _)| ScriptValue::Int(i as i64 + 1))
                     .collect::<Vec<_>>()
             };
-            // Diffed against the VM's column by the item each slot holds, so the store catching up
-            // with a click, its richer row included, is no change.
+            // A moved source fires only where it differs from the VM's column by the item each
+            // slot holds, so the store catching up with a click, its richer row included, is no
+            // change.
             let held = held_player.as_ref().unwrap_or(&old.player.slots);
             let item = |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count));
             let player_changed = new
@@ -660,7 +677,7 @@ fn feed_trade(
                 .iter()
                 .zip(held.iter())
                 .enumerate()
-                .filter(|(_, (a, b))| item(a) != item(b))
+                .filter(|(i, (a, b))| source_moved(*i) && item(a) != item(b))
                 .map(|(i, _)| ScriptValue::Int(i as i64 + 1));
             for slot in player_changed {
                 if matches!(slot, ScriptValue::Int(n) if invalidated.iter().any(|&i| i64::from(i) + 1 == n))
@@ -1286,6 +1303,65 @@ mod tests {
             .clear_own_item(1);
         app.update();
         assert_eq!(seen(&mut app), 2, "the feed re-announced the clear");
+    }
+
+    /// A click whose bag item the store cannot see (`own_item_at` finds nothing) never reaches
+    /// our column's source, so another change to the trade must not push the stale empty slot
+    /// over the VM's write, nor announce it.
+    #[test]
+    fn a_trade_slot_click_survives_a_push_of_the_stale_store() {
+        let (mut app, _rx) = feed_app();
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.begin(0x7);
+            trade.open_window();
+        }
+        app.update();
+        app.update();
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            let slot = benilla_ui::script::ContainerSlot {
+                item_id: 2589,
+                count: 3,
+                link: Some("|cffffffff|Hitem:2589|h[Linen Cloth]|h|r".into()),
+                ..Default::default()
+            };
+            script.set_container(
+                0,
+                Some(benilla_ui::script::ContainerState {
+                    name: None,
+                    num_slots: 16,
+                    slots: [(1, slot)].into_iter().collect(),
+                }),
+            );
+            script
+                .run(
+                    r#"
+                    SLOT_EVENTS = 0
+                    local f = CreateFrame("Frame")
+                    f:RegisterEvent("TRADE_PLAYER_ITEM_CHANGED")
+                    f:SetScript("OnEvent", function() SLOT_EVENTS = SLOT_EVENTS + 1 end)
+                    PickupContainerItem(0, 1)
+                    ClickTradeButton(1)
+                    "#,
+                )
+                .unwrap();
+        }
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .set_own_gold(100);
+        app.update();
+        let (events, name): (i64, Option<String>) = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("return SLOT_EVENTS, (GetTradePlayerItemInfo(1))")
+            .unwrap();
+        assert_eq!(events, 1, "the stale slot was announced");
+        assert_eq!(
+            name.as_deref(),
+            Some("Linen Cloth"),
+            "the click was rolled back"
+        );
     }
 
     /// The reference prints the line from its own sender, not on a reply; row `0xb9` is chat.

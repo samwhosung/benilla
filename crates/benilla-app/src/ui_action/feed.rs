@@ -416,12 +416,14 @@ pub(super) fn feed_actions(
                 },
             );
         }
-        // Diffed against the VM's slots, not what this feed last pushed: `PickupAction` and
-        // `PlaceAction` write their slot and fire its `ACTIONBAR_SLOT_CHANGED` in place, so the
-        // store catching up with them is no change. The item's ON_USE spell is pushed but never
-        // signalled: the place leaves it to this re-feed, and no handler paints it. A macro
-        // rename changes the name line (`GetActionText`) but not the slot value, so a macro edit
-        // re-fires every macro slot.
+        // A slot is pushed only when this feed's own source moved since its last push, so a
+        // verb's write (`PickupAction`, `PlaceAction`, an addon's from a handler this frame) is
+        // never rolled back by a store that has not caught up; it fires `ACTIONBAR_SLOT_CHANGED`
+        // only when what it pushes differs visibly from what the VM shows, so the store catching
+        // up with a verb is no change. The item's ON_USE spell is pushed but never signalled: the
+        // place leaves it to this re-feed, and no handler paints it. A macro rename changes the
+        // name line (`GetActionText`) but not the slot value, so a macro edit re-fires every
+        // macro slot.
         let held = script.action_slots();
         let shown = |s: Option<&ActionSlot>| {
             s.map(|s| ActionSlot {
@@ -431,15 +433,16 @@ pub(super) fn feed_actions(
         };
         let changed: Vec<(u32, bool)> = fresh
             .keys()
-            .chain(held.keys())
+            .chain(memory.pushed.keys())
             .copied()
             .collect::<HashSet<_>>()
             .into_iter()
             .filter_map(|a| {
                 let macro_moved =
                     macros_moved && fresh.get(&a).is_some_and(|s| s.kind == ACTION_KIND_MACRO);
-                let signal = macro_moved || shown(fresh.get(&a)) != shown(held.get(&a));
-                (signal || fresh.get(&a) != held.get(&a)).then_some((a, signal))
+                let moved = fresh.get(&a) != memory.pushed.get(&a);
+                let signal = macro_moved || (moved && shown(fresh.get(&a)) != shown(held.get(&a)));
+                (moved || macro_moved).then_some((a, signal))
             })
             .collect();
         for &(action, _) in &changed {
@@ -506,12 +509,23 @@ pub(super) fn feed_actions(
                 }
                 _ => false,
             };
+            // Only into the VM's slot when it still holds this action: a verb that moved another
+            // there since keeps its write until the identity resolve catches up.
             if changed {
-                script.set_action(action, Some(slot.clone()));
-                script.fire_event(
-                    "ACTIONBAR_SLOT_CHANGED",
-                    vec![ScriptValue::Int(i64::from(action))],
-                );
+                let held = script.action_slot(action);
+                if held
+                    .as_ref()
+                    .is_some_and(|h| (h.kind, h.action) == (slot.kind, slot.action))
+                {
+                    let mut next = held.unwrap_or_default();
+                    next.count = slot.count;
+                    next.texture = slot.texture.clone();
+                    script.set_action(action, Some(next));
+                    script.fire_event(
+                        "ACTIONBAR_SLOT_CHANGED",
+                        vec![ScriptValue::Int(i64::from(action))],
+                    );
+                }
             }
         }
     }
