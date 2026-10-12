@@ -317,9 +317,10 @@ pub(crate) struct CreateScene {
     rev: u64,
     /// The requested stage not yet committed ([`PendingSwap`]).
     pending: Option<PendingSwap>,
-    /// The stage's scene clock in seconds, the reference's per-`ModelFFX` scene clock
-    /// (`CSimpleModel+0x314`): it runs only while the pane shows ([`pace_glue_clock`]).
-    clock: f64,
+    /// The stage's scene clock in milliseconds, the reference's per-`ModelFFX` scene clock
+    /// (`CSimpleModel+0x314`): it steps in whole milliseconds, only while the pane shows
+    /// ([`pace_glue_clock`]).
+    clock_ms: u64,
 }
 
 impl CreateScene {
@@ -348,7 +349,7 @@ impl CreateScene {
             variants: default(),
             rev: 0,
             pending: None,
-            clock: 0.0,
+            clock_ms: 0,
         }
     }
 }
@@ -1581,11 +1582,13 @@ fn spawn_glue_effects(
     }
 }
 
-/// Pace the stage's one scene clock ([`CreateScene::clock`]): it runs while the pane shows and
-/// stops while it is hidden, as a `ModelFFX` advances its scene clock only in its `OnUpdate`
-/// (`0x76d7f0`), which the visible-frame pump (`0x765650`) calls. Every model on the stage, the
-/// scene, the character and the pet, reads that clock: its player pauses and resumes with it and
-/// its global-sequence drive samples it, so a return resumes where the hide stopped.
+/// Pace the stage's one scene clock ([`CreateScene::clock_ms`]) as a `ModelFFX` paces its own:
+/// its `OnUpdate` (`0x76d7f0`), which only the visible-frame pump (`0x765650`) calls, adds the
+/// frame's elapsed truncated to whole milliseconds ([`benilla_ui::widget::pane_clock_step_ms`]),
+/// the step the stock panes' clocks take too. So a hidden pane's stage stands still and resumes
+/// where it stopped, and a shown one runs at or below wall clock, never above. Every model on the
+/// stage, the scene, the character and the pet, reads that clock: each player advances by the
+/// step, and each global-sequence drive samples it.
 pub(super) fn pace_glue_clock(
     mut commands: Commands,
     preview: Res<GluePreview>,
@@ -1596,11 +1599,21 @@ pub(super) fn pace_glue_clock(
     let Some(mut scene) = scene else {
         return;
     };
-    let hidden = preview.hidden;
-    if !hidden {
-        scene.clock += time.delta_secs_f64();
-    }
-    let clock = scene.clock;
+    let delta = time.delta_secs();
+    let step_ms = if preview.hidden {
+        0
+    } else {
+        benilla_ui::widget::pane_clock_step_ms(delta)
+    };
+    scene.clock_ms += step_ms;
+    let clock = scene.clock_ms as f64 / 1000.0;
+    // A player advances by `delta · speed` (`advance_animations`), so this speed makes it step by
+    // the clock's own whole milliseconds, and 0 holds it.
+    let speed = if delta > 0.0 {
+        step_ms as f32 / 1000.0 / delta
+    } else {
+        0.0
+    };
     let character = booths.0.get(GLUE_SLOT).map(|b| b.root);
     // Through commands, not a query: the stage's three roots are all it touches, and a query of
     // every player would share its access with each world animation system.
@@ -1612,10 +1625,8 @@ pub(super) fn pace_glue_clock(
         model
             .entry::<AnimationPlayer>()
             .and_modify(move |mut player| {
-                if hidden && !player.all_paused() {
-                    player.pause_all();
-                } else if !hidden && player.playing_animations().any(|(_, a)| a.is_paused()) {
-                    player.resume_all();
+                for (_, active) in player.playing_animations_mut() {
+                    active.set_speed(speed);
                 }
             });
         model
@@ -2633,89 +2644,121 @@ mod tests {
 
     // ── The stage's clock ────────────────────────────────────────────────
 
+    /// A stage of three players on one clock (the scene, the character and the pet), stepped at
+    /// a fixed `frame`, with Stand's node.
+    struct Stage {
+        app: App,
+        models: [Entity; 3],
+        stand: bevy::animation::graph::AnimationNodeIndex,
+    }
+
+    impl Stage {
+        fn new(frame: std::time::Duration) -> Self {
+            use bevy::animation::{graph::AnimationGraph, AnimationClip};
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(frame))
+                .init_resource::<Assets<AnimationClip>>()
+                .init_resource::<Assets<AnimationGraph>>()
+                .init_resource::<GluePreview>()
+                .add_systems(
+                    Update,
+                    (pace_glue_clock, bevy::animation::advance_animations).chain(),
+                );
+            let mut clip = AnimationClip::default();
+            clip.set_duration(100.0);
+            let clip = app
+                .world_mut()
+                .resource_mut::<Assets<AnimationClip>>()
+                .add(clip);
+            let (graph, stand) = AnimationGraph::from_clip(clip);
+            let graph = app
+                .world_mut()
+                .resource_mut::<Assets<AnimationGraph>>()
+                .add(graph);
+            let mut model = || {
+                let mut player = AnimationPlayer::default();
+                player.play(stand).repeat();
+                app.world_mut()
+                    .spawn((player, AnimationGraphHandle(graph.clone())))
+                    .id()
+            };
+            let models = [model(), model(), model()];
+            let [scene_root, character, pet] = models;
+            app.insert_resource(CreateScene::empty(scene_root, pet));
+            let mut booths = Booths::default();
+            booths
+                .0
+                .insert(GLUE_SLOT.to_string(), glue_booth(character));
+            app.insert_resource(booths);
+            // The first frame's delta is 0; from the second the stage runs.
+            for _ in 0..3 {
+                app.update();
+            }
+            Stage { app, models, stand }
+        }
+
+        /// Each model's Stand position, and the scene clock.
+        fn at(&self) -> ([f32; 3], u64) {
+            let world = self.app.world();
+            (
+                self.models.map(|e| {
+                    world
+                        .get::<AnimationPlayer>(e)
+                        .and_then(|p| p.animation(self.stand))
+                        .unwrap()
+                        .seek_time()
+                }),
+                world.resource::<CreateScene>().clock_ms,
+            )
+        }
+
+        fn run(&mut self, frames: usize) {
+            for _ in 0..frames {
+                self.app.update();
+            }
+        }
+    }
+
     /// A `ModelFFX` advances its scene only in its `OnUpdate` (`0x76d7f0`), which the
     /// visible-frame pump (`0x765650`) calls: hidden, the stage stands still, and shown again it
     /// runs on from where it stopped.
     #[test]
     fn a_hidden_stage_stops_its_clock_and_resumes_where_it_stopped() {
-        use bevy::animation::{graph::AnimationGraph, AnimationClip};
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::from_millis(100),
-            ))
-            .init_resource::<Assets<AnimationClip>>()
-            .init_resource::<Assets<AnimationGraph>>()
-            .init_resource::<GluePreview>()
-            .add_systems(
-                Update,
-                (pace_glue_clock, bevy::animation::advance_animations).chain(),
-            );
-        let mut clip = AnimationClip::default();
-        clip.set_duration(100.0);
-        let clip = app
-            .world_mut()
-            .resource_mut::<Assets<AnimationClip>>()
-            .add(clip);
-        let (graph, stand) = AnimationGraph::from_clip(clip);
-        let graph = app
-            .world_mut()
-            .resource_mut::<Assets<AnimationGraph>>()
-            .add(graph);
-        // The scene, the character and the pet, each with its own player on the one clock.
-        let model = |app: &mut App| {
-            let mut player = AnimationPlayer::default();
-            player.play(stand).repeat();
-            app.world_mut()
-                .spawn((player, AnimationGraphHandle(graph.clone())))
-                .id()
-        };
-        let (scene_root, character, pet) = (model(&mut app), model(&mut app), model(&mut app));
-        app.insert_resource(CreateScene::empty(scene_root, pet));
-        let mut booths = Booths::default();
-        booths
-            .0
-            .insert(GLUE_SLOT.to_string(), glue_booth(character));
-        app.insert_resource(booths);
-        for _ in 0..3 {
-            app.update();
-        }
+        let mut stage = Stage::new(std::time::Duration::from_millis(100));
+        let shown = stage.at();
+        assert!(shown.1 > 0 && shown.0.iter().all(|t| *t > 0.0), "{shown:?}");
 
-        let at = |app: &App| {
-            [scene_root, character, pet].map(|e| {
-                app.world()
-                    .get::<AnimationPlayer>(e)
-                    .and_then(|p| p.animation(stand))
-                    .unwrap()
-                    .seek_time()
-            })
-        };
-        let clock = |app: &App| app.world().resource::<CreateScene>().clock;
-        let shown = (at(&app), clock(&app));
-        assert!(
-            shown.1 > 0.0 && shown.0.iter().all(|t| *t > 0.0),
-            "{shown:?}"
-        );
+        stage.app.world_mut().resource_mut::<GluePreview>().hidden = true;
+        stage.run(5);
+        assert_eq!(stage.at(), shown, "hidden, nothing on the stage advances");
 
-        app.world_mut().resource_mut::<GluePreview>().hidden = true;
-        for _ in 0..5 {
-            app.update();
-        }
-        assert_eq!(
-            (at(&app), clock(&app)),
-            shown,
-            "hidden, nothing on the stage advances"
-        );
-
-        app.world_mut().resource_mut::<GluePreview>().hidden = false;
-        app.update();
-        let (t, c) = (at(&app), clock(&app));
+        stage.app.world_mut().resource_mut::<GluePreview>().hidden = false;
+        stage.run(1);
+        let (t, c) = stage.at();
         for (now, then) in t.iter().zip(shown.0) {
             assert!(
                 (now - then - 0.1).abs() < 1e-4,
                 "shown again, one frame on from the stop: {then} → {now}"
             );
         }
-        assert!((c - shown.1 - 0.1).abs() < 1e-9, "{} → {c}", shown.1);
+        assert_eq!(c, shown.1 + 100, "{} → {c}", shown.1);
+    }
+
+    /// The pane clock's step: each frame's elapsed truncated to whole milliseconds (`0x76d846`),
+    /// so a 16.7 ms frame advances the stage 16 ms, and ten of them 160 ms, not 167.
+    #[test]
+    fn a_stage_steps_in_whole_milliseconds() {
+        let mut stage = Stage::new(std::time::Duration::from_micros(16_700));
+        let (t0, c0) = stage.at();
+        stage.run(10);
+        let (t, c) = stage.at();
+        assert_eq!(c - c0, 160, "ten 16.7 ms frames step the clock 10 × 16 ms");
+        for (now, then) in t.iter().zip(t0) {
+            assert!(
+                (now - then - 0.160).abs() < 1e-4,
+                "and every player steps with it: {then} → {now}"
+            );
+        }
     }
 }

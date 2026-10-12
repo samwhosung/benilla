@@ -298,6 +298,14 @@ pub const TOOLTIP_FADE_SECS: f32 = 2.0;
 /// A wrap-flagged line's width, pinned when it is appended; the reference's column is untraced.
 pub const TOOLTIP_WRAP_WIDTH: f32 = 260.0;
 
+/// One frame's advance of a model pane's scene clock in whole milliseconds: `elapsed · 1000`
+/// truncated toward zero with no `+0.5` (`0x76d846`, then `__ftol` `0x40a2b0`), where the world's
+/// clock rounds (`0x483659`), so each frame's sub-millisecond remainder is dropped with no carry.
+/// A negative or NaN `elapsed` advances nothing.
+pub fn pane_clock_step_ms(elapsed: f32) -> u64 {
+    (elapsed * 1000.0).trunc().max(0.0) as u64
+}
+
 /// A model pane's scene: the `CSimpleModel` (`0x76c8e0`) members every model kind carries, read
 /// and written by `Model`'s 23 methods (table `0x878948`); the render is the app's.
 #[derive(Clone, Debug, PartialEq)]

@@ -126,11 +126,11 @@ impl<T> Arena<T> {
 
 mod kinds;
 pub use kinds::{
-    model_key, slider_fraction, slider_grab, slider_set_value, ArmedSequence, ButtonFont,
-    ButtonState, ButtonVisualState, ColorSelectState, EditAction, EditBoxState, EditOutcome,
-    EditUnit, FrameKind, InsertMode, KindState, KindUpdate, MessageFrameState, MessageLine,
-    MinimapState, ModelFileFacts, ModelFog, ModelLight, ModelPlayHead, ModelState, RegionKind,
-    ScrollFrameState, ScrollingMessageState, SequenceFacts, ShownWrites, SliderState,
+    model_key, pane_clock_step_ms, slider_fraction, slider_grab, slider_set_value, ArmedSequence,
+    ButtonFont, ButtonState, ButtonVisualState, ColorSelectState, EditAction, EditBoxState,
+    EditOutcome, EditUnit, FrameKind, InsertMode, KindState, KindUpdate, MessageFrameState,
+    MessageLine, MinimapState, ModelFileFacts, ModelFog, ModelLight, ModelPlayHead, ModelState,
+    RegionKind, ScrollFrameState, ScrollingMessageState, SequenceFacts, ShownWrites, SliderState,
     StatusBarState, TooltipAnchor, TooltipState, MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK,
     MINIMAP_DEFAULT_PLAYER_MODEL, MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN,
     MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP, TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD,

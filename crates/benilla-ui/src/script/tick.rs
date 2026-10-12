@@ -237,7 +237,7 @@ impl UiScript {
     /// call (`0x7075af`), so `OnAnimFinished` (`0x76cdc0`) fires here, once per arm, against the
     /// arm the last paint left. A zero advance tests nothing (`0x7074b7`).
     pub(super) fn advance_pane(&mut self, h: FrameHandle, elapsed: f32) {
-        let dt_ms = (elapsed * 1000.0).trunc().max(0.0) as u64;
+        let dt_ms = crate::widget::pane_clock_step_ms(elapsed);
         let finished = {
             let mut model = self.model_mut();
             let model = &mut *model;
