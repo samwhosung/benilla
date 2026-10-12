@@ -352,6 +352,7 @@ fn arrival_handoff(
         entity,
         spell_id: missile.spell_id,
         kind,
+        cast_flags: 0,
         seq: play_seq.next(),
     };
     match missile.aim {

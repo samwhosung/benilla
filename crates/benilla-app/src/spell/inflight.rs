@@ -359,6 +359,7 @@ impl SelfCancel<'_, '_> {
                                 entity: e,
                                 spell_id,
                                 kind: CastEventKind::Fail,
+                                cast_flags: 0,
                                 seq: play_seq.next(),
                             });
                         }

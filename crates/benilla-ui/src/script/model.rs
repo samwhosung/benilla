@@ -767,8 +767,11 @@ pub(crate) struct Model {
     pub(crate) taxi_close: bool,
     pub(crate) taxi_riding: bool,
 
-    /// The open tradeskill window's recipes.
+    /// The tradeskill window's recipes, kept past a close as the reference's list (`[0xbde054]`)
+    /// is, until the next open rebuilds it.
     pub(crate) trade_skill: Option<tradeskill::TradeSkillState>,
+    /// The window is open (`[0xbde040]`), which a close alone zeroes (`0x4fc870`).
+    pub(crate) trade_skill_open: bool,
     /// `DoTradeSkill` calls, `(spell id, count)`.
     pub(crate) trade_skill_dos: Vec<(u32, u32)>,
     /// The 1-based selection, 0 for none, carried across a re-push by the recipe's spell id.
@@ -791,9 +794,15 @@ pub(crate) struct Model {
     /// The Create All repeat's spell (`0xbde05c`), armed by a `DoTradeSkill` of more than one
     /// (`0x4fd770`) and disarmed, with its `UPDATE_TRADESKILL_RECAST`, by the close (`0x4fd790`).
     pub(crate) trade_skill_repeat_spell: u32,
+    /// The Create All count (`0xbde060`), set with the spell and counted down by each of our own
+    /// casts of it (`0x4fd7ca`); a disarm leaves it.
+    pub(crate) trade_skill_repeat_count: u32,
 
-    /// The open craft window's recipes.
+    /// The craft window's recipes, kept past a close as the reference's list (`[0xbdcfc8]`) is,
+    /// until the next open rebuilds it.
     pub(crate) craft: Option<craft::CraftState>,
+    /// The window is open (`[0xbdcfb8]`), which a close alone zeroes (`0x4f5fe0`).
+    pub(crate) craft_open: bool,
     /// `DoCraft` spell ids; no count, as the 1.12 CraftFrame has no Create All.
     pub(crate) craft_dos: Vec<u32>,
     /// The 1-based selection, 0 for none, carried across a re-push by the recipe's spell id.
@@ -1473,6 +1482,7 @@ impl Model {
             taxi_close: false,
             taxi_riding: false,
             trade_skill: None,
+            trade_skill_open: false,
             trade_skill_dos: Vec::new(),
             trade_skill_selection: 0,
             trade_skill_close: false,
@@ -1482,7 +1492,9 @@ impl Model {
             trade_skill_last_line: 0,
             trade_skill_selected_spell: 0,
             trade_skill_repeat_spell: 0,
+            trade_skill_repeat_count: 0,
             craft: None,
+            craft_open: false,
             craft_dos: Vec::new(),
             craft_selection: 0,
             craft_close: false,

@@ -113,8 +113,6 @@ pub struct TradeSkillState {
     pub max_rank: u32,
     /// Unordered: the engine sorts them (`0x4fca20`), and Lua indexes the visible rows, not this.
     pub recipes: Vec<TradeSkillRecipe>,
-    /// Remaining Create All repeats (`0x500230`), decremented by the app as each cast resolves.
-    pub repeat_count: u32,
 }
 
 impl super::UiScript {
@@ -124,13 +122,13 @@ impl super::UiScript {
     /// resets filters, folds and selection, and the same line keeps them across a close. The
     /// selection rides its spell id (`0xbde044`); fold and subclass keys are pruned to live groups,
     /// while the inv-slot mask (`0x84dd64`) is never pruned.
+    /// `None` marks the window closed and keeps the list and selection, as the close does
+    /// (`0x4fc870`).
     pub fn set_trade_skill(&mut self, state: Option<TradeSkillState>) {
         let mut model = self.model_mut();
+        model.trade_skill_open = state.is_some();
         match state {
-            None => {
-                model.trade_skill_selection = 0;
-                model.trade_skill = None;
-            }
+            None => {}
             Some(s) => {
                 if model.trade_skill_last_line != s.line {
                     model.trade_skill_collapsed.clear();
@@ -171,17 +169,57 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().trade_skill_close)
     }
 
-    /// Whether the VM holds an open window: `CloseTradeSkill` empties it in the verb, so a feed
-    /// that finds it empty owes no `TRADE_SKILL_CLOSE` of its own.
+    /// Whether the VM holds the window open: `CloseTradeSkill` closes it in the verb, so a feed
+    /// that finds it closed owes no `TRADE_SKILL_CLOSE` of its own.
     pub fn trade_skill_open(&self) -> bool {
-        self.model_ref().trade_skill.is_some()
+        self.model_ref().trade_skill_open
     }
 
-    /// `GetTradeskillRepeatCount`'s answer as the VM holds it, `DoTradeSkill`'s write included.
-    pub fn trade_skill_repeat_count(&self) -> u32 {
-        self.model_ref()
-            .trade_skill
-            .as_ref()
-            .map_or(0, |t| t.repeat_count)
+    /// The post-cast hook `0x4fd7b0`, run for each of our own `SMSG_SPELL_GO`s without flag
+    /// `0x41` (`0x6e81de`): the armed spell counts down (`0x4fd7ca`) and, while any are left,
+    /// recasts and signals `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`); the last one ends silently
+    /// with the spell still armed (`0x4fd7cf`). Any other cast, or nothing left, disarms
+    /// (`0x4fd7e6` → `0x4fd790`). Returns the spell to recast, which the app sends.
+    pub fn trade_skill_spell_go(&mut self, spell_id: u32) -> Option<u32> {
+        super::tick::verb(&self.lua, |model| {
+            let armed = model.trade_skill_repeat_spell;
+            if armed == 0 || model.trade_skill_repeat_count == 0 || armed != spell_id {
+                disarm_repeat(model);
+                return None;
+            }
+            model.trade_skill_repeat_count -= 1;
+            if model.trade_skill_repeat_count == 0 {
+                return None;
+            }
+            model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
+            Some(armed)
+        })
+    }
+
+    /// A failed or interrupted cast of the armed spell disarms the repeat with its own signal
+    /// (`0x6e1a3c`-`0x6e1a55` → `0x4fd790`), so a later close finds nothing to disarm.
+    pub fn trade_skill_cast_failed(&mut self, spell_id: u32) {
+        super::tick::verb(&self.lua, |model| {
+            if spell_id == model.trade_skill_repeat_spell {
+                disarm_repeat(model);
+            }
+        });
+    }
+
+    /// The armed repeat as `(spell, count)`, the reference's `0xbde05c` and `0xbde060`.
+    pub fn trade_skill_repeat(&self) -> (u32, u32) {
+        let model = self.model_ref();
+        (
+            model.trade_skill_repeat_spell,
+            model.trade_skill_repeat_count,
+        )
+    }
+}
+
+/// `0x4fd790`: an armed repeat disarms and signals `UPDATE_TRADESKILL_RECAST`; the count stays.
+pub(crate) fn disarm_repeat(model: &mut super::Model) {
+    if model.trade_skill_repeat_spell != 0 {
+        model.trade_skill_repeat_spell = 0;
+        model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
     }
 }

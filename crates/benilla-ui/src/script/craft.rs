@@ -125,15 +125,14 @@ fn collate(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 impl super::UiScript {
-    /// Push the open craft window's snapshot, or clear it with `None`. A push sorts the rows and
+    /// Push the open craft window's snapshot, or mark it closed with `None`, which keeps the
+    /// list and selection as the reference's close does (`0x4f5fe0`). A push sorts the rows and
     /// keeps the selection on its spell id, clearing it when that recipe is gone.
     pub fn set_craft(&mut self, state: Option<CraftState>) {
         let mut model = self.model_mut();
+        model.craft_open = state.is_some();
         match state {
-            None => {
-                model.craft_selection = 0;
-                model.craft = None;
-            }
+            None => {}
             Some(mut s) => {
                 let craft_type = s.craft_type;
                 s.recipes.sort_by(|a, b| recipe_order(a, b, craft_type));
@@ -160,10 +159,10 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().craft_close)
     }
 
-    /// Whether the VM holds an open window: `CloseCraft` empties it in the verb, so a feed that
-    /// finds it empty owes no `CRAFT_CLOSE` of its own.
+    /// Whether the VM holds the window open: `CloseCraft` closes it in the verb, so a feed that
+    /// finds it closed owes no `CRAFT_CLOSE` of its own.
     pub fn craft_open(&self) -> bool {
-        self.model_ref().craft.is_some()
+        self.model_ref().craft_open
     }
 }
 
@@ -421,15 +420,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseCraft() (`0x4f6c00` → `0x4f5fe0`): no packet. It empties the window and signals
+    // CloseCraft() (`0x4f6c00` → `0x4f5fe0`): no packet. It zeroes the open marker alone
+    // (`[0xbdcfb8]`), so `GetNumCrafts` (`0x4f6e70`) still answers the held list, and signals
     // `CRAFT_CLOSE` unconditionally (`0x4f5fef`); the flag tells the app to clear its state.
     g.set(
         "CloseCraft",
         lua.create_function(|lua, ()| {
             super::tick::verb(lua, |model| {
                 model.craft_close = true;
-                model.craft_selection = 0;
-                model.craft = None;
+                model.craft_open = false;
                 model.raise("CRAFT_CLOSE", Vec::new());
             });
             Ok(())
@@ -683,23 +682,31 @@ mod tests {
         assert_eq!(s.arity("GetCraftSpellFocus(1)").unwrap(), 0);
     }
 
+    /// `0x4f5fe0` zeroes only the open marker (`[0xbdcfb8]`) and signals `CRAFT_CLOSE` before
+    /// the verb returns; `GetNumCrafts` (`0x4f6e70`, `[0xbdcfc8]`) and the selection still answer
+    /// the held list, through the app's close too.
     #[test]
-    fn close_and_clear_reset_the_window() {
+    fn a_close_keeps_the_list() {
         let mut s = UiScript::new().unwrap();
         s.set_craft(Some(state()));
         s.run("SelectCraft(1)").unwrap();
+        let held = s.eval::<i64>("return GetNumCrafts()").unwrap();
+        assert!(held > 0);
 
         assert!(!s.take_craft_close());
-        // `0x4f5fe0` empties the window and signals `CRAFT_CLOSE` before the verb returns.
         crate::script::tick::heard::listen(&s, &["CRAFT_CLOSE"], Some("GetNumCrafts()"));
         s.run("CloseCraft()").unwrap();
-        assert_eq!(crate::script::tick::heard::take(&s), ["CRAFT_CLOSE 0"]);
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            [format!("CRAFT_CLOSE {held}")]
+        );
+        assert!(!s.craft_open());
         assert!(s.take_craft_close());
         assert!(!s.take_craft_close(), "drained");
 
         s.set_craft(None);
-        assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), 0);
-        assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 0);
+        assert_eq!(s.eval::<i64>("return GetNumCrafts()").unwrap(), held);
+        assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 1);
     }
 
     /// The expected order is an emulated run of `0x4f6920` over the shipped `Spell.dbc` values.

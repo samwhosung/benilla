@@ -286,14 +286,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeskillRepeatCount(): the lowercase "s" is the 1.12 name.
+    // GetTradeskillRepeatCount(): the lowercase "s" is the 1.12 name. The armed count while the
+    // armed spell is the selected recipe's and above 1, else 1 (`0x500236`-`0x500251`).
     g.set(
         "GetTradeskillRepeatCount",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(
-                model.trade_skill.as_ref().map_or(0, |t| t.repeat_count),
-            ))
+            let armed = model.trade_skill_repeat_spell;
+            let count = model.trade_skill_repeat_count;
+            let latched = armed != 0 && armed == model.trade_skill_selected_spell && count > 1;
+            Ok(i64::from(if latched { count } else { 1 }))
         })?,
     )?;
 
@@ -326,13 +328,12 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 else {
                     return;
                 };
-                // The client clamps the repeat to numAvailable, at least 1 (`0x500280`).
-                let n = (count.unwrap_or(1).max(1) as u32).min(avail.max(1));
+                // The count, compared unsigned, clamps to numAvailable (`0x5002f5`-`0x5002fc`);
+                // above 1 it arms the repeat (`0x500301` → `0x4fd770`).
+                let n = (count.unwrap_or(1) as i32 as u32).min(avail);
                 if n > 1 {
                     model.trade_skill_repeat_spell = spell_id;
-                    if let Some(t) = model.trade_skill.as_mut() {
-                        t.repeat_count = n;
-                    }
+                    model.trade_skill_repeat_count = n;
                     model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
                 }
                 model.trade_skill_dos.push((spell_id, n));
@@ -341,20 +342,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseTradeSkill() (`0x4fd7f0` → `0x4fc870`): client-side only, no packet. It empties the
-    // window, disarms an armed repeat with its `UPDATE_TRADESKILL_RECAST` (`0x4fd790`), and
+    // CloseTradeSkill() (`0x4fd7f0` → `0x4fc870`): client-side only, no packet. It zeroes the
+    // open marker alone (`[0xbde040]`), so `GetNumTradeSkills` (`0x4fd800`) still answers the
+    // held list, disarms an armed repeat with its `UPDATE_TRADESKILL_RECAST` (`0x4fd790`), and
     // signals `TRADE_SKILL_CLOSE` unconditionally (`0x4fc884`); the app clears its own state.
     g.set(
         "CloseTradeSkill",
         lua.create_function(|lua, ()| {
             crate::script::tick::verb(lua, |model| {
                 model.trade_skill_close = true;
-                model.trade_skill_selection = 0;
-                model.trade_skill = None;
-                if model.trade_skill_repeat_spell != 0 {
-                    model.trade_skill_repeat_spell = 0;
-                    model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
-                }
+                model.trade_skill_open = false;
+                super::disarm_repeat(model);
                 model.raise("TRADE_SKILL_CLOSE", Vec::new());
             });
             Ok(())

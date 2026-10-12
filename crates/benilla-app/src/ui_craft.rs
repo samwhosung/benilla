@@ -235,7 +235,7 @@ fn feed_craft(
         })
     })();
 
-    // `CloseCraft` empties the VM and signals `CRAFT_CLOSE` in the verb (`0x4f5fef`).
+    // `CloseCraft` closes the VM's window and signals `CRAFT_CLOSE` in the verb (`0x4f5fef`).
     let closed_in_place = !script.craft_open();
     if fresh == *last {
         return;

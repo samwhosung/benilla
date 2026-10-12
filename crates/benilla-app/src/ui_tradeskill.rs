@@ -44,22 +44,6 @@ pub(crate) struct TradeSkillOpen {
     pub(crate) line: Option<u32>,
 }
 
-/// The Create All repeat (`DoTradeSkill` `0x500280`): latch the count, cast once, and re-cast on
-/// each of our own `SMSG_SPELL_GO`s for the spell until dry; a failure, a close or the session end
-/// stops it.
-#[derive(Resource, Default)]
-pub(crate) struct TradeSkillRepeat {
-    pub(crate) spell_id: u32,
-    pub(crate) remaining: u32,
-}
-
-impl TradeSkillRepeat {
-    fn clear(&mut self) {
-        self.spell_id = 0;
-        self.remaining = 0;
-    }
-}
-
 /// `SpellFocusObject.dbc`, the names on a "Requires: Anvil" line.
 #[derive(Resource)]
 pub(crate) struct SpellFocus {
@@ -73,7 +57,6 @@ impl Plugin for UiTradeSkillPlugin {
         app.net_handler(SessionEventKind::Disconnected, on_session_end);
         app.init_resource::<TradeSkillOpens>()
             .init_resource::<TradeSkillOpen>()
-            .init_resource::<TradeSkillRepeat>()
             .add_systems(Startup, load_spell_focus.after(AssetSet::Open))
             .add_systems(
                 Update,
@@ -88,16 +71,14 @@ impl Plugin for UiTradeSkillPlugin {
     }
 }
 
-/// The book, its repeat and any queued opener end with the session.
+/// The book and any queued opener end with the session; the repeat is the VM's and goes with it.
 fn on_session_end(
     In(_): In<SessionEvent>,
     mut opens: ResMut<TradeSkillOpens>,
     mut open: ResMut<TradeSkillOpen>,
-    mut repeat: ResMut<TradeSkillRepeat>,
 ) {
     opens.0.clear();
     open.line = None;
-    repeat.clear();
 }
 
 fn load_spell_focus(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
@@ -126,7 +107,6 @@ fn open_trade_skill(
     mut craft_open: ResMut<crate::ui_craft::CraftOpen>,
     skill_lines: Option<Res<SkillLines>>,
     spells: Option<Res<Spells>>,
-    mut repeat: ResMut<TradeSkillRepeat>,
 ) {
     for spell_id in opens.0.drain(..) {
         let Some(skill_lines) = skill_lines.as_deref() else {
@@ -153,9 +133,6 @@ fn open_trade_skill(
             craft_open.craft_type = craft_type;
         } else {
             debug!("ui_tradeskill: opener {spell_id} opens skill line {line}");
-            if open.line != Some(line) {
-                repeat.clear();
-            }
             open.line = Some(line);
         }
     }
@@ -328,7 +305,6 @@ fn feed_trade_skill(
     focus: Option<Res<SpellFocus>>,
     icons: Option<Res<ItemDisplays>>,
     subclasses: Option<Res<crate::ui_items::ItemSubClasses>>,
-    repeat: Res<TradeSkillRepeat>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
     items: Res<Items>,
@@ -387,25 +363,11 @@ fn feed_trade_skill(
             rank,
             max_rank,
             recipes,
-            repeat_count: repeat.remaining,
         })
     })();
 
-    // The repeat count against the VM's: `DoTradeSkill` arms it and signals in place (`0x4fd770`),
-    // and only the cast loop's decrements are left for this feed. The window's content is diffed
-    // without it, since a decrement alone signals only `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`).
-    let held_repeat = script.trade_skill_repeat_count();
-    let repeat_changed = fresh
-        .as_ref()
-        .is_some_and(|f| last.is_some() && f.repeat_count != held_repeat);
-    let content = |t: &Option<TradeSkillState>| {
-        t.as_ref().map(|t| TradeSkillState {
-            repeat_count: 0,
-            ..t.clone()
-        })
-    };
-    let content_changed = content(&fresh) != content(&*last);
-    // `CloseTradeSkill` empties the VM and signals `TRADE_SKILL_CLOSE` in the verb (`0x4fc884`).
+    // `CloseTradeSkill` closes the VM's window and signals `TRADE_SKILL_CLOSE` in the verb
+    // (`0x4fc884`).
     let closed_in_place = !script.trade_skill_open();
     if fresh == *last {
         return;
@@ -427,26 +389,19 @@ fn feed_trade_skill(
             );
             script.fire_event("TRADE_SKILL_SHOW", vec![]);
         }
-        (Some(_), Some(_)) => {
-            if content_changed {
-                script.fire_event("TRADE_SKILL_UPDATE", vec![]);
-            }
-            if repeat_changed {
-                script.fire_event("UPDATE_TRADESKILL_RECAST", vec![]);
-            }
-        }
+        (Some(_), Some(_)) => script.fire_event("TRADE_SKILL_UPDATE", vec![]),
         (Some(_), None) if !closed_in_place => script.fire_event("TRADE_SKILL_CLOSE", vec![]),
         (Some(_), None) | (None, None) => {}
     }
     *last = fresh;
 }
 
-/// Drain the Lua intents and run the repeat: `DoTradeSkill` latches and casts through the one
-/// cast-send path, our own GO re-casts, and a failure or `CloseTradeSkill` stops it.
+/// Drain the Lua intents and feed the VM's repeat (`0x4fd7b0`) our own cast edges: `DoTradeSkill`
+/// arms it in the verb and casts through the one cast-send path, each GO recasts what the hook
+/// answers, and a failure disarms it.
 fn drain_trade_skill(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<TradeSkillOpen>,
-    mut repeat: ResMut<TradeSkillRepeat>,
     mut cast_events: MessageReader<CastEvent>,
     targeting: cast_target::CastTargeting,
     mut ladder: CastLadder,
@@ -461,44 +416,40 @@ fn drain_trade_skill(
             continue;
         }
         debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
-        // Only a count above one arms the repeat (`0x500301`), as the VM's did.
-        if count > 1 {
-            repeat.spell_id = spell_id;
-            repeat.remaining = count;
-        }
         ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
     }
 
-    // The repeat's continuation: our own cast edges for the latched spell.
     let self_entity = ladder.self_player.single().ok().map(|(e, _)| e);
     for ev in cast_events.read() {
-        if repeat.remaining == 0 || Some(ev.entity) != self_entity || ev.spell_id != repeat.spell_id
-        {
+        if Some(ev.entity) != self_entity {
             continue;
         }
-        match ev.kind {
-            CastEventKind::Go => {
-                repeat.remaining -= 1;
-                if repeat.remaining > 0 {
-                    debug!(
-                        "ui_tradeskill: recast {} ({} left)",
-                        repeat.spell_id, repeat.remaining
-                    );
-                    ladder.send(repeat.spell_id, &targeting.context(), CastCommit::Spell);
-                }
-            }
-            CastEventKind::Fail => {
-                debug!("ui_tradeskill: cast failed — repeat stops");
-                repeat.clear();
-            }
-            _ => {}
+        if let Some(spell_id) = repeat_edge(&mut script, ev) {
+            debug!(
+                "ui_tradeskill: recast {spell_id} ({} left)",
+                script.trade_skill_repeat().1
+            );
+            ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
         }
     }
 
     if script.take_trade_skill_close() {
         debug!("ui_tradeskill: client-side close (no packet)");
         open.line = None;
-        repeat.clear();
+    }
+}
+
+/// One of our own cast edges into the VM's repeat: every GO without flag `0x41` runs the hook
+/// (`0x6e81de` → `0x4fd7b0`), and a failure disarms the armed spell (`0x6e1a3c`). Returns the
+/// spell to recast.
+fn repeat_edge(script: &mut UiScript, ev: &CastEvent) -> Option<u32> {
+    match ev.kind {
+        CastEventKind::Go if ev.cast_flags & 0x41 == 0 => script.trade_skill_spell_go(ev.spell_id),
+        CastEventKind::Fail => {
+            script.trade_skill_cast_failed(ev.spell_id);
+            None
+        }
+        _ => None,
     }
 }
 
@@ -598,7 +549,6 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<TradeSkillOpen>()
             .init_resource::<PlayerActions>()
-            .init_resource::<TradeSkillRepeat>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<Items>()
             .init_resource::<crate::spell::Cooldowns>()
@@ -643,17 +593,72 @@ mod tests {
         assert_eq!(closes(&app), 2, "a close from outside the VM still signals");
     }
 
+    /// Our GOs count the batch down and recast, a GO flagged `0x41` is not ours to count
+    /// (`0x6e81de`), and the last craft recasts and signals nothing (`0x4fd7cf`).
+    #[test]
+    fn our_cast_edges_drive_the_vms_repeat() {
+        let mut script = UiScript::new().unwrap();
+        script.set_trade_skill(Some(TradeSkillState {
+            line: 197,
+            line_name: "Tailoring".into(),
+            rank: 1,
+            max_rank: 75,
+            recipes: vec![benilla_ui::script::TradeSkillRecipe {
+                group: None,
+                spell_id: 2963,
+                name: "Bolt of Linen Cloth".into(),
+                difficulty: benilla_ui::script::TradeSkillDifficulty::Trivial,
+                num_available: 5,
+                icon: None,
+                min_made: 1,
+                max_made: 1,
+                cooldown_secs: None,
+                product_item: 2996,
+                product_inv_type: 0,
+                product_item_level: 0,
+                reagents: vec![],
+                tools: vec![],
+            }],
+        }));
+        script
+            .run(
+                "RECASTS = 0 local f = CreateFrame('Frame') \
+                 f:RegisterEvent('UPDATE_TRADESKILL_RECAST') \
+                 f:SetScript('OnEvent', function() RECASTS = RECASTS + 1 end) \
+                 DoTradeSkill(2, 3)",
+            )
+            .unwrap();
+        assert_eq!(
+            script.trade_skill_repeat(),
+            (2963, 3),
+            "row 2, under its header"
+        );
+        let go = |cast_flags| CastEvent {
+            entity: Entity::PLACEHOLDER,
+            spell_id: 2963,
+            kind: CastEventKind::Go,
+            cast_flags,
+            seq: 0,
+        };
+        assert_eq!(repeat_edge(&mut script, &go(0x01)), None, "flag 0x01");
+        assert_eq!(repeat_edge(&mut script, &go(0x40)), None, "flag 0x40");
+        assert_eq!(script.trade_skill_repeat(), (2963, 3), "neither counted");
+        assert_eq!(repeat_edge(&mut script, &go(0x20)), Some(2963));
+        assert_eq!(repeat_edge(&mut script, &go(0)), Some(2963));
+        assert_eq!(repeat_edge(&mut script, &go(0)), None);
+        assert_eq!(
+            script.eval::<i64>("return RECASTS").unwrap(),
+            3,
+            "the arm and two recasts; the last craft is silent"
+        );
+    }
+
     /// Driven through the real handler registration.
     #[test]
-    fn the_session_end_closes_the_book_and_drops_the_repeat() {
+    fn the_session_end_closes_the_book() {
         let mut app = App::new();
         app.add_plugins(UiTradeSkillPlugin);
         app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
-        {
-            let mut repeat = app.world_mut().resource_mut::<TradeSkillRepeat>();
-            repeat.spell_id = 3915;
-            repeat.remaining = 4;
-        }
 
         crate::net::handlers::dispatch(
             app.world_mut(),
@@ -664,7 +669,5 @@ mod tests {
         );
 
         assert_eq!(app.world().resource::<TradeSkillOpen>().line, None);
-        let repeat = app.world().resource::<TradeSkillRepeat>();
-        assert_eq!((repeat.spell_id, repeat.remaining), (0, 0));
     }
 }

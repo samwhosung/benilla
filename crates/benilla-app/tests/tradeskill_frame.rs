@@ -88,7 +88,6 @@ fn state() -> TradeSkillState {
             recipe(2662, "Copper Chain Pants", (4, 3, "Mail"), 7),
             recipe(3320, "Rough Sharpening Stone", (7, 0, "Trade Goods"), 0),
         ],
-        repeat_count: 0,
     }
 }
 
