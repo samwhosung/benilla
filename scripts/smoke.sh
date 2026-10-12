@@ -101,6 +101,15 @@ printf '%s' "$plain" | grep -q "logout-smoke: empty roster" &&
     fail "$user has no characters — the re-entry leg cannot run (make one, or rig it: WOW_RIG=…)"
 printf '%s' "$plain" | grep -q "logout-smoke: done" ||
     fail "the round trip never completed (no 'logout-smoke: done')"
+# The logout returns to character select on the link the world was entered by and re-lists there
+# (`0x5aaeb0` → `0x46b880`): a roster on that world session, and one realmd logon for the walk.
+printf '%s' "$plain" | grep -q "logout-smoke: FAILED" &&
+    fail "$(printf '%s\n' "$plain" | sed -n 's/.*logout-smoke: FAILED — //p' | tail -1)"
+printf '%s' "$plain" | grep -q "logout-smoke: roster after the logout on the same link" ||
+    fail "no roster came on the same link after the logout"
+logons="$(printf '%s\n' "$plain" | grep -cF "net: parked at the realm list")"
+[ "$logons" -eq 1 ] ||
+    fail "$logons realmd logons in the round trip, expected 1 — the logout logged on again"
 
 # The re-entered character must be drivable: the leg lists what would block movement (a /logout
 # root must end with its session), and anything but `none` fails.

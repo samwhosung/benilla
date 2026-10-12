@@ -832,3 +832,38 @@ fn a_command_ready_with_an_install_goes_out_on_the_new_writer() {
         );
     }
 }
+
+/// Under the stock screens a refused login returns the same way, and the roster comes only when
+/// the screen asks (in the reference from the refusal dialog's `StatusDialogClick`, `0x46b767` →
+/// `0x46b880`), on the same link.
+#[test]
+fn a_refused_login_under_the_stock_screens_waits_for_the_screens_ask() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    world.refuse_logins();
+    let cycles = fake::spawn_cycles_asking();
+    let epoch = enter_world(&cycles, &realmd, true);
+    expect_back(&cycles.events, |ev| {
+        matches!(ev, SessionEvent::CharacterLoginFailed { result: 1 })
+    });
+    assert!(
+        cycles
+            .events
+            .recv_timeout(std::time::Duration::from_millis(400))
+            .is_err(),
+        "the park sent a roster the stock screen did not ask for"
+    );
+    assert_eq!(world.enumerations_in(0), 0);
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::CharacterList {
+            cause, epoch: on, ..
+        } => {
+            assert_eq!(cause, RosterCause::Asked);
+            assert_eq!(on, epoch);
+        }
+        other => panic!("expected the asked-for roster, got {other:?}"),
+    }
+    assert_eq!(world.enumerations_in(0), 1);
+    assert_eq!(world.authentications(), 1, "no second CMSG_AUTH_SESSION");
+    assert_eq!(realmd.logons(), 1, "no realmd logon");
+}

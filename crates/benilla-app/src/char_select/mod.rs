@@ -596,7 +596,8 @@ fn debug_glue_roundtrip(
 }
 
 /// The logout smoke (`WOW_LOGOUT_SMOKE=1`, with `WOW_CHAR`): once in the world, `/logout`, return
-/// to CharSelect, enter the world again and close the window. The second entry streams a map
+/// to CharSelect, wait for the roster the logout brings on the link the world was entered by,
+/// enter the world again and close the window. The second entry streams a map
 /// `terrain_stream::release_world` tore down. It ends by a window close, not an `AppExit`, since
 /// only the close reaches the shutdown tail that saves variables and addon files.
 fn debug_logout_smoke(
@@ -610,11 +611,34 @@ fn debug_logout_smoke(
     mut exit: MessageWriter<AppExit>,
     mut close: MessageWriter<bevy::window::WindowCloseRequested>,
     windows: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mut lists: MessageReader<CharListMessage>,
+    // The world session's number at the entry, and whether a roster has come since the logout.
+    mut link: Local<Option<u64>>,
+    mut relisted: Local<bool>,
     mut phase: Local<u8>,
     mut mark: Local<f32>,
 ) {
     if std::env::var("WOW_LOGOUT_SMOKE").is_err() {
         return;
+    }
+    for list in lists.read() {
+        if *phase < 2 {
+            *link = Some(list.epoch);
+        } else if !*relisted {
+            *relisted = true;
+            if Some(list.epoch) == *link {
+                info!(
+                    "logout-smoke: roster after the logout on the same link — {} char(s)",
+                    list.characters.len()
+                );
+            } else {
+                error!(
+                    "logout-smoke: FAILED — the roster after the logout came on world session {} \
+                     where the world was entered on {:?}",
+                    list.epoch, *link
+                );
+            }
+        }
     }
     let now = time.elapsed_secs();
     match *phase {
@@ -633,21 +657,24 @@ fn debug_logout_smoke(
         }
         // Residency is read here, not on arrival: `release_world` runs about 150 ms after the
         // state edge, on the world-live falling edge.
-        3 if now - *mark > 4.0 => match roster.chars.first().map(|c| (c.guid, c.name.clone())) {
-            Some((guid, name)) => {
-                info!(
-                    "logout-smoke: {} tiles resident after the release (must be 0)",
-                    streamer.residency().1
-                );
-                info!("logout-smoke: re-entering the world as {name}");
-                send_pick(&mut roster, &pick, guid);
-                (*phase, *mark) = (4, now);
+        // The roster the logout brings, not the one that survived it, decides the re-entry.
+        3 if now - *mark > 4.0 && *relisted => {
+            match roster.chars.first().map(|c| (c.guid, c.name.clone())) {
+                Some((guid, name)) => {
+                    info!(
+                        "logout-smoke: {} tiles resident after the release (must be 0)",
+                        streamer.residency().1
+                    );
+                    info!("logout-smoke: re-entering the world as {name}");
+                    send_pick(&mut roster, &pick, guid);
+                    (*phase, *mark) = (4, now);
+                }
+                None => {
+                    warn!("logout-smoke: empty roster — cannot test re-entry");
+                    *phase = 5;
+                }
             }
-            None => {
-                warn!("logout-smoke: empty roster — cannot test re-entry");
-                *phase = 5;
-            }
-        },
+        }
         4 if *state.get() == ClientState::InWorld && player.active && now - *mark > 3.0 => {
             // The suppressor reading catches a character that re-entered unable to move;
             // `scripts/smoke.sh` fails on anything but `none`. A GM account's logout is instant,
