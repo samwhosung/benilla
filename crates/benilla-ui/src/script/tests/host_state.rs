@@ -203,6 +203,23 @@ fn the_getters_answer_the_pushed_state_in_their_1_12_shapes() {
         s.eval::<(f64, f64)>("return GetGameTime()").unwrap(),
         (21.0, 7.0)
     );
+
+    // An ownerless zone: the type is answered and the faction name is the empty string
+    // (`0x48d633`, pushed at `0x48d68f`), not nil.
+    s.set_zone_texts(crate::script::ZoneTexts {
+        pvp_type: Some("contested".into()),
+        pvp_faction: Some(String::new()),
+        ..Default::default()
+    });
+    assert_eq!(s.arity("GetZonePVPInfo()").unwrap(), 3);
+    assert_eq!(
+        s.eval::<String>(
+            "local t, f, a = GetZonePVPInfo() \
+             return t .. '|' .. type(f) .. ':' .. f .. '|' .. tostring(a)"
+        )
+        .unwrap(),
+        "contested|string:|nil"
+    );
 }
 
 /// The reference's handler slot starts empty (`[0x8722cc]` = -1 at `0x7039e0`), so

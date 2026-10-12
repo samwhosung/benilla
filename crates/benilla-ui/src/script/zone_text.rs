@@ -21,8 +21,8 @@ pub struct ZoneTexts {
     /// `GetZonePVPInfo`'s type, `"friendly"`, `"hostile"` or `"contested"`; `None` when the
     /// player, the zone or its faction template is missing, or on a PvE realm outside a capital.
     pub pvp_type: Option<String>,
-    /// `GetZonePVPInfo`'s faction, `FactionGroup.dbc`'s name for the zone's mask bit; `None` for
-    /// none.
+    /// `GetZonePVPInfo`'s faction, `FactionGroup.dbc`'s name for the zone's mask bit, `""` when no
+    /// row names one (`0x48d633`); `None` only where `pvp_type` is `None` (`0x48d6b5`).
     pub pvp_faction: Option<String>,
     /// `GetZonePVPInfo`'s isArena: the leaf area's flag `0x80`, the free-for-all pit.
     pub is_arena: bool,

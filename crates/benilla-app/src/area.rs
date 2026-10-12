@@ -219,10 +219,7 @@ fn feed_zone_events(
         subzone: signal.subzone_text.clone(),
         minimap: minimap_text.clone(),
         pvp_type: pvp.map(|(ty, _)| ty.to_string()),
-        pvp_faction: pvp
-            .map(|(_, faction)| faction)
-            .filter(|f| !f.is_empty())
-            .map(str::to_string),
+        pvp_faction: pvp_faction_text(pvp),
         is_arena,
     });
 
@@ -243,6 +240,14 @@ fn feed_zone_events(
     cache.minimap_text = minimap_text;
     cache.indoor = signal.indoor;
     cache.wmo_group = wmo_group;
+}
+
+/// `GetZonePVPInfo`'s second value: with a type answered, the faction name is always a string,
+/// starting as the empty string (`0x48d633`, `0x882748`) and pushed by `lua_pushstring`
+/// (`0x48d68f`) whether or not a FactionGroup row supplied one; only the bail (`0x48d6b5`) pushes
+/// nil.
+fn pvp_faction_text(pvp: Option<(&str, &str)>) -> Option<String> {
+    pvp.map(|(_, faction)| faction.to_string())
 }
 
 /// `GetZonePVPInfo` (`0x48d540`): `(pvpType, isArena)`. isArena is the leaf's Flags `0x80`, read
@@ -431,6 +436,21 @@ mod tests {
         assert_eq!(pvp(true, &elwynn), Some("friendly"));
         assert_eq!(pvp(true, &stranglethorn), Some("contested"));
         assert_eq!(pvp(true, &orgrimmar), Some("hostile"));
+    }
+
+    /// An answered type always carries a faction string, `""` in an ownerless zone such as
+    /// Stranglethorn Vale (`0x48d633`); no type, no string (`0x48d6b5`).
+    #[test]
+    fn an_answered_type_carries_an_empty_faction_name_not_nil() {
+        assert_eq!(
+            pvp_faction_text(Some(("contested", ""))),
+            Some(String::new())
+        );
+        assert_eq!(
+            pvp_faction_text(Some(("friendly", "Alliance"))),
+            Some("Alliance".to_string())
+        );
+        assert_eq!(pvp_faction_text(None), None);
     }
 
     /// isArena is the leaf's `0x80`, read before any bail, so a closed gate keeps it.
