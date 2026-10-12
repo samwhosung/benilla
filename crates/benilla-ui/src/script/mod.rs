@@ -74,7 +74,7 @@ pub use glue_realm::{
     realm_load_classify, realm_load_stats, GlueRealm, GlueRealmCategory, GlueRealmCells,
     GlueRealmType, RealmSortKey,
 };
-pub use glue_select::{GlueCharacter, GlueSelectCells};
+pub use glue_select::{GlueCharacter, GlueScenePane, GlueSelectCells};
 mod gm_ticket;
 mod gossip;
 mod guild;

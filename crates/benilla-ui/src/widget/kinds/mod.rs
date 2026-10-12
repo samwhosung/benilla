@@ -351,6 +351,11 @@ pub struct ModelState {
     /// and its layer-2 paint callback (`0x46fad0`, registered by `0x46fa90`) brackets the model
     /// paint `0x76d240` with the full-screen-effect pass pair `0x6cd890`/`0x6cda70`.
     pub ffx: bool,
+    /// The scene's fill callback is the select screen's (`0x472150`, installed by
+    /// `SetCharSelectBackground` at `0x472144`) in place of the fog callback `SetModel` installs
+    /// (`0x76cd96` → `0x76d680`): the scene draws unfogged whatever the fog fields hold. The
+    /// callback rides the model instance, so the next `SetModel` or `ClearModel` drops it.
+    pub select_fill: bool,
 }
 
 /// A model pane's armed fog, all the renderer needs ([`ModelState::armed_fog`]).
@@ -424,6 +429,7 @@ impl Default for ModelState {
             fog_near: 0.0,
             fog_far: 1.0,
             ffx: false,
+            select_fill: false,
         }
     }
 }
@@ -526,6 +532,7 @@ impl ModelState {
         self.icon = None;
         self.armed = None;
         self.pending_seed = true;
+        self.select_fill = false;
         if let Some(facts) = facts {
             self.seed_from_facts(facts);
         }
@@ -538,6 +545,7 @@ impl ModelState {
         self.icon = None;
         self.armed = None;
         self.pending_seed = false;
+        self.select_fill = false;
     }
 
     /// `SetSequence`/`SetSequenceTime` (`0x7121a0`): interrupts what plays, with no
@@ -589,6 +597,16 @@ impl ModelState {
             near: self.fog_near,
             far: self.fog_far,
         })
+    }
+
+    /// The fog the scene draws with: the armed fog under the fog callback `SetModel` installs
+    /// (`0x76d680`), none under the select screen's ([`Self::select_fill`]).
+    pub fn scene_fog(&self) -> Option<ModelFog> {
+        if self.select_fill {
+            None
+        } else {
+            self.armed_fog()
+        }
     }
 
     /// `SetCamera` by raw index (`0x76cec0`): deferred until the facts are known, then installed

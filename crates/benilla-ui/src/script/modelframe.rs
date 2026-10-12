@@ -55,6 +55,33 @@ impl Model {
         crate::layout::RESOLVE_EPS * f64::from(self.layout_unit())
     }
 
+    /// `SetModel` on the pane `h` (`0x76cce0`): the file, seeded now if its facts are held (else
+    /// asked for), and the implicit rect it may give a size-less pane. A frame that is no model
+    /// pane is left as it is.
+    pub(crate) fn set_pane_model(&mut self, h: FrameHandle, path: String) {
+        // The reference's asset-resident test (`0x71d5a3`): the loader's Stand seed runs now, or
+        // when the file lands.
+        let facts = self.model_facts_for(&path);
+        let Some(KindState::Model(m)) = self.arena.frame_mut(h).map(|f| &mut f.kind_state) else {
+            return;
+        };
+        m.set_file(path, facts.as_deref());
+        // A size-less pane takes the file's rect as soon as the file is known.
+        self.apply_implicit_rect(h);
+    }
+
+    /// `SetCamera(idx)` on the pane `h` (`0x76cec0`), against the facts of the file it holds.
+    pub(crate) fn set_pane_camera(&mut self, h: FrameHandle, idx: i32) {
+        let path = match self.arena.frame(h).map(|f| &f.kind_state) {
+            Some(KindState::Model(m)) => m.path.clone(),
+            _ => return,
+        };
+        let facts = path.and_then(|p| self.model_facts_for(&p));
+        if let Some(KindState::Model(m)) = self.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            m.install_camera(idx, facts.as_deref());
+        }
+    }
+
     /// The implicit rect: a pane with no authored size takes its file's bounding-box extent, in
     /// layout units, as the reference's geometry overrides answer it (`0x76d080`, `0x76d0d0`).
     pub(crate) fn apply_implicit_rect(&mut self, h: FrameHandle) {
@@ -301,18 +328,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let path = string_arg(&path)
                 .ok_or_else(|| usage(lua, &this, "SetModel(\"file\")"))?
                 .to_string();
-            // The reference's asset-resident test (`0x71d5a3`): the loader's Stand seed runs now,
-            // or when the file lands.
-            let facts = lua
-                .app_data_mut::<Model>()
-                .expect("model app_data")
-                .model_facts_for(&path);
-            with_model(lua, &this, |m| m.set_file(path, facts.as_deref()))?;
-            // A size-less pane takes the file's rect as soon as the file is known.
+            // A pane of this kind, or the error.
+            with_model(lua, &this, |_| ())?;
             let h = frame_handle_of(lua, &this)?;
             lua.app_data_mut::<Model>()
                 .expect("model app_data")
-                .apply_implicit_rect(h);
+                .set_pane_model(h, path);
             Ok(())
         })?,
     )?;
@@ -380,8 +401,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetCamera",
         lua.create_function(|lua, (this, c): (Table, Value)| {
             let c = int(&c);
-            let facts = facts_of_pane(lua, &this)?;
-            with_model(lua, &this, |m| m.install_camera(c, facts.as_deref()))
+            with_model(lua, &this, |_| ())?;
+            let h = frame_handle_of(lua, &this)?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .set_pane_camera(h, c);
+            Ok(())
         })?,
     )?;
     m.set(

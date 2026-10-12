@@ -8,10 +8,11 @@
 //! only read it answer here, and `SelectCharacter` fires `UPDATE_SELECTED_CHARACTER` as it returns,
 //! as `0x472740` does. Indices are 1-based in Lua and 0-based inside, the boundary at `0x473470`.
 //!
-//! The 3-D side of the reference (`0x472950`'s model build into the scene, the attachment detaches
-//! `0x4722c0`/`0x4722e0`, the camera reset `0x76cec0`) is the host's scene drive and lives outside
-//! this module; what a build leaves behind for Lua to see is kept here: the facing reset and the
-//! build counter that gates `SetCharacterSelectFacing`.
+//! The 3-D side of the reference (`0x472950`'s model build into the scene) is the host's scene
+//! drive; what it reads is kept here: the shown `ModelFFX` pane's scene ([`GlueScenePane`]), the
+//! character standing on the scene's attachment 0 ([`super::UiScript::glue_standing_guid`]), and
+//! the facing. What a build leaves behind for Lua to see is kept here too: the facing reset and
+//! the build counter that gates `SetCharacterSelectFacing`.
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -70,6 +71,19 @@ impl Default for GlueSelectCells {
     }
 }
 
+/// The scene a shown `ModelFFX` pane draws, as the host's scene drive reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GlueScenePane {
+    /// The file the pane's last `SetModel` gave it: the XML `file`, `Model:SetModel`, or
+    /// `SetCharSelectBackground`'s (`0x472128`, the pane's own `SetModel`).
+    pub path: String,
+    /// The fog the scene draws with ([`crate::widget::ModelState::scene_fog`]).
+    pub fog: Option<crate::widget::ModelFog>,
+    /// The pane is the select screen's model frame (`[0xb42174]`), whose scene the selected
+    /// character stands in.
+    pub select: bool,
+}
+
 /// A record of the array: the character and whether `+0x110`, the built composite, is set.
 #[derive(Clone, Debug)]
 struct Record {
@@ -84,8 +98,6 @@ pub(crate) struct GlueRoster {
     cells: GlueSelectCells,
     /// `[0xb42174]`: the name of the model frame `SetCharSelectModelFrame` found.
     model_frame: Option<String>,
-    /// The file `SetCharSelectBackground` last gave the model frame (`0x472110`).
-    background: Option<String>,
 }
 
 /// `rad = deg · 0.017453292` (`0x7ffaac`, a float).
@@ -145,10 +157,59 @@ impl super::UiScript {
         self.model_mut().glue.roster.cells = cells;
     }
 
-    /// The model frame's background file, as `SetCharSelectBackground` last recorded it: what the
-    /// scene drive loads into the select scene.
+    /// The file `SetCharSelectBackground` gave the model frame, while its scene still holds it: a
+    /// later `SetModel` on the frame replaces the scene and its fill callback with it.
     pub fn glue_select_background(&self) -> Option<String> {
-        self.model_ref().glue.roster.background.clone()
+        let model = self.model_ref();
+        let h = model_frame_handle(&model)?;
+        match &model.arena.frame(h)?.kind_state {
+            crate::widget::KindState::Model(m) if m.select_fill => m.path.clone(),
+            _ => None,
+        }
+    }
+
+    /// The character standing on the select scene's attachment 0: the selected record once
+    /// `0x472950` has built its composite (`+0x110`) and attached it (`0x473039`). Every path
+    /// that frees the records detaches it first (`0x4722c0`/`0x4722e0` at `0x472409` and
+    /// `0x4725b9`), and an empty roster has nothing to attach.
+    pub fn glue_standing_guid(&self) -> Option<u64> {
+        let model = self.model_ref();
+        let roster = &model.glue.roster;
+        usize::try_from(roster.cells.selected)
+            .ok()
+            .and_then(|i| roster.records.get(i))
+            .filter(|r| r.built)
+            .map(|r| r.character.guid)
+    }
+
+    /// The scene of the shown `ModelFFX` pane, the topmost by (strata, level) if more than one is
+    /// shown; `None` with none shown, or one holding no file.
+    pub fn glue_scene(&self) -> Option<GlueScenePane> {
+        let model = self.model_ref();
+        let select = model_frame_handle(&model);
+        model
+            .arena
+            .model_kinds()
+            .iter()
+            .filter_map(|&h| {
+                let f = model.arena.frame(h)?;
+                let crate::widget::KindState::Model(m) = &f.kind_state else {
+                    return None;
+                };
+                if !m.ffx || !f.effective_visible {
+                    return None;
+                }
+                Some((
+                    (f.strata, f.level),
+                    GlueScenePane {
+                        path: m.path.clone()?,
+                        fog: m.scene_fog(),
+                        select: select == Some(h),
+                    },
+                ))
+            })
+            .max_by_key(|(order, _)| *order)
+            .map(|(_, pane)| pane)
     }
 
     /// The selected character's guid, none off the roster.
@@ -174,11 +235,17 @@ impl super::UiScript {
 
     /// The roster teardown (`0x472580`): the records freed, the count 0, the selection reset
     /// through `0x472740(-1)`, which clamps to 0 and fires `UPDATE_SELECTED_CHARACTER` with 1 on
-    /// the empty roster whatever it held, then `CHARACTER_LIST_UPDATE`. The reset of the model
-    /// frame's camera (`0x76cec0`) is the scene drive's.
+    /// the empty roster whatever it held, the model frame's `SetCamera(0)` (`0x4725d7` →
+    /// `0x76cec0`), then `CHARACTER_LIST_UPDATE`.
     pub fn teardown_glue_roster(&mut self) {
         self.model_mut().glue.roster.clear();
         self.select_glue_character(-1);
+        {
+            let mut model = self.model_mut();
+            if let Some(h) = model_frame_handle(&model) {
+                model.set_pane_camera(h, 0);
+            }
+        }
         self.fire_event("CHARACTER_LIST_UPDATE", Vec::new());
     }
 
@@ -226,6 +293,18 @@ impl super::UiScript {
     }
 }
 
+/// `[0xb42174]`'s frame, while the name `SetCharSelectModelFrame` took still names a model pane.
+fn model_frame_handle(model: &Model) -> Option<crate::widget::FrameHandle> {
+    let h = model
+        .arena
+        .lookup(model.glue.roster.model_frame.as_deref()?)?;
+    matches!(
+        model.arena.frame(h).map(|f| &f.kind_state),
+        Some(crate::widget::KindState::Model(_))
+    )
+    .then_some(h)
+}
+
 fn model(lua: &Lua) -> mlua::AppDataRefMut<'_, Model> {
     lua.app_data_mut::<Model>().expect("model app_data")
 }
@@ -262,10 +341,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `0x473230`: the file (`0x6f3510`, else `0x83874c`) into `0x472110`, which needs the frame
-    // set and a non-empty name and hands it to the frame's SetModel (vtable `+0x94`).
-    //
-    // Only the path is recorded: the scene drive loads it into the select scene, and the frame's
-    // own model state, which benilla's widget renders nowhere on the glue, stays as it was.
+    // set and a non-empty name, hands it to the frame's own `SetModel` (vtable `+0x94`,
+    // `0x472128`), and on the new scene puts the select screen's fill callback `0x472150` where
+    // `SetModel` put the fog one (`0x472144`): the select scene never fogs once a background is set.
     g.set(
         "SetCharSelectBackground",
         lua.create_function(|lua, args: MultiValue| {
@@ -275,8 +353,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 "Usage: SetCharSelectBackground(\"filename\")",
             )?;
             let mut m = model(lua);
-            if m.glue.roster.model_frame.is_some() && !file.is_empty() {
-                m.glue.roster.background = Some(file);
+            let Some(h) = model_frame_handle(&m).filter(|_| !file.is_empty()) else {
+                return Ok(());
+            };
+            m.set_pane_model(h, file);
+            if let Some(crate::widget::KindState::Model(pane)) =
+                m.arena.frame_mut(h).map(|f| &mut f.kind_state)
+            {
+                pane.select_fill = true;
             }
             Ok(())
         })?,
@@ -668,9 +752,18 @@ mod tests {
         s.run("SetCharSelectModelFrame('Scene') SetCharSelectBackground('a.mdx')")
             .unwrap();
         assert_eq!(s.glue_select_background().as_deref(), Some("a.mdx"));
+        // It is the frame's own `SetModel` (`0x472128`).
+        assert_eq!(
+            s.eval::<String>("return Scene:GetModel()").unwrap(),
+            "a.mdx"
+        );
         // An empty name is ignored (`0x472123`).
         s.run("SetCharSelectBackground('')").unwrap();
         assert_eq!(s.glue_select_background().as_deref(), Some("a.mdx"));
+        // The frame's own `SetModel` replaces the scene, and the select fill with it.
+        s.run("Scene:SetModel('b.mdx')").unwrap();
+        assert_eq!(s.glue_select_background(), None);
+        s.run("SetCharSelectBackground('a.mdx')").unwrap();
         for (call, usage) in [
             (
                 "SetCharSelectModelFrame()",
@@ -685,6 +778,116 @@ mod tests {
             assert!(err.contains(usage), "{err}");
         }
         s.run("UpdateSelectionCustomizationScene()").unwrap();
+    }
+
+    /// The scene's fog follows its fill callback: `SetModel` installs the fog one (`0x76cd96`), so
+    /// the select screen's OnLoad scene fogs with the fog its fields hold; `SetCharSelectBackground`
+    /// installs `0x472150` over it (`0x472144`), and the fog fields written after it change nothing;
+    /// the next `SetModel` brings the fog back.
+    #[test]
+    fn the_select_scene_fogs_until_a_background_is_set() {
+        let s = UiScript::new_glue().unwrap();
+        s.run(
+            "local f = CreateFrame('ModelFFX', 'Scene') \
+             f:SetModel('UI_Orc.mdx') f:SetFogColor(0.5, 0.5, 0.5) f:SetFogNear(0) \
+             f:SetFogFar(270) SetCharSelectModelFrame('Scene')",
+        )
+        .unwrap();
+        let pane = s.glue_scene().expect("the shown ModelFFX");
+        assert_eq!(pane.path, "UI_Orc.mdx");
+        assert!(pane.select);
+        let fog = pane.fog.expect("the OnLoad scene fogs");
+        assert_eq!((fog.near, fog.far), (0.0, 270.0));
+        assert_eq!(fog.rgb().map(|c| (c * 255.0).round()), [128.0; 3]);
+
+        s.run(
+            "SetCharSelectBackground('UI_Human.mdx') \
+             Scene:SetFogColor(0.8, 0.65, 0.73) Scene:SetFogFar(222)",
+        )
+        .unwrap();
+        let pane = s.glue_scene().unwrap();
+        assert_eq!((pane.path.as_str(), pane.fog), ("UI_Human.mdx", None));
+
+        s.run("Scene:SetModel('UI_Dwarf.mdx')").unwrap();
+        let pane = s.glue_scene().unwrap();
+        assert_eq!(pane.path, "UI_Dwarf.mdx");
+        assert_eq!(pane.fog.map(|f| f.far), Some(222.0));
+    }
+
+    /// The scene is the shown `ModelFFX`'s, the topmost when two are shown; a hidden one, a plain
+    /// `Model` and a pane with no file are none.
+    #[test]
+    fn the_scene_is_the_topmost_shown_model_ffx() {
+        let s = UiScript::new_glue().unwrap();
+        assert_eq!(s.glue_scene(), None);
+        s.run(
+            "local low = CreateFrame('ModelFFX', 'Low') low:SetModel('low.mdx') \
+             low:SetFrameLevel(2) \
+             local high = CreateFrame('ModelFFX', 'High') high:SetModel('high.mdx') \
+             high:SetFrameLevel(5) \
+             local plain = CreateFrame('Model', 'Plain') plain:SetModel('plain.mdx') \
+             plain:SetFrameLevel(9) \
+             CreateFrame('ModelFFX', 'Empty'):SetFrameLevel(9)",
+        )
+        .unwrap();
+        let pane = s.glue_scene().unwrap();
+        assert_eq!(pane.path, "high.mdx");
+        assert!(!pane.select && pane.fog.is_none());
+        s.run("High:Hide()").unwrap();
+        assert_eq!(s.glue_scene().unwrap().path, "low.mdx");
+        s.run("Low:Hide()").unwrap();
+        assert_eq!(s.glue_scene(), None);
+    }
+
+    /// The character on the scene's attachment 0 is the selected record once its composite is
+    /// built: none for a record with no model, none once the records are freed.
+    #[test]
+    fn the_standing_character_is_the_built_selection() {
+        let mut roster = three();
+        roster[1].model = false;
+        let mut s = vm(roster);
+        assert_eq!(s.glue_standing_guid(), Some(1));
+        s.run("SelectCharacter(2)").unwrap();
+        assert_eq!(s.glue_selected_guid(), Some(2));
+        assert_eq!(s.glue_standing_guid(), None, "no model, nothing built");
+        s.run("SelectCharacter(3)").unwrap();
+        assert_eq!(s.glue_standing_guid(), Some(3));
+        s.run("GetCharacterListUpdate()").unwrap();
+        assert_eq!(s.glue_standing_guid(), None);
+        let _ = s.load_glue_roster(three());
+        assert_eq!(s.glue_standing_guid(), Some(1));
+        s.teardown_glue_roster();
+        assert_eq!(s.glue_standing_guid(), None);
+    }
+
+    /// `0x472580` ends with the model frame's `SetCamera(0)` (`0x4725d7`).
+    #[test]
+    fn the_teardown_puts_the_model_frame_back_on_camera_zero() {
+        let mut s = vm(three());
+        s.set_model_facts(
+            "a.mdx",
+            crate::widget::ModelFileFacts {
+                sequences: Vec::new(),
+                bbox: ([0.0; 3], [1.0; 3]),
+                cameras: 2,
+            },
+        );
+        s.run(
+            "CreateFrame('ModelFFX', 'Scene'):SetModel('a.mdx') Scene:SetCamera(1) \
+             SetCharSelectModelFrame('Scene')",
+        )
+        .unwrap();
+        let camera = |s: &UiScript| {
+            let model = s.model_ref();
+            let h = model.arena.lookup("Scene").unwrap();
+            match &model.arena.frame(h).unwrap().kind_state {
+                crate::widget::KindState::Model(m) => m.camera,
+                _ => unreachable!(),
+            }
+        };
+        assert_eq!(camera(&s), Some(1));
+        s.teardown_glue_roster();
+        assert_eq!(camera(&s), Some(0));
     }
 
     /// `0x4723d0` clears at the call: the count reads 0 straight after, and the host is asked for
