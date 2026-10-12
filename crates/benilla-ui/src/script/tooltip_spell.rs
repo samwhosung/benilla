@@ -907,16 +907,19 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 }
                 // The item builder's block takes the same live cooldown (`0x5324d5`), whose
                 // ITEM_COOLDOWN_TIME line (not built) sets the return value (`0x52e140`).
-                0x80 => Ok(flag(
-                    super::tooltip_item::render_by_id_flagged(
+                // The tooltip is built either way, but a miss in the player's own items pushes
+                // nil whatever the builder returned (`0x5325bc`, `0x532604`, `0x532404`).
+                0x80 => {
+                    let live = super::tooltip_item::render_by_id_flagged(
                         lua,
                         &this,
                         a.action,
                         None,
                         None,
                         owned.as_ref(),
-                    )? || remaining_ms > 0,
-                )),
+                    )?;
+                    Ok(flag(owned.is_some() && (live || remaining_ms > 0)))
+                }
                 0x40 => {
                     let h = frame_handle_of(lua, &this)?;
                     clear(lua, h);

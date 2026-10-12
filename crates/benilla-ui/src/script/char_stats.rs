@@ -407,7 +407,7 @@ pub(super) const KEYRING_INV_SLOTS: std::ops::RangeInclusive<usize> = 82..=113;
 
 /// The keyring's container id (`KEYRING_CONTAINER`, `MainMenuBarBagButtons.lua:1`); must match
 /// `ui_items::KEYRING_CONTAINER` in the app, which feeds the keys as that container.
-const KEYRING_CONTAINER: i64 = -2;
+pub(super) const KEYRING_CONTAINER: i64 = -2;
 
 impl Model {
     /// The item `token` exposes at live-API id `slot`, the one routing the `GetInventoryItem*`

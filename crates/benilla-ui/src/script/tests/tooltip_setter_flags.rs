@@ -218,6 +218,22 @@ fn set_action_answers_the_builders_flag_by_kind() {
     };
     put(&mut s, 1, 0x00, 871, RUNNING_30_MIN);
     put(&mut s, 2, 0x00, 871, None);
+    // The player owns one Hearthstone (the action word resolves by entry, `0x532490`).
+    s.set_container(
+        0,
+        Some(ContainerState {
+            name: Some("Backpack".into()),
+            num_slots: 16,
+            slots: std::collections::HashMap::from([(
+                1,
+                ContainerSlot {
+                    item_id: 6948,
+                    count: 1,
+                    ..Default::default()
+                },
+            )]),
+        }),
+    );
     put(&mut s, 3, 0x80, 6948, RUNNING_30_MIN);
     put(&mut s, 4, 0x80, 6948, None);
     put(&mut s, 5, 0x40, 1, RUNNING_30_MIN);
@@ -447,4 +463,100 @@ fn live_objects_and_blocks_reach_the_flag() {
         !locked(&s, "TT:SetTradePlayerItem(3)"),
         "no object, no block lock"
     );
+}
+
+/// The action bar's item word finds the player's item as `0x622420` walks with mask `0x47`: the
+/// worn items, then each equipped bag and its contents, then the backpack, then the keyring; the
+/// bank is out of the mask; a broken item or one with flag `0x10` is skipped; a miss pushes nil
+/// whatever the builder returned (`0x5325bc`). A timed copy answers 1, a plain one nil, so the
+/// answer says which copy was found.
+#[test]
+fn the_action_bar_item_word_walks_the_references_order() {
+    let mut s = fixture();
+    s.run("ITEM_DURATION_HOURS = '[DURATION %d h]'").unwrap();
+    s.set_item_template(
+        9000,
+        ItemTemplateView {
+            name: "Charm".into(),
+            ..Default::default()
+        },
+    );
+    let timed = |flags, durability| ContainerSlot {
+        item_id: 9000,
+        count: 1,
+        flags,
+        durability,
+        duration_ms: Some(3_600_000),
+        ..Default::default()
+    };
+    let plain = ContainerSlot {
+        item_id: 9000,
+        count: 1,
+        ..Default::default()
+    };
+    let bag = |slots: Vec<(u32, ContainerSlot)>| {
+        Some(ContainerState {
+            name: None,
+            num_slots: 16,
+            slots: slots.into_iter().collect(),
+        })
+    };
+    let ask = |s: &mut UiScript| {
+        s.set_action(
+            1,
+            Some(ActionSlot {
+                kind: 0x80,
+                action: 9000,
+                ..Default::default()
+            }),
+        );
+        show(s, "TT:SetAction(1)")
+    };
+    // Not carried at all.
+    assert_eq!(ask(&mut s), "1:nil:nil");
+    // Only in the bank (container -1): outside the mask, so a miss.
+    s.set_container(-1, bag(vec![(1, timed(0, None))]));
+    assert_eq!(ask(&mut s), "1:nil:nil", "the bank is not walked");
+    // A broken timed copy and a flag-0x10 timed copy in the backpack are skipped; the plain
+    // copy behind them is found, and says nil.
+    s.set_container(
+        0,
+        bag(vec![
+            (1, timed(0, Some((0, 100)))),
+            (2, timed(0x10, None)),
+            (3, plain.clone()),
+        ]),
+    );
+    assert_eq!(
+        ask(&mut s),
+        "1:nil:nil",
+        "skipped copies, then the plain one"
+    );
+    // A wrapped broken copy is not skipped (`0x6224f7`).
+    s.set_container(0, bag(vec![(1, timed(0x8, Some((0, 100))))]));
+    assert_eq!(ask(&mut s), "1:number:1");
+    // An equipped bag's contents come before the backpack's.
+    s.set_container(0, bag(vec![(1, plain.clone())]));
+    s.set_container(1, bag(vec![(1, timed(0, None))]));
+    assert_eq!(ask(&mut s), "1:number:1", "bag 1 before the backpack");
+    // The worn item comes before the bags.
+    let mut inv: InventorySlots = Default::default();
+    inv[5] = Some(InvSlotView {
+        item_id: 9000,
+        ..Default::default()
+    });
+    s.set_inventory_slots(inv);
+    assert_eq!(
+        ask(&mut s),
+        "1:nil:nil",
+        "the worn copy is plain and found first"
+    );
+    // The keyring comes last.
+    let mut inv: InventorySlots = Default::default();
+    inv[5] = None;
+    s.set_inventory_slots(inv);
+    s.set_container(1, None);
+    s.set_container(0, None);
+    s.set_container(-2, bag(vec![(1, timed(0, None))]));
+    assert_eq!(ask(&mut s), "1:number:1", "the keyring is walked");
 }

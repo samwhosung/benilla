@@ -160,17 +160,24 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
     }
 }
 
-/// The worn item `item_id` as the builder's live item object, or the first bag slot holding it
-/// (equipment first, then the bags in id order), which the action bar's item word resolves by
-/// entry (`0x622270` at `0x532490`). `None` when the player holds none (`0x5325bc`).
+/// The player's own item of entry `item_id` as the builder's live item object, found as the
+/// action bar's item word finds it (`0x532490` → `0x622270` → the walk `0x622420`, mask `0x47`
+/// because `0x5dd44d` sets `[player+0x1d48]`): the worn items (positions 0..18), then each
+/// equipped bag (19..22) followed by its contents, then the backpack (23..38), then the keyring
+/// (81..112). The bank is out of the mask. A broken item (durability 0 with a maximum, unless
+/// wrapped, `0x6224f7`..`0x62250e`) or one carrying flag `0x10` (`0x622510`) is skipped. The
+/// reference also skips an object whose `[+0xe4]` bit 0 is set (`0x614ea0`); benilla holds no
+/// such fact. `None` when nothing matches, where the setter pushes nil (`0x5325bc`).
 pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::ItemInstance> {
-    if let Some(s) = model
-        .inventory_slots
-        .iter()
-        .flatten()
-        .find(|s| s.item_id == item_id)
-    {
-        return Some(render::ItemInstance {
+    const BROKEN: u32 = 0x10;
+    const WRAPPED: u32 = 0x8;
+    let usable = |flags: u32, durability: Option<(u32, u32)>| {
+        let broken =
+            flags & WRAPPED == 0 && durability.is_some_and(|(cur, max)| max > 0 && cur == 0);
+        !broken && flags & BROKEN == 0
+    };
+    let worn = |s: &crate::script::InvSlotView| {
+        (s.item_id == item_id && usable(s.flags, s.durability)).then(|| render::ItemInstance {
             name: s.name.clone(),
             durability: s.durability,
             creator: s.creator.clone(),
@@ -180,18 +187,38 @@ pub(super) fn owned_instance(model: &Model, item_id: u32) -> Option<render::Item
             duration_ms: s.duration_ms,
             object: true,
             ..Default::default()
-        });
-    }
-    let mut bags: Vec<_> = model.containers.iter().collect();
-    bags.sort_by_key(|(bag, _)| **bag);
-    bags.into_iter()
-        .flat_map(|(_, c)| {
-            let mut slots: Vec<_> = c.slots.iter().collect();
-            slots.sort_by_key(|(n, _)| **n);
-            slots.into_iter().map(|(_, s)| s)
         })
-        .find(|s| s.item_id == item_id)
-        .map(|s| slot_instance(s, false))
+    };
+    let held = |bag: i64| -> Option<render::ItemInstance> {
+        let c = model.containers.get(&bag)?;
+        let mut slots: Vec<_> = c.slots.iter().collect();
+        slots.sort_by_key(|(n, _)| **n);
+        slots
+            .into_iter()
+            .map(|(_, s)| s)
+            .find(|s| s.item_id == item_id && usable(s.flags, s.durability))
+            .map(|s| slot_instance(s, false))
+    };
+    // Equipment, then each equipped bag item and straight after it that bag's contents.
+    for s in model.inventory_slots.iter().take(20).skip(1).flatten() {
+        if let Some(i) = worn(s) {
+            return Some(i);
+        }
+    }
+    for bag in 1..=4_i64 {
+        if let Some(i) = model
+            .inventory_slots
+            .get(19 + bag as usize)
+            .and_then(Option::as_ref)
+            .and_then(worn)
+        {
+            return Some(i);
+        }
+        if let Some(i) = held(bag) {
+            return Some(i);
+        }
+    }
+    held(0).or_else(|| held(super::char_stats::KEYRING_CONTAINER))
 }
 
 /// The item at `(bag, slot)` in the cursor's numbering, as a live object with no block, for the
