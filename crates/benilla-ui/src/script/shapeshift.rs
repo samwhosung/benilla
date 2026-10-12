@@ -83,7 +83,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, i: u32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(form) = form_at(&model, i) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                // `0x4b47d9`: four nils.
+                return Ok(super::binding_abi::tuple(&[None; 4]));
             };
             let texture = match &form.view.texture {
                 Some(t) => Value::String(lua.create_string(t)?),

@@ -306,7 +306,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(m) = model.macros.get(index) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                // `0x4f1829`: four nils.
+                return Ok(super::binding_abi::tuple(&[None; 4]));
             };
             let texture = match &m.texture {
                 Some(t) => Value::String(lua.create_string(t)?),

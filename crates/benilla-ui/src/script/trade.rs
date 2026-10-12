@@ -164,7 +164,8 @@ fn click_trade_button(model: &mut Model, id: u32) {
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // GetTradePlayerItemInfo(id): the five values `TradeFrame.lua:55` reads.
+    // GetTradePlayerItemInfo(id): the five values `TradeFrame.lua:55` reads; an empty slot is
+    // nil, nil, 0, 0, nil (`0x4c0613`).
     g.set(
         "GetTradePlayerItemInfo",
         lua.create_function(|lua, id: usize| {
@@ -177,7 +178,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 (slot, usable)
             };
             let Some(s) = slot else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(super::binding_abi::tuple(&[
+                    None,
+                    None,
+                    Some(0),
+                    Some(0),
+                    None,
+                ]));
             };
             let opt_str = |v: &Option<String>| -> mlua::Result<Value> {
                 Ok(match v {

@@ -3,8 +3,9 @@
 //!
 //! A 1.12 predicate answers `1` or `nil`, never a boolean (`IsPetAttackActive` aside), so kinds
 //! are gated with arity. The table says per row what to trust: `arity_conf = exact`, kinds only
-//! where `kinds_conf = agree`, never `argc_conf`. Only query verbs are probed, a call that raises
-//! is skipped, and a name registered from several tables (`GetBuildInfo` is 5 in the glue table
+//! where `kinds_conf = agree`, never `argc_conf`. Only query verbs are probed, each on every rung of
+//! [`ARG_LADDER`] (an indexed getter raises with none and answers its miss tuple for `0` or `99`), a
+//! call that raises is skipped, and a name registered from several tables (`GetBuildInfo` is 5 in the glue table
 //! `0x8373b8`, 3 in-game at `0x83de68`) is read at its non-glue row. The boolean gate alone reads every `global` row, whatever its
 //! `arity_conf`, and adds each row whose kinds are `(nil) | (number)` to the query verbs.
 
@@ -123,42 +124,48 @@ fn every_query_binding_answers_the_reference_s_return_arity() {
         }
         let want = first.arity;
 
-        // Counted with 5.0's `arg.n` inside the `pcall`: `select` is not a 1.12 global
-        // (`lua50::install` removes it).
-        let call = if name.starts_with("Unit") {
-            format!(r#"{name}("player")"#)
-        } else {
-            format!("{name}()")
-        };
-        let probe = format!(
-            "if type({name}) ~= 'function' then return -1 end \
-             local ok, n = pcall(function() return (function(...) return arg.n end)({call}) end) \
-             if not ok then return -1 end return n"
-        );
-        let got: i64 = match s.eval(&probe) {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-        if got < 0 {
-            continue;
-        }
-        checked += 1;
-        if got as usize != want {
-            if let Some((_, known, _)) = NOT_YET_ASSERTED.iter().find(|(n, ..)| n == name) {
-                assert_eq!(
-                    *known, want,
-                    "{name} is on the not-yet-asserted list at a stale arity — the table now says \
-                     {want}"
-                );
+        // Every rung of the argument ladder that returns is measured: an indexed getter raises
+        // with none and answers its miss tuple for `0` or `99`, a hit leg is not seeded here. A
+        // binding that raises on every rung is skipped. Counted with 5.0's `arg.n` inside the
+        // `pcall`: `select` is not a 1.12 global (`lua50::install` removes it).
+        let mut measured = false;
+        for args in ARG_LADDER {
+            let probe = format!(
+                "if type({name}) ~= 'function' then return -1 end \
+                 local ok, n = pcall(function() return (function(...) return arg.n end)({name}({args})) end) \
+                 if not ok then return -1 end return n"
+            );
+            let got: i64 = match s.eval(&probe) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            if got < 0 {
                 continue;
             }
-            mismatches.push(format!("{name}: answers {got}, reference states {want}"));
+            measured = true;
+            if got as usize != want {
+                if let Some((_, known, _)) = NOT_YET_ASSERTED.iter().find(|(n, ..)| n == name) {
+                    assert_eq!(
+                        *known, want,
+                        "{name} is on the not-yet-asserted list at a stale arity — the table now \
+                         says {want}"
+                    );
+                    continue;
+                }
+                mismatches.push(format!(
+                    "{name}({args}): answers {got}, reference states {want}"
+                ));
+                break;
+            }
+        }
+        if measured {
+            checked += 1;
         }
     }
 
     // A floor, not a target: raise it when coverage rises, never lower it to fit a change.
     assert!(
-        checked >= 240,
+        checked >= 440,
         "the gate measured only {checked} bindings — it has stopped covering anything"
     );
     // The list may only shrink: an entry that now answers the reference's arity must come off.
@@ -168,11 +175,19 @@ fn every_query_binding_answers_the_reference_s_return_arity() {
         .filter(|n| {
             by_name.get(n).is_some_and(|rs| {
                 let want = rs[0].arity;
-                s.eval::<i64>(&format!(
-                    "local ok, n = pcall(function() return (function(...) return arg.n end)({n}()) end) \
-                     if not ok then return -1 end return n"
-                ))
-                .is_ok_and(|got| got >= 0 && got as usize == want)
+                // Answers the reference's arity on every rung that returns, and on one at least.
+                let seen: Vec<i64> = ARG_LADDER
+                    .iter()
+                    .filter_map(|args| {
+                        s.eval::<i64>(&format!(
+                            "local ok, n = pcall(function() return (function(...) return arg.n end)({n}({args})) end) \
+                             if not ok then return -1 end return n"
+                        ))
+                        .ok()
+                        .filter(|got| *got >= 0)
+                    })
+                    .collect();
+                !seen.is_empty() && seen.iter().all(|got| *got as usize == want)
             })
         })
         .collect();
@@ -538,59 +553,68 @@ fn every_query_binding_answers_the_reference_s_return_kinds() {
             continue;
         }
 
-        let call = if name.starts_with("Unit") {
-            format!(r#"{name}("player")"#)
-        } else {
-            format!("{name}()")
-        };
-        let probe = format!(
-            "if type({name}) ~= 'function' then return '?' end \
-             local ok, s = pcall(function() return PGKinds({call}) end) \
-             if not ok then return '?' end return s"
-        );
-        let Ok(got) = s.eval::<String>(&probe) else {
-            continue;
-        };
-        if got == "?" {
-            continue;
-        }
-        let got: Vec<&str> = got.split(',').filter(|k| !k.is_empty()).collect();
-        // An arity fault is the arity gate's to report.
-        if !want.iter().any(|alt| alt.len() == got.len()) {
-            continue;
-        }
-        checked += 1;
-        let agrees = want.iter().any(|alt| {
-            alt.len() == got.len()
-                && alt
-                    .iter()
-                    .zip(&got)
-                    .all(|(w, g)| slot_accepts(w.as_str(), g))
-        });
-        let observed = got.join(",");
-        if !agrees {
-            if let Some((_, known, _)) = KINDS_NOT_YET_ASSERTED.iter().find(|(n, ..)| n == name) {
-                assert_eq!(
-                    *known, observed,
-                    "{name}'s not-yet-asserted row is stale: it now answers ({observed})"
-                );
+        // Every rung of the argument ladder that returns is compared, so an indexed getter's miss
+        // leg is measured with the rest (see the arity gate).
+        let mut measured = false;
+        for args in ARG_LADDER {
+            let probe = format!(
+                "if type({name}) ~= 'function' then return '?' end \
+                 local ok, s = pcall(function() return PGKinds({name}({args})) end) \
+                 if not ok then return '?' end return s"
+            );
+            let Ok(got) = s.eval::<String>(&probe) else {
+                continue;
+            };
+            if got == "?" {
                 continue;
             }
-            mismatches.push(format!(
-                "{name}: answers ({observed}), reference states {}",
-                first.kinds
-            ));
-        } else {
-            assert!(
-                !KINDS_NOT_YET_ASSERTED.iter().any(|(n, ..)| n == name),
-                "{name} now agrees with the reference and must come off KINDS_NOT_YET_ASSERTED"
-            );
+            let got: Vec<&str> = got.split(',').filter(|k| !k.is_empty()).collect();
+            // An arity fault is the arity gate's to report.
+            if !want.iter().any(|alt| alt.len() == got.len()) {
+                continue;
+            }
+            measured = true;
+            let agrees = want.iter().any(|alt| {
+                alt.len() == got.len()
+                    && alt
+                        .iter()
+                        .zip(&got)
+                        .all(|(w, g)| slot_accepts(w.as_str(), g))
+            });
+            let observed = got.join(",");
+            if !agrees {
+                if let Some((_, known, _)) = KINDS_NOT_YET_ASSERTED.iter().find(|(n, ..)| n == name)
+                {
+                    assert_eq!(
+                        *known, observed,
+                        "{name}'s not-yet-asserted row is stale: it now answers ({observed})"
+                    );
+                    continue;
+                }
+                mismatches.push(format!(
+                    "{name}({args}): answers ({observed}), reference states {}",
+                    first.kinds
+                ));
+                break;
+            }
+        }
+        if measured {
+            checked += 1;
+            if !mismatches
+                .last()
+                .is_some_and(|m| m.starts_with(&format!("{name}(")))
+            {
+                assert!(
+                    !KINDS_NOT_YET_ASSERTED.iter().any(|(n, ..)| n == name),
+                    "{name} now agrees with the reference and must come off KINDS_NOT_YET_ASSERTED"
+                );
+            }
         }
     }
 
     // A floor, not a target.
     assert!(
-        checked >= 150,
+        checked >= 395,
         "the kind gate measured only {checked} bindings — it has stopped covering anything"
     );
     assert!(
@@ -714,6 +738,8 @@ fn every_widget_method_answers_the_reference_s_return_kinds() {
 const ARG_LADDER: &[&str] = &[
     "",
     "\"player\"",
+    "0",
+    "99",
     "1",
     "2",
     "3",

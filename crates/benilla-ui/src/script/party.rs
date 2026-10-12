@@ -648,7 +648,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetNumSavedInstances() / GetSavedInstanceInfo(index), 1-based over the pushed list; a miss
-    // returns nothing.
+    // pushes nil, 0, nil (`0x4a19e9`).
     g.set(
         "GetNumSavedInstances",
         lua.create_function(|lua, ()| {
@@ -673,7 +673,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     Value::Integer(i64::from(r.instance)),
                     Value::Integer(i64::from(r.reset)),
                 ]),
-                None => MultiValue::new(),
+                None => super::binding_abi::tuple(&[None, Some(0), None]),
             })
         })?,
     )?;

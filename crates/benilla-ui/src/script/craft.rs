@@ -272,14 +272,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetCraftInfo(index) → craftName, craftSubSpellName, craftType, numAvailable, isExpanded,
-    // trainingPointCost, requiredLevel (`Blizzard_CraftUI.lua:168`); one nil past the end.
+    // trainingPointCost, requiredLevel (`Blizzard_CraftUI.lua:168`); a miss pushes the seven too.
     // `isExpanded` is always nil; Beast Training's cost and level answer 0, not built.
     g.set(
         "GetCraftInfo",
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(r) = recipe(&model, index) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                // `0x4f70a4`: nil, nil, nil, 0, nil, 0, 0.
+                return Ok(binding_abi::tuple(&[
+                    None,
+                    None,
+                    None,
+                    Some(0),
+                    None,
+                    Some(0),
+                    Some(0),
+                ]));
             };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&r.name)?),
@@ -324,7 +333,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetCraftReagentInfo(index, reagentIndex) → name, icon, need, have; one nil past the end.
+    // GetCraftReagentInfo(index, reagentIndex) → name, icon, need, have; a miss is four nils
+    // (`0x4f759b`).
     g.set(
         "GetCraftReagentInfo",
         lua.create_function(|lua, (index, reagent_index): (usize, usize)| {
@@ -332,7 +342,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(reagent) = recipe(&model, index)
                 .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
             else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(binding_abi::tuple(&[None; 4]));
             };
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, reagent.name.as_ref())?,

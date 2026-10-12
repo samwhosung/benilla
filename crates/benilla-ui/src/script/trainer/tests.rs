@@ -107,6 +107,27 @@ fn tree_interleaves_headers_and_ordered_services() {
     assert_eq!(info(&mut s, 5), ("Bloodrage".into(), "unavailable".into()));
 }
 
+/// The fourth value of a service row is 1 (`0x4d8e42`: the header test `0x4d8c30` answers 0 for a
+/// row that is no header, which pushes 1), not nil; a collapsed header's is nil.
+#[test]
+fn a_service_row_answers_one_for_its_fourth_value() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trainer(Some(trainer()));
+    let fourth = |s: &mut UiScript, row: u32| -> (i64, Option<i64>) {
+        s.eval(&format!(
+            "local n = function(...) return arg.n, arg[4] end return n(GetTrainerServiceInfo({row}))"
+        ))
+        .unwrap()
+    };
+    // Rows: Arms header, Heroic Strike, Cleave, Fury header, Bloodrage.
+    assert_eq!(fourth(&mut s, 1), (4, Some(1)));
+    for service in [2, 3, 5] {
+        assert_eq!(fourth(&mut s, service), (4, Some(1)), "row {service}");
+    }
+    s.run("CollapseTrainerSkillLine(1)").unwrap();
+    assert_eq!(fourth(&mut s, 1), (4, None), "a collapsed header");
+}
+
 /// `GetTrainerServiceDescription` (`0x4d9b40`) pushes one value, nil (`0x4d9d90`) where there is
 /// no text to show: no row at the index (`0x4d9ba8` to `0x4d9d93`), a service with no spell record
 /// (`0x4d9bd7`), or a service whose spell has none (`0x4d9d44`, `0x4d9d49`). A header row has no service either.

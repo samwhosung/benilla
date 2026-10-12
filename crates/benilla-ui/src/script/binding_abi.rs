@@ -14,7 +14,7 @@
 //!    `xor eax,eax; ret` that skips `0x6f4940` (`GetDefaultLanguage`'s failure edges);
 //! 3. raise.
 
-use mlua::{Lua, Value};
+use mlua::{Lua, MultiValue, Value};
 
 /// `_ftol` (`0x40a2b0`) as the bindings consume it: the x87 rounding control set to chop, a
 /// `fistp` to a qword, and its low dword. What the qword cannot hold (an infinity, NaN, ±2^63 and
@@ -315,6 +315,18 @@ pub(crate) fn flag(b: bool) -> Value {
     } else {
         Value::Nil
     }
+}
+
+/// A tuple the reference pushes by fixed slots, as an indexed getter's miss does: `None` is a nil
+/// (`0x6f37f0`), `Some(n)` the number `n` (`0x6f3810`). The count is the handler's `mov eax,N`, so
+/// a caller counting the returns (`arg.n`) reads N, never one nil.
+pub(crate) fn tuple(slots: &[Option<i64>]) -> MultiValue {
+    MultiValue::from_vec(
+        slots
+            .iter()
+            .map(|s| s.map_or(Value::Nil, Value::Integer))
+            .collect(),
+    )
 }
 
 #[cfg(test)]

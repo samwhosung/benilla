@@ -112,16 +112,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetTradeSkillInfo(index): (name, "header", 0, isExpanded) for a header, (name, difficulty,
-    // numAvailable, nil) for a recipe, one nil out of range.
+    // numAvailable, nil) for a recipe, nil, nil, 0, nil out of range (`0x4fd8d0`).
     g.set(
         "GetTradeSkillInfo",
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let miss = || binding_abi::tuple(&[None, None, Some(0), None]);
             let Some(n) = index.checked_sub(1) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(miss());
             };
             let Some(row) = rows(&model).get(n).cloned() else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(miss());
             };
             match row {
                 Row::Header { key, name } => {
@@ -237,8 +238,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTradeSkillReagentInfo(index, reagentIndex): one nil on a miss; name and icon are nil
-    // until the item template arrives.
+    // GetTradeSkillReagentInfo(index, reagentIndex): four nils on a miss (`0x4ff68b`); name and
+    // icon are nil until the item template arrives.
     g.set(
         "GetTradeSkillReagentInfo",
         lua.create_function(|lua, (index, reagent_index): (usize, usize)| {
@@ -246,7 +247,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(reagent) = recipe_at(&model, index)
                 .and_then(|r| reagent_index.checked_sub(1).and_then(|n| r.reagents.get(n)))
             else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(binding_abi::tuple(&[None; 4]));
             };
             Ok(MultiValue::from_vec(vec![
                 opt_str(lua, reagent.name.as_ref())?,

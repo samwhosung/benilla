@@ -870,7 +870,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .and_then(|i| model.worldmap.landmarks.get(i).cloned())
             };
             let Some(l) = landmark else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                // `0x4a88b3`: nil, nil, 0, 0, 0.
+                return Ok(super::binding_abi::tuple(&[
+                    None,
+                    None,
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                ]));
             };
             let description = match l.description.is_empty() {
                 true => Value::Nil,
@@ -908,7 +915,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .and_then(|i| revealed_overlays(&model.worldmap).get(i).cloned().cloned())
             };
             let Some(o) = overlay else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                // `0x4a8b53`: nil, then six 0.
+                return Ok(super::binding_abi::tuple(&[
+                    None,
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                    Some(0),
+                ]));
             };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&o.texture)?),

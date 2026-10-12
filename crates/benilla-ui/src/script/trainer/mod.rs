@@ -437,16 +437,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTrainerServiceInfo(index) → name, subText, serviceType, isExpanded; one nil past the end.
+    // GetTrainerServiceInfo(index) → name, subText, serviceType, isExpanded. Past the end the three
+    // strings are nil and the fourth is 1 (`0x4d8e42`: `0x4d8c30` answers 0 for a row that is no
+    // header, which pushes 1); a service row answers 1 there too, a header 1 when it is expanded.
     g.set(
         "GetTrainerServiceInfo",
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let miss = || binding_abi::tuple(&[None, None, None, Some(1)]);
             let Some(n) = index.checked_sub(1) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(miss());
             };
             let Some(row) = rows(&model).0.get(n).copied() else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(miss());
             };
             let t = model
                 .trainer
@@ -469,7 +472,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         opt_str(lua, s.name.as_ref())?,
                         opt_str(lua, s.subtext.as_ref())?,
                         Value::String(lua.create_string(s.category.era_str())?),
-                        Value::Nil,
+                        Value::Integer(1),
                     ]))
                 }
             }
@@ -546,8 +549,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetTrainerServiceSkillReq",
         lua.create_function(|lua, index: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            // No skill requirement, or no such row: nil, 0, 1 (`0x4d95bc`).
             let Some(req) = service(&model, index).and_then(|s| s.skill_req.as_ref()) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(binding_abi::tuple(&[None, Some(0), Some(1)]));
             };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&req.name)?),
@@ -572,7 +576,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(req) = service(&model, index)
                 .and_then(|s| i.checked_sub(1).and_then(|n| s.ability_reqs.get(n)))
             else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                // `0x4d98b5`: nil, 1.
+                return Ok(binding_abi::tuple(&[None, Some(1)]));
             };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&req.name)?),
@@ -581,10 +586,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // GetTrainerServiceStepReq(index) → step, met: always nil, as the wire carries no step data.
+    // GetTrainerServiceStepReq(index) → step, met: nil, 1, as the wire carries no step data. That
+    // is the reference's tuple for a row with no step spell and for a miss (`0x4d9afc`).
     g.set(
         "GetTrainerServiceStepReq",
-        lua.create_function(|_, _index: usize| Ok(Value::Nil))?,
+        lua.create_function(|_, _index: usize| Ok(binding_abi::tuple(&[None, Some(1)])))?,
     )?;
 
     g.set(

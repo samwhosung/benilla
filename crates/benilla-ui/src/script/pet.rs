@@ -285,13 +285,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // An out-of-range index answers a single nil, which the Lua reads as an empty slot.
+    // An out-of-range index answers seven nils (`0x4bdf3e`), which the Lua reads as an empty slot.
     g.set(
         "GetPetActionInfo",
         lua.create_function(move |lua, i: u32| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(slot) = slot_at(&model, i) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(super::binding_abi::tuple(&[None; 7]));
             };
             let v = &slot.view;
             let text = |s: &Option<String>| match s {

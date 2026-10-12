@@ -126,13 +126,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `texture` is nil: the stock frame never reads it. Out of range answers a single nil.
+    // `texture` is nil: the stock frame never reads it. Out of range answers nil, nil, 0, nil
+    // (`0x4f3132`).
     g.set(
         "GetTalentTabInfo",
         lua.create_function(|lua, i: usize| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(tab) = i.checked_sub(1).and_then(|n| model.talents.tabs.get(n)) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                return Ok(super::binding_abi::tuple(&[None, None, Some(0), None]));
             };
             Ok(MultiValue::from_vec(vec![
                 Value::String(lua.create_string(&tab.name)?),
@@ -160,7 +161,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (tab, i): (usize, usize)| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let Some(t) = talent_at(&model, tab, i) else {
-                return Ok(MultiValue::from_vec(vec![Value::Nil]));
+                // `0x4f3454`: nil, nil, 1, 1, 0, 0, nil, nil.
+                return Ok(super::binding_abi::tuple(&[
+                    None,
+                    None,
+                    Some(1),
+                    Some(1),
+                    Some(0),
+                    Some(0),
+                    None,
+                    None,
+                ]));
             };
             let texture = match &t.texture {
                 Some(tex) => Value::String(lua.create_string(tex)?),
