@@ -1764,12 +1764,13 @@ mod tests {
             ..crate::char_select::test_character(1, "Boo")
         };
         let set = |app: &mut App, look: Option<GlueLook>, show: bool| {
-            let mut p = app.world_mut().resource_mut::<GluePreview>();
-            p.look = look;
-            if show {
-                p.shown += 1;
+            {
+                let mut p = app.world_mut().resource_mut::<GluePreview>();
+                p.look = look;
+                if show {
+                    p.shown += 1;
+                }
             }
-            drop(p);
             app.update();
             *app.world().resource::<GlueFfx>()
         };
