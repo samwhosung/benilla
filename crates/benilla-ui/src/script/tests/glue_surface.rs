@@ -359,7 +359,8 @@ fn glue_events_register_by_the_glue_table() {
     );
 }
 
-/// The in-game VM keeps its by-name registry: an in-game event registers and fires there.
+/// The in-game VM registers by its own event table (`0x48feab`): an in-game event registers and
+/// fires there.
 #[test]
 fn the_in_game_vm_keeps_its_events() {
     let mut s = UiScript::new().unwrap();

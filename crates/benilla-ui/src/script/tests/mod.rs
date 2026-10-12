@@ -188,13 +188,13 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_none_leaves_the_host_ch
     s.set_screen_size(1024.0, 768.0);
     s.run(
         "local f = CreateFrame('Frame') \
-         f:RegisterEvent('ERROR_PROBE') \
+         f:RegisterEvent('PLAYER_ALIVE') \
          f:SetScript('OnEvent', function() error('boom from a handler') end)",
     )
     .unwrap();
 
     // With no handler set, as before FrameXML sets one, the dispatch adds nothing.
-    s.fire_event("ERROR_PROBE", vec![]);
+    s.fire_event("PLAYER_ALIVE", vec![]);
     s.dispatch_script_errors_to_handler();
     let errors = s.take_errors();
     assert_eq!(
@@ -206,7 +206,7 @@ fn a_chosen_error_handler_hears_engine_caught_errors_and_none_leaves_the_host_ch
     // A chosen handler gets the message, and the host channel still records it.
     s.run("caught = {} seterrorhandler(function(msg) table.insert(caught, msg) end)")
         .unwrap();
-    s.fire_event("ERROR_PROBE", vec![]);
+    s.fire_event("PLAYER_ALIVE", vec![]);
     s.dispatch_script_errors_to_handler();
     assert!(
         s.eval::<String>("return caught[1]")
@@ -257,7 +257,7 @@ fn the_error_handler_receives_the_bare_lua_message() {
     s.run(
         "caught = {} seterrorhandler(function(m) table.insert(caught, m) end) \
          local f = CreateFrame('Frame') \
-         f:RegisterEvent('ERROR_PROBE') \
+         f:RegisterEvent('PLAYER_ALIVE') \
          f:SetScript('OnEvent', function() this:NoSuchMethod() end) \
          local b = CreateFrame('Button') \
          b:SetScript('OnClick', function() local t = nil; t.x = 1 end) \
@@ -267,7 +267,7 @@ fn the_error_handler_receives_the_bare_lua_message() {
          c:Click()",
     )
     .unwrap();
-    s.fire_event("ERROR_PROBE", vec![]);
+    s.fire_event("PLAYER_ALIVE", vec![]);
     s.dispatch_script_errors_to_handler();
     let caught: Vec<String> = s.eval("return caught").unwrap();
     assert!(caught.len() >= 3, "{caught:?}");
@@ -316,11 +316,11 @@ fn an_error_handler_that_errors_does_not_recurse() {
     s.run(
         "seterrorhandler(function() error('the handler is broken too') end) \
          local f = CreateFrame('Frame') \
-         f:RegisterEvent('ERROR_PROBE') \
+         f:RegisterEvent('PLAYER_ALIVE') \
          f:SetScript('OnEvent', function() error('original fault') end)",
     )
     .unwrap();
-    s.fire_event("ERROR_PROBE", vec![]);
+    s.fire_event("PLAYER_ALIVE", vec![]);
     s.dispatch_script_errors_to_handler();
     let errors = s.take_errors();
     assert!(

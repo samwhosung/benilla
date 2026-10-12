@@ -57,21 +57,45 @@ pub const GLUE_EVENTS: [&str; 26] = [
     "PLAYER_ENTER_PIN",
 ];
 
+/// The in-game event table: the 549-slot name array `UI_Init` loads (`0x703d90` at `0x48feab`),
+/// `reference/1.12-event-catalog.tsv`. The 130 slots the client never writes stay nameless, and
+/// `0x703d90` skips a null name (`0x703e0c`), so the 419 names here are all it holds.
+const IN_GAME_EVENT_TABLE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../reference/1.12-event-catalog.tsv"
+));
+
+/// The in-game table's distinct names, in id order.
+pub(crate) fn in_game_events() -> &'static [&'static str] {
+    static NAMES: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+        let mut names: Vec<&'static str> = Vec::new();
+        for line in IN_GAME_EVENT_TABLE.lines() {
+            // `id<TAB>NAME`; a name two slots share (`UNIT_PET`) is one event to a name match.
+            let Some((_, name)) = line.split_once('\t') else {
+                continue;
+            };
+            if !line.starts_with('#') && !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    });
+    &NAMES
+}
+
 impl VmKind {
     /// The event table's own spelling of `name` for `RegisterEvent`/`UnregisterEvent` (`0x702140`,
     /// `0x702280`), or `None` for a name the table lacks, which registers nothing.
     ///
-    /// The in-game VM answers every name as given: benilla's in-game events register by name and
-    /// carry no table, so a name off the reference's table registers and never fires, and only the
-    /// exact spelling matches.
-    pub(crate) fn event_key(self, name: &str) -> Option<&str> {
-        match self {
-            VmKind::InGame => Some(name),
-            VmKind::Glue => GLUE_EVENTS
-                .iter()
-                .copied()
-                .find(|e| e.eq_ignore_ascii_case(name)),
-        }
+    /// The reference compares the name with every table entry's, ASCII case folded (`0x64a4c0` →
+    /// `0x414310`), and a miss returns without an error. A name two slots share registers on both,
+    /// which a name-keyed listener list is one entry for.
+    pub(crate) fn event_key(self, name: &str) -> Option<&'static str> {
+        let table: &'static [&'static str] = match self {
+            VmKind::InGame => in_game_events(),
+            VmKind::Glue => &GLUE_EVENTS,
+        };
+        table.iter().copied().find(|e| e.eq_ignore_ascii_case(name))
     }
 
     /// Whether the host may fire `event` into this VM. The reference fires by id

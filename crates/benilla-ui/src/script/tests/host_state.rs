@@ -261,11 +261,11 @@ fn the_engine_reads_the_handler_slot_not_the_geterrorhandler_global() {
          seterrorhandler(function(m) table.insert(Heard, m) end) \
          geterrorhandler = function() return function(m) table.insert(Decoy, m) end end \
          local f = CreateFrame('Frame') \
-         f:RegisterEvent('ERROR_PROBE') \
+         f:RegisterEvent('PLAYER_ALIVE') \
          f:SetScript('OnEvent', function() error('slot probe') end)",
     )
     .unwrap();
-    s.fire_event("ERROR_PROBE", vec![]);
+    s.fire_event("PLAYER_ALIVE", vec![]);
     s.dispatch_script_errors_to_handler();
     assert_eq!(
         s.eval::<(i64, i64)>("return table.getn(Heard), table.getn(Decoy)")
