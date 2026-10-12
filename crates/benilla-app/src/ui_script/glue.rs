@@ -8,16 +8,22 @@
 //! (`0x46abb0`) and the 26 glue events (`0x46a88f`), opens `Logs\GlueXML.log` (`0x46a8ce`), then
 //! checks `GlueXML.toc`'s signature (`0x46a90b`). Only a valid one (`0x6f10f0` answering 3) loads
 //! the toc through the shared runner (`0x6edb90`, at `0x46a9b3`), and only when the loaded files'
-//! MD5 matches the signature's (`0x46a9d3`) does `FRAMES_LOADED` fire (`0x46aa34`). A missing,
-//! corrupt or mismatched signature logs its line (`0x836fb8`, `0x836f98`, `0x836f78`) and quits
-//! with error 9 (`0x401560`: the exit code, then the quit post `ForceQuit` makes with code 0).
-//! benilla checks no signature, as for `FrameXML.toc` (`0x48ff4d`): the chain's toc always loads
-//! and `FRAMES_LOADED` follows.
+//! MD5 matches the signature's (`0x46a9d3`) does `FRAMES_LOADED` fire (`0x46aa34`). Signature
+//! results 0–2 (the table at `0x46aaac`) log their line, missing, corrupt or modified (`0x836fb8`,
+//! `0x836f98`, `0x836f78`), and load nothing; an MD5 mismatch logs no line, its frames already
+//! built, and skips `FRAMES_LOADED`. Either way the client quits with
+//! error 9 (`0x401560`: the exit code, then the quit post `ForceQuit` makes with code 0). benilla
+//! checks no signature, as for `FrameXML.toc` (`0x48ff4d`): the chain's toc always loads and
+//! `FRAMES_LOADED` follows.
 //!
-//! The screen comes after the build: at startup `0x402b65` fires `SET_GLUE_SCREEN` with `"movie"`
-//! when the `movie` CVar is 1 (clearing it), else `"login"`; back from the world `0x402090` fires
-//! it with `"charselect"` or `"login"`. Deviation: the boot screen is always `"login"`, since
-//! benilla plays no movie and registers no `movie` CVar.
+//! The screen comes after the build: at startup the reference fires `SET_GLUE_SCREEN` with
+//! `"movie"` while the `movie` CVar is 1 (clearing it), else `"login"` (`0x402b3b`–`0x402b65`);
+//! back from the world `0x402090` fires it with `"charselect"` or `"login"`. benilla plays no movie
+//! yet (#968), so its boot screen is `"login"`.
+//!
+//! The screens' `ModelFFX` panes (P4) must drive the glue booth's scene rig, the scene M2's own
+//! point lights (`portrait::glue_booth::scene_rig`) and the `FfxGlow::GLUE_SCENE` pass, never the
+//! `ui_models` tile path, where every lit batch draws black.
 
 use bevy::prelude::*;
 
