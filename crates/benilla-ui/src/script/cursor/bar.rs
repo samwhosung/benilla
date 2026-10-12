@@ -24,8 +24,8 @@ fn pack(kind: u8, action: u32) -> u32 {
 /// (`0x4e6130`, and `0x4e62e0`'s hop): an item action the row grab's mode 7 (`0x4e6215`,
 /// `0x4e6450`), a spell the spell setter's mode 3 (`0x4e6254`, `0x4e6494`), a macro the macro
 /// setter's mode 8 (`0x4e629d`, `0x4e64e2`). `None` is an empty slot; `Some(None)` an action no
-/// setter takes, a macro gone from the list (`0x4e6279`) or an unknown kind (`0x4e626e`), which
-/// returns before any clear.
+/// setter takes, a macro gone from the list (`0x4e6279`) or an unknown kind (`0x4e626e`): a
+/// pickup then sets nothing, and a place clears the cursor as for an empty slot.
 fn lift(model: &Model, id: u32) -> Option<Option<CursorPayload>> {
     let slot = model.actions.get(&id)?;
     Some(match slot.kind {
@@ -101,10 +101,11 @@ pub(super) fn pickup_action(lua: &Lua, id: u32) -> bool {
 /// slot's action hops onto the cursor with `id` as its source, through its setter ([`lift`]),
 /// whose inner `ClearCursor(1,1)` drops the held payload, hiding the grid, before the setter shows
 /// it again (`0x4e6450`, `0x4e6494`, `0x4e64e2`); an empty slot's place is that clear alone
-/// (`0x4e650f`), and an occupant no setter takes leaves the held payload as it was. An item stays
-/// in its bag, since a bar item is a reference, not a move. The cursor goes first and the slot
-/// after, as `0x4e62e0` writes the slot past the setter, so the cursor's events read the slot as
-/// it was. Returns whether to repaint.
+/// (`0x4e650f`), as is the place over an occupant no setter takes, an unknown kind or a macro
+/// gone from the list (`0x4e64b3`, `0x4e64be`; `0x4e6694`, `0x4e66a0`; `0x4e67f3`, `0x4e67fe`).
+/// An item stays in its bag, since a bar item is a reference, not a move. The cursor goes first
+/// and the slot after, as `0x4e62e0` writes the slot past the setter, so the cursor's events read
+/// the slot as it was. Returns whether to repaint.
 pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
     let (placed, displaced) = match verb(lua, |model| plan_place(model, id)) {
         Place::Refused => return false,
@@ -121,8 +122,7 @@ pub(crate) fn place_action(lua: &Lua, id: u32) -> bool {
         Some(Some(displaced)) => {
             set_cursor(lua, true, |_| Some(displaced));
         }
-        Some(None) => {}
-        None => verb(lua, clear_cursor),
+        Some(None) | None => verb(lua, clear_cursor),
     }
     verb(lua, |model| {
         model.actions.insert(
@@ -564,10 +564,10 @@ mod tests {
         );
     }
 
-    /// A bar spell lifts as the spell setter's mode 3 (`0x4e6254`), so `CursorHasSpell` (`0x489600`)
-    /// answers 1 and `PickupSpell`'s held check (`0x4b3285`) sees it; a bar macro lifts as the
-    /// macro setter's mode 8 (`0x4e629d`), and one gone from the list lifts nothing while its slot
-    /// still clears (`0x4e6279`, `0x4e62ba`).
+    /// A bar spell lifts as the spell setter's mode 3 (`0x4e6254`), so `CursorHasSpell`
+    /// (`0x489600`) answers 1 and `PickupSpell`'s held check (`0x4b3285`) sees it; a bar macro
+    /// lifts as the macro setter's mode 8 (`0x4e629d`), and one gone from the list lifts nothing
+    /// while its slot still clears (`0x4e6279`, `0x4e62ba`).
     #[test]
     fn bar_spells_and_macros_lift_with_their_setters() {
         let mut s = UiScript::new().unwrap();
@@ -667,5 +667,26 @@ mod tests {
                 "slot {slot}: nothing written"
             );
         }
+    }
+
+    /// A place over an occupant no setter takes, here a macro gone from the list, clears the
+    /// cursor before the write, as over an empty slot (`0x4e64be` to `0x4e6508`).
+    #[test]
+    fn a_place_over_a_dangling_macro_clears_the_cursor() {
+        let mut s = UiScript::new().unwrap();
+        s.set_action(
+            3,
+            Some(action_slot("Interface\\Icons\\Ability_Ambush", 0x40, 9)),
+        );
+        s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
+            spell_id: 133,
+            texture: None,
+            passive: false,
+        }));
+        crate::script::tick::heard::listen(&s, &["CURSOR_UPDATE"], None);
+        assert!(place_action(&s.lua, 3));
+        assert!(s.cursor_payload().is_none(), "the spell is dropped");
+        assert_eq!(crate::script::tick::heard::take(&s), ["CURSOR_UPDATE"]);
+        assert_eq!(s.take_action_sets(), vec![(3, 133)]);
     }
 }
