@@ -118,10 +118,24 @@ pub(crate) fn has_cursor_control(model: &Model) -> bool {
 
 /// `0x5e1840`: `SetCursorItem(1, …)` puts the item on the cursor, its inner clear dropping and
 /// unlocking whatever is held (`0x494bb6`), then `AutoEquipCursorItem(suppress)`. The item is not
-/// locked. A refused set (no control, not on a taxi) clears and sets nothing, and
+/// locked. An item in the trade window is refused first with its line. A refused set (no control, not on a taxi) clears and sets nothing, and
 /// `AutoEquipCursorItem` runs all the same (`0x5e18c9` falls through to `0x5e18d5` with no test),
 /// on whatever the cursor holds.
 pub(crate) fn auto_equip_from(lua: &Lua, item: CursorItem, suppress: bool) -> AutoEquip {
+    // An item offered in the trade window shows `ERR_EQUIP_TRADE_ITEM` and ends the verb before
+    // the set (`0x5e1897`-`0x5e18b3`, `0x4bfd20`).
+    {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if model
+            .trade_offered
+            .iter()
+            .flatten()
+            .any(|offered| offered.guid == item.guid)
+        {
+            model.ui_errors.push("ERR_EQUIP_TRADE_ITEM");
+            return AutoEquip::None;
+        }
+    }
     let control = has_cursor_control(&lua.app_data_ref::<Model>().expect("model app_data"));
     if control {
         set_cursor(lua, true, |_| Some(CursorPayload::Item(item)));
@@ -415,5 +429,29 @@ mod tests {
         );
         assert!(s.cursor_item().is_none());
         assert!(!s.item_locked(0x11), "SetCursorItem's clear unlocked it");
+    }
+
+    /// `0x5e1840` refuses an item offered in the trade window (`0x4bfd20`) with
+    /// `ERR_EQUIP_TRADE_ITEM` before it touches the cursor: a held item stays held, nothing
+    /// queues.
+    #[test]
+    fn an_item_in_the_trade_window_is_refused_before_the_set() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(bag(&[(1, 0x11, 4), (2, 0x12, 4)])));
+        // Offer the second item, then hold the first.
+        s.run("PickupContainerItem(0, 2) ClickTradeButton(1) ClearCursor()")
+            .unwrap();
+        s.unlock_item(0x12);
+        s.run("PickupContainerItem(0, 1)").unwrap();
+
+        assert_eq!(s.auto_equip_guid(0x12, false), AutoEquip::None);
+        assert_eq!(s.take_ui_errors(), vec!["ERR_EQUIP_TRADE_ITEM"]);
+        assert_eq!(s.cursor_item().map(|i| i.guid), Some(0x11), "still held");
+        assert!(s.item_locked(0x11), "and still locked");
+        // An item not offered goes through.
+        assert!(matches!(
+            s.auto_equip_guid(0x11, false),
+            AutoEquip::Sent { .. }
+        ));
     }
 }

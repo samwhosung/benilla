@@ -429,15 +429,21 @@ fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem) {
     let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
     let step = cursor::equip::auto_equip_from(lua, item, false);
     super::tick::verb(lua, |model| {
-        model
-            .script_calls
-            .push(super::ScriptCall::UseContainerItem(ContainerUse {
-                bag,
-                slot,
-                guid,
-                arm: UseArm::Item(UseFork::Equip),
-                asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
-            }));
+        // An item the verb refused (in the trade window) sends nothing, but still locks (`0x4fa418`).
+        if matches!(
+            step,
+            cursor::equip::AutoEquip::Sent { .. } | cursor::equip::AutoEquip::Asked { .. }
+        ) {
+            model
+                .script_calls
+                .push(super::ScriptCall::UseContainerItem(ContainerUse {
+                    bag,
+                    slot,
+                    guid,
+                    arm: UseArm::Item(UseFork::Equip),
+                    asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
+                }));
+        }
         if !projectile {
             cursor::lock_item(model, guid);
         }
