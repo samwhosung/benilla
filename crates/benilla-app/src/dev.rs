@@ -101,6 +101,10 @@ impl Plugin for DevProbesPlugin {
             if std::env::var("WOW_PROBE_LUA").is_ok() {
                 app.add_plugins(crate::capture::ProbeLuaPlugin);
             }
+            // `WOW_PROBE_GLUE_LUA`: runs a chunk once in the stock glue VM, then one shot.
+            if std::env::var("WOW_PROBE_GLUE_LUA").is_ok() {
+                app.add_plugins(crate::capture::ProbeGlueLuaPlugin);
+            }
             // `WOW_PROBE_DRAG="A>B"`: drags frame A onto B through the real pointer path.
             if std::env::var("WOW_PROBE_DRAG").is_ok() {
                 app.add_plugins(crate::capture::ProbeDragPlugin);

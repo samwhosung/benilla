@@ -73,6 +73,26 @@ pub(crate) const PROBE_VARS: &[ProbeVar] = &[
         wall_clock: true,
     },
     ProbeVar {
+        name: "WOW_PROBE_GLUE_LUA",
+        purpose: "\"<chunk>\" — under WOW_GLUE_STOCK=1, run a Lua chunk once in the stock glue VM (press the login screen's buttons headlessly)",
+        wall_clock: true,
+    },
+    ProbeVar {
+        name: "WOW_PROBE_GLUE_LUA_AT",
+        purpose: "<secs> — when the glue chunk runs (default 10)",
+        wall_clock: false,
+    },
+    ProbeVar {
+        name: "WOW_PROBE_GLUE_SHOT",
+        purpose: "<path> — one PNG after the glue chunk runs",
+        wall_clock: false,
+    },
+    ProbeVar {
+        name: "WOW_PROBE_GLUE_SHOT_AFTER",
+        purpose: "<secs> — how long after the glue chunk the shot is taken (default 1)",
+        wall_clock: false,
+    },
+    ProbeVar {
         name: "WOW_PROBE_LUA_AT",
         purpose: "<secs> — when the chunk runs after the first world entry (default 10)",
         wall_clock: false,
