@@ -156,89 +156,115 @@ fn trim_g(s: &str) -> &str {
 }
 
 /// Storm's `SStrToInt` (`0x64ac60`): an optional leading `-` (and no `+`), then the decimal digits
-/// up to the first other byte, with no whitespace skip; none is 0. `RemoveChatWindowChannel` and
-/// `LeaveChannelByName` key on it (`0x49e880`), and the `item:` link fields read it.
-///
-/// Deviation: an overflow saturates at `u32::MAX` where the reference wraps in 32 bits, because
-/// only a script can overflow it.
+/// up to the first other byte, with no whitespace skip; none is 0. The accumulator is a 32-bit
+/// register that wraps (`0x64ac98`-`0x64aca5`) and `neg` wraps too, so `"4294967297"` is 1.
+/// `RemoveChatWindowChannel` and `LeaveChannelByName` key on it (`0x49e880`), and the `item:` link
+/// fields and `SStrToFloat`'s exponent read it.
 pub(crate) fn s_str_to_int(s: &str) -> i64 {
     let b = s.as_bytes();
     let (neg, mut i) = match b.first() {
         Some(b'-') => (true, 1),
         _ => (false, 0),
     };
-    let mut n: i64 = 0;
+    let mut n: i32 = 0;
     while let Some(&c) = b.get(i) {
         if !c.is_ascii_digit() {
             break;
         }
-        n = n
-            .saturating_mul(10)
-            .saturating_add(i64::from(c - b'0'))
-            .min(i64::from(u32::MAX));
+        n = n.wrapping_mul(10).wrapping_add(i32::from(c - b'0'));
         i += 1;
     }
-    if neg {
-        -n
-    } else {
-        n
-    }
+    i64::from(if neg { n.wrapping_neg() } else { n })
 }
 
 /// Storm's `SStrToFloat` (`0x64aaa0`), which `EditBox:GetNumber` (`0x798790`) pushes: a prefix
-/// parse that stops at the first byte outside its grammar and skips no whitespace.
+/// parse that stops at the first byte outside its grammar and skips no whitespace, evaluated with
+/// the x87 at 53-bit precision (`_PC_53`), so every operation below rounds as an `f64` does.
 ///
-/// - an optional `-` (no `+`), then the integer digits, which may be none (`".5"`, `"-"`)
+/// - an optional `-` (no `+`)
+/// - the integer digits, which may be none (`".5"`, `"-"`), summed in chunks: a 32-bit register
+///   takes digits until it reaches `0x19999999` (`0x64ab19`), then `value = value * 10^n + chunk`
+///   (`0x64ab21`-`0x64ab48`) and a new chunk starts
 /// - a `.` is consumed whether or not a digit follows it (`0x64ab9f`: `esi` is advanced before the
-///   test), then any digits are the fraction, so `"5.e3"` is 5000
-/// - `e` or `E`, then an optional `+`, then `SStrToInt` ([`s_str_to_int`]) of what follows scales
-///   the value by `pow(10, exp)` (`0x64ac13`-`0x64ac40`), so `"1e"` is 1, `"1e+-2"` is 0.01, and
-///   `"0e999"` is `0 * inf`, NaN
+///   test), so `"5.e3"` is 5000; each fraction digit `d` at place `k` (0 for the first) then adds
+///   the table term `d * 10^-(k+1)` (`0x64abe4`, table `0xc52560` built at `0x64a680`; past place
+///   19 the same product is formed on the spot, `0x64abbb`-`0x64abda`), so `"0.12"` is
+///   `0.1 + 0.02` = 0.12000000000000001
+/// - `e` or `E`, an optional `+`, then [`s_str_to_int`] of what follows scales the value by
+///   `pow(10, exp)` (`0x64ac13`-`0x64ac40`): `"1e"` is 1, `"1e+-2"` is 0.01, and the wrapped
+///   exponent means `"1e4294967297"` is 10
 ///
-/// Deviation: the digits are converted correctly rounded where the reference accumulates them in
-/// x87 extended precision, so a text of more than 15 significant digits can differ in the last
-/// place.
+/// Deviation: `pow(10, n)` is the platform's, where the reference's (`0x73f940`, `fyl2x`) rounds
+/// its extended-precision steps at 53 bits, so a power or a fraction term can differ in the last
+/// place. The reference also keeps the product `value * 10^exp` in the x87's wider exponent range
+/// until it is stored, so an exponent past +-308 against a value that pulls it back in range
+/// (`"0.000...1e320"`) is reached here only by scaling in steps of 300 digits, which rounds more
+/// often; `"0e999"` is 0 as there, and only an exponent past +-4932 makes 0 * inf, NaN.
 pub(crate) fn s_str_to_float(s: &str) -> f64 {
     let b = s.as_bytes();
     let at = |i: usize| b.get(i).copied().unwrap_or(0);
-    let digits_from = |mut i: usize| {
-        let start = i;
+    let neg = at(0) == b'-';
+    let mut i = usize::from(neg);
+    let mut value = 0.0f64;
+    let (mut chunk, mut count) = (0u32, 0i32);
+    while at(i).is_ascii_digit() {
+        chunk = chunk * 10 + u32::from(at(i) - b'0');
+        count += 1;
+        i += 1;
+        if chunk >= 0x1999_9999 {
+            value = value * 10f64.powf(f64::from(count)) + f64::from(chunk);
+            (chunk, count) = (0, 0);
+        }
+    }
+    value = value * 10f64.powf(f64::from(count)) + f64::from(chunk);
+    if at(i) == b'.' {
+        i += 1;
+        let mut place = 1.0;
         while at(i).is_ascii_digit() {
+            value += f64::from(at(i) - b'0') * 10f64.powf(-place);
+            place += 1.0;
             i += 1;
         }
-        (start, i)
-    };
-    let neg = at(0) == b'-';
-    let (int_start, mut i) = digits_from(usize::from(neg));
-    let int_part = &s[int_start..i];
-    let mut frac_part = "";
-    if at(i) == b'.' {
-        let (start, end) = digits_from(i + 1);
-        frac_part = &s[start..end];
-        i = end;
     }
-    // Only ASCII digits are sliced, so `parse` cannot fail; an empty run reads as 0.
-    let mut value: f64 = format!(
-        "{}.{}",
-        if int_part.is_empty() { "0" } else { int_part },
-        if frac_part.is_empty() { "0" } else { frac_part }
-    )
-    .parse()
-    .unwrap_or(0.0);
     if matches!(at(i), b'e' | b'E') {
         i += 1;
         if at(i) == b'+' {
             i += 1;
         }
-        // `SStrToInt` wraps in 32 bits; either way the exponent is past any finite power.
-        let exp = s_str_to_int(&s[i..]).clamp(i64::from(i32::MIN), i64::from(i32::MAX));
-        value *= 10f64.powf(exp as f64);
+        value = scale_by_pow10(value, s_str_to_int(&s[i..]) as i32);
     }
     if neg {
         -value
     } else {
         value
     }
+}
+
+/// `value * pow(10, exp)` as the x87 forms it: the power keeps the extended exponent range until
+/// the product is stored as a double (see [`s_str_to_float`]).
+fn scale_by_pow10(value: f64, exp: i32) -> f64 {
+    let p = 10f64.powf(f64::from(exp));
+    if p.is_finite() && p != 0.0 {
+        return value * p;
+    }
+    if value == 0.0 || !value.is_finite() {
+        // 0 * a finite extended power is 0; the power overflows the extended range only past 4932.
+        return if exp > 4932 || !value.is_finite() {
+            value * p
+        } else {
+            value * 0.0
+        };
+    }
+    let mut v = value;
+    let mut left = exp;
+    while left.abs() > 300 {
+        v *= 10f64.powf(f64::from(300 * left.signum()));
+        left -= 300 * left.signum();
+        if v == 0.0 || v.is_infinite() {
+            return v;
+        }
+    }
+    v * 10f64.powf(f64::from(left))
 }
 
 /// `GetBoolOrDefault` (`0x6f1c10`, jump table `0x6f1ce8`), the reference's boolean argument
@@ -314,9 +340,7 @@ mod tests {
         Lua::new()
     }
 
-    /// `_ftol`'s low dword: chopped toward zero, wrapped to 32 bits, and 0 for whatever the qword
-    /// `fistp` cannot hold.
-    /// `SStrToInt` (`0x64ac60`): an optional `-`, digits, nothing skipped.
+    /// `SStrToInt` (`0x64ac60`): an optional `-`, digits, nothing skipped, a 32-bit wrap.
     #[test]
     fn s_str_to_int_is_the_references_atoi() {
         assert_eq!(s_str_to_int("2589"), 2589);
@@ -327,6 +351,13 @@ mod tests {
         assert_eq!(s_str_to_int("+12"), 0, "no unary plus");
         assert_eq!(s_str_to_int("12abc"), 12, "stops at the first non-digit");
         assert_eq!(s_str_to_int("-"), 0);
+        assert_eq!(
+            s_str_to_int("2147483648"),
+            -2_147_483_648,
+            "the register wraps"
+        );
+        assert_eq!(s_str_to_int("4294967297"), 1);
+        assert_eq!(s_str_to_int("-4294967297"), -1);
     }
 
     /// `SStrToFloat` (`0x64aaa0`): the grammar's quirks, each read off the bytes.
@@ -356,14 +387,30 @@ mod tests {
         ] {
             assert_eq!(s_str_to_float(text), want, "{text:?}");
         }
-        assert!(
-            s_str_to_float("0e999").is_nan(),
-            "0 * pow(10, 999) = 0 * inf"
+        // The fraction is a sum of per-digit table terms, not one correctly rounded parse.
+        assert_eq!(s_str_to_float("0.12"), 0.1 + 0.02);
+        assert_ne!(s_str_to_float("0.12"), 0.12);
+        assert_eq!(s_str_to_float("1.5"), 1.5);
+        // The exponent is `SStrToInt`'s 32-bit wrap.
+        assert_eq!(s_str_to_float("1e4294967297"), 10.0);
+        // The integer part sums in chunks of up to ten digits.
+        assert_eq!(
+            s_str_to_float("12345678901234567890"),
+            (1_234_567_890.0 * 1e10) + 1_234_567_890.0
         );
+        // The product keeps the x87's wide exponent until it is stored.
+        assert_eq!(s_str_to_float("0e999"), 0.0);
+        assert!(
+            s_str_to_float("0e5000").is_nan(),
+            "0 * inf past the extended range"
+        );
+        assert_eq!(s_str_to_float("1e-999"), 0.0);
         assert_eq!(s_str_to_float("1e999"), f64::INFINITY);
         assert!(s_str_to_float("-").is_sign_negative(), "'-' alone is -0");
     }
 
+    /// `_ftol`'s low dword: chopped toward zero, wrapped to 32 bits, and 0 for whatever the qword
+    /// `fistp` cannot hold.
     #[test]
     fn ftol_keeps_the_low_dword_of_the_x87_qword() {
         assert_eq!(ftol(-2.9), -2);

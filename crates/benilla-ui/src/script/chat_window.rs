@@ -581,7 +581,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // RemoveChatWindowChannel(id, name | n) (`0x4a1260`): a numeric key names the joined channel
-    // in slot n, and an empty slot removes nothing; the key then resolves to its DBC Shortcut as
+    // in slot n, and an empty slot or a negative number removes nothing; the key then resolves to its DBC Shortcut as
     // above, and the entry of that name is freed.
     lua.globals().set(
         "RemoveChatWindowChannel",
@@ -592,7 +592,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let key = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let n = crate::script::binding_abi::s_str_to_int(&key);
-                let key = if n > 0 {
+                // `0x49e880`: a non-zero `SStrToInt` names a joined slot, and `0x49be50` answers
+                // NULL below slot 1, so `"-1"` removes nothing (`0x4a12c9`); a zero keeps the
+                // string raw, untrimmed, for the case-insensitive compares (`0x4a1315`,
+                // `0x4a1359`).
+                let key = if n != 0 {
                     match usize::try_from(n)
                         .ok()
                         .and_then(|n| model.joined_channels.get(n - 1))
@@ -602,7 +606,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         None => return Ok(()),
                     }
                 } else {
-                    key.trim().to_string()
+                    key
                 };
                 match model
                     .zone_channel_catalog
@@ -1039,9 +1043,34 @@ mod record_tests {
                 "{key:?} is a name, not slot 1"
             );
         }
+        // A negative number is a slot too (non-zero, `0x49e889`) and no slot is below 1.
+        s.run("AddChatWindowChannel(1, '-1')").unwrap();
+        s.run("RemoveChatWindowChannel(1, '-1')").unwrap();
+        assert_eq!(
+            s.chat_window_looks()[0].channels,
+            vec![("MyChan".to_string(), 0), ("-1".to_string(), 0)],
+            "'-1' removes nothing"
+        );
+        // A name is raw: the blanks around it are part of it.
+        s.set_chat_window_looks([(
+            4,
+            ChatWindowLook {
+                channels: vec![(" pad ".into(), 0)],
+                ..Default::default()
+            },
+        )]);
+        s.run("RemoveChatWindowChannel(5, 'pad')").unwrap();
+        assert_eq!(
+            s.chat_window_looks()[4].channels.len(),
+            1,
+            "'pad' is not ' pad '"
+        );
+        s.run("RemoveChatWindowChannel(5, ' pad ')").unwrap();
+        assert!(s.chat_window_looks()[4].channels.is_empty());
         s.run("RemoveChatWindowChannel(1, '1abc')").unwrap();
-        assert!(
-            s.chat_window_looks()[0].channels.is_empty(),
+        assert_eq!(
+            s.chat_window_looks()[0].channels,
+            vec![("-1".to_string(), 0)],
             "'1abc' reads 1 and frees the channel joined in slot 1"
         );
     }
