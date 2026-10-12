@@ -273,7 +273,10 @@ fn stage_text(strings: &GlueStrings, stage: LoginStage) -> &str {
     match stage {
         LoginStage::Connecting => strings.text("LOGIN_STATE_CONNECTING", "Connecting"),
         LoginStage::Authenticating => strings.text("LOGIN_STATE_AUTHENTICATING", "Authenticating"),
-        LoginStage::Handshaking => strings.text("LOGIN_STATE_HANDSHAKING", "Handshaking"),
+        // The native dialog keeps the handshake's text through the world socket's connect.
+        LoginStage::Handshaking | LoginStage::WorldConnected => {
+            strings.text("LOGIN_STATE_HANDSHAKING", "Handshaking")
+        }
     }
 }
 
@@ -297,7 +300,9 @@ fn fail_text(
     }
     let authored = match refusal {
         Some(LoginRefusal::World(code)) => world_refusal_text(strings, code),
-        Some(LoginRefusal::Logon(code)) => logon_refusal_text(strings, Some(code)),
+        Some(LoginRefusal::Logon(code) | LoginRefusal::LogonProof(code)) => {
+            logon_refusal_text(strings, Some(code))
+        }
         None => logon_refusal_text(strings, None),
     };
     without_dead_url(authored).into_owned()

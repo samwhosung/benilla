@@ -43,7 +43,24 @@ const LOCALE_EN_US: u32 = 0x656e_5553; // "enUS"
 pub struct AuthReject {
     /// The grunt result byte (`WOW_FAIL_*`).
     pub code: u8,
+    /// Which reply carried it: the reference handles a byte by its reply, swallowing a proof's
+    /// `0x0A` (`0x5bada2`) where a challenge's reaches the patch state.
+    pub reply: LogonReply,
 }
+
+/// The two realmd replies a logon reads a result byte from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogonReply {
+    /// `CMD_AUTH_LOGON_CHALLENGE` (`Grunt::OnLogonChallenge`, `0x5baa20`).
+    Challenge,
+    /// `CMD_AUTH_LOGON_PROOF` (`Grunt::OnLogonProof`, `0x5bacb0`).
+    Proof,
+}
+
+/// `WOW_SUCCESS_SURVEY`: a success. Both reply handlers take it down their failure branch
+/// (`0x5baa77`, `0x5bace5` test the byte for zero), reading nothing after it, and
+/// `Logon::OnAuthResult` sends it down 0x00's success arm (`0x5b2cd4` `cmp eax,0xe; je 0x5b2e16`).
+pub const SUCCESS_SURVEY: u8 = 0x0e;
 
 impl std::fmt::Display for AuthReject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -93,16 +110,24 @@ pub fn write_logon_challenge(
     w.write_all(&packet)
 }
 
-/// Read the challenge reply; a non-success result is an [`AuthReject`].
-pub fn read_challenge_reply(r: &mut impl Read) -> Result<ChallengeReply> {
+/// Read the challenge reply: the SRP6 inputs, `None` for [`SUCCESS_SURVEY`] (a success that
+/// carries none), or an [`AuthReject`].
+pub fn read_challenge_reply(r: &mut impl Read) -> Result<Option<ChallengeReply>> {
     let opcode = read_u8(r)?;
     if opcode != CMD_AUTH_LOGON_CHALLENGE {
         bail!("expected CMD_AUTH_LOGON_CHALLENGE (0x00), got {opcode:#x}");
     }
     let _protocol_version = read_u8(r)?;
     let result = read_u8(r)?;
+    if result == SUCCESS_SURVEY {
+        return Ok(None);
+    }
     if result != 0 {
-        return Err(AuthReject { code: result }.into());
+        return Err(AuthReject {
+            code: result,
+            reply: LogonReply::Challenge,
+        }
+        .into());
     }
     let server_public_key = read_array::<32>(r)?;
     let generator_len = read_u8(r)?;
@@ -129,13 +154,13 @@ pub fn read_challenge_reply(r: &mut impl Read) -> Result<ChallengeReply> {
         let _pin_grid_seed = read_u32_le(r)?;
         let _pin_salt = read_array::<16>(r)?;
     }
-    Ok(ChallengeReply {
+    Ok(Some(ChallengeReply {
         server_public_key,
         generator,
         large_safe_prime,
         salt,
         crc_salt,
-    })
+    }))
 }
 
 // --- the version (client-integrity) proof --------------------------------------------------------
@@ -209,20 +234,28 @@ pub fn write_logon_proof(
     w.write_all(&packet)
 }
 
-/// Read the proof reply: the server's `M2`, or an [`AuthReject`].
-pub fn read_proof_reply(r: &mut impl Read) -> Result<[u8; 20]> {
+/// Read the proof reply: the server's `M2`, `None` for [`SUCCESS_SURVEY`] (a success with no `M2`
+/// read), or an [`AuthReject`].
+pub fn read_proof_reply(r: &mut impl Read) -> Result<Option<[u8; 20]>> {
     let opcode = read_u8(r)?;
     if opcode != CMD_AUTH_LOGON_PROOF {
         bail!("expected CMD_AUTH_LOGON_PROOF (0x01), got {opcode:#x}");
     }
     let result = read_u8(r)?;
+    if result == SUCCESS_SURVEY {
+        return Ok(None);
+    }
     if result != 0 {
         // A wrong password fails here, where `M1` does not verify: vmangos answers 0x04.
-        return Err(AuthReject { code: result }.into());
+        return Err(AuthReject {
+            code: result,
+            reply: LogonReply::Proof,
+        }
+        .into());
     }
     let server_proof = read_array::<20>(r)?;
     let _hardware_survey_id = read_u32_le(r)?;
-    Ok(server_proof)
+    Ok(Some(server_proof))
 }
 
 /// Send `CMD_REALM_LIST_Client` (opcode + a `u32` padding of 0).

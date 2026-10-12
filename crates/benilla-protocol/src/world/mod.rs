@@ -19,7 +19,7 @@ mod session;
 mod writer;
 
 pub use reader::WorldReader;
-pub use session::{WardenRequired, WorldAuthReject, WorldSession};
+pub use session::{WardenRequired, WorldAuthReject, WorldConnectEvent, WorldSession};
 pub use writer::WorldWriter;
 
 /// The stock `mangosd` port, for probes that dial the world server without a realm list.

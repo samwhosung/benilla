@@ -19,12 +19,15 @@
 //!    `CANCEL` with its `LOGIN_STATE_*` text (`0x836b40`). Authenticated (login state 4) sets the
 //!    final latch (`0x46b12c`), on which the state goes 0 then 2 (`0x46ba8d`, `0x46b1f0`); a
 //!    failure cancels the logon and goes to 0 (`0x46bbbf`).
-//! 3. State 2, the world connect, fetches the realm list and dials the realm `realmName` names
-//!    (`0x5aab20`), with no dialog of its own. In the queue its status (`AUTH_WAIT_QUEUE`) re-texts
-//!    the dialog every frame with the button relabelled `CHANGE_REALM` (`0x46bdfc`). A success
-//!    shows the status text and puts `charselect` up (`0x46c00e`-`0x46c01e`); a failure opens
-//!    `OKAY` with the status's text (`0x85cae8`), or `OKAY_WITH_URL` with the URL key for the five
-//!    codes of `0x803740` (`0x46bf63`), and goes to 0.
+//! 3. State 2, the world connect, runs `ClientServices` operations: the connect (`0x5aab20`,
+//!    which fetches the realm list and dials the realm `realmName` names), then the authentication
+//!    (`0x5aaba0`, begun at `0x46bfd9` once the connect completes `RESPONSE_CONNECTED`). Every frame
+//!    re-texts the dialog with the operation's status text (`0x46be8b`), empty while it runs
+//!    (`0x5aaa35`, which `GlueDialog_OnEvent` ignores), so each completion shows; in the queue
+//!    (`AUTH_WAIT_QUEUE`) the text is the queue's, with the button relabelled `CHANGE_REALM`
+//!    (`0x46bdfc`). The authentication's success puts `charselect` up (`0x46c00e`-`0x46c01e`); a
+//!    failure opens `OKAY` with the status's text (`0x85cae8`), or `OKAY_WITH_URL` with the URL key
+//!    for the five codes of `0x803740` (`0x46bf63`), and goes to 0.
 //!
 //! `StatusDialogClick` (`0x46b720`) is the dialog button's verb, a jump on the state: state 1
 //! cancels the logon (`0x5b3320`), state 2 cancels the world operation (`RESPONSE_CANCELLED`).
@@ -218,30 +221,90 @@ const RESULT_DISCONNECTED: i32 = 0x14;
 /// World statuses.
 const STATUS_RESPONSE_FAILURE: u8 = 0x01;
 const STATUS_FAILED_TO_CONNECT: u8 = 0x04;
+const STATUS_RESPONSE_CONNECTED: u8 = 0x05;
+const STATUS_CONNECTING: u8 = 0x07;
+const STATUS_AUTHENTICATING: u8 = 0x0b;
 const STATUS_AUTH_OK: u8 = 0x0c;
 const STATUS_AUTH_FAILED: u8 = 0x0d;
+const STATUS_WAIT_QUEUE: u8 = 0x1b;
 
-/// What a realmd refusal byte becomes, `(login state, result)`: `Logon::OnAuthResult`'s
+/// What a realmd result byte becomes, `(login state, result)`: `Logon::OnAuthResult`'s
 /// dispatch (`0x5b2c90`, byte index `0x5b2ea4`, jumps `0x5b2e78`) after the handlers' clamp of a
-/// byte past `0x0f` to `0xff` (`0x5bac36`, `0x5bad8d`). The unknown account and the wrong password
-/// share one arm (`0x5b2d00`, result 7 with no PIN), `0x0a` is the patch state (`0x5b2d3b`).
-pub(crate) fn realmd_result(byte: u8) -> (i32, i32) {
+/// byte past `0x0f` to `0xff` (`0x5bac36`, `0x5bad8d`). 0x00 and 0x0E take the success arm
+/// (`0x5b2cc9`, `0x5b2cd4` to `0x5b2e16`), authenticated; the unknown account and the wrong
+/// password share one arm (`0x5b2d00`, result 7 with no PIN); a challenge's 0x0A is the patch state
+/// (`0x5b2d3b`). A proof's 0x0A never gets here: `Grunt::OnLogonProof` returns on it (`0x5bada2`),
+/// so the logon reports nothing and its dialog stands (`None`).
+pub(crate) fn realmd_result(byte: u8, reply: benilla_protocol::LogonReply) -> Option<(i32, i32)> {
+    if byte == 0x0a && reply == benilla_protocol::LogonReply::Proof {
+        return None;
+    }
     let byte = if byte > 0x0f { 0xff } else { byte };
     let result = match byte {
+        0x00 | 0x0e => return Some((LOGIN_AUTHENTICATED, 0)),
         0x03 => 0x0d,
         0x04 | 0x05 => 0x07,
         0x06 => 0x0f,
         0x07 => 0x10,
         0x08 => 0x11,
         0x09 => 0x0e,
-        0x0a => return (LOGIN_DOWNLOADFILE, 0),
+        0x0a => return Some((LOGIN_DOWNLOADFILE, 0)),
         0x0c => 0x12,
         0x0f => 0x13,
         0xff => RESULT_DISCONNECTED,
-        // 0x01, 0x02, 0x0b, 0x0d, 0x0e: the default arm (`0x5b2e00`).
+        // 0x01, 0x02, 0x0b, 0x0d: the default arm (`0x5b2e00`).
         _ => RESULT_LOGIN_FAILED,
     };
-    (LOGIN_FAILED_STATE, result)
+    Some((LOGIN_FAILED_STATE, result))
+}
+
+/// A `ClientServices` operation of state 2 (`[svc+0x1b10]`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OpKind {
+    /// `COP_CONNECT` (2, `0x5aab20`).
+    #[default]
+    Connect,
+    /// The authentication (3, `0x5aaba0`).
+    Auth,
+}
+
+/// The operation record (`BeginOperation` `0x5aa400`, `SetStatus` `0x5aa920`): its status code
+/// (`[svc+0x1b14]`), completed (`[svc+0x1b08]`) and succeeded (`[svc+0x1b0c]`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Operation {
+    kind: OpKind,
+    status: u8,
+    done: bool,
+    ok: bool,
+    /// The text of a failure the reference has no status for, shown in place of the status's.
+    raw: Option<String>,
+}
+
+impl Operation {
+    fn begin(kind: OpKind, status: u8) -> Self {
+        Operation {
+            kind,
+            status,
+            ..Default::default()
+        }
+    }
+
+    fn complete(&mut self, ok: bool, status: u8) {
+        self.status = status;
+        self.ok = ok;
+        self.done = true;
+    }
+
+    /// `GetStatus`'s text: the status's key once completed, none while it runs (`0x5aaa35`).
+    fn text(&self) -> Option<Text> {
+        if !self.done {
+            return None;
+        }
+        Some(match &self.raw {
+            Some(t) => Text::Raw(t.clone()),
+            None => status_text(self.status).0,
+        })
+    }
 }
 
 /// A glue string by key or as given.
@@ -304,8 +367,8 @@ pub(crate) struct GlueMgr {
     connected: bool,
     /// The realm this session connected to.
     realm: Option<benilla_protocol::RealmInfo>,
-    /// In the realm's queue: the world status is `AUTH_WAIT_QUEUE`.
-    queued: bool,
+    /// State 2's operation.
+    op: Operation,
     queue: QueueEstimate,
     queue_realm: Option<String>,
     /// The current glue screen's name, as the VM's `SetCurrentScreen` last set it.
@@ -372,7 +435,7 @@ impl GlueMgr {
             // list it then raises (`0x46bf8c`, `0x46c073`) is not built on these screens yet.
             ScreenState::Connect => {
                 asks.push(GlueLogin::Abandon);
-                self.queued = false;
+                self.op = Operation::default();
                 self.connected = false;
                 self.state = ScreenState::Idle;
             }
@@ -397,6 +460,12 @@ impl GlueMgr {
             LoginStage::Authenticating => {}
             // The world dial begins: a logon with no realm list to publish is done.
             LoginStage::Handshaking => self.on_logon_done(),
+            // The connect completes `RESPONSE_CONNECTED` (`0x5aaa90`).
+            LoginStage::WorldConnected => {
+                if self.state == ScreenState::Connect && self.op.kind == OpKind::Connect {
+                    self.op.complete(true, STATUS_RESPONSE_CONNECTED);
+                }
+            }
         }
     }
 
@@ -413,27 +482,39 @@ impl GlueMgr {
     fn on_failed(&mut self, msg: &LoginFailedMessage) {
         match self.state {
             ScreenState::Logon => {
-                let (state, result) = match msg.refusal {
-                    Some(LoginRefusal::Logon(byte)) => realmd_result(byte),
+                let cells = match msg.refusal {
+                    Some(LoginRefusal::Logon(byte)) => {
+                        realmd_result(byte, benilla_protocol::LogonReply::Challenge)
+                    }
+                    Some(LoginRefusal::LogonProof(byte)) => {
+                        realmd_result(byte, benilla_protocol::LogonReply::Proof)
+                    }
                     // A dial that never connected reports `LOGIN_SERVER_DOWN` (`0x5b1bb2`) and then
                     // the unexpected disconnect (`0x5b1bb7` → `0x5b1c30`, result `0xff`), so the
                     // dialog the next tick shows is the last, `DISCONNECTED`; a transport failure
                     // after the connect is that disconnect alone.
-                    _ => (LOGIN_FAILED_STATE, RESULT_DISCONNECTED),
+                    _ => Some((LOGIN_FAILED_STATE, RESULT_DISCONNECTED)),
                 };
-                self.cells.state = state;
-                self.cells.result = result;
+                if let Some((state, result)) = cells {
+                    self.cells.state = state;
+                    self.cells.result = result;
+                }
             }
             ScreenState::Connect => {
-                let text = match msg.refusal {
-                    Some(LoginRefusal::World(code)) => status_text(code),
-                    Some(LoginRefusal::Logon(_)) => status_text(STATUS_RESPONSE_FAILURE),
-                    // A server refusing a client without Warden has no reference status: its
-                    // own words.
-                    None if msg.terminal => (Text::Raw(msg.reason.clone()), None),
-                    None => status_text(STATUS_FAILED_TO_CONNECT),
+                let status = match msg.refusal {
+                    Some(LoginRefusal::World(code)) => code,
+                    Some(LoginRefusal::Logon(_) | LoginRefusal::LogonProof(_)) => {
+                        STATUS_RESPONSE_FAILURE
+                    }
+                    None if msg.terminal => STATUS_RESPONSE_FAILURE,
+                    None => STATUS_FAILED_TO_CONNECT,
                 };
-                self.world_failed(text);
+                self.op.complete(false, status);
+                // A server refusing a client without Warden has no reference status: its own
+                // words.
+                if msg.terminal && msg.refusal.is_none() {
+                    self.op.raw = Some(msg.reason.clone());
+                }
             }
             _ => {}
         }
@@ -443,7 +524,11 @@ impl GlueMgr {
     /// the character screen goes back to login. The realm list the arm raises for every other
     /// code (`0x46bf1f`-`0x46bf96`, `0x46c073`) is not built on these screens yet, so the dialog
     /// stays.
-    fn world_failed(&mut self, (text, code): (Text, Option<u8>)) {
+    fn world_failed(&mut self) {
+        let (text, code) = match self.op.text() {
+            Some(Text::Raw(t)) => (Text::Raw(t), None),
+            _ => status_text(self.op.status),
+        };
         match code.and_then(|c| URL_STATUSES.iter().find(|(s, _)| *s == c)) {
             Some((_, url)) => self.outbox.push(Outgoing::Open {
                 which: "OKAY_WITH_URL",
@@ -453,27 +538,27 @@ impl GlueMgr {
             None => self.open("OKAY", Some(text)),
         }
         self.state = ScreenState::Idle;
-        self.queued = false;
         self.connected = false;
         if code == Some(STATUS_AUTH_FAILED) && self.screen.eq_ignore_ascii_case("charselect") {
             self.outbox.push(Outgoing::Screen("login"));
         }
     }
 
-    /// One queue packet: the status is `AUTH_WAIT_QUEUE` and the ring takes a sample.
+    /// One queue packet: the operation is re-armed as the queue's, status `AUTH_WAIT_QUEUE` and
+    /// not complete (`0x5ab280`), and the ring takes a sample.
     fn on_queued(&mut self, position: Option<u32>, realm: Option<String>, now_ms: u32) {
         if self.state != ScreenState::Connect {
             return;
         }
-        self.queued = true;
+        self.op = Operation::begin(OpKind::Auth, STATUS_WAIT_QUEUE);
         self.queue_realm = realm;
         if let Some(p) = position {
             self.queue.sample(p, now_ms);
         }
     }
 
-    /// The roster: in state 2, the world authenticated (`AUTH_OK`), the success arm
-    /// (`0x46c00e`-`0x46c01e`): the status text, state 0, the queue ring cleared, `charselect`.
+    /// The roster: in state 2, the authentication completes `AUTH_OK` (`0x5aab80`), which the tick
+    /// shows and takes down the success arm.
     fn on_roster(&mut self, realm: Option<benilla_protocol::RealmInfo>) {
         self.connected = true;
         if realm.is_some() {
@@ -487,28 +572,32 @@ impl GlueMgr {
         if self.state != ScreenState::Connect {
             return;
         }
-        self.outbox.push(Outgoing::Update {
-            text: Text::Key(STATUS_KEYS[STATUS_AUTH_OK as usize]),
-            button: None,
-        });
-        self.state = ScreenState::Idle;
-        self.queued = false;
-        self.queue = QueueEstimate::default();
-        self.outbox.push(Outgoing::Screen("charselect"));
+        self.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING);
+        self.op.complete(true, STATUS_AUTH_OK);
     }
 
     /// The session ended. Over (`session_over`), the disconnect handler (`0x46c540`): state 0,
     /// and `DISCONNECTED_FROM_SERVER` (`0x46c62e`), which the stock screens answer with the login
     /// screen and the `DISCONNECTED` dialog. A logout's relist or an unattended reconnect is no
     /// disconnect to the screens.
+    ///
+    /// Out of state 2 it fires the event (`0x46c618`); in state 2 a completed, failed operation
+    /// opens `OKAY` with its text instead (`0x46c671`-`0x46c68f`). The handler's first test, that
+    /// the dropped connection is `ClientServices`' current one (`0x5abd40`, else "Invalid
+    /// disconnect"), has no native counterpart: the IO thread holds one session and reports only
+    /// its own end.
     fn on_disconnected(&mut self, session_over: bool) {
         self.connected = false;
         if !session_over {
             return;
         }
+        let was_connect = self.state == ScreenState::Connect;
         self.state = ScreenState::Idle;
-        self.queued = false;
-        self.outbox.push(Outgoing::Disconnected);
+        let op = std::mem::take(&mut self.op);
+        match op.text() {
+            Some(text) if was_connect && !op.ok => self.open("OKAY", Some(text)),
+            _ => self.outbox.push(Outgoing::Disconnected),
+        }
     }
 
     /// The per-frame arms of `CGlueMgr::Update` that run without a new message.
@@ -520,9 +609,11 @@ impl GlueMgr {
                     self.show_login_dialog();
                 }
                 if self.auth_final {
-                    // `0x46ba8d`-`0x46ba98`, then `0x46b1f0`'s idle test passes.
+                    // `0x46ba8d`-`0x46ba98`, then `0x46b1f0`'s idle test passes and the connect
+                    // begins at `CSTATUS_CONNECTING` (`0x5aab4a`), its ring cleared (`0x5aab30`).
                     self.state = ScreenState::Connect;
                     self.auth_final = false;
+                    self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
                     self.queue = QueueEstimate::default();
                     return;
                 }
@@ -533,8 +624,33 @@ impl GlueMgr {
                     self.state = ScreenState::Idle;
                 }
             }
-            ScreenState::Connect if self.queued => self.outbox.push(Outgoing::Queue),
+            ScreenState::Connect => self.tick_connect(),
             _ => {}
+        }
+    }
+
+    /// State 2's frame (`0x46bc49`-`0x46c02e`): the dialog re-texted from the operation, then a
+    /// completed operation's arm.
+    fn tick_connect(&mut self) {
+        if self.op.status == STATUS_WAIT_QUEUE {
+            self.outbox.push(Outgoing::Queue);
+        } else if let Some(text) = self.op.text() {
+            self.outbox.push(Outgoing::Update { text, button: None });
+        }
+        if !self.op.done {
+            return;
+        }
+        if !self.op.ok {
+            self.world_failed();
+        } else if self.op.kind == OpKind::Connect {
+            // `0x46bfdd`: the connect done, the authentication begins (`0x5aaba0`).
+            self.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING);
+        } else {
+            // `0x46c00e`-`0x46c023`: state 0, `charselect`, the queue ring cleared.
+            self.state = ScreenState::Idle;
+            self.op = Operation::default();
+            self.queue = QueueEstimate::default();
+            self.outbox.push(Outgoing::Screen("charselect"));
         }
     }
 

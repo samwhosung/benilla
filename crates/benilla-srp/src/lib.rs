@@ -369,6 +369,12 @@ impl SrpClientChallenge {
         &self.client_public_key
     }
 
+    /// The session key this exchange derived, for a logon the server accepted without an `M2`
+    /// (realmd's `SUCCESS_SURVEY`), which leaves nothing to verify.
+    pub fn into_unverified_session_key(self) -> [u8; 40] {
+        self.session_key
+    }
+
     /// Verify the server's proof `M2`; the returned [`SrpClient`] holds the session key.
     pub fn verify_server_proof(
         self,

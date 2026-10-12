@@ -33,10 +33,13 @@ fn failed(refusal: Option<LoginRefusal>, terminal: bool) -> LoginFailedMessage {
     }
 }
 
-/// `0x5b2c90`'s arms, after the handlers' clamp past `0x0f`.
+/// `0x5b2c90`'s arms, after the handlers' clamp past `0x0f`: 0x0E is a success (`0x5b2cd4`), and
+/// a proof's 0x0A reports nothing (`0x5bada2`).
 #[test]
 fn a_realmd_refusal_maps_through_the_references_table() {
+    use benilla_protocol::LogonReply::{Challenge, Proof};
     let cases = [
+        (0x00, (4, 0x00)),
         (0x01, (5, 0x0b)),
         (0x02, (5, 0x0b)),
         (0x03, (5, 0x0d)),
@@ -50,14 +53,34 @@ fn a_realmd_refusal_maps_through_the_references_table() {
         (0x0b, (5, 0x0b)),
         (0x0c, (5, 0x12)),
         (0x0d, (5, 0x0b)),
-        (0x0e, (5, 0x0b)),
+        (0x0e, (4, 0x00)),
         (0x0f, (5, 0x13)),
         (0x10, (5, 0x14)),
         (0xff, (5, 0x14)),
     ];
     for (byte, want) in cases {
-        assert_eq!(realmd_result(byte), want, "{byte:#04x}");
+        assert_eq!(realmd_result(byte, Challenge), Some(want), "{byte:#04x}");
     }
+    assert_eq!(
+        realmd_result(0x0a, Proof),
+        None,
+        "a proof's 0x0A is swallowed"
+    );
+    assert_eq!(realmd_result(0x04, Proof), Some((5, 0x07)));
+}
+
+/// A proof's 0x0A leaves the logon's dialog as it stands.
+#[test]
+fn a_proof_0x0a_changes_no_dialog() {
+    let mut m = accepted();
+    m.login("a".into(), "b".into(), &mut Vec::new());
+    m.on_stage(LoginStage::Connecting, true);
+    m.tick();
+    m.outbox.clear();
+    m.on_failed(&failed(Some(LoginRefusal::LogonProof(0x0a)), false));
+    m.tick();
+    assert!(m.outbox.is_empty(), "{:?}", m.outbox);
+    assert_eq!(m.state, ScreenState::Logon);
 }
 
 /// `CGlueMgr::Login`'s guards: nothing without both agreements or outside state 0, an `OKAY`
@@ -154,29 +177,91 @@ fn a_world_refusal_opens_its_status_and_url() {
         m.state = ScreenState::Connect;
         m
     };
+    let update = |key| Outgoing::Update {
+        text: Text::Key(key),
+        button: None,
+    };
     let mut m = connected();
     m.on_failed(&failed(Some(LoginRefusal::World(0x1c)), false));
+    m.tick();
     assert_eq!(
         m.outbox,
-        [Outgoing::Open {
-            which: "OKAY_WITH_URL",
-            text: Some(Text::Key("AUTH_BANNED")),
-            data: Some("AUTH_BANNED_URL".into()),
-        }]
+        [
+            update("AUTH_BANNED"),
+            Outgoing::Open {
+                which: "OKAY_WITH_URL",
+                text: Some(Text::Key("AUTH_BANNED")),
+                data: Some("AUTH_BANNED_URL".into()),
+            }
+        ]
     );
     assert_eq!(m.state, ScreenState::Idle);
 
     let mut m = connected();
     m.screen = "charselect".into();
     m.on_failed(&failed(Some(LoginRefusal::World(0x0d)), false));
+    m.tick();
     assert_eq!(
         m.outbox,
-        [open("OKAY", Some("AUTH_FAILED")), Outgoing::Screen("login")]
+        [
+            update("AUTH_FAILED"),
+            open("OKAY", Some("AUTH_FAILED")),
+            Outgoing::Screen("login")
+        ]
     );
 
     let mut m = connected();
     m.on_failed(&failed(None, false));
-    assert_eq!(m.outbox, [open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT"))]);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            update("RESPONSE_FAILED_TO_CONNECT"),
+            open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT"))
+        ]
+    );
+}
+
+/// The world connect re-texts the dialog from its operation each frame: nothing while the connect
+/// runs, `RESPONSE_CONNECTED` when it completes (`0x5aaa90`), nothing while the authentication runs,
+/// then `AUTH_OK` and the character screen.
+#[test]
+fn the_world_connect_shows_each_completion() {
+    let mut m = accepted();
+    m.login("a".into(), "b".into(), &mut Vec::new());
+    m.on_logon_done();
+    m.tick();
+    assert_eq!(m.state, ScreenState::Connect);
+    m.outbox.clear();
+    m.tick();
+    assert!(m.outbox.is_empty(), "the running connect's text is empty");
+    m.on_stage(LoginStage::WorldConnected, true);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [Outgoing::Update {
+            text: Text::Key("RESPONSE_CONNECTED"),
+            button: None
+        }]
+    );
+    m.outbox.clear();
+    m.tick();
+    assert!(
+        m.outbox.is_empty(),
+        "the running authentication's text is empty"
+    );
+    m.on_roster(None);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("AUTH_OK"),
+                button: None
+            },
+            Outgoing::Screen("charselect")
+        ]
+    );
 }
 
 /// The roster ends the world connect: the status text, state 0, the character screen.
@@ -185,6 +270,7 @@ fn the_roster_puts_the_character_screen_up() {
     let mut m = accepted();
     m.state = ScreenState::Connect;
     m.on_roster(None);
+    m.tick();
     assert_eq!(
         m.outbox,
         [
@@ -228,7 +314,9 @@ fn status_dialog_click_cancels_by_state() {
     ));
 }
 
-/// A session that is over fires `DISCONNECTED_FROM_SERVER`; a logout's relist does not.
+/// A session that is over fires `DISCONNECTED_FROM_SERVER`; a logout's relist does not; in the
+/// world connect, a completed failed operation opens `OKAY` with its text instead
+/// (`0x46c671`-`0x46c68f`), and a running one still fires the event.
 #[test]
 fn a_lost_session_fires_disconnected() {
     let mut m = accepted();
@@ -236,6 +324,19 @@ fn a_lost_session_fires_disconnected() {
     assert!(m.outbox.is_empty());
     m.on_disconnected(true);
     assert_eq!(m.outbox, [Outgoing::Disconnected]);
+
+    let mut m = accepted();
+    m.state = ScreenState::Connect;
+    m.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+    m.on_disconnected(true);
+    assert_eq!(m.outbox, [Outgoing::Disconnected]);
+
+    let mut m = accepted();
+    m.state = ScreenState::Connect;
+    m.op.complete(false, STATUS_FAILED_TO_CONNECT);
+    m.on_disconnected(true);
+    assert_eq!(m.outbox, [open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT"))]);
+    assert_eq!(m.state, ScreenState::Idle);
 }
 
 // ── The stock screens over the native login, end to end ─────────────────────────────────────────

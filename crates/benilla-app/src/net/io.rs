@@ -366,9 +366,14 @@ fn run(
                 if let Some(dial) = e.downcast_ref::<benilla_protocol::DialFailure>() {
                     return fail_dial(dial.clone(), format!("{e:#}"));
                 }
-                let refusal = e
-                    .downcast_ref::<AuthReject>()
-                    .map(|r| benilla_protocol::LoginRefusal::Logon(r.code));
+                let refusal = e.downcast_ref::<AuthReject>().map(|r| match r.reply {
+                    benilla_protocol::LogonReply::Challenge => {
+                        benilla_protocol::LoginRefusal::Logon(r.code)
+                    }
+                    benilla_protocol::LogonReply::Proof => {
+                        benilla_protocol::LoginRefusal::LogonProof(r.code)
+                    }
+                });
                 return fail(refusal, format!("{e:#}"));
             }
         }
@@ -451,11 +456,16 @@ fn run(
         let realm_name = realm.as_ref().map(|r| r.name.clone());
         // A queue can last minutes, so it tests the abandon generation itself; otherwise a Cancel
         // would close the dialog while this thread held its place and entered the world anyway.
-        let mut on_queue = |position: Option<u32>| {
-            let _ = events_tx.send(SessionEvent::LoginQueued {
-                position,
-                realm: realm_name.clone(),
-            });
+        let mut on_queue = |event: benilla_protocol::WorldConnectEvent| {
+            match event {
+                benilla_protocol::WorldConnectEvent::Connected => stage(LoginStage::WorldConnected),
+                benilla_protocol::WorldConnectEvent::Queued(position) => {
+                    let _ = events_tx.send(SessionEvent::LoginQueued {
+                        position,
+                        realm: realm_name.clone(),
+                    });
+                }
+            }
             !canceled()
         };
         let mut session = match WorldSession::connect_queued(

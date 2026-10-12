@@ -71,6 +71,8 @@ pub enum LoginStage {
     Authenticating,
     /// Realm picked; the world-socket handshake and char enum (`LOGIN_STATE_HANDSHAKING`).
     Handshaking,
+    /// The world socket connected, before its authentication (`RESPONSE_CONNECTED`, `0x5aaa90`).
+    WorldConnected,
 }
 
 /// How a world session ended. On a loss the reference fires `DISCONNECTED_FROM_SERVER` and
@@ -88,8 +90,11 @@ pub enum SessionEnd {
 /// `AUTH_LOGON_FAILED_SUSPENDED` to realmd but `AUTH_OK` to the world server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginRefusal {
-    /// realmd's logon-proof `AuthLogonResult` (`crate::AuthReject`).
+    /// realmd's `AuthLogonResult` in its logon-challenge reply (`crate::AuthReject`).
     Logon(u8),
+    /// realmd's `AuthLogonResult` in its logon-proof reply, where the reference swallows `0x0A`
+    /// (`0x5bada2`).
+    LogonProof(u8),
     /// The world server's `SMSG_AUTH_RESPONSE` code (`crate::WorldAuthReject`).
     World(u8),
 }
@@ -98,7 +103,7 @@ impl LoginRefusal {
     /// The raw byte, for logging only: without its server it is ambiguous.
     pub fn byte(self) -> u8 {
         match self {
-            LoginRefusal::Logon(b) | LoginRefusal::World(b) => b,
+            LoginRefusal::Logon(b) | LoginRefusal::LogonProof(b) | LoginRefusal::World(b) => b,
         }
     }
 }
