@@ -21,7 +21,7 @@ pub(crate) fn setup_script(world: &mut World) {
 /// [`super::glue::GlueStock`], put up on `screen`, else a boot VM.
 ///
 /// The IO thread's roster policy follows the VM that is up: the screen asks for its roster only
-/// when the stock glue VM was built, so a run whose stock VM failed to build (logged as an error
+/// when the stock glue VM was built and its character select screen loaded, so a run whose stock VM failed to build (logged as an error
 /// by [`new_vm`]) falls back to the park's own enumeration instead of waiting on a screen that
 /// never asks.
 fn install_glue_side_vm(world: &mut World, screen: super::glue::GlueScreen) {
@@ -35,7 +35,7 @@ fn install_glue_side_vm(world: &mut World, screen: super::glue::GlueScreen) {
         false
     };
     if stock_asked && !stock_up {
-        error!("ui_script: WOW_GLUE_STOCK=1 but the stock glue VM did not come up; the roster is fetched at the park");
+        error!("ui_script: WOW_GLUE_STOCK=1 but the stock glue VM did not come up with its character select screen; the roster is fetched at the park");
     }
     if let Some(policy) = world.get_resource::<crate::net::RosterPolicy>() {
         policy
@@ -83,8 +83,15 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
         screen.key(),
         failures.len()
     );
+    // Up means the screen that asks for the roster exists: the stock files loaded far enough to
+    // define the character select frame and its `OnShow`, not merely that a VM started.
+    let charselect = script
+        .eval::<bool>(
+            "return type(CharacterSelect) == 'table' and type(CharacterSelect_OnShow) == 'function'",
+        )
+        .unwrap_or(false);
     world.insert_non_send_resource(script);
-    true
+    charselect
 }
 
 /// A fresh VM from `make` on the process clock with the addon asset probes wired, or `None` (the
@@ -1076,7 +1083,9 @@ mod tests {
             world.insert_resource(super::super::glue::GlueStock(stock));
             world.insert_resource(State::new(crate::char_select::ClientState::Login));
             setup_script(&mut world);
-            assert_eq!(policy.0.load(Ordering::SeqCst), stock);
+            // The stock policy needs the stock files to have loaded: no install, no screen.
+            let up = stock && benilla_formats::wow_data().is_some();
+            assert_eq!(policy.0.load(Ordering::SeqCst), up, "stock {stock}");
         }
     }
 

@@ -21,6 +21,9 @@ impl Plugin for ProbeCharCreatePlugin {
         else {
             return; // inert without a valid env spec
         };
+        if super::refuse_under_stock(app, "WOW_PROBE_CHARCREATE") {
+            return;
+        }
         let keep = std::env::var("WOW_PROBE_CHARCREATE_KEEP").as_deref() == Ok("1");
         app.insert_resource(CharCreateProbe {
             req,
@@ -28,12 +31,7 @@ impl Plugin for ProbeCharCreatePlugin {
             state: ProbeState::AwaitingRoster,
             roster: Vec::new(),
         })
-        // The park's own roster and the re-sent one after each action are the native policy's;
-        // under the stock screen nothing fetches them, so the probe would wait for ever.
-        .add_systems(
-            Update,
-            drive_charcreate_probe.run_if(crate::ui_script::glue::native_glue),
-        );
+        .add_systems(Update, drive_charcreate_probe);
     }
 }
 

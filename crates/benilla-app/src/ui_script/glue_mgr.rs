@@ -97,7 +97,8 @@ use crate::login::queue::QueueEstimate;
 use crate::login::GlueLogin;
 use crate::net::{
     CharListMessage, CharRequest, DisconnectedMessage, LoginFailedMessage, LoginQueuedMessage,
-    LoginStageMessage, ParkRequest, RealmListMessage, RealmRequest, WorldAuthMessage,
+    LoginStageMessage, ParkRequest, RealmListMessage, RealmRequest, RosterFailedMessage,
+    WorldAuthMessage,
 };
 
 /// `CGlueMgr`'s `screenState` (`0xb41da0`), named by the functions that set each value: the
@@ -287,6 +288,7 @@ const STATUS_REALM_LIST_FAILED: u8 = 0x24;
 const STATUS_REALM_LIST_REALM_NOT_FOUND: u8 = 0x26;
 const STATUS_CHAR_LIST_RETRIEVING: u8 = 0x2a;
 const STATUS_CHAR_LIST_RETRIEVED: u8 = 0x2b;
+const STATUS_CHAR_LIST_FAILED: u8 = 0x2c;
 
 /// What a realmd result byte becomes, `(login state, result)`: `Logon::OnAuthResult`'s
 /// dispatch (`0x5b2c90`, byte index `0x5b2ea4`, jumps `0x5b2e78`) after the handlers' clamp of a
@@ -823,6 +825,19 @@ impl GlueMgr {
         self.op.complete(true, STATUS_CHAR_LIST_RETRIEVED);
     }
 
+    /// The roster ask failed on the stream: the query completes `CHAR_LIST_FAILED` (`0x5ab300`'s
+    /// failure leg, `SetStatus(0, 0x2c)`), which the tick opens as `OKAY`. The session ends behind
+    /// it as a dropped socket does, so the disconnect handler follows (`0x46c540`).
+    fn on_roster_failed(&mut self, epoch: u64) {
+        if epoch != self.link
+            || self.state != ScreenState::CharList
+            || self.op.kind != OpKind::CharList
+        {
+            return;
+        }
+        self.op.complete(false, STATUS_CHAR_LIST_FAILED);
+    }
+
     /// The world server accepted the authentication: the link is up, and in state 2 the
     /// authentication completes `AUTH_OK` (`0x5aab80`), which the tick shows and takes down the
     /// success arm.
@@ -1052,6 +1067,7 @@ pub(crate) struct LoginNews<'w, 's> {
     queued: MessageReader<'w, 's, LoginQueuedMessage>,
     rosters: MessageReader<'w, 's, CharListMessage>,
     world_auths: MessageReader<'w, 's, WorldAuthMessage>,
+    roster_failures: MessageReader<'w, 's, RosterFailedMessage>,
     realm_lists: MessageReader<'w, 's, RealmListMessage>,
     disconnects: MessageReader<'w, 's, DisconnectedMessage>,
 }
@@ -1174,8 +1190,10 @@ pub(crate) fn drive_glue_mgr(
                 GlueRequest::DisconnectFromServer => {
                     // The disconnect handler zeroes the state (`0x46c55d`), the operation in
                     // flight with it, so no reply completes on the login screen.
-                    mgr.state = ScreenState::Idle;
-                    mgr.op = Operation::default();
+                    if mgr.connected || mgr.state == ScreenState::Connect {
+                        mgr.state = ScreenState::Idle;
+                        mgr.op = Operation::default();
+                    }
                     mgr.connected = false;
                     logins.push(GlueLogin::Disconnect);
                 }
@@ -1218,8 +1236,15 @@ pub(crate) fn drive_glue_mgr(
     for msg in news.failures.read() {
         mgr.on_failed(msg);
     }
+    // A session of an attempt a Cancel or a disconnect has passed is not the screen's.
+    let generation = crate::net::LoginAbandon::now(asks.abandon.as_deref());
     for msg in news.world_auths.read() {
-        mgr.on_world_authenticated(msg.realm.clone(), msg.epoch);
+        if msg.generation == generation {
+            mgr.on_world_authenticated(msg.realm.clone(), msg.epoch);
+        }
+    }
+    for msg in news.roster_failures.read() {
+        mgr.on_roster_failed(msg.epoch);
     }
     for msg in news.rosters.read() {
         mgr.on_roster(msg.characters.clone(), msg.cause, msg.epoch);

@@ -332,6 +332,8 @@ pub(crate) struct World {
     enum_delay: Arc<Mutex<Duration>>,
     /// Answer `CMSG_CHAR_ENUM` with `SMSG_WARDEN_DATA`, as a server does that wants Warden.
     warden: Arc<AtomicBool>,
+    /// Close the socket on `CMSG_CHAR_ENUM` instead of answering.
+    cut: Arc<AtomicBool>,
     open: Arc<AtomicUsize>,
 }
 
@@ -349,6 +351,11 @@ impl World {
     /// Have the server demand Warden in place of the roster from now on.
     pub(crate) fn demand_warden(&self) {
         self.warden.store(true, Ordering::SeqCst);
+    }
+
+    /// Have the server cut the connection on the next roster ask.
+    pub(crate) fn cut_on_roster_ask(&self) {
+        self.cut.store(true, Ordering::SeqCst);
     }
 
     /// Hold every roster answer back this long.
@@ -402,6 +409,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let enum_wait = Arc::clone(&enum_delay);
     let warden = Arc::new(AtomicBool::new(false));
     let warden_flag = Arc::clone(&warden);
+    let cut = Arc::new(AtomicBool::new(false));
+    let cut_flag = Arc::clone(&cut);
     let open = Arc::new(AtomicUsize::new(0));
     let sessions = Arc::clone(&open);
     thread::spawn(move || {
@@ -441,6 +450,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let session_log = Arc::clone(&session_log);
             let enum_wait = Arc::clone(&enum_wait);
             let warden_flag = Arc::clone(&warden_flag);
+            let cut_flag = Arc::clone(&cut_flag);
             let index = {
                 let mut all = session_log.lock().unwrap();
                 all.push(Vec::new());
@@ -462,6 +472,9 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                             };
                             let wait = *enum_wait.lock().unwrap();
                             thread::sleep(wait);
+                            if cut_flag.load(Ordering::SeqCst) {
+                                break;
+                            }
                             if warden_flag.load(Ordering::SeqCst) {
                                 send(&mut s, Some(&mut crypto), opcode::SMSG_WARDEN_DATA, &[]);
                                 continue;
@@ -488,6 +501,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         rosters,
         enum_delay,
         warden,
+        cut,
         open,
     }
 }

@@ -710,6 +710,7 @@ fn world(
             .send(SessionEvent::WorldAuthenticated {
                 realm: realm.clone(),
                 epoch,
+                generation,
             })
             .is_err()
         {
@@ -722,6 +723,7 @@ fn world(
                     realm: Some(realm.clone()),
                     cause: RosterCause::Park,
                     epoch,
+                    generation,
                 })
                 .is_err()
         {
@@ -782,7 +784,12 @@ fn world(
                         }
                         Err(e) => match e.downcast_ref::<WardenRequired>() {
                             Some(w) => Parked::Refused(w.to_string()),
-                            None => return Err(e),
+                            // The stream failed under the ask: the screen's query fails
+                            // (`0x5ab300`), and the session ends as a dropped socket does.
+                            None => {
+                                let _ = events_tx.send(SessionEvent::RosterFailed { epoch });
+                                return Err(e);
+                            }
                         },
                     },
                 },
@@ -808,6 +815,7 @@ fn world(
                             realm: Some(realm.clone()),
                             cause: RosterCause::Asked,
                             epoch,
+                            generation,
                         })
                         .is_err()
                     {
@@ -831,6 +839,7 @@ fn world(
                         realm: Some(realm.clone()),
                         cause: RosterCause::Changed,
                         epoch,
+                        generation,
                     })
                     .is_err()
                 {

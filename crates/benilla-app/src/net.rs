@@ -120,6 +120,7 @@ impl Plugin for NetPlugin {
             .add_message::<RealmListMessage>()
             .add_message::<CharListMessage>()
             .add_message::<WorldAuthMessage>()
+            .add_message::<RosterFailedMessage>()
             .add_message::<CharActionResultMessage>()
             .add_message::<CharacterLoginFailedMessage>()
             .add_message::<EnteredWorldMessage>()
@@ -2108,6 +2109,8 @@ pub(crate) struct CharListMessage {
     pub(crate) cause: benilla_protocol::RosterCause,
     /// The world session that sent it ([`WorldAuthMessage::epoch`]).
     pub(crate) epoch: u64,
+    /// The abandon generation of the attempt that dialed that session.
+    pub(crate) generation: u64,
 }
 
 /// The world server accepted the authentication: the world connect to `realm` is done and the IO
@@ -2116,6 +2119,15 @@ pub(crate) struct CharListMessage {
 pub(crate) struct WorldAuthMessage {
     pub(crate) realm: benilla_protocol::RealmInfo,
     /// This world session's number, counted per process: what its roster replies carry.
+    pub(crate) epoch: u64,
+    /// The abandon generation of the attempt that dialed it: behind [`LoginAbandon`], the attempt
+    /// was cancelled or disconnected since, and the session is not the screen's.
+    pub(crate) generation: u64,
+}
+
+/// A roster ask on the world session `epoch` failed on the stream.
+#[derive(Message)]
+pub(crate) struct RosterFailedMessage {
     pub(crate) epoch: u64,
 }
 

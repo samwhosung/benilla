@@ -73,6 +73,9 @@ impl Plugin for ProbeRigPlugin {
         else {
             return; // inert without a parseable spec (parse() has already said why)
         };
+        if super::refuse_under_stock(app, "WOW_RIG") {
+            return;
+        }
         info!("rig: {}", spec.describe());
         // Publish the claim on the character pick, so the roster knows the pick is spoken for.
         if let Some(name) = rig_char_name(&spec) {
@@ -87,11 +90,7 @@ impl Plugin for ProbeRigPlugin {
             sent: 0,
             next_at: 0.0,
         })
-        // Reads the native policy's rosters (see the create probe).
-        .add_systems(
-            Update,
-            drive_rig.run_if(crate::ui_script::glue::native_glue),
-        );
+        .add_systems(Update, drive_rig);
     }
 }
 

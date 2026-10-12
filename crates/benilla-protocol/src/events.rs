@@ -140,8 +140,18 @@ pub enum SessionEvent {
     /// The world server accepted the authentication (`SMSG_AUTH_RESPONSE` `AUTH_OK`, `0x5ab2b8`
     /// → `0x5aab80`): the world connect is done and the IO thread is at the character park, with
     /// no roster fetched unless the native policy's enumeration follows. Emitted by the IO thread,
-    /// never wire-decoded. `epoch` numbers the world session, per process.
-    WorldAuthenticated { realm: crate::RealmInfo, epoch: u64 },
+    /// never wire-decoded. `epoch` numbers the world session, per process; `generation` is the
+    /// abandon generation of the attempt that dialed it, which a Cancel or a disconnect since has
+    /// moved past (the reference drops the socket there, `0x46befd`, `0x46d360`).
+    WorldAuthenticated {
+        realm: crate::RealmInfo,
+        epoch: u64,
+        generation: u64,
+    },
+    /// A roster ask on the parked session failed on the stream (`0x5ab300`'s failure leg,
+    /// `SetStatus(0, 0x2c)`, `CHAR_LIST_FAILED`); the session ends after it. Emitted by the IO
+    /// thread, never wire-decoded.
+    RosterFailed { epoch: u64 },
     /// Queued for a full realm (`AUTH_WAIT_QUEUE`), per queue packet: a wait, not an outcome.
     LoginQueued {
         position: Option<u32>,
@@ -164,6 +174,8 @@ pub enum SessionEvent {
         cause: RosterCause,
         /// The world session's number ([`Self::WorldAuthenticated`]'s), 0 on the raw decode path.
         epoch: u64,
+        /// The abandon generation of the attempt that dialed that session.
+        generation: u64,
     },
     /// `SMSG_CHAR_CREATE`/`_DELETE`'s raw `WorldResult`; on success a fresh roster comes first.
     CharActionResult { action: CharAction, code: u8 },

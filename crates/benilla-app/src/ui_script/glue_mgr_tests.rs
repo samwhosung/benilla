@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::char_select::ClientState;
-use crate::net::{LoginAbandon, LoginRequest, LoginSubmit};
+use crate::net::{LoginAbandon, LoginRequest, LoginSubmit, RosterFailedMessage, WorldAuthMessage};
 use benilla_protocol::RealmInfo;
 
 /// The manager with both agreements accepted, the way a returning player's CVars seed it.
@@ -505,6 +505,54 @@ fn a_terminal_failure_fails_the_character_list_query_with_its_words() {
     assert!(!m.connected);
 }
 
+/// A roster ask that failed on the stream completes the query `CHAR_LIST_FAILED`
+/// (`0x5ab300`'s failure leg), which the tick opens as `OKAY`, instead of leaving the retrieving
+/// dialog up; one of another link changes nothing.
+#[test]
+fn a_failed_roster_ask_opens_okay_with_char_list_failed() {
+    let mut m = accepted();
+    m.connected = true;
+    m.on_world_authenticated(realm("Fake"), 3);
+    m.get_character_list();
+    m.outbox.clear();
+    m.on_roster_failed(2);
+    m.tick();
+    assert!(m.outbox.is_empty() && !m.op.done, "another link's failure");
+    m.on_roster_failed(3);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("CHAR_LIST_FAILED"),
+                button: None,
+            },
+            open("OKAY", Some("CHAR_LIST_FAILED")),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+}
+
+/// The world server's authentication of an attempt a Cancel or a disconnect has passed is not the
+/// screen's: the manager does not take the link.
+#[test]
+fn an_authentication_behind_the_abandon_generation_is_dropped() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, abandon) = stock_app();
+    abandon.store(1, Ordering::SeqCst);
+    let auth = |generation| WorldAuthMessage {
+        realm: realm("Fake"),
+        epoch: 1,
+        generation,
+    };
+    app.world_mut().write_message(auth(0));
+    app.update();
+    assert!(!app.world().resource::<GlueMgr>().connected);
+    app.world_mut().write_message(auth(1));
+    app.update();
+    assert!(app.world().resource::<GlueMgr>().connected);
+}
+
 /// With no world link `0x5aabb0` fails the query `RESPONSE_FAILED_TO_CONNECT` at once, and the
 /// arm opens `OKAY` with that text (`0x46c173`) and goes to state 0.
 #[test]
@@ -698,6 +746,7 @@ fn stock_app() -> (
         .add_message::<LoginFailedMessage>()
         .add_message::<CharListMessage>()
         .add_message::<WorldAuthMessage>()
+        .add_message::<RosterFailedMessage>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
         .add_message::<GlueLogin>()
@@ -756,6 +805,15 @@ fn disconnecting_from_the_server_ends_the_query_in_flight() {
     let mgr = app.world().resource::<GlueMgr>();
     assert_eq!(mgr.state, ScreenState::Idle);
     assert!(!mgr.connected && mgr.op.kind != OpKind::CharList);
+
+    // With no world connection the verb only cancels the logon (`0x46d34d`): the state stands.
+    app.world_mut().resource_mut::<GlueMgr>().state = ScreenState::RealmList;
+    vm(&app).run("DisconnectFromServer()").unwrap();
+    app.update();
+    assert_eq!(
+        app.world().resource::<GlueMgr>().state,
+        ScreenState::RealmList
+    );
 }
 
 /// The select verbs' cells are C globals in the reference, so a glue rebuild finds them as they
@@ -925,6 +983,7 @@ fn pump(
     mut failures: MessageWriter<LoginFailedMessage>,
     mut rosters: MessageWriter<CharListMessage>,
     mut auths: MessageWriter<WorldAuthMessage>,
+    mut failed_rosters: MessageWriter<RosterFailedMessage>,
     mut queued: MessageWriter<LoginQueuedMessage>,
 ) {
     use benilla_protocol::SessionEvent as E;
@@ -957,16 +1016,29 @@ fn pump(
                 realm,
                 cause,
                 epoch,
+                generation,
             } => {
                 rosters.write(CharListMessage {
                     characters,
                     realm,
                     cause,
                     epoch,
+                    generation,
                 });
             }
-            E::WorldAuthenticated { realm, epoch } => {
-                auths.write(WorldAuthMessage { realm, epoch });
+            E::WorldAuthenticated {
+                realm,
+                epoch,
+                generation,
+            } => {
+                auths.write(WorldAuthMessage {
+                    realm,
+                    epoch,
+                    generation,
+                });
+            }
+            E::RosterFailed { epoch } => {
+                failed_rosters.write(RosterFailedMessage { epoch });
             }
             E::LoginQueued { position, realm } => {
                 queued.write(LoginQueuedMessage { position, realm });
@@ -1029,6 +1101,7 @@ fn live_app_with(
         .add_message::<LoginFailedMessage>()
         .add_message::<CharListMessage>()
         .add_message::<WorldAuthMessage>()
+        .add_message::<RosterFailedMessage>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
         .add_message::<GlueLogin>()

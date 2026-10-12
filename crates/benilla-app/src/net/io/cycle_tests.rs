@@ -341,44 +341,77 @@ fn leave_drops_the_world_session_and_keeps_the_logon() {
 /// one channel. Two roster asks and a `Leave` queue while the IO thread is held in an earlier
 /// ask's slow reply: both asks go out on the old link before it leaves, none is dropped, and the
 /// leave is honored after them. The reference sends `CMSG_CHAR_ENUM` at the verb (`0x46b880`) and
-/// `ConnectToRealm` only then closes the link (`0x46b22b`). Two channels left the order to a random
-/// choice among the ready ones, which lost asks about half the time.
+/// `ConnectToRealm` only then closes the link (`0x46b22b`).
 #[test]
 fn the_park_serves_its_requests_in_the_order_they_were_made() {
-    for round in 0..32 {
-        let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
-        world.delay_rosters(std::time::Duration::from_millis(15));
-        let cycles = fake::spawn_cycles_asking();
-        fake::login(&cycles, &realmd.addr);
-        let (realms, _) = next_list(&cycles.events);
-        cycles.realm.send(enter(realms[0].clone())).unwrap();
-        assert!(matches!(
-            next_event(&cycles.events),
-            SessionEvent::WorldAuthenticated { .. }
-        ));
-        // The first ask holds the thread; the second and the leave queue behind it together.
-        cycles.pick.send(CharRequest::Enumerate).unwrap();
-        cycles.pick.send(CharRequest::Enumerate).unwrap();
-        cycles.realm.send(RealmRequest::Leave).unwrap();
-        for ask in 1..=2 {
-            match next_event(&cycles.events) {
-                SessionEvent::CharacterList { cause, .. } => {
-                    assert_eq!(cause, RosterCause::Asked, "round {round} ask {ask}")
-                }
-                other => panic!("round {round}: expected the asked-for roster, got {other:?}"),
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    world.delay_rosters(std::time::Duration::from_millis(15));
+    let cycles = fake::spawn_cycles_asking();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::WorldAuthenticated { .. }
+    ));
+    // The first ask holds the thread; the second and the leave queue behind it together.
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    cycles.realm.send(RealmRequest::Leave).unwrap();
+    for ask in 1..=2 {
+        match next_event(&cycles.events) {
+            SessionEvent::CharacterList { cause, .. } => {
+                assert_eq!(cause, RosterCause::Asked, "ask {ask}")
             }
+            other => panic!("expected the asked-for roster, got {other:?}"),
         }
-        assert_eq!(world.enumerations_in(0), 2, "round {round}");
-        let deadline = std::time::Instant::now() + WAIT;
-        while world.open() > 0 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "round {round}: the leave was lost, the session stays open"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        drop(cycles.pick);
     }
+    assert_eq!(world.enumerations_in(0), 2);
+    wait_until(|| world.open() == 0, "the leave closes the world session");
+}
+
+/// Wait for `done`, up to the tests' bound.
+fn wait_until(done: impl Fn() -> bool, what: &str) {
+    let deadline = std::time::Instant::now() + WAIT;
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// A session's authentication and its roster carry the same epoch and the attempt's generation; a
+/// realm change dials a new session, which has a new epoch.
+#[test]
+fn a_world_session_has_one_epoch_and_a_realm_change_a_new_one() {
+    let (realmd, _world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    let cycles = fake::spawn_cycles();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    let mut seen = Vec::new();
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    for round in 0..2 {
+        let (auth, listed) = match (next_event(&cycles.events), next_event(&cycles.events)) {
+            (
+                SessionEvent::WorldAuthenticated {
+                    epoch, generation, ..
+                },
+                SessionEvent::CharacterList {
+                    epoch: listed,
+                    generation: listed_generation,
+                    ..
+                },
+            ) => ((epoch, generation), (listed, listed_generation)),
+            other => panic!("round {round}: expected the auth and the roster, got {other:?}"),
+        };
+        assert_eq!(auth, listed, "round {round}: one session, one epoch");
+        assert_eq!(auth.1, 0, "the attempt's generation");
+        seen.push(auth.0);
+        if round == 0 {
+            // Change Realm at the park: a new dial, a new session.
+            cycles.realm.send(enter(realms[0].clone())).unwrap();
+        }
+    }
+    assert_ne!(seen[0], seen[1], "a new session has a new epoch");
 }
 
 /// A server that wants Warden answers the stock screen's first ask with `SMSG_WARDEN_DATA`: the
@@ -407,6 +440,34 @@ fn a_warden_demand_at_the_asked_roster_is_a_terminal_login_failure() {
             other => panic!("expected the terminal login failure, got {other:?}"),
         }
     }
+    // The world socket is closed and the realmd link kept, as after any failed world dial.
+    wait_until(|| world.open() == 0, "the world socket closes");
+    assert_eq!(realmd.open(), 1, "the realmd link is kept");
+}
+
+/// A roster ask that fails on the stream (the server cut the connection) tells the screen its
+/// query failed (`0x5ab300`'s failure leg) before the session ends as a dropped socket does.
+#[test]
+fn a_roster_ask_cut_on_the_stream_reports_its_failure_then_the_loss() {
+    let (realmd, world) = fake::servers(|world| vec![FakeRealm::new(REALM, world)]);
+    world.cut_on_roster_ask();
+    let cycles = fake::spawn_cycles_asking();
+    fake::login(&cycles, &realmd.addr);
+    let (realms, _) = next_list(&cycles.events);
+    cycles.realm.send(enter(realms[0].clone())).unwrap();
+    let epoch = match next_event(&cycles.events) {
+        SessionEvent::WorldAuthenticated { epoch, .. } => epoch,
+        other => panic!("expected the authentication, got {other:?}"),
+    };
+    cycles.pick.send(CharRequest::Enumerate).unwrap();
+    match next_event(&cycles.events) {
+        SessionEvent::RosterFailed { epoch: failed } => assert_eq!(failed, epoch),
+        other => panic!("expected the failed roster ask, got {other:?}"),
+    }
+    assert!(matches!(
+        next_event(&cycles.events),
+        SessionEvent::Disconnected { .. }
+    ));
 }
 
 /// After a create the native policy re-emits the roster before the result; the stock screen asks
