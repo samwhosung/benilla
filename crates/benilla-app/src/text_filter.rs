@@ -16,11 +16,17 @@
 //! The predicate has one call site, in the chat chokepoint; it never edits the text, and a hit
 //! drops the line silently.
 //!
+//! The same startup init compiles `NamesProfanity.dbc` and `NamesReserved.dbc` for the character
+//! name check (`0x6c96c0`), which searches them with `ChatProfanity`'s compiled list, ungated by
+//! either CVar: [`NameFilter`], the glue VM's [`benilla_ui::script::NameLists`].
+//!
 //! Two PCRE translations are the reference's own behaviour. `\<` and `\>` are the non-directional
 //! `\b`: the client's patched escape table (`.rdata 0x812330`) gives all three the code -4.
 //! CASELESS folds ASCII only (the fold table `0x873c40` is the identity over `0x80..=0xff`), so
 //! the pattern literals and the subject are ASCII-lowercased and matched case-sensitively, which
 //! keeps every offset. The shipped patterns use no backreferences or lookaround.
+
+use std::sync::Arc;
 
 use bevy::prelude::*;
 use regex::{Regex, RegexSet};
@@ -71,6 +77,11 @@ impl PatternList {
 
     fn len(&self) -> usize {
         self.each.len()
+    }
+
+    /// Whether any row matches `subject`, already folded by [`ascii_lower`].
+    fn any(&self, subject: &str) -> bool {
+        self.len() != 0 && self.set.is_match(subject)
     }
 }
 
@@ -146,7 +157,9 @@ pub(crate) const PROFANITY_MASKED_CHAT_TYPES: &[u8] = &[
 /// The two compiled lists and the rotating mask index.
 #[derive(Resource)]
 pub(crate) struct TextFilter {
-    profanity: PatternList,
+    /// Shared with [`NameFilter`], as the reference's one compiled `ChatProfanity` triple
+    /// (`0xce893c`) is read by the masker and the name check alike.
+    profanity: Arc<PatternList>,
     spam: PatternList,
     /// `[0xb6e5f0]`: zero-initialized, advanced mod 8, never reset.
     mask_index: usize,
@@ -156,7 +169,7 @@ impl Default for TextFilter {
     /// No lists, without client data: both filters pass everything.
     fn default() -> Self {
         TextFilter {
-            profanity: PatternList::empty(),
+            profanity: Arc::new(PatternList::empty()),
             spam: PatternList::empty(),
             mask_index: 0,
         }
@@ -166,10 +179,24 @@ impl Default for TextFilter {
 impl TextFilter {
     pub(crate) fn new(profanity: &[FilterPattern], spam: &[FilterPattern]) -> Self {
         TextFilter {
-            profanity: PatternList::compile(profanity, "chat profanity filter"),
+            profanity: Arc::new(PatternList::compile(profanity, "chat profanity filter")),
             spam: PatternList::compile(spam, "chat spam filter"),
             mask_index: 0,
         }
+    }
+
+    /// The name check's three lists: `names` (`NamesProfanity`) and `reserved` (`NamesReserved`)
+    /// compiled here, `ChatProfanity` this filter's own.
+    pub(crate) fn name_filter(
+        &self,
+        names: &[FilterPattern],
+        reserved: &[FilterPattern],
+    ) -> NameFilter {
+        NameFilter(Arc::new(NameLists {
+            names: PatternList::compile(names, "profane names filter"),
+            chat: Arc::clone(&self.profanity),
+            reserved: PatternList::compile(reserved, "reserved names filter"),
+        }))
     }
 
     pub(crate) fn profanity_len(&self) -> usize {
@@ -388,6 +415,45 @@ mod tests {
         }
     }
 
+    /// The name check over the shipped lists: a word of each list reserves the name, by its row's
+    /// own anchors, caseless; the three compile whole; and the check's other rules come first.
+    #[test]
+    fn the_shipped_name_lists_reserve_names() {
+        use benilla_ui::script::check_char_name;
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let profanity = benilla_formats::load_chat_profanity(&mut chain).expect("profanity");
+        let names = benilla_formats::load_names_profanity(&mut chain).expect("names");
+        let reserved = benilla_formats::load_names_reserved(&mut chain).expect("reserved");
+        let started = std::time::Instant::now();
+        let filter = TextFilter::new(&profanity, &[]).name_filter(&names, &reserved);
+        let built = started.elapsed();
+        assert_eq!(
+            filter.0.len(),
+            (names.len(), profanity.len(), reserved.len()),
+            "every row of the three compiled"
+        );
+        let check = |name: &str| check_char_name(Some(name), &*filter.0);
+        // NamesReserved's `\<thrall\>` and `blizzard`; NamesProfanity's `\<pussy`; ChatProfanity's
+        // unanchored `shit`.
+        for name in ["Thrall", "THRALL", "Blizzardbob", "Pussycat", "Bullshit"] {
+            assert_eq!(check(name), 0x4b, "{name} is CHAR_NAME_RESERVED");
+        }
+        // `\<thrall\>` is a whole word: `Thralls` is free.
+        for name in ["Thralls", "Probeone", "Zoë"] {
+            assert_eq!(check(name), 0x52, "{name} is CHAR_NAME_SUCCESS");
+        }
+        // The walk before the lists, the lists before the length.
+        assert_eq!(check("Thrall1"), 0x48);
+        assert_eq!(
+            check("Thrallthrall"),
+            0x52,
+            "no word boundary inside the name"
+        );
+        assert_eq!(check("Blizzardbobby"), 0x4b, "13 units, reserved first");
+        eprintln!("the name lists compiled in {built:?}");
+    }
+
     /// The transcript's sentences through the real lists.
     #[test]
     fn the_shipped_lists_reproduce_the_oracle_sentences() {
@@ -412,6 +478,34 @@ mod tests {
         assert!(!f.is_spam(true, "hello friend"));
     }
 }
+
+/// The lists the character name check searches (`0x6c9909`-`0x6c9a3f`), in its order: profane
+/// names, chat profanity, reserved names.
+pub(crate) struct NameLists {
+    names: PatternList,
+    chat: Arc<PatternList>,
+    reserved: PatternList,
+}
+
+impl NameLists {
+    fn len(&self) -> (usize, usize, usize) {
+        (self.names.len(), self.chat.len(), self.reserved.len())
+    }
+}
+
+impl benilla_ui::script::NameLists for NameLists {
+    /// A caseless, unanchored search of the name as typed (`0x71fc70`, one match per call): any
+    /// row of any list.
+    fn matches(&self, name: &str) -> bool {
+        let subject = ascii_lower(name);
+        self.names.any(&subject) || self.chat.any(&subject) || self.reserved.any(&subject)
+    }
+}
+
+/// The name check's lists, once the startup has compiled them; none without client data, where
+/// no name is reserved.
+#[derive(Resource, Clone)]
+pub(crate) struct NameFilter(pub(crate) Arc<NameLists>);
 
 /// The chat chokepoint's view of the two filters, one [`SystemParam`] to keep `feed_chat` under
 /// Bevy's sixteen-parameter limit.
@@ -449,19 +543,21 @@ impl ChatTextFilter<'_> {
     }
 }
 
-/// Load both lists off the patch chain once, as the reference's startup init does
+/// Load the four lists off the patch chain once, as the reference's startup init does
 /// (`0x402b7f → 0x6c91a0`). It must run after `AssetSet::Open`, or the filters are silently empty.
 fn load_text_filter_lists(
     mut commands: Commands,
     assets: Option<Res<benilla_assets::WorldAssets>>,
 ) {
     let Some(assets) = assets else { return };
-    let (profanity, spam) = {
+    let (profanity, spam, names, reserved) = {
         use benilla_assets::LockRecover;
         let mut chain = assets.chain.lock_recover();
         (
             benilla_formats::load_chat_profanity(&mut chain),
             benilla_formats::load_spam_messages(&mut chain),
+            benilla_formats::load_names_profanity(&mut chain),
+            benilla_formats::load_names_reserved(&mut chain),
         )
     };
     // A missing list passes everything; name it and carry on.
@@ -471,13 +567,23 @@ fn load_text_filter_lists(
     let spam = spam
         .inspect_err(|e| warn!("chat spam filter unavailable: {e:#}"))
         .unwrap_or_default();
+    let names = names
+        .inspect_err(|e| warn!("profane names filter unavailable: {e:#}"))
+        .unwrap_or_default();
+    let reserved = reserved
+        .inspect_err(|e| warn!("reserved names filter unavailable: {e:#}"))
+        .unwrap_or_default();
     let filter = TextFilter::new(&profanity, &spam);
+    let name_filter = filter.name_filter(&names, &reserved);
+    let (n, _, r) = name_filter.0.len();
     info!(
-        "chat filters: {} profanity expressions, {} spam expressions",
+        "chat filters: {} profanity expressions, {} spam expressions; name filters: {n} profane, \
+         {r} reserved",
         filter.profanity_len(),
         filter.spam_len()
     );
     commands.insert_resource(filter);
+    commands.insert_resource(name_filter);
 }
 
 pub(crate) struct TextFilterPlugin;

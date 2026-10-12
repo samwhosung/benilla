@@ -90,7 +90,7 @@ use bevy::prelude::*;
 use benilla_protocol::{Character, LoginRefusal, LoginStage, RealmInfo, RosterCause};
 use benilla_ui::script::{
     GlueCharacter, GlueNotice, GlueRealm, GlueRealmCells, GlueRequest, GlueSelectCells, GlueServer,
-    NoticeState, ScriptValue, UiScript, VmKind,
+    NoticeState, ScriptValue, UiScript, VmKind, GLUE_STATUS_KEYS,
 };
 
 use crate::login::queue::QueueEstimate;
@@ -161,94 +161,6 @@ const LOGIN_RESULT_KEYS: [&str; 21] = [
     "LOGIN_SUSPENDED",
     "LOGIN_PARENTALCONTROL",
     "DISCONNECTED",
-];
-
-/// The `ClientServices` status keys (`0x85cae8`, 83 entries), the `ResponseCodes` the world
-/// server's `SMSG_AUTH_RESPONSE` byte indexes directly.
-const STATUS_KEYS: [&str; 0x53] = [
-    "RESPONSE_SUCCESS",
-    "RESPONSE_FAILURE",
-    "RESPONSE_CANCELLED",
-    "RESPONSE_DISCONNECTED",
-    "RESPONSE_FAILED_TO_CONNECT",
-    "RESPONSE_CONNECTED",
-    "RESPONSE_VERSION_MISMATCH",
-    "CSTATUS_CONNECTING",
-    "CSTATUS_NEGOTIATING_SECURITY",
-    "CSTATUS_NEGOTIATION_COMPLETE",
-    "CSTATUS_NEGOTIATION_FAILED",
-    "CSTATUS_AUTHENTICATING",
-    "AUTH_OK",
-    "AUTH_FAILED",
-    "AUTH_REJECT",
-    "AUTH_BAD_SERVER_PROOF",
-    "AUTH_UNAVAILABLE",
-    "AUTH_SYSTEM_ERROR",
-    "AUTH_BILLING_ERROR",
-    "AUTH_BILLING_EXPIRED",
-    "AUTH_VERSION_MISMATCH",
-    "AUTH_UNKNOWN_ACCOUNT",
-    "AUTH_INCORRECT_PASSWORD",
-    "AUTH_SESSION_EXPIRED",
-    "AUTH_SERVER_SHUTTING_DOWN",
-    "AUTH_ALREADY_LOGGING_IN",
-    "AUTH_LOGIN_SERVER_NOT_FOUND",
-    "AUTH_WAIT_QUEUE",
-    "AUTH_BANNED",
-    "AUTH_ALREADY_ONLINE",
-    "AUTH_NO_TIME",
-    "AUTH_DB_BUSY",
-    "AUTH_SUSPENDED",
-    "AUTH_PARENTAL_CONTROL",
-    "REALM_LIST_IN_PROGRESS",
-    "REALM_LIST_SUCCESS",
-    "REALM_LIST_FAILED",
-    "REALM_LIST_INVALID",
-    "REALM_LIST_REALM_NOT_FOUND",
-    "ACCOUNT_CREATE_IN_PROGRESS",
-    "ACCOUNT_CREATE_SUCCESS",
-    "ACCOUNT_CREATE_FAILED",
-    "CHAR_LIST_RETRIEVING",
-    "CHAR_LIST_RETRIEVED",
-    "CHAR_LIST_FAILED",
-    "CHAR_CREATE_IN_PROGRESS",
-    "CHAR_CREATE_SUCCESS",
-    "CHAR_CREATE_ERROR",
-    "CHAR_CREATE_FAILED",
-    "CHAR_CREATE_NAME_IN_USE",
-    "CHAR_CREATE_DISABLED",
-    "CHAR_CREATE_PVP_TEAMS_VIOLATION",
-    "CHAR_CREATE_SERVER_LIMIT",
-    "CHAR_CREATE_ACCOUNT_LIMIT",
-    "CHAR_CREATE_SERVER_QUEUE",
-    "CHAR_CREATE_ONLY_EXISTING",
-    "CHAR_DELETE_IN_PROGRESS",
-    "CHAR_DELETE_SUCCESS",
-    "CHAR_DELETE_FAILED",
-    "CHAR_DELETE_FAILED_LOCKED_FOR_TRANSFER",
-    "CHAR_LOGIN_IN_PROGRESS",
-    "CHAR_LOGIN_SUCCESS",
-    "CHAR_LOGIN_NO_WORLD",
-    "CHAR_LOGIN_DUPLICATE_CHARACTER",
-    "CHAR_LOGIN_NO_INSTANCES",
-    "CHAR_LOGIN_FAILED",
-    "CHAR_LOGIN_DISABLED",
-    "CHAR_LOGIN_NO_CHARACTER",
-    "CHAR_LOGIN_LOCKED_FOR_TRANSFER",
-    "CHAR_NAME_NO_NAME",
-    "CHAR_NAME_TOO_SHORT",
-    "CHAR_NAME_TOO_LONG",
-    "CHAR_NAME_INVALID_CHARACTER",
-    "CHAR_NAME_MIXED_LANGUAGES",
-    "CHAR_NAME_PROFANE",
-    "CHAR_NAME_RESERVED",
-    "CHAR_NAME_INVALID_APOSTROPHE",
-    "CHAR_NAME_MULTIPLE_APOSTROPHES",
-    "CHAR_NAME_THREE_CONSECUTIVE",
-    "CHAR_NAME_INVALID_SPACE",
-    "CHAR_NAME_CONSECUTIVE_SPACES",
-    "CHAR_NAME_FAILURE",
-    "CHAR_NAME_SUCCESS",
 ];
 
 /// The five world statuses whose failure dialog carries a help URL, `{code, urlKey}` records at
@@ -1105,10 +1017,10 @@ fn glue_realm(r: &RealmInfo) -> GlueRealm {
 /// A world status's text and its code for the URL walk; a code past the table reads
 /// `RESPONSE_FAILURE`.
 fn status_text(code: u8) -> (Text, Option<u8>) {
-    match STATUS_KEYS.get(usize::from(code)) {
+    match GLUE_STATUS_KEYS.get(usize::from(code)) {
         Some(key) => (Text::Key(key), Some(code)),
         None => (
-            Text::Key(STATUS_KEYS[usize::from(STATUS_RESPONSE_FAILURE)]),
+            Text::Key(GLUE_STATUS_KEYS[usize::from(STATUS_RESPONSE_FAILURE)]),
             Some(STATUS_RESPONSE_FAILURE),
         ),
     }
