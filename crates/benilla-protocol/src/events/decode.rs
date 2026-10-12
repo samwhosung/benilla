@@ -182,12 +182,14 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             reason,
             required_level,
             item_guid,
+            item2_guid,
             bag_slot,
         } if reason != 0 => {
             vec![SessionEvent::InventoryFailure {
                 reason,
                 required_level,
                 item_guid,
+                item2_guid,
                 bag_slot,
             }]
         }

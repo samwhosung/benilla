@@ -464,6 +464,8 @@ pub enum ServerPacket {
         reason: u8,
         required_level: Option<u32>,
         item_guid: u64,
+        /// The second item the refused operation named: a swap's other end, or 0.
+        item2_guid: u64,
         /// The destination bag's absolute player slot (255 = the player's own array).
         bag_slot: u8,
     },

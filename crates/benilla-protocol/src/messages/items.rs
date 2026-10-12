@@ -575,10 +575,10 @@ pub fn set_ammo(entry: u32) -> Vec<u8> {
 /// (`Player.cpp:8975`); the reference names that bag in reason 16's message (`0x5ede00`).
 pub(super) fn read_inventory_change_failure(
     r: &mut &[u8],
-) -> io::Result<(u8, Option<u32>, u64, u8)> {
+) -> io::Result<(u8, Option<u32>, u64, u64, u8)> {
     let reason = read_u8(r)?;
     if reason == 0 {
-        return Ok((0, None, 0, 0));
+        return Ok((0, None, 0, 0, 0));
     }
     let required_level = if reason == 1 {
         Some(read_u32_le(r)?)
@@ -586,9 +586,9 @@ pub(super) fn read_inventory_change_failure(
         None
     };
     let item_guid = read_u64_le(r)?;
-    let _item2 = read_u64_le(r)?;
+    let item2_guid = read_u64_le(r)?;
     let bag_slot = read_u8(r)?;
-    Ok((reason, required_level, item_guid, bag_slot))
+    Ok((reason, required_level, item_guid, item2_guid, bag_slot))
 }
 
 /// Read `SMSG_ITEM_TIME_UPDATE` (`Objects/Item.cpp:1096-1106`): item guid, then seconds left, and
@@ -712,7 +712,7 @@ mod tests {
         let mut r = &buf[..];
         assert_eq!(
             read_inventory_change_failure(&mut r).unwrap(),
-            (0, None, 0, 0)
+            (0, None, 0, 0, 0)
         );
     }
 
@@ -727,7 +727,7 @@ mod tests {
         let mut r = &buf[..];
         assert_eq!(
             read_inventory_change_failure(&mut r).unwrap(),
-            (1, Some(40), 0x1122_3344_5566_7788, 7)
+            (1, Some(40), 0x1122_3344_5566_7788, 0, 7)
         );
     }
 
@@ -765,12 +765,12 @@ mod tests {
         let mut buf = Vec::new();
         buf.push(3u8); // reason (ITEM_DOESNT_GO_TO_SLOT)
         buf.extend_from_slice(&0xDEAD_BEEF_0000_0001u64.to_le_bytes()); // item1
-        buf.extend_from_slice(&0u64.to_le_bytes()); // item2
+        buf.extend_from_slice(&0xDEAD_BEEF_0000_0002u64.to_le_bytes()); // item2
         buf.push(0); // bagSlot
         let mut r = &buf[..];
         assert_eq!(
             read_inventory_change_failure(&mut r).unwrap(),
-            (3, None, 0xDEAD_BEEF_0000_0001, 0)
+            (3, None, 0xDEAD_BEEF_0000_0001, 0xDEAD_BEEF_0000_0002, 0)
         );
     }
 }

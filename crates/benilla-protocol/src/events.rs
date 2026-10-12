@@ -584,6 +584,9 @@ pub enum SessionEvent {
         reason: u8,
         required_level: Option<u32>,
         item_guid: u64,
+        /// The second item the refused operation named, or 0; the client unlocks both
+        /// (`0x5e3ac0`, `0x5e3ad3`).
+        item2_guid: u64,
         /// The destination bag's absolute player slot, reason 16's `%s`; 255 is the player's own.
         bag_slot: u8,
     },

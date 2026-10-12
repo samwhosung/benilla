@@ -113,6 +113,7 @@ fn item_query_wire() {
             required_level,
             item_guid,
             bag_slot,
+            ..
         } => {
             assert_eq!((reason, required_level), (1, Some(10)));
             assert_eq!(item_guid, 0x4000_0000_0000_0042);
@@ -123,15 +124,24 @@ fn item_query_wire() {
     }
     let plain_fail = messages::parse_server(
         messages::opcode::SMSG_INVENTORY_CHANGE_FAILURE,
-        &hx("14420000000000004000000000000000000000"),
+        &hx("14420000000000004043000000000000400000"),
     )
     .unwrap();
     match plain_fail {
         ServerPacket::InventoryChangeFailure {
             reason,
             required_level,
+            item_guid,
+            item2_guid,
             ..
-        } => assert_eq!((reason, required_level), (0x14, None)),
+        } => {
+            assert_eq!((reason, required_level), (0x14, None));
+            // Both guids, as a swap's refusal names both ends.
+            assert_eq!(
+                (item_guid, item2_guid),
+                (0x4000_0000_0000_0042, 0x4000_0000_0000_0043)
+            );
+        }
         other => panic!("plain refusal, got {}", other.name()),
     }
 

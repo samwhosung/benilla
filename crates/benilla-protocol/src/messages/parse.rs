@@ -662,12 +662,13 @@ fn parse_server_body(
             }
         }
         opcode::SMSG_INVENTORY_CHANGE_FAILURE => {
-            let (reason, required_level, item_guid, bag_slot) =
+            let (reason, required_level, item_guid, item2_guid, bag_slot) =
                 items::read_inventory_change_failure(&mut r)?;
             ServerPacket::InventoryChangeFailure {
                 reason,
                 required_level,
                 item_guid,
+                item2_guid,
                 bag_slot,
             }
         }
