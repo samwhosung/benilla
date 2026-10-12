@@ -1741,7 +1741,7 @@ impl UiScript {
                 layout_force.push(id);
             }
             input.scale = scale;
-            // Clamp-to-screen is a frame property (geometry flags bit 4), so every placement path
+            // Clamp-to-screen is a frame property (geometry flags `0x10`), so every placement path
             // clamps alike, against the live window size.
             input.clamp = clamp;
             if clamp {

@@ -332,7 +332,7 @@ impl<'a> IntoIterator for &'a Anchors {
 
 /// A frame's layout input, the geometry fields the client's resolver reads: `anchorPoints[9]`
 /// (`G+0x4`), `width` (`G+0x50`), `height` (`G+0x54`), `layoutScale` (`G+0x58`) and the clamp flag
-/// (bit 4 of `G+0x3c`).
+/// (mask `0x10` of `G+0x3c`, `0x768ccd`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutInput {
     pub anchors: Anchors,
@@ -491,7 +491,7 @@ pub struct AssembleRect {
     pub rect: [f32; 4],
 }
 
-/// `assemble` (`0x767a20`): fails if any edge is `+Inf`, else with `clamp` (flags bit 4) shifts
+/// `assemble` (`0x767a20`): fails if any edge is `+Inf`, else with `clamp` (flags `0x10`) shifts
 /// the rect into `[0, extent]` on each axis, low edge first, keeping its size.
 #[allow(clippy::float_cmp)]
 pub fn assemble_rect(edges: [f32; 4], clamp: bool, extent_x: f32, extent_y: f32) -> AssembleRect {

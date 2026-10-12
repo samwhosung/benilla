@@ -84,7 +84,7 @@ impl Loader<'_> {
                 self.call(wrapper, "SetID", n, dbg);
             }
         }
-        // `clampedToScreen`: the layout's screen clamp, geometry flag bit 4 (`0x768cc0`).
+        // `clampedToScreen`: the layout's screen clamp, geometry flag `0x10` (`0x768cc0`).
         if el.attr_bool("clampedToScreen") {
             self.call(wrapper, "SetClampedToScreen", true, dbg);
         }

@@ -666,7 +666,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             ))
         })?,
     )?;
-    // Clamp-to-screen (`0x776c00`/`0x776cb0`, geometry flags bit 4): the layout resolve keeps the
+    // Clamp-to-screen (`0x776c00`/`0x776cb0`, geometry flags `0x10`): the layout resolve keeps the
     // frame's rect inside the window, size preserved.
     m.set(
         "SetClampedToScreen",

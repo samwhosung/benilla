@@ -449,7 +449,7 @@ fn fadeout_ramps_then_hides() {
     assert!(s.take_errors().is_empty());
 }
 
-/// Every GameTooltip clamps to the screen (the geometry-flags bit 4 clamp, `assemble 0x767a20`), so
+/// Every GameTooltip clamps to the screen (the geometry `0x10` clamp, `assemble 0x767a20`), so
 /// the zone text's `ANCHOR_LEFT` (`Minimap.lua:39`) hangs down from the screen top, not above it.
 #[test]
 fn owner_anchored_tooltip_clamps_to_screen() {

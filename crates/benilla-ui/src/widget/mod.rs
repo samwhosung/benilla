@@ -189,7 +189,7 @@ pub struct Frame {
     /// mask's char and key bits (`0x76af00`), which key delivery walks
     /// ([`crate::script::keyboard`]); a script-less frame there declines.
     pub keyboard_enabled: bool,
-    /// `SetClampedToScreen`, geometry flags bit 4: `0x767a20` shifts the rect back on screen.
+    /// `SetClampedToScreen`, geometry flags `0x10`: `0x767a20` shifts the rect back on screen.
     /// Every GameTooltip is born with it here; the stock tooltips get it from their template,
     /// `GameTooltipTemplate.xml:3`.
     pub clamped_to_screen: bool,
