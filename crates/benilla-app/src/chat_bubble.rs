@@ -339,6 +339,15 @@ struct Bubbles {
 }
 
 impl Bubbles {
+    /// A new line from `guid`: it replaces the speaker's old bubble, which goes back to the pool
+    /// (`0x608bb4` → `0x608c00`), and the new one is linked at the stack's tail (`0x608bbf` →
+    /// `0x4b1870`, `0x4b18f0`), unstacked until the next pass.
+    fn spawn(&mut self, guid: u64, bubble: Bubble) {
+        self.stack.retain(|g| *g != guid);
+        self.stack.push(guid);
+        self.live.insert(guid, bubble);
+    }
+
     /// The stacking step of the bubble pass (`0x4b1060`). The camera moved when any coordinate
     /// differs from the held one, compared exactly (`0x4b10a5`–`0x4b10d3`); then every bubble is
     /// re-stacked, else only a new line (`0x4b11c7`), each from the held position to its speaker
@@ -353,13 +362,6 @@ impl Bubbles {
             live, stack, eye, ..
         } = self;
         stack.retain(|g| live.contains_key(g));
-        let mut fresh: Vec<(u64, u64)> = live
-            .iter()
-            .filter(|(g, _)| !stack.contains(g))
-            .map(|(g, b)| (b.line, *g))
-            .collect();
-        fresh.sort_unstable();
-        stack.extend(fresh.into_iter().map(|(_, g)| g));
         // Pulled out in stack order, then each re-inserted (`0x4b11d7`, `0x4b1220`).
         let dirty: Vec<u64> = stack
             .iter()
@@ -466,7 +468,7 @@ fn drive_bubbles(
         let line = bubbles.next_line;
         bubbles.next_line += 1;
         // Replace, never queue (`0x608bb4`): the old line's frame goes back to the pool.
-        bubbles.live.insert(
+        bubbles.spawn(
             guid,
             Bubble {
                 line,
@@ -907,7 +909,7 @@ mod tests {
     fn speak(b: &mut Bubbles, guid: u64) {
         let line = b.next_line;
         b.next_line += 1;
-        b.live.insert(
+        b.spawn(
             guid,
             Bubble {
                 line,
@@ -959,6 +961,24 @@ mod tests {
         b.live.remove(&2);
         b.restack(Some(camera), |g| at.get(&g).copied());
         assert_eq!(b.stack, [1, 3, 4]);
+    }
+
+    /// A speaker who speaks again goes to the tail before the pass re-stacks the new lines in list
+    /// order (`0x4b1870`, `0x4b11d7`), so in a tie the later line lands in front.
+    #[test]
+    fn a_repeat_line_moves_its_speaker_to_the_tail() {
+        let at = |_: u64| Some(Vec3::new(10.0, 0.0, 0.0));
+        let mut b = Bubbles::default();
+        for g in [1, 2] {
+            speak(&mut b, g);
+        }
+        b.restack(Some(Vec3::ZERO), at);
+        assert_eq!(b.stack, [1, 2]);
+        // In one frame, 3 speaks, then 1 again, all at one distance.
+        speak(&mut b, 3);
+        speak(&mut b, 1);
+        b.restack(Some(Vec3::ZERO), at);
+        assert_eq!(b.stack, [2, 3, 1], "1's new line came after 3's");
     }
 
     /// 16 px at 1024-wide 4:3 (width/64), damped past the plate knee.
