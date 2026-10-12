@@ -139,7 +139,7 @@ mod tests {
         world.insert_resource(NetCommands(tx));
         world.init_resource::<crate::items::Items>();
         world.init_resource::<crate::net::GuidIndex>();
-        world.insert_resource(crate::net::Reputations(Vec::new()));
+        world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
         world.init_resource::<crate::spell::PendingCast>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::Cooldowns>();

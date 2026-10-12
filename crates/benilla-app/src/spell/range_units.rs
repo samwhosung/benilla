@@ -315,7 +315,7 @@ mod tests {
                 0
             }));
             world.init_resource::<crate::spell::AutoSelfCast>();
-            world.insert_resource(crate::net::Reputations(Vec::new()));
+            world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
             world.insert_resource(crate::net::SelfGuid(Some(ME)));
             let run = UnitSpeeds(speeds());
             world.spawn((

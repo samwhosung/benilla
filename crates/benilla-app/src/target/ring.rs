@@ -452,8 +452,8 @@ pub(super) fn push_ring(
 /// `0x606530`: a faction with a reputation slot (`0x605fc0`) answers with our reputation rank
 /// (`0x4d63a0`), even in GM mode; any other goes to the template comparator (`0x606640`). Neutral
 /// when anything is missing. `0x606439` caps that answer at 6, so Revered and Exalted both read 6.
-/// Not applied: the party rung (`0x6062b0`), the contested guard, forced reactions and the summon
-/// tail.
+/// The forced-reaction table ([`forced_rank`]) answers ahead of both. Not applied: the party rung
+/// (`0x6062b0`), the contested guard and the summon tail.
 pub(crate) fn ring_reaction(
     factions: Option<&Factions>,
     reputations: &Reputations,
@@ -469,6 +469,10 @@ pub(crate) fn ring_reaction(
         let catalog = &factions?.0;
         let self_store = self_store?;
         let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
+        // The forced-reaction table (`0x4d6490`), ahead of every faction rule.
+        if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
+            return Some(rank);
+        }
         // A reputation faction: our rank with it.
         if let Some(info) = catalog.reputation_faction(target_tpl.faction) {
             let standing = reputations
@@ -507,6 +511,18 @@ fn leading_rungs(target: &ObjectStore, own: &ObjectStore) -> Option<u8> {
         return Some(rank);
     }
     ffa_reaction(&target.0, &own.0).then_some(Reaction::Hostile as u8)
+}
+
+/// The forced reaction the server set for a `Faction.dbc` id (`SMSG_SET_FORCED_REACTIONS`, a
+/// `SPELL_AURA_FORCE_REACTION` aura such as *King of the Gordok*'s) as a rank on the ring scale
+/// (`0..=7`); `None` when the faction is not forced. It answers both directions of `UnitReaction`,
+/// ahead of the reputation branch and the template comparator.
+fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
+    reputations
+        .1
+        .iter()
+        .find(|&&(id, _)| id == faction)
+        .map(|&(_, rank)| rank.min(7) as u8)
 }
 
 /// `UNIT_FIELD_FLAGS` bit 3, player-controlled in behaviour: players and their pets carry it, wild
@@ -557,8 +573,9 @@ const UNIT_FLAG_PVP: u32 = 0x1000;
 /// The local player's reaction toward a unit, `0x6061e0` with the player as `this`. This direction
 /// reaches leg 3 (`0x606372`), which answers a reputation faction by the at-war bit alone, never
 /// the standing, so a not-at-war neutral NPC is friendly here and neutral to [`ring_reaction`]: a
-/// friendly-category plate with a yellow bar. Not applied, each only ever making a unit
-/// friendlier: forced reactions (`0x4d6490`), the party rung and the charmed-player case.
+/// friendly-category plate with a yellow bar. The forced-reaction table ([`forced_rank`]) answers
+/// ahead of both legs. Not applied, each only ever making a unit friendlier: the party rung and
+/// the charmed-player case.
 pub(crate) fn reaction_from_player(
     factions: Option<&Factions>,
     reputations: &Reputations,
@@ -574,6 +591,10 @@ pub(crate) fn reaction_from_player(
     let resolved = (|| {
         let catalog = &factions?.0;
         let target_tpl = catalog.template(target_store?.0.unit_faction_template()?)?;
+        // The forced-reaction table (`0x4d6490`), ahead of every faction rule.
+        if let Some(rank) = forced_rank(reputations, target_tpl.faction) {
+            return Some(rank);
+        }
         // Leg 3: a reputation faction answers by the at-war bit alone.
         if let Some(at_war) = at_war_with(catalog, reputations, target_tpl.faction) {
             return Some(if at_war {
@@ -1064,6 +1085,13 @@ mod tests {
         let chicken = unit(31);
         assert!(!category(&chicken, &quiet), "a critter is enemy-category");
         assert_eq!(rank(&chicken, &quiet), 3, "and its bar is neutral yellow");
+        // `SMSG_SET_FORCED_REACTIONS` naming the chicken's faction (28) makes it friendly, ahead
+        // of the templates — the King of the Gordok's ogres; a table naming another faction does not.
+        let forced = Reputations(Vec::new(), vec![(28, 4)]);
+        assert_eq!(rank(&chicken, &forced), 4, "a forced faction answers its forced rank");
+        assert!(category(&chicken, &forced), "…and is friendly-category");
+        let elsewhere = Reputations(Vec::new(), vec![(29, 4)]);
+        assert_eq!(rank(&chicken, &elsewhere), 3, "another faction's entry changes nothing");
 
         // A League of Arathor Emissary, template 1577, reputation slot 53, not at war.
         let emissary = unit(1577);
@@ -1080,7 +1108,7 @@ mod tests {
         assert!(category(&goblin, &quiet), "Booty Bay: friendly, not at war");
         let mut slots = vec![(0u8, 0i32); 64];
         slots[1] = (benilla_formats::faction_flags::AT_WAR, 0); // Booty Bay = slot 1
-        let at_war = Reputations(slots);
+        let at_war = Reputations(slots, Vec::new());
         assert!(!category(&goblin, &at_war), "at war → enemy category");
         assert!(
             category(&emissary, &at_war),
@@ -1156,7 +1184,7 @@ mod tests {
         let quiet = Reputations::default(); // nothing at war
         let mut slots = vec![(0u8, 0i32); 64];
         slots[36] = (benilla_formats::faction_flags::AT_WAR, 0); // Cenarion Circle = slot 36
-        let at_war = Reputations(slots);
+        let at_war = Reputations(slots, Vec::new());
 
         let attackable = |u: &ObjectStore, r: &Reputations| {
             can_attack_from_player(Some(&factions), r, Some(u), Some(&me), false)

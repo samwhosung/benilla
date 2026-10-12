@@ -410,6 +410,9 @@ pub enum SessionEvent {
     Reputations { standings: Vec<(u8, i32)> },
     /// `SMSG_SET_FACTION_STANDING`: `(reputationListId, standing)` per slot, base excluded.
     ReputationDelta { standings: Vec<(u32, i32)> },
+    /// `SMSG_SET_FORCED_REACTIONS`: `(Faction.dbc id, reaction rank)`, the whole table replacing
+    /// the last. The reaction resolvers read it ahead of the faction rules.
+    ForcedReactions { reactions: Vec<(u32, u32)> },
     /// `SMSG_SET_FACTION_VISIBLE`: sets the slot's visible flag, which decides if it is listed.
     ReputationVisible { list_id: u32 },
     /// `SMSG_NAME_QUERY_RESPONSE`: names are never descriptor fields in 1.12, only query answers.

@@ -708,7 +708,13 @@ pub(crate) fn send_query_time(
 /// `SMSG_INITIALIZE_FACTIONS`, kept current by `SMSG_SET_FACTION_STANDING` (which also reveals)
 /// and `SMSG_SET_FACTION_VISIBLE`. Flag bit `0x08` marks a pane header.
 #[derive(Resource, Default)]
-pub(crate) struct Reputations(pub(crate) Vec<(u8, i32)>);
+pub(crate) struct Reputations(
+    pub(crate) Vec<(u8, i32)>,
+    /// The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`): `(Faction.dbc id, reaction rank)`.
+    /// A faction listed here answers with that rank whatever its templates or our standing say;
+    /// empty unless a `SPELL_AURA_FORCE_REACTION` aura is on us.
+    pub(crate) Vec<(u32, u32)>,
+);
 
 /// The hearthstone bind point (`SMSG_BINDPOINTUPDATE`): the AreaTable id the tooltip's `$z`
 /// token names.
