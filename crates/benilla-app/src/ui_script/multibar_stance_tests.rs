@@ -840,9 +840,16 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     let occupied = ring_alphas(&s, quickslot2);
     assert_eq!(occupied, vec![0.5], "the occupied ring ghosts too");
 
-    // Filling a ghosted well runs `ActionButton_UpdateUsable` (ActionButton.lua:269-283), whose
-    // three-argument `SetVertexColor(1, 1, 1)` sets alpha 1.0 in this engine; the reference keeps
-    // the region's alpha (`0x79abd0`), which would leave this ring dim.
+    // Filling a ghosted well runs `ActionButton_Update` (ActionButton.lua:162, 170). Its
+    // `SetNormalTexture(path)` (`0x781960` -> `0x781970`) reuses the XML-defined region in
+    // `[button + 4*state + 0x4b8]` (`0x778f10`) and sets only its file through `0x770200`, which
+    // writes `[tex+0xcc]` and `[tex+0x128]` and redraws (`0x77fdf0`); the colour array
+    // (`+0xa4/+0xa8/+0xb4/+0xb8`) is written by `0x77f750` alone, whose callers are the Lua
+    // colour setters and the XML loader, none a button state change. Then
+    // `ActionButton_UpdateUsable` (:274-275, :281) calls the three-argument
+    // `SetVertexColor(1, 1, 1)`, which keeps the region's alpha (`0x79abd0` re-tests the alpha
+    // gate at `0x79adfe` and copies the old byte back at `0x79ae0a`). So the filled well's ring
+    // stays at the grid's 0.5 like the occupied one.
     s.set_action(
         2,
         Some(ActionSlot {
@@ -857,9 +864,8 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     s.resolve();
     assert_eq!(
         ring_alphas(&s, quickslot2),
-        vec![0.5, 1.0],
-        "the well that got an action is opaque again (its Update ran UpdateUsable); the other \
-         occupied ring keeps its ghost, payload still held"
+        vec![0.5, 0.5],
+        "the filled well's UpdateUsable keeps the ghost alpha, as the occupied ring's does"
     );
 
     s.fire_event("ACTIONBAR_HIDEGRID", vec![]);
@@ -868,12 +874,14 @@ fn a_held_payload_ghosts_the_empty_wells_it_opens() {
     let after = ring_alphas(&s, quickslot2);
     assert_eq!(
         after,
-        vec![0.5, 1.0],
-        "HideGrid touches no colour: a ring the grid ghosted stays dim past the payload — the \
-         reference's own rule (ours used to clear it here)"
+        vec![0.5, 0.5],
+        "HideGrid touches no colour (ActionButton.lua:251-258): every ring the grid ghosted stays \
+         dim past the payload"
     );
-    // The ghosted ring's next `ActionButton_UpdateUsable` is not asserted: this engine resets its
-    // alpha to 1.0, the reference keeps 0.5 (`0x79abd0`).
+    // A later `ActionButton_UpdateUsable` (a target change fires it) keeps the dim alpha too.
+    s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+    s.resolve();
+    assert_eq!(ring_alphas(&s, quickslot2), vec![0.5, 0.5]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

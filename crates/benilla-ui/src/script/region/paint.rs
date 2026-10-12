@@ -3,7 +3,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::script::object::{alpha_f32, draw_layer_from_str, draw_layer_name, tonumber_f32};
+use crate::script::object::{draw_layer_from_str, draw_layer_name, tonumber_f32};
 use crate::script::{BlendMode, Model, TexCoords};
 
 use super::region_handle_of;
@@ -36,17 +36,16 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // SetVertexColor (`0x79abd0`) reads r, g and b with a bare `lua_tonumber`, so nil or a table is
-    // 0 and never raises; stock `QuestLogFrame.lua:337` can pass three nils. The alpha is
-    // `lua_isnumber`-gated (`0x79ad4a`): anything else, a table included, stages 1.0 and never
-    // raises. Deviation: a missing alpha is 1 here; the reference re-tests the gate at the end
-    // (`0x79adfe`) and keeps the region's current alpha (read back at `0x79ac81`, copied over at
-    // `0x79ae0a`), so there a three-argument call cannot restore opacity, and stock
-    // `ActionButton_UpdateUsable` relies on it being restored.
+    // 0 and never raises; stock `QuestLogFrame.lua:337` can pass three nils. The alpha is staged
+    // 1.0 (`0x79ad43`) but re-tested at the end (`0x79adfe`): when it is not a `lua_isnumber` the
+    // colour read back at the start (`0x79ac81`) lends its alpha byte (`0x79ae0a`), so a
+    // three-argument call keeps the region's alpha. Stock `ActionButton_UpdateUsable`
+    // (`ActionButton.lua:274-281`) leans on it: a ring `ActionButton_ShowGrid` dimmed stays dim.
     m.set(
         "SetVertexColor",
         lua.create_function(
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Value)| {
-                let a = alpha_f32(lua, &a);
+                let a = lua.coerce_number(a).ok().flatten().map(|n| n as f32);
                 let (r, g, b) = (
                     tonumber_f32(lua, &r),
                     tonumber_f32(lua, &g),
@@ -55,7 +54,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let rh = region_handle_of(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
-                d.vertex_color = Some([r, g, b, a]);
+                let kept = d.vertex_color.map_or(1.0, |c| c[3]);
+                d.vertex_color = Some([r, g, b, a.unwrap_or(kept)]);
                 // The slot `SetTextColor` writes on a FontString, so it overrides the font object.
                 d.font_explicit.color = true;
                 Ok(())

@@ -280,11 +280,10 @@ fn colour_alphas_are_gated_not_raised() {
     );
 }
 
-/// `SetVertexColor`'s alpha is `lua_isnumber`-gated (`0x79ad4a`) and stages 1.0: a table or a word
-/// neither raises nor sticks, and a numeric string is its number. (The engine does not keep the
-/// region's old alpha as `0x79adfe` does; see the comment at the binding.)
+/// `SetVertexColor` (`0x79abd0`) stages alpha 1.0 but re-tests the gate at the end (`0x79adfe`):
+/// anything but a number lends the region's current alpha back (`0x79ae0a`), and never raises.
 #[test]
-fn set_vertex_color_alpha_is_gated_not_raised() {
+fn set_vertex_color_keeps_the_alpha_unless_given_a_number() {
     let s = script();
     s.run(r#"F = CreateFrame("Frame", "F") T = F:CreateTexture("T")"#)
         .unwrap();
@@ -292,18 +291,15 @@ fn set_vertex_color_alpha_is_gated_not_raised() {
         s.eval::<f64>("local _, _, _, a = T:GetVertexColor() return a")
             .unwrap()
     };
-    for (arg, want) in [
-        ("0.5", 0.5),
-        (r#""0.25""#, 0.25),
-        ("{}", 1.0),
-        ("true", 1.0),
-        (r#""x""#, 1.0),
-        ("nil", 1.0),
-    ] {
-        s.run(&format!("T:SetVertexColor(0, 0, 0, {arg})"))
-            .unwrap_or_else(|e| panic!("with {arg}: {e}"));
-        assert_eq!(alpha(), want, "SetVertexColor(0, 0, 0, {arg})");
+    s.run("T:SetVertexColor(1, 1, 1, 0.5)").unwrap();
+    assert_eq!(alpha(), 0.5);
+    for arg in ["", ", nil", ", {}", ", true", r#", "x""#] {
+        s.run(&format!("T:SetVertexColor(0, 0, 0{arg})"))
+            .unwrap_or_else(|e| panic!("SetVertexColor(0, 0, 0{arg}) raised: {e}"));
+        assert_eq!(alpha(), 0.5, "SetVertexColor(0, 0, 0{arg}) keeps it");
     }
+    s.run(r#"T:SetVertexColor(0, 0, 0, "0.25")"#).unwrap();
+    assert_eq!(alpha(), 0.25, "a numeric string is a number");
 }
 
 /// `lua_isnumber` on the first argument picks `SetTexture`'s colour form (`0x79bbd5`), so a
