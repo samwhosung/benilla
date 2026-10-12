@@ -33,6 +33,9 @@ pub struct ContainerSlot {
     pub quality: Option<u32>,
     /// The template's InventoryType; 0 while unresolved and for an item that cannot be equipped.
     pub inventory_type: u32,
+    /// The template's class (`[rec+0x0]`, read by `0x5d9f30`), `None` while unresolved: a
+    /// projectile (6) auto-equips by entry and unlocks as it goes (`0x5e1704`).
+    pub item_class: Option<u32>,
     /// The item's template entry; 0 while unresolved.
     pub item_id: u32,
     /// An `|Hitem:…|h[Name]|h` link once the name is known.
@@ -351,6 +354,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
             .and_then(|c| c.slots.get(&slot))
             .filter(|s| s.item_id != 0 && !cursor::item_locked(model, s.guid))
             .map(|s| CursorItem {
+                item_class: s.item_class,
                 guid: s.guid,
                 bag,
                 slot,
@@ -785,6 +789,7 @@ mod tests {
         slots.insert(
             1,
             ContainerSlot {
+                item_class: None,
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
@@ -1191,6 +1196,7 @@ mod tests {
         state.slots.insert(
             5,
             ContainerSlot {
+                item_class: None,
                 duration_ms: None,
                 petition: None,
                 already_bound: false,

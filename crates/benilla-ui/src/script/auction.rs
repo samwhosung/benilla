@@ -925,6 +925,7 @@ mod tests {
         {
             let mut model = s.model_mut();
             model.auction_sell_item = Some(CursorItem {
+                item_class: None,
                 guid: 0x108,
                 bag: 0,
                 slot: 1,

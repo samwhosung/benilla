@@ -694,14 +694,19 @@ fn resolve_slot(
             rolls.enchants,
         ),
     );
+    // The guid rides every shape, so the slot's lock reads from its first push.
     if entry == 0 {
-        return Some(ContainerSlot::default());
+        return Some(ContainerSlot {
+            guid,
+            ..Default::default()
+        });
     }
     let template: Option<ItemInfo> = items.template(entry, guid, commands).cloned();
     let Some(t) = template else {
         // Asked (or a cached negative); show the slot occupied while the answer is in flight.
         return Some(ContainerSlot {
             durability: None,
+            guid,
             item_id: entry,
             count,
             readable,
@@ -714,6 +719,7 @@ fn resolve_slot(
         });
     };
     Some(ContainerSlot {
+        item_class: Some(t.class),
         // A charter's guild name and master, keyed by the petition id the server puts in
         // enchantment slot 0 (`PetitionsHandler.cpp:126`), where the reference reads it
         // (`0x5ef337`) and its enchant lines skip it (`0x52c9e0`). The first hover sends the query.
@@ -1396,6 +1402,8 @@ mod tests {
         let mut sword = test_template("Sword");
         sword.quality = 4;
         sword.inventory_type = 13;
+        sword.class = 2;
+        let sword_class = sword.class;
         items.insert_template(1234, Some(sword));
         items.insert_template(1235, Some(test_template("Healing Potion")));
 
@@ -1428,6 +1436,10 @@ mod tests {
         assert_eq!((potion.quality, potion.inventory_type), (Some(1), 0));
         let pending = slot(0xA3).expect("an occupied slot");
         assert_eq!((pending.quality, pending.inventory_type), (None, 0));
+        // The guid and the class: the lock reads the one from the first push, and the
+        // auto-equip's unlock reads the other (`0x5e1704`).
+        assert_eq!((sword.guid, sword.item_class), (0xA1, Some(sword_class)));
+        assert_eq!((pending.guid, pending.item_class), (0xA3, None));
     }
 
     /// No bags and an empty vault.

@@ -1191,6 +1191,7 @@ mod tests {
             .unwrap());
 
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x102,
             bar_placeable: true,
             bag: 0,
@@ -1225,6 +1226,7 @@ mod tests {
         use crate::script::cursor::{CursorItem, CursorPayload};
         let mut s = UiScript::new().unwrap();
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x103,
             bar_placeable: true,
             bag: 0,
@@ -1260,6 +1262,7 @@ mod tests {
         }]);
         s.run("SelectPackage(1)").unwrap();
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x104,
             bar_placeable: true,
             bag: 0,

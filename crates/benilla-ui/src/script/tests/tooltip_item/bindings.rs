@@ -64,6 +64,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
     slots.insert(
         1,
         ContainerSlot {
+            item_class: None,
             duration_ms: None,
             petition: None,
             already_bound: false,

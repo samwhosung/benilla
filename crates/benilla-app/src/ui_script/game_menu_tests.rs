@@ -694,6 +694,7 @@ fn backpack() -> ContainerState {
     slots.insert(
         1,
         ContainerSlot {
+            item_class: None,
             duration_ms: None,
             petition: None,
             already_bound: false,

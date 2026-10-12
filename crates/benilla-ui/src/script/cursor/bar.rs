@@ -362,6 +362,7 @@ mod tests {
     fn place_action_item_payload_packs_the_item_kind_and_leaves_the_bag_untouched() {
         let mut s = UiScript::new().unwrap();
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x114,
             bar_placeable: true,
             bag: 0,
@@ -462,6 +463,7 @@ mod tests {
     fn a_non_usable_non_equippable_item_is_refused_and_stays_held() {
         let mut s = UiScript::new().unwrap();
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x115,
             bar_placeable: false, // no on-use spell, InventoryType 0
             bag: 0,
@@ -530,6 +532,7 @@ mod tests {
     fn a_bag_is_placeable() {
         let mut s = UiScript::new().unwrap();
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x116,
             bar_placeable: true, // equippable (BAG), even with no on-use spell
             bag: 0,
@@ -664,6 +667,7 @@ mod tests {
                 passive: false,
             }),
             CursorPayload::Item(CursorItem {
+                item_class: None,
                 guid: 0x117,
                 bar_placeable: true,
                 bag: 0,

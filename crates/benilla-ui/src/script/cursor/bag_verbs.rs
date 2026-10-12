@@ -198,6 +198,7 @@ fn grab_bag(model: &Model, live: u32) -> Option<CursorItem> {
         .and_then(|slot| model.inv_slot("player", slot))
         .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
         .map(|s| CursorItem {
+            item_class: None,
             guid: s.guid,
             bag: EQUIPMENT_BAG,
             slot: live,

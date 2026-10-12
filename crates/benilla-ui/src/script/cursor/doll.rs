@@ -80,6 +80,7 @@ pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
                 .inv_slot("player", id as usize)
                 .filter(|s| s.item_id != 0 && !item_locked(model, s.guid))
                 .map(|s| CursorItem {
+                    item_class: None,
                     guid: s.guid,
                     bag: EQUIPMENT_BAG,
                     slot: id,
@@ -192,14 +193,25 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
             true
         }
         Some(CursorPayload::Item(item)) if item.count.is_none() => {
-            // `CMSG_AUTOEQUIP_ITEM`'s send clears with `ClearCursor(0,1)` and locks nothing new.
+            // The send tail clears with `ClearCursor(ebx,1)` (`0x5e1761`): a projectile loads by
+            // entry with `CMSG_SET_AMMO` and stays in its bag, so its arm sets `ebx = 1`
+            // (`0x5e1704`, `0x5e1711`) and the item unlocks; every other arm keeps the lock for
+            // the server's answer (`0x5e1577`). Neither locks anything new.
+            let how = if item.item_class == Some(ITEM_CLASS_PROJECTILE) {
+                Clear::BOTH
+            } else {
+                Clear::KEEP_LOCK
+            };
             model.container_autoequips.push((item.bag, item.slot));
-            clear(model, Clear::KEEP_LOCK);
+            clear(model, how);
             true
         }
         _ => false,
     }
 }
+
+/// `ITEM_CLASS_PROJECTILE`, the template class `0x5d9f30` reads.
+const ITEM_CLASS_PROJECTILE: u32 = 6;
 
 /// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): the cursor
 /// clears before the slot is read (`0x4c79a9`), so a held payload goes back, never placed, its
@@ -397,6 +409,7 @@ mod tests {
         slots.insert(
             1,
             ContainerSlot {
+                item_class: None,
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
@@ -588,6 +601,7 @@ mod tests {
         slots.insert(
             3,
             ContainerSlot {
+                item_class: None,
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
@@ -707,6 +721,43 @@ mod tests {
             "the ring onto the empty finger"
         );
         assert!(s.item_locked(ring), "the ring keeps its pickup's lock");
+    }
+
+    /// Arrows auto-equip by entry and unlock in the send's clear (`ClearCursor(1,1)`, `0x5e1711`,
+    /// `0x5e1763`), on the doll drop and on `AutoEquipCursorItem` alike; anything else keeps its
+    /// lock for the server's answer (`0x5e1577`).
+    #[test]
+    fn auto_equipped_arrows_unlock_and_other_items_keep_their_lock() {
+        use crate::script::tick::heard;
+        const ARROWS: u64 = 0x4000_0000_0000_0a12;
+        let mut s = UiScript::new().unwrap();
+        s.set_inventory_slots(doll_slots());
+        let mut bag = one_fitting_bag_item();
+        bag.slots.insert(
+            2,
+            ContainerSlot {
+                item_id: 2512,
+                item_class: Some(6),
+                inventory_type: 24,
+                count: 200,
+                guid: ARROWS,
+                equip_slots: vec![0],
+                ..Default::default()
+            },
+        );
+        s.set_container(0, Some(bag));
+        let helm = one_fitting_bag_item().slots[&1].guid;
+        for verb in ["PickupInventoryItem(1)", "AutoEquipCursorItem()"] {
+            s.run("PickupContainerItem(0, 2)").unwrap();
+            heard::listen(&s, &["ITEM_LOCK_CHANGED"], None);
+            s.run(verb).unwrap();
+            assert_eq!(heard::take(&s), ["ITEM_LOCK_CHANGED"], "{verb}");
+            assert!(!s.item_locked(ARROWS), "{verb}: the arrows unlock");
+            assert_eq!(s.take_container_autoequips(), vec![(0, 2)], "{verb}");
+        }
+        s.run("PickupContainerItem(0, 1) AutoEquipCursorItem()")
+            .unwrap();
+        assert!(s.item_locked(helm), "the helm keeps its lock");
     }
 
     /// A locked occupant refuses the drop and the payload stays held (`0x4c787b`).
@@ -993,6 +1044,7 @@ mod tests {
         assert!(s.cursor_item().is_none());
 
         s.set_cursor_for_test(CursorPayload::Item(crate::script::cursor::CursorItem {
+            item_class: None,
             guid: 0x112,
             bag: EQUIPMENT_BAG,
             slot: 64,

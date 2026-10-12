@@ -57,6 +57,7 @@ impl CursorPayload {
     fn emptied(&self) -> CursorPayload {
         match self {
             CursorPayload::Item(_) => CursorPayload::Item(CursorItem {
+                item_class: None,
                 guid: 0,
                 bag: 0,
                 slot: 0,
@@ -144,6 +145,9 @@ pub struct CursorItem {
     /// The 1-based source slot.
     pub slot: u32,
     pub item_id: u32,
+    /// The template's class from the source bag slot, `None` for a worn item or an unresolved
+    /// template: [`ContainerSlot::item_class`](super::ContainerSlot::item_class).
+    pub item_class: Option<u32>,
     pub texture: Option<String>,
     pub link: Option<String>,
     /// `Some(n)` for a split of `n`, `None` for the whole stack.
@@ -522,6 +526,7 @@ pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -
         let n = count as u32;
         let whole = n == s.count;
         CursorItem {
+            item_class: s.item_class,
             guid: s.guid,
             bag,
             slot,
@@ -874,6 +879,7 @@ mod tests {
         slots.insert(
             1,
             crate::script::container::ContainerSlot {
+                item_class: None,
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
@@ -972,6 +978,7 @@ mod tests {
         assert_eq!(ask(&mut s, "CursorHasSpell"), NO);
 
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x106,
             bar_placeable: true,
             bag: 0,
@@ -1175,6 +1182,7 @@ mod tests {
         }
 
         let item = CursorPayload::Item(CursorItem {
+            item_class: None,
             guid: 0x107,
             bar_placeable: true,
             bag: 0,
