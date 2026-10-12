@@ -13,7 +13,7 @@ use super::Model;
 /// `0x4c8520`, the registrar's shared slot reader: `is-number`, `tonumber`, the truncating cast,
 /// then `dec` into the 0-based slot and the whitelist; a failure of either raises `message`. The
 /// 0-based slot, `-1` for Lua 0, the ammo leg.
-fn inventory_slot_arg(lua: &Lua, v: Value, message: &'static str) -> mlua::Result<i32> {
+pub(super) fn inventory_slot_arg(lua: &Lua, v: Value, message: &'static str) -> mlua::Result<i32> {
     let slot0 = number_arg(lua, v, message)?.wrapping_sub(1);
     if !inventory_slot_reader_accepts(slot0) {
         return Err(mlua::Error::RuntimeError(message.into()));

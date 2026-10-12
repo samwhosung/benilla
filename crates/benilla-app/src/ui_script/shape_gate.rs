@@ -37,8 +37,14 @@ const NOT_YET_ASSERTED: &[(&str, usize, &str)] = &[
 /// but those are a separate sweep.
 const QUERY_PREFIXES: &[&str] = &["Get", "Is", "Has", "Can", "Unit", "Num"];
 
-/// Getters whose negative index raises in the reference too, and why. The list may only shrink.
-const NEGATIVE_RAISES: &[&str] = &[];
+/// Getters whose negative index raises in the reference too, each with the bytes that say so: a
+/// slot reader with a whitelist raises outside it, so `-1` raises where `99` answers. Verified
+/// entries only.
+const NEGATIVE_RAISES: &[(&str, &str)] = &[(
+    "IsInventoryItemLocked",
+    "its slot reader raises \"Invalid inventory slot\" outside {0, 1-23, 40-69, 82-113} (0x4c8520, \
+     0x4c8e7c): 99 is the keyring's slot 98 and answers, -1 raises",
+)];
 
 /// The kind gate's list, same rules: a name, the wrong kinds it answers and the reason. An entry
 /// whose binding comes into agreement fails the gate.
@@ -207,7 +213,7 @@ fn every_query_binding_answers_the_reference_s_return_arity() {
         if QUERY_PREFIXES.iter().any(|p| name.starts_with(p))
             && answered.contains(&"99")
             && !answered.contains(&"-1")
-            && !NEGATIVE_RAISES.contains(name)
+            && !NEGATIVE_RAISES.iter().any(|(n, _)| n == name)
         {
             mismatches.push(format!(
                 "{name}(-1) raises while {name}(99) answers: a negative index must fall out of range"

@@ -1,7 +1,7 @@
 //! The paper-doll cursor verbs: an equipped slot is an item source under
 //! [`super::EQUIPMENT_BAG`], so the shared cursor code handles its cancel, clear and world drop.
 
-use mlua::Lua;
+use mlua::{Lua, Value};
 
 use crate::script::binding_abi::flag;
 use crate::script::container::ContainerMove;
@@ -9,7 +9,6 @@ use crate::script::tick::verb;
 use crate::script::Model;
 
 use super::{raise_cursor_update, raise_lock_changed, CursorItem, CursorPayload, EQUIPMENT_BAG};
-use crate::script::binding_abi::Idx32;
 
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
 /// fitting whole item moves in and the cursor clears, with no hop; a split or a misfit stays
@@ -238,9 +237,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "IsInventoryItemLocked",
-        lua.create_function(|lua, Idx32(id): Idx32| {
+        lua.create_function(|lua, slot: Value| {
+            // The slot reader raises for any id outside its whitelist, a negative included
+            // (`0x4c8520`, `0x4c8e7c`), and the ammo leg (Lua 0) answers nil (`0x4c8e98`).
+            let slot0 = crate::script::inventory_verbs::inventory_slot_arg(
+                lua,
+                slot,
+                "Invalid inventory slot in IsInventoryItemLocked",
+            )?;
+            if slot0 < 0 {
+                return Ok(Value::Nil);
+            }
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(is_inventory_item_locked(&model, id)))
+            Ok(flag(is_inventory_item_locked(&model, slot0 as u32 + 1)))
         })?,
     )?;
 
@@ -252,6 +261,35 @@ mod tests {
     use super::{auto_equip_cursor_item, equip_cursor_item, pickup_inventory_item};
     use crate::script::cursor::{CursorAction, CursorPayload, CursorSpell, EQUIPMENT_BAG};
     use crate::script::{ContainerMove, ContainerSlot, ContainerState, InvSlotView, UiScript};
+
+    /// `IsInventoryItemLocked`'s slot reader (`0x4c8520`) raises for any id outside {0, 1-23,
+    /// 40-69, 82-113}, a negative included (`0x4c8e7c`); the ammo leg (0) answers nil; 99 is the
+    /// keyring's slot 98 and answers.
+    #[test]
+    fn is_inventory_item_locked_raises_outside_the_readers_whitelist() {
+        let s = UiScript::new().unwrap();
+        for id in ["-1", "24", "39", "70", "81", "114", "'x'", "nil"] {
+            let err = s
+                .eval::<String>(&format!(
+                    "local ok, e = pcall(IsInventoryItemLocked, {id}) return ok and 'ok' or tostring(e)"
+                ))
+                .unwrap();
+            assert!(
+                err.contains("Invalid inventory slot in IsInventoryItemLocked"),
+                "{id}: {err}"
+            );
+        }
+        for id in ["0", "1", "23", "40", "69", "82", "99", "113", "1.9"] {
+            assert_eq!(
+                s.eval::<i64>(&format!(
+                    "return (function(...) return arg.n end)(IsInventoryItemLocked({id}))"
+                ))
+                .unwrap(),
+                1,
+                "{id} answers one value"
+            );
+        }
+    }
 
     /// Head (1), a ring in finger slot 11 that also fits 12, and Tabard (19).
     fn doll_slots() -> crate::script::InventorySlots {
