@@ -109,10 +109,24 @@ fn a_pet_book_hover_reads_the_pets_book_not_the_players() {
         assert(TTTextLeft1:GetText() == "Firebolt", "case-insensitive pet")
         tt:SetSpell(1, "book")
         assert(TTTextLeft1:GetText() == "Fireball", "any other string is the player's book")
-        -- A non-string third argument is not "the player's book": the reference bails outright
-        -- (0x532dc0's isstring test), leaving whatever was shown.
+        -- A number is stringified (0x6f3510 accepts it) and so is the player's book.
+        tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetSpell(1, 7)
-        assert(TTTextLeft1:GetText() == "Fireball", "a non-string arg shows nothing new")
+        assert(TTTextLeft1:GetText() == "Fireball", "a number book type is the player's book")
+        -- A nil, table or boolean book type, a non-number index, and an index outside 1..1024
+        -- (trunc(n - 1) outside [0, 0x400)) raise "Invalid spell slot in SetSpell" (0x855290).
+        local function raises(...)
+            local ok, err = pcall(tt.SetSpell, tt, unpack(arg))
+            return not ok and string.find(tostring(err), "Invalid spell slot in SetSpell", 1, true)
+        end
+        assert(raises(1, nil), "nil book type")
+        assert(raises(1, {}), "table book type")
+        assert(raises(1, true), "boolean book type")
+        assert(raises("x", "spell"), "non-number index")
+        assert(raises(0, "spell"), "index 0")
+        assert(raises(1025, "spell"), "index 1025")
+        assert(raises(-3, "spell"), "negative index")
+        assert(not raises(1024, "spell"), "index 1024 is in range and misses quietly")
     "#,
     )
     .unwrap();

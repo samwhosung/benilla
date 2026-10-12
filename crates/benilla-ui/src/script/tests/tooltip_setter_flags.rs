@@ -94,7 +94,14 @@ fn set_spell_answers_one_while_the_tooltip_holds_a_changing_line() {
             "slot {index}"
         );
     }
-    assert_eq!(show(&s, "TT:SetSpell(1, 5)"), "1:nil:nil");
+    // A number book type is stringified, the player's book (`0x6f3510`); anything else raises.
+    assert_eq!(show(&s, "TT:SetSpell(1, 5)"), "1:number:1");
+    assert!(s
+        .eval::<bool>(
+            "local ok, err = pcall(TT.SetSpell, TT, 1, nil) \
+             return not ok and string.find(tostring(err), 'Invalid spell slot in SetSpell', 1, true) ~= nil"
+        )
+        .unwrap());
     assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
 }
 

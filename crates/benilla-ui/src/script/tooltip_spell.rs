@@ -591,11 +591,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // bank it passes to `0x6e2ea0` (`0x532e50`).
     m.set(
         "SetSpell",
-        lua.create_function(|lua, (this, book_id, book_type): (Table, u32, Value)| {
-            // A non-string `bookType` bails (`0x532dc0`) rather than meaning the player's book.
-            let Some(book_type) = book_type.as_string().and_then(|s| s.to_str().ok()) else {
-                return Ok(Value::Nil);
-            };
+        lua.create_function(|lua, (this, book_id, book_type): (Table, Value, Value)| {
+            // The shared slot marshaller's gates (`0x532db3`, `0x532dc0`, `0x532dd9`..`0x532df4`):
+            // a number index and a number or string `bookType` (a number is stringified and so is
+            // the player's book), the index `trunc(n - 1)` in `[0, 0x400)`, else the binding
+            // raises "Invalid spell slot in SetSpell" (`0x532ec8`, string `0x855290`).
+            let (book_id, book_type) =
+                super::spellbook::spell_slot_args(book_id, book_type, "SetSpell")?;
             let now = crate::script::clock::now(lua);
             let (spell_id, name, remaining_ms) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
