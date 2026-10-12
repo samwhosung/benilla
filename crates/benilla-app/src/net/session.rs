@@ -464,8 +464,8 @@ fn character_list(
         "net: character select — {} character(s) on the account",
         characters.len()
     );
-    // A roster means a live link: clear the reason the logout's teardown `Disconnected` left, or
-    // the select screen keeps its "Server down" note until the next world entry.
+    // A roster means a live link: clear the reason a lost link left, or the select screen keeps
+    // its "Server down" note until the next world entry.
     status.last_reason = None;
     char_lists.write(CharListMessage {
         characters,
@@ -565,12 +565,14 @@ fn disconnected(
     // An unfinished far teleport dies with the socket.
     pending_transfer.0 = None;
     status.connected = false;
+    // A logout or a refused login ends the character, the link kept: nothing reconnects it.
+    let character_over = over || end == benilla_protocol::SessionEnd::LoggedOut;
     // The RTT ring is not cleared here: the read thread wipes it as it re-enters its cycle loop.
     // Every streamed entity despawns at once, not faded, so none races the reconnect's creates.
-    // The self avatar stays as the local puppet for the reconnect to refresh, unless the session
-    // is over, and then it goes as on logout.
-    let keep = if over { None } else { self_guid.0 };
-    if over {
+    // The self avatar stays as the local puppet for the reconnect to refresh, unless the
+    // character is over, and then it goes as on logout.
+    let keep = if character_over { None } else { self_guid.0 };
+    if character_over {
         self_guid.0 = None;
     }
     index.0.retain(|guid, e| {
@@ -580,7 +582,10 @@ fn disconnected(
         commands.entity(*e).despawn();
         false
     });
-    status.last_reason = Some(reason);
+    // A failure to show at character select; a kept link has none.
+    if end != benilla_protocol::SessionEnd::LoggedOut {
+        status.last_reason = Some(reason);
+    }
     // In-flight name queries died with the socket.
     names.clear_pending();
     items.clear_session();
@@ -800,3 +805,83 @@ fn packet_dropped(opcode: u16, unparseable: bool, dropped: &mut DroppedOpcodes) 
 
 #[cfg(test)]
 mod reputation_tests;
+
+#[cfg(test)]
+mod teardown_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// One teardown of `end` over a session in the world as guid 7, whose avatar is spawned:
+    /// whether the self guid survived and the reason the select screen would show.
+    fn teardown(end: benilla_protocol::SessionEnd) -> (Option<u64>, Option<String>, bool) {
+        let mut app = App::new();
+        app.init_resource::<GuidIndex>()
+            .insert_resource(SelfGuid(Some(7)))
+            .init_resource::<NetStatus>()
+            .init_resource::<NameCache>()
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .init_resource::<PendingTransfer>()
+            .add_message::<DisconnectedMessage>();
+        let avatar = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(7, avatar);
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands,
+                      mut index: ResMut<GuidIndex>,
+                      mut self_guid: ResMut<SelfGuid>,
+                      mut status: ResMut<NetStatus>,
+                      mut names: ResMut<NameCache>,
+                      mut items: ResMut<Items>,
+                      mut cooldowns: ResMut<crate::spell::Cooldowns>,
+                      mut transfer: ResMut<PendingTransfer>,
+                      mut out: MessageWriter<DisconnectedMessage>| {
+                    disconnected(
+                        "character login refused".into(),
+                        end,
+                        &mut commands,
+                        &mut index,
+                        &mut self_guid,
+                        &mut status,
+                        &mut names,
+                        &mut items,
+                        &mut cooldowns,
+                        &mut transfer,
+                        &mut out,
+                    );
+                },
+            )
+            .unwrap();
+        (
+            app.world().resource::<SelfGuid>().0,
+            app.world().resource::<NetStatus>().last_reason.clone(),
+            app.world().get_entity(avatar).is_ok(),
+        )
+    }
+
+    /// A refused login (or a logout) ends the character with the link kept: the self guid goes as
+    /// on a logout, and no failure is left for character select to show as "Server down".
+    #[test]
+    fn a_teardown_on_a_kept_link_ends_the_character_and_reports_no_failure() {
+        let (guid, reason, avatar) = teardown(benilla_protocol::SessionEnd::LoggedOut);
+        assert_eq!(guid, None, "the refused character's guid outlived it");
+        assert_eq!(reason, None, "a kept link is no failure");
+        assert!(!avatar);
+    }
+
+    /// An unattended run's lost link keeps the avatar for the reconnect, and its reason.
+    #[test]
+    fn a_reconnectable_loss_keeps_the_avatar_and_its_reason() {
+        let _lock = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _decl = crate::local_state::test_env::EnvGuard::set("WOW_UNATTENDED", "1");
+        let (guid, reason, avatar) = teardown(benilla_protocol::SessionEnd::Lost);
+        assert_eq!(guid, Some(7));
+        assert!(reason.is_some());
+        assert!(avatar);
+    }
+}
