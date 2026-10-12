@@ -65,6 +65,7 @@ pub(crate) mod font;
 mod font_block;
 mod frame_enum;
 mod glue;
+mod glue_addons;
 mod glue_core;
 mod glue_realm;
 mod glue_select;
@@ -171,7 +172,7 @@ mod zone_text;
 
 pub use action::{ActionSlot, ActionState, ActionUse};
 pub use addon::{addon_load_context, AddOnInfo, AddonLoad};
-pub use addon_enable::EnableHash;
+pub use addon_enable::{AddonStateFiles, EnableHash, EnableStore};
 pub use addon_message::{AddonDistribution, AddonSend};
 pub use auction::{
     AuctionBid, AuctionCategory, AuctionHighBidder, AuctionItemRow, AuctionListState, AuctionQuery,

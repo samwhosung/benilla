@@ -78,9 +78,161 @@ impl EnableHash {
     }
 }
 
+/// Where a character's `AddOns.txt` lives and how it is read and written, the host's: the loader
+/// `0x51ebe0` opens `WTF\Account\<account>\<realm>\<character>\AddOns.txt` and the writer
+/// `0x51ef20` creates it afresh.
+pub trait AddonStateFiles {
+    /// The rows of `realm`/`character`'s file in file order, `None` when it cannot be opened
+    /// (`0x51ec9d` falls to the legacy path, then leaves the node empty).
+    fn read(&self, realm: &str, character: &str) -> Option<Vec<(String, bool)>>;
+    /// The file written from `rows`, a line each.
+    fn write(&self, realm: &str, character: &str, rows: &[(String, bool)]);
+}
+
+/// The reference's `ADDONSTATELIST` (`0xbe1bd0`): a node per character in `SMSG_CHAR_ENUM` order,
+/// rebuilt whole (`0x51f0b0` clears it, then callback `0x472300` fills a node per record through
+/// `AddOnList_LoadCharacter 0x51ebe0`), each holding that character's enable hash. A character
+/// with no file is an empty node, whose enable bit is answered from the others.
+#[derive(Default)]
+pub struct EnableStore {
+    /// The realm half of every node's file.
+    realm: String,
+    /// `(character, enable hash)` in character-list order.
+    nodes: Vec<(String, EnableHash)>,
+}
+
+impl EnableStore {
+    /// A node per character, each read through `files`; a character with no file still gets one
+    /// (`0x51ee69`, the node is made before the file is opened).
+    pub fn load(realm: &str, characters: &[String], files: &dyn AddonStateFiles) -> Self {
+        let nodes = characters
+            .iter()
+            .map(|character| {
+                let rows = files.read(realm, character).unwrap_or_default();
+                (character.clone(), EnableHash::from_rows(rows))
+            })
+            .collect();
+        Self {
+            realm: realm.to_string(),
+            nodes,
+        }
+    }
+
+    /// A node per character, none with a row, as for characters with no file.
+    pub fn blank(realm: &str, characters: &[String]) -> Self {
+        Self {
+            realm: realm.to_string(),
+            nodes: characters
+                .iter()
+                .map(|c| (c.clone(), EnableHash::default()))
+                .collect(),
+        }
+    }
+
+    /// The characters with a node, in order.
+    pub fn characters(&self) -> impl Iterator<Item = &str> {
+        self.nodes.iter().map(|(name, _)| name.as_str())
+    }
+
+    /// `0x51e470(addon, NULL, useDefault = 0)`, the explicit-only aggregate over the nodes with a
+    /// row (`0x51e5df je 0x51e60a`): `Some(v)` when all say `v` (the reference's 2 or 0), `None`
+    /// when they are mixed or there are none.
+    fn aggregate(&self, addon: &str) -> Option<bool> {
+        let mut total = 0usize;
+        let mut on = 0usize;
+        for (_, hash) in &self.nodes {
+            if let Some(v) = hash.get(addon) {
+                total += 1;
+                on += usize::from(v);
+            }
+        }
+        match (total, on) {
+            (0, _) => None,
+            (_, 0) => Some(false),
+            (t, o) if o == t => Some(true),
+            _ => None,
+        }
+    }
+
+    /// The query `0x51e470(addon, character, useDefault = 1)`: 0 disabled, 1 enabled for some of
+    /// the nodes it counted, 2 enabled for all of them. `character` `None` is the NULL name
+    /// (`0x51e547`), which counts every node; a name counts its one node and stops (`0x51e60f`),
+    /// so it answers 0 or 2 only.
+    /// * a node with an explicit row says what the row says;
+    /// * a node with none takes [`Self::aggregate`] (the self-recursion `0x51e5f0`), then
+    ///   `default_state` (`## DefaultState`, `[rec+0x2b]`) where that is undecided (`0x51e5fd`);
+    /// * no node counted (a name no node answers to, or no nodes) is `default_state ? 2 : 0`
+    ///   (`0x51e623`): a miss walks the list out (`0x51e55a jne 0x51e611`) with `total` still 0.
+    pub fn state(&self, addon: &str, default_state: bool, character: Option<&str>) -> u8 {
+        let (mut total, mut on) = (0usize, 0usize);
+        for (name, hash) in &self.nodes {
+            if character.is_some_and(|c| !name.eq_ignore_ascii_case(c)) {
+                continue;
+            }
+            total += 1;
+            on += usize::from(
+                hash.get(addon)
+                    .unwrap_or_else(|| self.aggregate(addon).unwrap_or(default_state)),
+            );
+            if character.is_some() {
+                break;
+            }
+        }
+        match (total, on) {
+            (0, _) => u8::from(default_state) * 2,
+            (_, 0) => 0,
+            (t, o) if o < t => 1,
+            _ => 2,
+        }
+    }
+
+    /// [`Self::state`] as the load gate reads it: `AddOn_CanLoad`'s check 3 (`0x51e829`) takes
+    /// any nonzero answer as enabled.
+    pub fn enabled_for(&self, addon: &str, default_state: bool, character: Option<&str>) -> bool {
+        self.state(addon, default_state, character) != 0
+    }
+
+    /// The setter `0x51ea20`: `None` is every node (the glue's All), a name its one node; a name
+    /// with no node is a no-op, as the setter never creates one.
+    pub fn set(&mut self, addon: &str, character: Option<&str>, on: bool) {
+        for (name, hash) in &mut self.nodes {
+            if character.is_none_or(|c| name.eq_ignore_ascii_case(c)) {
+                hash.set(addon, on);
+            }
+        }
+    }
+
+    /// The writer `0x51ef20`, glue `SaveAddOns` (`0x46d990`): each dirty node's file, rewritten
+    /// from its hash; a clean node is skipped (`0x51ef59`) and its file left as it is.
+    pub fn save(&mut self, files: &dyn AddonStateFiles) {
+        for (name, hash) in &mut self.nodes {
+            if let Some(rows) = hash.take_dirty() {
+                files.write(&self.realm, name, &rows);
+            }
+        }
+    }
+
+    /// `0x51ebe0(NULL)`, glue `ResetAddOns` (`0x46d9a0`): every node already in the list read
+    /// afresh from its file, clean (`0x51ec59`), whatever the toggles since changed.
+    pub fn reload(&mut self, files: &dyn AddonStateFiles) {
+        for (name, hash) in &mut self.nodes {
+            *hash = EnableHash::from_rows(files.read(&self.realm, name).unwrap_or_default());
+        }
+    }
+
+    pub fn node(&self, character: &str) -> Option<&EnableHash> {
+        self.nodes
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(character))
+            .map(|(_, hash)| hash)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::EnableHash;
+    use super::{AddonStateFiles, EnableHash, EnableStore};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
 
     fn loaded() -> EnableHash {
         EnableHash::from_rows([("Kept".to_string(), true), ("Off".to_string(), false)])
@@ -131,5 +283,129 @@ mod tests {
         assert!(h.is_dirty());
         assert_eq!(h.get("new"), Some(true));
         assert_eq!(h.rows().len(), 3);
+    }
+
+    type Rows = Vec<(String, bool)>;
+
+    /// Files in memory: `(realm, character)` to rows, with every write kept.
+    #[derive(Default)]
+    struct Mem {
+        files: RefCell<HashMap<(String, String), Rows>>,
+        writes: RefCell<Vec<(String, String, Rows)>>,
+    }
+
+    impl Mem {
+        fn with(rows: &[(&str, &[(&str, bool)])]) -> Self {
+            let m = Mem::default();
+            for (c, r) in rows {
+                m.files.borrow_mut().insert(
+                    ("R".to_string(), (*c).to_string()),
+                    r.iter().map(|(n, v)| ((*n).to_string(), *v)).collect(),
+                );
+            }
+            m
+        }
+    }
+
+    impl AddonStateFiles for Mem {
+        fn read(&self, realm: &str, character: &str) -> Option<Vec<(String, bool)>> {
+            self.files
+                .borrow()
+                .get(&(realm.to_string(), character.to_string()))
+                .cloned()
+        }
+        fn write(&self, realm: &str, character: &str, rows: &[(String, bool)]) {
+            self.writes
+                .borrow_mut()
+                .push((realm.into(), character.into(), rows.to_vec()));
+            self.files
+                .borrow_mut()
+                .insert((realm.into(), character.into()), rows.to_vec());
+        }
+    }
+
+    fn names(n: &[&str]) -> Vec<String> {
+        n.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// The glue query's tri-state (`0x51e470`): the NULL name counts every node, a name its one.
+    #[test]
+    fn the_query_is_a_tri_state_over_the_counted_nodes() {
+        let files = Mem::with(&[
+            ("A", &[("X", true), ("Y", false)]),
+            ("B", &[("X", false), ("Y", false)]),
+            ("C", &[("Z", true)]),
+        ]);
+        let s = EnableStore::load("R", &names(&["A", "B", "C"]), &files);
+        // X: on for A, off for B, and C has no row, so it takes the mixed aggregate's default.
+        assert_eq!(
+            s.state("X", true, None),
+            1,
+            "A on, B off, C by default: some"
+        );
+        assert_eq!(
+            s.state("X", false, None),
+            1,
+            "…C off by default: still some"
+        );
+        // Y: every row says off, and C inherits that.
+        assert_eq!(s.state("Y", true, None), 0);
+        // Z: only C says, on, so A and B inherit it.
+        assert_eq!(s.state("Z", false, None), 2);
+        // A name counts its one node: 0 or 2.
+        assert_eq!(s.state("X", true, Some("A")), 2);
+        assert_eq!(s.state("X", true, Some("b")), 0);
+        assert_eq!(
+            s.state("X", true, Some("C")),
+            2,
+            "no row: the aggregate is mixed, so the default"
+        );
+        assert_eq!(s.state("X", false, Some("C")), 0);
+    }
+
+    /// A name no node answers to walks the list out with nothing counted: `DefaultState ? 2 : 0`.
+    #[test]
+    fn a_missing_node_or_an_empty_store_answers_the_default() {
+        let s = EnableStore::blank("R", &names(&["A"]));
+        assert_eq!(s.state("X", true, Some("Nobody")), 2);
+        assert_eq!(s.state("X", false, Some("Nobody")), 0);
+        let none = EnableStore::default();
+        assert_eq!(none.state("X", true, None), 2);
+        assert_eq!(none.state("X", false, None), 0);
+    }
+
+    /// The setter with no name reaches every node, with one only its own, and with a name no node
+    /// has nobody (`0x51ea65`, `0x51ebc3`).
+    #[test]
+    fn the_setter_reaches_the_nodes_it_names() {
+        let mut s = EnableStore::blank("R", &names(&["A", "B"]));
+        s.set("X", None, false);
+        assert_eq!(s.state("X", true, None), 0);
+        s.set("X", Some("b"), true);
+        assert_eq!(s.state("X", true, None), 1);
+        assert_eq!(s.state("X", true, Some("A")), 0);
+        s.set("X", Some("Nobody"), true);
+        assert_eq!(s.characters().count(), 2);
+        assert!(s.node("Nobody").is_none());
+    }
+
+    /// The writer saves a dirty node and no other; a reload throws the toggles away and reads the
+    /// files again.
+    #[test]
+    fn save_writes_only_the_dirty_nodes_and_reload_reverts() {
+        let files = Mem::with(&[("A", &[("X", true)]), ("B", &[("X", true)])]);
+        let mut s = EnableStore::load("R", &names(&["A", "B"]), &files);
+        s.set("X", Some("A"), false);
+        s.reload(&files);
+        assert_eq!(s.state("X", false, Some("A")), 2, "reset reads the file");
+        s.set("X", Some("A"), false);
+        s.save(&files);
+        let writes = files.writes.borrow().clone();
+        assert_eq!(
+            writes,
+            vec![("R".into(), "A".into(), vec![("X".to_string(), false)])]
+        );
+        s.save(&files);
+        assert_eq!(files.writes.borrow().len(), 1, "saved nodes are clean");
     }
 }

@@ -168,7 +168,7 @@ impl AddonsPanel {
     /// characters agree on, else the manifest's `## DefaultState`.
     pub(super) fn open_for(&mut self, realm: String, chars: Vec<String>) {
         self.list = addons::installed_rows();
-        self.store = addons::EnableStore::load(&realm, &chars);
+        self.store = addons::load_store(&realm, &chars);
         self.chars = chars;
         self.reread();
         // "All" is the reference's default selection.
@@ -228,7 +228,7 @@ impl AddonsPanel {
     /// Okay, `SaveAddOns` (`0x46d990` into the writer `0x51ef20`): each character a click changed
     /// gets its enable hash written; the rest are left as they are.
     fn save(&mut self) {
-        self.store.save();
+        self.store.save(&addons::AppAddonFiles);
     }
 
     /// Whether any addon is installed (`UpdateAddonButton` hides the button otherwise). Cached for
@@ -1789,7 +1789,7 @@ mod tests {
 
         // Read back through the store world entry resolves against.
         let roster = ["Alice".to_string(), "Bob".to_string(), "Carol".to_string()];
-        let store = addons::EnableStore::load("TestRealm", &roster);
+        let store = addons::load_store("TestRealm", &roster);
         let rows = addons::installed_rows();
         let read = |who: &str| -> Vec<bool> {
             rows.iter()

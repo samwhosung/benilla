@@ -288,6 +288,12 @@ impl super::UiScript {
         let count = roster.len();
         {
             let mut model = self.model_mut();
+            // `0x51f0b0(NULL)` drops every AddOn node, then the appender loads one per record
+            // (`0x4724d0` through `0x5aabe0` and `0x472300`), the file named by the realm the
+            // session dialled (`0x5ab7d0`).
+            let names: Vec<String> = roster.iter().map(|c| c.name.clone()).collect();
+            let realm = model.glue.server.name.clone();
+            model.glue.addons.load(&realm, &names);
             model.glue.roster.records = roster
                 .into_iter()
                 .map(|character| Record {

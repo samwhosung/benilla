@@ -206,7 +206,7 @@ pub(crate) struct GlueCore {
     /// ClientServices' world-connection flag (`[svc+0x1b00]`), which `IsConnectedToServer`
     /// (`0x46d380`) reads.
     connected: bool,
-    server: GlueServer,
+    pub(super) server: GlueServer,
     /// The current glue screen's name (`[0xb41478]`), which `SetCurrentScreen` (`0x46ce60` →
     /// `0x46b860`) copies into a 0x40-byte buffer.
     pub(super) screen: String,
@@ -218,6 +218,8 @@ pub(crate) struct GlueCore {
     pub(super) realms: super::glue_realm::GlueRealmList,
     /// The character roster and the select verbs' cells ([`super::glue_select`]).
     pub(super) roster: super::glue_select::GlueRoster,
+    /// The AddOns screen's enable nodes ([`super::glue_addons`]).
+    pub(super) addons: super::glue_addons::GlueAddons,
 }
 
 /// `SetCurrentScreen`'s buffer, 0x40 bytes with its terminator (`0x46b860`, `SStrCopy`).

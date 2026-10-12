@@ -52,6 +52,10 @@ pub struct AddOnInfo {
     pub saved_variables: Vec<String>,
     /// `## SavedVariablesPerCharacter`, loaded after the account file so its values win.
     pub saved_variables_per_character: Vec<String>,
+    /// `## DefaultState:` (`[rec+0x2b]`, 1 unless the manifest says `disabled`): what the enable
+    /// query `0x51e470` falls back to for a character with no row. The glue's AddOns screen asks
+    /// it per character; the in-game verbs ask it once, for the logged-in one, at registration.
+    pub default_state: bool,
     /// Enable state from `AddOns.txt`; an addon never disabled is enabled.
     pub enabled: bool,
     /// The last-saved `enabled`, which `ResetDisabledAddOns` reverts to; set by `register_addons`.
@@ -90,21 +94,26 @@ enum AddonKey {
     Name(String),
 }
 
+/// A Lua index as the verbs resolve it: `_ftol` (`0x40a2b0`) truncates; minus one, compared
+/// unsigned, so 0 raises like count + 1. An index into the sorted, filtered name array, not the
+/// registry (`0x51df00` reads `[[0xbe1b94] + 4*idx]`, bound `[0xbe1b90]`); the message is
+/// `0x837d70`'s.
+pub(super) fn index_row(model: &Model, n: f64) -> mlua::Result<usize> {
+    let index0 = (super::binding_abi::ftol(n)).wrapping_sub(1) as u32 as usize;
+    match model.addon_index.get(index0) {
+        Some(&row) => Ok(row),
+        None => Err(mlua::Error::RuntimeError(format!(
+            "AddOn index must be in the range of 1 to {}",
+            model.addon_index.len()
+        ))),
+    }
+}
+
 /// The prologue; `usage` is the verb's own `.data` string.
 fn addon_key(lua: &Lua, model: &Model, key: &Value, usage: &'static str) -> mlua::Result<AddonKey> {
     // `coerce_number` is `lua_isnumber` (`0x6f34d0`), numeric strings included.
     if let Some(n) = lua.coerce_number(key.clone())? {
-        // `_ftol` (`0x40a2b0`) truncates; minus one, compared unsigned, so 0 raises like count + 1.
-        let index0 = (n as i64 as i32).wrapping_sub(1) as u32 as usize;
-        // An index into the sorted, filtered name array, not the registry (`0x51df00` reads
-        // `[[0xbe1b94] + 4*idx]`, bound `[0xbe1b90]`); the message is `0x837d70`'s.
-        return match model.addon_index.get(index0) {
-            Some(&row) => Ok(AddonKey::Index(row)),
-            None => Err(mlua::Error::RuntimeError(format!(
-                "AddOn index must be in the range of 1 to {}",
-                model.addon_index.len()
-            ))),
-        };
+        return index_row(model, n).map(AddonKey::Index);
     }
     // `lua_isstring`, `lua_tostring` (`0x6f3510`, `0x6f3690`); lossy, as a Lua string is bytes.
     match key {
@@ -182,7 +191,7 @@ fn gate_rows(model: &Model) -> Vec<GateRow<'_>> {
 
 /// `checkAddonVersion`, read per query as `IsAddonVersionCheckEnabled` (`0x51f180`) does; unset,
 /// it is the registered default `"1"`, check on.
-fn version_check(model: &Model) -> bool {
+pub(super) fn version_check(model: &Model) -> bool {
     model
         .cvars
         .get("checkaddonversion")

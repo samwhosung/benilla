@@ -1212,6 +1212,9 @@ pub(crate) fn drive_glue_mgr(
             s.set_glue_saved_account(&crate::login::load_saved_account());
             s.set_glue_realm_cells(mgr.realm_cells);
             s.set_glue_select_cells(mgr.select_cells);
+            // The AddOn registry and the reply the session has read; the reference's C globals
+            // outlive the glue's Lua state.
+            super::addons::seat_glue_addons(s, None);
             mgr.holder_moved = true;
             fresh_vm = true;
         }

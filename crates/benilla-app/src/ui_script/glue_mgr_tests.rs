@@ -1401,9 +1401,8 @@ fn roster3() -> Vec<benilla_protocol::Character> {
 /// The stock login for `roster`, `lastCharacterIndex` as given, a realm chosen or not, with the
 /// events the roster fires logged into the VM's `EVENTS`.
 ///
-/// `GetNumAddOns` is the add-on list's verb, which this screen's `OnShow` reaches first
-/// (`UpdateAddonButton`, `AddonList.lua:4`) and which the glue VM does not have yet; the test
-/// defines it empty, or the show raises there and never asks for the list.
+/// Nothing is stubbed: the screen's `OnShow` reaches the add-on list's verbs first
+/// (`UpdateAddonButton`, `AddonList.lua:4`) and the glue VM answers them.
 fn char_select_app(
     roster: &[benilla_protocol::Character],
     last: &str,
@@ -1437,8 +1436,7 @@ fn char_select_app_on(
         script.set_cvar_engine("lastCharacterIndex", last);
         script
             .run(
-                "function GetNumAddOns() return 0 end \
-                 EVENTS = {} \
+                "EVENTS = {} \
                  local f = CreateFrame('Frame', 'RosterListener') \
                  f:SetScript('OnEvent', function() \
                    table.insert(EVENTS, event .. ' ' .. tostring(arg1)) end) \
