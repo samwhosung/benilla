@@ -12,6 +12,11 @@
 //! ([`GreetSeq`], `[0xc4d970]`, reset when the greeted NPC changes) steps `0x623910`
 //! ([`greet_line`]): five hello takes, then the pissed kit's takes in order, then a wrap.
 //!
+//! Two gates stand ahead of the select play, both on the local player: dead or a ghost (`0x605f30`
+//! at `0x60c31d`) is silent, and so is a unit whose reaction toward the player or the player's
+//! toward it is below neutral (`0x6061e0` both ways, `0x60c2d9`–`0x60c2f2`). A streamed player is
+//! required: an unresolved one bails at `0x60c315`.
+//!
 //! ## The window hello and goodbye (`0x60c3b0`, right-click)
 //!
 //! Opening any interaction window (`0x4930d0`, 14 call sites, none a mouseover) plays the NPC's
@@ -25,7 +30,8 @@ use bevy::prelude::*;
 use benilla_formats::NpcGreetingCatalog;
 use benilla_protocol::EntityKind;
 
-use crate::net::{GuidIndex, NetEntity, ObjectStore};
+use crate::net::{GuidIndex, NetEntity, ObjectStore, Reputations, SelfPlayer};
+use crate::target::{both_reactions_at_least_neutral, Factions};
 use crate::ui_gossip::GossipState;
 use crate::ui_merchant::MerchantOpen;
 use crate::ui_quest::QuestGiver;
@@ -149,6 +155,23 @@ fn resolve(
     Some((row, transform.translation))
 }
 
+/// The local player may hear an NPC: streamed, and neither dead nor a ghost (`0x605f30`). The gate
+/// of the select greeting (`0x60c31d`) and of the window hello and goodbye (`0x60c401`).
+fn player_may_hear(me: Option<&ObjectStore>) -> bool {
+    me.is_some_and(|s| !s.0.is_dead_or_ghost())
+}
+
+/// The select greeting's two gates on the local player (`0x60c270`): both reaction directions at
+/// least neutral (`0x60c2d9`, `0x60c2ef`), then [`player_may_hear`] (`0x60c31d`).
+fn select_greeting_allowed(
+    factions: Option<&Factions>,
+    reputations: &Reputations,
+    npc: Option<&ObjectStore>,
+    me: Option<&ObjectStore>,
+) -> bool {
+    both_reactions_at_least_neutral(factions, reputations, npc, me) && player_may_hear(me)
+}
+
 /// Plays one line, kit 0 being none and `None` a free-picked take, gated on the unit's channel
 /// latch (`0x60c28c`).
 fn play_line(
@@ -191,6 +214,9 @@ fn play_select_greetings(
     mut reqs: MessageReader<NpcGreetingRequest>,
     mut seq: Local<GreetSeq>,
     units: Query<(&NetEntity, &Transform, Option<&ObjectStore>)>,
+    self_store: Query<&ObjectStore, With<SelfPlayer>>,
+    factions: Option<Res<Factions>>,
+    reputations: Res<Reputations>,
     greetings: Option<Res<NpcGreetings>>,
     kits: Option<ResMut<SoundKits>>,
     assets: Option<Res<WorldAssets>>,
@@ -211,6 +237,16 @@ fn play_select_greetings(
         let Some((row, pos)) = resolve(req.npc, &units, &greetings) else {
             continue;
         };
+        // Both gates precede the counter: a refused click neither plays nor retargets it.
+        let npc_store = units.get(req.npc).ok().and_then(|(_, _, s)| s);
+        if !select_greeting_allowed(
+            factions.as_deref(),
+            &reputations,
+            npc_store,
+            self_store.single().ok(),
+        ) {
+            continue;
+        }
         // A different NPC resets the sequence counter (`0x60c326`).
         if seq.tracked != Some(req.npc) {
             *seq = GreetSeq {
@@ -251,6 +287,7 @@ fn play_window_greetings(
     index: Res<GuidIndex>,
     mut prev_active: Local<Option<u64>>,
     units: Query<(&NetEntity, &Transform, Option<&ObjectStore>)>,
+    self_store: Query<&ObjectStore, With<SelfPlayer>>,
     greetings: Option<Res<NpcGreetings>>,
     kits: Option<ResMut<SoundKits>>,
     assets: Option<Res<WorldAssets>>,
@@ -279,6 +316,10 @@ fn play_window_greetings(
     let Some(&npc) = index.0.get(&guid) else {
         return;
     };
+    // No reaction gate here (`0x60c3b0`), only the player's: dead or a ghost hears nothing.
+    if !player_may_hear(self_store.single().ok()) {
+        return;
+    }
     let Some((row, pos)) = resolve(npc, &units, &greetings) else {
         return;
     };
@@ -372,5 +413,91 @@ mod tests {
             WindowVocal::None,
             "gossip→trainer on one NPC is a silent swap — no goodbye",
         );
+    }
+
+    use benilla_protocol::field::{
+        FIELD_PLAYER_FLAGS, FIELD_UNIT_FACTIONTEMPLATE, FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH,
+        FIELD_UNIT_MAXHEALTH,
+    };
+    use benilla_protocol::ObjectFields;
+
+    /// A player-controlled player on faction template 1 (Human), with the given health and
+    /// `PLAYER_FLAGS`.
+    fn player(health: u32, player_flags: u32) -> ObjectStore {
+        ObjectStore(ObjectFields::from_pairs(&[
+            (FIELD_UNIT_FACTIONTEMPLATE, 1),
+            (FIELD_UNIT_FLAGS, 1 << 3),
+            (FIELD_UNIT_HEALTH, health),
+            (FIELD_UNIT_MAXHEALTH, 100),
+            (FIELD_PLAYER_FLAGS, player_flags),
+        ]))
+    }
+
+    /// `0x605f30` over the local player gates both the select greeting (`0x60c31d`) and the window
+    /// hello and goodbye (`0x60c401`): a corpse (health 0) and a ghost (health 1, the flag) are
+    /// silent, and so is a player that has not streamed in (`0x60c315`).
+    #[test]
+    fn a_dead_or_ghost_or_absent_player_hears_nothing() {
+        assert!(player_may_hear(Some(&player(100, 0))), "alive hears");
+        assert!(!player_may_hear(Some(&player(0, 0))), "a corpse does not");
+        assert!(!player_may_hear(Some(&player(1, 0x10))), "nor a ghost");
+        assert!(!player_may_hear(None), "nor an unstreamed player");
+    }
+
+    /// The select greeting's reaction gate (`0x60c2d9`–`0x60c2f2`) on the real templates: Monster
+    /// (14) is hostile to a Human, a Chicken (31) is neutral, and neutral passes (`cmp eax,3` /
+    /// `jl`). A dead player is refused whatever the reactions.
+    #[test]
+    fn the_select_greeting_refuses_a_hostile_unit_and_a_dead_player() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let factions =
+            Factions::from_catalog(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
+        let reps = Reputations::default();
+        let unit = |template: u32| {
+            ObjectStore(ObjectFields::from_pairs(&[(
+                FIELD_UNIT_FACTIONTEMPLATE,
+                template,
+            )]))
+        };
+        let allowed = |npc: &ObjectStore, me: &ObjectStore| {
+            select_greeting_allowed(Some(&factions), &reps, Some(npc), Some(me))
+        };
+        let me = player(100, 0);
+        assert!(!allowed(&unit(14), &me), "a hostile monster is silent");
+        assert!(allowed(&unit(31), &me), "a neutral critter greets");
+        assert!(
+            !allowed(&unit(31), &player(0, 0)),
+            "a dead player hears no greeting"
+        );
+        assert!(!allowed(&unit(31), &player(1, 0x10)), "nor does a ghost");
+    }
+
+    /// The pair is both directions: with no catalog every faction leg reads neutral, so only a rung
+    /// ahead of them (two free-for-all players, hostile both ways) is refused.
+    #[test]
+    fn the_reaction_gate_is_the_pair_not_one_direction() {
+        let reps = Reputations::default();
+        let ffa = ObjectStore(ObjectFields::from_pairs(&[
+            (FIELD_UNIT_FLAGS, 1 << 3),
+            (FIELD_PLAYER_FLAGS, 0x80),
+        ]));
+        let other = ObjectStore(ObjectFields::from_pairs(&[
+            (FIELD_UNIT_FLAGS, 1 << 3),
+            (FIELD_PLAYER_FLAGS, 0x80),
+        ]));
+        assert!(!select_greeting_allowed(
+            None,
+            &reps,
+            Some(&other),
+            Some(&ffa)
+        ));
+        let calm = player(100, 0);
+        assert!(select_greeting_allowed(
+            None,
+            &reps,
+            Some(&calm),
+            Some(&player(100, 0))
+        ));
     }
 }

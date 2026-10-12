@@ -625,6 +625,19 @@ pub(crate) fn can_interact_from_player(
     if target.0.unit_flags() & UNIT_FLAG_NOT_SELECTABLE != 0 || target.0.unit_npc_flags() == 0 {
         return false;
     }
+    both_reactions_at_least_neutral(factions, reputations, target_store, self_store)
+}
+
+/// Both `UnitReaction` directions between a unit and the local player are neutral or better: the
+/// unit's toward the player ([`ring_reaction`], `this` the unit) and the player's toward the unit
+/// ([`reaction_from_player`]), each `>= 3` on the internal scale. The test of `CanInteract`
+/// (`0x606847`, `0x606854`) and of the select greeting (`0x60c2d9`–`0x60c2f2`).
+pub(crate) fn both_reactions_at_least_neutral(
+    factions: Option<&Factions>,
+    reputations: &Reputations,
+    target_store: Option<&ObjectStore>,
+    self_store: Option<&ObjectStore>,
+) -> bool {
     const NEUTRAL: u8 = Reaction::Neutral as u8;
     ring_reaction(factions, reputations, target_store, self_store) >= NEUTRAL
         && reaction_from_player(factions, reputations, target_store, self_store) >= NEUTRAL
