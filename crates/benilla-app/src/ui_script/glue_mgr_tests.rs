@@ -3214,14 +3214,15 @@ fn a_refused_stock_login_comes_back_to_the_select_and_lists_again() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (_home, _guard) = addon_home("refused-login");
     let (mut app, world) = entry_app(true);
-    // Long after the entry, so the client is in the world when the refusal lands.
-    world.delay_refusals(std::time::Duration::from_millis(300));
+    // Held until the client is in the world, then let go.
+    world.hold_refusals();
     vm(&app)
         .run("CharacterSelect_SelectCharacter(2) CharSelectEnterWorldButton:Click()")
         .unwrap();
     until_entry(&mut app, "the world", |app| {
         client_state(app) == ClientState::InWorld
     });
+    world.release_refusals();
     until_entry(&mut app, "state 9 on a new glue", |app| {
         glue_vm(app).is_some()
             && app.world().resource::<GlueMgr>().state == ScreenState::LoginRefused
@@ -3370,6 +3371,14 @@ fn a_refusal_in_the_entrys_drain_keeps_the_stock_select() {
         assert!(std::time::Instant::now() < deadline, "no refusal");
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
+    until_entry(&mut app, "state 9", |app| {
+        app.world().resource::<GlueMgr>().state == ScreenState::LoginRefused
+    });
+    assert_eq!(
+        dialog(&app),
+        Some(("OKAY".into(), "World server is down".into())),
+        "state 9's dialog, on the glue that stood"
+    );
     until_entry(&mut app, "the list again", |app| {
         glue_vm(app).is_some()
             && app.world().resource::<GlueMgr>().state == ScreenState::Idle
