@@ -454,7 +454,7 @@
 - `WOW_RES_CENSUS` — benilla-app/src/perf/census.rs
 - `WOW_RESIZE` — benilla-app/src/capture/mod.rs
 - `WOW_REVEAL` — benilla-app/src/capture/probes/reveal.rs, benilla-app/src/dev.rs
-- `WOW_RIG` — benilla-app/src/capture/probe_rig.rs, benilla-app/src/dev.rs, benilla-app/src/local_state.rs, benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/probe_shield.rs, benilla-app/src/realm_select/smoke.rs, benilla-app/src/run_mode.rs, benilla-world/src/bgwin.rs
+- `WOW_RIG` — benilla-app/src/capture/mod.rs, benilla-app/src/capture/probe_rig.rs, benilla-app/src/dev.rs, benilla-app/src/local_state.rs, benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/probe_shield.rs, benilla-app/src/realm_select/smoke.rs, benilla-app/src/run_mode.rs, benilla-world/src/bgwin.rs
 - `WOW_RIG_CENSUS` — benilla-world/src/rig_palette.rs
 - `WOW_RIG_COST` — benilla-world/src/rig_palette.rs
 - `WOW_RIG_SKIN` — benilla-assets/src/materials.rs
