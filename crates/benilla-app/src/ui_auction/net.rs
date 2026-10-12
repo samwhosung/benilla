@@ -173,7 +173,6 @@ fn auction_command_result(
         // prints each success in chat with no fill (`0x4cc4be`).
         match action {
             auction_action::STARTED => {
-                auction.sell_slot_taken();
                 auction.refresh_owner();
                 auction
                     .messages

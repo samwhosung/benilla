@@ -5,9 +5,9 @@ use benilla_ui::script::UiScript;
 
 use super::test_ui::load_ui as load_xml;
 
-/// The stock auction window's sell button: `ClickAuctionSellItemButton` signals
-/// `NEW_AUCTION_UPDATE` in place (`0x4ce576`), so `AuctionsFrame`'s handler has painted the
-/// attached item's name by the click's next line, with no feed or tick between.
+/// The stock auction window's sell button: `ClickAuctionSellItemButton` and `StartAuction` signal
+/// `NEW_AUCTION_UPDATE` in place (`0x4ce576`, `0x4cd678`), so `AuctionsFrame`'s handler has
+/// painted the slot by the call's next line, with no feed or tick between.
 #[test]
 fn the_auction_sell_button_paints_the_attached_item_in_place() {
     benilla_formats::wow_data_or_skip!();
@@ -63,4 +63,14 @@ fn the_auction_sell_button_paints_the_attached_item_in_place() {
         .unwrap();
     assert!(s.errors().is_empty(), "{:?}", s.errors());
     assert_eq!(name.as_deref(), Some("Linen Cloth"));
+
+    // `StartAuction` empties the slot in the verb (`0x4ce92a` → `0x4cd640`): its
+    // `NEW_AUCTION_UPDATE` has repainted the button before the call returns.
+    s.set_auction(Some(benilla_ui::script::AuctionState::default()));
+    let name: Option<String> = s
+        .eval("StartAuction(100, 0, 120) return AuctionsItemButtonName:GetText()")
+        .unwrap();
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+    assert_eq!(name, None, "the button still names the sent item");
+    assert_eq!(s.take_auction_starts().len(), 1);
 }

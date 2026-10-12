@@ -143,9 +143,6 @@ pub(crate) struct AuctionOpen {
     /// pane leaves "Searching" only on it (`Blizzard_AuctionUI.lua:187`). Only that list's: the
     /// Auctions tab's update needs the `page` its `OnShow` sets (`Blizzard_AuctionUI.lua:817`).
     list_result_landed: [bool; 3],
-    /// Empty the sell slot next feed: a listing was accepted, and the stale `(bag, slot)` would
-    /// auction whatever lands there next.
-    sell_slot_taken: bool,
     /// The `Time::elapsed_secs_f64` before which a browse query is refused; opening clears it.
     query_gate: Option<f64>,
     /// Messages queued for [`feed_auction`]; [`Self::clear`] keeps them, since a sale notice can
@@ -217,10 +214,6 @@ impl AuctionOpen {
             .map(|r| r.auction_id)
     }
 
-    pub(crate) fn sell_slot_taken(&mut self) {
-        self.sell_slot_taken = true;
-    }
-
     /// Re-query our listings next frame, only if we hold them: the reference patches its cached
     /// rows, so a list it never fetched announces nothing.
     pub(crate) fn refresh_owner(&mut self) {
@@ -242,7 +235,6 @@ impl AuctionOpen {
         self.pending_owner_refresh = false;
         self.pending_bidder_refresh = false;
         self.list_result_landed = [false; 3];
-        self.sell_slot_taken = false;
     }
 
     pub(crate) fn clear_session(&mut self) {
@@ -603,11 +595,6 @@ fn feed_auction(
     *last = fresh;
     *last_open = auction.auctioneer;
 
-    // A listing was accepted: drop the staged item before anything reads the slot.
-    if std::mem::take(&mut auction.sell_slot_taken) {
-        script.clear_auction_sell_item();
-    }
-
     // The browse gate, pushed when it changes; the Search button polls it every frame.
     let now = time.elapsed_secs_f64();
     let can_query = auction.query_gate.is_none_or(|gate| now >= gate);
@@ -648,7 +635,7 @@ fn drain_auction(
         let _ = script.take_auction_bidder_query();
         let _ = script.take_auction_bids();
         let _ = script.take_auction_cancels();
-        let _ = script.take_auction_start();
+        let _ = script.take_auction_starts();
         let _ = script.take_auction_sorts();
         return;
     };
@@ -749,14 +736,14 @@ fn drain_auction(
         }
     }
 
-    // The `(bag, slot)` resolves at send time, as the reference re-reads the slot on create.
-    if let Some(req) = script.take_auction_start() {
-        let item_guid = script
-            .auction_sell_item()
-            .and_then(|(bag, slot)| {
-                self_q.iter().next().and_then(|(store, _)| {
-                    crate::ui_items::slot_guid(&store.0, bag, (slot.max(1) - 1) as u8, &objects)
-                })
+    // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); its `(bag, slot)` resolves
+    // to the guid here.
+    for req in script.take_auction_starts() {
+        let item_guid = self_q
+            .iter()
+            .next()
+            .and_then(|(store, _)| {
+                crate::ui_items::slot_guid(&store.0, req.bag, (req.slot.max(1) - 1) as u8, &objects)
             })
             .unwrap_or(0);
         if item_guid != 0 {
@@ -913,20 +900,6 @@ mod tests {
         open.clear();
         open.refresh_owner();
         assert!(!open.pending_owner_refresh);
-    }
-
-    #[test]
-    fn an_accepted_listing_releases_the_sell_slot() {
-        let mut open = AuctionOpen::default();
-        open.open(0x1234, 1);
-        assert!(!open.sell_slot_taken, "nothing listed yet");
-
-        open.sell_slot_taken();
-        assert!(open.sell_slot_taken, "the feed owes the slot a clear");
-
-        // A closed session forgets it rather than clearing a slot it does not own.
-        open.clear();
-        assert!(!open.sell_slot_taken);
     }
 
     const ME: u64 = 0x77;

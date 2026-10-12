@@ -876,7 +876,7 @@ pub(crate) struct Model {
     pub(crate) auction_bidder_query: Option<u32>,
     pub(crate) auction_bids: Vec<auction::AuctionBid>,
     pub(crate) auction_cancels: Vec<u32>,
-    pub(crate) auction_start: Option<auction::AuctionStartRequest>,
+    pub(crate) auction_starts: Vec<auction::AuctionStartRequest>,
     pub(crate) auction_sorts: Vec<(usize, String)>,
     pub(crate) auction_close: bool,
     /// The sell slot's item, resolved to its guid when `StartAuction` fires.
@@ -1539,7 +1539,7 @@ impl Model {
             auction_bidder_query: None,
             auction_bids: Vec::new(),
             auction_cancels: Vec::new(),
-            auction_start: None,
+            auction_starts: Vec::new(),
             auction_sorts: Vec::new(),
             auction_close: false,
             auction_sell_item: None,

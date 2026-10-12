@@ -158,15 +158,21 @@ pub struct AuctionQuery {
     pub usable_only: bool,
 }
 
-/// A drained `StartAuction`.
+/// A drained `StartAuction`: the sell slot's item as the verb found it, which it then emptied.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuctionStartRequest {
+    /// The attached item's `(bag, slot)`, in the cursor's space.
+    pub bag: i64,
+    pub slot: u32,
     pub min_bid: u32,
-    /// `0` = no buyout.
+    /// `0` = no buyout; else at least the minimum bid (`0x4ce87b`-`0x4ce883`).
     pub buyout: u32,
-    /// Minutes: 120, 480 or 1440, the only values the reference sends.
+    /// Minutes: 120, 480 or 1440, the only values the verb sends (`0x4ce8a0`).
     pub duration: u32,
 }
+
+/// The run times `StartAuction` accepts, in minutes (`0x807028`).
+const RUN_TIMES: [u32; 3] = [120, 480, 1440];
 
 /// A drained `PlaceAuctionBid`.
 #[derive(Clone, Debug, PartialEq)]
@@ -225,9 +231,9 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().auction_cancels)
     }
 
-    /// Drain a pending `StartAuction`.
-    pub fn take_auction_start(&mut self) -> Option<AuctionStartRequest> {
-        self.model_mut().auction_start.take()
+    /// Drain the `StartAuction`s sent since the last drain, for `CMSG_AUCTION_SELL_ITEM`.
+    pub fn take_auction_starts(&mut self) -> Vec<AuctionStartRequest> {
+        std::mem::take(&mut self.model_mut().auction_starts)
     }
 
     /// Drain the header clicks: `(list index, sort key)`, in click order. The app owns the stacks.
@@ -248,16 +254,20 @@ impl super::UiScript {
             .map(|it| (it.bag, it.slot))
     }
 
-    /// Empty the sell slot, once the auction is sent and on session close: the sell-slot clear
-    /// (`0x4cd640`), which lifts the attached item's lock with its `ITEM_LOCK_CHANGED`
-    /// (`0x495420` at `0x4cd653`) and then signals `NEW_AUCTION_UPDATE` (`0x4cd678`); an empty
-    /// slot signals nothing (`0x4cd64f`).
+    /// Empty the sell slot on session close: the sell-slot clear (`0x4cd640`), as
+    /// [`clear_sell_slot`] runs it.
     pub fn clear_auction_sell_item(&mut self) {
-        let item = self.model_mut().auction_sell_item.take();
-        if let Some(item) = item {
-            self.unlock_item(item.guid);
-            self.fire_event("NEW_AUCTION_UPDATE", Vec::new());
-        }
+        super::tick::verb(&self.lua, clear_sell_slot);
+    }
+}
+
+/// The sell-slot clear (`0x4cd640`): it lifts the attached item's lock with its
+/// `ITEM_LOCK_CHANGED` (`0x495420` at `0x4cd653`), empties the slot and then signals
+/// `NEW_AUCTION_UPDATE` (`0x4cd678`); an empty slot signals nothing (`0x4cd64f`).
+pub(crate) fn clear_sell_slot(model: &mut Model) {
+    if let Some(item) = model.auction_sell_item.take() {
+        super::cursor::unlock_item(model, item.guid);
+        model.raise("NEW_AUCTION_UPDATE", Vec::new());
     }
 }
 
@@ -686,12 +696,36 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // StartAuction(minBid, buyoutPrice, runTime), runTime in minutes.
     g.set(
         "StartAuction",
-        lua.create_function(|lua, (min_bid, buyout, duration): (u32, u32, u32)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.auction_start = Some(AuctionStartRequest {
-                min_bid,
-                buyout,
-                duration,
+        lua.create_function(|lua, (bid, buyout, run): (Value, Value, Value)| {
+            const USAGE: &str = "Usage: StartAuction(minBid, buyoutPrice, runTime)";
+            let min_bid = super::binding_abi::number_arg(lua, bid, USAGE)? as u32;
+            let buyout = super::binding_abi::number_arg(lua, buyout, USAGE)? as u32;
+            let duration = super::binding_abi::number_arg(lua, run, USAGE)? as u32;
+            super::tick::verb(lua, |model| {
+                // No auctioneer or an empty slot ends it before the send (`0x4ce7da`,
+                // `0x4ce7e4`); so does a run time off the table (`0x4ce8a0`-`0x4ce8b8`).
+                if model.auction.is_none() || !RUN_TIMES.contains(&duration) {
+                    return;
+                }
+                let Some(item) = model.auction_sell_item.as_ref() else {
+                    return;
+                };
+                // A buyout under the minimum bid is raised to it (`0x4ce87b`-`0x4ce883`).
+                let buyout = if buyout != 0 && buyout < min_bid {
+                    min_bid
+                } else {
+                    buyout
+                };
+                model.auction_starts.push(AuctionStartRequest {
+                    bag: item.bag,
+                    slot: item.slot,
+                    min_bid,
+                    buyout,
+                    duration,
+                });
+                // The send (`0x4ce925`) is followed by the slot clear whatever the server
+                // answers (`0x4ce92a` → `0x4cd640`).
+                clear_sell_slot(model);
             });
             Ok(())
         })?,
@@ -1185,5 +1219,58 @@ mod tests {
         heard::take(&s);
         s.run("ClickAuctionSellItemButton()").unwrap();
         assert_eq!(heard::take(&s), ["CURSOR_UPDATE none"]);
+    }
+
+    /// `StartAuction` (`0x4ce770`) sends and then runs the sell-slot clear in the verb
+    /// (`0x4ce92a` → `0x4cd640`): the unlock and `NEW_AUCTION_UPDATE` fire before it returns,
+    /// whatever the server answers, so a second call finds the slot empty and sends nothing
+    /// (`0x4ce7e4`). A run time off the table sends nothing and keeps the slot (`0x4ce8a0`); a
+    /// buyout under the minimum bid is raised to it (`0x4ce883`).
+    #[test]
+    fn start_auction_sends_and_empties_the_slot_in_the_verb() {
+        use crate::script::cursor::{bag_lock_probe, two_item_bag};
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(two_item_bag()));
+        s.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton()")
+            .unwrap();
+        s.run("StartAuction(100, 0, 120)").unwrap();
+        assert!(s.take_auction_starts().is_empty(), "no auctioneer");
+
+        s.set_auction(Some(AuctionState::default()));
+        heard::listen(
+            &s,
+            &["ITEM_LOCK_CHANGED", "NEW_AUCTION_UPDATE"],
+            Some(&format!(
+                "tostring({}) .. ',' .. tostring((GetAuctionSellItemInfo()))",
+                bag_lock_probe(1)
+            )),
+        );
+        s.run("StartAuction(100, 50, 100)").unwrap();
+        assert!(
+            s.take_auction_starts().is_empty(),
+            "a run time off the table"
+        );
+        assert_eq!(s.auction_sell_item(), Some((0, 1)));
+
+        s.run("StartAuction(100, 50, 480) StartAuction(100, 0, 480)")
+            .unwrap();
+        assert_eq!(
+            heard::take(&s),
+            ["ITEM_LOCK_CHANGED nil,nil", "NEW_AUCTION_UPDATE nil,nil"]
+        );
+        assert_eq!(
+            s.take_auction_starts(),
+            [AuctionStartRequest {
+                bag: 0,
+                slot: 1,
+                min_bid: 100,
+                buyout: 100,
+                duration: 480,
+            }],
+            "one send; the second call finds the slot empty"
+        );
+        let err = s.run("StartAuction(100, 0)").unwrap_err().to_string();
+        assert!(err.contains("Usage: StartAuction(minBid, buyoutPrice, runTime)"));
     }
 }
