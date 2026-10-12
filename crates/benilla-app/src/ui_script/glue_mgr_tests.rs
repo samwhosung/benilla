@@ -1335,6 +1335,7 @@ struct CharWrites<'w> {
     renames: MessageWriter<'w, crate::net::CharRenameMessage>,
     entered: MessageWriter<'w, crate::net::EnteredWorldMessage>,
     refused: MessageWriter<'w, crate::net::CharacterLoginFailedMessage>,
+    logouts: MessageWriter<'w, crate::net::LoggedOutMessage>,
 }
 
 fn pump(
@@ -1431,14 +1432,14 @@ fn pump(
                     billing_time_rested,
                     tutorial_flags,
                 });
-                // The frame ends at the entry: the screens' edges take the entry and a refusal
-                // behind it in frames of their own.
-                break;
             }
             E::CharacterLoginFailed { result } => {
                 char_writes
                     .refused
                     .write(crate::net::CharacterLoginFailedMessage { result });
+            }
+            E::LoggedOut => {
+                char_writes.logouts.write(crate::net::LoggedOutMessage);
             }
             _ => {}
         }
@@ -1473,6 +1474,7 @@ fn live_app_with(
         .insert_resource(LoginAbandon(cycles.abandon.clone()))
         .insert_resource(crate::net::RealmChoice(cycles.realm.clone()))
         .insert_resource(crate::net::CharPick(cycles.pick.clone()))
+        .insert_resource(crate::net::NetCommands(cycles.commands.clone()))
         .insert_resource(crate::realm_select::Realms::us_client())
         .insert_resource(crate::entities::CharCreate(
             benilla_formats::CharCreateCatalog::load(&mut chain).expect("ChrRaces"),
@@ -1504,6 +1506,7 @@ fn live_app_with(
         .add_message::<crate::net::CharRenameMessage>()
         .add_message::<crate::net::EnteredWorldMessage>()
         .add_message::<crate::net::CharacterLoginFailedMessage>()
+        .add_message::<crate::net::LoggedOutMessage>()
         .init_resource::<AddonInfoReply>()
         .add_message::<RealmListMessage>()
         .add_message::<DisconnectedMessage>()
@@ -3086,7 +3089,6 @@ fn entry_app(refuse: bool) -> (App, fake::World) {
     }
     app.add_plugins(bevy::state::app::StatesPlugin)
         .insert_state(ClientState::CharSelect)
-        .add_message::<crate::net::LoggedOutMessage>()
         .add_systems(
             OnEnter(ClientState::InWorld),
             super::super::lifecycle::arm_entry_ui_load,
@@ -3198,8 +3200,8 @@ fn the_stock_enter_world_logs_in_and_the_glue_leaves_with_the_screen() {
     assert_eq!(app.world().resource::<GlueMgr>().state, ScreenState::Idle);
 }
 
-/// A refused login (vmangos's result 1) comes back to the stock select in state 9: the screen's
-/// own list ask sends nothing (`0x46b880`), state 9's frame opens `OKAY` with
+/// A refused login (vmangos's result 1) that lands once the client is in the world comes back to
+/// the stock select in state 9: the screen's own list ask sends nothing (`0x46b880`), state 9's frame opens `OKAY` with
 /// `CHAR_LOGIN_NO_WORLD`'s text (`0x46c283`), and the button the stock `OnShow` presses
 /// (`0x46b767`) asks for the list again on the same session, which comes back with the character
 /// entered selected (`lastCharacterIndex`).
@@ -3211,6 +3213,8 @@ fn a_refused_stock_login_comes_back_to_the_select_and_lists_again() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (_home, _guard) = addon_home("refused-login");
     let (mut app, world) = entry_app(true);
+    // Long after the entry, so the client is in the world when the refusal lands.
+    world.delay_refusals(std::time::Duration::from_millis(300));
     vm(&app)
         .run("CharacterSelect_SelectCharacter(2) CharSelectEnterWorldButton:Click()")
         .unwrap();
@@ -3227,7 +3231,11 @@ fn a_refused_stock_login_comes_back_to_the_select_and_lists_again() {
         dialog(&app),
         Some(("OKAY".into(), "World server is down".into()))
     );
-    assert_eq!(world.enumerations(), 1, "nothing asked before the button");
+    assert_eq!(
+        world.enumerations(),
+        1,
+        "nothing asked before the button"
+    );
     until_entry(&mut app, "the list again", |app| {
         app.world().resource::<GlueMgr>().state == ScreenState::Idle
             && vm(app).glue_roster_guids().len() == 3
@@ -3283,5 +3291,47 @@ fn the_stock_enter_world_stops_at_a_locked_or_renamed_character() {
     assert!(world
         .bodies(benilla_protocol::messages::opcode::CMSG_PLAYER_LOGIN)
         .is_empty());
+    assert_eq!(vm(&app).errors(), Vec::<String>::new());
+}
+
+/// A refusal in the same drain as the entry it revokes (vmangos refuses before touching the
+/// database) is the last word: the client never leaves the stock select, whose glue VM stands, and
+/// the refusal runs its state 9 there, to the list again on the same session.
+#[test]
+fn a_refusal_in_the_entrys_drain_keeps_the_stock_select() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let _l = crate::local_state::test_env::ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (_home, _guard) = addon_home("refused-drain");
+    let (mut app, world) = entry_app(true);
+    let session = vm(&app).session();
+    vm(&app)
+        .run("CharacterSelect_SelectCharacter(2) CharSelectEnterWorldButton:Click()")
+        .unwrap();
+    app.update();
+    // The entry, its refusal and the session's end, all queued before the next drain.
+    let deadline = std::time::Instant::now() + fake::WAIT;
+    while app.world().resource::<IoEvents>().0.len() < 3 {
+        assert!(std::time::Instant::now() < deadline, "no refusal");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    until_entry(&mut app, "the list again", |app| {
+        glue_vm(app).is_some()
+            && app.world().resource::<GlueMgr>().state == ScreenState::Idle
+            && vm(app).glue_roster_guids().len() == 3
+    });
+    assert_eq!(client_state(&app), ClientState::CharSelect);
+    assert_eq!(vm(&app).session(), session, "the glue never left");
+    assert!(
+        app.world()
+            .resource::<crate::char_select::Roster>()
+            .pending_row()
+            .is_none(),
+        "the pick went with the refusal"
+    );
+    assert_eq!((world.authentications(), world.enumerations_in(0)), (1, 2));
+    assert_eq!(vm(&app).glue_selected_guid(), Some(0x12));
+    assert_eq!(dialog(&app), None);
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
 }

@@ -349,6 +349,8 @@ pub(crate) struct World {
     cut: Arc<AtomicBool>,
     /// Answer `CMSG_PLAYER_LOGIN` with `SMSG_CHARACTER_LOGIN_FAILED`.
     refuse: Arc<AtomicBool>,
+    /// How long a refusal waits before it is sent.
+    refuse_delay: Arc<Mutex<Duration>>,
     /// Packets sent right behind `SMSG_LOGOUT_COMPLETE`, as the world session leaves them in flight.
     trail: Trail,
     /// The `SMSG_ADDON_INFO` body every session is sent, and whether it follows the authentication
@@ -404,6 +406,11 @@ impl World {
     /// vmangos's result 1).
     pub(crate) fn refuse_logins(&self) {
         self.refuse.store(true, Ordering::SeqCst);
+    }
+
+    /// Hold every refusal back this long.
+    pub(crate) fn delay_refusals(&self, by: Duration) {
+        *self.refuse_delay.lock().unwrap() = by;
     }
 
     /// Send `SMSG_ADDON_INFO` with one record per status (`2` hides the addon) to every session
@@ -517,6 +524,8 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
     let cut_flag = Arc::clone(&cut);
     let refuse = Arc::new(AtomicBool::new(false));
     let refuse_flag = Arc::clone(&refuse);
+    let refuse_delay = Arc::new(Mutex::new(Duration::ZERO));
+    let refuse_wait = Arc::clone(&refuse_delay);
     let trail: Trail = Arc::default();
     let trailing = Arc::clone(&trail);
     let addon_info: AddonReply = Arc::default();
@@ -570,6 +579,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
             let warden_flag = Arc::clone(&warden_flag);
             let cut_flag = Arc::clone(&cut_flag);
             let refuse_flag = Arc::clone(&refuse_flag);
+            let refuse_wait = Arc::clone(&refuse_wait);
             let trailing = Arc::clone(&trailing);
             let index = {
                 let mut all = session_log.lock().unwrap();
@@ -643,12 +653,16 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
                             }
                             send(&mut s, Some(&mut crypto), opcode::SMSG_CHAR_RENAME, &body);
                         }
-                        opcode::CMSG_PLAYER_LOGIN if refuse_flag.load(Ordering::SeqCst) => send(
-                            &mut s,
-                            Some(&mut crypto),
-                            opcode::SMSG_CHARACTER_LOGIN_FAILED,
-                            &[1],
-                        ),
+                        opcode::CMSG_PLAYER_LOGIN if refuse_flag.load(Ordering::SeqCst) => {
+                            let wait = *refuse_wait.lock().unwrap();
+                            thread::sleep(wait);
+                            send(
+                                &mut s,
+                                Some(&mut crypto),
+                                opcode::SMSG_CHARACTER_LOGIN_FAILED,
+                                &[1],
+                            );
+                        }
                         opcode::CMSG_LOGOUT_REQUEST => {
                             send(&mut s, Some(&mut crypto), opcode::SMSG_LOGOUT_COMPLETE, &[]);
                             for (op, body) in trailing.lock().unwrap().clone() {
@@ -672,6 +686,7 @@ pub(crate) fn world(listener: TcpListener, keys: Receiver<Key>) -> World {
         warden,
         cut,
         refuse,
+        refuse_delay,
         trail,
         addon_info,
         open,
