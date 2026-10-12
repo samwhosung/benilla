@@ -67,6 +67,9 @@ fn row(sender: &str, subject: &str, was_read: bool, item_id: u32, cod: u32) -> M
         item_quality: (item_id != 0).then_some(1),
         can_delete: false,
         item_random_property_id: 0,
+        cod_payment: false,
+        message_type: 0,
+        mail_template_id: 0,
     }
 }
 
@@ -100,6 +103,7 @@ fn small_inbox() -> MailState {
             row("Thrall", "Warchief's orders", false, 2589, 0),
             row("Jaina", "A letter", true, 0, 0),
         ],
+        open: true,
     }
 }
 
@@ -139,6 +143,8 @@ fn mail_show_opens_and_inbox_populates() {
     s.set_mail(Some(small_inbox()));
 
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     assert!(
         s.eval::<bool>("return MailFrame:IsShown()").unwrap(),
         "the window opens on MAIL_SHOW"
@@ -178,8 +184,10 @@ fn paging_math_enables_next_only_when_overflowing() {
     for i in 0..9 {
         inbox.push(row(&format!("S{i}"), &format!("subj{i}"), false, 0, 0));
     }
-    s.set_mail(Some(MailState { inbox }));
+    s.set_mail(Some(MailState { inbox, open: true }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
 
     // Page 1: prev disabled, next enabled.
@@ -209,8 +217,11 @@ fn cod_tag_shows_on_a_cod_mail() {
             row("Auctioneer", "COD parcel", false, 2589, 5000), // COD 50s
             row("Jaina", "A letter", true, 0, 0),               // no COD
         ],
+        open: true,
     }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
 
     assert!(
@@ -233,6 +244,8 @@ fn opening_a_letter_shows_the_open_frame_and_queues_the_body() {
     load_ui(&s);
     s.set_mail(Some(small_inbox()));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     let _ = s.take_mail_opens();
 
@@ -261,6 +274,8 @@ fn a_letter_and_the_centre_occupant_evict_each_other() {
     load_ui(&s);
     s.set_mail(Some(small_inbox()));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     let _ = s.take_mail_opens();
 
@@ -317,6 +332,8 @@ fn reply_switches_to_send_tab_prefilled() {
     load_ui(&s);
     s.set_mail(Some(small_inbox()));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     // A programmatic click toggles the check button on, then fires OnClick (this = the button).
     s.run("MailItem1Button:Click()").unwrap();
@@ -345,8 +362,11 @@ fn closing_a_plain_letter_does_not_delete_it() {
     load_ui(&s);
     s.set_mail(Some(MailState {
         inbox: vec![row("One", "test", false, 0, 0)],
+        open: true,
     }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     let _ = s.take_mail_opens();
     let _ = s.take_mail_deletes();
@@ -372,8 +392,13 @@ fn closing_a_taken_husk_deletes_it() {
     load_ui(&s);
     let mut husk = row("One", "test", false, 0, 0);
     husk.text_created = true;
-    s.set_mail(Some(MailState { inbox: vec![husk] }));
+    s.set_mail(Some(MailState {
+        inbox: vec![husk],
+        open: true,
+    }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     let _ = s.take_mail_opens();
     let _ = s.take_mail_deletes();
@@ -399,8 +424,11 @@ fn expiry_text_pluralizes_days() {
     one_day.days_left = 1.7;
     s.set_mail(Some(MailState {
         inbox: vec![row("One", "a", false, 0, 0), one_day],
+        open: true,
     }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     assert_eq!(
         s.eval::<String>("return MailItem1ExpireTime:GetText()")
@@ -424,8 +452,13 @@ fn letter_button_shows_for_a_body_letter_and_click_queues_the_copy() {
     load_ui(&s);
     let mut mail = row("One", "asd", false, 0, 0);
     mail.money = 10000;
-    s.set_mail(Some(MailState { inbox: vec![mail] }));
+    s.set_mail(Some(MailState {
+        inbox: vec![mail],
+        open: true,
+    }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
 
     s.run("MailItem1Button:Click()").unwrap();
@@ -460,8 +493,13 @@ fn letter_button_hides_once_copied() {
     let mut mail = row("One", "asd", false, 0, 0);
     mail.money = 10000;
     mail.text_created = true;
-    s.set_mail(Some(MailState { inbox: vec![mail] }));
+    s.set_mail(Some(MailState {
+        inbox: vec![mail],
+        open: true,
+    }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
 
     s.run("MailItem1Button:Click()").unwrap();
@@ -482,8 +520,13 @@ fn money_button_hover_shows_the_amount_tooltip() {
     load_ui(&s);
     let mut mail = row("One", "asd", false, 0, 0);
     mail.money = 10000;
-    s.set_mail(Some(MailState { inbox: vec![mail] }));
+    s.set_mail(Some(MailState {
+        inbox: vec![mail],
+        open: true,
+    }));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     s.run("MailItem1Button:Click()").unwrap();
 
@@ -510,6 +553,8 @@ fn inbox_page_label_stays_empty_like_the_reference() {
     load_ui(&s);
     s.set_mail(Some(small_inbox()));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     let text = s
         .eval::<Option<String>>("return InboxCurrentPage:GetText()")
@@ -564,6 +609,8 @@ fn an_auction_invoice_renders_as_a_receipt() {
         inbox.inbox[0].invoice = Some(invoice);
         s.set_mail(Some(inbox));
         s.fire_event("MAIL_SHOW", vec![]);
+        // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+        s.mail_request_resolved();
         s.fire_event("MAIL_INBOX_UPDATE", vec![]);
         s.run("MailItem1Button:Click()").unwrap();
         s
@@ -665,6 +712,8 @@ fn a_plain_letter_keeps_its_body_and_shows_no_receipt() {
     load_ui(&s);
     s.set_mail(Some(small_inbox()));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     s.run("MailItem1Button:Click()").unwrap();
     assert!(!s
@@ -690,6 +739,8 @@ fn the_open_letters_ring_icon_is_masked_but_the_inboxs_is_not() {
     s.set_screen_size(1024.0, 768.0);
     s.set_mail(Some(small_inbox()));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.fire_event("MAIL_INBOX_UPDATE", vec![]);
     s.run("MailItem1Button:Click()").unwrap();
     s.resolve();
@@ -736,6 +787,8 @@ fn every_send_tab_box_takes_a_keystroke_not_just_the_one_with_an_onchar() {
     s.set_screen_size(1024.0, 768.0);
     load_ui(&s);
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.run("MailFrameTab_OnClick(2)").unwrap();
     s.resolve();
     assert!(s.eval::<bool>("return SendMailFrame:IsVisible()").unwrap());
@@ -792,6 +845,8 @@ fn the_compose_reset_clears_the_subject_and_the_attachment_together() {
     load_ui(&s);
     s.set_container(0, Some(one_linen_backpack()));
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.run("MailFrameTab_OnClick(2)").unwrap();
 
     // Pick the item up and click the send slot; the stock tab names the letter after it.
@@ -852,6 +907,8 @@ fn send_tab() -> UiScript {
     s.set_text_measurer(Box::new(Mono));
     load_ui(&s);
     s.fire_event("MAIL_SHOW", vec![]);
+    // The list answer to `MAIL_SHOW`'s `CheckInbox` lifts the request lock (`0x4ad5d0`).
+    s.mail_request_resolved();
     s.run("MailFrameTab_OnClick(2)").unwrap();
     s.resolve();
     s

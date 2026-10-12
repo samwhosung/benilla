@@ -34,6 +34,9 @@ pub(crate) use pending::MailPending;
 const CHECKED_READ: u32 = 0x1;
 const CHECKED_RETURNED: u32 = 0x2;
 const CHECKED_COPIED: u32 = 0x4;
+/// `MAIL_CHECK_MASK_COD_PAYMENT` (`byte[rec+0x148] & 8`): the money a COD taker paid; taking it
+/// empties the mail (`0x4ad6b0`).
+const CHECKED_COD_PAYMENT: u32 = 0x8;
 
 /// `MAIL_STATIONERY_GM` (`Stationery.dbc` row 61): a GM row shows its stationery icon even when it
 /// carries a package (`MailFrame.lua:108`).
@@ -72,8 +75,10 @@ pub(crate) struct MailSendAck {
     pub(crate) refusal: Option<&'static str>,
 }
 
-/// The open mailbox session: the guid, the inbox rows as the wire sent them, the letter-body cache
-/// and the result queues. Cleared on close and on disconnect.
+/// The mailbox session: the open mailbox's guid, the inbox rows as the wire sent them, the
+/// letter-body cache and the result queues. A close forgets the guid and the queues and keeps the
+/// rows, as the reference's close does (`0x4acd71`); the world-enter init (`0x4acb10`) and a
+/// disconnect clear everything.
 #[derive(Resource, Default)]
 pub(crate) struct MailOpen {
     pub(crate) mailbox: Option<u64>,
@@ -99,13 +104,11 @@ impl crate::query_cache::AskOnce for MailOpen {
 }
 
 impl MailOpen {
-    /// A mailbox right-click. A different mailbox resets the rows, and the feed the VM's list
-    /// throttle; the same one only re-shows, as the reference fires `MAIL_SHOW` on every use.
+    /// A mailbox right-click: the open core stores the guid (`0x4acd27`) and keeps the rows,
+    /// whichever mailbox they came from, and re-shows, as the reference fires `MAIL_SHOW` on
+    /// every use.
     pub(crate) fn click(&mut self, mailbox: u64) {
-        if self.mailbox != Some(mailbox) {
-            self.mailbox = Some(mailbox);
-            self.mails.clear();
-        }
+        self.mailbox = Some(mailbox);
         self.show_requested = true;
     }
 
@@ -131,19 +134,22 @@ impl MailOpen {
         }
     }
 
-    /// A client-side close, sending nothing as 1.12 does; a re-open re-lists.
+    /// A client-side close, sending nothing as 1.12 does (`0x4acd71`): the guid goes, the rows
+    /// and the request lock stay, so a re-open inside `CheckInbox`'s window re-announces them. A
+    /// result already landed still lifts the lock.
     pub(crate) fn clear(&mut self) {
         self.mailbox = None;
-        self.mails.clear();
-        self.bodies.clear();
         self.show_requested = false;
-        self.request_resolved = false;
         self.send_acks.clear();
         self.errors.clear();
     }
 
+    /// The world-enter init (`0x4acb10`) and a disconnect: no mailbox and no rows.
     pub(crate) fn clear_session(&mut self) {
         self.clear();
+        self.mails.clear();
+        self.bodies.clear();
+        self.request_resolved = false;
     }
 }
 
@@ -177,21 +183,31 @@ impl Plugin for UiMailPlugin {
                     feed_mail.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     drain_mail.after(UiInput),
                     // The cascade's order: the time query, this, then the battlefield status.
-                    send_query_next_mail_time_on_enter.after(crate::net::send_query_time),
+                    send_query_next_mail_time_on_enter
+                        .after(crate::net::send_query_time)
+                        .in_set(UiFeed),
                 ),
             );
     }
 }
 
-/// `MSG_QUERY_NEXT_MAIL_TIME` at each world-enter cascade, from the mail init (`0x4acb10`, called
-/// at `0x4909f6`), after the time query and before the battlefield status. The init stamps "no
-/// mail" first (`0x4acb87`).
+/// The mail init (`0x4acb10`, called at `0x4909f6`) at each world-enter cascade, which a login, a
+/// cross-map worldport and a `/reload` all run: the mailbox, the rows, the list throttle
+/// (`0x4acb7d`) and the request lock (`0x4acb82`) start over, then it stamps "no mail"
+/// (`0x4acb87`) and sends `MSG_QUERY_NEXT_MAIL_TIME`, after the time query and before the
+/// battlefield status.
 pub(crate) fn send_query_next_mail_time_on_enter(
+    script: Option<NonSendMut<UiScript>>,
     mut cascades: MessageReader<WorldEnterCascadeMessage>,
     commands: Res<NetCommands>,
+    mut mail: ResMut<MailOpen>,
     mut pending: ResMut<MailPending>,
 ) {
     if cascades.read().next().is_some() {
+        mail.clear_session();
+        if let Some(mut script) = script {
+            script.reset_mail_world_state();
+        }
         pending.on_query_sent();
         let _ = commands.0.send(ClientCommand::QueryNextMailTime);
     }
@@ -335,6 +351,9 @@ fn resolve_row(
         was_read: entry.checked & CHECKED_READ != 0,
         was_returned: returned,
         text_created: entry.checked & CHECKED_COPIED != 0,
+        cod_payment: entry.checked & CHECKED_COD_PAYMENT != 0,
+        message_type: entry.message_type,
+        mail_template_id: entry.mail_template_id,
         can_reply,
         is_gm,
         // The body runs the `$`-macro expander for the local player, as `GetInboxText` does.
@@ -409,8 +428,8 @@ fn snapshot(
     macros: &crate::npc_text::MacroContext,
     get_text: &dyn Fn(&str) -> Option<String>,
 ) -> Option<MailState> {
-    mail.mailbox?;
     Some(MailState {
+        open: mail.mailbox.is_some(),
         inbox: mail
             .mails
             .iter()
@@ -539,12 +558,6 @@ fn feed_mail(
     };
     let opened = last_mailbox.is_none() && mail.mailbox.is_some();
     let closed = last_mailbox.is_some() && mail.mailbox.is_none();
-    // A new mailbox session lists afresh: the VM's throttle and lock start over before
-    // `MAIL_SHOW`'s `CheckInbox` (`MailFrame.lua:42`). Deviation: the reference keeps both, and
-    // the rows, across a close (`0x4acd71`), where a close here drops the rows.
-    if mail.mailbox.is_some() && *last_mailbox != mail.mailbox {
-        script.reset_mail_list_throttle();
-    }
     if std::mem::take(&mut mail.request_resolved) {
         script.mail_request_resolved();
     }
@@ -716,9 +729,11 @@ fn drain_mail(
         });
         if req.item.is_some() && item_guid.is_none() {
             // The item left its slot: `ERR_ITEM_NOT_FOUND`, no packet, the attachment dropped and
-            // `MAIL_SEND_INFO_UPDATE` fired (`0x4ae98d`).
+            // `MAIL_SEND_INFO_UPDATE` fired (`0x4ae98d`), ahead of the lock's write (`0x4aea7b`),
+            // so the lock the verb took goes back.
             mail.errors.push("ERR_ITEM_NOT_FOUND");
             script.drop_send_mail_item();
+            script.mail_request_resolved();
         } else {
             let _ = commands.0.send(ClientCommand::SendMail {
                 mailbox,
@@ -838,9 +853,9 @@ mod tests {
         m.click(0x100);
         assert_eq!(m.mails.len(), 1);
         assert!(m.show_requested);
-        // A different mailbox resets the session.
+        // Another mailbox keeps them too: the open core stores only the guid (`0x4acd27`).
         m.click(0x200);
-        assert!(m.mails.is_empty());
+        assert_eq!(m.mails.len(), 1);
     }
 
     #[test]
@@ -858,14 +873,59 @@ mod tests {
         assert_eq!(m.mails[0].checked & CHECKED_READ, CHECKED_READ);
     }
 
+    /// The world-enter init (`0x4acb10`), which a `/reload` and a worldport reach as well as a
+    /// login, drops the rows and the mailbox and lifts the request lock and the list throttle
+    /// (`0x4acb7d`, `0x4acb82`); nothing else resets them.
     #[test]
-    fn clear_closes_the_window() {
+    fn the_world_enter_init_resets_the_rows_lock_and_throttle() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<MailOpen>()
+            .init_resource::<MailPending>()
+            .insert_resource(NetCommands(tx))
+            .add_message::<WorldEnterCascadeMessage>()
+            .add_systems(Update, send_query_next_mail_time_on_enter);
+        let mut script = UiScript::new().unwrap();
+        script.set_mail(Some(MailState {
+            open: true,
+            ..Default::default()
+        }));
+        script.run("CheckInbox()").unwrap();
+        assert!(script.take_mail_check_inbox());
+        app.insert_non_send_resource(script);
+        {
+            let mut mail = app.world_mut().resource_mut::<MailOpen>();
+            mail.click(0x20);
+            mail.mails.push(entry(1, Some(0xA), 0, 30.0));
+        }
+        let check = |app: &mut App| {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.run("CheckInbox()").unwrap();
+            script.take_mail_check_inbox()
+        };
+        assert!(!check(&mut app), "the lock holds");
+        app.update();
+        assert!(!check(&mut app), "no cascade, no reset");
+        app.world_mut().write_message(WorldEnterCascadeMessage);
+        app.update();
+        let mail = app.world().resource::<MailOpen>();
+        assert!(mail.mails.is_empty() && mail.mailbox.is_none());
+        assert!(check(&mut app), "the lock and the throttle start over");
+    }
+
+    /// A close forgets the mailbox and keeps the rows (`0x4acd71`); the world-enter init and a
+    /// disconnect clear them (`0x4acb10`).
+    #[test]
+    fn a_close_keeps_the_rows_and_the_session_end_clears_them() {
         let mut m = MailOpen::default();
         m.click(0x1);
         m.mails.push(entry(1, Some(0xA), 0, 30.0));
         m.bodies.insert(7, Some("hi".into()));
         m.clear();
         assert!(m.mailbox.is_none());
+        assert_eq!(m.mails.len(), 1);
+        assert!(!m.bodies.is_empty());
+        m.clear_session();
         assert!(m.mails.is_empty());
         assert!(m.bodies.is_empty());
     }

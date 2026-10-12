@@ -5,7 +5,7 @@ use benilla_protocol::messages::{mail_action, mail_error, mail_message_type, Mai
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{mail_refusal, MailOpen, MailPending, MailSendAck};
+use super::{mail_refusal, MailOpen, MailPending, MailSendAck, CHECKED_COD_PAYMENT};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::ui_items::{EquipError, EquipErrors};
 
@@ -111,10 +111,6 @@ fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands: &NetComma
         .collect();
 }
 
-/// `MAIL_CHECK_MASK_COD_PAYMENT` (`byte[rec+0x148] & 8`): the money a COD taker paid; taking it
-/// empties the mail (`0x4ad6b0`).
-const CHECKED_COD_PAYMENT: u32 = 8;
-
 /// Whether a take leaves the mail empty, which the client then deletes itself: `CMSG_MAIL_DELETE`,
 /// then `CLOSE_INBOX_ITEM(index)`, then `MAIL_INBOX_UPDATE`. The money leg (`0x4ad6b0`) purges a
 /// COD payment or an auction notice with no item. The item leg (`0x4ad7b0`) purges once the money
@@ -145,7 +141,9 @@ fn send_mail_result(
     equip_errors: &mut EquipErrors,
 ) {
     // ITEM_TAKEN's `(entry, count)` tail is unused; vmangos sends no `SMSG_ITEM_PUSH_RESULT` for a
-    // mail take (`MailHandler.cpp:675`).
+    // mail take (`MailHandler.cpp:675`). Every result lifts the request lock at the handler's
+    // common tail (`0x4ad164`), whatever its action.
+    mail.resolve_request();
     if action == mail_action::SEND {
         if error == mail_error::EQUIP_ERROR {
             equip_errors.0.push(EquipError {
@@ -162,8 +160,6 @@ fn send_mail_result(
             refusal: (error != mail_error::OK && error != mail_error::EQUIP_ERROR)
                 .then(|| mail_refusal(error)),
         });
-        // The send arm clears the request lock with its `MAIL_FAILED` (`0x4ad164`).
-        mail.resolve_request();
         return;
     }
     // A take/return/delete result.
@@ -256,5 +252,29 @@ mod tests {
         );
         assert!(!app.world().resource::<MailPending>().has_new_mail());
         assert_eq!(app.world().resource::<MailOpen>().mailbox, None);
+    }
+
+    /// Every `SMSG_SEND_MAIL_RESULT` lifts the request lock at the handler's common tail
+    /// (`0x4ad164`): a take, a return and a delete as well as a send, refused or not.
+    #[test]
+    fn every_mail_result_lifts_the_request_lock() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut equip = EquipErrors::default();
+        for (action, error) in [
+            (mail_action::SEND, mail_error::OK),
+            (mail_action::MONEY_TAKEN, mail_error::OK),
+            (mail_action::ITEM_TAKEN, mail_error::INTERNAL_ERROR),
+            (mail_action::RETURNED, mail_error::OK),
+            (mail_action::MADE_PERMANENT, mail_error::OK),
+            (mail_action::DELETED, mail_error::INTERNAL_ERROR),
+        ] {
+            let mut mail = MailOpen::default();
+            mail.click(0x20);
+            send_mail_result(
+                7, action, error, None, None, &mut mail, &commands, &mut equip,
+            );
+            assert!(mail.request_resolved, "action {action} error {error}");
+        }
     }
 }

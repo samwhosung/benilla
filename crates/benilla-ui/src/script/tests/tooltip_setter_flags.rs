@@ -292,6 +292,7 @@ fn the_mail_and_auction_item_setters_answer_one_value() {
             item_name: Some("Linen Cloth".into()),
             ..Default::default()
         }],
+        open: true,
     }));
     let mut auction = AuctionState::default();
     auction.lists[0].rows.push(AuctionItemRow {

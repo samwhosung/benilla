@@ -33,6 +33,12 @@ pub struct MailInboxRow {
     pub was_returned: bool,
     /// `checked & COPIED(0x4)`: the letter was copied to an item (`textCreated`).
     pub text_created: bool,
+    /// `checked & COD_PAYMENT(0x8)`: the money a COD sale brought back.
+    pub cod_payment: bool,
+    /// The wire's message type (`[rec+0x4]`): 0 a player's mail, else a system sender.
+    pub message_type: u8,
+    /// The `MailTemplate.dbc` id (`[rec+0x25c]`), 0 for none: a body `TakeInboxTextItem` can copy.
+    pub mail_template_id: u32,
     /// `sender_guid.is_some() && !was_returned`, the Reply button's gate (`MailFrame.lua:281`).
     pub can_reply: bool,
     /// `stationery == 61`: a GM mail (vmangos `MAIL_STATIONERY_GM`, `Mail.h:85`).
@@ -80,10 +86,13 @@ pub struct MailInvoice {
     pub consignment: u32,
 }
 
-/// The open mailbox's inbox, pushed whole by the app; `set_mail(None)` means no mailbox is open.
+/// The inbox as the client holds it, pushed whole by the app. The rows outlive a close, as the
+/// reference's do (`0x4acd71` clears only the mailbox guid); `open` is that guid's presence
+/// (`[0xb6ef88]`), which every mail verb tests.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MailState {
     pub inbox: Vec<MailInboxRow>,
+    pub open: bool,
 }
 
 /// One usable stationery in the send tab's picker; the app builds the list from `Stationery.dbc`
@@ -160,8 +169,10 @@ impl super::UiScript {
         self.model_mut().mail_busy = false;
     }
 
-    /// Forget the list throttle and the lock, as a new mailbox session starts.
-    pub fn reset_mail_list_throttle(&mut self) {
+    /// The world-enter init (`0x4acb10`, from the cascade at `0x4909f6`, which a `/reload` and a
+    /// worldport reach as well as a login): the list throttle (`0x4acb7d`) and the request lock
+    /// (`0x4acb82`) start over.
+    pub fn reset_mail_world_state(&mut self) {
         let mut model = self.model_mut();
         model.mail_list_stamp = None;
         model.mail_busy = false;
@@ -272,6 +283,50 @@ impl super::UiScript {
     /// `UPDATE_PENDING_MAIL`, on which the minimap icon re-reads it (`Minimap.xml:278-289`).
     pub fn set_has_new_mail(&mut self, has: bool) {
         self.model_mut().has_new_mail = has;
+    }
+}
+
+/// The guards every mail request opens with: no request in flight (`[0xb6efc8]`, `0x4aeab6`,
+/// `0x4ae830`, `0x4af800`, `0x4af90c`, `0x4afa8e`, `0x4afbce`, `0x4afcfe`) and an open mailbox
+/// (`[0xb6ef88]`).
+fn mail_ready(model: &Model) -> bool {
+    !model.mail_busy && model.mail.as_ref().is_some_and(|m| m.open)
+}
+
+/// The five row verbs, each with its own refusal of the row (all silent, before any send).
+#[derive(Clone, Copy)]
+enum RowVerb {
+    TakeItem,
+    TakeMoney,
+    Delete,
+    Return,
+    TakeText,
+}
+
+impl RowVerb {
+    /// Whether the reference sends for `row`.
+    fn sends(self, model: &Model, row: &MailInboxRow) -> bool {
+        // `checked`: RETURNED 0x2, COPIED 0x4, COD_PAYMENT 0x8 (`[rec+0x148]`).
+        let returned_or_cod = row.was_returned || row.cod_payment;
+        match self {
+            // An item (`[rec+0x120]`, `0x4af96d`) and the purse to pay its COD (`[rec+0x144]`
+            // against the player's coinage, `0x4af9c5`).
+            RowVerb::TakeItem => row.item_id != 0 && model.money >= u64::from(row.cod),
+            // Money (`[rec+0x140]`, `0x4af85a`).
+            RowVerb::TakeMoney => row.money != 0,
+            // A body or a template to copy (`[rec+0x114]`, `[rec+0x25c]`, `0x4afae7`), not yet
+            // copied (`& 4`, `0x4afafb`).
+            RowVerb::TakeText => (row.has_body || row.mail_template_id != 0) && !row.text_created,
+            // A player's mail (type 0, `0x4afc27`) with an item or money (`0x4afc30`), neither
+            // returned nor a COD payment (`& 0xa`, `0x4afc44`).
+            RowVerb::Return => {
+                row.message_type == 0 && (row.item_id != 0 || row.money != 0) && !returned_or_cod
+            }
+            // Returned or a COD payment, not a player's, or empty (`0x4afd57`-`0x4afd77`).
+            RowVerb::Delete => {
+                returned_or_cod || row.message_type != 0 || (row.item_id == 0 && row.money == 0)
+            }
+        }
     }
 }
 
@@ -485,7 +540,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CheckInbox",
         lua.create_function(|lua, ()| {
             super::tick::verb(lua, |model| {
-                if model.mail_busy || model.mail.is_none() {
+                if !mail_ready(model) {
                     return;
                 }
                 if model.mail_list_stamp.is_some_and(|t| model.now < t) {
@@ -500,24 +555,62 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    for (name, field) in [
-        ("TakeInboxItem", 0u8),
-        ("TakeInboxMoney", 1),
-        ("DeleteInboxItem", 2),
-        ("ReturnInboxItem", 3),
-        ("TakeInboxTextItem", 4),
+    // The row verbs: the index must be a number, else the usage raises. A request in flight, no
+    // mailbox, an index past the held rows or the verb's own refusal of the row returns at once
+    // and sends nothing; a send takes the request lock (`0x4af8aa`, `0x4afa1f`, `0x4afb68`,
+    // `0x4afc9e`, `0x4afdca`), which only a mail result or a list result lifts.
+    for (name, verb, usage) in [
+        (
+            "TakeInboxItem",
+            RowVerb::TakeItem,
+            "Usage: TakeInboxItem(index)",
+        ),
+        (
+            "TakeInboxMoney",
+            RowVerb::TakeMoney,
+            "Usage: TakeInboxMoney(index)",
+        ),
+        (
+            "DeleteInboxItem",
+            RowVerb::Delete,
+            "Usage: DeleteInboxItem(index)",
+        ),
+        (
+            "ReturnInboxItem",
+            RowVerb::Return,
+            "Usage: ReturnInboxItem(index)",
+        ),
+        (
+            "TakeInboxTextItem",
+            RowVerb::TakeText,
+            "Usage: TakeInboxTextItem(index)",
+        ),
     ] {
         g.set(
             name,
-            lua.create_function(move |lua, index: u32| {
+            lua.create_function(move |lua, index: Value| {
+                let n = super::binding_abi::number_arg(lua, index, usage)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                match field {
-                    0 => model.mail_take_items.push(index),
-                    1 => model.mail_take_money.push(index),
-                    2 => model.mail_deletes.push(index),
-                    3 => model.mail_returns.push(index),
-                    _ => model.mail_take_texts.push(index),
+                if !mail_ready(&model) {
+                    return Ok(());
                 }
+                let Some(index) = u32::try_from(n).ok().filter(|&i| i >= 1) else {
+                    return Ok(());
+                };
+                let Some(row) = row_at(&model, index as usize) else {
+                    return Ok(());
+                };
+                if !verb.sends(&model, &row) {
+                    return Ok(());
+                }
+                match verb {
+                    RowVerb::TakeItem => model.mail_take_items.push(index),
+                    RowVerb::TakeMoney => model.mail_take_money.push(index),
+                    RowVerb::Delete => model.mail_deletes.push(index),
+                    RowVerb::Return => model.mail_returns.push(index),
+                    RowVerb::TakeText => model.mail_take_texts.push(index),
+                }
+                model.mail_busy = true;
                 Ok(())
             })?,
         )?;
@@ -537,6 +630,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "SendMail",
         lua.create_function(|lua, (target, subject, body): (String, String, String)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            // A request in flight or no mailbox returns at once (`0x4ae839`, `0x4ae852`).
+            if !mail_ready(&model) {
+                return Ok(());
+            }
             // `SendMail` (`0x4ae800`) aborts silently, no packet and no return value, on money
             // with COD or on COD with no attached item.
             if model.mail_send_money != 0 && model.mail_send_cod != 0 {
@@ -550,6 +647,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             }
             model.mail_send = Some((target, subject, body));
+            // The send takes the request lock (`0x4aea7b`); a send the app finds without its item
+            // gives it back, as that check precedes the reference's write (`0x4ae98d`).
+            model.mail_busy = true;
             Ok(())
         })?,
     )?;
@@ -858,6 +958,12 @@ mod tests {
 
         s.set_mail(Some(MailState::default()));
         s.run("CheckInbox()").unwrap();
+        assert!(!s.take_mail_check_inbox(), "rows held, no mailbox open");
+        s.set_mail(Some(MailState {
+            open: true,
+            ..Default::default()
+        }));
+        s.run("CheckInbox()").unwrap();
         assert!(s.take_mail_check_inbox());
         s.run("CheckInbox()").unwrap();
         assert!(
@@ -954,12 +1060,16 @@ mod tests {
             item_quality: (item_id != 0).then_some(1),
             can_delete: false, // a player's unreturned mail is returned, not deleted
             item_random_property_id: 0,
+            cod_payment: false,
+            message_type: 0,
+            mail_template_id: 0,
         }
     }
 
     fn state() -> MailState {
         MailState {
             inbox: vec![row(2589), row(0)],
+            open: true,
         }
     }
 
@@ -1194,30 +1304,107 @@ mod tests {
             .unwrap());
     }
 
+    /// The mail verbs share one request lock (`[0xb6efc8]`): each returns at once while it is
+    /// held, and each send takes it (`0x4aeb18`, `0x4af8aa`, `0x4afa1f`, `0x4afb68`, `0x4afc9e`,
+    /// `0x4afdca`, `0x4aea7b`) until a result lifts it.
     #[test]
-    fn intents_queue_and_drain() {
+    fn the_mail_verbs_share_one_request_lock() {
         let mut s = UiScript::new().unwrap();
-        s.set_mail(Some(state()));
-        s.run("CheckInbox()").unwrap();
+        let mut st = state();
+        // An empty player's mail: deletable (`0x4afd65`-`0x4afd77`).
+        st.inbox[1].money = 0;
+        s.set_mail(Some(st));
+        let all = "TakeInboxItem(1) TakeInboxMoney(1) DeleteInboxItem(2) ReturnInboxItem(1) \
+                   TakeInboxTextItem(1) CheckInbox()";
+        s.run(all).unwrap();
+        assert_eq!(s.take_mail_take_items(), vec![1], "the first send");
+        assert!(s.take_mail_take_money().is_empty(), "the rest wait on it");
+        assert!(!s.take_mail_check_inbox());
+        for (verb, take) in [
+            (
+                "TakeInboxMoney(1)",
+                UiScript::take_mail_take_money as fn(&mut UiScript) -> Vec<u32>,
+            ),
+            ("DeleteInboxItem(2)", UiScript::take_mail_deletes),
+            ("ReturnInboxItem(1)", UiScript::take_mail_returns),
+            ("TakeInboxTextItem(1)", UiScript::take_mail_take_texts),
+        ] {
+            s.mail_request_resolved();
+            s.run(&format!("{verb} {verb}")).unwrap();
+            assert_eq!(take(&mut s).len(), 1, "{verb}: one send, then the lock");
+        }
+        s.mail_request_resolved();
+        s.run("CheckInbox() CheckInbox()").unwrap();
         assert!(s.take_mail_check_inbox());
         assert!(!s.take_mail_check_inbox(), "drained");
 
-        s.run("TakeInboxItem(1) TakeInboxMoney(1) DeleteInboxItem(2) ReturnInboxItem(1) TakeInboxTextItem(1)")
+        s.mail_request_resolved();
+        select_default_stationery(&mut s);
+        s.tick(61.0);
+        s.run("SendMail('Jaina', 'Hi', 'body') CheckInbox()")
             .unwrap();
-        assert_eq!(s.take_mail_take_items(), vec![1]);
-        assert_eq!(s.take_mail_take_money(), vec![1]);
-        assert_eq!(s.take_mail_deletes(), vec![2]);
-        assert_eq!(s.take_mail_returns(), vec![1]);
-        assert_eq!(s.take_mail_take_texts(), vec![1]);
-        assert!(s.take_mail_take_texts().is_empty(), "drained");
+        assert!(s.take_mail_send().is_some());
+        assert!(!s.take_mail_check_inbox(), "the send holds the lock");
+
+        let err = s.run("TakeInboxItem('x')").unwrap_err().to_string();
+        assert!(err.contains("Usage: TakeInboxItem(index)"), "{err}");
 
         s.run("CloseMail()").unwrap();
         assert!(s.take_mail_close());
     }
 
+    /// Each row verb refuses a row the reference does not send for, and then takes no lock:
+    /// money to take (`0x4af85a`), an item and the purse for its COD (`0x4af96d`, `0x4af9c5`), a
+    /// body not yet copied (`0x4afae7`, `0x4afafb`), a player's unreturned mail with something
+    /// in it to return (`0x4afc27`-`0x4afc44`), and for delete the reverse (`0x4afd57`-`0x4afd77`).
+    #[test]
+    fn each_row_verb_refuses_a_row_it_cannot_send_for() {
+        let mut s = UiScript::new().unwrap();
+        let mut empty = row(0);
+        empty.money = 0;
+        empty.has_body = false;
+        let mut cod = row(2589);
+        cod.cod = 100;
+        let mut copied = row(0);
+        copied.text_created = true;
+        let mut returned = row(2589);
+        returned.was_returned = true;
+        s.set_mail(Some(MailState {
+            inbox: vec![empty, cod, copied, returned, row(2589)],
+            open: true,
+        }));
+        s.run(
+            "TakeInboxMoney(1) TakeInboxItem(1) TakeInboxTextItem(1) ReturnInboxItem(1) \
+             TakeInboxItem(2) TakeInboxTextItem(3) ReturnInboxItem(4) DeleteInboxItem(5) \
+             TakeInboxItem(9)",
+        )
+        .unwrap();
+        assert!(s.take_mail_take_money().is_empty());
+        assert!(s.take_mail_take_items().is_empty());
+        assert!(s.take_mail_take_texts().is_empty());
+        assert!(s.take_mail_returns().is_empty());
+        assert!(s.take_mail_deletes().is_empty());
+        // None of them took the lock: a deletable empty mail still goes.
+        s.run("DeleteInboxItem(1)").unwrap();
+        assert_eq!(s.take_mail_deletes(), vec![1]);
+        s.mail_request_resolved();
+        s.set_money(100);
+        s.run("TakeInboxItem(2)").unwrap();
+        assert_eq!(
+            s.take_mail_take_items(),
+            vec![2],
+            "the COD is affordable now"
+        );
+    }
+
     #[test]
     fn send_folds_money_cod_and_returns_true_from_setmoney() {
         let mut s = UiScript::new().unwrap();
+        // An open mailbox: the send verbs test it (`0x4ae852`).
+        s.set_mail(Some(crate::script::MailState {
+            open: true,
+            ..Default::default()
+        }));
         s.set_money(5_000);
         assert!(s.take_mail_send().is_none());
         assert!(s
@@ -1251,6 +1438,11 @@ mod tests {
     fn attach_from_cursor_and_get_send_item() {
         use crate::script::cursor::{CursorItem, CursorPayload};
         let mut s = UiScript::new().unwrap();
+        // An open mailbox: the send verbs test it (`0x4ae852`).
+        s.set_mail(Some(crate::script::MailState {
+            open: true,
+            ..Default::default()
+        }));
         assert!(s
             .eval::<bool>("local n = GetSendMailItem()\nreturn n == nil")
             .unwrap());
@@ -1291,6 +1483,11 @@ mod tests {
     fn clear_send_item_resets_the_form() {
         use crate::script::cursor::{CursorItem, CursorPayload};
         let mut s = UiScript::new().unwrap();
+        // An open mailbox: the send verbs test it (`0x4ae852`).
+        s.set_mail(Some(crate::script::MailState {
+            open: true,
+            ..Default::default()
+        }));
         s.model_mut().cursor = Some(CursorPayload::Item(CursorItem {
             item_class: None,
             guid: 0x103,
@@ -1320,6 +1517,11 @@ mod tests {
     fn clear_send_mail_resets_the_form_and_fires_its_events() {
         use crate::script::cursor::{CursorItem, CursorPayload};
         let mut s = UiScript::new().unwrap();
+        // An open mailbox: the send verbs test it (`0x4ae852`).
+        s.set_mail(Some(crate::script::MailState {
+            open: true,
+            ..Default::default()
+        }));
         select_default_stationery(&mut s);
         s.set_mail_packages(vec![PackageView {
             id: 2,
@@ -1385,6 +1587,11 @@ mod tests {
     #[test]
     fn packages_list_describe_and_select_by_row() {
         let mut s = UiScript::new().unwrap();
+        // An open mailbox: the send verbs test it (`0x4ae852`).
+        s.set_mail(Some(crate::script::MailState {
+            open: true,
+            ..Default::default()
+        }));
         assert_eq!(s.eval::<i64>("return GetNumPackages()").unwrap(), 0);
         s.set_mail_packages(vec![PackageView {
             id: 2,
@@ -1415,6 +1622,7 @@ mod tests {
         select_default_stationery(&mut s);
         s.run("SelectPackage(1) SendMail('x', 'y', 'z')").unwrap();
         assert_eq!(s.take_mail_send().map(|r| r.package), Some(2));
+        s.mail_request_resolved();
         s.run("SelectPackage(5) SendMail('x', 'y', 'z')").unwrap();
         assert_eq!(
             s.take_mail_send().map(|r| r.package),
@@ -1620,6 +1828,10 @@ mod stationery_tests {
     #[test]
     fn a_send_needs_a_stationery_and_carries_its_id() {
         let mut s = seated();
+        s.set_mail(Some(crate::script::MailState {
+            open: true,
+            ..Default::default()
+        }));
         s.run("SendMail(\"Bob\", \"hi\", \"body\")").unwrap();
         assert!(
             s.take_mail_send().is_none(),
@@ -1628,6 +1840,7 @@ mod stationery_tests {
         s.run("SelectStationery(1) SendMail(\"Bob\", \"hi\", \"body\")")
             .unwrap();
         assert_eq!(s.take_mail_send().map(|r| r.stationery), Some(41));
+        s.mail_request_resolved();
         s.reset_compose_tab_silently();
         s.run("SendMail(\"Bob\", \"hi\", \"body\")").unwrap();
         assert!(s.take_mail_send().is_none());
