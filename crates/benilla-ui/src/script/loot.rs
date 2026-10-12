@@ -48,7 +48,8 @@ pub struct LootRow {
     pub quality: Option<u32>,
     /// The synthesized coin pile (`LootSlotIsCoin` true, `LootSlotIsItem` false).
     pub is_coin: bool,
-    /// The tooltip store's key, 0 for the coin row: `GetLootSlotInfo`'s fifth return, not 1.12's.
+    /// The tooltip store's key, 0 for the coin row: `SetLootItem` reads it. `GetLootSlotInfo`
+    /// returns four values and no id (`0x4c2d07`).
     pub item_id: u32,
     /// `GetLootSlotLink`'s answer; `None` for the coin row and while the template is in flight.
     pub link: Option<String>,
@@ -175,8 +176,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     } else {
                         NO_SLOT_QUALITY
                     }),
-                    // The trailing item id: none here.
-                    Value::Integer(0),
                 ]));
             };
             let texture =
@@ -189,8 +188,6 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 item,
                 Value::Integer(i64::from(row.quantity)),
                 quality,
-                // The item id, a fifth return that is not a 1.12 value.
-                Value::Integer(i64::from(row.item_id)),
             ]))
         })?,
     )?;
@@ -507,6 +504,33 @@ mod tests {
         assert!(s.eval::<bool>("return not LootSlotIsItem(1)").unwrap());
         assert!(s.eval::<bool>("return not LootSlotIsCoin(1)").unwrap());
         assert!(s.eval::<bool>("return LootSlotIsItem(2)").unwrap());
+    }
+
+    /// `GetLootSlotInfo` pushes four values on every leg (`0x4c2d07 mov eax,4`): texture, name,
+    /// quantity, quality, with no item id.
+    #[test]
+    fn loot_slot_info_returns_four_values_on_every_leg() {
+        let mut s = UiScript::new().unwrap();
+        let count = |s: &UiScript, slot: u32| -> i64 {
+            s.eval::<i64>(&format!(
+                "return (function(...) return arg.n end)(GetLootSlotInfo({slot}))"
+            ))
+            .unwrap()
+        };
+        // No window.
+        assert_eq!(count(&s, 1), 4);
+        let mut state = loot();
+        state.rows[0].as_mut().unwrap().item_id = 2589;
+        state.rows[1].as_mut().unwrap().item_id = 2589;
+        s.set_loot(Some(state.clone()));
+        // A coin row, an item row with an id, an in-flight row, past the end.
+        for slot in [1, 2, 3, 9] {
+            assert_eq!(count(&s, slot), 4, "slot {slot}");
+        }
+        // A looted slot.
+        state.rows[0] = None;
+        s.set_loot(Some(state));
+        assert_eq!(count(&s, 1), 4);
     }
 
     #[test]
