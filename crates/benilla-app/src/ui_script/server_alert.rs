@@ -553,9 +553,9 @@ pub(crate) fn open_launched(mut urls: MessageReader<LaunchUrl>) {
 }
 
 /// The platform's opener, detached. The URL is `http://` and letters, digits, `.`, `-` and `/`
-/// ([`benilla_ui::script::GlueRequest::LaunchUrl`]), or a printable-ASCII web address
-/// ([`benilla_ui::script::GlueRequest::LaunchAddonUrl`]), and goes as one argument to an opener
-/// that is no shell.
+/// ([`benilla_ui::script::GlueRequest::LaunchUrl`]), or a web address of URL characters and
+/// `%XY` escapes ([`benilla_ui::script::launch_addon_url_allowed`]), and goes as one argument to
+/// an opener that is no shell.
 fn open_in_browser(url: &str) {
     let mut command = if cfg!(target_os = "macos") {
         std::process::Command::new("/usr/bin/open")
