@@ -1433,19 +1433,19 @@ fn char_select_app(
 }
 
 /// [`char_select_app`] over `realms`, the account holding `rosters[n]` on the world session
-/// that begins `n`th (the last repeats). `reply` is the `SMSG_ADDON_INFO` every session is sent,
-/// its statuses and whether it trails the authentication answer; none is no reply at all.
+/// that begins `n`th (the last repeats). `reply` seats the `SMSG_ADDON_INFO` every session is
+/// sent on the fake world, before the login dials; none is no reply at all.
 fn char_select_app_on(
     realms: impl FnOnce(&str) -> Vec<FakeRealm>,
     rosters: &[&[benilla_protocol::Character]],
     last: &str,
     chosen: bool,
-    reply: Option<(&[u8], bool)>,
+    reply: Option<&dyn Fn(&fake::World)>,
 ) -> (App, fake::Realmd, fake::World) {
     let (mut app, realmd, world) = live_app_with(realms, "Alpha", rosters[0]);
     world.set_rosters(rosters);
-    if let Some((statuses, after)) = reply {
-        world.set_addon_info(statuses, after);
+    if let Some(seat) = reply {
+        seat(&world);
     }
     if chosen {
         app.world_mut().resource_mut::<GlueMgr>().realm_cells.chosen = Some(0);
@@ -2136,7 +2136,7 @@ fn at_the_roster(app: &mut App) {
 
 /// The stock select over `roster3`'s account on realm `Alpha`, `three_addons`' folder under the
 /// current `BENILLA_HOME`, and `reply` the server's `SMSG_ADDON_INFO`.
-fn three_addon_app(reply: Option<(&[u8], bool)>) -> (App, fake::Realmd, fake::World) {
+fn three_addon_app(reply: Option<&dyn Fn(&fake::World)>) -> (App, fake::Realmd, fake::World) {
     char_select_app_on(
         |world| vec![FakeRealm::new("Alpha", world)],
         &[&roster3()],
@@ -2159,7 +2159,7 @@ fn the_stock_addon_list_opens_toggles_and_saves_like_the_native_screen() {
     let (home, _guard) = addon_home("stock");
     three_addons(&home);
 
-    let (mut app, _realmd, world) = three_addon_app(Some((&[2; 12], false)));
+    let (mut app, _realmd, world) = three_addon_app(Some(&|w| w.set_addon_info(&[2; 12], false)));
     at_the_roster(&mut app);
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
     assert_eq!(world.enumerations(), 1, "OnShow reached the list ask");
@@ -2275,7 +2275,7 @@ fn addon_list_update_fires_once_when_the_reply_is_read() {
     // Ahead of the authentication answer (vmangos builds it in the auth handler): the count the
     // event carries is the rebuilt index's, three, and the entry's teardown update and the
     // roster come after.
-    let (mut app, _r, _w) = three_addon_app(Some((&[2; 12], false)));
+    let (mut app, _r, _w) = three_addon_app(Some(&|w| w.set_addon_info(&[2; 12], false)));
     at_the_roster(&mut app);
     assert_eq!(
         events(&app)[..3],
@@ -2304,7 +2304,7 @@ fn addon_list_update_fires_once_when_the_reply_is_read() {
 
     // Behind the answer: read with the first list ask, so after the entry's teardown update
     // (`0x472580`) and before the roster's.
-    let (mut app, _r, _w) = three_addon_app(Some((&[2; 12], true)));
+    let (mut app, _r, _w) = three_addon_app(Some(&|w| w.set_addon_info(&[2; 12], true)));
     at_the_roster(&mut app);
     assert_eq!(
         events(&app)[..3],
@@ -2344,12 +2344,8 @@ fn the_server_reply_sets_the_security_url_and_new_version() {
     let mut records: Vec<(u8, Option<u32>, Option<&str>)> = vec![(2, Some(0), None); 12];
     records[0] = (1, Some(9), Some("http://example.com/auc"));
     records[1] = (0, None, Some("http://example.com/bf"));
-    let (mut app, _realmd, world) = {
-        let (app, realmd, world) = three_addon_app(None);
-        world.set_addon_records(&records, false);
-        (app, realmd, world)
-    };
-    drop(world);
+    let (mut app, _realmd, _world) =
+        three_addon_app(Some(&|w| w.set_addon_records(&records, false)));
     at_the_roster(&mut app);
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
     assert_eq!(
