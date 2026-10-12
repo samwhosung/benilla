@@ -825,6 +825,17 @@ fn save_config_when_quiet(mut cvars: ResMut<Cvars>) {
     }
 }
 
+impl Cvars {
+    /// `CVar::SaveConfig` (`0x63d980`) on demand, as the reference's callers that save at once do
+    /// (`EnterWorld`, `0x46b6f6`): the file written now if anything moved, the quiet second
+    /// skipped.
+    pub(crate) fn save(&mut self) {
+        if self.dirty {
+            write_config(self);
+        }
+    }
+}
+
 /// The exit frame: save whatever is still dirty, quiet second or not.
 fn save_config_on_exit(mut cvars: ResMut<Cvars>) {
     if cvars.dirty {

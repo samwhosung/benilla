@@ -100,6 +100,33 @@
 //! The dialog's button in state 6 cancels the operation and goes to state 0 (`0x46b776`), in state
 //! 7 it goes to state 0 alone (`0x46b79d`); neither sends anything.
 //!
+//! The world entry and its refusal:
+//!
+//! 1. `EnterWorld` reaches `CGlueMgr::EnterWorld` (`0x46b500`) with the selected record. Three
+//!    guards return having done nothing: no realm selected this process (`0x5ab9a0`), the
+//!    selection off the roster (the VM's, `0x46b53e`), no world link (`[svc+0x1b00]`, `0x46b56c`).
+//!    A record flagged `0x4` (`+0xfc`, locked for a transfer, `0x46b57e`) opens `OKAY` with status
+//!    `0x44`'s text, `CHAR_LOGIN_LOCKED_FOR_TRANSFER` (`0x46b589`-`0x46b5a5`); one flagged `0x4000`
+//!    fires `FORCE_RENAME_CHARACTER` with `CHAR_RENAME_DESCRIPTION` (`0x46b5c2`), which the stock
+//!    screen answers with its rename dialog. Either returns there. Otherwise `lastCharacterIndex`
+//!    takes the selection's index (`0x46b5fa`), the CVars are saved (`0x46b6f6`) and the state
+//!    goes to 8 (`0x46b711`). The record byte the call sets on the way (`+0x118`, `0x46b54a`) is
+//!    read nowhere.
+//! 2. The rest is the world entry the native screens make too ([`crate::char_select::send_pick`]):
+//!    the loading screen and its tip off the picked record (`0x406640`, `0x46b614`-`0x46b6e3`),
+//!    the realmd link closed (`0x46b70c`), the glue torn down (`0x46ac90`, the VM leaving with the
+//!    character screen) and `CMSG_PLAYER_LOGIN` (`0x46c272`), sent here as the call returns rather
+//!    than once the world has loaded (the `Deviation:` in [`crate::net::io`]). State 8 has no frame
+//!    arm here and ends with the glue, as the entry's second phase ends it (`0x46c252`); its dialog
+//!    button cancels to state 0 (`0x46b776`).
+//! 3. `SMSG_CHARACTER_LOGIN_FAILED` (`0x5aad70`) tears the world down and rebuilds the glue
+//!    (`0x401ee0`), setting state 9 before the `charselect` screen goes up (`0x402075`), so the
+//!    screen's `GetCharacterListUpdate` asks nothing (`0x46b880`'s first test); the login operation
+//!    then completes failed with the refusal's status (table `0x5aae08`, `0x5aaa50`). State 9's
+//!    frame (`0x46c283`) opens `OKAY` with its text; the button (`0x46b767`), which the stock
+//!    `OKAY` type's `OnShow` presses at once, goes to state 0 and asks for the list again on the
+//!    same link (`0x46b880`).
+//!
 //! The native login reports a logon as one blocking step, so of the logon's states only
 //! `CONNECTING` and `AUTHENTICATED` are seen; its refusals map through the reference's own
 //! byte-to-result table ([`realmd_result`]).
@@ -116,15 +143,16 @@ use crate::login::queue::QueueEstimate;
 use crate::login::GlueLogin;
 use crate::net::{
     AddonInfoMessage, AddonInfoReply, CharActionResultMessage, CharListMessage, CharRenameMessage,
-    CharRequest, DisconnectedMessage, LoginFailedMessage, LoginQueuedMessage, LoginStageMessage,
-    ParkRequest, RealmListMessage, RealmRequest, RosterFailedMessage, WorldAuthMessage,
+    CharRequest, CharacterLoginFailedMessage, DisconnectedMessage, LoginFailedMessage,
+    LoginQueuedMessage, LoginStageMessage, ParkRequest, RealmListMessage, RealmRequest,
+    RosterFailedMessage, WorldAuthMessage,
 };
 
 /// `CGlueMgr`'s `screenState` (`0xb41da0`), named by the functions that set each value: the
-/// states the login, the realm list, the character list, the delete and the rename reach. The
-/// reference's others are create (5, `0x46b29e`), `EnterWorld` (8, `0x46b711`), a refused
-/// character login (9, `0x402075`) and the patch and survey downloads (10 and 11, `0x473c40`,
-/// `0x473da8`), each set by a verb these screens do not have yet.
+/// states the login, the realm list, the character list, the delete, the rename and the world
+/// entry reach. The reference's others are create (5, `0x46b29e`) and the patch and survey
+/// downloads (10 and 11, `0x473c40`, `0x473da8`), each set by a verb these screens do not have
+/// yet.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ScreenState {
     /// No operation (`0x46a7ce`, and every terminal arm).
@@ -142,6 +170,11 @@ pub(crate) enum ScreenState {
     Delete = 6,
     /// A character rename (`0x46b3a4`).
     Rename = 7,
+    /// The world entry (`CGlueMgr::EnterWorld`, `0x46b711`), until the world is up.
+    EnterWorld = 8,
+    /// A refused character login (`0x402075`, inside `0x401ee0` from `0x5aad70`), until the
+    /// status dialog's button (`0x46b767`).
+    LoginRefused = 9,
 }
 
 /// The logon's `LOGIN_STATE_*` keys by login state (`0x836b40`, 13 entries).
@@ -226,6 +259,25 @@ const STATUS_CHAR_LIST_RETRIEVED: u8 = 0x2b;
 const STATUS_CHAR_LIST_FAILED: u8 = 0x2c;
 const STATUS_CHAR_DELETE_IN_PROGRESS: u8 = 0x38;
 const STATUS_CHAR_DELETE_SUCCESS: u8 = 0x39;
+const STATUS_CHAR_LOGIN_IN_PROGRESS: u8 = 0x3c;
+const STATUS_CHAR_LOGIN_FAILED: u8 = 0x41;
+const STATUS_CHAR_LOGIN_LOCKED_FOR_TRANSFER: u8 = 0x44;
+
+/// The record flags `EnterWorld` tests (`+0xfc`): locked for a paid transfer (`0x46b57e`) and
+/// flagged for a rename (`0x46b5b1`).
+const FLAG_LOCKED_FOR_TRANSFER: u32 = 0x4;
+const FLAG_RENAME: u32 = benilla_protocol::CHARACTER_FLAG_RENAME;
+
+/// `SMSG_CHARACTER_LOGIN_FAILED`'s byte as a status (`0x5aad70`, jump table `0x5aae08`): a 1-based
+/// index onto `0x3e 0x3f 0x40 0x42 0x43 0x44`, every other byte the default arm's
+/// `CHAR_LOGIN_FAILED` (`0x5aadf7`).
+fn char_login_status(result: u8) -> u8 {
+    match result {
+        1..=3 => 0x3d + result,
+        4..=6 => 0x3e + result,
+        _ => STATUS_CHAR_LOGIN_FAILED,
+    }
+}
 
 /// `SMSG_CHAR_RENAME`'s one result the handler tells apart (`0x46b498 cmp al,0x31`).
 const RENAME_NAME_IN_USE: u8 = 0x31;
@@ -274,6 +326,8 @@ enum OpKind {
     CharList,
     /// A character delete (7, `0x5ab100`).
     Delete,
+    /// The character login (8, `COP_LOGIN_CHARACTER`, begun at `0x5aae20`).
+    Login,
 }
 
 /// The operation record (`BeginOperation` `0x5aa400`, `SetStatus` `0x5aa920`): its status code
@@ -438,6 +492,10 @@ pub(crate) struct GlueMgr {
     /// The text a finished fetch left for the next frame (`alertReady`, `[0xb41e2c]`, and the
     /// buffer `0xb414f8` past its prefix).
     alert_ready: Option<String>,
+    /// A refused character login's status, waiting for the glue rebuild that sets state 9.
+    refused: Option<u8>,
+    /// The index `EnterWorld` writes to `lastCharacterIndex`, for the host's CVar registry.
+    last_character: Option<i32>,
 }
 
 impl GlueMgr {
@@ -542,13 +600,18 @@ impl GlueMgr {
                 self.op.complete(false, STATUS_CANCELLED);
                 self.outbox.push(Outgoing::Teardown);
             }
-            // `0x46b776` (states 4 and 6): the operation cancelled, state 0, nothing sent.
-            ScreenState::RealmList | ScreenState::Delete => {
+            // `0x46b776` (states 4, 6 and 8): the operation cancelled, state 0, nothing sent.
+            ScreenState::RealmList | ScreenState::Delete | ScreenState::EnterWorld => {
                 self.op.complete(false, STATUS_CANCELLED);
                 self.state = ScreenState::Idle;
             }
             // `0x46b79d`: state 0 alone; the rename's reply still lands (`0x46b440`).
             ScreenState::Rename => self.state = ScreenState::Idle,
+            // `0x46b767`: state 0, then the list asked for again on the same link (`0x46b880`).
+            ScreenState::LoginRefused => {
+                self.state = ScreenState::Idle;
+                self.get_character_list();
+            }
         }
     }
 
@@ -564,8 +627,11 @@ impl GlueMgr {
     /// dialog and the query (`0x5aabb0`: operation 6 at status `0x2a`, then `CMSG_CHAR_ENUM` on
     /// the world link). With no link the operation fails `RESPONSE_FAILED_TO_CONNECT` at once
     /// (`0x5aabca`). State 9, a refused character login (`0x46b880`'s first test), returns before
-    /// any of it; that state is not reached yet.
+    /// any of it.
     fn get_character_list(&mut self) {
+        if self.state == ScreenState::LoginRefused {
+            return;
+        }
         self.state = ScreenState::CharList;
         self.open("CANCEL", Some(Text::Key("CHAR_LIST_RETRIEVING")));
         self.op = Operation::begin(OpKind::CharList, STATUS_CHAR_LIST_RETRIEVING);
@@ -599,6 +665,53 @@ impl GlueMgr {
         if self.connected {
             self.park_out
                 .push(CharRequest::Rename { guid, name }.into());
+        }
+    }
+
+    /// `CGlueMgr::EnterWorld` (`0x46b500`) for the record the VM's selection named (its guard
+    /// `0x46b53e`): the realm and link guards (`0x46b50d`, `0x46b56c`), the two flag arms
+    /// (`0x46b57e`, `0x46b5b1`), then `lastCharacterIndex` (`0x46b5fa`, saved at `0x46b6f6`), state 8
+    /// (`0x46b711`) and the pick, in order with the park's other requests. The phase that sends the
+    /// login once (`0x46c272`, its guid stashed by the first frame of state 8, `0x46c1dd`) is the
+    /// pick here, so a second call in state 8 sends nothing more.
+    fn enter_world(&mut self, index: i32, guid: u64, flags: u32) {
+        if self.selected.is_none() || !self.connected {
+            return;
+        }
+        if flags & FLAG_LOCKED_FOR_TRANSFER != 0 {
+            self.open(
+                "OKAY",
+                Some(Text::Key(benilla_ui::script::glue_status_key(i32::from(
+                    STATUS_CHAR_LOGIN_LOCKED_FOR_TRANSFER,
+                )))),
+            );
+            return;
+        }
+        if flags & FLAG_RENAME != 0 {
+            self.outbox
+                .push(Outgoing::ForceRename("CHAR_RENAME_DESCRIPTION"));
+            return;
+        }
+        self.last_character = Some(index);
+        if self.state != ScreenState::EnterWorld {
+            self.park_out.push(CharRequest::Enter(guid).into());
+        }
+        self.state = ScreenState::EnterWorld;
+    }
+
+    /// `SMSG_CHARACTER_LOGIN_FAILED` (`0x5aad70`): the status its byte maps to, for the glue
+    /// rebuild that leaves the world (`0x401ee0`) to put into state 9 ([`Self::take_refusal`]).
+    fn on_char_login_failed(&mut self, result: u8) {
+        self.refused = Some(char_login_status(result));
+    }
+
+    /// The rebuild's half of a refused login (`0x402075`, then `0x5aaa50`): state 9 and the login
+    /// operation completed failed with the refusal's status.
+    fn take_refusal(&mut self) {
+        if let Some(status) = self.refused.take() {
+            self.state = ScreenState::LoginRefused;
+            self.op = Operation::begin(OpKind::Login, STATUS_CHAR_LOGIN_IN_PROGRESS);
+            self.op.complete(false, status);
         }
     }
 
@@ -717,7 +830,7 @@ impl GlueMgr {
                     }
                 }
             }
-            OpKind::Auth | OpKind::CharList | OpKind::Delete => {}
+            OpKind::Auth | OpKind::CharList | OpKind::Delete | OpKind::Login => {}
         }
     }
 
@@ -935,6 +1048,7 @@ impl GlueMgr {
         if !session_over {
             return;
         }
+        self.refused = None;
         let was_connect = self.state == ScreenState::Connect;
         self.state = ScreenState::Idle;
         let op = std::mem::take(&mut self.op);
@@ -973,8 +1087,14 @@ impl GlueMgr {
             ScreenState::CharList => self.tick_char_list(),
             ScreenState::RealmList => self.tick_realm_list(),
             ScreenState::Delete => self.tick_delete(),
-            // No arm for state 7: the compares in `[0x46b930, 0x46c2ac)` never take it.
-            ScreenState::Rename | ScreenState::Idle => {}
+            // `0x46c283`: `OKAY` with the operation's text, every frame the state stands.
+            ScreenState::LoginRefused => {
+                let text = self.op.text();
+                self.open("OKAY", text);
+            }
+            // No arm for state 7: the compares in `[0x46b930, 0x46c2ac)` never take it. State 8's
+            // two phases are the world entry's here (`0x46c1b8`).
+            ScreenState::Rename | ScreenState::EnterWorld | ScreenState::Idle => {}
         }
     }
 
@@ -1160,6 +1280,7 @@ pub(crate) struct LoginNews<'w, 's> {
     addon_reply: Option<Res<'w, AddonInfoReply>>,
     char_actions: MessageReader<'w, 's, CharActionResultMessage>,
     renames: MessageReader<'w, 's, CharRenameMessage>,
+    login_refusals: MessageReader<'w, 's, CharacterLoginFailedMessage>,
     /// The name check's lists, which the glue VM is seated with (`0x6c91a0`).
     names: Option<Res<'w, crate::text_filter::NameFilter>>,
 }
@@ -1173,8 +1294,12 @@ pub(crate) struct GlueAsks<'w> {
     launch_addon: MessageWriter<'w, super::server_alert::LaunchAddonUrl>,
     realm: Option<Res<'w, crate::net::RealmChoice>>,
     abandon: Option<Res<'w, crate::net::LoginAbandon>>,
-    /// The select screen's roster, which names the in-world files: a rename renames it too.
+    /// The select screen's roster, which names the in-world files: a rename renames it too, and
+    /// the world entry's pick is its pending one.
     roster: Option<ResMut<'w, crate::char_select::Roster>>,
+    pick: Option<Res<'w, crate::net::CharPick>>,
+    /// The engine-side CVar table `EnterWorld` writes and saves.
+    cvars: Option<ResMut<'w, crate::cvars::Cvars>>,
 }
 
 /// The CVars each agreement is read from and written to.
@@ -1240,6 +1365,11 @@ pub(crate) fn drive_glue_mgr(
         }
     }
 
+    // A refused character login, ahead of the glue build it comes back to (`0x5aad70`).
+    for msg in news.login_refusals.read() {
+        mgr.on_char_login_failed(msg.result);
+    }
+
     // A new glue VM is the glue build (`0x46a7b0`): state 0, its slots seeded, and the realm
     // list's C globals carried over, which outlive the Lua state.
     let mut fresh_vm = false;
@@ -1268,6 +1398,13 @@ pub(crate) fn drive_glue_mgr(
         // In the world the glue is torn down, and the entry's second phase leaves state 0
         // (`0x46c252`).
         mgr.state = ScreenState::Idle;
+    }
+    // A refused login's state 9, on the glue the refusal comes back to, before its screen's list
+    // ask is served (`0x402075`). One that finds the glue still standing beat the world it
+    // revokes, which here is entered before the verdict (the pick's `Deviation:` in
+    // [`crate::net::io`]), and ends the same way.
+    if glue_up {
+        mgr.take_refusal();
     }
     if let (Some(s), Some(r)) = (script.as_deref_mut(), realms.as_ref()) {
         if fresh_vm || r.is_changed() {
@@ -1339,9 +1476,20 @@ pub(crate) fn drive_glue_mgr(
                 GlueRequest::GetCharacterList => mgr.get_character_list(),
                 GlueRequest::DeleteCharacter(guid) => mgr.delete_character(guid),
                 GlueRequest::RenameCharacter { guid, name } => mgr.rename_character(guid, name),
+                GlueRequest::EnterWorld { index, guid, flags } => {
+                    mgr.enter_world(index, guid, flags);
+                }
             }
         }
         mgr.realm_cells = s.glue_realm_cells();
+    }
+    // `EnterWorld`'s `lastCharacterIndex` (`0x46b5fa`, `"%d"` of the selection) into the engine's
+    // table, then `SaveConfig` (`0x46b6f6`).
+    if let Some(index) = mgr.last_character.take() {
+        if let Some(cvars) = asks.cvars.as_deref_mut() {
+            cvars.set(crate::char_select::CVAR_LAST_CHARACTER, &index.to_string());
+            cvars.save();
+        }
     }
 
     // `SMSG_ADDON_INFO` read (`0x5b4260`): the index rebuilt from the reply (`0x51da70`), then
@@ -1444,7 +1592,8 @@ pub(crate) fn drive_glue_mgr(
 }
 
 /// Send the asks of the frame: the login engine's, and the park requests in the order they were
-/// made, the realm requests stamped with the abandon generation as they go.
+/// made, the realm requests stamped with the abandon generation as they go and the world entry's
+/// pick through the native screens' own ([`crate::char_select::send_pick`]).
 fn send_asks(mgr: &mut GlueMgr, logins: Vec<GlueLogin>, asks: &mut GlueAsks) {
     let (arms, park_asks) = mgr.take_asks();
     for ask in logins.into_iter().chain(arms) {
@@ -1453,8 +1602,17 @@ fn send_asks(mgr: &mut GlueMgr, logins: Vec<GlueLogin>, asks: &mut GlueAsks) {
     let now = crate::net::LoginAbandon::now(asks.abandon.as_deref());
     if let Some(choice) = asks.realm.as_deref() {
         for mut ask in park_asks {
-            if let ParkRequest::Realm(RealmRequest::Enter { generation, .. }) = &mut ask {
-                *generation = now;
+            match &mut ask {
+                ParkRequest::Realm(RealmRequest::Enter { generation, .. }) => *generation = now,
+                ParkRequest::Char(CharRequest::Enter(guid)) => {
+                    if let (Some(roster), Some(pick)) =
+                        (asks.roster.as_deref_mut(), asks.pick.as_deref())
+                    {
+                        crate::char_select::send_pick(roster, pick, *guid);
+                    }
+                    continue;
+                }
+                _ => {}
             }
             let _ = choice.0.send_request(ask);
         }

@@ -143,7 +143,6 @@ const NOT_YET: &[(&str, &[&str])] = &[
          patch and survey, the billing and the credits music; each a binding of its own, the ones \
          with an in-game namesake included",
         &[
-            "EnterWorld",
             "GetBillingPlan",
             "GetBillingTimeRemaining",
             "GetBillingTimeRested",

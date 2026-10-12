@@ -135,6 +135,10 @@ pub enum GlueRequest {
     /// `0x46b39b`): the host takes screen state 7, the `CHAR_RENAME_IN_PROGRESS` dialog and the
     /// `CMSG_CHAR_RENAME`.
     RenameCharacter { guid: u64, name: String },
+    /// `EnterWorld()` (`0x46d3c0` → `CGlueMgr::EnterWorld` `0x46b500`) with the selection on the
+    /// roster (`0x46b513`-`0x46b53e`): its 0-based index (`[0x83856c]`), guid (`+0x00`) and flags
+    /// (`+0xfc`). The realm and link guards, the flag dialogs and the entry are the host's.
+    EnterWorld { index: i32, guid: u64, flags: u32 },
 }
 
 /// The `ClientServices` status keys (`0x85cae8`, 83 entries), the `ResponseCodes` the world

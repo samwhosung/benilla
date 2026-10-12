@@ -147,7 +147,8 @@ impl Plugin for CharSelectPlugin {
 /// roster comes right behind them on the kept link, often in the same drain, and must be shown,
 /// not answered with the pick just left. `back_on_disconnect` runs after the entry: a session that
 /// died during entry queues both edges into one frame, and the dead one must win.
-fn session_edges() -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+pub(crate) fn session_edges(
+) -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
     (
         back_on_logout,
         back_on_login_refused,
@@ -197,6 +198,15 @@ impl Roster {
         if let Some(c) = self.chars.iter_mut().find(|c| c.guid == guid) {
             c.name = name.to_string();
             c.flags &= !benilla_protocol::CHARACTER_FLAG_RENAME;
+        }
+    }
+
+    /// A roster the screen holds with no pick, for tests outside this module.
+    #[cfg(test)]
+    pub(crate) fn with_chars(chars: Vec<Character>) -> Self {
+        Self {
+            chars,
+            ..Self::default()
         }
     }
 

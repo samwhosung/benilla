@@ -9,7 +9,8 @@
 //! as `0x472740` does. Indices are 1-based in Lua and 0-based inside, the boundary at `0x473470`.
 //!
 //! `DeleteCharacter` and `RenameCharacter` check here and hand the host what the reference sends
-//! (`0x46b2e0`, `0x46b340`), whose screen states are the host's; the rename reply's applier
+//! (`0x46b2e0`, `0x46b340`), whose screen states are the host's; `EnterWorld` hands it the selected
+//! record (`0x46b500`); the rename reply's applier
 //! (`0x4725f0`) changes the record here once the host has moved the character's files.
 //!
 //! The 3-D side of the reference (`0x472950`'s model build into the scene) is the host's scene
@@ -604,6 +605,32 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 queue(lua, GlueRequest::RenameCharacter { guid, name });
             }
             Ok(MultiValue::from_vec(vec![Value::Number(1.0)]))
+        })?,
+    )?;
+
+    // `0x46d3c0`, a glue core binding (table `0x8373b8`) that reads this roster: `CGlueMgr::
+    // EnterWorld` (`0x46b500`), then no values (`0x46d3c5 xor eax,eax`), arguments ignored. The
+    // selection cell indexes the record (`0x46b513`-`0x46b533`); off the roster the call returns
+    // having done nothing (`0x46b53e`). The record goes to the host, whose guards come next.
+    g.set(
+        "EnterWorld",
+        lua.create_function(|lua, _: MultiValue| {
+            let entry = {
+                let m = model(lua);
+                let roster = &m.glue.roster;
+                usize::try_from(roster.cells.selected)
+                    .ok()
+                    .and_then(|i| roster.records.get(i))
+                    .map(|r| GlueRequest::EnterWorld {
+                        index: roster.cells.selected,
+                        guid: r.character.guid,
+                        flags: r.character.flags,
+                    })
+            };
+            if let Some(entry) = entry {
+                queue(lua, entry);
+            }
+            Ok(MultiValue::new())
         })?,
     )?;
 
@@ -1284,6 +1311,38 @@ mod tests {
             ),
             "{queued:?}"
         );
+    }
+
+    /// `0x46d3c0`: the selected record's index, guid and flags go to the host and the call returns
+    /// no values; with the selection off the roster nothing goes (`0x46b53e`), and the verb fires
+    /// nothing itself.
+    #[test]
+    fn enter_world_hands_the_selected_record_to_the_host() {
+        let mut roster = three();
+        roster[1].flags = 0x4004;
+        let mut s = vm(roster);
+        s.take_glue_requests();
+        s.run("SelectCharacter(2) FIRED = {}").unwrap();
+        assert_eq!(s.eval::<f64>(&count("EnterWorld('x', 9)")).unwrap(), 0.0);
+        let queued = s.take_glue_requests();
+        assert!(
+            matches!(
+                queued.as_slice(),
+                [GlueRequest::EnterWorld {
+                    index: 1,
+                    guid: 2,
+                    flags: 0x4004
+                }]
+            ),
+            "{queued:?}"
+        );
+        assert!(fired(&s).is_empty());
+
+        for mut s in [vm(Vec::new()), UiScript::new_glue().unwrap()] {
+            s.take_glue_requests();
+            assert_eq!(s.eval::<f64>(&count("EnterWorld()")).unwrap(), 0.0);
+            assert!(s.take_glue_requests().is_empty());
+        }
     }
 
     /// `0x4725f0` on the VM's side: the record found by guid takes the name, loses the rename flag
