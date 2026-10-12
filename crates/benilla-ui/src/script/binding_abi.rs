@@ -46,6 +46,12 @@ pub(crate) fn number_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Resu
 /// negative a value no table holds. A non-number raises, as the reference's usage error does.
 pub(crate) struct Idx(pub usize);
 
+/// [`Idx`] as a function, for a binding whose reference raises its own usage text for a
+/// non-number (`usage`); the value is the same 32-bit pattern, widened.
+pub(crate) fn index_arg(lua: &Lua, v: Value, usage: &'static str) -> mlua::Result<usize> {
+    number_arg(lua, v, usage).map(|n| n as u32 as usize)
+}
+
 /// [`Idx`] for the parameters the bindings keep as `u32`.
 pub(crate) struct Idx32(pub u32);
 

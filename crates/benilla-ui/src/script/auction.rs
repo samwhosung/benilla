@@ -10,7 +10,7 @@ use mlua::{Lua, MultiValue, Value};
 use super::binding_abi::flag;
 use super::cursor::{self, CursorPayload};
 use super::Model;
-use crate::script::binding_abi::Idx32;
+use crate::script::binding_abi::{Idx, Idx32};
 
 /// The three list types, in the order the app pushes them.
 pub const LIST: usize = 0;
@@ -321,7 +321,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetAuctionItemInfo(type, index) → twelve values; `highBidder` is a name, `1` or nil.
     g.set(
         "GetAuctionItemInfo",
-        lua.create_function(|lua, (kind, index): (String, usize)| {
+        lua.create_function(|lua, (kind, index): (String, Value)| {
+            let index = crate::script::binding_abi::index_arg(
+                lua,
+                index,
+                "Usage: GetAuctionItemInfo(\"type\", index)",
+            )?;
             let row = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, &kind, index)
@@ -383,7 +388,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // live countdown: it moves only when a new list lands.
     g.set(
         "GetAuctionItemTimeLeft",
-        lua.create_function(|lua, (kind, index): (String, usize)| {
+        lua.create_function(|lua, (kind, Idx(index)): (String, Idx)| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(row_at(&model, &kind, index).map_or(0, |r| i64::from(r.time_left)))
         })?,
@@ -391,7 +396,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "GetAuctionItemLink",
-        lua.create_function(|lua, (kind, index): (String, usize)| {
+        lua.create_function(|lua, (kind, index): (String, Value)| {
+            let index = crate::script::binding_abi::index_arg(
+                lua,
+                index,
+                "Usage: GetAuctionItemLink(\"type\", index)",
+            )?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 row_at(&model, &kind, index).and_then(|r| r.link)
@@ -430,7 +440,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // SetSelectedAuctionItem(type, index): remembers the auction at that row; out of range clears.
     g.set(
         "SetSelectedAuctionItem",
-        lua.create_function(|lua, (kind, index): (String, usize)| {
+        lua.create_function(|lua, (kind, Idx(index)): (String, Idx)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let Some(i) = list_index(&kind) else {
                 return Ok(());

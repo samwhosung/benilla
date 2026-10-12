@@ -16,6 +16,13 @@ const MISSES: &[(&str, &str)] = &[
     ("GetContainerItemInfo(0, 1)", ""),
     ("GetContainerItemLink(0, 1)", ""),
     ("GetContainerItemCooldown(0, 1)", "0,0,0"),
+    // `index - 1` compared unsigned (`0x4ceed9`, `0x4cf375`): the twelve-value miss (`0x4cf1ec`),
+    // and nothing for a link (`0x4cf45b`).
+    (
+        "GetAuctionItemInfo('list', 1)",
+        "nil,nil,1,-1,nil,0,0,0,0,0,nil,nil",
+    ),
+    ("GetAuctionItemLink('list', 1)", ""),
     ("GetCraftInfo(1)", "nil,nil,nil,0,nil,0,0"),
     ("GetCraftInfo(0)", "nil,nil,nil,0,nil,0,0"),
     ("GetCraftReagentInfo(1, 1)", "nil,nil,nil,nil"),
