@@ -475,6 +475,37 @@ pub(crate) fn delete_cursor_item(model: &mut Model) {
     raise_lock_changed(model);
 }
 
+/// An attach slot's click, `ClickSendMailItemButton` (`0x4adef0`) and
+/// `ClickAuctionSellItemButton` (`0x4ce310`) alike: `slot` names the attachment. The held item,
+/// or none, is compared with the attachment (`0x4ae07a`, `0x4ce512`): the same, nothing on both
+/// sides included, is a plain `ClearCursor(1,1)` (`0x4ae08b`, `0x4ce523`), which drops any other
+/// payload. Otherwise the held item becomes the attachment and `SetCursorItem(0, …)` puts the old
+/// one back on the cursor (`0x4ae0d4`, `0x4ce56c`): its inner `ClearCursor(0,1)` lifts no lock,
+/// so the newly attached item stays locked ([`client_locked`]), and an empty old attachment
+/// leaves the cursor clear. Returns whether the attachment changed, after which the caller's
+/// slot signals its own update.
+pub(crate) fn click_attach_slot(
+    lua: &Lua,
+    slot: impl Fn(&mut Model) -> &mut Option<CursorItem>,
+) -> bool {
+    let (held, old) = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let held = match &model.cursor {
+            Some(CursorPayload::Item(item)) => Some(item.clone()),
+            _ => None,
+        };
+        (held, slot(&mut model).clone())
+    };
+    let key = |item: &Option<CursorItem>| item.as_ref().map(|i| (i.bag, i.slot));
+    if key(&held) == key(&old) {
+        verb(lua, clear_cursor);
+        return false;
+    }
+    verb(lua, |model| *slot(model) = held);
+    set_cursor(lua, false, |_| old.map(CursorPayload::Item));
+    true
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // UiScript accessors
 // ─────────────────────────────────────────────────────────────────────────────────────────────

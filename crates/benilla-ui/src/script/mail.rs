@@ -5,7 +5,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
-use super::cursor::{self, CursorPayload};
+use super::cursor;
 use super::Model;
 use crate::script::binding_abi::Idx;
 
@@ -647,7 +647,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ClickSendMailItemButton",
         lua.create_function(|lua, ()| {
-            super::tick::verb(lua, click_send_mail_item);
+            click_send_mail_item(lua);
             Ok(())
         })?,
     )?;
@@ -798,27 +798,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     Ok(())
 }
 
-/// `ClickSendMailItemButton` (`0x4adef0`): the send slot as a cursor drop target. The attach
-/// clears the cursor with `SetCursorItem(0, …)` (`0x4ae0d2`), whose inner `ClearCursor(0,1)` lifts
-/// no lock: the attached item stays locked in its bag slot until it leaves the attach slot
-/// ([`cursor::client_locked`]), and no `ITEM_LOCK_CHANGED` fires.
-fn click_send_mail_item(model: &mut Model) {
-    match model.cursor.clone() {
-        // A held bag item attaches; it stays in its bag slot until the send.
-        Some(CursorPayload::Item(item)) => {
-            // An earlier attachment is overwritten, as in the reference; its slot has no lock.
-            model.mail_send_item = Some(item);
-            cursor::clear(model, cursor::Clear::KEEP_LOCK);
-            // `MAIL_SEND_INFO_UPDATE` (`0x4ae0de`): the stock tab re-reads the item and postage.
+/// `ClickSendMailItemButton` (`0x4adef0`): the send slot as a cursor drop target, attaching the
+/// held item and putting an earlier attachment back on the cursor ([`cursor::click_attach_slot`]).
+/// A held item stays in its bag slot, locked, until the send. A changed attachment signals
+/// `MAIL_SEND_INFO_UPDATE` (`0x4ae0de`), whose stock handler re-reads the item and postage.
+fn click_send_mail_item(lua: &Lua) {
+    if cursor::click_attach_slot(lua, |model| &mut model.mail_send_item) {
+        super::tick::verb(lua, |model| {
             model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
-        }
-        None => {
-            if let Some(item) = model.mail_send_item.take() {
-                cursor::put(model, CursorPayload::Item(item));
-                model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
-            }
-        }
-        Some(_) => {}
+        });
     }
 }
 
@@ -1404,6 +1392,77 @@ mod tests {
         assert!(heard::take(&s).is_empty());
         s.reset_compose_tab();
         assert_eq!(heard::take(&s), ["ITEM_LOCK_CHANGED nil"]);
+    }
+
+    /// An occupied attach slot puts the old attachment back on the cursor through
+    /// `SetCursorItem(0, …)` (`0x4ae05a`-`0x4ae0d4`): its inner clear's `CURSOR_UPDATE` reads the
+    /// emptied cursor, the set's the old item, and both items stay locked. An empty hand takes the
+    /// attachment back the same way. With nothing held and nothing attached the click is
+    /// `ClearCursor(1,1)` (`0x4ae08b`), which drops any other payload and signals nothing more.
+    #[test]
+    fn an_attach_onto_an_occupied_slot_puts_the_old_item_on_the_cursor() {
+        use crate::script::cursor::{
+            bag_lock_probe, install_kind_probe, two_item_bag, CursorMacro, CursorPayload,
+        };
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(two_item_bag()));
+        install_kind_probe(&s);
+        s.run("PickupContainerItem(0, 1) ClickSendMailItemButton() PickupContainerItem(0, 2)")
+            .unwrap();
+        heard::listen(
+            &s,
+            &[
+                "ACTIONBAR_HIDEGRID",
+                "ACTIONBAR_SHOWGRID",
+                "CURSOR_UPDATE",
+                "ITEM_LOCK_CHANGED",
+                "MAIL_SEND_INFO_UPDATE",
+            ],
+            Some("CursorKind() .. ' ' .. tostring(GetSendMailItem())"),
+        );
+        s.run("ClickSendMailItemButton()").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            [
+                "ACTIONBAR_HIDEGRID none Minor Healing Potion",
+                "CURSOR_UPDATE none Minor Healing Potion",
+                "ACTIONBAR_SHOWGRID item Minor Healing Potion",
+                "CURSOR_UPDATE item Minor Healing Potion",
+                "MAIL_SEND_INFO_UPDATE item Minor Healing Potion"
+            ]
+        );
+        assert_eq!(s.cursor_item().map(|i| i.slot), Some(1));
+        for slot in [1, 2] {
+            let probe = bag_lock_probe(slot);
+            assert!(s.eval::<bool>(&format!("return {probe} == 1")).unwrap());
+        }
+
+        // An empty hand takes the attachment back.
+        s.run("ClearCursor()").unwrap();
+        heard::take(&s);
+        s.run("ClickSendMailItemButton()").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            [
+                "CURSOR_UPDATE none nil",
+                "ACTIONBAR_SHOWGRID item nil",
+                "CURSOR_UPDATE item nil",
+                "MAIL_SEND_INFO_UPDATE item nil"
+            ]
+        );
+        assert_eq!(s.cursor_item().map(|i| i.slot), Some(2));
+
+        // Nothing held and nothing attached: a plain clear, here of a held macro.
+        s.run("ClearCursor()").unwrap();
+        s.set_cursor_for_test(CursorPayload::Macro(CursorMacro {
+            index: 1,
+            texture: None,
+        }));
+        heard::take(&s);
+        s.run("ClickSendMailItemButton()").unwrap();
+        assert!(s.cursor_payload().is_none());
+        assert_eq!(heard::take(&s), ["CURSOR_UPDATE none nil"]);
     }
 }
 
