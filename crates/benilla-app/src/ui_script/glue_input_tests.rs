@@ -126,3 +126,44 @@ fn escape_on_a_playing_movie_returns_to_login_on_the_key_up() {
     assert!(!s.glue_cursor_hidden());
     assert_eq!(s.take_errors(), Vec::<String>::new());
 }
+
+/// The Realmlist dialog widens the stock edit box, whose border is two 75-pixel caps that meet at
+/// its own 130 pixels: while it is wide the stretched middle fills the gap between the caps, as the
+/// chat box's does (`ChatFrame.xml:41-55`), and the stock box comes back untouched.
+#[test]
+fn the_widened_realmlist_box_has_a_border_between_its_caps() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let mut s = glue_on(GlueScreen::Login);
+    s.run("BENILLA_REALMLIST = 'logon.example.org' BenillaRealmlistButton:Click()")
+        .unwrap();
+    s.resolve();
+    let span = |s: &UiScript| {
+        s.eval::<(f64, f64, f64, f64)>(
+            "return GlueDialogEditBox:GetLeft(), GlueDialogEditBox:GetRight(), \
+             BenillaRealmlist_Middle:GetLeft(), BenillaRealmlist_Middle:GetRight()",
+        )
+        .unwrap()
+    };
+    let (box_left, box_right, mid_left, mid_right) = span(&s);
+    assert_eq!(box_right - box_left, 300.0);
+    assert_eq!(
+        (mid_left - box_left, box_right - mid_right),
+        (65.0, 65.0),
+        "the middle starts where the left cap ends and ends where the right one starts"
+    );
+    assert!(s
+        .eval::<bool>("return BenillaRealmlist_Middle:IsShown() == 1")
+        .unwrap());
+
+    s.run("GlueDialogButton2:Click()").unwrap();
+    s.resolve();
+    assert!(!s
+        .eval::<bool>("return BenillaRealmlist_Middle:IsShown() == 1")
+        .unwrap());
+    assert_eq!(
+        s.eval::<f64>("return GlueDialogEditBox:GetWidth()")
+            .unwrap(),
+        130.0
+    );
+    assert_eq!(s.take_errors(), Vec::<String>::new());
+}

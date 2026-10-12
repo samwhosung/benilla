@@ -38,7 +38,9 @@
 
         -- The stock edit box's Enter and Escape call the in-game StaticPopup functions, which the
         -- glue does not have: while this dialog owns it, they press its buttons, and it is wide
-        -- enough for a host name.
+        -- enough for a host name. The stock border is two 75-pixel caps that meet at its own 130
+        -- pixels, so the widened box also takes the chat box's stretched middle piece
+        -- (ChatFrame.xml:41-55) between them.
         function BenillaRealmlist_TakeEditBox()
             if ( not BenillaRealmlist_Saved ) then
                 BenillaRealmlist_Saved = {
@@ -48,6 +50,15 @@
                 };
             end
             GlueDialogEditBox:SetWidth(300);
+            if ( not BenillaRealmlist_Middle ) then
+                BenillaRealmlist_Middle = GlueDialogEditBox:CreateTexture(nil, "BACKGROUND");
+                BenillaRealmlist_Middle:SetTexture("Interface\\ChatFrame\\UI-ChatInputBorder-Right");
+                BenillaRealmlist_Middle:SetTexCoord(0, 0.9375, 0, 1.0);
+                BenillaRealmlist_Middle:SetHeight(32);
+                BenillaRealmlist_Middle:SetPoint("LEFT", GlueDialogEditBox, "LEFT", 65, 0);
+                BenillaRealmlist_Middle:SetPoint("RIGHT", GlueDialogEditBox, "RIGHT", -65, 0);
+            end
+            BenillaRealmlist_Middle:Show();
             GlueDialogEditBox:SetScript("OnEnterPressed", function() GlueDialogButton1:Click(); end);
             GlueDialogEditBox:SetScript("OnEscapePressed", function() GlueDialogButton2:Click(); end);
         end
@@ -55,6 +66,7 @@
         function BenillaRealmlist_ReleaseEditBox()
             local saved = BenillaRealmlist_Saved;
             if ( saved ) then
+                BenillaRealmlist_Middle:Hide();
                 GlueDialogEditBox:SetWidth(saved.width);
                 GlueDialogEditBox:SetScript("OnEnterPressed", saved.enter);
                 GlueDialogEditBox:SetScript("OnEscapePressed", saved.escape);
