@@ -16,8 +16,8 @@ use mlua::{Lua, MultiValue, Value};
 use super::addon::{index_row, AddonSecurity};
 use super::addon_enable::{AddonStateFiles, EnableStore};
 use super::addon_gate::{can_load, GateRow};
-use super::binding_abi::{bool_or_default, flag, number_arg, string_arg};
-use super::glue_core::{leading_int, queue, GlueRequest};
+use super::binding_abi::{bool_or_default, flag, number_arg, s_str_to_int, string_arg};
+use super::glue_core::{queue, GlueRequest};
 use super::Model;
 
 /// `GetNumAddOns` is `0x46d420`; its in-game namesake is `0x48e350` and answers the same count.
@@ -334,7 +334,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let kb = model(lua)
                 .cvars
                 .get(&CVAR_SCRIPT_MEMORY.to_ascii_lowercase())
-                .map_or(0, |slot| leading_int(&slot.value) as i32);
+                .map_or(0, |slot| s_str_to_int(&slot.value) as i32);
             Ok(f64::from(kb.wrapping_add((kb >> 31) & 0x3ff) >> 10))
         })?,
     )?;
@@ -835,6 +835,20 @@ mod tests {
         assert_eq!(s.eval::<f64>("return GetScriptMemory()").unwrap(), 0.0);
         s.set_cvar_engine("scriptMemory", "-2048");
         assert_eq!(s.eval::<f64>("return GetScriptMemory()").unwrap(), -2.0);
+        // The CVar's integer is `SStrToInt` of its text (`+0x28`): no whitespace skip, no plus.
+        for (text, mb) in [
+            ("12288x", 12.0),
+            (" 4096", 0.0),
+            ("+4096", 0.0),
+            ("-3072", -3.0),
+        ] {
+            s.set_cvar_engine("scriptMemory", text);
+            assert_eq!(
+                s.eval::<f64>("return GetScriptMemory()").unwrap(),
+                mb,
+                "{text:?}"
+            );
+        }
         assert!(raised(&s, "SetScriptMemory('')").contains("Usage: SetScriptMemory(MB)"));
         assert!(raised(&s, "SetScriptMemory()").contains("Usage: SetScriptMemory(MB)"));
     }
