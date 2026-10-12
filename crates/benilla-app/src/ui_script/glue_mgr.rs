@@ -400,14 +400,16 @@ impl Operation {
     }
 }
 
-/// What follows a verb's dialog in the reference, run once the dialog's handlers have: the
+/// What follows a signal in the reference, run once the signal's handlers have: a verb's
 /// operation begun and its request asked (`0x46b8b7`, `0x46b2cd`, `0x46b328`, `0x46b902`,
-/// `0x46b274`, the logon at `0x46b05c`), so a handler that presses the dialog's button acts on the
-/// operation before it.
-#[derive(Clone, PartialEq, Eq)]
+/// `0x46b274`, the logon at `0x46b05c`), and the state writes an `Update` arm makes after its
+/// re-text and its dialogs. So a handler that presses the dialog's button acts on the state and
+/// the operation as they stood when the signal was raised. The arm's decisions are the ones it
+/// made off the status it read first (`0x46ba5a`), carried in the step.
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Step {
     /// The logon, `0x5ab4b0`.
-    Logon { account: String, password: String },
+    Logon { account: String, password: Secret },
     /// The character list query, `0x5aabb0`.
     CharList,
     /// The create, `0x5aac50`.
@@ -420,28 +422,38 @@ enum Step {
     RealmList,
     /// The world connect, `0x5aab20`.
     Connect,
+    /// The screen state, written.
+    State(ScreenState),
+    /// The logon arm's authenticated latch (`0x46ba8d`-`0x46ba98`): state 0, then `0x46b1f0`'s
+    /// connect at `CSTATUS_CONNECTING` (`0x5aab4a`), its ring cleared (`0x5aab30`), with no dialog
+    /// of its own; the logon's list is its query's reply.
+    LogonAuthenticated,
+    /// The logon arm's failure (`0x46bbbf`): the logon cancelled, state 0.
+    LogonFailed,
+    /// The connect done, the authentication begins (`0x46bfdd` → `0x5aaba0`).
+    BeginAuth,
+    /// The authentication's success (`0x46c00e`): state 0.
+    Authenticated,
+    /// The queue ring cleared after the character screen is up (`0x46c029`).
+    ClearQueue,
+    /// State 2's failure arm past its dialog, with the status it read (`0x46bef5`-`0x46bfc8`).
+    WorldFailed(u8),
+    /// The failure arm past its teardown (`0x46bf24`-`0x46bf96`): the realm list raised over the
+    /// screen, or with no realm held asked for (`0x46c06e`).
+    RaiseRealmList,
+    /// `RequestRealmList(1)` (`0x46b8d0`), as an arm calls it.
+    RequestRealmList,
+    /// `0x46b880`, as the delete's success calls it (`0x46c1a7`).
+    GetCharacterList,
 }
 
-/// Never prints the password.
-impl std::fmt::Debug for Step {
+/// A password in a step, which never prints.
+#[derive(Clone, PartialEq, Eq)]
+struct Secret(String);
+
+impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Step::Logon { account, .. } => f
-                .debug_struct("Logon")
-                .field("account", account)
-                .field("password", &"<redacted>")
-                .finish(),
-            Step::CharList => f.write_str("CharList"),
-            Step::Create(r) => f.debug_tuple("Create").field(r).finish(),
-            Step::Delete(g) => f.debug_tuple("Delete").field(g).finish(),
-            Step::Rename { guid, name } => f
-                .debug_struct("Rename")
-                .field("guid", guid)
-                .field("name", name)
-                .finish(),
-            Step::RealmList => f.write_str("RealmList"),
-            Step::Connect => f.write_str("Connect"),
-        }
+        f.write_str("<redacted>")
     }
 }
 
@@ -597,6 +609,9 @@ pub(crate) struct GlueMgr {
     resumes: std::collections::HashMap<u32, Step>,
     /// The next such number.
     next_resume: u32,
+    /// A world authentication that came inside the logon's frame, waiting on the logon arm's
+    /// steps.
+    auth_waits: bool,
 }
 
 impl GlueMgr {
@@ -696,8 +711,10 @@ impl GlueMgr {
             return;
         }
         self.begin_logon();
-        self.outbox
-            .push(Outgoing::Begin(Step::Logon { account, password }));
+        self.outbox.push(Outgoing::Begin(Step::Logon {
+            account,
+            password: Secret(password),
+        }));
     }
 
     /// Login's own state edge: the cells cleared, the latch down, state 1, and the `CANCEL`
@@ -821,7 +838,10 @@ impl GlueMgr {
         };
         match step {
             Step::Logon { account, password } => {
-                self.login_out.push(GlueLogin::Submit { account, password });
+                self.login_out.push(GlueLogin::Submit {
+                    account,
+                    password: password.0,
+                });
             }
             Step::CharList => char_op(
                 self,
@@ -867,7 +887,87 @@ impl GlueMgr {
                 // The connect's own query (`0x5aab20` → `0x5b2220`).
                 self.park_out.push(RealmRequest::Refresh.into());
             }
+            Step::State(state) => self.state = state,
+            Step::LogonAuthenticated => {
+                self.state = ScreenState::Connect;
+                self.auth_final = false;
+                self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+                self.queue = QueueEstimate::default();
+            }
+            Step::LogonFailed => {
+                self.login_out.push(GlueLogin::Abandon);
+                self.state = ScreenState::Idle;
+            }
+            Step::BeginAuth => self.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING),
+            Step::Authenticated => {
+                self.state = ScreenState::Idle;
+                self.op = Operation::default();
+            }
+            Step::ClearQueue => self.queue = QueueEstimate::default(),
+            Step::WorldFailed(status) => self.world_failed_past_dialog(status),
+            Step::RaiseRealmList => {
+                if self.holder.is_empty() {
+                    self.request_realm_list(true);
+                } else {
+                    self.outbox.push(Outgoing::Close);
+                    self.outbox.push(Outgoing::Rebuild);
+                }
+            }
+            Step::RequestRealmList => self.request_realm_list(true),
+            Step::GetCharacterList => self.get_character_list(),
         }
+    }
+
+    /// Run `f`, the items it raises going ahead of everything already waiting: a step or an
+    /// outbox entry's own work runs inside the arm that raised it, before the arm goes on.
+    fn at_front(&mut self, f: impl FnOnce(&mut Self)) {
+        let rest = std::mem::take(&mut self.outbox);
+        f(self);
+        self.outbox.extend(rest);
+    }
+
+    /// The outbox's next signal or frame-only entry, every step ahead of it run in order on the
+    /// way, what each raises taking its place at the front.
+    fn next_out(&mut self) -> Option<Outgoing> {
+        loop {
+            if self.outbox.is_empty() {
+                return None;
+            }
+            match self.outbox.remove(0) {
+                Outgoing::Begin(step) => self.at_front(|m| m.run_step(step)),
+                out => return Some(out),
+            }
+        }
+    }
+
+    /// What a verb's call raised, as the VM fires it: its steps become [`GlueSignal::Resume`]s
+    /// at their places. Nothing a call raises is one of the frame-only entries; one would wait
+    /// for the frame's flush.
+    fn vm_signals(&mut self, raised: Vec<Outgoing>) -> Vec<GlueSignal> {
+        let mut signals = Vec::with_capacity(raised.len());
+        for out in raised {
+            match out.into_signal() {
+                Ok(signal) => signals.push(signal),
+                Err(Outgoing::Begin(step)) => {
+                    let id = self.next_resume;
+                    self.next_resume = id.wrapping_add(1);
+                    self.resumes.insert(id, step);
+                    signals.push(GlueSignal::Resume(id));
+                }
+                Err(out) => self.outbox.push(out),
+            }
+        }
+        signals
+    }
+
+    /// Every step the outbox holds run in order, the signals kept for a VM: the frame with no
+    /// glue VM to fire into, whose state still moves.
+    fn settle(&mut self) {
+        let mut kept = Vec::new();
+        while let Some(out) = self.next_out() {
+            kept.push(out);
+        }
+        self.outbox = kept;
     }
 
     /// `CGlueMgr::EnterWorld` (`0x46b500`) for the record the VM's selection named (its guard
@@ -1149,15 +1249,13 @@ impl GlueMgr {
         }
     }
 
-    /// State 2's failure arm (`0x46bea7`-`0x46bfc8`): the dialog unless cancelled, state 0, a
-    /// cancel's world socket dropped (`0x46befd`); `AUTH_FAILED` from the character screen goes
-    /// back to login (`0x46bfa7`); every other status tears the roster down (`0x46bf1f`) and
-    /// raises the realm list (`0x46bf24`-`0x46bf96`), or with no realm held asks for one
-    /// (`0x46c06e`).
-    fn world_failed(&mut self) {
-        let status = self.op.status;
+    /// State 2's failure arm (`0x46bea7`-`0x46bfc8`), off the status the frame read: the dialog
+    /// unless cancelled (`0x46bee7`, `0x46bf6f`), whose `OnShow` press runs in state 2
+    /// (`0x46b754`), then the rest ([`Self::world_failed_past_dialog`]).
+    fn world_failed(&mut self, op: &Operation) {
+        let status = op.status;
         if status != STATUS_CANCELLED {
-            let (text, code) = match self.op.text() {
+            let (text, code) = match op.text() {
                 Some(Text::Raw(t)) => (Text::Raw(t), None),
                 _ => status_text(status),
             };
@@ -1170,6 +1268,14 @@ impl GlueMgr {
                 None => self.open("OKAY", Some(text)),
             }
         }
+        self.outbox.push(Outgoing::Begin(Step::WorldFailed(status)));
+    }
+
+    /// The failure arm past its dialog: state 0 (`0x46bef5`), a cancel's world socket dropped
+    /// (`0x46befd`); `AUTH_FAILED` from the character screen goes back to login (`0x46bfa7`);
+    /// every other status tears the roster down (`0x46bf1f`) and then raises the realm list
+    /// ([`Step::RaiseRealmList`]).
+    fn world_failed_past_dialog(&mut self, status: u8) {
         self.state = ScreenState::Idle;
         self.connected = false;
         if status == STATUS_CANCELLED {
@@ -1182,12 +1288,7 @@ impl GlueMgr {
             return;
         }
         self.outbox.push(Outgoing::Teardown);
-        if self.holder.is_empty() {
-            self.request_realm_list(true);
-        } else {
-            self.outbox.push(Outgoing::Close);
-            self.outbox.push(Outgoing::Rebuild);
-        }
+        self.outbox.push(Outgoing::Begin(Step::RaiseRealmList));
     }
 
     /// One queue packet: the operation is re-armed as the queue's, status `AUTH_WAIT_QUEUE` and
@@ -1250,10 +1351,25 @@ impl GlueMgr {
             self.selected = Some(realm);
         }
         if self.state == ScreenState::Logon {
-            // A logon whose world half finished inside one frame.
+            // A logon whose world half finished inside one frame: its arm runs, and the
+            // authentication completes once the arm's steps have ([`Self::finish_auth`]).
             self.on_logon_done();
             self.tick();
+            self.auth_waits = true;
+            return;
         }
+        self.complete_auth();
+    }
+
+    /// The authentication that waited on the logon's arm.
+    fn finish_auth(&mut self) {
+        if std::mem::take(&mut self.auth_waits) {
+            self.complete_auth();
+        }
+    }
+
+    /// In state 2, the authentication completes `AUTH_OK` (`0x5aab80`).
+    fn complete_auth(&mut self) {
         if self.state != ScreenState::Connect {
             return;
         }
@@ -1291,7 +1407,10 @@ impl GlueMgr {
         }
     }
 
-    /// The per-frame arms of `CGlueMgr::Update` that run without a new message.
+    /// The per-frame arms of `CGlueMgr::Update` that run without a new message. Each reads the
+    /// operation's status once (`0x46ba5a`) and decides off it; every write it makes after a
+    /// signal is a [`Step`] behind that signal, so the signal's handlers run first, as the
+    /// reference's do inside its `SignalEvent`.
     fn tick(&mut self) {
         match self.state {
             ScreenState::Logon => {
@@ -1300,20 +1419,14 @@ impl GlueMgr {
                     self.show_login_dialog();
                 }
                 if self.auth_final {
-                    // `0x46ba8d`-`0x46ba98`, then `0x46b1f0`'s idle test passes and the connect
-                    // begins at `CSTATUS_CONNECTING` (`0x5aab4a`), its ring cleared (`0x5aab30`),
-                    // with no dialog of its own; the logon's list is its query's reply.
-                    self.state = ScreenState::Connect;
-                    self.auth_final = false;
-                    self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
-                    self.queue = QueueEstimate::default();
+                    self.outbox.push(Outgoing::Begin(Step::LogonAuthenticated));
                     return;
                 }
                 // `0x46bbbf`: a failed logon is cancelled and the state goes to 0. The patch
                 // state (`0x46bb64`) waits on a downloader benilla does not have; its dialog's
                 // Cancel ends it.
                 if self.cells.state == LOGIN_FAILED_STATE {
-                    self.state = ScreenState::Idle;
+                    self.outbox.push(Outgoing::Begin(Step::LogonFailed));
                 }
             }
             ScreenState::Connect => self.tick_connect(),
@@ -1332,25 +1445,41 @@ impl GlueMgr {
         }
     }
 
+    /// An arm's re-text of the dialog from the operation (`0x46c043`, `0x46c0ae`, `0x46c0fc`,
+    /// `0x46c157`), empty while it runs; the operation as the frame read it.
+    fn retext(&mut self) -> Operation {
+        let op = self.op.clone();
+        if let Some(text) = op.text() {
+            self.outbox.push(Outgoing::Update { text, button: None });
+        }
+        op
+    }
+
+    /// A completed operation's failure: `OKAY` with the status's text, then state 0 (`0x46c177`,
+    /// `0x46c188`).
+    fn fail_okay(&mut self, op: &Operation) {
+        self.open("OKAY", op.text());
+        self.outbox
+            .push(Outgoing::Begin(Step::State(ScreenState::Idle)));
+    }
+
     /// State 5's frame (`0x46c0f3`-`0x46c13d`): the dialog re-texted, then a completed create's
     /// arm. A success goes to state 0, closes the dialog, fires `SELECT_LAST_CHARACTER` and puts
     /// `charselect` up (`0x46c11e`-`0x46c13d`); a failure opens `OKAY` with the status's text and
     /// goes to state 0 (`0x46c118` → `0x46c177`).
     fn tick_create(&mut self) {
-        if let Some(text) = self.op.text() {
-            self.outbox.push(Outgoing::Update { text, button: None });
-        }
-        if !self.op.done {
+        let op = self.retext();
+        if !op.done {
             return;
         }
-        self.state = ScreenState::Idle;
-        if self.op.ok {
+        if op.ok {
+            self.outbox
+                .push(Outgoing::Begin(Step::State(ScreenState::Idle)));
             self.outbox.push(Outgoing::Close);
             self.outbox.push(Outgoing::SelectLast);
             self.outbox.push(Outgoing::Screen("charselect"));
         } else {
-            let text = self.op.text();
-            self.open("OKAY", text);
+            self.fail_okay(&op);
         }
     }
 
@@ -1359,19 +1488,15 @@ impl GlueMgr {
     /// 3 and its dialog); a failure opens `OKAY` with the status's text and goes to state 0
     /// (`0x46c173`).
     fn tick_delete(&mut self) {
-        if let Some(text) = self.op.text() {
-            self.outbox.push(Outgoing::Update { text, button: None });
-        }
-        if !self.op.done {
+        let op = self.retext();
+        if !op.done {
             return;
         }
-        if self.op.ok {
+        if op.ok {
             self.outbox.push(Outgoing::SelectFirst);
-            self.get_character_list();
+            self.outbox.push(Outgoing::Begin(Step::GetCharacterList));
         } else {
-            let text = self.op.text();
-            self.open("OKAY", text);
-            self.state = ScreenState::Idle;
+            self.fail_okay(&op);
         }
     }
 
@@ -1379,46 +1504,43 @@ impl GlueMgr {
     /// to state 0, the dialog closed and the rebuild (`0x46c0d2`-`0x46c0e2`), failure to `OKAY`
     /// with its text and state 0 (`0x46c0c9` → `0x46c177`).
     fn tick_realm_list(&mut self) {
-        if let Some(text) = self.op.text() {
-            self.outbox.push(Outgoing::Update { text, button: None });
-        }
-        if !self.op.done {
+        let op = self.retext();
+        if !op.done {
             return;
         }
-        self.state = ScreenState::Idle;
-        if self.op.ok {
+        if op.ok {
+            self.outbox
+                .push(Outgoing::Begin(Step::State(ScreenState::Idle)));
             self.outbox.push(Outgoing::Close);
             self.outbox.push(Outgoing::Rebuild);
         } else {
-            let text = self.op.text();
-            self.open("OKAY", text);
+            self.fail_okay(&op);
         }
     }
 
     /// State 2's frame (`0x46bc49`-`0x46c02e`): the dialog re-texted from the operation, then a
     /// completed operation's arm.
     fn tick_connect(&mut self) {
-        if self.op.status == STATUS_WAIT_QUEUE {
+        let op = self.op.clone();
+        if op.status == STATUS_WAIT_QUEUE {
             self.outbox.push(Outgoing::Queue);
-        } else if let Some(text) = self.op.text() {
+        } else if let Some(text) = op.text() {
             self.outbox.push(Outgoing::Update { text, button: None });
         }
-        if !self.op.done {
+        if !op.done {
             return;
         }
-        if !self.op.ok {
-            self.world_failed();
-        } else if self.op.kind == OpKind::Connect {
-            // `0x46bfdd`: the connect done, the authentication begins (`0x5aaba0`).
-            self.op = Operation::begin(OpKind::Auth, STATUS_AUTHENTICATING);
+        if !op.ok {
+            self.world_failed(&op);
+        } else if op.kind == OpKind::Connect {
+            self.outbox.push(Outgoing::Begin(Step::BeginAuth));
         } else {
-            // `0x46c00e`-`0x46c023`: state 0, the roster torn down, `charselect`, the queue ring
+            // `0x46c00e`-`0x46c029`: state 0, the roster torn down, `charselect`, the queue ring
             // cleared. The screen's own `GetCharacterListUpdate` loads the roster.
-            self.state = ScreenState::Idle;
-            self.op = Operation::default();
-            self.queue = QueueEstimate::default();
+            self.outbox.push(Outgoing::Begin(Step::Authenticated));
             self.outbox.push(Outgoing::Teardown);
             self.outbox.push(Outgoing::Screen("charselect"));
+            self.outbox.push(Outgoing::Begin(Step::ClearQueue));
         }
     }
 
@@ -1428,24 +1550,21 @@ impl GlueMgr {
     /// to state 0 (`0x46c173`); a success goes to state 0, closes the dialog and loads the roster
     /// (`0x46c084`-`0x46c094`).
     fn tick_char_list(&mut self) {
-        if let Some(text) = self.op.text() {
-            self.outbox.push(Outgoing::Update { text, button: None });
-        }
-        if !self.op.done {
+        let op = self.retext();
+        if !op.done {
             return;
         }
-        if !self.op.ok {
-            if self.op.status == STATUS_CANCELLED {
+        if !op.ok {
+            if op.status == STATUS_CANCELLED {
                 self.outbox.push(Outgoing::Teardown);
-                self.request_realm_list(true);
+                self.outbox.push(Outgoing::Begin(Step::RequestRealmList));
             } else {
-                let text = self.op.text();
-                self.open("OKAY", text);
-                self.state = ScreenState::Idle;
+                self.fail_okay(&op);
             }
             return;
         }
-        self.state = ScreenState::Idle;
+        self.outbox
+            .push(Outgoing::Begin(Step::State(ScreenState::Idle)));
         self.outbox.push(Outgoing::Close);
         self.outbox.push(Outgoing::Roster);
     }
@@ -1522,27 +1641,18 @@ impl GlueHost for GlueMgrCell {
         let from = mgr.outbox.len();
         mgr.call(call);
         let raised = mgr.outbox.split_off(from);
-        let mut signals = Vec::with_capacity(raised.len());
-        for out in raised {
-            match out.into_signal() {
-                Ok(signal) => signals.push(signal),
-                Err(Outgoing::Begin(step)) => {
-                    let id = mgr.next_resume;
-                    mgr.next_resume = id.wrapping_add(1);
-                    mgr.resumes.insert(id, step);
-                    signals.push(GlueSignal::Resume(id));
-                }
-                Err(out) => mgr.outbox.push(out),
-            }
-        }
-        signals
+        mgr.vm_signals(raised)
     }
 
-    fn resume(&self, step: u32) {
+    fn resume(&self, step: u32) -> Vec<GlueSignal> {
         let mut mgr = self.0.borrow_mut();
-        if let Some(step) = mgr.resumes.remove(&step) {
-            mgr.run_step(step);
-        }
+        let Some(step) = mgr.resumes.remove(&step) else {
+            return Vec::new();
+        };
+        let rest = std::mem::take(&mut mgr.outbox);
+        mgr.run_step(step);
+        let raised = std::mem::replace(&mut mgr.outbox, rest);
+        mgr.vm_signals(raised)
     }
 
     fn connected(&self) -> bool {
@@ -1771,7 +1881,14 @@ pub(crate) fn drive_glue_mgr(
         }
     }
 
-    {
+    let names = RosterNames {
+        areas: areas.as_deref().map(|a| &a.0),
+        create: sources.create.as_deref().map(|c| &c.0),
+        classes: sources.classes.as_deref().map(|c| &c.0),
+        creatures: sources.creatures.as_deref(),
+    };
+
+    let (lists, latched) = {
         let mut mgr = shared.get_mut();
         // The native login's news.
         for msg in news.stages.read() {
@@ -1790,9 +1907,24 @@ pub(crate) fn drive_glue_mgr(
             mgr.on_queued(msg.position, msg.realm.clone(), now_ms);
         }
         // An authenticated logon moves to the world connect before the world's own news.
-        if mgr.auth_final {
+        let latched = mgr.auth_final;
+        if latched {
             mgr.tick();
         }
+        (lists, latched)
+    };
+    if latched {
+        pump(
+            &shared,
+            script.as_deref_mut(),
+            realmlist.as_deref(),
+            now_ms,
+            &names,
+            asks.roster.as_deref_mut(),
+        );
+    }
+    let auth_waits = {
+        let mut mgr = shared.get_mut();
         for (realms, failed) in lists {
             mgr.on_realm_list(realms, failed, &realm_name);
         }
@@ -1806,6 +1938,21 @@ pub(crate) fn drive_glue_mgr(
                 mgr.on_world_authenticated(msg.realm.clone(), msg.epoch);
             }
         }
+        mgr.auth_waits
+    };
+    if auth_waits {
+        pump(
+            &shared,
+            script.as_deref_mut(),
+            realmlist.as_deref(),
+            now_ms,
+            &names,
+            asks.roster.as_deref_mut(),
+        );
+        shared.get_mut().finish_auth();
+    }
+    {
+        let mut mgr = shared.get_mut();
         for msg in news.roster_failures.read() {
             mgr.on_roster_failed(msg.epoch);
         }
@@ -1824,43 +1971,65 @@ pub(crate) fn drive_glue_mgr(
         for msg in news.disconnects.read() {
             mgr.on_disconnected(msg.end, msg.session_over);
         }
-        mgr.tick();
-        send_asks(&mut mgr, &mut asks);
     }
-
-    let Some(mut script) = script else {
-        return;
-    };
+    // What the news raised runs out before the frame's arm, as the reference's network handlers
+    // signal inside the net pump, ahead of `CGlueMgr::Update`.
+    pump(
+        &shared,
+        script.as_deref_mut(),
+        realmlist.as_deref(),
+        now_ms,
+        &names,
+        asks.roster.as_deref_mut(),
+    );
     {
         let mut mgr = shared.get_mut();
+        mgr.tick();
         // The realmlist control's typed value that was not an address reopens its dialog.
-        if let Some(typed) = realmlist.as_deref_mut().and_then(|r| r.take_refused()) {
-            mgr.outbox.push(Outgoing::Open {
-                which: "BENILLA_REALMLIST",
-                text: Some(Text::Raw(crate::login::REALMLIST_BAD.to_string())),
-                data: Some(typed),
-            });
+        if script.is_some() {
+            if let Some(typed) = realmlist.as_deref_mut().and_then(|r| r.take_refused()) {
+                mgr.outbox.push(Outgoing::Open {
+                    which: "BENILLA_REALMLIST",
+                    text: Some(Text::Raw(crate::login::REALMLIST_BAD.to_string())),
+                    data: Some(typed),
+                });
+            }
         }
-        seed(&mut mgr, &mut script, realmlist.as_deref());
     }
-    let names = RosterNames {
-        areas: areas.as_deref().map(|a| &a.0),
-        create: sources.create.as_deref().map(|c| &c.0),
-        classes: sources.classes.as_deref().map(|c| &c.0),
-        creatures: sources.creatures.as_deref(),
-    };
-    flush(
+    pump(
         &shared,
-        &mut script,
+        script.as_deref_mut(),
+        realmlist.as_deref(),
         now_ms,
         &names,
         asks.roster.as_deref_mut(),
     );
     let mut mgr = shared.get_mut();
-    mgr.select_cells = script.glue_select_cells();
-    // What the outbox asked in turn (the roster load's realm list), and what the handlers' verbs
-    // asked inside it.
+    if let Some(s) = script.as_deref() {
+        mgr.select_cells = s.glue_select_cells();
+    }
+    // The frame's asks, the verbs' calls since the last frame and the handlers' inside it.
     send_asks(&mut mgr, &mut asks);
+}
+
+/// Run what the manager has raised so far: into the glue VM when one stands, its slots seeded
+/// first ([`seed`]) and its outbox fired in order ([`flush`]); with none, its steps alone, the
+/// signals kept for the next VM.
+fn pump(
+    shared: &SharedGlueMgr,
+    script: Option<&mut UiScript>,
+    realmlist: Option<&crate::realmlist::Realmlist>,
+    now_ms: u32,
+    names: &RosterNames,
+    roster: Option<&mut crate::char_select::Roster>,
+) {
+    match script {
+        Some(s) => {
+            seed(&mut shared.get_mut(), s, realmlist);
+            flush(shared, s, now_ms, names, roster);
+        }
+        None => shared.get_mut().settle(),
+    }
 }
 
 /// The glue build (`0x46a7b0`) on a new glue VM: state 0, then everything the manager holds that
@@ -2036,14 +2205,10 @@ fn flush(
     names: &RosterNames,
     mut roster: Option<&mut crate::char_select::Roster>,
 ) {
-    // The roster load can queue more (the realm list's dialog), which goes out in turn.
+    // Steps run as the walk reaches them; what an entry raises goes ahead of the rest.
     loop {
-        let out = {
-            let mut mgr = shared.get_mut();
-            if mgr.outbox.is_empty() {
-                return;
-            }
-            mgr.outbox.remove(0)
+        let Some(out) = shared.get_mut().next_out() else {
+            return;
         };
         flush_one(shared, script, now_ms, names, roster.as_deref_mut(), out);
     }
@@ -2076,7 +2241,6 @@ fn flush_one(
                 vec![ScriptValue::Str(body), ScriptValue::Str(button)],
             );
         }
-        Outgoing::Begin(step) => shared.get_mut().run_step(step),
         Outgoing::Rebuild => {
             script.rebuild_glue_realms();
             shared.get_mut().realm_cells = script.glue_realm_cells();
@@ -2105,11 +2269,11 @@ fn flush_one(
                 .iter()
                 .map(|c| glue_character(c, names))
                 .collect();
-            // `RequestRealmList(1)` at `0x47254b`, when no realm has been chosen.
+            // `RequestRealmList(1)` at `0x47254b`, when no realm has been chosen, inside the load.
             let ask = script.load_glue_roster(records);
             let mut mgr = shared.get_mut();
             if ask {
-                mgr.request_realm_list(true);
+                mgr.at_front(|m| m.request_realm_list(true));
             }
             mgr.realm_cells = script.glue_realm_cells();
         }

@@ -12,12 +12,7 @@ use benilla_protocol::{RealmInfo, SessionEnd};
 /// Run the steps the outbox holds past their signals and drop them, as the frame's flush does
 /// where it reaches them: what a test of the manager alone sees once the frame has run.
 fn settle(m: &mut GlueMgr) {
-    for out in std::mem::take(&mut m.outbox) {
-        match out {
-            Outgoing::Begin(step) => m.run_step(step),
-            out => m.outbox.push(out),
-        }
-    }
+    m.settle();
 }
 
 /// A manager as the app starts it.
@@ -1628,16 +1623,15 @@ fn a_verb_called_inside_another_verbs_fan_out_acts_before_its_operation_begins()
            if arg1 == 'CANCEL' and not pressed then pressed = true StatusDialogClick() end end)",
     )
     .unwrap();
-    let events: Vec<String> = heard_in(&s, "GetCharacterListUpdate()")
-        .iter()
-        .map(|h| h.split(' ').next().unwrap_or_default().to_string())
-        .collect();
+    // The nested events run inside `OPEN_STATUS_DIALOG`'s dispatch, whose `arg1` and `arg2` stand
+    // where a nested event has fewer: `0x704f10` sets only the arguments it is given
+    // (`0x705045`-`0x70508d`) and restores them after the call (`0x7051fc`-).
     assert_eq!(
-        events,
+        heard_in(&s, "GetCharacterListUpdate()"),
         [
-            "OPEN_STATUS_DIALOG",
-            "UPDATE_SELECTED_CHARACTER",
-            "CHARACTER_LIST_UPDATE"
+            "OPEN_STATUS_DIALOG CANCEL Retrieving character list",
+            "UPDATE_SELECTED_CHARACTER 1 Retrieving character list",
+            "CHARACTER_LIST_UPDATE CANCEL Retrieving character list"
         ]
     );
     let m = shared.get();
@@ -1694,6 +1688,116 @@ fn disconnect_with_no_link_leaves_the_connect_in_flight() {
     assert_eq!(m.op.kind, OpKind::Connect);
     assert!(!m.op.done);
     assert!(matches!(m.login_out.as_slice(), [GlueLogin::Disconnect]));
+}
+
+/// The frame's arm through the seated VM: its signals fired and its steps run in order.
+fn frame(shared: &SharedGlueMgr, s: &mut UiScript) {
+    shared.get_mut().tick();
+    let names = RosterNames {
+        areas: None,
+        create: None,
+        classes: None,
+        creatures: None,
+    };
+    super::pump(shared, Some(s), None, 0, &names, None);
+}
+
+/// State 2's failure arm with no realm held: the failure's `OKAY` is pressed by its own `OnShow`
+/// while the arm is still in state 2 (`0x46b754`: the operation cancelled, the roster torn
+/// down); only then come state 0 (`0x46bef5`) and `RequestRealmList(1)` (`0x46bf86` →
+/// `0x46c06e`), whose query is not cancelled, so its reply closes its dialog and raises the list.
+#[test]
+fn a_world_failure_with_no_realm_held_asks_for_the_list_and_its_reply_closes_it() {
+    let shared = SharedGlueMgr::default();
+    let mut s = seated(&shared);
+    // The stock `OKAY` type's `OnShow` press (`GlueDialog.lua:72`), and the dialog's close.
+    s.run(
+        "REALM_LIST_FAILED = 'Realm list failed' local f = CreateFrame('Frame') \
+         f:RegisterEvent('OPEN_STATUS_DIALOG') f:RegisterEvent('CLOSE_STATUS_DIALOG') \
+         f:SetScript('OnEvent', function() \
+           if event == 'CLOSE_STATUS_DIALOG' then table.insert(HEARD, 'CLOSE') \
+           elseif arg1 == 'OKAY' then StatusDialogClick() end end)",
+    )
+    .unwrap();
+    {
+        let mut m = shared.get_mut();
+        m.state = ScreenState::Connect;
+        m.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+        m.op.complete(false, STATUS_REALM_LIST_FAILED);
+    }
+    s.run("HEARD = {}").unwrap();
+    frame(&shared, &mut s);
+    let events = |s: &UiScript| -> Vec<String> {
+        s.eval::<Vec<String>>("local h = HEARD HEARD = {} return h")
+            .unwrap()
+            .iter()
+            .map(|h| h.split(' ').take(2).collect::<Vec<_>>().join(" "))
+            .collect()
+    };
+    assert_eq!(
+        events(&s),
+        [
+            "OPEN_STATUS_DIALOG OKAY",
+            // The press in state 2, inside the dialog's dispatch: the teardown (`0x472580`).
+            "UPDATE_SELECTED_CHARACTER 1",
+            "CHARACTER_LIST_UPDATE OKAY",
+            // The arm's own teardown (`0x46bf1f`), then `RequestRealmList(1)`. Inside the
+            // dispatch the outer `arg1` stood for the argument-less event; here it is nil again
+            // (`0x704f10` sets only the arguments it has and restores them after).
+            "UPDATE_SELECTED_CHARACTER 1",
+            "CHARACTER_LIST_UPDATE nil",
+            "OPEN_STATUS_DIALOG CANCEL",
+        ]
+    );
+    {
+        let m = shared.get();
+        assert_eq!(m.state, ScreenState::RealmList, "the query stands");
+        assert_eq!(m.op.kind, OpKind::GetRealms);
+        assert!(!m.op.done, "and was not cancelled: {:?}", m.op);
+        assert!(m.outbox.is_empty() && m.resumes.is_empty());
+    }
+    shared
+        .get_mut()
+        .on_realm_list(vec![realm("Fake")], false, "Fake");
+    frame(&shared, &mut s);
+    assert!(
+        events(&s).contains(&"CLOSE".to_string()),
+        "the query's success closes its dialog (`0x46c0d7`)"
+    );
+    assert_eq!(shared.get().state, ScreenState::Idle);
+}
+
+/// The logon arm's failure: its `OKAY` is pressed by its own `OnShow` while the arm is still in
+/// state 1, which cancels the logon (`0x46b73d`); then the arm cancels it and goes to state 0
+/// (`0x46bbbf`-`0x46bbcb`).
+#[test]
+fn a_failed_logons_dialog_is_pressed_in_state_1() {
+    let shared = SharedGlueMgr::default();
+    let mut s = seated(&shared);
+    s.run(
+        "local f = CreateFrame('Frame') f:RegisterEvent('OPEN_STATUS_DIALOG') \
+         f:SetScript('OnEvent', function() if arg1 == 'OKAY' then StatusDialogClick() end end)",
+    )
+    .unwrap();
+    {
+        let mut m = shared.get_mut();
+        m.login("a".into(), "b".into());
+        m.settle();
+        m.outbox.clear();
+        m.login_out.clear();
+        m.on_failed(&failed(Some(LoginRefusal::Logon(0x04)), false));
+    }
+    frame(&shared, &mut s);
+    let m = shared.get();
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(
+        matches!(
+            m.login_out.as_slice(),
+            [GlueLogin::Abandon, GlueLogin::Abandon]
+        ),
+        "the press's cancel, then the arm's: {:?}",
+        m.login_out.len()
+    );
 }
 
 /// A VM the manager has not seated holds its verbs' calls, which the manager runs when it seats
@@ -1940,6 +2044,31 @@ fn the_stock_select_with_no_link_shows_the_selected_realms_pvp() {
         "{:?}",
         vm(&app).eval::<String>("return CharSelectRealmName:GetText()")
     );
+}
+
+/// The stock dialog over a world failure with no realm held: the failure's `OKAY` presses itself
+/// in state 2, the `CANCEL` "Retrieving realm list" follows, and the list's reply closes it.
+#[test]
+fn the_stock_realm_list_dialog_after_a_world_failure_closes_on_its_reply() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    let (mut app, _rx, _) = stock_app();
+    {
+        let mut m = mgr_mut(&app);
+        m.state = ScreenState::Connect;
+        m.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+        m.op.complete(false, STATUS_REALM_LIST_FAILED);
+    }
+    app.update();
+    let retrieving = vm(&app).global_text("REALM_LIST_IN_PROGRESS");
+    assert_eq!(dialog(&app), Some(("CANCEL".into(), retrieving)));
+    assert_eq!(mgr(&app).state, ScreenState::RealmList);
+    app.world_mut().write_message(RealmListMessage {
+        realms: vec![realm("Fake")],
+        failed: false,
+    });
+    app.update();
+    assert_eq!(dialog(&app), None, "the query's success closes it");
+    assert_eq!(mgr(&app).state, ScreenState::Idle);
 }
 
 /// The status dialog's Cancel is `StatusDialogClick`, which abandons the native attempt.

@@ -222,8 +222,9 @@ pub trait GlueHost {
     /// Run `call` and return what it raised, in order, for the VM to fire before the verb
     /// returns. The network half it starts is the host's, sent on its next frame.
     fn call(&self, call: GlueCall) -> Vec<GlueSignal>;
-    /// Run the step a [`GlueSignal::Resume`] names, once.
-    fn resume(&self, step: u32);
+    /// Run the step a [`GlueSignal::Resume`] names, once, and return what it raised, for the VM
+    /// to fire in its place.
+    fn resume(&self, step: u32) -> Vec<GlueSignal>;
     /// The world link's flag (`[svc+0x1b00]`), which `IsConnectedToServer` (`0x46d380`) reads.
     fn connected(&self) -> bool;
     /// The realm type of the realm selected this process (`0x5ab9a0`: `[0xc28134]`, the record at
@@ -677,7 +678,9 @@ fn fire_signal(lua: &Lua, signal: GlueSignal) {
                 .host
                 .clone();
             if let Some(host) = host {
-                host.resume(step);
+                for signal in host.resume(step) {
+                    fire_signal(lua, signal);
+                }
             }
         }
     }
@@ -1012,8 +1015,9 @@ mod tests {
                 .unwrap_or_default()
         }
 
-        fn resume(&self, step: u32) {
+        fn resume(&self, step: u32) -> Vec<GlueSignal> {
             self.calls.borrow_mut().push(format!("resume {step}"));
+            Vec::new()
         }
 
         fn connected(&self) -> bool {
