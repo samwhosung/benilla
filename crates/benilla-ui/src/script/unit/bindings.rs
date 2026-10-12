@@ -1045,12 +1045,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let name =
                 super::super::binding_abi::string_arg(lua, name, "Usage: TargetByName(\"name\")")?;
             // Argument 2 comes from `0x6f1c10` with default 0: it never raises, and 0 is absent.
-            let exact = match exact {
-                None | Some(Value::Nil) | Some(Value::Boolean(false)) => false,
-                Some(Value::Integer(n)) => n != 0,
-                Some(Value::Number(n)) => n != 0.0,
-                Some(_) => true,
-            };
+            let exact = super::super::binding_abi::bool_or_default(exact.as_ref(), false);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model
                 .script_calls

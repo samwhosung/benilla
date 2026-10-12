@@ -1,7 +1,7 @@
 //! The FontString-only methods: the string, its measured width, justification, non-space wrap and
 //! text height. The font block it shares with EditBox comes from [`crate::script::font_block`].
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::justify;
 use crate::script::Model;
@@ -160,15 +160,12 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // SetNonSpaceWrap/CanNonSpaceWrap (`0x79e9f0`/`0x79ead0`), FontString only: the getter
-    // answers 1 or nil, and a call with no argument enables.
+    // answers 1 or nil. The flag is `GetBoolOrDefault` (`0x6f1c10`, default 1, `0x79ea7e`): a call
+    // with no argument enables, an explicit nil disables.
     m.set(
         "SetNonSpaceWrap",
-        lua.create_function(|lua, (this, enable): (Table, Value)| {
-            let on = match &enable {
-                Value::Nil => true,
-                Value::Boolean(b) => *b,
-                _ => true,
-            };
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let on = crate::script::binding_abi::bool_or_default(args.front(), true);
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             model.region_data.entry(rh).or_default().non_space_wrap = Some(on);

@@ -1,6 +1,8 @@
 //! Frame methods: visibility, hierarchy, strata, level, scale, alpha, backdrop and input flags.
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, MultiValue, Table, Value};
+
+use crate::script::binding_abi::bool_or_default;
 
 use crate::script::region_map::{set_shared, Side};
 
@@ -578,7 +580,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // Mouse interaction: `EnableMouse` gates hit-testing.
     m.set(
         "EnableMouse",
-        lua.create_function(|lua, (this, enable): (Table, bool)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let enable = bool_or_default(args.front(), true); // `0x7770fe`
             let h = frame_handle_of(lua, &this)?;
             visibility::set_mouse_enabled(lua, h, enable);
             Ok(())
@@ -598,7 +601,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // (`script::keyboard`), separate from having a handler (`0x76af00`).
     m.set(
         "EnableKeyboard",
-        lua.create_function(|lua, (this, enable): (Table, bool)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let enable = bool_or_default(args.front(), true); // `0x776f4e`
             let h = frame_handle_of(lua, &this)?;
             lua.app_data_mut::<Model>()
                 .expect("model")
@@ -647,7 +651,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // in the reference, and the one the wheel hit test gates on.
     m.set(
         "EnableMouseWheel",
-        lua.create_function(|lua, (this, enable): (Table, bool)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let enable = bool_or_default(args.front(), true); // `0x77727e`
             let h = frame_handle_of(lua, &this)?;
             lua.app_data_mut::<Model>()
                 .expect("model")
@@ -670,7 +675,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // frame's rect inside the window, size preserved.
     m.set(
         "SetClampedToScreen",
-        lua.create_function(|lua, (this, clamp): (Table, bool)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let clamp = bool_or_default(args.front(), true); // `0x776c8e`
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let changed = model.arena.is_clamped_to_screen(h) != clamp;
@@ -726,10 +732,9 @@ fn backdrop_from_table(t: &Table) -> mlua::Result<Backdrop> {
     if let Ok(Value::String(s)) = t.get::<Value>("edgeFile") {
         bd.edge_file = Some(s.to_str()?.to_string());
     }
-    bd.tile = !matches!(
-        t.get::<Value>("tile").unwrap_or(Value::Nil),
-        Value::Nil | Value::Boolean(false)
-    );
+    // `GetBoolOrDefault` (`0x7778a3`) with default 0 on the `tile` key's value, so `tile = "0"`
+    // and `tile = 0` are off and `tile = "yes"` is on.
+    bd.tile = bool_or_default(Some(&t.get::<Value>("tile").unwrap_or(Value::Nil)), false);
     if let Ok(Value::Number(n)) = t.get::<Value>("tileSize") {
         bd.tile_size = n as f32;
     } else if let Ok(Value::Integer(n)) = t.get::<Value>("tileSize") {

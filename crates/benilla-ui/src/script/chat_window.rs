@@ -385,11 +385,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // SetChatWindowLocked(id, isLocked) (`0x4a1650`): the record's `+0x8c` (`0x4a16a2`), 1 at
     // boot (`0x4984e4`). A `bool` holds it, as the cache writer stores it through `setne`
-    // (`0x499e8b`). The argument is Lua truthiness, where the reference coerces through `0x6f1c10`
-    // (default 0): `0` and "off" unlock there and lock here. FrameXML passes only 1 and nil.
+    // (`0x499e8b`). The argument goes through `GetBoolOrDefault` (`0x4a1697`, default 0), so `0`
+    // and "off" unlock and "yes" locks. FrameXML passes only 1 and nil.
     lua.globals().set(
         "SetChatWindowLocked",
-        lua.create_function(|lua, (id, locked): (i64, bool)| {
+        lua.create_function(|lua, (id, locked): (i64, Option<Value>)| {
+            let locked = crate::script::binding_abi::bool_or_default(locked.as_ref(), false);
             let i = window_index(id)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let look = &mut model.chat_window_looks[i];
@@ -491,31 +492,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetChatWindowShown(id [, shown]): `+0x94` through the flag coercion `0x6f1c10`, default 1.
-    // No argument stores 1; nil, false, 0, "0", "off" and "disabled" store 0. The reference also
-    // stores 0 for a string opening F or N ("false", "no"), which stores 1 here.
+    // SetChatWindowShown(id [, shown]): `+0x94` (`0x4a1782`) through `GetBoolOrDefault`
+    // (`0x4a1777`) with default 1: no argument stores 1; nil, false, `0`, "0", "off", "disabled"
+    // and anything opening F or N ("false", "no") store 0.
     lua.globals().set(
         "SetChatWindowShown",
         lua.create_function(|lua, (id, rest): (i64, MultiValue)| {
-            let shown = match rest.front() {
-                None => true,
-                Some(Value::Nil) | Some(Value::Boolean(false)) => false,
-                Some(Value::Boolean(true)) => true,
-                Some(Value::Integer(n)) => *n != 0,
-                Some(Value::Number(n)) => n.is_finite() && n.trunc() != 0.0,
-                Some(Value::String(s)) => {
-                    let s = s
-                        .to_str()
-                        .map(|s| s.trim().to_ascii_lowercase())
-                        .unwrap_or_default();
-                    if s.starts_with(|c: char| c.is_ascii_digit() || c == '-') {
-                        crate::script::binding_abi::s_str_to_int(&s) != 0
-                    } else {
-                        !(s == "off" || s == "disabled")
-                    }
-                }
-                Some(_) => true,
-            };
+            let shown = crate::script::binding_abi::bool_or_default(rest.front(), true);
             with_look(lua, id, |look| look.shown = shown)
         })?,
     )?;

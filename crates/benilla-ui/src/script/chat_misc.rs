@@ -5,6 +5,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::binding_abi::bool_or_default;
 use super::Model;
 
 /// `DoEmote(token [, target])`: the `EmotesText.dbc` name token (`"WAVE"`, not `/wave`) and an
@@ -28,17 +29,6 @@ fn to_u32(v: &Value) -> u32 {
             .filter(|n| n.is_finite() && *n >= 0.0)
             .map_or(0, |n| n as u32),
         _ => 0,
-    }
-}
-
-fn flag_arg(v: Option<Value>) -> Option<bool> {
-    match v {
-        None | Some(Value::Nil) => None,
-        Some(Value::Boolean(b)) => Some(b),
-        Some(Value::Integer(n)) => Some(n != 0),
-        Some(Value::Number(n)) => Some(n != 0.0),
-        Some(Value::String(s)) => Some(s.to_str().is_ok_and(|s| s != "0" && !s.is_empty())),
-        Some(_) => Some(true),
     }
 }
 
@@ -167,14 +157,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     for (name, chat) in [("LoggingChat", true), ("LoggingCombat", false)] {
         g.set(
             name,
-            lua.create_function(move |lua, flag: Option<Value>| {
+            lua.create_function(move |lua, args: MultiValue| {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let slot = if chat {
                     &mut model.logging_chat
                 } else {
                     &mut model.logging_combat
                 };
-                match flag_arg(flag) {
+                // With an argument (`lua_gettop > 0`, `0x49fe57`) the flag is set from
+                // `GetBoolOrDefault` (`0x49fe69`, default 1), so an explicit nil clears it.
+                match args.front().map(|v| bool_or_default(Some(v), true)) {
                     None => Ok(MultiValue::from_vec(vec![if *slot {
                         Value::Integer(1)
                     } else {

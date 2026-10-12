@@ -247,18 +247,6 @@ fn member_at(roster: &[GuildMemberInfo], index: i64) -> Option<&GuildMemberInfo>
         .and_then(|i| roster.get(i))
 }
 
-/// A flag argument: `nil`, `false` and `0` are off, anything else on. The reference reads both
-/// flags with `GetBoolOrDefault` (`0x6f1c10`, `binding_abi::bool_or_default`), which differs on
-/// strings and fractions; the FrameXML's checkbox states, `1` or `nil`, read the same in both.
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Nil | Value::Boolean(false) => false,
-        Value::Integer(0) => false,
-        Value::Number(n) => *n != 0.0,
-        _ => true,
-    }
-}
-
 /// Whether the player's own rank holds right `index`, 1-based into [`RANK_RIGHT_BITS`].
 fn has_right(model: &Model, index: usize) -> bool {
     model.guild.in_guild && model.guild.rights & RANK_RIGHT_BITS[index - 1] != 0
@@ -335,12 +323,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ── The roster ───────────────────────────────────────────────────────────────────────────
-    // GetNumGuildMembers() (`0x4d1190`): the loop bound (`FriendsFrame.lua:446`), which respects
-    // show-offline, not the addressable range (`GuildState::num_members`).
+    // GetNumGuildMembers([includeOffline]) (`0x4d1190`): the loop bound (`FriendsFrame.lua:446`),
+    // which respects show-offline, not the addressable range (`GuildState::num_members`).
     g.set(
         "GetNumGuildMembers",
-        lua.create_function(|lua, ()| {
+        lua.create_function(|lua, args: MultiValue| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
+            // The flag is `GetBoolOrDefault` (`0x4d11a0`, default 0): a set one counts the whole
+            // roster (`[0xb73118]`) whatever show-offline says, else the loop bound.
+            if binding_abi::bool_or_default(args.front(), false) {
+                return Ok(model.guild.roster.len() as i64);
+            }
             Ok(model.guild.num_members as i64)
         })?,
     )?;
@@ -438,14 +431,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(binding_abi::flag(model.guild.show_offline))
         })?,
     )?;
-    // With no argument it turns show-offline on, unlike an explicit `nil`, hence `MultiValue`.
+    // `GetBoolOrDefault` (`0x4d1e17`) with default 1: no argument turns show-offline on, unlike an
+    // explicit `nil`, hence `MultiValue`.
     g.set(
         "SetGuildRosterShowOffline",
         lua.create_function(|lua, args: MultiValue| {
-            let on = match args.into_iter().next() {
-                None => true,
-                Some(flag) => truthy(&flag),
-            };
+            let on = binding_abi::bool_or_default(args.front(), true);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.guild.show_offline = on;
             model.guild_requests.push(GuildRequest::SetShowOffline(on));
@@ -653,7 +644,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GuildControlSetRankFlag(index, enabled) (`0x4d2070`): stage one checkbox, 1 to 13.
     g.set(
         "GuildControlSetRankFlag",
-        lua.create_function(|lua, (index, enabled): (i64, Value)| {
+        lua.create_function(|lua, (index, enabled): (i64, Option<Value>)| {
             let Some(slot) = usize::try_from(index)
                 .ok()
                 .and_then(|i| i.checked_sub(1))
@@ -662,7 +653,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(());
             };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.guild_control.staged[slot] = truthy(&enabled);
+            // `GetBoolOrDefault` (`0x4d20b7`), default 0.
+            model.guild_control.staged[slot] =
+                binding_abi::bool_or_default(enabled.as_ref(), false);
             Ok(())
         })?,
     )?;

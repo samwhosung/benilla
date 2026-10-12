@@ -5,7 +5,7 @@
 //! there and forces alpha opaque. `SetInsertMode` and `GetInsertMode` (`0x794ed0`, `0x794ff0`)
 //! exist on this class only.
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::script::object::frame_handle_of;
 use crate::script::Model;
@@ -116,8 +116,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The fade accessors, as on the scrolling class; XML's `displayDuration` is `TimeVisible`.
     m.set(
         "SetFading",
-        lua.create_function(|lua, (this, on): (Table, Value)| {
-            let on = !matches!(on, Value::Nil | Value::Boolean(false));
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            // `GetBoolOrDefault` (`0x6f1c10`, `0x7950d0`) with default 1: a bare call enables.
+            let on = crate::script::binding_abi::bool_or_default(args.front(), true);
             with_mf(lua, &this, |mf| mf.fading_enabled = on)
         })?,
     )?;

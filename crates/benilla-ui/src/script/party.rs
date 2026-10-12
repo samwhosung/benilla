@@ -625,12 +625,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             Ok(())
         })?,
     )?;
-    // ConfirmReadyCheck(ready) reads its argument as truth: the reference's No button passes no
-    // argument, Yes passes `1`.
+    // ConfirmReadyCheck(ready) (`0x4bc090`) reads its argument through `GetBoolOrDefault`
+    // (`0x4bc0ad`) with default 0: the reference's No button passes no argument, Yes passes `1`.
     g.set(
         "ConfirmReadyCheck",
-        lua.create_function(|lua, ready: Value| {
-            let ready = !matches!(ready, Value::Nil | Value::Boolean(false));
+        lua.create_function(|lua, ready: Option<Value>| {
+            let ready = crate::script::binding_abi::bool_or_default(ready.as_ref(), false);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model
                 .party_requests
@@ -1339,8 +1339,8 @@ mod tests {
                 PartyRequest::ReadyCheckAnswer(true),
                 PartyRequest::ReadyCheckAnswer(false),
                 PartyRequest::ReadyCheckAnswer(false),
-                // `0` is true in Lua.
-                PartyRequest::ReadyCheckAnswer(true),
+                // `0` truncates to 0 (`GetBoolOrDefault`, `0x4bc0ad`), where Lua calls it true.
+                PartyRequest::ReadyCheckAnswer(false),
             ]
         );
     }

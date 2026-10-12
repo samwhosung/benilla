@@ -7,7 +7,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{bool_or_default, flag};
 use super::Model;
 
 /// The kind byte, bits 24-31 of the packed slot word (vmangos `Player.h:133`). Must match
@@ -137,17 +137,6 @@ impl super::UiScript {
     }
 }
 
-/// `UseAction`'s flag test: `nil`, `false` and `0` are false, unlike Lua, where `0` is true.
-pub(super) fn truthy_nonzero(v: &Value) -> bool {
-    match v {
-        Value::Nil => false,
-        Value::Boolean(b) => *b,
-        Value::Integer(i) => *i != 0,
-        Value::Number(n) => *n != 0.0,
-        _ => true,
-    }
-}
-
 /// Register the action globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
@@ -253,9 +242,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "UseAction",
         lua.create_function(|lua, (action, rest): (u32, MultiValue)| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let mut rest = rest.iter();
-            let check_cursor = rest.next().is_some_and(truthy_nonzero);
-            let on_self = rest.next().is_some_and(truthy_nonzero);
+            // Both flags go through `GetBoolOrDefault` (`0x4e717e`, `0x4e716f`), default 0.
+            let check_cursor = bool_or_default(rest.front(), false);
+            let on_self = bool_or_default(rest.get(1), false);
             if check_cursor && model.cursor.is_some() {
                 super::cursor::place_action(&mut model, action);
             } else {

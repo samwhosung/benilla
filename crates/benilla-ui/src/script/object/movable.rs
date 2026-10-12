@@ -14,6 +14,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::layout::{Anchor, Anchors, Point};
+use crate::script::binding_abi::bool_or_default;
 use crate::script::{Model, UiScript, SCREEN};
 use crate::widget::FrameHandle;
 
@@ -37,10 +38,12 @@ pub(crate) struct FrameMove {
 /// Populate `m`'s movable and resizable methods.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // SetMovable / IsMovable (`0x776420`/`0x7764d0`): a pure flag write, so clearing it mid-drag
-    // stops nothing. The argument is Lua truthiness, as the reference's `toboolean`.
+    // stops nothing. The argument goes through `GetBoolOrDefault` (`0x6f1c10`) with default 1
+    // (`0x7764ae`), as every flag setter of the Frame table does.
     m.set(
         "SetMovable",
-        lua.create_function(|lua, (this, flag): (Table, bool)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let flag = bool_or_default(args.front(), true);
             set_flag(lua, &this, Flag::Movable, flag)
         })?,
     )?;
@@ -51,7 +54,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // SetResizable / IsResizable (`0x776590`/`0x776640`): the same pure flag write.
     m.set(
         "SetResizable",
-        lua.create_function(|lua, (this, flag): (Table, bool)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let flag = bool_or_default(args.front(), true); // `0x77661e`
             set_flag(lua, &this, Flag::Resizable, flag)
         })?,
     )?;
@@ -132,7 +136,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // nor resizable (`0x776adb`).
     m.set(
         "SetUserPlaced",
-        lua.create_function(|lua, (this, flag): (Table, bool)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            let flag = bool_or_default(args.front(), true); // `0x776b29`
             let h = frame_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let ok = model

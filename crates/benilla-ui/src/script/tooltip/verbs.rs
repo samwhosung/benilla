@@ -10,8 +10,8 @@ use crate::script::Model;
 use crate::widget::{KindState, TooltipAnchor, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
 
 use super::{
-    append_line, bool_arg, clear, parse_line_color, parse_line_tail, set_owner_core, set_shown,
-    text_of, tip_mut, with_tip, write_cell, REG_TOOLTIP_METHODS,
+    append_line, clear, parse_line_color, parse_line_tail, set_owner_core, set_shown, text_of,
+    tip_mut, with_tip, wrap_arg, write_cell, REG_TOOLTIP_METHODS,
 };
 
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -121,7 +121,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(Value::Integer(i)) => *i as f32,
                 _ => 1.0,
             };
-            let wrap = bool_arg(args.get(5));
+            let wrap = wrap_arg(args.get(5));
             clear(lua, h);
             append_line(lua, &this, (text, [r, g, b, a]), None, wrap)?;
             set_shown(lua, h, true);
@@ -166,20 +166,23 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     // AddDoubleLine(textL, textR, rL, gL, bL, rR, gR, bR [, wrap]) (`0x531840`): each side's
-    // colour gates on its own r-slot. The core forces wrap off when the right text is non-empty;
-    // this never wraps.
+    // colour gates on its own r-slot, and the wrap flag is the tenth argument.
     m.set(
         "AddDoubleLine",
         lua.create_function(
             |lua, (this, tl, tr, cl): (Table, Value, Value, Variadic<Value>)| {
                 let left_color = parse_line_color(cl.first(), cl.get(1), cl.get(2));
                 let right_color = parse_line_color(cl.get(3), cl.get(4), cl.get(5));
+                let right = text_of(Some(&tr));
+                // The line core (`0x530270`) clears the flag when the right text is non-empty
+                // (`0x530284`), so only a double line with an empty right side can wrap.
+                let wrap = right.is_empty() && wrap_arg(cl.get(6));
                 append_line(
                     lua,
                     &this,
                     (text_of(Some(&tl)), left_color),
-                    Some((text_of(Some(&tr)), right_color)),
-                    false,
+                    Some((right, right_color)),
+                    wrap,
                 )
             },
         )?,

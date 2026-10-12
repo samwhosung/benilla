@@ -577,19 +577,10 @@ fn color_num(v: Option<&Value>) -> Option<f32> {
     }
 }
 
-/// A wrap flag: nil, false, 0 and the strings "0", "off" and "disabled" are false, anything else
-/// true. The reference reads it with `GetBoolOrDefault` (`0x6f1c10`,
-/// `binding_abi::bool_or_default`), where "false", "no" and 0.5 are false too.
-fn bool_arg(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Nil) | Some(Value::Boolean(false)) => false,
-        Some(Value::Integer(i)) => *i != 0,
-        Some(Value::Number(n)) => *n != 0.0,
-        Some(Value::String(s)) => !s.to_str().ok().is_some_and(|s| {
-            s == "0" || s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("disabled")
-        }),
-        _ => true,
-    }
+/// A line's wrap flag, `GetBoolOrDefault` (`0x6f1c10`) with default 0 at `AddLine`'s sixth
+/// argument (`0x53181a`), `SetText`'s seventh (`0x531ddc`) and `AddDoubleLine`'s tenth (`0x531b69`).
+fn wrap_arg(v: Option<&Value>) -> bool {
+    crate::script::binding_abi::bool_or_default(v, false)
 }
 
 /// An `AddLine`-family colour, gated on the r-slot alone (`lua_isnumber`, `0x6f34d0`), else
@@ -611,7 +602,7 @@ fn parse_line_color(r: Option<&Value>, g: Option<&Value>, b: Option<&Value>) -> 
 fn parse_line_tail(args: &[Value]) -> ([f32; 4], bool) {
     (
         parse_line_color(args.first(), args.get(1), args.get(2)),
-        bool_arg(args.get(3)),
+        wrap_arg(args.get(3)),
     )
 }
 

@@ -6,7 +6,7 @@
 
 use mlua::{Lua, Value};
 
-use super::binding_abi::string_arg;
+use super::binding_abi::{bool_or_default, string_arg};
 use super::who_sort::WhoSortChain;
 use super::Model;
 
@@ -434,16 +434,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetWhoToUI(flag): the Who frame passes 1 on show and 0 on hide; nil, false and 0 are off.
+    // SetWhoToUI(flag) (`0x5ad870`): the Who frame passes 1 on show and 0 on hide; the flag goes
+    // through `GetBoolOrDefault` (`0x5ad877`) with default 0.
     g.set(
         "SetWhoToUI",
-        lua.create_function(|lua, flag: Value| {
-            let on = match flag {
-                Value::Nil | Value::Boolean(false) => false,
-                Value::Integer(0) => false,
-                Value::Number(n) => n != 0.0,
-                _ => true,
-            };
+        lua.create_function(|lua, flag: Option<Value>| {
+            let on = bool_or_default(flag.as_ref(), false);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.social_requests.push(SocialRequest::SetWhoToUi(on));
             Ok(())

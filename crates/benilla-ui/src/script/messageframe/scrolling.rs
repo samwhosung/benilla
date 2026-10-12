@@ -4,7 +4,7 @@
 //! every scroll call re-arming the displayed lines' fade (`0x788b80` when refused at an end,
 //! `0x788af0` when it moves), which is what brings a faded chat back.
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::script::object::frame_handle_of;
 use crate::script::{Model, UiScript};
@@ -195,8 +195,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     m.set(
         "SetFading",
-        lua.create_function(|lua, (this, on): (Table, Value)| {
-            let on = !matches!(on, Value::Nil | Value::Boolean(false));
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
+            // `GetBoolOrDefault` (`0x6f1c10`, `0x7939a0`) with default 1: a bare call enables.
+            let on = crate::script::binding_abi::bool_or_default(args.front(), true);
             with_smf(lua, &this, |smf| smf.fading_enabled = on)
         })?,
     )?;

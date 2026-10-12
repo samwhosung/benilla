@@ -43,14 +43,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "FollowByName",
         lua.create_function(|lua, (name, exact): (String, Option<mlua::Value>)| {
-            // The reference reads this with `GetBoolOrDefault` (`0x6f1c10`), default false; here
-            // nil, false and 0 are false and any other value is true.
-            let exact = match exact {
-                None | Some(mlua::Value::Nil) | Some(mlua::Value::Boolean(false)) => false,
-                Some(mlua::Value::Integer(n)) => n != 0,
-                Some(mlua::Value::Number(n)) => n != 0.0,
-                Some(_) => true,
-            };
+            // `GetBoolOrDefault` (`0x6f1c10`, `0x489f14`) with default false.
+            let exact = super::binding_abi::bool_or_default(exact.as_ref(), false);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model
                 .follow_requests

@@ -213,10 +213,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 
     // SetDesaturated(flag) (`0x79c1e0`), Texture only, answers shaderSupported, which stock
     // `ItemButtonTemplate.lua:69` reads to fall back to a grey tint; the renderer greys the texel,
-    // so this answers 1. The flag is `GetBoolOrDefault` (`0x6f1c10`, default 1, jump table
-    // `0x6f1ce8`): no argument is on, hence the `MultiValue`, nil is off, a number truncating to 0
-    // is off (`0x6f3620`, `0x40a2b0`), and a table, function or userdata is on. Every string is on
-    // here; the reference's string arm (`0x6f1c51`, against `0x871460` and `0x853758`) is not.
+    // so this answers 1. The flag is `GetBoolOrDefault` (`0x6f1c10`, default 1, `0x79c27e`): no
+    // argument is on, hence the `MultiValue`, nil is off, and a string goes by its first byte.
     m.set(
         "SetDesaturated",
         lua.create_function(|lua, args: MultiValue| {
@@ -225,14 +223,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 Some(Value::Table(t)) => t,
                 _ => return Ok(Value::Nil),
             };
-            let on = match args.next() {
-                None => true,
-                Some(Value::Nil) => false,
-                Some(Value::Boolean(b)) => b,
-                Some(Value::Integer(i)) => i != 0,
-                Some(Value::Number(n)) => n.trunc() != 0.0,
-                Some(_) => true,
-            };
+            let on = crate::script::binding_abi::bool_or_default(args.next().as_ref(), true);
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
             model.region_data.entry(rh).or_default().desaturated = on;
@@ -312,11 +303,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     // flag makes `SetTexCoord` re-derive the rect from the UV quad (`0x770462`).
     m.set(
         "SetTexCoordModifiesRect",
-        lua.create_function(|lua, (this, arg): (Table, Value)| {
+        lua.create_function(|lua, (this, args): (Table, MultiValue)| {
             let rh = region_handle_of(lua, &this)?;
-            // `GetBoolOrDefault` (`0x6f1c10`) with default 1 (`0x79c105`), but a missing argument
-            // arrives here as nil and reads false, where the reference sets the flag.
-            let on = crate::script::binding_abi::bool_or_default(Some(&arg), false);
+            // `GetBoolOrDefault` (`0x6f1c10`) with default 1 (`0x79c10e`): a bare call sets it.
+            let on = crate::script::binding_abi::bool_or_default(args.front(), true);
             let mut model = lua.app_data_mut::<Model>().expect("model");
             model
                 .region_data

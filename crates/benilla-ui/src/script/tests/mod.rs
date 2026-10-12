@@ -23,6 +23,7 @@ mod dying_target;
 mod end_to_end;
 mod engine_updates;
 mod events;
+mod flag_args;
 mod font_object;
 mod frame_api;
 mod generic_for;
