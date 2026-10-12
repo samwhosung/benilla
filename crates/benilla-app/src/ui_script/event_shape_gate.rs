@@ -148,6 +148,7 @@ fn fire_sites() -> Vec<(String, Vec<char>, String)> {
             for call in [
                 concat!("fire_event", "("),
                 concat!("fire_event_into", "("),
+                concat!("model.raise", "("),
                 concat!("pending_events.push", "(("),
             ] {
                 let mut from = 0;

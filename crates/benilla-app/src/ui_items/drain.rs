@@ -1692,9 +1692,12 @@ mod bind_confirm_tests {
                 },
             );
         }
-        // Re-run the place now that the item is out of reach.
+        // Re-run the place now that the item is out of reach. The fixture's own place asked
+        // first, unjudged; the re-run's pickup retires that question with its `CURSOR_UPDATE`,
+        // which fires inside the verb.
         {
-            let s = app.world_mut().non_send_resource_mut::<UiScript>();
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.tick(0.01);
             s.run("PickupContainerItem(0, 1)").unwrap();
             s.run("PickupInventoryItem(16)").unwrap();
         }

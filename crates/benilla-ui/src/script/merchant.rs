@@ -174,6 +174,37 @@ fn invalid_tuple() -> Vec<Value> {
 }
 
 /// Register the merchant globals.
+/// The row `PickupMerchantItem(index)` grabs, read before its clear: `None` for each silent
+/// refusal, a non-number (`0x4fb7cb`; a numeric string passes), `index < 1` (`0x4fb7e1`),
+/// `index > count` (`0x4fb7e9`), no merchant (`0x4fb7f7`), a dead row (`0x4fb80b`), or the held
+/// row again (`0x4fb818`, the toggle-off). Neither stock nor the item cache is tested: a sold-out
+/// row grabs, and the server refuses the buy.
+fn merchant_grab(model: &Model, index: Option<f64>) -> Option<CursorPayload> {
+    let held = match &model.cursor {
+        Some(CursorPayload::Merchant(m)) => Some(m.row),
+        _ => None,
+    };
+    // `_ftol` truncates toward zero, then the bound applies signed. The upper bound is
+    // load-bearing: `2^32 + 1` would narrow to row 0, where the reference bounds against the
+    // vendor count before any narrowing.
+    let row = index?.trunc();
+    if row.is_nan() || row < 1.0 || row > f64::from(u32::MAX) {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let row0 = row as u32 - 1;
+    let item = model.merchant.as_ref()?.items.get(row0 as usize)?;
+    // The toggle-off: naming the held row puts nothing back.
+    if held == Some(row0) {
+        return None;
+    }
+    Some(CursorPayload::Merchant(super::cursor::CursorMerchantItem {
+        item_id: item.item_id,
+        row: row0,
+        texture: item.texture.clone(),
+    }))
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -277,62 +308,35 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `CursorHasItem()` first (`MerchantFrame.lua:329`). A bag item on the cursor is sold, index
     // ignored and no merchant-open gate, which stock `MerchantFrame.xml:743`'s
     // `PickupMerchantItem(0)` relies on; otherwise row `index - 1` is grabbed as cursor mode 5.
-    //
-    // Every refusal is silent and clears the cursor: a non-number (`0x4fb7cb`; a numeric string
-    // passes), `index < 1` (`0x4fb7e1`), `index > count` (`0x4fb7e9`), no merchant (`0x4fb7f7`), a
-    // dead row (`0x4fb80b`), or the held row again (`0x4fb818`, the toggle-off). Neither stock nor
-    // the item cache is tested: a sold-out row grabs, and the server refuses the buy.
+    // Every refusal ([`merchant_grab`]) is silent and clears the cursor.
     g.set(
         "PickupMerchantItem",
         lua.create_function(|lua, index: Option<f64>| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-
             // The sell fork comes first, before the argument is read. Its clear is the sale's, not
             // `ClearCursor`: `CURSOR_UPDATE` fires and the source slot stays greyed until the
-            // server's inventory update (`0x494b60`).
-            if let Some(item) = crate::script::cursor::take_cursor_item_for_sale(&mut model) {
-                model.merchant_cursor_sells.push((item.bag, item.slot));
-                return Ok(());
-            }
+            // server's inventory update (`0x494b60`). Every other leg reads the row, then clears.
+            let grab = super::tick::verb(lua, |model| {
+                if let Some(item) = crate::script::cursor::take_cursor_item_for_sale(model) {
+                    model.merchant_cursor_sells.push((item.bag, item.slot));
+                    return None;
+                }
+                Some(merchant_grab(model, index))
+            });
+            let Some(grab) = grab else { return Ok(()) };
 
             // Every other leg clears with the real `ClearCursor(1,1)` (`0x4fb82d`/`0x4fb83f` on a
-            // refusal, `0x49510b` in the grab), not a bare drop: a held spell fires `CURSOR_UPDATE`
-            // and hides the bar grid, and an armed gift wrap is cancelled (`0x5edf10`).
-            let held = match &model.cursor {
-                Some(CursorPayload::Merchant(m)) => Some(m.row),
-                _ => None,
-            };
-            crate::script::cursor::clear_cursor(&mut model);
-
-            let Some(index) = index else { return Ok(()) };
-            // `_ftol` truncates toward zero, then the bound applies signed. The upper bound is
-            // load-bearing: `2^32 + 1` would narrow to row 0, where the reference bounds against
-            // the vendor count before any narrowing.
-            let row = index.trunc();
-            if row.is_nan() || row < 1.0 || row > f64::from(u32::MAX) {
-                return Ok(());
+            // refusal, `0x495112` in the grab), not a bare drop: a held spell fires `CURSOR_UPDATE`
+            // and hides the bar grid, and an armed gift wrap is cancelled (`0x5edf10`). Its events
+            // run before the grab sets the row, so that `CURSOR_UPDATE` reads an empty cursor.
+            super::tick::verb(lua, crate::script::cursor::clear_cursor);
+            if let Some(payload) = grab {
+                // The grab's `SignalEvent(CURSOR_UPDATE)` (`0x49515e`); mode 5 skips the mode-7
+                // `ACTIONBAR_SHOWGRID` branch.
+                super::tick::verb(lua, |model| {
+                    model.cursor = Some(payload);
+                    crate::script::cursor::raise_cursor_update(model);
+                });
             }
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let row0 = row as u32 - 1;
-            let Some(merchant) = model.merchant.as_ref() else {
-                return Ok(());
-            };
-            let Some(item) = merchant.items.get(row0 as usize) else {
-                return Ok(());
-            };
-            // The toggle-off: naming the held row puts nothing back.
-            if held == Some(row0) {
-                return Ok(());
-            }
-            let payload = CursorPayload::Merchant(super::cursor::CursorMerchantItem {
-                item_id: item.item_id,
-                row: row0,
-                texture: item.texture.clone(),
-            });
-            // The grab's `SignalEvent(CURSOR_UPDATE)` (`0x495159`); mode 5 skips the mode-7
-            // `ACTIONBAR_SHOWGRID` branch.
-            model.cursor = Some(payload);
-            crate::script::cursor::queue_cursor_update(&mut model);
             Ok(())
         })?,
     )?;
@@ -447,13 +451,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ShowRepairCursor",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // `0x4fbcc0`: a targeting spell or a vendor without repair service leaves the
-            // cursor untouched. `ClearCursor(1,1)` returns any held item before mode 0x11 arms.
-            if model.spell_targeting || !model.merchant.as_ref().is_some_and(|m| m.can_repair) {
-                return Ok(());
+            // cursor untouched. `ClearCursor(1,1)` returns any held item before mode 0x11 arms,
+            // its events running first.
+            {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                if model.spell_targeting || !model.merchant.as_ref().is_some_and(|m| m.can_repair) {
+                    return Ok(());
+                }
             }
-            crate::script::cursor::clear_cursor(&mut model);
+            super::tick::verb(lua, crate::script::cursor::clear_cursor);
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             model.repair_mode = true;
             model.ui_cursor = None;
             model.ui_cursor_dirty = true;
@@ -892,7 +900,10 @@ mod tests {
         assert!(s.cursor_item().is_some());
 
         s.set_spell_targeting(false);
+        // The clear's `CURSOR_UPDATE` (`0x4fbcd9`) runs before repair mode arms.
+        crate::script::tick::heard::listen(&s, &["CURSOR_UPDATE"], Some("InRepairMode()"));
         s.run("ShowRepairCursor()").unwrap();
+        assert_eq!(crate::script::tick::heard::take(&s), ["CURSOR_UPDATE nil"]);
         assert!(s.repair_mode());
         assert!(
             s.cursor_item().is_none(),
@@ -1157,7 +1168,7 @@ mod tests {
             texture: None,
             passive: false,
         }));
-        cursor::queue_cursor_update(&mut s.model_mut()); // the pickup's own transition
+        cursor::raise_cursor_update(&mut s.model_mut()); // the pickup's own transition
         assert_eq!(cursor_event_counts(&mut s), (1, 1, 0), "the spell pickup");
 
         s.run("PickupMerchantItem(0)").unwrap();

@@ -9,7 +9,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::cursor::{queue_cursor_update, CursorMacro, CursorPayload};
+use super::cursor::{raise_cursor_update, CursorMacro, CursorPayload};
 use super::Model;
 
 /// Macros per tab (`Blizzard_MacroUI.lua:1`), and so the character tab's base.
@@ -268,7 +268,7 @@ fn pickup_macro(model: &mut Model, index: usize) -> bool {
         texture: entry.texture.clone(),
     };
     model.cursor = Some(CursorPayload::Macro(payload));
-    queue_cursor_update(model);
+    raise_cursor_update(model);
     true
 }
 
@@ -414,8 +414,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PickupMacro",
         lua.create_function(|lua, index: usize| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            pickup_macro(&mut model, index);
+            super::tick::verb(lua, |model| pickup_macro(model, index));
             Ok(())
         })?,
     )?;

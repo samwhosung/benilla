@@ -2103,10 +2103,12 @@ mod tests {
                     // rustfmt splits a long chain at its dots, so the three shapes are matched
                     // with the whitespace before each `.` removed.
                     let text = glue_chains(&text);
-                    // The engine's deferred lane, `pending_events.push((name, args))`, fires too.
-                    const CALLS: [&str; 3] = [
+                    // A verb's `model.raise(name, args)` and the host queue,
+                    // `pending_events.push((name, args))`, fire too.
+                    const CALLS: [&str; 4] = [
                         concat!("fire_event", "("),
                         concat!("fire_event_into", "("),
+                        concat!("model.raise", "("),
                         concat!("pending_events.push", "(("),
                     ];
                     let mut fires_indirectly = false;

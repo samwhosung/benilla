@@ -743,12 +743,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ClickAuctionSellItemButton(): attach the cursor's item, or pick the attached one back up;
-    // every cursor write queues both CURSOR_UPDATE and ITEM_LOCK_CHANGED.
+    // every cursor write raises both CURSOR_UPDATE and ITEM_LOCK_CHANGED.
     g.set(
         "ClickAuctionSellItemButton",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            click_auction_sell_item(&mut model);
+            super::tick::verb(lua, click_auction_sell_item);
             Ok(())
         })?,
     )?;
@@ -790,17 +789,15 @@ const AUCTION_INV_TYPES: [(u32, &str); 14] = [
 fn click_auction_sell_item(model: &mut Model) {
     match model.cursor.take() {
         Some(CursorPayload::Item(item)) => {
-            let (bag, slot) = (item.bag, item.slot);
             model.auction_sell_item = Some(item);
-            cursor::queue_cursor_update(model);
-            cursor::queue_lock_changed(model, bag, slot);
+            cursor::raise_cursor_update(model);
+            cursor::raise_lock_changed(model);
         }
         None => {
             if let Some(item) = model.auction_sell_item.take() {
-                let (bag, slot) = (item.bag, item.slot);
                 model.cursor = Some(CursorPayload::Item(item));
-                cursor::queue_cursor_update(model);
-                cursor::queue_lock_changed(model, bag, slot);
+                cursor::raise_cursor_update(model);
+                cursor::raise_lock_changed(model);
             }
         }
         Some(other) => {

@@ -5,9 +5,10 @@ use mlua::Lua;
 
 use crate::script::binding_abi::flag;
 use crate::script::container::ContainerMove;
+use crate::script::tick::verb;
 use crate::script::Model;
 
-use super::{queue_cursor_update, queue_lock_changed, CursorItem, CursorPayload, EQUIPMENT_BAG};
+use super::{raise_cursor_update, raise_lock_changed, CursorItem, CursorPayload, EQUIPMENT_BAG};
 
 /// `PickupInventoryItem(id)` (`0x4c7300`), the doll slot's click, on the bag click's model: a
 /// fitting whole item moves in and the cursor clears, with no hop; a split or a misfit stays
@@ -57,16 +58,17 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
             match picked {
                 Some(item) => {
                     model.cursor = Some(CursorPayload::Item(item));
-                    queue_cursor_update(model);
-                    queue_lock_changed(model, EQUIPMENT_BAG, id);
+                    raise_cursor_update(model);
+                    raise_lock_changed(model);
                     true
                 }
                 None => false,
             }
         }
+        // The cancel is `ClearCursor(1,1)` (`0x4c794d`): the unlock, then `CURSOR_UPDATE`.
         Some(CursorPayload::Item(held)) if held.bag == EQUIPMENT_BAG && held.slot == id => {
-            queue_cursor_update(model);
-            queue_lock_changed(model, held.bag, held.slot);
+            raise_lock_changed(model);
+            raise_cursor_update(model);
             true
         }
         Some(CursorPayload::Item(held)) => {
@@ -82,8 +84,8 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
                 dst_slot: id,
                 count: None,
             });
-            queue_cursor_update(model);
-            queue_lock_changed(model, held.bag, held.slot);
+            raise_cursor_update(model);
+            raise_lock_changed(model);
             true
         }
         // Mode 5, a buy into this slot: `0x4c78fd` sends `CMSG_BUY_ITEM_IN_SLOT` (`0x1a3`) and the
@@ -99,7 +101,7 @@ pub(super) fn pickup_inventory_item(model: &mut Model, id: u32) -> bool {
             if let Some(entry) = entry {
                 model.merchant_slot_buys.push((EQUIPMENT_BAG, id, entry));
             }
-            queue_cursor_update(model);
+            raise_cursor_update(model);
             true
         }
         Some(
@@ -144,8 +146,8 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
     match model.cursor.take() {
         Some(CursorPayload::Item(item)) if item.bag >= 0 && item.count.is_none() => {
             model.container_autoequips.push((item.bag, item.slot));
-            queue_cursor_update(model);
-            queue_lock_changed(model, item.bag, item.slot);
+            raise_cursor_update(model);
+            raise_lock_changed(model);
             true
         }
         other => {
@@ -156,11 +158,17 @@ pub(super) fn auto_equip_cursor_item(model: &mut Model) -> bool {
 }
 
 /// `UseInventoryItem(id)`, the doll slot's right-click (`PaperDollFrame.lua:658-659`): the cursor
-/// clears before the slot is read (`0x4c79a9`), so a held payload goes back, never placed; then
-/// the app sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot, dropping an empty slot unsent,
-/// or in repair mode a worn item is repaired, locked or not (`0x4c79c4`).
-pub(super) fn use_inventory_item(model: &mut Model, id: u32) {
-    super::clear_cursor(model);
+/// clears before the slot is read (`0x4c79a9`), so a held payload goes back, never placed, its
+/// events running first; then the app sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot,
+/// dropping an empty slot unsent, or in repair mode a worn item is repaired, locked or not
+/// (`0x4c79c4`).
+pub(super) fn use_inventory_item(lua: &Lua, id: u32) {
+    verb(lua, super::clear_cursor);
+    verb(lua, |model| use_cleared(model, id));
+}
+
+/// `UseInventoryItem` past its clear.
+fn use_cleared(model: &mut Model, id: u32) {
     if !model.repair_mode {
         model
             .script_calls
@@ -195,16 +203,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PickupInventoryItem",
         lua.create_function(|lua, id: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            pickup_inventory_item(&mut model, id);
+            verb(lua, |model| pickup_inventory_item(model, id));
             Ok(())
         })?,
     )?;
     g.set(
         "EquipCursorItem",
         lua.create_function(|lua, id: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            equip_cursor_item(&mut model, id);
+            verb(lua, |model| equip_cursor_item(model, id));
             Ok(())
         })?,
     )?;
@@ -218,16 +224,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "AutoEquipCursorItem",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            auto_equip_cursor_item(&mut model);
+            verb(lua, auto_equip_cursor_item);
             Ok(())
         })?,
     )?;
     g.set(
         "UseInventoryItem",
         lua.create_function(|lua, id: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            use_inventory_item(&mut model, id);
+            use_inventory_item(lua, id);
             Ok(())
         })?,
     )?;

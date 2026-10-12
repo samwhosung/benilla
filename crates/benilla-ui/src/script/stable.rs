@@ -187,6 +187,56 @@ fn drag_verb(from: u8, to: u8, state: &StableState) -> Option<StableIntent> {
 }
 
 /// Register the stable globals.
+/// `ClickStablePet(i)`'s one value (`0x4cb420`), keyed only on whether the cursor held a pet: a
+/// plain click selects and answers 1, so the stock window repaints; a drop answers nil, packet or
+/// not, and the repaint comes with the server's next list.
+fn click_stable_pet(model: &mut Model, i: i64) -> Value {
+    let Some(to) = slot_index(i) else {
+        // Out of range: a click selects nothing, a drop clears the cursor.
+        if !matches!(
+            model.cursor,
+            Some(super::cursor::CursorPayload::StablePet(_))
+        ) {
+            model.stable.selected = 0;
+            return Value::Number(1.0);
+        }
+        super::cursor::clear_cursor(model);
+        return Value::Nil;
+    };
+    let to = to as u8;
+
+    // A drop.
+    if let Some(super::cursor::CursorPayload::StablePet(held)) = model.cursor.clone() {
+        let from = held.slot;
+        let intent = model
+            .stable
+            .state
+            .as_ref()
+            .and_then(|state| drag_verb(from, to, state));
+        super::cursor::clear_cursor(model);
+        if let Some(intent) = intent {
+            model.stable.intents.push(intent);
+        }
+        return Value::Nil;
+    }
+
+    // A plain click: select only.
+    let pet_number = model
+        .stable
+        .state
+        .as_ref()
+        .and_then(|s| s.slots[usize::from(to)].as_ref())
+        .map(|p| p.pet_number);
+    model.stable.selected = match (to, pet_number) {
+        // Slot 0 selects the summoned pet by its sentinel, not a pet number.
+        (0, _) => -1,
+        (_, Some(n)) => n as i32,
+        // An empty slot selects nothing.
+        (_, None) => 0,
+    };
+    Value::Number(1.0)
+}
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -296,57 +346,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ClickStablePet(i) → one value (`0x4cb420`), keyed only on whether the cursor held a pet: a
-    // plain click selects and answers 1, so the stock window repaints; a drop answers nil, packet
-    // or not, and the repaint comes with the server's next list.
+    // ClickStablePet(i) → one value ([`click_stable_pet`]).
     g.set(
         "ClickStablePet",
         lua.create_function(|lua, i: i64| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let Some(to) = slot_index(i) else {
-                // Out of range: a click selects nothing, a drop clears the cursor.
-                if !matches!(
-                    model.cursor,
-                    Some(super::cursor::CursorPayload::StablePet(_))
-                ) {
-                    model.stable.selected = 0;
-                    return Ok(Value::Number(1.0));
-                }
-                super::cursor::clear_cursor(&mut model);
-                return Ok(Value::Nil);
-            };
-            let to = to as u8;
-
-            // A drop.
-            if let Some(super::cursor::CursorPayload::StablePet(held)) = model.cursor.clone() {
-                let from = held.slot;
-                let intent = model
-                    .stable
-                    .state
-                    .as_ref()
-                    .and_then(|state| drag_verb(from, to, state));
-                super::cursor::clear_cursor(&mut model);
-                if let Some(intent) = intent {
-                    model.stable.intents.push(intent);
-                }
-                return Ok(Value::Nil);
-            }
-
-            // A plain click: select only.
-            let pet_number = model
-                .stable
-                .state
-                .as_ref()
-                .and_then(|s| s.slots[usize::from(to)].as_ref())
-                .map(|p| p.pet_number);
-            model.stable.selected = match (to, pet_number) {
-                // Slot 0 selects the summoned pet by its sentinel, not a pet number.
-                (0, _) => -1,
-                (_, Some(n)) => n as i32,
-                // An empty slot selects nothing.
-                (_, None) => 0,
-            };
-            Ok(Value::Number(1.0))
+            Ok(super::tick::verb(lua, |model| click_stable_pet(model, i)))
         })?,
     )?;
 
@@ -355,19 +359,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PickupStablePet",
         lua.create_function(|lua, i: i64| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let texture = slot_index(i)
-                .and_then(|i| model.stable.state.as_ref()?.slots[i].as_ref())
-                .and_then(|p| p.icon.clone());
-            if let Some(texture) = texture {
-                model.cursor = Some(super::cursor::CursorPayload::StablePet(
-                    super::cursor::CursorStablePet {
-                        slot: i as u8,
-                        texture,
-                    },
-                ));
-                super::cursor::queue_cursor_update(&mut model);
-            }
+            super::tick::verb(lua, |model| {
+                let texture = slot_index(i)
+                    .and_then(|i| model.stable.state.as_ref()?.slots[i].as_ref())
+                    .and_then(|p| p.icon.clone());
+                if let Some(texture) = texture {
+                    model.cursor = Some(super::cursor::CursorPayload::StablePet(
+                        super::cursor::CursorStablePet {
+                            slot: i as u8,
+                            texture,
+                        },
+                    ));
+                    super::cursor::raise_cursor_update(model);
+                }
+            });
             Ok(())
         })?,
     )?;

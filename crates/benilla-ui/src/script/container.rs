@@ -200,7 +200,7 @@ impl super::UiScript {
         model.pending_wrap = Some(PendingWrap { bag, slot });
         model.ui_cursor = Some(UiCursorMode::Cast);
         model.ui_cursor_dirty = true;
-        cursor::queue_lock_changed(&mut model, bag, slot);
+        cursor::raise_lock_changed(&mut model);
     }
 
     /// The armed gift wrap, if any; the app reads it to hold the cursor's base at Cast.
@@ -293,7 +293,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) {
         model.container_wraps.push((wrap.bag, wrap.slot, bag, slot));
         // The paper unlocks and the cursor resets right after the send (`0x5eded0` at
         // `0x5ee0aa`), not on the answer; the target never locks.
-        cursor::queue_lock_changed(model, wrap.bag, wrap.slot);
+        cursor::raise_lock_changed(model);
         model.ui_cursor = None;
         model.ui_cursor_dirty = true;
         return;
@@ -339,13 +339,14 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) {
                 });
             if let Some(item) = picked {
                 model.cursor = Some(CursorPayload::Item(item));
-                cursor::queue_cursor_update(model);
-                cursor::queue_lock_changed(model, bag, slot);
+                cursor::raise_cursor_update(model);
+                cursor::raise_lock_changed(model);
             }
         }
+        // The cancel is `ClearCursor(1,1)` (`0x4f9e0e`): the unlock, then `CURSOR_UPDATE`.
         Some(CursorPayload::Item(held)) if held.bag == bag && held.slot == slot => {
-            cursor::queue_cursor_update(model);
-            cursor::queue_lock_changed(model, held.bag, held.slot);
+            cursor::raise_lock_changed(model);
+            cursor::raise_cursor_update(model);
         }
         Some(CursorPayload::Item(held)) => {
             // Cloned so the moves below can borrow `model`; an unresolved slot reads as empty.
@@ -364,8 +365,8 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) {
                 // or a swap that lands the displaced item in the source slot.
                 (count, _) => {
                     queue_move(model, &held, bag, slot, count);
-                    cursor::queue_cursor_update(model);
-                    cursor::queue_lock_changed(model, held.bag, held.slot);
+                    cursor::raise_cursor_update(model);
+                    cursor::raise_lock_changed(model);
                 }
             }
         }
@@ -383,7 +384,7 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) {
             if let Some(entry) = entry {
                 model.merchant_slot_buys.push((bag, slot, entry));
             }
-            cursor::queue_cursor_update(model);
+            cursor::raise_cursor_update(model);
         }
         Some(
             other @ (CursorPayload::Spell(_)
@@ -588,10 +589,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "UseContainerItem",
         lua.create_function(|lua, (bag, slot, _rest): (i64, u32, mlua::MultiValue)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // Every right-click clears the cursor before it reads the slot (`0x4fa198`): a held
-            // payload goes back, never placed, and an armed gift wrap is cancelled.
-            cursor::clear_cursor(&mut model);
+            // payload goes back, never placed, and an armed gift wrap is cancelled. The clear's
+            // events run first, as the reference's do before it reads the slot.
+            super::tick::verb(lua, cursor::clear_cursor);
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if model.repair_mode {
                 // Then the item in the slot is repaired (`0x4fa1a6`, `0x4fa1da`).
                 let occupied = model
@@ -616,8 +618,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "PickupContainerItem",
         lua.create_function(|lua, (bag, slot): (i64, u32)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            pickup_container_item(&mut model, bag, slot);
+            super::tick::verb(lua, |model| pickup_container_item(model, bag, slot));
             Ok(())
         })?,
     )?;

@@ -139,8 +139,8 @@ fn click_trade_button(model: &mut Model, id: u32) {
         Some(CursorPayload::Item(item)) => {
             let (bag, slot) = (item.bag, item.slot);
             model.trade_set_items.push((id, bag, slot));
-            cursor::queue_cursor_update(model);
-            cursor::queue_lock_changed(model, bag, slot);
+            cursor::raise_cursor_update(model);
+            cursor::raise_lock_changed(model);
         }
         None => {
             let filled = matches!(
@@ -355,8 +355,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ClickTradeButton",
         lua.create_function(|lua, id: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            click_trade_button(&mut model, id);
+            super::tick::verb(lua, |model| click_trade_button(model, id));
             Ok(())
         })?,
     )?;
@@ -366,8 +365,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "ClickTargetTradeButton",
         lua.create_function(|lua, _id: u32| {
             // Coins on the cursor still go into our offer, the index unread (`0x4c00a3`).
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            cursor::money::add_trade_money(&mut model);
+            super::tick::verb(lua, cursor::money::add_trade_money);
             Ok(())
         })?,
     )?;

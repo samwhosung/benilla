@@ -12,7 +12,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
-use super::cursor::{queue_cursor_update, CursorPayload, CursorSpell};
+use super::cursor::{raise_cursor_update, CursorPayload, CursorSpell};
 use super::{Model, ScriptCall};
 
 const BOOKTYPE_SPELL: &str = "spell";
@@ -316,7 +316,7 @@ fn pickup_spell(model: &mut Model, id: u32, book_type: &str) -> bool {
         })
     };
     model.cursor = Some(payload);
-    queue_cursor_update(model);
+    raise_cursor_update(model);
     true
 }
 
@@ -581,8 +581,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "PickupSpell",
         lua.create_function(|lua, (id, book_type): (Value, Value)| {
             let (id, book_type) = spell_slot_args(id, book_type, "PickupSpell")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            pickup_spell(&mut model, id, &book_type);
+            super::tick::verb(lua, |model| pickup_spell(model, id, &book_type));
             Ok(())
         })?,
     )?;

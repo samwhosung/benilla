@@ -241,12 +241,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "UseAction",
         lua.create_function(|lua, (action, rest): (u32, MultiValue)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // Both flags go through `GetBoolOrDefault` (`0x4e717e`, `0x4e716f`), default 0.
             let check_cursor = bool_or_default(rest.front(), false);
             let on_self = bool_or_default(rest.get(1), false);
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if check_cursor && model.cursor.is_some() {
-                super::cursor::place_action(&mut model, action);
+                drop(model);
+                super::cursor::place_action(lua, action);
             } else {
                 model
                     .script_calls

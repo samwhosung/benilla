@@ -128,18 +128,11 @@ pub struct MailSendRequest {
     pub package: u32,
 }
 
-/// `0x4acdc0`'s clears: the attachment, whose lock it lifts (`0x495420`, firing
-/// `ITEM_LOCK_CHANGED`), then money, COD, stationery and package. Returns the lock event to fire.
-fn clear_compose(model: &mut Model) -> Option<(String, Vec<super::ScriptValue>)> {
-    let lock = model.mail_send_item.take().map(|item| {
-        (
-            "ITEM_LOCK_CHANGED".to_string(),
-            vec![
-                super::ScriptValue::Int(item.bag),
-                super::ScriptValue::Int(i64::from(item.slot)),
-            ],
-        )
-    });
+/// `0x4acdc0`'s clears: the attachment, whose lock it lifts (`0x495420`, firing an argless
+/// `ITEM_LOCK_CHANGED` at `0x495455`), then money, COD, stationery and package. Returns whether
+/// an attachment was lifted, so the caller fires that event.
+fn clear_compose(model: &mut Model) -> bool {
+    let lock = model.mail_send_item.take().is_some();
     model.mail_send_money = 0;
     model.mail_send_cod = 0;
     model.mail_stationery = 0;
@@ -220,8 +213,8 @@ impl super::UiScript {
     pub fn reset_compose_tab(&mut self) {
         let lock = clear_compose(&mut self.model_mut());
         // Fired now, not queued: the order against the caller's `MAIL_SHOW`/`MAIL_FAILED` matters.
-        if let Some((event, args)) = lock {
-            self.fire_event(&event, args);
+        if lock {
+            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
         }
         // One literal call each, as the event census (`ui_script::reference_ui`) reads them.
         self.fire_event("SEND_MAIL_MONEY_CHANGED", Vec::new()); // 0x4ace14
@@ -232,9 +225,8 @@ impl super::UiScript {
     /// The close core's silent reset (`0x4acdc0(0)`, from `0x4acd50`): the same clears, and only
     /// the attachment's `ITEM_LOCK_CHANGED`, which `0x495420` fires on either leg.
     pub fn reset_compose_tab_silently(&mut self) {
-        let lock = clear_compose(&mut self.model_mut());
-        if let Some((event, args)) = lock {
-            self.fire_event(&event, args);
+        if clear_compose(&mut self.model_mut()) {
+            self.fire_event("ITEM_LOCK_CHANGED", Vec::new());
         }
     }
 
@@ -543,16 +535,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 copper,
                 "Usage: SetSendMailMoney(amount)",
             )? as u32;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if u64::from(n) > model.money {
-                model.ui_errors.push("ERR_NOT_ENOUGH_MONEY");
-                return Ok(Value::Nil);
-            }
-            model.mail_send_money = n;
-            model
-                .pending_events
-                .push(("SEND_MAIL_MONEY_CHANGED".to_string(), Vec::new()));
-            Ok(Value::Integer(1))
+            Ok(super::tick::verb(lua, |model| {
+                if u64::from(n) > model.money {
+                    model.ui_errors.push("ERR_NOT_ENOUGH_MONEY");
+                    return Value::Nil;
+                }
+                // The write (`0x4adc39`), then the signal (`0x4adc44`).
+                model.mail_send_money = n;
+                model.raise("SEND_MAIL_MONEY_CHANGED", Vec::new());
+                Value::Integer(1)
+            }))
         })?,
     )?;
 
@@ -588,14 +580,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 copper,
                 "Usage: SetSendMailCOD(amount)",
             )? as u32;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if model.mail_send_item.is_none() {
-                return Ok(());
-            }
-            model.mail_send_cod = n;
-            model
-                .pending_events
-                .push(("SEND_MAIL_COD_CHANGED".to_string(), Vec::new()));
+            super::tick::verb(lua, |model| {
+                if model.mail_send_item.is_some() {
+                    // The write (`0x4adc7d`), then the signal (`0x4adc88`).
+                    model.mail_send_cod = n;
+                    model.raise("SEND_MAIL_COD_CHANGED", Vec::new());
+                }
+            });
             Ok(())
         })?,
     )?;
@@ -655,8 +646,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ClickSendMailItemButton",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            click_send_mail_item(&mut model);
+            super::tick::verb(lua, click_send_mail_item);
             Ok(())
         })?,
     )?;
@@ -739,21 +729,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ClearSendMail() (`0x4adee0`): the compose reset with its events (`0x4acdc0(1)`), queued in
-    // its order; zero returns.
+    // ClearSendMail() (`0x4adee0`): the compose reset with its events (`0x4acdc0(1)`), fired in
+    // place in its order: the attachment's unlock (`0x495455`), then `0x4ace19`, `0x4ace23` and
+    // `0x4ace2d`; zero returns.
     g.set(
         "ClearSendMail",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let lock = clear_compose(&mut model);
-            model.pending_events.extend(lock);
-            for event in [
-                "SEND_MAIL_MONEY_CHANGED",
-                "SEND_MAIL_COD_CHANGED",
-                "MAIL_SEND_SUCCESS",
-            ] {
-                model.pending_events.push((event.to_string(), Vec::new()));
-            }
+            super::tick::verb(lua, |model| {
+                if clear_compose(model) {
+                    model.raise("ITEM_LOCK_CHANGED", Vec::new());
+                }
+                model.raise("SEND_MAIL_MONEY_CHANGED", Vec::new());
+                model.raise("SEND_MAIL_COD_CHANGED", Vec::new());
+                model.raise("MAIL_SEND_SUCCESS", Vec::new());
+            });
             Ok(MultiValue::new())
         })?,
     )?;
@@ -814,25 +803,19 @@ fn click_send_mail_item(model: &mut Model) {
     match model.cursor.take() {
         // A held bag item attaches; it stays in its bag slot until the send.
         Some(CursorPayload::Item(item)) => {
-            let (bag, slot) = (item.bag, item.slot);
             // An earlier attachment is overwritten, as in the reference; its slot has no lock.
             model.mail_send_item = Some(item);
-            cursor::queue_cursor_update(model);
-            cursor::queue_lock_changed(model, bag, slot);
+            cursor::raise_cursor_update(model);
+            cursor::raise_lock_changed(model);
             // `MAIL_SEND_INFO_UPDATE` (`0x4ae0de`): the stock tab re-reads the item and postage.
-            model
-                .pending_events
-                .push(("MAIL_SEND_INFO_UPDATE".to_string(), Vec::new()));
+            model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
         }
         None => {
             if let Some(item) = model.mail_send_item.take() {
-                let (bag, slot) = (item.bag, item.slot);
                 model.cursor = Some(CursorPayload::Item(item));
-                cursor::queue_cursor_update(model);
-                cursor::queue_lock_changed(model, bag, slot);
-                model
-                    .pending_events
-                    .push(("MAIL_SEND_INFO_UPDATE".to_string(), Vec::new()));
+                cursor::raise_cursor_update(model);
+                cursor::raise_lock_changed(model);
+                model.raise("MAIL_SEND_INFO_UPDATE", Vec::new());
             }
         }
         Some(other) => {
@@ -845,6 +828,40 @@ fn click_send_mail_item(model: &mut Model) {
 mod tests {
     use super::*;
     use crate::script::UiScript;
+
+    /// The compose verbs fire in place, each after its write (`0x4adc39` then `0x4adc44`), and
+    /// `ClearSendMail` after all its clears (`0x4acddf`-`0x4ace0c`, then `0x4ace19`, `0x4ace23`,
+    /// `0x4ace2d`): every handler reads the stored amount before the next Lua line runs.
+    #[test]
+    fn the_compose_verbs_fire_their_events_in_place() {
+        let mut s = UiScript::new().unwrap();
+        s.set_money(1_000);
+        crate::script::tick::heard::listen(
+            &s,
+            &[
+                "SEND_MAIL_MONEY_CHANGED",
+                "SEND_MAIL_COD_CHANGED",
+                "MAIL_SEND_SUCCESS",
+            ],
+            Some("GetSendMailMoney()"),
+        );
+        let seen: Vec<String> = s
+            .eval("SetSendMailMoney(250) local h = HEARD HEARD = {} return h")
+            .unwrap();
+        assert_eq!(seen, ["SEND_MAIL_MONEY_CHANGED 250"]);
+        let seen: Vec<String> = s
+            .eval("ClearSendMail() local h = HEARD HEARD = {} return h")
+            .unwrap();
+        assert_eq!(
+            seen,
+            [
+                "SEND_MAIL_MONEY_CHANGED 0",
+                "SEND_MAIL_COD_CHANGED 0",
+                "MAIL_SEND_SUCCESS 0"
+            ]
+        );
+        assert!(s.model_ref().pending_events.is_empty());
+    }
 
     /// A send needs a stationery: select the default, as the stock `SendMailFrame_Reset` does.
     fn select_default_stationery(s: &mut UiScript) {

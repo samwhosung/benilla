@@ -1,11 +1,10 @@
 //! The money cursor, payload mode 2: coins taken off a money frame; the purse is never debited.
-//! Deviation: a `CURSOR_UPDATE` handler already sees the coins, because events are queued; the
-//! reference runs it inside the clear, before they land.
 
 use mlua::{Lua, Value};
 
-use super::{queue_cursor_update, CursorMoney, CursorPayload};
+use super::{raise_cursor_update, CursorMoney, CursorPayload};
 use crate::script::binding_abi::{flag, number_arg};
+use crate::script::tick::verb;
 use crate::script::Model;
 
 /// The coin icon for an amount of copper: `GetCoinIcon`'s table (`0x48d4e0`), thresholds signed.
@@ -33,32 +32,38 @@ pub(crate) fn cursor_money(model: &Model) -> u32 {
     }
 }
 
-/// Queue `PLAYER_MONEY`, which repaints the money frames less the held coins.
-fn queue_player_money(model: &mut Model) {
-    model
-        .pending_events
-        .push(("PLAYER_MONEY".to_string(), Vec::new()));
+/// Raise `PLAYER_MONEY`, which repaints the money frames less the held coins.
+fn raise_player_money(model: &mut Model) {
+    model.raise("PLAYER_MONEY", Vec::new());
 }
 
-/// Put coins on the cursor as `0x494cc0` does: the inner clear's `CURSOR_UPDATE`, after its own
-/// `PLAYER_MONEY` if coins were already held, then the payload and `PLAYER_MONEY`.
-fn install_money(model: &mut Model, copper: u32) {
-    if matches!(model.cursor, Some(CursorPayload::Money(_))) {
-        queue_player_money(model);
-    }
-    model.cursor = None;
-    queue_cursor_update(model);
-    model.cursor = Some(CursorPayload::Money(CursorMoney { copper }));
-    queue_player_money(model);
+/// Put coins on the cursor as `0x494cc0` does, in two steps. Its inner `ClearCursor(1,1)`
+/// (`0x494cd9`) drops coins already held with their `PLAYER_MONEY` (`0x495243`) and fires
+/// `CURSOR_UPDATE` (`0x4952cc`) on the empty cursor, so that handler sees no coins; then the coins
+/// land and `PLAYER_MONEY` fires (`0x494d0a`), with no second `CURSOR_UPDATE`.
+fn install_money(lua: &Lua, copper: u32) {
+    verb(lua, |model| {
+        if matches!(model.cursor.take(), Some(CursorPayload::Money(_))) {
+            raise_player_money(model);
+        }
+        raise_cursor_update(model);
+    });
+    verb(lua, |model| {
+        model.cursor = Some(CursorPayload::Money(CursorMoney { copper }));
+        raise_player_money(model);
+    });
 }
 
 /// `PickupPlayerMoney` after the argument gate; each refusal is silent.
-pub(crate) fn pickup_player_money(model: &mut Model, copper: u32) -> bool {
-    if copper == 0 || !model.player_control || u64::from(copper) > model.money {
-        return false;
+pub(crate) fn pickup_player_money(lua: &Lua, copper: u32) -> bool {
+    let allowed = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        copper != 0 && model.player_control && u64::from(copper) <= model.money
+    };
+    if allowed {
+        install_money(lua, copper);
     }
-    install_money(model, copper);
-    true
+    allowed
 }
 
 /// `DropCursorMoney`: `PLAYER_MONEY`, then the clear's `CURSOR_UPDATE`, and no packet.
@@ -67,8 +72,8 @@ pub(crate) fn drop_cursor_money(model: &mut Model) -> bool {
         return false;
     }
     model.cursor = None;
-    queue_player_money(model);
-    queue_cursor_update(model);
+    raise_player_money(model);
+    raise_cursor_update(model);
     true
 }
 
@@ -91,24 +96,29 @@ pub(crate) fn add_trade_money(model: &mut Model) -> bool {
     }
     // `ClearCursor(1, 0)`: no PLAYER_MONEY, the clear's own CURSOR_UPDATE.
     model.cursor = None;
-    queue_cursor_update(model);
+    raise_cursor_update(model);
     true
 }
 
 /// `PickupTradeMoney` after the argument gate: signed gates, then `CMSG_SET_TRADE_GOLD` (`0x11F`)
 /// with the trimmed offer, then the coins onto the cursor.
-pub(crate) fn pickup_trade_money(model: &mut Model, amount: i32) -> bool {
-    let offer = model.trade.as_ref().map_or(0, |t| t.player.gold) as i32;
-    if amount <= 0 || amount > offer {
-        return false;
+pub(crate) fn pickup_trade_money(lua: &Lua, amount: i32) -> bool {
+    let trimmed = verb(lua, |model| {
+        let offer = model.trade.as_ref().map_or(0, |t| t.player.gold) as i32;
+        if amount <= 0 || amount > offer {
+            return false;
+        }
+        let left = (offer - amount) as u32;
+        model.trade_set_money = Some(left);
+        if let Some(t) = model.trade.as_mut() {
+            t.player.gold = left;
+        }
+        true
+    });
+    if trimmed {
+        install_money(lua, amount as u32);
     }
-    let left = (offer - amount) as u32;
-    model.trade_set_money = Some(left);
-    if let Some(t) = model.trade.as_mut() {
-        t.player.gold = left;
-    }
-    install_money(model, amount as u32);
-    true
+    trimmed
 }
 
 impl crate::script::UiScript {
@@ -139,24 +149,21 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "PickupPlayerMoney",
         lua.create_function(|lua, amount: Value| {
             let n = number_arg(lua, amount, "Usage: PickupPlayerMoney(amount)")? as u32;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            pickup_player_money(&mut model, n);
+            pickup_player_money(lua, n);
             Ok(())
         })?,
     )?;
     g.set(
         "DropCursorMoney",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            drop_cursor_money(&mut model);
+            verb(lua, drop_cursor_money);
             Ok(())
         })?,
     )?;
     g.set(
         "AddTradeMoney",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            add_trade_money(&mut model);
+            verb(lua, add_trade_money);
             Ok(())
         })?,
     )?;
@@ -164,8 +171,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "PickupTradeMoney",
         lua.create_function(|lua, amount: Value| {
             let n = number_arg(lua, amount, "Usage: PickupTradeMoney(amount)")?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            pickup_trade_money(&mut model, n);
+            pickup_trade_money(lua, n);
             Ok(())
         })?,
     )?;
@@ -183,17 +189,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::coin_icon;
     use crate::script::cursor::CursorPayload;
+    use crate::script::tick::heard;
     use crate::script::UiScript;
-
-    fn events(s: &mut UiScript) -> Vec<String> {
-        s.run(
-            r#"EV = {} F = F or CreateFrame("Frame") F:RegisterEvent("PLAYER_MONEY")
-               F:RegisterEvent("CURSOR_UPDATE") F:SetScript("OnEvent", function() table.insert(EV, event) end)"#,
-        )
-        .unwrap();
-        s.tick(0.0);
-        s.eval::<Vec<String>>("return EV").unwrap()
-    }
 
     #[test]
     fn coins_ride_the_cursor_without_leaving_the_purse() {
@@ -251,25 +248,75 @@ mod tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
+    /// The events fire inside each verb, in `0x494cc0`'s order: the inner clear's `CURSOR_UPDATE`
+    /// reads an empty cursor, and only the install's `PLAYER_MONEY` reads the new coins.
     #[test]
     fn the_pickup_and_drop_fire_player_money_around_the_clear() {
         let mut s = UiScript::new().unwrap();
         s.set_money(1_000);
-        let _ = events(&mut s);
+        heard::listen(
+            &s,
+            &["PLAYER_MONEY", "CURSOR_UPDATE"],
+            Some("GetCursorMoney()"),
+        );
         s.run("PickupPlayerMoney(10)").unwrap();
         assert_eq!(
-            events(&mut s),
-            vec!["CURSOR_UPDATE", "PLAYER_MONEY"],
+            heard::take(&s),
+            ["CURSOR_UPDATE 0", "PLAYER_MONEY 10"],
             "the inner clear's CURSOR_UPDATE, then the money's PLAYER_MONEY"
         );
         s.run("PickupPlayerMoney(20)").unwrap();
         assert_eq!(
-            events(&mut s),
-            vec!["PLAYER_MONEY", "CURSOR_UPDATE", "PLAYER_MONEY"],
+            heard::take(&s),
+            ["PLAYER_MONEY 0", "CURSOR_UPDATE 0", "PLAYER_MONEY 20"],
             "coins already held: the mode-2 arm's PLAYER_MONEY first"
         );
         s.run("DropCursorMoney()").unwrap();
-        assert_eq!(events(&mut s), vec!["PLAYER_MONEY", "CURSOR_UPDATE"]);
+        assert_eq!(heard::take(&s), ["PLAYER_MONEY 0", "CURSOR_UPDATE 0"]);
+        assert!(s.model_ref().pending_events.is_empty());
+    }
+
+    /// A handler that calls another verb runs it to completion inside the dispatch, as the
+    /// reference's synchronous `SignalEvent` nests: the mail verb's event lands between the
+    /// pickup's two steps, and a pickup called from the install's `PLAYER_MONEY` runs both of its
+    /// own steps before the outer verb returns. No step waits on a held model borrow.
+    #[test]
+    fn a_verb_called_from_a_handler_nests_inside_the_dispatch() {
+        let mut s = UiScript::new().unwrap();
+        s.set_money(1_000);
+        let log: Vec<String> = s
+            .eval(
+                r#"LOG = {} NEST = 0
+                   local f = CreateFrame("Frame")
+                   f:RegisterEvent("CURSOR_UPDATE")
+                   f:RegisterEvent("PLAYER_MONEY")
+                   f:RegisterEvent("SEND_MAIL_MONEY_CHANGED")
+                   f:SetScript("OnEvent", function()
+                       table.insert(LOG, event .. " " .. GetCursorMoney() .. " " .. GetSendMailMoney())
+                       if event == "CURSOR_UPDATE" and NEST == 0 then
+                           NEST = 1 SetSendMailMoney(5)
+                       elseif event == "PLAYER_MONEY" and NEST == 1 then
+                           NEST = 2 PickupPlayerMoney(20)
+                       end
+                   end)
+                   PickupPlayerMoney(10)
+                   return LOG"#,
+            )
+            .unwrap();
+        assert_eq!(
+            log,
+            [
+                "CURSOR_UPDATE 0 0",
+                "SEND_MAIL_MONEY_CHANGED 0 5",
+                "PLAYER_MONEY 10 5",
+                "PLAYER_MONEY 0 5",
+                "CURSOR_UPDATE 0 5",
+                "PLAYER_MONEY 20 5",
+            ]
+        );
+        assert_eq!(s.eval::<i64>("return GetCursorMoney()").unwrap(), 20);
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+        assert!(s.model_ref().pending_events.is_empty());
     }
 
     #[test]
