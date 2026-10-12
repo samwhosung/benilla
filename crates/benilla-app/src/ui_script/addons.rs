@@ -3045,6 +3045,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
+    /// `LoadAddOn` runs `AddOn_Load` with `dl` 1, so the `## LoadWith` loop (`0x51f5d3` forwards
+    /// it) meets `AddOn_CanLoad`'s demand check (`0x51e902`-`0x51e91b`): a dependent that is not
+    /// LoadOnDemand and not loaded, here one disabled at startup and enabled mid-session, stays
+    /// unloaded and answers `NOT_DEMAND_LOADED` itself.
+    #[test]
+    fn load_addon_leaves_a_plain_load_with_dependent_unloaded() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("demand-load-with-plain");
+        write_marking_addon(&home, "Host", "## LoadOnDemand: 1\n");
+        write_marking_addon(&home, "Plain", "## LoadWith: Host\n");
+        write_marking_addon(&home, "OnDemand", "## LoadOnDemand: 1\n## LoadWith: Host\n");
+        std::fs::create_dir_all(home.join("addons")).unwrap();
+        std::fs::write(
+            home.join("addons/Realm-Char.txt"),
+            "Plain: disabled\nOnDemand: disabled\n",
+        )
+        .unwrap();
+        let mut script = UiScript::new().unwrap();
+        script.set_screen_size(1024.0, 768.0);
+        let id = ("Realm".to_string(), "Char".to_string());
+        let _ = load_third_party(&mut script, Some(&id), &[], true);
+        script
+            .eval::<()>("EnableAddOn('Plain') EnableAddOn('OnDemand')")
+            .unwrap();
+
+        assert_eq!(
+            script
+                .eval::<(Option<i64>, Option<String>)>("return LoadAddOn('Host')")
+                .ok(),
+            Some((Some(1), None))
+        );
+        assert!(is_loaded(&script, "Host"));
+        assert!(
+            is_loaded(&script, "OnDemand"),
+            "a LoadOnDemand dependent loads"
+        );
+        assert!(
+            !is_loaded(&script, "Plain"),
+            "a plain one waits for the walk, which has passed"
+        );
+        assert_eq!(
+            script
+                .eval::<(Option<i64>, Option<String>)>("return LoadAddOn('Plain')")
+                .ok(),
+            Some((None, Some("NOT_DEMAND_LOADED".into())))
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
     /// The setter `0x51ea20` keeps a toggle for a name nothing installed answers to, and the
     /// logout writer `0x51ef20` saves it with the rest, in the caller's spelling.
     #[test]
