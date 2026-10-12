@@ -25,7 +25,8 @@ use super::{
 /// Registers the session handlers.
 pub(super) fn register(app: &mut App) {
     use SessionEventKind as K;
-    app.net_handler(K::LoginStage, on_login_edge)
+    app.init_resource::<crate::ui_reputation::StandingLines>()
+        .net_handler(K::LoginStage, on_login_edge)
         .net_handler(K::LoginQueued, on_login_edge)
         .net_handler(K::LoginFailed, on_login_edge)
         .net_handler(K::RealmList, on_login_edge)
@@ -269,14 +270,37 @@ fn on_clock(In(ev): In<SessionEvent>, mut b: Bridge) {
     }
 }
 
-fn on_reputations(In(ev): In<SessionEvent>, mut b: Bridge) {
+fn on_reputations(
+    In(ev): In<SessionEvent>,
+    mut b: Bridge,
+    factions: Option<Res<crate::target::ring::Factions>>,
+    mut lines: ResMut<crate::ui_reputation::StandingLines>,
+) {
     match ev {
         SessionEvent::Reputations { standings } => reputations(standings, &mut b.reputations),
         SessionEvent::ReputationVisible { list_id } => {
+            // The chat line names the rank, so it reads the store before the flag lands.
+            if let (Some(f), Some((race, class))) = (factions.as_deref(), self_race_class(&b)) {
+                lines.push_all(crate::ui_reputation::visible_line(
+                    list_id,
+                    &b.reputations,
+                    f.catalog(),
+                    race,
+                    class,
+                ));
+            }
             reputation_visible(list_id, &mut b.reputations)
         }
         _ => {}
     }
+}
+
+/// The local player's race and class, `None` before the self object streams in; the reference's
+/// `0x62c670` prints nothing without it (`0x62c6bf`).
+fn self_race_class(b: &Bridge) -> Option<(u8, u8)> {
+    let entity = *b.index.0.get(&b.self_guid.0?)?;
+    let store = b.stores.get(entity).ok()?;
+    Some((store.0.unit_race()?, store.0.unit_class()?))
 }
 
 /// The chat line reads the deltas against the store, so it must run before the overwrite.
@@ -285,6 +309,7 @@ fn on_reputation_delta(
     mut b: Bridge,
     factions: Option<Res<crate::target::ring::Factions>>,
     mut chat_log: ResMut<crate::ui_chat::ChatLog>,
+    mut lines: ResMut<crate::ui_reputation::StandingLines>,
     mut quest: ResMut<QuestGiver>,
 ) {
     if let SessionEvent::ReputationDelta { standings } = ev {
@@ -294,6 +319,15 @@ fn on_reputation_delta(
             factions.as_deref(),
             &mut chat_log,
         );
+        if let (Some(f), Some((race, class))) = (factions.as_deref(), self_race_class(&b)) {
+            lines.push_all(crate::ui_reputation::delta_lines(
+                &standings,
+                &b.reputations,
+                f.catalog(),
+                race,
+                class,
+            ));
+        }
         reputation_delta(standings, &mut b.reputations, &mut quest);
     }
 }
@@ -699,3 +733,6 @@ fn packet_dropped(opcode: u16, unparseable: bool, dropped: &mut DroppedOpcodes) 
         tally.unknown += 1;
     }
 }
+
+#[cfg(test)]
+mod reputation_tests;
