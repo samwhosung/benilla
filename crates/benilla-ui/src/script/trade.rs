@@ -168,7 +168,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // GetTradePlayerItemInfo(id): name, texture, numItems, quality, enchantment; an empty slot is
-    // nil, nil, 0, 0, nil (`0x4c0613`). The fourth is the quality, -1 unless the template is cached
+    // nil, nil, 0, 0, nil (`0x4c0613`), and a filled one's texture is a string. The fourth is the quality, -1 unless the template is cached
     // and equippable (`0x4c059c`), never a usable flag; `TradeFrame.lua:55` names it `isUsable` and
     // never reads it.
     g.set(
@@ -195,7 +195,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             Ok(MultiValue::from_vec(vec![
                 opt_str(&s.name)?,
-                opt_str(&s.texture)?,
+                // The question mark while the template is unknown (`0x4c0529`).
+                Value::String(
+                    lua.create_string(
+                        s.texture
+                            .as_deref()
+                            .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
+                    )?,
+                ),
                 Value::Integer(i64::from(s.count.max(1))),
                 Value::Integer(super::item_stats::gated_quality(
                     s.quality,
@@ -530,6 +537,31 @@ mod tests {
                 ))
                 .unwrap(),
                 want,
+                "slot {slot}"
+            );
+        }
+    }
+
+    /// The texture is a string for a filled slot: `0x5d8af0` falls back to the question mark while
+    /// the template is unknown.
+    #[test]
+    fn player_item_texture_falls_back_to_the_question_mark() {
+        let mut s = UiScript::new().unwrap();
+        let mut st = state();
+        let mut pending = item(1235, 1, 0);
+        pending.texture = None;
+        st.player.slots[1] = Some(pending);
+        s.set_trade(Some(st));
+        for (slot, want) in [
+            (1, "Interface\\Icons\\INV_Fabric_Linen_01"),
+            (2, "Interface\\Icons\\INV_Misc_QuestionMark"),
+        ] {
+            assert_eq!(
+                s.eval::<String>(&format!(
+                    "local n, t = GetTradePlayerItemInfo({slot}) return type(t) .. ':' .. t"
+                ))
+                .unwrap(),
+                format!("string:{want}"),
                 "slot {slot}"
             );
         }

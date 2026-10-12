@@ -555,6 +555,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // GetContainerItemInfo(bag, slot) (`0x4f9670`) → texture, itemCount, locked, quality,
     // readable, the five `ContainerFrame.lua:241` reads; no values for an empty or unknown slot.
+    // The texture is the question mark while the template is unknown.
     // `locked` and `readable` are 1 or nil (`0x4f975d`/`0x4f976b`, `0x4f97e6`/`0x4f97d3`).
     lua.globals().set(
         "GetContainerItemInfo",
@@ -584,10 +585,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 return Ok(mlua::MultiValue::new());
             };
             Ok(mlua::MultiValue::from_vec(vec![
-                match &s.texture {
-                    Some(p) => Value::String(lua.create_string(p.as_str())?),
-                    None => Value::Nil,
-                },
+                // A string on every path: the question mark while the template is unknown
+                // (`0x5d8af0`).
+                Value::String(
+                    lua.create_string(
+                        s.texture
+                            .as_deref()
+                            .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
+                    )?,
+                ),
                 Value::Integer(i64::from(s.count)),
                 // A held item's source slot reads locked, derived from the cursor so the app's
                 // re-push cannot wipe it.
@@ -865,11 +871,12 @@ mod tests {
             .eval::<bool>("local _, _, _, _, readable = GetContainerItemInfo(0, 4) return readable")
             .unwrap());
 
-        // An in-flight slot: texture nil, quality the -1 sentinel, itemCount real.
+        // An in-flight slot: the question mark, the -1 quality sentinel, itemCount real.
         assert!(s
             .eval::<bool>(
                 "local texture, itemCount, locked, quality = GetContainerItemInfo(0, 3)\n\
-                 return texture == nil and quality == -1 and itemCount ~= nil",
+                 return texture == 'Interface\\\\Icons\\\\INV_Misc_QuestionMark' \
+                 and quality == -1 and itemCount ~= nil",
             )
             .unwrap());
         assert!(s
@@ -921,6 +928,52 @@ mod tests {
                 ))
                 .unwrap(),
                 format!("5:{want}"),
+                "slot {index}"
+            );
+        }
+    }
+
+    /// The texture is a string on every path: while the template is unknown, `0x5d8af0` falls back
+    /// to `Interface\Icons\INV_Misc_QuestionMark` (`0x5d88b0`, `0x847fe4`), not nil.
+    #[test]
+    fn container_item_info_texture_falls_back_to_the_question_mark() {
+        let mut s = UiScript::new().unwrap();
+        let mut slots = std::collections::HashMap::new();
+        slots.insert(
+            1,
+            ContainerSlot {
+                count: 1,
+                item_id: 25,
+                ..Default::default()
+            },
+        );
+        slots.insert(
+            2,
+            ContainerSlot {
+                count: 1,
+                item_id: 26,
+                texture: Some("Interface\\Icons\\INV_Sword_01".into()),
+                ..Default::default()
+            },
+        );
+        s.set_container(
+            0,
+            Some(ContainerState {
+                slots,
+                ..Default::default()
+            }),
+        );
+        for (index, want) in [
+            (1, "string:Interface\\Icons\\INV_Misc_QuestionMark"),
+            (2, "string:Interface\\Icons\\INV_Sword_01"),
+        ] {
+            assert_eq!(
+                s.eval::<String>(&format!(
+                    "local c = function(...) return type(arg[1]) .. ':' .. tostring(arg[1]) end \
+                     return c(GetContainerItemInfo(0, {index}))"
+                ))
+                .unwrap(),
+                want,
                 "slot {index}"
             );
         }

@@ -115,6 +115,13 @@ pub struct PlayerReqState {
     pub honor_rank: u8,
 }
 
+/// The icon an item-texture getter answers while the item's template is unknown or its display
+/// has no icon: `0x5d8af0` looks the template up, finds none and passes display id 0 to `0x5d88b0`,
+/// which falls back to `INV_Misc_QuestionMark` (`0x847fe4`, `0x5d8927`) under the icon directory.
+/// `GetContainerItemInfo` (`0x4f9708`) and `GetTradePlayerItemInfo` (`0x4c0529`) push it, so their
+/// texture is a string on every path.
+pub(super) const MISSING_ITEM_ICON: &str = "Interface\\Icons\\INV_Misc_QuestionMark";
+
 /// The quality an item-info getter answers: the template's quality only when the template is
 /// cached and its InventoryType is nonzero, else -1 (`GetContainerItemInfo` `0x4f9794`..`0x4f97a6`,
 /// `GetTradePlayerItemInfo` `0x4c059c`..`0x4c05af`, `GetTradeTargetItemInfo` `0x4c0241`). A potion,
