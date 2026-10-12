@@ -87,7 +87,7 @@ pub(crate) fn visible_line(
     class: u8,
 ) -> Option<StandingLine> {
     use benilla_formats::faction_flags as flag;
-    let (flags, wire) = store.0.get(list_id as usize).copied().unwrap_or((0, 0));
+    let (flags, wire) = store.slots.get(list_id as usize).copied().unwrap_or((0, 0));
     if flags & flag::VISIBLE != 0 {
         return None;
     }
@@ -116,7 +116,7 @@ pub(crate) fn delta_lines(
             continue;
         };
         let base = info.base_for(race, class);
-        let (flags, old) = store.0.get(list_id as usize).copied().unwrap_or((0, 0));
+        let (flags, old) = store.slots.get(list_id as usize).copied().unwrap_or((0, 0));
         let (old_rank, rank) = (
             benilla_formats::reputation_rank(base + old),
             benilla_formats::reputation_rank(base + standing),
@@ -260,7 +260,7 @@ fn feed_reputation(
         // An uncovered slot reads `(0, 0)`, unmet, and its row stays: a header's name rides on it.
         let (flags, wire) = usize::try_from(info.rep_index)
             .ok()
-            .and_then(|i| reputations.0.get(i))
+            .and_then(|i| reputations.slots.get(i))
             .copied()
             .unwrap_or((0, 0));
         if let Some(row) = reputation_row(faction_id, info, catalog, flags, wire, race, class) {
@@ -499,7 +499,7 @@ mod tests {
     fn store(slot: u32, flags: u8, standing: i32) -> Reputations {
         let mut v = vec![(0u8, 0i32); slot as usize + 1];
         v[slot as usize] = (flags, standing);
-        Reputations(v, Vec::new())
+        Reputations::from_slots(v)
     }
 
     /// `0x4d5731` gates the list on `VISIBLE`: an unmet faction prints its rank (base 4000 is

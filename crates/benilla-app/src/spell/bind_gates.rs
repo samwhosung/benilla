@@ -98,7 +98,7 @@ mod tests {
         store: &ObjectStore,
         types: CreatureTypeSources,
     ) -> bool {
-        static EMPTY: Reputations = Reputations(Vec::new(), Vec::new());
+        static EMPTY: Reputations = Reputations::from_slots(Vec::new());
         let rel = TargetRelations {
             target_store: Some(store),
             target_owner_store: None,
@@ -137,7 +137,7 @@ mod tests {
             target_owner_store: None,
             self_store: None,
             factions: None,
-            reputations: &Reputations(Vec::new(), Vec::new()),
+            reputations: &Reputations::default(),
             types: CreatureTypeSources::default(),
             group: Default::default(),
         };
@@ -366,7 +366,7 @@ mod tests {
                 target_owner_store: None,
                 self_store: Some(me),
                 factions: Some(&factions),
-                reputations: &Reputations(Vec::new(), Vec::new()),
+                reputations: &Reputations::default(),
                 types: CreatureTypeSources {
                     names: Some(&names),
                     forms: None,

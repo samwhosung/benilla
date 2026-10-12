@@ -703,18 +703,43 @@ pub(crate) fn send_query_time(
     }
 }
 
-/// Our `(flags, standing)` per slot, indexed by `Faction.dbc`'s `reputationIndex`. The standing
-/// excludes the DBC race/class base, which consumers add before ranking. Filled by
-/// `SMSG_INITIALIZE_FACTIONS`, kept current by `SMSG_SET_FACTION_STANDING` (which also reveals)
-/// and `SMSG_SET_FACTION_VISIBLE`. Flag bit `0x08` marks a pane header.
+/// Our reputation state: the `(flags, standing)` per slot and the forced-reaction table.
+///
+/// `slots` is indexed by `Faction.dbc`'s `reputationIndex`. The standing excludes the DBC
+/// race/class base, which consumers add before ranking. Filled by `SMSG_INITIALIZE_FACTIONS`, kept
+/// current by `SMSG_SET_FACTION_STANDING` (which also reveals) and `SMSG_SET_FACTION_VISIBLE`.
+/// Flag bit `0x08` marks a pane header.
+///
+/// `forced` is `SMSG_SET_FORCED_REACTIONS` (`0x4d59a0`): `(Faction.dbc id, reaction rank)` per
+/// faction a `SPELL_AURA_FORCE_REACTION` aura forces, which answers with that rank whatever its
+/// templates or our standing say. Both halves live on one resource so a change to either wakes the
+/// unit feed and the questgiver-marker re-query that read reactions.
 #[derive(Resource, Default)]
-pub(crate) struct Reputations(
-    pub(crate) Vec<(u8, i32)>,
-    /// The forced-reaction table (`SMSG_SET_FORCED_REACTIONS`): `(Faction.dbc id, reaction rank)`.
-    /// A faction listed here answers with that rank whatever its templates or our standing say;
-    /// empty unless a `SPELL_AURA_FORCE_REACTION` aura is on us.
-    pub(crate) Vec<(u32, u32)>,
-);
+pub(crate) struct Reputations {
+    pub(crate) slots: Vec<(u8, i32)>,
+    pub(crate) forced: Vec<(u32, u32)>,
+}
+
+impl Reputations {
+    /// A store holding only `slots`, with nothing forced.
+    #[cfg(test)]
+    pub(crate) const fn from_slots(slots: Vec<(u8, i32)>) -> Self {
+        Self {
+            slots,
+            forced: Vec::new(),
+        }
+    }
+
+    /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`).
+    pub(crate) fn set_forced(&mut self, table: Vec<(u32, u32)>) {
+        self.forced = table;
+    }
+
+    /// Drops the table: the reference's teardown zeroes the count (`0x4d5419`).
+    pub(crate) fn clear_forced(&mut self) {
+        self.forced.clear();
+    }
+}
 
 /// The hearthstone bind point (`SMSG_BINDPOINTUPDATE`): the AreaTable id the tooltip's `$z`
 /// token names.

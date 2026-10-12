@@ -476,7 +476,7 @@ pub(crate) fn ring_reaction(
         // A reputation faction: our rank with it.
         if let Some(info) = catalog.reputation_faction(target_tpl.faction) {
             let standing = reputations
-                .0
+                .slots
                 .get(info.rep_index as usize)
                 .map_or(0, |&(_flags, s)| s);
             let race = self_store.0.unit_race().unwrap_or(0);
@@ -519,7 +519,7 @@ fn leading_rungs(target: &ObjectStore, own: &ObjectStore) -> Option<u8> {
 /// ahead of the reputation branch and the template comparator.
 pub(crate) fn forced_rank(reputations: &Reputations, faction: u32) -> Option<u8> {
     reputations
-        .1
+        .forced
         .iter()
         .find(|&&(id, _)| id == faction)
         .map(|&(_, rank)| rank.min(7) as u8)
@@ -622,7 +622,7 @@ pub(crate) fn at_war_with(
     Some(
         usize::try_from(info.rep_index)
             .ok()
-            .and_then(|i| reputations.0.get(i))
+            .and_then(|i| reputations.slots.get(i))
             .is_some_and(|&(flags, _)| flags & benilla_formats::faction_flags::AT_WAR != 0),
     )
 }
@@ -902,6 +902,13 @@ mod tests {
     };
     use benilla_protocol::ObjectFields;
 
+    /// A store carrying only the forced-reaction `table`, as the server's packet leaves it.
+    fn forced_table(table: Vec<(u32, u32)>) -> Reputations {
+        let mut reps = Reputations::default();
+        reps.set_forced(table);
+        reps
+    }
+
     /// `PLAYER_FLAGS_FFA_PVP` and `UNIT_FLAG_PVP`.
     const FFA: u32 = 0x80;
     const PVP: u32 = 0x1000;
@@ -1087,14 +1094,14 @@ mod tests {
         assert_eq!(rank(&chicken, &quiet), 3, "and its bar is neutral yellow");
         // `SMSG_SET_FORCED_REACTIONS` naming the chicken's faction (28) makes it friendly, ahead
         // of the templates — the King of the Gordok's ogres; a table naming another faction does not.
-        let forced = Reputations(Vec::new(), vec![(28, 4)]);
+        let forced = forced_table(vec![(28, 4)]);
         assert_eq!(
             rank(&chicken, &forced),
             4,
             "a forced faction answers its forced rank"
         );
         assert!(category(&chicken, &forced), "…and is friendly-category");
-        let elsewhere = Reputations(Vec::new(), vec![(29, 4)]);
+        let elsewhere = forced_table(vec![(29, 4)]);
         assert_eq!(
             rank(&chicken, &elsewhere),
             3,
@@ -1116,7 +1123,7 @@ mod tests {
         assert!(category(&goblin, &quiet), "Booty Bay: friendly, not at war");
         let mut slots = vec![(0u8, 0i32); 64];
         slots[1] = (benilla_formats::faction_flags::AT_WAR, 0); // Booty Bay = slot 1
-        let at_war = Reputations(slots, Vec::new());
+        let at_war = Reputations::from_slots(slots);
         assert!(!category(&goblin, &at_war), "at war → enemy category");
         assert!(
             category(&emissary, &at_war),
@@ -1192,7 +1199,7 @@ mod tests {
         let quiet = Reputations::default(); // nothing at war
         let mut slots = vec![(0u8, 0i32); 64];
         slots[36] = (benilla_formats::faction_flags::AT_WAR, 0); // Cenarion Circle = slot 36
-        let at_war = Reputations(slots, Vec::new());
+        let at_war = Reputations::from_slots(slots);
 
         let attackable = |u: &ObjectStore, r: &Reputations| {
             can_attack_from_player(Some(&factions), r, Some(u), Some(&me), false)

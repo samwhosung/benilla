@@ -521,7 +521,7 @@ mod tests {
         world.insert_resource(NetCommands(tx));
         world.init_resource::<crate::items::Items>();
         world.init_resource::<crate::net::GuidIndex>();
-        world.insert_resource(crate::net::Reputations(Vec::new(), Vec::new()));
+        world.insert_resource(crate::net::Reputations::default());
         world.init_resource::<crate::spell::PendingCast>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::Cooldowns>();
@@ -1078,7 +1078,7 @@ mod tests {
                     target_owner_store: None,
                     self_store: Some(&store),
                     factions: None,
-                    reputations: &crate::net::Reputations(Vec::new(), Vec::new()),
+                    reputations: &crate::net::Reputations::default(),
                     types: crate::creature_type::CreatureTypeSources {
                         names: Some(&names),
                         forms: None,

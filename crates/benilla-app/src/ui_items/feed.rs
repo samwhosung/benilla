@@ -592,7 +592,7 @@ pub(super) fn feed_player_req(
         for (id, info) in cat.reputation_factions() {
             let standing = usize::try_from(info.rep_index)
                 .ok()
-                .and_then(|i| reputations.0.get(i))
+                .and_then(|i| reputations.slots.get(i))
                 .map(|&(_, s)| s)
                 .unwrap_or(0);
             rep_ranks.insert(

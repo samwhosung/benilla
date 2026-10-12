@@ -212,14 +212,14 @@ fn on_logged_out(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
         );
         // The forced-reaction table is the character's: the core sends it only on an aura
         // change, never at login, so one left here would colour the next character's world.
-        b.reputations.1.clear();
+        b.reputations.clear_forced();
     }
 }
 
 /// The bridge's half of the session end; each window's own listener runs after it.
 fn on_disconnected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
     if let SessionEvent::Disconnected { reason, end } = ev {
-        b.reputations.1.clear();
+        b.reputations.clear_forced();
         disconnected(
             reason,
             end,
@@ -749,14 +749,14 @@ fn server_unix_time(unix_time: u32, clock: &mut ServerWallClock) {
 /// `SMSG_INITIALIZE_FACTIONS`: the login reputation store.
 fn reputations(standings: Vec<(u8, i32)>, reputations: &mut Reputations) {
     info!("net: reputation store ({} slots)", standings.len());
-    reputations.0 = standings;
+    reputations.slots = standings;
 }
 
 /// `SMSG_SET_FORCED_REACTIONS`: the server resends the table whole on every change, so it
 /// replaces the last one.
 fn forced_reactions(reactions: Vec<(u32, u32)>, reputations: &mut Reputations) {
     info!("net: forced reactions ({} factions)", reactions.len());
-    reputations.1 = reactions;
+    reputations.set_forced(reactions);
 }
 
 /// `SMSG_SET_FACTION_STANDING`: overwrites the changed slots, growing the store with flags 0,
@@ -771,12 +771,12 @@ fn reputation_delta(
         let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_STANDING") else {
             continue;
         };
-        if reputations.0.len() <= i {
-            reputations.0.resize(i + 1, (0, 0));
+        if reputations.slots.len() <= i {
+            reputations.slots.resize(i + 1, (0, 0));
         }
-        reputations.0[i].1 = standing;
-        if reputations.0[i].0 & flag::HIDDEN == 0 {
-            reputations.0[i].0 |= flag::VISIBLE;
+        reputations.slots[i].1 = standing;
+        if reputations.slots[i].0 & flag::HIDDEN == 0 {
+            reputations.slots[i].0 |= flag::VISIBLE;
         }
     }
     // Standing feeds questgiver status (`SatisfyQuestReputation`); the reference re-asks here too.
@@ -789,10 +789,10 @@ fn reputation_visible(list_id: u32, reputations: &mut Reputations) {
     let Some(i) = reputation_slot(list_id, "SMSG_SET_FACTION_VISIBLE") else {
         return;
     };
-    if reputations.0.len() <= i {
-        reputations.0.resize(i + 1, (0, 0));
+    if reputations.slots.len() <= i {
+        reputations.slots.resize(i + 1, (0, 0));
     }
-    reputations.0[i].0 |= benilla_formats::faction_flags::VISIBLE;
+    reputations.slots[i].0 |= benilla_formats::faction_flags::VISIBLE;
 }
 
 /// A wire `repListId` as a store index, or `None` (logged) past the `FACTION_LIST_LEN` array

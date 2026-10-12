@@ -73,7 +73,7 @@ pub(crate) fn stormwind_fixture(
     (
         Factions::from_catalog(catalog),
         template,
-        Reputations(reps, Vec::new()),
+        Reputations::from_slots(reps),
     )
 }
 
