@@ -402,6 +402,23 @@ struct ProbeGlueLua {
     shot_done: bool,
 }
 
+/// The log line for a failed glue chunk: its kind alone. The error's text can quote the chunk (a
+/// syntax error's `near '<token>'`, a chunk named by its own source), and the chunk may carry a
+/// typed password.
+fn glue_chunk_failure(e: &dyn std::fmt::Display) -> String {
+    let text = e.to_string();
+    let kind = if text.starts_with("syntax error") {
+        "a syntax error"
+    } else if text.starts_with("runtime error") {
+        "a runtime error"
+    } else if text.starts_with("callback error") {
+        "an error in a callback"
+    } else {
+        "an error"
+    };
+    format!("probe-glue-lua: the chunk failed with {kind}")
+}
+
 /// Runs the chunk once the glue VM stands and its time has come, then the one shot.
 fn fire_probe_glue_lua(
     mut probe: ResMut<ProbeGlueLua>,
@@ -422,7 +439,7 @@ fn fire_probe_glue_lua(
             probe.ran_at = Some(now);
             info!("probe-glue-lua: running the chunk at {now:.1}s");
             if let Err(e) = script.run(&probe.chunk) {
-                error!("probe-glue-lua: {e}");
+                error!("{}", glue_chunk_failure(&e));
             }
         }
         Some(ran) if !probe.shot_done && now >= ran + probe.shot_after => {
@@ -797,5 +814,30 @@ mod tests {
             probe_lua_due(&p, 44.0),
             "WOW_PROBE_LUA_AGAIN past the re-entry"
         );
+    }
+}
+
+#[cfg(test)]
+mod glue_chunk_tests {
+    /// A failing chunk is logged by its kind, never its text: a syntax error quotes its token.
+    #[test]
+    fn a_failed_glue_chunk_never_echoes_its_text() {
+        let s = benilla_ui::script::UiScript::new_glue().unwrap();
+        for (chunk, kind) in [
+            ("x = 1 'SECRET'", "a syntax error"),
+            ("error('SECRET')", "a runtime error"),
+            ("SECRET()", "a runtime error"),
+        ] {
+            let e = s.run(chunk).unwrap_err();
+            assert!(
+                e.to_string().contains("SECRET"),
+                "the raw error quotes the chunk: {e}"
+            );
+            let line = super::glue_chunk_failure(&e);
+            assert_eq!(
+                line,
+                format!("probe-glue-lua: the chunk failed with {kind}")
+            );
+        }
     }
 }
