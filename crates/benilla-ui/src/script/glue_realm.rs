@@ -3,8 +3,8 @@
 //! Region's categories (`0x46e300`), the sort (`0xb41f40`) and the two selection cells
 //! (`0x837e98`, `0x837e9c`). The host's glue manager seeds the holder and runs the rebuild
 //! (`0x46e510`) where `CGlueMgr::Update` does; the verbs that only read or re-sort the list answer
-//! here, firing their events as they return, and the ones that reach the network queue a
-//! [`GlueRequest`].
+//! here, firing their events as they return, and the ones that reach the network call the glue
+//! manager in place ([`super::GlueCall`]).
 //!
 //! Every category argument that crosses the Lua boundary is a 1-based ordinal over the categories
 //! holding a realm, mapped to the stored index by `0x46edf0`, which has no sentinel: an ordinal
@@ -13,7 +13,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag, ftol, string_arg};
-use super::glue_core::{queue, GlueRequest};
+use super::glue_core::{call, GlueCall};
 use super::{Model, ScriptValue};
 
 /// One realm of the holder, a `CMD_REALM_LIST` record (`0x5b2230`, stride `0x134`) as the parser
@@ -519,14 +519,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "RequestRealmList",
         lua.create_function(|lua, args: MultiValue| {
             let dialog = bool_or_default(args.front(), false);
-            queue(lua, GlueRequest::RequestRealmList { dialog });
+            call(lua, GlueCall::RequestRealmList { dialog });
             Ok(())
         })?,
     )?;
     g.set(
         "CancelRealmListQuery",
         lua.create_function(|lua, _: MultiValue| {
-            queue(lua, GlueRequest::CancelRealmListQuery);
+            call(lua, GlueCall::CancelRealmListQuery);
             Ok(())
         })?,
     )?;
@@ -538,7 +538,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, _: MultiValue| {
             let on_login = cmp_folded(&model(lua).glue.screen, "login").is_eq();
             if on_login {
-                queue(lua, GlueRequest::CancelLogon);
+                call(lua, GlueCall::CancelLogon);
             }
             Ok(())
         })?,
@@ -612,7 +612,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 name
             };
             if let Some(name) = name {
-                queue(lua, GlueRequest::ChangeRealm(name));
+                call(lua, GlueCall::ChangeRealm(name));
             }
             Ok(())
         })?,
@@ -837,7 +837,7 @@ mod tests {
         assert_eq!(fired(&s), ["OPEN_REALM_LIST nil nil"]);
         s.set_glue_realm_characters(0);
         s.run("ChangeRealm(1, 1)").unwrap();
-        let _ = s.take_glue_requests();
+        let _ = s.take_glue_calls();
         s.rebuild_glue_realms();
         assert_eq!(fired(&s), ["OPEN_REALM_LIST nil nil"], "a choice was made");
     }
@@ -1054,7 +1054,7 @@ mod tests {
         ]);
         s.rebuild_glue_realms();
         s.run("ChangeRealm(2, 7)").unwrap();
-        assert!(s.take_glue_requests().is_empty(), "no realm, no connect");
+        assert!(s.take_glue_calls().is_empty(), "no realm, no connect");
         assert_eq!(
             s.glue_realm_cells().category,
             1,
@@ -1064,8 +1064,8 @@ mod tests {
         assert_eq!(s.eval::<f64>("return GetSelectedCategory()").unwrap(), 2.0);
         s.run("ChangeRealm(2, 1)").unwrap();
         assert!(matches!(
-            s.take_glue_requests().as_slice(),
-            [GlueRequest::ChangeRealm(n)] if n == "Oz"
+            s.take_glue_calls().as_slice(),
+            [GlueCall::ChangeRealm(n)] if n == "Oz"
         ));
         assert_eq!(s.cvar("realmName").as_deref(), Some("Oz"));
         assert_eq!(s.glue_realm_cells().chosen, Some(0));
@@ -1092,31 +1092,32 @@ mod tests {
         assert_eq!(s.eval::<f64>("return GetSelectedCategory()").unwrap(), 2.0);
     }
 
-    /// The network verbs queue for the host; `RealmListDialogCancelled` only on the login screen.
+    /// The network verbs call the manager (here, with none seated, they wait for one);
+    /// `RealmListDialogCancelled` only on the login screen.
     #[test]
-    fn the_request_verbs_queue_and_the_cancel_is_screen_conditional() {
+    fn the_request_verbs_call_the_manager_and_the_cancel_is_screen_conditional() {
         let mut s = vm(Vec::new());
         s.run("RequestRealmList() RequestRealmList(1) CancelRealmListQuery()")
             .unwrap();
         assert!(matches!(
-            s.take_glue_requests().as_slice(),
+            s.take_glue_calls().as_slice(),
             [
-                GlueRequest::RequestRealmList { dialog: false },
-                GlueRequest::RequestRealmList { dialog: true },
-                GlueRequest::CancelRealmListQuery
+                GlueCall::RequestRealmList { dialog: false },
+                GlueCall::RequestRealmList { dialog: true },
+                GlueCall::CancelRealmListQuery
             ]
         ));
         s.run("SetCurrentScreen('charselect') RealmListDialogCancelled()")
             .unwrap();
         assert!(
-            s.take_glue_requests().is_empty(),
+            s.take_glue_calls().is_empty(),
             "a no-op off the login screen"
         );
         s.run("SetCurrentScreen('LOGIN') RealmListDialogCancelled()")
             .unwrap();
         assert!(matches!(
-            s.take_glue_requests().as_slice(),
-            [GlueRequest::CancelLogon]
+            s.take_glue_calls().as_slice(),
+            [GlueCall::CancelLogon]
         ));
     }
 

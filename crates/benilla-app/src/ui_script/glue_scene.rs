@@ -20,7 +20,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{GlueScenePane, UiScript, VmKind};
 
-use super::glue_mgr::GlueMgr;
+use super::glue_mgr::SharedGlueMgr;
 use crate::portrait::{CreateLook, GlueLook, GluePreview, GlueScene, SceneFog, SelectLook};
 
 /// The create scene's character and facing, as the create verbs left them.
@@ -96,7 +96,7 @@ pub(crate) struct StockFeed {
 /// once they are not (the world entered, the VM gone).
 pub(crate) fn feed_stock_glue_preview(
     script: Option<NonSend<UiScript>>,
-    mgr: Res<GlueMgr>,
+    mgr: NonSend<SharedGlueMgr>,
     state: Option<Res<State<crate::char_select::ClientState>>>,
     mut preview: ResMut<GluePreview>,
     mut feed: Local<super::VmMemo<StockFeed>>,
@@ -104,6 +104,7 @@ pub(crate) fn feed_stock_glue_preview(
     let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let script = script.filter(|s| s.vm_kind() == VmKind::Glue && !in_world);
     let pane = script.as_deref().and_then(|s| s.glue_scene());
+    let mgr = mgr.get();
     let (scene, look, yaw, fog) = match script.as_deref() {
         Some(s) => {
             let standing = s.glue_standing_guid().and_then(|g| mgr.roster_character(g));

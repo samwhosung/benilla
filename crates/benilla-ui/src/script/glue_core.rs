@@ -1,13 +1,15 @@
 //! The glue core's login-screen verbs (registrar `0x46ddf0`, table `0x8373b8`): the login, the
 //! status dialog's button, the saved account, the four user agreements, the build, the locale,
-//! the server, the screen name, the glue music, the movie frame's settings and the quit. Each reads a slot the host seeds or
-//! queues a [`GlueRequest`] the host's glue manager drains; the screen state machine they drive
-//! (`CGlueMgr::Update`, `0x46b930`) is the host's.
+//! the server, the screen name, the glue music, the movie frame's settings and the quit. Each reads
+//! a slot of its own, runs one of the glue manager's functions in place through the host the VM is
+//! seated with ([`GlueHost`], a [`GlueCall`]), or leaves the host an effect for its next frame (a
+//! [`GlueRequest`]). The screen state machine (`CGlueMgr`, its frame `CGlueMgr::Update` `0x46b930`)
+//! is the host's.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{flag, string_arg};
-use super::Model;
+use super::{Model, ScriptValue};
 
 /// One of the four user agreements the login screen walks before it shows the login boxes
 /// (`AccountLogin_ShowUserAgreements`), each a CVar the glue manager reads once at startup
@@ -31,6 +33,17 @@ impl GlueNotice {
 
     fn index(self) -> usize {
         self as usize
+    }
+
+    /// The CVar the agreement is read from at startup (`0x46a400`) and set to `"1"` on its accept
+    /// (`0x46aef0` and its siblings).
+    pub fn cvar(self) -> &'static str {
+        match self {
+            GlueNotice::Tos => "readTOS",
+            GlueNotice::Eula => "readEULA",
+            GlueNotice::Scanning => "readScanning",
+            GlueNotice::Contest => "readContest",
+        }
     }
 }
 
@@ -83,26 +96,38 @@ impl std::fmt::Debug for GlueCredentials {
     }
 }
 
-/// A glue verb's effect on the host, drained by its glue manager.
+/// A glue verb's effect the host carries out on its next frame, drained by its glue manager: the
+/// account name's file, the glue music and the browser. None of them is anything Lua reads back.
 #[derive(Debug)]
 pub enum GlueRequest {
-    /// `DefaultServerLogin(account, password)` (`0x46d160`), handed to `CGlueMgr::Login`
-    /// (`0x46afb0`), whose guards and dialogs are the host's.
-    Login(GlueCredentials),
-    /// `StatusDialogClick()` (`0x46d270` → `0x46b720`): the status dialog's button, per screen
-    /// state.
-    StatusDialogClick,
     /// `SetSavedAccountName(name)` (`0x46cdf0`): the `accountName` CVar's new value.
     SetSavedAccountName(String),
-    /// `AcceptTOS` and its three siblings (`0x46d000`, `0x46d070`, `0x46d0e0`, `0x46d150`): the
-    /// agreement's CVar set to `"1"` (`0x46aef0` and its siblings).
-    Accept(GlueNotice),
     /// `PlayGlueMusic(file)` (`0x46ceb0` → `0x45aeb0`).
     PlayGlueMusic(String),
     /// `StopGlueMusic()` (`0x46cf00`): `0x45b050(1.0)`, a one-second fade.
     StopGlueMusic,
-    /// `DisconnectFromServer()` (`0x46d340`): the world connection dropped if up, then the logon
-    /// cancelled.
+    /// `LaunchURL(url)` (`0x46cf60` → `0x5abd00`) for a URL that passed `launch_url_allowed`
+    /// (`0x5abd00` tests `0x5abc10` first): the player's browser opens it (`0x429ff0`).
+    LaunchUrl(String),
+    /// `LaunchAddOnURL(index)` (`0x46d5e0` → `0x429ff0`, no whitelist) for a URL that passed
+    /// [`launch_addon_url`]: already decoded, ready for the player's browser.
+    LaunchAddonUrl(String),
+}
+
+/// One of the glue manager's own functions a verb calls (`CGlueMgr`, `[0x46a400, 0x476020)`), run
+/// in place by the host the VM is seated with ([`GlueHost::call`]): its screen state, its dialog
+/// and its other events land before the verb returns; only the network half waits for the host.
+#[derive(Debug)]
+pub enum GlueCall {
+    /// `DefaultServerLogin(account, password)` (`0x46d160`) past the agreements (`0x46afb0`'s
+    /// first two tests, `[0xb41dfc]`, `[0xb41e04]`), the rest of `CGlueMgr::Login`: the idle
+    /// test, an `OKAY` dialog for an empty box, else state 1, the `CANCEL` dialog and the logon.
+    Login(GlueCredentials),
+    /// `StatusDialogClick()` (`0x46d270` → `0x46b720`): the status dialog's button, per screen
+    /// state.
+    StatusDialogClick,
+    /// `DisconnectFromServer()` (`0x46d340`): the world link's flag down and the link dropped if
+    /// up (`0x5ab1a0`), then the logon cancelled (`0x5b3320`).
     DisconnectFromServer,
     /// `QuitGame()` (`0x46cea0` → `0x46b870` → `0x401560(0)`).
     QuitGame,
@@ -122,12 +147,6 @@ pub enum GlueRequest {
     /// cleared in the VM; the host takes screen state 3, the `CHAR_LIST_RETRIEVING` dialog and
     /// the `CMSG_CHAR_ENUM`.
     GetCharacterList,
-    /// `LaunchURL(url)` (`0x46cf60` → `0x5abd00`) for a URL that passed `launch_url_allowed`
-    /// (`0x5abd00` tests `0x5abc10` first): the player's browser opens it (`0x429ff0`).
-    LaunchUrl(String),
-    /// `LaunchAddOnURL(index)` (`0x46d5e0` → `0x429ff0`, no whitelist) for a URL that passed
-    /// [`launch_addon_url`]: already decoded, ready for the player's browser.
-    LaunchAddonUrl(String),
     /// `DeleteCharacter(index)` (`0x4734c0` → `0x46b2e0`) for a record with a guid: the host takes
     /// screen state 6, the `CHAR_DELETE_IN_PROGRESS` dialog and the `CMSG_CHAR_DELETE`.
     DeleteCharacter(u64),
@@ -143,6 +162,60 @@ pub enum GlueRequest {
     /// screen state 5, the `CHAR_CREATE_IN_PROGRESS` dialog and the `CMSG_CHAR_CREATE`
     /// (`0x46b290`).
     CreateCharacter(super::glue_create::GlueCreateRequest),
+}
+
+/// A glue string by its global's key, or as given.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GlueText {
+    Key(&'static str),
+    Raw(String),
+}
+
+/// One thing the glue manager raises in the glue VM: an event of the glue table, or the roster
+/// teardown that fires two. The host's frame and a verb's in-place call fire them through the same
+/// path ([`super::UiScript::fire_glue_signal`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GlueSignal {
+    /// `OPEN_STATUS_DIALOG(which[, text[, data]])` (event 3), the text resolved at the fire
+    /// (`0x703bf0`).
+    Open {
+        which: &'static str,
+        text: Option<GlueText>,
+        data: Option<String>,
+    },
+    /// `UPDATE_STATUS_DIALOG(text[, button])` (event 4).
+    Update {
+        text: GlueText,
+        button: Option<GlueText>,
+    },
+    /// `CLOSE_STATUS_DIALOG` (event 5).
+    Close,
+    /// `SET_GLUE_SCREEN(name)` (event 0, `0x46b840`).
+    Screen(&'static str),
+    /// `DISCONNECTED_FROM_SERVER` (event 2, `0x46c62e`).
+    Disconnected,
+    /// The roster teardown (`0x472580`): `UPDATE_SELECTED_CHARACTER` with 1, then
+    /// `CHARACTER_LIST_UPDATE`.
+    Teardown,
+    /// `SHOW_SERVER_ALERT(text)` (event 21, `0x46b964`).
+    ServerAlert(String),
+    /// `SELECT_FIRST_CHARACTER` (event 13, `0x46c1a2`).
+    SelectFirst,
+    /// `SELECT_LAST_CHARACTER` (event 12, `0x46c133`).
+    SelectLast,
+    /// `FORCE_RENAME_CHARACTER(key)` (event 23): the key, unresolved.
+    ForceRename(&'static str),
+}
+
+/// The glue manager a glue VM is seated with: the host side of `CGlueMgr` and the parts of
+/// `ClientServices` it reads, which outlive the VM as the reference's C globals outlive its Lua
+/// state.
+pub trait GlueHost {
+    /// Run `call` and return what it raised, in order, for the VM to fire before the verb
+    /// returns. The network half it starts is the host's, sent on its next frame.
+    fn call(&self, call: GlueCall) -> Vec<GlueSignal>;
+    /// The world link's flag (`[svc+0x1b00]`), which `IsConnectedToServer` (`0x46d380`) reads.
+    fn connected(&self) -> bool;
 }
 
 /// The `ClientServices` status keys (`0x85cae8`, 83 entries), the `ResponseCodes` the world
@@ -416,12 +489,15 @@ pub struct GlueServer {
 #[derive(Default)]
 pub(crate) struct GlueCore {
     requests: Vec<GlueRequest>,
+    /// The glue manager the verbs call in place, once the host has seated this VM.
+    host: Option<std::rc::Rc<dyn GlueHost>>,
+    /// Calls made before any host was seated, for the one that seats this VM to run.
+    calls: Vec<GlueCall>,
     /// The `accountName` CVar (`[0x8826c8]`), which `GetSavedAccountName` (`0x46cdd0`) reads.
     saved_account: String,
+    /// The agreements' flag pairs (`[0xb41df8]`-`[0xb41e14]`): read off their CVars when the glue
+    /// starts, set by their accepts, and read by the getters and the login's first two tests.
     notices: [NoticeState; 4],
-    /// ClientServices' world-connection flag (`[svc+0x1b00]`), which `IsConnectedToServer`
-    /// (`0x46d380`) reads.
-    connected: bool,
     pub(super) server: GlueServer,
     /// The current glue screen's name (`[0xb41478]`), which `SetCurrentScreen` (`0x46ce60` →
     /// `0x46b860`) copies into a 0x40-byte buffer.
@@ -460,6 +536,21 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().glue.requests)
     }
 
+    /// Seat the glue manager the verbs call in place ([`GlueHost`]).
+    pub fn set_glue_host(&mut self, host: std::rc::Rc<dyn GlueHost>) {
+        self.model_mut().glue.host = Some(host);
+    }
+
+    /// Drain the manager calls made while no host was seated, for the host to run now.
+    pub fn take_glue_calls(&mut self) -> Vec<GlueCall> {
+        std::mem::take(&mut self.model_mut().glue.calls)
+    }
+
+    /// Fire one of the glue manager's signals into this VM, as the manager's frame raises it.
+    pub fn fire_glue_signal(&mut self, signal: GlueSignal) {
+        fire_signal(&self.lua, signal);
+    }
+
     /// Seat the lists the character name check searches (`0x6c91a0` compiles them at startup).
     pub fn set_glue_name_lists(&mut self, lists: std::rc::Rc<dyn super::NameLists>) {
         self.model_mut().glue.name_lists = Some(lists);
@@ -478,11 +569,6 @@ impl super::UiScript {
     /// One agreement's flags as the VM holds them.
     pub fn glue_notice(&self, notice: GlueNotice) -> NoticeState {
         self.model_ref().glue.notices[notice.index()]
-    }
-
-    /// Seed whether the world connection is up.
-    pub fn set_glue_connected(&mut self, connected: bool) {
-        self.model_mut().glue.connected = connected;
     }
 
     /// Seed the realm `GetServerName` answers.
@@ -516,6 +602,74 @@ pub(super) fn queue(lua: &Lua, request: GlueRequest) {
         .push(request);
 }
 
+/// Run one of the glue manager's functions inside the verb: the seated host runs its half, then
+/// everything it raised fires before the binding returns, as the reference's verbs call `CGlueMgr`
+/// directly and its `SignalEvent` (`0x703e50`, `0x703f50`) walks the listeners in place. A handler
+/// that calls another verb runs that call inside this fan-out. With no host seated yet the call
+/// waits for the one that seats this VM.
+pub(super) fn call(lua: &Lua, call: GlueCall) {
+    let host = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        match model.glue.host.clone() {
+            Some(host) => host,
+            None => {
+                model.glue.calls.push(call);
+                return;
+            }
+        }
+    };
+    for signal in host.call(call) {
+        fire_signal(lua, signal);
+    }
+}
+
+/// Fire one signal, its text resolved through the VM's own strings (`0x703bf0`).
+fn fire_signal(lua: &Lua, signal: GlueSignal) {
+    let text = |t: &GlueText| match t {
+        GlueText::Key(k) => global_text(lua, k),
+        GlueText::Raw(s) => s.clone(),
+    };
+    let fire = |event: &str, args: Vec<ScriptValue>| super::tick::fire_event_into(lua, event, args);
+    match signal {
+        GlueSignal::Open {
+            which,
+            text: t,
+            data,
+        } => {
+            let mut args = vec![ScriptValue::Str(which.to_string())];
+            if t.is_some() || data.is_some() {
+                args.push(t.map_or(ScriptValue::Nil, |t| ScriptValue::Str(text(&t))));
+            }
+            if let Some(d) = data {
+                args.push(ScriptValue::Str(d));
+            }
+            fire("OPEN_STATUS_DIALOG", args);
+        }
+        GlueSignal::Update { text: t, button } => {
+            let mut args = vec![ScriptValue::Str(text(&t))];
+            if let Some(b) = button {
+                args.push(ScriptValue::Str(text(&b)));
+            }
+            fire("UPDATE_STATUS_DIALOG", args);
+        }
+        GlueSignal::Close => fire("CLOSE_STATUS_DIALOG", Vec::new()),
+        GlueSignal::Screen(name) => {
+            fire("SET_GLUE_SCREEN", vec![ScriptValue::Str(name.to_string())]);
+        }
+        GlueSignal::Disconnected => fire("DISCONNECTED_FROM_SERVER", Vec::new()),
+        GlueSignal::Teardown => super::glue_select::teardown_roster(lua),
+        GlueSignal::ServerAlert(text) => fire("SHOW_SERVER_ALERT", vec![ScriptValue::Str(text)]),
+        GlueSignal::SelectFirst => fire("SELECT_FIRST_CHARACTER", Vec::new()),
+        GlueSignal::SelectLast => fire("SELECT_LAST_CHARACTER", Vec::new()),
+        GlueSignal::ForceRename(key) => {
+            fire(
+                "FORCE_RENAME_CHARACTER",
+                vec![ScriptValue::Str(key.to_string())],
+            );
+        }
+    }
+}
+
 /// The text of a string global, as [`super::UiScript::global_text`] reads it.
 pub(super) fn global_text(lua: &Lua, key: &str) -> String {
     match lua.globals().get::<Value>(key) {
@@ -533,7 +687,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // Both arguments `is-number-or-string` (`0x46d168`, `0x46d178`), else the usage error
-    // (`0x837cbc`); then `CGlueMgr::Login(account, password)` (`0x46d1a0`).
+    // (`0x837cbc`); then `CGlueMgr::Login(account, password)` (`0x46d1a0`), whose first two tests
+    // are the TOS and EULA flags (`0x46afb0`, `0x46afc0`): either unaccepted, it returns.
     g.set(
         "DefaultServerLogin",
         lua.create_function(|lua, (account, password): (Value, Value)| {
@@ -545,10 +700,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             let account = string_arg(lua, account, USAGE)?;
             let password = string_arg(lua, password, USAGE)?;
-            queue(
-                lua,
-                GlueRequest::Login(GlueCredentials { account, password }),
-            );
+            let agreed = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let n = &model.glue.notices;
+                n[GlueNotice::Tos.index()].accepted && n[GlueNotice::Eula.index()].accepted
+            };
+            if agreed {
+                call(lua, GlueCall::Login(GlueCredentials { account, password }));
+            }
             Ok(())
         })?,
     )?;
@@ -556,7 +715,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "StatusDialogClick",
         lua.create_function(|lua, _: MultiValue| {
-            queue(lua, GlueRequest::StatusDialogClick);
+            call(lua, GlueCall::StatusDialogClick);
             Ok(())
         })?,
     )?;
@@ -588,7 +747,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // manager seeded (`[0xb41df8]`/`[0xb41dfc]` for the TOS, `[0xb41e00]`/`[0xb41e04]` the EULA,
     // `[0xb41e08]`/`[0xb41e0c]` scanning, `[0xb41e10]`/`[0xb41e14]` the contest); `Accept*` sets
     // accepted, clears the notice and sets the CVar to "1" (`0x46aef0`, `0x46af20`, `0x46af50`,
-    // `0x46af80`).
+    // `0x46af80`), all in the call.
     for (notice, show, accepted, accept) in [
         (GlueNotice::Tos, "ShowTOSNotice", "TOSAccepted", "AcceptTOS"),
         (
@@ -628,14 +787,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             accept,
             lua.create_function(move |lua, _: MultiValue| {
-                lua.app_data_mut::<Model>()
-                    .expect("model app_data")
-                    .glue
-                    .notices[i] = NoticeState {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.glue.notices[i] = NoticeState {
                     accepted: true,
                     show_notice: false,
                 };
-                queue(lua, GlueRequest::Accept(notice));
+                super::cvars::set_from_engine(&mut model, notice.cvar(), "1".to_string());
                 Ok(())
             })?,
         )?;
@@ -700,24 +857,30 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // The host's link flag as it stands; with no host seated, none.
     g.set(
         "IsConnectedToServer",
         lua.create_function(|lua, _: MultiValue| {
-            let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(flag(model.glue.connected))
+            let host = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .glue
+                .host
+                .clone();
+            Ok(flag(host.is_some_and(|h| h.connected())))
         })?,
     )?;
     g.set(
         "DisconnectFromServer",
         lua.create_function(|lua, _: MultiValue| {
-            queue(lua, GlueRequest::DisconnectFromServer);
+            call(lua, GlueCall::DisconnectFromServer);
             Ok(())
         })?,
     )?;
     g.set(
         "QuitGame",
         lua.create_function(|lua, _: MultiValue| {
-            queue(lua, GlueRequest::QuitGame);
+            call(lua, GlueCall::QuitGame);
             Ok(())
         })?,
     )?;
@@ -802,6 +965,149 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
+    /// A host that answers each call with the signals it was given for that call's name, and
+    /// records the calls in order.
+    #[derive(Default)]
+    struct FakeHost {
+        calls: std::cell::RefCell<Vec<String>>,
+        replies: std::cell::RefCell<Vec<(&'static str, Vec<GlueSignal>)>>,
+        connected: std::cell::Cell<bool>,
+    }
+
+    impl GlueHost for FakeHost {
+        fn call(&self, call: GlueCall) -> Vec<GlueSignal> {
+            let name = format!("{call:?}");
+            self.calls.borrow_mut().push(name.clone());
+            self.replies
+                .borrow()
+                .iter()
+                .find(|(n, _)| name.starts_with(n))
+                .map(|(_, s)| s.clone())
+                .unwrap_or_default()
+        }
+
+        fn connected(&self) -> bool {
+            self.connected.get()
+        }
+    }
+
+    fn seated(replies: Vec<(&'static str, Vec<GlueSignal>)>) -> (UiScript, std::rc::Rc<FakeHost>) {
+        let mut s = UiScript::new_glue().unwrap();
+        let host = std::rc::Rc::new(FakeHost::default());
+        *host.replies.borrow_mut() = replies;
+        s.set_glue_host(host.clone());
+        (s, host)
+    }
+
+    /// A seated host runs the call inside the verb, and what it raised has run its handlers by
+    /// the verb's next Lua line, in order, with nothing left for a tick or a queue.
+    #[test]
+    fn a_seated_host_runs_the_call_and_its_signals_fire_before_the_verb_returns() {
+        let (mut s, host) = seated(vec![(
+            "StatusDialogClick",
+            vec![
+                GlueSignal::Teardown,
+                GlueSignal::Open {
+                    which: "CANCEL",
+                    text: Some(GlueText::Key("CHAR_LIST_RETRIEVING")),
+                    data: None,
+                },
+            ],
+        )]);
+        s.run("CHAR_LIST_RETRIEVING = 'Retrieving character list'")
+            .unwrap();
+        super::super::tick::heard::listen(
+            &s,
+            &[
+                "UPDATE_SELECTED_CHARACTER",
+                "CHARACTER_LIST_UPDATE",
+                "OPEN_STATUS_DIALOG",
+            ],
+            Some("arg2"),
+        );
+        let seen: Vec<String> = s
+            .eval("StatusDialogClick() local h = HEARD HEARD = {} return h")
+            .unwrap();
+        assert_eq!(
+            seen,
+            [
+                "UPDATE_SELECTED_CHARACTER nil",
+                "CHARACTER_LIST_UPDATE nil",
+                "OPEN_STATUS_DIALOG Retrieving character list"
+            ]
+        );
+        assert_eq!(*host.calls.borrow(), ["StatusDialogClick"]);
+        assert!(s.take_glue_calls().is_empty());
+        assert!(s.model_ref().pending_events.is_empty());
+    }
+
+    /// A handler of a call's event that calls another verb runs that call inside the fan-out, as
+    /// the stock `OKAY` dialog's `OnShow` presses `StatusDialogClick` inside `OPEN_STATUS_DIALOG`.
+    #[test]
+    fn a_handler_that_calls_a_verb_runs_its_call_inside_the_first() {
+        let open = |which| GlueSignal::Open {
+            which,
+            text: None,
+            data: None,
+        };
+        let (s, host) = seated(vec![
+            ("GetCharacterList", vec![open("OKAY")]),
+            ("StatusDialogClick", vec![open("CANCEL")]),
+        ]);
+        s.run(
+            "SEEN = {} F = CreateFrame('Frame') F:RegisterEvent('OPEN_STATUS_DIALOG') \
+             F:SetScript('OnEvent', function() table.insert(SEEN, arg1) \
+               if arg1 == 'OKAY' then StatusDialogClick() end end)",
+        )
+        .unwrap();
+        let seen: Vec<String> = s.eval("GetCharacterListUpdate() return SEEN").unwrap();
+        assert_eq!(seen, ["OKAY", "CANCEL"]);
+        assert_eq!(
+            *host.calls.borrow(),
+            ["GetCharacterList", "StatusDialogClick"]
+        );
+    }
+
+    /// `IsConnectedToServer` reads the host's flag as it stands, nil with no host seated.
+    #[test]
+    fn is_connected_to_server_reads_the_hosts_flag() {
+        let bare = UiScript::new_glue().unwrap();
+        assert!(bare
+            .eval::<bool>("return IsConnectedToServer() == nil")
+            .unwrap());
+        let (s, host) = seated(Vec::new());
+        assert!(s
+            .eval::<bool>("return IsConnectedToServer() == nil")
+            .unwrap());
+        host.connected.set(true);
+        assert_eq!(
+            s.eval::<Option<i64>>("return IsConnectedToServer()")
+                .unwrap(),
+            Some(1)
+        );
+    }
+
+    /// Every manager verb reaches the host in its call.
+    #[test]
+    fn every_manager_verb_calls_the_host() {
+        let (s, host) = seated(Vec::new());
+        s.run(
+            "DisconnectFromServer() QuitGame() RequestRealmList(1) CancelRealmListQuery() \
+             SetCurrentScreen('login') RealmListDialogCancelled()",
+        )
+        .unwrap();
+        assert_eq!(
+            *host.calls.borrow(),
+            [
+                "DisconnectFromServer",
+                "QuitGame",
+                "RequestRealmList { dialog: true }",
+                "CancelRealmListQuery",
+                "CancelLogon"
+            ]
+        );
+    }
+
     #[test]
     fn a_notice_cvar_reads_as_atoi() {
         let s = |v| NoticeState::from_cvar(v);
@@ -813,13 +1119,21 @@ mod tests {
         assert_eq!(s("x"), NoticeState::default());
     }
 
+    /// With no host seated the call waits for one; the agreements are the login's first tests
+    /// (`0x46afb0`, `0x46afc0`), so with either unaccepted nothing is called.
     #[test]
-    fn default_server_login_queues_the_strings_or_raises_its_usage() {
+    fn default_server_login_calls_with_the_strings_or_raises_its_usage() {
         let mut s = UiScript::new_glue().unwrap();
         s.run("DefaultServerLogin('probe', 1234)").unwrap();
-        let reqs = s.take_glue_requests();
-        match reqs.as_slice() {
-            [GlueRequest::Login(c)] => {
+        assert!(s.take_glue_calls().is_empty(), "no agreements, no login");
+        s.set_glue_notice(GlueNotice::Tos, NoticeState::from_cvar("1"));
+        s.run("DefaultServerLogin('probe', 1234)").unwrap();
+        assert!(s.take_glue_calls().is_empty(), "the EULA still stands");
+        s.set_glue_notice(GlueNotice::Eula, NoticeState::from_cvar("1"));
+        s.run("DefaultServerLogin('probe', 1234)").unwrap();
+        let calls = s.take_glue_calls();
+        match calls.as_slice() {
+            [GlueCall::Login(c)] => {
                 assert_eq!((c.account.as_str(), c.password.as_str()), ("probe", "1234"));
                 assert!(
                     !format!("{c:?}").contains("1234"),
@@ -836,12 +1150,14 @@ mod tests {
             err.contains("Usage: DefaultServerLogin(\"accountName\", \"password\")"),
             "{err}"
         );
-        assert!(s.take_glue_requests().is_empty());
+        assert!(s.take_glue_calls().is_empty());
     }
 
+    /// `AcceptEULA` sets its flag pair and its CVar in the call (`0x46af20`).
     #[test]
     fn the_agreements_answer_their_seeded_flags_and_accept_sets_them() {
         let mut s = UiScript::new_glue().unwrap();
+        s.register_cvars([("readEULA", "0")]);
         s.set_glue_notice(
             GlueNotice::Eula,
             NoticeState {
@@ -858,11 +1174,14 @@ mod tests {
         };
         assert_eq!(read(&s), (None, Some(1), Some(1), None));
         s.run("AcceptEULA()").unwrap();
+        assert_eq!(s.cvar("readEULA").as_deref(), Some("1"));
+        assert_eq!(
+            s.take_cvar_changes(),
+            [("readEULA".to_string(), "1".to_string())],
+            "the write is the engine's, for the CVar sync to persist"
+        );
         assert_eq!(read(&s), (Some(1), None, Some(1), None));
-        assert!(matches!(
-            s.take_glue_requests().as_slice(),
-            [GlueRequest::Accept(GlueNotice::Eula)]
-        ));
+        assert!(s.take_glue_requests().is_empty() && s.take_glue_calls().is_empty());
     }
 
     #[test]

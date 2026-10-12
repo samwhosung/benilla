@@ -8,9 +8,9 @@
 //! only read it answer here, and `SelectCharacter` fires `UPDATE_SELECTED_CHARACTER` as it returns,
 //! as `0x472740` does. Indices are 1-based in Lua and 0-based inside, the boundary at `0x473470`.
 //!
-//! `DeleteCharacter` and `RenameCharacter` check here and hand the host what the reference sends
-//! (`0x46b2e0`, `0x46b340`), whose screen states are the host's; `EnterWorld` hands it the selected
-//! record (`0x46b500`); the rename reply's applier
+//! `DeleteCharacter` and `RenameCharacter` check here and call the glue manager in place with what
+//! the reference sends (`0x46b2e0`, `0x46b340`), whose screen states are the host's; `EnterWorld`
+//! calls it with the selected record (`0x46b500`); the rename reply's applier
 //! (`0x4725f0`) changes the record here once the host has moved the character's files.
 //!
 //! The 3-D side of the reference (`0x472950`'s model build into the scene) is the host's scene
@@ -22,7 +22,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{flag, number_arg, string_arg};
-use super::glue_core::{glue_status_key, leading_int, queue, GlueRequest};
+use super::glue_core::{call, glue_status_key, leading_int, GlueCall};
 use super::{check_char_name, Model, ScriptValue, CHAR_NAME_SUCCESS};
 
 /// The record flag a server sets on a character it wants renamed (`[rec+0xfc]` bit `0x4000`,
@@ -308,20 +308,9 @@ impl super::UiScript {
             .collect()
     }
 
-    /// The roster teardown (`0x472580`): the records freed, the count 0, the selection reset
-    /// through `0x472740(-1)`, which clamps to 0 and fires `UPDATE_SELECTED_CHARACTER` with 1 on
-    /// the empty roster whatever it held, the model frame's `SetCamera(0)` (`0x4725d7` →
-    /// `0x76cec0`), then `CHARACTER_LIST_UPDATE`.
+    /// The roster teardown ([`teardown_roster`]).
     pub fn teardown_glue_roster(&mut self) {
-        self.model_mut().glue.roster.clear();
-        self.select_glue_character(-1);
-        {
-            let mut model = self.model_mut();
-            if let Some(h) = model_frame_handle(&model) {
-                model.set_pane_camera(h, 0);
-            }
-        }
-        self.fire_event("CHARACTER_LIST_UPDATE", Vec::new());
+        teardown_roster(&self.lua);
     }
 
     /// The roster load (`0x4724d0`), run when the character list reply completes: the old records
@@ -372,6 +361,30 @@ impl super::UiScript {
             vec![ScriptValue::Number(f64::from(arg))],
         );
     }
+}
+
+/// The roster teardown (`0x472580`): the records freed, the count 0, the selection reset through
+/// `0x472740(-1)`, which clamps to 0 and fires `UPDATE_SELECTED_CHARACTER` with 1 on the empty
+/// roster whatever it held, the model frame's `SetCamera(0)` (`0x4725d7` → `0x76cec0`), then
+/// `CHARACTER_LIST_UPDATE`.
+pub(super) fn teardown_roster(lua: &Lua) {
+    let selected = {
+        let mut m = model(lua);
+        m.glue.roster.clear();
+        m.glue.roster.select(-1)
+    };
+    super::tick::fire_event_into(
+        lua,
+        "UPDATE_SELECTED_CHARACTER",
+        vec![ScriptValue::Number(f64::from(selected))],
+    );
+    {
+        let mut m = model(lua);
+        if let Some(h) = model_frame_handle(&m) {
+            m.set_pane_camera(h, 0);
+        }
+    }
+    super::tick::fire_event_into(lua, "CHARACTER_LIST_UPDATE", Vec::new());
 }
 
 /// `[0xb42174]`'s frame, while the name `SetCharSelectModelFrame` took still names a model pane.
@@ -448,13 +461,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `0x473270` → `0x4723d0`: every record freed and the count 0 (`0x4723ff`) in the call, so a
-    // `GetNumCharacters` straight after reads 0; then `0x46b880`, the host's: state 3, the
-    // dialog and the list request.
+    // `GetNumCharacters` straight after reads 0; then `0x46b880`, the manager's, in the call:
+    // state 3 and the dialog, the list request its frame's to send.
     g.set(
         "GetCharacterListUpdate",
         lua.create_function(|lua, _: MultiValue| {
             model(lua).glue.roster.clear();
-            queue(lua, GlueRequest::GetCharacterList);
+            call(lua, GlueCall::GetCharacterList);
             Ok(())
         })?,
     )?;
@@ -528,8 +541,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `0x4734c0`: one number or `Usage: DeleteCharacter(index)` (`0x8387b8`); an index in
-    // `[1, count]` hands its record's guid to `0x46b2e0`, which with a nonzero guid is the host's
-    // (state 6, the dialog and the `CMSG_CHAR_DELETE`). No values on any path (`0x47351b`).
+    // `[1, count]` hands its record's guid to `0x46b2e0`, which with a nonzero guid is the
+    // manager's, in the call (state 6, the dialog and the `CMSG_CHAR_DELETE`). No values on any
+    // path (`0x47351b`).
     g.set(
         "DeleteCharacter",
         lua.create_function(|lua, args: MultiValue| {
@@ -543,7 +557,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     .map(|r| r.character.guid)
             };
             if let Some(guid) = guid.filter(|&g| g != 0) {
-                queue(lua, GlueRequest::DeleteCharacter(guid));
+                call(lua, GlueCall::DeleteCharacter(guid));
             }
             Ok(MultiValue::new())
         })?,
@@ -556,7 +570,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `FORCE_RENAME_CHARACTER` with `CHAR_CREATE_NAME_IN_USE` (`0x4735d2`) and returns none.
     // Otherwise `0x46b340` decides one value: 1, or nil when the name check (`0x5abd50`) fails,
     // which fires `FORCE_RENAME_CHARACTER` with the check's key (`0x46b388`); a passing name is
-    // the host's (state 7, the dialog and the `CMSG_CHAR_RENAME`).
+    // the manager's, in the call (state 7, the dialog and the `CMSG_CHAR_RENAME`), before the 1.
     g.set(
         "RenameCharacter",
         lua.create_function(|lua, args: MultiValue| {
@@ -607,7 +621,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     force_rename(glue_status_key(i32::from(status)));
                     return Ok(MultiValue::from_vec(vec![Value::Nil]));
                 }
-                queue(lua, GlueRequest::RenameCharacter { guid, name });
+                call(lua, GlueCall::RenameCharacter { guid, name });
             }
             Ok(MultiValue::from_vec(vec![Value::Number(1.0)]))
         })?,
@@ -616,7 +630,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `0x46d3c0`, a glue core binding (table `0x8373b8`) that reads this roster: `CGlueMgr::
     // EnterWorld` (`0x46b500`), then no values (`0x46d3c5 xor eax,eax`), arguments ignored. The
     // selection cell indexes the record (`0x46b513`-`0x46b533`); off the roster the call returns
-    // having done nothing (`0x46b53e`). The record goes to the host, whose guards come next.
+    // having done nothing (`0x46b53e`). The record goes to the manager, whose guards come next,
+    // in the call.
     g.set(
         "EnterWorld",
         lua.create_function(|lua, _: MultiValue| {
@@ -626,14 +641,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 usize::try_from(roster.cells.selected)
                     .ok()
                     .and_then(|i| roster.records.get(i))
-                    .map(|r| GlueRequest::EnterWorld {
+                    .map(|r| GlueCall::EnterWorld {
                         index: roster.cells.selected,
                         guid: r.character.guid,
                         flags: r.character.flags,
                     })
             };
             if let Some(entry) = entry {
-                queue(lua, entry);
+                call(lua, entry);
             }
             Ok(MultiValue::new())
         })?,
@@ -1102,12 +1117,12 @@ mod tests {
     #[test]
     fn get_character_list_update_clears_and_asks_the_host() {
         let mut s = vm(three());
-        s.take_glue_requests();
+        s.take_glue_calls();
         s.run("GetCharacterListUpdate()").unwrap();
         assert_eq!(s.eval::<f64>("return GetNumCharacters()").unwrap(), 0.0);
         assert!(matches!(
-            s.take_glue_requests().as_slice(),
-            [GlueRequest::GetCharacterList]
+            s.take_glue_calls().as_slice(),
+            [GlueCall::GetCharacterList]
         ));
         assert!(fired(&s).is_empty(), "the clear fires nothing");
     }
@@ -1167,7 +1182,7 @@ mod tests {
         let mut s = vm(roster);
         s.run("Listener:RegisterEvent('FORCE_RENAME_CHARACTER')")
             .unwrap();
-        s.take_glue_requests();
+        s.take_glue_calls();
         s
     }
 
@@ -1178,7 +1193,7 @@ mod tests {
         let mut roster = three();
         roster[2].guid = 0;
         let mut s = vm(roster);
-        s.take_glue_requests();
+        s.take_glue_calls();
         for call in [
             "DeleteCharacter(2)",
             "DeleteCharacter('2')",
@@ -1189,14 +1204,11 @@ mod tests {
         ] {
             assert_eq!(s.eval::<f64>(&count(call)).unwrap(), 0.0, "{call}");
         }
-        let queued = s.take_glue_requests();
+        let queued = s.take_glue_calls();
         assert!(
             matches!(
                 queued.as_slice(),
-                [
-                    GlueRequest::DeleteCharacter(2),
-                    GlueRequest::DeleteCharacter(2)
-                ]
+                [GlueCall::DeleteCharacter(2), GlueCall::DeleteCharacter(2)]
             ),
             "off the roster, or a zero guid (`0x46b2ed`), sends nothing: {queued:?}"
         );
@@ -1225,7 +1237,7 @@ mod tests {
             assert_eq!(s.eval::<f64>(&count(call)).unwrap(), 0.0, "{call}");
         }
         assert!(fired(&s).is_empty());
-        assert!(s.take_glue_requests().is_empty());
+        assert!(s.take_glue_calls().is_empty());
         for call in ["RenameCharacter()", "RenameCharacter('x', 'Newname')"] {
             let err = s.run(call).unwrap_err().to_string();
             assert!(err.contains("Usage: RenameCharacter(index, name)"), "{err}");
@@ -1245,7 +1257,7 @@ mod tests {
             fired(&s),
             ["FORCE_RENAME_CHARACTER CHAR_CREATE_NAME_IN_USE"]
         );
-        assert!(s.take_glue_requests().is_empty());
+        assert!(s.take_glue_calls().is_empty());
     }
 
     /// A name the check fails is `FORCE_RENAME_CHARACTER` with the check's key, one nil and
@@ -1283,7 +1295,7 @@ mod tests {
                 "{call}"
             );
         }
-        assert!(s.take_glue_requests().is_empty());
+        assert!(s.take_glue_calls().is_empty());
     }
 
     /// A passing name is the host's, and the verb answers 1 with nothing fired; a C string ends at
@@ -1305,13 +1317,13 @@ mod tests {
             1.0
         );
         assert!(fired(&s).is_empty());
-        let queued = s.take_glue_requests();
+        let queued = s.take_glue_calls();
         assert!(
             matches!(
                 queued.as_slice(),
                 [
-                    GlueRequest::RenameCharacter { guid: 2, name: a },
-                    GlueRequest::RenameCharacter { guid: 2, name: b },
+                    GlueCall::RenameCharacter { guid: 2, name: a },
+                    GlueCall::RenameCharacter { guid: 2, name: b },
                 ] if a == "Newname" && b == "Zoë"
             ),
             "{queued:?}"
@@ -1326,14 +1338,14 @@ mod tests {
         let mut roster = three();
         roster[1].flags = 0x4004;
         let mut s = vm(roster);
-        s.take_glue_requests();
+        s.take_glue_calls();
         s.run("SelectCharacter(2) FIRED = {}").unwrap();
         assert_eq!(s.eval::<f64>(&count("EnterWorld('x', 9)")).unwrap(), 0.0);
-        let queued = s.take_glue_requests();
+        let queued = s.take_glue_calls();
         assert!(
             matches!(
                 queued.as_slice(),
-                [GlueRequest::EnterWorld {
+                [GlueCall::EnterWorld {
                     index: 1,
                     guid: 2,
                     flags: 0x4004
@@ -1344,9 +1356,9 @@ mod tests {
         assert!(fired(&s).is_empty());
 
         for mut s in [vm(Vec::new()), UiScript::new_glue().unwrap()] {
-            s.take_glue_requests();
+            s.take_glue_calls();
             assert_eq!(s.eval::<f64>(&count("EnterWorld()")).unwrap(), 0.0);
-            assert!(s.take_glue_requests().is_empty());
+            assert!(s.take_glue_calls().is_empty());
         }
     }
 
@@ -1375,7 +1387,7 @@ mod tests {
                 .unwrap(),
             0.0
         );
-        assert!(s.take_glue_requests().is_empty());
+        assert!(s.take_glue_calls().is_empty());
     }
 
     /// `0x4724d0` with none: -1 is selected (the event carries 1), then with no realm chosen the

@@ -301,7 +301,7 @@ impl Plugin for UiScriptPlugin {
         crate::shutdown::on_app_exit(app, shutdown_on_exit.into_configs());
         app.insert_resource(UiScaleCvar(default_ui_scale()))
             .insert_resource(glue::GlueStock::from_env())
-            .init_resource::<glue_mgr::GlueMgr>()
+            .init_non_send_resource::<glue_mgr::SharedGlueMgr>()
             .init_resource::<UiAutoScaleCache>()
             .init_resource::<UiFrameCost>()
             .init_resource::<crate::bindings::WheelNotches>()

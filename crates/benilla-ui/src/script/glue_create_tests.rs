@@ -715,7 +715,7 @@ fn create_character_checks_the_name_then_asks_the_host() {
     let mut s = human([1, 2, 3, 4, 5]);
     s.run("SetSelectedClass(3) CHAR_NAME_TOO_SHORT = 'short' CHAR_NAME_NO_NAME = 'none'")
         .unwrap();
-    s.take_glue_requests();
+    s.take_glue_calls();
     for (call, text) in [
         ("CreateCharacter('A')", "short"),
         ("CreateCharacter()", "none"),
@@ -734,15 +734,15 @@ fn create_character_checks_the_name_then_asks_the_host() {
     // A number is a name too, and no letter.
     s.run("FIRED = {} CreateCharacter(12)").unwrap();
     assert_eq!(fired(&s), ["OPEN_STATUS_DIALOG OKAY "]);
-    assert!(s.take_glue_requests().is_empty());
+    assert!(s.take_glue_calls().is_empty());
 
     s.run("FIRED = {} CreateCharacter('Zoë\\0Bob')").unwrap();
     assert!(fired(&s).is_empty());
-    let queued = s.take_glue_requests();
+    let queued = s.take_glue_calls();
     assert!(
         matches!(
             queued.as_slice(),
-            [GlueRequest::CreateCharacter(GlueCreateRequest {
+            [GlueCall::CreateCharacter(GlueCreateRequest {
                 name,
                 race: 1,
                 class: 4,
@@ -763,6 +763,6 @@ fn create_character_checks_the_name_then_asks_the_host() {
 fn create_character_with_no_character_sends_nothing() {
     let mut s = vm();
     s.run("CreateCharacter('Newbie')").unwrap();
-    assert!(s.take_glue_requests().is_empty());
+    assert!(s.take_glue_calls().is_empty());
     assert!(fired(&s).is_empty());
 }

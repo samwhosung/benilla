@@ -29,7 +29,7 @@ use std::rc::Rc;
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{number_arg, string_arg};
-use super::glue_core::{glue_status_key, queue, GlueRequest};
+use super::glue_core::{call, glue_status_key, GlueCall};
 use super::glue_select::{DEG_TO_RAD, RAD_TO_DEG};
 use super::{check_char_name, Model, ScriptValue, CHAR_NAME_SUCCESS};
 
@@ -1034,7 +1034,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The reference builds the body off the character with no test for one; with none
             // built yet nothing is sent here.
             if let Some(request) = request {
-                queue(lua, GlueRequest::CreateCharacter(request));
+                call(lua, GlueCall::CreateCharacter(request));
             }
             Ok(())
         })?,

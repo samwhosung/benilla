@@ -3,8 +3,11 @@
 //! IO thread's parks and [`crate::login`]'s policy still do the network; this maps their messages
 //! onto the reference's screen states and fires the glue events the stock GlueXML answers: the
 //! status dialog (`OPEN_STATUS_DIALOG`, `UPDATE_STATUS_DIALOG`, `CLOSE_STATUS_DIALOG`),
-//! `SET_GLUE_SCREEN` and `DISCONNECTED_FROM_SERVER`, and it serves the glue core's verbs
-//! ([`benilla_ui::script::GlueRequest`]).
+//! `SET_GLUE_SCREEN` and `DISCONNECTED_FROM_SERVER`. Its verbs run inside their Lua call, as the
+//! reference's call `CGlueMgr` directly: the glue VM it seats holds it as its
+//! [`benilla_ui::script::GlueHost`] ([`SharedGlueMgr`]), so a verb's screen state, its dialog and
+//! its other events land before the call returns, and only the network half it starts waits for
+//! this frame's sends, as `CGlueMgr::Update` polls the operation each frame.
 //!
 //! The login, in the reference's order:
 //!
@@ -50,9 +53,11 @@
 //!    `REALM_LIST_IN_PROGRESS` when asked. State 4's frame (`0x46c0a5`) re-texts the dialog; a
 //!    success goes to 0, closes the dialog and rebuilds (`0x46c0d2`-`0x46c0e2`), which is how the
 //!    stock list's five-second refresh redraws; a failure opens `OKAY` and goes to 0.
-//! 4. `ChangeRealm` reaches `ConnectToRealm` (`0x46b210`): the realm selected, state 2, the
-//!    `CANCEL` dialog `GAME_SERVER_LOGIN`, and the connect. `RealmListDialogCancelled` closes the
-//!    realmd link on the login screen only; `CancelRealmListQuery` cancels state 4 only.
+//! 4. `ChangeRealm` reaches `ConnectToRealm` (`0x46b210`): the realm selected, then with no world
+//!    link state 2, the `CANCEL` dialog `GAME_SERVER_LOGIN` and the connect, in the call; with one,
+//!    the link dropped in the call and the connect begun by the drop's handler (`0x46c585`).
+//!    `RealmListDialogCancelled` closes the realmd link on the login screen only;
+//!    `CancelRealmListQuery` cancels state 4 only.
 //!
 //! The list itself, its categories, sort and the verbs that read it are the glue VM's
 //! ([`benilla_ui::script::GlueRealm`]); the manager fills its holder and runs its rebuild where
@@ -146,10 +151,14 @@
 
 use bevy::prelude::*;
 
+use std::cell::{Ref, RefCell, RefMut};
+use std::rc::Rc;
+
 use benilla_protocol::{Character, LoginRefusal, LoginStage, RealmInfo, RosterCause};
 use benilla_ui::script::{
-    GlueCharacter, GlueNotice, GlueRealm, GlueRealmCells, GlueRequest, GlueSelectCells, GlueServer,
-    NoticeState, ScriptValue, UiScript, VmKind, GLUE_STATUS_KEYS,
+    GlueCall, GlueCharacter, GlueHost, GlueNotice, GlueRealm, GlueRealmCells, GlueRequest,
+    GlueSelectCells, GlueServer, GlueSignal, GlueText as Text, NoticeState, ScriptValue, UiScript,
+    VmKind, GLUE_STATUS_KEYS,
 };
 
 use crate::login::queue::QueueEstimate;
@@ -391,13 +400,6 @@ impl Operation {
     }
 }
 
-/// A glue string by key or as given.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Text {
-    Key(&'static str),
-    Raw(String),
-}
-
 /// One glue event the manager fires into the glue VM.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Outgoing {
@@ -437,6 +439,29 @@ enum Outgoing {
     Renamed { guid: u64, name: String },
 }
 
+impl Outgoing {
+    /// The signal this is, for the VM to fire ([`UiScript::fire_glue_signal`]); the four only
+    /// this frame can fire, off what the manager holds, come back as they are.
+    fn into_signal(self) -> Result<GlueSignal, Outgoing> {
+        Ok(match self {
+            Outgoing::Open { which, text, data } => GlueSignal::Open { which, text, data },
+            Outgoing::Update { text, button } => GlueSignal::Update { text, button },
+            Outgoing::Screen(name) => GlueSignal::Screen(name),
+            Outgoing::Disconnected => GlueSignal::Disconnected,
+            Outgoing::Close => GlueSignal::Close,
+            Outgoing::Teardown => GlueSignal::Teardown,
+            Outgoing::ServerAlert(text) => GlueSignal::ServerAlert(text),
+            Outgoing::SelectFirst => GlueSignal::SelectFirst,
+            Outgoing::SelectLast => GlueSignal::SelectLast,
+            Outgoing::ForceRename(key) => GlueSignal::ForceRename(key),
+            out @ (Outgoing::Queue
+            | Outgoing::Rebuild
+            | Outgoing::Roster
+            | Outgoing::Renamed { .. }) => return Err(out),
+        })
+    }
+}
+
 /// The logon's notification cells: the latest `(state, result)` (`0x836b28`, `0x836b24`) and the
 /// pair last shown (`0x836b30`, `0x836b2c`), -1 when none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -458,17 +483,20 @@ impl Default for LoginCells {
     }
 }
 
-/// The host side of `CGlueMgr`.
-#[derive(Resource, Default)]
+/// The host side of `CGlueMgr`, and the `ClientServices` state its functions read: one object,
+/// which the app's frame ([`drive_glue_mgr`]) and the seated glue VM's verbs ([`GlueHost`]) both
+/// run in, through [`SharedGlueMgr`].
+#[derive(Default)]
 pub(crate) struct GlueMgr {
     pub(crate) state: ScreenState,
     cells: LoginCells,
     /// Authenticated, waiting for the next tick (`[0xb41e18]`).
     auth_final: bool,
-    /// The four agreements, read once from their CVars (`0x46a400`).
-    notices: Option<[NoticeState; 4]>,
     /// The world connection is up (`[svc+0x1b00]`).
     connected: bool,
+    /// `ChangeRealm` dropped a live world link to connect to another realm (`[0xb41d9c]`, set at
+    /// `0x46b235`): the connect waits for the drop's handler (`0x46c56f`-`0x46c5bf`).
+    reconnect: bool,
     /// The realm this session connected to.
     realm: Option<benilla_protocol::RealmInfo>,
     /// State 2's operation.
@@ -549,20 +577,46 @@ impl GlueMgr {
     /// The top of `CGlueMgr::Update` (`0x46b939`-`0x46b96c`): a ready alert first runs the status
     /// dialog's button (`0x46b947` → `0x46b720`, the screen state's cancel), fires
     /// `SHOW_SERVER_ALERT` with the text, and is spent.
-    fn show_alert(&mut self, asks: &mut Vec<GlueLogin>) {
+    fn show_alert(&mut self) {
         if let Some(text) = self.alert_ready.take() {
-            self.status_dialog_click(asks);
+            self.status_dialog_click();
             self.outbox.push(Outgoing::ServerAlert(text));
         }
     }
 
-    /// The agreements as read at the startup (`0x46a400`).
-    pub(super) fn set_notices(&mut self, notices: [NoticeState; 4]) {
-        self.notices = Some(notices);
+    /// One of the manager's functions a glue verb calls, run as the verb's own call does: in place
+    /// through [`GlueHost`], or for a call made before this manager seated its VM, on this frame.
+    fn call(&mut self, call: GlueCall) {
+        match call {
+            GlueCall::Login(c) => self.login(c.account, c.password),
+            GlueCall::StatusDialogClick => self.status_dialog_click(),
+            GlueCall::DisconnectFromServer => self.disconnect_from_server(),
+            GlueCall::QuitGame => self.login_out.push(GlueLogin::Quit),
+            GlueCall::RequestRealmList { dialog } => self.request_realm_list(dialog),
+            GlueCall::CancelRealmListQuery => self.cancel_realm_list_query(),
+            // `CLoginMgr::Cancel` (`0x5b3320`): nothing else moves, so no dialog shows.
+            GlueCall::CancelLogon => self.login_out.push(GlueLogin::Abandon),
+            GlueCall::ChangeRealm(name) => self.connect_to_realm(&name),
+            // `0x46b880`; the VM cleared the roster in the verb.
+            GlueCall::GetCharacterList => self.get_character_list(),
+            GlueCall::DeleteCharacter(guid) => self.delete_character(guid),
+            GlueCall::RenameCharacter { guid, name } => self.rename_character(guid, name),
+            GlueCall::EnterWorld { index, guid, flags } => self.enter_world(index, guid, flags),
+            GlueCall::CreateCharacter(request) => self.create_character(request),
+        }
     }
 
-    fn notice(&self, notice: GlueNotice) -> NoticeState {
-        self.notices.map(|n| n[notice as usize]).unwrap_or_default()
+    /// `DisconnectFromServer` (`0x46d340`): with the world link up, its flag goes down in the call
+    /// (`0x5ab1a8`) and the link is dropped; then the logon is cancelled (`0x46d36c`). The drop's
+    /// handler zeroes the state (`0x46c55d`), the operation in flight with it, so no reply
+    /// completes on the login screen; here that is done in the call.
+    fn disconnect_from_server(&mut self) {
+        if self.connected || self.state == ScreenState::Connect {
+            self.state = ScreenState::Idle;
+            self.op = Operation::default();
+        }
+        self.connected = false;
+        self.login_out.push(GlueLogin::Disconnect);
     }
 
     fn open(&mut self, which: &'static str, text: Option<Text>) {
@@ -573,12 +627,10 @@ impl GlueMgr {
         });
     }
 
-    /// `CGlueMgr::Login` (`0x46afb0`).
-    fn login(&mut self, account: String, password: String, asks: &mut Vec<GlueLogin>) {
-        if !self.notice(GlueNotice::Tos).accepted
-            || !self.notice(GlueNotice::Eula).accepted
-            || self.state != ScreenState::Idle
-        {
+    /// `CGlueMgr::Login` (`0x46afb0`) past its first two tests, the agreements, which the VM that
+    /// holds them made: the idle test (`0x46afcd`), then the dialogs and the logon.
+    fn login(&mut self, account: String, password: String) {
+        if self.state != ScreenState::Idle {
             return;
         }
         if account.is_empty() {
@@ -590,7 +642,7 @@ impl GlueMgr {
             return;
         }
         self.begin_logon();
-        asks.push(GlueLogin::Submit { account, password });
+        self.login_out.push(GlueLogin::Submit { account, password });
     }
 
     /// Login's own state edge: the cells cleared, the latch down, state 1, and the `CANCEL`
@@ -603,13 +655,13 @@ impl GlueMgr {
     }
 
     /// `StatusDialogClick` (`0x46b720`, jump table `0x46b7a8`).
-    fn status_dialog_click(&mut self, asks: &mut Vec<GlueLogin>) {
+    fn status_dialog_click(&mut self) {
         match self.state {
             // `0x46b731`: the pending operation's callback; none is pending outside an operation.
             ScreenState::Idle => {}
             // `0x46b73d`: the logon cancelled, state 0.
             ScreenState::Logon => {
-                asks.push(GlueLogin::Abandon);
+                self.login_out.push(GlueLogin::Abandon);
                 self.state = ScreenState::Idle;
             }
             // `0x46b754` (states 2 and 3): the operation completes `RESPONSE_CANCELLED` and the
@@ -638,7 +690,8 @@ impl GlueMgr {
         }
     }
 
-    /// The asks the per-frame arms made of the login engine and of the IO thread.
+    /// The asks made of the login engine and of the IO thread since the last send, by the verbs'
+    /// calls and the frame's arms, each list in the order made.
     fn take_asks(&mut self) -> (Vec<GlueLogin>, Vec<ParkRequest>) {
         (
             std::mem::take(&mut self.login_out),
@@ -838,19 +891,36 @@ impl GlueMgr {
     }
 
     /// `ConnectToRealm` (`0x46b210`) for the realm `ChangeRealm` named, `realmName` already set to
-    /// it: the selection (`0x5ab7b0`'s tail, `0x5ab6f0`), state 2, the `GAME_SERVER_LOGIN` dialog
-    /// and the connect. With a world connection up the reference drops it first (`0x46b22b` →
-    /// `0x5ab1a0`) and begins the same connect from the disconnect handler (`0x46c5bf`); here the
-    /// drop is asked first and the connect follows at once, so a failed query finds no session.
+    /// it: the selection (`0x5ab7b0`'s tail, `0x5ab6f0`). With no world link, state 2, the
+    /// `GAME_SERVER_LOGIN` dialog and the connect, all in the call (`0x46b246`-`0x46b27b`). With
+    /// one up, the call only flags the reconnect (`0x46b230`, `0x46b235`) and drops the link, its
+    /// flag down at once (`0x5ab1a0`); the connect is begun by the drop's handler
+    /// (`0x46c585`-`0x46c5bf`), which here is this manager's next frame ([`Self::reconnect`]), the
+    /// drop asked before anything of realmd on the one ordered channel.
     fn connect_to_realm(&mut self, name: &str) {
         if let Some(r) = select_by_name(&self.holder, name) {
             self.selected = Some(r);
         }
         if self.connected {
-            // `0x46b22b`: the world connection drops before anything is asked of realmd.
             self.park_out.push(RealmRequest::Leave.into());
+            self.connected = false;
+            self.reconnect = true;
+            return;
         }
-        self.connected = false;
+        self.begin_connect();
+    }
+
+    /// The disconnect handler's reconnect (`0x46c585`-`0x46c5bf`): the drop `ChangeRealm` made is
+    /// done, and the connect it deferred begins.
+    fn reconnect(&mut self) {
+        if std::mem::take(&mut self.reconnect) {
+            self.begin_connect();
+        }
+    }
+
+    /// State 2, the `GAME_SERVER_LOGIN` dialog and the connect (`0x5aab20`), as `ConnectToRealm`
+    /// and the disconnect handler both begin it.
+    fn begin_connect(&mut self) {
         self.state = ScreenState::Connect;
         self.open("CANCEL", Some(Text::Key("GAME_SERVER_LOGIN")));
         self.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
@@ -1325,6 +1395,55 @@ impl GlueMgr {
     }
 }
 
+/// The one [`GlueMgr`], shared by the app's frame and the glue VM it seats: a NonSend resource,
+/// as the VM is. Nothing that holds a borrow of it calls into Lua, since a handler may call a verb
+/// that borrows it in turn.
+#[derive(Clone, Default)]
+pub(crate) struct SharedGlueMgr(Rc<GlueMgrCell>);
+
+/// The cell the manager lives in, which the VM holds as its host.
+#[derive(Default)]
+struct GlueMgrCell(RefCell<GlueMgr>);
+
+impl SharedGlueMgr {
+    pub(crate) fn get(&self) -> Ref<'_, GlueMgr> {
+        self.0 .0.borrow()
+    }
+
+    pub(crate) fn get_mut(&self) -> RefMut<'_, GlueMgr> {
+        self.0 .0.borrow_mut()
+    }
+
+    /// The manager as the glue VM's host.
+    fn host(&self) -> Rc<dyn GlueHost> {
+        self.0.clone()
+    }
+}
+
+/// A glue verb's call into the manager: its half runs here, and the signals it raised go back to
+/// the VM to fire before the verb returns. Everything a call raises is a signal; the four only the
+/// frame fires would stay for its flush.
+impl GlueHost for GlueMgrCell {
+    fn call(&self, call: GlueCall) -> Vec<GlueSignal> {
+        let mut mgr = self.0.borrow_mut();
+        let from = mgr.outbox.len();
+        mgr.call(call);
+        let raised = mgr.outbox.split_off(from);
+        let mut signals = Vec::with_capacity(raised.len());
+        for out in raised {
+            match out.into_signal() {
+                Ok(signal) => signals.push(signal),
+                Err(out) => mgr.outbox.push(out),
+            }
+        }
+        signals
+    }
+
+    fn connected(&self) -> bool {
+        self.0.borrow().connected
+    }
+}
+
 /// `SelectRealmByName` (`0x5ab6f0`): the first realm in the holder whose name matches, case
 /// folded (`0x64a4c0`), whatever its flags.
 fn select_by_name(holder: &[RealmInfo], name: &str) -> Option<RealmInfo> {
@@ -1395,34 +1514,28 @@ pub(crate) struct GlueAsks<'w> {
     cvars: Option<ResMut<'w, crate::cvars::Cvars>>,
 }
 
-/// The CVars each agreement is read from and written to.
-fn notice_cvar(notice: GlueNotice) -> &'static str {
-    match notice {
-        GlueNotice::Tos => "readTOS",
-        GlueNotice::Eula => "readEULA",
-        GlueNotice::Scanning => "readScanning",
-        GlueNotice::Contest => "readContest",
-    }
-}
-
 /// The four agreements' states off the CVar registry: the read `0x46a400` makes at `0x402b36`,
 /// before the first glue screen is set (`0x402b65`), so a returning player's login screen never
 /// sees them unaccepted.
 pub(crate) fn read_agreements(cvars: &crate::cvars::Cvars) -> [NoticeState; 4] {
     let mut n = [NoticeState::default(); 4];
     for notice in GlueNotice::ALL {
-        if let Some(value) = cvars.get(notice_cvar(notice)) {
+        if let Some(value) = cvars.get(notice.cvar()) {
             n[notice as usize] = NoticeState::from_cvar(value);
         }
     }
     n
 }
 
-/// The glue manager's frame: the VM's requests, the native login's news, the per-frame arms, then
-/// the events into the glue VM and its slots seeded. Runs under `WOW_GLUE_STOCK=1` only.
+/// The glue manager's frame: the native login's news, the per-frame arms, then the events into the
+/// glue VM and its slots seeded. The verbs ran in their own calls ([`GlueHost`]); what is left of
+/// them here is the effects they leave for the frame and the calls a VM made before it was seated.
+/// Runs under `WOW_GLUE_STOCK=1` only.
+///
+/// No borrow of the manager is held across a call into the VM that can run a handler.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn drive_glue_mgr(
-    mut mgr: ResMut<GlueMgr>,
+    shared: NonSend<SharedGlueMgr>,
     script: Option<NonSendMut<UiScript>>,
     mut news: LoginNews,
     mut asks: GlueAsks,
@@ -1433,40 +1546,23 @@ pub(crate) fn drive_glue_mgr(
     state: Option<Res<State<crate::char_select::ClientState>>>,
     time: Res<Time>,
 ) {
+    let shared = shared.clone();
     let now_ms = time.elapsed().as_millis() as u32;
     let mut script = script.filter(|s| s.vm_kind() == VmKind::Glue);
     let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let glue_up = script.is_some() && !in_world;
 
-    // The agreements, read once (`0x46a400`) off the VM's CVar mirror once the sync has seeded
-    // it.
-    if mgr.notices.is_none() {
-        if let Some(s) = script.as_deref() {
-            let values: Option<Vec<String>> = GlueNotice::ALL
-                .iter()
-                .map(|n| s.cvar(notice_cvar(*n)))
-                .collect();
-            if let Some(values) = values {
-                let mut n = [NoticeState::default(); 4];
-                for (notice, value) in GlueNotice::ALL.iter().zip(&values) {
-                    n[*notice as usize] = NoticeState::from_cvar(value);
-                }
-                mgr.notices = Some(n);
-            }
-        }
-    }
-
     // A refused character login, ahead of the glue build it comes back to (`0x5aad70`).
     for msg in news.login_refusals.read() {
-        mgr.on_char_login_failed(msg.result);
+        shared.get_mut().on_char_login_failed(msg.result);
     }
 
     // A glue VM the glue build did not seat ([`seat_glue_build`]) is seated here.
     let mut fresh_vm = false;
     if let Some(s) = script.as_deref_mut() {
-        if mgr.vm != Some(s.session()) {
+        if shared.get().vm != Some(s.session()) {
             seat_glue(
-                &mut mgr,
+                &shared,
                 s,
                 news.addon_reply.as_deref().and_then(|r| r.0.as_deref()),
                 news.names.as_deref(),
@@ -1486,14 +1582,14 @@ pub(crate) fn drive_glue_mgr(
     } else if in_world {
         // In the world the glue is torn down, and the entry's second phase leaves state 0
         // (`0x46c252`).
-        mgr.state = ScreenState::Idle;
+        shared.get_mut().state = ScreenState::Idle;
     }
     // A refused login's state 9, on the glue the refusal comes back to, before its screen's list
     // ask is served (`0x402075`). One that finds the glue still standing beat the world it
     // revokes, which here is entered before the verdict (the pick's `Deviation:` in
     // [`crate::net::io`]), and ends the same way.
     if glue_up {
-        mgr.take_refusal();
+        shared.get_mut().take_refusal();
     }
     if let (Some(s), Some(r)) = (script.as_deref_mut(), realms.as_ref()) {
         if !fresh_vm && r.is_changed() {
@@ -1507,78 +1603,50 @@ pub(crate) fn drive_glue_mgr(
         .and_then(|s| s.cvar(crate::realm_select::CVAR_REALM_NAME))
         .unwrap_or_default();
 
-    // The alert a finished fetch left, shown before anything else this frame (`0x46b939`).
-    let mut logins = Vec::new();
-    mgr.poll_alert();
-    if glue_up {
-        mgr.show_alert(&mut logins);
-    }
-
-    // The verbs the last tick's Lua called.
-    if let Some(s) = script.as_deref_mut() {
-        mgr.screen = s.glue_screen();
-        for request in s.take_glue_requests() {
-            match request {
-                GlueRequest::Login(c) => mgr.login(c.account, c.password, &mut logins),
-                GlueRequest::StatusDialogClick => mgr.status_dialog_click(&mut logins),
-                GlueRequest::SetSavedAccountName(name) => crate::login::save_account(&name),
-                GlueRequest::Accept(notice) => {
-                    let n = mgr.notices.get_or_insert([NoticeState::default(); 4]);
-                    n[notice as usize] = NoticeState {
-                        accepted: true,
-                        show_notice: false,
-                    };
-                    // Through the VM's mirror, whose writes the CVar sync persists.
-                    s.set_cvar_engine(notice_cvar(notice), "1");
-                }
-                GlueRequest::PlayGlueMusic(file) => {
-                    asks.music.write(crate::sound::GlueMusicRequest::Play(file));
-                }
-                GlueRequest::StopGlueMusic => {
-                    asks.music.write(crate::sound::GlueMusicRequest::Stop);
-                }
-                GlueRequest::DisconnectFromServer => {
-                    // The disconnect handler zeroes the state (`0x46c55d`), the operation in
-                    // flight with it, so no reply completes on the login screen.
-                    if mgr.connected || mgr.state == ScreenState::Connect {
-                        mgr.state = ScreenState::Idle;
-                        mgr.op = Operation::default();
-                    }
-                    mgr.connected = false;
-                    logins.push(GlueLogin::Disconnect);
-                }
-                GlueRequest::QuitGame => logins.push(GlueLogin::Quit),
-                // `0x5abd00`, past the whitelist the verb applied (`0x5abc10`).
-                GlueRequest::LaunchAddonUrl(url) => {
-                    asks.launch_addon
-                        .write(super::server_alert::LaunchAddonUrl(url));
-                }
-                GlueRequest::LaunchUrl(url) => {
-                    asks.launch.write(super::server_alert::LaunchUrl(url));
-                }
-                GlueRequest::RequestRealmList { dialog } => mgr.request_realm_list(dialog),
-                GlueRequest::CancelRealmListQuery => mgr.cancel_realm_list_query(),
-                // `CLoginMgr::Cancel` (`0x5b3320`): nothing else moves, so no dialog shows.
-                GlueRequest::CancelLogon => logins.push(GlueLogin::Abandon),
-                GlueRequest::ChangeRealm(name) => mgr.connect_to_realm(&name),
-                // `0x46b880`; the VM cleared the roster in the verb.
-                GlueRequest::GetCharacterList => mgr.get_character_list(),
-                GlueRequest::DeleteCharacter(guid) => mgr.delete_character(guid),
-                GlueRequest::RenameCharacter { guid, name } => mgr.rename_character(guid, name),
-                GlueRequest::EnterWorld { index, guid, flags } => {
-                    mgr.enter_world(index, guid, flags);
-                }
-                GlueRequest::CreateCharacter(request) => mgr.create_character(request),
-            }
+    {
+        let mut mgr = shared.get_mut();
+        // The alert a finished fetch left, shown before anything else this frame (`0x46b939`).
+        mgr.poll_alert();
+        if glue_up {
+            mgr.show_alert();
         }
-        mgr.realm_cells = s.glue_realm_cells();
-    }
-    // `EnterWorld`'s `lastCharacterIndex` (`0x46b5fa`, `"%d"` of the selection) into the engine's
-    // table, then `SaveConfig` (`0x46b6f6`).
-    if let Some(index) = mgr.last_character.take() {
-        if let Some(cvars) = asks.cvars.as_deref_mut() {
-            cvars.set(crate::char_select::CVAR_LAST_CHARACTER, &index.to_string());
-            cvars.save();
+        // A world link `ChangeRealm` dropped is down: the connect it deferred begins.
+        mgr.reconnect();
+
+        // What the verbs left for the frame, and the calls a VM made before it was seated.
+        if let Some(s) = script.as_deref_mut() {
+            mgr.screen = s.glue_screen();
+            for call in s.take_glue_calls() {
+                mgr.call(call);
+            }
+            for request in s.take_glue_requests() {
+                match request {
+                    GlueRequest::SetSavedAccountName(name) => crate::login::save_account(&name),
+                    GlueRequest::PlayGlueMusic(file) => {
+                        asks.music.write(crate::sound::GlueMusicRequest::Play(file));
+                    }
+                    GlueRequest::StopGlueMusic => {
+                        asks.music.write(crate::sound::GlueMusicRequest::Stop);
+                    }
+                    // `0x5abd00`, past the whitelist the verb applied (`0x5abc10`).
+                    GlueRequest::LaunchAddonUrl(url) => {
+                        asks.launch_addon
+                            .write(super::server_alert::LaunchAddonUrl(url));
+                    }
+                    GlueRequest::LaunchUrl(url) => {
+                        asks.launch.write(super::server_alert::LaunchUrl(url));
+                    }
+                }
+            }
+            mgr.realm_cells = s.glue_realm_cells();
+        }
+        // `EnterWorld`'s `lastCharacterIndex` (`0x46b5fa`, `"%d"` of the selection) into the
+        // engine's table, then `SaveConfig` (`0x46b6f6`).
+        if let Some(index) = mgr.last_character.take() {
+            if let Some(cvars) = asks.cvars.as_deref_mut() {
+                cvars.set(crate::char_select::CVAR_LAST_CHARACTER, &index.to_string());
+                cvars.save();
+            }
         }
     }
 
@@ -1593,77 +1661,83 @@ pub(crate) fn drive_glue_mgr(
         }
     }
 
-    // The native login's news.
-    for msg in news.stages.read() {
-        mgr.on_stage(msg.stage, glue_up);
-    }
-    // The logon's list ends the logon, then answers the connect its latch begins.
-    let lists: Vec<(Vec<RealmInfo>, bool)> = news
-        .realm_lists
-        .read()
-        .map(|m| (m.realms.clone(), m.failed))
-        .collect();
-    if !lists.is_empty() {
-        mgr.on_logon_done();
-    }
-    for msg in news.queued.read() {
-        mgr.on_queued(msg.position, msg.realm.clone(), now_ms);
-    }
-    // An authenticated logon moves to the world connect before the world's own news.
-    if mgr.auth_final {
+    {
+        let mut mgr = shared.get_mut();
+        // The native login's news.
+        for msg in news.stages.read() {
+            mgr.on_stage(msg.stage, glue_up);
+        }
+        // The logon's list ends the logon, then answers the connect its latch begins.
+        let lists: Vec<(Vec<RealmInfo>, bool)> = news
+            .realm_lists
+            .read()
+            .map(|m| (m.realms.clone(), m.failed))
+            .collect();
+        if !lists.is_empty() {
+            mgr.on_logon_done();
+        }
+        for msg in news.queued.read() {
+            mgr.on_queued(msg.position, msg.realm.clone(), now_ms);
+        }
+        // An authenticated logon moves to the world connect before the world's own news.
+        if mgr.auth_final {
+            mgr.tick();
+        }
+        for (realms, failed) in lists {
+            mgr.on_realm_list(realms, failed, &realm_name);
+        }
+        for msg in news.failures.read() {
+            mgr.on_failed(msg);
+        }
+        // A session of an attempt a Cancel or a disconnect has passed is not the screen's.
+        let generation = crate::net::LoginAbandon::now(asks.abandon.as_deref());
+        for msg in news.world_auths.read() {
+            if msg.generation == generation {
+                mgr.on_world_authenticated(msg.realm.clone(), msg.epoch);
+            }
+        }
+        for msg in news.roster_failures.read() {
+            mgr.on_roster_failed(msg.epoch);
+        }
+        for msg in news.rosters.read() {
+            mgr.on_roster(msg.characters.clone(), msg.cause, msg.epoch);
+        }
+        for msg in news.char_actions.read() {
+            match msg.action {
+                benilla_protocol::CharAction::Delete => mgr.on_char_deleted(msg.code),
+                benilla_protocol::CharAction::Create => mgr.on_char_created(msg.code),
+            }
+        }
+        for msg in news.renames.read() {
+            mgr.on_char_renamed(msg.result, msg.renamed.clone());
+        }
+        for msg in news.disconnects.read() {
+            mgr.on_disconnected(msg.end, msg.session_over);
+        }
         mgr.tick();
+        send_asks(&mut mgr, &mut asks);
     }
-    for (realms, failed) in lists {
-        mgr.on_realm_list(realms, failed, &realm_name);
-    }
-    for msg in news.failures.read() {
-        mgr.on_failed(msg);
-    }
-    // A session of an attempt a Cancel or a disconnect has passed is not the screen's.
-    let generation = crate::net::LoginAbandon::now(asks.abandon.as_deref());
-    for msg in news.world_auths.read() {
-        if msg.generation == generation {
-            mgr.on_world_authenticated(msg.realm.clone(), msg.epoch);
-        }
-    }
-    for msg in news.roster_failures.read() {
-        mgr.on_roster_failed(msg.epoch);
-    }
-    for msg in news.rosters.read() {
-        mgr.on_roster(msg.characters.clone(), msg.cause, msg.epoch);
-    }
-    for msg in news.char_actions.read() {
-        match msg.action {
-            benilla_protocol::CharAction::Delete => mgr.on_char_deleted(msg.code),
-            benilla_protocol::CharAction::Create => mgr.on_char_created(msg.code),
-        }
-    }
-    for msg in news.renames.read() {
-        mgr.on_char_renamed(msg.result, msg.renamed.clone());
-    }
-    for msg in news.disconnects.read() {
-        mgr.on_disconnected(msg.end, msg.session_over);
-    }
-    mgr.tick();
-    send_asks(&mut mgr, logins, &mut asks);
 
     let Some(mut script) = script else {
         return;
     };
-    // The realmlist control's typed value that was not an address reopens its dialog.
-    if let Some(typed) = realmlist.as_deref_mut().and_then(|r| r.take_refused()) {
-        mgr.outbox.push(Outgoing::Open {
-            which: "BENILLA_REALMLIST",
-            text: Some(Text::Raw(crate::login::REALMLIST_BAD.to_string())),
-            data: Some(typed),
-        });
+    {
+        let mut mgr = shared.get_mut();
+        // The realmlist control's typed value that was not an address reopens its dialog.
+        if let Some(typed) = realmlist.as_deref_mut().and_then(|r| r.take_refused()) {
+            mgr.outbox.push(Outgoing::Open {
+                which: "BENILLA_REALMLIST",
+                text: Some(Text::Raw(crate::login::REALMLIST_BAD.to_string())),
+                data: Some(typed),
+            });
+        }
+        seed(
+            &mut mgr,
+            &mut script,
+            realms.as_deref(),
+            realmlist.as_deref(),
+        );
     }
-    seed(
-        &mut mgr,
-        &mut script,
-        realms.as_deref(),
-        realmlist.as_deref(),
-    );
     let names = RosterNames {
         areas: areas.as_deref().map(|a| &a.0),
         create: sources.create.as_deref().map(|c| &c.0),
@@ -1671,31 +1745,34 @@ pub(crate) fn drive_glue_mgr(
         creatures: sources.creatures.as_deref(),
     };
     flush(
-        &mut mgr,
+        &shared,
         &mut script,
         now_ms,
         &names,
         asks.roster.as_deref_mut(),
     );
+    let mut mgr = shared.get_mut();
     mgr.select_cells = script.glue_select_cells();
-    // What the outbox asked in turn (the roster load's realm list).
-    send_asks(&mut mgr, Vec::new(), &mut asks);
+    // What the outbox asked in turn (the roster load's realm list), and what the handlers' verbs
+    // asked inside it.
+    send_asks(&mut mgr, &mut asks);
 }
 
 /// The glue build (`0x46a7b0`) on a new glue VM: state 0, then everything the manager holds that
-/// the reference keeps in C globals, which outlive the Lua state: the saved account, the realm list
-/// and select cells, the AddOn registry and the reply the session has read, the name check's
-/// lists, the realm categories, a refused login's state 9 (`0x402075`, set ahead of the screen)
-/// and the slots the verbs read live, the world link (`IsConnectedToServer`, `0x46d380` reads
-/// `[svc+0x1b00]`) and the server among them.
+/// the reference keeps in C globals, which outlive the Lua state: the manager itself as the VM's
+/// host, the saved account, the realm list and select cells, the AddOn registry and the reply the
+/// session has read, the name check's lists, the realm categories, a refused login's state 9
+/// (`0x402075`, set ahead of the screen) and the slots the verbs read live, the server among them.
 fn seat_glue(
-    mgr: &mut GlueMgr,
+    shared: &SharedGlueMgr,
     s: &mut UiScript,
     addon_reply: Option<&[benilla_protocol::messages::AddonRecord]>,
     names: Option<&crate::text_filter::NameFilter>,
     realms: Option<&crate::realm_select::Realms>,
     realmlist: Option<&crate::realmlist::Realmlist>,
 ) {
+    s.set_glue_host(shared.host());
+    let mut mgr = shared.get_mut();
     mgr.vm = Some(s.session());
     mgr.state = ScreenState::Idle;
     mgr.cells = LoginCells::default();
@@ -1713,7 +1790,7 @@ fn seat_glue(
         s.set_glue_realm_setup(categories, types);
     }
     mgr.take_refusal();
-    seed(mgr, s, realms, realmlist);
+    seed(&mut mgr, s, realms, realmlist);
 }
 
 /// The glue build's seating ([`seat_glue`]) inside the build, before its first `SET_GLUE_SCREEN`:
@@ -1721,30 +1798,28 @@ fn seat_glue(
 /// `CharacterSelect_OnShow` asks for its list only on a link `IsConnectedToServer` reports, and
 /// names the realm `GetServerName` does).
 pub(crate) fn seat_glue_build(world: &mut World, script: &mut UiScript) {
-    if !world.contains_resource::<GlueMgr>() {
+    let Some(shared) = world.get_non_send_resource::<SharedGlueMgr>().cloned() else {
         return;
-    }
+    };
     script.set_glue_create_catalog(std::rc::Rc::new(super::glue_create::world_catalog(world)));
-    world.resource_scope(|world, mut mgr: Mut<GlueMgr>| {
-        seat_glue(
-            &mut mgr,
-            script,
-            world
-                .get_resource::<AddonInfoReply>()
-                .and_then(|r| r.0.as_deref()),
-            world.get_resource::<crate::text_filter::NameFilter>(),
-            world.get_resource::<crate::realm_select::Realms>(),
-            world.get_resource::<crate::realmlist::Realmlist>(),
-        );
-    });
+    seat_glue(
+        &shared,
+        script,
+        world
+            .get_resource::<AddonInfoReply>()
+            .and_then(|r| r.0.as_deref()),
+        world.get_resource::<crate::text_filter::NameFilter>(),
+        world.get_resource::<crate::realm_select::Realms>(),
+        world.get_resource::<crate::realmlist::Realmlist>(),
+    );
 }
 
-/// Send the asks of the frame: the login engine's, and the park requests in the order they were
-/// made, the realm requests stamped with the abandon generation as they go and the world entry's
-/// pick through the native screens' own ([`crate::char_select::send_pick`]).
-fn send_asks(mgr: &mut GlueMgr, logins: Vec<GlueLogin>, asks: &mut GlueAsks) {
-    let (arms, park_asks) = mgr.take_asks();
-    for ask in logins.into_iter().chain(arms) {
+/// Send the asks the manager holds: the login engine's, and the park requests in the order they
+/// were made, the realm requests stamped with the abandon generation as they go and the world
+/// entry's pick through the native screens' own ([`crate::char_select::send_pick`]).
+fn send_asks(mgr: &mut GlueMgr, asks: &mut GlueAsks) {
+    let (logins, park_asks) = mgr.take_asks();
+    for ask in logins {
         asks.login.write(ask);
     }
     let now = crate::net::LoginAbandon::now(asks.abandon.as_deref());
@@ -1807,13 +1882,6 @@ fn seed(
     realms: Option<&crate::realm_select::Realms>,
     realmlist: Option<&crate::realmlist::Realmlist>,
 ) {
-    for notice in GlueNotice::ALL {
-        let want = mgr.notice(notice);
-        if script.glue_notice(notice) != want {
-            script.set_glue_notice(notice, want);
-        }
-    }
-    script.set_glue_connected(mgr.connected);
     if std::mem::take(&mut mgr.cells_moved) {
         script.set_glue_realm_cells(mgr.realm_cells);
     }
@@ -1868,88 +1936,59 @@ fn seed_realmlist(script: &UiScript, realmlist: &crate::realmlist::Realmlist) {
     }
 }
 
-/// Fire the outbox into the glue VM, the texts resolved through its own strings (`0x703bf0`).
+/// Fire the outbox into the glue VM, the texts resolved through its own strings (`0x703bf0`). Each
+/// entry is taken off the outbox and fired with no borrow of the manager held, since a handler may
+/// call a verb, whose call runs in the manager and fires its own signals inside this one.
 fn flush(
-    mgr: &mut GlueMgr,
+    shared: &SharedGlueMgr,
     script: &mut UiScript,
     now_ms: u32,
     names: &RosterNames,
     mut roster: Option<&mut crate::char_select::Roster>,
 ) {
     // The roster load can queue more (the realm list's dialog), which goes out in turn.
-    while !mgr.outbox.is_empty() {
-        for out in std::mem::take(&mut mgr.outbox) {
-            flush_one(mgr, script, now_ms, names, roster.as_deref_mut(), out);
-        }
+    loop {
+        let out = {
+            let mut mgr = shared.get_mut();
+            if mgr.outbox.is_empty() {
+                return;
+            }
+            mgr.outbox.remove(0)
+        };
+        flush_one(shared, script, now_ms, names, roster.as_deref_mut(), out);
     }
 }
 
 fn flush_one(
-    mgr: &mut GlueMgr,
+    shared: &SharedGlueMgr,
     script: &mut UiScript,
     now_ms: u32,
     names: &RosterNames,
     roster: Option<&mut crate::char_select::Roster>,
     out: Outgoing,
 ) {
-    let text = |script: &UiScript, t: &Text| match t {
-        Text::Key(k) => script.global_text(k),
-        Text::Raw(s) => s.clone(),
+    let out = match out.into_signal() {
+        Ok(signal) => return script.fire_glue_signal(signal),
+        Err(out) => out,
     };
     match out {
-        Outgoing::Open {
-            which,
-            text: t,
-            data,
-        } => {
-            let mut args = vec![ScriptValue::Str(which.to_string())];
-            if t.is_some() || data.is_some() {
-                args.push(t.map_or(ScriptValue::Nil, |t| ScriptValue::Str(text(script, &t))));
-            }
-            if let Some(d) = data {
-                args.push(ScriptValue::Str(d));
-            }
-            script.fire_event("OPEN_STATUS_DIALOG", args);
-        }
-        Outgoing::Update { text: t, button } => {
-            let mut args = vec![ScriptValue::Str(text(script, &t))];
-            if let Some(b) = button {
-                args.push(ScriptValue::Str(text(script, &b)));
-            }
-            script.fire_event("UPDATE_STATUS_DIALOG", args);
-        }
         Outgoing::Queue => {
-            let body = mgr
-                .queue
-                .text_by(now_ms, mgr.queue_realm.as_deref(), |key| {
-                    script.global_text(key)
-                });
+            let body = {
+                let mgr = shared.get();
+                mgr.queue
+                    .text_by(now_ms, mgr.queue_realm.as_deref(), |key| {
+                        script.global_text(key)
+                    })
+            };
             let button = script.global_text("CHANGE_REALM");
             script.fire_event(
                 "UPDATE_STATUS_DIALOG",
                 vec![ScriptValue::Str(body), ScriptValue::Str(button)],
             );
         }
-        Outgoing::Screen(name) => {
-            script.fire_event("SET_GLUE_SCREEN", vec![ScriptValue::Str(name.to_string())]);
-        }
-        Outgoing::Disconnected => script.fire_event("DISCONNECTED_FROM_SERVER", Vec::new()),
-        Outgoing::Close => script.fire_event("CLOSE_STATUS_DIALOG", Vec::new()),
         Outgoing::Rebuild => {
             script.rebuild_glue_realms();
-            mgr.realm_cells = script.glue_realm_cells();
-        }
-        Outgoing::Teardown => script.teardown_glue_roster(),
-        Outgoing::ServerAlert(text) => {
-            script.fire_event("SHOW_SERVER_ALERT", vec![ScriptValue::Str(text)]);
-        }
-        Outgoing::SelectFirst => script.fire_event("SELECT_FIRST_CHARACTER", Vec::new()),
-        Outgoing::SelectLast => script.fire_event("SELECT_LAST_CHARACTER", Vec::new()),
-        Outgoing::ForceRename(key) => {
-            script.fire_event(
-                "FORCE_RENAME_CHARACTER",
-                vec![ScriptValue::Str(key.to_string())],
-            );
+            shared.get_mut().realm_cells = script.glue_realm_cells();
         }
         Outgoing::Renamed { guid, name } => {
             // `0x4725f0`: the record by guid, else nothing; the files first (`0x47269a`,
@@ -1957,8 +1996,9 @@ fn flush_one(
             let Some(old) = script.glue_character_name(guid) else {
                 return;
             };
-            crate::local_state::move_character_state(&server_name(mgr, script), &old, &name);
-            if let Some(c) = mgr.roster.iter_mut().find(|c| c.guid == guid) {
+            let realm = server_name(&shared.get(), script);
+            crate::local_state::move_character_state(&realm, &old, &name);
+            if let Some(c) = shared.get_mut().roster.iter_mut().find(|c| c.guid == guid) {
                 c.name.clone_from(&name);
                 c.flags &= !benilla_protocol::CHARACTER_FLAG_RENAME;
             }
@@ -1968,17 +2008,22 @@ fn flush_one(
             script.apply_glue_rename(guid, &name);
         }
         Outgoing::Roster => {
-            let roster = mgr
+            let records = shared
+                .get()
                 .roster
                 .iter()
                 .map(|c| glue_character(c, names))
                 .collect();
             // `RequestRealmList(1)` at `0x47254b`, when no realm has been chosen.
-            if script.load_glue_roster(roster) {
+            let ask = script.load_glue_roster(records);
+            let mut mgr = shared.get_mut();
+            if ask {
                 mgr.request_realm_list(true);
             }
             mgr.realm_cells = script.glue_realm_cells();
         }
+        // Signals, fired above.
+        _ => {}
     }
 }
 

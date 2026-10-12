@@ -74,8 +74,9 @@ mod glue_realm;
 mod glue_select;
 pub use glue::{VmKind, GLUE_EVENTS};
 pub use glue_core::{
-    glue_status_key, launch_addon_url, launch_addon_url_allowed, launch_url_allowed,
-    GlueCredentials, GlueNotice, GlueRequest, GlueServer, NoticeState, GLUE_STATUS_KEYS,
+    glue_status_key, launch_addon_url, launch_addon_url_allowed, launch_url_allowed, GlueCall,
+    GlueCredentials, GlueHost, GlueNotice, GlueRequest, GlueServer, GlueSignal, GlueText,
+    NoticeState, GLUE_STATUS_KEYS,
 };
 pub use glue_create::{
     GlueCreateCatalog, GlueCreateClass, GlueCreateCounts, GlueCreateLook, GlueCreateRace,

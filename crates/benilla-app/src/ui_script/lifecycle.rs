@@ -105,15 +105,15 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
 fn start_server_alert(world: &mut World, script: &UiScript) {
     let url = script.global_text("SERVER_ALERT_URL");
     if let Some(fetch) = super::server_alert::begin_once(&url) {
-        if let Some(mut mgr) = world.get_resource_mut::<super::glue_mgr::GlueMgr>() {
-            mgr.set_alert_fetch(fetch);
+        if let Some(shared) = world.get_non_send_resource::<super::glue_mgr::SharedGlueMgr>() {
+            shared.get_mut().set_alert_fetch(fetch);
         }
     }
 }
 
-/// Read the four agreement CVars into the glue VM and the manager before any screen is set, as
-/// the reference does (`0x46a400` at `0x402b36`, then `SET_GLUE_SCREEN` at `0x402b65`): the login
-/// screen's `OnShow` asks them at once, and nothing asks again.
+/// Read the four agreement CVars into the glue VM, which holds their flags, before any screen is
+/// set, as the reference does (`0x46a400` at `0x402b36`, then `SET_GLUE_SCREEN` at `0x402b65`):
+/// the login screen's `OnShow` asks them at once, and nothing asks again.
 fn seed_agreements(world: &mut World, script: &mut UiScript) {
     let Some(cvars) = world.get_resource::<crate::cvars::Cvars>() else {
         return;
@@ -121,9 +121,6 @@ fn seed_agreements(world: &mut World, script: &mut UiScript) {
     let notices = super::glue_mgr::read_agreements(cvars);
     for notice in GlueNotice::ALL {
         script.set_glue_notice(notice, notices[notice as usize]);
-    }
-    if let Some(mut mgr) = world.get_resource_mut::<super::glue_mgr::GlueMgr>() {
-        mgr.set_notices(notices);
     }
 }
 
@@ -1156,7 +1153,7 @@ mod tests {
             world.insert_resource(super::super::glue::GlueStock(true));
             world.insert_resource(State::new(ClientState::Login));
             world.insert_resource(cvars);
-            world.init_resource::<super::super::glue_mgr::GlueMgr>();
+            world.init_non_send_resource::<super::super::glue_mgr::SharedGlueMgr>();
             setup_script(&mut world);
             world
                 .non_send_resource::<UiScript>()
