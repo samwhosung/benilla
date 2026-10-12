@@ -399,12 +399,7 @@ pub(super) fn feed_item_stats(
     commands: Res<NetCommands>,
     spells: Option<Res<crate::ui_action::Spells>>,
     // The caster the `$`-tokens read: its spell modifiers and its skills.
-    (spell_mods, self_q, locks): (
-        Res<crate::spell::SpellModifiers>,
-        Query<&ObjectStore, With<SelfPlayer>>,
-        // `Lock.dbc`: the LOCKED line needs the item's lock row to exist (`0x52bd6b`).
-        Option<Res<crate::go_templates::Locks>>,
-    ),
+    (spell_mods, self_q, locks): CasterReads,
     skill_lines: Option<Res<crate::ui_spellbook::SkillLines>>,
     // The `$z` token: the bind point's area (`SMSG_BINDPOINTUPDATE`), named through `AreaTable`.
     home_bind: Option<Res<crate::net::HomeBind>>,
@@ -506,6 +501,14 @@ pub(super) fn feed_item_stats(
         script.set_item_template(id, view);
     }
 }
+
+/// What the `$`-tokens read of the caster, and the `Lock.dbc` the LOCKED line needs a row from
+/// (`0x52bd6b`).
+type CasterReads<'w, 's> = (
+    Res<'w, crate::spell::SpellModifiers>,
+    Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+    Option<Res<'w, crate::go_templates::Locks>>,
+);
 
 /// The template's lock id when `Lock.dbc` holds its row, else 0: the builder's LOCKED line starts
 /// from that row (`0x52bd57`..`0x52bd76`), and a missing one is no lock. With the catalog not
