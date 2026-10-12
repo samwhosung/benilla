@@ -229,8 +229,13 @@ pub(crate) struct GluePreview {
     /// from the top-left ([`super::framing::stock_pane_view`]); `None` frames the native way.
     pub(crate) pane: Option<[f32; 4]>,
     /// The stage's instance: a change starts the scene over, as each `SetModel` makes a new
-    /// instance (`0x76cce0`), the same file included.
+    /// instance (`0x76cce0`), the same file included. The stock feeder numbers each (pane,
+    /// instance) once, so a pane shown again on the instance it held brings its number back.
     pub(crate) stage: u64,
+    /// The stages whose pane still holds them, shown or hidden: a scene left for another pane's
+    /// is parked while its number is here, and resumes where it stopped when the number returns
+    /// ([`CreateScene::parked`]). Empty from a feeder that numbers no panes.
+    pub(crate) live: Vec<u64>,
     /// Bumped as a glue screen's scene shows: the `ModelFFX`'s OnShow pins the glow back to
     /// 0.30 (`0x46fa60`), which nothing else does ([`sync_glue_ffx`]).
     pub(crate) shown: u64,
@@ -251,6 +256,7 @@ impl Default for GluePreview {
             stage: 0,
             shown: 0,
             hidden: false,
+            live: Vec::new(),
         }
     }
 }
@@ -321,6 +327,31 @@ pub(crate) struct CreateScene {
     /// (`CSimpleModel+0x314`): it steps in whole milliseconds, only while the pane shows
     /// ([`pace_glue_clock`]).
     clock_ms: u64,
+    /// The scenes left for another pane's while their own pane still holds them
+    /// ([`GluePreview::live`]), each to resume where it stopped when its stage returns.
+    parked: Vec<ParkedScene>,
+}
+
+/// A scene left standing for another pane's, its pane still holding it: a hidden `ModelFFX` keeps
+/// its model and scene, and only its clock stops (`0x76d7f0`). The login screen's `UI_MainMenu` is
+/// the case: `AccountLogin.xml`'s `file=` is its only `SetModel` (the attribute handler
+/// `0x76cce0`), so its scene outlives every visit to the other screens. Its root is hidden, its
+/// pose held, its players at speed 0 and its emitters frozen; its clock and its materials' clock
+/// keep the values they stopped at.
+struct ParkedScene {
+    root: Entity,
+    token: &'static str,
+    handle: Handle<M2Model>,
+    cam: Option<benilla_assets::PortraitCamera>,
+    art: Option<ArtExtent>,
+    char_spot: Vec3,
+    char_facing: Quat,
+    char_scale: f32,
+    pet_spot: Vec3,
+    pet_facing: Quat,
+    pet_stage_scale: f32,
+    stage: u64,
+    clock_ms: u64,
 }
 
 impl CreateScene {
@@ -350,7 +381,132 @@ impl CreateScene {
             rev: 0,
             pending: None,
             clock_ms: 0,
+            parked: Vec::new(),
         }
+    }
+
+    /// Step off the standing scene for stage `next`: park it while its pane still holds it
+    /// (`live`), else strip its root; then stand `next` back up if it is parked, returning whether
+    /// it was, so the caller lights it instead of spawning. `children` lists an entity's children,
+    /// for the emitters to freeze and thaw. Token and handle stay for the caller to set on a
+    /// spawn; a resumed scene brings its own.
+    fn leave_for(
+        &mut self,
+        commands: &mut Commands,
+        layer: &RenderLayers,
+        live: &[u64],
+        next: u64,
+        children: &dyn Fn(Entity) -> Vec<Entity>,
+    ) -> bool {
+        let returning = self
+            .parked
+            .iter()
+            .position(|p| p.stage == next)
+            .map(|i| self.parked.remove(i));
+        let parks = self.spawned && self.stage != next && live.contains(&self.stage);
+        match (parks, self.token, self.handle.clone()) {
+            (true, Some(token), Some(handle)) => {
+                hold_scene(commands, self.root, true, children);
+                self.parked.push(ParkedScene {
+                    root: self.root,
+                    token,
+                    handle,
+                    cam: self.cam,
+                    art: self.art,
+                    char_spot: self.char_spot,
+                    char_facing: self.char_facing,
+                    char_scale: self.char_scale,
+                    pet_spot: self.pet_spot,
+                    pet_facing: self.pet_facing,
+                    pet_stage_scale: self.pet_stage_scale,
+                    stage: self.stage,
+                    clock_ms: self.clock_ms,
+                });
+                // A fresh root for the incoming spawn; a resumed scene brings its own.
+                if returning.is_none() {
+                    self.root = commands
+                        .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
+                        .id();
+                }
+            }
+            _ if returning.is_some() => {
+                // Gone for good, and its root with it: the returning scene stands on its own.
+                commands.entity(self.root).despawn();
+            }
+            _ => {
+                commands.entity(self.root).despawn_related::<Children>();
+                // The model may still be loading: strip the old rig state off the root now.
+                super::clear_booth_rig(commands, self.root);
+            }
+        }
+        self.spawned = false;
+        self.cam = None;
+        self.art = None;
+        // `viewport_aspect` stays: the frame is the window's, not the stage's.
+        self.char_spot = Vec3::ZERO;
+        let Some(p) = returning else {
+            return false;
+        };
+        hold_scene(commands, p.root, false, children);
+        self.root = p.root;
+        self.token = Some(p.token);
+        self.handle = Some(p.handle);
+        self.cam = p.cam;
+        self.art = p.art;
+        self.char_spot = p.char_spot;
+        self.char_facing = p.char_facing;
+        self.char_scale = p.char_scale;
+        self.pet_spot = p.pet_spot;
+        self.pet_facing = p.pet_facing;
+        self.pet_stage_scale = p.pet_stage_scale;
+        self.stage = p.stage;
+        self.clock_ms = p.clock_ms;
+        self.spawned = true;
+        true
+    }
+
+    /// Drop every parked scene whose pane let it go: a new `SetModel` there (`0x76cce0`), or the
+    /// glue screens gone.
+    fn evict(&mut self, commands: &mut Commands, live: &[u64]) {
+        self.parked.retain(|p| {
+            let keep = live.contains(&p.stage);
+            if !keep {
+                commands.entity(p.root).despawn();
+            }
+            keep
+        });
+    }
+}
+
+/// Hold a scene's root still and out of sight, or release it: hidden, its pose evaluation parked,
+/// its players at speed 0 ([`pace_glue_clock`] sets the standing scene's each frame) and its
+/// emitters, the root's children, frozen.
+fn hold_scene(
+    commands: &mut Commands,
+    root: Entity,
+    held: bool,
+    children: &dyn Fn(Entity) -> Vec<Entity>,
+) {
+    let mut model = commands.entity(root);
+    if held {
+        model
+            .insert((Visibility::Hidden, benilla_world::rig_anim::AnimParked))
+            .entry::<AnimationPlayer>()
+            .and_modify(|mut player| {
+                for (_, active) in player.playing_animations_mut() {
+                    active.set_speed(0.0);
+                }
+            });
+    } else {
+        model
+            .insert(Visibility::Visible)
+            .remove::<benilla_world::rig_anim::AnimParked>();
+    }
+    for child in children(root) {
+        commands
+            .entity(child)
+            .entry::<benilla_world::particles::ParticleEmitter>()
+            .and_modify(move |mut emitter| emitter.set_frozen(held));
     }
 }
 
@@ -723,8 +879,13 @@ pub(super) fn sync_glue_scene(
         ResMut<benilla_world::mat_anim_table::MatAnimTable>,
         ResMut<benilla_world::mat_anim_table::MatAnimMirrors>,
     ),
-    // The swap gate's inputs ([`PendingSwap`]).
-    swap: (Res<GluePreviewBake>, Res<Time<bevy::time::Real>>),
+    // The swap gate's inputs ([`PendingSwap`]), and the roots' children, where a parked scene's
+    // emitters are ([`CreateScene::leave_for`]).
+    swap: (
+        Res<GluePreviewBake>,
+        Res<Time<bevy::time::Real>>,
+        Query<&Children>,
+    ),
 ) {
     let (
         mut palettes,
@@ -737,12 +898,14 @@ pub(super) fn sync_glue_scene(
         mut anim_table,
         mut anim_mirrors,
     ) = particle_assets;
-    let (bake, real) = swap;
+    let (bake, real, kids) = swap;
     let Some(booth) = booths.0.get(GLUE_SLOT) else {
         return;
     };
+    let children = |e: Entity| kids.get(e).map(|c| c.to_vec()).unwrap_or_default();
     let Some(which) = preview.scene else {
         // Off the glue screens: tear the scene down, free the model, square target back.
+        scene.evict(&mut commands, &[]);
         if scene.token.is_some() {
             commands.entity(scene.root).despawn_related::<Children>();
             // Strip the rig state (pose buffer, player, palette slot): the root outlives its bakes.
@@ -779,6 +942,7 @@ pub(super) fn sync_glue_scene(
         }
     }
 
+    scene.evict(&mut commands, &preview.live);
     let token = which.token();
     let fog = preview.fog;
     // The ghost light fork (`0x472150`, [`ghost_rig`]), shared by the scene, character and pet.
@@ -790,6 +954,8 @@ pub(super) fn sync_glue_scene(
         // The requested stage is already standing: no swap pends.
         scene.pending = None;
     }
+    // A parked scene that stands again ([`CreateScene::leave_for`]).
+    let mut resumed = false;
     if scene.token != Some(token) {
         // The pair swaps together or not at all ([`PendingSwap`]).
         let now = real.elapsed_secs();
@@ -819,20 +985,31 @@ pub(super) fn sync_glue_scene(
                  {art_ready}, body {body_ready}) — the bound is GLUE_SWAP_HOLD_SECS"
             );
         }
-        scene.token = Some(token);
-        scene.handle = Some(pending.handle);
-        scene.spawned = false;
-        scene.cam = None;
-        scene.art = None;
-        // `viewport_aspect` stays: the frame is the window's, not the stage's.
-        scene.char_spot = Vec3::ZERO;
         clear_pet(&mut commands, &mut scene);
-        commands.entity(scene.root).despawn_related::<Children>();
-        // The model may still be loading: strip the old rig state off the root now.
-        super::clear_booth_rig(&mut commands, scene.root);
-    } else if scene.spawned && (scene.fog != fog || scene.stage != preview.stage) {
-        // Same scene, other screen or a new instance of it: rebuild in place (the handle is
-        // cached, so it respawns now).
+        resumed = scene.leave_for(
+            &mut commands,
+            &booth.layer,
+            &preview.live,
+            preview.stage,
+            &children,
+        );
+        if !resumed {
+            scene.token = Some(token);
+            scene.handle = Some(pending.handle);
+        }
+    } else if scene.spawned && scene.stage != preview.stage {
+        // Same file, another instance: this pane's new one or another pane's (the handle is
+        // cached, so a spawn is now).
+        clear_pet(&mut commands, &mut scene);
+        resumed = scene.leave_for(
+            &mut commands,
+            &booth.layer,
+            &preview.live,
+            preview.stage,
+            &children,
+        );
+    } else if scene.spawned && scene.fog != fog {
+        // Same scene, other screen: rebuild in place.
         scene.spawned = false;
         commands.entity(scene.root).despawn_related::<Children>();
     } else if scene.spawned && scene.ghost != ghost {
@@ -858,6 +1035,37 @@ pub(super) fn sync_glue_scene(
                 rig.points.len(),
             );
         }
+    }
+    if resumed {
+        // The shared light buffer carries the standing scene's rig and fog: put this one's back.
+        if let (Some(model), Some(light)) = (
+            scene.handle.as_ref().and_then(|h| m2s.get(h)),
+            scene.light.clone(),
+        ) {
+            let rig = if ghost {
+                ghost_rig()
+            } else {
+                scene_rig(&model.lights)
+            };
+            scene_light_blob(&rig, fog).write(&queue, &light);
+        }
+        scene.fog = fog;
+        scene.ghost = ghost;
+        // The character and the pet re-seat and re-light on the stage that came back.
+        scene.pet_baked = None;
+        scene.rev += 1;
+        info!(
+            "glue scene: UI_{token} resumed at {} ms on its own clock",
+            scene.clock_ms
+        );
+        apply_yaw(
+            &mut commands,
+            booth.root,
+            scene.char_spot,
+            scene.char_facing,
+            scene.char_scale,
+            preview.yaw,
+        );
     }
     if !scene.spawned {
         let Some(model) = scene.handle.as_ref().and_then(|h| m2s.get(h)) else {
@@ -1620,8 +1828,12 @@ pub(super) fn pace_glue_clock(
     };
     scene.clock_ms += step_ms;
     let clock = scene.clock_ms as f64 / 1000.0;
-    // The scene's texture transforms and colour tracks sample it too ([`sync_glue_scene`]).
+    // The scene's texture transforms and colour tracks sample it too ([`sync_glue_scene`]); a
+    // parked scene's stay where it stopped, and a dropped one's go.
     clocks.0.insert(scene.root, clock);
+    clocks
+        .0
+        .retain(|root, _| *root == scene.root || scene.parked.iter().any(|p| p.root == *root));
     // A player advances by `delta · speed` (`advance_animations`), so this speed makes it step by
     // the clock's own whole milliseconds, and 0 holds it.
     let speed = if delta > 0.0 {
@@ -2788,5 +3000,138 @@ mod tests {
                 "and every player steps with it: {then} → {now}"
             );
         }
+    }
+
+    // ── A scene left for another pane's ──────────────────────────────────
+
+    /// `AccountLogin.xml`'s `file=` is the login pane's only `SetModel` (`0x76cce0`), so its scene
+    /// outlives a visit to the character screens: left for the select stage it is parked (hidden,
+    /// posed still, its players and emitters stopped), and the return stands the same root back up
+    /// on the clock it stopped at. A scene whose pane let it go is dropped instead.
+    #[test]
+    fn a_scene_left_for_another_panes_resumes_on_its_return() {
+        use bevy::ecs::world::CommandQueue;
+        let mut world = World::new();
+        let layer = RenderLayers::layer(GLUE_LAYER);
+        let login = world
+            .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
+            .id();
+        let pet = world.spawn_empty().id();
+        // The login scene: a looping player on its root and one brazier under it.
+        let mut player = AnimationPlayer::default();
+        player.play(node(STAND_NODE)).repeat();
+        world.entity_mut(login).insert(player);
+        let brazier = {
+            let em = benilla_assets::ModelEmitter {
+                def: benilla_world::testing::plain_particle_def(),
+                texture: Some(Handle::default()),
+                bone_pivot: [0.0; 3],
+                billboard: None,
+                recursion: None,
+                geometry: None,
+                owner_reach: 0.0,
+                water_bound: (Vec3::ZERO, 0.0),
+                idle_seq: 0,
+            };
+            let mut queue = CommandQueue::default();
+            let e = {
+                let mut commands = Commands::new(&mut queue, &world);
+                benilla_world::particles::spawn_emitter(
+                    &mut commands,
+                    &em,
+                    Transform::IDENTITY,
+                    default(),
+                    benilla_world::particles::EmitClock::Pinned,
+                )
+                .expect("a textured emitter spawns")
+            };
+            queue.apply(&mut world);
+            world.entity_mut(e).insert(ChildOf(login));
+            e
+        };
+        let mut scene = CreateScene::empty(login, pet);
+        scene.token = Some("MainMenu");
+        scene.handle = Some(Handle::default());
+        scene.spawned = true;
+        scene.stage = 1;
+        scene.clock_ms = 1234;
+
+        let step = |world: &mut World, scene: &mut CreateScene, live: &[u64], next: u64| {
+            let mut queue = CommandQueue::default();
+            let resumed = {
+                let children = |e: Entity| {
+                    world
+                        .get::<Children>(e)
+                        .map(|c| c.to_vec())
+                        .unwrap_or_default()
+                };
+                let mut commands = Commands::new(&mut queue, world);
+                scene.leave_for(&mut commands, &layer, live, next, &children)
+            };
+            queue.apply(world);
+            resumed
+        };
+        let frozen = |world: &World| {
+            world
+                .get::<benilla_world::particles::ParticleEmitter>(brazier)
+                .unwrap()
+                .is_frozen()
+        };
+        let speed = |world: &World| {
+            world
+                .get::<AnimationPlayer>(login)
+                .and_then(|p| p.animation(node(STAND_NODE)))
+                .unwrap()
+                .speed()
+        };
+
+        // Login → select: both panes hold their instances, so the login scene parks.
+        assert!(!step(&mut world, &mut scene, &[1, 2], 2), "select is new");
+        assert_ne!(
+            scene.root, login,
+            "the select stage spawns on a root of its own"
+        );
+        assert!(!scene.spawned);
+        assert_eq!(*world.get::<Visibility>(login).unwrap(), Visibility::Hidden);
+        assert!(world
+            .get::<benilla_world::rig_anim::AnimParked>(login)
+            .is_some());
+        assert_eq!(speed(&world), 0.0, "its clock stands still");
+        assert!(frozen(&world), "and its brazier with it");
+        assert_eq!(
+            world.get::<ChildOf>(brazier).map(|c| c.parent()),
+            Some(login),
+            "nothing of the scene is torn down"
+        );
+
+        // The select stage stands, then the return to login.
+        let select = scene.root;
+        scene.token = Some("Orc");
+        scene.spawned = true;
+        scene.stage = 2;
+        scene.clock_ms = 50;
+        assert!(step(&mut world, &mut scene, &[1, 2], 1), "login resumes");
+        assert_eq!(scene.root, login);
+        assert_eq!(
+            (scene.token, scene.stage, scene.clock_ms, scene.spawned),
+            (Some("MainMenu"), 1, 1234, true),
+            "on the clock it stopped at"
+        );
+        assert_eq!(
+            *world.get::<Visibility>(login).unwrap(),
+            Visibility::Visible
+        );
+        assert!(world
+            .get::<benilla_world::rig_anim::AnimParked>(login)
+            .is_none());
+        assert!(!frozen(&world));
+        assert_eq!(scene.parked.len(), 1, "the select stage parks in turn");
+
+        // The select pane takes a new model: its old scene goes.
+        let mut queue = CommandQueue::default();
+        scene.evict(&mut Commands::new(&mut queue, &world), &[1]);
+        queue.apply(&mut world);
+        assert!(scene.parked.is_empty());
+        assert!(world.get_entity(select).is_err());
     }
 }
