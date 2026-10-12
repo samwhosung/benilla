@@ -145,12 +145,14 @@ fn row_of(model: &Model, key: &AddonKey) -> Option<usize> {
 }
 
 /// The enable setter (`0x51ea20`), the one write every enable verb makes, for the current
-/// character's row: the registry bit the gate reads, and the character's enable hash, which the
-/// setter dirties only when the row changes or is new.
-fn set_enabled(model: &mut Model, i: usize, on: bool) {
-    model.addons[i].enabled = on;
-    let name = model.addons[i].name.clone();
-    model.addon_enable.set(&name, on);
+/// character's row: the character's enable hash, which the setter dirties only when the row
+/// changes or is new, and, for an installed addon (`row`), the registry bit the gate reads. A
+/// name nothing installed answers to still gets its hash row, which the logout writer saves.
+fn set_enabled(model: &mut Model, row: Option<usize>, name: &str, on: bool) {
+    if let Some(i) = row {
+        model.addons[i].enabled = on;
+    }
+    model.addon_enable.set(name, on);
 }
 
 /// The registry as [`super::addon_gate`] rows, the one input every verb's verdict reads.
@@ -321,9 +323,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // One argument, keyed on the logged-in character (`0x48e690`, `0x48e760`, via `0x5abdc0`);
-    // the `(character, index)` form is the glue's (`0x46d7b0`, `0x46d8a0`). Deviation: an unknown
-    // name is a no-op, where the reference adds an enable-hash entry for it, so that a typo leaves
-    // no row behind.
+    // the `(character, index)` form is the glue's (`0x46d7b0`, `0x46d8a0`). A name goes to the
+    // setter as the caller spelled it (`0x6f3690`), installed or not: the setter never checks the
+    // installed list, and inserts a row for a name its hash lacks (`0x51eb06`-`0x51eb62`).
     for (name, on, usage) in [
         ("EnableAddOn", true, USAGE_ENABLE),
         ("DisableAddOn", false, USAGE_DISABLE),
@@ -332,10 +334,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             name,
             lua.create_function(move |lua, key: Value| {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
-                let key = addon_key(lua, &model, &key, usage)?;
-                if let Some(i) = row_of(&model, &key) {
-                    set_enabled(&mut model, i, on);
-                }
+                let (row, name) = match addon_key(lua, &model, &key, usage)? {
+                    AddonKey::Index(i) => (Some(i), model.addons[i].name.clone()),
+                    AddonKey::Name(n) => (by_name(&model, &n), n),
+                };
+                set_enabled(&mut model, row, &name, on);
                 Ok(())
             })?,
         )?;
@@ -352,7 +355,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 for k in 0..model.addon_index.len() {
                     let i = model.addon_index[k];
-                    set_enabled(&mut model, i, on);
+                    let name = model.addons[i].name.clone();
+                    set_enabled(&mut model, Some(i), &name, on);
                 }
                 Ok(())
             })?,

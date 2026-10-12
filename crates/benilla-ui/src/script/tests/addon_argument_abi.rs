@@ -152,3 +152,58 @@ fn an_unknown_name_echoes_itself_rather_than_a_placeholder_literal() {
     );
     assert_eq!(s.arity(r##"GetAddOnDependencies("Nope")"##).unwrap(), 0);
 }
+
+/// `EnableAddOn 0x48e690` and `DisableAddOn 0x48e760` pass a name to the setter `0x51ea20` as the
+/// caller spelled it, and the setter never looks at the installed list: a name it lacks gets a
+/// row (`0x51eb06`-`0x51eb62`) for the logout writer, while `GetAddOnInfo` still answers the
+/// missing-addon values (`0x51e470` resolves the installed list first).
+#[test]
+fn a_name_nothing_installed_answers_to_still_gets_its_enable_row() {
+    let s = seeded();
+    s.run("DisableAddOn('NotInstalledYet') EnableAddOn('ALSOGONE')")
+        .unwrap();
+    assert_eq!(
+        s.take_addon_enable_rows(),
+        Some(vec![
+            ("NotInstalledYet".to_string(), false),
+            ("ALSOGONE".to_string(), true),
+        ]),
+        "a row per unknown name, in the caller's spelling"
+    );
+    assert_eq!(
+        s.eval::<(
+            String,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            String
+        )>(
+            "local n, t, no, e, l, r = GetAddOnInfo('NotInstalledYet') return n, t, no, e, l, r"
+        )
+        .unwrap(),
+        (
+            "NotInstalledYet".to_string(),
+            None,
+            None,
+            None,
+            None,
+            "MISSING".to_string()
+        ),
+        "in the session the addon is still missing"
+    );
+}
+
+/// `ResetDisabledAddOns 0x48e830` reloads the character's hash from its file (`0x51ebe0`), clean,
+/// so a row the session added for an unknown name goes with the rest.
+#[test]
+fn reset_clears_a_toggle_for_a_name_nothing_installed_answers_to() {
+    let s = seeded();
+    s.run("DisableAddOn('NotInstalledYet') ResetDisabledAddOns() DisableAddOn('Alpha')")
+        .unwrap();
+    assert_eq!(
+        s.take_addon_enable_rows(),
+        Some(vec![("Alpha".to_string(), false)]),
+        "the reset took the unknown name's row with it"
+    );
+}

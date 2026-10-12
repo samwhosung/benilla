@@ -2889,6 +2889,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 
+    /// The setter `0x51ea20` keeps a toggle for a name nothing installed answers to, and the
+    /// logout writer `0x51ef20` saves it with the rest, in the caller's spelling.
+    #[test]
+    fn a_toggle_for_an_uninstalled_name_reaches_the_file_at_logout() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("uninstalled-toggle");
+        let id = ("Realm".to_string(), "Char".to_string());
+        let p = crate::local_state::addons_state_path("Realm", "Char").unwrap();
+        let mut script = UiScript::new().unwrap();
+        let _ = load_third_party(&mut script, Some(&id), &[], true);
+        script
+            .eval::<()>("DisableAddOn('ComesLater') EnableAddOn('AlsoLater')")
+            .unwrap();
+        save_enable_state(&script, Some(&id));
+
+        let rows = parse_enable_state(&std::fs::read_to_string(&p).unwrap());
+        assert_eq!(
+            rows,
+            vec![
+                ("ComesLater".to_string(), false),
+                ("AlsoLater".to_string(), true)
+            ]
+        );
+        // The addon arrives disabled when it is installed.
+        write_addon(
+            &home,
+            "ComesLater",
+            "## Interface: 11200\nmain.lua\n",
+            &[("main.lua", "ComesLaterRan = true")],
+        );
+        let mut next = UiScript::new().unwrap();
+        let _ = load_third_party(&mut next, Some(&id), &[], true);
+        assert_eq!(
+            next.eval::<bool>("return ComesLaterRan == nil").ok(),
+            Some(true)
+        );
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
     /// `AddOn_Load 0x51f240` has no re-entrancy guard (the visiting byte `[UIADDON+0x2d]` lives in
     /// `AddOn_CanLoad 0x51e780`) but stamps the loaded byte before the dependency loops
     /// (`0x51f313 mov byte [rec+0x18],1`), so the re-entered frame exits at `0x51f2d6`/`0x51f2db`
