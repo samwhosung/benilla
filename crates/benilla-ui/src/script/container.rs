@@ -393,6 +393,9 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
                 // (`ClearCursor(0,1)` at `0x5e0fe7`: the grid hide, `CURSOR_UPDATE`) and the
                 // binding clears again (`0x4f9eb8`), a second `CURSOR_UPDATE` on the empty cursor.
                 // The source keeps its lock in both: the clears pass no unlock.
+                // A locked occupant refuses the whole stack, the payload kept (`0x4f9e76`); the
+                // split arm above never reads it.
+                (None, Some(d)) if cursor::item_locked(model, d.guid) => {}
                 (None, dest) => {
                     queue_move(model, &held, bag, slot, None);
                     cursor::lock_item(model, dest.map_or(0, |d| d.guid));
@@ -699,8 +702,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // ShowContainerSellCursor(bag, slot) (`0x4fa460`): Buy (3) over an occupied slot, with no
-    // price check, so selling never greys; an empty slot leaves the cursor alone.
+    // ShowContainerSellCursor(bag, slot) (`0x4fa460`): Buy (3) over an occupied, unlocked slot
+    // (`0x4fa4bf`), with no price check, so selling never greys; an empty or locked slot leaves
+    // the cursor alone.
     lua.globals().set(
         "ShowContainerSellCursor",
         lua.create_function(|lua, (bag, slot): (i64, u32)| {
@@ -709,7 +713,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 .containers
                 .get(&bag)
                 .and_then(|c| c.slots.get(&slot))
-                .is_some();
+                .is_some_and(|s| !cursor::item_locked(&model, s.guid));
             // An armed spell or repair cursor suppresses it first; each is sticky, so a Buy here
             // would stamp out the active base cursor.
             if occupied && !model.spell_targeting && !model.repair_mode {
@@ -1278,6 +1282,33 @@ mod tests {
         );
     }
 
+    /// A whole stack placed onto a locked occupant is refused, held and unsent (`0x4f9e76`); a
+    /// split onto the same stack goes (`0x4f9e1c` reads no lock).
+    #[test]
+    fn a_whole_stack_onto_a_locked_occupant_is_refused_and_a_split_is_not() {
+        let mut s = UiScript::new().unwrap();
+        let mut state = backpack(); // slot 1: a 5-stack of 117, guid 0x10a
+        state.slots.insert(
+            5,
+            ContainerSlot {
+                item_id: 117,
+                count: 2,
+                guid: 0x55,
+                ..Default::default()
+            },
+        );
+        s.set_container(0, Some(state));
+        s.lock_item(0x55);
+        s.run("PickupContainerItem(0, 1) PickupContainerItem(0, 5)")
+            .unwrap();
+        assert!(s.cursor_item().is_some(), "kept");
+        assert!(s.take_container_moves().is_empty());
+        s.run("ClearCursor() SplitContainerItem(0, 1, 2) PickupContainerItem(0, 5)")
+            .unwrap();
+        assert!(s.cursor_item().is_none());
+        assert_eq!(s.take_container_moves().len(), 1, "the split merges");
+    }
+
     #[test]
     fn pickup_refuses_a_locked_slot() {
         let mut s = UiScript::new().unwrap();
@@ -1417,6 +1448,19 @@ mod tests {
         s.run("ClearCursor()").unwrap();
         assert!(s.cursor_item().is_none());
         assert!(s.take_container_moves().is_empty());
+    }
+
+    /// A locked item shows no sell cursor (`0x4fa4bf`).
+    #[test]
+    fn a_locked_item_shows_no_sell_cursor() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.lock_item(0x10a);
+        s.run("ShowContainerSellCursor(0, 1)").unwrap();
+        assert_eq!(s.ui_cursor(), None);
+        s.unlock_item(0x10a);
+        s.run("ShowContainerSellCursor(0, 1)").unwrap();
+        assert_eq!(s.ui_cursor(), Some(UiCursorMode::Buy));
     }
 
     #[test]

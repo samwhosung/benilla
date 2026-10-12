@@ -605,7 +605,9 @@ pub(crate) fn click_attach_slot(
 
 impl super::UiScript {
     /// `LockItem` (`0x4953e0`) from the host, for a send that locks its item: the open-item and
-    /// `UseContainerItem` sends, say. Its `ITEM_LOCK_CHANGED` fires now.
+    /// `UseContainerItem` sends, say. Its `ITEM_LOCK_CHANGED` fires now. The host passes only a
+    /// guid that resolves to an item object, as `LockItem` on any other signals nothing
+    /// (`0x495407`); the VM cannot see the objects to check.
     pub fn lock_item(&mut self, guid: u64) {
         if guid == 0 {
             return;
