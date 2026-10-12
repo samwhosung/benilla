@@ -646,10 +646,13 @@ impl UiScript {
 
     /// The glue screens' VM, as the glue builder (`0x46a7b0`) leaves its state before GlueXML
     /// loads: the base set and the shared registrars, with the glue event table and the glue frame
-    /// types ([`glue`]), and none of the in-game surface. The glue registrar's own four tables
-    /// (`0x46ddf0`, `0x4736c0`, `0x471a20`, `0x46f480`) are not built yet.
+    /// types ([`glue`]), and none of the in-game surface. Of the glue registrar's own four tables
+    /// (`0x46ddf0`, `0x4736c0`, `0x471a20`, `0x46f480`) only the screen verbs are built
+    /// ([`glue::install`]).
     pub fn new_glue() -> mlua::Result<UiScript> {
-        Ok(Self::host(install_framescript(VmKind::Glue)?))
+        let lua = install_framescript(VmKind::Glue)?;
+        glue::install(&lua)?;
+        Ok(Self::host(lua))
     }
 
     fn host(lua: Lua) -> UiScript {

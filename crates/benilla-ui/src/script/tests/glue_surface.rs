@@ -162,14 +162,11 @@ const NOT_YET: &[(&str, &[&str])] = &[
             "GetBillingTimeRemaining",
             "GetBillingTimeRested",
             "GetBuildInfo",
-            "GetCursorPosition",
             "GetLocale",
             "GetMovieResolution",
             "GetMovieSubtitles",
             "GetNumAddOns",
             "GetSavedAccountName",
-            "GetScreenHeight",
-            "GetScreenWidth",
             "GetScriptMemory",
             "GetServerName",
             "HideCursor",
@@ -520,5 +517,32 @@ fn model_ffx_is_a_model_flagged_ffx() {
         s.eval::<(String, f64)>("return XmlFfx:GetModel(), XmlFfx:GetModelScale()")
             .unwrap(),
         ("Test/Xml.mdx".to_string(), 2.0)
+    );
+}
+
+/// The glue's screen verbs answer the screen root with no UI scale (`0x46dd30`, `0x46dd80`): the
+/// in-game pair divides by `UIParent`'s scale (`0x494590`), the glue pair has none to divide by,
+/// even when a frame is named `UIParent`. The cursor is the root's (`0x46dad0`).
+#[test]
+fn the_glue_screen_verbs_answer_the_root_unscaled() {
+    let root = (768.0_f32 * 16.0 / 9.0, 768.0_f32);
+    let read = |mut s: UiScript| {
+        s.set_screen_size(root.0, root.1);
+        s.run(r#"local p = CreateFrame("Frame", "UIParent") p:SetScale(0.5)"#)
+            .unwrap();
+        s.mouse_move(100.0, 200.0);
+        s.eval::<(f32, f32, f32, f32)>(
+            "local x, y = GetCursorPosition() return GetScreenWidth(), GetScreenHeight(), x, y",
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        read(UiScript::new_glue().unwrap()),
+        (root.0, root.1, 100.0, 200.0)
+    );
+    assert_eq!(
+        read(UiScript::new().unwrap()),
+        (root.0 * 2.0, root.1 * 2.0, 100.0, 200.0),
+        "the in-game pair answers in UIParent's units"
     );
 }
