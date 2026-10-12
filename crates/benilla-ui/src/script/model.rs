@@ -184,7 +184,7 @@ pub(crate) struct Model {
     /// Per layout id, what its resolve owes beside the deferral bit itself (which the frame and
     /// region carry, [`crate::widget::Frame::layout_deferred`]): `HOLD_*` bits. A node in
     /// [`Self::layout_pending`] or [`Self::layout_force`] is queued; a deferred node pending is
-    /// held, the reference's bit 4 under bit 2, whose resolve waits until its show, a read or a
+    /// held, the reference's `0x4` under `0x2`, whose resolve waits until its show, a read or a
     /// reader's anchor read.
     pub(crate) layout_hold: Vec<u8>,
     /// Layout ids invalidated while deferred since the last resolve: each passes the invalidate to
@@ -1799,7 +1799,8 @@ impl Model {
         }
     }
 
-    /// A deferred node's invalidate: pending, and the first one passes on (`0x76814b`).
+    /// A deferred node's invalidate: it sets `0x4` and passes on (`0x768169`–`0x76819c`); one
+    /// already pending only writes the drain's retry counter, `+0x38 = 6` (`0x76814b`–`0x768166`).
     pub(super) fn hold_invalidated(&mut self, id: u32, force: bool) {
         if self.hold_flags(id) & HOLD_HELD == 0 {
             self.layout_pass.push(id);
@@ -1930,11 +1931,29 @@ impl Model {
         }
     }
 
-    /// The show transition's layout step (`0x76ae10`): out of its load window, the frame and its
-    /// title region undefer, resolving first (`0x76ae58`, `0x76ae6c`), and each shown region
-    /// starts drawing and undefers (`0x76aeac` → `0x77fce6`). Whether any of them owes a resolve
-    /// now, or an invalidate passed while deferred is yet to reach what it may.
-    pub(crate) fn layout_on_show(&mut self, h: FrameHandle) -> bool {
+    /// The show transition's layout step for the frame (`0x76ae10`): out of its load window, the
+    /// frame and its title region undefer, resolving first (`0x76ae58`, `0x76ae6c`). Whether
+    /// either owes a resolve now, or an invalidate passed while deferred is yet to reach what it
+    /// may.
+    pub(crate) fn layout_on_show_frame(&mut self, h: FrameHandle) -> bool {
+        let Some(f) = self.arena.frame(h) else {
+            return false;
+        };
+        if f.load_window {
+            return false;
+        }
+        let title = f.title_region;
+        let mut owed = self.undefer_frame(h);
+        if let Some(t) = title {
+            owed |= self.undefer_region(t);
+        }
+        owed || !self.layout_pass.is_empty()
+    }
+
+    /// The show transition's region step, after the frame is marked visible (`0x76aeac` →
+    /// `0x77fcb0`): out of the frame's load window, each shown region starts drawing and
+    /// undefers (`0x77fce6`). Whether any owes a resolve now, as [`Self::layout_on_show_frame`].
+    pub(crate) fn layout_on_show_regions(&mut self, h: FrameHandle) -> bool {
         let Some(f) = self.arena.frame(h) else {
             return false;
         };
@@ -1943,10 +1962,7 @@ impl Model {
         }
         let title = f.title_region;
         let regions: Vec<RegionHandle> = f.regions.clone();
-        let mut owed = self.undefer_frame(h);
-        if let Some(t) = title {
-            owed |= self.undefer_region(t);
-        }
+        let mut owed = false;
         for rh in regions {
             if Some(rh) != title && self.region_shown_bit(rh) {
                 owed |= self.undefer_region(rh);
@@ -1955,73 +1971,86 @@ impl Model {
         owed || !self.layout_pass.is_empty()
     }
 
-    /// Whether the show of frame `h` must resolve before it goes on: a resolve the show owes fires
-    /// `OnSizeChanged` inside it for the frame and for each deferred, pending frame an anchor read
-    /// on the way resolves (`0x7a2fc0`). With no such handler the resolve shows nothing here, and
-    /// the next resolve, a getter's or the drain's, gives the same rects.
-    pub(crate) fn show_fires(&self, h: FrameHandle) -> bool {
+    /// Both show steps at once, for a show with no handler to run between them.
+    pub(crate) fn layout_on_show(&mut self, h: FrameHandle) -> bool {
+        let frame = self.layout_on_show_frame(h);
+        self.layout_on_show_regions(h) || frame
+    }
+
+    /// Whether a resolve of `roots` now can fire `OnSizeChanged`: a root frame has the handler, or
+    /// a deferred, pending frame an anchor read on the way would resolve (`0x7a2fc0`) does. With no
+    /// such handler the resolve shows nothing in the binding, and the next resolve, a getter's or
+    /// the drain's, gives the same rects.
+    pub(crate) fn resolve_fires(&self, roots: &[u32]) -> bool {
         let fires = |f: FrameHandle| {
             self.scripts
                 .get(&f)
                 .is_some_and(|s| s.contains("OnSizeChanged"))
         };
-        if fires(h) {
-            return true;
-        }
-        let Some(f) = self.arena.frame(h) else {
-            return false;
+        let anchors = |id: u32| -> Option<crate::layout::Anchors> {
+            match self.id_to_frame.get(&id) {
+                Some(h) => self.layout_inputs.get(h).map(|i| i.anchors),
+                None => self
+                    .id_to_region
+                    .get(&id)
+                    .and_then(|rh| self.region_data.get(rh))
+                    .map(|d| d.anchors),
+            }
         };
         let mut stack: Vec<u32> = Vec::new();
-        let mut seen: Vec<u32> = Vec::new();
-        let push_anchors = |anchors: &crate::layout::Anchors, stack: &mut Vec<u32>| {
-            stack.extend(anchors.iter().map(|a| a.relative_to));
-        };
-        if let Some(i) = self.layout_inputs.get(&h) {
-            push_anchors(&i.anchors, &mut stack);
-        }
-        for &rh in &f.regions {
-            if Some(rh) == f.title_region || self.region_shown_bit(rh) {
-                if let Some(d) = self.region_data.get(&rh) {
-                    push_anchors(&d.anchors, &mut stack);
-                }
+        for &id in roots {
+            if self.id_to_frame.get(&id).is_some_and(|&h| fires(h)) {
+                return true;
             }
+            stack.extend(
+                anchors(id)
+                    .iter()
+                    .flat_map(|a| a.iter().map(|a| a.relative_to)),
+            );
         }
+        let mut seen: Vec<u32> = Vec::new();
         while let Some(t) = stack.pop() {
             if seen.contains(&t) || self.hold_flags(t) & HOLD_HELD == 0 || !self.node_deferred(t) {
                 continue;
             }
             seen.push(t);
-            if let Some(&th) = self.id_to_frame.get(&t) {
-                if fires(th) {
-                    return true;
-                }
-                if let Some(i) = self.layout_inputs.get(&th) {
-                    push_anchors(&i.anchors, &mut stack);
-                }
-            } else if let Some(d) = self
-                .id_to_region
-                .get(&t)
-                .and_then(|rh| self.region_data.get(rh))
-            {
-                push_anchors(&d.anchors, &mut stack);
+            if self.id_to_frame.get(&t).is_some_and(|&th| fires(th)) {
+                return true;
             }
+            stack.extend(
+                anchors(t)
+                    .iter()
+                    .flat_map(|a| a.iter().map(|a| a.relative_to)),
+            );
         }
         false
     }
 
-    /// The layout ids [`Self::layout_on_show`] undeferred: the frame, its title region and its
-    /// shown regions.
-    pub(crate) fn show_roots(&self, h: FrameHandle) -> Vec<u32> {
+    /// The layout ids [`Self::layout_on_show_frame`] undeferred: the frame and its title region.
+    pub(crate) fn show_frame_roots(&self, h: FrameHandle) -> Vec<u32> {
+        let mut out: Vec<u32> = self.frame_to_id.get(&h).copied().into_iter().collect();
+        if let Some(t) = self.arena.frame(h).and_then(|f| f.title_region) {
+            out.extend(self.region_to_id.get(&t).copied());
+        }
+        out
+    }
+
+    /// The layout ids [`Self::layout_on_show_regions`] undeferred: the shown regions.
+    pub(crate) fn show_region_roots(&self, h: FrameHandle) -> Vec<u32> {
         let Some(f) = self.arena.frame(h) else {
             return Vec::new();
         };
-        let mut out: Vec<u32> = self.frame_to_id.get(&h).copied().into_iter().collect();
-        for &rh in &f.regions {
-            if Some(rh) == f.title_region || self.region_shown_bit(rh) {
-                out.extend(self.region_to_id.get(&rh).copied());
-            }
-        }
-        out
+        f.regions
+            .iter()
+            .filter(|&&rh| Some(rh) != f.title_region && self.region_shown_bit(rh))
+            .filter_map(|rh| self.region_to_id.get(rh).copied())
+            .collect()
+    }
+
+    /// Whether node `id` is pending (`0x4`, [`Self::layout_hold`]): queued, or held under its
+    /// deferral.
+    pub(crate) fn node_pending(&self, id: u32) -> bool {
+        self.hold_flags(id) & (HOLD_HELD | HOLD_QUEUED | HOLD_QUEUED_FORCE) != 0
     }
 
     /// The arena's handler-free `Show`/`Hide` ([`WidgetArena::set_shown`]) with each transition's

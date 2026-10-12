@@ -1,12 +1,13 @@
-//! A hidden frame's layout waits. Hiding sets the layout object's deferral bit, on the frame and
-//! its regions (`0x76ad50` → `0x768060(1)`; regions `0x77fc60`), and a load sets it too
-//! (`0x769770`), which the load's end clears only for a visible frame (`0x76a2f0`). While it is set
-//! an invalidate marks the object pending and passes the invalidate to what anchors to it, but
-//! queues no resolve (`0x768169`–`0x76819c`), so `ApplyRect` and its `OnSizeChanged` (`0x76b580`)
-//! wait for one of three things: the show, which resolves the frame before its regions and
-//! children show (`0x76ae58` → `0x768060(0)` → `0x7680e0(1)`); a getter, which resolves it and
-//! leaves the bit set (`0x7a1980`, `0x7a1e00`); or an anchor read by an object that resolves, which
-//! clears the bit for good (`0x7a2fb8`–`0x7a2fc0`).
+//! A hidden frame's layout waits. Hiding sets the layout object's deferral bit (`0x2` of
+//! `G+0x3c`), on the frame and its regions (`0x76ad50` → `0x768060(1)`; regions `0x77fc60`), and a
+//! load sets it too (`0x769770`), which the load's end clears only for a visible frame
+//! (`0x76a2f0`). While it is set an invalidate marks the object pending (`0x4`) and passes the
+//! invalidate to what anchors to it, but queues no resolve (`0x768169`–`0x76819c`), so `ApplyRect`
+//! and its `OnSizeChanged` (`0x76b580`) wait for one of three things: the show, which resolves the
+//! frame before its regions and children show (`0x76ae58` → `0x768060(0)` → `0x7680e0(1)`); a
+//! getter, which resolves it inside the read and leaves the bit set (`0x7a1980`; `0x7a1e00` only
+//! at a zero size); or an anchor read by an object that resolves, which clears the bit for good
+//! (`0x7a2fb8`–`0x7a2fc0`).
 
 use super::common::script;
 use crate::script::UiScript;
@@ -390,4 +391,178 @@ fn a_region_hidden_on_a_visible_frame_waits_and_its_show_resolves_it() {
     assert_eq!(num(&s, "DeferMark:GetLeft() - DeferBase:GetLeft()"), 7.0);
     assert!(s.extract().len() > held, "it draws again");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A getter's resolve fires `OnSizeChanged` inside the getter, as its `ApplyRect` runs there
+/// (`0x7a1a1d` → `0x76b580` → vt+0x48); the show fires the next size inside `Show`, and the drain
+/// fires neither again.
+#[test]
+fn a_getter_fires_the_size_change_it_resolves_inside_the_read() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        DeferGet = CreateFrame("Frame", "DeferGet")
+        DeferGet:SetPoint("BOTTOMLEFT", 10, 10)
+        DeferGet:SetWidth(10); DeferGet:SetHeight(10)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(
+        r#"
+        DeferGet:SetScript("OnSizeChanged", function()
+            table.insert(log, "size " .. arg1)
+        end)
+        DeferGet:Hide(); DeferGet:SetWidth(20)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(
+        r#"
+        table.insert(log, "read")
+        DeferGet:GetLeft()
+        table.insert(log, "read done")
+        DeferGet:SetWidth(30)
+        table.insert(log, "show")
+        DeferGet:Show()
+        table.insert(log, "show done")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "read,size 20,read done,show,size 30,show done",
+        "each size fires inside the call that resolves it, and the drain fires no stale one"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A visible frame's getter on a queued resolve fires it inside the read too: the getter resolves
+/// whatever is pending (`0x7a1a0b` → `0x7680e0(1)`).
+#[test]
+fn a_getter_on_a_queued_visible_frame_fires_inside_the_read() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        QueuedGet = CreateFrame("Frame", "QueuedGet")
+        QueuedGet:SetPoint("BOTTOMLEFT", 10, 10)
+        QueuedGet:SetWidth(10); QueuedGet:SetHeight(10)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(
+        r#"
+        QueuedGet:SetScript("OnSizeChanged", function()
+            table.insert(log, "size " .. arg1)
+        end)
+        QueuedGet:SetWidth(25)
+        table.insert(log, "read")
+        QueuedGet:GetRight()
+        table.insert(log, "read done")
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "read,size 25,read done"
+    );
+}
+
+/// The show resolves the frame before marking it visible (`0x76ae58`, then `0x76ae7b`), and its
+/// regions after (`0x76aeac` → `0x77fcb0`): a deferred target the frame's anchor read pulls fires
+/// with the frame not yet visible, one its region's read pulls with it visible.
+#[test]
+fn a_target_pulled_by_a_shown_frame_fires_before_its_mark_and_by_its_region_after() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        log = {}
+        PullHost = CreateFrame("Frame", "PullHost")
+        PullHost:SetPoint("BOTTOMLEFT", 10, 10)
+        PullHost:SetWidth(100); PullHost:SetHeight(50)
+        PullTex = PullHost:CreateTexture("PullTex")
+        PullFrameTarget = CreateFrame("Frame", "PullFrameTarget")
+        PullFrameTarget:SetPoint("TOPLEFT", 300, -10)
+        PullFrameTarget:SetWidth(40); PullFrameTarget:SetHeight(40)
+        PullRegionTarget = CreateFrame("Frame", "PullRegionTarget")
+        PullRegionTarget:SetPoint("TOPLEFT", 400, -10)
+        PullRegionTarget:SetWidth(40); PullRegionTarget:SetHeight(40)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(
+        r#"
+        PullHost:Hide(); PullFrameTarget:Hide(); PullRegionTarget:Hide()
+        local function note(tag)
+            return function() table.insert(log, tag .. " " .. tostring(PullHost:IsVisible())) end
+        end
+        PullFrameTarget:SetScript("OnSizeChanged", note("frame read"))
+        PullRegionTarget:SetScript("OnSizeChanged", note("region read"))
+        PullFrameTarget:SetWidth(44); PullRegionTarget:SetWidth(46)
+        PullHost:ClearAllPoints()
+        PullHost:SetPoint("BOTTOMLEFT", PullFrameTarget, "BOTTOMRIGHT", 0, 0)
+        PullTex:SetAllPoints(PullRegionTarget)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(s.eval::<i64>("return table.getn(log)").unwrap(), 0);
+    s.run("PullHost:Show()").unwrap();
+    assert_eq!(
+        s.eval::<String>("return table.concat(log, ',')").unwrap(),
+        "frame read nil,region read 1"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A moved effective scale clears every region's rect, deferred or not (`0x768360`,
+/// `0x7683a2`–`0x7683c3`, through `0x76ad06`): a hidden frame's anchorless region holds no rect
+/// after the resolve, before any read or show pulls it.
+#[test]
+fn a_scale_change_clears_a_deferred_anchorless_regions_rect() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        ScaleHost = CreateFrame("Frame", "ScaleHost")
+        ScaleHost:SetPoint("BOTTOMLEFT", 10, 10)
+        ScaleHost:SetWidth(100); ScaleHost:SetHeight(50)
+        ScaleTex = ScaleHost:CreateTexture("ScaleTex")
+        ScaleTex:SetAllPoints(ScaleHost)
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let rect = |s: &UiScript| {
+        let m = s.model_ref();
+        let host = m.arena.lookup("ScaleHost").expect("host");
+        let rh = m.arena.frame(host).expect("frame").regions[0];
+        m.region_resolved.get(&rh).copied()
+    };
+    assert!(rect(&s).is_some());
+    s.run("ScaleTex:ClearAllPoints(); ScaleHost:Hide()")
+        .unwrap();
+    s.resolve();
+    assert!(rect(&s).is_some(), "a clear keeps the rect");
+    s.run("ScaleHost:SetScale(0.5)").unwrap();
+    s.resolve();
+    assert_eq!(
+        rect(&s),
+        None,
+        "the cascade cleared the deferred region's rect"
+    );
+    assert!(
+        s.eval::<bool>("return ScaleTex:GetLeft() == nil").unwrap(),
+        "and a read finds none"
+    );
 }

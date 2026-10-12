@@ -221,26 +221,40 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
 }
 
 /// Resolve the layout now if anything moved, as the reference answers a geometry query against
-/// current layout; a settled tree costs one epoch compare. Deviation: `OnSizeChanged` fires at the
-/// next layout drain (`UiScript::resolve`), not inside the getter as the reference's forced
-/// `ApplyRect 0x76b580` does, because running Lua handlers inside a binding risks a borrow panic
-/// or unbounded recursion. The read frame `h`, pending under its deferral, resolves too, its bit
-/// left set (`0x7a1a0b` → `0x7680e0(1)`).
+/// current layout; a settled tree costs one epoch compare. The read frame `h`, if pending, resolves
+/// inside the read, its deferral bit left set (`0x7a1a0b` → `0x7680e0(1)`), and its `OnSizeChanged`
+/// fires here, as its `ApplyRect` (`0x76b580` → vt+0x48) runs inside the getter.
 pub(in crate::script) fn settle_frame(lua: &Lua, h: FrameHandle) {
-    let mut model = lua.app_data_mut::<Model>().expect("model");
-    if let Some(&id) = model.frame_to_id.get(&h) {
-        model.pull_read(id);
-    }
-    crate::script::UiScript::resolve_layout(&mut model);
+    let id = lua
+        .app_data_ref::<Model>()
+        .expect("model")
+        .frame_to_id
+        .get(&h)
+        .copied();
+    settle_node(lua, id);
 }
 
 /// [`settle_frame`] for a region's rect, through the same getters (`0x7a1980`..).
 pub(in crate::script) fn settle_region(lua: &Lua, rh: crate::widget::RegionHandle) {
+    let id = lua
+        .app_data_ref::<Model>()
+        .expect("model")
+        .region_to_id
+        .get(&rh)
+        .copied();
+    settle_node(lua, id);
+}
+
+fn settle_node(lua: &Lua, id: Option<u32>) {
     let mut model = lua.app_data_mut::<Model>().expect("model");
-    if let Some(&id) = model.region_to_id.get(&rh) {
-        model.pull_read(id);
+    match id {
+        Some(id) if model.node_pending(id) => {
+            model.pull_read(id);
+            drop(model);
+            crate::script::visibility::resolve_and_fire(lua, vec![id]);
+        }
+        _ => crate::script::UiScript::resolve_layout(&mut model),
     }
-    crate::script::UiScript::resolve_layout(&mut model);
 }
 
 pub(crate) fn eff_scale(model: &Model, h: FrameHandle) -> f32 {

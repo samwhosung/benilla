@@ -870,13 +870,13 @@ pub struct LayoutSolver {
     has_entry: Vec<bool>,
     /// Per frame, whether it was invalidated (`0x7680e0`) since its entry state.
     pending: Vec<bool>,
-    /// Per node, its deferral bit for this solve (`G+0x3c` bit 2, [`set_deferral`]): it keeps its
-    /// entry state, and an invalidate that reaches it passes on instead.
+    /// Per node, its deferral flag for this solve (`0x2` of `G+0x3c`, [`set_deferral`]): it keeps
+    /// its entry state, and an invalidate that reaches it passes on instead.
     ///
     /// [`set_deferral`]: Self::set_deferral
     deferred: Vec<bool>,
-    /// Per node, pending under its deferral at entry (bit 4 with bit 2): an invalidate reaching it
-    /// does nothing more (`0x76814b`).
+    /// Per node, pending under its deferral at entry (`0x4` with `0x2`): an invalidate reaching it
+    /// only writes the drain's retry counter, `+0x38 = 6` (`0x76814b`–`0x768166`).
     held: Vec<bool>,
     /// Per node, whether its invalidate passes to what anchors to it in this solve, each of which
     /// is then reached (`0x768178`–`0x76819c`).

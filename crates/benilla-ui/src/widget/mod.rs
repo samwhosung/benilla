@@ -175,7 +175,7 @@ pub struct Frame {
     /// the post-load hook starts (`0x76a2ff`). While it is set the frame's own OnShow and OnHide
     /// fire nothing (`0x76b270`/`0x76b2a0`); it still transitions and walks its children.
     pub load_window: bool,
-    /// The layout object's deferral bit (`G+0x3c` bit 2, written only by `0x768060`): set by a
+    /// The layout object's deferral flag (`0x2` of `G+0x3c`, written only by `0x768060`): set by a
     /// hide (`0x76ad70`) and a load's start (`0x7697cc`), cleared by a show (`0x76ae58`), a load's
     /// end while visible (`0x76a310`) and an anchor read (`0x7a2fc0`). While it is set the frame's
     /// resolve waits; [`crate::script::Model`] keeps what it owes.

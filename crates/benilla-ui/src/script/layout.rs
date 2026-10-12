@@ -1031,7 +1031,7 @@ impl UiScript {
         let mut forced = std::mem::take(layout_force);
         let mut pending = pending;
 
-        // ── Deferral (`G+0x3c` bit 2, `0x768060`) ───────────────────────────────────────────
+        // ── Deferral (`0x2` of `G+0x3c`, `0x768060`) ─────────────────────────────────────────
         // A deferred node's resolve waits, pending, until its show, a read, or an anchor read of
         // a node that resolves pulls it; the pulled ones are this resolve's to solve.
         scope.begin_marks((*next_id as usize).max(scope.node_of.len()));
@@ -1135,10 +1135,9 @@ impl UiScript {
         }
         for &id in &scaled {
             if let Some(f) = id_to_frame.get(&id).and_then(|&h| arena.frame(h)) {
+                // Whatever each region's deferral (`0x7683a2`–`0x7683c3`).
                 for &rh in &f.regions {
-                    if !arena.region(rh).is_some_and(|r| r.layout_deferred) {
-                        fail_loose(rh, arena, region_resolved, region_kept);
-                    }
+                    fail_loose(rh, arena, region_resolved, region_kept);
                 }
             }
         }
