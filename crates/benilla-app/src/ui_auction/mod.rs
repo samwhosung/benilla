@@ -18,7 +18,7 @@ use benilla_ui::script::{
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::names::NameCache;
-use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
+use crate::net::{ClientCommand, NetCommands, SelfPlayer};
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, UiError};
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
@@ -610,11 +610,10 @@ fn drain_auction(
     mut auction: ResMut<AuctionOpen>,
     commands: Res<NetCommands>,
     time: Res<Time>,
-    objects: Objects,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
     names: Res<NameCache>,
-    self_q: Query<(&ObjectStore, &crate::net::Guid), With<SelfPlayer>>,
+    self_q: Query<&crate::net::Guid, With<SelfPlayer>>,
     props: Option<Res<crate::items::RandomProperties>>,
     enchants: Option<Res<crate::items::Enchants>>,
 ) {
@@ -693,7 +692,7 @@ fn drain_auction(
     }
 
     // Bids and cancels map the clicked row through the sorted view the feed pushed, roll included.
-    let self_guid = self_q.iter().next().map(|(_, g)| g.0);
+    let self_guid = self_q.iter().next().map(|g| g.0);
     let bids = script.take_auction_bids();
     let cancels = script.take_auction_cancels();
     if !bids.is_empty() || !cancels.is_empty() {
@@ -736,25 +735,16 @@ fn drain_auction(
         }
     }
 
-    // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); its `(bag, slot)` resolves
-    // to the guid here.
+    // `StartAuction` emptied the sell slot in the verb (`0x4ce92a`); it sends the guid the attach
+    // stored (`0x4ce8f3`), wherever the item has since gone.
     for req in script.take_auction_starts() {
-        let item_guid = self_q
-            .iter()
-            .next()
-            .and_then(|(store, _)| {
-                crate::ui_items::slot_guid(&store.0, req.bag, (req.slot.max(1) - 1) as u8, &objects)
-            })
-            .unwrap_or(0);
-        if item_guid != 0 {
-            let _ = commands.0.send(ClientCommand::AuctionSellItem {
-                auctioneer,
-                item_guid,
-                bid: req.min_bid,
-                buyout: req.buyout,
-                etime_minutes: req.duration,
-            });
-        }
+        let _ = commands.0.send(ClientCommand::AuctionSellItem {
+            auctioneer,
+            item_guid: req.item_guid,
+            bid: req.min_bid,
+            buyout: req.buyout,
+            etime_minutes: req.duration,
+        });
     }
 
     // Header clicks last: a row pick above indexes last frame's order, so sorting first would

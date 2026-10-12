@@ -44,6 +44,7 @@ fn the_auction_sell_button_paints_the_attached_item_in_place() {
                 1,
                 benilla_ui::script::ContainerSlot {
                     item_id: 2589,
+                    guid: 0x4001,
                     count: 5,
                     quality: Some(1),
                     texture: Some("Interface\\Icons\\INV_Fabric_Linen_01".into()),

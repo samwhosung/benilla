@@ -759,6 +759,7 @@ fn the_create_gate_and_the_deposit() {
             slots: std::collections::HashMap::from([(
                 1,
                 benilla_ui::script::ContainerSlot {
+                    guid: 0x4001,
                     texture: Some("Interface\\Icons\\INV_Fabric_Linen_01".into()),
                     count: 4,
                     quality: Some(1),

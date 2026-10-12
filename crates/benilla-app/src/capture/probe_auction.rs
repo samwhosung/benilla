@@ -952,11 +952,9 @@ fn auction_probe(
                 } else if now - since > SELL_SLOT_GRACE_SECS {
                     error!(
                         "PROBE_AUCTION: FAIL (5c sell-slot) — the auction is away and the item \
-                         has left the bag, but GetAuctionSellItemInfo() still reads one. \
-                         `clear_auction_sell_item` is documented as called \"once the auction is \
-                         away, and on session close\" and in fact only ever runs on CLOSE \
-                         (`feed_auction`'s `closed` arm is its one caller), so the pane shows a \
-                         phantom stack until the window is shut"
+                         has left the bag, but GetAuctionSellItemInfo() still reads one: \
+                         `StartAuction` should empty the sell slot in the verb, after its send \
+                         (`0x4cd640` at `0x4ce92a`)"
                     );
                     probe.fails += 1;
                     slot_done = true;

@@ -158,12 +158,12 @@ pub struct AuctionQuery {
     pub usable_only: bool,
 }
 
-/// A drained `StartAuction`: the sell slot's item as the verb found it, which it then emptied.
+/// A drained `StartAuction`: the sell slot's item as the attach stored it, which the verb then
+/// emptied.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AuctionStartRequest {
-    /// The attached item's `(bag, slot)`, in the cursor's space.
-    pub bag: i64,
-    pub slot: u32,
+    /// The item's guid as the attach found it (`[0xb72608]`, sent at `0x4ce8f3`).
+    pub item_guid: u64,
     pub min_bid: u32,
     /// `0` = no buyout; else at least the minimum bid (`0x4ce87b`-`0x4ce883`).
     pub buyout: u32,
@@ -702,23 +702,40 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let buyout = super::binding_abi::number_arg(lua, buyout, USAGE)? as u32;
             let duration = super::binding_abi::number_arg(lua, run, USAGE)? as u32;
             super::tick::verb(lua, |model| {
-                // No auctioneer or an empty slot ends it before the send (`0x4ce7da`,
-                // `0x4ce7e4`); so does a run time off the table (`0x4ce8a0`-`0x4ce8b8`).
-                if model.auction.is_none() || !RUN_TIMES.contains(&duration) {
+                // No auctioneer or an empty slot, its stored guid zero, ends it before the send
+                // (`0x4ce7da`, `0x4ce7e4`).
+                let guid = model.auction_sell_item.as_ref().map_or(0, |it| it.guid);
+                if model.auction.is_none() || guid == 0 {
                     return;
                 }
-                let Some(item) = model.auction_sell_item.as_ref() else {
+                // A damaged item, not wrapped (`flags & 8`), with a max durability whose current
+                // falls short, refuses with `ERR_AUCTION_REPAIR_ITEM` (`0x4ce80f`-`0x4ce83f`). An
+                // item not found skips the check (`0x4ce802`).
+                let damaged = model
+                    .containers
+                    .values()
+                    .flat_map(|c| c.slots.values())
+                    .find(|s| s.guid == guid)
+                    .is_some_and(|s| {
+                        s.flags & 0x8 == 0
+                            && s.durability.is_some_and(|(cur, max)| max > 0 && cur < max)
+                    });
+                if damaged {
+                    model.ui_errors.push("ERR_AUCTION_REPAIR_ITEM");
                     return;
-                };
+                }
                 // A buyout under the minimum bid is raised to it (`0x4ce87b`-`0x4ce883`).
                 let buyout = if buyout != 0 && buyout < min_bid {
                     min_bid
                 } else {
                     buyout
                 };
+                // A run time off the table returns silently (`0x4ce8a0`-`0x4ce8b8`).
+                if !RUN_TIMES.contains(&duration) {
+                    return;
+                }
                 model.auction_starts.push(AuctionStartRequest {
-                    bag: item.bag,
-                    slot: item.slot,
+                    item_guid: guid,
                     min_bid,
                     buyout,
                     duration,
@@ -1232,9 +1249,15 @@ mod tests {
         use crate::script::cursor::{bag_lock_probe, two_item_bag};
         use crate::script::tick::heard;
         let mut s = UiScript::new().unwrap();
-        s.set_container(0, Some(two_item_bag()));
+        let mut bag = two_item_bag();
+        for (slot, item) in bag.slots.iter_mut() {
+            item.guid = 0x4000 + u64::from(*slot);
+        }
+        s.set_container(0, Some(bag));
         s.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton()")
             .unwrap();
+        // The attach stored the guid (`[0xb72608]`); the item moving on leaves it.
+        s.set_container(0, Some(two_item_bag()));
         s.run("StartAuction(100, 0, 120)").unwrap();
         assert!(s.take_auction_starts().is_empty(), "no auctioneer");
 
@@ -1263,8 +1286,7 @@ mod tests {
         assert_eq!(
             s.take_auction_starts(),
             [AuctionStartRequest {
-                bag: 0,
-                slot: 1,
+                item_guid: 0x4001,
                 min_bid: 100,
                 buyout: 100,
                 duration: 480,
@@ -1273,5 +1295,39 @@ mod tests {
         );
         let err = s.run("StartAuction(100, 0)").unwrap_err().to_string();
         assert!(err.contains("Usage: StartAuction(minBid, buyoutPrice, runTime)"));
+    }
+
+    /// A damaged item, not wrapped, refuses before the send with `ERR_AUCTION_REPAIR_ITEM` (id
+    /// 375, `0x4ce80f`-`0x4ce83f`) and keeps its slot; a wrapped one, or one at full durability,
+    /// goes.
+    #[test]
+    fn start_auction_refuses_a_damaged_item() {
+        use crate::script::cursor::two_item_bag;
+        let mut s = UiScript::new().unwrap();
+        s.set_auction(Some(AuctionState::default()));
+        let bag = |durability, flags| {
+            let mut bag = two_item_bag();
+            for (slot, item) in bag.slots.iter_mut() {
+                item.guid = 0x4000 + u64::from(*slot);
+                item.durability = durability;
+                item.flags = flags;
+            }
+            bag
+        };
+        s.set_container(0, Some(bag(Some((10, 40)), 0)));
+        s.run("PickupContainerItem(0, 1) ClickAuctionSellItemButton() StartAuction(100, 0, 120)")
+            .unwrap();
+        assert!(s.take_auction_starts().is_empty());
+        assert_eq!(s.take_ui_errors(), vec!["ERR_AUCTION_REPAIR_ITEM"]);
+        assert_eq!(s.auction_sell_item(), Some((0, 1)), "the slot keeps it");
+
+        s.set_container(0, Some(bag(Some((10, 40)), 0x8)));
+        s.run("StartAuction(100, 0, 120)").unwrap();
+        assert_eq!(
+            s.take_auction_starts().len(),
+            1,
+            "a wrapped item is not checked"
+        );
+        assert!(s.take_ui_errors().is_empty());
     }
 }
