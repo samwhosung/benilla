@@ -23,6 +23,8 @@ const MISSES: &[(&str, &str)] = &[
         "nil,nil,1,-1,nil,0,0,0,0,0,nil,nil",
     ),
     ("GetAuctionItemLink('list', 1)", ""),
+    // `index - 1` against 6, unsigned (`0x501924`); every miss is one nil (`0x50216a`).
+    ("GetQuestItemLink('reward', 1)", "nil"),
     ("GetCraftInfo(1)", "nil,nil,nil,0,nil,0,0"),
     ("GetCraftInfo(0)", "nil,nil,nil,0,nil,0,0"),
     ("GetCraftReagentInfo(1, 1)", "nil,nil,nil,nil"),

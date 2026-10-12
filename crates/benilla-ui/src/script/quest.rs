@@ -7,7 +7,7 @@ use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::flag;
 use super::Model;
-use crate::script::binding_abi::{Idx, Idx32};
+use crate::script::binding_abi::Idx;
 
 /// Which questgiver panel a [`QuestState`] is for, set from the wire packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -330,7 +330,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetQuestItemLink(type, index), for a row's ctrl and shift clicks (`QuestFrame.lua:118`).
     g.set(
         "GetQuestItemLink",
-        lua.create_function(|lua, (kind, index): (String, usize)| {
+        lua.create_function(|lua, (kind, index): (String, Value)| {
+            // `index - 1` is compared unsigned against 6 (`0x501924`), so a zero or negative index
+            // is no item; every miss pushes one nil (`0x50216a`).
+            let index = super::binding_abi::index_arg(
+                lua,
+                index,
+                "Usage: GetQuestItemLink(\"type\", index)",
+            )?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 model.quest.as_ref().and_then(|q| {
@@ -448,11 +455,36 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `RewChoiceItemId` with it.
     g.set(
         "GetQuestReward",
-        lua.create_function(|lua, choice: Option<Idx32>| {
+        lua.create_function(|lua, choice: Option<Value>| {
+            // `is-number` failing leaves the choice at -1 (`0x501d89`) and raises nothing; a
+            // number is `trunc(n) - 1` (`0x501da8`), read as signed.
+            let choice = match choice {
+                Some(v) => lua
+                    .coerce_number(v)?
+                    .map_or(-1, |n| super::binding_abi::ftol(n).wrapping_sub(1)),
+                None => -1,
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.quest_actions.push(super::QuestAction::Reward(
-                choice.map_or(0, |c| c.0).saturating_sub(1),
-            ));
+            // Off the reward panel the reference does nothing and answers success (`0x5015b0`:
+            // `[0xbe0818] != 3`).
+            let Some(q) = model
+                .quest
+                .as_ref()
+                .filter(|q| q.panel == QuestPanel::Reward)
+            else {
+                return Ok(());
+            };
+            // With choices on offer an index outside `[0, n)` fails (`0x501608`..`0x50160e`) and
+            // the binding raises; without any, the wire gets `max(choice, 0)` (`0x501627`).
+            let n = q.choices.len() as i32;
+            if n > 0 && !(0..n).contains(&choice) {
+                return Err(mlua::Error::RuntimeError(
+                    "Invalid reward choice in GetQuestReward([choice])".into(),
+                ));
+            }
+            model
+                .quest_actions
+                .push(super::QuestAction::Reward(choice.max(0) as u32));
             Ok(())
         })?,
     )?;
@@ -701,19 +733,87 @@ mod tests {
         assert_eq!(s.take_quest_actions(), vec![QuestAction::Accept]);
 
         s.run("CompleteQuest()").unwrap(); // progress -> reward
+        let mut offer = detail();
+        offer.panel = QuestPanel::Reward;
+        s.set_quest(Some(offer)); // the app pushes the reward panel
         s.run("GetQuestReward(2)").unwrap(); // row 2 (1-based) → wire choice 1 (0-based)
-        s.run("GetQuestReward()").unwrap(); // no-choice quest -> 0
         s.run("DeclineQuest()").unwrap();
         assert_eq!(
             s.take_quest_actions(),
             vec![
                 QuestAction::Continue,
                 QuestAction::Reward(1),
-                QuestAction::Reward(0),
                 QuestAction::Decline,
             ]
         );
         assert!(s.take_quest_actions().is_empty(), "drained");
+    }
+
+    /// `GetQuestReward` (`0x501d80` → `0x5015b0`): with choices on offer an index outside `[0, n)`
+    /// raises "Invalid reward choice" (`0x84eda4`), the default for no argument being -1; with
+    /// none the wire gets `max(index, 0)`; off the reward panel it does nothing.
+    #[test]
+    fn get_quest_reward_validates_the_choice_against_the_offer() {
+        let mut s = UiScript::new().unwrap();
+        s.set_quest(Some(detail()));
+        let n_choices = s.eval::<i64>("return GetNumQuestChoices()").unwrap();
+        assert!(n_choices >= 2);
+        // Not on the reward panel yet: nothing happens, and nothing raises.
+        s.run("GetQuestReward(99)").unwrap();
+        assert!(s.take_quest_actions().is_empty());
+        s.run("CompleteQuest()").unwrap();
+        s.take_quest_actions();
+        let mut offer = detail();
+        offer.panel = QuestPanel::Reward;
+        s.set_quest(Some(offer));
+        for call in [
+            "GetQuestReward()",
+            "GetQuestReward(0)",
+            "GetQuestReward(-3)",
+            &format!("GetQuestReward({})", n_choices + 1),
+            "GetQuestReward('x')",
+        ] {
+            let err = s.run(call).unwrap_err().to_string();
+            assert!(
+                err.contains("Invalid reward choice in GetQuestReward([choice])"),
+                "{call}: {err}"
+            );
+        }
+        assert!(
+            s.take_quest_actions().is_empty(),
+            "a failed pick sends nothing"
+        );
+        s.run(&format!("GetQuestReward({n_choices})")).unwrap();
+        s.run("GetQuestReward(1.9)").unwrap();
+        assert_eq!(
+            s.take_quest_actions(),
+            vec![
+                QuestAction::Reward(n_choices as u32 - 1),
+                QuestAction::Reward(0)
+            ]
+        );
+
+        // No choices on offer: any index goes, as `max(index, 0)`.
+        let mut bare = detail();
+        bare.choices.clear();
+        bare.panel = QuestPanel::Reward;
+        let mut s = UiScript::new().unwrap();
+        s.set_quest(Some(bare));
+        for call in [
+            "GetQuestReward()",
+            "GetQuestReward(-3)",
+            "GetQuestReward(4)",
+        ] {
+            s.run(call).unwrap();
+        }
+        assert_eq!(
+            s.take_quest_actions(),
+            vec![
+                QuestAction::Reward(0),
+                QuestAction::Reward(0),
+                QuestAction::Reward(3)
+            ]
+        );
     }
 
     #[test]
