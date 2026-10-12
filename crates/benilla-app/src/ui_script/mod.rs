@@ -844,6 +844,9 @@ mod uiparent_tests;
 mod trainer_tests;
 
 #[cfg(test)]
+mod auction_tests;
+
+#[cfg(test)]
 mod bank_tests;
 
 #[cfg(test)]

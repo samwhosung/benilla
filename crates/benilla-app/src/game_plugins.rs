@@ -1271,8 +1271,6 @@ pub(crate) mod schedule_tests {
          "the pre-VM take of `LootMoveStart` is documented at the line and publishes nothing to the VM; the event-firing takes are Lua's queues"),
         ("ui_loot/mod.rs", "feed_loot", Because::PlayerRoundTrip,
          "it takes `LootMoveStart` only on a window it has just opened, which answers a loot click"),
-        ("ui_loot_roll.rs", "drain_loot_rolls", Because::FilledByVm,
-         "only a Need/Greed/Pass click queues a confirm or vote, held in the VM"),
         ("ui_loot_roll.rs", "feed_loot_rolls", Because::PlayerRoundTrip,
          "a roll exists only after a group member loots under group loot; leftovers are cleared at socket teardown (another player's act: coincidence-only residual)"),
         ("ui_macro/mod.rs", "load_macros", Because::MemoLatched,
@@ -1305,8 +1303,6 @@ pub(crate) mod schedule_tests {
          "`MSG_TALENT_WIPE_CONFIRM` answers the trainer's gossip option"),
         ("ui_taxi/mod.rs", "feed_taxi", Because::PlayerRoundTrip,
          "both packets follow talking to a flight master"),
-        ("ui_tradeskill.rs", "drain_trade_skill", Because::FilledByVm,
-         "every consumed queue is Lua's; the cast-event continuation is inert until a Lua `DoTradeSkill` latched a count"),
         ("ui_trainer/mod.rs", "feed_trainer", Because::PlayerRoundTrip,
          "a refusal answers a Train click and a list answers a trainer gossip click; the edges ride `VmMemo`s"),
     ];

@@ -788,9 +788,9 @@ pub(crate) struct Model {
     pub(crate) trade_skill_last_line: u32,
     /// The selected recipe's spell id (`0xbde044`), which carries it across reopen and re-push.
     pub(crate) trade_skill_selected_spell: u32,
-    /// A filter or subclass collapse changed: `TRADE_SKILL_UPDATE` (`0x13a`) is owed this frame, as
-    /// the client fires it inside the call (`0x4fd710`/`0x4fd730`/`0x4fd750`, `0x4fd180`).
-    pub(crate) trade_skill_touched: bool,
+    /// The Create All repeat's spell (`0xbde05c`), armed by a `DoTradeSkill` of more than one
+    /// (`0x4fd770`) and disarmed, with its `UPDATE_TRADESKILL_RECAST`, by the close (`0x4fd790`).
+    pub(crate) trade_skill_repeat_spell: u32,
 
     /// The open craft window's recipes.
     pub(crate) craft: Option<craft::CraftState>,
@@ -818,8 +818,6 @@ pub(crate) struct Model {
     /// The open group-loot rolls, and the `RollOnLoot` `(roll_id, roll_type)` votes.
     pub(crate) loot_rolls: loot_roll::LootRollsState,
     pub(crate) loot_roll_votes: Vec<(u32, u8)>,
-    /// Need or Greed on a bind-on-pickup roll: a `CONFIRM_LOOT_ROLL` popup ask, not a vote.
-    pub(crate) loot_roll_confirms: Vec<(u32, u8)>,
 
     /// The item-text reader: the pushed page, then the close and page-turn calls.
     pub(crate) item_text: Option<item_text::ItemTextState>,
@@ -828,6 +826,12 @@ pub(crate) struct Model {
     /// The open inbox and mail calls, rows 1-based: `mail_opens` are rows `GetInboxText` read.
     pub(crate) mail: Option<mail::MailState>,
     pub(crate) mail_check_inbox: bool,
+    /// `CheckInbox`'s throttle `[0xb6efc4]`, on the `GetTime` clock: the list query 60 s ago
+    /// plus its window, before which a check re-announces the held list instead.
+    pub(crate) mail_list_stamp: Option<f64>,
+    /// A mail request in flight (`[0xb6efc8]`), set by the list query and cleared by its answer
+    /// or a send's; `CheckInbox` does nothing while it is set.
+    pub(crate) mail_busy: bool,
     pub(crate) mail_opens: Vec<u32>,
     pub(crate) mail_take_items: Vec<u32>,
     pub(crate) mail_take_money: Vec<u32>,
@@ -927,8 +931,11 @@ pub(crate) struct Model {
     pub(crate) pet_spell_tooltip_asks: HashSet<u32>,
     /// The tooltips whose spell render missed its view, re-rendered when the app answers.
     pub(crate) spell_tooltip_waits: HashMap<FrameHandle, super::tooltip_spell::SpellWait>,
-    /// `CollapseQuestHeader`/`ExpandQuestHeader` as `(1-based entry, collapse)`, entry 0 for all.
-    pub(crate) quest_log_collapses: Vec<(u32, bool)>,
+    /// Every quest-log row as the app pushed it, each header followed by all its quests, which
+    /// [`quest_log::fold`] folds into the visible [`Self::quest_log`].
+    pub(crate) quest_log_rows: Vec<quest_log::QuestLogEntryView>,
+    /// The collapsed headers by title, the reference's fold mask `0xbb748c`.
+    pub(crate) quest_log_collapsed: HashSet<String>,
     /// Watched quest ids in watch order, pruned when a quest leaves the log.
     pub(crate) quest_log_watched: Vec<u32>,
     /// The server's clock in Unix seconds, `None` before `SMSG_QUERY_TIME_RESPONSE`. A quest
@@ -1474,7 +1481,7 @@ impl Model {
             trade_skill_invslot_mask: u32::MAX,
             trade_skill_last_line: 0,
             trade_skill_selected_spell: 0,
-            trade_skill_touched: false,
+            trade_skill_repeat_spell: 0,
             craft: None,
             craft_dos: Vec::new(),
             craft_selection: 0,
@@ -1488,12 +1495,13 @@ impl Model {
             loot_master_gives: Vec::new(),
             loot_rolls: loot_roll::LootRollsState::default(),
             loot_roll_votes: Vec::new(),
-            loot_roll_confirms: Vec::new(),
             item_text: None,
             item_text_close: false,
             item_text_page_turns: Vec::new(),
             mail: None,
             mail_check_inbox: false,
+            mail_list_stamp: None,
+            mail_busy: false,
             mail_opens: Vec::new(),
             mail_take_items: Vec::new(),
             mail_take_money: Vec::new(),
@@ -1556,7 +1564,8 @@ impl Model {
             pet_spell_tooltips: HashMap::new(),
             pet_spell_tooltip_asks: HashSet::new(),
             spell_tooltip_waits: HashMap::new(),
-            quest_log_collapses: Vec::new(),
+            quest_log_rows: Vec::new(),
+            quest_log_collapsed: HashSet::new(),
             quest_log_watched: Vec::new(),
             server_unix_time: None,
             worldmap: super::worldmap::WorldMapState::default(),

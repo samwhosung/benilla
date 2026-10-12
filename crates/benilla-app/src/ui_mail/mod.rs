@@ -39,9 +39,6 @@ const CHECKED_COPIED: u32 = 0x4;
 /// carries a package (`MailFrame.lua:108`).
 const STATIONERY_GM: u32 = 61;
 
-/// `CheckInbox`'s client-side rate limit on `CMSG_GET_MAIL_LIST`, in seconds (`0x4aeab0`).
-const CHECK_INBOX_THROTTLE_SECS: f64 = 60.0;
-
 /// The letter-row icon: the stationery's item icon (`Stationery.dbc` 41 → item 9311, display
 /// 7798; 61 → item 18154, display 30658).
 const STATIONERY_ICON_NORMAL: &str = "Interface\\Icons\\INV_Misc_Note_01";
@@ -86,8 +83,8 @@ pub(crate) struct MailOpen {
     pub(crate) bodies: QueryCache<u32, String>,
     /// `MAIL_SHOW` owed: every mailbox use re-shows the window (`0x4acd10`).
     show_requested: bool,
-    /// When the last `CMSG_GET_MAIL_LIST` went out, in `Time::elapsed_secs_f64`.
-    last_list_query: Option<f64>,
+    /// A list or send answer landed since the last feed: the VM's request lock clears.
+    request_resolved: bool,
     pub(crate) send_acks: Vec<MailSendAck>,
     /// 1-based rows a take emptied and purged, each owed a `CLOSE_INBOX_ITEM`.
     pub(crate) close_inbox: Vec<u32>,
@@ -102,15 +99,19 @@ impl crate::query_cache::AskOnce for MailOpen {
 }
 
 impl MailOpen {
-    /// A mailbox right-click. A different mailbox resets the rows and the throttle; the same one
-    /// only re-shows, as the reference fires `MAIL_SHOW` on every use.
+    /// A mailbox right-click. A different mailbox resets the rows, and the feed the VM's list
+    /// throttle; the same one only re-shows, as the reference fires `MAIL_SHOW` on every use.
     pub(crate) fn click(&mut self, mailbox: u64) {
         if self.mailbox != Some(mailbox) {
             self.mailbox = Some(mailbox);
             self.mails.clear();
-            self.last_list_query = None;
         }
         self.show_requested = true;
+    }
+
+    /// A list or send answer: the VM's request lock clears at the next feed.
+    pub(crate) fn resolve_request(&mut self) {
+        self.request_resolved = true;
     }
 
     fn mail_id_at(&self, index_1based: u32) -> Option<u32> {
@@ -136,7 +137,7 @@ impl MailOpen {
         self.mails.clear();
         self.bodies.clear();
         self.show_requested = false;
-        self.last_list_query = None;
+        self.request_resolved = false;
         self.send_acks.clear();
         self.errors.clear();
     }
@@ -538,6 +539,15 @@ fn feed_mail(
     };
     let opened = last_mailbox.is_none() && mail.mailbox.is_some();
     let closed = last_mailbox.is_some() && mail.mailbox.is_none();
+    // A new mailbox session lists afresh: the VM's throttle and lock start over before
+    // `MAIL_SHOW`'s `CheckInbox` (`MailFrame.lua:42`). Deviation: the reference keeps both, and
+    // the rows, across a close (`0x4acd71`), where a close here drops the rows.
+    if mail.mailbox.is_some() && *last_mailbox != mail.mailbox {
+        script.reset_mail_list_throttle();
+    }
+    if std::mem::take(&mut mail.request_resolved) {
+        script.mail_request_resolved();
+    }
     let show_requested = std::mem::take(&mut mail.show_requested);
     let changed = fresh != *last;
     if changed {
@@ -613,7 +623,6 @@ fn drain_mail(
     commands: Res<NetCommands>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
-    time: Res<Time>,
     mut pending: ResMut<MailPending>,
 ) {
     let Some(mut script) = script else {
@@ -630,16 +639,9 @@ fn drain_mail(
         return;
     };
 
-    // `CheckInbox`: the list query, throttled to one per 60 s (`0x4aeab0`).
+    // `CheckInbox`: the list query the VM let through its 60 s throttle (`0x4aeab0`).
     if script.take_mail_check_inbox() {
-        let now = time.elapsed_secs_f64();
-        if mail
-            .last_list_query
-            .is_none_or(|t| now - t >= CHECK_INBOX_THROTTLE_SECS)
-        {
-            mail.last_list_query = Some(now);
-            let _ = commands.0.send(ClientCommand::GetMailList { mailbox });
-        }
+        let _ = commands.0.send(ClientCommand::GetMailList { mailbox });
     }
 
     // An opened mail: mark read, then ask for the body, in `0x4af110`'s order.
@@ -831,17 +833,14 @@ mod tests {
         assert_eq!(m.mailbox, Some(0x100));
         assert!(m.show_requested);
         m.mails.push(entry(1, Some(0xA), 0, 30.0));
-        m.last_list_query = Some(5.0);
         m.show_requested = false;
-        // The same mailbox keeps the rows and throttle, and re-requests the show.
+        // The same mailbox keeps the rows, and re-requests the show.
         m.click(0x100);
         assert_eq!(m.mails.len(), 1);
-        assert_eq!(m.last_list_query, Some(5.0));
         assert!(m.show_requested);
         // A different mailbox resets the session.
         m.click(0x200);
         assert!(m.mails.is_empty());
-        assert_eq!(m.last_list_query, None);
     }
 
     #[test]

@@ -784,6 +784,22 @@ fn a_right_click_on_an_action_button_uses_the_action() {
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
+/// `SetBinding` signals `UPDATE_BINDINGS` before it returns (`0x4b805b`), so the stock button's
+/// hotkey corner (`ActionButton_UpdateHotkeys`) shows the new key by the call's next line.
+#[test]
+fn a_rebind_repaints_the_hotkey_in_place() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_action_bar(&s);
+    s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
+    let hotkey: String = s
+        .eval("SetBinding('F', 'ACTIONBUTTON1') return ActionButton1HotKey:GetText()")
+        .unwrap();
+    assert_eq!(hotkey, "F");
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// Shift-click runs `PickupAction`, a plain click `UseAction` (ActionBarFrame.xml:12-22).
 #[test]
 fn shift_click_picks_up_not_uses() {
@@ -825,6 +841,13 @@ fn shift_click_picks_up_not_uses() {
         vec![(1, 0)],
         "picking up queues the clear-the-slot send"
     );
+    // The slot's `ACTIONBAR_SLOT_CHANGED` ran `ActionButton_Update` inside the click, with no
+    // tick and no feed between.
+    assert!(
+        !s.eval::<bool>("return ActionButton1Icon:IsShown() == 1")
+            .unwrap(),
+        "the emptied button hid its icon in place"
+    );
 
     // A plain click while holding places (`UseAction(id, 1)`, ActionBarFrame.xml:19).
     s.mouse_button(26.0, 22.0, "LeftButton", true);
@@ -833,6 +856,15 @@ fn shift_click_picks_up_not_uses() {
     assert!(s.cursor_payload().is_none(), "empty destination clears");
     assert!(s.eval::<bool>("return HasAction(1)").unwrap());
     assert_eq!(s.take_action_sets(), vec![(1, 111)]);
+    assert_eq!(
+        s.eval::<Option<String>>(
+            "if ActionButton1Icon:IsShown() then return ActionButton1Icon:GetTexture() end"
+        )
+        .unwrap()
+        .as_deref(),
+        Some("Interface\\Icons\\Spell_A"),
+        "the placed action painted in place"
+    );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 
@@ -1181,6 +1213,7 @@ fn shipped_bag_frame_drives_end_to_end() {
             petition: None,
             already_bound: false,
             bar_placeable: true,
+            consumable: false,
             durability: None,
             texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
             count: 5,

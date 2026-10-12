@@ -159,6 +159,12 @@ impl super::UiScript {
     pub fn take_craft_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().craft_close)
     }
+
+    /// Whether the VM holds an open window: `CloseCraft` empties it in the verb, so a feed that
+    /// finds it empty owes no `CRAFT_CLOSE` of its own.
+    pub fn craft_open(&self) -> bool {
+        self.model_ref().craft.is_some()
+    }
 }
 
 /// The recipe at a 1-based index.
@@ -415,12 +421,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseCraft(): no packet; the flag tells the app to clear its state.
+    // CloseCraft() (`0x4f6c00` → `0x4f5fe0`): no packet. It empties the window and signals
+    // `CRAFT_CLOSE` unconditionally (`0x4f5fef`); the flag tells the app to clear its state.
     g.set(
         "CloseCraft",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.craft_close = true;
+            super::tick::verb(lua, |model| {
+                model.craft_close = true;
+                model.craft_selection = 0;
+                model.craft = None;
+                model.raise("CRAFT_CLOSE", Vec::new());
+            });
             Ok(())
         })?,
     )?;
@@ -679,7 +690,10 @@ mod tests {
         s.run("SelectCraft(1)").unwrap();
 
         assert!(!s.take_craft_close());
+        // `0x4f5fe0` empties the window and signals `CRAFT_CLOSE` before the verb returns.
+        crate::script::tick::heard::listen(&s, &["CRAFT_CLOSE"], Some("GetNumCrafts()"));
         s.run("CloseCraft()").unwrap();
+        assert_eq!(crate::script::tick::heard::take(&s), ["CRAFT_CLOSE 0"]);
         assert!(s.take_craft_close());
         assert!(!s.take_craft_close(), "drained");
 

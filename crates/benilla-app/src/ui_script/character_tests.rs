@@ -84,6 +84,7 @@ fn backpack_with_fitting_helm() -> benilla_ui::script::ContainerState {
             petition: None,
             already_bound: false,
             bar_placeable: true,
+            consumable: false,
             durability: None,
             texture: Some("Interface\\Icons\\INV_Helmet_02".into()),
             count: 1,

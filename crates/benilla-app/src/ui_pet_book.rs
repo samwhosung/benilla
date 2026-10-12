@@ -233,9 +233,7 @@ pub(crate) fn drain_pet_book(
         let Some(on) = flip_autocast(&mut bar.spells, spell_id) else {
             continue;
         };
-        // `0x4bcdc6`'s `SignalEvent(0x161)`: the bar repaints before the packet leaves, and the
-        // signal count carries that to the feed.
-        bar.bar_signals = bar.bar_signals.wrapping_add(1);
+        // The VM flipped its own book and bar and fired `PET_BAR_UPDATE` in the verb (`0x4bcdcb`).
         debug!("ui_pet_book: autocast {spell_id} -> {on}");
         let _ = commands.0.send(ClientCommand::PetSpellAutocast {
             pet_guid,

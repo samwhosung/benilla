@@ -330,13 +330,18 @@ fn each_exit_alone_stops_the_pet_books_autocast_toggle() {
         let mut rig = scene();
         apply(&mut rig);
         rig.frame();
-        let (word, signals) = {
-            let bar = rig.app.world().resource::<PetBar>();
-            (bar.spells.spells[0], bar.bar_signals)
-        };
+        let word = rig.app.world().resource::<PetBar>().spells.spells[0];
 
-        ui(&mut rig, |s| {
-            s.run("ToggleSpellAutocast(1, BOOKTYPE_PET)").unwrap()
+        let repainted = ui(&mut rig, |s| {
+            s.run(
+                "BAR_UPDATES = 0 \
+                 local f = CreateFrame('Frame') f:RegisterEvent('PET_BAR_UPDATE') \
+                 f:SetScript('OnEvent', function() BAR_UPDATES = BAR_UPDATES + 1 end) \
+                 ToggleSpellAutocast(1, BOOKTYPE_PET) \
+                 f:UnregisterEvent('PET_BAR_UPDATE')",
+            )
+            .unwrap();
+            s.eval::<i64>("return BAR_UPDATES").unwrap() == 1
         });
         rig.app
             .world_mut()
@@ -351,9 +356,8 @@ fn each_exit_alone_stops_the_pet_books_autocast_toggle() {
             "{name}: the book's word flips only when usable"
         );
         assert_eq!(
-            bar.bar_signals != signals,
-            usable,
-            "{name}: the bar repaints only when usable"
+            repainted, usable,
+            "{name}: the bar repaints, in the verb, only when usable"
         );
         assert_eq!(
             sent.iter()
@@ -702,4 +706,36 @@ fn the_predicate_reads_exactly_the_reference_fields() {
     };
     disabled.spells.state |= PET_STATE_BAR_DISABLED;
     assert!(!actions_usable(&disabled, me, Some(&player), Some(&pet)));
+}
+
+/// The toggle and the drag's pickup signal `PET_BAR_UPDATE` inside the verb (`0x4bcc81`,
+/// `0x4bcb6d`), and the bar catching up with them a frame later signals nothing more.
+#[test]
+fn the_verbs_bar_writes_are_signalled_once() {
+    let mut rig = scene();
+    let in_place = |rig: &mut Rig, lua: &str| -> Vec<String> {
+        ui(rig, |s| {
+            s.run(lua).unwrap();
+            let seen = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            seen
+        })
+    };
+    assert_eq!(
+        in_place(&mut rig, "TogglePetAutocast(1)"),
+        ["PET_BAR_UPDATE"]
+    );
+    rig.app
+        .world_mut()
+        .run_system_once(super::drain::drain_pet_actions)
+        .expect("the drain runs");
+    assert!(rig.frame().is_empty(), "the feed owes no second signal");
+
+    let seen = in_place(&mut rig, "PickupPetAction(1)");
+    assert_eq!(seen.last().map(String::as_str), Some("PET_BAR_UPDATE"));
+    rig.app
+        .world_mut()
+        .run_system_once(super::drain::drain_pet_actions)
+        .expect("the drain runs");
+    assert!(rig.frame().is_empty(), "the feed owes no second signal");
 }

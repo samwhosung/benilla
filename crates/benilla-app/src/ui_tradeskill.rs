@@ -391,10 +391,22 @@ fn feed_trade_skill(
         })
     })();
 
-    let repeat_changed = match (&*last, &fresh) {
-        (Some(l), Some(f)) => l.repeat_count != f.repeat_count,
-        _ => false,
+    // The repeat count against the VM's: `DoTradeSkill` arms it and signals in place (`0x4fd770`),
+    // and only the cast loop's decrements are left for this feed. The window's content is diffed
+    // without it, since a decrement alone signals only `UPDATE_TRADESKILL_RECAST` (`0x4fd7dc`).
+    let held_repeat = script.trade_skill_repeat_count();
+    let repeat_changed = fresh
+        .as_ref()
+        .is_some_and(|f| last.is_some() && f.repeat_count != held_repeat);
+    let content = |t: &Option<TradeSkillState>| {
+        t.as_ref().map(|t| TradeSkillState {
+            repeat_count: 0,
+            ..t.clone()
+        })
     };
+    let content_changed = content(&fresh) != content(&*last);
+    // `CloseTradeSkill` empties the VM and signals `TRADE_SKILL_CLOSE` in the verb (`0x4fc884`).
+    let closed_in_place = !script.trade_skill_open();
     if fresh == *last {
         return;
     }
@@ -416,13 +428,15 @@ fn feed_trade_skill(
             script.fire_event("TRADE_SKILL_SHOW", vec![]);
         }
         (Some(_), Some(_)) => {
-            script.fire_event("TRADE_SKILL_UPDATE", vec![]);
+            if content_changed {
+                script.fire_event("TRADE_SKILL_UPDATE", vec![]);
+            }
             if repeat_changed {
                 script.fire_event("UPDATE_TRADESKILL_RECAST", vec![]);
             }
         }
-        (Some(_), None) => script.fire_event("TRADE_SKILL_CLOSE", vec![]),
-        (None, None) => {}
+        (Some(_), None) if !closed_in_place => script.fire_event("TRADE_SKILL_CLOSE", vec![]),
+        (Some(_), None) | (None, None) => {}
     }
     *last = fresh;
 }
@@ -447,8 +461,11 @@ fn drain_trade_skill(
             continue;
         }
         debug!("ui_tradeskill: DoTradeSkill({spell_id}) ×{count}");
-        repeat.spell_id = spell_id;
-        repeat.remaining = count.max(1);
+        // Only a count above one arms the repeat (`0x500301`), as the VM's did.
+        if count > 1 {
+            repeat.spell_id = spell_id;
+            repeat.remaining = count;
+        }
         ladder.send(spell_id, &targeting.context(), CastCommit::Spell);
     }
 
@@ -476,13 +493,6 @@ fn drain_trade_skill(
             }
             _ => {}
         }
-    }
-
-    // A filter or expand/collapse fires `TRADE_SKILL_UPDATE` from inside the reference's C call
-    // (`0x4fd710`, `0x4fd750`); ours is the touched flag, answered the same frame.
-    let touched = script.take_trade_skill_touched();
-    if touched && open.line.is_some() {
-        script.fire_event("TRADE_SKILL_UPDATE", vec![]);
     }
 
     if script.take_trade_skill_close() {
@@ -577,6 +587,60 @@ mod tests {
         // Template landed, `ItemDisplayInfo` missing: still nil.
         let d = recipe(SPELL_EFFECT_CREATE_ITEM, 777);
         assert_eq!(recipe_icon(&d, None, &deps.items, &deps.commands), None);
+    }
+
+    /// `CloseTradeSkill` signals `TRADE_SKILL_CLOSE` in the verb (`0x4fc884`), so the feed that
+    /// finds the book closed a frame later signals no second close; a close the VM did not make
+    /// still signals from the feed.
+    #[test]
+    fn a_verbs_close_is_signalled_once() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<TradeSkillOpen>()
+            .init_resource::<PlayerActions>()
+            .init_resource::<TradeSkillRepeat>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .init_resource::<crate::spell::Cooldowns>()
+            .insert_resource(crate::net::NetCommands(tx))
+            .insert_resource(Spells::empty_for_tests())
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_spell_lines([]),
+            });
+        app.world_mut()
+            .spawn((ObjectStore(Default::default()), SelfPlayer));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "CLOSES = 0 local f = CreateFrame('Frame') f:RegisterEvent('TRADE_SKILL_CLOSE') \
+                 f:SetScript('OnEvent', function() CLOSES = CLOSES + 1 end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.add_systems(Update, feed_trade_skill);
+        let closes = |app: &App| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<i64>("return CLOSES")
+                .unwrap()
+        };
+
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        app.update();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("CloseTradeSkill()")
+            .unwrap();
+        assert_eq!(closes(&app), 1, "the verb's own signal");
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
+        app.update();
+        assert_eq!(closes(&app), 1, "no second signal from the feed");
+
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = Some(197);
+        app.update();
+        app.world_mut().resource_mut::<TradeSkillOpen>().line = None;
+        app.update();
+        assert_eq!(closes(&app), 2, "a close from outside the VM still signals");
     }
 
     /// Driven through the real handler registration.

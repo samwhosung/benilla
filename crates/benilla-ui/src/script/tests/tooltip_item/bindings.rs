@@ -70,6 +70,7 @@ fn merchant_compare_renders_the_compare_shape_and_no_hover_seats_a_plate() {
             petition: None,
             already_bound: false,
             bar_placeable: true,
+            consumable: false,
             durability: None,
             texture: None,
             count: 1,

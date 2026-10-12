@@ -790,25 +790,62 @@ fn one_hand_weapon_spans_both_hand_slots() {
     );
 }
 
-/// Each filter or fold raises the flag the app answers with TRADE_SKILL_UPDATE (`0x4fd710`,
-/// `0x4fd750`).
+/// Each filter or fold re-sorts and signals TRADE_SKILL_UPDATE before it returns (`0x4fd710`,
+/// `0x4fd730`, `0x4fd750`), its handler reading the new list.
 #[test]
-fn filter_and_fold_mutators_raise_the_touched_flag() {
+fn filter_and_fold_mutators_signal_the_update_in_place() {
+    use crate::script::tick::heard;
     let mut s = UiScript::new().unwrap();
     s.set_trade_skill(Some(state()));
-    assert!(!s.take_trade_skill_touched());
+    heard::listen(&s, &["TRADE_SKILL_UPDATE"], Some("GetNumTradeSkills()"));
+    let before = s.eval::<i64>("return GetNumTradeSkills()").unwrap();
 
     s.run("SetTradeSkillSubClassFilter(2, 1, 1)").unwrap();
-    assert!(s.take_trade_skill_touched());
-    assert!(!s.take_trade_skill_touched(), "drained");
+    let after_filter = s.eval::<i64>("return GetNumTradeSkills()").unwrap();
+    assert!(after_filter < before);
+    assert_eq!(
+        heard::take(&s),
+        [format!("TRADE_SKILL_UPDATE {after_filter}")]
+    );
 
-    s.run("SetTradeSkillInvSlotFilter(0, 1, 1)").unwrap();
-    assert!(s.take_trade_skill_touched());
+    s.run("SetTradeSkillSubClassFilter(0) SetTradeSkillInvSlotFilter(0, 1, 1)")
+        .unwrap();
+    assert_eq!(heard::take(&s).len(), 2);
 
     s.run("CollapseTradeSkillSubClass(0)").unwrap();
-    assert!(s.take_trade_skill_touched());
+    let folded = s.eval::<i64>("return GetNumTradeSkills()").unwrap();
+    assert_eq!(heard::take(&s), [format!("TRADE_SKILL_UPDATE {folded}")]);
     s.run("ExpandTradeSkillSubClass(0)").unwrap();
-    assert!(s.take_trade_skill_touched());
+    assert_eq!(heard::take(&s), [format!("TRADE_SKILL_UPDATE {before}")]);
+}
+
+/// `DoTradeSkill` of more than one arms the repeat and signals `UPDATE_TRADESKILL_RECAST` in place
+/// (`0x500307` → `0x4fd770`); one signals nothing. `CloseTradeSkill` disarms an armed repeat with
+/// its own signal (`0x4fd790`) ahead of `TRADE_SKILL_CLOSE` (`0x4fc884`), which fires even with
+/// nothing open.
+#[test]
+fn the_repeat_and_the_close_signal_in_place() {
+    use crate::script::tick::heard;
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(state()));
+    heard::listen(
+        &s,
+        &["UPDATE_TRADESKILL_RECAST", "TRADE_SKILL_CLOSE"],
+        Some("GetTradeskillRepeatCount()"),
+    );
+    s.run("DoTradeSkill(2, 1)").unwrap();
+    assert!(heard::take(&s).is_empty(), "a single craft arms nothing");
+    s.run("DoTradeSkill(2, 3)").unwrap();
+    assert_eq!(heard::take(&s), ["UPDATE_TRADESKILL_RECAST 3"]);
+    assert_eq!(s.take_trade_skill_dos(), vec![(2, 1), (2, 3)]);
+
+    s.run("CloseTradeSkill()").unwrap();
+    assert_eq!(
+        heard::take(&s),
+        ["UPDATE_TRADESKILL_RECAST 0", "TRADE_SKILL_CLOSE 0"]
+    );
+    s.run("CloseTradeSkill()").unwrap();
+    assert_eq!(heard::take(&s), ["TRADE_SKILL_CLOSE 0"], "disarmed once");
 }
 
 /// ItemLevel (`record+0x14`) sorts between tier and name.

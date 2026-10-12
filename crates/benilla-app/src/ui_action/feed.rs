@@ -416,20 +416,33 @@ pub(super) fn feed_actions(
                 },
             );
         }
-        // A macro rename changes the name line (`GetActionText`) but not the slot value, so a
-        // macro edit re-fires every macro slot.
-        let changed: Vec<u32> = fresh
+        // Diffed against the VM's slots, not what this feed last pushed: `PickupAction` and
+        // `PlaceAction` write their slot and fire its `ACTIONBAR_SLOT_CHANGED` in place, so the
+        // store catching up with them is no change. The item's ON_USE spell is pushed but never
+        // signalled: the place leaves it to this re-feed, and no handler paints it. A macro
+        // rename changes the name line (`GetActionText`) but not the slot value, so a macro edit
+        // re-fires every macro slot.
+        let held = script.action_slots();
+        let shown = |s: Option<&ActionSlot>| {
+            s.map(|s| ActionSlot {
+                use_spell: None,
+                ..s.clone()
+            })
+        };
+        let changed: Vec<(u32, bool)> = fresh
             .keys()
-            .chain(memory.pushed.keys())
+            .chain(held.keys())
             .copied()
             .collect::<HashSet<_>>()
             .into_iter()
-            .filter(|a| {
-                fresh.get(a) != memory.pushed.get(a)
-                    || (macros_moved && fresh.get(a).is_some_and(|s| s.kind == ACTION_KIND_MACRO))
+            .filter_map(|a| {
+                let macro_moved =
+                    macros_moved && fresh.get(&a).is_some_and(|s| s.kind == ACTION_KIND_MACRO);
+                let signal = macro_moved || shown(fresh.get(&a)) != shown(held.get(&a));
+                (signal || fresh.get(&a) != held.get(&a)).then_some((a, signal))
             })
             .collect();
-        for &action in &changed {
+        for &(action, _) in &changed {
             script.set_action(action, fresh.get(&action).cloned());
         }
         memory.pushed = fresh;
@@ -438,7 +451,7 @@ pub(super) fn feed_actions(
             changed.len(),
             memory.pushed.len()
         );
-        for action in changed {
+        for (action, _) in changed.into_iter().filter(|&(_, signal)| signal) {
             script.fire_event(
                 "ACTIONBAR_SLOT_CHANGED",
                 vec![ScriptValue::Int(i64::from(action))],

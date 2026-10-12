@@ -17,11 +17,11 @@ use crate::ui_action::Spells;
 
 use super::{PetBar, PetUnit};
 
-/// What the feed last pushed, so `PET_BAR_UPDATE` fires on a change; the key's leading `u32` is
-/// [`PetBar::bar_signals`], so a press that changes nothing still repaints.
+/// The bar-wide half of what the feed last pushed, so `PET_BAR_UPDATE` fires on a change; the
+/// key's leading `u32` is [`PetBar::bar_signals`], so a press that changes nothing still repaints.
 #[derive(Default)]
 pub(super) struct PetBarMemory {
-    pushed: Option<(u32, bool, bool, bool, Vec<PetActionView>)>,
+    pushed: Option<(u32, bool, bool, bool)>,
     /// The ten cooldown triples as last pushed, so a cooldown alone is pushed with no event: its
     /// events are [`fire_pet_cooldown_events`]'s.
     cooldowns: Vec<Option<(i64, u32, bool)>>,
@@ -239,8 +239,12 @@ pub(super) fn feed_pet_bar(
             s
         })
         .collect();
-    let key = (bar.bar_signals, has_bar, usable, pickup_allowed, content);
-    let bar_changed = memory.pushed.as_ref() != Some(&key);
+    // The slots are diffed against the VM's, not against this feed's last push: the drag and the
+    // autocast toggles write theirs and fire `PET_BAR_UPDATE` in place (`0x4bcb6d`, `0x4bcc81`,
+    // `0x4bcdcb`), so the bar catching up with them is no change.
+    let held = script.pet_action_views();
+    let key = (bar.bar_signals, has_bar, usable, pickup_allowed);
+    let bar_changed = memory.pushed.as_ref() != Some(&key) || held != content;
     let cooldowns_changed = memory.cooldowns != cooldowns;
     if bar_changed || cooldowns_changed {
         script.set_pet_actions(has_bar, usable, pickup_allowed, fresh);
@@ -250,7 +254,7 @@ pub(super) fn feed_pet_bar(
         debug!(
             "ui_pet: bar {} ({} occupied slot(s), {}{})",
             if key.1 { "shown" } else { "hidden" },
-            key.4.iter().filter(|s| s.name.is_some()).count(),
+            content.iter().filter(|s| s.name.is_some()).count(),
             if key.2 { "usable" } else { "disabled" },
             if key.3 { "" } else { ", possessed" },
         );

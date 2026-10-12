@@ -102,6 +102,66 @@ fn shipped_questlog_frame_loads_clean() {
     load_xml(&s, "ScrollTemplates.xml"); // our scroll kits
 }
 
+/// The collapse-all button folds in place: `CollapseQuestHeader(0)` signals `QUEST_LOG_UPDATE`
+/// inside the click (`0x4ded30`), so `QuestLog_Update` has hidden the quest rows by its next line.
+#[test]
+fn the_collapse_all_button_repaints_the_list_in_place() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    for f in [
+        "Interface\\FrameXML\\GlobalStrings.lua",
+        "Interface\\FrameXML\\Fonts.xml",
+        r"Interface\FrameXML\BasicControls.xml",
+        r"Interface\FrameXML\LocaleProperties.lua",
+        r"Interface\FrameXML\UIParent.xml",
+        r"Interface\FrameXML\MoneyFrame.lua",
+        r"Interface\FrameXML\MoneyFrame.xml",
+        "Interface\\FrameXML\\GameTooltip.xml",
+        r"Interface\FrameXML\UIPanelTemplates.lua",
+        r"Interface\FrameXML\UIPanelTemplates.xml",
+        "Interface\\FrameXML\\CharacterFrameTemplates.xml",
+        r"Interface\FrameXML\StaticPopup.xml",
+        r"Interface\FrameXML\MainMenuBarMicroButtons.xml",
+        "Interface\\FrameXML\\ItemButtonTemplate.xml",
+        "Interface\\FrameXML\\QuestFrame.xml",
+        "Interface\\FrameXML\\QuestLogFrame.xml",
+        "Interface\\FrameXML\\MerchantFrame.xml",
+        "ScrollTemplates.xml",
+    ] {
+        load_xml(&s, f);
+    }
+    let mut log = eight_entries();
+    log.entries.truncate(2);
+    log.num_quests = 2;
+    log.entries.insert(
+        0,
+        QuestLogEntryView {
+            title: "Elwynn Forest".into(),
+            is_header: true,
+            ..Default::default()
+        },
+    );
+    s.set_quest_log(log);
+    s.run("ToggleQuestLog()").unwrap();
+    assert!(s
+        .eval::<bool>("return QuestLogTitle2:IsShown() == 1")
+        .unwrap());
+    let shown: bool = s
+        .eval(
+            "this = QuestLogCollapseAllButton QuestLogCollapseAllButton_OnClick() \
+             return QuestLogTitle2:IsShown() == 1",
+        )
+        .unwrap();
+    assert!(!shown, "the folded quests left the list inside the click");
+    assert_eq!(
+        s.eval::<i64>("return GetNumQuestLogEntries()").unwrap(),
+        1,
+        "and stay folded: the selection kept its quest, so QuestLog_Update reopened no header"
+    );
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
 /// Open, read the list and the detail, wheel the list, abandon through the confirm, close.
 #[test]
 fn shipped_questlog_frame_drives_end_to_end() {

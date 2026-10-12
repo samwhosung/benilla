@@ -20,6 +20,7 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
             petition: None,
             already_bound: false,
             bar_placeable: true,
+            consumable: false,
             durability: None,
             texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
             count: 5,

@@ -70,6 +70,15 @@ impl super::UiScript {
         self.model_mut().trade = state;
     }
 
+    /// Our column as the VM holds it, `ClickTradeButton`'s writes included: what the slots'
+    /// `TRADE_PLAYER_ITEM_CHANGED` handlers last read. `None` with no trade open.
+    pub fn trade_player_slots(&self) -> Option<[Option<TradeSlotItem>; TRADE_SLOTS]> {
+        self.model_ref()
+            .trade
+            .as_ref()
+            .map(|t| t.player.slots.clone())
+    }
+
     /// `UnlockTradeItems` (`0x4bfcf0`), which the `CANCELED`, `COMPLETE` and `CLOSE_WINDOW` status
     /// arms run before the window closes (`0x4bf837`, `0x4bf859`, `0x4bf87e`): every item our
     /// slots held unlocks, one `ITEM_LOCK_CHANGED` each (`0x4bfd03`), fired now. A local
@@ -174,8 +183,10 @@ fn gold(model: &Model, pick: impl Fn(&TradeState) -> &TradeSideState) -> u32 {
 /// `CMSG_SET_TRADE_ITEM`, or empties, a `CMSG_CLEAR_TRADE_ITEM` (`0x4bfa70`), and
 /// `SetCursorItem` puts the slot's old item back on the cursor, whole (count 0, `0x4c004e`),
 /// lifting no lock when the send went (`0x4c004a`-`0x4c0064`), so a placed item stays locked in
-/// its bag. The app fills our column
-/// itself, since vmangos echoes a placement only to the partner (`TradeData.cpp:81`).
+/// its bag. `0x4bfa70` stores the slot and signals `TRADE_PLAYER_ITEM_CHANGED` with it
+/// (`0x4bfaef`) before that `SetCursorItem`, so the handler reads the slot as written. The VM
+/// fills our column itself, since vmangos echoes a placement only to the partner
+/// (`TradeData.cpp:81`).
 fn click_trade_button(lua: &Lua, id: u32) {
     let money = super::tick::verb(lua, |model| {
         if !matches!(model.cursor, Some(CursorPayload::Money(_))) {
@@ -212,6 +223,7 @@ fn click_trade_button(lua: &Lua, id: u32) {
         let Some(i) = index else {
             return false;
         };
+        let placed = held.as_ref().map(|item| trade_slot_item(model, item));
         match &held {
             Some(item) => model.trade_set_items.push((id, item.bag, item.slot)),
             None => model.trade_clear_items.push(id),
@@ -220,9 +232,55 @@ fn click_trade_button(lua: &Lua, id: u32) {
             count: None,
             ..item
         });
+        write_player_slot(model, i, placed);
         true
     });
     cursor::set_cursor(lua, !sent, |_| old.map(CursorPayload::Item));
+}
+
+/// `0x4bfa70`'s local half: our 0-based slot shows `item` and signals
+/// `TRADE_PLAYER_ITEM_CHANGED` with its 1-based index (`0x4bfaef`). The reference writes only
+/// past a successful send (`0x4bfab1`), which needs an open trade.
+fn write_player_slot(model: &mut Model, i: usize, item: Option<TradeSlotItem>) {
+    let Some(trade) = model.trade.as_mut() else {
+        return;
+    };
+    trade.player.slots[i] = item;
+    model.raise(
+        "TRADE_PLAYER_ITEM_CHANGED",
+        vec![super::ScriptValue::Int(i as i64 + 1)],
+    );
+}
+
+/// What our slot shows for a held item: the bag record the app fed, else what the cursor carries.
+fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
+    let name = |link: Option<&str>| link.map(|l| cursor::item_link_name(Some(l)));
+    model
+        .containers
+        .get(&item.bag)
+        .and_then(|c| c.slots.get(&item.slot))
+        .filter(|s| s.item_id == item.item_id)
+        .map(|s| TradeSlotItem {
+            item_id: s.item_id,
+            name: name(s.link.as_deref()),
+            texture: s.texture.clone(),
+            count: s.count.max(1),
+            quality: s.quality,
+            inventory_type: s.inventory_type,
+            lock_id: 0,
+            object_flags: Some(s.flags),
+            enchantment: None,
+            link: s.link.clone(),
+        })
+        .unwrap_or_else(|| TradeSlotItem {
+            item_id: item.item_id,
+            name: name(item.link.as_deref()),
+            texture: item.texture.clone(),
+            count: cursor::held_count(model, item),
+            quality: item.quality,
+            link: item.link.clone(),
+            ..Default::default()
+        })
 }
 
 /// Register the trade globals.
@@ -736,6 +794,42 @@ mod tests {
         s.run("SetTradeMoney(30000)").unwrap();
         assert_eq!(s.take_trade_money(), None, "more than the purse: silent");
         assert!(s.run("SetTradeMoney(nil)").is_err(), "a non-number raises");
+    }
+
+    /// `0x4bfa70` writes our slot and signals `TRADE_PLAYER_ITEM_CHANGED` with it (`0x4bfaef`)
+    /// before the cursor's `SetCursorItem` (`0x4c0064`); an empty cursor on a filled slot writes
+    /// the clear the same way, and `SetCursorItem`'s clear and put of the old item follow it.
+    #[test]
+    fn a_trade_slot_click_signals_its_slot_before_the_cursor() {
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(crate::script::cursor::two_item_bag()));
+        s.set_trade(Some(TradeState::default()));
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        crate::script::tick::heard::listen(
+            &s,
+            &["TRADE_PLAYER_ITEM_CHANGED", "CURSOR_UPDATE"],
+            Some("tostring(arg1) .. ' ' .. tostring((GetTradePlayerItemInfo(2)))"),
+        );
+        s.run("ClickTradeButton(2)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            [
+                "TRADE_PLAYER_ITEM_CHANGED 2 Tough Jerky",
+                "CURSOR_UPDATE nil Tough Jerky"
+            ]
+        );
+        assert_eq!(s.take_trade_set_items(), vec![(2, 0, 1)]);
+
+        s.run("ClickTradeButton(2)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            [
+                "TRADE_PLAYER_ITEM_CHANGED 2 nil",
+                "CURSOR_UPDATE nil nil",
+                "CURSOR_UPDATE nil nil"
+            ]
+        );
+        assert_eq!(s.take_trade_clear_items(), vec![2]);
     }
 
     /// `ClickTradeButton` (`0x4bfdf0`): a held item goes in and the slot's old item comes back on

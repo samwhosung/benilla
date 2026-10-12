@@ -760,6 +760,7 @@ fn resolve_slot(
         duration_ms,
         equip_slots: find_equip_slot(t.inventory_type, has_relic_slot),
         bar_placeable: t.placeable_on_action_bar(),
+        consumable: t.is_consumable(),
         cooldown: t.use_spell.and_then(|u| {
             let sd = spells.and_then(|s| s.get(u.spell_id));
             cooldowns

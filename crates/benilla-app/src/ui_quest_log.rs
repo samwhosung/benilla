@@ -4,7 +4,6 @@
 //! its line and fires `QUEST_WATCH_UPDATE`. Abandons, shares and header folds drain from here.
 
 use crate::ui_items::{count_of, InventoryScope};
-use std::collections::HashSet;
 
 use bevy::prelude::*;
 
@@ -44,10 +43,6 @@ struct Row {
 pub(crate) struct QuestLog {
     templates: QueryCache<u32, QuestTemplate>,
     row_slots: Vec<(u32, u8)>,
-    /// The collapsed headers, by title.
-    collapsed: HashSet<String>,
-    /// Per pushed entry, the header's title, `None` for a quest: the fold drain's index map.
-    header_keys: Vec<Option<String>>,
 }
 
 impl crate::query_cache::AskOnce for QuestLog {
@@ -82,8 +77,6 @@ impl QuestLog {
     pub(crate) fn clear_session(&mut self) {
         self.templates.clear();
         self.row_slots.clear();
-        self.collapsed.clear();
-        self.header_keys.clear();
     }
 }
 
@@ -141,7 +134,6 @@ impl Plugin for UiQuestLogPlugin {
                     feed_server_clock.in_set(UiFeed),
                     drain_quest_log_abandons.after(UiInput),
                     drain_quest_log_pushes.after(UiInput),
-                    drain_quest_log_collapses.after(UiInput),
                 ),
             );
     }
@@ -376,23 +368,6 @@ fn abandon_slot(quest_id: u32, row_slots: &[(u32, u8)]) -> Option<u8> {
         .map(|&(_, slot)| slot)
 }
 
-/// Moves the 1-based selection to its quest's new index. A header is never a selection
-/// (`QuestLog_GetFirstSelectableQuest` skips them), so one with no visible quest becomes 0 and
-/// `QuestLog_Update` selects the first quest (`QuestLogFrame.lua:293-296`).
-fn remap_selection(old: &[QuestLogEntryView], new: &[QuestLogEntryView], sel: u32) -> u32 {
-    let Some(prev) = (sel as usize)
-        .checked_sub(1)
-        .and_then(|i| old.get(i))
-        .filter(|e| !e.is_header)
-    else {
-        return 0;
-    };
-    new.iter()
-        .position(|e| !e.is_header && e.quest_id == prev.quest_id)
-        .map(|i| i as u32 + 1)
-        .unwrap_or(0)
-}
-
 /// Pushes the server's wall clock every frame, for `GetQuestTimers()`; before the first
 /// `SMSG_QUERY_TIME_RESPONSE` nothing is pushed and the bindings report no timer.
 fn feed_server_clock(
@@ -568,33 +543,25 @@ pub(crate) fn feed_quest_log(
         states: &states,
     };
 
+    // Every row, each header with all its quests: the engine folds them by its own collapse set,
+    // as the reference's rebuild (`0x4dea50`) counts the rows its fold mask hides.
     let mut entries: Vec<QuestLogEntryView> = Vec::new();
-    let mut header_keys: Vec<Option<String>> = Vec::new();
-    // Quests under a collapsed header: out of the visible list, still in the log, and counted by
-    // the watch prune, as the reference's scans the whole row array (`0x4de7a7`-`0x4de80f`).
-    let mut hidden_quest_ids: Vec<u32> = Vec::new();
     for (_, name, row_idxs) in &groups {
-        let collapsed = quest_log.collapsed.contains(name);
         entries.push(QuestLogEntryView {
             quest_id: 0,
             title: name.clone(),
             level: 0,
             tag: None,
             is_header: true,
-            collapsed,
+            collapsed: false,
             complete: 0,
             timer: 0,
             pushable: false,
             objectives: Vec::new(),
             detail: None,
         });
-        header_keys.push(Some(name.clone()));
         for &ri in row_idxs {
             let r = &rows[ri];
-            if collapsed {
-                hidden_quest_ids.push(r.quest_id);
-                continue;
-            }
             let (title, level, tag, pushable, objectives, detail) =
                 match quest_log.template(r.quest_id, &commands) {
                     Some(t) => (
@@ -654,32 +621,24 @@ pub(crate) fn feed_quest_log(
                 objectives,
                 detail,
             });
-            header_keys.push(None);
         }
     }
 
-    // ── Selection remap ─────────────────────────────────────────────────────────────────────────
-    let sel = script.quest_log_selection();
-    let new_sel = remap_selection(&last.entries, &entries, sel);
-    if new_sel != sel {
-        script.set_quest_log_selection(new_sel);
-    }
     // Every cached row, folded or not: the table `AbandonQuest` searches.
     quest_log.row_slots = rows.iter().map(|r| (r.quest_id, r.slot)).collect();
-    quest_log.header_keys = header_keys;
 
     let fresh = QuestLogState {
         entries,
         num_quests: rows.len() as u32,
-        hidden_quest_ids,
+        hidden_quest_ids: Vec::new(),
     };
     if fresh == *last {
         return;
     }
     // Announced after the push, so a handler reads the new log. The reference announces from the
     // `SMSG_QUESTUPDATE_*` handler (`0x5e5ad0`), dropping a toast whose name is uncached; this
-    // rides the log diff, so a quest under a collapsed header announces nothing. A progress toast
-    // is the leaderboard line, as the `ERR_QUEST_ADD_*_SII` keys compose the same sentence.
+    // rides the log diff, which carries every row, folded ones included. A progress toast is the
+    // leaderboard line, as the `ERR_QUEST_ADD_*_SII` keys compose the same sentence.
     let progressed = quests_with_progressed_objectives(last, &fresh);
     script.set_quest_log(fresh.clone());
     script.fire_event("QUEST_LOG_UPDATE", vec![]);
@@ -827,33 +786,6 @@ fn load_quest_tag_names(mut commands: Commands, assets: Option<Res<benilla_asset
     }
 }
 
-/// Drains `CollapseQuestHeader` and `ExpandQuestHeader`: an entry index names a header by its
-/// title, and 0 is every header (the collapse-all button).
-fn drain_quest_log_collapses(
-    script: Option<NonSendMut<UiScript>>,
-    mut quest_log: ResMut<QuestLog>,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for (idx, collapse) in script.take_quest_log_collapses() {
-        if idx == 0 {
-            if collapse {
-                let all: Vec<String> = quest_log.header_keys.iter().flatten().cloned().collect();
-                quest_log.collapsed.extend(all);
-            } else {
-                quest_log.collapsed.clear();
-            }
-        } else if let Some(Some(name)) = quest_log.header_keys.get(idx as usize - 1).cloned() {
-            if collapse {
-                quest_log.collapsed.insert(name);
-            } else {
-                quest_log.collapsed.remove(&name);
-            }
-        }
-    }
-}
-
 /// `QuestLogPushQuest()`: the quest id taken at the click goes out; the server finds the party.
 fn drain_quest_log_pushes(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
     let Some(mut script) = script else {
@@ -952,71 +884,6 @@ mod tests {
             .map(|&i| rows[i].title.as_str())
             .collect();
         assert_eq!(titles, vec!["apple", "Banana"]);
-    }
-
-    // ── remap_selection ─────────────────────────────────────────────────────────────────────────
-
-    fn header(title: &str) -> QuestLogEntryView {
-        QuestLogEntryView {
-            detail: None,
-            quest_id: 0,
-            title: title.into(),
-            level: 0,
-            tag: None,
-            is_header: true,
-            collapsed: false,
-            complete: 0,
-            timer: 0,
-            pushable: false,
-            objectives: Vec::new(),
-        }
-    }
-
-    fn quest(id: u32) -> QuestLogEntryView {
-        QuestLogEntryView {
-            detail: None,
-            quest_id: id,
-            title: format!("Quest {id}"),
-            level: 1,
-            tag: None,
-            is_header: false,
-            collapsed: false,
-            complete: 0,
-            timer: 0,
-            pushable: false,
-            objectives: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn selection_follows_its_quest_across_reindexing() {
-        let old = vec![header("A"), quest(7), quest(9)];
-        // A new header lands above: quest 9 moves from entry 3 to entry 5.
-        let new = vec![header("A"), quest(7), header("B"), header("C"), quest(9)];
-        assert_eq!(remap_selection(&old, &new, 3), 5);
-    }
-
-    #[test]
-    fn fold_hiding_the_selection_resets_to_zero_never_the_header() {
-        // A header is never a selection: 0 lets `QuestLog_SetFirstValidSelection` pick a quest.
-        let old = vec![header("A"), quest(7)];
-        let new = vec![header("A")]; // folded: the quest left the visible list
-        assert_eq!(remap_selection(&old, &new, 2), 0);
-    }
-
-    #[test]
-    fn a_header_selection_is_evicted_not_preserved() {
-        let old = vec![header("A"), quest(7)];
-        let new = vec![header("A"), quest(7)];
-        assert_eq!(remap_selection(&old, &new, 1), 0);
-    }
-
-    #[test]
-    fn zero_and_stale_selections_stay_zero() {
-        let old = vec![header("A"), quest(7)];
-        let new = vec![header("A"), quest(7)];
-        assert_eq!(remap_selection(&old, &new, 0), 0);
-        assert_eq!(remap_selection(&old, &new, 99), 0); // out-of-range: nothing to follow
     }
 
     fn obj(
@@ -1459,15 +1326,7 @@ mod tests {
             SelfPlayer,
         ));
         app.insert_non_send_resource(UiScript::new().unwrap());
-        app.add_systems(
-            Update,
-            (
-                drain_quest_log_collapses,
-                feed_quest_log,
-                drain_quest_log_abandons,
-            )
-                .chain(),
-        );
+        app.add_systems(Update, (feed_quest_log, drain_quest_log_abandons).chain());
         let run = |app: &mut App, lua: &str| {
             app.world_mut()
                 .non_send_resource_mut::<UiScript>()

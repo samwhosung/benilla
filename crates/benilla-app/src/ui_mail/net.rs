@@ -90,6 +90,8 @@ fn on_session_end(
 /// `CMSG_MAIL_DELETE` and dropped, as the handler `0x4ad1b0` does. It never touches
 /// [`MailPending`]: nothing on the inbox path writes the countdown `0x845eac`.
 fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands: &NetCommands) {
+    // The answer clears the request lock (`0x4ad5d0`).
+    mail.resolve_request();
     let mailbox = mail.mailbox;
     mail.mails = mails
         .into_iter()
@@ -160,6 +162,8 @@ fn send_mail_result(
             refusal: (error != mail_error::OK && error != mail_error::EQUIP_ERROR)
                 .then(|| mail_refusal(error)),
         });
+        // The send arm clears the request lock with its `MAIL_FAILED` (`0x4ad164`).
+        mail.resolve_request();
         return;
     }
     // A take/return/delete result.

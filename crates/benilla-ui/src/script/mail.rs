@@ -9,6 +9,9 @@ use super::cursor;
 use super::Model;
 use crate::script::binding_abi::Idx;
 
+/// `CheckInbox`'s throttle window, 60 000 ms (`0x4aeb06`).
+const CHECK_INBOX_WINDOW_SECS: f64 = 60.0;
+
 /// One inbox row, resolved by the app from a wire `MailListEntry`; its 1-based index is its
 /// position in [`MailState::inbox`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -150,6 +153,18 @@ impl super::UiScript {
     /// Take the `CheckInbox` flag; the app answers it with `CMSG_GET_MAIL_LIST`.
     pub fn take_mail_check_inbox(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().mail_check_inbox)
+    }
+
+    /// A list or send answer landed: the request lock clears (`0x4ad5d0`, `0x4ad164`).
+    pub fn mail_request_resolved(&mut self) {
+        self.model_mut().mail_busy = false;
+    }
+
+    /// Forget the list throttle and the lock, as a new mailbox session starts.
+    pub fn reset_mail_list_throttle(&mut self) {
+        let mut model = self.model_mut();
+        model.mail_list_stamp = None;
+        model.mail_busy = false;
     }
 
     /// Drain the 1-based indices `GetInboxText` opened; the app marks each read, fetches its body.
@@ -462,12 +477,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // CheckInbox() (`0x4aeab0`): nothing while a request is in flight (`0x4aeac2`) or with no
+    // mailbox (`0x4aead8`). Within 60 s of the last list query it re-announces the held list,
+    // signalling `MAIL_INBOX_UPDATE` in place (`0x4aeaf8`); otherwise it queues the query, stamps
+    // the window and takes the lock (`0x4aeb06`-`0x4aeb18`), and the answer announces the list.
     g.set(
         "CheckInbox",
         lua.create_function(|lua, ()| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .mail_check_inbox = true;
+            super::tick::verb(lua, |model| {
+                if model.mail_busy || model.mail.is_none() {
+                    return;
+                }
+                if model.mail_list_stamp.is_some_and(|t| model.now < t) {
+                    model.raise("MAIL_INBOX_UPDATE", Vec::new());
+                    return;
+                }
+                model.mail_list_stamp = Some(model.now + CHECK_INBOX_WINDOW_SECS);
+                model.mail_busy = true;
+                model.mail_check_inbox = true;
+            });
             Ok(())
         })?,
     )?;
@@ -815,6 +843,43 @@ fn click_send_mail_item(lua: &Lua) {
 mod tests {
     use super::*;
     use crate::script::UiScript;
+
+    /// `CheckInbox` (`0x4aeab0`): no mailbox or a request in flight does nothing; the first
+    /// check queues the query and takes the lock; once answered, a check inside the 60 s window
+    /// re-announces the held list with `MAIL_INBOX_UPDATE` in place (`0x4aeaf8`), and past it
+    /// queries again.
+    #[test]
+    fn check_inbox_throttles_to_an_in_place_reannounce() {
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        heard::listen(&s, &["MAIL_INBOX_UPDATE"], None);
+        s.run("CheckInbox()").unwrap();
+        assert!(!s.take_mail_check_inbox(), "no mailbox, no query");
+
+        s.set_mail(Some(MailState::default()));
+        s.run("CheckInbox()").unwrap();
+        assert!(s.take_mail_check_inbox());
+        s.run("CheckInbox()").unwrap();
+        assert!(
+            !s.take_mail_check_inbox(),
+            "the lock holds until the answer"
+        );
+        assert!(heard::take(&s).is_empty());
+
+        s.mail_request_resolved();
+        s.tick(30.0);
+        s.run("CheckInbox()").unwrap();
+        assert!(!s.take_mail_check_inbox());
+        assert_eq!(heard::take(&s), ["MAIL_INBOX_UPDATE"]);
+
+        s.tick(31.0);
+        s.run("CheckInbox()").unwrap();
+        assert!(
+            s.take_mail_check_inbox(),
+            "the window ran out: a fresh query"
+        );
+        assert!(heard::take(&s).is_empty());
+    }
 
     /// The compose verbs fire in place, each after its write (`0x4adc39` then `0x4adc44`), and
     /// `ClearSendMail` after all its clears (`0x4acddf`-`0x4ace0c`, then `0x4ace19`, `0x4ace23`,

@@ -1,6 +1,7 @@
 //! The quest-log verbs the stock `QuestLogFrame.lua` calls, over a [`QuestLogState`] the app
 //! pushes (rows from the `PLAYER_QUEST_LOG` descriptor slots, text from the quest template cache),
-//! with the abandon, share and fold intents drained back. The selection lives in the engine, as
+//! with the abandon and share intents drained back. The engine owns the header folds, as the
+//! reference's mask does, and folds the pushed rows itself. The selection lives in the engine, as
 //! `QuestLog_SetSelection` sets and re-reads it in one call (`QuestLogFrame.lua:318`, `:342`). The
 //! abandon mark and the share hold the quest id selected at the click, as the reference's mark
 //! does (`0x4dfb50` copies the selection `0xbb7480`, a quest id, to `0xbb7484`), so a re-index
@@ -36,7 +37,8 @@ pub struct QuestLogEntryView {
     /// `GetQuestLogPushable`: the template's `QUEST_FLAGS_SHARABLE` (`0x8`), false until the
     /// template arrives, as the reference reads the same cache.
     pub pushable: bool,
-    /// A collapsed header (`isCollapsed`), whose quests the app leaves out of `entries`.
+    /// A collapsed header (`isCollapsed`), whose quests the engine leaves out of the visible rows;
+    /// the engine's own fold sets it, and a pushed value is not read.
     pub collapsed: bool,
     /// The slot state: `1` complete, `-1` failed, `0` in progress (`isComplete` 1, -1 or nil).
     pub complete: i32,
@@ -95,21 +97,103 @@ pub type QuestLogQuestItem = QuestItemView;
 /// The quest-log snapshot the app pushes on each change; an empty log is empty `entries`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct QuestLogState {
-    /// The visible rows, in log order; a collapsed header's quests are left out.
+    /// Pushed: every row in log order, each header followed by all its quests. Held by the
+    /// engine: the visible rows, then the quests collapsed headers fold ([`fold`]).
     pub entries: Vec<QuestLogEntryView>,
     /// `GetNumQuestLogEntries`'s return 2: every quest, folded ones included, for the
     /// "Quests: N/20" count (`QuestLogFrame.lua:290`).
     pub num_quests: u32,
-    /// Quests folded under a collapsed header: in the log, not in `entries`. Their watches and
-    /// abandon marks hold, as the reference's watch prune (`0x4de7a7` to `0x4de80f`) and abandon
-    /// search (`0xbb71c0`) cover every row, folded ones included.
+    /// Held by the engine, not read from a push: the quests folded under a collapsed header, the
+    /// tail of `entries`. Their watches and abandon marks hold, as the reference's watch prune
+    /// (`0x4de7a7` to `0x4de80f`) and abandon search (`0xbb71c0`) cover every row, folded ones
+    /// included.
     pub hidden_quest_ids: Vec<u32>,
+}
+
+/// The rows off every row and the collapse set, as the rebuild `0x4dea50` orders them: the
+/// visible rows, then the quests a collapsed header folds, sorted past them, so
+/// `GetNumQuestLogEntries` counts the visible ones (`[0xbb7490]`) while an index reaches every row
+/// (`[0xbb7478]`, `0x4df99c`). The selection is the reference's quest id (`0xbb7480`), answered as
+/// that quest's index wherever it now sits (`0x4df010`), 0 once it left the log; a header is never
+/// a selection (`QuestLog_GetFirstSelectableQuest`).
+pub(crate) fn fold(model: &mut Model) {
+    let selected = (model.quest_log_selection as usize)
+        .checked_sub(1)
+        .and_then(|i| model.quest_log.entries.get(i))
+        .filter(|e| !e.is_header)
+        .map(|e| e.quest_id);
+    let mut entries = Vec::with_capacity(model.quest_log_rows.len());
+    let mut folded_rows = Vec::new();
+    let mut folded = false;
+    for row in &model.quest_log_rows {
+        if row.is_header {
+            folded = model.quest_log_collapsed.contains(&row.title);
+            entries.push(QuestLogEntryView {
+                collapsed: folded,
+                ..row.clone()
+            });
+        } else if folded {
+            folded_rows.push(row.clone());
+        } else {
+            entries.push(row.clone());
+        }
+    }
+    model.quest_log.hidden_quest_ids = folded_rows.iter().map(|e| e.quest_id).collect();
+    entries.extend(folded_rows);
+    model.quest_log_selection = selected
+        .and_then(|id| {
+            entries
+                .iter()
+                .position(|e| !e.is_header && e.quest_id == id)
+        })
+        .map_or(0, |i| i as u32 + 1);
+    model.quest_log.entries = entries;
+}
+
+/// The visible rows' count, `GetNumQuestLogEntries`'s first return (`[0xbb7490]`).
+fn visible_rows(model: &Model) -> usize {
+    model.quest_log.entries.len() - model.quest_log.hidden_quest_ids.len()
+}
+
+/// `CollapseQuestHeader`/`ExpandQuestHeader` (`0x4e1730`, `0x4e1780` → `0x4ded30`): the header at
+/// the 1-based visible index folds or opens; an index that is no header, 0 or past the rows
+/// folds or opens every header (`0x4dedbf`). Either re-folds the list (`0x4dea50`) and signals
+/// `QUEST_LOG_UPDATE` before the verb returns.
+fn set_collapsed(model: &mut Model, index: u32, collapse: bool) {
+    let header = (index as usize)
+        .checked_sub(1)
+        .and_then(|i| model.quest_log.entries.get(i))
+        .filter(|e| e.is_header)
+        .map(|e| e.title.clone());
+    match (header, collapse) {
+        (Some(title), true) => {
+            model.quest_log_collapsed.insert(title);
+        }
+        (Some(title), false) => {
+            model.quest_log_collapsed.remove(&title);
+        }
+        (None, true) => {
+            let all: Vec<String> = model
+                .quest_log_rows
+                .iter()
+                .filter(|e| e.is_header)
+                .map(|e| e.title.clone())
+                .collect();
+            model.quest_log_collapsed.extend(all);
+        }
+        (None, false) => model.quest_log_collapsed.clear(),
+    }
+    fold(model);
+    model.raise("QUEST_LOG_UPDATE", Vec::new());
 }
 
 impl super::UiScript {
     /// Push the quest-log snapshot, dropping the watch of a quest that left the log: the
     /// reference's prune (`0x4de7a7` to `0x4de80f`) keeps a watch while any quest row, visible or
     /// folded, carries its id, and a collapse (`0x4ded30`) never prunes.
+    ///
+    /// `state.entries` carries every row, each header with all its quests; the engine folds them
+    /// by its own collapse set ([`fold`]), moving the selection with its quest.
     pub fn set_quest_log(&mut self, state: QuestLogState) {
         let mut model = self.model_mut();
         model.quest_log_watched.retain(|id| {
@@ -117,9 +201,11 @@ impl super::UiScript {
                 .entries
                 .iter()
                 .any(|e| !e.is_header && e.quest_id == *id)
-                || state.hidden_quest_ids.contains(id)
         });
-        model.quest_log = state;
+        let model = &mut *model;
+        model.quest_log.num_quests = state.num_quests;
+        model.quest_log_rows = state.entries;
+        fold(model);
     }
 
     /// The watched quest ids, in watch order.
@@ -150,13 +236,7 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().quest_confirms)
     }
 
-    /// Drain `CollapseQuestHeader`/`ExpandQuestHeader` as `(1-based index, collapse)`; index 0
-    /// is every header, as the collapse-all button passes (`QuestLogFrame.lua:557`, `:561`).
-    pub fn take_quest_log_collapses(&mut self) -> Vec<(u32, bool)> {
-        std::mem::take(&mut self.model_mut().quest_log_collapses)
-    }
-
-    /// Set the selection, re-pointed by the app at the same quest when a rebuild shifts the rows.
+    /// Set the selection.
     pub fn set_quest_log_selection(&mut self, i: u32) {
         self.model_mut().quest_log_selection = i;
     }
@@ -201,8 +281,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetNumQuestLogEntries",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let entries = &model.quest_log.entries;
-            Ok((entries.len() as i64, i64::from(model.quest_log.num_quests)))
+            Ok((
+                visible_rows(&model) as i64,
+                i64::from(model.quest_log.num_quests),
+            ))
         })?,
     )?;
 
@@ -449,20 +531,19 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Header folds, drained by the app, which owns the collapse set; index 0 is every header.
+    // Header folds ([`set_collapsed`]); index 0 is every header, as the collapse-all button
+    // passes (`QuestLogFrame.lua:557`, `:561`).
     g.set(
         "CollapseQuestHeader",
         lua.create_function(|lua, i: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.quest_log_collapses.push((i, true));
+            super::tick::verb(lua, |model| set_collapsed(model, i, true));
             Ok(())
         })?,
     )?;
     g.set(
         "ExpandQuestHeader",
         lua.create_function(|lua, i: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.quest_log_collapses.push((i, false));
+            super::tick::verb(lua, |model| set_collapsed(model, i, false));
             Ok(())
         })?,
     )?;
@@ -895,6 +976,86 @@ mod tests {
         }
     }
 
+    /// Two zones, each with one quest: `[A, 783, B, 7]`.
+    fn two_zones() -> QuestLogState {
+        let mut state = two_quests();
+        let header = |t: &str| QuestLogEntryView {
+            title: t.into(),
+            is_header: true,
+            ..Default::default()
+        };
+        state.entries.insert(0, header("A"));
+        state.entries.insert(2, header("B"));
+        state
+    }
+
+    /// `0x4ded30` folds in place: the list re-folds (`0x4dea50`) and `QUEST_LOG_UPDATE` fires
+    /// before the verb returns. A quest's index, 0 and an index past the rows fold or open every
+    /// header (`0x4dedbf`).
+    #[test]
+    fn a_fold_signals_quest_log_update_in_place() {
+        use crate::script::tick::heard;
+        let mut s = UiScript::new().unwrap();
+        s.set_quest_log(two_zones());
+        heard::listen(&s, &["QUEST_LOG_UPDATE"], Some("GetNumQuestLogEntries()"));
+        s.run("CollapseQuestHeader(1)").unwrap();
+        assert_eq!(heard::take(&s), ["QUEST_LOG_UPDATE 3"]);
+        s.run("ExpandQuestHeader(1)").unwrap();
+        assert_eq!(heard::take(&s), ["QUEST_LOG_UPDATE 4"]);
+        s.run("CollapseQuestHeader(2)").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            ["QUEST_LOG_UPDATE 2"],
+            "a quest row folds all"
+        );
+        s.run("ExpandQuestHeader(0)").unwrap();
+        assert_eq!(heard::take(&s), ["QUEST_LOG_UPDATE 4"]);
+        s.run("CollapseQuestHeader(9)").unwrap();
+        assert_eq!(
+            heard::take(&s),
+            ["QUEST_LOG_UPDATE 2"],
+            "past the rows folds all"
+        );
+    }
+
+    /// The selection follows its quest across a fold and a re-push, the reference's quest id.
+    #[test]
+    fn the_selection_follows_its_quest_across_folds() {
+        let mut s = UiScript::new().unwrap();
+        s.set_quest_log(two_zones());
+        s.run("SelectQuestLogEntry(4)").unwrap(); // quest 7, under B
+        s.run("CollapseQuestHeader(1)").unwrap();
+        assert_eq!(
+            s.quest_log_selection(),
+            3,
+            "A's fold moves quest 7 up a row"
+        );
+        let mut grown = two_zones();
+        grown.entries.insert(
+            0,
+            QuestLogEntryView {
+                title: "0".into(),
+                is_header: true,
+                ..Default::default()
+            },
+        );
+        s.set_quest_log(grown);
+        assert_eq!(s.quest_log_selection(), 4, "a header above pushes it down");
+        s.run("CollapseQuestHeader(3)").unwrap();
+        assert_eq!(s.eval::<i64>("return GetNumQuestLogEntries()").unwrap(), 3);
+        assert_eq!(
+            s.quest_log_selection(),
+            5,
+            "folded away, the quest keeps the selection at its row past the visible ones \
+             (0x4df010), so QuestLog_Update picks no new one"
+        );
+        assert_eq!(
+            s.eval::<String>("return (GetQuestLogTitle(5))").unwrap(),
+            "Kobold Camp Cleanup",
+            "an index reaches the folded rows (0x4df99c)"
+        );
+    }
+
     #[test]
     fn is_header_and_is_collapsed_are_one_or_nil_never_booleans() {
         let mut s = UiScript::new().unwrap();
@@ -904,7 +1065,6 @@ mod tests {
             QuestLogEntryView {
                 title: "Elwynn Forest".into(),
                 is_header: true,
-                collapsed: true,
                 ..Default::default()
             },
         );
@@ -913,11 +1073,11 @@ mod tests {
             QuestLogEntryView {
                 title: "Westfall".into(),
                 is_header: true,
-                collapsed: false,
                 ..Default::default()
             },
         );
         s.set_quest_log(state);
+        s.run("CollapseQuestHeader(1)").unwrap();
 
         assert!(s
             .eval::<bool>(
@@ -1197,15 +1357,14 @@ mod tests {
     /// The prune (`0x4de7a7` to `0x4de80f`) counts folded quests; a collapse never prunes.
     #[test]
     fn a_collapsed_header_keeps_its_quests_watched() {
-        let header = |collapsed| QuestLogEntryView {
+        let header = || QuestLogEntryView {
             title: "Elwynn Forest".into(),
             is_header: true,
-            collapsed,
             ..Default::default()
         };
         let expanded = || {
             let mut state = two_quests();
-            state.entries.insert(0, header(false));
+            state.entries.insert(0, header());
             state
         };
         let mut s = UiScript::new().unwrap();
@@ -1213,17 +1372,16 @@ mod tests {
         s.run("AddQuestWatch(3)").unwrap(); // quest 7
         assert_eq!(s.quest_log_watched(), vec![7]);
 
-        // Collapsed: only the header is visible.
-        s.set_quest_log(QuestLogState {
-            entries: vec![header(true)],
-            num_quests: 2,
-            hidden_quest_ids: vec![783, 7],
-        });
+        // Collapsed: only the header is visible, and a re-push keeps the fold.
+        s.run("CollapseQuestHeader(1)").unwrap();
+        s.set_quest_log(expanded());
+        assert_eq!(s.eval::<i64>("return GetNumQuestLogEntries()").unwrap(), 1);
         assert_eq!(
             s.eval::<i64>("return GetNumQuestWatches()").unwrap(),
             1,
             "a collapse must not prune the watch of a quest still in the log"
         );
+        s.run("ExpandQuestHeader(1)").unwrap();
         s.set_quest_log(expanded());
         assert_eq!(s.eval::<i64>("return GetNumQuestWatches()").unwrap(), 1);
         assert_eq!(s.eval::<i64>("return GetQuestIndexForWatch(1)").unwrap(), 3);
@@ -1372,11 +1530,18 @@ mod tests {
         assert_eq!(s.take_quest_log_abandons(), vec![7]);
 
         // Folded away: still abandonable.
-        s.run("SelectQuestLogEntry(1); SetAbandonQuest()").unwrap();
-        let mut folded = moved.clone();
-        folded.entries.remove(0);
-        folded.hidden_quest_ids = vec![7];
-        s.set_quest_log(folded);
+        let mut under_a_header = moved.clone();
+        under_a_header.entries.insert(
+            0,
+            QuestLogEntryView {
+                title: "Elwynn Forest".into(),
+                is_header: true,
+                ..Default::default()
+            },
+        );
+        s.set_quest_log(under_a_header);
+        s.run("SelectQuestLogEntry(2); SetAbandonQuest(); CollapseQuestHeader(1)")
+            .unwrap();
         s.run("AbandonQuest()").unwrap();
         assert_eq!(s.take_quest_log_abandons(), vec![7]);
 

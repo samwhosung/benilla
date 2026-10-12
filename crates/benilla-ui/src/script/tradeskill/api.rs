@@ -182,22 +182,25 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Expand/CollapseTradeSkillSubClass(i): the group whose header is visible row i; 0 is all.
+    // Expand/CollapseTradeSkillSubClass(i): the group whose header is visible row i; 0 is all. The
+    // fold re-sorts and signals `TRADE_SKILL_UPDATE` in place (`0x4fd750`).
     g.set(
         "ExpandTradeSkillSubClass",
         lua.create_function(|lua, id: usize| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            set_collapsed(&mut model, id, false);
-            model.trade_skill_touched = true;
+            crate::script::tick::verb(lua, |model| {
+                set_collapsed(model, id, false);
+                raise_update(model);
+            });
             Ok(())
         })?,
     )?;
     g.set(
         "CollapseTradeSkillSubClass",
         lua.create_function(|lua, id: usize| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            set_collapsed(&mut model, id, true);
-            model.trade_skill_touched = true;
+            crate::script::tick::verb(lua, |model| {
+                set_collapsed(model, id, true);
+                raise_update(model);
+            });
             Ok(())
         })?,
     )?;
@@ -312,28 +315,48 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // DoTradeSkill(index, count): queues the recipe's spell for `count` crafts, which the app sends
-    // as one `CMSG_CAST_SPELL` each.
+    // as one `CMSG_CAST_SPELL` each. More than one arms the repeat and signals
+    // `UPDATE_TRADESKILL_RECAST` before the first cast (`0x500307` → `0x4fd770`).
     g.set(
         "DoTradeSkill",
         lua.create_function(|lua, (index, count): (usize, Option<i64>)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some((spell_id, avail)) =
-                recipe_at(&model, index).map(|r| (r.spell_id, r.num_available))
-            {
+            crate::script::tick::verb(lua, |model| {
+                let Some((spell_id, avail)) =
+                    recipe_at(model, index).map(|r| (r.spell_id, r.num_available))
+                else {
+                    return;
+                };
                 // The client clamps the repeat to numAvailable, at least 1 (`0x500280`).
                 let n = (count.unwrap_or(1).max(1) as u32).min(avail.max(1));
+                if n > 1 {
+                    model.trade_skill_repeat_spell = spell_id;
+                    if let Some(t) = model.trade_skill.as_mut() {
+                        t.repeat_count = n;
+                    }
+                    model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
+                }
                 model.trade_skill_dos.push((spell_id, n));
-            }
+            });
             Ok(())
         })?,
     )?;
 
-    // CloseTradeSkill(): client-side only, no packet; the app clears its state.
+    // CloseTradeSkill() (`0x4fd7f0` → `0x4fc870`): client-side only, no packet. It empties the
+    // window, disarms an armed repeat with its `UPDATE_TRADESKILL_RECAST` (`0x4fd790`), and
+    // signals `TRADE_SKILL_CLOSE` unconditionally (`0x4fc884`); the app clears its own state.
     g.set(
         "CloseTradeSkill",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.trade_skill_close = true;
+            crate::script::tick::verb(lua, |model| {
+                model.trade_skill_close = true;
+                model.trade_skill_selection = 0;
+                model.trade_skill = None;
+                if model.trade_skill_repeat_spell != 0 {
+                    model.trade_skill_repeat_spell = 0;
+                    model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
+                }
+                model.raise("TRADE_SKILL_CLOSE", Vec::new());
+            });
             Ok(())
         })?,
     )?;
@@ -341,8 +364,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // The subclass and inv-slot filters (Blizzard_TradeSkillUI.lua:314-414): index i is 1-based
     // into `GetTradeSkillSubClasses` (`0x4ffc70` bounds-checks it) or `GetTradeSkillInvSlots`, and
     // 0 is all. `Set*(i, 1, 1)` shows only i, as every menu click does; `Set*(i, 1)` shows i and
-    // `Set*(i, 0)` hides it. Each set fires TRADE_SKILL_UPDATE through the touched flag
-    // (`0x4fd710`), and `Get*(0)` asks whether everything is shown. The reference's per-header
+    // `Set*(i, 0)` hides it. Each set re-sorts and signals TRADE_SKILL_UPDATE in place
+    // (`0x4fd710`, `0x4fd730`), and `Get*(0)` asks whether everything is shown. The reference's per-header
     // subclass flag (`+0xc`, mask `0x84dd60`) is kept here as hidden group keys.
     g.set(
         "GetTradeSkillSubClassFilter",
@@ -374,33 +397,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetTradeSkillSubClassFilter",
         lua.create_function(
             |lua, (index, on, exclusive): (usize, Option<i64>, Option<i64>)| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let Some(t) = model.trade_skill.as_ref() else {
-                    return Ok(());
-                };
-                let keys: Vec<(u32, u32)> = build_groups(&t.recipes)
-                    .into_iter()
-                    .map(|g| g.key)
-                    .collect();
-                let on = on.unwrap_or(1) != 0;
-                let exclusive = exclusive.unwrap_or(0) != 0;
-                match index.checked_sub(1) {
-                    None => model.trade_skill_subclass_hidden.clear(),
-                    Some(n) => {
-                        let Some(&key) = keys.get(n) else {
-                            return Ok(());
-                        };
-                        if on && exclusive {
-                            model.trade_skill_subclass_hidden =
-                                keys.iter().copied().filter(|&k| k != key).collect();
-                        } else if on {
-                            model.trade_skill_subclass_hidden.remove(&key);
-                        } else {
-                            model.trade_skill_subclass_hidden.insert(key);
-                        }
-                    }
-                }
-                model.trade_skill_touched = true;
+                crate::script::tick::verb(lua, |model| {
+                    set_subclass_filter(model, index, on, exclusive)
+                });
                 Ok(())
             },
         )?,
@@ -453,34 +452,76 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "SetTradeSkillInvSlotFilter",
         lua.create_function(
             |lua, (index, on, exclusive): (usize, Option<i64>, Option<i64>)| {
-                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                if model.trade_skill.is_none() {
-                    return Ok(());
-                }
-                let bits = present_inv_slots(&model);
-                let on = on.unwrap_or(1) != 0;
-                let exclusive = exclusive.unwrap_or(0) != 0;
-                // The mask each path writes, as `0x4fd730` is called.
-                match index.checked_sub(1) {
-                    None => model.trade_skill_invslot_mask = u32::MAX,
-                    Some(n) => {
-                        let Some(&bit) = bits.get(n) else {
-                            return Ok(());
-                        };
-                        if on && exclusive {
-                            model.trade_skill_invslot_mask = 1 << bit;
-                        } else if on {
-                            model.trade_skill_invslot_mask |= 1 << bit;
-                        } else {
-                            model.trade_skill_invslot_mask &= !(1 << bit);
-                        }
-                    }
-                }
-                model.trade_skill_touched = true;
+                crate::script::tick::verb(lua, |model| {
+                    set_inv_slot_filter(model, index, on, exclusive)
+                });
                 Ok(())
             },
         )?,
     )?;
 
     Ok(())
+}
+
+/// The filter and fold setters' tail (`0x4fd710`, `0x4fd730`, `0x4fd750`): the list rebuild, which
+/// the bindings derive on read, then `TRADE_SKILL_UPDATE` (`0x13a`) in place.
+fn raise_update(model: &mut Model) {
+    model.raise("TRADE_SKILL_UPDATE", Vec::new());
+}
+
+/// `SetTradeSkillSubClassFilter`'s write (`0x4ffc70` → `0x4fd710`).
+fn set_subclass_filter(model: &mut Model, index: usize, on: Option<i64>, exclusive: Option<i64>) {
+    let Some(t) = model.trade_skill.as_ref() else {
+        return;
+    };
+    let keys: Vec<(u32, u32)> = build_groups(&t.recipes)
+        .into_iter()
+        .map(|g| g.key)
+        .collect();
+    let on = on.unwrap_or(1) != 0;
+    let exclusive = exclusive.unwrap_or(0) != 0;
+    match index.checked_sub(1) {
+        None => model.trade_skill_subclass_hidden.clear(),
+        Some(n) => {
+            let Some(&key) = keys.get(n) else {
+                return;
+            };
+            if on && exclusive {
+                model.trade_skill_subclass_hidden =
+                    keys.iter().copied().filter(|&k| k != key).collect();
+            } else if on {
+                model.trade_skill_subclass_hidden.remove(&key);
+            } else {
+                model.trade_skill_subclass_hidden.insert(key);
+            }
+        }
+    }
+    raise_update(model);
+}
+
+/// `SetTradeSkillInvSlotFilter`'s write (`0x4ffe60` → `0x4fd730`).
+fn set_inv_slot_filter(model: &mut Model, index: usize, on: Option<i64>, exclusive: Option<i64>) {
+    if model.trade_skill.is_none() {
+        return;
+    }
+    let bits = present_inv_slots(model);
+    let on = on.unwrap_or(1) != 0;
+    let exclusive = exclusive.unwrap_or(0) != 0;
+    // The mask each path writes, as `0x4fd730` is called.
+    match index.checked_sub(1) {
+        None => model.trade_skill_invslot_mask = u32::MAX,
+        Some(n) => {
+            let Some(&bit) = bits.get(n) else {
+                return;
+            };
+            if on && exclusive {
+                model.trade_skill_invslot_mask = 1 << bit;
+            } else if on {
+                model.trade_skill_invslot_mask |= 1 << bit;
+            } else {
+                model.trade_skill_invslot_mask &= !(1 << bit);
+            }
+        }
+    }
+    raise_update(model);
 }

@@ -117,6 +117,7 @@ fn seed_items(s: &mut UiScript) {
             petition: None,
             already_bound: false,
             bar_placeable: true,
+            consumable: false,
             durability: None,
             texture: Some("Interface\\Icons\\INV_Helmet_02".into()),
             count: 1,

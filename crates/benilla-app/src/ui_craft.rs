@@ -235,6 +235,8 @@ fn feed_craft(
         })
     })();
 
+    // `CloseCraft` empties the VM and signals `CRAFT_CLOSE` in the verb (`0x4f5fef`).
+    let closed_in_place = !script.craft_open();
     if fresh == *last {
         return;
     }
@@ -253,11 +255,11 @@ fn feed_craft(
             script.fire_event("CRAFT_SHOW", vec![]);
         }
         (Some(_), Some(_)) => script.fire_event("CRAFT_UPDATE", vec![]),
-        (Some(_), None) => {
+        (Some(_), None) if !closed_in_place => {
             debug!("ui_craft: window closes");
             script.fire_event("CRAFT_CLOSE", vec![]);
         }
-        (None, None) => {}
+        (Some(_), None) | (None, None) => {}
     }
     *last = fresh;
 }
@@ -294,6 +296,58 @@ fn drain_craft(
 mod tests {
     use super::*;
     use benilla_formats::SpellDisplay;
+
+    /// `CloseCraft` signals `CRAFT_CLOSE` in the verb (`0x4f5fef`), so the feed that finds the
+    /// window closed a frame later signals no second close.
+    #[test]
+    fn a_verbs_close_is_signalled_once() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<CraftOpen>()
+            .init_resource::<PlayerActions>()
+            .init_resource::<crate::spell::SpellModifiers>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .insert_resource(NetCommands(tx))
+            .insert_resource(crate::ui_action::Spells::empty_for_tests())
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_spell_lines([]),
+            });
+        app.world_mut()
+            .spawn((ObjectStore(Default::default()), SelfPlayer));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                "CLOSES = 0 local f = CreateFrame('Frame') f:RegisterEvent('CRAFT_CLOSE') \
+                 f:SetScript('OnEvent', function() CLOSES = CLOSES + 1 end)",
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app.add_systems(Update, feed_craft);
+        let closes = |app: &App| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<i64>("return CLOSES")
+                .unwrap()
+        };
+
+        app.world_mut().resource_mut::<CraftOpen>().line = Some(333);
+        app.update();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("CloseCraft()")
+            .unwrap();
+        assert_eq!(closes(&app), 1, "the verb's own signal");
+        app.world_mut().resource_mut::<CraftOpen>().line = None;
+        app.update();
+        assert_eq!(closes(&app), 1, "no second signal from the feed");
+
+        app.world_mut().resource_mut::<CraftOpen>().line = Some(333);
+        app.update();
+        app.world_mut().resource_mut::<CraftOpen>().line = None;
+        app.update();
+        assert_eq!(closes(&app), 2, "a close from outside the VM still signals");
+    }
 
     #[test]
     fn law_d_is_always_the_spells_own_icon_even_for_a_rod_recipe() {

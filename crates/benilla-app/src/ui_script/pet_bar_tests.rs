@@ -437,6 +437,19 @@ fn dragging_a_pet_spell_between_slots_moves_it_through_the_shipped_handlers() {
         vec![vec![(4, CLAW_WORD)]],
         "and the drop writes the word verbatim into slot 5 (0-based 4)"
     );
+    // The write's `PET_BAR_UPDATE` (`0x4bcb6d`) ran `PetActionBar_Update` inside the drop: slot 5
+    // already paints Claw and slot 4 nothing, with no feed between.
+    assert_eq!(
+        s.eval::<(Option<String>, Option<String>)>(
+            "return PetActionButton5Icon:GetTexture(), \
+             (PetActionButton4Icon:IsShown() and PetActionButton4Icon:GetTexture() or nil)"
+        )
+        .unwrap(),
+        (
+            Some("Interface\\Icons\\Ability_Druid_Rake".to_string()),
+            None
+        )
+    );
     s.tick(0.01);
     assert_eq!(
         s.eval::<i64>("return PetActionBarFrame.showgrid").unwrap(),

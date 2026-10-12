@@ -104,6 +104,12 @@ impl super::UiScript {
         }
     }
 
+    /// Every occupied slot as the VM holds it, the cursor verbs' writes included, keyed by Lua
+    /// action id: what the slots' `ACTIONBAR_SLOT_CHANGED` handlers last read.
+    pub fn action_slots(&self) -> std::collections::HashMap<u32, ActionSlot> {
+        self.model_ref().actions.clone()
+    }
+
     /// Push (or clear) one action's state; the cooldown start is already on the `GetTime` clock,
     /// so storing only converts milliseconds to seconds.
     pub fn set_action_state(&mut self, action: u32, state: Option<ActionState>) {
@@ -600,6 +606,8 @@ mod tests {
             kind: 0x00,
             action: 111,
             texture: Some("Interface\\Icons\\Spell_A".into()),
+            count: 0,
+            consumable: false,
         }));
 
         s.run("UseAction(9, 0)").unwrap();

@@ -623,6 +623,8 @@ fn feed_trade(
     let opened = !*last_open && trade.is_open();
     let closed = *last_open && !trade.is_open();
     let changed = fresh != *last;
+    // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`).
+    let held_player = script.trade_player_slots();
     if changed {
         script.set_trade(fresh.clone());
     }
@@ -648,7 +650,19 @@ fn feed_trade(
                     .map(|(i, _)| ScriptValue::Int(i as i64 + 1))
                     .collect::<Vec<_>>()
             };
-            for slot in changed_slots(&new.player.slots, &old.player.slots) {
+            // Diffed against the VM's column by the item each slot holds, so the store catching up
+            // with a click, its richer row included, is no change.
+            let held = held_player.as_ref().unwrap_or(&old.player.slots);
+            let item = |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count));
+            let player_changed = new
+                .player
+                .slots
+                .iter()
+                .zip(held.iter())
+                .enumerate()
+                .filter(|(_, (a, b))| item(a) != item(b))
+                .map(|(i, _)| ScriptValue::Int(i as i64 + 1));
+            for slot in player_changed {
                 if matches!(slot, ScriptValue::Int(n) if invalidated.iter().any(|&i| i64::from(i) + 1 == n))
                 {
                     continue;
@@ -1188,6 +1202,90 @@ mod tests {
             1,
             "and only once — the flag is taken"
         );
+    }
+
+    /// `ClickTradeButton` signals its slot in place (`0x4bfaef`), so the store catching up with
+    /// the click a frame later, its richer row included, fires nothing more; nor does the clear.
+    #[test]
+    fn a_trade_slot_click_is_not_announced_again_by_the_feed() {
+        let (mut app, _rx) = feed_app();
+        // The app's row reads the template; the bag record the click copies has none yet.
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(2589, Some(crate::items::test_template("Tough Jerky")));
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.begin(0x7);
+            trade.open_window();
+        }
+        app.update();
+        app.update();
+        let jerky = |count| TradeItem {
+            entry: 2589,
+            display_id: 0,
+            count,
+            wrapped: false,
+            gift_creator: 0,
+            perm_enchant: 0,
+            creator: 0,
+            charges: 0,
+            suffix_factor: 0,
+            random_prop_id: 0,
+            lock_id: 0,
+            max_durability: 0,
+            durability: 0,
+        };
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            let slot = benilla_ui::script::ContainerSlot {
+                item_id: 2589,
+                count: 3,
+                ..Default::default()
+            };
+            script.set_container(
+                0,
+                Some(benilla_ui::script::ContainerState {
+                    name: None,
+                    num_slots: 16,
+                    slots: [(1, slot)].into_iter().collect(),
+                }),
+            );
+            script
+                .run(
+                    r#"
+                    SLOT_EVENTS = 0
+                    local f = CreateFrame("Frame")
+                    f:RegisterEvent("TRADE_PLAYER_ITEM_CHANGED")
+                    f:SetScript("OnEvent", function() SLOT_EVENTS = SLOT_EVENTS + 1 end)
+                    PickupContainerItem(0, 1)
+                    ClickTradeButton(1)
+                    "#,
+                )
+                .unwrap();
+        }
+        let seen = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource::<UiScript>()
+                .eval::<i64>("return SLOT_EVENTS")
+                .unwrap()
+        };
+        assert_eq!(seen(&mut app), 1, "the click's own signal, in place");
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .place_own_item(1, jerky(3), 0);
+        app.update();
+        assert_eq!(seen(&mut app), 1, "the feed re-announced the placement");
+
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("ClearCursor() ClickTradeButton(1)")
+            .unwrap();
+        assert_eq!(seen(&mut app), 2, "the clear's own signal, in place");
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .clear_own_item(1);
+        app.update();
+        assert_eq!(seen(&mut app), 2, "the feed re-announced the clear");
     }
 
     /// The reference prints the line from its own sender, not on a reply; row `0xb9` is chat.

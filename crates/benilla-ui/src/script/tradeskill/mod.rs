@@ -2,7 +2,8 @@
 //! ([`UiScript::set_trade_skill`]) with recipes resolved from `Spell.dbc`, `SkillLineAbility.dbc`
 //! and bag counts, and drains the intents `DoTradeSkill` and `CloseTradeSkill` queue. The engine
 //! owns the grouped, filtered list (`0x4fca20`); every Lua index, `SetTradeSkillItem`'s included,
-//! is 1-based into its visible rows ([`recipe_at`]).
+//! is 1-based into its visible rows ([`recipe_at`]). The filter, fold, repeat and close verbs fire
+//! their events inside the call, as the reference's do.
 
 use std::collections::HashSet;
 
@@ -170,11 +171,17 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().trade_skill_close)
     }
 
-    /// Whether a filter or fold changed since the last drain. The reference re-sorts and fires
-    /// `TRADE_SKILL_UPDATE` (event `0x13a`) inside the call (`0x4fd710`, `0x4fd730`, `0x4fd750`);
-    /// the app fires it the same frame, and the stock filter and collapse-all clicks repaint only
-    /// off that event.
-    pub fn take_trade_skill_touched(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().trade_skill_touched)
+    /// Whether the VM holds an open window: `CloseTradeSkill` empties it in the verb, so a feed
+    /// that finds it empty owes no `TRADE_SKILL_CLOSE` of its own.
+    pub fn trade_skill_open(&self) -> bool {
+        self.model_ref().trade_skill.is_some()
+    }
+
+    /// `GetTradeskillRepeatCount`'s answer as the VM holds it, `DoTradeSkill`'s write included.
+    pub fn trade_skill_repeat_count(&self) -> u32 {
+        self.model_ref()
+            .trade_skill
+            .as_ref()
+            .map_or(0, |t| t.repeat_count)
     }
 }

@@ -130,6 +130,20 @@ pub(crate) struct PetBarState {
 }
 
 impl super::UiScript {
+    /// The ten slot views as the VM holds them, the drag's and the toggles' writes included, each
+    /// without its cooldown: what the bar's `PET_BAR_UPDATE` handler last read.
+    pub fn pet_action_views(&self) -> Vec<PetActionView> {
+        self.model_ref()
+            .pet_bar
+            .slots
+            .iter()
+            .map(|s| PetActionView {
+                cooldown: None,
+                ..s.view.clone()
+            })
+            .collect()
+    }
+
     /// Push the whole pet bar; the app diffs and fires `PET_BAR_UPDATE`.
     pub fn set_pet_actions(
         &mut self,
@@ -232,6 +246,36 @@ impl super::UiScript {
     /// Drain the names `PetRename(name)` queued, in order.
     pub fn take_pet_renames(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().pet_renames)
+    }
+}
+
+/// A pet word's autocast-on bit (30); bit 31 allows it.
+pub(crate) const AUTOCAST_ON: u32 = 0x4000_0000;
+/// A pet word without its two autocast bits: the type and the action, which the client compares
+/// words under (`0x4bca44`, `0x4bcd2a`, `0x4bd1b9`).
+pub(crate) const ACTION_MASK: u32 = 0x3FFF_FFFF;
+
+/// A pet book entry takes a word that differs from its own in the autocast bits alone.
+pub(crate) fn set_book_word(book: &mut super::spellbook::SpellSlotView, word: u32) {
+    book.packed = word;
+    if let Some((_, on)) = book.autocast.as_mut() {
+        *on = word & AUTOCAST_ON != 0;
+    }
+}
+
+/// A book word as the bar paints a spell (`0x4bdc50`'s spell arm): its name, rank and icon, the
+/// spell id, and the autocast bits read off the word (`0x4bdd65`, `0x4bdda4`).
+pub(crate) fn book_word_view(book: &super::spellbook::SpellSlotView) -> PetActionView {
+    PetActionView {
+        name: Some(book.name.clone()),
+        subtext: book.rank.clone(),
+        texture: book.texture.clone(),
+        spell_id: Some(book.spell_id),
+        autocast_allowed: book.packed & 0x8000_0000 != 0,
+        autocast_enabled: book.packed & AUTOCAST_ON != 0,
+        packed: book.packed,
+        passive: book.passive,
+        ..Default::default()
     }
 }
 
@@ -349,14 +393,42 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Only a slot that can autocast queues: the wire verb names a spell, and a token has none.
+    // `0x4bcbb0`: on a usable pet (`0x4bcbcf`) a slot whose word allows autocast (bit 31,
+    // `0x4bcbf1`) flips bit 30 in place, copies a spell word onto its book entry (`0x4bd190`),
+    // queues the `CMSG_PET_SET_ACTION` and signals `PET_BAR_UPDATE` (`0x4bcc81`) before the verb
+    // returns. A token has no bit 31, so it does nothing.
     g.set(
         "TogglePetAutocast",
         lua.create_function(|lua, i: u32| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if slot_at(&model, i).is_some_and(|s| s.view.autocast_allowed) {
+            super::tick::verb(lua, |model| {
+                let Some(n) = i
+                    .checked_sub(1)
+                    .map(|n| n as usize)
+                    .filter(|&n| n < model.pet_bar.slots.len())
+                else {
+                    return;
+                };
+                if !model.pet_bar.actions_usable || !model.pet_bar.slots[n].view.autocast_allowed {
+                    return;
+                }
+                let view = &mut model.pet_bar.slots[n].view;
+                view.packed ^= AUTOCAST_ON;
+                view.autocast_enabled = view.packed & AUTOCAST_ON != 0;
+                let word = view.packed;
+                if (word >> 24) & 0x3F == 1 {
+                    if let Some(book) = model
+                        .pet_book
+                        .slots
+                        .iter_mut()
+                        .rev()
+                        .find(|b| b.packed & ACTION_MASK == word & ACTION_MASK)
+                    {
+                        set_book_word(book, word);
+                    }
+                }
                 model.pet_autocast_toggles.push(i);
-            }
+                model.raise("PET_BAR_UPDATE", Vec::new());
+            });
             Ok(())
         })?,
     )?;
@@ -747,6 +819,47 @@ mod tests {
         s.run("PetStopAttack() PetStopAttack()").unwrap();
         assert_eq!(s.take_pet_stop_attacks(), 2);
         assert_eq!(s.take_pet_stop_attacks(), 0, "drain empties");
+    }
+
+    /// `0x4bcbb0` flips the slot and its book entry and signals `PET_BAR_UPDATE` before the verb
+    /// returns; an unusable pet (`0x4bcbcf`) does nothing.
+    #[test]
+    fn a_slot_autocast_toggle_repaints_in_place() {
+        let mut s = UiScript::new().unwrap();
+        s.set_pet_book(crate::script::PetBookState {
+            token: Some("PET".into()),
+            slots: vec![crate::script::SpellSlotView {
+                spell_id: 2649,
+                name: "Growl".into(),
+                autocast: Some((true, true)),
+                packed: 0xC100_0000 | 2649,
+                ..Default::default()
+            }],
+        });
+        let mut bar = slots();
+        bar[1].packed = 0xC100_0000 | 2649;
+        s.set_pet_actions(true, false, true, bar.clone());
+        s.run(
+            "function PROBE() \
+               local _, e = GetSpellAutocast(1, BOOKTYPE_PET) \
+               local _, _, _, _, _, _, b = GetPetActionInfo(2) \
+               return tostring(e) .. ',' .. tostring(b) \
+             end",
+        )
+        .unwrap();
+        crate::script::tick::heard::listen(&s, &["PET_BAR_UPDATE"], Some("PROBE()"));
+        s.run("TogglePetAutocast(2)").unwrap();
+        assert!(crate::script::tick::heard::take(&s).is_empty());
+        assert!(s.take_pet_autocast_toggles().is_empty());
+
+        s.set_pet_actions(true, true, true, bar);
+        s.run("TogglePetAutocast(2)").unwrap();
+        assert_eq!(
+            crate::script::tick::heard::take(&s),
+            ["PET_BAR_UPDATE nil,nil"],
+            "the slot and its book entry both read autocast off"
+        );
+        assert_eq!(s.take_pet_autocast_toggles(), vec![2]);
     }
 
     #[test]

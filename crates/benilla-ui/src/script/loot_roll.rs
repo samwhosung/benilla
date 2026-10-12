@@ -1,13 +1,14 @@
 //! The group loot roll bindings `GroupLootFrame` calls: the app pushes the open rolls and drains
 //! the votes `RollOnLoot` queues, 0 Pass, 1 Need, 2 Greed (`LootFrame.xml:374`/`:398`/`:425`).
 //! `START_LOOT_ROLL` carries `(rollID, rollTime)` and `CANCEL_LOOT_ROLL` the `rollID`
-//! (`UIParent.lua:513-515`, `LootFrame.lua:279-285`). The `rollID` is client-internal, as
+//! (`UIParent.lua:513-515`, `LootFrame.lua:279-285`); a vote's own cancel, and the
+//! bind-on-pickup confirm, fire inside the verb. The `rollID` is client-internal, as
 //! `CMSG_LOOT_ROLL` addresses `(lootedTarget, itemSlot)`, so the app allocates its own.
 
 use mlua::Lua;
 
 use super::binding_abi::flag;
-use super::Model;
+use super::{Model, ScriptValue};
 use crate::script::binding_abi::Idx32;
 
 /// `rollType` 0, the one vote the bind-on-pickup gate never intercepts.
@@ -61,11 +62,38 @@ impl super::UiScript {
     pub fn take_loot_roll_votes(&mut self) -> Vec<(u32, u8)> {
         std::mem::take(&mut self.model_mut().loot_roll_votes)
     }
+}
 
-    /// Drain the `(roll_id, roll_type)` Need or Greed calls on a bind-on-pickup roll: the app fires
-    /// `CONFIRM_LOOT_ROLL`, and the popup's `ConfirmLootRoll` queues the real vote.
-    pub fn take_loot_roll_confirms(&mut self) -> Vec<(u32, u8)> {
-        std::mem::take(&mut self.model_mut().loot_roll_confirms)
+/// `0x61bdf0`, the vote both bindings share: an unknown or closed roll does nothing
+/// (`0x61be3f`). Need or Greed on a bind-on-pickup item, unconfirmed, signals
+/// `CONFIRM_LOOT_ROLL` with `(rollID, rollType)` and sends nothing (`0x61be8b`). Otherwise the
+/// vote is queued for `CMSG_LOOT_ROLL` and `CANCEL_LOOT_ROLL` fires (`0x61bf2a`) before the roll
+/// closes (`0x61bf32`), so its handler still reads the roll; the app's later close of the same
+/// roll then signals nothing, as the closed byte `+0x3a` guards it.
+fn vote(lua: &Lua, roll_id: u32, roll_type: u8, confirmed: bool) {
+    let closes = super::tick::verb(lua, |model| {
+        let Some(entry) = find(model, roll_id) else {
+            return false;
+        };
+        if roll_type > 2 {
+            return false;
+        }
+        let id = ScriptValue::Int(i64::from(roll_id));
+        if entry.bind_on_pickup && roll_type != PASS && !confirmed {
+            model.raise(
+                "CONFIRM_LOOT_ROLL",
+                vec![id, ScriptValue::Int(i64::from(roll_type))],
+            );
+            return false;
+        }
+        model.loot_roll_votes.push((roll_id, roll_type));
+        model.raise("CANCEL_LOOT_ROLL", vec![id]);
+        true
+    });
+    if closes {
+        super::tick::verb(lua, |model| {
+            model.loot_rolls.rolls.retain(|r| r.roll_id != roll_id);
+        });
     }
 }
 
@@ -130,24 +158,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // The server ignores a `rollType` of 3 or more (`GroupHandler.cpp:367`), so those and unknown
-    // ids are dropped. Need or Greed on a bind-on-pickup item sends nothing and fires
-    // `CONFIRM_LOOT_ROLL` (`0x61bdf0`, `0x61be8b`); the gate is in the C function, so it holds for
-    // an addon's call too.
+    // ids are dropped. The bind-on-pickup gate is in the C function ([`vote`]), so it holds for an
+    // addon's call too.
     g.set(
         "RollOnLoot",
         lua.create_function(|lua, (roll_id, roll_type): (u32, u8)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let Some(entry) = find(&model, roll_id) else {
-                return Ok(());
-            };
-            if roll_type > 2 {
-                return Ok(());
-            }
-            if entry.bind_on_pickup && roll_type != PASS {
-                model.loot_roll_confirms.push((roll_id, roll_type));
-            } else {
-                model.loot_roll_votes.push((roll_id, roll_type));
-            }
+            vote(lua, roll_id, roll_type, false);
             Ok(())
         })?,
     )?;
@@ -156,10 +172,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ConfirmLootRoll",
         lua.create_function(|lua, (roll_id, roll_type): (u32, u8)| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if roll_type <= 2 && find(&model, roll_id).is_some() {
-                model.loot_roll_votes.push((roll_id, roll_type));
-            }
+            vote(lua, roll_id, roll_type, true);
             Ok(())
         })?,
     )?;
@@ -273,40 +286,60 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetLootRollTimeLeft(99)").unwrap(), 0);
     }
 
+    /// A vote signals `CANCEL_LOOT_ROLL` inside the verb (`0x61bf2a`), its handler still reading
+    /// the roll, which closes after it (`0x61bf32`): a second vote on it does nothing (`0x61be3f`).
     #[test]
-    fn roll_on_loot_queues_votes() {
+    fn a_vote_signals_its_cancel_in_place_and_closes_the_roll() {
+        use crate::script::tick::heard;
         let mut s = UiScript::new().unwrap();
         s.set_loot_rolls(rolls());
-        // Roll 8 is not bind-on-pickup, so every vote goes straight out.
-        s.run("RollOnLoot(8, 1)").unwrap(); // Need
-        s.run("RollOnLoot(8, 2)").unwrap(); // Greed
-        s.run("RollOnLoot(8, 0)").unwrap(); // Pass
-        assert_eq!(s.take_loot_roll_votes(), vec![(8, 1), (8, 2), (8, 0)]);
-        assert!(s.take_loot_roll_votes().is_empty(), "drained");
-        assert!(s.take_loot_roll_confirms().is_empty(), "nothing to confirm");
+        heard::listen(
+            &s,
+            &["CANCEL_LOOT_ROLL", "CONFIRM_LOOT_ROLL"],
+            Some("arg1 .. ' ' .. GetLootRollTimeLeft(arg1)"),
+        );
+        // Roll 8 is not bind-on-pickup, so the Need goes straight out.
+        s.run("RollOnLoot(8, 1) RollOnLoot(8, 2)").unwrap();
+        assert_eq!(heard::take(&s), ["CANCEL_LOOT_ROLL 8 60000"]);
+        assert_eq!(s.take_loot_roll_votes(), vec![(8, 1)]);
+        assert_eq!(s.eval::<i64>("return GetLootRollTimeLeft(8)").unwrap(), 0);
     }
 
+    /// Need or Greed on a bind-on-pickup roll signals `CONFIRM_LOOT_ROLL` with
+    /// `(rollID, rollType)` and sends nothing (`0x61be8b`); Pass and the confirm vote.
     #[test]
     fn need_or_greed_on_a_bop_roll_confirms_instead_of_voting() {
+        use crate::script::tick::heard;
         let mut s = UiScript::new().unwrap();
         s.set_loot_rolls(rolls()); // roll 7 is bind_on_pickup
-        s.run("RollOnLoot(7, 1)").unwrap(); // Need on BoP
-        s.run("RollOnLoot(7, 2)").unwrap(); // Greed on BoP
+        heard::listen(
+            &s,
+            &["CANCEL_LOOT_ROLL", "CONFIRM_LOOT_ROLL"],
+            Some("arg1 .. ',' .. tostring(arg2)"),
+        );
+        s.run("RollOnLoot(7, 1) RollOnLoot(7, 2)").unwrap();
         assert!(
             s.take_loot_roll_votes().is_empty(),
             "a BoP need/greed must not reach the wire before the popup is accepted"
         );
-        assert_eq!(s.take_loot_roll_confirms(), vec![(7, 1), (7, 2)]);
+        assert_eq!(
+            heard::take(&s),
+            ["CONFIRM_LOOT_ROLL 7,1", "CONFIRM_LOOT_ROLL 7,2"]
+        );
 
-        // Pass is never gated.
+        // `ConfirmLootRoll`, the popup's accept, lands the real vote and closes the roll.
+        s.run("ConfirmLootRoll(7, 1) RollOnLoot(7, 0)").unwrap();
+        assert_eq!(s.take_loot_roll_votes(), vec![(7, 1)]);
+        assert_eq!(heard::take(&s), ["CANCEL_LOOT_ROLL 7,nil"]);
+    }
+
+    /// Pass is never gated.
+    #[test]
+    fn a_pass_on_a_bop_roll_votes() {
+        let mut s = UiScript::new().unwrap();
+        s.set_loot_rolls(rolls());
         s.run("RollOnLoot(7, 0)").unwrap();
         assert_eq!(s.take_loot_roll_votes(), vec![(7, 0)]);
-        assert!(s.take_loot_roll_confirms().is_empty());
-
-        // `ConfirmLootRoll`, the popup's accept, lands the real vote.
-        s.run("ConfirmLootRoll(7, 1)").unwrap();
-        assert_eq!(s.take_loot_roll_votes(), vec![(7, 1)]);
-        assert!(s.take_loot_roll_confirms().is_empty(), "no second prompt");
     }
 
     #[test]

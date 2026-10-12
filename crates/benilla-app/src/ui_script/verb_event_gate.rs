@@ -15,107 +15,11 @@ struct Pair {
     via: String,
 }
 
-/// Pairs a feed fires on the state the verb changes, as `(verb, event, file)` with the file
-/// matched as a path suffix; each row's comment names the trigger.
-const ELSEWHERE: &[(&str, &str, &str)] = &[
-    // The sell slot's diff (`auction_sell_item` moved, or `sell_slot_dirty`).
-    (
-        "ClickAuctionSellItemButton",
-        "NEW_AUCTION_UPDATE",
-        "benilla-app/src/ui_auction/mod.rs",
-    ),
-    // The query goes to the wire; the inbox feed announces the list when it lands.
-    (
-        "CheckInbox",
-        "MAIL_INBOX_UPDATE",
-        "benilla-app/src/ui_mail/mod.rs",
-    ),
-    // `craft_close` / `trade_skill_close` are drained by the app, whose store transition
-    // `(Some, None)` is the fire.
-    ("CloseCraft", "CRAFT_CLOSE", "benilla-app/src/ui_craft.rs"),
-    (
-        "CloseTradeSkill",
-        "TRADE_SKILL_CLOSE",
-        "benilla-app/src/ui_tradeskill.rs",
-    ),
-    // `take_quest_log_collapses`: the app owns the collapse set, re-feeds the list, fires.
-    (
-        "CollapseQuestHeader",
-        "QUEST_LOG_UPDATE",
-        "benilla-app/src/ui_quest_log.rs",
-    ),
-    (
-        "ExpandQuestHeader",
-        "QUEST_LOG_UPDATE",
-        "benilla-app/src/ui_quest_log.rs",
-    ),
-    // `trade_skill_touched`, set by all four verbs, drained by `take_trade_skill_touched`.
-    (
-        "CollapseTradeSkillSubClass",
-        "TRADE_SKILL_UPDATE",
-        "benilla-app/src/ui_tradeskill.rs",
-    ),
-    (
-        "ExpandTradeSkillSubClass",
-        "TRADE_SKILL_UPDATE",
-        "benilla-app/src/ui_tradeskill.rs",
-    ),
-    (
-        "SetTradeSkillInvSlotFilter",
-        "TRADE_SKILL_UPDATE",
-        "benilla-app/src/ui_tradeskill.rs",
-    ),
-    (
-        "SetTradeSkillSubClassFilter",
-        "TRADE_SKILL_UPDATE",
-        "benilla-app/src/ui_tradeskill.rs",
-    ),
-    // `repeat_count` moved (`repeat_changed`).
-    (
-        "DoTradeSkill",
-        "UPDATE_TRADESKILL_RECAST",
-        "benilla-app/src/ui_tradeskill.rs",
-    ),
-    // `take_loot_roll_confirms`: a Need/Greed on a bind-on-pickup roll is diverted to the popup.
-    (
-        "ConfirmLootRoll",
-        "CANCEL_LOOT_ROLL",
-        "benilla-app/src/ui_loot_roll.rs",
-    ),
-    (
-        "ConfirmLootRoll",
-        "CONFIRM_LOOT_ROLL",
-        "benilla-app/src/ui_loot_roll.rs",
-    ),
-    (
-        "RollOnLoot",
-        "CANCEL_LOOT_ROLL",
-        "benilla-app/src/ui_loot_roll.rs",
-    ),
-    (
-        "RollOnLoot",
-        "CONFIRM_LOOT_ROLL",
-        "benilla-app/src/ui_loot_roll.rs",
-    ),
-    // `keybinds.generation` moves; `sync_dispatch` re-derives the table and fires.
-    (
-        "SetBinding",
-        "UPDATE_BINDINGS",
-        "benilla-app/src/bindings.rs",
-    ),
-    // Fired when the server's reply changes the bar, a round trip after the reference, which
-    // fires locally from the toggle.
-    (
-        "TogglePetAutocast",
-        "PET_BAR_UPDATE",
-        "benilla-app/src/ui_pet/bar.rs",
-    ),
-    (
-        "ToggleSpellAutocast",
-        "PET_BAR_UPDATE",
-        "benilla-app/src/ui_pet/bar.rs",
-    ),
-];
+/// Pairs whose event the verb's path leaves to a later server answer, as `(verb, event, file)` with
+/// the file that fires on that answer matched as a path suffix; each row's comment names the
+/// answer's fire site. Empty: every pair the table lists fires inside its verb, the reference's
+/// way, a check's throttled re-announce included (`CheckInbox`, `0x4aeaf8`).
+const ELSEWHERE: &[(&str, &str, &str)] = &[];
 
 /// Pairs nothing fires on the verb's path, each with its reason.
 const GAP: &[(&str, &str, &str)] = &[

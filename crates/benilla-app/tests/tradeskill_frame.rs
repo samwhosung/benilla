@@ -92,13 +92,6 @@ fn state() -> TradeSkillState {
     }
 }
 
-/// What the app does after a list mutator: drain the touched flag and fire `TRADE_SKILL_UPDATE`.
-fn pump(script: &mut UiScript) {
-    if script.take_trade_skill_touched() {
-        script.fire_event("TRADE_SKILL_UPDATE", vec![]);
-    }
-}
-
 #[test]
 fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
     benilla_formats::wow_data_or_skip!();
@@ -121,16 +114,15 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
         "All"
     );
 
-    // The click never calls Update() itself: the repaint rides TRADE_SKILL_UPDATE (`pump`).
+    // The click never calls Update() itself: the repaint rides the TRADE_SKILL_UPDATE the verb
+    // signals before it returns (`0x4fd750`).
     s.run("TradeSkillCollapseAllButton:Click()").unwrap();
-    pump(&mut s);
     assert_eq!(
         s.eval::<i64>("return GetNumTradeSkills()").unwrap(),
         2,
         "collapse-all leaves only the two headers"
     );
     s.run("TradeSkillCollapseAllButton:Click()").unwrap();
-    pump(&mut s);
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 5);
 
     // The dropdowns default to the "All …" texts.
@@ -159,7 +151,6 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
     s.run("ToggleDropDownMenu(1, nil, TradeSkillSubClassDropDown)")
         .unwrap();
     s.run("DropDownList1Button3:Click()").unwrap();
-    pump(&mut s);
     assert_eq!(
         s.eval::<i64>("return GetNumTradeSkills()").unwrap(),
         2,
@@ -183,7 +174,6 @@ fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
     s.run("ToggleDropDownMenu(1, nil, TradeSkillSubClassDropDown)")
         .unwrap();
     s.run("DropDownList1Button1:Click()").unwrap();
-    pump(&mut s);
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 5);
 }
 
@@ -377,7 +367,6 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
 
     // A click on the other Mail recipe moves it.
     s.run("TradeSkillSkill3:Click()").unwrap();
-    pump(&mut s);
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")
             .unwrap(),
@@ -393,7 +382,6 @@ fn a_row_click_shows_the_selection_glow_and_a_row_hover_shows_nothing() {
 
     // With every group folded no recipe row is visible to carry it.
     s.run("TradeSkillCollapseAllButton:Click()").unwrap();
-    pump(&mut s);
     assert!(
         !s.eval::<bool>("return TradeSkillHighlightFrame:IsShown()")
             .unwrap(),
@@ -511,7 +499,6 @@ fn a_hovered_or_selected_recipe_row_paints_its_label_white() {
 
     // Click row 3: the white follows the selection, and row 2 falls back to its difficulty colour.
     s.run("TradeSkillSkill3:Click()").unwrap();
-    pump(&mut s);
     park_cursor_off_the_list(&mut s);
     assert_eq!(
         s.eval::<i64>("return GetTradeSkillSelectionIndex()")

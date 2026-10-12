@@ -1081,6 +1081,54 @@ fn trade_recipient_money_renders_the_digit_not_ellipsis() {
     );
 }
 
+/// The stock trade window repaints our slot on `ClickTradeButton`'s own
+/// `TRADE_PLAYER_ITEM_CHANGED` (`0x4bfaef`, `TradeFrame.lua:32`), before the click returns.
+#[test]
+fn a_trade_slot_click_repaints_the_slot_in_place() {
+    benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    for f in crate::ui_script::test_ui::production_order(&[
+        super::test_ui::MERCHANT_UI,
+        &[
+            "Interface\\FrameXML\\MoneyInputFrame.lua",
+            "Interface\\FrameXML\\MoneyInputFrame.xml",
+            "Interface\\FrameXML\\MerchantFrame.xml",
+            "Interface\\FrameXML\\TradeFrame.xml",
+            "ScrollTemplates.xml",
+        ],
+    ]) {
+        load_xml(&s, f);
+    }
+    s.set_trade(Some(benilla_ui::script::TradeState::default()));
+    s.fire_event("TRADE_SHOW", vec![]);
+    s.set_container(
+        0,
+        Some(benilla_ui::script::ContainerState {
+            name: Some("Backpack".into()),
+            num_slots: 16,
+            slots: [(
+                1,
+                benilla_ui::script::ContainerSlot {
+                    item_id: 2589,
+                    count: 5,
+                    quality: Some(1),
+                    texture: Some("Interface\\Icons\\INV_Fabric_Linen_01".into()),
+                    link: Some("|cffffffff|Hitem:2589|h[Linen Cloth]|h|r".into()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+    );
+    let name: Option<String> = s
+        .eval("PickupContainerItem(0, 1) ClickTradeButton(2) return TradePlayerItem2Name:GetText()")
+        .unwrap();
+    assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
+    assert_eq!(name.as_deref(), Some("Linen Cloth"));
+}
+
 /// The row's left-click fork (`MerchantFrame.lua:301-306`): ctrl dresses up the item and shift
 /// posts its link, both through `GetMerchantItemLink`, and neither buys; a right-click buys unless
 /// ctrl is held (`MerchantFrame.lua:332-333`).

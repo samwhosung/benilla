@@ -9,8 +9,9 @@
 
 use mlua::Lua;
 
+use crate::script::pet::StoredPetAction;
 use crate::script::tick::verb;
-use crate::script::Model;
+use crate::script::{Model, PetActionView};
 
 use super::{clear_cursor, set_cursor, CursorPayload, CursorPetAction};
 
@@ -133,7 +134,13 @@ pub(super) fn pickup_pet_action(lua: &Lua, slot: u32) -> bool {
             set_pet_action(lua, payload);
             if let Some((index, word)) = blank {
                 verb(lua, |model| {
-                    write_slot(model, index, word, false);
+                    // A spell word with id 0 paints nothing (`0x4bdc50`'s spell arm finds no
+                    // record).
+                    let blank = PetActionView {
+                        packed: word,
+                        ..Default::default()
+                    };
+                    write_slot(model, index, word, false, blank);
                 });
             }
             true
@@ -161,6 +168,7 @@ fn pick_pet_action(model: &Model, slot: u32) -> Option<(CursorPetAction, Option<
         packed,
         passive: view.passive,
         texture: view.texture.clone(),
+        view: view.clone(),
     };
     Some((
         payload,
@@ -181,7 +189,8 @@ fn place_pet_action(
     };
     // Read before the write: a displaced word's passive bit and icon are its slot's.
     let occupant_view = model.pet_bar.slots[index].view.clone();
-    let Some(assigned) = write_slot(model, index, held.packed, held.passive) else {
+    let Some(assigned) = write_slot(model, index, held.packed, held.passive, held.view.clone())
+    else {
         return (false, None);
     };
     let displaced = assigned.displaced.map(|packed| CursorPetAction {
@@ -189,6 +198,7 @@ fn place_pet_action(
         packed,
         passive: occupant_view.passive,
         texture: occupant_view.texture.clone(),
+        view: occupant_view.clone(),
     });
     (true, displaced)
 }
@@ -206,13 +216,29 @@ fn slot_index(model: &Model, slot: u32) -> Option<usize> {
 /// pickup's blank goes through it too, as in the reference (`0x4be268`). `0x4bc9a0` takes its
 /// send flag from both callers as 1, which makes it ask `0x4bcf70` before anything else
 /// (`0x4bc9c7`-`0x4bc9d7`); the app's answer, the one the bar's `GetPetActionsUsable` reads, is
-/// `PetBarState::actions_usable`.
-fn write_slot(model: &mut Model, target: usize, source: u32, passive: bool) -> Option<Assigned> {
+/// `PetBarState::actions_usable`. Each word carries its paint: a relocated occupant its own, the
+/// target `source_view`. The send flag also signals `PET_BAR_UPDATE` after the send
+/// (`0x4bcb6d`), in place.
+fn write_slot(
+    model: &mut Model,
+    target: usize,
+    source: u32,
+    passive: bool,
+    source_view: PetActionView,
+) -> Option<Assigned> {
     if !model.pet_bar.actions_usable {
         return None;
     }
     let mut words: Vec<u32> = model.pet_bar.slots.iter().map(|s| s.view.packed).collect();
     let assigned = assign(&mut words, target, source, passive)?;
+    if let Some(j) = assigned.reloc {
+        let occupant = std::mem::take(&mut model.pet_bar.slots[target]);
+        model.pet_bar.slots[j] = occupant;
+    }
+    model.pet_bar.slots[target] = StoredPetAction {
+        view: source_view,
+        cooldown: None,
+    };
 
     // One `CMSG_PET_SET_ACTION`: the relocation pair first whenever there was one, changed or
     // not, then the target pair (`0x4bcad4`).
@@ -226,6 +252,7 @@ fn write_slot(model: &mut Model, target: usize, source: u32, passive: bool) -> O
     for (i, word) in words.into_iter().enumerate() {
         model.pet_bar.slots[i].view.packed = word;
     }
+    model.raise("PET_BAR_UPDATE", Vec::new());
     Some(assigned)
 }
 
@@ -377,18 +404,25 @@ mod tests {
         s.run("PickupPetAction(4)").unwrap();
         crate::script::tick::heard::listen(
             &s,
-            &["PET_BAR_HIDEGRID", "CURSOR_UPDATE", "PET_BAR_SHOWGRID"],
-            Some("SlotFiveIsClaw()"),
+            &[
+                "PET_BAR_HIDEGRID",
+                "CURSOR_UPDATE",
+                "PET_BAR_SHOWGRID",
+                "PET_BAR_UPDATE",
+            ],
+            Some("tostring(SlotFiveIsClaw()) .. ' ' .. tostring((GetPetActionInfo(5)))"),
         );
-        // Growl is displaced and rides the cursor out, signalling after the write.
+        // Growl is displaced and rides the cursor out, signalling after the write, whose
+        // `PET_BAR_UPDATE` (`0x4bcb6d`) reads the slot already painted as Claw.
         s.run("PickupPetAction(5)").unwrap();
         assert_eq!(
             crate::script::tick::heard::take(&s),
             [
-                "PET_BAR_HIDEGRID false",
-                "CURSOR_UPDATE false",
-                "CURSOR_UPDATE true",
-                "PET_BAR_SHOWGRID true"
+                "PET_BAR_HIDEGRID false Growl",
+                "CURSOR_UPDATE false Growl",
+                "PET_BAR_UPDATE true Claw",
+                "CURSOR_UPDATE true Claw",
+                "PET_BAR_SHOWGRID true Claw"
             ]
         );
         assert!(s.eval::<bool>("return SlotFiveIsClaw()").unwrap());
@@ -640,16 +674,23 @@ mod tests {
         crate::script::cursor::install_kind_probe(&s);
         crate::script::tick::heard::listen(
             &s,
-            &["CURSOR_UPDATE", "PET_BAR_SHOWGRID", "PET_BAR_HIDEGRID"],
-            Some("CursorKind()"),
+            &[
+                "CURSOR_UPDATE",
+                "PET_BAR_SHOWGRID",
+                "PET_BAR_HIDEGRID",
+                "PET_BAR_UPDATE",
+            ],
+            Some("CursorKind() .. ' ' .. tostring((GetPetActionInfo(4)))"),
         );
         assert!(pickup_pet_action(&s.lua, 4));
+        // The spell slot's blank writes through `0x4bc9a0` after the setter (`0x4be27f`).
         assert_eq!(
             crate::script::tick::heard::take(&s),
             [
-                "CURSOR_UPDATE none",
-                "CURSOR_UPDATE none",
-                "PET_BAR_SHOWGRID pet"
+                "CURSOR_UPDATE none Claw",
+                "CURSOR_UPDATE none Claw",
+                "PET_BAR_SHOWGRID pet Claw",
+                "PET_BAR_UPDATE pet nil"
             ]
         );
     }

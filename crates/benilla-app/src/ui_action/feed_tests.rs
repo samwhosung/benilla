@@ -159,6 +159,68 @@ fn a_landed_item_template_also_lands_the_consumable_gate() {
     );
 }
 
+/// `PickupAction` and `PlaceAction` fire their slots' `ACTIONBAR_SLOT_CHANGED` in place
+/// (`0x4e5db0` and `0x4e684f` into `0x4e58e0`), each reading the slot as written, count and
+/// consumable gate included; the store catching up a frame later fires nothing more.
+#[test]
+fn a_bar_drag_fires_its_slots_in_place_and_the_feed_adds_nothing() {
+    let (mut app, _rx) = app_with_food_on_the_bar();
+    app.add_systems(Update, super::drain::drain_action_sets.after(feed_actions));
+    let mut info = test_template("Tough Jerky");
+    info.display_info_id = JERKY_DISPLAY;
+    info.spells = vec![ItemSpellEntry {
+        index: 0,
+        spell_id: 433,
+        trigger: 0,
+        charges: -1,
+        cooldown_ms: -1,
+        category: 0,
+        category_cooldown_ms: -1,
+    }];
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(JERKY, Some(info));
+    app.update();
+    app.update();
+
+    fn script(app: &mut App) -> Mut<'_, UiScript> {
+        app.world_mut().non_send_resource_mut::<UiScript>()
+    }
+    script(&mut app)
+        .run(
+            r#"
+            SLOT_EVENTS = {}
+            local f = CreateFrame("Frame")
+            f:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+            f:SetScript("OnEvent", function()
+                table.insert(SLOT_EVENTS, arg1 .. ":" .. tostring(GetActionTexture(arg1))
+                    .. ":" .. tostring(IsConsumableAction(arg1)))
+            end)
+            "#,
+        )
+        .unwrap();
+    let seen: Vec<String> = script(&mut app)
+        .eval(&format!(
+            "PickupAction({JERKY_ACTION}) PlaceAction(1) local s = SLOT_EVENTS SLOT_EVENTS = {{}} return s"
+        ))
+        .unwrap();
+    assert_eq!(
+        seen,
+        [
+            format!("{JERKY_ACTION}:nil:nil"),
+            format!("1:{JERKY_ICON}:1"),
+        ],
+        "both slots signal before the verbs return, the placed one with its gate"
+    );
+
+    app.update();
+    app.update();
+    let late: Vec<String> = script(&mut app).eval("return SLOT_EVENTS").unwrap();
+    assert!(late.is_empty(), "the feed re-fired {late:?}");
+    let bar = app.world().resource::<PlayerActions>();
+    assert!(bar.buttons.contains_key(&0) && !bar.buttons.contains_key(&JERKY_SLOT));
+}
+
 /// `IsConsumableAction 0x4e5250`'s two clauses; the item class is neither.
 #[test]
 fn is_consumable_is_ammo_thrown_or_a_negative_charge_use_block() {

@@ -139,8 +139,6 @@ pub(crate) struct AuctionOpen {
     pub(crate) lists: [AuctionListSlot; 3],
     /// Fire `AUCTION_HOUSE_SHOW` next feed: a hello reply landed.
     show_requested: bool,
-    /// Fire `NEW_AUCTION_UPDATE` next feed: the sell slot changed.
-    sell_slot_dirty: bool,
     /// Per list, a result landed, so its event is owed even for an identical page: the Browse
     /// pane leaves "Searching" only on it (`Blizzard_AuctionUI.lua:187`). Only that list's: the
     /// Auctions tab's update needs the `page` its `OnShow` sets (`Blizzard_AuctionUI.lua:817`).
@@ -240,7 +238,6 @@ impl AuctionOpen {
         self.house_id = 0;
         self.lists = Default::default();
         self.show_requested = false;
-        self.sell_slot_dirty = false;
         self.query_gate = None;
         self.pending_owner_refresh = false;
         self.pending_bidder_refresh = false;
@@ -491,7 +488,6 @@ fn feed_auction(
     mut last: Local<crate::ui_script::VmMemo<Option<AuctionState>>>,
     mut last_open: Local<crate::ui_script::VmMemo<Option<u64>>>,
     mut last_can_query: Local<crate::ui_script::VmMemo<bool>>,
-    mut last_sell: Local<crate::ui_script::VmMemo<Option<(i64, u32)>>>,
     mut last_classes: Local<crate::ui_script::VmMemo<Vec<AuctionCategory>>>,
 ) {
     let Some(mut script) = script else {
@@ -500,7 +496,6 @@ fn feed_auction(
     let last = last.get(&script);
     let last_open = last_open.get(&script);
     let last_can_query = last_can_query.get(&script);
-    let last_sell = last_sell.get(&script);
 
     // The class tree needs no session: the stock `AuctionFrameBrowse_OnLoad` reads
     // `GetAuctionItemClasses()` when the addon loads (`Blizzard_AuctionUI.lua:174`).
@@ -611,12 +606,6 @@ fn feed_auction(
     // A listing was accepted: drop the staged item before anything reads the slot.
     if std::mem::take(&mut auction.sell_slot_taken) {
         script.clear_auction_sell_item();
-    }
-
-    let sell = script.auction_sell_item();
-    if sell != *last_sell || std::mem::take(&mut auction.sell_slot_dirty) {
-        *last_sell = sell;
-        script.fire_event("NEW_AUCTION_UPDATE", vec![]);
     }
 
     // The browse gate, pushed when it changes; the Search button polls it every frame.

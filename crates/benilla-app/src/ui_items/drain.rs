@@ -1752,6 +1752,7 @@ mod bind_confirm_tests {
                 petition: None,
                 already_bound: false,
                 bar_placeable: true,
+                consumable: false,
                 durability: None,
                 texture: Some("Interface\\Icons\\INV_Axe_01".into()),
                 count: 1,

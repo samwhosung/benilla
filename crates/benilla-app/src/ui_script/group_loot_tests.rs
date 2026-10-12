@@ -233,7 +233,20 @@ fn start_loot_roll_claims_frames_in_order_and_paints_the_roll() {
         s.take_loot_roll_votes().is_empty(),
         "a BoP Need must not reach the wire before the confirm"
     );
-    assert_eq!(s.take_loot_roll_confirms(), vec![(7, 1)], "Need on roll 7");
+    // `RollOnLoot` signalled `CONFIRM_LOOT_ROLL` inside the click (`0x61be8b`), so
+    // `UIParent_OnEvent` has the dialog up already, carrying Need on roll 7.
+    assert_eq!(
+        s.eval::<(i64, i64)>(
+            "local d = StaticPopup_FindVisible(\"CONFIRM_LOOT_ROLL\") return d.data, d.data2"
+        )
+        .unwrap(),
+        (7, 1)
+    );
+    assert!(
+        s.eval::<bool>("return GroupLootFrame1:IsVisible()")
+            .unwrap(),
+        "the frame stays up for the confirm"
+    );
 }
 
 /// `CONFIRM_LOOT_ROLL` opens the dialog carrying `(rollID, rollType)` (`UIParent.lua:517-523`);
@@ -243,12 +256,16 @@ fn the_bop_confirm_popup_lands_the_withheld_vote() {
     let _data = benilla_formats::wow_data_or_skip!();
     let mut s = setup();
     s.set_loot_rolls(rolls());
-
-    // The app fires this after draining the confirm queue (`ui_loot_roll::drain_loot_rolls`).
     s.fire_event(
-        "CONFIRM_LOOT_ROLL",
-        vec![ScriptValue::Int(7), ScriptValue::Int(1)],
+        "START_LOOT_ROLL",
+        vec![ScriptValue::Int(7), ScriptValue::Int(42_000)],
     );
+    assert!(s
+        .eval::<bool>("return GroupLootFrame1:IsVisible()")
+        .unwrap());
+
+    // `RollOnLoot`'s own signal for a bind-on-pickup Need (`0x61be8b`).
+    s.run("RollOnLoot(7, 1)").unwrap();
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
     // `data2` is the rollType, so `OnAccept` can replay the click.
@@ -292,6 +309,10 @@ fn the_bop_confirm_popup_lands_the_withheld_vote() {
         vec![(7, 1)],
         "OK on the confirm sends the Need the gate withheld"
     );
+    // The confirmed vote's `CANCEL_LOOT_ROLL` (`0x61bf2a`) hid roll 7's frame inside the call.
+    assert!(!s
+        .eval::<bool>("return GroupLootFrame1:IsVisible()")
+        .unwrap());
 }
 
 /// `CANCEL_LOOT_ROLL` hides the popup holding that rollID and no other (`LootFrame.lua:279-285`).
@@ -525,7 +546,7 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
     s.mouse_button(x, y, "LeftButton", true);
     s.mouse_button(x, y, "LeftButton", false);
     assert!(
-        s.take_loot_roll_votes().is_empty() && s.take_loot_roll_confirms().is_empty(),
+        s.take_loot_roll_votes().is_empty(),
         "an unmodified icon click votes nothing"
     );
 
@@ -551,7 +572,7 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
         "re-dress first, then try the rolled item on"
     );
     assert!(
-        s.take_loot_roll_votes().is_empty() && s.take_loot_roll_confirms().is_empty(),
+        s.take_loot_roll_votes().is_empty(),
         "no modified icon click may vote"
     );
 
@@ -564,6 +585,11 @@ fn ctrl_and_shift_on_the_roll_icon_preview_and_post_its_link() {
         "the Need button still votes"
     );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+    assert!(
+        !s.eval::<bool>("return GroupLootFrame1:IsVisible()")
+            .unwrap(),
+        "and its CANCEL_LOOT_ROLL hid the frame inside the click (0x61bf2a)"
+    );
 }
 
 /// Addons inherit `GroupLootFrameTemplate` by its 1.12 name and reach for its children; the icon

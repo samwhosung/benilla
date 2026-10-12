@@ -48,6 +48,9 @@ pub struct ContainerSlot {
     /// Whether the item may go on an action bar: `PlaceAction`'s only item filter (`0x4e62e0`), an
     /// on-use spell or equippable.
     pub bar_placeable: bool,
+    /// The action bar's count gate (`IsConsumableAction`, `0x4e5250`): ammo, thrown, or an on-use
+    /// spell with negative charges.
+    pub consumable: bool,
     /// Current and max durability; `None` when the max is 0 or the item object has not arrived.
     pub durability: Option<(u32, u32)>,
     /// The use cooldown, `(start_ms on the GetTime clock, duration_ms, enabled)`; `None` if cold.
@@ -890,6 +893,7 @@ mod tests {
                 petition: None,
                 already_bound: false,
                 bar_placeable: true,
+                consumable: false,
                 durability: None,
                 texture: Some("Interface\\Icons\\INV_Misc_Food_16".into()),
                 count: 5,
@@ -1337,6 +1341,7 @@ mod tests {
                 petition: None,
                 already_bound: false,
                 bar_placeable: true,
+                consumable: false,
                 durability: None,
                 texture: Some("Interface\\Icons\\INV_Misc_Gem_01".into()),
                 count: 1,
@@ -1881,6 +1886,8 @@ mod tests {
             kind: 0x80,
             action: 4540,
             texture: None,
+            count: 0,
+            consumable: false,
         }));
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert!(s.cursor_payload().is_none(), "the bar item is cleared");

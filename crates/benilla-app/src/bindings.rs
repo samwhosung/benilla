@@ -304,7 +304,8 @@ fn drain_binding_requests(script: Option<NonSendMut<UiScript>>, files: Res<Bindi
 
 /// Rebuild the dispatch map when the engine table moved (a rebind, a set switch, the seed, a
 /// load), and fire `UPDATE_BINDINGS` so the Lua consumers (the action bar's hotkey corners)
-/// repaint.
+/// repaint, unless the move was a Lua verb's, which signalled it in place (`SetBinding`
+/// `0x4b805b`, `LoadBindings` `0x4b649d`).
 fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<BindingDispatch>) {
     let Some(mut script) = script else { return };
     let generation = script.keybinds_generation();
@@ -321,7 +322,9 @@ fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<Bind
             None => warn!("bindings: {command}: unpressable chord '{key}' (unknown token)"),
         }
     }
-    script.fire_event("UPDATE_BINDINGS", vec![]);
+    if script.keybinds_signalled_generation() != generation {
+        script.fire_event("UPDATE_BINDINGS", vec![]);
+    }
 }
 
 /// A wheel delta in lines (notches), whatever unit the OS reported: a trackpad's `Pixel` deltas
@@ -807,6 +810,36 @@ mod tests {
             &benilla_ui::bindings_xml::parse(bindings).expect("well-formed"),
         );
         script
+    }
+
+    /// `SetBinding` signalled its `UPDATE_BINDINGS` in place (`0x4b805b`): the dispatch map still
+    /// re-derives, and the frame fires no second signal for the same change.
+    #[test]
+    fn a_verbs_binding_change_is_signalled_once() {
+        let script = core_script();
+        let mut app = vm_harness(script);
+        app.update();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                "UPDATES = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_BINDINGS') \
+                 f:SetScript('OnEvent', function() UPDATES = UPDATES + 1 end) \
+                 SetBinding('F', 'JUMP')",
+            )
+            .unwrap();
+        assert_eq!(lua_count(&app, "UPDATES"), 1, "the verb's own signal");
+        app.update();
+        assert_eq!(
+            lua_count(&app, "UPDATES"),
+            1,
+            "no second signal from the feed"
+        );
+        assert!(app
+            .world()
+            .resource::<BindingDispatch>()
+            .map
+            .values()
+            .any(|c| c == "JUMP"));
     }
 
     /// A `runOnUp` body is one chunk run twice, `keystate` "down" then "up"; a plain one runs on

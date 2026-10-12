@@ -543,7 +543,9 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
     assert!(s.take_spell_casts().is_empty());
     assert!(s.take_pet_spell_autocasts().is_empty());
 
-    // Right: autocast, never a cast (`SpellBookFrame.lua:284-285`).
+    // Right: autocast, never a cast (`SpellBookFrame.lua:284-285`). On a usable pet the toggle's
+    // `PET_BAR_UPDATE` (`0x4bcdcb`) repaints the page inside the click, lighting the shine.
+    s.set_pet_actions(true, true, true, Vec::new());
     click(&mut s, "SpellButton3", "RightButton");
     assert!(
         s.errors().is_empty(),
@@ -551,6 +553,11 @@ fn the_pet_tab_switches_books_and_renders_the_pets_spells() {
         s.errors()
     );
     assert_eq!(s.take_pet_spell_autocasts(), vec![16827]);
+    assert!(
+        s.eval::<bool>("return SpellButton3AutoCast:IsShown() == 1")
+            .unwrap(),
+        "Claw's shine lit before any feed ran"
+    );
     assert!(
         s.take_pet_spell_casts().is_empty(),
         "a right-click on the pet page must not also cast"

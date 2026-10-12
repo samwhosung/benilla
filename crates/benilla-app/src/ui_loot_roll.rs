@@ -155,11 +155,11 @@ impl LootRolls {
         }
     }
 
-    /// Our own vote: close the frame and return the roll's wire identity; `None` for a stale click.
+    /// Our own vote: drop the roll and return its wire identity; `None` for a stale click. The
+    /// vote's `CANCEL_LOOT_ROLL` fired in the verb, so none is queued here.
     fn vote(&mut self, roll_id: u32) -> Option<(u64, u32)> {
         let i = self.active.iter().position(|r| r.roll_id == roll_id)?;
         let r = self.active.remove(i);
-        self.cancelled.push(r.roll_id);
         Some((r.looted_target, r.item_slot))
     }
 
@@ -562,18 +562,8 @@ fn drain_loot_rolls(
     let Some(mut script) = script else {
         return;
     };
-    // A bind-on-pickup Need or Greed sends nothing yet and its frame stays up:
-    // `UIParent_OnEvent` turns `CONFIRM_LOOT_ROLL` into its popup.
-    for (roll_id, roll_type) in script.take_loot_roll_confirms() {
-        debug!("ui_loot_roll: BoP confirm for {roll_type} on roll {roll_id}");
-        script.fire_event(
-            "CONFIRM_LOOT_ROLL",
-            vec![
-                ScriptValue::Int(roll_id as i64),
-                ScriptValue::Int(roll_type as i64),
-            ],
-        );
-    }
+    // The VM signalled each vote's `CANCEL_LOOT_ROLL`, and a bind-on-pickup Need or Greed's
+    // `CONFIRM_LOOT_ROLL`, inside the verb (`0x61bf2a`, `0x61be8b`).
     for (roll_id, roll_type) in script.take_loot_roll_votes() {
         match rolls.vote(roll_id) {
             Some((looted_target, item_slot)) => {
@@ -912,7 +902,7 @@ mod tests {
         r.start(start(0xAA, 3, 17182));
         assert_eq!(r.vote(1), Some((0xAA, 3)));
         assert!(r.active.is_empty(), "the frame closes client-predicted");
-        assert_eq!(r.cancelled, vec![1]);
+        assert!(r.cancelled.is_empty(), "the verb signalled its own cancel");
         assert_eq!(r.vote(1), None);
         assert_eq!(r.vote(99), None);
     }
