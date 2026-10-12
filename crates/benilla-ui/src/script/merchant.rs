@@ -238,10 +238,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Some(n) => Value::String(lua.create_string(n)?),
                 None => Value::Nil,
             };
-            let texture = match &it.texture {
-                Some(t) => Value::String(lua.create_string(t)?),
-                None => Value::Nil,
-            };
+            // A string on every path: the wire display id has no icon row, or no row, so
+            // `0x5d88b0` answers the question mark (`0x4fb214`, `0x5d8927`).
+            let texture = Value::String(
+                lua.create_string(
+                    it.texture
+                        .as_deref()
+                        .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
+                )?,
+            );
             Ok(MultiValue::from_vec(vec![
                 name,
                 texture,
@@ -378,14 +383,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(it) = item else {
                 return Ok(MultiValue::from_vec(invalid_tuple()));
             };
-            let name = match &it.name {
-                Some(n) => Value::String(lua.create_string(n)?),
-                None => Value::Nil,
-            };
-            let texture = match &it.texture {
-                Some(t) => Value::String(lua.create_string(t)?),
-                None => Value::Nil,
-            };
+            // A template the cache lacks takes the miss (`0x4fb416`, `0x4fb515`); a cached one
+            // reaches the icon through its display (`0x4fb45e`, `0x5d8af0`), falling to the
+            // question mark when that row is missing or bare.
+            if it.name.is_none() {
+                return Ok(MultiValue::from_vec(invalid_tuple()));
+            }
+            let name = Value::String(lua.create_string(it.name.as_deref().unwrap_or_default())?);
+            let texture = Value::String(
+                lua.create_string(
+                    it.texture
+                        .as_deref()
+                        .unwrap_or(super::item_stats::MISSING_ITEM_ICON),
+                )?,
+            );
             Ok(MultiValue::from_vec(vec![
                 name,
                 texture,
@@ -590,11 +601,13 @@ mod tests {
         assert_eq!((price, quantity, num), (25, 5, -1));
         assert_eq!(usable, 1);
 
-        // In flight: name and texture nil, and usable (the null-record skip).
+        // In flight: name nil, the texture the question mark (the wire display has no icon row,
+        // `0x4fb214`), and usable (the null-record skip).
         assert!(s
             .eval::<bool>(
                 "local n, t, p, q, a, u = GetMerchantItemInfo(2)\n\
-                 return n == nil and t == nil and p == 1500 and u == 1",
+                 return n == nil and t == 'Interface\\\\Icons\\\\INV_Misc_QuestionMark' \
+                 and p == 1500 and u == 1",
             )
             .unwrap());
         assert!(s
@@ -744,6 +757,56 @@ mod tests {
         s.run("CloseMerchant()").unwrap();
         assert!(s.take_merchant_close());
         assert!(!s.take_merchant_close(), "drained");
+    }
+
+    /// The question-mark fallback and the buyback miss: a vendor row whose wire display has no
+    /// icon (or no row) answers the question mark (`0x5d88b0` at `0x4fb214`), a buyback row with a
+    /// cached template and no icon does too (`0x5d8af0` at `0x4fb45e`), and one whose template is
+    /// uncached takes the miss tuple nil, nil, 0, 1, 0, 1 (`0x4fb416`, `0x4fb515`).
+    #[test]
+    fn merchant_and_buyback_icons_fall_back_and_an_uncached_buyback_misses() {
+        let mut s = UiScript::new().unwrap();
+        let row = |name: Option<&str>| MerchantItem {
+            name: name.map(str::to_string),
+            texture: None,
+            price: 10,
+            quantity: 1,
+            num_available: -1,
+            item_id: 25,
+            ..Default::default()
+        };
+        s.set_merchant(Some(MerchantState {
+            items: vec![row(Some("Sword")), row(None)],
+            buyback: vec![
+                MerchantItem {
+                    num_available: 0,
+                    ..row(Some("Sold Sword"))
+                },
+                row(None),
+            ],
+            ..Default::default()
+        }));
+        let shape = |call: &str| -> String {
+            s.eval(&format!(
+                "local c = function(...) local o = {{}} for i = 1, arg.n do o[i] = tostring(arg[i]) end \
+                 return table.concat(o, ',') end return c({call})"
+            ))
+            .unwrap()
+        };
+        let q = "Interface\\Icons\\INV_Misc_QuestionMark";
+        assert_eq!(
+            shape("GetMerchantItemInfo(1)"),
+            format!("Sword,{q},10,1,-1,1")
+        );
+        assert_eq!(
+            shape("GetMerchantItemInfo(2)"),
+            format!("nil,{q},10,1,-1,1")
+        );
+        assert_eq!(
+            shape("GetBuybackItemInfo(1)"),
+            format!("Sold Sword,{q},10,1,0,1")
+        );
+        assert_eq!(shape("GetBuybackItemInfo(2)"), "nil,nil,0,1,0,1");
     }
 
     #[test]
