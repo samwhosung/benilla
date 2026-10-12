@@ -70,6 +70,12 @@ impl super::UiScript {
         self.model_ref().unit_guids.held.keys().copied().collect()
     }
 
+    /// The unit tokens that name a unit now ([`super::UnitGuids::bound_tokens`]): the set a
+    /// field's change is fanned out to (`0x515e50`).
+    pub fn bound_unit_tokens(&self) -> Vec<String> {
+        self.model_ref().unit_guids.bound_tokens()
+    }
+
     /// Push (or clear, with `None`) the inspected unit's equipment. It fires nothing: the app fires
     /// `UNIT_INVENTORY_CHANGED` for the token, which the stock slot buttons listen for.
     pub fn set_inspect(&mut self, view: Option<InspectView>) {

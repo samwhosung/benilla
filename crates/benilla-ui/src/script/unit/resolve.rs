@@ -218,6 +218,41 @@ impl UnitGuids {
         self.held.values().copied().filter(|&guid| guid != 0)
     }
 
+    /// Every token that names a unit now, the base spellings `0x515c50` builds for a guid (it
+    /// tests the guid against each global and table in turn and keeps every match, so a unit two
+    /// tokens name is fired for twice), taken over all units at once: `player`, `pet`, `target`,
+    /// `mouseover`, `npc`, then each `partyN`, `partypetN`, `raidN` and `raidpetN` with a guid.
+    /// Hop tokens are not among them: the reference's array holds none.
+    pub fn bound_tokens(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut name = |token: String, base: UnitBase| {
+            if self.resolve_unit(base, 0).is_some() {
+                out.push(token);
+            }
+        };
+        name("player".into(), UnitBase::Player);
+        name("pet".into(), UnitBase::Pet);
+        name("target".into(), UnitBase::Target);
+        name("mouseover".into(), UnitBase::Mouseover);
+        name("npc".into(), UnitBase::Npc);
+        for row in 0..self.party.len() {
+            name(format!("party{}", row + 1), UnitBase::Party(row as u32));
+        }
+        for row in 0..self.party_pets.len() {
+            name(
+                format!("partypet{}", row + 1),
+                UnitBase::PartyPet(row as u32),
+            );
+        }
+        for row in 0..self.raid.len() {
+            name(format!("raid{}", row + 1), UnitBase::Raid(row as u32));
+        }
+        for row in 0..self.raid_pets.len() {
+            name(format!("raidpet{}", row + 1), UnitBase::RaidPet(row as u32));
+        }
+        out
+    }
+
     /// [`Self::resolve`] with the raise as the Lua error it is.
     pub(crate) fn guid_of(&self, token: &str) -> mlua::Result<Option<u64>> {
         self.resolve(token)
@@ -290,6 +325,42 @@ mod tests {
         assert_eq!(at("partypet1"), Some(P1_PET));
         assert_eq!(at("raid3"), Some(R3));
         assert_eq!(at("raidpet2"), Some(P1_PET));
+    }
+
+    /// The tokens naming a unit, in the fan-out's order: the five globals that hold a guid, then
+    /// the group tables row by row. A hop token and a nobody are left out.
+    #[test]
+    fn bound_tokens_lists_each_base_that_names_a_unit() {
+        assert_eq!(
+            guids().bound_tokens(),
+            [
+                "player",
+                "pet",
+                "target",
+                "mouseover",
+                "npc",
+                "party1",
+                "party2",
+                "partypet1",
+                "raid1",
+                "raid2",
+                "raid3",
+                "raidpet1",
+                "raidpet2",
+            ]
+        );
+        // Every listed token resolves to a unit, and the omitted `raidpet3` to nobody.
+        for token in guids().bound_tokens() {
+            assert!(guids().resolve(&token).unwrap().is_some(), "{token}");
+        }
+        assert_eq!(guids().resolve("raidpet3"), Ok(None));
+        // Nothing seated, nothing named; no mouseover held, no mouseover.
+        assert!(UnitGuids::default().bound_tokens().is_empty());
+        let unheld = UnitGuids {
+            held: HashMap::new(),
+            ..guids()
+        };
+        assert!(!unheld.bound_tokens().contains(&"mouseover".to_string()));
     }
 
     #[test]

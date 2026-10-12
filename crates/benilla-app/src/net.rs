@@ -718,6 +718,9 @@ pub(crate) fn send_query_time(
 pub(crate) struct Reputations {
     pub(crate) slots: Vec<(u8, i32)>,
     pub(crate) forced: Vec<(u32, u32)>,
+    /// How many forced tables have arrived. The reference's handler fires `UNIT_FACTION` on every
+    /// arrival, a resend of the same table included, so a feed counts arrivals, not table diffs.
+    forced_arrivals: u64,
 }
 
 impl Reputations {
@@ -727,17 +730,24 @@ impl Reputations {
         Self {
             slots,
             forced: Vec::new(),
+            forced_arrivals: 0,
         }
     }
 
     /// `SMSG_SET_FORCED_REACTIONS`: the table replaces the last whole (`0x4d59a0`).
     pub(crate) fn set_forced(&mut self, table: Vec<(u32, u32)>) {
         self.forced = table;
+        self.forced_arrivals += 1;
     }
 
     /// Drops the table: the reference's teardown zeroes the count (`0x4d5419`).
     pub(crate) fn clear_forced(&mut self) {
         self.forced.clear();
+    }
+
+    /// The tables that have arrived so far.
+    pub(crate) fn forced_arrivals(&self) -> u64 {
+        self.forced_arrivals
     }
 }
 
