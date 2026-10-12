@@ -316,9 +316,9 @@ pub(super) fn install(
         lua.create_function(
             move |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
                 let (r, g, b) = (
-                    super::object::as_f32(&r),
-                    super::object::as_f32(&g),
-                    super::object::as_f32(&b),
+                    super::object::tonumber_f32(lua, &r),
+                    super::object::tonumber_f32(lua, &g),
+                    super::object::tonumber_f32(lua, &b),
                 );
                 let rh = resolve(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
@@ -355,9 +355,9 @@ pub(super) fn install(
             // r, g and b are a bare `lua_tonumber` (`0x79dd40`), as in `SetTextColor`.
             move |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
                 let (r, g, b) = (
-                    super::object::as_f32(&r),
-                    super::object::as_f32(&g),
-                    super::object::as_f32(&b),
+                    super::object::tonumber_f32(lua, &r),
+                    super::object::tonumber_f32(lua, &g),
+                    super::object::tonumber_f32(lua, &b),
                 );
                 let rh = resolve(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");

@@ -245,9 +245,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
                 let (r, g, b) = (
-                    crate::script::object::as_f32(&r),
-                    crate::script::object::as_f32(&g),
-                    crate::script::object::as_f32(&b),
+                    crate::script::object::tonumber_f32(lua, &r),
+                    crate::script::object::tonumber_f32(lua, &g),
+                    crate::script::object::tonumber_f32(lua, &b),
                 );
                 // `0x78fc20` hands the colour to the bar (`0x782dd0`), which sets its vertex colour
                 // only if a bar exists and keeps nothing otherwise.

@@ -287,9 +287,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
                 let (r, g, b) = (
-                    super::object::as_f32(&r),
-                    super::object::as_f32(&g),
-                    super::object::as_f32(&b),
+                    super::object::tonumber_f32(lua, &r),
+                    super::object::tonumber_f32(lua, &g),
+                    super::object::tonumber_f32(lua, &b),
                 );
                 edit(lua, &this, |fo| {
                     let keep = fo.color.map_or(1.0, |c| c[3]);
@@ -328,9 +328,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // Shape C on r, g, b (`Font:SetShadowColor 0x79f730`): never raises.
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
                 let (r, g, b) = (
-                    crate::script::object::as_f32(&r),
-                    crate::script::object::as_f32(&g),
-                    crate::script::object::as_f32(&b),
+                    crate::script::object::tonumber_f32(lua, &r),
+                    crate::script::object::tonumber_f32(lua, &g),
+                    crate::script::object::tonumber_f32(lua, &b),
                 );
                 edit(lua, &this, |fo| {
                     let offset = fo.shadow.map_or([0.0, 0.0], |s| s.offset);

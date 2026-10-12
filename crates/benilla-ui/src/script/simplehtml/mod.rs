@@ -734,7 +734,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let raw = match &text {
                 // Bytes, lossily; never a raise.
                 Value::String(s) => s.to_string_lossy(),
-                Value::Number(_) | Value::Integer(_) => super::object::as_f32(&text).to_string(),
+                Value::Number(n) => (*n as f32).to_string(),
+                Value::Integer(i) => (*i as f32).to_string(),
                 _ => String::new(),
             };
             let h = html_handle(lua, &this)?;

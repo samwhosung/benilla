@@ -3,7 +3,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use crate::script::object::{as_f32, draw_layer_from_str, draw_layer_name};
+use crate::script::object::{draw_layer_from_str, draw_layer_name, tonumber_f32};
 use crate::script::{BlendMode, Model, TexCoords};
 
 use super::region_handle_of;
@@ -43,7 +43,11 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetVertexColor",
         lua.create_function(
             |lua, (this, r, g, b, a): (Table, Value, Value, Value, Option<f32>)| {
-                let (r, g, b) = (as_f32(&r), as_f32(&g), as_f32(&b));
+                let (r, g, b) = (
+                    tonumber_f32(lua, &r),
+                    tonumber_f32(lua, &g),
+                    tonumber_f32(lua, &b),
+                );
                 let rh = region_handle_of(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
@@ -90,8 +94,21 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 };
                 let n = if with_alpha { 8 } else { 6 };
                 let mut c = [0.0f32; 8];
-                for slot in c.iter_mut().take(n) {
-                    *slot = it.next().as_ref().map(as_f32).unwrap_or(0.0);
+                for (i, slot) in c.iter_mut().take(n).enumerate() {
+                    let v = it.next();
+                    // Every channel is a bare `lua_tonumber` (`0x79aef3`-`0x79b083`, `0x79b242`-
+                    // `0x79b490`) except the two alphas, which are `lua_isnumber`-gated with
+                    // default 1 (`0x79b30d`, `0x79b480`).
+                    *slot = match v {
+                        Some(v) if with_alpha && matches!(i, 3 | 7) => lua
+                            .coerce_number(v)
+                            .ok()
+                            .flatten()
+                            .map_or(1.0, |n| n as f32),
+                        Some(v) => tonumber_f32(lua, &v),
+                        None if with_alpha && matches!(i, 3 | 7) => 1.0,
+                        None => 0.0,
+                    };
                 }
                 let (start, end) = if with_alpha {
                     ([c[0], c[1], c[2], c[3]], [c[4], c[5], c[6], c[7]])
@@ -172,20 +189,21 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             }
                             resolvable && had_probe
                         }
-                        // The colour form, the only one to read the trailing three; a non-number
-                        // there takes the default a missing one does.
+                        // The colour form (`lua_isnumber`, `0x79bbd5`, so a numeric string too): g
+                        // and b are a bare `lua_tonumber`, and alpha is `lua_isnumber`-gated with
+                        // default 1.
                         Value::Number(_) | Value::Integer(_) => {
-                            let chan = |v: &Value, dflt: f32| match v {
-                                Value::Number(_) | Value::Integer(_) => as_f32(v),
-                                Value::String(s) => s
-                                    .to_str()
-                                    .ok()
-                                    .and_then(|s| s.parse::<f32>().ok())
-                                    .unwrap_or(dflt),
-                                _ => dflt,
-                            };
-                            data.fill =
-                                Some([as_f32(&arg), chan(&g, 0.0), chan(&b, 0.0), chan(&a, 1.0)]);
+                            let alpha = lua
+                                .coerce_number(a.clone())
+                                .ok()
+                                .flatten()
+                                .map_or(1.0, |n| n as f32);
+                            data.fill = Some([
+                                tonumber_f32(lua, &arg),
+                                tonumber_f32(lua, &g),
+                                tonumber_f32(lua, &b),
+                                alpha,
+                            ]);
                             data.texture = None;
                             true
                         }
@@ -387,7 +405,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         // Each coordinate is a bare `lua_tonumber` (`0x79beb0`), so nil or a table is 0; only the
         // count is gated, 4 or 8 (`0x79bf5d`).
         lua.create_function(|lua, (this, args): (Table, mlua::Variadic<Value>)| {
-            let rest: Vec<f32> = args.iter().map(as_f32).collect();
+            let rest: Vec<f32> = args.iter().map(|v| tonumber_f32(lua, v)).collect();
             let rh = region_handle_of(lua, &this)?;
             let coords = match rest.len() {
                 4 => Some(TexCoords::Rect([rest[0], rest[1], rest[2], rest[3]])),

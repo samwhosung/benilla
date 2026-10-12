@@ -239,9 +239,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         // Shape C on r, g, b (`ColorSelect:SetColorRGB 0x78eae0`, `2=C 3=C 4=C 5=B`).
         lua.create_function(|lua, (this, r, g, b): (Table, Value, Value, Value)| {
             let (r, g, b) = (
-                crate::script::object::as_f64(&r),
-                crate::script::object::as_f64(&g),
-                crate::script::object::as_f64(&b),
+                crate::script::object::tonumber_f64(lua, &r),
+                crate::script::object::tonumber_f64(lua, &g),
+                crate::script::object::tonumber_f64(lua, &b),
             );
             // Store through the client's quantizer, then fire with what the widget now holds: the
             // round-tripped values, identical to the next `GetColorRGB`, not the raw arguments.

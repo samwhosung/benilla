@@ -334,23 +334,17 @@ fn frame_type(s: &str) -> Option<FrameType> {
     Some(FrameType { kind, factory })
 }
 
-/// A Lua number-ish → f32 (nil/other → 0.0), for offset/color args.
-pub(super) fn as_f32(v: &Value) -> f32 {
-    match v {
-        Value::Number(n) => *n as f32,
-        Value::Integer(i) => *i as f32,
-        _ => 0.0,
-    }
+/// A colour or coordinate argument by the reference's bare `lua_tonumber` (`0x6f3620`): a number,
+/// or a string `luaO_str2d` (`0x6f5900`) reads as one, and 0.0 for anything else, with no type gate
+/// and no raise. [`super::binding_abi::coerced_number`] narrowed to the `f32` the widgets store.
+pub(super) fn tonumber_f32(lua: &Lua, v: &Value) -> f32 {
+    super::binding_abi::coerced_number(lua, Some(v.clone())) as f32
 }
 
-/// [`as_f32`] in `f64`, for `ColorSelect:SetColorRGB`, whose quantizer an `f32` detour could push
-/// across a rounding boundary.
-pub(super) fn as_f64(v: &Value) -> f64 {
-    match v {
-        Value::Number(n) => *n,
-        Value::Integer(i) => *i as f64,
-        _ => 0.0,
-    }
+/// [`tonumber_f32`] in `f64`, for `ColorSelect:SetColorRGB`, whose quantizer an `f32` detour could
+/// push across a rounding boundary.
+pub(super) fn tonumber_f64(lua: &Lua, v: &Value) -> f64 {
+    super::binding_abi::coerced_number(lua, Some(v.clone()))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
