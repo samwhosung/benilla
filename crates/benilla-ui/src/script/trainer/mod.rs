@@ -461,7 +461,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let expanded = !model.trainer_collapsed.contains(&g.key);
                     Ok(MultiValue::from_vec(vec![
                         Value::String(lua.create_string(&g.name)?),
-                        Value::Nil,
+                        // The header's subText is the empty string (`0x4d8b50` returns `0x882748`
+                        // for a header row, pushed at `0x4d8e13`), not nil.
+                        Value::String(lua.create_string("")?),
                         Value::String(lua.create_string("header")?),
                         binding_abi::flag(expanded),
                     ]))

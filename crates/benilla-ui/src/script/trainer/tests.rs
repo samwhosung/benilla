@@ -90,7 +90,8 @@ fn tree_interleaves_headers_and_ordered_services() {
         )
         .unwrap();
     assert_eq!((hn.as_str(), ht.as_str()), ("Arms", "header"));
-    assert_eq!((hsub, hexp), (None, Some(1)));
+    // The header's subText is the empty string (`0x4d8b50`), not nil.
+    assert_eq!((hsub.as_deref(), hexp), (Some(""), Some(1)));
 
     let info = |s: &mut UiScript, i: i64| {
         s.eval::<(String, String)>(&format!(
