@@ -610,3 +610,90 @@ fn a_repeat_goes_to_the_consumer_not_the_walk() {
     assert_eq!(s.eval::<i64>("return enters").unwrap(), 2);
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// Equal-level frames walk in the order they joined the bucket (`0x764aa0` inserts after the
+/// equals): a live `EnableKeyboard` inserts then, and a level change inserts again (`0x76a4f0`
+/// takes the frame out and back in).
+#[test]
+fn equal_levels_walk_in_bucket_join_order() {
+    let mut s = script();
+    s.run(
+        r#"
+        winner = nil
+        function mk(name)
+            local f = CreateFrame("Frame", name)
+            f:SetFrameStrata("HIGH")
+            f:SetScript("OnKeyDown", function() winner = name end)
+            return f
+        end
+        a = mk("KbJoinA")
+        b = mk("KbJoinB")
+        -- created A then B, but B joined first
+        b:EnableKeyboard(true)
+        a:EnableKeyboard(true)
+    "#,
+    )
+    .unwrap();
+    assert!(s.key_input("Z"));
+    assert_eq!(s.eval::<String>("return winner").unwrap(), "KbJoinB");
+
+    // A level change re-inserts the frame after its equals.
+    s.run(
+        r#"
+        local l = b:GetFrameLevel()
+        b:SetFrameLevel(l + 1)
+        b:SetFrameLevel(l)
+    "#,
+    )
+    .unwrap();
+    assert!(s.key_input("Z"));
+    assert_eq!(s.eval::<String>("return winner").unwrap(), "KbJoinA");
+
+    // Already enabled: enabling again joins nothing.
+    s.run("b:EnableKeyboard(true) a:EnableKeyboard(true)")
+        .unwrap();
+    assert!(s.key_input("Z"));
+    assert_eq!(s.eval::<String>("return winner").unwrap(), "KbJoinA");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The XML walker enables one kind per handler (`0x769ef0`): `OnChar` the char bucket
+/// (`0x769f6b`), `OnKeyDown` and `OnKeyUp` the key bucket (`0x769fa4`). A frame with only
+/// `OnKeyDown` is in no char walk, and the reverse.
+#[test]
+fn an_xml_handler_enables_only_its_own_kind() {
+    let mut s = script();
+    let doc = crate::framexml::parse(
+        r#"<Ui>
+             <Frame name="XmlKeysOnly"><Scripts><OnKeyDown>keys = (keys or 0) + 1</OnKeyDown></Scripts></Frame>
+             <Frame name="XmlCharsOnly"><Scripts><OnChar>chars = (chars or 0) + 1</OnChar></Scripts></Frame>
+           </Ui>"#,
+    )
+    .expect("valid FrameXML");
+    let report = crate::loader::load(&s, &doc, &|_| None);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert!(s.key_input("Q"));
+    assert!(s.char_input("q"));
+    assert_eq!(s.eval::<i64>("return keys").unwrap(), 1);
+    assert_eq!(s.eval::<i64>("return chars").unwrap(), 1);
+    // A handler Lua adds later enables nothing (`0x7748d0`), so it shows which buckets each
+    // frame is in: the keys-only frame is in no char walk, the chars-only one in no key walk.
+    s.run(
+        r#"
+        XmlKeysOnly:SetScript("OnKeyDown", nil)
+        XmlKeysOnly:SetScript("OnChar", function() chars = chars + 10 end)
+        XmlCharsOnly:SetScript("OnChar", nil)
+        XmlCharsOnly:SetScript("OnKeyDown", function() keys = keys + 10 end)
+    "#,
+    )
+    .unwrap();
+    assert!(
+        !s.char_input("q"),
+        "the keys-only frame is not in the char walk"
+    );
+    assert!(
+        !s.key_input("Q"),
+        "the chars-only frame is not in the key walk"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

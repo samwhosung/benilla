@@ -46,8 +46,9 @@ enum Channel {
 }
 
 /// The walk order (`0x765f10`): the channel's enabled, effectively-visible frames, strata TOOLTIP
-/// down to WORLD, then level descending, ties oldest registration first as the inserter keeps
-/// them (`0x764aa0`).
+/// down to WORLD, then level descending, ties oldest first by when each joined the bucket
+/// (`0x764aa0` inserts after the equal levels; a show, a level or strata change and a live enable
+/// each insert again).
 fn walk_order(model: &Model, channel: Channel) -> Vec<FrameHandle> {
     let mut candidates: Vec<(FrameHandle, u8, u16, u64)> = model
         .arena
@@ -61,7 +62,8 @@ fn walk_order(model: &Model, channel: Channel) -> Vec<FrameHandle> {
         })
         .map(|(h, f)| {
             let stamp = match channel {
-                Channel::Char | Channel::KeyDown => u64::from(f.insertion_seq),
+                Channel::Char => f.char_stamp,
+                Channel::KeyDown => f.key_stamp,
             };
             (h, f.strata as u8, f.level, stamp)
         })
@@ -172,6 +174,26 @@ fn walk_key(lua: &Lua, key: &str) -> KeyWalk {
         }
     }
     KeyWalk::Declined
+}
+
+/// The XML walker's auto-enable after a `SetScript` (`0x769ef0`): `OnChar` sets the char bit
+/// (`0x769f6b`), `OnKeyDown` and `OnKeyUp` the key bit (`0x769fa4`), each alone. Lua's `SetScript`
+/// never does (`0x7748d0`).
+pub(crate) fn enable_for_script(lua: &Lua, this: &mlua::Table, script: &str) -> mlua::Result<()> {
+    let char_bit = script.eq_ignore_ascii_case("OnChar");
+    let key_bit =
+        script.eq_ignore_ascii_case("OnKeyDown") || script.eq_ignore_ascii_case("OnKeyUp");
+    if !(char_bit || key_bit) {
+        return Ok(());
+    }
+    let h = super::object::frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if char_bit {
+        model.arena.set_char_enabled(h, true);
+    } else {
+        model.arena.set_key_enabled(h, true);
+    }
+    Ok(())
 }
 
 /// The consumer of a key-down, which that key's up and repeats go to (`0x765fa2`).

@@ -405,10 +405,39 @@ impl WidgetArena {
 
     /// `EnableKeyboard` (`0x776ec0`): the char and key bits the key walks filter on, both.
     pub fn set_keyboard_enabled(&mut self, h: FrameHandle, enabled: bool) {
+        self.set_char_enabled(h, enabled);
+        self.set_key_enabled(h, enabled);
+    }
+
+    /// The input mask's char bit alone (`0x76af00(0)`, `0x76af50(0)`), which the XML walker sets
+    /// for `OnChar` (`0x769f6b`). A bit newly set on a linked frame inserts it into the bucket
+    /// now, so it walks after the frames already there.
+    pub fn set_char_enabled(&mut self, h: FrameHandle, enabled: bool) {
+        let stamp = self.next_kb_stamp;
+        let mut joined = false;
         if let Some(f) = self.frame_mut(h) {
+            joined = enabled && !f.char_enabled && f.effective_visible;
             f.char_enabled = enabled;
-            f.key_enabled = enabled;
+            if joined {
+                f.char_stamp = stamp;
+            }
         }
+        self.next_kb_stamp += u64::from(joined);
+    }
+
+    /// The mask's key bit alone (`0x76af00(1)`), which the XML walker sets for `OnKeyDown` and
+    /// `OnKeyUp` (`0x769fa4`).
+    pub fn set_key_enabled(&mut self, h: FrameHandle, enabled: bool) {
+        let stamp = self.next_kb_stamp;
+        let mut joined = false;
+        if let Some(f) = self.frame_mut(h) {
+            joined = enabled && !f.key_enabled && f.effective_visible;
+            f.key_enabled = enabled;
+            if joined {
+                f.key_stamp = stamp;
+            }
+        }
+        self.next_kb_stamp += u64::from(joined);
     }
 
     /// `IsKeyboardEnabled` (`0x776f90`): either bit.

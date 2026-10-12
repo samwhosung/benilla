@@ -93,6 +93,7 @@ mod item_stats;
 mod item_text;
 pub mod keybind;
 mod keyboard;
+pub(crate) use keyboard::enable_for_script;
 pub use keyboard::KeyWalk;
 mod layout;
 mod layout_cache;

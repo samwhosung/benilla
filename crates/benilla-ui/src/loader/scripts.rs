@@ -62,11 +62,10 @@ impl Loader<'_> {
                 if name.eq_ignore_ascii_case("OnMouseWheel") {
                     self.call(wrapper, "EnableMouseWheel", true, dbg);
                 }
-                // The key handlers, the same rule (`OnChar` kind 0, `OnKeyDown`/`OnKeyUp` kind 1);
-                // here any of them sets the one flag both key walks read.
-                const KEY_KIND: [&str; 3] = ["OnChar", "OnKeyDown", "OnKeyUp"];
-                if KEY_KIND.iter().any(|k| name.eq_ignore_ascii_case(k)) {
-                    self.call(wrapper, "EnableKeyboard", true, dbg);
+                // The key handlers, the same rule, one bit each: `OnChar` the char bit,
+                // `OnKeyDown` and `OnKeyUp` the key bit (`0x769f6b`, `0x769fa4`).
+                if let Err(e) = crate::script::enable_for_script(self.lua, wrapper, &name) {
+                    self.report.fault(format!("{dbg}: {name}: {e}"));
                 }
                 if name.eq_ignore_ascii_case("OnLoad") {
                     // A cleared `OnLoad` also unsets a template's, or the caller would fire it.
