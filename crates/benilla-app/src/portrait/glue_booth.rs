@@ -123,24 +123,107 @@ impl GlueLook {
     }
 }
 
-/// Which glue background scene shows: the login screen's main menu, or a race's `UI_<Race>` stage.
-/// The main menu always fogs; a race stage fogs at create only.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Which glue background scene shows, by its model's token, `UI_<token>`: the login screen's main
+/// menu (`AccountLogin.xml`'s `ModelFFX`) or a race's stage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GlueScene {
-    /// `UI_MainMenu`, the login screen's burning gate (`AccountLogin.xml`'s ModelFFX).
     MainMenu,
-    /// A race's `UI_<Race>` stage (Gnome uses Dwarf's, Troll uses Orc's).
-    Race(u8),
+    Human,
+    Orc,
+    Dwarf,
+    NightElf,
+    Scourge,
+    Tauren,
 }
 
-/// The glue screens' input to the booth: the scene (`None` tears the booth down; select shows Orc
-/// before a list arrives), the standing look (`None` for an empty stage), and the yaw in radians,
-/// which create resets to the reference's −15° and select to 0; a yaw change never re-bakes.
+impl GlueScene {
+    const ALL: [GlueScene; 7] = [
+        GlueScene::MainMenu,
+        GlueScene::Human,
+        GlueScene::Orc,
+        GlueScene::Dwarf,
+        GlueScene::NightElf,
+        GlueScene::Scourge,
+        GlueScene::Tauren,
+    ];
+
+    /// The model-name token, `Interface\Glues\Models\UI_<token>\UI_<token>.mdx`.
+    pub(crate) fn token(self) -> &'static str {
+        match self {
+            GlueScene::MainMenu => "MainMenu",
+            GlueScene::Human => "Human",
+            GlueScene::Orc => "Orc",
+            GlueScene::Dwarf => "Dwarf",
+            GlueScene::NightElf => "NightElf",
+            GlueScene::Scourge => "Scourge",
+            GlueScene::Tauren => "Tauren",
+        }
+    }
+
+    /// A race's stage, `GlueParent.lua`'s `SetBackgroundModel` remap: Gnome stands in Dwarf's,
+    /// Troll in Orc's.
+    pub(crate) fn of_race(race: u8) -> Self {
+        match race {
+            2 | 8 => GlueScene::Orc,
+            3 | 7 => GlueScene::Dwarf,
+            4 => GlueScene::NightElf,
+            5 => GlueScene::Scourge,
+            6 => GlueScene::Tauren,
+            _ => GlueScene::Human,
+        }
+    }
+
+    /// The scene a model path names, by its file stem (`UI_<token>`, any case, any extension);
+    /// `None` for a file that is none of the shipped scenes.
+    pub(crate) fn from_model_path(path: &str) -> Option<Self> {
+        let file = path.rsplit(['\\', '/']).next()?;
+        let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+        let token = stem.get(..3).filter(|p| p.eq_ignore_ascii_case("UI_"))?;
+        let token = &stem[token.len()..];
+        Self::ALL
+            .into_iter()
+            .find(|s| s.token().eq_ignore_ascii_case(token))
+    }
+
+    /// The fog the stock files give the scene, near 0: the race rows are `GlueParent.lua`'s
+    /// `CharModelFogInfo`; the main menu's is `AccountLogin.xml`'s `<FogColor>` and `fogFar`.
+    pub(crate) fn stock_fog(self) -> SceneFog {
+        let (rgb, far) = match self {
+            GlueScene::MainMenu => ([0.25, 0.06, 0.015], 1200.0),
+            GlueScene::Orc => ([0.5, 0.5, 0.5], 270.0),
+            GlueScene::Dwarf => ([0.85, 0.88, 1.0], 500.0),
+            GlueScene::NightElf => ([0.25, 0.22, 0.55], 611.0),
+            GlueScene::Scourge => ([0.0, 0.22, 0.22], 26.0),
+            GlueScene::Tauren => ([1.0, 0.61, 0.42], 153.0),
+            GlueScene::Human => ([0.8, 0.65, 0.73], 222.0),
+        };
+        SceneFog {
+            rgb,
+            near: 0.0,
+            far,
+        }
+    }
+}
+
+/// A scene's fog: the colour and the span the fog fill callback (`0x76d680`) reads off the pane.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct SceneFog {
+    pub(crate) rgb: [f32; 3],
+    pub(crate) near: f32,
+    pub(crate) far: f32,
+}
+
+/// The glue screens' input to the booth: the scene (`None` tears the booth down), the standing
+/// look (`None` for an empty stage), the yaw in radians, which create resets to the reference's
+/// −15° and select to 0 (a yaw change never re-bakes), and the scene's fog. The fog is the
+/// pane's while the scene holds the fog fill callback `Model:SetModel` installs (`0x76d680`), and
+/// none once `SetCharSelectBackground` put the select screen's in its place (`0x472150`).
 #[derive(Resource)]
 pub(crate) struct GluePreview {
     pub(crate) scene: Option<GlueScene>,
     pub(crate) look: Option<GlueLook>,
     pub(crate) yaw: f32,
+    pub(crate) fog: Option<SceneFog>,
 }
 
 impl Default for GluePreview {
@@ -149,7 +232,19 @@ impl Default for GluePreview {
             scene: None,
             look: None,
             yaw: 0.0,
+            fog: None,
         }
+    }
+}
+
+impl GluePreview {
+    /// The create screen's stage: the race's scene, fogged as the create screen fogs it, with the
+    /// dialled look standing in it.
+    pub(crate) fn show_create(&mut self, race: u8, look: CreateLook) {
+        let scene = GlueScene::of_race(race);
+        self.scene = Some(scene);
+        self.look = Some(GlueLook::Create(look));
+        self.fog = Some(scene.stock_fog());
     }
 }
 
@@ -188,13 +283,12 @@ pub(crate) struct CreateScene {
     pet_stage_scale: f32,
     /// The revision of the pet bake standing at [`Self::pet_spot`], so a re-bake happens once.
     pet_baked: Option<u64>,
-    /// Whether the spawn wrote fog enabled (create); the scene rebuilds when it flips.
-    fog: bool,
+    /// The fog the spawn wrote; the scene rebuilds when it changes.
+    fog: Option<SceneFog>,
     /// Whether the buffer holds the ghost rig ([`ghost_rig`]); a flip rewrites the buffer in
     /// place, like the reference's per-frame fill callback, so the stage's emitters keep running.
     ghost: bool,
-    /// The scene's light buffer: its authored rig ([`SceneRig`]) plus the per-race fog
-    /// (`CharModelFogInfo`) at create only; select renders unfogged (`0x472110`).
+    /// The scene's light buffer: its authored rig ([`SceneRig`]) plus [`GluePreview::fog`].
     light: Option<bevy::render::render_resource::Buffer>,
     /// Booth twins of the character's materials against the scene buffer (`BoothLight::variants`).
     variants: std::collections::HashMap<AssetId<WowModelMaterial>, Handle<WowModelMaterial>>,
@@ -219,22 +313,6 @@ struct PendingSwap {
 
 /// The bound on that hold, so a look whose assembly never completes cannot freeze the screen.
 const GLUE_SWAP_HOLD_SECS: f32 = 2.0;
-
-/// The scene's model-name token, `Interface\Glues\Models\UI_<token>\UI_<token>.mdx`. The race
-/// mapping is `GlueParent.lua`'s `SetBackgroundModel`; the main menu is `AccountLogin.xml`'s.
-fn scene_token(scene: GlueScene) -> &'static str {
-    match scene {
-        GlueScene::MainMenu => "MainMenu",
-        GlueScene::Race(race) => match race {
-            2 | 8 => "Orc",   // Troll shares Orc's scene
-            3 | 7 => "Dwarf", // Gnome shares Dwarf's
-            4 => "NightElf",
-            5 => "Scourge",
-            6 => "Tauren",
-            _ => "Human",
-        },
-    }
-}
 
 /// Whether the stage may swap this frame: nothing coherent is `standing`, both the requested art
 /// and body are ready, or the hold has reached [`GLUE_SWAP_HOLD_SECS`].
@@ -311,34 +389,20 @@ fn ghost_rig() -> SceneRig {
 
 /// Pack a [`SceneRig`] into the glue scene's light buffer. The core rows carry the plain ambient
 /// with a zero sun for any non-rig lane; the directional fold lands in probe slot 0 (`MeshTag` 0).
-fn scene_light_blob(
-    rig: &SceneRig,
-    fog_rgb: [f32; 3],
-    fog_far: f32,
-    fog: bool,
-) -> benilla_world::lighting::LightBlob {
+fn scene_light_blob(rig: &SceneRig, fog: Option<SceneFog>) -> benilla_world::lighting::LightBlob {
+    let span = fog.unwrap_or(SceneFog {
+        rgb: [0.0; 3],
+        near: 0.0,
+        far: 1.0,
+    });
     let mut blob = benilla_world::lighting::LightBlob::model(rig.ambient, [0.0; 3], Vec3::NEG_Y)
         .probe(rig.ambient, &rig.lobes)
-        .fog(fog_rgb, fog_far, fog)
+        .fog_span(span.rgb, span.near, span.far, fog.is_some())
         .dial(1.0);
     for (pos, color) in &rig.points {
         blob = blob.point(*pos, SCENE_POINT_RANGE, *color);
     }
     blob
-}
-
-/// The per-scene fog, colour and far (near is 0): the race rows are `GlueParent.lua`'s
-/// `CharModelFogInfo`; the main menu's is `AccountLogin.xml`'s `<FogColor>` and `fogFar`.
-fn scene_fog(token: &str) -> ([f32; 3], f32) {
-    match token {
-        "MainMenu" => ([0.25, 0.06, 0.015], 1200.0),
-        "Orc" => ([0.5, 0.5, 0.5], 270.0),
-        "Dwarf" => ([0.85, 0.88, 1.0], 500.0),
-        "NightElf" => ([0.25, 0.22, 0.55], 611.0),
-        "Scourge" => ([0.0, 0.22, 0.22], 26.0),
-        "Tauren" => ([1.0, 0.61, 0.42], 153.0),
-        _ => ([0.8, 0.65, 0.73], 222.0), // Human
-    }
 }
 
 /// One assembled preview mesh, the tuple-driven counterpart of [`super::PortraitPart`].
@@ -538,7 +602,7 @@ pub(super) fn spawn_glue_booth(
         pet_facing: Quat::IDENTITY,
         pet_stage_scale: 1.0,
         pet_baked: None,
-        fog: true,
+        fog: None,
         ghost: false,
         light: None,
         variants: default(),
@@ -662,13 +726,8 @@ pub(super) fn sync_glue_scene(
         }
     }
 
-    let token = scene_token(which);
-    // A race stage fogs at create and not at select (`0x472110` replaces the fog callback); the
-    // main menu always fogs.
-    let fog = match which {
-        GlueScene::MainMenu => true,
-        GlueScene::Race(_) => matches!(preview.look, Some(GlueLook::Create(_))),
-    };
+    let token = which.token();
+    let fog = preview.fog;
     // The ghost light fork (`0x472150`, [`ghost_rig`]), shared by the scene, character and pet.
     let ghost = matches!(
         preview.look,
@@ -734,8 +793,7 @@ pub(super) fn sync_glue_scene(
             } else {
                 scene_rig(&model.lights)
             };
-            let (fog_rgb, fog_far) = scene_fog(token);
-            scene_light_blob(&rig, fog_rgb, fog_far, fog).write(&queue, &light);
+            scene_light_blob(&rig, fog).write(&queue, &light);
             scene.ghost = ghost;
             // The character and the pet re-bake onto the rewritten buffer.
             scene.rev += 1;
@@ -767,8 +825,7 @@ pub(super) fn sync_glue_scene(
         } else {
             scene_rig(&model.lights)
         };
-        let (fog_rgb, fog_far) = scene_fog(token);
-        let blob = scene_light_blob(&rig, fog_rgb, fog_far, fog);
+        let blob = scene_light_blob(&rig, fog);
         let light = scene
             .light
             .get_or_insert_with(|| blob.create(&device, "wow_create_scene_light"))
@@ -1059,7 +1116,7 @@ pub(super) fn sync_glue_booth(
     // stage matching the request means this bake may show ([`PendingSwap`]).
     let staged = scene
         .as_deref()
-        .is_none_or(|s| s.token == preview.scene.map(scene_token));
+        .is_none_or(|s| s.token == preview.scene.map(GlueScene::token));
     let rebake = staged && (last_rev != bake.revision || last_scene != scene_rev);
     let reyaw = last_yaw != preview.yaw;
     if !rebake && !reyaw {
@@ -1506,8 +1563,7 @@ pub(super) fn drive_create_test(
         look.hair_color,
         look.facial_hair
     );
-    preview.scene = Some(GlueScene::Race(look.race));
-    preview.look = Some(GlueLook::Create(look));
+    preview.show_create(look.race, look);
     // Show the booth's render target full-screen, so a live shot shows the body.
     if let Some(PortraitSource::Live(image)) = portraits.0.get(GLUE_SLOT) {
         commands.spawn((
@@ -1528,6 +1584,32 @@ mod tests {
     use super::*;
     use benilla_assets::ModelLight;
     use benilla_formats::M2Light;
+
+    /// A scene is its model's token, from the path the glue screens give the pane in any case or
+    /// extension; `SetBackgroundModel`'s race remap lands on the same scenes.
+    #[test]
+    fn a_scene_is_named_by_its_models_token() {
+        for scene in GlueScene::ALL {
+            let token = scene.token();
+            let path = format!("Interface\\Glues\\Models\\UI_{token}\\UI_{token}.mdx");
+            assert_eq!(GlueScene::from_model_path(&path), Some(scene), "{path}");
+        }
+        assert_eq!(
+            GlueScene::from_model_path("interface/glues/models/ui_nightelf/UI_NIGHTELF.M2"),
+            Some(GlueScene::NightElf)
+        );
+        for odd in [
+            "",
+            "UI_",
+            "UI_Gnome.mdx",
+            "Interface\\Glues\\Models\\Orc.mdx",
+        ] {
+            assert_eq!(GlueScene::from_model_path(odd), None, "{odd}");
+        }
+        assert_eq!(GlueScene::of_race(8), GlueScene::Orc);
+        assert_eq!(GlueScene::of_race(7), GlueScene::Dwarf);
+        assert_eq!(GlueScene::of_race(1), GlueScene::Human);
+    }
 
     /// `petDisplayId == 0` is the client's whole gate: the server zeroes the triple for all but a
     /// living hunter or warlock (vmangos `Player::BuildEnumData`).

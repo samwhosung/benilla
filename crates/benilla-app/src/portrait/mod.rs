@@ -120,6 +120,11 @@ pub(crate) fn model_pane_booth(name: &str) -> Option<&'static str> {
         .map(|(_, slot)| *slot)
 }
 
+/// The systems that write [`GluePreview`], one per glue screen set (the native screens', the
+/// stock glue VM's); the glue booth reads it after them, the same frame.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct GluePreviewFeed;
+
 /// World is layer 0, the UI pass layer 1; each portrait slot gets its own layer from here up.
 const PORTRAIT_LAYER_BASE: usize = 2;
 /// The paper-doll booth's layer, the first past the portrait slots.
@@ -803,7 +808,8 @@ impl Plugin for PortraitPlugin {
                     // Last: it reads the wake/pending state every sync above may have armed.
                     gate_booth_cameras,
                 )
-                    .chain(),
+                    .chain()
+                    .after(GluePreviewFeed),
             )
             // Re-face each booth's eye-glow cards to its own camera.
             .add_systems(Update, booth::face_booth_billboards)

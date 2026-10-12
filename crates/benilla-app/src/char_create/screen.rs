@@ -9,7 +9,7 @@ use bevy::window::PrimaryWindow;
 use crate::char_select::{race_name, wow_font};
 use crate::entities::CharCreate;
 use crate::glue_strings::GlueStrings;
-use crate::portrait::{GlueLook, GluePreview, PortraitImages, PortraitSource, GLUE_SLOT};
+use crate::portrait::{GluePreview, PortraitImages, PortraitSource, GLUE_SLOT};
 use benilla_assets::WorldAssets;
 
 use super::parts::{CharCreateUi, DialRow, DynIcon, DynText, DynTint, StatusLine};
@@ -41,8 +41,7 @@ pub(super) fn enter_create(
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
     sel.reset(catalog.as_deref());
-    preview.scene = Some(crate::portrait::GlueScene::Race(sel.race));
-    preview.look = Some(GlueLook::Create(sel.look()));
+    preview.show_create(sel.race, sel.look());
     preview.yaw = INITIAL_FACING;
     if let Some(mut wa) = world_assets {
         art.ensure_loaded(&mut wa, &mut images, &mut add_mats);

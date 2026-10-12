@@ -7,7 +7,7 @@ use crate::area::AreaTableRes;
 use crate::glue::widgets::{GlueDisabled, Hilight, LockHighlight};
 use crate::glue_strings::GlueStrings;
 use crate::net::NetStatus;
-use crate::portrait::{GlueLook, GluePreview, SelectLook};
+use crate::portrait::{GlueLook, GluePreview, GlueScene, SelectLook};
 
 use super::screen::{RealmBanner, RowText, SelectAction, SelectedName, MAX_ROWS};
 use super::{class_name, Roster};
@@ -170,10 +170,26 @@ pub(super) fn refresh_banner_and_buttons(
     }
 }
 
-/// Feed the glue booth: the scene is the selected character's race (`SetBackgroundModel`; Orc
-/// with no character, the reference's OnLoad default), the look its geared enum record.
+/// The select scene's background as `CharacterSelect` holds it for the glue session: `None` while
+/// only its OnLoad has set the scene (`Model:SetModel(UI_Orc)` under Orc's fog,
+/// `CharacterSelect.lua:26-31`), else the stage `SetCharSelectBackground` last gave it for a
+/// selected character (`CharacterSelect.lua:341-344`), drawn unfogged (`0x472110` replaces the fog
+/// callback). An emptied roster selects nothing and calls neither, so the scene stays. The glue
+/// rebuild at world entry restores OnLoad's.
+#[derive(Resource, Default)]
+pub(crate) struct SelectBackground(pub(super) Option<GlueScene>);
+
+/// The glue rebuild (`0x46a7b0`) runs `CharacterSelect`'s OnLoad again.
+pub(super) fn reset_select_background(mut background: ResMut<SelectBackground>) {
+    background.0 = None;
+}
+
+/// Feed the glue booth: the scene is the selected character's stage (`SetBackgroundModel`),
+/// unfogged; with no character the last stage stays, or the OnLoad Orc scene under its fog stands
+/// ([`SelectBackground`]); the look is the selected character's geared enum record.
 pub(super) fn feed_glue_preview(
     roster: Res<Roster>,
+    mut background: ResMut<SelectBackground>,
     mut preview: ResMut<GluePreview>,
     mut showing: Local<Option<u64>>,
 ) {
@@ -184,13 +200,22 @@ pub(super) fn feed_glue_preview(
         *showing = Some(roster.select_seq);
         preview.yaw = 0.0;
     }
-    let (race, look) = match roster.selected_char() {
-        Some(c) => (c.race, Some(GlueLook::Select(SelectLook::from(c)))),
-        None => (2, None), // UI_Orc, the reference's empty-account scene
+    let look = roster.selected_char().map(|c| {
+        let stage = GlueScene::of_race(c.race);
+        if background.0 != Some(stage) {
+            background.0 = Some(stage);
+        }
+        GlueLook::Select(SelectLook::from(c))
+    });
+    let (scene, fog) = match background.0 {
+        Some(stage) => (stage, None),
+        None => (GlueScene::Orc, Some(GlueScene::Orc.stock_fog())),
     };
-    let scene = Some(crate::portrait::GlueScene::Race(race));
-    if preview.scene != scene {
-        preview.scene = scene;
+    if preview.scene != Some(scene) {
+        preview.scene = Some(scene);
+    }
+    if preview.fog != fog {
+        preview.fog = fog;
     }
     if preview.look != look {
         preview.look = look;
@@ -200,6 +225,49 @@ pub(super) fn feed_glue_preview(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #978: an empty roster's select scene is OnLoad's Orc under Orc's fog; a selected character
+    /// sets its stage, unfogged, and that stage stays when the roster empties; the glue rebuild at
+    /// world entry restores OnLoad's.
+    #[test]
+    fn the_select_scene_fogs_until_a_background_is_set_and_then_stays() {
+        let mut app = App::new();
+        app.init_resource::<Roster>()
+            .init_resource::<SelectBackground>()
+            .init_resource::<GluePreview>()
+            .add_systems(Update, feed_glue_preview);
+        let shown = |app: &App| {
+            let p = app.world().resource::<GluePreview>();
+            (p.scene, p.fog.map(|f| f.far), p.look.is_some())
+        };
+        app.update();
+        assert_eq!(shown(&app), (Some(GlueScene::Orc), Some(270.0), false));
+
+        let mut tauren = crate::char_select::test_character(1, "Moo");
+        tauren.race = 6;
+        {
+            let mut roster = app.world_mut().resource_mut::<Roster>();
+            roster.chars = vec![tauren];
+            roster.select(Some(0));
+        }
+        app.update();
+        assert_eq!(shown(&app), (Some(GlueScene::Tauren), None, true));
+
+        // The last character deleted: nothing is selected, and no background call replaces it.
+        {
+            let mut roster = app.world_mut().resource_mut::<Roster>();
+            roster.chars.clear();
+            roster.select(None);
+        }
+        app.update();
+        assert_eq!(shown(&app), (Some(GlueScene::Tauren), None, false));
+
+        app.world_mut()
+            .run_system_cached(reset_select_background)
+            .unwrap();
+        app.update();
+        assert_eq!(shown(&app), (Some(GlueScene::Orc), Some(270.0), false));
+    }
 
     /// The composition order of `CharacterSelect.lua:48-64`.
     #[test]

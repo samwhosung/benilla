@@ -73,13 +73,25 @@ impl Plugin for CharSelectPlugin {
             )
             .init_resource::<dialog::DeleteDialog>()
             .init_resource::<addons::AddonsPanel>()
+            .init_resource::<refresh::SelectBackground>()
             .add_systems(
                 OnEnter(ClientState::CharSelect),
-                (screen::enter_select, stamp_select_entry),
+                (
+                    screen::enter_select.run_if(crate::ui_script::glue::native_glue),
+                    stamp_select_entry,
+                ),
             )
             .add_systems(
                 OnExit(ClientState::CharSelect),
-                (screen::exit_select, clear_select_entry),
+                (
+                    screen::exit_select,
+                    screen::clear_select_scene.run_if(crate::ui_script::glue::native_glue),
+                    clear_select_entry,
+                ),
+            )
+            .add_systems(
+                OnEnter(ClientState::InWorld),
+                refresh::reset_select_background,
             )
             .add_systems(Update, (debug_glue_roundtrip, debug_logout_smoke))
             .add_systems(
@@ -102,7 +114,10 @@ impl Plugin for CharSelectPlugin {
                         addons::drive_addons_panel.run_if(crate::ui_script::glue::native_glue),
                         refresh::refresh_list,
                         refresh::refresh_banner_and_buttons,
-                        refresh::feed_glue_preview,
+                        // The stock screens drive the booth off the glue VM instead.
+                        refresh::feed_glue_preview
+                            .run_if(crate::ui_script::glue::native_glue)
+                            .in_set(crate::portrait::GluePreviewFeed),
                         debug_select_shot,
                     )
                         .chain()

@@ -54,8 +54,21 @@ impl Plugin for LoginPlugin {
         app.init_resource::<LoginIntent>()
             .init_resource::<LoginForm>()
             .add_message::<GlueLogin>()
-            .add_systems(OnEnter(ClientState::Login), enter_login)
-            .add_systems(OnExit(ClientState::Login), screen::exit_login)
+            .add_systems(
+                OnEnter(ClientState::Login),
+                (
+                    enter_login,
+                    // Under the stock glue screens their own feeder drives the booth.
+                    show_main_menu.run_if(crate::ui_script::glue::native_glue),
+                ),
+            )
+            .add_systems(
+                OnExit(ClientState::Login),
+                (
+                    screen::exit_login,
+                    screen::clear_login_scene.run_if(crate::ui_script::glue::native_glue),
+                ),
+            )
             .add_systems(
                 Update,
                 (
@@ -753,8 +766,8 @@ impl LoginForm {
 struct QuitArm(Option<f32>);
 
 /// `AccountLogin_OnShow`: prefill the saved account, clear the password, focus the first empty
-/// box, check Remember when a name is saved; then show the `UI_MainMenu` scene.
-fn enter_login(mut form: ResMut<LoginForm>, mut preview: ResMut<GluePreview>) {
+/// box, check Remember when a name is saved.
+fn enter_login(mut form: ResMut<LoginForm>) {
     let saved = load_saved_account();
     form.save = !saved.is_empty();
     form.focus = if saved.is_empty() {
@@ -768,9 +781,14 @@ fn enter_login(mut form: ResMut<LoginForm>, mut preview: ResMut<GluePreview>) {
     // remembered name is typed over.
     let focus = form.focus;
     form.focus(focus);
+}
+
+/// The native login's scene, `AccountLogin.xml`'s `ModelFFX`: `UI_MainMenu` under its fog.
+fn show_main_menu(mut preview: ResMut<GluePreview>) {
     preview.scene = Some(GlueScene::MainMenu);
     preview.look = None;
     preview.yaw = 0.0;
+    preview.fog = Some(GlueScene::MainMenu.stock_fog());
 }
 
 /// The screen's input: typing, Tab, Enter submits, Esc quits (an open dialog takes it first),

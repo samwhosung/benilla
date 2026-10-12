@@ -20,7 +20,7 @@ use crate::char_select::{ClientState, Roster};
 use crate::entities::CharCreate;
 use crate::glue_strings::GlueStrings;
 use crate::net::{CharActionResultMessage, CharPick, CharRequest};
-use crate::portrait::{CreateLook, GlueLook, GluePreview};
+use crate::portrait::{CreateLook, GluePreview};
 use crate::sound::GlueSound;
 
 /// Alliance and Horde race columns, top to bottom: `CharacterCreateEnumerateRaces` fills buttons
@@ -165,8 +165,7 @@ fn debug_pick(
             sel.dials[i] = want.min(n - 1);
         }
     }
-    preview.scene = Some(crate::portrait::GlueScene::Race(sel.race));
-    preview.look = Some(GlueLook::Create(sel.look()));
+    preview.show_create(sel.race, sel.look());
     info!(
         "char create: pick instrument set race {} sex {} class {} dials {:?}",
         sel.race, sel.sex, sel.class, sel.dials
@@ -445,8 +444,7 @@ fn create_input(
         let _ = pick.0.send(CharRequest::Create(sel.request()));
     }
     if changed_look {
-        preview.scene = Some(crate::portrait::GlueScene::Race(sel.race));
-        preview.look = Some(GlueLook::Create(sel.look()));
+        preview.show_create(sel.race, sel.look());
     }
 }
 
