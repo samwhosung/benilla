@@ -446,20 +446,24 @@ pub(super) fn inspect_ui(
             // `0x606439` caps the rank at 6: Exalted reads here too.
             _ => "revered+",
         };
-        // A faction with a reputation slot reacts by our standing (`0x605fc0` -> `0x4d63a0`),
-        // before any template comparison; everything else by the template comparator.
-        let branch = s
-            .0
-            .unit_faction_template()
-            .and_then(|t| factions?.catalog().template(t))
-            .map(|t| {
-                if factions.is_some_and(|f| f.catalog().reputation_faction(t.faction).is_some()) {
-                    "rep"
-                } else {
-                    "tpl"
-                }
-            })
-            .unwrap_or("?");
+        // The forced-reaction table answers first; then a faction with a reputation slot reacts
+        // by our standing (`0x605fc0` -> `0x4d63a0`), before any template comparison; everything
+        // else by the template comparator.
+        let branch =
+            s.0.unit_faction_template()
+                .and_then(|t| factions?.catalog().template(t))
+                .map(|t| {
+                    if crate::target::ring::forced_rank(reputations, t.faction).is_some() {
+                        "forced"
+                    } else if factions
+                        .is_some_and(|f| f.catalog().reputation_faction(t.faction).is_some())
+                    {
+                        "rep"
+                    } else {
+                        "tpl"
+                    }
+                })
+                .unwrap_or("?");
         let ctype = net_entity
             .and_then(|p| guids.get(p).ok())
             .and_then(|g| benilla_protocol::guid::entry(g.0))

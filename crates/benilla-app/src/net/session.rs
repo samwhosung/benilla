@@ -210,12 +210,16 @@ fn on_logged_out(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
             &mut b.self_guid,
             &mut e.logged_out,
         );
+        // The forced-reaction table is the character's: the core sends it only on an aura
+        // change, never at login, so one left here would colour the next character's world.
+        b.reputations.1.clear();
     }
 }
 
 /// The bridge's half of the session end; each window's own listener runs after it.
 fn on_disconnected(In(ev): In<SessionEvent>, mut e: Edges, mut b: Bridge) {
     if let SessionEvent::Disconnected { reason, end } = ev {
+        b.reputations.1.clear();
         disconnected(
             reason,
             end,
