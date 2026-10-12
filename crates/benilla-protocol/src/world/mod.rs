@@ -48,8 +48,9 @@ pub(super) fn recv_packet(
     messages::parse_server(opcode, &body).map_err(|e| anyhow!("parsing opcode {opcode:#x}: {e}"))
 }
 
-/// What [`observe_sends`] takes: called with a sent packet's opcode and body length.
-pub type SendObserver = fn(opcode: u16, body_len: usize);
+/// What [`observe_sends`] takes: called with a sent packet's opcode and its body, the bytes after
+/// the 6-byte header and as plain as the caller built them (encryption covers the header alone).
+pub type SendObserver = fn(opcode: u16, body: &[u8]);
 
 static SEND_OBSERVER: OnceLock<SendObserver> = OnceLock::new();
 
@@ -87,7 +88,7 @@ pub(super) fn send_packet(
         .write_all(&packet)
         .map_err(|e| anyhow!("sending opcode {opcode:#x}: {e}"))?;
     if let Some(observer) = SEND_OBSERVER.get() {
-        observer(opcode, body.len());
+        observer(opcode, body);
     }
     Ok(())
 }

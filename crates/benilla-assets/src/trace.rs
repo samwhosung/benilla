@@ -1,7 +1,7 @@
 //! The shared debug-trace sink behind `WOW_MOVE_TRACE=<path>`: one file and one clock for every
 //! layer's tagged lines, engine and game alike, so it sits below both. `in` and `out` are the full
-//! inbound and outbound opcode streams; `out` is written after the send, where the mover's `snd`
-//! is a decision before queueing. Each file opens with a `# t0=<unix epoch>` header so two
+//! inbound and outbound packet streams, each line an opcode, its name, its length and its body as
+//! hex; `out` is written after the send, where the mover's `snd` is a decision before queueing. Each file opens with a `# t0=<unix epoch>` header so two
 //! clients' traces align. `WOW_MOVE_TRACE_TAGS="move,snd,in"` keeps only those tags: every line is
 //! an unbuffered write under one mutex on the main thread, so a busy tag skews every `t=`.
 

@@ -40,6 +40,7 @@ impl WorldReader {
                 opcode,
                 events: crate::decode(packet),
                 tail,
+                body,
             }),
             Err(e) => Ok(crate::Poll::Skipped {
                 opcode,
@@ -48,6 +49,7 @@ impl WorldReader {
                     messages::opcode_name(opcode).unwrap_or("?"),
                     hex_preview(&body, 64)
                 ),
+                body,
             }),
         }
     }

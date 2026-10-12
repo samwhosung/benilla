@@ -97,13 +97,13 @@ fn a_warden_server_is_refused_at_the_handshake() {
 
 /// Every packet the observer saw, with the thread that wrote it: the tests of this file share one
 /// process, so each filters for its own thread.
-static SEEN: std::sync::Mutex<Vec<(thread::ThreadId, u16, usize)>> =
+static SEEN: std::sync::Mutex<Vec<(thread::ThreadId, u16, Vec<u8>)>> =
     std::sync::Mutex::new(Vec::new());
 
-fn record(opcode: u16, len: usize) {
+fn record(opcode: u16, body: &[u8]) {
     SEEN.lock()
         .unwrap()
-        .push((thread::current().id(), opcode, len));
+        .push((thread::current().id(), opcode, body.to_vec()));
 }
 
 /// A packet sent before the session splits (the handshake's `CMSG_AUTH_SESSION`, the world entry's
@@ -117,12 +117,12 @@ fn sends_before_the_split_are_observed_in_order() {
     let (_reader, mut writer) = session.into_split().unwrap();
     writer.complete_cinematic().unwrap();
     let me = thread::current().id();
-    let mine: Vec<(u16, usize)> = SEEN
+    let mine: Vec<(u16, Vec<u8>)> = SEEN
         .lock()
         .unwrap()
         .iter()
         .filter(|(t, ..)| *t == me)
-        .map(|&(_, op, len)| (op, len))
+        .map(|(_, op, body)| (*op, body.clone()))
         .collect();
     let auth_len = messages::auth_session(
         u32::from(benilla_protocol::CLIENT_BUILD),
@@ -132,12 +132,18 @@ fn sends_before_the_split_are_observed_in_order() {
         &messages::STOCK_SECURE_ADDONS,
     )
     .len();
+    // The observer gets the bodies themselves: the auth block by its length (its proof is derived
+    // from the seeds), the rest byte for byte.
+    let ops: Vec<u16> = mine.iter().map(|(op, _)| *op).collect();
     assert_eq!(
-        mine,
+        ops,
         [
-            (opcode::CMSG_AUTH_SESSION, auth_len),
-            (opcode::CMSG_PLAYER_LOGIN, messages::full_guid(0x2a).len()),
-            (opcode::CMSG_COMPLETE_CINEMATIC, 0),
+            opcode::CMSG_AUTH_SESSION,
+            opcode::CMSG_PLAYER_LOGIN,
+            opcode::CMSG_COMPLETE_CINEMATIC
         ]
     );
+    assert_eq!(mine[0].1.len(), auth_len);
+    assert_eq!(mine[1].1, messages::full_guid(0x2a));
+    assert!(mine[2].1.is_empty());
 }

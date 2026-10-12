@@ -1116,14 +1116,21 @@ impl SessionEventKind {
 /// The result of polling the reader for the next packet's events.
 pub enum Poll {
     /// A decoded packet; `events` is empty for an opcode parsed but not modelled. `tail` counts
-    /// body bytes left unread, which shows a decoder shorter than the server's layout.
+    /// body bytes left unread, which shows a decoder shorter than the server's layout. `body` is
+    /// the packet as it came off the wire, after the header, for the packet trace.
     Events {
         opcode: u16,
         events: Vec<SessionEvent>,
         tail: usize,
+        body: Vec<u8>,
     },
-    /// An unparseable packet, skipped to keep the stream aligned; `reason` has a hex preview.
-    Skipped { opcode: u16, reason: String },
+    /// An unparseable packet, skipped to keep the stream aligned; `reason` has a hex preview and
+    /// `body` the whole packet.
+    Skipped {
+        opcode: u16,
+        reason: String,
+        body: Vec<u8>,
+    },
 }
 
 mod decode;

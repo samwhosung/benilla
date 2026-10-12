@@ -108,6 +108,11 @@ out of scope is closed with the reason.
     `WOW_GOD=off` leaves it off.
   - A trace is `WOW_MOVE_TRACE=<file>`, filtered with `WOW_MOVE_TRACE_TAGS` (`"move,snd,in"`) and
     ended by `WOW_PROBE_EXIT_AT=<seconds>`; grep it for the `rly` and `snd` lines.
+  - To sniff the wire, trace the tags `in` and `out` (`WOW_MOVE_TRACE_TAGS="in,out"`): one line
+    per world packet, with its opcode, name, `len=` and the body as `hex=`, the bytes after the
+    packet header. An `in` line also has `ev=`, the events it decoded to; a server packet that
+    failed to parse is a `skip` line with its bytes. A client packet that carries a secret, the
+    auth session, a channel password or a typed `.account` command, shows `hex=<redacted>`.
   - A capture runs through `scripts/visual.sh`, whose recipe is the header of
     `crates/benilla-app/src/capture/mod.rs`. Pixel questions go through `benilla-visual crop`,
     `series` and `hotspot`.

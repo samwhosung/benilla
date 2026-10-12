@@ -192,7 +192,7 @@ pub(super) struct NetHandles {
 pub(super) fn spawn_net(connect: bool) -> NetHandles {
     // The outbound opcode trace (tag `out`), armed before any thread can send.
     if benilla_assets::trace::enabled_for("out") {
-        benilla_protocol::observe_sends(trace_out);
+        benilla_protocol::observe_sends(wire_trace::trace_out);
     }
     let (events_tx, events_rx) = crossbeam_channel::unbounded();
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
@@ -675,6 +675,7 @@ fn run(
                     opcode,
                     events,
                     tail,
+                    body,
                 } => {
                     skip_run = 0;
                     // A body is length-framed, so a decoder shorter than the server's layout
@@ -686,16 +687,12 @@ fn run(
                             benilla_protocol::messages::opcode_name(opcode).unwrap_or("?"),
                         );
                     }
-                    // Every inbound opcode by name (tag `in`), including one that parsed into no
-                    // event.
-                    if benilla_assets::trace::enabled() {
+                    // Every inbound opcode by name, length and bytes (tag `in`), including one that
+                    // parsed into no event.
+                    if benilla_assets::trace::enabled_for("in") {
                         benilla_assets::trace::line(
                             "in",
-                            &format!(
-                                "{opcode:#06x} {} ev={}",
-                                benilla_protocol::messages::opcode_name(opcode).unwrap_or("?"),
-                                events.len()
-                            ),
+                            &wire_trace::in_line(opcode, events.len(), &body),
                         );
                     }
                     for ev in events {
@@ -724,14 +721,18 @@ fn run(
                         }
                     }
                 }
-                Poll::Skipped { opcode, reason } => {
+                Poll::Skipped {
+                    opcode,
+                    reason,
+                    body,
+                } => {
                     skip_run += 1;
-                    // Every skip, uncapped, into the trace (tag `skip`): otherwise a packet that
-                    // failed to parse looks like one that never arrived.
-                    if benilla_assets::trace::enabled() {
+                    // Every skip, uncapped, into the trace (tag `skip`) with its whole body:
+                    // otherwise a packet that failed to parse looks like one that never arrived.
+                    if benilla_assets::trace::enabled_for("skip") {
                         benilla_assets::trace::line(
                             "skip",
-                            &format!("opcode={opcode:#06x} {reason}"),
+                            &wire_trace::skip_line(opcode, &reason, &body),
                         );
                     }
                     // Capped, but enough for a post-teleport burst of unparseable object updates.
@@ -775,18 +776,6 @@ fn refuse_once(guid: u64) -> u64 {
     } else {
         guid
     }
-}
-
-/// One `out` trace line per client packet written to the world socket, whichever session or writer
-/// sent it: the hook [`spawn_net`] installs when the `out` tag is on.
-fn trace_out(opcode: u16, len: usize) {
-    benilla_assets::trace::line(
-        "out",
-        &format!(
-            "{opcode:#06x} {} len={len}",
-            benilla_protocol::messages::opcode_name(opcode).unwrap_or("?")
-        ),
-    );
 }
 
 /// The write thread: app commands, writer swaps and the [`PING_INTERVAL`] keepalive. With no live
@@ -1489,6 +1478,8 @@ fn writer_loop(
         }
     }
 }
+
+mod wire_trace;
 
 #[cfg(test)]
 mod cycle_tests;
