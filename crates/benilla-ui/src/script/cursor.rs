@@ -595,12 +595,24 @@ mod tests {
         );
     }
 
+    /// `CursorHasItem` (`0x4895d0`) and `CursorHasSpell` (`0x489600`) push the number 1
+    /// (`0x4895ea`, `0x489609`) or nil (`0x4895df`, `0x48961b`) and return one value.
     #[test]
     fn the_has_checks_answer_per_arm() {
         let mut s = UiScript::new().unwrap();
+        // `arg.n` counts the returns (`select` is 5.1's, not a 1.12 global).
+        let ask = |s: &mut UiScript, f: &str| {
+            s.eval::<String>(&format!(
+                "local function c(...) return arg.n .. ':' .. type(arg[1]) .. ':' .. tostring(arg[1]) end \
+                 return c({f}())"
+            ))
+            .unwrap()
+        };
+        const YES: &str = "1:number:1";
+        const NO: &str = "1:nil:nil";
 
-        assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
-        assert!(!s.eval::<bool>("return CursorHasSpell()").unwrap());
+        assert_eq!(ask(&mut s, "CursorHasItem"), NO);
+        assert_eq!(ask(&mut s, "CursorHasSpell"), NO);
 
         s.set_cursor_for_test(CursorPayload::Item(CursorItem {
             bar_placeable: true,
@@ -613,8 +625,8 @@ mod tests {
             quality: Some(3),
             equip_slots: Vec::new(),
         }));
-        assert!(s.eval::<bool>("return CursorHasItem()").unwrap());
-        assert!(!s.eval::<bool>("return CursorHasSpell()").unwrap());
+        assert_eq!(ask(&mut s, "CursorHasItem"), YES);
+        assert_eq!(ask(&mut s, "CursorHasSpell"), NO);
 
         s.set_cursor_for_test(CursorPayload::Spell(CursorSpell {
             passive: false,
@@ -623,8 +635,8 @@ mod tests {
             spell_id: 133,
             texture: None,
         }));
-        assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
-        assert!(s.eval::<bool>("return CursorHasSpell()").unwrap());
+        assert_eq!(ask(&mut s, "CursorHasItem"), NO);
+        assert_eq!(ask(&mut s, "CursorHasSpell"), YES);
 
         s.set_cursor_for_test(CursorPayload::Action(CursorAction {
             src_slot: 12,
@@ -632,8 +644,8 @@ mod tests {
             action: 133,
             texture: None,
         }));
-        assert!(!s.eval::<bool>("return CursorHasItem()").unwrap());
-        assert!(!s.eval::<bool>("return CursorHasSpell()").unwrap());
+        assert_eq!(ask(&mut s, "CursorHasItem"), NO);
+        assert_eq!(ask(&mut s, "CursorHasSpell"), NO);
     }
 
     #[test]
