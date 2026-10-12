@@ -574,8 +574,14 @@ impl GlueMgr {
                     self.selected = select_by_name(&self.holder, realm_name);
                 }
                 match &self.selected {
-                    Some(r) => self.realm_out.push(RealmRequest::Enter(r.clone())),
-                    None => self.op.complete(false, STATUS_REALM_LIST_REALM_NOT_FOUND),
+                    Some(r) => {
+                        info!("glue: the connect dials {:?}", r.name);
+                        self.realm_out.push(RealmRequest::Enter(r.clone()));
+                    }
+                    None => {
+                        info!("glue: realmName {realm_name:?} names no listed realm");
+                        self.op.complete(false, STATUS_REALM_LIST_REALM_NOT_FOUND);
+                    }
                 }
             }
             OpKind::Auth => {}
