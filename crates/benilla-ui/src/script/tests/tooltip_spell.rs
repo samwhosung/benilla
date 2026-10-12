@@ -127,6 +127,11 @@ fn a_pet_book_hover_reads_the_pets_book_not_the_players() {
         assert(raises(1025, "spell"), "index 1025")
         assert(raises(-3, "spell"), "negative index")
         assert(not raises(1024, "spell"), "index 1024 is in range and misses quietly")
+        -- `_ftol` wraps to the low dword (0x532dd9): 4294967297 - 1 is 2^32, which is slot 1.
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        tt:SetSpell(4294967297, "spell")
+        assert(TTTextLeft1:GetText() == "Fireball", "a wrapped index reads slot 1")
+        assert(raises(4294967297 + 1024, "spell"), "2^32 + 1024 wraps to slot 1025, past the table")
     "#,
     )
     .unwrap();

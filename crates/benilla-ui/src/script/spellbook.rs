@@ -191,8 +191,10 @@ pub(super) fn spell_slot_args(
         Value::Integer(_) | Value::Number(_) => String::new(),
         _ => return Err(invalid()),
     };
-    let index = (index - 1.0).trunc();
-    if !(0.0..1024.0).contains(&index) {
+    // `fsub 1.0` then `_ftol` (`0x4b3efd`, `0x532dd9`): the cast wraps to its low dword, so
+    // 4294967297 is slot 1, and the signed result must lie in `[0, 0x400)`.
+    let index = super::binding_abi::ftol(index - 1.0);
+    if !(0..1024).contains(&index) {
         return Err(invalid());
     }
     let book = if is_pet_book(&book) {
