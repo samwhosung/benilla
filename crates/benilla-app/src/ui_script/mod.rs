@@ -18,6 +18,8 @@ mod content;
 pub(crate) mod extract;
 /// The stock glue screens behind `WOW_GLUE_STOCK=1`.
 pub(crate) mod glue;
+/// The stock create screen's catalog off the host's DBC catalogs.
+pub(crate) mod glue_create;
 /// `CGlueMgr`'s screen states over the native login, for the stock glue screens.
 pub(crate) mod glue_mgr;
 pub(crate) mod glue_scene;

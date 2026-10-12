@@ -782,6 +782,119 @@ fn a_delete_with_no_link_fails_and_a_cancelled_one_shows_nothing() {
     assert!(m.outbox.is_empty());
 }
 
+/// A create request with the name and the bytes as `CreateCharacter` reads them.
+fn create_request(name: &str) -> benilla_ui::script::GlueCreateRequest {
+    benilla_ui::script::GlueCreateRequest {
+        name: name.into(),
+        race: 2,
+        class: 3,
+        sex: 1,
+        skin: 4,
+        face: 5,
+        hair_style: 6,
+        hair_color: 7,
+        facial_hair: 0,
+    }
+}
+
+/// `0x46b290` and state 5: the dialog and the `CMSG_CHAR_CREATE`, the dialog re-texted once the
+/// reply is in; a success (`0x2e`) goes to state 0, closes the dialog, fires
+/// `SELECT_LAST_CHARACTER` and puts `charselect` up (`0x46c11e`-`0x46c13d`), a failure opens
+/// `OKAY` with its status's text and goes to state 0 (`0x46c118` → `0x46c177`).
+#[test]
+fn a_create_runs_state_5_to_the_select_screen_or_to_okay() {
+    let mut m = accepted();
+    m.connected = true;
+    m.create_character(create_request("Newbie"));
+    assert_eq!(m.state, ScreenState::Create);
+    assert_eq!(m.outbox, [open("CANCEL", Some("CHAR_CREATE_IN_PROGRESS"))]);
+    assert!(matches!(
+        m.park_out.as_slice(),
+        [ParkRequest::Char(CharRequest::Create(r))]
+            if r.name == "Newbie"
+                && (r.race, r.class, r.gender, r.skin, r.face) == (2, 3, 1, 4, 5)
+                && (r.hair_style, r.hair_color, r.facial_hair) == (6, 7, 0)
+    ));
+    m.park_out.clear();
+    m.outbox.clear();
+    m.tick();
+    assert!(m.outbox.is_empty(), "no text while the reply is out");
+    // Another operation's reply is not the create's.
+    m.on_char_deleted(0x39);
+    m.tick();
+    assert!(m.outbox.is_empty());
+    m.on_char_created(0x2e);
+    m.tick();
+    assert_eq!(
+        m.outbox,
+        [
+            Outgoing::Update {
+                text: Text::Key("CHAR_CREATE_SUCCESS"),
+                button: None,
+            },
+            Outgoing::Close,
+            Outgoing::SelectLast,
+            Outgoing::Screen("charselect"),
+        ]
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+    assert!(m.park_out.is_empty(), "the screen asks for the list itself");
+
+    // vmangos's taken name, `CHAR_CREATE_NAME_IN_USE` (0x31), and a name it refuses, by its
+    // own `CHAR_NAME_*` code.
+    for (code, key) in [
+        (0x31, "CHAR_CREATE_NAME_IN_USE"),
+        (0x30, "CHAR_CREATE_FAILED"),
+        (0x4e, "CHAR_NAME_THREE_CONSECUTIVE"),
+    ] {
+        let mut m = accepted();
+        m.connected = true;
+        m.create_character(create_request("Newbie"));
+        m.outbox.clear();
+        m.on_char_created(code);
+        m.tick();
+        assert_eq!(
+            m.outbox,
+            [
+                Outgoing::Update {
+                    text: Text::Key(key),
+                    button: None,
+                },
+                open("OKAY", Some(key)),
+            ],
+            "{code:#x}"
+        );
+        assert_eq!(m.state, ScreenState::Idle);
+    }
+}
+
+/// With no link the create fails `RESPONSE_FAILED_TO_CONNECT` at once (`0x5aac72`) and sends
+/// nothing; the dialog's button in state 5 cancels it to state 0 (`0x46b776`), and a reply that
+/// lands after shows nothing.
+#[test]
+fn a_create_with_no_link_fails_and_a_cancelled_one_shows_nothing() {
+    let mut m = accepted();
+    m.create_character(create_request("Newbie"));
+    assert!(m.park_out.is_empty());
+    m.outbox.clear();
+    m.tick();
+    assert_eq!(
+        m.outbox.last(),
+        Some(&open("OKAY", Some("RESPONSE_FAILED_TO_CONNECT")))
+    );
+    assert_eq!(m.state, ScreenState::Idle);
+
+    let mut m = accepted();
+    m.connected = true;
+    m.create_character(create_request("Newbie"));
+    m.outbox.clear();
+    m.status_dialog_click(&mut Vec::new());
+    assert_eq!(m.state, ScreenState::Idle);
+    m.on_char_created(0x2e);
+    m.tick();
+    assert!(m.outbox.is_empty());
+}
+
 /// State 7: the dialog and the `CMSG_CHAR_RENAME` (`0x46b39b`), sent only on a live link; no
 /// frame arm; the button goes to state 0 and sends nothing (`0x46b79d`).
 #[test]
@@ -3411,3 +3524,4 @@ fn a_refusal_in_the_entrys_drain_keeps_the_stock_select() {
     assert_eq!(dialog(&app), None);
     assert_eq!(vm(&app).errors(), Vec::<String>::new());
 }
+

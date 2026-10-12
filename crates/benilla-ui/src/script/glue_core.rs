@@ -139,6 +139,10 @@ pub enum GlueRequest {
     /// roster (`0x46b513`-`0x46b53e`): its 0-based index (`[0x83856c]`), guid (`+0x00`) and flags
     /// (`+0xfc`). The realm and link guards, the flag dialogs and the entry are the host's.
     EnterWorld { index: i32, guid: u64, flags: u32 },
+    /// `CreateCharacter(name)` (`0x4719e0` → `0x4711d0`) past the name check: the host takes
+    /// screen state 5, the `CHAR_CREATE_IN_PROGRESS` dialog and the `CMSG_CHAR_CREATE`
+    /// (`0x46b290`).
+    CreateCharacter(super::glue_create::GlueCreateRequest),
 }
 
 /// The `ClientServices` status keys (`0x85cae8`, 83 entries), the `ResponseCodes` the world
@@ -430,6 +434,8 @@ pub(crate) struct GlueCore {
     pub(super) realms: super::glue_realm::GlueRealmList,
     /// The character roster and the select verbs' cells ([`super::glue_select`]).
     pub(super) roster: super::glue_select::GlueRoster,
+    /// The create screen's state ([`super::glue_create`]).
+    pub(super) create: super::glue_create::GlueCreate,
     /// The AddOns screen's enable nodes ([`super::glue_addons`]).
     pub(super) addons: super::glue_addons::GlueAddons,
     /// The character name check's lists ([`super::char_name`]), as the host seated them.
@@ -511,7 +517,7 @@ pub(super) fn queue(lua: &Lua, request: GlueRequest) {
 }
 
 /// The text of a string global, as [`super::UiScript::global_text`] reads it.
-fn global_text(lua: &Lua, key: &str) -> String {
+pub(super) fn global_text(lua: &Lua, key: &str) -> String {
     match lua.globals().get::<Value>(key) {
         Ok(v @ (Value::String(_) | Value::Integer(_) | Value::Number(_))) => lua
             .coerce_string(v)

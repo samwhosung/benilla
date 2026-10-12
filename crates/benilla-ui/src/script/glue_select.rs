@@ -99,6 +99,9 @@ pub struct GlueScenePane {
     /// The pane is the select screen's model frame (`[0xb42174]`), whose scene the selected
     /// character stands in.
     pub select: bool,
+    /// The pane is the create screen's customize frame (`[0xb420f0]`), whose scene the preview
+    /// character stands in.
+    pub create: bool,
 }
 
 /// A record of the array: the character and whether `+0x110`, the built composite, is set.
@@ -118,9 +121,9 @@ pub(crate) struct GlueRoster {
 }
 
 /// `rad = deg · 0.017453292` (`0x7ffaac`, a float).
-const DEG_TO_RAD: f32 = f32::from_bits(0x3c8e_fa35);
+pub(super) const DEG_TO_RAD: f32 = f32::from_bits(0x3c8e_fa35);
 /// `deg = rad · 57.29578` (`0x803a78`, a float).
-const RAD_TO_DEG: f32 = f32::from_bits(0x4265_2ee1);
+pub(super) const RAD_TO_DEG: f32 = f32::from_bits(0x4265_2ee1);
 
 impl GlueRoster {
     /// `0x473700` on every record and the count to 0 (`0x4723ff`, `0x4725af`).
@@ -207,6 +210,7 @@ impl super::UiScript {
     pub fn glue_scene(&self) -> Option<GlueScenePane> {
         let model = self.model_ref();
         let select = model_frame_handle(&model);
+        let create = super::glue_create::create_frame_handle(&model);
         let (sw, sh) = (model.screen.width(), model.screen.height());
         model
             .arena
@@ -240,6 +244,7 @@ impl super::UiScript {
                         path: m.path.clone()?,
                         fog: m.scene_fog(),
                         select: select == Some(h),
+                        create: create == Some(h),
                     },
                 ))
             })

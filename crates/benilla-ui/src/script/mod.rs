@@ -69,12 +69,17 @@ pub use char_name::{check_char_name, NameLists, NoNameLists, CHAR_NAME_SUCCESS};
 mod glue;
 mod glue_addons;
 mod glue_core;
+mod glue_create;
 mod glue_realm;
 mod glue_select;
 pub use glue::{VmKind, GLUE_EVENTS};
 pub use glue_core::{
     glue_status_key, launch_addon_url, launch_addon_url_allowed, launch_url_allowed,
     GlueCredentials, GlueNotice, GlueRequest, GlueServer, NoticeState, GLUE_STATUS_KEYS,
+};
+pub use glue_create::{
+    GlueCreateCatalog, GlueCreateClass, GlueCreateLook, GlueCreateRace, GlueCreateRequest,
+    GlueNameRow,
 };
 pub use glue_realm::{
     realm_load_classify, realm_load_stats, GlueRealm, GlueRealmCategory, GlueRealmCells,

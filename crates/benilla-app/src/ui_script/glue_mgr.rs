@@ -127,6 +127,19 @@
 //!    `OKAY` type's `OnShow` presses at once, goes to state 0 and asks for the list again on the
 //!    same link (`0x46b880`).
 //!
+//! The create:
+//!
+//! 1. `CreateCharacter`'s passing name reaches `0x46b290`: state 5, the `CANCEL` dialog
+//!    `CHAR_CREATE_IN_PROGRESS` and the create (`0x5aac50`: operation 5 at status `0x2d`, then
+//!    `CMSG_CHAR_CREATE`; with no link it fails `RESPONSE_FAILED_TO_CONNECT` at once). The reply is
+//!    the status (`0x5aac30`, success on `0x2e`).
+//! 2. State 5's frame (`0x46c0f3`) re-texts the dialog and acts on a completed create: a success
+//!    goes to state 0, closes the dialog, fires `SELECT_LAST_CHARACTER` and puts `charselect` up
+//!    (`0x46c11e`-`0x46c13d`), whose `OnShow` asks for the list again and whose list update then
+//!    selects the last row; a failure opens `OKAY` with the status's text and goes to state 0
+//!    (`0x46c118` → `0x46c177`). The dialog's button in state 5 cancels the operation and goes to
+//!    state 0 (`0x46b776`), sending nothing.
+//!
 //! The native login reports a logon as one blocking step, so of the logon's states only
 //! `CONNECTING` and `AUTHENTICATED` are seen; its refusals map through the reference's own
 //! byte-to-result table ([`realmd_result`]).
@@ -149,10 +162,9 @@ use crate::net::{
 };
 
 /// `CGlueMgr`'s `screenState` (`0xb41da0`), named by the functions that set each value: the
-/// states the login, the realm list, the character list, the delete, the rename and the world
-/// entry reach. The reference's others are create (5, `0x46b29e`) and the patch and survey
-/// downloads (10 and 11, `0x473c40`, `0x473da8`), each set by a verb these screens do not have
-/// yet.
+/// states the login, the realm list, the character list, the create, the delete, the rename and
+/// the world entry reach. The reference's others are the patch and survey downloads (10 and 11,
+/// `0x473c40`, `0x473da8`), each set by a verb these screens do not have yet.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ScreenState {
     /// No operation (`0x46a7ce`, and every terminal arm).
@@ -166,6 +178,8 @@ pub(crate) enum ScreenState {
     CharList = 3,
     /// A realm list query (`RequestRealmList`, `0x46b8d2`).
     RealmList = 4,
+    /// A character create (`0x46b29e`).
+    Create = 5,
     /// A character delete (`0x46b2f8`).
     Delete = 6,
     /// A character rename (`0x46b3a4`).
@@ -257,6 +271,8 @@ const STATUS_REALM_LIST_REALM_NOT_FOUND: u8 = 0x26;
 const STATUS_CHAR_LIST_RETRIEVING: u8 = 0x2a;
 const STATUS_CHAR_LIST_RETRIEVED: u8 = 0x2b;
 const STATUS_CHAR_LIST_FAILED: u8 = 0x2c;
+const STATUS_CHAR_CREATE_IN_PROGRESS: u8 = 0x2d;
+const STATUS_CHAR_CREATE_SUCCESS: u8 = 0x2e;
 const STATUS_CHAR_DELETE_IN_PROGRESS: u8 = 0x38;
 const STATUS_CHAR_DELETE_SUCCESS: u8 = 0x39;
 const STATUS_CHAR_LOGIN_IN_PROGRESS: u8 = 0x3c;
@@ -324,6 +340,8 @@ enum OpKind {
     GetRealms,
     /// The character list (6, `0x5aabb0`).
     CharList,
+    /// A character create (5, `0x5aac50`).
+    Create,
     /// A character delete (7, `0x5ab100`).
     Delete,
     /// The character login (8, `COP_LOGIN_CHARACTER`, begun at `0x5aae20`).
@@ -411,6 +429,8 @@ enum Outgoing {
     ServerAlert(String),
     /// `SELECT_FIRST_CHARACTER` (event 13, `0x46c1a2`).
     SelectFirst,
+    /// `SELECT_LAST_CHARACTER` (event 12, `0x46c133`).
+    SelectLast,
     /// `FORCE_RENAME_CHARACTER(key)` (event 23, `0x46b4a8`, `0x46b4cd`): the key, unresolved.
     ForceRename(&'static str),
     /// The rename applier (`0x4725f0`) for this guid and name.
@@ -600,8 +620,11 @@ impl GlueMgr {
                 self.op.complete(false, STATUS_CANCELLED);
                 self.outbox.push(Outgoing::Teardown);
             }
-            // `0x46b776` (states 4, 6 and 8): the operation cancelled, state 0, nothing sent.
-            ScreenState::RealmList | ScreenState::Delete | ScreenState::EnterWorld => {
+            // `0x46b776` (states 4, 5, 6 and 8): the operation cancelled, state 0, nothing sent.
+            ScreenState::RealmList
+            | ScreenState::Create
+            | ScreenState::Delete
+            | ScreenState::EnterWorld => {
                 self.op.complete(false, STATUS_CANCELLED);
                 self.state = ScreenState::Idle;
             }
@@ -639,6 +662,43 @@ impl GlueMgr {
             self.op.complete(false, STATUS_FAILED_TO_CONNECT);
         } else {
             self.park_out.push(CharRequest::Enumerate.into());
+        }
+    }
+
+    /// `0x46b290`, `CreateCharacter`'s tail past the name check: state 5, the
+    /// `CHAR_CREATE_IN_PROGRESS` dialog (`0x46b2c4`) and the create (`0x5aac50`: operation 5 at
+    /// status `0x2d`, then `CMSG_CHAR_CREATE` with the name and the nine bytes). With no link it
+    /// fails `RESPONSE_FAILED_TO_CONNECT` at once (`0x5aac72`). No guard on the state: a second
+    /// call sends again.
+    fn create_character(&mut self, request: benilla_ui::script::GlueCreateRequest) {
+        self.state = ScreenState::Create;
+        self.open("CANCEL", Some(Text::Key("CHAR_CREATE_IN_PROGRESS")));
+        self.op = Operation::begin(OpKind::Create, STATUS_CHAR_CREATE_IN_PROGRESS);
+        if !self.connected {
+            self.op.complete(false, STATUS_FAILED_TO_CONNECT);
+        } else {
+            self.park_out.push(
+                CharRequest::Create(benilla_protocol::CharCreateReq {
+                    name: request.name,
+                    race: request.race,
+                    class: request.class,
+                    gender: request.sex,
+                    skin: request.skin,
+                    face: request.face,
+                    hair_style: request.hair_style,
+                    hair_color: request.hair_color,
+                    facial_hair: request.facial_hair,
+                })
+                .into(),
+            );
+        }
+    }
+
+    /// `SMSG_CHAR_CREATE` (`0x5aac30`): the result byte is the create's status, success on
+    /// `0x2e`, whatever the screen state (`SetStatus`, `0x5aa920`).
+    fn on_char_created(&mut self, code: u8) {
+        if self.op.kind == OpKind::Create {
+            self.op.complete(code == STATUS_CHAR_CREATE_SUCCESS, code);
         }
     }
 
@@ -840,7 +900,7 @@ impl GlueMgr {
                     }
                 }
             }
-            OpKind::Auth | OpKind::CharList | OpKind::Delete | OpKind::Login => {}
+            OpKind::Auth | OpKind::CharList | OpKind::Create | OpKind::Delete | OpKind::Login => {}
         }
     }
 
@@ -1096,6 +1156,7 @@ impl GlueMgr {
             ScreenState::Connect => self.tick_connect(),
             ScreenState::CharList => self.tick_char_list(),
             ScreenState::RealmList => self.tick_realm_list(),
+            ScreenState::Create => self.tick_create(),
             ScreenState::Delete => self.tick_delete(),
             // `0x46c283`: `OKAY` with the operation's text, every frame the state stands.
             ScreenState::LoginRefused => {
@@ -1105,6 +1166,28 @@ impl GlueMgr {
             // No arm for state 7: the compares in `[0x46b930, 0x46c2ac)` never take it. State 8's
             // two phases are the world entry's here (`0x46c1b8`).
             ScreenState::Rename | ScreenState::EnterWorld | ScreenState::Idle => {}
+        }
+    }
+
+    /// State 5's frame (`0x46c0f3`-`0x46c13d`): the dialog re-texted, then a completed create's
+    /// arm. A success goes to state 0, closes the dialog, fires `SELECT_LAST_CHARACTER` and puts
+    /// `charselect` up (`0x46c11e`-`0x46c13d`); a failure opens `OKAY` with the status's text and
+    /// goes to state 0 (`0x46c118` → `0x46c177`).
+    fn tick_create(&mut self) {
+        if let Some(text) = self.op.text() {
+            self.outbox.push(Outgoing::Update { text, button: None });
+        }
+        if !self.op.done {
+            return;
+        }
+        self.state = ScreenState::Idle;
+        if self.op.ok {
+            self.outbox.push(Outgoing::Close);
+            self.outbox.push(Outgoing::SelectLast);
+            self.outbox.push(Outgoing::Screen("charselect"));
+        } else {
+            let text = self.op.text();
+            self.open("OKAY", text);
         }
     }
 
@@ -1346,9 +1429,7 @@ pub(crate) fn drive_glue_mgr(
     realms: Option<Res<crate::realm_select::Realms>>,
     mut realmlist: Option<ResMut<crate::realmlist::Realmlist>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
-    create: Option<Res<crate::entities::CharCreate>>,
-    classes: Option<Res<crate::chr_classes::ChrClassTable>>,
-    creatures: Option<Res<crate::entities::Creatures>>,
+    sources: super::glue_create::CreateSources,
     state: Option<Res<State<crate::char_select::ClientState>>>,
     time: Res<Time>,
 ) {
@@ -1396,6 +1477,11 @@ pub(crate) fn drive_glue_mgr(
         }
         if let Some(names) = news.names.as_ref().filter(|n| !fresh_vm && n.is_changed()) {
             s.set_glue_name_lists(std::rc::Rc::new((**names).clone()));
+        }
+        // The create screen's catalog, on every new VM (the glue build's walk, `0x470430`) and
+        // whenever a catalog behind it arrives.
+        if fresh_vm || sources.changed() {
+            s.set_glue_create_catalog(std::rc::Rc::new(sources.catalog()));
         }
     } else if in_world {
         // In the world the glue is torn down, and the entry's second phase leaves state 0
@@ -1482,6 +1568,7 @@ pub(crate) fn drive_glue_mgr(
                 GlueRequest::EnterWorld { index, guid, flags } => {
                     mgr.enter_world(index, guid, flags);
                 }
+                GlueRequest::CreateCharacter(request) => mgr.create_character(request),
             }
         }
         mgr.realm_cells = s.glue_realm_cells();
@@ -1546,8 +1633,9 @@ pub(crate) fn drive_glue_mgr(
         mgr.on_roster(msg.characters.clone(), msg.cause, msg.epoch);
     }
     for msg in news.char_actions.read() {
-        if msg.action == benilla_protocol::CharAction::Delete {
-            mgr.on_char_deleted(msg.code);
+        match msg.action {
+            benilla_protocol::CharAction::Delete => mgr.on_char_deleted(msg.code),
+            benilla_protocol::CharAction::Create => mgr.on_char_created(msg.code),
         }
     }
     for msg in news.renames.read() {
@@ -1578,9 +1666,9 @@ pub(crate) fn drive_glue_mgr(
     );
     let names = RosterNames {
         areas: areas.as_deref().map(|a| &a.0),
-        create: create.as_deref().map(|c| &c.0),
-        classes: classes.as_deref().map(|c| &c.0),
-        creatures: creatures.as_deref(),
+        create: sources.create.as_deref().map(|c| &c.0),
+        classes: sources.classes.as_deref().map(|c| &c.0),
+        creatures: sources.creatures.as_deref(),
     };
     flush(
         &mut mgr,
@@ -1636,6 +1724,7 @@ pub(crate) fn seat_glue_build(world: &mut World, script: &mut UiScript) {
     if !world.contains_resource::<GlueMgr>() {
         return;
     }
+    script.set_glue_create_catalog(std::rc::Rc::new(super::glue_create::world_catalog(world)));
     world.resource_scope(|world, mut mgr: Mut<GlueMgr>| {
         seat_glue(
             &mut mgr,
@@ -1855,6 +1944,7 @@ fn flush_one(
             script.fire_event("SHOW_SERVER_ALERT", vec![ScriptValue::Str(text)]);
         }
         Outgoing::SelectFirst => script.fire_event("SELECT_FIRST_CHARACTER", Vec::new()),
+        Outgoing::SelectLast => script.fire_event("SELECT_LAST_CHARACTER", Vec::new()),
         Outgoing::ForceRename(key) => {
             script.fire_event(
                 "FORCE_RENAME_CHARACTER",
