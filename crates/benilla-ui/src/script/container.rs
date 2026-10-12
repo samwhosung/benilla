@@ -3,9 +3,9 @@
 //! (0 the backpack, 1-4 the worn bags, -1 the bank's own slots, 5-10 the bank bags, -2 the
 //! keyring); slots are 1-based.
 
-use mlua::{Lua, Table, Value};
+use mlua::{Lua, MultiValue, Table, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{flag, number_arg};
 use super::cursor::{self, CursorItem, CursorPayload};
 use super::Model;
 
@@ -433,6 +433,21 @@ fn queue_move(
     });
 }
 
+/// The `(bag, slot)` the three container getters resolve (`0x4f9820`): both are numbers (else the
+/// binding's usage error), the slot is `trunc(n) - 1` and fails the resolver when negative
+/// (`0x4f990d`), so a zero or negative slot is no slot at all. `None` is that failure. The slot
+/// is returned 1-based, as the snapshot keys it.
+fn container_key(
+    lua: &Lua,
+    bag: Value,
+    slot: Value,
+    usage: &'static str,
+) -> mlua::Result<Option<(i64, u32)>> {
+    let bag = number_arg(lua, bag, usage)?;
+    let slot = number_arg(lua, slot, usage)?;
+    Ok((slot >= 1).then_some((i64::from(bag), slot as u32)))
+}
+
 /// Register the container verbs as bare globals, as `reference/1.12-globals.tsv` lists them;
 /// `C_Container` is a later client's namespace, and an addon that finds it assumes that client.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -523,10 +538,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // re-feed cannot replay the finish flash.
     lua.globals().set(
         "GetContainerItemCooldown",
-        lua.create_function(|lua, (bag, slot): (i64, u32)| {
+        lua.create_function(|lua, (bag, slot): (Value, Value)| {
             let now = crate::script::clock::now(lua);
+            let key = container_key(
+                lua,
+                bag,
+                slot,
+                "Usage: GetContainerItemCooldown(index, slot)",
+            )?;
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(match model.container_cooldowns.get(&(bag, slot)) {
+            // No resolved slot or no item in it pushes three zeros, the enable included
+            // (`0x4f9ae9`); an item with no running cooldown reads (0, 0, 1).
+            let held = key.is_some_and(|k| {
+                model
+                    .containers
+                    .get(&k.0)
+                    .is_some_and(|c| c.slots.contains_key(&k.1))
+            });
+            Ok(match key.and_then(|k| model.container_cooldowns.get(&k)) {
+                _ if !held => (0.0, 0.0, 0),
                 Some(&(start, duration, enabled)) if start + duration > now || !enabled => {
                     (start, duration, i32::from(enabled))
                 }
@@ -537,18 +567,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.globals().set(
         "GetContainerItemLink",
-        lua.create_function(|lua, (bag, slot): (i64, u32)| {
+        lua.create_function(|lua, (bag, slot): (Value, Value)| {
+            let key = container_key(lua, bag, slot, "Usage: GetContainerItemLink(index, slot)")?;
             let link = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                model
-                    .containers
-                    .get(&bag)
-                    .and_then(|c| c.slots.get(&slot))
-                    .and_then(|s| s.link.clone())
+                key.and_then(|(bag, slot)| {
+                    model
+                        .containers
+                        .get(&bag)
+                        .and_then(|c| c.slots.get(&slot))
+                        .and_then(|s| s.link.clone())
+                })
             };
+            // Nothing at all on every miss: the resolver failing, no item object or no template
+            // name (`0x4f996b`, `0x4f9979`, `0x4f99a5`).
             match link {
-                Some(l) => Ok(Value::String(lua.create_string(&l)?)),
-                None => Ok(Value::Nil),
+                Some(l) => Ok(MultiValue::from_vec(vec![Value::String(
+                    lua.create_string(&l)?,
+                )])),
+                None => Ok(MultiValue::new()),
             }
         })?,
     )?;
@@ -559,7 +596,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `locked` and `readable` are 1 or nil (`0x4f975d`/`0x4f976b`, `0x4f97e6`/`0x4f97d3`).
     lua.globals().set(
         "GetContainerItemInfo",
-        lua.create_function(|lua, (bag, slot): (i64, u32)| {
+        lua.create_function(|lua, (bag, slot): (Value, Value)| {
+            let Some((bag, slot)) =
+                container_key(lua, bag, slot, "Usage: GetContainerItemInfo(index, slot)")?
+            else {
+                // The resolver failed (`0x4f990d`): nothing is pushed (`0x4f9810`).
+                return Ok(mlua::MultiValue::new());
+            };
             let (info, held_here) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let held = matches!(

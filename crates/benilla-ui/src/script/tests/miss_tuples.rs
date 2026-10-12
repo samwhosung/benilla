@@ -11,6 +11,11 @@ const SHOW: &str = "function PGShow(...) local o = {} \
 
 /// `(call, the tuple the reference pushes on a miss)`; the model is empty, so every call misses.
 const MISSES: &[(&str, &str)] = &[
+    // The resolver fails (`0x4f990d`) or finds no item: nothing at all, and three zeros for the
+    // cooldown (`0x4f9810`, `0x4f99a5`, `0x4f9ae9`).
+    ("GetContainerItemInfo(0, 1)", ""),
+    ("GetContainerItemLink(0, 1)", ""),
+    ("GetContainerItemCooldown(0, 1)", "0,0,0"),
     ("GetCraftInfo(1)", "nil,nil,nil,0,nil,0,0"),
     ("GetCraftInfo(0)", "nil,nil,nil,0,nil,0,0"),
     ("GetCraftReagentInfo(1, 1)", "nil,nil,nil,nil"),
@@ -90,5 +95,26 @@ fn an_indexed_getter_with_no_row_pushes_the_references_full_tuple() {
             .unwrap(),
             if name.ends_with("Info") { 4 } else { 3 },
         );
+    }
+    // A non-number raises the binding's own usage text (`0x84d860`, `0x84d88c`, `0x84d8b8`).
+    for name in [
+        "GetContainerItemInfo",
+        "GetContainerItemLink",
+        "GetContainerItemCooldown",
+    ] {
+        for call in [
+            format!("{name}('x', 1)"),
+            format!("{name}(0)"),
+            format!("{name}(0, nil)"),
+        ] {
+            assert!(
+                s.eval::<bool>(&format!(
+                    "local ok, err = pcall(function() return {call} end) \
+                     return not ok and string.find(tostring(err), 'Usage: {name}(index, slot)', 1, true) ~= nil"
+                ))
+                .unwrap(),
+                "{call} raises its usage"
+            );
+        }
     }
 }
