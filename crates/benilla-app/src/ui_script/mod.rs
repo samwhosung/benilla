@@ -315,7 +315,13 @@ impl Plugin for UiScriptPlugin {
             .init_resource::<UiClock>()
             .init_resource::<AddOnIdentity>()
             // After `AssetSet::Open`: the VM's first load is the chain's `GlobalStrings.lua`.
-            .add_systems(Startup, setup_script.after(benilla_assets::AssetSet::Open))
+            .add_systems(
+                Startup,
+                // After the CVars load: the glue screens read the agreements as they come up.
+                setup_script
+                    .after(benilla_assets::AssetSet::Open)
+                    .after(crate::cvars::CvarLoad),
+            )
             // The in-game UI loads on world entry, as the reference's does, once the loading cover
             // has presented, so its ~0.5 s never stalls the cover's first frame.
             .add_systems(

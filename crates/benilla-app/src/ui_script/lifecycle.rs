@@ -7,7 +7,7 @@
 use bevy::prelude::*;
 
 use benilla_assets::LockRecover;
-use benilla_ui::script::UiScript;
+use benilla_ui::script::{GlueNotice, UiScript};
 
 use super::manifest::silenced_ui_load;
 use super::{load_ingame_ui, CursorPayloadHeld, PlayerUiHover, UiClock, UiKeyboardCapture};
@@ -73,6 +73,7 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
         return false;
     };
     seat_raster_seam_for_load(world, &mut script);
+    seed_agreements(world, &mut script);
     let start = std::time::Instant::now();
     let failures = super::glue::load_glue(&mut script);
     super::glue::finish_glue_load_log(&mut script);
@@ -92,6 +93,22 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
         .unwrap_or(false);
     world.insert_non_send_resource(script);
     charselect
+}
+
+/// Read the four agreement CVars into the glue VM and the manager before any screen is set, as
+/// the reference does (`0x46a400` at `0x402b36`, then `SET_GLUE_SCREEN` at `0x402b65`): the login
+/// screen's `OnShow` asks them at once, and nothing asks again.
+fn seed_agreements(world: &mut World, script: &mut UiScript) {
+    let Some(cvars) = world.get_resource::<crate::cvars::Cvars>() else {
+        return;
+    };
+    let notices = super::glue_mgr::read_agreements(cvars);
+    for notice in GlueNotice::ALL {
+        script.set_glue_notice(notice, notices[notice as usize]);
+    }
+    if let Some(mut mgr) = world.get_resource_mut::<super::glue_mgr::GlueMgr>() {
+        mgr.set_notices(notices);
+    }
 }
 
 /// A fresh VM from `make` on the process clock with the addon asset probes wired, or `None` (the
@@ -1087,6 +1104,42 @@ mod tests {
             let up = stock && benilla_formats::wow_data().is_some();
             assert_eq!(policy.0.load(Ordering::SeqCst), up, "stock {stock}");
         }
+    }
+
+    /// The agreements are read from their CVars before the first screen is set (`0x46a400` at
+    /// `0x402b36`, `SET_GLUE_SCREEN` at `0x402b65`): a returning player's login shows the boxes,
+    /// not the EULA, and a first launch still shows the EULA.
+    #[test]
+    fn the_login_screen_comes_up_on_the_accepted_agreements() {
+        use crate::char_select::ClientState;
+        let _ = benilla_formats::wow_data_or_skip!();
+        let screens = |cvars: crate::cvars::Cvars| {
+            let mut world = World::new();
+            world.insert_resource(super::super::glue::GlueStock(true));
+            world.insert_resource(State::new(ClientState::Login));
+            world.insert_resource(cvars);
+            world.init_resource::<super::super::glue_mgr::GlueMgr>();
+            setup_script(&mut world);
+            world
+                .non_send_resource::<UiScript>()
+                .eval::<(bool, bool, bool)>(
+                    "return TOSFrame:IsShown() == 1, AccountLoginUI:IsShown() == 1, \
+                     AccountLoginAccountEdit:IsVisible() == 1",
+                )
+                .unwrap()
+        };
+        let mut accepted = crate::cvars::Cvars::with_value("readEULA", "1");
+        accepted.set("readTOS", "1");
+        assert_eq!(
+            screens(accepted),
+            (false, true, true),
+            "accepted agreements go straight to the login boxes"
+        );
+        assert_eq!(
+            screens(crate::cvars::Cvars::default()),
+            (true, false, false),
+            "a first launch is asked for the EULA"
+        );
     }
 
     /// Under `WOW_GLUE_STOCK=1` the world holds the glue VM where it holds a boot VM, at startup

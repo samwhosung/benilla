@@ -485,6 +485,11 @@ pub(crate) struct GlueMgr {
 }
 
 impl GlueMgr {
+    /// The agreements as read at the startup (`0x46a400`).
+    pub(super) fn set_notices(&mut self, notices: [NoticeState; 4]) {
+        self.notices = Some(notices);
+    }
+
     fn notice(&self, notice: GlueNotice) -> NoticeState {
         self.notices.map(|n| n[notice as usize]).unwrap_or_default()
     }
@@ -1094,6 +1099,19 @@ fn notice_cvar(notice: GlueNotice) -> &'static str {
         GlueNotice::Scanning => "readScanning",
         GlueNotice::Contest => "readContest",
     }
+}
+
+/// The four agreements' states off the CVar registry: the read `0x46a400` makes at `0x402b36`,
+/// before the first glue screen is set (`0x402b65`), so a returning player's login screen never
+/// sees them unaccepted.
+pub(crate) fn read_agreements(cvars: &crate::cvars::Cvars) -> [NoticeState; 4] {
+    let mut n = [NoticeState::default(); 4];
+    for notice in GlueNotice::ALL {
+        if let Some(value) = cvars.get(notice_cvar(notice)) {
+            n[notice as usize] = NoticeState::from_cvar(value);
+        }
+    }
+    n
 }
 
 /// The glue manager's frame: the VM's requests, the native login's news, the per-frame arms, then
