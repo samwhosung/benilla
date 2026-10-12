@@ -1019,8 +1019,21 @@ pub(crate) struct Model {
     pub(crate) chat_bubbles: super::chat_bubble::ChatBubbles,
     /// The world-state readout's rows, gated and resolved by the app.
     pub(crate) worldstate: super::worldstate::WorldStateUiState,
-    /// Events bindings raise. Deviation: fired at the next tick, not synchronously as in the
-    /// reference, because a binding runs inside Lua and cannot re-enter handler dispatch.
+    /// Events raised outside a dispatch, fired at the start of the next tick ahead of its `OnUpdate`
+    /// pass (`UiScript::tick`). The reference queues nothing here: a fire site calls
+    /// `SignalEvent` (`0x703e50`, `0x703f50`), which runs every handler before it returns, so a
+    /// verb's event reaches its listeners inside the call.
+    ///
+    /// A binding can do the same: `tick::fire_event_into` re-enters dispatch from inside Lua, as
+    /// `SetCVar`'s `CVAR_UPDATE` does, once the binding holds no model borrow. So the queue is no
+    /// limit, and a Lua verb that pushes here instead is a gap against the reference: the cursor
+    /// verbs' `CURSOR_UPDATE`, grid, `ITEM_LOCK_CHANGED`, `DELETE_ITEM_CONFIRM` and
+    /// `PLAYER_MONEY`, the send-mail verbs' events, `SetGuildRecruitmentMode`'s
+    /// `UPDATE_CHAT_WINDOWS`, `SetBattlefieldScoreFaction`'s `UPDATE_BATTLEFIELD_SCORE`,
+    /// `UpdateInventoryAlertStatus`'s `UPDATE_INVENTORY_ALERTS`, `CancelAreaSpiritHeal`'s
+    /// `AREA_SPIRIT_HEALER_OUT_OF_RANGE` and the trainer verbs' `TRAINER_UPDATE`. The host's own
+    /// setters (the world map's, the world-state rows, a dropped mail attachment) and
+    /// `UiScript::queue_event` have no verb to fire inside and queue by design.
     pub(crate) pending_events: Vec<(String, Vec<ScriptValue>)>,
     /// The last cursor position in UI space (logical px, y-up), behind `GetCursorPosition()`.
     pub(crate) cursor_pos: (f32, f32),
