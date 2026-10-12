@@ -87,6 +87,8 @@ impl Plugin for LoginPlugin {
                             .run_if(crate::ui_script::glue::stock_glue)
                             .in_set(crate::portrait::GluePreviewFeed),
                         crate::ui_script::server_alert::open_launched
+                            // Reads only its message, so no state orders it but the sets.
+                            .after(benilla_world::schedule::WorldStage::Stream)
                             .run_if(crate::ui_script::glue::stock_glue),
                         answer_glue,
                         drive_policy,
