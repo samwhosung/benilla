@@ -149,8 +149,9 @@ pub(crate) struct KeybindState {
     generation: u64,
     /// A host-side load of a set into the live table (the seed at the VM's birth) is owed its
     /// `UPDATE_BINDINGS`, which the reference signals at the copy into set 3 (`0x4b649d`). The Lua
-    /// verbs signal in place and clear it; a registration (`0x4b6f70`) signals nothing, so it
-    /// moves [`Self::generation`] alone.
+    /// verbs signal in place (`SetBinding` `0x4b805b`, `LoadBindings`) and leave the debt, a
+    /// separate signal; a registration (`0x4b6f70`) signals nothing, so it moves
+    /// [`Self::generation`] alone.
     signal_owed: bool,
     requests: Vec<KeybindRequest>,
 }
@@ -158,7 +159,6 @@ pub(crate) struct KeybindState {
 impl KeybindState {
     /// A verb's change, signalled in place: `UPDATE_BINDINGS` (`0x182`) before the verb returns.
     fn signal(model: &mut Model) {
-        model.keybinds.signal_owed = false;
         model.raise("UPDATE_BINDINGS", Vec::new());
     }
 }
@@ -404,7 +404,7 @@ impl super::UiScript {
     }
 
     /// Whether a host-side load still owes its `UPDATE_BINDINGS` (`0x4b649d`); taking it clears
-    /// the debt. A Lua verb's change signals in place and owes nothing.
+    /// the debt. A Lua verb's change signals in place and leaves it.
     pub fn take_keybinds_signal_owed(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().keybinds.signal_owed)
     }
@@ -684,6 +684,7 @@ mod tests {
     #[test]
     fn the_binding_verbs_signal_update_bindings_in_place() {
         let mut s = script();
+        let _ = s.take_keybinds_signal_owed(); // the fixture's own load
         crate::script::tick::heard::listen(&s, &["UPDATE_BINDINGS"], Some("GetBindingAction('F')"));
         s.run(r#"SetBinding("F", "JUMP")"#).unwrap();
         assert_eq!(
@@ -696,8 +697,22 @@ mod tests {
         assert_eq!(crate::script::tick::heard::take(&s), ["UPDATE_BINDINGS "]);
         assert!(
             !s.take_keybinds_signal_owed(),
-            "a verb's signal leaves no debt"
+            "a verb's signal makes no debt"
         );
+    }
+
+    /// The seed's copy into set 3 (`0x4b649d`) and `SetBinding` (`0x4b805b`) signal separately: a
+    /// verb in between does not pay the load's debt.
+    #[test]
+    fn a_verb_does_not_pay_a_host_loads_signal() {
+        let mut s = script();
+        s.load_binding_set(1);
+        s.run(r#"SetBinding("F", "JUMP") LoadBindings(1)"#).unwrap();
+        assert!(
+            s.take_keybinds_signal_owed(),
+            "the load's own signal is still owed"
+        );
+        assert!(!s.take_keybinds_signal_owed());
     }
 
     /// `LoadBindings` reads its set with a bare `tonumber` (`0x4b8228`) and raises its usage for
