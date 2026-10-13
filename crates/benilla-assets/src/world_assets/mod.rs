@@ -104,9 +104,10 @@ pub fn sprite_dimensions(
     decode_sprite(chain, loose_root, path).map(|(w, h, _)| (w, h))
 }
 
-/// Decode the first of [`sprite_candidates`] that reads and decodes, each from the AddOns folder and
-/// then the chain ([`read_loose_or_chain`]), as the reference's two loaders fail silently. A miss warns, once per key since
-/// every cache stores its misses: a missing sprite draws nothing, and nothing else says why.
+/// Decode the first of [`sprite_candidates`] that reads and decodes, each read by
+/// [`read_loose_or_chain`]'s rule, as the reference's two loaders fail silently. A miss warns, once
+/// per key since every cache stores its misses: a missing sprite draws nothing, and nothing else
+/// says why.
 fn decode_sprite(
     chain: &Mutex<Chain>,
     loose_root: Option<&Path>,
@@ -115,18 +116,13 @@ fn decode_sprite(
     let candidates = sprite_candidates(path);
     let mut chain = chain.lock_recover();
     for candidate in &candidates {
-        if let Some(file) = loose_root.and_then(|root| loose_addon_file(root, candidate)) {
-            if let Ok(decoded) = std::fs::read(&file)
-                .map_err(anyhow::Error::from)
-                .and_then(|bytes| decode_sprite_bytes(&bytes))
-            {
-                return Some(decoded);
-            }
-        }
-        if let Ok(bytes) = chain.read_file(candidate) {
-            if let Ok(decoded) = decode_sprite_bytes(&bytes) {
-                return Some(decoded);
-            }
+        // A loose file answers the candidate whether or not it decodes ([`read_loose_or_chain`]).
+        let bytes = match loose_root.and_then(|root| loose_addon_file(root, candidate)) {
+            Some(file) => std::fs::read(&file).ok(),
+            None => chain.read_file(candidate).ok(),
+        };
+        if let Some(Ok(decoded)) = bytes.map(|b| decode_sprite_bytes(&b)) {
+            return Some(decoded);
         }
     }
     // "Not there" and "there but would not decode" are different faults; say which.
@@ -171,22 +167,20 @@ fn decode_sprite_bytes(bytes: &[u8]) -> anyhow::Result<(u32, u32, Vec<u8>)> {
     }
 }
 
-/// Read a file from the loose addon folder, for an `Interface\AddOns\` path, then the patch chain:
-/// how art, fonts and audio load. The reference's resolver (`0x647e60`) answers from the install
-/// tree's index (`0x647f89`) before the archive chain (`0x648116`), so a loose copy of a stock
-/// `Blizzard_*` addon's file shadows the one in the MPQs.
+/// Read a file by path: an `Interface\AddOns\` path from the loose addon folder when the file is
+/// there, any other from the patch chain. The reference's resolver (`0x647e60`) answers from the
+/// install tree's index (`0x647f89`) before the archive chain (`0x648116`) for an open that sets
+/// the index flag, as the UI texture (`0x770281`) and sound (`0x7a8860`) opens do; a file the
+/// index answers and the open then fails is a miss, with no turn to the chain (`0x6478d5`).
 pub fn read_loose_or_chain(
     chain: &Mutex<Chain>,
     loose_root: Option<&Path>,
     path: &str,
 ) -> Option<Vec<u8>> {
-    if let Some(bytes) = loose_root
-        .and_then(|root| loose_addon_file(root, &normalize_path(path)))
-        .and_then(|file| std::fs::read(file).ok())
-    {
-        return Some(bytes);
+    match loose_root.and_then(|root| loose_addon_file(root, &normalize_path(path))) {
+        Some(file) => std::fs::read(file).ok(),
+        None => chain.lock_recover().read(path).ok(),
     }
-    chain.lock_recover().read(path).ok()
 }
 
 /// Map a normalized `interface\addons\…` path onto a file under the addon root, matching each
@@ -632,7 +626,7 @@ mod tests {
 
     /// Against the real chain: a client file comes from the archive, an addon's own file from
     /// disk, and a loose copy of a path the archive also holds shadows it, as `0x647e60` asks the
-    /// install tree (`0x647f89`) before the chain (`0x648116`).
+    /// install tree (`0x647f89`) before the chain (`0x648116`), even when it will not read.
     #[test]
     fn read_loose_or_chain_asks_an_addons_own_file_on_disk_then_the_chain() {
         let data = benilla_formats::wow_data_or_skip!();
@@ -687,6 +681,22 @@ mod tests {
             Some(&b"-- loose"[..]),
             "the loose copy shadows the archive's"
         );
+        // A loose file that will not read is a miss: the index answered, so the archive is not
+        // asked (`0x6478d5`).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let loose = addons
+                .join("Blizzard_AuctionUI")
+                .join("Blizzard_AuctionUI.lua");
+            std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o000)).unwrap();
+            let unreadable = std::fs::read(&loose).is_err();
+            let got = read_loose_or_chain(&chain, Some(&addons), stock);
+            std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).unwrap();
+            if unreadable {
+                assert_eq!(got, None, "no fallback to the archive copy");
+            }
+        }
 
         // In neither store: a plain miss, which every caller renders as silence.
         assert!(read_loose_or_chain(&chain, Some(&addons), "Sound\\Music\\nope.mp3").is_none());
