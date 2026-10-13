@@ -1770,7 +1770,6 @@ mod tests {
             ambient: [0.1, 0.1, 0.1],
             diffuse: [0.5, 0.5, 0.5],
             vector: [0.0, 0.0, -1.0],
-            ..ModelLight::default()
         };
         let widget_alone = scene(widget, SceneRig::default()).blob();
         let both = scene(widget, file_rig()).blob();
