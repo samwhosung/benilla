@@ -64,7 +64,9 @@ pub(crate) fn apply_script_calls(
             ScriptCall::UseContainerItem(call) => {
                 appliers.p5().use_container_item(script, call);
             }
-            ScriptCall::UseInventoryItem(id) => appliers.p5().use_inventory_item(script, id),
+            ScriptCall::UseInventoryItem { slot, on_self } => {
+                appliers.p5().use_inventory_item(script, slot, on_self)
+            }
             ScriptCall::CastPetSpell { spell_id, on_self } => {
                 crate::ui_pet_book::cast_pet_spell(&mut appliers.p6(), spell_id, on_self);
             }

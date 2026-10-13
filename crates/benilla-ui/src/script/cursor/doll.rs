@@ -186,15 +186,15 @@ pub(super) fn cursor_can_go_in_slot(model: &Model, id: u32) -> bool {
 /// events running first; then the app sends `CMSG_USE_ITEM` with bag 255 and the 0-based slot,
 /// dropping an empty slot unsent, or in repair mode a worn item is repaired, locked or not
 /// (`0x4c79c4`).
-pub(super) fn use_inventory_item(lua: &Lua, id: u32) {
+pub(super) fn use_inventory_item(lua: &Lua, id: u32, on_self: bool) {
     verb(lua, clear_cursor);
-    verb(lua, |model| use_cleared(model, id));
+    verb(lua, |model| use_cleared(model, id, on_self));
 }
 
 /// `UseInventoryItem` past its clear. Outside repair mode a locked worn item is refused in the
 /// call, `CGItem::Use`'s first gate (`0x4c7af0` → `0x5d8d32`), so a later call's lock does not
 /// reach it.
-fn use_cleared(model: &mut Model, id: u32) {
+fn use_cleared(model: &mut Model, id: u32, on_self: bool) {
     if !model.repair_mode {
         let locked = model
             .inv_slot("player", id as usize)
@@ -219,7 +219,7 @@ fn use_cleared(model: &mut Model, id: u32) {
         } else if !locked {
             model
                 .script_calls
-                .push(crate::script::ScriptCall::UseInventoryItem(id));
+                .push(crate::script::ScriptCall::UseInventoryItem { slot: id, on_self });
         }
         return;
     }
@@ -275,8 +275,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "UseInventoryItem",
-        lua.create_function(|lua, id: u32| {
-            use_inventory_item(lua, id);
+        lua.create_function(|lua, (id, rest): (u32, mlua::MultiValue)| {
+            // `onSelf` through the client's flag coercion (`0x4c8e37`, `0x6f1c10`, default 0).
+            let on_self = crate::script::binding_abi::bool_or_default(rest.front(), false);
+            use_inventory_item(lua, id, on_self);
             Ok(())
         })?,
     )?;
@@ -838,6 +840,26 @@ mod tests {
         s.run("UseInventoryItem(19)").unwrap();
         assert_eq!(s.take_inventory_uses(), vec![1, 19]);
         assert!(s.take_inventory_uses().is_empty(), "drained");
+    }
+
+    /// `onSelf`, argument 2, through the flag coercion (`0x4c8e37`, `0x6f1c10`, default 0).
+    #[test]
+    fn use_inventory_item_carries_on_self() {
+        let mut s = UiScript::new().unwrap();
+        for (chunk, on_self) in [
+            ("UseInventoryItem(1)", false),
+            ("UseInventoryItem(1, nil)", false),
+            ("UseInventoryItem(1, 0)", false),
+            ("UseInventoryItem(1, 1)", true),
+            ("UseInventoryItem(1, true)", true),
+        ] {
+            s.run(chunk).unwrap();
+            assert_eq!(
+                s.take_script_calls(),
+                [crate::script::ScriptCall::UseInventoryItem { slot: 1, on_self }],
+                "{chunk}"
+            );
+        }
     }
 
     /// A right-click clears the cursor before it reads the slot (`0x4c79a9`): a held item goes

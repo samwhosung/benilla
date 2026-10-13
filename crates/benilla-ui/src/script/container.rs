@@ -152,6 +152,8 @@ pub struct ContainerUse {
     /// The equip arm raised the bind-on-equip question and sent nothing: the item stays on the
     /// cursor, locked, under the popup (`0x5e16c6`, `0x5e16ce`).
     pub asks: bool,
+    /// `onSelf`: the use targets the player in place of the selection (`0x4fa17d`-`0x4fa18e`).
+    pub on_self: bool,
 }
 
 /// One enchant slot as the tooltip renders it (`0x52c9f9`..`0x52ca23`); the app resolves the row.
@@ -359,7 +361,7 @@ pub enum UiCursorMode {
 /// deposit (`0x4fa312`, `0x4fa34b`), the sale (`0x4fa37f`), the open (`0x5edcd9`) and the wrap
 /// paper (`0x5edea0`). The equip arm is not done here: it returns its item, which the call puts on
 /// the cursor ([`use_equip_arm`]). The app sends each arm.
-fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) -> Option<CursorItem> {
+fn use_cleared(model: &mut super::Model, bag: i64, slot: u32, on_self: bool) -> Option<CursorItem> {
     let s = model
         .containers
         .get(&bag)
@@ -409,6 +411,7 @@ fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) -> Option<CursorIt
             guid,
             arm,
             asks: false,
+            on_self,
         }));
     match arm {
         UseArm::Withdraw | UseArm::Deposit | UseArm::Sell | UseArm::Item(UseFork::Open) => {
@@ -424,7 +427,7 @@ fn use_cleared(model: &mut super::Model, bag: i64, slot: u32) -> Option<CursorIt
 /// `AutoEquipCursorItem` (`0x4fa3ff`), then the item locks unless it is a projectile
 /// (`0x4fa40b`, `0x4fa418`), whose clear unlocked it instead (`0x5e1711`). A bind-on-equip item
 /// sends nothing: it stays held and locked under the question.
-fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem) {
+fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem, on_self: bool) {
     let guid = item.guid;
     let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
     let step = cursor::equip::auto_equip_from(lua, item, false);
@@ -442,6 +445,7 @@ fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem) {
                     guid,
                     arm: UseArm::Item(UseFork::Equip),
                     asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
+                    on_self,
                 }));
         }
         if !projectile {
@@ -840,13 +844,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     lua.globals().set(
         "UseContainerItem",
-        lua.create_function(|lua, (bag, slot, _rest): (i64, u32, mlua::MultiValue)| {
+        lua.create_function(|lua, (bag, slot, rest): (i64, u32, mlua::MultiValue)| {
+            // `onSelf` through the client's flag coercion (`0x4fa17d`, `0x6f1c10`, default 0).
+            let on_self = super::binding_abi::bool_or_default(rest.front(), false);
             // Every right-click clears the cursor before it reads the slot (`0x4fa198`): a held
             // payload goes back, never placed, and an armed gift wrap is cancelled. The clear's
             // events run first, as the reference's do before it reads the slot.
             super::tick::verb(lua, cursor::clear_cursor);
-            if let Some(item) = super::tick::verb(lua, |model| use_cleared(model, bag, slot)) {
-                use_equip_arm(lua, bag, slot, item);
+            if let Some(item) =
+                super::tick::verb(lua, |model| use_cleared(model, bag, slot, on_self))
+            {
+                use_equip_arm(lua, bag, slot, item, on_self);
             }
             Ok(())
         })?,

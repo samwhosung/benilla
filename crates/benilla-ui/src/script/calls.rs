@@ -43,10 +43,12 @@ pub enum ScriptCall {
     CastShapeshiftForm(u32),
     /// `UseAction(slot, …)` (`0x4e7140` → `0x4e5ee0`); a macro slot runs its lines inside it.
     UseAction(ActionUse),
-    /// `UseContainerItem(bag, slot)` outside repair mode, its arm chosen and locked in the call.
+    /// `UseContainerItem(bag, slot, onSelf)` outside repair mode, its arm chosen and locked in the
+    /// call.
     UseContainerItem(super::ContainerUse),
-    /// `UseInventoryItem(id)` outside repair mode.
-    UseInventoryItem(u32),
+    /// `UseInventoryItem(slot, onSelf)` outside repair mode: `on_self` makes the player the
+    /// use's target in place of the selection (`0x4c8e37`-`0x4c8e48`).
+    UseInventoryItem { slot: u32, on_self: bool },
     /// `CastPetAction(slot)`, a 1-based pet bar slot.
     PetAction(u32),
     /// `PetAttack` and the other one-shot orders, as their bar slot's packed word.

@@ -341,7 +341,7 @@ impl super::UiScript {
     /// `CMSG_USE_ITEM`, bag 255 and the 0-based slot.
     pub fn take_inventory_uses(&mut self) -> Vec<u32> {
         self.take_calls_where(|c| match c {
-            super::ScriptCall::UseInventoryItem(id) => Some(*id),
+            super::ScriptCall::UseInventoryItem { slot, .. } => Some(*slot),
             _ => None,
         })
     }
