@@ -1348,7 +1348,8 @@ pub(crate) mod schedule_tests {
                     continue;
                 }
                 let takes = f.body.contains("mem::take(") || f.body.contains(".drain(");
-                let memo = f.params.contains("VmMemo<");
+                // A `WindowMemo` is a `VmMemo` the leave-world sweep also clears.
+                let memo = f.params.contains("VmMemo<") || f.params.contains("WindowMemo<");
                 consumers.push((rel.clone(), f.name.to_string(), takes, memo));
             }
         }
@@ -1361,6 +1362,23 @@ pub(crate) mod schedule_tests {
             return;
         }
         let post = census(&mut app, PostUpdate, SyncPoints::Built);
+        // The leave-world sweep's legs run only inside its schedule, whose callers hold the
+        // interface up: the worldport's producer is gated with the unit feed, the shutdown edges
+        // run the sweep before a parked boot VM returns, and the quit returns inside the
+        // entry-load window.
+        let swept: Vec<String> = census(
+            &mut app,
+            crate::ui_script::WorldLeaveSweep,
+            SyncPoints::Built,
+        )
+        .systems
+        .values()
+        .map(|s| s.name.clone())
+        .collect();
+        let in_sweep = |full: &str, name: &str| {
+            let suffix = format!("::{name}");
+            swept.iter().any(|s| s == full || s.ends_with(&suffix))
+        };
         let by_name: HashMap<&str, &SystemInfo> = update
             .systems
             .values()
@@ -1389,8 +1407,9 @@ pub(crate) mod schedule_tests {
                 }
             });
             let exempt = EXEMPT.iter().find(|(p, f, _, _)| p == rel && f == name);
-            let is_gated =
-                info.is_some_and(|i| i.conditions.iter().any(|c| c.ends_with("::ingame_ui_up")));
+            let is_gated = info
+                .is_some_and(|i| i.conditions.iter().any(|c| c.ends_with("::ingame_ui_up")))
+                || (info.is_none() && in_sweep(&full, name));
             if is_gated {
                 gated += 1;
                 if exempt.is_some() {

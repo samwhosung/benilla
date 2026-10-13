@@ -37,6 +37,7 @@ use crate::char_select::ClientState;
 use crate::loading_screen::LoadingScreen;
 use crate::net::{CinematicTriggeredMessage, ClientCommand, NetCommands};
 use crate::player::PlayerControlSet;
+use crate::ui_script::SweepApp;
 
 /// Both cinematic DBCs, read once at startup.
 #[derive(Resource, Default)]
@@ -159,7 +160,12 @@ impl Plugin for CinematicPlugin {
             )
             .add_systems(Update, send_opening_cinematic.in_set(WorldStage::Input))
             // Leaving the world drops a cinematic with no ack, as the reference's teardown does
-            // (`0x490a80` clears the flag and sends no `CMSG_COMPLETE_CINEMATIC`).
+            // (`0x490a80` clears the flag and sends no `CMSG_COMPLETE_CINEMATIC`); the exit
+            // edge drops a latch too, where a departure with the sweep spent leaves one.
+            .add_sweep_leg(
+                crate::ui_script::SweepLeg::Cinematic,
+                abandon_cinematic_on_leave_world,
+            )
             .add_systems(OnExit(ClientState::InWorld), abandon_on_leaving_world);
     }
 }
@@ -523,11 +529,37 @@ pub(crate) fn stop(cine: &mut Cinematic, net: Option<&NetCommands>) {
     relinquish(cine, net, "stopped");
 }
 
+/// The leave-world sweep's last step (`0x490b69`-`0x490bbb`), past the interaction close and
+/// outside the sweep's sound scope: a cinematic in flight (`[0xb4e310]`) is dropped, the VM the
+/// sweep runs in told `CINEMATIC_STOP` (`0x490b77`), with no `CMSG_COMPLETE_CINEMATIC`.
+fn abandon_cinematic_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut cine: ResMut<Cinematic>,
+    mut fade: ResMut<crate::screen_fade::ScreenFade>,
+) {
+    if !cine.is_playing() {
+        return;
+    }
+    // The world-ready latch (`0xc4d75c`) is another cell, which the sweep leaves.
+    let pending = cine.pending;
+    abandon(&mut cine, &mut fade);
+    cine.pending = pending;
+    if let Some(mut script) = script {
+        script.set_in_cinematic(false);
+        script.fire_event("CINEMATIC_STOP", vec![]);
+    }
+}
+
 /// Leaving the world drops a cinematic without acking; the socket goes with it.
 fn abandon_on_leaving_world(
     mut cine: ResMut<Cinematic>,
     mut fade: ResMut<crate::screen_fade::ScreenFade>,
 ) {
+    abandon(&mut cine, &mut fade);
+}
+
+/// Drop the cinematic and its latch with no ack, and any fade.
+fn abandon(cine: &mut Cinematic, fade: &mut crate::screen_fade::ScreenFade) {
     if let Some(play) = cine.playing.take() {
         info!("cinematic: {} abandoned (left the world)", play.sequence_id);
     }
@@ -539,17 +571,16 @@ fn abandon_on_leaving_world(
 }
 
 /// Fire the `CINEMATIC_START`/`CINEMATIC_STOP` edges and keep `InCinematic()` current. The memo
-/// is per VM, so a `/reload` mid-cinematic re-fires `CINEMATIC_START` into the rebuilt tree.
+/// is per VM and per world: the leave-world sweep drops a cinematic and tells the VM itself.
 fn feed_ui(
     cine: Res<Cinematic>,
     script: Option<NonSendMut<UiScript>>,
-    mut published: Local<crate::ui_script::VmMemo<Option<bool>>>,
+    mut published: crate::ui_script::WindowMemo<Option<bool>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let playing = cine.is_playing();
-    // VM-scoped: a plain `Local` would leave ESC dead after a mid-cinematic `/reload`.
     let published = published.get(&script);
     if *published == Some(playing) {
         return;
@@ -750,6 +781,35 @@ mod ack_ledger {
         app.update();
         assert_eq!(acks(&rx), 0);
         assert!(!app.world().resource::<Cinematic>().is_playing());
+    }
+
+    /// A `/reload` mid-cinematic: the sweep's tail drops it (`0x490b69`), telling the dying VM
+    /// `CINEMATIC_STOP` with no ack, and the new VM starts out of a cinematic.
+    #[test]
+    fn a_reload_drops_the_cinematic_and_the_new_vm_starts_nothing() {
+        use crate::ui_script::sweep_test::{reload_in_place, seen, seen_in, spied_vm};
+        const EVENTS: [&str; 2] = ["CINEMATIC_START", "CINEMATIC_STOP"];
+        let (net, rx) = wire();
+        let mut app = App::new();
+        app.insert_resource(Cinematic::playing_for_test())
+            .insert_resource(net)
+            .init_resource::<crate::screen_fade::ScreenFade>()
+            .add_sweep_leg(
+                crate::ui_script::SweepLeg::Cinematic,
+                abandon_cinematic_on_leave_world,
+            )
+            .add_systems(Update, feed_ui);
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.update();
+        assert_eq!(seen_in(&app), ["CINEMATIC_START"]);
+
+        let dying = reload_in_place(&mut app, &EVENTS);
+        assert_eq!(seen(&dying), ["CINEMATIC_START", "CINEMATIC_STOP"]);
+        assert_eq!(acks(&rx), 0);
+        assert!(!app.world().resource::<Cinematic>().is_playing());
+
+        app.update();
+        assert!(seen_in(&app).is_empty(), "the new VM is out of a cinematic");
     }
 }
 

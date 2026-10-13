@@ -1,7 +1,8 @@
 //! The leave-world sweep `0x490a80`: past its latch, 36 calls with no branch between them, each
 //! closing or freeing one subsystem's world state, then `PLAYER_LEAVING_WORLD` (`0x490b4d`) and
 //! the close of whatever interaction is still latched (`0x490b5f` → `0x493310`), all inside a
-//! `PlaySound` suppression scope (`0x490a94` to `0x490b64`).
+//! `PlaySound` suppression scope (`0x490a94` to `0x490b64`), and last the drop of a cinematic in
+//! flight (`0x490b69`).
 //!
 //! Three callers reach it, and it is the same sweep from each: a `/reload` and every UI shutdown
 //! root (`0x490bd0`, at `0x490c20`), the local player's destructor on a cross-map worldport
@@ -64,6 +65,8 @@ pub(crate) struct WorldLeaveSweep;
 /// The legs benilla models, by their call sites in `0x490a80`, in its order.
 #[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum SweepLeg {
+    /// `0x490a94` → `0x458f50`: the `PlaySound` suppression scope opens.
+    Silence,
     /// `0x490ab2` → `0x4c1ca0` → `CloseInteraction 0x48f200(cl=1, dl=0)`.
     Loot,
     /// `0x490abc` → `0x4e3240` → `0x4e32e0(0, 0)`.
@@ -99,6 +102,10 @@ pub(crate) enum SweepLeg {
     /// `0x490b5f` → `0x493310`: the interaction still latched, which only the bank and a trade
     /// can be by now, as every other window's leg above released its own.
     Interaction,
+    /// `0x490b64` → `0x458f60`: the suppression scope closes.
+    Unsilence,
+    /// `0x490b69`-`0x490bbb`: a cinematic in flight is dropped.
+    Cinematic,
 }
 
 /// Spend the latch and, if it was armed, run the sweep: `true` at most once per world. No latch
@@ -111,17 +118,25 @@ pub(crate) fn run_leave_world_sweep(world: &mut World) -> bool {
         if let Some(mut worlds) = world.get_resource_mut::<SweptWorlds>() {
             worlds.0 += 1;
         }
-        // The legs' sounds and their handlers' are dropped (`0x490a94`, `0x490b64`).
-        if let Some(script) = world.get_non_send_resource::<UiScript>() {
-            script.push_sound_suppression();
-        }
         // Absent in a harness that registers no leg.
         let _ = world.try_run_schedule(WorldLeaveSweep);
-        if let Some(script) = world.get_non_send_resource::<UiScript>() {
-            script.pop_sound_suppression();
-        }
     }
     swept
+}
+
+/// Open the sweep's `PlaySound` suppression scope (`0x490a94`), so the legs' sounds and their
+/// handlers' are dropped.
+fn silence(script: Option<NonSend<UiScript>>) {
+    if let Some(script) = script {
+        script.push_sound_suppression();
+    }
+}
+
+/// Close it (`0x490b64`), ahead of the cinematic's drop.
+fn unsilence(script: Option<NonSend<UiScript>>) {
+    if let Some(script) = script {
+        script.pop_sound_suppression();
+    }
 }
 
 /// `PLAYER_LEAVING_WORLD`, fired unconditionally past the latch (`0x490b48`, its one site).
@@ -175,6 +190,7 @@ fn sweep_schedule() -> Schedule {
         .set_executor_kind(ExecutorKind::SingleThreaded)
         .configure_sets(
             (
+                SweepLeg::Silence,
                 SweepLeg::Loot,
                 SweepLeg::ItemText,
                 SweepLeg::Gossip,
@@ -192,10 +208,16 @@ fn sweep_schedule() -> Schedule {
                 SweepLeg::MeetingStone,
                 SweepLeg::LeavingWorld,
                 SweepLeg::Interaction,
+                SweepLeg::Unsilence,
+                SweepLeg::Cinematic,
             )
                 .chain(),
         )
-        .add_systems(fire_player_leaving_world.in_set(SweepLeg::LeavingWorld));
+        .add_systems((
+            silence.in_set(SweepLeg::Silence),
+            fire_player_leaving_world.in_set(SweepLeg::LeavingWorld),
+            unsilence.in_set(SweepLeg::Unsilence),
+        ));
     schedule
 }
 
@@ -223,17 +245,19 @@ pub(crate) fn arm_leaving_world_on_self_create(
 }
 
 /// The sweep from the local player's destructor (`0x5dd543`) on a cross-map worldport; a
-/// same-map teleport destroys nothing and never sweeps. Exclusive, so the legs and their events
-/// run before the entering edge `feed_units` raises for the same port.
+/// same-map teleport destroys nothing and never sweeps. The sweep runs at this system's sync
+/// point, so its legs and their events land before the entering edge `feed_units`, ordered after
+/// it, raises for the same port.
 pub(crate) fn sweep_on_worldport(
-    world: &mut World,
-    ports: &mut bevy::ecs::system::SystemState<MessageReader<crate::net::WorldportMessage>>,
+    mut ports: MessageReader<crate::net::WorldportMessage>,
+    mut commands: Commands,
 ) {
     // `needs_ack` false is the initial-login map, an arrival; the whole iterator is read so no
     // message carries over.
-    let leaving = ports.get_mut(world).read().filter(|w| w.needs_ack).count() > 0;
-    if leaving {
-        run_leave_world_sweep(world);
+    if ports.read().filter(|w| w.needs_ack).count() > 0 {
+        commands.queue(|world: &mut World| {
+            run_leave_world_sweep(world);
+        });
     }
 }
 

@@ -1,6 +1,7 @@
 //! The leave-world sweep over every leg benilla models, each registered by its window's own
 //! plugin: every window open, one sweep, and the VM hears the closes in `0x490a80`'s call order,
-//! `PLAYER_LEAVING_WORLD` after them and the interaction close after that.
+//! `PLAYER_LEAVING_WORLD` after them, the interaction close after that and the cinematic's drop
+//! last.
 
 use bevy::prelude::*;
 
@@ -25,7 +26,7 @@ const STABLE_MASTER: u64 = 0xF130_0000_0000_000A;
 const BANKER: u64 = 0xF130_0000_0000_000B;
 
 /// Every event a leg can fire, in no particular order.
-const EVENTS: [&str; 17] = [
+const EVENTS: [&str; 18] = [
     "LOOT_CLOSED",
     "ITEM_TEXT_CLOSED",
     "GOSSIP_CLOSED",
@@ -43,6 +44,7 @@ const EVENTS: [&str; 17] = [
     "PLAYER_LEAVING_WORLD",
     "BANKFRAME_CLOSED",
     "PETITION_CLOSED",
+    "CINEMATIC_STOP",
 ];
 
 /// The window plugins, which register the legs, over a world holding what the legs read.
@@ -67,9 +69,11 @@ fn legs_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         crate::ui_auction::UiAuctionPlugin,
         crate::ui_stable::UiStablePlugin,
         crate::ui_bank::UiBankPlugin,
+        crate::cinematic::CinematicPlugin,
     ))
     .insert_resource(NetCommands(tx))
     .init_resource::<crate::net::GuidIndex>()
+    .init_resource::<crate::screen_fade::ScreenFade>()
     .add_message::<crate::target::DeselectGuid>();
     (app, rx)
 }
@@ -118,12 +122,13 @@ fn open_everything(world: &mut World) {
     world
         .resource_mut::<crate::ui_bank::BankOpen>()
         .open(BANKER);
+    world.insert_resource(crate::cinematic::Cinematic::playing_for_test());
 }
 
 /// One sweep closes every window in the reference's order: the legs from `0x490ab2` to
 /// `0x490b2a`, `PLAYER_LEAVING_WORLD` (`0x490b4d`), then the interaction close (`0x490b5f`), whose
-/// trade arm is tested before its bank arm. The mail leg and the duel leg are silent, and the
-/// charter window is no leg's.
+/// trade arm is tested before its bank arm, then the cinematic (`0x490b77`). The mail leg and the
+/// duel leg are silent, and the charter window is no leg's.
 #[test]
 fn the_sweep_closes_every_window_in_the_references_order() {
     let (mut app, rx) = legs_app();
@@ -147,6 +152,7 @@ fn the_sweep_closes_every_window_in_the_references_order() {
             "PLAYER_LEAVING_WORLD",
             "TRADE_CLOSED",
             "BANKFRAME_CLOSED",
+            "CINEMATIC_STOP",
         ]
     );
     let sent: Vec<ClientCommand> = rx.try_iter().collect();
@@ -165,6 +171,7 @@ fn the_sweep_closes_every_window_in_the_references_order() {
     );
 
     let world = app.world();
+    assert!(!world.resource::<crate::cinematic::Cinematic>().is_playing());
     assert_eq!(world.resource::<crate::ui_duel::DuelState>().arbiter, 0);
     assert_eq!(world.resource::<crate::ui_mail::MailOpen>().mailbox, None);
     assert!(!world.resource::<crate::ui_bank::BankOpen>().is_open());
@@ -181,4 +188,31 @@ fn a_second_departure_in_one_world_closes_nothing() {
     assert!(!super::run_leave_world_sweep(app.world_mut()));
     assert_eq!(seen_in(&app), ["PLAYER_LEAVING_WORLD"]);
     assert_eq!(rx.try_iter().count(), 0);
+}
+
+/// The sweep's `PlaySound` scope (`0x490a94` to `0x490b64`) drops a leg handler's sound, and
+/// closes before the cinematic's drop (`0x490b69`), whose handler is heard.
+#[test]
+fn the_sweep_drops_its_legs_sounds_and_not_the_cinematics() {
+    let (mut app, _rx) = legs_app();
+    let vm = spied_vm(&EVENTS);
+    vm.run(
+        "local f = CreateFrame('Frame') f:RegisterEvent('LOOT_CLOSED') \
+         f:RegisterEvent('CINEMATIC_STOP') \
+         f:SetScript('OnEvent', function() PlaySound(event) end)",
+    )
+    .expect("sound frame");
+    app.insert_non_send_resource(vm);
+    open_everything(app.world_mut());
+    sweep_in_place(&mut app);
+    let played = app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .take_sounds();
+    assert_eq!(
+        played,
+        [benilla_ui::script::SoundRequest::KitName(
+            "CINEMATIC_STOP".into()
+        )]
+    );
 }
