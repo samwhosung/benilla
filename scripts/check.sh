@@ -102,6 +102,8 @@ run() {
     local name="$1"; shift
     if ! "$@" >"$log" 2>&1; then
         echo "CHECK FAILED: $name"
+        # The failing test or error first: a test gate's tail is the doc-test noise after it.
+        grep -E 'panicked at|^---- .* ----$|^test .* FAILED$|^error(\[E[0-9]+\])?:' "$log" | head -40
         tail -30 "$log"
         exit 1
     fi

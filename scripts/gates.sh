@@ -98,6 +98,8 @@ run() {
     if ! "$@" >"$log" 2>&1; then
         echo "GATE FAILED: $name ($((SECONDS - t0)) s)"
         note_timing "$name" "$((SECONDS - t0))" "FAILED"
+        # The failing test or error first: a test gate's tail is the doc-test noise after it.
+        grep -E 'panicked at|^---- .* ----$|^test .* FAILED$|^error(\[E[0-9]+\])?:' "$log" | head -40
         tail -30 "$log"
         exit 1
     fi
