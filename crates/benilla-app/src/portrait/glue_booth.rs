@@ -1935,6 +1935,19 @@ pub(super) fn pace_glue_clock(
     } else {
         0.0
     };
+    // A hidden pane's scene and pet hold their poses too: nothing it draws moves, so nothing is
+    // evaluated (the character's root parks with its camera, `gate_booth_cameras`).
+    for root in [scene.root, scene.pet_root] {
+        if preview.hidden {
+            commands
+                .entity(root)
+                .insert(benilla_world::rig_anim::AnimParked);
+        } else {
+            commands
+                .entity(root)
+                .remove::<benilla_world::rig_anim::AnimParked>();
+        }
+    }
     let character = booths.0.get(GLUE_SLOT).map(|b| b.root);
     // Through commands, not a query: the stage's three roots are all it touches, and a query of
     // every player would share its access with each world animation system. Each root carries the
@@ -3103,9 +3116,21 @@ mod tests {
         stage.app.world_mut().resource_mut::<GluePreview>().hidden = true;
         stage.run(5);
         assert_eq!(stage.at(), shown, "hidden, nothing on the stage advances");
+        let parked = |stage: &Stage| {
+            let [scene_root, _, pet] = stage.models;
+            [scene_root, pet].map(|e| {
+                stage
+                    .app
+                    .world()
+                    .get::<benilla_world::rig_anim::AnimParked>(e)
+                    .is_some()
+            })
+        };
+        assert_eq!(parked(&stage), [true, true], "and no pose is evaluated");
 
         stage.app.world_mut().resource_mut::<GluePreview>().hidden = false;
         stage.run(1);
+        assert_eq!(parked(&stage), [false, false]);
         let (t, c) = stage.at();
         for (now, then) in t.iter().zip(shown.0) {
             assert!(
