@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(f.text, "abcd");
     }
 
-    /// Copying from a password field yields the mask, not the secret.
+    /// Copying from a password field yields the empty string, not the secret.
     #[test]
     fn a_password_field_masks_display_and_copies() {
         let mut f = field(0, true);
@@ -191,6 +191,6 @@ mod tests {
         assert_eq!(f.text, "hunter2");
         assert_eq!(f.display(), "*******");
         f.highlight_text(0, -1);
-        assert_eq!(f.selected_text().as_deref(), Some("*******"));
+        assert_eq!(f.selected_text().as_deref(), Some(""));
     }
 }

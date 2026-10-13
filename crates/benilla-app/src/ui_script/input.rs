@@ -355,8 +355,8 @@ pub(crate) fn feed_keys<'a>(
                 keymap::Chord::Edit(action) => {
                     script.editbox_action(action);
                 }
-                // Copy and cut need a selection (`0x77e1d0`), and a password box yields its mask
-                // run, never the real text; paste sanitizes and inserts.
+                // Copy and cut need a selection (`0x77e1d0`), and a password box yields the empty
+                // string, never the real text; paste types the clipboard in.
                 keymap::Chord::Copy => {
                     if let Some(text) = script.editbox_copy() {
                         clipboard.write(wl_display, &text);

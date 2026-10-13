@@ -118,8 +118,8 @@ impl UiScript {
         })
     }
 
-    /// Ctrl/Cmd+C: the focused EditBox's selection for the OS clipboard; a password box yields its
-    /// mask run, never the text, where the client copies the empty string (`0x882748`).
+    /// Ctrl/Cmd+C: the focused EditBox's selection for the OS clipboard; a password box yields the
+    /// empty string, as the client's copy does (`0x77e1f8`, `0x882748`).
     pub fn editbox_copy(&mut self) -> Option<String> {
         super::copy_selection(self.lua())
     }

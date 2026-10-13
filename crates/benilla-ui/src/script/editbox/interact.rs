@@ -77,8 +77,8 @@ pub(in crate::script) fn move_word(lua: &Lua, h: FrameHandle, right: bool, shift
     with_eb(lua, h, |eb| eb.move_by_word(right, shift));
 }
 
-/// Ctrl+C (`0x77e1d0`): the focused box's selection. A password box never yields its text: the
-/// client copies the image's empty string (`0x882748`), benilla the mask run.
+/// Ctrl+C (`0x77e1d0`): the focused box's selection. A password box never yields its text: it
+/// copies the image's empty string (`0x882748`, `0x77e1f8`).
 pub(in crate::script) fn copy_selection(lua: &Lua) -> Option<String> {
     let h = focused(lua)?;
     with_eb(lua, h, |eb| eb.selected_text()).flatten()

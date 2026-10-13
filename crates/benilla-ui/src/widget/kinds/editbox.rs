@@ -668,7 +668,8 @@ impl EditBoxState {
         true
     }
 
-    /// The selection for Ctrl+C (`0x77e1d0`); a password box yields its mask, never the text.
+    /// The selection for Ctrl+C (`0x77e1d0`); a password box yields the empty string, the image's
+    /// `""` at `0x882748` (`0x77e1ef`–`0x77e1fd`), never its text.
     pub fn selected_text(&self) -> Option<String> {
         if self.sel_start == self.sel_end {
             return None;
@@ -678,7 +679,7 @@ impl EditBoxState {
             self.sel_start.max(self.sel_end),
         );
         Some(if self.password {
-            "*".repeat(self.text[a..b].chars().count())
+            String::new()
         } else {
             self.text[a..b].to_string()
         })

@@ -1157,8 +1157,8 @@ fn ctrl_arrows_jump_words() {
     );
 }
 
-/// Copy needs a selection, cut copies then deletes, and a password box copies its mask run, never
-/// the text (the client copies the empty string, `0x882748`).
+/// Copy needs a selection, cut copies then deletes, and a password box copies the empty string,
+/// never the text (`0x77e1f8`, `0x882748`); its cut still deletes (`0x77b399` → `0x77cd70`).
 #[test]
 fn copy_cut_and_the_password_placeholder() {
     let mut s = script();
@@ -1177,9 +1177,11 @@ fn copy_cut_and_the_password_placeholder() {
     s.run("P:HighlightText(0, -1)").unwrap();
     assert_eq!(
         s.editbox_copy().as_deref(),
-        Some("**"),
-        "password copy must never yield the real text"
+        Some(""),
+        "password copy yields the empty string"
     );
+    assert_eq!(s.editbox_cut().as_deref(), Some(""));
+    assert_eq!(s.eval::<String>("return P:GetText()").unwrap(), "");
 }
 
 /// Word and edge deletes, the host's OS-native chords with no 1.12 counterpart: a word delete
