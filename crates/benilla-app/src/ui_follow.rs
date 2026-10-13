@@ -13,8 +13,9 @@ use benilla_ui::script::{FollowRequest as ScriptFollowRequest, ScriptValue, UiSc
 use crate::player::{FollowRequest, FollowState};
 use crate::ui_script::{UiFeed, UiInput};
 
-/// The followee guid each VM was last told of, so the events fire on transitions only; a VM
-/// replaced by `/reload` mid-follow starts at `None` and is told `BEGIN` again.
+/// The followee guid each VM was last told of, so the events fire on transitions only. A
+/// `/reload` ends a follow before the VM goes ([`crate::player::cancel_move_action_on_ui_shutdown`]),
+/// so the next VM starts with none.
 #[derive(Resource, Default)]
 pub(crate) struct FollowFeed {
     vm: crate::ui_script::VmMemo<FollowFeedMemo>,

@@ -1465,10 +1465,30 @@ pub(crate) fn deselect_on_ui_shutdown(
     mut selection: ResMut<Selection>,
     mut seam: crate::creature_anim::AttackSeam,
     engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
+    me: Query<&crate::net::ObjectStore, With<SelfPlayer>>,
 ) -> bool {
+    // A charmed player's `SetSelection` returns at once (`0x493589`-`0x49359c`).
+    if me
+        .iter()
+        .next()
+        .is_some_and(|s| s.0.unit_charmed_by().is_some())
+    {
+        return false;
+    }
     let had = selection.target.is_some();
     deselect(&mut selection, &mut seam, !engaged.is_empty());
     had
+}
+
+/// The UI shutdown's `SetSelection(0, 0)` after the world's teardown, with no object manager:
+/// the selection is stamped as the last target (`0x493622`) and cleared (`0x4939d3`), and
+/// `0x4939df` returns before the swing stop, the send and the event.
+pub(crate) fn clear_selection_on_world_teardown(mut selection: ResMut<Selection>) {
+    if selection.guid.is_some() {
+        selection.last = selection.guid;
+    }
+    selection.target = None;
+    selection.guid = None;
 }
 
 /// A deselect that applies only if the selection is this guid (`0x493910(guid, 1)`), raised by

@@ -74,6 +74,8 @@ fn legs_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
     .insert_resource(NetCommands(tx))
     .init_resource::<crate::net::GuidIndex>()
     .init_resource::<crate::screen_fade::ScreenFade>()
+    .init_resource::<crate::items::Items>()
+    .add_message::<crate::sound::LootPickupSound>()
     .add_message::<crate::target::DeselectGuid>();
     (app, rx)
 }

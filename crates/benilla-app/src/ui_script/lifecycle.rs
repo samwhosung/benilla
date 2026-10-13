@@ -565,10 +565,18 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     world.insert_non_send_resource(script);
     world.insert_resource(AddOnIdentity(identity));
     // Arm the world latch, the reference's `0x490168 call 0x4908c0`: a reload creates no entity
-    // to re-arm it, so without this a second `/reload` would not fire `PLAYER_LEAVING_WORLD`. The
-    // reference skips this leg on a fresh login (`0x490166 je`, the GUID still 0) and arms from
-    // the player's create instead; both reach the same armed byte.
-    if let Some(mut armed) = world.get_resource_mut::<super::LeavingWorldArmed>() {
+    // to re-arm it, so without this a second `/reload` would not fire `PLAYER_LEAVING_WORLD`. Only
+    // with our own player present (`0x490166 je`, the GUID still 0 on a fresh login, which arms
+    // from the player's create instead), so a load the server then refuses arms nothing.
+    let seated = world
+        .query_filtered::<(), With<crate::net::SelfPlayer>>()
+        .iter(world)
+        .next()
+        .is_some();
+    if let Some(mut armed) = world
+        .get_resource_mut::<super::LeavingWorldArmed>()
+        .filter(|_| seated)
+    {
         armed.arm();
     }
 }
@@ -667,36 +675,111 @@ fn unsilence_ui_shutdown(world: &World) {
     }
 }
 
-/// `0x490bd0`'s head, ahead of its active-player guard, so on every root and a `/reload`: the
-/// selection dropped (`0x490bdf` → `SetSelection(0, 0)` → `0x493910(1)`, which closes a loot
-/// window on the target and tells the VM with `PLAYER_TARGET_CHANGED`, `0x493a73`), then
-/// `CMSG_CANCEL_TRADE` (`0x490be4` → `0x5d4310`), a send the sweep's trade leg repeats.
-fn run_ui_shutdown_head(world: &mut World) {
-    let looting = world
-        .get_resource::<crate::ui_loot::LootState>()
-        .and_then(crate::ui_loot::LootState::source);
-    // A harness without the target stack has no selection to drop.
-    let deselected = world
-        .run_system_cached(crate::target::deselect_on_ui_shutdown)
-        .unwrap_or(false);
-    // The teardown's own loot close, on a window looting the target (`0x493959`-`0x493974`).
-    let loot_closed = looting.is_some()
-        && world
-            .get_resource::<crate::ui_loot::LootState>()
-            .and_then(crate::ui_loot::LootState::source)
-            .is_none();
-    if loot_closed {
-        let _ = world.run_system_cached(crate::ui_loot::tell_loot_closed);
-    }
-    if deselected {
-        if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-            script.set_unit("target", None);
-            script.set_unit("targettarget", None);
-            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+/// Which root runs the UI shutdown `0x490bd0`, which decides the order of its front.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ShutdownRoot {
+    /// `/reload` (`0x495664` → `0x490bd0`): the world and its objects stay.
+    Reload,
+    /// The world's teardown `0x401ee0`, behind a logout, a disconnect, a refused login and an
+    /// exit in the world: it destroys the objects first (`0x402011` → `0x467700`), the local
+    /// player's destructor sweeping (`0x5dd543`), and nulls the object manager (`0x46771e`)
+    /// before it calls the shutdown (`0x402039` → `0x491180` → `0x490bd0`). At the character
+    /// screen it returns at once (`0x401ef3`, `[0x882734]` clear), so a quit there runs nothing.
+    WorldTeardown,
+}
+
+/// The shutdown up to `PLAYER_LOGOUT`, in `root`'s order; `true` when it opened the suppression
+/// scope (`0x490bd1`), which the caller closes after the tail (`0x490cd9`).
+///
+/// - `/reload`: the scope, the head with its sends and events, then past the active-player guard
+///   (`0x490bee`-`0x490bf5`) the found arm's move-action cancel (`0x490c1b` → `0x60fb60(0, 1)`)
+///   and the sweep (`0x490c20`).
+/// - The world's teardown: the sweep from the local player's destructor, then the scope and a
+///   silent head: with no object manager `SetSelection(0, 0)` only clears the selection
+///   (`0x493549` → `0x467d00`, `0x4939d3`, returning at `0x4939df` before the send and the
+///   event), and `CMSG_CANCEL_TRADE` still goes. The guard then finds no player.
+///
+/// The sweep runs only with our own player present: the guard's `0x468550`, and on the teardown
+/// the destructor's own gate (`0x5dd71c`), so a refused login sweeps nothing.
+fn run_shutdown_front(world: &mut World, root: ShutdownRoot) -> bool {
+    let seated = world
+        .query_filtered::<(), With<crate::net::SelfPlayer>>()
+        .iter(world)
+        .next()
+        .is_some();
+    match root {
+        ShutdownRoot::Reload => {
+            let silenced = silence_ui_shutdown(world);
+            run_ui_shutdown_head(world, true);
+            if seated {
+                cancel_move_action(world);
+                super::run_leave_world_sweep(world);
+            }
+            silenced
         }
+        ShutdownRoot::WorldTeardown => {
+            if seated {
+                super::run_leave_world_sweep(world);
+            }
+            let silenced = silence_ui_shutdown(world);
+            run_ui_shutdown_head(world, false);
+            silenced
+        }
+    }
+}
+
+/// `0x490bd0`'s head, ahead of its active-player guard: `SetSelection(0, 0)` (`0x490bdf`), then
+/// `CMSG_CANCEL_TRADE` (`0x490be4` → `0x5d4310`), a send the sweep's trade leg repeats.
+///
+/// `loud`, with the object manager up (a `/reload`): the deselect's teardown (`0x493910(1)`)
+/// closes a loot window on the target, sends `CMSG_SET_SELECTION` 0 and tells the VM with
+/// `PLAYER_TARGET_CHANGED` (`0x493a2a`, `0x493a73`), unless the player is charmed, which makes
+/// `SetSelection` a no-op (`0x493589`-`0x49359c`). Not `loud`, after the world's teardown: the
+/// selection is only cleared ([`ShutdownRoot::WorldTeardown`]).
+fn run_ui_shutdown_head(world: &mut World, loud: bool) {
+    if loud {
+        let looting = world
+            .get_resource::<crate::ui_loot::LootState>()
+            .and_then(crate::ui_loot::LootState::source);
+        // A harness without the target stack has no selection to drop.
+        let deselected = world
+            .run_system_cached(crate::target::deselect_on_ui_shutdown)
+            .unwrap_or(false);
+        // The teardown's own loot close, on a window looting the target (`0x493959`-`0x493974`).
+        let loot_closed = looting.is_some()
+            && world
+                .get_resource::<crate::ui_loot::LootState>()
+                .and_then(crate::ui_loot::LootState::source)
+                .is_none();
+        if loot_closed {
+            let _ = world.run_system_cached(crate::ui_loot::tell_loot_closed);
+        }
+        if deselected {
+            if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
+                script.set_unit("target", None);
+                script.set_unit("targettarget", None);
+                script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+            }
+        }
+    } else {
+        let _ = world.run_system_cached(crate::target::clear_selection_on_world_teardown);
     }
     if let Some(net) = world.get_resource::<crate::net::NetCommands>() {
         let _ = net.0.send(crate::net::ClientCommand::CancelTrade);
+    }
+}
+
+/// The `/reload` guard's found arm (`0x490c0d`-`0x490c1b` → `0x60fb60(0, 1)`): a follow or a
+/// Click to Move walk in flight is cancelled and the mover stopped, a follow telling the VM
+/// `AUTOFOLLOW_END` (`0x60fb84`), so the new VM starts with none.
+fn cancel_move_action(world: &mut World) {
+    let followed = world
+        .run_system_cached(crate::player::cancel_move_action_on_ui_shutdown)
+        .unwrap_or(false);
+    if followed {
+        if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
+            script.fire_event("AUTOFOLLOW_END", vec![]);
+        }
     }
 }
 
@@ -727,7 +810,7 @@ pub(crate) fn shutdown_ui_state(script: &mut UiScript, identity: Option<&(String
 /// character screen runs on a state of its own. Ours is a fresh boot VM, or the stock glue's
 /// ([`install_glue_side_vm`]).
 pub(crate) fn end_ui_session(world: &mut World) {
-    close_ui_session(world);
+    close_ui_session(world, ShutdownRoot::WorldTeardown);
     // The session's end drops what the fold just carried, as the disconnect handler, a frame
     // earlier, dropped the rest: only a `/reload` seats it again.
     if let Some(mut log) = world.get_resource_mut::<crate::ui_quest_log::QuestLog>() {
@@ -750,13 +833,11 @@ pub(crate) fn end_ui_session(world: &mut World) {
 }
 
 /// [`end_ui_session`] up to the new VM: the shutdown tail, the folds and the host values reset.
-fn close_ui_session(world: &mut World) {
-    // The head and the sweep run before the unpark, so a VM still parked (the load never ran)
-    // hears none of it; the sweep's latch is spent at the root, so of this edge and the
-    // worldport's, the first to a departure owns it.
-    let silenced = silence_ui_shutdown(world);
-    run_ui_shutdown_head(world);
-    super::run_leave_world_sweep(world);
+fn close_ui_session(world: &mut World, root: ShutdownRoot) {
+    // The front runs before the unpark, so a VM still parked (the load never ran) hears none of
+    // it; the sweep's latch is spent at the root, so of this edge and the worldport's, the first
+    // to a departure owns it.
+    let silenced = run_shutdown_front(world, root);
     // A VM still parked goes back into the world first.
     unpark_boot_vm(world);
     // An entry load still armed means no in-game UI was built, and the tail would overwrite the
@@ -836,7 +917,7 @@ pub(crate) fn run_pending_reload(world: &mut World) {
     info!("ui_script: ReloadUI — ending the UI session and building a new one");
     // A boot VM, never the glue's: the reload builds no glue (`0x495664` then `0x495669`), and the
     // load replaces this VM at once.
-    close_ui_session(world);
+    close_ui_session(world, ShutdownRoot::Reload);
     install_boot_vm(world);
     load_ingame_ui_seated(world, LoadSeat::Live);
     // `UI_Init` ends by re-entering the world-enter cascade (`0x490168`), its sends included, but
@@ -852,9 +933,10 @@ pub(crate) fn run_pending_reload(world: &mut World) {
     }
 }
 
-/// `AppExit`, the quit roots, read as a message because a quit from in-world never leaves
-/// `InWorld`. A quit from the character screen, or on a worldport's loading screen, finds the
-/// latch spent, so `PLAYER_LEAVING_WORLD` does not fire.
+/// `AppExit`, the quit root, read as a message because a quit from in-world never leaves
+/// `InWorld`: the world's teardown ([`ShutdownRoot::WorldTeardown`]). A quit on a worldport's
+/// loading screen finds the latch spent, so the sweep does not run; a quit from the character
+/// screen runs nothing at all (`0x401ef3`).
 pub(crate) fn shutdown_on_exit(
     world: &mut World,
     exits: &mut bevy::ecs::system::SystemState<MessageReader<AppExit>>,
@@ -862,13 +944,14 @@ pub(crate) fn shutdown_on_exit(
     if exits.get_mut(world).read().next().is_none() {
         return;
     }
+    let in_world = world
+        .get_resource::<State<crate::char_select::ClientState>>()
+        .is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     // Same guard as [`end_ui_session`]: a quit inside the entry-load window has no UI to save.
-    if world.contains_resource::<PendingEntryUiLoad>() {
+    if !in_world || world.contains_resource::<PendingEntryUiLoad>() {
         return;
     }
-    let silenced = silence_ui_shutdown(world);
-    run_ui_shutdown_head(world);
-    super::run_leave_world_sweep(world);
+    let silenced = run_shutdown_front(world, ShutdownRoot::WorldTeardown);
     let identity = world
         .get_resource::<AddOnIdentity>()
         .and_then(|id| id.0.clone());
@@ -1306,23 +1389,42 @@ mod tests {
         );
     }
 
-    /// `0x490bd0`'s head on a `/reload` while looting the target: the deselect's teardown closes
-    /// the loot on it (`0x493959`-`0x493974`), releasing it and telling the dying VM, then sends
-    /// `CMSG_SET_SELECTION` 0 and fires `PLAYER_TARGET_CHANGED` (`0x493a2a`, `0x493a73`); then
-    /// `CMSG_CANCEL_TRADE` (`0x490be4`).
-    #[test]
-    fn the_shutdown_head_drops_the_target_and_cancels_the_trade() {
-        use crate::net::{ClientCommand, NetCommands};
-        const CORPSE: u64 = 0xF130_0000_0000_0042;
+    const CORPSE: u64 = 0xF130_0000_0000_0042;
+    const LEADER: u64 = 0x0000_0000_0000_0009;
+    const FRONT_EVENTS: [&str; 4] = [
+        "LOOT_CLOSED",
+        "PLAYER_TARGET_CHANGED",
+        "AUTOFOLLOW_END",
+        "PLAYER_LEAVING_WORLD",
+    ];
+
+    /// A world in play for the shutdown's front: the corpse targeted and looted, a follow on,
+    /// the latch armed, our own player present when `seated` (charmed when `charmed`), and the
+    /// sweep with only its own event.
+    fn front_world(
+        seated: bool,
+        charmed: bool,
+    ) -> (
+        World,
+        crossbeam_channel::Receiver<crate::net::ClientCommand>,
+    ) {
+        use benilla_protocol::messages::ObjectFields;
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut world = World::new();
-        world.insert_resource(NetCommands(tx));
+        world.insert_resource(crate::net::NetCommands(tx));
         world.init_resource::<crate::target::Selection>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<crate::ui_loot::LootLatch>();
         world.init_resource::<crate::net::GuidIndex>();
+        world.init_resource::<crate::player::Approach>();
+        world.init_resource::<crate::player::FollowState>();
+        world.resource_mut::<crate::player::FollowState>().guid = Some(LEADER);
+        super::super::sweep::install_world_leave_sweep(&mut world, |_| {});
+        world
+            .resource_mut::<super::super::LeavingWorldArmed>()
+            .arm();
         let mut loot = crate::ui_loot::LootState::default();
         loot.open(CORPSE, 1, 0, Vec::new());
         world.insert_resource(loot);
@@ -1332,16 +1434,41 @@ mod tests {
             selection.target = Some(body);
             selection.guid = Some(CORPSE);
         }
-        world.insert_non_send_resource(crate::ui_script::sweep_test::spied_vm(&[
-            "LOOT_CLOSED",
-            "PLAYER_TARGET_CHANGED",
-        ]));
+        if seated {
+            // `UNIT_FIELD_CHARMEDBY` (10, 11).
+            let fields = if charmed {
+                ObjectFields::from_pairs(&[(10, 0x77), (11, 0)])
+            } else {
+                ObjectFields::from_pairs(&[])
+            };
+            world.spawn((crate::net::SelfPlayer, crate::net::ObjectStore(fields)));
+        }
+        world.insert_non_send_resource(crate::ui_script::sweep_test::spied_vm(&FRONT_EVENTS));
+        (world, rx)
+    }
 
-        run_ui_shutdown_head(&mut world);
+    fn front_seen(world: &World) -> Vec<String> {
+        crate::ui_script::sweep_test::seen(world.non_send_resource::<UiScript>())
+    }
 
+    /// `/reload` (`0x495664` → `0x490bd0`): the head with the object manager up drops the target
+    /// loudly, its teardown closing the loot on it (`0x493959`-`0x493974`) and sending
+    /// `CMSG_SET_SELECTION` 0 and `PLAYER_TARGET_CHANGED` (`0x493a2a`, `0x493a73`), then
+    /// `CMSG_CANCEL_TRADE` (`0x490be4`); past the guard the found arm ends the follow
+    /// (`0x60fb84`), then the sweep (`0x490c20`).
+    #[test]
+    fn a_reload_drops_the_target_loudly_ends_the_follow_then_sweeps() {
+        use crate::net::ClientCommand;
+        let (mut world, rx) = front_world(true, false);
+        assert!(run_shutdown_front(&mut world, ShutdownRoot::Reload));
         assert_eq!(
-            crate::ui_script::sweep_test::seen(world.non_send_resource::<UiScript>()),
-            ["LOOT_CLOSED", "PLAYER_TARGET_CHANGED"]
+            front_seen(&world),
+            [
+                "LOOT_CLOSED",
+                "PLAYER_TARGET_CHANGED",
+                "AUTOFOLLOW_END",
+                "PLAYER_LEAVING_WORLD"
+            ]
         );
         let sent: Vec<ClientCommand> = rx.try_iter().collect();
         assert!(
@@ -1356,6 +1483,86 @@ mod tests {
             "{sent:?}"
         );
         assert_eq!(world.resource::<crate::target::Selection>().guid, None);
-        assert_eq!(world.resource::<crate::ui_loot::LootState>().source(), None);
+        assert_eq!(world.resource::<crate::player::FollowState>().guid, None);
+    }
+
+    /// A charmed player's `SetSelection` is a no-op (`0x493589`-`0x49359c`): a `/reload` keeps
+    /// the target and sends no `CMSG_SET_SELECTION`, and the trade cancel still goes.
+    #[test]
+    fn a_charmed_reload_keeps_the_target() {
+        use crate::net::ClientCommand;
+        let (mut world, rx) = front_world(true, true);
+        run_shutdown_front(&mut world, ShutdownRoot::Reload);
+        assert!(!front_seen(&world).contains(&"PLAYER_TARGET_CHANGED".to_string()));
+        assert!(rx
+            .try_iter()
+            .all(|c| !matches!(c, ClientCommand::SetSelection { .. })));
+        assert_eq!(
+            world.resource::<crate::target::Selection>().guid,
+            Some(CORPSE)
+        );
+    }
+
+    /// A logout, a disconnect or an exit in the world (`0x401ee0`): the destructor's sweep first
+    /// (`0x402011` → `0x5dd543`), then the head with no object manager, which clears the
+    /// selection silently (`0x4939df`) and still cancels the trade; no follow cancel.
+    #[test]
+    fn a_world_teardown_sweeps_first_then_clears_the_target_silently() {
+        use crate::net::ClientCommand;
+        let (mut world, rx) = front_world(true, false);
+        world
+            .resource_mut::<crate::ui_loot::LootState>()
+            .clear_session();
+        assert!(run_shutdown_front(&mut world, ShutdownRoot::WorldTeardown));
+        assert_eq!(front_seen(&world), ["PLAYER_LEAVING_WORLD"]);
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            matches!(sent.as_slice(), [ClientCommand::CancelTrade]),
+            "{sent:?}"
+        );
+        let selection = world.resource::<crate::target::Selection>();
+        assert_eq!((selection.guid, selection.last), (None, Some(CORPSE)));
+    }
+
+    /// A refused login has no player of ours to destroy, so no sweep; the head still cancels.
+    #[test]
+    fn a_refused_login_sweeps_nothing_and_cancels_the_trade() {
+        use crate::net::ClientCommand;
+        let (mut world, rx) = front_world(false, false);
+        run_shutdown_front(&mut world, ShutdownRoot::WorldTeardown);
+        assert!(front_seen(&world).is_empty());
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            matches!(sent.as_slice(), [ClientCommand::CancelTrade]),
+            "{sent:?}"
+        );
+    }
+
+    /// A quit from the character screen runs nothing (`0x401ef3`): no head, no cancel, no
+    /// `PLAYER_LOGOUT`.
+    #[test]
+    fn a_quit_at_the_character_screen_runs_nothing() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut world, rx) = front_world(false, false);
+        world.insert_resource(State::new(crate::char_select::ClientState::CharSelect));
+        world.init_resource::<AddOnIdentity>();
+        world.init_resource::<Messages<AppExit>>();
+        world
+            .non_send_resource::<UiScript>()
+            .run(
+                "SEEN_LOGOUT = 0 local f = CreateFrame('Frame') f:RegisterEvent('PLAYER_LOGOUT') \
+                 f:SetScript('OnEvent', function() SEEN_LOGOUT = SEEN_LOGOUT + 1 end)",
+            )
+            .unwrap();
+        world.write_message(AppExit::Success);
+        world.run_system_once(shutdown_on_exit).unwrap();
+        assert_eq!(rx.try_iter().count(), 0);
+        assert_eq!(
+            world
+                .non_send_resource::<UiScript>()
+                .eval::<i64>("return SEEN_LOGOUT")
+                .unwrap(),
+            0
+        );
     }
 }

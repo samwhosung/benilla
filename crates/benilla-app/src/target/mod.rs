@@ -82,7 +82,7 @@ pub(crate) use ring::{
 pub(crate) use ring::{ring_variant, PlayerPath, SelectorInput};
 
 pub use click::Interact;
-pub(crate) use click::{deselect_on_ui_shutdown, DeselectGuid};
+pub(crate) use click::{clear_selection_on_world_teardown, deselect_on_ui_shutdown, DeselectGuid};
 
 /// Our target, set the instant we click, as the 1.12 client does without waiting for the server,
 /// and cleared on deselect or when it streams out. `CMSG_SET_SELECTION` carries the guid, which the

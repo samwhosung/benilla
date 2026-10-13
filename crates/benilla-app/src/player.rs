@@ -80,8 +80,8 @@ use camera_zoom::{apply_zoom_scroll, CAM_DIST_DEFAULT};
 pub(crate) use follow::{FollowRequest, FollowState};
 // Click to Move: `crate::target`'s dispatchers start it and run the verb it owes on arrival.
 pub(crate) use approach::{
-    can_auto_interact, Approach, ApproachVerb, AutoMove, Refused, Subject, RANGE_STOP_FRACTION,
-    TALK_STOP,
+    can_auto_interact, cancel_move_action_on_ui_shutdown, Approach, ApproachVerb, AutoMove,
+    Refused, Subject, RANGE_STOP_FRACTION, TALK_STOP,
 };
 use state::{
     MoveSpeed, PlayerRide, AIR_NUDGE_SPEED, FALL_FAR_DROP, FALL_FAR_TIME, FOOT_CONE_HEIGHT,

@@ -163,6 +163,17 @@ impl Approach {
 }
 
 /// `CanAutoInteract` (`0x60f900`): alive, driving our own body, and the option on.
+/// The canceller `0x60fb60(0, 1)` as the UI shutdown's `/reload` guard calls it (`0x490c1b`): a
+/// follow or a walk in flight ends and the mover stops (`0x60fc05`-`0x60fc18`, the mode reset
+/// `0x60fc30`). `true` when it ended a follow, mode 3, which owes `AUTOFOLLOW_END` (`0x60fb84`).
+pub(crate) fn cancel_move_action_on_ui_shutdown(
+    mut follow: ResMut<FollowState>,
+    mut approach: ResMut<Approach>,
+) -> bool {
+    approach.stop();
+    follow.stop()
+}
+
 pub(crate) fn can_auto_interact(enabled: bool, me: Option<&ObjectStore>, player: &Player) -> bool {
     enabled
         && me.is_some_and(|s| s.0.unit_health().unwrap_or(0) > 0)

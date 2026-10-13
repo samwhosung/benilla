@@ -254,6 +254,12 @@ fn the_login_arms_the_world_latch_and_the_logout_spends_it() {
         "the character screen is not a world — nothing has armed the latch yet"
     );
 
+    // A load with no player of ours (a login the server then refuses) arms nothing (`0x490166`).
+    log_in_as(&mut world, "Onehunter", 1);
+    assert!(!world.resource::<super::LeavingWorldArmed>().is_armed());
+    super::end_ui_session(&mut world);
+
+    world.spawn(crate::net::SelfPlayer);
     log_in_as(&mut world, "Onehunter", 1);
     assert!(
         world.resource::<super::LeavingWorldArmed>().is_armed(),
@@ -314,12 +320,12 @@ fn the_realm_cvars_are_read_only_to_lua_only_in_the_world() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// The reference's one guard in the shutdown tail: `0x490bd0` tests the active player's GUID pair
-/// (`0x490bee call 0x468550`, `0x490bf3 or eax,edx`) and with none jumps (`0x490bf5 je 0x490c25`)
-/// past only the sweep, `0x490c20 call 0x490a80`, whose `0x490b4d` fires `PLAYER_LEAVING_WORLD`;
-/// in-world roots fire both. Ours: no world latch armed at the character screen.
+/// The shutdown tail's one guard: `0x490bd0` tests the active player's GUID pair (`0x490bee call
+/// 0x468550`, `0x490bf3 or eax,edx`) and with none jumps (`0x490bf5 je 0x490c25`) past only the
+/// sweep, `0x490c20 call 0x490a80`, whose `0x490b4d` fires `PLAYER_LEAVING_WORLD`, while
+/// `PLAYER_LOGOUT` fires either way. Ours: a root with no world latch armed.
 #[test]
-fn a_quit_from_the_character_screen_fires_logout_without_leaving_world() {
+fn a_shutdown_with_no_world_fires_logout_without_leaving_world() {
     use crate::ui_script::SweepApp;
     let _l = ENV_LOCK
         .lock()
@@ -369,7 +375,7 @@ fn a_quit_from_the_character_screen_fires_logout_without_leaving_world() {
     assert_eq!(
         seen(&app, "SeenLeaving"),
         0,
-        "the glue-screen quit fired PLAYER_LEAVING_WORLD — the reference's 0x490bf5 skips it"
+        "a shutdown with no world fired PLAYER_LEAVING_WORLD — the reference's 0x490bf5 skips it"
     );
     assert_eq!(
         seen(&app, "SeenLogout"),
@@ -456,6 +462,10 @@ fn sweep_lock_legs(world: &mut World) {
     world.init_resource::<crate::ui_mail::MailOpen>();
     world.init_resource::<crate::ui_auction::AuctionOpen>();
     world.init_resource::<crate::ui_merchant::MerchantOpen>();
+    world.init_resource::<crate::items::Items>();
+    world.init_resource::<Messages<crate::sound::LootPickupSound>>();
+    // Our own player: the reload's guard (`0x490bee`) passes only with one.
+    world.spawn(crate::net::SelfPlayer);
 }
 
 /// Arm the world latch as our own create does, so the next reload sweeps.
