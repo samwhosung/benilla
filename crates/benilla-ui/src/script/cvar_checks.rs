@@ -161,8 +161,8 @@ pub fn check_camera_rate(value: &str, _applied: &str) -> CvarVerdict {
 /// floats, ±89 degrees.
 pub fn check_camera_pitch(value: &str, _applied: &str) -> CvarVerdict {
     const DEG_PER_RAD: f32 = 57.295_78; // [0x803a78]
-    let max = (f64::from(1.553_343_1f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089d8]
-    let min = (f64::from(-1.553_343_1f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089dc]
+    let max = (f64::from(1.553_343_f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089d8]
+    let min = (f64::from(-1.553_343_f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089dc]
     camera_range(value, min, max)
 }
 
