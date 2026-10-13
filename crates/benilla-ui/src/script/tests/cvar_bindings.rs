@@ -95,6 +95,25 @@ fn get_cvar_raises_the_reference_usage_without_a_name() {
     assert_eq!(s.eval::<String>("return GetCVar(5)").unwrap(), "a");
 }
 
+/// `GetCVarDefault` (`0x488cf0`) tests `lua_isstring(1)` too, and raises its own usage text,
+/// which names `SetCVarDefault` (`0x84238c`).
+#[test]
+fn get_cvar_default_raises_the_reference_usage_without_a_name() {
+    let s = script_with(&[("5", "a")]);
+    for chunk in [
+        "GetCVarDefault()",
+        "GetCVarDefault(nil)",
+        "GetCVarDefault({})",
+    ] {
+        assert_eq!(
+            crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
+            "Usage: SetCVarDefault(\"cvar\")",
+            "{chunk}"
+        );
+    }
+    assert_eq!(s.eval::<String>("return GetCVarDefault(5)").unwrap(), "a");
+}
+
 /// Flag bit2 (`0x488c67`-`0x488c78`): the in-game session flags three rows (`0x48f566`), and
 /// only the Lua binding tests it; before the flag the same write lands.
 #[test]

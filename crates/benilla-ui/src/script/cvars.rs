@@ -412,6 +412,9 @@ const NO_STRING_FORM: &str = "0";
 /// `0x842330`, verbatim.
 const USAGE_GET_CVAR: &str = "Usage: GetCVar(\"cvar\")";
 
+/// `0x84238c`, verbatim: the reference's `GetCVarDefault` names itself `SetCVarDefault`.
+const USAGE_GET_CVAR_DEFAULT: &str = "Usage: SetCVarDefault(\"cvar\")";
+
 /// `0x84235c`, verbatim, the unbalanced parenthesis included.
 const USAGE_SET_CVAR: &str = "Usage: SetCVar(\"cvar\", value [, \"scriptCvar\")";
 
@@ -496,9 +499,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
         })?,
     )?;
+    // `GetCVarDefault(name)` (`0x488cf0`).
     lua.globals().set(
         "GetCVarDefault",
-        lua.create_function(|lua, name: String| {
+        lua.create_function(|lua, args: mlua::MultiValue| {
+            // `lua_isstring(1)` (`0x488cf8`): a string or a number names it.
+            let Some(name) = cvar_arg(args.front()) else {
+                return Err(mlua::Error::runtime(USAGE_GET_CVAR_DEFAULT));
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             match model.cvars.get(&name.to_ascii_lowercase()) {
                 Some(slot) => Ok(Value::String(lua.create_string(&slot.default)?)),
