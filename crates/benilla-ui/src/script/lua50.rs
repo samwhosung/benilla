@@ -626,12 +626,9 @@ mod tests {
         }
         // Two's complement, signed out: `bnot(0)` is -1, not 4294967295.
         assert_eq!(s.eval::<i64>("return bit.bnot(0)").unwrap(), -1);
-        assert_eq!(
-            s.eval::<i64>("return bit.band(0x1234, 0xFF)").unwrap(),
-            0x34
-        );
-        assert_eq!(s.eval::<i64>("return bit.bor(0xF0, 0x0F)").unwrap(), 0xFF);
-        assert_eq!(s.eval::<i64>("return bit.bxor(0xFF, 0x0F)").unwrap(), 0xF0);
+        assert_eq!(s.eval::<i64>("return bit.band(4660, 255)").unwrap(), 0x34);
+        assert_eq!(s.eval::<i64>("return bit.bor(240, 15)").unwrap(), 0xFF);
+        assert_eq!(s.eval::<i64>("return bit.bxor(255, 15)").unwrap(), 0xF0);
         assert_eq!(s.eval::<i64>("return bit.lshift(1, 4)").unwrap(), 16);
         // `rshift` is logical, `arshift` propagates the sign.
         assert_eq!(s.eval::<i64>("return bit.rshift(-1, 28)").unwrap(), 15);
