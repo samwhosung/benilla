@@ -109,7 +109,7 @@ pub(crate) fn outlined_text<W: Bundle, T: Bundle>(
         node,
         wrapper_extra,
         text_extra,
-        &markup_spans(spec.text, spec.color, spec.wrap),
+        &markup_spans(spec.text, spec.color),
         spec.size,
         spec.wrap,
         Justify::Left,
@@ -134,7 +134,7 @@ pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
         node,
         wrapper_extra,
         text_extra,
-        &markup_spans(spec.text, spec.color, spec.wrap),
+        &markup_spans(spec.text, spec.color),
         spec.size,
         spec.wrap,
         Justify::Center,
@@ -147,9 +147,9 @@ pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
 /// Every `CSimpleFontString` decodes it unconditionally (`0x5c2810`), so every glue string does.
 ///
 /// An escape overrides `base` until `|r`, its alpha discarded (`0x5c2ab2`); a link keeps only its
-/// text; `||` draws one `|`. A line break is real when `wrap` is set and a space otherwise, `wrap`
-/// standing in for the multi-line flag the reference tests. An empty string yields one empty span.
-pub(crate) fn markup_spans(text: &str, base: Color, wrap: bool) -> Vec<(String, Color)> {
+/// text; `||` draws one `|`. A line break (`\n`, `\r`, `|n`) breaks the line whatever the string's
+/// wrap flag, as `0x5c2810` classes it for every string. An empty string yields one empty span.
+pub(crate) fn markup_spans(text: &str, base: Color) -> Vec<(String, Color)> {
     let mut spans: Vec<(String, Color)> = Vec::new();
     let mut cur = String::new();
     let mut colour = base;
@@ -165,7 +165,7 @@ pub(crate) fn markup_spans(text: &str, base: Color, wrap: bool) -> Vec<(String, 
                 None
             }
             TokenKind::LineBreak => {
-                cur.push(if wrap { '\n' } else { ' ' });
+                cur.push('\n');
                 None
             }
             TokenKind::LinkOpen { .. } | TokenKind::LinkClose => None,
@@ -818,17 +818,17 @@ mod tests {
         let blue = Color::srgb(0.0, 0x55 as f32 / 255.0, 1.0);
 
         assert_eq!(
-            markup_spans("|cff00ff00MapCoords 0.32", base, false),
+            markup_spans("|cff00ff00MapCoords 0.32", base),
             vec![("MapCoords 0.32".to_string(), green)],
             "the whole-title escape colours everything and prints nothing"
         );
         assert_eq!(
-            markup_spans("|cff0055FFDeadly Boss Mod API|r", base, true),
+            markup_spans("|cff0055FFDeadly Boss Mod API|r", base),
             vec![("Deadly Boss Mod API".to_string(), blue)],
-            "the tooltip's title wraps, and wrapping does not exempt it from the decode"
+            "a reset after the last character leaves no empty span"
         );
         assert_eq!(
-            markup_spans("A |cff00ff00B|r C", base, false),
+            markup_spans("A |cff00ff00B|r C", base),
             vec![
                 ("A ".to_string(), base),
                 ("B".to_string(), green),
@@ -837,18 +837,18 @@ mod tests {
             "|r restores the string's base colour"
         );
         assert_eq!(
-            markup_spans("pipe || pipe", base, false),
+            markup_spans("pipe || pipe", base),
             vec![("pipe | pipe".to_string(), base)],
             "|| draws one literal pipe"
         );
         assert_eq!(
-            markup_spans("|xnot an escape", base, false),
+            markup_spans("|xnot an escape", base),
             vec![("|xnot an escape".to_string(), base)],
             "a | that opens nothing well-formed is an ordinary character (the grammar's \
              fall-through arm)"
         );
         assert_eq!(
-            markup_spans("", base, false),
+            markup_spans("", base),
             vec![(String::new(), base)],
             "an empty string still yields one span, so the text entity exists"
         );
@@ -857,22 +857,23 @@ mod tests {
     #[test]
     fn a_link_escape_keeps_its_text_and_hides_its_payload() {
         assert_eq!(
-            markup_spans("see |Hitem:1234:0:0:0|h[Thunderfury]|h now", GOLD, true),
+            markup_spans("see |Hitem:1234:0:0:0|h[Thunderfury]|h now", GOLD),
             vec![("see [Thunderfury] now".to_string(), GOLD)],
         );
     }
 
     #[test]
-    fn a_line_break_follows_the_strings_own_wrap_flag() {
+    fn a_line_break_breaks_whatever_the_wrap_flag() {
+        // `VERSION_TEMPLATE` (`"%s %s (%s) (%s)\n%s"`) on the one-line version label.
         assert_eq!(
-            markup_spans("one|ntwo", GOLD, true),
-            vec![("one\ntwo".to_string(), GOLD)],
-            "a wrapping string breaks where the author asked"
+            markup_spans("1.12.1 5875\nSep 19 2006", GOLD),
+            vec![("1.12.1 5875\nSep 19 2006".to_string(), GOLD)],
+            "a hard newline breaks"
         );
         assert_eq!(
-            markup_spans("one|ntwo", GOLD, false),
-            vec![("one two".to_string(), GOLD)],
-            "a one-line label collapses the break to a space"
+            markup_spans("one|ntwo", GOLD),
+            vec![("one\ntwo".to_string(), GOLD)],
+            "so does the `|n` escape"
         );
     }
 }
