@@ -127,7 +127,10 @@ fn take_empties(entry: &MailListEntry, action: u32) -> bool {
         mail_action::MONEY_TAKEN => {
             entry.checked & CHECKED_COD_PAYMENT != 0 || (auction && entry.item.is_none())
         }
-        mail_action::ITEM_TAKEN => entry.money == 0 && (auction || entry.item_text_id == 0),
+        mail_action::ITEM_TAKEN => {
+            entry.money == 0
+                && (auction || (entry.item_text_id == 0 && entry.mail_template_id == 0))
+        }
         _ => false,
     }
 }
@@ -447,6 +450,46 @@ mod tests {
             // A mail the rows do not hold ends the arm silently.
             result(&mut m, 99, action);
             assert!(!m.results[1].inbox_update);
+        }
+    }
+
+    /// A mail with a mail template id (a quest or event reward) is kept when its item is taken
+    /// (`0x4ad809`), as one with a text id is (`0x4ad7fd`); an auction notice still goes.
+    #[test]
+    fn taking_the_item_of_a_template_mail_keeps_the_letter() {
+        let attach = Some(attachment());
+        for (template, text, kind, purged) in [
+            (1141, 0, mail_message_type::NORMAL, false),
+            (0, 55, mail_message_type::NORMAL, false),
+            (0, 0, mail_message_type::NORMAL, true),
+            (1141, 55, mail_message_type::AUCTION, true),
+        ] {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let mut mail = MailOpen::default();
+            mail.click(0x20);
+            let mut row = super::super::tests::entry(7, None, 0, 30.0);
+            row.item = attach;
+            row.mail_template_id = template;
+            row.item_text_id = text;
+            row.message_type = kind;
+            mail.mails.push(row);
+            let mut equip = EquipErrors::default();
+            send_mail_result(
+                7,
+                mail_action::ITEM_TAKEN,
+                mail_error::OK,
+                None,
+                None,
+                &mut mail,
+                &NetCommands(tx),
+                &mut equip,
+            );
+            assert_eq!(
+                sent_commands(&rx).is_empty(),
+                !purged,
+                "template {template} text {text} kind {kind}"
+            );
+            assert_eq!(mail.results[0].close_inbox.is_some(), purged);
         }
     }
 }
