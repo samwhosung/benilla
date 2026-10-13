@@ -268,35 +268,25 @@ impl EditBoxState {
 
     // ── selection / geometry law ─────────────────────────────────────────────────────────────
 
-    /// What the box draws and hit-tests: the text, or one `*` per character under `password`
-    /// (`E+0x334`; the draw `0x77da80` and the hit-test `0x77d0d0` both branch on the flag).
+    /// What the box draws and hit-tests: the text, or under `password` one `*` per byte of it
+    /// (`E+0x334`, `strlen` at `0x77d4fc` then `rep stos` of `0x2a`; the draw `0x77da80` and the
+    /// hit-test `0x77d0d0` both branch on the flag), so a mask byte stands for each text byte.
     pub fn display(&self) -> String {
         if self.password {
-            "*".repeat(self.text.chars().count())
+            "*".repeat(self.text.len())
         } else {
             self.text.clone()
         }
     }
 
-    /// A text byte offset as a display byte offset.
+    /// A text byte offset as a display byte offset: the same, the mask being byte for byte.
     pub fn text_to_display(&self, byte: usize) -> usize {
-        if self.password {
-            self.text[..byte.min(self.text.len())].chars().count()
-        } else {
-            byte
-        }
+        byte.min(self.text.len())
     }
 
-    /// A display byte offset as a text byte offset.
+    /// A display byte offset as a text byte offset, the caller snapping it to a character.
     pub fn display_to_text(&self, dbyte: usize) -> usize {
-        if self.password {
-            self.text
-                .char_indices()
-                .nth(dbyte)
-                .map_or(self.text.len(), |(b, _)| b)
-        } else {
-            dbyte
-        }
+        dbyte.min(self.text.len())
     }
 
     /// The display index nearest pixel `x` from the text origin, the caller adding the scroll
@@ -436,6 +426,7 @@ impl EditBoxState {
     /// What the text region holds: the window's bytes of the display (`0x77d840`–`0x77d858`), or
     /// with `to_end` everything from the window's start, which an edit writes so that what it
     /// typed shows before the flush re-windows. A multi-line box's window is its whole text.
+    /// A window inside a colour run keeps its colour: [`colour_carry`] prefixes the run's `|c`.
     pub fn window_text(&self, to_end: bool) -> String {
         let display = self.display();
         if self.multi_line {
@@ -447,7 +438,11 @@ impl EditBoxState {
         } else {
             snap_down(&display, from + self.window_len)
         };
-        display[from..to.max(from)].to_string()
+        let window = &display[from..to.max(from)];
+        match colour_carry(&display, from) {
+            Some(code) => format!("{code}{window}"),
+            None => window.to_string(),
+        }
     }
 
     /// The relayout's window (`0x77d4d0`), `width` the text region's in the advance table's
@@ -457,6 +452,10 @@ impl EditBoxState {
     /// by the left, or three quarters, by the right (`0x77d7d4`–`0x77d7f3`). A multi-line box's
     /// window is its whole text (its line table ends at the text's length, `0x77d6ef`). Needs the
     /// advance table measured for the display.
+    ///
+    /// The caret is tested against the start as it stands (`0x77d7b4`–`0x77d7c2`), so a text that
+    /// shrank below it re-windows. A `password` box never re-windows (`0x77d769` skips both
+    /// calls): its window is the mask that fits from its start, and a caret past it is hidden.
     pub fn rewindow(&mut self, width: f32) {
         let display = self.display();
         if self.multi_line || self.advances.len() != display.len() + 1 {
@@ -465,14 +464,27 @@ impl EditBoxState {
             return;
         }
         let map = crate::markup::ClassMap::new(&display);
-        let cursor = self.text_to_display(self.cursor).min(display.len());
-        let mut start = snap_down(&display, self.scroll_start);
-        let mut end = self.fit_forward(&map, start, width);
-        if cursor < start || cursor > end {
-            let lead = if cursor < start { 0.25 } else { 0.75 };
-            start = self.fit_back(&map, cursor, width * lead);
-            end = self.fit_forward(&map, start, width);
+        let cursor = self.text_to_display(self.cursor);
+        if self.password {
+            let start = self.scroll_start.min(display.len());
+            self.scroll_start = start;
+            self.window_len = self.fit_forward(&map, start, width) - start;
+            return;
         }
+        let (start, end) = if cursor < self.scroll_start {
+            let start = self.fit_back(&map, cursor, width * 0.25);
+            (start, self.fit_forward(&map, start, width))
+        } else {
+            // At or before the caret, so inside the text.
+            let start = snap_down(&display, self.scroll_start);
+            let end = self.fit_forward(&map, start, width);
+            if cursor > end {
+                let start = self.fit_back(&map, cursor, width * 0.75);
+                (start, self.fit_forward(&map, start, width))
+            } else {
+                (start, end)
+            }
+        };
         self.scroll_start = start;
         self.window_len = end - start;
     }
@@ -618,8 +630,9 @@ impl EditBoxState {
         }
     }
 
-    /// The glue fields' paste: the clipboard as one insert, its control characters dropped, bar
-    /// `\n` in a multiline box. A FrameXML box types a paste a character at a time instead
+    /// Paste for benilla's own glue-screen fields, which are benilla's code and not the stock
+    /// GlueXML that is to replace them: the clipboard as one insert, its control characters
+    /// dropped, bar `\n` in a multiline box. A FrameXML box types a paste a character at a time
     /// (`0x77e250`).
     pub fn paste(&mut self, text: &str) -> EditOutcome {
         let cleaned: String = text
@@ -1016,6 +1029,33 @@ impl EditBoxState {
         self.sel_start = snap_down(&self.text, self.sel_start.min(len));
         self.sel_end = snap_down(&self.text, self.sel_end.min(len));
     }
+}
+
+/// The colour code a window starting at `from` must carry, `0x77d7f8`–`0x77d93c`: scanning on
+/// from `from` (a `||` skipped), an unescaped `|r` met before any `|c` sends a scan back from it
+/// for the nearest `|c` not preceded by a `|`, whose ten bytes (`|cAARRGGBB`) go before the
+/// window.
+fn colour_carry(display: &str, from: usize) -> Option<&str> {
+    let b = display.as_bytes();
+    let mut i = from;
+    let reset = loop {
+        if i >= b.len() {
+            return None;
+        }
+        if b[i] == b'|' {
+            match b.get(i + 1) {
+                Some(b'|') => i += 1,
+                Some(b'c') => return None,
+                Some(b'r') => break i,
+                _ => {}
+            }
+        }
+        i += 1;
+    };
+    (0..=reset)
+        .rev()
+        .find(|&p| b[p] == b'|' && (p == 0 || b[p - 1] != b'|') && b.get(p + 1) == Some(&b'c'))
+        .and_then(|p| display.get(p..p + 10))
 }
 
 /// The char boundary at or below `i`.

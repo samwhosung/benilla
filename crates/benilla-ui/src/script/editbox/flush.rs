@@ -100,13 +100,34 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
             return None;
         }
         let cursor_d = eb.text_to_display(eb.cursor).min(display.len());
-        // `x` counts from the caret's line's first byte in the line table (`0x77dcd8`–`0x77dcfc`),
-        // which in a single-line box is the window's (`0x77d750`, `0x77d3b2`).
-        let (row, x) = if eb.multi_line {
-            eb.caret_row_x(cursor_d)
+        // The caret's line in the line table: in a single-line box the window (`0x77d750`,
+        // `0x77d3b2`), multi-line its wrapped row, the last ending at the text's end (`0x77d6ef`).
+        let len = display.len();
+        let (row, line_start, line_end) = if eb.multi_line {
+            let row = eb.row_of(cursor_d);
+            let (a, b) = eb.row_range(row, len);
+            (row, a.min(len), b.min(len))
         } else {
-            let from = eb.scroll_start.min(cursor_d);
-            (0, eb.advances[cursor_d] - eb.advances[from])
+            let a = eb.scroll_start.min(len);
+            (0, a, (a + eb.window_len).min(len))
+        };
+        let a = &eb.advances;
+        // `x` by the font string's justifyH, which follows the box's font (`[fs+0x120] & 7`,
+        // `0x77db63`): LEFT from the line's start (`0x77dcd8`–`0x77dcfc`), CENTER that less half
+        // the line (`0x77dc1d`–`0x77dc7b`), RIGHT minus the rest of the line (`0x77db89`–
+        // `0x77dbb0`), each 0 with the caret on its measuring edge; no axis bit leaves it 0
+        // (`0x77db83` → `0x77dd5f`).
+        let along = if cursor_d == line_start {
+            0.0
+        } else {
+            a[cursor_d] - a[line_start]
+        };
+        let x = match eb.justify & crate::justify::H_MASK {
+            0x01 => along,
+            0x02 => along - (a[line_end] - a[line_start]) * 0.5,
+            0x04 if cursor_d == line_end => 0.0,
+            0x04 => -(a[line_end] - a[cursor_d]),
+            _ => 0.0,
         };
         let pitch = eb.cell_h;
         // `y` starts at 0 and loses one pitch per row above the caret (`0x77dae1`, `0x77db31`),

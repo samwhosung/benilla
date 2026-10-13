@@ -382,8 +382,10 @@ fn highlight_text(lua: &Lua, h: FrameHandle, start: i64, end: i64) {
 
 // ── text-region sync ─────────────────────────────────────────────────────────────────────────
 
-/// After an edit, write the display from the window's start into the text region, so what was
-/// typed shows before the flush re-windows; a `password` box shows one `*` per character.
+/// After an edit, write the display from the window's start into the text region; a `password`
+/// box shows one `*` per byte. The reference sets the region only in the flush's relayout
+/// (`0x77d858`); benilla's host takes input after the tick's flush, so this shows what was typed
+/// in the same frame, and the next flush trims it to the window.
 fn sync_text_region(lua: &Lua, h: FrameHandle) {
     let Some(rh) = ensure_text_region(lua, h) else {
         return;

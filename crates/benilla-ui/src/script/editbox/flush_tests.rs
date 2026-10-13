@@ -669,6 +669,103 @@ fn on_cursor_changed_measures_x_from_the_windows_start() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// The caret is tested against the window's start as it stands (`0x77d7b4`–`0x77d7c2`): a text
+/// that shrinks below a scrolled start re-windows around the caret, never to an empty window.
+#[test]
+fn a_shorter_text_re_windows_a_scrolled_box() {
+    let mut s = script();
+    long_box(&mut s);
+    s.run(r#"W:SetText("abc")"#).unwrap();
+    s.tick(0.016);
+    assert_eq!(window(&s), "abc");
+}
+
+/// A password box never re-windows (`0x77d769` skips both re-window calls): its window is the mask
+/// that fits from its start, one `*` per byte of the text (`0x77d4fc`, `0x77d533`), and a caret
+/// past it fires no `OnCursorChanged` (`0x77da97` → `0x77de49`) until it comes back.
+#[test]
+fn a_password_box_keeps_its_window_at_the_start() {
+    let mut s = script();
+    s.run(&format!(
+        r#"
+        LOG = {{}}
+        W = CreateFrame("EditBox", "W")
+        W:SetAutoFocus(false)
+        W:SetPoint("BOTTOMLEFT", 100, 50)
+        W:SetWidth(200); W:SetHeight(32)
+        W:SetPassword(true)
+        W:SetScript("OnCursorChanged", function() table.insert(LOG, "cursor@" .. arg1) end)
+        W:SetText("{ALPHA40}")
+    "#
+    ))
+    .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    assert_eq!(window(&s), "*".repeat(28));
+    s.run("W:SetFocus()").unwrap();
+    s.editbox_action(EditAction::Move {
+        unit: EditUnit::Edge,
+        back: true,
+        extend: false,
+    });
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "cursor@0", "only the caret inside the window");
+
+    s.run(r"W:SetText('a\195\169')").unwrap();
+    s.tick(0.016);
+    assert_eq!(window(&s), "***", "a two-byte letter masks as two");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A window inside a colour run keeps its colour (`0x77d7f8`–`0x77d93c`): an unescaped `|r` met
+/// before any `|c` puts the run's `|cAARRGGBB` before the window.
+#[test]
+fn a_window_inside_a_colour_run_carries_its_colour() {
+    let mut s = script();
+    long_box(&mut s);
+    s.run(&format!(r#"W:SetText("|cff00ff00{ALPHA40}|r")"#))
+        .unwrap();
+    s.tick(0.016);
+    assert_eq!(window(&s), format!("|cff00ff00{}|r", &ALPHA40[21..]));
+}
+
+/// `OnCursorChanged`'s `x` follows justifyH: CENTER is the advance from the line's start less half
+/// the line (`0x77dc1d`–`0x77dc7b`), RIGHT minus the advance to the line's end (`0x77db89`–
+/// `0x77dbb0`), 0 with the caret at the end.
+#[test]
+fn on_cursor_changed_x_follows_justify_h() {
+    for (justify, want) in [
+        ("CENTER", "cursor@14 cursor@7"),
+        ("RIGHT", "cursor@0 cursor@-7"),
+    ] {
+        let mut s = script();
+        logged_box(&mut s);
+        s.run(&format!(
+            r#"
+            E:SetJustifyH("{justify}")
+            E:SetScript("OnCursorChanged", function() table.insert(LOG, "cursor@" .. arg1) end)
+            E:SetText("abcd")
+            E:SetFocus()
+        "#
+        ))
+        .unwrap();
+        s.tick(0.016);
+        s.editbox_action(EditAction::Move {
+            unit: EditUnit::Char,
+            back: true,
+            extend: false,
+        });
+        s.tick(0.016);
+        let log = take_log(&s);
+        let cursors: Vec<&str> = log
+            .split(' ')
+            .filter(|e| e.starts_with("cursor@"))
+            .collect();
+        assert_eq!(cursors.join(" "), want, "{justify}");
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+}
+
 /// [`Mono`] as the host answers a scaled box: glyphs 7 and lines 14 in the box's own units, the
 /// table in root units (measured at the box's scale, divided by the seam alone).
 struct ScaledMono;
