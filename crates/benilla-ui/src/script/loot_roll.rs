@@ -5,14 +5,14 @@
 //! bind-on-pickup confirm, fire inside the verb. The `rollID` is client-internal, as
 //! `CMSG_LOOT_ROLL` addresses `(lootedTarget, itemSlot)`, so the app allocates its own.
 
-use mlua::Lua;
+use mlua::{Lua, Value};
 
 use super::binding_abi::flag;
 use super::{Model, ScriptValue};
-use crate::script::binding_abi::Idx32;
+use crate::script::binding_abi::{number_arg, Idx32};
 
 /// `rollType` 0, the one vote the bind-on-pickup gate never intercepts.
-const PASS: u8 = 0;
+const PASS: i32 = 0;
 
 /// The quality `GetLootRollItemInfo` answers on an item-template miss, from the reference's miss
 /// tail `nil, nil, 1.0, 1.0, nil` (`0x4c31a3`): 1, not `GetLootSlotInfo`'s -1. Stock
@@ -65,19 +65,18 @@ impl super::UiScript {
 }
 
 /// `0x61bdf0`, the vote both bindings share: an unknown or closed roll does nothing
-/// (`0x61be3f`). Need or Greed on a bind-on-pickup item, unconfirmed, signals
+/// (`0x61be3f`). The type is not range-tested: any nonzero one takes the bind-on-pickup gate, and
+/// the wire carries its low byte (`0x418070`); the server ignores one of 3 or more
+/// (`GroupHandler.cpp:367`). Need or Greed on a bind-on-pickup item, unconfirmed, signals
 /// `CONFIRM_LOOT_ROLL` with `(rollID, rollType)` and sends nothing (`0x61be8b`). Otherwise the
 /// vote is queued for `CMSG_LOOT_ROLL` and `CANCEL_LOOT_ROLL` fires (`0x61bf2a`) before the roll
 /// closes (`0x61bf32`), so its handler still reads the roll; the app's later close of the same
 /// roll then signals nothing, as the closed byte `+0x3a` guards it.
-fn vote(lua: &Lua, roll_id: u32, roll_type: u8, confirmed: bool) {
+fn vote(lua: &Lua, roll_id: u32, roll_type: i32, confirmed: bool) {
     let closes = super::tick::verb(lua, |model| {
         let Some(entry) = find(model, roll_id) else {
             return false;
         };
-        if roll_type > 2 {
-            return false;
-        }
         let id = ScriptValue::Int(i64::from(roll_id));
         if entry.bind_on_pickup && roll_type != PASS && !confirmed {
             model.raise(
@@ -86,7 +85,7 @@ fn vote(lua: &Lua, roll_id: u32, roll_type: u8, confirmed: bool) {
             );
             return false;
         }
-        model.loot_roll_votes.push((roll_id, roll_type));
+        model.loot_roll_votes.push((roll_id, roll_type as u8));
         model.raise("CANCEL_LOOT_ROLL", vec![id]);
         true
     });
@@ -157,13 +156,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // The server ignores a `rollType` of 3 or more (`GroupHandler.cpp:367`), so those and unknown
-    // ids are dropped. The bind-on-pickup gate is in the C function ([`vote`]), so it holds for an
+    // Both arguments are numbers (`0x4c3370`, `0x6f34d0`), else the usage line; an unknown id is
+    // dropped. The bind-on-pickup gate is in the C function ([`vote`]), so it holds for an
     // addon's call too.
     g.set(
         "RollOnLoot",
-        lua.create_function(|lua, (roll_id, roll_type): (u32, u8)| {
-            vote(lua, roll_id, roll_type, false);
+        lua.create_function(|lua, (roll_id, roll_type): (Value, Value)| {
+            let usage = "Usage: RollOnLoot(id, rollType)";
+            let id = number_arg(lua, roll_id, usage)? as u32;
+            let ty = number_arg(lua, roll_type, usage)?;
+            vote(lua, id, ty, false);
             Ok(())
         })?,
     )?;
@@ -171,8 +173,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // The gate's bypass: `0x4c33e0` re-enters `0x61bdf0` with a third argument of 1.
     g.set(
         "ConfirmLootRoll",
-        lua.create_function(|lua, (roll_id, roll_type): (u32, u8)| {
-            vote(lua, roll_id, roll_type, true);
+        lua.create_function(|lua, (roll_id, roll_type): (Value, Value)| {
+            let usage = "Usage: ConfirmLootRoll(id, rollType)";
+            let id = number_arg(lua, roll_id, usage)? as u32;
+            let ty = number_arg(lua, roll_type, usage)?;
+            vote(lua, id, ty, true);
             Ok(())
         })?,
     )?;
@@ -347,18 +352,57 @@ mod tests {
         let mut s = UiScript::new().unwrap();
         s.set_loot_rolls(rolls());
         s.run("ConfirmLootRoll(99, 1)").unwrap(); // no such roll
-        s.run("ConfirmLootRoll(7, 3)").unwrap(); // server-only rollType
         assert!(s.take_loot_roll_votes().is_empty());
     }
 
+    /// `0x61bdf0` has no range test on the type: a type the server ignores (`GroupHandler.cpp:367`)
+    /// still goes out and closes the roll with its `CANCEL_LOOT_ROLL` (`0x61bf2a`), a bind-on-pickup
+    /// one takes the confirm branch (`0x61be8b`) with the type as given, and the wire carries the
+    /// low byte (`0x418070`). Only an unknown id is dropped.
     #[test]
-    fn bad_votes_are_dropped() {
+    fn any_roll_type_is_sent_and_closes_the_roll() {
+        use crate::script::tick::heard;
         let mut s = UiScript::new().unwrap();
         s.set_loot_rolls(rolls());
-        s.run("RollOnLoot(7, 3)").unwrap(); // ROLL_NOT_EMITED_YET, server-only
-        s.run("RollOnLoot(7, 200)").unwrap();
-        s.run("RollOnLoot(99, 1)").unwrap(); // no such roll
+        heard::listen(
+            &s,
+            &["CANCEL_LOOT_ROLL", "CONFIRM_LOOT_ROLL"],
+            Some("arg1 .. ',' .. tostring(arg2)"),
+        );
+        s.run("RollOnLoot(99, 1) RollOnLoot(99, 3)").unwrap(); // no such roll
         assert!(s.take_loot_roll_votes().is_empty());
+        assert!(heard::take(&s).is_empty());
+        s.run("RollOnLoot(8, 3)").unwrap();
+        assert_eq!(s.take_loot_roll_votes(), vec![(8, 3)]);
+        assert_eq!(heard::take(&s), ["CANCEL_LOOT_ROLL 8,nil"]);
+        assert_eq!(s.eval::<i64>("return GetLootRollTimeLeft(8)").unwrap(), 0);
+        s.run("RollOnLoot(7, 200)").unwrap();
+        assert!(s.take_loot_roll_votes().is_empty());
+        assert_eq!(heard::take(&s), ["CONFIRM_LOOT_ROLL 7,200"]);
+        s.run("ConfirmLootRoll(7, 300)").unwrap();
+        assert_eq!(s.take_loot_roll_votes(), vec![(7, 44)]);
+        assert_eq!(heard::take(&s), ["CANCEL_LOOT_ROLL 7,nil"]);
+    }
+
+    /// A non-number argument raises the binding's usage line (`0x848140`, `0x848160`).
+    #[test]
+    fn roll_bindings_raise_their_usage_on_a_non_number() {
+        let s = UiScript::new().unwrap();
+        for (call, usage) in [
+            ("RollOnLoot(1)", "Usage: RollOnLoot(id, rollType)"),
+            ("RollOnLoot('x', 1)", "Usage: RollOnLoot(id, rollType)"),
+            (
+                "ConfirmLootRoll(1, nil)",
+                "Usage: ConfirmLootRoll(id, rollType)",
+            ),
+        ] {
+            let e = s
+                .eval::<String>(&format!(
+                    "local ok, e = pcall(function() {call} end) return tostring(e)"
+                ))
+                .unwrap();
+            assert!(e.contains(usage), "{call}: {e}");
+        }
     }
 
     #[test]
