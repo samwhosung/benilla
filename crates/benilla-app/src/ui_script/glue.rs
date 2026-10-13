@@ -368,6 +368,78 @@ mod tests {
         }
     }
 
+    /// The stock credits screen (`CreditsFrame.xml`). Its two fades are a black `<Color>` under a
+    /// vertical alpha `<Gradient>`, opaque at the scroll frame's edge and clear inward, so the
+    /// credits text fades instead of being cut. Its borders are file art in the BACKGROUND layer
+    /// beside the solid black bars, and the layer batch's sort (`0x7731a0`) draws them over.
+    #[test]
+    fn the_stock_credits_fades_ramp_and_its_borders_cover_the_bars() {
+        use benilla_ui::script::QuadContent;
+        let _ = benilla_formats::wow_data_or_skip!();
+        let mut s = UiScript::new_glue().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        let _ = load_glue(&mut s);
+        set_glue_screen(&mut s, GlueScreen::Login);
+        s.run("AccountLogin:Hide() CreditsFrame:Show()").unwrap();
+        let _ = s.take_errors();
+        s.resolve();
+        let quads = s.extract();
+        let black = Some([0.0, 0.0, 0.0, 1.0]);
+
+        let (clear, opaque) = ([0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 1.0]);
+        let mut fades: Vec<_> = quads
+            .iter()
+            .filter_map(|q| match &q.content {
+                QuadContent::Texture {
+                    path: None,
+                    color,
+                    gradient: Some(g),
+                    ..
+                } if *color == black => Some((q.rect.expect("a fade is placed"), *g)),
+                _ => None,
+            })
+            .collect();
+        fades.sort_by(|a, b| a.0.bottom.total_cmp(&b.0.bottom));
+        assert_eq!(fades.len(), 2, "both fades draw");
+        assert_eq!(
+            fades[0].1,
+            [clear, clear, opaque, opaque],
+            "the bottom fade: opaque along the bottom, clear at its top"
+        );
+        assert_eq!(
+            fades[1].1,
+            [opaque, opaque, clear, clear],
+            "the top fade: opaque along the top, clear at its bottom"
+        );
+
+        let owned_by_credits = |q: &&benilla_ui::script::ExtractedQuad| {
+            s.quad_owner_name(q.target).as_deref() == Some("CreditsFrame")
+        };
+        let bars: Vec<u128> = quads
+            .iter()
+            .filter(owned_by_credits)
+            .filter(|q| {
+                matches!(&q.content, QuadContent::Texture { path: None, color, gradient: None, .. }
+                    if *color == black)
+            })
+            .map(|q| q.z)
+            .collect();
+        let borders: Vec<u128> = quads
+            .iter()
+            .filter(owned_by_credits)
+            .filter(|q| {
+                matches!(&q.content, QuadContent::Texture { path: Some(p), .. }
+                    if p.ends_with("Credits\\Border1"))
+            })
+            .map(|q| q.z)
+            .collect();
+        assert_eq!((bars.len(), borders.len()), (2, 2));
+        assert!(
+            borders.iter().all(|b| bars.iter().all(|bar| b > bar)),
+            "the borders draw over the black bars: {borders:?} over {bars:?}"
+        );
+    }
+
     /// `GlueParent` fills the screen root, 768 tall and `768·a` wide (`0x41ad10`, from `0x46ab40`),
     /// up to 16:9; past that `GlueParent_OnLoad` centres it 16:9 wide on the root's height.
     #[test]

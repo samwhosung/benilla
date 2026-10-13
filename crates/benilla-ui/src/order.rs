@@ -21,9 +21,8 @@
 //! same within a bucket. The is-region bit is benilla's: the client has no frame drawable, and the
 //! frame's own slot (a minimap or model pane, scissor) must precede its regions.
 //!
-//! Deviation: textures in one layer keep link order where the client sorts them by texture handle
-//! (`0x7731a0`, comparator `0x7731c0`), because benilla allocates its handles differently; no
-//! content may depend on the order of two overlapping textures in one layer.
+//! A layer batch's textures do not keep that order: its End (`0x7731a0`) sorts them by texture
+//! handle, which [`quad_batch`] groups for and `script::layer_batch` reproduces as far as it can.
 
 use crate::widget::{FrameHandle, KindState, RegionHandle, RegionKind, WidgetArena};
 
@@ -383,6 +382,28 @@ pub const fn unpack(raw: u128) -> ZParts {
         decl: ((hi >> DECL_SHIFT) & ((1 << DECL_BITS) - 1)) as u16,
         in_scroll_child: raw as u64 != 0,
     }
+}
+
+/// The layer batch a raw key's texture quad fills, `None` for anything else: the flat pass's
+/// `(strata, level, layer)` (`levelNode+0x1c`, every frame at the level sharing it), or, in a
+/// scroll subtree, one frame's layer (`0x76b3f0` ends each frame's own five, `0x76b469`). The
+/// keys of one batch's quads are contiguous among the regions, in the order the batch filled.
+pub(crate) const fn quad_batch(raw: u128) -> Option<(u64, u64)> {
+    let (hi, lo) = ((raw >> 64) as u64, raw as u64);
+    let (word, rank_shift) = if lo == 0 {
+        (hi, RANK_SHIFT)
+    } else {
+        (lo, NESTED_RANK_SHIFT)
+    };
+    let quad = (word >> rank_shift) & 0x3 == BatchRank::Quad as u64;
+    if !quad || (word >> IS_REGION_SHIFT) & 1 == 0 {
+        return None;
+    }
+    Some(if lo == 0 {
+        (hi >> RANK_SHIFT, 0)
+    } else {
+        (hi, lo >> NESTED_RANK_SHIFT)
+    })
 }
 
 // ── Traversal: the visible render list in painter order ──────────────────────────────────────

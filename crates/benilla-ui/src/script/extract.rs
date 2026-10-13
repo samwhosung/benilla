@@ -6,7 +6,9 @@ use crate::order::{self, ZTarget};
 use crate::widget::FrameHandle;
 
 use super::clip::DrawClips;
-use super::{colorselect, slider, ExtractedQuad, FontObject, QuadContent, TexCoords, UiScript};
+use super::{
+    colorselect, layer_batch, slider, ExtractedQuad, FontObject, QuadContent, TexCoords, UiScript,
+};
 
 impl UiScript {
     /// Every live draw target, visible or not: each frame's slot then its regions, in arena order.
@@ -63,6 +65,8 @@ impl UiScript {
         let mut out = Vec::with_capacity(list.len());
         // A scroll child's subtree clips to its ScrollFrames' rects, nested ones intersecting.
         let mut clips = DrawClips::new(&model, &list);
+        // Every texture quad's batch and texture, for the batches' End sort below.
+        let mut batch_quads: Vec<layer_batch::BatchQuad> = Vec::new();
         for &order::DrawEntry {
             target,
             key: zkey,
@@ -73,6 +77,8 @@ impl UiScript {
             let Some(clip) = clips.clip(scope) else {
                 continue;
             };
+            // A region's solid fill, which keys its texture in the batch sort.
+            let mut region_fill: Option<[f32; 4]> = None;
             let (rect, alpha, content, clip, scale) = match target {
                 ZTarget::Frame(fh) => {
                     let frame = model.arena.frame(fh);
@@ -255,6 +261,7 @@ impl UiScript {
                         continue;
                     }
                     let mut data = data_ref.cloned().unwrap_or_default();
+                    region_fill = data.fill;
                     // One hop (region combine `0x772180`): the region's alpha times its owner's
                     // `effective_alpha`, which `SetAlpha 0x76a690` already carries down the tree.
                     let alpha = owner_frame.map(|f| f.effective_alpha).unwrap_or(1.0)
@@ -398,6 +405,16 @@ impl UiScript {
                 QuadContent::ModelPane { .. } => zkey.callback(order::DrawLayer::Artwork).raw(),
                 _ => zkey.raw(),
             };
+            if let (Some(texel), Some(batch)) = (
+                layer_batch::Texel::of(&content, region_fill),
+                order::quad_batch(z),
+            ) {
+                batch_quads.push(layer_batch::BatchQuad {
+                    index: out.len(),
+                    batch,
+                    texel,
+                });
+            }
             out.push(ExtractedQuad {
                 target,
                 z,
@@ -424,6 +441,8 @@ impl UiScript {
                 );
             }
         }
+        // Each layer batch's End sorts its quads by texture (`0x7731a0`).
+        layer_batch::sort_batches(&mut out, &batch_quads);
         out
     }
 }

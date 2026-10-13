@@ -490,7 +490,7 @@ fn xml_backdrop_and_layers_link_in_document_order() {
 }
 
 /// The regression check on the draw: each piece's quad (rect, texcoords, colour and order) is the
-/// one the backdrop geometry (`pieces`, `0x77e8d0` and `0x77f0c0`) gives for the frame, on the
+/// one the backdrop geometry (`pieces`, `0x77e8d0` and `0x77f0c0`) and the batch sort give for the frame, on the
 /// stock plates' shapes, at scale 1 and below, after a resize too.
 #[test]
 fn the_piece_quads_are_the_backdrop_geometry() {
@@ -577,7 +577,13 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                     b.border_color = [c.0, c.1, c.2, c.3];
                     b
                 };
-                let want = pieces(fr, &spec, eff);
+                let mut want = pieces(fr, &spec, eff);
+                // The edges share one texture in one BORDER batch, which its End sorts
+                // (`0x7731a0`): on equal keys the CRT's selection sort (`0x73f87b`) swaps the
+                // front to the end each pass, so the first piece draws last, the rest in order.
+                if let Some(first_edge) = want.iter().position(|p| !p.is_bg) {
+                    want[first_edge..].rotate_left(1);
+                }
                 let ctx = format!("shape {i} scale {scale} size {w}x{h}");
                 assert_eq!(quads.len(), want.len(), "{ctx}");
                 for (k, (q, p)) in quads.iter().zip(&want).enumerate() {

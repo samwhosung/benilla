@@ -1377,3 +1377,102 @@ fn tex_coord_modifies_rect_is_one_slash_nil_and_moves_no_rect_yet() {
         "cleared back to nil"
     );
 }
+
+/// The draw order of the texture quads `label` names.
+fn quad_order(
+    s: &mut UiScript,
+    label: impl Fn(&QuadContent) -> Option<&'static str>,
+) -> Vec<&'static str> {
+    s.resolve();
+    let mut quads: Vec<(u128, &'static str)> = s
+        .extract()
+        .iter()
+        .filter_map(|q| label(&q.content).map(|l| (q.z, l)))
+        .collect();
+    quads.sort_by_key(|&(z, _)| z);
+    quads.into_iter().map(|(_, l)| l).collect()
+}
+
+/// A layer batch's End (`0x7731a0`) sorts its quads by texture handle, across every frame at the
+/// level: the solid fill before the files, one file's quads together (the cache keys `x.blp` as
+/// `X`), and the tie in the CRT's order. Hand-run `shortsort` (`0x73f87b`) on the batch
+/// `[A x, B solid, C x, D y]`: D stays last, then A swaps with C, then C with B, leaving
+/// `B C A D`.
+#[test]
+fn a_layer_draws_its_textures_in_handle_order_across_frames() {
+    let mut s = script();
+    s.run(
+        r#"
+        f1 = CreateFrame("Frame", "BatchOne")
+        f1:SetPoint("TOPLEFT", 0, 0) f1:SetWidth(50) f1:SetHeight(50)
+        a = f1:CreateTexture(nil, "BACKGROUND") a:SetAllPoints(f1)
+        a:SetTexture("Interface\\Batch\\X")
+        b = f1:CreateTexture(nil, "BACKGROUND") b:SetAllPoints(f1)
+        b:SetTexture(0, 0, 0)
+        f2 = CreateFrame("Frame", "BatchTwo")
+        f2:SetPoint("TOPLEFT", 0, 0) f2:SetWidth(50) f2:SetHeight(50)
+        c = f2:CreateTexture(nil, "BACKGROUND") c:SetAllPoints(f2)
+        c:SetTexture("interface\\batch\\x.blp")
+        d = f2:CreateTexture(nil, "BACKGROUND") d:SetAllPoints(f2)
+        d:SetTexture("Interface\\Batch\\Y")
+    "#,
+    )
+    .unwrap();
+    let label = |c: &QuadContent| match c {
+        QuadContent::Texture { path: Some(p), .. } if p.ends_with('X') => Some("A"),
+        QuadContent::Texture { path: Some(p), .. } if p.ends_with("x.blp") => Some("C"),
+        QuadContent::Texture { path: Some(p), .. } if p.ends_with('Y') => Some("D"),
+        QuadContent::Texture {
+            path: None,
+            color: Some(_),
+            ..
+        } => Some("B"),
+        _ => None,
+    };
+    assert_eq!(quad_order(&mut s, label), ["B", "C", "A", "D"]);
+
+    // Another layer is another batch: the solid on ARTWORK stays above them all.
+    s.run("b:SetDrawLayer('ARTWORK')").unwrap();
+    assert_eq!(quad_order(&mut s, label), ["C", "A", "D", "B"]);
+}
+
+/// In a scroll child's subtree each frame ends its own batches (`0x76b3f0`, End at `0x76b469`),
+/// so the sort stays inside one frame's layer: the child's solid draws after its parent's file.
+#[test]
+fn a_scroll_child_sorts_each_frames_layer_alone() {
+    let mut s = script();
+    s.run(
+        r#"
+        sf = CreateFrame("ScrollFrame", "BatchScroll")
+        sf:SetPoint("TOPLEFT", 0, 0) sf:SetWidth(50) sf:SetHeight(50)
+        p = CreateFrame("Frame", "BatchScrollChild")
+        p:SetWidth(50) p:SetHeight(50)
+        sf:SetScrollChild(p)
+        x = p:CreateTexture(nil, "ARTWORK") x:SetAllPoints(p)
+        x:SetTexture("Interface\\Batch\\X")
+        ps = p:CreateTexture(nil, "ARTWORK") ps:SetAllPoints(p)
+        ps:SetTexture(1, 0, 0)
+        q = CreateFrame("Frame", "BatchScrollInner", p)
+        q:SetAllPoints(p)
+        qs = q:CreateTexture(nil, "ARTWORK") qs:SetAllPoints(q)
+        qs:SetTexture(0, 1, 0)
+    "#,
+    )
+    .unwrap();
+    let label = |c: &QuadContent| match c {
+        QuadContent::Texture { path: Some(_), .. } => Some("x"),
+        QuadContent::Texture {
+            color: Some([1.0, 0.0, 0.0, _]),
+            ..
+        } => Some("parent solid"),
+        QuadContent::Texture {
+            color: Some([0.0, 1.0, 0.0, _]),
+            ..
+        } => Some("child solid"),
+        _ => None,
+    };
+    assert_eq!(
+        quad_order(&mut s, label),
+        ["parent solid", "x", "child solid"]
+    );
+}
