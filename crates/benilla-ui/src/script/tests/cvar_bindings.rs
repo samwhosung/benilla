@@ -262,3 +262,40 @@ fn register_cvar_defaults_to_zero_and_reads_numbers_as_lua_text() {
         );
     }
 }
+
+/// `RegisterCVar` creates at most 30 CVars per process (`0x488b25`: `cmp [0xb4e3c8], 0x1e`), and
+/// raises `0x8422c0` once there, before the name is even looked up. Only a creation counts
+/// (`0x488b8f`): a live name and a name the config file already holds do not.
+#[test]
+fn register_cvar_creates_thirty_cvars_per_process() {
+    let mut s = script_with(&[("farclip", "350")]);
+    s.set_cvar_saved_base([("savedknob".to_string(), "4".to_string())]);
+    s.run("RegisterCVar('farclip', '1') RegisterCVar('SavedKnob', '1')")
+        .unwrap();
+    assert_eq!(s.cvar_lua_created(), 0, "neither call created a record");
+    for i in 0..29 {
+        s.run(&format!("RegisterCVar('knob{i}', '1')")).unwrap();
+    }
+    s.run("RegisterCVar('knob0', '2')").unwrap();
+    assert_eq!(s.cvar_lua_created(), 29, "a re-declaration is no creation");
+    s.run("RegisterCVar('knob29', '1')").unwrap();
+    assert_eq!(s.cvar_lua_created(), 30);
+    for chunk in ["RegisterCVar('knob30', '1')", "RegisterCVar('knob0', '1')"] {
+        assert_eq!(
+            crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
+            "Attempted to register too many CVars",
+            "{chunk}"
+        );
+    }
+    assert!(s.cvar("knob30").is_none());
+    assert_eq!(
+        s.take_cvar_registrations().len(),
+        31,
+        "30 counted, one saved"
+    );
+
+    // The count is the process's: a new VM seeded with it is already at the limit.
+    let mut next = UiScript::new().unwrap();
+    next.set_cvar_lua_created(s.cvar_lua_created());
+    assert!(next.run("RegisterCVar('fresh', '1')").is_err());
+}

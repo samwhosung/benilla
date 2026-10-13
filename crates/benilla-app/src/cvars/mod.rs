@@ -134,6 +134,10 @@ pub(crate) struct Cvars {
     /// A change since the last save; `last_change` drives the one-quiet-second debounce.
     dirty: bool,
     last_change: Option<Instant>,
+    /// The CVars Lua's `RegisterCVar` created this process, the reference's `[0xb4e3c8]`: kept
+    /// here because it outlives every VM, and counted by the VM
+    /// ([`benilla_ui::script::LUA_CVAR_LIMIT`]).
+    lua_created: u32,
 }
 
 impl Default for Cvars {
@@ -147,6 +151,7 @@ impl Default for Cvars {
             outbox: Vec::new(),
             dirty: false,
             last_change: None,
+            lua_created: 0,
         };
         for r in REGISTERED {
             cvars.insert_row(Row {
@@ -436,6 +441,27 @@ impl Cvars {
             .collect()
     }
 
+    /// Seed a new VM's mirror before anything registers in it: the file's unclaimed entries
+    /// first, so an addon's `RegisterCVar` starts at the saved value, then the table, then the
+    /// process's count of Lua-created CVars.
+    pub(crate) fn seed_vm(&self, script: &mut UiScript) {
+        script.set_cvar_saved_base(self.orphans());
+        script.seed_cvars(self.vm_seed());
+        script.set_cvar_lua_created(self.lua_created);
+    }
+
+    /// Take in a VM's registrations and writes, registrations first, since an addon declares a
+    /// row and sets it together; and its count of Lua-created CVars, which only grows.
+    fn drain_vm(&mut self, script: &mut UiScript) {
+        for (name, default) in script.take_cvar_registrations() {
+            self.learn_addon_row(&name, &default);
+        }
+        for (name, value) in script.take_cvar_changes() {
+            self.set_from_vm(&name, &value);
+        }
+        self.lua_created = self.lua_created.max(script.cvar_lua_created());
+    }
+
     /// The whole table as a VM's mirror is seeded from it.
     pub(crate) fn vm_seed(&self) -> Vec<SeededCvar> {
         self.rows
@@ -710,23 +736,13 @@ pub(crate) fn sync_cvars(
         return;
     };
     // The VM's writes before the seed: an addon's `SetCVar` at load is already queued, and seeding
-    // first would overwrite the mirror with the older value. Registrations before writes, since an
-    // addon declares a row and sets it together.
-    let registrations = script.take_cvar_registrations();
-    let changes = script.take_cvar_changes();
-    if !registrations.is_empty() || !changes.is_empty() {
-        for (name, default) in registrations {
-            cvars.learn_addon_row(&name, &default);
-        }
-        for (name, value) in changes {
-            cvars.set_from_vm(&name, &value);
-        }
+    // first would overwrite the mirror with the older value. Read before taking, so a quiet frame
+    // never deref-muts the registry.
+    if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
+        cvars.drain_vm(&mut script);
     }
     if seeded.claim(&script) {
-        // The file's unclaimed entries first, so an addon's `RegisterCVar` starts at the saved
-        // value; then the table.
-        script.set_cvar_saved_base(cvars.orphans());
-        script.seed_cvars(cvars.vm_seed());
+        cvars.seed_vm(&mut script);
         if cvars.has_outbox() {
             cvars.take_outbox(); // the seed just carried everything
         }
@@ -786,20 +802,11 @@ pub(crate) fn fold_dying_vm_cvars(world: &mut World) {
     if !world.contains_resource::<Cvars>() {
         return;
     }
-    let (registrations, changes) = {
+    let events = world.resource_scope(|world, mut cvars: Mut<Cvars>| {
         let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() else {
-            return;
+            return Vec::new();
         };
-        (script.take_cvar_registrations(), script.take_cvar_changes())
-    };
-    let events = {
-        let mut cvars = world.resource_mut::<Cvars>();
-        for (name, default) in registrations {
-            cvars.learn_addon_row(&name, &default);
-        }
-        for (name, value) in changes {
-            cvars.set_from_vm(&name, &value);
-        }
+        cvars.drain_vm(&mut script);
         if cvars.has_outbox() {
             cvars.take_outbox(); // the VM this was for is going away
         }
@@ -808,7 +815,7 @@ pub(crate) fn fold_dying_vm_cvars(world: &mut World) {
         } else {
             Vec::new()
         }
-    };
+    });
     for event in events {
         world.trigger(event);
     }
@@ -2141,6 +2148,30 @@ mod tests {
             cvars.compose().get("FutureKnob").map(String::as_str),
             Some("3")
         );
+    }
+
+    /// `RegisterCVar`'s count (`[0xb4e3c8]`) is the process's, so it outlives the VM: a
+    /// `ReloadUI`'s VM is seeded with it, and its re-declarations find their rows and count nothing.
+    #[test]
+    fn the_lua_registration_count_survives_a_vm_replacement() {
+        let mut cvars = registry(&[]);
+        let mut first = UiScript::new().unwrap();
+        cvars.seed_vm(&mut first);
+        for i in 0..benilla_ui::script::LUA_CVAR_LIMIT {
+            first.run(&format!("RegisterCVar('knob{i}', '1')")).unwrap();
+        }
+        cvars.drain_vm(&mut first);
+        assert_eq!(cvars.lua_created, benilla_ui::script::LUA_CVAR_LIMIT);
+
+        let mut second = UiScript::new().unwrap();
+        cvars.seed_vm(&mut second);
+        let err = second.run("RegisterCVar('knob0', '1')").unwrap_err();
+        assert_eq!(
+            benilla_ui::script::lua_message(&err),
+            "Attempted to register too many CVars",
+            "at the limit even a re-declaration raises"
+        );
+        assert!(second.run("RegisterCVar('knob31', '1')").is_err());
     }
 
     #[test]

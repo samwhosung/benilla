@@ -191,6 +191,13 @@ impl super::UiScript {
             .collect()
     }
 
+    /// Whether a Lua write or registration waits for [`Self::take_cvar_changes`] or
+    /// [`Self::take_cvar_registrations`].
+    pub fn has_cvar_traffic(&self) -> bool {
+        let model = self.model_mut();
+        !model.cvar_changes.is_empty() || !model.cvar_registrations.is_empty()
+    }
+
     /// Drain the `(name, new_value)` changes queued since the last call, under the registered
     /// spelling: the host's cue to sync its resources and mark the config dirty.
     pub fn take_cvar_changes(&mut self) -> Vec<(String, String)> {
@@ -201,6 +208,18 @@ impl super::UiScript {
     /// host's registry keeps them beside its own, as the reference's one table does.
     pub fn take_cvar_registrations(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.model_mut().cvar_registrations)
+    }
+
+    /// The process's count of CVars Lua has created ([`LUA_CVAR_LIMIT`]), which outlives the VM
+    /// as the reference's `[0xb4e3c8]` outlives every `ReloadUI`: the host seeds each new VM with
+    /// it and reads it back.
+    pub fn set_cvar_lua_created(&mut self, count: u32) {
+        self.model_mut().cvar_lua_created = count;
+    }
+
+    /// See [`Self::set_cvar_lua_created`].
+    pub fn cvar_lua_created(&self) -> u32 {
+        self.model_mut().cvar_lua_created
     }
 
     /// Flag a CVar read-only to Lua, or clear it: `CVar::SetReadOnly` (`0x63e030`). A flagged name
@@ -376,6 +395,12 @@ const USAGE_SET_CVAR: &str = "Usage: SetCVar(\"cvar\", value [, \"scriptCvar\")"
 /// `0x8422e8`, verbatim.
 const USAGE_REGISTER_CVAR: &str = "Usage: RegisterCVar(\"cvar\" [, default])";
 
+/// How many CVars `RegisterCVar` creates per process (`0x488b25`: `cmp [0xb4e3c8], 0x1e`).
+pub const LUA_CVAR_LIMIT: u32 = 30;
+
+/// `0x8422c0`, verbatim.
+const TOO_MANY_CVARS: &str = "Attempted to register too many CVars";
+
 /// The CVars `CGGameUI::InitializeGame` flags read-only for the whole world session, the table
 /// at `0x83de4c` walked by `0x48f566`-`0x48f584`; `ShutdownGame` clears them again
 /// (`0x491240`-`0x49125d`). The host flags them on each in-game VM before its UI loads, as
@@ -393,14 +418,25 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(name) = cvar_arg(args.front()) else {
                 return Err(mlua::Error::runtime(USAGE_REGISTER_CVAR));
             };
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            // The limit is tested before the name is looked up (`0x488b25`), so at the limit a
+            // re-declaration raises too.
+            if model.cvar_lua_created >= LUA_CVAR_LIMIT {
+                return Err(mlua::Error::runtime(TOO_MANY_CVARS));
+            }
             // The default only when `lua_isstring(2)` passes (`0x488b56`), else "0".
             let value = cvar_arg(args.get(1)).unwrap_or_else(|| NO_STRING_FORM.to_string());
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let key = name.to_ascii_lowercase();
             // A saved value outranks the declared one, which stays the default for the saver.
             let saved = model.cvars_saved_base.get(&key).cloned();
             if model.cvars.contains_key(&key) {
                 return Ok(());
+            }
+            // Only a call that creates the record counts (`0x488b8f`, past the lookup at
+            // `0x488b7d`). A saved name is no creation: the reference's config load already made
+            // its record (`set`, `0x63d582`), so its lookup finds one.
+            if saved.is_none() {
+                model.cvar_lua_created += 1;
             }
             // The host gives the row a place in its registry, which outlives this VM.
             model.cvar_registrations.push((name.clone(), value.clone()));

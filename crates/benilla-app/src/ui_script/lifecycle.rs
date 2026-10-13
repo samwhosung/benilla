@@ -77,8 +77,7 @@ fn install_glue_vm(world: &mut World, screen: super::glue::GlueScreen) -> bool {
     // this VM is born before `cvars::sync_cvars`'s per-VM seed, and the character screen's
     // `OnShow` names the realm `GetServerName` reads off `realmName` (`0x46d289`).
     if let Some(cvars) = world.get_resource::<crate::cvars::Cvars>() {
-        script.set_cvar_saved_base(cvars.orphans());
-        script.seed_cvars(cvars.vm_seed());
+        cvars.seed_vm(&mut script);
     }
     seed_agreements(world, &mut script);
     let start = std::time::Instant::now();
@@ -414,13 +413,9 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // The CVar table goes in before the UI loads: stock `UIOptionsFrame.xml`'s camera dropdowns
     // read `cameraSmoothStyle` and `cameraSmoothTrackingStyle` in their `OnLoad`, where a nil is a
     // concat error (`UIOptionsFrame.lua:379-384`, `:501-506`), and this VM was born inside this
-    // call, before `cvars::sync_cvars`'s per-VM seed. Its order: the file's unclaimed entries
-    // first, so an addon's `RegisterCVar` starts at the player's value, then the live table.
+    // call, before `cvars::sync_cvars`'s per-VM seed.
     match world.get_resource::<crate::cvars::Cvars>() {
-        Some(cvars) => {
-            script.set_cvar_saved_base(cvars.orphans());
-            script.seed_cvars(cvars.vm_seed());
-        }
+        Some(cvars) => cvars.seed_vm(&mut script),
         None => script.register_cvars(crate::cvars::registered_pairs()),
     }
     // The item locks before any file or event runs: a `/reload`'s survive, as on the reference's
