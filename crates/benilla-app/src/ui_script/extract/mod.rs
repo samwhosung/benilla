@@ -2385,19 +2385,21 @@ mod extract_gate_tests {
     #[test]
     fn a_shown_sibling_splices_through_the_shift_and_matches_the_full_conversion() {
         // A, B, C in declaration order, so B's entries sort between A's and C's; B starts hidden.
+        // Each texture has a layer of its own: in one, the batch sort (`0x7731a0`) would rank the
+        // three by texture and move C's key when B rejoins.
         const BUILD: &str = r#"
-            local function box(name, x, r, g, b)
+            local function box(name, x, r, g, b, layer)
               local f = CreateFrame("Frame", name)
               f:SetPoint("TOPLEFT", x, 0)
               f:SetWidth(50); f:SetHeight(50)
-              local t = f:CreateTexture(nil, "ARTWORK")
+              local t = f:CreateTexture(nil, layer)
               t:SetTexture(r, g, b)
               t:SetAllPoints()
               return f
             end
-            box("A", 0, 1, 0, 0)
-            hidden = box("B", 60, 0, 1, 0)
-            box("C", 120, 0, 0, 1)
+            box("A", 0, 1, 0, 0, "BACKGROUND")
+            hidden = box("B", 60, 0, 1, 0, "BORDER")
+            box("C", 120, 0, 0, 1, "ARTWORK")
         "#;
         let mut app = app_from_script(&format!("{BUILD}\nhidden:Hide()"));
         app.world_mut()
@@ -2430,7 +2432,7 @@ mod extract_gate_tests {
             quads.quads.len()
         );
         // The comparison app replays the history: `Show()` re-stacks a hidden frame to the tail of
-        // its draw bucket (the client's show, `0x76ae10`), so B draws above C.
+        // its draw bucket (the client's show, `0x76ae10`).
         let mut reference = app_from_script(&format!("{BUILD}\nhidden:Hide()\nhidden:Show()"));
         reference.update();
         assert!(
