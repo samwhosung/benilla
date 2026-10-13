@@ -10,8 +10,8 @@ use benilla_ui::script::{TaxiUiState, UiScript};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::UNIT_FLAG_TAXI_FLIGHT;
-use crate::ui_script::{UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, sweep_close, NpcSession};
 
 mod routing;
 use routing::{build_nodes, load_taxi_catalogs, taxi_error_key, TaxiCatalogs, TaxiRouteCache};
@@ -58,6 +58,18 @@ impl TaxiState {
     }
 }
 
+/// The leave-world sweep's taxi leg (`0x490ad0` → `0x4db700` → `0x4dc0f0`): an open map closes
+/// with `TAXIMAP_CLOSED` (`0x4dc15f`) in the VM the sweep runs in.
+fn close_taxi_on_leave_world(script: Option<NonSendMut<UiScript>>, mut state: ResMut<TaxiState>) {
+    if sweep_close(&mut *state).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_taxi(None);
+        script.fire_event("TAXIMAP_CLOSED", vec![]);
+    }
+}
+
 /// A flight master's `SMSG_TAXINODE_STATUS`: `known = false` shows the green `TalkToMeGreen`
 /// overhead icon (`0x5ecdd0` to `0x607480`, resource table `0xc4d9d8` index 4). The query and the
 /// teardown belong to [`crate::quest_markers::query`]: the reference's only sender, `0x5eb170`, is
@@ -93,8 +105,8 @@ fn feed_taxi(
     stores: Query<&ObjectStore>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     reactions: crate::target::ReactionInputs,
-    mut last: Local<crate::ui_script::VmMemo<Option<TaxiUiState>>>,
-    mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
+    mut last: crate::ui_script::WindowMemo<Option<TaxiUiState>>,
+    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
     mut sink: crate::ui_action::MessageSink,
 ) {
     let Some(mut script) = script else {
@@ -292,6 +304,7 @@ impl Plugin for UiTaxiPlugin {
         net::register(app);
         app.init_resource::<TaxiState>()
             .init_resource::<TaxiRouteCache>()
+            .add_sweep_leg(SweepLeg::Taxi, close_taxi_on_leave_world)
             .add_systems(
                 Update,
                 (

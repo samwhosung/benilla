@@ -3,6 +3,8 @@
 //! kept past its VM silently skips the push into the next one; [`VmMemo`] keys it on
 //! [`UiScript::session`], so against a new VM it reads as fresh.
 
+use bevy::prelude::*;
+
 use benilla_ui::script::UiScript;
 
 /// A host-side memo valid only for the VM that wrote it: [`VmMemo::get`] resets it to
@@ -10,6 +12,8 @@ use benilla_ui::script::UiScript;
 pub(crate) struct VmMemo<T> {
     /// The VM this memory is about; 0 is no VM, as [`UiScript::session`] counts from 1.
     session: u64,
+    /// The world it is about, for [`VmMemo::get_in_world`]: the sweeps run before it was written.
+    world: u64,
     inner: T,
 }
 
@@ -17,6 +21,7 @@ impl<T: Default> Default for VmMemo<T> {
     fn default() -> Self {
         Self {
             session: 0,
+            world: 0,
             inner: T::default(),
         }
     }
@@ -40,6 +45,17 @@ impl<T: Default> VmMemo<T> {
         self.get_reset_for(Some(script))
     }
 
+    /// [`VmMemo::get`] for what a window's feed last told the VM: cleared as well once a
+    /// leave-world sweep has run, since the sweep closes the window and tells the VM itself, so
+    /// the feed's next look starts from a closed window and announces nothing twice.
+    pub(crate) fn get_in_world(&mut self, script: &UiScript, worlds: super::SweptWorlds) -> &mut T {
+        if self.world != worlds.0 {
+            self.world = worlds.0;
+            self.inner = T::default();
+        }
+        self.get(script)
+    }
+
     fn get_reset_for(&mut self, script: Option<&UiScript>) -> (&mut T, bool) {
         let now = script.map_or(0, UiScript::session);
         let reset = self.session != now;
@@ -48,6 +64,23 @@ impl<T: Default> VmMemo<T> {
             self.inner = T::default();
         }
         (&mut self.inner, reset)
+    }
+}
+
+/// What a window's feed last told the VM: a [`VmMemo`] that a leave-world sweep clears as well
+/// ([`VmMemo::get_in_world`]), for the windows whose sweep leg closes them and tells the VM.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct WindowMemo<'w, 's, T: Default + Send + 'static> {
+    memo: Local<'s, VmMemo<T>>,
+    /// Absent in a harness that registers no sweep, which then never sweeps.
+    worlds: Option<Res<'w, super::SweptWorlds>>,
+}
+
+impl<T: Default + Send + 'static> WindowMemo<'_, '_, T> {
+    /// The memory, cleared first against a different VM or after a sweep.
+    pub(crate) fn get(&mut self, script: &UiScript) -> &mut T {
+        let worlds = self.worlds.as_deref().copied().unwrap_or_default();
+        self.memo.get_in_world(script, worlds)
     }
 }
 
@@ -106,6 +139,22 @@ mod tests {
         let (m, reset) = memo.get_reset(&second);
         assert!(reset, "a new VM resets again");
         assert_eq!(*m, 0, "…and the memory is gone with the old one");
+    }
+
+    #[test]
+    fn a_window_memo_does_not_survive_a_sweep() {
+        let vm = UiScript::new().expect("VM");
+        let mut memo: VmMemo<Option<u32>> = VmMemo::default();
+        *memo.get_in_world(&vm, super::super::SweptWorlds(0)) = Some(7);
+        assert_eq!(
+            *memo.get_in_world(&vm, super::super::SweptWorlds(0)),
+            Some(7)
+        );
+        assert_eq!(
+            *memo.get_in_world(&vm, super::super::SweptWorlds(1)),
+            None,
+            "the sweep closed the window and told the VM"
+        );
     }
 
     #[test]

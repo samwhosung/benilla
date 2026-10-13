@@ -22,8 +22,8 @@ use crate::net::{
     ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer, WorldEnterCascadeMessage,
 };
 use crate::query_cache::QueryCache;
-use crate::ui_script::{UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, sweep_close, NpcSession};
 
 mod net;
 mod pending;
@@ -166,6 +166,21 @@ impl NpcSession for MailOpen {
     }
 }
 
+/// The leave-world sweep's mail leg (`0x490b1b` → `0x4acc00` → `0x4acd50(cl=1)`): the compose
+/// tab's silent reset runs first and always (`0x4acd55` → `0x4acdc0(0)`), lifting the
+/// attachment's lock in the VM the sweep runs in (`0x4acdd6`); then the mailbox is forgotten with
+/// no `MAIL_CLOSED`, no interaction release and no refresh (`0x4acd5f`-`0x4acd6b`), the `cl`
+/// arm the close button's `0x4acd71` skips to.
+pub(crate) fn close_mail_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut mail: ResMut<MailOpen>,
+) {
+    if let Some(mut script) = script {
+        script.reset_compose_tab_silently();
+    }
+    sweep_close(&mut *mail);
+}
+
 pub(crate) struct UiMailPlugin;
 
 impl Plugin for UiMailPlugin {
@@ -174,6 +189,7 @@ impl Plugin for UiMailPlugin {
         net::register(app);
         app.init_resource::<MailOpen>()
             .init_resource::<MailPending>()
+            .add_sweep_leg(SweepLeg::Mail, close_mail_on_leave_world)
             .add_systems(
                 Update,
                 (
@@ -474,8 +490,8 @@ fn feed_mail(
     commands: Res<NetCommands>,
     mut pending: ResMut<MailPending>,
     time: Res<Time>,
-    mut last: Local<crate::ui_script::VmMemo<Option<MailState>>>,
-    mut last_mailbox: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut last: crate::ui_script::WindowMemo<Option<MailState>>,
+    mut last_mailbox: crate::ui_script::WindowMemo<Option<u64>>,
     mut last_has_new_mail: Local<crate::ui_script::VmMemo<bool>>,
     // The local player, the letter body's `$`-macro subject.
     self_q: Query<(&crate::net::ObjectStore, &crate::net::Guid), With<crate::net::SelfPlayer>>,
@@ -1135,5 +1151,68 @@ mod tests {
         assert!(row.has_body);
         // The item template has not answered yet.
         assert!(row.item_name.is_none());
+    }
+
+    /// The feed and the sweep's mail leg, the feed's other inputs at rest.
+    fn sweep_mail_app() -> App {
+        use crate::ui_script::SweepApp;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<MailOpen>()
+            .init_resource::<MailPending>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<Time>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(NetCommands(tx))
+            .add_sweep_leg(SweepLeg::Mail, close_mail_on_leave_world)
+            .add_systems(Update, feed_mail);
+        app
+    }
+
+    const EVENTS: [&str; 2] = ["MAIL_SHOW", "MAIL_CLOSED"];
+    const MAILBOX: u64 = 0xF110_0000_0000_0B0C;
+
+    /// A `/reload` at an open mailbox: the mail leg (`0x490b1b` → `0x4acd50(cl=1)`) forgets it
+    /// with no `MAIL_CLOSED`, and the new VM shows nothing.
+    #[test]
+    fn a_reload_forgets_the_mailbox_silently_and_the_new_vm_shows_nothing() {
+        use crate::ui_script::sweep_test::{reload_in_place, seen, seen_in, spied_vm};
+        let mut app = sweep_mail_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.world_mut().resource_mut::<MailOpen>().click(MAILBOX);
+        app.update();
+        assert_eq!(seen_in(&app), ["MAIL_SHOW"]);
+
+        let dying = reload_in_place(&mut app, &EVENTS);
+        assert_eq!(
+            seen(&dying),
+            ["MAIL_SHOW"],
+            "no `MAIL_CLOSED` on the `cl` arm"
+        );
+        assert_eq!(app.world().resource::<MailOpen>().mailbox, None);
+
+        app.update();
+        assert!(
+            seen_in(&app).is_empty(),
+            "the new VM has no mailbox to show"
+        );
+    }
+
+    /// A worldport's surviving VM: the leg's silence holds, and the feed adds no `MAIL_CLOSED`.
+    #[test]
+    fn a_worldport_forgets_the_mailbox_without_mail_closed() {
+        use crate::ui_script::sweep_test::{seen_in, spied_vm, sweep_in_place};
+        let mut app = sweep_mail_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.world_mut().resource_mut::<MailOpen>().click(MAILBOX);
+        app.update();
+        sweep_in_place(&mut app);
+        app.update();
+        app.update();
+        assert_eq!(seen_in(&app), ["MAIL_SHOW"]);
     }
 }

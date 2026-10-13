@@ -25,8 +25,8 @@ use bevy::ecs::system::SystemParam;
 
 use crate::net::{ClientCommand, FieldChanged, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_action::{PlayerActions, Spells};
-use crate::ui_script::{UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, npc_switched, sweep_close, NpcSession};
 use crate::ui_spellbook::SkillLines;
 
 /// `SMSG_TRAINER_LIST`'s `trainer_type` for a tradeskill trainer (0 class, 1 mount, 2 tradeskill,
@@ -122,6 +122,7 @@ impl Plugin for UiTrainerPlugin {
         app.init_resource::<TrainerOpen>()
             .init_resource::<TrainerErrors>()
             .init_resource::<TrainerTooltipSubjects>()
+            .add_sweep_leg(SweepLeg::Trainer, close_trainer_on_leave_world)
             .add_systems(
                 Update,
                 (
@@ -318,9 +319,9 @@ pub(crate) fn feed_trainer(
     commands: Res<NetCommands>,
     names: Res<NameCache>,
     mut tooltip_subjects: ResMut<TrainerTooltipSubjects>,
-    mut last: Local<crate::ui_script::VmMemo<Option<TrainerState>>>,
-    mut last_trainer: Local<crate::ui_script::VmMemo<Option<u64>>>,
-    mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
+    mut last: crate::ui_script::WindowMemo<Option<TrainerState>>,
+    mut last_trainer: crate::ui_script::WindowMemo<Option<u64>>,
+    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -539,6 +540,21 @@ pub(crate) fn feed_trainer(
     *last = fresh;
     *last_trainer = open.trainer;
     *last_name = trainer_name;
+}
+
+/// The leave-world sweep's trainer leg (`0x490ad5` → `0x4d7400` → `0x4d7440(0)`): an open window
+/// closes with `TRAINER_CLOSED` (`0x4d7468`) in the VM the sweep runs in.
+fn close_trainer_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut open: ResMut<TrainerOpen>,
+) {
+    if sweep_close(&mut *open).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_trainer(None);
+        script.fire_event("TRAINER_CLOSED", vec![]);
+    }
 }
 
 /// The range guard closes the window, as `CloseTrainer` would, on walk-away or despawn.

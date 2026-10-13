@@ -14,19 +14,33 @@ use bevy::prelude::*;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfGuid, SelfPlayer};
 use crate::ui_items::{find_item, ItemSearch};
-use crate::ui_session::{npc_switched, NpcSession};
+use crate::ui_session::{npc_switched, sweep_close, NpcSession};
 
 use super::{lines, GuildRegistrarState, PetitionState};
 
 /// What the feed last announced, so the events fire on edges rather than every frame.
 #[derive(Default)]
 pub(super) struct FedPetition {
-    registrar: Option<u64>,
     /// The charter shown last frame; `None` while one is still resolving, so the wait is an edge.
     shown_charter: Option<u64>,
     /// The last pushed view and names, so a change while shown re-fires `PETITION_SHOW`.
     shown: Option<PetitionRecordView>,
     shown_signers: Vec<Option<String>>,
+}
+
+/// The leave-world sweep's registrar leg (`0x490b07` → `0x4f4fa0` → `0x4f5010`): an open
+/// registrar closes with `GUILD_REGISTRAR_CLOSED` (`0x4f503a`) in the VM the sweep runs in. The
+/// charter window is no leg's: the sweep frees only its signer list (`0x490b11` → `0x4f3eb0`).
+pub(super) fn close_registrar_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut registrar: ResMut<GuildRegistrarState>,
+) {
+    if sweep_close(&mut *registrar).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
+    }
 }
 
 /// Build the snapshot, push it, drain the queued lines, and fire the four events on their edges.
@@ -40,11 +54,15 @@ pub(super) fn feed_petition(
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedPetition>>,
+    // Apart from the charter's: the leave-world sweep closes the registrar and tells the VM, and
+    // leaves the charter open.
+    mut fed_registrar: crate::ui_script::WindowMemo<Option<u64>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let fed = fed.get(&script);
+    let fed_registrar = fed_registrar.get(&script);
 
     // Shown before the snapshot, so a refusal lands the same frame as its state change; a key the
     // VM's `GlobalStrings.lua` lacks shows nothing, as in the reference.
@@ -122,19 +140,19 @@ pub(super) fn feed_petition(
     // ── The registrar's edges. Switching registrars is a close then an open: `ShowUIPanel`
     //    returns early on a visible frame, so the open sound would not replay.
     let now_registrar = registrar.npc();
-    if npc_switched(fed.registrar, now_registrar) {
+    if npc_switched(*fed_registrar, now_registrar) {
         script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
         script.fire_event("GUILD_REGISTRAR_SHOW", vec![]);
         // Drop the close intent `OnHide` just queued, or the drain would close the new registrar.
         let _ = script.drop_petition_close_intents();
     } else {
-        match (fed.registrar, now_registrar) {
+        match (*fed_registrar, now_registrar) {
             (None, Some(_)) => script.fire_event("GUILD_REGISTRAR_SHOW", vec![]),
             (Some(_), None) => script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]),
             _ => {}
         }
     }
-    fed.registrar = now_registrar;
+    *fed_registrar = now_registrar;
 
     // ── The petition window's edges, once the record and every signer name have landed.
     let ready = record.is_some() && signers.iter().all(Option::is_some);

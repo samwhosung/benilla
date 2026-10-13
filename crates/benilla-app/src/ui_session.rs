@@ -99,6 +99,14 @@ pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
     }
 }
 
+/// Close `T`'s open session as its leave-world sweep leg does, client-side with no packet: the
+/// NPC it was bound to, or `None` when nothing was open. The leg then tells the VM.
+pub(crate) fn sweep_close<T: NpcSession>(session: &mut T) -> Option<u64> {
+    let npc = session.npc()?;
+    session.close();
+    Some(npc)
+}
+
 /// The `"npc"` unit: the open [`NpcSession`]'s world entity and guid, read by the portrait booth
 /// as it reads [`crate::target::Selection`] for `"target"`. Only one session is open in play.
 #[derive(Resource, Default, PartialEq, Eq)]

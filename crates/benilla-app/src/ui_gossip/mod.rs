@@ -12,8 +12,8 @@ use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow, ScriptVal
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_quest::{row_is_active, row_is_one_click};
-use crate::ui_script::{UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, npc_switched, sweep_close, NpcSession};
 
 /// The open gossip menu, plus the NPC-text records by id, which outlive it. The cache holds whole
 /// records: the reference draws the greeting afresh at each open, from the NPC's gender and a roll.
@@ -137,15 +137,17 @@ pub(crate) struct UiGossipPlugin;
 impl Plugin for UiGossipPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<GossipState>().add_systems(
-            Update,
-            (
-                // Range-close first so the clear fires `GOSSIP_CLOSED` the same frame.
-                close_npc_session_out_of_range::<GossipState>.before(feed_gossip),
-                feed_gossip.in_set(UiFeed),
-                drain_gossip.after(UiInput),
-            ),
-        );
+        app.init_resource::<GossipState>()
+            .add_sweep_leg(SweepLeg::Gossip, close_gossip_on_leave_world)
+            .add_systems(
+                Update,
+                (
+                    // Range-close first so the clear fires `GOSSIP_CLOSED` the same frame.
+                    close_npc_session_out_of_range::<GossipState>.before(feed_gossip),
+                    feed_gossip.in_set(UiFeed),
+                    drain_gossip.after(UiInput),
+                ),
+            );
     }
 }
 
@@ -219,6 +221,21 @@ fn snapshot(state: &GossipState) -> Option<GossipMenu> {
     })
 }
 
+/// The leave-world sweep's gossip leg (`0x490ac1` → `0x4e1f60` → `0x4e1fa0(0)`): an open menu
+/// closes with `GOSSIP_CLOSED` (`0x4e1fdc`) in the VM the sweep runs in.
+fn close_gossip_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut state: ResMut<GossipState>,
+) {
+    if sweep_close(&mut *state).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_gossip(None);
+        script.fire_event("GOSSIP_CLOSED", vec![]);
+    }
+}
+
 /// Push the menu into the VM and fire `GOSSIP_SHOW` or `GOSSIP_CLOSED` on a change.
 fn feed_gossip(
     script: Option<NonSendMut<UiScript>>,
@@ -227,9 +244,9 @@ fn feed_gossip(
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     states: Res<crate::world_state::WorldStates>,
-    mut last: Local<crate::ui_script::VmMemo<Option<GossipMenu>>>,
-    mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
-    mut last_npc: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut last: crate::ui_script::WindowMemo<Option<GossipMenu>>,
+    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
+    mut last_npc: crate::ui_script::WindowMemo<Option<u64>>,
 ) {
     let Some(mut script) = script else {
         return;

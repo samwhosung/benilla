@@ -21,7 +21,7 @@ use bevy::prelude::*;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::QueryCache;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::NpcSession;
 
 mod feed;
@@ -67,6 +67,12 @@ impl GuildRegistrarState {
             cost: first.charter_cost as u32,
         });
         true
+    }
+
+    /// An open registrar on `npc`, past the gates [`Self::open`] runs, for a test.
+    #[cfg(test)]
+    pub(crate) fn open_for_test(&mut self, npc: u64) {
+        self.open = Some(Registrar { npc, cost: 0 });
     }
 
     /// `GetGuildCharterCost()`: 0 with no registrar open.
@@ -261,6 +267,7 @@ impl Plugin for UiPetitionPlugin {
         crate::query_cache::register::<PetitionState>(app);
         app.init_resource::<GuildRegistrarState>()
             .init_resource::<PetitionState>()
+            .add_sweep_leg(SweepLeg::Registrar, feed::close_registrar_on_leave_world)
             .add_systems(
                 Update,
                 (

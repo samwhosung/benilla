@@ -19,7 +19,7 @@ use crate::net::{
     FieldChanged, FieldEdges, Guid, NetCommands, ObjectStore, Reputations, SelfPlayer,
 };
 use crate::target::{ring_reaction, Factions, Selection};
-use crate::ui_script::{gate, UiInput};
+use crate::ui_script::{gate, SweepApp, UiInput};
 
 mod control_gate;
 mod held;
@@ -56,35 +56,6 @@ pub(crate) struct CombatTextEvent {
     pub(crate) message_type: &'static str,
     pub(crate) data: Option<String>,
     pub(crate) extra: Option<String>,
-}
-
-/// `PLAYER_LEAVING_WORLD` on a cross-map worldport. The reference fires event `0x111` at one site
-/// (`0x490b48`), gated only by the latch `[0xb4b424]`, from the local player's destructor
-/// (`0x5dd543`, this system), the shutdown tail `0x490bd0` (ours is `shutdown_ui_state`) and the
-/// local player's DESTROY or OUT_OF_RANGE (`0x5e9b5a`); a same-map teleport destroys nothing.
-///
-/// Deviation: fires with our descriptor present, so `UnitExists("player")` answers true where the
-/// reference's (`0x515970`) misses, because matching it breaks `UnitExists` for no stock reader.
-pub(crate) fn fire_leaving_world_on_worldport(
-    script: Option<NonSendMut<UiScript>>,
-    mut sweep: crate::ui_script::LeaveWorldSweep,
-    mut ports: MessageReader<crate::net::WorldportMessage>,
-) {
-    // `needs_ack` false is the initial-login map, an arrival; the whole iterator is read so no
-    // message carries over.
-    let leaving = ports.read().filter(|w| w.needs_ack).count() > 0;
-    if !leaving {
-        return;
-    }
-    // The world latch keeps this producer and the shutdown tail from both claiming one departure;
-    // spent even with no VM, as the reference clears it at `0x490a8d`, ahead of the fire.
-    if !sweep.run() {
-        return;
-    }
-    let Some(mut script) = script else {
-        return;
-    };
-    script.fire_event("PLAYER_LEAVING_WORLD", Vec::new());
 }
 
 /// The feed's change-tracking memory: what we last told the VM, plus one server-side log-once.
@@ -145,14 +116,13 @@ impl Plugin for UiUnitPlugin {
         .add_message::<CombatTextEvent>()
         .add_message::<crate::net::WorldportMessage>()
         .add_message::<crate::net::FieldChanged>()
-        .init_resource::<crate::ui_script::LeavingWorldArmed>()
-        .add_message::<crate::ui_script::WorldLeaveSweepMessage>()
+        .init_world_leave_sweep()
         .add_systems(
             Update,
             (
                 // First, so a worldport's leaving edge precedes the entering edge `feed_units`
                 // raises for the same port.
-                fire_leaving_world_on_worldport,
+                crate::ui_script::sweep_on_worldport,
                 feed_units,
                 // After the aura feed, whose resolver inputs it measures.
                 feed_unit_reach.after(crate::ui_aura::AuraEvents),
@@ -3812,9 +3782,8 @@ mod tests {
     fn a_cross_map_worldport_fires_leaving_world_and_the_login_map_does_not() {
         let mut app = App::new();
         app.add_message::<crate::net::WorldportMessage>()
-            .init_resource::<crate::ui_script::LeavingWorldArmed>()
-            .add_message::<crate::ui_script::WorldLeaveSweepMessage>()
-            .add_systems(Update, fire_leaving_world_on_worldport);
+            .init_world_leave_sweep()
+            .add_systems(Update, crate::ui_script::sweep_on_worldport);
         app.insert_non_send_resource(UiScript::new().expect("VM"));
         app.world_mut()
             .non_send_resource::<UiScript>()

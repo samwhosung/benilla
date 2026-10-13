@@ -19,7 +19,7 @@ use crate::net::{
     ClientCommand, NetCommands, ObjectStore, SelfGuid, SelfPlayer, WorldEnterCascadeMessage,
 };
 use crate::ui_party::GroupState;
-use crate::ui_script::{UiFeed, UiInput, WorldLeaveSweepMessage};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
 /// The pet trainer's pending question: the latch (`0xc4d7b0/b4`) and the cost (`0xc4d7b8`).
@@ -636,13 +636,8 @@ fn drain_meeting_stone_joins(
 
 /// The leave-world sweep's meeting-stone leg (`0x490b2f` → `0x4c9f80`): the text dropped, the
 /// area kept.
-pub(crate) fn meeting_stone_leave_world(
-    mut sweeps: MessageReader<WorldLeaveSweepMessage>,
-    mut stone: ResMut<MeetingStone>,
-) {
-    if sweeps.read().next().is_some() {
-        stone.leave_world();
-    }
+fn meeting_stone_leave_world(mut stone: ResMut<MeetingStone>) {
+    stone.leave_world();
 }
 
 /// Drop the cached spirit guide when the world does, so no healer, wave or event reaches the
@@ -974,7 +969,7 @@ impl Plugin for UiDialogVerbsPlugin {
             .init_resource::<MeetingStone>()
             .add_message::<MeetingStoneUse>()
             .add_message::<WorldEnterCascadeMessage>()
-            .add_message::<WorldLeaveSweepMessage>()
+            .add_sweep_leg(SweepLeg::MeetingStone, meeting_stone_leave_world)
             .add_systems(
                 Update,
                 (
@@ -992,9 +987,6 @@ impl Plugin for UiDialogVerbsPlugin {
                         .after(crate::target::TargetUpdate)
                         .run_if(crate::ui_script::ingame_ui_up)
                         .in_set(crate::char_select::InWorldGated),
-                    // The sweep's drop, then the cascade's reset: a `/reload` runs both in one
-                    // frame, in this order (`0x490c20`, then `0x490168`).
-                    meeting_stone_leave_world.before(meeting_stone_enter_world),
                     // The cascade's order: the battlefield status, then this (`0x4909fb`,
                     // `0x490a14`), so `CMSG 0x296` follows `CMSG 0x2D3` on the wire.
                     meeting_stone_enter_world
@@ -1475,21 +1467,19 @@ mod tests {
     }
 
     /// The two meeting-stone legs behind the worldport's sweep producer, the latch armed as our
-    /// own create arms it; the cascade and a `/reload`'s sweep are written by hand.
+    /// own create arms it; the cascade is written by hand, and a `/reload`'s sweep run by hand.
     fn stone_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<MeetingStone>()
             .insert_resource(NetCommands(tx))
-            .init_resource::<crate::ui_script::LeavingWorldArmed>()
             .add_message::<crate::net::WorldportMessage>()
             .add_message::<WorldEnterCascadeMessage>()
-            .add_message::<WorldLeaveSweepMessage>()
+            .add_sweep_leg(SweepLeg::MeetingStone, meeting_stone_leave_world)
             .add_systems(
                 Update,
                 (
-                    crate::ui_unit::fire_leaving_world_on_worldport,
-                    meeting_stone_leave_world,
+                    crate::ui_script::sweep_on_worldport,
                     meeting_stone_enter_world,
                 )
                     .chain(),
@@ -1605,7 +1595,7 @@ mod tests {
         assert_eq!(stone_queries(&rx), 1);
         answered(&mut app, 1519);
 
-        app.world_mut().write_message(WorldLeaveSweepMessage);
+        assert!(crate::ui_script::run_leave_world_sweep(app.world_mut()));
         app.world_mut().write_message(WorldEnterCascadeMessage);
         app.update();
         assert_eq!(stone_queries(&rx), 1, "the reload re-asks the server");

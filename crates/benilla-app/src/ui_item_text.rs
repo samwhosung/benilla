@@ -19,7 +19,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, Objects};
 use crate::query_cache::QueryCache;
 use crate::ui_mail::MailOpen;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 
 /// One page of a book as the wire gave it (`SMSG_PAGE_TEXT_QUERY_RESPONSE`).
 pub(crate) struct PageText {
@@ -71,7 +71,7 @@ pub(crate) struct ReadSession {
     /// An item's or a GameObject's guid; reading the same object again closes the reader.
     pub(crate) object_guid: u64,
     pub(crate) source: ReadSource,
-    /// Keyed on the VM, so a `/reload` re-fires `ITEM_TEXT_BEGIN` for a reader still open.
+    /// Keyed on the VM; the leave-world sweep closes the reader, so no later VM inherits one.
     told: crate::ui_script::VmMemo<ItemTextTold>,
 }
 
@@ -165,6 +165,7 @@ impl Plugin for UiItemTextPlugin {
         crate::query_cache::register::<PageTexts>(app);
         app.init_resource::<ItemTextOpen>()
             .init_resource::<PageTexts>()
+            .add_sweep_leg(SweepLeg::ItemText, close_item_text_on_leave_world)
             .add_systems(
                 Update,
                 (
@@ -174,6 +175,23 @@ impl Plugin for UiItemTextPlugin {
                     drain_item_text.after(UiInput),
                 ),
             );
+    }
+}
+
+/// The leave-world sweep's item-text leg (`0x490abc` → `0x4e3240` → `0x4e32e0(0, 0)`): an open
+/// reader, or one a toggle closed this frame, is told closed in the VM the sweep runs in
+/// (`ITEM_TEXT_CLOSED`, `0x4e33a2`).
+fn close_item_text_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut open: ResMut<ItemTextOpen>,
+) {
+    let was_open = open.pending.take().is_some();
+    if !(open.take_closing() || was_open) {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_item_text(None);
+        script.fire_event("ITEM_TEXT_CLOSED", vec![]);
     }
 }
 

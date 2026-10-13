@@ -20,8 +20,8 @@ use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, SelfPlayer};
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, UiError};
-use crate::ui_script::{UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, sweep_close, NpcSession};
 
 mod sort;
 
@@ -252,27 +252,47 @@ impl NpcSession for AuctionOpen {
     }
 }
 
+/// The leave-world sweep's auction leg (`0x490b25` → `0x4cc2f0` → `0x4cd5f0`): with an
+/// auctioneer open, `AUCTION_HOUSE_CLOSED` (`0x4cd602`) in the VM the sweep runs in, the
+/// auctioneer cleared (`0x4cd613`-`0x4cd629`), then the sell slot emptied with its unlock
+/// (`0x4cd62e` → `0x4cd640`).
+pub(crate) fn close_auction_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut auction: ResMut<AuctionOpen>,
+) {
+    if sweep_close(&mut *auction).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_auction(None);
+        script.fire_event("AUCTION_HOUSE_CLOSED", vec![]);
+        script.clear_auction_sell_item();
+    }
+}
+
 pub(crate) struct UiAuctionPlugin;
 
 impl Plugin for UiAuctionPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<AuctionOpen>().add_systems(
-            Update,
-            (
-                // Range-close before the feed so the close fires the same frame; the feed before
-                // the input pass, and after `UnitFeed` so a row's tooltip reads a landed template;
-                // the drain after the input pass so a click goes out the same frame.
-                close_npc_session_out_of_range::<AuctionOpen>.before(feed_auction),
-                // Only with the interface up: a sale notice landing in the login burst would
-                // otherwise be shown on the boot VM and lost.
-                feed_auction
-                    .after(crate::ui_unit::UnitFeed)
-                    .in_set(UiFeed)
-                    .run_if(crate::ui_script::ingame_ui_up),
-                drain_auction.after(UiInput),
-            ),
-        );
+        app.init_resource::<AuctionOpen>()
+            .add_sweep_leg(SweepLeg::Auction, close_auction_on_leave_world)
+            .add_systems(
+                Update,
+                (
+                    // Range-close before the feed so the close fires the same frame; the feed before
+                    // the input pass, and after `UnitFeed` so a row's tooltip reads a landed template;
+                    // the drain after the input pass so a click goes out the same frame.
+                    close_npc_session_out_of_range::<AuctionOpen>.before(feed_auction),
+                    // Only with the interface up: a sale notice landing in the login burst would
+                    // otherwise be shown on the boot VM and lost.
+                    feed_auction
+                        .after(crate::ui_unit::UnitFeed)
+                        .in_set(UiFeed)
+                        .run_if(crate::ui_script::ingame_ui_up),
+                    drain_auction.after(UiInput),
+                ),
+            );
     }
 }
 
@@ -477,8 +497,8 @@ fn feed_auction(
     houses: Option<Res<AuctionHouses>>,
     mut sink: MessageSink,
     self_q: Query<&crate::net::Guid, With<SelfPlayer>>,
-    mut last: Local<crate::ui_script::VmMemo<Option<AuctionState>>>,
-    mut last_open: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut last: crate::ui_script::WindowMemo<Option<AuctionState>>,
+    mut last_open: crate::ui_script::WindowMemo<Option<u64>>,
     mut last_can_query: Local<crate::ui_script::VmMemo<bool>>,
     mut last_classes: Local<crate::ui_script::VmMemo<Vec<AuctionCategory>>>,
 ) {
@@ -1103,5 +1123,68 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(bid.displayed_bid(), 7500);
+    }
+
+    /// The feed and the sweep's auction leg, the feed's other inputs at rest.
+    fn sweep_auction_app() -> App {
+        use crate::ui_script::SweepApp;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<AuctionOpen>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<Time>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .insert_resource(NetCommands(tx))
+            .add_sweep_leg(SweepLeg::Auction, close_auction_on_leave_world)
+            .add_systems(Update, feed_auction);
+        app
+    }
+
+    const EVENTS: [&str; 2] = ["AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED"];
+    const AUCTIONEER: u64 = 0xF130_0000_0000_0A0C;
+
+    /// A `/reload` at an open auction house: the auction leg (`0x490b25` → `0x4cd5f0`) fires
+    /// `AUCTION_HOUSE_CLOSED` in the dying VM and clears the auctioneer; the new VM shows nothing.
+    #[test]
+    fn a_reload_closes_the_auction_house_and_the_new_vm_shows_nothing() {
+        use crate::ui_script::sweep_test::{reload_in_place, seen, seen_in, spied_vm};
+        let mut app = sweep_auction_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.world_mut()
+            .resource_mut::<AuctionOpen>()
+            .open(AUCTIONEER, 1);
+        app.update();
+        assert_eq!(seen_in(&app), ["AUCTION_HOUSE_SHOW"]);
+
+        let dying = reload_in_place(&mut app, &EVENTS);
+        assert_eq!(seen(&dying), ["AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED"]);
+        assert_eq!(app.world().resource::<AuctionOpen>().auctioneer, None);
+
+        app.update();
+        assert!(
+            seen_in(&app).is_empty(),
+            "the new VM has no auction house to show"
+        );
+    }
+
+    /// A worldport's surviving VM hears `AUCTION_HOUSE_CLOSED` once, from the leg.
+    #[test]
+    fn a_worldport_closes_the_auction_house_once() {
+        use crate::ui_script::sweep_test::{seen_in, spied_vm, sweep_in_place};
+        let mut app = sweep_auction_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.world_mut()
+            .resource_mut::<AuctionOpen>()
+            .open(AUCTIONEER, 1);
+        app.update();
+        sweep_in_place(&mut app);
+        app.update();
+        app.update();
+        assert_eq!(
+            seen_in(&app),
+            ["AUCTION_HOUSE_SHOW", "AUCTION_HOUSE_CLOSED"]
+        );
     }
 }

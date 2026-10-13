@@ -156,9 +156,4 @@ fn the_client_schedules_the_sends_in_the_reference_order() {
         crate::ui_battlefield::reset_on_world_enter,
         crate::ui_dialog_verbs::meeting_stone_enter_world
     ));
-    assert!(runs_before(
-        &mut app,
-        crate::ui_dialog_verbs::meeting_stone_leave_world,
-        crate::ui_dialog_verbs::meeting_stone_enter_world
-    ));
 }

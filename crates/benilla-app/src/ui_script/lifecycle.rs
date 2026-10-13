@@ -568,7 +568,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // to re-arm it, so without this a second `/reload` would not fire `PLAYER_LEAVING_WORLD`. The
     // reference skips this leg on a fresh login (`0x490166 je`, the GUID still 0) and arms from
     // the player's create instead; both reach the same armed byte.
-    if let Some(mut armed) = world.get_resource_mut::<LeavingWorldArmed>() {
+    if let Some(mut armed) = world.get_resource_mut::<super::LeavingWorldArmed>() {
         armed.arm();
     }
 }
@@ -651,104 +651,19 @@ pub(crate) fn seat_from_roster(
 #[derive(Resource, Default)]
 pub(crate) struct AddOnIdentity(pub(crate) Option<(String, String)>);
 
-/// The world latch, the reference's `[0xb4b424]`: set at `0x4908ce` in the world-enter cascade
-/// `0x4908c0` and cleared at `0x490a8d` by the leave-world sweep `0x490a80`, which then fires
-/// `PLAYER_LEAVING_WORLD` (`0x490b4d`, its one site), so the first departure in a world sweeps
-/// and the rest are no-ops until the next entry. Ours is spent through [`LeaveWorldSweep`] or
-/// [`run_leave_world_sweep`], by [`shutdown_ui_state`]'s roots and `ui_unit`'s worldport fire. A
-/// cross-map worldport spends it without leaving `InWorld`, so a quit on its loading screen
-/// fires nothing; a `/reload` fires, and its rebuild re-arms.
-#[derive(Resource, Default)]
-pub(crate) struct LeavingWorldArmed(bool);
-
-/// The leave-world sweep `0x490a80` ran past its latch: a cross-map worldport (the local
-/// player's destructor, `0x5dd543`), a `/reload` (`0x490c20`) or leaving the world. Its legs
-/// past the clear read this, as the meeting stone's text drop (`0x490b2f` → `0x4c9f80`) does; a
-/// same-map teleport destroys nothing and never sweeps.
-#[derive(Message)]
-pub(crate) struct WorldLeaveSweepMessage;
-
-/// The latch and the sweep it gates, for a system: spending one writes the other.
-#[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct LeaveWorldSweep<'w> {
-    armed: ResMut<'w, LeavingWorldArmed>,
-    sweeps: MessageWriter<'w, WorldLeaveSweepMessage>,
-}
-
-impl LeaveWorldSweep<'_> {
-    /// Run the sweep: `true`, and [`WorldLeaveSweepMessage`] written, at most once per world.
-    pub(crate) fn run(&mut self) -> bool {
-        let swept = self.armed.spend();
-        if swept {
-            self.sweeps.write(WorldLeaveSweepMessage);
-        }
-        swept
-    }
-}
-
-/// [`LeaveWorldSweep::run`] for an exclusive edge; no latch is no world to leave.
-pub(crate) fn run_leave_world_sweep(world: &mut World) -> bool {
-    let swept = world
-        .get_resource_mut::<LeavingWorldArmed>()
-        .is_some_and(|mut l| l.spend());
-    if swept {
-        if let Some(mut sweeps) = world.get_resource_mut::<Messages<WorldLeaveSweepMessage>>() {
-            sweeps.write(WorldLeaveSweepMessage);
-        }
-    }
-    swept
-}
-
-impl LeavingWorldArmed {
-    /// A world began. Idempotent, like the reference's `mov byte [0xb4b424],1`.
-    pub(crate) fn arm(&mut self) {
-        self.0 = true;
-    }
-
-    /// Take the one-shot: `true` at most once per world, `0x490a8d`'s clear folded in.
-    fn spend(&mut self) -> bool {
-        std::mem::take(&mut self.0)
-    }
-
-    /// Read without taking, for tests.
-    #[cfg(test)]
-    pub(crate) fn is_armed(&self) -> bool {
-        self.0
-    }
-}
-
-/// Arm the latch when the local player's entity appears: the reference's `0x5deb60` entry into
-/// the world-enter cascade, which a fresh login and a worldport's new-world create both take
-/// (`0x5deb49 call 0x468570` / `0x5deb50 jne 0x5deb6a`).
-pub(crate) fn arm_leaving_world_on_self_create(
-    created: Query<(), Added<crate::net::SelfPlayer>>,
-    mut armed: ResMut<LeavingWorldArmed>,
-) {
-    if !created.is_empty() {
-        armed.arm();
-    }
-}
-
-/// The UI shutdown in the reference's order, `0x490bd0`'s tail: `PLAYER_LEAVING_WORLD` (273) →
-/// `PLAYER_LOGOUT` (271, `0x490c2a`) → `layout-cache.txt` → the flat saved file (`0x490c7e`) →
-/// the per-addon files (`0x490c83`) → `AddOns.txt` (`0x490c88`) → destroy the frame-script owner
-/// (`0x490c97`) → nil all 216 C bindings out of `_G` (`0x490cba` → `0x490ce0`).
+/// The UI shutdown in the reference's order, `0x490bd0`'s tail past the leave-world sweep (which
+/// fires `PLAYER_LEAVING_WORLD`, [`super::run_leave_world_sweep`]): `PLAYER_LOGOUT` (271,
+/// `0x490c2a`) → `layout-cache.txt` → the flat saved file (`0x490c7e`) → the per-addon files
+/// (`0x490c83`) → `AddOns.txt` (`0x490c88`) → destroy the frame-script owner (`0x490c97`) → nil
+/// all 216 C bindings out of `_G` (`0x490cba` → `0x490ce0`).
 ///
-/// `PLAYER_LOGOUT` fires before any write, an addon's last chance to change a saved global. One
-/// function on every root because the steps are ordered against each other; the layout save is
-/// here because a `/reload` never leaves `InWorld`. No autosave, as the reference has none (the
-/// layout cache's crash-only debounce in [`crate::ui_layout`] is ours).
-pub(crate) fn shutdown_ui_state(
-    script: &mut UiScript,
-    identity: Option<&(String, String)>,
-    leaving_world: bool,
-) {
-    // The one conditional step: the reference reaches `0x490c20 call 0x490a80` only past the
-    // active-player guard (`0x490bee call 0x468550`, `0x490bf5 je 0x490c25`) and the world latch,
-    // while `PLAYER_LOGOUT` (`0x490c2a`) fires on every root. The caller spends the latch.
-    if leaving_world {
-        script.fire_event("PLAYER_LEAVING_WORLD", vec![]);
-    }
+/// `PLAYER_LOGOUT` fires before any write, an addon's last chance to change a saved global, and on
+/// every root, where the sweep runs only past the active-player guard (`0x490bee call 0x468550`,
+/// `0x490bf5 je 0x490c25`) and the world latch. One function on every root because the steps are
+/// ordered against each other; the layout save is here because a `/reload` never leaves
+/// `InWorld`. No autosave, as the reference has none (the layout cache's crash-only debounce in
+/// [`crate::ui_layout`] is ours).
+pub(crate) fn shutdown_ui_state(script: &mut UiScript, identity: Option<&(String, String)>) {
     script.fire_event("PLAYER_LOGOUT", vec![]);
     crate::ui_layout::save_now(script, identity);
     crate::ui_saved::save(script);
@@ -787,7 +702,11 @@ pub(crate) fn end_ui_session(world: &mut World) {
 
 /// [`end_ui_session`] up to the new VM: the shutdown tail, the folds and the host values reset.
 fn close_ui_session(world: &mut World) {
-    // A VM still parked (the load never ran) goes back into the world first.
+    // The sweep runs before the unpark, so a VM still parked (the load never ran) hears none of
+    // it; its latch is spent at the root, so of this edge and the worldport's, the first to a
+    // departure owns it.
+    super::run_leave_world_sweep(world);
+    // A VM still parked goes back into the world first.
     unpark_boot_vm(world);
     // An entry load still armed means no in-game UI was built, and the tail would overwrite the
     // saved files with the boot VM's emptiness.
@@ -795,11 +714,9 @@ fn close_ui_session(world: &mut World) {
     let identity = world
         .get_resource::<AddOnIdentity>()
         .and_then(|id| id.0.clone());
-    // Spent at the root: of this edge and the worldport's, the first to a departure owns it.
-    let leaving_world = run_leave_world_sweep(world);
     if !ui_never_loaded {
         if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
-            shutdown_ui_state(&mut script, identity.as_ref(), leaving_world);
+            shutdown_ui_state(&mut script, identity.as_ref());
         }
     }
     // After the shutdown events (a `PLAYER_LOGOUT` handler may `SetCVar`, which in the reference
@@ -885,22 +802,22 @@ pub(crate) fn run_pending_reload(world: &mut World) {
 /// `InWorld`. A quit from the character screen, or on a worldport's loading screen, finds the
 /// latch spent, so `PLAYER_LEAVING_WORLD` does not fire.
 pub(crate) fn shutdown_on_exit(
-    script: Option<NonSendMut<UiScript>>,
-    id: Res<AddOnIdentity>,
-    pending_entry: Option<Res<PendingEntryUiLoad>>,
-    mut sweep: LeaveWorldSweep,
-    mut exits: MessageReader<AppExit>,
+    world: &mut World,
+    exits: &mut bevy::ecs::system::SystemState<MessageReader<AppExit>>,
 ) {
-    if exits.read().next().is_none() {
+    if exits.get_mut(world).read().next().is_none() {
         return;
     }
     // Same guard as [`end_ui_session`]: a quit inside the entry-load window has no UI to save.
-    if pending_entry.is_some() {
+    if world.contains_resource::<PendingEntryUiLoad>() {
         return;
     }
-    let leaving_world = sweep.run();
-    if let Some(mut script) = script {
-        shutdown_ui_state(&mut script, id.0.as_ref(), leaving_world);
+    super::run_leave_world_sweep(world);
+    let identity = world
+        .get_resource::<AddOnIdentity>()
+        .and_then(|id| id.0.clone());
+    if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
+        shutdown_ui_state(&mut script, identity.as_ref());
     }
 }
 
@@ -1102,19 +1019,18 @@ mod tests {
             world.insert_resource(State::new(crate::char_select::ClientState::InWorld));
             world.insert_resource(crate::run_mode::CaptureMode);
             world.init_resource::<Messages<WorldEnterCascadeMessage>>();
-            world.init_resource::<Messages<WorldLeaveSweepMessage>>();
-            world.init_resource::<LeavingWorldArmed>();
-            world.resource_mut::<LeavingWorldArmed>().arm();
+            world.init_resource::<super::super::SweptWorlds>();
+            world.init_resource::<super::super::LeavingWorldArmed>();
+            world
+                .resource_mut::<super::super::LeavingWorldArmed>()
+                .arm();
             if seated {
                 world.spawn(crate::net::SelfPlayer);
             }
             world.insert_resource(ReloadUiPending(true));
             run_pending_reload(&mut world);
             assert!(!world.resource::<ReloadUiPending>().0, "the reload ran");
-            let sweeps = world
-                .resource_mut::<Messages<WorldLeaveSweepMessage>>()
-                .drain()
-                .count();
+            let sweeps = world.resource::<super::super::SweptWorlds>().0;
             let cascades = world
                 .resource_mut::<Messages<WorldEnterCascadeMessage>>()
                 .drain()

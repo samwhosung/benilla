@@ -222,8 +222,8 @@ fn quitting_from_the_character_screen_does_not_blank_the_session_it_wrote() {
     let mut script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("a boot VM is live at the character screen");
-    // `false`: at the character screen there is no active player.
-    super::shutdown_ui_state(&mut script, identity.as_ref(), false);
+    // At the character screen there is no active player and no world to sweep.
+    super::shutdown_ui_state(&mut script, identity.as_ref());
 
     assert_eq!(
         std::fs::read_to_string(&saved).ok().as_deref(),
@@ -316,15 +316,17 @@ fn the_realm_cvars_are_read_only_to_lua_only_in_the_world() {
 
 /// The reference's one guard in the shutdown tail: `0x490bd0` tests the active player's GUID pair
 /// (`0x490bee call 0x468550`, `0x490bf3 or eax,edx`) and with none jumps (`0x490bf5 je 0x490c25`)
-/// past only the `PLAYER_LEAVING_WORLD` fire, `0x490c20 call 0x490a80`; in-world roots fire both.
+/// past only the sweep, `0x490c20 call 0x490a80`, whose `0x490b4d` fires `PLAYER_LEAVING_WORLD`;
+/// in-world roots fire both. Ours: no world latch armed at the character screen.
 #[test]
 fn a_quit_from_the_character_screen_fires_logout_without_leaving_world() {
+    use crate::ui_script::SweepApp;
     let _l = ENV_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _c, _h) = hermetic_probe("quitsplit");
     let mut world = booted_world();
-    let mut script = world
+    let script = world
         .remove_non_send_resource::<benilla_ui::script::UiScript>()
         .expect("a boot VM is live at the character screen");
 
@@ -345,27 +347,47 @@ fn a_quit_from_the_character_screen_fires_logout_without_leaving_world() {
             "#,
         )
         .expect("the probe frame registers");
+    let mut app = App::new();
+    app.init_world_leave_sweep();
+    app.insert_non_send_resource(script);
+    // A root's order: the sweep, then the tail.
+    let root = |app: &mut App| {
+        super::run_leave_world_sweep(app.world_mut());
+        let mut script = app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>();
+        super::shutdown_ui_state(&mut script, None);
+    };
+    let seen = |app: &App, global: &str| {
+        app.world()
+            .non_send_resource::<benilla_ui::script::UiScript>()
+            .eval::<i64>(&format!("return {global}"))
+            .unwrap()
+    };
 
-    super::shutdown_ui_state(&mut script, None, false);
+    root(&mut app);
     assert_eq!(
-        script.eval::<i64>("return SeenLeaving").unwrap(),
+        seen(&app, "SeenLeaving"),
         0,
         "the glue-screen quit fired PLAYER_LEAVING_WORLD — the reference's 0x490bf5 skips it"
     );
     assert_eq!(
-        script.eval::<i64>("return SeenLogout").unwrap(),
+        seen(&app, "SeenLogout"),
         1,
         "…and it must still fire PLAYER_LOGOUT, which is the whole of the taken side"
     );
 
-    super::shutdown_ui_state(&mut script, None, true);
+    app.world_mut()
+        .resource_mut::<super::LeavingWorldArmed>()
+        .arm();
+    root(&mut app);
     assert_eq!(
-        script.eval::<i64>("return SeenLeaving").unwrap(),
+        seen(&app, "SeenLeaving"),
         1,
         "an in-world root must fire PLAYER_LEAVING_WORLD — the control for the assertion above"
     );
     assert_eq!(
-        script.eval::<i64>("return SeenLogout").unwrap(),
+        seen(&app, "SeenLogout"),
         2,
         "…and PLAYER_LOGOUT on every root, guarded or not"
     );
@@ -414,11 +436,38 @@ fn logging_out_leaves_no_in_game_frames_behind() {
 
 // ───────────────────────────────── ReloadUI ─────────────────────────────────
 
+/// The sweep's four legs that change a lock or the cursor, in a bare world with the sessions they
+/// read, a mailbox, an auctioneer and a vendor open; the reload runs them in the dying VM.
+fn sweep_lock_legs(world: &mut World) {
+    use crate::ui_script::SweepLeg;
+    super::sweep::install_world_leave_sweep(world, |s| {
+        s.add_systems((
+            crate::ui_loot::close_loot_on_leave_world.in_set(SweepLeg::Loot),
+            crate::ui_merchant::close_merchant_on_leave_world.in_set(SweepLeg::Merchant),
+            crate::ui_mail::close_mail_on_leave_world.in_set(SweepLeg::Mail),
+            crate::ui_auction::close_auction_on_leave_world.in_set(SweepLeg::Auction),
+        ));
+    });
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    world.insert_resource(crate::net::NetCommands(tx));
+    world.init_resource::<crate::net::GuidIndex>();
+    world.init_resource::<crate::ui_loot::LootLatch>();
+    world.init_resource::<Messages<crate::target::DeselectGuid>>();
+    world.init_resource::<crate::ui_mail::MailOpen>();
+    world.init_resource::<crate::ui_auction::AuctionOpen>();
+    world.init_resource::<crate::ui_merchant::MerchantOpen>();
+}
+
+/// Arm the world latch as our own create does, so the next reload sweeps.
+fn arm_world(world: &mut World) {
+    world.resource_mut::<super::LeavingWorldArmed>().arm();
+}
+
 /// The item lock is the item object's (`item+0x314`), which a `/reload` keeps, save what the
-/// reload's sweep unlocks: the looted clam (`0x490ab2`), the mail attachment (`0x490b1b`) and the
-/// auction sell item (`0x490b25`). A trade offer stays locked, its table zeroed with no unlock
-/// (`0x4909b5`), and the cursor, engine state, keeps a held item and an armed wrap with their
-/// locks. A new world entry builds its objects afresh and starts with none.
+/// reload's sweep unlocks at its legs: the looted clam (`0x490ab2`), the mail attachment
+/// (`0x490b1b`) and the auction sell item (`0x490b25`). A trade offer stays locked, its table
+/// zeroed with no unlock (`0x4909b5`), and the cursor, engine state, keeps a held item and an
+/// armed wrap with their locks. A new world entry builds its objects afresh and starts with none.
 #[test]
 fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     const CLAM: u64 = 0x4000_0000_0000_0c1a;
@@ -433,6 +482,7 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     let (tmp, _c, _h) = hermetic_probe("item-locks");
     let mut world = booted_world();
     world.init_resource::<crate::ui_items::locks::HeldItemLocks>();
+    sweep_lock_legs(&mut world);
     let locked = |world: &World, guid: u64| {
         world
             .get_non_send_resource::<benilla_ui::script::UiScript>()
@@ -478,6 +528,19 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
     let mut loot = crate::ui_loot::LootState::default();
     loot.open(CLAM, 1, 0, Vec::new());
     world.insert_resource(loot);
+    // The clam's own object, `OBJECT_FIELD_TYPE` object and item, which the close looks up
+    // (`0x48f29e`) before its unlock.
+    crate::items::test_spawn_item(
+        &mut world,
+        CLAM,
+        benilla_protocol::messages::ObjectFields::from_pairs(&[(2, 0x3)]),
+        false,
+    );
+    world.resource_mut::<crate::ui_mail::MailOpen>().mailbox = Some(0xF110_0000_0000_0B0C);
+    world
+        .resource_mut::<crate::ui_auction::AuctionOpen>()
+        .open(0xF130_0000_0000_0A0C, 1);
+    arm_world(&mut world);
     reload(&mut world, crate::char_select::ClientState::InWorld);
     assert!(!locked(&world, CLAM), "the sweep's loot close unlocks it");
     assert!(!locked(&world, MAILED), "the sweep's mail reset unlocks it");
@@ -519,6 +582,7 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
         );
         s.arm_gift_wrap(0, 5);
     }
+    arm_world(&mut world);
     reload(&mut world, crate::char_select::ClientState::InWorld);
     {
         let s = world.non_send_resource::<benilla_ui::script::UiScript>();
@@ -529,7 +593,7 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
             "the clear before it unlocked the held item"
         );
     }
-    // A held vendor row, mode 5, goes with the sweep's interaction close (`0x4fadf0`, `0x4fae4a`).
+    // A held vendor row, mode 5, goes with the sweep's merchant close (`0x4fadf0`, `0x4fae4a`).
     {
         let mut s = world.non_send_resource_mut::<benilla_ui::script::UiScript>();
         s.run("ClearCursor()").unwrap();
@@ -550,6 +614,10 @@ fn item_locks_cross_a_reload_as_its_sweep_leaves_them() {
             Some(benilla_ui::script::CursorPayload::Merchant(_))
         ));
     }
+    world
+        .resource_mut::<crate::ui_merchant::MerchantOpen>()
+        .open(0xF130_0000_0000_0E1D, Vec::new());
+    arm_world(&mut world);
     reload(&mut world, crate::char_select::ClientState::InWorld);
     assert!(world
         .non_send_resource::<benilla_ui::script::UiScript>()

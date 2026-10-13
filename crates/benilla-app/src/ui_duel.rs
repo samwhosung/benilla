@@ -15,7 +15,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, SelfPlayer};
 use crate::target::Selection;
 use crate::ui_action::Spells;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 
 /// The `Effect[0]` that marks the duel spell (7266 on 1.12 data): the reference's spell-learned
 /// walk stores any learned spell with `SpellRec+0xf4 == 0x53` in `[0xb71130]` (`0x4b2605`), which
@@ -43,7 +43,8 @@ enum OwedLine {
 pub(crate) struct DuelState {
     owed: Vec<OwedLine>,
     /// The duel flag's guid, `[0xb73240]`: set by the request, echoed on accept and cancel, and
-    /// cleared only by completion, which fires `DUEL_FINISHED`. `0` is no duel.
+    /// cleared by completion, which fires `DUEL_FINISHED`, and silently by the leave-world sweep
+    /// ([`clear_duel_on_leave_world`]). `0` is no duel.
     pub(crate) arbiter: u64,
     /// Set while the challenge popup is owed; the challenger never gets one.
     challenger: Option<u64>,
@@ -256,6 +257,14 @@ pub(crate) mod net {
     }
 }
 
+/// The leave-world sweep's duel leg (`0x490afd` → `0x4d47d0`): the arbiter is zeroed
+/// (`0x4d47d8`, `0x4d47e2`) and the `ProcessCountdown` timer cancelled (`0x4d47ee`), with no
+/// event, so a completion after it finds no duel (`0x4d4b20`).
+fn clear_duel_on_leave_world(mut duel: ResMut<DuelState>) {
+    duel.arbiter = 0;
+    duel.countdown = None;
+}
+
 /// Fire the four duel events on [`DuelState`]'s edges.
 fn feed_duel(
     script: Option<NonSendMut<UiScript>>,
@@ -264,11 +273,14 @@ fn feed_duel(
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedDuel>>,
+    // Apart from the bounds: the leave-world sweep drops the arbiter with no `DUEL_FINISHED`.
+    mut fed_held: crate::ui_script::WindowMemo<bool>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let fed = fed.get(&script);
+    let fed_held = fed_held.get(&script);
 
     // Lines before events: a line describes the transition its event announces.
     let owed = std::mem::take(&mut duel.owed);
@@ -294,10 +306,10 @@ fn feed_duel(
 
     // `DUEL_FINISHED` when the arbiter clears (`0x4d4b51`).
     let held = duel.arbiter != 0;
-    if fed.held && !held {
+    if *fed_held && !held {
         script.fire_event("DUEL_FINISHED", Vec::new());
     }
-    fed.held = held;
+    *fed_held = held;
 
     // The bounds pair (`0x4d4aa0`, `0x4d4ac0`).
     if fed.out_of_bounds != duel.out_of_bounds {
@@ -314,7 +326,6 @@ fn feed_duel(
 /// What [`feed_duel`] last announced.
 #[derive(Default)]
 struct FedDuel {
-    held: bool,
     out_of_bounds: bool,
 }
 
@@ -461,16 +472,18 @@ pub(crate) struct UiDuelPlugin;
 impl Plugin for UiDuelPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<DuelState>().add_systems(
-            Update,
-            (
-                // The tick names its line and `feed_duel` resolves it, so the tick runs first or
-                // each "Duel starting: N" lands a frame late.
-                tick_countdown.before(feed_duel),
-                feed_duel.in_set(UiFeed),
-                drain_duel.after(UiInput),
-            ),
-        );
+        app.init_resource::<DuelState>()
+            .add_sweep_leg(SweepLeg::Duel, clear_duel_on_leave_world)
+            .add_systems(
+                Update,
+                (
+                    // The tick names its line and `feed_duel` resolves it, so the tick runs first or
+                    // each "Duel starting: N" lands a frame late.
+                    tick_countdown.before(feed_duel),
+                    feed_duel.in_set(UiFeed),
+                    drain_duel.after(UiInput),
+                ),
+            );
     }
 }
 

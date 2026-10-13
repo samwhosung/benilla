@@ -18,7 +18,7 @@ use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, Spells, UiError};
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
 
 /// The wire packet that opened the current panel.
@@ -204,16 +204,39 @@ impl Plugin for UiQuestPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
         lines::register(app);
-        app.init_resource::<QuestGiver>().add_systems(
-            Update,
-            (
-                // Range-close before the feed so the close fires the same frame; the feed before
-                // the input pass and the drain after it, so a click goes out the same frame.
-                close_npc_session_out_of_range::<QuestGiver>.before(feed_quest),
-                feed_quest.in_set(UiFeed),
-                drain_quest.after(UiInput),
-            ),
-        );
+        app.init_resource::<QuestGiver>()
+            .add_sweep_leg(SweepLeg::Quest, close_quest_on_leave_world)
+            .add_systems(
+                Update,
+                (
+                    // Range-close before the feed so the close fires the same frame; the feed before
+                    // the input pass and the drain after it, so a click goes out the same frame.
+                    close_npc_session_out_of_range::<QuestGiver>.before(feed_quest),
+                    feed_quest.in_set(UiFeed),
+                    drain_quest.after(UiInput),
+                ),
+            );
+    }
+}
+
+/// The leave-world sweep's quest leg (`0x490ac6` → `0x500bc0` → `0x501130(0, 1)`): an open
+/// panel, an item's included, ends as the walk-away does, a shared quest declined to its sharer
+/// (`MSG_QUEST_PUSH_RESULT` 3), then `QUEST_FINISHED` (`0x501217`) in the VM the sweep runs in.
+fn close_quest_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut giver: ResMut<QuestGiver>,
+    commands: Res<NetCommands>,
+) {
+    let Some(source) = giver.npc else {
+        return;
+    };
+    if let Some(cmd) = giver.walk_away_send(source) {
+        let _ = commands.0.send(cmd);
+    }
+    giver.clear();
+    if let Some(mut script) = script {
+        script.set_quest(None);
+        script.fire_event("QUEST_FINISHED", vec![]);
     }
 }
 
@@ -403,9 +426,9 @@ pub(crate) fn feed_quest(
     go_templates: Res<crate::go_templates::GameObjectTemplates>,
     materials: Option<Res<crate::ui_item_text::PageMaterials>>,
     mut sink: MessageSink,
-    mut last: Local<crate::ui_script::VmMemo<Option<QuestState>>>,
-    mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
-    mut last_npc: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut last: crate::ui_script::WindowMemo<Option<QuestState>>,
+    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
+    mut last_npc: crate::ui_script::WindowMemo<Option<u64>>,
 ) {
     let Some(mut script) = script else {
         return;

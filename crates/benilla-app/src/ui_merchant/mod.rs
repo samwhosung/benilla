@@ -16,8 +16,8 @@ use crate::items::Items;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::ui_items::{item_link, slot_guid, wire_pos};
-use crate::ui_script::{gate, UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
+use crate::ui_script::{gate, SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, npc_switched, sweep_close, NpcSession};
 use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
 
 /// A vendor row's unlimited `current_count` (vmangos `ItemHandler.cpp:795`), `-1` to Lua.
@@ -108,6 +108,7 @@ impl Plugin for UiMerchantPlugin {
         net::register(app);
         app.init_resource::<MerchantOpen>()
             .init_resource::<MerchantErrors>()
+            .add_sweep_leg(SweepLeg::Merchant, close_merchant_on_leave_world)
             .add_systems(
                 Update,
                 (
@@ -576,10 +577,10 @@ fn feed_merchant(
     units: Query<(&Guid, &ObjectStore), Without<SelfPlayer>>,
     names: Res<NameCache>,
     mut errors: ResMut<MerchantErrors>,
-    mut last: Local<crate::ui_script::VmMemo<Option<MerchantState>>>,
+    mut last: crate::ui_script::WindowMemo<Option<MerchantState>>,
     mut last_money: Local<crate::ui_script::VmMemo<Option<u64>>>,
-    mut last_name: Local<crate::ui_script::VmMemo<Option<String>>>,
-    mut last_vendor: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut last_name: crate::ui_script::WindowMemo<Option<String>>,
+    mut last_vendor: crate::ui_script::WindowMemo<Option<u64>>,
     mut sink: crate::ui_action::MessageSink,
 ) {
     let Some(mut script) = script else {
@@ -670,6 +671,28 @@ impl NpcSession for MerchantOpen {
 
     fn close(&mut self) {
         self.clear();
+    }
+}
+
+/// The leave-world sweep's merchant leg (`0x490ada` → `0x4facc0` → `0x4fadf0`): an open window
+/// closes with `MERCHANT_CLOSED` (`0x4fae2c`) in the VM the sweep runs in, and a vendor row held
+/// on the cursor, mode 5, is cleared after it (`0x4fae31`, `0x4fae4a`).
+pub(crate) fn close_merchant_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut open: ResMut<MerchantOpen>,
+) {
+    if sweep_close(&mut *open).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_merchant(None);
+        script.fire_event("MERCHANT_CLOSED", vec![]);
+        if matches!(
+            script.held_cursor().payload(),
+            Some(benilla_ui::script::CursorPayload::Merchant(_))
+        ) {
+            script.clear_cursor_payload();
+        }
     }
 }
 

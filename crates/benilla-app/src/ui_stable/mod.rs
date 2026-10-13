@@ -15,8 +15,8 @@ use benilla_ui::script::{StableIntent, StablePetSlot, StableState, UiScript, NUM
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::ui_pet_stats::{PetFamilyTables, PetStatTables};
-use crate::ui_script::{UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, npc_switched, sweep_close, NpcSession};
 
 mod net;
 
@@ -27,6 +27,7 @@ impl Plugin for UiStablePlugin {
         net::register(app);
         app.init_resource::<StableOpen>()
             .init_resource::<StableErrors>()
+            .add_sweep_leg(SweepLeg::Stable, close_stable_on_leave_world)
             .add_systems(
                 Update,
                 (
@@ -172,6 +173,18 @@ fn snapshot(
 }
 
 /// Push the stable into the VM and fire its events on a change.
+/// The leave-world sweep's stable leg (`0x490b2a` → `0x4caae0` → `0x4cae10`): an open stable
+/// closes with `PET_STABLE_CLOSED` (`0x4cae3a`) in the VM the sweep runs in.
+fn close_stable_on_leave_world(script: Option<NonSendMut<UiScript>>, mut open: ResMut<StableOpen>) {
+    if sweep_close(&mut *open).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_stable(None);
+        script.fire_event("PET_STABLE_CLOSED", vec![]);
+    }
+}
+
 fn feed_stable(
     script: Option<NonSendMut<UiScript>>,
     // Mutable only to take the fresh-list latch.
@@ -183,8 +196,8 @@ fn feed_stable(
     commands: Res<NetCommands>,
     names: Res<NameCache>,
     mut errors: ResMut<StableErrors>,
-    mut last: Local<crate::ui_script::VmMemo<Option<StableState>>>,
-    mut last_npc: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut last: crate::ui_script::WindowMemo<Option<StableState>>,
+    mut last_npc: crate::ui_script::WindowMemo<Option<u64>>,
     mut sink: crate::ui_action::MessageSink,
 ) {
     let Some(mut script) = script else {

@@ -13,7 +13,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::ui_items::KEYRING_CONTAINER;
 use crate::ui_party::{GroupState, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP};
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 
 mod net;
 
@@ -425,6 +425,7 @@ impl Plugin for UiLootPlugin {
             .init_resource::<LootLatch>()
             .init_resource::<LootKneel>()
             .init_resource::<LootMoveStart>()
+            .add_sweep_leg(SweepLeg::Loot, close_loot_on_leave_world)
             .add_systems(
                 Update,
                 (
@@ -702,7 +703,7 @@ fn feed_loot(
     icons: Option<Res<ItemDisplays>>,
     commands: Res<NetCommands>,
     mut chat: ResMut<crate::ui_chat::ChatLog>,
-    mut last: Local<crate::ui_script::VmMemo<Option<LootSnapshot>>>,
+    mut last: crate::ui_script::WindowMemo<Option<LootSnapshot>>,
     cfg: Res<LootConfig>,
     keys: Res<ButtonInput<KeyCode>>,
     mut pickup: MessageWriter<crate::sound::LootPickupSound>,
@@ -857,6 +858,45 @@ pub(crate) fn close_interaction(
     loot.unlock_item_source(source);
     loot.clear();
     Some(source)
+}
+
+/// The leave-world sweep's loot leg (`0x490ab2` → `0x4c1ca0` → `0x48f200(cl=1, dl=0, 0)`): the
+/// shared close with its `CMSG_LOOT_RELEASE` (`0x48f2da`), told to the VM the sweep runs in, the
+/// dying one on a `/reload` ([`tell_loot_closed`]). The dead-unit deselect follows, as the
+/// close's last step.
+pub(crate) fn close_loot_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut loot: ResMut<LootState>,
+    mut latch: ResMut<LootLatch>,
+    commands: Res<NetCommands>,
+    objects: crate::net::Objects,
+    mut dead: DeadUnitDeselect,
+) {
+    let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
+    if closed.is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        announce_loot_closed(&mut script, &mut loot, &objects);
+    }
+    dead.after_close(closed);
+}
+
+/// The VM's half of a close that runs where the feed cannot report it: an item source's two
+/// unlocks (`0x48f2bd`, `0x4c1d36`), each resolved as the close's own lookup (`0x48f29e`), then
+/// `LOOT_CLOSED` (`0x4c1dac`).
+fn announce_loot_closed(
+    script: &mut UiScript,
+    loot: &mut LootState,
+    objects: &crate::net::Objects,
+) {
+    for (guid, live) in loot.take_item_unlocks() {
+        if !live || objects.object(guid).is_some_and(|f| f.is_item()) {
+            script.unlock_item(guid);
+        }
+    }
+    script.set_loot(None);
+    script.fire_event("LOOT_CLOSED", vec![]);
 }
 
 /// `CloseInteraction`'s last step (`0x48f34f`–`0x48f369`): a closed source that is a unit, a
@@ -2437,5 +2477,77 @@ mod tests {
         step(&mut app);
         assert_eq!(app.world().resource::<LootState>().source(), None);
         assert!(matches!(rx.try_recv(), Ok(ClientCommand::LootRelease { guid }) if guid == CORPSE));
+    }
+
+    /// The feed and the sweep's loot leg over an empty world, the feed's other inputs at rest.
+    fn sweep_loot_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        use crate::ui_script::SweepApp;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.add_message::<crate::sound::LootPickupSound>()
+            .add_message::<crate::target::DeselectGuid>()
+            .init_resource::<LootState>()
+            .init_resource::<LootLatch>()
+            .init_resource::<LootMoveStart>()
+            .init_resource::<LootConfig>()
+            .init_resource::<GroupState>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(NetCommands(tx))
+            .add_sweep_leg(SweepLeg::Loot, close_loot_on_leave_world)
+            .add_systems(Update, feed_loot);
+        (app, rx)
+    }
+
+    const EVENTS: [&str; 2] = ["LOOT_OPENED", "LOOT_CLOSED"];
+
+    /// A `/reload` with a window open: the sweep's loot leg (`0x490ab2` → `0x48f200(cl=1)`)
+    /// releases it and tells the dying VM `LOOT_CLOSED`, and the new VM opens nothing.
+    #[test]
+    fn a_reload_releases_the_loot_and_the_new_vm_opens_nothing() {
+        use crate::ui_script::sweep_test::{reload_in_place, seen, seen_in, spied_vm};
+        let (mut app, rx) = sweep_loot_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.world_mut()
+            .resource_mut::<LootState>()
+            .open(CORPSE, 1, 0, Vec::new());
+        app.world_mut().resource_mut::<LootLatch>().0 = Some(CORPSE);
+        app.update();
+        assert_eq!(seen_in(&app), ["LOOT_OPENED"]);
+
+        let dying = reload_in_place(&mut app, &EVENTS);
+        assert_eq!(seen(&dying), ["LOOT_OPENED", "LOOT_CLOSED"]);
+        assert_eq!(
+            rx.try_iter()
+                .filter(|c| matches!(c, ClientCommand::LootRelease { guid } if *guid == CORPSE))
+                .count(),
+            1,
+            "the leg's `CMSG_LOOT_RELEASE` (`0x48f2da`)"
+        );
+        assert_eq!(app.world().resource::<LootState>().source(), None);
+        assert_eq!(app.world().resource::<LootLatch>().0, None);
+
+        app.update();
+        assert!(seen_in(&app).is_empty(), "the new VM has no window to open");
+    }
+
+    /// A worldport sweeps the VM that stays: `LOOT_CLOSED` once, from the leg, and the feed adds
+    /// none after it.
+    #[test]
+    fn a_worldport_closes_the_loot_once() {
+        use crate::ui_script::sweep_test::{seen_in, spied_vm, sweep_in_place};
+        let (mut app, _rx) = sweep_loot_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.world_mut()
+            .resource_mut::<LootState>()
+            .open(CORPSE, 1, 0, Vec::new());
+        app.update();
+        sweep_in_place(&mut app);
+        app.update();
+        app.update();
+        assert_eq!(seen_in(&app), ["LOOT_OPENED", "LOOT_CLOSED"]);
     }
 }

@@ -8,8 +8,8 @@ use bevy::prelude::*;
 use benilla_ui::script::{BankState, UiScript};
 
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
-use crate::ui_script::{UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{close_npc_session_out_of_range, npc_switched, sweep_close, NpcSession};
 
 /// `BankBagSlotPrices.dbc`, the client's own slot prices; absent, the purchase row shows 0 and
 /// the server still charges its own price.
@@ -67,6 +67,11 @@ impl Plugin for UiBankPlugin {
         net::register(app);
         app.init_resource::<BankOpen>()
             .init_resource::<BankErrors>()
+            // `0x493310` tests the trade's cell before the bank's (`0x49335f`, `0x493449`).
+            .add_sweep_leg(
+                SweepLeg::Interaction,
+                close_bank_on_leave_world.after(crate::ui_trade::close_trade_on_leave_world),
+            )
             .add_systems(
                 Update,
                 (
@@ -76,6 +81,19 @@ impl Plugin for UiBankPlugin {
                     drain_bank.after(UiInput),
                 ),
             );
+    }
+}
+
+/// The sweep's interaction close (`0x490b5f` → `0x493310`), past `PLAYER_LEAVING_WORLD`: no leg
+/// of the sweep closes the bank, so an open one is still the latched interaction, and its arm
+/// (`0x493466` → `0x4f84d0(0)`) fires `BANKFRAME_CLOSED` (`0x4f84df`) in the VM the sweep runs in.
+fn close_bank_on_leave_world(script: Option<NonSendMut<UiScript>>, mut open: ResMut<BankOpen>) {
+    if sweep_close(&mut *open).is_none() {
+        return;
+    }
+    if let Some(mut script) = script {
+        script.set_bank(None);
+        script.fire_event("BANKFRAME_CLOSED", vec![]);
     }
 }
 
@@ -100,8 +118,8 @@ fn feed_bank(
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     prices: Option<Res<BankPrices>>,
     mut errors: ResMut<BankErrors>,
-    mut last: Local<crate::ui_script::VmMemo<Option<BankState>>>,
-    mut last_banker: Local<crate::ui_script::VmMemo<Option<u64>>>,
+    mut last: crate::ui_script::WindowMemo<Option<BankState>>,
+    mut last_banker: crate::ui_script::WindowMemo<Option<u64>>,
     mut sink: crate::ui_action::MessageSink,
 ) {
     let Some(mut script) = script else {

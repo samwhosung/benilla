@@ -13,7 +13,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::target::Selection;
 use crate::ui_party::GroupState;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::NpcSession;
 
 mod net;
@@ -334,6 +334,34 @@ impl NpcSession for TradeSession {
     }
 }
 
+/// The leave-world sweep's trade leg (`0x490adf` → `0x4bf220` → `0x5d4310`): `CMSG_CANCEL_TRADE`,
+/// sent whether or not a trade is open; vmangos ignores one with no trade
+/// (`TradeHandler.cpp:560-565` → `Player.cpp:11663`). The window itself stays until the sweep's
+/// last step, [`close_trade_on_leave_world`].
+fn cancel_trade_on_leave_world(commands: Res<NetCommands>) {
+    let _ = commands.0.send(ClientCommand::CancelTrade);
+}
+
+/// The sweep's interaction close (`0x490b5f` → `0x493310`), past `PLAYER_LEAVING_WORLD`: an open
+/// trade is the latched interaction, as opening anything else would have closed it, so its arm
+/// runs `0x4bf4e0(0, 0)`: `TRADE_CLOSED` (`0x4bf522`) in the VM the sweep runs in, with no
+/// `UnlockTradeItems`, then one more `CMSG_CANCEL_TRADE` (`0x4bf527`).
+pub(crate) fn close_trade_on_leave_world(
+    script: Option<NonSendMut<UiScript>>,
+    mut trade: ResMut<TradeSession>,
+    commands: Res<NetCommands>,
+) {
+    if !trade.is_open() {
+        return;
+    }
+    trade.close_window();
+    if let Some(mut script) = script {
+        script.set_trade(None);
+        script.fire_event("TRADE_CLOSED", vec![]);
+    }
+    let _ = commands.0.send(ClientCommand::CancelTrade);
+}
+
 pub(crate) struct UiTradePlugin;
 
 /// Mirrors the `BlockTrades` CVar into [`BlockTrades`].
@@ -349,6 +377,8 @@ impl Plugin for UiTradePlugin {
         net::register(app);
         app.init_resource::<TradeSession>()
             .init_resource::<BlockTrades>()
+            .add_sweep_leg(SweepLeg::Trade, cancel_trade_on_leave_world)
+            .add_sweep_leg(SweepLeg::Interaction, close_trade_on_leave_world)
             .add_systems(
                 Update,
                 (
@@ -604,11 +634,11 @@ fn feed_trade(
     // The `%s` lines' live-object guard, the same reads as the ladder's leg 3.
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
-    mut last: Local<crate::ui_script::VmMemo<Option<TradeState>>>,
-    mut last_open: Local<crate::ui_script::VmMemo<bool>>,
-    mut last_accept: Local<crate::ui_script::VmMemo<(bool, bool)>>,
-    mut last_player_gold: Local<crate::ui_script::VmMemo<u32>>,
-    mut last_their_gold: Local<crate::ui_script::VmMemo<u32>>,
+    mut last: crate::ui_script::WindowMemo<Option<TradeState>>,
+    mut last_open: crate::ui_script::WindowMemo<bool>,
+    mut last_accept: crate::ui_script::WindowMemo<(bool, bool)>,
+    mut last_player_gold: crate::ui_script::WindowMemo<u32>,
+    mut last_their_gold: crate::ui_script::WindowMemo<u32>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -1998,5 +2028,86 @@ mod tests {
             ["ITEM_LOCK_CHANGED", "TRADE_PLAYER_ITEM_CHANGED"]
         );
         assert!(!bag_locked(&mut app));
+    }
+
+    /// [`feed_app`] with the sweep's two trade legs.
+    fn sweep_trade_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        use crate::ui_script::SweepApp;
+        let (mut app, rx) = feed_app();
+        app.add_sweep_leg(SweepLeg::Trade, cancel_trade_on_leave_world)
+            .add_sweep_leg(SweepLeg::Interaction, close_trade_on_leave_world);
+        (app, rx)
+    }
+
+    fn cancels(rx: &crossbeam_channel::Receiver<ClientCommand>) -> usize {
+        rx.try_iter()
+            .filter(|c| matches!(c, ClientCommand::CancelTrade))
+            .count()
+    }
+
+    const EVENTS: [&str; 3] = ["TRADE_SHOW", "TRADE_CLOSED", "PLAYER_LEAVING_WORLD"];
+
+    /// A `/reload` with a trade open: the trade leg cancels (`0x490adf` → `0x5d4310`), and past
+    /// `PLAYER_LEAVING_WORLD` the interaction close shuts the window in the dying VM and cancels
+    /// again (`0x493365` → `0x4bf4e0`); the new VM opens nothing.
+    #[test]
+    fn a_reload_cancels_the_trade_closes_it_and_the_new_vm_opens_nothing() {
+        use crate::ui_script::sweep_test::{reload_in_place, seen, seen_in, spied_vm};
+        let (mut app, rx) = sweep_trade_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.begin(0x7);
+            trade.open_window();
+        }
+        app.update();
+        assert_eq!(seen_in(&app), ["TRADE_SHOW"]);
+        let _ = rx.try_iter().count();
+
+        let dying = reload_in_place(&mut app, &EVENTS);
+        assert_eq!(
+            seen(&dying),
+            ["TRADE_SHOW", "PLAYER_LEAVING_WORLD", "TRADE_CLOSED"]
+        );
+        assert_eq!(cancels(&rx), 2, "the leg's and the interaction close's");
+        assert!(!app.world().resource::<TradeSession>().is_open());
+
+        app.update();
+        assert!(seen_in(&app).is_empty(), "the new VM has no trade to show");
+    }
+
+    /// With no trade, the leg still cancels and nothing closes; a worldport's surviving VM hears
+    /// `TRADE_CLOSED` once when one was open.
+    #[test]
+    fn the_trade_leg_cancels_with_no_trade_and_a_worldport_closes_once() {
+        use crate::ui_script::sweep_test::{seen_in, spied_vm, sweep_in_place};
+        let (mut app, rx) = sweep_trade_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        sweep_in_place(&mut app);
+        assert_eq!(
+            cancels(&rx),
+            1,
+            "`0x5d4310` sends whether or not a trade is open"
+        );
+        assert_eq!(seen_in(&app), ["PLAYER_LEAVING_WORLD"]);
+
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.begin(0x7);
+            trade.open_window();
+        }
+        app.update();
+        sweep_in_place(&mut app);
+        app.update();
+        app.update();
+        assert_eq!(
+            seen_in(&app),
+            [
+                "PLAYER_LEAVING_WORLD",
+                "TRADE_SHOW",
+                "PLAYER_LEAVING_WORLD",
+                "TRADE_CLOSED"
+            ]
+        );
     }
 }

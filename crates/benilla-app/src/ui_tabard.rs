@@ -14,7 +14,7 @@ use benilla_ui::script::{TabardHost, TabardIntent, UiScript, TABARD_COUNTS, TABA
 use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
 use crate::portrait::PaperDollBooth;
 use crate::ui_guild::GuildState;
-use crate::ui_script::{UiFeed, UiInput};
+use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
 
 /// The open designer: its vendor (`[0xbdcee8]`), the save-in-flight latch (`[0xc4d780]`), and
@@ -190,6 +190,24 @@ fn feed_tabard(
     }
 }
 
+/// The leave-world sweep's tabard leg (`0x490b02` → `0x4f5830` → `0x4f58a0`): the close core,
+/// told to the VM the sweep runs in (`CLOSE_TABARD_FRAME`, `0x4f58f8`) rather than left to the
+/// feed, which a `/reload` hands the next VM. An open not yet told goes first, as the reference
+/// fired it at the open.
+fn close_tabard_on_leave_world(script: Option<NonSendMut<UiScript>>, mut open: ResMut<TabardOpen>) {
+    open.close_core();
+    let opened = std::mem::take(&mut open.open_event);
+    let closed = std::mem::take(&mut open.close_event);
+    if let Some(mut script) = script {
+        if opened {
+            script.fire_event("OPEN_TABARD_FRAME", vec![]);
+        }
+        if closed {
+            script.fire_event("CLOSE_TABARD_FRAME", vec![]);
+        }
+    }
+}
+
 fn drain_tabard(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<TabardOpen>,
@@ -301,6 +319,7 @@ impl Plugin for TabardUiPlugin {
         net::register(app);
         app.init_resource::<TabardOpen>()
             .init_resource::<TabardDesign>()
+            .add_sweep_leg(SweepLeg::Tabard, close_tabard_on_leave_world)
             .add_systems(
                 Update,
                 (
