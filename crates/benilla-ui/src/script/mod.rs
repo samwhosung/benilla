@@ -56,6 +56,7 @@ pub mod addon_gate;
 mod char_name;
 mod client;
 mod clock;
+mod cvar_checks;
 mod cvars;
 mod dressup;
 mod duel;
@@ -219,6 +220,10 @@ pub use cursor::{
     CursorAction, CursorItem, CursorMacro, CursorMerchantItem, CursorMoney, CursorPayload,
     CursorPetAction, CursorSpell, CursorStablePet, EnchantConfirm, HeldCursor, WorldPick,
     EQUIPMENT_BAG,
+};
+pub use cvar_checks::{
+    check_base_mip, check_shadow_level, check_small_cull, check_tex_lod_bias, CvarCheck,
+    CvarVerdict,
 };
 pub use cvars::{small_cull_text, sstr_to_int};
 pub use cvars::{

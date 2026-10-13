@@ -2,6 +2,8 @@
 //! the reference's registered one ([`Reference`]). The runtime that holds the live values is the
 //! parent module.
 
+use benilla_ui::script::CvarCheck;
+
 /// One host-backed CVar: its name, benilla's default, and where that default stands against the
 /// reference's ([`Reference`]).
 pub(crate) struct Registered {
@@ -16,6 +18,9 @@ pub(crate) struct Registered {
     /// Registered with flag bit1 (`rec+0x1c & 0x2`, `flags` 2 or 3 at the register site): a write
     /// is staged in [`super::Row::pending`] until [`super::Cvars::commit_latched`].
     pub(crate) latched: bool,
+    /// The change callback's refusal, run on every write before it is stored
+    /// ([`benilla_ui::script::CvarCheck`]).
+    pub(crate) check: Option<CvarCheck>,
 }
 
 impl Registered {
@@ -23,6 +28,14 @@ impl Registered {
     pub(crate) const fn latched(self) -> Self {
         Self {
             latched: true,
+            ..self
+        }
+    }
+
+    /// Give the row its callback's refusal.
+    pub(crate) const fn checked(self, check: CvarCheck) -> Self {
+        Self {
+            check: Some(check),
             ..self
         }
     }
@@ -61,6 +74,7 @@ const fn same(name: &'static str, default: &'static str) -> Registered {
         default,
         reference: Reference::Same(default),
         latched: false,
+        check: None,
     }
 }
 
@@ -76,6 +90,7 @@ const fn overridden(
         default,
         reference: Reference::Overridden { registered, why },
         latched: false,
+        check: None,
     }
 }
 
@@ -91,6 +106,7 @@ const fn deviates(
         default,
         reference: Reference::Deviates { value, why },
         latched: false,
+        check: None,
     }
 }
 
@@ -101,6 +117,7 @@ const fn ours(name: &'static str, default: &'static str, why: &'static str) -> R
         default,
         reference: Reference::Ours(why),
         latched: false,
+        check: None,
     }
 }
 
@@ -309,7 +326,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `[0x868620]`, which nothing reads: no mechanism here either. Its readers are Lua ones:
     // `SetWorldDetail` writes it per stop, and `OptionsFrame_SetDefaults` reads its default
     // (`OptionsFrame.lua:431`). `hwDetect` sets 0.04 on the fallback row a modern GPU reaches.
-    same(benilla_ui::script::CVAR_SMALL_CULL, "0.04"),
+    same(benilla_ui::script::CVAR_SMALL_CULL, "0.04").checked(benilla_ui::script::check_small_cull),
     // `frillDensity` (`0x68862e`: name `0x8423d8`, default `0x864644` "16", flags 1, callback
     // `0x688de0`, record `[0xc7f2f4]`): detail-doodad cells visited per chunk, clamped to [1, 256]
     // and handed through `0x6725a0` to `[0xc7b494]`, the bound of the scatter loop at
@@ -567,7 +584,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // callback `0x688c10`, record `[0xc7f350]`) is behind `Get/SetTerrainMip` as `1 − level`: the
     // callback refuses above 1 and prints "Shadow mip level changed upon restart.", and the
     // terrain's shadow-map mip (`0x66f877`) reads it at load. `hwDetect` leaves it at 1.
-    same("shadowLevel", "1"),
+    same("shadowLevel", "1").checked(benilla_ui::script::check_shadow_level),
     // `doodadAnim` (`0x6884d8`, "1", flags 1, callback `0x688a10`, record `[0xc7f354]`), behind
     // `Get/SetDoodadAnim`: the callback toggles bit `0x8000` of `[0xc7b2a4]` and calls `0x6953d0`,
     // a bare `ret`, so no animation reads it. `hwDetect` sets 0 or 1 by CPU tier.
@@ -575,12 +592,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `texLodBias` (`0x6885e2`, "0.0" at `0x84fad4`, flags 1, callback `0x688c90`, record
     // `[0xc7f2f8]`), behind `Get/SetTexLodBias`: the callback refuses outside [-1.0, 1.0] and its
     // sink `0x672640` is `ret 4`.
-    same("texLodBias", "0.0"),
+    same("texLodBias", "0.0").checked(benilla_ui::script::check_tex_lod_bias),
     // `baseMip` (`0x6887aa`, "0", flags 1, callback `0x689090`, record `[0xc7f2f0]`), behind
     // `Get/SetBaseMip` as `1 − level`: the callback refuses outside [0, 1] ("BaseMip must be 0 or
     // 1") and sets the device's first uploaded mip level (`0x589bf0`, read at `0x59f6ce`). benilla
     // uploads every level; the write is kept and has no effect. `hwDetect` leaves it at 0.
-    same("baseMip", "0"),
+    same("baseMip", "0").checked(benilla_ui::script::check_base_mip),
     // `spellEffectLevel` (`0x688900`: name `0x869324`, default `0x843068` "2", flags 1, callback
     // `0x689510`, record `[0xc7f2a4]`), the Spell Detail slider (`OptionsFrame.lua:32`). The
     // callback's two effects here: the particle emission scalar ([`crate::video::on_cvar`]) and

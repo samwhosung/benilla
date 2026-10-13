@@ -150,28 +150,32 @@ fn print_cvar(world: &World, name: &str) -> String {
 
 /// A write through the registry with its observers run, and the outcome as a line.
 fn set_cvar(world: &mut World, name: &str, value: &str) -> Vec<String> {
-    let (outcome, events) = {
+    let (outcome, events, checked) = {
         let mut cvars = world.resource_mut::<Cvars>();
         let outcome = cvars.set(name, value);
-        (outcome, cvars.take_events())
+        (outcome, cvars.take_events(), cvars.take_console_lines())
     };
-    // The callbacks' own lines come first, as they print inside `CVar::Set`.
+    // The callbacks' own lines come first, as they print inside `CVar::Set`: a refusing check's
+    // before the observers'.
     if let Some(mut echo) = world.get_resource_mut::<ConsoleEcho>() {
         echo.capture = Some(Vec::new());
     }
     for event in events {
         world.trigger(event);
     }
-    let mut lines = world
-        .get_resource_mut::<ConsoleEcho>()
-        .and_then(|mut echo| echo.capture.take())
-        .unwrap_or_default();
+    let mut lines = checked;
+    lines.extend(
+        world
+            .get_resource_mut::<ConsoleEcho>()
+            .and_then(|mut echo| echo.capture.take())
+            .unwrap_or_default(),
+    );
     lines.extend(match outcome {
         SetOutcome::Unknown => vec![format!("console: no CVar named '{name}'")],
         SetOutcome::Refused => vec![format!(
             "console: '{value}' is not a number, and {name} takes one"
         )],
-        SetOutcome::Unchanged | SetOutcome::Changed => Vec::new(),
+        SetOutcome::Unchanged | SetOutcome::Changed | SetOutcome::Vetoed => Vec::new(),
         SetOutcome::Staged => vec![format!(
             "{name} staged as \"{value}\" — applies at the next RestartGx"
         )],

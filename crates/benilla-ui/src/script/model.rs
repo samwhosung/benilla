@@ -522,6 +522,9 @@ pub(crate) struct Model {
     /// How many CVars Lua's `RegisterCVar` has created this process (`[0xb4e3c8]`), which nothing
     /// resets; seeded by the host into each VM and read back from it.
     pub(crate) cvar_lua_created: u32,
+    /// The lines a CVar's change callback printed ([`super::CvarVerdict::line`]), for the host's
+    /// console.
+    pub(crate) cvar_console: Vec<String>,
     pub(crate) cvars_warned: HashSet<String>,
     /// The lowercased names a Lua `SetCVar` refuses, the reference's flag bit2 (`rec+0x1c & 4`,
     /// `CVar::SetReadOnly 0x63e030`). Kept beside the rows, so a host re-seed never clears it.
@@ -1387,6 +1390,7 @@ impl Model {
             cvar_changes: Vec::new(),
             cvar_registrations: Vec::new(),
             cvar_lua_created: 0,
+            cvar_console: Vec::new(),
             cvars_warned: HashSet::new(),
             cvars_read_only: HashSet::new(),
             multisample_formats: Vec::new(),

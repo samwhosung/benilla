@@ -7,7 +7,8 @@
 //! - [`REGISTERED`] holds only vars something reads, a host knob or a Lua consumer. A row's default
 //!   is the reference's, and [`table::Registered::reference`] says where it stands against it.
 //! - The change callback is a Bevy observer on [`CvarChanged`], beside the knob it writes; the
-//!   registry applies nothing itself.
+//!   registry applies nothing itself. A callback that can refuse a write is also the row's
+//!   [`CvarCheck`], which the registry and the VM's mirror run before storing.
 //! - A latched row's write is staged in [`Row::pending`] until [`Cvars::commit_latched`], the
 //!   reference's `0x639ec0` inside `RestartGx`. A stage never committed is dropped at exit, as the
 //!   reference's `SaveConfig` writes only the applied value (`rec+0x20`).
@@ -25,7 +26,7 @@ use std::time::Instant;
 use bevy::prelude::*;
 
 use crate::ui_script::VmMemo;
-use benilla_ui::script::{SeededCvar, UiScript};
+use benilla_ui::script::{CvarCheck, SeededCvar, UiScript};
 
 #[cfg(test)]
 mod reference_table;
@@ -91,6 +92,8 @@ pub(crate) struct Row {
     /// Declared by an addon's `RegisterCVar`: persisted like any row and re-seeded into every later
     /// VM, so the addon's re-declaration is a no-op.
     pub(crate) addon: bool,
+    /// The change callback's refusal ([`table::Registered::check`]).
+    check: Option<CvarCheck>,
 }
 
 impl Row {
@@ -107,6 +110,9 @@ pub(crate) enum SetOutcome {
     Unknown,
     /// A numeric row and a value that does not parse: refused, the applied value stands (warned).
     Refused,
+    /// The row's change callback refused it ([`table::Registered::check`]): the applied value
+    /// stands, and the callback's own line says why.
+    Vetoed,
     /// Already the applied value (or already the staged one).
     Unchanged,
     /// A latched row: staged, not applied; nothing fires until the commit.
@@ -134,6 +140,9 @@ pub(crate) struct Cvars {
     /// A change since the last save; `last_change` drives the one-quiet-second debounce.
     dirty: bool,
     last_change: Option<Instant>,
+    /// Lines change callbacks printed (`0x63cb50`), for the console command that wrote, else the
+    /// log ([`Cvars::take_console_lines`]).
+    console: Vec<String>,
     /// The CVars Lua's `RegisterCVar` created this process, the reference's `[0xb4e3c8]`: kept
     /// here because it outlives every VM, and counted by the VM
     /// ([`benilla_ui::script::LUA_CVAR_LIMIT`]).
@@ -151,6 +160,7 @@ impl Default for Cvars {
             outbox: Vec::new(),
             dirty: false,
             last_change: None,
+            console: Vec::new(),
             lua_created: 0,
         };
         for r in REGISTERED {
@@ -161,6 +171,7 @@ impl Default for Cvars {
                 pending: None,
                 latched: r.latched,
                 addon: false,
+                check: r.check,
             });
         }
         cvars
@@ -257,6 +268,15 @@ impl Cvars {
                 self.outbox.push((row.name.clone(), row.value.clone()));
             }
             return SetOutcome::Refused;
+        }
+        // The change callback, before anything is stored (`0x63df7d`). A VM write was checked
+        // by the VM's own mirror, which refused it there or printed its line already.
+        if let (Some(check), false) = (row.check, from_vm) {
+            let verdict = check(value, &row.value);
+            self.console.extend(verdict.line);
+            if !verdict.accept {
+                return SetOutcome::Vetoed;
+            }
         }
         if row.latched {
             // The reference's `Set 0x63df50` on flag bit1 stores `latchedValue` and skips
@@ -396,6 +416,7 @@ impl Cvars {
             pending: None,
             latched: false,
             addon: true,
+            check: None,
         });
     }
 
@@ -417,6 +438,12 @@ impl Cvars {
             if row.numeric() && value.trim().parse::<f32>().is_err() {
                 warn!("config: {name}: unparseable value '{value}' ignored");
                 continue;
+            }
+            // The callback runs on the saved value and its answer is ignored: the file is read
+            // before these rows are registered, and `CVar::Register` on the record it made calls
+            // the callback without testing the result (`0x63dc58`), so the value stands.
+            if let Some(check) = row.check {
+                self.console.extend(check(value, &row.value).line);
             }
             if row.value == *value {
                 continue;
@@ -460,6 +487,7 @@ impl Cvars {
             self.set_from_vm(&name, &value);
         }
         self.lua_created = self.lua_created.max(script.cvar_lua_created());
+        self.console.extend(script.take_cvar_console_lines());
     }
 
     /// The whole table as a VM's mirror is seeded from it.
@@ -471,8 +499,29 @@ impl Cvars {
                 value: r.value.clone(),
                 default: r.default.clone(),
                 latched: r.latched,
+                check: r.check,
             })
             .collect()
+    }
+
+    /// The change callbacks' lines since the last call.
+    pub(crate) fn take_console_lines(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.console)
+    }
+
+    fn has_console_lines(&self) -> bool {
+        !self.console.is_empty()
+    }
+
+    /// Send the change callbacks' lines no console command collected to the log, as
+    /// [`crate::console::ConsoleEcho`] does with an observer's.
+    fn log_console_lines(&mut self) {
+        if self.console.is_empty() {
+            return;
+        }
+        for line in self.console.drain(..) {
+            info!("console: {line}");
+        }
     }
 
     /// Read before taking, so a quiet frame never deref-muts the registry.
@@ -656,6 +705,7 @@ fn load_config(world: &mut World) {
             }
             StoredConfig::Table(table) => cvars.load_file(table),
         }
+        cvars.log_console_lines();
         cvars.take_events()
     };
     for event in events {
@@ -723,6 +773,9 @@ pub(crate) fn sync_cvars(
             cvars.own_for_session("gxApi", Some(backend));
         }
     }
+    if cvars.has_console_lines() {
+        cvars.log_console_lines();
+    }
     let Some(mut script) = script else {
         // Nothing to mirror into; a later VM is seeded from the table, which carries it all.
         if cvars.has_outbox() {
@@ -740,6 +793,7 @@ pub(crate) fn sync_cvars(
     // never deref-muts the registry.
     if script.has_cvar_traffic() || script.cvar_lua_created() != cvars.lua_created {
         cvars.drain_vm(&mut script);
+        cvars.log_console_lines();
     }
     if seeded.claim(&script) {
         cvars.seed_vm(&mut script);
@@ -807,6 +861,7 @@ pub(crate) fn fold_dying_vm_cvars(world: &mut World) {
             return Vec::new();
         };
         cvars.drain_vm(&mut script);
+        cvars.log_console_lines();
         if cvars.has_outbox() {
             cvars.take_outbox(); // the VM this was for is going away
         }
@@ -1550,6 +1605,98 @@ mod tests {
             crate::console::execute(app.world_mut(), "farclip 400"),
             Vec::<String>::new(),
             "a callback that prints nothing adds nothing"
+        );
+    }
+
+    /// The four video rows whose callbacks refuse (`SmallCull` `0x688b10`, `shadowLevel`
+    /// `0x688c10`, `texLodBias` `0x688c90`, `baseMip` `0x689090`): `CVar::Set` keeps the old value
+    /// (`0x63df85`), and the console shows the callback's line, on the console and on a host write.
+    #[test]
+    fn a_refusing_callback_keeps_the_value_on_every_write() {
+        let mut app = cvar_app();
+        app.init_resource::<crate::console::ConsoleEcho>();
+        for (line, said, name, kept) in [
+            (
+                "SmallCull 5",
+                "SmallCull must be in range 0.001 - 2.0.",
+                "SmallCull",
+                "0.04",
+            ),
+            (
+                "shadowLevel 3",
+                "Shadow mip level must be in range 0 - 1.",
+                "shadowLevel",
+                "1",
+            ),
+            (
+                "texLodBias -2",
+                "TexLodBias must be in range -1.0 - 1.0.",
+                "texLodBias",
+                "0.0",
+            ),
+            ("baseMip 5", "BaseMip must be 0 or 1", "baseMip", "0"),
+        ] {
+            assert_eq!(
+                crate::console::execute(app.world_mut(), line),
+                [said],
+                "{line}"
+            );
+            assert_eq!(res::<Cvars>(&app).get(name), Some(kept), "{line}");
+        }
+        assert_eq!(
+            crate::console::execute(app.world_mut(), "baseMip 1"),
+            ["BaseMip level changed to 1"]
+        );
+        assert_eq!(
+            crate::console::execute(app.world_mut(), "baseMip 1"),
+            Vec::<String>::new(),
+            "the level it already has is taken silently"
+        );
+        assert_eq!(
+            crate::console::execute(app.world_mut(), "shadowLevel 0"),
+            ["Shadow mip level changed upon restart."]
+        );
+        assert_eq!(res::<Cvars>(&app).get("shadowLevel"), Some("0"));
+
+        let mut cvars = Cvars::default();
+        assert_eq!(cvars.set("texLodBias", "1.5"), SetOutcome::Vetoed);
+        assert_eq!(cvars.get("texLodBias"), Some("0.0"));
+        assert!(!cvars.has_events() && !cvars.has_outbox() && !cvars.dirty);
+        assert_eq!(cvars.set("texLodBias", "-0.5"), SetOutcome::Changed);
+    }
+
+    /// The config file is read before these rows are registered, and `CVar::Register` runs the
+    /// callback on the saved value without testing its answer (`0x63dc58`), so it stands.
+    #[test]
+    fn a_saved_value_a_callback_refuses_still_loads() {
+        let cvars = registry(&[("baseMip", "5"), ("shadowLevel", "3")]);
+        assert_eq!(cvars.get("baseMip"), Some("5"));
+        assert_eq!(cvars.get("shadowLevel"), Some("3"));
+    }
+
+    /// The VM's mirror carries the same callbacks, so a Lua `SetCVar` is refused at once and
+    /// `GetCVar` never answers the refused value.
+    #[test]
+    fn a_seeded_vm_refuses_what_the_registry_refuses() {
+        let mut cvars = registry(&[]);
+        let mut script = UiScript::new().unwrap();
+        cvars.seed_vm(&mut script);
+        script
+            .run(r#"SetCVar("shadowLevel", 3) SetCVar("baseMip", 1) ConsoleExec("SmallCull 9")"#)
+            .unwrap();
+        assert_eq!(script.cvar("shadowLevel").as_deref(), Some("1"));
+        assert_eq!(script.cvar("baseMip").as_deref(), Some("1"));
+        assert_eq!(script.cvar("SmallCull").as_deref(), Some("0.04"));
+        cvars.drain_vm(&mut script);
+        assert_eq!(cvars.get("baseMip"), Some("1"));
+        assert_eq!(
+            cvars.take_console_lines(),
+            [
+                "Shadow mip level must be in range 0 - 1.",
+                "BaseMip level changed to 1",
+                "SmallCull must be in range 0.001 - 2.0.",
+            ],
+            "each line once: the registry does not re-run a VM write's check"
         );
     }
 

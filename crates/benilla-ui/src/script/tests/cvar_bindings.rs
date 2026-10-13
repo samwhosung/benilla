@@ -169,6 +169,7 @@ fn the_read_only_flag_survives_a_host_reseed() {
         value: "Here".into(),
         default: String::new(),
         latched: false,
+        check: None,
     }]);
     assert!(raised(&s, "SetCVar(\"realmName\", \"x\")").contains("is read-only"));
 }
@@ -298,4 +299,30 @@ fn register_cvar_creates_thirty_cvars_per_process() {
     let mut next = UiScript::new().unwrap();
     next.set_cvar_lua_created(s.cvar_lua_created());
     assert!(next.run("RegisterCVar('fresh', '1')").is_err());
+}
+
+/// A seeded row's change callback runs before the store (`CVar::Set` `0x63df7d`): a refusal keeps
+/// the applied value and queues nothing for the host but the callback's console line.
+#[test]
+fn a_seeded_check_refuses_before_the_store() {
+    let mut s = UiScript::new().unwrap();
+    s.seed_cvars([crate::script::SeededCvar {
+        name: "shadowLevel".into(),
+        value: "1".into(),
+        default: "1".into(),
+        latched: false,
+        check: Some(crate::script::check_shadow_level),
+    }]);
+    s.run("SetCVar('shadowLevel', 2)").unwrap();
+    assert_eq!(get(&s, "shadowLevel"), "1");
+    assert!(s.take_cvar_changes().is_empty());
+    s.run("SetCVar('shadowLevel', 0)").unwrap();
+    assert_eq!(get(&s, "shadowLevel"), "0");
+    assert_eq!(
+        s.take_cvar_console_lines(),
+        [
+            "Shadow mip level must be in range 0 - 1.",
+            "Shadow mip level changed upon restart.",
+        ]
+    );
 }

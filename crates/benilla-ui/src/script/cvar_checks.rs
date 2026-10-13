@@ -1,0 +1,218 @@
+//! CVar change callbacks that can refuse a write. The reference's `CVar::Set` (`0x63df50`) calls
+//! a record's callback before it stores anything (`0x63df7d`) and keeps the old value when the
+//! callback answers false (`0x63df85`), on every write that asks for the callback: `SetCVar`
+//! (`0x488ca8`), a CVar's console command (`0x63de23`), `set` (`0x63d55b`) and the engine's own
+//! writes. A row carries its callback as a [`CvarCheck`], which the script VM's mirror and the
+//! host's registry both run, so a refused write never reaches `GetCVar`.
+//!
+//! A value the config file saved is not refused: the file is read before these CVars are
+//! registered (`InitializeGlobal` loads it at `0x402375`, the video block registers from
+//! `0x4027e7`), so `CVar::Register` finds a record already holding it, runs the callback and
+//! ignores its answer (`0x63dc58`).
+
+use super::binding_abi::s_str_to_float;
+use super::cvars::sstr_to_int;
+
+/// What a [`CvarCheck`] answers a write: whether it may be stored, and the line the callback
+/// prints to the console (`0x63cb50`), refused or not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CvarVerdict {
+    pub accept: bool,
+    pub line: Option<String>,
+}
+
+impl CvarVerdict {
+    fn accept() -> Self {
+        Self {
+            accept: true,
+            line: None,
+        }
+    }
+
+    fn accept_saying(line: impl Into<String>) -> Self {
+        Self {
+            accept: true,
+            line: Some(line.into()),
+        }
+    }
+
+    fn refuse(line: impl Into<String>) -> Self {
+        Self {
+            accept: false,
+            line: Some(line.into()),
+        }
+    }
+}
+
+/// A row's change callback as a gate: the value being written and the applied one in, the
+/// verdict out. It holds no state; the applied value stands in for what the reference's callback
+/// keeps elsewhere.
+pub type CvarCheck = fn(value: &str, applied: &str) -> CvarVerdict;
+
+/// `SmallCull`'s callback (`0x688b10`): `sscanf(value, "%f")` (`0x73fb5d`, format `0x835160`),
+/// then a refusal below the double 0.001 (`[0x801608]`) or above the float 2.0 (`[0x801628]`),
+/// with "SmallCull must be in range 0.001 - 2.0." (`0x869900`). A value with no number in it
+/// leaves the callback comparing the bits of its own string pointer, read as a float far below
+/// the lower bound.
+pub fn check_small_cull(value: &str, _applied: &str) -> CvarVerdict {
+    match scanf_f(value) {
+        Some(v) if f64::from(v) >= 0.001 && v <= 2.0 => CvarVerdict::accept(),
+        _ => CvarVerdict::refuse("SmallCull must be in range 0.001 - 2.0."),
+    }
+}
+
+/// `shadowLevel`'s callback (`0x688c10`): `SStrToInt` (`0x64ac60`), refused above 1 with "Shadow
+/// mip level must be in range 0 - 1." (`0x869998`), else accepted with "Shadow mip level changed
+/// upon restart." (`0x869970`). The test is signed and has no lower bound.
+pub fn check_shadow_level(value: &str, _applied: &str) -> CvarVerdict {
+    if sstr_to_int(value) > 1 {
+        CvarVerdict::refuse("Shadow mip level must be in range 0 - 1.")
+    } else {
+        CvarVerdict::accept_saying("Shadow mip level changed upon restart.")
+    }
+}
+
+/// `texLodBias`'s callback (`0x688c90`): `SStrToFloat` (`0x64aaa0`), refused below -1.0
+/// (`[0x8030a0]`) or above 1.0 (`[0x7ff9d8]`) with "TexLodBias must be in range -1.0 - 1.0."
+/// (`0x869a14`). The lower test reads the parsed value as is; the upper one reloads it from the
+/// float it was stored to (`0x688c9c`, `0x688cac`).
+pub fn check_tex_lod_bias(value: &str, _applied: &str) -> CvarVerdict {
+    let v = s_str_to_float(value);
+    if v < -1.0 || v as f32 > 1.0 {
+        CvarVerdict::refuse("TexLodBias must be in range -1.0 - 1.0.")
+    } else {
+        CvarVerdict::accept()
+    }
+}
+
+/// `baseMip`'s callback (`0x689090`): `SStrToInt` (`0x64ac60`) of the value against the device's
+/// current first mip level (`0x589c50`, the device's `+0x31c`, which only this callback sets,
+/// through `0x589bf0`): the same level is accepted silently; else anything outside 0..=1 is refused
+/// with "BaseMip must be 0 or 1" (`0x869c9c`), and 0 or 1 is applied with "BaseMip level changed
+/// to %d" (`0x869cb4`).
+///
+/// benilla's device uploads every level, so the applied value stands for the device's level: the
+/// two differ only after a saved out-of-range value, which the reference keeps without applying,
+/// and then only in the console line.
+pub fn check_base_mip(value: &str, applied: &str) -> CvarVerdict {
+    let level = sstr_to_int(value);
+    if level == sstr_to_int(applied) {
+        CvarVerdict::accept()
+    } else if !(0..=1).contains(&level) {
+        CvarVerdict::refuse("BaseMip must be 0 or 1")
+    } else {
+        CvarVerdict::accept_saying(format!("BaseMip level changed to {level}"))
+    }
+}
+
+/// `sscanf(s, "%f")` as the reference's CRT reads it: leading white space, an optional sign, digits
+/// with at most one `.` (at least one digit), then `e`/`E` with an optional sign and digits,
+/// converted as a double and stored as a float. `None` when no number starts the string.
+fn scanf_f(s: &str) -> Option<f32> {
+    let b = s.as_bytes();
+    let mut i = b
+        .iter()
+        .take_while(|c| matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'))
+        .count();
+    let start = i;
+    if matches!(b.get(i), Some(b'+' | b'-')) {
+        i += 1;
+    }
+    let digits = |i: &mut usize| {
+        let from = *i;
+        while b.get(*i).is_some_and(u8::is_ascii_digit) {
+            *i += 1;
+        }
+        *i - from
+    };
+    let mut n = digits(&mut i);
+    if b.get(i) == Some(&b'.') {
+        i += 1;
+        n += digits(&mut i);
+    }
+    if n == 0 {
+        return None;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        let mut e = i + 1;
+        if matches!(b.get(e), Some(b'+' | b'-')) {
+            e += 1;
+        }
+        if digits(&mut e) > 0 {
+            i = e;
+        }
+    }
+    s[start..i].parse::<f64>().ok().map(|v| v as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_cull_takes_0_001_to_2() {
+        for ok in [
+            "0.001", "0.04", "2", "2.0", " 1.5", "1.5junk", "+0.5", "1e-3",
+        ] {
+            assert!(check_small_cull(ok, "0.04").accept, "{ok}");
+        }
+        for bad in ["0.0009", "0", "-1", "2.01", "abc", "", "1e9"] {
+            let v = check_small_cull(bad, "0.04");
+            assert!(!v.accept, "{bad}");
+            assert_eq!(
+                v.line.as_deref(),
+                Some("SmallCull must be in range 0.001 - 2.0.")
+            );
+        }
+    }
+
+    #[test]
+    fn shadow_level_refuses_only_above_one() {
+        for ok in ["0", "1", "-5", "abc", "1.9"] {
+            let v = check_shadow_level(ok, "1");
+            assert!(v.accept, "{ok}");
+            assert_eq!(
+                v.line.as_deref(),
+                Some("Shadow mip level changed upon restart.")
+            );
+        }
+        for bad in ["2", "10"] {
+            assert!(!check_shadow_level(bad, "1").accept, "{bad}");
+        }
+    }
+
+    #[test]
+    fn tex_lod_bias_takes_minus_one_to_one() {
+        for ok in ["-1", "0.0", "1", "1.00000001", "+5", " 5"] {
+            assert!(check_tex_lod_bias(ok, "0.0").accept, "{ok}");
+        }
+        for bad in ["-1.00000001", "1.5", "-2", "5"] {
+            let v = check_tex_lod_bias(bad, "0.0");
+            assert!(!v.accept, "{bad}");
+            assert_eq!(
+                v.line.as_deref(),
+                Some("TexLodBias must be in range -1.0 - 1.0.")
+            );
+        }
+    }
+
+    #[test]
+    fn base_mip_takes_zero_or_one_and_says_so_when_it_moves() {
+        assert_eq!(check_base_mip("0", "0"), CvarVerdict::accept());
+        assert_eq!(
+            check_base_mip("1", "0"),
+            CvarVerdict::accept_saying("BaseMip level changed to 1")
+        );
+        assert_eq!(
+            check_base_mip("0", "1"),
+            CvarVerdict::accept_saying("BaseMip level changed to 0")
+        );
+        for bad in ["2", "-1", "5"] {
+            assert_eq!(
+                check_base_mip(bad, "0"),
+                CvarVerdict::refuse("BaseMip must be 0 or 1"),
+                "{bad}"
+            );
+        }
+    }
+}

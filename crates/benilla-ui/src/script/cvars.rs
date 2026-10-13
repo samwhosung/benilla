@@ -10,6 +10,7 @@
 use mlua::{Lua, Value};
 
 use super::binding_abi::lua_number_text;
+use super::cvar_checks::CvarCheck;
 use super::{Model, ScriptValue};
 
 /// One registered CVar.
@@ -26,16 +27,19 @@ pub(crate) struct CvarSlot {
     pub latched: bool,
     /// A latched row's staged value, reported to the host through the change queue when written.
     pub pending: Option<String>,
+    /// The change callback that may refuse a write ([`super::cvar_checks`]); host-seeded only.
+    pub check: Option<CvarCheck>,
 }
 
 /// One row of the host's registry as the VM's mirror is seeded from it; `value` is the applied
 /// value.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct SeededCvar {
     pub name: String,
     pub value: String,
     pub default: String,
     pub latched: bool,
+    pub check: Option<CvarCheck>,
 }
 
 /// One multisample format the device supports, the reference's triple (`[0xb4b444]`, count
@@ -109,7 +113,8 @@ impl super::UiScript {
 
     /// Register the host-backed CVars as `(name, default)`, idempotently: a re-register refreshes
     /// the default and keeps a live value, and a new row starts at its saved value if the config
-    /// file has one. `&self` so the interface loader can register from a `&UiScript`: the stock
+    /// file has one. A row registered here has no change callback; [`Self::seed_cvars`] carries
+    /// the host registry's. `&self` so the interface loader can register from a `&UiScript`: the stock
     /// `UIOptionsFrame.xml` reads CVars in its own `OnLoad`.
     pub fn register_cvars<'a>(&self, vars: impl IntoIterator<Item = (&'a str, &'a str)>) {
         let mut model = self.model_mut();
@@ -131,6 +136,7 @@ impl super::UiScript {
                             default: default.to_string(),
                             latched: false,
                             pending: None,
+                            check: None,
                         },
                     );
                 }
@@ -153,6 +159,7 @@ impl super::UiScript {
                     default: row.default,
                     latched: row.latched,
                     pending: None,
+                    check: row.check,
                 },
             );
         }
@@ -191,11 +198,18 @@ impl super::UiScript {
             .collect()
     }
 
-    /// Whether a Lua write or registration waits for [`Self::take_cvar_changes`] or
-    /// [`Self::take_cvar_registrations`].
+    /// Drain the lines CVar change callbacks printed since the last call, for the console.
+    pub fn take_cvar_console_lines(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.model_mut().cvar_console)
+    }
+
+    /// Whether a Lua write, registration or callback line waits for [`Self::take_cvar_changes`],
+    /// [`Self::take_cvar_registrations`] or [`Self::take_cvar_console_lines`].
     pub fn has_cvar_traffic(&self) -> bool {
         let model = self.model_mut();
-        !model.cvar_changes.is_empty() || !model.cvar_registrations.is_empty()
+        !model.cvar_changes.is_empty()
+            || !model.cvar_registrations.is_empty()
+            || !model.cvar_console.is_empty()
     }
 
     /// Drain the `(name, new_value)` changes queued since the last call, under the registered
@@ -292,10 +306,19 @@ pub(super) fn set_from_engine(model: &mut Model, name: &str, value: String) {
 }
 
 /// The one store every write goes through; returns the registered spelling when the value moved
-/// and the change was queued. A latched slot stages the write, as the reference's `Set 0x63df50`
-/// stores `latchedValue` and skips `InternalSet`; writing back the applied value unstages it.
+/// and the change was queued. The row's check runs first and may refuse the write, as the
+/// reference's `Set 0x63df50` calls the callback before anything else (`0x63df7d`). A latched
+/// slot stages the write, as `Set` stores `latchedValue` and skips `InternalSet`; writing back the
+/// applied value unstages it.
 fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
     let slot = model.cvars.get_mut(key)?;
+    if let Some(check) = slot.check {
+        let verdict = check(&value, &slot.value);
+        model.cvar_console.extend(verdict.line);
+        if !verdict.accept {
+            return None;
+        }
+    }
     if slot.latched {
         let staged = (value != slot.value).then_some(value.clone());
         if slot.pending == staged && staged.is_some() {
@@ -448,6 +471,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     default: value,
                     latched: false,
                     pending: None,
+                    check: None,
                 },
             );
             Ok(())
@@ -980,12 +1004,14 @@ mod tests {
                 value: "1".into(),
                 default: "1".into(),
                 latched: true,
+                check: None,
             },
             SeededCvar {
                 name: "MusicVolume".into(),
                 value: "0.4".into(),
                 default: "0.4".into(),
                 latched: false,
+                check: None,
             },
         ]);
         s.run(r#"SetCVar("gxVSync", 0)"#).unwrap();
