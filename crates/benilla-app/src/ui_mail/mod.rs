@@ -66,13 +66,20 @@ fn package_view(row: &benilla_formats::PackageRow) -> benilla_ui::script::Packag
     }
 }
 
-/// A `SEND` result queued for [`feed_mail`]. `MAIL_FAILED` fires on every one, success included:
-/// the reference uses it as "the send resolved" (`0x4ad15f`), and the stock handler only
-/// re-enables the button.
-pub(crate) struct MailSendAck {
-    pub(crate) ok: bool,
-    /// The message key of a failure other than an equip error.
-    pub(crate) refusal: Option<&'static str>,
+/// One `SMSG_SEND_MAIL_RESULT`, queued in arrival order for [`feed_mail`]. The handler (`0x4ad050`)
+/// ends every arm (send, take money, take item, return, delete, each success and each refusal)
+/// at one tail that lifts the locks and signals `MAIL_FAILED` (`0x4ad15f`-`0x4ad16a`), so every
+/// result owes the event, success included; the stock handler only re-enables the send button.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct MailResult {
+    /// The message key of the line the arm shows: a send's "mail sent" or a refusal other than an
+    /// equip error, which goes through the equip-error table.
+    pub(crate) line: Option<&'static str>,
+    /// A `SEND` result and whether it succeeded: it lifts the send-pending flag (`0x4ad159`), and a
+    /// success resets the compose tab (`0x4ad0ca`).
+    pub(crate) send: Option<bool>,
+    /// The 1-based row a take emptied and purged, owed a `CLOSE_INBOX_ITEM`.
+    pub(crate) close_inbox: Option<u32>,
 }
 
 /// The mailbox session: the open mailbox's guid, the inbox rows as the wire sent them, the
@@ -90,10 +97,9 @@ pub(crate) struct MailOpen {
     show_requested: bool,
     /// A list or send answer landed since the last feed: the VM's request lock clears.
     request_resolved: bool,
-    pub(crate) send_acks: Vec<MailSendAck>,
-    /// 1-based rows a take emptied and purged, each owed a `CLOSE_INBOX_ITEM`.
-    pub(crate) close_inbox: Vec<u32>,
-    /// Take, return and delete refusals, as message keys.
+    /// The mail results since the last feed, in arrival order.
+    pub(crate) results: Vec<MailResult>,
+    /// Refusals of a request the client made no packet for, as message keys.
     pub(crate) errors: Vec<&'static str>,
 }
 
@@ -140,7 +146,7 @@ impl MailOpen {
     pub(crate) fn clear(&mut self) {
         self.mailbox = None;
         self.show_requested = false;
-        self.send_acks.clear();
+        self.results.clear();
         self.errors.clear();
     }
 
@@ -479,6 +485,33 @@ struct MailFeedExtras<'w, 's> {
     packages_pushed: Local<'s, crate::ui_script::VmMemo<bool>>,
 }
 
+/// `0x4ad050`'s order for each result: the arm's message line, a send's flag lift and compose
+/// reset, a purged row's `CLOSE_INBOX_ITEM(index)` (money `0x4ad772`, item `0x4ad87d`), then the
+/// tail's `MAIL_FAILED` on every path (`0x4ad15f`).
+fn announce_results(
+    script: &mut UiScript,
+    results: Vec<MailResult>,
+    mut show: impl FnMut(&mut UiScript, Option<crate::ui_action::Shown>),
+) {
+    for result in results {
+        let line = result
+            .line
+            .and_then(|key| crate::ui_action::keyed_line(script, key));
+        show(script, line);
+        if let Some(ok) = result.send {
+            // The send's result lifts the send-pending flag (`0x4ad159`), then the compose reset.
+            script.mail_send_resolved();
+            if ok {
+                script.reset_compose_tab();
+            }
+        }
+        if let Some(index) = result.close_inbox {
+            script.fire_event("CLOSE_INBOX_ITEM", vec![ScriptValue::Int(i64::from(index))]);
+        }
+        script.fire_event("MAIL_FAILED", vec![]);
+    }
+}
+
 fn feed_mail(
     script: Option<NonSendMut<UiScript>>,
     mut mail: ResMut<MailOpen>,
@@ -524,34 +557,17 @@ fn feed_mail(
     let last_mailbox = last_mailbox.get(&script);
     let last_has_new_mail = last_has_new_mail.get(&script);
 
-    // Take, return and delete refusals, on the surface and voice their message row names.
+    // A request refused before it went out, on the surface and voice its message row names.
     let refusals: Vec<_> = std::mem::take(&mut mail.errors)
         .into_iter()
         .filter_map(|key| crate::ui_action::keyed_line(&script, key))
         .collect();
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_mail", refusals);
-    // A purged row fires `CLOSE_INBOX_ITEM(index)` before the list's `MAIL_INBOX_UPDATE`, as both
-    // take legs do (money `0x4ad772` before `0x4ad7a3`, item `0x4ad87d` before `0x4ad8ae`).
-    for index in std::mem::take(&mut mail.close_inbox) {
-        script.fire_event("CLOSE_INBOX_ITEM", vec![ScriptValue::Int(i64::from(index))]);
-    }
-    // `0x4ad050`'s order: the message line, then on a successful send the compose reset
-    // (`0x4acdc0`) with its three events, then `MAIL_FAILED` on every path (`0x4ad15f`).
-    for ack in std::mem::take(&mut mail.send_acks) {
-        let key = if ack.ok {
-            Some(MAIL_SENT_KEY)
-        } else {
-            ack.refusal
-        };
-        let line = key.and_then(|k| crate::ui_action::keyed_line(&script, k));
-        crate::ui_action::show_messages(&mut script, &mut sink, "ui_mail", line);
-        // The send's result lifts the send-pending flag (`0x4ad159`), then the compose reset.
-        script.mail_send_resolved();
-        if ack.ok {
-            script.reset_compose_tab();
-        }
-        script.fire_event("MAIL_FAILED", vec![]);
-    }
+    announce_results(
+        &mut script,
+        std::mem::take(&mut mail.results),
+        |script, line| crate::ui_action::show_messages(script, &mut sink, "ui_mail", line),
+    );
 
     // `None` until the player is named; the diff re-substitutes an open letter when it lands.
     let subject = crate::npc_text::player_identity(&self_q, &names, &commands);
@@ -870,7 +886,7 @@ mod tests {
         }
     }
 
-    fn entry(
+    pub(super) fn entry(
         message_id: u32,
         sender_guid: Option<u64>,
         checked: u32,

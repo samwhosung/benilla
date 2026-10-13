@@ -5,7 +5,7 @@ use benilla_protocol::messages::{mail_action, mail_error, mail_message_type, Mai
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{mail_refusal, MailOpen, MailPending, MailSendAck, CHECKED_COD_PAYMENT};
+use super::{mail_refusal, MailOpen, MailPending, MailResult, CHECKED_COD_PAYMENT, MAIL_SENT_KEY};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::ui_items::{EquipError, EquipErrors};
 
@@ -144,6 +144,8 @@ fn send_mail_result(
     // mail take (`MailHandler.cpp:675`). Every result lifts the request lock at the handler's
     // common tail (`0x4ad164`), whatever its action.
     mail.resolve_request();
+    // Every result owes the feed its tail `MAIL_FAILED`, whatever its action (`0x4ad15f`).
+    let mut result = MailResult::default();
     if action == mail_action::SEND {
         if error == mail_error::EQUIP_ERROR {
             equip_errors.0.push(EquipError {
@@ -155,11 +157,13 @@ fn send_mail_result(
                 bag_slot: 255,
             });
         }
-        mail.send_acks.push(MailSendAck {
-            ok: error == mail_error::OK,
-            refusal: (error != mail_error::OK && error != mail_error::EQUIP_ERROR)
-                .then(|| mail_refusal(error)),
-        });
+        result.send = Some(error == mail_error::OK);
+        result.line = match error {
+            mail_error::OK => Some(MAIL_SENT_KEY),
+            mail_error::EQUIP_ERROR => None,
+            other => Some(mail_refusal(other)),
+        };
+        mail.results.push(result);
         return;
     }
     // A take/return/delete result.
@@ -179,7 +183,7 @@ fn send_mail_result(
                             .0
                             .send(ClientCommand::MailDelete { mailbox, mail_id });
                     }
-                    mail.close_inbox.push(pos as u32 + 1);
+                    result.close_inbox = Some(pos as u32 + 1);
                     mail.mails.remove(pos);
                 }
             }
@@ -194,8 +198,9 @@ fn send_mail_result(
             required_level: None,
             bag_slot: 255,
         }),
-        other => mail.errors.push(mail_refusal(other)),
+        other => result.line = Some(mail_refusal(other)),
     }
+    mail.results.push(result);
 }
 
 /// `SMSG_ITEM_TEXT_QUERY_RESPONSE`: the body lands in the cache and the feed repaints.
@@ -276,5 +281,52 @@ mod tests {
             );
             assert!(mail.request_resolved, "action {action} error {error}");
         }
+    }
+
+    /// `0x4ad050` ends every arm at one tail that signals `MAIL_FAILED` (`0x4ad15f`): a send, a
+    /// take, a return and a delete, each success and each refusal, once per result and in arrival
+    /// order, a purged row's `CLOSE_INBOX_ITEM` (`0x4ad772`) ahead of its own.
+    #[test]
+    fn every_mail_result_signals_mail_failed_once() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut equip = EquipErrors::default();
+        let mut mail = MailOpen::default();
+        mail.click(0x20);
+        let mut cod = super::super::tests::entry(7, Some(0xA), 0, 30.0);
+        cod.checked = CHECKED_COD_PAYMENT;
+        mail.mails.push(cod);
+        for (action, error) in [
+            (mail_action::MONEY_TAKEN, mail_error::OK),
+            (mail_action::RETURNED, mail_error::INTERNAL_ERROR),
+            (mail_action::DELETED, mail_error::OK),
+            (mail_action::ITEM_TAKEN, mail_error::EQUIP_ERROR),
+            (mail_action::SEND, mail_error::OK),
+        ] {
+            send_mail_result(
+                7, action, error, None, None, &mut mail, &commands, &mut equip,
+            );
+        }
+        assert_eq!(mail.results.len(), 5, "one per result");
+
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        script
+            .run(
+                r#"log = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("MAIL_FAILED")
+                f:RegisterEvent("CLOSE_INBOX_ITEM")
+                f:SetScript("OnEvent", function()
+                    table.insert(log, event .. (arg1 and (":" .. arg1) or ""))
+                end)"#,
+            )
+            .unwrap();
+        super::super::announce_results(&mut script, std::mem::take(&mut mail.results), |_, _| {});
+        assert_eq!(
+            script
+                .eval::<String>("return table.concat(log, ' ')")
+                .unwrap(),
+            "CLOSE_INBOX_ITEM:1 MAIL_FAILED MAIL_FAILED MAIL_FAILED MAIL_FAILED MAIL_FAILED"
+        );
     }
 }
