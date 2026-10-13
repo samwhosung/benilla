@@ -147,8 +147,12 @@ pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
 /// Every `CSimpleFontString` decodes it unconditionally (`0x5c2810`), so every glue string does.
 ///
 /// An escape overrides `base` until `|r`, its alpha discarded (`0x5c2ab2`); a link keeps only its
-/// text; `||` draws one `|`. A line break (`\n`, `\r`, `|n`) breaks the line whatever the string's
-/// wrap flag, as `0x5c2810` classes it for every string. An empty string yields one empty span.
+/// text; `||` draws one `|`. A line break breaks the line whatever the string's wrap flag: `\n`
+/// and `\r` are classed before any flag is read (`0x5c286e`, `0x5c2896`), and `|n` is refused
+/// only under decoder flag `0x200` (`0x5c29e7`), which a font string's style word gives from its
+/// bit `0x4000` (`0x44d4da`) and which none of its writers sets (the ctor's `0x212` at `0x770dd3`,
+/// `0x7712ed`, `0x771351`, `0x77162d`, `0x7722ee`, `0x7723a0`, `0x77350e`). An empty string yields
+/// one empty span.
 pub(crate) fn markup_spans(text: &str, base: Color) -> Vec<(String, Color)> {
     let mut spans: Vec<(String, Color)> = Vec::new();
     let mut cur = String::new();
@@ -860,7 +864,8 @@ mod tests {
 
     #[test]
     fn a_line_break_breaks_whatever_the_wrap_flag() {
-        // `VERSION_TEMPLATE` (`"%s %s (%s) (%s)\n%s"`) on the one-line version label.
+        // `VERSION_TEMPLATE` (`"%s %s (%s) (%s)\n%s"`) on the one-line version label: a hard
+        // newline is classed before any flag (`0x5c2896`).
         assert_eq!(
             markup_spans("1.12.1 5875\nSep 19 2006", GOLD),
             vec![("1.12.1 5875\nSep 19 2006".to_string(), GOLD)],
@@ -869,7 +874,7 @@ mod tests {
         assert_eq!(
             markup_spans("one|ntwo", GOLD),
             vec![("one\ntwo".to_string(), GOLD)],
-            "so does the `|n` escape"
+            "so does `|n`: no font string's style word carries the bit that refuses it"
         );
     }
 }
