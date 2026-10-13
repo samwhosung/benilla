@@ -369,13 +369,14 @@ fn may_swap(standing: bool, art_ready: bool, body_ready: bool, waited: f32) -> b
 /// directional ambients sum, each directional's diffuse × intensity becomes an SH lobe
 /// ([`benilla_world::lighting::prop_probe_coeffs`]), and point lights go to the point table with
 /// the fixed falloff `1/(0.7·d + 0.03·d²)`; the reference ignores the authored attenuation radii.
-struct SceneRig {
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SceneRig {
     /// The summed directional ambient (every UI_* point light authors ambient ×0).
-    ambient: [f32; 3],
+    pub(crate) ambient: [f32; 3],
     /// The directional lobes, toward-light and committed; folded into probe slot 0.
-    lobes: Vec<(Vec3, [f32; 3])>,
+    pub(crate) lobes: Vec<(Vec3, [f32; 3])>,
     /// The point lights: Bevy position and committed colour.
-    points: Vec<(Vec3, [f32; 3])>,
+    pub(crate) points: Vec<(Vec3, [f32; 3])>,
 }
 
 /// Range packed with a scene point light: the reference gather has no range gate (≤3 nearest).
@@ -383,7 +384,7 @@ const SCENE_POINT_RANGE: f32 = 1.0e6;
 
 /// Fold the scene model's lights into a [`SceneRig`]. A directional's to-light direction is its
 /// bone's local +Z, row 2 of the light bone's pose matrix (`0x718a76`), never the def position.
-fn scene_rig(lights: &[benilla_assets::ModelLight]) -> SceneRig {
+pub(crate) fn scene_rig(lights: &[benilla_assets::ModelLight]) -> SceneRig {
     let mut ambient = [0.0f32; 3];
     let mut lobes: Vec<(Vec3, [f32; 3])> = Vec::new();
     let mut points = Vec::new();

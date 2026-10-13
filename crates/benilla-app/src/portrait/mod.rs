@@ -54,6 +54,8 @@ use booth::{
 mod dressup;
 pub(crate) use dressup::{DressUpBake, DressUpLook, DressUpPreview};
 mod glue_booth;
+/// A model file's own authored lights, folded as the reference's gather does (`0x718960`).
+pub(crate) use glue_booth::{scene_rig, SceneRig};
 pub(crate) use glue_booth::{
     CreateLook, GhostKit, GlueLook, GluePetBake, GluePreview, GluePreviewBake, GlueScene, PetLook,
     PreviewBillboard, PreviewEffects, PreviewPart, PreviewRider, SceneFog, SelectLook, GLUE_SLOT,

@@ -37,8 +37,8 @@ use benilla_world::rig_anim::{AnimParked, GlobalSeqDrive, RigPose};
 use benilla_world::rig_palette::{RigPaletteMirrors, RigPalettes, RigPart, RigSkin};
 
 use crate::portrait::{
-    booth_view_shape, material_variant, new_target_image_sized, pane_projection, StageRig,
-    VariantLane, WowPortraitProjection, UI_MODELS_LAYER, UI_MODEL_CAM_LAYERS,
+    booth_view_shape, material_variant, new_target_image_sized, pane_projection, scene_rig,
+    SceneRig, StageRig, VariantLane, WowPortraitProjection, UI_MODELS_LAYER, UI_MODEL_CAM_LAYERS,
     UI_MODEL_CAM_LAYER_BASE,
 };
 use crate::ui_pass::{UiQuad, UiQuadAppend, UiQuads, UvRect};
@@ -76,7 +76,7 @@ pub(crate) struct TileRequest {
     /// The installed camera index (ctor 0, `SetCamera(n)`); `None` is the NULL camera an index
     /// past the file's cameras installs (`0x76cec0`), the orthographic leg of every shipped pane.
     pub camera: Option<u32>,
-    /// The pane's embedded `CGLight`, disabled on a fresh `<Model>`, so a lit batch draws black.
+    /// The pane's embedded `CGLight`, disabled on a fresh `<Model>`; it adds to the file's own lights.
     pub light: ModelLight,
     pub fog: Option<ModelFog>,
     /// `ReplaceIconTexture`'s path, the texture of the file's type-14 batches.
@@ -113,31 +113,54 @@ pub(crate) struct UiModelTiles {
     pub dpi: f32,
 }
 
-/// A pane's light input: its embedded `CGLight` and its armed fog. Panes with the same scene
-/// share one light buffer and twin cache; the default, a disabled light and no fog, is slot 0.
-#[derive(Clone, Copy, PartialEq)]
+/// A pane's light input: its embedded `CGLight`, its armed fog and its M2's own lights. Panes
+/// with the same scene share one light buffer and twin cache; the default, a disabled light, no
+/// fog and a file with no lights, is slot 0.
+#[derive(Clone, PartialEq)]
 struct TileScene {
     light: ModelLight,
     fog: Option<ModelFog>,
+    /// The file's authored lights: `SetModel` (`0x76cce0`) loads the M2 into the widget's own
+    /// scene (`0x76cfc0`), where `0x718960` emits them every frame, so the file's rig is there
+    /// whatever the widget light is.
+    rig: SceneRig,
 }
 
 impl TileScene {
-    /// The `<Model>` ctor's scene, a disabled white light and no fog; every shipped UI M2 is unlit.
+    /// The `<Model>` ctor's scene, a disabled white light and no fog, around a file with no
+    /// lights of its own.
     fn default_scene() -> Self {
         Self {
             light: ModelLight::default(),
             fog: None,
+            rig: SceneRig::default(),
         }
     }
 
-    /// The light buffer the reference's collector finalizes for this scene. It gathers only what
-    /// `0x76d680` stages, the fog when armed and the light when enabled: a directional light
-    /// folds ambient and one diffuse lobe into the SH (`0x71bc70`, `0x71bce0`), a point light
-    /// joins the 4-nearest heap with no ambient (`0x71bf90`). The ambient and the lobe land in
-    /// probe slot 0, which every tile part's `MeshTag` names; the rig lane reads no rows 0-2.
+    /// A pane's scene: its request's widget light and fog around its file's `lights`, none while
+    /// the file is not resident (the pane draws nothing until it is).
+    fn of_pane(req: &TileRequest, file_lights: &[benilla_assets::ModelLight]) -> Self {
+        Self {
+            light: req.light,
+            fog: req.fog,
+            rig: scene_rig(file_lights),
+        }
+    }
+
+    /// The light buffer the reference's collector finalizes for this scene: the file's lights
+    /// (`0x718960`), then what `0x76d680` stages on top, the fog when armed and the widget light
+    /// when enabled. A directional light folds ambient and one diffuse lobe into the SH
+    /// (`0x71bc70`, `0x71bce0`), a point light joins the 4-nearest heap with no ambient
+    /// (`0x71bf90`). The ambient and the lobes land in probe slot 0, which every tile part's
+    /// `MeshTag` names; the rig lane reads no rows 0-2.
     fn blob(&self) -> LightBlob {
         let l = self.light;
-        let (ambient, lobes, point) = match (l.enabled, l.omni) {
+        let (mut ambient, mut lobes, mut points) = (
+            self.rig.ambient,
+            self.rig.lobes.clone(),
+            self.rig.points.clone(),
+        );
+        let (widget_ambient, widget_lobes, widget_point) = match (l.enabled, l.omni) {
             (false, _) => ([0.0; 3], Vec::new(), None),
             // Type 1, point: model-space position; `1/(0.7d + 0.03d²)` falloff, no range gate.
             (true, true) => (
@@ -157,8 +180,13 @@ impl TileScene {
                 None,
             ),
         };
+        for (a, w) in ambient.iter_mut().zip(widget_ambient) {
+            *a += w;
+        }
+        lobes.extend(widget_lobes);
+        points.extend(widget_point);
         let mut blob = LightBlob::model(ambient, [0.0; 3], Vec3::NEG_Y).probe(ambient, &lobes);
-        if let Some((pos, colour)) = point {
+        for (pos, colour) in points {
             blob = blob.point(pos, POINT_RANGE, colour);
         }
         match self.fog {
@@ -214,7 +242,7 @@ impl TileRig {
             return i;
         }
         if self.lights.len() >= UI_MODEL_CAM_LAYERS {
-            warn!("ui_models: the light pool is full — a pane's SetLight/fog is not applied");
+            warn!("ui_models: the light pool is full — a pane's M2 lights, SetLight and fog are not applied");
             return 0;
         }
         let key = LIGHT_MIRROR_KEYS[self.lights.len()];
@@ -746,11 +774,14 @@ fn sync_tiles(
     let light_slots: Vec<usize> = live
         .iter()
         .map(|(_, req, _)| {
+            // The pane's file, once it is resident: its own lights join the scene.
+            let file_lights = state
+                .loaded
+                .get(&benilla_ui::widget::model_key(&req.path))
+                .and_then(|(handle, _)| assets.m2s.get(handle))
+                .map_or(&[][..], |model| &model.lights[..]);
             render.rig.slot_for(
-                TileScene {
-                    light: req.light,
-                    fog: req.fog,
-                },
+                TileScene::of_pane(req, file_lights),
                 &render.device,
                 &render.queue,
                 &mut render.mirrors,
@@ -1695,6 +1726,98 @@ fn build_tile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file rig of one ambient-only directional and one point light.
+    fn file_rig() -> SceneRig {
+        SceneRig {
+            ambient: [0.2, 0.25, 0.3],
+            lobes: Vec::new(),
+            points: vec![(Vec3::new(1.0, 2.0, 3.0), [0.7, 0.8, 1.0])],
+        }
+    }
+
+    fn scene(light: ModelLight, rig: SceneRig) -> TileScene {
+        TileScene {
+            light,
+            fog: None,
+            rig,
+        }
+    }
+
+    /// A plain `<Model>` is lit by its file's own lights (`0x718960` into the widget's scene
+    /// `0x76cfc0`) with its widget light disabled, and the widget light adds to them (`0x76d680`).
+    #[test]
+    fn a_tile_scene_is_lit_by_its_files_own_lights() {
+        let dark = scene(ModelLight::default(), SceneRig::default()).blob();
+        assert_eq!(dark.probe_dc(), [0.0; 3]);
+        assert_eq!(dark.point_count(), 0);
+
+        let lit = scene(ModelLight::default(), file_rig()).blob();
+        assert!(
+            lit.probe_dc().iter().all(|c| *c > 0.0),
+            "the file's ambient reaches the probe: {:?}",
+            lit.probe_dc()
+        );
+        assert_eq!(
+            lit.point_count(),
+            1,
+            "the file's point light joins the table"
+        );
+
+        let widget = ModelLight {
+            enabled: true,
+            omni: false,
+            ambient: [0.1, 0.1, 0.1],
+            diffuse: [0.5, 0.5, 0.5],
+            vector: [0.0, 0.0, -1.0],
+            ..ModelLight::default()
+        };
+        let widget_alone = scene(widget, SceneRig::default()).blob();
+        let both = scene(widget, file_rig()).blob();
+        for c in 0..3 {
+            assert!(
+                both.probe_dc()[c] > widget_alone.probe_dc()[c],
+                "the widget light adds on top of the file's rig"
+            );
+        }
+    }
+
+    /// A pane takes its file's lights through the same fold the glue booth gathers with.
+    #[test]
+    fn a_pane_gathers_its_files_lights() {
+        let req = persp_req(UVec2::splat(8), 1.0, Vec3::ZERO, 0.0);
+        let torch = benilla_assets::ModelLight {
+            def: benilla_formats::M2Light {
+                light_type: 1,
+                bone: -1,
+                position: [1.0, 2.0, 3.0],
+                bone_z: [0.0, 0.0, 1.0],
+                ambient_color: [0.0; 3],
+                ambient_intensity: 0.0,
+                diffuse_color: [1.0, 0.5, 0.25],
+                diffuse_intensity: 2.0,
+                attenuation_start: 2.0,
+                attenuation_end: 5.0,
+                visibility_off: false,
+            },
+            bone_pivot: [0.0; 3],
+        };
+        let scene = TileScene::of_pane(&req, &[torch]);
+        assert_eq!(scene.rig, scene_rig(&[torch]));
+        assert_eq!(scene.rig.points.len(), 1);
+        assert_eq!(scene.blob().point_count(), 1);
+        assert!(
+            TileScene::of_pane(&req, &[]) == TileScene::default_scene(),
+            "a file with no lights leaves the pane on the default scene"
+        );
+    }
+
+    /// A file with no lights of its own is the default scene, so the pool keeps sharing slot 0.
+    #[test]
+    fn a_file_without_lights_is_the_default_scene() {
+        assert!(scene(ModelLight::default(), scene_rig(&[])) == TileScene::default_scene());
+        assert!(scene(ModelLight::default(), file_rig()) != TileScene::default_scene());
+    }
 
     #[test]
     fn the_packer_keeps_cells_apart_and_in_order() {

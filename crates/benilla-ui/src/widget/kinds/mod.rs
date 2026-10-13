@@ -380,9 +380,10 @@ impl ModelFog {
     }
 }
 
-/// A model pane's embedded `CGLight` (`+0x324`), its only light (`0x76d680`): off on a plain
-/// `<Model>` until Lua enables it, so a lit batch draws black (`0x71bf90`), and on for a
-/// `PlayerModel` (ctor `0x505680`). Colours are stored times their intensity.
+/// A model pane's embedded `CGLight` (`+0x324`), the light `0x76d680` adds to its file's own
+/// (`0x718960`): off on a plain `<Model>` until Lua enables it, so a file with no lights draws
+/// black (`0x71bf90`), and on for a `PlayerModel` (ctor `0x505680`). Colours are stored times
+/// their intensity.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ModelLight {
     /// `+0x60`: set by a nonzero `SetLight` (`0x76e1e0`) first argument; `SetLight(0, …)` is inert.
