@@ -251,12 +251,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     crate::script::object::tonumber_f32(lua, &b),
                 );
                 // `0x78fc20` hands the colour to the bar (`0x782dd0`), which sets its vertex colour
-                // only if a bar exists and keeps nothing otherwise.
+                // (`0x77f750`, collapsing a gradient) only if a bar exists and keeps nothing
+                // otherwise.
                 let Some(rh) = with_bar(lua, &this, |sb| sb.bar)? else {
                     return Ok(());
                 };
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model.region_data.entry(rh).or_default().vertex_color = Some([r, g, b, a]);
+                let d = model.region_data.entry(rh).or_default();
+                d.vertex_color = Some([r, g, b, a]);
+                d.gradient = None;
                 Ok(())
             },
         )?,

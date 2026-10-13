@@ -75,6 +75,10 @@ pub(crate) struct UiQuad {
     pub uv: UvRect,
     /// Straight-alpha tint in client-space sRGB, the raw FrameXML/Lua value, never converted.
     pub color: [f32; 4],
+    /// Per-vertex tints in [`UvRect`]'s winding (TL, TR, BR, BL), replacing `color` at each
+    /// corner and interpolated across the quad: a texture's `<Gradient>`, whose four colours the
+    /// reference submits with a vertex stride of 4 (`0x77304d`).
+    pub corner_colors: Option<[[f32; 4]; 4]>,
     /// WoW `ADD` blend (EGxBlend 3, `glBlendFunc(GL_SRC_ALPHA, GL_ONE)`) instead of straight alpha.
     pub additive: bool,
     /// Mask to the inscribed circle: the live unit portrait.
@@ -129,6 +133,7 @@ impl Default for UiQuad {
             texture: None,
             uv: UvRect::FULL,
             color: [1.0, 1.0, 1.0, 1.0],
+            corner_colors: None,
             additive: false,
             circular: false,
             desaturated: false,
@@ -418,8 +423,21 @@ fn init_white_texture(mut commands: Commands, mut images: ResMut<Assets<Image>>)
     commands.insert_resource(UiWhiteTexture(images.add(image)));
 }
 
-/// Clip `rect` to `clip`, reprojecting the UVs to the clipped edges; `None` when nothing is left.
-fn clip_quad(rect: Rect, uv: UvRect, clip: Rect) -> Option<(Rect, UvRect)> {
+impl UiQuad {
+    /// The tint at each corner, TL, TR, BR, BL: [`Self::corner_colors`], or `color` at all four.
+    pub(crate) fn vertex_colors(&self) -> [[f32; 4]; 4] {
+        self.corner_colors.unwrap_or([self.color; 4])
+    }
+}
+
+/// Clip `rect` to `clip`, reprojecting the UVs and the corner colours to the clipped edges;
+/// `None` when nothing is left.
+fn clip_quad(
+    rect: Rect,
+    uv: UvRect,
+    colors: [[f32; 4]; 4],
+    clip: Rect,
+) -> Option<(Rect, UvRect, [[f32; 4]; 4])> {
     let clipped = rect.intersect(clip);
     if clipped.is_empty() {
         return None;
@@ -447,7 +465,22 @@ fn clip_quad(rect: Rect, uv: UvRect, clip: Rect) -> Option<(Rect, UvRect)> {
         bilerp(t_max_x, t_max_y),
         bilerp(t_min_x, t_max_y),
     ]);
-    Some((clipped, new_uv))
+    // The colours the same way, so a gradient keeps its ramp across a scissor edge.
+    let [ctl, ctr, cbr, cbl] = colors;
+    let color_at = |fx: f32, fy: f32| -> [f32; 4] {
+        std::array::from_fn(|i| {
+            let top = lerp(ctl[i], ctr[i], fx);
+            let bot = lerp(cbl[i], cbr[i], fx);
+            lerp(top, bot, fy)
+        })
+    };
+    let new_colors = [
+        color_at(t_min_x, t_min_y),
+        color_at(t_max_x, t_min_y),
+        color_at(t_max_x, t_max_y),
+        color_at(t_min_x, t_max_y),
+    ];
+    Some((clipped, new_uv, new_colors))
 }
 
 /// One run: contiguous quads, in `z_key` order, sharing a texture and every material flag.
@@ -494,7 +527,7 @@ impl Run {
         &mut self,
         rect: Rect,
         uv: UvRect,
-        color: [f32; 4],
+        colors: [[f32; 4]; 4],
         rotation: f32,
         to_world: impl Fn(Vec2) -> Vec2,
     ) {
@@ -514,18 +547,18 @@ impl Run {
                 *p = center + Vec2::new(d.x * cos - d.y * sin, d.x * sin + d.y * cos);
             }
         }
-        self.push_corners(corners, color, to_world);
+        self.push_corners(corners, colors, to_world);
     }
 
-    /// Append four screen corners with their UVs as the fan `(0,1,2)(0,2,3)`.
+    /// Append four screen corners with their UVs and colours as the fan `(0,1,2)(0,2,3)`.
     fn push_corners(
         &mut self,
         corners: [(Vec2, Vec2); 4],
-        color: [f32; 4],
+        colors: [[f32; 4]; 4],
         to_world: impl Fn(Vec2) -> Vec2,
     ) {
         let base = self.positions.len() as u32;
-        for (p, t) in corners {
+        for ((p, t), color) in corners.into_iter().zip(colors) {
             let w = to_world(p);
             self.positions.push([w.x, w.y, 0.0]);
             self.uvs.push([t.x, t.y]);
@@ -856,11 +889,11 @@ fn rebuild_ui_mesh(
         // Explicit corners (the cooldown pie's wedge) are exact: no clip, rotation or reprojection.
         let plain = if q.corners.is_none() {
             match q.clip {
-                Some(clip) => match clip_quad(q.rect, q.uv, clip) {
-                    Some(pair) => Some(pair),
+                Some(clip) => match clip_quad(q.rect, q.uv, q.vertex_colors(), clip) {
+                    Some(clipped) => Some(clipped),
                     None => continue,
                 },
-                None => Some((q.rect, q.uv)),
+                None => Some((q.rect, q.uv, q.vertex_colors())),
             }
         } else {
             None
@@ -891,11 +924,13 @@ fn rebuild_ui_mesh(
                         (c[2], Vec2::from(br)),
                         (c[3], Vec2::from(bl)),
                     ],
-                    q.color,
+                    q.vertex_colors(),
                     to_world,
                 );
             }
-            (None, Some((rect, uv))) => run.push_quad(rect, uv, q.color, q.rotation, to_world),
+            (None, Some((rect, uv, colors))) => {
+                run.push_quad(rect, uv, colors, q.rotation, to_world);
+            }
             (None, None) => unreachable!("plain is Some when corners is None"),
         }
     }
@@ -1428,8 +1463,8 @@ mod tests {
         let uv = UvRect::from_tex_coords([1.0, 0.09375, 0.0, 0.78125]);
         let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
         let clip = Rect::new(0.0, 0.0, 50.0, 100.0);
-        let (crect, cuv) =
-            clip_quad(rect, uv, clip).expect("left half is a non-empty intersection");
+        let (crect, cuv, _) = clip_quad(rect, uv, [[1.0; 4]; 4], clip)
+            .expect("left half is a non-empty intersection");
         assert_eq!(crect, Rect::new(0.0, 0.0, 50.0, 100.0));
         let [tl, tr, ..] = cuv.corners;
         assert!(
@@ -1452,12 +1487,60 @@ mod tests {
         let uv = UvRect::from_corners([[0.25, 4.0], [0.25, 0.0], [0.375, 0.0], [0.375, 4.0]]);
         let rect = Rect::new(0.0, 0.0, 100.0, 16.0);
         let clip = Rect::new(0.0, 0.0, 50.0, 16.0);
-        let (crect, cuv) = clip_quad(rect, uv, clip).expect("left half intersects");
+        let (crect, cuv, _) =
+            clip_quad(rect, uv, [[1.0; 4]; 4], clip).expect("left half intersects");
         assert_eq!(crect, Rect::new(0.0, 0.0, 50.0, 16.0));
         let [tl, tr, br, bl] = cuv.corners;
         assert!((tl[0] - 0.25).abs() < 1e-6 && (tr[0] - 0.25).abs() < 1e-6);
         assert!((bl[0] - 0.375).abs() < 1e-6 && (br[0] - 0.375).abs() < 1e-6);
         assert!((tl[1] - 4.0).abs() < 1e-6, "left v kept: {}", tl[1]);
         assert!((tr[1] - 2.0).abs() < 1e-6, "right v halved: {}", tr[1]);
+    }
+
+    /// A gradient's four colours reach the mesh one per vertex, in the TL, TR, BR, BL winding,
+    /// so the GPU interpolates the ramp across the quad as the reference's per-vertex submit does.
+    #[test]
+    fn corner_colours_reach_the_mesh_per_vertex() {
+        let mut app = rebuild_app();
+        let (top, bottom) = ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]);
+        {
+            let mut q = app.world_mut().resource_mut::<UiQuads>();
+            q.quads[0].corner_colors = Some([top, top, bottom, bottom]);
+            q.dirty = true;
+        }
+        app.update();
+        let batch = app
+            .world_mut()
+            .query_filtered::<&Mesh2d, With<UiQuadBatch>>()
+            .single(app.world())
+            .expect("one batch")
+            .0
+            .clone();
+        let mesh = app
+            .world()
+            .resource::<Assets<Mesh>>()
+            .get(&batch)
+            .expect("the pooled mesh");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colors)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("the run's vertex colours are Float32x4");
+        };
+        assert_eq!(colors, &vec![top, top, bottom, bottom]);
+    }
+
+    /// A scissor cut through a gradient keeps its ramp: the clipped corners take the colour at
+    /// their place on the quad.
+    #[test]
+    fn clip_reprojects_corner_colours() {
+        let (top, bottom) = ([1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 1.0]);
+        let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
+        // The lower quarter (y-down): from y = 75 to the bottom edge.
+        let clip = Rect::new(0.0, 75.0, 100.0, 100.0);
+        let (crect, _, colors) =
+            clip_quad(rect, UvRect::FULL, [top, top, bottom, bottom], clip).expect("intersects");
+        assert_eq!(crect, clip);
+        let quarter = [1.0, 0.0, 0.0, 0.75];
+        assert_eq!(colors, [quarter, quarter, bottom, bottom]);
     }
 }

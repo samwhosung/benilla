@@ -529,6 +529,77 @@ mod loader_tests {
             .unwrap());
     }
 
+    /// `<Gradient>` (`0x7700b0` → `0x6f2630` → `0x77f910`): both stops staged as transparent
+    /// black, so a missing one is that, and the orientation HORIZONTAL unless it reads VERTICAL;
+    /// an unknown one is reported and stays HORIZONTAL. The credits fades are this shape: a
+    /// black `<Color>` under a vertical alpha ramp.
+    #[test]
+    fn an_xml_gradient_writes_four_vertex_colours_over_its_fill() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                 <Frame name="Fades">
+                   <Size><AbsDimension x="100" y="100"/></Size>
+                   <Anchors><Anchor point="CENTER"/></Anchors>
+                   <Layers><Layer level="ARTWORK">
+                     <Texture name="FadeV" setAllPoints="true">
+                       <Color r="0" g="0" b="0"/>
+                       <Gradient orientation="VERTICAL">
+                         <MinColor r="0" g="1.0" b="0" a="1.0"/>
+                         <MaxColor r="0" g="1.0" b="0" a="0"/>
+                       </Gradient>
+                     </Texture>
+                     <Texture name="FadeOdd" setAllPoints="true">
+                       <Color r="1" g="1" b="1"/>
+                       <Gradient orientation="SIDEWAYS">
+                         <MinColor r="1" g="0" b="0"/>
+                       </Gradient>
+                     </Texture>
+                   </Layer></Layers>
+                 </Frame>
+               </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| w == "Unknown orientation SIDEWAYS in element Gradient"),
+            "{:?}",
+            report.warnings
+        );
+        s.resolve();
+        let quads = s.extract();
+        // Told apart by their fills: FadeV's is black, FadeOdd's white.
+        let quad = |fill: [f32; 4]| {
+            quads
+                .iter()
+                .find_map(|q| match &q.content {
+                    QuadContent::Texture {
+                        color: Some(c),
+                        gradient,
+                        ..
+                    } if *c == fill => Some((Some(*c), *gradient)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{fill:?} extracts"))
+        };
+        let (bottom, top) = ([0.0, 1.0, 0.0, 1.0], [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(
+            quad([0.0, 0.0, 0.0, 1.0]),
+            (Some([0.0, 0.0, 0.0, 1.0]), Some([top, top, bottom, bottom])),
+            "opaque black at the bottom, clear at the top"
+        );
+        let (red, none) = ([1.0, 0.0, 0.0, 1.0], [0.0; 4]);
+        assert_eq!(
+            quad([1.0; 4]),
+            (Some([1.0; 4]), Some([red, none, none, red])),
+            "HORIZONTAL, the missing MaxColor transparent black"
+        );
+    }
+
     /// `CSimpleFrame::LoadXML 0x769820`: a strata `0x6f17d0` does not know logs at severity 1
     /// (`0x7699a4`) and skips `SetFrameStrata 0x76a470`.
     #[test]

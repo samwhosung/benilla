@@ -684,10 +684,29 @@ fn set_texture_ignores_arguments_past_the_path_like_the_client_does() {
         .expect("clear, blank and the plain colour form are unaffected");
 }
 
-/// A gradient fills the texture slot the colour form fills, so a gradient-only region paints;
-/// both stops are stored, and the quad paints their midpoint, not the gradient.
+/// The texture quad of the one region `t`, as extract hands it over: `(path, color, gradient)`.
+#[allow(clippy::type_complexity)]
+fn gradient_probe(
+    s: &mut UiScript,
+) -> Option<(Option<String>, Option<[f32; 4]>, Option<[[f32; 4]; 4]>)> {
+    s.resolve();
+    s.extract().into_iter().find_map(|q| match q.content {
+        QuadContent::Texture {
+            path,
+            color,
+            gradient,
+            ..
+        } => Some((path, color, gradient)),
+        _ => None,
+    })
+}
+
+/// A gradient is the four-colour form of the vertex-colour slot (`0x77f910` writes `+0xb8` with
+/// count 4), not a texture: alone it draws nothing (`0x7706e0` gates on `+0xcc`), over a fill or
+/// art each vertex multiplies the texel (stride 4 at `0x77304d`). pfUI's selected tab is
+/// `SetTexture(1, 1, 1, 1)` then a faint white ramp, which must not paint an opaque slab.
 #[test]
-fn a_gradient_is_stored_whole_and_painted_as_its_midpoint() {
+fn a_gradient_tints_each_vertex_over_the_texture_and_alone_draws_nothing() {
     let mut s = script();
     s.run(
         r#"
@@ -696,36 +715,117 @@ fn a_gradient_is_stored_whole_and_painted_as_its_midpoint() {
         f:SetPoint("TOPLEFT", 0, 0)
         t = f:CreateTexture(nil, "ARTWORK")
         t:SetAllPoints(f)
-        -- FuBar's own call: white at both stops, ALPHA only, vertical.
-        t:SetGradientAlpha("VERTICAL", 1, 1, 1, 0, 1, 1, 1, 0.5)
+        t:SetGradientAlpha("HORIZONTAL", 0, 0, 0, 0, 1, 1, 1, 0.05)
     "#,
     )
-    .expect("SetGradientAlpha must exist and accept the client's argument shape");
-
-    s.resolve();
-    let painted = s.extract().iter().any(|q| {
-        matches!(&q.content, crate::script::QuadContent::Texture { color: Some(c), .. }
-            // midpoint of alpha 0.0 and 0.5
-            if (c[3] - 0.25).abs() < 1e-6 && c[0] == 1.0)
-    });
-    assert!(
-        painted,
-        "a region carrying only a gradient must paint, at the midpoint of its two stops"
-    );
-
-    // Any orientation token but "VERTICAL" is horizontal.
-    s.run("t:SetGradient('HORIZONTAL', 1, 0, 0, 0, 0, 1)")
-        .expect("SetGradient takes six colour arguments and no alpha");
-    s.resolve();
-    let mid = s.extract().iter().find_map(|q| match &q.content {
-        crate::script::QuadContent::Texture { color: Some(c), .. } => Some(*c),
-        _ => None,
-    });
+    .unwrap();
+    let (path, color, gradient) = gradient_probe(&mut s).expect("the region extracts");
     assert_eq!(
-        mid.map(|c| [c[0], c[1], c[2], c[3]]),
-        Some([0.5, 0.0, 0.5, 1.0]),
-        "SetGradient's stops are opaque, so the midpoint alpha is 1"
+        (path, color, gradient),
+        (None, None, None),
+        "a gradient alone fills no texture slot, so nothing draws"
     );
+
+    let (min, max) = ([0.0, 0.0, 0.0, 0.0], [1.0, 1.0, 1.0, 0.05]);
+    s.run("t:SetTexture(1, 1, 1, 1)").unwrap();
+    assert_eq!(
+        gradient_probe(&mut s).unwrap(),
+        (None, Some([1.0; 4]), Some([min, max, max, min])),
+        "HORIZONTAL: the min on the left pair, the max on the right, over the white fill"
+    );
+
+    s.run("t:SetGradientAlpha('vertical', 0, 0, 0, 0, 1, 1, 1, 0.05)")
+        .unwrap();
+    assert_eq!(
+        gradient_probe(&mut s).unwrap().2,
+        Some([max, max, min, min]),
+        "VERTICAL, in any case: the max on the top pair, the min on the bottom"
+    );
+
+    s.run(r#"t:SetTexture("Interface\\Buttons\\WHITE8X8")"#)
+        .unwrap();
+    assert_eq!(
+        gradient_probe(&mut s).unwrap(),
+        (
+            Some("Interface\\Buttons\\WHITE8X8".to_string()),
+            None,
+            Some([max, max, min, min])
+        ),
+        "file art keeps the gradient: the texture slot and the colour slot are apart"
+    );
+
+    s.run("t:SetVertexColor(0.5, 0.5, 0.5)").unwrap();
+    assert_eq!(
+        gradient_probe(&mut s).unwrap().1,
+        Some([0.5, 0.5, 0.5, 1.0]),
+        "SetVertexColor collapses the four colours to one (`0x77f87f`), its alpha unlent"
+    );
+    assert_eq!(gradient_probe(&mut s).unwrap().2, None);
+
+    s.run("t:SetGradient('HORIZONTAL', 1, 0, 0, 0, 0, 1)")
+        .unwrap();
+    assert_eq!(
+        gradient_probe(&mut s).unwrap().1,
+        None,
+        "a gradient replaces the one colour"
+    );
+    assert_eq!(
+        s.eval::<(f32, f32, f32, f32)>("return t:GetVertexColor()")
+            .unwrap(),
+        (1.0, 1.0, 1.0, 1.0),
+        "GetVertexColor answers white under four colours (`0x77f8c0`)"
+    );
+    let (red, blue) = ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(
+        gradient_probe(&mut s).unwrap().2,
+        Some([red, blue, blue, red]),
+        "SetGradient's stops are opaque"
+    );
+}
+
+/// The orientation must name HORIZONTAL or VERTICAL (`0x6f1a20`); anything else raises the usage
+/// line and writes nothing (`0x79b126`). The channels clamp to `0..=1` (`0x79af05`).
+#[test]
+fn a_gradient_rejects_an_unknown_orientation_and_clamps_its_channels() {
+    let mut s = script();
+    s.run(
+        r#"
+        f = CreateFrame("Frame", "GradArgs")
+        f:SetWidth(10) f:SetHeight(10)
+        f:SetPoint("TOPLEFT", 0, 0)
+        t = f:CreateTexture("GradArgsTex", "ARTWORK")
+        t:SetAllPoints(f)
+        t:SetTexture(1, 1, 1)
+        t:SetGradient("HORIZONTAL", 2, -1, 0.5, 0, 0, 0)
+    "#,
+    )
+    .unwrap();
+    let kept = gradient_probe(&mut s).unwrap().2;
+    assert_eq!(
+        kept,
+        Some([
+            [1.0, 0.0, 0.5, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.5, 1.0]
+        ]),
+        "each channel clamps to 0..=1"
+    );
+    for (call, usage) in [
+        (
+            "t:SetGradient('DIAGONAL', 1, 1, 1, 1, 1, 1)",
+            "Usage: GradArgsTex:SetGradient(\"orientation\", minR, minG, minB, maxR, maxG, maxB)",
+        ),
+        (
+            "t:SetGradientAlpha(1, 1, 1, 1, 1, 1, 1, 1, 1)",
+            "Usage: GradArgsTex:SetGradientAlpha(\"orientation\", minR, minG, minB, minA, maxR, maxG, maxB, maxA)",
+        ),
+        ("t:SetGradient(nil, 1, 1, 1, 1, 1, 1)", "Usage: GradArgsTex:SetGradient("),
+    ] {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(err.contains(usage), "{call}: {err}");
+        assert_eq!(gradient_probe(&mut s).unwrap().2, kept, "{call} wrote nothing");
+    }
 }
 
 /// Texture's map (`0x87c128`, 22 entries) and FontString's (`0xcf5400`, 32) each answer their own

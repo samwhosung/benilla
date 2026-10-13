@@ -1287,6 +1287,7 @@ fn convert_entry(
         QuadContent::Texture {
             path,
             color,
+            gradient,
             additive,
             tex_coords,
             circular,
@@ -1409,6 +1410,10 @@ fn convert_entry(
             // A pathless Texture region is a solid color; a textured one tints by it.
             let mut color = color.unwrap_or([1.0, 1.0, 1.0, 1.0]);
             color[3] *= eq.alpha;
+            // A gradient's vertex colours each multiply the fill and the alpha, as `0x77fac0`
+            // folds the frame alpha into every vertex's byte.
+            let corner_colors =
+                gradient.map(|corners| corners.map(|v| std::array::from_fn(|i| v[i] * color[i])));
             out.push(UiQuad {
                 rect,
                 z_key: eq.z,
@@ -1416,6 +1421,7 @@ fn convert_entry(
                 uv,
                 uv_clamp,
                 color,
+                corner_colors,
                 additive,
                 clip,
                 // `SetRotation` is counter-clockwise-positive, `UiQuad::rotation` clockwise.
@@ -1976,6 +1982,37 @@ mod extract_gate_tests {
         let script = UiScript::new().unwrap();
         script.run(lua).unwrap();
         app_over(script)
+    }
+
+    /// A black fill under a vertical alpha ramp, the credits fade's shape, in a frame at half
+    /// alpha: each corner is fill × gradient × frame alpha (`0x77fac0` folds it into every
+    /// vertex), the opaque end at the bottom.
+    #[test]
+    fn a_gradient_paints_per_corner_over_its_fill() {
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+            local f = CreateFrame("Frame", "Fade")
+            f:SetPoint("TOPLEFT", 0, 0)
+            f:SetWidth(100); f:SetHeight(100)
+            local t = f:CreateTexture(nil, "ARTWORK")
+            t:SetAllPoints(f)
+            t:SetTexture(0, 0, 0)
+            t:SetGradientAlpha("VERTICAL", 0, 1, 0, 1, 0, 1, 0, 0)
+            f:SetAlpha(0.5)
+        "#,
+            )
+            .unwrap();
+        let mut app = app_over(script);
+        app.update();
+        let quads = &app.world().resource::<UiQuads>().quads;
+        let fade = quads
+            .iter()
+            .find(|q| q.texture.is_none() && q.corner_colors.is_some())
+            .expect("the fade draws, with its corners");
+        let (top, bottom) = ([0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.5]);
+        assert_eq!(fade.corner_colors, Some([top, top, bottom, bottom]));
     }
 
     /// [`app_from_script`] over a VM of the caller's.

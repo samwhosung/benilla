@@ -102,7 +102,11 @@ pub enum QuadContent {
     /// A `Texture` region: a BLP path, a solid or vertex colour, or both (a tinted texture).
     Texture {
         path: Option<String>,
+        /// The solid fill times the one vertex colour; with `gradient`, the fill alone.
         color: Option<[f32; 4]>,
+        /// A gradient's four vertex colours, `[TL, TR, BR, BL]` ([`Gradient::vertex_colors`]),
+        /// each multiplying the texel and `color`; `None` for a one-colour quad.
+        gradient: Option<[[f32; 4]; 4]>,
         /// The `ADD` blend instead of straight alpha.
         additive: bool,
         /// `None` is the full texture.
@@ -313,24 +317,31 @@ pub struct ExtractedQuad {
     pub scale: f32,
 }
 
-/// A two-stop linear gradient (`SetGradientAlpha`/`SetGradient`).
+/// A two-stop gradient (`SetGradientAlpha`/`SetGradient`, XML `<Gradient>`): the four-colour form
+/// of the vertex-colour slot (`+0xb0`, count 4), which `0x77f910` writes and `SetVertexColor`
+/// collapses back to one colour (`0x77f87f`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Gradient {
-    /// `"VERTICAL"`, matched case-insensitively; anything else is horizontal, as in the client.
+    /// `VERTICAL` (1) rather than `HORIZONTAL` (0), the `0x811b00` enum.
     pub vertical: bool,
-    /// RGBA; `SetGradient`, which takes no alpha, sets both alphas to 1.
+    /// `MinColor`, RGBA in `0..=1`; `SetGradient`, which takes no alpha, sets both alphas to 1.
     pub start: [f32; 4],
+    /// `MaxColor`.
     pub end: [f32; 4],
 }
 
 impl Gradient {
-    /// The midpoint, the one colour a one-tint quad can show.
-    pub fn midpoint(&self) -> [f32; 4] {
-        let mut out = [0.0; 4];
-        for (i, chan) in out.iter_mut().enumerate() {
-            *chan = (self.start[i] + self.end[i]) / 2.0;
+    /// The quad's vertex colours in screen order `[TL, TR, BR, BL]`. `0x77f910` writes the
+    /// vertices in `0x7705b0`'s order `TL BL TR BR`: HORIZONTAL the min on the left pair and the
+    /// max on the right (`0x77f9c3`), VERTICAL the min on the bottom pair and the max on the top
+    /// (`0x77fa2c`).
+    pub fn vertex_colors(&self) -> [[f32; 4]; 4] {
+        let (min, max) = (self.start, self.end);
+        if self.vertical {
+            [max, max, min, min]
+        } else {
+            [min, max, max, min]
         }
-        out
     }
 }
 
@@ -343,7 +354,8 @@ pub(crate) struct RegionData {
     ///
     /// Deviation: kept apart from [`Self::vertex_color`], which the reference's `Texture:SetAlpha`
     /// (`0x79b580`) rewrites, because the drawn product differs only on a region that sets both,
-    /// which no stock code does, and a FontString's `SetAlpha` then keeps its font colour.
+    /// or a gradient and an alpha, which no stock code does, and a FontString's `SetAlpha` then
+    /// keeps its font colour.
     pub(crate) alpha: Option<f32>,
     /// A texture path (`SetTexture("Interface\\...")`).
     pub(crate) texture: Option<String>,
@@ -351,8 +363,9 @@ pub(crate) struct RegionData {
     /// [`Self::texture`]: setting one clears the other. The reference makes an 8×8 texture of it
     /// (`0x770360` → `0x44a9c0` → `0x5c5350`), so its alpha multiplies with the vertex colour's.
     pub(crate) fill: Option<[f32; 4]>,
-    /// `SetGradientAlpha`/`SetGradient`, stored whole and drawn as its midpoint: the renderer has
-    /// one tint per quad, so the reference's gradient is not built.
+    /// `SetGradientAlpha`/`SetGradient` or `<Gradient>`: four vertex colours, drawn as
+    /// `texel × vertexColour` like [`Self::vertex_color`], whose slot it shares, so setting either
+    /// clears the other. It is no texture: a gradient alone draws nothing (`0x7706e0`).
     pub(crate) gradient: Option<Gradient>,
     /// `SetVertexColor` (`0x79abd0` → `0x77f750`, `+0xb8`), `SetStatusBarColor` or a text colour,
     /// drawn as `texel × colour` per channel, alpha included: a `<Color 1,1,1,0.2>` tinted

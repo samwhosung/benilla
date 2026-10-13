@@ -56,6 +56,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let d = model.region_data.entry(rh).or_default();
                 let kept = d.vertex_color.map_or(1.0, |c| c[3]);
                 d.vertex_color = Some([r, g, b, a.unwrap_or(kept)]);
+                // One colour collapses a gradient's four (`0x77f87f`).
+                d.gradient = None;
                 // The slot `SetTextColor` writes on a FontString, so it overrides the font object.
                 d.font_explicit.color = true;
                 Ok(())
@@ -63,7 +65,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         )?,
     )?;
 
-    // GetVertexColor (`0x79aa50`): white when never set.
+    // GetVertexColor (`0x79aa50`): white when never set, and under a gradient (`0x77f8c0` answers
+    // white unless the slot holds exactly one colour).
     m.set(
         "GetVertexColor",
         lua.create_function(|lua, this: Table| {
@@ -78,11 +81,23 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         })?,
     )?;
 
-    // SetGradientAlpha(orientation, r1, g1, b1, a1, r2, g2, b2, a2) and SetGradient without the
-    // alphas: a two-stop gradient the client generates into the texture slot (`+0xcc`); here it is
-    // stored whole and drawn as its midpoint. Any orientation but "VERTICAL", in any case, is
-    // horizontal.
-    for (name, with_alpha) in [("SetGradientAlpha", true), ("SetGradient", false)] {
+    // SetGradientAlpha(orientation, minR, minG, minB, minA, maxR, maxG, maxB, maxA) (`0x79b180`)
+    // and SetGradient without the alphas (`0x79ae30`) write the four vertex colours (`0x77f910`),
+    // the slot `SetVertexColor` writes one colour into, so each clears the other. The orientation
+    // is a `lua_isstring` matched case-insensitively against HORIZONTAL and VERTICAL (`0x6f1a20`);
+    // anything else raises the usage line (`0x79b126`, `0x79b54a`) and writes nothing.
+    for (name, with_alpha, usage) in [
+        (
+            "SetGradientAlpha",
+            true,
+            "(\"orientation\", minR, minG, minB, minA, maxR, maxG, maxB, maxA)",
+        ),
+        (
+            "SetGradient",
+            false,
+            "(\"orientation\", minR, minG, minB, maxR, maxG, maxB)",
+        ),
+    ] {
         m.set(
             name,
             lua.create_function(move |lua, args: mlua::MultiValue| {
@@ -91,10 +106,21 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     Some(Value::Table(t)) => t,
                     _ => return Err(mlua::Error::runtime("expected a region")),
                 };
-                let orientation = match it.next() {
-                    Some(Value::String(s)) => s.to_str()?.to_string(),
-                    // A missing or non-string orientation is horizontal.
-                    _ => String::new(),
+                let rh = region_handle_of(lua, &this)?;
+                let vertical = match it.next() {
+                    Some(Value::String(s)) => s.to_str().ok().and_then(|t| orientation(&t)),
+                    // A number is a `lua_isstring` too, and names neither orientation.
+                    _ => None,
+                };
+                let Some(vertical) = vertical else {
+                    let model = lua.app_data_ref::<Model>().expect("model");
+                    let who = crate::script::object::decode_id(&this)
+                        .ok()
+                        .and_then(|id| super::region_name_of(&model, id));
+                    return Err(mlua::Error::runtime(format!(
+                        "Usage: {}:{name}{usage}",
+                        who.as_deref().unwrap_or("<unnamed>")
+                    )));
                 };
                 let n = if with_alpha { 8 } else { 6 };
                 let mut c = [0.0f32; 8];
@@ -103,7 +129,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // Every channel is a bare `lua_tonumber` (`0x79aef3`-`0x79b083`, `0x79b242`-
                     // `0x79b490`) except the two alphas, which are `lua_isnumber`-gated with
                     // default 1 (`0x79b30d`, `0x79b480`).
-                    *slot = match v {
+                    let raw = match v {
                         Some(v) if with_alpha && matches!(i, 3 | 7) => lua
                             .coerce_number(v)
                             .ok()
@@ -113,6 +139,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         None if with_alpha && matches!(i, 3 | 7) => 1.0,
                         None => 0.0,
                     };
+                    *slot = clamp_channel(raw);
                 }
                 let (start, end) = if with_alpha {
                     ([c[0], c[1], c[2], c[3]], [c[4], c[5], c[6], c[7]])
@@ -120,14 +147,14 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // SetGradient has no alpha stops: both ends are opaque.
                     ([c[0], c[1], c[2], 1.0], [c[3], c[4], c[5], 1.0])
                 };
-                let rh = region_handle_of(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
                 d.gradient = Some(crate::script::Gradient {
-                    vertical: orientation.eq_ignore_ascii_case("VERTICAL"),
+                    vertical,
                     start,
                     end,
                 });
+                d.vertex_color = None;
                 Ok(())
             })?,
         )?;
@@ -513,5 +540,27 @@ impl crate::script::UiScript {
         // No per-node hash holds a probe's answer: a full-scope rebuild, as for a screen move.
         model.layout_scope.invalidate();
         model.touch_layout();
+    }
+}
+
+/// A gradient orientation token (`0x6f1a20` over `0x811b00`): `Some(true)` for VERTICAL,
+/// `Some(false)` for HORIZONTAL, in any case; `None` for anything else.
+pub(crate) fn orientation(token: &str) -> Option<bool> {
+    if token.eq_ignore_ascii_case("VERTICAL") {
+        Some(true)
+    } else if token.eq_ignore_ascii_case("HORIZONTAL") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// A gradient channel's clamp to `0..=1` (`0x79af05`-`0x79af2d`): the two `fcom`s fall through an
+/// unordered compare, so NaN lands on 1.
+fn clamp_channel(v: f32) -> f32 {
+    if v.is_nan() {
+        1.0
+    } else {
+        v.clamp(0.0, 1.0)
     }
 }

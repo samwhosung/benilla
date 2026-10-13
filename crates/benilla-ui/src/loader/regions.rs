@@ -1,6 +1,7 @@
 use mlua::{ObjectLike, Table};
 
 use crate::framexml::{self, Element};
+use crate::status;
 
 use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, Loader};
 
@@ -275,30 +276,40 @@ impl Loader<'_> {
                 // with `SetVertexColor` rather than being replaced by it.
                 self.call_region(region_wrapper, "SetTexture", (c[0], c[1], c[2], c[3]), dbg);
             }
-            // `<Gradient>` writes the vertex colours (`+0xb8`, `0x77304d`), which `file=` leaves
-            // alone, so unlike `<Color>` it tints the art. MinColor is the first stop and MaxColor
-            // the second; the reference's stop-to-vertex order is untraced (`0x7700b0`).
+            // `<Gradient>` writes the vertex colours (`+0xb8`, `0x7700f2` → `0x77f910`), which
+            // `file=` leaves alone, so unlike `<Color>` it tints the art. `0x6f2630` stages both
+            // stops as 0 (`0x7700d8`), so a missing one is transparent black, and reads a missing
+            // orientation as HORIZONTAL; an unknown one stays HORIZONTAL and is reported.
             if let Some(g) = children_named(region, "Gradient").next() {
-                let stop = |tag: &str| children_named(g, tag).next().map(color_of);
-                // A gradient missing a stop is skipped: an absent stop is not a black one.
-                if let (Some(min), Some(max)) = (stop("MinColor"), stop("MaxColor")) {
-                    self.call_region(
-                        region_wrapper,
-                        "SetGradientAlpha",
-                        (
-                            g.attr("orientation").unwrap_or_default().to_string(),
-                            min[0],
-                            min[1],
-                            min[2],
-                            min[3],
-                            max[0],
-                            max[1],
-                            max[2],
-                            max[3],
-                        ),
-                        dbg,
-                    );
-                }
+                let stop = |tag: &str| children_named(g, tag).next().map_or([0.0; 4], color_of);
+                let (min, max) = (stop("MinColor"), stop("MaxColor"));
+                let token = g.attr("orientation").unwrap_or_default();
+                let vertical = match crate::script::region::orientation(token) {
+                    Some(v) => v,
+                    None if token.is_empty() => false,
+                    None => {
+                        let line = format!("Unknown orientation {token} in element {}", g.tag);
+                        self.report.status.report(status::WARNING, line.clone());
+                        self.report.warnings.push(line);
+                        false
+                    }
+                };
+                self.call_region(
+                    region_wrapper,
+                    "SetGradientAlpha",
+                    (
+                        if vertical { "VERTICAL" } else { "HORIZONTAL" },
+                        min[0],
+                        min[1],
+                        min[2],
+                        min[3],
+                        max[0],
+                        max[1],
+                        max[2],
+                        max[3],
+                    ),
+                    dbg,
+                );
             }
             if let Some(tc) = tex_coords_of(region) {
                 self.call_region(region_wrapper, "SetTexCoord", tc, dbg);

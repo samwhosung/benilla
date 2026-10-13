@@ -357,9 +357,8 @@ impl UiScript {
                         }
                     } else {
                         // The draw gate is the texture slot, never the colour (`0x7706e0`: empty
-                        // `+0xcc` emits nothing); a vertex colour alone is a tint. A gradient fills
-                        // the texture slot, so it draws, at its midpoint since a quad has one tint.
-                        let fill = data.fill.or_else(|| data.gradient.map(|g| g.midpoint()));
+                        // `+0xcc` emits nothing): a vertex colour or a gradient alone is a tint.
+                        let fill = data.fill;
                         let has_path = data.texture.is_some();
                         let has_texture = has_path || fill.is_some();
                         QuadContent::Texture {
@@ -367,6 +366,12 @@ impl UiScript {
                             color: has_texture
                                 .then(|| texture_color(fill, data.vertex_color))
                                 .flatten(),
+                            // The quad record carries the four colours with stride 4
+                            // (`0x77304d`), one per vertex, each times the texel.
+                            gradient: data
+                                .gradient
+                                .filter(|_| has_texture)
+                                .map(|g| g.vertex_colors()),
                             // The renderer acts on ADD only: the other four `alphaMode` values
                             // answer `GetBlendMode` but draw as straight alpha.
                             additive: data.blend == crate::script::BlendMode::Add,
