@@ -102,8 +102,8 @@ fn on_release_response(
     mut latch: ResMut<LootLatch>,
     mut dead: super::DeadUnitDeselect,
 ) {
-    if let SessionEvent::LootReleaseResponse { guid } = ev {
-        dead.after_close(loot_release_response(guid, &mut loot, &mut latch));
+    if let SessionEvent::LootReleaseResponse { guid, result } = ev {
+        dead.after_close(loot_release_response(guid, result, &mut loot, &mut latch));
     }
 }
 
@@ -275,15 +275,29 @@ fn loot_clear_money(loot: &mut LootState) {
     loot.clear_money();
 }
 
-/// `SMSG_LOOT_RELEASE_RESPONSE`, idempotent after our own close. The latch clear is guid-matched,
-/// as the reference's (`0x5ec0d4`), so an old window's release keeps a newer request's latch.
-/// The open window takes the shared close without a send (`0x5ec0f3`), which unlocks an item
+/// `SMSG_LOOT_RELEASE_RESPONSE` (`0x5ec090`): acted on only with a nonzero result (`0x5ec0b6`)
+/// and the latched guid (`0x5ec0bd`-`0x5ec0ce`), so a release for an old window, which vmangos
+/// sends when a new `CMSG_LOOT` replaces it (`Player.cpp:7694-7695`), closes nothing, and one
+/// after our own close finds the latch already clear. An accepted one clears the latch
+/// (`0x5ec0d4`) and takes the shared close without a send (`0x5ec0f3`), which unlocks an item
 /// source (`0x48f200(cl=0, dl=0)`, [`super::close_interaction`]): a lockbox closed with loot left
 /// keeps its slot, as vmangos destroys only a fully looted item (`LootHandler.cpp:558`). The
 /// closed source is returned.
-fn loot_release_response(guid: u64, loot: &mut LootState, latch: &mut LootLatch) -> Option<u64> {
+fn loot_release_response(
+    guid: u64,
+    result: u8,
+    loot: &mut LootState,
+    latch: &mut LootLatch,
+) -> Option<u64> {
+    if result == 0 || latch.0 != Some(guid) {
+        debug!(
+            "net: loot release {guid:#x} (result {result}) ignored, latch {:?}",
+            latch.0
+        );
+        return None;
+    }
     debug!("net: loot released {guid:#x}");
-    latch.clear_for(guid);
+    latch.0 = None;
     super::close_interaction(loot, latch, None)
 }
 
@@ -523,7 +537,10 @@ mod tests {
         world
             .run_system_once_with(
                 on_release_response,
-                SessionEvent::LootReleaseResponse { guid: CHEST },
+                SessionEvent::LootReleaseResponse {
+                    guid: CHEST,
+                    result: 1,
+                },
             )
             .expect("the handler runs as a one-shot system");
         assert_eq!(
@@ -618,7 +635,10 @@ mod tests {
         world
             .run_system_once_with(
                 on_release_response,
-                SessionEvent::LootReleaseResponse { guid: LOCKBOX },
+                SessionEvent::LootReleaseResponse {
+                    guid: LOCKBOX,
+                    result: 1,
+                },
             )
             .expect("the handler runs as a one-shot system");
         assert_eq!(
@@ -634,7 +654,10 @@ mod tests {
         world
             .run_system_once_with(
                 on_release_response,
-                SessionEvent::LootReleaseResponse { guid: LOCKBOX },
+                SessionEvent::LootReleaseResponse {
+                    guid: LOCKBOX,
+                    result: 1,
+                },
             )
             .expect("the handler runs as a one-shot system");
         assert!(world
@@ -730,7 +753,10 @@ mod tests {
         world
             .run_system_once_with(
                 on_release_response,
-                SessionEvent::LootReleaseResponse { guid: CORPSE },
+                SessionEvent::LootReleaseResponse {
+                    guid: CORPSE,
+                    result: 1,
+                },
             )
             .expect("the handler runs as a one-shot system");
         assert_eq!(world.resource::<LootState>().source(), None);
@@ -747,7 +773,10 @@ mod tests {
         world
             .run_system_once_with(
                 on_release_response,
-                SessionEvent::LootReleaseResponse { guid: CORPSE },
+                SessionEvent::LootReleaseResponse {
+                    guid: CORPSE,
+                    result: 1,
+                },
             )
             .expect("the handler runs as a one-shot system");
         assert!(world
@@ -755,6 +784,55 @@ mod tests {
             .drain()
             .next()
             .is_none());
+    }
+
+    /// Chained loot: A's window is open and `CMSG_LOOT` for B latched B, so the release vmangos
+    /// sends for A on the way (`Player.cpp:7694-7695`) is not the latch and closes nothing
+    /// (`0x5ec0bd`-`0x5ec0ce`); B's response then replaces the window.
+    #[test]
+    fn a_release_for_the_window_a_new_loot_request_replaces_closes_nothing() {
+        let mut world = opened_lockbox_world();
+        world
+            .resource_mut::<LootState>()
+            .open(CORPSE, 1, 0, Vec::new());
+        world.resource_mut::<LootState>().take_item_unlocks();
+        world.resource_mut::<LootLatch>().0 = Some(CHEST); // the `CMSG_LOOT` for B
+        world
+            .run_system_once_with(
+                on_release_response,
+                SessionEvent::LootReleaseResponse {
+                    guid: CORPSE,
+                    result: 1,
+                },
+            )
+            .expect("the handler runs as a one-shot system");
+        assert_eq!(
+            world.resource::<LootState>().source(),
+            Some(CORPSE),
+            "A's window stays up for B's response to replace"
+        );
+        assert_eq!(
+            world.resource::<LootLatch>().0,
+            Some(CHEST),
+            "B stays latched"
+        );
+    }
+
+    /// A zero result is ignored even for the latched guid (`0x5ec0b6`).
+    #[test]
+    fn a_release_with_result_zero_closes_nothing() {
+        let mut world = opened_lockbox_world();
+        world
+            .run_system_once_with(
+                on_release_response,
+                SessionEvent::LootReleaseResponse {
+                    guid: LOCKBOX,
+                    result: 0,
+                },
+            )
+            .expect("the handler runs as a one-shot system");
+        assert_eq!(world.resource::<LootState>().source(), Some(LOCKBOX));
+        assert_eq!(world.resource::<LootLatch>().0, Some(LOCKBOX));
     }
 
     /// A live creature: `TYPEMASK_OBJECT | TYPEMASK_UNIT`, so it is the Tab target.

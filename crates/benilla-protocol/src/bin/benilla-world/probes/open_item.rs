@@ -96,7 +96,7 @@ impl Probe for OpenItem {
         while Instant::now() < until {
             let Ok(msg) = session.recv() else { continue };
             for ev in decode(msg) {
-                if let SessionEvent::LootReleaseResponse { guid } = ev {
+                if let SessionEvent::LootReleaseResponse { guid, .. } = ev {
                     if guid == item_guid {
                         println!("✅ release: SMSG_LOOT_RELEASE_RESPONSE on {guid:#x}");
                     }

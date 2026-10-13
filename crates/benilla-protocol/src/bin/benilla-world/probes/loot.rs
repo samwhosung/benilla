@@ -339,7 +339,7 @@ impl Probe for Loot {
         while Instant::now() < drain_until && !released {
             let Ok(msg) = session.recv() else { continue };
             for ev in decode(msg) {
-                if let SessionEvent::LootReleaseResponse { guid: g } = ev {
+                if let SessionEvent::LootReleaseResponse { guid: g, .. } = ev {
                     if g == target {
                         println!("SMSG_LOOT_RELEASE_RESPONSE: guid {g:#x}");
                         released = true;

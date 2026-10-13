@@ -854,8 +854,9 @@ pub enum SessionEvent {
     LootMoneyNotify { amount: u32 },
     /// The coin line disappears for every current looter (`SMSG_LOOT_CLEAR_MONEY`).
     LootClearMoney,
-    /// The loot window closes (`SMSG_LOOT_RELEASE_RESPONSE`), answering our `CMSG_LOOT_RELEASE`.
-    LootReleaseResponse { guid: u64 },
+    /// A loot release (`SMSG_LOOT_RELEASE_RESPONSE`), answering a `CMSG_LOOT_RELEASE`; `result`
+    /// is the wire byte, which the client reads as a gate.
+    LootReleaseResponse { guid: u64, result: u8 },
     /// A group roll opened on one drop (`SMSG_LOOT_START_ROLL`); its `rollID` is client-allocated.
     LootStartRoll(LootStartRoll),
     /// A vote or dice (`SMSG_LOOT_ROLL`); `LootRoll::is_dice`/`vote` split the overloaded pair.

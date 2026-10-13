@@ -466,8 +466,8 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
             items,
         }],
         ServerPacket::LootError { guid, error } => vec![SessionEvent::LootError { guid, error }],
-        ServerPacket::LootReleaseResponse { guid, .. } => {
-            vec![SessionEvent::LootReleaseResponse { guid }]
+        ServerPacket::LootReleaseResponse { guid, result } => {
+            vec![SessionEvent::LootReleaseResponse { guid, result }]
         }
         ServerPacket::LootRemoved { slot } => vec![SessionEvent::LootRemoved { slot }],
         ServerPacket::LootMoneyNotify { amount } => {
