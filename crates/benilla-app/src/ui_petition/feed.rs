@@ -18,7 +18,10 @@ use crate::ui_session::{npc_switched, sweep_close, NpcSession};
 
 use super::{lines, GuildRegistrarState, PetitionState};
 
-/// What the feed last announced, so the events fire on edges rather than every frame.
+/// What the feed last announced of the charter, so the events fire on edges rather than every
+/// frame. It is the session's, not the VM's: every `PETITION_SHOW` the reference fires answers a
+/// packet (`0x4f41b4`, `0x4f430c`, `0x4f433f`, `0x4f43ad`, `0x5ef29c`), so a `/reload` replays
+/// none into the new VM; the session's end forgets it ([`PetitionState::forget_announced`]).
 #[derive(Default)]
 pub(super) struct FedPetition {
     /// The charter shown last frame; `None` while one is still resolving, so the wait is an edge.
@@ -26,6 +29,13 @@ pub(super) struct FedPetition {
     /// The last pushed view and names, so a change while shown re-fires `PETITION_SHOW`.
     shown: Option<PetitionRecordView>,
     shown_signers: Vec<Option<String>>,
+}
+
+impl FedPetition {
+    /// No signers announced, as the sweep's free (`0x4f3eb0`) leaves it with none to repaint.
+    pub(super) fn forget_signers(&mut self) {
+        self.shown_signers.clear();
+    }
 }
 
 /// The leave-world sweep's registrar leg (`0x490b07` → `0x4f4fa0` → `0x4f5010`): an open
@@ -43,6 +53,12 @@ pub(super) fn close_registrar_on_leave_world(
     }
 }
 
+/// The leave-world sweep's petition leg (`0x490b11` → `0x4f3eb0`): the signer list is freed, its
+/// count zeroed, with no event; the charter window stays.
+pub(super) fn free_petition_signers_on_leave_world(mut petition: ResMut<PetitionState>) {
+    petition.free_signers();
+}
+
 /// Build the snapshot, push it, drain the queued lines, and fire the four events on their edges.
 pub(super) fn feed_petition(
     script: Option<NonSendMut<UiScript>>,
@@ -53,7 +69,6 @@ pub(super) fn feed_petition(
     self_guid: Res<SelfGuid>,
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
-    mut fed: Local<crate::ui_script::VmMemo<FedPetition>>,
     // Apart from the charter's: the leave-world sweep closes the registrar and tells the VM, and
     // leaves the charter open.
     mut fed_registrar: crate::ui_script::WindowMemo<Option<u64>>,
@@ -61,7 +76,6 @@ pub(super) fn feed_petition(
     let Some(mut script) = script else {
         return;
     };
-    let fed = fed.get(&script);
     let fed_registrar = fed_registrar.get(&script);
 
     // Shown before the snapshot, so a refusal lands the same frame as its state change; a key the
@@ -157,6 +171,7 @@ pub(super) fn feed_petition(
     // ── The petition window's edges, once the record and every signer name have landed.
     let ready = record.is_some() && signers.iter().all(Option::is_some);
     let now_charter = open.as_ref().map(|o| o.item).filter(|_| ready);
+    let fed = &mut petition.fed;
     match (fed.shown_charter, now_charter) {
         (Some(a), Some(b)) if a != b => {
             // Another charter while one is shown: drop the queued close intent, or the drain would

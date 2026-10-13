@@ -17,9 +17,10 @@
 //! unregistrations (`0x490aad`, `0x490ab7`, `0x490acb`, `0x490ae4`, `0x490af3`, and the tail of
 //! `0x490ada`'s leg), frees of caches it does not hold (the minimap's points of interest
 //! `0x490a99`, the durability alert `0x490aa8`, the taxi nodes at the head of `0x490ad0`'s leg,
-//! the trade skill's item callbacks `0x490ae9`, the petition's signers `0x490b11`, the
-//! battlefield list `0x490b20`, the minigame `0x490b34`, a chat notification helper `0x490b3e`),
-//! the pending-chat latch (`0x490a9e`), an empty stub (`0x490b43`) and six bare `ret`s.
+//! the trade skill's item callbacks `0x490ae9`, the battlefield list `0x490b20`, the minigame
+//! `0x490b34`), the sound band's reset (`0x490b3e` → `0x72a450`, `[0xcf06e4]`), the pending-chat
+//! latch (`0x490a9e`), an empty stub (`0x490b43`), six bare `ret`s, and past the event the
+//! camera's detach (`0x490b52`-`0x490b5a`, `0x4841a0` → `0x50d0f0(0)`).
 
 use bevy::ecs::schedule::{ExecutorKind, ScheduleConfigs, ScheduleLabel};
 use bevy::ecs::system::ScheduleSystem;
@@ -89,6 +90,8 @@ pub(crate) enum SweepLeg {
     Tabard,
     /// `0x490b07` → `0x4f4fa0` → `0x4f5010`.
     Registrar,
+    /// `0x490b11` → `0x4f3eb0`.
+    Petition,
     /// `0x490b1b` → `0x4acc00` → `0x4acd50(cl=1)`.
     Mail,
     /// `0x490b25` → `0x4cc2f0` → `0x4cd5f0`.
@@ -99,8 +102,10 @@ pub(crate) enum SweepLeg {
     MeetingStone,
     /// `0x490b48`/`0x490b4d`: `PLAYER_LEAVING_WORLD`, its one fire site.
     LeavingWorld,
-    /// `0x490b5f` → `0x493310`: the interaction still latched, which only the bank and a trade
-    /// can be by now, as every other window's leg above released its own.
+    /// `0x490b5f` → `0x493310`: the interaction still latched. Every window's leg above
+    /// released its own but the mailbox's, whose `cl` arm leaves the latch (`0x4acd5f`) with its
+    /// cell zeroed, so its object meets only the game-object arm (`0x493513` → `0x5f8c40`), which
+    /// benilla has nothing for. Beside it, only the bank and a trade can be latched by now.
     Interaction,
     /// `0x490b64` → `0x458f60`: the suppression scope closes.
     Unsilence,
@@ -188,6 +193,7 @@ fn sweep_schedule() -> Schedule {
     let mut schedule = Schedule::new(WorldLeaveSweep);
     schedule
         .set_executor_kind(ExecutorKind::SingleThreaded)
+        // Two chains joined at the meeting stone: a tuple chains at most twenty.
         .configure_sets(
             (
                 SweepLeg::Silence,
@@ -202,9 +208,16 @@ fn sweep_schedule() -> Schedule {
                 SweepLeg::Duel,
                 SweepLeg::Tabard,
                 SweepLeg::Registrar,
+                SweepLeg::Petition,
                 SweepLeg::Mail,
                 SweepLeg::Auction,
                 SweepLeg::Stable,
+                SweepLeg::MeetingStone,
+            )
+                .chain(),
+        )
+        .configure_sets(
+            (
                 SweepLeg::MeetingStone,
                 SweepLeg::LeavingWorld,
                 SweepLeg::Interaction,

@@ -820,6 +820,9 @@ pub(crate) fn end_ui_session(world: &mut World) {
     {
         carry.0 = 0;
     }
+    if let Some(mut petition) = world.get_resource_mut::<crate::ui_petition::PetitionState>() {
+        petition.forget_announced();
+    }
     // `0x401ee0`'s glue leg: `"charselect"` after a logout, `"login"` after a disconnect
     // (`0x402084`); the state this exit enters says which.
     let screen = match world
