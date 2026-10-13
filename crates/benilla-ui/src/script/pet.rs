@@ -453,13 +453,26 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `0x4bcbb0`: on a usable pet (`0x4bcbcf`) a slot whose word allows autocast (bit 31,
+    // `0x4be290`: a non-number raises the usage line and an index past the eleventh slot raises
+    // "Invalid slot" (`0x4be2d0`). Then, whatever is held, `ClearCursor(1,1)` (`0x4be2f8`); a held
+    // pet action is dropped on the slot (`0x4be309`) and the verb ends, else `0x4bcbb0` runs:
+    // on a usable pet (`0x4bcbcf`) a slot whose word allows autocast (bit 31,
     // `0x4bcbf1`) flips bit 30 in place, copies a spell word onto its book entry (`0x4bd190`),
     // queues the `CMSG_PET_SET_ACTION` and signals `PET_BAR_UPDATE` (`0x4bcc81`) before the verb
     // returns. A token has no bit 31, so it does nothing.
     g.set(
         "TogglePetAutocast",
-        lua.create_function(|lua, i: u32| {
+        lua.create_function(|lua, i: mlua::Value| {
+            let i =
+                super::binding_abi::number_arg(lua, i, "Usage: TogglePetAutocast(index)")? as u32;
+            if i.wrapping_sub(1) > 10 {
+                return Err(mlua::Error::RuntimeError(
+                    "Invalid slot in TogglePetAutocast".into(),
+                ));
+            }
+            if super::cursor::pet::clear_and_drop(lua, i).is_some() {
+                return Ok(());
+            }
             super::tick::verb(lua, |model| {
                 let Some(n) = i
                     .checked_sub(1)

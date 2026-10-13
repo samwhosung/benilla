@@ -17,7 +17,7 @@ mod doll;
 mod drag;
 pub(crate) mod equip;
 pub(crate) mod money;
-mod pet;
+pub(super) mod pet;
 
 pub(crate) use bar::place_action;
 pub(crate) use drag::{
