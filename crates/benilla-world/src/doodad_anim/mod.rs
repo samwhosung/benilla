@@ -23,10 +23,11 @@ pub(crate) use lazy::{LazyRig, SkinnedTwin};
 use mat_anim::tick_anim_materials;
 pub use mat_anim::{
     playing_seq, register_entity_uv, register_fx_uv, register_tint, sample_mat_anim, scene_clocked,
-    AnimMatPart, MatAnim, SceneClocks, TintAnimMaterials, TintLoop, UvAnimMaterials, UvLoops,
+    AnimMatPart, MatAnim, TintAnimMaterials, TintLoop, UvAnimMaterials, UvLoops,
 };
 
-/// The material tick's set: a scene that owns its clock ([`SceneClocks`]) writes it before this.
+/// The material tick's set: a scene that owns its clock ([`crate::rig_anim::SceneClock`]) writes
+/// it before this.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MatAnimTick;
 pub(crate) use mat_anim::{register_uv, UvLoop};
@@ -444,7 +445,6 @@ impl Plugin for DoodadAnimPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UvAnimMaterials>();
         app.init_resource::<TintAnimMaterials>();
-        app.init_resource::<SceneClocks>();
         // The one `rand()` stream: the reference seeds it once per process before `WinMain`
         // (`srand(GetTickCount())`, `0x5d1c70`); a capture leaves it unseeded.
         app.init_resource::<benilla_assets::AnimRng>();

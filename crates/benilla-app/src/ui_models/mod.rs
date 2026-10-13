@@ -33,7 +33,7 @@ use benilla_world::particles::buffer::EffectLightOverride;
 use benilla_world::particles::{
     spawn_emitter, EmitClock, EmitterFrames, OwnerLoss, ParticleEmitter,
 };
-use benilla_world::rig_anim::{AnimParked, GlobalSeqDrive, RigPose};
+use benilla_world::rig_anim::{AnimParked, GlobalSeqDrive, RigPose, SceneClock};
 use benilla_world::rig_palette::{RigPaletteMirrors, RigPalettes, RigPart, RigSkin};
 
 use crate::portrait::{
@@ -685,7 +685,7 @@ fn sync_tiles(
             &mut Transform,
             &mut Visibility,
             Option<&mut AnimationPlayer>,
-            Option<&mut GlobalSeqDrive>,
+            Option<&mut SceneClock>,
         ),
         (
             With<TileRoot>,
@@ -984,7 +984,7 @@ fn sync_tiles(
             continue;
         };
         bridge.cells.insert(*handle, cell);
-        let Ok((mut tf, mut vis, player, drive)) = roots.get_mut(tile.root) else {
+        let Ok((mut tf, mut vis, player, scene_clock)) = roots.get_mut(tile.root) else {
             continue;
         };
 
@@ -1110,8 +1110,8 @@ fn sync_tiles(
         // attach snapshot, and a `<Model>` owns a private `CM2Scene` (`CSimpleModel+0x314`) that
         // only its `OnUpdate` advances (`0x76d7f0`). So the ping's 4833 ms spinner resumes where
         // the last ping stopped; the drive anchors on its first tick, the attach.
-        if let Some(mut d) = drive {
-            d.set_clock(gseq_s);
+        if let Some(mut clock) = scene_clock.filter(|c| c.0 != gseq_s) {
+            clock.0 = gseq_s;
         }
         let light_trace = if trace_on() {
             let sc = &render.rig.lights[tile.light_slot].scene;
@@ -1634,7 +1634,8 @@ fn build_tile(
                 anims.clone(),
             ));
             if let Some(drive) = GlobalSeqDrive::new_rig(&anims.global_bones, p.locals.len()) {
-                commands.entity(root).insert(drive);
+                // The drive samples the pane's clock, which `sync_tiles` writes here.
+                commands.entity(root).insert((drive, SceneClock::default()));
             }
         }
         pose = Some(p);

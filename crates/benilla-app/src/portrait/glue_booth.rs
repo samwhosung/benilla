@@ -445,6 +445,10 @@ impl CreateScene {
         // `viewport_aspect` stays: the frame is the window's, not the stage's.
         self.char_spot = Vec3::ZERO;
         let Some(p) = returning else {
+            // A new instance's clock starts from 0, as the widget scene's constructor zeroes it
+            // (`0x706ff0`): its sequence bands then sample `clock − lo` (`0x714530`) from an arm
+            // at 0, and its global sequences `clock − attach`.
+            self.clock_ms = 0;
             return false;
         };
         hold_scene(commands, p.root, false, children);
@@ -1806,16 +1810,15 @@ fn spawn_glue_effects(
 /// frame's elapsed truncated to whole milliseconds ([`benilla_ui::widget::pane_clock_step_ms`]),
 /// the step the stock panes' clocks take too. So a hidden pane's stage stands still and resumes
 /// where it stopped, and a shown one runs at or below wall clock, never above. Every model on the
-/// stage, the scene, the character and the pet, reads that clock: each player advances by the
-/// step, each global-sequence drive samples it, and so do the scene's texture transforms and
-/// colour tracks ([`benilla_world::doodad_anim::SceneClocks`]).
+/// stage, the scene, the character and the pet, reads that clock
+/// ([`benilla_world::rig_anim::SceneClock`] on each root): each player advances by the step, and
+/// each global-sequence drive and the scene's texture transforms and colour tracks sample it.
 pub(super) fn pace_glue_clock(
     mut commands: Commands,
     preview: Res<GluePreview>,
     time: Res<Time>,
     booths: Res<Booths>,
     scene: Option<ResMut<CreateScene>>,
-    mut clocks: ResMut<benilla_world::doodad_anim::SceneClocks>,
 ) {
     let Some(mut scene) = scene else {
         return;
@@ -1827,13 +1830,7 @@ pub(super) fn pace_glue_clock(
         benilla_ui::widget::pane_clock_step_ms(delta)
     };
     scene.clock_ms += step_ms;
-    let clock = scene.clock_ms as f64 / 1000.0;
-    // The scene's texture transforms and colour tracks sample it too ([`sync_glue_scene`]); a
-    // parked scene's stay where it stopped, and a dropped one's go.
-    clocks.0.insert(scene.root, clock);
-    clocks
-        .0
-        .retain(|root, _| *root == scene.root || scene.parked.iter().any(|p| p.root == *root));
+    let clock = benilla_world::rig_anim::SceneClock(scene.clock_ms as f64 / 1000.0);
     // A player advances by `delta · speed` (`advance_animations`), so this speed makes it step by
     // the clock's own whole milliseconds, and 0 holds it.
     let speed = if delta > 0.0 {
@@ -1843,22 +1840,22 @@ pub(super) fn pace_glue_clock(
     };
     let character = booths.0.get(GLUE_SLOT).map(|b| b.root);
     // Through commands, not a query: the stage's three roots are all it touches, and a query of
-    // every player would share its access with each world animation system.
+    // every player would share its access with each world animation system. Each root carries the
+    // stage's clock, which its global sequences and its materials read; a parked scene's root
+    // keeps the value it stopped at.
     for root in [Some(scene.root), character, Some(scene.pet_root)]
         .into_iter()
         .flatten()
     {
-        let mut model = commands.entity(root);
-        model
+        commands
+            .entity(root)
+            .insert(clock)
             .entry::<AnimationPlayer>()
             .and_modify(move |mut player| {
                 for (_, active) in player.playing_animations_mut() {
                     active.set_speed(speed);
                 }
             });
-        model
-            .entry::<benilla_world::rig_anim::GlobalSeqDrive>()
-            .and_modify(move |mut drive| drive.set_clock(clock));
     }
 }
 
@@ -2888,7 +2885,6 @@ mod tests {
                 .init_resource::<Assets<AnimationClip>>()
                 .init_resource::<Assets<AnimationGraph>>()
                 .init_resource::<GluePreview>()
-                .init_resource::<benilla_world::doodad_anim::SceneClocks>()
                 .add_systems(
                     Update,
                     (pace_glue_clock, bevy::animation::advance_animations).chain(),
@@ -2931,16 +2927,15 @@ mod tests {
         fn at(&self) -> ([f32; 3], u64) {
             let world = self.app.world();
             let clock_ms = world.resource::<CreateScene>().clock_ms;
-            let root = world.resource::<CreateScene>().root;
-            assert_eq!(
-                world
-                    .resource::<benilla_world::doodad_anim::SceneClocks>()
-                    .0
-                    .get(&root)
-                    .copied(),
-                Some(clock_ms as f64 / 1000.0),
-                "the scene's materials run on the stage clock"
-            );
+            for root in self.models {
+                assert_eq!(
+                    world.get::<benilla_world::rig_anim::SceneClock>(root),
+                    Some(&benilla_world::rig_anim::SceneClock(
+                        clock_ms as f64 / 1000.0
+                    )),
+                    "each root on the stage carries the stage clock"
+                );
+            }
             (
                 self.models.map(|e| {
                     world
@@ -3091,6 +3086,7 @@ mod tests {
             scene.root, login,
             "the select stage spawns on a root of its own"
         );
+        assert_eq!(scene.clock_ms, 0, "on a clock of its own, from 0");
         assert!(!scene.spawned);
         assert_eq!(*world.get::<Visibility>(login).unwrap(), Visibility::Hidden);
         assert!(world

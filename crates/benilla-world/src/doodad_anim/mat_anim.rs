@@ -202,7 +202,8 @@ pub struct UvAnimEntry {
     pub seed: [f32; 2],
     /// The rotation and scaling half ([`UvAffine`]), `None` when the transform only translates.
     affine: Option<UvAffine>,
-    /// The scene whose clock this entry runs on ([`SceneClocks`]), `None` for the world's.
+    /// The entity whose [`crate::rig_anim::SceneClock`] this entry runs on, `None` for the
+    /// world's clock.
     clock: Option<Entity>,
 }
 
@@ -285,16 +286,16 @@ impl UvAnimEntry {
 }
 
 impl UvAnimEntry {
-    /// This frame's translation row and affine row, on the entry's own clock ([`SceneClocks`]):
-    /// what the tick writes.
+    /// This frame's translation row and affine row, on `scene`, the time of the scene clock the
+    /// entry runs on, else on the world's `now`: what the tick writes.
     fn rows(
         &self,
-        clocks: &SceneClocks,
+        scene: Option<f64>,
         now: f32,
         gseq_now: f64,
         playing: Option<(usize, f32)>,
     ) -> ([f32; 4], Option<(u16, [f32; 4])>) {
-        let (now, gseq_now) = clocks.times(self.clock, now, gseq_now);
+        let (now, gseq_now) = scene.map_or((now, gseq_now), |t| (t as f32, t));
         (
             self.delta(now, gseq_now, playing),
             self.affine(now, gseq_now, playing),
@@ -335,15 +336,15 @@ impl UvAnimEntry {
 }
 
 impl TintAnimEntry {
-    /// This frame's row on the entry's own clock ([`SceneClocks`]): what the tick writes.
+    /// This frame's row on `scene`'s time, else the world's, as [`UvAnimEntry`]'s rows.
     fn row(
         &self,
-        clocks: &SceneClocks,
+        scene: Option<f64>,
         now: f32,
         gseq_now: f64,
         playing: Option<(usize, f32)>,
     ) -> [f32; 4] {
-        let (now, gseq_now) = clocks.times(self.clock, now, gseq_now);
+        let (now, gseq_now) = scene.map_or((now, gseq_now), |t| (t as f32, t));
         self.delta(now, gseq_now, playing)
     }
 
@@ -371,25 +372,9 @@ pub struct UvAnimMaterials(
     >,
 );
 
-/// The clocks of the scenes that own one, by the scene's root: a glue `ModelFFX`'s scene runs on
-/// its own clock (`CSimpleModel+0x314`), advanced only by the pane's `OnUpdate` (`0x76d7f0`) while
-/// it shows, and every model in that scene animates on it, its texture transforms and colour
-/// tracks included. Seconds; the scene's owner writes it each frame before the tick.
-#[derive(Resource, Default)]
-pub struct SceneClocks(pub std::collections::HashMap<Entity, f64>);
-
-impl SceneClocks {
-    /// `(now, gseq_now)` for an entry on `clock`: that scene's time, else the world's.
-    fn times(&self, clock: Option<Entity>, now: f32, gseq_now: f64) -> (f32, f64) {
-        match clock.and_then(|c| self.0.get(&c)) {
-            Some(&t) => (t as f32, t),
-            None => (now, gseq_now),
-        }
-    }
-}
-
-/// Put material `id`'s registered UV and tint entries on scene `clock`'s time ([`SceneClocks`]):
-/// a scene with its own clock calls it after registering each of its batches.
+/// Put material `id`'s registered UV and tint entries on the clock of the scene `clock` stands in
+/// ([`crate::rig_anim::SceneClock`] on that entity): a scene with its own clock calls it after
+/// registering each of its batches.
 pub fn scene_clocked(
     uv: &mut UvAnimMaterials,
     tint: &mut TintAnimMaterials,
@@ -616,7 +601,7 @@ impl UvLoops {
 /// spell-effect lane ([`UvAnimEntry::instance_lane`]).
 pub(super) fn tick_anim_materials(
     time: Res<Time>,
-    clocks: Res<SceneClocks>,
+    clocks: Query<&crate::rig_anim::SceneClock>,
     real: Res<Time<bevy::time::Real>>,
     mut uv_reg: ResMut<UvAnimMaterials>,
     mut tint_reg: ResMut<TintAnimMaterials>,
@@ -680,7 +665,8 @@ pub(super) fn tick_anim_materials(
         // lives about a second, so an undrawn one costs little.
         let fx = entry.instance_lane();
         if (fx || drawn.contains(id)) && (!frozen || fx) {
-            let (row, affine) = entry.rows(&clocks, now, gseq_now, host_seq(&hosts, entry.host()));
+            let scene = entry.clock.and_then(|e| clocks.get(e).ok()).map(|c| c.0);
+            let (row, affine) = entry.rows(scene, now, gseq_now, host_seq(&hosts, entry.host()));
             table.set(entry.slot, row);
             if let Some((slot, row)) = affine {
                 table.set(slot, row);
@@ -694,9 +680,10 @@ pub(super) fn tick_anim_materials(
             return false;
         }
         if drawn.contains(id) && !frozen {
+            let scene = entry.clock.and_then(|e| clocks.get(e).ok()).map(|c| c.0);
             table.set(
                 entry.slot,
-                entry.row(&clocks, now, gseq_now, host_seq(&hosts, entry.host())),
+                entry.row(scene, now, gseq_now, host_seq(&hosts, entry.host())),
             );
         }
         true
@@ -742,7 +729,7 @@ pub struct TintAnimEntry {
     pub anim: TintLoop,
     pub slot: u16,
     pub seed: [f32; 3],
-    /// As [`UvAnimEntry`]'s: the scene clock it runs on, `None` for the world's.
+    /// As [`UvAnimEntry`]'s: the entity whose scene clock it runs on, `None` for the world's.
     clock: Option<Entity>,
 }
 
@@ -1274,14 +1261,14 @@ mod delta_tests {
             },
         );
         scene_clocked(&mut uv, &mut tint, id, scene);
-        let mut clocks = SceneClocks::default();
-        clocks.0.insert(scene, 0.5);
+        assert_eq!(uv.0[&id].clock, Some(scene));
+        assert_eq!(tint.0[&id].clock, Some(scene));
 
         // The world is at 10 s, the scene's clock at 0.5 s: the rows are the scene's.
-        let (row, _) = uv.0[&id].rows(&clocks, 10.0, 10.0, None);
+        let (row, _) = uv.0[&id].rows(Some(0.5), 10.0, 10.0, None);
         assert_eq!(row, uv.0[&id].delta(0.5, 0.5, None));
         assert_ne!(row, uv.0[&id].delta(10.0, 10.0, None));
-        let row = tint.0[&id].row(&clocks, 10.0, 10.0, None);
+        let row = tint.0[&id].row(Some(0.5), 10.0, 10.0, None);
         assert_eq!(row, tint.0[&id].delta(0.5, 0.5, None));
         assert_ne!(row, tint.0[&id].delta(10.0, 10.0, None));
 
@@ -1294,7 +1281,7 @@ mod delta_tests {
             clock: None,
         };
         assert_eq!(
-            other.rows(&clocks, 10.0, 10.0, None).0,
+            other.rows(None, 10.0, 10.0, None).0,
             other.delta(10.0, 10.0, None)
         );
     }
