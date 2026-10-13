@@ -1,11 +1,14 @@
 //! The mailbox's packet handlers: they fill [`MailOpen`] and [`MailPending`] and send the wire
-//! re-syncs; the events fire from [`super::feed_mail`].
+//! requests; the events fire from [`super::feed_mail`].
 
 use benilla_protocol::messages::{mail_action, mail_error, mail_message_type, MailListEntry};
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
-use super::{mail_refusal, MailOpen, MailPending, MailResult, CHECKED_COD_PAYMENT, MAIL_SENT_KEY};
+use super::{
+    mail_refusal, MailOpen, MailPending, MailResult, CHECKED_COD_PAYMENT, CHECKED_COPIED,
+    MAIL_SENT_KEY,
+};
 use crate::net::{ClientCommand, NetCommands, NetHandlerApp};
 use crate::ui_items::{EquipError, EquipErrors};
 
@@ -92,13 +95,8 @@ fn on_session_end(
 pub(super) fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands: &NetCommands) {
     // The answer clears the request lock (`0x4ad5d0`).
     mail.resolve_request();
-    // The parse ends in `MAIL_INBOX_UPDATE` (`0x4ad5c6`), unless the list answers a re-sync the
-    // reference never asks for. Answers come back in the order they were asked.
-    if mail.silent_lists > 0 {
-        mail.silent_lists -= 1;
-    } else {
-        mail.list_results += 1;
-    }
+    // The parse ends in `MAIL_INBOX_UPDATE` (`0x4ad5c6`).
+    mail.list_results += 1;
     let mailbox = mail.mailbox;
     mail.mails = mails
         .into_iter()
@@ -119,11 +117,10 @@ pub(super) fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands
 }
 
 /// Whether a take leaves the mail empty, which the client then deletes itself: `CMSG_MAIL_DELETE`,
-/// then `CLOSE_INBOX_ITEM(index)`, then `MAIL_INBOX_UPDATE`. The money leg (`0x4ad6b0`) purges a
-/// COD payment or an auction notice with no item. The item leg (`0x4ad7b0`) purges once the money
-/// is gone and the mail is an auction notice or has neither a text id (`[rec+0x114]`) nor a mail
-/// template id (`[rec+0x25c]`); this reads the text id alone, so it also purges a template mail
-/// the reference keeps.
+/// then `CLOSE_INBOX_ITEM(index)`. The money leg (`0x4ad6b0`) purges a COD payment or an auction
+/// notice with no item. The item leg (`0x4ad7b0`) purges once the money is gone and the mail is an
+/// auction notice or has neither a text id (`[rec+0x114]`, `0x4ad7fd`) nor a mail template id
+/// (`[rec+0x25c]`, `0x4ad809`), so a quest or event reward mail stays.
 fn take_empties(entry: &MailListEntry, action: u32) -> bool {
     let auction = entry.message_type == mail_message_type::AUCTION;
     match action {
@@ -135,8 +132,13 @@ fn take_empties(entry: &MailListEntry, action: u32) -> bool {
     }
 }
 
-/// `SMSG_SEND_MAIL_RESULT`: a `SEND` result is queued for the feed; a successful take updates the
-/// row and purges it when empty, and every successful take, return or delete re-lists the inbox.
+/// `SMSG_SEND_MAIL_RESULT` (`0x4ad050`). A `SEND` result is queued for the feed. A successful take,
+/// return, delete or copy edits the held rows in place, as its arm does, and owes the feed that
+/// arm's own `MAIL_INBOX_UPDATE`: the money leg (`0x4ad6b0`) and the item leg (`0x4ad7b0`) clear
+/// the field and purge an emptied mail with `CMSG_MAIL_DELETE` and `CLOSE_INBOX_ITEM`, keeping the
+/// row until the delete's own result; the return and delete arm (`0x4ad910`) removes the record;
+/// the copy arm (`0x4ad8c0`) sets the COPIED bit. A mail the rows do not hold ends the arm
+/// silently. Nothing asks the server for the list again.
 pub(super) fn send_mail_result(
     mail_id: u32,
     action: u32,
@@ -173,32 +175,35 @@ pub(super) fn send_mail_result(
         mail.results.push(result);
         return;
     }
-    // A take/return/delete result.
+    // A take/return/delete/copy result.
     match error {
         mail_error::OK => {
-            // The take clears the local row first (`[rec+0x140]` money, `[rec+0x120]` item), then
-            // an emptied mail is purged: `CMSG_MAIL_DELETE`, then the feed's `CLOSE_INBOX_ITEM`.
             if let Some(pos) = mail.mails.iter().position(|e| e.message_id == mail_id) {
+                result.inbox_update = true;
                 match action {
-                    mail_action::MONEY_TAKEN => mail.mails[pos].money = 0,
-                    mail_action::ITEM_TAKEN => mail.mails[pos].item = None,
-                    _ => {}
-                }
-                if take_empties(&mail.mails[pos], action) {
-                    if let Some(mailbox) = mail.mailbox {
-                        let _ = commands
-                            .0
-                            .send(ClientCommand::MailDelete { mailbox, mail_id });
+                    mail_action::MONEY_TAKEN | mail_action::ITEM_TAKEN => {
+                        // The take clears the local field first (`[rec+0x140]` money,
+                        // `[rec+0x120]` item), then an emptied mail is purged.
+                        if action == mail_action::MONEY_TAKEN {
+                            mail.mails[pos].money = 0;
+                        } else {
+                            mail.mails[pos].item = None;
+                        }
+                        if take_empties(&mail.mails[pos], action) {
+                            if let Some(mailbox) = mail.mailbox {
+                                let _ = commands
+                                    .0
+                                    .send(ClientCommand::MailDelete { mailbox, mail_id });
+                            }
+                            result.close_inbox = Some(pos as u32 + 1);
+                        }
                     }
-                    result.close_inbox = Some(pos as u32 + 1);
-                    mail.mails.remove(pos);
+                    mail_action::RETURNED | mail_action::DELETED => {
+                        mail.mails.remove(pos);
+                    }
+                    mail_action::MADE_PERMANENT => mail.mails[pos].checked |= CHECKED_COPIED,
+                    _ => result.inbox_update = false,
                 }
-            }
-            // Re-sync the inbox: the taken money/item or removed row is gone server-side. The
-            // reference edits its rows in place and asks for nothing, so the answer is silent.
-            if let Some(mailbox) = mail.mailbox {
-                let _ = commands.0.send(ClientCommand::GetMailList { mailbox });
-                mail.silent_lists += 1;
             }
         }
         mail_error::EQUIP_ERROR => equip_errors.0.push(EquipError {
@@ -325,6 +330,7 @@ mod tests {
                 local f = CreateFrame("Frame")
                 f:RegisterEvent("MAIL_FAILED")
                 f:RegisterEvent("CLOSE_INBOX_ITEM")
+                f:RegisterEvent("MAIL_INBOX_UPDATE")
                 f:SetScript("OnEvent", function()
                     table.insert(log, event .. (arg1 and (":" .. arg1) or ""))
                 end)"#,
@@ -335,7 +341,112 @@ mod tests {
             script
                 .eval::<String>("return table.concat(log, ' ')")
                 .unwrap(),
-            "CLOSE_INBOX_ITEM:1 MAIL_FAILED MAIL_FAILED MAIL_FAILED MAIL_FAILED MAIL_FAILED"
+            "CLOSE_INBOX_ITEM:1 MAIL_INBOX_UPDATE MAIL_FAILED MAIL_FAILED \
+             MAIL_INBOX_UPDATE MAIL_FAILED MAIL_FAILED MAIL_FAILED"
         );
+    }
+
+    fn attachment() -> benilla_protocol::messages::MailAttachment {
+        benilla_protocol::messages::MailAttachment {
+            entry: 2589,
+            perm_enchant: 0,
+            random_prop_id: 0,
+            suffix_factor: 0,
+            count: 3,
+            charges: 0,
+            durability_max: 0,
+            durability: 0,
+        }
+    }
+
+    fn sent_commands(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<(&'static str, u32)> {
+        rx.try_iter()
+            .map(|c| match c {
+                ClientCommand::MailDelete { mail_id, .. } => ("delete", mail_id),
+                ClientCommand::GetMailList { .. } => ("list", 0),
+                _ => ("other", 0),
+            })
+            .collect()
+    }
+
+    fn result(
+        mail: &mut MailOpen,
+        id: u32,
+        action: u32,
+    ) -> crossbeam_channel::Receiver<ClientCommand> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut equip = EquipErrors::default();
+        send_mail_result(
+            id,
+            action,
+            mail_error::OK,
+            None,
+            None,
+            mail,
+            &NetCommands(tx),
+            &mut equip,
+        );
+        rx
+    }
+
+    /// The take arms edit the held row in place and ask the server for nothing (`0x4ad6e8`,
+    /// `0x4ad7e8`): no `CMSG_GET_MAIL_LIST` follows a take, a return or a delete, and each arm
+    /// owes its own `MAIL_INBOX_UPDATE`.
+    #[test]
+    fn a_take_edits_its_row_in_place_and_asks_for_no_list() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut equip = EquipErrors::default();
+        let mut mail = MailOpen::default();
+        mail.click(0x20);
+        let mut row = super::super::tests::entry(7, Some(0xA), 0, 30.0);
+        row.money = 90;
+        row.item = Some(attachment());
+        mail.mails.push(row);
+        for (action, id) in [
+            (mail_action::MONEY_TAKEN, 7),
+            (mail_action::ITEM_TAKEN, 7),
+            (mail_action::MADE_PERMANENT, 7),
+        ] {
+            send_mail_result(
+                id,
+                action,
+                mail_error::OK,
+                None,
+                None,
+                &mut mail,
+                &commands,
+                &mut equip,
+            );
+        }
+        let row = &mail.mails[0];
+        assert_eq!((row.money, row.item.is_none()), (0, true));
+        assert_ne!(row.checked & CHECKED_COPIED, 0, "the copy arm sets COPIED");
+        assert!(mail.results.iter().all(|r| r.inbox_update));
+        // A plain player's mail with no text id: the item leg purges it, once, and keeps the row.
+        assert_eq!(sent_commands(&rx), [("delete", 7)], "no list request");
+        assert_eq!(mail.results[1].close_inbox, Some(1));
+        assert_eq!(
+            mail.mails.len(),
+            1,
+            "the row stays until the delete's own result"
+        );
+
+        for action in [mail_action::DELETED, mail_action::RETURNED] {
+            let mut m = MailOpen::default();
+            m.click(0x20);
+            m.mails
+                .push(super::super::tests::entry(7, Some(0xA), 0, 30.0));
+            m.mails
+                .push(super::super::tests::entry(8, Some(0xA), 0, 30.0));
+            let rx = result(&mut m, 7, action);
+            assert!(sent_commands(&rx).is_empty(), "and asks for nothing");
+            assert_eq!(m.mails.len(), 1, "action {action} removes the record");
+            assert_eq!(m.mails[0].message_id, 8);
+            assert!(m.results[0].inbox_update);
+            // A mail the rows do not hold ends the arm silently.
+            result(&mut m, 99, action);
+            assert!(!m.results[1].inbox_update);
+        }
     }
 }
