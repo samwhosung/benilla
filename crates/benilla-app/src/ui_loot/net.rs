@@ -1254,6 +1254,7 @@ mod tests {
         world.insert_resource(player);
         world.init_resource::<crate::ui_party::GroupState>();
         world.init_resource::<crate::items::Items>();
+        world.init_resource::<crate::ui_action::UiErrorKeys>();
         world.init_resource::<bevy::ecs::message::Messages<crate::sound::LootPickupSound>>();
     }
 

@@ -115,8 +115,9 @@ fn escape_closes_bag_and_panel_releases_loot_and_keeps_the_held_item() {
         !s.eval::<bool>("return LootFrame:IsVisible()").unwrap(),
         "ESC hid the loot window"
     );
-    assert!(
+    assert_eq!(
         s.take_loot_close(),
+        Some(false),
         "closing the loot fired the release (OnHide → CloseLoot)"
     );
     // Stock `ToggleGameMenu` has no `ClearCursor` arm, so the held item survives ESC.

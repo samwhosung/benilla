@@ -10,7 +10,7 @@
 
 use mlua::{Lua, MultiValue, Table, Value};
 
-use super::binding_abi::flag;
+use super::binding_abi::{bool_or_default, flag};
 use super::Model;
 use crate::script::binding_abi::{Idx, Idx32};
 
@@ -102,9 +102,10 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().loot_confirms)
     }
 
-    /// Whether `CloseLoot` was called since the last drain; the app releases an open loot.
-    pub fn take_loot_close(&mut self) -> bool {
-        std::mem::take(&mut self.model_mut().loot_close)
+    /// Whether `CloseLoot` was called since the last drain, with its `failed` flag: the app
+    /// releases an open loot and, on a set flag, shows `ERR_LOOT_NO_UI`.
+    pub fn take_loot_close(&mut self) -> Option<bool> {
+        self.model_mut().loot_close.take()
     }
 
     /// Drain the `GiveMasterLoot(slot, candidateIndex)` pairs, both 1-based; the app resolves them
@@ -287,12 +288,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CloseLoot([failed]): the "unable to open the UI" argument (`LootFrame.lua:18`) is ignored.
+    // CloseLoot([failed]) (`0x4c2ec0`): the flag is read through the client's flag coercion
+    // (`0x4c2ec7`, `0x6f1c10`, default 0) and handed to the close (`0x48f200`), which raises
+    // `ERR_LOOT_NO_UI` for a set one (`0x48f27b`). Stock `LootFrame.lua:18` passes 1 when the
+    // window cannot open.
     g.set(
         "CloseLoot",
-        lua.create_function(|lua, _args: MultiValue| {
+        lua.create_function(|lua, args: MultiValue| {
+            let failed = bool_or_default(args.front(), false);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.loot_close = true;
+            model.loot_close.get_or_insert(failed);
             Ok(())
         })?,
     )?;
@@ -643,12 +648,26 @@ mod tests {
     fn close_loot_flags_the_intent() {
         let mut s = UiScript::new().unwrap();
         s.set_loot(Some(loot()));
-        assert!(!s.take_loot_close());
+        assert_eq!(s.take_loot_close(), None);
         s.run("CloseLoot()").unwrap();
-        assert!(s.take_loot_close());
-        assert!(!s.take_loot_close(), "drained");
+        assert_eq!(s.take_loot_close(), Some(false));
+        assert_eq!(s.take_loot_close(), None, "drained");
         s.run("CloseLoot(1)").unwrap();
-        assert!(s.take_loot_close());
+        assert_eq!(
+            s.take_loot_close(),
+            Some(true),
+            "the failed flag (`0x6f1c10`)"
+        );
+        for (arg, failed) in [("nil", false), ("0", false), ("'1'", true), ("true", true)] {
+            s.run(&format!("CloseLoot({arg})")).unwrap();
+            assert_eq!(s.take_loot_close(), Some(failed), "CloseLoot({arg})");
+        }
+        s.run("CloseLoot() CloseLoot(1)").unwrap();
+        assert_eq!(
+            s.take_loot_close(),
+            Some(false),
+            "the first close releases the loot; the second finds none"
+        );
     }
 
     #[test]

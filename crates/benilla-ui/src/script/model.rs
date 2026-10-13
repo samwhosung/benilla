@@ -838,7 +838,9 @@ pub(crate) struct Model {
     pub(crate) loot_picks: Vec<u32>,
     /// `LootSlot(slot)` rows, 1-based, apart from clicks for the reference's pending-slot gate.
     pub(crate) loot_confirms: Vec<u32>,
-    pub(crate) loot_close: bool,
+    /// The first `CloseLoot` since the last drain, with its `failed` flag; a later one in the
+    /// same frame finds the loot already released.
+    pub(crate) loot_close: Option<bool>,
     /// `GiveMasterLoot(slot, candidateIndex)`, both 1-based display positions the app translates.
     pub(crate) loot_master_gives: Vec<(u32, u32)>,
 
@@ -1534,7 +1536,7 @@ impl Model {
             bind_on_use_confirms: 0,
             loot_picks: Vec::new(),
             loot_confirms: Vec::new(),
-            loot_close: false,
+            loot_close: None,
             loot_master_gives: Vec::new(),
             loot_rolls: loot_roll::LootRollsState::default(),
             loot_roll_votes: Vec::new(),

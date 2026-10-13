@@ -219,7 +219,7 @@ fn shipped_loot_frame_drives_end_to_end() {
         vec![1, 2],
         "coin row is pick 1, the first item row is pick 2"
     );
-    assert!(!s.take_loot_close());
+    assert_eq!(s.take_loot_close(), None);
 
     // The looted coin row hides in place, off `LOOT_SLOT_CLEARED` alone, and the items keep their
     // rows.
@@ -243,8 +243,9 @@ fn shipped_loot_frame_drives_end_to_end() {
     );
 
     s.run("LootCloseButton:Click()").unwrap();
-    assert!(
+    assert_eq!(
         s.take_loot_close(),
+        Some(false),
         "closing the window releases the loot (OnHide → CloseLoot)"
     );
     assert!(!s.eval::<bool>("return LootFrame:IsVisible()").unwrap());

@@ -11,6 +11,7 @@ use crate::entities::ItemDisplays;
 use crate::items::{Items, RollCatalogs};
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
+use crate::ui_action::{UiError, UiErrorKeys};
 use crate::ui_items::KEYRING_CONTAINER;
 use crate::ui_party::{GroupState, GROUPTYPE_RAID, GROUP_MEMBER_SUBGROUP};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
@@ -1049,6 +1050,7 @@ fn drain_loot(
     // The move-start close runs before the VM check: it needs no Lua.
     mut move_start: ResMut<LootMoveStart>,
     mut dead: DeadUnitDeselect,
+    mut errors: ResMut<UiErrorKeys>,
 ) {
     if std::mem::take(&mut move_start.0) {
         dead.after_close(close_on_move_start(&mut loot, &mut latch, &commands));
@@ -1154,11 +1156,16 @@ fn drain_loot(
         });
     }
     // `CloseLoot` (`0x4c2ec0` → `0x48f200(cl=1, dl=0)`), which stock `LootFrame_OnHide` calls.
-    if script.take_loot_close() {
+    if let Some(failed) = script.take_loot_close() {
         if loot.disenchant_holds() {
             debug!("ui_loot: CloseLoot on a disenchant window with rows left — sweeping it");
             sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
         } else {
+            // Past the no-loot and disenchant returns, a set flag shows `ERR_LOOT_NO_UI`
+            // (`0x48f272`-`0x48f280`, `DisplayError(0x87)`) before the release.
+            if failed && loot.source().is_some() {
+                errors.0.push(UiError::key("ERR_LOOT_NO_UI"));
+            }
             let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
             if let Some(guid) = closed {
                 debug!("ui_loot: release loot {guid:#x}");
@@ -1289,6 +1296,7 @@ mod tests {
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<UiErrorKeys>()
             .insert_resource(NetCommands(tx));
 
         let mut items = app.world_mut().resource_mut::<Items>();
@@ -2333,6 +2341,7 @@ mod tests {
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<UiErrorKeys>()
             .insert_resource(NetCommands(tx))
             .add_systems(Update, drain_loot);
         for (guid, health) in [(CORPSE, 0), (LIVE, 100)] {
@@ -2455,6 +2464,60 @@ mod tests {
         close_loot(&mut app);
         assert!(released(&rx).is_empty());
         assert!(deselects(&mut app).is_empty());
+    }
+
+    /// `CloseLoot(1)`, stock `LootFrame.lua:18`'s answer to a window that cannot open: the close
+    /// raises `ERR_LOOT_NO_UI` (`0x48f27b`) before its release, and only with loot open
+    /// (`0x48f23f` returns first on none) and past the disenchant hold.
+    #[test]
+    fn close_loot_with_its_flag_set_shows_err_loot_no_ui() {
+        let (mut app, rx) = close_app();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let close_loot = |app: &mut App, chunk: &str| -> Vec<&'static str> {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .run(chunk)
+                .unwrap();
+            app.update();
+            std::mem::take(&mut app.world_mut().resource_mut::<UiErrorKeys>().0)
+                .into_iter()
+                .map(|e| e.key)
+                .collect()
+        };
+        open_loot(
+            &mut app,
+            CORPSE,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        assert_eq!(close_loot(&mut app, "CloseLoot(1)"), ["ERR_LOOT_NO_UI"]);
+        assert!(rx
+            .try_iter()
+            .any(|c| matches!(c, ClientCommand::LootRelease { guid } if guid == CORPSE)));
+        assert!(
+            close_loot(&mut app, "CloseLoot(1)").is_empty(),
+            "nothing open, nothing shown"
+        );
+        open_loot(
+            &mut app,
+            CORPSE,
+            loot_type::CORPSE,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        assert!(close_loot(&mut app, "CloseLoot()").is_empty());
+        open_loot(
+            &mut app,
+            ESSENCE_SOURCE,
+            loot_type::DISENCHANTING,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        assert!(
+            close_loot(&mut app, "CloseLoot(1)").is_empty(),
+            "a disenchant hold returns before the error"
+        );
     }
 
     /// `CloseInteraction` on a move start, with no server help and no VM.
