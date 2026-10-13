@@ -119,7 +119,7 @@ impl Default for DrawLayer {
 // its parent, and the tie lets the bar's ARTWORK fill draw under the parent's OVERLAY border.
 //
 // The sub-level is the engine's own ordering within a layer, set only for the EditBox caret: 1.12
-// gives Lua and XML none (`0x76a860` takes only region and layer and inserts at the head, and
+// gives Lua and XML none (`0x76a860` takes only region and layer and appends at the tail, and
 // `SetDrawLayer` `0x79a780` reads the layer alone).
 //
 // The low word is 0 for the flat pass. A scroll child's subtree takes its outermost ScrollFrame's
