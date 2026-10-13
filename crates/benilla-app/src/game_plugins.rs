@@ -749,6 +749,33 @@ pub(crate) mod schedule_tests {
         }
     }
 
+    /// The worldport's sweep runs whether or not the interface is up, as the local player's
+    /// destructor does (`0x5dd543`): nothing gates it on `ingame_ui_up`.
+    #[test]
+    fn the_worldport_sweep_is_not_gated_on_the_interface() {
+        let mut app = headless_client();
+        let update = census(&mut app, Update, SyncPoints::Built);
+        if !type_names_available(&update) {
+            eprintln!(
+                "skipped: this build carries no type names (bevy/debug rides with the dev feature)"
+            );
+            return;
+        }
+        let sweep = update
+            .systems
+            .values()
+            .find(|s| s.name.ends_with("::sweep_on_worldport"))
+            .expect("the worldport's sweep is in Update");
+        assert!(
+            !sweep
+                .conditions
+                .iter()
+                .any(|c| c.ends_with("::ingame_ui_up")),
+            "{:?}",
+            sweep.conditions
+        );
+    }
+
     #[test]
     fn the_client_builds_headless() {
         let app = headless_client();

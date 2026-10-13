@@ -117,12 +117,18 @@ impl Plugin for UiUnitPlugin {
         .add_message::<crate::net::WorldportMessage>()
         .add_message::<crate::net::FieldChanged>()
         .init_world_leave_sweep()
+        // Ahead of the unit feed, so a worldport's leaving edge precedes the entering edge
+        // `feed_units` raises for the same port, and outside its gate: the destructor sweeps
+        // (`0x5dd543`) whether or not an interface is up, the host legs with it.
+        .add_systems(
+            Update,
+            crate::ui_script::sweep_on_worldport
+                .after(benilla_world::schedule::WorldStage::Net)
+                .before(UnitFeed),
+        )
         .add_systems(
             Update,
             (
-                // First, so a worldport's leaving edge precedes the entering edge `feed_units`
-                // raises for the same port.
-                crate::ui_script::sweep_on_worldport,
                 feed_units,
                 // After the aura feed, whose resolver inputs it measures.
                 feed_unit_reach.after(crate::ui_aura::AuraEvents),
