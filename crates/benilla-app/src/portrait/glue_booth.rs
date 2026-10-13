@@ -1413,9 +1413,21 @@ type StageLanes<'w> = (
 pub(super) struct GlueStanding {
     /// The bake revision, yaw and scene revision last committed.
     last: Option<(u64, f32, u64)>,
-    /// The create character standing as one instance a re-dress keeps: its body display and its
-    /// attachments as hung. `None` for a select record, an empty stage or a boneless bake.
-    create: Option<(u32, Hung)>,
+    /// The create character standing as one instance a re-dress keeps. `None` for a select
+    /// record, an empty stage or a boneless bake.
+    create: Option<StandingCreate>,
+}
+
+/// The create body standing: one `CharacterModel` while its display and its stage last.
+struct StandingCreate {
+    /// The race and sex body: a change is the builder's new model (`0x470b70`).
+    display: u32,
+    /// The stage it was built on ([`GluePreview::stage`]): every create `OnShow` builds anew, its
+    /// `SetCharCustomizeBackground` making a new scene (`0x4707b0` → `0x76cce0`, unconditional) and
+    /// `ResetCharCustomize` a new body (`0x4709f3`).
+    stage: u64,
+    /// Its attachments as hung.
+    hung: Hung,
 }
 
 /// The attachments a bake hung, by what each draws and where: a re-dress re-hangs them only when
@@ -1702,14 +1714,15 @@ pub(super) fn sync_glue_booth(
             &booth_effects,
             scene_buf.as_ref(),
         );
-        // The standing create body, kept when this bake wears the same display ([`GlueStanding`]).
+        // The standing create body, kept when this bake wears the same display on the same stage
+        // ([`StandingCreate`]).
         let create = matches!(bake.look, Some(GlueLook::Create(_)));
         let keep = create
             && !instance.feathering()
             && state
                 .create
                 .as_ref()
-                .is_some_and(|(display, _)| *display == bake.display_id);
+                .is_some_and(|c| c.display == bake.display_id && c.stage == preview.stage);
         let standing = if keep {
             standing_rigs
                 .get(booth.root)
@@ -1748,7 +1761,7 @@ pub(super) fn sync_glue_booth(
                     slot,
                     instance,
                 );
-                if state.create.as_ref().is_none_or(|(_, was)| *was != hung) {
+                if state.create.as_ref().is_none_or(|c| c.hung != hung) {
                     // The outfit changed: the old items come off with their anchors, and the new
                     // ones hang on a fresh pose buffer the root's player re-poses before it draws.
                     for c in kids.iter().filter(|c| !worn.iter().any(|(w, _)| w == *c)) {
@@ -1825,7 +1838,11 @@ pub(super) fn sync_glue_booth(
                 None => benilla_world::instance_tint::IDENTITY,
             },
         );
-        state.create = (create && booth.rigged).then_some((bake.display_id, hung));
+        state.create = (create && booth.rigged).then_some(StandingCreate {
+            display: bake.display_id,
+            stage: preview.stage,
+            hung,
+        });
         // The fallback framing with no scene up: the model's `<PlayerModel>` pane camera, at the
         // bake's aspect, as it shows only for the frames before the scene's camera takes over.
         let (t, _) = body_frame(&anchors, 1.0);
@@ -2928,6 +2945,19 @@ mod tests {
                 .is_some(),
             "the hand that holds it closes (`0x479660`)"
         );
+
+        // The create screen shown again: a new scene and a new body, Stand from the top.
+        app.world_mut().resource_mut::<GluePreview>().stage += 1;
+        bake(
+            &mut app,
+            create(0, 2, 3, 2),
+            HUMAN_MALE,
+            vec![part(1, 40), part(3, 41)],
+            Vec::new(),
+            [false, false],
+        );
+        assert_eq!(stand_at(&app, root), 0.0, "a re-entered create rebuilds");
+        run_stand_to(&mut app, root, 1.25);
 
         // Sex: the builder makes a new body, whose Stand starts from the top.
         bake(
