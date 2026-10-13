@@ -223,8 +223,9 @@ pub use cursor::{
 };
 pub use cvar_checks::{
     check_base_mip, check_camera_decay, check_camera_distance_max, check_camera_rate,
-    check_camera_smooth_style, check_camera_time, check_camera_view, check_shadow_level,
-    check_small_cull, check_tex_lod_bias, CvarCheck, CvarVerdict,
+    check_camera_smooth_style, check_camera_time, check_camera_view, check_farclip,
+    check_frill_density, check_shadow_level, check_small_cull, check_tex_lod_bias, CvarCheck,
+    CvarVerdict,
 };
 pub use cvars::{small_cull_text, sstr_to_int};
 pub use cvars::{

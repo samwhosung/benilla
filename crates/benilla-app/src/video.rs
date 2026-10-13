@@ -208,6 +208,8 @@ pub(crate) fn on_cvar(
             }
             info!("video: full-screen effects {:?}", *ffx);
         }
+        // The registry refuses a value outside the callback's range (`0x688d40`); the clamp only
+        // keeps the knob in it.
         "farclip" => view.farclip = v.clamp(*FARCLIP_RANGE.start(), *FARCLIP_RANGE.end()),
         // Clamped, where the reference refuses an out-of-range write and keeps the value
         // (`0x688d90` echoes "NearClip must be in range 0.01 - 0.33" and returns 0).
@@ -248,8 +250,8 @@ pub(crate) fn on_cvar(
                 &benilla_ui::script::small_cull_text(v.clamp(0.0, 2.0) as usize),
             );
         }
-        // The same knob in the reference's cells per chunk, clamped to `[1, 256]`
-        // (`ClutterConfig::set_frill_density`); the loaded tiles re-scatter off the change.
+        // The same knob in the reference's cells per chunk, which the registry holds to `[1, 256]`
+        // (`0x688de0`); the loaded tiles re-scatter off the change.
         "frilldensity" => {
             clutter.set_frill_density(v);
             cvars.mirror(

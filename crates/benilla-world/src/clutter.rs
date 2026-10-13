@@ -140,8 +140,8 @@ impl ClutterConfig {
         self.density * benilla_formats::FRILL_DENSITY as f32
     }
 
-    /// Set the ground cover from a `frillDensity`, clamped to `[1, 256]` as the reference's change
-    /// callback `0x688de0` does, so zero is unreachable here.
+    /// Set the ground cover from a `frillDensity`, held to `[1, 256]`, the range the reference's
+    /// change callback `0x688de0` accepts (it refuses the rest), so zero is unreachable here.
     pub fn set_frill_density(&mut self, frill: f32) {
         self.density = frill.clamp(1.0, benilla_formats::FRILL_DENSITY_MAX as f32)
             / benilla_formats::FRILL_DENSITY as f32;

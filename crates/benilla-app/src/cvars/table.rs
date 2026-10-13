@@ -208,7 +208,8 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `ContainerFrame.lua:483` and `UIDropDownMenu.lua:525` branch on it and `OptionsFrame.lua:13`
     // gives it a checkbox.
     same("useUiScale", "0"),
-    same("farclip", "350"),
+    // `farclip` (`0x688654`, "350", callback `0x688d40`), which refuses outside [177, 777].
+    same("farclip", "350").checked(benilla_ui::script::check_farclip),
     // `nearclip` (`0x68867a`: name `0x84ffb0`, default `0x84fb48` "0.1", flags 1, callback
     // `0x688d90`, record `[0xc7f348]`). The camera re-reads the record every frame: `0x511bc0`
     // (sole caller `0x483094`) stamps `[cam+0x38]` from it through the handle `[0xbe1078]` that
@@ -330,9 +331,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // (`OptionsFrame.lua:431`). `hwDetect` sets 0.04 on the fallback row a modern GPU reaches.
     same(benilla_ui::script::CVAR_SMALL_CULL, "0.04").checked(benilla_ui::script::check_small_cull),
     // `frillDensity` (`0x68862e`: name `0x8423d8`, default `0x864644` "16", flags 1, callback
-    // `0x688de0`, record `[0xc7f2f4]`): detail-doodad cells visited per chunk, clamped to [1, 256]
-    // and handed through `0x6725a0` to `[0xc7b494]`, the bound of the scatter loop at
-    // `0x6bfcfb`/`0x6bff1c`. One knob with `WorldDetail`, each keeping its own clamp. `hwDetect`
+    // `0x688de0`, record `[0xc7f2f4]`): detail-doodad cells visited per chunk; the callback refuses
+    // outside [1, 256] and hands the rest through `0x6725a0` to `[0xc7b494]`, the bound of the
+    // scatter loop at `0x6bfcfb`/`0x6bff1c`. One knob with `WorldDetail`. `hwDetect`
     // (`0x639a60`) sets it from `VideoHardware.dbc` field `+0x18`, 24 on videoID 170. pfUI's
     // `hdgraphic` reads `GetCVar("frillDensity") > 48` and writes up to 256.
     deviates(
@@ -342,7 +343,8 @@ pub(crate) const REGISTERED: &[Registered] = &[
         "the reference's registered 16 is stop 0 and its post-`hwDetect` 24 is on no \
          stop at all, so every stop diverges; Medium (32) is the nearest one no sparser than a \
          fresh install, and erring sparse is the worse failure for ground cover",
-    ),
+    )
+    .checked(benilla_ui::script::check_frill_density),
     // ── Combat log display ranges, in yards ──────────────────────────────────────────────────────
     //
     // Registered by `0x626d00` from the `{name, default}` pairs at `0x8629e0`, read as the record's

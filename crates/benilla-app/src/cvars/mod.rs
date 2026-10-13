@@ -1279,11 +1279,17 @@ mod tests {
             "elsewhere.example.org",
             "a known key with a bad value is consumed, and the resource keeps its truth",
         );
-        // Clamps are the knob's own: volume to [0,1], farclip to FARCLIP_RANGE.
+        // Volume clamps at the knob to [0,1]; `farclip` refuses outside [177, 777] (`0x688d40`)
+        // and the old value stands.
         apply(&mut app, "mastervolume", "7");
         assert_eq!(res::<SoundConfig>(&app).master, 1.0);
-        apply(&mut app, "farclip", "50");
-        assert_eq!(res::<ViewDistance>(&app).farclip, *FARCLIP_RANGE.start());
+        apply(&mut app, "farclip", "400");
+        assert_eq!(apply(&mut app, "farclip", "50"), SetOutcome::Vetoed);
+        assert_eq!(res::<ViewDistance>(&app).farclip, 400.0);
+        assert_eq!(res::<Cvars>(&app).get("farclip"), Some("400"));
+        assert_eq!(apply(&mut app, "farclip", "1000"), SetOutcome::Vetoed);
+        assert_eq!(res::<ViewDistance>(&app).farclip, 400.0);
+        assert!(FARCLIP_RANGE.contains(&res::<ViewDistance>(&app).farclip));
         // `nearclip` clamps to the callback's `[0.01, 0.33]` (`0x688d90`).
         apply(&mut app, "nearclip", "0.001");
         assert_eq!(
@@ -1431,7 +1437,7 @@ mod tests {
         assert_eq!(res::<ClutterConfig>(&app).density, 1.0);
         apply(&mut app, "worlddetail", "7");
         assert_eq!(res::<ClutterConfig>(&app).density, 3.0);
-        // `frillDensity` is the same field in cells per chunk, with its own clamp `[1, 256]`
+        // `frillDensity` is the same field in cells per chunk, refused outside `[1, 256]`
         // (`0x688de0`); the stops round-trip through both spellings.
         apply(&mut app, "frillDensity", "48");
         assert_eq!(res::<ClutterConfig>(&app).density, 3.0);
@@ -1440,10 +1446,13 @@ mod tests {
         // Past the top stop is honoured; pfUI's `hdgraphic` writes up to 256.
         apply(&mut app, "frillDensity", "256");
         assert_eq!(res::<ClutterConfig>(&app).density, 16.0);
-        // `0` is not clutter-off: the callback pins it to 1.
-        apply(&mut app, "frillDensity", "9000");
+        // Past either end is refused and the density stands; `0` is not clutter-off.
+        assert_eq!(apply(&mut app, "frillDensity", "9000"), SetOutcome::Vetoed);
         assert_eq!(res::<ClutterConfig>(&app).density, 16.0);
-        apply(&mut app, "frillDensity", "0");
+        assert_eq!(apply(&mut app, "frillDensity", "0"), SetOutcome::Vetoed);
+        assert_eq!(res::<ClutterConfig>(&app).density, 16.0);
+        assert_eq!(res::<Cvars>(&app).get("frillDensity"), Some("256"));
+        apply(&mut app, "frillDensity", "1");
         assert_eq!(res::<ClutterConfig>(&app).density, 1.0 / 16.0);
         apply(&mut app, "WorldDetail", "1");
         assert_eq!(res::<ClutterConfig>(&app).density, 2.0);
@@ -1621,8 +1630,9 @@ mod tests {
         );
     }
 
-    /// The four video rows whose callbacks refuse (`SmallCull` `0x688b10`, `shadowLevel`
-    /// `0x688c10`, `texLodBias` `0x688c90`, `baseMip` `0x689090`): `CVar::Set` keeps the old value
+    /// The video rows whose callbacks refuse (`SmallCull` `0x688b10`, `shadowLevel` `0x688c10`,
+    /// `texLodBias` `0x688c90`, `baseMip` `0x689090`, `farclip` `0x688d40`, `frillDensity`
+    /// `0x688de0`): `CVar::Set` keeps the old value
     /// (`0x63df85`), and the console shows the callback's line, on the console and on a host write.
     #[test]
     fn a_refusing_callback_keeps_the_value_on_every_write() {
@@ -1648,6 +1658,18 @@ mod tests {
                 "0.0",
             ),
             ("baseMip 5", "BaseMip must be 0 or 1", "baseMip", "0"),
+            (
+                "farclip 1000",
+                "FarClip must be in range 177.0 - 777.0.",
+                "farclip",
+                "350",
+            ),
+            (
+                "frillDensity 0",
+                "Frill Density must be in range 1 - 256.",
+                "frillDensity",
+                "32",
+            ),
         ] {
             assert_eq!(
                 crate::console::execute(app.world_mut(), line),

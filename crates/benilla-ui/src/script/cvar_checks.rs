@@ -105,6 +105,30 @@ pub fn check_base_mip(value: &str, applied: &str) -> CvarVerdict {
     }
 }
 
+/// `farclip`'s callback (`0x688d40`): `SStrToFloat` (`0x64aaa0`), refused below 177
+/// (`[0x81021c]`) or above 777 (`[0x80fed8]`) with "FarClip must be in range 177.0 - 777.0."
+/// (`0x869a94`). As in `texLodBias`'s, the lower test reads the parse as is and the upper one the
+/// float it was stored to (`0x688d4c`, `0x688d5c`). Neither bound clamps.
+pub fn check_farclip(value: &str, _applied: &str) -> CvarVerdict {
+    let v = s_str_to_float(value);
+    if v < 177.0 || v as f32 > 777.0 || v.is_nan() {
+        CvarVerdict::refuse("FarClip must be in range 177.0 - 777.0.")
+    } else {
+        CvarVerdict::accept()
+    }
+}
+
+/// `frillDensity`'s callback (`0x688de0`): `SStrToInt` (`0x64ac60`) compared unsigned to 1 and
+/// 256 (`0x688dec`-`0x688df6`), so a negative is refused too, with "Frill Density must be in
+/// range 1 - 256." (`0x869ae4`).
+pub fn check_frill_density(value: &str, _applied: &str) -> CvarVerdict {
+    if (1..=256).contains(&(sstr_to_int(value) as u32)) {
+        CvarVerdict::accept()
+    } else {
+        CvarVerdict::refuse("Frill Density must be in range 1 - 256.")
+    }
+}
+
 /// The camera block's range validator (`0x50b330(value, min, max)`): `SStrToFloat` (`0x64aaa0`),
 /// refused below `min` or above `max` (unordered refuses too), each bound a float widened to the
 /// parse's precision, with `Value out of range (%f - %f)` (`0x84fb00`) printed through `0x63cd00`.
@@ -263,6 +287,31 @@ mod tests {
             !check_camera_time("0", "").accept,
             "the tilt time that panicked the clamp"
         );
+    }
+
+    #[test]
+    fn farclip_and_frill_density_refuse_without_clamping() {
+        for ok in ["177", "350", "777", "777.00001", "abc177"] {
+            let v = check_farclip(ok, "350");
+            assert_eq!(v.accept, ok != "abc177", "{ok}");
+        }
+        for bad in ["176.9", "1000", "-5", "0"] {
+            assert_eq!(
+                check_farclip(bad, "350"),
+                CvarVerdict::refuse("FarClip must be in range 177.0 - 777.0."),
+                "{bad}"
+            );
+        }
+        for ok in ["1", "16", "256", "48.9"] {
+            assert!(check_frill_density(ok, "16").accept, "{ok}");
+        }
+        for bad in ["0", "257", "-1", "9000", "abc"] {
+            assert_eq!(
+                check_frill_density(bad, "16"),
+                CvarVerdict::refuse("Frill Density must be in range 1 - 256."),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
