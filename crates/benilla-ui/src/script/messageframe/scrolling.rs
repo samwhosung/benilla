@@ -330,6 +330,37 @@ mod tests {
         assert_eq!(s.lines[0].alpha, 0.0);
     }
 
+    /// The link flag's producers (`+0x3b8`): a new line's relayout (`0x788234`), a line fading out
+    /// (`0x788538`), once, and any scroll entry, refused or not (`0x788bf1`, `0x788a8e`). The
+    /// fade's ramp alone raises nothing.
+    #[test]
+    fn the_link_flag_rises_on_relayout_fade_out_and_scroll() {
+        let mut s = ScrollingMessageState {
+            time_visible: 0.5,
+            fade_duration: 1.0,
+            ..Default::default()
+        };
+        assert!(!s.links_dirty, "the ctor clears it");
+        s.add("x".into(), 1.0, 1.0, 1.0);
+        assert!(std::mem::take(&mut s.links_dirty), "AddMessage relayouts");
+        s.tick(0.6);
+        s.tick(0.5);
+        assert!(
+            s.lines[0].alpha > 0.0 && !s.links_dirty,
+            "mid-ramp: no flag"
+        );
+        s.tick(0.6);
+        assert_eq!(s.lines[0].alpha, 0.0);
+        assert!(std::mem::take(&mut s.links_dirty), "the hide raises it");
+        s.tick(0.6);
+        assert!(!s.links_dirty, "a hidden line is not hidden again");
+        s.scroll_down(4);
+        assert!(
+            s.links_dirty,
+            "a scroll refused at the bottom re-arms and raises it"
+        );
+    }
+
     /// With a one-row viewport the scroll re-arms one line; the lines either side show the freeze.
     #[test]
     fn scrolled_up_freezes_the_fade() {
@@ -533,10 +564,11 @@ mod tests {
             2,
             "partial top line draws, off-top line doesn't"
         );
-        assert_eq!(texts[0].0, "new");
-        assert!((texts[0].1 - 90.0).abs() < 0.01 && (texts[0].2 - 104.0).abs() < 0.01);
-        assert_eq!(texts[1].0, "wrapped");
-        assert!((texts[1].1 - 104.0).abs() < 0.01 && (texts[1].2 - 132.0).abs() < 0.01);
+        // Farthest displayed line first, the link rebuild's walk (`0x788c8d`-`0x788d7d`).
+        assert_eq!(texts[0].0, "wrapped");
+        assert!((texts[0].1 - 104.0).abs() < 0.01 && (texts[0].2 - 132.0).abs() < 0.01);
+        assert_eq!(texts[1].0, "new");
+        assert!((texts[1].1 - 90.0).abs() < 0.01 && (texts[1].2 - 104.0).abs() < 0.01);
         let clip = quads
             .iter()
             .find_map(|q| match &q.content {
@@ -662,10 +694,10 @@ mod tests {
             .collect();
         // 'doomed' draws nothing but keeps its band at the top; the live lines hold the bottom two.
         assert_eq!(texts.len(), 2);
-        assert_eq!(texts[0].0, "b");
-        assert!((texts[0].1 - 0.0).abs() < 0.01);
-        assert_eq!(texts[1].0, "a");
-        assert!((texts[1].1 - 14.0).abs() < 0.01);
+        assert_eq!(texts[0].0, "a");
+        assert!((texts[0].1 - 14.0).abs() < 0.01);
+        assert_eq!(texts[1].0, "b");
+        assert!((texts[1].1 - 0.0).abs() < 0.01);
     }
 
     #[test]

@@ -50,6 +50,10 @@ pub struct ScrollingMessageState {
     pub fading_enabled: bool,
     /// Lines scrolled back from the newest; 0 is AtBottom, the only state in which fades tick.
     pub scroll_offset: usize,
+    /// The link-button rebuild flag (`+0x3b8`, cleared by the ctor at `0x7878d0`): set by a
+    /// relayout (`0x788a8e`), a line fading out (`0x788538`) and a fade re-arm (`0x788bf1`), and
+    /// spent by the per-frame rebuild (`0x788595` → `0x788c00`).
+    pub links_dirty: bool,
 }
 
 impl Default for ScrollingMessageState {
@@ -64,6 +68,7 @@ impl Default for ScrollingMessageState {
             fading_enabled: true,
             lines_gen: 0,
             scroll_offset: 0,
+            links_dirty: false,
         }
     }
 }
@@ -81,6 +86,8 @@ impl ScrollingMessageState {
         if id == 0 {
             return 0;
         }
+        // Past the guard the relayout runs whether or not a line matched (`0x78829e`).
+        self.links_dirty = true;
         let rgb = [quantize_u8(r), quantize_u8(g), quantize_u8(b)];
         let mut moved = 0;
         for line in self.lines.iter_mut().filter(|l| l.id == id) {
@@ -103,6 +110,8 @@ impl ScrollingMessageState {
     /// past `max_lines`; a scrolled-up view stays on the same lines.
     pub fn add_with_id(&mut self, text: String, r: f32, g: f32, b: f32, id: u32) {
         self.lines_gen = self.lines_gen.wrapping_add(1);
+        // Its relayout (`0x788234`).
+        self.links_dirty = true;
         let line = MessageLine {
             text,
             id,
@@ -137,6 +146,8 @@ impl ScrollingMessageState {
     /// `Clear` (`0x7882b0`): retire every line immediately (no fade), reset to the bottom.
     pub fn clear(&mut self) {
         self.lines_gen = self.lines_gen.wrapping_add(1);
+        // Its relayout (`0x7882c9`).
+        self.links_dirty = true;
         self.lines.clear();
         self.scroll_offset = 0;
     }
@@ -164,6 +175,9 @@ impl ScrollingMessageState {
     /// current `timeVisible`/`fadeDuration`, so even a fully faded line comes back (expiry frees
     /// nothing, `0x788525`). Engine-only, not a 1.12 Lua verb; every scroll entry reaches it.
     pub fn reset_all_fade_times(&mut self, viewport_rows: usize) {
+        // Both a refused scroll's re-arm (`0x788bf1`) and a moving one's relayout (`0x788a8e`)
+        // mark the links for rebuild.
+        self.links_dirty = true;
         let (time_visible, fade_duration) = (self.time_visible, self.fade_duration);
         for line in self.lines.range_mut(self.displayed_range(viewport_rows)) {
             line.time_left = time_visible;
@@ -261,13 +275,16 @@ impl ScrollingMessageState {
                 continue;
             }
             if self.fade_duration <= 0.0 {
-                // No ramp: the line vanishes when phase 1 ends.
+                // No ramp: the line vanishes when phase 1 ends, marking the links (`0x788538`).
+                self.links_dirty |= line.alpha > 0.0;
                 line.alpha = 0.0;
                 continue;
             }
             let remaining = f64::from(line.fade_left) - dt;
             line.fade_left = remaining as f32;
             if remaining <= 0.0 {
+                // The hide marks the links (`0x788538`), once: a hidden line is skipped after.
+                self.links_dirty |= line.alpha > 0.0;
                 line.fade_left = 0.0;
                 line.alpha = 0.0;
             } else {
