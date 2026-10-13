@@ -411,11 +411,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Value::Integer(i64::from(r.money)),
                 Value::Integer(i64::from(r.cod)),
                 Value::Number(f64::from(r.days_left)),
-                if r.item_count > 0 {
-                    Value::Integer(i64::from(r.item_count))
-                } else {
-                    Value::Nil
-                },
+                // hasItem is the constant 1.0 for a nonzero item entry (`0x4aef38`), not the stack.
+                flag(r.item_id != 0),
                 flag(r.was_read),
                 flag(r.was_returned),
                 flag(r.text_created),
@@ -1274,7 +1271,7 @@ mod tests {
         assert!(s
             .eval::<bool>(
                 "local a,b,c,d,e,f,g, has, read, ret, tc, reply, gm = GetInboxHeaderInfo(1)\n\
-                 return has == 3 and read == nil and ret == nil and tc == nil and reply == 1 and gm == nil",
+                 return has == 1 and read == nil and ret == nil and tc == nil and reply == 1 and gm == nil",
             )
             .unwrap());
 
