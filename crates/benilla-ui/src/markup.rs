@@ -178,8 +178,8 @@ pub fn token_at(text: &str, at: usize) -> Option<Token<'_>> {
                 kind: TokenKind::EscapedPipe,
                 byte_len: 2,
             },
-            // Uppercase opens and lowercase closes, inferred: the remap sends both to one arm,
-            // whose case test is untraced.
+            // The remap gives each case its own arm: `H` opens a link (`0x5c28eb`), `h` closes
+            // one (`0x5c29c8`).
             Some(b'H') => match parse_link_open(rest) {
                 Some((payload, byte_len)) => Token {
                     kind: TokenKind::LinkOpen { payload },

@@ -569,8 +569,9 @@ mod tests {
         assert_eq!(bg.corners[1], [195.0, 95.0]); // TR
         assert_eq!(bg.corners[2], [195.0, 5.0]); // BR
         assert_eq!(bg.corners[3], [5.0, 5.0]); // BL
-                                               // The span divides the frame's 200×100, not the 190×90 quad (`0x77f18f`): 12.5 tiles
-                                               // across the inset quad, each squeezed to 190/200 of its period.
+
+        // The span divides the frame's 200×100, not the 190×90 quad (`0x77f18f`): 12.5 tiles
+        // across the inset quad, each squeezed to 190/200 of its period.
         assert_eq!(bg.uvs[0], [0.0, 0.0]);
         assert!((bg.uvs[1][0] - 200.0 / 16.0).abs() < 1e-4);
         assert!((bg.uvs[2][1] - 100.0 / 16.0).abs() < 1e-4);
