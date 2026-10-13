@@ -129,17 +129,19 @@ pub fn playing_seq(player: &AnimationPlayer, anims: &ModelAnimations) -> Option<
         .or_else(|| anims.idle_seq().map(|seq| (seq, 0.0)))
 }
 
+/// What a hosted alpha reads off its host: the rig that names its sequence and clip time, and the
+/// scene clock its global sequences run on, either absent.
+type AlphaHost = (
+    Option<(&'static AnimationPlayer, &'static ModelAnimations)>,
+    Option<&'static crate::rig_anim::SceneClock>,
+);
+
 /// Sample every instance: a hosted one on its host's sequence and clip clock, and its global
 /// sequences on the host's scene clock when it stands in one ([`crate::rig_anim::SceneClock`]);
 /// a pinned one on its spawn clock; frozen ones keep their t = 0 sample. Hidden instances sample too, as the reference
 /// evaluates the tracks every frame regardless of the cull (`0x707b3a`–`0x707b5c`), or a batch
 /// born at weight 0 would stay hidden. Runs before the visibility authority.
-pub fn sample_mat_anim(
-    time: Res<Time>,
-    hosts: Query<(&AnimationPlayer, &ModelAnimations)>,
-    clocks: Query<&crate::rig_anim::SceneClock>,
-    mut q: Query<&mut MatAnim>,
-) {
+pub fn sample_mat_anim(time: Res<Time>, hosts: Query<AlphaHost>, mut q: Query<&mut MatAnim>) {
     let now = time.elapsed_secs();
     // The world clock in f64: a long-uptime f32 drifts whole milliseconds.
     let world = time.elapsed_secs_f64();
@@ -148,10 +150,11 @@ pub fn sample_mat_anim(
             continue;
         }
         // A host with no player yet keeps its last slot at t = 0, a bind-posed model's pose.
-        let played = m
+        let (rig, clock) = m
             .host
             .and_then(|h| hosts.get(h).ok())
-            .and_then(|(p, a)| playing_seq(p, a));
+            .unwrap_or((None, None));
+        let played = rig.and_then(|(p, a)| playing_seq(p, a));
         let (seq, elapsed) = match played {
             Some((seq, t)) => {
                 m.seq = Some(seq);
@@ -162,10 +165,7 @@ pub fn sample_mat_anim(
         };
         // The gseq cursor is sceneNow − attach, the anchor stamped on the first pass, on the
         // host's own scene clock when it has one.
-        let shared = m
-            .host
-            .and_then(|h| clocks.get(h).ok())
-            .map_or(world, |c| c.0);
+        let shared = clock.map_or(world, |c| c.0);
         let attach = *m.gseq_attach.get_or_insert(shared);
         m.current = m.anim.sample(seq, elapsed, shared - attach);
     }
@@ -298,6 +298,13 @@ impl UvAnimEntry {
 }
 
 impl UvLoop {
+    /// Move a per-sequence or per-instance lane to `host`'s player; a shared one has none.
+    fn set_host(&mut self, to: Entity) {
+        if let UvLoop::PerSeq { host, .. } | UvLoop::Instance { host, .. } = self {
+            *host = to;
+        }
+    }
+
     /// This lane for a twin of the material on another instance: the same loops, a per-sequence
     /// or per-instance one following `host`'s player.
     fn for_twin(&self, host: Entity) -> Self {
@@ -323,6 +330,13 @@ impl UvLoop {
 }
 
 impl TintLoop {
+    /// As [`UvLoop::set_host`].
+    fn set_host(&mut self, to: Entity) {
+        if let TintLoop::PerSeq { host, .. } = self {
+            *host = to;
+        }
+    }
+
     /// As [`UvLoop`]'s: the same loop, a per-sequence one following `host`.
     fn for_twin(&self, host: Entity) -> Self {
         match self {
@@ -422,12 +436,12 @@ pub struct UvAnimMaterials(
     >,
 );
 
-/// Give `twin`, a booth's relit clone of the registered material `source`, rows of its own on the
-/// scene clock `clock` carries: a copy of each of the source's lanes, a per-sequence one following
-/// `host`'s player instead. The source's rows run on the world's clock and are written only while
-/// the world draws it; a scene that owns its clock animates its models on that clock alone. An
-/// already registered twin only moves to `clock`. Returns whether the twin has a row, which its
-/// part's [`AnimMatPart`] marker must agree with.
+/// Give `twin`, a booth's relit clone of the registered material `source`, rows of its own for the
+/// model `root`: a copy of each of the source's lanes on `root`'s scene clock, a per-sequence one
+/// following `root`'s player. The source's rows run on the world's clock and are written only
+/// while the world draws it; a scene that owns its clock animates its models on that clock alone.
+/// An already registered twin moves to `root`, clock and player both. Returns whether the twin has
+/// a row, which its part's [`AnimMatPart`] marker must agree with.
 pub fn clocked_twin(
     uv: &mut UvAnimMaterials,
     tint: &mut TintAnimMaterials,
@@ -435,14 +449,13 @@ pub fn clocked_twin(
     materials: &mut bevy::asset::Assets<benilla_assets::materials::WowModelMaterial>,
     source: bevy::asset::AssetId<benilla_assets::materials::WowModelMaterial>,
     twin: bevy::asset::AssetId<benilla_assets::materials::WowModelMaterial>,
-    clock: Entity,
-    host: Entity,
+    root: Entity,
 ) -> bool {
     if source == twin {
         return false; // no twin was made: the source's rows are the world's
     }
     if let Some(src) = uv.0.get(&source) {
-        let lane = src.anim.for_twin(host);
+        let lane = src.anim.for_twin(root);
         let affine = src
             .affine
             .as_ref()
@@ -455,10 +468,17 @@ pub fn clocked_twin(
         }
     }
     if let Some(src) = tint.0.get(&source) {
-        let lane = src.anim.for_twin(host);
+        let lane = src.anim.for_twin(root);
         register_tint(tint, table, materials, twin, lane);
     }
-    scene_clocked(uv, tint, twin, clock);
+    // A twin registered for an earlier model follows this one.
+    if let Some(e) = uv.0.get_mut(&twin) {
+        e.anim.set_host(root);
+    }
+    if let Some(e) = tint.0.get_mut(&twin) {
+        e.anim.set_host(root);
+    }
+    scene_clocked(uv, tint, twin, root);
     uv.0.contains_key(&twin) || tint.0.contains_key(&twin)
 }
 
@@ -1450,6 +1470,13 @@ mod delta_tests {
             }
             _ => panic!("a per-sequence lane stays one"),
         }
+        // A twin already registered for another model moves to this one's player.
+        let mut moved = UvLoop::PerSeq {
+            seqs: seqs.clone(),
+            host: world_unit,
+        };
+        moved.set_host(booth);
+        assert!(matches!(moved, UvLoop::PerSeq { host, .. } if host == booth));
         let shared = uv_loop();
         match UvLoop::Shared(Some(shared.clone())).for_twin(booth) {
             UvLoop::Shared(Some(a)) => assert!(std::sync::Arc::ptr_eq(&a, &shared)),

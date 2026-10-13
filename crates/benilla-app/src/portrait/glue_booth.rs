@@ -436,9 +436,7 @@ impl CreateScene {
         // A fresh root for the incoming spawn, whose materials are its own; a resumed scene
         // brings its root back.
         if returning.is_none() {
-            self.root = commands
-                .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
-                .id();
+            self.root = commands.spawn(stage_root(layer)).id();
         }
         self.spawned = false;
         self.cam = None;
@@ -467,6 +465,32 @@ impl CreateScene {
         self.stage = p.stage;
         self.clock_ms = p.clock_ms;
         self.spawned = true;
+        true
+    }
+
+    /// Off the glue screens: drop every scene, parked or standing, and the relit twins of the
+    /// models that stood (`variants`), so nothing holds their materials and the tick frees their
+    /// rows. Returns whether a scene stood, for the caller to square its target back.
+    fn stand_down(&mut self, commands: &mut Commands) -> bool {
+        self.evict(commands, &[]);
+        self.variants.clear();
+        if self.token.is_none() {
+            return false;
+        }
+        commands.entity(self.root).despawn_related::<Children>();
+        self.dropped.push(self.root);
+        // Strip the rig state (pose buffer, player, palette slot): the root outlives its bakes.
+        super::clear_booth_rig(commands, self.root);
+        self.token = None;
+        self.handle = None;
+        self.spawned = false;
+        self.cam = None;
+        self.art = None;
+        self.viewport_aspect = None;
+        self.char_spot = Vec3::ZERO;
+        self.char_facing = Quat::IDENTITY;
+        self.char_scale = 1.0;
+        clear_pet(commands, self);
         true
     }
 
@@ -741,9 +765,7 @@ pub(super) fn spawn_glue_booth(
         .0
         .insert(GLUE_SLOT.to_string(), PortraitSource::Live(image.clone()));
     let layer = RenderLayers::layer(GLUE_LAYER);
-    let root = commands
-        .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
-        .id();
+    let root = commands.spawn(stage_root(&layer)).id();
     commands.spawn((
         // The shared booth view shape; [`super`] says why every booth camera spawns through it.
         super::booth_view_shape(),
@@ -799,14 +821,22 @@ pub(super) fn spawn_glue_booth(
         },
     );
     // The background scene's own root; the character root yaws, this one never does.
-    let scene_root = commands
-        .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
-        .id();
+    let scene_root = commands.spawn(stage_root(&layer)).id();
     // The pet's root never yaws: the reference's facing call turns only the character (`0x4730e0`).
-    let pet_root = commands
-        .spawn((Transform::IDENTITY, Visibility::Visible, layer))
-        .id();
+    let pet_root = commands.spawn(stage_root(&layer)).id();
     commands.insert_resource(CreateScene::empty(scene_root, pet_root));
+}
+
+/// A model root on the glue stage, its scene clock at 0 from birth (the widget scene's constructor
+/// zeroes it, `0x706ff0`), so no reader latches an anchor off the world's clock before
+/// [`pace_glue_clock`] first writes it.
+fn stage_root(layer: &RenderLayers) -> impl Bundle {
+    (
+        Transform::IDENTITY,
+        Visibility::Visible,
+        layer.clone(),
+        benilla_world::rig_anim::SceneClock(0.0),
+    )
 }
 
 /// Drive the glue FFX state ([`benilla_world::ffx_glow::GlueFfx`]) off the live look: the pass
@@ -912,23 +942,7 @@ pub(super) fn sync_glue_scene(
     let children = |e: Entity| kids.get(e).map(|c| c.to_vec()).unwrap_or_default();
     let Some(which) = preview.scene else {
         // Off the glue screens: tear the scene down, free the model, square target back.
-        scene.evict(&mut commands, &[]);
-        if scene.token.is_some() {
-            commands.entity(scene.root).despawn_related::<Children>();
-            let root = scene.root;
-            scene.dropped.push(root);
-            // Strip the rig state (pose buffer, player, palette slot): the root outlives its bakes.
-            super::clear_booth_rig(&mut commands, scene.root);
-            scene.token = None;
-            scene.handle = None;
-            scene.spawned = false;
-            scene.cam = None;
-            scene.art = None;
-            scene.viewport_aspect = None;
-            scene.char_spot = Vec3::ZERO;
-            scene.char_facing = Quat::IDENTITY;
-            scene.char_scale = 1.0;
-            clear_pet(&mut commands, &mut scene);
+        if scene.stand_down(&mut commands) {
             resize_target(&mut images, &booth.target, GLUE_SIZE, GLUE_SIZE);
         }
         for root in scene.dropped.drain(..) {
@@ -1660,7 +1674,6 @@ pub(super) fn sync_glue_booth(
                     source.id(),
                     twin.id(),
                     booth.root,
-                    booth.root,
                 );
                 let feathered = match blend {
                     (Some(source), Some(twin)) => benilla_world::doodad_anim::clocked_twin(
@@ -1670,7 +1683,6 @@ pub(super) fn sync_glue_booth(
                         &mut materials,
                         source.id(),
                         twin.id(),
-                        booth.root,
                         booth.root,
                     ),
                     _ => false,
@@ -2059,7 +2071,6 @@ pub(super) fn sync_glue_pet(
             &mut materials,
             source.id(),
             twin.id(),
-            pet_root,
             pet_root,
         )
     };
@@ -3248,6 +3259,11 @@ mod tests {
             "the select stage spawns on a root of its own"
         );
         assert_eq!(scene.clock_ms, 0, "on a clock of its own, from 0");
+        assert_eq!(
+            world.get::<benilla_world::rig_anim::SceneClock>(scene.root),
+            Some(&benilla_world::rig_anim::SceneClock(0.0)),
+            "born on it, so nothing latches the world's clock first"
+        );
         assert!(!scene.spawned);
         assert_eq!(*world.get::<Visibility>(login).unwrap(), Visibility::Hidden);
         assert!(world
@@ -3352,5 +3368,71 @@ mod tests {
         queue.apply(&mut world);
         assert_eq!(scene.dropped, vec![create]);
         assert!(world.get_entity(create).is_err());
+    }
+
+    /// Every stage root is born on a scene clock at 0, so a reader running before the first pace
+    /// (an alpha's global-sequence anchor) never latches the world's clock.
+    #[test]
+    fn the_glue_booths_roots_are_born_on_a_zero_scene_clock() {
+        use bevy::ecs::world::CommandQueue;
+        let mut world = World::new();
+        let mut images = Assets::<Image>::default();
+        let mut portraits = PortraitImages::default();
+        let mut booths = Booths::default();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            spawn_glue_booth(&mut commands, &mut images, &mut portraits, &mut booths);
+        }
+        queue.apply(&mut world);
+        let scene = world.resource::<CreateScene>();
+        let roots = [booths.0[GLUE_SLOT].root, scene.root, scene.pet_root];
+        for root in roots {
+            assert_eq!(
+                world.get::<benilla_world::rig_anim::SceneClock>(root),
+                Some(&benilla_world::rig_anim::SceneClock(0.0))
+            );
+        }
+    }
+
+    /// Off the glue screens every scene goes, parked or standing, and so do the relit twins of the
+    /// models that stood, so nothing holds their materials and the tick frees their rows.
+    #[test]
+    fn standing_down_drops_every_scene_and_every_twin() {
+        use bevy::ecs::world::CommandQueue;
+        let mut world = World::new();
+        let standing = world.spawn(Transform::IDENTITY).id();
+        let parked_root = world.spawn(Transform::IDENTITY).id();
+        let pet = world.spawn_empty().id();
+        let mut scene = CreateScene::empty(standing, pet);
+        scene.token = Some("Orc");
+        scene.handle = Some(Handle::default());
+        scene.spawned = true;
+        scene.parked.push(ParkedScene {
+            root: parked_root,
+            token: "MainMenu",
+            handle: Handle::default(),
+            cam: None,
+            art: None,
+            char_spot: Vec3::ZERO,
+            char_facing: Quat::IDENTITY,
+            char_scale: 1.0,
+            pet_spot: Vec3::ZERO,
+            pet_facing: Quat::IDENTITY,
+            pet_stage_scale: 1.0,
+            stage: 1,
+            clock_ms: 0,
+        });
+        scene
+            .variants
+            .insert(handle::<WowModelMaterial>(1).id(), handle(2));
+        let mut queue = CommandQueue::default();
+        let stood = scene.stand_down(&mut Commands::new(&mut queue, &world));
+        queue.apply(&mut world);
+        assert!(stood);
+        assert!(scene.variants.is_empty(), "the twins go");
+        assert!(scene.parked.is_empty() && scene.token.is_none());
+        assert_eq!(scene.dropped, vec![parked_root, standing]);
+        assert!(world.get_entity(parked_root).is_err());
     }
 }

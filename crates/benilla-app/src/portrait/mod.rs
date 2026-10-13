@@ -808,7 +808,8 @@ impl Plugin for PortraitPlugin {
                     glue_booth::pace_glue_clock
                         .after(glue_booth::drive_create_test)
                         .after(test_bake::dump_booth_target)
-                        .before(benilla_world::doodad_anim::MatAnimTick),
+                        .before(benilla_world::doodad_anim::MatAnimTick)
+                        .before(benilla_world::doodad_anim::sample_mat_anim),
                     dressup::sync_dressup_booth,
                     // After the syncs, the only writers of the yaw it spends.
                     booth::drive_booth_turn,
