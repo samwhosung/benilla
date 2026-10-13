@@ -97,6 +97,12 @@ pub(crate) struct MailOpen {
     show_requested: bool,
     /// A list or send answer landed since the last feed: the VM's request lock clears.
     request_resolved: bool,
+    /// Inbox list results parsed since the last feed, each owed a `MAIL_INBOX_UPDATE`
+    /// (`0x4ad5c6`-`0x4ad5d6`), changed or not.
+    list_results: u32,
+    /// Re-syncs this client asked for that the reference has no packet for: their answers update
+    /// the rows and announce nothing.
+    silent_lists: u32,
     /// The mail results since the last feed, in arrival order.
     pub(crate) results: Vec<MailResult>,
     /// Refusals of a request the client made no packet for, as message keys.
@@ -147,6 +153,9 @@ impl MailOpen {
         self.mailbox = None;
         self.show_requested = false;
         self.results.clear();
+        // A re-sync still in flight may never be answered (the server drops one from out of
+        // range), so a close stops counting on it.
+        self.silent_lists = 0;
         self.errors.clear();
     }
 
@@ -156,6 +165,7 @@ impl MailOpen {
         self.mails.clear();
         self.bodies.clear();
         self.request_resolved = false;
+        self.list_results = 0;
     }
 }
 
@@ -596,6 +606,7 @@ fn feed_mail(
         script.mail_request_resolved();
     }
     let show_requested = std::mem::take(&mut mail.show_requested);
+    let announced = std::mem::take(&mut mail.list_results);
     let changed = fresh != *last;
     if changed {
         script.set_mail(fresh.clone());
@@ -643,9 +654,16 @@ fn feed_mail(
         if show_requested {
             script.fire_event("MAIL_SHOW", vec![]);
         }
-        if changed {
+        // A change no list result announced: a row edited in place by a take, a name or an item
+        // template landing (`0x4af0a0`).
+        if changed && announced == 0 {
             script.fire_event("MAIL_INBOX_UPDATE", vec![]);
         }
+    }
+    // Every list result ends its parse in the event (`0x4ad5c6`-`0x4ad5d6`), changed or not, and
+    // whether or not the window is up.
+    for _ in 0..announced {
+        script.fire_event("MAIL_INBOX_UPDATE", vec![]);
     }
     *last = fresh;
     *last_mailbox = mail.mailbox;
@@ -1230,5 +1248,109 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(seen_in(&app), ["MAIL_SHOW"]);
+    }
+
+    /// A `feed_mail` app whose listener logs the mail events the stock frame reacts to.
+    fn feed_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<MailOpen>()
+            .init_resource::<MailPending>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::world_state::WorldStates>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<Time>()
+            .insert_resource(NetCommands(tx))
+            .add_systems(Update, feed_mail);
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"LOG = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("MAIL_INBOX_UPDATE")
+                f:SetScript("OnEvent", function() table.insert(LOG, event) end)"#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        (app, rx)
+    }
+
+    fn logged(app: &mut App) -> i64 {
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<i64>("return getn(LOG)")
+            .unwrap()
+    }
+
+    /// Every list result ends in `MAIL_INBOX_UPDATE` (`0x4ad5c6`-`0x4ad5d6`), changed or not, so an
+    /// addon that called `CheckInbox` hears the answer whatever it held. A list that answers a
+    /// re-sync the reference never asks for stays silent.
+    #[test]
+    fn every_list_result_signals_the_inbox_update() {
+        let (mut app, _rx) = feed_app();
+        app.world_mut().resource_mut::<MailOpen>().click(0x20);
+        app.update();
+        assert_eq!(logged(&mut app), 0, "opening announces no list");
+        let commands = NetCommands(crossbeam_channel::unbounded().0);
+        let list = || vec![entry(1, Some(0xA), 0, 30.0)];
+
+        net::mail_list(
+            list(),
+            &mut app.world_mut().resource_mut::<MailOpen>(),
+            &commands,
+        );
+        app.update();
+        assert_eq!(logged(&mut app), 1, "the first list");
+        net::mail_list(
+            list(),
+            &mut app.world_mut().resource_mut::<MailOpen>(),
+            &commands,
+        );
+        app.update();
+        assert_eq!(logged(&mut app), 2, "the same list again is still a result");
+        app.update();
+        assert_eq!(logged(&mut app), 2, "and one result is one signal");
+
+        // Two results in one frame signal twice.
+        for _ in 0..2 {
+            net::mail_list(
+                list(),
+                &mut app.world_mut().resource_mut::<MailOpen>(),
+                &commands,
+            );
+        }
+        app.update();
+        assert_eq!(logged(&mut app), 4);
+
+        // A take's re-sync is this client's own ask: its answer updates the rows, not the addons.
+        let (tx, _keep) = crossbeam_channel::unbounded();
+        let mut equip = crate::ui_items::EquipErrors::default();
+        net::send_mail_result(
+            1,
+            benilla_protocol::messages::mail_action::MONEY_TAKEN,
+            mail_error::OK,
+            None,
+            None,
+            &mut app.world_mut().resource_mut::<MailOpen>(),
+            &NetCommands(tx),
+            &mut equip,
+        );
+        net::mail_list(
+            list(),
+            &mut app.world_mut().resource_mut::<MailOpen>(),
+            &commands,
+        );
+        app.update();
+        assert_eq!(logged(&mut app), 4, "the re-sync's answer is silent");
+        net::mail_list(
+            list(),
+            &mut app.world_mut().resource_mut::<MailOpen>(),
+            &commands,
+        );
+        app.update();
+        assert_eq!(logged(&mut app), 5, "and swallows no later result");
     }
 }

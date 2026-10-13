@@ -89,9 +89,16 @@ fn on_session_end(
 /// `SMSG_MAIL_LIST_RESULT` replaces the rows; an expired row (`expire_days <= 0`) is deleted with
 /// `CMSG_MAIL_DELETE` and dropped, as the handler `0x4ad1b0` does. It never touches
 /// [`MailPending`]: nothing on the inbox path writes the countdown `0x845eac`.
-fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands: &NetCommands) {
+pub(super) fn mail_list(mails: Vec<MailListEntry>, mail: &mut MailOpen, commands: &NetCommands) {
     // The answer clears the request lock (`0x4ad5d0`).
     mail.resolve_request();
+    // The parse ends in `MAIL_INBOX_UPDATE` (`0x4ad5c6`), unless the list answers a re-sync the
+    // reference never asks for. Answers come back in the order they were asked.
+    if mail.silent_lists > 0 {
+        mail.silent_lists -= 1;
+    } else {
+        mail.list_results += 1;
+    }
     let mailbox = mail.mailbox;
     mail.mails = mails
         .into_iter()
@@ -130,7 +137,7 @@ fn take_empties(entry: &MailListEntry, action: u32) -> bool {
 
 /// `SMSG_SEND_MAIL_RESULT`: a `SEND` result is queued for the feed; a successful take updates the
 /// row and purges it when empty, and every successful take, return or delete re-lists the inbox.
-fn send_mail_result(
+pub(super) fn send_mail_result(
     mail_id: u32,
     action: u32,
     error: u32,
@@ -187,9 +194,11 @@ fn send_mail_result(
                     mail.mails.remove(pos);
                 }
             }
-            // Re-sync the inbox: the taken money/item or removed row is gone server-side.
+            // Re-sync the inbox: the taken money/item or removed row is gone server-side. The
+            // reference edits its rows in place and asks for nothing, so the answer is silent.
             if let Some(mailbox) = mail.mailbox {
                 let _ = commands.0.send(ClientCommand::GetMailList { mailbox });
+                mail.silent_lists += 1;
             }
         }
         mail_error::EQUIP_ERROR => equip_errors.0.push(EquipError {
