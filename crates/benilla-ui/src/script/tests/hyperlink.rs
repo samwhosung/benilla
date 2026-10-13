@@ -162,3 +162,59 @@ fn a_message_frame_line_gets_no_link_button() {
     assert!(s.eval::<bool>("return GetMouseFocus() == nil").unwrap());
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+fn set_spans_to(s: &mut UiScript, link: &str) {
+    let cf = s.model_ref().arena.lookup("CF").expect("CF");
+    s.set_link_spans(vec![(
+        cf,
+        Rect::new(120.0, 110.0, 134.0, 160.0),
+        link.to_string(),
+        format!("|H{link}|h[x]|h"),
+    )]);
+}
+
+/// A rebuild (`0x788c00`) hides every live button first (`0x7a3920`), so the hovered one leaves
+/// with the link it entered with, and the button that takes the new span enters afresh. The same
+/// spans again rebuild nothing.
+#[test]
+fn a_changed_span_list_leaves_the_hovered_link_before_the_new_one_enters() {
+    let mut s = chat();
+    s.run(
+        r#"
+        CF:SetScript("OnHyperlinkEnter", function() table.insert(log, "enter:"..arg1) end)
+        CF:SetScript("OnHyperlinkLeave", function() table.insert(log, "leave:"..arg1) end)
+        "#,
+    )
+    .unwrap();
+    s.mouse_move(130.0, 127.0);
+    set_link(&mut s, "CF");
+    assert_eq!(
+        log_of(&s),
+        format!("enter:{LINK}"),
+        "unchanged spans: no rebuild"
+    );
+    set_spans_to(&mut s, "item:2589");
+    s.mouse_move(131.0, 127.0);
+    s.mouse_move(300.0, 150.0);
+    assert_eq!(
+        log_of(&s),
+        format!("enter:{LINK} leave:{LINK} enter:item:2589 leave:item:2589")
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// A press held over a link whose span list changes before the release loses its capture with
+/// the hide, so the release clicks nothing.
+#[test]
+fn a_rebuild_under_a_held_press_drops_the_click() {
+    let mut s = chat();
+    s.mouse_move(130.0, 127.0);
+    s.mouse_button(130.0, 127.0, "LeftButton", true);
+    set_spans_to(&mut s, "item:2589");
+    s.mouse_button(130.0, 127.0, "LeftButton", false);
+    assert_eq!(log_of(&s), "");
+    // The next press and release click the new link.
+    click(&mut s, (130.0, 127.0), "LeftButton");
+    assert_eq!(log_of(&s), "click:item:2589#|Hitem:2589|h[x]|h#LeftButton");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}

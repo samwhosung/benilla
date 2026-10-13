@@ -223,9 +223,8 @@ pub(crate) struct Model {
     pub(crate) layout_last_scope: (usize, usize),
     /// Fixpoint rounds run across all solves.
     pub(crate) layout_rounds: u64,
-    /// Per text frame, its pool of hyperlink buttons (`[+0x314]`), the shown ones first
-    /// ([`super::hyperlink`]).
-    pub(crate) link_buttons: HashMap<FrameHandle, Vec<FrameHandle>>,
+    /// Per text frame, its hyperlink buttons, live and free ([`super::hyperlink::LinkPool`]).
+    pub(crate) link_buttons: HashMap<FrameHandle, super::hyperlink::LinkPool>,
     /// Region visuals (texture, colour, text) and layout (anchors, size, justify).
     pub(crate) region_data: HashMap<RegionHandle, RegionData>,
     /// The textures the regions' slots hold, with their creation stamps ([`super::texel`]).
