@@ -3,8 +3,9 @@
 //! `minimapZoom`/`minimapInsideZoom` CVars (default `"3"`) that re-seed it (`0x6d9008`); the app
 //! maps the index to a radius (`0x6da9b0`) and holds the ping as a world point.
 
-use mlua::{Lua, Table};
+use mlua::{Lua, Table, Value};
 
+use super::binding_abi::lua_number_text;
 use super::object::frame_handle_of;
 use super::Model;
 use crate::widget::{KindState, MinimapState, MINIMAP_ZOOM_LEVELS};
@@ -96,12 +97,34 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
     m.set(
-        // The disc's mask art, write-only as in the reference. An absent or empty path restores
-        // the default circle rather than unmasking the map; what the reference's `0x4ee4a0` does
-        // with one is untraced.
+        // The disc's mask art, write-only as in the reference (`0x4ee4a0`). The receiver is checked
+        // first, then `lua_isstring(2)` (`0x4ee532`): anything but a string or a number raises
+        // `Usage: %s:SetMaskTexture("file")` (`0x84c7fc`), naming the frame or `<unnamed>`. An
+        // empty path restores the default circle rather than unmasking the map; what the
+        // reference does with one is untraced.
         "SetMaskTexture",
-        lua.create_function(|lua, (this, path): (Table, Option<String>)| {
-            let path = path.filter(|p| !p.is_empty());
+        lua.create_function(|lua, (this, path): (Table, Value)| {
+            let path = match path {
+                Value::String(s) => s.to_string_lossy(),
+                Value::Integer(i) => lua_number_text(i as f64),
+                Value::Number(n) => lua_number_text(n),
+                _ => {
+                    let name = with_minimap(lua, &this, |_| ())
+                        .and_then(|()| frame_handle_of(lua, &this))
+                        .map(|h| {
+                            lua.app_data_ref::<Model>()
+                                .expect("model app_data")
+                                .arena
+                                .frame(h)
+                                .and_then(|f| f.name.clone())
+                        })?;
+                    let name = name.unwrap_or_else(|| "<unnamed>".to_string());
+                    return Err(mlua::Error::runtime(format!(
+                        "Usage: {name}:SetMaskTexture(\"file\")"
+                    )));
+                }
+            };
+            let path = Some(path).filter(|p| !p.is_empty());
             with_minimap(lua, &this, |m| m.mask_texture = path)
         })?,
     )?;

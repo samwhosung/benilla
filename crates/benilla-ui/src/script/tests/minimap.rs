@@ -251,12 +251,33 @@ fn set_mask_texture_is_state_and_empty_restores_the_default() {
         Some("Interface\\AddOns\\pfUI\\img\\minimap")
     );
 
-    // Empty and nil both restore the engine's circle, never "no mask".
+    // Empty restores the engine's circle, never "no mask".
     s.run(r#"m:SetMaskTexture("")"#).unwrap();
     assert_eq!(s.minimap_mask_texture(), None);
-    s.run(r#"m:SetMaskTexture("Interface\\Foo") m:SetMaskTexture(nil)"#)
+
+    // `lua_isstring(2)` (`0x4ee532`): a missing or nil path raises `0x84c7fc` and keeps the mask.
+    s.run(r#"m:SetMaskTexture("Interface\\Foo")"#).unwrap();
+    for chunk in [
+        "m:SetMaskTexture()",
+        "m:SetMaskTexture(nil)",
+        "m:SetMaskTexture({})",
+    ] {
+        assert_eq!(
+            crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
+            "Usage: TestMinimap:SetMaskTexture(\"file\")",
+            "{chunk}"
+        );
+    }
+    assert_eq!(s.minimap_mask_texture().as_deref(), Some("Interface\\Foo"));
+    s.run(r#"CreateFrame("Minimap"):SetMaskTexture(5)"#)
         .unwrap();
-    assert_eq!(s.minimap_mask_texture(), None);
+    assert_eq!(
+        crate::script::lua_message(
+            &s.run(r#"CreateFrame("Minimap"):SetMaskTexture(false)"#)
+                .unwrap_err()
+        ),
+        "Usage: <unnamed>:SetMaskTexture(\"file\")"
+    );
 
     assert!(s.eval::<bool>("return m.GetMaskTexture == nil").unwrap());
 }
