@@ -105,6 +105,61 @@ pub fn check_base_mip(value: &str, applied: &str) -> CvarVerdict {
     }
 }
 
+/// The camera block's range validator (`0x50b330(value, min, max)`): `SStrToFloat` (`0x64aaa0`),
+/// refused below `min` or above `max` (unordered refuses too), each bound a float widened to the
+/// parse's precision, with `Value out of range (%f - %f)` (`0x84fb00`) printed through `0x63cd00`.
+/// So a lower bound stored as a float above its decimal refuses that decimal: "0.1" parses under
+/// the float 0.1, and `cameraYawMoveSpeed 0.1` is refused.
+fn camera_range(value: &str, min: f32, max: f32) -> CvarVerdict {
+    let v = s_str_to_float(value);
+    if v >= f64::from(min) && v <= f64::from(max) {
+        CvarVerdict::accept()
+    } else {
+        CvarVerdict::refuse(format!(
+            "Value out of range ({:.6} - {:.6})",
+            f64::from(min),
+            f64::from(max)
+        ))
+    }
+}
+
+/// `0x50c000`, the camera's angular rates (`camera*MoveSpeed`, `camera*SmoothSpeed`): its bounds
+/// are degrees made from radians, `[0x8089ec]·[0x803a78]` and `[0x8089e8]·[0x803a78]` stored as
+/// floats, 0.1 and 360.
+pub fn check_camera_rate(value: &str, _applied: &str) -> CvarVerdict {
+    const DEG_PER_RAD: f32 = 57.295_78; // [0x803a78]
+    let min = (f64::from(0.001_745_329_2f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089ec]
+    let max = (f64::from(6.283_185_5f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089e8]
+    camera_range(value, min, max)
+}
+
+/// `0x50bfe0`, the camera's durations and the bob frequency: `[0x8089fc]` 0.001 to `[0x8089f8]`
+/// 300.
+pub fn check_camera_time(value: &str, _applied: &str) -> CvarVerdict {
+    camera_range(value, 0.001, 300.0)
+}
+
+/// `0x50c040`, the camera's decay rates (`cameraBobbingSmoothSpeed`, `cameraDistanceMoveSpeed`):
+/// `[0x8089f4]` 1/360 to `[0x8089f0]` 50.
+pub fn check_camera_decay(value: &str, _applied: &str) -> CvarVerdict {
+    camera_range(value, 1.0 / 360.0, 50.0)
+}
+
+/// `0x50b310`, `cameraDistanceMax`: `[0x8089a8]` 0 to `[0x8089a4]` 50.
+pub fn check_camera_distance_max(value: &str, _applied: &str) -> CvarVerdict {
+    camera_range(value, 0.0, 50.0)
+}
+
+/// `0x50c060`, `cameraSmoothStyle` and `cameraSmoothTrackingStyle`: 0 to 3.
+pub fn check_camera_smooth_style(value: &str, _applied: &str) -> CvarVerdict {
+    camera_range(value, 0.0, 3.0)
+}
+
+/// `0x50bfc0`, `cameraView`: 0 to 4.
+pub fn check_camera_view(value: &str, _applied: &str) -> CvarVerdict {
+    camera_range(value, 0.0, 4.0)
+}
+
 /// `sscanf(s, "%f")` as the reference's CRT reads it: leading white space, an optional sign, digits
 /// with at most one `.` (at least one digit), then `e`/`E` with an optional sign and digits,
 /// converted as a double and stored as a float. `None` when no number starts the string.
@@ -148,6 +203,67 @@ fn scanf_f(s: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x50b330` through each wrapper: values at the float bounds pass, values past them do not,
+    /// and the line prints the float bounds with `%f`.
+    #[test]
+    fn the_camera_ranges_are_the_validators() {
+        for (check, lo, hi, line) in [
+            (
+                check_camera_rate as CvarCheck,
+                "0.10000001",
+                "360",
+                "Value out of range (0.100000 - 360.000000)",
+            ),
+            (
+                check_camera_time,
+                "0.0010000001",
+                "300",
+                "Value out of range (0.001000 - 300.000000)",
+            ),
+            (
+                check_camera_decay,
+                "0.002777778",
+                "50",
+                "Value out of range (0.002778 - 50.000000)",
+            ),
+            (
+                check_camera_distance_max,
+                "0",
+                "50",
+                "Value out of range (0.000000 - 50.000000)",
+            ),
+            (
+                check_camera_smooth_style,
+                "0",
+                "3",
+                "Value out of range (0.000000 - 3.000000)",
+            ),
+            (
+                check_camera_view,
+                "0",
+                "4",
+                "Value out of range (0.000000 - 4.000000)",
+            ),
+        ] {
+            assert!(check(lo, "").accept, "{line}: {lo}");
+            assert!(check(hi, "").accept, "{line}: {hi}");
+            for bad in ["-1", "1000", "1e9"] {
+                assert_eq!(check(bad, ""), CvarVerdict::refuse(line), "{bad}");
+            }
+        }
+        // `SStrToFloat`: no `+`, no leading space, so both read 0.
+        assert!(!check_camera_rate("+90", "").accept);
+        assert!(check_camera_smooth_style(" 9", "").accept);
+        assert!(!check_camera_rate("0.0999", "").accept);
+        // The bound is the float nearest 0.1, which is above the parse of "0.1".
+        assert!(!check_camera_rate("0.1", "").accept);
+        assert!(!check_camera_time("0.001", "").accept);
+        assert!(
+            !check_camera_time("0", "").accept,
+            "the tilt time that panicked the clamp"
+        );
+    }
 
     #[test]
     fn small_cull_takes_0_001_to_2() {

@@ -76,16 +76,8 @@ pub(crate) fn on_cvar(
         "mousespeed" => {
             look.sensitivity = v.clamp(*MOUSE_SPEED_RANGE.start(), *MOUSE_SPEED_RANGE.end());
         }
+        // The registry refuses a speed outside the validator's range (`0x50c000`).
         "camerayawmovespeed" | "camerapitchmovespeed" => {
-            if !CAMERA_SPEED_RANGE.contains(&v) {
-                warn!(
-                    "cvar {}: value out of range ({} - {}) — ignored",
-                    ev.name,
-                    CAMERA_SPEED_RANGE.start(),
-                    CAMERA_SPEED_RANGE.end()
-                );
-                return;
-            }
             if ev.is("cameraYawMoveSpeed") {
                 look.yaw_speed = v;
             } else {
@@ -121,10 +113,6 @@ pub(crate) fn on_cvar(
 /// shipped feel: both axes turn alike, where the reference's yaw turns 1.5× faster than its pitch.
 const LOOK_YAW_PER_SPEED: f32 = LOOK_SENSITIVITY / 180.0;
 const LOOK_PITCH_PER_SPEED: f32 = LOOK_SENSITIVITY / 90.0;
-
-/// The reference's validator range for the `camera*MoveSpeed`/`SmoothSpeed` CVars (`0x50c000` →
-/// `0x50b330`): an out-of-range value prints "Value out of range" and the old one stands.
-pub(crate) const CAMERA_SPEED_RANGE: std::ops::RangeInclusive<f32> = 0.1..=360.0;
 
 /// The mouse-look knobs. `invert_pitch` is 1.12's `mouseInvertPitch` checkbox
 /// (`UIOptionsFrame.lua:4`); `sensitivity` is `mousespeed`, scaling both the rotation and the click

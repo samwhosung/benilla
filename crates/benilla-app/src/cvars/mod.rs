@@ -439,16 +439,22 @@ impl Cvars {
                 warn!("config: {name}: unparseable value '{value}' ignored");
                 continue;
             }
-            // The callback runs on the saved value and its answer is ignored: the file is read
-            // before these rows are registered, and `CVar::Register` on the record it made calls
-            // the callback without testing the result (`0x63dc58`), so the value stands.
-            if let Some(check) = row.check {
-                self.console.extend(check(value, &row.value).line);
-            }
+            // The callback runs on the saved value and its answer is not tested: the file is read
+            // before these rows are registered (`0x402375`), and `CVar::Register` on the record it
+            // made calls the callback and ignores the result (`0x63dc58`), so the value stands.
+            // A refusing callback applied nothing, so no observer fires for it.
+            let applies = row.check.is_none_or(|check| {
+                let verdict = check(value, &row.value);
+                self.console.extend(verdict.line);
+                verdict.accept
+            });
             if row.value == *value {
                 continue;
             }
             let old = std::mem::replace(&mut row.value, value.clone());
+            if !applies {
+                continue;
+            }
             self.events.push(CvarChanged {
                 name: row.name.clone(),
                 old,
@@ -1371,7 +1377,11 @@ mod tests {
         );
         apply(&mut app, "cameraYawSmoothSpeed", "270");
         assert_eq!(res::<FollowConfig>(&app).yaw_speed, 270.0);
-        apply(&mut app, "cameraYawSmoothSpeed", "9000");
+        // Past the validator's 360 (`0x50c000`): refused, 270 stands.
+        assert_eq!(
+            apply(&mut app, "cameraYawSmoothSpeed", "9000"),
+            SetOutcome::Vetoed
+        );
         assert_eq!(
             res::<FollowConfig>(&app).yaw_speed,
             *FOLLOW_SPEED_RANGE.end()
@@ -1391,9 +1401,12 @@ mod tests {
         assert_eq!(res::<ZoomLimit>(&app).max, 0.0);
         apply(&mut app, "cameraDistanceMaxFactor", "nan");
         assert_eq!(res::<ZoomLimit>(&app).max, 50.0);
-        // Out of `cameraDistanceMax`'s validator range: refused at the knob, 25 stands.
+        // Out of `cameraDistanceMax`'s validator range (`0x50b310`): refused, 25 stands.
         apply(&mut app, "cameraDistanceMaxFactor", "1");
-        apply(&mut app, "cameraDistanceMax", "60");
+        assert_eq!(
+            apply(&mut app, "cameraDistanceMax", "60"),
+            SetOutcome::Vetoed
+        );
         assert_eq!(res::<ZoomLimit>(&app).max, 25.0);
         apply(&mut app, "autoLootDefault", "1");
         assert!(res::<LootConfig>(&app).auto_loot);
@@ -1663,6 +1676,64 @@ mod tests {
         assert_eq!(cvars.get("texLodBias"), Some("0.0"));
         assert!(!cvars.has_events() && !cvars.has_outbox() && !cvars.dirty);
         assert_eq!(cvars.set("texLodBias", "-0.5"), SetOutcome::Changed);
+    }
+
+    /// The camera block's validator `0x50b330`, through its wrappers `0x50c000`, `0x50bfe0` and
+    /// `0x50c040`: an out-of-range rate, time or decay keeps the old value and prints the range
+    /// (`0x84fb00`), so a zero can no longer stall an ease or invert a clamp. A saved one stands
+    /// in the row but reaches no knob, as the callback that refused it applied nothing.
+    #[test]
+    fn the_camera_validators_refuse_out_of_range_rates_and_times() {
+        let mut app = cvar_app();
+        app.init_resource::<crate::console::ConsoleEcho>();
+        for (line, said, name, kept) in [
+            (
+                "cameraTerrainTiltTimeMax 0",
+                "Value out of range (0.001000 - 300.000000)",
+                "cameraTerrainTiltTimeMax",
+                "10",
+            ),
+            (
+                "cameraTargetSmoothSpeed 0",
+                "Value out of range (0.100000 - 360.000000)",
+                "cameraTargetSmoothSpeed",
+                "90",
+            ),
+            (
+                "cameraBobbingSmoothSpeed 0",
+                "Value out of range (0.002778 - 50.000000)",
+                "cameraBobbingSmoothSpeed",
+                "0.8",
+            ),
+            (
+                "cameraYawMoveSpeed 400",
+                "Value out of range (0.100000 - 360.000000)",
+                "cameraYawMoveSpeed",
+                "180",
+            ),
+            (
+                "cameraSmoothStyle 4",
+                "Value out of range (0.000000 - 3.000000)",
+                "cameraSmoothStyle",
+                "1",
+            ),
+        ] {
+            assert_eq!(
+                crate::console::execute(app.world_mut(), line),
+                [said],
+                "{line}"
+            );
+            assert_eq!(res::<Cvars>(&app).get(name), Some(kept), "{line}");
+        }
+        assert!(crate::console::execute(app.world_mut(), "cameraTerrainTiltTimeMax 20").is_empty());
+        assert_eq!(
+            res::<Cvars>(&app).get("cameraTerrainTiltTimeMax"),
+            Some("20")
+        );
+
+        let cvars = registry(&[("cameraTerrainTiltTimeMax", "0")]);
+        assert_eq!(cvars.get("cameraTerrainTiltTimeMax"), Some("0"));
+        assert!(!cvars.has_events(), "the refused value reaches no knob");
     }
 
     /// The config file is read before these rows are registered, and `CVar::Register` runs the

@@ -59,8 +59,9 @@ pub(crate) struct CameraOptions {
     pub(crate) water_collision: bool,
 }
 
-/// Applies a camera option CVar change. The numeric rows take any value, where the reference's
-/// `0x50b330` refuses an out-of-range smooth speed, tilt time or bob frequency.
+/// Applies a camera option CVar change. An out-of-range smooth speed, tilt time or bob rate never
+/// arrives: the registry refuses it as the reference's `0x50b330` does
+/// ([`benilla_ui::script::CvarCheck`]), and a saved one stands without firing.
 pub(crate) fn on_cvar(ev: On<crate::cvars::CvarChanged>, mut opts: ResMut<CameraOptions>) {
     let v = ev.num();
     match ev.key().as_str() {

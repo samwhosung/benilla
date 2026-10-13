@@ -231,11 +231,13 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // `TOGGLEAUTOSELFCAST` toggles it.
     same("autoSelfCast", "0"),
     // The five saved camera views and the live index, at the reference's names and default strings;
-    // owned by [`crate::player::camera_view`]. Registered so a `SaveView` persists.
+    // owned by [`crate::player::camera_view`]. Registered so a `SaveView` persists. The index's
+    // validator `0x50bfc0` takes 0 to 4.
     same(
         crate::player::camera_view::CVAR_ACTIVE_VIEW,
         crate::player::camera_view::ACTIVE_VIEW_DEFAULT,
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_view),
     same(
         crate::player::camera_view::VIEW_CVARS[0][0],
         crate::player::camera_view::VIEW_DEFAULTS[0][0],
@@ -390,10 +392,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // writes `cameraPitchMoveSpeed` as half of it (`:355-356`). The reference integrates
     // OS-accelerated pixels where we take raw device deltas, so the unit factor lives in
     // `camera::LOOK_YAW_PER_SPEED` and these defaults stay the reference's. The validator
-    // `0x50c000` → `0x50b330` rejects values outside [0.1, 360] rather than clamping, and
-    // `player::camera::on_cvar` does the same.
-    same("cameraYawMoveSpeed", "180"),
-    same("cameraPitchMoveSpeed", "90"),
+    // `0x50c000` → `0x50b330` refuses values outside [0.1, 360] rather than clamping.
+    same("cameraYawMoveSpeed", "180").checked(benilla_ui::script::check_camera_rate),
+    same("cameraPitchMoveSpeed", "90").checked(benilla_ui::script::check_camera_rate),
     // MOUSE_SENSITIVITY (`UIOptionsFrame.lua:87`): FrameXML's spelling of the binary's `mouseSpeed`
     // (`0x402c7b`); lookups are case-insensitive (`CVar::Lookup 0x63de30`), here as there. The
     // reference's default is `SPI_GETMOUSESPEED × 0.1`, "1.0" on stock Windows, and its record
@@ -403,23 +404,23 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("mousespeed", "1"),
     // The zoom-out limit is `cameraDistanceMax × cameraDistanceMaxFactor`, held to [0, 50]
     // (`0x5112d6`). `cameraDistanceMax` (`0x50beb2`, default `0x84fbd0`) has no panel row; its
-    // validator `0x50b310` refuses a value outside [0, 50], and `player::camera::on_cvar` does the
-    // same. The factor is MAX_FOLLOW_DIST (`UIOptionsFrame.lua:90`), registered "1.0" (`0x82e92c`)
+    // validator `0x50b310` refuses a value outside [0, 50]. The factor is MAX_FOLLOW_DIST (`UIOptionsFrame.lua:90`), registered "1.0" (`0x82e92c`)
     // with no validator: the slider's 1 to 2 is the slider's, not the CVar's.
-    same("cameraDistanceMax", "15.0"),
+    same("cameraDistanceMax", "15.0").checked(benilla_ui::script::check_camera_distance_max),
     same("cameraDistanceMaxFactor", "1"),
     // `cameraSmoothStyle` (`0x50ba92`, default `[0x84f4f4]` "1"), the auto-return behind the
     // character. The engine's enum is 0 Never, 1 Smart, 2 Always, as the stock dropdown writes it
     // (`UIOptionsFrame.lua:525,536,547`); 3, the Never entry's position, is the validator's upper
     // bound (`0x50b330(v, 0, 3)`). See `FollowStyle`.
-    same("cameraSmoothStyle", "1"),
+    same("cameraSmoothStyle", "1").checked(benilla_ui::script::check_camera_smooth_style),
     // Read instead of `cameraSmoothStyle` while the state mask holds Track or Fear; no panel row.
-    same("cameraSmoothTrackingStyle", "1"),
+    same("cameraSmoothTrackingStyle", "1").checked(benilla_ui::script::check_camera_smooth_style),
     // AUTO_FOLLOW_SPEED (`UIOptionsFrame.lua:88`), deg/s, registered "180.0" (`[0xbe1070]`): it
     // sets the transition's duration (`|dyaw| / rate * factor`), an average rate, not a slew. The
-    // knob clamps it to `FOLLOW_SPEED_RANGE`. The stock Save also writes `cameraPitchSmoothSpeed`
+    // validator `0x50c000` refuses outside [0.1, 360]; the knob then clamps to `FOLLOW_SPEED_RANGE`,
+    // the slider's. The stock Save also writes `cameraPitchSmoothSpeed`
     // at a quarter (`:353`), unregistered here: `FollowRig` has one rate.
-    same("cameraYawSmoothSpeed", "180"),
+    same("cameraYawSmoothSpeed", "180").checked(benilla_ui::script::check_camera_rate),
     // `cameraPivot` `[0xbe10a4]` "1" (`0x50bda3`), smart pivot: gate `0x510690`, routing
     // `0x50fee0`, release `0x5107f0`; ours is `player::camera_dynamics::SmartPivot`.
     same("cameraPivot", "1"),
@@ -429,7 +430,7 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("cameraPivotDYMin", "0"),
     // The pitch bias's ease-back once the pivot lets go, deg/s (`[0xbe0fc8]`; `0x512a50` divides
     // |Δ| by rate · π/180 for the duration); no panel row.
-    same("cameraTargetSmoothSpeed", "90"),
+    same("cameraTargetSmoothSpeed", "90").checked(benilla_ui::script::check_camera_rate),
     // `cameraWaterCollision` `[0xbe1088]` "1" (`0x50bd63`, `0x82e748`): one register, two consumers
     // that must ship together. `0x50e5ec` builds it; its `0xf0000` nibble joins the trace mask of
     // all three `0x50e570` queries (reaching `0x69cc13`), and `0x50e629` tests it to lift the sweep
@@ -441,9 +442,10 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("cameraTerrainTilt", "0"),
     // Rate in deg/s (`[0xbe0fc0]`), duration bounds in seconds (`[0xbe1050]`/`[0xbe1054]`). The 3 s
     // floor always binds (20° at 7.5°/s is 2.67 s), so the camera leans rather than tracks.
-    same("cameraGroundSmoothSpeed", "7.5"),
-    same("cameraTerrainTiltTimeMin", "3"),
-    same("cameraTerrainTiltTimeMax", "10"),
+    // Their validators: `0x50c000` for the rate, `0x50bfe0` for the bounds.
+    same("cameraGroundSmoothSpeed", "7.5").checked(benilla_ui::script::check_camera_rate),
+    same("cameraTerrainTiltTimeMin", "3").checked(benilla_ui::script::check_camera_time),
+    same("cameraTerrainTiltTimeMax", "10").checked(benilla_ui::script::check_camera_time),
     // `cameraBobbing` `[0xbe10c0]` "0" (`0x50b76d`), head bob: kernel `0x511920`, gate `0x5105e0`;
     // ours is `player::camera_dynamics::HeadBob`.
     same("cameraBobbing", "0"),
@@ -452,8 +454,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // divides the largest component by it for the ramp's duration (~0.069 s at these defaults).
     same("cameraBobbingLRAmplitude", "2"),
     same("cameraBobbingUDAmplitude", "2"),
-    same("cameraBobbingFrequency", "0.8"),
-    same("cameraBobbingSmoothSpeed", "0.8"),
+    // Validated by `0x50bfe0` and `0x50c040`.
+    same("cameraBobbingFrequency", "0.8").checked(benilla_ui::script::check_camera_time),
+    same("cameraBobbingSmoothSpeed", "0.8").checked(benilla_ui::script::check_camera_decay),
     // `statusBarText` (`0x48fc34`, record `[0xb4d904]`, no engine reader), read by
     // `TextStatusBar.lua:47,97`: "0" shows the numbers on hover only.
     same("statusBarText", "0"),
