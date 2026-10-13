@@ -545,6 +545,53 @@ mod tests {
         assert!(!parses("local a = ... return a"));
     }
 
+    /// The client's `luaO_str2d` (`0x6f5900`) is `strtod` (`0x741e39`) and a trailing-space skip:
+    /// a decimal numeral or nothing. Every coercion goes through it, so hexadecimal, `inf` and
+    /// `nan` are not numbers to `tonumber`, to arithmetic or to a binding's argument, and a source
+    /// `0x10` does not compile.
+    #[test]
+    fn only_a_decimal_numeral_is_a_number() {
+        let s = UiScript::new().unwrap();
+        for text in [
+            "0x10", "0X1A", "0x1p4", "-0x2", " 0x10 ", "inf", "nan", "infinity",
+        ] {
+            assert!(
+                s.eval::<bool>(&format!("return tonumber({text:?}) == nil"))
+                    .unwrap(),
+                "tonumber({text:?})"
+            );
+        }
+        for (text, n) in [
+            (" 12 ", 12.0),
+            ("1e2", 100.0),
+            ("-.5", -0.5),
+            ("5.", 5.0),
+            ("+3", 3.0),
+        ] {
+            assert_eq!(
+                s.eval::<f64>(&format!("return tonumber({text:?})"))
+                    .unwrap(),
+                n,
+                "tonumber({text:?})"
+            );
+        }
+        // A base still reads hexadecimal digits: that is `strtoul`, not `luaO_str2d`.
+        assert_eq!(s.eval::<f64>(r#"return tonumber("10", 16)"#).unwrap(), 16.0);
+        assert!(!s
+            .eval::<bool>(r#"return (pcall(function() return "0x2" + 1 end))"#)
+            .unwrap());
+        assert_eq!(s.eval::<f64>(r#"return "2" + 1"#).unwrap(), 3.0);
+        // A binding's numeric argument: `GetCraftInfo`'s index raises on a non-number.
+        assert!(!s
+            .eval::<bool>(r#"return (pcall(GetCraftInfo, "0x2"))"#)
+            .unwrap());
+        assert!(s
+            .eval::<bool>(r#"return (pcall(GetCraftInfo, "2"))"#)
+            .unwrap());
+        let err = s.run("return 0x10").unwrap_err().to_string();
+        assert!(err.contains("malformed number"), "{err}");
+    }
+
     #[test]
     fn sort_foreach_and_foreachi_are_bare_globals_like_the_reference() {
         let s = UiScript::new().unwrap();

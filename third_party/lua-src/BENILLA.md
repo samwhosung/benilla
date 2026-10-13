@@ -33,7 +33,7 @@ whole of mlua's surface, stay exactly as upstream.
 
 ## The delta, and the command that proves it
 
-Eight hunks in three files. `src/lib.rs` additionally differs by having Lua 5.2/5.3/5.4/5.5 stripped
+Nine hunks in four files. `src/lib.rs` additionally differs by having Lua 5.2/5.3/5.4/5.5 stripped
 from the `Version` enum (with their source trees deleted): benilla builds 5.1 and only 5.1, and a
 fork that still offered the other four would answer a request for one with a missing directory at
 build time instead of a compile error.
@@ -58,6 +58,12 @@ Three delete what 5.1 added, all in `lparser.c`, all byte-read out of the client
 | `getunopr`'s `case '#'` deleted: no length operator | the client's `getunopr` tests exactly two tokens (`-`, `not`) and its `OPR_NOUNOPR` is 2, a three-member enum; 5.0 asks a table with `table.getn` and a string with `string.len` |
 | `getbinopr`'s `case '%'` deleted: no modulo operator | the client's `getbinopr` switch is based at `'*'` (0x2A), so `%` (0x25) is below its range and reaches `OPR_NOBINOPR` = 14, a fifteen-member `BinOpr`; 5.0 spells it `math.mod` |
 
+One narrows what 5.1 reads as a number, in `lobject.c`:
+
+| hunk | why |
+|---|---|
+| `luaO_str2d` reads only a decimal numeral: 5.1's hexadecimal branch deleted, and a new `decimal_end` stops the platform's C99 `strtod` short of hexadecimal, `inf` and `nan` | the client's `luaO_str2d` (`0x6f5900`) is `strtod` (`0x741e39`, decimal only) and a trailing-space skip, so `tonumber("0x10")` is nil there and `"0x2" + 1` raises; every coercion goes through it (arithmetic, `tonumber`, a binding's numeric argument). The lexer converts numerals through it too, so a source `0x10` is now a malformed number. The client's numeral reader (`0x6ffd20`) takes digits only, so there it is the number 0 then the name `x10`: a syntax error too, except where a statement can end after the 0 (`a = 0x10()`) |
+
 The deletions are safe because nothing the reference runs uses those constructs: a comment- and
 string-stripping scan of the 1.12 FrameXML (177 files), GlueXML, Blizzard's own addons and the
 corpus finds zero sites of all three. No chunk of benilla's own Lua may use a construct the client's
@@ -71,7 +77,7 @@ diff -r third_party/lua-src/lua-5.1.5 \
   ~/.cargo/registry/src/*/lua-src-550.0.0/lua-5.1.5
 ```
 
-That must print exactly the eight hunks in the tables above and nothing else.
+That must print exactly the nine hunks in the tables above and nothing else.
 
 ## The generic-for, in detail
 

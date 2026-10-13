@@ -87,12 +87,44 @@ int luaO_rawequalObj (const TValue *t1, const TValue *t2) {
 }
 
 
+/* BENILLA: the end of the decimal numeral at the head of `s` (spaces, a sign, digits with at
+** most one `.`, then `e`/`E`, a sign and digits only when a digit follows), or `s` when it has
+** no digit: the grammar of the 1.12.1 client's strtod (0x741e39), which its luaO_str2d
+** (0x6f5900) calls. A C99 strtod reads further, into hexadecimal ("0x10", "0x1p4") and
+** "inf"/"nan", none of which that client reads as a number. See third_party/lua-src/BENILLA.md.
+*/
+static const char *decimal_end (const char *s) {
+  const char *p = s;
+  int digits = 0;
+  while (isspace(cast(unsigned char, *p))) p++;
+  if (*p == '+' || *p == '-') p++;
+  while (isdigit(cast(unsigned char, *p))) { p++; digits++; }
+  if (*p == '.') {
+    p++;
+    while (isdigit(cast(unsigned char, *p))) { p++; digits++; }
+  }
+  if (digits == 0) return s;
+  if (*p == 'e' || *p == 'E') {
+    const char *e = p + 1;
+    if (*e == '+' || *e == '-') e++;
+    if (isdigit(cast(unsigned char, *e))) {
+      while (isdigit(cast(unsigned char, *e))) e++;
+      p = e;
+    }
+  }
+  return p;
+}
+
+
 int luaO_str2d (const char *s, lua_Number *result) {
   char *endptr;
+  const char *end = decimal_end(s);  /* BENILLA: see decimal_end */
+  if (end == s) return 0;  /* conversion failed */
   *result = lua_str2number(s, &endptr);
-  if (endptr == s) return 0;  /* conversion failed */
-  if (*endptr == 'x' || *endptr == 'X')  /* maybe an hexadecimal constant? */
-    *result = cast_num(strtoul(s, &endptr, 16));
+  /* BENILLA: 5.1's hexadecimal branch (`strtoul(s, &endptr, 16)` on a trailing `x`) is gone, as
+  ** 0x6f5900 has none. A strtod that read past the decimal numeral read hexadecimal, whose
+  ** decimal head "0" is followed by an `x`: an invalid trailing character there. */
+  if (endptr != end) return 0;
   if (*endptr == '\0') return 1;  /* most common case */
   while (isspace(cast(unsigned char, *endptr))) endptr++;
   if (*endptr != '\0') return 0;  /* invalid trailing characters? */
