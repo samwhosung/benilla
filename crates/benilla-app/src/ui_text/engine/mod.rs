@@ -108,7 +108,7 @@ struct CacheStats {
 
 // ── The engine ──
 
-/// The two stores a font path can come from: the patch chain, then the AddOns folder.
+/// The two stores a font path can come from: the AddOns folder, then the patch chain.
 struct FontSource {
     chain: Arc<Mutex<benilla_formats::Chain>>,
     /// `ui_script::addons::root()`; `None` under `$WOW_CAPTURE`, which keeps a capture hermetic.
@@ -634,10 +634,10 @@ impl UiFontAtlas {
     }
 }
 
-/// Read one font path by the rule every by-path addon asset follows, chain first
-/// ([`benilla_assets::read_chain_or_loose`]).
+/// Read one font path by the rule every by-path asset follows, an addon's loose file first
+/// ([`benilla_assets::read_loose_or_chain`]).
 fn read_font_bytes(source: &FontSource, path: &str) -> Option<Vec<u8>> {
-    benilla_assets::read_chain_or_loose(&source.chain, source.loose_root.as_deref(), path)
+    benilla_assets::read_loose_or_chain(&source.chain, source.loose_root.as_deref(), path)
 }
 
 /// A real-font engine for a test, the client faces off the patch chain; `None` without an install

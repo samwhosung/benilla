@@ -672,7 +672,7 @@ fn open_lua_music(
     let Some(mixer_ref) = out.mixer.as_mut() else {
         return false;
     };
-    // The chain, then the addon folder: an addon's own track has an `Interface\AddOns\…` path.
+    // The addon folder, then the chain: an addon's own track has an `Interface\AddOns\…` path.
     let Some(bytes) = assets.read_file_or_loose(path) else {
         // Silent, as the reference's; the name is used verbatim (`0x458720` appends nothing).
         debug!("Lua music: {path} — not in the patch chain or the AddOns folder");

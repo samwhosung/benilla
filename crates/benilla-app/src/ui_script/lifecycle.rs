@@ -215,10 +215,9 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
         if let Some(&cached) = seen.borrow().get(path) {
             return cached;
         }
-        let found = font_chain.lock_recover().contains(path)
-            || font_root.as_deref().is_some_and(|r| {
-                benilla_assets::loose_addon_file(r, &benilla_assets::normalize_path(path)).is_some()
-            });
+        let found = font_root.as_deref().is_some_and(|r| {
+            benilla_assets::loose_addon_file(r, &benilla_assets::normalize_path(path)).is_some()
+        }) || font_chain.lock_recover().contains(path);
         seen.borrow_mut().insert(path.to_string(), found);
         found
     }));
