@@ -101,6 +101,9 @@ pub(crate) struct LootState {
     pending_master_candidates: Vec<u64>,
     /// The wire `loot_type` (`0x4c2740`); a disenchant window with rows left survives movement.
     loot_type: u8,
+    /// A close with `dl` clear found a disenchant window with rows left and owes its sweep
+    /// (`0x48f264` → `0x4c1fa0`), run by [`feed_loot`], which holds the VM.
+    sweep_owed: bool,
     /// The `UnlockItem` (`0x495420`) calls the loot paths owe, run ahead of the inventory feeds
     /// ([`crate::ui_items::locks::apply_item_releases`]); a window's clear keeps them. The flag
     /// marks a window source's, owed only while the guid resolves as a live item object.
@@ -204,6 +207,7 @@ impl LootState {
         self.pending_bind_confirm = None;
         self.master_candidates.clear();
         self.pending_master_candidates.clear();
+        self.sweep_owed = false;
     }
 
     /// Session end: drops the window, the queued pushes and the owed unlocks.
@@ -258,6 +262,26 @@ impl LootState {
     /// Nothing lootable left: the reference's empty check `0x4c2a70`.
     fn is_empty(&self) -> bool {
         !self.has_coin() && self.items.iter().all(|it| self.taken.contains(&it.slot))
+    }
+
+    /// `0x48f200`'s early-out with `dl` clear (`0x48f245`-`0x48f26f`): a disenchant window
+    /// (`0x4c2740` == 4) with rows left (`0x4c2a70`) is not closed but swept (`0x48f264` →
+    /// `0x4c1fa0`), with no release, no latch clear and no `LOOT_CLOSED`. Every close with `dl`
+    /// clear tests it; the move-start close, `dl` set, returns instead (`0x48f25a`).
+    pub(crate) fn disenchant_holds(&self) -> bool {
+        self.source.is_some()
+            && self.loot_type == benilla_protocol::messages::loot_type::DISENCHANTING
+            && !self.is_empty()
+    }
+
+    /// Owe the hold's sweep to the feed, from a close with no VM at hand.
+    pub(crate) fn owe_sweep(&mut self) {
+        self.sweep_owed = true;
+    }
+
+    /// The display rows of the fixed layout, gaps included.
+    fn row_count(&self) -> u32 {
+        (self.items.len() + usize::from(self.coin_slot)) as u32
     }
 
     /// A 1-based display row of the fixed layout; a gap answers `None`, like the hidden button.
@@ -733,6 +757,10 @@ fn feed_loot(
         rolls,
     );
 
+    if std::mem::take(&mut loot.sweep_owed) && loot.source.is_some() {
+        sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+    }
+
     let who = Candidates {
         group: &group,
         names: &names,
@@ -758,42 +786,7 @@ fn feed_loot(
             // sends, and emptying the window auto-releases it.
             let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
             if cfg.auto_loot != shift {
-                let mut bind_confirm_fired = false;
-                for index in 1..=snap.rows.len() as u32 {
-                    match loot.action_at(index) {
-                        Some(LootAction::Money) => {
-                            let _ = commands.0.send(ClientCommand::LootMoney);
-                        }
-                        // Only `ALLOW_LOOT` rows: the reference's sweep skips any other slot type
-                        // (`0x4c2180`/`0x4c2196`).
-                        Some(LootAction::Item {
-                            wire_slot,
-                            display_id,
-                            item_id,
-                            slot_type,
-                        }) if slot_type == slot_type::ALLOW_LOOT => {
-                            // A hand click's bind gate plus a one-shot latch (`0x4c21c2`,
-                            // `0x4c21e2`): later bind-on-pickup rows stay, untaken and unasked.
-                            if bind_confirm_required(&items, &commands, item_id) {
-                                if bind_confirm_fired {
-                                    continue;
-                                }
-                                loot.pending_bind_confirm = Some(index);
-                                script.fire_event(
-                                    "LOOT_BIND_CONFIRM",
-                                    vec![ScriptValue::Int(i64::from(index))],
-                                );
-                                bind_confirm_fired = true;
-                                continue;
-                            }
-                            let _ = commands
-                                .0
-                                .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
-                            pickup.write(crate::sound::LootPickupSound { display_id });
-                        }
-                        Some(LootAction::Item { .. }) | None => {}
-                    }
-                }
+                sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
             }
             // The response's tail (`0x5ebc3a`-`0x5ebc51`) closes a window that opened while we
             // move, after the copier's open and sweep and in the same handler: `LOOT_CLOSED` fires
@@ -827,6 +820,51 @@ fn feed_loot(
         (None, None) => {}
     }
     *last = fresh;
+}
+
+/// The sweep `0x4c1fa0`, auto-loot's and a disenchant hold's: every row gets a hand pick's sends,
+/// and emptying the window auto-releases it. Only `ALLOW_LOOT` rows (`0x4c2180`/`0x4c2196`); a
+/// hand click's bind gate plus a one-shot latch (`0x4c21c2`, `0x4c21e2`): later bind-on-pickup
+/// rows stay, untaken and unasked.
+fn sweep_rows(
+    loot: &mut LootState,
+    items: &Items,
+    commands: &NetCommands,
+    script: &mut UiScript,
+    pickup: &mut MessageWriter<crate::sound::LootPickupSound>,
+) {
+    let mut bind_confirm_fired = false;
+    for index in 1..=loot.row_count() {
+        match loot.action_at(index) {
+            Some(LootAction::Money) => {
+                let _ = commands.0.send(ClientCommand::LootMoney);
+            }
+            Some(LootAction::Item {
+                wire_slot,
+                display_id,
+                item_id,
+                slot_type,
+            }) if slot_type == slot_type::ALLOW_LOOT => {
+                if bind_confirm_required(items, commands, item_id) {
+                    if bind_confirm_fired {
+                        continue;
+                    }
+                    loot.pending_bind_confirm = Some(index);
+                    script.fire_event(
+                        "LOOT_BIND_CONFIRM",
+                        vec![ScriptValue::Int(i64::from(index))],
+                    );
+                    bind_confirm_fired = true;
+                    continue;
+                }
+                let _ = commands
+                    .0
+                    .send(ClientCommand::AutostoreLootItem { slot: wire_slot });
+                pickup.write(crate::sound::LootPickupSound { display_id });
+            }
+            Some(LootAction::Item { .. }) | None => {}
+        }
+    }
 }
 
 /// Whether a take must raise `LOOT_BIND_CONFIRM` first (`0x4c28f2`/`0x4c28fb`): bind on pickup
@@ -863,7 +901,8 @@ pub(crate) fn close_interaction(
 /// The leave-world sweep's loot leg (`0x490ab2` → `0x4c1ca0` → `0x48f200(cl=1, dl=0, 0)`): the
 /// shared close with its `CMSG_LOOT_RELEASE` (`0x48f2da`), told to the VM the sweep runs in, the
 /// dying one on a `/reload` ([`tell_loot_closed`]). The dead-unit deselect follows, as the
-/// close's last step.
+/// close's last step. A disenchant window with rows left is swept instead
+/// ([`LootState::disenchant_holds`]).
 pub(crate) fn close_loot_on_leave_world(
     script: Option<NonSendMut<UiScript>>,
     mut loot: ResMut<LootState>,
@@ -871,7 +910,17 @@ pub(crate) fn close_loot_on_leave_world(
     commands: Res<NetCommands>,
     objects: crate::net::Objects,
     mut dead: DeadUnitDeselect,
+    sweep: LegSweepInputs,
 ) {
+    if loot.disenchant_holds() {
+        let LegSweepInputs { items, mut pickup } = sweep;
+        if let Some(mut script) = script {
+            sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+        } else {
+            loot.owe_sweep();
+        }
+        return;
+    }
     let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
     if closed.is_none() {
         return;
@@ -880,6 +929,13 @@ pub(crate) fn close_loot_on_leave_world(
         announce_loot_closed(&mut script, &mut loot, &objects);
     }
     dead.after_close(closed);
+}
+
+/// What the loot leg's disenchant hold sweeps with.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct LegSweepInputs<'w> {
+    items: Res<'w, Items>,
+    pickup: MessageWriter<'w, crate::sound::LootPickupSound>,
 }
 
 /// Tell the VM in the world that a close the feed will not see closed the window: the UI
@@ -1099,11 +1155,16 @@ fn drain_loot(
     }
     // `CloseLoot` (`0x4c2ec0` → `0x48f200(cl=1, dl=0)`), which stock `LootFrame_OnHide` calls.
     if script.take_loot_close() {
-        let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
-        if let Some(guid) = closed {
-            debug!("ui_loot: release loot {guid:#x}");
+        if loot.disenchant_holds() {
+            debug!("ui_loot: CloseLoot on a disenchant window with rows left — sweeping it");
+            sweep_rows(&mut loot, &items, &commands, &mut script, &mut pickup);
+        } else {
+            let closed = close_interaction(&mut loot, &mut latch, Some(&commands));
+            if let Some(guid) = closed {
+                debug!("ui_loot: release loot {guid:#x}");
+            }
+            dead.after_close(closed);
         }
-        dead.after_close(closed);
     }
     // The last-row auto-close (`0x4c1f8d`, `0x4c2785` → `0x48f200(cl=1, dl=0)`). The feed then
     // fires `LOOT_CLOSED`, and the `CloseLoot()` from `OnHide` finds no source.
@@ -2561,5 +2622,82 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(seen_in(&app), ["LOOT_OPENED", "LOOT_CLOSED"]);
+    }
+
+    /// A disenchanted item's guid (`HIGHGUID_ITEM`).
+    const ESSENCE_SOURCE: u64 = 0x4000_0000_0000_0d15;
+
+    /// `CloseLoot` (`0x4c2ec0` → `0x48f200(cl=1, dl=0)`) on a disenchant window with rows left
+    /// sweeps it (`0x48f264` → `0x4c1fa0`): the rows go out, no release, the latch and the
+    /// window stay.
+    #[test]
+    fn close_loot_on_a_disenchant_window_with_rows_left_sweeps_it() {
+        let (mut app, rx) = close_app();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut().resource_mut::<Items>().insert_template(
+            117,
+            Some(crate::items::test_template("Lesser Magic Essence")),
+        );
+        open_loot(
+            &mut app,
+            ESSENCE_SOURCE,
+            loot_type::DISENCHANTING,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("CloseLoot()")
+            .unwrap();
+        app.update();
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [ClientCommand::AutostoreLootItem { slot: 0 }]
+            ),
+            "{sent:?}"
+        );
+        assert_eq!(
+            app.world().resource::<LootState>().source(),
+            Some(ESSENCE_SOURCE)
+        );
+        assert_eq!(app.world().resource::<LootLatch>().0, Some(ESSENCE_SOURCE));
+    }
+
+    /// The sweep's loot leg has `dl` clear too: a disenchant window with rows left is swept in
+    /// the VM the sweep runs in, not closed, and no `LOOT_CLOSED` fires.
+    #[test]
+    fn the_loot_leg_sweeps_a_disenchant_window_with_rows_left() {
+        use crate::ui_script::sweep_test::{seen_in, spied_vm, sweep_in_place};
+        let (mut app, rx) = sweep_loot_app();
+        app.insert_non_send_resource(spied_vm(&EVENTS));
+        app.world_mut().resource_mut::<Items>().insert_template(
+            117,
+            Some(crate::items::test_template("Lesser Magic Essence")),
+        );
+        app.world_mut().resource_mut::<LootState>().open(
+            ESSENCE_SOURCE,
+            loot_type::DISENCHANTING,
+            0,
+            vec![item(0, 117, 1)],
+        );
+        app.world_mut().resource_mut::<LootLatch>().0 = Some(ESSENCE_SOURCE);
+        app.update();
+        let _ = rx.try_iter().count();
+        sweep_in_place(&mut app);
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [ClientCommand::AutostoreLootItem { slot: 0 }]
+            ),
+            "{sent:?}"
+        );
+        assert_eq!(seen_in(&app), ["LOOT_OPENED"]);
+        assert_eq!(
+            app.world().resource::<LootState>().source(),
+            Some(ESSENCE_SOURCE)
+        );
     }
 }

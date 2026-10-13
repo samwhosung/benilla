@@ -290,6 +290,11 @@ impl AttackSeam<'_, '_> {
     /// `CMSG_SET_SELECTION` 0 (`0x493a2a`), which this does not.
     pub(crate) fn close_loot_on(&mut self, outgoing: u64) {
         if self.loot.source() == Some(outgoing) {
+            // `dl` clear (`0x493970`): a disenchant window with rows left is swept, not closed.
+            if self.loot.disenchant_holds() {
+                self.loot.owe_sweep();
+                return;
+            }
             debug!("target: the selection teardown closes the loot on {outgoing:#x}");
             crate::ui_loot::close_interaction(
                 &mut self.loot,

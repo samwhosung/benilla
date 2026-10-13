@@ -298,6 +298,12 @@ fn loot_release_response(
     }
     debug!("net: loot released {guid:#x}");
     latch.0 = None;
+    // The handler's close has `dl` clear (`0x5ec0ef`), so a disenchant window with rows left is
+    // swept instead, by the feed.
+    if loot.disenchant_holds() {
+        loot.owe_sweep();
+        return None;
+    }
     super::close_interaction(loot, latch, None)
 }
 
@@ -816,6 +822,39 @@ mod tests {
             Some(CHEST),
             "B stays latched"
         );
+    }
+
+    /// The release's close has `dl` clear (`0x5ec0ef`): a disenchant window with rows left owes
+    /// its sweep instead of closing; the handler's own latch clear (`0x5ec0d4`) still runs.
+    #[test]
+    fn a_release_on_a_disenchant_window_with_rows_left_owes_its_sweep() {
+        let mut world = opened_lockbox_world();
+        world.resource_mut::<LootState>().open(
+            LOCKBOX,
+            benilla_protocol::messages::loot_type::DISENCHANTING,
+            0,
+            vec![benilla_protocol::messages::LootItem {
+                slot: 0,
+                item_id: 117,
+                count: 1,
+                display_info_id: 1117,
+                random_property_id: 0,
+                slot_type: 0,
+            }],
+        );
+        world
+            .run_system_once_with(
+                on_release_response,
+                SessionEvent::LootReleaseResponse {
+                    guid: LOCKBOX,
+                    result: 1,
+                },
+            )
+            .expect("the handler runs as a one-shot system");
+        let loot = world.resource::<LootState>();
+        assert_eq!(loot.source(), Some(LOCKBOX));
+        assert!(loot.sweep_owed);
+        assert_eq!(world.resource::<LootLatch>().0, None);
     }
 
     /// A zero result is ignored even for the latched guid (`0x5ec0b6`).
