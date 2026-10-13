@@ -1622,8 +1622,8 @@ fn feed_units(
         }
     }
 
-    // `PLAYER_TARGET_CHANGED`, argless, when the selection changes. A `/reload`'s fresh memo fires
-    // it for a kept selection, where the reference's shutdown clears the target (`0x490bdf`).
+    // `PLAYER_TARGET_CHANGED`, argless, when the selection changes. A `/reload`'s fresh memo finds
+    // none: the shutdown dropped the target and told the dying VM (`0x490bdf`).
     if selection.guid != memo.target_guid {
         gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
         memo.target_guid = selection.guid;

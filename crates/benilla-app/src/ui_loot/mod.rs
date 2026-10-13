@@ -882,6 +882,18 @@ pub(crate) fn close_loot_on_leave_world(
     dead.after_close(closed);
 }
 
+/// Tell the VM in the world that a close the feed will not see closed the window: the UI
+/// shutdown's deselect closing the loot on its target (`0x490bdf` → `0x493910` → `0x48f200`).
+pub(crate) fn tell_loot_closed(
+    script: Option<NonSendMut<UiScript>>,
+    mut loot: ResMut<LootState>,
+    objects: crate::net::Objects,
+) {
+    if let Some(mut script) = script {
+        announce_loot_closed(&mut script, &mut loot, &objects);
+    }
+}
+
 /// The VM's half of a close that runs where the feed cannot report it: an item source's two
 /// unlocks (`0x48f2bd`, `0x4c1d36`), each resolved as the close's own lookup (`0x48f29e`), then
 /// `LOOT_CLOSED` (`0x4c1dac`).

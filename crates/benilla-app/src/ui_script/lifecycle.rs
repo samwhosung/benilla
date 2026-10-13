@@ -651,6 +651,55 @@ pub(crate) fn seat_from_roster(
 #[derive(Resource, Default)]
 pub(crate) struct AddOnIdentity(pub(crate) Option<(String, String)>);
 
+/// The UI shutdown's `PlaySound` suppression scope (`0x490bd1` → `0x458f50`, closed at
+/// `0x490cd9` → `0x458f60`), around the whole of it, on the VM in the world: `true` when entered.
+fn silence_ui_shutdown(world: &World) -> bool {
+    world
+        .get_non_send_resource::<UiScript>()
+        .map(UiScript::push_sound_suppression)
+        .is_some()
+}
+
+/// Leave [`silence_ui_shutdown`]'s scope on the same VM.
+fn unsilence_ui_shutdown(world: &World) {
+    if let Some(script) = world.get_non_send_resource::<UiScript>() {
+        script.pop_sound_suppression();
+    }
+}
+
+/// `0x490bd0`'s head, ahead of its active-player guard, so on every root and a `/reload`: the
+/// selection dropped (`0x490bdf` → `SetSelection(0, 0)` → `0x493910(1)`, which closes a loot
+/// window on the target and tells the VM with `PLAYER_TARGET_CHANGED`, `0x493a73`), then
+/// `CMSG_CANCEL_TRADE` (`0x490be4` → `0x5d4310`), a send the sweep's trade leg repeats.
+fn run_ui_shutdown_head(world: &mut World) {
+    let looting = world
+        .get_resource::<crate::ui_loot::LootState>()
+        .and_then(crate::ui_loot::LootState::source);
+    // A harness without the target stack has no selection to drop.
+    let deselected = world
+        .run_system_cached(crate::target::deselect_on_ui_shutdown)
+        .unwrap_or(false);
+    // The teardown's own loot close, on a window looting the target (`0x493959`-`0x493974`).
+    let loot_closed = looting.is_some()
+        && world
+            .get_resource::<crate::ui_loot::LootState>()
+            .and_then(crate::ui_loot::LootState::source)
+            .is_none();
+    if loot_closed {
+        let _ = world.run_system_cached(crate::ui_loot::tell_loot_closed);
+    }
+    if deselected {
+        if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
+            script.set_unit("target", None);
+            script.set_unit("targettarget", None);
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+        }
+    }
+    if let Some(net) = world.get_resource::<crate::net::NetCommands>() {
+        let _ = net.0.send(crate::net::ClientCommand::CancelTrade);
+    }
+}
+
 /// The UI shutdown in the reference's order, `0x490bd0`'s tail past the leave-world sweep (which
 /// fires `PLAYER_LEAVING_WORLD`, [`super::run_leave_world_sweep`]): `PLAYER_LOGOUT` (271,
 /// `0x490c2a`) → `layout-cache.txt` → the flat saved file (`0x490c7e`) → the per-addon files
@@ -702,9 +751,11 @@ pub(crate) fn end_ui_session(world: &mut World) {
 
 /// [`end_ui_session`] up to the new VM: the shutdown tail, the folds and the host values reset.
 fn close_ui_session(world: &mut World) {
-    // The sweep runs before the unpark, so a VM still parked (the load never ran) hears none of
-    // it; its latch is spent at the root, so of this edge and the worldport's, the first to a
-    // departure owns it.
+    // The head and the sweep run before the unpark, so a VM still parked (the load never ran)
+    // hears none of it; the sweep's latch is spent at the root, so of this edge and the
+    // worldport's, the first to a departure owns it.
+    let silenced = silence_ui_shutdown(world);
+    run_ui_shutdown_head(world);
     super::run_leave_world_sweep(world);
     // A VM still parked goes back into the world first.
     unpark_boot_vm(world);
@@ -718,6 +769,9 @@ fn close_ui_session(world: &mut World) {
         if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
             shutdown_ui_state(&mut script, identity.as_ref());
         }
+    }
+    if silenced {
+        unsilence_ui_shutdown(world);
     }
     // After the shutdown events (a `PLAYER_LOGOUT` handler may `SetCVar`, which in the reference
     // lands in an engine-side store that survives) and before the VM is replaced.
@@ -812,12 +866,17 @@ pub(crate) fn shutdown_on_exit(
     if world.contains_resource::<PendingEntryUiLoad>() {
         return;
     }
+    let silenced = silence_ui_shutdown(world);
+    run_ui_shutdown_head(world);
     super::run_leave_world_sweep(world);
     let identity = world
         .get_resource::<AddOnIdentity>()
         .and_then(|id| id.0.clone());
     if let Some(mut script) = world.get_non_send_resource_mut::<UiScript>() {
         shutdown_ui_state(&mut script, identity.as_ref());
+    }
+    if silenced {
+        unsilence_ui_shutdown(world);
     }
 }
 
@@ -1245,5 +1304,58 @@ mod tests {
              anything but `start > 0`",
             triple.0
         );
+    }
+
+    /// `0x490bd0`'s head on a `/reload` while looting the target: the deselect's teardown closes
+    /// the loot on it (`0x493959`-`0x493974`), releasing it and telling the dying VM, then sends
+    /// `CMSG_SET_SELECTION` 0 and fires `PLAYER_TARGET_CHANGED` (`0x493a2a`, `0x493a73`); then
+    /// `CMSG_CANCEL_TRADE` (`0x490be4`).
+    #[test]
+    fn the_shutdown_head_drops_the_target_and_cancels_the_trade() {
+        use crate::net::{ClientCommand, NetCommands};
+        const CORPSE: u64 = 0xF130_0000_0000_0042;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut world = World::new();
+        world.insert_resource(NetCommands(tx));
+        world.init_resource::<crate::target::Selection>();
+        world.init_resource::<crate::spell::QueuedMeleeSpell>();
+        world.init_resource::<crate::spell::AutoRepeatActive>();
+        world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
+        world.init_resource::<crate::ui_loot::LootLatch>();
+        world.init_resource::<crate::net::GuidIndex>();
+        let mut loot = crate::ui_loot::LootState::default();
+        loot.open(CORPSE, 1, 0, Vec::new());
+        world.insert_resource(loot);
+        let body = world.spawn_empty().id();
+        {
+            let mut selection = world.resource_mut::<crate::target::Selection>();
+            selection.target = Some(body);
+            selection.guid = Some(CORPSE);
+        }
+        world.insert_non_send_resource(crate::ui_script::sweep_test::spied_vm(&[
+            "LOOT_CLOSED",
+            "PLAYER_TARGET_CHANGED",
+        ]));
+
+        run_ui_shutdown_head(&mut world);
+
+        assert_eq!(
+            crate::ui_script::sweep_test::seen(world.non_send_resource::<UiScript>()),
+            ["LOOT_CLOSED", "PLAYER_TARGET_CHANGED"]
+        );
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [
+                    ClientCommand::LootRelease { guid: CORPSE },
+                    ClientCommand::SetSelection { guid: 0 },
+                    ClientCommand::CancelTrade,
+                ]
+            ),
+            "{sent:?}"
+        );
+        assert_eq!(world.resource::<crate::target::Selection>().guid, None);
+        assert_eq!(world.resource::<crate::ui_loot::LootState>().source(), None);
     }
 }

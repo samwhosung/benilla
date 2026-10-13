@@ -1458,6 +1458,19 @@ pub(crate) fn clear_target_requests(
     }
 }
 
+/// The UI shutdown's own deselect (`0x490bdf` → `SetSelection(0, 0)`), ahead of its
+/// active-player guard, so every shutdown root and a `/reload` drop the target: `true` when one
+/// was selected.
+pub(crate) fn deselect_on_ui_shutdown(
+    mut selection: ResMut<Selection>,
+    mut seam: crate::creature_anim::AttackSeam,
+    engaged: Query<(), (With<Engaged>, With<SelfPlayer>)>,
+) -> bool {
+    let had = selection.target.is_some();
+    deselect(&mut selection, &mut seam, !engaged.is_empty());
+    had
+}
+
 /// A deselect that applies only if the selection is this guid (`0x493910(guid, 1)`), raised by
 /// every loot close for a dead unit (`0x48f369`) and drained by [`clear_target_requests`].
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
