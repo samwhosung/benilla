@@ -526,6 +526,7 @@ impl UiScript {
                     spacing: font.spacing.max(0.0),
                     alpha_gradient: None,
                     world_seat: false, // interface, not world
+                    edit_line: false,
                 },
                 scale: paint.scale,
             });

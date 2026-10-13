@@ -2,7 +2,7 @@
 //! (`0x77a790`), `OnCursorChanged` then `OnTextChanged`, on the dirty word `[E+0x31c]`.
 
 use crate::script::{
-    EditAction, EditBoxAdvanceRequest, EditUnit, MeasureRequest, TextMeasure, UiScript,
+    EditAction, EditBoxAdvanceRequest, EditUnit, MeasureRequest, QuadContent, TextMeasure, UiScript,
 };
 
 /// A stand-in font engine: each byte 7 wide and each line 14 tall, answering the advance table
@@ -544,6 +544,98 @@ fn on_cursor_changed_reports_one_line_tall_in_a_single_line_box() {
     .unwrap();
     s.tick(0.016);
     assert_eq!(take_log(&s), "early update cursor@14,0,4,14 text:ab late");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// 40 distinct characters, 280 wide in [`Mono`].
+const ALPHA40: &str = "abcdefghijklmnopqrstuvwxyz0123456789ABCD";
+
+/// A 200×32 single-line box `W` at `(100, 50)` holding [`ALPHA40`], nothing focused, flushed once.
+fn long_box(s: &mut UiScript) {
+    s.run(&format!(
+        r#"
+        W = CreateFrame("EditBox", "W")
+        W:SetAutoFocus(false)
+        W:SetPoint("BOTTOMLEFT", 100, 50)
+        W:SetWidth(200); W:SetHeight(32)
+        W:SetText("{ALPHA40}")
+    "#
+    ))
+    .unwrap();
+    s.resolve();
+    s.tick(0.016);
+    s.resolve();
+}
+
+/// What the box's text region holds.
+fn window(s: &UiScript) -> String {
+    s.eval("return (W:GetRegions()):GetText()").unwrap()
+}
+
+/// Every shown box runs its flush, focused or not, and the relayout hands its text region only
+/// the window (`0x77d840`–`0x77d858`): the 28 characters that fit 200 from the start, re-windowed
+/// once the caret at the end has left them, to the 21 characters that fit three quarters of the
+/// width back from it (`0x77d7df` → `0x77d320`). The region is the inset box, one `TOPLEFT` point
+/// and an explicit size (`0x77b905`, `0x77b940`, `0x77b96b`), and its quad draws as one line.
+#[test]
+fn an_unfocused_box_holds_the_window_its_caret_left() {
+    let mut s = script();
+    long_box(&mut s);
+    assert_eq!(window(&s), &ALPHA40[19..]);
+    assert_eq!(
+        s.eval::<(f64, f64, i64)>(
+            "local t = W:GetRegions() return t:GetWidth(), t:GetHeight(), t:GetNumPoints()"
+        )
+        .unwrap(),
+        (200.0, 32.0, 1)
+    );
+    let line = s.extract().into_iter().find_map(|q| match q.content {
+        QuadContent::Text {
+            text: Some(t),
+            edit_line,
+            ..
+        } if t == ALPHA40[19..] => Some(edit_line),
+        _ => None,
+    });
+    assert_eq!(line, Some(true), "the window's quad draws as an edit line");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
+/// The window moves only when the caret leaves it (`0x77d3f5`–`0x77d436` promote the caret's bit
+/// to the relayout's): leaving by the left starts it a quarter of the width back from the caret
+/// (`0x77d7d4`), and losing the focus leaves it where it is.
+#[test]
+fn the_window_moves_only_when_the_caret_leaves_it() {
+    let mut s = script();
+    long_box(&mut s);
+    s.run("W:SetFocus()").unwrap();
+    let left = EditAction::Move {
+        unit: EditUnit::Char,
+        back: true,
+        extend: false,
+    };
+    for _ in 0..21 {
+        s.editbox_action(left);
+    }
+    s.tick(0.016);
+    assert_eq!(window(&s), &ALPHA40[19..], "the caret at its left edge");
+    s.editbox_action(left);
+    s.tick(0.016);
+    assert_eq!(
+        window(&s),
+        &ALPHA40[11..39],
+        "7 back from the caret, then 28"
+    );
+    s.editbox_action(EditAction::Move {
+        unit: EditUnit::Edge,
+        back: true,
+        extend: false,
+    });
+    s.tick(0.016);
+    assert_eq!(window(&s), &ALPHA40[..28]);
+    s.run("W:ClearFocus()").unwrap();
+    s.tick(0.016);
+    assert_eq!(window(&s), &ALPHA40[..28], "the window outlives the focus");
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 

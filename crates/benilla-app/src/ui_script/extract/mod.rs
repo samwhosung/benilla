@@ -1477,6 +1477,7 @@ fn convert_entry(
             spacing,
             alpha_gradient,
             world_seat,
+            edit_line,
         } => {
             // No atlas (no client data, or an unreadable font) draws no text.
             let (Some(atlas), Some(text)) = (font_atlas.as_deref_mut(), text) else {
@@ -1497,6 +1498,7 @@ fn convert_entry(
                     spacing,
                     alpha_gradient,
                     world_seat,
+                    edit_line,
                 },
                 text::TextHost {
                     z: eq.z,

@@ -30,6 +30,8 @@ pub(super) struct TextStyle {
     pub alpha_gradient: Option<(f32, f32)>,
     /// The V-plate's name and level, seated on the plate's device-snapped overlay, not the UI grid.
     pub world_seat: bool,
+    /// A single-line EditBox's window: one unwrapped line, cut at the rect, never ellipsized.
+    pub edit_line: bool,
 }
 
 /// The extraction loop's context for one Text quad.
@@ -40,6 +42,7 @@ pub(super) struct TextHost<'a> {
     pub rect: Rect,
     pub clip: Option<Rect>,
     /// The focused editbox's text UI, unfiltered: [`emit`] matches it to this quad by `target`.
+    /// Its caret and selection are measured from the text region's start, the window's.
     pub ebox: Option<&'a EditBoxTextUi>,
     pub screen_h: f32,
     /// The seam scale `windowH/768`, for the root-unit inputs; rects arrive in px.
@@ -85,8 +88,9 @@ pub(super) fn emit(
             .map_or(0.0, |sh| sh.offset[0] * host.scale * host.font_scale),
         alpha_gradient: style.alpha_gradient,
     };
-    // The focused editbox draws windowed (`0x77da80`): the scroll window's substring from the
-    // line origin, unwrapped and clipped at the box edge, the selection behind, the caret after.
+    // A single-line editbox's region holds its window (`0x77d858`), drawn from the line origin,
+    // unwrapped and cut at the box edge, focused or not; the focused box's selection goes behind
+    // and its caret after.
     let ebox = host.ebox.filter(|u| u.target == host.target);
     let mut draw_text: &str = text;
     let mut draw_rect = host.rect;
@@ -110,25 +114,25 @@ pub(super) fn emit(
         }
     }
     let mut ebox_geom = None;
-    if let Some(ui) = ebox {
-        let drawn = &text[ui.display_from.min(text.len())..];
+    if ebox.is_some() || style.edit_line {
         let (x0, top, cell_h) =
-            crate::ui_text::line_origin(&mut atlas.lock(), drawn, host.rect, draw_justify, spec);
+            crate::ui_text::line_origin(&mut atlas.lock(), text, host.rect, draw_justify, spec);
         ebox_geom = Some((x0, top, cell_h));
-        // A single-line box shows only what fits its text region (`0x77d858` sets the window's
-        // substring), so the whole string drawn here is cut at the region. A multi-line region is
-        // only as tall as its text, and the reference clips neither it nor the caret texture
-        // (`E+0x368`), which after a trailing break stands a line below it: only a ScrollFrame's
-        // clip applies.
-        if !ui.multi_line {
+        // The window fits its region once the flush has windowed it; between an edit and that
+        // flush the region holds the text from the window's start, so it is cut at the region. A
+        // multi-line region is only as tall as its text, and the reference clips neither it nor
+        // the caret texture (`E+0x368`), which after a trailing break stands a line below it:
+        // only a ScrollFrame's clip applies.
+        if style.edit_line {
             text_clip = Some(host.clip.map_or(host.rect, |c| c.intersect(host.rect)));
-            draw_text = drawn;
             draw_rect = Rect::new(x0, host.rect.min.y, x0 + 100_000.0, host.rect.max.y);
             draw_justify = crate::ui_text::Justify {
                 h: JustifyH::Left,
                 v: style.justify_v,
             };
         }
+    }
+    if let (Some(ui), Some((x0, top, cell_h))) = (ebox, ebox_geom) {
         // A multiline box draws wrapped (its region is TOP/LEFT already); the caret and the
         // selection seat by `(row, x)` at the wrap's row pitch.
         for &(row, sx0, sx1) in &ui.selection {
@@ -166,7 +170,7 @@ pub(super) fn emit(
     // `prefix + "..."` (`CSimpleFontString` `0x771ec0`); an editbox never truncates and a message
     // line sizes to its text. Before the shadow, which the client draws from the same string.
     let ellipsized = match host.target {
-        ZTarget::Region(region) if ebox.is_none() => {
+        ZTarget::Region(region) if ebox.is_none() && !style.edit_line => {
             crate::ui_text::ellipsize_to_fit(atlas, region, draw_text, draw_rect, spec)
         }
         _ => None,
@@ -316,8 +320,17 @@ pub(super) fn emit(
     out.extend(glyphs);
     // The caret: a 1 px bar in the constructor's white (`0xffffffff`), one line cell tall at the
     // engine's x, pushed after the glyphs to draw on top. The reference's is 4 UI units wide
-    // (`0x77b8c0`) and takes the edit box's text colour on a font change (`0x77e2a0`).
+    // (`0x77b8c0`) and takes the edit box's text colour on a font change (`0x77e2a0`). A
+    // single-line box's cut keeps its own bar's width past the edge, where a full window's caret
+    // stands.
     if let (Some(ui), Some((x0, top, cell_h))) = (ebox, ebox_geom) {
+        let caret_clip = if style.edit_line {
+            let mut r = host.rect;
+            r.max.x += 1.0;
+            Some(host.clip.map_or(r, |c| c.intersect(r)))
+        } else {
+            text_clip
+        };
         if host.caret_pinned || ui.caret_on {
             #[allow(clippy::cast_precision_loss)]
             let top = top + ui.caret_row as f32 * cell_h;
@@ -337,7 +350,7 @@ pub(super) fn emit(
                 gamma_texel: false,
                 alpha_test: None,
                 uv_clamp: None,
-                clip: text_clip,
+                clip: caret_clip,
                 rotation: 0.0,
                 mask: None,
                 corners: None,
@@ -450,10 +463,8 @@ mod caret_tests {
 
     /// A focused 270-wide multi-line box at 14 px on a 1024×768 window (`s = 1`), holding `text`.
     fn app_with_focused_box(text: &str) -> App {
-        let script = UiScript::new().unwrap();
-        script
-            .run(&format!(
-                r#"
+        app_with(&format!(
+            r#"
             E = CreateFrame("EditBox", "E")
             E:SetPoint("TOPLEFT", 100, -100)
             E:SetWidth(270); E:SetHeight(200)
@@ -462,8 +473,13 @@ mod caret_tests {
             E:SetFocus()
             E:SetText({text:?})
         "#
-            ))
-            .unwrap();
+        ))
+    }
+
+    /// The whole UI pass on a 1024×768 window (`s = 1`), after `lua` has run.
+    fn app_with(lua: &str) -> App {
+        let script = UiScript::new().unwrap();
+        script.run(lua).unwrap();
         let mut app = App::new();
         app.insert_non_send_resource(script);
         app.insert_resource(UiFontAtlas::for_test(1.0).expect("the client faces open"));
@@ -517,6 +533,51 @@ mod caret_tests {
                 clip.intersect(c.rect),
                 c.rect,
                 "the clip cuts the caret: {clip:?}"
+            );
+        }
+    }
+
+    /// An unfocused single-line box draws its window, the part of its text its caret last left
+    /// in view (`0x77d858`), as one line inside its rect, where a FontString too narrow for its
+    /// text would draw `prefix...`.
+    #[test]
+    fn an_unfocused_single_line_box_draws_its_window_on_one_line() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let text = "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        let app = app_with(&format!(
+            r#"
+            E = CreateFrame("EditBox", "E")
+            E:SetAutoFocus(false)
+            E:SetPoint("TOPLEFT", 100, -100)
+            E:SetWidth(120); E:SetHeight(20)
+            E:SetFont("Fonts\\FRIZQT__.TTF", 14)
+            E:SetText("{text}")
+        "#
+        ));
+        let window: String = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return (E:GetRegions()):GetText()")
+            .unwrap();
+        assert!(
+            !window.is_empty() && window.len() < text.len() && text.ends_with(&window),
+            "the window holds the caret, at the text's end: {window:?}"
+        );
+        let quads = &app.world().resource::<UiQuads>().quads;
+        let glyphs: Vec<&UiQuad> = quads.iter().filter(|q| q.texture.is_some()).collect();
+        assert_eq!(
+            glyphs.len(),
+            window.len(),
+            "the window's glyphs, no ellipsis"
+        );
+        let top = glyphs[0].rect.min.y;
+        for g in &glyphs {
+            assert!((g.rect.min.y - top).abs() < 4.0, "one line: {:?}", g.rect);
+            let clip = g.clip.expect("cut at the box");
+            assert!(
+                g.rect.max.x <= clip.max.x + 0.5,
+                "inside the box: {:?}",
+                g.rect
             );
         }
     }

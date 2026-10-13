@@ -161,6 +161,9 @@ pub enum QuadContent {
         /// (`super::nameplate::is_world_seated`), which slides on a device-pixel snap, so a second
         /// snap would jitter its text. Not a reference field.
         world_seat: bool,
+        /// A single-line EditBox's text, which holds the box's window (`0x77d858`): one line from
+        /// the region's left, never wrapped or ellipsized, cut at the region's rect.
+        edit_line: bool,
     },
 }
 
@@ -567,11 +570,10 @@ pub use crate::widget::{EditAction, EditOutcome, EditUnit};
 pub struct EditBoxTextUi {
     /// The text region's draw target, to find its extracted Text quad by.
     pub target: crate::order::ZTarget,
-    /// The scroll window's start, a display byte offset; always 0 for a multiline box.
-    pub display_from: usize,
     /// Multiline: the whole wrapped block draws, caret and selection seated by `(row, x)`.
     pub multi_line: bool,
-    /// Caret x in px from the drawn window's text origin (multiline: from the row's origin).
+    /// Caret x in px from the text region's origin, the window's start (multiline: from the
+    /// row's origin).
     pub caret_x: f32,
     /// Always 0 single-line.
     pub caret_row: usize,

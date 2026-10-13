@@ -363,6 +363,11 @@ impl UiScript {
                             // The owner's property: an addon's strings on a plate slide with it.
                             world_seat: owner
                                 .is_some_and(|o| super::nameplate::is_world_seated(&model, o)),
+                            edit_line: matches!(
+                                owner_frame.map(|f| &f.kind_state),
+                                Some(crate::widget::KindState::EditBox(eb))
+                                    if eb.text_region == Some(rh) && !eb.multi_line
+                            ),
                         }
                     } else {
                         // The draw gate is the texture slot, never the colour (`0x7706e0`: empty

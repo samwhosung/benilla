@@ -36,9 +36,10 @@ impl UiScript {
         }
     }
 
-    /// The focused EditBox's text geometry this frame: its text quad, the scroll window and the
-    /// caret and selection spans in it, after scrolling the caret into view (`0x77da80`). `None`
-    /// until the advance table is answered: the text draws, without caret or highlight.
+    /// The focused EditBox's text geometry this frame: its text quad and the caret and selection
+    /// spans in it, measured from the window's start, which the box's flush keeps
+    /// (`0x77d4d0`). `None` until the advance table is answered: the text draws, without caret or
+    /// highlight.
     pub fn focused_editbox_text_ui(&mut self) -> Option<types::EditBoxTextUi> {
         let h = {
             let model = self.model_mut();
@@ -52,13 +53,6 @@ impl UiScript {
         // Materialize the lazy text region, so an empty, just-focused box has a caret home.
         let rh = super::ensure_text_region(self.lua(), h)?;
         let mut model = self.model_mut();
-        // An unanchored text region draws over its owner, so the frame's own width stands in.
-        let avail = model
-            .region_resolved
-            .get(&rh)
-            .or_else(|| model.resolved.get(&h))
-            .map(|r| r.right - r.left)
-            .unwrap_or(0.0);
         let Some(KindState::EditBox(eb)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state)
         else {
             return None;
@@ -71,10 +65,13 @@ impl UiScript {
             eb.advances = vec![0.0];
             eb.rows = vec![0];
         }
-        // Keep the caret inside the window with room at the right edge; a multi-line box wraps
-        // instead, its window pinned at 0.
-        eb.clamp_scroll((avail - 2.0).max(0.0));
-        let from = eb.scroll_start.min(display.len());
+        // The text region holds the display from the window's start; a multi-line box's window
+        // starts at 0.
+        let from = if eb.multi_line {
+            0
+        } else {
+            eb.scroll_start.min(display.len())
+        };
         let origin = eb.advances[from];
         let cursor_d = eb.text_to_display(eb.cursor).min(display.len());
         let (a, b) = (eb.sel_start.min(eb.sel_end), eb.sel_start.max(eb.sel_end));
@@ -111,7 +108,6 @@ impl UiScript {
         };
         Some(types::EditBoxTextUi {
             target: crate::order::ZTarget::Region(rh),
-            display_from: from,
             multi_line: eb.multi_line,
             caret_x,
             caret_row,

@@ -1046,7 +1046,6 @@ fn text_ui_reports_caret_geometry_and_focus() {
         .focused_editbox_text_ui()
         .expect("focused box has text-UI");
     assert_eq!(ui.caret_x, 0.0);
-    assert_eq!(ui.display_from, 0);
     assert!(ui.selection.is_empty());
     assert!(
         s.extract().iter().any(|q| matches!(
@@ -1260,28 +1259,27 @@ fn select_all_action() {
     );
 }
 
-/// The scroll window keeps the cursor visible (`0x77da80`) in whole chars: typing past the edge
-/// advances `display_from`, HOME snaps it back.
+/// The focused box's caret geometry counts from the window's start, which the flush moves
+/// (`0x77d4d0`): typing past the edge leaves the caret three quarters in, HOME brings the window
+/// back to 0.
 #[test]
-fn scroll_window_keeps_the_cursor_visible() {
+fn the_text_ui_measures_from_the_window_the_flush_keeps() {
     let mut s = script();
-    // 40 bytes × 7px = 280px in a 200px box (avail 198): the window must slide.
+    // 40 bytes × 7px = 280px in a 200px box: the window must slide.
     seam_rig(&mut s, &"x".repeat(40));
+    s.tick(0.016);
     let ui = s.focused_editbox_text_ui().unwrap();
-    assert!(ui.display_from > 0, "overlong text must scroll: {ui:?}");
-    assert!(ui.caret_x <= 198.0, "caret inside the window: {ui:?}");
     assert_eq!(
-        ui.caret_x,
-        (40 - ui.display_from) as f32 * 7.0,
-        "caret x measures from the window origin"
+        ui.caret_x, 147.0,
+        "21 chars from the window's start: {ui:?}"
     );
     s.editbox_action(EditAction::Move {
         unit: EditUnit::Edge,
         back: true,
         extend: false,
     });
+    s.tick(0.016);
     let ui = s.focused_editbox_text_ui().unwrap();
-    assert_eq!(ui.display_from, 0);
     assert_eq!(ui.caret_x, 0.0);
 }
 

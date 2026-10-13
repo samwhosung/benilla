@@ -109,9 +109,12 @@ pub struct EditBoxState {
     /// A multi-line relayout that found its text's measure pending, retried at each flush until it
     /// lands; with no font engine installed the measure arrives from the host a tick later.
     pub relayout_owed: bool,
-    /// The first visible display byte of a single-line box (`E+0x348`), scrolled by whole chars
-    /// to keep the caret in view; `0x77da80` hides a caret outside the window.
+    /// The window's first display byte (`E+0x348`), which only the flush's relayout moves
+    /// ([`Self::rewindow`]), so the window stays where the caret last left it.
     pub scroll_start: usize,
+    /// The window's length in display bytes (`E+0x34c`): what of the text from
+    /// [`Self::scroll_start`] the text region holds and draws (`0x77d858`).
+    pub window_len: usize,
     /// A left-button press in the box is held (`E+0x364`); moves extend the selection (`0x77a860`).
     pub drag_active: bool,
     /// Caret blink half-period in seconds (`E+0x370`; ctor 0.5, XML `blinkSpeed`).
@@ -194,6 +197,7 @@ impl Default for EditBoxState {
             dirty: Self::DIRTY_TEXT,
             relayout_owed: false,
             scroll_start: 0,
+            window_len: 0,
             drag_active: false,
             blink_period: 0.5,
             blink_accum: 0.0,
@@ -423,37 +427,79 @@ impl EditBoxState {
         self.blink_accum = 0.0;
     }
 
-    /// Scroll the single-line window (`E+0x348`) by whole chars to keep the caret in `avail` px.
-    pub fn clamp_scroll(&mut self, avail: f32) {
-        if self.multi_line {
-            // A multiline box wraps; its parent ScrollFrame scrolls it.
-            self.scroll_start = 0;
-            return;
-        }
+    /// Whether the caret lies in the window, its ends included (`0x77da95`–`0x77daa7`).
+    pub fn caret_in_window(&self) -> bool {
+        let c = self.text_to_display(self.cursor);
+        c >= self.scroll_start && c <= self.scroll_start + self.window_len
+    }
+
+    /// What the text region holds: the window's bytes of the display (`0x77d840`–`0x77d858`), or
+    /// with `to_end` everything from the window's start, which an edit writes so that what it
+    /// typed shows before the flush re-windows. A multi-line box's window is its whole text.
+    pub fn window_text(&self, to_end: bool) -> String {
         let display = self.display();
-        if self.advances.len() != display.len() + 1 || avail <= 0.0 {
+        if self.multi_line {
+            return display;
+        }
+        let from = snap_down(&display, self.scroll_start);
+        let to = if to_end {
+            display.len()
+        } else {
+            snap_down(&display, from + self.window_len)
+        };
+        display[from..to.max(from)].to_string()
+    }
+
+    /// The relayout's window (`0x77d4d0`), `width` the text region's in the advance table's
+    /// units. A single-line box keeps its start and takes the stops from it that fit the width
+    /// (`0x77d71a`, `0x77d739`); when the caret has left that window, `0x77d320` starts it again
+    /// at the stops back from the caret that fit a quarter of the width, the caret having left
+    /// by the left, or three quarters, by the right (`0x77d7d4`–`0x77d7f3`). A multi-line box's
+    /// window is its whole text (its line table ends at the text's length, `0x77d6ef`). Needs the
+    /// advance table measured for the display.
+    pub fn rewindow(&mut self, width: f32) {
+        let display = self.display();
+        if self.multi_line || self.advances.len() != display.len() + 1 {
+            self.scroll_start = 0;
+            self.window_len = display.len();
             return;
         }
-        let cursor_d = self.text_to_display(self.cursor);
-        // Snap a stale start back onto a char boundary.
-        self.scroll_start = self.scroll_start.min(display.len());
-        while self.scroll_start > 0 && !display.is_char_boundary(self.scroll_start) {
-            self.scroll_start -= 1;
+        let map = crate::markup::ClassMap::new(&display);
+        let cursor = self.text_to_display(self.cursor).min(display.len());
+        let mut start = snap_down(&display, self.scroll_start);
+        let mut end = self.fit_forward(&map, start, width);
+        if cursor < start || cursor > end {
+            let lead = if cursor < start { 0.25 } else { 0.75 };
+            start = self.fit_back(&map, cursor, width * lead);
+            end = self.fit_forward(&map, start, width);
         }
-        if cursor_d < self.scroll_start {
-            self.scroll_start = cursor_d;
-            return;
+        self.scroll_start = start;
+        self.window_len = end - start;
+    }
+
+    /// The last stop from `start` whose advance fits `width`, stepping each visible character
+    /// (`0x772bc0`'s count, as bytes by `0x77bb30` with links not atomic).
+    fn fit_forward(&self, map: &crate::markup::ClassMap, start: usize, width: f32) -> usize {
+        let mut end = start;
+        loop {
+            let next = map.advance(end, 1, false);
+            if next <= end || self.advances[next] - self.advances[start] > width {
+                return end;
+            }
+            end = next;
         }
-        while self.advances[cursor_d] - self.advances[self.scroll_start] > avail {
-            // Advance the window one char; the loop is bounded by cursor_d.
-            let mut next = self.scroll_start + 1;
-            while next < display.len() && !display.is_char_boundary(next) {
-                next += 1;
+    }
+
+    /// The first stop back from `cursor` whose span to it fits `width` (`0x772c30`, then
+    /// `0x77bb30` backward), at 0 at the latest (`0x77d363`).
+    fn fit_back(&self, map: &crate::markup::ClassMap, cursor: usize, width: f32) -> usize {
+        let mut start = cursor;
+        loop {
+            let prev = map.advance(start, -1, false);
+            if prev >= start || self.advances[cursor] - self.advances[prev] > width {
+                return start;
             }
-            if next > cursor_d {
-                break;
-            }
-            self.scroll_start = next;
+            start = prev;
         }
     }
 }

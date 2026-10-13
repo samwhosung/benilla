@@ -20,20 +20,22 @@ pub(in crate::script) fn update(lua: &Lua, h: FrameHandle, dt: f32) {
 /// raises bits for the next flush, a frame later, and never loops inside one: an `OnTextChanged`
 /// that sets its own text fires once more, next frame, and a caret moved by `OnCursorChanged` is
 /// cleared with the bit.
+/// A caret that has left the window promotes bit 2 to bit 0 (`0x77d3f5`–`0x77d436`), so the
+/// relayout re-windows around it; that fires no `OnTextChanged`, which keys on the bit as sampled.
 /// Besides the walk, the box's `OnKeyDown` (`0x77b1e2`) and `OnMouseDown` (`0x77b819`) run it
 /// before the key or click acts.
 ///
-/// Deviation: the flush's promotion of bit 2 to bit 0 when the caret has left the display window
-/// (`0x77d3f5`–`0x77d436`), with its IME legs (`0x77d417`–`0x77d431`), and the IME writer's
-/// `or 6` (`0x77acde`, in `0x77ac60`) are not modelled: the promotion only relayouts, which
-/// re-windows a single-line box whose window benilla keeps host-side, and fires nothing, since
-/// bit 0 is sampled before it; benilla has no IME composition.
+/// Deviation: the promotion's IME legs (`0x77d417`–`0x77d431`) and the IME writer's `or 6`
+/// (`0x77acde`, in `0x77ac60`) are not modelled: benilla has no IME composition.
 pub(super) fn flush(lua: &Lua, h: FrameHandle) {
-    let Some((entry, owed)) = with_eb(lua, h, |eb| (eb.dirty, eb.relayout_owed)) else {
+    let Some((entry, owed, left)) = with_eb(lua, h, |eb| {
+        (eb.dirty, eb.relayout_owed, !eb.caret_in_window())
+    }) else {
         return;
     };
     let text_changed = entry & EditBoxState::DIRTY_TEXT != 0;
-    if text_changed || owed {
+    let promoted = entry & EditBoxState::DIRTY_CURSOR != 0 && left;
+    if text_changed || owed || promoted {
         let done = relayout::relayout(lua, h);
         with_eb(lua, h, |eb| {
             eb.dirty &= !EditBoxState::DIRTY_TEXT;
@@ -48,11 +50,17 @@ pub(super) fn flush(lua: &Lua, h: FrameHandle) {
     }
 }
 
-/// The caret leg `0x77da80`: it restarts the blink (`0x77dd68`), fires `OnCursorChanged`, then
-/// shows the caret in the focused box (`0x77de35`) and hides it elsewhere (`0x77de51`). So a box
-/// that takes the keyboard, whose focus change raises bit 2 (`0x77afa8`), starts its caret solid.
-/// `false` while the advance table is pending, for the next flush to retry.
+/// The caret leg `0x77da80`: a caret outside the window is only hidden (`0x77da97` →
+/// `0x77de49`); else it restarts the blink (`0x77dd68`), fires `OnCursorChanged`, then shows the
+/// caret in the focused box (`0x77de35`) and hides it elsewhere (`0x77de51`). So a box that takes
+/// the keyboard, whose focus change raises bit 2 (`0x77afa8`), starts its caret solid. `false`
+/// while the advance table is pending, for the next flush to retry.
 fn caret(lua: &Lua, h: FrameHandle) -> bool {
+    // A window still owed its relayout is stale, and the retry places the caret.
+    if with_eb(lua, h, |eb| !eb.relayout_owed && !eb.caret_in_window()) == Some(true) {
+        with_eb(lua, h, |eb| eb.caret_shown = false);
+        return true;
+    }
     with_eb(lua, h, |eb| eb.blink_accum = 0.0);
     let placed = cursor_changed(lua, h);
     let focused = lua
@@ -133,12 +141,9 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
     true
 }
 
-/// The caret blink (`0x77a7a6`–`0x77a84c`): past the period (0.5 s by default) the focused box's
-/// caret toggles and the accumulator resets; only a period of exactly 0.0 keeps the caret solid
-/// (`0x77a7b4`).
-///
-/// Deviation: not gated on the cursor lying inside the scroll window (`0x77a7bd`–`0x77a7d7`),
-/// which benilla's host keeps around the caret.
+/// The caret blink (`0x77a7a6`–`0x77a84c`): while the caret lies in the window
+/// (`0x77a7bd`–`0x77a7d7`), past the period (0.5 s by default) the focused box's caret toggles and
+/// the accumulator resets; only a period of exactly 0.0 keeps the caret solid (`0x77a7b4`).
 fn blink(lua: &Lua, h: FrameHandle, dt: f32) {
     let focused = lua
         .app_data_ref::<Model>()
@@ -149,7 +154,7 @@ fn blink(lua: &Lua, h: FrameHandle, dt: f32) {
         return;
     }
     with_eb(lua, h, |eb| {
-        if eb.blink_period != 0.0 {
+        if eb.blink_period != 0.0 && eb.caret_in_window() {
             eb.blink_accum += dt;
             if eb.blink_accum > eb.blink_period {
                 eb.caret_shown = !eb.caret_shown;

@@ -382,26 +382,28 @@ fn highlight_text(lua: &Lua, h: FrameHandle, start: i64, end: i64) {
 
 // ── text-region sync ─────────────────────────────────────────────────────────────────────────
 
-/// Write the display string into the text region; a `password` box shows one `*` per character.
+/// After an edit, write the display from the window's start into the text region, so what was
+/// typed shows before the flush re-windows; a `password` box shows one `*` per character.
 fn sync_text_region(lua: &Lua, h: FrameHandle) {
     let Some(rh) = ensure_text_region(lua, h) else {
         return;
     };
-    let display = with_eb(lua, h, |eb| {
-        if eb.password {
-            "*".repeat(eb.text.chars().count())
-        } else {
-            eb.text.clone()
-        }
-    });
-    if let Some(display) = display {
+    if let Some(text) = with_eb(lua, h, |eb| eb.window_text(true)) {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let data = model.region_data.entry(rh).or_default();
-        let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());
-        data.text = Some(display);
-        model.touch_measure(rh);
-        model.touch_layout_text(rh, was_shown);
+        write_region_text(&mut model, rh, text);
     }
+}
+
+/// Set the text region's string, `SetText` on the box's font string (`0x771d80`).
+fn write_region_text(model: &mut Model, rh: RegionHandle, text: String) {
+    let data = model.region_data.entry(rh).or_default();
+    if data.text.as_deref() == Some(text.as_str()) {
+        return;
+    }
+    let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());
+    data.text = Some(text);
+    model.touch_measure(rh);
+    model.touch_layout_text(rh, was_shown);
 }
 
 /// `SetTextInsets(l, r, t, b)` (`0x77a6e0`): store the insets and re-seat the text region by
