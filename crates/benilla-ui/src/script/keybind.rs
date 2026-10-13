@@ -145,18 +145,20 @@ pub(crate) struct KeybindState {
     /// The set the live table edits (`GetCurrentBindingSet`): 1 account, 2 character.
     current_set: u32,
     /// Bumped by every change to the live table or the commands: the app's signal to re-derive
-    /// dispatch.
+    /// dispatch. It says nothing of `UPDATE_BINDINGS`.
     generation: u64,
-    /// The generation a Lua verb last signalled `UPDATE_BINDINGS` for in place (`SetBinding`
-    /// `0x4b805b`, `LoadBindings` through `0x4b649d`), so the app owes no second signal for it.
-    signalled: u64,
+    /// A host-side load of a set into the live table (the seed at the VM's birth) is owed its
+    /// `UPDATE_BINDINGS`, which the reference signals at the copy into set 3 (`0x4b649d`). The Lua
+    /// verbs signal in place and clear it; a registration (`0x4b6f70`) signals nothing, so it
+    /// moves [`Self::generation`] alone.
+    signal_owed: bool,
     requests: Vec<KeybindRequest>,
 }
 
 impl KeybindState {
     /// A verb's change, signalled in place: `UPDATE_BINDINGS` (`0x182`) before the verb returns.
     fn signal(model: &mut Model) {
-        model.keybinds.signalled = model.keybinds.generation;
+        model.keybinds.signal_owed = false;
         model.raise("UPDATE_BINDINGS", Vec::new());
     }
 }
@@ -361,7 +363,9 @@ impl super::UiScript {
 
     /// Host-side `LoadBindings` (world entry: character set if it exists, else account).
     pub fn load_binding_set(&mut self, set: u32) {
-        self.model_mut().keybinds.load(set);
+        let mut model = self.model_mut();
+        model.keybinds.load(set);
+        model.keybinds.signal_owed = true;
     }
 
     /// The live keys as `(chord, command)` in bind order, for dispatch.
@@ -399,9 +403,10 @@ impl super::UiScript {
         self.model_mut().keybinds.generation
     }
 
-    /// The generation a Lua verb already signalled `UPDATE_BINDINGS` for in place.
-    pub fn keybinds_signalled_generation(&self) -> u64 {
-        self.model_ref().keybinds.signalled
+    /// Whether a host-side load still owes its `UPDATE_BINDINGS` (`0x4b649d`); taking it clears
+    /// the debt. A Lua verb's change signals in place and owes nothing.
+    pub fn take_keybinds_signal_owed(&mut self) -> bool {
+        std::mem::take(&mut self.model_mut().keybinds.signal_owed)
     }
 
     /// Drain the queued host requests.
@@ -678,7 +683,7 @@ mod tests {
     /// live set (`0x4b649d`).
     #[test]
     fn the_binding_verbs_signal_update_bindings_in_place() {
-        let s = script();
+        let mut s = script();
         crate::script::tick::heard::listen(&s, &["UPDATE_BINDINGS"], Some("GetBindingAction('F')"));
         s.run(r#"SetBinding("F", "JUMP")"#).unwrap();
         assert_eq!(
@@ -689,7 +694,10 @@ mod tests {
         assert!(crate::script::tick::heard::take(&s).is_empty());
         s.run("LoadBindings(0)").unwrap();
         assert_eq!(crate::script::tick::heard::take(&s), ["UPDATE_BINDINGS "]);
-        assert_eq!(s.keybinds_signalled_generation(), s.keybinds_generation());
+        assert!(
+            !s.take_keybinds_signal_owed(),
+            "a verb's signal leaves no debt"
+        );
     }
 
     /// `LoadBindings` reads its set with a bare `tonumber` (`0x4b8228`) and raises its usage for

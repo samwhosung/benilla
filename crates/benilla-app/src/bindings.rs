@@ -303,26 +303,26 @@ fn drain_binding_requests(script: Option<NonSendMut<UiScript>>, files: Res<Bindi
 }
 
 /// Rebuild the dispatch map when the engine table moved (a rebind, a set switch, the seed, a
-/// load), and fire `UPDATE_BINDINGS` so the Lua consumers (the action bar's hotkey corners)
-/// repaint, unless the move was a Lua verb's, which signalled it in place (`SetBinding`
-/// `0x4b805b`, `LoadBindings` `0x4b649d`).
+/// load, a registration), and fire the `UPDATE_BINDINGS` a host-side load owes so the Lua
+/// consumers (the action bar's hotkey corners) repaint. The reference signals it from `SetBinding`
+/// (`0x4b805b`), which signals in place, and from the copy of a set into the live table
+/// (`0x4b649d`); reading a `Bindings.xml` (`0x4b6f70`) signals nothing.
 fn sync_dispatch(script: Option<NonSendMut<UiScript>>, mut dispatch: ResMut<BindingDispatch>) {
     let Some(mut script) = script else { return };
     let generation = script.keybinds_generation();
-    if *dispatch.seen_generation.get(&script) == Some(generation) {
-        return;
-    }
-    *dispatch.seen_generation.get(&script) = Some(generation);
-    dispatch.map.clear();
-    for (key, command) in script.binding_keys() {
-        match Chord::parse(&key) {
-            Some(ch) => {
-                dispatch.map.insert(ch, command);
+    if *dispatch.seen_generation.get(&script) != Some(generation) {
+        *dispatch.seen_generation.get(&script) = Some(generation);
+        dispatch.map.clear();
+        for (key, command) in script.binding_keys() {
+            match Chord::parse(&key) {
+                Some(ch) => {
+                    dispatch.map.insert(ch, command);
+                }
+                None => warn!("bindings: {command}: unpressable chord '{key}' (unknown token)"),
             }
-            None => warn!("bindings: {command}: unpressable chord '{key}' (unknown token)"),
         }
     }
-    if script.keybinds_signalled_generation() != generation {
+    if script.take_keybinds_signal_owed() {
         script.fire_event("UPDATE_BINDINGS", vec![]);
     }
 }
@@ -840,6 +840,61 @@ mod tests {
             .map
             .values()
             .any(|c| c == "JUMP"));
+    }
+
+    /// Only the two reference sites signal `UPDATE_BINDINGS`: a set's copy into the live table
+    /// (`0x4b649d`, here the host's load) and a stored `SetBinding`. Reading an addon's
+    /// `Bindings.xml` (`0x4b6f70`) moves the dispatch table and signals nothing.
+    #[test]
+    fn registering_an_addons_bindings_signals_nothing_but_a_load_does() {
+        let script = core_script();
+        script
+            .run(
+                "UPDATES = 0 local f = CreateFrame('Frame') f:RegisterEvent('UPDATE_BINDINGS') \
+                 f:SetScript('OnEvent', function() UPDATES = UPDATES + 1 end)",
+            )
+            .unwrap();
+        let mut app = vm_harness(script);
+        app.update();
+        assert_eq!(
+            lua_count(&app, "UPDATES"),
+            1,
+            "the seed's load owes its signal"
+        );
+        app.update();
+        assert_eq!(lua_count(&app, "UPDATES"), 1, "once");
+
+        {
+            let script = app.world().non_send_resource::<UiScript>();
+            // The verb signals in place and owes nothing; only then does the registration run.
+            script
+                .run(r#"SetBinding("J", "PROBEHOLD") UPDATES = 0"#)
+                .unwrap();
+            script.register_addon_bindings(
+                "ProbeAddon",
+                &benilla_ui::bindings_xml::parse(PROBE_BINDINGS).expect("well-formed"),
+            );
+        }
+        app.update();
+        assert_eq!(
+            lua_count(&app, "UPDATES"),
+            0,
+            "a registration signals nothing"
+        );
+        assert!(
+            app.world()
+                .resource::<BindingDispatch>()
+                .map
+                .values()
+                .any(|c| c == "PROBEHOLD"),
+            "but the dispatch map re-derives"
+        );
+
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .load_binding_set(1);
+        app.update();
+        assert_eq!(lua_count(&app, "UPDATES"), 1, "a load does");
     }
 
     /// A `runOnUp` body is one chunk run twice, `keystate` "down" then "up"; a plain one runs on
