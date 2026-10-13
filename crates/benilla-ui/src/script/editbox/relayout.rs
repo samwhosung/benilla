@@ -171,7 +171,7 @@ const ONE_LINE: &str = "0";
 /// `0x7727b0(fs, 1)`, one line's height in the text region's font: the installed engine's measure
 /// of one line, the same measure a line of text takes, cached on the box under its key. `None`
 /// with no engine installed.
-fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option<f32> {
+pub(super) fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option<f32> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let scale = owner_scale(&model, h);
     let req = {

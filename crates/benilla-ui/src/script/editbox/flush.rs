@@ -64,16 +64,14 @@ fn caret(lua: &Lua, h: FrameHandle) -> bool {
     placed
 }
 
-/// `OnCursorChanged(x, y, w, h)` (`0x77de1b`, in the box's own units via `0x77dd5f`), `x` the caret's advance
-/// along its line, `y` minus the row index times the row pitch, `w` the constant 4.0 and `h` the
-/// line height. The arguments are computed only for a box with the script (`0x77dd8c`), from the
-/// box's advance table, which the installed font engine measures here when the text or font
-/// moved. `false` while that table is pending, with no engine installed: the host answers the
-/// focused box's a tick later.
-///
-/// Deviation: `h` is the row pitch the advance answer carries, where the reference passes the line
-/// height (`0x7727b0`): 0 for a single-line box, whose answer has no pitch, and for a multi-line
-/// box taller than the line height only for a font with extra spacing (none in the stock UI).
+/// `OnCursorChanged(x, y, w, h)` (`0x77de1b`, in the box's own units via `0x77dd5f`), `x` the
+/// caret's advance along its line, `y` minus the row index times the row pitch, and `w` and `h`
+/// the caret texture's size (`0x77dd86`, `0x77dd74`): the constant 4.0 and one line of the text's
+/// font (`0x7727b0(fs, 1)`, set at `0x77ba76`), single-line or multi-line. The arguments are
+/// computed only for a box with the script (`0x77dd8c`), from the box's advance table, which the
+/// installed font engine measures here when the text or font moved. `false` while that table or
+/// the line's measure is pending, with no engine installed: the host answers the focused box's
+/// table a tick later.
 fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
     let id = frame_id_of(lua, h);
     if !event::has_widget_handler(lua, id, "OnCursorChanged") {
@@ -82,6 +80,12 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
     if !super::seam::advances_current(lua, h) {
         return false;
     }
+    // Already in the box's own units, as the measure answers.
+    let Some(line_h) =
+        super::ensure_text_region(lua, h).and_then(|rh| relayout::line_height(lua, h, rh))
+    else {
+        return false;
+    };
     let args = with_eb(lua, h, |eb| {
         let display = eb.display();
         if eb.advances.len() != display.len() + 1 {
@@ -97,10 +101,10 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
         // `y` starts at 0 and loses one pitch per row above the caret (`0x77dae1`, `0x77db31`),
         // so row 0 reports +0, never the -0 that Lua prints as "-0".
         let y = 0.0 - row as f32 * pitch;
-        Some((x, y, pitch))
+        Some((x, y))
     })
     .flatten();
-    let Some((x, y, pitch)) = args else {
+    let Some((x, y)) = args else {
         return false;
     };
     // The advance table is in root units (measured at the box's scale, divided by the seam
@@ -110,7 +114,7 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         crate::script::object::eff_scale(&model, h)
     };
-    let (x, y, pitch) = (x / k, y / k, pitch / k);
+    let (x, y) = (x / k, y / k);
     if let Err(e) = event::fire_widget_handler(
         lua,
         id,
@@ -119,7 +123,7 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
             Value::Number(f64::from(x)),
             Value::Number(f64::from(y)),
             Value::Number(f64::from(CARET_WIDTH)),
-            Value::Number(f64::from(pitch)),
+            Value::Number(f64::from(line_h)),
         ],
     ) {
         lua.app_data_mut::<Model>()

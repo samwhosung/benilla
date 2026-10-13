@@ -1648,6 +1648,24 @@ fn set_max_bytes_caps_the_buffer_in_bytes_with_minus_one_unlimited() {
     assert!(s.run("E:SetMaxBytes(1, 2)").is_err(), "too many raises");
 }
 
+/// A font engine whose lines are 12 tall and which leaves every advance table to the host's round
+/// trip.
+struct TwelveTall;
+
+impl crate::script::TextMeasure for TwelveTall {
+    fn measure(&mut self, req: &crate::script::MeasureRequest) -> (f32, f32, f32) {
+        let w = req.text.len() as f32 * 7.0;
+        (w, 12.0, w)
+    }
+
+    fn editbox_advances(
+        &mut self,
+        _: &crate::script::EditBoxAdvanceRequest,
+    ) -> Option<(Vec<f32>, Vec<usize>, f32)> {
+        None
+    }
+}
+
 /// `OnCursorChanged(x, y, w, h)` fires when the caret moves, with the reference's args
 /// (`0x77dd5f`, each scaled): `x` the advance along the line, `y` negative downward by row, `w`
 /// the constant 4, `h` the line height. Stock `ScrollingEdit_OnCursorChanged` reads `-y` as the
@@ -1656,6 +1674,7 @@ fn set_max_bytes_caps_the_buffer_in_bytes_with_minus_one_unlimited() {
 fn the_caret_flush_fires_on_cursor_changed_with_the_references_four_args() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
+    s.set_text_measurer(Box::new(TwelveTall));
     s.run(
         r#"
         fires = {}

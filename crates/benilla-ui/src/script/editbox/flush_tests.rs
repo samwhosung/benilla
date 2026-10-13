@@ -526,6 +526,27 @@ fn on_cursor_changed_reports_the_first_row_at_plus_zero() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// `OnCursorChanged`'s `h` is the caret's height, which the text seat sets to one line of the
+/// box's font (`0x77b970` → `0x77ba76`) whether or not the box is multi-line, and its `w` the
+/// constant 4 (`0x77ba67`).
+#[test]
+fn on_cursor_changed_reports_one_line_tall_in_a_single_line_box() {
+    let mut s = script();
+    logged_box(&mut s);
+    s.run(
+        r#"
+        E:SetScript("OnCursorChanged", function()
+            table.insert(LOG, format("cursor@%g,%g,%g,%g", arg1, arg2, arg3, arg4))
+        end)
+        E:SetText("ab")
+    "#,
+    )
+    .unwrap();
+    s.tick(0.016);
+    assert_eq!(take_log(&s), "early update cursor@14,0,4,14 text:ab late");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// [`Mono`] as the host answers a scaled box: glyphs 7 and lines 14 in the box's own units, the
 /// table in root units (measured at the box's scale, divided by the seam alone).
 struct ScaledMono;
