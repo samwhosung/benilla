@@ -157,6 +157,23 @@ pub fn check_camera_rate(value: &str, _applied: &str) -> CvarVerdict {
     camera_range(value, min, max)
 }
 
+/// `0x50b380`, a saved view's pitch: `[0x8089dc]·[0x803a78]` to `[0x8089d8]·[0x803a78]` as
+/// floats, ±89 degrees.
+pub fn check_camera_pitch(value: &str, _applied: &str) -> CvarVerdict {
+    const DEG_PER_RAD: f32 = 57.295_78; // [0x803a78]
+    let max = (f64::from(1.553_343_1f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089d8]
+    let min = (f64::from(-1.553_343_1f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089dc]
+    camera_range(value, min, max)
+}
+
+/// `0x50b3c0`, a saved view's yaw: `[0x8089e4]·[0x803a78]` to `[0x8089e0]·[0x803a78]` as floats,
+/// 0 to 360 degrees, so a negative offset is refused.
+pub fn check_camera_yaw(value: &str, _applied: &str) -> CvarVerdict {
+    const DEG_PER_RAD: f32 = 57.295_78; // [0x803a78]
+    let max = (f64::from(6.283_185_5f32) * f64::from(DEG_PER_RAD)) as f32; // [0x8089e0]
+    camera_range(value, 0.0, max)
+}
+
 /// `0x50bfe0`, the camera's durations and the bob frequency: `[0x8089fc]` 0.001 to `[0x8089f8]`
 /// 300.
 pub fn check_camera_time(value: &str, _applied: &str) -> CvarVerdict {
@@ -269,10 +286,22 @@ mod tests {
                 "4",
                 "Value out of range (0.000000 - 4.000000)",
             ),
+            (
+                check_camera_pitch,
+                "-89",
+                "89",
+                "Value out of range (-89.000000 - 89.000000)",
+            ),
+            (
+                check_camera_yaw,
+                "0",
+                "360",
+                "Value out of range (0.000000 - 360.000000)",
+            ),
         ] {
             assert!(check(lo, "").accept, "{line}: {lo}");
             assert!(check(hi, "").accept, "{line}: {hi}");
-            for bad in ["-1", "1000", "1e9"] {
+            for bad in ["-1000", "1000", "1e9"] {
                 assert_eq!(check(bad, ""), CvarVerdict::refuse(line), "{bad}");
             }
         }
@@ -280,6 +309,8 @@ mod tests {
         assert!(!check_camera_rate("+90", "").accept);
         assert!(check_camera_smooth_style(" 9", "").accept);
         assert!(!check_camera_rate("0.0999", "").accept);
+        assert!(!check_camera_yaw("-1", "").accept, "a negative yaw offset");
+        assert!(!check_camera_pitch("89.001", "").accept);
         // The bound is the float nearest 0.1, which is above the parse of "0.1".
         assert!(!check_camera_rate("0.1", "").accept);
         assert!(!check_camera_time("0.001", "").accept);

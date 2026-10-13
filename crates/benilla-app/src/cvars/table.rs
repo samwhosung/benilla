@@ -233,7 +233,8 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("autoSelfCast", "0"),
     // The five saved camera views and the live index, at the reference's names and default strings;
     // owned by [`crate::player::camera_view`]. Registered so a `SaveView` persists. The index's
-    // validator `0x50bfc0` takes 0 to 4.
+    // validator `0x50bfc0` takes 0 to 4; each view's three take their field's range, from
+    // `[0x84f790]` (`0x50b9ec`): distance `0x50b310`, pitch `0x50b380`, yaw `0x50b3c0`.
     same(
         crate::player::camera_view::CVAR_ACTIVE_VIEW,
         crate::player::camera_view::ACTIVE_VIEW_DEFAULT,
@@ -242,63 +243,78 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same(
         crate::player::camera_view::VIEW_CVARS[0][0],
         crate::player::camera_view::VIEW_DEFAULTS[0][0],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_distance_max),
     same(
         crate::player::camera_view::VIEW_CVARS[0][1],
         crate::player::camera_view::VIEW_DEFAULTS[0][1],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_pitch),
     same(
         crate::player::camera_view::VIEW_CVARS[0][2],
         crate::player::camera_view::VIEW_DEFAULTS[0][2],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_yaw),
     same(
         crate::player::camera_view::VIEW_CVARS[1][0],
         crate::player::camera_view::VIEW_DEFAULTS[1][0],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_distance_max),
     same(
         crate::player::camera_view::VIEW_CVARS[1][1],
         crate::player::camera_view::VIEW_DEFAULTS[1][1],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_pitch),
     same(
         crate::player::camera_view::VIEW_CVARS[1][2],
         crate::player::camera_view::VIEW_DEFAULTS[1][2],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_yaw),
     same(
         crate::player::camera_view::VIEW_CVARS[2][0],
         crate::player::camera_view::VIEW_DEFAULTS[2][0],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_distance_max),
     same(
         crate::player::camera_view::VIEW_CVARS[2][1],
         crate::player::camera_view::VIEW_DEFAULTS[2][1],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_pitch),
     same(
         crate::player::camera_view::VIEW_CVARS[2][2],
         crate::player::camera_view::VIEW_DEFAULTS[2][2],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_yaw),
     same(
         crate::player::camera_view::VIEW_CVARS[3][0],
         crate::player::camera_view::VIEW_DEFAULTS[3][0],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_distance_max),
     same(
         crate::player::camera_view::VIEW_CVARS[3][1],
         crate::player::camera_view::VIEW_DEFAULTS[3][1],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_pitch),
     same(
         crate::player::camera_view::VIEW_CVARS[3][2],
         crate::player::camera_view::VIEW_DEFAULTS[3][2],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_yaw),
     same(
         crate::player::camera_view::VIEW_CVARS[4][0],
         crate::player::camera_view::VIEW_DEFAULTS[4][0],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_distance_max),
     same(
         crate::player::camera_view::VIEW_CVARS[4][1],
         crate::player::camera_view::VIEW_DEFAULTS[4][1],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_pitch),
     same(
         crate::player::camera_view::VIEW_CVARS[4][2],
         crate::player::camera_view::VIEW_DEFAULTS[4][2],
-    ),
+    )
+    .checked(benilla_ui::script::check_camera_yaw),
     same("mouseInvertPitch", "0"),
     ours(
         "autoLootDefault",

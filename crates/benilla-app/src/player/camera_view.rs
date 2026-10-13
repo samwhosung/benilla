@@ -80,7 +80,9 @@ impl ViewPose {
         }
     }
 
-    /// The three CVar strings, in the reference's `"%f"` (`0x50f9f3`, format `0x835160`).
+    /// The three CVar strings, in the reference's `"%f"` (`0x50f9f3`, format `0x835160`), each
+    /// written through `CVar::Set` with its callback (`0x50fa09`): a negative yaw offset is refused
+    /// by `0x50b3c0` and only the in-memory view keeps it.
     fn to_reference(self) -> [String; 3] {
         [
             format!("{:.6}", self.distance),

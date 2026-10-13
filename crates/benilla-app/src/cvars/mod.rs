@@ -1454,6 +1454,9 @@ mod tests {
         assert_eq!(res::<Cvars>(&app).get("frillDensity"), Some("256"));
         apply(&mut app, "frillDensity", "1");
         assert_eq!(res::<ClutterConfig>(&app).density, 1.0 / 16.0);
+        // The callback hands on `SStrToInt`'s integer (`0x688dfa`): 48.9 applies 48.
+        apply(&mut app, "frillDensity", "48.9");
+        assert_eq!(res::<ClutterConfig>(&app).density, 3.0);
         apply(&mut app, "WorldDetail", "1");
         assert_eq!(res::<ClutterConfig>(&app).density, 2.0);
         for (wrote, want) in [
@@ -1738,6 +1741,25 @@ mod tests {
                 "Value out of range (0.000000 - 3.000000)",
                 "cameraSmoothStyle",
                 "1",
+            ),
+            // A saved view's three, from `[0x84f790]`: `0x50b310`, `0x50b380`, `0x50b3c0`.
+            (
+                "cameraDistanceC 60",
+                "Value out of range (0.000000 - 50.000000)",
+                "cameraDistanceC",
+                "13.88",
+            ),
+            (
+                "cameraPitchB 100",
+                "Value out of range (-89.000000 - 89.000000)",
+                "cameraPitchB",
+                "20.0",
+            ),
+            (
+                "cameraYawA -10",
+                "Value out of range (0.000000 - 360.000000)",
+                "cameraYawA",
+                "0.0",
             ),
         ] {
             assert_eq!(

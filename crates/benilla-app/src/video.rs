@@ -251,9 +251,10 @@ pub(crate) fn on_cvar(
             );
         }
         // The same knob in the reference's cells per chunk, which the registry holds to `[1, 256]`
-        // (`0x688de0`); the loaded tiles re-scatter off the change.
+        // (`0x688de0`); the callback hands on `SStrToInt`'s integer (`0x688dfa`), so "48.9" is 48.
+        // The loaded tiles re-scatter off the change.
         "frilldensity" => {
-            clutter.set_frill_density(v);
+            clutter.set_frill_density(benilla_ui::script::sstr_to_int(&ev.new) as f32);
             cvars.mirror(
                 benilla_ui::script::CVAR_WORLD_DETAIL,
                 &(clutter.density - 1.0).to_string(),
