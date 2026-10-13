@@ -364,7 +364,6 @@ pub(super) fn teardown_roster(lua: &Lua) {
     super::tick::fire_event_into(lua, "CHARACTER_LIST_UPDATE", Vec::new());
 }
 
-/// `[0xb42174]`'s frame, while the name `SetCharSelectModelFrame` took still names a model pane.
 /// The scene a `ModelFFX` pane `h` holds, visible or not ([`UiScript::glue_scene`]).
 fn scene_pane(model: &Model, h: crate::widget::FrameHandle) -> Option<GlueScenePane> {
     let f = model.arena.frame(h)?;
@@ -397,6 +396,7 @@ fn scene_pane(model: &Model, h: crate::widget::FrameHandle) -> Option<GlueSceneP
     })
 }
 
+/// `[0xb42174]`'s frame, while the name `SetCharSelectModelFrame` took still names a model pane.
 fn model_frame_handle(model: &Model) -> Option<crate::widget::FrameHandle> {
     let h = model
         .arena
