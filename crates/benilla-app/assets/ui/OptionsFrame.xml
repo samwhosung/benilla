@@ -1275,9 +1275,11 @@
             <BackgroundInsets><AbsInset left="11" right="12" top="12" bottom="11"/></BackgroundInsets>
         </Backdrop>
         <Layers>
-            <Layer level="BACKGROUND">
+            <!-- BORDER, over the tile: a layer draws its textures sorted by texture, not in
+                 declaration order, so on BACKGROUND the fill could sort under the tile. -->
+            <Layer level="BORDER">
                 <!-- 0.88 combined with the tile, so labels read over bright terrain. Inset 15:
-                     regions draw over the border, whose ink ends by texel 14. -->
+                     clear of the border's ink, which ends by texel 14. -->
                 <Texture name="$parentGroundDim">
                     <Anchors>
                         <Anchor point="TOPLEFT"><Offset><AbsDimension x="15" y="-15"/></Offset></Anchor>
