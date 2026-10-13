@@ -413,17 +413,18 @@ fn paste_strips_newlines_in_a_single_line_box_but_keeps_them_when_multiline() {
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetFocus()"#)
         .unwrap();
-    // Single-line: newlines/tabs and other control chars are dropped; spaces survive.
-    assert!(s.paste("one\ntwo\tthree\r"));
+    // Single-line: a newline and the other control chars are dropped, a tab types four spaces
+    // (`0x77c228`).
+    assert!(s.paste("one\ntwo\tthree\r\u{7f}"));
     assert_eq!(
         s.eval::<String>("return E:GetText()").unwrap(),
-        "onetwothree"
+        "onetwo    three"
     );
 
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetMultiLine(true); E:SetFocus()"#)
         .unwrap();
-    assert!(s.paste("one\ntwo"));
+    assert!(s.paste("one\r\ntwo"));
     assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "one\ntwo");
 }
 
@@ -438,31 +439,44 @@ fn paste_honors_max_letters_and_numeric() {
     let mut s = script();
     s.run(r#"E = CreateFrame("EditBox", "E"); E:SetNumeric(true); E:SetFocus()"#)
         .unwrap();
-    assert!(s.paste("12a3"), "consumed even though the insert aborts");
-    assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "");
-    assert!(s.paste("456"));
-    assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "456");
+    // Each character is its own insert, so only the non-digits are refused.
+    assert!(s.paste("12a3"));
+    assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "123");
 }
 
+/// A paste is typed (`0x77e250` feeds `0x77c200`): each character goes in as its own insert with
+/// `OnChar`, a `|` escaped, and a space or a tab fires `OnSpacePressed` as it lands, so
+/// `ChatEdit_OnSpacePressed` sees `/w ` before the rest arrives.
 #[test]
-fn paste_does_not_fire_onspacepressed() {
+fn a_paste_is_typed_one_character_at_a_time() {
     let mut s = script();
     s.run(
         r#"
-        spaces = 0
+        chars, spaces = {}, {}
         E = CreateFrame("EditBox", "E")
-        E:SetScript("OnSpacePressed", function() spaces = spaces + 1 end)
+        E:SetScript("OnChar", function() table.insert(chars, arg1) end)
+        E:SetScript("OnSpacePressed", function() table.insert(spaces, this:GetText()) end)
         E:SetFocus()
     "#,
     )
     .unwrap();
-    assert!(s.paste("a b c"));
-    assert_eq!(s.eval::<String>("return E:GetText()").unwrap(), "a b c");
+    assert!(s.paste("/w a|r\tb"));
     assert_eq!(
-        s.eval::<i64>("return spaces").unwrap(),
-        0,
-        "a paste is not a typed space"
+        s.eval::<String>("return E:GetText()").unwrap(),
+        "/w a||r    b",
+        "markup stays literal text"
     );
+    assert_eq!(
+        s.eval::<String>("return table.concat(chars, ',')").unwrap(),
+        "/,w, ,a,||,r,    ,b"
+    );
+    assert_eq!(
+        s.eval::<String>("return table.concat(spaces, ',')")
+            .unwrap(),
+        "/w ,/w a||r    ",
+        "one OnSpacePressed per space, and one for the tab's four"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
 #[test]

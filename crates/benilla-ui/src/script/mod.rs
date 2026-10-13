@@ -1162,8 +1162,9 @@ impl UiScript {
         keyboard::char_input(&self.lua, text)
     }
 
-    /// Paste host clipboard text into the focused EditBox as one edit: newlines survive only in a
-    /// `multiLine` box, other control characters drop. `true` if a box consumed it.
+    /// Paste host clipboard text into the focused EditBox, typed a character at a time as the
+    /// reference's paste is (`0x77e250`), with a typed character's escapes and events. `true` if
+    /// a box consumed it.
     pub fn paste(&mut self, text: &str) -> bool {
         editbox::paste(&self.lua, text)
     }

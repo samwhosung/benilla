@@ -473,8 +473,9 @@ pub struct EditOutcome {
     /// An insert went in, so `OnChar` fires (`0x77c13c`); a `numeric` abort that only deleted the
     /// selection did not.
     pub inserted: bool,
-    /// Typed spaces inserted, one `OnSpacePressed` each; a paste reports none.
-    pub spaces: usize,
+    /// The inserted string holds a space: one `OnSpacePressed`, however many it holds, since the
+    /// scan stops at the first (`0x77c153` → `0x77c173`).
+    pub space: bool,
 }
 
 impl EditOutcome {
@@ -553,12 +554,27 @@ impl EditBoxState {
         EditOutcome {
             text_changed: true,
             inserted: true,
-            spaces: ins.matches(' ').count(),
+            space: ins.contains(' '),
         }
     }
 
-    /// Insert clipboard text with its control characters dropped, bar `\n` in a multiline box; a
-    /// paste fires no `OnSpacePressed`.
+    /// What typing `c` inserts (`0x77c200`): a `|` goes in as `||` (`0x879cac`, `0x77c254`), so
+    /// markup cannot be typed, and a tab as four spaces (`0x879cb0`, `0x77c228`); a newline goes in
+    /// only in a `multiLine` box (`0x77c234`–`0x77c240`), and any other control character, DEL
+    /// (`0x7f`) included, is dropped. `None` for a dropped character.
+    pub fn typed(&self, c: char) -> Option<String> {
+        match c {
+            '\t' => Some("    ".to_string()),
+            '\n' if self.multi_line => Some("\n".to_string()),
+            c if (c as u32) < 0x20 || c == '\u{7f}' => None,
+            '|' => Some("||".to_string()),
+            c => Some(c.to_string()),
+        }
+    }
+
+    /// The glue fields' paste: the clipboard as one insert, its control characters dropped, bar
+    /// `\n` in a multiline box. A FrameXML box types a paste a character at a time instead
+    /// (`0x77e250`).
     pub fn paste(&mut self, text: &str) -> EditOutcome {
         let cleaned: String = text
             .chars()
