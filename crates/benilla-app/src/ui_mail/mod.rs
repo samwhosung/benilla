@@ -1480,6 +1480,11 @@ mod tests {
         m.results.push(MailResult::default());
         m.clear();
         assert_eq!(m.results.len(), 1);
+        // The leave-world sweep's mail leg (`0x4acd50`, `cl=1`) forgets the mailbox the same way
+        // and touches no pending result.
+        m.click(0x1);
+        assert!(crate::ui_session::sweep_close(&mut m).is_some());
+        assert_eq!(m.results.len(), 1);
         m.clear_session();
         assert!(m.results.is_empty());
     }
