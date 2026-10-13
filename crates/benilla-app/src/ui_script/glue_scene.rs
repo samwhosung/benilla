@@ -96,8 +96,6 @@ pub(crate) struct StockFeed {
     instance: Option<(benilla_ui::widget::FrameHandle, u64)>,
     /// Every scene a pane still holds, by its (pane, instance), with its stage number.
     stages: Vec<((benilla_ui::widget::FrameHandle, u64), u64)>,
-    /// The highest stage number given out.
-    top: u64,
 }
 
 /// Feed the glue booth from the glue VM while the stock glue screens are up, and stand it down
@@ -108,6 +106,9 @@ pub(crate) fn feed_stock_glue_preview(
     state: Option<Res<State<crate::char_select::ClientState>>>,
     mut preview: ResMut<GluePreview>,
     mut feed: Local<super::VmMemo<StockFeed>>,
+    // The highest stage number given out, kept across VMs: a new VM's first scene must not take a
+    // number a scene parked under the old one still holds.
+    mut top: Local<u64>,
 ) {
     let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
     let script = script.filter(|s| s.vm_kind() == VmKind::Glue && !in_world);
@@ -154,9 +155,9 @@ pub(crate) fn feed_stock_glue_preview(
         let id = match feed.stages.iter().find(|(k, _)| *k == key) {
             Some(&(_, id)) => id,
             None => {
-                feed.top = feed.top.max(preview.stage).wrapping_add(1);
-                feed.stages.push((key, feed.top));
-                feed.top
+                *top = top.max(preview.stage).wrapping_add(1);
+                feed.stages.push((key, *top));
+                *top
             }
         };
         preview.stage = id;
@@ -421,5 +422,42 @@ mod tests {
             "Select:SetModel('Interface/Glues/Models/UI_Human/UI_Human.mdx')",
         );
         assert_eq!(live, vec![login], "the select pane let its old scene go");
+    }
+
+    /// A new VM's panes are new frames, but their scenes' numbers must not repeat one the old VM
+    /// gave out: a scene parked under it would stand in for the new VM's first.
+    #[test]
+    fn a_new_vm_never_reuses_a_stage_number() {
+        let mut app = App::new();
+        let vm = || {
+            let s = UiScript::new_glue().unwrap();
+            s.run(
+                "CreateFrame('ModelFFX', 'Login')\
+                 :SetModel('Interface/Glues/Models/UI_MainMenu/UI_MainMenu.mdx') \
+                 CreateFrame('ModelFFX', 'Select')\
+                 :SetModel('Interface/Glues/Models/UI_Orc/UI_Orc.mdx') Select:Hide()",
+            )
+            .unwrap();
+            s
+        };
+        app.insert_non_send_resource(vm())
+            .insert_non_send_resource(SharedGlueMgr::default())
+            .init_resource::<GluePreview>()
+            .add_systems(Update, feed_stock_glue_preview);
+        let run = |app: &mut App, chunk: &str| {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.run(chunk).unwrap();
+            s.resolve();
+            app.update();
+            app.world().resource::<GluePreview>().stage
+        };
+        let login = run(&mut app, "");
+        let select = run(&mut app, "Login:Hide() Select:Show()");
+        assert_eq!(run(&mut app, "Select:Hide() Login:Show()"), login);
+
+        // A new VM: its login scene takes a number past every one given out.
+        app.insert_non_send_resource(vm());
+        let fresh = run(&mut app, "");
+        assert!(fresh > select.max(login), "{fresh} after {login}, {select}");
     }
 }

@@ -186,6 +186,9 @@ mod tests {
         ("ui_script/input.rs", "pressed"),
         // The catalog's bit-15 spells, a fact about the spell catalog, rebuilt when it changes.
         ("ui_unit/control_gate.rs", "candidates"),
+        // The glue booth's stage numbers, which must outlive the VM: a scene parked under the old
+        // VM keeps its number until the booth drops it, so a new VM's scenes take fresh ones.
+        ("ui_script/glue_scene.rs", "top"),
     ];
 
     use crate::test_support::{fn_parameter_lists, rust_files};
