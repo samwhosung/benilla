@@ -713,6 +713,70 @@ fn filter_getters_treat_a_non_positive_index_as_all_and_raise_past_the_end() {
     raises(&s, "GetTradeSkillSubClassFilter(1)", "Bad sub class");
 }
 
+/// The two filter setters check their arguments in the reference's order before touching state
+/// (`0x4ffc70`, `0x4ffe60`): a bad index raises, an `on` that is not a number raises, and an
+/// index at or below 0 sets everything on without reading `on`.
+#[test]
+fn filter_setters_raise_on_a_bad_index_and_a_missing_on_off() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(state()));
+    let err = |s: &UiScript, call: &str| {
+        s.eval::<String>(&format!(
+            "local ok, e = pcall(function() {call} end) return ok and 'ok' or tostring(e)"
+        ))
+        .unwrap()
+    };
+    // Four groups and two present inventory types: index 5 and 3 are past the end.
+    assert!(err(&s, "SetTradeSkillSubClassFilter(5, 1)")
+        .contains("Bad sub class in SetTradeSkillSubClassFilter"));
+    assert!(err(&s, "SetTradeSkillInvSlotFilter(3, 1)")
+        .contains("Bad inv slot in SetTradeSkillInvSlotFilter"));
+    assert!(err(&s, "SetTradeSkillSubClassFilter(2)")
+        .contains("Missing on//off parameter in SetTradeSkillSubClassFilter"));
+    assert!(err(&s, "SetTradeSkillSubClassFilter(2, true)").contains("Missing on//off parameter"));
+    assert!(err(&s, "SetTradeSkillInvSlotFilter(1)")
+        .contains("Missing on//off parameter in SetTradeSkillInvSlotFilter"));
+    assert!(err(&s, "SetTradeSkillSubClassFilter()")
+        .contains("Usage: SetTradeSkillSubClassFilter(index [, on\\off, exclusive])"));
+    assert!(err(&s, "SetTradeSkillInvSlotFilter(nil, 1)")
+        .contains("Usage: SetTradeSkillInvSlotFilter(index [, on\\off, exclusive])"));
+    // The index is checked before `on`: a bad index with no `on` is the bad-index error.
+    assert!(err(&s, "SetTradeSkillSubClassFilter(9)").contains("Bad sub class"));
+    // None of the raises touched the list.
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
+
+    // An index at or below 0 is "all" and reads no `on`; so is a non-numeric string (tonumber 0).
+    s.run("SetTradeSkillSubClassFilter(2, 1, 1)").unwrap();
+    assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 3);
+    for call in [
+        "SetTradeSkillSubClassFilter(-3)",
+        "SetTradeSkillSubClassFilter(-0.5)",
+        "SetTradeSkillSubClassFilter('x')",
+    ] {
+        s.run("SetTradeSkillSubClassFilter(2, 1, 1)").unwrap();
+        assert_eq!(err(&s, call), "ok", "{call}");
+        assert_eq!(
+            s.eval::<i64>("return GetNumTradeSkills()").unwrap(),
+            10,
+            "{call}"
+        );
+    }
+    s.run("SetTradeSkillInvSlotFilter(1, 1, 1)").unwrap();
+    assert_eq!(err(&s, "SetTradeSkillInvSlotFilter(-2)"), "ok");
+    assert_eq!(
+        s.eval::<i64>("return GetTradeSkillInvSlotFilter(0)")
+            .unwrap(),
+        1
+    );
+
+    // A numeric `on` of 0 hides the class; a fractional one truncates to 0 as `_ftol` does.
+    assert_eq!(err(&s, "SetTradeSkillSubClassFilter(2, 0.9)"), "ok");
+    assert!(s
+        .eval::<Option<i64>>("return GetTradeSkillSubClassFilter(2)")
+        .unwrap()
+        .is_none());
+}
+
 /// Stand-in slot strings named after their tokens (`0x84dd70`): `SECONDARYHANDSLOT`,
 /// `INVTYPE_SHIELD` and `INVTYPE_WEAPONOFFHAND` all read "Off Hand" in enUS, so only the token
 /// shows which one a bit reaches.

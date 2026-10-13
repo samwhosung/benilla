@@ -19,6 +19,58 @@ fn filter_index(lua: &Lua, v: Option<Value>, usage: &'static str) -> mlua::Resul
     Ok(number_arg(lua, v, usage)?.wrapping_sub(1))
 }
 
+/// The arguments of `SetTradeSkillSubClassFilter` (`0x4ffc70`) and `SetTradeSkillInvSlotFilter`
+/// (`0x4ffe60`), checked in the reference's order before any state is touched. Arg 1 passes
+/// `lua_isstring` (`0x6f3510`), so a non-numeric string reads as 0; nil and the rest raise the
+/// usage line. `trunc(n) - 1` below 0 is "all" and reads nothing further; an index at or past
+/// `count` raises `bad`; arg 2 must be a number (`0x6f34d0`) or `missing` raises. Arg 3 is the
+/// exclusive flag only when it is a nonzero number, and is read only for an `on` that is nonzero.
+struct SetFilterNames {
+    usage: &'static str,
+    bad: &'static str,
+    missing: &'static str,
+}
+
+enum SetFilter {
+    All,
+    One { n: usize, on: bool, exclusive: bool },
+}
+
+fn set_filter_args(
+    lua: &Lua,
+    (index, on, exclusive): (Option<Value>, Option<Value>, Option<Value>),
+    names: &SetFilterNames,
+    count: usize,
+) -> mlua::Result<SetFilter> {
+    let index = match index.unwrap_or(Value::Nil) {
+        v @ (Value::Integer(_) | Value::Number(_) | Value::String(_)) => {
+            binding_abi::ftol(lua.coerce_number(v)?.unwrap_or(0.0))
+        }
+        _ => return Err(mlua::Error::RuntimeError(names.usage.into())),
+    };
+    let Some(n) = index.checked_sub(1).filter(|&n| n >= 0) else {
+        return Ok(SetFilter::All);
+    };
+    if n as usize >= count {
+        return Err(mlua::Error::RuntimeError(names.bad.into()));
+    }
+    let number = |lua: &Lua, v: Option<Value>| -> mlua::Result<Option<i32>> {
+        Ok(match v {
+            Some(v) => lua.coerce_number(v)?.map(binding_abi::ftol),
+            None => None,
+        })
+    };
+    let Some(on) = number(lua, on)? else {
+        return Err(mlua::Error::RuntimeError(names.missing.into()));
+    };
+    let exclusive = number(lua, exclusive)?.is_some_and(|x| x != 0);
+    Ok(SetFilter::One {
+        n: n as usize,
+        on: on != 0,
+        exclusive,
+    })
+}
+
 /// An optional string as a Lua value (`nil` when absent).
 fn opt_str(lua: &Lua, s: Option<&String>) -> mlua::Result<Value> {
     Ok(match s {
@@ -397,14 +449,23 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "SetTradeSkillSubClassFilter",
-        lua.create_function(
-            |lua, (index, on, exclusive): (usize, Option<i64>, Option<i64>)| {
-                crate::script::tick::verb(lua, |model| {
-                    set_subclass_filter(model, index, on, exclusive)
-                });
-                Ok(())
-            },
-        )?,
+        lua.create_function(|lua, args: (Option<Value>, Option<Value>, Option<Value>)| {
+            let count = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model
+                    .trade_skill
+                    .as_ref()
+                    .map_or(0, |t| build_groups(&t.recipes).len())
+            };
+            let names = SetFilterNames {
+                usage: "Usage: SetTradeSkillSubClassFilter(index [, on\\off, exclusive])",
+                bad: "Bad sub class in SetTradeSkillSubClassFilter",
+                missing: "Missing on//off parameter in SetTradeSkillSubClassFilter",
+            };
+            let filter = set_filter_args(lua, args, &names, count)?;
+            crate::script::tick::verb(lua, |model| set_subclass_filter(model, filter));
+            Ok(())
+        })?,
     )?;
     // GetTradeSkillInvSlots(): the products' slot names in ascending bit order (`0xbde058`).
     g.set(
@@ -452,14 +513,24 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     g.set(
         "SetTradeSkillInvSlotFilter",
-        lua.create_function(
-            |lua, (index, on, exclusive): (usize, Option<i64>, Option<i64>)| {
-                crate::script::tick::verb(lua, |model| {
-                    set_inv_slot_filter(model, index, on, exclusive)
-                });
-                Ok(())
-            },
-        )?,
+        lua.create_function(|lua, args: (Option<Value>, Option<Value>, Option<Value>)| {
+            let count = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                if model.trade_skill.is_some() {
+                    present_inv_slots(&model).len()
+                } else {
+                    0
+                }
+            };
+            let names = SetFilterNames {
+                usage: "Usage: SetTradeSkillInvSlotFilter(index [, on\\off, exclusive])",
+                bad: "Bad inv slot in SetTradeSkillInvSlotFilter",
+                missing: "Missing on//off parameter in SetTradeSkillInvSlotFilter",
+            };
+            let filter = set_filter_args(lua, args, &names, count)?;
+            crate::script::tick::verb(lua, |model| set_inv_slot_filter(model, filter));
+            Ok(())
+        })?,
     )?;
 
     Ok(())
@@ -471,20 +542,18 @@ fn raise_update(model: &mut Model) {
     model.raise("TRADE_SKILL_UPDATE", Vec::new());
 }
 
-/// `SetTradeSkillSubClassFilter`'s write (`0x4ffc70` → `0x4fd710`).
-fn set_subclass_filter(model: &mut Model, index: usize, on: Option<i64>, exclusive: Option<i64>) {
-    let Some(t) = model.trade_skill.as_ref() else {
-        return;
-    };
-    let keys: Vec<(u32, u32)> = build_groups(&t.recipes)
-        .into_iter()
-        .map(|g| g.key)
-        .collect();
-    let on = on.unwrap_or(1) != 0;
-    let exclusive = exclusive.unwrap_or(0) != 0;
-    match index.checked_sub(1) {
-        None => model.trade_skill_subclass_hidden.clear(),
-        Some(n) => {
+/// `SetTradeSkillSubClassFilter`'s write (`0x4ffc70` → `0x4fd710`), the arguments already checked.
+fn set_subclass_filter(model: &mut Model, filter: SetFilter) {
+    match filter {
+        SetFilter::All => model.trade_skill_subclass_hidden.clear(),
+        SetFilter::One { n, on, exclusive } => {
+            let Some(t) = model.trade_skill.as_ref() else {
+                return;
+            };
+            let keys: Vec<(u32, u32)> = build_groups(&t.recipes)
+                .into_iter()
+                .map(|g| g.key)
+                .collect();
             let Some(&key) = keys.get(n) else {
                 return;
             };
@@ -501,18 +570,12 @@ fn set_subclass_filter(model: &mut Model, index: usize, on: Option<i64>, exclusi
     raise_update(model);
 }
 
-/// `SetTradeSkillInvSlotFilter`'s write (`0x4ffe60` → `0x4fd730`).
-fn set_inv_slot_filter(model: &mut Model, index: usize, on: Option<i64>, exclusive: Option<i64>) {
-    if model.trade_skill.is_none() {
-        return;
-    }
-    let bits = present_inv_slots(model);
-    let on = on.unwrap_or(1) != 0;
-    let exclusive = exclusive.unwrap_or(0) != 0;
-    // The mask each path writes, as `0x4fd730` is called.
-    match index.checked_sub(1) {
-        None => model.trade_skill_invslot_mask = u32::MAX,
-        Some(n) => {
+/// `SetTradeSkillInvSlotFilter`'s write (`0x4ffe60` → `0x4fd730`), the arguments already checked.
+fn set_inv_slot_filter(model: &mut Model, filter: SetFilter) {
+    match filter {
+        SetFilter::All => model.trade_skill_invslot_mask = u32::MAX,
+        SetFilter::One { n, on, exclusive } => {
+            let bits = present_inv_slots(model);
             let Some(&bit) = bits.get(n) else {
                 return;
             };
