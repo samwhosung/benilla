@@ -639,6 +639,36 @@ fn the_window_moves_only_when_the_caret_leaves_it() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// `OnCursorChanged`'s `x` counts from the caret's line's first byte in the line table
+/// (`0x77dcd8`–`0x77dcfc`), in a single-line box the window's (`0x77d750`): a scrolled box reports
+/// its caret inside its width.
+#[test]
+fn on_cursor_changed_measures_x_from_the_windows_start() {
+    let mut s = script();
+    long_box(&mut s);
+    s.run(
+        r#"
+        LOG = {}
+        W:SetScript("OnCursorChanged", function() table.insert(LOG, "cursor@" .. arg1) end)
+        W:SetFocus()
+    "#,
+    )
+    .unwrap();
+    s.tick(0.016);
+    s.editbox_action(EditAction::Move {
+        unit: EditUnit::Char,
+        back: true,
+        extend: false,
+    });
+    s.tick(0.016);
+    assert_eq!(
+        take_log(&s),
+        "cursor@147 cursor@140",
+        "21 then 20 characters past the window's start, at 19"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// [`Mono`] as the host answers a scaled box: glyphs 7 and lines 14 in the box's own units, the
 /// table in root units (measured at the box's scale, divided by the seam alone).
 struct ScaledMono;

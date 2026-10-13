@@ -100,10 +100,13 @@ fn cursor_changed(lua: &Lua, h: FrameHandle) -> bool {
             return None;
         }
         let cursor_d = eb.text_to_display(eb.cursor).min(display.len());
+        // `x` counts from the caret's line's first byte in the line table (`0x77dcd8`–`0x77dcfc`),
+        // which in a single-line box is the window's (`0x77d750`, `0x77d3b2`).
         let (row, x) = if eb.multi_line {
             eb.caret_row_x(cursor_d)
         } else {
-            (0, eb.advances[cursor_d])
+            let from = eb.scroll_start.min(cursor_d);
+            (0, eb.advances[cursor_d] - eb.advances[from])
         };
         let pitch = eb.cell_h;
         // `y` starts at 0 and loses one pitch per row above the caret (`0x77dae1`, `0x77db31`),
