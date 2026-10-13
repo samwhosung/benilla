@@ -1497,6 +1497,7 @@ fn sync_portraits(
                     bone: r.bone,
                     offset: r.offset,
                     twins: BoothTwins::default(),
+                    mat_anim: false,
                 })
                 .collect();
             let booth_billboards: Vec<BoothBillboardSpec> = billboards
@@ -1508,6 +1509,7 @@ fn sync_portraits(
                     offset: b.seat.offset(),
                     kind: b.kind,
                     twins: BoothTwins::default(),
+                    mat_anim: false,
                 })
                 .collect();
             // A source material was not resident, so a twin is the world one; retry next frame.
@@ -1911,6 +1913,7 @@ fn sync_body_booth(
                 bone: r.bone,
                 offset: r.offset,
                 twins: BoothTwins::default(),
+                mat_anim: false,
             })
             .collect();
         let booth_billboards: Vec<BoothBillboardSpec> = billboards
@@ -1922,6 +1925,7 @@ fn sync_body_booth(
                 offset: b.seat.offset(),
                 kind: b.kind,
                 twins: BoothTwins::default(),
+                mat_anim: false,
             })
             .collect();
         // The worn items' effects, spawned after the model hands over the joints.

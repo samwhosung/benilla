@@ -24,15 +24,16 @@ pub(super) struct BoothPart {
     pub(super) twins: BoothTwins,
     /// Whether the builder registered this batch's material on the UV and tint lane. It records the
     /// registration, never re-tests the asset: the marker and the registration must be one fact.
-    /// True only for the glue scenes, which animate texture transforms per frame (`0x715f25` to
-    /// `0x7163bc` over `md+0x74`); portraits and panes are stills.
+    /// True only on the glue stage (its scene, character and pet), which animates texture
+    /// transforms per frame (`0x715f25` to `0x7163bc` over `md+0x74`) on the stage's own clock;
+    /// portraits and panes are stills.
     pub(super) mat_anim: bool,
 }
 
 /// Marks a booth child for the draw gate when its material is on the UV and tint lane; an
 /// unmarked registered batch stays frozen at its seed.
-fn mark_mat_anim(child: &mut bevy::ecs::system::EntityCommands<'_>, p: &BoothPart) {
-    if p.mat_anim {
+fn mark_mat_anim(child: &mut bevy::ecs::system::EntityCommands<'_>, mat_anim: bool) {
+    if mat_anim {
         child.insert(benilla_world::doodad_anim::AnimMatPart);
     }
 }
@@ -115,6 +116,8 @@ pub(super) struct BoothRider {
     /// An attached model composes onto its parent's alpha (`0x714000`), so a ghost's helm
     /// feathers with the head under it.
     pub(super) twins: BoothTwins,
+    /// As [`BoothPart::mat_anim`]: its material has UV or tint rows of its own.
+    pub(super) mat_anim: bool,
 }
 
 /// One camera-facing batch headed into a booth bake: the undead or night-elf eye glow, or an
@@ -130,6 +133,8 @@ pub(super) struct BoothBillboardSpec {
     pub(super) kind: BillboardKind,
     /// A card takes the instance alpha like every other batch of the model.
     pub(super) twins: BoothTwins,
+    /// As [`BoothPart::mat_anim`].
+    pub(super) mat_anim: bool,
 }
 
 /// A spawned booth billboard card, faced to its own booth's camera every frame by
@@ -426,7 +431,7 @@ pub(super) fn spawn_booth_model(
     let Some((skeleton, ibp, anims)) = rig.filter(|(s, _, _)| !s.joints.is_empty()) else {
         // No palette slot: every part draws its static twin at bind pose.
         for p in parts {
-            spawn_batch(commands, root, &layer, p, 0, instance);
+            spawn_batch(commands, root, &layer, p, 0, instance, None);
         }
         return BoothRig {
             root,
@@ -485,8 +490,11 @@ pub(super) fn spawn_booth_model(
             }
         }
     }
+    // A live booth's batch alphas follow the sequence its root plays, on its clock; a still's
+    // stay pinned.
+    let host = (motion == BoothMotion::Loop && anims.is_some()).then_some(root);
     for p in parts {
-        spawn_batch(commands, root, &layer, p, rig_slot, instance);
+        spawn_batch(commands, root, &layer, p, rig_slot, instance, host);
     }
     let mut booth_rig = BoothRig {
         root,
@@ -543,6 +551,7 @@ fn spawn_batch(
     p: &BoothPart,
     rig_slot: u16,
     instance: BoothInstance,
+    host: Option<Entity>,
 ) -> Entity {
     let use_rig = p.skinned.is_some() && rig_slot != 0;
     let mut child = commands.spawn((
@@ -552,7 +561,7 @@ fn spawn_batch(
         ChildOf(root),
         BoothBatch,
     ));
-    dress_batch(&mut child, p, rig_slot, instance);
+    dress_batch(&mut child, p, rig_slot, instance, host);
     if use_rig {
         child.insert(benilla_world::rig_palette::RigPart(root));
         // A skinned booth part is never frustum-culled: Bevy's bound is the bind-pose box, the
@@ -564,15 +573,17 @@ fn spawn_batch(
 }
 
 /// A batch's dressing: its material, its tag (the palette slot beside the instance alpha, or the
-/// material alpha that drives it) and its depth-prime record.
+/// material alpha that drives it) and its depth-prime record. `host` is the root whose player the
+/// material alpha follows, its sequence and its scene's clock; `None` pins it.
 fn dress_batch(
     child: &mut bevy::ecs::system::EntityCommands<'_>,
     p: &BoothPart,
     rig_slot: u16,
     instance: BoothInstance,
+    host: Option<Entity>,
 ) {
     child.insert(MeshMaterial3d(instance.material(&p.material, &p.twins)));
-    mark_mat_anim(child, p);
+    mark_mat_anim(child, p.mat_anim);
     // The material alpha drives the tag's alpha field itself (nothing else writes a booth part's
     // alpha) beside the rig slot. `alpha_bits` floors a true zero just above 0, so the shader's
     // all-zero "untagged, opaque" sentinel cannot fire on an invisible batch.
@@ -581,7 +592,8 @@ fn dress_batch(
     if let Some(anim) = &p.alpha_anim {
         // The batch's material alpha times the instance alpha, the reference's
         // `model+0x180 × the batch factor` (`0x707680`).
-        let mat_anim = benilla_world::doodad_anim::MatAnim::driving_tag(anim.clone(), 0.0, None);
+        let mat_anim = benilla_world::doodad_anim::MatAnim::driving_tag(anim.clone(), 0.0, None)
+            .following_host(host);
         child.insert((
             bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
                 tag_slot,
@@ -625,6 +637,7 @@ fn hang_attachments(
             layer.clone(),
             ChildOf(anchor),
         ));
+        mark_mat_anim(&mut child, r.mat_anim);
         // An attached model composes onto its parent's colour and alpha (`0x714000`). Untagged
         // means opaque and slot 0, so the tag goes up only for a translucent instance or a slot.
         if instance.feathering() || rig_slot != 0 {
@@ -650,6 +663,7 @@ fn hang_attachments(
             ChildOf(anchor),
             BoothBillboard { kind: bb.kind },
         ));
+        mark_mat_anim(&mut card, bb.mat_anim);
         if instance.feathering() || rig_slot != 0 {
             card.insert(bevy::mesh::MeshTag(benilla_world::mesh_tag::spawn_tag(
                 rig_slot,
@@ -704,10 +718,10 @@ pub(super) fn redress_booth_batches(
                         benilla_world::doodad_anim::AnimMatPart,
                     )>()
                     .insert(Visibility::Inherited);
-                dress_batch(&mut child, p, rig_slot, instance);
+                dress_batch(&mut child, p, rig_slot, instance, Some(root));
             }
             None => {
-                spawn_batch(commands, root, layer, p, rig_slot, instance);
+                spawn_batch(commands, root, layer, p, rig_slot, instance, Some(root));
             }
         }
     }
@@ -1343,6 +1357,68 @@ mod tests {
                 .contains::<bevy::camera::visibility::NoFrustumCulling>()),
             "…and the static twin keeps the ordinary test — its own box IS where it draws"
         );
+    }
+
+    /// A live booth's batch alpha follows its root's player, its sequence and its scene's clock,
+    /// so a glue scene's dimming loops stop with the scene; a still's stays pinned.
+    #[test]
+    fn a_live_booths_batch_alpha_follows_its_root() {
+        let skeleton = benilla_assets::ModelSkeleton {
+            joints: vec![benilla_assets::ModelJoint {
+                parent: -1,
+                local_translation: Vec3::ZERO,
+                billboard: None,
+                parent_arm: None,
+            }],
+            spine_bone: None,
+            head_bone: None,
+        };
+        let anims = turning_model();
+        for (motion, follows) in [(BoothMotion::Loop, true), (BoothMotion::Frozen, false)] {
+            let mut app = App::new();
+            app.init_resource::<benilla_world::rig_palette::RigPalettes>();
+            let parts = vec![BoothPart {
+                skinned: None,
+                static_mesh: Handle::default(),
+                material: Handle::default(),
+                alpha_anim: Some(constant_alpha(0.55)),
+                twins: BoothTwins::default(),
+                mat_anim: false,
+            }];
+            let root = app.world_mut().spawn(Transform::IDENTITY).id();
+            let mut palettes = app
+                .world_mut()
+                .remove_resource::<benilla_world::rig_palette::RigPalettes>()
+                .expect("just inserted");
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, app.world());
+                spawn_booth_model(
+                    &mut commands,
+                    &mut palettes,
+                    root,
+                    RenderLayers::layer(9),
+                    &parts,
+                    &[],
+                    Some((&skeleton, &Handle::default(), Some(&anims))),
+                    None,
+                    motion,
+                    [false, false],
+                    &[],
+                    BoothInstance::default(),
+                )
+                .finish(&mut commands);
+            }
+            queue.apply(app.world_mut());
+            let mut q = app.world_mut().query::<&MatAnim>();
+            let hosts: Vec<_> = q.iter(app.world()).map(MatAnim::host).collect();
+            assert_eq!(
+                hosts,
+                vec![follows.then_some(root)],
+                "{} booth",
+                if follows { "a live" } else { "a still" }
+            );
+        }
     }
 
     /// World parts carry `MatAnim` too; their alpha belongs to the world's visibility pass.

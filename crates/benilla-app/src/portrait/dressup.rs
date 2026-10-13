@@ -229,6 +229,7 @@ pub(super) fn sync_dressup_booth(
                 bone: r.bone,
                 offset: r.offset,
                 twins: BoothTwins::default(),
+                mat_anim: false,
             })
             .collect();
         let booth_billboards: Vec<BoothBillboardSpec> = bake
@@ -241,6 +242,7 @@ pub(super) fn sync_dressup_booth(
                 offset: b.offset,
                 kind: b.kind,
                 twins: BoothTwins::default(),
+                mat_anim: false,
             })
             .collect();
         // Never latch a world-lane material into a pane ([`super::light`]): retry instead.

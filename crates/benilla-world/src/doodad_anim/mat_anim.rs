@@ -100,6 +100,11 @@ impl MatAnim {
         }
     }
 
+    /// The entity whose player this instance follows, `None` when pinned.
+    pub fn host(&self) -> Option<Entity> {
+        self.host
+    }
+
     /// Whether the unit lane composes this instance's tag: a hosted or attach-model batch, never an
     /// effect part that drives its own.
     pub fn composes_unit_tag(&self) -> bool {
@@ -124,18 +129,20 @@ pub fn playing_seq(player: &AnimationPlayer, anims: &ModelAnimations) -> Option<
         .or_else(|| anims.idle_seq().map(|seq| (seq, 0.0)))
 }
 
-/// Sample every instance: a hosted one on its host's sequence and clip clock, a pinned one on its
-/// spawn clock; frozen ones keep their t = 0 sample. Hidden instances sample too, as the reference
+/// Sample every instance: a hosted one on its host's sequence and clip clock, and its global
+/// sequences on the host's scene clock when it stands in one ([`crate::rig_anim::SceneClock`]);
+/// a pinned one on its spawn clock; frozen ones keep their t = 0 sample. Hidden instances sample too, as the reference
 /// evaluates the tracks every frame regardless of the cull (`0x707b3a`–`0x707b5c`), or a batch
 /// born at weight 0 would stay hidden. Runs before the visibility authority.
 pub fn sample_mat_anim(
     time: Res<Time>,
     hosts: Query<(&AnimationPlayer, &ModelAnimations)>,
+    clocks: Query<&crate::rig_anim::SceneClock>,
     mut q: Query<&mut MatAnim>,
 ) {
     let now = time.elapsed_secs();
-    // The scene clock in f64: a long-uptime f32 drifts whole milliseconds.
-    let shared = time.elapsed_secs_f64();
+    // The world clock in f64: a long-uptime f32 drifts whole milliseconds.
+    let world = time.elapsed_secs_f64();
     for mut m in &mut q {
         if m.frozen {
             continue;
@@ -153,7 +160,12 @@ pub fn sample_mat_anim(
             None if m.host.is_some() => (m.seq, 0.0),
             None => (m.seq, now - m.spawned_at),
         };
-        // The gseq cursor is sceneNow − attach, the anchor stamped on the first pass.
+        // The gseq cursor is sceneNow − attach, the anchor stamped on the first pass, on the
+        // host's own scene clock when it has one.
+        let shared = m
+            .host
+            .and_then(|h| clocks.get(h).ok())
+            .map_or(world, |c| c.0);
         let attach = *m.gseq_attach.get_or_insert(shared);
         m.current = m.anim.sample(seq, elapsed, shared - attach);
     }
@@ -285,6 +297,44 @@ impl UvAnimEntry {
     }
 }
 
+impl UvLoop {
+    /// This lane for a twin of the material on another instance: the same loops, a per-sequence
+    /// or per-instance one following `host`'s player.
+    fn for_twin(&self, host: Entity) -> Self {
+        match self {
+            UvLoop::Shared(a) => UvLoop::Shared(a.clone()),
+            UvLoop::PerSeq { seqs, .. } => UvLoop::PerSeq {
+                seqs: seqs.clone(),
+                host,
+            },
+            UvLoop::Instance {
+                seqs,
+                single,
+                attached_at,
+                ..
+            } => UvLoop::Instance {
+                seqs: seqs.clone(),
+                single: single.clone(),
+                host,
+                attached_at: *attached_at,
+            },
+        }
+    }
+}
+
+impl TintLoop {
+    /// As [`UvLoop`]'s: the same loop, a per-sequence one following `host`.
+    fn for_twin(&self, host: Entity) -> Self {
+        match self {
+            TintLoop::Shared(a) => TintLoop::Shared(a.clone()),
+            TintLoop::PerSeq { seqs, .. } => TintLoop::PerSeq {
+                seqs: seqs.clone(),
+                host,
+            },
+        }
+    }
+}
+
 impl UvAnimEntry {
     /// This frame's translation row and affine row, on `scene`, the time of the scene clock the
     /// entry runs on, else on the world's `now`: what the tick writes.
@@ -371,6 +421,46 @@ pub struct UvAnimMaterials(
         UvAnimEntry,
     >,
 );
+
+/// Give `twin`, a booth's relit clone of the registered material `source`, rows of its own on the
+/// scene clock `clock` carries: a copy of each of the source's lanes, a per-sequence one following
+/// `host`'s player instead. The source's rows run on the world's clock and are written only while
+/// the world draws it; a scene that owns its clock animates its models on that clock alone. An
+/// already registered twin only moves to `clock`. Returns whether the twin has a row, which its
+/// part's [`AnimMatPart`] marker must agree with.
+pub fn clocked_twin(
+    uv: &mut UvAnimMaterials,
+    tint: &mut TintAnimMaterials,
+    table: &mut crate::mat_anim_table::MatAnimTable,
+    materials: &mut bevy::asset::Assets<benilla_assets::materials::WowModelMaterial>,
+    source: bevy::asset::AssetId<benilla_assets::materials::WowModelMaterial>,
+    twin: bevy::asset::AssetId<benilla_assets::materials::WowModelMaterial>,
+    clock: Entity,
+    host: Entity,
+) -> bool {
+    if source == twin {
+        return false; // no twin was made: the source's rows are the world's
+    }
+    if let Some(src) = uv.0.get(&source) {
+        let lane = src.anim.for_twin(host);
+        let affine = src
+            .affine
+            .as_ref()
+            .map(|a| (a.rot.clone(), a.scale.clone()));
+        if !uv.0.contains_key(&twin) {
+            register_uv(uv, table, materials, twin, lane);
+            if let Some((rot, scale)) = affine {
+                attach_affine(uv, table, materials, twin, rot, scale);
+            }
+        }
+    }
+    if let Some(src) = tint.0.get(&source) {
+        let lane = src.anim.for_twin(host);
+        register_tint(tint, table, materials, twin, lane);
+    }
+    scene_clocked(uv, tint, twin, clock);
+    uv.0.contains_key(&twin) || tint.0.contains_key(&twin)
+}
 
 /// Put material `id`'s registered UV and tint entries on the clock of the scene `clock` stands in
 /// ([`crate::rig_anim::SceneClock`] on that entity): a scene with its own clock calls it after
@@ -1284,5 +1374,105 @@ mod delta_tests {
             other.rows(None, 10.0, 10.0, None).0,
             other.delta(10.0, 10.0, None)
         );
+    }
+
+    /// A batch alpha following a host that stands in a scene with its own clock samples its
+    /// global sequences on that clock: hidden, the scene's vignette or flicker stands still.
+    #[test]
+    fn a_hosted_alpha_samples_its_hosts_scene_clock() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_millis(100),
+        ));
+        app.add_systems(Update, sample_mat_anim);
+        // A 2 s gseq weight ramp, 0 → 1 → 0.
+        let anim = std::sync::Arc::new(
+            benilla_formats::AlphaAnim::new(vec![benilla_formats::AlphaSeq {
+                color: None,
+                weight: Some(benilla_formats::ScalarAnim {
+                    period: 2.0,
+                    step: false,
+                    wrap: true,
+                    gseq: true,
+                    keys: vec![(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)],
+                }),
+            }])
+            .expect("an animated weight is carried"),
+        );
+        let host = app.world_mut().spawn(crate::rig_anim::SceneClock(3.0)).id();
+        let part = app
+            .world_mut()
+            .spawn(MatAnim::driving_tag(anim, 0.0, None).following_host(Some(host)))
+            .id();
+        app.update(); // attach at the scene's 3.0
+        let current = |app: &App| app.world().get::<MatAnim>(part).unwrap().current;
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_eq!(current(&app), 0.0, "the world ran on; the scene did not");
+        app.world_mut()
+            .get_mut::<crate::rig_anim::SceneClock>(host)
+            .unwrap()
+            .0 = 3.5;
+        app.update();
+        assert!(
+            (current(&app) - 0.5).abs() < 1e-4,
+            "half a second of the scene's clock past attach: {}",
+            current(&app)
+        );
+    }
+
+    /// A booth's twin of a registered material takes the same loops on its own row, a
+    /// per-sequence lane following the booth's model instead of the world's.
+    #[test]
+    fn a_twin_lane_keeps_its_loops_and_follows_its_own_host() {
+        let world_unit = Entity::from_raw_u32(1).unwrap();
+        let booth = Entity::from_raw_u32(2).unwrap();
+        let seqs = std::sync::Arc::new(
+            benilla_formats::SeqLoops::new(vec![Some(benilla_formats::KeyAnim {
+                period: 1.0,
+                step: false,
+                wrap: true,
+                gseq: false,
+                keys: vec![(0.0, [0.0, 0.0]), (1.0, [1.0, 0.0])],
+            })])
+            .expect("one animating slot"),
+        );
+        let per_seq = UvLoop::PerSeq {
+            seqs: seqs.clone(),
+            host: world_unit,
+        };
+        match per_seq.for_twin(booth) {
+            UvLoop::PerSeq { seqs: s, host } => {
+                assert!(std::sync::Arc::ptr_eq(&s, &seqs));
+                assert_eq!(host, booth);
+            }
+            _ => panic!("a per-sequence lane stays one"),
+        }
+        let shared = uv_loop();
+        match UvLoop::Shared(Some(shared.clone())).for_twin(booth) {
+            UvLoop::Shared(Some(a)) => assert!(std::sync::Arc::ptr_eq(&a, &shared)),
+            _ => panic!("a shared lane stays shared"),
+        }
+        let tint_seqs = std::sync::Arc::new(
+            benilla_formats::SeqLoops::new(vec![Some(benilla_formats::KeyAnim {
+                period: 1.0,
+                step: false,
+                wrap: true,
+                gseq: false,
+                keys: vec![(0.0, [1.0; 3]), (1.0, [0.0; 3])],
+            })])
+            .expect("one animating slot"),
+        );
+        match (TintLoop::PerSeq {
+            seqs: tint_seqs,
+            host: world_unit,
+        })
+        .for_twin(booth)
+        {
+            TintLoop::PerSeq { host, .. } => assert_eq!(host, booth),
+            TintLoop::Shared(_) => panic!("a per-sequence tint stays one"),
+        }
     }
 }

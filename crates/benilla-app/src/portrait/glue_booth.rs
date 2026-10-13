@@ -1401,6 +1401,13 @@ fn resize_target(images: &mut Assets<Image>, target: &Handle<Image>, w: u32, h: 
     );
 }
 
+/// The material lanes a stage model's own rows go on ([`benilla_world::doodad_anim::clocked_twin`]).
+type StageLanes<'w> = (
+    ResMut<'w, benilla_world::doodad_anim::UvAnimMaterials>,
+    ResMut<'w, benilla_world::doodad_anim::TintAnimMaterials>,
+    ResMut<'w, benilla_world::mat_anim_table::MatAnimTable>,
+);
+
 /// What [`sync_glue_booth`] keeps between frames.
 #[derive(Default)]
 pub(super) struct GlueStanding {
@@ -1487,6 +1494,7 @@ pub(super) fn sync_glue_booth(
     standing_rigs: Query<StandingRig>,
     batches: Query<&Mesh3d, With<BoothBatch>>,
     mut state: Local<GlueStanding>,
+    mut lanes: StageLanes,
 ) {
     let Some(booth) = booths.0.get_mut(GLUE_SLOT) else {
         return;
@@ -1598,7 +1606,7 @@ pub(super) fn sync_glue_booth(
                 mat_anim: false,
             });
         }
-        let booth_riders: Vec<BoothRider> = bake
+        let mut booth_riders: Vec<BoothRider> = bake
             .riders
             .iter()
             .map(|r| BoothRider {
@@ -1607,9 +1615,10 @@ pub(super) fn sync_glue_booth(
                 bone: r.bone,
                 offset: r.offset,
                 twins: relight_twins(&r.twins, &mut scene, &mut booth_light, &mut materials),
+                mat_anim: false,
             })
             .collect();
-        let booth_billboards: Vec<BoothBillboardSpec> = bake
+        let mut booth_billboards: Vec<BoothBillboardSpec> = bake
             .billboards
             .iter()
             .map(|b| BoothBillboardSpec {
@@ -1619,8 +1628,65 @@ pub(super) fn sync_glue_booth(
                 offset: b.offset,
                 kind: b.kind,
                 twins: relight_twins(&b.twins, &mut scene, &mut booth_light, &mut materials),
+                mat_anim: false,
             })
             .collect();
+        // On the stage, each animated material runs on the stage's clock, following the body.
+        if scene_buf.is_some() {
+            let (uv, tint, table) = &mut lanes;
+            let mut on_clock = |source: &Handle<WowModelMaterial>,
+                                twin: &Handle<WowModelMaterial>,
+                                blend: (
+                Option<&Handle<WowModelMaterial>>,
+                Option<&Handle<WowModelMaterial>>,
+            )| {
+                let steady = benilla_world::doodad_anim::clocked_twin(
+                    uv,
+                    tint,
+                    table,
+                    &mut materials,
+                    source.id(),
+                    twin.id(),
+                    booth.root,
+                    booth.root,
+                );
+                let feathered = match blend {
+                    (Some(source), Some(twin)) => benilla_world::doodad_anim::clocked_twin(
+                        uv,
+                        tint,
+                        table,
+                        &mut materials,
+                        source.id(),
+                        twin.id(),
+                        booth.root,
+                        booth.root,
+                    ),
+                    _ => false,
+                };
+                steady || feathered
+            };
+            for (p, bp) in bake.parts.iter().zip(booth_parts.iter_mut()) {
+                bp.mat_anim = on_clock(
+                    &p.material,
+                    &bp.material,
+                    (p.twins.blend.as_ref(), bp.twins.blend.as_ref()),
+                );
+            }
+            for (r, br) in bake.riders.iter().zip(booth_riders.iter_mut()) {
+                br.mat_anim = on_clock(
+                    &r.material,
+                    &br.material,
+                    (r.twins.blend.as_ref(), br.twins.blend.as_ref()),
+                );
+            }
+            for (b, bb) in bake.billboards.iter().zip(booth_billboards.iter_mut()) {
+                bb.mat_anim = on_clock(
+                    &b.material,
+                    &bb.material,
+                    (b.twins.blend.as_ref(), bb.twins.blend.as_ref()),
+                );
+            }
+        }
         let booth_effects: Vec<BoothEffects> = bake
             .effects
             .iter()
@@ -1885,6 +1951,7 @@ pub(super) fn sync_glue_pet(
     creatures: Option<Res<Creatures>>,
     anim_data: Option<Res<crate::creature_anim::AnimData>>,
     mut palettes: ResMut<benilla_world::rig_palette::RigPalettes>,
+    mut lanes: StageLanes,
 ) {
     let Some(scene) = scene.as_deref_mut() else {
         return;
@@ -1926,7 +1993,7 @@ pub(super) fn sync_glue_pet(
         )
         .unwrap_or_else(|| material.clone())
     };
-    let booth_parts: Vec<BoothPart> = pet
+    let mut booth_parts: Vec<BoothPart> = pet
         .parts
         .iter()
         .map(|p| BoothPart {
@@ -1938,7 +2005,7 @@ pub(super) fn sync_glue_pet(
             mat_anim: false,
         })
         .collect();
-    let booth_billboards: Vec<BoothBillboardSpec> = pet
+    let mut booth_billboards: Vec<BoothBillboardSpec> = pet
         .billboards
         .iter()
         .map(|b| BoothBillboardSpec {
@@ -1948,8 +2015,30 @@ pub(super) fn sync_glue_pet(
             offset: b.offset,
             kind: b.kind,
             twins: BoothTwins::default(),
+            mat_anim: false,
         })
         .collect();
+    // The pet's animated materials run on the stage's clock, following the pet.
+    let (uv, tint, table) = &mut lanes;
+    let pet_root = scene.pet_root;
+    let mut on_clock = |source: &Handle<WowModelMaterial>, twin: &Handle<WowModelMaterial>| {
+        benilla_world::doodad_anim::clocked_twin(
+            uv,
+            tint,
+            table,
+            &mut materials,
+            source.id(),
+            twin.id(),
+            pet_root,
+            pet_root,
+        )
+    };
+    for (p, bp) in pet.parts.iter().zip(booth_parts.iter_mut()) {
+        bp.mat_anim = on_clock(&p.material, &bp.material);
+    }
+    for (b, bb) in pet.billboards.iter().zip(booth_billboards.iter_mut()) {
+        bb.mat_anim = on_clock(&b.material, &bb.material);
+    }
     commands
         .entity(scene.pet_root)
         .despawn_related::<Children>();
@@ -2662,6 +2751,9 @@ mod tests {
             .init_resource::<Assets<WowModelMaterial>>()
             .init_resource::<benilla_world::rig_palette::RigPalettes>()
             .init_resource::<benilla_world::instance_tint::InstanceTints>()
+            .init_resource::<benilla_world::doodad_anim::UvAnimMaterials>()
+            .init_resource::<benilla_world::doodad_anim::TintAnimMaterials>()
+            .init_resource::<benilla_world::mat_anim_table::MatAnimTable>()
             .insert_resource(Creatures::rigged_for_test(vec![
                 (HUMAN_MALE, two_bones(), Some(body_anims())),
                 (HUMAN_FEMALE, two_bones(), Some(body_anims())),

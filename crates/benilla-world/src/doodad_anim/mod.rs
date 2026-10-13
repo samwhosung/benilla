@@ -22,8 +22,8 @@ mod mat_anim;
 pub(crate) use lazy::{LazyRig, SkinnedTwin};
 use mat_anim::tick_anim_materials;
 pub use mat_anim::{
-    playing_seq, register_entity_uv, register_fx_uv, register_tint, sample_mat_anim, scene_clocked,
-    AnimMatPart, MatAnim, TintAnimMaterials, TintLoop, UvAnimMaterials, UvLoops,
+    clocked_twin, playing_seq, register_entity_uv, register_fx_uv, register_tint, sample_mat_anim,
+    scene_clocked, AnimMatPart, MatAnim, TintAnimMaterials, TintLoop, UvAnimMaterials, UvLoops,
 };
 
 /// The material tick's set: a scene that owns its clock ([`crate::rig_anim::SceneClock`]) writes

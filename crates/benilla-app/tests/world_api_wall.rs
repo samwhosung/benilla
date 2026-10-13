@@ -99,6 +99,7 @@ const PUBLISHED: &[(&str, &str)] = &[
     ("doodad_anim::MatAnimTick", "record"),
     ("doodad_anim::TintLoop", "record"),
     ("doodad_anim::UvLoops", "record"),
+    ("doodad_anim::clocked_twin", "record"),
     ("doodad_anim::register_entity_uv", "record"),
     ("doodad_anim::register_fx_uv", "record"),
     ("doodad_anim::register_tint", "record"),
