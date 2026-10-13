@@ -588,8 +588,43 @@ mod tests {
         assert!(s
             .eval::<bool>(r#"return (pcall(GetCraftInfo, "2"))"#)
             .unwrap());
-        let err = s.run("return 0x10").unwrap_err().to_string();
-        assert!(err.contains("malformed number"), "{err}");
+        // The numeral reader (`0x6ffd20`) stops at the `x`: `0x10` is 0 and then the name `x10`.
+        assert!(s.run("return 0x10").is_err());
+    }
+
+    /// The client's numeral reader (`0x6ffd20`, 5.0's `read_numeral`) takes digits, one `.`,
+    /// digits, then `e`/`E`, a sign and digits, and nothing more: a letter or `_` after a number
+    /// starts the next token, and `1..2` is its own error (`0x8721dc`).
+    #[test]
+    fn a_numeral_ends_where_the_clients_reader_stops() {
+        let s = UiScript::new().unwrap();
+        assert_eq!(
+            s.eval::<(i64, i64)>("a=1b=2 return a, b").unwrap(),
+            (1, 2),
+            "two statements, as the client reads them"
+        );
+        assert!(
+            s.run("a = 0x10()").is_err(),
+            "compiles as `a = 0` then a call to `x10`, which is nil"
+        );
+        assert!(s
+            .eval::<bool>("return loadstring('a = 0x10()') ~= nil")
+            .unwrap());
+        assert_eq!(s.eval::<f64>("return 1.5e+3").unwrap(), 1500.0);
+        assert_eq!(s.eval::<f64>("return .5E-1").unwrap(), 0.05);
+        assert_eq!(s.eval::<f64>("return 2.").unwrap(), 2.0);
+        let err = s.run("return 1..2").unwrap_err().to_string();
+        assert!(
+            err.contains("ambiguous syntax (decimal point x string concatenation)"),
+            "{err}"
+        );
+        // One `.` per numeral: `1.2.3` is `1.2` then `.3`.
+        let err = s.run("return 1.2.3").unwrap_err().to_string();
+        assert!(err.contains("near `.3'"), "{err}");
+        for malformed in ["return 3e", "return .5.3"] {
+            let err = s.run(malformed).unwrap_err().to_string();
+            assert!(err.contains("malformed number"), "{malformed}: {err}");
+        }
     }
 
     #[test]

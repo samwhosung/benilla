@@ -9,7 +9,7 @@
 # mlua's whole surface stay intact.
 #
 # What changes: `BENILLA.md` lists every hunk against upstream's `lua-5.1.5/` tree
-# (nine, in four files) and the one command that verifies the sources against the registry copy.
+# (ten, in five files) and the one command that verifies the sources against the registry copy.
 #
 # The crate's own `src/lib.rs` is upstream's, with Lua 5.2 to 5.5 stripped from the `Version` enum
 # and their trees deleted, so asking for another version is a compile error here rather than a

@@ -191,15 +191,33 @@ static void trydecpoint (LexState *ls, SemInfo *seminfo) {
 
 
 /* LUA_NUMBER */
+/* BENILLA: 5.0's numeral reader, as the 1.12.1 client's (0x6ffd20): digits, one `.' (a second
+** right after it is "ambiguous syntax (decimal point x string concatenation)", 0x8721dc), digits,
+** then `e'/`E', an optional sign and digits. 5.1's reader also took every further `.', letter and
+** `_' into the numeral, so `a=1b=2' was a malformed number where the client reads `a=1 b=2'.
+** See third_party/lua-src/BENILLA.md. */
 static void read_numeral (LexState *ls, SemInfo *seminfo) {
   lua_assert(isdigit(ls->current));
-  do {
+  while (isdigit(ls->current))
     save_and_next(ls);
-  } while (isdigit(ls->current) || ls->current == '.');
-  if (check_next(ls, "Ee"))  /* `E'? */
-    check_next(ls, "+-");  /* optional exponent sign */
-  while (isalnum(ls->current) || ls->current == '_')
+  if (ls->current == '.') {
     save_and_next(ls);
+    if (ls->current == '.') {
+      save_and_next(ls);
+      luaX_lexerror(ls,
+                    "ambiguous syntax (decimal point x string concatenation)",
+                    TK_NUMBER);
+    }
+  }
+  while (isdigit(ls->current))
+    save_and_next(ls);
+  if (ls->current == 'e' || ls->current == 'E') {
+    save_and_next(ls);  /* read `E' */
+    if (ls->current == '+' || ls->current == '-')
+      save_and_next(ls);  /* optional exponent sign */
+    while (isdigit(ls->current))
+      save_and_next(ls);
+  }
   save(ls, '\0');
   buffreplace(ls, '.', ls->decpoint);  /* follow locale for decimal point */
   if (!luaO_str2d(luaZ_buffer(ls->buff), &seminfo->r))  /* format error? */
