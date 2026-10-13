@@ -66,6 +66,14 @@ impl Plugin for GluePlugin {
                 PostUpdate,
                 fit_glue_canvas.before(bevy::ui::UiSystems::Layout),
             )
+            // After layout, so a background never draws its sheet stretched once.
+            .add_systems(
+                PostUpdate,
+                backdrop::fit_tiled_backgrounds
+                    .after(bevy::ui::UiSystems::Layout)
+                    // The stack writes only `stack_index`, which the fit never reads.
+                    .ambiguous_with(bevy::ui::UiSystems::Stack),
+            )
             .add_systems(
                 PostUpdate,
                 hide_native_glue

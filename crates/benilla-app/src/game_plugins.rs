@@ -785,8 +785,10 @@ pub(crate) mod schedule_tests {
     /// `PostUpdate`'s undeclared-order pairs on the declared graph; `GlobalTransform` and the
     /// particle `EffectQuads` are most of it. Six are `glue::hide_native_glue`'s `Visibility`
     /// against the world's and the fade cover's writers, populations it never shares an entity
-    /// with (the native glue roots alone).
-    const POST_UPDATE_CEILING: usize = 377;
+    /// with (the native glue roots alone). One is `glue::backdrop::fit_tiled_backgrounds`'s
+    /// `ImageNode` rect against bevy's private accessibility `image_changed`, which reads only
+    /// the change tick for a label: either order labels the same node.
+    const POST_UPDATE_CEILING: usize = 378;
     const POST_UPDATE_SLACK: usize = 20;
     /// The actionable pairs in `Update`: conflicting access, no declared order, and nothing
     /// [`Classes`] explains, so the executor orders them however the graph falls. The count may

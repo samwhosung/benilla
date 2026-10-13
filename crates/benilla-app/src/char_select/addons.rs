@@ -21,7 +21,7 @@ use benilla_ui::script::UiScript;
 use benilla_ui::widget::{slider_fraction, slider_grab};
 
 use crate::glue::art::{tc_rect, GlueArt, DIM, GOLD};
-use crate::glue::backdrop::{backdrop_border, tiled_bg_node};
+use crate::glue::backdrop::{backdrop_border, tiled_bg};
 use crate::glue::widgets::{
     glue_button, outlined_text, overlay, ArtSwap, GlueBtnKind, GlueText, Hilight,
 };
@@ -1322,21 +1322,12 @@ fn spawn_panel(
                     }
                     list.with_children(|list| {
                         if framed {
-                            list.spawn((
-                                tiled_bg_node(
-                                    art.dialog_bg.clone().unwrap(),
-                                    32.0,
-                                    s,
-                                    Color::WHITE,
-                                ),
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: px(11.0),
-                                    right: px(12.0),
-                                    top: px(12.0),
-                                    bottom: px(11.0),
-                                    ..default()
-                                },
+                            list.spawn(tiled_bg(
+                                art.dialog_bg.clone().unwrap(),
+                                32.0,
+                                (11.0, 12.0, 12.0, 11.0),
+                                s,
+                                Color::WHITE,
                             ));
                             backdrop_border(
                                 list,
@@ -1485,16 +1476,12 @@ fn spawn_tooltip(
     }
     tip.with_children(|t| {
         if framed {
-            t.spawn((
-                tiled_bg_node(art.tooltip_bg.clone().unwrap(), 16.0, s, TIP_FILL),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(5.0),
-                    right: px(5.0),
-                    top: px(5.0),
-                    bottom: px(5.0),
-                    ..default()
-                },
+            t.spawn(tiled_bg(
+                art.tooltip_bg.clone().unwrap(),
+                16.0,
+                (5.0, 5.0, 5.0, 5.0),
+                s,
+                TIP_FILL,
             ));
             backdrop_border(t, art.tooltip_border.as_ref().unwrap(), 16.0, Color::WHITE);
         }

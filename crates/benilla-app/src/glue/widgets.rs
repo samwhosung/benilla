@@ -9,7 +9,7 @@ use bevy::text::LineHeight;
 use bevy::ui_render::ui_material::MaterialNode;
 
 use super::art::{tc_rect, ArrowArt, GlueArt, BTN_BG, BUTTON_TC, FALLBACK_ALPHA, GOLD, NAME_EDGE};
-use super::backdrop::{backdrop_border, tiled_bg_node};
+use super::backdrop::{backdrop_border, tiled_bg};
 
 // ── The shared widget vocabulary ─────────────────────────────────────────────────────────────────
 
@@ -623,16 +623,12 @@ pub(crate) fn glue_edit_box<E: Bundle, T: Bundle + Clone>(
     }
     boxed.with_children(|b| {
         if framed {
-            b.spawn((
-                tiled_bg_node(art.tooltip_bg.clone().unwrap(), NAME_EDGE, s, fill),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(10.0),
-                    right: px(5.0),
-                    top: px(4.0),
-                    bottom: px(9.0),
-                    ..default()
-                },
+            b.spawn(tiled_bg(
+                art.tooltip_bg.clone().unwrap(),
+                NAME_EDGE,
+                (10.0, 5.0, 4.0, 9.0),
+                s,
+                fill,
             ));
             backdrop_border(b, art.name_border.as_ref().unwrap(), NAME_EDGE, border);
         }

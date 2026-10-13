@@ -13,7 +13,7 @@ use crate::glue::art::{
     tc_rect, GlueArt, ScrollArt, ALLIANCE_FILL, FALLBACK_ALPHA, GOLD, INFO_TEXT, PANEL_EDGE,
     SCROLL_BTN_TC,
 };
-use crate::glue::backdrop::{backdrop_border, tiled_bg_node};
+use crate::glue::backdrop::{backdrop_border, tiled_bg};
 use crate::glue::widgets::{abs, outlined_text, overlay, GlueText, Hilight};
 
 pub(super) fn right_stack(
@@ -55,20 +55,13 @@ pub(super) fn right_stack(
                         // The reference tints only the bg, never the `TextPanel-Border`.
                         panel.spawn((
                             DynTint::BoxFill,
-                            tiled_bg_node(
+                            tiled_bg(
                                 art.tooltip_bg.clone().unwrap(),
                                 PANEL_EDGE,
+                                (8.0, 4.0, 4.0, 8.0),
                                 s,
                                 ALLIANCE_FILL,
                             ),
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: px(8.0),
-                                right: px(4.0),
-                                top: px(4.0),
-                                bottom: px(8.0),
-                                ..default()
-                            },
                         ));
                         backdrop_border(
                             panel,

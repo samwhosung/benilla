@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use benilla_ui::widget::EditBoxState;
 
 use crate::glue::art::{GlueArt, GOLD};
-use crate::glue::backdrop::{backdrop_border, tiled_bg_node};
+use crate::glue::backdrop::{backdrop_border, tiled_bg};
 use crate::glue::widgets::{
     glue_button, glue_edit_box, outlined_text_centered, overlay, paint_glue_field, GlueBtnKind,
     GlueFieldPart, GlueText,
@@ -218,16 +218,12 @@ pub(crate) fn spawn_dialog(
             boxed.with_children(|b| {
                 // Backdrop: bg tiled at 32 inside (11,12,12,11), the 32-edge border over it.
                 if let (Some(bg), Some(border)) = (&art.dialog_bg, &art.dialog_border) {
-                    b.spawn((
-                        tiled_bg_node(bg.clone(), 32.0, s, Color::WHITE),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(11.0),
-                            right: px(12.0),
-                            top: px(12.0),
-                            bottom: px(11.0),
-                            ..default()
-                        },
+                    b.spawn(tiled_bg(
+                        bg.clone(),
+                        32.0,
+                        (11.0, 12.0, 12.0, 11.0),
+                        s,
+                        Color::WHITE,
                     ));
                     backdrop_border(b, border, 32.0, Color::WHITE);
                 } else {

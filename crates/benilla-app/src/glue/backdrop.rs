@@ -6,9 +6,6 @@ use bevy::prelude::*;
 
 use benilla_assets::{sprite_image, sprite_image_tiled, WorldAssets};
 
-/// `UI-Tooltip-Background`'s native size, converting a tile period to a `stretch_value`.
-const TOOLTIP_BG_NATIVE: f32 = 64.0;
-
 // ── WoW backdrops ────────────────────────────────────────────────────────────────────────────────
 
 /// One `Backdrop` `edgeFile`'s eight pieces, split out upright and ready to draw.
@@ -218,23 +215,109 @@ pub(crate) fn fit_backdrop_borders(
     }
 }
 
-/// The tiled `UI-Tooltip-Background` behind a bordered box, at the authored `tileSize` period.
-pub(crate) fn tiled_bg_node(sheet: Handle<Image>, period: f32, s: f32, color: Color) -> ImageNode {
-    ImageNode {
-        image: sheet,
-        color,
-        image_mode: NodeImageMode::Tiled {
-            tile_x: true,
-            tile_y: true,
-            stretch_value: period * s / TOOLTIP_BG_NATIVE,
+/// A tiled `bgFile` inside its `BackgroundInsets` `(left, right, top, bottom)`, in UI units: the
+/// quad is inset (`0x77e8d0`), but its texcoords span the frame's own rect over the period
+/// (`0x77f0c0`, `0x77f18f`/`0x77f1af`), so it repeats frame-width/period times across the narrower
+/// quad. [`fit_tiled_backgrounds`] sets the span after layout; the sheet must repeat-sample.
+pub(crate) fn tiled_bg(
+    sheet: Handle<Image>,
+    period: f32,
+    insets: (f32, f32, f32, f32),
+    s: f32,
+    color: Color,
+) -> impl Bundle {
+    let (left, right, top, bottom) = insets;
+    (
+        TiledBg { period, insets },
+        ImageNode {
+            image: sheet,
+            color,
+            image_mode: NodeImageMode::Stretch,
+            ..default()
         },
-        ..default()
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(left * s),
+            right: Val::Px(right * s),
+            top: Val::Px(top * s),
+            bottom: Val::Px(bottom * s),
+            ..default()
+        },
+    )
+}
+
+/// A [`tiled_bg`]'s period and insets, in UI units.
+#[derive(Component, Clone, Copy, Debug)]
+pub(crate) struct TiledBg {
+    period: f32,
+    insets: (f32, f32, f32, f32),
+}
+
+impl TiledBg {
+    /// The tiles across and down for an inset quad of `quad` UI units: the frame's size, the quad
+    /// plus its insets, over the period (`0x77f195`).
+    fn span(&self, quad: Vec2) -> Vec2 {
+        let (l, r, t, b) = self.insets;
+        (quad + Vec2::new(l + r, t + b)) / self.period
+    }
+}
+
+/// Set every [`tiled_bg`]'s texture span from its laid-out size, after layout so no frame draws
+/// the sheet stretched once.
+pub(crate) fn fit_tiled_backgrounds(
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    images: Res<Assets<Image>>,
+    mut bgs: Query<(&TiledBg, &ComputedNode, &mut ImageNode)>,
+) {
+    let s = super::screen_scale(window.single().ok());
+    for (bg, computed, mut img) in &mut bgs {
+        if computed.is_empty() {
+            continue;
+        }
+        let Some(texels) = images.get(&img.image).map(|i| i.size_f32()) else {
+            continue;
+        };
+        let span = bg.span(computed.size() * computed.inverse_scale_factor / s);
+        let rect = Rect::from_corners(Vec2::ZERO, span * texels);
+        if img.rect != Some(rect) {
+            img.rect = Some(rect);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tooltip's shape: a 200×100 frame with 5-unit insets at period 16 draws a 190×90 quad
+    /// that repeats 200/16 by 100/16 times (`0x77f0c0`), each tile squeezed by 190/200 and 90/100.
+    #[test]
+    fn a_tiled_background_spans_the_frame_rect_over_its_period() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Assets<Image>>();
+        let sheet = world
+            .resource_mut::<Assets<Image>>()
+            .add(sprite_image_tiled(64, 64, vec![0; 64 * 64 * 4]));
+        let bg = world
+            .spawn((
+                tiled_bg(sheet, 16.0, (5.0, 5.0, 5.0, 5.0), 1.0, Color::WHITE),
+                ComputedNode {
+                    size: Vec2::new(190.0, 90.0),
+                    inverse_scale_factor: 1.0,
+                    ..ComputedNode::DEFAULT
+                },
+            ))
+            .id();
+        world.run_system_once(fit_tiled_backgrounds).unwrap();
+        let rect = world.get::<ImageNode>(bg).unwrap().rect.expect("fitted");
+        assert_eq!(
+            rect.min,
+            Vec2::ZERO,
+            "the first tile starts at the quad's corner"
+        );
+        assert_eq!(rect.size() / 64.0, Vec2::new(12.5, 6.25));
+    }
 
     // An e=2 strip holding each pixel's (x, y) in r/g, so every copied texel names its source.
     #[test]

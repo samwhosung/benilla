@@ -6,7 +6,7 @@ use bevy::ui_render::ui_material::MaterialNode;
 use bevy::window::PrimaryWindow;
 
 use crate::glue::art::{GlueArt, BACKDROP, DIM, GOLD, NAME_EDGE};
-use crate::glue::backdrop::{backdrop_border, tiled_bg_node};
+use crate::glue::backdrop::{backdrop_border, tiled_bg};
 use crate::glue::widgets::{
     abs, glue_button, outlined_text, overlay, GlueBtnKind, GlueText, Hilight, LockHighlight,
 };
@@ -321,21 +321,12 @@ fn character_frame(
             // Background inset (10,5,4,9) tiled at 16 under the 16-edge border, both tinted with
             // `DEFAULT_TOOLTIP_COLOR` in the reference's OnLoad.
             if let (Some(bg), Some(border)) = (&art.tooltip_bg, &art.name_border) {
-                frame.spawn((
-                    tiled_bg_node(
-                        bg.clone(),
-                        NAME_EDGE,
-                        s,
-                        FRAME_FILL.with_alpha(FRAME_FILL_ALPHA),
-                    ),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(10.0),
-                        right: px(5.0),
-                        top: px(4.0),
-                        bottom: px(9.0),
-                        ..default()
-                    },
+                frame.spawn(tiled_bg(
+                    bg.clone(),
+                    NAME_EDGE,
+                    (10.0, 5.0, 4.0, 9.0),
+                    s,
+                    FRAME_FILL.with_alpha(FRAME_FILL_ALPHA),
                 ));
                 backdrop_border(frame, border, NAME_EDGE, FRAME_BORDER);
             } else {

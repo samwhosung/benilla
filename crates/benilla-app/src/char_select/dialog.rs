@@ -9,7 +9,7 @@ use crate::textinput::{self, HostClipboard};
 use bevy::prelude::*;
 
 use crate::glue::art::{tc_rect, GlueArt, GOLD};
-use crate::glue::backdrop::{backdrop_border, tiled_bg_node};
+use crate::glue::backdrop::{backdrop_border, tiled_bg};
 use crate::glue::widgets::{
     caret_bar, glue_button, outlined_text, overlay, paint_glue_field, GlueBtnKind, GlueDisabled,
     GlueFieldPart, GlueText,
@@ -242,16 +242,12 @@ fn spawn_dialog(
             boxed.with_children(|b| {
                 // Background tiled at 32 inside insets (11,12,12,11), the 32-edge border over it.
                 if let (Some(bg), Some(border)) = (&art.dialog_bg, &art.dialog_border) {
-                    b.spawn((
-                        tiled_bg_node(bg.clone(), 32.0, s, Color::WHITE),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(11.0),
-                            right: px(12.0),
-                            top: px(12.0),
-                            bottom: px(11.0),
-                            ..default()
-                        },
+                    b.spawn(tiled_bg(
+                        bg.clone(),
+                        32.0,
+                        (11.0, 12.0, 12.0, 11.0),
+                        s,
+                        Color::WHITE,
                     ));
                     backdrop_border(b, border, 32.0, Color::WHITE);
                 } else {
