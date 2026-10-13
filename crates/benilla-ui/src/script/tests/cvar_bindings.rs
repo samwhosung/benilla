@@ -1,5 +1,5 @@
-//! The `SetCVar` (`0x488c10`) and `RegisterCVar` (`0x488b00`) bindings: how each reads its
-//! arguments, the read-only flag, and when `CVAR_UPDATE` fires.
+//! The `GetCVar` (`0x488ba0`), `SetCVar` (`0x488c10`) and `RegisterCVar` (`0x488b00`) bindings:
+//! how each reads its arguments, the read-only flag, and when `CVAR_UPDATE` fires.
 
 use crate::script::UiScript;
 
@@ -78,6 +78,21 @@ fn set_cvar_raises_the_reference_usage_without_a_name() {
     }
     s.run("SetCVar(5, \"b\")").unwrap();
     assert_eq!(get(&s, "5"), "b");
+}
+
+/// `lua_isstring(1)` fails (`0x488ba8`) and `GetCVar` raises the reference's own usage text
+/// (`0x842330`); a number passes and names the CVar by its text.
+#[test]
+fn get_cvar_raises_the_reference_usage_without_a_name() {
+    let s = script_with(&[("5", "a")]);
+    for chunk in ["GetCVar()", "GetCVar(nil)", "GetCVar({})", "GetCVar(true)"] {
+        assert_eq!(
+            crate::script::lua_message(&s.run(chunk).expect_err(chunk)),
+            "Usage: GetCVar(\"cvar\")",
+            "{chunk}"
+        );
+    }
+    assert_eq!(s.eval::<String>("return GetCVar(5)").unwrap(), "a");
 }
 
 /// Flag bit2 (`0x488c67`-`0x488c78`): the in-game session flags three rows (`0x48f566`), and

@@ -367,6 +367,9 @@ pub fn sstr_to_int(s: &str) -> i32 {
 /// at `0x488c98` and `0x488b6f`).
 const NO_STRING_FORM: &str = "0";
 
+/// `0x842330`, verbatim.
+const USAGE_GET_CVAR: &str = "Usage: GetCVar(\"cvar\")";
+
 /// `0x84235c`, verbatim, the unbalanced parenthesis included.
 const USAGE_SET_CVAR: &str = "Usage: SetCVar(\"cvar\", value [, \"scriptCvar\")";
 
@@ -415,9 +418,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // `GetCVar(name)` (`0x488ba0`).
     lua.globals().set(
         "GetCVar",
-        lua.create_function(|lua, name: String| {
+        lua.create_function(|lua, args: mlua::MultiValue| {
+            // `lua_isstring(1)` (`0x488ba8`): a string or a number names it.
+            let Some(name) = cvar_arg(args.front()) else {
+                return Err(mlua::Error::runtime(USAGE_GET_CVAR));
+            };
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             match model.cvars.get(&name.to_ascii_lowercase()) {
                 Some(slot) => Ok(Value::String(lua.create_string(&slot.value)?)),
