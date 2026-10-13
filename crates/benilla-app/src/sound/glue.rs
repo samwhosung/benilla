@@ -344,15 +344,18 @@ fn hand_off_glue_music(
 
 /// The starvation watch over the held theme, and the handle's drop once it reaches `Stopped`.
 /// On the glue screens [`start_glue_music`] then restarts it; in the world it runs out and stays
-/// out.
+/// out. The credits playlist's callback rides along ([`watch_credits`]).
 fn watch_glue_music(
     mut music: NonSendMut<GlueMusic>,
     // Wall time: the watch compares against the stream's own position, and the paced virtual
     // clock is snapped and capped by `frame_pace`.
     time: Res<Time<bevy::time::Real>>,
     config: Res<SoundConfig>,
+    mut out: NonSendMut<SoundOutput>,
+    assets: Option<Res<WorldAssets>>,
 ) {
     let music = &mut *music;
+    watch_credits(music, &mut out, assets.as_deref(), &config);
     // The Music slider rescales the playing theme in place (the `MusicVolume` re-apply walker
     // `0x7a6660(ecx=2)` matches the glue stream), except while the stop-fade runs.
     if !music.fading {
@@ -379,11 +382,11 @@ fn watch_glue_music(
 
 /// The playlist's per-frame callback (`0x45ae00`): the Music slider rescales the playing track,
 /// and a track that has run out gives way to the next.
-fn watch_credits_music(
-    mut music: NonSendMut<GlueMusic>,
-    mut out: NonSendMut<SoundOutput>,
-    assets: Option<Res<WorldAssets>>,
-    config: Res<SoundConfig>,
+fn watch_credits(
+    music: &mut GlueMusic,
+    out: &mut SoundOutput,
+    assets: Option<&WorldAssets>,
+    config: &SoundConfig,
 ) {
     let Some(h) = music.credits_handle.as_mut() else {
         return;
@@ -397,7 +400,7 @@ fn watch_credits_music(
     }
     music.credits_handle = None;
     if let Some(next) = music.credits.advance() {
-        open_credits_track(&mut music, &mut out, assets.as_deref(), &config, next);
+        open_credits_track(music, out, assets, config, next);
     }
 }
 
@@ -434,7 +437,6 @@ pub(super) fn plugin(app: &mut App) {
                 watch_glue_music
                     .after(start_glue_music)
                     .after(hand_off_glue_music),
-                watch_credits_music.after(drive_glue_music_requests),
                 report_stream_voices,
             ),
         );
