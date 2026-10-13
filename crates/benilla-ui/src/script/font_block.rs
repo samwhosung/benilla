@@ -324,7 +324,7 @@ pub(super) fn install(
                 let rh = resolve(lua, &this)?;
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
-                d.vertex_color = Some([r, g, b, a]);
+                d.set_vertex_color(Some([r, g, b, a]));
                 // Clears the colour inherit bit (`0x79dbd0`): it survives a font-object repaint.
                 d.font_explicit.color = true;
                 Ok(())

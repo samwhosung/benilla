@@ -58,7 +58,7 @@ fn blocks(s: &UiScript, name: &str) -> Vec<Blk> {
             });
             Blk {
                 text: d.text.clone(),
-                texture: d.texture.clone(),
+                texture: d.tex.path().clone(),
                 justify_h: d.justify.name_h(),
                 font: d.font_path.clone(),
                 font_height: d.font_height,

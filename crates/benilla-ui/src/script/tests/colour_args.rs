@@ -148,7 +148,10 @@ fn texture_colour_form_coerces_numeric_strings() {
     let t: mlua::Table = s.lua().globals().get("T").unwrap();
     let rh = crate::script::region::region_handle_of(s.lua(), &t).unwrap();
     assert_eq!(
-        s.model_ref().region_data.get(&rh).and_then(|d| d.fill),
+        s.model_ref()
+            .region_data
+            .get(&rh)
+            .and_then(|d| d.tex.fill()),
         Some([1.0, 0.5, 0.0, 0.25])
     );
 }
@@ -314,8 +317,8 @@ fn set_texture_takes_a_numeric_string_as_a_colour() {
     let rh = crate::script::region::region_handle_of(s.lua(), &t).unwrap();
     let m = s.model_ref();
     let d = m.region_data.get(&rh).unwrap();
-    assert_eq!(d.fill, Some([1.0, 0.5, 0.0, 1.0]));
-    assert_eq!(d.texture, None, "a numeric string is not a path");
+    assert_eq!(d.tex.fill(), Some([1.0, 0.5, 0.0, 1.0]));
+    assert_eq!(*d.tex.path(), None, "a numeric string is not a path");
 }
 
 /// `GameTooltip:SetText`'s alpha (`0x531d23`) is `lua_isnumber`-gated too.

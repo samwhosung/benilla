@@ -357,12 +357,11 @@ pub(crate) struct RegionData {
     /// or a gradient and an alpha, which no stock code does, and a FontString's `SetAlpha` then
     /// keeps its font colour.
     pub(crate) alpha: Option<f32>,
-    /// A texture path (`SetTexture("Interface\\...")`).
-    pub(crate) texture: Option<String>,
-    /// `SetTexture(r, g, b, a)` or an XML `<Color>` with no `file=`, sharing `+0xcc` with
-    /// [`Self::texture`]: setting one clears the other. The reference makes an 8×8 texture of it
-    /// (`0x770360` → `0x44a9c0` → `0x5c5350`), so its alpha multiplies with the vertex colour's.
-    pub(crate) fill: Option<[f32; 4]>,
+    /// The texture slot (`+0xcc`): a path (`SetTexture("Interface\\...")`) or a solid fill
+    /// (`SetTexture(r, g, b, a)`, an XML `<Color>` with no `file=`), each clearing the other. The
+    /// reference makes an 8×8 texture of a fill (`0x770360` → `0x44a9c0` → `0x5c5350`), so its alpha
+    /// multiplies with the vertex colour's. Written only through [`super::Model::set_texel`].
+    pub(crate) tex: super::texel::TexSlot,
     /// `SetGradientAlpha`/`SetGradient` or `<Gradient>`: four vertex colours, drawn as
     /// `texel × vertexColour` like [`Self::vertex_color`], whose slot it shares, so setting either
     /// clears the other. It is no texture: a gradient alone draws nothing (`0x7706e0`).
@@ -484,6 +483,12 @@ impl MeasuredText {
 }
 
 impl RegionData {
+    /// Write the one vertex colour (`0x77f750`), which collapses a gradient's four (`0x77f87f`).
+    pub(crate) fn set_vertex_color(&mut self, color: Option<[f32; 4]>) {
+        self.vertex_color = color;
+        self.gradient = None;
+    }
+
     /// The gap a line string lays its lines out by: [`Self::spacing`] clamped at 0, as a line
     /// string stores it through `0x772240`.
     pub(crate) fn line_gap(&self) -> f32 {

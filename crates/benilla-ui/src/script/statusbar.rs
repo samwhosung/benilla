@@ -257,9 +257,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return Ok(());
                 };
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                let d = model.region_data.entry(rh).or_default();
-                d.vertex_color = Some([r, g, b, a]);
-                d.gradient = None;
+                model
+                    .region_data
+                    .entry(rh)
+                    .or_default()
+                    .set_vertex_color(Some([r, g, b, a]));
                 Ok(())
             },
         )?,

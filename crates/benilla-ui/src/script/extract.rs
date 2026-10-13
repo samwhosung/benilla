@@ -60,6 +60,8 @@ impl UiScript {
 
     /// The render list in painter order, ascending by `ZKey`; call [`UiScript::resolve`] first.
     pub fn extract(&self) -> Vec<ExtractedQuad> {
+        // The files set since the last draw take their stamps: this draw forces them.
+        self.model_mut().texels.flush();
         let model = self.model_ref();
         let list = order::traversal(&model.arena);
         let mut out = Vec::with_capacity(list.len());
@@ -77,8 +79,8 @@ impl UiScript {
             let Some(clip) = clips.clip(scope) else {
                 continue;
             };
-            // A region's solid fill, which keys its texture in the batch sort.
-            let mut region_fill: Option<[f32; 4]> = None;
+            // A region's texture, which ranks it in the batch sort.
+            let mut region_tex = None;
             let (rect, alpha, content, clip, scale) = match target {
                 ZTarget::Frame(fh) => {
                     let frame = model.arena.frame(fh);
@@ -261,7 +263,7 @@ impl UiScript {
                         continue;
                     }
                     let mut data = data_ref.cloned().unwrap_or_default();
-                    region_fill = data.fill;
+                    region_tex = data.tex.id();
                     // One hop (region combine `0x772180`): the region's alpha times its owner's
                     // `effective_alpha`, which `SetAlpha 0x76a690` already carries down the tree.
                     let alpha = owner_frame.map(|f| f.effective_alpha).unwrap_or(1.0)
@@ -339,7 +341,7 @@ impl UiScript {
                     }
                     // Generated art fills only an empty slot (`ColorPickerFrame.xml` sets none).
                     let content = if let Some(art) =
-                        color_art.filter(|_| data.texture.is_none() && data.fill.is_none())
+                        color_art.filter(|_| data.tex.path().is_none() && data.tex.fill().is_none())
                     {
                         art
                     } else if is_text {
@@ -365,11 +367,11 @@ impl UiScript {
                     } else {
                         // The draw gate is the texture slot, never the colour (`0x7706e0`: empty
                         // `+0xcc` emits nothing): a vertex colour or a gradient alone is a tint.
-                        let fill = data.fill;
-                        let has_path = data.texture.is_some();
+                        let fill = data.tex.fill();
+                        let has_path = data.tex.path().is_some();
                         let has_texture = has_path || fill.is_some();
                         QuadContent::Texture {
-                            path: data.texture,
+                            path: std::mem::take(&mut data.tex).into_path(),
                             color: has_texture
                                 .then(|| texture_color(fill, data.vertex_color))
                                 .flatten(),
@@ -405,14 +407,18 @@ impl UiScript {
                 QuadContent::ModelPane { .. } => zkey.callback(order::DrawLayer::Artwork).raw(),
                 _ => zkey.raw(),
             };
-            if let (Some(texel), Some(batch)) = (
-                layer_batch::Texel::of(&content, region_fill),
-                order::quad_batch(z),
-            ) {
+            // A slot's texture by its stamp; the colour picker's two images, built when it loads
+            // (`0x78b580`, `0x78b8a0`), before anything a script sets.
+            let rank = match &content {
+                QuadContent::Texture { .. } => region_tex.map(|id| model.texels.stamp(id)),
+                QuadContent::ColorWheel | QuadContent::ColorValue { .. } => Some(0),
+                _ => None,
+            };
+            if let (Some(rank), Some(batch)) = (rank, order::quad_batch(z)) {
                 batch_quads.push(layer_batch::BatchQuad {
                     index: out.len(),
                     batch,
-                    texel,
+                    rank,
                 });
             }
             out.push(ExtractedQuad {

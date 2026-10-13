@@ -190,9 +190,11 @@ fn emblem_texture(lua: &Lua, this: Value, texture: Value, upper: bool) -> mlua::
         return Err(wrong());
     }
     let path = emblem_path(design(&model, h), half);
+    model.set_texel(
+        rh,
+        super::texel::TexSet::Own(Some(format!("{EMBLEM_MASK_TOKEN}{path}"))),
+    );
     let data = model.region_data.entry(rh).or_default();
-    data.texture = Some(format!("{EMBLEM_MASK_TOKEN}{path}"));
-    data.fill = None;
     data.portrait_unit = None;
     data.circular = false;
     model.note_art(rh);

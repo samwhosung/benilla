@@ -274,7 +274,7 @@ fn create(
         .arena
         .create_region(frame, RegionKind::Texture, DrawLayer::Artwork, 0)
         .expect("live bubble");
-    model.region_data.entry(tail).or_default().texture = Some(TAIL_TEXTURE.to_string());
+    model.set_texel(tail, super::texel::TexSet::File(TAIL_TEXTURE.to_string()));
     let text = model
         .arena
         .create_region(frame, RegionKind::FontString, DrawLayer::Artwork, 0)
@@ -368,7 +368,7 @@ fn set_line(
     let c = state.colour;
     let data = model.region_data.entry(text).or_default();
     data.text = Some(state.text.clone());
-    data.vertex_color = Some([c[0], c[1], c[2], 1.0]);
+    data.set_vertex_color(Some([c[0], c[1], c[2], 1.0]));
     fit_width(model, i, g);
     if !was_shown {
         visibility.push((frame, true));

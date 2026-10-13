@@ -305,10 +305,12 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     RegionData {
                         anchors,
                         size: Some((*w, *h)),
-                        texture: src.clone(),
                         ..RegionData::default()
                     },
                 );
+                if let Some(src) = src.clone() {
+                    model.set_texel(rh, crate::script::texel::TexSet::File(src));
+                }
                 // An unfloated image moves the flow down by its height (`0x78ad07`-`0x78ad1b`), but
                 // the next block still hangs off the last text block: the image path never writes
                 // `prevBlock`. Without `height=` it reserves its texture's texel height

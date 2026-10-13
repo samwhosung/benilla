@@ -4,6 +4,7 @@
 use mlua::{Lua, MultiValue, Table, Value};
 
 use crate::script::object::{draw_layer_from_str, draw_layer_name, tonumber_f32};
+use crate::script::texel::TexSet;
 use crate::script::{BlendMode, Model, TexCoords};
 
 use super::region_handle_of;
@@ -55,9 +56,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let mut model = lua.app_data_mut::<Model>().expect("model");
                 let d = model.region_data.entry(rh).or_default();
                 let kept = d.vertex_color.map_or(1.0, |c| c[3]);
-                d.vertex_color = Some([r, g, b, a.unwrap_or(kept)]);
-                // One colour collapses a gradient's four (`0x77f87f`).
-                d.gradient = None;
+                d.set_vertex_color(Some([r, g, b, a.unwrap_or(kept)]));
                 // The slot `SetTextColor` writes on a FontString, so it overrides the font object.
                 d.font_explicit.color = true;
                 Ok(())
@@ -183,7 +182,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // (`+0x128`) from an argument the binding (`0x79bb40`) always passes NULL. The
                     // same path returns first (`0x770225`) and keeps it, nil or "" clear it, and
                     // the colour form (`0x770360`) never writes it.
-                    let same_path = matches!((&arg, &data.texture),
+                    let same_path = matches!((&arg, data.tex.path()),
                     (Value::String(s), Some(cur)) if s.to_str().is_ok_and(|s| *s == **cur));
                     if !same_path && !colour_form {
                         data.desaturated = false;
@@ -191,7 +190,7 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     // Both forms write the one texture slot (`+0xcc`), a file or an 8×8 solid, so
                     // each clears the other; neither touches the vertex colour (`+0xb8`), so a
                     // tint outlives its art.
-                    let loaded = match &arg {
+                    let (set, loaded) = match &arg {
                         // The colour form (`lua_isnumber`, `0x79bbd5`, so a numeric string too): g
                         // and b are a bare `lua_tonumber`, and alpha is `lua_isnumber`-gated with
                         // default 1.
@@ -201,22 +200,17 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                 .ok()
                                 .flatten()
                                 .map_or(1.0, |n| n as f32);
-                            data.fill = Some([
+                            let fill = [
                                 tonumber_f32(lua, &arg),
                                 tonumber_f32(lua, &g),
                                 tonumber_f32(lua, &b),
                                 alpha,
-                            ]);
-                            data.texture = None;
-                            true
+                            ];
+                            (Some(TexSet::Fill(fill)), true)
                         }
                         // "" clears, as nil does (stock `QuestLogFrame.lua:166`), and answers nil
                         // like a failed load; the reference's answer for "" is untraced.
-                        Value::String(s) if s.to_str()?.is_empty() => {
-                            data.texture = None;
-                            data.fill = None;
-                            false
-                        }
+                        Value::String(s) if s.to_str()?.is_empty() => (Some(TexSet::None), false),
                         // Ask the probe before writing: on a failed load the reference returns 0
                         // and keeps the texture it had (`0x770288`, `0x77028e`-`0x7702b2`). With
                         // no probe the path is stored, though the answer is nil.
@@ -230,23 +224,27 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                     .as_ref()
                                     .is_none_or(|probe| probe(&path))
                             };
-                            let mut model = lua.app_data_mut::<Model>().expect("model");
+                            model = lua.app_data_mut::<Model>().expect("model");
                             let had_probe = model.texture_probe.is_some();
                             if resolvable {
-                                let data = model.region_data.entry(rh).or_default();
-                                data.texture = Some(path);
-                                data.fill = None;
+                                // Resolvable already: the probe need not run again.
+                                let Model {
+                                    region_data,
+                                    texels,
+                                    ..
+                                } = &mut *model;
+                                let data = region_data.entry(rh).or_default();
+                                texels.set(&mut data.tex, TexSet::File(path), |_| false);
                             }
-                            resolvable && had_probe
+                            (None, resolvable && had_probe)
                         }
                         // nil clears, so the region draws nothing, and answers 1 (`0x79bb40`).
-                        Value::Nil => {
-                            data.texture = None;
-                            data.fill = None;
-                            true
-                        }
-                        _ => false,
+                        Value::Nil => (Some(TexSet::None), true),
+                        _ => (None, false),
                     };
+                    if let Some(set) = set {
+                        model.set_texel(rh, set);
+                    }
                     loaded
                 };
                 // The draw only (`0x77fdf0`); an art-sized texture now holds a state its next
@@ -293,10 +291,10 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let Some(data) = model.region_data.get(&rh) else {
                 return Ok(None);
             };
-            if data.fill.is_some() {
+            if data.tex.fill().is_some() {
                 return Ok(Some("Solid Texture".to_string()));
             }
-            Ok(data.texture.as_ref().map(|t| match t.rfind('.') {
+            Ok(data.tex.path().as_ref().map(|t| match t.rfind('.') {
                 Some(i) => t[..i].to_string(),
                 None => t.clone(),
             }))

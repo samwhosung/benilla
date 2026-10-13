@@ -16,6 +16,21 @@ fn painted(s: &mut UiScript) -> Vec<String> {
         .collect()
 }
 
+/// The drawn font strings' texts, in draw order.
+fn written(s: &mut UiScript) -> Vec<String> {
+    s.resolve();
+    let mut texts: Vec<(u128, String)> = s
+        .extract()
+        .iter()
+        .filter_map(|q| match &q.content {
+            QuadContent::Text { text: Some(t), .. } => Some((q.z, t.clone())),
+            _ => None,
+        })
+        .collect();
+    texts.sort_by_key(|&(z, _)| z);
+    texts.into_iter().map(|(_, t)| t).collect()
+}
+
 fn level(s: &mut UiScript, frame: &str) -> i64 {
     s.eval::<i64>(&format!("return {frame}:GetFrameLevel()"))
         .unwrap()
@@ -776,6 +791,8 @@ fn a_raise_with_a_hidden_child_keeps_the_windows_own_siblings_level() {
 /// The raise's compaction relinks each moved visible frame through `0x76a4f0` (`0x764fb6`), in
 /// creation order (`0x764f80`), so two frames sharing a shifted level swap when the first-created
 /// was linked last: the later link draws on top, and the hit sweep probes the earlier link first.
+/// Their font strings show it: a layer's textures draw sorted by texture (`0x7731a0`), its font
+/// strings in link order.
 #[test]
 fn a_compaction_relinks_a_shared_level_in_creation_order() {
     let mut s = script();
@@ -787,7 +804,8 @@ fn a_compaction_relinks_a_shared_level_in_creation_order() {
             f:SetPoint("BOTTOMLEFT", x, y)
             f:SetWidth(size); f:SetHeight(size)
             f:EnableMouse(true)
-            f:CreateTexture(nil, "ARTWORK"):SetTexture(name .. ".blp")
+            local t = f:CreateFontString(nil, "ARTWORK")
+            t:SetAllPoints(f); t:SetText(name)
             return f
         end
         Square("First", 100, 100, 200):SetFrameLevel(3)
@@ -802,8 +820,8 @@ fn a_compaction_relinks_a_shared_level_in_creation_order() {
     // Inside First and Second, outside Top.
     let (x, y) = (200.0, 200.0);
     assert_eq!(
-        painted(&mut s),
-        vec!["Second.blp", "First.blp"],
+        written(&mut s),
+        vec!["Second", "First"],
         "before: the later link, First, draws on top"
     );
     assert_eq!(s.hit_test_name(x, y).as_deref(), Some("Second"));
@@ -815,8 +833,8 @@ fn a_compaction_relinks_a_shared_level_in_creation_order() {
         "the compaction shifted their level"
     );
     assert_eq!(
-        painted(&mut s),
-        vec!["First.blp", "Second.blp", "Top.blp"],
+        written(&mut s),
+        vec!["First", "Second", "Top"],
         "after: relinked in creation order, Second draws on top"
     );
     assert_eq!(

@@ -200,7 +200,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model");
             let art = model.taxi.as_ref().map(|t| t.art.clone());
             if let Some(art) = art {
-                model.region_data.entry(rh).or_default().texture = Some(art);
+                model.set_texel(rh, crate::script::texel::TexSet::File(art));
                 model.note_art(rh);
             }
             Ok(())

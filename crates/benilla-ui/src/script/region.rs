@@ -208,9 +208,12 @@ pub(super) fn new_texture_region(
 /// `CSimpleTexture::SetTexture(path)` (`0x770200`) on a region: the file replaces a solid fill, and
 /// `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
 pub(super) fn set_texture_path(model: &mut Model, rh: RegionHandle, path: &str) {
-    let data = model.region_data.entry(rh).or_default();
-    data.texture = (!path.is_empty()).then(|| path.to_string());
-    data.fill = None;
+    let set = if path.is_empty() {
+        super::texel::TexSet::None
+    } else {
+        super::texel::TexSet::File(path.to_string())
+    };
+    model.set_texel(rh, set);
     model.note_art(rh);
 }
 
@@ -274,10 +277,8 @@ pub(super) fn this_texture(lua: &Lua, this: &Value) -> mlua::Result<RegionHandle
 /// `CSimpleTexture::SetTexture(NULL)` (`0x770300` with 0): the texture slot emptied, a file, a
 /// solid fill and a baked unit portrait alike; the shader slot, and so the desaturation, stays.
 pub(super) fn clear_texture(model: &mut Model, rh: RegionHandle) {
-    let data = model.region_data.entry(rh).or_default();
-    data.texture = None;
-    data.fill = None;
-    data.portrait_unit = None;
+    model.set_texel(rh, super::texel::TexSet::None);
+    model.region_data.entry(rh).or_default().portrait_unit = None;
     model.note_art(rh);
 }
 
@@ -375,13 +376,12 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
             )?;
             let rh = region_handle_of(lua, &region)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
+            model.set_texel(rh, super::texel::TexSet::Own(None));
             let data = model.region_data.entry(rh).or_default();
             // Lowercased: the reference resolves the token case-insensitively (`0x519ef0` →
             // `0x515970`), stock `MerchantFrame.lua:68` passes `"NPC"`, and the app's bakes are
             // keyed lowercase.
             data.portrait_unit = Some(unit.to_ascii_lowercase());
-            data.texture = None;
-            data.fill = None;
             data.circular = true;
             model.note_art(rh);
             Ok(())
@@ -402,8 +402,8 @@ pub(super) fn install_in_game(lua: &Lua) -> mlua::Result<()> {
             let Some(rh) = model.id_to_region.get(&id).copied() else {
                 return Ok(());
             };
+            model.set_texel(rh, super::texel::TexSet::Portrait(path));
             let data = model.region_data.entry(rh).or_default();
-            data.texture = Some(path);
             data.circular = true;
             data.portrait_unit = None;
             model.note_art(rh);
@@ -703,7 +703,9 @@ pub(crate) fn free_region(model: &mut Model, rh: RegionHandle) {
 pub(crate) fn free_regions(model: &mut Model, dying: &[RegionHandle]) {
     let mut ids = Vec::with_capacity(dying.len());
     for &rh in dying {
-        model.region_data.remove(&rh);
+        if let Some(data) = model.region_data.remove(&rh) {
+            model.texels.release(data.tex);
+        }
         model.region_resolved.remove(&rh);
         model.region_kept.remove(&rh);
         let name = model.arena.region(rh).and_then(|r| r.name.clone());

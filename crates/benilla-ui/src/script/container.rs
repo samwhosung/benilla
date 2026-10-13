@@ -696,9 +696,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             };
             let rh = crate::script::region::region_handle_of(lua, &region)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let data = model.region_data.entry(rh).or_default();
             // An empty slot's `None` is the answer: the reference clears first, then sets.
-            data.texture = path;
+            let set = path.map_or(super::texel::TexSet::None, super::texel::TexSet::Portrait);
+            model.set_texel(rh, set);
+            let data = model.region_data.entry(rh).or_default();
             data.circular = true;
             data.portrait_unit = None;
             model.note_art(rh);

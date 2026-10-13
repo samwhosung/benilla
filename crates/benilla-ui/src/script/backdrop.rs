@@ -11,6 +11,7 @@ use crate::layout::{self, Anchor, Anchors, Point, Rect};
 use crate::order::DrawLayer;
 use crate::widget::{FrameHandle, RegionHandle, RegionKind};
 
+use super::texel::TexSet;
 use super::{Model, RegionData, TexCoords};
 
 /// The default `edgeSize`, logical 32: the constructor writes device 0.025 (`DAT_0081c9b0`).
@@ -342,13 +343,15 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
         model.region_data.insert(
             rh,
             RegionData {
-                texture,
                 anchors,
                 size,
                 tex_coords,
                 ..RegionData::default()
             },
         );
+        if let Some(path) = texture {
+            model.set_texel(rh, TexSet::File(path));
+        }
         Some(rh)
     };
     if spec.has_bg() {
@@ -479,11 +482,11 @@ fn rerun(
 /// (`0x77f410`), the border colour on the eight edges only (`0x77f440`).
 fn paint(inst: &Installed, region_data: &mut HashMap<RegionHandle, RegionData>) {
     if let Some(d) = inst.bg().and_then(|rh| region_data.get_mut(&rh)) {
-        d.vertex_color = Some(inst.spec.bg_color);
+        d.set_vertex_color(Some(inst.spec.bg_color));
     }
     for rh in inst.edges() {
         if let Some(d) = region_data.get_mut(&rh) {
-            d.vertex_color = Some(inst.spec.border_color);
+            d.set_vertex_color(Some(inst.spec.border_color));
         }
     }
 }
@@ -503,13 +506,13 @@ pub(crate) fn set_color(model: &mut Model, fh: FrameHandle, border: bool, color:
         inst.spec.border_color = color;
         for rh in inst.edges() {
             if let Some(d) = region_data.get_mut(&rh) {
-                d.vertex_color = Some(color);
+                d.set_vertex_color(Some(color));
             }
         }
     } else {
         inst.spec.bg_color = color;
         if let Some(d) = inst.bg().and_then(|rh| region_data.get_mut(&rh)) {
-            d.vertex_color = Some(color);
+            d.set_vertex_color(Some(color));
         }
     }
 }

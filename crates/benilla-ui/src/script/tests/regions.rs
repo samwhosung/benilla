@@ -1476,3 +1476,82 @@ fn a_scroll_child_sorts_each_frames_layer_alone() {
         ["parent solid", "x", "child solid"]
     );
 }
+
+/// Different textures rank by when each was made, not by where their quads fall: the stand-in
+/// for the device texture's address on a growing heap. A file is made at the first draw after
+/// its set, and one its last region let go of is made anew.
+#[test]
+fn different_textures_draw_in_the_order_they_were_made() {
+    let mut s = script();
+    s.run(
+        r#"
+        f1 = CreateFrame("Frame", "StampOne")
+        f1:SetPoint("TOPLEFT", 0, 0) f1:SetWidth(50) f1:SetHeight(50)
+        a = f1:CreateTexture(nil, "BACKGROUND") a:SetAllPoints(f1)
+        f2 = CreateFrame("Frame", "StampTwo")
+        f2:SetPoint("TOPLEFT", 0, 0) f2:SetWidth(50) f2:SetHeight(50)
+        b = f2:CreateTexture(nil, "BACKGROUND") b:SetAllPoints(f2)
+        b:SetTexture("Interface\\Stamp\\Early")
+    "#,
+    )
+    .unwrap();
+    let label = |c: &QuadContent| match c {
+        QuadContent::Texture { path: Some(p), .. } if p.ends_with("Early") => Some("early"),
+        QuadContent::Texture { path: Some(p), .. } if p.ends_with("Late") => Some("late"),
+        _ => None,
+    };
+    let _ = quad_order(&mut s, label);
+    s.run(r#"a:SetTexture("Interface\\Stamp\\Late")"#).unwrap();
+    assert_eq!(
+        quad_order(&mut s, label),
+        ["early", "late"],
+        "the older texture first, though its frame links second"
+    );
+
+    s.run(r#"b:SetTexture(nil) b:SetTexture("Interface\\Stamp\\Early")"#)
+        .unwrap();
+    assert_eq!(
+        quad_order(&mut s, label),
+        ["late", "early"],
+        "let go of and set again, it is the newer one"
+    );
+}
+
+/// Every engine writer of the one vertex colour goes through `0x77f750`, so it collapses a
+/// gradient as `SetVertexColor` does: here the backdrop colour on its background piece.
+#[test]
+fn an_engine_vertex_colour_collapses_a_gradient() {
+    let mut s = script();
+    s.run(
+        r#"
+        f = CreateFrame("Frame", "GradBackdrop")
+        f:SetPoint("TOPLEFT", 0, 0) f:SetWidth(64) f:SetHeight(64)
+        f:SetBackdrop({ bgFile = "bg" })
+        bg = f:GetRegions()
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    s.run(r#"bg:SetGradient("VERTICAL", 1, 0, 0, 0, 0, 1)"#)
+        .unwrap();
+    let bg = |s: &mut UiScript| {
+        s.resolve();
+        s.extract().into_iter().find_map(|q| match q.content {
+            QuadContent::Texture {
+                path: Some(p),
+                color,
+                gradient,
+                ..
+            } if p == "bg" => Some((color, gradient)),
+            _ => None,
+        })
+    };
+    assert!(bg(&mut s).unwrap().1.is_some(), "the gradient is on");
+    s.run("f:SetBackdropColor(0.5, 0.5, 0.5)").unwrap();
+    let (color, gradient) = bg(&mut s).unwrap();
+    assert_eq!(gradient, None, "the backdrop colour collapsed it");
+    assert!(
+        color.is_some_and(|c| (c[0] - 0.5).abs() < 0.01),
+        "{color:?}"
+    );
+}

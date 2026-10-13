@@ -131,7 +131,7 @@ pub(crate) fn repaint(d: &mut RegionData, fo: &FontObject) {
     }
     if !ex.color {
         if let Some(c) = fo.color {
-            d.vertex_color = Some(c);
+            d.set_vertex_color(Some(c));
         }
     }
     if !ex.justify_h {

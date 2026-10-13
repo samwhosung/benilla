@@ -472,10 +472,14 @@ fn set_slot_texture(
     let id = ensure_slot(lua, this, slot)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let rh = *model.id_to_region.get(&id).expect("slot region id");
-    let data = model.region_data.entry(rh).or_default();
     // `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
-    data.texture = (!path.is_empty()).then_some(path);
-    data.fill = None;
+    let set = if path.is_empty() {
+        crate::script::texel::TexSet::None
+    } else {
+        crate::script::texel::TexSet::File(path)
+    };
+    model.set_texel(rh, set);
+    let data = model.region_data.entry(rh).or_default();
     // The highlight applies its blend on every path call, to the old region as to a new one
     // (`0x779082`, `0x7790e6`).
     if let Some(blend) = blend {

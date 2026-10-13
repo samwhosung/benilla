@@ -478,8 +478,11 @@ impl Plate {
             .arena
             .create_region(bar, RegionKind::Texture, DrawLayer::Artwork, 0)
             .expect("live bar");
+        model.set_texel(
+            fill,
+            super::texel::TexSet::File(BAR_FILL_TEXTURE.to_string()),
+        );
         let fill_data = model.region_data.entry(fill).or_default();
-        fill_data.texture = Some(BAR_FILL_TEXTURE.to_string());
         // The fill keeps `CSimpleTexture`'s default BLEND (`0x76fc40`), written out as a fact.
         fill_data.blend = BlendMode::Blend;
         if let Some(KindState::StatusBar(sb)) =
@@ -681,7 +684,11 @@ impl Plate {
             } else {
                 [1.0, 1.0, 1.0, 1.0]
             };
-            model.region_data.entry(name).or_default().vertex_color = Some(c);
+            model
+                .region_data
+                .entry(name)
+                .or_default()
+                .set_vertex_color(Some(c));
             // The glow really shows, as addons read mouseover from it; it only paints nothing.
             model.set_region_hidden(glow, !state.hovered);
         }
@@ -699,7 +706,7 @@ impl Plate {
                     let c = state.level_colour;
                     let data = model.region_data.entry(level).or_default();
                     data.text = Some(n.to_string());
-                    data.vertex_color = Some([c[0], c[1], c[2], 1.0]);
+                    data.set_vertex_color(Some([c[0], c[1], c[2], 1.0]));
                     model.set_region_hidden(level, false);
                     model.set_region_hidden(skull, true);
                     model.touch_measure(level);
@@ -752,8 +759,8 @@ fn texture(
         .arena
         .create_region(frame, RegionKind::Texture, layer, 0)
         .expect("live plate");
+    model.set_texel(rh, super::texel::TexSet::File(path.to_string()));
     let data = model.region_data.entry(rh).or_default();
-    data.texture = Some(path.to_string());
     data.blend = blend;
     rh
 }
@@ -785,7 +792,7 @@ pub(super) fn is_world_seated(model: &Model, frame: FrameHandle) -> bool {
 /// the bar ([`LIT_BOOST`]), because the rim reads as hard edge lines in our linear-blending
 /// pipeline. The art has no alpha and is mostly black, so as BLEND it would be an opaque box.
 pub(super) fn is_unpainted_glow(data: &RegionData) -> bool {
-    data.blend == BlendMode::Add && data.texture.as_deref() == Some(GLOW_TEXTURE)
+    data.blend == BlendMode::Add && data.tex.path().as_deref() == Some(GLOW_TEXTURE)
 }
 
 /// The lit bar's brighten, a multiply of the fill tint in encoded sRGB like the client's modulate:

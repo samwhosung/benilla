@@ -228,6 +228,8 @@ pub(crate) struct Model {
     pub(crate) link_buttons: HashMap<FrameHandle, Vec<FrameHandle>>,
     /// Region visuals (texture, colour, text) and layout (anchors, size, justify).
     pub(crate) region_data: HashMap<RegionHandle, RegionData>,
+    /// The textures the regions' slots hold, with their creation stamps ([`super::texel`]).
+    pub(crate) texels: super::texel::Texels,
     /// Each frame's backdrop plate (`<Backdrop>` or `SetBackdrop`, the client's `frame+0x1ac`):
     /// its spec and the nine Texture regions it built.
     pub(crate) backdrops: HashMap<FrameHandle, backdrop::Installed>,
@@ -1247,6 +1249,7 @@ impl Model {
             resolved: HashMap::new(),
             link_buttons: HashMap::new(),
             region_data: HashMap::new(),
+            texels: super::texel::Texels::default(),
             backdrops: HashMap::new(),
             simple_html: simplehtml::SimpleHtmlStates::new(),
             font_objects_by_lower: HashMap::new(),
@@ -2297,6 +2300,19 @@ impl Model {
         if let Some(&id) = self.frame_to_id.get(&h) {
             self.layout_unsettled.insert(id);
         }
+    }
+
+    /// Set region `rh`'s texture slot ([`super::texel::Texels::set`]), the one way it is written.
+    pub(crate) fn set_texel(&mut self, rh: RegionHandle, set: super::texel::TexSet) {
+        let Model {
+            region_data,
+            texels,
+            texture_probe,
+            ..
+        } = self;
+        let data = region_data.entry(rh).or_default();
+        let missing = |p: &str| texture_probe.as_ref().is_some_and(|probe| !probe(p));
+        texels.set(&mut data.tex, set, missing);
     }
 
     /// New art on region `rh` (`SetTexture` `0x770200`, the colour form `0x770360`): it marks

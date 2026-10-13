@@ -68,7 +68,7 @@ fn apply_font(d: &mut RegionData, name: &str, fo: Option<&FontObject>) {
         d.outline = f.outline;
         d.font_shadow = f.shadow;
         if let Some(c) = f.color {
-            d.vertex_color = Some(c);
+            d.set_vertex_color(Some(c));
         }
     }
 }
@@ -131,7 +131,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
                             d.font_height = src.font_height;
                             d.outline = src.outline;
                             d.font_shadow = src.font_shadow;
-                            d.vertex_color = src.vertex_color;
+                            d.set_vertex_color(src.vertex_color);
                         }
                         None => {
                             let font = if i == 1 {
@@ -268,7 +268,7 @@ pub(super) fn write_cell(
     let d = model.region_data.entry(rh).or_default();
     let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
     d.text = Some(text.to_string());
-    d.vertex_color = Some(color);
+    d.set_vertex_color(Some(color));
     // The line's own colour, as if set by `SetTextColor`: a later
     // `GameTooltipText:SetTextColor` must not repaint it.
     d.font_explicit.color = true;

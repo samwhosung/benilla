@@ -131,10 +131,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::region::clear_texture(&mut model, rh);
                 return Ok(Value::Nil);
             }
+            model.set_texel(rh, super::texel::TexSet::Own(None));
             let data = model.region_data.entry(rh).or_default();
             data.portrait_unit = Some(LOOT_PORTRAIT_UNIT.to_string());
-            data.texture = None;
-            data.fill = None;
             data.circular = true;
             model.note_art(rh);
             Ok(Value::Integer(1))
@@ -343,7 +342,7 @@ mod tests {
         let id = model.region_by_name[name];
         let rh = *model.id_to_region.get(&id).expect("a region");
         let data = &model.region_data[&rh];
-        (data.portrait_unit.clone(), data.texture.clone())
+        (data.portrait_unit.clone(), data.tex.path().clone())
     }
 
     /// `SetLootPortrait` (`0x4c2b40`): a unit source binds the loot portrait and answers 1;
