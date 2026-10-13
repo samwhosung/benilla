@@ -646,6 +646,7 @@ fn feed_merchant(
         // `MERCHANT_CLOSED` queues a close intent through OnHide; consume it so the drain keeps
         // the new vendor.
         script.fire_event("MERCHANT_CLOSED", vec![]);
+        drop_held_vendor_row(&mut script);
         script.fire_event("MERCHANT_SHOW", name_arg());
         let _ = script.take_merchant_close();
     } else {
@@ -653,7 +654,12 @@ fn feed_merchant(
             (None, Some(_)) => script.fire_event("MERCHANT_SHOW", name_arg()),
             // A change while open: an item or the name landed, or the stock moved.
             (Some(_), Some(_)) => script.fire_event("MERCHANT_UPDATE", name_arg()),
-            (Some(_), None) => script.fire_event("MERCHANT_CLOSED", vec![]),
+            // `CloseMerchant` (`0x4fb120`) and the walk-away (`0x4933f8`) share the close core
+            // `0x4fadf0`, the leave-world sweep's too.
+            (Some(_), None) => {
+                script.fire_event("MERCHANT_CLOSED", vec![]);
+                drop_held_vendor_row(&mut script);
+            }
             (None, None) => {}
         }
     }
@@ -675,8 +681,8 @@ impl NpcSession for MerchantOpen {
 }
 
 /// The leave-world sweep's merchant leg (`0x490ada` → `0x4facc0` → `0x4fadf0`): an open window
-/// closes with `MERCHANT_CLOSED` (`0x4fae2c`) in the VM the sweep runs in, and a vendor row held
-/// on the cursor, mode 5, is cleared after it (`0x4fae31`, `0x4fae4a`).
+/// closes with `MERCHANT_CLOSED` (`0x4fae2c`) in the VM the sweep runs in, then the close core's
+/// tail ([`drop_held_vendor_row`]).
 pub(crate) fn close_merchant_on_leave_world(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<MerchantOpen>,
@@ -687,12 +693,19 @@ pub(crate) fn close_merchant_on_leave_world(
     if let Some(mut script) = script {
         script.set_merchant(None);
         script.fire_event("MERCHANT_CLOSED", vec![]);
-        if matches!(
-            script.held_cursor().payload(),
-            Some(benilla_ui::script::CursorPayload::Merchant(_))
-        ) {
-            script.clear_cursor_payload();
-        }
+        drop_held_vendor_row(&mut script);
+    }
+}
+
+/// The close core's tail (`0x4fadf0`, every close's): a vendor row held on the cursor, mode 5 with
+/// its entry stored (`0x4fae31`, `[0xb4b41c]` through `0x495170`), is cleared (`0x4fae4a` →
+/// `ClearCursor(1, 1)`), after `MERCHANT_CLOSED`.
+fn drop_held_vendor_row(script: &mut UiScript) {
+    if matches!(
+        script.held_cursor().payload(),
+        Some(benilla_ui::script::CursorPayload::Merchant(_))
+    ) {
+        script.clear_cursor_payload();
     }
 }
 
@@ -1579,5 +1592,53 @@ mod tests {
         open.clear();
         assert!(!open.is_open());
         assert!(open.items.is_empty());
+    }
+
+    /// Every merchant close runs the core `0x4fadf0`, whose tail clears a vendor row held on the
+    /// cursor (`0x4fae31`-`0x4fae4a`): `CloseMerchant` here, through the feed's close edge.
+    #[test]
+    fn closing_the_vendor_drops_a_held_vendor_row() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.init_resource::<Items>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<MerchantOpen>()
+            .init_resource::<MerchantErrors>()
+            .init_resource::<NameCache>()
+            .init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .insert_resource(NetCommands(tx))
+            .add_systems(Update, (drain_merchant, feed_merchant).chain());
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.world_mut()
+            .resource_mut::<MerchantOpen>()
+            .open(0xF130_0000_0000_0E1D, Vec::new());
+        app.update();
+        {
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.set_merchant(Some(benilla_ui::script::MerchantState {
+                items: vec![benilla_ui::script::MerchantItem {
+                    name: Some("Refreshing Spring Water".into()),
+                    price: 25,
+                    quantity: 5,
+                    num_available: -1,
+                    item_id: 159,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }));
+            s.run("PickupMerchantItem(1) CloseMerchant()").unwrap();
+            assert!(matches!(
+                s.cursor_payload(),
+                Some(benilla_ui::script::CursorPayload::Merchant(_))
+            ));
+        }
+        app.update();
+        assert!(app
+            .world()
+            .non_send_resource::<UiScript>()
+            .cursor_payload()
+            .is_none());
     }
 }
