@@ -193,11 +193,12 @@ pub(super) fn send_mail_result(
                             mail.mails[pos].item = None;
                         }
                         if take_empties(&mail.mails[pos], action) {
-                            if let Some(mailbox) = mail.mailbox {
-                                let _ = commands
-                                    .0
-                                    .send(ClientCommand::MailDelete { mailbox, mail_id });
-                            }
+                            // Sent whether or not a mailbox is open (`0x4ad74d`); a closed one
+                            // has no guid, and the server drops it.
+                            let mailbox = mail.mailbox.unwrap_or(0);
+                            let _ = commands
+                                .0
+                                .send(ClientCommand::MailDelete { mailbox, mail_id });
                             result.close_inbox = Some(pos as u32 + 1);
                         }
                     }
@@ -230,6 +231,8 @@ fn mail_item_text(text_id: u32, text: String, mail: &mut MailOpen) {
 ///
 /// Deviation: an open mailbox also re-lists at once, past `CheckInbox`'s 60 s throttle, because a
 /// mail announced while the player stands there should show; the reference waits for the close.
+/// Its list answer also releases the request lock (`0x4ad5d0`), so a take in flight when it lands
+/// loses its lock and a second request can go out before the take's result.
 fn received_mail(seconds: f32, pending: &mut MailPending, mail: &MailOpen, commands: &NetCommands) {
     pending.apply_received_mail(seconds, mail.mailbox.is_some());
     if let Some(mailbox) = mail.mailbox {
@@ -491,5 +494,28 @@ mod tests {
             );
             assert_eq!(mail.results[0].close_inbox.is_some(), purged);
         }
+    }
+
+    /// A purge sends `CMSG_MAIL_DELETE` whether or not a mailbox is open (`0x4ad74d`).
+    #[test]
+    fn a_purge_sends_its_delete_with_no_mailbox_open() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut mail = MailOpen::default();
+        let mut cod = super::super::tests::entry(7, Some(0xA), 0, 30.0);
+        cod.checked = CHECKED_COD_PAYMENT;
+        mail.mails.push(cod);
+        let mut equip = EquipErrors::default();
+        send_mail_result(
+            7,
+            mail_action::MONEY_TAKEN,
+            mail_error::OK,
+            None,
+            None,
+            &mut mail,
+            &NetCommands(tx),
+            &mut equip,
+        );
+        assert_eq!(sent_commands(&rx), [("delete", 7)]);
+        assert_eq!(mail.results[0].close_inbox, Some(1));
     }
 }
