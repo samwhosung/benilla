@@ -330,6 +330,9 @@ pub(crate) struct CreateScene {
     /// The scenes left for another pane's while their own pane still holds them
     /// ([`GluePreview::live`]), each to resume where it stopped when its stage returns.
     parked: Vec<ParkedScene>,
+    /// Scene roots gone since [`sync_glue_scene`] last looked, whose own materials it forgets
+    /// (`M2BatchMaterials::forget_scene`).
+    dropped: Vec<Entity>,
 }
 
 /// A scene left standing for another pane's, its pane still holding it: a hidden `ModelFFX` keeps
@@ -382,6 +385,7 @@ impl CreateScene {
             pending: None,
             clock_ms: 0,
             parked: Vec::new(),
+            dropped: Vec::new(),
         }
     }
 
@@ -422,22 +426,19 @@ impl CreateScene {
                     stage: self.stage,
                     clock_ms: self.clock_ms,
                 });
-                // A fresh root for the incoming spawn; a resumed scene brings its own.
-                if returning.is_none() {
-                    self.root = commands
-                        .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
-                        .id();
-                }
-            }
-            _ if returning.is_some() => {
-                // Gone for good, and its root with it: the returning scene stands on its own.
-                commands.entity(self.root).despawn();
             }
             _ => {
-                commands.entity(self.root).despawn_related::<Children>();
-                // The model may still be loading: strip the old rig state off the root now.
-                super::clear_booth_rig(commands, self.root);
+                // Gone for good, its root and its own materials with it.
+                commands.entity(self.root).despawn();
+                self.dropped.push(self.root);
             }
+        }
+        // A fresh root for the incoming spawn, whose materials are its own; a resumed scene
+        // brings its root back.
+        if returning.is_none() {
+            self.root = commands
+                .spawn((Transform::IDENTITY, Visibility::Visible, layer.clone()))
+                .id();
         }
         self.spawned = false;
         self.cam = None;
@@ -472,10 +473,12 @@ impl CreateScene {
     /// Drop every parked scene whose pane let it go: a new `SetModel` there (`0x76cce0`), or the
     /// glue screens gone.
     fn evict(&mut self, commands: &mut Commands, live: &[u64]) {
+        let dropped = &mut self.dropped;
         self.parked.retain(|p| {
             let keep = live.contains(&p.stage);
             if !keep {
                 commands.entity(p.root).despawn();
+                dropped.push(p.root);
             }
             keep
         });
@@ -912,6 +915,8 @@ pub(super) fn sync_glue_scene(
         scene.evict(&mut commands, &[]);
         if scene.token.is_some() {
             commands.entity(scene.root).despawn_related::<Children>();
+            let root = scene.root;
+            scene.dropped.push(root);
             // Strip the rig state (pose buffer, player, palette slot): the root outlives its bakes.
             super::clear_booth_rig(&mut commands, scene.root);
             scene.token = None;
@@ -925,6 +930,9 @@ pub(super) fn sync_glue_scene(
             scene.char_scale = 1.0;
             clear_pet(&mut commands, &mut scene);
             resize_target(&mut images, &booth.target, GLUE_SIZE, GLUE_SIZE);
+        }
+        for root in scene.dropped.drain(..) {
+            mats.forget_scene(root);
         }
         return;
     };
@@ -1040,6 +1048,10 @@ pub(super) fn sync_glue_scene(
             );
         }
     }
+    // The scenes gone this frame take their own materials with them.
+    for root in scene.dropped.drain(..) {
+        mats.forget_scene(root);
+    }
     if resumed {
         // The shared light buffer carries the standing scene's rig and fog: put this one's back.
         if let (Some(model), Some(light)) = (
@@ -1133,7 +1145,9 @@ pub(super) fn sync_glue_scene(
                 // The authored batch order (index + 1) is all that separates batches sharing the
                 // scene root's sort distance.
                 let order = u16::try_from(pi + 1).unwrap_or(u16::MAX);
-                let material = mats.off_world(s, s.texture.clone(), order, &light, true);
+                // The scene's own material, never another scene's of the same file: its UV and
+                // tint rows run on this scene's clock and go with it.
+                let material = mats.off_world_for(s, s.texture.clone(), order, &light, scene_root);
                 // Texture transforms and M2Color tints run live, as in the reference's
                 // per-frame animate kernel (`0x715f25`-`0x7163bc`). Every glue model's loops are
                 // shared, none per-placement, so `host: None` is exact.
@@ -3129,5 +3143,67 @@ mod tests {
         queue.apply(&mut world);
         assert!(scene.parked.is_empty());
         assert!(world.get_entity(select).is_err());
+    }
+
+    /// Select stands a race's stage, create stands the same file on its own pane, and Back returns
+    /// to select, whose pane still holds its instance (`currentModel` unchanged, no `SetModel`).
+    /// Each scene stands on a root of its own, which keys its own materials
+    /// (`M2BatchMaterials::off_world_for`), so the resumed select scene's rows run on its clock
+    /// and not on the parked create scene's; a root that goes hands its materials back.
+    #[test]
+    fn select_create_back_keeps_each_scene_on_its_own_root_and_clock() {
+        use bevy::ecs::world::CommandQueue;
+        let mut world = World::new();
+        let layer = RenderLayers::layer(GLUE_LAYER);
+        let first = world.spawn(Transform::IDENTITY).id();
+        let pet = world.spawn_empty().id();
+        let mut scene = CreateScene::empty(first, pet);
+        let step = |world: &mut World, scene: &mut CreateScene, live: &[u64], next: u64| {
+            let mut queue = CommandQueue::default();
+            let resumed = {
+                let mut commands = Commands::new(&mut queue, world);
+                scene.leave_for(&mut commands, &layer, live, next, &|_| Vec::new())
+            };
+            queue.apply(world);
+            resumed
+        };
+        let stand = |scene: &mut CreateScene, stage: u64, clock_ms: u64| {
+            scene.token = Some("Orc");
+            scene.handle = Some(Handle::default());
+            scene.spawned = true;
+            scene.stage = stage;
+            scene.clock_ms = clock_ms;
+        };
+
+        // The first stage replaces the boot root, which held nothing of a scene.
+        assert!(!step(&mut world, &mut scene, &[2], 2));
+        assert_eq!(scene.dropped, vec![first], "the boot root goes");
+        scene.dropped.clear();
+        let select = scene.root;
+        stand(&mut scene, 2, 700);
+
+        // Create: select's pane still holds UI_Orc, so it parks; create stands UI_Orc anew.
+        assert!(!step(&mut world, &mut scene, &[2, 3], 3));
+        let create = scene.root;
+        assert_ne!(create, select, "the same file, two scenes, two roots");
+        assert!(scene.dropped.is_empty(), "nothing went");
+        stand(&mut scene, 3, 0);
+        scene.clock_ms = 400;
+
+        // Back: select resumes on its own root and its own clock; create parks.
+        assert!(step(&mut world, &mut scene, &[2, 3], 2));
+        assert_eq!((scene.root, scene.clock_ms), (select, 700));
+        assert_eq!(
+            scene.parked.iter().map(|p| p.root).collect::<Vec<_>>(),
+            [create]
+        );
+
+        // The next create show makes a new instance: the old create scene goes, with its
+        // materials.
+        let mut queue = CommandQueue::default();
+        scene.evict(&mut Commands::new(&mut queue, &world), &[2]);
+        queue.apply(&mut world);
+        assert_eq!(scene.dropped, vec![create]);
+        assert!(world.get_entity(create).is_err());
     }
 }

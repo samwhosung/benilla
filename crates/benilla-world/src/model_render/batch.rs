@@ -168,6 +168,36 @@ impl M2BatchMaterials<'_> {
         self.build(sub, texture, order, shade, false, false, rig, light)
     }
 
+    /// [`Self::off_world`] for one scene's own batches: keyed to `scene`, so two scenes of one
+    /// file never share a material, and with it the UV and tint rows the scene's own clock drives
+    /// (`doodad_anim::scene_clocked`). [`Self::forget_scene`] lets them go with the scene.
+    pub fn off_world_for(
+        &mut self,
+        sub: &ModelSubmesh,
+        texture: Option<Handle<Image>>,
+        order: u16,
+        light: &Buffer,
+        scene: Entity,
+    ) -> Handle<WowModelMaterial> {
+        self.build_for(
+            sub,
+            texture,
+            order,
+            ShadeSel::Rig,
+            false,
+            false,
+            true,
+            light,
+            Some(scene),
+        )
+    }
+
+    /// Drop the cached materials [`Self::off_world_for`] built for `scene`, which is gone: once its
+    /// batches despawn, nothing holds them, and their animated rows are freed by the tick.
+    pub fn forget_scene(&mut self, scene: Entity) {
+        super::forget_instance(&mut self.cache.0, scene);
+    }
+
     /// The variant set of any entity part, all lit with one indoor pair: the reference gives every
     /// entity M2 the same entity-node fill (`0x672a20`). Registers each variant's UV loop on `uv`
     /// in the same step; the depth-prime twin, drawn only mid-feather, is not registered.
@@ -376,6 +406,26 @@ impl M2BatchMaterials<'_> {
         play_uv: bool,
         light: &Buffer,
     ) -> Handle<WowModelMaterial> {
+        // Entity batches share one material per batch: an entity resolves its sequence through
+        // `MatAnim::host`, so only the world streamer keys one per placement.
+        self.build_for(
+            sub, texture, order, shade, probe, fade, play_uv, light, None,
+        )
+    }
+
+    /// [`Self::build`], keyed to `instance` when the material belongs to one.
+    fn build_for(
+        &mut self,
+        sub: &ModelSubmesh,
+        texture: Option<Handle<Image>>,
+        order: u16,
+        shade: ShadeSel,
+        probe: bool,
+        fade: bool,
+        play_uv: bool,
+        light: &Buffer,
+        instance: Option<Entity>,
+    ) -> Handle<WowModelMaterial> {
         model_material(
             &mut self.cache.0,
             &mut self.materials,
@@ -403,9 +453,7 @@ impl M2BatchMaterials<'_> {
             // The sky lane overrides the batch's depth state, so only `Self::skybox` builds it.
             false,
             light,
-            // Entity batches share one material per batch: an entity resolves its sequence
-            // through `MatAnim::host`, so only the world streamer keys one per placement.
-            None,
+            instance,
         )
     }
 }

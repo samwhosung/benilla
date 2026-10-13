@@ -77,6 +77,11 @@ impl<K: Eq + Hash, V> SpatialCache<K, V> {
         &mut slot.0
     }
 
+    /// Keep only the entries whose key passes `keep`: an owner dropping what it alone keyed.
+    pub fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        self.map.retain(|k, _| keep(k));
+    }
+
     /// Stamp everything used since the last sweep at `focus` and `now`, then drop every entry both
     /// more than `radius` yd away and idle for [`MIN_DWELL_SECS`]; returns how many were dropped.
     pub fn scope(&mut self, focus: [f32; 3], radius: f32, now: f32) -> usize {
@@ -237,5 +242,19 @@ mod tests {
         c.insert(1, 10);
         assert_eq!(c.fetch(&1), Some(10));
         assert_eq!(c.len(), 1);
+    }
+
+    /// An owner drops exactly what it keyed: a glue scene going takes its own materials, and no
+    /// other scene's.
+    #[test]
+    fn retain_drops_only_the_keys_it_is_told_to() {
+        let mut c: SpatialCache<(u32, Option<u32>), u32> = SpatialCache::default();
+        c.insert((1, Some(7)), 10);
+        c.insert((2, Some(8)), 20);
+        c.insert((3, None), 30);
+        c.retain(|k| k.1 != Some(7));
+        assert!(c.fetch(&(1, Some(7))).is_none());
+        assert_eq!(c.fetch(&(2, Some(8))), Some(20));
+        assert_eq!(c.fetch(&(3, None)), Some(30));
     }
 }
