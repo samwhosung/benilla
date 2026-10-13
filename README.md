@@ -15,6 +15,10 @@ reads the game's data from your own 1.12.1 install. Every file format, the netwo
 the interface engine are written from scratch, with no original client code, no third-party WoW
 crates and no bundled game assets.
 
+What the real client does is read at its bytes in
+[benilla-re](https://github.com/samwhosung/benilla-re), the reverse engineering benilla is built
+against, by the same client addresses the comments here cite.
+
 ## What's inside
 
 - **Formats:** readers for the whole asset stack (the MPQ patch chain, BLP, DBC, ADT, WDT, WDL, M2

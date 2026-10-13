@@ -55,9 +55,11 @@ pins the benilla revision it builds on. What a crate cannot reach stays a fork's
    doc-link and render-pass lints, the player build with its own tests, and the engine boot
    checks. A pull request from a fork runs the ones that need neither the install nor a display
    in CI, on Linux; the rest run on the maintainer's machine before it lands.
-2. The reference fact is stated: what 1.12.1 does, and where that is known from (the client's
+2. The reference fact is stated: what 1.12.1 does, and where that is known from (an entry in
+   [benilla-re](https://github.com/samwhosung/benilla-re) by client address, the client's
    behaviour you observed, a DBC field, a FrameXML line, a packet capture). The names and shapes
-   under `reference/` are the surface benilla tracks.
+   under `reference/` are the surface benilla tracks. A fact benilla-re does not have yet can be
+   added there first.
 3. A comment where it matters, one line, saying what the code does and the 1.12 fact behind it.
    No history.
 4. The commit message says what changed, for a player or a developer, in one line.

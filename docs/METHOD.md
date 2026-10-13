@@ -17,8 +17,10 @@ crate of its own or a fork, and benilla opens a piece of itself to such a crate 
 ## The loop
 
 1. **The reference first.** For anything fidelity-defining, get the mechanism from the real
-   client before building: its behaviour, a DBC field, a FrameXML line, a packet capture. The
-   names and shapes under `reference/` are the surface benilla tracks.
+   client before building: its code as
+   [benilla-re](https://github.com/samwhosung/benilla-re) documents it by address, its
+   behaviour, a DBC field, a FrameXML line, a packet capture. The names and shapes under
+   `reference/` are the surface benilla tracks.
 2. **Build it idiomatically.** Modern Bevy and Rust, performance woven in from the start.
    Implement the mechanism well; do not ape a quirk that is a bug.
 3. **Measure, never eyeball.** Timing, delay, ordering and feel are settled with instruments:
