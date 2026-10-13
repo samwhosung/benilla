@@ -938,14 +938,18 @@ fn a_texture_gradient_tints_the_art_it_sits_on() {
         .map(|q| q.content.clone())
         .expect("the popup's background art reaches the render list");
 
-    let QuadContent::Texture { color, .. } = bg else {
+    let QuadContent::Texture {
+        color, gradient, ..
+    } = bg
+    else {
         unreachable!("filtered to Texture above")
     };
-    // The stops are (0,0,0,0.9) and (0.2,0.2,0.2,0.9). A quad carries one tint, so the paint shows
-    // their midpoint, 0.1 grey; the reference shades per vertex.
+    // VERTICAL, MinColor (0,0,0,0.9) on the bottom pair and MaxColor (0.2,0.2,0.2,0.9) on the top.
+    let (min, max) = ([0.0, 0.0, 0.0, 0.9], [0.2, 0.2, 0.2, 0.9]);
+    assert_eq!(color, None, "the art carries no one-colour tint");
     assert_eq!(
-        color,
-        Some([0.1, 0.1, 0.1, 0.9]),
+        gradient,
+        Some([max, max, min, min]),
         "the <Gradient> must tint the art; untinted this is the reported white box"
     );
 }
