@@ -578,6 +578,82 @@ mod tests {
         assert_eq!(swings(&f), (vec![NEW], false));
     }
 
+    /// `TargetByName` (`0x489d60`) commits through `SetSelection 0x493540` before it returns, so
+    /// `UnitName("target")` on the next line of the same chunk names the new unit, and the frame's
+    /// one application commits the same pick.
+    #[test]
+    fn target_by_name_names_the_new_target_in_the_same_chunk() {
+        let mut f = frame(true);
+        spawn_mob(&mut f, &[]);
+        let world = f.app.world_mut();
+        let mut names = world.resource_mut::<crate::names::NameCache>();
+        names.insert_player(OLD, "Old Mob".into(), None);
+        names.insert_player(MOB, "Red Affinity".into(), None);
+        names.insert_player(NEW, "Red Whelp".into(), None);
+        world
+            .run_system_once(crate::ui_unit::feed_name_candidates)
+            .expect("the candidate feed runs as a one-shot system");
+        let named = f
+            .app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<String>("TargetByName('Red Affinity', true) return UnitName('target')")
+            .expect("the chunk runs");
+        assert_eq!(named, "Red Affinity");
+        f.app
+            .world_mut()
+            .run_system_once(apply_script_calls)
+            .expect("the calls apply as a one-shot system");
+        assert_eq!(
+            selected(&f),
+            Some(MOB),
+            "the commit picks what the chunk read"
+        );
+    }
+
+    /// Two namesakes: the ranking decides, and the chunk shows the one the commit then selects --
+    /// the nearer, and of two at one distance the lower guid, whatever order either side walks.
+    #[test]
+    fn target_by_name_shows_the_namesake_the_commit_picks() {
+        /// A namesake of `MOB` on our other side, told apart by its health.
+        const TWIN: u64 = 0x30;
+        for (twin_x, picked, health) in [(-4.0, MOB, 100), (-3.0, TWIN, 40)] {
+            let mut f = frame(true);
+            spawn_mob(&mut f, &[]);
+            let world = f.app.world_mut();
+            let twin = world
+                .spawn((
+                    Guid(TWIN),
+                    Transform::from_xyz(twin_x, 0.0, 0.0),
+                    GlobalTransform::from_translation(Vec3::new(twin_x, 0.0, 0.0)),
+                    ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                        (HEALTH, 40),
+                        (28, 100),
+                    ])),
+                ))
+                .id();
+            world.resource_mut::<GuidIndex>().0.insert(TWIN, twin);
+            let mut names = world.resource_mut::<crate::names::NameCache>();
+            names.insert_player(MOB, "Red Affinity".into(), None);
+            names.insert_player(TWIN, "Red Affinity".into(), None);
+            world
+                .run_system_once(crate::ui_unit::feed_name_candidates)
+                .expect("the candidate feed runs as a one-shot system");
+            let shown = f
+                .app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<i64>("TargetByName('Red Affinity') return UnitHealth('target')")
+                .expect("the chunk runs");
+            assert_eq!(shown, health, "the twin {twin_x} yd off");
+            f.app
+                .world_mut()
+                .run_system_once(apply_script_calls)
+                .expect("the calls apply as a one-shot system");
+            assert_eq!(selected(&f), Some(picked), "the twin {twin_x} yd off");
+        }
+    }
+
     /// `0x6130a3`: a unit we are friendly toward is dropped (`0x6130a8`) and `TargetNearestEnemy`
     /// runs (`0x6130b5`), moving the selection; the swing goes at what it picked (`0x6130c1`).
     /// The Attack button reaches the same `0x6131a0` through `TryCast` (`0x6e4c90`).

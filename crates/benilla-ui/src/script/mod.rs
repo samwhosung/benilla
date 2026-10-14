@@ -303,6 +303,7 @@ pub use types::{
     MeasureRequest, Outline, QuadContent, ScriptValue, TexCoords,
 };
 pub(crate) use types::{FontExplicit, MeasuredText, RegionData};
+pub use unit::by_name::{self, NameCandidate};
 pub use unit::{
     grey_band, level_reads_unknown, parse_unit_token, power_token, unit_is_grey, PlayerRecord,
     SelectionRequest, UnitBase, UnitGuids, UnitState, UnitTokenParse,

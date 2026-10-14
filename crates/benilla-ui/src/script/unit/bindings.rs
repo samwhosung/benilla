@@ -986,12 +986,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // TargetUnit(unit): queue the token for the app to resolve and select; a token naming no unit
-    // is a no-op, as in the reference.
+    // is a no-op, as in the reference. A held unit is shown as `"target"` at once, as `0x4899d0`
+    // commits before it returns.
     g.set(
         "TargetUnit",
         lua.create_function(|lua, token: Option<String>| {
             if let Some(token) = token {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                if let Some(state) = model.held_unit_view(&token) {
+                    model.show_selection(Some(state));
+                }
                 model
                     .script_calls
                     .push(ScriptCall::Select(SelectionRequest::Unit(token)));
@@ -1038,7 +1042,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // number is taken as its string. Deviation: among whole-name matches ours picks the nearest,
     // because the reference's first-walked pick is order-dependent and reads as a bug. A miss is
     // silent here, where the reference shows `0x127` ERR_UNIT_NOT_FOUND, or `0xb8`
-    // ERR_GENERIC_NO_TARGET for an empty name.
+    // ERR_GENERIC_NO_TARGET for an empty name. The pick is shown as `"target"` at once, from the
+    // app's candidates (`by_name`), so `UnitName("target")` on the next line names it; the
+    // queued call still commits it.
     g.set(
         "TargetByName",
         lua.create_function(|lua, (name, exact): (Value, Option<Value>)| {
@@ -1047,6 +1053,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // Argument 2 comes from `0x6f1c10` with default 0: it never raises, and 0 is absent.
             let exact = super::super::binding_abi::bool_or_default(exact.as_ref(), false);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            if let Some(state) = model.named_unit(&name, exact).map(|c| c.state.clone()) {
+                model.show_selection(Some(state));
+            }
             model
                 .script_calls
                 .push(ScriptCall::TargetByName { name, exact });
@@ -1097,12 +1106,16 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // ClearTarget() (`0x489ff0`): 1 when it cleared a target, nil when there was none, which
     // `ToggleGameMenu`'s Escape chain needs to fall through to the menu. The deselect is queued
     // either way: it reads the selection as the calls before it leave it (`0x489ff0`-`0x489fff`),
-    // so `TargetUnit("player") ClearTarget()` ends with nothing selected.
+    // so `TargetUnit("player") ClearTarget()` ends with nothing selected, and `"target"` reads
+    // nothing for the rest of the chunk.
     g.set(
         "ClearTarget",
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let had = model.unit("target").is_some_and(|u| u.exists);
+            if had {
+                model.show_selection(None);
+            }
             model.script_calls.push(ScriptCall::ClearTarget);
             Ok(flag(had))
         })?,

@@ -525,6 +525,7 @@ fn unit_predicate(
 
 /// The `Unit*` and `GetQuestGreenRange` registrations.
 mod bindings;
+pub mod by_name;
 #[cfg(test)]
 mod chain_tests;
 mod resolve;

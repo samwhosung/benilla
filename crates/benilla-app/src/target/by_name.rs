@@ -8,22 +8,20 @@
 //! | `FollowByName 0x489ec0` | 0x10, players only | 2, `CanAssist` and alive | Lua arg 2 |
 //!
 //! Filter mode 0 underflows `0x493e40`'s jump table into accept-all: no range, facing, reaction,
-//! liveness, visibility or self test. A name matches whole-string first (`0x64a4c0` → CRT
-//! `0x414310`), else by the longest common prefix (`0x493cb6`-`0x493cf6`), both case-insensitive.
-//!
-//! Deviation: the reference ends the walk at the first whole-string hit (`0x493ca2`), so its pick
-//! follows the object list's order (a tail append, `0x4646c3`-`0x4646d4`); we rank exact, then
-//! longer prefix, then nearest ([`Rank::beats`]), because the nearest namesake is the better pick.
+//! liveness, visibility or self test. The ranking is the VM's ([`benilla_ui::script::by_name`]),
+//! which `TargetByName` runs over [`crate::ui_unit`]'s candidate feed to show its pick to the rest
+//! of its chunk; the reference's walk follows the object list's order (a tail append,
+//! `0x4646c3`-`0x4646d4`), the deviation documented there. Both walks measure off
+//! [`GlobalTransform`] and break a full tie by guid, so the chunk shows the unit the commit picks.
 //!
 //! Not built: the reference's party (`0x493b20`) and raid (`0x493b9d`) pre-scans, which select an
 //! unstreamed groupmate; [`Selection::target`] is an `Entity`.
-
-use std::cmp::Ordering;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use benilla_protocol::guid;
+use benilla_ui::script::by_name::{rank, Match, Rank};
 
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, ObjectStore, SelfPlayer};
@@ -40,7 +38,7 @@ pub(crate) enum NameSearch {
 }
 
 impl NameSearch {
-    fn accepts(self, guid_val: u64) -> bool {
+    pub(crate) fn accepts(self, guid_val: u64) -> bool {
         match self {
             Self::AnyUnit => guid::is_player(guid_val) || guid::is_creature_or_pet(guid_val),
             Self::PlayerOnly => guid::is_player(guid_val),
@@ -59,43 +57,6 @@ pub(crate) struct TargetByNameRequest {
 #[derive(bevy::ecs::message::Message, Clone, Debug)]
 pub(crate) struct AssistRequest {
     pub(crate) name: Option<String>,
-}
-
-/// How well one candidate answered the query, ordered by [`Rank::beats`].
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Rank {
-    /// A whole-string, case-insensitive match.
-    exact: bool,
-    /// The folded common-prefix length.
-    prefix: usize,
-    /// 3D centre-to-centre squared distance from the active player.
-    dist2: f32,
-}
-
-impl Rank {
-    /// Strictly better than the incumbent: exact, then the longer prefix, then the strictly nearer.
-    /// A tie or a NaN distance keeps the incumbent, as the reference's `fcomp`/`jp` compare does.
-    fn beats(self, other: Rank) -> bool {
-        match (self.exact, other.exact) {
-            (true, false) => true,
-            (false, true) => false,
-            _ => match self.prefix.cmp(&other.prefix) {
-                Ordering::Greater => true,
-                Ordering::Less => false,
-                Ordering::Equal => self.dist2 < other.dist2,
-            },
-        }
-    }
-}
-
-/// The case-folded common-prefix length, the reference's lockstep walk (`0x493cc0`-`0x493cee`)
-/// through the ASCII fold `0x41089b`.
-fn common_prefix_len(query: &str, name: &str) -> usize {
-    query
-        .bytes()
-        .zip(name.bytes())
-        .take_while(|(q, n)| q.eq_ignore_ascii_case(n))
-        .count()
 }
 
 /// The follow start gate (`0x60fed0`'s mode-3 chain) as a pure function, its order pinned by test:
@@ -133,38 +94,6 @@ fn follow_refusal_key(
     None
 }
 
-/// Whether the prefix tier is live, the resolver's exact-only argument. The unit popup's Target and
-/// Follow pass 1 (`UnitPopup.lua:557`, `UnitPopup.lua:623`), so a menu naming its unit never lands
-/// on a bystander sharing a first letter; the slash commands pass nothing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Match {
-    /// A whole-string hit, else the longest common prefix.
-    PrefixOk,
-    /// Whole-string only.
-    ExactOnly,
-}
-
-/// Score one candidate against the query. The reference's best length seeds at 1, so a zero-length
-/// overlap is no match.
-fn rank(query: &str, name: &str, dist2: f32, mode: Match) -> Option<Rank> {
-    if query.eq_ignore_ascii_case(name) {
-        return Some(Rank {
-            exact: true,
-            prefix: query.len(),
-            dist2,
-        });
-    }
-    if mode == Match::ExactOnly {
-        return None;
-    }
-    let prefix = common_prefix_len(query, name);
-    (prefix >= 1).then_some(Rank {
-        exact: false,
-        prefix,
-        dist2,
-    })
-}
-
 /// Everything a by-name search reads.
 #[derive(SystemParam)]
 #[allow(clippy::type_complexity)] // one bundled param, the app's convention for big query sets
@@ -177,7 +106,7 @@ pub(crate) struct ByNameScan<'w, 's> {
         (
             Entity,
             &'static Guid,
-            &'static Transform,
+            &'static GlobalTransform,
             Option<&'static ObjectStore>,
         ),
         With<SelfPlayer>,
@@ -206,7 +135,7 @@ impl ByNameScan<'_, '_> {
         self.self_q
             .single()
             .ok()
-            .map(|(_, _, tf, _)| tf.translation)
+            .map(|(_, _, tf, _)| tf.translation())
     }
 
     /// The mode-2 arm (`0x493eca`): alive, and `CanAssist 0x6066f0` as a friendly reaction (4+).
@@ -257,7 +186,7 @@ impl ByNameScan<'_, '_> {
         scan_units(
             self.units
                 .iter()
-                .map(|(e, g, tf, store)| (e, g.0, tf.translation, store)),
+                .map(|(e, g, tf, store)| (e, g.0, tf.translation(), store)),
             self.origin(),
             &self.names,
             query,
@@ -268,14 +197,16 @@ impl ByNameScan<'_, '_> {
     }
 }
 
-/// One unit query's candidates, shared by [`ByNameScan`] and [`PlayerLookup`].
+/// One unit query's candidates. World positions, [`GlobalTransform`], as the VM's candidate feed
+/// (`ui_unit::held::feed_name_candidates`) measures them: a passenger's `Transform` is local to its
+/// transport, and one source on both sides keeps the chunk's pick the commit's.
 type UnitQuery<'w, 's> = Query<
     'w,
     's,
     (
         Entity,
         &'static Guid,
-        &'static Transform,
+        &'static GlobalTransform,
         Option<&'static ObjectStore>,
     ),
 >;
@@ -317,7 +248,10 @@ fn scan_units<'a>(
         let Some(r) = rank(query, name, dist2, mode) else {
             continue;
         };
-        if best.as_ref().is_none_or(|(_, _, b, _)| r.beats(*b)) {
+        if best
+            .as_ref()
+            .is_none_or(|(_, g, b, _)| r.beats_at(guid, *b, *g))
+        {
             best = Some((entity, guid, r, name.to_string()));
         }
     }
@@ -634,6 +568,7 @@ impl SelectCommit<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use benilla_ui::script::by_name::common_prefix_len;
 
     fn exact(dist2: f32) -> Rank {
         Rank {
