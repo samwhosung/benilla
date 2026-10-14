@@ -7,12 +7,12 @@
 //! unit no base does, so the VM resolves it to a guid and reads that guid's snapshot, which
 //! [`feed_chain_units`] pushes for the guids [`UiScript::chain_end_guids`] lists.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
 use benilla_formats::ChrClasses;
-use benilla_ui::script::{UiScript, UnitState};
+use benilla_ui::script::{NameCandidate, UiScript, UnitState};
 
 use super::{enrich_unit, faction_group, faction_group_localized, snapshot, unit_reaction};
 use crate::creature_type::CreatureTypeSources;
@@ -43,6 +43,11 @@ impl HeldUnits<'_> {
             .names
             .resolve_unit(guid, Some(store), self.commands)
             .map(str::to_string);
+        self.state_named(store, guid, name)
+    }
+
+    /// [`Self::state`] under a name the caller looked up, which sends no name query.
+    fn state_named(&self, store: &ObjectStore, guid: u64, name: Option<String>) -> UnitState {
         let reaction = unit_reaction(self.factions, self.reputations, store, self.self_store);
         let mut s = snapshot(store, guid, name, reaction, self.classes, self.types);
         s.raid_target = self.group.raid_target_index(guid);
@@ -169,6 +174,123 @@ pub(super) fn feed_chain_units(
         }
     }
     memo.ends = ends;
+}
+
+/// [`feed_name_candidates`]' per-VM memory.
+#[derive(Default)]
+pub(crate) struct CandidateMemo {
+    /// What each pushed candidate was built from: the name it was pushed under, and whether its
+    /// entry's creature record had answered. A creature's name is its record, but a pet's name
+    /// and its record (the creature type the snapshot reads) come back apart.
+    pushed: HashMap<u64, (String, bool)>,
+    /// This frame's candidates, kept between frames so the walk allocates nothing.
+    seen: HashSet<u64>,
+}
+
+/// Push every unit `TargetByName` can pick, by guid, so the binding resolves its name against
+/// them and shows the pick as `"target"` to the rest of its chunk, as `0x489d60` commits before it
+/// returns: the by-name scan's candidates (typemask 8, a cached name, no query sent) with their
+/// distance each frame, and each one's snapshot when it is new, its descriptor, name or creature
+/// record moved, or an input every snapshot reads did; another name's answer rebuilds nothing.
+/// The snapshot has no guild leg, as a chain end's; it is a view for the rest of a chunk, which
+/// [`super::feed_units`] replaces with the committed selection's next frame.
+/// A move of our own descriptor does not rebuild the rest, so a reaction can lag our own faction
+/// change until the unit's next update. Without an active player object nothing is a candidate,
+/// as the reference resolves nothing then (`0x493ae0`).
+pub(crate) fn feed_name_candidates(
+    script: Option<NonSendMut<UiScript>>,
+    tables: super::SnapshotTables,
+    // [`GlobalTransform`], as [`crate::target::PlayerLookup`] reads it: `Transform` would put
+    // this feed in an undeclared order against every system that moves a unit.
+    units: Query<(&Guid, &GlobalTransform, Option<Ref<ObjectStore>>)>,
+    self_q: Query<(&GlobalTransform, Option<&ObjectStore>), With<SelfPlayer>>,
+    names: Res<NameCache>,
+    commands: Res<NetCommands>,
+    factions: Option<Res<Factions>>,
+    reputations: Res<Reputations>,
+    group: Res<crate::ui_party::GroupState>,
+    mut memo: Local<VmMemo<CandidateMemo>>,
+) {
+    let Some(mut script) = script else {
+        return;
+    };
+    let (memo, vm_reset) = memo.get_reset(&script);
+    let rebuild = vm_reset
+        || group.is_changed()
+        || reputations.is_changed()
+        || factions.as_ref().is_some_and(|r| r.is_changed());
+    let me = self_q.single().ok();
+    let held = HeldUnits {
+        names: &names,
+        commands: &commands,
+        factions: factions.as_deref(),
+        reputations: &reputations,
+        group: &group,
+        self_store: me.and_then(|(_, s)| s),
+        classes: tables.classes(),
+        types: tables.types(&names),
+    };
+    memo.seen.clear();
+    let origin = me.map(|(tf, _)| tf.translation());
+    for (guid, tf, store) in origin.iter().flat_map(|_| &units) {
+        let guid = guid.0;
+        if !crate::target::NameSearch::AnyUnit.accepts(guid) {
+            continue;
+        }
+        let Some(name) = names.peek(guid) else {
+            continue;
+        };
+        memo.seen.insert(guid);
+        let dist2 = origin.map_or(0.0, |o| tf.translation().distance_squared(o));
+        let record = store
+            .as_ref()
+            .and_then(|s| s.0.object_entry())
+            .or_else(|| benilla_protocol::guid::entry(guid))
+            .is_some_and(|e| names.creature_record(e).is_some());
+        let fresh = rebuild
+            || store.as_ref().is_some_and(|s| s.is_changed())
+            || memo
+                .pushed
+                .get(&guid)
+                .is_none_or(|(n, r)| n != name || *r != record);
+        if !fresh {
+            script.set_name_candidate_dist2(guid, dist2);
+            continue;
+        }
+        let state = match store.as_deref() {
+            // The name as the target feed reads it off the descriptor, from the cache alone.
+            Some(store) => {
+                let named = names.peek_unit(guid, Some(store)).map(str::to_string);
+                held.state_named(store, guid, named)
+            }
+            None => UnitState {
+                exists: true,
+                has_object: true,
+                is_connected: true,
+                guid,
+                name: Some(name.to_string()),
+                is_player: benilla_protocol::guid::is_player(guid),
+                ..Default::default()
+            },
+        };
+        script.set_name_candidate(
+            guid,
+            Some(NameCandidate {
+                name: name.to_string(),
+                dist2,
+                state,
+            }),
+        );
+        memo.pushed.insert(guid, (name.to_string(), record));
+    }
+    let seen = &memo.seen;
+    memo.pushed.retain(|guid, _| {
+        let keep = seen.contains(guid);
+        if !keep {
+            script.set_name_candidate(*guid, None);
+        }
+        keep
+    });
 }
 
 #[cfg(test)]

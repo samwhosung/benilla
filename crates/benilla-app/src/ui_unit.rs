@@ -136,6 +136,7 @@ impl Plugin for UiUnitPlugin {
                 held::feed_chain_units.after(crate::ui_aura::AuraEvents),
                 // After every snapshot above is pushed, so a handler reads the new reaction.
                 fire_faction_on_forced_table.after(crate::ui_aura::AuraEvents),
+                held::feed_name_candidates,
                 feed_player_control,
                 // After the control edge, whose flag the exemption is asked for.
                 control_gate::feed_control_bypass,
@@ -1331,6 +1332,8 @@ fn feed_units(
     let factions_changed = factions.as_ref().is_some_and(|r| r.is_changed());
     // The interaction NPC moves when nothing else does, and `MERCHANT_SHOW` reads `"npc"`.
     let interact_changed = interact.as_ref().is_some_and(|r| r.is_changed());
+    // A selection call showed its pick as `"target"` inside its chunk, past this memo.
+    let target_view_moved = script.take_target_view_moved();
     gate::trace(
         "feed_units",
         &[
@@ -1344,6 +1347,7 @@ fn feed_units(
             ("reputations", reps_changed),
             ("factions", factions_changed),
             ("interact", interact_changed),
+            ("target_view", target_view_moved),
         ],
     );
     let gate = gate::Gate::new(
@@ -1356,7 +1360,8 @@ fn feed_units(
             || group_changed
             || reps_changed
             || factions_changed
-            || interact_changed,
+            || interact_changed
+            || target_view_moved,
     );
     stores.removed.clear();
     if gate.skip() {
@@ -1429,11 +1434,12 @@ fn feed_units(
             script.set_unit("player", player.clone());
         }
     }
-    let target_dirty = match (&target, memo.last.get("target")) {
-        (Some(cur), Some(prev)) => cur != prev,
-        (None, None) => false,
-        _ => true,
-    };
+    let target_dirty = target_view_moved
+        || match (&target, memo.last.get("target")) {
+            (Some(cur), Some(prev)) => cur != prev,
+            (None, None) => false,
+            _ => true,
+        };
     if target_dirty {
         gate.audit("feed_units", "the target snapshot");
         script.set_unit("target", target.clone());
@@ -1722,6 +1728,9 @@ fn feed_units(
 fn combo_edge(last: Option<(u8, u64)>, now: (u8, u64)) -> Option<bool> {
     (last != Some(now)).then(|| last.map(|(count, _)| count) != Some(now.0))
 }
+
+#[cfg(test)]
+pub(crate) use held::feed_name_candidates;
 
 /// The bare unit feed, for a test driving the stock unit frames off engine state.
 #[cfg(test)]
@@ -3630,6 +3639,110 @@ mod tests {
         assert!(
             !exists(&mut app),
             "the window closed, yet UnitExists(\"npc\")"
+        );
+    }
+
+    /// A selection call shows its pick as `"target"` to the rest of its chunk (`TargetByName`,
+    /// `0x489d60`); when the commit does not follow (here the call is dropped), the next frame
+    /// re-pushes `"target"` from the committed selection, though nothing the feed diffs moved.
+    #[test]
+    fn a_target_view_the_commit_did_not_follow_is_re_pushed_the_next_frame() {
+        use crate::names::CreatureRecord;
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+        use benilla_ui::script::NameCandidate;
+
+        const OBJECT_FIELD_ENTRY: u16 = 3;
+        /// `HIGHGUID_UNIT` guids of entries 69, the selected wolf, and 70, a druid.
+        const WOLF: u64 = 0xF130_0000_4500_0001;
+        const DRUID: u64 = 0xF130_0000_4600_0001;
+
+        let mut app = App::new();
+        app.init_resource::<UnitFeedState>()
+            .init_resource::<Selection>()
+            .init_resource::<Reputations>()
+            .init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_guild::GuildState>();
+        app.add_message::<FieldChanged>();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let mut names = NameCache::default();
+        names.insert_creature(
+            69,
+            Some(CreatureRecord {
+                name: "Wolf".into(),
+                subname: None,
+                creature_type: 1,
+                pet_family: 0,
+                rank: 0,
+                type_flags: 0,
+                civilian: false,
+                racial_leader: false,
+                display_id: 0,
+            }),
+        );
+        app.insert_resource(names);
+        app.add_systems(Update, feed_units);
+        app.world_mut().spawn((
+            SelfPlayer,
+            Guid(0x77),
+            ObjectStore(ObjectFields::from_pairs(&[]).into_created(ObjectType::Player)),
+        ));
+        let wolf = app
+            .world_mut()
+            .spawn(ObjectStore(ObjectFields::from_pairs(&[(
+                OBJECT_FIELD_ENTRY,
+                69,
+            )])))
+            .id();
+        *app.world_mut().resource_mut::<Selection>() = Selection {
+            target: Some(wolf),
+            guid: Some(WOLF),
+            ..Default::default()
+        };
+        let target_name = |app: &mut App, lua: &str| -> Option<String> {
+            app.world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .eval::<Option<String>>(&format!("{lua} return UnitName('target')"))
+                .unwrap()
+        };
+        app.update();
+        app.update();
+        assert_eq!(target_name(&mut app, "").as_deref(), Some("Wolf"));
+
+        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+        script.set_name_candidate(
+            DRUID,
+            Some(NameCandidate {
+                name: "Druid".into(),
+                dist2: 1.0,
+                state: benilla_ui::script::UnitState {
+                    exists: true,
+                    has_object: true,
+                    guid: DRUID,
+                    name: Some("Druid".into()),
+                    ..Default::default()
+                },
+            }),
+        );
+        assert_eq!(
+            target_name(&mut app, "TargetByName('Druid')").as_deref(),
+            Some("Druid"),
+            "the chunk reads its pick"
+        );
+        let dropped = app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .take_script_calls();
+        assert_eq!(dropped.len(), 1, "the call queued for the commit");
+        app.update();
+        assert_eq!(
+            target_name(&mut app, "").as_deref(),
+            Some("Wolf"),
+            "the committed selection is shown again"
         );
     }
 

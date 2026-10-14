@@ -349,6 +349,12 @@ pub(crate) struct Model {
     /// [`super::UnitGuids::chain_ends`]: a token with a hop that no push names reads its
     /// resolved guid's entry here.
     pub(crate) units_by_guid: HashMap<u64, UnitState>,
+    /// Every unit `TargetByName` can pick, by guid, as the app's by-name scan sees it this frame:
+    /// the binding resolves against it so the rest of its chunk reads the new selection.
+    pub(crate) name_candidates: HashMap<u64, super::NameCandidate>,
+    /// A selection call moved the `"target"` view inside a chunk; the app's unit feed re-pushes
+    /// `"target"` from the committed selection, whatever its memo holds.
+    pub(crate) target_view_moved: bool,
     /// The player's auras in the reference cache's insertion order (`0xbc6040`), durations joined:
     /// the `GetPlayerBuff` family's list, and any token naming the player's.
     pub(crate) player_auras: Vec<AuraState>,
@@ -1301,6 +1307,8 @@ impl Model {
             ui_scale_request: None,
             units_by_lower: HashMap::new(),
             units_by_guid: HashMap::new(),
+            name_candidates: HashMap::new(),
+            target_view_moved: false,
             player_auras: Vec::new(),
             unit_auras: HashMap::new(),
             unit_guids: Default::default(),

@@ -858,6 +858,161 @@ fn target_by_name_queues_the_name_and_the_exact_flag() {
     );
 }
 
+/// A by-name candidate as the app's feed pushes it: `name` at `dist2`, held, under `guid`.
+fn candidate(guid: u64, name: &str, dist2: f32) -> crate::script::NameCandidate {
+    crate::script::NameCandidate {
+        name: name.into(),
+        dist2,
+        state: UnitState {
+            exists: true,
+            has_object: true,
+            guid,
+            name: Some(name.into()),
+            health: 40,
+            max_health: 50,
+            ..Default::default()
+        },
+    }
+}
+
+/// `TargetByName` (`0x489d60`) commits through `SetSelection` before it returns, so the rest of its
+/// chunk reads the pick as `"target"`; the call still queues for the app's commit, and the feed is
+/// told to re-push `"target"` from the committed selection.
+#[test]
+fn target_by_name_shows_its_pick_to_the_rest_of_the_chunk() {
+    const OLD: u64 = 0x21;
+    let mut s = UiScript::new().unwrap();
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            exists: true,
+            has_object: true,
+            guid: OLD,
+            name: Some("Old Mob".into()),
+            ..Default::default()
+        }),
+    );
+    s.set_name_candidate(0x31, Some(candidate(0x31, "Red Affinity", 400.0)));
+    s.set_name_candidate(0x32, Some(candidate(0x32, "Red Affinity", 100.0)));
+    s.set_name_candidate(0x33, Some(candidate(0x33, "Redridge Gnoll", 4.0)));
+    s.set_name_candidate_dist2(0x31, 25.0);
+    assert!(!s.take_target_view_moved());
+
+    let named = |s: &UiScript, lua: &str| s.eval::<Option<String>>(lua).unwrap();
+    assert_eq!(
+        named(
+            &s,
+            "TargetByName('Red Affinity', true) return UnitName('target')"
+        )
+        .as_deref(),
+        Some("Red Affinity")
+    );
+    assert_eq!(
+        s.eval::<i64>("return UnitHealth('target')").unwrap(),
+        40,
+        "the pick's whole snapshot, not only its name"
+    );
+    assert_eq!(
+        s.model_ref().unit_guids.target,
+        0x31,
+        "the resolver's target guid moved with it, to the namesake nearer by the last distance"
+    );
+    assert_eq!(
+        s.take_target_by_name_requests(),
+        vec![("Red Affinity".to_string(), true)],
+        "the app still commits the call"
+    );
+    assert!(s.take_target_view_moved());
+    // The prefix tier needs no exact flag.
+    let guid = |s: &UiScript| {
+        s.model_ref()
+            .unit("target")
+            .map(|u| u.guid)
+            .expect("a target")
+    };
+    s.run("TargetByName('Red Affinity')").unwrap();
+    assert_eq!(guid(&s), 0x31);
+    // Two namesakes at one distance: the lower guid, whatever order the map walks in.
+    for (moved, at) in [(0x31, 100.0), (0x32, 100.0), (0x32, 25.0)] {
+        s.set_name_candidate_dist2(moved, at);
+    }
+    s.set_name_candidate(0x30, Some(candidate(0x30, "Red Affinity", 25.0)));
+    s.run("TargetByName('Red Affinity')").unwrap();
+    assert_eq!(guid(&s), 0x30, "a full tie goes to the lower guid");
+    s.set_name_candidate(0x30, None);
+    s.run("TargetByName('Red Affinity')").unwrap();
+    assert_eq!(guid(&s), 0x32, "the nearer namesake again");
+    s.run("TargetByName('redr')").unwrap();
+    assert_eq!(
+        guid(&s),
+        0x33,
+        "the longer prefix beats the nearer shorter one"
+    );
+    // A miss, an exact-only prefix and an empty name leave the view where it was.
+    for lua in [
+        "TargetByName('Nobody')",
+        "TargetByName('Red', 1)",
+        "TargetByName('  ')",
+    ] {
+        s.run(lua).unwrap();
+        assert_eq!(guid(&s), 0x33, "{lua}");
+    }
+}
+
+/// `ClearTarget` (`0x489ff0` → `0x493540(0,0)`) and `TargetUnit` (`0x4899d0`) commit before they
+/// return too; a token naming no held unit leaves the view alone, as the app's commit does.
+#[test]
+fn clear_target_and_target_unit_show_their_outcome_to_the_rest_of_the_chunk() {
+    let mut s = UiScript::new().unwrap();
+    s.set_unit_guids(&UnitGuids {
+        player: 0x10,
+        party: [0x22, 0x23, 0, 0],
+        target: 0x21,
+        ..Default::default()
+    });
+    let mut mate = candidate(0x22, "Bob", 9.0).state;
+    s.set_unit("party1", Some(mate.clone()));
+    // The by-name feed's snapshot of the same unit, which `TargetUnit` shows when it has one.
+    let mut fed = candidate(0x22, "Bob", 9.0);
+    fed.state.health = 45;
+    s.set_name_candidate(0x22, Some(fed));
+    mate.guid = 0x23;
+    mate.has_object = false;
+    s.set_unit("party2", Some(mate));
+    s.set_unit("target", Some(candidate(0x21, "Old Mob", 1.0).state));
+
+    assert!(s
+        .eval::<bool>("ClearTarget() return UnitExists('target') == nil")
+        .unwrap());
+    assert!(s.take_target_view_moved());
+    assert_eq!(
+        s.eval::<Option<String>>("TargetUnit('party2') return UnitName('target')")
+            .unwrap(),
+        None,
+        "an out-of-range member is not held: nothing to commit"
+    );
+    assert!(!s.take_target_view_moved());
+    assert_eq!(
+        s.eval::<String>("TargetUnit('party1') return UnitName('target')")
+            .unwrap(),
+        "Bob"
+    );
+    assert!(s.take_target_view_moved());
+    assert_eq!(
+        s.eval::<i64>("return UnitHealth('target')").unwrap(),
+        45,
+        "party1 resolves to 0x22, and the feed's snapshot of 0x22 is the one shown"
+    );
+    assert_eq!(s.model_ref().unit_guids.target, 0x22);
+    s.set_name_candidate(0x22, None);
+    s.run("ClearTarget() TargetUnit('party1')").unwrap();
+    assert_eq!(
+        s.eval::<i64>("return UnitHealth('target')").unwrap(),
+        40,
+        "without a feed snapshot, the token's own push"
+    );
+}
+
 /// `0x516cf0` tests `UNIT_FIELD_CHARMEDBY` (fields 10-11) non-zero, not a `UNIT_FIELD_FLAGS` bit.
 #[test]
 fn unit_is_charmed_answers_one_or_nil_and_only_for_the_charmed_side() {
