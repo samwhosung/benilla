@@ -3726,6 +3726,7 @@ mod tests {
                     name: Some("Druid".into()),
                     ..Default::default()
                 },
+                selectable: true,
             }),
         );
         assert_eq!(

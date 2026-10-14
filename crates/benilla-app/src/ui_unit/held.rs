@@ -203,7 +203,7 @@ pub(crate) fn feed_name_candidates(
     // [`GlobalTransform`], as [`crate::target::PlayerLookup`] reads it: `Transform` would put
     // this feed in an undeclared order against every system that moves a unit.
     units: Query<(&Guid, &GlobalTransform, Option<Ref<ObjectStore>>)>,
-    self_q: Query<(&GlobalTransform, Option<&ObjectStore>), With<SelfPlayer>>,
+    self_q: Query<(&Guid, &GlobalTransform, Option<&ObjectStore>), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     factions: Option<Res<Factions>>,
@@ -226,12 +226,13 @@ pub(crate) fn feed_name_candidates(
         factions: factions.as_deref(),
         reputations: &reputations,
         group: &group,
-        self_store: me.and_then(|(_, s)| s),
+        self_store: me.and_then(|(_, _, s)| s),
         classes: tables.classes(),
         types: tables.types(&names),
     };
     memo.seen.clear();
-    let origin = me.map(|(tf, _)| tf.translation());
+    let origin = me.map(|(_, tf, _)| tf.translation());
+    let self_guid = me.map(|(g, _, _)| g.0);
     for (guid, tf, store) in origin.iter().flat_map(|_| &units) {
         let guid = guid.0;
         if !crate::target::NameSearch::AnyUnit.accepts(guid) {
@@ -279,6 +280,7 @@ pub(crate) fn feed_name_candidates(
                 name: name.to_string(),
                 dist2,
                 state,
+                selectable: crate::target::is_selectable(store.as_deref(), self_guid),
             }),
         );
         memo.pushed.insert(guid, (name.to_string(), record));

@@ -654,6 +654,53 @@ mod tests {
         }
     }
 
+    /// The candidate feed marks a `UNIT_FLAG_NOT_SELECTABLE` unit as the commit's `IsSelectable`
+    /// does (`0x4935ee`): the nearer namesake is the ranked pick and it is refused, so the chunk
+    /// keeps the old target's view and the commit keeps its selection, not the farther namesake.
+    #[test]
+    fn target_by_name_shows_nothing_when_the_commit_refuses_its_pick() {
+        /// `UNIT_FLAG_NOT_SELECTABLE`, `UNIT_FIELD_FLAGS` bit 25.
+        const NOT_SELECTABLE: u32 = 1 << 25;
+        /// A selectable namesake of `MOB` farther off, told apart by its health.
+        const TWIN: u64 = 0x30;
+        let mut f = frame(true);
+        spawn_mob(&mut f, &[(FLAGS, NOT_SELECTABLE)]);
+        let world = f.app.world_mut();
+        let twin = world
+            .spawn((
+                Guid(TWIN),
+                Transform::from_xyz(-4.0, 0.0, 0.0),
+                GlobalTransform::from_translation(Vec3::new(-4.0, 0.0, 0.0)),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (HEALTH, 40),
+                    (28, 100),
+                ])),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(TWIN, twin);
+        let mut names = world.resource_mut::<crate::names::NameCache>();
+        names.insert_player(MOB, "Red Affinity".into(), None);
+        names.insert_player(TWIN, "Red Affinity".into(), None);
+        world
+            .run_system_once(crate::ui_unit::feed_name_candidates)
+            .expect("the candidate feed runs as a one-shot system");
+        let shown = f
+            .app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .eval::<i64>("TargetByName('Red Affinity') return UnitHealth('target')")
+            .expect("the chunk runs");
+        assert_eq!(
+            shown, 0,
+            "the old target's view, not the twin's 40 or the mob's 100"
+        );
+        f.app
+            .world_mut()
+            .run_system_once(apply_script_calls)
+            .expect("the calls apply as a one-shot system");
+        assert_eq!(selected(&f), Some(OLD), "the commit refuses the same pick");
+    }
+
     /// `0x6130a3`: a unit we are friendly toward is dropped (`0x6130a8`) and `TargetNearestEnemy`
     /// runs (`0x6130b5`), moving the selection; the swing goes at what it picked (`0x6130c1`).
     /// The Attack button reaches the same `0x6131a0` through `TryCast` (`0x6e4c90`).

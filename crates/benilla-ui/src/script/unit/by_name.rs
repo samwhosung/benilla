@@ -100,6 +100,9 @@ pub struct NameCandidate {
     pub dist2: f32,
     /// The unit as a token naming it reads it.
     pub state: UnitState,
+    /// `IsSelectable`, which `SetSelection` asks before it selects (`0x4935ee`): a pick that is not
+    /// selectable leaves the selection and so the `"target"` view as it was.
+    pub selectable: bool,
 }
 
 impl super::super::UiScript {
@@ -132,8 +135,9 @@ impl super::super::UiScript {
 }
 
 impl Model {
-    /// The candidate `TargetByName(name, exactMatch)` picks, the scan's walk over this frame's
-    /// candidates: the query trimmed, an empty one nothing.
+    /// The candidate `TargetByName(name, exactMatch)` ranks first, the scan's walk over this
+    /// frame's candidates: the query trimmed, an empty one nothing. Selectable or not, as the
+    /// resolver ranks before `SetSelection` refuses (`0x4935ee`).
     pub(crate) fn named_unit(&self, query: &str, exact: bool) -> Option<&NameCandidate> {
         let query = query.trim();
         if query.is_empty() {
@@ -160,13 +164,15 @@ impl Model {
     }
 
     /// What `TargetUnit(token)` shows as `"target"`: the unit the token names when the object
-    /// manager holds it, the app's own commit condition; its by-name snapshot when it has one,
-    /// else the token's own push.
+    /// manager holds it, the app's own commit condition, and `SetSelection` accepts it
+    /// (`0x4935ee`); its by-name snapshot when it has one, else the token's own push, whose
+    /// selectability the VM cannot see.
     pub(crate) fn held_unit_view(&self, token: &str) -> Option<UnitState> {
         let guid = self.unit_guids.resolve(token).ok().flatten();
-        guid.and_then(|g| self.name_candidates.get(&g))
-            .map(|c| c.state.clone())
-            .or_else(|| self.unit(token).filter(|u| u.has_object).cloned())
+        match guid.and_then(|g| self.name_candidates.get(&g)) {
+            Some(c) => c.selectable.then(|| c.state.clone()),
+            None => self.unit(token).filter(|u| u.has_object).cloned(),
+        }
     }
 
     /// Show a selection call's outcome to the rest of its chunk: the resolver's target guid and the

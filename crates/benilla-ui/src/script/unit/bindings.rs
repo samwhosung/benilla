@@ -986,8 +986,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // TargetUnit(unit): queue the token for the app to resolve and select; a token naming no unit
-    // is a no-op, as in the reference. A held unit is shown as `"target"` at once, as `0x4899d0`
-    // commits before it returns.
+    // is a no-op, as in the reference. A held, selectable unit is shown as `"target"` at once, as
+    // `0x4899d0` commits before it returns.
     g.set(
         "TargetUnit",
         lua.create_function(|lua, token: Option<String>| {
@@ -1043,8 +1043,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     // because the reference's first-walked pick is order-dependent and reads as a bug. A miss is
     // silent here, where the reference shows `0x127` ERR_UNIT_NOT_FOUND, or `0xb8`
     // ERR_GENERIC_NO_TARGET for an empty name. The pick is shown as `"target"` at once, from the
-    // app's candidates (`by_name`), so `UnitName("target")` on the next line names it; the
-    // queued call still commits it.
+    // app's candidates (`by_name`), so `UnitName("target")` on the next line names it, unless it
+    // is not selectable and `SetSelection` returns (`0x4935ee`); the queued call still commits it.
     g.set(
         "TargetByName",
         lua.create_function(|lua, (name, exact): (Value, Option<Value>)| {
@@ -1053,7 +1053,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             // Argument 2 comes from `0x6f1c10` with default 0: it never raises, and 0 is absent.
             let exact = super::super::binding_abi::bool_or_default(exact.as_ref(), false);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(state) = model.named_unit(&name, exact).map(|c| c.state.clone()) {
+            let pick = model.named_unit(&name, exact).filter(|c| c.selectable);
+            if let Some(state) = pick.map(|c| c.state.clone()) {
                 model.show_selection(Some(state));
             }
             model

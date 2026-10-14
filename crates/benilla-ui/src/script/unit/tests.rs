@@ -872,6 +872,15 @@ fn candidate(guid: u64, name: &str, dist2: f32) -> crate::script::NameCandidate 
             max_health: 50,
             ..Default::default()
         },
+        selectable: true,
+    }
+}
+
+/// [`candidate`] that `SetSelection` refuses (`UNIT_FLAG_NOT_SELECTABLE`, `0x4935ee`).
+fn unselectable(guid: u64, name: &str, dist2: f32) -> crate::script::NameCandidate {
+    crate::script::NameCandidate {
+        selectable: false,
+        ..candidate(guid, name, dist2)
     }
 }
 
@@ -1011,6 +1020,71 @@ fn clear_target_and_target_unit_show_their_outcome_to_the_rest_of_the_chunk() {
         40,
         "without a feed snapshot, the token's own push"
     );
+}
+
+/// `SetSelection` (`0x493540`) returns at its `IsSelectable` call (`0x4935ee`) and keeps the old
+/// target, while `TargetByName` ranks (`0x493aa0`, no selectable filter) before it: a
+/// non-selectable best pick leaves the view, though a selectable namesake farther off is ranked
+/// below it. The call still queues for the app's commit, which refuses it the same way.
+#[test]
+fn target_by_name_leaves_the_view_when_its_pick_is_not_selectable() {
+    const OLD: u64 = 0x21;
+    let mut s = UiScript::new().unwrap();
+    let old = candidate(OLD, "Old Mob", 1.0).state;
+    s.set_unit("target", Some(old));
+    s.set_name_candidate(0x31, Some(unselectable(0x31, "Red Affinity", 4.0)));
+    s.set_name_candidate(0x32, Some(candidate(0x32, "Red Affinity", 100.0)));
+    let guid = |s: &UiScript| s.model_ref().unit("target").map(|u| u.guid);
+
+    s.run("TargetByName('Red Affinity')").unwrap();
+    assert_eq!(
+        guid(&s),
+        Some(OLD),
+        "the nearer namesake is the pick, and it is refused"
+    );
+    assert!(!s.take_target_view_moved());
+    assert_eq!(
+        s.take_target_by_name_requests(),
+        vec![("Red Affinity".to_string(), false)],
+        "the call still queues for the app's commit"
+    );
+    // Once the nearer one is selectable the same walk shows it.
+    s.set_name_candidate(0x31, Some(candidate(0x31, "Red Affinity", 4.0)));
+    s.run("TargetByName('Red Affinity')").unwrap();
+    assert_eq!(guid(&s), Some(0x31));
+}
+
+/// `TargetUnit` (`0x4899d0` → `0x489a40`) selects through the same `SetSelection`: a held unit
+/// that is not selectable leaves the view, and does not fall back to the token's own push.
+#[test]
+fn target_unit_leaves_the_view_when_the_held_unit_is_not_selectable() {
+    let mut s = UiScript::new().unwrap();
+    s.set_unit_guids(&UnitGuids {
+        player: 0x10,
+        party: [0x22, 0, 0, 0],
+        target: 0x21,
+        ..Default::default()
+    });
+    s.set_unit("party1", Some(candidate(0x22, "Bob", 9.0).state));
+    s.set_unit("target", Some(candidate(0x21, "Old Mob", 1.0).state));
+    s.set_name_candidate(0x22, Some(unselectable(0x22, "Bob", 9.0)));
+
+    s.run("TargetUnit('party1')").unwrap();
+    assert_eq!(
+        s.model_ref().unit("target").map(|u| u.guid),
+        Some(0x21),
+        "the old target stays"
+    );
+    assert_eq!(s.model_ref().unit_guids.target, 0x21);
+    assert!(!s.take_target_view_moved());
+    assert_eq!(
+        s.take_script_calls().len(),
+        1,
+        "the call still queues for the app's commit"
+    );
+    s.set_name_candidate(0x22, Some(candidate(0x22, "Bob", 9.0)));
+    s.run("TargetUnit('party1')").unwrap();
+    assert_eq!(s.model_ref().unit("target").map(|u| u.guid), Some(0x22));
 }
 
 /// `0x516cf0` tests `UNIT_FIELD_CHARMEDBY` (fields 10-11) non-zero, not a `UNIT_FIELD_FLAGS` bit.
