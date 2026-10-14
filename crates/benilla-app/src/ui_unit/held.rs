@@ -18,7 +18,7 @@ use super::{enrich_unit, faction_group, faction_group_localized, snapshot, unit_
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
-use crate::target::Factions;
+use crate::target::{Candidacy, Factions, NameSearch};
 use crate::ui_script::{gate, VmMemo};
 
 /// What a held unit's snapshot reads beside its descriptor.
@@ -235,10 +235,7 @@ pub(crate) fn feed_name_candidates(
     let self_guid = me.map(|(g, _, _)| g.0);
     for (guid, tf, store) in origin.iter().flat_map(|_| &units) {
         let guid = guid.0;
-        if !crate::target::NameSearch::AnyUnit.accepts(guid) {
-            continue;
-        }
-        let Some(name) = names.peek(guid) else {
+        let Candidacy::Named(name) = NameSearch::AnyUnit.candidacy(&names, guid) else {
             continue;
         };
         memo.seen.insert(guid);

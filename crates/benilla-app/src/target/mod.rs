@@ -71,7 +71,7 @@ pub(crate) use relations::{
 pub(crate) use scan::{AttackNearestRequest, AttackPick};
 // The chat layer's by-name asks (`/target`, `/assist`), and the typemask `TargetByName`'s
 // candidate feed shares.
-pub(crate) use by_name::{AssistRequest, NameSearch, PlayerLookup, TargetByNameRequest};
+pub(crate) use by_name::{AssistRequest, Candidacy, NameSearch, PlayerLookup, TargetByNameRequest};
 // The one SetSelection path, for the loot response's select (`0x48f3a0`).
 pub(crate) use by_name::SelectCommit;
 // The reaction decode and its faction catalog, which also tint the target frame

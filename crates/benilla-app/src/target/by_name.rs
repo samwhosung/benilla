@@ -37,12 +37,35 @@ pub(crate) enum NameSearch {
     PlayerOnly,
 }
 
+/// What a by-name search makes of one unit, [`NameSearch::candidacy`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Candidacy<'a> {
+    /// Its guid family is outside the search's typemask.
+    Outside,
+    /// In the typemask, but its name is not cached; a sweep sends no query, so it cannot match.
+    Nameless,
+    /// A candidate under its cached name.
+    Named(&'a str),
+}
+
 impl NameSearch {
-    pub(crate) fn accepts(self, guid_val: u64) -> bool {
+    fn accepts(self, guid_val: u64) -> bool {
         match self {
             Self::AnyUnit => guid::is_player(guid_val) || guid::is_creature_or_pet(guid_val),
             Self::PlayerOnly => guid::is_player(guid_val),
         }
+    }
+
+    /// Whether `guid_val` is a candidate of this search: the typemask, then a name already in the
+    /// cache. The one test both [`scan_units`] and the VM's candidate feed
+    /// (`ui_unit::held::feed_name_candidates`) apply, so the chunk's candidates are the commit's.
+    pub(crate) fn candidacy<'a>(self, names: &'a NameCache, guid_val: u64) -> Candidacy<'a> {
+        if !self.accepts(guid_val) {
+            return Candidacy::Outside;
+        }
+        names
+            .peek(guid_val)
+            .map_or(Candidacy::Nameless, Candidacy::Named)
     }
 }
 
@@ -236,10 +259,11 @@ fn scan_units<'a>(
     let mut nameless = 0usize;
     let mut best: Option<(Entity, u64, Rank, String)> = None;
     for (entity, guid, pos, store) in units {
-        if !search.accepts(guid) || !keep(store) {
+        let candidacy = search.candidacy(names, guid);
+        if candidacy == Candidacy::Outside || !keep(store) {
             continue;
         }
-        let Some(name) = names.peek(guid) else {
+        let Candidacy::Named(name) = candidacy else {
             nameless += 1;
             continue;
         };
