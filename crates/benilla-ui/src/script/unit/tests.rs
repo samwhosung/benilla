@@ -998,7 +998,7 @@ fn clear_target_and_target_unit_show_their_outcome_to_the_rest_of_the_chunk() {
         s.eval::<Option<String>>("TargetUnit('party2') return UnitName('target')")
             .unwrap(),
         None,
-        "an out-of-range member is not held: nothing to commit"
+        "party2 is not held: the view mirrors the app's commit, which selects no unheld unit"
     );
     assert!(!s.take_target_view_moved());
     assert_eq!(
