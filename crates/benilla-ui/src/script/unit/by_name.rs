@@ -42,6 +42,9 @@ impl Rank {
 
     /// [`Rank::beats`] with the guid as the last key: of two equal ranks the lower guid wins. A
     /// NaN distance is equal to nothing, so it still keeps the incumbent.
+    ///
+    /// Deviation: a full tie goes to the lower guid, where the reference keeps the first unit its
+    /// walk (`0x493aa0`) reaches, an order neither of ours has; a guid keeps the two picks equal.
     pub fn beats_at(self, guid: u64, other: Rank, other_guid: u64) -> bool {
         self.beats(other) || (self == other && guid < other_guid)
     }
