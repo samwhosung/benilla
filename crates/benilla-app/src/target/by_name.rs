@@ -220,9 +220,9 @@ impl ByNameScan<'_, '_> {
     }
 }
 
-/// One unit query's candidates. World positions, [`GlobalTransform`], as the VM's candidate feed
-/// (`ui_unit::held::feed_name_candidates`) measures them: a passenger's `Transform` is local to its
-/// transport, and one source on both sides keeps the chunk's pick the commit's.
+/// One unit query's candidates, positioned by [`GlobalTransform`] as the VM's candidate feed
+/// (`ui_unit::held::feed_name_candidates`) does: nothing writes it during `Update`, so both walks
+/// read one value in a frame, and it adds no undeclared order against the systems that move units.
 type UnitQuery<'w, 's> = Query<
     'w,
     's,
