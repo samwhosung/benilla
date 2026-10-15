@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 
 mod api;
+mod itemstats;
 mod view;
 
 #[cfg(test)]

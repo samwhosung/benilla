@@ -32,7 +32,7 @@ pub(super) const CREAM: [f32; 4] = [1.0, 1.0, 151.0 / 255.0, 1.0];
 /// `[record+0x2c]` (`0x52c103`); entries 0 and 29 are the empty string `0x882748`, here `None`. A
 /// bag (18) takes CONTAINER_SLOTS instead, and class 6 its class name (`0x52c0bc`); 24-27 ship no
 /// `GlobalStrings.lua` value, so a thrown weapon (25) or a gun (26) has an empty slot cell.
-pub(super) fn invtype_key(t: u32) -> Option<&'static str> {
+pub(in crate::script) fn invtype_key(t: u32) -> Option<&'static str> {
     Some(match t {
         1 => "INVTYPE_HEAD",
         2 => "INVTYPE_NECK",
@@ -70,25 +70,25 @@ const DAMAGE_BIAS: f32 = f32::from_bits(0x3f7f_ff58);
 
 /// The builder's `floor(DamageMin)`: subtract the bias unless positive, then truncate toward zero
 /// (`0x52c253..0x52c276`).
-pub(super) fn floor_min(m: f32) -> i32 {
+pub(in crate::script) fn floor_min(m: f32) -> i32 {
     (if m > 0.0 { m } else { m - DAMAGE_BIAS }) as i32
 }
 
 /// The builder's `ceil(DamageMax)`: add the bias if positive, then truncate (`0x52c26e..0x52c28c`).
-pub(super) fn ceil_max(m: f32) -> i32 {
+pub(in crate::script) fn ceil_max(m: f32) -> i32 {
     (if m > 0.0 { m + DAMAGE_BIAS } else { m }) as i32
 }
 
 /// A school's name key, `SPELL_SCHOOL%d_CAP`, the one key the builder composes (`0x84e4cc`,
 /// pushed at `0x52c2a8` and `0x52c8d1`). School 0 has none: a physical weapon takes the
 /// school-less `DAMAGE_TEMPLATE` arm.
-pub(super) fn school_key(s: u32) -> Option<String> {
+pub(in crate::script) fn school_key(s: u32) -> Option<String> {
     (1..=6).contains(&s).then(|| format!("SPELL_SCHOOL{s}_CAP"))
 }
 
 /// Stat type to its `ITEM_MOD_*` line template (`"%c%d Agility"`); the builder's 8-way jump table
 /// `0x52e510` skips 2 (keys at `0x52c6eb..0x52c777`).
-pub(super) fn stat_key(t: u32) -> Option<&'static str> {
+pub(in crate::script) fn stat_key(t: u32) -> Option<&'static str> {
     Some(match t {
         0 => "ITEM_MOD_MANA",
         1 => "ITEM_MOD_HEALTH",
@@ -102,7 +102,7 @@ pub(super) fn stat_key(t: u32) -> Option<&'static str> {
 }
 
 /// The playable class ids and names the `ITEM_CLASSES_ALLOWED` list prints.
-pub(super) const CLASS_NAMES: [(u32, &str); 9] = [
+pub(in crate::script) const CLASS_NAMES: [(u32, &str); 9] = [
     (1, "Warrior"),
     (2, "Paladin"),
     (3, "Hunter"),
@@ -115,7 +115,7 @@ pub(super) const CLASS_NAMES: [(u32, &str); 9] = [
 ];
 
 /// The playable race ids and names the `ITEM_RACES_ALLOWED` list prints.
-pub(super) const RACE_NAMES: [(u32, &str); 8] = [
+pub(in crate::script) const RACE_NAMES: [(u32, &str); 8] = [
     (1, "Human"),
     (2, "Orc"),
     (3, "Dwarf"),
@@ -127,7 +127,7 @@ pub(super) const RACE_NAMES: [(u32, &str); 8] = [
 ];
 
 /// The mask of every listed id; an item allowing all of them shows no line.
-pub(super) fn full_mask(ids: &[(u32, &str)]) -> i32 {
+pub(in crate::script) fn full_mask(ids: &[(u32, &str)]) -> i32 {
     ids.iter().fold(0i32, |m, &(id, _)| m | (1 << (id - 1)))
 }
 

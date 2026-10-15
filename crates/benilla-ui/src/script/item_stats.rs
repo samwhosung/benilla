@@ -32,6 +32,14 @@ pub struct ItemTemplateView {
     /// prerequisite, or its postrequisite when the prerequisite is -1. A weapon with only the
     /// alternate's bit reds the slot cell, not the type cell.
     pub proficiency_alt: Option<u32>,
+    /// `ItemSubClass.dbc`'s prerequisite proficiency alone (row `+0x08`, `None` for -1):
+    /// `GetTradeSkillItemStats` reads this field where the tooltip walks on to the postrequisite.
+    pub proficiency_prereq: Option<u32>,
+    /// The template's item level (`+0x38`).
+    pub item_level: u32,
+    /// `(spell name, charges)` for each of the five spell slots whose id names a `Spell.dbc` row,
+    /// in slot order (`+0x11c`, `+0x144`): `GetTradeSkillItemStats`' `ITEM_SPELL_EFFECT` lines.
+    pub spell_slots: Vec<(String, i32)>,
     /// `ItemSubClass.dbc` displayFlags bit 0: the type cell never prints (rings, trinkets, …).
     pub hide_subclass: bool,
     /// Template flags; `0x2` prints "Conjured Item".

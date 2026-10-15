@@ -138,6 +138,59 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
+    // GetTradeSkillItemStats(index) (`0x4fdec0`): one string per tooltip line of the item the recipe
+    // creates ([`super::itemstats`]), and zero values on any miss: an index outside the full row
+    // list, a header, a spell with no product, or a template not cached yet, which is asked for
+    // (`0x4fdf95`) so the next call finds it.
+    g.set(
+        "GetTradeSkillItemStats",
+        lua.create_function(|lua, index: Value| {
+            let index = number_arg(lua, index, "Usage: GetTradeSkillItemStats(index)")?;
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let product = usize::try_from(index)
+                .ok()
+                .and_then(|i| i.checked_sub(1))
+                .and_then(|n| rows(&model).get(n).cloned())
+                .and_then(|row| match row {
+                    Row::Header { .. } => None,
+                    Row::Entry(ei) => model.trade_skill.as_ref().map(|t| &t.recipes[ei]),
+                })
+                .map(|r| r.product_item);
+            let Some(product) = product else {
+                return Ok(MultiValue::new());
+            };
+            let Some(view) = model.item_templates.get(&product).cloned() else {
+                if product != 0 {
+                    model.item_stat_asks.insert(product);
+                }
+                return Ok(MultiValue::new());
+            };
+            let req = model.player_req.clone();
+            let player = model.unit("player").map(|u| (u.pvp_team, u.sex == 3));
+            let knows = view.required_spell != 0
+                && model
+                    .spellbook
+                    .slots
+                    .iter()
+                    .any(|s| s.spell_id == view.required_spell);
+            drop(model);
+            let facts = super::itemstats::PlayerFacts {
+                // A player whose level is unpushed declines to judge, as `item_refusal` does.
+                present: req.level != 0 || player.is_some(),
+                pvp_team: player.map_or(0, |p| p.0),
+                female: player.is_some_and(|p| p.1),
+                knows_required_spell: knows,
+            };
+            let get = |key: &str| crate::strings::global(lua, key).unwrap_or_default();
+            let lines = super::itemstats::item_stat_lines(&view, &req, facts, &get);
+            let mut out = Vec::with_capacity(lines.len());
+            for line in &lines {
+                out.push(Value::String(lua.create_string(line)?));
+            }
+            Ok(MultiValue::from_vec(out))
+        })?,
+    )?;
+
     // GetTradeSkillReagentItemLink(index, reagentIndex) (`0x4ff800`): always one value, the link
     // or nil; `reagentIndex` counts the non-empty reagent slots, and the usage error's
     // `GetTradeReagentSkillItemLink` is the reference's own typo.

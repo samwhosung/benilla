@@ -17,7 +17,7 @@ use super::object::frame_handle_of;
 use super::tooltip::{append_line, clear, clear_silent, show_or_hide_empty};
 use super::{ItemTemplateView, Model};
 
-mod names;
+pub(in crate::script) mod names;
 pub(in crate::script) mod render;
 
 use names::{quality_color, GRAY, WHITE};

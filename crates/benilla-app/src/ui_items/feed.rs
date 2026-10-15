@@ -171,6 +171,15 @@ fn template_view(
         subclass: t.subclass,
         inventory_type: t.inventory_type,
         proficiency_alt: sub_classes.and_then(|c| c.proficiency_alt(t.class, t.subclass)),
+        proficiency_prereq: sub_classes
+            .and_then(|c| c.proficiency_prerequisite(t.class, t.subclass)),
+        item_level: t.item_level,
+        // The five slots' ids that name a spell row, with their charges (`0x4fe890`).
+        spell_slots: t
+            .spells
+            .iter()
+            .filter_map(|s| spell_name(s.spell_id).map(|n| (n, s.charges)))
+            .collect(),
         hide_subclass: sub_classes.is_some_and(|c| c.hides_name(t.class, t.subclass)),
         // `GetItemInfo`'s type pair: the subclass is `name()`, verbose name first (`0x48e311`),
         // so a one-handed sword is "One-Handed Swords" to an addon and "Sword" on the tooltip.
@@ -1395,6 +1404,66 @@ mod tests {
             "no catalog, the id stands"
         );
         assert_eq!(super::known_lock_id(0, Some(&catalog)), 0);
+    }
+
+    /// The view carries what `GetTradeSkillItemStats` reads beyond the tooltip: the item level, and
+    /// the five spell slots whose id names a `Spell.dbc` row with their charges, in slot order.
+    #[test]
+    fn a_template_view_carries_the_item_level_and_the_named_spell_slots() {
+        use crate::items::test_template;
+        use benilla_formats::SpellDisplay;
+        use benilla_protocol::messages::ItemSpellEntry;
+        use std::collections::HashMap;
+
+        let mut t = test_template("Wand");
+        t.item_level = 33;
+        let slot = |index, spell_id, charges| ItemSpellEntry {
+            index,
+            spell_id,
+            trigger: 0,
+            charges,
+            cooldown_ms: 0,
+            category: 0,
+            category_cooldown_ms: 0,
+        };
+        // Slot 1 names no row; slots 0 and 3 do.
+        t.spells = vec![slot(0, 10, 3), slot(1, 11, 0), slot(3, 12, -1)];
+        let mut spells = crate::ui_action::Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays(HashMap::from([
+            (
+                10,
+                SpellDisplay {
+                    name: "Fireball".into(),
+                    ..Default::default()
+                },
+            ),
+            (
+                12,
+                SpellDisplay {
+                    name: "Frost Nova".into(),
+                    ..Default::default()
+                },
+            ),
+        ]));
+        let view = super::template_view(
+            &t,
+            Some(&spells),
+            None,
+            &|_| 0,
+            None,
+            None,
+            &|| 0,
+            None,
+            None,
+            None,
+            None,
+            &|_| None,
+        );
+        assert_eq!(view.item_level, 33);
+        assert_eq!(
+            view.spell_slots,
+            [("Fireball".to_string(), 3), ("Frost Nova".to_string(), -1)]
+        );
     }
 
     /// A bag slot carries the template's quality and InventoryType, which `GetContainerItemInfo`

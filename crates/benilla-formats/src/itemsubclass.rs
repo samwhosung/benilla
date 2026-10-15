@@ -57,6 +57,12 @@ impl ItemSubClassCatalog {
             .map(|v| v as u32)
     }
 
+    /// The prerequisite proficiency alone (`[row+0x08]`), `None` for -1 or an unknown pair.
+    pub fn proficiency_prerequisite(&self, class: u32, subclass: u32) -> Option<u32> {
+        let r = self.rows.get(&(class, subclass))?;
+        (r.prerequisite_proficiency != -1).then_some(r.prerequisite_proficiency as u32)
+    }
+
     /// `WeaponSwingSize` (`[row+0x24]`, returned by `0x623870`). An unknown pair is the reference's
     /// "not a weapon", which plays nothing rather than defaulting to a weight.
     pub fn weapon_swing_size(&self, class: u32, subclass: u32) -> Option<u32> {
@@ -384,6 +390,13 @@ mod tests {
         assert_eq!(cat.proficiency_alt(2, 8), Some(7));
         assert_eq!(cat.proficiency_alt(4, 6), Some(5));
         assert_eq!(cat.proficiency_alt(2, 15), None);
+        // The prerequisite alone: a two-handed sword's one-handed twin, nothing for the one-handed
+        // sword, whose alternate is only its postrequisite.
+        assert_eq!(cat.proficiency_prerequisite(2, 8), Some(7));
+        assert_eq!(cat.proficiency_prerequisite(2, 7), None);
+        assert_eq!(cat.proficiency_prerequisite(4, 6), Some(5));
+        assert_eq!(cat.proficiency_prerequisite(2, 15), None);
+        assert_eq!(cat.proficiency_prerequisite(99, 0), None);
         // Display flag bit 0: Miscellaneous armor hides its type name.
         assert!(cat.hides_name(4, 0));
         assert!(!cat.hides_name(4, 1), "Cloth prints");
