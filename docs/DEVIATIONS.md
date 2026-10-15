@@ -346,7 +346,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_honor
 
-- We clear it whenever the inspected token's guid moves, because our window re-resolves its token each frame and both tabs read it, so the reference's rule would let the two tabs show different players. `ClearInspectPlayer` drops the token, which clears the slot here too. ([`src/ui_honor.rs:206`](../crates/benilla-app/src/ui_honor.rs#L206))
+- We clear it whenever the inspected token's guid moves, because our window re-resolves its token each frame and both tabs read it, so the reference's rule would let the two tabs show different players. `ClearInspectPlayer` drops the token, which clears the slot here too. ([`src/ui_honor.rs:175`](../crates/benilla-app/src/ui_honor.rs#L175))
 
 #### ui_instance
 
@@ -456,7 +456,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_unit
 
-- 10, "Not specified", answers None because the word would print in the tooltip's level line; `UnitCreatureType` then answers nil where the reference names it. ([`src/ui_unit.rs:1116`](../crates/benilla-app/src/ui_unit.rs#L1116))
+- 10, "Not specified", answers None because the word would print in the tooltip's level line; `UnitCreatureType` then answers nil where the reference names it. ([`src/ui_unit.rs:1123`](../crates/benilla-app/src/ui_unit.rs#L1123))
 
 #### video
 
