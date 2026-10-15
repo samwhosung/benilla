@@ -207,6 +207,16 @@ fn gratuity_builds_its_thirty_line_scan_tooltip() {
     );
     // Gratuity's next call: `ClearLines` over the grown line stack.
     s.run("vars.tooltip:ClearLines()").unwrap();
+    // Each `AddFontStrings` raised the line limit by one (`0x529940`): a bare tooltip holds the 30
+    // pairs it was given, in the order given.
+    s.run(
+        r#"
+        for i = 1, 35 do vars.tooltip:AddLine("line " .. i) end
+        assert(vars.tooltip:NumLines() == 30, vars.tooltip:NumLines())
+        assert(vars.Llines[1]:GetText() == "line 1" and vars.Llines[30]:GetText() == "line 30")
+    "#,
+    )
+    .unwrap();
 }
 
 #[test]

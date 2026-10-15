@@ -21,7 +21,7 @@ fn item_line_law_and_red_requirements() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         SetItemByIdForTest(tt, 871)
         assert(tt:IsShown(), "the id render shows")
@@ -88,7 +88,7 @@ fn red_lines_track_player_state() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot2"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         SetItemByIdForTest(tt, 871)
     "#,
@@ -144,7 +144,7 @@ fn verified_families_signable_locked_resists_known() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot5"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         SetItemByIdForTest(tt, 5518)
     "#,
@@ -255,7 +255,7 @@ fn proficiency_and_reputation_reds() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot9"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         SetItemByIdForTest(tt, 871)
     "#,
@@ -396,8 +396,7 @@ fn proficiency_and_reputation_reds() {
         r#"
         TT:SetOwner(Slot9, "ANCHOR_RIGHT"); SetItemByIdForTest(TT, 889)
         assert(TTTextLeft2:GetText() == "[INVTYPE_FINGER]")
-        assert(TTTextRight2:GetText() == nil or TTTextRight2:GetText() == "",
-               "a ring never prints its Miscellaneous type")
+        assert(not TTTextRight2:IsShown(), "a ring never prints its Miscellaneous type")
     "#,
     )
     .unwrap();
@@ -423,7 +422,7 @@ fn required_level_one_is_hidden() {
     s.run(
         r#"
         local a = CreateFrame("Button", "SlotR"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT"); SetItemByIdForTest(tt, 11)
         assert(tt:NumLines() == 1, "req 0: name only, got " .. tt:NumLines())
         tt:SetOwner(a, "ANCHOR_RIGHT"); SetItemByIdForTest(tt, 12)
@@ -500,7 +499,7 @@ fn charter_lines_sit_between_the_name_and_the_signable_line() {
     s.run(
         r#"
         local a = CreateFrame("Button", "SlotC"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT"); tt:SetBagItem(0, 1)
     "#,
     )
@@ -633,7 +632,7 @@ fn instance_tail_creator_and_readable() {
     s.run(
         r#"
         local a = CreateFrame("Button", "SlotL"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT"); tt:SetBagItem(0, 1)
     "#,
     )
@@ -739,7 +738,7 @@ fn a_runtime_bound_instance_overrides_the_bind_line_to_soulbound() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetBagItem(0, 1)
     "#,
@@ -791,7 +790,7 @@ fn damage_matrix_arms_and_the_first_flag() {
         s.set_item_template(id, v);
         s.run(&format!(
             r#"local a = CreateFrame("Button", "S{id}"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-               if not TT then CreateFrame("GameTooltip", "TT") end
+               if not TT then CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate") end
                TT:SetOwner(S{id}, "ANCHOR_RIGHT"); SetItemByIdForTest(TT, {id})"#
         ))
         .unwrap();
@@ -869,10 +868,10 @@ fn damage_matrix_arms_and_the_first_flag() {
         !lines.iter().any(|l| l.starts_with("[DPS")),
         "ammo never reaches the DPS line: {lines:?}"
     );
-    let right: String = s
-        .eval("return TTTextRight3:GetText() or ''")
-        .expect("right cell");
-    assert_eq!(right, "", "ammo gets no Speed cell either");
+    // A cell the build did not write is hidden, its old text standing (`0x530050` clears no right
+    // text).
+    let shown: bool = s.eval("return TTTextRight3:IsShown()").expect("right cell");
+    assert!(!shown, "ammo gets no Speed cell either");
     let lines = show(
         &mut s,
         905,
@@ -928,7 +927,7 @@ fn container_slots_line_names_its_subclass() {
         s.set_item_template(id, v);
         s.run(&format!(
             r#"local a = CreateFrame("Button", "B{id}"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-               if not TT then CreateFrame("GameTooltip", "TT") end
+               if not TT then CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate") end
                TT:SetOwner(B{id}, "ANCHOR_RIGHT"); SetItemByIdForTest(TT, {id})"#
         ))
         .unwrap();

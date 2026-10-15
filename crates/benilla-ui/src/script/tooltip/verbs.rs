@@ -204,6 +204,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             let lh = region_handle_of(lua, &left)?;
             let rh = region_handle_of(lua, &right)?;
+            super::grow_line_cap(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let frame_id = model.frame_id(h);
             let prev_left = match model.arena.frame(h).map(|f| &f.kind_state) {

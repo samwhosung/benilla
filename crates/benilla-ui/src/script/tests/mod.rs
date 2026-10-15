@@ -13,7 +13,7 @@ mod channel;
 mod chat_bubble;
 mod clear_points;
 mod colour_args;
-mod common;
+pub(in crate::script) mod common;
 mod cooldown;
 mod create_frame_template;
 mod cvar_bindings;

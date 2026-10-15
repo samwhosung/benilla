@@ -71,6 +71,7 @@ impl FeedApp {
         let ids: Vec<u32> = make(1).iter().map(|&(id, _)| id).collect();
         app.world_mut().resource_mut::<PlayerActions>().spells = ids.iter().copied().collect();
         let mut script = UiScript::new().unwrap();
+        crate::ui_script::test_ui::load_tooltip_template(&script);
         script.set_spellbook(benilla_ui::script::SpellBookState {
             tabs: Vec::new(),
             slots: ids
@@ -87,7 +88,7 @@ impl FeedApp {
                 r#"
                 local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0)
                 a:SetWidth(10); a:SetHeight(10)
-                CreateFrame("GameTooltip", "TT")
+                CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
                 function TEXT(i)
                     TT:SetOwner(B, "ANCHOR_RIGHT"); TT:SetSpell(i, "spell")
                     local t = {}
@@ -391,6 +392,7 @@ fn a_pet_view_reads_the_pets_and_its_targets_run() {
     index.0.insert(MOB, mob);
 
     let mut script = UiScript::new().unwrap();
+    crate::ui_script::test_ui::load_tooltip_template(&script);
     script.set_pet_book(PetBookState {
         token: Some("CAT".into()),
         slots: vec![SpellSlotView {
@@ -405,7 +407,7 @@ fn a_pet_view_reads_the_pets_and_its_targets_run() {
             SPELL_RANGE = "%s yd range"
             local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0)
             a:SetWidth(10); a:SetHeight(10)
-            CreateFrame("GameTooltip", "TT")
+            CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
             function RANGE()
                 TT:SetOwner(B, "ANCHOR_RIGHT"); TT:SetSpell(1, "pet")
                 for k = 1, TT:NumLines() do

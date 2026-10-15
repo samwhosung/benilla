@@ -187,7 +187,7 @@ fn set_talent_on_a_passive_talent_is_the_talent_builder() {
     s.run(
         r#"
         local a = CreateFrame("Button", "TB1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetTalent(1, 1)
         assert(tt:IsShown(), "SetTalent shows")
@@ -248,7 +248,7 @@ fn set_talent_on_an_exceptional_talent_keeps_the_spell_body() {
     s.run(
         r#"
         local a = CreateFrame("Button", "TB3"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT3")
+        local tt = CreateFrame("GameTooltip", "TT3", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetTalent(1, 2)
         local want = {
@@ -276,7 +276,7 @@ fn set_talent_locked_reqs_and_the_ask_once_miss() {
     s.run(
         r#"
         local a = CreateFrame("Button", "TB2"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT2")
+        local tt = CreateFrame("GameTooltip", "TT2", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetTalent(1, 2)
         assert(tt:IsShown())

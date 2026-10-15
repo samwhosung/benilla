@@ -16,7 +16,7 @@ fn minimap_and_bag() -> UiScript {
         local map = CreateFrame("Minimap", "Minimap", UIParent)
         map:SetPoint("BOTTOMLEFT", 600, 400); map:SetWidth(140); map:SetHeight(140)
         map:EnableMouse(true)
-        CreateFrame("GameTooltip", "GameTooltip", UIParent):Hide()
+        CreateFrame("GameTooltip", "GameTooltip", UIParent, "TestTooltipTemplate"):Hide()
         Bag = CreateFrame("Button", "Bag", UIParent)
         Bag:SetPoint("BOTTOMLEFT", 100, 100); Bag:SetWidth(40); Bag:SetHeight(40)
         Bag:EnableMouse(true)

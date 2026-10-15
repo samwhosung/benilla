@@ -219,7 +219,7 @@ const OWNED_TIP: &str = r#"
     local root = CreateFrame("Frame", "TipRoot")
     local owner = CreateFrame("Button", "TipOwner", root)
     owner:SetPoint("CENTER", 0, 0); owner:SetWidth(10); owner:SetHeight(10)
-    local tt = CreateFrame("GameTooltip", "CascadeTip", root)
+    local tt = CreateFrame("GameTooltip", "CascadeTip", root, "TestTooltipTemplate")
     tt:SetOwner(owner, "ANCHOR_RIGHT")
     tt:SetText("Owned")
     tt:SetScript("OnTooltipCleared", function() table.insert(LOG, "cleared") end)

@@ -946,6 +946,7 @@ pub(crate) mod purse_fixture {
     /// A VM with the sword at live id 16, backpack slot 1 and bank slot 1, and a tooltip `TT`.
     pub(crate) fn sword_vm() -> UiScript {
         let mut script = UiScript::new().unwrap();
+        crate::ui_script::test_ui::load_tooltip_template(&script);
         let mut inv: benilla_ui::script::InventorySlots = Default::default();
         inv[16] = Some(benilla_ui::script::InvSlotView {
             item_id: SWORD_ENTRY,
@@ -968,7 +969,7 @@ pub(crate) mod purse_fixture {
         script.set_container(crate::ui_items::BANK_CONTAINER, Some(bag));
         script
             .run(
-                r#"CreateFrame("GameTooltip", "TT"):SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")"#,
+                r#"CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate"):SetOwner(CreateFrame("Frame"), "ANCHOR_NONE")"#,
             )
             .unwrap();
         script

@@ -13,12 +13,13 @@ use crate::target::{Hovered, HoveredObject};
 fn world_and_bag(app: &mut App, anchor: &str) {
     let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
     script.set_screen_size(800.0, 600.0);
+    crate::ui_script::test_ui::load_tooltip_template(&script);
     script
         .run(&format!(
             r#"
             UIParent = CreateFrame("Frame", "UIParent"); UIParent:SetAllPoints()
             WorldFrame = CreateFrame("WorldFrame", "WorldFrame"); WorldFrame:SetAllPoints()
-            local tt = CreateFrame("GameTooltip", "GameTooltip", UIParent); tt:Hide()
+            local tt = CreateFrame("GameTooltip", "GameTooltip", UIParent, "TestTooltipTemplate"); tt:Hide()
             tt:SetScript("OnTooltipSetDefaultAnchor", function()
                 GameTooltip:SetOwner(UIParent, "{anchor}")
             end)

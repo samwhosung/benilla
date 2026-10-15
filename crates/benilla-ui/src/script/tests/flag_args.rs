@@ -409,7 +409,8 @@ fn macro_flags_read_get_bool_or_default_with_default_zero() {
 #[test]
 fn tooltip_wrap_flags_read_get_bool_or_default_with_default_zero() {
     let s = script();
-    s.run(r#"TT = CreateFrame("GameTooltip", "TT")"#).unwrap();
+    s.run(r#"TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")"#)
+        .unwrap();
     let pinned = |line: u32| {
         let t: mlua::Table = s
             .lua()

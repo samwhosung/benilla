@@ -6,7 +6,7 @@ use crate::script::{PlateGeometry, PlateState, UiScript};
 
 /// A VM with a `WorldFrame` to hang plates off, all [`UiScript::sync_nameplates`] requires.
 fn vm() -> UiScript {
-    let mut s = UiScript::new().unwrap();
+    let mut s = super::common::script();
     s.set_screen_size(1024.0, 768.0);
     s.run(r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()"#)
         .unwrap();
@@ -746,7 +746,7 @@ fn leaving_a_plate_publishes_the_empty_mouseover_before_the_next_enter() {
     let key = wolf.key;
     s.run(
         r#"
-        CreateFrame("GameTooltip", "GameTooltip"):Hide()
+        CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate"):Hide()
         Bag = CreateFrame("Button", "Bag")
         Bag:SetPoint("BOTTOMLEFT", 40, 40); Bag:SetWidth(40); Bag:SetHeight(40)
         Bag:EnableMouse(true)

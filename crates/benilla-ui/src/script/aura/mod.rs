@@ -437,6 +437,7 @@ mod tests {
     /// its own: `base + 1` and `base + 2`.
     fn group_script() -> UiScript {
         let mut s = UiScript::new().unwrap();
+        crate::script::tests::common::load_tooltip_template(&s);
         s.set_unit_guids(&UnitGuids {
             player: ME,
             target: TARGET,
@@ -576,7 +577,7 @@ mod tests {
         s.run(
             r#"local a = CreateFrame("Button", "TF1")
                a:SetPoint("CENTER", 0, 0) a:SetWidth(10) a:SetHeight(10)
-               TT = CreateFrame("GameTooltip", "TT")
+               TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
                TT:SetOwner(a, "ANCHOR_BOTTOMRIGHT")
                TT:SetUnitDebuff("MouseOver", 1)"#,
         )

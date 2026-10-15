@@ -279,12 +279,9 @@ pub struct TooltipState {
     pub equipped_header_armed: bool,
     /// `SetPadding`: extra width past the content (`ItemRef.xml:40` sets 16 for the close button).
     pub padding: f32,
-    /// Line 1 came from XML (`ShoppingTooltipTemplate`), so later lines clone the previous fonts.
-    pub xml_declared_lines: bool,
     /// The line limit (`+0x320`), read once at the first line: the count of consecutive declared
     /// `<name>TextLeft<n>`/`TextRight<n>` pairs, which the post-load pass counts (`0x529650`).
-    /// `None` is a tooltip with no declared pair, whose pool grows on demand.
-    pub line_cap: Option<usize>,
+    pub line_cap: usize,
     /// [`Self::line_cap`] has been read.
     pub line_cap_read: bool,
     /// A relayout (`0x530640`) is owed: Show and the line writers run it with an owner, and it

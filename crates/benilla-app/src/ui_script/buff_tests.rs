@@ -861,6 +861,7 @@ fn the_duration_line_reads_the_real_global_strings() {
         .expect("GlobalStrings.lua in the chain");
 
     let mut s = UiScript::new().unwrap();
+    crate::ui_script::test_ui::load_tooltip_template(&s);
     s.set_screen_size(1024.0, 768.0);
     s.run(&String::from_utf8_lossy(&src)).expect("runs clean");
     s.set_spell_tooltip(
@@ -876,7 +877,7 @@ fn the_duration_line_reads_the_real_global_strings() {
         r#"
         BENILLA_ANCHOR = CreateFrame("Button", "BF9")
         BENILLA_ANCHOR:SetPoint("CENTER", 0, 0); BENILLA_ANCHOR:SetWidth(10); BENILLA_ANCHOR:SetHeight(10)
-        BENILLA_TIP = CreateFrame("GameTooltip", "TT9")
+        BENILLA_TIP = CreateFrame("GameTooltip", "TT9", nil, "TestTooltipTemplate")
     "#,
     )
     .unwrap();

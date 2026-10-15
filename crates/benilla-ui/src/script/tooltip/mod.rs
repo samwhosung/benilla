@@ -13,15 +13,13 @@
 use mlua::{Lua, Table, Value};
 
 use super::event;
-use super::object::{frame_handle_of, publish_global};
-use super::region::region_wrapper;
+use super::object::frame_handle_of;
 use super::visibility;
-use super::{FontObject, Model, RegionData};
+use super::Model;
 use crate::layout::{Anchor, Anchors, Point};
-use crate::order::DrawLayer;
 use crate::widget::{
-    FrameHandle, KindState, RegionKind, TooltipAnchor, TooltipState, TOOLTIP_DOUBLE_GAP,
-    TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD,
+    FrameHandle, KindState, TooltipAnchor, TooltipState, TOOLTIP_DOUBLE_GAP, TOOLTIP_FADE_SECS,
+    TOOLTIP_LINE_GAP, TOOLTIP_PAD,
 };
 
 /// Registry key of the GameTooltip method table, a named registry root (the MAXCSTACK discipline).
@@ -56,23 +54,6 @@ pub(super) fn tip_mut(model: &mut Model, h: FrameHandle) -> mlua::Result<&mut To
     }
 }
 
-/// `SetFontObject` onto a line cell, except that a missing font object keeps the default face
-/// rather than raising (a VM loaded without Fonts.xml).
-fn apply_font(d: &mut RegionData, name: &str, fo: Option<&FontObject>) {
-    d.font_object = Some(name.to_string());
-    // The inherit mask (`+0x2c`) stays: a re-point does not restore inheritance in the reference.
-    // From here the line follows the font object live, through `font::propagate`.
-    if let Some(f) = fo {
-        d.font_path = f.font.clone();
-        d.font_height = f.height;
-        d.outline = f.outline;
-        d.font_shadow = f.shadow;
-        if let Some(c) = f.color {
-            d.set_vertex_color(Some(c));
-        }
-    }
-}
-
 /// The tooltip's declared `<name>Text<cell><i>` FontString, if it owns one.
 fn declared_cell(
     model: &Model,
@@ -94,11 +75,8 @@ fn declared_cell(
 
 /// The line limit (`+0x320`): the post-load pass counts `<name>TextLeft<n>` and `TextRight<n>`
 /// pairs from 1 until either is missing (`0x52972d`-`0x52983d`), and `0x530270` adds no line at
-/// that count (`0x530291`). The stock template declares 30.
-///
-/// Deviation: a tooltip with no declared pair has limit 0 in the reference, so every `AddLine`
-/// adds nothing; here its pool grows on demand, so a bare `CreateFrame("GameTooltip")` works.
-fn read_line_cap(lua: &Lua, this: &Table) -> mlua::Result<Option<usize>> {
+/// that count (`0x530291`). The stock template declares 30; a tooltip with none holds no line.
+fn read_line_cap(lua: &Lua, this: &Table) -> mlua::Result<usize> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let frame_name = model
@@ -106,193 +84,115 @@ fn read_line_cap(lua: &Lua, this: &Table) -> mlua::Result<Option<usize>> {
         .frame(h)
         .and_then(|f| f.name.clone())
         .unwrap_or_default();
-    let mut n = 0;
-    while declared_cell(&model, h, &frame_name, "Left", n + 1).is_some()
-        && declared_cell(&model, h, &frame_name, "Right", n + 1).is_some()
+    let mut cap = 0;
+    while declared_cell(&model, h, &frame_name, "Left", cap + 1).is_some()
+        && declared_cell(&model, h, &frame_name, "Right", cap + 1).is_some()
     {
-        n += 1;
+        cap += 1;
     }
-    let cap = (n > 0).then_some(n);
     let t = tip_mut(&mut model, h)?;
     t.line_cap = cap;
     t.line_cap_read = true;
     Ok(cap)
 }
 
-/// Grows the line-pair pool to `n` pairs: XML-declared pairs (`<name>TextLeft<i>`) are adopted
-/// with their fonts, and created pairs clone the previous pair's fonts past a declared ladder, or
-/// else wear the template's `GameTooltipHeaderText` (line 1) and `GameTooltipText`.
+/// `AddFontStrings` (`0x530c40` into `0x529940`) raises the line limit by one and seats the caller's
+/// pair as the last: the declared pairs are seated first, so it lands after them.
+pub(super) fn grow_line_cap(lua: &Lua, this: &Table) -> mlua::Result<()> {
+    let h = frame_handle_of(lua, this)?;
+    let read = with_tip(lua, this, |t| t.line_cap_read)?;
+    let cap = if read {
+        with_tip(lua, this, |t| t.line_cap)?
+    } else {
+        read_line_cap(lua, this)?
+    };
+    ensure_lines(lua, this, cap)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    tip_mut(&mut model, h)?.line_cap = cap + 1;
+    Ok(())
+}
+
+/// Seats line pairs up to `n`: the declared `<name>TextLeft<i>` and `TextRight<i>` are the line's
+/// cells (`0x5297c9`-`0x529812`), kept with their declared faces, and the engine owns their
+/// justify, visibility and anchors. `n` never passes the line limit ([`read_line_cap`]).
 fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
-    // (id, global name) pairs to publish once the model borrow is dropped.
-    let mut publish: Vec<(u32, String)> = Vec::new();
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        let frame_name = model
-            .arena
-            .frame(h)
-            .and_then(|f| f.name.clone())
-            .unwrap_or_default();
-        let frame_id = model.frame_id(h);
-        loop {
-            let (have, prev_left, prev_right, clone_prev) =
-                match model.arena.frame(h).map(|f| &f.kind_state) {
-                    Some(KindState::Tooltip(t)) => (
-                        t.left_lines.len(),
-                        t.left_lines.last().copied(),
-                        t.right_lines.last().copied(),
-                        t.xml_declared_lines,
-                    ),
-                    _ => return Err(mlua::Error::runtime("not a GameTooltip")),
-                };
-            if have >= n {
-                break;
-            }
-            let i = have + 1;
-
-            // The template's declared pair for this index (ShoppingTooltipTemplate's ladder).
-            let declared =
-                |model: &Model, cell: &str| declared_cell(model, h, &frame_name, cell, i);
-            // A created cell's fonts: the previous line's under an XML ladder, else the defaults.
-            let seed_font =
-                |model: &mut Model,
-                 d: &mut RegionData,
-                 prev: Option<crate::widget::RegionHandle>| {
-                    let cloned = clone_prev
-                        .then(|| prev.and_then(|p| model.region_data.get(&p)).cloned())
-                        .flatten();
-                    match cloned {
-                        Some(src) => {
-                            d.font_object = src.font_object.clone();
-                            d.font_path = src.font_path.clone();
-                            d.font_height = src.font_height;
-                            d.outline = src.outline;
-                            d.font_shadow = src.font_shadow;
-                            d.set_vertex_color(src.vertex_color);
-                        }
-                        None => {
-                            let font = if i == 1 {
-                                "GameTooltipHeaderText"
-                            } else {
-                                "GameTooltipText"
-                            };
-                            let fo = model.font_object(font).cloned();
-                            apply_font(d, font, fo.as_ref());
-                        }
-                    }
-                };
-
-            let adopted_left = declared(&model, "Left");
-            let left = match adopted_left {
-                Some(rh) => rh,
-                None => model
-                    .arena
-                    .create_region(h, RegionKind::FontString, DrawLayer::Artwork, 0)
-                    .ok_or_else(|| mlua::Error::runtime("dead tooltip frame"))?,
-            };
-            let left_drew = model.region_draws(left);
-            {
-                let mut d = if adopted_left.is_some() {
-                    // Keep the declared faces; the engine owns justify/visibility/anchors.
-                    model.region_data.remove(&left).unwrap_or_default()
-                } else {
-                    let mut d = RegionData {
-                        hidden: true,
-                        ..RegionData::default()
-                    };
-                    seed_font(&mut model, &mut d, prev_left);
-                    d
-                };
-                d.hidden = true;
-                // Left-justified as in the template; it shows once a wrap line pins its width.
-                d.justify.set_h(super::JustifyH::Left);
-                d.anchors = Anchors::from([match prev_left {
-                    None => Anchor::new(
-                        Point::TopLeft,
-                        frame_id,
-                        Point::TopLeft,
-                        TOOLTIP_PAD,
-                        -TOOLTIP_PAD,
-                    ),
-                    Some(prev) => {
-                        let prev_id = model.region_id(prev);
-                        Anchor::new(
-                            Point::TopLeft,
-                            prev_id,
-                            Point::BottomLeft,
-                            0.0,
-                            -TOOLTIP_LINE_GAP,
-                        )
-                    }
-                }]);
-                model.region_data.insert(left, d);
-                model.note_region_draw(left, left_drew);
-                model.touch_measure(left); // an adopted cell can arrive text-in-hand
-                                           // A line row's points are set with the invalidate flag (`0x530197`).
-                model.invalidate_region(left, true);
-            }
-            let left_id = model.region_id(left);
-
-            let adopted_right = declared(&model, "Right");
-            let right = match adopted_right {
-                Some(rh) => rh,
-                None => model
-                    .arena
-                    .create_region(h, RegionKind::FontString, DrawLayer::Artwork, 0)
-                    .ok_or_else(|| mlua::Error::runtime("dead tooltip frame"))?,
-            };
-            let right_drew = model.region_draws(right);
-            {
-                let mut d = if adopted_right.is_some() {
-                    model.region_data.remove(&right).unwrap_or_default()
-                } else {
-                    let mut d = RegionData {
-                        hidden: true,
-                        ..RegionData::default()
-                    };
-                    seed_font(&mut model, &mut d, prev_right);
-                    d
-                };
-                d.hidden = true;
-                d.justify.set_h(super::JustifyH::Right);
-                // RIGHT on the left cell's LEFT, the point the layout re-sets with the plate
-                // width as x (`0x53094f`), as the template's `$parentTextRight1` declares it.
-                d.anchors =
-                    Anchors::from([Anchor::new(Point::Right, left_id, Point::Left, 0.0, 0.0)]);
-                model.region_data.insert(right, d);
-                model.note_region_draw(right, right_drew);
-                model.touch_measure(right); // an adopted cell can arrive text-in-hand
-                model.invalidate_region(right, true);
-            }
-            let right_id = model.region_id(right);
-
-            if !frame_name.is_empty() {
-                // Adopted pairs are already named and published by the loader.
-                if adopted_left.is_none() {
-                    let ln = format!("{frame_name}TextLeft{i}");
-                    crate::script::region::set_region_name(&mut model, left, left_id, &ln);
-                    publish.push((left_id, ln));
-                }
-                if adopted_right.is_none() {
-                    let rn = format!("{frame_name}TextRight{i}");
-                    crate::script::region::set_region_name(&mut model, right, right_id, &rn);
-                    publish.push((right_id, rn));
-                }
-            }
-
-            let t = tip_mut(&mut model, h)?;
-            t.left_lines.push(left);
-            t.right_lines.push(right);
-            if i == 1 && adopted_left.is_some() {
-                t.xml_declared_lines = true;
-            }
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let frame_name = model
+        .arena
+        .frame(h)
+        .and_then(|f| f.name.clone())
+        .unwrap_or_default();
+    let frame_id = model.frame_id(h);
+    loop {
+        let (have, prev_left) = match model.arena.frame(h).map(|f| &f.kind_state) {
+            Some(KindState::Tooltip(t)) => (t.left_lines.len(), t.left_lines.last().copied()),
+            _ => return Err(mlua::Error::runtime("not a GameTooltip")),
+        };
+        if have >= n {
+            return Ok(());
         }
+        let i = have + 1;
+        let (Some(left), Some(right)) = (
+            declared_cell(&model, h, &frame_name, "Left", i),
+            declared_cell(&model, h, &frame_name, "Right", i),
+        ) else {
+            return Err(mlua::Error::runtime("a declared tooltip line is gone"));
+        };
+
+        let left_drew = model.region_draws(left);
+        {
+            // Keep the declared faces.
+            let mut d = model.region_data.remove(&left).unwrap_or_default();
+            d.hidden = true;
+            // Left-justified as in the template; it shows once a wrap line pins its width.
+            d.justify.set_h(super::JustifyH::Left);
+            d.anchors = Anchors::from([match prev_left {
+                None => Anchor::new(
+                    Point::TopLeft,
+                    frame_id,
+                    Point::TopLeft,
+                    TOOLTIP_PAD,
+                    -TOOLTIP_PAD,
+                ),
+                Some(prev) => {
+                    let prev_id = model.region_id(prev);
+                    Anchor::new(
+                        Point::TopLeft,
+                        prev_id,
+                        Point::BottomLeft,
+                        0.0,
+                        -TOOLTIP_LINE_GAP,
+                    )
+                }
+            }]);
+            model.region_data.insert(left, d);
+            model.note_region_draw(left, left_drew);
+            model.touch_measure(left); // an adopted cell can arrive text-in-hand
+                                       // A line row's points are set with the invalidate flag (`0x530197`).
+            model.invalidate_region(left, true);
+        }
+        let left_id = model.region_id(left);
+
+        let right_drew = model.region_draws(right);
+        {
+            let mut d = model.region_data.remove(&right).unwrap_or_default();
+            d.hidden = true;
+            d.justify.set_h(super::JustifyH::Right);
+            // RIGHT on the left cell's LEFT, the point the layout re-sets with the plate
+            // width as x (`0x53094f`), as the template's `$parentTextRight1` declares it.
+            d.anchors = Anchors::from([Anchor::new(Point::Right, left_id, Point::Left, 0.0, 0.0)]);
+            model.region_data.insert(right, d);
+            model.note_region_draw(right, right_drew);
+            model.touch_measure(right);
+            model.invalidate_region(right, true);
+        }
+        model.region_id(right);
+
+        let t = tip_mut(&mut model, h)?;
+        t.left_lines.push(left);
+        t.right_lines.push(right);
     }
-    for (id, name) in publish {
-        let wrapper = region_wrapper(lua, id)?;
-        publish_global(lua, &name, &wrapper)?;
-    }
-    Ok(())
 }
 
 /// Writes a line cell's text and colour and shows it.
@@ -314,25 +214,45 @@ pub(super) fn write_cell(
     model.touch_layout_text(rh, was_shown);
 }
 
-/// Blanks every line cell and resets the counters and the subject: the model half of the clear
-/// ([`clear_silent`]).
+/// The model half of the clear ([`clear_silent`]), `0x530050`'s loop over the used lines: each left
+/// text is set to "" and both cells are hidden (`0x530203`-`0x530225`); a right text is left as it
+/// was, so it reads back until the line is written again.
 fn clear_content(model: &mut Model, h: FrameHandle) {
     let (lefts, rights) = match model.arena.frame(h).map(|f| &f.kind_state) {
-        Some(KindState::Tooltip(t)) => (t.left_lines.clone(), t.right_lines.clone()),
+        Some(KindState::Tooltip(t)) => (
+            t.left_lines
+                .iter()
+                .take(t.num_lines)
+                .copied()
+                .collect::<Vec<_>>(),
+            t.right_lines
+                .iter()
+                .take(t.num_lines)
+                .copied()
+                .collect::<Vec<_>>(),
+        ),
         _ => return,
     };
-    for rh in lefts.into_iter().chain(rights) {
+    for (rh, left) in lefts
+        .into_iter()
+        .map(|rh| (rh, true))
+        .chain(rights.into_iter().map(|rh| (rh, false)))
+    {
         let drew = model.region_draws(rh);
         if let Some(d) = model.region_data.get_mut(&rh) {
             let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
-            d.text = None;
+            if left {
+                d.text = Some(String::new());
+            }
             d.hidden = true;
             model.note_region_draw(rh, drew);
             // `measured` and the wrap pin (`size`) stay: the measure cache is keyed by content
             // ([`RegionData::measure_key`]) and `append_line` rewrites the pin, so the hover
             // loop's per-frame clear and rebuild (`ContainerFrameItemButton_OnUpdate`) re-measures
             // nothing, and its lines' layout re-hashes to the converged node and solves nothing.
-            model.touch_layout_text(rh, was_shown);
+            if left {
+                model.touch_layout_text(rh, was_shown);
+            }
         }
     }
     if let Ok(t) = tip_mut(model, h) {
@@ -685,7 +605,7 @@ pub(super) fn append_line(
     let (read, cap, have) = with_tip(lua, this, |t| (t.line_cap_read, t.line_cap, t.num_lines))?;
     let cap = if read { cap } else { read_line_cap(lua, this)? };
     // A full line array adds nothing (`0x530291`).
-    if cap.is_some_and(|cap| have >= cap) {
+    if have >= cap {
         return Ok(());
     }
     let n = have + 1;

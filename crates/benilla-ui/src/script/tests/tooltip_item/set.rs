@@ -53,7 +53,7 @@ fn item_set_block_counts_and_colors() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot10"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         SetItemByIdForTest(tt, 6303)
         -- The spacer is the reference's own literal `0x854b2c` — a space and a newline, which is
@@ -195,7 +195,7 @@ fn quest_item_hovers_render_the_rows_item_by_id() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Q1"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT"); tt:SetQuestItem("choice", 1)
         "#,
     )

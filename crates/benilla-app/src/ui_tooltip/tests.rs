@@ -1121,6 +1121,7 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
     .add_systems(Update, feed_spell_tooltips);
 
     let mut script = UiScript::new().unwrap();
+    crate::ui_script::test_ui::load_tooltip_template(&script);
     script.set_pet_actions(
         true,
         true,
@@ -1179,7 +1180,7 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
         .run(
             r#"
             local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-            CreateFrame("GameTooltip", "TT")
+            CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
             local function lines()
                 local t = {}
                 for i = 1, TT:NumLines() do t[i] = getglobal("TTTextLeft" .. i):GetText() end
@@ -1256,6 +1257,7 @@ fn the_feed_builds_the_pet_views_against_the_pet_and_rebuilds_them_on_its_level(
     index.0.insert(IMP, imp);
 
     let mut script = UiScript::new().unwrap();
+    crate::ui_script::test_ui::load_tooltip_template(&script);
     script.set_pet_actions(
         true,
         true,
@@ -1283,7 +1285,7 @@ fn the_feed_builds_the_pet_views_against_the_pet_and_rebuilds_them_on_its_level(
         .run(
             r#"
             local a = CreateFrame("Button", "B"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-            CreateFrame("GameTooltip", "TT")
+            CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
             function DESC(set) TT:SetOwner(B, "ANCHOR_RIGHT"); set(); return TTTextLeft2:GetText() end
             "#,
         )

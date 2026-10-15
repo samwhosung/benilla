@@ -767,11 +767,12 @@ mod tests {
     #[test]
     fn the_builder_flag_is_true_for_an_expiry_or_an_enchant_countdown() {
         let s = crate::script::UiScript::new().unwrap();
+        crate::script::tests::common::load_tooltip_template(&s);
         s.run(
             r#"
             ITEM_DURATION_HOURS = "[DURATION %d h]"
             ITEM_ENCHANT_TIME_LEFT_MIN = "<%s :: %d M>"
-            CreateFrame("GameTooltip", "TT")
+            CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         "#,
         )
         .unwrap();

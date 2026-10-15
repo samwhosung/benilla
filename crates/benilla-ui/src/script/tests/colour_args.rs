@@ -325,7 +325,8 @@ fn set_texture_takes_a_numeric_string_as_a_colour() {
 #[test]
 fn tooltip_set_text_alpha_accepts_a_numeric_string() {
     let s = script();
-    s.run(r#"TT = CreateFrame("GameTooltip", "TT")"#).unwrap();
+    s.run(r#"TT = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")"#)
+        .unwrap();
     s.run(r#"TT:SetText("x", 1, 1, 1, "0.5")"#).unwrap();
     assert_eq!(
         s.eval::<f64>("local _, _, _, a = TTTextLeft1:GetTextColor() return a")

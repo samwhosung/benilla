@@ -54,7 +54,7 @@ fn bag_item_money_law_and_fallback() {
         r#"
         money_fired = nil
         local a = CreateFrame("Button", "Slot3"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetScript("OnTooltipAddMoney", function() local self = this money_fired = arg1 end)
         -- No merchant: no money handler fires.
         tt:SetOwner(a, "ANCHOR_RIGHT")
@@ -122,7 +122,7 @@ fn wrap_lines_measure_wrapped_in_one_pass_and_survive_the_reenter_loop() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot4"); a:SetPoint("TOPLEFT", 10, -10); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         SetItemByIdForTest(tt, 7)
     "#,
@@ -210,7 +210,7 @@ fn item_render_hides_the_unit_health_bar() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot6"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "GameTooltip"); tt:Hide()
+        local tt = CreateFrame("GameTooltip", "GameTooltip", nil, "TestTooltipTemplate"); tt:Hide()
         local bar = CreateFrame("StatusBar", "GameTooltipStatusBar", tt)
         bar:SetPoint("TOPLEFT", tt, "BOTTOMLEFT", 2, -1); bar:SetWidth(100); bar:SetHeight(8)
         -- The stock default anchor owns the plate; an unowned one's show hides it.
@@ -270,7 +270,7 @@ fn real_instance_hover_renders_live_durability() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetBagItem(0, 2)
         found = nil
@@ -329,7 +329,7 @@ fn broken_instance_hover_renders_zero_durability() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetBagItem(0, 1)
         found = nil
@@ -399,7 +399,7 @@ fn an_enchanted_instance_renders_its_enchant_line_before_durability() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetBagItem(0, 1)
     "#,
@@ -492,7 +492,7 @@ fn enchant_line_colour_is_per_slot_and_sign() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetBagItem(0, 1)
     "#,
@@ -573,7 +573,7 @@ fn temporary_enchant_line_carries_its_countdown_and_charges() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetBagItem(0, 1)
     "#,
@@ -651,7 +651,7 @@ fn a_looted_roll_shows_its_lines_and_never_the_placeholder() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetLootItem(1)
     "#,
@@ -707,7 +707,7 @@ fn a_looted_item_with_no_roll_shows_neither_line_nor_placeholder() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetLootItem(1)
     "#,
@@ -756,7 +756,7 @@ fn a_linked_roll_shows_its_lines_and_never_the_placeholder() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         tt:SetHyperlink("|cff1eff00|Hitem:8888:0:584:0|h[Bloodrazor of the Monkey]|h|r")
     "#,
@@ -799,7 +799,7 @@ fn random_property_template_hover_shows_the_placeholder() {
     s.run(
         r#"
         local a = CreateFrame("Button", "Slot"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(Slot, "ANCHOR_RIGHT")
         SetItemByIdForTest(tt, 8888)
     "#,
@@ -855,7 +855,7 @@ fn an_uncached_item_hides_and_un_owns_until_the_next_hover() {
         r#"
         shows = 0
         UncSlot = CreateFrame("Button", "UncSlot")
-        UncTip = CreateFrame("GameTooltip", "UncTip")
+        UncTip = CreateFrame("GameTooltip", "UncTip", nil, "TestTooltipTemplate")
         UncTip:SetScript("OnShow", function() shows = shows + 1 end)
         UncTip:SetOwner(UncSlot, "ANCHOR_RIGHT")
         SetItemByIdForTest(UncTip, 4242)

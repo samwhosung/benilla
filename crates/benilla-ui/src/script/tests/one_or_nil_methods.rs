@@ -36,7 +36,7 @@ fn tooltip_is_owned_answers_one_or_nil() {
         local function shape(...) return arg.n .. ':' .. type(arg[1]) .. ':' .. tostring(arg[1]) end
         local a = CreateFrame("Button", "A"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local b = CreateFrame("Button", "B"); b:SetPoint("CENTER", 50, 0); b:SetWidth(10); b:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         assert(shape(tt:IsOwned(a)) == "1:number:1", shape(tt:IsOwned(a)))
         assert(shape(tt:IsOwned(b)) == "1:nil:nil", shape(tt:IsOwned(b)))

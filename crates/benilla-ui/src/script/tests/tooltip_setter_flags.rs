@@ -38,7 +38,7 @@ fn fixture() -> UiScript {
         r#"
         CreateFrame("Button", "FL"):SetPoint("CENTER", 0, 0)
         FL:SetWidth(10) FL:SetHeight(10)
-        CreateFrame("GameTooltip", "TT")
+        CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
     "#,
     )
     .unwrap();

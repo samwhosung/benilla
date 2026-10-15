@@ -28,7 +28,7 @@ fn line_stack_autosize_and_right_flush() {
         r#"
         local owner = CreateFrame("Button", "Slot")
         owner:SetPoint("TOPLEFT", 100, -100); owner:SetWidth(40); owner:SetHeight(40)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(owner, "ANCHOR_RIGHT")
         tt:AddLine("Tough Jerky", 1, 1, 1)
         tt:AddDoubleLine("One-Hand", "Sword", 1, 1, 1, 1, 1, 1)
@@ -91,7 +91,7 @@ fn the_right_column_write_sets_the_right_slot_only() {
         r#"
         local owner = CreateFrame("Button", "SlotR")
         owner:SetPoint("TOPLEFT", 100, -100); owner:SetWidth(40); owner:SetHeight(40)
-        local tt = CreateFrame("GameTooltip", "TTR")
+        local tt = CreateFrame("GameTooltip", "TTR", nil, "TestTooltipTemplate")
         tt:SetOwner(owner, "ANCHOR_RIGHT")
         tt:AddLine("Tough Jerky", 1, 1, 1)
         tt:AddDoubleLine("One-Hand", "Sword", 1, 1, 1, 1, 1, 1)
@@ -161,7 +161,7 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_inside_the_plate() {
         r#"
         local owner = CreateFrame("Button", "Slot2")
         owner:SetPoint("TOPLEFT", 100, -100); owner:SetWidth(40); owner:SetHeight(40)
-        local tt = CreateFrame("GameTooltip", "TTE")
+        local tt = CreateFrame("GameTooltip", "TTE", nil, "TestTooltipTemplate")
         tt:SetOwner(owner, "ANCHOR_RIGHT")
         tt:AddLine("Marshal McBride", 0.25, 0.75, 0.25)
         tt:AddDoubleLine("", "R")
@@ -208,7 +208,7 @@ fn a_line_with_no_text_on_either_side_is_not_added() {
     let mut s = script();
     s.run(
         r#"
-        local tt = CreateFrame("GameTooltip", "TTN")
+        local tt = CreateFrame("GameTooltip", "TTN", nil, "TestTooltipTemplate")
         tt:AddLine("")
         tt:AddLine()
         tt:AddLine(nil, 1, 1, 1)
@@ -237,7 +237,7 @@ fn double_line_wraps_only_with_an_empty_right_text() {
     let mut s = script();
     s.run(
         r#"
-        local tt = CreateFrame("GameTooltip", "TTW")
+        local tt = CreateFrame("GameTooltip", "TTW", nil, "TestTooltipTemplate")
         tt:AddDoubleLine("wrapped", "", 1, 1, 1, 1, 1, 1, true)
         tt:AddDoubleLine("plain", "R", 1, 1, 1, 1, 1, 1, true)
         tt:AddDoubleLine("unflagged", "", 1, 1, 1, 1, 1, 1)
@@ -262,7 +262,7 @@ fn an_empty_side_of_a_line_is_not_written() {
     let mut s = script();
     s.run(
         r#"
-        local tt = CreateFrame("GameTooltip", "TTS")
+        local tt = CreateFrame("GameTooltip", "TTS", nil, "TestTooltipTemplate")
         tt:AddLine("Level 20")
         tt:AddDoubleLine("Sword", "Common")
         assert(TTSTextLeft2:IsShown() and TTSTextRight2:IsShown())
@@ -280,6 +280,33 @@ fn an_empty_side_of_a_line_is_not_written() {
     assert!(s.take_errors().is_empty());
 }
 
+/// The clear (`0x530050`) sets each used line's left text to "" and hides both cells, and leaves a
+/// right cell's text as it was; a tooltip made without a declared pair holds no line (`0x530291`).
+#[test]
+fn the_clear_blanks_the_left_text_and_keeps_the_right() {
+    let mut s = script();
+    s.run(
+        r#"
+        local bare = CreateFrame("GameTooltip", "TTBare")
+        bare:AddLine("nothing holds this")
+        assert(bare:NumLines() == 0, "no declared pair, no line")
+
+        local tt = CreateFrame("GameTooltip", "TTK", nil, "TestTooltipTemplate")
+        tt:AddDoubleLine("Sword", "Common")
+        assert(TTKTextLeft1:IsShown() and TTKTextRight1:IsShown())
+        tt:ClearLines()
+        assert(TTKTextLeft1:GetText() ~= "Sword", "the left text is blanked")
+        assert(not TTKTextLeft1:IsShown() and not TTKTextRight1:IsShown(), "both are hidden")
+        assert(TTKTextRight1:GetText() == "Common", "the right text stands")
+        tt:AddDoubleLine("Axe", "")
+        assert(TTKTextRight1:GetText() == "Common" and not TTKTextRight1:IsShown(),
+               "an empty right side is not written")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
 #[test]
 fn owner_clear_and_hide_lifecycle() {
     let mut s = script();
@@ -289,7 +316,7 @@ fn owner_clear_and_hide_lifecycle() {
         cleared = 0
         local a = CreateFrame("Button", "A"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
         local b = CreateFrame("Button", "B"); b:SetPoint("CENTER", 50, 0); b:SetWidth(10); b:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT2")
+        local tt = CreateFrame("GameTooltip", "TT2", nil, "TestTooltipTemplate")
         tt:SetScript("OnTooltipCleared", function() cleared = cleared + 1 end)
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:AddLine("first hover")
@@ -320,7 +347,7 @@ fn the_host_reads_the_owner_and_lua_cannot() {
         r#"
         local a = CreateFrame("Button", "OwnA")
         local b = CreateFrame("Button", "OwnB")
-        TTO = CreateFrame("GameTooltip", "TTO")
+        TTO = CreateFrame("GameTooltip", "TTO", nil, "TestTooltipTemplate")
         TTO:SetOwner(a, "ANCHOR_RIGHT")
         "#,
     )
@@ -351,7 +378,7 @@ fn settext_shows_and_both_addline_shapes() {
     s.run(
         r#"
         local a = CreateFrame("Button", "A3"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT3")
+        local tt = CreateFrame("GameTooltip", "TT3", nil, "TestTooltipTemplate")
         tt:Hide() -- the XML instance ships hidden="true"; CreateFrame defaults shown
         tt:SetOwner(a, "ANCHOR_RIGHT")
         assert(not tt:IsShown(), "SetOwner alone does not show")
@@ -406,7 +433,7 @@ fn unmeasured_lines_hold_declared_size() {
     s.run(
         r#"
         local a = CreateFrame("Button", "A6"); a:SetPoint("TOPLEFT", 100, -100); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT6")
+        local tt = CreateFrame("GameTooltip", "TT6", nil, "TestTooltipTemplate")
         tt:SetWidth(120); tt:SetHeight(32)
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:AddLine("Tough Jerky")
@@ -448,7 +475,7 @@ fn minimum_width_floors_autosize() {
     s.run(
         r#"
         local a = CreateFrame("Button", "A4"); a:SetPoint("TOPLEFT", 100, -100); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT4")
+        local tt = CreateFrame("GameTooltip", "TT4", nil, "TestTooltipTemplate")
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:AddLine("tiny")
         tt:SetMinimumWidth(90)
@@ -472,7 +499,7 @@ fn fadeout_ramps_then_hides() {
         r#"
         cleared = 0
         local a = CreateFrame("Button", "A5"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
-        local tt = CreateFrame("GameTooltip", "TT5")
+        local tt = CreateFrame("GameTooltip", "TT5", nil, "TestTooltipTemplate")
         tt:SetScript("OnTooltipCleared", function() cleared = cleared + 1 end)
         tt:SetOwner(a, "ANCHOR_RIGHT")
         tt:SetText("Fading Unit")
@@ -538,7 +565,7 @@ fn owner_anchored_tooltip_clamps_to_screen() {
         r#"
         local owner = CreateFrame("Button", "ZoneTextBtn")
         owner:SetPoint("TOPRIGHT", -100, 0); owner:SetWidth(90); owner:SetHeight(14)
-        local tt = CreateFrame("GameTooltip", "TTC")
+        local tt = CreateFrame("GameTooltip", "TTC", nil, "TestTooltipTemplate")
         assert(tt:IsClampedToScreen(), "a GameTooltip clamps by construction")
         assert(not owner:IsClampedToScreen(), "a plain frame does not")
         tt:SetOwner(owner, "ANCHOR_LEFT")
@@ -673,7 +700,7 @@ fn an_emptied_pooled_line_drops_its_stale_box_and_the_plate_still_contains_the_c
         r#"
         local owner = CreateFrame("Button", "SlotR")
         owner:SetPoint("TOPLEFT", 100, -100); owner:SetWidth(40); owner:SetHeight(40)
-        local tt = CreateFrame("GameTooltip", "TTR")
+        local tt = CreateFrame("GameTooltip", "TTR", nil, "TestTooltipTemplate")
         tt:SetOwner(owner, "ANCHOR_RIGHT")
         tt:AddLine("Marshal McBride")
         tt:AddLine("Level 20")
@@ -737,7 +764,7 @@ fn set_owner_defaults_to_anchor_left_and_only_preserve_keeps_the_placement() {
     s.set_screen_size(800.0, 600.0);
     s.run(
         r#"
-        Plate = CreateFrame("GameTooltip", "Plate")
+        Plate = CreateFrame("GameTooltip", "Plate", nil, "TestTooltipTemplate")
         Owner = CreateFrame("Frame", "Owner")
         Owner:SetPoint("BOTTOMLEFT", nil, "BOTTOMLEFT", 300, 300)
         Owner:SetWidth(40) Owner:SetHeight(40)
@@ -800,7 +827,7 @@ fn set_owner_stamps_full_alpha_even_with_no_fade_running() {
     s.run(
         r#"
         Owner = CreateFrame("Frame", "Owner")
-        Tip = CreateFrame("GameTooltip", "Tip")
+        Tip = CreateFrame("GameTooltip", "Tip", nil, "TestTooltipTemplate")
         Tip:SetOwner(Owner, "ANCHOR_RIGHT")
         Tip:AddLine("Tough Jerky", 1, 1, 1)
         Tip:Show()
@@ -826,7 +853,7 @@ fn show_with_no_lines_self_hides_and_un_owns() {
         Owner = CreateFrame("Button", "Owner")
         Owner:SetPoint("TOPLEFT", nil, "TOPLEFT", 100, -100)
         Owner:SetWidth(40) Owner:SetHeight(40)
-        Tip = CreateFrame("GameTooltip", "Tip")
+        Tip = CreateFrame("GameTooltip", "Tip", nil, "TestTooltipTemplate")
         Tip:SetOwner(Owner, "ANCHOR_RIGHT")
         Tip:AddLine("Tough Jerky", 1, 1, 1)
         Tip:Show()
@@ -867,7 +894,7 @@ fn a_non_string_anchor_is_silently_mode_zero_and_never_raises() {
     let s = script();
     s.run(
         r#"
-        Plate = CreateFrame("GameTooltip", "Plate")
+        Plate = CreateFrame("GameTooltip", "Plate", nil, "TestTooltipTemplate")
         Owner = CreateFrame("Frame", "Owner")
         "#,
     )
@@ -911,7 +938,7 @@ fn anchor_cursor_follows_the_cursor_every_frame() {
     s.set_screen_size(800.0, 600.0);
     s.run(
         r#"
-        Tip = CreateFrame("GameTooltip", "Tip")
+        Tip = CreateFrame("GameTooltip", "Tip", nil, "TestTooltipTemplate")
         Host = CreateFrame("Frame", "Host")
         Tip:SetOwner(Host, "ANCHOR_CURSOR")
         Tip:AddLine("Copper Ore")
@@ -966,7 +993,7 @@ fn anchor_cursor_keeps_a_point_set_after_set_owner() {
     s.set_screen_size(800.0, 600.0);
     s.run(
         r#"
-        KeepTip = CreateFrame("GameTooltip", "KeepTip")
+        KeepTip = CreateFrame("GameTooltip", "KeepTip", nil, "TestTooltipTemplate")
         KeepHost = CreateFrame("Frame", "KeepHost")
         KeepTip:SetOwner(KeepHost, "ANCHOR_CURSOR")
         KeepTip:AddLine("Copper Ore")
@@ -998,7 +1025,7 @@ fn tooltip_anchor_type_round_trips_every_reachable_mode() {
     let s = script();
     s.run(
         r#"
-        AnchorTip = CreateFrame("GameTooltip", "AnchorTip")
+        AnchorTip = CreateFrame("GameTooltip", "AnchorTip", nil, "TestTooltipTemplate")
         AnchorOwner = CreateFrame("Frame", "AnchorOwner")
         "#,
     )
@@ -1076,7 +1103,7 @@ fn fadeout_holds_a_second_then_ramps_over_the_next_and_every_call_rearms() {
     s.run(
         r#"
         FadeHost = CreateFrame("Frame", "FadeHost")
-        FadeTip = CreateFrame("GameTooltip", "FadeTip")
+        FadeTip = CreateFrame("GameTooltip", "FadeTip", nil, "TestTooltipTemplate")
         FadeTip:SetOwner(FadeHost, "ANCHOR_RIGHT")
         FadeTip:SetText("Timber Wolf")
         FadeTip:FadeOut()
@@ -1132,7 +1159,7 @@ fn fadeout_on_a_cursor_anchored_tooltip_hides_at_once() {
         r#"
         hid = 0
         CurHost = CreateFrame("Frame", "CurHost")
-        CurTip = CreateFrame("GameTooltip", "CurTip")
+        CurTip = CreateFrame("GameTooltip", "CurTip", nil, "TestTooltipTemplate")
         CurTip:SetScript("OnHide", function() hid = hid + 1 end)
         CurTip:SetOwner(CurHost, "ANCHOR_CURSOR")
         CurTip:AddLine("Copper Ore")
@@ -1160,7 +1187,7 @@ fn a_line_added_mid_fade_keeps_fading() {
     s.run(
         r#"
         LateHost = CreateFrame("Frame", "LateHost")
-        LateTip = CreateFrame("GameTooltip", "LateTip")
+        LateTip = CreateFrame("GameTooltip", "LateTip", nil, "TestTooltipTemplate")
         LateTip:SetOwner(LateHost, "ANCHOR_RIGHT")
         LateTip:SetText("Linen Cloth")
         LateTip:FadeOut()
@@ -1194,7 +1221,7 @@ fn set_owner_hides_the_tooltip_first() {
         log = {}
         OwnA = CreateFrame("Frame", "OwnA")
         OwnB = CreateFrame("Frame", "OwnB")
-        ReTip = CreateFrame("GameTooltip", "ReTip")
+        ReTip = CreateFrame("GameTooltip", "ReTip", nil, "TestTooltipTemplate")
         ReTip:SetScript("OnTooltipCleared", function() table.insert(log, "cleared") end)
         ReTip:SetScript("OnHide", function() table.insert(log, "hide") end)
         ReTip:SetOwner(OwnA, "ANCHOR_RIGHT")
@@ -1220,7 +1247,7 @@ fn get_anchor_type_answers_anchor_none_after_a_hide() {
     s.run(
         r#"
         NoneHost = CreateFrame("Frame", "NoneHost")
-        NoneTip = CreateFrame("GameTooltip", "NoneTip")
+        NoneTip = CreateFrame("GameTooltip", "NoneTip", nil, "TestTooltipTemplate")
         NoneTip:SetOwner(NoneHost, "ANCHOR_RIGHT")
         NoneTip:SetText("Peacebloom")
         assert(NoneTip:GetAnchorType() == "ANCHOR_RIGHT", "owned: the name round-trips")
@@ -1241,7 +1268,7 @@ fn the_fade_end_restores_full_alpha_before_its_hide() {
         r#"
         seen = nil
         EndHost = CreateFrame("Frame", "EndHost")
-        EndTip = CreateFrame("GameTooltip", "EndTip")
+        EndTip = CreateFrame("GameTooltip", "EndTip", nil, "TestTooltipTemplate")
         EndTip:SetOwner(EndHost, "ANCHOR_RIGHT")
         EndTip:SetText("Silverleaf")
         EndTip:SetScript("OnTooltipCleared", function() seen = EndTip:GetAlpha() end)
@@ -1269,7 +1296,7 @@ fn only_the_relayout_invalidates_the_tooltip() {
         r#"
         local owner = CreateFrame("Button", "Slot")
         owner:SetPoint("TOPLEFT", 100, -100); owner:SetWidth(40); owner:SetHeight(40)
-        local tt = CreateFrame("GameTooltip", "TT")
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
         tt:SetOwner(owner, "ANCHOR_RIGHT")
         tt:AddLine("Tough Jerky", 1, 1, 1)
         tt:Show()

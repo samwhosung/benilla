@@ -42,7 +42,7 @@ const FADING_TIP: &str = r#"
     local root = CreateFrame("Frame", "FadeRoot")
     local owner = CreateFrame("Button", "FadeOwner", root)
     owner:SetPoint("CENTER", 0, 0); owner:SetWidth(10); owner:SetHeight(10)
-    local tt = CreateFrame("GameTooltip", "FadeTip", root)
+    local tt = CreateFrame("GameTooltip", "FadeTip", root, "TestTooltipTemplate")
     tt:SetFrameStrata("HIGH")
     tt:SetOwner(owner, "ANCHOR_RIGHT")
     tt:SetText("Fading")
