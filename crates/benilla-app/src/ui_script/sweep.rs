@@ -6,7 +6,8 @@
 //!
 //! Three callers reach it, and it is the same sweep from each: a `/reload` and every UI shutdown
 //! root (`0x490bd0`, at `0x490c20`), the local player's destructor on a cross-map worldport
-//! (`0x5dd543`), and a `SMSG_DESTROY_OBJECT` or out-of-range of the local player (`0x5e9b5a`).
+//! (`0x5dd543`), and a `SMSG_DESTROY_OBJECT` of the local player (`0x4674cf` → `0x464920`, the
+//! player's deactivate `0x5e9b5a`); an out-of-range block skips the active player (`0x465f3e`).
 //! Ours is one schedule, [`WorldLeaveSweep`], run in place by [`run_leave_world_sweep`] so every
 //! leg tells the VM it was called from, the dying one on a `/reload`, before the caller goes on.
 //! Its callers are the UI shutdown's roots (`super::lifecycle`) and [`sweep_on_worldport`]; the
