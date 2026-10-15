@@ -31,6 +31,9 @@
 //! Narrower than 4:3 the loading screen's box overflows where the reference letterboxes top and
 //! bottom, so the whole screen differs there, the tip with it.
 //!
+//! The face is the locale's (`0x406663`-`0x406678`, table `0x82f018` by `[0xc0e080]`): koKR's
+//! `2002.TTF`, zhCN's and zhTW's `FZLBJW.TTF`, `FRIZQT__.TTF` for the other five ([`tip_font`]).
+//!
 //! The `|cffffd100Tip:|r ` prefix and trailing `\r\n` are in the DBC data and the escapes are
 //! interpreted (`0x5c28af`, flags bit `0x800` clear), so the line goes through
 //! [`benilla_ui::markup`].
@@ -309,7 +312,7 @@ fn drive_game_tip(
     n.left = Val::Percent(left);
     n.bottom = Val::Percent(bottom);
     n.width = Val::Percent(width);
-    font.font = crate::char_select::wow_font(&assets);
+    font.font = tip_font(&assets, crate::ui_script::client_locale().index());
     font.font_size = l.font_size;
     shadow.offset = l.shadow;
     shadow.color = Color::BLACK;
@@ -387,9 +390,43 @@ pub(crate) fn clear(tips: &mut GameTips) {
     tips.shown = None;
 }
 
+/// The tip's face by locale index: the table `0x82f018` (`s_loadingFontPaths`), koKR (1) `2002.TTF`,
+/// zhCN (4) and zhTW (5) `FZLBJW.TTF`, every other `FRIZQT__.TTF`.
+fn tip_font_path(locale: usize) -> &'static str {
+    match locale {
+        1 => "mpq://Fonts/2002.ttf",
+        4 | 5 => "mpq://Fonts/FZLBJW.ttf",
+        _ => "mpq://Fonts/FRIZQT__.ttf",
+    }
+}
+
+/// The tip's font, loaded off the patch chain like the UI font ([`crate::char_select::wow_font`]).
+fn tip_font(assets: &AssetServer, locale: usize) -> Handle<Font> {
+    assets.load(tip_font_path(locale))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x82f018` by locale index (enUS, koKR, frFR, deDE, zhCN, zhTW, esES, xxYY): koKR and the
+    /// two Chinese locales have faces of their own, every other index the Latin face.
+    #[test]
+    fn the_tip_face_follows_the_locale() {
+        let want = [
+            "FRIZQT__", "2002", "FRIZQT__", "FRIZQT__", "FZLBJW", "FZLBJW", "FRIZQT__", "FRIZQT__",
+        ];
+        for (locale, face) in want.into_iter().enumerate() {
+            assert_eq!(
+                tip_font_path(locale),
+                format!("mpq://Fonts/{face}.ttf"),
+                "locale {locale}"
+            );
+        }
+        // The index is clamped to the table by `Locale`, so none past it reaches here; the
+        // default arm is the Latin face.
+        assert_eq!(tip_font_path(99), "mpq://Fonts/FRIZQT__.ttf");
+    }
 
     fn tips(rows: &[&str]) -> GameTips {
         GameTips {
