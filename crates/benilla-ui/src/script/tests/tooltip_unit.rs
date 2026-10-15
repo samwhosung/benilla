@@ -548,6 +548,64 @@ fn a_players_level_line_ignores_the_snapshots_creature_type() {
     assert!(s.take_errors().is_empty());
 }
 
+/// A creature of type 10, "Not specified", has no word in the level line (`0x52a2c1`-`0x52a2c6`
+/// skip the type row), where `UnitCreatureType` still answers it (`0x51a2dc`): the line reads
+/// without a class slot, for a hostile unit as for a neutral one, and an ordinary type shows its
+/// word beside it.
+#[test]
+fn a_type_ten_creature_has_no_word_in_the_level_line_but_unitcreaturetype_answers_it() {
+    let mut s = script();
+    seed_level_strings(&mut s);
+    s.set_screen_size(800.0, 600.0);
+    s.set_player_req_state(PlayerReqState {
+        level: 60,
+        ..Default::default()
+    });
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "UF2"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+    "#,
+    )
+    .unwrap();
+    let creature = |reaction: u8, id: u32, word: &str| UnitState {
+        guid: 0xF130_0000_0000_0109,
+        exists: true,
+        has_object: true,
+        name: Some("Wisp".into()),
+        level: 60,
+        reaction,
+        creature_type: id,
+        creature_type_name: Some(word.into()),
+        ..Default::default()
+    };
+    for reaction in [2, 4] {
+        s.set_unit("target", Some(creature(reaction, 10, "Not specified")));
+        s.run(
+            r#"
+            TT:SetOwner(UF2, "ANCHOR_RIGHT"); TT:SetUnit("target")
+            assert(TTTextLeft2:GetText() == "[LEVEL 60]", "got " .. TTTextLeft2:GetText())
+        "#,
+        )
+        .unwrap_or_else(|e| panic!("reaction {reaction}: {e}"));
+        assert_eq!(
+            s.eval::<String>(r#"return UnitCreatureType("target")"#)
+                .unwrap(),
+            "Not specified"
+        );
+        s.set_unit("target", Some(creature(reaction, 7, "Humanoid")));
+        s.run(
+            r#"
+            TT:SetOwner(UF2, "ANCHOR_RIGHT"); TT:SetUnit("target")
+            assert(TTTextLeft2:GetText() == "[LEVEL_CLASS 60 Humanoid]", "got " .. TTTextLeft2:GetText())
+        "#,
+        )
+        .unwrap_or_else(|e| panic!("reaction {reaction}: {e}"));
+    }
+    assert!(s.take_errors().is_empty());
+}
+
 /// `world_tooltip_unit` fires the default anchor, renders, then fires `UPDATE_MOUSEOVER_UNIT`.
 #[test]
 fn world_hover_drive_and_health_watcher() {

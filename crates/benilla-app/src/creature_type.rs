@@ -275,10 +275,10 @@ mod tests {
         );
     }
 
-    /// Type 10, "Not specified", has a row and a word in the table, and the snapshot answers
-    /// none for it: the existing deviation keeps it out of the tooltip's level line.
+    /// Type 10, "Not specified", has a row and a word, and the snapshot carries both: the id for
+    /// the tooltip's own gate and the word `UnitCreatureType` answers (`0x51a2dc`).
     #[test]
-    fn type_ten_stays_wordless() {
+    fn type_ten_carries_its_word_and_its_id() {
         let names = names_with(72, 10);
         let words = words();
         let sources = CreatureTypeSources {
@@ -287,11 +287,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(sources.word(10), Some("지정되지 않음"));
-        assert_eq!(
-            crate::ui_unit::snapshot(&store(72, 0, 0), 0, None, 0, None, sources)
-                .creature_type_name,
-            None
-        );
+        let snap = crate::ui_unit::snapshot(&store(72, 0, 0), 0, None, 0, None, sources);
+        assert_eq!(snap.creature_type, 10);
+        assert_eq!(snap.creature_type_name.as_deref(), Some("지정되지 않음"));
     }
 
     /// The shipped `CreatureType.dbc` through the resolver at the install's locale: the eleven

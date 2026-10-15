@@ -873,6 +873,7 @@ pub(crate) fn snapshot(
     let race = store.0.unit_race().and_then(race_names);
     let class_id = store.0.unit_class();
     let class = class_id.and_then(class_names);
+    let creature_type = types.of(store);
     UnitState {
         exists: true,
         // A live descriptor is `0x468460` having succeeded, all of `UnitIsVisible` (`0x516030`).
@@ -908,7 +909,8 @@ pub(crate) fn snapshot(
         reaction,
         // The one resolver `0x605570` behind `UnitCreatureType` (`0x51a2bc`) and the tooltip's
         // type slot (`0x52a2e5`): the form's type, else the template's, else the race's.
-        creature_type_name: creature_type_word(types, types.of(store)),
+        creature_type_name: types.word(creature_type).map(str::to_string),
+        creature_type,
         race: race.map(|(n, _)| n.to_string()),
         race_file: race.map(|(_, f)| f.to_string()),
         class: class.map(|(n, _)| n.to_string()),
@@ -1111,19 +1113,6 @@ pub(crate) fn faction_group_localized(
         .faction_group_name(template.group_mask & 6)
         .map(str::to_string)
 }
-
-/// A creature type id's word at the install's locale, a creature's level-line class slot.
-fn creature_type_word(types: CreatureTypeSources<'_>, creature_type: u32) -> Option<String> {
-    // Deviation: 10, "Not specified", answers None because the word would print in the
-    // tooltip's level line; `UnitCreatureType` then answers nil where the reference names it.
-    if creature_type == CREATURE_TYPE_NOT_SPECIFIED {
-        return None;
-    }
-    types.word(creature_type).map(str::to_string)
-}
-
-/// `CreatureType.dbc` id 10, "Not specified".
-const CREATURE_TYPE_NOT_SPECIFIED: u32 = 10;
 
 /// Diff a token's snapshot against the last pushed and fire the per-field `UNIT_*` events. The
 /// watch-bridge arms fire off `edges`, as the reference's create runs no notify pass; the rest fire

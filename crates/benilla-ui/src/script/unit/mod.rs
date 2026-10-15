@@ -144,6 +144,9 @@ pub struct UnitState {
     /// race's. `UnitCreatureType` answers it, and a creature's level line takes it as its class
     /// slot; a player's reads race and class instead. `None` for type 0 or no descriptor.
     pub creature_type_name: Option<String>,
+    /// The id that resolver returned, 0 for none. The tooltip's level line leaves the word out for
+    /// type 10, "Not specified" (`0x52a2c6`), where `UnitCreatureType` answers it.
+    pub creature_type: u32,
     /// Creature rank 0..=4 as the reference's getter (`0x605620`) answers it, so already gated:
     /// 0 without a cached creature template or with a pet number. The tooltip's rank word,
     /// `UnitLevel`'s boss -1 and `UnitClassification` all read it.

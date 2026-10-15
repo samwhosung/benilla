@@ -36,6 +36,9 @@ pub enum TooltipTint {
     LockOpen,
 }
 
+/// `CreatureType.dbc` id 10, "Not specified".
+const CREATURE_TYPE_NOT_SPECIFIED: u32 = 10;
+
 /// The rank word's GlobalString key, from the builder's table `0x854158` (indexed at `0x52a5bd`
 /// and `0x52a5d4`): ranks 1 and 2 (elite, rare elite) are `ELITE`, 3 is `BOSS`, and 0 and 4 (rare)
 /// are the empty string `0x882748`.
@@ -69,7 +72,9 @@ fn level_line(lua: &Lua, u: &UnitState, player_level: u32) -> Option<String> {
             (None, Some(c)) => Some(c.clone()),
             (None, None) => None,
         }
-    } else if u.reaction != 0 && u.reaction <= 4 {
+    } else if u.reaction != 0 && u.reaction <= 4 && u.creature_type != CREATURE_TYPE_NOT_SPECIFIED {
+        // Type 10 is no word here (`0x52a2c1` resolves the type, `0x52a2c6` compares it with 10
+        // and skips the row); `UnitCreatureType` answers its word.
         u.creature_type_name.clone()
     } else {
         None
