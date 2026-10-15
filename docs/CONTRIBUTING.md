@@ -48,6 +48,25 @@ Past `run_with` and that folder, benilla opens a piece of itself to such a crate
 1.12.1 work creates that piece, never for the crate alone, and promises no stable API: a crate
 pins the benilla revision it builds on. What a crate cannot reach stays a fork's.
 
+## The reference
+
+[benilla-re](https://github.com/samwhosung/benilla-re) is the reverse engineering of the 1.12.1
+client that benilla is built against, read at its bytes, and the place to find what 1.12.1 does
+before you change benilla. Every client address a comment here cites is backed there, by a row
+or a finding.
+
+- **Look it up.** The site, `https://samwhosung.github.io/benilla-re/`, has a page per function,
+  global and struct, per system, and per Lua function, event, CVar and opcode;
+  `?0x5e6853` goes to whatever holds an address. For an agent, a clone beside this repo is
+  quicker: grep `symbols/functions.tsv` (a row per function: name, meaning, confidence, the
+  finding behind it), `tables/` (opcodes, events, CVars, Lua bindings, messages) and the docs
+  under `systems/`.
+- **Weigh it.** A row says how sure it is: `inferred` is a lead to check before you rest on it,
+  `verified` with proof `one` or `two` is one or two readings of the bytes.
+- **When it has a gap or is wrong,** take that to benilla-re: an issue there with what you need to
+  know, or a pull request that adds the finding (its `CONTRIBUTING.md` says how a finding is
+  written and checked). Then cite the client address here, as the comments do.
+
 ## How a change is judged
 
 1. `scripts/gates.sh` is green: fmt, clippy with warnings denied, the workspace tests (once
@@ -58,8 +77,8 @@ pins the benilla revision it builds on. What a crate cannot reach stays a fork's
 2. The reference fact is stated: what 1.12.1 does, and where that is known from (an entry in
    [benilla-re](https://github.com/samwhosung/benilla-re) by client address, the client's
    behaviour you observed, a DBC field, a FrameXML line, a packet capture). The names and shapes
-   under `reference/` are the surface benilla tracks. A fact benilla-re does not have yet can be
-   added there first.
+   under `reference/` are the surface benilla tracks. A fact benilla-re does not have yet is
+   added there first ("The reference").
 3. A comment where it matters, one line, saying what the code does and the 1.12 fact behind it.
    No history.
 4. The commit message says what changed, for a player or a developer, in one line.

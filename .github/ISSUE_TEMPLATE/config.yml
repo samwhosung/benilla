@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: A fact about the 1.12.1 client that is missing or wrong
+    url: https://github.com/samwhosung/benilla-re/issues
+    about: The reverse engineering lives in benilla-re; a gap or an error in it is filed there.
   - name: Discord
     url: https://discord.gg/wJSJx467G4
     about: Questions, ideas and chat.
