@@ -12,12 +12,22 @@
 //! Lua frame whose function carries a context decides, which is the reference's answer wherever
 //! the taint came from a function that is still running. A function carries a context when it was
 //! [`tag`]ged at compile (a `RunScript` chunk, an XML handler or a binding body an insecure addon
-//! loaded), or when its chunk is a file of an insecure addon (`@Interface\AddOns\<Folder>\…`).
+//! loaded), or when its chunk is a file or an inline `<Script>` block of a registered insecure
+//! addon (`Interface\AddOns\<Folder>\…`).
 //!
-//! Not modelled: a tainted value that is data (a string, a table, a number read from an addon's
-//! global and used by stock code), a tainted function that has returned, and the reset a script
-//! slot's own run does to the context (`0x7026ad`), so a stock handler an addon's call fires in
-//! place still reads as tainted.
+//! Not modelled, each a refusal the stack scan can miss or make:
+//! - a tainted value that is data (a string, table or number read from an addon's global and used
+//!   by stock code);
+//! - a tainted function that has returned, since only running frames are read;
+//! - a closure created inside a `RunScript` chunk, an XML handler or a `loadstring` chunk, which
+//!   carries its creator's context in the reference and is the client's here once the creator
+//!   is off the stack;
+//! - `SetScript` stamping the slot with the caller's context (`0x774a05`);
+//! - a value copied under an addon context being restamped with it (`0x6f3c73`);
+//! - the reset a script slot's own run does to the context (`0x7026ad`), so a stock handler an
+//!   addon's call fires in place still reads as tainted;
+//! - the rule that a binding body starts clean (`0x4b7aee`) is kept by `execute_binding` running
+//!   only from Rust at the top of the stack (`bindings.rs:632`, `:647`), which the scan relies on.
 
 use mlua::{Function, Lua, Table, Value};
 
