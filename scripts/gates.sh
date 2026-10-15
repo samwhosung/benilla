@@ -42,11 +42,12 @@ tree_key() {
         "$(shasum "$root/scripts/gates.sh" 2>/dev/null | cut -d' ' -f1)"
 }
 resolve_wow() { cargo run -q -p benilla-formats --example where 2>/dev/null || true; }
-# A delta only under docs/ or in top-level *.md files keeps the stamped verdict, since no gate
-# reads those paths; a gate that starts to read one must narrow this pattern.
+# A delta only under docs/, in top-level *.md files or in the issue and PR templates keeps the
+# stamped verdict, since no gate reads those paths; a gate that starts to read one must narrow
+# this pattern.
 docs_only_delta() { # $1 = stamped tree, $2 = current tree
     git cat-file -e "$1^{tree}" 2>/dev/null && git cat-file -e "$2^{tree}" 2>/dev/null || return 1
-    [ -z "$(git diff-tree -r --name-only "$1" "$2" 2>/dev/null | grep -vE '^(docs/|[^/]*\.md$)' || true)" ]
+    [ -z "$(git diff-tree -r --name-only "$1" "$2" 2>/dev/null | grep -vE '^(docs/|[^/]*\.md$|\.github/(ISSUE_TEMPLATE/|pull_request_template\.md$))' || true)" ]
 }
 key_start="$(tree_key || true)"
 if [ "${GATES_FORCE:-}" != "1" ] && [ -n "$key_start" ] && [ -f "$stamp" ]; then
