@@ -37,6 +37,13 @@ impl ShapeshiftForm {
         self.flags & 1 != 0
     }
 
+    /// Flag bit `0x8` of `flags1`: the form may still talk to NPCs. Without it `0x5f0130` refuses
+    /// the interaction (`ERR_CANT_INTERACT_SHAPESHIFTED`) and a change into the form closes the
+    /// open window (`0x5de072`).
+    pub fn allows_interaction(&self) -> bool {
+        self.flags & 0x8 != 0
+    }
+
     /// Clicking the active form's button cancels its aura (`CMSG_CANCEL_AURA`) unless bit `0x2`
     /// makes it a silent no-op (`CastShapeshiftForm` `0x4b4810`, guard at `0x4b4963`); the
     /// warrior stances (`0x7`) set it on 5875.

@@ -17,6 +17,9 @@ use benilla_world::schedule::WorldStage;
 mod latch;
 #[cfg(test)]
 mod latch_tests;
+mod release;
+#[cfg(test)]
+mod release_tests;
 
 pub(crate) use latch::{
     dispatch, fire, note_closed, queue, register, release, with_script, CoreCloses, InteractLatch,
@@ -44,6 +47,11 @@ impl Plugin for UiSessionPlugin {
                 (
                     // Before the feeds, so a walk-away's `*_CLOSED` lands the frame it happens.
                     latch::watch_interaction_range.before(crate::ui_script::UiFeed),
+                    // The unit events that release the latch, off the apply pass's field edges.
+                    release::release_on_field_edges
+                        .in_set(WorldStage::Net)
+                        .after(crate::net::apply_net_updates)
+                        .before(feed_interact_npc),
                     // Inside the net chain, after the apply pass that opens and closes windows
                     // and before the facing chain: a `MERCHANT_SHOW` handler reads
                     // `UnitName("NPC")` the frame it opens.

@@ -234,7 +234,7 @@ pub(crate) fn release(world: &mut World, cell: u64) {
 
 /// `0x4931c0(cell, dl = !goodbye)`: while the latch names `cell`, the unit's goodbye unless `dl`
 /// is set (`0x493208`), then `0x493310` whether or not the object is still there (`0x49321e`).
-fn release_cell(world: &mut World, cell: u64, goodbye: bool) {
+pub(crate) fn release_cell(world: &mut World, cell: u64, goodbye: bool) {
     let latched = world
         .get_resource::<InteractLatch>()
         .and_then(|l| l.guid)
@@ -244,6 +244,14 @@ fn release_cell(world: &mut World, cell: u64, goodbye: bool) {
             say(world, LatchVocal::Goodbye(cell));
         }
         dispatch(world);
+    }
+}
+
+/// `0x4931c0` on the latch itself (`ecx = 0xb4e2d0`): whatever it holds is released, with the
+/// goodbye unless `goodbye` is false.
+pub(crate) fn release_latch(world: &mut World, goodbye: bool) {
+    if let Some(guid) = world.get_resource::<InteractLatch>().and_then(|l| l.guid) {
+        release_cell(world, guid, goodbye);
     }
 }
 

@@ -21,8 +21,8 @@ use crate::ui_taxi::TaxiState;
 use crate::ui_trade::TradeSession;
 use crate::ui_trainer::TrainerOpen;
 
-const VENDOR: u64 = 0xF130_0000_0000_0001;
-const BANKER: u64 = 0xF130_0000_0000_0002;
+pub(super) const VENDOR: u64 = 0xF130_0000_0000_0001;
+pub(super) const BANKER: u64 = 0xF130_0000_0000_0002;
 const NPC: u64 = 0xF130_0000_0000_0003;
 
 /// The windows this harness opens, in `0x493310`'s order: every window on the latch.
@@ -63,7 +63,7 @@ fn event(window: W) -> &'static str {
 
 /// The windows on the latch with their cells, a wire, and a VM that records their closes. Every
 /// unit guid's entry is 0, which a type-9 template makes a book, so any NPC here can be read.
-fn harness() -> App {
+pub(super) fn harness() -> App {
     harness_with_wire().0
 }
 
@@ -109,7 +109,7 @@ fn harness_with_wire() -> (App, crossbeam_channel::Receiver<crate::net::ClientCo
     (app, rx)
 }
 
-fn latch(app: &App) -> Option<u64> {
+pub(super) fn latch(app: &App) -> Option<u64> {
     app.world().resource::<InteractLatch>().guid()
 }
 
@@ -149,7 +149,7 @@ fn greeting(npc: u64) -> QuestView {
 }
 
 /// Each window's open as its packet handler or click runs it, on `npc`.
-fn open(app: &mut App, window: W, npc: u64) {
+pub(super) fn open(app: &mut App, window: W, npc: u64) {
     let world = app.world_mut();
     match window {
         W::Trade => {
@@ -490,7 +490,7 @@ fn a_book_and_an_npc_window_close_each_other() {
 }
 
 /// The lines the latch asked for since the last call.
-fn vocals(app: &mut App) -> Vec<LatchVocal> {
+pub(super) fn vocals(app: &mut App) -> Vec<LatchVocal> {
     app.world_mut()
         .resource_mut::<Messages<LatchVocal>>()
         .drain()
