@@ -286,6 +286,7 @@ impl CastTargeting<'_, '_> {
                 types: CreatureTypeSources {
                     names: self.names.as_deref(),
                     forms: self.spells.as_deref().map(|s| &s.forms),
+                    ..Default::default()
                 },
                 group: GroupInputs {
                     self_guid: self.self_guid.0,

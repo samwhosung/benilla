@@ -119,6 +119,7 @@ impl BindChecks<'_, '_> {
             types: crate::creature_type::CreatureTypeSources {
                 names: self.names.as_deref(),
                 forms: self.spells.as_deref().map(|s| &s.forms),
+                ..Default::default()
             },
             group: super::group_relation::GroupInputs {
                 self_guid: me
@@ -1127,6 +1128,7 @@ mod tests {
                     types: crate::creature_type::CreatureTypeSources {
                         names: Some(&names),
                         forms: None,
+                        ..Default::default()
                     },
                     group: Default::default(),
                 },

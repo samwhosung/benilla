@@ -983,6 +983,7 @@ fn a_held_pet_names_its_templates_creature_type() {
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::net::SelfGuid>()
         .insert_resource(names)
+        .insert_resource(crate::target::CreatureTypes::korean_for_tests())
         .insert_resource(PetBar {
             spells: PetSpells {
                 pet_guid: PET,
@@ -1017,5 +1018,5 @@ fn a_held_pet_names_its_templates_creature_type() {
         .non_send_resource_mut::<benilla_ui::script::UiScript>()
         .eval::<Option<String>>("return UnitCreatureType('pet')")
         .unwrap();
-    assert_eq!(answer.as_deref(), Some("Demon"));
+    assert_eq!(answer.as_deref(), Some("악마"));
 }

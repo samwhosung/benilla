@@ -820,12 +820,14 @@ pub(crate) struct UnitStores<'w, 's> {
 }
 
 /// The client tables [`snapshot`] reads beside a descriptor, as one parameter for the feeders that
-/// sit at Bevy's 16-parameter limit: `ChrClasses.dbc` for the relic slot, and the form table
-/// the creature-type resolver's first stage reads. Each is absent without game data.
+/// sit at Bevy's 16-parameter limit: `ChrClasses.dbc` for the relic slot, the form table the
+/// creature-type resolver's first stage reads and `CreatureType.dbc` for its words. Each is absent
+/// without game data.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SnapshotTables<'w> {
     classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
+    creature_types: Option<Res<'w, crate::target::CreatureTypes>>,
 }
 
 impl SnapshotTables<'_> {
@@ -834,9 +836,13 @@ impl SnapshotTables<'_> {
         self.classes.as_deref().map(|t| &t.0)
     }
 
-    /// The creature-type resolver's sources: the name cache and the form table.
+    /// The creature-type resolver's sources: the name cache, the form table and the type words.
     pub(crate) fn types<'a>(&'a self, names: &'a NameCache) -> CreatureTypeSources<'a> {
-        CreatureTypeSources::of_resources(names, self.spells.as_deref())
+        CreatureTypeSources::of_resources(
+            names,
+            self.spells.as_deref(),
+            self.creature_types.as_deref(),
+        )
     }
 }
 
@@ -902,7 +908,7 @@ pub(crate) fn snapshot(
         reaction,
         // The one resolver `0x605570` behind `UnitCreatureType` (`0x51a2bc`) and the tooltip's
         // type slot (`0x52a2e5`): the form's type, else the template's, else the race's.
-        creature_type_name: creature_type_word(types.of(store)).map(str::to_string),
+        creature_type_name: creature_type_word(types, types.of(store)),
         race: race.map(|(n, _)| n.to_string()),
         race_file: race.map(|(_, f)| f.to_string()),
         class: class.map(|(n, _)| n.to_string()),
@@ -1106,25 +1112,18 @@ pub(crate) fn faction_group_localized(
         .map(str::to_string)
 }
 
-/// `CreatureType.dbc` id to the enUS word, a creature's level-line class slot.
-fn creature_type_word(t: u32) -> Option<&'static str> {
-    Some(match t {
-        1 => "Beast",
-        2 => "Dragonkin",
-        3 => "Demon",
-        4 => "Elemental",
-        5 => "Giant",
-        6 => "Undead",
-        7 => "Humanoid",
-        8 => "Critter",
-        9 => "Mechanical",
-        // The shipped table runs 1..11; the nameplate filter tests 11 (`0x605570`).
-        11 => "Totem",
-        // Deviation: 10, "Not specified", answers None because the word would print in the
-        // tooltip's level line; `UnitCreatureType` then answers nil where the reference names it.
-        _ => return None,
-    })
+/// A creature type id's word at the install's locale, a creature's level-line class slot.
+fn creature_type_word(types: CreatureTypeSources<'_>, creature_type: u32) -> Option<String> {
+    // Deviation: 10, "Not specified", answers None because the word would print in the
+    // tooltip's level line; `UnitCreatureType` then answers nil where the reference names it.
+    if creature_type == CREATURE_TYPE_NOT_SPECIFIED {
+        return None;
+    }
+    types.word(creature_type).map(str::to_string)
 }
+
+/// `CreatureType.dbc` id 10, "Not specified".
+const CREATURE_TYPE_NOT_SPECIFIED: u32 = 10;
 
 /// Diff a token's snapshot against the last pushed and fire the per-field `UNIT_*` events. The
 /// watch-bridge arms fire off `edges`, as the reference's create runs no notify pass; the rest fire
@@ -3958,6 +3957,8 @@ mod tests {
         spells.forms.insert(CAT_FORM, form(1));
         spells.forms.insert(NO_TYPE_FORM, form(-1));
         app.insert_resource(spells);
+        // The words are the table's own, not English: a koKR install's column.
+        app.insert_resource(crate::target::CreatureTypes::korean_for_tests());
         app.add_systems(Update, feed_units);
 
         let me = app
@@ -4006,44 +4007,44 @@ mod tests {
         app.update();
         assert_eq!(
             creature_type(&mut app, "player").as_deref(),
-            Some("Humanoid"),
+            Some("인간형"),
             "no form: the race's type"
         );
         shift(&mut app, me, CAT_FORM);
         assert_eq!(
             creature_type(&mut app, "player").as_deref(),
-            Some("Beast"),
+            Some("야수"),
             "Cat Form: the form's type, before the race's"
         );
         shift(&mut app, me, NO_TYPE_FORM);
         assert_eq!(
             creature_type(&mut app, "player").as_deref(),
-            Some("Humanoid"),
+            Some("인간형"),
             "a form of type -1 falls through to the race"
         );
         shift(&mut app, me, 0);
         assert_eq!(
             creature_type(&mut app, "player").as_deref(),
-            Some("Humanoid"),
+            Some("인간형"),
             "out of form again"
         );
 
         select(&mut app, wolf, WOLF);
         assert_eq!(
             creature_type(&mut app, "target").as_deref(),
-            Some("Beast"),
+            Some("야수"),
             "a creature's template type"
         );
         select(&mut app, druid, DRUID);
         assert_eq!(
             creature_type(&mut app, "target").as_deref(),
-            Some("Humanoid"),
+            Some("인간형"),
             "a Humanoid template"
         );
         shift(&mut app, druid, CAT_FORM);
         assert_eq!(
             creature_type(&mut app, "target").as_deref(),
-            Some("Beast"),
+            Some("야수"),
             "a form outranks the template, on a creature as on a player"
         );
     }

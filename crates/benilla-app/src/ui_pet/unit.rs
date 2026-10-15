@@ -46,8 +46,9 @@ pub(super) fn feed_pet_unit(
     mut removed_stores: RemovedComponents<ObjectStore>,
     mut names: ResMut<NameCache>,
     commands: Res<NetCommands>,
-    // The form table, the creature-type resolver's first stage.
+    // The form table, the creature-type resolver's first stage, and the type words.
     spells: Option<Res<crate::ui_action::Spells>>,
+    creature_types: Option<Res<crate::target::CreatureTypes>>,
     mut memory: Local<crate::ui_script::VmMemo<PetUnitMemory>>,
 ) {
     let Some(mut script) = script else {
@@ -86,7 +87,11 @@ pub(super) fn feed_pet_unit(
                 .resolve_unit(pet_guid, Some(store), &commands)
                 .map(str::to_string);
             // No `ChrClasses.dbc`: the reference reads a class only for TYPEMASK_PLAYER.
-            let types = CreatureTypeSources::of_resources(&names, spells.as_deref());
+            let types = CreatureTypeSources::of_resources(
+                &names,
+                spells.as_deref(),
+                creature_types.as_deref(),
+            );
             snapshot(store, pet_guid, name, 0, None, types)
         });
 

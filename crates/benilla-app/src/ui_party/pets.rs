@@ -917,6 +917,7 @@ pub(in crate::ui_party) mod tests {
     /// The resolver's inputs for the creature-type tests: Cat Form's row, and entry 69's template
     /// a Demon (an imp), so a pet's type is told from the race's Humanoid.
     fn seed_creature_types(app: &mut App) {
+        app.insert_resource(crate::target::CreatureTypes::korean_for_tests());
         let mut spells = crate::ui_action::Spells::empty_for_tests();
         spells.forms.insert(
             CAT_FORM,
@@ -971,10 +972,10 @@ pub(in crate::ui_party) mod tests {
 
         let creature_type =
             |app: &mut App, token: &str| text(app, &format!("UnitCreatureType('{token}')"));
-        assert_eq!(creature_type(&mut app, "party1").as_deref(), Some("Beast"));
+        assert_eq!(creature_type(&mut app, "party1").as_deref(), Some("야수"));
         assert_eq!(
             creature_type(&mut app, "partypet1").as_deref(),
-            Some("Demon"),
+            Some("악마"),
             "the pet's template"
         );
         assert_eq!(
@@ -987,7 +988,7 @@ pub(in crate::ui_party) mod tests {
         frame(&mut app);
         assert_eq!(
             creature_type(&mut app, "party1").as_deref(),
-            Some("Humanoid"),
+            Some("인간형"),
             "out of form: the race's type"
         );
     }
@@ -1030,19 +1031,19 @@ pub(in crate::ui_party) mod tests {
             |app: &mut App, token: &str| text(app, &format!("UnitCreatureType('{token}')"));
         assert_eq!(
             creature_type(&mut app, "raid1").as_deref(),
-            Some("Beast"),
+            Some("야수"),
             "our own row"
         );
         assert_eq!(
             creature_type(&mut app, "raid2").as_deref(),
-            Some("Beast"),
+            Some("야수"),
             "a held member's row"
         );
         set_fields(&mut app, me, &[(BYTES_1, 0)]);
         frame(&mut app);
         assert_eq!(
             creature_type(&mut app, "raid1").as_deref(),
-            Some("Humanoid"),
+            Some("인간형"),
             "out of form: our race's type"
         );
     }

@@ -196,6 +196,7 @@ mod tests {
         let types = CreatureTypeSources {
             names: Some(&names),
             forms: None,
+            ..Default::default()
         };
         let check = |def: &SpellDisplay, store: &ObjectStore| {
             passes_with(def, WORD_UNIT, false, store, types)
@@ -370,6 +371,7 @@ mod tests {
                 types: CreatureTypeSources {
                     names: Some(&names),
                     forms: None,
+                    ..Default::default()
                 },
                 group: Default::default(),
             };

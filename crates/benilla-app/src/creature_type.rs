@@ -6,28 +6,43 @@
 
 use std::collections::HashMap;
 
-use benilla_formats::ShapeshiftForm;
+use benilla_formats::{CreatureTypeTable, ShapeshiftForm};
 
 use crate::names::NameCache;
 use crate::net::ObjectStore;
+use crate::target::CreatureTypes;
 use crate::ui_action::Spells;
 
 /// What the resolver reads beside the unit's own fields: the creature template cache and the
-/// form table. A source that is absent resolves nothing at its stage.
+/// form table, and `CreatureType.dbc` for the id's word. A source that is absent resolves nothing
+/// at its stage.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct CreatureTypeSources<'a> {
     pub(crate) names: Option<&'a NameCache>,
     pub(crate) forms: Option<&'a HashMap<u32, ShapeshiftForm>>,
+    pub(crate) words: Option<&'a CreatureTypeTable>,
 }
 
 impl<'a> CreatureTypeSources<'a> {
-    /// The sources a system holds as resources: the name cache and, once `Spell.dbc` has loaded,
-    /// the form table it carries.
-    pub(crate) fn of_resources(names: &'a NameCache, spells: Option<&'a Spells>) -> Self {
+    /// The sources a system holds as resources: the name cache, once `Spell.dbc` has loaded the
+    /// form table it carries, and once `CreatureType.dbc` has loaded its words.
+    pub(crate) fn of_resources(
+        names: &'a NameCache,
+        spells: Option<&'a Spells>,
+        words: Option<&'a CreatureTypes>,
+    ) -> Self {
         Self {
             names: Some(names),
             forms: spells.map(|s| &s.forms),
+            words: words.map(|t| &t.0),
         }
+    }
+
+    /// The word of a creature type id: `CreatureType.dbc`'s string at the install's locale
+    /// (`0x51a2dc`, `0x52a4bd`). Type 0 has no row, and neither has an id past the table, so both
+    /// answer nothing (`0x51a2c1`, `0x51a2cd`).
+    pub(crate) fn word(&self, creature_type: u32) -> Option<&'a str> {
+        self.words?.name(creature_type)
     }
 
     /// The unit's creature type, 0 for none. The template stage answers whatever the record
@@ -124,6 +139,7 @@ mod tests {
         let sources = CreatureTypeSources {
             names: Some(&names),
             forms: Some(&forms),
+            ..Default::default()
         };
         // A cat-form player is a Beast; unshifted, a Humanoid by race.
         assert_eq!(sources.of(&store(0, 1, 1)), 1);
@@ -137,6 +153,7 @@ mod tests {
         let sources = CreatureTypeSources {
             names: Some(&humanoid),
             forms: Some(&forms),
+            ..Default::default()
         };
         assert_eq!(sources.of(&store(69, 0, 0)), 7);
         assert_eq!(
@@ -149,6 +166,7 @@ mod tests {
         let sources = CreatureTypeSources {
             names: Some(&untyped),
             forms: None,
+            ..Default::default()
         };
         assert_eq!(sources.of(&store(69, 1, 0)), 0);
     }
@@ -162,6 +180,7 @@ mod tests {
         let sources = CreatureTypeSources {
             names: Some(&names),
             forms: Some(&forms),
+            ..Default::default()
         };
         assert_eq!(sources.of(&store(69, 0, 0)), 0, "no template, race 0");
         assert_eq!(sources.of(&store(69, 0, 99)), 0, "no form row either");
@@ -181,6 +200,7 @@ mod tests {
         let sources = CreatureTypeSources {
             names: None,
             forms: Some(&forms),
+            ..Default::default()
         };
         // Cat, Travel, Aquatic, Bear, Dire Bear, Creature - Bear, Creature - Cat, Ghost Wolf.
         for id in [1, 3, 4, 5, 8, 14, 15, 16] {
@@ -203,33 +223,107 @@ mod tests {
         }
     }
 
+    /// The words `CreatureType.dbc` holds at some locale's column: whatever the table says, not
+    /// the English ones.
+    fn words() -> CreatureTypeTable {
+        CreatureTypes::korean_for_tests().0
+    }
+
     /// The unit snapshot carries the resolver's word for every unit, players included: a
     /// shapeshifted player a Beast, an unshifted one a Humanoid by race, a form of no type the
-    /// same, and a creature its template's.
+    /// same, and a creature its template's. The word is the table's own string, so a table in
+    /// another language reaches `UnitCreatureType` and the tooltip as that language.
     #[test]
     fn the_snapshot_carries_the_resolved_type_word() {
         let names = names_with(69, 1);
         let forms = forms();
+        let words = words();
         let sources = CreatureTypeSources {
             names: Some(&names),
             forms: Some(&forms),
+            words: Some(&words),
         };
         let word = |store: &ObjectStore| {
             crate::ui_unit::snapshot(store, 0, None, 0, None, sources).creature_type_name
         };
-        assert_eq!(word(&store(0, 1, 1)).as_deref(), Some("Beast"), "cat form");
-        assert_eq!(
-            word(&store(0, 1, 0)).as_deref(),
-            Some("Humanoid"),
-            "no form"
-        );
-        assert_eq!(
-            word(&store(0, 1, 2)).as_deref(),
-            Some("Humanoid"),
-            "type -1"
-        );
-        assert_eq!(word(&store(69, 0, 0)).as_deref(), Some("Beast"), "template");
+        assert_eq!(word(&store(0, 1, 1)).as_deref(), Some("야수"), "cat form");
+        assert_eq!(word(&store(0, 1, 0)).as_deref(), Some("인간형"), "no form");
+        assert_eq!(word(&store(0, 1, 2)).as_deref(), Some("인간형"), "type -1");
+        assert_eq!(word(&store(69, 0, 0)).as_deref(), Some("야수"), "template");
         assert_eq!(word(&store(70, 0, 0)), None, "uncached: race 0, no type");
+        // A type the table has no row for (4, Elemental) has no word.
+        let elemental = names_with(71, 4);
+        let sources = CreatureTypeSources {
+            names: Some(&elemental),
+            words: Some(&words),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::ui_unit::snapshot(&store(71, 0, 0), 0, None, 0, None, sources)
+                .creature_type_name,
+            None
+        );
+        // Without the table, as before `CreatureType.dbc` loads, no unit has a word.
+        let sources = CreatureTypeSources {
+            names: Some(&names),
+            forms: Some(&forms),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::ui_unit::snapshot(&store(0, 1, 1), 0, None, 0, None, sources).creature_type_name,
+            None
+        );
+    }
+
+    /// Type 10, "Not specified", has a row and a word in the table, and the snapshot answers
+    /// none for it: the existing deviation keeps it out of the tooltip's level line.
+    #[test]
+    fn type_ten_stays_wordless() {
+        let names = names_with(72, 10);
+        let words = words();
+        let sources = CreatureTypeSources {
+            names: Some(&names),
+            words: Some(&words),
+            ..Default::default()
+        };
+        assert_eq!(sources.word(10), Some("지정되지 않음"));
+        assert_eq!(
+            crate::ui_unit::snapshot(&store(72, 0, 0), 0, None, 0, None, sources)
+                .creature_type_name,
+            None
+        );
+    }
+
+    /// The shipped `CreatureType.dbc` through the resolver at the install's locale: the eleven
+    /// words the stock tooltip and `UnitCreatureType` print, and enGB's are enUS's.
+    #[test]
+    fn the_shipped_words_are_the_installs_own() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let table = benilla_formats::load_creature_type_table(&mut chain).expect("CreatureType");
+        let sources = CreatureTypeSources {
+            words: Some(&table),
+            ..Default::default()
+        };
+        if chain.locale().index() == 0 {
+            for (id, word) in [
+                (1, "Beast"),
+                (2, "Dragonkin"),
+                (3, "Demon"),
+                (4, "Elemental"),
+                (5, "Giant"),
+                (6, "Undead"),
+                (7, "Humanoid"),
+                (8, "Critter"),
+                (9, "Mechanical"),
+                (10, "Not specified"),
+                (11, "Totem"),
+            ] {
+                assert_eq!(sources.word(id), Some(word), "type {id}");
+            }
+        }
+        assert_eq!(sources.word(0), None);
+        assert_eq!(sources.word(12), None);
     }
 
     /// The frozen race table against the shipped `ChrRaces.dbc`.

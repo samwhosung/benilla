@@ -10,7 +10,7 @@
 //! [`commit`] through `SetSelection` (`0x493540`), the attack acquire (`0x612df0` at `0x6130b5`),
 //! the ATTACKERSTATEUPDATE acquire (`0x6259c9`–`0x6259fe`) and the 41 yd range.
 
-use benilla_formats::CreatureTypeFlags;
+use benilla_formats::CreatureTypeTable;
 use benilla_protocol::{guid, EntityKind};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -154,17 +154,32 @@ fn combat_with_me(store: &ObjectStore, me: Option<u64>) -> bool {
     me.is_some() && store.0.unit_target() == me && store.0.unit_flags() & (1 << 19) != 0
 }
 
-/// `CreatureType.dbc`'s flags, whose no-TAB bit is set on type 8, Critter, alone (Totem reads 0).
-/// Absent after a load failure, when nothing is filtered.
+/// `CreatureType.dbc`: the flags, whose no-TAB bit is set on type 8, Critter, alone (Totem reads
+/// 0), and the type words at the install's locale. Absent after a load failure, when nothing is
+/// filtered and no unit has a type word.
 #[derive(Resource)]
-pub(crate) struct CreatureTypes(CreatureTypeFlags);
+pub(crate) struct CreatureTypes(pub(crate) CreatureTypeTable);
+
+#[cfg(test)]
+impl CreatureTypes {
+    /// The words of a koKR install's column, for a test that must tell the table's word from
+    /// English: Beast, Demon, Humanoid and "Not specified".
+    pub(crate) fn korean_for_tests() -> Self {
+        Self(CreatureTypeTable::from_rows([
+            (1, "야수", 0),
+            (3, "악마", 0),
+            (7, "인간형", 0),
+            (10, "지정되지 않음", 0),
+        ]))
+    }
+}
 
 pub(super) fn load_creature_types(mut commands: Commands, world_assets: Option<Res<WorldAssets>>) {
     let Some(world_assets) = world_assets else {
         return;
     };
     let mut chain = world_assets.chain.lock_recover();
-    match benilla_formats::load_creature_type_flags(&mut chain) {
+    match benilla_formats::load_creature_type_table(&mut chain) {
         Ok(flags) => {
             info!("creature types: {} rows", flags.len());
             commands.insert_resource(CreatureTypes(flags));

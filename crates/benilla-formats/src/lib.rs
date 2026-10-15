@@ -88,7 +88,7 @@ pub use factions::{
     FactionInfo, FactionTemplate, Reaction,
 };
 mod creature_types;
-pub use creature_types::{load_creature_type_flags, CreatureTypeFlags};
+pub use creature_types::{load_creature_type_table, CreatureTypeTable};
 /// The chat language scramble, the reference's `0x49b560`.
 mod garble;
 pub use garble::{garble, garble_chat, Garble, FLUENT_SKILL};

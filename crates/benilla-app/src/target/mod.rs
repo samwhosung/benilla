@@ -73,7 +73,7 @@ pub(crate) use relations::{
 // pet bar's; the melee probe's press with nothing selected.
 #[cfg(test)]
 pub(crate) use scan::LastEnemy;
-pub(crate) use scan::{AttackNearestRequest, AttackPick};
+pub(crate) use scan::{AttackNearestRequest, AttackPick, CreatureTypes};
 // The chat layer's by-name asks (`/target`, `/assist`), and the typemask `TargetByName`'s
 // candidate feed shares.
 pub(crate) use by_name::{AssistRequest, Candidacy, NameSearch, PlayerLookup, TargetByNameRequest};

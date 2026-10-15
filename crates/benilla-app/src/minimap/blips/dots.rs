@@ -230,6 +230,7 @@ pub(in crate::minimap) fn emit_tracking_dots(
     let types = CreatureTypeSources {
         names: Some(names),
         forms,
+        ..Default::default()
     };
     for (guid, net, tf, store) in candidates.iter() {
         if !matches!(net.kind, EntityKind::Unit | EntityKind::Player) {
@@ -515,6 +516,7 @@ mod tests {
             CreatureTypeSources {
                 names: Some(&NameCache::default()),
                 forms: Some(&forms),
+                ..Default::default()
             }
             .of(&cat_druid),
         );
