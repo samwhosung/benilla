@@ -533,8 +533,8 @@ fn an_inserts_prune_fires_only_the_inserts_own_flush() {
     assert!(rig.frame().is_empty(), "and nothing follows");
 }
 
-/// An insert's prune is invisible to `GetPetActionCooldown`: a running recovery and a parked
-/// record whose timers have run down push what they pushed before, the same start included.
+/// An insert's prune is invisible to `GetPetActionCooldown`: a running recovery pushes what it
+/// pushed before, the same start included, and a parked record the same duration and enable.
 #[test]
 fn an_insert_changes_no_bar_read_of_the_records_that_stay() {
     let mut rig = rig(
@@ -571,5 +571,12 @@ fn an_insert_changes_no_bar_read_of_the_records_that_stay() {
         running,
         "the running recovery, its start too"
     );
-    assert_eq!(rig.cooldown(3), parked_read, "the parked record");
+    // A parked leg reads a start of the query's now (`0x6e1517`), so only its duration and enable
+    // are stable.
+    let parked_after = rig.cooldown(3);
+    assert_eq!(
+        (parked_after.1, parked_after.2),
+        (parked_read.1, parked_read.2),
+        "the parked record"
+    );
 }
