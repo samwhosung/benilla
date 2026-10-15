@@ -98,7 +98,11 @@ impl Loader<'_> {
             .set_mode(mlua::ChunkMode::Text)
             .into_function()
         {
-            Ok(f) => Some(f),
+            Ok(f) => {
+                // An insecure addon's handler is its code whoever fires it ([`crate::script::taint`]).
+                crate::script::taint::tag_for_load(self.lua(), &f);
+                Some(f)
+            }
             Err(e) => {
                 self.report
                     .raise(format!("{dbg}: compiling <{name}>: {e}"), &e);

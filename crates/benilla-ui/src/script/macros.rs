@@ -365,8 +365,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // or number and the icon a number or numeric string, else the usage text (`0x84cb74`) raises.
     // `iconIndex` is an index into the chooser list. An empty name raises (`0x84cbb4`, tested on
     // the first byte, so a blank one is a name), and so does a full tab (`0x84cbdc`); a made macro
-    // answers exactly its new 1-based index (`0x4f16ce`). Not modelled: the script-context gate
-    // `0x494a50(7)` ahead of the body, which has no taint to read here.
+    // answers exactly its new 1-based index (`0x4f16ce`). The gate `0x494a50(7)` ahead of the body
+    // passes every context (`0x494b54` maps tag 7 to the arm that returns 1).
     g.set(
         "CreateMacro",
         lua.create_function(|lua, args: MultiValue| {

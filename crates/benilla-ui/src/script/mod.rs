@@ -112,6 +112,7 @@ mod item_text;
 pub mod keybind;
 mod keyboard;
 mod layer_batch;
+pub(crate) mod taint;
 pub(crate) mod texel;
 pub(crate) mod use_gates;
 pub(crate) use keyboard::enable_for_script;
@@ -573,6 +574,7 @@ fn install_framescript(vm: VmKind) -> mlua::Result<Lua> {
     stdlib::sandbox(&lua)?;
     // Before the stdlib layer, so its aliases bind the 5.0-shaped functions.
     lua50::install(&lua)?;
+    taint::install(&lua)?;
     stdlib::install(&lua)?;
 
     // `0x51bb20` (table `0x8503f4`): `GetTime`, `GetGameTime` and `ConsoleExec`. `ReadFile`,

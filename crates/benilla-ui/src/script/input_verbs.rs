@@ -6,20 +6,25 @@
 //! ([`FiredInput`]), and the targeting and attack calls go through the call queue
 //! ([`ScriptCall`]), so a macro's `TargetNearestEnemy()` then `/cast` casts at the new target.
 //!
-//! Every movement function but the mouselook three opens on the hardware-event gate `0x494a50`
-//! with tag 0. Untainted, it passes only inside a real input event, which for a binding body is
-//! `CBindings::ExecuteBinding 0x4b7990` on the stack (`[[0xb71290]+0xd8]`, raised at `0x4b7b02`);
-//! tainted code (a macro, `RunScript`, an addon's own) is refused. So a key's body moves and a
-//! `/script MoveForwardStart()` does not. benilla has no taint model, so here the gate is "a
-//! binding body is running" ([`UiScript::execute_binding`]), which refuses the same callers, silently
-//! where the reference fires `MACRO_ACTION_FORBIDDEN` (431) or `ADDON_ACTION_FORBIDDEN` (432).
-//! The camera table and the main-table verbs have no gate.
+//! Every movement function but the mouselook three opens on the protected-action gate `0x494a50`
+//! with tag 0, which is all twenty-three of its tag-0 callers. Whose code runs ([`taint`]) decides
+//! first. Context 0 passes only inside a real input event, which for a binding body is
+//! `CBindings::ExecuteBinding 0x4b7990` on the stack (`[[0xb71290]+0xd8]`, raised at `0x4b7b02`),
+//! and is refused silently otherwise. Any other context is refused whatever input event runs
+//! (`0x494ab8`), and the refusal signals `MACRO_ACTION_FORBIDDEN` for a `RunScript` chunk or
+//! `ADDON_ACTION_FORBIDDEN` with the addon's name for any other (`0x494ac6`-`0x494afb`), once at
+//! a time ([`InputState::refusing`]). So a key's stock body moves, and `/script MoveForwardStart()`,
+//! an addon's own call and an insecure addon's binding body do not and say so. The edit box's enter
+//! script and a mouse handler, the other two input events the gate reads (`0xcf4dc4`, `0xcf4da0`),
+//! are not raised here. The camera table and the main-table verbs have no tag-0 gate.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
 use super::calls::{NearestMode, ScriptCall};
-use super::{Model, UiScript};
+use super::taint::{self, Context};
+use super::tick::fire_event_into;
+use super::{Model, ScriptValue, UiScript};
 
 /// A held movement command: one bit of the reference's `[InputControl+4]` word, set by its Start
 /// and cleared by its Stop through `0x515090`.
@@ -77,6 +82,9 @@ pub(crate) struct InputState {
     queue: Vec<BindingInput>,
     /// How many binding bodies are running: the hardware-event gate's `[[0xb71290]+0xd8]`.
     binding_depth: u32,
+    /// `[0xb4e3e4]`: set while a refusal's event is being signalled, so a handler that calls a
+    /// gated function in turn is refused without a second event (`0x494abf`, `0x494acc`).
+    refusing: bool,
     /// `[InputControl+4] & 1`, the TurnOrAction channel `IsMouselooking` tests (`0x514278`), as
     /// the app pushed it or a `MouselookStart`/`Stop` since moved it.
     turn_or_action: bool,
@@ -123,10 +131,46 @@ impl UiScript {
     }
 }
 
-/// The hardware-event gate `0x494a50(0)`: inside a binding body.
+/// Whether a binding body is running: the gate's input-event flag `[[0xb71290]+0xd8]`.
 fn in_binding(lua: &Lua) -> bool {
     let model = lua.app_data_ref::<Model>().expect("model app_data");
     model.input.binding_depth > 0
+}
+
+/// The gate `0x494a50(0)`, whether the call may go on. Code of the client's own passes inside a
+/// binding body (`0x494b1a`-`0x494b3c`); any other code is refused with its event.
+fn gate(lua: &Lua) -> bool {
+    match taint::current(lua) {
+        Context::Client => in_binding(lua),
+        context => {
+            refuse(lua, &context);
+            false
+        }
+    }
+}
+
+/// The refusal arm `0x494ab8`: `MACRO_ACTION_FORBIDDEN` (`0x1af`) for a `RunScript` chunk's
+/// context, else `ADDON_ACTION_FORBIDDEN` (`0x1b0`) with the context's text, signalled in place.
+fn refuse(lua: &Lua, context: &Context) {
+    {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if std::mem::replace(&mut model.input.refusing, true) {
+            return;
+        }
+    }
+    match context {
+        Context::Macro => fire_event_into(lua, "MACRO_ACTION_FORBIDDEN", Vec::new()),
+        Context::Addon(name) => fire_event_into(
+            lua,
+            "ADDON_ACTION_FORBIDDEN",
+            vec![ScriptValue::Str(name.clone())],
+        ),
+        Context::Client => {}
+    }
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .input
+        .refusing = false;
 }
 
 fn push(lua: &Lua, input: BindingInput) {
@@ -165,7 +209,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // ── The movement table `0x8500b8` ──────────────────────────────────────────────────────
-    // Each Start/Stop is `0x494a50(0)`, then `0x515090(bit, set, time, 0)`; nothing is returned,
+    // Each Start/Stop is `0x494a50(0)` ([`gate`]), then `0x515090(bit, set, time, 0)`; nothing is returned,
     // and no argument is read but `CameraOrSelectOrMoveStop`'s sticky flag (`0x5141f6`), which
     // nothing here acts on.
     let held: [(&str, &str, HeldInput); 8] = [
@@ -205,7 +249,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             start,
             lua.create_function(move |lua, _: MultiValue| {
-                if in_binding(lua) {
+                if gate(lua) {
                     push(lua, BindingInput::Start(input));
                 }
                 Ok(())
@@ -214,7 +258,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             stop,
             lua.create_function(move |lua, _: MultiValue| {
-                if in_binding(lua) {
+                if gate(lua) {
                     push(lua, BindingInput::Stop(input));
                 }
                 Ok(())
@@ -232,7 +276,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, _: MultiValue| {
-                if in_binding(lua) {
+                if gate(lua) {
                     push(lua, BindingInput::Fire(input));
                 }
                 Ok(())
@@ -263,17 +307,23 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             })?,
         )?;
     }
-    // Not built, so these answer and do nothing: the pitch pair (`0x400`/`0x800`), since the
-    // mover has no keyboard pitch axis, so PITCHUP and PITCHDOWN (INSERT, DELETE) do nothing.
-    inert(
-        lua,
-        &[
-            "PitchUpStart",
-            "PitchUpStop",
-            "PitchDownStart",
-            "PitchDownStop",
-        ],
-    )?;
+    // The pitch pair (`0x400`/`0x800`) opens on the same gate (`0x51406a`-`0x5140fa`) and acts on
+    // nothing here, since the mover has no keyboard pitch axis, so PITCHUP and PITCHDOWN (INSERT,
+    // DELETE) do nothing.
+    for name in [
+        "PitchUpStart",
+        "PitchUpStop",
+        "PitchDownStart",
+        "PitchDownStop",
+    ] {
+        g.set(
+            name,
+            lua.create_function(|lua, _: MultiValue| {
+                gate(lua);
+                Ok(())
+            })?,
+        )?;
+    }
 
     // ── The camera table `0x84f7a0` ────────────────────────────────────────────────────────
     g.set(

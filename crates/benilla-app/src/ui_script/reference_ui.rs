@@ -1822,15 +1822,6 @@ mod tests {
         const UNPRODUCED: &[(&str, &str)] = &[
             // ── The stock `UIParent.lua`'s listeners first, then the other files' ──
             (
-                "ADDON_ACTION_FORBIDDEN",
-                "UIParent.lua — the protected-action refusal; benilla has no protected-call \
-                 taint model, so nothing can raise it",
-            ),
-            (
-                "MACRO_ACTION_FORBIDDEN",
-                "UIParent.lua — the macro half of ADDON_ACTION_FORBIDDEN, same reason",
-            ),
-            (
                 "GUILD_INVITE_CANCEL",
                 "UIParent.lua — the invite popup's hide. The 5875 client registers it, and its \
                  signal wrapper `0x48f470` has no caller and no stored address, so nothing \

@@ -116,6 +116,9 @@ struct Entry {
     hidden: bool,
     /// The `<Binding>` element's Lua chunk, verbatim.
     body: String,
+    /// The insecure addon whose load registered it, whose code the body is (`0x51f443`,
+    /// [`super::taint`]); `None` for the core's and a secure addon's.
+    context: Option<String>,
 }
 
 /// One row of the list `GetNumBindings`/`GetBinding` walk, in load order.
@@ -290,7 +293,12 @@ impl KeybindState {
     /// header opens a `HEADER_<addon>` row, where the reference files those rows under the
     /// previous file's last header, because under a foreign header the player could not find
     /// them. The core file passes `None` and is read as the reference reads it.
-    fn register(&mut self, fallback_header: Option<&str>, bindings: &[Binding]) {
+    fn register(
+        &mut self,
+        fallback_header: Option<&str>,
+        context: Option<&str>,
+        bindings: &[Binding],
+    ) {
         let mut opened = false;
         for b in bindings {
             if b.platform.as_deref().is_some_and(|p| p != THIS_PLATFORM) {
@@ -313,6 +321,7 @@ impl KeybindState {
                 run_on_up: b.run_on_up,
                 hidden: b.hidden,
                 body: b.body.clone(),
+                context: context.map(str::to_owned),
             });
             self.rows.push(Row::Command(idx));
         }
@@ -329,13 +338,13 @@ impl super::UiScript {
     /// Register the core's `Interface\FrameXML\Bindings.xml`, at the reference's point in the UI
     /// load: after the `FrameXML.toc` walk (`0x48ffed`), before the addons (`0x490018`).
     pub fn register_bindings(&self, bindings: &[Binding]) {
-        self.model_mut().keybinds.register(None, bindings);
+        self.model_mut().keybinds.register(None, None, bindings);
     }
 
     /// Register one addon's parsed `Bindings.xml`, at the reference's point in the addon load:
     /// after its `.toc` files, before its saved variables (`0x51f443`).
     pub fn register_addon_bindings(&self, addon: &str, bindings: &[Binding]) {
-        self.model_mut().keybinds.register(Some(addon), bindings);
+        register_addon_bindings(self.lua(), addon, bindings);
     }
 
     /// Set 0, the defaults, from `WTF\DefaultBindings.wtf` ([`parse_bindings_wtf`]), as
@@ -428,10 +437,12 @@ impl super::UiScript {
 /// Register one addon's `Bindings.xml` from a bare `&Lua`: `LoadAddOn` runs inside a Lua binding
 /// with no `UiScript` to reach.
 pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[Binding]) {
-    lua.app_data_mut::<Model>()
-        .expect("model app_data")
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    // The context the load runs under: the addon's name unless it is secure (`0x51f387`).
+    let context = model.exec_context.borrow().clone();
+    model
         .keybinds
-        .register(Some(addon), bindings);
+        .register(Some(addon), context.as_deref(), bindings);
 }
 
 /// `CBindings::RunCommand` (`0x4b7b50`): look the command up by name (`0x4b7b77`); on a release
@@ -440,7 +451,7 @@ pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[Bindin
 /// 1.12 client's in-world `_G` has none (`reference/lua_globals.tsv`). `Ok(false)` when nothing
 /// ran.
 pub(crate) fn run_command(lua: &Lua, command: &str, down: bool) -> mlua::Result<bool> {
-    let (name, body) = {
+    let (name, body, context) = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
         let kb = &model.keybinds;
         let Some(&i) = kb.by_name.get(&command.to_ascii_uppercase()) else {
@@ -450,15 +461,23 @@ pub(crate) fn run_command(lua: &Lua, command: &str, down: bool) -> mlua::Result<
         if !down && !e.run_on_up {
             return Ok(false);
         }
-        (e.name.clone(), e.body.clone())
+        (e.name.clone(), e.body.clone(), e.context.clone())
     };
     let g = lua.globals();
     g.set("keystate", if down { "down" } else { "up" })?;
+    // The body was compiled under its addon's context when the file loaded (`0x4b73f9`), and the
+    // runner's call of it makes that the context again (`0x704cf0`).
     let ran = lua
         .load(body.as_str())
         .set_name(name)
         .set_mode(mlua::ChunkMode::Text)
-        .exec();
+        .into_function()
+        .and_then(|chunk| {
+            if let Some(addon) = context {
+                super::taint::tag(lua, &chunk, &super::taint::Context::Addon(addon));
+            }
+            chunk.call::<()>(())
+        });
     g.set("keystate", Value::Nil)?;
     ran.map(|()| true)
 }

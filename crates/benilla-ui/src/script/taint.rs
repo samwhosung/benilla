@@ -1,0 +1,121 @@
+//! The execution context word `[0xceeac0]` as the protected-action gate `0x494a50` reads it.
+//!
+//! The reference stamps every Lua value with the context that made it and makes a value's stamp
+//! the current context whenever the VM copies it. Context 0 is the client's own code; a script
+//! run by `RunScript` carries `[0x83de24]`, the empty string's address (`0x48b9bb`), and an
+//! insecure addon's files and `Bindings.xml` its name (`0x51f387`). So a function defined by one
+//! stays that one's whoever calls it, and what a tainted function calls is tainted with it.
+//!
+//! benilla has no stamp on its values. [`current`] reads the call stack instead: the innermost
+//! Lua frame whose function carries a context decides, which is the reference's answer wherever
+//! the taint came from a function that is still running. A function carries a context when it was
+//! [`tag`]ged at compile (a `RunScript` chunk, an XML handler or a binding body an insecure addon
+//! loaded), or when its chunk is a file of an insecure addon (`@Interface\AddOns\<Folder>\…`).
+//!
+//! Not modelled: a tainted value that is data (a string, a table, a number read from an addon's
+//! global and used by stock code), a tainted function that has returned, and the reset a script
+//! slot's own run does to the context (`0x7026ad`), so a stock handler an addon's call fires in
+//! place still reads as tainted.
+
+use mlua::{Function, Lua, Table, Value};
+
+use super::Model;
+
+/// The registry table of tagged functions, keyed weakly by the function.
+const REG_FN_CONTEXT: &str = "__benilla_fn_context";
+
+/// A tagged function's value for a `RunScript` chunk; an addon's is its name.
+const MACRO_TAG: i64 = 1;
+
+/// Whose code is running.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Context {
+    /// Context 0: the client's own code, stock FrameXML and benilla's layer.
+    Client,
+    /// `[0x83de24]`: a script `RunScript` ran, so a `/script` line or a macro's.
+    Macro,
+    /// An insecure addon's name (`[rec+0x14]`).
+    Addon(String),
+}
+
+/// Make the registry table that [`tag`] fills.
+pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
+    let tags = lua.create_table()?;
+    let meta = lua.create_table()?;
+    meta.set("__mode", "k")?;
+    tags.set_metatable(Some(meta))?;
+    lua.set_named_registry_value(REG_FN_CONTEXT, tags)
+}
+
+/// Stamp `f` with the context it was made under. [`Context::Client`] is the default and stamps
+/// nothing.
+pub(crate) fn tag(lua: &Lua, f: &Function, context: &Context) {
+    let value = match context {
+        Context::Client => return,
+        Context::Macro => Value::Integer(MACRO_TAG),
+        Context::Addon(name) => match lua.create_string(name) {
+            Ok(s) => Value::String(s),
+            Err(_) => return,
+        },
+    };
+    if let Ok(tags) = lua.named_registry_value::<Table>(REG_FN_CONTEXT) {
+        let _ = tags.raw_set(f.clone(), value);
+    }
+}
+
+/// [`tag`] with the context a load is under now ([`Model::exec_context`]): an insecure addon's
+/// name while its files load, else nothing.
+pub(crate) fn tag_for_load(lua: &Lua, f: &Function) {
+    let context = lua
+        .app_data_ref::<Model>()
+        .and_then(|model| model.exec_context.borrow().clone());
+    if let Some(name) = context {
+        tag(lua, f, &Context::Addon(name));
+    }
+}
+
+/// The addon a chunk name belongs to: `@Interface\AddOns\<Folder>\<file>`
+/// ([`super::addon_chunk_name`]), and only while that addon is insecure, since a secure one runs
+/// under context 0 (`0x51f37e`-`0x51f387`). The registry row's own spelling of the name is the
+/// context word; a folder it does not know is insecure, as a record starts (`0x5205b6`).
+fn addon_of_chunk(model: &Model, source: &str) -> Option<String> {
+    let rest = source.strip_prefix("@Interface\\AddOns\\")?;
+    let folder = rest.split_once('\\')?.0;
+    let row = model
+        .addons
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case(folder));
+    match row {
+        Some(a) if a.security == super::AddonSecurity::Secure => None,
+        Some(a) => Some(a.name.clone()),
+        None => Some(folder.to_owned()),
+    }
+}
+
+/// The context word the running call carries: the innermost Lua frame's, [`Context::Client`] when
+/// none is tagged.
+pub(crate) fn current(lua: &Lua) -> Context {
+    let tags: Option<Table> = lua.named_registry_value(REG_FN_CONTEXT).ok();
+    let mut level = 0;
+    loop {
+        let frame = lua.inspect_stack(level, |debug| {
+            if let Some(tags) = &tags {
+                match tags.raw_get::<Value>(debug.function()) {
+                    Ok(Value::Integer(_)) => return Some(Context::Macro),
+                    Ok(Value::String(name)) => {
+                        return Some(Context::Addon(name.to_string_lossy()));
+                    }
+                    _ => {}
+                }
+            }
+            let source = debug.source().source;
+            let model = lua.app_data_ref::<Model>()?;
+            addon_of_chunk(&model, source.as_deref()?).map(Context::Addon)
+        });
+        match frame {
+            None => return Context::Client,
+            Some(Some(context)) => return context,
+            Some(None) => level += 1,
+        }
+    }
+}

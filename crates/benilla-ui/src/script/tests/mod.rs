@@ -54,6 +54,7 @@ mod nameplate;
 mod numeric_shape_gate;
 mod object_model;
 mod one_or_nil_methods;
+mod protected_gate;
 mod reference_surface;
 mod region_map;
 mod regions;

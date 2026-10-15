@@ -183,8 +183,8 @@ fn table(t: &Table, depth: usize, seen: &mut HashSet<*const c_void>) -> Option<V
     Some(out)
 }
 
-/// Register `RegisterForSave`, with no taint gate: the reference refuses it outside Blizzard code
-/// (`0x4884e0`), and benilla has no taint model.
+/// Register `RegisterForSave`, with no context gate: the reference refuses it outside Blizzard code
+/// (`0x4884e0`), which [`super::taint::current`] could answer.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "RegisterForSave",
