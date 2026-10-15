@@ -153,3 +153,25 @@ fn a_non_master_gets_the_no_guild_greeting_and_no_save() {
     assert!(!s.eval::<bool>("return TabardFrame:IsVisible()").unwrap());
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
+
+/// `OPEN_TABARD_FRAME` binds the designer's pane to the player (`TabardFrame.lua:26`).
+#[test]
+fn the_designer_pane_binds_the_player() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = harness(0);
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: 0x42,
+        ..Default::default()
+    });
+    s.set_tabard_host(TabardHost {
+        guild_record: Some([12, 4, 1, 2, 9]),
+        save_pending: false,
+    });
+    s.fire_event("OPEN_TABARD_FRAME", vec![]);
+    let pane = s
+        .character_pane(s.frame_handle("TabardModel").unwrap())
+        .expect("a character pane");
+    assert_eq!(pane.guid, 0x42);
+    assert!(pane.pending(), "the shown pane asks for its copy");
+    assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
+}

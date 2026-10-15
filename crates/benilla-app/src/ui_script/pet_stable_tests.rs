@@ -2,7 +2,9 @@
 //! (`PetStable.lua:20`) and concatenates `UnitName("pet")` (`PetStable.lua:129`); until the pet
 //! name query answers, `UnitName` reads `UNKNOWNOBJECT`, as in the reference.
 
-use benilla_ui::script::{PetStats, ScriptValue, UiScript, UnitState};
+use benilla_ui::script::{
+    PetStats, ScriptValue, StablePetSlot, StableState, UiScript, UnitGuids, UnitState,
+};
 
 use super::test_ui::load_ui_strict;
 
@@ -144,4 +146,61 @@ fn dismissing_the_pet_empties_the_closed_stable_without_raising() {
             .unwrap(),
         "Empty Stable Slot"
     );
+}
+
+/// One stable row, with the template display its entry names.
+fn row(pet_number: u32, name: &str, display_id: u32) -> StablePetSlot {
+    StablePetSlot {
+        pet_number,
+        icon: Some(r"Interface\Icons\Ability_Hunter_Pet_Boar".into()),
+        name: name.into(),
+        level: 58,
+        family: Some("Boar".into()),
+        loyalty: Some("(Loyalty Level 6) Best Friend".into()),
+        // `PetStable_Update` formats the diet unguarded (`PetStable.lua:95`).
+        diet: vec!["Meat".into()],
+        display_id: Some(display_id),
+    }
+}
+
+/// `PetStable_Update` puts the selection on `PetStableModel` with `SetPetStablePaperdoll`
+/// (`PetStable.lua:94`, `:131`): a creature display, never a unit, the summoned pet's live one and
+/// a stabled pet its row's (`0x4cb870`).
+#[test]
+fn the_stable_pane_shows_the_selected_pets_display() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let mut s = load_stable();
+    s.set_unit_guids(&UnitGuids {
+        player: 0x42,
+        pet: 0xF140_0000_0000_0001,
+        ..Default::default()
+    });
+    s.set_unit("pet", Some(pet(Some("Snarl"))));
+    s.set_pet_stats(true, hunter_pet_stats());
+    s.set_stable(Some(StableState {
+        num_stable_slots: 1,
+        next_slot_cost: 0,
+        slots: [
+            Some(row(7, "Snarl", 1007)),
+            Some(row(8, "Tusk", 1008)),
+            None,
+        ],
+        has_live_pet: true,
+        live_pet_display: Some(4449),
+    }));
+    s.fire_event("PET_STABLE_SHOW", vec![]);
+    let pane = |s: &UiScript| {
+        s.character_pane(s.frame_handle("PetStableModel").unwrap())
+            .expect("a character pane")
+    };
+    assert_eq!(
+        (pane(&s).guid, pane(&s).display),
+        (0, 4449),
+        "the summoned pet's live display"
+    );
+    assert!(pane(&s).pending(), "the shown pane asks for its copy");
+
+    s.run("ClickStablePet(1) PetStable_Update()").unwrap();
+    assert_eq!((pane(&s).guid, pane(&s).display), (0, 1008), "the row's");
+    assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }

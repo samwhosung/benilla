@@ -193,9 +193,6 @@ fn feed_dressup(
     {
         room.apply(DressUpIntent::Close);
     }
-    // The stock rotate buttons set the yaw with `DressUpModel:SetRotation`; the booth mirrors it.
-    preview.yaw = script.model_pane_facing("DressUpModel");
-
     room.resolve_pending(&items, &commands);
 
     // The crest comes off the guild cache this system holds, not the outfit `player_look` builds.

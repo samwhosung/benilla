@@ -436,13 +436,15 @@ pub(super) fn tick_script(
 ) {
     pass.live = false;
     let Some(mut script) = script else {
-        // No VM, no UI sampling a booth pane: a stranded pane would keep the paper-doll camera
-        // rendering behind a dead UI.
+        // No VM, no UI sampling a booth pane: a stranded pane would keep its camera rendering
+        // behind a dead UI.
         booths.panes.0.clear();
+        booths.character.reset(0);
         return;
     };
     let Ok(window) = window.single() else {
         booths.panes.0.clear();
+        booths.character.reset(0);
         return;
     };
     let (w, h) = (window.width(), window.height());
@@ -979,9 +981,10 @@ pub(super) fn paint_script(
     prev.text_ui = text_ui.clone();
     prev.portraits = booths.images.0.clone();
     prev.extracted = extracted.clone();
-    // Cleared only on the full-conversion path: a settled frame's map is still true, and
-    // clearing it would put the body panes' cameras to sleep.
+    // Cleared only on the full-conversion path: a settled frame's maps are still true, and
+    // clearing them would put the character panes' cameras to sleep.
     booths.panes.0.clear();
+    booths.character.reset(script.session());
     let mut spans: Vec<u32> = Vec::with_capacity(prev.extracted.len());
     for eq in extracted {
         convert_entry(
@@ -1145,11 +1148,12 @@ fn convert_entry(
         }
         // A `<Model>`/`<PlayerModel>` pane draws itself, as the stock files declare a bare pane
         // with no Texture: a glue `ModelFFX` is the glue booth's scene, a file pane is a model
-        // tile, a unit pane samples its window's body bake square
-        // ([`crate::portrait::model_pane_booth`]), and an unclaimed pane draws nothing.
+        // tile, a character pane draws its own booth's copy of its subject
+        // (`crate::portrait::panes`), and a bare `Model` draws nothing.
         QuadContent::ModelPane {
             handle,
             name,
+            character,
             model,
             facing,
             model_scale,
@@ -1193,6 +1197,27 @@ fn convert_entry(
                     ..default()
                 });
                 return;
+            }
+            // A character pane publishes an idempotent request; `portrait::panes` builds the
+            // pane's booth and draws its quad each frame the engine lists the pane with a copy.
+            // Published with a file too: a `SetUnit` pending over it builds the copy that
+            // replaces the file.
+            if character && rect.width() > 0.0 && rect.height() > 0.0 {
+                let dpi = booths.tiles.dpi.max(0.01);
+                booths.character.insert(
+                    handle,
+                    crate::portrait::PaneRequest {
+                        rect,
+                        z_key: eq.z,
+                        // The copy draws at the widget's own alpha (`0x76d120`).
+                        alpha: own_alpha,
+                        clip,
+                        size_px: UVec2::new(
+                            (rect.width() * dpi).round().max(1.0) as u32,
+                            (rect.height() * dpi).round().max(1.0) as u32,
+                        ),
+                    },
+                );
             }
             // A file pane publishes an idempotent tile request; `ui_models::compose_tiles` draws
             // its quad each frame, so a cell packed later needs no re-conversion.
@@ -1252,39 +1277,7 @@ fn convert_entry(
                         tiles.atlas_size
                     );
                 }
-                return;
             }
-            let Some(slot) = name.as_deref().and_then(crate::portrait::model_pane_booth) else {
-                return;
-            };
-            // The aspect is published before the readiness check: the bake waits on the publish.
-            if rect.height() > 0.0 {
-                booths
-                    .panes
-                    .0
-                    .insert(slot.to_string(), rect.width() / rect.height());
-            }
-            // The bake is premultiplied; the 2D stand-in while a model streams is straight alpha.
-            let (handle, premultiplied) = match booths.images.0.get(slot) {
-                Some(PortraitSource::Live(h)) => (Some(h.clone()), true),
-                Some(PortraitSource::File(p)) => (
-                    assets.as_mut().and_then(|a| a.sprite_texture(p, images)),
-                    false,
-                ),
-                None => (None, false),
-            };
-            let Some(handle) = handle else {
-                return;
-            };
-            out.push(UiQuad {
-                rect,
-                z_key: eq.z,
-                texture: Some(handle),
-                color: [1.0, 1.0, 1.0, eq.alpha],
-                premultiplied,
-                clip,
-                ..default()
-            });
         }
         QuadContent::Texture {
             path,
@@ -1717,6 +1710,7 @@ mod clip_plumb_tests {
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
         app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::portrait::PaneRequests>();
         app.init_resource::<crate::ui_models::UiModelTiles>();
         app.init_resource::<crate::minimap::MinimapWidget>();
         app.init_resource::<crate::ui_script::UiFrameCost>();
@@ -1802,6 +1796,7 @@ mod clip_plumb_tests {
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
         app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::portrait::PaneRequests>();
         app.init_resource::<crate::ui_models::UiModelTiles>();
         app.init_resource::<crate::minimap::MinimapWidget>();
         app.init_resource::<crate::ui_script::UiFrameCost>();
@@ -2032,6 +2027,7 @@ mod extract_gate_tests {
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
         app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::portrait::PaneRequests>();
         app.init_resource::<crate::ui_models::UiModelTiles>();
         app.init_resource::<crate::minimap::MinimapWidget>();
         app.init_resource::<crate::ui_script::UiFrameCost>();
@@ -2196,56 +2192,57 @@ mod extract_gate_tests {
         );
     }
 
-    /// `PaperDollFrame.xml:204` declares a bare `<PlayerModel name="CharacterModelFrame">`; a pane
-    /// no window claims ([`crate::portrait::model_pane_booth`]) must not borrow a bake.
+    /// `PaperDollFrame.xml:204` declares a bare `<PlayerModel name="CharacterModelFrame">`. Every
+    /// character pane, the stock window's or an addon's, publishes its own composite request at
+    /// its own rect, and draws no quad here: its booth's composite does (`crate::portrait`). A
+    /// plain `Model` with no file publishes nothing.
     #[test]
-    fn a_named_model_pane_samples_its_booth_and_an_unclaimed_one_draws_nothing() {
+    fn every_character_pane_publishes_its_own_request_and_a_bare_model_none() {
         let mut app = app_from_script(
             r#"
             local doll = CreateFrame("PlayerModel", "CharacterModelFrame")
             doll:SetPoint("TOPLEFT", 0, 0)
             doll:SetWidth(233); doll:SetHeight(224)
             doll:SetUnit("player")
-            local stray = CreateFrame("PlayerModel", "SomeAddonsModelPane")
+            local stray = CreateFrame("DressUpModel", "SomeAddonsModelPane")
             stray:SetPoint("TOPLEFT", 300, 0)
-            stray:SetWidth(233); stray:SetHeight(224)
-            stray:SetUnit("player")
+            stray:SetWidth(100); stray:SetHeight(200)
+            local bare = CreateFrame("Model", "Bare")
+            bare:SetPoint("TOPLEFT", 500, 0)
+            bare:SetWidth(50); bare:SetHeight(50)
         "#,
-        );
-        let bake = app
-            .world_mut()
-            .resource_mut::<Assets<Image>>()
-            .add(Image::default());
-        app.world_mut().resource_mut::<PortraitImages>().0.insert(
-            "paperdoll".to_string(),
-            crate::portrait::PortraitSource::Live(bake.clone()),
         );
         app.update();
 
-        let quads = &app.world().resource::<UiQuads>().quads;
-        let panes: Vec<_> = quads
-            .iter()
-            .filter(|q| q.texture.as_ref() == Some(&bake))
-            .collect();
+        let script = app.world().non_send_resource::<UiScript>();
+        let handle = |name: &str| script.frame_handle(name).expect(name);
+        let (doll, stray, bare) = (
+            handle("CharacterModelFrame"),
+            handle("SomeAddonsModelPane"),
+            handle("Bare"),
+        );
+        let requests = app.world().resource::<crate::portrait::PaneRequests>();
+        let doll = requests.of(doll).expect("the paper doll publishes");
         assert_eq!(
-            panes.len(),
-            1,
-            "exactly the claimed pane draws the paper doll's bake"
+            doll.size_px,
+            UVec2::new(233, 224),
+            "its own rect, in device px"
+        );
+        assert!((doll.alpha - 1.0).abs() < 1e-6);
+        let stray = requests.of(stray).expect("an addon's pane publishes too");
+        assert_eq!(stray.size_px, UVec2::new(100, 200));
+        assert!(stray.rect.min.x > doll.rect.max.x, "at its own place");
+        assert!(
+            requests.of(bare).is_none(),
+            "a bare Model is no character pane"
         );
         assert!(
-            panes[0].premultiplied,
-            "a render-target bake carries premultiplied colour"
-        );
-        let aspect = app
-            .world()
-            .resource::<crate::portrait::BoothPanes>()
-            .0
-            .get("paperdoll")
-            .copied()
-            .expect("the pane publishes its aspect");
-        assert!(
-            (aspect - 233.0 / 224.0).abs() < 0.01,
-            "the pane's own rect is the aspect, got {aspect}"
+            app.world()
+                .resource::<UiQuads>()
+                .quads
+                .iter()
+                .all(|q| q.texture.is_none()),
+            "no pane draws a quad of its own in the extract"
         );
     }
 

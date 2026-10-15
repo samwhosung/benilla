@@ -32,24 +32,7 @@ impl Plugin for UiStablePlugin {
             .add_sweep_leg(SweepLeg::Stable, close_core)
             .add_systems(
                 Update,
-                (
-                    feed_stable.in_set(UiFeed),
-                    drain_stable.after(UiInput),
-                    // After the VM ticks: the selection is written by a click during `UiInput`
-                    // and by `PetStable_Update`'s re-pick (`PetStable.lua:48-63`) inside the
-                    // feed's events, so an earlier read shows the previous pet for a frame.
-                    feed_stable_booth
-                        .after(UiInput)
-                        // Gated: the feed starts with a name lookup over every UI frame.
-                        .run_if(
-                            |open: Res<StableOpen>, booth: Res<crate::portrait::StableBooth>| {
-                                // One more run after the close, which empties the booth.
-                                open.npc.is_some()
-                                    || booth.unit.is_some()
-                                    || booth.display_id.is_some()
-                            },
-                        ),
-                ),
+                (feed_stable.in_set(UiFeed), drain_stable.after(UiInput)),
             );
     }
 }
@@ -152,6 +135,10 @@ fn resolve_pet(
     let family_row = families.and_then(|t| t.families.get(family_id));
     StablePetSlot {
         pet_number: wire.pet_number,
+        // The template's display, which `SetPetStablePaperdoll` shows (`0x4cba0e`).
+        display_id: names
+            .creature_record(wire.creature_entry)
+            .map(|r| r.display_id),
         // The family's `CreatureFamily.dbc` icon; `SetItemButtonTexture` draws `None` as empty.
         icon: families
             .and_then(|t| t.families.icon(family_id))
@@ -188,6 +175,7 @@ fn snapshot(
     stats: Option<&PetStatTables>,
     next_slot_cost: u32,
     has_live_pet: bool,
+    live_pet_display: Option<u32>,
     commands: &NetCommands,
 ) -> Option<StableState> {
     open.npc?;
@@ -207,6 +195,7 @@ fn snapshot(
         next_slot_cost,
         slots,
         has_live_pet,
+        live_pet_display,
     })
 }
 
@@ -217,6 +206,7 @@ fn feed_stable(
     // Mutable only to take the fresh-list latch.
     mut open: ResMut<StableOpen>,
     bar: Res<crate::ui_pet::PetBar>,
+    pet: crate::ui_pet::PetUnit,
     families: Option<Res<PetFamilyTables>>,
     stats: Option<Res<PetStatTables>>,
     prices: Option<Res<StableSlotPrices>>,
@@ -253,6 +243,12 @@ fn feed_stable(
 
     // The reference's live-pet test, `[0xb714a0]|[0xb714a4]`; a dismissed pet fails it.
     let has_live_pet = bar.spells.pet_guid != 0;
+    // The summoned pet's own display while its object is held (`[unit+0xb30]`, `0x4cb99e`).
+    let live_pet_display = has_live_pet
+        .then(|| pet.store(bar.spells.pet_guid))
+        .flatten()
+        .and_then(|s| s.0.unit_displayid())
+        .and_then(|d| u32::try_from(d).ok());
     let fresh = snapshot(
         &open,
         &names,
@@ -260,6 +256,7 @@ fn feed_stable(
         stats.as_deref(),
         next_slot_cost,
         has_live_pet,
+        live_pet_display,
         &commands,
     );
     let fresh_list = std::mem::take(&mut open.fresh_list);
@@ -312,57 +309,6 @@ fn drain_stable(
     }
 }
 
-/// Point the model pane at the pet `GetSelectedStablePet()` names, as the reference's
-/// `SetPetStablePaperdoll` (`0x4cb870`) does: the summoned pet (`[0xb72250] == -1`) shows its
-/// live body (`[unit+0xb30]`), and anything else, or a failed live resolve (`0x4cb9bc`), shows the
-/// row's creature display, whose late cache answer re-points the pane.
-fn feed_stable_booth(
-    script: Option<NonSendMut<UiScript>>,
-    open: Res<StableOpen>,
-    bar: Res<crate::ui_pet::PetBar>,
-    pet: crate::ui_pet::PetUnit,
-    names: Res<NameCache>,
-    mut booth: ResMut<crate::portrait::StableBooth>,
-) {
-    let Some(mut script) = script else {
-        return;
-    };
-    // Every frame, so a stale yaw cannot snap the model when a pet is picked.
-    booth.yaw = script.model_pane_facing("PetStableModel");
-
-    // `GetSelectedStablePet()`: 0 the summoned pet, 1..=2 a stable slot, -1 nothing, including a
-    // pet the latest list no longer holds.
-    let slot = script.stable_selection();
-
-    let live_pet = bar.spells.pet_guid;
-    let (unit, display_id) = stable_subject(
-        slot,
-        (live_pet != 0).then(|| pet.entity(live_pet)).flatten(),
-        &open.pets,
-        |entry| names.creature_record(entry).map(|r| r.display_id),
-    );
-    booth.unit = unit;
-    booth.display_id = display_id;
-}
-
-/// The selection's `(live unit, display id)`. The live arm reads the pet guid at `[0xb714a0]` and
-/// no row; the display is resolved too, as the reference falls through to it when the live
-/// resolve fails. Display 0 reads as no answer.
-fn stable_subject(
-    slot: i32,
-    live_pet: Option<Entity>,
-    pets: &[StabledPet],
-    display_of: impl Fn(u32) -> Option<u32>,
-) -> (Option<Entity>, Option<u32>) {
-    let unit = if slot == 0 { live_pet } else { None };
-    let display = u8::try_from(slot)
-        .ok()
-        .and_then(|slot| pets.iter().find(|p| p.slot == slot))
-        .and_then(|row| display_of(row.creature_entry))
-        .filter(|&d| d != 0);
-    (unit, display)
-}
-
 /// Stable refusals as message keys: only `ERR_NOT_ENOUGH_MONEY`, `DisplayError(0x25)` in the
 /// `SMSG_STABLE_RESULT` handler `0x4cacb0`, whose row also speaks (line `0x28`).
 #[derive(Resource, Default)]
@@ -375,77 +321,6 @@ pub(crate) struct StableSlotPrices(pub(crate) benilla_formats::StableSlotPrices)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn row(slot: u8, entry: u32) -> StabledPet {
-        StabledPet {
-            pet_number: u32::from(slot) + 100,
-            creature_entry: entry,
-            level: 30,
-            name: format!("pet{slot}"),
-            loyalty: 6,
-            slot,
-        }
-    }
-
-    /// One display per entry; entry `9` is the template that ships none.
-    fn display_of(entry: u32) -> Option<u32> {
-        match entry {
-            1 => Some(4449),
-            2 => Some(822),
-            9 => Some(0),
-            _ => None,
-        }
-    }
-
-    #[test]
-    fn the_selection_forks_between_a_live_body_and_a_bare_display() {
-        let pets = [row(0, 1), row(1, 2)];
-        let live = Entity::from_raw_u32(7).expect("a test entity id");
-
-        // Nothing selected: neither source, so the pane empties.
-        assert_eq!(
-            stable_subject(-1, Some(live), &pets, display_of),
-            (None, None)
-        );
-
-        // Slot 0 with the pet out: the body, and the display beside it so a dismiss keeps the pane.
-        assert_eq!(
-            stable_subject(0, Some(live), &pets, display_of),
-            (Some(live), Some(4449))
-        );
-
-        // Slot 0 with the pet dismissed: the display alone.
-        assert_eq!(
-            stable_subject(0, None, &pets, display_of),
-            (None, Some(4449))
-        );
-
-        // A stabled slot never takes the live body: the live arm is gated on the selection.
-        assert_eq!(
-            stable_subject(1, Some(live), &pets, display_of),
-            (None, Some(822))
-        );
-
-        // A slot with no row (never bought, or empty) and a slot past the window: nothing.
-        assert_eq!(
-            stable_subject(2, Some(live), &pets, display_of),
-            (None, None)
-        );
-    }
-
-    #[test]
-    fn an_unanswered_or_display_less_template_empties_the_pane() {
-        assert_eq!(
-            stable_subject(1, None, &[row(1, 404)], display_of),
-            (None, None),
-            "the query has not landed yet"
-        );
-        assert_eq!(
-            stable_subject(1, None, &[row(1, 9)], display_of),
-            (None, None),
-            "the template ships no display"
-        );
-    }
 
     /// The range guard cannot close it: after the drop there is no self player to measure from.
     #[test]

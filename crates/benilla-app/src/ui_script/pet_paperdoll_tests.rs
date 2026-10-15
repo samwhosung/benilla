@@ -3,7 +3,7 @@
 //! with the pet.
 
 use benilla_ui::script::{
-    PetStats, QuadContent, ScriptValue, UiScript, UnitCombatStats, UnitState,
+    PetStats, QuadContent, ScriptValue, UiScript, UnitCombatStats, UnitGuids, UnitState,
 };
 
 /// The whole character block: the page calls seven `PaperDollFrame_Set*` setters
@@ -438,4 +438,47 @@ fn build_list_string_is_a_plain_comma_join_that_nils_on_nothing() {
         s.eval::<bool>("return BuildListString() == nil").unwrap(),
         "zero arguments is nil, not an empty string"
     );
+}
+
+/// The stock pages bind their own panes: the paper doll to the player at world entry
+/// (`PaperDollFrame.lua:39`), the pet page to the pet as it paints (`PetPaperDollFrame.lua:67`).
+/// A hidden pane stores its unit and asks for nothing until shown (`0x505b50`, `0x505d00`).
+#[test]
+fn the_paper_doll_and_the_pet_page_bind_their_own_units() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    const ME: u64 = 0x42;
+    const PET: u64 = 0xF140_0000_0000_0077;
+    let mut s = load_pet_page();
+    s.set_unit_guids(&UnitGuids {
+        player: ME,
+        pet: PET,
+        ..Default::default()
+    });
+    let pane = |s: &UiScript, name: &str| {
+        s.character_pane(s.frame_handle(name).expect(name))
+            .expect("a character pane")
+    };
+    s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
+    assert_eq!(pane(&s, "CharacterModelFrame").guid, ME);
+    assert_eq!(
+        pane(&s, "CharacterModelFrame").builds,
+        0,
+        "hidden, it asks for no copy"
+    );
+    s.run(r#"ToggleCharacter("PaperDollFrame")"#).unwrap();
+    assert!(
+        pane(&s, "CharacterModelFrame").pending(),
+        "shown, it asks for its copy"
+    );
+
+    give_pet(&mut s);
+    s.run(r#"ToggleCharacter("PetPaperDollFrame")"#).unwrap();
+    assert_eq!(pane(&s, "PetModelFrame").guid, PET);
+    assert!(pane(&s, "PetModelFrame").pending());
+    assert_eq!(
+        pane(&s, "CharacterModelFrame").guid,
+        ME,
+        "each pane keeps its own subject"
+    );
+    assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
 }

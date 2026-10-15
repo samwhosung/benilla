@@ -499,6 +499,7 @@ mod caret_tests {
         app.init_resource::<Assets<Image>>();
         app.init_resource::<PortraitImages>();
         app.init_resource::<crate::portrait::BoothPanes>();
+        app.init_resource::<crate::portrait::PaneRequests>();
         app.init_resource::<crate::ui_models::UiModelTiles>();
         app.init_resource::<crate::minimap::MinimapWidget>();
         app.init_resource::<crate::ui_script::UiFrameCost>();

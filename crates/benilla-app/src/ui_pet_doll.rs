@@ -1,4 +1,5 @@
-//! The pet paper-doll feed: `PetPaperDollFrame`'s combat stats and its model booth.
+//! The pet paper-doll feed: `PetPaperDollFrame`'s combat stats. Its model pane is an ordinary
+//! character pane, `PetModelFrame:SetUnit("pet")` (`PetPaperDollFrame.lua:67`).
 //!
 //! The pet's [`UnitCombatStats`] come from the character sheet's descriptor-only core and
 //! bindings, as in the reference, whose page calls the `PaperDollFrame_Set*` setters with `"pet"`
@@ -11,7 +12,6 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{UiScript, UnitCombatStats};
 
-use crate::portrait::PetDollBooth;
 use crate::ui_char::{fire_stat_transitions, unit_combat_stats};
 use crate::ui_pet::{PetBar, PetUnit};
 use crate::ui_unit::UnitFeed;
@@ -29,21 +29,14 @@ fn feed_pet_doll(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
     pet: PetUnit,
-    mut booth: ResMut<PetDollBooth>,
     mut last: Local<crate::ui_script::VmMemo<Option<UnitCombatStats>>>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let last = last.get(&script);
-    // The pane's rotate buttons own the yaw. Written every frame, pet or not, so a new pet does
-    // not snap to a stale one.
-    booth.yaw = script.model_pane_facing("PetModelFrame");
-
     let pet_guid = bar.spells.pet_guid;
     let store = (pet_guid != 0).then(|| pet.store(pet_guid)).flatten();
-    // A guid whose object never streamed is no pet: `None` empties the booth.
-    booth.unit = (pet_guid != 0).then(|| pet.entity(pet_guid)).flatten();
 
     let fresh = store.map(unit_combat_stats);
     // Push only on change: the page repaints off the `UNIT_*` events below.

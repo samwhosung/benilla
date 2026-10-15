@@ -38,6 +38,9 @@ pub struct StablePetSlot {
     pub loyalty: Option<String>,
     /// The localized food names the pet's family eats: `GetStablePetFoodTypes`'s returns.
     pub diet: Vec<String>,
+    /// The creature display the row's entry names in the creature cache, the record
+    /// `SetPetStablePaperdoll` shows (`0x4cba0e`); `None` while the query is in flight.
+    pub display_id: Option<u32>,
 }
 
 /// The open stable's snapshot, pushed whole; `None` when no stable is open.
@@ -55,6 +58,9 @@ pub struct StableState {
     /// stabled pet's drop between swap and unstable. Not `slots[0].is_some()`: a dismissed or
     /// distant pet keeps its slot-0 row with no live guid.
     pub has_live_pet: bool,
+    /// The summoned pet's own display while the client holds its unit (`[unit+0xb30]`, read by
+    /// `SetPetStablePaperdoll` at `0x4cb99e`); `None` when it holds none.
+    pub live_pet_display: Option<u32>,
 }
 
 impl StableState {
@@ -153,6 +159,28 @@ fn selected_slot(m: &StableModel) -> i32 {
             // A pet no longer listed reads as nothing, the loop's fall-through at `0x4cb84c`.
             .unwrap_or(-1),
     }
+}
+
+/// The creature display `SetPetStablePaperdoll` puts on its pane for the selection: the
+/// summoned pet's live one, else its row's; a stabled pet's row's; `None` for nothing selected, a
+/// pet the list no longer holds, or a display the creature cache has not answered.
+fn paperdoll_display(m: &StableModel) -> Option<u32> {
+    let state = m.state.as_ref()?;
+    let row = |pet_number: i64| {
+        state
+            .slots
+            .iter()
+            .flatten()
+            .find(|p| i64::from(p.pet_number) == pet_number)
+    };
+    match m.selected {
+        0 => None,
+        -1 => state
+            .live_pet_display
+            .or_else(|| state.slots[0].as_ref().and_then(|p| p.display_id)),
+        pet_number => row(i64::from(pet_number)).and_then(|p| p.display_id),
+    }
+    .filter(|&d| d != 0)
 }
 
 /// A slot argument as an index into [`StableState::slots`], `None` out of range.
@@ -423,11 +451,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Deviation: SetPetStablePaperdoll(model) is inert, because the model pane is an app-side
-    // booth that follows the selection every frame, with no VM-side unit to point.
+    // SetPetStablePaperdoll(frame) (`0x4cb870`): the selection's creature display onto a
+    // character pane (`0x505cb0`), never a unit copy. The summoned pet shows its live display
+    // (`[unit+0xb30]`, `0x4cb99e`), else its record's through the creature cache (`0x4cb9bc`); a
+    // stabled pet its row's (`0x4cb9dc`); nothing selected sets nothing (`0x4cb931`), and neither
+    // does a display the cache has not answered (`0x4cba1a`), whose answer fires
+    // `PET_STABLE_UPDATE_PAPERDOLL` (`0x4cba5f`).
     g.set(
         "SetPetStablePaperdoll",
-        lua.create_function(|_, _model: Value| Ok(()))?,
+        lua.create_function(|lua, frame: Value| {
+            let Value::Table(frame) = frame else {
+                return Err(mlua::Error::runtime(
+                    "Usage: SetPetStablePaperdoll(characterModel)",
+                ));
+            };
+            let h = super::object::frame_handle_of(lua, &frame).map_err(|_| {
+                mlua::Error::runtime(
+                    "SetPetStablePaperdoll(): Couldn't find 'this' in frame object",
+                )
+            })?;
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            if let Some(display) = paperdoll_display(&model.stable) {
+                model.set_pane_display(h, display);
+            }
+            Ok(())
+        })?,
     )?;
 
     // BuyStableSlot(): the client's silent gates, in order: an open stable, fewer than 2 slots
@@ -477,6 +525,8 @@ mod tests {
             family: Some("Wolf".into()),
             loyalty: Some("(Loyalty Level 6) Best Friend".into()),
             diet: vec!["Meat".into(), "Fish".into()],
+            // One display per pet number, so a test can tell the rows apart.
+            display_id: Some(1000 + number),
         }
     }
 
@@ -486,6 +536,7 @@ mod tests {
             next_slot_cost: 50_000,
             slots,
             has_live_pet: true,
+            live_pet_display: Some(4449),
         }
     }
 
@@ -737,10 +788,65 @@ mod tests {
         assert!(!s.take_stable_close(), "drain clears");
     }
 
+    /// `0x4cb870` reads its frame argument as a table (`0x4cb89a`, else the usage at `0x848f78`).
     #[test]
-    fn the_paperdoll_setter_is_callable() {
+    fn the_paperdoll_setter_wants_a_frame() {
         let s = UiScript::new().unwrap();
-        s.eval::<()>("SetPetStablePaperdoll(nil)").unwrap();
+        let err = s.eval::<()>("SetPetStablePaperdoll(nil)").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Usage: SetPetStablePaperdoll(characterModel)"),
+            "{err}"
+        );
+    }
+
+    /// The pane shows a creature display, never a unit copy: the summoned pet's live one, else
+    /// its row's, and a stabled pet its row's (`0x4cb99e`, `0x4cba0e`, then `0x505cb0`).
+    #[test]
+    fn the_paperdoll_setter_puts_the_selections_display_on_the_pane() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        s.run(r#"m = CreateFrame("PlayerModel", "StableDoll", UIParent)"#)
+            .unwrap();
+        let h = s.frame_handle("StableDoll").unwrap();
+        let shown = |s: &UiScript| {
+            let c = s.character_pane(h).unwrap();
+            (c.guid, c.display)
+        };
+        open(&mut s);
+        // Nothing selected after a list: the call sets nothing (`0x4cb931`).
+        s.eval::<()>("SetPetStablePaperdoll(m)").unwrap();
+        assert_eq!(shown(&s), (0, 0));
+
+        // The current pet out: its live display.
+        s.eval::<()>("ClickStablePet(0) SetPetStablePaperdoll(m)")
+            .unwrap();
+        assert_eq!(shown(&s), (0, 4449));
+        let builds = s.character_pane(h).unwrap().builds;
+        assert!(builds > 0, "a visible pane asks for its copy");
+
+        // A stabled pet: its row's display, through the creature cache.
+        s.eval::<()>("ClickStablePet(1) SetPetStablePaperdoll(m)")
+            .unwrap();
+        assert_eq!(shown(&s), (0, 1008));
+        assert!(s.character_pane(h).unwrap().builds > builds);
+
+        // The pet dismissed: the current pet's row.
+        let mut dismissed = state([Some(pet(7, "Rex", 41)), Some(pet(8, "Bruiser", 38)), None]);
+        dismissed.has_live_pet = false;
+        dismissed.live_pet_display = None;
+        s.set_stable(Some(dismissed));
+        s.eval::<()>("ClickStablePet(0) SetPetStablePaperdoll(m)")
+            .unwrap();
+        assert_eq!(shown(&s), (0, 1007));
+
+        // A unit stored over it clears the display, as `0x505b50` does.
+        s.set_unit_guids(&crate::script::UnitGuids {
+            player: 0x42,
+            ..Default::default()
+        });
+        s.eval::<()>("m:SetUnit('player')").unwrap();
+        assert_eq!(shown(&s), (0x42, 0));
     }
 
     /// The grab clears first (`0x495034`) and only then checks the family icon: a slot without one

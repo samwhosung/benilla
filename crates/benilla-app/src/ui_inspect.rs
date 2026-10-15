@@ -15,7 +15,6 @@ use benilla_ui::script::{InspectView, InvSlotView, InventorySlots, ScriptValue, 
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore};
-use crate::portrait::InspectBooth;
 use crate::ui_script::UiFeed;
 
 /// The reference's `InspectFrame.unit`. The token, not the guid, is the identity: the reference
@@ -108,7 +107,6 @@ fn feed_inspect(
     script: Option<NonSendMut<UiScript>>,
     mut target: ResMut<InspectTarget>,
     mut feed: ResMut<InspectFeedState>,
-    mut booth: ResMut<InspectBooth>,
     items: Res<Items>,
     icons: Option<Res<ItemDisplays>>,
     // `SpellItemEnchantment` names the enchant lines, `ItemRandomProperties` the roll suffix.
@@ -141,7 +139,7 @@ fn feed_inspect(
             }
         }
     }
-    // `ClearInspectPlayer()`, from `InspectFrame_OnHide`: the resolve stops and the booth empties.
+    // `ClearInspectPlayer()`, from `InspectFrame_OnHide`: the resolve stops.
     if script.take_inspect_clear() {
         target.token = None;
     }
@@ -155,19 +153,14 @@ fn feed_inspect(
     });
 
     let Some((token, guid, entity)) = resolved else {
-        // Nothing inspected, or the target is not streamed: clear the view and empty the booth.
+        // Nothing inspected, or the target is not streamed: clear the view.
         if memo.last.is_some() {
             script.set_inspect(None);
             memo.last = None;
             memo.last_level = None;
         }
-        booth.unit = None;
         return;
     };
-
-    booth.unit = Some(entity);
-    // The stock Lua turns the doll through the pane (`InspectModelFrame:SetRotation`).
-    booth.yaw = script.model_pane_facing("InspectModelFrame");
 
     let Ok(store) = stores.get(entity) else {
         return;

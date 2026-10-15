@@ -6,8 +6,8 @@ use benilla_assets::M2Model;
 use bevy::prelude::*;
 
 use super::booth::{spawn_booth_model, BoothInstance, BoothMotion, BoothPart, BoothTwins};
-use super::framing::{body_frame, frame, head_anchor, PortraitAnchors};
-use super::{aim, test_mode, BoothCam, BoothLight, Booths, PaperDollBooth, PAPERDOLL_SLOT, SLOTS};
+use super::framing::{frame, head_anchor, PortraitAnchors};
+use super::{aim, test_mode, BoothCam, BoothLight, Booths, SLOTS};
 use benilla_assets::m2_url;
 
 /// When `WOW_PORTRAIT_TEST` is set, bake the named model into every slot once it loads.
@@ -74,11 +74,8 @@ fn bake_test(
     let Some(model) = m2s.get(&handle) else {
         return false;
     };
-    // Each slot bakes against the light it really uses: the portraits' studio, the pane's own.
-    let (Some(studio), Some(pane)) = (
-        booth_light.studio.buffer.clone(),
-        booth_light.pane.buffer.clone(),
-    ) else {
+    // The portraits' studio light, the one every slot bakes against.
+    let Some(studio) = booth_light.studio.buffer.clone() else {
         return false;
     };
     // An untextured model reads dark brown (the muted fallback), so brightness is only judgeable
@@ -126,7 +123,6 @@ fn bake_test(
                 .collect::<Vec<BoothPart>>()
         };
     let parts = parts_against(&studio, mats);
-    let pane_parts = parts_against(&pane, mats);
     let (pivot_height, ground_radius) = model
         .bounds
         .map(|b| (b.pivot_z.map_or(0.0, |z| z + 0.0972), b.ring_footprint))
@@ -182,41 +178,12 @@ fn bake_test(
         .finish(commands);
         aim(cams, token, &rig);
     }
-    // The paper-doll booth too, to check the full-body framing, spun to the pane's default yaw.
-    if let Some(booth) = booths.0.get(PAPERDOLL_SLOT) {
-        commands.entity(booth.root).despawn_related::<Children>();
-        spawn_booth_model(
-            commands,
-            palettes,
-            booth.root,
-            booth.layer.clone(),
-            &pane_parts, // the pane's own light, not the portraits' studio
-            &[],
-            Some((
-                &model.skeleton,
-                &model.inverse_bindposes,
-                model.animations.as_ref(),
-            )),
-            catalog,
-            BoothMotion::Frozen,
-            [false, false], // the harness bake holds no weapons, so no in-hand grip
-            &[],            // no eye-glow
-            BoothInstance::default(),
-        )
-        .finish(commands);
-        // No live UI publishes a pane aspect here, so it bakes square.
-        aim(cams, PAPERDOLL_SLOT, &body_frame(&anchors, 1.0));
-        commands
-            .entity(booth.root)
-            .insert(Transform::from_rotation(Quat::from_rotation_y(
-                PaperDollBooth::default().yaw,
-            )));
-    }
     true
 }
 
 /// `WOW_BOOTH_DUMP=<token>:<path>:<secs>`: after `secs` of app time, save the named booth's render
-/// target (e.g. `paperdoll`) to `path` as a PNG, once; inert without the env.
+/// target to `path` as a PNG, once; inert without the env. `token` is a portrait slot (`player`),
+/// or a character pane's global frame name (`CharacterModelFrame`).
 ///
 /// It must wake the booth first: `Screenshot::image` returns only what renders during the capture
 /// frame (`bevy_render`'s `prepare_screenshots`), and a settled booth's camera is inactive, so a
@@ -225,6 +192,7 @@ fn bake_test(
 pub(super) fn dump_booth_target(
     mut commands: Commands,
     mut booths: ResMut<Booths>,
+    panes: Res<super::panes::PaneBooths>,
     time: Res<Time<bevy::time::Real>>,
     mut phase: Local<u32>,
 ) {
@@ -248,7 +216,8 @@ pub(super) fn dump_booth_target(
     if *phase == DONE || (*phase == 0 && time.elapsed_secs() < *secs) {
         return;
     }
-    let Some(booth) = booths.0.get_mut(token.as_str()) else {
+    let key = panes.key_named(token).unwrap_or(token).to_string();
+    let Some(booth) = booths.0.get_mut(&key) else {
         warn!("WOW_BOOTH_DUMP: no booth named {token:?}");
         *phase = DONE;
         return;

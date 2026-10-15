@@ -7,7 +7,8 @@
 //! into its own cell of one shared atlas, through the sheet's one orthographic camera or a pooled
 //! perspective one, and [`compose_tiles`] draws each cell as a quad at the pane's callback rank.
 //! `PlayerModel`, `DressUpModel` and `TabardModel` are booths instead (`crate::portrait`): the
-//! reference frames them through camera 1 frozen at load.
+//! reference frames them through camera 1 frozen at load. They share this module's light pool
+//! ([`PaneLights`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,6 +43,9 @@ use crate::portrait::{
     UI_MODEL_CAM_LAYER_BASE,
 };
 use crate::ui_pass::{UiQuad, UiQuadAppend, UiQuads, UvRect};
+
+mod pane_light;
+pub(crate) use pane_light::{PaneLights, PaneScene, CHARACTER_SCENE_SLOT};
 
 /// `WOW_TILE_TRACE=1`: a `tile-trace:` line per pane per frame from the renderer and the
 /// extract's arm, naming the gate a listed pane that draws nothing stopped at.
@@ -115,9 +119,10 @@ pub(crate) struct UiModelTiles {
 
 /// A pane's light input: its embedded `CGLight`, its armed fog and its M2's own lights. Panes
 /// with the same scene share one light buffer and twin cache; the default, a disabled light, no
-/// fog and a file with no lights, is slot 0.
+/// fog and a file with no lights, is slot 0, and the character panes' constructor scene is slot 1
+/// ([`CHARACTER_SCENE_SLOT`]).
 #[derive(Clone, PartialEq)]
-struct TileScene {
+pub(crate) struct TileScene {
     light: ModelLight,
     fog: Option<ModelFog>,
     /// The file's authored lights: `SetModel` (`0x76cce0`) loads the M2 into the widget's own
@@ -144,6 +149,16 @@ impl TileScene {
             light: req.light,
             fog: req.fog,
             rig: scene_rig(file_lights),
+        }
+    }
+
+    /// A character pane's scene: the pane's own light and fog. The copy's own M2 lights, which
+    /// `0x707400` builds into the pane's scene, are not gathered: the display cache keeps none.
+    pub(crate) fn of_character(light: ModelLight, fog: Option<ModelFog>) -> Self {
+        Self {
+            light,
+            fog,
+            rig: SceneRig::default(),
         }
     }
 
@@ -238,12 +253,26 @@ impl TileRig {
         mirrors: &mut RigPaletteMirrors,
         anim_mirrors: &mut MatAnimMirrors,
     ) -> usize {
+        self.slot_or(scene, 0, device, queue, mirrors, anim_mirrors)
+    }
+
+    /// The pool slot for `scene`, grown if it is new and there is room, else `fallback`: a scene
+    /// past the cap draws in its kind's constructor scene.
+    fn slot_or(
+        &mut self,
+        scene: TileScene,
+        fallback: usize,
+        device: &RenderDevice,
+        queue: &RenderQueue,
+        mirrors: &mut RigPaletteMirrors,
+        anim_mirrors: &mut MatAnimMirrors,
+    ) -> usize {
         if let Some(i) = self.lights.iter().position(|l| l.scene == scene) {
             return i;
         }
         if self.lights.len() >= UI_MODEL_CAM_LAYERS {
             warn!("ui_models: the light pool is full — a pane's M2 lights, SetLight and fog are not applied");
-            return 0;
+            return fallback;
         }
         let key = LIGHT_MIRROR_KEYS[self.lights.len()];
         let blob = scene.blob();
@@ -515,6 +544,16 @@ fn setup_tiles(
         &mut mirrors,
         &mut anim_mirrors,
     );
+    // Slot 1, the character panes' ctor scene (`0x505680`), held from the start so a full pool
+    // never leaves the stock windows without their light.
+    let character = rig.slot_for(
+        TileScene::of_character(ModelLight::character(), None),
+        &device,
+        &queue,
+        &mut mirrors,
+        &mut anim_mirrors,
+    );
+    debug_assert_eq!(character, CHARACTER_SCENE_SLOT);
     let light_buf = rig.lights[0].buffer.clone();
     commands.spawn((
         Name::new("ui model tiles camera"),

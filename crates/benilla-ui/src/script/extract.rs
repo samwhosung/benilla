@@ -91,12 +91,13 @@ impl UiScript {
                             zoom: m.zoom,
                             inside_zoom: m.inside_zoom,
                         },
-                        // A `<Model>`/`<PlayerModel>` pane's content hole, named so the app can
-                        // join it to that window's bake. Both kinds share `KindState::Model`, as
-                        // the client's `CGCharacterModelBase` extends `CSimpleModel`.
+                        // A `<Model>`/`<PlayerModel>` pane's content hole. Both kinds share
+                        // `KindState::Model`, as the client's `CGCharacterModelBase` extends
+                        // `CSimpleModel`.
                         Some(crate::widget::KindState::Model(m)) => QuadContent::ModelPane {
                             handle: fh,
                             name: frame.and_then(|f| f.name.clone()),
+                            character: m.character.is_some(),
                             model: m.path.clone(),
                             facing: m.facing,
                             model_scale: m.scale,

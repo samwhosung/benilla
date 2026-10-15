@@ -854,7 +854,7 @@ pub(crate) mod schedule_tests {
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 4_463;
+    const UPDATE_ACTIONABLE_CEILING: usize = 4_067;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
@@ -1381,6 +1381,8 @@ pub(crate) mod schedule_tests {
          "the window queues are mailbox-click replies; the one server push (`SMSG_RECEIVED_MAIL`) is re-asked by `send_query_next_mail_time_on_enter`, whose reply sets `notify` unconditionally"),
         ("ui_merchant/mod.rs", "feed_merchant", Because::PlayerRoundTrip,
          "a buy/sell refusal answers a click on an open merchant; show/update ride `VmMemo`s"),
+        ("ui_panes.rs", "feed_character_panes", Because::FilledByVm,
+         "the answers answer the VM's own build requests and arms on panes it listed; a frameless VM lists none, and an answer for another VM's rows is dropped"),
         ("ui_petition/feed.rs", "feed_petition", Because::PlayerRoundTrip,
          "every line answers a charter action of ours; the window edges ride the `fed` memo"),
         ("ui_quest_share.rs", "feed_quest_share", Because::PlayerRoundTrip,

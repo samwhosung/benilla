@@ -277,11 +277,11 @@ impl UiScript {
     /// stratum hid still paints this frame; only the callback's own gates ([`paints`]) are read at
     /// the call. The rects are the ones the pump's last drain (`0x765799`) left: the paint reads
     /// them through `0x768320`, which never resolves.
+    ///
+    /// A character pane's paint then runs its turn timer (`0x505c50`, after the root step
+    /// `0x76d1a0` that fires `OnUpdateModel`), whether or not it has the handler.
     fn paint_model_panes(&mut self) {
         let mut model = self.model_mut();
-        if model.on_update_model_frames.is_empty() {
-            return;
-        }
         // Kept by `SetScript`; a destroyed frame's handle compacts out on its first miss.
         if model
             .on_update_model_frames
@@ -297,23 +297,48 @@ impl UiScript {
                 .collect();
             model.on_update_model_frames = live;
         }
+        // The character copies paint whether or not a script listens.
+        let copies: Vec<FrameHandle> = model
+            .arena
+            .model_kinds()
+            .iter()
+            .copied()
+            .filter(|&h| {
+                model
+                    .arena
+                    .frame(h)
+                    .is_some_and(|f| f.effective_visible && holds_copy(f))
+            })
+            .collect();
+        if model.on_update_model_frames.is_empty() && copies.is_empty() {
+            return;
+        }
         drop(model);
         for stratum in crate::order::Strata::ALL {
-            let panes: Vec<FrameHandle> = {
+            let panes: Vec<(FrameHandle, bool)> = {
                 let model = self.model_ref();
-                let mut panes: Vec<(u16, u64, FrameHandle)> = model
-                    .on_update_model_frames
+                let scripted = &model.on_update_model_frames;
+                let mut panes: Vec<(u16, u64, FrameHandle, bool)> = scripted
                     .iter()
+                    .chain(copies.iter().filter(|h| !scripted.contains(h)))
                     .filter_map(|&h| {
                         let f = model.arena.frame(h)?;
-                        (f.strata == stratum && f.effective_visible && has_model_file(f))
-                            .then_some((f.level, u64::from(f.insertion_seq), h))
+                        (f.strata == stratum && f.effective_visible && has_model_file(f)).then(
+                            || {
+                                (
+                                    f.level,
+                                    u64::from(f.insertion_seq),
+                                    h,
+                                    scripted.contains(&h),
+                                )
+                            },
+                        )
                     })
                     .collect();
-                panes.sort_unstable_by_key(|&(level, seq, _)| (level, seq));
-                panes.into_iter().map(|(_, _, h)| h).collect()
+                panes.sort_unstable_by_key(|&(level, seq, _, _)| (level, seq));
+                panes.into_iter().map(|(_, _, h, s)| (h, s)).collect()
             };
-            for h in panes {
+            for (h, scripted) in panes {
                 let id = {
                     let mut model = self.model_mut();
                     match model.arena.frame(h) {
@@ -321,21 +346,41 @@ impl UiScript {
                         _ => continue,
                     }
                 };
-                if let Err(e) =
-                    event::fire_widget_handler(&self.lua, id, "OnUpdateModel", Vec::new())
+                if scripted {
+                    if let Err(e) =
+                        event::fire_widget_handler(&self.lua, id, "OnUpdateModel", Vec::new())
+                    {
+                        self.push_error(e);
+                    }
+                }
+                // The turn timer, against the latch the handler may just have set.
+                let mut model = self.model_mut();
+                let now_ms = model.now_ms();
+                if let Some(crate::widget::KindState::Model(m)) =
+                    model.arena.frame_mut(h).map(|f| &mut f.kind_state)
                 {
-                    self.push_error(e);
+                    if m.path.is_none() {
+                        if let Some(c) = &mut m.character {
+                            c.paint(now_ms);
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-/// A Model-family pane with a file set, resident or streaming (`[widget+0x318] ≠ 0`), which its
-/// layer emit and its render callback both require (`0x76d24c`); on any other kind
-/// `OnUpdateModel` is inert.
+/// A character pane whose copy sits at `+0x318`, rather than a file `SetModel` put there.
+fn holds_copy(f: &crate::widget::Frame) -> bool {
+    matches!(&f.kind_state, crate::widget::KindState::Model(m)
+        if m.path.is_none() && m.character.as_ref().is_some_and(|c| c.copy.is_some()))
+}
+
+/// A Model-family pane with a model at `[widget+0x318]` (`0x76d24c`), which its layer emit and its
+/// render callback both require: a file set, resident or streaming, or a character pane's copy.
+/// On any other kind `OnUpdateModel` is inert.
 fn has_model_file(f: &crate::widget::Frame) -> bool {
-    matches!(&f.kind_state, crate::widget::KindState::Model(m) if m.path.is_some())
+    holds_copy(f) || matches!(&f.kind_state, crate::widget::KindState::Model(m) if m.path.is_some())
 }
 
 /// The paint callback's gates ahead of `OnUpdateModel` (`0x76d240`, firing at `0x76d5ea`): a model

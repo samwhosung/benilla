@@ -110,8 +110,7 @@ fn a_player_model_is_a_model_plus_three_and_the_chain_runs_one_way() {
         "one slot: SetFacing overwrites what SetRotation wrote"
     );
 
-    // `RefreshUnit` is a no-op, as the pane resolves its unit token at render; stock
-    // `PaperDollFrame.xml:221` calls it.
+    // Stock `PaperDollFrame.xml:221` calls `RefreshUnit`, which rebuilds from the stored GUID.
     assert!(s.run("PMPane:RefreshUnit()").is_ok());
 
     // `ClearModel`, reached through the chain, empties both content slots.
@@ -510,4 +509,330 @@ fn the_fog_block_arms_on_colour_and_clears_only_its_bit() {
     // The Lua setters store raw, with no clamp or ordering check; only the XML path clamps at 0.
     s.run("MFog:SetFogNear(-40) MFog:SetFogFar(-1)").unwrap();
     assert_eq!(fog(&s), (false, -40.0, -1.0));
+}
+
+/// The light `GetLight` reads back, as `f32`s (the getter widens the stored floats, `0x76e8ca`).
+fn light_of(s: &UiScript, pane: &str) -> Vec<f32> {
+    let v: mlua::MultiValue = s.eval(&format!("return {pane}:GetLight()")).unwrap();
+    v.into_iter()
+        .map(|x| match x {
+            mlua::Value::Number(n) => n as f32,
+            mlua::Value::Integer(i) => i as f32,
+            other => panic!("GetLight returned {other:?}"),
+        })
+        .collect()
+}
+
+/// `0x505680` makes the three character kinds' light directional, ambient 0.7, diffuse
+/// (0.8, 0.8, 0.64), direction (0, 1, 0) (the second `0x71b6a0` write) and enabled; a plain
+/// `Model` keeps its ctor's disabled white point light.
+#[test]
+fn a_fresh_character_pane_answers_its_constructors_light() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        CreateFrame("PlayerModel", "LitPM", UIParent)
+        CreateFrame("DressUpModel", "LitDM", UIParent)
+        CreateFrame("TabardModel", "LitTM", UIParent)
+        CreateFrame("Model", "DarkM", UIParent)
+    "#,
+    )
+    .unwrap();
+    let character = [
+        1.0, 0.0, 0.0, 1.0, 0.0, // enabled, directional, (0, 1, 0)
+        1.0, 0.7, 0.7, 0.7, // ambient
+        1.0, 0.8, 0.8, 0.64, // diffuse
+    ];
+    for pane in ["LitPM", "LitDM", "LitTM"] {
+        let got = light_of(&s, pane);
+        assert_eq!(got, character, "{pane}");
+        // Bit for bit the ctor's immediates (`0x3f333333`, `0x3f4ccccd`, `0x3f23d70a`).
+        assert_eq!(got[6].to_bits(), 0x3f33_3333);
+        assert_eq!(got[10].to_bits(), 0x3f4c_cccd);
+        assert_eq!(got[12].to_bits(), 0x3f23_d70a);
+    }
+    assert_eq!(
+        light_of(&s, "DarkM"),
+        [0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        "a plain Model's light is off"
+    );
+}
+
+/// The resolver's inputs: the player, a target and the target's target.
+fn guids(target: u64, next: u64) -> crate::script::UnitGuids {
+    crate::script::UnitGuids {
+        player: PLAYER,
+        target,
+        held: [(PLAYER, 0), (target, next)].into_iter().collect(),
+        ..Default::default()
+    }
+}
+
+const PLAYER: u64 = 0x0000_0000_0000_0001;
+const ORC: u64 = 0xF130_0000_0000_0002;
+const WOLF: u64 = 0xF130_0000_0000_0003;
+
+fn char_state(s: &UiScript, name: &str) -> crate::widget::CharacterPane {
+    s.character_pane(s.frame_handle(name).unwrap()).unwrap()
+}
+
+/// `SetUnit` resolves its token once and stores the GUID (`0x505b50`): the pane keeps showing
+/// that unit when the token moves, `RefreshUnit` rebuilds the GUID it stored (`0x505ee3`), and
+/// only a new `SetUnit` re-reads the token.
+#[test]
+fn set_unit_stores_the_guid_and_refresh_unit_rebuilds_it() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&guids(ORC, WOLF));
+    s.run(
+        r#"
+        a = CreateFrame("PlayerModel", nil, UIParent)
+        a:SetWidth(90) a:SetHeight(90) a:SetPoint("CENTER", 0, 0)
+        a:SetUnit("TaRgEt")
+        b = CreateFrame("PlayerModel", "TotPane", UIParent)
+        b:SetUnit("targettarget")
+    "#,
+    )
+    .unwrap();
+    let panes = s.character_panes();
+    assert_eq!(panes.len(), 2, "every visible character pane, named or not");
+    assert_eq!(panes[0].name, None, "the anonymous pane is listed");
+    assert_eq!((panes[0].guid, panes[1].guid), (ORC, WOLF));
+    assert_eq!(panes[0].builds, 1, "a visible pane asks for its copy");
+
+    // The target moves; the pane does not follow it.
+    s.set_unit_guids(&guids(WOLF, 0));
+    assert_eq!(s.character_panes()[0].guid, ORC);
+    s.run("a:RefreshUnit()").unwrap();
+    let refreshed = &s.character_panes()[0];
+    assert_eq!(
+        refreshed.guid, ORC,
+        "RefreshUnit reads +0x3e0, not the token"
+    );
+    assert_eq!(refreshed.builds, 2, "and asks for a fresh copy of it");
+    s.run("a:SetUnit('target')").unwrap();
+    assert_eq!(s.character_panes()[0].guid, WOLF);
+
+    // A token nobody holds stores 0 and asks for nothing: no unit, no build (`0x505b8d`).
+    s.run("a:SetUnit('mouseover')").unwrap();
+    let nobody = &s.character_panes()[0];
+    assert_eq!((nobody.guid, nobody.builds), (0, 3));
+
+    // The token is checked like the reference's: a string (`0x84f284`), and a name it knows.
+    let err = s.run("a:SetUnit(nil)").unwrap_err().to_string();
+    assert!(err.contains(r#"Usage: SetUnit("unit")"#), "{err}");
+    let err = s.run("a:SetUnit('nosuchunit')").unwrap_err().to_string();
+    assert!(err.contains("Unknown unit name: nosuchunit"), "{err}");
+}
+
+/// The reference builds the copy inside `SetUnit` (`0x505b99`), so a `SetModel` or `ClearModel`
+/// after it wins: the request it overtook is answered, and a late copy for it is refused.
+#[test]
+fn a_file_after_set_unit_overtakes_the_copy_in_flight() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&guids(ORC, WOLF));
+    s.run(r#"a = CreateFrame("PlayerModel", "Doll", UIParent) a:SetUnit("target")"#)
+        .unwrap();
+    let h = s.frame_handle("Doll").unwrap();
+    let pane = |s: &UiScript| s.character_pane(h).unwrap();
+    assert!(pane(&s).pending(), "the copy is asked for");
+    s.run(r#"a:SetModel("Creature\Wolf\Wolf.mdx")"#).unwrap();
+    assert!(!pane(&s).pending(), "the file overtook it");
+    let build = pane(&s).builds;
+    s.character_copy_built(h, build);
+    assert_eq!(
+        pane(&s).copy,
+        None,
+        "a late copy does not displace the file"
+    );
+    assert!(s.character_panes()[0].file, "the file stays");
+
+    // A later `SetUnit` asks again, and its copy replaces the file.
+    s.run("a:SetUnit('target')").unwrap();
+    let build = pane(&s).builds;
+    s.character_copy_built(h, build);
+    assert!(pane(&s).copy.is_some_and(|c| c.build == build));
+    assert!(!s.character_panes()[0].file, "the copy took +0x318");
+    // One answer per request.
+    let arms = pane(&s).arms;
+    s.character_copy_built(h, build);
+    assert_eq!(pane(&s).arms, arms, "a second answer arms nothing");
+
+    s.run("a:ClearModel()").unwrap();
+    assert_eq!(pane(&s).copy, None);
+    assert!(!pane(&s).pending());
+}
+
+/// Hiding drops the copy and keeps the subject (`0x505ce0`); showing asks for a fresh copy
+/// (`0x505d00`); a build answered for a replaced request is dropped.
+#[test]
+fn hide_drops_the_copy_and_show_asks_for_a_new_one() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&guids(ORC, 0));
+    s.run(
+        r#"
+        p = CreateFrame("PlayerModel", "Doll", UIParent)
+        p:SetWidth(90) p:SetHeight(90) p:SetPoint("CENTER", 0, 0)
+        p:SetUnit("player")
+    "#,
+    )
+    .unwrap();
+    let h = s.frame_handle("Doll").unwrap();
+    s.character_copy_built(h, 1);
+    let copy = char_state(&s, "Doll").copy.expect("built");
+    assert_eq!(
+        (copy.build, copy.arm.anim_id),
+        (1, 0),
+        "built with Stand armed"
+    );
+
+    s.run("p:Hide()").unwrap();
+    let hidden = char_state(&s, "Doll");
+    assert!(hidden.copy.is_none(), "the hide hook drops the copy");
+    assert_eq!(hidden.guid, PLAYER, "and keeps the GUID");
+    assert!(
+        s.character_panes().is_empty(),
+        "a hidden pane is no paint list row"
+    );
+    s.character_copy_built(h, 1);
+    assert!(
+        char_state(&s, "Doll").copy.is_none(),
+        "a hidden pane takes no copy"
+    );
+
+    s.run("p:Show()").unwrap();
+    assert_eq!(char_state(&s, "Doll").builds, 2, "the show hook asks again");
+    s.character_copy_built(h, 1);
+    assert!(
+        char_state(&s, "Doll").copy.is_none(),
+        "a copy for the replaced request is stale"
+    );
+    s.character_copy_built(h, 2);
+    assert_eq!(char_state(&s, "Doll").copy.map(|c| c.build), Some(2));
+
+    // A pane shown with no subject asks for nothing.
+    s.run(
+        r#"
+        e = CreateFrame("PlayerModel", "Empty", UIParent) e:Hide() e:Show()
+    "#,
+    )
+    .unwrap();
+    assert_eq!(char_state(&s, "Empty").builds, 0);
+}
+
+/// `SetRotation` arms the shuffle toward the angle unless it already plays (`0x505bb0`), latches
+/// and holds 100 ms; the paint returns to Stand once no rotation came since the last paint and the
+/// deadline passed (`0x505c50`); a `SetSequence` arm lasts one paint; a whole-body completion arms
+/// Stand (`0x5062a0`) and no `OnAnimFinished` runs.
+#[test]
+fn the_turn_latch_arms_shuffles_and_the_paint_returns_to_stand() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&guids(ORC, 0));
+    s.run(
+        r#"
+        p = CreateFrame("PlayerModel", "Turner", UIParent)
+        p:SetWidth(90) p:SetHeight(90) p:SetPoint("CENTER", 0, 0)
+        p:SetUnit("player")
+        FINISHED = 0
+        p:SetScript("OnAnimFinished", function() FINISHED = FINISHED + 1 end)
+    "#,
+    )
+    .unwrap();
+    let h = s.frame_handle("Turner").unwrap();
+    let arm = |s: &UiScript| char_state(s, "Turner").copy.unwrap().arm;
+
+    // No copy yet: the facing moves and the latch sets, but nothing is armed.
+    s.run("p:SetRotation(0.5)").unwrap();
+    assert!(char_state(&s, "Turner").turn_latch);
+    s.tick(0.0);
+    s.character_copy_built(h, 1);
+    let stand = arm(&s);
+    assert_eq!(stand.anim_id, 0);
+
+    // Growing: ShuffleRight; held the same way, armed once.
+    s.run("p:SetRotation(0.6)").unwrap();
+    let right = arm(&s);
+    assert_eq!(right.anim_id, 12);
+    assert!(right.blend && right.serial > stand.serial);
+    s.run("p:SetRotation(0.7)").unwrap();
+    assert_eq!(arm(&s), right, "a held direction arms once");
+    // Shrinking: ShuffleLeft at once.
+    s.run("p:SetRotation(0.65)").unwrap();
+    assert_eq!(arm(&s).anim_id, 11);
+
+    // The paint inside the hold keeps it; one past the deadline with no rotation returns to Stand.
+    s.tick(0.05);
+    assert_eq!(arm(&s).anim_id, 11, "the latch held it");
+    s.tick(0.03);
+    assert_eq!(arm(&s).anim_id, 11, "before the deadline");
+    s.tick(0.1);
+    let back = arm(&s);
+    assert_eq!(back.anim_id, 0, "past the deadline, Stand");
+    assert!(back.blend);
+    assert_eq!(char_state(&s, "Turner").turn_deadline_ms, 0);
+
+    // `SetSequence` arms the copy with no blend, and the next paint replaces it.
+    s.run("p:SetSequence(60)").unwrap();
+    let emote = arm(&s);
+    assert_eq!((emote.anim_id, emote.blend), (60, false));
+    s.tick(0.01);
+    assert_eq!(arm(&s).anim_id, 0, "Stand is the resting state");
+
+    // A completion of the live arm re-arms Stand; one for an arm already replaced does nothing.
+    let live = arm(&s);
+    s.character_arm_finished(h, 1, live.serial - 1);
+    assert_eq!(arm(&s), live, "a cut arm never completes");
+    s.character_arm_finished(h, 1, live.serial);
+    let again = arm(&s);
+    assert_eq!(again.anim_id, 0);
+    assert!(
+        again.serial > live.serial,
+        "a fresh Stand arm, rolled again"
+    );
+    s.tick(0.5);
+    assert_eq!(
+        s.eval::<u32>("return FINISHED").unwrap(),
+        0,
+        "the copy's callback replaces OnAnimFinished"
+    );
+}
+
+/// `OnUpdateModel` runs only while a model sits at `+0x318` (`0x76d24c`): a stored GUID with no
+/// copy built is no model.
+#[test]
+fn on_update_model_waits_for_the_copy() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&guids(ORC, 0));
+    s.run(
+        r#"
+        p = CreateFrame("PlayerModel", "Painted", UIParent)
+        p:SetWidth(90) p:SetHeight(90) p:SetPoint("CENTER", 0, 0)
+        p:SetUnit("target")
+        PAINTS = 0
+        p:SetScript("OnUpdateModel", function() PAINTS = PAINTS + 1 end)
+    "#,
+    )
+    .unwrap();
+    s.tick(0.02);
+    assert_eq!(
+        s.eval::<u32>("return PAINTS").unwrap(),
+        0,
+        "no copy, no paint"
+    );
+    let h = s.frame_handle("Painted").unwrap();
+    s.character_copy_built(h, 1);
+    s.tick(0.02);
+    assert_eq!(s.eval::<u32>("return PAINTS").unwrap(), 1);
+    s.run("p:Hide() p:Show()").unwrap();
+    s.tick(0.02);
+    assert_eq!(
+        s.eval::<u32>("return PAINTS").unwrap(),
+        1,
+        "the shown pane waits for its new copy"
+    );
 }

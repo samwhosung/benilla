@@ -16,7 +16,6 @@ use benilla_ui::strings::Arg;
 use crate::entities::ItemDisplays;
 use crate::items::Items;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfPlayer};
-use crate::portrait::PaperDollBooth;
 use crate::ui_items::{find_equip_slot, item_link};
 use crate::ui_script::{gate, UiFeed, UiInput};
 
@@ -880,7 +879,6 @@ pub(crate) fn feed_char(
     props: Option<Res<crate::items::RandomProperties>>,
     commands: Res<NetCommands>,
     mut feed: ResMut<CharFeedState>,
-    mut booth: ResMut<PaperDollBooth>,
     names: Res<crate::names::NameCache>,
     // `ItemSubClass.dbc`, for `GetInventoryItemCount`'s container count bit.
     sub_classes: Option<Res<crate::ui_items::ItemSubClasses>>,
@@ -888,13 +886,6 @@ pub(crate) fn feed_char(
     let Some(mut script) = script else {
         return;
     };
-    // The stock `CharacterModelFrame` owns the yaw (`Model_Rotate*` call `SetRotation`); the booth
-    // mirrors it, written only on change so it is not marked changed every frame.
-    let yaw = script.model_pane_facing("CharacterModelFrame");
-    if booth.yaw != yaw {
-        booth.yaw = yaw;
-    }
-
     // Per VM: after a `/reload` both snapshots re-push and their events re-fire.
     let (memo, vm_reset) = feed.vm.get_reset(&script);
 
@@ -1143,7 +1134,6 @@ mod tests {
         let (tx, _rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.init_resource::<CharFeedState>()
-            .init_resource::<PaperDollBooth>()
             .init_resource::<Items>()
             .init_resource::<crate::net::GuidIndex>()
             .init_resource::<crate::names::NameCache>()

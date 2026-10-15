@@ -167,6 +167,15 @@ impl super::UiScript {
         }
     }
 
+    /// Seat the player's own guid in the unit-token resolver ahead of a full
+    /// [`Self::set_unit_guids`] push, so `"player"` names us from the world-enter cascade on.
+    pub fn seat_player_guid(&mut self, guid: u64) {
+        let mut model = self.model_mut();
+        if model.unit_guids.player != guid {
+            model.unit_guids.player = guid;
+        }
+    }
+
     /// Push or clear the player's active [`TrackingState`].
     pub fn set_tracking(&mut self, tracking: Option<TrackingState>) {
         self.model_mut().tracking = tracking;

@@ -150,6 +150,7 @@ mod ui_merchant;
 mod ui_mirror;
 mod ui_models;
 mod ui_net;
+mod ui_panes;
 mod ui_party;
 mod ui_pass;
 mod ui_pet;

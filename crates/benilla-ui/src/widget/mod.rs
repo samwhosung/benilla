@@ -127,14 +127,15 @@ impl<T> Arena<T> {
 mod kinds;
 pub use kinds::{
     model_key, pane_clock_step_ms, slider_fraction, slider_grab, slider_set_value, ArmedSequence,
-    ButtonFont, ButtonState, ButtonVisualState, ColorSelectState, EditAction, EditBoxState,
-    EditOutcome, EditUnit, FrameKind, InsertMode, KindState, KindUpdate, MessageFrameState,
-    MessageLine, MinimapState, ModelFileFacts, ModelFog, ModelLight, ModelPlayHead, ModelState,
-    RegionKind, ScrollFrameState, ScrollingMessageState, SequenceFacts, ShownWrites, SliderState,
-    StatusBarState, TooltipAnchor, TooltipState, MINIMAP_DEFAULT_ARROW_MODEL, MINIMAP_DEFAULT_MASK,
-    MINIMAP_DEFAULT_PLAYER_MODEL, MINIMAP_DEFAULT_ZOOM, MINIMAP_ENGINE_CHILDREN,
-    MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP, TOOLTIP_FADE_SECS, TOOLTIP_LINE_GAP, TOOLTIP_PAD,
-    TOOLTIP_WRAP_WIDTH,
+    ButtonFont, ButtonState, ButtonVisualState, CharacterPane, ColorSelectState, EditAction,
+    EditBoxState, EditOutcome, EditUnit, FrameKind, InsertMode, KindState, KindUpdate,
+    MessageFrameState, MessageLine, MinimapState, ModelFileFacts, ModelFog, ModelLight,
+    ModelPlayHead, ModelState, PaneArm, PaneCopy, RegionKind, ScrollFrameState,
+    ScrollingMessageState, SequenceFacts, ShownWrites, SliderState, StatusBarState, TooltipAnchor,
+    TooltipState, ANIM_SHUFFLE_LEFT, ANIM_SHUFFLE_RIGHT, ANIM_STAND, MINIMAP_DEFAULT_ARROW_MODEL,
+    MINIMAP_DEFAULT_MASK, MINIMAP_DEFAULT_PLAYER_MODEL, MINIMAP_DEFAULT_ZOOM,
+    MINIMAP_ENGINE_CHILDREN, MINIMAP_ZOOM_LEVELS, TOOLTIP_DOUBLE_GAP, TOOLTIP_FADE_SECS,
+    TOOLTIP_LINE_GAP, TOOLTIP_PAD, TOOLTIP_WRAP_WIDTH, TURN_HOLD_MS,
 };
 
 // ── Frame and Region nodes ───────────────────────────────────────────────────────────────────
@@ -614,8 +615,11 @@ impl WidgetArena {
                 FrameKind::ColorSelect => {
                     KindState::ColorSelect(kinds::ColorSelectState::default())
                 }
-                // `CGCharacterModelBase` extends `CSimpleModel`, adding only a turn-animation pair,
-                // which is not modelled.
+                // `CGCharacterModelBase` (`0x505680`) extends `CSimpleModel` with its subject, its
+                // turn latch and its own light.
+                FrameKind::PlayerModel | FrameKind::DressUpModel | FrameKind::TabardModel => {
+                    KindState::Model(kinds::ModelState::character())
+                }
                 k if k.is_model() => KindState::Model(kinds::ModelState::default()),
                 FrameKind::Minimap => KindState::Minimap(kinds::MinimapState::default()),
                 FrameKind::GameTooltip => KindState::Tooltip(kinds::TooltipState::default()),

@@ -1603,9 +1603,13 @@ fn feed_units(
     // the world both times. `PLAYER_LOGIN` only when this VM's load armed it, so a worldport's
     // re-entry fires `PLAYER_ENTERING_WORLD` alone. At world exit, re-arm the entry and forget the
     // player-global memos so the next character seeds them.
-    if self_pair.is_some() {
+    if let Some((_, me)) = self_pair {
         if !memo.entered_world {
             gate.audit("feed_units", "the world-enter events");
+            // `"player"` names us when the cascade runs, from our own create: the stock windows
+            // bind their model panes to it here (`PaperDollFrame.lua:39`), so it is seated ahead
+            // of the aura feed's full resolver push, which this feed is not ordered against.
+            script.seat_player_guid(me.0);
             script.fire_world_enter();
             memo.entered_world = true;
         }

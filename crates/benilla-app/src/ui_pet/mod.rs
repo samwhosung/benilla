@@ -146,10 +146,4 @@ impl PetUnit<'_, '_> {
     pub(crate) fn player_store(&self) -> Option<&ObjectStore> {
         self.store(self.self_guid.0?)
     }
-
-    /// The pet's entity under [`Self::store`]'s contract, for the pet paper doll's model.
-    pub(crate) fn entity(&self, pet_guid: u64) -> Option<Entity> {
-        let e = *self.index.0.get(&pet_guid)?;
-        self.stores.contains(e).then_some(e)
-    }
 }

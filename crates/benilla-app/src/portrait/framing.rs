@@ -222,6 +222,7 @@ impl CameraProjection for WowPortraitProjection {
 
 /// A display id's framing inputs ([`Creatures::display_anchors`]), model-local at scale 1: the
 /// reference bakes with the root scale reset (`0x47a230`).
+#[derive(Clone)]
 pub(crate) struct PortraitAnchors {
     /// The round portrait's authored camera, `cameraLookup[0]`; `None` uses the heuristic fields.
     pub(crate) camera: Option<benilla_assets::PortraitCamera>,

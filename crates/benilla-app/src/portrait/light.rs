@@ -1,5 +1,6 @@
-//! The booths' light rigs: two fixed light buffers, the per-light material-twin cache, and the
-//! reference values behind each. A booth draws with the world's own materials, cloned with only
+//! The round portraits' light rig: a fixed light buffer, its material-twin cache, and the values
+//! behind it. The character panes light through the UI model tiles' pool instead
+//! (`crate::ui_models::PaneLights`). A booth draws with the world's own materials, cloned with only
 //! the light storage swapped ([`material_variant`]), so it never inherits the time of day.
 
 use benilla_world::lighting::LightBlob;
@@ -60,17 +61,13 @@ impl BoothRig {
     }
 }
 
-/// The booths' two lights, each with its own variant cache since a twin points at one buffer:
-///
-/// - [`Self::studio`] lights the round unit-frame portraits. Deviation: a fixed neutral
-///   front-lit studio ([`studio_light`]) replaces the portrait bake's hard-coded rig (`0x525b10`:
-///   ambient 0.45 grey, white directional), because the studio is the look chosen for them.
-/// - [`Self::pane`] lights the body panes, transcriptions of `<PlayerModel>`, with the one light
-///   the reference widget's constructor sets ([`model_pane_light`]).
+/// The booths' light, with its own variant cache since a twin points at one buffer.
+/// [`Self::studio`] lights the round unit-frame portraits. Deviation: a fixed neutral front-lit
+/// studio ([`studio_light`]) replaces the portrait bake's hard-coded rig (`0x525b10`: ambient 0.45
+/// grey, white directional), because the studio is the look chosen for them.
 #[derive(Resource, Default)]
 pub(super) struct BoothLight {
     pub(super) studio: BoothRig,
-    pub(super) pane: BoothRig,
 }
 
 /// Reap the booth twins whose world source died (`AssetEvent::Removed`, e.g. a map teardown); a
@@ -82,7 +79,6 @@ pub(super) fn reap_dead_variants(
     for ev in events.read() {
         if let AssetEvent::Removed { id } = ev {
             booths.studio.variants.remove(id);
-            booths.pane.variants.remove(id);
         }
     }
 }
@@ -135,35 +131,6 @@ pub(crate) fn material_variant(
     Some(handle)
 }
 
-/// The `<PlayerModel>` panes' light, the widget default (no FrameXML sets one):
-///
-/// - `"PlayerModel"` registers factory `0x495bd0` (table at `0x49597a`), which allocates
-///   `CharacterModelBase` (`0x3f8` bytes) and runs the ctor `0x505680`; `DressUpModel` and
-///   `TabardModel` subclass the same base.
-/// - The ctor sets the embedded `CGLight` at `+0x324`: directional (`0x71b620` at `0x5056c9`),
-///   propagation direction `(0, 1, 0)` (`0x71b6a0` at `0x505761` writes `+0x24`, which `0x71bce0`
-///   negates at `0x71be7c` before the SH basis; it overwrites a dead `(0, -0.7071, -0.7071)` from
-///   `0x5056e9`), diffuse `(0.8, 0.8, 0.64)` (`+0x3c`, `0x505702`), ambient `(0.7, 0.7, 0.7)`
-///   (`+0x30`, `0x50572e`), enabled (`0x71b780` at `0x50576a`).
-/// - It is the widget's only light: the fill callback `0x76d680` (set at `[model+0x3bc]` by
-///   `0x76cd30`) stages just this one, and `CSimpleModel::SetLight` (`0x76cf30`) is reached only
-///   from Lua `Model:SetLight`, which no 1.12 FrameXML calls.
-/// - No ×2.5 exterior node on this path (`0x6a7300` is world-only): intensity 1.0.
-///
-/// The light travels toward the model's own left (Bevy `(-1, 0, 0)` under [`wow_to_bevy`]),
-/// square across the body rig's view axis ([`framing::body_frame`]), so what the pane shows is
-/// lit by ambient alone and the diffuse only grazes the figure's screen-left side.
-pub(super) fn model_pane_light() -> LightBlob {
-    // The builder takes the propagation direction, which is what the ctor's `(0,1,0)` is.
-    let sun_dir = benilla_assets::coords::wow_to_bevy([0.0, 1.0, 0.0]);
-    LightBlob::model(
-        [0.7, 0.7, 0.7],  // CharacterModelBase ctor, CGLight+0x30
-        [0.8, 0.8, 0.64], // CharacterModelBase ctor, CGLight+0x3c
-        sun_dir,
-    )
-    .dial(0.4) // row 19.w, which no shader reads
-}
-
 /// The round portraits' studio light: neutral warm-white ambient and diffuse, the sun from the
 /// camera's three-quarter side so the face shown is lit, fog and point lights off. The layout comes
 /// from the scene's own packer ([`LightBlob`]); only the values live here.
@@ -183,37 +150,7 @@ pub(super) fn studio_light() -> LightBlob {
 mod tests {
     use super::*;
 
-    /// The `CharacterModelBase` ctor's values, and the consequence: the light runs square across
-    /// the view axis, so the pane's visible face is ambient-lit only.
-    #[test]
-    fn model_pane_light_is_the_reference_widget_light_across_the_view_axis() {
-        let blob = model_pane_light();
-        let rows = blob.header_rows();
-        assert_eq!(rows[0][..3], [0.7, 0.7, 0.7], "ambient (CGLight+0x30)");
-        assert_eq!(rows[1][..3], [0.8, 0.8, 0.64], "diffuse (CGLight+0x3c)");
-
-        // Row 2 is the propagation direction; the to-light is its negation.
-        let sun = Vec3::from_slice(&rows[2][..3]);
-        assert!(
-            sun.abs_diff_eq(benilla_assets::coords::wow_to_bevy([0.0, 1.0, 0.0]), 1e-6),
-            "propagation = wow_to_bevy(0,1,0): {sun:?}"
-        );
-        let to_light = -sun;
-        assert!(
-            to_light.abs_diff_eq(Vec3::new(1.0, 0.0, 0.0), 1e-6),
-            "to-light = -wow_to_bevy(0,1,0): {to_light:?}"
-        );
-        // The eye is on -Z looking at +Z, so a face toward the camera gets no diffuse.
-        let facing_camera = Vec3::NEG_Z;
-        assert!(
-            facing_camera.dot(to_light).abs() < 1e-6,
-            "the reference light grazes the pane's visible face, it does not key it"
-        );
-        // +X, the figure's screen-left and its own right, catches it.
-        assert!(Vec3::X.dot(to_light) > 0.99, "lit from the viewer's left");
-    }
-
-    /// The studio light keys from the camera's side, the opposite of the pane light.
+    /// The studio light keys from the camera's side.
     #[test]
     fn studio_light_keys_from_the_camera_side() {
         let blob = studio_light();

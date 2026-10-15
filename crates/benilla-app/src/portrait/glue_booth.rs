@@ -799,27 +799,8 @@ pub(super) fn spawn_glue_booth(
     ));
     booths.0.insert(
         GLUE_SLOT.to_string(),
-        Booth {
-            layer: layer.clone(),
-            root,
-            target: image,
-            baked: None,
-            baked_guid: None,
-            snap: None,
-            shown: false,
-            show_rev: 0,
-            // `gate_booth_cameras` keeps the glue camera live while a scene shows.
-            wake: 0,
-            live: false,
-            pending: Vec::new(),
-            pending_since: None,
-            pipes_settling: false,
-            pipes_since: None,
-            aspect: 1.0,
-            rigged: false,
-            parked: false,
-            turn: super::Turn::default(),
-        },
+        // `gate_booth_cameras` keeps the glue camera live while a scene shows.
+        Booth::new(layer.clone(), root, image),
     );
     // The background scene's own root; the character root yaws, this one never does.
     let scene_root = commands.spawn(stage_root(&layer)).id();
@@ -2764,26 +2745,7 @@ mod tests {
 
     /// The glue booth over the character root `root`, as [`spawn_glue_booth`] stands it.
     fn glue_booth(root: Entity) -> Booth {
-        Booth {
-            layer: RenderLayers::layer(GLUE_LAYER),
-            root,
-            target: Handle::default(),
-            baked: None,
-            baked_guid: None,
-            snap: None,
-            shown: false,
-            show_rev: 0,
-            wake: 0,
-            live: false,
-            pending: Vec::new(),
-            pending_since: None,
-            pipes_settling: false,
-            pipes_since: None,
-            aspect: 1.0,
-            rigged: false,
-            parked: false,
-            turn: super::super::Turn::default(),
-        }
+        Booth::new(RenderLayers::layer(GLUE_LAYER), root, Handle::default())
     }
 
     fn booth_app() -> (App, Entity) {

@@ -193,6 +193,25 @@ fn num(v: &Value) -> f32 {
     }
 }
 
+/// `SetSequence`/`SetSequenceTime` on any model pane: a character pane's copy takes the arm (the
+/// wrappers push blend 0, `0x76cf60`), a file pane its own sequence. A character pane holding a
+/// file arms the file.
+fn arm_pane(m: &mut ModelState, id: i32, ms: i64, facts: Option<&ModelFileFacts>) {
+    match m.character.as_mut().filter(|c| c.copy.is_some()) {
+        Some(c) if m.path.is_none() => {
+            m.sequence = id;
+            // An id past the sequence table arms nothing (`0x712484`).
+            if let Ok(id) = u16::try_from(id) {
+                c.arm(id, false);
+                if let Some(copy) = &mut c.copy {
+                    copy.arm.offset_ms = u32::try_from(ms).unwrap_or(0);
+                }
+            }
+        }
+        _ => m.arm(id, ms, facts),
+    }
+}
+
 /// Same, as an integer (sequence and camera indices).
 fn int(v: &Value) -> i32 {
     num(v) as i32
@@ -217,6 +236,9 @@ const FLOAT_EPS: f32 = 2.384_185_8e-7;
 /// and ends in `)`; this one names `Model` and drops the `)`.
 const SET_LIGHT_USAGE: &str = "Usage: Model:SetLight(enabled[, omni, dirX, dirY, dirZ, \
      ambIntensity[, ambR, ambG, ambB], dirIntensity[, dirR, dirG, dirB]]";
+
+/// `PlayerModel:SetUnit`'s usage error (`0x84f284`), which names no receiver.
+const SET_UNIT_USAGE: &str = "Usage: SetUnit(\"unit\")";
 
 /// What [`parse_set_light`] decided.
 enum SetLight {
@@ -354,12 +376,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `ms = 0` (`0x76dec0` → `0x76cf50`), `SetSequenceTime` with the caller's (`0x76dfc0` →
     // `0x76cf80`). It anchors the play head at `clock − trunc(ms)`, re-read every frame
     // (`0x71273d`). The id is an `AnimationData` id, not a file slot.
+    //
+    // On a character pane holding a copy the arm lands on the copy, blend 0; the next paint's
+    // turn timer replaces anything but Stand with Stand (`0x505c81`), so it shows for one paint.
     m.set(
         "SetSequence",
         lua.create_function(|lua, (this, seq): (Table, Value)| {
             let seq = int(&seq);
             let facts = facts_of_pane(lua, &this)?;
-            with_model(lua, &this, |m| m.arm(seq, 0, facts.as_deref()))
+            with_model(lua, &this, |m| arm_pane(m, seq, 0, facts.as_deref()))
         })?,
     )?;
     m.set(
@@ -367,7 +392,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, (this, seq, ms): (Table, Value, Value)| {
             let (seq, ms) = (int(&seq), int(&ms));
             let facts = facts_of_pane(lua, &this)?;
-            with_model(lua, &this, |m| m.arm(seq, i64::from(ms), facts.as_deref()))
+            with_model(lua, &this, |m| {
+                arm_pane(m, seq, i64::from(ms), facts.as_deref())
+            })
         })?,
     )?;
 
@@ -563,52 +590,187 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 pub(super) fn install_player_model(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;
 
-    // `SetUnit(unit)` (`0x84f1fc[0]` → `0x505d70`) clears the `SetModel` path; the unit token is
-    // resolved at render.
+    // `SetUnit(unit)` (`0x84f1fc[0]` → `0x505d70`): the token, which `lua_isstring` must pass
+    // (`0x505dfc`, else the usage at `0x84f284`), resolves to a GUID now (`0x515970`, raising on
+    // an unknown name) and the worker `0x505b50` stores it, so the pane keeps showing that unit
+    // whatever the token names later.
     m.set(
         "SetUnit",
         lua.create_function(|lua, (this, unit): (Table, Value)| {
-            let unit = match &unit {
-                Value::String(s) => Some(s.to_str()?.to_string()),
-                _ => None,
+            with_model(lua, &this, |_| ())?;
+            let token = string_arg(&unit)
+                .ok_or_else(|| mlua::Error::runtime(SET_UNIT_USAGE))?
+                .to_string();
+            let h = frame_handle_of(lua, &this)?;
+            let guid = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.unit_guids.guid_of(&token)?.unwrap_or(0)
             };
-            with_model(lua, &this, |m| {
-                m.unit = unit;
-                m.path = None;
-            })?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .set_pane_unit(h, guid);
             // A dress-up pane rebuilds from the unit's live model, dropping try-ons (`0x5059a0`).
             super::dressup::redress_if_dressup(lua, &this)
         })?,
     )?;
 
-    // `RefreshUnit()` (`0x84f1fc[1]` → `0x505e40`) re-reads the pane's unit; the token already
-    // resolves at render, so only a dress-up pane has work to do.
+    // `RefreshUnit()` (`0x84f1fc[1]` → `0x505e40`) runs the same worker on the GUID the pane
+    // stored (`0x505ee3` loads `+0x3e0`/`+0x3e4`), not on a token.
     m.set(
         "RefreshUnit",
         lua.create_function(|lua, this: Table| {
-            with_model(lua, &this, |_| ())?;
-            // The same worker as `SetUnit`'s (`0x505b50`).
+            let guid = with_model(lua, &this, |m| m.character.as_ref().map_or(0, |c| c.guid))?;
+            let h = frame_handle_of(lua, &this)?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .set_pane_unit(h, guid);
             super::dressup::redress_if_dressup(lua, &this)
         })?,
     )?;
 
-    // `SetRotation(rad)` (`0x84f1fc[2]` → `0x505f00` → `0x505bb0`) writes the yaw `SetFacing`
-    // writes (`0x505c44`). Not built: the reference also plays a turn animation, ShuffleRight
-    // (`0xc`) when the facing grows, ShuffleLeft (`0xb`) when it shrinks, else Stand (0), unless
-    // already armed on bone slot 0, and holds the turn 100 ms (`[+0x3e8]`, `[+0x3ec]`, expired by
-    // `0x505c50`).
+    // `SetRotation(rad)` (`0x84f1fc[2]` → `0x505f00` → `0x505bb0`) turns the copy toward the angle
+    // ([`crate::widget::CharacterPane::rotate`]) and writes the yaw `SetFacing` writes
+    // (`0x505c44`).
     m.set(
         "SetRotation",
         lua.create_function(|lua, (this, rad): (Table, Value)| {
             let rad = num(&rad);
-            with_model(lua, &this, |m| m.facing = rad)
+            let now_ms = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .now_ms();
+            with_model(lua, &this, |m| {
+                if let Some(c) = &mut m.character {
+                    c.rotate(m.facing, rad, now_ms);
+                }
+                m.facing = rad;
+            })
         })?,
     )?;
 
     lua.set_named_registry_value(REG_PLAYERMODEL_METHODS, m)
 }
 
+impl Model {
+    /// The millisecond clock the character panes' turn deadline reads (`0x42c010`).
+    pub(crate) fn now_ms(&self) -> u64 {
+        (self.now * 1000.0).max(0.0) as u64
+    }
+
+    /// `0x505b50` on the pane `h`: store `guid` and clear the display (`0x505b64`-`0x505b70`), and
+    /// if the pane is visible ask for its copy (`0x505b8d`, `0x505b99`).
+    pub(crate) fn set_pane_unit(&mut self, h: FrameHandle, guid: u64) {
+        self.set_pane_subject(h, guid, 0);
+    }
+
+    /// `0x505cb0` on the pane `h`: clear the GUID, store the creature display, and if the pane is
+    /// visible ask for its copy (`0x505cc1`-`0x505cd7`).
+    pub(crate) fn set_pane_display(&mut self, h: FrameHandle, display: u32) {
+        self.set_pane_subject(h, 0, display);
+    }
+
+    fn set_pane_subject(&mut self, h: FrameHandle, guid: u64, display: u32) {
+        let Some(f) = self.arena.frame_mut(h) else {
+            return;
+        };
+        let visible = f.effective_visible;
+        let KindState::Model(m) = &mut f.kind_state else {
+            return;
+        };
+        let Some(c) = &mut m.character else {
+            return;
+        };
+        c.guid = guid;
+        c.display = display;
+        if visible {
+            c.request_build();
+        }
+    }
+}
+
 impl crate::script::UiScript {
+    /// The visible character panes in the arena's registry order: what each asks the host to draw,
+    /// the paint list for their copies.
+    pub fn character_panes(&self) -> Vec<CharacterPaneFrame> {
+        let model = self.model_ref();
+        model
+            .arena
+            .model_kinds()
+            .iter()
+            .filter_map(|&h| {
+                let f = model.arena.frame(h)?;
+                if !f.effective_visible {
+                    return None;
+                }
+                let KindState::Model(m) = &f.kind_state else {
+                    return None;
+                };
+                let c = m.character.as_ref()?;
+                Some(CharacterPaneFrame {
+                    handle: h,
+                    kind: f.kind,
+                    name: f.name.clone(),
+                    guid: c.guid,
+                    display: c.display,
+                    builds: c.builds,
+                    pending: c.pending(),
+                    copy: c.copy,
+                    file: m.path.is_some(),
+                    facing: m.facing,
+                    light: m.light,
+                    fog: m.scene_fog(),
+                })
+            })
+            .collect()
+    }
+
+    /// The host built the copy for request `build` of the pane `h`, or rebuilt it for that same
+    /// request: it goes to `+0x318` with Stand armed (`0x5059a0`), replacing a file `SetModel`
+    /// put there. A stale answer, for a request a later one replaced, is dropped, as is one for a
+    /// pane no longer visible: its hide dropped the copy.
+    pub fn character_copy_built(&mut self, h: FrameHandle, build: u64) {
+        let mut model = self.model_mut();
+        let Some(f) = model.arena.frame_mut(h) else {
+            return;
+        };
+        if !f.effective_visible {
+            return;
+        }
+        let KindState::Model(m) = &mut f.kind_state else {
+            return;
+        };
+        let built = m.character.as_mut().is_some_and(|c| c.copy_built(build));
+        if built {
+            m.path = None;
+            m.armed = None;
+            m.pending_seed = false;
+            m.icon = None;
+        }
+    }
+
+    /// The host played arm `serial` of copy `build` on the pane `h` to its natural end: the copy's
+    /// completion callback (`0x5062a0`) runs, never `OnAnimFinished`.
+    pub fn character_arm_finished(&mut self, h: FrameHandle, build: u64, serial: u64) {
+        let mut model = self.model_mut();
+        if let Some(KindState::Model(m)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            if let Some(c) = &mut m.character {
+                c.finished(build, serial);
+            }
+        }
+    }
+
+    /// The handle of the frame the global `name` names, for tests and instruments.
+    pub fn frame_handle(&self, name: &str) -> Option<FrameHandle> {
+        self.model_ref().arena.lookup(name)
+    }
+
+    /// The character state of the pane `h`, for tests and instruments.
+    pub fn character_pane(&self, h: FrameHandle) -> Option<crate::widget::CharacterPane> {
+        match self.model_ref().arena.frame(h).map(|f| &f.kind_state) {
+            Some(KindState::Model(m)) => m.character.clone(),
+            _ => None,
+        }
+    }
     /// The scene state of the model pane named `name`, for the host that draws it, which knows the
     /// pane by its stock name (`CharacterModelFrame`).
     pub fn model_pane(&self, name: &str) -> Option<ModelState> {
@@ -716,6 +878,32 @@ impl crate::script::UiScript {
             })
             .collect()
     }
+}
+
+/// One row of [`crate::script::UiScript::character_panes`]: a visible `PlayerModel`,
+/// `DressUpModel` or `TabardModel` and what its copy is built from and does.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CharacterPaneFrame {
+    pub handle: FrameHandle,
+    pub kind: crate::widget::FrameKind,
+    /// The global name; `None` for an anonymous `CreateFrame("PlayerModel")`.
+    pub name: Option<String>,
+    /// The stored subject: a unit's GUID, else a creature display (0 for none of either).
+    pub guid: u64,
+    pub display: u32,
+    /// Builds asked so far; a host whose copy answers an older one builds again.
+    pub builds: u64,
+    /// The latest build is unanswered, and no file or clear has overtaken it.
+    pub pending: bool,
+    /// The copy the host built, and the arm its key bone plays.
+    pub copy: Option<crate::widget::PaneCopy>,
+    /// A file `SetModel` put at `+0x318` since the last copy: the pane draws that, not a copy.
+    pub file: bool,
+    /// The facing, the root's yaw (`+0x39c`).
+    pub facing: f32,
+    /// The pane's light and the fog its scene draws with.
+    pub light: ModelLight,
+    pub fog: Option<crate::widget::ModelFog>,
 }
 
 /// One row of [`UiScript::visible_model_panes`].
