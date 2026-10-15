@@ -378,7 +378,7 @@ fn send_spell_cast(
         return;
     }
     // The spell awaiting its click is in flight (`0x6e5026` precedes the arm that raises the
-    // cursor), so TryCast's same-spell test (`6e4d43`) bails on it silently, ahead of the
+    // cursor), so TryCast's same-spell test (`6e4d43`) bails on it with no red line, ahead of the
     // IsTargeting leg.
     if ground.spell() == Some(spell_id) {
         debug!("ui_action: cast {spell_id} suppressed — already awaiting its click");
@@ -394,15 +394,15 @@ fn send_spell_cast(
     // ([`crate::spell::QueuedMeleeSpell`]) and does not guard: `6e4dbe` exempts an in-flight
     // record with the 0x404 bits.
     let on_next_swing = def.is_some_and(|d| d.on_next_swing());
-    // Re-pressing the queued strike is the silent same-spell bail (`6e4d43`): 1.12 has no
-    // re-press-to-unqueue.
+    // Re-pressing the queued strike is the same-spell bail (`6e4d43`), with no red line: 1.12
+    // has no re-press-to-unqueue.
     if on_next_swing && queued_melee.current() == Some(spell_id) {
         debug!("ui_action: cast {spell_id} suppressed — already queued on next swing");
         return;
     }
     if pending.in_flight(now) {
-        // The already-casting refusal: the same spell bails silently (`6e4d43`), another errors
-        // 0x61 "Another action is in progress" (`6e4d97`). The gate reads the in-flight record's
+        // The already-casting refusal: the same spell bails with no red line (`6e4d43`), another
+        // errors 0x61 "Another action is in progress" (`6e4d97`). The gate reads the in-flight record's
         // `Attributes & 0x404`, never the pressed spell's, and a recorded cast is never
         // on-next-swing, so every press class is refused here.
         if pending.current(now) != Some(spell_id) {
@@ -982,7 +982,7 @@ mod tests {
     }
 
     /// A mashed chest opener goes out once as the GameObject block; the re-click is `6e4d43`'s
-    /// silent same-spell bail, with no packet and no red line.
+    /// same-spell bail, with no packet and no red line.
     #[test]
     fn a_mashed_gameobject_opener_never_ships_the_duplicate() {
         const OPENING: u32 = 6478;
@@ -1003,7 +1003,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "no duplicate on the wire");
         assert!(
             world.resource::<CastErrors>().0.is_empty(),
-            "the same spell's re-press is the reference's SILENT bail (6e4d43), not \"Another \
+            "the same spell's re-press is the reference's same-spell bail (6e4d43), not \"Another \
              action is in progress\""
         );
 
@@ -1081,8 +1081,8 @@ mod tests {
 
     /// The attempt pushes every cast (`0x6e5026`) and only an auto-repeat spell is popped after the
     /// send (`0x6e5935` → `0x6e5989`): a ranged shot that is not auto-repeat holds the slot until
-    /// its result, and a press meanwhile meets `6e4d97`'s 0x61, or `6e4d43`'s silent bail for the
-    /// same spell. Auto Shot and a queued strike never occupy the refusal.
+    /// its result, and a press meanwhile meets `6e4d97`'s 0x61, or for the same spell `6e4d43`'s
+    /// bail with no red line. Auto Shot and a queued strike never occupy the refusal.
     #[test]
     fn a_ranged_shot_holds_the_slot_until_its_result_and_auto_repeat_is_popped() {
         let (mut world, rx) = combat_world(false);
@@ -1110,7 +1110,7 @@ mod tests {
         assert!(rx.try_recv().is_err());
         assert!(
             world.resource::<CastErrors>().0.is_empty(),
-            "the same shot again is the silent bail"
+            "the same shot again is the same-spell bail, with no red line"
         );
 
         // The result clears it, as `cast_result` does, and the next press goes out.
@@ -1456,8 +1456,8 @@ mod tests {
     }
 
     /// An item use whose flags carry `ITEM_FLAG_PLAYERCAST` (the Hearthstone's 64) holds the slot
-    /// like a spell: a double-click bails silently (`6e4d43`), a different spell errors 0x61
-    /// (`6e4d97`), and nothing reaches the wire.
+    /// like a spell: a double-click bails with no red line (`6e4d43`), a different spell errors
+    /// 0x61 (`6e4d97`), and nothing reaches the wire.
     #[test]
     fn a_double_clicked_item_never_ships_the_duplicate() {
         let (mut world, rx) = world();
@@ -1473,7 +1473,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "no duplicate on the wire");
         assert!(
             world.resource::<CastErrors>().0.is_empty(),
-            "the same spell's re-press is the reference's SILENT bail (6e4d43), not a red line"
+            "the same spell's re-press is the reference's same-spell bail (6e4d43), not a red line"
         );
 
         send(&mut world, MOUNT, HEARTH_COMMIT);
@@ -1524,7 +1524,7 @@ mod tests {
     }
 
     /// The spell awaiting its click is in flight (`0x6e5026` precedes the arm that raises the
-    /// cursor): pressing it again bails silently with the cursor up (`6e4d43`, ahead of the
+    /// cursor): pressing it again bails with no red line and the cursor up (`6e4d43`, ahead of the
     /// IsTargeting leg at `6e4d62`), and another spell drops the cursor and goes on.
     #[test]
     fn the_spell_awaiting_its_click_bails_on_a_repress_and_another_supersedes_it() {

@@ -35,13 +35,12 @@ const CAST_SLACK: Duration = Duration::from_secs(2);
 /// `ITEM_FLAG_PLAYERCAST` (`0x6e500b`–`0x6e501f`). Only an auto-repeat spell is popped after the
 /// send (`0x6e5935` → `0x6e5989`). While the slot holds a spell that is not on-next-swing, a press
 /// of another spell is refused with 0x61 (`TryCast 0x6e4d97`–`0x6e4dbe`) and the same spell bails
-/// silently (`0x6e4d43`). On-next-swing spells (`Attributes & 0x404`) live in [`QueuedMeleeSpell`]
-/// instead, and the spell awaiting its click is read off [`SpellTargeting`]; [`inflight`] joins the
-/// three into the reference's one slot.
+/// with no red line (`0x6e4d43`). On-next-swing spells (`Attributes & 0x404`) live in
+/// [`QueuedMeleeSpell`] instead, and the spell awaiting its click is read off [`SpellTargeting`];
+/// [`inflight`] joins the three into the reference's one slot.
 ///
-/// Cleared by the cast's resolution (`SMSG_SPELL_GO`, a failing `SMSG_CAST_RESULT`,
-/// `SMSG_SPELL_FAILED_OTHER`), keyed on the spell id, or by [`local_self_cancel`]; `deadline`
-/// covers a lost resolution.
+/// Cleared by the spell's `SMSG_CAST_RESULT`, success or failure (`0x6e7408` → `0x6e741a`), keyed
+/// on the spell id, or by [`local_self_cancel`]; `deadline` covers a lost result.
 #[derive(Resource, Default)]
 pub(crate) struct PendingCast(Option<PendingCastState>);
 
@@ -137,10 +136,10 @@ impl PendingCast {
 /// dies. The reference clears it on a matching `SMSG_CAST_RESULT` alone (`0x6e7330`; its GO
 /// handler never touches `0xceca88`); vmangos sends the OK result just before the GO
 /// (`Spell.cpp:3681`, `Spell.cpp:3715`). A re-arm replaces it (the server's one
-/// `CURRENT_MELEE_SPELL`). Re-pressing the queued spell bails silently (`0x6e4d43`); it un-queues
-/// through the StopAttack chain (`0x5ecac0`, `CancelQueuedCast 0x6e6f30`), which an auto-repeat
-/// press also runs (`0x6e5976`), or through Esc, which cancels it as the inflight spell
-/// (`SpellStopCasting 0x6e6e80`).
+/// `CURRENT_MELEE_SPELL`). Re-pressing the queued spell bails with no red line (`0x6e4d43`); it
+/// un-queues through the StopAttack chain (`0x5ecac0`, `CancelQueuedCast 0x6e6f30`), which an
+/// auto-repeat press also runs (`0x6e5976`), or through Esc, which cancels it as the inflight
+/// spell (`SpellStopCasting 0x6e6e80`).
 #[derive(Resource, Default)]
 pub(crate) struct QueuedMeleeSpell(Option<u32>);
 

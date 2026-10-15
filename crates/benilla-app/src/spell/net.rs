@@ -271,7 +271,6 @@ fn on_spell_go(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Scene) {
             &l.self_guid,
             &sc.stores,
             &mut l.cast_bar,
-            &mut l.pending,
             &mut l.queued_melee,
             &mut sc.text,
             *sc.damage_text,
@@ -313,7 +312,6 @@ fn on_spell_failed_other(In(ev): In<SessionEvent>, mut l: Lifecycle, mut sc: Sce
             &mut sc.cast_events,
             &l.self_guid,
             &mut l.cast_bar,
-            &mut l.pending,
             &mut l.queued_melee,
             l.play_seq.next(),
         );
@@ -817,7 +815,6 @@ fn spell_go(
     self_guid: &SelfGuid,
     stores: &Query<&mut ObjectStore>,
     cast_bar: &mut CastBarFeed,
-    pending: &mut PendingCast,
     queued_melee: &mut QueuedMeleeSpell,
     text: &mut MessageWriter<crate::combat_text::CombatTextSpawn>,
     // The floating-text CVars, read inside the word emitter `0x607140`: they gate miss words too.
@@ -910,7 +907,8 @@ fn spell_go(
         if completes_our_cast {
             cast_bar.0.push(CastBarEdge::Stop);
         }
-        pending.clear_if(spell_id);
+        // The in-flight slot is not popped here: only the spell's `SMSG_CAST_RESULT` pops it
+        // (`0x6e7408` → `0x6e741a`), and vmangos sends that result ahead of the GO.
         // The queued strike fired on this swing: the queue opens here, like the in-flight finish.
         queued_melee.clear_if(spell_id);
 
@@ -1106,7 +1104,6 @@ fn spell_failed_other(
     cast_events: &mut MessageWriter<CastEvent>,
     self_guid: &SelfGuid,
     cast_bar: &mut CastBarFeed,
-    pending: &mut PendingCast,
     queued_melee: &mut QueuedMeleeSpell,
     seq: u64,
 ) {
@@ -1124,7 +1121,6 @@ fn spell_failed_other(
         if interrupts_our_cast {
             cast_bar.0.push(CastBarEdge::Interrupted);
         }
-        pending.clear_if(spell_id);
         // The melee-slot interrupt's other half, beside the failing CAST_RESULT.
         queued_melee.clear_if(spell_id);
     }
@@ -1650,7 +1646,6 @@ mod tests {
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
                           mut cast_bar: ResMut<CastBarFeed>,
-                          mut pending: ResMut<PendingCast>,
                           mut queued_melee: ResMut<QueuedMeleeSpell>,
                           mut text: MessageWriter<CombatTextSpawn>,
                           mut go_lid: MessageWriter<GoLidOpen>,
@@ -1678,7 +1673,6 @@ mod tests {
                             &self_guid,
                             &stores,
                             &mut cast_bar,
-                            &mut pending,
                             &mut queued_melee,
                             &mut text,
                             crate::combat_text::DamageTextGates::default(),
@@ -1782,7 +1776,6 @@ mod tests {
                       mut cast_events: MessageWriter<CastEvent>,
                       self_guid: Res<SelfGuid>,
                       mut cast_bar: ResMut<CastBarFeed>,
-                      mut pending: ResMut<PendingCast>,
                       mut queued_melee: ResMut<QueuedMeleeSpell>| {
                     spell_failed_other(
                         10,
@@ -1793,7 +1786,6 @@ mod tests {
                         &mut cast_events,
                         &self_guid,
                         &mut cast_bar,
-                        &mut pending,
                         &mut queued_melee,
                         1,
                     );
@@ -1906,7 +1898,6 @@ mod tests {
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
                           mut cast_bar: ResMut<CastBarFeed>,
-                          mut pending: ResMut<PendingCast>,
                           mut queued_melee: ResMut<QueuedMeleeSpell>,
                           mut text: MessageWriter<CombatTextSpawn>,
                           mut go_lid: MessageWriter<GoLidOpen>,
@@ -1934,7 +1925,6 @@ mod tests {
                             &self_guid,
                             &stores,
                             &mut cast_bar,
-                            &mut pending,
                             &mut queued_melee,
                             &mut text,
                             gates,
@@ -2072,7 +2062,6 @@ mod tests {
                       self_guid: Res<SelfGuid>,
                       stores: Query<&mut ObjectStore>,
                       mut cast_bar: ResMut<CastBarFeed>,
-                      mut pending: ResMut<PendingCast>,
                       mut queued_melee: ResMut<QueuedMeleeSpell>,
                       mut text: MessageWriter<CombatTextSpawn>,
                       mut go_lid: MessageWriter<GoLidOpen>,
@@ -2100,7 +2089,6 @@ mod tests {
                         &self_guid,
                         &stores,
                         &mut cast_bar,
-                        &mut pending,
                         &mut queued_melee,
                         &mut text,
                         crate::combat_text::DamageTextGates::default(),
@@ -2280,7 +2268,6 @@ mod tests {
                       self_guid: Res<SelfGuid>,
                       stores: Query<&mut ObjectStore>,
                       mut cast_bar: ResMut<CastBarFeed>,
-                      mut pending: ResMut<PendingCast>,
                       mut queued_melee: ResMut<QueuedMeleeSpell>,
                       mut text: MessageWriter<CombatTextSpawn>,
                       mut go_lid: MessageWriter<GoLidOpen>,
@@ -2308,7 +2295,6 @@ mod tests {
                         &self_guid,
                         &stores,
                         &mut cast_bar,
-                        &mut pending,
                         &mut queued_melee,
                         &mut text,
                         crate::combat_text::DamageTextGates::default(),
@@ -2666,7 +2652,6 @@ mod tests {
                           self_guid: Res<SelfGuid>,
                           stores: Query<&mut ObjectStore>,
                           mut cast_bar: ResMut<CastBarFeed>,
-                          mut pending: ResMut<PendingCast>,
                           mut queued_melee: ResMut<QueuedMeleeSpell>,
                           mut text: MessageWriter<CombatTextSpawn>,
                           mut go_lid: MessageWriter<GoLidOpen>,
@@ -2695,7 +2680,6 @@ mod tests {
                             &self_guid,
                             &stores,
                             &mut cast_bar,
-                            &mut pending,
                             &mut queued_melee,
                             &mut text,
                             crate::combat_text::DamageTextGates::default(),
