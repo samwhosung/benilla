@@ -71,6 +71,14 @@ impl HeldUnits<'_> {
             self.by_guid,
             crate::target::Assist::PlayerToUnit,
         );
+        s.can_assist_player = crate::target::can_assist(
+            Some(store),
+            self.factions,
+            self.reputations,
+            self.self_store,
+            self.by_guid,
+            crate::target::Assist::UnitToPlayer,
+        );
         enrich_unit(
             &mut s,
             guid,
@@ -657,6 +665,12 @@ mod tests {
         assert!(
             holds(&app, r#"UnitCanAssist("player", "raid3target") == nil"#),
             "a friendly creature that is not PvP-flagged"
+        );
+        // The other way round the creature is `this` and the player the argument: the player is
+        // player-controlled, so no PvP flag is asked, and `ADD` assists us though we cannot it.
+        assert!(
+            holds(&app, r#"UnitCanAssist("raid3target", "player") == 1"#),
+            "a friendly creature toward the player"
         );
         // A unit nobody holds is no unit: nil.
         assert!(holds(

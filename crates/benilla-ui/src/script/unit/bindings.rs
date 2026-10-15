@@ -8,6 +8,7 @@ use mlua::{Lua, Value};
 use super::super::binding_abi::flag;
 use super::super::calls::ScriptCall;
 use super::super::Model;
+use super::UnitState;
 use super::{
     check_unit_token, classification_word, grey_band, level_reads_unknown, parse_unit_token,
     pick_unit_token, unit_is_grey, unit_predicate, unknownobject, with_unit, PlayerRecord,
@@ -222,11 +223,13 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // UnitCanAssist (`0x516bb0`) delegates to `CanAssist` (`0x6066f0`), `this` the first unit. Both
-    // tokens are `lua_isstring`-gated and both resolved (`0x515940`, which raises on an unknown
-    // one) before either is judged; nil when either names no unit. The snapshot holds only whether
-    // the player can assist the unit, so, as for `UnitCanAttack`, it answers the non-player token
-    // in either argument order; the reverse direction is not built.
+    // UnitCanAssist (`0x516bb0`) delegates to `CanAssist` (`0x6066f0`), the first unit `this`
+    // (`0x516c03`). Both tokens are `lua_isstring`-gated and both resolved (`0x515940`, which raises
+    // on an unknown one) before either is judged; nil when either names no unit. The snapshots hold
+    // `CanAssist` with the player on one side only: `can_assist` with the player as `this`, and
+    // `can_assist_player` with the unit as `this`. So the first unit being the player reads the
+    // second's `can_assist`, the second being the player reads the first's `can_assist_player`,
+    // and two units that are neither are not modelled and answer nil.
     g.set(
         "UnitCanAssist",
         lua.create_function(|lua, (a, b): (Value, Value)| {
@@ -242,15 +245,17 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             check_unit_token(&a)?;
             check_unit_token(&b)?;
-            let token = pick_unit_token(&a, &b);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             let named = |t: &Option<String>| t.as_ref().and_then(|t| model.unit(t));
-            let ok = match (
-                named(&a),
-                named(&b),
-                token.as_ref().and_then(|t| model.unit(t)),
-            ) {
-                (Some(_), Some(_), Some(u)) => u.can_assist,
+            let player_guid = model.unit("player").map_or(0, |p| p.guid);
+            let is_player = |t: &Option<String>, u: &UnitState| {
+                t.as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case("player"))
+                    || (u.guid != 0 && u.guid == player_guid)
+            };
+            let ok = match (named(&a), named(&b)) {
+                (Some(ua), Some(ub)) if is_player(&a, ua) => ub.can_assist,
+                (Some(ua), Some(ub)) if is_player(&b, ub) => ua.can_assist_player,
                 _ => false,
             };
             Ok(flag(ok))

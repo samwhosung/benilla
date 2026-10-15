@@ -401,6 +401,43 @@ fn unit_can_assist_gates_resolves_and_answers_one_or_nil() {
     );
 }
 
+/// `UnitCanAssist(a, b)` is `a` toward `b` (`0x516c03`): with the player first it reads the other
+/// unit's player-to-unit verdict, with the player second the first unit's unit-to-player one, and
+/// two units that are neither are not modelled.
+#[test]
+fn unit_can_assist_takes_the_first_unit_as_the_assister() {
+    let mut s = UiScript::new().unwrap();
+    s.set_unit(
+        "player",
+        Some(UnitState {
+            exists: true,
+            guid: 1,
+            ..Default::default()
+        }),
+    );
+    let unit = |guid, can_assist, can_assist_player| UnitState {
+        exists: true,
+        guid,
+        can_assist,
+        can_assist_player,
+        ..Default::default()
+    };
+    // A unit the player can assist but which will not assist the player, and its mirror.
+    s.set_unit("target", Some(unit(2, true, false)));
+    s.set_unit("npc", Some(unit(3, false, true)));
+    let one = |s: &UiScript, call: &str| s.eval::<Option<i64>>(&format!("return {call}")).unwrap();
+    assert_eq!(one(&s, r#"UnitCanAssist("player", "target")"#), Some(1));
+    assert_eq!(one(&s, r#"UnitCanAssist("target", "player")"#), None);
+    assert_eq!(one(&s, r#"UnitCanAssist("player", "npc")"#), None);
+    assert_eq!(one(&s, r#"UnitCanAssist("npc", "player")"#), Some(1));
+    // A token that names the player by guid is the player; two other units are not modelled.
+    s.set_unit("party1", Some(unit(1, true, true)));
+    assert_eq!(one(&s, r#"UnitCanAssist("party1", "target")"#), Some(1));
+    assert_eq!(one(&s, r#"UnitCanAssist("target", "party1")"#), None);
+    assert_eq!(one(&s, r#"UnitCanAssist("target", "npc")"#), None);
+    assert_eq!(one(&s, r#"UnitCanAssist("npc", "target")"#), None);
+}
+
 /// `UnitIsTrivial` (`0x519d70`) over `0x5f0700`: false for a player, else true when the player
 /// out-levels the unit by more than the grey band (`0x80ae98`, indexed by player level / 5, 12
 /// past the table), strictly; nil for a missing unit.

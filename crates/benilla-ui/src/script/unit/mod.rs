@@ -197,6 +197,9 @@ pub struct UnitState {
     /// Whether the player can assist the unit, `UnitCanAssist("player", unit)`: `CanAssist`
     /// (`0x6066f0`, `this` the player, the argument the unit). Fed where [`Self::can_attack`] is.
     pub can_assist: bool,
+    /// The same with the unit as `this` and the player the argument (`0x6066f0` reads the reaction
+    /// of `this` toward the argument): `UnitCanAssist(unit, "player")`.
+    pub can_assist_player: bool,
     /// `UnitIsCorpse` (`0x5161c0`): the token names a `TYPEID_CORPSE` object, which a dead unit
     /// is not. No feed sets it.
     pub corpse_object: bool,
