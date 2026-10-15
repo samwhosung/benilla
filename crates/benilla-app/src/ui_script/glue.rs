@@ -92,6 +92,8 @@ impl GlueScreen {
 /// is tagged `"GlueXML/<file>: <error>"`, a handler that raised during the walk is one too. The
 /// load's record is left for [`finish_glue_load_log`].
 pub(super) fn load_glue(script: &mut UiScript) -> Vec<String> {
+    // The builder's sweep before the checks and the toc (`0x46a8eb`).
+    super::addons::sweep_loose_interface();
     let mut failures = match reference_ui::glue() {
         Some(glue) => {
             let mut toc = benilla_ui::status::Status::default();

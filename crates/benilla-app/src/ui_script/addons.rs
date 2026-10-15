@@ -356,6 +356,26 @@ fn upcase_unit(c: char) -> char {
     }
 }
 
+/// The glue build's sweep of loose interface folders (`0x51fb50`, at `0x46a8eb`): the reference
+/// moves the install's `Interface\GlueXML` and `Interface\FrameXML` and each moved-aside `Blizzard*`
+/// add-on folder to `%s.old`, and when anything moved empties the loose-file index (`0x51fbe3`).
+/// benilla moves nothing (the index leaves the first two out, discovery the third), and empties
+/// the index when the reference would have.
+pub(super) fn sweep_loose_interface() {
+    let addon_copy = root().is_some_and(|root| {
+        std::fs::read_dir(&root).is_ok_and(|entries| {
+            entries.flatten().any(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|name| benilla_assets::moved_aside(&e.path(), name))
+            })
+        })
+    });
+    if addon_copy || benilla_formats::install_has_loose_interface_folders() {
+        benilla_formats::install_index().clear();
+    }
+}
+
 /// The player's own addons: every folder under the AddOns root with a `<Name>.toc`, in
 /// [`sort_by_directory_order`].
 fn discover_folder() -> Vec<Addon> {
@@ -646,7 +666,11 @@ pub(crate) fn write_enable_state(identity: Option<&(String, String)>, rows: &[(S
         return; // no character picked, or no state folder
     };
     match crate::local_state::write_atomic(&path, &render_enable_state(rows)) {
-        Ok(()) => info!("addons: wrote {} ({} rows)", path.display(), rows.len()),
+        Ok(()) => {
+            info!("addons: wrote {} ({} rows)", path.display(), rows.len());
+            // A written `AddOns.txt` empties the loose-file index (`0x51f09d`).
+            benilla_formats::install_index().clear();
+        }
         Err(e) => warn!("addons: cannot write {}: {e}", path.display()),
     }
 }
@@ -666,6 +690,7 @@ pub(super) fn save_enable_state(script: &UiScript, identity: Option<&(String, St
 pub(super) fn save_addon_variables(script: &mut UiScript, identity: Option<&(String, String)>) {
     let account = crate::local_state::addon_saved_account_dir();
     let character = identity.and_then(|(r, c)| crate::local_state::addon_saved_character_dir(r, c));
+    let mut written = 0;
     for (name, account_names, character_names) in script.addon_saved_variable_sets() {
         for (dir, names) in [(&account, &account_names), (&character, &character_names)] {
             if names.is_empty() {
@@ -685,10 +710,17 @@ pub(super) fn save_addon_variables(script: &mut UiScript, identity: Option<&(Str
             let mut body = SAVED_HEADER.as_bytes().to_vec();
             body.extend(script.saved_variables_bytes_for(names));
             match crate::local_state::write_atomic_bytes(&path, &body) {
-                Ok(()) => info!("ui_script: wrote {}", path.display()),
+                Ok(()) => {
+                    info!("ui_script: wrote {}", path.display());
+                    written += 1;
+                }
                 Err(e) => warn!("ui_script: cannot write {}: {e}", path.display()),
             }
         }
+    }
+    // Any file written empties the loose-file index (`0x51fa2f` tests the count, `0x51fa31`).
+    if written > 0 {
+        benilla_formats::install_index().clear();
     }
     for w in script.take_warnings() {
         warn!("ui_script: saved variables: {w}");
@@ -2560,6 +2592,34 @@ mod tests {
                 "{call}"
             );
         }
+        let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// Writing a character's `AddOns.txt` empties the loose-file index (`0x51f09d`), and so does
+    /// the glue build's sweep when a loose `Blizzard*` copy sits in the AddOns folder (`0x51fbe3`),
+    /// so the next flagged open builds it again.
+    #[test]
+    fn an_enable_write_and_the_glue_sweep_empty_the_loose_index() {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _c = crate::local_state::test_env::EnvGuard::unset("WOW_CAPTURE");
+        let (home, _h) = hermetic_root("loose-clear");
+        let cell = benilla_formats::install_index();
+        let before = cell.generation();
+        let id = ("Realm".to_string(), "Onemage".to_string());
+        write_enable_state(Some(&id), &[("Atlas".into(), true)]);
+        assert!(
+            cell.generation() > before,
+            "the AddOns.txt write empties the index"
+        );
+        write_addon(&home, "Blizzard_Foo", "## Interface: 11200\nfoo.lua\n", &[]);
+        let before = cell.generation();
+        sweep_loose_interface();
+        assert!(
+            cell.generation() > before,
+            "a Blizzard* copy empties it at the glue build"
+        );
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
     }
 

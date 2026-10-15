@@ -4,7 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use crate::wow_data;
 
@@ -44,11 +45,11 @@ const NEVER_INDEXED: &[&str] = &["Interface\\AddOns"];
 /// benilla never writes into the install, so it leaves them unread instead.
 const MOVED_ASIDE: &[&str] = &["Interface\\GlueXML", "Interface\\FrameXML"];
 
-/// The key a name is looked up and entered by: ASCII case folded, as `SStrCmpI` compares. `/`
-/// reads as `\`, where the reference's compare misses a name written with `/` (`0x647f37`):
-/// benilla's loader joins every path with `/`, so a name's own separator is not kept to tell.
+/// The key a name is looked up and entered by: ASCII case folded, as `SStrCmpI` compares
+/// (`0x647f37`). A `/` stays: the keys hold `\`, so a name written with `/` never matches, though
+/// the bucket hash reads it as `\` (`0x64b3f0`).
 fn key(name: &str) -> String {
-    name.replace('/', "\\").to_ascii_lowercase()
+    name.to_ascii_lowercase()
 }
 
 impl LooseIndex {
@@ -150,7 +151,7 @@ impl LooseIndex {
     }
 
     /// The disk file that answers an open of `name` with `open`, `0x647e60`'s probes: with
-    /// [`LooseOpen::BareNameFirst`] the part after the last separator, then for either loose open
+    /// [`LooseOpen::BareNameFirst`] the part after the last backslash, then for either loose open
     /// the whole name. `None` sends the open to the archives; a hit is the open's one answer,
     /// and a file that then fails to read is a miss with no turn to the archives (`0x647865`).
     pub fn resolve(&self, name: &str, open: LooseOpen) -> Option<&Path> {
@@ -158,7 +159,7 @@ impl LooseIndex {
             LooseOpen::Archives => None,
             LooseOpen::Index => self.get(name),
             LooseOpen::BareNameFirst => {
-                let bare = name.rsplit(['\\', '/']).next().unwrap_or(name);
+                let bare = name.rsplit('\\').next().unwrap_or(name);
                 self.get(bare).or_else(|| self.get(name))
             }
         }
@@ -175,20 +176,85 @@ impl LooseIndex {
     }
 }
 
-/// The index of the player's install, built once on first use from [`wow_data`] and its parent
-/// folder, as the reference builds it on the first open (`0x647ebc`); empty without an install.
-/// benilla writes nothing into the install, so nothing it does calls for the rebuild the
-/// reference makes after its own writes there (`0x646fc0`).
-pub fn install_index() -> Arc<LooseIndex> {
-    static INDEX: OnceLock<Arc<LooseIndex>> = OnceLock::new();
-    INDEX
-        .get_or_init(|| {
-            Arc::new(match wow_data() {
-                Some(data) => LooseIndex::build(data.parent(), &data),
-                None => LooseIndex::default(),
-            })
+/// An index with its lifetime: built by the first open that asks (`0x647ebc` calls `0x646ea0`
+/// when the built byte `0xc5251c` is clear), emptied by [`Self::clear`] as `0x646fc0` empties it,
+/// and built again by the next open, so a file added in between is found only after a clear.
+pub struct LooseIndexCell {
+    build: Box<dyn Fn() -> LooseIndex + Send + Sync>,
+    slot: RwLock<Option<Arc<LooseIndex>>>,
+    generation: AtomicU64,
+}
+
+impl LooseIndexCell {
+    /// A cell whose index `build` makes, built on first use.
+    pub fn new(build: impl Fn() -> LooseIndex + Send + Sync + 'static) -> Self {
+        LooseIndexCell {
+            build: Box::new(build),
+            slot: RwLock::new(None),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    /// The index, built now if it is not.
+    pub fn get(&self) -> Arc<LooseIndex> {
+        if let Some(index) = self.slot.read().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            return index.clone();
+        }
+        let mut slot = self.slot.write().unwrap_or_else(|p| p.into_inner());
+        slot.get_or_insert_with(|| Arc::new((self.build)())).clone()
+    }
+
+    /// Empty the index, `0x646fc0`, so the next open builds it again.
+    pub fn clear(&self) {
+        *self.slot.write().unwrap_or_else(|p| p.into_inner()) = None;
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+
+    /// How many times the index has been emptied: a holder of what it answered compares this to
+    /// know its answers may be stale.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+}
+
+/// The player's install as a [`LooseIndexCell`], over [`wow_data`] and its parent folder; empty
+/// without an install.
+pub fn install_index() -> Arc<LooseIndexCell> {
+    static CELL: LazyLock<Arc<LooseIndexCell>> = LazyLock::new(|| {
+        Arc::new(LooseIndexCell::new(|| match wow_data() {
+            Some(data) => LooseIndex::build(data.parent(), &data),
+            None => LooseIndex::default(),
+        }))
+    });
+    CELL.clone()
+}
+
+/// Whether the install holds a loose `Interface\GlueXML` or `Interface\FrameXML` folder, any case:
+/// one the glue build's sweep moves aside (`0x51fb50`), after which it empties the index.
+pub fn install_has_loose_interface_folders() -> bool {
+    let Some(base) = wow_data().and_then(|d| d.parent().map(Path::to_path_buf)) else {
+        return false;
+    };
+    let Some(interface) = child_dir_ignoring_case(&base, "Interface") else {
+        return false;
+    };
+    ["GlueXML", "FrameXML"]
+        .iter()
+        .any(|name| child_dir_ignoring_case(&interface, name).is_some())
+}
+
+/// `dir`'s folder named `name` without regard to case, as `OsMoveFile` finds it on Windows.
+fn child_dir_ignoring_case(dir: &Path, name: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .find(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+                && e.path().is_dir()
         })
-        .clone()
+        .map(|e| e.path())
 }
 
 #[cfg(test)]
@@ -243,9 +309,11 @@ mod tests {
             Some("base font")
         );
         assert_eq!(
-            body(ix.get("Interface/Glues/Common/Glues-WoW-Logo.BLP")).as_deref(),
+            body(ix.get("Interface\\Glues\\Common\\Glues-WoW-Logo.BLP")).as_deref(),
             Some("logo")
         );
+        // `SStrCmpI` does not read `/` as `\`, so a name written with it misses.
+        assert_eq!(ix.get("Interface/Glues/Common/Glues-WoW-Logo.blp"), None);
         assert_eq!(body(ix.get("EULA.html")).as_deref(), Some("eula"));
         // The base walk skips `Data`, so a `Data\` file is never keyed by its `Data\` path.
         assert_eq!(ix.get("Data\\eula.html"), None);
@@ -272,6 +340,11 @@ mod tests {
         assert_eq!(ix.resolve(name, LooseOpen::Archives), None);
         assert_eq!(
             ix.resolve("Fonts\\MORPHEUS.TTF", LooseOpen::BareNameFirst),
+            None
+        );
+        // `SStrChrR(name, '\\')` finds no backslash in a `/` name, whose whole self misses too.
+        assert_eq!(
+            ix.resolve("Fonts/FRIZQT__.TTF", LooseOpen::BareNameFirst),
             None
         );
     }
@@ -317,5 +390,29 @@ mod tests {
         assert_eq!(ix.get("WoW\\WTF\\Config.wtf"), None);
         assert_eq!(ix.get("MyData\\Credits.html"), None);
         assert_eq!(ix.len(), 2);
+    }
+
+    /// A file added after the index is built is not found until the index is emptied, and is
+    /// found by the next open after, which builds it again.
+    #[test]
+    fn a_file_added_after_the_build_is_found_only_after_a_clear() {
+        let t = Tree::new("cell");
+        t.file("Data/eula.html", "eula");
+        let root = t.0.clone();
+        let cell = LooseIndexCell::new(move || LooseIndex::build(Some(&root), &root.join("Data")));
+        assert_eq!(cell.get().len(), 1);
+        t.file("Fonts/FRIZQT__.TTF", "added");
+        assert_eq!(
+            cell.get().get("Fonts\\FRIZQT__.TTF"),
+            None,
+            "the built index stays"
+        );
+        let before = cell.generation();
+        cell.clear();
+        assert_ne!(cell.generation(), before);
+        assert_eq!(
+            body(cell.get().get("Fonts\\FRIZQT__.TTF")).as_deref(),
+            Some("added")
+        );
     }
 }

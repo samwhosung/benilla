@@ -24,7 +24,9 @@ pub use install::{
 };
 /// The install's loose files, asked before the archives by the opens that set the loose flag.
 mod loose;
-pub use loose::{install_index, LooseIndex, LooseOpen};
+pub use loose::{
+    install_has_loose_interface_folders, install_index, LooseIndex, LooseIndexCell, LooseOpen,
+};
 mod characters;
 pub use characters::{
     equip_blits, equip_column, equip_region_candidates, equip_tex_dir, equip_tile, forearm_dressed,

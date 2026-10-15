@@ -189,9 +189,7 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
     let font_chain = chain.clone();
     let font_loose = loose.clone();
     script.set_texture_probe(Box::new(move |path| {
-        benilla_assets::sprite_candidates(path)
-            .iter()
-            .any(|c| chain.lock_recover().contains(c) || loose.find(c, LooseOpen::Index).is_some())
+        benilla_assets::sprite_found(&chain, &loose, path)
     }));
     // Keyed by the path exactly as the region carries it, so a hit allocates nothing (this is
     // asked per zero-size textured region per layout pass); misses are cached too.

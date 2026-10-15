@@ -125,8 +125,13 @@ pub(crate) struct TextEngine {
     path_to_face: HashMap<String, usize>,
     /// Where an unmapped face is read from; `None` only in a VM with no install.
     source: Option<FontSource>,
-    /// Paths that failed to load, read and warned once; a font file does not appear mid-session.
+    /// Paths that failed to load, read and warned once, until the install's index is emptied
+    /// ([`Self::loose_generation`]).
     missing_fonts: HashSet<String>,
+    /// The install index's generation [`Self::missing_fonts`] was filled under: a font added loose
+    /// is found after the index is rebuilt (a `ReloadUI`, a logout), and not before. A face already
+    /// loaded stays, as the client faces load once.
+    loose_generation: u64,
     default_face: usize,
     /// The window's `scale_factor`. Every raster size derives from it ([`Self::ppem`]), so a
     /// change invalidates no cell, only the measures taken under the old value.
@@ -207,6 +212,7 @@ impl TextEngine {
             path_to_face,
             source: Some(source),
             missing_fonts: HashSet::new(),
+            loose_generation: 0,
             default_face,
             dpi,
             chars: HashMap::new(),
@@ -232,6 +238,13 @@ impl TextEngine {
         let key = p.to_ascii_lowercase();
         if let Some(&i) = self.path_to_face.get(&key) {
             return i;
+        }
+        let generation = self.source.as_ref().and_then(|s| s.loose.install.as_ref());
+        if let Some(generation) = generation.map(|cell| cell.generation()) {
+            if generation != self.loose_generation {
+                self.loose_generation = generation;
+                self.missing_fonts.clear();
+            }
         }
         if self.missing_fonts.contains(&key) {
             return self.default_face;
@@ -686,6 +699,7 @@ pub(super) fn test_engine(dpi: f32) -> Option<TextEngine> {
             loose: benilla_assets::LooseFiles::default(),
         }),
         missing_fonts: HashSet::new(),
+        loose_generation: 0,
         default_face,
         dpi,
         chars: HashMap::new(),
@@ -1180,12 +1194,54 @@ mod ppem_tests {
         let _ = std::fs::remove_dir_all(&install);
         std::fs::create_dir_all(install.join("Data")).unwrap();
         std::fs::write(install.join("Data").join("Custom.TTF"), &bytes).unwrap();
-        let index = benilla_formats::LooseIndex::build(Some(&install), &install.join("Data"));
-        e.source.as_mut().unwrap().loose.install = Some(Arc::new(index));
+        let root = install.clone();
+        let cell = benilla_formats::LooseIndexCell::new(move || {
+            benilla_formats::LooseIndex::build(Some(&root), &root.join("Data"))
+        });
+        e.source.as_mut().unwrap().loose.install = Some(Arc::new(cell));
 
         let face = e.face_for(Some("Interface\\Nowhere\\custom.ttf"));
         assert_ne!(face, e.face_for(None), "the loose face, not Friz");
         assert!(e.missing_fonts.is_empty(), "and not recorded as a miss");
+        let _ = std::fs::remove_dir_all(&install);
+    }
+
+    /// A font added loose after a miss stays a miss until the install's index is emptied, then
+    /// loads: the remembered miss goes with the index it was asked of.
+    #[test]
+    fn a_loose_font_added_mid_session_loads_after_the_index_is_emptied() {
+        let Some(mut e) = engine_or_skip() else {
+            return;
+        };
+        let bytes = {
+            let source = e.source.as_ref().expect("the test engine carries a chain");
+            let chain = source.chain.lock_recover();
+            chain.read(TEST_FACES[2]).expect("MORPHEUS is in the chain")
+        };
+        let install =
+            std::env::temp_dir().join(format!("benilla-install-late-font-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&install);
+        std::fs::create_dir_all(install.join("Data")).unwrap();
+        let root = install.clone();
+        let cell = Arc::new(benilla_formats::LooseIndexCell::new(move || {
+            benilla_formats::LooseIndex::build(Some(&root), &root.join("Data"))
+        }));
+        e.source.as_mut().unwrap().loose.install = Some(cell.clone());
+
+        let path = "Fonts\\Late.ttf";
+        assert_eq!(e.face_for(Some(path)), e.face_for(None), "not there yet");
+        std::fs::write(install.join("Data").join("Late.ttf"), &bytes).unwrap();
+        assert_eq!(
+            e.face_for(Some(path)),
+            e.face_for(None),
+            "the built index stays"
+        );
+        cell.clear();
+        assert_ne!(
+            e.face_for(Some(path)),
+            e.face_for(None),
+            "found after the rebuild"
+        );
         let _ = std::fs::remove_dir_all(&install);
     }
 

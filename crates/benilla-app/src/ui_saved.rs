@@ -83,11 +83,15 @@ pub(crate) fn save(script: &mut UiScript) {
         warn!("saved variables: {w}");
     }
     match crate::local_state::write_atomic_bytes(&path, &body) {
-        Ok(()) => info!(
-            "saved variables: wrote {} ({} names)",
-            path.display(),
-            names.len()
-        ),
+        Ok(()) => {
+            info!(
+                "saved variables: wrote {} ({} names)",
+                path.display(),
+                names.len()
+            );
+            // A written saved-variables file empties the loose-file index (`0x491865`).
+            benilla_formats::install_index().clear();
+        }
         Err(e) => warn!("saved variables: cannot write {}: {e}", path.display()),
     }
 }

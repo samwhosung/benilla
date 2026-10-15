@@ -103,7 +103,7 @@ pub(super) fn read(req: &str) -> Option<Vec<u8>> {
     if let Some(overlaid) = fixture::read(req) {
         return overlaid;
     }
-    if let Some(answer) = read_loose(&benilla_formats::install_index(), req) {
+    if let Some(answer) = read_loose(&benilla_formats::install_index().get(), req) {
         return answer;
     }
     let chain = chain()?;
@@ -120,9 +120,12 @@ pub(super) fn read(req: &str) -> Option<Vec<u8>> {
 /// index of the install folder and its `Data\` (`0x647f89`) before the archives (`0x648116`), so
 /// a loose copy of an interface file shadows the archive's, and the login screen's agreements
 /// (`<SimpleHTML file="eula.html">`) are found loose in `Data\`. A file the index holds that
-/// will not read answers `Some(None)`, with no turn to the chain (`0x647865`).
+/// will not read answers `Some(None)`, with no turn to the chain (`0x647865`). `/` is read as `\`,
+/// where the index misses a name written with `/`: a `.toc` line and an `<Include>` or
+/// `<Script file=>` reach here joined by `benilla_ui::loader::join_ref`, which writes every
+/// separator as `/`, so the name's own is gone.
 fn read_loose(index: &benilla_formats::LooseIndex, req: &str) -> Option<Option<Vec<u8>>> {
-    let file = index.resolve(req, benilla_formats::LooseOpen::Index)?;
+    let file = index.resolve(&req.replace('/', "\\"), benilla_formats::LooseOpen::Index)?;
     Some(std::fs::read(file).ok())
 }
 
