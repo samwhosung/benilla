@@ -350,6 +350,12 @@ mod bite {
         // Two functions of the name, or a tail that is not the list.
         let twice = format!("{built} fn args() -> Vec<ScriptValue> {{ vec![] }} {call}");
         assert_eq!(judged(&twice).1.len(), 1);
+        // An early `return` may hand back another list, so the tail alone proves nothing.
+        let early = built.replace("let a = 1;", "if self.0 { return Vec::new(); }");
+        assert_eq!(judged(&format!("{early} {call}")).1.len(), 1);
+        // The word inside a literal, or part of a longer name, is no `return`.
+        let spelled = built.replace("let a = 1;", "let a = \"return\"; let returned = 1;");
+        assert!(judged(&format!("{spelled} {call}")).1.is_empty());
         let late = built
             .replace("vec![", "let v = vec![")
             .replace("]\n", "];\n v\n");

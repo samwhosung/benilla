@@ -750,7 +750,7 @@ fn resolve(
 /// written. That is the reference's own shape for a shared fire: one helper builds the list
 /// (`0x49b0b0` for every `CHAT_MSG_*`), and each call site only names it. `None` for a name two
 /// functions carry, a body that does not end in the list, or an expression that is more than the
-/// call.
+/// call, or a body with a `return` in it.
 fn list_of_call(sources: &[Src], defs: &[Vec<Def>], expr: &str) -> Option<String> {
     let e = expr.trim();
     let open = e.find('(')?;
@@ -781,7 +781,17 @@ fn list_of_call(sources: &[Src], defs: &[Vec<Def>], expr: &str) -> Option<String
         return None;
     }
     let (code, lit) = (src.code.as_bytes(), &src.lit);
-    let at = src.code[d.start..d.end].rfind("vec![")? + d.start;
+    // An early `return` can hand back another list, so the tail is then not the whole story.
+    let body = &src.code[d.start..d.end];
+    if body.match_indices("return").any(|(i, _)| {
+        let (at, end) = (d.start + i, d.start + i + "return".len());
+        !lit[at]
+            && (i == 0 || !is_ident(code[at - 1]))
+            && (end >= code.len() || !is_ident(code[end]))
+    }) {
+        return None;
+    }
+    let at = body.rfind("vec![")? + d.start;
     let close = close_of(code, lit, at + "vec![".len());
     (!lit[at] && src.code[close + 1..d.end].trim().is_empty())
         .then(|| src.code[at..=close].to_string())
