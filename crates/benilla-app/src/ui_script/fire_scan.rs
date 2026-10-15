@@ -84,6 +84,8 @@ pub(super) struct Site {
     pub relay: bool,
     /// The site sits inside a firing function, and forwards what that function was given.
     forward: bool,
+    /// Where the site is in its source's code.
+    pos: usize,
 }
 
 impl Site {
@@ -111,6 +113,17 @@ pub(super) struct Scan {
 /// The files that drain the host queue: their relay carries what the `pending_events` sites
 /// pushed, and those are sites of their own.
 const DRAINS: &[&str] = &["crates/benilla-ui/src/script/tick.rs"];
+
+impl Scan {
+    /// The event-shaped literals of the file at `path`.
+    pub fn file_events(&self, path: &str) -> BTreeSet<String> {
+        self.sources
+            .iter()
+            .find(|s| s.path == path)
+            .map(Src::event_literals)
+            .unwrap_or_default()
+    }
+}
 
 pub(super) fn scan() -> &'static Scan {
     static SCAN: OnceLock<Scan> = OnceLock::new();
@@ -549,6 +562,189 @@ fn pushes(src: &Src, field: &str) -> Vec<(usize, Option<(String, String)>)> {
     out
 }
 
+/// Names a `format!` builds, by its template: the five power tokens of `UnitFrame` (`0x51bbb0`'s
+/// bridge fires `UNIT_MANA` and `UNIT_MAXMANA` and their kin).
+const FORMATTED: &[(&str, &[&str])] = &[
+    ("UNIT_{}", &["MANA", "RAGE", "FOCUS", "ENERGY", "HAPPINESS"]),
+    (
+        "UNIT_MAX{}",
+        &["MANA", "RAGE", "FOCUS", "ENERGY", "HAPPINESS"],
+    ),
+];
+
+impl Src {
+    /// The event-shaped literals between `from` and `to`.
+    fn event_literals_in(&self, from: usize, to: usize) -> Vec<String> {
+        let (b, to) = (self.code.as_bytes(), to.min(self.code.len()));
+        let mut out = Vec::new();
+        let mut k = from;
+        while k < to {
+            if self.lit[k] && b[k] == b'"' && (k == 0 || !self.lit[k - 1]) {
+                let end = (k + 1..b.len()).find(|&e| b[e] == b'"').unwrap_or(b.len());
+                if let Some(body) = self.code.get(k + 1..end) {
+                    if event_shaped(body) {
+                        out.push(body.to_string());
+                    }
+                }
+                k = end + 1;
+            } else {
+                k += 1;
+            }
+        }
+        out
+    }
+}
+
+/// Where the expression starting at `from` ends: the `;`, or with `brace` the `{`, at depth 0.
+fn expr_end(src: &Src, from: usize, brace: bool) -> usize {
+    let (b, mut depth) = (src.code.as_bytes(), 0i32);
+    for (k, &c) in b.iter().enumerate().skip(from) {
+        if src.lit[k] {
+            continue;
+        }
+        match c {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'{' if brace && depth == 0 => return k,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return k;
+                }
+            }
+            b';' if depth == 0 => return k,
+            _ => {}
+        }
+    }
+    b.len()
+}
+
+fn has_word(hay: &str, word: &str) -> bool {
+    hay.match_indices(word).any(|(i, _)| {
+        let (b, end) = (hay.as_bytes(), i + word.len());
+        (i == 0 || !is_ident(b[i - 1])) && (end >= b.len() || !is_ident(b[end]))
+    })
+}
+
+/// The event names `expr` can hold at `pos` of source `i`, read from where the enclosing function
+/// binds it: `let x = <init>;` (an `if`, `match` or `Some(..)` of literals, or another binding),
+/// `for x in <literals> {`, `if let Some(x) = <binding> {`; a `format!` template of [`FORMATTED`];
+/// a `const`; or a call, whose callee's body names them. `None` when it is read from nowhere
+/// else in the function: a parameter, a field, a collection filled elsewhere.
+fn resolve(
+    sources: &[Src],
+    defs: &[Vec<Def>],
+    i: usize,
+    pos: usize,
+    expr: &str,
+    depth: u8,
+) -> Option<Vec<String>> {
+    let e = expr.trim().trim_start_matches('&').trim_start_matches('*');
+    let mut out: Vec<String> = Vec::new();
+    if let Some(rest) = e.strip_prefix("format!(") {
+        let rest = rest.trim_start();
+        let tpl = rest.strip_prefix('"')?.split('"').next()?;
+        let (_, fills) = FORMATTED.iter().find(|(t, _)| *t == tpl)?;
+        return Some(fills.iter().map(|f| tpl.replace("{}", f)).collect());
+    }
+    let ident: String = e.chars().take_while(|&c| is_ident(c as u8)).collect();
+    if ident.is_empty() || depth == 0 {
+        return None;
+    }
+    let rest = e[ident.len()..].trim_start();
+    if rest.starts_with('(') || rest.starts_with("::") {
+        // A call: the last path segment before the arguments names the function.
+        let callee: String = e[..e.find('(')?].rsplit("::").next()?.trim().to_string();
+        for (src, ds) in sources.iter().zip(defs) {
+            for d in ds.iter().filter(|d| d.name == callee && d.firing.is_none()) {
+                out.extend(src.event_literals_in(d.start, d.end));
+            }
+        }
+    } else if rest.is_empty()
+        && ident
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b == b'_' || b.is_ascii_digit())
+    {
+        let decl = format!("const {ident}:");
+        for src in sources {
+            for (k, _) in src.code.match_indices(&decl) {
+                out.extend(src.event_literals_in(k, expr_end(src, k, false)));
+            }
+        }
+    } else if rest.is_empty() {
+        let src = &sources[i];
+        let body = defs[i].iter().rev().find(|d| {
+            d.start <= pos && pos < d.end && d.firing.as_ref().is_none_or(|f| !f.closure)
+        })?;
+        for (k, _) in src.code[body.start..body.end]
+            .match_indices("let ")
+            .map(|(k, m)| (body.start + k, m))
+        {
+            if k > 0 && is_ident(src.code.as_bytes()[k - 1]) {
+                continue;
+            }
+            let after = k + 4;
+            // The pattern runs to the `=` that is not `==`, past a type annotation.
+            let Some(eq) = src.code[after..].find(" = ").map(|p| after + p) else {
+                continue;
+            };
+            let pat = src.code[after..eq].split(':').next().unwrap_or("");
+            if !has_word(pat, &ident)
+                || pat.contains(';')
+                || pat.contains('{') && !pat.contains('(')
+            {
+                continue;
+            }
+            let conditional = {
+                let before = src.code[..k].trim_end();
+                before.ends_with("if") || before.ends_with("while") || before.ends_with("&&")
+            };
+            let (from, to) = (eq + 3, expr_end(src, eq + 3, conditional));
+            out.extend(src.event_literals_in(from, to));
+            let init = src.code[from..to].trim();
+            if init.bytes().all(|b| is_ident(b) || b" &.".contains(&b)) {
+                out.extend(resolve(sources, defs, i, k, init, depth - 1).unwrap_or_default());
+            }
+            // A function the initializer calls names its own events.
+            for (at, _) in init.match_indices('(') {
+                let callee: String = init[..at]
+                    .chars()
+                    .rev()
+                    .take_while(|&c| is_ident(c as u8))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                for (csrc, ds) in sources.iter().zip(defs) {
+                    for d in ds.iter().filter(|d| d.name == callee && d.firing.is_none()) {
+                        out.extend(csrc.event_literals_in(d.start, d.end));
+                    }
+                }
+            }
+        }
+        for (k, _) in src.code[body.start..body.end]
+            .match_indices("for ")
+            .map(|(k, m)| (body.start + k, m))
+        {
+            if k > 0 && is_ident(src.code.as_bytes()[k - 1]) {
+                continue;
+            }
+            let after = k + 4;
+            let Some(inn) = src.code[after..].find(" in ").map(|p| after + p) else {
+                continue;
+            };
+            if !has_word(&src.code[after..inn], &ident) {
+                continue;
+            }
+            out.extend(src.event_literals_in(inn + 4, expr_end(src, inn + 4, true)));
+        }
+    }
+    out.sort();
+    out.dedup();
+    (!out.is_empty()).then_some(out)
+}
+
 fn build(sources: Vec<Src>) -> Scan {
     let defs: Vec<Vec<Def>> = sources.iter().map(defs_of).collect();
 
@@ -628,6 +824,7 @@ fn build(sources: Vec<Src>) -> Scan {
                     list: l.clone(),
                     relay: bare(n, &[]) && bare(l, &[".to_vec()"]),
                     forward: in_firing(at),
+                    pos: at,
                 });
             }
         }
@@ -640,6 +837,7 @@ fn build(sources: Vec<Src>) -> Scan {
                     name: name_of(&n),
                     relay: bare(&n, &[".to_string()"]) && bare(&l, &[]),
                     forward: in_firing(at),
+                    pos: at,
                     list: l,
                 }),
                 None if !in_firing(at) => stray.push(format!(
@@ -688,6 +886,7 @@ fn build(sources: Vec<Src>) -> Scan {
                     list: l.clone(),
                     relay: false,
                     forward: false,
+                    pos: at,
                 });
             }
         }
@@ -700,6 +899,23 @@ fn build(sources: Vec<Src>) -> Scan {
         .cloned()
         .collect();
     sites.extend(tuples);
+
+    // A name held in a binding is read from where the function binds it.
+    let resolved: Vec<Option<Vec<String>>> = sites
+        .iter()
+        .map(|site| match &site.name {
+            Name::Other(expr) if !site.relay => {
+                let i = sources.iter().position(|x| x.path == site.path)?;
+                resolve(&sources, &defs, i, site.pos, expr, 3)
+            }
+            _ => None,
+        })
+        .collect();
+    for (site, names) in sites.iter_mut().zip(resolved) {
+        if let Some(names) = names {
+            site.name = Name::Lit(names);
+        }
+    }
 
     Scan {
         sources,

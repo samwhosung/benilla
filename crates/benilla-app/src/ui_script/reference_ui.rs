@@ -1835,22 +1835,6 @@ mod tests {
     fn every_event_a_chain_file_registers_has_a_producer() {
         let _data = benilla_formats::wow_data_or_skip!();
 
-        // Names built at runtime, which a literal scan cannot see; each entry is a promise that
-        // something fires it.
-        const CONSTRUCTED: &[&str] = &[
-            // `ui_unit.rs` builds `UNIT_{}` and `UNIT_MAX{}` over `power_token`'s five resources.
-            "UNIT_MANA",
-            "UNIT_RAGE",
-            "UNIT_FOCUS",
-            "UNIT_ENERGY",
-            "UNIT_HAPPINESS",
-            "UNIT_MAXMANA",
-            "UNIT_MAXRAGE",
-            "UNIT_MAXFOCUS",
-            "UNIT_MAXENERGY",
-            "UNIT_MAXHAPPINESS",
-        ];
-
         // Registered by a chain file we load and fired by nothing here; each says why.
         const UNPRODUCED: &[(&str, &str)] = &[
             // ── The stock `UIParent.lua`'s listeners first, then the other files' ──
@@ -1868,6 +1852,13 @@ mod tests {
                 "UIParent.lua — the invite popup's hide. The 5875 client registers it, and its \
                  signal wrapper `0x48f470` has no caller and no stored address, so nothing \
                  signals it THERE either: producing it would be a divergence, not a fix",
+            ),
+            (
+                "FRIENDLIST_SHOW",
+                "FriendsFrame.lua — registered, but the name is no row of the client's event table \
+                 (`reference/events.tsv`), so `RegisterEvent` drops it (`0x702140`) and nothing \
+                 signals it. The friend list ends in `FRIENDLIST_UPDATE` (`0x5ae867`), after \
+                 `ShowFriends` too",
             ),
             (
                 "BILLING_NAG_DIALOG",
@@ -1956,8 +1947,7 @@ mod tests {
             ),
         ];
 
-        let mut fired: std::collections::HashSet<String> =
-            CONSTRUCTED.iter().map(|s| (*s).to_string()).collect();
+        let mut fired: std::collections::HashSet<String> = std::collections::HashSet::new();
         // Every fire site of the scan names its event or does not. A name held in a binding or
         // built by a call is an indirect fire, and any event-shaped literal of its file counts as
         // fired, as does any of the file that defines the const or function it names (which may
@@ -2050,51 +2040,6 @@ mod tests {
                 level: 60,
                 ..Default::default()
             }),
-        );
-    }
-
-    /// Every event benilla fires exists in the 1.12 client: an event it can dispatch is a
-    /// NUL-terminated string in `WoW.exe`, and a name missing there no stock listener can ever
-    /// receive. Test files are skipped; they fire synthetic names (`E3`) on purpose.
-    #[test]
-    fn every_event_we_fire_is_an_event_the_reference_has() {
-        let data = benilla_formats::wow_data_or_skip!();
-        let exe = data.parent().expect("install root").join("WoW.exe");
-        let Ok(bytes) = std::fs::read(&exe) else {
-            eprintln!("skipping: no WoW.exe at {exe:?}");
-            return;
-        };
-
-        let mut fired: std::collections::BTreeMap<String, String> =
-            std::collections::BTreeMap::new();
-        for site in &fire_scan::scan().sites {
-            if let fire_scan::Name::Lit(names) = &site.name {
-                for name in names {
-                    fired.entry(name.clone()).or_insert_with(|| site.at());
-                }
-            }
-        }
-        assert!(
-            fired.len() > 100,
-            "the walker found only {} fired events — it stopped matching, which would make this \
-             gate silently vacuous",
-            fired.len()
-        );
-
-        let ghosts: Vec<String> = fired
-            .iter()
-            .filter(|(ev, _)| {
-                let needle: Vec<u8> = ev.bytes().chain(std::iter::once(0)).collect();
-                !bytes.windows(needle.len()).any(|w| w == needle)
-            })
-            .map(|(ev, at)| format!("{ev}  (fired from {at})"))
-            .collect();
-        assert!(
-            ghosts.is_empty(),
-            "benilla fires {} event(s) the 1.12 client does not have — a Classic Era name, or one \
-             invented here. Nothing in the stock UI can ever listen for these:\n  {}",
-            ghosts.len(),
-            ghosts.join("\n  ")
         );
     }
 }

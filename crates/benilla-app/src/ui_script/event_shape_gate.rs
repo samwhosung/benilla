@@ -77,6 +77,33 @@ fn fired_in(scan: &Scan) -> Vec<Fired> {
     out
 }
 
+/// The sites whose name the scan could not read, in a file that names a gated event: a fire there
+/// may be a gated event, and nothing says which. A file that names no gated event is not refused.
+fn unnamed_in(scan: &Scan, table: &BTreeMap<String, Row>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for site in scan.sites.iter().filter(|s| !s.relay) {
+        let Name::Other(expr) = &site.name else {
+            continue;
+        };
+        let gated: Vec<String> = scan
+            .file_events(&site.path)
+            .into_iter()
+            .filter(|e| table.contains_key(e))
+            .collect();
+        if !gated.is_empty() {
+            out.push(format!(
+                "{} fires `{}`, and the file names gated events ({})",
+                site.at(),
+                expr.replace('\n', " "),
+                gated.join(", ")
+            ));
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 fn fire_sites() -> Vec<Fired> {
     fired_in(scan())
 }
@@ -140,6 +167,16 @@ fn every_event_we_fire_carries_the_reference_s_arguments() {
          one call per shape:\n  {}",
         unreadable.len(),
         unreadable.join("\n  ")
+    );
+    let unnamed = unnamed_in(scan(), &table);
+    assert!(
+        unnamed.is_empty(),
+        "{} fire site(s) build their event name away from the call, in files that name gated \
+         events, so this gate cannot tell which event they fire. Bind the name from literals in \
+         the same function (`let event = if .. {{ \"A\" }} else {{ \"B\" }};`), or fire by \
+         literal:\n  {}",
+        unnamed.len(),
+        unnamed.join("\n  ")
     );
     assert!(
         checked >= 175,
@@ -208,28 +245,8 @@ fn every_unit_field_bridge_event_has_a_producer() {
         "only {} bridge events in the table — it stopped being read",
         bridge.len()
     );
-    let fired: std::collections::HashSet<String> = fire_sites()
-        .into_iter()
-        .map(|(n, _, _)| n)
-        .chain(
-            // The ten power events are built with `format!("UNIT_{}", power_token(…))`, so there
-            // is no literal to scan; `reference_ui`'s `CONSTRUCTED` list declares the same family.
-            [
-                "MANA",
-                "RAGE",
-                "FOCUS",
-                "ENERGY",
-                "HAPPINESS",
-                "MAXMANA",
-                "MAXRAGE",
-                "MAXFOCUS",
-                "MAXENERGY",
-                "MAXHAPPINESS",
-            ]
-            .iter()
-            .map(|p| format!("UNIT_{p}")),
-        )
-        .collect();
+    let fired: std::collections::HashSet<String> =
+        fire_sites().into_iter().map(|(n, _, _)| n).collect();
 
     let expected: std::collections::HashSet<&str> = UNPRODUCED.iter().map(|(e, _)| *e).collect();
     let missing: Vec<&str> = bridge
@@ -308,5 +325,63 @@ mod bite {
         let (wrong, unreadable) =
             judged(r#"fn f(s: &mut UiScript) { s.fire_event("NOT_AN_EVENT", name_arg()); }"#);
         assert!(wrong.is_empty() && unreadable.is_empty());
+    }
+
+    /// A name bound in the function is read from its binding, so the site is checked like a
+    /// literal one: an `if`, a `match`, a `for` over literals, a `Some(..)` or a const.
+    #[test]
+    fn a_bound_name_is_checked_against_its_rows() {
+        for body in [
+            r#"fn f(s: &mut UiScript, c: bool) {
+                let event = if c { "GOSSIP_SHOW" } else { "MERCHANT_SHOW" };
+                s.fire_event(event, vec![ScriptValue::Int(1)]);
+            }"#,
+            r#"fn f(s: &mut UiScript, c: u8) {
+                let event = match c { 0 => "GOSSIP_SHOW", _ => "MERCHANT_SHOW" };
+                s.fire_event(event, vec![ScriptValue::Int(1)]);
+            }"#,
+            r#"fn f(s: &mut UiScript) {
+                for event in ["GOSSIP_SHOW", "MERCHANT_SHOW"] {
+                    s.fire_event(event, vec![ScriptValue::Int(1)]);
+                }
+            }"#,
+            r#"fn f(s: &mut UiScript, c: bool) {
+                let ev = if c { Some("GOSSIP_SHOW") } else { None };
+                if let Some(event) = ev {
+                    s.fire_event(event, vec![ScriptValue::Int(1)]);
+                }
+            }"#,
+            r#"const EVENT: &str = "GOSSIP_SHOW";
+            fn f(s: &mut UiScript) { s.fire_event(EVENT, vec![ScriptValue::Int(1)]); }"#,
+            r#"fn f(s: &mut UiScript, c: bool) { s.fire_event(pick(c), vec![ScriptValue::Int(1)]); }
+            fn pick(c: bool) -> &'static str { if c { "GOSSIP_SHOW" } else { "MERCHANT_SHOW" } }"#,
+        ] {
+            let (wrong, unreadable) = judged(body);
+            assert!(unreadable.is_empty());
+            assert!(!wrong.is_empty(), "not checked: {body}");
+        }
+        // The same bindings with the reference's bare list pass.
+        let (wrong, _) = judged(
+            r#"fn f(s: &mut UiScript, c: bool) {
+                let event = if c { "GOSSIP_SHOW" } else { "MERCHANT_SHOW" };
+                s.fire_event(event, vec![]);
+            }"#,
+        );
+        assert!(wrong.is_empty());
+    }
+
+    fn unnamed(body: &str) -> Vec<String> {
+        let s = scan_of(&[("w.rs", WRAPPER), ("a.rs", body)]);
+        unnamed_in(&s, &table())
+    }
+
+    /// A name read from nowhere in the function (a parameter, a field) is refused where the file
+    /// names a gated event, and not where it names none.
+    #[test]
+    fn a_name_read_from_nowhere_is_refused_in_a_file_that_names_gated_events() {
+        let hidden = r#"fn f(s: &mut UiScript, event: &str) { s.fire_event(event, vec![]); }"#;
+        assert!(unnamed(hidden).is_empty());
+        let near = format!("{hidden} const A: &str = \"GOSSIP_SHOW\";");
+        assert_eq!(unnamed(&near).len(), 1);
     }
 }
