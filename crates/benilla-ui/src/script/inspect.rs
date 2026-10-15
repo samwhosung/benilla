@@ -76,6 +76,18 @@ impl super::UiScript {
         self.model_ref().unit_guids.bound_tokens()
     }
 
+    /// The tokens naming one unit now ([`super::UnitGuids::tokens_of`]), the list `0x515e50`
+    /// signals a unit event for.
+    pub fn unit_tokens_of(&self, guid: u64) -> Vec<String> {
+        self.model_ref().unit_guids.tokens_of(guid)
+    }
+
+    /// Whether one unit carries the unit-field watchers now
+    /// ([`super::UnitGuids::has_field_watchers`]).
+    pub fn unit_has_field_watchers(&self, guid: u64) -> bool {
+        self.model_ref().unit_guids.has_field_watchers(guid)
+    }
+
     /// Push (or clear, with `None`) the inspected unit's equipment. It fires nothing: the app fires
     /// `UNIT_INVENTORY_CHANGED` for the token, which the stock slot buttons listen for.
     pub fn set_inspect(&mut self, view: Option<InspectView>) {
