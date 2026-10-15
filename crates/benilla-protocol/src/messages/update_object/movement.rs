@@ -146,13 +146,17 @@ impl MovementBlock {
             speeds = Some(s);
             if flags & MOVEMENT_FLAG_SPLINE_ENABLED != 0 {
                 let spline_flags = read_u32_le(r)?;
-                // The final facing (`packet_builder.cpp:162-167`); a unit on a path faces along it.
+                // The final facing, three independent reads in the reference's order: a point
+                // (`0x47f0bf`), a guid (`0x47f0e8`), an angle (`0x47f0f9`). vmangos writes at most
+                // one (`packet_builder.cpp:162-167`); a unit on a path faces along it.
+                if spline_flags & SPLINE_FLAG_FINAL_POINT != 0 {
+                    let _ = Vector3d::read(r)?;
+                }
+                if spline_flags & SPLINE_FLAG_FINAL_TARGET != 0 {
+                    let _ = read_u64_le(r)?;
+                }
                 if spline_flags & SPLINE_FLAG_FINAL_ANGLE != 0 {
                     let _ = read_f32_le(r)?;
-                } else if spline_flags & SPLINE_FLAG_FINAL_TARGET != 0 {
-                    let _ = read_u64_le(r)?;
-                } else if spline_flags & SPLINE_FLAG_FINAL_POINT != 0 {
-                    let _ = Vector3d::read(r)?;
                 }
                 let time_passed_ms = read_u32_le(r)?;
                 let duration_ms = read_u32_le(r)?;
