@@ -21,8 +21,9 @@ use super::motion::{
     trace_create_spline, trace_move_snap, wire_yaw, write_pose, SplineStopped, ROOT_APPLY_WIPE,
 };
 use super::{
-    merge_store_fields, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity, NetHandlerApp,
-    ObjectStore, RemoteMotion, SelfGuid, SpeedChangeMessage, Spline, UnitMoveModes, UnitSpeeds,
+    merge_store_fields, ActiveMover, FieldChanged, Guid, GuidIndex, NetCommands, NetEntity,
+    NetHandlerApp, ObjectStore, RemoteMotion, SelfGuid, SpeedChangeMessage, Spline, UnitMoveModes,
+    UnitSpeeds,
 };
 
 /// `SMSG_GAMEOBJECT_CUSTOM_ANIM`, bridged to [`crate::go_anim`], which rejects `anim_id >= 4` and
@@ -84,6 +85,7 @@ pub(crate) struct Scene<'w, 's> {
     self_guid: Res<'w, SelfGuid>,
     real: Res<'w, Time<Real>>,
     transforms: Query<'w, 's, &'static mut Transform>,
+    movers: Query<'w, 's, (), With<ActiveMover>>,
     stores: Query<'w, 's, &'static mut ObjectStore>,
     countdowns: Query<'w, 's, &'static mut crate::items::Countdowns>,
     remote: Query<'w, 's, &'static mut RemoteMotion>,
@@ -223,6 +225,7 @@ fn on_object_move(In(ev): In<SessionEvent>, mut sc: Scene) {
             &mut sc.commands,
             &sc.index,
             &mut sc.transforms,
+            &sc.movers,
         );
     }
 }
@@ -656,7 +659,10 @@ fn item_create(
     }
 }
 
-/// An `SMSG_UPDATE_OBJECT` movement block: a new pose that supersedes any active path.
+/// An `SMSG_UPDATE_OBJECT` movement block: a new pose that supersedes any active path. The unit
+/// this client moves, our player or a possessed unit ([`ActiveMover`]), drops it: the reference
+/// compares the block's guid with the active mover before it looks the object up (`0x4670a5`,
+/// `0x4670ae`, `0x4670b5`), and returns on a match (`0x4670bb`).
 fn object_move(
     guid: u64,
     position: [f32; 3],
@@ -664,8 +670,12 @@ fn object_move(
     commands: &mut Commands,
     index: &GuidIndex,
     transforms: &mut Query<&mut Transform>,
+    movers: &Query<(), With<ActiveMover>>,
 ) {
     if let Some(&e) = index.0.get(&guid) {
+        if movers.contains(e) {
+            return;
+        }
         commands.entity(e).remove::<Spline>();
         // A yaw only: the GameObjects that get one are transports, which their tick then owns.
         write_pose(commands, transforms, e, position, wire_yaw(orientation));
