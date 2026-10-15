@@ -6,7 +6,7 @@
 //! ```
 //!
 //! The namespace is [`UiScript::new`]'s, the engine half before any FrameXML loads, which
-//! `scripts/api-coverage.sh` compares with `reference/1.12-globals.tsv`. `--members` adds what `_G`
+//! `scripts/api-coverage.sh` compares with `reference/lua_globals.tsv`. `--members` adds what `_G`
 //! cannot show: the stdlib tables' members (`table.setn` is one) and the per-type metatables.
 use benilla_ui::script::UiScript;
 

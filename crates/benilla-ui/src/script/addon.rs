@@ -1,5 +1,5 @@
 //! The in-game AddOn API, the twelve `engine` addon globals of the 1.12 `_G`
-//! (`reference/1.12-globals.tsv`), over a registry the host fills at discovery. A verb that names
+//! (`reference/lua_globals.tsv`), over a registry the host fills at discovery. A verb that names
 //! an addon takes a 1-based index or a name. `reason` is a token the stock UI splices into
 //! `getglobal("ADDON_"..reason)` (`UIParent.lua:642`), so its spelling is the contract. Verdicts
 //! come from [`super::addon_gate`], the reference's `AddOn_CanLoad` (`0x51e780`).

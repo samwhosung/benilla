@@ -643,7 +643,7 @@ fn container_key(
     Ok((slot >= 1).then_some((i64::from(bag), slot as u32)))
 }
 
-/// Register the container verbs as bare globals, as `reference/1.12-globals.tsv` lists them;
+/// Register the container verbs as bare globals, as `reference/lua_globals.tsv` lists them;
 /// `C_Container` is a later client's namespace, and an addon that finds it assumes that client.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // ContainerIDToInventoryID(containerID) (`0x4f94e0`): `id - 1`, then +20 below 4 else +60, so

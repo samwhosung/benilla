@@ -221,17 +221,17 @@ fn every_sounding_catalog_row_also_has_text_to_show() {
 }
 
 /// Every `PETTAME_*` key `pet_tame_failure_key` returns, the fill for `ERR_TAME_FAILED`, is a 1.12
-/// global, checked against the in-tree `reference/1.12-globals.tsv`.
+/// global, checked against the in-tree `reference/lua_globals.tsv`.
 #[test]
 fn every_pettame_key_is_a_real_1_12_global() {
     let tsv = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-globals.tsv"
+        "/../../reference/lua_globals.tsv"
     );
     let text = std::fs::read_to_string(tsv).expect("the reference surface");
     let globals: BTreeSet<&str> = text
         .lines()
-        .filter(|l| !l.starts_with('#'))
+        .skip(1)
         .filter_map(|l| l.split('\t').next())
         .collect();
 

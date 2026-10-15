@@ -260,6 +260,30 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
+    /// `DEFAULTS` is `reference/chat_types.tsv`, row for row: index, name and colour.
+    #[test]
+    fn the_defaults_are_the_reference_table() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../reference/chat_types.tsv"
+        );
+        let text = std::fs::read_to_string(path).expect("reference/chat_types.tsv");
+        let rows: Vec<Vec<&str>> = text
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').collect())
+            .collect();
+        assert_eq!(rows.len(), DEFAULTS.len(), "row count");
+        for (i, (row, (name, [r, g, b]))) in rows.iter().zip(DEFAULTS).enumerate() {
+            assert_eq!(row[0], i.to_string(), "indices run in order");
+            assert_eq!(
+                (row[1], row[2]),
+                (name, format!("{r:02x}{g:02x}{b:02x}").as_str()),
+                "type {i}"
+            );
+        }
+    }
+
     #[test]
     fn the_index_is_one_based_case_folded_and_zero_on_a_miss() {
         let s = UiScript::new().unwrap();

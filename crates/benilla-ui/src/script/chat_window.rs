@@ -882,6 +882,41 @@ mod record_tests {
     use super::{ChatWindowLook, MESSAGE_GROUPS};
     use crate::script::{UiScript, ZoneChannelRow};
 
+    /// `MESSAGE_GROUPS` is `reference/chat_groups.tsv`, row for row: index, name, `defaultOn` and
+    /// `addedVersion`.
+    #[test]
+    fn the_message_groups_are_the_reference_table() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../reference/chat_groups.tsv"
+        );
+        let text = std::fs::read_to_string(path).expect("reference/chat_groups.tsv");
+        let rows: Vec<Vec<&str>> = text
+            .lines()
+            .skip(1)
+            .map(|l| l.split('\t').collect())
+            .collect();
+        assert_eq!(rows.len(), MESSAGE_GROUPS.len(), "row count");
+        for (i, (row, (name, on, added))) in rows.iter().zip(MESSAGE_GROUPS).enumerate() {
+            let got = (
+                i.to_string(),
+                name,
+                if on { "1" } else { "0" }.to_string(),
+                added.to_string(),
+            );
+            assert_eq!(
+                (
+                    row[0].to_string(),
+                    row[1],
+                    row[2].to_string(),
+                    row[3].to_string()
+                ),
+                got,
+                "group {i}"
+            );
+        }
+    }
+
     /// The boot init (`0x4982c0`); 34 of groups 11 to 68 are `defaultOn`.
     #[test]
     fn the_stock_records_are_the_boot_init() {

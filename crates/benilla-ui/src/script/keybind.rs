@@ -437,7 +437,7 @@ pub(crate) fn register_addon_bindings(lua: &Lua, addon: &str, bindings: &[Bindin
 /// `CBindings::RunCommand` (`0x4b7b50`): look the command up by name (`0x4b7b77`); on a release
 /// run nothing unless it is `runOnUp` (`0x4b7bf1`); else set the global `keystate` to `"down"` or
 /// `"up"` (`0x4b7c0f`), run the body, and set `keystate` to nil (`0x4b7c42`-`0x4b7c4e`), since the
-/// 1.12 client's in-world `_G` has none (`reference/1.12-globals.tsv`). `Ok(false)` when nothing
+/// 1.12 client's in-world `_G` has none (`reference/lua_globals.tsv`). `Ok(false)` when nothing
 /// ran.
 pub(crate) fn run_command(lua: &Lua, command: &str, down: bool) -> mlua::Result<bool> {
     let (name, body) = {

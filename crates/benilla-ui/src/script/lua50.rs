@@ -60,7 +60,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     // ── 3 · the 5.0 compat globals ────────────────────────────────────────────────────────────
     // The client's compat chunk (`0x8722e8`) publishes these three bare, and no bare `setn`
-    // (`reference/1.12-globals.tsv`).
+    // (`reference/lua_globals.tsv`).
     let table: Table = g.get("table")?;
     for name in ["sort", "foreach", "foreachi"] {
         if let Ok(f) = table.get::<Value>(name) {
@@ -306,7 +306,7 @@ mod tests {
             s.eval::<Vec<String>>("local a, b = gcinfo() return { type(a), type(b) }")
                 .unwrap(),
             vec!["number".to_string(), "number".to_string()],
-            "(number,number) — `1.12-shapes.tsv` types the row `agree`"
+            "(number,number) — `bindings.tsv` types the row `agree`"
         );
         // `luaC_checkGC` keeps 5.0's threshold above the live count.
         assert!(
@@ -838,7 +838,7 @@ mod error_quoting_tests {
         let s = UiScript::new().unwrap();
         assert!(
             s.eval::<bool>("return select == nil").unwrap(),
-            "`select` is 5.1's base library; `reference/1.12-globals.tsv` has no row for it"
+            "`select` is 5.1's base library; `reference/lua_globals.tsv` has no row for it"
         );
 
         // 5.0's spelling, as an addon writes it.

@@ -75,7 +75,7 @@ crate of its own or a fork, and benilla opens a piece of itself to such a crate 
 ## Gates
 
 - **The land gates**: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets
-  -- -D warnings`, `cargo test --workspace`, the doc-link and render-pass lints, the player
+  -- -D warnings`, `cargo test --workspace`, the doc-link and render-pass lints, the vendored-reference and message-catalog checks, the player
   build without the `dev` feature with its own tests, and the engine boot checks, as
   `scripts/gates.sh`. It runs on the tree that lands, before it lands; it is memoized on the
   tree. The tests that read the install or the addon corpus skip where the data is absent, and

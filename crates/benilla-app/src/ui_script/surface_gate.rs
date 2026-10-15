@@ -1,6 +1,6 @@
 //! The 1.12 surface of the production load as a gate: every global and widget method an addon
 //! reaches once the core and benilla's layer have loaded is one the 1.12.1 client has
-//! (`reference/1.12-globals.tsv`), one the engine exposes, or a `Benilla`-prefixed name the layer
+//! (`reference/lua_globals.tsv`), one the engine exposes, or a `Benilla`-prefixed name the layer
 //! defines. The engine's own surface is gated on a bare VM in `benilla-ui`, name by name against
 //! the same table (`script::tests::reference_surface`, whose commented `BEYOND_1_12` is the one
 //! allowlist) and method by method against each class's registrar tables
@@ -12,15 +12,15 @@ use benilla_ui::script::{widget_method_census, UiScript};
 
 use crate::local_state::test_env::ENV_LOCK;
 
-/// `reference/1.12-globals.tsv`'s names.
+/// `reference/lua_globals.tsv`'s names.
 fn reference_globals() -> HashSet<&'static str> {
     let tsv = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-globals.tsv"
+        "/../../reference/lua_globals.tsv"
     ));
     let names: HashSet<&str> = tsv
         .lines()
-        .filter(|l| !l.starts_with('#'))
+        .skip(1)
         .filter_map(|l| l.split('\t').next())
         .collect();
     assert!(

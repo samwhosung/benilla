@@ -46,6 +46,8 @@ jobs:
         run: cargo test --workspace
       - name: doc-links
         run: scripts/doc-links.py
+      - name: message-catalog
+        run: scripts/gen-message-catalog.py --check
       - name: pass-span-lint
         run: scripts/pass-span-lint.py
       - name: player-tests

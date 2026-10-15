@@ -1,4 +1,4 @@
-//! The return-shape gate: `reference/1.12-shapes.tsv`, a harvest of every binding the 1.12 client
+//! The return-shape gate: `reference/bindings.tsv`, a harvest of every binding the 1.12 client
 //! registers, against what this client answers.
 //!
 //! A 1.12 predicate answers `1` or `nil`, never a boolean (`IsPetAttackActive` aside), so kinds
@@ -72,16 +72,13 @@ fn rows() -> Vec<Row> {
 /// The `arity_conf = exact` or `set` rows of one `table_kind`: `global` is the registrar surface,
 /// `baselib` the 36-entry Lua base array looped into `_G` at `0x811e28`.
 fn rows_of_kind(kind: &str) -> Vec<Row> {
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-shapes.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-shapes.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
     text.lines()
         .filter(|l| !l.starts_with('#') && !l.starts_with("name\t"))
         .filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            // name fn pair_va table_va table_kind argc argc_conf arity arity_conf kinds …
+            // name fn pair table table_kind argc argc_conf arity arity_conf kinds …
             if f.len() < 9 || f[4] != kind || !(f[8] == "exact" || f[8] == "set") {
                 return None;
             }
@@ -436,11 +433,8 @@ const REGION_PROBES: &[(&str, &str)] = &[
 /// own registrar table's class.
 #[test]
 fn every_widget_method_answers_the_reference_s_return_arity() {
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-shapes.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-shapes.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
 
     let s = benilla_ui::script::UiScript::new().expect("VM");
     let mut made: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
@@ -539,11 +533,8 @@ fn the_tooltip_flag_setters_answer_one_value_that_is_a_number_or_nil() {
         "SetSendMailItem",
     ];
     const TIP_TABLE: &str = "0x854198";
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-shapes.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-shapes.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
     let s = benilla_ui::script::UiScript::new().expect("VM");
     s.run(KIND_HELPER).expect("kind helper");
     s.run("PGTipSetter = CreateFrame('GameTooltip', 'PGTipSetter', UIParent)")
@@ -736,11 +727,8 @@ fn every_query_binding_answers_the_reference_s_return_kinds() {
 /// The widget kind gate, on an instance of each method's own registrar class.
 #[test]
 fn every_widget_method_answers_the_reference_s_return_kinds() {
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-shapes.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-shapes.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
 
     let s = benilla_ui::script::UiScript::new().expect("VM");
     s.run(KIND_HELPER).expect("kind helper");
@@ -866,11 +854,8 @@ const ARG_LADDER: &[&str] = &[
 /// `Pickup*` or `Place*` verb that hands back whether it moved something fails here as readily as
 /// a predicate that answers `true` (`LootSlotIsItem`, `Resurrect*`, `Check*Dist`).
 fn predicate_names() -> Vec<String> {
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-shapes.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-shapes.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
     let mut names: Vec<String> = text
         .lines()
         .filter(|l| !l.starts_with('#') && !l.starts_with("name\t"))
@@ -1051,11 +1036,8 @@ fn no_query_binding_answers_a_lua_boolean() {
 /// raising without one, such as `HasScript("OnClick")` and `IsObjectType("Frame")`.
 #[test]
 fn no_widget_method_answers_a_lua_boolean() {
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-shapes.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-shapes.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
 
     let s = benilla_ui::script::UiScript::new().expect("VM");
     s.run(KIND_HELPER).expect("kind helper");

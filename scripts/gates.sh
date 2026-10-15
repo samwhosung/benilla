@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # The land gate chain: every gate in order, stopping at the first failure.
 #
-# fmt, clippy, test, test-no-install, doc-links, pass-span-lint, player-tests, enforcer,
-# enforcer-no-install. A failure prints the gate's log tail and exits nonzero; a green
-# run stamps the tree, which then re-greens without running. GATES_FORCE=1 runs the chain anyway,
+# fmt, clippy, reference, test, test-no-install, doc-links, message-catalog, pass-span-lint,
+# player-tests, enforcer, enforcer-no-install. A failure prints the gate's log tail and exits
+# nonzero; a green run stamps the tree, which then re-greens without running. GATES_FORCE=1 runs
+# the chain anyway,
 # WOW_DATA picks the install (set and empty: none) and TMPDIR holds the scratch files; the script
 # sets BENILLA_REQUIRE_DATA, BENILLA_ADDON_CORPUS, BENILLA_SKIP_LOG and WOW_WORLDVIEW_CHECK for
-# its gates.
+# its gates. BENILLA_RE names the benilla-re checkout the reference gate compares `reference/` with.
 # `.github/workflows/ci.yml` runs the gates that need neither the install nor a display on a fork's
 # pull request: a gate added here goes there too, if it can run on a bare Linux runner.
 #
@@ -122,6 +123,25 @@ else
          "corpus=$([ -d "$root/wow-addons-vanilla" ] && echo yes || echo no)):" \
          "data-gated tests skip silently on this machine"
 fi
+# reference: `reference/` is byte for byte benilla-re's tables at `reference/PIN`. It needs a
+# benilla-re checkout ($BENILLA_RE, else `../benilla-re` beside the repo, else beside the main
+# checkout when this is a linked worktree) and skips with a line where there is none, unless data
+# is required (BENILLA_REQUIRE_DATA, set above where the install and corpus are, or by the caller).
+re_checkout=""
+primary="$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd || true)"
+for c in "${BENILLA_RE:-}" "$root/../benilla-re" "${primary:+$primary/../benilla-re}"; do
+    if [ -n "$c" ] && [ -d "$c/tables" ]; then re_checkout="$c"; break; fi
+done
+if [ -n "$re_checkout" ]; then
+    run reference scripts/sync-reference.py "$re_checkout" --check
+elif [ -n "$require_data" ] || [ "${BENILLA_REQUIRE_DATA:-}" = "1" ]; then
+    echo "GATE FAILED: reference (no benilla-re checkout: set BENILLA_RE, or clone it beside the repo)"
+    exit 1
+else
+    echo "gate SKIPPED: reference (no benilla-re checkout found: BENILLA_RE, ../benilla-re)"
+    note_timing reference 0 SKIPPED
+fi
+
 run test env ${require_data:+BENILLA_REQUIRE_DATA=1} BENILLA_SKIP_LOG="$skips" cargo test --no-fail-fast --workspace
 report_skips test
 
@@ -132,6 +152,10 @@ run test-no-install env -u BENILLA_REQUIRE_DATA WOW_DATA= cargo test --no-fail-f
 # doc-links: refuses a doc link to a `crate::`, `super::`, `self::` or `Self::` path whose leaf is
 # declared nowhere in the workspace. Narrow on purpose: every other unresolved link is a convention.
 run doc-links scripts/doc-links.py
+
+# message-catalog: `crates/benilla-ui/src/messages/catalog.rs` is what the vendored messages table
+# generates, byte for byte.
+run message-catalog scripts/gen-message-catalog.py --check
 
 # pass-span-lint: refuses a second `pass_span` on a render pass whose span is still open, a fatal
 # wgpu validation error on Vulkan and a silent no-op on Metal and DX12, which no macOS run sees.

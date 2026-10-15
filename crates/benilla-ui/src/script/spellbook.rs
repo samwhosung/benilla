@@ -1506,7 +1506,7 @@ mod tests {
             1,
             "UpdateSpells must fire SPELLS_CHANGED synchronously, as SignalEvent does"
         );
-        // Zero returns, `reference/1.12-shapes.tsv`'s `arity = 0 (exact)`.
+        // Zero returns, `reference/bindings.tsv`'s `arity = 0 (exact)`.
         assert_eq!(s.arity("UpdateSpells()").unwrap(), 0);
         assert!(s.errors().is_empty(), "errors: {:?}", s.errors());
     }

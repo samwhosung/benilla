@@ -36,7 +36,7 @@ fn spacing(s: &UiScript, obj: &str) -> f32 {
         .unwrap_or_else(|e| panic!("{obj}:GetSpacing raised {e}"))
 }
 
-/// Every table carries the pair (`reference/1.12-shapes.tsv`, the `SetSpacing` rows), starting at
+/// Every table carries the pair (`reference/bindings.tsv`, the `SetSpacing` rows), starting at
 /// the constructors' 0 (`0x783a81`, `0x770d89`), and a number round-trips.
 #[test]
 fn every_text_table_round_trips_its_spacing() {

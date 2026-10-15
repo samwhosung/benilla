@@ -27,6 +27,8 @@ use bevy::prelude::*;
 use crate::ui_script::VmMemo;
 use benilla_ui::script::{SeededCvar, UiScript};
 
+#[cfg(test)]
+mod reference_table;
 mod table;
 #[cfg(test)]
 use table::Reference;

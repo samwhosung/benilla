@@ -265,7 +265,7 @@ function setglobal(name, value) _G[name] = value end
 
 -- ── NOT here: wipe / tostringall / strsplit / strjoin / strconcat / strtrim ────────────────────
 -- Six 2.0+ names benilla used to define. 1.12 has none of them (absent from
--- `reference/1.12-globals.tsv`, from the stock chain, and from every registrar table), and the
+-- `reference/lua_globals.tsv`, from the stock chain, and from every registrar table), and the
 -- reason they were kept — that the vanilla addon ecosystem assumes them — did not survive being
 -- checked: the corpus callers are multi-client addons whose vanilla paths raise on a real 1.12
 -- client too, or that define the name themselves under their own namespace.

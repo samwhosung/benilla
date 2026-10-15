@@ -206,17 +206,17 @@ mod tests {
         rest.starts_with(" (a nil value)").then_some(name)
     }
 
-    /// The glue state's functions, `reference/1.12-glue-surface.tsv`'s names.
+    /// The glue state's functions, `reference/glue_surface.tsv`'s names.
     fn glue_surface() -> BTreeSet<String> {
         let path = format!(
-            "{}/../../reference/1.12-glue-surface.tsv",
+            "{}/../../reference/glue_surface.tsv",
             env!("CARGO_MANIFEST_DIR")
         );
         std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("reading {path}: {e}"))
             .lines()
-            .filter(|l| !l.starts_with('#') && !l.starts_with("scope\t"))
-            .filter_map(|l| l.split('\t').nth(2).map(str::to_string))
+            .skip(1)
+            .filter_map(|l| l.split('\t').next().map(str::to_string))
             .collect()
     }
 

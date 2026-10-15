@@ -1,44 +1,4 @@
-# Lua binding shapes of the 1.12.1 client (WoW.exe build 5875): one row per registered
-# binding, name -> (argc, return arity, return kinds), with per-column confidence.
-#
-# 82 registrar tables, 1722 bindings, 1722 analysed, 0 unresolved registrar sites. Four
-# registration routes, extents read from the registrar's own literal: 0x704120
-# RegisterFunction loops; 0x701d80 widget method tables; the inlined base-library loop at
-# 0x811e28; and the four luaL_openlib 0x6f4dc0 tables (bit/math/table/string).
-#
-# Column contract:
-#   arity / arity_conf   sound. exact = one constant; set = a `|`-separated set of possible
-#     counts; unknown = `?`. An imprecise result is a set or `?`, never a wrong single
-#     number. Gate on this.
-#   kind `string?`       string or nil. lua_pushstring 0x6f3890 begins `test edx,edx ; jne`
-#     and tail-jumps to lua_pushnil when the char* is NULL, so `string` is emitted only where
-#     the pointer is a constant that resolves to a readable literal; every other
-#     lua_pushstring is `string?`. A miss path can show a fixed arity and still answer nil in
-#     that slot (GetMapInfo -> nil,0,0; GetChannelName -> 0,nil,0).
-#   kinds / kinds_conf   advisory unless kinds_conf == agree: the independent lua_push* trace
-#     length matches `eax` at every ret, and every ret was checked. A loop (GetTexCoord: 2
-#     textual pushes, 8 real) -> unverified. `agree` is about the binding's own ops:
-#     lua_gettable 0x6f3a40 and lua_rawget 0x6f3b00 replace the key on top with the looked-up
-#     value (recorded as `any`), and a callee that pushes on the binding's behalf is invisible
-#     to the trace, so the returned window may hold slots it never described (note
-#     `delegated-push`).
-#   argc / argc_conf     never gate on this. argc is a max over observed constant Lua stack
-#     indices, with no unknown state, and a silent lower bound when a binding delegates
-#     argument parsing to a helper. Such rows say lower-bound, but the detector is one level
-#     deep, so treat every argc as a floor.
-#   name       not a key. 60 names are registered from more than one table and 21 of those
-#     differ in arity between registrations: GetBuildInfo returns 5 on the glue screen (table
-#     0x8373b8) and 3 in-game (0x83de68); GetAddOnInfo 8 and 7. Key on `fn`, or on
-#     (table_va, name). Every such row carries the note name-not-unique.
-#   notes  stack-leak = the reference pushes a value and then returns 0 (or fewer): the
-#     disabled lottery/vendor stubs, which a faithful client does not copy. variadic = the
-#     count comes from lua_gettop, no constant exists. delegated-push = a foreign callee
-#     pushes on the binding's behalf, so `agree` covers this row's own ops only.
-#     cfg-truncated / indirect-branch / iteration-cap = an edge the walk could not resolve;
-#     such a row's arity is not covered by the soundness claim above.
-#
-# Vendored from the maintainer's analysis (`WOW_RE`); no generator for it lives in this repo.
-name	fn	pair_va	table_va	table_kind	argc	argc_conf	arity	arity_conf	kinds	kinds_conf	notes
+name	fn	pair	table	table_kind	argc	argc_conf	arity	arity_conf	kinds	kinds_conf	notes
 AbandonQuest	0x4dfe00	0x84b128	0x84b0f0	global	0	exact	0	exact	()	agree	
 AbandonSkill	0x4d3ab0	0x849d08	0x849cf8	global	1	exact	0	exact	()	agree	
 AcceptAreaSpiritHeal	0x48df20	0x83e468	0x83de68	global	0	exact	0	exact	()	agree	

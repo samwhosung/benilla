@@ -985,7 +985,7 @@ pub fn framexml_digest() -> String {
 }
 
 /// Every name our VM publishes into `_G`, with its Lua type, with no addons loaded: our side of the
-/// diff against the 1.12 client's in-world `_G` (`reference/1.12-globals.tsv`). Dumped in Lua,
+/// diff against the 1.12 client's in-world `_G` (`reference/lua_globals.tsv`). Dumped in Lua,
 /// since `_G` is what an addon sees.
 pub fn surface() -> Vec<(String, String)> {
     let Ok(mut script) = UiScript::new() else {

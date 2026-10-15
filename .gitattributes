@@ -1,0 +1,2 @@
+# Vendored benilla-re tables are compared and read byte for byte; no line-ending conversion.
+reference/*.tsv -text

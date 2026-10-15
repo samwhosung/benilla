@@ -1,0 +1,382 @@
+site	name	name_address	default	default_address	flags	callback	category	script_hidden	callback_arg	record	help	notes
+0x40239d	disableOptionalSpeech	0x82e50c	0	0x82e570	0		5	0	0		Disables the optional speech packs (forces use of primary speech pack.)	
+0x402880	M2UseZFill	0x82e720	1	0x82e748	0		1	0	0	0x8826ac	z-fill transparent objects	
+0x4028a3	M2UseClipPlanes	0x82e6e0	1	0x82e748	0		1	0	0	0x8826dc	use clip planes for sorting transparent objects	
+0x4028c6	M2UseThreads	0x82e6b0	1	0x82e748	0		1	0	0	0x8826a8	multithread model animations	
+0x4028e9	M2UseShaders	0x82e67c	1	0x82e748	0		1	0	0	0x88251c	skin models using vertex shaders	
+0x40290c	M2UsePixelShaders	0x82e644	0	0x82e570	0		1	0	0	0x882724	light models using pixel shaders	
+0x40292f	M2BatchDoodads	0x82e60c	1	0x82e748	0		1	0	0	0x882678	combine doodads to reduce batch count	
+0x402952	M2Faster	0x82e5cc	1	0x82e748	0		1	0	0	0x882660	end user control of scene optimization mode - (0-3)	
+0x402975	M2FasterDebug	0x82e58c	0	0x82e570	0		1	0	0	0x882714	programmer control of scene optimization mode	
+0x402bd2	accountName	0x82ea18		0x882748	0		4	0	0	0x8826c8	Saved account name	
+0x402bf5	movie	0x82e74c	1	0x82e748	0		4	0	0	0x8826e0	Show movie on startup	
+0x402c18	movieSubtitle	0x82e9d8	0	0x82e570	0		4	0	0	0x882640	Show movie subtitles	
+0x402c3b	checkAddonVersion	0x82e99c	1	0x82e748	0		4	0	0	0x882630	Check interface addon version number	
+0x402c7b	mouseSpeed	0x82e988	?	?	0	0x402ec0	4	0	0	0x882704		default-computed
+0x402c9e	Errors	0x82e980	0	0x82e570	0	0x402ee0	0	0	0	0x882684		
+0x402cc1	ShowErrors	0x82e974	1	0x82e748	0	0x402f20	0	0	0	0x882708		
+0x402ce4	ErrorLevelMin	0x82e964	1	0x82e748	0	0x402f60	0	0	0	0x8826f0		
+0x402d07	ErrorLevelMax	0x82e950	3	0x82e960	0	0x4030b0	0	0	0	0x882520		
+0x402d2a	ErrorFilter	0x82e940	all	0x82e94c	0	0x4030f0	0	0	0	0x8826cc		
+0x402d4d	DesktopGamma	0x82e930	0	0x82e570	0	0x403500	1	0	0	0x8826d4		
+0x402d70	Gamma	0x82e924	1.0	0x82e92c	0	0x4034d0	1	0	0	0x88269c		
+0x402d93	lastCharacterIndex	0x82e8f8	0	0x82e570	0		4	0	0	0x882674	Last character selected	
+0x402db6	readTOS	0x82e8dc	0	0x82e570	0		4	0	0	0x882720	Status of the TOS	
+0x402dd9	readEULA	0x82e8bc	0	0x82e570	0		4	0	0	0x882688	Status of the EULA	
+0x402dfc	readScanning	0x82e88c	0	0x82e570	0		4	0	0	0x8826d8	Status of the Scanning notice	
+0x402e1f	readContest	0x82e860	0	0x82e570	0		4	0	0	0x88265c	Status of the Contest notice	
+0x402e42	scriptMemory	0x82e81c	49152	0x82e858	0		4	0	0	0x882654	Memory used by the scripting system (in Kb)	
+0x402e68	profanityFilter	0x82e7f4	1	0x82e748	0	0x403570	4	0	0	0x88263c	Toggle profanity filter	
+0x402e8e	spamFilter	0x82e7d4	1	0x82e748	0	0x4035b0	4	0	0	0x88267c	Toggle spam filter	
+0x402eb4	timingModeOverride	0x82e754	0	0x82e570	1	0x403610	4	0	0		Select a specific timing mode (0=default 1=GetTickCount 2=RDTSC 3=QueryPerformanceCounter 4=timeGetTime)	
+0x4571ca	SoundBufferSize	0x835dd8	?	?	2		7	0	0		sound buffer size (milliseconds)	default-computed
+0x4571e8	SoundOutputSystem	0x835dac	-1	0x835dd4	2		7	0	0		sound output system	
+0x457206	SoundDriver	0x835d90	-1	0x835dd4	2		7	0	0		sound driver	
+0x457224	SoundMixer	0x835d78	-1	0x835dd4	2		7	0	0		sound mixer	
+0x457242	SoundMinHardwareChannels	0x835d3c	-1	0x835dd4	2		7	0	0		sound minimum hardware channels	
+0x457260	SoundMaxHardwareChannels	0x835cfc	12	0x835d38	2		7	0	0		sound maximum hardware channels	
+0x45727e	SoundMixRate	0x835cd0	44100	0x835cf4	2		7	0	0		sound mix rate (Hz)	
+0x45729c	SoundSoftwareChannels	0x835ca0	12	0x835d38	2		7	0	0		sound software channels	
+0x4572ba	SoundInitFlags	0x835c70	128	0x835c9c	2		7	0	0		sound initialization flags	
+0x4572d8	SoundMemoryCache	0x835c38	4	0x835c6c	2		7	0	0		sound cache memory size (MB)	
+0x4572f6	SoundRolloffFactor	0x835c0c	4	0x835c6c	2		7	0	0		sound rolloff factor	
+0x457317	MusicVolume	0x835be0	0.4	0x835c08	0	0x4573e0	7	0	0		music volume (0.0 to 1.0)	
+0x457338	SoundVolume	0x835bb8	1.0	0x82e92c	0	0x457400	7	0	0		sound volume (0.0 to 1.0)	
+0x457359	MasterVolume	0x835b44	1.0	0x82e92c	0	0x457470	7	0	0		master volume (0.0 to 1.0)	
+0x45737a	MasterSoundEffects	0x835b88	1	0x82e748	0	0x457500	7	0	0			
+0x45739b	EnableMusic	0x835b6c	1	0x82e748	0	0x457490	7	0	0		Enables music	
+0x4573b9	EmoteSounds	0x835b60	1	0x82e748	0		7	0	0			
+0x4573da	SoundReverb	0x835b54	1	0x82e748	0	0x4574d0	7	0	0			
+0x457859	EnableGroupSpeech	0x835f3c	1	0x82e748	0		7	0	0		voice macros	
+0x457877	EnableErrorSpeech	0x835f18	1	0x82e748	0		7	0	0		error speech	
+0x457895	SoundListenerAtCharacter	0x835ee0	1	0x82e748	0		7	0	0		lock listener at character	
+0x4578b3	SoundZoneMusicNoDelay	0x835ec8	0	0x82e570	0		7	0	0			
+0x460a7c	AmbienceVolume	0x836478	0.6	0x8364a8	0	0x460ad0	7	0	0		Ambience Volume (0.0 to 1.0)	
+0x460a9d	EnableAmbience	0x836458	1	0x82e748	0	0x460ab0	7	0	0		Enable Ambience	
+0x462ac9	MapWaterSounds	0x8364e4	1	0x82e748	0	0x462af0	5	0	0	0xb2306c		
+0x46b633	gameTip	0x837140	0	0x82e570	0		5	0	0	0xb41e38		
+0x46b658	showGameTips	0x837130	1	0x82e748	?	?	5	?	?	0xb41e3c		flags-computed;callback-computed;script_hidden-computed;callback_arg-computed
+0x481b72	PlayerFadeInRate	0x83dd58	4096	0x83dd90	0		5	0	0	0xb4b2dc	fade in rate for player mouseover	
+0x481b91	PlayerFadeOutRate	0x83dd20	4096	0x83dd90	0		5	0	0	0xb4b370	fade out rate for player mouseover	
+0x481bbf	PlayerFadeOutAlpha	0x83dce4	128	0x835c9c	0		5	0	0	0xb4b34c	min fade out alpha for player mouseover	
+0x488b8a	?	?	0	0x82e570	?	?	9	?	?			name-computed;flags-computed;callback-computed;script_hidden-computed;callback_arg-computed
+0x48fc18	debugTaint	0x843120	0	0x82e570	0		5	0	0	0xb4da34		
+0x48fc34	statusBarText	0x843110	0	0x82e570	0		5	0	0	0xb4d904		
+0x48fc50	assistAttack	0x843100	0	0x82e570	0		5	0	0	0xb4d8f8		
+0x48fc6c	minimapZoom	0x8430f4	3	0x82e960	0		5	0	0	0xb4b410		
+0x48fc88	minimapInsideZoom	0x8430e0	3	0x82e960	0		5	0	0	0xb4d90c		
+0x48fca4	combatLogOn	0x8430d4	1	0x82e748	0		5	0	0	0xb4da38		
+0x48fcc4	uiScale	0x8430cc	1.0	0x82e92c	0	0x490770	5	0	0	0xb4e2b0		
+0x48fce4	useUiScale	0x8430c0	0	0x82e570	0	0x4907f0	5	0	0	0xb4e2b4		
+0x48fd00	deselectOnClick	0x8430b0	1	0x82e748	0		5	0	0	0xb4e2b8		
+0x48fd1c	showLootSpam	0x8430a0	1	0x82e748	0		5	0	0	0xb4e2bc		
+0x48fd60	targetNearestDistanceRadius	0x843084	?	?	0	0x490720	5	0	0	0xb4d8fc		default-computed
+0x48fda4	targetNearestDistance	0x84306c	?	?	0	0x490720	5	0	0	0xb4e2a8		default-computed
+0x48fdc3	UnitNameRenderMode	0x842fec	2	0x843068	0		1	0	0		sets unitname mode (0=none,1=lockedunits/lockedplayers, 2=playersalways+lockedunits, 3=all units always	
+0x48fddd	UberTooltips	0x842fc8	1	0x82e748	0		4	0	0		Toggles ubertips	
+0x48fdf4	BlockTrades	0x842fbc	0	0x82e570	0		5	0	0			
+0x509439	showsmartrects	0x84f400	0	0x82e570	0		0	0	0	0xbe0c18	Toggle display of SmartScreenRects	
+0x50b72d	mouseInvertYaw	0x84ffa0	0	0x82e570	0		5	0	0	0xbe1084		
+0x50b74d	mouseInvertPitch	0x84ff8c	0	0x82e570	0		5	0	0	0xbe1040		
+0x50b76d	cameraBobbing	0x84ff7c	0	0x82e570	0		5	0	0	0xbe10c0		
+0x50b78d	cameraBobbingLRAmplitude	0x84ff5c	2.0	0x84ff78	0		5	0	0	0xbe1064		
+0x50b7ad	cameraBobbingUDAmplitude	0x84ff40	2.0	0x84ff78	0		5	0	0	0xbe10c8		
+0x50b7d0	cameraBobbingFrequency	0x84ff24	0.8	0x84ff3c	0	0x50bfe0	5	0	0	0xbe0cf8		
+0x50b7f3	cameraDistanceMoveSpeed	0x84ff04	8.33	0x84ff1c	0	0x50c040	5	0	0	0xbe0fbc		
+0x50b816	cameraPitchMoveSpeed	0x84fee4	90.0	0x84fefc	0	0x50c000	5	0	0	0xbe0f78		
+0x50b839	cameraYawMoveSpeed	0x84fec8	180.0	0x84fedc	0	0x50c000	5	0	0	0xbe1094		
+0x50b85c	cameraBobbingSmoothSpeed	0x84feac	0.8	0x84ff3c	0	0x50c040	5	0	0	0xbe10bc		
+0x50b87f	cameraFoVSmoothSpeed	0x84fe90	0.5	0x84fea8	0	0x50c000	5	0	0	0xbe1068		
+0x50b8a2	cameraDistanceSmoothSpeed	0x84fe74	8.33	0x84ff1c	0	0x50c040	5	0	0	0xbe106c		
+0x50b8c5	cameraGroundSmoothSpeed	0x84fe58	7.5	0x84fe70	0	0x50c000	5	0	0	0xbe0fc0		
+0x50b8e8	cameraHeightSmoothSpeed	0x84fe3c	1.2	0x84fe54	0	0x50c040	5	0	0	0xbe0cd4		
+0x50b90b	cameraPitchSmoothSpeed	0x84fe1c	45.0	0x84fe34	0	0x50c000	5	0	0	0xbe0ce4		
+0x50b92e	cameraTargetSmoothSpeed	0x84fe04	90.0	0x84fefc	0	0x50c000	5	0	0	0xbe0fc8		
+0x50b951	cameraYawSmoothSpeed	0x84fdec	180.0	0x84fedc	0	0x50c000	5	0	0	0xbe1070		
+0x50b972	cameraViewBlendStyle	0x84fdd4	1	0x82e748	0		5	0	0	0xbe10b0		
+0x50b997	cameraView	0x84fdc8	1	0x82e748	0	0x50bfc0	5	0	0	0xbe0e68		
+0x50ba02	cameraDistance		0.0	0x84fad4	0	0x50b310	5	0	0			looped;name-built
+0x50ba02	cameraPitch		0.0	0x84fad4	0	0x50b380	5	0	0			looped;name-built
+0x50ba02	cameraYaw		0.0	0x84fad4	0	0x50b3c0	5	0	0			looped;name-built
+0x50ba02	cameraDistanceA		5.55	0x84facc	0	0x50b310	5	0	0			looped;name-built
+0x50ba02	cameraPitchA		10.0	0x84fac4	0	0x50b380	5	0	0			looped;name-built
+0x50ba02	cameraYawA		0.0	0x84fad4	0	0x50b3c0	5	0	0			looped;name-built
+0x50ba02	cameraDistanceB		5.55	0x84facc	0	0x50b310	5	0	0			looped;name-built
+0x50ba02	cameraPitchB		20.0	0x84fabc	0	0x50b380	5	0	0			looped;name-built
+0x50ba02	cameraYawB		0.0	0x84fad4	0	0x50b3c0	5	0	0			looped;name-built
+0x50ba02	cameraDistanceC		13.88	0x84fab4	0	0x50b310	5	0	0			looped;name-built
+0x50ba02	cameraPitchC		30.0	0x84faac	0	0x50b380	5	0	0			looped;name-built
+0x50ba02	cameraYawC		0.0	0x84fad4	0	0x50b3c0	5	0	0			looped;name-built
+0x50ba02	cameraDistanceD		13.88	0x84fab4	0	0x50b310	5	0	0			looped;name-built
+0x50ba02	cameraPitchD		10.0	0x84fac4	0	0x50b380	5	0	0			looped;name-built
+0x50ba02	cameraYawD		0.0	0x84fad4	0	0x50b3c0	5	0	0			looped;name-built
+0x50ba39	camerasmooth	0x84fdb0	1	0x82e748	0		5	0	0	0xbe1074		
+0x50ba55	cameraSmoothPitch	0x84fd9c	0	0x82e570	0		5	0	0	0xbe0fc4		
+0x50ba71	cameraSmoothYaw	0x84fd8c	1	0x82e748	0		5	0	0	0xbe104c		
+0x50ba92	cameraSmoothStyle	0x84fd78	1	0x82e748	0	0x50c060	5	0	0	0xbe1098		
+0x50bab4	cameraSmoothTrackingStyle	0x84fd5c	1	0x82e748	0	0x50c060	5	0	0	0xbe10c4		
+0x50bad0	cameraCustomViewSmoothing	0x84fd40	0	0x82e570	0		5	0	0	0xbe0f1c		
+0x50bb5e	cameraSmoothNeverIdleDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverIdleFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverStopDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverStopFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverTrackDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverTrackFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverMoveDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverMoveFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverStrafeDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverStrafeFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverTurnDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverTurnFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverFearDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothNeverFearFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartIdleDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartIdleFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartStopDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartStopFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartTrackDelay		0.4	0x835c08	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartTrackFactor		10.0	0x84fac4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartMoveDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartMoveFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartStrafeDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartStrafeFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartTurnDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartTurnFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartFearDelay		0.4	0x835c08	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothSmartFearFactor		10.0	0x84fac4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysIdleDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysIdleFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysStopDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysStopFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysTrackDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysTrackFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysMoveDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysMoveFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysStrafeDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysStrafeFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysTurnDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysTurnFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysFearDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bb5e	cameraSmoothAlwaysFearFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataNeverDistanceDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataNeverDistanceFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataNeverPitchDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataNeverPitchFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataNeverYawDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataNeverYawFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataSmartDistanceDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataSmartDistanceFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataSmartPitchDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataSmartPitchFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataSmartYawDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataSmartYawFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataAlwaysDistanceDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataAlwaysDistanceFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataAlwaysPitchDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataAlwaysPitchFactor		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataAlwaysYawDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bbfe	cameraSmoothViewDataAlwaysYawFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverFallAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverFallDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverFallFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverFearAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverFearDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverFearFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverIdleAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverIdleDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverIdleFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverJumpAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverJumpDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverJumpFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverMoveAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverMoveDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverMoveFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverStrafeAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverStrafeDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverStrafeFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverSwimAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverSwimDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverSwimFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTaxiAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTaxiDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTaxiFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTrackAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTrackDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTrackFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTurnAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTurnDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltNeverTurnFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartFallAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartFallDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartFallFactor		0.75	0x84fa14	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartFearAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartFearDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartFearFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartIdleAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartIdleDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartIdleFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartJumpAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartJumpDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartJumpFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartMoveAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartMoveDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartMoveFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartStrafeAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartStrafeDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartStrafeFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartSwimAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartSwimDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartSwimFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTaxiAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTaxiDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTaxiFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTrackAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTrackDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTrackFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTurnAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTurnDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltSmartTurnFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysFallAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysFallDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysFallFactor		0.75	0x84fa14	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysFearAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysFearDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysFearFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysIdleAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysIdleDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysIdleFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysJumpAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysJumpDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysJumpFactor		-1.0	0x84fa1c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysMoveAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysMoveDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysMoveFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysStrafeAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysStrafeDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysStrafeFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysSwimAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysSwimDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysSwimFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTaxiAbsorb		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTaxiDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTaxiFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTrackAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTrackDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTrackFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTurnAbsorb		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTurnDelay		0.0	0x84fad4	0		5	0	0			looped;name-built
+0x50bc9e	cameraTerrainTiltAlwaysTurnFactor		1.0	0x82e92c	0		5	0	0			looped;name-built
+0x50bcfd	cameraTerrainTilt	0x84fd04	0	0x82e570	0		5	0	0	0xbe0fd4		
+0x50bd20	cameraTerrainTiltTimeMin	0x84fce4	3.0	0x84fd00	0	0x50bfe0	5	0	0	0xbe1050		
+0x50bd43	cameraTerrainTiltTimeMax	0x84fcc8	10.0	0x84fac4	0	0x50bfe0	5	0	0	0xbe1054		
+0x50bd63	cameraWaterCollision	0x84fcb0	1	0x82e748	0		5	0	0	0xbe1088		
+0x50bd83	cameraHeightIgnoreStandState	0x84fc90	0	0x82e570	0		5	0	0	0xbe0cf4		
+0x50bda3	cameraPivot	0x84fc84	1	0x82e748	0		5	0	0	0xbe10a4		
+0x50bdc3	cameraPivotDXMax	0x84fc68	0.05	0x84fc7c	0		5	0	0	0xbe0f30		
+0x50bde3	cameraPivotDYMin	0x84fc4c	0.00	0x84fc60	0		5	0	0	0xbe0cec		
+0x50be03	cameraDive	0x84fc40	1	0x82e748	0		5	0	0	0xbe0cd0		
+0x50be26	cameraSurfacePitch	0x84fc2c	0.0	0x84fad4	0	0x50b380	5	0	0	0xbe0f4c		
+0x50be49	cameraSubmergePitch	0x84fc10	18.0	0x84fc24	0	0x50b380	5	0	0	0xbe0fd8		
+0x50be6c	cameraSurfaceFinalPitch	0x84fbf4	5.0	0x84fc0c	0	0x50b380	5	0	0	0xbe0f2c		
+0x50be8f	cameraSubmergeFinalPitch	0x84fbd8	5.0	0x84fc0c	0	0x50b380	5	0	0	0xbe0fdc		
+0x50beb2	cameraDistanceMax	0x84fbbc	15.0	0x84fbd0	0	0x50b310	5	0	0	0xbe0e6c		
+0x50bed2	cameraDistanceMaxFactor	0x84fba4	1.0	0x82e92c	0		5	0	0	0xbe0fe0		
+0x50bef5	cameraPitchSmoothMin	0x84fb8c	0.0	0x84fad4	0	0x50b380	5	0	0	0xbe0f44		
+0x50bf18	cameraPitchSmoothMax	0x84fb74	30.0	0x84faac	0	0x50b380	5	0	0	0xbe0f48		
+0x50bf3b	cameraYawSmoothMin	0x84fb60	0.0	0x84fad4	0	0x50b3c0	5	0	0	0xbe0fb8		
+0x50bf5e	cameraYawSmoothMax	0x84fb4c	0.0	0x84fad4	0	0x50b3c0	5	0	0	0xbe0fcc		
+0x50bf81	cameraSmoothTimeMin	0x84fb34	0.1	0x84fb48	0	0x50bfe0	5	0	0	0xbe105c		
+0x50bfa4	cameraSmoothTimeMax	0x84fb20	2.0	0x84ff78	0	0x50bfe0	5	0	0	0xbe1038		
+0x5142bc	Joystick	0x8503ac	0	0x82e570	0	0x5142f0	5	0	0		enable joystick control	
+0x5ab6a6	realmList	0x83f2dc	us.logon.worldofwarcraft.com:3724	0x85d660	0		6	0	0	0xc2812c	Address of realm list server	
+0x5ab7ee	realmName	0x83f2d0		0x882748	?	?	6	?	?	0xc28130	Last realm connected to	flags-computed;callback-computed;script_hidden-computed;callback_arg-computed
+0x5e24a9	CombatModeMaxDistance	0x860354	30.0f	0x8603ac	0		3	0	0		Specifies the range outside of which combat mode is impossible	
+0x5e24c7	guildMemberNotify	0x86030c	0	0x82e570	0		4	0	0	0xc4d3c4	Receive notification when guild members log on/off	
+0x5e24ea	autoClearAFK	0x8602cc	1	0x82e748	0		4	0	0	0xc4d68c	Automatically clear AFK when moving or chatting	
+0x603299	PetMeleeDamage	0x860e74	1	0x82e748	0		4	0	0	0xc4d9cc	Toggle display of in-world pet melee damage feedback	
+0x6032bc	PetSpellDamage	0x860e2c	1	0x82e748	0		4	0	0	0xc4d99c	Toggle display of in-world pet spell damage feedback	
+0x6032df	CombatDamage	0x860df0	1	0x82e748	0		4	0	0	0xc4d944	Toggles all damage numbers over a creature	
+0x603302	ChatBubbles	0x860dbc	1	0x82e748	0		4	0	0		Toggles showing in-game chat bubbles	
+0x60331d	ChatBubblesParty	0x860da8	0	0x82e570	0		4	0	0			
+0x60333b	PlayerAnim	0x860d68	0	0x82e570	0		4	0	0	0xc4d974	Toggle display of player anims in the debug window	
+0x60335e	TargetAnim	0x860d20	0	0x82e570	0		4	0	0	0xc4da30	Toggle display of player's target anims in the debug window	
+0x603390	AutoInteract	0x860ce8	1|0	0x82e748|0x82e570	0		4	0	0	0xc4d9a4	Toggles auto-move to interact target	default-conditional
+0x6033b3	CombatLogPeriodicSpells	0x860cd0	1	0x82e748	0		5	0	0			
+0x6039b5	showfootprintparticles	0x860ef8	1	0x82e748	1	?	1	?	?	0xc4d948	toggles rendering of footprint particles	callback-computed;script_hidden-computed;callback_arg-computed
+0x6039d4	automoveturnspeedwide	0x860ed8	1200	0x860ef0	?	?	5	?	?			flags-computed;callback-computed;script_hidden-computed;callback_arg-computed
+0x6039ee	automoveturnspeednarrow	0x860ebc	800	0x860ed4	?	?	5	?	?			flags-computed;callback-computed;script_hidden-computed;callback_arg-computed
+0x6146ec	ObjectSelectionCircle	0x861380	1	0x82e748	0		0	0	0	0xc4daf8		
+0x623133	FootstepSounds	0x8627d8	1	0x82e748	0		5	0	0	0xc4e140		
+0x626d39	CombatLogRangeParty	0x862aec	50	0x835e10	0		5	0	0			looped
+0x626d39	CombatLogRangePartyPet	0x862ad4	50	0x835e10	0		5	0	0			looped
+0x626d39	CombatLogRangeFriendlyPlayers	0x862ab4	50	0x835e10	0		5	0	0			looped
+0x626d39	CombatLogRangeFriendlyPlayersPets	0x862a90	50	0x835e10	0		5	0	0			looped
+0x626d39	CombatLogRangeHostilePlayers	0x862a70	50	0x835e10	0		5	0	0			looped
+0x626d39	CombatLogRangeHostilePlayersPets	0x862a4c	50	0x835e10	0		5	0	0			looped
+0x626d39	CombatLogRangeCreature	0x862a34	30	0x862a30	0		5	0	0			looped
+0x626d5f	CombatDeathLogRange	0x862e00	60	0x862e14	0		5	0	0			
+0x63a259	hwDetect	0x864e00	1	0x82e748	1		1	0	0	0xc4ea7c	do hardware detection	
+0x63a74f	widescreen	0x837050	1	0x82e748	0		1	0	0	0xc4ec08	Allow widescreen support	
+0x63a775	gxColorBits	0x842a88	16	0x864644	3	0x63adb0	1	0	0	0xc4ea90	color bits	
+0x63a79b	gxDepthBits	0x842a7c	16	0x864644	3	0x63ae40	1	0	0	0xc4ea84	depth bits	
+0x63a7c1	gxResolution	0x837040	640x480	0x82e118	3	0x63aa00	1	0	0	0xc4eac4	resolution	
+0x63a7e7	gxRefresh	0x864fa8	75	0x864fc4	3	0x63aed0	1	0	0	0xc4e9e0	refresh rate	
+0x63a80d	gxTripleBuffer	0x864f88	0	0x82e570	3	0x63afe0	1	0	0	0xc4e9a0	triple buffer	
+0x63a833	gxApi	0x842a64	direct3d	0x864f7c	3	0x63b030	1	0	0	0xc4ea94	graphics api	
+0x63a859	gxVSync	0x864f54	1	0x82e748	3	0x63b160	1	0	0	0xc4eb88	vsync on or off	
+0x63a889	gxWindow	0x864f2c	1|0	0x82e748|0x82e570	3	0x63b190	1	0	0	0xc4e838	toggle fullscreen/window	default-conditional
+0x63a8af	gxAspect	0x864f00	1	0x82e748	3	0x63b1c0	1	0	0	0xc4eab8	constrain window aspect ratio	
+0x63a8e0	gxMaximize	0x864edc	1|0	0x82e748|0x82e570	3	0x63b1f0	1	0	0	0xc4eacc	maximize game window	default-conditional
+0x63a906	gxCursor	0x864eb8	1	0x82e748	3	0x63b220	1	0	0	0xc4eab0	toggle hardware cursor	
+0x63a950	gxMultisample	0x842a6c	?	?	3	0x63b250	1	0	0	0xc4e9dc	multisample antialiasing	default-computed
+0x63a976	gxMultisampleQuality	0x864e60	0.0	0x84fad4	3	0x63b290	1	0	0	0xc4ec0c	multisample antialiasing quality	
+0x63a9c1	gxFixLag	0x864e40	?	?	3	0x63b310	1	0	0	0xc4eab4	prevent cursor lag	default-computed
+0x63a9e7	gxOverride	0x864e24		0x882748	1	0x63b340	1	0	0	0xc4e954	gx overrides	
+0x63d582	?	?	?	?	0		5	1	0			name-computed;default-computed
+0x67b806	weatherDensity	0x8685ac	2	0x843068	0	0x67b870	5	0	0			
+0x67b81d	useWeatherShaders	0x868598	1	0x82e748	0		5	0	0	0xc7b588		
+0x68848c	lod	0x8697d0	1	0x82e748	1	0x688920	1	0	0	0xc7f314	Video option: Toggle Lod	
+0x6884b2	fullAlpha	0x8697a4	0	0x82e570	1	0x688960	1	0	0	0xc7f2a0	Video option: Toggle full alpha	
+0x6884d8	doodadAnim	0x842474	1	0x82e748	1	0x688a10	1	0	0	0xc7f354	Video option: Toggle doodad anim	
+0x6884fe	mapShadows	0x869750	1	0x82e748	1	0x688a70	1	0	0	0xc7f318	Video option: Toggle map shadows	
+0x688524	lodDist	0x869720	100.0	0x869748	1	0x688ab0	1	0	0	0xc7f344	Video option: Set Lod distance	
+0x68854a	SmallCull	0x8696f8	0.04	0x869718	1	0x688b10	1	0	0	0xc7f330	Object size culling	
+0x688570	DistCull	0x8696d0	500	0x8696f4	1	0x688b70	1	0	0	0xc7f320	Object distance culling	
+0x688596	MaxLights	0x8696a4	4	0x835c6c	1	0x688bd0	1	0	0	0xc7f370	Max number of hardware lights	
+0x6885bc	shadowLevel	0x84244c	1	0x82e748	1	0x688c10	1	0	0	0xc7f350	Terrain shadow map mip level	
+0x6885e2	texLodBias	0x84249c	0.0	0x84fad4	1	0x688c90	1	0	0	0xc7f2f8	Texture LOD Bias	
+0x688608	trilinear	0x869640	0	0x82e570	1	0x688ce0	1	0	0	0xc7f2bc	Enable Trilinear texture filtering	
+0x68862e	frillDensity	0x8423d8	16	0x864644	1	0x688de0	1	0	0	0xc7f2f4	Terrain frill density	
+0x688654	farclip	0x842428	350	0x869624	1	0x688d40	1	0	0	0xc7f304	Far clip plane distance	
+0x68867a	nearclip	0x84ffb0	0.1	0x84fb48	1	0x688d90	1	0	0	0xc7f348	Near clip plane distance	
+0x6886a0	specular	0x8695d8	0	0x82e570	1	0x688e20	1	0	0	0xc7f2cc	Specularity	
+0x6886c6	mapObjOverbright	0x8695ac	1	0x82e748	1	0x688e90	1	0	0	0xc7f324	Map object overbright	
+0x6886ec	mapObjLightLOD	0x869584	0	0x82e570	1	0x688f00	1	0	0	0xc7f310	Map object light LOD	
+0x688712	pixelShaders	0x869560	0	0x82e570	1	0x688f40	1	0	0	0xc7f360	Use pixel shaders	
+0x688738	particleDensity	0x869530	1.0	0x82e92c	1	0x688fb0	1	0	0	0xc7f368	Video option: Particle density	
+0x68875e	unitDrawDist	0x869504	300.0	0x869528	1	0x689000	1	0	0	0xc7f298	Unit draw distance	
+0x688784	waterLOD	0x8694e4	0	0x82e570	1	0x689050	1	0	0	0xc7f2c0	Water geometry LOD	
+0x6887aa	baseMip	0x8424e4	0	0x82e570	1	0x689090	1	0	0	0xc7f2f0	base mipmap level	
+0x6887d0	anisotropic	0x8694a4	1	0x82e748	1	0x689110	1	0	0	0xc7f2e4	Anisotropic texture filtering	
+0x6887f6	textureLodDist	0x86946c	777.0	0x86949c	1	0x6891f0	1	0	0	0xc7f2d8	Video option: texture detail	
+0x68881c	horizonfarclip	0x869430	2112	0x869464	1	0x689250	1	0	0	0xc7f34c	Far clip plane distance for horizon	
+0x688842	showfootprints	0x869400	1	0x82e748	1	0x6892e0	1	0	0	0xc7f364	toggles rendering of footprints	
+0x688868	bspcache	0x8693e0	1	0x82e748	1	0x689330	1	0	0	0xc7f2ec	BSP node caching	
+0x68888e	triangleStrips	0x8693b0	1	0x82e748	1	0x689400	1	0	0	0xc7f308	Use triangle strips to render	
+0x6888b4	footstepBias	0x86937c	0.125	0x8693a8	1	0x689450	1	0	0	0xc7f300	Unit footstep depth bias	
+0x6888da	occlusion	0x869354	1	0x82e748	1	0x6894e0	1	0	0	0xc7f31c	Use hardware occlusion test	
+0x688900	spellEffectLevel	0x869324	2	0x843068	1	0x689510	1	0	0	0xc7f2a4	Video Option: Spell Effects	
+0x6c5ae1	violenceLevel	0x86c478	?	?	0	0x6c5af0	5	0	0		Sets the violence level of the game	default-computed
+0x6c74ca	UnitNameOwn	0x86c6b0	0	0x82e570	0	0x6c75c0	4	0	1			
+0x6c74eb	UnitNameNPC	0x86c6a4	0	0x82e570	0	0x6c75c0	4	0	2			
+0x6c750c	UnitNamePlayer	0x86c694	1	0x82e748	0	0x6c75c0	4	0	4			
+0x6c752d	UnitNamePlayerGuild	0x86c680	1	0x82e748	0	0x6c75c0	4	0	16			
+0x6c754e	UnitNamePlayerPVPTitle	0x86c668	1	0x82e748	0	0x6c75c0	4	0	32			
+0x6cc17d	ffxGlow	0x86f200	1	0x82e748	1	0x6cde30	1	0	0		full screen glow effect	
+0x6cc6d1	ffxDeath	0x86f238	1	0x82e748	1	0x6cde30	1	0	0		full screen death effect	
+0x6ccfe3	ffx	0x86f2ac	1	0x82e748	1	0x6cde30	1	0	0	0xce8a04	full screen effects	
+0x6cd007	ffxRectangle	0x86f26c	1	0x82e748	1	0x6cde30	1	0	0	0xce8a00	use rectangle texture for full screen effects	
+0x6d1d33	SkyCloudLOD	0x86f48c	0	0x82e570	0	0x6d1d60	1	0	0	0xce9d18		
+0x6d8157	shadowLOD	0x86f5dc	1	0x82e748	1	0x6d8450	1	0	0	0xce9e04	Unit shadow LOD	
+0x6d817d	shadowBias	0x86f5b8	0.1	0x84fb48	1	0x6d8530	1	0	0	0xce9e00	Unit shadow depth bias	
+0x6e731d	autoSelfCast	0x870dc0	0	0x82e570	0		5	0	0	0xceac34		

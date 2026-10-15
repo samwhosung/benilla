@@ -59,14 +59,14 @@ fn render_frames(frames: &[String]) -> String {
     format!("{},+{} more", frames[..cap].join(","), frames.len() - cap)
 }
 
-/// Our `_G` against the captured 1.12 `_G` (`reference/1.12-globals.tsv`). Both directions
+/// Our `_G` against the captured 1.12 `_G` (`reference/lua_globals.tsv`). Both directions
 /// matter: 1.12 addons feature-test with `if SomeName then`, so a name we publish that the
 /// reference lacks can send an addon down a path the real client never takes. `lod` rows are the
 /// twelve LoadOnDemand `Blizzard_*` addons' names, counted apart as a live capture misses them.
 fn surface_report(deep: bool, dump_path: Option<String>) {
     let tsv = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-globals.tsv"
+        "/../../reference/lua_globals.tsv"
     );
     let Ok(text) = std::fs::read_to_string(tsv) else {
         eprintln!("cannot read the reference surface at {tsv}");
@@ -74,7 +74,7 @@ fn surface_report(deep: bool, dump_path: Option<String>) {
     };
 
     let mut reference: std::collections::BTreeMap<String, String> = Default::default();
-    for line in text.lines().filter(|l| !l.starts_with('#')) {
+    for line in text.lines().skip(1) {
         let mut f = line.split('\t');
         if let (Some(name), Some(kind)) = (f.next(), f.next()) {
             if !name.is_empty() {

@@ -1,11 +1,11 @@
-//! The glue screens' Lua surface (`reference/1.12-glue-surface.tsv`) held to its source, the shapes
+//! The glue screens' Lua surface (`reference/glue_surface.tsv`) held to its source, the shapes
 //! table, and the glue VM ([`UiScript::new_glue`]) held to the surface: every function it puts in
 //! `_G` is a glue-state one, and every glue-state function is there or on [`NOT_YET`]. Then the glue
 //! state's frame types and event table.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::script::{UiScript, GLUE_EVENTS};
+use crate::script::{glue_events, UiScript};
 use crate::widget::KindState;
 
 /// A vendored `reference/` table's data rows, split on tabs, the header row dropped.
@@ -13,7 +13,7 @@ fn reference_rows(file: &str, header: &str) -> Vec<Vec<String>> {
     let path = format!("{}/../../reference/{file}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
     text.lines()
-        .filter(|l| !l.starts_with('#') && !l.is_empty())
+        .filter(|l| !l.is_empty())
         .map(|l| l.split('\t').map(str::to_string).collect::<Vec<_>>())
         .filter(|f| f[0] != header)
         .collect()
@@ -28,13 +28,13 @@ pub(super) struct GlueRow {
     pub arity: String,
 }
 
-/// `reference/1.12-glue-surface.tsv`.
+/// `reference/glue_surface.tsv`.
 pub(super) fn glue_surface() -> Vec<GlueRow> {
-    let rows: Vec<GlueRow> = reference_rows("1.12-glue-surface.tsv", "scope")
+    let rows: Vec<GlueRow> = reference_rows("glue_surface.tsv", "name")
         .into_iter()
         .map(|f| GlueRow {
-            scope: f[0].clone(),
-            name: f[2].clone(),
+            name: f[0].clone(),
+            scope: f[1].clone(),
             fn_va: f[3].clone(),
             table_va: f[4].clone(),
             arity: f[5].clone(),
@@ -42,8 +42,7 @@ pub(super) fn glue_surface() -> Vec<GlueRow> {
         .collect();
     assert!(
         rows.len() > 150,
-        "the glue surface table looks truncated ({} rows) — regenerate it with \
-         scripts/gen-reference-glue-surface.py",
+        "the glue surface table looks truncated ({} rows)",
         rows.len()
     );
     rows
@@ -68,7 +67,7 @@ const GLUE_TABLES: [(&str, usize); 8] = [
 fn the_glue_surface_matches_the_shapes_table() {
     // (table_va, name) -> (fn, arity): a name is not a key in the shapes table.
     let shapes: BTreeMap<(String, String), (String, String)> =
-        reference_rows("1.12-shapes.tsv", "name")
+        reference_rows("bindings.tsv", "name")
             .into_iter()
             .map(|f| ((f[3].clone(), f[0].clone()), (f[1].clone(), f[7].clone())))
             .collect();
@@ -100,7 +99,7 @@ fn the_glue_surface_matches_the_shapes_table() {
         if r.fn_va == "lua" {
             continue;
         }
-        if r.table_va == "-" {
+        if r.table_va.is_empty() {
             // `__pow`, set by `luaopen_math` outside any table.
             assert_eq!(r.name, "__pow", "{} has no table", r.name);
             continue;
@@ -243,14 +242,14 @@ fn the_glue_vm_holds_no_other_global() {
     assert_eq!(others, want);
 }
 
-/// The glue event table in code is `reference/1.12-glue-events.tsv`, by id.
+/// The glue event table the VM matches against is `reference/glue_events.tsv`, by id.
 #[test]
 fn the_glue_event_table_matches_the_reference() {
-    let rows = reference_rows("1.12-glue-events.tsv", "id");
-    assert_eq!(rows.len(), GLUE_EVENTS.len());
+    let rows = reference_rows("glue_events.tsv", "id");
+    assert_eq!(rows.len(), glue_events().len());
     for (id, row) in rows.iter().enumerate() {
         assert_eq!(row[0], id.to_string(), "ids run 0..26 in order");
-        assert_eq!(row[1], GLUE_EVENTS[id], "event {id}");
+        assert_eq!(row[1], glue_events()[id], "event {id}");
     }
 }
 

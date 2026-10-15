@@ -1,5 +1,5 @@
 //! The verb-fired event gate: an event the reference fires on a verb's own call path
-//! (`reference/1.12-verb-events.tsv`) must be fired by a file that registers the verb, since stock
+//! (`reference/verb_events.tsv`) must be fired by a file that registers the verb, since stock
 //! Lua calls such a verb for its event (`0x4d8c90`, the trainer filter's commit, fires
 //! `TRAINER_UPDATE`). Otherwise the pair is declared in [`ELSEWHERE`] or [`GAP`], and the verb's
 //! own file must not fire it. The check is textual, so it cannot see a fire off the verb's path.
@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-/// One row of `reference/1.12-verb-events.tsv`.
+/// One row of `reference/verb_events.tsv`.
 struct Pair {
     verb: String,
     event: String,
@@ -80,9 +80,9 @@ const GAP: &[(&str, &str, &str)] = &[
 fn table() -> Vec<Pair> {
     let tsv = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-verb-events.tsv"
+        "/../../reference/verb_events.tsv"
     );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-verb-events.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/verb_events.tsv");
     text.lines()
         .filter(|l| !l.starts_with('#') && !l.starts_with("verb\t"))
         .filter_map(|l| {

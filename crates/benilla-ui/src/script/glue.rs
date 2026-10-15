@@ -25,61 +25,46 @@ pub enum VmKind {
     Glue,
 }
 
-/// The glue event table by id (`0xb41e70`, written by `0x46cc60`), `reference/1.12-glue-events.tsv`.
-/// While the glue state runs these are the only events: `RegisterEvent` matches a name against
-/// them case-insensitively (`0x702140` with `0x64a4c0`) and drops one they lack without an error.
-pub const GLUE_EVENTS: [&str; 26] = [
-    "SET_GLUE_SCREEN",
-    "START_GLUE_MUSIC",
-    "DISCONNECTED_FROM_SERVER",
-    "OPEN_STATUS_DIALOG",
-    "UPDATE_STATUS_DIALOG",
-    "CLOSE_STATUS_DIALOG",
-    "ADDON_LIST_UPDATE",
-    "CHARACTER_LIST_UPDATE",
-    "UPDATE_SELECTED_CHARACTER",
-    "OPEN_REALM_LIST",
-    "GET_PREFERRED_REALM_INFO",
-    "UPDATE_SELECTED_RACE",
-    "SELECT_LAST_CHARACTER",
-    "SELECT_FIRST_CHARACTER",
-    "GLUE_SCREENSHOT_SUCCEEDED",
-    "GLUE_SCREENSHOT_FAILED",
-    "PATCH_UPDATE_PROGRESS",
-    "PATCH_DOWNLOADED",
-    "SUGGEST_REALM",
-    "SUGGEST_REALM_WRONG_PVP",
-    "SUGGEST_REALM_WRONG_CATEGORY",
-    "SHOW_SERVER_ALERT",
-    "FRAMES_LOADED",
-    "FORCE_RENAME_CHARACTER",
-    "SHOW_SURVEY_NOTIFICATION",
-    "PLAYER_ENTER_PIN",
-];
+/// The glue event table (`0xb41e70`, written by `0x46cc60`), `reference/glue_events.tsv`, compiled in.
+const GLUE_EVENT_TABLE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../reference/glue_events.tsv"
+));
 
 /// The in-game event table: the 549-slot name array `UI_Init` loads (`0x703d90` at `0x48feab`),
-/// `reference/1.12-event-catalog.tsv`. The 130 slots the client never writes stay nameless, and
-/// `0x703d90` skips a null name (`0x703e0c`), so the 419 names here are all it holds.
+/// `reference/events.tsv`, compiled in. The 130 slots the client never writes stay nameless, and
+/// `0x703d90` skips a null name (`0x703e0c`), so the 419 rows here are all it holds.
 const IN_GAME_EVENT_TABLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../reference/1.12-event-catalog.tsv"
+    "/../../reference/events.tsv"
 ));
+
+/// A table's distinct event names, in id order (the `name` column, the header row dropped). A name
+/// two slots share (`UNIT_PET`) is one event to a name match.
+fn event_names(table: &'static str) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = Vec::new();
+    for line in table.lines().skip(1) {
+        let name = line.split('\t').nth(1).expect("event table row: id, name");
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// The glue event table's names by id. While the glue state runs these 26 are the only events:
+/// `RegisterEvent` matches a name against them case-insensitively (`0x702140` with `0x64a4c0`) and
+/// drops one they lack without an error.
+pub fn glue_events() -> &'static [&'static str] {
+    static NAMES: std::sync::LazyLock<Vec<&'static str>> =
+        std::sync::LazyLock::new(|| event_names(GLUE_EVENT_TABLE));
+    &NAMES
+}
 
 /// The in-game table's distinct names, in id order.
 pub(crate) fn in_game_events() -> &'static [&'static str] {
-    static NAMES: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
-        let mut names: Vec<&'static str> = Vec::new();
-        for line in IN_GAME_EVENT_TABLE.lines() {
-            // `id<TAB>NAME`; a name two slots share (`UNIT_PET`) is one event to a name match.
-            let Some((_, name)) = line.split_once('\t') else {
-                continue;
-            };
-            if !line.starts_with('#') && !names.contains(&name) {
-                names.push(name);
-            }
-        }
-        names
-    });
+    static NAMES: std::sync::LazyLock<Vec<&'static str>> =
+        std::sync::LazyLock::new(|| event_names(IN_GAME_EVENT_TABLE));
     &NAMES
 }
 
@@ -93,7 +78,7 @@ impl VmKind {
     pub(crate) fn event_key(self, name: &str) -> Option<&'static str> {
         let table: &'static [&'static str] = match self {
             VmKind::InGame => in_game_events(),
-            VmKind::Glue => &GLUE_EVENTS,
+            VmKind::Glue => glue_events(),
         };
         table.iter().copied().find(|e| e.eq_ignore_ascii_case(name))
     }
@@ -104,7 +89,7 @@ impl VmKind {
     pub(crate) fn fires(self, event: &str) -> bool {
         match self {
             VmKind::InGame => true,
-            VmKind::Glue => GLUE_EVENTS.contains(&event),
+            VmKind::Glue => glue_events().contains(&event),
         }
     }
 }

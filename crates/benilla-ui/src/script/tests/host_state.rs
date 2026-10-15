@@ -1,5 +1,5 @@
 //! The host's state lives off `_G`: 1.12.1's global table has no name for the clock, the zone
-//! caches, the game clock or the error-handler slot (`reference/1.12-globals.tsv`), and the
+//! caches, the game clock or the error-handler slot (`reference/lua_globals.tsv`), and the
 //! getters over them read the client's own state, which Lua cannot reach. So a global an addon
 //! assigns under one of benilla's old host names is a global no getter reads.
 

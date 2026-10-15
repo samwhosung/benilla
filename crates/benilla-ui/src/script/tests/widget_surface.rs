@@ -152,11 +152,8 @@ const ALLOWED_BEYOND: &[(&str, &str, &str)] = &[];
 
 /// The reference's widget rows, `table_va -> {name}`.
 fn reference_tables() -> BTreeMap<String, BTreeSet<String>> {
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-shapes.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-shapes.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/bindings.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/bindings.tsv");
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for line in text.lines() {
         if line.starts_with('#') || line.starts_with("name\t") {

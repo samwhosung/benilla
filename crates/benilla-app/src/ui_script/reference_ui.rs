@@ -599,7 +599,7 @@ mod tests {
 
     /// What each unmigrated stock window would cost to build. Its calls (the `.xml` and every
     /// `.lua` it sources, comments stripped), minus what it defines and what the loaded interface
-    /// has, split against the reference's `_G` (`reference/1.12-globals.tsv`):
+    /// has, split against the reference's `_G` (`reference/lua_globals.tsv`):
     ///
     /// * `engine`: a reference engine binding we lack, the real work.
     /// * `fx`: a FrameXML function, which arrives with the file named beside it; a `<?>` is
@@ -617,11 +617,11 @@ mod tests {
         // The reference's `_G`, each name with its origin (`engine`, `framexml`, `lua`).
         let tsv = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../reference/1.12-globals.tsv"
+            "/../../reference/lua_globals.tsv"
         );
         let text = std::fs::read_to_string(tsv).expect("the reference surface");
         let mut origin: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
-        for line in text.lines().filter(|l| !l.starts_with('#')) {
+        for line in text.lines().skip(1) {
             let mut f = line.split('\t');
             if let (Some(name), Some(_kind), Some(from)) = (f.next(), f.next(), f.next()) {
                 origin.insert(name, from);
@@ -1233,7 +1233,7 @@ mod tests {
     /// Every global a migrated window calls exists once the shipped interface is up. Loading never
     /// runs the body that calls it, so a missing one raises on the first click that reaches it.
     /// Bare `name(` calls in each chain file and its `.lua`, minus its own functions and locals,
-    /// count when the reference's `_G` has them (`reference/1.12-globals.tsv`). Blind to names
+    /// count when the reference's `_G` has them (`reference/lua_globals.tsv`). Blind to names
     /// reached through `getglobal` and to widget methods; it checks existence, not the body.
     #[test]
     fn every_global_a_migrated_window_calls_is_answered() {
@@ -1242,12 +1242,12 @@ mod tests {
         // The reference's `_G`, which filters out locals, fields and widget methods.
         let tsv = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../reference/1.12-globals.tsv"
+            "/../../reference/lua_globals.tsv"
         );
         let text = std::fs::read_to_string(tsv).expect("the reference surface");
         let reference: std::collections::HashSet<&str> = text
             .lines()
-            .filter(|l| !l.starts_with('#'))
+            .skip(1)
             .filter_map(|l| l.split('\t').next())
             .collect();
 

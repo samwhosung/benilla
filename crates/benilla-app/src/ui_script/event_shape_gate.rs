@@ -1,12 +1,12 @@
 //! The event argument-shape gate: every fire site with a literal name against
-//! `reference/1.12-events.tsv`, since an event name is a plain string at both ends.
+//! `reference/event_args.tsv`, since an event name is a plain string at both ends.
 //!
 //! Only `exact` rows gate: an `advisory` row's site declares more varargs than its caller pushes,
 //! and a `none` row has no producer in the census, which does not mean it has none. Only a
 //! `ScriptValue::` element's kind is asserted; any other argument counts toward the arity alone.
 use std::collections::BTreeMap;
 
-/// One row of `reference/1.12-events.tsv`.
+/// One row of `reference/event_args.tsv`.
 struct Row {
     /// The alternatives, each a per-slot kind list. `%s` -> `s`, `%d`/`%u`/`%f` -> `n`.
     shapes: Vec<Vec<char>>,
@@ -16,9 +16,9 @@ struct Row {
 fn table() -> BTreeMap<String, Row> {
     let tsv = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-events.tsv"
+        "/../../reference/event_args.tsv"
     );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-events.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/event_args.tsv");
     let mut out = BTreeMap::new();
     for line in text.lines() {
         if line.starts_with('#') || line.starts_with("name\t") {
@@ -255,21 +255,18 @@ fn every_event_we_fire_carries_the_reference_s_arguments() {
 }
 
 /// The in-game event table (`0x703d90`, name array `0xbe1198`) holds the names of
-/// `reference/1.12-event-catalog.tsv` and the glue table the 26 of `GLUE_EVENTS`; `RegisterEvent`
+/// `reference/events.tsv` and the glue table the 26 of `reference/glue_events.tsv`; `RegisterEvent`
 /// drops any other name (`0x702140`), so an event fired under a name off both reaches no frame
 /// that registered it by name.
 #[test]
 fn every_event_we_fire_is_in_the_reference_table() {
-    let tsv = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../reference/1.12-event-catalog.tsv"
-    );
-    let text = std::fs::read_to_string(tsv).expect("reference/1.12-event-catalog.tsv");
+    let tsv = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/events.tsv");
+    let text = std::fs::read_to_string(tsv).expect("reference/events.tsv");
     let names: std::collections::BTreeSet<&str> = text
         .lines()
-        .filter(|l| !l.starts_with('#'))
-        .filter_map(|l| l.split_once('\t').map(|(_, n)| n))
-        .chain(benilla_ui::script::GLUE_EVENTS)
+        .skip(1)
+        .filter_map(|l| l.split('\t').nth(1))
+        .chain(benilla_ui::script::glue_events().iter().copied())
         .collect();
     assert!(names.len() > 390, "the catalog stopped being read");
     let mut off: Vec<String> = fire_sites()
