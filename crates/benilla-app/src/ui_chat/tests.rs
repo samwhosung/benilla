@@ -3060,6 +3060,7 @@ fn a_dead_or_ghost_players_say_yell_and_emote_are_refused_after_the_afk_clear() 
 /// (`0x494ac6`-`0x494add`) and moves nothing, whether a macro button, a key or the player typed it.
 #[test]
 fn a_macro_script_line_that_moves_signals_the_macro_event() {
+    let _data = benilla_formats::wow_data_or_skip!();
     let mut s = chat_vm();
     s.run(
         r#"
