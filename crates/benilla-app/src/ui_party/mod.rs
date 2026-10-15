@@ -24,6 +24,7 @@ pub(crate) use feed::{
     raid_row_guid, raid_row_guids, synthetic_raid, synthetic_roster, GROUPTYPE_RAID,
     GROUP_MEMBER_SUBGROUP,
 };
+pub(crate) use records::record_notices;
 
 pub(crate) struct UiPartyPlugin;
 
