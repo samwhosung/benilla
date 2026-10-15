@@ -14,6 +14,7 @@
 use mlua::{Lua, MultiValue, Value, Variadic};
 
 use super::binding_abi::{coerced_number, ftol, number_arg};
+use super::item_stats::MISSING_ITEM_ICON;
 use super::Model;
 
 /// A send made by a verb of a system no 1.12 server runs, drained by the app in call order.
@@ -144,21 +145,54 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(name, lua.create_function(|_, ()| Ok(()))?)?;
     }
 
-    // GetLotteryPrizeInfo(index) (`0x4c44e0`): an `is-number` gate and the n-th prize record
-    // (`0x4c3f50`) both fail into the one error. The window holds no prizes, so every call does.
+    // GetLotteryPrizeInfo(index) (`0x4c44e0`): an `is-number` gate fails into the error, and so
+    // does the record lookup `0x4c3f50` for any `index - 1` above 4 or, with the window holding no
+    // prizes, above 0. Its scan counts the nonzero prize ids so far and keeps the last slot where
+    // the count equals `n` (`0x4c3fb0`..`0x4c3fc5`): with every id 0 the count is 0 at each slot,
+    // so `n == 0` finds slot 3, id 0. The item cache answers null for id 0 without a query
+    // (`0x55ba3d`), which leaves the name empty and the usable flag at its initial 1; the icon is
+    // the display-0 icon (`0x5d88b0`, no `ItemDisplayInfo` row 0), the missing-item icon; the
+    // count is the initial 1 and the quality 0 (`0x4c3f84`..`0x4c3f90`).
     g.set(
         "GetLotteryPrizeInfo",
-        lua.create_function(|_, _index: Value| -> mlua::Result<()> {
-            Err(mlua::Error::runtime(NO_PRIZE))
+        lua.create_function(|lua, index: Value| {
+            let n = number_arg(lua, index, NO_PRIZE)?.wrapping_sub(1) as u32;
+            if n != 0 {
+                return Err(mlua::Error::runtime(NO_PRIZE));
+            }
+            Ok(MultiValue::from_vec(vec![
+                Value::String(lua.create_string("")?),
+                Value::String(lua.create_string(MISSING_ITEM_ICON)?),
+                Value::Integer(1),
+                Value::Integer(0),
+                Value::Integer(1),
+            ]))
         })?,
     )?;
 
     // GetPastDrawResult(index) (`0x4c4690`): `lua_tonumber` with no gate, then the n-th used draw
-    // record (`0x4c41a0`); there are none.
+    // record (`0x4c41a0`). Its scan bumps the used count before comparing it with `n`
+    // (`0x4c41b0`..`0x4c41b8`), so with every record unused the count is 0 and `n == 0` matches
+    // the first record, empty: four zeros and the seconds since its stamp (`0x4c41ee`), a stamp
+    // of 0. Any other `n` finds nothing.
     g.set(
         "GetPastDrawResult",
-        lua.create_function(|_, _index: Value| -> mlua::Result<()> {
-            Err(mlua::Error::runtime(NO_DRAW))
+        lua.create_function(|lua, index: Option<Value>| {
+            let n = ftol(coerced_number(lua, index)).wrapping_sub(1) as u32;
+            if n != 0 {
+                return Err(mlua::Error::runtime(NO_DRAW));
+            }
+            // `GetWallClockSeconds` (`0x429580`) less the stamp, pushed as a signed dword.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs()) as u32 as i32;
+            Ok(MultiValue::from_vec(vec![
+                Value::Integer(0),
+                Value::Integer(0),
+                Value::Integer(0),
+                Value::Integer(0),
+                Value::Integer(i64::from(now)),
+            ]))
         })?,
     )?;
 
@@ -272,15 +306,26 @@ mod tests {
         }
     }
 
-    /// The window holds no prize and no draw, so the readers' errors are the only answer, and the
+    /// With every prize id and draw record empty the readers' scans still match their first
+    /// entry (`0x4c3fb0`, `0x4c41b0`): index 1 answers five values, any other raises. The
     /// reference's pushing getters return no value at all.
     #[test]
-    fn the_empty_lottery_answers_errors_and_no_values() {
+    fn the_empty_lottery_answers_its_first_slot_and_errors_elsewhere() {
         let s = UiScript::new().unwrap();
+        let (name, icon, count, quality, usable): (String, String, i64, i64, i64) =
+            s.eval("return GetLotteryPrizeInfo(1)").unwrap();
+        assert_eq!(
+            (name.as_str(), icon.as_str(), count, quality, usable),
+            ("", "Interface\\Icons\\INV_Misc_QuestionMark", 1, 0, 1)
+        );
+        assert_eq!(s.arity("GetLotteryPrizeInfo('1')").unwrap(), 5);
         for call in [
-            "GetLotteryPrizeInfo(1)",
+            "GetLotteryPrizeInfo(2)",
+            "GetLotteryPrizeInfo(0)",
+            "GetLotteryPrizeInfo(5)",
             "GetLotteryPrizeInfo(nil)",
             "GetLotteryPrizeInfo()",
+            "GetLotteryPrizeInfo('x')",
         ] {
             raises(
                 &s,
@@ -288,10 +333,24 @@ mod tests {
                 r#"Invalid prize item in GetPrizeItemInfo("type", index)"#,
             );
         }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let (a, b, c, d, since): (i64, i64, i64, i64, i64) =
+            s.eval("return GetPastDrawResult(1)").unwrap();
+        assert_eq!((a, b, c, d), (0, 0, 0, 0));
+        assert!(
+            (since - now).abs() <= 2,
+            "the stamp is 0, so the clock: {since} vs {now}"
+        );
+        assert_eq!(s.arity("GetPastDrawResult(1.9)").unwrap(), 5);
         for call in [
-            "GetPastDrawResult(1)",
+            "GetPastDrawResult(2)",
             "GetPastDrawResult(0)",
+            "GetPastDrawResult(-1)",
             "GetPastDrawResult()",
+            "GetPastDrawResult('x')",
         ] {
             raises(
                 &s,
