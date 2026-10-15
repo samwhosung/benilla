@@ -80,7 +80,7 @@ impl Probe for Aura {
 
         // Index the first duration packet and the first delta naming the buff by packet arrival;
         // `SMSG_UPDATE_AURA_DURATION` is read off the `ServerPacket`, before decode.
-        let mut durations: Vec<(u8, u32)> = Vec::new();
+        let mut durations: Vec<(u8, i32)> = Vec::new();
         let (mut seq, mut first_duration_at, mut buff_field_at) = (0usize, None, None);
         let drain_until = Instant::now() + Duration::from_secs(8);
         while Instant::now() < drain_until {
@@ -174,7 +174,7 @@ impl Probe for Aura {
                         aura.slot
                     )
                 })?;
-            let asked_ms = asked * 1000;
+            let asked_ms = (asked * 1000) as i32;
             ensure!(
                 ms <= asked_ms && ms + 2000 >= asked_ms,
                 "{label} duration {ms} ms is not the {asked_ms} ms we asked for"

@@ -687,7 +687,7 @@ pub enum SessionEvent {
     ChannelUpdate { remaining_ms: u32 },
     /// Time left on one of our auras by `UNIT_FIELD_AURA` slot (`SMSG_UPDATE_AURA_DURATION`),
     /// never for a permanent one. It arrives before the delta naming the slot's spell.
-    AuraDuration { slot: u8, remaining_ms: u32 },
+    AuraDuration { slot: u8, remaining_ms: i32 },
     /// A spell-visual kit outside the cast sequence (`SMSG_PLAY_SPELL_VISUAL`), such as eat/drink.
     PlaySpellVisual { unit: u64, kit_id: u32 },
     /// Spell damage dealt (`SMSG_SPELLNONMELEEDAMAGELOG`).

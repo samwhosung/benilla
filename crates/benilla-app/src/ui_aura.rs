@@ -43,14 +43,21 @@ struct DurationStamp {
 }
 
 impl AuraDurations {
-    /// Records one `SMSG_UPDATE_AURA_DURATION`.
-    pub(crate) fn set(&mut self, slot: u8, remaining_ms: u32, now: f64) {
-        let total = f64::from(remaining_ms) / 1000.0;
+    /// Records one `SMSG_UPDATE_AURA_DURATION`. The reference stores `now + ms` over the slot's
+    /// expiry (`0x4e4390`) and its reader answers 0 once `now - expiry >= 0` (`0x4e4472`), so a
+    /// negative span is a lapsed timer that replaces the slot's last one; here that is no stamp,
+    /// which every reader answers `(0, 0)`.
+    pub(crate) fn set(&mut self, slot: u8, remaining_ms: i32, now: f64) {
         if trace_period().is_some() {
             info!(
                 "aura trace: SMSG_UPDATE_AURA_DURATION slot {slot} = {remaining_ms} ms @ {now:.2}"
             );
         }
+        if remaining_ms < 0 {
+            self.by_slot.remove(&slot);
+            return;
+        }
+        let total = f64::from(remaining_ms) / 1000.0;
         self.by_slot.insert(
             slot,
             DurationStamp {
@@ -879,6 +886,28 @@ mod tests {
         );
         // No stamp: a permanent aura, which gets no packet.
         assert_eq!(join_duration(None, 200.0, 200.0, 5000.0), (0.0, 0.0));
+    }
+
+    /// The span is a signed dword that the reference adds to its clock (`0x4e4390`) and reads back
+    /// as 0 once past (`0x4e4472`): a core that sends -1 for a permanent aura reads as no time
+    /// left, and the slot's earlier timer is overwritten, not kept.
+    #[test]
+    fn a_negative_span_leaves_the_slot_reading_zero_and_drops_its_last_timer() {
+        let mut durations = AuraDurations::default();
+        durations.set(0, 300_000, 15.0);
+        let live = join_duration(durations.by_slot.get(&0), 15.0, 15.0, 900.0);
+        assert_eq!(live.0, 300.0, "control: a positive span joins");
+
+        durations.set(0, -1, 16.0);
+        assert_eq!(
+            join_duration(durations.by_slot.get(&0), 15.0, 16.0, 901.0),
+            (0.0, 0.0),
+            "-1 is not 4,294,967 seconds, and not the earlier 300"
+        );
+        durations.set(1, i32::MIN, 16.0);
+        assert!(!durations.by_slot.contains_key(&1));
+        durations.set(2, 0, 16.0);
+        assert!(durations.by_slot.contains_key(&2), "0 ms is a stamp, now");
     }
 
     /// The duration packet arrives about a frame before the delta that fills its slot.

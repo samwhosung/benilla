@@ -639,7 +639,7 @@ pub enum ServerPacket {
     /// left. It arrives before the delta naming the slot's spell, so buffer it by slot.
     UpdateAuraDuration {
         slot: u8,
-        remaining_ms: u32,
+        remaining_ms: i32,
     },
     /// `SMSG_PLAY_SPELL_VISUAL`: a spell-visual kit on a unit outside a cast, at the fixed stage 0.
     PlaySpellVisual {

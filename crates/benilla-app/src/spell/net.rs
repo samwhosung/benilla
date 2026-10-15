@@ -1294,7 +1294,7 @@ fn channel_update(remaining_ms: u32, channel: &mut ActiveChannel, feed: &mut Cas
 
 /// `SMSG_UPDATE_AURA_DURATION`: one of our auras' remaining time, by raw slot, stamped with the
 /// receive time. It arrives before the descriptor delta that names the slot.
-fn aura_duration(slot: u8, remaining_ms: u32, durations: &mut AuraDurations, now_secs: f64) {
+fn aura_duration(slot: u8, remaining_ms: i32, durations: &mut AuraDurations, now_secs: f64) {
     durations.set(slot, remaining_ms, now_secs);
 }
 

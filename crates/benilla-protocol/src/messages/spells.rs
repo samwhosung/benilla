@@ -260,11 +260,12 @@ pub(super) fn read_set_spell_modifier(r: &mut impl Read) -> io::Result<(u8, u8, 
 }
 
 /// Read `SMSG_UPDATE_AURA_DURATION` (vmangos `SpellAuras.cpp:7511-7523`): an aura slot and its ms
-/// left. Sent only to the aura's target and never for a permanent aura, so an occupied slot with
-/// no duration lasts until cancelled.
-pub(super) fn read_update_aura_duration(r: &mut impl Read) -> io::Result<(u8, u32)> {
+/// left, signed: the client reads a dword and adds it to its clock (`0x4e4390`), so a negative span
+/// is an expiry in the past. Sent only to the aura's target; vmangos skips a permanent aura, but a
+/// core that sends -1 for one reads as no time left.
+pub(super) fn read_update_aura_duration(r: &mut impl Read) -> io::Result<(u8, i32)> {
     let slot = read_u8(r)?;
-    let remaining_ms = read_u32_le(r)?;
+    let remaining_ms = read_i32_le(r)?;
     Ok((slot, remaining_ms))
 }
 
@@ -472,6 +473,30 @@ mod tests {
             r.is_empty(),
             "the body is exactly 5 bytes — slot is a byte, not a dword"
         );
+
+        // The span is a signed dword (`0x4e4390` adds it to the clock): -1 is an expiry in the
+        // past, not 4,294,967,295 ms.
+        let body = [0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(read_update_aura_duration(&mut &body[..]).unwrap(), (0, -1));
+        let body = [0x20, 0x00, 0x00, 0x00, 0x80];
+        assert_eq!(
+            read_update_aura_duration(&mut &body[..]).unwrap(),
+            (32, i32::MIN)
+        );
+        // Through the packet table, the way the session reads it.
+        let body = [0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        let packet = crate::messages::parse_server(
+            crate::messages::opcode::SMSG_UPDATE_AURA_DURATION,
+            &body,
+        )
+        .unwrap();
+        assert!(matches!(
+            packet,
+            crate::messages::ServerPacket::UpdateAuraDuration {
+                slot: 0,
+                remaining_ms: -1
+            }
+        ));
     }
 
     #[test]
