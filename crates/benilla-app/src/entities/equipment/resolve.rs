@@ -223,22 +223,22 @@ pub(in crate::entities) fn resolve_equipment(
                 let Some(entry) = s.player_visible_item_entry(slot).filter(|e| *e != 0) else {
                     continue;
                 };
-                match templates.held(entry, &net) {
-                    Some(t) => eq.bodyslots[idx] = t.display_info_id,
+                match templates.worn_display(entry, &net) {
+                    Some(display) => eq.bodyslots[idx] = display,
                     None => eq.settled = false, // asked; answer pending
                 }
             }
             // The cloak (slot 14) and helm (slot 0). A hidden piece is still looked up and zeroed
             // after, so `settled` keeps its meaning and showing it again needs no round trip.
             if let Some(entry) = s.player_visible_item_entry(14).filter(|e| *e != 0) {
-                match templates.held(entry, &net) {
-                    Some(t) => eq.cloak = t.display_info_id,
+                match templates.worn_display(entry, &net) {
+                    Some(display) => eq.cloak = display,
                     None => eq.settled = false,
                 }
             }
             if let Some(entry) = s.player_visible_item_entry(0).filter(|e| *e != 0) {
-                match templates.held(entry, &net) {
-                    Some(t) => eq.helm = t.display_info_id,
+                match templates.worn_display(entry, &net) {
+                    Some(display) => eq.helm = display,
                     None => eq.settled = false,
                 }
             }
@@ -882,6 +882,61 @@ mod tests {
             "and nothing else the player is wearing moves"
         );
         assert!(hidden.settled, "the worn set is still fully resolved");
+    }
+
+    /// One resolve pass over a player wearing `entries`, with helm 100 known and chest 300
+    /// answered unknown: the [`Equipment`] and the entries asked.
+    fn dress_with_refusal(entries: &[(u8, u32)]) -> (Equipment, Vec<u32>) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        let mut items = Items::default();
+        items.insert_template(100, Some(worn(900, 1))); // INVTYPE_HEAD
+        items.insert_template(300, None); // the server refused it
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        app.insert_resource(items);
+        app.init_resource::<crate::net::GuidIndex>();
+        app.insert_resource(NetCommands(tx));
+        app.insert_resource(ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::new()),
+        ));
+        let player = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Player,
+                    display_id: Some(49),
+                    scale: 1.0,
+                },
+                wearing(0, entries),
+            ))
+            .id();
+        app.add_systems(Update, resolve_equipment);
+        app.update();
+        let asked = rx
+            .try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::ItemQuery { entry, .. } => Some(entry),
+                _ => None,
+            })
+            .collect();
+        (*app.world().get::<Equipment>(player).unwrap(), asked)
+    }
+
+    /// The refusal runs the callback with status 0 and `0x5ed880` decrements `[player+0x1d20]`
+    /// with no display applied, so the player is drawn without that slot; a still-pending ask
+    /// holds the model update (`0x5ec8f0`).
+    #[test]
+    fn an_item_the_server_refused_leaves_its_slot_bare_and_does_not_hold_the_player() {
+        let (eq, asked) = dress_with_refusal(&[(0, 100), (4, 300)]);
+        assert!(eq.settled, "a refused entry is settled, not pending");
+        assert!(asked.is_empty(), "a cached refusal is not asked again");
+        assert_eq!(eq.bodyslots[1], 0, "the refused chest draws no display");
+        assert_eq!(eq.helm, 900, "the rest of the set is unchanged");
+
+        // Control: the same set plus a cloak (400) nobody has answered holds the player.
+        let (eq, asked) = dress_with_refusal(&[(0, 100), (4, 300), (14, 400)]);
+        assert!(!eq.settled, "a pending ask holds the player");
+        assert_eq!(asked, vec![400], "only the unanswered entry is asked");
     }
 
     #[test]

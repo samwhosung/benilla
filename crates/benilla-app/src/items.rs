@@ -469,6 +469,18 @@ impl Items {
         })
     }
 
+    /// The display id a worn `entry` draws with, asked template-only: `None` while the answer is
+    /// pending, `Some(0)` once the server refused the entry. The reference holds the model update
+    /// while `[player+0x1d20]` counts a pending ask (`0x5ec8f0`, `0x5ed771`); the refusal runs the
+    /// callback with status 0 (`0x556f05`), `0x5ed880` decrements without applying a display
+    /// (`0x5ed8c0`), and the player is drawn without that slot.
+    pub(crate) fn worn_display(&self, entry: u32, commands: &NetCommands) -> Option<u32> {
+        match self.held(entry, commands) {
+            Some(t) => Some(t.display_info_id),
+            None => self.template_answered_unknown(entry).then_some(0),
+        }
+    }
+
     /// [`Self::template`] without the ask: the cached record only.
     pub(crate) fn template_cached(&self, entry: u32) -> Option<&ItemInfo> {
         self.templates.get(entry)
