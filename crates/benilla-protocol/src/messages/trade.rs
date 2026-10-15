@@ -126,6 +126,10 @@ pub struct TradeItem {
 pub struct TradeStatusExtended {
     /// The partner's (right) column when the wire byte is 1, ours (left) when 0.
     pub their_window: bool,
+    /// The first `u32` after the side byte (`0x5d4990`): the client drops a status for its own
+    /// column whose sequence is below its own-edit counter. vmangos writes the slot count there,
+    /// 7, whatever the sender's edits (`TradeHandler.cpp:60`).
+    pub sequence: u32,
     /// In copper.
     pub gold: u32,
     /// The spell cast on this side's non-traded slot item, 0 for none.
@@ -206,12 +210,13 @@ pub(super) fn read_trade_status(r: &mut &[u8]) -> io::Result<TradeStatus> {
     })
 }
 
-/// `SMSG_TRADE_STATUS_EXTENDED` (vmangos `WorldSession::SendUpdateTrade`): `u8 which`, the slot
-/// count twice, gold, enchant spell, then seven records of `u8 index` and a 60-byte item block.
+/// `SMSG_TRADE_STATUS_EXTENDED` (vmangos `WorldSession::SendUpdateTrade`): `u8 which`, the
+/// sequence, the slot count, gold, enchant spell, then seven records of `u8 index` and a 60-byte
+/// item block.
 pub(super) fn read_trade_status_extended(r: &mut &[u8]) -> io::Result<TradeStatusExtended> {
     let which = read_u8(r)?;
-    let _slot_count_a = read_u32_le(r)?;
-    let _slot_count_b = read_u32_le(r)?;
+    let sequence = read_u32_le(r)?;
+    let _slot_count = read_u32_le(r)?;
     let gold = read_u32_le(r)?;
     let enchant_spell_id = read_u32_le(r)?;
 
@@ -251,6 +256,7 @@ pub(super) fn read_trade_status_extended(r: &mut &[u8]) -> io::Result<TradeStatu
     }
     Ok(TradeStatusExtended {
         their_window: which == 1,
+        sequence,
         gold,
         enchant_spell_id,
         slots,
@@ -396,8 +402,8 @@ mod tests {
     ) -> Vec<u8> {
         let mut b = Vec::new();
         b.push(which);
-        b.extend_from_slice(&(TRADE_SLOT_COUNT as u32).to_le_bytes());
-        b.extend_from_slice(&(TRADE_SLOT_COUNT as u32).to_le_bytes());
+        b.extend_from_slice(&(TRADE_SLOT_COUNT as u32).to_le_bytes()); // sequence
+        b.extend_from_slice(&(TRADE_SLOT_COUNT as u32).to_le_bytes()); // slot count
         b.extend_from_slice(&gold.to_le_bytes());
         b.extend_from_slice(&spell.to_le_bytes());
         for (i, entry) in entries.iter().enumerate() {
@@ -478,6 +484,36 @@ mod tests {
         );
         assert!(ext.slots[1].is_none(), "empty slot folds to None");
         assert!(ext.slots[5].is_none());
+    }
+
+    /// The header byte for byte: side, then the sequence, then the slot count, gold and spell. The
+    /// sequence is the first `u32` (`0x5d4990` reads it into `[ebp-0xc]` before the others), so a
+    /// sender that counts its edits is read as it wrote them, not as the slot count after it.
+    #[test]
+    fn extended_reads_the_sequence_before_the_slot_count() {
+        let mut wire = vec![
+            0x00, // side: ours
+            0x0B, 0x00, 0x00, 0x00, // sequence 11
+            0x07, 0x00, 0x00, 0x00, // slot count 7
+            0x39, 0x30, 0x00, 0x00, // gold 12345
+            0x09, 0x03, 0x00, 0x00, // spell 777
+        ];
+        for i in 0..TRADE_SLOT_COUNT {
+            wire.push(i as u8);
+            wire.extend_from_slice(&[0u8; 60]);
+        }
+        assert_eq!(wire.len(), 444);
+        let ext = read_trade_status_extended(&mut &wire[..]).unwrap();
+        assert_eq!(ext.sequence, 11);
+        assert_eq!((ext.gold, ext.enchant_spell_id), (12_345, 777));
+        // What vmangos sends: the slot count in both words.
+        let vmangos = extended_wire(0, 0, 0, [None; TRADE_SLOT_COUNT]);
+        assert_eq!(
+            read_trade_status_extended(&mut &vmangos[..])
+                .unwrap()
+                .sequence,
+            7
+        );
     }
 
     #[test]
