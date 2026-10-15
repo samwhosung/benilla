@@ -55,6 +55,24 @@ fn drawn_textures(s: &mut UiScript) -> Vec<String> {
         .collect()
 }
 
+/// The stock template declares 30 `TextLeft`/`TextRight` pairs, the tooltip's line limit
+/// (`0x529650`, `0x530291`): the 31st `AddLine` adds nothing.
+#[test]
+fn a_stock_template_tooltip_holds_30_lines() {
+    benilla_formats::wow_data_or_skip!();
+    let s = harness();
+    s.run(
+        r#"
+        local tip = CreateFrame("GameTooltip", "CapTip", UIParent, "GameTooltipTemplate")
+        for i = 1, 40 do tip:AddLine("line " .. i) end
+        assert(tip:NumLines() == 30, tip:NumLines())
+        assert(CapTipTextLeft30:GetText() == "line 30")
+        assert(CapTipTextLeft31 == nil)
+    "#,
+    )
+    .unwrap();
+}
+
 /// An addon tooltip's lines are named after the caller (`MyTipTextLeft1`), never the template, so
 /// the corpus idiom `getglobal(tip:GetName().."TextLeft1")` resolves.
 #[test]

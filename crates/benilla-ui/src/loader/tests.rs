@@ -1362,6 +1362,38 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
+    /// The line limit (`+0x320`) is the count of declared `TextLeft<n>`/`TextRight<n>` pairs, read
+    /// until either is missing (`0x529650`): a line past it is not added (`0x530291`).
+    #[test]
+    fn a_tooltip_holds_as_many_lines_as_it_declares_pairs() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                <GameTooltip name="Cap">
+                    <Layers><Layer level="ARTWORK">
+                        <FontString name="$parentTextLeft1"/><FontString name="$parentTextRight1"/>
+                        <FontString name="$parentTextLeft2"/><FontString name="$parentTextRight2"/>
+                        <FontString name="$parentTextLeft3"/>
+                    </Layer></Layers>
+                </GameTooltip>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        s.run(
+            r#"
+            for i = 1, 5 do Cap:AddLine("line " .. i) end
+            assert(Cap:NumLines() == 2, "two pairs; a lone TextLeft3 is no line: " .. Cap:NumLines())
+            Cap:ClearLines()
+            Cap:AddDoubleLine("a", "b") Cap:AddLine("c") Cap:AddLine("d")
+            assert(Cap:NumLines() == 2)
+        "#,
+        )
+        .unwrap();
+        assert!(s.errors().is_empty(), "{:?}", s.errors());
+    }
+
     /// An EditBox's `<FontString bytes="N">` caps the box at N - 1 bytes (`0x77a225`-`0x77a260`):
     /// `SStrToInt`, a value of 0 or less lifts the cap, and an empty or absent one leaves the
     /// ctor's.

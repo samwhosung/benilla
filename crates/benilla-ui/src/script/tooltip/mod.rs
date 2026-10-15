@@ -73,6 +73,52 @@ fn apply_font(d: &mut RegionData, name: &str, fo: Option<&FontObject>) {
     }
 }
 
+/// The tooltip's declared `<name>Text<cell><i>` FontString, if it owns one.
+fn declared_cell(
+    model: &Model,
+    h: FrameHandle,
+    frame_name: &str,
+    cell: &str,
+    i: usize,
+) -> Option<crate::widget::RegionHandle> {
+    if frame_name.is_empty() {
+        return None;
+    }
+    let id = model
+        .region_by_name
+        .get(&format!("{frame_name}Text{cell}{i}"))
+        .copied()?;
+    let rh = model.id_to_region.get(&id).copied()?;
+    (model.arena.region(rh)?.owner == h).then_some(rh)
+}
+
+/// The line limit (`+0x320`): the post-load pass counts `<name>TextLeft<n>` and `TextRight<n>`
+/// pairs from 1 until either is missing (`0x52972d`-`0x52983d`), and `0x530270` adds no line at
+/// that count (`0x530291`). The stock template declares 30.
+///
+/// Deviation: a tooltip with no declared pair has limit 0 in the reference, so every `AddLine`
+/// adds nothing; here its pool grows on demand, so a bare `CreateFrame("GameTooltip")` works.
+fn read_line_cap(lua: &Lua, this: &Table) -> mlua::Result<Option<usize>> {
+    let h = frame_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    let frame_name = model
+        .arena
+        .frame(h)
+        .and_then(|f| f.name.clone())
+        .unwrap_or_default();
+    let mut n = 0;
+    while declared_cell(&model, h, &frame_name, "Left", n + 1).is_some()
+        && declared_cell(&model, h, &frame_name, "Right", n + 1).is_some()
+    {
+        n += 1;
+    }
+    let cap = (n > 0).then_some(n);
+    let t = tip_mut(&mut model, h)?;
+    t.line_cap = cap;
+    t.line_cap_read = true;
+    Ok(cap)
+}
+
 /// Grows the line-pair pool to `n` pairs: XML-declared pairs (`<name>TextLeft<i>`) are adopted
 /// with their fonts, and created pairs clone the previous pair's fonts past a declared ladder, or
 /// else wear the template's `GameTooltipHeaderText` (line 1) and `GameTooltipText`.
@@ -105,17 +151,8 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
             let i = have + 1;
 
             // The template's declared pair for this index (ShoppingTooltipTemplate's ladder).
-            let declared = |model: &Model, cell: &str| -> Option<crate::widget::RegionHandle> {
-                if frame_name.is_empty() {
-                    return None;
-                }
-                let id = model
-                    .region_by_name
-                    .get(&format!("{frame_name}Text{cell}{i}"))
-                    .copied()?;
-                let rh = model.id_to_region.get(&id).copied()?;
-                (model.arena.region(rh)?.owner == h).then_some(rh)
-            };
+            let declared =
+                |model: &Model, cell: &str| declared_cell(model, h, &frame_name, cell, i);
             // A created cell's fonts: the previous line's under an XML ladder, else the defaults.
             let seed_font =
                 |model: &mut Model,
@@ -629,8 +666,9 @@ fn text_of(v: Option<&Value>) -> String {
 
 /// Appends one line, without showing the tooltip or touching a fade (`0x5303b0`): `AddLine`
 /// callers call `Show`. The line core (`0x530270`) clears the wrap flag when the right text is
-/// non-empty (`0x53027d`–`0x530284`) and adds no line when both texts are empty
-/// (`0x5302a9`–`0x5302b4`).
+/// non-empty (`0x53027d`–`0x530284`), adds no line when both texts are empty
+/// (`0x5302a9`–`0x5302b4`) or the array is full (`0x530291`), and writes only a non-empty side
+/// (`0x5302ba`, `0x53030a`).
 pub(super) fn append_line(
     lua: &Lua,
     this: &Table,
@@ -644,14 +682,22 @@ pub(super) fn append_line(
     }
     let wrap = wrap && right_empty;
     let h = frame_handle_of(lua, this)?;
-    let n = with_tip(lua, this, |t| t.num_lines + 1)?;
+    let (read, cap, have) = with_tip(lua, this, |t| (t.line_cap_read, t.line_cap, t.num_lines))?;
+    let cap = if read { cap } else { read_line_cap(lua, this)? };
+    // A full line array adds nothing (`0x530291`).
+    if cap.is_some_and(|cap| have >= cap) {
+        return Ok(());
+    }
+    let n = have + 1;
     ensure_lines(lua, this, n)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let (lh, rh) = match model.arena.frame(h).map(|f| &f.kind_state) {
         Some(KindState::Tooltip(t)) => (t.left_lines[n - 1], t.right_lines[n - 1]),
         _ => return Err(mlua::Error::runtime("not a GameTooltip")),
     };
-    write_cell(&mut model, lh, &left.0, left.1);
+    if !left.0.is_empty() {
+        write_cell(&mut model, lh, &left.0, left.1);
+    }
     // The wrap width is pinned at append, so the first measure already comes back wrapped. It is
     // written from this line's own flag every time, and layout is touched only on a change.
     let pin = wrap.then_some((crate::widget::TOOLTIP_WRAP_WIDTH, 0.0));
@@ -665,7 +711,7 @@ pub(super) fn append_line(
             model.touch_measure(lh);
         }
     }
-    if let Some((text, color)) = right {
+    if let Some((text, color)) = right.filter(|(text, _)| !text.is_empty()) {
         write_cell(&mut model, rh, &text, color);
     }
     if let Ok(t) = tip_mut(&mut model, h) {

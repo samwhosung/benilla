@@ -253,7 +253,7 @@ impl TooltipAnchor {
 pub struct TooltipState {
     /// Lines currently filled (`NumLines`). Regions past this index exist but are hidden.
     pub num_lines: usize,
-    /// The left-column FontString pool, index i = line i+1, grown on demand with no line cap.
+    /// The left-column FontString pool, index i = line i+1, grown on demand up to [`Self::line_cap`].
     pub left_lines: Vec<RegionHandle>,
     /// The right-column pool (the `AddDoubleLine`/`TextRightN` half), parallel to `left_lines`.
     pub right_lines: Vec<RegionHandle>,
@@ -281,6 +281,12 @@ pub struct TooltipState {
     pub padding: f32,
     /// Line 1 came from XML (`ShoppingTooltipTemplate`), so later lines clone the previous fonts.
     pub xml_declared_lines: bool,
+    /// The line limit (`+0x320`), read once at the first line: the count of consecutive declared
+    /// `<name>TextLeft<n>`/`TextRight<n>` pairs, which the post-load pass counts (`0x529650`).
+    /// `None` is a tooltip with no declared pair, whose pool grows on demand.
+    pub line_cap: Option<usize>,
+    /// [`Self::line_cap`] has been read.
+    pub line_cap_read: bool,
     /// A relayout (`0x530640`) is owed: Show and the line writers run it with an owner, and it
     /// ends by invalidating the plate (`0x530a52`). The layout pre-pass pays it.
     pub relayout_owed: bool,

@@ -255,6 +255,31 @@ fn double_line_wraps_only_with_an_empty_right_text() {
     assert!(s.take_errors().is_empty());
 }
 
+/// `0x530270` writes a side only when its text is non-empty (`0x5302ba`, `0x53030a`): an empty
+/// left cell stays as the clear left it (hidden, blank), and an empty right cell stays hidden.
+#[test]
+fn an_empty_side_of_a_line_is_not_written() {
+    let mut s = script();
+    s.run(
+        r#"
+        local tt = CreateFrame("GameTooltip", "TTS")
+        tt:AddLine("Level 20")
+        tt:AddDoubleLine("Sword", "Common")
+        assert(TTSTextLeft2:IsShown() and TTSTextRight2:IsShown())
+        tt:ClearLines()
+        tt:AddDoubleLine("", "Right only")
+        assert(not TTSTextLeft1:IsShown(), "the left cell is not written")
+        assert(TTSTextLeft1:GetText() ~= "Level 20", "and it was blanked by the clear")
+        assert(TTSTextRight1:IsShown() and TTSTextRight1:GetText() == "Right only")
+        tt:AddDoubleLine("Left only", "")
+        assert(TTSTextLeft2:IsShown() and TTSTextLeft2:GetText() == "Left only")
+        assert(not TTSTextRight2:IsShown(), "the right cell is not written")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
 #[test]
 fn owner_clear_and_hide_lifecycle() {
     let mut s = script();
