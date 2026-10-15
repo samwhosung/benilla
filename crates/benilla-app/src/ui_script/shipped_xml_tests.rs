@@ -1942,7 +1942,6 @@ fn the_stock_options_windows_load_and_save_are_reachable_for_addons() {
 fn every_cvar_name_the_stock_interface_spells_out_is_registered() {
     let _data = benilla_formats::wow_data_or_skip!();
     let registered: std::collections::HashSet<String> = crate::cvars::registered_pairs()
-        .into_iter()
         .map(|(name, _)| name.to_ascii_lowercase())
         .collect();
     let toc = super::reference_ui::core().expect("the stock FrameXML.toc");
