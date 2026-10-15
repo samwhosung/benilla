@@ -273,7 +273,7 @@ fn gold(model: &Model, pick: impl Fn(&TradeState) -> &TradeSideState) -> u32 {
 /// (`0x4bfaef`) before that `SetCursorItem`, so the handler reads the slot as written. The VM
 /// fills our column itself, since vmangos echoes a placement only to the partner
 /// (`TradeData.cpp:81`).
-fn click_trade_button(lua: &Lua, id: u32) {
+fn click_trade_button(lua: &Lua, id: i32) {
     let money = super::tick::verb(lua, |model| {
         if !matches!(model.cursor, Some(CursorPayload::Money(_))) {
             return false;
@@ -285,8 +285,9 @@ fn click_trade_button(lua: &Lua, id: u32) {
         return;
     }
     // A held item a slot below 7 refuses shows its error and nothing else happens: no send, no
-    // signal, the cursor kept (`0x4bfea1`; the compare is signed, so slot 0 is checked too).
-    if id <= 6 {
+    // signal, the cursor kept. The id less one is compared signed (`0x4bfe7f`, `0x4bfea1`), so a
+    // zero or negative id is checked too.
+    if i64::from(id) - 1 < 6 {
         let refusal = {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             match &model.cursor {
@@ -300,9 +301,8 @@ fn click_trade_button(lua: &Lua, id: u32) {
         }
     }
     // A slot outside the seven reads as empty (`0x4bffc5`-`0x4c0001`).
-    let index = id
-        .checked_sub(1)
-        .map(|i| i as usize)
+    let index = usize::try_from(i64::from(id) - 1)
+        .ok()
         .filter(|&i| i < TRADE_SLOTS);
     let (held, old) = {
         let model = lua.app_data_ref::<Model>().expect("model app_data");
@@ -326,8 +326,10 @@ fn click_trade_button(lua: &Lua, id: u32) {
         };
         let placed = held.as_ref().map(|item| trade_slot_item(model, item));
         match &held {
-            Some(item) => model.trade_set_items.push((id, item.bag, item.slot)),
-            None => model.trade_clear_items.push(id),
+            Some(item) => model
+                .trade_set_items
+                .push((i as u32 + 1, item.bag, item.slot)),
+            None => model.trade_clear_items.push(i as u32 + 1),
         }
         model.trade_offered[i] = held.map(|item| cursor::CursorItem {
             count: None,
@@ -648,7 +650,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "ClickTradeButton",
-        lua.create_function(|lua, id: u32| {
+        // A non-number raises the usage before anything else (`0x4bfe12`, `0x847bac`); the
+        // number is truncated by `_ftol` (`0x40a2b0`).
+        lua.create_function(|lua, v: Value| {
+            let id = super::binding_abi::number_arg(lua, v, "Usage: ClickTradeButton(index)")?;
             click_trade_button(lua, id);
             Ok(())
         })?,
@@ -1124,7 +1129,7 @@ mod tests {
                f:SetScript("OnEvent", function() SEEN = SEEN + 1 end)"#,
         )
         .unwrap();
-        let click = |s: &mut UiScript, pick: &str, id: u32| -> (Vec<&'static str>, i64, bool) {
+        let click = |s: &mut UiScript, pick: &str, id: i64| -> (Vec<&'static str>, i64, bool) {
             s.run(&format!("ClearCursor() {pick} ClickTradeButton({id})"))
                 .unwrap();
             let sent = !s.take_trade_set_items().is_empty();
@@ -1156,5 +1161,21 @@ mod tests {
             click(&mut s, "PickupContainerItem(0, 1)", 7),
             (vec![], 1, true)
         );
+        // The id less one is compared signed: a zero or negative id refuses too, and an unbound
+        // item on it reaches the slot compare, which reads it as no slot and sends nothing.
+        for id in [0, -3] {
+            assert_eq!(
+                click(&mut s, "PickupContainerItem(0, 2)", id),
+                (vec!["ERR_TRADE_QUEST_ITEM"], 0, false),
+                "id {id}"
+            );
+        }
+        s.run("ClearCursor() PickupContainerItem(0, 6) ClickTradeButton(-3)")
+            .unwrap();
+        assert!(s.take_ui_errors().is_empty());
+        assert!(s.take_trade_set_items().is_empty());
+        // A non-number raises the binding's usage.
+        let err = s.run("ClickTradeButton('x')").unwrap_err().to_string();
+        assert!(err.contains("Usage: ClickTradeButton(index)"), "{err}");
     }
 }
