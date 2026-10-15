@@ -87,6 +87,7 @@ fn fixture(points_spent: u32) -> TalentUiState {
             name: "Arms".into(),
             background: "WarriorArms".into(),
             points_spent,
+            texture: None,
         }],
         talents: vec![vec![rend, deep_wounds]],
         points: (2, 0),

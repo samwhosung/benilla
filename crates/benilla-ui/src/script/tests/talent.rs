@@ -11,11 +11,13 @@ fn one_tab_state() -> TalentUiState {
                 name: "Fire".into(),
                 background: "MageFire".into(),
                 points_spent: 7,
+                texture: Some("Interface\\Icons\\Spell_Fire_Fire".into()),
             },
             TalentTabView {
                 name: "Frost".into(),
                 background: "MageFrost".into(),
                 points_spent: 0,
+                texture: None,
             },
         ],
         talents: vec![
@@ -69,7 +71,11 @@ fn bindings_read_the_pushed_snapshot() {
         r#"
         assert(GetNumTalentTabs() == 2)
         local name, texture, points, file = GetTalentTabInfo(1)
-        assert(name == "Fire" and texture == nil and points == 7 and file == "MageFire")
+        assert(name == "Fire" and points == 7 and file == "MageFire")
+        assert(texture == "Interface\\Icons\\Spell_Fire_Fire", "the tab's SpellIcon path")
+        local n2, texture2, points2, file2 = GetTalentTabInfo(2)
+        assert(n2 == "Frost" and texture2 == nil and points2 == 0 and file2 == "MageFrost",
+            "a tab whose icon id is not in SpellIcon.dbc pushes nil there")
         assert(GetTalentTabInfo(3) == nil, "out of range is nil")
         assert(GetNumTalents(1) == 2 and GetNumTalents(2) == 0 and GetNumTalents(9) == 0)
 

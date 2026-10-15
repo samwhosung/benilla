@@ -903,6 +903,7 @@ fn seed_boolean_probe_state(s: &mut benilla_ui::script::UiScript) {
             name: "Probe".into(),
             background: "Interface\\TalentFrame\\Probe-".into(),
             points_spent: 0,
+            texture: None,
         }],
         talents: vec![vec![
             TalentView {

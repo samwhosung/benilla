@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{load_spell_icon_map, parse, str_at, u32_at};
 use crate::Chain;
 
 const TALENT: &str = "DBFilesClient\\Talent.dbc";
@@ -29,6 +29,7 @@ const COL_T_REQUIRED_SPELL: usize = 20;
 
 const TALENT_TAB_FIELDS: usize = 15;
 const COL_TT_NAME_ENUS: usize = 1;
+const COL_TT_SPELL_ICON: usize = 10;
 const COL_TT_RACE_MASK: usize = 11;
 const COL_TT_CLASS_MASK: usize = 12;
 const COL_TT_BACKGROUND: usize = 14;
@@ -76,6 +77,10 @@ pub struct TalentTabInfo {
     pub class_mask: u32,
     /// The `Interface\TalentFrame\<background>-…` art base ("MageFire").
     pub background: String,
+    /// The tab's `SpellIconID` (`[tab+0x28]`) resolved through `SpellIcon.dbc` to its extensionless
+    /// texture path (`Interface\Icons\…`), the second value of `GetTalentTabInfo` (`0x4f30d0`);
+    /// `None` for an id the table lacks (`0x4f30f8`).
+    pub icon: Option<String>,
 }
 
 /// Talent tabs by class and talents by tab.
@@ -148,6 +153,7 @@ pub fn load_talent_catalog(chain: &mut Chain) -> Result<TalentCatalog> {
         .read_file(TALENT_TAB)
         .context("reading TalentTab.dbc")?;
     let tab_set = parse(&tab_bytes, talent_tab_schema(), "TalentTab.dbc")?;
+    let icons = load_spell_icon_map(chain)?;
     let mut tabs = Vec::new();
     for r in tab_set.records() {
         let Some(id) = u32_at(r, 0) else { continue };
@@ -157,6 +163,7 @@ pub fn load_talent_catalog(chain: &mut Chain) -> Result<TalentCatalog> {
             race_mask: u32_at(r, COL_TT_RACE_MASK).unwrap_or(0),
             class_mask: u32_at(r, COL_TT_CLASS_MASK).unwrap_or(0),
             background: str_at(&tab_set, r, COL_TT_BACKGROUND).unwrap_or_default(),
+            icon: u32_at(r, COL_TT_SPELL_ICON).and_then(|id| icons.get(&id).cloned()),
         });
     }
 
@@ -215,6 +222,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["MageArcane", "MageFire", "MageFrost"]
         );
+        // Each tab's `SpellIconID` resolves to a `SpellIcon.dbc` path (`0x4f30d0`-`0x4f30f1`).
+        let icon = |class: u8, i: usize| cat.tabs_for_class(HUMAN, class)[i].icon.clone();
+        assert_eq!(
+            icon(MAGE, 1).as_deref(),
+            Some("Interface\\Icons\\Spell_Fire_Fire")
+        );
+        const SHAMAN: u8 = 7;
+        assert_eq!(
+            icon(SHAMAN, 0).as_deref(),
+            Some("Interface\\Icons\\Spell_Fire_Volcano")
+        );
+        for class in [1u8, 2, 3, 4, 5, 7, 8, 9, 11] {
+            for tab in cat.tabs_for_class(HUMAN, class) {
+                let icon = tab.icon.as_deref().unwrap_or_default();
+                assert!(
+                    icon.starts_with("Interface\\Icons\\"),
+                    "{}: {icon:?}",
+                    tab.name
+                );
+            }
+        }
         // Every shipped tab's raceMask is 511, so race 10 admits nothing.
         assert!(
             cat.tabs_for_class(10, MAGE).is_empty(),

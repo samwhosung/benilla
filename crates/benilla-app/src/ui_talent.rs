@@ -275,6 +275,7 @@ pub(crate) fn build_pages(
             name: tab.name.clone(),
             background: tab.background.clone(),
             points_spent: spent,
+            texture: tab.icon.clone(),
         });
         pages.push(views);
     }
@@ -377,5 +378,34 @@ mod tests {
         let spent: BTreeSet<u32> = [14522, 14788, 14789].into_iter().collect();
         assert_eq!(rank_of(&t, &spent), 3);
         assert_eq!(rank_of(&t, &BTreeSet::new()), 0);
+    }
+
+    /// A tab's icon (`TalentTab.dbc` `SpellIconID` through `SpellIcon.dbc`, `0x4f30d0`-`0x4f30f1`)
+    /// is the second value `GetTalentTabInfo` answers, from the catalog to the Lua call.
+    #[test]
+    fn get_talent_tab_info_answers_the_tab_icon_from_the_catalog() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let talents = benilla_formats::load_talent_catalog(&mut chain).expect("talent catalog");
+        let spells = benilla_formats::load_spell_catalog(&mut chain).expect("spell catalog");
+        let get = |_: &str| None;
+        // Human (`ChrRaces.dbc` 1) shaman (`ChrClasses.dbc` 7).
+        let state = build_pages(&talents, &BTreeSet::new(), &spells, 1, 7, (0, 0), &get);
+        let mut script = UiScript::new().expect("script");
+        script.set_talents(state);
+        let icons: Vec<String> = script
+            .eval(
+                "local t = {} for i = 1, 3 do local _, icon = GetTalentTabInfo(i) t[i] = icon end \
+                 return t",
+            )
+            .expect("tab icons");
+        assert_eq!(
+            icons,
+            [
+                "Interface\\Icons\\Spell_Fire_Volcano",
+                "Interface\\Icons\\Spell_Nature_UnyeildingStamina",
+                "Interface\\Icons\\Spell_Nature_HealingWaveGreater",
+            ]
+        );
     }
 }
