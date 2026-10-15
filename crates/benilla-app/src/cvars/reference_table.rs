@@ -25,6 +25,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("cameraBobbingUDAmplitude", "#1278"),
     ("WorldDetail", "#1279"),
     ("Sound_EnableSoundWhenGameIsInBG", "#545"),
+    ("gamma", "#1281"),
 ];
 
 /// Every registered name, lower-cased, with the defaults the client registers it with (a
