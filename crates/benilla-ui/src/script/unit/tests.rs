@@ -316,6 +316,159 @@ fn corpse_can_attack_and_green_range_bindings() {
     }
 }
 
+/// `UnitCanAssist` (`0x516bb0`): both arguments `lua_isstring`-gated, both tokens resolved
+/// (`0x515940` raises on an unknown one), nil when either names no unit, else `CanAssist`'s verdict
+/// as the number 1 or nil.
+#[test]
+fn unit_can_assist_gates_resolves_and_answers_one_or_nil() {
+    let mut s = UiScript::new().unwrap();
+    let usage = r#"Usage: UnitCanAssist("unit", "otherUnit")"#;
+    for call in [
+        "UnitCanAssist()",
+        r#"UnitCanAssist("player")"#,
+        r#"UnitCanAssist(nil, "target")"#,
+        r#"UnitCanAssist("player", {})"#,
+        r#"UnitCanAssist(true, "target")"#,
+    ] {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(err.contains(usage), "{call}: {err}");
+    }
+    // A number is a string to `lua_isstring`; the resolver then refuses it.
+    let err = s
+        .run(r#"UnitCanAssist(5, "target")"#)
+        .expect_err("a numeric token")
+        .to_string();
+    assert!(err.contains("Unknown unit name: 5"), "{err}");
+    // Both tokens are resolved: the second one's refusal is raised too.
+    let err = s
+        .run(r#"UnitCanAssist("player", "bogus")"#)
+        .expect_err("the second token")
+        .to_string();
+    assert!(err.contains("Unknown unit name: bogus"), "{err}");
+
+    // Neither unit held: nil. Only the target held: still nil, the player is missing.
+    assert!(s
+        .eval::<bool>(r#"return UnitCanAssist("player", "target") == nil"#)
+        .unwrap());
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            exists: true,
+            can_assist: true,
+            ..Default::default()
+        }),
+    );
+    assert!(s
+        .eval::<bool>(r#"return UnitCanAssist("player", "target") == nil"#)
+        .unwrap());
+    // Both held: the number 1, not a boolean.
+    s.set_unit("player", Some(player()));
+    assert_eq!(
+        s.eval::<i64>(r#"return UnitCanAssist("player", "target")"#)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        s.eval::<String>(r#"return type(UnitCanAssist("player", "target"))"#)
+            .unwrap(),
+        "number"
+    );
+    // The verdict fails: nil, not 0.
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            exists: true,
+            can_assist: false,
+            ..Default::default()
+        }),
+    );
+    assert!(s
+        .eval::<bool>(r#"return UnitCanAssist("player", "target") == nil"#)
+        .unwrap());
+    // Case-folded tokens resolve as the resolver folds them.
+    s.set_unit(
+        "target",
+        Some(UnitState {
+            exists: true,
+            can_assist: true,
+            ..Default::default()
+        }),
+    );
+    assert_eq!(
+        s.eval::<i64>(r#"return UnitCanAssist("PLAYER", "Target")"#)
+            .unwrap(),
+        1
+    );
+}
+
+/// `UnitIsTrivial` (`0x519d70`) over `0x5f0700`: false for a player, else true when the player
+/// out-levels the unit by more than the grey band (`0x80ae98`, indexed by player level / 5, 12
+/// past the table), strictly; nil for a missing unit.
+#[test]
+fn unit_is_trivial_is_the_grey_test_and_never_a_player() {
+    use crate::script::PlayerReqState;
+    let mut s = UiScript::new().unwrap();
+    for call in ["UnitIsTrivial()", "UnitIsTrivial(nil)", "UnitIsTrivial({})"] {
+        let err = s.run(call).expect_err(call).to_string();
+        assert!(
+            err.contains(r#"Usage: UnitIsTrivial("unit")"#),
+            "{call}: {err}"
+        );
+    }
+    let err = s
+        .run(r#"UnitIsTrivial("bogus")"#)
+        .expect_err("an unknown token")
+        .to_string();
+    assert!(err.contains("Unknown unit name: bogus"), "{err}");
+    // No unit: nil.
+    assert!(s
+        .eval::<bool>(r#"return UnitIsTrivial("target") == nil"#)
+        .unwrap());
+
+    let at = |s: &mut UiScript, level: u32, is_player: bool| {
+        s.set_unit(
+            "target",
+            Some(UnitState {
+                exists: true,
+                level,
+                is_player,
+                ..Default::default()
+            }),
+        );
+        s.eval::<Option<i64>>(r#"return UnitIsTrivial("target")"#)
+            .unwrap()
+    };
+    // Player level 10 (index 2, band 5): 4 below is green, 5 below is still green (the gap must
+    // exceed the band), 6 below is grey.
+    s.set_player_req_state(PlayerReqState {
+        level: 10,
+        ..Default::default()
+    });
+    assert_eq!(at(&mut s, 6, false), None, "a gap of 4");
+    assert_eq!(at(&mut s, 5, false), None, "a gap equal to the band");
+    assert_eq!(at(&mut s, 4, false), Some(1), "a gap past the band");
+    assert_eq!(at(&mut s, 12, false), None, "a unit above the player");
+    // A player never is, however low.
+    assert_eq!(at(&mut s, 1, true), None, "a low player");
+    // Past the table's end the band is 12: level 120, gap 12 is green, 13 grey.
+    s.set_player_req_state(PlayerReqState {
+        level: 120,
+        ..Default::default()
+    });
+    assert_eq!(at(&mut s, 108, false), None);
+    assert_eq!(at(&mut s, 107, false), Some(1));
+    // Level 40 is index 8, whose band is 8.
+    s.set_player_req_state(PlayerReqState {
+        level: 40,
+        ..Default::default()
+    });
+    assert_eq!(at(&mut s, 32, false), None);
+    assert_eq!(at(&mut s, 31, false), Some(1));
+    // No player (level 0): nothing is trivial.
+    s.set_player_req_state(PlayerReqState::default());
+    assert_eq!(at(&mut s, 0, false), None);
+}
+
 #[test]
 fn target_unit_queues_the_token_for_the_app_to_resolve() {
     use crate::script::SelectionRequest;

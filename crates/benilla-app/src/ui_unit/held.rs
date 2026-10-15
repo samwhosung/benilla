@@ -32,6 +32,8 @@ pub(super) struct HeldUnits<'a> {
     pub(super) self_store: Option<&'a ObjectStore>,
     pub(super) classes: Option<&'a ChrClasses>,
     pub(super) types: CreatureTypeSources<'a>,
+    /// The object manager's lookup by guid (`0x468460`), which `CanAssist`'s owner leg reads.
+    pub(super) by_guid: &'a dyn Fn(u64) -> Option<ObjectStore>,
 }
 
 impl HeldUnits<'_> {
@@ -59,6 +61,14 @@ impl HeldUnits<'_> {
             self.factions,
             self.reputations,
             self.self_store,
+        );
+        // `CanAssist` (`0x6066f0`), the player toward the unit; `UnitCanAssist` reads it.
+        s.can_assist = crate::target::can_assist(
+            Some(store),
+            self.factions,
+            self.reputations,
+            self.self_store,
+            self.by_guid,
         );
         enrich_unit(
             &mut s,
@@ -139,6 +149,9 @@ pub(super) fn feed_chain_units(
         return;
     }
 
+    let by_guid = |guid: u64| -> Option<ObjectStore> {
+        stores.get(*index.as_ref()?.0.get(&guid)?).ok().cloned()
+    };
     let held = HeldUnits {
         names: &names,
         commands: &commands,
@@ -148,6 +161,7 @@ pub(super) fn feed_chain_units(
         self_store: self_q.iter().next(),
         classes: tables.classes(),
         types: tables.types(&names),
+        by_guid: &by_guid,
     };
     let built: HashMap<u64, UnitState> = ends
         .iter()
@@ -203,6 +217,8 @@ pub(crate) fn feed_name_candidates(
     // [`GlobalTransform`], as [`crate::target::PlayerLookup`] reads it: `Transform` would put
     // this feed in an undeclared order against every system that moves a unit.
     units: Query<(&Guid, &GlobalTransform, Option<Ref<ObjectStore>>)>,
+    index: Option<Res<crate::net::GuidIndex>>,
+    all_stores: Query<&ObjectStore>,
     self_q: Query<(&Guid, &GlobalTransform, Option<&ObjectStore>), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
@@ -220,6 +236,9 @@ pub(crate) fn feed_name_candidates(
         || reputations.is_changed()
         || factions.as_ref().is_some_and(|r| r.is_changed());
     let me = self_q.single().ok();
+    let by_guid = |guid: u64| -> Option<ObjectStore> {
+        all_stores.get(*index.as_ref()?.0.get(&guid)?).ok().cloned()
+    };
     let held = HeldUnits {
         names: &names,
         commands: &commands,
@@ -229,6 +248,7 @@ pub(crate) fn feed_name_candidates(
         self_store: me.and_then(|(_, _, s)| s),
         classes: tables.classes(),
         types: tables.types(&names),
+        by_guid: &by_guid,
     };
     memo.seen.clear();
     let origin = me.map(|(_, tf, _)| tf.translation());
@@ -577,6 +597,88 @@ mod tests {
         app.update();
         // The name would be the name cache's (`0x5171eb`), which a chain's end does not read yet.
         assert_eq!(health(&app, "raid3target"), 0);
+    }
+
+    /// `UnitCanAssist` (`0x516bb0`) over a chain's end reads the feed's `CanAssist` verdict
+    /// (`0x6066f0`): the player's template toward the unit's friendly, the unit not
+    /// unselectable, and, for a unit that is not player-controlled, PvP-flagged.
+    #[test]
+    fn unit_can_assist_reads_the_feeds_can_assist_for_a_chain_end() {
+        use crate::spell::targeting::corpse_fixture as fx;
+        const TEMPLATE: u16 = 35;
+        const FLAGS: u16 = 46;
+        let mut app = app();
+        app.insert_resource(fx::factions());
+        let with = |extra: &[(u16, u32)], target: u64, kind: u32| {
+            let mut pairs = vec![
+                (OBJECT_TYPE, kind),
+                (TARGET, target as u32),
+                (TARGET + 1, (target >> 32) as u32),
+                (HEALTH, 4000),
+                (MAXHEALTH, 5000),
+                (LEVEL, 60),
+            ];
+            pairs.extend_from_slice(extra);
+            ObjectStore(ObjectFields::from_pairs(&pairs))
+        };
+        let put = |app: &mut App, guid: u64, store: ObjectStore| {
+            let e = app.world().resource::<GuidIndex>().0[&guid];
+            app.world_mut().entity_mut(e).insert(store);
+        };
+        // We are a human; `BOSS` (party1's target) a human creature, PvP-flagged; `ADD`
+        // (raid3's target) a human creature that is not.
+        put(&mut app, ME, with(&[(TEMPLATE, 1)], MOB, 0x19));
+        put(
+            &mut app,
+            BOSS,
+            with(&[(TEMPLATE, 1), (FLAGS, 0x1000)], GONE, 0x09),
+        );
+        put(&mut app, ADD, with(&[(TEMPLATE, 1)], 0, 0x09));
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_unit(
+                "player",
+                Some(UnitState {
+                    exists: true,
+                    ..Default::default()
+                }),
+            );
+        app.update();
+        assert!(
+            holds(&app, r#"UnitCanAssist("player", "party1target") == 1"#),
+            "a friendly, PvP-flagged creature"
+        );
+        assert!(
+            holds(&app, r#"UnitCanAssist("player", "raid3target") == nil"#),
+            "a friendly creature that is not PvP-flagged"
+        );
+        // A unit nobody holds is no unit: nil.
+        assert!(holds(
+            &app,
+            r#"UnitCanAssist("player", "party1targettarget") == nil"#
+        ));
+        // The verdict follows a descriptor that moves: `ADD` takes the flag.
+        put(
+            &mut app,
+            ADD,
+            with(&[(TEMPLATE, 1), (FLAGS, 0x1000)], 0, 0x09),
+        );
+        app.update();
+        assert!(holds(
+            &app,
+            r#"UnitCanAssist("player", "raid3target") == 1"#
+        ));
+        // `UNIT_FLAG_NOT_SELECTABLE` (bit 25) refuses it.
+        put(
+            &mut app,
+            ADD,
+            with(&[(TEMPLATE, 1), (FLAGS, 0x1000 | 0x0200_0000)], 0, 0x09),
+        );
+        app.update();
+        assert!(holds(
+            &app,
+            r#"UnitCanAssist("player", "raid3target") == nil"#
+        ));
     }
 
     /// The chain feed reads the resolver inputs the aura feed pushes in the same frame, so the

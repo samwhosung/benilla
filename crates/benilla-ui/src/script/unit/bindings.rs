@@ -10,8 +10,8 @@ use super::super::calls::ScriptCall;
 use super::super::Model;
 use super::{
     check_unit_token, classification_word, grey_band, level_reads_unknown, parse_unit_token,
-    pick_unit_token, unit_predicate, unknownobject, with_unit, PlayerRecord, SelectionRequest,
-    UnitBase, UnitTokenParse,
+    pick_unit_token, unit_is_grey, unit_predicate, unknownobject, with_unit, PlayerRecord,
+    SelectionRequest, UnitBase, UnitTokenParse,
 };
 
 /// The `"player"` fast path of `UnitName`, `UnitRace`, `UnitClass` and `UnitSex`, never
@@ -219,6 +219,63 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             )?);
             let token = pick_unit_token(&a, &b);
             unit_predicate(lua, &token, |u| u.can_attack)
+        })?,
+    )?;
+
+    // UnitCanAssist (`0x516bb0`) delegates to `CanAssist` (`0x6066f0`), `this` the first unit. Both
+    // tokens are `lua_isstring`-gated and both resolved (`0x515940`, which raises on an unknown
+    // one) before either is judged; nil when either names no unit. The snapshot holds only whether
+    // the player can assist the unit, so, as for `UnitCanAttack`, it answers the non-player token
+    // in either argument order; the reverse direction is not built.
+    g.set(
+        "UnitCanAssist",
+        lua.create_function(|lua, (a, b): (Value, Value)| {
+            let a = Some(crate::script::binding_abi::string_arg(
+                lua,
+                a,
+                r#"Usage: UnitCanAssist("unit", "otherUnit")"#,
+            )?);
+            let b = Some(crate::script::binding_abi::string_arg(
+                lua,
+                b,
+                r#"Usage: UnitCanAssist("unit", "otherUnit")"#,
+            )?);
+            check_unit_token(&a)?;
+            check_unit_token(&b)?;
+            let token = pick_unit_token(&a, &b);
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let named = |t: &Option<String>| t.as_ref().and_then(|t| model.unit(t));
+            let ok = match (
+                named(&a),
+                named(&b),
+                token.as_ref().and_then(|t| model.unit(t)),
+            ) {
+                (Some(_), Some(_), Some(u)) => u.can_assist,
+                _ => false,
+            };
+            Ok(flag(ok))
+        })?,
+    )?;
+
+    // UnitIsTrivial (`0x519d70`): `0x5f0700`, false for a player (object type bit `0x10`), else
+    // true when the player's level is above the unit's by more than the grey band
+    // ([`unit_is_grey`]). The unit's raw level is read, as `UnitLevel`'s raw 0 is.
+    g.set(
+        "UnitIsTrivial",
+        lua.create_function(|lua, token: Value| {
+            let token = Some(crate::script::binding_abi::string_arg(
+                lua,
+                token,
+                r#"Usage: UnitIsTrivial("unit")"#,
+            )?);
+            let player_level = lua
+                .app_data_ref::<Model>()
+                .expect("model app_data")
+                .player_req
+                .level;
+            unit_predicate(lua, &token, |u| {
+                !u.is_player && unit_is_grey(player_level, u.level)
+            })
         })?,
     )?;
 
