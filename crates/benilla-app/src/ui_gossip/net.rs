@@ -65,7 +65,7 @@ fn npc_gender(world: &World, guid: u64) -> u8 {
 /// cell already holds this NPC (`0x4e1fb8`), then writes the cell (`0x4e1ff0`); the menu is
 /// latched, and on a first visit to its text the query goes out. The greeting is drawn at menu
 /// open, as the reference's `0x4e2010` draws it; a record with no line closes the menu.
-fn gossip_menu(
+pub(crate) fn gossip_menu(
     world: &mut World,
     npc: u64,
     text_id: u32,
