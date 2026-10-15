@@ -49,7 +49,7 @@ mod death;
 pub mod diagnostics;
 mod editbox;
 pub mod instance;
-pub(crate) use editbox::{adopt_text_region, editbox_text_region_wrapper};
+pub(crate) use editbox::{adopt_text_region, apply_xml_bytes, editbox_text_region_wrapper};
 pub(crate) mod addon;
 mod addon_enable;
 pub mod addon_gate;

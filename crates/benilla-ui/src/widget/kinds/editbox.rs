@@ -63,7 +63,9 @@ pub struct EditBoxState {
     pub alt_arrow_key_mode: bool,
     /// `maxLetters` (`E+0x340`), 0 for unlimited.
     pub max_letters: usize,
-    /// `maxBytes` (`E+0x33c`); the client's `-1`, unlimited, is `None`.
+    /// The byte cap as the client stores it (`E+0x33c`): one under what `SetMaxBytes` and XML
+    /// `<FontString bytes>` name (`0x799016`, `0x77a24f`), the room the terminator takes. Its `-1`,
+    /// unlimited, is `None`.
     pub max_bytes: Option<usize>,
     /// The implicit FontString the text renders through (`E+0x328`, ctor `0x779bee`).
     pub text_region: Option<RegionHandle>,
@@ -1002,28 +1004,30 @@ impl EditBoxState {
         self.sel_end = a.max(b);
     }
 
-    /// After an edit, trim from the end to `maxBytes`, then `maxLetters` (`0x77c02d`).
-    fn enforce_caps(&mut self) {
-        if let Some(mb) = self.max_bytes {
-            while self.text.len() > mb {
-                self.text.pop();
+    /// Deletes back from the end, one character or one whole link at a time, while `over` holds.
+    fn trim_end_while(&mut self, over: impl Fn(&str) -> bool) {
+        while over(&self.text) {
+            let len = self.text.len();
+            let cut = crate::markup::ClassMap::new(&self.text).advance(len, -1, true);
+            if cut >= len {
+                break;
             }
+            self.text.truncate(cut);
+        }
+    }
+
+    /// After an edit, trim from the end to `maxBytes`, then `maxLetters` (`0x77c02d`). Each trim is
+    /// the Backspace step from the end (`0x77c280(-1)`, links atomic), re-counted after every
+    /// step (`0x77c066`, `0x77c0d0`), so it sheds a whole link at once.
+    fn enforce_caps(&mut self) {
+        if let Some(cap) = self.max_bytes {
+            self.trim_end_while(|text| text.len() > cap);
         }
         if self.max_letters > 0 {
             // Letters, not chars: `0x77bc80` counts classes 2, 3 and 6, so an item link costs only
-            // its visible name. The trim is the Backspace step (`0x77c280(-1)`, links atomic),
-            // re-counting after each pop (`0x77c0e4`), so it sheds a whole link at once.
-            loop {
-                let map = crate::markup::ClassMap::new(&self.text);
-                if map.num_letters() <= self.max_letters {
-                    break;
-                }
-                let cut = map.advance(self.text.len(), -1, true);
-                if cut >= self.text.len() {
-                    break;
-                }
-                self.text.truncate(cut);
-            }
+            // its visible name.
+            let cap = self.max_letters;
+            self.trim_end_while(|text| crate::markup::ClassMap::new(text).num_letters() > cap);
         }
         let len = self.text.len();
         self.cursor = snap_down(&self.text, self.cursor.min(len));

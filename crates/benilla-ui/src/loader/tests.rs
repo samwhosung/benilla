@@ -1362,6 +1362,56 @@ mod loader_tests {
         assert!(s.errors().is_empty(), "{:?}", s.errors());
     }
 
+    /// An EditBox's `<FontString bytes="N">` caps the box at N - 1 bytes (`0x77a225`-`0x77a260`):
+    /// `SStrToInt`, a value of 0 or less lifts the cap, and an empty or absent one leaves the
+    /// ctor's.
+    #[test]
+    fn an_editbox_fontstring_bytes_caps_the_box_at_n_minus_one() {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = parse(
+            r#"<Ui>
+                <EditBox name="Chat" letters="255"><FontString bytes="256"/></EditBox>
+                <EditBox name="Short"><FontString bytes="4x"/></EditBox>
+                <EditBox name="Off"><FontString bytes="0"/></EditBox>
+                <EditBox name="Neg"><FontString bytes="-3"/></EditBox>
+                <EditBox name="Empty"><FontString bytes=""/></EditBox>
+                <EditBox name="Plain"><FontString/></EditBox>
+                <EditBox name="Bare" bytes="9"/>
+            </Ui>"#,
+        );
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        for (name, want) in [
+            ("Chat", 256),
+            ("Short", 4),
+            ("Off", 0),
+            ("Neg", 0),
+            ("Empty", 0),
+            ("Plain", 0),
+            ("Bare", 0),
+        ] {
+            assert_eq!(
+                s.eval::<i64>(&format!("return {name}:GetMaxBytes()"))
+                    .unwrap(),
+                want,
+                "{name}"
+            );
+        }
+        // 300 two-byte letters stop at 255 bytes: 127 whole letters.
+        s.run(r#"Chat:SetFocus() Chat:Insert(string.rep("é", 300))"#)
+            .unwrap();
+        assert_eq!(
+            s.eval::<i64>("return string.len(Chat:GetText())").unwrap(),
+            254
+        );
+        s.run(r#"Chat:SetText(string.rep("a", 300))"#).unwrap();
+        assert_eq!(
+            s.eval::<i64>("return string.len(Chat:GetText())").unwrap(),
+            255
+        );
+    }
+
     /// The EditBox ctor leaves autoFocus on (`flags = 1`), so the stock UI writes the attribute
     /// only as `autoFocus="false"`: ten times across FrameXML and GlueXML.
     #[test]

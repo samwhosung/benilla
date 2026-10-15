@@ -152,6 +152,27 @@ fn wheel_scroll_re_arms_the_fade_then_freezes_it() {
     assert!(close(a4, a1), "and from a full re-arm: {a4} vs {a1}");
 }
 
+/// The stock `ChatFrame.xml` writes `<FontString bytes="256"/>` on the chat box, which caps it at
+/// 255 bytes (`0x77a225`-`0x77a260`, `0x77c040`): a line is stopped before vmangos would drop it.
+#[test]
+fn the_stock_chat_box_stops_at_255_bytes() {
+    benilla_formats::wow_data_or_skip!();
+    let s = chat_frame();
+    assert_eq!(
+        s.eval::<i64>("return ChatFrameEditBox:GetMaxBytes()")
+            .unwrap(),
+        256
+    );
+    s.run("ChatFrameEditBox:SetText(string.rep('\\195\\169', 200))")
+        .unwrap();
+    assert_eq!(
+        s.eval::<i64>("return string.len(ChatFrameEditBox:GetText())")
+            .unwrap(),
+        254,
+        "127 two-byte letters"
+    );
+}
+
 #[test]
 fn input_editbox_enter_drains_the_typed_line() {
     benilla_formats::wow_data_or_skip!();

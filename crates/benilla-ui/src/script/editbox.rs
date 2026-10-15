@@ -459,6 +459,18 @@ pub(crate) fn adopt_text_region(lua: &Lua, frame: &Table, region: &Table) -> mlu
     Ok(())
 }
 
+/// An EditBox's `<FontString bytes="N">` (`0x77a225`-`0x77a260`): `SStrToInt` of a non-empty value
+/// caps the box at N - 1 bytes, and a value of 0 or less lifts the cap.
+pub(crate) fn apply_xml_bytes(lua: &Lua, frame: &Table, bytes: &str) -> mlua::Result<()> {
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let n = super::binding_abi::s_str_to_int(bytes);
+    let h = frame_handle_of(lua, frame)?;
+    with_eb(lua, h, |eb| eb.max_bytes = (n > 0).then(|| n as usize - 1));
+    Ok(())
+}
+
 /// Get or create the box's text FontString; an XML-declared one is wired by [`adopt_text_region`].
 pub(super) fn ensure_text_region(lua: &Lua, h: FrameHandle) -> Option<RegionHandle> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");

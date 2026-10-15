@@ -182,6 +182,11 @@ impl Loader<'_> {
                     self.report
                         .fault(format!("{dbg}: adopt special FontString: {e}"));
                 }
+                if let Some(bytes) = region.attr("bytes") {
+                    if let Err(e) = crate::script::apply_xml_bytes(self.lua(), wrapper, bytes) {
+                        self.report.fault(format!("{dbg}: FontString bytes: {e}"));
+                    }
+                }
             }
         }
     }

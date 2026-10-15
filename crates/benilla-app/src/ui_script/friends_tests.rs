@@ -44,6 +44,25 @@ fn push(s: &mut UiScript, state: SocialState, event: &str) {
     s.fire_event(event, Vec::new());
 }
 
+/// `FriendsFrame.xml` writes `<FontString bytes="256"/>` on the `/who` box (`0x77a225`-`0x77a260`).
+#[test]
+fn the_who_box_stops_at_255_bytes() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let s = setup();
+    assert_eq!(
+        s.eval::<i64>("return WhoFrameEditBox:GetMaxBytes()")
+            .unwrap(),
+        256
+    );
+    s.run("WhoFrameEditBox:SetText(string.rep('a', 300))")
+        .unwrap();
+    assert_eq!(
+        s.eval::<i64>("return string.len(WhoFrameEditBox:GetText())")
+            .unwrap(),
+        255
+    );
+}
+
 /// With no guild seated, `IsInGuild()` is nil and `FriendsFrame_OnShow`'s `InGuildCheck()` greys
 /// the guild tab (`FriendsFrame.lua:78`, `:920-922`).
 #[test]

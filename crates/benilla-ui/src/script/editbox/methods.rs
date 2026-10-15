@@ -138,8 +138,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
     m.set(
         // `SetMaxBytes` (`0x798f30`) has `SetMaxLetters`'s exact count gate (`0x798fbc`) and raw
-        // coercion, but its no-limit value is -1 (`0x799012`; the ctor writes -1 at `0x7799df`):
-        // a non-positive argument is unlimited, a positive one caps the bytes.
+        // coercion, but it stores n - 1 for a positive n and -1, unlimited, otherwise
+        // (`0x799012`-`0x799022`; the ctor writes -1 at `0x7799df`).
         "SetMaxBytes",
         lua.create_function(|lua, (this, args): (Table, mlua::MultiValue)| {
             let args: Vec<Value> = args.into_iter().collect();
@@ -151,15 +151,15 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let n = crate::script::binding_abi::coerced_number(lua, args.first().cloned());
             let n = n as i64;
             with_editbox(lua, &this, |eb| {
-                eb.max_bytes = (n > 0).then_some(n as usize);
+                eb.max_bytes = (n > 0).then(|| n as usize - 1);
             })
         })?,
     )?;
     m.set(
-        // -1 while unlimited, the reference's stored sentinel.
+        // The stored cap plus one (`0x7990e3`-`0x7990e9`), so 0 while unlimited.
         "GetMaxBytes",
         lua.create_function(|lua, this: Table| {
-            with_editbox(lua, &this, |eb| eb.max_bytes.map_or(-1, |n| n as i64))
+            with_editbox(lua, &this, |eb| eb.max_bytes.map_or(0, |n| n as i64 + 1))
         })?,
     )?;
     m.set(
