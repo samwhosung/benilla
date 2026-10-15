@@ -15,10 +15,12 @@
 //! goes to the free list's tail. Then each span takes the free list's head (`0x7a3880`, a new
 //! button when it is empty), which is placed on its line and shown (`0x7a3350`); nothing is ever
 //! freed. A ScrollingMessageFrame rebuilds from its update (`0x788595`) whenever its flag is up
-//! ([`crate::widget::ScrollingMessageState::links_dirty`]), and a resize relayouts it (`0x788440`
-//! → `0x788750`). The buttons hang off their line (`0x7a3441`), so a frame that only moves or
-//! rescales carries them along with no rebuild. The app lays the text out, so its spans arrive
-//! here as screen rects every frame, and a frame not rebuilt has its buttons re-seated in place.
+//! ([`crate::widget::ScrollingMessageState::links_dirty`]), and a change of its on-screen width
+//! or height relayouts it (`0x7882f0` → `0x788310` → `0x788750`), a rescale included, since the
+//! rect it compares is in screen units (`0x788342` scales the insets by `+0x7c`). The buttons hang
+//! off their line (`0x7a3441`), so a frame that only moves carries them along with no rebuild.
+//! The app lays the text out, so its spans arrive here as screen rects every frame, and a frame
+//! not rebuilt has its buttons re-seated in place.
 
 use std::collections::VecDeque;
 
@@ -97,7 +99,7 @@ pub(crate) struct LinkPool {
     live: Vec<FrameHandle>,
     spans: Vec<Span>,
     free: VecDeque<FrameHandle>,
-    /// The text frame's size in its own units at the last pass, for the resize relayout.
+    /// The text frame's on-screen size at the last pass, for the resize relayout.
     size: Option<(f32, f32)>,
 }
 
@@ -156,19 +158,17 @@ pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String
 }
 
 /// Whether `owner` rebuilds this pass. A ScrollingMessageFrame does when its flag is up, which
-/// this spends, or its size moved; any other text frame when its links or their count changed.
+/// this spends, or its on-screen size moved (`0x788394`, `0x7883b2`); any other text frame when
+/// its links or their count changed.
 /// Deviation: a span count that no longer matches the live set always rebuilds, so a state this
 /// model does not flag (a ring wiped by `SetMaxLines`, a hidden frame) leaves no stale button.
 fn due(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     let model = &mut *model;
-    let scale = f64::from(super::object::eff_scale(model, owner));
-    let size = model.resolved.get(&owner).map(|r| {
-        (
-            ((f64::from(r.right) - f64::from(r.left)) / scale) as f32,
-            ((f64::from(r.top) - f64::from(r.bottom)) / scale) as f32,
-        )
-    });
+    let size = model
+        .resolved
+        .get(&owner)
+        .map(|r| (r.right - r.left, r.top - r.bottom));
     let flagged = match model.arena.frame_mut(owner).map(|f| &mut f.kind_state) {
         Some(KindState::ScrollingMessage(smf)) => Some(std::mem::take(&mut smf.links_dirty)),
         _ => None,

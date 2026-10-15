@@ -479,9 +479,10 @@ impl UiScript {
             None => fr,
         });
         let mut used = 0.0f32; // px used from the anchored edge
-                               // The scrolling class's lines go out from the farthest displayed line to the anchored
-                               // one, the order its link rebuild walks them (`0x788c8d`-`0x788d7d`), so the spans reach
-                               // [`super::hyperlink`] in the reference's placement order.
+
+        // The scrolling class's lines go out from the farthest displayed line to the anchored
+        // one, the order its link rebuild walks them (`0x788c8d`-`0x788d7d`), so the spans reach
+        // [`super::hyperlink`] in the reference's placement order.
         let first = out.len();
         let reverse = matches!(frame.kind_state, KindState::ScrollingMessage(_));
         for idx in (0..=top_index).rev() {

@@ -238,6 +238,25 @@ fn a_moved_frame_carries_its_buttons_with_no_leave_or_enter() {
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
 
+/// A rescale changes the frame's on-screen size, which its rect callback compares
+/// (`0x788394`), so it relayouts and rebuilds: the hovered link leaves and enters again, though
+/// its span is where it was.
+#[test]
+fn a_rescaled_frame_rebuilds_its_buttons() {
+    let mut s = chat();
+    log_hover(&mut s);
+    s.mouse_move(130.0, 127.0);
+    s.run("CF:SetScale(0.9)").unwrap();
+    s.resolve();
+    set_link(&mut s);
+    s.mouse_move(131.0, 127.0);
+    assert_eq!(
+        log_of(&s),
+        format!("enter:{LINK} leave:{LINK} enter:{LINK}")
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
+
 /// A press held over a link through a rebuild loses its capture with the hide, so the release
 /// clicks nothing; the next press and release click the new link.
 #[test]
