@@ -3,13 +3,12 @@
 //! the power leg, the last, sets `notEnoughMana`.
 //!
 //! Built: the TRADE_SKILL early-out, dead (leg 1), lost control (2), reagents and totems (3), the
-//! equipped item (4),
-//! combo points (5), shapeshift form (6), only-stealthed (7), not-in-combat (8), CasterAuraState
-//! (9), TargetAuraState and its CanAttack/CanAssist fork (10/10b, the only legs that read the
-//! current target), the bit-25 cooldown fold (11) and power (12).
+//! equipped item (4), combo points (5), shapeshift form (6), only-stealthed (7), not-in-combat
+//! (8), CasterAuraState (9), TargetAuraState and its CanAttack/CanAssist fork (10/10b, the only
+//! legs that read the current target), the bit-25 cooldown fold (11) and power (12).
 //!
-//! Not built, answering usable: leg 4's `AttributesEx3` sub-conditions. CanAssist in leg 10b is a reaction-rank test (friendly or
-//! better), not the reference's `0x6066f0`.
+//! Not built, answering usable: leg 4's `AttributesEx3` sub-conditions. CanAssist in leg 10b is a
+//! reaction-rank test (friendly or better), not the reference's `0x6066f0`.
 
 use benilla_protocol::messages::ItemUseSpell;
 

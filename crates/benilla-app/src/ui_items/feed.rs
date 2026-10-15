@@ -775,7 +775,7 @@ fn resolve_slot(
         cooldown: t.use_spell.and_then(|u| {
             let sd = spells.and_then(|s| s.get(u.spell_id));
             cooldowns
-                .info(u.spell_id, entry, sd, now)
+                .info_item(u.spell_id, entry, u.category, sd, now)
                 .ui_triple(now, ui_now)
         }),
     })

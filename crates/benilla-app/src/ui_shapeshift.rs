@@ -219,9 +219,17 @@ fn feed_shapeshift_bar(
                     usable::spell_usable(id, d, &spells, &ctx, &objects, &items, &commands).0
                 });
             let texture = form_texture(d, active);
-            let cooldown = cooldowns
-                .info(id, 0, Some(d), now)
-                .ui_triple(anchor, ui_now);
+            let pushed = memory
+                .pushed
+                .as_deref()
+                .and_then(|p| p.iter().find(|v| v.spell_id == id))
+                .and_then(|v| v.cooldown);
+            let cooldown = crate::spell::cooldowns::settle(
+                pushed,
+                cooldowns
+                    .info(id, 0, Some(d), now)
+                    .ui_triple(anchor, ui_now),
+            );
             ShapeshiftFormView {
                 spell_id: id,
                 texture,
@@ -402,5 +410,136 @@ mod tests {
             !form_active(2457, &battle_stance, 0, Some(&player_with_aura(2457))),
             "out of the form: a live aura row is not what the MOD_SHAPESHIFT arm reads"
         );
+    }
+
+    const FEAR_AURA: u32 = 5782;
+    const PLAIN_FORM: u32 = 5487;
+    const WARDED_FORM: u32 = 7744;
+    /// `UNIT_FIELD_FLAGS` bit 23, fleeing.
+    const FLEEING: u32 = 0x0080_0000;
+
+    /// The bar feed over two forms and a feared player: the plain form and the form whose spell
+    /// carries the fear immunity (`AttributesEx` bit 15, aura 77 over mechanic 5).
+    fn bar_rig() -> App {
+        let mut fear = SpellDisplay {
+            mechanic: 5,
+            ..Default::default()
+        };
+        fear.effects[0] = 6;
+        fear.effect_apply_aura[0] = 7;
+        let plain = SpellDisplay {
+            name: "Bear Form".into(),
+            shapeshift_form: Some(5),
+            ..Default::default()
+        };
+        let mut warded = SpellDisplay {
+            name: "Warded".into(),
+            shapeshift_form: Some(6),
+            attributes_ex: 0x8000,
+            ..Default::default()
+        };
+        warded.effects[0] = 6;
+        warded.effect_apply_aura[0] = 77;
+        warded.effect_misc_value[0] = 5;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.spells.extend([PLAIN_FORM, WARDED_FORM]);
+        app.insert_resource(actions)
+            .insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [
+                        (PLAIN_FORM, plain),
+                        (WARDED_FORM, warded),
+                        (FEAR_AURA, fear),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..Spells::empty_for_tests()
+            })
+            .init_resource::<crate::player::Player>()
+            .init_resource::<Cooldowns>()
+            .init_resource::<crate::spell::SpellModifiers>()
+            .init_resource::<crate::ui_script::UiClock>()
+            .init_resource::<Selection>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Reputations>()
+            .init_resource::<Items>()
+            .insert_resource(NetCommands(tx));
+        app.world_mut().spawn((
+            SelfPlayer,
+            ObjectStore(ObjectFields::from_pairs(&[
+                (22, 100),
+                (23, 500),
+                (46, (1 << 3) | FLEEING),
+                (47, FEAR_AURA),
+            ])),
+        ));
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, feed_shapeshift_bar);
+        app
+    }
+
+    fn castable(app: &App, index: u32) -> bool {
+        app.world()
+            .non_send_resource::<UiScript>()
+            .eval::<bool>(&format!(
+                "local _, _, _, c = GetShapeshiftFormInfo({index}) return c == 1"
+            ))
+            .unwrap()
+    }
+
+    /// Leg 2 reaches the stance bar's `isCastable` (`0x4b45c0` runs `0x6e3d60`): lost control
+    /// greys the plain form, the fear-immune one stays castable, control back lights both.
+    #[test]
+    fn lost_control_greys_the_stance_bar_but_the_immunity_form() {
+        let mut app = bar_rig();
+        app.update();
+        assert!(castable(&app, 1) && castable(&app, 2), "in control");
+
+        app.world_mut()
+            .resource_mut::<crate::player::Player>()
+            .own_control_lost = true;
+        app.update();
+        assert!(!castable(&app, 1), "the plain form greys");
+        assert!(castable(&app, 2), "the fear immunity passes the scan");
+
+        app.world_mut()
+            .resource_mut::<crate::player::Player>()
+            .own_control_lost = false;
+        app.update();
+        assert!(castable(&app, 1) && castable(&app, 2), "control back");
+    }
+
+    /// A held form (Shadowform in the bar) reads a start of the query's now, which moves each
+    /// frame; the bar pushes it once, not every frame.
+    #[test]
+    fn a_held_forms_moving_start_pushes_nothing_new() {
+        let mut app = bar_rig();
+        let d = SpellDisplay {
+            shapeshift_form: Some(5),
+            attributes: 0x0200_0000,
+            ..Default::default()
+        };
+        app.world_mut().resource_mut::<Cooldowns>().start_spell(
+            PLAIN_FORM,
+            &d,
+            0,
+            Instant::now(),
+            None,
+        );
+        let read = |app: &App| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<(f64, f64, i64)>("return GetShapeshiftFormCooldown(1)")
+                .unwrap()
+        };
+        app.update();
+        let held = read(&app);
+        assert_eq!((held.1, held.2), (0.001, 0), "(now, 0.001, 0)");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.update();
+        assert_eq!(read(&app), held, "the same push, the moving start included");
     }
 }

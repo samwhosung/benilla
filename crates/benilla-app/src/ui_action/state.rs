@@ -246,7 +246,10 @@ pub(super) fn feed_action_state(
                     _ => None,
                 };
                 let info = cooldowns.info(button.action, 0, Some(d), now);
-                st.cooldown = info.ui_triple(anchor, ui_now);
+                st.cooldown = crate::spell::cooldowns::settle(
+                    memory.pushed.get(&action).and_then(|o| o.cooldown),
+                    info.ui_triple(anchor, ui_now),
+                );
                 if st.cooldown.is_some() && trace_cd {
                     // The store's clock against the widget's; the sink stamps wall time.
                     benilla_assets::trace::line(
@@ -304,8 +307,11 @@ pub(super) fn feed_action_state(
                 }
                 if let Some(u) = use_spell {
                     let d = spells.as_ref().and_then(|s| s.catalog.get(u.spell_id));
-                    let info = cooldowns.info(u.spell_id, button.action, d, now);
-                    st.cooldown = info.ui_triple(anchor, ui_now);
+                    let info = cooldowns.info_item(u.spell_id, button.action, u.category, d, now);
+                    st.cooldown = crate::spell::cooldowns::settle(
+                        memory.pushed.get(&action).and_then(|o| o.cooldown),
+                        info.ui_triple(anchor, ui_now),
+                    );
                 }
             }
             _ => {}
@@ -990,5 +996,80 @@ mod tests {
         app.update();
         assert_eq!(lit(&app), [true, true, true], "control back, all lit again");
         assert_eq!(events(&mut app), 1);
+    }
+
+    /// A held action (Stealth) reads a start of the query's now, which moves every frame; the
+    /// bar pushes the first read and keeps it while nothing else changes.
+    #[test]
+    fn a_held_actions_moving_start_is_not_repushed() {
+        use benilla_protocol::messages::ActionButton;
+        use benilla_protocol::ObjectFields;
+
+        const STEALTH: u32 = 1784;
+        let stealth = || SpellDisplay {
+            attributes: 0x0200_0000,
+            recovery_ms: 10_000,
+            ..Default::default()
+        };
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.buttons.insert(
+            0,
+            ActionButton {
+                slot: 0,
+                action: STEALTH,
+                kind: ACTION_KIND_SPELL,
+            },
+        );
+        app.insert_resource(actions)
+            .insert_resource(crate::ui_macro::MacroBoundSpells::default())
+            .insert_resource(Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(STEALTH, stealth())].into_iter().collect(),
+                ),
+                ..Spells::empty_for_tests()
+            })
+            .init_resource::<Cooldowns>()
+            .init_resource::<crate::spell::SpellModifiers>()
+            .init_resource::<crate::ui_script::UiClock>()
+            .init_resource::<AutoRepeatActive>()
+            .init_resource::<crate::spell::PendingCast>()
+            .init_resource::<crate::spell::QueuedMeleeSpell>()
+            .init_resource::<crate::spell::ActiveChannel>()
+            .init_resource::<crate::spell::SpellTargeting>()
+            .init_resource::<crate::spell::HeldForPick>()
+            .init_resource::<Selection>()
+            .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<crate::net::Reputations>()
+            .init_resource::<Items>()
+            .insert_resource(NetCommands(tx));
+        app.world_mut().spawn((
+            SelfPlayer,
+            Transform::default(),
+            ObjectStore(ObjectFields::from_pairs(&[(22, 100), (23, 500)])),
+        ));
+        app.world_mut().resource_mut::<Cooldowns>().start_spell(
+            STEALTH,
+            &stealth(),
+            0,
+            Instant::now(),
+            None,
+        );
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, feed_action_state);
+
+        let read = |app: &App| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<(f64, f64, i64)>("return GetActionCooldown(1)")
+                .unwrap()
+        };
+        app.update();
+        let first = read(&app);
+        assert_eq!((first.1, first.2), (0.001, 0), "(now, 0.001, 0)");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.update();
+        assert_eq!(read(&app), first, "the moving start is not pushed again");
     }
 }

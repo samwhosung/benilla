@@ -113,8 +113,9 @@ fn feed_spellbook(
         return;
     };
     let (memory, vm_reset) = memory.get_reset(&script);
-    // The book depends on these inputs alone. `UiClock` is not one: `ui_triple` is frame-stable
-    // per arm, and expiry moves the store's `feed_epoch`.
+    // The book depends on these inputs alone. `UiClock` is not one: a running read's `ui_triple`
+    // is frame-stable per arm (a held read's start is the query's `anchor`, so it moves with
+    // `ui_now`, but nothing held moves an input), and expiry moves the store's `feed_epoch`.
     let objects_moved = inv.changes.moved();
     let templates_moved = memory.items_templates.moved(items.template_epoch());
     let cooldowns_moved = memory.cooldown_epoch.moved(cooldowns.feed_epoch());
@@ -234,7 +235,8 @@ fn feed_spellbook(
         }
     }
     // Each slot's cooldown (`GetCooldownInfo` `0x6e13e0`: id, category and GCD alike) on the
-    // `GetTime` clock, frame-stable per arm, so a running cooldown never churns the diff.
+    // `GetTime` clock, frame-stable per arm while it runs, so a running cooldown never churns the
+    // diff; a held read starts at `anchor`, so it differs per push.
     let (anchor, ui_now) = (clock.anchor, clock.ui_now);
     for slot in &mut fresh.slots {
         slot.cooldown = cooldowns

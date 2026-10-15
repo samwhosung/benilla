@@ -102,6 +102,19 @@ impl CooldownInfo {
     }
 }
 
+/// A feed's triple for a held read keeps its last pushed start: a held leg's start is the query's
+/// now (`0x6e1517`), which moves every frame while nothing changed (duration and enable are the
+/// state, and `CooldownFrame_SetTimer` hides a disabled one). Any other change passes through.
+pub(crate) fn settle(
+    pushed: Option<(i64, u32, bool)>,
+    fresh: Option<(i64, u32, bool)>,
+) -> Option<(i64, u32, bool)> {
+    match (pushed, fresh) {
+        (Some((_, d0, false)), Some((_, d1, false))) if d0 == d1 => pushed,
+        _ => fresh,
+    }
+}
+
 /// One cooldown list, the client's `SpellHistory`: the player's is this resource (`0xcecaec`), the
 /// pet's is [`crate::ui_pet::PetBar::cooldowns`] (`0xcecb04`), which the pet bar, the pet book and
 /// the pet's `SMSG_SPELL_GO` leg read and write. Each list's edge feeds its own events: the
@@ -571,6 +584,20 @@ impl Cooldowns {
         self.info(spell_id, item_entry, spell, now).remaining_ms > 0
     }
 
+    /// [`Self::not_ready`] for an item press, with [`Self::info_item`]'s category.
+    pub(crate) fn not_ready_item(
+        &self,
+        spell_id: u32,
+        item_entry: u32,
+        item_category: u32,
+        spell: Option<&SpellDisplay>,
+        now: Instant,
+    ) -> bool {
+        self.info_item(spell_id, item_entry, item_category, spell, now)
+            .remaining_ms
+            > 0
+    }
+
     /// `GetCooldownInfo 0x6e13e0`: the latest end over every record's three legs, in list order.
     ///
     /// - `Effect[0]` of ATTACK or TRADE_SKILL always reads cold (`0x6e1439`).
@@ -587,10 +614,27 @@ impl Cooldowns {
     /// - GCD leg (`0x6e15cc`): the node's GCD category equals the query's `startRecoveryCategory`
     ///   and the node's time is nonzero; it ignores on-hold and never touches `enabled`. It runs
     ///   from the recovery start (`0x6e15d8`).
+    /// - With an item, the category leg queries the item's own spell-slot category instead of the
+    ///   spell's when that is positive (`0x6e1457`-`0x6e1499`): see [`Self::info_item`].
     pub(crate) fn info(
         &self,
         spell_id: u32,
         item_entry: u32,
+        spell: Option<&SpellDisplay>,
+        now: Instant,
+    ) -> CooldownInfo {
+        self.info_item(spell_id, item_entry, 0, spell, now)
+    }
+
+    /// [`Self::info`] for an item's on-use spell: a positive `item_category` (the item's
+    /// `spellcategory` for that spell, `+0x16c` of its slot) replaces the spell's own category in
+    /// the category leg (`0x6e1492`), as Fishliver Oil's 28 replaces the spell's 4. The GCD leg
+    /// keeps the spell's `startRecoveryCategory`. 0 keeps the spell's.
+    pub(crate) fn info_item(
+        &self,
+        spell_id: u32,
+        item_entry: u32,
+        item_category: u32,
         spell: Option<&SpellDisplay>,
         now: Instant,
     ) -> CooldownInfo {
@@ -603,7 +647,10 @@ impl Cooldowns {
         if spell.is_some_and(|s| s.cooldown_query_excluded()) {
             return out;
         }
-        let category = spell.map_or(0, |s| s.category);
+        let category = match item_category {
+            0 => spell.map_or(0, |s| s.category),
+            c => c,
+        };
         let start_recovery_category = spell.map_or(0, |s| s.start_recovery_category);
         let ms = |d: Duration| d.as_millis().min(u128::from(u32::MAX)) as u32;
         let mut best_end = now;
@@ -1087,6 +1134,44 @@ mod tests {
         // So does any other category-4 potion.
         let other = cds.info(440, 929, Some(&potion_spell), mid);
         assert_eq!(other.remaining_ms, 45_000);
+    }
+
+    /// `0x6e1457`-`0x6e1499`: with an item, the category leg queries the item's own category for
+    /// the spell (Fishliver Oil: spell category 4, item category 28), so the oil's record reaches
+    /// a sibling of category 28 and no longer a bare category-4 spell.
+    #[test]
+    fn an_item_query_uses_the_items_category_override() {
+        let t0 = Instant::now();
+        let mut cds = Cooldowns::default();
+        let oil_spell = spell(4, 0, 0, (0, 0), 0);
+        let oil = ItemUseSpell {
+            spell_id: 1322,
+            cooldown_ms: 0,
+            category: 28,
+            category_cooldown_ms: 20_000,
+        };
+        cds.start_item(1322, &oil, Some(&oil_spell), t0);
+        let mid = t0 + Duration::from_secs(5);
+
+        // The oil's own query, and a second item of category 28 over the same spell.
+        let own = cds.info_item(1322, 1322, 28, Some(&oil_spell), mid);
+        assert_eq!((own.remaining_ms, own.duration_ms), (15_000, 20_000));
+        assert!(cds.not_ready_item(1322, 1322, 28, Some(&oil_spell), mid));
+        // Another item whose slot carries category 28 reads the oil's category timer; the spell's
+        // own category 4 does not match the record's 28.
+        let other = cds.info_item(1322, 4096, 28, Some(&oil_spell), mid);
+        assert_eq!(other.remaining_ms, 15_000);
+        let by_spell = cds.info(1322, 4096, Some(&oil_spell), mid);
+        assert_eq!(
+            by_spell.remaining_ms, 0,
+            "the spell's category 4 is not the record's 28"
+        );
+        // No override keeps the spell's category: a category-4 record reaches it.
+        cds.start_spell(77, &spell(4, 0, 9_000, (0, 0), 0), 0, t0, None);
+        assert_eq!(
+            cds.info(1322, 4096, Some(&oil_spell), mid).remaining_ms,
+            4_000
+        );
     }
 
     #[test]

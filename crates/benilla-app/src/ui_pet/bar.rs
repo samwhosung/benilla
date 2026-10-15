@@ -234,7 +234,13 @@ pub(super) fn feed_pet_bar(
     // `bar_signals` in the key repaints a signal that moved nothing (`SetPet`'s `0x4bc90c`, the
     // possessed Attack latch's `0x4bd438`); the cooldown triples are keyed apart, since they carry
     // no `PET_BAR_UPDATE`.
-    let cooldowns: Vec<Option<(i64, u32, bool)>> = fresh.iter().map(|s| s.cooldown).collect();
+    let cooldowns: Vec<Option<(i64, u32, bool)>> = fresh
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            crate::spell::cooldowns::settle(memory.cooldowns.get(i).copied().flatten(), s.cooldown)
+        })
+        .collect();
     let content: Vec<PetActionView> = fresh
         .iter()
         .cloned()

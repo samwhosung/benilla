@@ -101,9 +101,17 @@ pub(crate) fn feed_pet_book(
             if !d.in_pet_book() {
                 continue;
             }
-            fresh
-                .slots
-                .push(slot_view(entry, d, &bar, pet_store, now, anchor, ui_now));
+            let mut slot = slot_view(entry, d, &bar, pet_store, now, anchor, ui_now);
+            slot.cooldown = crate::spell::cooldowns::settle(
+                memory
+                    .pushed
+                    .slots
+                    .iter()
+                    .find(|s| s.spell_id == spell_id)
+                    .and_then(|s| s.cooldown),
+                slot.cooldown,
+            );
+            fresh.slots.push(slot);
         }
         // `0x4b2fd0`'s re-sort, with the player book's own comparator.
         fresh

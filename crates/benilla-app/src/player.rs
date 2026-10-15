@@ -298,6 +298,13 @@ impl Plugin for PlayerPlugin {
             Update,
             wire_in::release_on_session_end.in_set(WorldStage::Input),
         )
+        // A create gives control back; before `control`, which reads the flags.
+        .add_systems(
+            Update,
+            wire_in::regain_control_on_arrival
+                .in_set(WorldStage::Input)
+                .before(control),
+        )
         // Embodiment, before every reader of the marker.
         .add_systems(
             Update,

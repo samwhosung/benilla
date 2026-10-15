@@ -498,6 +498,28 @@ fn apply_self_move(
     player.wedge_still = 0;
 }
 
+/// Our own player's create gives control back (`OnActiveArrival 0x5dea50`): with the manager's
+/// `+0xc8` clear (`0x5deb49`; its constructor `0x4650e7` is the only store, so every create),
+/// `0x5fa600(1)` (`0x5deb56`) raises `[0xb4b3e4]` through `0x4958e0` (`PLAYER_CONTROL_GAINED` if it
+/// was down) and `0x4958a0` (`0x5deb5b`) stores 1 and re-claims our own mover (the claim is sent
+/// by `enter_world_on_self_create`). vmangos sends a battleground's closing `control 0` and no
+/// restore (`BattleGround.cpp:905-908`). The event is the `ui_unit::feed_player_control` edge.
+pub(super) fn regain_control_on_arrival(
+    mut arrivals: MessageReader<crate::net::WorldEnterCascadeMessage>,
+    mut player: ResMut<Player>,
+) {
+    if arrivals.read().next().is_none() {
+        return;
+    }
+    if player.own_control_lost || player.control_lost || player.foreign_mover.is_some() {
+        player.own_control_lost = false;
+        player.control_lost = false;
+        // The mover is ours again, as `ControlVerdict::Restored` seats it.
+        player.foreign_mover = None;
+        player.reseat = true;
+    }
+}
+
 /// On a `/logout` or a lost session, reset the whole resource to its boot state, so the next login
 /// owes nothing to the ended one. Whole, not by field: `/logout` roots us for the countdown
 /// (`MiscHandler.cpp:329`) and the next session never unroots, so any kept mover state persists.
@@ -794,5 +816,70 @@ mod teleport_tests {
         assert_eq!(player.pos, wow_to_bevy(t.position));
         assert_eq!((player.face_yaw, cam_yaw), (1.25, 1.25));
         assert!(player.settling && player.ride_abort && player.world_stale);
+    }
+}
+
+#[cfg(test)]
+mod arrival_tests {
+    use super::*;
+    use crate::net::WorldEnterCascadeMessage;
+
+    const ME: u64 = 0x45;
+
+    fn harness() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Player>()
+            .add_message::<WorldEnterCascadeMessage>()
+            .add_systems(Update, regain_control_on_arrival);
+        app
+    }
+
+    /// A battleground's end sends `control 0` for us and never the restore; the teleport out
+    /// creates us afresh and that create gives control back, the movement lock and the bar's
+    /// `[0xb4b3e4]` flag both.
+    #[test]
+    fn a_control_loss_does_not_survive_the_next_self_create() {
+        let mut app = harness();
+        let mut player = app.world_mut().resource_mut::<Player>();
+        track_control(&mut player, control_verdict(ME, false, Some(ME)));
+        assert!(player.control_lost && player.own_control_lost);
+        app.update();
+        assert!(
+            app.world().resource::<Player>().own_control_lost,
+            "nothing restores it without a create"
+        );
+
+        app.world_mut().write_message(WorldEnterCascadeMessage);
+        app.update();
+        let player = app.world().resource::<Player>();
+        assert!(!player.own_control_lost, "the bar's flag is back");
+        assert!(!player.control_lost, "and the controller's movement lock");
+        assert_eq!(player.foreign_mover, None);
+    }
+
+    /// A possession does not outlive the world either: the create claims our own mover.
+    #[test]
+    fn a_create_ends_a_possession_too() {
+        let mut app = harness();
+        {
+            let mut player = app.world_mut().resource_mut::<Player>();
+            player.foreign_mover = Some(0x99);
+            player.control_lost = true;
+        }
+        app.world_mut().write_message(WorldEnterCascadeMessage);
+        app.update();
+        let player = app.world().resource::<Player>();
+        assert_eq!(player.foreign_mover, None);
+        assert!(!player.control_lost && player.reseat);
+    }
+
+    /// A login in control touches nothing.
+    #[test]
+    fn a_create_in_control_changes_nothing() {
+        let mut app = harness();
+        app.world_mut().write_message(WorldEnterCascadeMessage);
+        app.update();
+        assert!(!app.world().resource::<Player>().reseat);
     }
 }

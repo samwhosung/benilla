@@ -535,7 +535,13 @@ fn send_spell_cast(
         CastCommit::Item { entry, .. } => entry,
         CastCommit::Spell => 0,
     };
-    if cooldowns.not_ready(spell_id, queried_item, def, now) {
+    // The item's own category for this spell replaces the spell's in the category leg (`0x6e1492`).
+    let item_category = items
+        .template_cached(queried_item)
+        .and_then(|t| t.use_spell)
+        .filter(|u| u.spell_id == spell_id)
+        .map_or(0, |u| u.category);
+    if cooldowns.not_ready_item(spell_id, queried_item, item_category, def, now) {
         debug!("ui_action: cast {spell_id} refused locally — not ready (the validator's rung 1)");
         // The one packet a local refusal sends (`0x609576–0x60960f`, spell leg only): a running
         // repeat with AttributesEx3 0x400000 (wand Shoot) gets `CMSG_CANCEL_CAST`, then the local
@@ -1590,6 +1596,46 @@ mod tests {
             "the item-keyed record never not-readies a bare spell press"
         );
         assert!(world.resource::<CastErrors>().0.is_empty());
+    }
+
+    /// The item press queries with its own spell-slot category (`0x6e1457`-`0x6e1499`): another
+    /// item's running category-28 timer refuses it 0x28, though the spell row carries no category.
+    #[test]
+    fn an_item_press_not_readies_on_its_own_category() {
+        use benilla_protocol::messages::ItemUseSpell;
+        let (mut world, rx) = world();
+        let mut template = crate::items::test_template("Hearthstone");
+        template.use_spell = Some(ItemUseSpell {
+            spell_id: HEARTHSTONE,
+            cooldown_ms: 0,
+            category: 28,
+            category_cooldown_ms: 0,
+        });
+        world
+            .resource_mut::<Items>()
+            .insert_template(6948, Some(template));
+        let other = ItemUseSpell {
+            spell_id: MOUNT,
+            cooldown_ms: 0,
+            category: 28,
+            category_cooldown_ms: 30_000,
+        };
+        world.resource_mut::<crate::spell::Cooldowns>().start_item(
+            7001,
+            &other,
+            None,
+            Instant::now(),
+        );
+
+        send(&mut world, HEARTHSTONE, HEARTH_COMMIT);
+        assert!(
+            rx.try_recv().is_err(),
+            "the shared category holds the press"
+        );
+        assert_eq!(
+            world.resource::<CastErrors>().0,
+            vec![CastFail::local(HEARTHSTONE, 0x28)]
+        );
     }
 
     /// `SendCast 0x6e54f0`: two opcodes, one targets block; a key's lock rides it as
