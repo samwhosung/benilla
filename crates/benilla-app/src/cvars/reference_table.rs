@@ -87,6 +87,23 @@ fn the_reference_columns_hold_against_the_registered_cvars() {
                 ));
             }
         }
+        // A locale-dependent default is the reference's, arm for arm: the strings its register
+        // site chooses between are exactly the base and the exceptions'.
+        if let Reference::SameByLocale { except } = &row.reference {
+            let mut ours: Vec<&str> = std::iter::once(row.default)
+                .chain(except.iter().map(|(_, v)| *v))
+                .collect();
+            let mut theirs: Vec<&str> = defaults.iter().map(String::as_str).collect();
+            ours.sort_unstable();
+            ours.dedup();
+            theirs.sort_unstable();
+            theirs.dedup();
+            if ours != theirs {
+                differs.push(format!(
+                    "{name}: ships {ours:?} across the locales, the reference registers {theirs:?}"
+                ));
+            }
+        }
         if let Reference::Same(_) = row.reference {
             let right = defaults.iter().any(|d| d == row.default);
             match (right, known) {

@@ -107,9 +107,28 @@ pub(crate) fn window_mode(
 /// does not flash windowed until `Startup`. `MonitorSelection::Primary`, since `Current` has no
 /// answer before the window exists (`bevy_winit::select_monitor`).
 pub(crate) fn boot_window_mode() -> WindowMode {
-    let flag = |name| crate::cvars::boot_cvar(name).and_then(|v| v.parse::<f32>().ok());
+    boot_window_mode_for(
+        crate::ui_script::client_locale().index(),
+        crate::cvars::boot_cvar,
+        windowed_env(),
+    )
+}
+
+/// [`boot_window_mode`] on a client of this locale index, with `stored` answering for
+/// `config.toml`: a row the file does not hold boots at its registered default there, which
+/// zhCN's differs from the other locales' (`0x63a738`).
+fn boot_window_mode_for(
+    locale: usize,
+    stored: impl Fn(&str) -> Option<String>,
+    windowed_env: bool,
+) -> WindowMode {
+    let flag = |name: &str| {
+        stored(name)
+            .or_else(|| crate::cvars::registered_default(name, locale).map(str::to_string))
+            .and_then(|v| v.parse::<f32>().ok())
+    };
     // A run that sizes its own window owns both rows for the session.
-    let (display, maximize) = if windowed_env() {
+    let (display, maximize) = if windowed_env {
         (DisplayMode::Windowed, false)
     } else {
         (
@@ -680,6 +699,38 @@ mod tests {
             window_mode(DisplayMode::Windowed, false, MonitorSelection::Primary),
             WindowMode::Windowed
         );
+    }
+
+    /// The window is born in the mode its rows register at on this locale, a stored value over
+    /// that, and a run that sizes its own window over both. zhCN registers windowed and maximized
+    /// (`0x63a738`), which is borderless over the monitor, as every other locale's fullscreen is
+    /// here; they part when the player stores one of the two rows: a stored "0" for `gxMaximize`
+    /// leaves zhCN windowed where another locale stays fullscreen.
+    #[test]
+    fn the_window_is_born_at_the_locales_registered_modes() {
+        let none = |_: &str| None;
+        let fullscreen = WindowMode::BorderlessFullscreen(MonitorSelection::Primary);
+        for locale in 0..8 {
+            assert_eq!(boot_window_mode_for(locale, none, false), fullscreen);
+        }
+        // zhCN with the player's stored windowed, unmaximized choice.
+        let stored = |name: &str| match name {
+            "gxWindow" => Some("1".to_string()),
+            "gxMaximize" => Some("0".to_string()),
+            _ => None,
+        };
+        assert_eq!(boot_window_mode_for(4, stored, false), WindowMode::Windowed);
+        assert_eq!(boot_window_mode_for(0, stored, false), WindowMode::Windowed);
+        // The player un-maximizes only the maximize row: zhCN's windowed default then stands
+        // unmaximized, enUS's fullscreen default stands fullscreen.
+        let unmaximized = |name: &str| (name == "gxMaximize").then(|| "0".to_string());
+        assert_eq!(
+            boot_window_mode_for(4, unmaximized, false),
+            WindowMode::Windowed
+        );
+        assert_eq!(boot_window_mode_for(0, unmaximized, false), fullscreen);
+        // An instrumented run stays windowed whatever the locale registers.
+        assert_eq!(boot_window_mode_for(4, none, true), WindowMode::Windowed);
     }
 
     /// The reference's polarity: the row is "Windowed Mode".
