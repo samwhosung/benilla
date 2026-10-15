@@ -54,7 +54,7 @@ impl super::UiScript {
     /// each, or cancels it when it is the active form.
     pub fn take_shapeshift_casts(&mut self) -> Vec<u32> {
         self.take_calls_where(|c| match c {
-            super::ScriptCall::CastShapeshiftForm(id) => Some(*id),
+            super::ScriptCall::CastShapeshiftForm { spell_id, .. } => Some(*spell_id),
             _ => None,
         })
     }
@@ -134,16 +134,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "CastShapeshiftForm",
         lua.create_function(|lua, i: u32| {
-            // The form's cast is `TryCastSpell` (`0x4b4992` → `0x6e5a90`), behind the gate's tag 2.
+            // The form's cast is `TryCastSpell` (`0x4b4992` → `0x6e5a90`), behind the gate's tag 2;
+            // the cancels of an active form (`0x4b496b`, `0x4b497c`) run ahead of it, so the call
+            // is queued whatever the gate said and carries the answer to the cast alone.
             let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(spell_id) = form_at(&model, i)
-                .map(|f| f.view.spell_id)
-                .filter(|_| may_cast)
-            {
+            if let Some(spell_id) = form_at(&model, i).map(|f| f.view.spell_id) {
                 model
                     .script_calls
-                    .push(super::ScriptCall::CastShapeshiftForm(spell_id));
+                    .push(super::ScriptCall::CastShapeshiftForm { spell_id, may_cast });
             }
             Ok(())
         })?,

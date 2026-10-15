@@ -135,7 +135,9 @@ impl super::UiScript {
     /// `(spell id, onSelf)`.
     pub fn take_spell_casts(&mut self) -> Vec<(u32, bool)> {
         self.take_calls_where(|c| match c {
-            ScriptCall::CastSpell { spell_id, on_self } => Some((*spell_id, *on_self)),
+            ScriptCall::CastSpell {
+                spell_id, on_self, ..
+            } => Some((*spell_id, *on_self)),
             _ => None,
         })
     }
@@ -525,18 +527,24 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             |lua, (id, book_type, on_self): (Value, Value, Option<Value>)| {
                 let (id, book_type) = spell_slot_args(id, book_type, "CastSpell")?;
                 let on_self = bool_or_default(on_self.as_ref(), false);
-                // The player book's cast is `TryCastSpell`, behind the gate's tag 2 (`0x6e4bc1`);
-                // the pet book's `CMSG_PET_ACTION` fork (`0x4b34c8`) is not.
+                // The player book's cast is `TryCastSpell`, behind the gate's tag 2 (`0x6e4bc1`),
+                // after the cancels of an active aura or form (`0x4b3466`, `0x4b35da`), so the call
+                // is queued whatever the gate said and carries the answer to the cast alone; the
+                // pet book's `CMSG_PET_ACTION` fork (`0x4b34c8`) is not gated.
                 let pet = is_pet_book(&book_type);
                 let may_cast = pet || protected::gate(lua, Tag::CAST);
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 if let Some(slot) = book_slot(&model, id, &book_type) {
-                    if !slot.passive && may_cast {
+                    if !slot.passive {
                         let spell_id = slot.spell_id;
                         model.script_calls.push(if pet {
                             ScriptCall::CastPetSpell { spell_id, on_self }
                         } else {
-                            ScriptCall::CastSpell { spell_id, on_self }
+                            ScriptCall::CastSpell {
+                                spell_id,
+                                on_self,
+                                may_cast,
+                            }
                         });
                     }
                 }
@@ -629,15 +637,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "CastSpellByName",
         lua.create_function(|lua, (name, on_self): (String, Option<Value>)| {
             let on_self = bool_or_default(on_self.as_ref(), false);
-            // `TryCastSpell`'s gate, tag 2 (`0x6e4bc1`).
+            // `TryCastSpell`'s gate, tag 2 (`0x6e4bc1`), behind the cancels as for `CastSpell`. The
+            // name resolves in the player book alone, whose leg is the gated one.
             let may_cast = protected::gate(lua, Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(slot) = resolve_spell_by_name(&model.spellbook, &name).filter(|_| may_cast)
-            {
+            if let Some(slot) = resolve_spell_by_name(&model.spellbook, &name) {
                 let spell_id = slot.spell_id;
-                model
-                    .script_calls
-                    .push(ScriptCall::CastSpell { spell_id, on_self });
+                model.script_calls.push(ScriptCall::CastSpell {
+                    spell_id,
+                    on_self,
+                    may_cast,
+                });
             }
             Ok(())
         })?,

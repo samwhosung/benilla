@@ -39,12 +39,23 @@ pub enum ScriptCall {
     SpellStopCasting,
     /// `CastSpell(id, "spell", onSelf)` and `CastSpellByName(name, onSelf)`, through `0x4b3300`'s
     /// player leg; `onSelf` swaps the target guid for the active player's (`0x4b4afa`, `0x4b4345`).
-    CastSpell { spell_id: u32, on_self: bool },
+    CastSpell {
+        spell_id: u32,
+        on_self: bool,
+        /// The gate's tag 2 allowed the cast (`0x6e4bc1`). The book leg's cancels (an active aura
+        /// `0x4b3466`, a form `0x4b35da`) come before it, so a refusal stops only the cast.
+        may_cast: bool,
+    },
     /// `CastSpell(id, "pet", onSelf)`, `0x4b3300`'s `CMSG_PET_ACTION` fork (`0x4b34ce`), with the
     /// same guid swap.
     CastPetSpell { spell_id: u32, on_self: bool },
     /// `CastShapeshiftForm(index)` (`0x4b4810`), as the form's spell.
-    CastShapeshiftForm(u32),
+    CastShapeshiftForm {
+        spell_id: u32,
+        /// The gate's tag 2 allowed the cast (`0x4b4992` → `0x6e4bc1`); the cancels at `0x4b496b`
+        /// and `0x4b497c` come before it.
+        may_cast: bool,
+    },
     /// `UseAction(slot, …)` (`0x4e7140` → `0x4e5ee0`); a macro slot runs its lines inside it.
     UseAction(ActionUse),
     /// `UseContainerItem(bag, slot, onSelf)` outside repair mode, its arm chosen and locked in the
@@ -87,6 +98,8 @@ impl ScriptCall {
             ScriptCall::UseAction(press) => press.may_cast,
             ScriptCall::UseContainerItem(item) => item.may_cast,
             ScriptCall::UseInventoryItem { may_cast, .. } => *may_cast,
+            ScriptCall::CastSpell { may_cast, .. } => *may_cast,
+            ScriptCall::CastShapeshiftForm { may_cast, .. } => *may_cast,
             _ => true,
         }
     }

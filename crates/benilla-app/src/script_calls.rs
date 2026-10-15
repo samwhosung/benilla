@@ -52,10 +52,12 @@ pub(crate) fn apply_script_calls(
             ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
             ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
             ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
-            ScriptCall::CastSpell { spell_id, on_self } => {
+            ScriptCall::CastSpell {
+                spell_id, on_self, ..
+            } => {
                 crate::ui_spellbook::cast_spell(&mut appliers.p3(), spell_id, on_self);
             }
-            ScriptCall::CastShapeshiftForm(spell_id) => {
+            ScriptCall::CastShapeshiftForm { spell_id, .. } => {
                 crate::ui_shapeshift::cast_form(&mut appliers.p3(), spell_id);
             }
             ScriptCall::UseAction(press) => {
@@ -935,6 +937,96 @@ mod tests {
             run(&mut f, lua);
             assert_eq!(casts(&f), want, "{lua}");
         }
+    }
+
+    /// Ghost Wolf: an aura with an `ActiveIconID`, which a second press cancels.
+    const GHOST_WOLF: u32 = 2645;
+
+    /// Ghost Wolf in the catalog, the book and the form bar, and up on us as a cancelable aura.
+    fn with_ghost_wolf_up(f: &mut Frame, up: bool) {
+        let world = f.app.world_mut();
+        let display = benilla_formats::SpellDisplay {
+            active_icon_id: 1,
+            ..Default::default()
+        };
+        world.insert_resource(crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays([(GHOST_WOLF, display)].into()),
+            ..crate::ui_action::Spells::empty_for_tests()
+        });
+        let me = world.resource::<GuidIndex>().0[&ME];
+        let mut pairs = vec![(2, 0x19), (HEALTH, 100), (28, 100), (FLAGS, 0x8)];
+        if up {
+            // `UNIT_FIELD_AURA` 47 and the nibble-packed `UNIT_FIELD_AURAFLAGS` 95: occupied and
+            // cancelable.
+            pairs.extend([(47, GHOST_WOLF), (95, 0xb)]);
+        }
+        world
+            .entity_mut(me)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(
+                &pairs,
+            )));
+        let mut script = world.non_send_resource_mut::<UiScript>();
+        script.set_spellbook(SpellBookState {
+            tabs: vec![SpellTabView {
+                name: "Druid".into(),
+                texture: None,
+                offset: 0,
+                num_spells: 1,
+            }],
+            slots: vec![SpellSlotView {
+                spell_id: GHOST_WOLF,
+                name: "Ghost Wolf".into(),
+                ..Default::default()
+            }],
+        });
+        script.set_shapeshift_forms(vec![benilla_ui::script::ShapeshiftFormView {
+            spell_id: GHOST_WOLF,
+            name: "Ghost Wolf".into(),
+            castable: true,
+            ..Default::default()
+        }]);
+    }
+
+    /// The `CMSG_CANCEL_AURA`s sent, as spell ids.
+    fn cancels(f: &Frame) -> Vec<u32> {
+        f.rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::CancelAura { spell_id } => Some(spell_id),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `CastBookSpell` (`0x4b3300`) and `CastShapeshiftForm` (`0x4b4810`) cancel an active aura or
+    /// form before `TryCast` (`0x4b3466`, `0x4b496b`, `0x4b497c`), so the gate's tag 2, which is
+    /// `TryCast`'s first rung (`0x6e4bc1`), refuses only the cast: a macro's press outside an input
+    /// event cancels the wolf all the same, and casts nothing when it is down.
+    #[test]
+    fn a_refused_book_or_form_cast_still_runs_its_cancels() {
+        for lua in [
+            r#"RunScript('CastSpellByName("Ghost Wolf")')"#,
+            r#"RunScript("CastSpell(1, BOOKTYPE_SPELL)")"#,
+            r#"RunScript("CastShapeshiftForm(1)")"#,
+        ] {
+            let mut f = frame(true);
+            with_ghost_wolf_up(&mut f, true);
+            run(&mut f, lua);
+            assert_eq!(cancels(&f), vec![GHOST_WOLF], "{lua}: up, cancels");
+
+            let mut f = frame(true);
+            with_ghost_wolf_up(&mut f, false);
+            run(&mut f, lua);
+            assert_eq!(cancels(&f), Vec::<u32>::new(), "{lua}: down");
+            assert_eq!(casts(&f), vec![], "{lua}: down, refused, casts nothing");
+        }
+        // The client's own call casts when the wolf is down.
+        let mut f = frame(true);
+        with_ghost_wolf_up(&mut f, false);
+        run(&mut f, "CastShapeshiftForm(1)");
+        assert_eq!(
+            casts(&f).iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![GHOST_WOLF]
+        );
     }
 
     /// The Attack slot is a cast too (`UseAction` → `TryCast`, `0x6e4c90`), behind the same first

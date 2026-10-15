@@ -393,10 +393,10 @@ const fn flagged(chunk: &'static str) -> Verb {
 /// `SpellStopTargeting`, `SpellStopCasting`, `CGGameUI::TargetNearest` (and the attack validator's
 /// pick that reaches it) and `CGGameUI::Reload`.
 const VERBS: &[Verb] = &[
-    gone(r#"CastSpellByName("Fireball")"#),
-    gone(r#"CastSpell(1, BOOKTYPE_SPELL)"#),
+    flagged(r#"CastSpellByName("Fireball")"#),
+    flagged(r#"CastSpell(1, BOOKTYPE_SPELL)"#),
     flagged("UseAction(1)"),
-    gone("CastShapeshiftForm(1)"),
+    flagged("CastShapeshiftForm(1)"),
     gone("SpellStopCasting()"),
     gone("SpellStopTargeting()"),
     gone(r#"SpellTargetUnit("player")"#),
