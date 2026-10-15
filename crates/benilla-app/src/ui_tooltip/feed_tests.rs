@@ -449,3 +449,73 @@ fn a_pet_view_reads_the_pets_and_its_targets_run() {
         "the target halts"
     );
 }
+
+/// The reagents line is red only for a reagent no copy of which is carried (`0x52f49f`:
+/// `0x622270` at mask 0 returns null, `0x52f4a6`), however many the spell needs: one Strange Dust
+/// of the three a recipe lists is white, none is red, a copy worn or in the keyring is carried.
+#[test]
+fn a_reagent_is_red_only_when_no_copy_is_carried() {
+    const DUST: u32 = 10_940;
+    const RED: &str = "|cffff2020Strange Dust (3)|r";
+    let spells = |_g: u32| {
+        vec![(
+            1,
+            benilla_formats::SpellDisplay {
+                name: "Spell".into(),
+                reagents: [
+                    (DUST, 3),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                    (0, 0),
+                ],
+                ..Default::default()
+            },
+        )]
+    };
+    // `PLAYER_FIELD_PACK_SLOT_1`, and the keyring's first seat.
+    let seat = |field: u16, guid: u64| [(field, guid as u32), (field + 1, (guid >> 32) as u32)];
+    let line = |feed: &mut FeedApp| -> String {
+        feed.app.update();
+        let text: String = feed
+            .app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return TEXT(1)")
+            .unwrap();
+        text.split(" | ")
+            .find(|l| l.starts_with("Reagents") || l.contains("Strange Dust"))
+            .unwrap_or_else(|| panic!("no reagents line in {text:?}"))
+            .to_string()
+    };
+    let mut feed = FeedApp::new(spells, &[(22, 100)]);
+    feed.app
+        .world_mut()
+        .resource_mut::<Items>()
+        .insert_template(DUST, Some(crate::items::test_template("Strange Dust")));
+    assert!(line(&mut feed).contains(RED), "none carried");
+
+    crate::items::test_spawn_item(
+        feed.app.world_mut(),
+        0x4000_0000_0000_0010,
+        ObjectFields::from_pairs(&[(3, DUST), (14, 1)]),
+        false,
+    );
+    for (what, field) in [
+        ("the backpack", 532),
+        ("the keyring", 648),
+        ("a worn slot", 520),
+    ] {
+        let mut fields = vec![(22, 100)];
+        fields.extend(seat(field, 0x4000_0000_0000_0010));
+        feed.set_player(&fields);
+        let shown = line(&mut feed);
+        assert!(
+            shown.contains("Strange Dust (3)") && !shown.contains("ff2020"),
+            "one of the three in {what} is carried, so white: {shown:?}"
+        );
+    }
+}

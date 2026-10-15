@@ -17,7 +17,7 @@ use crate::items::Items;
 use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::spell::usable::{self, CostBasis};
 use crate::ui_action::{PlayerActions, Spells};
-use crate::ui_items::{count_of, InventoryScope};
+use crate::ui_items::{count_of, find_item, InventoryScope, ItemSearch};
 use crate::ui_trainer::TrainerTooltipSubjects;
 
 /// The unit a view's caster cells are computed against, the spell builder `0x52e610`'s fourth
@@ -342,8 +342,10 @@ pub(super) fn build_view(
             } else {
                 name
             };
+            // Red only when no copy is found at all (`0x52f49f`, `0x622270` at mask 0 returning
+            // null at `0x52f4a6`); the count in the line is shown, never compared.
             let short = vctx.store.is_some_and(|s| {
-                count_of(&s.0, vctx.objects, entry, InventoryScope::DEFAULT) < count
+                find_item(&s.0, vctx.objects, entry, ItemSearch::default()).is_none()
             });
             parts.push(if short {
                 format!("|cffff2020{text}|r")
