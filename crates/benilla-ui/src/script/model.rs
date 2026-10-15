@@ -928,8 +928,8 @@ pub(crate) struct Model {
     /// getters' tables (`0xb714f4` and its siblings, `0xb716d0`), which a close leaves alone and
     /// the next open clears (`0x4bf549`-`0x4bf5ef`).
     pub(crate) trade: Option<trade::TradeState>,
-    /// The partner cell `[0xb71728]` is set: the window is open. Nothing but the checks that test
-    /// the cell first (`0x4bfd20`) reads it.
+    /// The partner cell `[0xb71728]` is set: the window is open. Read by the checks that test the
+    /// cell first (`0x4bfd20`) and by `GetPlayerTradeMoney` (`0x4c0706`).
     pub(crate) trade_window: bool,
     /// The entries the item getters found filled and unnamed (`0x4c017f`, `0x4c0582`), for the
     /// host to ask the item cache for with the callback that signals `TRADE_UPDATE`.
@@ -941,7 +941,7 @@ pub(crate) struct Model {
     /// `BeginTrade()` and `CancelTrade()` calls.
     pub(crate) trade_begin: bool,
     pub(crate) trade_cancel: bool,
-    pub(crate) trade_set_money: Option<u32>,
+    pub(crate) trade_set_money: Vec<u32>,
     /// Items dropped on our slots, `(1-based trade slot, bag, slot)`, and the slots clicks cleared.
     pub(crate) trade_set_items: Vec<(u32, i64, u32)>,
     pub(crate) trade_clear_items: Vec<u32>,
@@ -1641,7 +1641,7 @@ impl Model {
             trade_close: false,
             trade_begin: false,
             trade_cancel: false,
-            trade_set_money: None,
+            trade_set_money: Vec::new(),
             trade_set_items: Vec::new(),
             trade_clear_items: Vec::new(),
             trade_offered: Default::default(),

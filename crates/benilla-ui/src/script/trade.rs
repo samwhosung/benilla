@@ -73,12 +73,22 @@ impl super::UiScript {
 
     /// The open of the window (`0x4bf4e0` with a partner): the partner cell is set (`0x4bf549`) and
     /// both offers and our item table clear (`0x4bf55d`-`0x4bf5ef`), so the getters answer nil
-    /// until the statuses fill them. Nothing else clears them.
+    /// until the statuses fill them. Only an open clears them, and the world entry's reset
+    /// (`0x4909b5` → `0x4bf0e0`, `0x4bf174`-`0x4bf20e`), which clears the tables and the cell too.
     pub fn open_trade_window(&mut self) {
         let mut model = self.model_mut();
         model.trade = None;
         model.trade_offered = Default::default();
         model.trade_window = true;
+    }
+
+    /// Both money offers zero (`0xc4be70`, `0xc4be74`), as the cancel, complete, close-window and
+    /// code 13 statuses do before their dispatch (`0x5d4884`-`0x5d48a2`, `0x5d48eb`-`0x5d48ff`).
+    pub fn zero_trade_gold(&mut self) {
+        if let Some(trade) = self.model_mut().trade.as_mut() {
+            trade.player.gold = 0;
+            trade.target.gold = 0;
+        }
     }
 
     /// The close core's cell clear (`0x4bf516`): the window is shut. Both offers and our item
@@ -259,7 +269,7 @@ impl super::UiScript {
     }
 
     /// The copper `SetTradeMoney` last offered since the last drain: `CMSG_SET_TRADE_GOLD`.
-    pub fn take_trade_money(&mut self) -> Option<u32> {
+    pub fn take_trade_money(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().trade_set_money)
     }
 
@@ -614,7 +624,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetPlayerTradeMoney",
         lua.create_function(|lua, ()| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            Ok(i64::from(gold(&model, |t| &t.player)))
+            // Gated on the partner cell (`0x4c0706`-`0x4c0714`); the target's is not (`0x4c0759`).
+            Ok(if model.trade_window {
+                i64::from(gold(&model, |t| &t.player))
+            } else {
+                0
+            })
         })?,
     )?;
     g.set(
@@ -701,7 +716,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if u64::from(n) > model.money {
                 return Ok(());
             }
-            model.trade_set_money = Some(n);
+            model.trade_set_money.push(n);
             Ok(())
         })?,
     )?;
@@ -952,6 +967,13 @@ mod tests {
         s.set_trade(Some(state()));
         assert_eq!(
             s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(),
+            0,
+            "our getter answers 0 with the partner cell clear"
+        );
+        s.open_trade_window();
+        s.set_trade(Some(state()));
+        assert_eq!(
+            s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(),
             12_345
         );
         assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 500);
@@ -968,8 +990,10 @@ mod tests {
         assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 0);
     }
 
-    /// The getters test no open state (`0x4c015a`, `0x4c04b3`): a close leaves both offers and the
-    /// money, the next open clears them (`0x4bf55d`-`0x4bf5ef`), and nothing else does.
+    /// The item getters test no open state (`0x4c015a`, `0x4c04b3`): a close leaves both offers,
+    /// the next open clears them (`0x4bf55d`-`0x4bf5ef`), and nothing else does. The money getters
+    /// are the VM half only; the app's `both_offers_answer_inside_trade_closed…` drives the real
+    /// close and the zeroing statuses.
     #[test]
     fn a_close_keeps_both_offers_and_the_next_open_clears_them() {
         let mut s = UiScript::new().unwrap();
@@ -987,11 +1011,13 @@ mod tests {
                 "{read} after the close"
             );
         }
-        assert_eq!(
-            s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(),
-            12_345
-        );
+        // A local close leaves the offers, but our money getter tests the partner cell
+        // (`0x4c0706`) and the target's does not (`0x4c0759`).
+        assert_eq!(s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(), 0);
         assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 500);
+        // The statuses that end a trade zero both before the close (`0x5d4884`).
+        s.zero_trade_gold();
+        assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 0);
 
         s.open_trade_window();
         assert!(s
@@ -1090,13 +1116,16 @@ mod tests {
         // An offer is sent only when the purse covers it.
         s.set_money(20_000);
         s.run("SetTradeMoney(1 * 10000 + 23 * 100 + 45)").unwrap();
-        assert_eq!(s.take_trade_money(), Some(12_345));
-        assert_eq!(s.take_trade_money(), None, "drained");
+        assert_eq!(s.take_trade_money(), [12_345]);
+        assert!(s.take_trade_money().is_empty(), "drained");
         // The low dword of -5 is 0xFFFFFFFB, past any purse: refused silently.
         s.run("SetTradeMoney(-5)").unwrap();
-        assert_eq!(s.take_trade_money(), None);
+        assert!(s.take_trade_money().is_empty());
         s.run("SetTradeMoney(30000)").unwrap();
-        assert_eq!(s.take_trade_money(), None, "more than the purse: silent");
+        assert!(
+            s.take_trade_money().is_empty(),
+            "more than the purse: silent"
+        );
         assert!(s.run("SetTradeMoney(nil)").is_err(), "a non-number raises");
     }
 

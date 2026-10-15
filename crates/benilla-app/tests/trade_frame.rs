@@ -273,6 +273,7 @@ fn player_money_input_reflects_then_offers() {
     let mut s = UiScript::new().unwrap();
     s.set_money(1_000_000); // SetTradeMoney is purse-gated
     load_ui(&s);
+    s.open_trade_window(); // our money getter tests the partner cell (`0x4c0706`)
     s.set_trade(Some(state())); // state().player.gold == 12345 (1g 23s 45c)
     s.fire_event("TRADE_SHOW", vec![]);
 
@@ -302,7 +303,7 @@ fn player_money_input_reflects_then_offers() {
     );
     assert_eq!(
         s.take_trade_money(),
-        None,
+        Vec::<u32>::new(),
         "the guarded reflect does not re-offer"
     );
 
@@ -313,7 +314,7 @@ fn player_money_input_reflects_then_offers() {
     s.tick(0.0); // the deferred OnTextChanged drains here
     assert_eq!(
         s.take_trade_money(),
-        Some(2 * 10000 + 23 * 100 + 45),
+        [2 * 10000 + 23 * 100 + 45],
         "typing offers the copper total via SetTradeMoney"
     );
     assert!(s.take_errors().is_empty());

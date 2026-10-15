@@ -83,7 +83,7 @@ pub(crate) fn add_trade_money(model: &mut Model) -> bool {
         return false;
     }
     let total = total as u32;
-    model.trade_set_money = Some(total);
+    model.trade_set_money.push(total);
     if let Some(t) = model.trade.as_mut() {
         t.player.gold = total;
     }
@@ -101,7 +101,7 @@ pub(crate) fn pickup_trade_money(lua: &Lua, amount: i32) -> bool {
             return false;
         }
         let left = (offer - amount) as u32;
-        model.trade_set_money = Some(left);
+        model.trade_set_money.push(left);
         if let Some(t) = model.trade.as_mut() {
             t.player.gold = left;
         }
@@ -315,27 +315,24 @@ mod tests {
     fn the_trade_pair_moves_coins_between_the_cursor_and_the_offer() {
         let mut s = UiScript::new().unwrap();
         s.set_money(1_000);
+        s.open_trade_window();
         s.set_trade(Some(crate::script::TradeState::default()));
         s.run("PickupPlayerMoney(300) AddTradeMoney()").unwrap();
-        assert_eq!(
-            s.take_trade_money(),
-            Some(300),
-            "an ABSOLUTE offer + cursor"
-        );
+        assert_eq!(s.take_trade_money(), [300], "an ABSOLUTE offer + cursor");
         assert_eq!(s.eval::<i64>("return GetCursorMoney()").unwrap(), 0);
         assert_eq!(s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(), 300);
         // The purse cannot cover offer + cursor: refused, the coins stay held.
         s.run("PickupPlayerMoney(800) AddTradeMoney()").unwrap();
-        assert_eq!(s.take_trade_money(), None);
+        assert!(s.take_trade_money().is_empty());
         assert_eq!(s.eval::<i64>("return GetCursorMoney()").unwrap(), 800);
         s.run("DropCursorMoney()").unwrap();
         // Back off the offer: signed gates, the trimmed offer on the wire, coins on the cursor.
         assert!(s.run("PickupTradeMoney(nil)").is_err());
         s.run("PickupTradeMoney(0) PickupTradeMoney(301) PickupTradeMoney(-1)")
             .unwrap();
-        assert_eq!(s.take_trade_money(), None);
+        assert!(s.take_trade_money().is_empty());
         s.run("PickupTradeMoney(100)").unwrap();
-        assert_eq!(s.take_trade_money(), Some(200));
+        assert_eq!(s.take_trade_money(), [200]);
         assert_eq!(s.eval::<i64>("return GetCursorMoney()").unwrap(), 100);
         assert!(matches!(s.cursor_payload(), Some(CursorPayload::Money(_))));
         assert!(s.errors().is_empty(), "{:?}", s.errors());

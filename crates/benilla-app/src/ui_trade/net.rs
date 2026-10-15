@@ -86,6 +86,18 @@ fn trade_status(
         None => {}
     }
 
+    // The four ending statuses zero both money offers before the dispatcher (`0x5d4884`,
+    // `0x5d48eb`); [`super::server_close`] zeroes the VM's.
+    if matches!(
+        status,
+        TradeStatus::Canceled
+            | TradeStatus::Complete
+            | TradeStatus::CloseWindow { .. }
+            | TradeStatus::Unknown13
+    ) {
+        trade.zero_gold();
+    }
+
     match status {
         TradeStatus::BeginTrade { partner } => trade.request(partner),
         TradeStatus::OpenWindow => return Some(Window::Open),
