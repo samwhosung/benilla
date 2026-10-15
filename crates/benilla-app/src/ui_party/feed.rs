@@ -344,8 +344,8 @@ pub(super) fn feed_party(
         // ── PARTY_MEMBER_ENABLE / PARTY_MEMBER_DISABLE ──────────────────────
         //
         // Fired as a slot's object enters (`0x4e86b6`) or leaves (`0x5e9b78`) the object manager,
-        // with the 1-based slot as a string. Stock FrameXML ignores them
-        // (`PartyMemberFrame.lua:145` is commented out).
+        // with the 1-based slot as a number (`%d`, `esi+1` at `0x4e869d`). Stock FrameXML ignores
+        // them (`PartyMemberFrame.lua:145` is commented out).
         let presence = member.map_or((0, false), |m| (m.guid, index.0.contains_key(&m.guid)));
         if fed.presence[i] != presence {
             gate.audit("feed_party", "a party-slot presence edge");
@@ -357,7 +357,7 @@ pub(super) fn feed_party(
                 } else {
                     "PARTY_MEMBER_DISABLE"
                 };
-                script.fire_event(event, vec![ScriptValue::Str((i + 1).to_string())]);
+                script.fire_event(event, vec![ScriptValue::Int(i as i64 + 1)]);
             }
             fed.presence[i] = presence;
         }

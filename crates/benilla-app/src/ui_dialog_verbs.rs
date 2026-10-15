@@ -54,11 +54,18 @@ impl NpcSession for PetUnlearnState {
     }
 }
 
+/// The event a boot packet owes the UI.
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum BootEdge {
+    Start,
+    Stop,
+}
+
 /// The instance-boot clock (`[0xb4e34c]`), and what the last packet owes the UI.
 #[derive(Resource, Default)]
 pub(crate) struct InstanceBoot {
     deadline: Option<Instant>,
-    events: Vec<&'static str>,
+    events: Vec<BootEdge>,
     errors: Vec<&'static str>,
 }
 
@@ -67,10 +74,10 @@ impl InstanceBoot {
     pub(crate) fn apply(&mut self, delay_ms: u32, reason: u32, now: Instant) {
         if delay_ms > 0 {
             self.deadline = Some(now + std::time::Duration::from_millis(u64::from(delay_ms)));
-            self.events.push("INSTANCE_BOOT_START");
+            self.events.push(BootEdge::Start);
         } else {
             self.deadline = None;
-            self.events.push("INSTANCE_BOOT_STOP");
+            self.events.push(BootEdge::Stop);
             match reason {
                 1 => self.errors.push("ERR_RAID_GROUP_ONLY"),
                 2 => self.errors.push("ERR_RAID_GROUP_FULL"),
@@ -670,8 +677,11 @@ pub(crate) fn feed_dialog_verbs(
     }
 
     script.set_instance_boot_secs(boot.secs(now));
-    for event in std::mem::take(&mut boot.events) {
-        script.fire_event(event, vec![]);
+    for edge in std::mem::take(&mut boot.events) {
+        match edge {
+            BootEdge::Start => script.fire_event("INSTANCE_BOOT_START", vec![]),
+            BootEdge::Stop => script.fire_event("INSTANCE_BOOT_STOP", vec![]),
+        }
     }
     let lines: Vec<_> = std::mem::take(&mut boot.errors)
         .into_iter()
@@ -1628,13 +1638,10 @@ mod tests {
         let mut boot = InstanceBoot::default();
         let now = Instant::now();
         boot.apply(60_500, 0, now);
-        assert_eq!(boot.events, vec!["INSTANCE_BOOT_START"]);
+        assert_eq!(boot.events, vec![BootEdge::Start]);
         assert_eq!(boot.secs(now), 60, "whole seconds, truncated");
         boot.apply(0, 1, now);
-        assert_eq!(
-            boot.events,
-            vec!["INSTANCE_BOOT_START", "INSTANCE_BOOT_STOP"]
-        );
+        assert_eq!(boot.events, vec![BootEdge::Start, BootEdge::Stop]);
         assert_eq!(boot.errors, vec!["ERR_RAID_GROUP_ONLY"]);
         assert_eq!(boot.secs(now), 0);
         boot.apply(0, 7, now);

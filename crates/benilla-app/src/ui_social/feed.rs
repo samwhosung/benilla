@@ -106,12 +106,9 @@ pub(super) fn feed_social(
     fed.seeded = true;
     if social.friends_dirty || first {
         social.friends_dirty = false;
-        let event = if std::mem::take(&mut social.friends_show_pending) {
-            "FRIENDLIST_SHOW"
-        } else {
-            "FRIENDLIST_UPDATE"
-        };
-        script.fire_event(event, Vec::new());
+        // The list ends in `FRIENDLIST_UPDATE` (`0x5ae867`), after `ShowFriends` too; the event
+        // table has no `FRIENDLIST_SHOW`.
+        script.fire_event("FRIENDLIST_UPDATE", Vec::new());
     }
     if social.ignores_dirty || first {
         social.ignores_dirty = false;
@@ -352,7 +349,6 @@ pub(super) fn drain_social(
     for request in requests {
         match request {
             SocialRequest::RefreshFriends => {
-                social.friends_show_pending = true;
                 let _ = commands.0.send(ClientCommand::FriendListRequest);
             }
             SocialRequest::AddFriend(name) => {

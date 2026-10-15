@@ -44,8 +44,6 @@ pub(crate) struct SocialState {
     pending_lines: Vec<FriendStatusUpdate>,
     /// Set when the friend list changed, so the feed fires its list event.
     friends_dirty: bool,
-    /// A `ShowFriends()` is out: the next list fires `FRIENDLIST_SHOW`, not `FRIENDLIST_UPDATE`.
-    pub(crate) friends_show_pending: bool,
     ignores_dirty: bool,
     who_dirty: bool,
 }
