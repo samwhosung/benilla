@@ -1698,9 +1698,11 @@ pub(super) fn drain_bind_on_use_confirms(
     let Some(mut script) = script else {
         return;
     };
-    if script.take_bind_on_use_confirms() == 0 {
+    // The first accept spends the pending use, whatever the protected-action gate said; the cast
+    // inside it asks tag 2 (`0x5d92c1` → `0x6e4bc1`).
+    let Some(may_cast) = script.take_bind_on_use_casts().first().copied() else {
         return;
-    }
+    };
     let Some(it) = gate.on_use.0.take() else {
         return;
     };
@@ -1712,6 +1714,7 @@ pub(super) fn drain_bind_on_use_confirms(
         "ui_items: bind-on-use confirmed for wire {}/{}",
         it.bag_index, it.slot
     );
+    ladder.permit(may_cast);
     super::send_item_use(
         it,
         &targeting.context(),
@@ -1721,6 +1724,7 @@ pub(super) fn drain_bind_on_use_confirms(
         true,
         &mut ui_errors,
     );
+    ladder.permit(true);
 }
 
 #[cfg(test)]
@@ -2309,7 +2313,8 @@ mod bind_confirm_tests {
     fn use_arm_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
-        app.add_message::<crate::sound::AutoEquipSound>()
+        app.init_resource::<crate::spell::ScriptCastPermit>()
+            .add_message::<crate::sound::AutoEquipSound>()
             .add_message::<crate::creature_anim::SheathRequest>()
             .init_resource::<crate::ui_merchant::MerchantOpen>()
             .init_resource::<crate::ui_bank::BankOpen>()
@@ -2577,6 +2582,37 @@ mod bind_confirm_tests {
         let script = app.world().non_send_resource::<UiScript>();
         assert_eq!(script.cursor_item().map(|i| i.guid), Some(AXE_GUID));
         assert!(script.item_locked(AXE_GUID), "still locked, still held");
+    }
+
+    /// `ConfirmBindOnUse` spends its pending use whatever the protected-action gate says
+    /// (`0x5d92c6`-`0x5d92cc` after `CGItem::Use`), but the cast inside asks tag 2: a macro's
+    /// accept outside an input event sends nothing, and the pending use is gone for the next.
+    #[test]
+    fn a_refused_bind_on_use_confirm_spends_the_pending_use_and_sends_nothing() {
+        benilla_formats::wow_data_or_skip!();
+        let (mut app, rx) = right_click_a_bind_on_use_item(false);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .tick(0.01);
+        assert!(shown(&mut app, "USE_BIND"));
+        let _ = rx.try_iter().count();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(r#"RunScript("ConfirmBindOnUse()")"#)
+            .unwrap();
+        app.world_mut()
+            .run_system_once(drain_bind_on_use_confirms)
+            .unwrap();
+        let sent: Vec<String> = rx.try_iter().map(|c| format!("{c:?}")).collect();
+        assert_eq!(sent, Vec::<String>::new(), "the cast is refused");
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("ConfirmBindOnUse()")
+            .unwrap();
+        app.world_mut()
+            .run_system_once(drain_bind_on_use_confirms)
+            .unwrap();
+        assert_eq!(rx.try_iter().count(), 0, "the pending use was spent");
     }
 
     /// The confirm's re-issue goes through `CGItem::Use` (`0x5d92c1`), which refuses an item

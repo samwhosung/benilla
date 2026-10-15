@@ -81,6 +81,13 @@ pub(super) fn install_console_exec(lua: &Lua) -> mlua::Result<()> {
             let (name, value) = line
                 .split_once(char::is_whitespace)
                 .map_or((line.as_str(), ""), |(n, v)| (n, v.trim()));
+            // `reloadUI` is `ReloadUiCommand` (`0x4035f0`), which asks `CGGameUI::Reload`'s gate,
+            // tag 10 (`0x4035fa` → `0x491380`), inside the call: refused, it does nothing.
+            if name.eq_ignore_ascii_case("reloadui")
+                && !super::protected::gate(lua, super::protected::Tag::RELOAD)
+            {
+                return Ok(());
+            }
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let is_cvar = model.cvars.contains_key(&name.to_ascii_lowercase());
             if is_cvar && !value.is_empty() {
@@ -273,6 +280,20 @@ mod tests {
             vec![("uiScale".to_string(), "0.8".to_string())],
             "a bare name writes nothing"
         );
+    }
+
+    /// `reloadUI` is `ReloadUiCommand` (`0x4035f0`), which asks the gate's tag 10 (`0x4035fa`): a
+    /// macro's line outside an input event is ignored, a key's body or the client's own passes.
+    #[test]
+    fn console_exec_reload_ui_asks_the_gate() {
+        let mut s = UiScript::new().unwrap();
+        s.run(r#"RunScript("ConsoleExec('reloadUI')")"#).unwrap();
+        assert!(s.take_console_lines().is_empty());
+        s.run_binding(r#"RunScript("ConsoleExec('ReloadUI')")"#)
+            .unwrap();
+        assert_eq!(s.take_console_lines(), vec!["ReloadUI".to_string()]);
+        s.run("ConsoleExec('reloadui')").unwrap();
+        assert_eq!(s.take_console_lines(), vec!["reloadui".to_string()]);
     }
 
     #[test]

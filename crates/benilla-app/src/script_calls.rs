@@ -1177,6 +1177,18 @@ mod tests {
         }
     }
 
+    /// The ladder reads the permit as an optional resource, so a world without it passes every
+    /// cast; the client must register it, or the gate is silently off.
+    #[test]
+    fn the_client_registers_the_cast_permit() {
+        let f = frame(false);
+        assert!(f
+            .app
+            .world()
+            .get_resource::<crate::spell::ScriptCastPermit>()
+            .is_some());
+    }
+
     /// The Attack slot is a cast too (`UseAction` → `TryCast`, `0x6e4c90`), behind the same first
     /// rung: a macro's press outside an input event swings at nothing, not even at a target
     /// already selected.

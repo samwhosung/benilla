@@ -99,7 +99,10 @@ fn death_popup_offers_the_self_resurrect_and_spends_it() {
     // Either click hides the dialog, so raise it again first.
     s.fire_event("PLAYER_DEAD", vec![]);
     s.run("StaticPopup_OnClick(StaticPopup1, 2)").unwrap();
-    assert_eq!(s.take_death_actions(), vec![DeathAction::UseSoulstone]);
+    assert_eq!(
+        s.take_death_actions(),
+        vec![DeathAction::UseSoulstone { may_cast: true }]
+    );
     assert!(
         !s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap(),
         "the self-res hides the dialog; the resurrection itself lands as descriptor deltas"
@@ -141,7 +144,10 @@ fn death_popup_button2_is_decided_at_show_time() {
         "Reincarnation"
     );
     s.run("StaticPopup_OnClick(StaticPopup1, 2)").unwrap();
-    assert_eq!(s.take_death_actions(), vec![DeathAction::UseSoulstone]);
+    assert_eq!(
+        s.take_death_actions(),
+        vec![DeathAction::UseSoulstone { may_cast: true }]
+    );
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 }
 

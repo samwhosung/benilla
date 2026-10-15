@@ -28,6 +28,14 @@ impl super::UiScript {
 
     /// `ConfirmBindOnUse()` calls since the last drain.
     pub fn take_bind_on_use_confirms(&mut self) -> u32 {
+        self.take_bind_on_use_casts().len() as u32
+    }
+
+    /// The `ConfirmBindOnUse()` calls since the last drain, each with what the protected-action
+    /// gate's tag 2 allowed it: the re-issued use is `CGItem::Use` (`0x5d92c1`), whose cast is
+    /// `TryCastSpell`'s, behind the gate. The call spends its pending state whatever the gate said
+    /// (`0x5d92c6`-`0x5d92cc`), so it is queued either way.
+    pub fn take_bind_on_use_casts(&mut self) -> Vec<bool> {
         std::mem::take(&mut self.model_mut().bind_on_use_confirms)
     }
 
@@ -74,8 +82,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "ConfirmBindOnUse",
         lua.create_function(|lua, ()| {
+            let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.bind_on_use_confirms += 1;
+            model.bind_on_use_confirms.push(may_cast);
             Ok(())
         })?,
     )?;

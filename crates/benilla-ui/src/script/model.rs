@@ -846,7 +846,7 @@ pub(crate) struct Model {
 
     /// `EquipPendingItem`/`CancelPendingEquip` answers in order, and `ConfirmBindOnUse()` calls.
     pub(crate) pending_equip_answers: Vec<bind_confirm::PendingEquipAnswer>,
-    pub(crate) bind_on_use_confirms: u32,
+    pub(crate) bind_on_use_confirms: Vec<bool>,
 
     /// The open loot, the row clicks and whether `CloseLoot` ran. A click is the reference's take
     /// `0x4c2790` with flag 0, raising `LOOT_BIND` for a bind-on-pickup row (a `LootButton`'s own
@@ -1579,7 +1579,7 @@ impl Model {
             craft_close: false,
             loot: None,
             pending_equip_answers: Vec::new(),
-            bind_on_use_confirms: 0,
+            bind_on_use_confirms: Vec::new(),
             loot_picks: Vec::new(),
             loot_confirms: Vec::new(),
             loot_close: None,

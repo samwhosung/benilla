@@ -473,7 +473,7 @@ fn drain_death(
             },
             // Re-resolved at click time, as the reference's `OnCancel` calls `HasSoulstone()`
             // again; nothing is cleared here, the server zeroes `PLAYER_SELF_RES_SPELL`.
-            DeathAction::UseSoulstone => {
+            DeathAction::UseSoulstone { may_cast } => {
                 let store = targeting.self_store.single().ok().map(|s| s.0.clone());
                 let res = store.as_ref().and_then(|store| {
                     let ladder = cast.p0();
@@ -525,6 +525,7 @@ fn drain_death(
                                 on_object: None,
                                 is_charter: false,
                             };
+                            ladder.permit(may_cast);
                             crate::ui_items::send_item_use(
                                 it,
                                 &targeting.context(),
@@ -534,6 +535,7 @@ fn drain_death(
                                 false,
                                 &mut ui_errors,
                             );
+                            ladder.permit(true);
                             Ok(())
                         }
                     }
@@ -885,6 +887,92 @@ mod tests {
             .resource::<crate::ui_cast::CastBarFeed>()
             .0
             .is_empty());
+    }
+
+    /// The item leg's cancel (`0x48ae6b`) comes before the use (`0x48ae7d`) and its gate, tag 2 at
+    /// `TryCastSpell` (`0x6e4bc1`): a macro's press outside an input event cancels, which disarms the
+    /// repeat, and the stone's use is refused; the same press from the client sends it.
+    #[test]
+    fn a_refused_soulstone_press_cancels_and_uses_nothing() {
+        let (mut app, rx) = soulstone_app();
+        // A stone that is no quest-starter (whose offer is `CGItem::Use`'s own arm, ahead of the
+        // cast), whose spell is castable dead and needs a reagent we lack: entering the cast
+        // ladder leaves a local refusal (0x5c), and being kept out of it leaves nothing.
+        let world = app.world_mut();
+        world.resource_mut::<crate::items::Items>().insert_template(
+            5232,
+            Some(benilla_protocol::messages::ItemInfo {
+                spells: vec![benilla_protocol::messages::ItemSpellEntry {
+                    index: 0,
+                    spell_id: SELF_RES,
+                    trigger: 0,
+                    charges: -1,
+                    cooldown_ms: -1,
+                    category: 0,
+                    category_cooldown_ms: -1,
+                }],
+                use_spell: Some(benilla_protocol::messages::ItemUseSpell {
+                    spell_id: SELF_RES,
+                    cooldown_ms: -1,
+                    category: 0,
+                    category_cooldown_ms: -1,
+                }),
+                ..crate::items::test_template("Minor Soulstone")
+            }),
+        );
+        let display = benilla_formats::SpellDisplay {
+            effects: [SPELL_EFFECT_SELF_RESURRECT, 0, 0],
+            attributes: 0x0080_0000,
+            reagents: [
+                (9999, 1),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+                (0, 0),
+            ],
+            ..Default::default()
+        };
+        world.insert_resource(crate::ui_action::Spells {
+            catalog: benilla_formats::SpellCatalog::from_displays([(SELF_RES, display)].into()),
+            ..crate::ui_action::Spells::empty_for_tests()
+        });
+        arm_repeat(&mut app);
+        let _ = rx.try_iter().count();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(r#"RunScript("UseSoulstone()")"#)
+            .unwrap();
+        app.world_mut().run_system_once(drain_death).unwrap();
+        assert!(
+            app.world()
+                .resource::<crate::ui_action::CastErrors>()
+                .0
+                .is_empty(),
+            "the cast ladder was never entered"
+        );
+        assert_eq!(
+            app.world()
+                .non_send_resource::<UiScript>()
+                .trade_skill_repeat(),
+            (0, 3),
+            "the cancel ran ahead of the gate"
+        );
+        press_soulstone(&mut app);
+        let fails: Vec<u8> = app
+            .world()
+            .resource::<crate::ui_action::CastErrors>()
+            .0
+            .iter()
+            .map(|f| f.reason)
+            .collect();
+        assert_eq!(
+            fails,
+            vec![0x5c],
+            "the client's own press enters the ladder"
+        );
     }
 
     /// The soulstone's use is `CGItem::Use` (`0x48ae7d`): without control it meets the control gate

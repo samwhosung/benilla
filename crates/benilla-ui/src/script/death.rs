@@ -48,7 +48,12 @@ pub enum DeathAction {
     AcceptXpLoss,
     /// `UseSoulstone()`: `CMSG_SELF_RES` when `PLAYER_SELF_RES_SPELL` is non-zero, else a use of
     /// the carried item, decided at drain time as the reference decides it at call time.
-    UseSoulstone,
+    UseSoulstone {
+        /// What the protected-action gate's tag 2 allowed the call: the item leg is `CGItem::Use`
+        /// (`0x48ae7d`), whose cast is `TryCastSpell`'s. The cancel before it (`0x48ae6b`) is not
+        /// behind it, nor is the `CMSG_SELF_RES` leg.
+        may_cast: bool,
+    },
 }
 
 impl super::UiScript {
@@ -81,7 +86,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     install_action(lua, "AcceptResurrect", DeathAction::AcceptResurrect)?;
     install_action(lua, "DeclineResurrect", DeathAction::DeclineResurrect)?;
     install_action(lua, "AcceptXPLoss", DeathAction::AcceptXpLoss)?;
-    install_action(lua, "UseSoulstone", DeathAction::UseSoulstone)?;
+    g.set(
+        "UseSoulstone",
+        lua.create_function(|lua, ()| {
+            let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            model
+                .death_actions
+                .push(DeathAction::UseSoulstone { may_cast });
+            Ok(())
+        })?,
+    )?;
 
     g.set(
         "GetReleaseTimeRemaining",
