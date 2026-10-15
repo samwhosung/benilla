@@ -10,35 +10,68 @@ use benilla_protocol::messages::ACTION_KIND_ITEM;
 use benilla_ui::script::{ScriptValue, UiScript};
 
 use crate::item_watch::ItemNotice;
-use crate::net::{ObjectStore, Objects, SelfPlayer};
+use crate::net::{ObjectStore, Objects, SelfPlayer, WorldEnterCascadeMessage};
 use crate::ui_items::{count_of, InventoryScope};
 
 /// The bar's 120 slots, as Lua action ids.
 const ACTION_SLOTS: std::ops::RangeInclusive<u32> = 1..=120;
 
-/// Run the recounts the frame's item notices owe, in their order.
+/// Run our own player's arrival pass, if it arrived, then the recounts the frame's item notices
+/// owe, in their order.
 pub(crate) fn recount_item_actions(
     script: Option<NonSendMut<UiScript>>,
     mut notices: MessageReader<ItemNotice>,
+    mut arrivals: MessageReader<WorldEnterCascadeMessage>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
 ) {
+    let arrived = arrivals.read().count() > 0;
     let notices: Vec<ItemNotice> = notices.read().cloned().collect();
     let Some(mut script) = script else {
         return;
     };
     let store = self_q.iter().next();
+    if arrived {
+        arrival_counts(&mut script, store, &objects);
+    }
     for entry in notices.iter().flat_map(ItemNotice::recounts) {
         recount(&mut script, store, &objects, entry);
     }
 }
 
+/// Our own player's arrival (`0x5dea50`, its manager flag `+0xc8` always clear) writes the bar's
+/// 120 words through `0x4e5d60` with no send and quiet set (`0x5deafc`, `0x5deafe`), so each item
+/// word is recounted (`0x4e5d90`) with no signal, then signals `ACTIONBAR_SLOT_CHANGED` once with
+/// 0 (`0x5deb20`). Nothing else recounts a worldport: its items are created again before our
+/// player, outside the world latch, and run no record set-up.
+fn arrival_counts(script: &mut UiScript, store: Option<&ObjectStore>, objects: &Objects) {
+    let mut counts = std::collections::HashMap::new();
+    for action in ACTION_SLOTS {
+        let Some(mut slot) = script
+            .action_slot(action)
+            .filter(|s| s.kind == ACTION_KIND_ITEM)
+        else {
+            continue;
+        };
+        slot.count = *counts
+            .entry(slot.action)
+            .or_insert_with(|| count(store, objects, slot.action));
+        script.set_action(action, Some(slot));
+    }
+    script.fire_event("ACTIONBAR_SLOT_CHANGED", vec![ScriptValue::Int(0)]);
+}
+
+/// `0x4e6d20(entry)`: 0 without an active player.
+fn count(store: Option<&ObjectStore>, objects: &Objects, entry: u32) -> u32 {
+    store.map_or(0, |s| {
+        count_of(&s.0, objects, entry, InventoryScope::CARRIED)
+    })
+}
+
 /// `0x4e5c70(entry)`: no active player counts 0 (`0x4e6d20`). Each slot is read as the VM holds it
 /// when its turn comes, so a handler that rewrites a later slot is seen.
 fn recount(script: &mut UiScript, store: Option<&ObjectStore>, objects: &Objects, entry: u32) {
-    let count = store.map_or(0, |s| {
-        count_of(&s.0, objects, entry, InventoryScope::CARRIED)
-    });
+    let count = count(store, objects, entry);
     for action in ACTION_SLOTS {
         let Some(mut slot) = script
             .action_slot(action)
@@ -74,6 +107,7 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.add_message::<ItemNotice>()
+            .add_message::<WorldEnterCascadeMessage>()
             .init_resource::<crate::net::GuidIndex>()
             .add_systems(Update, recount_item_actions);
         let world = app.world_mut();
@@ -198,5 +232,23 @@ mod tests {
         );
         assert_eq!(seen(&mut app), ["3=2", "50=2"]);
         assert_eq!(count(&mut app), 2);
+    }
+
+    /// Our player's arrival stores every item slot's count with no per-slot signal, then signals
+    /// slot 0 once (`0x5dea50`): a worldport's re-created bags recount here and nowhere else.
+    #[test]
+    fn our_arrival_recounts_every_item_slot_quietly_and_signals_slot_zero() {
+        let mut app = app();
+        app.world_mut()
+            .resource_mut::<Messages<WorldEnterCascadeMessage>>()
+            .write(WorldEnterCascadeMessage);
+        app.update();
+        assert_eq!(seen(&mut app), ["0=0"], "one signal, slot 0");
+        let counts: (i64, i64, i64) = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("return GetActionCount(3), GetActionCount(50), GetActionCount(7)")
+            .unwrap();
+        assert_eq!(counts, (5, 5, 0));
     }
 }
