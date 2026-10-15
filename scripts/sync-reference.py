@@ -49,6 +49,16 @@ def main():
         pin = f.read().strip()
     if len(pin) != 40 or any(c not in "0123456789abcdef" for c in pin):
         sys.exit("sync-reference: reference/PIN must hold a full 40-hex commit")
+    for ref in ("origin/main", "main"):
+        r = subprocess.run(["git", "-C", checkout, "merge-base", "--is-ancestor", pin, ref],
+                           capture_output=True)
+        if r.returncode in (0, 1):
+            if r.returncode == 1:
+                sys.exit(f"sync-reference: the PIN {pin[:12]} is not on benilla-re's {ref}")
+            break
+    stray = sorted(n for n in os.listdir(REFERENCE) if n.endswith(".tsv") and n not in TABLES)
+    if stray:
+        sys.exit("sync-reference: reference/ holds tables it does not vendor: " + ", ".join(stray))
     bad = []
     for name in TABLES:
         want = git_show(checkout, pin, name)

@@ -246,6 +246,8 @@ fn the_glue_vm_holds_no_other_global() {
 #[test]
 fn the_glue_event_table_matches_the_reference() {
     let rows = reference_rows("glue_events.tsv", "id");
+    // 1.12.1's glue screens name 26 events; a PIN bump that changes the count is read here.
+    assert_eq!(glue_events().len(), 26);
     assert_eq!(rows.len(), glue_events().len());
     for (id, row) in rows.iter().enumerate() {
         assert_eq!(row[0], id.to_string(), "ids run 0..26 in order");

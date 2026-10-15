@@ -65,7 +65,10 @@ fn the_reference_columns_hold_against_the_registered_cvars() {
             if !matches!(row.reference, Reference::Ours(_)) && known.is_none() {
                 absent.push(format!("{name}: no CVar::Register names it"));
             }
-            known_hit.extend(known.map(|_| name));
+            // An `ours` row is what the fix of an absent name makes it: its KNOWN entry has come right.
+            if !matches!(row.reference, Reference::Ours(_)) {
+                known_hit.extend(known.map(|_| name));
+            }
             continue;
         };
         if defaults.iter().any(|d| d == "?") {

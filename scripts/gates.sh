@@ -129,6 +129,10 @@ fi
 # is required (BENILLA_REQUIRE_DATA, set above where the install and corpus are, or by the caller).
 re_checkout=""
 primary="$(cd "$(git rev-parse --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd || true)"
+if [ -n "${BENILLA_RE:-}" ] && [ ! -d "$BENILLA_RE/tables" ]; then
+    echo "GATE FAILED: reference (BENILLA_RE=$BENILLA_RE holds no benilla-re checkout)"
+    exit 1
+fi
 for c in "${BENILLA_RE:-}" "$root/../benilla-re" "${primary:+$primary/../benilla-re}"; do
     if [ -n "$c" ] && [ -d "$c/tables" ]; then re_checkout="$c"; break; fi
 done
