@@ -231,9 +231,6 @@ mod tests {
         }
     }
 
-    /// `GMSurveySubmit` sends once with the stored overall comment and clears it
-    /// (`0x4965e0`, `0x496510`); an empty comment stores nothing.
-
     /// The shipped survey: id 6, questions 28 to 32 in the first five slots.
     fn shipped() -> crate::script::GmSurveyTables {
         crate::script::GmSurveyTables {
