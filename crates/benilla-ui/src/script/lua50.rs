@@ -554,6 +554,9 @@ mod tests {
         let s = UiScript::new().unwrap();
         for text in [
             "0x10", "0X1A", "0x1p4", "-0x2", " 0x10 ", "inf", "nan", "infinity",
+            // A marker with no digit after it ends the numeral before it (`0x411432`), so it
+            // trails; `f` is no marker.
+            "1e", "1d", "1f2",
         ] {
             assert!(
                 s.eval::<bool>(&format!("return tonumber({text:?}) == nil"))
@@ -567,6 +570,10 @@ mod tests {
             ("-.5", -0.5),
             ("5.", 5.0),
             ("+3", 3.0),
+            // The client's strtod also takes `d`/`D` as the exponent marker (`0x4112d1`).
+            ("1d2", 100.0),
+            ("-2.5D-1", -0.25),
+            (" 1d+1 ", 10.0),
         ] {
             assert_eq!(
                 s.eval::<f64>(&format!("return tonumber({text:?})"))
@@ -575,6 +582,12 @@ mod tests {
                 "tonumber({text:?})"
             );
         }
+        // A numeral too long for the conversion's stack buffer takes the same path.
+        let long = format!("1{}d-70", "0".repeat(70));
+        assert_eq!(
+            s.eval::<f64>(&format!("return tonumber({long:?})")).unwrap(),
+            1.0
+        );
         // A base still reads hexadecimal digits: that is `strtoul`, not `luaO_str2d`.
         assert_eq!(s.eval::<f64>(r#"return tonumber("10", 16)"#).unwrap(), 16.0);
         assert!(!s

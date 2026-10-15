@@ -88,14 +88,17 @@ int luaO_rawequalObj (const TValue *t1, const TValue *t2) {
 
 
 /* BENILLA: the end of the decimal numeral at the head of `s` (spaces, a sign, digits with at
-** most one `.`, then `e`/`E`, a sign and digits only when a digit follows), or `s` when it has
-** no digit: the grammar of the 1.12.1 client's strtod (0x741e39), which its luaO_str2d
-** (0x6f5900) calls. A C99 strtod reads further, into hexadecimal ("0x10", "0x1p4") and
-** "inf"/"nan", none of which that client reads as a number. See third_party/lua-src/BENILLA.md.
+** most one `.`, then an exponent marker, a sign and digits only when a digit follows), or `s`
+** when it has no digit: the grammar of the 1.12.1 client's strtod (0x741e39, its state machine
+** 0x4111f0), which its luaO_str2d (0x6f5900) calls. Its exponent marker is `e`, `E`, `d` or `D`
+** (0x4112d1-0x4112f1), and `*dexp` is set to a `d`/`D` one, which a C99 strtod does not read. A
+** C99 strtod also reads further, into hexadecimal ("0x10", "0x1p4") and "inf"/"nan", none of
+** which that client reads as a number. See third_party/lua-src/BENILLA.md.
 */
-static const char *decimal_end (const char *s) {
+static const char *decimal_end (const char *s, const char **dexp) {
   const char *p = s;
   int digits = 0;
+  *dexp = NULL;
   while (isspace(cast(unsigned char, *p))) p++;
   if (*p == '+' || *p == '-') p++;
   while (isdigit(cast(unsigned char, *p))) { p++; digits++; }
@@ -104,11 +107,12 @@ static const char *decimal_end (const char *s) {
     while (isdigit(cast(unsigned char, *p))) { p++; digits++; }
   }
   if (digits == 0) return s;
-  if (*p == 'e' || *p == 'E') {
+  if (*p == 'e' || *p == 'E' || *p == 'd' || *p == 'D') {
     const char *e = p + 1;
     if (*e == '+' || *e == '-') e++;
     if (isdigit(cast(unsigned char, *e))) {
       while (isdigit(cast(unsigned char, *e))) e++;
+      if (*p == 'd' || *p == 'D') *dexp = p;
       p = e;
     }
   }
@@ -118,9 +122,27 @@ static const char *decimal_end (const char *s) {
 
 int luaO_str2d (const char *s, lua_Number *result) {
   char *endptr;
-  const char *end = decimal_end(s);  /* BENILLA: see decimal_end */
+  const char *dexp;
+  const char *end = decimal_end(s, &dexp);  /* BENILLA: see decimal_end */
   if (end == s) return 0;  /* conversion failed */
-  *result = lua_str2number(s, &endptr);
+  if (dexp != NULL) {
+    /* BENILLA: the numeral again with its `d` exponent spelled `e`, for the platform's strtod */
+    size_t n = cast(size_t, end - s);
+    char small[64];
+    char *buf = n < sizeof(small) ? small : cast(char *, malloc(n + 1));
+    int whole;
+    if (buf == NULL) return 0;
+    memcpy(buf, s, n);
+    buf[n] = '\0';
+    buf[dexp - s] = 'e';
+    *result = lua_str2number(buf, &endptr);
+    whole = (endptr == buf + n);
+    if (buf != small) free(buf);
+    if (!whole) return 0;
+    endptr = cast(char *, end);
+  }
+  else
+    *result = lua_str2number(s, &endptr);
   /* BENILLA: 5.1's hexadecimal branch (`strtoul(s, &endptr, 16)` on a trailing `x`) is gone, as
   ** 0x6f5900 has none. A strtod that read past the decimal numeral read hexadecimal, whose
   ** decimal head "0" is followed by an `x`: an invalid trailing character there. */
