@@ -599,8 +599,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### loader
 
-- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:369`](../crates/benilla-ui/src/loader/mod.rs#L369))
-- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:395`](../crates/benilla-ui/src/loader/mod.rs#L395))
+- A `<Script file=>` value with a separator joins the including document's directory, like a bare name. ([`src/loader/mod.rs:370`](../crates/benilla-ui/src/loader/mod.rs#L370))
+- Padded to the block's line, so a raise reports a line a reader can find in the file; the reference counts from the body's first line. ([`src/loader/mod.rs:396`](../crates/benilla-ui/src/loader/mod.rs#L396))
 
 #### markup
 
@@ -625,7 +625,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The result is correctly rounded, where the reference rounds to 17 digits half-up and then again to 14, differing in the last digit on about 0.05% of doubles, because no consumer reads that digit. ([`src/script/binding_abi.rs:139`](../crates/benilla-ui/src/script/binding_abi.rs#L139))
 - `pow(10, n)` is the platform's, where the reference's (`0x73f940`, `fyl2x`) rounds its extended-precision steps at 53 bits, so a power or a fraction term can differ in the last place. ([`src/script/binding_abi.rs:234`](../crates/benilla-ui/src/script/binding_abi.rs#L234))
 - A hovered or disabled label still reports the normal font, since the state fonts are overlaid at paint and a link made here would outlive the state. `font::repaint` keeps what the label set itself (its severance mask, `CSimpleFontString+0xd4`), and the local justify obeys the same mask. ([`src/script/button.rs:130`](../crates/benilla-ui/src/script/button.rs#L130))
-- The slot is read before the handler, where the reference reads it after (`[esi+0x4dc]`), because reading first keeps the borrow simple and no stock handler re-slots its row. ([`src/script/button.rs:1040`](../crates/benilla-ui/src/script/button.rs#L1040))
+- The slot is read before the handler, where the reference reads it after (`[esi+0x4dc]`), because reading first keeps the borrow simple and no stock handler re-slots its row. ([`src/script/button.rs:1042`](../crates/benilla-ui/src/script/button.rs#L1042))
 - The reference composes the Shortcut with `GetRealZoneText` alone (`0x49efe8`), so in a capital `/leave Trade` sends `Trade - Stormwind City` and leaves nothing; ours uses the join's city-aware name, because the reference's form cannot leave the channel it joined. ([`src/script/channel.rs:480`](../crates/benilla-ui/src/script/channel.rs#L480))
 - The frame's bottom-left origin is snapped onto the device grid so the border art blits 1:1; the reference ceils the anchor point itself onto it (`0x7666a0`, `0x766750`). ([`src/script/chat_bubble.rs:435`](../crates/benilla-ui/src/script/chat_bubble.rs#L435))
 - No truncation at 255 characters (`0x49f604`), because vmangos refuses a longer line itself (`Chat.cpp:2177`): it is dropped where the reference sends its first 255. ([`src/script/chat_send.rs:23`](../crates/benilla-ui/src/script/chat_send.rs#L23))
@@ -662,7 +662,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - `IsInInstance()` then answers `nil, "none"`, because the reference returns two results without pushing either (`0x48a7a9`), a stack bug. ([`src/script/instance.rs:21`](../crates/benilla-ui/src/script/instance.rs#L21))
 - Bounds-checked where the reference indexes unguarded, so none reads past it. ([`src/script/item_stats.rs:361`](../crates/benilla-ui/src/script/item_stats.rs#L361))
 - Nil for a display row with no icon, where the reference answers the unloadable `Interface\Icons\`, because `SetTexture` shows no icon for either. ([`src/script/item_stats.rs:463`](../crates/benilla-ui/src/script/item_stats.rs#L463))
-- An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:289`](../crates/benilla-ui/src/script/keybind.rs#L289))
+- An addon file whose first binding has no header opens a `HEADER_<addon>` row, where the reference files those rows under the previous file's last header, because under a foreign header the player could not find them. ([`src/script/keybind.rs:292`](../crates/benilla-ui/src/script/keybind.rs#L292))
 - The handle's value is the address of a `CGxTex` (`SMemAlloc(0x54)`, `0x594a96`), which benilla cannot reproduce; each texture ranks instead by a creation stamp, one global sequence number taken when its cache key is first created and taken anew once its last region has let go of it (`super::texel::Texels`). ([`src/script/layer_batch.rs:9`](../crates/benilla-ui/src/script/layer_batch.rs#L9))
 - 5.0 has no bound, but a remembered size is whatever an addon wrote, and a Rust loop over two billion slots is beyond the VM's instruction budget: a hung client. ([`src/script/lua50/table_size.rs:32`](../crates/benilla-ui/src/script/lua50/table_size.rs#L32))
 - A longer one sorts only the border, where 5.0 compares nils and raises: it departs from an error path, not from a mechanism. ([`src/script/lua50/table_size.rs:194`](../crates/benilla-ui/src/script/lua50/table_size.rs#L194))
