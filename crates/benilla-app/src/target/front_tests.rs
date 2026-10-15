@@ -132,6 +132,43 @@ impl Fix {
     }
 }
 
+/// A left click on a nameplate is the body click's select (`0x7cb910` → `0x4949f0` action 1 →
+/// `0x4925d0`), whose `SelectTarget` (`0x49280c`) binds the unit to a standing cursor's cast
+/// and returns. The cursor down, the same click selects.
+#[test]
+fn a_plate_click_with_the_cursor_up_binds_its_unit() {
+    let mut up = fix(false);
+    up.cursor_up();
+    let mob = up.mob;
+    up.app
+        .world_mut()
+        .resource_mut::<PlateClicks>()
+        .left
+        .push(mob);
+    up.app
+        .world_mut()
+        .run_system_once(click::select_on_plate_click)
+        .expect("the plate click runs");
+    up.bind();
+    assert_eq!(up.wire(), (vec![Some(MOB)], vec![]), "bound, not selected");
+    assert_eq!(up.selected(), Some(OLD));
+    assert!(!up.cursor_is_up());
+
+    let mut down = fix(false);
+    let mob = down.mob;
+    down.app
+        .world_mut()
+        .resource_mut::<PlateClicks>()
+        .left
+        .push(mob);
+    down.app
+        .world_mut()
+        .run_system_once(click::select_on_plate_click)
+        .expect("the plate click runs");
+    assert_eq!(down.wire(), (vec![], vec![MOB]));
+    assert_eq!(down.selected(), Some(MOB));
+}
+
 /// `SelectTarget`'s charmed return (`0x49359c`) is ahead of every writer, deselects included,
 /// and ahead of the cursor's bind: each of them leaves a charmed player's target and cast be,
 /// and does its work for one who is not.

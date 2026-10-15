@@ -30,12 +30,18 @@ pub(super) fn world_right_click_payload(
 /// plate's unit, as a scripted `plate:Click()` (pfUI, `nameplates.lua:1228`) has no cursor; the
 /// right replays [`WorldRightClick`] only when the press pick names it, so a scripted one does
 /// nothing yet. A physical right-click arrives only here: `0x7cb910` → `0x4949f0` → `0x492820`.
+///
+/// The left click is the body click's select (`0x4949f0` action 1 → `0x4925d0` → `SelectTarget`
+/// `0x49280c`), so with the targeting cursor up the unit goes to the cast's bind and the target
+/// stays ([`super::front`]). The right is dropped while the cursor is up: its `0x492820` also binds
+/// (`0x492870`) and then interacts, which is not built.
 pub(super) fn select_on_plate_click(
     mut plate: ResMut<crate::vplates::PlateClicks>,
     press: Res<PressPick>,
     ground: Res<crate::spell::SpellTargeting>,
     mut selection: ResMut<Selection>,
     mut seam: crate::creature_anim::AttackSeam,
+    mut front: super::front::SelectFront,
     self_q: Query<(&Guid, Has<Engaged>), With<SelfPlayer>>,
     mut greeting: MessageWriter<crate::sound::NpcGreetingRequest>,
     mut right_clicks: MessageWriter<WorldRightClick>,
@@ -45,9 +51,6 @@ pub(super) fn select_on_plate_click(
         std::mem::take(&mut plate.left),
         std::mem::take(&mut plate.right),
     );
-    if ground.active() {
-        return;
-    }
     let (self_guid, engaged) = self_q
         .single()
         .map(|(g, e)| (Some(g.0), e))
@@ -58,6 +61,10 @@ pub(super) fn select_on_plate_click(
         };
         // The greeting fires on the select, plate or body, before SetTarget (`0x60c270`).
         greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
+        // `SelectTarget`'s returns: charmed, or the cursor's bind in the select's place.
+        if front.takes(entity, guid.0) {
+            continue;
+        }
         // Attack-classified only when the press was on this unit: a scripted click has no cursor.
         let attack = press.attack() && press.hovered.target == Some(entity);
         scan::commit(
@@ -71,7 +78,7 @@ pub(super) fn select_on_plate_click(
             attack,
         );
     }
-    if right.into_iter().any(|e| press.hovered.target == Some(e)) {
+    if !ground.active() && right.into_iter().any(|e| press.hovered.target == Some(e)) {
         right_clicks.write(WorldRightClick);
     }
 }
