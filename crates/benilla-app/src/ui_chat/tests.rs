@@ -2541,6 +2541,7 @@ fn afk_then_dnd_clears_the_afk_first() {
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::feed::ChatLog>();
+    world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.init_resource::<super::away::AfkMirror>();
     world.init_resource::<crate::cvars::Cvars>();
     world.init_resource::<super::edit::ChannelState>();
@@ -2603,6 +2604,7 @@ fn a_named_language_rides_the_chat_command() {
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::feed::ChatLog>();
+    world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.init_resource::<super::away::AfkMirror>();
     world.init_resource::<crate::cvars::Cvars>();
     world.init_resource::<super::edit::ChannelState>();
@@ -2654,6 +2656,7 @@ fn a_channel_send_carries_the_numbered_slots_name() {
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::feed::ChatLog>();
+    world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.init_resource::<super::away::AfkMirror>();
     world.init_resource::<crate::cvars::Cvars>();
     world.insert_resource(ChannelState {
@@ -2730,6 +2733,7 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::feed::ChatLog>();
+    world.init_resource::<crate::ui_action::UiErrorKeys>();
     world.insert_resource(super::away::AfkMirror(2));
     world.init_resource::<crate::cvars::Cvars>();
     world.insert_resource(ChannelState {
@@ -2800,4 +2804,160 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
             (ChatKind::Afk, "Away from Keyboard".into()),
         ]
     );
+}
+
+/// Run `lua` through the real `SendChatMessage` drain in a group state, with a standing AFK, and
+/// return what went on the wire and the refusals shown.
+fn group_chat_sends(
+    group: benilla_ui::script::PartyState,
+    lua: &str,
+) -> (Vec<(crate::net::ChatKind, String)>, Vec<&'static str>, bool) {
+    use crate::net::{ClientCommand, NetCommands};
+    use bevy::ecs::system::RunSystemOnce;
+
+    let mut world = bevy::prelude::World::new();
+    let mut script = benilla_ui::script::UiScript::new().expect("VM");
+    script.set_party(group);
+    world.insert_non_send_resource(script);
+    let (tx, rx) = crossbeam_channel::unbounded();
+    world.insert_resource(NetCommands(tx));
+    world.init_resource::<super::feed::ChatLog>();
+    world.init_resource::<crate::ui_action::UiErrorKeys>();
+    world.insert_resource(super::away::AfkMirror(2));
+    world.init_resource::<crate::cvars::Cvars>();
+    world.init_resource::<super::edit::ChannelState>();
+    world
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .run(lua)
+        .expect("lua");
+    world
+        .run_system_once(super::input::drain_addon_chat_sends)
+        .expect("drain");
+    // Without the empty AFK packet that tells the server a sent line cleared the standing AFK.
+    let sent = rx
+        .try_iter()
+        .map(|c| match c {
+            ClientCommand::Chat { kind, text, .. } => (kind, text),
+            other => panic!("unexpected command {other:?}"),
+        })
+        .filter(|(kind, text)| !(*kind == crate::net::ChatKind::Afk && text.is_empty()))
+        .collect();
+    let refused = world
+        .resource::<crate::ui_action::UiErrorKeys>()
+        .0
+        .iter()
+        .map(|e| e.key)
+        .collect();
+    (
+        sent,
+        refused,
+        world.resource::<super::away::AfkMirror>().is_afk(),
+    )
+}
+
+/// A raid of the player (guid 1, at `rank`) and one other, led by `leader`.
+fn raid_group(rank: u32, leader: u64) -> benilla_ui::script::PartyState {
+    use benilla_ui::script::{PartyMemberInfo, PartyState, RaidMemberInfo};
+    PartyState {
+        members: vec![PartyMemberInfo {
+            name: "Other".into(),
+            guid: 2,
+        }],
+        leader_guid: leader,
+        own_guid: 1,
+        raid: vec![
+            RaidMemberInfo {
+                guid: 1,
+                rank,
+                ..Default::default()
+            },
+            RaidMemberInfo {
+                guid: 2,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// `SendChatMessage`'s group arms (`0x49f343`, `0x49f379`, `0x49f4b2`): a type sent without its
+/// group is refused with the reference's error, ahead of the AFK clear, and nothing goes out.
+#[test]
+fn a_group_line_without_its_group_is_refused_and_leaves_afk_standing() {
+    use crate::net::ChatKind;
+    let all = r#"SendChatMessage("a", "PARTY") SendChatMessage("b", "RAID")
+        SendChatMessage("c", "RAID_WARNING") SendChatMessage("d", "BATTLEGROUND")"#;
+
+    let (sent, refused, afk) = group_chat_sends(Default::default(), all);
+    assert_eq!(sent, vec![]);
+    assert_eq!(
+        refused,
+        [
+            "ERR_NOT_IN_GROUP",
+            "ERR_NOT_IN_RAID",
+            "ERR_NOT_IN_RAID",
+            "ERR_NOT_IN_RAID"
+        ]
+    );
+    assert!(afk, "a refused line never reaches the AFK clear");
+
+    // A party of two is no raid.
+    let party = benilla_ui::script::PartyState {
+        members: vec![benilla_ui::script::PartyMemberInfo {
+            name: "Other".into(),
+            guid: 2,
+        }],
+        own_guid: 1,
+        leader_guid: 1,
+        ..Default::default()
+    };
+    let (sent, refused, _) = group_chat_sends(party, all);
+    assert_eq!(sent, vec![(ChatKind::Party, "a".into())]);
+    assert_eq!(refused, ["ERR_NOT_IN_RAID"; 3]);
+
+    // In a raid as a plain member: RAID_WARNING needs the leader or an assistant (`0x4bb080`).
+    let (sent, refused, _) = group_chat_sends(
+        raid_group(0, 9),
+        r#"SendChatMessage("w", "RAID_WARNING") SendChatMessage("r", "RAID")"#,
+    );
+    assert_eq!(sent, vec![(ChatKind::Raid, "r".into())]);
+    assert_eq!(refused, ["ERR_NOT_LEADER"]);
+    let (sent, refused, afk) =
+        group_chat_sends(raid_group(1, 9), r#"SendChatMessage("w", "RAID_WARNING")"#);
+    assert_eq!(sent, vec![(ChatKind::RaidWarning, "w".into())]);
+    assert!(refused.is_empty());
+    assert!(!afk, "a sent line clears the standing AFK");
+}
+
+/// `SendChatMessage` sends RAID as RAID_LEADER when the player's GUID is the group leader's
+/// (`0x49f3a4`-`0x49f3c4`) and BATTLEGROUND as BATTLEGROUND_LEADER likewise (`0x49f463`-`0x49f490`);
+/// the server relays a plain RAID as RAID (vmangos `ChatHandler.cpp:514-536`).
+#[test]
+fn the_group_leaders_raid_and_battleground_lines_go_out_as_leader_types() {
+    use crate::net::ChatKind;
+    let lines = r#"SendChatMessage("r", "RAID") SendChatMessage("b", "BATTLEGROUND")
+        SendChatMessage("w", "RAID_WARNING") SendChatMessage("p", "PARTY")"#;
+
+    let (sent, refused, _) = group_chat_sends(raid_group(2, 1), lines);
+    assert_eq!(
+        sent,
+        vec![
+            (ChatKind::RaidLeader, "r".into()),
+            (ChatKind::BattlegroundLeader, "b".into()),
+            (ChatKind::RaidWarning, "w".into()),
+            (ChatKind::Party, "p".into()),
+        ]
+    );
+    assert!(refused.is_empty());
+
+    // Someone else leads: both go out plain.
+    let (sent, _, _) = group_chat_sends(raid_group(2, 2), lines);
+    assert_eq!(sent[0], (ChatKind::Raid, "r".into()));
+    assert_eq!(sent[1], (ChatKind::Battleground, "b".into()));
+
+    // No leader known and no own guid: a zero matches nobody.
+    let mut unknown = raid_group(0, 0);
+    unknown.own_guid = 0;
+    let (sent, _, _) = group_chat_sends(unknown, r#"SendChatMessage("r", "RAID")"#);
+    assert_eq!(sent, vec![(ChatKind::Raid, "r".into())]);
 }

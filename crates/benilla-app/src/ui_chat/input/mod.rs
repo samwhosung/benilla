@@ -1436,6 +1436,29 @@ fn auto_clear_afk(cvars: &crate::cvars::Cvars) -> bool {
     cvars.flag("autoClearAFK").unwrap_or(true)
 }
 
+/// `SendChatMessage`'s group arms (`0x49f33e`-`0x49f4c7`): the refusal a type meets without its
+/// group, as a message key (`DisplayError` `0x496720`), or the type that goes out. PARTY needs a
+/// party member (id 0x48, `ERR_NOT_IN_GROUP`); RAID, RAID_WARNING and BATTLEGROUND need a raid
+/// (0x19c, `ERR_NOT_IN_RAID`); RAID_WARNING also needs the leader or an assistant (0x4b,
+/// `ERR_NOT_LEADER`). The group leader's RAID goes out as RAID_LEADER (`0x49f3bf`) and its
+/// BATTLEGROUND as BATTLEGROUND_LEADER (`0x49f48b`).
+fn group_gate(
+    kind: super::edit::SendType,
+    group: benilla_ui::script::ChatGroup,
+) -> Result<super::edit::SendType, &'static str> {
+    use super::edit::SendType as T;
+    match kind {
+        T::Party if !group.in_party => Err("ERR_NOT_IN_GROUP"),
+        T::Raid | T::RaidWarning | T::Battleground if group.raid_members == 0 => {
+            Err("ERR_NOT_IN_RAID")
+        }
+        T::RaidWarning if !group.leads_or_assists => Err("ERR_NOT_LEADER"),
+        T::Raid if group.leads => Ok(T::RaidLeader),
+        T::Battleground if group.leads => Ok(T::BattlegroundLeader),
+        other => Ok(other),
+    }
+}
+
 /// Turn `SendChatMessage` calls into sends. No slash grammar runs here: an addon sending
 /// `"/dance"` says six characters. An empty line of any type but AFK and DND sends nothing and
 /// prints nothing.
@@ -1451,19 +1474,29 @@ pub(super) fn drain_addon_chat_sends(
     self_q: Query<&crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     // The joined slots a `CHANNEL` target's number names.
     channels: Res<super::edit::ChannelState>,
+    mut errors: ResMut<crate::ui_action::UiErrorKeys>,
 ) {
     let Some(mut script) = script else {
         return;
     };
     for mut send in script.take_chat_sends() {
         // The binding has raised on any other token (`0x49f27f`), so none reaches here.
-        let Some(kind) = super::edit::SendType::from_token(&send.chat_type) else {
+        let Some(mut kind) = super::edit::SendType::from_token(&send.chat_type) else {
             continue;
         };
         // An empty line of any type but AFK and DND ends the call here, ahead of the target
         // checks, the AFK clear and the tutorial acknowledge (`0x49f2a1`).
         if send.ends_at_empty_line() {
             continue;
+        }
+        // The group gates and the leader promotion, ahead of the AFK clear and the tutorial
+        // acknowledge, which a refused line never reaches.
+        match group_gate(kind, script.chat_group()) {
+            Ok(promoted) => kind = promoted,
+            Err(key) => {
+                errors.0.push(crate::ui_action::UiError::key(key));
+                continue;
+            }
         }
         // A channel target is a slot number, sent as that slot's name; with no such slot the call
         // ends here (`0x49f4ea`), ahead of the AFK clear and the tutorial acknowledge.

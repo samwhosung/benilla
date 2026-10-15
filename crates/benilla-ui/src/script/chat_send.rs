@@ -1,6 +1,7 @@
 //! `SendChatMessage(text [, chatType [, language [, target]]])` (`0x49f1e0`): the engine verb an
 //! addon speaks through, with no FrameXML between it and the wire. `chatType` defaults to
-//! `"SAY"`; the fourth argument is the whisper target or the channel's number.
+//! `"SAY"`, also when it is not a string or a number; the fourth argument is the whisper target or
+//! the channel's number.
 //!
 //! The call raises where the reference does, ahead of anything queued: a string `chatType` outside
 //! [`SEND_CHAT_TOKENS`] raises `Unknown chat type` (`0x49f27f`), and past the empty-line gate and
@@ -95,6 +96,45 @@ fn ends_at_empty_line(text: &str, chat_type: &str) -> bool {
     text.bytes().next().unwrap_or(0) == 0 && !matches!(chat_type, "AFK" | "DND")
 }
 
+/// What `SendChatMessage` reads of the group before it sends: the party, raid and leader tests of
+/// `0x49f343`-`0x49f4b2`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChatGroup {
+    /// The first party GUID `[0xbc6f48]` is non-zero (`0x49f343`).
+    pub in_party: bool,
+    /// The raid member count `[0xb713e0]` (`0x49f379`).
+    pub raid_members: usize,
+    /// The player's GUID is the group leader's `[0xbc75f8]` (`0x49f3a4`, `0x49f463`): a party
+    /// leader leads too, and a zero GUID matches nobody.
+    pub leads: bool,
+    /// `IsRaidLeaderOrAssistant` (`0x4bb080`) on the player: a raid member of rank above 0, or the
+    /// leader.
+    pub leads_or_assists: bool,
+}
+
+impl super::UiScript {
+    /// The group facts `SendChatMessage`'s gates and leader promotion read.
+    pub fn chat_group(&self) -> ChatGroup {
+        let model = self.model_ref();
+        let party = &model.party;
+        let own = party.own_guid;
+        let leads = own != 0 && own == party.leader_guid;
+        // `0x4bb080`: a zero GUID or one off the roster fails; a member above rank 0 passes, and
+        // one at rank 0 passes only as the group leader.
+        let leads_or_assists = party
+            .raid
+            .iter()
+            .find(|m| own != 0 && m.guid == own)
+            .is_some_and(|m| m.rank > 0 || leads);
+        ChatGroup {
+            in_party: party.members.first().is_some_and(|m| m.guid != 0),
+            raid_members: party.raid.len(),
+            leads,
+            leads_or_assists,
+        }
+    }
+}
+
 impl super::UiScript {
     /// Push `Languages.dbc` as `(ID, Name_lang)` rows in file order, the table `SendChatMessage`
     /// matches its language name against (`[0xc0db40]`, count `[0xc0db44]`).
@@ -178,8 +218,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "SendChatMessage",
         lua.create_function(
-            |lua, (text, chat_type, language, target): (String, Option<String>, Value, Value)| {
-                let chat_type = chat_type
+            |lua, (text, chat_type, language, target): (String, Value, Value, Value)| {
+                // `lua_isstring(2)` (`0x49f25c`): anything that is not a string or a number leaves
+                // the type at 0, SAY (`0x49f255`).
+                let chat_type = super::binding_abi::optional_string(lua, &chat_type)
                     .unwrap_or_else(|| "SAY".into())
                     .to_ascii_uppercase();
                 // The type check precedes the empty-line gate (`0x49f276`-`0x49f285`).
@@ -336,6 +378,66 @@ mod tests {
             call(&s, &args).expect(token);
         }
         assert_eq!(s.take_chat_sends().len(), SEND_CHAT_TOKENS.len());
+    }
+
+    /// `lua_isstring(2)` (`0x49f25c`) refuses anything but a string or a number, which leaves the
+    /// type at SAY (`0x49f255`): no error, no conversion failure.
+    #[test]
+    fn a_chat_type_that_is_no_string_is_say() {
+        let mut s = UiScript::new().unwrap();
+        for ty in ["nil", "true", "false", "{}", "print"] {
+            call(&s, &format!(r#""hi", {ty}"#)).unwrap_or_else(|e| panic!("{ty}: {e}"));
+        }
+        let sent = s.take_chat_sends();
+        assert_eq!(sent.len(), 5);
+        assert!(sent.iter().all(|c| c.chat_type == "SAY"), "{sent:?}");
+    }
+
+    /// `0x4bb080` and the leader compares (`0x49f3a4`, `0x49f463`).
+    #[test]
+    fn the_group_facts_follow_the_references_tests() {
+        use crate::script::{PartyMemberInfo, PartyState, RaidMemberInfo};
+        let member = |guid, rank| RaidMemberInfo {
+            guid,
+            rank,
+            ..Default::default()
+        };
+        let mut s = UiScript::new().unwrap();
+        assert_eq!(s.chat_group(), ChatGroup::default(), "ungrouped");
+        let state = |own, leader, rank| PartyState {
+            members: vec![PartyMemberInfo {
+                name: "B".into(),
+                guid: 2,
+            }],
+            own_guid: own,
+            leader_guid: leader,
+            raid: vec![member(own, rank), member(2, 0)],
+            ..Default::default()
+        };
+        s.set_party(state(1, 9, 0));
+        let g = s.chat_group();
+        assert!(g.in_party && g.raid_members == 2);
+        assert!(!g.leads && !g.leads_or_assists, "a plain member");
+        s.set_party(state(1, 9, 1));
+        let g = s.chat_group();
+        assert!(!g.leads && g.leads_or_assists, "an assistant");
+        s.set_party(state(1, 1, 0));
+        let g = s.chat_group();
+        assert!(g.leads && g.leads_or_assists, "the leader at rank 0");
+        let mut off_roster = state(1, 1, 0);
+        off_roster.raid = vec![member(2, 2)];
+        s.set_party(off_roster);
+        let g = s.chat_group();
+        assert!(
+            g.leads && !g.leads_or_assists,
+            "`0x4bb080` fails off the roster"
+        );
+        s.set_party(state(0, 0, 0));
+        let g = s.chat_group();
+        assert!(
+            !g.leads && !g.leads_or_assists,
+            "a zero guid matches nobody"
+        );
     }
 
     /// `0x49f310`-`0x49f32b` and `0x49f4ca`-`0x49f4d6`, `0x49f535`: a WHISPER or CHANNEL whose
