@@ -320,16 +320,23 @@ const CACHE_MAGIC: &str = "benilla-namecache";
 const CACHE_FORMAT: u32 = 2;
 /// The client build, the reference's `0x16f3`.
 const CACHE_BUILD: u32 = 5875;
-/// In the header as in the reference's: the server names creatures in the locale the logon
-/// challenge sends, which benilla-protocol's `auth.rs` fixes at enUS.
-const CACHE_LOCALE: &str = "enUS";
+/// The header's locale, the client's locale tag as each `.wdb` header carries it (`[0xc2a2a4]`,
+/// written at `0x5567d9` and compared at `0x5573c6`): the server names creatures in the locale the
+/// logon challenge sent, so a cache from another locale is discarded. Its four bytes as text,
+/// `enGB`; empty for tag 0, an install with no `Wow.ini` locale.
+fn cache_locale() -> String {
+    let tag = crate::ui_script::client_locale().tag().to_be_bytes();
+    String::from_utf8_lossy(&tag)
+        .trim_start_matches('\0')
+        .to_string()
+}
 
 impl NameCache {
     /// Serialize as TSV: the header line, then one line per creature record. In-flight asks are
     /// not written.
     pub(crate) fn to_tsv(&self, realm: &str) -> String {
-        let mut out =
-            format!("{CACHE_MAGIC}\t{CACHE_FORMAT}\t{CACHE_BUILD}\t{CACHE_LOCALE}\t{realm}\n");
+        let locale = cache_locale();
+        let mut out = format!("{CACHE_MAGIC}\t{CACHE_FORMAT}\t{CACHE_BUILD}\t{locale}\t{realm}\n");
         for (entry, rec) in self.creatures.iter() {
             match rec {
                 Some(r) => out.push_str(&format!(
@@ -359,7 +366,7 @@ impl NameCache {
             || header[0] != CACHE_MAGIC
             || header[1] != CACHE_FORMAT.to_string()
             || header[2] != CACHE_BUILD.to_string()
-            || header[3] != CACHE_LOCALE
+            || header[3] != cache_locale()
             || header[4] != realm
         {
             return None;
@@ -787,6 +794,16 @@ mod tests {
         // The realm: our field, not the reference's.
         assert!(NameCache::from_tsv(&good, "Another Realm").is_none());
 
+        // The locale field is the client's tag, as the reference's `.wdb` header holds it.
+        let tag = crate::ui_script::client_locale().tag().to_be_bytes();
+        let spelled = String::from_utf8_lossy(&tag)
+            .trim_start_matches('\0')
+            .to_string();
+        assert_eq!(
+            good.lines().next().unwrap().split('\t').nth(3),
+            Some(&*spelled)
+        );
+
         let head = good.lines().next().unwrap();
         for (field, bad) in [
             (0, "not-benilla"),
@@ -811,8 +828,9 @@ mod tests {
 
         // A version-1 file, which held player names, is discarded whole.
         let v1 = format!(
-            "{CACHE_MAGIC}\t1\t{CACHE_BUILD}\t{CACHE_LOCALE}\tHydraxian Waterlords\n\
-             P\t7\t1\t1\t0\tMoamtester\n"
+            "{CACHE_MAGIC}\t1\t{CACHE_BUILD}\t{}\tHydraxian Waterlords\n\
+             P\t7\t1\t1\t0\tMoamtester\n",
+            cache_locale()
         );
         assert!(NameCache::from_tsv(&v1, "Hydraxian Waterlords").is_none());
     }
