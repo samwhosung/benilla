@@ -76,13 +76,15 @@ pub(crate) fn tag_for_load(lua: &Lua, f: &Function) {
     }
 }
 
-/// The addon a chunk name belongs to: `@Interface\AddOns\<Folder>\<file>`
-/// ([`super::addon_chunk_name`]), and only while that addon is registered and insecure, since a
+/// The addon a chunk name belongs to: `Interface\AddOns\<Folder>\<file>`, a file chunk's with its
+/// `@` ([`super::addon_chunk_name`]) or an XML document's inline `<Script>` block's without
+/// (`<path>:<Scripts>`, `0x871074`), and only while that addon is registered and insecure, since a
 /// secure one runs under context 0 (`0x51f37e`-`0x51f387`). The registry row's own spelling of the
 /// name is the context word. No code runs from a folder the registry lacks, so one is not an
 /// addon's, and benilla's own layer, which names its chunks that way, stays the client's.
 fn addon_of_chunk(model: &Model, source: &str) -> Option<String> {
-    let rest = source.strip_prefix("@Interface\\AddOns\\")?;
+    let path = source.strip_prefix('@').unwrap_or(source);
+    let rest = path.strip_prefix("Interface\\AddOns\\")?;
     let folder = rest.split_once('\\')?.0;
     let row = model
         .addons

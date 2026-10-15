@@ -19,9 +19,15 @@ fn walker(security: AddonSecurity) -> UiScript {
         ),
         (
             "Interface/AddOns/Walker/Walker.xml",
-            r#"<Ui><Button name="WalkerButton"><Scripts>
+            r#"<Ui><Script>function Walker_Inline() ToggleRun() end</Script>
+            <Script file="Extra.lua"/>
+            <Button name="WalkerButton"><Scripts>
                 <OnClick>ToggleRun()</OnClick>
             </Scripts></Button></Ui>"#,
+        ),
+        (
+            "Interface/AddOns/Walker/Extra.lua",
+            "function Walker_Extra() Jump() end",
         ),
         (
             "Interface/AddOns/Walker/Bindings.xml",
@@ -50,8 +56,11 @@ fn walker(security: AddonSecurity) -> UiScript {
         None,
     );
     s.note_addon_info_reply(&[]);
-    let core = bindings_xml::parse(r#"<Bindings><Binding name="JUMP">Jump()</Binding></Bindings>"#)
-        .unwrap();
+    let core = bindings_xml::parse(
+        r#"<Bindings><Binding name="JUMP">Jump()</Binding>
+            <Binding name="WALKINLINE">Walker_Inline()</Binding></Bindings>"#,
+    )
+    .unwrap();
     s.register_bindings(&core);
     // What UIParent.lua registers for: one listener, the events in order with `arg1`.
     s.run(
@@ -191,4 +200,27 @@ fn a_folder_the_registry_lacks_is_the_clients_own() {
     let name = crate::script::addon_chunk_name("walker", "Other.lua");
     s.run_chunk_named(b"Jump()", &name).unwrap();
     assert_eq!(events(&s), ["ADDON_ACTION_FORBIDDEN:Walker"]);
+}
+
+/// A function an insecure addon's XML defines in an inline `<Script>` block, or in a file the
+/// XML names, is its code: the chunk is named over the install path, `<path>:<Scripts>` with no `@`
+/// for the block (`0x871074`), and a stock key's binding that calls it is refused with the
+/// addon's name. A secure addon's is the client's.
+#[test]
+fn an_inline_script_block_of_an_insecure_addon_is_its_code() {
+    let mut s = walker(AddonSecurity::Insecure);
+    assert!(s.execute_binding("WALKINLINE", true).unwrap());
+    assert_eq!(events(&s), ["ADDON_ACTION_FORBIDDEN:Walker"]);
+    assert!(s.take_binding_input().is_empty());
+    // A Lua file the XML names is named over the install path too.
+    s.run("Walker_Extra()").unwrap();
+    assert_eq!(events(&s).len(), 2);
+
+    let mut s = walker(AddonSecurity::Secure);
+    assert!(s.execute_binding("WALKINLINE", true).unwrap());
+    assert!(events(&s).is_empty());
+    assert_eq!(
+        s.take_binding_input(),
+        vec![BindingInput::Fire(FiredInput::ToggleRun)]
+    );
 }
