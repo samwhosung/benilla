@@ -462,6 +462,14 @@ mod tests {
             "the mouseover and the NPC alone register nothing"
         );
         assert!(!guids().has_field_watchers(0));
+        // Our pet in no group table carries them by the pet's own flag, and only with a player.
+        let alone = UnitGuids {
+            player: ME,
+            pet: PET,
+            ..Default::default()
+        };
+        assert!(alone.has_field_watchers(PET));
+        assert!(!UnitGuids { player: 0, ..alone }.has_field_watchers(PET));
     }
 
     #[test]
