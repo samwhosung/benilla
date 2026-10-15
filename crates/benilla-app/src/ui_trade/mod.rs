@@ -388,6 +388,7 @@ pub(crate) fn open_window(world: &mut World) {
 /// release's `0x493310` runs this once more inside it (`0x493365`), so a direct close fires
 /// `TRADE_CLOSED` twice and sends the cancel twice.
 pub(crate) fn close_core(world: &mut World) {
+    drain_trade_touches(world);
     if let Some(partner) = world.resource::<TradeSession>().cell() {
         crate::ui_session::release(world, partner);
         world.resource_mut::<TradeSession>().close_window();
@@ -408,6 +409,7 @@ pub(crate) fn close_core(world: &mut World) {
 /// `TRADE_REQUEST_CANCEL` (`0x4bf832`), and each runs `UnlockTradeItems` (`0x4bf837`, `0x4bf859`,
 /// `0x4bf87e`) before the close core (`0x4bf842`, `0x4bf867`, `0x4bf89c`).
 pub(crate) fn server_close(world: &mut World, canceled: bool) {
+    drain_trade_touches(world);
     crate::ui_session::fire(world, |script| {
         // The statuses zero both offers before any of it (`0x5d4884`-`0x5d48a2`).
         script.zero_trade_gold();
@@ -443,6 +445,7 @@ impl Plugin for UiTradePlugin {
         // A UI-only harness has no net stack; declaring a message twice is idempotent.
         app.add_message::<crate::item_watch::ItemNotice>();
         app.init_resource::<TradeSession>()
+            .init_resource::<TradeTouchCursor>()
             .init_resource::<BlockTrades>()
             .add_latched_window::<TradeSession>()
             .add_sweep_leg(SweepLeg::Trade, cancel_trade_on_leave_world)
@@ -740,6 +743,27 @@ fn snapshot(
     })
 }
 
+/// Where the trade scan has read the item notices to, shared by its scheduled run and the close
+/// paths' early one so no notice is scanned twice.
+#[derive(Resource, Default)]
+pub(crate) struct TradeTouchCursor(
+    bevy::ecs::message::MessageCursor<crate::item_watch::ItemNotice>,
+);
+
+/// Run the trade scan ([`resignal_trade_items`]) on the notices not yet read, ahead of a close: the
+/// destroys of the traded items arrive before the close in the packet stream, and their scan ran
+/// at their turn in the reference.
+fn drain_trade_touches(world: &mut World) {
+    if world.get_resource::<TradeTouchCursor>().is_none()
+        || world
+            .get_resource::<Messages<crate::item_watch::ItemNotice>>()
+            .is_none()
+    {
+        return;
+    }
+    let _ = world.run_system_cached(resignal_trade_items);
+}
+
 /// The item watchers' trade half, after the action bar's recount in each handler: an item of
 /// ours that one of our slots holds re-signals the slot (`0x4bfb10`, `0x4bfb60` into `0x4bfa70`).
 /// Gone, the slot clears with `CMSG_CLEAR_TRADE_ITEM` (`0x5d4480`), as a click's clear does;
@@ -747,9 +771,16 @@ fn snapshot(
 /// position it was placed from (`0x5d4380`), our session's offer left as it is. vmangos refuses an
 /// item its trade already holds and cancels the trade (`TradeHandler.cpp:716-720`), as it does
 /// for the reference's send. Neither scan asks whether a trade is open.
+///
+/// The scan reads the notices through [`TradeTouchCursor`], which the close paths share
+/// ([`drain_trade_touches`]): vmangos sends the traded items' destroys before `TRADE_COMPLETE`
+/// (`TradeHandler.cpp:469`, `Player.cpp:10710`, then `:526`), the destroy releases at once
+/// (`0x4674cf` → `0x464920`), so the clears and `TRADE_PLAYER_ITEM_CHANGED` belong ahead of the
+/// close, not a stage after it.
 fn resignal_trade_items(
     script: Option<NonSendMut<UiScript>>,
-    mut notices: MessageReader<crate::item_watch::ItemNotice>,
+    mut cursor: ResMut<TradeTouchCursor>,
+    messages: Res<Messages<crate::item_watch::ItemNotice>>,
     mut trade: ResMut<TradeSession>,
     commands: Res<NetCommands>,
     objects: Objects,
@@ -757,8 +788,9 @@ fn resignal_trade_items(
     icons: Option<Res<ItemDisplays>>,
 ) {
     use crate::item_watch::TradeTouch;
-    let touches: Vec<TradeTouch> = notices
-        .read()
+    let touches: Vec<TradeTouch> = cursor
+        .0
+        .read(&messages)
         .filter_map(crate::item_watch::ItemNotice::trade)
         .collect();
     let Some(mut script) = script else {
@@ -1435,6 +1467,7 @@ mod tests {
             .init_resource::<Items>()
             .init_resource::<crate::ui_action::UiErrorKeys>()
             .init_resource::<GuidIndex>()
+            .init_resource::<TradeTouchCursor>()
             .add_message::<crate::item_watch::ItemNotice>()
             .insert_resource(names)
             .insert_resource(NetCommands(tx));
@@ -2806,6 +2839,56 @@ mod tests {
         assert!(rx.try_iter().next().is_none());
         assert!(seen(&mut app).is_empty());
         assert_eq!(app.world().resource::<TradeSession>().own_edits, 2);
+    }
+
+    /// vmangos sends the traded items' destroys before `TRADE_COMPLETE`, and the destroy releases
+    /// the item at its packet (`0x4674cf` → `0x464920`), so the slot clears and signals while the
+    /// window is still open: by `TRADE_CLOSED` the slot is empty, once, and the later scheduled
+    /// scan finds nothing left to read.
+    #[test]
+    fn a_traded_away_item_clears_its_slot_before_trade_closed() {
+        let (mut app, rx) = resignal_app();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                "READS = {} local f = CreateFrame('Frame') f:RegisterEvent('TRADE_CLOSED') \
+                 f:SetScript('OnEvent', function() \
+                     table.insert(READS, tostring((GetTradePlayerItemInfo(1)))) end)",
+            )
+            .unwrap();
+        // The packets of one drain: the destroy's notice, then the status, with no frame between.
+        app.world_mut()
+            .resource_mut::<Messages<crate::item_watch::ItemNotice>>()
+            .write(crate::item_watch::ItemNotice::Destroyed {
+                guid: LINEN,
+                entry: 2589,
+            });
+        status(&mut app, TradeStatus::Complete);
+        assert_eq!(
+            seen(&mut app),
+            ["TRADE_PLAYER_ITEM_CHANGED", "TRADE_CLOSED", "TRADE_CLOSED"],
+            "the clear signals ahead of the close"
+        );
+        let reads: Vec<String> = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return READS")
+            .unwrap();
+        assert_eq!(
+            reads,
+            ["nil", "nil"],
+            "and the handler finds the slot empty"
+        );
+        app.update();
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert_eq!(
+            sent.iter()
+                .filter(|c| matches!(c, ClientCommand::ClearTradeItem { .. }))
+                .count(),
+            1,
+            "scanned once: {sent:?}"
+        );
+        assert!(seen(&mut app).is_empty());
     }
 
     /// `0x4bfb60` from the stack and enchantment watchers: the same item placed again from its
