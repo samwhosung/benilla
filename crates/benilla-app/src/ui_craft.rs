@@ -221,6 +221,11 @@ fn feed_craft(
                     tooltip: craft_tooltip(s, d),
                     // `spellLevel` at `+0x74` (column 29), not `baseLevel` (column 28).
                     spell_level: d.spell_level,
+                    // The group key is the ability row's line (`0x4f61b1`).
+                    skill_line: skill_lines
+                        .catalog
+                        .line(sla.skill_id)
+                        .map(|l| l.name.clone()),
                 })
             })
             .collect();

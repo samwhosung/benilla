@@ -1149,6 +1149,7 @@ fn the_feed_pushes_the_spells_the_vm_holds_before_a_hover() {
             reagents: vec![],
             tools: vec![],
             spell_level: 0,
+            skill_line: None,
         }],
     }));
     // We target a mob that targets party1, whose list the VM holds by guid.

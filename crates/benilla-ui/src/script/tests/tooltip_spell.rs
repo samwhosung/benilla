@@ -817,6 +817,7 @@ fn set_craft_spell_selects_the_builder_like_the_trainer_hover_does() {
         reagents: vec![],
         tools: vec![],
         spell_level: 0,
+        skill_line: None,
     };
     s.set_craft(Some(CraftState {
         name: "Enchanting".into(),
@@ -1070,6 +1071,7 @@ fn craft_recipe(spell_id: u32, name: &str, tooltip: CraftTooltip) -> CraftRecipe
         reagents: vec![],
         tools: vec![],
         spell_level: 0,
+        skill_line: None,
     }
 }
 

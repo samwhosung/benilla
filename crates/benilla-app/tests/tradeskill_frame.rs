@@ -534,6 +534,7 @@ fn a_hovered_or_selected_craft_row_paints_its_label_white() {
         tools: vec![],
         tooltip: CraftTooltip::Spell(spell_id),
         spell_level: 0,
+        skill_line: None,
     };
     s.set_craft(Some(CraftState {
         name: "Enchanting".into(),
