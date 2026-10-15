@@ -167,48 +167,56 @@ fn coin_text(copper: u32, get: &dyn Fn(&str) -> String) -> String {
         .join(", ")
 }
 
+/// A cached quest template with only its id, title and next step set, for a test.
+#[cfg(test)]
+pub(crate) fn test_template(
+    quest_id: u32,
+    title: &str,
+    next_quest_in_chain: u32,
+) -> benilla_protocol::messages::QuestTemplate {
+    use benilla_protocol::messages::{QuestObjective, QuestTemplate};
+    let objective = || QuestObjective {
+        creature_or_go: 0,
+        required_count: 0,
+        item_id: 0,
+        item_count: 0,
+        text: String::new(),
+    };
+    QuestTemplate {
+        quest_id,
+        method: 2,
+        level: 1,
+        zone_or_sort: 12,
+        quest_type: 0,
+        rep_objective_faction: 0,
+        rep_objective_value: 0,
+        next_quest_in_chain,
+        money: 0,
+        money_max_level: 0,
+        reward_spell: 0,
+        src_item_id: 0,
+        flags: 0,
+        rewards: [(0, 0); 4],
+        choices: [(0, 0); 6],
+        point_map_id: 0,
+        point_x: 0.0,
+        point_y: 0.0,
+        point_opt: 0,
+        title: title.into(),
+        objectives_text: String::new(),
+        details: String::new(),
+        end_text: String::new(),
+        objectives: std::array::from_fn(|_| objective()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use benilla_protocol::messages::{QuestObjective, QuestTemplate};
 
     use crate::net::ClientCommand;
 
-    fn template(quest_id: u32, title: &str, next_quest_in_chain: u32) -> QuestTemplate {
-        let objective = || QuestObjective {
-            creature_or_go: 0,
-            required_count: 0,
-            item_id: 0,
-            item_count: 0,
-            text: String::new(),
-        };
-        QuestTemplate {
-            quest_id,
-            method: 2,
-            level: 1,
-            zone_or_sort: 12,
-            quest_type: 0,
-            rep_objective_faction: 0,
-            rep_objective_value: 0,
-            next_quest_in_chain,
-            money: 0,
-            money_max_level: 0,
-            reward_spell: 0,
-            src_item_id: 0,
-            flags: 0,
-            rewards: [(0, 0); 4],
-            choices: [(0, 0); 6],
-            point_map_id: 0,
-            point_x: 0.0,
-            point_y: 0.0,
-            point_opt: 0,
-            title: title.into(),
-            objectives_text: String::new(),
-            details: String::new(),
-            end_text: String::new(),
-            objectives: std::array::from_fn(|_| objective()),
-        }
-    }
+    use super::test_template as template;
 
     /// The feed alone, over a VM holding the stock enUS templates.
     fn app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {

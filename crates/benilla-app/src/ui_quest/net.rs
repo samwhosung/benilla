@@ -84,15 +84,25 @@ fn on_offer(In(ev): In<SessionEvent>, mut commands: Commands) {
     }
 }
 
+/// The turn-in's tail (`0x5dc6d0`-`0x5dc6e9`): `0x501130(next, 0)`, where `next` is whether the
+/// quest's cached record names a quest that follows (`+0x24`). A chain's next step leaves the
+/// panel up, for the server's next panel; a miss or a last step closes it.
 fn on_complete(
     In(ev): In<SessionEvent>,
     mut quest: ResMut<QuestGiver>,
     mut lines: ResMut<QuestLines>,
+    quest_log: Res<QuestLog>,
+    net_commands: Res<NetCommands>,
     mut commands: Commands,
 ) {
     if let SessionEvent::QuestComplete(c) = ev {
+        let chained = quest_log
+            .template(c.quest_id, &net_commands)
+            .is_some_and(|t| t.next_quest_in_chain != 0);
         quest_complete(c, &mut quest, &mut lines);
-        crate::ui_session::queue(&mut commands, close_without_report);
+        if !chained {
+            crate::ui_session::queue(&mut commands, close_without_report);
+        }
     }
 }
 
@@ -161,8 +171,8 @@ fn on_giver_failed(
     }
 }
 
-/// The handlers' close, `0x501130(0, 0)`: the turn-in (`0x5dc6e9`) and the two refusals
-/// (`0x5dbd03`, `0x5dc8bc`-`0x5dc911`).
+/// The handlers' close, `0x501130(0, 0)`: the turn-in of a quest with no next step (`0x5dc6e5`)
+/// and the two refusals (`0x5dbd03`, `0x5dc8bc`-`0x5dc911`).
 fn close_without_report(world: &mut World) {
     super::close_core(world, false);
 }
@@ -538,7 +548,42 @@ mod tests {
                 None,
                 "{name}"
             );
-            assert!(rx.try_iter().next().is_none(), "no decline owed: {name}");
+            assert!(
+                !rx.try_iter()
+                    .any(|c| matches!(c, ClientCommand::QuestPushResult { .. })),
+                "no decline owed: {name}"
+            );
+        }
+    }
+
+    /// A turn-in whose cached record names a next step (`+0x24`) calls `0x501130(1, 0)`
+    /// (`0x5dc6de`), which returns at once (`0x5011e9`): the panel stays for the chain's next one.
+    #[test]
+    fn a_chained_turn_in_leaves_the_panel_up() {
+        use bevy::ecs::system::RunSystemOnce;
+        const NPC: u64 = 0xF130_0000_0000_0007;
+        for (next, open) in [(201, true), (0, false)] {
+            let (mut world, _rx) = quest_world();
+            world.init_resource::<QuestLines>();
+            world.init_resource::<crate::ui_session::InteractLatch>();
+            let mut log = QuestLog::default();
+            log.insert_template(crate::ui_quest::lines::test_template(200, "Step", next));
+            world.insert_resource(log);
+            quest_detail(&mut world, detail(NPC, 200));
+            let _ = world.run_system_once_with(
+                on_complete,
+                SessionEvent::QuestComplete(QuestComplete {
+                    quest_id: 200,
+                    xp: 0,
+                    money: 0,
+                    items: vec![],
+                }),
+            );
+            assert_eq!(
+                world.resource::<QuestGiver>().is_open(),
+                open,
+                "next step {next}"
+            );
         }
     }
 
