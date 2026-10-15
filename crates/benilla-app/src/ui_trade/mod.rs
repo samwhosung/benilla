@@ -1,5 +1,6 @@
 //! The trade window: [`net`] folds the two status packets into [`TradeSession`], [`feed_trade`]
-//! pushes it into the VM and fires the trade events, [`drain_trade`] sends the Lua intents, and
+//! pushes it into the VM and fires the trade events, [`drain_trade`] sends the Lua intents,
+//! [`run_record_callbacks`] signals `TRADE_UPDATE` when a record a getter asked for lands, and
 //! [`answer_trade_request`] answers an incoming request.
 
 use benilla_protocol::messages::{TradeItem, TradeStatusExtended, TRADE_SLOT_COUNT};
@@ -876,8 +877,9 @@ fn feed_trade(
         script.set_trade(pushed);
     }
     // The per-slot events the stock `TradeFrame.lua` repaints one slot on, arg1 the 1-based slot
-    // (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player); the reference also fires the
-    // full `TRADE_UPDATE` (`0x4c034f`).
+    // (`0x4bf414`/`0x4bf452` target, `0x4bf487`/`0x4bfaef` player). An offer change signals
+    // nothing else: `TRADE_UPDATE` has one producer, the getters' record callback
+    // ([`run_record_callbacks`]).
     // `InvalidateTradeSlot` (`0x4bfbd0`) on our slots: the unlock and its own
     // `TRADE_PLAYER_ITEM_CHANGED`, which the diff below then skips.
     let invalidated = trade.take_invalidated();
@@ -962,8 +964,6 @@ fn feed_trade(
             script.fire_event("PLAYER_MONEY", vec![]);
         }
         script.fire_event("TRADE_SHOW", vec![]);
-    } else if trade.is_open() && changed {
-        script.fire_event("TRADE_UPDATE", vec![]);
     }
 
     // `TRADE_ACCEPT_UPDATE(mine, theirs)` on any change while open.
@@ -1003,9 +1003,37 @@ fn feed_trade(
     *last_open = trade.is_open();
 }
 
-/// Drain the Lua intents into the trade `CMSG`s; `CloseTrade` runs the close core.
+/// `TRADE_UPDATE`, whose one producer is the callback `0x4c0340` (`0x4c034f`) that the item
+/// getters register when they find a filled slot whose template the cache lacks (`0x4c017f`,
+/// `0x4c0582` into `0x55ba30`). A hit never calls it. Each such getter call registers one
+/// callback, with no dedupe (`0x55bbb3`), and each runs when the record lands, for a ready record
+/// only; a refusal frees them silent. The asks the script queued are registered here, after its
+/// tick, and the landed records ([`crate::item_watch::ItemNotice::TradeRecord`]) signal, after
+/// the feed pushed the answered rows. The waiters are the getters' own asks, which a frameless VM
+/// never makes.
+fn run_record_callbacks(
+    script: &mut UiScript,
+    items: &Items,
+    notices: &mut MessageReader<crate::item_watch::ItemNotice>,
+) {
+    for entry in script.take_trade_record_asks() {
+        // An answered entry is never asked again, so nothing could run its callback.
+        if items.template_cached(entry).is_none() && !items.template_answered_unknown(entry) {
+            items.wait_for_trade_record(entry);
+        }
+    }
+    for notice in notices.read() {
+        if matches!(notice, crate::item_watch::ItemNotice::TradeRecord { .. }) {
+            script.fire_event("TRADE_UPDATE", vec![]);
+        }
+    }
+}
+
+/// Drain the Lua intents into the trade `CMSG`s; `CloseTrade` runs the close core. The item
+/// getters' record callbacks ([`run_record_callbacks`]) ride the same after-the-tick pass.
 fn drain_trade(
     script: Option<NonSendMut<UiScript>>,
+    mut notices: MessageReader<crate::item_watch::ItemNotice>,
     mut trade: ResMut<TradeSession>,
     mut world_commands: Commands,
     commands: Res<NetCommands>,
@@ -1018,6 +1046,7 @@ fn drain_trade(
     let Some(mut script) = script else {
         return;
     };
+    run_record_callbacks(&mut script, &items, &mut notices);
     // Our bag contents, for the own-column item resolve.
     let store = self_q.iter().next();
 
@@ -1361,6 +1390,7 @@ mod tests {
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<GuidIndex>()
+            .add_message::<crate::item_watch::ItemNotice>()
             .insert_resource(NetCommands(tx))
             .insert_resource(Selection {
                 target: None,
@@ -1400,6 +1430,7 @@ mod tests {
             .init_resource::<Items>()
             .init_resource::<crate::ui_action::UiErrorKeys>()
             .init_resource::<GuidIndex>()
+            .add_message::<crate::item_watch::ItemNotice>()
             .insert_resource(names)
             .insert_resource(NetCommands(tx));
         app.insert_non_send_resource(UiScript::new().unwrap());
@@ -2043,6 +2074,7 @@ mod tests {
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<GuidIndex>()
+            .add_message::<crate::item_watch::ItemNotice>()
             .insert_resource(NetCommands(tx))
             .insert_resource(Selection::default());
         let mut vm = UiScript::new().unwrap();
@@ -2085,6 +2117,7 @@ mod tests {
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<GuidIndex>()
+            .add_message::<crate::item_watch::ItemNotice>()
             .insert_resource(NetCommands(tx))
             .insert_resource(Selection::default());
         app.insert_non_send_resource(UiScript::new().unwrap());
@@ -2135,6 +2168,7 @@ mod tests {
             .init_resource::<GroupState>()
             .init_resource::<Items>()
             .init_resource::<GuidIndex>()
+            .add_message::<crate::item_watch::ItemNotice>()
             .insert_resource(NetCommands(tx))
             .insert_resource(Selection::default());
         let mut vm = UiScript::new().unwrap();
@@ -2397,6 +2431,117 @@ mod tests {
         app.update();
         assert_eq!(read(&app), "nil/nil/0", "the open cleared both");
         assert_eq!(holding(&app), None, "and the item table");
+    }
+
+    /// `TRADE_UPDATE` has one producer, the getters' record callback `0x4c0340` (`0x4c034f`): an
+    /// offer or gold change signals its slot and money events and nothing else, and a getter
+    /// that finds an unanswered template is called back once per call when the record lands,
+    /// to a handler that now reads it answered. A getter that hits is never called back.
+    #[test]
+    fn trade_update_comes_only_from_a_landed_record_a_getter_asked_for() {
+        use crate::item_watch::ItemNotice;
+        let (mut app, _rx) = feed_app();
+        app.add_systems(Update, drain_trade.after(feed_trade))
+            .init_resource::<Selection>()
+            .init_resource::<GroupState>();
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(
+                r#"
+                UPDATES, SLOTS, SEEN = 0, 0, {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("TRADE_UPDATE")
+                f:RegisterEvent("TRADE_TARGET_ITEM_CHANGED")
+                f:SetScript("OnEvent", function()
+                    if event == "TRADE_UPDATE" then
+                        UPDATES = UPDATES + 1
+                        table.insert(SEEN, tostring((GetTradeTargetItemInfo(1))))
+                    else
+                        SLOTS = SLOTS + 1
+                    end
+                end)
+                "#,
+            )
+            .unwrap();
+        open_with(&mut app, 0x7);
+        app.update();
+        let counts = |app: &App| -> (i64, i64) {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval("return UPDATES, SLOTS")
+                .unwrap()
+        };
+        let offer = |app: &mut App, gold: u32| {
+            let mut theirs = [None; TRADE_SLOT_COUNT];
+            theirs[0] = Some(wire_item(4306));
+            app.world_mut()
+                .resource_mut::<TradeSession>()
+                .set_offer(&TradeStatusExtended {
+                    their_window: true,
+                    sequence: 7,
+                    gold,
+                    enchant_spell_id: 0,
+                    slots: theirs,
+                });
+            app.update();
+        };
+        offer(&mut app, 0);
+        offer(&mut app, 900);
+        assert_eq!(
+            counts(&app),
+            (0, 1),
+            "the slot event once, and no TRADE_UPDATE for the offer or the gold"
+        );
+
+        // Two getter calls on the unanswered slot register two callbacks (`0x55bbb3`).
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("GetTradeTargetItemInfo(1) GetTradeTargetItemInfo(1)")
+            .unwrap();
+        app.update();
+        assert_eq!(counts(&app).0, 0, "nothing signals until the record lands");
+
+        // The record lands as the object handlers write it: the cache, then one notice per waiter.
+        let waiting = {
+            let mut items = app.world_mut().resource_mut::<Items>();
+            items.insert_template(4306, Some(crate::items::test_template("Iron Sword")));
+            items.take_trade_waiters(4306)
+        };
+        assert_eq!(waiting, 2, "the drain registered one per call");
+        app.world_mut()
+            .resource_mut::<Messages<ItemNotice>>()
+            .write_batch(vec![ItemNotice::TradeRecord { entry: 4306 }; waiting]);
+        app.update();
+        assert_eq!(
+            counts(&app).0,
+            2,
+            "one TRADE_UPDATE per registered callback"
+        );
+        let seen: Vec<String> = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return SEEN")
+            .unwrap();
+        assert_eq!(
+            seen,
+            ["Iron Sword", "Iron Sword"],
+            "the handler reads the answered row"
+        );
+
+        // Answered now, a getter asks nothing and nothing signals.
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run("GetTradeTargetItemInfo(1)")
+            .unwrap();
+        app.update();
+        app.update();
+        assert_eq!(counts(&app).0, 2);
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Items>()
+                .take_trade_waiters(4306),
+            0
+        );
     }
 
     /// `ONLY_CONJURED` invalidates the slot (`0x4bf9fd` into `0x4bfbd0`): the item unlocks and

@@ -5,6 +5,7 @@
 
 use std::time::{Duration, Instant};
 
+use benilla_assets::LockRecover;
 use bevy::prelude::*;
 
 use benilla_protocol::{ItemInfo, ObjectFields};
@@ -374,6 +375,10 @@ pub(crate) struct Items {
     /// `(guid, entry)` of our items whose entry changed to one the cache missed, each waiting on
     /// the answer with the entry watcher's callback `0x5d96b0`, in request order.
     entry_waiters: Vec<(u64, u32)>,
+    /// The entry each trade getter call that missed the cache asked for, in call order: one
+    /// callback `0x4c0340` per call, with no dedupe (`0x4c017f`, `0x4c0582`). A lookup registers
+    /// it, so it is locked like the in-flight asks and registering takes `&self`.
+    trade_waiters: std::sync::Mutex<Vec<u32>>,
 }
 
 impl Items {
@@ -400,6 +405,23 @@ impl Items {
             !hit
         });
         taken
+    }
+
+    /// A trade getter missed the cache on `entry` and asked with the callback `0x4c0340`.
+    pub(crate) fn wait_for_trade_record(&self, entry: u32) {
+        self.trade_waiters.lock_recover().push(entry);
+    }
+
+    /// The answer for `entry` landed, or refused it: how many trade getter calls were waiting on
+    /// it, whose callbacks are spent either way.
+    pub(crate) fn take_trade_waiters(&mut self, entry: u32) -> usize {
+        let waiters = self
+            .trade_waiters
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner());
+        let before = waiters.len();
+        waiters.retain(|&e| e != entry);
+        before - waiters.len()
     }
 
     /// The item `guid` arrived: its queued enchant updates in arrival order, unlinked (`0x5ebde0`).
@@ -492,6 +514,10 @@ impl Items {
     pub(crate) fn clear_session(&mut self) {
         self.pending_enchant_times.clear();
         self.entry_waiters.clear();
+        self.trade_waiters
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.templates.clear_pending();
     }
 }

@@ -220,6 +220,13 @@ impl super::UiScript {
         });
     }
 
+    /// The entries the trade getters asked the item cache for since the last drain, one per call
+    /// that found a filled slot with no template: the host registers the callback `0x4c0340` on
+    /// each that is still unanswered.
+    pub fn take_trade_record_asks(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.model_mut().trade_record_asks)
+    }
+
     /// Drain the tokens `InitiateTrade` queued; the app sends `CMSG_INITIATE_TRADE` for each.
     pub fn take_trade_initiates(&mut self) -> Vec<String> {
         std::mem::take(&mut self.model_mut().trade_initiates)
@@ -279,6 +286,15 @@ impl Model {
                 .iter()
                 .flatten()
                 .any(|item| item.guid == guid)
+    }
+}
+
+/// What a getter's item-cache lookup leaves behind when the slot is filled and its template has
+/// not answered: a request carrying the callback `0x4c0340` (`0x4c017f`, `0x4c0582`), one per
+/// call. The host registers it and signals `TRADE_UPDATE` when the record lands.
+fn ask_record(model: &mut Model, slot: Option<&TradeSlotItem>) {
+    if let Some(slot) = slot.filter(|s| s.name.is_none()) {
+        model.trade_record_asks.push(slot.item_id);
     }
 }
 
@@ -477,8 +493,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetTradePlayerItemInfo",
         lua.create_function(|lua, Idx(id): Idx| {
             let slot = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
-                slot_at(&model, id, |t| &t.player)
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                let slot = slot_at(&model, id, |t| &t.player);
+                ask_record(&mut model, slot.as_ref());
+                slot
             };
             let Some(s) = slot else {
                 return Ok(super::binding_abi::tuple(&[
@@ -547,8 +565,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetTradeTargetItemInfo",
         lua.create_function(|lua, Idx(id): Idx| {
             let (slot, usable) = {
-                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 let slot = slot_at(&model, id, |t| &t.target);
+                ask_record(&mut model, slot.as_ref());
                 let usable = slot
                     .as_ref()
                     .is_none_or(|s| super::item_stats::item_usable_by_id(&model, s.item_id));
@@ -1016,6 +1035,37 @@ mod tests {
         );
         s.open_trade_window();
         assert_eq!(s.trade_slot_holding(0x2589), None, "the open clears it");
+    }
+
+    /// `0x4c017f` and `0x4c0582` ask the item cache with the callback that signals `TRADE_UPDATE`
+    /// when a getter finds a filled slot whose template has not answered: one ask per call, none
+    /// for an answered slot (a hit never calls it), an empty one or a link verb (no callback,
+    /// `0x4c03e5`).
+    #[test]
+    fn a_getter_that_finds_an_unanswered_template_asks_the_cache_once_per_call() {
+        let mut s = UiScript::new().unwrap();
+        let mut st = state();
+        st.target.slots[0] = Some(TradeSlotItem {
+            name: None,
+            ..item(4306, 1, 2)
+        });
+        st.player.slots[1] = Some(TradeSlotItem {
+            name: None,
+            ..item(2592, 1, 1)
+        });
+        s.set_trade(Some(st));
+        s.run(
+            "GetTradeTargetItemInfo(1) GetTradeTargetItemInfo(1) GetTradePlayerItemInfo(2) \
+             GetTradePlayerItemInfo(1) GetTradeTargetItemInfo(7) GetTradeTargetItemInfo(2) \
+             GetTradeTargetItemLink(1) GetTradePlayerItemLink(2)",
+        )
+        .unwrap();
+        assert_eq!(
+            s.take_trade_record_asks(),
+            [4306, 4306, 2592],
+            "each unanswered call, in call order; the named slots, the empty one and the links ask nothing"
+        );
+        assert!(s.take_trade_record_asks().is_empty(), "drained");
     }
 
     #[test]

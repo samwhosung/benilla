@@ -931,6 +931,9 @@ pub(crate) struct Model {
     /// The partner cell `[0xb71728]` is set: the window is open. Nothing but the checks that test
     /// the cell first (`0x4bfd20`) reads it.
     pub(crate) trade_window: bool,
+    /// The entries the item getters found filled and unnamed (`0x4c017f`, `0x4c0582`), for the
+    /// host to ask the item cache for with the callback that signals `TRADE_UPDATE`.
+    pub(crate) trade_record_asks: Vec<u32>,
     pub(crate) trade_initiates: Vec<String>,
     pub(crate) trade_accept: bool,
     pub(crate) trade_unaccept: bool,
@@ -1631,6 +1634,7 @@ impl Model {
             auction_sell_item: None,
             trade: None,
             trade_window: false,
+            trade_record_asks: Vec::new(),
             trade_initiates: Vec::new(),
             trade_accept: false,
             trade_unaccept: false,

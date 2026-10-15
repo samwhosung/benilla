@@ -236,10 +236,12 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             debug!("net: item template {entry} → {info:?}");
             // The answer finishes the set-up of every item of ours waiting on it (`0x5d8390`); a
             // negative answer finishes nothing (its found byte is clear, `0x5d83b8`).
-            let landed = info.is_some() && sc.items.template_cached(entry).is_none();
+            let answered = info.is_some();
+            let landed = answered && sc.items.template_cached(entry).is_none();
             sc.items.insert_template(entry, info);
             // A negative answer releases the waiters with nothing run (`0x5d96bb`).
             let waiters = sc.items.take_entry_waiters(entry);
+            let trade_waiters = sc.items.take_trade_waiters(entry);
             if landed {
                 let notices = {
                     let (index, stores) = (&sc.index, &sc.stores);
@@ -251,6 +253,13 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                         .record_landed(entry, held, &waiters)
                 };
                 sc.item_notices.write_batch(notices);
+            }
+            // The trade getters' callbacks run for a ready record only (`0x4c0343`).
+            if answered {
+                sc.item_notices.write_batch(std::iter::repeat_n(
+                    crate::item_watch::ItemNotice::TradeRecord { entry },
+                    trade_waiters,
+                ));
             }
         }
         // `0x5e4f30`'s two arms share the item lookup (`0x468460`, `TYPEMASK_ITEM`) and differ on
@@ -1371,6 +1380,55 @@ mod tests {
                     entry: POTION
                 },
             ]
+        );
+    }
+
+    /// `0x4c0340`: every trade getter call that missed the cache registered its own callback, and
+    /// the record's answer runs each once, in call order, signalling for a ready record only
+    /// (`0x4c0343`); a refusal frees them silent.
+    #[test]
+    fn an_item_answer_runs_each_waiting_trade_getters_callback_once() {
+        use crate::item_watch::ItemNotice;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        {
+            let items = world.resource::<Items>();
+            for entry in [4306, 4306, 2592, 7777] {
+                items.wait_for_trade_record(entry);
+            }
+        }
+        let answer = |entry: u32, ok: bool| SessionEvent::ItemTemplate {
+            entry,
+            info: ok.then(|| Box::new(crate::items::test_template("Thing"))),
+        };
+        super::super::handlers::dispatch(world, vec![answer(4306, true), answer(7777, false)]);
+        let notices: Vec<ItemNotice> = world
+            .resource_mut::<Messages<ItemNotice>>()
+            .drain()
+            .collect();
+        assert_eq!(
+            notices,
+            [
+                ItemNotice::TradeRecord { entry: 4306 },
+                ItemNotice::TradeRecord { entry: 4306 }
+            ],
+            "one per call that asked, none for the refusal"
+        );
+        // The callbacks are spent: a second answer, or the refused entry's later one, runs none.
+        super::super::handlers::dispatch(world, vec![answer(4306, true), answer(7777, true)]);
+        assert!(world
+            .resource_mut::<Messages<ItemNotice>>()
+            .drain()
+            .next()
+            .is_none());
+        // The one still waiting runs on its own answer.
+        super::super::handlers::dispatch(world, vec![answer(2592, true)]);
+        assert_eq!(
+            world
+                .resource_mut::<Messages<ItemNotice>>()
+                .drain()
+                .collect::<Vec<_>>(),
+            [ItemNotice::TradeRecord { entry: 2592 }]
         );
     }
 

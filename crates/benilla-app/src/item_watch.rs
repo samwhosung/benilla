@@ -7,6 +7,8 @@
 //! block was written, once, at the first sent field of its range (`0x465570` sets the record's
 //! countdown to 1), so the notices of one block come out in field order. A first create runs no
 //! watcher; a re-create of a live guid merges like a values block ([`crate::net::FieldChanged`]).
+//! One notice belongs to no item: the landing of a record a trade getter asked for
+//! ([`ItemNotice::TradeRecord`]), which signals `TRADE_UPDATE`.
 
 use benilla_protocol::field::{
     FIELD_CONTAINER_SLOT_1, FIELD_ITEM_ENCHANTMENT, FIELD_ITEM_SPELL_CHARGES,
@@ -59,6 +61,11 @@ pub(crate) enum ItemNotice {
     /// One of our visible items changed (`0x5dee30`, for the active player): the old and new
     /// `PLAYER_VISIBLE_ITEM_<n>_0`.
     Visible { old: u32, new: u32 },
+    /// The record a trade getter asked for landed: its callback `0x4c0340` signals `TRADE_UPDATE`
+    /// (`0x4c034f`), for a ready record only. Each getter call that missed registered one callback
+    /// with no dedupe (`0x4c017f`, `0x4c0582`), so an answer writes one notice per call, after the
+    /// notices of the handlers that registered earlier. It concerns no item of ours.
+    TradeRecord { entry: u32 },
 }
 
 /// What a notice asks of the trade's own column (`0x4bfb10`, `0x4bfb60`).
@@ -96,6 +103,7 @@ impl ItemNotice {
             Self::Seat { old, new } => old.iter().chain(new.iter()).copied().collect(),
             Self::Bag { entries } => entries.clone(),
             Self::Visible { old, new } => vec![*old, *new],
+            Self::TradeRecord { .. } => Vec::new(),
         }
     }
 
@@ -719,6 +727,14 @@ mod tests {
             ],
             "in guid order"
         );
+    }
+
+    /// A trade getter's record callback (`0x4c0340`) touches neither the bar nor a trade slot.
+    #[test]
+    fn a_trade_record_notice_recounts_and_touches_nothing() {
+        let notice = ItemNotice::TradeRecord { entry: POTION_ID };
+        assert!(notice.recounts().is_empty());
+        assert_eq!(notice.trade(), None);
     }
 
     #[test]
