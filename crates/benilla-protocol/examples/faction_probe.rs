@@ -19,7 +19,12 @@ fn main() -> Result<()> {
         .context("usage: faction_probe -- <probeN> <password> [host] (a probe account)")?;
     let host = args.next().unwrap_or_else(|| "localhost".into());
 
-    let logon = benilla_protocol::logon(&host, &user, &pass)?;
+    let logon = benilla_protocol::logon(
+        &host,
+        &user,
+        &pass,
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )?;
     let world_addr = logon
         .realms
         .first()

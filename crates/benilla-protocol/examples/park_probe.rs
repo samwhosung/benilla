@@ -9,7 +9,12 @@ use std::time::Duration;
 use benilla_protocol::{logon, WorldSession, WORLD_PORT};
 
 fn connect(user: &str, pass: &str) -> anyhow::Result<WorldSession> {
-    let l = logon("localhost", user, pass)?;
+    let l = logon(
+        "localhost",
+        user,
+        pass,
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )?;
     let addr = l
         .realms
         .first()

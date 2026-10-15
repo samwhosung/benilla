@@ -201,7 +201,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // 1. realmd logon: session key and realm list.
-    let logon = benilla_protocol::logon(&cli.host, &cli.username, &cli.password)?;
+    let logon = benilla_protocol::logon(
+        &cli.host,
+        &cli.username,
+        &cli.password,
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )?;
     println!("authenticated as '{}'", cli.username);
 
     // 2. The world address: the override, else the first realm's, else the auth host's.

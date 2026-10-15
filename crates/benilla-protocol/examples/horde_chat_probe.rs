@@ -32,7 +32,12 @@ fn main() -> Result<()> {
     let orc = orc_name(&user)
         .context("account must be a probeN (docs/CONTRIBUTING.md, \"Running it unattended\")")?;
 
-    let logon = benilla_protocol::logon(&host, &user, &pass)?;
+    let logon = benilla_protocol::logon(
+        &host,
+        &user,
+        &pass,
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )?;
     let addr = logon
         .realms
         .first()

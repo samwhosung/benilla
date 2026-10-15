@@ -21,7 +21,12 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let logon = benilla_protocol::logon(&cli.host, &cli.username, &cli.password)?;
+    let logon = benilla_protocol::logon(
+        &cli.host,
+        &cli.username,
+        &cli.password,
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )?;
 
     println!(
         "authenticated as '{}' (session key {} bytes)",

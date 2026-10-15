@@ -34,7 +34,10 @@ const fn client_os() -> u32 {
         OS_WINDOWS
     }
 }
-const LOCALE_EN_US: u32 = 0x656e_5553; // "enUS"
+
+/// The enUS locale tag, for the tools that log in with no install of their own to read one from;
+/// the client sends its install's ([`write_logon_challenge`]).
+pub const LOCALE_TAG_EN_US: u32 = u32::from_be_bytes(*b"enUS");
 
 /// A non-success auth result byte, typed so the app can map it to its `AUTH_*` glue string; it
 /// survives [`crate::logon`]'s `anyhow` contexts via `downcast_ref`. vmangos answers an unknown
@@ -81,11 +84,14 @@ pub struct ChallengeReply {
 }
 
 /// Send `CMD_AUTH_LOGON_CHALLENGE_Client`. `account_name` must be uppercased, as the SRP6 hashes
-/// use it; `build` is 5875.
+/// use it; `build` is 5875. `locale` is the client's locale tag, `[0xc2a2a4]` (`0x5b2115`): the
+/// configured string packed big-endian, written like the other tags as a little-endian dword, so
+/// "enGB" reaches the wire as `B G n e`.
 pub fn write_logon_challenge(
     w: &mut impl Write,
     account_name: &str,
     build: u16,
+    locale: u32,
 ) -> std::io::Result<()> {
     // Everything after the 2-byte size field, assembled first so we can prefix its length.
     let mut body = Vec::with_capacity(34 + account_name.len());
@@ -96,7 +102,7 @@ pub fn write_logon_challenge(
     body.extend_from_slice(&build.to_le_bytes());
     body.extend_from_slice(&PLATFORM_X86.to_le_bytes());
     body.extend_from_slice(&client_os().to_le_bytes());
-    body.extend_from_slice(&LOCALE_EN_US.to_le_bytes());
+    body.extend_from_slice(&locale.to_le_bytes());
     body.extend_from_slice(&0u32.to_le_bytes()); // utc_timezone_offset
     body.extend_from_slice(&Ipv4Addr::LOCALHOST.octets()); // client_ip_address (network order)
     body.push(account_name.len() as u8);
@@ -332,6 +338,30 @@ mod tests {
         assert_eq!(spelled(OS_WINDOWS), "Win");
         assert_eq!(spelled(OS_MACOS), "OSX");
         assert_eq!(spelled(PLATFORM_X86), "x86");
+    }
+
+    /// The whole challenge for account `AB` on an enGB install: the locale tag as `0x5b2115` loads
+    /// it, `0x656e4742`, goes out little-endian like `'WoW'` and `'x86'` (benilla-re
+    /// `net/login#logon-challenge`).
+    #[test]
+    fn the_challenge_carries_the_locale_tag() {
+        let mut out = Vec::new();
+        write_logon_challenge(&mut out, "AB", 5875, u32::from_be_bytes(*b"enGB")).unwrap();
+        let mut want = vec![
+            0x00, 0x03, 0x20, 0x00, // command, protocol 3, 32 bytes follow
+            b'W', b'o', b'W', 0x00, // game
+            1, 12, 1, // version
+            0xf3, 0x16, // build 5875
+            b'6', b'8', b'x', 0x00, // platform
+        ];
+        want.extend_from_slice(&client_os().to_le_bytes());
+        want.extend_from_slice(&[
+            b'B', b'G', b'n', b'e', // locale "enGB"
+            0, 0, 0, 0, // time zone
+            127, 0, 0, 1, // address
+            2, b'A', b'B', // account
+        ]);
+        assert_eq!(out, want);
     }
 
     #[test]

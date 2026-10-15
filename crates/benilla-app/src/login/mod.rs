@@ -201,6 +201,7 @@ impl Attempt<'_> {
             user: user.to_string(),
             pass: pass.to_string(),
             host: self.realmlist.address().to_string(),
+            locale: crate::ui_script::client_locale().tag(),
             generation: self.abandon.0.load(Ordering::SeqCst),
         });
     }

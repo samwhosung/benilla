@@ -152,7 +152,12 @@ fn parse_opts() -> Result<Opts> {
 }
 
 fn connect(o: &Opts) -> Result<WorldSession> {
-    let l = logon(&o.host, &o.user, &o.pass)?;
+    let l = logon(
+        &o.host,
+        &o.user,
+        &o.pass,
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )?;
     let addr = l
         .realms
         .first()

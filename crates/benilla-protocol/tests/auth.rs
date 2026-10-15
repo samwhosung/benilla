@@ -136,7 +136,13 @@ fn a_survey_success_in_the_proof_reply_logs_in() {
         Some(vec![0x01, 0x0e]),
         true,
     );
-    let logon = benilla_protocol::logon(&addr, "probe", "secret").expect("0x0E is a success");
+    let logon = benilla_protocol::logon(
+        &addr,
+        "probe",
+        "secret",
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )
+    .expect("0x0E is a success");
     assert_eq!(logon.realms.len(), 1);
 }
 
@@ -144,7 +150,13 @@ fn a_survey_success_in_the_proof_reply_logs_in() {
 #[test]
 fn a_survey_success_in_the_challenge_reply_logs_in() {
     let addr = fake_realmd(vec![0x00, 0x00, 0x0e], None, true);
-    let logon = benilla_protocol::logon(&addr, "probe", "secret").expect("0x0E is a success");
+    let logon = benilla_protocol::logon(
+        &addr,
+        "probe",
+        "secret",
+        benilla_protocol::auth::LOCALE_TAG_EN_US,
+    )
+    .expect("0x0E is a success");
     assert_eq!(logon.realms.len(), 1);
 }
 
@@ -153,9 +165,14 @@ fn a_survey_success_in_the_challenge_reply_logs_in() {
 #[test]
 fn a_refusal_names_its_reply() {
     let refused = |addr: String| {
-        let e = benilla_protocol::logon(&addr, "probe", "secret")
-            .err()
-            .expect("refused");
+        let e = benilla_protocol::logon(
+            &addr,
+            "probe",
+            "secret",
+            benilla_protocol::auth::LOCALE_TAG_EN_US,
+        )
+        .err()
+        .expect("refused");
         *e.downcast_ref::<benilla_protocol::AuthReject>()
             .expect("an AuthReject")
     };
