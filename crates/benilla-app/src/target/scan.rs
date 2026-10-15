@@ -20,7 +20,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetEntity, ObjectStore, Reputations, SelfPlayer};
 use benilla_assets::{LockRecover, WorldAssets};
 
-use super::relations::{can_assist, can_attack};
+use super::relations::{can_assist, can_attack, Assist};
 use super::ring::reaction_from_player;
 use super::{Factions, Selection};
 
@@ -252,6 +252,7 @@ impl TargetScan<'_, '_> {
                     &self.reputations,
                     self_store,
                     |owner| self.store_of(owner).cloned(),
+                    Assist::PlayerToUnit,
                 ) && !store.is_some_and(|s| s.0.unit_is_dead())
             }
             // Modes 3 and 4 open on `cmp esi,ecx`, the candidate is not us, which our own body's

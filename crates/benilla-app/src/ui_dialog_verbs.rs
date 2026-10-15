@@ -876,6 +876,7 @@ fn poll_area_spirit_healer(
             &reputations,
             Some(self_store),
             store_of,
+            crate::target::Assist::UnitToPlayer,
         ) {
             continue;
         }

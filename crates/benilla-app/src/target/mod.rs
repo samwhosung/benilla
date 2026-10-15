@@ -63,7 +63,7 @@ pub(crate) use price_discount::vendor_price_discount;
 #[cfg(test)]
 pub(crate) use price_discount::{stormwind_fixture, HUMAN_WARRIOR};
 pub(crate) use relations::{
-    can_assist, can_attack, can_interact, corpse_friendly, is_possessed_by, is_selectable,
+    can_assist, can_attack, can_interact, corpse_friendly, is_possessed_by, is_selectable, Assist,
     UNIT_FLAG_POSSESSED,
 };
 // The attack validator's target half, run in the call that asks, for the player's Attack and the

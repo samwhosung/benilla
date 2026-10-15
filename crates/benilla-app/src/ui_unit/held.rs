@@ -69,6 +69,7 @@ impl HeldUnits<'_> {
             self.reputations,
             self.self_store,
             self.by_guid,
+            crate::target::Assist::PlayerToUnit,
         );
         enrich_unit(
             &mut s,

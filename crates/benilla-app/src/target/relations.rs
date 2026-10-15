@@ -3,7 +3,7 @@
 //!
 //! - `CanAttack 0x606980` forwards to [`super::ring::can_attack_from_player`],
 //! - `CanInteract 0x6067f0` forwards to [`super::ring::can_interact_from_player`],
-//! - `CanAssist 0x6066f0` is derived here, on [`ring_reaction`].
+//! - `CanAssist 0x6066f0` is derived here, on [`reaction_from_player`] or [`ring_reaction`].
 //!
 //! The first two live in [`super::ring`] beside the reaction directions they turn on:
 //! `0x6061e0(this = player)` answers a reputation faction with the at-war bit,
@@ -15,6 +15,7 @@ use benilla_protocol::messages::{ObjectType, OwnerFallback};
 
 use crate::net::{ObjectStore, Reputations};
 
+use super::ring::reaction_from_player;
 use super::{ring_reaction, Factions};
 
 /// `OBJECT_FIELD_TYPE` bit 4, the reference's own player test (`0x606984` in `CanAttack`,
@@ -129,41 +130,69 @@ const UNIT_FLAG_PVP: u32 = 0x1000;
 /// [`ring_reaction`]'s duel leg selects on.
 const UNIT_FLAG_PLAYER_CONTROLLED: u32 = 0x8;
 
-/// `CanAssist 0x6066f0` (Lua `UnitCanAssist` `0x516bb0`, registered at `.data 0x8504c8`), the
-/// unit-level gate of `UnitBuff` ([`crate::ui_aura::buffs_visible_on`]): `UNIT_FLAG_NOT_SELECTABLE`
-/// clear, a reaction of at least 4, and for a unit that is not player-controlled, `IsPvP 0x605ff0`
-/// on its owner. The 4 is the internal scale [`ring_reaction`] returns (`UnitReaction 0x5167e0`
-/// adds 1 for Lua at `0x51683e`), so neutral fails.
+/// Which of the two objects `CanAssist 0x6066f0` takes is the local player: its `this` (the
+/// assister) or its argument (the one assisted).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Assist {
+    /// `this` the player, the argument the unit: `UnitBuff` (`0x5195e0`), the TAB scan's friend
+    /// mode (`0x493eca`), the cast binder (`0x6e45a2`) and `UnitCanAssist("player", unit)`
+    /// (`0x516c05`).
+    PlayerToUnit,
+    /// `this` the unit, the argument the player: the spirit guide's acquisition (`0x4924c0`,
+    /// `0x492506`).
+    UnitToPlayer,
+}
+
+/// `CanAssist 0x6066f0` (Lua `UnitCanAssist` `0x516bb0`, registered at `.data 0x8504c8`), over the
+/// unit and the local player in the roles [`Assist`] names. The argument's `UNIT_FLAG_NOT_SELECTABLE`
+/// refuses first (`0x6066f4`..`0x606713`), then `this`' reaction toward the argument must be at
+/// least 4 (`0x606719`..`0x606721`): `this` the player is [`reaction_from_player`] (the at-war bit
+/// answers a reputation faction), `this` the unit [`ring_reaction`] (the standing). The 4 is the
+/// internal scale (`UnitReaction 0x5167e0` adds 1 for Lua at `0x51683e`), so neutral fails.
 ///
-/// The player-controlled arm (`0x60673e`..`0x60679f`) reads an `[obj+0xe68]` record whose fields
-/// are unnamed and is not built: a player-controlled unit passes, which never hides a buff.
+/// Then the argument decides (`0x60672b`..`0x6067cd`): player-controlled, it takes the arm that
+/// reads an `[obj+0xe68]` record whose fields are unnamed and is not built, so it passes. Otherwise
+/// a player-controlled `this` needs `IsPvP 0x605ff0` of the argument, its owner's flag (charmedBy,
+/// else createdBy, `0x5ee5a0`) else its own, and any other `this` passes.
 pub(crate) fn can_assist(
     store: Option<&ObjectStore>,
     factions: Option<&Factions>,
     reputations: &Reputations,
     self_store: Option<&ObjectStore>,
     owner_store: impl FnOnce(u64) -> Option<ObjectStore>,
+    roles: Assist,
 ) -> bool {
-    let Some(store) = store else {
+    let (Some(unit), Some(me)) = (store, self_store) else {
         return false;
     };
-    let flags = store.0.unit_flags();
-    if flags & UNIT_FLAG_NOT_SELECTABLE != 0 {
+    let (this, arg) = match roles {
+        Assist::PlayerToUnit => (me, unit),
+        Assist::UnitToPlayer => (unit, me),
+    };
+    let arg_flags = arg.0.unit_flags();
+    if arg_flags & UNIT_FLAG_NOT_SELECTABLE != 0 {
         return false;
     }
-    if ring_reaction(factions, reputations, Some(store), self_store) < 4 {
+    let reaction = match roles {
+        Assist::PlayerToUnit => reaction_from_player(factions, reputations, Some(unit), Some(me)),
+        Assist::UnitToPlayer => ring_reaction(factions, reputations, Some(unit), Some(me)),
+    };
+    if reaction < 4 {
         return false;
     }
-    if flags & UNIT_FLAG_PLAYER_CONTROLLED != 0 {
+    if arg_flags & UNIT_FLAG_PLAYER_CONTROLLED != 0 {
         // The player-controlled arm, not built: passes.
         return true;
     }
-    // `IsPvP 0x605ff0`: the owner's flag (charmedBy, else createdBy, `0x5ee5a0`), else the unit's.
-    let owned = store
+    if this.0.unit_flags() & UNIT_FLAG_PLAYER_CONTROLLED == 0 {
+        return true;
+    }
+    // `IsPvP 0x605ff0`: the owner's flag, else the argument's.
+    let owned = arg
         .0
         .unit_owner(OwnerFallback::CreatedBy)
         .and_then(owner_store);
-    let pvp_flags = owned.as_ref().map_or(flags, |o| o.0.unit_flags());
+    let pvp_flags = owned.as_ref().map_or(arg_flags, |o| o.0.unit_flags());
     pvp_flags & UNIT_FLAG_PVP != 0
 }
 
@@ -171,6 +200,116 @@ pub(crate) fn can_assist(
 mod tests {
     use super::*;
     use crate::spell::targeting::corpse_fixture as fx;
+
+    /// `UNIT_FIELD_FLAGS` bits: player-controlled, PvP, and not selectable.
+    const PC: u32 = 0x8;
+    const PVP: u32 = 0x1000;
+    const NOT_SELECTABLE: u32 = 1 << 25;
+
+    fn unit(template: u32, flags: u32) -> ObjectStore {
+        // 35 = UNIT_FIELD_FACTIONTEMPLATE, 46 = UNIT_FIELD_FLAGS.
+        ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (35, template),
+            (46, flags),
+        ]))
+    }
+
+    /// `this` the player asks `IsPvP` of the argument when the argument is not player-controlled
+    /// (`0x6067a7`..`0x6067c2`), and a player-controlled argument takes the unbuilt arm and
+    /// passes; with the roles swapped the argument is the player, who is. The argument's
+    /// `UNIT_FLAG_NOT_SELECTABLE` refuses first, whoever it is.
+    #[test]
+    fn the_arguments_flags_and_the_assisters_control_decide_the_tail() {
+        let factions = fx::factions();
+        let reps = Reputations::default();
+        let ask = |unit: &ObjectStore, me: &ObjectStore, roles| {
+            can_assist(
+                Some(unit),
+                Some(&factions),
+                &reps,
+                Some(me),
+                |_| None,
+                roles,
+            )
+        };
+        let me = unit(1, PC);
+        // A friendly creature: only a PvP flag lets the player assist it.
+        let plain = unit(1, 0);
+        let flagged = unit(1, PVP);
+        assert!(!ask(&plain, &me, Assist::PlayerToUnit));
+        assert!(ask(&flagged, &me, Assist::PlayerToUnit));
+        // Not selectable: refused.
+        assert!(!ask(
+            &unit(1, PVP | NOT_SELECTABLE),
+            &me,
+            Assist::PlayerToUnit
+        ));
+        // Swapped, the argument is the player: a player-controlled one passes with no PvP flag
+        // on the unit, and its own NOT_SELECTABLE refuses.
+        assert!(ask(&plain, &me, Assist::UnitToPlayer));
+        assert!(!ask(
+            &plain,
+            &unit(1, PC | NOT_SELECTABLE),
+            Assist::UnitToPlayer
+        ));
+        // A creature that is no friend (an orc to a human) fails the reaction either way.
+        assert!(!ask(&unit(2, PVP), &me, Assist::PlayerToUnit));
+        assert!(!ask(&unit(2, 0), &me, Assist::UnitToPlayer));
+        // No player, no unit: nothing to ask.
+        assert!(!can_assist(
+            None,
+            Some(&factions),
+            &reps,
+            Some(&me),
+            |_| None,
+            Assist::PlayerToUnit
+        ));
+        assert!(!can_assist(
+            Some(&me),
+            Some(&factions),
+            &reps,
+            None,
+            |_| None,
+            Assist::PlayerToUnit
+        ));
+    }
+
+    /// The reaction is the assister's toward the argument: with the player as `this` a reputation
+    /// faction answers by the at-war bit (`0x6063e0`..`0x606426`), not the standing. Cenarion
+    /// Circle (faction 609, slot 36) at a neutral standing is therefore assistable by the player
+    /// until war is declared on it, though its standing reads neutral (3 < 4) toward the player.
+    #[test]
+    fn the_player_assists_a_not_at_war_reputation_faction_whose_standing_is_neutral() {
+        let data = benilla_formats::wow_data_or_skip!();
+        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+        let factions =
+            Factions::from_catalog(benilla_formats::load_faction_catalog(&mut chain).expect("dbc"));
+        let me = unit(1, PC);
+        let circle = unit(996, PVP);
+        let quiet = Reputations::default();
+        let mut slots = vec![(0u8, 0i32); 64];
+        slots[36] = (benilla_formats::faction_flags::AT_WAR, 0);
+        let at_war = Reputations::from_slots(slots);
+        let ask = |reps: &Reputations, roles| {
+            can_assist(
+                Some(&circle),
+                Some(&factions),
+                reps,
+                Some(&me),
+                |_| None,
+                roles,
+            )
+        };
+        assert!(
+            ask(&quiet, Assist::PlayerToUnit),
+            "player toward unit: not at war"
+        );
+        assert!(!ask(&at_war, Assist::PlayerToUnit), "at war: hostile");
+        // The unit toward the player is the standing, neutral either way: the spirit guide's
+        // direction.
+        assert!(!ask(&quiet, Assist::UnitToPlayer));
+        assert!(!ask(&at_war, Assist::UnitToPlayer));
+    }
 
     /// `0x6067d0`: the caster's template toward the corpse's race's, friendly or better; every gap
     /// is neutral (`0x60651b`) and fails.

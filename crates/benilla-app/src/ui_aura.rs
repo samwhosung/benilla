@@ -19,7 +19,7 @@ use crate::char_select::ClientState;
 use crate::net::{
     ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, Reputations, SelfPlayer,
 };
-use crate::target::{can_assist, Factions, Selection};
+use crate::target::{can_assist, Assist, Factions, Selection};
 use crate::ui_action::Spells;
 use crate::ui_script::UiInput;
 use crate::ui_unit::UnitFeed;
@@ -315,7 +315,14 @@ fn buffs_visible_on(
     if self_store.is_some_and(|s| s.0.unit_charmed_by().is_some()) {
         return false;
     }
-    can_assist(Some(store), factions, reputations, self_store, owner_store)
+    can_assist(
+        Some(store),
+        factions,
+        reputations,
+        self_store,
+        owner_store,
+        Assist::PlayerToUnit,
+    )
 }
 
 /// `UNIT_FIELD_FLAGS` bit 27, `0x08000000` (`0x5195b6`).
