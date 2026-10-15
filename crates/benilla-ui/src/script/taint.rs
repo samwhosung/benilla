@@ -1,10 +1,12 @@
 //! The execution context word `[0xceeac0]` as the protected-action gate `0x494a50` reads it.
 //!
-//! The reference stamps every Lua value with the context that made it and makes a value's stamp
-//! the current context whenever the VM copies it. Context 0 is the client's own code; a script
-//! run by `RunScript` carries `[0x83de24]`, the empty string's address (`0x48b9bb`), and an
-//! insecure addon's files and `Bindings.xml` its name (`0x51f387`). So a function defined by one
-//! stays that one's whoever calls it, and what a tainted function calls is tainted with it.
+//! The reference stamps every Lua value with the context that made it. Copying a value whose stamp
+//! is nonzero makes that stamp the current context while `[0xceeac4] > 0`; copying one whose stamp
+//! is zero stamps the copy with the current context instead (`0x6f3c52`-`0x6f3c78`), which is why
+//! taint is sticky. Context 0 is the client's own code; a script run by `RunScript` carries
+//! `[0x83de24]`, the empty string's address (`0x48b9bb`), and an insecure addon's files and
+//! `Bindings.xml` its name (`0x51f387`). So a function defined by one stays that one's whoever
+//! calls it, and what a tainted function calls is tainted with it.
 //!
 //! benilla has no stamp on its values. [`current`] reads the call stack instead: the innermost
 //! Lua frame whose function carries a context decides, which is the reference's answer wherever
