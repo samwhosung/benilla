@@ -15,6 +15,10 @@
 //! - [`item`]: the bag click (`PickupContainerItem 0x4f9b30`) and the paper-doll click
 //!   (`0x4c7300`), both `IsTargeting`, `TargetingWantsItem 0x6e6330`, then `0x495d60`, whose
 //!   confirm popups park the clicked guid (`0xb4e3c0`) with the word still standing.
+//! - [`CursorPicks`]: the selection writers' own seam. `SelectTarget 0x493540` binds the unit it was
+//!   given to the pending cast and returns, with the cursor up (`0x4935ca`-`0x4935d5`), so a script's
+//!   `TargetUnit`, `TargetByName`, a TAB and the rest never select then ([`crate::target`]'s front
+//!   parks the unit here), and the cursor's owner binds it through [`bind_target_unit`].
 //!
 //! Every seam commits through [`crate::spell::CastLadder::commit_targeted`] (`SendCast 0x6e54f0`).
 //! Only the unit and corpse arms have a range gate ([`merge`]): the terrain and GameObject clicks
@@ -213,6 +217,29 @@ impl TargetingWants {
 /// The word bits `0x6e61a0` lets the world pick take the local player for: unit, raid, party,
 /// assist, the explicit gate and the ally corpse, never enemy (`0x80`) or enemy corpse (`0x200`).
 const SELF_PICK_BITS: u16 = 0x850e;
+
+/// The units `SelectTarget 0x493540` found the cursor up for (`0x4935ca`) and so hands to
+/// `BindTarget 0x6e5b40` in place of selecting (`0x4935d5`): parked by the selection writers, which
+/// own no cast ladder, and bound in order by the script calls' pass ([`ScriptCursor::bind_parked`]):
+/// after the call that parked them, and at the head of the next pass for a writer outside it (a
+/// loot window's select, the chat layer's `/target`), which waits for it.
+#[derive(Resource, Default)]
+pub(crate) struct CursorPicks(Vec<(Entity, u64)>);
+
+impl CursorPicks {
+    /// Park a unit for the bind.
+    pub(crate) fn park(&mut self, entity: Entity, guid: u64) {
+        self.0.push((entity, guid));
+    }
+
+    /// Bind every parked unit, front to back: a unit the cursor no longer wants (an earlier one
+    /// emptied the word) binds nothing, as [`bind_target_unit`] finds no pending cast.
+    fn bind_all(&mut self, ladder: &mut crate::spell::CastLadder, checks: &BindChecks) {
+        for (entity, guid) in std::mem::take(&mut self.0) {
+            bind_target_unit(ladder, checks, entity, guid);
+        }
+    }
+}
 
 /// The targeting mode, `Some` while the flag_word is nonzero. Entered by the cast-send path
 /// ([`super::cast_target::CastWireTarget::Targeting`]), cleared by a commit or a cancel.
@@ -464,6 +491,7 @@ pub(crate) struct ScriptCursor<'w, 's> {
     selection: Res<'w, crate::target::Selection>,
     checks: BindChecks<'w, 's>,
     ladder: crate::spell::CastLadder<'w, 's>,
+    picks: ResMut<'w, CursorPicks>,
 }
 
 impl ScriptCursor<'_, '_> {
@@ -486,6 +514,12 @@ impl ScriptCursor<'_, '_> {
                 self.ladder.ground.clear();
             }
         }
+    }
+
+    /// Bind the units the call just applied handed the cursor instead of selecting
+    /// ([`CursorPicks`]), before the next call reads the cursor and the selection.
+    pub(crate) fn bind_parked(&mut self) {
+        self.picks.bind_all(&mut self.ladder, &self.checks);
     }
 
     /// The ESC chain's `SpellStopTargeting()` (`0x6e6e30`): `StopTargeting 0x6e4900`, word
@@ -530,6 +564,7 @@ mod tests {
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<crate::ui_tradeskill::TradeSkillOpens>();
         world.init_resource::<SpellTargeting>();
+        world.init_resource::<CursorPicks>();
         world.init_resource::<crate::spell::HeldForPick>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
         world.init_resource::<crate::ui_party::GroupState>();

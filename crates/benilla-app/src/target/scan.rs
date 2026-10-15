@@ -500,6 +500,7 @@ pub(super) fn cycle(
     history: &mut TabHistory,
     selection: &mut Selection,
     seam: &mut crate::creature_anim::AttackSeam,
+    front: &mut super::front::SelectFront,
     engaged: bool,
 ) {
     history.enter(side);
@@ -546,6 +547,12 @@ pub(super) fn cycle(
             (pool[i].entity, pool[i].guid, wrapped)
         }
     };
+    // `0x4941e6`: the pick goes to `SelectTarget`, whose front may bind it to the cursor's cast
+    // instead. The cycle's cursor has moved on (`0x4941d4`) but the selection has not, so the
+    // history, which stands in for the cursor, is left to the next press.
+    if front.takes(entity, guid) {
+        return;
+    }
     if wrapped {
         history.visited.clear();
     }
@@ -594,6 +601,8 @@ pub(crate) struct AttackPick<'w, 's> {
     history: ResMut<'w, TabHistory>,
     time: Res<'w, Time>,
     engaged: Query<'w, 's, (), (With<Engaged>, With<SelfPlayer>)>,
+    /// The `SelectTarget` returns ahead of the validator's two selecting calls.
+    front: super::front::SelectFront<'w, 's>,
 }
 
 impl AttackPick<'_, '_> {
@@ -618,7 +627,9 @@ impl AttackPick<'_, '_> {
     /// the final gate to refuse, and only an empty selection is `ERR_NO_ATTACK_TARGET`
     /// (`0x6130d9`). `may_pick` is the protected-action gate's tag 4, which opens the cycle
     /// (`0x493f9b`): refused, the cycle returns having picked nothing and the target is the
-    /// selection as it stands.
+    /// selection as it stands. A unit kept goes to `SelectTarget` (`0x613100`) and the cycle's pick
+    /// does too (`0x4941e6`), so with the targeting cursor up either is bound to the cast and the
+    /// selection stays ([`super::front`]).
     pub(crate) fn target(
         &mut self,
         passed: Option<u64>,
@@ -627,7 +638,18 @@ impl AttackPick<'_, '_> {
         seam: &mut crate::creature_anim::AttackSeam,
         errors: &mut crate::ui_action::UiErrorKeys,
     ) -> Option<u64> {
-        if may_pick && !passed.or(selection.guid).is_some_and(|g| self.keeps(g)) {
+        let candidate = passed.or(selection.guid);
+        if candidate.is_some_and(|g| self.keeps(g)) {
+            // `0x613100`: the kept unit is selected again, a no-op unless the cursor is up. Only
+            // the selection is kept in practice: the unit a caller passes is the caster.
+            if let Some((entity, guid)) = selection
+                .target
+                .zip(selection.guid)
+                .filter(|&(_, guid)| Some(guid) == candidate)
+            {
+                self.front.takes(entity, guid);
+            }
+        } else if may_pick {
             let engaged = self.engaged();
             cycle(
                 ScanSide::Enemy,
@@ -637,6 +659,7 @@ impl AttackPick<'_, '_> {
                 &mut self.history,
                 selection,
                 seam,
+                &mut self.front,
                 engaged,
             );
         }

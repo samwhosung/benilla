@@ -91,6 +91,7 @@ impl ScriptSelect<'_, '_> {
             &mut self.history,
             &mut self.commit.selection,
             &mut self.commit.seam,
+            &mut self.commit.front,
             engaged,
         );
     }
@@ -137,6 +138,8 @@ mod tests {
         world.init_resource::<crate::net::Reputations>();
         world.init_resource::<super::super::AssistAttack>();
         world.init_resource::<super::super::Selection>();
+        world.init_resource::<crate::spell::SpellTargeting>();
+        world.init_resource::<crate::spell::CursorPicks>();
         world.init_resource::<scan::LastEnemy>();
         world.init_resource::<crate::names::NameCache>();
         world.init_resource::<scan::TabHistory>();

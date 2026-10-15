@@ -431,7 +431,7 @@ impl super::UiScript {
     /// Take the queued [`SelectionRequest`]s out of the call stream, in call order.
     pub fn take_selection_requests(&mut self) -> Vec<SelectionRequest> {
         self.take_calls_where(|c| match c {
-            ScriptCall::Select(r) => Some(r.clone()),
+            ScriptCall::Select { request, .. } => Some(request.clone()),
             _ => None,
         })
     }
@@ -441,7 +441,7 @@ impl super::UiScript {
     /// `SetSelection`.
     pub fn take_target_nearest_requests(&mut self) -> Vec<(NearestMode, bool)> {
         self.take_calls_where(|c| match c {
-            ScriptCall::TargetNearest { mode, reverse } => Some((*mode, *reverse)),
+            ScriptCall::TargetNearest { mode, reverse, .. } => Some((*mode, *reverse)),
             _ => None,
         })
     }
@@ -449,7 +449,7 @@ impl super::UiScript {
     /// Take the `TargetByName(name, exactMatch)` calls out of the call stream.
     pub fn take_target_by_name_requests(&mut self) -> Vec<(String, bool)> {
         self.take_calls_where(|c| match c {
-            ScriptCall::TargetByName { name, exact } => Some((name.clone(), *exact)),
+            ScriptCall::TargetByName { name, exact, .. } => Some((name.clone(), *exact)),
             _ => None,
         })
     }

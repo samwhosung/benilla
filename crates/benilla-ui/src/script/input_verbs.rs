@@ -331,7 +331,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return Ok(());
                 }
                 let reverse = bool_or_default(reverse.as_ref(), false);
-                push_call(lua, ScriptCall::TargetNearest { mode, reverse });
+                let may_cast = protected::select_may_cast(lua);
+                push_call(
+                    lua,
+                    ScriptCall::TargetNearest {
+                        mode,
+                        reverse,
+                        may_cast,
+                    },
+                );
                 Ok(())
             })?,
         )?;
@@ -340,7 +348,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "TargetLastTarget",
         lua.create_function(|lua, _: MultiValue| {
-            push_call(lua, ScriptCall::TargetLastTarget);
+            let may_cast = protected::select_may_cast(lua);
+            push_call(lua, ScriptCall::TargetLastTarget { may_cast });
             Ok(())
         })?,
     )?;
@@ -350,7 +359,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // The validator's pick of the nearest enemy asks the gate's tag 4 (`0x493f9b`); the rest
             // of the attack has no gate.
             let may_pick = protected::gate(lua, Tag::TARGET);
-            push_call(lua, ScriptCall::AttackTarget { may_pick });
+            let may_cast = protected::select_may_cast(lua);
+            push_call(lua, ScriptCall::AttackTarget { may_pick, may_cast });
             Ok(())
         })?,
     )?;
@@ -549,10 +559,14 @@ mod tests {
             vec![
                 ScriptCall::TargetNearest {
                     mode: NearestMode::Enemy,
-                    reverse: true
+                    reverse: true,
+                    may_cast: true
                 },
-                ScriptCall::TargetLastTarget,
-                ScriptCall::AttackTarget { may_pick: true },
+                ScriptCall::TargetLastTarget { may_cast: true },
+                ScriptCall::AttackTarget {
+                    may_pick: true,
+                    may_cast: true
+                },
                 ScriptCall::ClearTarget,
             ]
         );

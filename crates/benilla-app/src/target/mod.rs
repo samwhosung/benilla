@@ -20,6 +20,7 @@ pub(crate) mod click;
 // `pub(crate)` for the hover inspector, which runs the cursor's `cursor_mode::go_highlightable`.
 pub(crate) mod cursor_mode;
 mod flash;
+mod front;
 mod highlight;
 pub(crate) mod hover;
 mod hover_probe;
@@ -68,6 +69,8 @@ pub(crate) use relations::{
 };
 // The attack validator's target half, run in the call that asks, for the player's Attack and the
 // pet bar's; the melee probe's press with nothing selected.
+#[cfg(test)]
+pub(crate) use scan::LastEnemy;
 pub(crate) use scan::{AttackNearestRequest, AttackPick};
 // The chat layer's by-name asks (`/target`, `/assist`), and the typemask `TargetByName`'s
 // candidate feed shares.

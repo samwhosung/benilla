@@ -391,7 +391,8 @@ const fn flagged(chunk: &'static str) -> Verb {
 /// `CGItem::Use`, the shapeshift, duel, craft and trade-skill casts, `Stuck`), `PressPetAction`'s,
 /// `TogglePetSlotAutocast`, `SendSpellAutocast`, `SendPetAbandon`, `SpellTargetUnit`,
 /// `SpellStopTargeting`, `SpellStopCasting`, `CGGameUI::TargetNearest` (and the attack validator's
-/// pick that reaches it) and `CGGameUI::Reload`.
+/// pick that reaches it), `CGGameUI::Reload` and `BindSpellTargetObject`, which `SelectTarget`
+/// reaches from every selecting verb while the cursor is up.
 const VERBS: &[Verb] = &[
     flagged(r#"CastSpellByName("Fireball")"#),
     flagged(r#"CastSpell(1, BOOKTYPE_SPELL)"#),
@@ -420,6 +421,14 @@ const VERBS: &[Verb] = &[
     gone("TargetNearestPartyMember()"),
     gone("TargetNearestRaidMember()"),
     flagged("AttackTarget()"),
+    // `SelectTarget` binds the unit to the cast with the cursor up, behind tag 2 (`0x6e5ba5`); the
+    // verbs queue either way, the cursor being the app's to see when it applies them.
+    flagged(r#"TargetUnit("player")"#),
+    flagged(r#"AssistUnit("player")"#),
+    flagged("TargetLastEnemy()"),
+    flagged(r#"TargetByName("Bob")"#),
+    flagged(r#"AssistByName("Bob")"#),
+    flagged("TargetLastTarget()"),
     gone(r#"DropItemOnUnit("pet")"#),
     flagged("BindEnchant()"),
     flagged("ReplaceEnchant()"),

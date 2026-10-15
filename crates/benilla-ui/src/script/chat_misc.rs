@@ -141,10 +141,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(name) = name.filter(|n| !n.trim().is_empty()) else {
                 return Ok(());
             };
+            let may_cast = super::protected::select_may_cast(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.queue_call(super::ScriptCall::Select(
-                super::SelectionRequest::AssistByName(name),
-            ));
+            model.queue_call(super::ScriptCall::Select {
+                request: super::SelectionRequest::AssistByName(name),
+                may_cast,
+            });
             Ok(())
         })?,
     )?;

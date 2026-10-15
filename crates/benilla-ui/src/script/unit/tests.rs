@@ -1212,6 +1212,46 @@ fn clear_target_and_target_unit_show_their_outcome_to_the_rest_of_the_chunk() {
     );
 }
 
+/// With the targeting cursor up `SelectTarget` binds the unit to the cast and returns before it
+/// selects (`0x4935ca`-`0x4935d5`), so `TargetUnit` and `TargetByName` show nothing moved to the rest
+/// of the chunk; with it down the same calls move the view.
+#[test]
+fn target_unit_and_by_name_leave_the_view_while_the_cursor_is_up() {
+    let script = |targeting| {
+        let mut s = UiScript::new().unwrap();
+        s.set_unit_guids(&UnitGuids {
+            player: 0x10,
+            party: [0x22, 0, 0, 0],
+            target: 0x21,
+            ..Default::default()
+        });
+        s.set_unit("party1", Some(candidate(0x22, "Bob", 9.0).state));
+        s.set_name_candidate(0x22, Some(candidate(0x22, "Bob", 9.0)));
+        s.set_unit("target", Some(candidate(0x21, "Old Mob", 1.0).state));
+        s.set_spell_targeting(targeting);
+        s
+    };
+    for lua in ["TargetUnit('party1')", "TargetByName('Bob')"] {
+        let mut up = script(true);
+        up.run(lua).unwrap();
+        assert_eq!(
+            up.eval::<String>("return UnitName('target')").unwrap(),
+            "Old Mob",
+            "{lua}"
+        );
+        assert!(!up.take_target_view_moved(), "{lua}");
+        assert_eq!(up.take_script_calls().len(), 1, "{lua}: still queued");
+
+        let down = script(false);
+        down.run(lua).unwrap();
+        assert_eq!(
+            down.eval::<String>("return UnitName('target')").unwrap(),
+            "Bob",
+            "{lua}"
+        );
+    }
+}
+
 /// `SetSelection` (`0x493540`) returns at its `IsSelectable` call (`0x4935ee`) and keeps the old
 /// target, while `TargetByName` ranks (`0x493aa0`, no selectable filter) before it: a
 /// non-selectable best pick leaves the view, though a selectable namesake farther off is ranked

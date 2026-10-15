@@ -93,6 +93,13 @@ impl Default for ScriptCastPermit {
     }
 }
 
+impl ScriptCastPermit {
+    /// Whether tag 2 passed for the call being applied.
+    pub(crate) fn allows(&self) -> bool {
+        self.0
+    }
+}
+
 /// Everything the cast-send path reads, as one [`SystemParam`]: [`CastLadder::send`] is the only
 /// way into [`send_spell_cast`], for every caster surface.
 #[derive(SystemParam)]

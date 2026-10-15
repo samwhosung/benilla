@@ -33,6 +33,10 @@ pub(crate) fn apply_script_calls(
         crate::ui_action::AttackPress,
     )>,
 ) {
+    // The units a selection writer outside this pass (a loot window's select, the chat layer's
+    // `/target`) found the targeting cursor up for (`SelectTarget`, `0x4935d5`), bound to the cast
+    // in their place; this pass's own are bound after the call that parked them.
+    appliers.p1().bind_parked();
     let Some(mut script) = script else {
         return;
     };
@@ -46,14 +50,16 @@ pub(crate) fn apply_script_calls(
             appliers.p3().ladder.cast_errors.0.len(),
         );
         match call {
-            ScriptCall::Select(request) => appliers.p0().select(request),
-            ScriptCall::TargetByName { name, exact } => appliers.p0().target_by_name(&name, exact),
-            ScriptCall::TargetNearest { mode, reverse } => {
+            ScriptCall::Select { request, .. } => appliers.p0().select(request),
+            ScriptCall::TargetByName { name, exact, .. } => {
+                appliers.p0().target_by_name(&name, exact)
+            }
+            ScriptCall::TargetNearest { mode, reverse, .. } => {
                 appliers.p0().target_nearest(mode, reverse);
             }
-            ScriptCall::TargetLastTarget => appliers.p0().target_last_target(),
+            ScriptCall::TargetLastTarget { .. } => appliers.p0().target_last_target(),
             ScriptCall::ClearTarget => appliers.p0().clear_target(),
-            ScriptCall::AttackTarget { may_pick } => appliers.p7().attack_target(may_pick),
+            ScriptCall::AttackTarget { may_pick, .. } => appliers.p7().attack_target(may_pick),
             ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
             ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
             ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
@@ -85,6 +91,9 @@ pub(crate) fn apply_script_calls(
             ScriptCall::PetAction(slot) => appliers.p6().press_slot(slot),
             ScriptCall::PetOrder(packed) => appliers.p6().order(packed),
         }
+        // A selection this call made with the targeting cursor up was handed to the cast
+        // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.
+        appliers.p1().bind_parked();
         // TryCast's attack pick can move the selection mid-cast (`0x6e4efb`), so a press held
         // there is picked and resumed before the next call reads the selection.
         if let Some(held) = appliers.p3().ladder.take_held() {
@@ -1063,11 +1072,22 @@ mod tests {
     /// The stock UI over the frame's world, with an insecure addon, `Hook`, whose handler of
     /// `PLAYER_TARGET_CHANGED` casts Heal.
     fn with_stock_ui_and_a_casting_hook(f: &mut Frame) {
+        with_stock_ui(f, true);
+    }
+
+    /// The stock UI over the frame's world, and with `hook` the addon above.
+    fn with_stock_ui(f: &mut Frame, hook: bool) {
         let _l = crate::local_state::test_env::ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (mut script, failures) =
-            crate::ui_script::layer_tests::production_load_with("tab-hook", false, "", |root| {
+        let (mut script, failures) = crate::ui_script::layer_tests::production_load_with(
+            if hook { "tab-hook" } else { "tab-stock" },
+            false,
+            "",
+            |root| {
+                if !hook {
+                    return;
+                }
                 let dir = root.join("Hook");
                 std::fs::create_dir_all(&dir).unwrap();
                 std::fs::write(dir.join("Hook.toc"), "## Interface: 11200\nhook.lua\n").unwrap();
@@ -1078,7 +1098,8 @@ mod tests {
                        f:SetScript("OnEvent", function() CastSpellByName("Heal") end)"#,
                 )
                 .unwrap();
-            });
+            },
+        );
         assert!(failures.is_empty(), "{failures:#?}");
         script.set_spellbook(SpellBookState {
             tabs: vec![SpellTabView {
@@ -1892,5 +1913,260 @@ mod tests {
             .set_control_bypass([4321].into());
         run(&mut f, "UseAction(1)");
         assert!(keys(&f).is_empty(), "{:?}", keys(&f));
+    }
+
+    /// A heal's targeting cursor up: `TARGET_FLAG_UNIT` (0x2), which any unit binds, in the app's
+    /// word and the VM's view of it.
+    fn with_the_cursor_up(f: &mut Frame) {
+        f.app
+            .world_mut()
+            .resource_mut::<crate::spell::SpellTargeting>()
+            .enter(HEAL, crate::spell::CastCommit::Spell, 0x0002);
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_spell_targeting(true);
+    }
+
+    fn cursor_is_up(f: &Frame) -> bool {
+        f.app
+            .world()
+            .resource::<crate::spell::SpellTargeting>()
+            .active()
+    }
+
+    /// The `CMSG_SET_SELECTION`s sent.
+    fn selections(sent: &[ClientCommand]) -> Vec<u64> {
+        sent.iter()
+            .filter_map(|c| match c {
+                ClientCommand::SetSelection { guid } => Some(*guid),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The units a selecting verb can find in the frame: `MOB` (an enemy, named, party1's target
+    /// and the last enemy) beside `OLD` (selected) and `NEW` (party1, "Bob"), with `OLD` the last
+    /// target.
+    fn with_things_to_select(f: &mut Frame) {
+        spawn_mob(f, &[]);
+        let world = f.app.world_mut();
+        let new = world.resource::<GuidIndex>().0[&NEW];
+        world
+            .entity_mut(new)
+            .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+                (16, MOB as u32),
+            ])));
+        let mut names = world.resource_mut::<crate::names::NameCache>();
+        names.insert_player(MOB, "Red Affinity".into(), None);
+        names.insert_player(NEW, "Bob".into(), None);
+        world.resource_mut::<crate::target::LastEnemy>().0 = Some(MOB);
+        world.resource_mut::<Selection>().last = Some(NEW);
+    }
+
+    /// `SelectTarget` (`0x493540`) with the targeting cursor up binds the unit to the pending cast
+    /// and returns without selecting (`0x4935ca`-`0x4935d5`), from every verb that calls it:
+    /// `TargetUnit`, `AssistUnit` and `TargetLastEnemy` (`0x489a40`), `AssistByName`,
+    /// `TargetLastTarget`, `TargetByName` (`0x489daa`) and `TargetNearestEnemy` (`0x4941e6`). The
+    /// bind asks the gate's tag 2 (`0x6e5ba5`): a macro's line outside an input event is refused,
+    /// and `SelectTarget` returns all the same, with the cursor still up and nothing selected.
+    #[test]
+    fn a_selecting_verb_with_the_cursor_up_casts_at_its_unit_and_selects_nothing() {
+        for (lua, bound) in [
+            (r#"TargetUnit("party1")"#, NEW),
+            (r#"AssistUnit("party1")"#, MOB),
+            ("TargetLastEnemy()", MOB),
+            (r#"TargetByName("Red Affinity")"#, MOB),
+            (r#"AssistByName("Bob")"#, MOB),
+            ("TargetLastTarget()", NEW),
+            ("TargetNearestEnemy()", MOB),
+        ] {
+            // Pressed: the call is the client's own inside an input event.
+            let mut f = frame(true);
+            with_things_to_select(&mut f);
+            with_the_cursor_up(&mut f);
+            run_pressed(&mut f, lua);
+            let sent: Vec<_> = f.rx.try_iter().collect();
+            assert!(
+                matches!(sent.iter().find_map(|c| match c {
+                    ClientCommand::CastSpell { spell_id, target } => Some((*spell_id, *target)),
+                    _ => None,
+                }), Some((HEAL, Some(g))) if g == bound),
+                "{lua}: casts at {bound:#x}: {sent:?}"
+            );
+            assert_eq!(
+                selections(&sent),
+                Vec::<u64>::new(),
+                "{lua}: selects nothing"
+            );
+            assert_eq!(selected(&f), Some(OLD), "{lua}");
+            assert!(!cursor_is_up(&f), "{lua}: the bind emptied the word");
+
+            // The same line as a macro's `/script`: tag 2 refuses the bind.
+            let mut f = frame(true);
+            with_things_to_select(&mut f);
+            with_the_cursor_up(&mut f);
+            run(&mut f, &format!("RunScript({lua:?})"));
+            let sent: Vec<_> = f.rx.try_iter().collect();
+            assert_eq!(casts_of(&sent), vec![], "{lua}: refused, casts nothing");
+            assert_eq!(
+                selections(&sent),
+                Vec::<u64>::new(),
+                "{lua}: and selects nothing"
+            );
+            assert_eq!(selected(&f), Some(OLD), "{lua}");
+            assert!(cursor_is_up(&f), "{lua}: the cursor stands");
+
+            // With the cursor down the same verb selects, and casts nothing.
+            if lua != "TargetNearestEnemy()" {
+                let mut f = frame(true);
+                with_things_to_select(&mut f);
+                run_pressed(&mut f, lua);
+                let sent: Vec<_> = f.rx.try_iter().collect();
+                assert_eq!(casts_of(&sent), vec![], "{lua}: cursor down");
+                assert_eq!(selected(&f), Some(bound), "{lua}: cursor down");
+            }
+        }
+    }
+
+    /// The `CMSG_CAST_SPELL`s among `sent`.
+    fn casts_of(sent: &[ClientCommand]) -> Vec<(u32, Option<u64>)> {
+        sent.iter()
+            .filter_map(|c| match c {
+                ClientCommand::CastSpell { spell_id, target } => Some((*spell_id, *target)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// TAB with a heal's cursor up, through the stock `TARGETNEARESTENEMY` binding: the cycler picks
+    /// the enemy, `SelectTarget` binds it (`0x4941e6` → `0x4935d5`) and the heal goes to it, the
+    /// target where it was. A second TAB, the cursor down now, selects as ever.
+    #[test]
+    fn a_tab_with_a_heals_cursor_up_casts_at_the_tabbed_unit() {
+        benilla_formats::wow_data_or_skip!();
+        let mut f = frame(true);
+        with_factions(&mut f, FRIEND, &[]);
+        spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+        with_stock_ui(&mut f, false);
+        settle(&mut f);
+        with_the_cursor_up(&mut f);
+        f.rx.try_iter().for_each(drop);
+
+        let tab = |f: &mut Frame| {
+            let pressed = f
+                .app
+                .world_mut()
+                .non_send_resource_mut::<UiScript>()
+                .execute_binding("TARGETNEARESTENEMY", true)
+                .expect("the binding runs");
+            assert!(pressed);
+            settle(f);
+            f.rx.try_iter().collect::<Vec<_>>()
+        };
+        let sent = tab(&mut f);
+        assert_eq!(casts_of(&sent), vec![(HEAL, Some(MOB))], "{sent:?}");
+        assert_eq!(selections(&sent), Vec::<u64>::new());
+        assert_eq!(selected(&f), Some(OLD), "TAB left the target alone");
+        assert!(!cursor_is_up(&f));
+
+        let sent = tab(&mut f);
+        assert_eq!(casts_of(&sent), vec![]);
+        assert_eq!(selections(&sent), vec![MOB], "the cursor down, TAB selects");
+    }
+
+    /// A charmed player's `SelectTarget` returns before anything (`0x493589`-`0x49359c`): the bind
+    /// does not happen with the cursor up, nor the selection with it down.
+    #[test]
+    fn a_charmed_player_neither_binds_nor_selects() {
+        for cursor in [true, false] {
+            let mut f = frame(true);
+            let me = f.app.world().resource::<GuidIndex>().0[&ME];
+            f.app.world_mut().entity_mut(me).insert(ObjectStore(
+                benilla_protocol::ObjectFields::from_pairs(&[
+                    (2, 0x19),
+                    (HEALTH, 100),
+                    (28, 100),
+                    // `UNIT_FIELD_CHARMEDBY`, a guid of two fields.
+                    (10, 0x99),
+                    (11, 0),
+                ]),
+            ));
+            if cursor {
+                with_the_cursor_up(&mut f);
+            }
+            run_pressed(&mut f, r#"TargetUnit("party1")"#);
+            let sent: Vec<_> = f.rx.try_iter().collect();
+            assert_eq!(casts_of(&sent), vec![], "cursor {cursor}");
+            assert_eq!(selections(&sent), Vec::<u64>::new(), "cursor {cursor}");
+            assert_eq!(selected(&f), Some(OLD), "cursor {cursor}");
+            assert_eq!(cursor_is_up(&f), cursor, "cursor {cursor}");
+        }
+    }
+
+    /// A deselect passes guid 0 and skips the bind (`0x4935ac`): `ClearTarget` with the cursor up
+    /// clears the target and the cursor stands.
+    #[test]
+    fn clear_target_with_the_cursor_up_still_clears() {
+        let mut f = frame(true);
+        with_the_cursor_up(&mut f);
+        run_pressed(&mut f, "ClearTarget()");
+        assert_eq!(selected(&f), None);
+        assert!(cursor_is_up(&f));
+        assert_eq!(casts(&f), vec![]);
+    }
+
+    /// The attack validator selects a unit twice over: the one it keeps (`0x613100`, when the
+    /// selection is not friendly) and the nearest enemy it picks otherwise (`0x4941e6`). With the
+    /// cursor up each is bound to the cast and the selection stays; the attack goes on past it.
+    #[test]
+    fn attack_target_with_the_cursor_up_binds_the_unit_it_would_select() {
+        // A hostile selection is kept (`0x6130a3`): the bind is at it, and the swing follows.
+        let mut f = frame(true);
+        with_factions(&mut f, FOE, &[]);
+        spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+        with_the_cursor_up(&mut f);
+        run_pressed(&mut f, "AttackTarget()");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        assert_eq!(casts_of(&sent), vec![(HEAL, Some(OLD))], "{sent:?}");
+        assert_eq!(selections(&sent), Vec::<u64>::new());
+        assert_eq!(selected(&f), Some(OLD));
+        assert!(sent
+            .iter()
+            .any(|c| matches!(c, ClientCommand::AttackSwing { guid: OLD })));
+
+        // A friendly one is dropped for the nearest enemy, which the bind takes.
+        let mut f = frame(true);
+        with_factions(&mut f, FRIEND, &[]);
+        spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+        with_the_cursor_up(&mut f);
+        run_pressed(&mut f, "AttackTarget()");
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        assert_eq!(casts_of(&sent), vec![(HEAL, Some(MOB))], "{sent:?}");
+        assert_eq!(selections(&sent), Vec::<u64>::new());
+        assert_eq!(selected(&f), Some(OLD), "the friend stays selected");
+    }
+
+    /// The selection writers outside the script calls (a loot window's select, `0x48f3a0`) hand the
+    /// unit to the cursor too, and the next pass of the calls binds it.
+    #[test]
+    fn a_loot_windows_select_with_the_cursor_up_is_bound_by_the_next_pass() {
+        let mut f = frame(true);
+        spawn_mob(&mut f, &[(2, 0x9)]);
+        with_the_cursor_up(&mut f);
+        let world = f.app.world_mut();
+        world
+            .run_system_once(|mut select: crate::target::SelectCommit| select.select_unit(MOB))
+            .expect("the select runs");
+        assert_eq!(selected(&f), Some(OLD), "nothing selected");
+        assert_eq!(casts(&f), vec![], "and nothing bound until the pass");
+        f.app
+            .world_mut()
+            .run_system_once(apply_script_calls)
+            .expect("the calls apply as a one-shot system");
+        assert_eq!(casts(&f), vec![(HEAL, Some(MOB))]);
+        assert_eq!(selected(&f), Some(OLD));
     }
 }

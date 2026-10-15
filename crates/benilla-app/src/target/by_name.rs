@@ -498,6 +498,8 @@ pub(crate) struct SelectCommit<'w, 's> {
     reputations: Res<'w, crate::net::Reputations>,
     /// `assistAttack`, the assist tail's second leg.
     assist_attack: Res<'w, super::AssistAttack>,
+    /// The returns ahead of every selection `SetSelection` makes: charmed, and the cursor's bind.
+    pub(super) front: super::front::SelectFront<'w, 's>,
 }
 
 impl SelectCommit<'_, '_> {
@@ -565,8 +567,13 @@ impl SelectCommit<'_, '_> {
         }
     }
 
-    /// Select a resolved guid, `0x489a40`'s arm 1, through [`scan::commit`].
+    /// Select a resolved guid, `0x489a40`'s arm 1, through [`scan::commit`], unless
+    /// `SelectTarget`'s front returns first ([`super::front`]): with the targeting cursor up the unit
+    /// is bound to the cast and the selection stays.
     pub(super) fn commit(&mut self, entity: Entity, guid: u64) {
+        if self.front.takes(entity, guid) {
+            return;
+        }
         let me = self.me.single().ok();
         // The re-swing's gate is `StartAttack`'s on the new target (`0x5ecc16`): alive, then
         // `CanAttack`, so a body is switched to and never swung at.

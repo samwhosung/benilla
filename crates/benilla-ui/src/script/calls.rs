@@ -5,6 +5,11 @@
 //! `SetSelection 0x493540` before returning, and `CastSpellByName` (`0x4b4ab0`) casts at the
 //! selection as it stands then. So `/target Bob` then `/cast Flash Heal` heals Bob, and the app
 //! applies this queue front to back at one point in the frame.
+//!
+//! A call that selects a unit may find the spell targeting cursor up when it is applied:
+//! `SelectTarget` (`0x493540`) then binds the unit to the pending cast and returns without
+//! selecting (`0x4935d5`), behind the gate's tag 2 inside `BindSpellTargetObject` (`0x6e5ba5`). Each
+//! such call carries that answer as `may_cast`, asked where the Lua verb ran.
 
 use super::{ActionUse, SelectionRequest, UiScript};
 
@@ -12,16 +17,34 @@ use super::{ActionUse, SelectionRequest, UiScript};
 #[derive(Clone, Debug, PartialEq)]
 pub enum ScriptCall {
     /// `TargetUnit`, `AssistUnit`, `AssistByName` and `TargetLastEnemy`.
-    Select(SelectionRequest),
+    Select {
+        request: SelectionRequest,
+        /// The gate's tag 2, which `SelectTarget`'s bind asks while the cursor is up (`0x6e5ba5`).
+        may_cast: bool,
+    },
     /// `TargetByName(name, exactMatch)` (`0x489d60`), the stock `/target`.
-    TargetByName { name: String, exact: bool },
+    TargetByName {
+        name: String,
+        exact: bool,
+        /// As [`ScriptCall::Select::may_cast`].
+        may_cast: bool,
+    },
     /// `TargetNearestEnemy`, `TargetNearestFriend`, `TargetNearestPartyMember` and
     /// `TargetNearestRaidMember` (`0x489a80`/`0x489aa0`/`0x489ac0`/`0x489ae0`): one TAB cycle,
     /// `0x493f60(reverse, mode)`.
-    TargetNearest { mode: NearestMode, reverse: bool },
+    TargetNearest {
+        mode: NearestMode,
+        reverse: bool,
+        /// As [`ScriptCall::Select::may_cast`], for the pick's `SelectTarget` (`0x4941e6`); tag 4
+        /// opened the cycle (`0x493f9b`).
+        may_cast: bool,
+    },
     /// `TargetLastTarget()` (`0x489b00`): re-select the last-target pair, or deselect when it is
     /// empty.
-    TargetLastTarget,
+    TargetLastTarget {
+        /// As [`ScriptCall::Select::may_cast`]; the empty pair's deselect asks no gate (`0x4935ac`).
+        may_cast: bool,
+    },
     /// `ClearTarget()` (`0x489ff0` → `0x493540(0,0)`), a no-op when nothing is selected by then.
     ClearTarget,
     /// `AttackTarget()` (`0x489b50` → `0x6131a0(0,0)`): the attack validator's pick from the
@@ -30,6 +53,9 @@ pub enum ScriptCall {
         /// The gate's tag 4 allowed the pick (`0x6130bc` → `0x493f9b`): with none, the validator
         /// takes the selection as it stands.
         may_pick: bool,
+        /// As [`ScriptCall::Select::may_cast`], for the `SelectTarget` of a kept unit
+        /// (`0x613100`) and of the cycle's pick.
+        may_cast: bool,
     },
     /// `SpellTargetUnit(unit)` (`0x6e6d90`), made while the cursor was up.
     SpellTargetUnit(String),
@@ -91,8 +117,9 @@ pub enum NearestMode {
 
 impl ScriptCall {
     /// What the protected-action gate's tag 2 allowed the verb that queued this call, for the casts
-    /// applying it starts (`TryCastSpell`, `0x6e4bc1`); a call that casts nothing, or that was
-    /// refused at the verb and never queued, reads passed.
+    /// applying it starts (`TryCastSpell`, `0x6e4bc1`) or the bind of a selection it makes while
+    /// the targeting cursor is up (`0x6e5ba5`); a call that does neither, or that was refused at
+    /// the verb and never queued, reads passed.
     pub fn may_cast(&self) -> bool {
         match self {
             ScriptCall::UseAction(press) => press.may_cast,
@@ -100,6 +127,11 @@ impl ScriptCall {
             ScriptCall::UseInventoryItem { may_cast, .. } => *may_cast,
             ScriptCall::CastSpell { may_cast, .. } => *may_cast,
             ScriptCall::CastShapeshiftForm { may_cast, .. } => *may_cast,
+            ScriptCall::Select { may_cast, .. }
+            | ScriptCall::TargetByName { may_cast, .. }
+            | ScriptCall::TargetNearest { may_cast, .. }
+            | ScriptCall::TargetLastTarget { may_cast }
+            | ScriptCall::AttackTarget { may_cast, .. } => *may_cast,
             _ => true,
         }
     }

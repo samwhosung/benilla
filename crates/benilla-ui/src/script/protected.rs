@@ -232,6 +232,14 @@ pub(crate) fn gate(lua: &Lua, tag: Tag) -> bool {
     }
 }
 
+/// The gate's tag 2 for a verb that selects a unit. `SelectTarget` (`0x493540`) asks it only inside
+/// the bind it makes while the targeting cursor is up (`0x4935d5` → `0x6e5ba5`), and tag 2 refuses
+/// silently, so asking at every such verb shows nothing when the cursor is down. The cursor may go up
+/// between the verb and the app's application of its call, so the answer is carried either way.
+pub(crate) fn select_may_cast(lua: &Lua) -> bool {
+    gate(lua, Tag::CAST)
+}
+
 /// The refusal arm `0x494ab8`: `MACRO_ACTION_FORBIDDEN` (`0x1af`) for a `RunScript` chunk's
 /// context, else `ADDON_ACTION_FORBIDDEN` (`0x1b0`) with the context's text, signalled in place.
 fn refuse(lua: &Lua, context: &Context) {
