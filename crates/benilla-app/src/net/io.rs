@@ -98,6 +98,10 @@ const REALM_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The reference's 30 s ping timer (`0x537ff0`). vmangos kicks a socket whose pings come faster
 /// than 27 s apart more than twice (`WorldSocket::_HandlePing`), so this must not shrink.
+/// `GMSurveySubmit`'s survey id with `GMSurveyCurrentSurvey.dbc` unloaded: `0x496440` finds no row
+/// and answers 0 (`0x49645e`).
+const GM_SURVEY_ID_WITHOUT_TABLES: u32 = 0;
+
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Round trips [`PingClock`] keeps: 15. The reference's ring (`conn+0x1a6c`) has 16 slots, but
@@ -1530,6 +1534,13 @@ pub(super) fn writer_loop(
                         w.gm_ticket_updatetext(category, &text)
                     }
                     ClientCommand::GmTicketGet => w.gm_ticket_get(),
+                    ClientCommand::LotteryQuery => w.lottery_query(),
+                    ClientCommand::BuyLotteryTicket { first, second } => {
+                        w.buy_lottery_ticket(first, second)
+                    }
+                    ClientCommand::GmSurveySubmit { comment } => {
+                        w.gm_survey_submit(GM_SURVEY_ID_WITHOUT_TABLES, &[], &comment)
+                    }
                     ClientCommand::GmTicketDelete => w.gm_ticket_delete(),
                     ClientCommand::GmTicketSystemStatus => w.gm_ticket_system_status(),
                     ClientCommand::BinderActivate { binder } => w.binder_activate(binder),

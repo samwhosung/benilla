@@ -11,7 +11,7 @@
 //! `GMSURVEY_DISPLAY` is not fired: vmangos never sends its trigger, `SMSG_GM_TICKET_STATUS_UPDATE`
 //! status 3, and the survey window (`Blizzard_GMSurveyUI`) is not built.
 
-use benilla_ui::script::{GmTicketIntent, GmTicketWrite, ScriptValue, UiScript};
+use benilla_ui::script::{GmTicketIntent, GmTicketWrite, ScriptValue, UiScript, UnservedSend};
 use bevy::prelude::*;
 
 use benilla_assets::coords::bevy_to_wow;
@@ -190,6 +190,23 @@ fn drain_gm_ticket(
                     }
                 }
             }
+        });
+    }
+}
+
+/// Put the lottery and survey verbs' sends on the wire, in call order (`ui_gm_ticket` carries the
+/// survey; the lottery has no module of its own, its window being unbuilt).
+fn drain_unserved_sends(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
+    let Some(mut script) = script else {
+        return;
+    };
+    for send in script.take_unserved_sends() {
+        let _ = commands.0.send(match send {
+            UnservedSend::LotteryQuery => ClientCommand::LotteryQuery,
+            UnservedSend::BuyLotteryTicket { first, second } => {
+                ClientCommand::BuyLotteryTicket { first, second }
+            }
+            UnservedSend::GmSurveySubmit { comment } => ClientCommand::GmSurveySubmit { comment },
         });
     }
 }
@@ -379,6 +396,7 @@ impl Plugin for UiGmTicketPlugin {
                 (
                     feed_gm_ticket.in_set(UiFeed),
                     drain_gm_ticket.after(UiInput),
+                    drain_unserved_sends.after(UiInput),
                 ),
             );
     }
@@ -387,6 +405,61 @@ impl Plugin for UiGmTicketPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Each lottery and survey verb reaches the wire exactly once, with the command the bytes
+    /// call for, and a refused call reaches it not at all.
+    #[test]
+    fn the_lottery_and_survey_verbs_send_once_each() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .add_systems(Update, drain_unserved_sends);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        let mut run = |app: &mut App, lua: &str| {
+            app.world().non_send_resource::<UiScript>().run(lua).ok();
+            app.update();
+            rx.try_iter().collect::<Vec<_>>()
+        };
+        let one = |sent: Vec<ClientCommand>| {
+            assert_eq!(sent.len(), 1, "{sent:?}");
+            sent.into_iter().next().unwrap()
+        };
+        assert!(matches!(
+            one(run(&mut app, "GetLastLotteryNumbers()")),
+            ClientCommand::LotteryQuery
+        ));
+        assert!(matches!(
+            one(run(&mut app, "BuyRandomPicks(4)")),
+            ClientCommand::BuyLotteryTicket {
+                first: 4,
+                second: 0
+            }
+        ));
+        assert!(matches!(
+            one(run(&mut app, "SubmitNumbers(1, 2, 3, 4)")),
+            ClientCommand::BuyLotteryTicket {
+                first: 0,
+                second: 0b1111
+            }
+        ));
+        match one(run(
+            &mut app,
+            "GMSurveyCommentSubmit('hi') GMSurveySubmit()",
+        )) {
+            ClientCommand::GmSurveySubmit { comment } => assert_eq!(comment, "hi"),
+            other => panic!("{other:?}"),
+        }
+        // Refused, or a verb that sends nothing in the state this client holds.
+        for call in [
+            "BuyRandomPicks(0)",
+            "SubmitNumbers(1, 1, 2, 3)",
+            "AcceptSkillUps()",
+            "BuySkillTier(1)",
+            "LFGQuery(1, 0)",
+        ] {
+            assert!(run(&mut app, call).is_empty(), "{call}");
+        }
+    }
+
     use benilla_protocol::messages::GmTicket;
 
     fn ticket() -> Box<GmTicket> {

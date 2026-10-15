@@ -1062,6 +1062,10 @@ pub(crate) struct Model {
     /// The skill points chosen on each line and not yet accepted (row `+0x10`): `AddSkillUp` and
     /// `RemoveSkillUp` move them, a rebuild or `CancelSkillUps` clears them.
     pub(crate) skills_pending: HashMap<u32, u32>,
+    /// Sends the lottery and GM survey verbs queued, for the app to put on the wire.
+    pub(crate) unserved_sends: Vec<super::lottery::UnservedSend>,
+    /// The GM survey's overall comment (`0xb4e3a8`), kept until `GMSurveySubmit`.
+    pub(crate) gm_survey_comment: Option<String>,
 
     /// The reputation pane's snapshot and the display tree built from it.
     pub(crate) reputation: reputation::ReputationState,
@@ -1697,6 +1701,8 @@ impl Model {
             skills_selected: None,
             skill_abandons: Vec::new(),
             skills_pending: HashMap::new(),
+            unserved_sends: Vec::new(),
+            gm_survey_comment: None,
             reputation: reputation::ReputationState::default(),
             reputation_groups: Vec::new(),
             reputation_collapsed: HashSet::new(),

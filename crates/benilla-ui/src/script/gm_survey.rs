@@ -6,13 +6,17 @@
 //! `0xb4e3a8`) and `GMSurveySubmit` sends them (`0x32a`) and clears it. Benilla loads none of the
 //! three tables and has no buffer to read back, so the questions answer as with the tables empty.
 //!
-//! Deviation: `GMSurveyAnswerSubmit`, `GMSurveyCommentSubmit` and `GMSurveySubmit` check their
-//! arguments as the reference does and then do nothing: the survey wire is not built, and a
-//! submission with no survey id would file an empty survey on the server.
+//! `GMSurveyCommentSubmit` stores the overall comment (`0x4965e0`, an empty one clears it) and
+//! `GMSurveySubmit` sends it (`0x32a`) and clears it. The answers `GMSurveyAnswerSubmit` takes
+//! only ever reach the wire through a question id, and with the tables empty the first slot's id is
+//! 0, which ends the answer loop at once (`0x49668b`): they are checked and not kept. The survey
+//! id is 0 for the same reason (`0x496440`).
 
 use mlua::{Lua, Value};
 
 use super::binding_abi::{number_arg, string_arg};
+use super::lottery::{queue, UnservedSend};
+use super::Model;
 
 /// Register the survey globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -52,13 +56,29 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "GMSurveyCommentSubmit",
         lua.create_function(|lua, comment: Value| {
-            string_arg(lua, comment, "Usage: GMSurveyCommentSubmit(comment)")?;
+            let comment = string_arg(lua, comment, "Usage: GMSurveyCommentSubmit(comment)")?;
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .gm_survey_comment = Some(comment).filter(|c| !c.is_empty());
             Ok(())
         })?,
     )?;
 
-    // GMSurveySubmit() (`0x48cf80`): the send (module doc) and the buffer's clear.
-    g.set("GMSurveySubmit", lua.create_function(|_, ()| Ok(()))?)?;
+    // GMSurveySubmit() (`0x48cf80` over `0x496630`): sends `0x32a`, then clears the buffer
+    // (`0x496510`), the comment included.
+    g.set(
+        "GMSurveySubmit",
+        lua.create_function(|lua, ()| {
+            let comment = lua
+                .app_data_mut::<Model>()
+                .expect("model app_data")
+                .gm_survey_comment
+                .take()
+                .unwrap_or_default();
+            queue(lua, UnservedSend::GmSurveySubmit { comment });
+            Ok(())
+        })?,
+    )?;
 
     Ok(())
 }
@@ -154,5 +174,54 @@ mod tests {
         ] {
             assert_eq!(s.arity(call).unwrap(), 0, "{call}");
         }
+    }
+
+    /// `GMSurveySubmit` sends once with the stored overall comment and clears it
+    /// (`0x4965e0`, `0x496510`); an empty comment stores nothing.
+    #[test]
+    fn a_survey_submit_sends_the_stored_comment_once_and_clears_it() {
+        use crate::script::UnservedSend::GmSurveySubmit;
+        let mut s = UiScript::new().unwrap();
+        s.run("GMSurveySubmit()").unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [GmSurveySubmit {
+                comment: String::new()
+            }]
+        );
+        s.run("GMSurveyCommentSubmit('first') GMSurveyCommentSubmit('second')")
+            .unwrap();
+        assert!(s.take_unserved_sends().is_empty(), "storing sends nothing");
+        s.run("GMSurveyAnswerSubmit(1, 3, 'c') GMSurveySubmit()")
+            .unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [GmSurveySubmit {
+                comment: "second".into()
+            }]
+        );
+        // Cleared by the submit; an empty string clears a stored one; a number is a comment.
+        s.run("GMSurveySubmit()").unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [GmSurveySubmit {
+                comment: String::new()
+            }]
+        );
+        s.run("GMSurveyCommentSubmit('x') GMSurveyCommentSubmit('') GMSurveySubmit()")
+            .unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [GmSurveySubmit {
+                comment: String::new()
+            }]
+        );
+        s.run("GMSurveyCommentSubmit(42) GMSurveySubmit()").unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [GmSurveySubmit {
+                comment: "42".into()
+            }]
+        );
     }
 }

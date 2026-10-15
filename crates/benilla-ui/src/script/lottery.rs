@@ -7,14 +7,41 @@
 //! The reference's getters push a number and then return 0 (`xor eax,eax`), so Lua receives no
 //! value from them (`tables/bindings.tsv` flags them `stack-leak`); that is kept.
 //!
-//! Deviation: the three senders (`GetLastLotteryNumbers`, `BuyRandomPicks`, `SubmitNumbers`) check
-//! their arguments and answer as the reference does but send nothing. Their `CMSG` (`0x334`,
-//! `0x336`) belong to a system no server of 1.12 answers or accepts, and the wire for it is not
-//! built.
+//! The three senders (`GetLastLotteryNumbers`, `BuyRandomPicks`, `SubmitNumbers`) queue the send
+//! the reference makes ([`UnservedSend`]) for the app to put on the wire: opcodes `0x334` and
+//! `0x336`. Their bodies are the instructions' own (`0x4c4220`, `0x4c4290`, `0x4c4400`).
 
 use mlua::{Lua, MultiValue, Value, Variadic};
 
 use super::binding_abi::{coerced_number, ftol, number_arg};
+use super::Model;
+
+/// A send made by a verb of a system no 1.12 server runs, drained by the app in call order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnservedSend {
+    /// `CMSG_LOTTERY_QUERY_OBSOLETE`: `GetLastLotteryNumbers`.
+    LotteryQuery,
+    /// `CMSG_BUY_LOTTERY_TICKET_OBSOLETE` with its two dwords: `BuyRandomPicks` sends `(count, 0)`,
+    /// `SubmitNumbers` `(0, mask)`.
+    BuyLotteryTicket { first: u32, second: u32 },
+    /// `CMSG_GMSURVEY_SUBMIT` with the overall comment `GMSurveyCommentSubmit` stored.
+    GmSurveySubmit { comment: String },
+}
+
+impl super::UiScript {
+    /// Drain the sends queued since the last call.
+    pub fn take_unserved_sends(&mut self) -> Vec<UnservedSend> {
+        std::mem::take(&mut self.model_mut().unserved_sends)
+    }
+}
+
+/// Queue a send from a binding.
+pub(super) fn queue(lua: &Lua, send: UnservedSend) {
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .unserved_sends
+        .push(send);
+}
 
 /// `GetPrizeItemInfo`'s error (`0x848318`), raised for a prize the window holds no record of.
 const NO_PRIZE: &str = r#"Invalid prize item in GetPrizeItemInfo("type", index)"#;
@@ -41,21 +68,31 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CloseLottery (`0x4c4210`): `xor eax,eax; ret`.
     g.set("CloseLottery", lua.create_function(|_, ()| Ok(()))?)?;
 
-    // GetLastLotteryNumbers (`0x4c4220`): sends opcode `0x334` with no body (module doc).
+    // GetLastLotteryNumbers (`0x4c4220`): sends opcode `0x334` with no body.
     g.set(
         "GetLastLotteryNumbers",
-        lua.create_function(|_, ()| Ok(()))?,
+        lua.create_function(|lua, ()| {
+            queue(lua, UnservedSend::LotteryQuery);
+            Ok(())
+        })?,
     )?;
 
     // SubmitNumbers(a, b, c, d) (`0x4c4290`): no argument gate, each read by `lua_tonumber` and
-    // truncated (a missing or non-numeric one reads 0, so is out of range). Valid picks would send
-    // `0x336` with the mask (module doc). Invalid ones send nothing and `return 1` without a push,
+    // truncated (a missing or non-numeric one reads 0, so is out of range). Valid picks send
+    // `0x336` with `(0, mask)` (`0x4c4378`, `0x4c4385`). Invalid ones send nothing and `return 1` without a push,
     // which hands Lua the stack's top: the last argument given, or with none the called function.
     g.set(
         "SubmitNumbers",
         lua.create_function(|lua, args: Variadic<Value>| {
             let pick = |i: usize| ftol(coerced_number(lua, args.get(i).cloned()));
-            if pick_mask([pick(0), pick(1), pick(2), pick(3)]).is_some() {
+            if let Some(mask) = pick_mask([pick(0), pick(1), pick(2), pick(3)]) {
+                queue(
+                    lua,
+                    UnservedSend::BuyLotteryTicket {
+                        first: 0,
+                        second: mask,
+                    },
+                );
                 return Ok(MultiValue::new());
             }
             let top = match args.last() {
@@ -69,12 +106,20 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // IsVendorActive (`0x4c43d0`) pushes a number and returns 0 values.
     g.set("IsVendorActive", lua.create_function(|_, ()| Ok(()))?)?;
 
-    // BuyRandomPicks(n) (`0x4c4400`): `lua_tonumber` with no gate; a count from 1 to 10 would send
-    // `0x336` with it (module doc), any other raises.
+    // BuyRandomPicks(n) (`0x4c4400`): `lua_tonumber` with no gate; a count from 1 to 10 sends
+    // `0x336` with `(count, 0)` (`0x4c444e`, `0x4c4457`), any other raises.
     g.set(
         "BuyRandomPicks",
         lua.create_function(|lua, n: Option<Value>| {
-            if (1..=10).contains(&ftol(coerced_number(lua, n))) {
+            let n = ftol(coerced_number(lua, n));
+            if (1..=10).contains(&n) {
+                queue(
+                    lua,
+                    UnservedSend::BuyLotteryTicket {
+                        first: n as u32,
+                        second: 0,
+                    },
+                );
                 Ok(())
             } else {
                 Err(mlua::Error::runtime("Invalid number of randompicks"))
@@ -141,7 +186,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::pick_mask;
+    use super::{pick_mask, UnservedSend};
     use crate::script::UiScript;
 
     /// The raising calls, each with the exe's own text.
@@ -277,5 +322,51 @@ mod tests {
         for bad in ["", "1", "nil, 1", "1, nil", "'x', 1", "1, {}"] {
             raises(&s, &format!("MakeMinigameMove({bad})"), usage);
         }
+    }
+
+    /// Each sender queues its send exactly once, with the body's two dwords as the bytes build
+    /// them; a refused call queues nothing.
+    #[test]
+    fn the_senders_queue_one_send_each_and_the_refused_none() {
+        let mut s = UiScript::new().unwrap();
+        s.run("GetLastLotteryNumbers()").unwrap();
+        assert_eq!(s.take_unserved_sends(), [UnservedSend::LotteryQuery]);
+        s.run("BuyRandomPicks(7)").unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [UnservedSend::BuyLotteryTicket {
+                first: 7,
+                second: 0
+            }]
+        );
+        // The mask: bit n - 1 per pick (`0x4c431b`..`0x4c4323`).
+        s.run("SubmitNumbers(1, 2, 31, 4)").unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [UnservedSend::BuyLotteryTicket {
+                first: 0,
+                second: 0x4000_000b
+            }]
+        );
+        assert!(s.take_unserved_sends().is_empty(), "drained");
+        // Refused: nothing queued.
+        s.run("SubmitNumbers(1, 1, 2, 3) SubmitNumbers(0, 1, 2, 3) SubmitNumbers()")
+            .unwrap();
+        for bad in ["0", "11", "nil"] {
+            let _ = s.run(&format!("BuyRandomPicks({bad})"));
+        }
+        assert!(s.take_unserved_sends().is_empty());
+        // In call order.
+        s.run("BuyRandomPicks(1) GetLastLotteryNumbers()").unwrap();
+        assert_eq!(
+            s.take_unserved_sends(),
+            [
+                UnservedSend::BuyLotteryTicket {
+                    first: 1,
+                    second: 0
+                },
+                UnservedSend::LotteryQuery
+            ]
+        );
     }
 }

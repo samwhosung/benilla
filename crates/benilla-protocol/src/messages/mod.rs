@@ -53,6 +53,7 @@ mod taxi;
 mod trade;
 mod trainer;
 mod tutorial;
+mod unserved;
 mod update_object;
 mod vendor;
 mod world_state;
@@ -248,6 +249,7 @@ pub use trade::{
 };
 pub use trainer::{train_fail, trainer_buy_spell, trainer_list, trainer_spell_state, TrainerSpell};
 pub use tutorial::{tutorial_flag, TutorialFlags};
+pub use unserved::{buy_lottery_ticket, gm_survey_submit, lottery_query, SurveyAnswer};
 pub use update_object::field;
 pub use update_object::{
     power_display_scale, quest_slot_state, CorpseLook, CreateSpline, MovementBlock, MoverState,

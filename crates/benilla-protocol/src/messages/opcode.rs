@@ -619,6 +619,13 @@ pub const SMSG_GMTICKET_DELETETICKET: u16 = 0x0218; // 536
 pub const CMSG_GMTICKET_SYSTEMSTATUS: u16 = 0x021A; // 538
 pub const SMSG_GMTICKET_SYSTEMSTATUS: u16 = 0x021B; // 539
 
+/// The GM survey's submission, sent from `0x4966a0`'s builder (`0x496630`) by `GMSurveySubmit`.
+pub const CMSG_GMSURVEY_SUBMIT: u16 = 0x032A; // 810
+/// The lottery window's two sends: the last numbers' query (`0x4c4220`) and the ticket purchase
+/// (`0x4c4290`, `0x4c4400`). No 1.12 server handles either.
+pub const CMSG_LOTTERY_QUERY_OBSOLETE: u16 = 0x0334; // 820
+pub const CMSG_BUY_LOTTERY_TICKET_OBSOLETE: u16 = 0x0336; // 822
+
 /// A ticket-state push: `u32` 1 updated, 2 closed, 3 survey offered; vmangos never sends it. The
 /// reference re-asks for the ticket on 1 (`0x5e7932`); 2 and 3 are recorded, not acted on, and
 /// the survey window 3 offers is not built.
