@@ -115,3 +115,17 @@ fn skill_buy_step_body_golden() {
     assert_eq!(opcode::CMSG_SKILL_BUY_STEP, 0x21f);
     assert_eq!(messages::skill_buy_step(493), hx("ed010000"));
 }
+
+/// `LFGQuery`'s send: `0x1ff` (pushed at `0x4e97f9`), the criterion word and the class.
+#[test]
+fn lfg_query_body_golden() {
+    assert_eq!(opcode::MSG_LOOKING_FOR_GROUP, 0x1ff);
+    assert_eq!(
+        messages::looking_for_group_query(0, 0),
+        hx("0000000000000000")
+    );
+    assert_eq!(
+        messages::looking_for_group_query(0x0102_0304, 9),
+        hx("0403020109000000")
+    );
+}

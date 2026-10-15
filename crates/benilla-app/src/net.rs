@@ -1983,6 +1983,11 @@ pub(crate) enum ClientCommand {
         slots: [u32; 3],
         comment: String,
     },
+    /// `MSG_LOOKING_FOR_GROUP`: `LFGQuery`'s inquiry.
+    LfgQuery {
+        criterion: u32,
+        class: u32,
+    },
     /// `CMSG_DEL_FRIEND`.
     DelFriend {
         guid: u64,

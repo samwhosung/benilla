@@ -220,9 +220,9 @@ pub use roster::{
 pub use skills::{skill_buy_step, unlearn_skill};
 pub use social::{
     add_friend, add_ignore, del_friend, del_ignore, friend_list, friend_result, friend_status,
-    read_friend_list, read_friend_status, read_ignore_list, read_who, set_looking_for_group, who,
-    FriendEntry, FriendOnline, FriendStatusUpdate, WhoEntry, WhoRequest, WhoResults,
-    WHO_MAX_SEARCH_TERMS, WHO_MAX_ZONES,
+    looking_for_group_query, read_friend_list, read_friend_status, read_ignore_list, read_who,
+    set_looking_for_group, who, FriendEntry, FriendOnline, FriendStatusUpdate, WhoEntry,
+    WhoRequest, WhoResults, WHO_MAX_SEARCH_TERMS, WHO_MAX_ZONES,
 };
 pub use spellbook::SpellCooldown;
 pub use spells::{

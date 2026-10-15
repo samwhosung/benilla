@@ -834,6 +834,8 @@ pub const CMSG_ADD_FRIEND: u16 = 0x0069; // 105
 /// Our LFG slots and comment, sent only from `0x4e8948`; nothing answers it. The name is the
 /// emulators'.
 pub const CMSG_SET_LOOKING_FOR_GROUP: u16 = 0x0200; // 512
+/// The LFG inquiry `LFGQuery` sends (`0x4e97f9`); the server's result list comes back under it.
+pub const MSG_LOOKING_FOR_GROUP: u16 = 0x01FF; // 511
 pub const CMSG_DEL_FRIEND: u16 = 0x006A; // 106
 pub const SMSG_IGNORE_LIST: u16 = 0x006B; // 107
 pub const CMSG_ADD_IGNORE: u16 = 0x006C; // 108

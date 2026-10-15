@@ -291,13 +291,47 @@ pub(crate) struct UiSocialPlugin;
 impl Plugin for UiSocialPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<SocialState>().add_systems(
-            Update,
-            (
-                feed::feed_social.in_set(UiFeed),
-                feed::drain_social.after(UiInput),
-            ),
-        );
+        app.init_resource::<SocialState>()
+            .add_systems(
+                Startup,
+                load_lfg_dungeons.after(benilla_assets::AssetSet::Open),
+            )
+            .add_systems(
+                Update,
+                (
+                    feed::feed_social.in_set(UiFeed),
+                    feed::drain_social.after(UiInput),
+                ),
+            );
+    }
+}
+
+/// `LFGDungeons.dbc` for the VM's looking-for-group lists.
+#[derive(Resource)]
+struct LfgDungeonsRes(Vec<benilla_ui::script::LfgDungeon>);
+
+fn load_lfg_dungeons(mut commands: Commands, assets: Option<Res<benilla_assets::WorldAssets>>) {
+    use benilla_assets::LockRecover;
+    let Some(assets) = assets else { return };
+    let loaded = {
+        let mut chain = assets.chain.lock_recover();
+        benilla_formats::load_lfg_dungeons(&mut chain)
+    };
+    match loaded {
+        Ok(rows) => commands.insert_resource(LfgDungeonsRes(
+            rows.into_iter()
+                .map(|r| benilla_ui::script::LfgDungeon {
+                    name: r.name,
+                    min_level: r.min_level,
+                    max_level: r.max_level,
+                    kind: r.kind,
+                    side: r.side,
+                })
+                .collect(),
+        )),
+        Err(e) => {
+            warn!("ui_social: LFGDungeons.dbc failed to load — the LFG lists stay empty: {e:#}")
+        }
     }
 }
 

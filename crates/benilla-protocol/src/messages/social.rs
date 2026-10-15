@@ -304,6 +304,16 @@ pub fn set_looking_for_group(slots: [u32; 3], comment: &str) -> Vec<u8> {
     body
 }
 
+/// Body of `MSG_LOOKING_FOR_GROUP` as `LFGQuery` sends it (`0x4e97f9`..`0x4e983a`): two
+/// `PutUInt32` (`0x4181f0`) after the opcode, the criterion word `(type << 24) & entry` (an `and`,
+/// `0x4e9826`, so 0 for any entry below 2^24) and the class argument, 0 when it is not a number.
+pub fn looking_for_group_query(criterion: u32, class: u32) -> Vec<u8> {
+    let mut body = Vec::with_capacity(8);
+    body.extend_from_slice(&criterion.to_le_bytes());
+    body.extend_from_slice(&class.to_le_bytes());
+    body
+}
+
 fn cstring_body(s: &str) -> Vec<u8> {
     let mut body = Vec::with_capacity(s.len() + 1);
     push_cstring(&mut body, s);

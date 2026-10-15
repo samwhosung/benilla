@@ -27,6 +27,14 @@ impl WorldWriter {
         )
     }
 
+    /// `MSG_LOOKING_FOR_GROUP`: `LFGQuery`'s inquiry, answered with the result list.
+    pub fn looking_for_group_query(&mut self, criterion: u32, class: u32) -> Result<()> {
+        self.send(
+            opcode::MSG_LOOKING_FOR_GROUP,
+            &messages::looking_for_group_query(criterion, class),
+        )
+    }
+
     /// Drop a friend by guid (`CMSG_DEL_FRIEND`); acked with `FRIEND_REMOVED`.
     pub fn del_friend(&mut self, guid: u64) -> Result<()> {
         self.send(opcode::CMSG_DEL_FRIEND, &messages::del_friend(guid))

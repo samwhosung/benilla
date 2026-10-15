@@ -81,6 +81,9 @@ pub enum SocialRequest {
     Who(String),
     /// `SortWho(sortType)`, the raw argument; the binding has already sorted the snapshot.
     SortWho(String),
+    /// `LFGQuery(type, entry)` that passed its bounds: `MSG_LOOKING_FOR_GROUP` with the criterion
+    /// word and the class.
+    LfgQuery { criterion: u32, class: u32 },
     /// `SetWhoToUI(flag)`: the next `/who` answer goes to the Who frame (true) or chat (false).
     SetWhoToUi(bool),
 }

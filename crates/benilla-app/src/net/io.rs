@@ -1862,6 +1862,9 @@ pub(super) fn writer_loop(
                     ClientCommand::SetLookingForGroup { slots, comment } => {
                         w.set_looking_for_group(slots, &comment)
                     }
+                    ClientCommand::LfgQuery { criterion, class } => {
+                        w.looking_for_group_query(criterion, class)
+                    }
                     ClientCommand::DelFriend { guid } => w.del_friend(guid),
                     ClientCommand::AddIgnore { name } => w.add_ignore(&name),
                     ClientCommand::DelIgnore { guid } => w.del_ignore(guid),

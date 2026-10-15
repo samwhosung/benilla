@@ -249,6 +249,7 @@ pub use guild::{
     MAX_RANKS, MIN_RANKS, RANK_RIGHT_BITS,
 };
 pub use input_verbs::{BindingInput, FiredInput, HeldInput};
+pub use lfg::LfgDungeon;
 pub use lottery::UnservedSend;
 pub use modelframe::ModelPaneFrame;
 pub use petition::{

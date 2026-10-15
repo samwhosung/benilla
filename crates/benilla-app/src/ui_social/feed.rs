@@ -36,6 +36,8 @@ const WHO_CHAT_MAX: usize = 3;
 pub(super) struct FedSocial {
     /// Whether the VM has had a snapshot; the first push fires the list events regardless.
     seeded: bool,
+    /// Whether the VM has been given the dungeon table.
+    lfg_pushed: bool,
 }
 
 /// Push the display snapshot to the VM, fire the list events, and print the owed result lines.
@@ -44,6 +46,7 @@ pub(super) fn feed_social(
     mut social: ResMut<SocialState>,
     names: Res<NameCache>,
     areas: Option<Res<AreaTableRes>>,
+    dungeons: Option<Res<super::LfgDungeonsRes>>,
     commands: Res<NetCommands>,
     mut sink: MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedSocial>>,
@@ -53,6 +56,12 @@ pub(super) fn feed_social(
     };
     let fed = fed.get(&script);
     let areas = areas.as_deref().map(|a| &a.0);
+    if !fed.lfg_pushed {
+        if let Some(d) = dungeons.as_deref() {
+            script.set_lfg_dungeons(d.0.clone());
+            fed.lfg_pushed = true;
+        }
+    }
 
     // Everything that reads the VM's own string table, resolved under one borrow of it.
     let (owed, friends, display_order) = {
@@ -359,6 +368,11 @@ pub(super) fn drain_social(
                 let _ = commands
                     .0
                     .send(ClientCommand::SetLookingForGroup { slots, comment });
+            }
+            SocialRequest::LfgQuery { criterion, class } => {
+                let _ = commands
+                    .0
+                    .send(ClientCommand::LfgQuery { criterion, class });
             }
             SocialRequest::RemoveFriendIndex(index) => {
                 if let Some(guid) = row_guid(&social.display_order, index) {
