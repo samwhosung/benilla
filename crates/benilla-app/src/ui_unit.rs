@@ -1499,45 +1499,38 @@ fn feed_units(
         }
     }
 
-    // The XP pair and `PLAYER_XP_UPDATE`, ahead of the world-enter events so `PLAYER_LOGIN` and
-    // `PLAYER_ENTERING_WORLD` handlers read real values. The event fires on first sight too, at
-    // login and after a `/reload`, where the reference's field watchers stay silent. Each field
-    // has a watch of its own (`0x5ddb4b` XP, `0x5ddb72` next-level XP), each firing
-    // `PLAYER_XP_UPDATE("player")` through `0x5de4b0` when its four bytes change, so a level-up,
-    // which moves both, fires it twice.
+    // The XP pair and the rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), pushed ahead of
+    // the world-enter events so `PLAYER_LOGIN` and `PLAYER_ENTERING_WORLD` handlers read real
+    // values, and both before any of their events fire, since a handler reads the two together.
+    //
+    // The events fire in the order the reference's notify pass walks the fields. `PLAYER_BYTES_2`
+    // byte 3 (194) is watched by `0x5de4e0`, which signals `UPDATE_EXHAUSTION` bare through
+    // `0x703e50` and prints the rest message; XP (716) and next-level XP (717) are two watches
+    // (`0x5ddb4b`, `0x5ddb72`), each signalling `PLAYER_XP_UPDATE("player")` through `0x5de4b0`
+    // when its four bytes change, so a level-up fires it twice; the rest pool (1175) is
+    // `0x5ddb24`, `UPDATE_EXHAUSTION("player")`. So the last rested kill, which moves all four,
+    // fires `UPDATE_EXHAUSTION()`, `PLAYER_XP_UPDATE`, `UPDATE_EXHAUSTION("player")`. Each event
+    // also fires once on first sight, at login and after a `/reload`, where the reference's
+    // watchers stay silent on a create: the XP one, and the exhaustion one bare in the byte's slot.
+    // Below `0x5ee990`'s local-GUID gate (`0x5eea93`) the flag arms test their own bits:
+    // `PLAYER_UPDATE_RESTING` on either edge of `0x20` (`0x5eead0`, fire `0x5eeaf2`),
+    // `PLAYTIME_CHANGED` on `0x3000` (`0x5eeb65`, fire `0x5eeb6f`).
     if let Some((store, _)) = self_q.iter().next() {
         let (xp, next) = xp_pair(store);
-        if memo.last_xp != Some((xp, next)) {
-            gate.audit("feed_units", "the XP pair");
-            let prev = memo.last_xp.replace((xp, next));
-            script.set_player_xp(xp, next);
-            let fires = prev.map_or(1, |(p_xp, p_next)| {
-                usize::from(p_xp != xp) + usize::from(p_next != next)
-            });
-            for _ in 0..fires {
-                script.fire_event("PLAYER_XP_UPDATE", vec![player_token()]);
-            }
-        }
-    }
-
-    // The rest snapshot (rest-state byte, pool, `PLAYER_FLAGS`), ahead of the world-enter events
-    // as the reference's descriptor is. Below `0x5ee990`'s local-GUID gate (`0x5eea93`) each arm
-    // tests its own bits: `PLAYER_UPDATE_RESTING` on either edge of `0x20` (`0x5eead0`, fire
-    // `0x5eeaf2`), `PLAYTIME_CHANGED` on `0x3000` (`0x5eeb65`, fire `0x5eeb6f`).
-    // `UPDATE_EXHAUSTION` is two watchers: `0x5de4e0` on the rest-state byte fires it bare
-    // through `0x703e50`, and `0x5de4b0` on the pool fires it with `"player"` (`0x5ddb24`). Each
-    // fires when its own bytes change, the byte's first (`PLAYER_BYTES_2` precedes the pool in
-    // the notify pass). Here it also fires once, bare, on first sight, where both stay silent on
-    // a create and on `/reload`.
-    if let Some((store, _)) = self_q.iter().next() {
         let rest = (
             store.0.player_rest_state().unwrap_or(0),
             store.0.player_rest_state_experience().unwrap_or(0),
             store.0.player_flags(),
         );
-        if memo.last_rest != Some(rest) {
+        let (xp_prev, rest_prev) = (memo.last_xp, memo.last_rest);
+        let (xp_moved, rest_moved) = (xp_prev != Some((xp, next)), rest_prev != Some(rest));
+        if xp_moved {
+            gate.audit("feed_units", "the XP pair");
+            memo.last_xp = Some((xp, next));
+            script.set_player_xp(xp, next);
+        }
+        if rest_moved {
             gate.audit("feed_units", "the rest snapshot");
-            let prev = memo.last_rest;
             memo.last_rest = Some(rest);
             script.set_rest_state(rest.0, rest.1, rest.2 & PLAYER_FLAGS_RESTING != 0);
             // The play-time bits share the dword and the memo; only the events split by bit.
@@ -1545,34 +1538,37 @@ fn feed_units(
                 rest.2 & PLAYER_FLAGS_PARTIAL_PLAY_TIME != 0,
                 rest.2 & PLAYER_FLAGS_NO_PLAY_TIME != 0,
             );
-            match prev {
-                None => script.fire_event("UPDATE_EXHAUSTION", vec![]),
-                Some(p) => {
-                    if p.0 != rest.0 {
-                        script.fire_event("UPDATE_EXHAUSTION", vec![]);
-                    }
-                    if p.1 != rest.1 {
-                        script.fire_event("UPDATE_EXHAUSTION", vec![player_token()]);
-                    }
-                }
-            }
+        }
+        if rest_moved && rest_prev.is_none_or(|p| p.0 != rest.0) {
+            script.fire_event("UPDATE_EXHAUSTION", vec![]);
             // Only the byte watcher messages, and only on a real change: `prev` None is the login
             // descriptor, a create the reference never runs through the notify pass.
-            if let Some(p) = prev {
+            if let Some(p) = rest_prev {
                 let line = rest_state_message(p.0, rest.0)
                     .and_then(|key| crate::ui_action::keyed_line(&script, key));
                 crate::ui_action::show_messages(&mut script, &mut sink, "ui_unit", line);
             }
-            // The self-only flag events on their own bits' edges; the login create is silent.
-            if let Some(p) = prev {
-                let moved = p.2 ^ rest.2;
-                if moved & PLAYER_FLAGS_RESTING != 0 {
-                    script.fire_event("PLAYER_UPDATE_RESTING", vec![]);
-                }
-                // `PLAYTIME_CHANGED` (id 530), argless; stock `PlayerFrame.lua:23` registers it.
-                if moved & (PLAYER_FLAGS_PARTIAL_PLAY_TIME | PLAYER_FLAGS_NO_PLAY_TIME) != 0 {
-                    script.fire_event("PLAYTIME_CHANGED", vec![]);
-                }
+        }
+        if xp_moved {
+            let fires = xp_prev.map_or(1, |(p_xp, p_next)| {
+                usize::from(p_xp != xp) + usize::from(p_next != next)
+            });
+            for _ in 0..fires {
+                script.fire_event("PLAYER_XP_UPDATE", vec![player_token()]);
+            }
+        }
+        if rest_prev.is_some_and(|p| p.1 != rest.1) {
+            script.fire_event("UPDATE_EXHAUSTION", vec![player_token()]);
+        }
+        // The self-only flag events on their own bits' edges; the login create is silent.
+        if let Some(p) = rest_prev {
+            let moved = p.2 ^ rest.2;
+            if moved & PLAYER_FLAGS_RESTING != 0 {
+                script.fire_event("PLAYER_UPDATE_RESTING", vec![]);
+            }
+            // `PLAYTIME_CHANGED` (id 530), argless; stock `PlayerFrame.lua:23` registers it.
+            if moved & (PLAYER_FLAGS_PARTIAL_PLAY_TIME | PLAYER_FLAGS_NO_PLAY_TIME) != 0 {
+                script.fire_event("PLAYTIME_CHANGED", vec![]);
             }
         }
     }
@@ -3229,7 +3225,7 @@ mod tests {
                 &mut app,
                 &[(FIELD_PLAYER_XP, 10), (FIELD_PLAYER_NEXT_LEVEL_XP, 100)]
             ),
-            vec!["PLAYER_XP_UPDATE player", "UPDATE_EXHAUSTION nil"]
+            vec!["UPDATE_EXHAUSTION nil", "PLAYER_XP_UPDATE player"]
         );
         assert_eq!(
             step(&mut app, &[(FIELD_PLAYER_XP, 20)]),
@@ -3263,6 +3259,33 @@ mod tests {
             ),
             vec!["UPDATE_EXHAUSTION nil", "UPDATE_EXHAUSTION player"],
             "the byte's watch runs before the pool's in the notify pass"
+        );
+
+        // The last rested kill moves the state byte (194), XP (716) and the pool (1175) in one
+        // block, and the notify pass walks the fields in index order.
+        step(
+            &mut app,
+            &[
+                (FIELD_PLAYER_BYTES_2, 1 << 24),
+                (FIELD_PLAYER_REST_STATE_EXPERIENCE, 30),
+                (FIELD_PLAYER_XP, 100),
+            ],
+        );
+        assert_eq!(
+            step(
+                &mut app,
+                &[
+                    (FIELD_PLAYER_BYTES_2, 0),
+                    (FIELD_PLAYER_REST_STATE_EXPERIENCE, 0),
+                    (FIELD_PLAYER_XP, 160)
+                ]
+            ),
+            vec![
+                "UPDATE_EXHAUSTION nil",
+                "PLAYER_XP_UPDATE player",
+                "UPDATE_EXHAUSTION player"
+            ],
+            "byte 194, XP 716, pool 1175"
         );
     }
 
