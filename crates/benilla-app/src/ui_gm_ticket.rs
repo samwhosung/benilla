@@ -414,7 +414,7 @@ mod tests {
         app.insert_resource(NetCommands(tx))
             .add_systems(Update, drain_unserved_sends);
         app.insert_non_send_resource(UiScript::new().unwrap());
-        let mut run = |app: &mut App, lua: &str| {
+        let run = |app: &mut App, lua: &str| {
             app.world().non_send_resource::<UiScript>().run(lua).ok();
             app.update();
             rx.try_iter().collect::<Vec<_>>()
