@@ -3,6 +3,7 @@
 //! events' handlers read is pushed ([`FieldEventPushes`]) and the unit tokens are seated
 //! ([`crate::ui_aura::AuraEvents`]).
 
+use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript};
@@ -15,18 +16,54 @@ use crate::field_watch::FieldNotice;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FieldEventPushes;
 
-/// Fire this frame's field notices in the order the packets wrote them.
+/// The read position in the notices, one for both of their readers: the firing while the in-game
+/// interface is up and the drop while it is not, so each notice is taken exactly once, the frame
+/// it is written.
+#[derive(Resource, Default)]
+pub(crate) struct FieldNoticeCursor(MessageCursor<FieldNotice>);
+
+/// Fire this frame's field notices in the order the packets wrote them. Under the unit feed's
+/// gate, so only while the in-game interface is up; [`drop_field_notices`] takes them otherwise.
 pub(super) fn fire_field_notices(
     script: Option<NonSendMut<UiScript>>,
-    mut notices: MessageReader<FieldNotice>,
+    notices: Res<Messages<FieldNotice>>,
+    mut cursor: ResMut<FieldNoticeCursor>,
     mut sink: crate::ui_action::MessageSink,
 ) {
+    let fresh: Vec<FieldNotice> = cursor.0.read(&notices).copied().collect();
+    // No VM, nobody to hear them: they are dropped, as below.
     let Some(mut script) = script else {
         return;
     };
-    for &notice in notices.read() {
+    for notice in fresh {
         fire(&mut script, &mut sink, notice);
     }
+}
+
+/// The field notices' second reader and its position: [`drop_field_notices`] under the exact
+/// complement of the unit feed's gate, so a notice is fired or dropped the frame it is written,
+/// never left to age in the buffer.
+pub(super) fn add_notice_drop(app: &mut App) {
+    app.add_message::<FieldNotice>()
+        .init_resource::<FieldNoticeCursor>()
+        .add_systems(
+            Update,
+            drop_field_notices
+                .in_set(crate::ui_script::UiFeed)
+                .before(super::UnitFeed)
+                .run_if(not(crate::ui_script::ingame_ui_up)),
+        );
+}
+
+/// The notices written while no in-game interface is up, taken unfired, on purpose: there is no VM
+/// to hear them, and the one that comes up later must not hear changes from before it. The
+/// reference's interface exists before the world it watches, so it has no such window; the
+/// snapshots the VM reads are pushed whole when it comes up, as they are at a `/reload`.
+pub(super) fn drop_field_notices(
+    notices: Res<Messages<FieldNotice>>,
+    mut cursor: ResMut<FieldNoticeCursor>,
+) {
+    cursor.0.clear(&notices);
 }
 
 /// One callback's signals.
@@ -157,6 +194,7 @@ mod tests {
     fn world(guids: benilla_ui::script::UnitGuids) -> App {
         let mut app = App::new();
         app.add_message::<FieldNotice>()
+            .init_resource::<FieldNoticeCursor>()
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::sound::MessageSounds>();
         let mut script = UiScript::new().unwrap();
@@ -251,5 +289,48 @@ mod tests {
                 "UPDATE_EXHAUSTION player",
             ]
         );
+    }
+
+    /// The two readers share one position: what the drop took, the firing never fires.
+    #[test]
+    fn a_dropped_notice_never_fires_later() {
+        let mut app = world(seated());
+        app.world_mut()
+            .resource_mut::<Messages<FieldNotice>>()
+            .write(FieldNotice::Player { id: 523 });
+        app.world_mut().run_system_once(drop_field_notices).unwrap();
+        assert_eq!(
+            fired(&mut app, &[FieldNotice::Player { id: 524 }]),
+            ["PLAYER_PVP_RANK_CHANGED player"]
+        );
+    }
+
+    /// The drop's own registration: while no in-game interface is up it takes each notice the
+    /// frame it is written; once one is up it leaves them to the firing.
+    #[test]
+    fn the_drop_runs_exactly_while_no_interface_is_up() {
+        let mut app = App::new();
+        add_notice_drop(&mut app);
+        let unread = |app: &mut App, notice: FieldNotice| -> usize {
+            app.world_mut()
+                .resource_mut::<Messages<FieldNotice>>()
+                .write(notice);
+            app.update();
+            app.world_mut()
+                .resource_scope(|world, cursor: Mut<FieldNoticeCursor>| {
+                    cursor.0.len(world.resource::<Messages<FieldNotice>>())
+                })
+        };
+        // No state yet: the login screen's side of the gate.
+        assert_eq!(unread(&mut app, FieldNotice::Player { id: 189 }), 0);
+        app.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+        assert_eq!(
+            unread(&mut app, FieldNotice::Player { id: 189 }),
+            1,
+            "the interface is up: the firing's to take"
+        );
+        // An entry load pending is the interface not up yet.
+        app.insert_resource(crate::ui_script::PendingEntryUiLoad);
+        assert_eq!(unread(&mut app, FieldNotice::Player { id: 406 }), 0);
     }
 }

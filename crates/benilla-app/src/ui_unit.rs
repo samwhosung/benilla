@@ -102,6 +102,7 @@ pub(crate) struct UiUnitPlugin;
 
 impl Plugin for UiUnitPlugin {
     fn build(&self, app: &mut App) {
+        field_events::add_notice_drop(app);
         app.configure_sets(
             Update,
             UnitFeed
