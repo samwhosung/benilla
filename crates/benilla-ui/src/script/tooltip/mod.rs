@@ -197,16 +197,19 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
     }
 }
 
-/// Writes a line cell's text and colour and shows it.
+/// Writes a line cell's text and colour and shows it. The text goes through `SetText` with its
+/// expand flag (`0x530203`, `0x5302e7`, `0x53033d`, `0x53060e`), so the number separators swap
+/// while `SetEuropeanNumbers` holds.
 pub(super) fn write_cell(
     model: &mut Model,
     rh: crate::widget::RegionHandle,
     text: &str,
     color: [f32; 4],
 ) {
+    let text = model.localized_text(text.to_string());
     let d = model.region_data.entry(rh).or_default();
     let was_shown = d.text.as_deref().is_some_and(|t| !t.is_empty());
-    d.text = Some(text.to_string());
+    d.text = Some(text);
     d.set_vertex_color(Some(color));
     // The line's own colour, as if set by `SetTextColor`: a later
     // `GameTooltipText:SetTextColor` must not repaint it.

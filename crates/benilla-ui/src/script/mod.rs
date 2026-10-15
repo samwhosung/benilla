@@ -944,9 +944,11 @@ impl UiScript {
         let Some(h) = model.arena.lookup(frame) else {
             return false;
         };
+        // The line `AddMessage` would store, through `SetText`'s expand flag (`0x788b3c`).
+        let text = model.localized_text(text.to_string());
         match model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
             Some(crate::widget::KindState::ScrollingMessage(smf)) => {
-                smf.add(text.to_string(), r, g, b);
+                smf.add(text, r, g, b);
                 true
             }
             _ => false,

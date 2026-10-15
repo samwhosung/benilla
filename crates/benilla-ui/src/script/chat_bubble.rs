@@ -366,8 +366,10 @@ fn set_line(
     let (frame, text, was_shown) = (b.frame, b.text, b.shown);
     b.shown = true;
     let c = state.colour;
+    // The line goes through `SetText` with its expand flag (`0x4b16c0`).
+    let line = model.localized_text(state.text.clone());
     let data = model.region_data.entry(text).or_default();
-    data.text = Some(state.text.clone());
+    data.text = Some(line);
     data.set_vertex_color(Some([c[0], c[1], c[2], 1.0]));
     fit_width(model, i, g);
     if !was_shown {

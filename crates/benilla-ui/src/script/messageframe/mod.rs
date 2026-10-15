@@ -61,8 +61,13 @@ pub(super) fn channel(lua: &mlua::Lua, v: &mlua::Value) -> f32 {
 /// full keyring and gets a silent click. Only the text is gated so: a bad colour still adds the
 /// line in white (`0x79581c`), and the receiver checks (`0x847ef8`) still raise. A number becomes
 /// its decimal text (`0x6f7c80`).
+///
+/// The line's text is what `SetText` stores with its expand flag (`0x7863fe`, `0x788b3c`), so the
+/// number separators swap while `SetEuropeanNumbers` holds.
 pub(super) fn message_text(lua: &mlua::Lua, v: &mlua::Value) -> Option<String> {
-    super::binding_abi::optional_string(lua, v).filter(|s| !s.is_empty())
+    let text = super::binding_abi::optional_string(lua, v).filter(|s| !s.is_empty())?;
+    let model = lua.app_data_ref::<super::Model>().expect("model app_data");
+    Some(model.localized_text(text))
 }
 
 /// Install `SetJustifyH`, `GetJustifyH`, `SetJustifyV` and `GetJustifyV`, which both classes carry,

@@ -673,7 +673,10 @@ impl Plate {
         }
 
         if last.as_ref().is_none_or(|l| l.name != state.name) {
-            model.region_data.entry(name).or_default().text = Some(state.name.clone());
+            // The name goes through `SetText` with its expand flag: `GetUnitName` takes the one
+            // stack argument and leaves the `push 1` ahead of it for the call (`0x7cb706`-`0x7cb718`).
+            let shown = model.localized_text(state.name.clone());
+            model.region_data.entry(name).or_default().text = Some(shown);
             model.touch_measure(name);
             // A new string clears the valid bit and invalidates (`0x771ea4`).
             model.clear_region_valid(name);
@@ -704,8 +707,10 @@ impl Plate {
                 }
                 (Some(n), false) => {
                     let c = state.level_colour;
+                    // The level goes through `SetText` with its expand flag (`0x7cbcca`).
+                    let shown = model.localized_text(n.to_string());
                     let data = model.region_data.entry(level).or_default();
-                    data.text = Some(n.to_string());
+                    data.text = Some(shown);
                     data.set_vertex_color(Some([c[0], c[1], c[2], 1.0]));
                     model.set_region_hidden(level, false);
                     model.set_region_hidden(skull, true);

@@ -238,6 +238,8 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     break;
                 };
                 let id = model.region_id(rh);
+                // The block's text goes through `SetText` with its expand flag (`0x78aea1`).
+                let text = model.localized_text(text.clone());
                 let mut d = RegionData {
                     anchors: Anchors::from([anchor_for(
                         prev_block,
@@ -248,7 +250,7 @@ fn build(model: &mut Model, fh: FrameHandle, blocks: &[Block]) {
                     // No height: the rect takes the wrapped text's height from the measure round
                     // trip, as the client's font engine gives it (`0x7729b0`, `0x5c2070`).
                     size: Some((width, 0.0)),
-                    text: Some(text.clone()),
+                    text: Some(text),
                     font_object: paint.font_object.clone(),
                     font_explicit: paint.explicit,
                     font_path: paint.font_path.clone(),

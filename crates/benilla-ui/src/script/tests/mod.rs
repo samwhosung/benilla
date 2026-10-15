@@ -23,6 +23,7 @@ mod drag_threshold;
 mod dying_target;
 mod end_to_end;
 mod engine_updates;
+mod european_text;
 mod events;
 mod flag_args;
 mod font_object;
