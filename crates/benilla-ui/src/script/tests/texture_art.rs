@@ -160,3 +160,39 @@ fn a_same_value_invalidate_after_new_art_takes_the_art() {
     );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }
+
+/// The full pass is not a second reader of the art: new art plus a layout touch that names no node
+/// (which sends the next resolve down the full derivation) leaves the resolved texture's rect
+/// standing, as the pass that names it does, and the verify mode's from-scratch solve agrees.
+#[test]
+fn new_art_and_an_unnamed_touch_in_one_frame_leave_the_rect_standing() {
+    let mut s = owner();
+    s.run(
+        r#"T = f:CreateTexture("T", "ARTWORK"); T:SetTexture("Art")
+        T:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)"#,
+    )
+    .unwrap();
+    s.resolve();
+    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0));
+    let before = drawn(&s, "T").expect("drawn");
+
+    let derives = s.model_ref().layout_derives;
+    s.run(r#"T:SetTexture("Big")"#).unwrap();
+    s.model_mut().touch_layout();
+    resolve_matches_scratch(&mut s, "new art and an unnamed touch");
+    assert!(
+        s.model_ref().layout_derives > derives,
+        "the run took the full derivation, the path whose fingerprint leaves the art out"
+    );
+    assert_eq!(num(&mut s, "T:GetRight()"), Some(164.0), "the rect stands");
+    assert_eq!(drawn(&s, "T"), Some(before));
+
+    s.run("f:SetHeight(120)").unwrap();
+    resolve_matches_scratch(&mut s, "the target moved");
+    assert_eq!(
+        num(&mut s, "T:GetRight()"),
+        Some(228.0),
+        "the next resolve that reaches it reads the new art"
+    );
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
