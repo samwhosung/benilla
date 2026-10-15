@@ -789,6 +789,7 @@ pub(super) fn auto_acquire_attacker(
     stores: Query<&ObjectStore>,
     mut selection: ResMut<Selection>,
     mut seam: crate::creature_anim::AttackSeam,
+    mut front: super::front::SelectFront,
 ) {
     for s in swings.read() {
         if selection.target.is_some() {
@@ -807,6 +808,11 @@ pub(super) fn auto_acquire_attacker(
             "auto-target: attacker {:#x} (victim = me, no target)",
             guid.0
         );
+        // `0x6259fe` is `SelectTarget`, whose front may bind the attacker to a standing cursor's
+        // cast instead; the packet handler runs in no script, whose gate context passes tag 2.
+        if front.takes(s.attacker, guid.0) {
+            continue;
+        }
         // The selection was empty, so no switch law: selection only.
         commit(
             &mut selection,
