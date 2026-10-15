@@ -561,6 +561,7 @@ fn a_pets_refused_cast_writes_no_combat_log_line() {
         arg: None,
         caster: Caster::Player,
         redisplay: false,
+        input: benilla_ui::script::InputEvents::NONE,
     });
     errors.push_pet(GROWL, 0x5F);
 

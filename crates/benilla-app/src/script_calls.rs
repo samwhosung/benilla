@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 
-use benilla_ui::script::{ScriptCall, UiScript};
+use benilla_ui::script::{QueuedCall, ScriptCall, UiScript};
 
 /// How deep calls made while applying a call may nest in one frame: a macro whose line presses a
 /// macro, and so on. Past it (a macro that presses itself), what is left waits for the next frame,
@@ -40,6 +40,11 @@ pub(crate) fn apply_script_calls(
         // The gate's answer for this call, made where the Lua verb ran: its casts start only if
         // tag 2 passed there. The ladder reads it for as long as this call applies.
         appliers.p3().ladder.permit(call.may_cast());
+        let selected_before = appliers.p0().selected();
+        let error_marks = (
+            appliers.p4().error_count(),
+            appliers.p3().ladder.cast_errors.0.len(),
+        );
         match call {
             ScriptCall::Select(request) => appliers.p0().select(request),
             ScriptCall::TargetByName { name, exact } => appliers.p0().target_by_name(&name, exact),
@@ -82,36 +87,62 @@ pub(crate) fn apply_script_calls(
         }
         // TryCast's attack pick can move the selection mid-cast (`0x6e4efb`), so a press held
         // there is picked and resumed before the next call reads the selection.
-        let Some(held) = appliers.p3().ladder.take_held() else {
-            return;
-        };
-        // A held press passed tag 2 to be held, so the pick's tag 4 passes as well.
-        if appliers.p7().pick_for_cast(held) {
-            let mut cast = appliers.p3();
-            let ctx = cast.targeting.context();
-            cast.ladder.resume_after_pick(held, &ctx);
+        if let Some(held) = appliers.p3().ladder.take_held() {
+            // A held press passed tag 2 to be held, so the pick's tag 4 passes as well.
+            if appliers.p7().pick_for_cast(held) {
+                let mut cast = appliers.p3();
+                let ctx = cast.targeting.context();
+                cast.ladder.resume_after_pick(held, &ctx);
+            }
+        }
+        // The reference signals `PLAYER_TARGET_CHANGED` inside `SetSelection`, so inside this
+        // call's input events; the unit feed signals it a step later, and asks for them.
+        let selected_after = appliers.p0().selected();
+        let input = script.input_events();
+        if selected_after != selected_before {
+            script.note_selection_cause(selected_after, input);
+        }
+        // So are the refusals this call raised: the feed signals `UI_ERROR_MESSAGE` for them a
+        // frame later, inside the same events.
+        if input.any() {
+            appliers.p4().stamp_errors(error_marks.0, input);
+            for fail in appliers
+                .p3()
+                .ladder
+                .cast_errors
+                .0
+                .iter_mut()
+                .skip(error_marks.1)
+            {
+                fail.input = input;
+            }
         }
     });
     // Whatever casts next is the engine's own, which asks no gate.
     appliers.p3().ladder.permit(true);
 }
 
-/// Apply every queued call front to back. Applying one may queue more: a macro's lines run
-/// inside `UseAction` (`0x4e6098 call 0x4f1460`), so the calls they make go before the next one
-/// queued.
+/// Apply every queued call front to back, each with the input events its verb ran under raised
+/// again: the reference does the call inside the verb, so whatever it signals (a macro's lines, a
+/// handler of an event it fires) runs inside the key, click or Enter that made it. Applying one may
+/// queue more: a macro's lines run inside `UseAction` (`0x4e6098 call 0x4f1460`), so the calls they
+/// make go before the next one queued, under the same events.
 pub(crate) fn in_call_order(
     script: &mut UiScript,
     mut apply: impl FnMut(&mut UiScript, ScriptCall),
 ) {
-    let mut queue: VecDeque<(ScriptCall, u8)> = script
-        .take_script_calls()
+    let mut queue: VecDeque<(QueuedCall, u8)> = script
+        .take_queued_calls()
         .into_iter()
         .map(|call| (call, 0))
         .collect();
     let mut next_frame = Vec::new();
-    while let Some((call, depth)) = queue.pop_front() {
-        apply(script, call);
-        let nested = script.take_script_calls();
+    while let Some((QueuedCall { call, input }, depth)) = queue.pop_front() {
+        // The nested calls it queues are taken inside the replay, which they were made under.
+        let nested = script.with_input_events(input, |script| {
+            apply(script, call);
+            script.take_queued_calls()
+        });
         if depth >= MAX_NESTING {
             next_frame.extend(nested);
             continue;
@@ -121,7 +152,7 @@ pub(crate) fn in_call_order(
         }
     }
     if !next_frame.is_empty() {
-        script.requeue_script_calls(next_frame);
+        script.requeue_calls(next_frame);
     }
 }
 
@@ -1027,6 +1058,123 @@ mod tests {
             casts(&f).iter().map(|c| c.0).collect::<Vec<_>>(),
             vec![GHOST_WOLF]
         );
+    }
+
+    /// The stock UI over the frame's world, with an insecure addon, `Hook`, whose handler of
+    /// `PLAYER_TARGET_CHANGED` casts Heal.
+    fn with_stock_ui_and_a_casting_hook(f: &mut Frame) {
+        let _l = crate::local_state::test_env::ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (mut script, failures) =
+            crate::ui_script::layer_tests::production_load_with("tab-hook", false, "", |root| {
+                let dir = root.join("Hook");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("Hook.toc"), "## Interface: 11200\nhook.lua\n").unwrap();
+                std::fs::write(
+                    dir.join("hook.lua"),
+                    r#"local f = CreateFrame("Frame")
+                       f:RegisterEvent("PLAYER_TARGET_CHANGED")
+                       f:SetScript("OnEvent", function() CastSpellByName("Heal") end)"#,
+                )
+                .unwrap();
+            });
+        assert!(failures.is_empty(), "{failures:#?}");
+        script.set_spellbook(SpellBookState {
+            tabs: vec![SpellTabView {
+                name: "Holy".into(),
+                texture: None,
+                offset: 0,
+                num_spells: 1,
+            }],
+            slots: vec![SpellSlotView {
+                spell_id: HEAL,
+                name: "Heal".into(),
+                ..Default::default()
+            }],
+        });
+        f.app.world_mut().insert_non_send_resource(script);
+    }
+
+    /// Apply the queued calls, then the unit feed (which signals the selection's change), then the
+    /// calls the handlers made.
+    fn settle(f: &mut Frame) {
+        let world = f.app.world_mut();
+        world.run_system_once(apply_script_calls).unwrap();
+        crate::ui_unit::run_feed_units_once(world);
+        world.run_system_once(apply_script_calls).unwrap();
+    }
+
+    /// `SetSelection` signals `PLAYER_TARGET_CHANGED` inside `ExecuteBinding` (`0x4b7b02`-
+    /// `0x4b7b11`), so an insecure addon's handler that casts passes after a TAB press. Here the
+    /// unit feed signals it a step after the call is applied, with the call's input events raised
+    /// again around it: the stock `TARGETNEARESTENEMY` binding moves the target, the addon's handler
+    /// casts at the new one. A change no call made (the server's) hears it with none up, and its
+    /// cast is refused.
+    #[test]
+    fn a_tab_targets_and_the_addons_target_handler_casts() {
+        benilla_formats::wow_data_or_skip!();
+        let mut f = frame(true);
+        with_factions(&mut f, FRIEND, &[]);
+        spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+        with_stock_ui_and_a_casting_hook(&mut f);
+        // The feed's first pass seats the selection it finds, with its world-enter events.
+        settle(&mut f);
+        f.rx.try_iter().for_each(drop);
+
+        let pressed = f
+            .app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .execute_binding("TARGETNEARESTENEMY", true)
+            .expect("the binding runs");
+        assert!(pressed);
+        settle(&mut f);
+        assert_eq!(selected(&f), Some(MOB), "TAB picked the enemy");
+        assert_eq!(
+            casts(&f),
+            vec![(HEAL, Some(MOB))],
+            "the handler's cast passed"
+        );
+
+        // The same edge with no call behind it: the server moves the target.
+        f.app.world_mut().resource_mut::<Selection>().guid = Some(NEW);
+        settle(&mut f);
+        assert_eq!(
+            casts(&f),
+            vec![],
+            "no input event up for the handler: refused"
+        );
+    }
+
+    /// A refusal a call raises while it is applied is signalled by the feed a frame later, with the
+    /// input events the call ran under raised again (the reference signals it inside the press):
+    /// an attack with nothing to attack, pressed in a key's body, queues its refusal stamped with
+    /// the binding event, and pressed otherwise it carries none.
+    #[test]
+    fn a_refusal_a_call_raises_carries_the_events_it_ran_under() {
+        for (pressed, want) in [(true, true), (false, false)] {
+            let mut f = frame(false);
+            with_factions(&mut f, FRIEND, &[]);
+            if pressed {
+                run_pressed(&mut f, "AttackTarget()");
+            } else {
+                run(&mut f, "AttackTarget()");
+            }
+            let queued: Vec<_> = f
+                .app
+                .world()
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .0
+                .iter()
+                .map(|e| (e.key, e.input.binding))
+                .collect();
+            assert_eq!(
+                queued,
+                vec![("ERR_NO_ATTACK_TARGET", want)],
+                "pressed: {pressed}"
+            );
+        }
     }
 
     /// The Attack slot is a cast too (`UseAction` → `TryCast`, `0x6e4c90`), behind the same first

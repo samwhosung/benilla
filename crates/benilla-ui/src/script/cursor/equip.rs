@@ -132,7 +132,7 @@ pub(crate) fn auto_equip_from(lua: &Lua, item: CursorItem, suppress: bool) -> Au
             .flatten()
             .any(|offered| offered.guid == item.guid)
         {
-            model.ui_errors.push("ERR_EQUIP_TRADE_ITEM");
+            model.push_ui_error("ERR_EQUIP_TRADE_ITEM");
             return AutoEquip::None;
         }
     }

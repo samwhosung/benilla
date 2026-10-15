@@ -225,15 +225,13 @@ fn use_cleared(model: &mut Model, id: u32, on_self: bool, may_cast: bool) {
                 )
             });
         if let Some(key) = refusal.filter(|_| !locked) {
-            model.ui_errors.push(key);
+            model.push_ui_error(key);
         } else if !locked {
-            model
-                .script_calls
-                .push(crate::script::ScriptCall::UseInventoryItem {
-                    slot: id,
-                    on_self,
-                    may_cast,
-                });
+            model.queue_call(crate::script::ScriptCall::UseInventoryItem {
+                slot: id,
+                on_self,
+                may_cast,
+            });
         }
         return;
     }

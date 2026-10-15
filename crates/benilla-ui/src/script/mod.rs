@@ -205,7 +205,7 @@ pub use battlefield_positions::{BattlefieldFlagView, BattlefieldPositionView};
 pub use battlefield_queue::{BattlefieldListView, BattlefieldMapInfo, BattlefieldQueueSlot};
 pub use battlefield_score::{BattlefieldScoreRow, BattlefieldScores, BattlefieldStatColumn};
 pub use bind_confirm::PendingEquipAnswer;
-pub use calls::{NearestMode, ScriptCall};
+pub use calls::{NearestMode, QueuedCall, ScriptCall};
 pub use camera_view::{CameraViewRequest, CAMERA_VIEW_COUNT};
 pub use channel::{ChannelCommand, RecruitmentPlan, RecruitmentRun, ZoneChannelRow};
 pub use char_stats::{

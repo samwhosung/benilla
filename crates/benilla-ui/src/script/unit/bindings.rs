@@ -1058,9 +1058,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 if let Some(state) = model.held_unit_view(&token) {
                     model.show_selection(Some(state));
                 }
-                model
-                    .script_calls
-                    .push(ScriptCall::Select(SelectionRequest::Unit(token)));
+                model.queue_call(ScriptCall::Select(SelectionRequest::Unit(token)));
             }
             Ok(())
         })?,
@@ -1076,9 +1074,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, token: Option<String>| {
             if let Some(token) = token {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                model
-                    .script_calls
-                    .push(ScriptCall::Select(SelectionRequest::Assist(token)));
+                model.queue_call(ScriptCall::Select(SelectionRequest::Assist(token)));
             }
             Ok(())
         })?,
@@ -1090,9 +1086,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "TargetLastEnemy",
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model
-                .script_calls
-                .push(ScriptCall::Select(SelectionRequest::LastEnemy));
+            model.queue_call(ScriptCall::Select(SelectionRequest::LastEnemy));
             Ok(())
         })?,
     )?;
@@ -1119,9 +1113,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some(state) = pick.map(|c| c.state.clone()) {
                 model.show_selection(Some(state));
             }
-            model
-                .script_calls
-                .push(ScriptCall::TargetByName { name, exact });
+            model.queue_call(ScriptCall::TargetByName { name, exact });
             Ok(())
         })?,
     )?;
@@ -1171,7 +1163,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             check_unit_token(&Some(token.clone()))?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.script_calls.push(ScriptCall::SpellTargetUnit(token));
+            model.queue_call(ScriptCall::SpellTargetUnit(token));
             Ok(())
         })?,
     )?;
@@ -1189,7 +1181,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if had {
                 model.show_selection(None);
             }
-            model.script_calls.push(ScriptCall::ClearTarget);
+            model.queue_call(ScriptCall::ClearTarget);
             Ok(flag(had))
         })?,
     )?;

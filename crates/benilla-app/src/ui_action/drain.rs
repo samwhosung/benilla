@@ -177,6 +177,22 @@ pub(super) fn drain_go_openers(
     }
 }
 
+impl ActionPress<'_, '_> {
+    /// How many by-key refusals are queued.
+    pub(crate) fn error_count(&self) -> usize {
+        self.ui_errors.0.len()
+    }
+
+    /// Stamp the refusals queued since `from` with the input events the call that raised them ran
+    /// under, so the feed signals `UI_ERROR_MESSAGE` for them as the reference does, inside the
+    /// press.
+    pub(crate) fn stamp_errors(&mut self, from: usize, input: benilla_ui::script::InputEvents) {
+        for e in self.ui_errors.0.iter_mut().skip(from) {
+            e.input = input;
+        }
+    }
+}
+
 /// What a `UseAction` press reads and writes.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct ActionPress<'w, 's> {
@@ -387,12 +403,9 @@ pub(crate) fn use_action(
         // The macro arm (`0x4e5ee0` calls `0x4f1460`): each body line goes through the chat
         // input, as if typed.
         Some(b) if b.kind == ACTION_KIND_MACRO => {
-            // The macro's lines run inside the press in the reference, so the key or click that
-            // made it is still running for them; here it has returned, so it is raised again.
-            let ran = script.with_input_events(press.input, |script| {
-                crate::ui_macro::run_macro(script, b.action)
-            });
-            if !ran {
+            // The press's input events are up around the whole call
+            // ([`crate::script_calls::in_call_order`]), so the lines run inside them.
+            if !crate::ui_macro::run_macro(script, b.action) {
                 debug!(
                     "ui_action: macro action {action} (macro {}) is empty",
                     b.action

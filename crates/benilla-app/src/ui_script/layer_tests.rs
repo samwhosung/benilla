@@ -44,7 +44,7 @@ fn production_load(tag: &str, stock_ui: bool) -> (UiScript, Vec<String>) {
 /// The production in-game load, the layer on unless `stock_ui`, over a hermetic AddOns root that
 /// `addons` fills; `before` runs ahead of the load. The caller holds [`ENV_LOCK`]. Returns the VM
 /// and the load's failures.
-pub(super) fn production_load_with(
+pub(crate) fn production_load_with(
     tag: &str,
     stock_ui: bool,
     before: &str,

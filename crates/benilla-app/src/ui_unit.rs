@@ -1295,6 +1295,15 @@ pub(crate) fn live_player_seat(
     })
 }
 
+/// One pass of the unit feed, for a test that follows a selection change to its event.
+#[cfg(test)]
+pub(crate) fn run_feed_units_once(world: &mut World) {
+    use bevy::ecs::system::RunSystemOnce;
+    world
+        .run_system_once(feed_units)
+        .expect("the unit feed runs as a one-shot system");
+}
+
 fn feed_units(
     script: Option<NonSendMut<UiScript>>,
     tables: SnapshotTables,
@@ -1676,7 +1685,12 @@ fn feed_units(
     if selection.guid != memo.target_guid {
         gate.audit("feed_units", "the PLAYER_TARGET_CHANGED edge");
         memo.target_guid = selection.guid;
-        script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+        // The reference signals it inside `SetSelection`, so inside the key or click whose call
+        // moved the selection; a change that call made hears it under that call's input events.
+        let cause = script.take_selection_cause(selection.guid);
+        script.with_input_events(cause, |script| {
+            script.fire_event("PLAYER_TARGET_CHANGED", vec![]);
+        });
     }
 
     // `PLAYER_REGEN_DISABLED`/`ENABLED` on our in-combat flag's edge (`UNIT_FLAG_IN_COMBAT`

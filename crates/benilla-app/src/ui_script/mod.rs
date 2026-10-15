@@ -29,7 +29,7 @@ pub(crate) mod server_alert;
 #[cfg(test)]
 pub(crate) use input::feed_keys;
 #[cfg(test)]
-mod layer_tests;
+pub(crate) mod layer_tests;
 mod load_log;
 mod manifest;
 

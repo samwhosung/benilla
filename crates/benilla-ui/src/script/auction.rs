@@ -721,7 +721,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                             && s.durability.is_some_and(|(cur, max)| max > 0 && cur < max)
                     });
                 if damaged {
-                    model.ui_errors.push("ERR_AUCTION_REPAIR_ITEM");
+                    model.push_ui_error("ERR_AUCTION_REPAIR_ITEM");
                     return;
                 }
                 // A buyout under the minimum bid is raised to it (`0x4ce87b`-`0x4ce883`).

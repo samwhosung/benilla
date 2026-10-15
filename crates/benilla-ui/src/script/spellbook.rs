@@ -537,7 +537,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if let Some(slot) = book_slot(&model, id, &book_type) {
                     if !slot.passive {
                         let spell_id = slot.spell_id;
-                        model.script_calls.push(if pet {
+                        model.queue_call(if pet {
                             ScriptCall::CastPetSpell { spell_id, on_self }
                         } else {
                             ScriptCall::CastSpell {
@@ -643,7 +643,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if let Some(slot) = resolve_spell_by_name(&model.spellbook, &name) {
                 let spell_id = slot.spell_id;
-                model.script_calls.push(ScriptCall::CastSpell {
+                model.queue_call(ScriptCall::CastSpell {
                     spell_id,
                     on_self,
                     may_cast,
@@ -675,7 +675,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let may_stop = protected::gate(lua, Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if may_stop && model.casting {
-                model.script_calls.push(ScriptCall::SpellStopCasting);
+                model.queue_call(ScriptCall::SpellStopCasting);
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)
@@ -723,7 +723,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let may_stop = protected::gate(lua, Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if may_stop && model.spell_targeting {
-                model.script_calls.push(ScriptCall::SpellStopTargeting);
+                model.queue_call(ScriptCall::SpellStopTargeting);
                 Ok(Value::Integer(1))
             } else {
                 Ok(Value::Nil)

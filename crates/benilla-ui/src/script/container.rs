@@ -412,21 +412,19 @@ fn use_cleared(
         if let Some(key) =
             super::use_gates::item_use_refusal(model, fork, item_id, use_spell, known)
         {
-            model.ui_errors.push(key);
+            model.push_ui_error(key);
             return None;
         }
     }
-    model
-        .script_calls
-        .push(super::ScriptCall::UseContainerItem(ContainerUse {
-            bag,
-            slot,
-            guid,
-            arm,
-            asks: false,
-            on_self,
-            may_cast,
-        }));
+    model.queue_call(super::ScriptCall::UseContainerItem(ContainerUse {
+        bag,
+        slot,
+        guid,
+        arm,
+        asks: false,
+        on_self,
+        may_cast,
+    }));
     match arm {
         UseArm::Withdraw | UseArm::Deposit | UseArm::Sell | UseArm::Item(UseFork::Open) => {
             cursor::lock_item(model, guid);
@@ -451,17 +449,15 @@ fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem, on_self: bool
             step,
             cursor::equip::AutoEquip::Sent { .. } | cursor::equip::AutoEquip::Asked { .. }
         ) {
-            model
-                .script_calls
-                .push(super::ScriptCall::UseContainerItem(ContainerUse {
-                    bag,
-                    slot,
-                    guid,
-                    arm: UseArm::Item(UseFork::Equip),
-                    asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
-                    on_self,
-                    may_cast,
-                }));
+            model.queue_call(super::ScriptCall::UseContainerItem(ContainerUse {
+                bag,
+                slot,
+                guid,
+                arm: UseArm::Item(UseFork::Equip),
+                asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
+                on_self,
+                may_cast,
+            }));
         }
         if !projectile {
             cursor::lock_item(model, guid);

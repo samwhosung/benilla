@@ -165,7 +165,7 @@ fn plan_place(model: &mut Model, id: u32) -> Place {
     match &model.cursor {
         Some(CursorPayload::Item(i)) if !i.bar_placeable => return Place::Refused,
         Some(CursorPayload::Spell(s)) if s.passive => {
-            model.ui_errors.push(PASSIVE_ON_BAR_ERROR);
+            model.push_ui_error(PASSIVE_ON_BAR_ERROR);
             return Place::Refused;
         }
         _ => {}

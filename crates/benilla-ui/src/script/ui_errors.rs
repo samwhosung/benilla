@@ -19,7 +19,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "NotWhileDeadError",
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.ui_errors.push(NOT_WHILE_DEAD_KEY);
+            model.push_ui_error(NOT_WHILE_DEAD_KEY);
             Ok(())
         })?,
     )

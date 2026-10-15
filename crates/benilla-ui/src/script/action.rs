@@ -85,9 +85,6 @@ pub struct ActionUse {
     /// What the protected-action gate's tag 2 allowed the call (`0x6e4bc1`): a spell or an item's
     /// on-use spell casts through `TryCastSpell`, behind it. The equip arm and a macro are not.
     pub may_cast: bool,
-    /// The input events running when the call was made. A macro's lines run inside the call in the
-    /// reference, so the app runs them with these raised again.
-    pub input: super::InputEvents,
 }
 
 impl ActionUse {
@@ -167,6 +164,16 @@ impl super::UiScript {
     /// Drain the GlobalStrings keys of engine-side refusals; the app fires `UI_ERROR_MESSAGE` for
     /// each, where the reference calls `CGGameUI::DisplayError` inline.
     pub fn take_ui_errors(&mut self) -> Vec<&'static str> {
+        self.take_ui_errors_with_input()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    /// [`Self::take_ui_errors`] with the input events each was raised under: the reference signals
+    /// `UI_ERROR_MESSAGE` inside the failing press, and the app signals it a frame later, under
+    /// these raised again.
+    pub fn take_ui_errors_with_input(&mut self) -> Vec<(&'static str, super::InputEvents)> {
         std::mem::take(&mut self.model_mut().ui_errors)
     }
 }
@@ -279,22 +286,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let check_cursor = bool_or_default(rest.front(), false);
             let on_self = bool_or_default(rest.get(1), false);
             let may_cast = protected::gate(lua, Tag::CAST);
-            let input = protected::events(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if check_cursor && model.cursor.is_some() {
                 drop(model);
                 super::cursor::place_action(lua, action);
             } else {
                 let item_locks = model.item_locks.iter().copied().collect();
-                model
-                    .script_calls
-                    .push(super::ScriptCall::UseAction(ActionUse {
-                        action,
-                        on_self,
-                        item_locks,
-                        may_cast,
-                        input,
-                    }));
+                model.queue_call(super::ScriptCall::UseAction(ActionUse {
+                    action,
+                    on_self,
+                    item_locks,
+                    may_cast,
+                }));
             }
             Ok(())
         })?,

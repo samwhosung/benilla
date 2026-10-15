@@ -126,7 +126,7 @@ fn push(lua: &Lua, input: BindingInput) {
 
 fn push_call(lua: &Lua, call: ScriptCall) {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    model.script_calls.push(call);
+    model.queue_call(call);
 }
 
 /// A zoom's optional amount: `0x6f34d0` (is-number, a numeric string passes) then `0x6f3620`,

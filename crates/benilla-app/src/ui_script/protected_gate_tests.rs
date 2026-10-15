@@ -186,7 +186,10 @@ fn a_typed_cast_casts() {
     // A `/script` line run outside the enter script (a timer, an event) casts nothing.
     s.run(r#"RunScript('CastSpellByName("Fireball")')"#)
         .unwrap();
-    assert!(calls(&mut s).is_empty());
+    assert!(
+        matches!(calls(&mut s).as_slice(), [(_, false)]),
+        "queued with the gate's no, for the book's cancels; the cast is refused"
+    );
 }
 
 /// The stock spellbook: `SpellButton_OnClick` calls `CastSpell(id, book)` from the button's
@@ -207,7 +210,7 @@ fn a_stock_spellbook_click_casts() {
     // The same call from a macro outside an input event is refused here.
     s.run(r#"RunScript("CastSpell(1, BOOKTYPE_SPELL)")"#)
         .unwrap();
-    assert!(s.take_spell_casts().is_empty());
+    assert!(matches!(calls(&mut s).as_slice(), [(_, false)]));
 }
 
 /// A stock macro button whose body is a `/script` line: the click is the input event, and the
@@ -238,29 +241,30 @@ fn a_stock_macro_buttons_script_line_casts() {
     );
     s.fire_event("PLAYER_ENTERING_WORLD", vec![]);
     s.tick(0.1);
-    for (replay, want) in [(true, 1), (false, 0)] {
-        click(&mut s, "ActionButton2");
-        let press = s
-            .take_action_uses()
-            .pop()
-            .expect("the click pressed slot 2");
-        assert_eq!(
-            (press.action, press.input.click),
-            (2, true),
-            "pressed inside a click"
-        );
-        let events = if replay {
-            press.input
-        } else {
-            Default::default()
-        };
-        let ran = s.with_input_events(events, |s| crate::ui_macro::run_macro(s, index));
-        assert!(ran, "the macro has a line");
-        assert_eq!(
-            s.take_spell_casts().len(),
-            want,
-            "replayed events: {replay}"
-        );
-    }
+    // The press is applied as the app applies it, in call order, which raises the events the click
+    // ran under around the macro's lines; the same lines run with none are refused.
+    click(&mut s, "ActionButton2");
+    let mut ran = false;
+    let mut casts = Vec::new();
+    crate::script_calls::in_call_order(&mut s, |s, call| match call {
+        ScriptCall::UseAction(press) => {
+            assert_eq!(press.action, 2);
+            ran = crate::ui_macro::run_macro(s, index);
+        }
+        other => casts.push(other),
+    });
+    assert!(ran, "the macro has a line");
+    assert!(
+        matches!(casts.as_slice(), [c @ ScriptCall::CastSpell { .. }] if c.may_cast()),
+        "the line's cast passed the gate inside the click's events: {casts:?}"
+    );
+
+    click(&mut s, "ActionButton2");
+    s.take_script_calls();
+    assert!(crate::ui_macro::run_macro(&mut s, index));
+    assert!(
+        matches!(s.take_script_calls().as_slice(), [c @ ScriptCall::CastSpell { .. }] if !c.may_cast()),
+        "with no input event up the cast is refused"
+    );
     assert!(s.errors().is_empty(), "{:?}", s.errors());
 }

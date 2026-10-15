@@ -140,9 +140,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if let Some(spell_id) = form_at(&model, i).map(|f| f.view.spell_id) {
-                model
-                    .script_calls
-                    .push(super::ScriptCall::CastShapeshiftForm { spell_id, may_cast });
+                model.queue_call(super::ScriptCall::CastShapeshiftForm { spell_id, may_cast });
             }
             Ok(())
         })?,

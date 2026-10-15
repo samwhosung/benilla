@@ -112,7 +112,7 @@ pub(super) fn feed_actions(
     for spell_id in refused {
         script.trade_skill_cast_failed(spell_id);
     }
-    let texts: Vec<cast_fail::CastFailLine> = cast_errors
+    let texts: Vec<(cast_fail::CastFailLine, benilla_ui::script::InputEvents)> = cast_errors
         .0
         .drain(..)
         .filter_map(|fail| {
@@ -252,7 +252,7 @@ pub(super) fn feed_actions(
                     });
                 }
             }
-            line
+            line.map(|l| (l, fail.input))
         })
         .collect();
     cast_errors.0.extend(await_template);
@@ -263,7 +263,9 @@ pub(super) fn feed_actions(
         &mut script,
         &mut sink,
         "ui_action",
-        texts.into_iter().map(|l| Shown::keyed(l.key, l.text)),
+        texts
+            .into_iter()
+            .map(|(l, input)| Shown::keyed(l.key, l.text).under(input)),
     );
 
     // (Dis)mount refusals by key ([`mount_result_key`]); none of these strings takes arguments.
@@ -303,7 +305,7 @@ pub(super) fn feed_actions(
         .drain(..)
         .filter_map(|e| {
             ui_error_text(&e, &|key| script.lua().globals().get::<String>(key).ok())
-                .map(|t| Shown::keyed(e.key, t))
+                .map(|t| Shown::keyed(e.key, t).under(e.input))
         })
         .collect();
     show_messages(&mut script, &mut sink, "ui_action", key_lines);
@@ -318,13 +320,13 @@ pub(super) fn feed_actions(
 
     // The engine's own by-key refusals (`ERR_PASSIVE_ABILITY`): `benilla_ui` cannot reach
     // [`UiErrorKeys`], so it queues keys that show here, one frame late.
-    let engine_keys = script.take_ui_errors();
+    let engine_keys = script.take_ui_errors_with_input();
     let engine_lines: Vec<Shown> = engine_keys
         .into_iter()
-        .filter_map(|key| {
+        .filter_map(|(key, input)| {
             let e = UiError::key(key);
             ui_error_text(&e, &|k| script.lua().globals().get::<String>(k).ok())
-                .map(|t| Shown::keyed(e.key, t))
+                .map(|t| Shown::keyed(e.key, t).under(input))
         })
         .collect();
     show_messages(&mut script, &mut sink, "ui_action", engine_lines);

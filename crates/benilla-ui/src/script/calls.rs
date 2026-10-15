@@ -105,14 +105,47 @@ impl ScriptCall {
     }
 }
 
+/// A call and the input events running when its verb queued it. The reference does the call inside
+/// that verb, so what it signals runs with those events up ([`super::protected`]); the app applies
+/// the call a frame step later and raises them again around it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueuedCall {
+    pub call: ScriptCall,
+    pub input: super::InputEvents,
+}
+
+impl super::Model {
+    /// Queue `call` with the input events running now.
+    pub(crate) fn queue_call(&mut self, call: ScriptCall) {
+        let input = self.protected.events();
+        self.script_calls.push(QueuedCall { call, input });
+    }
+}
+
+impl super::Model {
+    /// Queue an engine-side refusal for the app to show, with the input events running now.
+    pub(crate) fn push_ui_error(&mut self, key: &'static str) {
+        let input = self.protected.events();
+        self.ui_errors.push((key, input));
+    }
+}
+
 impl UiScript {
     /// Take every queued call, in call order.
     pub fn take_script_calls(&mut self) -> Vec<ScriptCall> {
+        self.take_queued_calls()
+            .into_iter()
+            .map(|queued| queued.call)
+            .collect()
+    }
+
+    /// [`Self::take_script_calls`] with the input events each was made under.
+    pub fn take_queued_calls(&mut self) -> Vec<QueuedCall> {
         std::mem::take(&mut self.model_mut().script_calls)
     }
 
     /// Put calls back at the front of the queue, ahead of any queued since.
-    pub fn requeue_script_calls(&mut self, calls: Vec<ScriptCall>) {
+    pub fn requeue_calls(&mut self, calls: Vec<QueuedCall>) {
         let mut model = self.model_mut();
         let later = std::mem::replace(&mut model.script_calls, calls);
         model.script_calls.extend(later);
@@ -125,13 +158,15 @@ impl UiScript {
     ) -> Vec<T> {
         let mut model = self.model_mut();
         let mut taken = Vec::new();
-        model.script_calls.retain(|call| match pick(call) {
-            Some(t) => {
-                taken.push(t);
-                false
-            }
-            None => true,
-        });
+        model
+            .script_calls
+            .retain(|queued| match pick(&queued.call) {
+                Some(t) => {
+                    taken.push(t);
+                    false
+                }
+                None => true,
+            });
         taken
     }
 }

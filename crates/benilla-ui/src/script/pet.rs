@@ -455,7 +455,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     return;
                 };
                 latch_press(model, packed);
-                model.script_calls.push(super::ScriptCall::PetAction(i));
+                model.queue_call(super::ScriptCall::PetAction(i));
             });
             Ok(())
         })?,
@@ -666,7 +666,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 super::tick::verb(lua, |model| {
                     if model.pet_bar.has_bar {
                         latch_press(model, packed);
-                        model.script_calls.push(super::ScriptCall::PetOrder(packed));
+                        model.queue_call(super::ScriptCall::PetOrder(packed));
                     }
                 });
                 Ok(())

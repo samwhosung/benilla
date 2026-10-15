@@ -584,9 +584,7 @@ pub(crate) fn split_container_item(lua: &Lua, bag: i64, slot: u32, count: i64) -
         clear_cursor(model);
         // `StopTargeting` ends an armed spell's targeting, as `SpellStopTargeting` does.
         if model.spell_targeting {
-            model
-                .script_calls
-                .push(super::ScriptCall::SpellStopTargeting);
+            model.queue_call(super::ScriptCall::SpellStopTargeting);
         }
     });
     pick_up_item(lua, item);

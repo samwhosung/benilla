@@ -368,9 +368,12 @@ pub(crate) struct Model {
     /// The player's active tracking aura, behind `GetTrackingTexture`.
     pub(crate) tracking: Option<super::aura::TrackingState>,
     /// The calls that touch the selection, the cast or the targeting cursor, in call order.
-    pub(crate) script_calls: Vec<super::calls::ScriptCall>,
+    pub(crate) script_calls: Vec<super::calls::QueuedCall>,
     /// The binding functions' queue and mouselook state.
     pub(crate) input: super::input_verbs::InputState,
+    /// The selection change a script call made and the input events it ran under, for the event
+    /// the unit feed signals for it ([`super::UiScript::note_selection_cause`]).
+    pub(crate) selection_cause: Option<(Option<u64>, super::InputEvents)>,
     /// The protected-action gate's input events ([`super::protected`]).
     pub(crate) protected: super::protected::Flags,
     /// `DropItemOnUnit` tokens (`0x48d960`), gated by the app; a refusal silently keeps the item.
@@ -566,7 +569,7 @@ pub(crate) struct Model {
     pub(crate) action_sets: Vec<(u32, u32)>,
     /// GlobalStrings keys of refusals this crate raises, fired by the app as `UI_ERROR_MESSAGE`
     /// (the reference's `DisplayError` `0x496720`), each a literal from `0xb4b498` (stride `0x14`).
-    pub(crate) ui_errors: Vec<&'static str>,
+    pub(crate) ui_errors: Vec<(&'static str, super::InputEvents)>,
 
     pub(crate) spellbook: spellbook::SpellBookState,
     /// The pet's spellbook, a second array as in the reference (`0xb700f0`, `0xb6f098`).
@@ -1360,6 +1363,7 @@ impl Model {
             script_calls: Vec::new(),
             input: Default::default(),
             protected: Default::default(),
+            selection_cause: None,
             drop_item_on_unit: Vec::new(),
             joined_channels: Vec::new(),
             party: party::PartyState::default(),

@@ -2,7 +2,7 @@
 //! [`show_messages`]; cast failures resolve in [`super::cast_fail`].
 
 use benilla_ui::messages::MessageRecord;
-use benilla_ui::script::{ScriptValue, UiScript};
+use benilla_ui::script::{InputEvents, ScriptValue, UiScript};
 use bevy::prelude::*;
 
 use crate::net::ObjectStore;
@@ -29,6 +29,10 @@ pub(crate) struct CastFail {
     /// cache callback `0x6e29b0`, calls `DisplayError` directly and never `0x62c360`, so a
     /// redisplay is not logged.
     pub redisplay: bool,
+    /// The input events the press ran under, when a script call's application raised this
+    /// refusal ([`crate::script_calls`]): the reference signals `UI_ERROR_MESSAGE` inside the
+    /// press, so a handler of it runs inside them. The server's failures carry none.
+    pub input: InputEvents,
 }
 
 /// Who failed to cast, which picks the reference's handler: `SMSG_CAST_RESULT` lands in
@@ -53,6 +57,7 @@ impl CastFail {
             arg: None,
             caster: Caster::Player,
             redisplay: false,
+            input: InputEvents::NONE,
         }
     }
 
@@ -79,6 +84,7 @@ impl CastErrors {
             arg: Some(arg),
             caster: Caster::Player,
             redisplay: false,
+            input: InputEvents::default(),
         });
     }
 
@@ -91,6 +97,7 @@ impl CastErrors {
             arg: None,
             caster: Caster::Pet,
             redisplay: false,
+            input: InputEvents::default(),
         });
     }
 }
@@ -126,36 +133,36 @@ pub(crate) enum FillArg {
 pub(crate) struct UiError {
     pub key: &'static str,
     pub args: Vec<FillArg>,
+    /// The input events the press ran under ([`CastFail::input`]).
+    pub input: InputEvents,
 }
 
 impl UiError {
     /// A message with no arguments.
     pub(crate) fn key(key: &'static str) -> Self {
-        Self {
-            key,
-            args: Vec::new(),
-        }
+        Self::args(key, Vec::new())
     }
 
     /// One string, the `_S` family.
     pub(crate) fn s(key: &'static str, s: impl Into<String>) -> Self {
-        Self {
-            key,
-            args: vec![FillArg::S(s.into())],
-        }
+        Self::args(key, vec![FillArg::S(s.into())])
     }
 
     /// Several strings in push order, the `_SS`/`_SSS` family.
     pub(crate) fn strings(key: &'static str, args: &[&str]) -> Self {
-        Self {
+        Self::args(
             key,
-            args: args.iter().map(|s| FillArg::S((*s).to_string())).collect(),
-        }
+            args.iter().map(|s| FillArg::S((*s).to_string())).collect(),
+        )
     }
 
     /// A mixed list, for a template whose specifiers are not all `%s`.
     pub(crate) fn args(key: &'static str, args: Vec<FillArg>) -> Self {
-        Self { key, args }
+        Self {
+            key,
+            args,
+            input: InputEvents::default(),
+        }
     }
 
     /// The first string argument.
@@ -224,6 +231,8 @@ pub(crate) struct Shown {
     record: Option<&'static MessageRecord>,
     kind: MsgKind,
     text: String,
+    /// The input events the message's event is signalled under ([`CastFail::input`]).
+    input: InputEvents,
 }
 
 impl Shown {
@@ -245,6 +254,7 @@ impl Shown {
             record,
             kind: record.map_or(MsgKind::Error, |r| r.kind),
             text,
+            input: InputEvents::NONE,
         }
     }
 
@@ -255,7 +265,14 @@ impl Shown {
             record: None,
             kind,
             text,
+            input: InputEvents::NONE,
         }
+    }
+
+    /// The same line, its event signalled under `input`: the reference signals it inside the press
+    /// that failed, and the app a frame later, with the press's events raised again.
+    pub(crate) fn under(self, input: InputEvents) -> Self {
+        Self { input, ..self }
     }
 }
 
@@ -289,7 +306,13 @@ pub(crate) fn show_messages(
     who: &str,
     lines: impl IntoIterator<Item = Shown>,
 ) {
-    for Shown { record, kind, text } in lines {
+    for Shown {
+        record,
+        kind,
+        text,
+        input,
+    } in lines
+    {
         debug!("{who}: message ({kind:?}) {text:?}");
         // The reference sounds a message beside its text, so the sound shares the display's guards.
         if let Some(record) = record {
@@ -300,12 +323,12 @@ pub(crate) fn show_messages(
                 sink.chat
                     .push_event(ChatEvent::text_only(ChatEventKind::System, text));
             }
-            MsgKind::Info => {
+            MsgKind::Info => script.with_input_events(input, |script| {
                 script.fire_event("UI_INFO_MESSAGE", vec![ScriptValue::Str(text)]);
-            }
-            MsgKind::Error => {
+            }),
+            MsgKind::Error => script.with_input_events(input, |script| {
                 script.fire_event("UI_ERROR_MESSAGE", vec![ScriptValue::Str(text)]);
-            }
+            }),
         }
     }
 }
@@ -876,5 +899,66 @@ mod totem_reagent_tests {
         let none = spell([0, 0], [(0, 0); 8]);
         assert_eq!(first_missing_totem(&none, &st, &objs.get()), None);
         assert_eq!(first_short_reagent(&none, &st, &objs.get()), None);
+    }
+}
+
+#[cfg(test)]
+mod message_input_tests {
+    use super::*;
+
+    /// A message's event is signalled under the input events its [`Shown`] carries: a handler whose
+    /// cast is a macro's passes the gate only inside one, as in the reference where the failed
+    /// press is the key or click that is still running.
+    #[test]
+    fn a_shown_line_signals_its_event_under_the_events_it_carries() {
+        let mut script = UiScript::new().unwrap();
+        script.set_spellbook(benilla_ui::script::SpellBookState {
+            tabs: vec![benilla_ui::script::SpellTabView {
+                name: "Fire".into(),
+                texture: None,
+                offset: 0,
+                num_spells: 1,
+            }],
+            slots: vec![benilla_ui::script::SpellSlotView {
+                spell_id: 133,
+                name: "Fireball".into(),
+                ..Default::default()
+            }],
+        });
+        script
+            .run(
+                r#"local f = CreateFrame("Frame")
+                   f:RegisterEvent("UI_ERROR_MESSAGE")
+                   f:SetScript("OnEvent", function() RunScript('CastSpell(1, BOOKTYPE_SPELL)') end)"#,
+            )
+            .unwrap();
+        let mut world = World::new();
+        world.init_resource::<ChatLog>();
+        world.init_resource::<MessageSounds>();
+        for (events, want) in [
+            (
+                InputEvents {
+                    binding: true,
+                    ..InputEvents::NONE
+                },
+                true,
+            ),
+            (InputEvents::NONE, false),
+        ] {
+            let mut state = bevy::ecs::system::SystemState::<MessageSink>::new(&mut world);
+            let mut sink = state.get_mut(&mut world);
+            show_messages(
+                &mut script,
+                &mut sink,
+                "test",
+                [Shown::unkeyed(MsgKind::Error, "Out of range.".into()).under(events)],
+            );
+            let casts: Vec<bool> = script
+                .take_script_calls()
+                .iter()
+                .map(|c| c.may_cast())
+                .collect();
+            assert_eq!(casts, vec![want], "events: {events:?}");
+        }
     }
 }
