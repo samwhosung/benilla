@@ -153,9 +153,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### login
 
 - The Credits, Cinematics and TOS side of the reference screen is absent, because the screen keeps only what logging in needs. ([`src/login/mod.rs:2`](../crates/benilla-app/src/login/mod.rs#L2))
-- A dial that never opened a socket reads `AUTH_LOGIN_SERVER_NOT_FOUND` or `LOGIN_SERVER_DOWN` plus the address, because with an editable realmlist "Unable to connect" cannot tell a bad name from a server that is down. ([`src/login/mod.rs:338`](../crates/benilla-app/src/login/mod.rs#L338))
-- No URL button on the native screen, because `LaunchURL`'s whitelist (`0x85cc34`) names only Blizzard domains that no longer serve these pages. ([`src/login/mod.rs:387`](../crates/benilla-app/src/login/mod.rs#L387))
-- The reference prints the address, but those Blizzard pages no longer serve and a private realm's player is not served by them. ([`src/login/mod.rs:414`](../crates/benilla-app/src/login/mod.rs#L414))
+- A dial that never opened a socket reads `AUTH_LOGIN_SERVER_NOT_FOUND` or `LOGIN_SERVER_DOWN` plus the address, because with an editable realmlist "Unable to connect" cannot tell a bad name from a server that is down. ([`src/login/mod.rs:339`](../crates/benilla-app/src/login/mod.rs#L339))
+- No URL button on the native screen, because `LaunchURL`'s whitelist (`0x85cc34`) names only Blizzard domains that no longer serve these pages. ([`src/login/mod.rs:388`](../crates/benilla-app/src/login/mod.rs#L388))
+- The reference prints the address, but those Blizzard pages no longer serve and a private realm's player is not served by them. ([`src/login/mod.rs:415`](../crates/benilla-app/src/login/mod.rs#L415))
 - The Credits, Cinematics and TOS buttons are absent, because the screen keeps only what logging in needs. ([`src/login/screen.rs:5`](../crates/benilla-app/src/login/screen.rs#L5))
 
 #### minimap
@@ -175,8 +175,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### net
 
 - The reference loads the world first and logs in after: the entry's first frame starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). ([`src/net/io.rs:10`](../crates/benilla-app/src/net/io.rs#L10))
-- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:408`](../crates/benilla-app/src/net/io.rs#L408))
-- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1251`](../crates/benilla-app/src/net/io.rs#L1251))
+- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:410`](../crates/benilla-app/src/net/io.rs#L410))
+- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1253`](../crates/benilla-app/src/net/io.rs#L1253))
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:55`](../crates/benilla-app/src/net/motion/remote.rs#L55))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
@@ -418,7 +418,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_script
 
 - The reference reads the install's `Interface\AddOns\`; benilla reads an install and does not live in one, so its addons live in its own state folder, and only there. ([`src/ui_script/addons.rs:264`](../crates/benilla-app/src/ui_script/addons.rs#L264))
-- The reference writes none (its file opens with a blank line); ours names the file, because players open this folder. ([`src/ui_script/addons.rs:749`](../crates/benilla-app/src/ui_script/addons.rs#L749))
+- The reference writes none (its file opens with a blank line); ours names the file, because players open this folder. ([`src/ui_script/addons.rs:752`](../crates/benilla-app/src/ui_script/addons.rs#L752))
 - The reference then re-reads the aspect (`0x492f13`), and on a change of 0.001 or more calls `0x491380`, which sets the reload trigger (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry` with it, because the window resizes freely and a reload on each resize would tear down every addon's state mid-play. ([`src/ui_script/extract/mod.rs:501`](../crates/benilla-app/src/ui_script/extract/mod.rs#L501))
 - The V-plate border is resampled sharp to the quad's physical size rather than GPU-magnified, so its 1 px bevel stays crisp; keyed by that size, so only a resize re-rasterises it. ([`src/ui_script/extract/mod.rs:1370`](../crates/benilla-app/src/ui_script/extract/mod.rs#L1370))
 - No signature or digest check (`0x46a90b`, `0x46a9d3`, `0x401560(9)`), so the chain's toc always loads and `FRAMES_LOADED` follows, because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/glue.rs:16`](../crates/benilla-app/src/ui_script/glue.rs#L16))
@@ -426,7 +426,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The files are under `benilla-config/Logs/`, since the install is read-only. ([`src/ui_script/load_log.rs:5`](../crates/benilla-app/src/ui_script/load_log.rs#L5))
 - `FULLSCREEN_QUADS_RESEAT` re-sizes the full-screen quads, which the stock files size only in their OnLoads, because a resize here keeps the loaded UI and the blackout would stop short of the new screen. ([`src/ui_script/manifest.rs:74`](../crates/benilla-app/src/ui_script/manifest.rs#L74))
 - No `FrameXML.toc` signature check, where `UI_Init` loads on a failed one and then quits (`0x401560(0xa)` at `0x48ff90`), because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/manifest.rs:171`](../crates/benilla-app/src/ui_script/manifest.rs#L171))
-- A flat 0.9, because 1.0 reads oversized. With `useUiScale` off, its default (`0x8430c0`), the reference sets `max(768/H, 0.9)` above 768 px tall and 1.0 at or below (`0x492f70`, on a mode set and from `0x4908ad`), so the two agree from ~853 px up. benilla never reads `useUiScale`: this CVar always applies to `UIParent` alone, as with it on. ([`src/ui_script/mod.rs:233`](../crates/benilla-app/src/ui_script/mod.rs#L233))
+- A flat 0.9, because 1.0 reads oversized. With `useUiScale` off, its default (`0x8430c0`), the reference sets `max(768/H, 0.9)` above 768 px tall and 1.0 at or below (`0x492f70`, on a mode set and from `0x4908ad`), so the two agree from ~853 px up. benilla never reads `useUiScale`: this CVar always applies to `UIParent` alone, as with it on. ([`src/ui_script/mod.rs:234`](../crates/benilla-app/src/ui_script/mod.rs#L234))
 - The body is read with 0x4000-byte reads filled to the end of the body, so what a read returns does not depend on how the network cut the packets; and the reading stops once the buffer is full, since no later byte can change it. ([`src/ui_script/server_alert.rs:23`](../crates/benilla-app/src/ui_script/server_alert.rs#L23))
 - The connection is direct. The reference opens its session with access type 0 (`InternetOpenA`, `0x7a6d97`), the system's proxy settings, which benilla does not read. ([`src/ui_script/server_alert.rs:26`](../crates/benilla-app/src/ui_script/server_alert.rs#L26))
 - On a worldport it fires with our descriptor present, so `UnitExists("player")` answers true where the reference's (`0x515970`) misses, because matching it breaks `UnitExists` for no stock reader. ([`src/ui_script/sweep.rs:150`](../crates/benilla-app/src/ui_script/sweep.rs#L150))
@@ -505,7 +505,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### chain
 
-- An archive that fails to open is an error, where the reference logs `"Failed to open archive"` and goes on, because a skipped corrupt archive surfaces only as missing files far downstream. ([`src/chain.rs:65`](../crates/benilla-formats/src/chain.rs#L65))
+- An archive that fails to open is an error, where the reference logs `"Failed to open archive"` and goes on, because a skipped corrupt archive surfaces only as missing files far downstream. ([`src/chain.rs:67`](../crates/benilla-formats/src/chain.rs#L67))
 
 #### characters
 
@@ -517,7 +517,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### emote_text
 
-- A surplus `%s` stays verbatim, where the reference would print stack garbage; no shipped row has one. ([`src/emote_text.rs:118`](../crates/benilla-formats/src/emote_text.rs#L118))
+- A surplus `%s` stays verbatim, where the reference would print stack garbage; no shipped row has one. ([`src/emote_text.rs:113`](../crates/benilla-formats/src/emote_text.rs#L113))
 
 #### garble
 
@@ -552,7 +552,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### auth
 
-- A stored per-OS constant, not the reference's HMAC over its own executables (`0x5b1170`), because every mangos-family realmd issues this one salt. ([`src/auth.rs:193`](../crates/benilla-protocol/src/auth.rs#L193))
+- A stored per-OS constant, not the reference's HMAC over its own executables (`0x5b1170`), because every mangos-family realmd issues this one salt. ([`src/auth.rs:199`](../crates/benilla-protocol/src/auth.rs#L199))
 
 #### events
 
