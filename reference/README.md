@@ -5,7 +5,9 @@ reads, under their benilla-re names, taken at the commit `PIN` holds (40 hex dig
 documents every column (`tables/README.md`) and rebuilds each table from the client's exe; nothing
 here is edited by hand, and nothing here is Blizzard content.
 
-Update: put the new benilla-re commit in `PIN`, then
+The pin moves when a change needs a row benilla-re has after it, and with that change: to a
+commit on benilla-re's main (the script refuses any other), then the sync, then the tests that
+read the table. Update: put the new benilla-re commit in `PIN`, then
 
 ```
 scripts/sync-reference.py <benilla-re checkout>            # copy the tables at the PIN

@@ -64,8 +64,12 @@ or a finding.
 - **Weigh it.** A row says how sure it is: `inferred` is a lead to check before you rest on it,
   `verified` with proof `one` or `two` is one or two readings of the bytes.
 - **When it has a gap or is wrong,** take that to benilla-re: an issue there with what you need to
-  know, or a pull request that adds the finding (its `CONTRIBUTING.md` says how a finding is
-  written and checked). Then cite the client address here, as the comments do.
+  know, or a pull request that adds the finding (its `docs/CONTRIBUTING.md` says how a finding is
+  written and checked). Then cite the client address here, as the comments do, and link that
+  issue or pull request in yours while it is open.
+- **The vendored tables.** `reference/` holds the benilla-re tables benilla's tests read, at the
+  commit in `reference/PIN`; its README says how to move the pin. Move it only when your change
+  needs a row benilla-re has after the pin, to a commit on benilla-re's main.
 
 ## How a change is judged
 
@@ -145,8 +149,9 @@ out of scope is closed with the reason.
   - A capture runs through `scripts/visual.sh`, whose recipe is the header of
     `crates/benilla-app/src/capture/mod.rs`. Pixel questions go through `benilla-visual crop`,
     `series` and `hotspot`.
-- **The loop.** `cargo play` builds and runs the play profile. `scripts/check.sh` verifies a
-  round of work; `scripts/gates.sh` is the full chain, and it opens a window for the engine boot
+- **The loop.** `cargo play` builds and runs the play profile. `cargo test -p <crate>` runs one
+  crate's tests, the quickest loop. `scripts/check.sh` verifies a round of work: the crates your
+  branch changed against main and their dependents, so on a clean clone it has nothing to check; `scripts/gates.sh` is the full chain, and it opens a window for the engine boot
   checks, so it needs a display. `WOW_STOCK_UI=1` boots a dev build on the stock interface
   alone, without benilla's layer. Work on a branch.
 

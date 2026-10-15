@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Fail on a doc link whose target is declared nowhere in the workspace.
 
-It reads rustdoc's unresolved-link warnings and fails on a `crate::`, `super::`, `self::` or
+It runs `cargo doc` over the whole workspace (a full doc build, minutes on a cold tree) and reads
+rustdoc's unresolved-link warnings and fails on a `crate::`, `super::`, `self::` or
 `Self::` path whose leaf name is declared nowhere: the item is gone. Every other warning is a
 convention here, not rot (a private module named through its parent, another crate's module
 named with `crate::`, a bare name for an unimported bevy type).
