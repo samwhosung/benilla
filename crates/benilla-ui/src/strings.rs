@@ -82,7 +82,18 @@ pub(crate) fn swap_number_separators(text: &str) -> String {
         }
         i = end;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    // The input is valid UTF-8 and only ASCII bytes change, so the cap alone can cut a sequence:
+    // drop the cut character, which the reference's one-byte characters never have, rather than
+    // show U+FFFD.
+    match String::from_utf8(out) {
+        Ok(text) => text,
+        Err(e) => {
+            let valid = e.utf8_error().valid_up_to();
+            let mut bytes = e.into_bytes();
+            bytes.truncate(valid);
+            String::from_utf8(bytes).unwrap_or_default()
+        }
+    }
 }
 
 /// One argument to [`fill`]; any variant renders in any hole, so the template's order decides.
@@ -611,5 +622,18 @@ mod tests {
         let out = swap_number_separators(&numbers);
         assert_eq!(out.len(), 4095);
         assert!(out.starts_with("1,5 1,5 "));
+    }
+
+    /// The cap cuts at a character boundary: a two-byte character straddling byte 4095 is dropped
+    /// whole, never left as a replacement character.
+    #[test]
+    fn number_separators_cut_at_a_character_boundary() {
+        let out = swap_number_separators(&"\u{e9}".repeat(3000));
+        assert_eq!(out.len(), 4094);
+        assert_eq!(out.chars().count(), 2047);
+        assert!(!out.contains('\u{fffd}'));
+        let out = swap_number_separators(&format!("1.5 {}", "\u{e9}".repeat(3000)));
+        assert!(out.starts_with("1,5 "));
+        assert!(out.len() <= 4095 && !out.contains('\u{fffd}'));
     }
 }
