@@ -28,9 +28,9 @@
 //! through `0x4931c0` plays the goodbye (`+0x8`), so every window on the latch greets alike. A
 //! swap to another NPC's window plays the new hello and no goodbye for the old (`0x4930fd`:
 //! `dl = (new_guid != 0)`), and a walk-away close (`0x493305`) plays none. The gate is a
-//! non-player unit (`0x493187`, `0x4931f8`-`0x493203`): a game object (a mailbox) or a player
-//! speaks nothing. Every such call also zeroes the select greeting's tracked NPC (`0x60c3d1`), so
-//! the next left-click starts its sequence over.
+//! non-player unit (`0x493159`, `0x493182`, `0x4931f8`-`0x493203`): a game object (a mailbox)
+//! or a player speaks nothing. Every such call also zeroes the select greeting's tracked NPC
+//! (`0x60c3d1`), so the next left-click starts its sequence over.
 
 use bevy::prelude::*;
 
@@ -108,8 +108,8 @@ fn load_npc_greetings(mut commands: Commands, assets: Option<Res<WorldAssets>>) 
     }
 }
 
-/// Whether an object greets: a non-player unit (`0x493182`, `0x4931f8`-`0x493203`). A player, a
-/// game object such as a mailbox and a book have no NPC to speak.
+/// Whether an object greets: a non-player unit (`0x493159`, `0x493182`, `0x4931f8`-`0x493203`).
+/// A player, a game object such as a mailbox and a book have no NPC to speak.
 fn speaks(kind: EntityKind) -> bool {
     matches!(kind, EntityKind::Unit)
 }
