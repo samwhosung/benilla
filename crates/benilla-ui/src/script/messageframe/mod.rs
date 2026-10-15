@@ -61,13 +61,24 @@ pub(super) fn channel(lua: &mlua::Lua, v: &mlua::Value) -> f32 {
 /// full keyring and gets a silent click. Only the text is gated so: a bad colour still adds the
 /// line in white (`0x79581c`), and the receiver checks (`0x847ef8`) still raise. A number becomes
 /// its decimal text (`0x6f7c80`).
-///
-/// The line's text is what `SetText` stores with its expand flag (`0x7863fe`, `0x788b3c`), so the
-/// number separators swap while `SetEuropeanNumbers` holds.
 pub(super) fn message_text(lua: &mlua::Lua, v: &mlua::Value) -> Option<String> {
-    let text = super::binding_abi::optional_string(lua, v).filter(|s| !s.is_empty())?;
-    let model = lua.app_data_ref::<super::Model>().expect("model app_data");
-    Some(model.localized_text(text))
+    super::binding_abi::optional_string(lua, v).filter(|s| !s.is_empty())
+}
+
+/// The text a line is drawn and measured as. `SetText`'s expand flag swaps the number separators
+/// while `SetEuropeanNumbers` holds: a MessageFrame does it when the line is added (`0x7863fe`,
+/// [`Model::localized_text`] at the verb), a ScrollingMessageFrame each time it shows the line
+/// (`ShowLine`, `0x788b3c`), from the raw text it keeps, so a line reads the switch as it stands.
+pub(super) fn shown_text<'a>(
+    european_numbers: bool,
+    kind: &KindState,
+    text: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    if european_numbers && matches!(kind, KindState::ScrollingMessage(_)) {
+        std::borrow::Cow::Owned(crate::strings::swap_number_separators(text))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// Install `SetJustifyH`, `GetJustifyH`, `SetJustifyV` and `GetJustifyV`, which both classes carry,
@@ -311,6 +322,7 @@ impl UiScript {
         // A plain reborrow, so the arena reads and the sweep-token writes borrow disjoint fields.
         let model = &mut *model;
         let mut out = Vec::new();
+        let european = model.european_numbers;
         let frames: Vec<(FrameHandle, Rect)> = model
             .resolved
             .iter()
@@ -356,6 +368,7 @@ impl UiScript {
                     .to_bits()
                     .hash(&mut h);
                 scale.to_bits().hash(&mut h);
+                european.hash(&mut h);
                 h.finish()
             };
             if model.msg_swept.get(&fh) == Some(&(lines_gen, env)) {
@@ -365,7 +378,8 @@ impl UiScript {
             for (index, line) in lines.iter().enumerate() {
                 model.msg_lines_hashed += 1;
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                line.text.hash(&mut hasher);
+                let text = shown_text(european, &frame.kind_state, &line.text);
+                text.hash(&mut hasher);
                 font.path.hash(&mut hasher);
                 font.height.map(f32::to_bits).hash(&mut hasher);
                 wrap_width.to_bits().hash(&mut hasher);
@@ -388,7 +402,7 @@ impl UiScript {
                     outline: font.outline,
                     shadow_x: font.shadow.map_or(0.0, |s| s.offset[0]),
                     scale,
-                    text: line.text.clone(),
+                    text: text.into_owned(),
                     key,
                 });
             }
@@ -513,7 +527,10 @@ impl UiScript {
                 alpha: paint.alpha,
                 clip: line_clip,
                 content: QuadContent::Text {
-                    text: Some(line.text.clone()),
+                    text: Some(
+                        shown_text(model.european_numbers, &frame.kind_state, &line.text)
+                            .into_owned(),
+                    ),
                     color: Some([
                         f32::from(line.color[0]) / 255.0,
                         f32::from(line.color[1]) / 255.0,

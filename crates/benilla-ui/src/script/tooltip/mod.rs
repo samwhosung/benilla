@@ -198,8 +198,8 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
 }
 
 /// Writes a line cell's text and colour and shows it. The text goes through `SetText` with its
-/// expand flag (`0x530203`, `0x5302e7`, `0x53033d`, `0x53060e`), so the number separators swap
-/// while `SetEuropeanNumbers` holds.
+/// expand flag (`0x5302e7`, `0x53033d` for the two sides of a line, `0x53060e` for `AppendText`'s
+/// helper `0x5305b0`), so the number separators swap while `SetEuropeanNumbers` holds.
 pub(super) fn write_cell(
     model: &mut Model,
     rh: crate::widget::RegionHandle,

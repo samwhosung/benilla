@@ -16,9 +16,9 @@ fn european() -> UiScript {
     s
 }
 
-/// A tooltip's lines: `AddLine` (`0x5302e7`), `AddDoubleLine`'s two sides (`0x5302e7`, `0x53033d`),
-/// `SetText` and `AppendText` (`0x53060e`), which formats the line's text again and stores it
-/// through the same setter.
+/// A tooltip's lines: `AddLine` and `SetText` (`0x531df5` → `AddLine 0x5303b0` → `0x5302e7`),
+/// `AddDoubleLine`'s two sides (`0x5302e7`, `0x53033d`) and `AppendText`, whose helper `0x5305b0`
+/// formats the line's text again and stores it through the same setter (`0x53060e`).
 #[test]
 fn tooltip_lines_swap_their_separators() {
     let mut s = european();
@@ -49,32 +49,52 @@ fn tooltip_lines_swap_their_separators() {
     assert_eq!(read(&s, "TTTextLeft1"), "Takes 6.5", "off: as given");
 }
 
-/// `AddMessage` on a MessageFrame (`0x7863fe`) and a ScrollingMessageFrame (`0x788b3c`), and the
-/// app's chat feed that stands for the latter.
+/// `AddMessage` on a MessageFrame (`0x7863fe`) swaps as the line is added; a ScrollingMessageFrame
+/// swaps each time it shows its lines (`ShowLine`, `0x788b3c`), from the raw text it keeps, so its
+/// lines read the switch as it stands and the app's chat feed (which stands for the verb) too.
 #[test]
 fn message_frame_lines_swap_their_separators() {
-    let mut s = european();
+    let mut s = script();
+    s.set_screen_size(1024.0, 768.0);
     s.run(
         r#"
-        CreateFrame("MessageFrame", "MF")
-        CreateFrame("ScrollingMessageFrame", "SMF")
-        MF:AddMessage("You gain 1.5 xp")
-        SMF:AddMessage("You gain 2.5 xp")
+        local up = CreateFrame("Frame", "UIParent")
+        up:SetPoint("BOTTOMLEFT", 0, 0); up:SetPoint("TOPRIGHT", 0, 0)
+        for i, name in ipairs({"MF", "SMF"}) do
+            local f = CreateFrame(i == 1 and "MessageFrame" or "ScrollingMessageFrame", name, up)
+            f:SetPoint("BOTTOMLEFT", 0, 100 * i); f:SetWidth(300); f:SetHeight(80)
+            f:SetFont("Fonts\\FRIZQT__.TTF", 12)
+        end
     "#,
     )
     .unwrap();
-    assert!(s.add_chat_message("SMF", "You gain 3.5 xp", 1.0, 1.0, 1.0));
-    let texts = |name: &str| -> Vec<String> {
-        let m = s.model_ref();
-        let h = m.arena.lookup(name).expect("named frame");
-        m.arena
-            .frame(h)
-            .and_then(|f| f.kind_state.message_lines())
-            .map(|lines| lines.iter().map(|l| l.text.clone()).collect())
-            .unwrap_or_default()
+    let texts = |s: &mut UiScript| -> Vec<String> {
+        s.resolve();
+        let mut t: Vec<String> = s
+            .extract()
+            .iter()
+            .filter_map(|q| match &q.content {
+                QuadContent::Text { text: Some(t), .. } => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        t.sort();
+        t
     };
-    assert_eq!(texts("MF"), ["You gain 1,5 xp"]);
-    assert_eq!(texts("SMF"), ["You gain 2,5 xp", "You gain 3,5 xp"]);
+    // Off at boot: lines read as given.
+    s.run(r#"MF:AddMessage("Off 1.5") SMF:AddMessage("Off 2.5")"#)
+        .unwrap();
+    assert_eq!(texts(&mut s), ["Off 1.5", "Off 2.5"]);
+
+    // On: the scrolling frame's lines swap at their next show, the plain frame's stay as added.
+    s.set_european_numbers(true);
+    s.run(r#"MF:AddMessage("On 3.5")"#).unwrap();
+    assert!(s.add_chat_message("SMF", "Feed 4.5", 1.0, 1.0, 1.0));
+    assert_eq!(texts(&mut s), ["Feed 4,5", "Off 1.5", "Off 2,5", "On 3,5"]);
+
+    // Off again: the scrolling frame reads as given, the plain frame keeps what it swapped.
+    s.set_european_numbers(false);
+    assert_eq!(texts(&mut s), ["Feed 4.5", "Off 1.5", "Off 2.5", "On 3,5"]);
 }
 
 /// SimpleHTML builds each text block through `0x771d80(text, 1)` (`0x78aea1`).
@@ -100,6 +120,7 @@ fn simple_html_blocks_swap_their_separators() {
 }
 
 /// XML `text=` on a FontString (`0x77103a`) and on a Button's label reach `SetText` with the flag.
+/// A guard, not a fix: the loader calls the `SetText` method, which already swapped.
 #[test]
 fn xml_text_attributes_swap_their_separators() {
     let s = european();

@@ -159,7 +159,7 @@ pub struct ContainerUse {
     /// `onSelf`: the use targets the player in place of the selection (`0x4fa17d`-`0x4fa18e`).
     pub on_self: bool,
     /// What the protected-action gate's tag 2 allowed the call: an item's on-use spell casts
-    /// through `TryCastSpell`, behind it (`0x4fa1a6` → `0x5d8d00` → `0x5d9258` → `0x6e5a90`).
+    /// through `TryCastSpell`, behind it (`0x4fa430` → `0x5d8d00` → `0x5d9258` → `0x6e5a90`).
     pub may_cast: bool,
 }
 
@@ -1289,7 +1289,7 @@ mod tests {
         );
     }
 
-    /// The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2 (`0x4fa1a6` →
+    /// The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2 (`0x4fa430` →
     /// `0x5d8d00` → `0x5d9258` → `0x6e5a90` → `0x6e4bc1`). The call keeps its other arms, so it is
     /// queued whatever the gate said, carrying the answer; an armed item-targeting spell's pick
     /// carries it the same way (`0x4f9c54` → `0x495d60` → `0x6e5b9e`).

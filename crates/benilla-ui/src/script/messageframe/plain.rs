@@ -52,6 +52,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let Some(text) = super::message_text(lua, &text) else {
                     return Ok(());
                 };
+                // The line goes through `SetText` with its expand flag as it is added (`0x7863fe`).
+                let text = lua
+                    .app_data_ref::<crate::script::Model>()
+                    .expect("model app_data")
+                    .localized_text(text);
                 // Each of r, g and b is `lua_isnumber`-gated (`0x79565f`-`0x795687`) and the trio is
                 // all or nothing; a failed gate still adds the line, in white (`0x79581c`).
                 let has_rgb = [&r, &g, &b].iter().all(|v| is_number(lua, v).is_some());
