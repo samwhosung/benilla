@@ -1673,6 +1673,19 @@ mod tests {
                 "frillDensity",
                 "32",
             ),
+            (
+                "gxTripleBuffer 2",
+                "TripleBuffer must be 0 or 1",
+                "gxTripleBuffer",
+                "0",
+            ),
+            (
+                "gxRefresh 144",
+                "unsupported refresh rate, must be one of \
+                 60, 70, 72, 75, 85, 90, 100, 120, 160, 180, 200",
+                "gxRefresh",
+                "75",
+            ),
         ] {
             assert_eq!(
                 crate::console::execute(app.world_mut(), line),
@@ -1695,6 +1708,19 @@ mod tests {
             ["Shadow mip level changed upon restart."]
         );
         assert_eq!(res::<Cvars>(&app).get("shadowLevel"), Some("0"));
+        // A latched row's callback runs before the stage (`0x63df7d`, ahead of `0x63df8e`): the
+        // refused rate stages nothing, a listed one stages and says so.
+        assert_eq!(
+            res::<Cvars>(&app).rows[res::<Cvars>(&app).slot("gxRefresh").unwrap()].pending,
+            None
+        );
+        assert_eq!(
+            crate::console::execute(app.world_mut(), "gxRefresh 60"),
+            [
+                "set pending gxRestart",
+                "gxRefresh staged as \"60\" — applies at the next RestartGx"
+            ]
+        );
 
         let mut cvars = Cvars::default();
         assert_eq!(cvars.set("texLodBias", "1.5"), SetOutcome::Vetoed);

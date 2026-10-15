@@ -105,6 +105,38 @@ pub fn check_base_mip(value: &str, applied: &str) -> CvarVerdict {
     }
 }
 
+/// What the `gx*` callbacks print when they take a value (`0x865008`): the device record changed
+/// and waits for the next `gxRestart`.
+const GX_PENDING: &str = "set pending gxRestart";
+
+/// `gxTripleBuffer`'s callback (`0x63afe0`): `SStrToInt` (`0x64ac60`), refused unless 0 or 1 with
+/// "TripleBuffer must be 0 or 1" (`0x8650b8`), else taken with [`GX_PENDING`].
+pub fn check_triple_buffer(value: &str, _applied: &str) -> CvarVerdict {
+    if matches!(sstr_to_int(value), 0 | 1) {
+        CvarVerdict::accept_saying(GX_PENDING)
+    } else {
+        CvarVerdict::refuse("TripleBuffer must be 0 or 1")
+    }
+}
+
+/// The eleven rates `gxRefresh`'s callback takes, the table at `0x8645e0`.
+const REFRESH_RATES: [i32; 11] = [60, 70, 72, 75, 85, 90, 100, 120, 160, 180, 200];
+
+/// `gxRefresh`'s callback (`0x63aed0`): `SStrToInt` (`0x64ac60`) looked up in [`REFRESH_RATES`]
+/// (`0x63aee4`-`0x63aef6`). A miss is refused with "unsupported refresh rate, must be one of "
+/// (`0x86508c`) and the rates as `%d` joined by ", " (`0x84480c`); a hit is taken with
+/// [`GX_PENDING`].
+pub fn check_refresh(value: &str, _applied: &str) -> CvarVerdict {
+    if REFRESH_RATES.contains(&sstr_to_int(value)) {
+        return CvarVerdict::accept_saying(GX_PENDING);
+    }
+    let rates: Vec<String> = REFRESH_RATES.iter().map(i32::to_string).collect();
+    CvarVerdict::refuse(format!(
+        "unsupported refresh rate, must be one of {}",
+        rates.join(", ")
+    ))
+}
+
 /// `farclip`'s callback (`0x688d40`): `SStrToFloat` (`0x64aaa0`), refused below 177
 /// (`[0x81021c]`) or above 777 (`[0x80fed8]`) with "FarClip must be in range 177.0 - 777.0."
 /// (`0x869a94`). As in `texLodBias`'s, the lower test reads the parse as is and the upper one the
@@ -319,6 +351,37 @@ mod tests {
             !check_camera_time("0", "").accept,
             "the tilt time that panicked the clamp"
         );
+    }
+
+    #[test]
+    fn the_gx_checks_take_only_their_values() {
+        for ok in ["0", "1", "1.9"] {
+            assert_eq!(
+                check_triple_buffer(ok, "0"),
+                CvarVerdict::accept_saying("set pending gxRestart"),
+                "{ok}"
+            );
+        }
+        for bad in ["2", "-1", "3"] {
+            assert_eq!(
+                check_triple_buffer(bad, "0"),
+                CvarVerdict::refuse("TripleBuffer must be 0 or 1"),
+                "{bad}"
+            );
+        }
+        for ok in ["60", "75", "200", "85.5"] {
+            assert!(check_refresh(ok, "75").accept, "{ok}");
+        }
+        for bad in ["59", "144", "0", "abc"] {
+            assert_eq!(
+                check_refresh(bad, "75"),
+                CvarVerdict::refuse(
+                    "unsupported refresh rate, must be one of \
+                     60, 70, 72, 75, 85, 90, 100, 120, 160, 180, 200"
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

@@ -724,10 +724,11 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // 0 and 1). The knob is [`crate::video::VideoConfig::maximize`].
     same("gxMaximize", "0").latched(),
     // `gxTripleBuffer` (`0x63a80d`: name `0x864f88`, "0", callback `0x63afe0` → `+0x18`), whose
-    // callback refuses any value but 0 or 1 ("TripleBuffer must be 0 or 1", `0x8650b8`), a refusal
-    // this row does not carry yet. No effect here: wgpu's present modes offer no triple-buffer
-    // choice.
-    same("gxTripleBuffer", "0").latched(),
+    // callback refuses any value but 0 or 1 ("TripleBuffer must be 0 or 1", `0x8650b8`). No effect
+    // here: wgpu's present modes offer no triple-buffer choice.
+    same("gxTripleBuffer", "0")
+        .latched()
+        .checked(benilla_ui::script::check_triple_buffer),
     // `gxCursor` (`0x63a906`: name `0x864eb8`, "1", callback `0x63b220` → `+0x05` `[0xc4eb9d]`),
     // Hardware Cursor. No effect here: benilla always draws the OS cursor (`crate::cursor`) and has
     // no software cursor to fall back to.
@@ -739,9 +740,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("gxFixLag", "1").latched(),
     // `gxRefresh` (`0x63a7e7`: name `0x864fa8`, "75", callback `0x63aed0` → `+0x28`), the refresh
     // dropdown (`OptionsFrame.lua:242-245`, `:300`); the callback accepts only the eleven rates at
-    // `0x8645e0` (60 to 200). No effect here: fullscreen is borderless at the monitor's own rate,
-    // and `GetRefreshRates` answers the reference's no-rates sentinel, which disables the dropdown.
-    same("gxRefresh", "75").latched(),
+    // `0x8645e0` (60 to 200) and refuses the rest. No effect here: fullscreen is borderless at the
+    // monitor's own rate, and `GetRefreshRates` answers no values, which leaves the dropdown
+    // enabled and empty (the stock frame disables it only on a single 0, `OptionsFrame.lua:311`).
+    same("gxRefresh", "75")
+        .latched()
+        .checked(benilla_ui::script::check_refresh),
     // benilla's own: the world renders at `window × this` while the UI stays native. The knob is
     // [`crate::world_backdrop::RenderScale`], clamped to `RENDER_SCALE_RANGE`; at "1" nothing is
     // resampled. `$WOW_RENDER_SCALE` overrides it for the session.
