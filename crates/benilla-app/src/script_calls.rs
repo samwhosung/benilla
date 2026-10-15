@@ -1827,6 +1827,11 @@ mod tests {
     fn a_bar_equip_of_an_item_in_the_trade_window_is_refused() {
         let mut f = frame(false);
         with_bar_helm(&mut f, 0);
+        // The refusal tests the partner cell first (`0x4bfd23`): the window is open.
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .open_trade_window();
         run(
             &mut f,
             "PickupContainerItem(0, 2) ClickTradeButton(1) ClearCursor() PickupContainerItem(0, 1)",

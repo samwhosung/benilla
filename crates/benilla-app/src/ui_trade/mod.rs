@@ -2402,7 +2402,7 @@ mod tests {
         let read = |app: &App| {
             app.world()
                 .non_send_resource::<UiScript>()
-                .eval::<String>(&format!("{reads}"))
+                .eval::<String>(reads)
                 .unwrap()
         };
         assert_eq!(read(&app), "Linen Cloth/Iron Sword/500", "open");

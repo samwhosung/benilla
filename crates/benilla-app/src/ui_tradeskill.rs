@@ -253,7 +253,7 @@ fn resolve_recipe(
     let d = spells.catalog.get(spell_id)?;
     let sla = skill_lines.catalog.ability(spell_id)?;
 
-    // Reagents: `(entry, need)` pairs off `Spell.dbc`; have is the carried count.
+    // Reagents: `(entry, need)` pairs off `Spell.dbc`; have is the mask-0 count (`0x622130`, `0x4fccfc`).
     let mut reagents = Vec::new();
     let mut num_available = u32::MAX;
     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
