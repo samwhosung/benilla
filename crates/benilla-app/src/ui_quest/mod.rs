@@ -370,11 +370,15 @@ fn snapshot(
         QuestView::Greeting(l) => {
             let mut active_titles = Vec::new();
             let mut available_titles = Vec::new();
+            let mut active_levels = Vec::new();
+            let mut available_levels = Vec::new();
             for q in &l.quests {
                 if row_is_active(q.icon) {
                     active_titles.push(q.title.clone());
+                    active_levels.push(q.level);
                 } else {
                     available_titles.push(q.title.clone());
+                    available_levels.push(q.level);
                 }
             }
             QuestState {
@@ -382,6 +386,8 @@ fn snapshot(
                 greeting: sub(&l.greeting),
                 active_titles,
                 available_titles,
+                active_levels,
+                available_levels,
                 ..Default::default()
             }
         }
@@ -845,6 +851,52 @@ mod tests {
         assert_eq!(snap.required.len(), 1);
         assert_eq!(snap.required_money, 500);
         assert!(snap.completable);
+    }
+
+    /// The greeting snapshot keeps each quest's level beside its title, split into the two pools
+    /// by the icon (`0x5dbb10` stores the wire level at row `+0x04`), for `GetActiveLevel` and
+    /// `GetAvailableLevel`.
+    #[test]
+    fn the_greeting_snapshot_keeps_each_quests_level_beside_its_title() {
+        let row = |quest_id, icon, level, title: &str| benilla_protocol::messages::QuestListEntry {
+            quest_id,
+            icon,
+            level,
+            title: title.into(),
+        };
+        let mut giver = QuestGiver::default();
+        giver.open(
+            0x42,
+            QuestView::Greeting(QuestGiverList {
+                npc: 0x42,
+                greeting: "Hi".into(),
+                emote_delay: 0,
+                emote: 0,
+                quests: vec![
+                    row(1, 4, 12, "Active A"),
+                    row(2, 2, 3, "Available A"),
+                    row(3, 3, 9, "Active B"),
+                    row(4, 2, 5, "Available B"),
+                ],
+            }),
+        );
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let snap = snapshot(
+            &giver,
+            &Items::default(),
+            None,
+            &NetCommands(tx),
+            &crate::npc_text::MacroContext {
+                subject: None,
+                states: &crate::world_state::WorldStates::default(),
+            },
+            None,
+        )
+        .unwrap();
+        assert_eq!(snap.active_titles, ["Active A", "Active B"]);
+        assert_eq!(snap.active_levels, [12, 9]);
+        assert_eq!(snap.available_titles, ["Available A", "Available B"]);
+        assert_eq!(snap.available_levels, [3, 5]);
     }
 
     #[test]
