@@ -4,7 +4,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::Model;
+use super::{Model, UiScript};
 
 /// The 1.12.1 client's build identity, as the strings in its binary spell it.
 pub(super) const VERSION: &str = "1.12.1";
@@ -288,6 +288,18 @@ impl super::UiScript {
     /// Push the current framerate, from the app's frame clock each tick; this crate has no clock.
     pub fn set_framerate(&mut self, fps: f64) {
         self.model_mut().framerate = fps;
+    }
+}
+
+impl UiScript {
+    /// `SetEuropeanNumbers`'s switch `[0xcf4d24]`, a client global no UI rebuild resets.
+    pub fn european_numbers(&self) -> bool {
+        self.model_ref().european_numbers
+    }
+
+    /// Seat the switch a dying VM held in the VM that replaces it.
+    pub fn set_european_numbers(&mut self, on: bool) {
+        self.model_mut().european_numbers = on;
     }
 }
 

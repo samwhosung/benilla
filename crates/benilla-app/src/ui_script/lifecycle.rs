@@ -136,6 +136,11 @@ fn new_vm<E: std::fmt::Display>(
     world: &mut World,
     make: fn() -> Result<UiScript, E>,
 ) -> Option<UiScript> {
+    // The client globals the VM holds that no rebuild resets: `[0xcf4d24]`, written only by
+    // `SetEuropeanNumbers` (`0x771c40`), outlives a `ReloadUI` and a logout.
+    let european_numbers = world
+        .get_non_send_resource::<UiScript>()
+        .is_some_and(UiScript::european_numbers);
     let mut script = match make() {
         Ok(s) => s,
         Err(e) => {
@@ -144,6 +149,7 @@ fn new_vm<E: std::fmt::Display>(
             return None;
         }
     };
+    script.set_european_numbers(european_numbers);
     seed_vm_clock(world, &mut script);
     install_addon_asset_resolvers(world, &mut script);
     info!("ui_script: new VM, session {}", script.session());
@@ -1091,6 +1097,39 @@ pub(crate) fn is_emote_token_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `[0xcf4d24]` has one writer, `SetEuropeanNumbers` (`0x771c40`), and nothing resets it, so
+    /// the VM that replaces a dying one (a `ReloadUI`, a logout, a login) opens with its value.
+    #[test]
+    fn the_european_numbers_switch_outlives_the_vm_that_set_it() {
+        let mut world = World::new();
+        let first = UiScript::new().unwrap();
+        assert!(!first.european_numbers(), "off at boot");
+        world.insert_non_send_resource(first);
+        let text = |world: &World| {
+            let script = world.non_send_resource::<UiScript>();
+            script
+                .run("F = CreateFrame('Frame'):CreateFontString() F:SetText('1.5')")
+                .unwrap();
+            script.eval::<String>("return F:GetText()").unwrap()
+        };
+        world
+            .non_send_resource::<UiScript>()
+            .run("SetEuropeanNumbers(1)")
+            .unwrap();
+        for _ in 0..2 {
+            let next = new_vm(&mut world, UiScript::new).expect("a VM");
+            world.insert_non_send_resource(next);
+            assert_eq!(text(&world), "1,5");
+        }
+        world
+            .non_send_resource::<UiScript>()
+            .run("SetEuropeanNumbers(false)")
+            .unwrap();
+        let next = new_vm(&mut world, UiScript::new).expect("a VM");
+        world.insert_non_send_resource(next);
+        assert_eq!(text(&world), "1.5");
+    }
 
     #[test]
     fn the_entry_edge_parks_the_boot_vm_and_the_session_end_returns_it() {
