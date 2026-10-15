@@ -164,6 +164,18 @@ fn drain_gm_ticket(
         });
     }
 
+    // The lottery and survey verbs' sends (the lottery has no module of its own, its window being
+    // unbuilt), in call order.
+    for send in script.take_unserved_sends() {
+        let _ = commands.0.send(match send {
+            UnservedSend::LotteryQuery => ClientCommand::LotteryQuery,
+            UnservedSend::BuyLotteryTicket { first, second } => {
+                ClientCommand::BuyLotteryTicket { first, second }
+            }
+            UnservedSend::GmSurveySubmit { comment } => ClientCommand::GmSurveySubmit { comment },
+        });
+    }
+
     let intents = script.take_gm_ticket_intents();
     if intents.is_empty() {
         return;
@@ -190,23 +202,6 @@ fn drain_gm_ticket(
                     }
                 }
             }
-        });
-    }
-}
-
-/// Put the lottery and survey verbs' sends on the wire, in call order (`ui_gm_ticket` carries the
-/// survey; the lottery has no module of its own, its window being unbuilt).
-fn drain_unserved_sends(script: Option<NonSendMut<UiScript>>, commands: Res<NetCommands>) {
-    let Some(mut script) = script else {
-        return;
-    };
-    for send in script.take_unserved_sends() {
-        let _ = commands.0.send(match send {
-            UnservedSend::LotteryQuery => ClientCommand::LotteryQuery,
-            UnservedSend::BuyLotteryTicket { first, second } => {
-                ClientCommand::BuyLotteryTicket { first, second }
-            }
-            UnservedSend::GmSurveySubmit { comment } => ClientCommand::GmSurveySubmit { comment },
         });
     }
 }
@@ -396,7 +391,6 @@ impl Plugin for UiGmTicketPlugin {
                 (
                     feed_gm_ticket.in_set(UiFeed),
                     drain_gm_ticket.after(UiInput),
-                    drain_unserved_sends.after(UiInput),
                 ),
             );
     }
@@ -412,7 +406,8 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = App::new();
         app.insert_resource(NetCommands(tx))
-            .add_systems(Update, drain_unserved_sends);
+            .init_resource::<GmTicketState>()
+            .add_systems(Update, drain_gm_ticket);
         app.insert_non_send_resource(UiScript::new().unwrap());
         let run = |app: &mut App, lua: &str| {
             app.world().non_send_resource::<UiScript>().run(lua).ok();

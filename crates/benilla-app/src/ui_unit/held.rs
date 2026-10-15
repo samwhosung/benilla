@@ -628,7 +628,12 @@ mod tests {
         };
         // We are a human; `BOSS` (party1's target) a human creature, PvP-flagged; `ADD`
         // (raid3's target) a human creature that is not.
-        put(&mut app, ME, with(&[(TEMPLATE, 1)], MOB, 0x19));
+        // A player carries the player-controlled bit, which makes `IsPvP` the unit's test.
+        put(
+            &mut app,
+            ME,
+            with(&[(TEMPLATE, 1), (FLAGS, 0x8)], MOB, 0x19),
+        );
         put(
             &mut app,
             BOSS,
