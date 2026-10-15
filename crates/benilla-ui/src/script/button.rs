@@ -469,19 +469,36 @@ fn set_slot_texture(
         super::region::SlotArg::Clear => return install_slot(lua, this, slot, None).map(|_| ()),
         super::region::SlotArg::Path(path) => path,
     };
+    // `0x770200` answers 0 for a name no candidate resolves and keeps what the region held
+    // (`0x7702ac`). The slot's region made for this call is then destroyed without a blend or a
+    // slot (`0x7790ce`, `0x7790fa`; `0x778f88`, `0x778fb7`), while an existing one (`0x77907c`) goes
+    // on to the highlight's blend.
+    let existing = with_button(lua, this, |bs| slot.get(bs))?.is_some();
+    let resolvable = path.is_empty()
+        || lua
+            .app_data_ref::<Model>()
+            .expect("model app_data")
+            .texture_probe
+            .as_ref()
+            .is_none_or(|probe| probe(&path));
+    if !existing && !resolvable {
+        return Ok(());
+    }
     let id = ensure_slot(lua, this, slot)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let rh = *model.id_to_region.get(&id).expect("slot region id");
-    // `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
-    let set = if path.is_empty() {
-        crate::script::texel::TexSet::None
-    } else {
-        crate::script::texel::TexSet::File(path)
-    };
-    model.set_texel(rh, set);
+    if resolvable {
+        // `""` clears the texture, which `QuestLogFrame.lua:165` relies on.
+        let set = if path.is_empty() {
+            crate::script::texel::TexSet::None
+        } else {
+            crate::script::texel::TexSet::File(path)
+        };
+        model.set_texel(rh, set);
+    }
     let data = model.region_data.entry(rh).or_default();
     // The highlight applies its blend on every path call, to the old region as to a new one
-    // (`0x779082`, `0x7790e6`).
+    // (`0x779082`, `0x7790e6`), the old one even when its texture did not load.
     if let Some(blend) = blend {
         data.blend = blend;
     }

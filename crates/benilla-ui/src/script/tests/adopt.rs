@@ -480,6 +480,32 @@ fn the_highlight_sets_its_blend_on_the_object_leg_and_the_path_leg() {
     .unwrap();
 }
 
+/// A name no candidate resolves fails `0x770200`, which keeps what the region held (`0x7702ac`). A
+/// region made for the call is destroyed with no slot and no blend (`0x7790ce`, `0x7790fa`); an
+/// existing highlight keeps its texture and still takes the blend (`0x77907c`-`0x779082`).
+#[test]
+fn a_path_that_does_not_load_makes_no_slot_region_and_keeps_the_old_texture() {
+    let mut s = script();
+    s.set_texture_probe(Box::new(|p| p != "missing"));
+    s.run(
+        r#"
+        b = CreateFrame("Button")
+        b:SetHighlightTexture("missing", "MOD")
+        b:SetNormalTexture("missing")
+        assert(b:GetHighlightTexture() == nil, "no highlight region for a failed load")
+        assert(b:GetNormalTexture() == nil, "nor a normal one")
+
+        b:SetHighlightTexture("present")
+        hl = b:GetHighlightTexture()
+        hl:SetBlendMode("BLEND")
+        b:SetHighlightTexture("missing", "MOD")
+        assert(b:GetHighlightTexture() == hl and hl:GetTexture() == "present", "the old texture stands")
+        assert(hl:GetBlendMode() == "MOD", "the blend still applies to the existing region")
+    "#,
+    )
+    .unwrap();
+}
+
 /// The Button setters' raises (`0x87a210`/`0x87a1e0`, the highlight's `0x87a2cc`/`0x87a28c`, the
 /// checked pair's `0x87b224`/`0x87b1e8` and `0x87c0e8`/`0x87c0a0`) name the receiver and the
 /// method; a call with no argument raises Usage and clears nothing (`0x781b4f`).
