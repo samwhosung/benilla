@@ -586,6 +586,82 @@ fn an_attack_press_with_no_pet_object_sends_nothing() {
     assert!(!latched(&rig).2, "an ordinary pet's Attack raises no latch");
 }
 
+/// The pet bar's Attack runs the attack validator (`0x4bd40d` → `0x612df0`), whose `SelectTarget`
+/// (`0x613100`) binds a kept target to a standing targeting cursor and casts inside the validator,
+/// so the cast goes out ahead of the `CMSG_PET_ACTION` it validated.
+#[test]
+fn a_pet_attack_with_the_cursor_up_casts_before_the_pet_acts() {
+    const FOE: u64 = 0x77;
+    const HEAL: u32 = 2050;
+    let mut rig = rig(
+        vec![(CLAW, claw())],
+        &[],
+        Some(owned_pet_with(&[(22, 100), (28, 100)])),
+    );
+    let world = rig.app.world_mut();
+    let me = world.resource::<GuidIndex>().0[&ME];
+    world
+        .entity_mut(me)
+        .insert(ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+            (2, 0x19),
+            (22, 100),
+            (28, 100),
+            (FLAGS, 0x8),
+        ])));
+    let foe = world
+        .spawn((
+            Guid(FOE),
+            Transform::default(),
+            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (22, 100),
+                (28, 100),
+            ])),
+        ))
+        .id();
+    world.resource_mut::<GuidIndex>().0.insert(FOE, foe);
+    *world.resource_mut::<crate::target::Selection>() = crate::target::Selection {
+        target: Some(foe),
+        guid: Some(FOE),
+        ..Default::default()
+    };
+    let attack = PET_COMMAND_ATTACK | (u32::from(PET_ACT_COMMAND) << 24);
+    world.resource_mut::<PetBar>().spells.bar[0] = PetActionEntry::from(attack);
+    world.resource_mut::<crate::spell::SpellTargeting>().enter(
+        HEAL,
+        crate::spell::CastCommit::Spell,
+        0x0002,
+    );
+    rig.frame();
+    rig.app
+        .world_mut()
+        .non_send_resource_mut::<benilla_ui::script::UiScript>()
+        .run_binding("PetAttack()")
+        .expect("the key runs");
+    rig.app
+        .world_mut()
+        .run_system_once(crate::script_calls::apply_script_calls)
+        .expect("the calls apply as a one-shot system");
+
+    let sent = rig.sent();
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [
+                ClientCommand::CastSpell {
+                    spell_id: HEAL,
+                    target: Some(FOE)
+                },
+                ClientCommand::PetAction {
+                    pet_guid: PET,
+                    target_guid: FOE,
+                    ..
+                },
+            ]
+        ),
+        "{sent:?}"
+    );
+}
+
 /// `PetWait` signals `PET_BAR_UPDATE` in the verb (`0x4bc979`); the app's mirror of the latch and
 /// the bar catching up with it a frame later add no second signal.
 #[test]

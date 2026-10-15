@@ -36,12 +36,42 @@ pub(crate) struct PetPress<'w, 's> {
     seam: crate::creature_anim::AttackSeam<'w, 's>,
 }
 
+/// A press that passed everything ahead of its packet.
+pub(crate) struct PetSend {
+    pet_guid: u64,
+    packed: u32,
+    target_guid: u64,
+}
+
 impl PetPress<'_, '_> {
     /// `CastPetAction(slot)`, a 1-based bar slot.
+    #[cfg(test)]
     pub(crate) fn press_slot(&mut self, slot: u32) {
-        if let Some(entry) = slot_entry(&self.bar, slot) {
-            self.press(slot, entry);
+        if let Some(send) = self.begin_slot(slot) {
+            self.finish_press(send);
         }
+    }
+
+    /// [`Self::press_slot`]'s first half, up to the packet. The attack validator in it
+    /// (`0x612df0`) may hand a unit to a standing targeting cursor, whose cast goes out inside the
+    /// validator, ahead of the packet: a caller that owns the cursor binds between the halves.
+    pub(crate) fn begin_slot(&mut self, slot: u32) -> Option<PetSend> {
+        let entry = slot_entry(&self.bar, slot)?;
+        self.begin_press(slot, entry)
+    }
+
+    /// [`Self::order`]'s first half; see [`Self::begin_slot`].
+    pub(crate) fn begin_order(&mut self, packed: u32) -> Option<PetSend> {
+        self.begin_press(0, PetActionEntry::from(packed))
+    }
+
+    /// The second half of a press: its `CMSG_PET_ACTION`.
+    pub(crate) fn finish_press(&mut self, send: PetSend) {
+        let _ = self.commands.0.send(ClientCommand::PetAction {
+            pet_guid: send.pet_guid,
+            packed: send.packed,
+            target_guid: send.target_guid,
+        });
     }
 
     /// The guid the pet book's `CastSpell(id, "pet", onSelf)` aims at: the selection, or with
@@ -55,8 +85,11 @@ impl PetPress<'_, '_> {
     /// `PetAttack` and the other one-shot orders, as their slot's packed word. A slot press and
     /// an order are one press: both reach the reference's one dispatcher (`0x4bd1d0`). The slot
     /// number only labels logs.
+    #[cfg(test)]
     pub(crate) fn order(&mut self, packed: u32) {
-        self.press(0, PetActionEntry::from(packed));
+        if let Some(send) = self.begin_order(packed) {
+            self.finish_press(send);
+        }
     }
 
     /// Send under [`PetBar`]'s pet guid, never one from the VM, so a press queued as the pet
@@ -64,7 +97,7 @@ impl PetPress<'_, '_> {
     /// its type, with our selection as the target; `HandlePetAction` drops a target the spell
     /// does not want. The dispatcher's first act is the usability predicate (`0x4bd1f2`), and a
     /// zero answer leaves for the epilogue (`0x4bd1f9`) ahead of everything below it.
-    fn press(&mut self, slot: u32, entry: PetActionEntry) {
+    fn begin_press(&mut self, slot: u32, entry: PetActionEntry) -> Option<PetSend> {
         let Self {
             bar,
             selection,
@@ -78,7 +111,7 @@ impl PetPress<'_, '_> {
         } = self;
         let Some(pet_store) = pet.usable_pet(bar) else {
             debug!("ui_pet: slot {slot} refused, the pet's actions are not usable — no packet");
-            return;
+            return None;
         };
         let pet_guid = bar.spells.pet_guid;
         let possessing = possessing(Some(pet_store), pet.self_guid.0);
@@ -93,7 +126,7 @@ impl PetPress<'_, '_> {
             let _ = commands
                 .0
                 .send(ClientCommand::PetCancelAura { pet_guid, spell_id });
-            return;
+            return None;
         }
         // The spell arm leaves for the epilogue, before its GCD and its send, unless the slot's
         // `Spell.dbc` record resolves (`0x4bd2e7`-`0x4bd2fe`); an id past the table's maximum has
@@ -107,7 +140,7 @@ impl PetPress<'_, '_> {
                     "ui_pet: slot {slot} (spell {}) has no record — no packet",
                     entry.action()
                 );
-                return;
+                return None;
             };
             Some(spell)
         } else {
@@ -130,7 +163,7 @@ impl PetPress<'_, '_> {
         };
         if !commit_press(bar, entry, refused, possessing) {
             debug!("ui_pet: slot {slot} refused by the attack validator — no packet");
-            return;
+            return None;
         }
         if let Some(spell) = spell {
             arm_pet_gcd(
@@ -147,11 +180,11 @@ impl PetPress<'_, '_> {
             entry.action(),
             entry.kind()
         );
-        let _ = commands.0.send(ClientCommand::PetAction {
+        Some(PetSend {
             pet_guid,
             packed: entry.packed,
             target_guid,
-        });
+        })
     }
 }
 

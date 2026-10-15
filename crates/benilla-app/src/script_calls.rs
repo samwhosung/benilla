@@ -31,6 +31,18 @@ macro_rules! attack_in_order {
     }};
 }
 
+/// The pet bar's Attack (`0x4bd40d`) runs the same validator, so a cast it binds to a standing
+/// targeting cursor goes out ahead of the `CMSG_PET_ACTION` it validated.
+macro_rules! pet_in_order {
+    ($appliers:expr, $begin:ident($arg:expr)) => {{
+        let send = $appliers.p6().$begin($arg);
+        $appliers.p1().bind_parked();
+        if let Some(send) = send {
+            $appliers.p6().finish_press(send);
+        }
+    }};
+}
+
 /// Apply this frame's script calls in call order, in the target chain after the world clicks.
 #[allow(clippy::type_complexity)] // the appliers, one per owner of the state a call touches
 pub(crate) fn apply_script_calls(
@@ -101,8 +113,8 @@ pub(crate) fn apply_script_calls(
             ScriptCall::CastPetSpell { spell_id, on_self } => {
                 crate::ui_pet_book::cast_pet_spell(&mut appliers.p6(), spell_id, on_self);
             }
-            ScriptCall::PetAction(slot) => appliers.p6().press_slot(slot),
-            ScriptCall::PetOrder(packed) => appliers.p6().order(packed),
+            ScriptCall::PetAction(slot) => pet_in_order!(appliers, begin_slot(slot)),
+            ScriptCall::PetOrder(packed) => pet_in_order!(appliers, begin_order(packed)),
         }
         // A selection this call made with the targeting cursor up was handed to the cast
         // (`SelectTarget`, `0x4935d5`) and is bound now, before the next call reads either.
