@@ -704,9 +704,9 @@ fn snapshot(
 /// ours that one of our slots holds re-signals the slot (`0x4bfb10`, `0x4bfb60` into `0x4bfa70`).
 /// Gone, the slot clears with `CMSG_CLEAR_TRADE_ITEM` (`0x5d4480`), as a click's clear does;
 /// restacked or enchanted, the same item is placed again with `CMSG_SET_TRADE_ITEM` from the
-/// position it was placed from (`0x5d4380`), which vmangos takes as no change
-/// (`TradeData::SetItem` returns on the same guid), so neither side's accept drops. Neither scan
-/// asks whether a trade is open.
+/// position it was placed from (`0x5d4380`), our session's offer left as it is. vmangos refuses an
+/// item its trade already holds and cancels the trade (`TradeHandler.cpp:716-720`), as it does
+/// for the reference's send. Neither scan asks whether a trade is open.
 fn resignal_trade_items(
     script: Option<NonSendMut<UiScript>>,
     mut notices: MessageReader<crate::item_watch::ItemNotice>,
