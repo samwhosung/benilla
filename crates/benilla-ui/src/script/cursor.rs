@@ -666,8 +666,8 @@ impl super::UiScript {
     }
 
     /// The stackable arrival's unlock (`0x5d8590` into `0x6221e0`): every one of `guids`, the
-    /// player's items of one entry, unlocks unless it sits in our trade offer (`0x4bfd20`), the
-    /// mail attach slot (`0xb6ef90`) or the auction sell slot (`0xb72608`), each of which keeps
+    /// player's items of one entry, unlocks unless it sits in our trade offer while the window is
+    /// open (`0x4bfd20`), the mail attach slot (`0xb6ef90`) or the auction sell slot (`0xb72608`), each of which keeps
     /// its lock until it leaves; then one `ITEM_LOCK_CHANGED` (`0x5d859a`).
     pub fn unlock_entry_items(&mut self, guids: &[u64]) {
         {
@@ -676,7 +676,7 @@ impl super::UiScript {
             let attached = |guid: u64| {
                 let held =
                     |item: &Option<CursorItem>| item.as_ref().is_some_and(|i| i.guid == guid);
-                model.trade_offered.iter().any(held)
+                model.trade_holds(guid)
                     || held(&model.mail_send_item)
                     || held(&model.auction_sell_item)
             };
@@ -1400,6 +1400,28 @@ mod tests {
         assert_eq!(heard::take(&s), ["ITEM_LOCK_CHANGED"]);
         assert!(s.item_locked(117), "the attachment keeps its lock");
         assert!(!s.item_locked(118));
+    }
+
+    /// The same unlock keeps an item in our trade offer, but only while the window is open
+    /// (`0x4bfd20` tests the partner cell first, `0x4bfd23`).
+    #[test]
+    fn the_entry_unlock_skips_a_trade_offer_only_while_the_window_is_open() {
+        let mut s = UiScript::new().unwrap();
+        s.open_trade_window();
+        s.set_trade(Some(Default::default()));
+        s.set_container(0, Some(super::two_item_bag()));
+        s.run("PickupContainerItem(0, 1) ClickTradeButton(1)")
+            .unwrap();
+        s.lock_item(118);
+        s.unlock_entry_items(&[117, 118]);
+        assert!(s.item_locked(117), "the offered item keeps its lock");
+        assert!(!s.item_locked(118));
+        s.close_trade_window();
+        s.unlock_entry_items(&[117]);
+        assert!(
+            !s.item_locked(117),
+            "past the close the table holds nothing"
+        );
     }
 
     #[test]

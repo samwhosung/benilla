@@ -1,7 +1,8 @@
-//! The trade bindings: the app pushes both sides of the open trade ([`UiScript::set_trade`]), and
-//! the trade verbs queue intents it drains. Slots are 1-based, 1..=7, the seventh the non-traded
+//! The trade bindings: the app pushes both sides of the trade ([`UiScript::set_trade`]), and the
+//! trade verbs queue intents it drains. Slots are 1-based, 1..=7, the seventh the non-traded
 //! enchant slot; an empty or out-of-range slot answers nil. The partner rides the `"npc"` unit,
-//! which the app points at them.
+//! which the app points at them. The getters test no open state: both offers stay as the last
+//! trade left them until the next open clears them ([`UiScript::open_trade_window`]).
 
 use mlua::{Lua, MultiValue, Value};
 
@@ -65,13 +66,30 @@ pub struct TradeState {
 }
 
 impl super::UiScript {
-    /// Push (or clear, with `None`) the open trade window's snapshot.
+    /// Push (or clear, with `None`) the trade's two offers.
     pub fn set_trade(&mut self, state: Option<TradeState>) {
         self.model_mut().trade = state;
     }
 
+    /// The open of the window (`0x4bf4e0` with a partner): the partner cell is set (`0x4bf549`) and
+    /// both offers and our item table clear (`0x4bf55d`-`0x4bf5ef`), so the getters answer nil
+    /// until the statuses fill them. Nothing else clears them.
+    pub fn open_trade_window(&mut self) {
+        let mut model = self.model_mut();
+        model.trade = None;
+        model.trade_offered = Default::default();
+        model.trade_window = true;
+    }
+
+    /// The close core's cell clear (`0x4bf516`): the window is shut. Both offers and our item
+    /// table stay (`0x4bfcf0` only unlocks), so the getters still answer the last offer, in
+    /// `TRADE_CLOSED`'s handlers too (`0x4bf522`).
+    pub fn close_trade_window(&mut self) {
+        self.model_mut().trade_window = false;
+    }
+
     /// Our column as the VM holds it, `ClickTradeButton`'s writes included: what the slots'
-    /// `TRADE_PLAYER_ITEM_CHANGED` handlers last read. `None` with no trade open.
+    /// `TRADE_PLAYER_ITEM_CHANGED` handlers last read. `None` before any trade has opened.
     pub fn trade_player_slots(&self) -> Option<[Option<TradeSlotItem>; TRADE_SLOTS]> {
         self.model_ref()
             .trade
@@ -81,12 +99,19 @@ impl super::UiScript {
 
     /// `UnlockTradeItems` (`0x4bfcf0`), which the `CANCELED`, `COMPLETE` and `CLOSE_WINDOW` status
     /// arms run before the window closes (`0x4bf837`, `0x4bf859`, `0x4bf87e`): every item our
-    /// slots held unlocks, one `ITEM_LOCK_CHANGED` each (`0x4bfd03`), fired now. A local
-    /// `CloseTrade` (`0x4bfdc0`) never runs it; the server's `CANCELED` does.
+    /// slots held unlocks, one `ITEM_LOCK_CHANGED` each (`0x4bfd03`), fired now. The table keeps
+    /// its guids (`0x4bfd08`-`0x4bfd11` only walk it). A local `CloseTrade` (`0x4bfdc0`) never
+    /// runs it; the server's `CANCELED` does.
     pub fn unlock_trade_items(&mut self) {
-        let offered = std::mem::take(&mut self.model_mut().trade_offered);
-        for item in offered.iter().flatten() {
-            self.unlock_item(item.guid);
+        let offered: Vec<u64> = self
+            .model_ref()
+            .trade_offered
+            .iter()
+            .flatten()
+            .map(|item| item.guid)
+            .collect();
+        for guid in offered {
+            self.unlock_item(guid);
         }
     }
 
@@ -111,8 +136,8 @@ impl super::UiScript {
 
     /// The scans `0x4bfb10` and `0x4bfb60`: the first of our seven slots whose stored item is
     /// `guid`, with the bag position it was placed from, `(slot, bag, bag_slot)`, 0-based slot;
-    /// none for a zero guid (`0x4bfb1e`). The table outlives a local close, as the reference's
-    /// does (`0xb716d0`).
+    /// none for a zero guid (`0x4bfb1e`). The table outlives a close, as the reference's does
+    /// (`0xb716d0`): it asks nothing of the window.
     pub fn trade_slot_holding(&self, guid: u64) -> Option<(u8, i64, u32)> {
         if guid == 0 {
             return None;
@@ -240,6 +265,20 @@ impl super::UiScript {
     /// The 1-based slots `ClickTradeButton` queued to clear, for `CMSG_CLEAR_TRADE_ITEM`.
     pub fn take_trade_clear_items(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.model_mut().trade_clear_items)
+    }
+}
+
+impl Model {
+    /// `0x4bfd20`: the window is open (the partner cell, tested first at `0x4bfd23`-`0x4bfd2f`)
+    /// and one of our slots holds `guid`. The equip refusal (`0x5e1897`) and the stackable
+    /// arrival's unlock (`0x622229`) ask it.
+    pub(crate) fn trade_holds(&self, guid: u64) -> bool {
+        self.trade_window
+            && self
+                .trade_offered
+                .iter()
+                .flatten()
+                .any(|item| item.guid == guid)
     }
 }
 
@@ -908,6 +947,75 @@ mod tests {
             .eval::<bool>("return GetTradePlayerItemInfo(1) == nil")
             .unwrap());
         assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 0);
+    }
+
+    /// The getters test no open state (`0x4c015a`, `0x4c04b3`): a close leaves both offers and the
+    /// money, the next open clears them (`0x4bf55d`-`0x4bf5ef`), and nothing else does.
+    #[test]
+    fn a_close_keeps_both_offers_and_the_next_open_clears_them() {
+        let mut s = UiScript::new().unwrap();
+        s.open_trade_window();
+        s.set_trade(Some(state()));
+        s.close_trade_window();
+        for read in [
+            "return GetTradePlayerItemInfo(1)",
+            "return GetTradeTargetItemInfo(1)",
+            "return GetTradeTargetItemInfo(7)",
+        ] {
+            assert_eq!(
+                s.eval::<Option<String>>(read).unwrap().as_deref(),
+                Some("Linen Cloth"),
+                "{read} after the close"
+            );
+        }
+        assert_eq!(
+            s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(),
+            12_345
+        );
+        assert_eq!(s.eval::<i64>("return GetTargetTradeMoney()").unwrap(), 500);
+
+        s.open_trade_window();
+        assert!(s
+            .eval::<bool>("return GetTradePlayerItemInfo(1) == nil")
+            .unwrap());
+        assert!(s
+            .eval::<bool>("return GetTradeTargetItemInfo(1) == nil")
+            .unwrap());
+        assert_eq!(s.eval::<i64>("return GetPlayerTradeMoney()").unwrap(), 0);
+    }
+
+    /// `0x4bfcf0` only unlocks: the table keeps its guids, so the scans of `0x4bfb10` and
+    /// `0x4bfb60` still find the slot, and the open clears it.
+    #[test]
+    fn unlocking_the_offered_items_leaves_the_table() {
+        let mut s = UiScript::new().unwrap();
+        s.open_trade_window();
+        s.set_trade(Some(TradeState::default()));
+        let mut bag = crate::script::ContainerState::default();
+        bag.slots.insert(
+            1,
+            crate::script::ContainerSlot {
+                item_id: 2589,
+                guid: 0x2589,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        s.set_container(0, Some(bag));
+        s.run("PickupContainerItem(0, 1) ClickTradeButton(1)")
+            .unwrap();
+        assert!(s.item_locked(0x2589));
+        s.unlock_trade_items();
+        assert!(!s.item_locked(0x2589), "unlocked");
+        assert_eq!(s.trade_slot_holding(0x2589), Some((0, 0, 1)), "still held");
+        s.close_trade_window();
+        assert_eq!(
+            s.trade_slot_holding(0x2589),
+            Some((0, 0, 1)),
+            "past the close"
+        );
+        s.open_trade_window();
+        assert_eq!(s.trade_slot_holding(0x2589), None, "the open clears it");
     }
 
     #[test]

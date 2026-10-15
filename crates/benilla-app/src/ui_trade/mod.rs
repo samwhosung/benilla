@@ -383,8 +383,10 @@ pub(crate) fn close_core(world: &mut World) {
         crate::ui_session::release(world, partner);
         world.resource_mut::<TradeSession>().close_window();
         crate::ui_session::note_closed(world, NpcWindow::Trade);
+        // The cell clears and the signal fires (`0x4bf516`-`0x4bf522`); both offers stay for the
+        // handlers' getters, and for the next open to clear.
         crate::ui_session::fire(world, |script| {
-            script.set_trade(None);
+            script.close_trade_window();
             script.fire_event("TRADE_CLOSED", vec![]);
         });
     }
@@ -843,8 +845,14 @@ fn feed_trade(
         spells.as_deref(),
         &commands,
     );
-    // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
+    // A close is the core's, which shut the VM's window and left both offers in place; a
+    // disconnect's clear tells it nothing.
     let opened = !*last_open && trade.is_open();
+    if opened {
+        // The open clears both offers and our item table before anything is placed (`0x4bf549`).
+        script.open_trade_window();
+        *last = None;
+    }
     let changed = fresh != *last;
     // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`). A slot
     // whose source has not moved since the last push keeps the VM's value, so a click this
@@ -2319,6 +2327,76 @@ mod tests {
             1,
             "the core's cancel goes out with no window open"
         );
+    }
+
+    /// Both offers live in tables only an open clears (`0x4bf549`-`0x4bf5ef`); a close signals
+    /// `TRADE_CLOSED` (`0x4bf522`) and clears none, and the getters test no open state
+    /// (`0x4c015a`, `0x4c04b3`). So a `TRADE_CLOSED` handler reads the last offer of both sides,
+    /// ours while its item object exists and the partner's from the record cache, and so does
+    /// anything after, until the next open.
+    #[test]
+    fn both_offers_answer_inside_trade_closed_and_until_the_next_open() {
+        let mut app = offered_app();
+        {
+            let mut items = app.world_mut().resource_mut::<Items>();
+            items.insert_template(2589, Some(crate::items::test_template("Linen Cloth")));
+            items.insert_template(1234, Some(crate::items::test_template("Iron Sword")));
+        }
+        let mut theirs = [None; TRADE_SLOT_COUNT];
+        theirs[0] = Some(wire_item(1234));
+        {
+            let mut trade = app.world_mut().resource_mut::<TradeSession>();
+            trade.place_own_item(1, wire_item(2589), 0);
+            trade.set_offer(&TradeStatusExtended {
+                their_window: true,
+                sequence: 7,
+                gold: 500,
+                enchant_spell_id: 0,
+                slots: theirs,
+            });
+        }
+        let reads = "return tostring((GetTradePlayerItemInfo(1))) .. '/' .. \
+                     tostring((GetTradeTargetItemInfo(1))) .. '/' .. GetTargetTradeMoney()";
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run(&format!(
+                "CLOSED = {{}} local f = CreateFrame('Frame') f:RegisterEvent('TRADE_CLOSED') \
+                 f:SetScript('OnEvent', function() table.insert(CLOSED, (function() {reads} end)()) end)"
+            ))
+            .unwrap();
+        app.update();
+        let read = |app: &App| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<String>(&format!("{reads}"))
+                .unwrap()
+        };
+        assert_eq!(read(&app), "Linen Cloth/Iron Sword/500", "open");
+
+        status(&mut app, TradeStatus::Complete);
+        app.update();
+        let closed: Vec<String> = app
+            .world()
+            .non_send_resource::<UiScript>()
+            .eval("return CLOSED")
+            .unwrap();
+        assert!(!closed.is_empty(), "TRADE_CLOSED fired");
+        assert!(
+            closed.iter().all(|c| c == "Linen Cloth/Iron Sword/500"),
+            "the handler read {closed:?}"
+        );
+        assert_eq!(read(&app), "Linen Cloth/Iron Sword/500", "after the close");
+        let holding = |app: &App| {
+            app.world()
+                .non_send_resource::<UiScript>()
+                .trade_slot_holding(LINEN)
+        };
+        assert_eq!(holding(&app), Some((0, 0, 1)), "our item table outlives it");
+
+        open_with(&mut app, 0x7);
+        app.update();
+        assert_eq!(read(&app), "nil/nil/0", "the open cleared both");
+        assert_eq!(holding(&app), None, "and the item table");
     }
 
     /// `ONLY_CONJURED` invalidates the slot (`0x4bf9fd` into `0x4bfbd0`): the item unlocks and

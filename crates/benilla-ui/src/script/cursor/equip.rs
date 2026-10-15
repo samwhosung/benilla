@@ -126,12 +126,7 @@ pub(crate) fn auto_equip_from(lua: &Lua, item: CursorItem, suppress: bool) -> Au
     // the set (`0x5e1897`-`0x5e18b3`, `0x4bfd20`).
     {
         let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        if model
-            .trade_offered
-            .iter()
-            .flatten()
-            .any(|offered| offered.guid == item.guid)
-        {
+        if model.trade_holds(item.guid) {
             model.push_ui_error("ERR_EQUIP_TRADE_ITEM");
             return AutoEquip::None;
         }
@@ -437,6 +432,7 @@ mod tests {
     #[test]
     fn an_item_in_the_trade_window_is_refused_before_the_set() {
         let mut s = UiScript::new().unwrap();
+        s.open_trade_window();
         s.set_container(0, Some(bag(&[(1, 0x11, 4), (2, 0x12, 4)])));
         // Offer the second item, then hold the first.
         s.run("PickupContainerItem(0, 2) ClickTradeButton(1) ClearCursor()")
@@ -453,5 +449,13 @@ mod tests {
             s.auto_equip_guid(0x11, false),
             AutoEquip::Sent { .. }
         ));
+        // The check tests the partner cell first (`0x4bfd23`): the table outlives the close, the
+        // refusal does not.
+        s.close_trade_window();
+        assert!(matches!(
+            s.auto_equip_guid(0x12, false),
+            AutoEquip::Sent { .. }
+        ));
+        assert!(s.take_ui_errors().is_empty());
     }
 }

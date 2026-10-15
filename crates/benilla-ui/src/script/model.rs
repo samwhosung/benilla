@@ -923,9 +923,14 @@ pub(crate) struct Model {
     /// The sell slot's item, resolved to its guid when `StartAuction` fires.
     pub(crate) auction_sell_item: Option<cursor::CursorItem>,
 
-    /// The open trade and its calls: `InitiateTrade` tokens, the accept, unaccept and cancel flags,
-    /// and `SetTradeMoney` copper (`CMSG_SET_TRADE_GOLD`).
+    /// The last trade's two offers and its calls: `InitiateTrade` tokens, the accept, unaccept and
+    /// cancel flags, and `SetTradeMoney` copper (`CMSG_SET_TRADE_GOLD`). The offers are the
+    /// getters' tables (`0xb714f4` and its siblings, `0xb716d0`), which a close leaves alone and
+    /// the next open clears (`0x4bf549`-`0x4bf5ef`).
     pub(crate) trade: Option<trade::TradeState>,
+    /// The partner cell `[0xb71728]` is set: the window is open. Nothing but the checks that test
+    /// the cell first (`0x4bfd20`) reads it.
+    pub(crate) trade_window: bool,
     pub(crate) trade_initiates: Vec<String>,
     pub(crate) trade_accept: bool,
     pub(crate) trade_unaccept: bool,
@@ -939,7 +944,8 @@ pub(crate) struct Model {
     pub(crate) trade_clear_items: Vec<u32>,
     /// The item each of our trade slots holds, as the client's own table records it at the click
     /// (`[0xb716d0]`, written by `0x4bfa70`): the item a later click puts back on the cursor, and
-    /// one the client keeps locked until the trade closes (`0x4bfcf0`).
+    /// one the client keeps locked until the trade closes (`0x4bfcf0` unlocks them and leaves the
+    /// table, which the next open clears).
     pub(crate) trade_offered: [Option<cursor::CursorItem>; super::trade::TRADE_SLOTS],
 
     /// The open questgiver panel, its greeting-row selects and its button calls.
@@ -1624,6 +1630,7 @@ impl Model {
             auction_close: false,
             auction_sell_item: None,
             trade: None,
+            trade_window: false,
             trade_initiates: Vec::new(),
             trade_accept: false,
             trade_unaccept: false,
