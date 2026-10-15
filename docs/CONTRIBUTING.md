@@ -29,7 +29,8 @@ taken.
   queue, new Lua functions, graphics past 1.12's), and behaviour changed because it seems better.
   They live on top of benilla ("Building on top"), so that what benilla does is what 1.12.1 does,
   for everyone who builds on it. A deviation from the reference is the maintainer's call and is
-  recorded where it lives; a pull request is not the place to propose one.
+  recorded where it lives, and gathered in [`docs/DEVIATIONS.md`](DEVIATIONS.md); a pull request is
+  not the place to propose one.
 - Anything from a WoW install: art, models, sounds, maps, data, and interface code (FrameXML and
   GlueXML), which runs off the player's own install (`docs/METHOD.md`).
 - Big or mixed changes. One change per pull request, small enough to read in one sitting.

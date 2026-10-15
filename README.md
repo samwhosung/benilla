@@ -43,6 +43,7 @@ against, by the same client addresses the comments here cite.
 
 The format readers and the UI engine core are plain Rust with no Bevy in them, and the world
 renderer runs with no game attached. [`docs/MAP.md`](docs/MAP.md) maps every crate and subsystem,
+and [`docs/DEVIATIONS.md`](docs/DEVIATIONS.md) lists everywhere benilla differs from 1.12.1; both are
 generated from the code.
 
 ## Status

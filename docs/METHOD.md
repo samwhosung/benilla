@@ -68,6 +68,8 @@ crate of its own or a fork, and benilla opens a piece of itself to such a crate 
 - `docs/METHOD.md`, this file: rules and method. Never state, never a log.
 - `docs/MAP.md`: what is built, generated from the code by `scripts/genmap.sh` at every land.
   Read it to orient; never edit or commit it by hand.
+- `docs/DEVIATIONS.md`: every place benilla differs from 1.12.1, its `Deviates` rows and `Deviation:`
+  comments, generated from the code by `scripts/genmap.sh` at every land; never edited by hand.
 - git: the history. No changelogs, no status docs, no "what we did" narratives.
 - The code: a comment says what the code does and the 1.12 fact behind it, in a line. No
   history, no stories.
