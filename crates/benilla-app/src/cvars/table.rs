@@ -422,8 +422,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("mousespeed", "1"),
     // The zoom-out limit is `cameraDistanceMax × cameraDistanceMaxFactor`, held to [0, 50]
     // (`0x5112d6`). `cameraDistanceMax` (`0x50beb2`, default `0x84fbd0`) has no panel row; its
-    // validator `0x50b310` refuses a value outside [0, 50]. The factor is MAX_FOLLOW_DIST (`UIOptionsFrame.lua:90`), registered "1.0" (`0x82e92c`)
-    // with no validator: the slider's 1 to 2 is the slider's, not the CVar's.
+    // validator `0x50b310` refuses a value outside [0, 50]. The factor is MAX_FOLLOW_DIST
+    // (`UIOptionsFrame.lua:90`), registered "1.0" (`0x82e92c`) with no validator: the slider's 1
+    // to 2 is the slider's, not the CVar's.
     same("cameraDistanceMax", "15.0").checked(benilla_ui::script::check_camera_distance_max),
     same("cameraDistanceMaxFactor", "1"),
     // `cameraSmoothStyle` (`0x50ba92`, default `[0x84f4f4]` "1"), the auto-return behind the
@@ -723,9 +724,9 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // 0 and 1). The knob is [`crate::video::VideoConfig::maximize`].
     same("gxMaximize", "0").latched(),
     // `gxTripleBuffer` (`0x63a80d`: name `0x864f88`, "0", callback `0x63afe0` → `+0x18`), whose
-    // callback refuses any value but 0 or 1 ("TripleBuffer must be 0 or 1", `0x8650b8`), a range
-    // this registry has no way to refuse with. No effect here: wgpu's present modes offer no
-    // triple-buffer choice.
+    // callback refuses any value but 0 or 1 ("TripleBuffer must be 0 or 1", `0x8650b8`), a refusal
+    // this row does not carry yet. No effect here: wgpu's present modes offer no triple-buffer
+    // choice.
     same("gxTripleBuffer", "0").latched(),
     // `gxCursor` (`0x63a906`: name `0x864eb8`, "1", callback `0x63b220` → `+0x05` `[0xc4eb9d]`),
     // Hardware Cursor. No effect here: benilla always draws the OS cursor (`crate::cursor`) and has

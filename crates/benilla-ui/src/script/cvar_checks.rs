@@ -108,10 +108,11 @@ pub fn check_base_mip(value: &str, applied: &str) -> CvarVerdict {
 /// `farclip`'s callback (`0x688d40`): `SStrToFloat` (`0x64aaa0`), refused below 177
 /// (`[0x81021c]`) or above 777 (`[0x80fed8]`) with "FarClip must be in range 177.0 - 777.0."
 /// (`0x869a94`). As in `texLodBias`'s, the lower test reads the parse as is and the upper one the
-/// float it was stored to (`0x688d4c`, `0x688d5c`). Neither bound clamps.
+/// float it was stored to (`0x688d4c`, `0x688d5c`), and a NaN passes both, unordered
+/// (`0x688d57`, `0x688d67`). Neither bound clamps.
 pub fn check_farclip(value: &str, _applied: &str) -> CvarVerdict {
     let v = s_str_to_float(value);
-    if v < 177.0 || v as f32 > 777.0 || v.is_nan() {
+    if v < 177.0 || v as f32 > 777.0 {
         CvarVerdict::refuse("FarClip must be in range 177.0 - 777.0.")
     } else {
         CvarVerdict::accept()
@@ -326,6 +327,9 @@ mod tests {
             let v = check_farclip(ok, "350");
             assert_eq!(v.accept, ok != "abc177", "{ok}");
         }
+        // `SStrToFloat`'s 0 * inf is NaN, which neither of the callback's compares refuses.
+        assert!(s_str_to_float("0e5000").is_nan());
+        assert!(check_farclip("0e5000", "350").accept);
         for bad in ["176.9", "1000", "-5", "0"] {
             assert_eq!(
                 check_farclip(bad, "350"),
