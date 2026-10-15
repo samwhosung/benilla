@@ -59,13 +59,13 @@ pub(crate) fn str_at(rs: &RecordSet, r: &Record, i: usize) -> Option<String> {
 
 /// A localized string: of the eight offset columns from `first`, the locale's
 /// (`record + first·4 + locale·4`, benilla-re `dbc#localized-strings`); `None` when it is empty.
-/// The column reads as an offset whatever the schema typed it, as the other locales' columns are
-/// often left untyped.
+/// The column's raw dword is the offset, as the client reads it, whatever the schema typed it: the
+/// other locales' columns are often left untyped.
 pub(crate) fn loc_str(rs: &RecordSet, r: &Record, first: usize, locale: Locale) -> Option<String> {
     let off = match r.get_value(first + locale.index())? {
         Value::StringRef(StringRef(off)) | Value::UInt32(off) => *off,
         Value::Int32(off) => *off as u32,
-        Value::Float32(_) => return None,
+        Value::Float32(f) => f.to_bits(),
     };
     let s = rs.get_string(StringRef(off)).ok()?;
     (!s.is_empty()).then(|| s.to_string())

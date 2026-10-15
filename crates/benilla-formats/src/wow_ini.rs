@@ -1,6 +1,7 @@
 //! `Wow.ini`, the client's `[WoW Config]` section. The reference loads it through the archive
-//! chain at startup (`0x40249d`, `SFileLoadFile` with flags 0, so no loose copy), and a stock
-//! install ships it in `interface.MPQ`; `Region` picks the realm categories
+//! chain at startup (`0x40249d` → `0x444460`, whose `SFileLoadFile` at `0x444507` opens with flags
+//! 0; the extra flags `[0x865b40]` are cleared by `0x648be0(0)` at `0x40221f`, so no loose copy),
+//! and a stock install ships it in `interface.MPQ`; `Region` picks the realm categories
 //! ([`crate::load_realm_categories`]), `Language` and `Country` the locale ([`crate::Locale`]).
 
 use crate::{Chain, Locale};

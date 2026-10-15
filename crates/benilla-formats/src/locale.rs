@@ -3,8 +3,9 @@
 //! `0x4024f7`), formats them `"%s%s"` into five bytes (`0x402513`, so four characters at most),
 //! packs those bytes into the locale tag (`0x40251b`-`0x402537`, `[0xc2a2a4]`), and stores as the
 //! locale index the position of the name in [`LOCALE_NAMES`] the string equals, any case
-//! (`0x402540`-`0x402562`, `[0xc0e080]`). Nothing else writes either word. With no `Wow.ini`,
-//! either key missing, or a name the table lacks (enGB), both stay 0 and the index reads column 0.
+//! (`0x402540`-`0x402562`, `[0xc0e080]`). Nothing else writes either word. With no `Wow.ini` or
+//! either key missing both stay 0; a name the table lacks (enGB) still sets the tag, and the index
+//! stays 0, enUS's column.
 
 /// The locale names in index order, the table at `0x8558a4`.
 pub const LOCALE_NAMES: [&str; 8] = [
