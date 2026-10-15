@@ -5,7 +5,8 @@
 //! and a `none` row has no producer in the census, which does not mean it has none. Only a
 //! `ScriptValue::` element's kind is asserted; any other argument counts toward the arity alone.
 //! A site of a gated event whose list is not written out at the call (`vec![…]`, `&[…]`,
-//! `Vec::new()`) is refused, since nothing then says what it pushes.
+//! `Vec::new()`) is refused, since nothing then says what it pushes; a call of the one function of
+//! its name whose body ends in a `vec![…]` stands for that list.
 use std::collections::BTreeMap;
 
 use super::fire_scan::{scan, Name, Scan};
@@ -317,6 +318,42 @@ mod bite {
             assert!(wrong.is_empty());
             assert_eq!(unreadable.len(), 1, "{body}: {unreadable:?}");
         }
+    }
+
+    /// A list built by the one function the call names is read from that function's tail `vec![…]`,
+    /// the way the reference's one chat helper (`0x49b0b0`) builds the ten `CHAT_MSG_*` values for
+    /// every caller. A name two functions carry, or a body that does not end in the list, stays
+    /// unreadable.
+    #[test]
+    fn a_list_built_by_the_one_function_the_call_names_is_read() {
+        let built = r#"impl Ev { fn args(&self) -> Vec<ScriptValue> {
+            let a = 1;
+            vec![ScriptValue::Str(String::new()), ScriptValue::Int(0)]
+        } }"#;
+        let call = r#"fn f(s: &mut UiScript, e: &Ev) { s.fire_event("GOSSIP_SHOW", e.args()); }"#;
+        let (wrong, unreadable) = judged(&format!("{built} {call}"));
+        assert!(unreadable.is_empty(), "{unreadable:?}");
+        assert_eq!(
+            wrong.len(),
+            1,
+            "a built list of two values is not bare: {wrong:?}"
+        );
+        let bare = built.replace(
+            "vec![ScriptValue::Str(String::new()), ScriptValue::Int(0)]",
+            "vec![]",
+        );
+        let (wrong, unreadable) = judged(&format!("{bare} {call}"));
+        assert!(
+            wrong.is_empty() && unreadable.is_empty(),
+            "{wrong:?} {unreadable:?}"
+        );
+        // Two functions of the name, or a tail that is not the list.
+        let twice = format!("{built} fn args() -> Vec<ScriptValue> {{ vec![] }} {call}");
+        assert_eq!(judged(&twice).1.len(), 1);
+        let late = built
+            .replace("vec![", "let v = vec![")
+            .replace("]\n", "];\n v\n");
+        assert_eq!(judged(&format!("{late} {call}")).1.len(), 1);
     }
 
     /// An event the table does not gate (a glue event, an advisory row) is not refused for it.

@@ -745,6 +745,48 @@ fn resolve(
     (!out.is_empty()).then_some(out)
 }
 
+/// The list a call stands for: `expr` is `callee(..)` or `recv.callee(..)`, `callee` is the one
+/// function of that name in the sources, and its body ends in a `vec![…]`, which comes back as
+/// written. That is the reference's own shape for a shared fire: one helper builds the list
+/// (`0x49b0b0` for every `CHAT_MSG_*`), and each call site only names it. `None` for a name two
+/// functions carry, a body that does not end in the list, or an expression that is more than the
+/// call.
+fn list_of_call(sources: &[Src], defs: &[Vec<Def>], expr: &str) -> Option<String> {
+    let e = expr.trim();
+    let open = e.find('(')?;
+    let (head, callee) = {
+        let head = &e[..open];
+        let name: String = head
+            .chars()
+            .rev()
+            .take_while(|&c| is_ident(c as u8))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        (&head[..head.len() - name.len()], name)
+    };
+    let path_like = head.bytes().all(|b| is_ident(b) || b == b'.' || b == b':');
+    let (code, lit) = lex(e);
+    if callee.is_empty() || !path_like || close_of(&code, &lit, open + 1) + 1 != e.len() {
+        return None;
+    }
+    let mut found = sources.iter().zip(defs).flat_map(|(src, ds)| {
+        ds.iter()
+            .filter(|d| d.name == callee)
+            .map(move |d| (src, d))
+    });
+    let (src, d) = found.next().filter(|_| found.next().is_none())?;
+    if d.firing.is_some() {
+        return None;
+    }
+    let (code, lit) = (src.code.as_bytes(), &src.lit);
+    let at = src.code[d.start..d.end].rfind("vec![")? + d.start;
+    let close = close_of(code, lit, at + "vec![".len());
+    (!lit[at] && src.code[close + 1..d.end].trim().is_empty())
+        .then(|| src.code[at..=close].to_string())
+}
+
 fn build(sources: Vec<Src>) -> Scan {
     let defs: Vec<Vec<Def>> = sources.iter().map(defs_of).collect();
 
@@ -914,6 +956,15 @@ fn build(sources: Vec<Src>) -> Scan {
     for (site, names) in sites.iter_mut().zip(resolved) {
         if let Some(names) = names {
             site.name = Name::Lit(names);
+        }
+    }
+
+    // A list held in a call is read from the one function it names.
+    for site in sites.iter_mut().filter(|s| !s.relay) {
+        if kinds_of_list(&site.list).is_none() {
+            if let Some(list) = list_of_call(&sources, &defs, &site.list) {
+                site.list = list;
+            }
         }
     }
 

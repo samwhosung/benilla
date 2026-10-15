@@ -31,100 +31,100 @@ BIND_ENCHANT	402	signal	()	exact
 CANCEL_LOOT_ROLL	506	signal2	%d	exact	
 CHARACTER_POINTS_CHANGED	264	signal2	%d%d	exact	
 CHAT_MSG_ADDON	227	signal2	%s%s%s%s	exact	
-CHAT_MSG_AFK	249		?	none	
-CHAT_MSG_BATTLEGROUND	546		?	none	
-CHAT_MSG_BATTLEGROUND_LEADER	547		?	none	
-CHAT_MSG_BG_SYSTEM_ALLIANCE	497		?	none	
-CHAT_MSG_BG_SYSTEM_HORDE	498		?	none	
-CHAT_MSG_BG_SYSTEM_NEUTRAL	496		?	none	
-CHAT_MSG_CHANNEL	243		?	none	
-CHAT_MSG_CHANNEL_JOIN	244		?	none	
-CHAT_MSG_CHANNEL_LEAVE	245		?	none	
-CHAT_MSG_CHANNEL_LIST	246		?	none	
-CHAT_MSG_CHANNEL_NOTICE	247		?	none	
-CHAT_MSG_CHANNEL_NOTICE_USER	248		?	none	
-CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_HITS	455		?	none	
-CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_MISSES	456		?	none	
-CHAT_MSG_COMBAT_CREATURE_VS_PARTY_HITS	453		?	none	
-CHAT_MSG_COMBAT_CREATURE_VS_PARTY_MISSES	454		?	none	
-CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS	451		?	none	
-CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES	452		?	none	
-CHAT_MSG_COMBAT_FACTION_CHANGE	533		?	none	
-CHAT_MSG_COMBAT_FRIENDLYPLAYER_HITS	447		?	none	
-CHAT_MSG_COMBAT_FRIENDLYPLAYER_MISSES	448		?	none	
-CHAT_MSG_COMBAT_FRIENDLY_DEATH	457		?	none	
-CHAT_MSG_COMBAT_HONOR_GAIN	460		?	none	
-CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS	449		?	none	
-CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES	450		?	none	
-CHAT_MSG_COMBAT_HOSTILE_DEATH	458		?	none	
+CHAT_MSG_AFK	249	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_BATTLEGROUND	546	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_BATTLEGROUND_LEADER	547	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_BG_SYSTEM_ALLIANCE	497	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_BG_SYSTEM_HORDE	498	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_BG_SYSTEM_NEUTRAL	496	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_CHANNEL	243	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_CHANNEL_JOIN	244	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_CHANNEL_LEAVE	245	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_CHANNEL_LIST	246	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_CHANNEL_NOTICE	247	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_CHANNEL_NOTICE_USER	248	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_HITS	455	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_MISSES	456	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_CREATURE_VS_PARTY_HITS	453	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_CREATURE_VS_PARTY_MISSES	454	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS	451	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES	452	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_FACTION_CHANGE	533	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_FRIENDLYPLAYER_HITS	447	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_FRIENDLYPLAYER_MISSES	448	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_FRIENDLY_DEATH	457	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_HONOR_GAIN	460	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS	449	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES	450	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_HOSTILE_DEATH	458	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
 CHAT_MSG_COMBAT_LOG	251		?	none	
-CHAT_MSG_COMBAT_MISC_INFO	358		?	none	
-CHAT_MSG_COMBAT_PARTY_HITS	445		?	none	
-CHAT_MSG_COMBAT_PARTY_MISSES	446		?	none	
-CHAT_MSG_COMBAT_PET_HITS	443		?	none	
-CHAT_MSG_COMBAT_PET_MISSES	444		?	none	
-CHAT_MSG_COMBAT_SELF_HITS	441		?	none	
-CHAT_MSG_COMBAT_SELF_MISSES	442		?	none	
-CHAT_MSG_COMBAT_XP_GAIN	459		?	none	
-CHAT_MSG_DND	250		?	none	
-CHAT_MSG_EMOTE	236		?	none	
-CHAT_MSG_FILTERED	544		?	none	
-CHAT_MSG_GUILD	231		?	none	
-CHAT_MSG_IGNORED	252		?	none	
-CHAT_MSG_LOOT	254		?	none	
-CHAT_MSG_MONEY	255		?	none	
-CHAT_MSG_MONSTER_EMOTE	242		?	none	
-CHAT_MSG_MONSTER_SAY	239		?	none	
-CHAT_MSG_MONSTER_WHISPER	241		?	none	
-CHAT_MSG_MONSTER_YELL	240		?	none	
-CHAT_MSG_OFFICER	232		?	none	
-CHAT_MSG_PARTY	229		?	none	
-CHAT_MSG_RAID	230		?	none	
-CHAT_MSG_RAID_BOSS_EMOTE	541		?	none	
-CHAT_MSG_RAID_LEADER	256		?	none	
-CHAT_MSG_RAID_WARNING	257		?	none	
-CHAT_MSG_SAY	228		?	none	
-CHAT_MSG_SKILL	253		?	none	
-CHAT_MSG_SPELL_AURA_GONE_OTHER	482		?	none	
-CHAT_MSG_SPELL_AURA_GONE_PARTY	481		?	none	
-CHAT_MSG_SPELL_AURA_GONE_SELF	480		?	none	
-CHAT_MSG_SPELL_BREAK_AURA	484		?	none	
-CHAT_MSG_SPELL_CREATURE_VS_CREATURE_BUFF	476		?	none	
-CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE	475		?	none	
-CHAT_MSG_SPELL_CREATURE_VS_PARTY_BUFF	474		?	none	
-CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE	473		?	none	
-CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF	472		?	none	
-CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE	471		?	none	
-CHAT_MSG_SPELL_DAMAGESHIELDS_ON_OTHERS	479		?	none	
-CHAT_MSG_SPELL_DAMAGESHIELDS_ON_SELF	478		?	none	
-CHAT_MSG_SPELL_FAILED_LOCALPLAYER	495		?	none	
-CHAT_MSG_SPELL_FRIENDLYPLAYER_BUFF	468		?	none	
-CHAT_MSG_SPELL_FRIENDLYPLAYER_DAMAGE	467		?	none	
-CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF	470		?	none	
-CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE	469		?	none	
-CHAT_MSG_SPELL_ITEM_ENCHANTMENTS	483		?	none	
-CHAT_MSG_SPELL_PARTY_BUFF	466		?	none	
-CHAT_MSG_SPELL_PARTY_DAMAGE	465		?	none	
-CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS	494		?	none	
-CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE	493		?	none	
-CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS	490		?	none	
-CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_DAMAGE	489		?	none	
-CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_BUFFS	492		?	none	
-CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE	491		?	none	
-CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS	488		?	none	
-CHAT_MSG_SPELL_PERIODIC_PARTY_DAMAGE	487		?	none	
-CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS	486		?	none	
-CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE	485		?	none	
-CHAT_MSG_SPELL_PET_BUFF	464		?	none	
-CHAT_MSG_SPELL_PET_DAMAGE	463		?	none	
-CHAT_MSG_SPELL_SELF_BUFF	462		?	none	
-CHAT_MSG_SPELL_SELF_DAMAGE	461		?	none	
-CHAT_MSG_SPELL_TRADESKILLS	477		?	none	
-CHAT_MSG_SYSTEM	238		?	none	
-CHAT_MSG_TEXT_EMOTE	237		?	none	
-CHAT_MSG_WHISPER	234		?	none	
-CHAT_MSG_WHISPER_INFORM	235		?	none	
-CHAT_MSG_YELL	233		?	none	
+CHAT_MSG_COMBAT_MISC_INFO	358	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_PARTY_HITS	445	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_PARTY_MISSES	446	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_PET_HITS	443	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_PET_MISSES	444	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_SELF_HITS	441	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_SELF_MISSES	442	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_COMBAT_XP_GAIN	459	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_DND	250	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_EMOTE	236	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_FILTERED	544	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_GUILD	231	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_IGNORED	252	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_LOOT	254	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_MONEY	255	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_MONSTER_EMOTE	242	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_MONSTER_SAY	239	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_MONSTER_WHISPER	241	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_MONSTER_YELL	240	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_OFFICER	232	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_PARTY	229	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_RAID	230	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_RAID_BOSS_EMOTE	541	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_RAID_LEADER	256	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_RAID_WARNING	257	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SAY	228	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SKILL	253	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_AURA_GONE_OTHER	482	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_AURA_GONE_PARTY	481	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_AURA_GONE_SELF	480	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_BREAK_AURA	484	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_CREATURE_VS_CREATURE_BUFF	476	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE	475	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_CREATURE_VS_PARTY_BUFF	474	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_CREATURE_VS_PARTY_DAMAGE	473	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF	472	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE	471	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_DAMAGESHIELDS_ON_OTHERS	479	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_DAMAGESHIELDS_ON_SELF	478	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_FAILED_LOCALPLAYER	495	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_FRIENDLYPLAYER_BUFF	468	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_FRIENDLYPLAYER_DAMAGE	467	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF	470	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE	469	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_ITEM_ENCHANTMENTS	483	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PARTY_BUFF	466	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PARTY_DAMAGE	465	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_CREATURE_BUFFS	494	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE	493	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS	490	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_DAMAGE	489	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_BUFFS	492	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE	491	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_PARTY_BUFFS	488	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_PARTY_DAMAGE	487	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS	486	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PERIODIC_SELF_DAMAGE	485	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PET_BUFF	464	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_PET_DAMAGE	463	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_SELF_BUFF	462	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_SELF_DAMAGE	461	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SPELL_TRADESKILLS	477	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_SYSTEM	238	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_TEXT_EMOTE	237	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_WHISPER	234	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_WHISPER_INFORM	235	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
+CHAT_MSG_YELL	233	signal2	%s%s%s%s%s%s%d%d%s%d	exact	
 CINEMATIC_START	370	signal	()	exact	
 CINEMATIC_STOP	371	signal	()	exact	
 CLOSE_INBOX_ITEM	515	signal2	%d	exact	
@@ -240,7 +240,7 @@ PLAYER_CAMPING	276	signal	()	exact
 PLAYER_COMBO_POINTS	202	signal	()	exact	
 PLAYER_CONTROL_GAINED	197	signal	()	exact	
 PLAYER_CONTROL_LOST	196	signal	()	exact	
-PLAYER_DAMAGE_DONE_MODS	201		?	none	
+PLAYER_DAMAGE_DONE_MODS	201	signal2	%s	exact	
 PLAYER_DEAD	275	signal	()	exact	
 PLAYER_ENTERING_WORLD	272	signal	()	exact	
 PLAYER_ENTER_COMBAT	193	signal	()	exact	
@@ -253,8 +253,8 @@ PLAYER_LEVEL_UP	199	signal2	%d%d%d%d%d%d%d%d%d	exact
 PLAYER_LOGIN	270	signal	()	exact	
 PLAYER_LOGOUT	271	signal	()	exact	
 PLAYER_MONEY	200	signal	()	exact	
-PLAYER_PVP_KILLS_CHANGED	523		?	none	
-PLAYER_PVP_RANK_CHANGED	524		?	none	
+PLAYER_PVP_KILLS_CHANGED	523	signal2	%s	exact	
+PLAYER_PVP_RANK_CHANGED	524	signal2	%s	exact	
 PLAYER_QUITING	277	signal	()	exact	
 PLAYER_REGEN_DISABLED	190	signal	()	exact	
 PLAYER_REGEN_ENABLED	191	signal	()	exact	
@@ -263,7 +263,7 @@ PLAYER_TARGET_CHANGED	195	signal	()	exact
 PLAYER_TRADE_MONEY	326	signal	()	exact	
 PLAYER_UNGHOST	401	signal	()	exact	
 PLAYER_UPDATE_RESTING	405	signal	()	exact	
-PLAYER_XP_UPDATE	189		?	none	
+PLAYER_XP_UPDATE	189	signal2	%s	exact	
 PLAYTIME_CHANGED	530	signal	()	exact	
 QUEST_ACCEPT_CONFIRM	346	signal2	%s%s	exact	
 QUEST_COMPLETE	303	signal	()	exact	
@@ -361,7 +361,7 @@ UNIT_QUEST_LOG_CHANGED	522	token-fanout	%s	exact
 UNIT_RAGE	18	unit-field-bridge	%s	exact	
 UNIT_RANGEDDAMAGE	122|165|166	unit-field-bridge	%s	exact	
 UNIT_RANGED_ATTACK_POWER	162|163|164	signal2|unit-field-bridge	%s	exact	
-UNIT_RESISTANCES	149|150|151|152|153|154|155	unit-field-bridge	%s	exact	
+UNIT_RESISTANCES	149|150|151|152|153|154|155	signal2|unit-field-bridge	%s	exact	
 UNIT_STATS	144|145|146|147|148	unit-field-bridge	%s	exact	
 UPDATE_BATTLEFIELD_SCORE	420	signal	()	exact	
 UPDATE_BATTLEFIELD_STATUS	419	signal	()	exact	
@@ -369,8 +369,8 @@ UPDATE_BINDINGS	386	signal	()	exact
 UPDATE_BONUS_ACTIONBAR	217	signal	()	exact	
 UPDATE_CHAT_COLOR	226	signal2	%s%f%f%f	exact	
 UPDATE_CHAT_WINDOWS	395	signal	()	exact	
-UPDATE_EXHAUSTION	406	signal	()	exact	
-UPDATE_FACTION	372	signal	()	exact	
+UPDATE_EXHAUSTION	406	signal|signal2	%s|()	exact	
+UPDATE_FACTION	372	signal|signal2	%s|()	exact	
 UPDATE_GM_STATUS	400	signal2	%d	exact	
 UPDATE_INSTANCE_INFO	539	signal	()	exact	
 UPDATE_INVENTORY_ALERTS	501	signal	()	exact	
