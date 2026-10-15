@@ -178,6 +178,17 @@ impl Model {
         }
     }
 
+    /// Whether a selection call made now will not move the selection when the app applies it, as
+    /// far as the VM can know: `SelectTarget` returns first for a charmed player (`0x49359c`), and
+    /// binds the unit to the cast in the selection's place while the targeting cursor is up
+    /// (`0x4935d5`). Both are the frame's last push. A cursor an earlier call of the same chunk arms
+    /// (`CastSpellByName("Heal")` with nothing selected) is the app's to decide when it applies
+    /// that call, so it is not seen here: the view is eager for the rest of such a chunk until the
+    /// next frame's feed corrects it.
+    pub(crate) fn selection_call_declined(&self) -> bool {
+        self.spell_targeting || self.unit("player").is_some_and(|u| u.charmed)
+    }
+
     /// Show a selection call's outcome to the rest of its chunk: the resolver's target guid and the
     /// `"target"` snapshot, `None` for nothing selected. The call itself stays queued, and the app
     /// commits it (`CMSG_SET_SELECTION`, the attack re-point, the loot close) when its turn comes;

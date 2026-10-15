@@ -1059,7 +1059,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             if let Some(token) = token {
                 let may_cast = select_may_cast(lua);
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-                if !model.spell_targeting {
+                if !model.selection_call_declined() {
                     if let Some(state) = model.held_unit_view(&token) {
                         model.show_selection(Some(state));
                     }
@@ -1127,10 +1127,11 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let exact = super::super::binding_abi::bool_or_default(exact.as_ref(), false);
             let may_cast = select_may_cast(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            // With the targeting cursor up the pick is bound, not selected (`0x4935d5`).
+            // With the targeting cursor up the pick is bound, not selected (`0x4935d5`), and a
+            // charmed player's select returns first (`0x49359c`).
             let pick = model
                 .named_unit(&name, exact)
-                .filter(|c| c.selectable && !model.spell_targeting);
+                .filter(|c| c.selectable && !model.selection_call_declined());
             if let Some(state) = pick.map(|c| c.state.clone()) {
                 model.show_selection(Some(state));
             }
@@ -1203,7 +1204,8 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         lua.create_function(|lua, ()| {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             let had = model.unit("target").is_some_and(|u| u.exists);
-            if had {
+            // A charmed player's deselect returns first (`0x49359c`).
+            if had && !model.unit("player").is_some_and(|u| u.charmed) {
                 model.show_selection(None);
             }
             model.queue_call(ScriptCall::ClearTarget);

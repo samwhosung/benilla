@@ -1252,6 +1252,45 @@ fn target_unit_and_by_name_leave_the_view_while_the_cursor_is_up() {
     }
 }
 
+/// A charmed player's `SelectTarget` returns before anything (`0x49359c`), a deselect included, so
+/// the three eager verbs show the rest of their chunk no change; an uncharmed player sees it.
+#[test]
+fn the_selection_verbs_leave_the_view_for_a_charmed_player() {
+    let script = |charmed| {
+        let mut s = UiScript::new().unwrap();
+        s.set_unit_guids(&UnitGuids {
+            player: 0x10,
+            party: [0x22, 0, 0, 0],
+            target: 0x21,
+            ..Default::default()
+        });
+        s.set_unit(
+            "player",
+            Some(UnitState {
+                exists: true,
+                charmed,
+                ..Default::default()
+            }),
+        );
+        s.set_unit("party1", Some(candidate(0x22, "Bob", 9.0).state));
+        s.set_name_candidate(0x22, Some(candidate(0x22, "Bob", 9.0)));
+        s.set_unit("target", Some(candidate(0x21, "Old Mob", 1.0).state));
+        s
+    };
+    for (lua, free) in [
+        (
+            "TargetUnit('party1') return UnitName('target')",
+            Some("Bob"),
+        ),
+        ("TargetByName('Bob') return UnitName('target')", Some("Bob")),
+        ("ClearTarget() return UnitName('target')", None),
+    ] {
+        let name = |charmed| script(charmed).eval::<Option<String>>(lua).unwrap();
+        assert_eq!(name(false).as_deref(), free, "{lua}: free");
+        assert_eq!(name(true).as_deref(), Some("Old Mob"), "{lua}: charmed");
+    }
+}
+
 /// `SetSelection` (`0x493540`) returns at its `IsSelectable` call (`0x4935ee`) and keeps the old
 /// target, while `TargetByName` ranks (`0x493aa0`, no selectable filter) before it: a
 /// non-selectable best pick leaves the view, though a selectable namesake farther off is ranked
