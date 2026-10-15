@@ -561,7 +561,7 @@ fn hovered_bag_tooltip_fills_itself_when_the_stats_land() {
 #[test]
 fn vendor_bag_hover_shows_sell_price_and_arms_the_pouch_cursor() {
     benilla_formats::wow_data_or_skip!();
-    use benilla_ui::script::{MerchantState, ScriptValue, UiCursorMode};
+    use benilla_ui::script::{MerchantState, UiCursorMode};
 
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
@@ -664,7 +664,7 @@ fn vendor_bag_hover_shows_sell_price_and_arms_the_pouch_cursor() {
     s.set_merchant(Some(MerchantState::default()));
     // `MERCHANT_SHOW` opens the bags (the window's OnShow calls `OpenBackpack`); a toggle here
     // would take `ToggleBackpack`'s close-all arm.
-    s.fire_event("MERCHANT_SHOW", vec![ScriptValue::Str("Vendor".into())]);
+    s.fire_event("MERCHANT_SHOW", vec![]);
     s.take_sounds();
     s.resolve();
     let b1 = bag_slot_button(&s, 0, 1);

@@ -12,8 +12,8 @@ use benilla_protocol::messages::TrainerSpell;
 use bevy::prelude::*;
 
 use benilla_ui::script::{
-    ScriptValue, TrainerAbilityReq, TrainerService, TrainerServiceCategory, TrainerSkillReq,
-    TrainerState, TrainerTooltip, UiScript,
+    TrainerAbilityReq, TrainerService, TrainerServiceCategory, TrainerSkillReq, TrainerState,
+    TrainerTooltip, UiScript,
 };
 
 use crate::entities::ItemDisplays;
@@ -555,8 +555,9 @@ pub(crate) fn feed_trainer(
     if *tooltip_subjects != fresh_tooltip_subjects {
         *tooltip_subjects = fresh_tooltip_subjects;
     }
-    // A name-only change re-fires `TRAINER_UPDATE`, so the title's `UnitName("npc")` repaints.
-    // The name rides as arg1, which the 1.12 trainer events do not carry.
+    // `TRAINER_SHOW` and `TRAINER_UPDATE` carry no argument (`SignalEvent` `0x4d7b73`, `0x4d83f9`)
+    // and the stock window titles with `UnitName("npc")` (`Blizzard_TrainerUI.lua:90`), so a
+    // name-only change re-fires `TRAINER_UPDATE` to repaint it.
     let trainer_name = open
         .trainer
         .and_then(|g| names.resolve(g, &commands).map(str::to_string));
@@ -565,10 +566,9 @@ pub(crate) fn feed_trainer(
         return;
     }
     script.set_trainer(fresh.clone());
-    let name_arg = || vec![ScriptValue::Str(trainer_name.clone().unwrap_or_default())];
     match (&*last, &fresh) {
-        (None, Some(_)) => script.fire_event("TRAINER_SHOW", name_arg()),
-        (Some(_), Some(_)) => script.fire_event("TRAINER_UPDATE", name_arg()),
+        (None, Some(_)) => script.fire_event("TRAINER_SHOW", vec![]),
+        (Some(_), Some(_)) => script.fire_event("TRAINER_UPDATE", vec![]),
         // The core told the VM; a disconnect's clear tells it nothing.
         (Some(_), None) | (None, None) => {}
     }

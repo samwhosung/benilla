@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use benilla_protocol::messages::{select_greeting, GossipOption, NpcTextBlock};
 use bevy::prelude::*;
 
-use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow, ScriptValue, UiScript};
+use benilla_ui::script::{GossipMenu, GossipOptionView, GossipQuestRow, UiScript};
 
 use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
@@ -274,9 +274,9 @@ fn feed_gossip(
         *last = None;
         *last_name = None;
     }
-    // The NPC's name rides `GOSSIP_SHOW` as arg1, and its landing alone re-fires the event; the
-    // reference fires `GOSSIP_SHOW` bare (`0x4e22b0`), and stock `GossipFrame.lua:33` titles with
-    // `UnitName("npc")`. Asked before the hold, so the name query goes out beside the text query.
+    // `GOSSIP_SHOW` carries no argument (`SignalEvent` `0x4e22b5`) and the stock window titles with
+    // `UnitName("npc")` (`GossipFrame.lua:33`), so the name's landing alone re-fires it. Asked
+    // before the hold, so the name query goes out beside the text query.
     let npc_name = state
         .npc
         .and_then(|g| names.resolve(g, &commands).map(str::to_string));
@@ -303,11 +303,10 @@ fn feed_gossip(
         return;
     }
     script.set_gossip(fresh.clone());
-    let name_arg = || vec![ScriptValue::Str(npc_name.clone().unwrap_or_default())];
     // Opened, or changed while open; a close is the core's, and a disconnect's clear tells the
     // VM nothing.
     if fresh.is_some() {
-        script.fire_event("GOSSIP_SHOW", name_arg());
+        script.fire_event("GOSSIP_SHOW", vec![]);
     }
     *last = fresh;
     *last_name = npc_name;
