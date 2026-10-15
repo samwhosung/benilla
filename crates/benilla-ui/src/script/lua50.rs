@@ -585,7 +585,8 @@ mod tests {
         // A numeral too long for the conversion's stack buffer takes the same path.
         let long = format!("1{}d-70", "0".repeat(70));
         assert_eq!(
-            s.eval::<f64>(&format!("return tonumber({long:?})")).unwrap(),
+            s.eval::<f64>(&format!("return tonumber({long:?})"))
+                .unwrap(),
             1.0
         );
         // A base still reads hexadecimal digits: that is `strtoul`, not `luaO_str2d`.
