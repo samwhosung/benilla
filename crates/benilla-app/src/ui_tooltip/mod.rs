@@ -272,7 +272,8 @@ fn drive_mouseover_tooltip(
         }
         let Some(template) = go_inputs.templates.get(guid).cloned() else {
             // Template in flight: ask once, and show it when it lands.
-            go_inputs.templates.request(guid, &commands);
+            let field_entry = stores.get(entity).ok().and_then(|s| s.0.object_entry());
+            go_inputs.templates.request(guid, field_entry, &commands);
             return;
         };
         // The builder's lock lines (`0x52aa20`): "Locked" iff `GO_FLAG_LOCKED` (`0x52aae5`), then

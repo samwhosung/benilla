@@ -365,7 +365,8 @@ pub(crate) fn object_material(
         return match go_templates.get(guid) {
             Some(go) => go.quest_material.and_then(name),
             None => {
-                go_templates.request(guid, commands);
+                let field_entry = objects.object(guid).and_then(|o| o.object_entry());
+                go_templates.request(guid, field_entry, commands);
                 None
             }
         };

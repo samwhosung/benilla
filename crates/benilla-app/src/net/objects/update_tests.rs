@@ -100,6 +100,33 @@ fn create(guid: u64, kind: EntityKind, position: [f32; 3]) -> SessionEvent {
     }
 }
 
+/// A GameObject create asks its template by the descriptor's `OBJECT_FIELD_ENTRY` (`0x5f7d77`,
+/// `[descriptor+0xc]`), never by the guid's bits: a boat whose guid counter is not its entry.
+#[test]
+fn a_gameobject_create_asks_its_template_by_the_entry_field() {
+    const BOAT_ENTRY: u32 = 176231;
+    // `HIGHGUID_MO_TRANSPORT` with a plain counter in the low 32 bits.
+    const BOAT: u64 = 0x1FC0_0000_0000_0007;
+    let mut app = client();
+    let (tx, rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    let world = app.world_mut();
+    let mut boat = create(BOAT, EntityKind::GameObject, [1.0, 2.0, 3.0]);
+    if let SessionEvent::ObjectCreate { fields, .. } = &mut boat {
+        *fields =
+            ObjectFields::from_pairs(&[(benilla_protocol::field::FIELD_OBJECT_ENTRY, BOAT_ENTRY)]);
+    }
+    super::super::handlers::dispatch(world, vec![boat]);
+    let asked: Vec<_> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            crate::net::ClientCommand::GameObjectQuery { entry, guid } => Some((entry, guid)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked, vec![(BOAT_ENTRY, BOAT)]);
+}
+
 /// A create of a known guid moves only a unit (type-mask bit 3, `0x46638c`); a GameObject's
 /// block position is read and dropped (`0x4664c3`), so it keeps its place.
 #[test]

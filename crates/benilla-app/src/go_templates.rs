@@ -2,6 +2,10 @@
 //! streams in. The template's lockId decides a right-click: a locked object is opened by an
 //! `OPEN_LOCK` cast, an unlocked one by `CMSG_GAMEOBJ_USE`.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use benilla_assets::LockRecover;
 use benilla_formats::{LockCatalog, LockTypeCatalog};
 use benilla_protocol::guid;
 use bevy::prelude::*;
@@ -79,18 +83,41 @@ pub(crate) struct TextPage {
 #[derive(Resource, Default)]
 pub(crate) struct GameObjectTemplates {
     templates: QueryCache<u32, GoTemplate>,
+    /// Each streamed-in object's `OBJECT_FIELD_ENTRY`, the template's key (`[descriptor+0xc]`,
+    /// `0x5f7d77`). Behind a lock because [`Self::request`] records through `&self`, like the
+    /// cache's in-flight set.
+    entries: Mutex<HashMap<u64, u32>>,
 }
 
 impl crate::query_cache::AskOnce for GameObjectTemplates {
     fn clear_pending(&mut self) {
         self.templates.clear_pending();
+        // Every world entry re-creates its objects, and a guid may name a different object after.
+        self.entries
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
 
 impl GameObjectTemplates {
-    /// Asks for a template once per entry; every spawn of a template shares the one query.
-    pub(crate) fn request(&self, guid: u64, commands: &NetCommands) {
-        let Some(entry) = guid::entry(guid) else {
+    /// The key the template is cached under: the entry the object's create carried, else the
+    /// guid's bits for a guid never seen created (the reference has no such path: it reads the
+    /// descriptor alone).
+    fn entry_of(&self, guid: u64) -> Option<u32> {
+        let recorded = self.entries.lock_recover().get(&guid).copied();
+        recorded.or_else(|| guid::entry(guid))
+    }
+
+    /// Asks for a template once per entry; every spawn of a template shares the one query. The
+    /// reference keys the cache with the descriptor's `OBJECT_FIELD_ENTRY` and never reads the
+    /// guid (`0x5f7c40`, `0x5f7d77`), so a create passes the field as `field_entry`, which is
+    /// recorded for [`Self::get`]; without one the guid's bits stand in.
+    pub(crate) fn request(&self, guid: u64, field_entry: Option<u32>, commands: &NetCommands) {
+        if let Some(entry) = field_entry.filter(|&e| e != 0) {
+            self.entries.lock_recover().insert(guid, entry);
+        }
+        let Some(entry) = self.entry_of(guid) else {
             return;
         };
         self.templates.get_or_ask(entry, || {
@@ -152,7 +179,7 @@ impl GameObjectTemplates {
 
     /// The cached template for a GameObject guid.
     pub(crate) fn get(&self, guid: u64) -> Option<&GoTemplate> {
-        guid::entry(guid).and_then(|e| self.templates.get(e))
+        self.entry_of(guid).and_then(|e| self.templates.get(e))
     }
 }
 
@@ -308,5 +335,70 @@ mod tests {
                 "type {type_id} must not take the cursor arm — it carries no semantic 0x13"
             );
         }
+    }
+
+    /// `0x5f7c40` keys the cache with `[descriptor+0xc]`, the create's `OBJECT_FIELD_ENTRY`
+    /// (`0x5f7d77`), and never the guid: a boat whose guid counter is not its template entry is
+    /// asked and read by the field.
+    #[test]
+    fn the_template_is_keyed_by_the_creates_entry_field_not_the_guid_bits() {
+        const FIELD_ENTRY: u32 = 176231;
+        // A MO_TRANSPORT guid whose low 32 bits are a plain counter.
+        let boat = (u64::from(guid::HIGH_MO_TRANSPORT) << 48) | 7;
+        assert_eq!(guid::entry(boat), Some(7), "the guid bits say 7");
+
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let commands = NetCommands(tx);
+        let mut t = GameObjectTemplates::default();
+        t.request(boat, Some(FIELD_ENTRY), &commands);
+        t.request(boat, Some(FIELD_ENTRY), &commands);
+        let asked: Vec<_> = rx
+            .try_iter()
+            .map(|c| match c {
+                ClientCommand::GameObjectQuery { entry, guid } => (entry, guid),
+                _ => panic!("only the template query is sent"),
+            })
+            .collect();
+        assert_eq!(asked, vec![(FIELD_ENTRY, boat)], "asked once, by the field");
+
+        let mut data = [0i32; 24];
+        data[0] = 292;
+        t.insert(FIELD_ENTRY, 15, "Boat".into(), &data);
+        let mo = t.get(boat).and_then(|g| g.mo_transport);
+        assert_eq!(mo.map(|m| m.taxi_path_id), Some(292), "read by the field");
+
+        // Another object of the same template shares the one query.
+        let sister = (u64::from(guid::HIGH_MO_TRANSPORT) << 48) | 9;
+        t.request(sister, Some(FIELD_ENTRY), &commands);
+        assert!(rx.try_recv().is_err(), "the cached entry is not re-asked");
+        assert!(t.get(sister).is_some());
+    }
+
+    /// A guid never seen created has no field to read: the guid's bits stand in.
+    #[test]
+    fn a_guid_without_a_recorded_entry_falls_back_to_its_bits() {
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let commands = NetCommands(tx);
+        let t = GameObjectTemplates::default();
+        let chest = 0xF110_0000_0000_0000 | (1731u64 << 24) | 0x40;
+        t.request(chest, None, &commands);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::GameObjectQuery { entry: 1731, .. })
+        ));
+    }
+
+    /// A world entry forgets the recorded keys with the in-flight asks.
+    #[test]
+    fn a_world_entry_forgets_the_recorded_entries() {
+        use crate::query_cache::AskOnce;
+        let (tx, _rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let commands = NetCommands(tx);
+        let mut t = GameObjectTemplates::default();
+        let boat = (u64::from(guid::HIGH_MO_TRANSPORT) << 48) | 7;
+        t.request(boat, Some(500), &commands);
+        assert_eq!(t.entry_of(boat), Some(500));
+        t.clear_pending();
+        assert_eq!(t.entry_of(boat), Some(7));
     }
 }
