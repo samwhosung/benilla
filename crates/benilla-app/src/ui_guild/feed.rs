@@ -114,12 +114,11 @@ pub(super) fn feed_guild(
         // A frame loaded after the roster still needs one push to draw from.
         super::RosterUpdate::Applied,
     )) {
-        let args = if kind.arg1() {
-            vec![ScriptValue::Int(1)]
+        if kind.arg1() {
+            script.fire_event("GUILD_ROSTER_UPDATE", vec![ScriptValue::Int(1)]);
         } else {
-            Vec::new()
-        };
-        script.fire_event("GUILD_ROSTER_UPDATE", args);
+            script.fire_event("GUILD_ROSTER_UPDATE", vec![]);
+        }
     }
 
     // `GUILD_MOTD` carries the text; its chat line is the FrameXML's (`ChatFrame.lua:1335-1340`).

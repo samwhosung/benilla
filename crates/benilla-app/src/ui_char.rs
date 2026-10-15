@@ -1029,12 +1029,14 @@ pub(crate) fn feed_char(
         gate.audit("feed_char", "a bank bag slot transition");
     }
     for same_bag in repainted {
-        let args = if same_bag {
-            vec![ScriptValue::Str("player".to_string())]
+        if same_bag {
+            script.fire_event(
+                "PLAYERBANKSLOTS_CHANGED",
+                vec![ScriptValue::Str("player".to_string())],
+            );
         } else {
-            Vec::new()
-        };
-        script.fire_event("PLAYERBANKSLOTS_CHANGED", args);
+            script.fire_event("PLAYERBANKSLOTS_CHANGED", vec![]);
+        }
     }
 }
 

@@ -1371,12 +1371,14 @@ fn diff_and_push(
     // One event per changed vault slot, with no slot argument: every bank button repaints from
     // its own slot (`feed_char` fires the same event for the bank-bag buttons).
     for &same_item in &vault {
-        let args = if same_item {
-            vec![ScriptValue::Str("player".into())]
+        if same_item {
+            script.fire_event(
+                "PLAYERBANKSLOTS_CHANGED",
+                vec![ScriptValue::Str("player".into())],
+            );
         } else {
-            Vec::new()
-        };
-        script.fire_event("PLAYERBANKSLOTS_CHANGED", args);
+            script.fire_event("PLAYERBANKSLOTS_CHANGED", vec![]);
+        }
     }
     // A `BAG_CLOSED` or vault event alone still went into the VM.
     !changed.is_empty() || !closed.is_empty() || !vault.is_empty()

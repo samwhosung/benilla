@@ -170,7 +170,7 @@ fn channel_counts_down_not_up() {
     benilla_formats::wow_data_or_skip!();
     let mut s = harness();
     // SPELLCAST_CHANNEL_START is (ms, name), reversed from START. The name is the word
-    // "Channeling" for all but 9 of the 323 channeled spells (`ui_cast::channel_start_args`).
+    // "Channeling" for all but 9 of the 323 channeled spells (`ui_cast::channel_start_name`).
     s.fire_event(
         "SPELLCAST_CHANNEL_START",
         vec![

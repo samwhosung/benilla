@@ -27,7 +27,7 @@ pub(crate) enum CastBarEdge {
     /// `SMSG_SPELL_DELAYED`: pushback extends the cast by `delay_ms`; the bar slides, never
     /// cancels.
     Delayed { delay_ms: u32 },
-    /// `MSG_CHANNEL_START`, sent by vmangos to the caster only; gated by [`channel_start_args`].
+    /// `MSG_CHANNEL_START`, sent by vmangos to the caster only; gated by [`channel_start_name`].
     ChannelStart { spell_id: u32, duration_ms: u32 },
     /// `MSG_CHANNEL_UPDATE`, also caster-only: the time left, 0 when the channel is over.
     ChannelUpdate { remaining_ms: u32 },
@@ -39,7 +39,7 @@ pub(crate) struct CastBarFeed(pub(crate) Vec<CastBarEdge>);
 
 /// `SPELLCAST_START`'s name argument: empty for an unknown spell, or when `AttributesEx3 & 0x4`
 /// is set, where the reference pushes `""` (`0x6e7a2d`) and still fires, so the bar is a
-/// full-length untitled one. The channel bar names differently ([`channel_start_args`]).
+/// full-length untitled one. The channel bar names differently ([`channel_start_name`]).
 fn cast_bar_label(spells: Option<&crate::ui_action::Spells>, id: u32) -> String {
     spells
         .and_then(|s| s.catalog.get(id))
@@ -48,20 +48,20 @@ fn cast_bar_label(spells: Option<&crate::ui_action::Spells>, id: u32) -> String 
         .unwrap_or_default()
 }
 
-/// `SPELLCAST_CHANNEL_START`'s arguments, `(duration, name)` (format `0x8432cc`, "%d%s"), or
-/// `None` where `SpellChannelStart` (`0x6e7550`) fires no event: a zero duration, an id with no
-/// `Spell.dbc` row, or `AttributesEx3 & 0x2000`. The name is the spell's own only with
+/// `SPELLCAST_CHANNEL_START`'s name, the second of its `(duration, name)` (format `0x8432cc`,
+/// "%d%s"), or `None` where `SpellChannelStart` (`0x6e7550`) fires no event: a zero duration, an
+/// id with no `Spell.dbc` row, or `AttributesEx3 & 0x2000`. The name is the spell's own only with
 /// `AttributesEx` bit 29 set, else the Lua global `CHANNELING` off the player's chain (`""` when
 /// missing, and the event still fires).
 ///
 /// This gates the event only: the reference's channel mirror (`0xceac58`) is written at the cast
 /// send (`0x6e4f88`), never here, so `ActiveChannel` still arms for a suppressed channel.
-fn channel_start_args(
+fn channel_start_name(
     script: &UiScript,
     spells: Option<&crate::ui_action::Spells>,
     id: u32,
     duration_ms: u32,
-) -> Option<Vec<ScriptValue>> {
+) -> Option<String> {
     if duration_ms == 0 {
         return None;
     }
@@ -78,10 +78,7 @@ fn channel_start_args(
             .get::<String>("CHANNELING")
             .unwrap_or_default()
     };
-    Some(vec![
-        ScriptValue::Int(i64::from(duration_ms)),
-        ScriptValue::Str(name),
-    ])
+    Some(name)
 }
 
 /// Drain the queue into the stock events: `SPELLCAST_START(name, ms)`,
@@ -144,23 +141,31 @@ pub(crate) fn feed_cast_bar(
                 spell_id,
                 duration_ms,
             } => {
-                let args = channel_start_args(&script, spells.as_deref(), spell_id, duration_ms);
+                let name = channel_start_name(&script, spells.as_deref(), spell_id, duration_ms);
                 // Traced here, where the `0x6e7550` gate is decided; other edges trace in
                 // `spell::net`.
                 if *crate::net::CAST_TRACE {
-                    match args.as_deref() {
-                        Some([_, ScriptValue::Str(label)]) => info!(
+                    match name.as_deref() {
+                        Some(label) => info!(
                             "cast-trace: CHANNEL_START — spell {spell_id} {duration_ms}ms, \
                              bar label {label:?}"
                         ),
-                        _ => info!(
+                        None => info!(
                             "cast-trace: CHANNEL_START — spell {spell_id} {duration_ms}ms, \
                              NO BAR (0x6e7550 gate: zero duration, no Spell.dbc row, or \
                              AttributesEx3 & 0x2000)"
                         ),
                     }
                 }
-                args.map(|args| ("SPELLCAST_CHANNEL_START", args))
+                name.map(|name| {
+                    (
+                        "SPELLCAST_CHANNEL_START",
+                        vec![
+                            ScriptValue::Int(i64::from(duration_ms)),
+                            ScriptValue::Str(name),
+                        ],
+                    )
+                })
             }
             // `0x6e75f0`: nonzero re-times the bar, zero ends it, with no attribute gate; for a
             // suppressed channel the stock Lua's `IsShown()` guards absorb these.
@@ -271,10 +276,7 @@ mod tests {
         script.eval::<()>("CHANNELING = \"Channeling\"").unwrap();
 
         let name_of = |id: u32, ms: u32| -> Option<String> {
-            channel_start_args(&script, Some(&spells), id, ms).map(|args| match &args[1] {
-                ScriptValue::Str(s) => s.clone(),
-                other => panic!("arg 2 is the name, got {other:?}"),
-            })
+            channel_start_name(&script, Some(&spells), id, ms)
         };
         assert_eq!(
             name_of(10, 8_000).as_deref(),
@@ -298,16 +300,9 @@ mod tests {
             "0x6e7590: no SpellRec -> no event"
         );
         assert_eq!(
-            channel_start_args(&script, None, 10, 8_000),
+            channel_start_name(&script, None, 10, 8_000),
             None,
             "no client data is the same no-record leg"
-        );
-
-        // Duration first, the reverse of `SPELLCAST_START`.
-        assert_eq!(
-            channel_start_args(&script, Some(&spells), 10, 8_000).unwrap()[0],
-            ScriptValue::Int(8_000),
-            "fmt 0x8432cc is \"%d%s\" — duration first"
         );
     }
 
@@ -334,8 +329,8 @@ mod tests {
             ..crate::ui_action::Spells::empty_for_tests()
         };
         assert_eq!(
-            channel_start_args(&script, Some(&spells), 10, 8_000).unwrap()[1],
-            ScriptValue::Str("Channeling".into()),
+            channel_start_name(&script, Some(&spells), 10, 8_000).as_deref(),
+            Some("Channeling"),
         );
     }
 }
