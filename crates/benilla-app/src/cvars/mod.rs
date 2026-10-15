@@ -32,6 +32,8 @@ use benilla_ui::script::{CvarCheck, SeededCvar, UiScript};
 
 mod inert;
 #[cfg(test)]
+mod deviations_doc;
+#[cfg(test)]
 mod reference_table;
 mod table;
 #[cfg(test)]
