@@ -497,7 +497,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // `0x4d3f70`), is priced by `SkillTiers.dbc`: the cost at the step in the line's tier
     // (`0x6de1c0`). A cost of 0 ends it; a cost above the player's skill points
     // (`PLAYER_CHARACTER_POINTS2`, `0x4d3faf`) ends it; else `CMSG_SKILL_BUY_STEP` carries the
-    // line id. On the 1.12 data every tier id is 0, so nothing is ever sent.
+    // line id. On the 1.12 data no row carries `0x8` and the one with `0x4` (skill 493) has tier
+    // id 0, so nothing is ever sent.
     g.set(
         "BuySkillTier",
         lua.create_function(|lua, index: Value| {
