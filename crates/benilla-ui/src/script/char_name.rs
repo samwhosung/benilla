@@ -92,10 +92,8 @@ impl NameCharsets {
         const REGIONS: [(u8, u8); 5] = [(1, 1), (2, 4), (1, 1), (3, 1), (3, 1)];
         const LOCALES: [u8; 8] = [1, 2, 1, 1, 3, 3, 1, 0];
         const KO_KR: usize = 1;
-        if let Some(&(primary, secondary)) = usize::try_from(region - 1)
-            .ok()
-            .and_then(|i| REGIONS.get(i))
-        {
+        if let 1..=5 = region {
+            let (primary, secondary) = REGIONS[(region - 1) as usize];
             return Self { primary, secondary };
         }
         // An index past the table or whose entry is 0 reads row 0.
@@ -366,6 +364,9 @@ mod tests {
         // An index past the table reads row 0, as the client's does.
         assert_eq!(pair(0, 9), (1, 1));
         assert_eq!(NameCharsets::default(), NameCharsets::for_client(0, 0));
+        // The extremes of the signed word are no region, not an overflow.
+        assert_eq!(pair(i32::MIN, 1), (2, 4));
+        assert_eq!(pair(i32::MAX, 4), (3, 1));
     }
 
     /// koKR: a Hangul name passes, and the same bytes fail on every Latin locale. The first
