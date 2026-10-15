@@ -6,7 +6,7 @@ use super::common::script;
 fn get_locale_and_set_all_points() {
     let mut s = script();
     s.set_screen_size(800.0, 600.0);
-    // `GetLocale`: benilla is enUS-only.
+    // `GetLocale`: enUS, index 0, until the host seats the install's locale.
     assert_eq!(s.eval::<String>("return GetLocale()").unwrap(), "enUS");
 
     s.run(

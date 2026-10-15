@@ -736,6 +736,9 @@ pub(crate) struct Model {
     /// `SetEuropeanNumbers`'s switch, `[0xcf4d24]` (0 at start): while set, a FontString's or a
     /// Button's `SetText` swaps the dots and commas of its numbers (`0x771d9f`, `0x771c50`).
     pub(crate) european_numbers: bool,
+    /// The client's locale index, `[0xc0e080]` (0, enUS, until the host seats the install's): the
+    /// name `GetLocale` answers is the table `0x8558a4` at it ([`crate::toc::LOCALES`]).
+    pub(crate) locale: usize,
     /// A Slider thumb drag, left press to release or pointer leave, handled here with no Lua.
     pub(crate) slider_drag: Option<slider::SliderDrag>,
     /// A ColorSelect wheel or value-bar drag, press to release.
@@ -1517,6 +1520,7 @@ impl Model {
             moving: None,
             layout_mode: 0,
             european_numbers: false,
+            locale: 0,
             slider_drag: None,
             color_drag: None,
             gossip: None,

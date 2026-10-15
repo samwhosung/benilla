@@ -150,6 +150,8 @@ fn new_vm<E: std::fmt::Display>(
         }
     };
     script.set_european_numbers(european_numbers);
+    // `[0xc0e080]`, which start-up sets once from `Wow.ini`, so every VM answers `GetLocale` alike.
+    script.set_locale(super::client_locale().index());
     seed_vm_clock(world, &mut script);
     install_addon_asset_resolvers(world, &mut script);
     info!("ui_script: new VM, session {}", script.session());
@@ -1097,6 +1099,20 @@ pub(crate) fn is_emote_token_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every VM, glue and in-game, answers `GetLocale` with the install's locale (`[0xc0e080]`).
+    #[test]
+    fn every_new_vm_is_seated_with_the_installs_locale() {
+        let mut world = World::new();
+        let want = super::super::client_locale();
+        let in_game = new_vm(&mut world, UiScript::new).expect("a VM");
+        let glue = new_vm(&mut world, UiScript::new_glue).expect("a glue VM");
+        for script in [in_game, glue] {
+            assert_eq!(script.locale(), want.index());
+            let answer = script.eval::<String>("return GetLocale()").unwrap();
+            assert_eq!(answer, want.name());
+        }
+    }
 
     /// `[0xcf4d24]` has one writer, `SetEuropeanNumbers` (`0x771c40`), and nothing resets it, so
     /// the VM that replaces a dying one (a `ReloadUI`, a logout, a login) opens with its value.

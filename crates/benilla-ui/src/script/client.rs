@@ -27,11 +27,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
     // `GetLocale()` (glue `0x46ce40`, in-game `0x48d8b0`) returns one string, the name at the locale
-    // index; this answers `enUS` whatever the install's locale. `IsMacClient()` (`0x48c980`) returns one nil, the PC build's answer, which
+    // index ([`locale_name`]). `IsMacClient()` (`0x48c980`) returns one nil, the PC build's answer, which
     // takes FrameXML's PC key-label arm.
     g.set(
         "GetLocale",
-        lua.create_function(|lua, ()| lua.create_string("enUS"))?,
+        lua.create_function(|lua, ()| lua.create_string(locale_name(lua)))?,
     )?;
     g.set("IsMacClient", lua.create_function(|_, ()| Ok(Value::Nil))?)?;
     // The PC build's other two platform answers: `IsWindowsClient()` (`0x48c960`) pushes the
@@ -301,6 +301,27 @@ impl UiScript {
     pub fn set_european_numbers(&mut self, on: bool) {
         self.model_mut().european_numbers = on;
     }
+
+    /// The client's locale index, `[0xc0e080]`.
+    pub fn locale(&self) -> usize {
+        self.model_ref().locale
+    }
+
+    /// Seat the install's locale index, which start-up reads from `Wow.ini` once (`0x402562`); an
+    /// index past the table's eight names reads as 0.
+    pub fn set_locale(&mut self, index: usize) {
+        self.model_mut().locale = if index < crate::toc::LOCALES.len() {
+            index
+        } else {
+            0
+        };
+    }
+}
+
+/// The locale name table `0x8558a4` at the VM's locale index, `GetLocale`'s answer in either state.
+pub(super) fn locale_name(lua: &Lua) -> &'static str {
+    let index = lua.app_data_ref::<Model>().map_or(0, |m| m.locale);
+    crate::toc::LOCALES[index]
 }
 
 #[cfg(test)]
@@ -321,6 +342,25 @@ mod tests {
             3,
             "three values, never a fourth"
         );
+    }
+
+    /// `GetLocale` answers the table `0x8558a4` at the seated index in either state (in-game
+    /// `0x48d8b0`, glue `0x46ce40`); an index past the eight names reads as 0.
+    #[test]
+    fn get_locale_answers_the_seated_locale_in_game_and_in_glue() {
+        for (kind, mut s) in [
+            ("in-game", UiScript::new().unwrap()),
+            ("glue", UiScript::new_glue().unwrap()),
+        ] {
+            let locale = |s: &UiScript| s.eval::<String>("return GetLocale()").unwrap();
+            assert_eq!(locale(&s), "enUS", "{kind}: unseated");
+            s.set_locale(3);
+            assert_eq!(locale(&s), "deDE", "{kind}");
+            s.set_locale(6);
+            assert_eq!(locale(&s), "esES", "{kind}");
+            s.set_locale(8);
+            assert_eq!((s.locale(), locale(&s).as_str()), (0, "enUS"), "{kind}");
+        }
     }
 
     /// Never nil: addons index with it at file scope, and a nil index errors far from the cause.

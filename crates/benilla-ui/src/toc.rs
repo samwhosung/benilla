@@ -31,13 +31,9 @@ pub struct Directive {
 
 /// The locale slots the metadata reader knows, in the client's table order (`0x8558a4`): a
 /// metadata key ending `-<locale>` belongs to that locale.
-const LOCALES: [&str; 8] = [
+pub const LOCALES: [&str; 8] = [
     "enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "xxYY",
 ];
-
-/// The client's locale slot (`[0xc0e080]`), fixed at 0 as `GetLocale()` answers `enUS`
-/// (`script/client.rs`); the install's own locale is not consulted here.
-pub const CLIENT_LOCALE: usize = 0;
 
 /// A directive the reference reads, with the literal its reader tests (`SStrCmpI` with the
 /// literal's own `SStrLen`) and that literal's address. Variants are in the order the reader tests
@@ -161,7 +157,7 @@ impl Directive {
     /// the dash (`0x51d5f0`); another locale drops the line (`0x51d5e7`); no locale keeps the
     /// key whole. The value is the rest past any colons and spaces (`0x51d610`), trailing
     /// whitespace and a leading tab kept.
-    fn metadata(&self) -> Option<(String, String)> {
+    fn metadata(&self, locale: usize) -> Option<(String, String)> {
         let line = self.line.as_bytes();
         let end = line.iter().position(|&b| b == b':').unwrap_or(line.len());
         let mut key_end = end;
@@ -171,7 +167,7 @@ impl Directive {
                     .iter()
                     .position(|l| tag.eq_ignore_ascii_case(l.as_bytes()))
                 {
-                    if slot != CLIENT_LOCALE {
+                    if slot != locale {
                         return None;
                     }
                     key_end = dash;
@@ -213,8 +209,9 @@ impl Toc {
     /// `Author`, `Version` and `X-*` line then inserts into it (`0x51d580`, from `0x51d3c6`),
     /// replacing an earlier value of the same key (`0x51d77b`), the key keeping its first spelling.
     /// The typed directives jump to `0x51d3d0` without it, so `GetAddOnMetadata(addon,
-    /// "Interface")` is nil. Keys compare case-insensitively.
-    pub fn metadata(&self, folder: &str) -> Vec<(String, String)> {
+    /// "Interface")` is nil. Keys compare case-insensitively. `locale` is the client's locale
+    /// index (`[0xc0e080]`), which picks the `-<locale>` lines that count.
+    pub fn metadata(&self, folder: &str, locale: usize) -> Vec<(String, String)> {
         let mut map = vec![("Title".to_string(), folder.to_string())];
         let reaches_the_map = [
             Kind::Title,
@@ -227,7 +224,7 @@ impl Toc {
             if !d.kind().is_some_and(|k| reaches_the_map.contains(&k)) {
                 continue;
             }
-            let Some((key, value)) = d.metadata() else {
+            let Some((key, value)) = d.metadata(locale) else {
                 continue;
             };
             match map.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(&key)) {
@@ -239,8 +236,8 @@ impl Toc {
     }
 
     /// One metadata entry of [`Self::metadata`].
-    pub fn metadata_value(&self, folder: &str, key: &str) -> Option<String> {
-        self.metadata(folder)
+    pub fn metadata_value(&self, folder: &str, key: &str, locale: usize) -> Option<String> {
+        self.metadata(folder, locale)
             .into_iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, v)| v)
@@ -364,7 +361,7 @@ mod tests {
 
     /// A metadata entry of a manifest in the folder `Folder`.
     fn meta(toc: &Toc, key: &str) -> Option<String> {
-        toc.metadata_value("Folder", key)
+        toc.metadata_value("Folder", key, 0)
     }
 
     #[test]
@@ -659,7 +656,7 @@ mod tests {
             "## Interface: 11200\n## Title : T\n## Notes: N\n## Author: A\n## Version: 1\n\
              ## X-Website:: http://x\n## SavedVariables: V\n## Dependencies: D\n## Includes: I\n",
         );
-        let keys: Vec<(String, String)> = toc.metadata("Folder");
+        let keys: Vec<(String, String)> = toc.metadata("Folder", 0);
         assert_eq!(
             keys,
             vec![
@@ -678,7 +675,7 @@ mod tests {
     fn title_defaults_to_the_folder_and_the_last_line_wins() {
         let toc = Toc::parse("## Notes: n\n");
         assert_eq!(
-            toc.metadata("Fold"),
+            toc.metadata("Fold", 0),
             vec![
                 ("Title".into(), "Fold".into()),
                 ("Notes".into(), "n".into()),
@@ -686,7 +683,7 @@ mod tests {
         );
         let toc = Toc::parse("## Title: a\n## TITLE: b\n## notes: x\n## Notes: y\n");
         assert_eq!(
-            toc.metadata("Fold"),
+            toc.metadata("Fold", 0),
             vec![("Title".into(), "b".into()), ("notes".into(), "y".into()),]
         );
     }
@@ -701,7 +698,7 @@ mod tests {
              ## Notes-ENUS: loud\n## Author-zhCN: x\n## X-Website-Home: h\n## X-Date-2006: d\n\
              ## X-ab: short\n",
         );
-        let map = toc.metadata("F");
+        let map = toc.metadata("F", 0);
         let get = |k: &str| {
             map.iter()
                 .find(|(key, _)| key == k)
@@ -718,8 +715,12 @@ mod tests {
         assert_eq!(get("X-Date-2006"), Some("d"));
         assert_eq!(get("X-ab"), Some("short"));
         assert_eq!(map.len(), 5, "{map:?}");
-        // A table slot, not the name: the client is slot 0.
-        assert_eq!(LOCALES[CLIENT_LOCALE], "enUS");
+
+        // On a deDE client (index 3) the German line is the title and the enUS ones drop.
+        let de = toc.metadata("F", 3);
+        let get = |k: &str| de.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("Title"), Some("German"));
+        assert_eq!(get("Notes"), None, "enUS and xxYY are other locales now");
     }
 
     /// Nothing is trimmed past the reference's own cuts: the key loses trailing spaces
@@ -761,7 +762,7 @@ mod tests {
         let toc = Toc::parse(
             "## Title Foo\n## Version\n## Interface 11200\n## Dependencies A\n## LoadOnDemand 1\n",
         );
-        let map = toc.metadata("F");
+        let map = toc.metadata("F", 0);
         assert_eq!(
             map,
             vec![

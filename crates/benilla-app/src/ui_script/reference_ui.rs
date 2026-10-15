@@ -155,6 +155,13 @@ fn chain() -> Option<&'static Chain> {
         .as_ref()
 }
 
+/// The client's locale, from the player's `Wow.ini` as start-up reads it once (`0x402350`): the
+/// default, enUS's column and tag 0, with no install. Every VM answers `GetLocale` and picks an
+/// addon's metadata by its index, the logon carries its tag, and the name cache keys on it.
+pub(crate) fn client_locale() -> benilla_formats::Locale {
+    chain().map(Chain::locale).unwrap_or_default()
+}
+
 /// Files a test lays over the chain, per test thread: an entry with bytes reads as a chain file,
 /// one with `None` as a file the chain lacks, and any other path falls through to the chain.
 #[cfg(test)]
