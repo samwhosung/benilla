@@ -20,7 +20,7 @@ mod latch_tests;
 
 pub(crate) use latch::{
     dispatch, fire, note_closed, queue, register, release, with_script, CoreCloses, InteractLatch,
-    LatchApp, LatchedWindow, NpcWindow,
+    LatchApp, LatchVocal, LatchedWindow, NpcWindow,
 };
 
 /// Owns [`InteractLatch`], its watchdog and [`InteractNpc`], read by the `"npc"` portrait and the
@@ -30,6 +30,7 @@ pub(crate) struct UiSessionPlugin;
 impl Plugin for UiSessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<InteractLatch>()
+            .add_message::<LatchVocal>()
             .init_resource::<InteractNpc>()
             .net_handler(
                 SessionEventKind::Disconnected,

@@ -18,6 +18,11 @@
 //! `HideUIPanel` → `OnHide` does, re-enters that core in the reference before the fire returns;
 //! [`fire`] runs such a call before going on, as a core that fires before it clears its cell
 //! (trainer, bank, auction) is re-entered with the cell still set.
+//!
+//! The NPC's voice rides the same two calls ([`LatchVocal`]): `0x4930d0` greets a different
+//! non-player unit it latches, and `0x4931c0` says goodbye to the unit it releases, unless its
+//! caller's `dl` is set. A swap releases with `dl` set, and the watchdog and the leave-world sweep
+//! call `0x493310` directly, so neither says goodbye.
 
 use bevy::prelude::*;
 
@@ -77,6 +82,16 @@ impl NpcWindow {
     fn index(self) -> usize {
         self as usize
     }
+}
+
+/// What the latch asks the latched NPC to say. The unit's kind and state gate it where it is
+/// played (`0x60c3b0`): a player, a game object or a book speaks nothing.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LatchVocal {
+    /// A different unit latched (`0x4930d0` → `0x49318f`, `0x60c3b0` with 1).
+    Hello(u64),
+    /// The latch released to nothing with `dl` clear (`0x4931c0` → `0x493210`, `0x60c3b0` with 0).
+    Goodbye(u64),
 }
 
 /// How deep [`fire`]'s answers to close verbs may nest. The reference recurses without bound, so
@@ -194,24 +209,48 @@ fn entries(world: &World) -> Vec<Entry> {
 }
 
 /// `CGGameUI::SetInteractNPC` (`0x4930d0`), at a window's open: with anything latched, `0x4931c0`
-/// on the latch itself (`0x49310a`), which always matches and runs `0x493310`, so the holder
-/// closes first, even when it is this window on this same guid; then `guid` is latched
-/// (`0x493114`). The opener writes its cell after this, except the tabard designer's.
+/// on the latch itself with `dl` set (`0x49310a`, `dl = guid != 0`), which always matches and
+/// runs `0x493310` with no goodbye, so the holder closes first, even when it is this window on this
+/// same guid; then `guid` is latched (`0x493114`). A guid that differs from the one latched
+/// before is greeted (`0x49318f`, `bl` clear), so a second window on the same unit is silent. The
+/// opener writes its cell after this, except the tabard designer's.
 pub(crate) fn register(world: &mut World, guid: u64) {
     world.init_resource::<InteractLatch>();
-    if world.resource::<InteractLatch>().guid.is_some() {
+    let before = world.resource::<InteractLatch>().guid;
+    if before.is_some() {
         dispatch(world);
     }
     world.resource_mut::<InteractLatch>().guid = Some(guid);
+    if guid != 0 && before != Some(guid) {
+        say(world, LatchVocal::Hello(guid));
+    }
 }
 
-/// `0x4931c0` on a core's own cell: while the latch names `cell`, `0x493310`.
+/// `0x4931c0` on a core's own cell with `dl` clear: while the latch names `cell`, the goodbye
+/// (`0x493210`), then `0x493310`.
 pub(crate) fn release(world: &mut World, cell: u64) {
-    if world
+    release_cell(world, cell, true);
+}
+
+/// `0x4931c0(cell, dl = !goodbye)`: while the latch names `cell`, the unit's goodbye unless `dl`
+/// is set (`0x493208`), then `0x493310` whether or not the object is still there (`0x49321e`).
+fn release_cell(world: &mut World, cell: u64, goodbye: bool) {
+    let latched = world
         .get_resource::<InteractLatch>()
-        .is_some_and(|l| l.guid == Some(cell))
-    {
+        .and_then(|l| l.guid)
+        .filter(|g| *g == cell);
+    if latched.is_some() {
+        if goodbye {
+            say(world, LatchVocal::Goodbye(cell));
+        }
         dispatch(world);
+    }
+}
+
+/// Queue the NPC's line for whoever plays it; nothing reads it in a build with no sound.
+fn say(world: &mut World, vocal: LatchVocal) {
+    if let Some(mut messages) = world.get_resource_mut::<Messages<LatchVocal>>() {
+        messages.write(vocal);
     }
 }
 

@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use super::{dispatch, InteractLatch, LatchApp, LatchedWindow, NpcWindow as W};
+use super::{dispatch, InteractLatch, LatchApp, LatchVocal, LatchedWindow, NpcWindow as W};
 use crate::net::NetCommands;
 use crate::ui_auction::AuctionOpen;
 use crate::ui_bank::BankOpen;
@@ -75,6 +75,7 @@ fn harness_with_wire() -> (App, crossbeam_channel::Receiver<crate::net::ClientCo
     data[0] = 1;
     books.insert(0, 9, "Book".into(), &data);
     app.insert_resource(NetCommands(tx))
+        .add_message::<LatchVocal>()
         .insert_resource(books)
         .init_resource::<crate::net::GuidIndex>()
         .init_resource::<crate::items::Items>()
@@ -486,4 +487,72 @@ fn a_book_and_an_npc_window_close_each_other() {
     crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, Vec::new());
     assert_eq!(seen_in(&app), ["MERCHANT_CLOSED", "ITEM_TEXT_CLOSED"]);
     assert_eq!(app.world().resource::<ItemTextOpen>().object(), None);
+}
+
+/// The lines the latch asked for since the last call.
+fn vocals(app: &mut App) -> Vec<LatchVocal> {
+    app.world_mut()
+        .resource_mut::<Messages<LatchVocal>>()
+        .drain()
+        .collect()
+}
+
+/// Every window registers on the latch, so each greets the unit it latches (`0x4930d0` →
+/// `0x49318f`) and says goodbye when its close core releases the latch to nothing (`0x4931c0` →
+/// `0x493210`): a banker, a flight master or a stable master speaks as a vendor does.
+#[test]
+fn every_window_greets_on_open_and_says_goodbye_on_close() {
+    for window in WINDOWS {
+        let mut app = harness();
+        open(&mut app, window, NPC);
+        assert_eq!(
+            vocals(&mut app),
+            [LatchVocal::Hello(NPC)],
+            "{window:?} open"
+        );
+        close(&mut app, window);
+        assert_eq!(
+            vocals(&mut app),
+            [LatchVocal::Goodbye(NPC)],
+            "{window:?} close"
+        );
+    }
+}
+
+/// A swap greets the new unit and says no goodbye for the old (`0x4930fd`, `dl = guid != 0`); a
+/// second window on the unit already latched greets nobody (`0x493187`, `bl` set).
+#[test]
+fn a_swap_greets_the_new_unit_with_no_goodbye_and_the_same_unit_is_silent() {
+    let mut app = harness();
+    crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, Vec::new());
+    crate::ui_bank::open_bank(app.world_mut(), BANKER);
+    assert_eq!(
+        vocals(&mut app),
+        [LatchVocal::Hello(VENDOR), LatchVocal::Hello(BANKER)]
+    );
+
+    crate::ui_gossip::open_menu(app.world_mut(), BANKER, 0, Vec::new(), Vec::new());
+    assert_eq!(vocals(&mut app), [], "the same unit, another window");
+    // Closing to nothing still says goodbye to the one latched.
+    crate::ui_gossip::close_core(app.world_mut());
+    assert_eq!(vocals(&mut app), [LatchVocal::Goodbye(BANKER)]);
+}
+
+/// A walk-away close and the leave-world sweep run `0x493310` directly (`0x493305`, `0x490b5f`),
+/// skipping `0x4931c0`: no goodbye. A later open greets again.
+#[test]
+fn a_walk_away_says_no_goodbye() {
+    for window in WINDOWS {
+        let mut app = harness();
+        open(&mut app, window, NPC);
+        vocals(&mut app);
+        dispatch(app.world_mut());
+        assert_eq!(vocals(&mut app), [], "{window:?}");
+        open(&mut app, window, NPC);
+        assert_eq!(
+            vocals(&mut app),
+            [LatchVocal::Hello(NPC)],
+            "{window:?} again"
+        );
+    }
 }
