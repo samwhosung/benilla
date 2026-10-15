@@ -757,9 +757,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             });
             Ok(match key.and_then(|k| model.container_cooldowns.get(&k)) {
                 _ if !held => (0.0, 0.0, 0),
-                Some(&(start, duration, enabled)) if start + duration > now || !enabled => {
-                    (start, duration, i32::from(enabled))
-                }
+                Some(&(start, duration, enabled)) if start + duration > now || !enabled => (
+                    crate::script::clock::held_start(start, enabled, now),
+                    duration,
+                    i32::from(enabled),
+                ),
                 _ => (0.0, 0.0, 1),
             })
         })?,
@@ -2191,5 +2193,24 @@ mod tests {
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(s.cursor_payload(), Some(row), "no vendor: kept");
         assert!(s.take_merchant_slot_buys().is_empty());
+    }
+
+    /// A held bag item answers the call's own now, whatever was pushed (`0x6e1517`).
+    #[test]
+    fn a_held_container_item_answers_the_polls_now() {
+        let mut s = UiScript::new().unwrap();
+        s.tick(100.0);
+        let mut state = backpack();
+        state.slots.get_mut(&1).unwrap().cooldown = Some((0, 1, false));
+        s.set_container(0, Some(state));
+        let poll = |s: &UiScript| {
+            s.eval::<(f64, f64, i32)>("return GetContainerItemCooldown(0, 1)")
+                .unwrap()
+        };
+        assert_eq!(poll(&s), (100.0, 0.001, 0));
+        s.tick(0.02);
+        let (start, _, _) = poll(&s);
+        assert_eq!(start, s.eval::<f64>("return GetTime()").unwrap());
+        assert!((start - 100.02).abs() < 1e-9);
     }
 }

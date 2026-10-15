@@ -121,9 +121,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(match form_at(&model, i).and_then(|f| f.cooldown) {
-                Some((start, duration, enabled)) if start + duration > now || !enabled => {
-                    (start, duration, i32::from(enabled))
-                }
+                Some((start, duration, enabled)) if start + duration > now || !enabled => (
+                    crate::script::clock::held_start(start, enabled, now),
+                    duration,
+                    i32::from(enabled),
+                ),
                 _ => (0.0, 0.0, 1),
             })
         })?,
@@ -237,5 +239,24 @@ mod tests {
         s.run("CastShapeshiftForm(9)").unwrap(); // out of range: no-op
         assert_eq!(s.take_shapeshift_casts(), vec![71]);
         assert!(s.take_shapeshift_casts().is_empty(), "drain empties");
+    }
+
+    /// A held form answers the call's own now, whatever was pushed (`0x6e1517`).
+    #[test]
+    fn a_held_form_answers_the_polls_now() {
+        let mut s = UiScript::new().unwrap();
+        s.tick(10.0);
+        let mut f = forms();
+        f[1].cooldown = Some((0, 1, false));
+        s.set_shapeshift_forms(f);
+        let poll = |s: &UiScript| {
+            s.eval::<(f64, f64, i32)>("return GetShapeshiftFormCooldown(2)")
+                .unwrap()
+        };
+        assert_eq!(poll(&s), (10.0, 0.001, 0));
+        s.tick(0.02);
+        let (start, _, _) = poll(&s);
+        assert_eq!(start, s.eval::<f64>("return GetTime()").unwrap());
+        assert!((start - 10.02).abs() < 1e-9);
     }
 }

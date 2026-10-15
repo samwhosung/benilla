@@ -408,9 +408,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(
                 match model.action_states.get(&action).and_then(|s| s.cooldown) {
-                    Some((start, duration, enabled)) if start + duration > now || !enabled => {
-                        (start, duration, i32::from(enabled))
-                    }
+                    Some((start, duration, enabled)) if start + duration > now || !enabled => (
+                        crate::script::clock::held_start(start, enabled, now),
+                        duration,
+                        i32::from(enabled),
+                    ),
                     _ => (0.0, 0.0, 1),
                 },
             )

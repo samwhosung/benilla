@@ -82,11 +82,16 @@ pub(crate) struct CooldownInfo {
 }
 
 impl CooldownInfo {
-    /// `(start_ms on the GetTime clock, duration_ms, enabled)`, or `None` when cold. `anchor` and
+    /// `(start_ms on the GetTime clock, duration_ms, enabled)`, or `None` when cold. A held read
+    /// (`enabled` false) pushes a start of 0: its start is the query's now (`0x6e1517`,
+    /// `0x6e15a1`), which the Lua bindings answer at call time, so the pushed state never moves. `anchor` and
     /// `ui_now` must be the frame's one clock pair ([`crate::ui_script::UiClock`]), so one arm
     /// derives the same start every frame; a fresh `Instant::now()` here would jitter it.
     pub(crate) fn ui_triple(&self, anchor: Instant, ui_now: f64) -> Option<(i64, u32, bool)> {
         (self.remaining_ms > 0).then(|| {
+            if !self.enabled {
+                return (0, self.duration_ms, false);
+            }
             // Signed both ways: a timer armed after the anchor sample projects forward.
             let start = match self.start.checked_duration_since(anchor) {
                 Some(ahead) => ui_now + ahead.as_secs_f64(),
@@ -99,19 +104,6 @@ impl CooldownInfo {
                 self.enabled,
             )
         })
-    }
-}
-
-/// A feed's triple for a held read keeps its last pushed start: a held leg's start is the query's
-/// now (`0x6e1517`), which moves every frame while nothing changed (duration and enable are the
-/// state, and `CooldownFrame_SetTimer` hides a disabled one). Any other change passes through.
-pub(crate) fn settle(
-    pushed: Option<(i64, u32, bool)>,
-    fresh: Option<(i64, u32, bool)>,
-) -> Option<(i64, u32, bool)> {
-    match (pushed, fresh) {
-        (Some((_, d0, false)), Some((_, d1, false))) if d0 == d1 => pushed,
-        _ => fresh,
     }
 }
 
@@ -919,7 +911,11 @@ mod tests {
         );
         assert_eq!(info.remaining_ms, 10_001, "the end is time + now + 1 ms");
         let (start, duration, enabled) = info.ui_triple(now, 42.0).unwrap();
-        assert_eq!((start, duration, enabled), (42_000, 1, false));
+        assert_eq!(
+            (start, duration, enabled),
+            (0, 1, false),
+            "a held read pushes the marker, not a moving start"
+        );
     }
 
     /// `0x6e15a1`: a parked category leg keeps the category time as the duration and reads a
@@ -971,6 +967,27 @@ mod tests {
             info.enabled,
             "5 s parked ends before the 60 s: it does not pass"
         );
+    }
+
+    /// A held read's start is the query's now, which moves with it; the triple a feed pushes is
+    /// the held marker, so it does not move and the feeds see no change.
+    #[test]
+    fn a_held_triple_is_the_same_whatever_the_query_time() {
+        let t0 = Instant::now();
+        let mut cds = Cooldowns::default();
+        cds.start_spell(1784, &stealth(), 0, t0, None);
+        let at = |ms: u64| {
+            cds.info(1784, 0, Some(&stealth()), t0 + Duration::from_millis(ms))
+                .ui_triple(t0, 7.0)
+        };
+        assert_ne!(
+            cds.info(1784, 0, Some(&stealth()), t0).start,
+            cds.info(1784, 0, Some(&stealth()), t0 + Duration::from_millis(20))
+                .start,
+            "the read's own start moves"
+        );
+        assert_eq!(at(0), at(20));
+        assert_eq!(at(0), Some((0, 1, false)));
     }
 
     /// A parked record with no recovery (Shadowform) still passes the spell leg (`0x6e14d9`): the

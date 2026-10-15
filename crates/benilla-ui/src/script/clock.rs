@@ -30,6 +30,17 @@ impl super::UiScript {
     }
 }
 
+/// The start a cooldown binding answers: a held one (`enabled` false) reports the call's own now,
+/// as the reference's held legs write the query time (`0x6e1517`, `0x6e15a1`), so the pushed
+/// triple carries no moving start.
+pub(crate) fn held_start(start: f64, enabled: bool, now: f64) -> f64 {
+    if enabled {
+        start
+    } else {
+        now
+    }
+}
+
 /// `GetTime()`'s clock, for a caller holding no model borrow; one that holds it reads `model.now`.
 pub(crate) fn now(lua: &Lua) -> f64 {
     lua.app_data_ref::<Model>().expect("model app_data").now

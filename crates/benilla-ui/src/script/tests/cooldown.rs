@@ -171,3 +171,28 @@ fn shapeshift_and_container_cooldowns_keep_their_anchors_too() {
         .eval::<bool>("local st = GetContainerItemCooldown(0, 1); return math.abs(st - 50) < 1e-3")
         .unwrap());
 }
+
+/// A held action (enable 0) answers the call's own now (`0x6e1517`, `0x6e15a1`): two polls with
+/// no feed change in between return starts as far apart as `GetTime()`.
+#[test]
+fn a_held_action_answers_the_polls_now() {
+    let mut s = script();
+    s.tick(50.0);
+    s.set_action_state(
+        3,
+        Some(ActionState {
+            cooldown: Some((0, 1, false)),
+            ..Default::default()
+        }),
+    );
+    let poll = |s: &UiScript| {
+        s.eval::<(f64, f64, i32)>("return GetActionCooldown(3)")
+            .unwrap()
+    };
+    let first = poll(&s);
+    assert_eq!(first, (50.0, 0.001, 0));
+    s.tick(0.02);
+    let second = poll(&s);
+    assert_eq!(second.0, s.eval::<f64>("return GetTime()").unwrap());
+    assert!((second.0 - first.0 - 0.02).abs() < 1e-9, "20 ms apart");
+}

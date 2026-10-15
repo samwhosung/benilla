@@ -219,17 +219,9 @@ fn feed_shapeshift_bar(
                     usable::spell_usable(id, d, &spells, &ctx, &objects, &items, &commands).0
                 });
             let texture = form_texture(d, active);
-            let pushed = memory
-                .pushed
-                .as_deref()
-                .and_then(|p| p.iter().find(|v| v.spell_id == id))
-                .and_then(|v| v.cooldown);
-            let cooldown = crate::spell::cooldowns::settle(
-                pushed,
-                cooldowns
-                    .info(id, 0, Some(d), now)
-                    .ui_triple(anchor, ui_now),
-            );
+            let cooldown = cooldowns
+                .info(id, 0, Some(d), now)
+                .ui_triple(anchor, ui_now);
             ShapeshiftFormView {
                 spell_id: id,
                 texture,
@@ -512,10 +504,10 @@ mod tests {
         assert!(castable(&app, 1) && castable(&app, 2), "control back");
     }
 
-    /// A held form (Shadowform in the bar) reads a start of the query's now, which moves each
-    /// frame; the bar pushes it once, not every frame.
+    /// A held form (Shadowform in the bar) reaches the VM as the held marker, and
+    /// `GetShapeshiftFormCooldown` answers the poll's own now (`0x6e1517`).
     #[test]
-    fn a_held_forms_moving_start_pushes_nothing_new() {
+    fn a_held_form_polls_answer_their_own_now() {
         let mut app = bar_rig();
         let d = SpellDisplay {
             shapeshift_form: Some(5),
@@ -530,16 +522,22 @@ mod tests {
             None,
         );
         let read = |app: &App| {
-            app.world()
-                .non_send_resource::<UiScript>()
+            let script = app.world().non_send_resource::<UiScript>();
+            let (start, duration, enable) = script
                 .eval::<(f64, f64, i64)>("return GetShapeshiftFormCooldown(1)")
-                .unwrap()
+                .unwrap();
+            (start, duration, enable, script.now())
         };
         app.update();
-        let held = read(&app);
-        assert_eq!((held.1, held.2), (0.001, 0), "(now, 0.001, 0)");
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let first = read(&app);
+        assert_eq!((first.1, first.2), (0.001, 0), "(now, 0.001, 0)");
+        assert_eq!(first.0, first.3);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .tick(0.02);
         app.update();
-        assert_eq!(read(&app), held, "the same push, the moving start included");
+        let second = read(&app);
+        assert_eq!(second.0, second.3, "the poll answers its own now");
+        assert!((second.0 - first.0 - 0.02).abs() < 1e-9, "20 ms apart");
     }
 }

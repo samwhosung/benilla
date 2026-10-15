@@ -485,7 +485,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     let (start, duration) =
                         (start_ms as f64 / 1000.0, f64::from(duration_ms) / 1000.0);
                     if start + duration > now || !enabled {
-                        (start, duration, i32::from(enabled))
+                        (
+                            crate::script::clock::held_start(start, enabled, now),
+                            duration,
+                            i32::from(enabled),
+                        )
                     } else {
                         (0.0, 0.0, 1)
                     }
@@ -822,11 +826,20 @@ mod tests {
                 .unwrap(),
             (14.0, 10.0, 1)
         );
-        // On hold survives the expiry guard.
+        // On hold survives the expiry guard, and its start is the call's now (`0x6e1517`).
         assert_eq!(
             s.eval::<(f64, f64, i64)>("return GetSpellCooldown(2, BOOKTYPE_SPELL)")
                 .unwrap(),
-            (2.0, 8.0, 0)
+            (20.0, 8.0, 0)
+        );
+        s.tick(0.02);
+        let (start, _, _) = s
+            .eval::<(f64, f64, i64)>("return GetSpellCooldown(2, BOOKTYPE_SPELL)")
+            .unwrap();
+        assert_eq!(start, s.eval::<f64>("return GetTime()").unwrap());
+        assert!(
+            (start - 20.02).abs() < 1e-9,
+            "a second poll reads its own now"
         );
         // Elapsed goes cold.
         assert_eq!(

@@ -416,9 +416,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let now = crate::script::clock::now(lua);
             let model = lua.app_data_ref::<Model>().expect("model app_data");
             Ok(match slot_at(&model, i).and_then(|s| s.cooldown) {
-                Some((start, duration, enabled)) if start + duration > now || !enabled => {
-                    (start, duration, i32::from(enabled))
-                }
+                Some((start, duration, enabled)) if start + duration > now || !enabled => (
+                    crate::script::clock::held_start(start, enabled, now),
+                    duration,
+                    i32::from(enabled),
+                ),
                 _ => (0.0, 0.0, 1),
             })
         })?,
@@ -1356,5 +1358,24 @@ mod tests {
         );
         assert!(s.eval::<bool>("return GetPetLoyalty() == nil").unwrap());
         assert_eq!(s.arity("GetPetFoodTypes()").unwrap(), 0);
+    }
+
+    /// A held pet action answers the call's own now, whatever was pushed (`0x6e1517`).
+    #[test]
+    fn a_held_pet_action_answers_the_polls_now() {
+        let mut s = UiScript::new().unwrap();
+        s.tick(10.0);
+        let mut v = slots();
+        v[1].cooldown = Some((0, 1, false));
+        s.set_pet_actions(true, true, true, v);
+        let poll = |s: &UiScript| {
+            s.eval::<(f64, f64, i32)>("return GetPetActionCooldown(2)")
+                .unwrap()
+        };
+        assert_eq!(poll(&s), (10.0, 0.001, 0));
+        s.tick(0.02);
+        let (start, _, _) = poll(&s);
+        assert_eq!(start, s.eval::<f64>("return GetTime()").unwrap());
+        assert!((start - 10.02).abs() < 1e-9);
     }
 }

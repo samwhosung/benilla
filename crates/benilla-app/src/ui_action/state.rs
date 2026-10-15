@@ -246,10 +246,7 @@ pub(super) fn feed_action_state(
                     _ => None,
                 };
                 let info = cooldowns.info(button.action, 0, Some(d), now);
-                st.cooldown = crate::spell::cooldowns::settle(
-                    memory.pushed.get(&action).and_then(|o| o.cooldown),
-                    info.ui_triple(anchor, ui_now),
-                );
+                st.cooldown = info.ui_triple(anchor, ui_now);
                 if st.cooldown.is_some() && trace_cd {
                     // The store's clock against the widget's; the sink stamps wall time.
                     benilla_assets::trace::line(
@@ -308,10 +305,7 @@ pub(super) fn feed_action_state(
                 if let Some(u) = use_spell {
                     let d = spells.as_ref().and_then(|s| s.catalog.get(u.spell_id));
                     let info = cooldowns.info_item(u.spell_id, button.action, u.category, d, now);
-                    st.cooldown = crate::spell::cooldowns::settle(
-                        memory.pushed.get(&action).and_then(|o| o.cooldown),
-                        info.ui_triple(anchor, ui_now),
-                    );
+                    st.cooldown = info.ui_triple(anchor, ui_now);
                 }
             }
             _ => {}
@@ -998,10 +992,10 @@ mod tests {
         assert_eq!(events(&mut app), 1);
     }
 
-    /// A held action (Stealth) reads a start of the query's now, which moves every frame; the
-    /// bar pushes the first read and keeps it while nothing else changes.
+    /// A held action (Stealth) reaches the VM as the held marker, and `GetActionCooldown` answers
+    /// the poll's own now (`0x6e1517`) with no feed change between polls.
     #[test]
-    fn a_held_actions_moving_start_is_not_repushed() {
+    fn a_held_action_polls_answer_their_own_now() {
         use benilla_protocol::messages::ActionButton;
         use benilla_protocol::ObjectFields;
 
@@ -1060,16 +1054,21 @@ mod tests {
         app.add_systems(Update, feed_action_state);
 
         let read = |app: &App| {
-            app.world()
-                .non_send_resource::<UiScript>()
+            let script = app.world().non_send_resource::<UiScript>();
+            let (start, duration, enable) = script
                 .eval::<(f64, f64, i64)>("return GetActionCooldown(1)")
-                .unwrap()
+                .unwrap();
+            (start, duration, enable, script.now())
         };
         app.update();
         let first = read(&app);
         assert_eq!((first.1, first.2), (0.001, 0), "(now, 0.001, 0)");
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        app.update();
-        assert_eq!(read(&app), first, "the moving start is not pushed again");
+        assert_eq!(first.0, first.3);
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .tick(0.02);
+        let second = read(&app);
+        assert_eq!(second.0, second.3, "the poll answers its own now");
+        assert!((second.0 - first.0 - 0.02).abs() < 1e-9, "20 ms apart");
     }
 }
