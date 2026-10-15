@@ -83,9 +83,20 @@ impl AttackPress<'_, '_> {
     /// (`0x5ecb70`). Only the start cancels auto-repeat (`0x5ecd8c`), so stopping melee leaves
     /// Auto Shot running.
     pub(crate) fn attack_target(&mut self, may_pick: bool) {
-        let Some(guid) = self.validate(None, may_pick) else {
-            return;
-        };
+        if let Some(guid) = self.validate_attack(may_pick) {
+            self.start_attack(guid);
+        }
+    }
+
+    /// [`Self::attack_target`]'s first half, the validator `0x612df0`. Its `SelectTarget` calls
+    /// (`0x613100`, `0x4941e6`) may hand a unit to the targeting cursor, which binds it before the
+    /// swing below goes out, so a caller that owns the cursor binds between the two halves.
+    pub(crate) fn validate_attack(&mut self, may_pick: bool) -> Option<u64> {
+        self.validate(None, may_pick)
+    }
+
+    /// [`Self::attack_target`]'s second half, the toggle at the validated target.
+    pub(crate) fn start_attack(&mut self, guid: u64) {
         let Self { pick, seam, .. } = self;
         let Ok(e) = seam.me.single() else {
             return;

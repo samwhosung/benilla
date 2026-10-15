@@ -18,6 +18,19 @@ use benilla_ui::script::{QueuedCall, ScriptCall, UiScript};
 /// so a frame always ends.
 const MAX_NESTING: u8 = 8;
 
+/// The player's Attack (`0x6131a0`) in the reference's order: the validator's `SelectTarget`s bind a
+/// unit to a standing targeting cursor's cast inside the validator, so that cast is sent before the
+/// swing the validated target gets.
+macro_rules! attack_in_order {
+    ($appliers:expr, $may_pick:expr) => {{
+        let target = $appliers.p7().validate_attack($may_pick);
+        $appliers.p1().bind_parked();
+        if let Some(guid) = target {
+            $appliers.p7().start_attack(guid);
+        }
+    }};
+}
+
 /// Apply this frame's script calls in call order, in the target chain after the world clicks.
 #[allow(clippy::type_complexity)] // the appliers, one per owner of the state a call touches
 pub(crate) fn apply_script_calls(
@@ -59,7 +72,7 @@ pub(crate) fn apply_script_calls(
             }
             ScriptCall::TargetLastTarget { .. } => appliers.p0().target_last_target(),
             ScriptCall::ClearTarget => appliers.p0().clear_target(),
-            ScriptCall::AttackTarget { may_pick, .. } => appliers.p7().attack_target(may_pick),
+            ScriptCall::AttackTarget { may_pick, .. } => attack_in_order!(appliers, may_pick),
             ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
             ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
             ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
@@ -76,7 +89,7 @@ pub(crate) fn apply_script_calls(
                 // The Attack slot is a cast, so the gate's tag 4 (the pick) is asked only after
                 // tag 2 passed, and so passes as well.
                 if used == crate::ui_action::UseOutcome::Attack {
-                    appliers.p7().attack_target(true);
+                    attack_in_order!(appliers, true);
                 }
             }
             ScriptCall::UseContainerItem(call) => {
@@ -2133,9 +2146,16 @@ mod tests {
         assert_eq!(casts_of(&sent), vec![(HEAL, Some(OLD))], "{sent:?}");
         assert_eq!(selections(&sent), Vec::<u64>::new());
         assert_eq!(selected(&f), Some(OLD));
-        assert!(sent
-            .iter()
-            .any(|c| matches!(c, ClientCommand::AttackSwing { guid: OLD })));
+        // The bind is inside the validator, ahead of the swing it validates.
+        let at = |want: fn(&ClientCommand) -> bool| sent.iter().position(want);
+        let (cast, swing) = (
+            at(|c| matches!(c, ClientCommand::CastSpell { .. })),
+            at(|c| matches!(c, ClientCommand::AttackSwing { guid: OLD })),
+        );
+        assert!(
+            cast.is_some() && swing.is_some() && cast < swing,
+            "the cast goes out before the swing: {sent:?}"
+        );
 
         // A friendly one is dropped for the nearest enemy, which the bind takes.
         let mut f = frame(true);
