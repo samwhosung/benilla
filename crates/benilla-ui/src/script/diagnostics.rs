@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn a_warning_reaches_the_retained_log_and_the_host_drain() {
         let mut s = crate::script::UiScript::new().expect("vm");
-        s.run(r#"SetCVar("thisCVarDoesNotExist", "1")"#).unwrap();
+        s.set_cvar_host("thisCVarDoesNotExist", "1");
 
         let host = s.take_warnings();
         assert!(

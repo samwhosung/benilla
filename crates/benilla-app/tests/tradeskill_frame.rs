@@ -95,6 +95,8 @@ fn state() -> TradeSkillState {
 fn collapse_all_tab_and_filter_dropdowns_work_end_to_end() {
     benilla_formats::wow_data_or_skip!();
     let mut s = UiScript::new().unwrap();
+    // `ToggleDropDownMenu` reads `useUiScale` (`UIDropDownMenu.lua:525`), which the client registers.
+    s.register_cvars([("useUiScale", "0"), ("uiScale", "1.0")]);
     load_ui(&s);
 
     s.set_trade_skill(Some(state()));

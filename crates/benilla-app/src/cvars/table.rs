@@ -437,9 +437,12 @@ pub(crate) const REGISTERED: &[Registered] = &[
     // AUTO_FOLLOW_SPEED (`UIOptionsFrame.lua:88`), deg/s, registered "180.0" (`[0xbe1070]`): it
     // sets the transition's duration (`|dyaw| / rate * factor`), an average rate, not a slew. The
     // validator `0x50c000` refuses outside [0.1, 360]; the knob then clamps to `FOLLOW_SPEED_RANGE`,
-    // the slider's. The stock Save also writes `cameraPitchSmoothSpeed`
-    // at a quarter (`:353`), unregistered here: `FollowRig` has one rate.
+    // the slider's.
     same("cameraYawSmoothSpeed", "180").checked(benilla_ui::script::check_camera_rate),
+    // `UIOptionsFrame.lua:353` names `cameraPitchSmoothSpeed`, registered "45.0" (`0x50b90b`) with
+    // the same validator, and `SetCVar` raises on a name no CVar has (`0x488c53`). `FollowRig` has
+    // one rate, so nothing reads it.
+    same("cameraPitchSmoothSpeed", "45.0").checked(benilla_ui::script::check_camera_rate),
     // `cameraPivot` `[0xbe10a4]` "1" (`0x50bda3`), smart pivot: gate `0x510690`, routing
     // `0x50fee0`, release `0x5107f0`; ours is `player::camera_dynamics::SmartPivot`.
     same("cameraPivot", "1"),

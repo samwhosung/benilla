@@ -2552,6 +2552,10 @@ mod tests {
             ),
             ("gxApi", "pfUI's system tooltip names the backend"),
             (
+                "cameraPitchSmoothSpeed",
+                "UIOptionsFrame.lua's Save writes it at a quarter of the Auto Follow Speed slider",
+            ),
+            (
                 "useUiScale",
                 "UIOptionsFrame.lua and OptionsFrame.lua branch on it to gate the uiScale slider",
             ),

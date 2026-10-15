@@ -4,8 +4,9 @@
 //! The host registers the vars it backs and drains Lua's writes from a change queue; its own
 //! writes do not queue. The table dies with the VM, where the reference's outlives every
 //! `ReloadUI`, so the host seeds each new VM with the saved values before anything registers.
-//! An unknown name warns once and is ignored (`GetCVar` answers nil), where the reference's
-//! `GetCVar`, `SetCVar` and `GetCVarDefault` raise `Couldn't find CVar named '%s'` (`0x842310`).
+//! `GetCVar`, `SetCVar` and `GetCVarDefault` raise `Couldn't find CVar named '%s'` on an unknown
+//! name (`0x842310`, at `0x488be7`, `0x488c53` and `0x488d37`); the host-side writes and the
+//! other by-name bindings warn once and ignore it.
 
 use mlua::{Lua, Value};
 
@@ -339,16 +340,22 @@ fn store(model: &mut Model, key: &str, value: String) -> Option<String> {
     Some(registered)
 }
 
-/// A by-name write from a binding (`SetCVar`, `ConsoleExec`, `SetGamma`, `SetWorldDetail`): the
-/// change is queued only when the value moved. `false`, with a warning, for an unknown name.
-pub(super) fn write_cvar(model: &mut Model, name: &str, value: String) -> bool {
+/// A by-name write from a binding that raises nothing (`ConsoleExec`, `SetGamma`,
+/// `SetWorldDetail`, the video pairs): the change is queued only when the value moved, and an
+/// unknown name warns once.
+pub(super) fn write_cvar(model: &mut Model, name: &str, value: String) {
     let key = name.to_ascii_lowercase();
     if !model.cvars.contains_key(&key) {
         warn_unknown(model, name);
-        return false;
+        return;
     }
     store(model, &key, value);
-    true
+}
+
+/// `Couldn't find CVar named '%s'` (`0x842310`), the error `GetCVar`, `SetCVar` and
+/// `GetCVarDefault` raise with the name as `lua_tostring` gave it.
+fn unknown_cvar(name: &str) -> mlua::Error {
+    mlua::Error::runtime(format!("Couldn't find CVar named '{name}'"))
 }
 
 fn warn_unknown(model: &mut Model, name: &str) {
@@ -489,13 +496,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(name) = cvar_arg(args.front()) else {
                 return Err(mlua::Error::runtime(USAGE_GET_CVAR));
             };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
             match model.cvars.get(&name.to_ascii_lowercase()) {
                 Some(slot) => Ok(Value::String(lua.create_string(&slot.value)?)),
-                None => {
-                    warn_unknown(&mut model, &name);
-                    Ok(Value::Nil)
-                }
+                None => Err(unknown_cvar(&name)),
             }
         })?,
     )?;
@@ -507,13 +511,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(name) = cvar_arg(args.front()) else {
                 return Err(mlua::Error::runtime(USAGE_GET_CVAR_DEFAULT));
             };
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
             match model.cvars.get(&name.to_ascii_lowercase()) {
                 Some(slot) => Ok(Value::String(lua.create_string(&slot.default)?)),
-                None => {
-                    warn_unknown(&mut model, &name);
-                    Ok(Value::Nil)
-                }
+                None => Err(unknown_cvar(&name)),
             }
         })?,
     )?;
@@ -601,13 +602,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let value = cvar_arg(args.get(1)).unwrap_or_else(|| NO_STRING_FORM.to_string());
             {
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                // The lookup comes first (`0x488c47`-`0x488c59`): an unknown name raises before
+                // the read-only flag is read.
+                let key = name.to_ascii_lowercase();
+                if !model.cvars.contains_key(&key) {
+                    return Err(unknown_cvar(&name));
+                }
                 // Flag bit2 (`0x488c67`), tested before anything is written.
-                if model.cvars_read_only.contains(&name.to_ascii_lowercase()) {
+                if model.cvars_read_only.contains(&key) {
                     return Err(mlua::Error::runtime(format!("\"{name}\" is read-only")));
                 }
-                if !write_cvar(&mut model, &name, value.clone()) {
-                    return Ok(());
-                }
+                store(&mut model, &key, value.clone());
             }
             // A third argument that passes `lua_isstring` is the `CVAR_UPDATE` token, arg1, with
             // the value as arg2 (`0x488cad`-`0x488cd5`), fired on every such call, changed or not,
@@ -1117,14 +1122,49 @@ mod tests {
         assert_eq!((master.1.as_str(), master.2.as_str()), ("0.25", "1.0"));
     }
 
+    /// `0x488bd1`-`0x488bed`, `0x488c47`-`0x488c59`, `0x488d21`-`0x488d3d`: the lookup `0x63dec0`
+    /// returns 0 and the verb raises `0x842310` with the name; nothing is returned or written.
     #[test]
-    fn unknown_names_warn_once_and_no_op() {
+    fn an_unknown_name_raises_in_the_three_verbs() {
         let mut s = script_with_volume();
-        assert!(s
-            .eval::<bool>(r#"return GetCVar("bogusKnob") == nil"#)
-            .unwrap());
-        s.run(r#"SetCVar("bogusKnob", 1)"#).unwrap();
-        s.run(r#"SetCVar("bogusKnob", 2)"#).unwrap();
+        for call in [
+            r#"GetCVar("bogusKnob")"#,
+            r#"SetCVar("bogusKnob", 1)"#,
+            r#"GetCVarDefault("bogusKnob")"#,
+        ] {
+            let observed: (bool, String) = s
+                .eval(&format!(
+                    "local ok, err = pcall(function() return {call} end) \
+                     return ok, tostring(err)"
+                ))
+                .unwrap();
+            assert!(!observed.0, "{call} must raise");
+            assert!(
+                observed.1.contains("Couldn't find CVar named 'bogusKnob'"),
+                "{call}: {}",
+                observed.1
+            );
+        }
+        assert!(s.take_cvar_changes().is_empty(), "nothing is written");
+        // The name is `lua_tostring`'s, so a number names one too (`0x488bca`).
+        let err = s.run("GetCVar(7)").expect_err("7 names no CVar");
+        assert!(
+            err.to_string().contains("Couldn't find CVar named '7'"),
+            "{err}"
+        );
+        // The lookup precedes the read-only test (`0x488c47` before `0x488c67`).
+        s.set_cvar_read_only("bogusKnob", true);
+        let err = s
+            .run(r#"SetCVar("bogusKnob", 1)"#)
+            .expect_err("still unknown");
+        assert!(err.to_string().contains("Couldn't find CVar"), "{err}");
+    }
+
+    #[test]
+    fn host_side_unknown_names_warn_once_and_no_op() {
+        let mut s = script_with_volume();
+        s.set_cvar_host("bogusKnob", "1");
+        s.set_cvar_host("bogusKnob", "2");
         assert!(s.take_cvar_changes().is_empty());
         let warns: Vec<String> = s.take_warnings();
         assert_eq!(warns.len(), 1, "warn-once: {warns:?}");
