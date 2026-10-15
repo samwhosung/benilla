@@ -3053,3 +3053,37 @@ fn a_dead_or_ghost_players_say_yell_and_emote_are_refused_after_the_afk_clear() 
     let (_, refused, _) = chat_sends_as(raid_group(2, 9), None, r#"SendChatMessage("a")"#);
     assert!(refused.is_empty());
 }
+
+/// A macro's `/script` line reaches the engine through the stock chat code: `EXECUTE_CHAT_LINE`
+/// (`ChatFrame.lua:1343`) sets the edit box and `ChatEdit_SendText` runs `SlashCmdList["SCRIPT"]`,
+/// which is `RunScript(msg)`. So a gated movement call in it signals `MACRO_ACTION_FORBIDDEN`
+/// (`0x494ac6`-`0x494add`) and moves nothing, whether a macro button, a key or the player typed it.
+#[test]
+fn a_macro_script_line_that_moves_signals_the_macro_event() {
+    let mut s = chat_vm();
+    s.run(
+        r#"
+        Forbidden = {}
+        local f = CreateFrame("Frame")
+        f:RegisterEvent("MACRO_ACTION_FORBIDDEN")
+        f:RegisterEvent("ADDON_ACTION_FORBIDDEN")
+        f:SetScript("OnEvent", function() table.insert(Forbidden, event) end)
+    "#,
+    )
+    .unwrap();
+    for line in [
+        "/script MoveForwardStart()",
+        "/script Jump() ToggleAutoRun()",
+    ] {
+        s.fire_event(
+            "EXECUTE_CHAT_LINE",
+            vec![benilla_ui::script::ScriptValue::Str(line.into())],
+        );
+    }
+    assert_eq!(
+        s.eval::<Vec<String>>("return Forbidden").unwrap(),
+        ["MACRO_ACTION_FORBIDDEN"; 3]
+    );
+    assert!(s.take_binding_input().is_empty(), "nothing moved");
+    assert!(s.errors().is_empty(), "{:?}", s.errors());
+}
