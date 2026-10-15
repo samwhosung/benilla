@@ -168,7 +168,7 @@ fn setup_water_fx(
 }
 
 /// Decodes a foam stencil with its authored RGBA verbatim, as raw gamma bytes, from the archives
-/// alone: a world texture's open passes flag 0.
+/// alone: `0x68f8b0`'s `TextureCreate` call passes file flag 0 (`0x68f90f`).
 fn foam_image(
     world_assets: &mut WorldAssets,
     path: &str,

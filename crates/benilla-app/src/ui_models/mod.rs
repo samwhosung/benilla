@@ -20,7 +20,7 @@ use bevy::render::render_resource::Buffer;
 use bevy::render::renderer::{RenderDevice, RenderQueue};
 
 use benilla_assets::materials::WowModelMaterial;
-use benilla_assets::{m2_url, quantize, M2Model, WorldAssets};
+use benilla_assets::{m2_url_on, quantize, M2Model, WorldAssets, MPQ_LOOSE_SOURCE};
 use benilla_formats::{SeqLoops, UvAnim};
 use benilla_ui::script::{ModelPaneFrame, UiScript};
 use benilla_ui::widget::{FrameHandle, ModelFileFacts, ModelFog, ModelLight, SequenceFacts};
@@ -720,7 +720,10 @@ fn sync_tiles(
         if trace_on() {
             info!("tile-trace: facts for {key} wanted — loading the file");
         }
-        let handle = assets.asset_server.load::<M2Model>(m2_url(&key));
+        // A model frame's `SetModel` creates the model with flags 5 (`0x76ccf5`), so the `.m2` and
+        // its textures open loose-flagged.
+        let url = m2_url_on(MPQ_LOOSE_SOURCE, &key);
+        let handle = assets.asset_server.load::<M2Model>(url);
         state.pending_facts.insert(key, handle);
     }
     let landed: Vec<(String, Handle<M2Model>)> = state

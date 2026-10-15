@@ -4,7 +4,7 @@
 //! but not for the lifecycle: they load outside `AddOn_Load`
 //! ([`super::manifest::load_ingame_ui`]), get no `ADDON_LOADED` and have no registry row.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
@@ -360,20 +360,39 @@ fn upcase_unit(c: char) -> char {
 /// moves the install's `Interface\GlueXML` and `Interface\FrameXML` and each moved-aside `Blizzard*`
 /// add-on folder to `%s.old`, and when anything moved empties the loose-file index (`0x51fbe3`).
 /// benilla moves nothing (the index leaves the first two out, discovery the third), and empties
-/// the index when the reference would have.
+/// the index when the reference would have: when a sweep finds a folder the last one did not, as
+/// the reference finds each only once, the move taking it away.
 pub(super) fn sweep_loose_interface() {
-    let addon_copy = root().is_some_and(|root| {
-        std::fs::read_dir(&root).is_ok_and(|entries| {
-            entries.flatten().any(|e| {
-                e.file_name()
-                    .to_str()
-                    .is_some_and(|name| benilla_assets::moved_aside(&e.path(), name))
-            })
-        })
-    });
-    if addon_copy || benilla_formats::install_has_loose_interface_folders() {
+    static LAST: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+    let mut now: BTreeSet<String> = benilla_formats::install_loose_interface_folders()
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    if let Some(root) = root() {
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            for e in entries.flatten() {
+                if let Some(name) = e.file_name().to_str() {
+                    if benilla_assets::moved_aside(&e.path(), name) {
+                        now.insert(format!("Interface\\AddOns\\{name}"));
+                    }
+                }
+            }
+        }
+    }
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if sweep_moves(&mut last, now) {
         benilla_formats::install_index().clear();
     }
+}
+
+/// Whether a sweep that finds `now` would move anything, given the folders the last sweep found:
+/// one it has not seen before. `last` becomes `now`.
+fn sweep_moves(last: &mut BTreeSet<String>, now: BTreeSet<String>) -> bool {
+    let moves = !now.is_subset(last);
+    *last = now;
+    moves
 }
 
 /// The player's own addons: every folder under the AddOns root with a `<Name>.toc`, in
@@ -2593,6 +2612,31 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(home.parent().unwrap());
+    }
+
+    /// A sweep moves something only when it finds a folder the last sweep did not: nothing found,
+    /// the same set again, or a smaller one moves nothing.
+    #[test]
+    fn a_sweep_moves_only_a_folder_it_has_not_seen() {
+        let set = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<BTreeSet<_>>();
+        let mut last = BTreeSet::new();
+        assert!(!sweep_moves(&mut last, set(&[])), "nothing would move");
+        assert!(sweep_moves(
+            &mut last,
+            set(&["Interface\\AddOns\\Blizzard_Foo"])
+        ));
+        assert!(
+            !sweep_moves(&mut last, set(&["Interface\\AddOns\\Blizzard_Foo"])),
+            "unchanged"
+        );
+        assert!(sweep_moves(
+            &mut last,
+            set(&["Interface\\AddOns\\Blizzard_Foo", "Interface\\FrameXML"])
+        ));
+        assert!(
+            !sweep_moves(&mut last, set(&["Interface\\FrameXML"])),
+            "one went away"
+        );
     }
 
     /// Writing a character's `AddOns.txt` empties the loose-file index (`0x51f09d`), and so does

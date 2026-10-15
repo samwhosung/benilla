@@ -260,14 +260,20 @@ impl AssetLoader for M2ModelLoader {
             .ok()
             .filter(|c| !c.is_empty());
 
+        // The textures open as the model did (`0x71da64` pushes the model's own flag).
+        let source = match ctx.path().source() {
+            bevy::asset::io::AssetSourceId::Name(name) if &**name == crate::MPQ_LOOSE_SOURCE => {
+                crate::MPQ_LOOSE_SOURCE
+            }
+            _ => crate::MPQ_SOURCE,
+        };
         let mut submeshes = Vec::with_capacity(subs.len());
         for sub in subs {
             // The URL is lowercased, since Bevy matches the `blp` extension case-sensitively, and
             // carries the wrap modes, since two modes of one texture are two uploads.
-            let texture = sub
-                .texture
-                .as_deref()
-                .map(|t| ctx.load::<Image>(crate::texture_url(t, (sub.wrap_x, sub.wrap_y))));
+            let texture = sub.texture.as_deref().map(|t| {
+                ctx.load::<Image>(crate::texture_url_on(source, t, (sub.wrap_x, sub.wrap_y)))
+            });
             submeshes.push(ModelSubmesh {
                 texture,
                 skin_slot: sub.skin_slot,

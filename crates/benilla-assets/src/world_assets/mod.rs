@@ -13,7 +13,7 @@ use bevy::render::render_resource::{Buffer, Face};
 use crate::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
 use crate::SpatialCache;
 use benilla_formats::{blp_to_rgba, read_texture_native_chain, tga_to_rgba, Chain, ModelBlend};
-pub use benilla_formats::{LooseIndex, LooseIndexCell, LooseOpen};
+pub use benilla_formats::{LooseFile, LooseIndex, LooseIndexCell, LooseOpen};
 
 /// BLP and RGBA to `Image` helpers, re-exported.
 mod images;
@@ -29,27 +29,13 @@ pub struct WorldAssets {
     /// Decoded GPU textures by `(normalized path, wrap_u, wrap_v)`: one BLP can be sampled both
     /// ways (tiled on a wall, clamped on a cutout card), and the address mode lives on the sampler.
     pub textures: SpatialCache<(String, bool, bool), Handle<Image>>,
-    /// UI sprites by resolved path and open, misses cached as `None` so a bad path never re-walks
-    /// the chain per frame; the open is in the key as the reference's texture cache keys on the
-    /// file flag (`0x449d90`).
-    sprites: HashMap<(String, LooseOpen), Option<Handle<Image>>>,
-    /// UI sprites by path, per-axis wrap and open, since the sampler bakes into the `Image`.
-    tiled_sprites: HashMap<(String, bool, bool, LooseOpen), Option<Handle<Image>>>,
-    /// Sprites resampled to an exact physical size, by `(path, w, h)`.
-    resampled_sprites: HashMap<(String, u32, u32), Option<Handle<Image>>>,
-    /// The decoded pixels behind [`Self::resampled_sprites`], so a resize does not re-decode.
-    resample_sources: HashMap<String, Option<(u32, u32, Vec<u8>)>>,
-    /// Portrait sprites by path and open, the circular mask baked in ([`portrait_image`]).
-    portraits: HashMap<(String, LooseOpen), Option<Handle<Image>>>,
-    /// Coverage masks ([`mask_image`]) by path and open: the minimap's circular clip.
-    masks: HashMap<(String, LooseOpen), Option<Handle<Image>>>,
+    /// The UI sprite caches.
+    cache: SpriteCaches,
     /// UI sprites whose pixels the client computes ([`Self::generated_sprite`]).
     generated: HashMap<&'static str, Handle<Image>>,
     /// The loose files a flagged open reads before the chain: the install's index, and the AddOns
     /// folder once the app installs it (never in capture runs).
     loose: LooseFiles,
-    /// The install index's [`LooseIndexCell::generation`] the loose-read caches were filled under.
-    loose_generation: u64,
     /// Materials deduped by [`MaterialKey`].
     pub model_materials: SpatialCache<MaterialKey, Handle<WowModelMaterial>>,
     /// The shared global-light buffer, cloned into every deduped model material's `light_buf`.
@@ -121,11 +107,13 @@ fn decode_sprite(
 ) -> Option<(u32, u32, Vec<u8>)> {
     let open = loose_open_for(path, open);
     let candidates = sprite_candidates(path);
+    // Asked before the chain's lock, so an index build never stalls an archive reader.
+    let hits: Vec<Option<LooseFile>> = candidates.iter().map(|c| loose.find(c, open)).collect();
     let mut chain = chain.lock_recover();
-    for candidate in &candidates {
+    for (candidate, hit) in candidates.iter().zip(&hits) {
         // A loose file answers the candidate whether or not it decodes ([`read_loose_or_chain`]).
-        let bytes = match loose.find(candidate, open) {
-            Some(file) => std::fs::read(&file).ok(),
+        let bytes = match hit {
+            Some(file) => file.read(),
             None => chain.read_file(candidate).ok(),
         };
         if let Some(Ok(decoded)) = bytes.map(|b| decode_sprite_bytes(&b)) {
@@ -135,7 +123,9 @@ fn decode_sprite(
     // "Not there" and "there but would not decode" are different faults; say which.
     let found_but_undecodable: Vec<&String> = candidates
         .iter()
-        .filter(|c| chain.read_file(c).is_ok() || loose.find(c, open).is_some())
+        .zip(&hits)
+        .filter(|(c, hit)| hit.is_some() || chain.read_file(c).is_ok())
+        .map(|(c, _)| c)
         .collect();
     if found_but_undecodable.is_empty() {
         warn!(
@@ -176,9 +166,10 @@ fn loose_open_for(path: &str, open: LooseOpen) -> LooseOpen {
 /// for the probes that answer `SetTexture`'s 1|nil before anything decodes.
 pub fn sprite_found(chain: &Mutex<Chain>, loose: &LooseFiles, path: &str) -> bool {
     let open = loose_open_for(path, LooseOpen::Index);
-    sprite_candidates(path)
-        .iter()
-        .any(|c| chain.lock_recover().contains(c) || loose.find(c, open).is_some())
+    let candidates = sprite_candidates(path);
+    // The loose files first, outside the chain's lock.
+    candidates.iter().any(|c| loose.find(c, open).is_some())
+        || candidates.iter().any(|c| chain.lock_recover().contains(c))
 }
 
 /// Decode by content, not extension, since addon folders mislabel both ways: a `BLP2` magic is a
@@ -213,12 +204,12 @@ impl LooseFiles {
         }
     }
 
-    /// The disk file that answers an open of `path` with `open`, or `None` for the archives:
+    /// The loose file that answers an open of `path` with `open`, or `None` for the archives:
     /// the font open's bare name first ([`LooseOpen::BareNameFirst`]), then the whole name, an
     /// `Interface\AddOns\` one in the AddOns folder, which the install's index leaves out. A name
     /// written with `/` finds nothing, as the index's compare does not read it as `\` (`0x647f37`);
     /// a caller whose path benilla joined with `/` turns it back first.
-    pub fn find(&self, path: &str, open: LooseOpen) -> Option<PathBuf> {
+    pub fn find(&self, path: &str, open: LooseOpen) -> Option<LooseFile> {
         if open == LooseOpen::Archives || path.contains('/') {
             return None;
         }
@@ -226,7 +217,7 @@ impl LooseFiles {
         if open == LooseOpen::BareNameFirst {
             let bare = path.rsplit('\\').next().unwrap_or(path);
             if let Some(file) = install.as_ref().and_then(|ix| ix.get(bare)) {
-                return Some(file.to_path_buf());
+                return Some(file.clone());
             }
         }
         let norm = normalize_path(path);
@@ -234,12 +225,10 @@ impl LooseFiles {
             return self
                 .addons
                 .as_deref()
-                .and_then(|root| loose_addon_file(root, &norm));
+                .and_then(|root| loose_addon_file(root, &norm))
+                .map(LooseFile::Plain);
         }
-        install
-            .as_ref()
-            .and_then(|ix| ix.get(&norm))
-            .map(Path::to_path_buf)
+        install.as_ref().and_then(|ix| ix.get(&norm)).cloned()
     }
 }
 
@@ -253,7 +242,7 @@ pub fn read_loose_or_chain(
     open: LooseOpen,
 ) -> Option<Vec<u8>> {
     match loose.find(path, open) {
-        Some(file) => std::fs::read(file).ok(),
+        Some(file) => file.read(),
         None => chain.lock_recover().read(path).ok(),
     }
 }
@@ -307,6 +296,90 @@ pub fn moved_aside(dir: &Path, name: &str) -> bool {
         && child_ignoring_case(dir, &format!("{name}.toc")).is_some_and(|toc| toc.is_file())
 }
 
+/// Sprite handles by key, a miss as `None`, each with the open that made it. The key holds no
+/// open: the reference's texture cache keys on the stripped name and the flags word `0x449ae0`
+/// builds from the filter and force arguments (`0x449dd2` to `0x449dec`, compared at `0x449f39`
+/// and `0x449f47`), and the file flag is read only by the loaders (`0x449e20`, `0x449e32`), so a
+/// name's first open wins while it is cached (`0x449df3`).
+struct Opened<K>(HashMap<K, (LooseOpen, Option<Handle<Image>>)>);
+
+impl<K> Default for Opened<K> {
+    fn default() -> Self {
+        Opened(HashMap::new())
+    }
+}
+
+impl<K: Eq + std::hash::Hash> Opened<K> {
+    /// The cached answer, `Some(None)` for a cached miss.
+    fn get(&self, key: &K) -> Option<Option<Handle<Image>>> {
+        self.0.get(key).map(|(_, handle)| handle.clone())
+    }
+
+    fn insert(&mut self, key: K, open: LooseOpen, handle: Option<Handle<Image>>) {
+        self.0.insert(key, (open, handle));
+    }
+
+    /// Keep the entries `keep(key, open, hit)` says to.
+    fn retain(&mut self, mut keep: impl FnMut(&K, LooseOpen, bool) -> bool) {
+        self.0
+            .retain(|key, (open, handle)| keep(key, *open, handle.is_some()));
+    }
+}
+
+/// The UI sprite caches, and the install index's generation they were filled under.
+#[derive(Default)]
+struct SpriteCaches {
+    /// UI sprites by [`sprite_key`].
+    sprites: Opened<String>,
+    /// UI sprites by key and per-axis wrap, since the sampler bakes into the `Image`.
+    tiled: Opened<(String, bool, bool)>,
+    /// Sprites resampled to an exact physical size, by `(path, w, h)`, always opened loose.
+    resampled: HashMap<(String, u32, u32), Option<Handle<Image>>>,
+    /// The decoded pixels behind [`Self::resampled`], so a resize does not re-decode.
+    resample_sources: HashMap<String, Option<(u32, u32, Vec<u8>)>>,
+    /// Portrait sprites, the circular mask baked in ([`portrait_image`]).
+    portraits: Opened<String>,
+    /// Coverage masks ([`mask_image`]): the minimap's circular clip.
+    masks: Opened<String>,
+    /// The [`LooseIndexCell::generation`] the entries opened loose were filled under.
+    loose_generation: u64,
+}
+
+impl SpriteCaches {
+    /// Drop every entry opened with the loose flag when the install's index was emptied since
+    /// they filled, so the next request opens again, as the reference opens a texture again once
+    /// it was released (every UI texture at a `ReloadUI` or a logout, the moments that empty the
+    /// index). Entries opened with flag 0 stay: nothing loose answered them.
+    fn sync(&mut self, generation: Option<u64>) {
+        let Some(generation) = generation.filter(|g| *g != self.loose_generation) else {
+            return;
+        };
+        self.loose_generation = generation;
+        let archives = |_: &_, open: LooseOpen, _| open == LooseOpen::Archives;
+        self.sprites.retain(archives);
+        self.tiled.retain(|_, open, _| open == LooseOpen::Archives);
+        self.portraits.retain(archives);
+        self.masks.retain(archives);
+        self.resampled.clear();
+        self.resample_sources.clear();
+    }
+
+    /// Drop every miss and every `Interface\AddOns\` entry, when the AddOns folder changes: a path
+    /// asked before it existed gets a second look, and a loose file shadows the chain's
+    /// ([`read_loose_or_chain`]); any other hit came from the chain and stays.
+    fn drop_addons_and_misses(&mut self) {
+        // `emblem_mask_texture` prefixes its `sprites` key, so the test looks past a tag.
+        let stays =
+            |key: &str, hit: bool| hit && !normalize_path(key).contains("interface\\addons\\");
+        self.sprites.retain(|k, _, hit| stays(k, hit));
+        self.tiled.retain(|k, _, hit| stays(&k.0, hit));
+        self.resampled.retain(|k, v| stays(&k.0, v.is_some()));
+        self.resample_sources.retain(|k, v| stays(k, v.is_some()));
+        self.portraits.retain(|k, _, hit| stays(k, hit));
+        self.masks.retain(|k, _, hit| stays(k, hit));
+    }
+}
+
 /// Mutate an asset only when `differs` says it does not already match: `Assets::get_mut` alone
 /// marks it Modified, a uniform re-upload and, on Metal's non-bindless path, a bind-group rebuild.
 /// Pair it with values quantized to display precision ([`quantize`], [`quant255`]).
@@ -357,15 +430,9 @@ impl WorldAssets {
         Self {
             chain: Arc::new(Mutex::new(chain)),
             textures: SpatialCache::default(),
-            sprites: HashMap::new(),
-            resampled_sprites: HashMap::new(),
-            resample_sources: HashMap::new(),
-            tiled_sprites: HashMap::new(),
-            portraits: HashMap::new(),
-            masks: HashMap::new(),
+            cache: SpriteCaches::default(),
             generated: HashMap::new(),
             loose: LooseFiles::install(),
-            loose_generation: 0,
             model_materials: SpatialCache::default(),
             shared_light,
         }
@@ -391,37 +458,13 @@ impl WorldAssets {
             return;
         }
         self.loose.addons = root;
-        // `emblem_mask_texture` prefixes its `sprites` key, so the test looks past a tag.
-        let stays =
-            |key: &str, hit: bool| hit && !normalize_path(key).contains("interface\\addons\\");
-        self.sprites.retain(|k, v| stays(&k.0, v.is_some()));
-        self.tiled_sprites.retain(|k, v| stays(&k.0, v.is_some()));
-        self.resampled_sprites
-            .retain(|k, v| stays(&k.0, v.is_some()));
-        self.resample_sources.retain(|k, v| stays(k, v.is_some()));
-        self.portraits.retain(|k, v| stays(&k.0, v.is_some()));
-        self.masks.retain(|k, v| stays(&k.0, v.is_some()));
+        self.cache.drop_addons_and_misses();
     }
 
-    /// Drop what the loose-read caches hold when the install's index was emptied since they
-    /// filled, so the next request opens again, as a texture the reference released (every UI
-    /// texture at a `ReloadUI` or a logout, the moments that empty the index) is opened again;
-    /// flag-0 entries stay, as nothing loose answered them.
+    /// [`SpriteCaches::sync`] to the install index's generation.
     fn sync_loose(&mut self) {
-        let Some(generation) = self.loose.install.as_ref().map(|c| c.generation()) else {
-            return;
-        };
-        if generation == self.loose_generation {
-            return;
-        }
-        self.loose_generation = generation;
-        let archives = |open: &LooseOpen| *open == LooseOpen::Archives;
-        self.sprites.retain(|k, _| archives(&k.1));
-        self.masks.retain(|k, _| archives(&k.1));
-        self.portraits.retain(|k, _| archives(&k.1));
-        self.tiled_sprites.retain(|k, _| archives(&k.3));
-        self.resampled_sprites.clear();
-        self.resample_sources.clear();
+        let generation = self.loose.install.as_ref().map(|c| c.generation());
+        self.cache.sync(generation);
     }
 
     /// Decode and upload a BLP once per path and wrap; later requests share the handle.
@@ -462,15 +505,16 @@ impl WorldAssets {
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
         self.sync_loose();
-        let key = (sprite_key(path), loose_open_for(path, open));
+        let key = sprite_key(path);
         // Hits and misses are cached: the UI extractor asks per quad per frame, and a fresh handle
         // would defeat its dirty check.
-        if let Some(cached) = self.sprites.get(&key) {
-            return cached.clone();
+        if let Some(cached) = self.cache.sprites.get(&key) {
+            return cached;
         }
         let loaded = decode_sprite(&self.chain, &self.loose, path, open)
             .map(|(w, h, rgba)| images.add(sprite_image(w, h, rgba)));
-        self.sprites.insert(key, loaded.clone());
+        let open = loose_open_for(path, open);
+        self.cache.sprites.insert(key, open, loaded.clone());
         loaded
     }
 
@@ -491,17 +535,19 @@ impl WorldAssets {
     ) -> Option<Handle<Image>> {
         self.sync_loose();
         let key = (path.to_string(), w, h);
-        if let Some(cached) = self.resampled_sprites.get(&key) {
+        if let Some(cached) = self.cache.resampled.get(&key) {
             return cached.clone();
         }
-        if !self.resample_sources.contains_key(path) {
+        if !self.cache.resample_sources.contains_key(path) {
             let decoded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index);
-            self.resample_sources.insert(path.to_string(), decoded);
+            self.cache
+                .resample_sources
+                .insert(path.to_string(), decoded);
         }
-        let made = self.resample_sources[path]
+        let made = self.cache.resample_sources[path]
             .as_ref()
             .map(|(sw, sh, src)| images.add(sprite_image(w, h, resample(src, *sw, *sh, w, h))));
-        self.resampled_sprites.insert(key, made.clone());
+        self.cache.resampled.insert(key, made.clone());
         made
     }
 
@@ -513,14 +559,14 @@ impl WorldAssets {
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
         self.sync_loose();
-        let open = loose_open_for(path, LooseOpen::Index);
-        let key = (sprite_key(path), wrap.0, wrap.1, open);
-        if let Some(cached) = self.tiled_sprites.get(&key) {
-            return cached.clone();
+        let key = (sprite_key(path), wrap.0, wrap.1);
+        if let Some(cached) = self.cache.tiled.get(&key) {
+            return cached;
         }
         let loaded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index)
             .map(|(w, h, rgba)| images.add(sprite_image_wrapped(w, h, rgba, wrap)));
-        self.tiled_sprites.insert(key, loaded.clone());
+        let open = loose_open_for(path, LooseOpen::Index);
+        self.cache.tiled.insert(key, open, loaded.clone());
         loaded
     }
 
@@ -549,13 +595,14 @@ impl WorldAssets {
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
         self.sync_loose();
-        let key = (sprite_key(path), loose_open_for(path, LooseOpen::Index));
-        if let Some(cached) = self.portraits.get(&key) {
-            return cached.clone();
+        let key = sprite_key(path);
+        if let Some(cached) = self.cache.portraits.get(&key) {
+            return cached;
         }
         let loaded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index)
             .map(|(w, h, rgba)| images.add(portrait_image(w, h, rgba)));
-        self.portraits.insert(key, loaded.clone());
+        let open = loose_open_for(path, LooseOpen::Index);
+        self.cache.portraits.insert(key, open, loaded.clone());
         loaded
     }
 
@@ -568,23 +615,20 @@ impl WorldAssets {
         path: &str,
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
-        let key = (
-            format!("emblem-mask:{}", sprite_key(path)),
-            LooseOpen::Archives,
-        );
-        if let Some(cached) = self.sprites.get(&key) {
-            return cached.clone();
+        let key = format!("emblem-mask:{}", sprite_key(path));
+        if let Some(cached) = self.cache.sprites.get(&key) {
+            return cached;
         }
-        let loaded =
-            decode_sprite(&self.chain, &self.loose, path, key.1).map(|(w, h, mut rgba)| {
-                for px in rgba.as_chunks_mut::<4>().0 {
-                    px[0] = 0xFF;
-                    px[1] = 0xFF;
-                    px[2] = 0xFF;
-                }
-                images.add(sprite_image(w, h, rgba))
-            });
-        self.sprites.insert(key, loaded.clone());
+        let open = LooseOpen::Archives;
+        let loaded = decode_sprite(&self.chain, &self.loose, path, open).map(|(w, h, mut rgba)| {
+            for px in rgba.as_chunks_mut::<4>().0 {
+                px[0] = 0xFF;
+                px[1] = 0xFF;
+                px[2] = 0xFF;
+            }
+            images.add(sprite_image(w, h, rgba))
+        });
+        self.cache.sprites.insert(key, open, loaded.clone());
         loaded
     }
 
@@ -597,13 +641,14 @@ impl WorldAssets {
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
         self.sync_loose();
-        let key = (sprite_key(path), loose_open_for(path, open));
-        if let Some(cached) = self.masks.get(&key) {
-            return cached.clone();
+        let key = sprite_key(path);
+        if let Some(cached) = self.cache.masks.get(&key) {
+            return cached;
         }
         let loaded = decode_sprite(&self.chain, &self.loose, path, open)
             .map(|(w, h, rgba)| images.add(mask_image(w, h, rgba)));
-        self.masks.insert(key, loaded.clone());
+        let open = loose_open_for(path, open);
+        self.cache.masks.insert(key, open, loaded.clone());
         loaded
     }
 
@@ -922,8 +967,8 @@ mod tests {
         }
     }
 
-    fn body(path: Option<PathBuf>) -> Option<String> {
-        path.map(|p| std::fs::read_to_string(p).unwrap())
+    fn body(file: Option<LooseFile>) -> Option<String> {
+        file.map(|f| String::from_utf8(f.read().unwrap()).unwrap())
     }
 
     /// A flagged open finds an install's loose file by its path below the install or `Data\`, a
@@ -1017,6 +1062,38 @@ mod tests {
         assert!(sprite_dimensions(&chain, &loose, slash).is_none());
     }
 
+    /// An emptied index drops every sprite opened with the loose flag, hit or miss, and keeps those
+    /// opened with flag 0; the same generation again drops nothing.
+    #[test]
+    fn a_new_index_generation_drops_the_loose_opened_sprites() {
+        let mut c = SpriteCaches::default();
+        let hit = Some(Handle::<Image>::default());
+        c.sprites.insert("ui".into(), LooseOpen::Index, hit.clone());
+        c.sprites.insert("miss".into(), LooseOpen::Index, None);
+        c.sprites
+            .insert("sun".into(), LooseOpen::Archives, hit.clone());
+        c.tiled
+            .insert(("ui".into(), true, false), LooseOpen::Index, hit.clone());
+        c.portraits
+            .insert("p".into(), LooseOpen::Index, hit.clone());
+        c.masks
+            .insert("mask".into(), LooseOpen::Archives, hit.clone());
+        c.resampled.insert(("ui".into(), 4, 4), hit.clone());
+        c.sync(Some(0));
+        assert!(
+            c.sprites.get(&"ui".to_string()).is_some(),
+            "an unchanged generation keeps all"
+        );
+        c.sync(Some(1));
+        assert!(c.sprites.get(&"ui".to_string()).is_none());
+        assert!(c.sprites.get(&"miss".to_string()).is_none());
+        assert!(c.sprites.get(&"sun".to_string()).is_some());
+        assert!(c.tiled.get(&("ui".into(), true, false)).is_none());
+        assert!(c.portraits.get(&"p".to_string()).is_none());
+        assert!(c.masks.get(&"mask".to_string()).is_some());
+        assert!(c.resampled.is_empty());
+    }
+
     /// A `Blizzard*` folder holding its own `.toc`, any case, is moved aside and answers no path;
     /// one without it, or a folder of another name, answers as before.
     #[test]
@@ -1038,7 +1115,7 @@ mod tests {
             "Blizzard_AuctionUI"
         ));
         assert!(!moved_aside(&root.join("MyBlizzard"), "MyBlizzard"));
-        let get = |p: &str| body(loose_addon_file(root, &normalize_path(p)));
+        let get = |p: &str| body(loose_addon_file(root, &normalize_path(p)).map(LooseFile::Plain));
         assert_eq!(get("Interface\\AddOns\\Blizzard_Foo\\Foo.lua"), None);
         assert_eq!(get("Interface\\AddOns\\blizzard_bar\\Bar.lua"), None);
         assert_eq!(

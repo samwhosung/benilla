@@ -169,7 +169,8 @@ fn start_glue_music(
     open_glue_music(&mut music, &mut out, assets.as_deref(), &config, GLUE_MUSIC);
 }
 
-/// Open `file` off the loose files or the chain as a stream at `amp` (the category's slider already multiplied in).
+/// Open `file` off the loose files or the chain as a stream at `amp` (the category's slider
+/// already multiplied in).
 fn open_stream(
     out: &mut SoundOutput,
     assets: Option<&WorldAssets>,

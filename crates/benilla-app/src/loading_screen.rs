@@ -614,6 +614,7 @@ fn drive_loading_screen(
                 .map(str::to_string);
             let handle = path.and_then(|path| match screen.art_cache.get(&path) {
                 Some(h) => Some(h.clone()),
+                // `ResolveLoadingArt` opens the art with file flag 0 (`0x406eba`, `0x406ef1`).
                 None => assets
                     .sprite_texture_opened(&path, LooseOpen::Archives, &mut images)
                     .inspect(|h| {

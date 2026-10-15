@@ -24,10 +24,47 @@ pub enum LooseOpen {
 }
 
 /// The index: a file's path below the folder walked, compared without ASCII case (`SStrCmpI`), to
-/// its path on disk; a key's first entry stays (`0x646d66`).
+/// what opens it; a key's first entry stays (`0x646d66`).
 #[derive(Debug, Default)]
 pub struct LooseIndex {
-    files: HashMap<String, PathBuf>,
+    files: HashMap<String, LooseFile>,
+}
+
+/// What an index entry opens, by the kind `0x646910` stores (`+0x1c`) and `SFile::OpenEx`
+/// (`0x6477c0`) switches on (`0x64783d`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LooseFile {
+    /// Kind 0: the file itself, opened with `fopen(path, "rb")` (`0x647844`).
+    Plain(PathBuf),
+    /// Kind 2: a `<name>.MPQ`, keyed without the suffix, opened as an archive from which the
+    /// name's last component is read (`0x647a30`).
+    Archive {
+        /// The `.MPQ` on disk.
+        archive: PathBuf,
+        /// The file read from it: the key's part after its last backslash.
+        member: String,
+    },
+}
+
+impl LooseFile {
+    /// The file on disk the entry opens.
+    pub fn path(&self) -> &Path {
+        match self {
+            LooseFile::Plain(path) | LooseFile::Archive { archive: path, .. } => path,
+        }
+    }
+
+    /// The entry's bytes, or `None` when the file, the archive or its member will not open: the
+    /// open fails then, with no turn to the archive chain (`0x647865`, `0x647a63`, `0x647a94`).
+    pub fn read(&self) -> Option<Vec<u8>> {
+        match self {
+            LooseFile::Plain(path) => std::fs::read(path).ok(),
+            LooseFile::Archive { archive, member } => benilla_mpq::Archive::open(archive)
+                .ok()?
+                .read_file(member)
+                .ok(),
+        }
+    }
 }
 
 /// The data folder the second walk takes, `0xc520c8` (`Data\`); the walk skips a folder whose
@@ -133,28 +170,33 @@ impl LooseIndex {
         }
     }
 
-    /// Enter one file by its path below the walked folder. A last extension `.bz` or `.MPQ` makes
-    /// the reference's kinds 1 and 2 (`0x646aab`, `0x646bc7`), a Storm-compressed file and an
-    /// archive of one file, which benilla does not open: such a file is left out, so a name
-    /// equal to its path less the suffix reads from the archives.
+    /// Enter one file by its path below the walked folder. A last extension `.MPQ` (any case) is
+    /// cut from the key and makes kind 2 (`0x646bc7`, `0x646bd4`); any other file is kind 0.
     fn insert(&mut self, rel: &str, full: PathBuf) {
-        let ext = rel.rsplit_once('.').map(|(_, e)| e);
-        if ext.is_some_and(|e| e.eq_ignore_ascii_case("bz") || e.eq_ignore_ascii_case("mpq")) {
-            return;
-        }
-        self.files.entry(key(rel)).or_insert(full);
+        let (key_rel, file) = match rel.rsplit_once('.') {
+            // Kind 1, a `.bz` file opened past a `BZ00` header (`0x646aab`, `0x647894`): the
+            // reference does not say how its body decodes, so it is left out of the index.
+            Some((_, ext)) if ext.eq_ignore_ascii_case("bz") => return,
+            Some((stem, ext)) if ext.eq_ignore_ascii_case("mpq") => {
+                let member = stem.rsplit('\\').next().unwrap_or(stem).to_string();
+                let archive = full;
+                (stem, LooseFile::Archive { archive, member })
+            }
+            _ => (rel, LooseFile::Plain(full)),
+        };
+        self.files.entry(key(key_rel)).or_insert(file);
     }
 
-    /// The disk file whose key equals `name` without ASCII case.
-    pub fn get(&self, name: &str) -> Option<&Path> {
-        self.files.get(&key(name)).map(PathBuf::as_path)
+    /// The entry whose key equals `name` without ASCII case.
+    pub fn get(&self, name: &str) -> Option<&LooseFile> {
+        self.files.get(&key(name))
     }
 
-    /// The disk file that answers an open of `name` with `open`, `0x647e60`'s probes: with
+    /// The entry that answers an open of `name` with `open`, `0x647e60`'s probes: with
     /// [`LooseOpen::BareNameFirst`] the part after the last backslash, then for either loose open
     /// the whole name. `None` sends the open to the archives; a hit is the open's one answer,
     /// and a file that then fails to read is a miss with no turn to the archives (`0x647865`).
-    pub fn resolve(&self, name: &str, open: LooseOpen) -> Option<&Path> {
+    pub fn resolve(&self, name: &str, open: LooseOpen) -> Option<&LooseFile> {
         match open {
             LooseOpen::Archives => None,
             LooseOpen::Index => self.get(name),
@@ -229,18 +271,23 @@ pub fn install_index() -> Arc<LooseIndexCell> {
     CELL.clone()
 }
 
-/// Whether the install holds a loose `Interface\GlueXML` or `Interface\FrameXML` folder, any case:
-/// one the glue build's sweep moves aside (`0x51fb50`), after which it empties the index.
-pub fn install_has_loose_interface_folders() -> bool {
+/// The install's loose `Interface\GlueXML` and `Interface\FrameXML` folders, any case, by those
+/// names: the folders the glue build's sweep moves aside (`0x51fb50`).
+pub fn install_loose_interface_folders() -> Vec<&'static str> {
     let Some(base) = wow_data().and_then(|d| d.parent().map(Path::to_path_buf)) else {
-        return false;
+        return Vec::new();
     };
     let Some(interface) = child_dir_ignoring_case(&base, "Interface") else {
-        return false;
+        return Vec::new();
     };
-    ["GlueXML", "FrameXML"]
+    MOVED_ASIDE
         .iter()
-        .any(|name| child_dir_ignoring_case(&interface, name).is_some())
+        .copied()
+        .filter(|folder| {
+            let name = folder.rsplit('\\').next().unwrap_or(folder);
+            child_dir_ignoring_case(&interface, name).is_some()
+        })
+        .collect()
 }
 
 /// `dir`'s folder named `name` without regard to case, as `OsMoveFile` finds it on Windows.
@@ -290,12 +337,12 @@ mod tests {
         }
     }
 
-    fn body(path: Option<&Path>) -> Option<String> {
-        path.map(|p| std::fs::read_to_string(p).unwrap())
+    fn body(file: Option<&LooseFile>) -> Option<String> {
+        file.map(|f| String::from_utf8(f.read().unwrap()).unwrap())
     }
 
     /// Both walks enter files by their path below the folder walked, the base folder's first, and
-    /// a name matches without case and with either separator.
+    /// a name matches without case, written with `\\` and not with `/`.
     #[test]
     fn the_base_folder_is_walked_before_data_and_keys_ignore_case() {
         let t = Tree::new("order");
@@ -351,9 +398,9 @@ mod tests {
 
     /// The folders the reference moves aside and the AddOns folder benilla's own stands in for
     /// are not indexed; a `Data\` copy of the moved folders is, as the move is of the base
-    /// folder's alone; `.bz` and `.MPQ` files are not entered.
+    /// folder's alone; a `.bz` file is not entered, and a `.MPQ` is, by its path less the suffix.
     #[test]
-    fn moved_aside_addons_and_archive_kinds_stay_out() {
+    fn moved_aside_addons_and_bz_files_stay_out() {
         let t = Tree::new("skip");
         t.file("Interface/FrameXML/UIParent.lua", "x");
         t.file("interface/gluexml/GlueParent.lua", "x");
@@ -366,13 +413,19 @@ mod tests {
         assert_eq!(ix.get("Interface\\FrameXML\\UIParent.lua"), None);
         assert_eq!(ix.get("Interface\\GlueXML\\GlueParent.lua"), None);
         assert_eq!(ix.get("Interface\\AddOns\\Atlas\\Atlas.toc"), None);
-        assert_eq!(ix.get("patch-3"), None);
+        assert_eq!(
+            ix.get("patch-3"),
+            Some(&LooseFile::Archive {
+                archive: t.0.join("Data").join("patch-3.MPQ"),
+                member: "patch-3".to_string(),
+            })
+        );
         assert_eq!(ix.get("Textures\\Foo.blp"), None);
         assert_eq!(
             body(ix.get("Interface\\GlueXML\\GlueStrings.lua")).as_deref(),
             Some("data glue")
         );
-        assert_eq!(ix.len(), 1);
+        assert_eq!(ix.len(), 2);
     }
 
     /// A link back up the tree is walked once, and a `$WOW_DATA` folder not named `Data` is the
@@ -414,5 +467,26 @@ mod tests {
             body(cell.get().get("Fonts\\FRIZQT__.TTF")).as_deref(),
             Some("added")
         );
+    }
+
+    /// A kind-2 entry reads the name's last component out of the `.MPQ` on disk: here a real
+    /// archive's `(listfile)`, linked as `Misc\(listfile).MPQ`.
+    #[cfg(unix)]
+    #[test]
+    fn a_loose_mpq_answers_its_name_from_inside_the_archive() {
+        let data = crate::wow_data_or_skip!();
+        let real = data.join("patch.MPQ");
+        let want = benilla_mpq::Archive::open(&real)
+            .and_then(|a| a.read_file("(listfile)"))
+            .expect("patch.MPQ carries a (listfile)");
+        let t = Tree::new("mpq");
+        std::fs::create_dir_all(t.0.join("Data/Misc")).unwrap();
+        std::os::unix::fs::symlink(&real, t.0.join("Data/Misc/(listfile).MPQ")).unwrap();
+        let ix = LooseIndex::build(Some(&t.0), &t.0.join("Data"));
+        let hit = ix
+            .resolve("Misc\\(LISTFILE)", LooseOpen::Index)
+            .expect("keyed less .MPQ");
+        assert_eq!(hit.read().as_deref(), Some(&want[..]));
+        assert_eq!(ix.get("Misc\\(listfile).MPQ"), None);
     }
 }

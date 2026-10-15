@@ -126,7 +126,7 @@ pub(super) fn read(req: &str) -> Option<Vec<u8>> {
 /// separator as `/`, so the name's own is gone.
 fn read_loose(index: &benilla_formats::LooseIndex, req: &str) -> Option<Option<Vec<u8>>> {
     let file = index.resolve(&req.replace('/', "\\"), benilla_formats::LooseOpen::Index)?;
-    Some(std::fs::read(file).ok())
+    Some(file.read())
 }
 
 /// The player's patch chain, opened once per process and shared by every VM. Process-local, not

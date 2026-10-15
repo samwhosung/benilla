@@ -252,21 +252,18 @@ fn setup_minimap(
         Ok(translate) => {
             info!("minimap: md5translate.trs — {} tiles", translate.len());
             // The default mask and icons open from the archives alone, as `0x4ed810`'s
-            // `TextureCreate` calls (`0x4ed862`) pass file flag 0. The arrows are model textures
-            // in the reference (`MinimapArrow.m2`, `Rotating-MinimapArrow.m2`), whose open takes
-            // the model's flags; they read the archives too.
+            // `TextureCreate` calls pass file flag 0 (`0x4ed862`, `0x4ed88b`, `0x4ed8b4`). The
+            // arrows are model textures (`MinimapArrow.m2`, `Rotating-MinimapArrow.m2`), and
+            // `CGMinimapFrame::LoadArrowModel` creates the models with flags 4 (`0x4ee181`), which
+            // their textures' opens keep (`0x71da64`), so they open loose-flagged.
             let archives = LooseOpen::Archives;
             let mask = assets.mask_texture("Textures\\MinimapMask", archives, &mut images);
-            let arrow =
-                assets.sprite_texture_opened(blips::PLAYER_ARROW_TEXTURE, archives, &mut images);
+            let arrow = assets.sprite_texture(blips::PLAYER_ARROW_TEXTURE, &mut images);
             let poi =
                 assets.sprite_texture_opened("Interface\\Minimap\\POIIcons", archives, &mut images);
             let mut rim_arrows = blips::RimArrowArt::default();
             for kind in blips::RimArrow::ALL {
-                rim_arrows.set(
-                    kind,
-                    assets.sprite_texture_opened(kind.texture(), archives, &mut images),
-                );
+                rim_arrows.set(kind, assets.sprite_texture(kind.texture(), &mut images));
             }
             let object_icons = assets.sprite_texture_opened(
                 "Interface\\Minimap\\ObjectIcons",
