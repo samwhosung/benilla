@@ -70,8 +70,8 @@ pub const CMSG_SET_WATCHED_FACTION: u16 = 0x0318; // 792
 pub const SMSG_AUTH_CHALLENGE: u16 = 0x01EC;
 pub const SMSG_AUTH_RESPONSE: u16 = 0x01EE;
 /// The Warden anticheat challenge; vmangos kicks a client that leaves it unanswered for 30 s
-/// (`Warden::Update`). Deviation: benilla has no Warden, so the connect refuses such a server
-/// ([`crate::WardenRequired`]) because a session there would only be kicked.
+/// (`Warden::Update`). Deviation: benilla cannot run a Warden module, so the connect refuses such
+/// a server; [`crate::WardenRequired`] says why.
 pub const SMSG_WARDEN_DATA: u16 = 0x02E6;
 /// The answer to `CMSG_AUTH_SESSION`'s addon block: one record per `## Secure:` addon, in order,
 /// with no count or names.

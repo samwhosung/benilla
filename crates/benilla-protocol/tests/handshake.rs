@@ -1,6 +1,6 @@
 //! The world handshake over a real socket against a fake server: packets may precede
 //! `SMSG_AUTH_RESPONSE`. Deviation: `SMSG_WARDEN_DATA` refuses the login, because benilla cannot
-//! answer Warden and the server kicks a client that stays silent about 30 s later.
+//! run a Warden module (`WardenRequired` says why) and the server kicks a silent client 30 s later.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};

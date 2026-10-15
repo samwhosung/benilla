@@ -18,9 +18,12 @@ const HANDSHAKE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// waits forever; a bound tells a server that died mid-queue from a long wait.
 const QUEUE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
-/// The server requires Warden. Deviation: benilla does not implement it; vmangos ships with it
-/// off (`Warden.WinEnabled`, `Warden.OSXEnabled`). vmangos kicks a client that leaves a Warden
-/// request unanswered for 30 s (`Warden.cpp`), so the connect refuses.
+/// The server requires Warden. Deviation: benilla cannot answer it. The answers come from a module,
+/// native Win32 x86 code the server sends, which the client maps, links and runs in its own
+/// process (`0x7a79d0`); the client itself parses none of the payload (`0x6ca5c0`). benilla runs no
+/// such code on any platform, so it has nothing that could answer. vmangos ships Warden off
+/// (`Warden.WinEnabled`, `Warden.OSXEnabled`) and kicks a client that leaves a request unanswered
+/// for 30 s (`Warden.cpp`), so the connect refuses rather than log in to be kicked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WardenRequired;
 
