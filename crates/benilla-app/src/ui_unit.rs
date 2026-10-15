@@ -1212,6 +1212,13 @@ pub(crate) fn fire_transitions(
     }
 }
 
+/// `CanAssist` (`0x6066f0`) of the player toward itself, `UnitCanAssist("player", "player")`: one
+/// object toward itself is friendly (`0x606200`), so `UNIT_FLAG_NOT_SELECTABLE` is the only refusal
+/// left.
+fn self_can_assist(store: &ObjectStore) -> bool {
+    crate::target::is_selectable(Some(store), None)
+}
+
 /// `"player"`'s snapshot off our own descriptor: no reaction (the unit is ours), the raid icon,
 /// both faction-group spellings and the guild. One builder for [`feed_units`] and for the seat a
 /// `/reload`'s load runs under ([`live_player_seat`]).
@@ -1230,6 +1237,7 @@ fn player_snapshot(
         .map(str::to_string);
     let mut s = snapshot(store, guid, name, 0, tables.classes(), tables.types(names));
     s.is_player = true;
+    s.can_assist = self_can_assist(store);
     s.raid_target = group.raid_target_index(guid);
     s.faction_group = faction_group(store, factions);
     s.faction_group_localized = faction_group_localized(store, factions);
@@ -3359,6 +3367,25 @@ mod tests {
             [[0; 3]; 20],
             "a creature has no PLAYER block"
         );
+    }
+
+    /// The player can assist itself unless its descriptor says `UNIT_FLAG_NOT_SELECTABLE`
+    /// (`0x6066f0`'s first refusal; the reaction of one object toward itself is friendly,
+    /// `0x606200`).
+    #[test]
+    fn the_player_assists_itself_unless_it_is_unselectable() {
+        use benilla_protocol::messages::ObjectFields;
+
+        const OBJECT_TYPE: u16 = 2;
+        const FLAGS: u16 = 46;
+        let me = |flags: u32| {
+            ObjectStore(ObjectFields::from_pairs(&[
+                (OBJECT_TYPE, 0x19),
+                (FLAGS, flags),
+            ]))
+        };
+        assert!(self_can_assist(&me(0x8)));
+        assert!(!self_can_assist(&me(0x8 | (1 << 25))));
     }
 
     /// The rank getter's two gates (`0x605620`), through `enrich_unit`'s wiring.
