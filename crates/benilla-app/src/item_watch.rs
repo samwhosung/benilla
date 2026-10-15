@@ -30,13 +30,17 @@ pub(crate) enum ItemNotice {
     /// at its create when the record is cached (`0x5d8300`), else when the answer lands
     /// (`0x5d8390`).
     Record { guid: u64, entry: u32 },
+    /// The answer to an [`Self::Entry`] miss, its callback `0x5d96b0`: the new entry's slots
+    /// refresh (`0x5d96bd`), then `0x4f9480` and `0x4c7180` with the guid. It has no world latch
+    /// and finds no item: it runs for the request, whatever the item has become since.
+    EntryRecord { guid: u64, entry: u32 },
     /// `ITEM_FIELD_STACK_COUNT`'s watcher `0x5d9400`.
     StackCount { guid: u64, entry: u32 },
     /// `ITEM_FIELD_SPELL_CHARGES`'s watcher `0x5d9540`.
     SpellCharges { guid: u64, entry: u32 },
     /// `OBJECT_FIELD_ENTRY`'s watcher `0x5d95e0`: the old entry's slots refresh at once
-    /// (`0x5d963e`), the new one's when its record is cached (`0x5d9676`); a miss waits for the
-    /// answer, a [`Self::Record`] here.
+    /// (`0x5d963e`), the new one's when its record is cached (`0x5d9676`); a miss asks with the
+    /// callback `0x5d96b0` and waits for the answer, an [`Self::EntryRecord`].
     Entry {
         guid: u64,
         old: u32,
@@ -73,6 +77,7 @@ impl ItemNotice {
         match self {
             Self::Destroyed { entry, .. }
             | Self::Record { entry, .. }
+            | Self::EntryRecord { entry, .. }
             | Self::StackCount { entry, .. }
             | Self::SpellCharges { entry, .. }
             | Self::Enchantment { entry, .. } => vec![*entry],
@@ -352,26 +357,36 @@ where
         })
     }
 
-    /// A record answer for `entry` that the cache did not hold: every item of ours with that
-    /// entry finishes its set-up (`0x5d8390` into `0x5d8440`), in guid order. `held` lists the
-    /// live objects.
+    /// A record answer for `entry` that the cache did not hold. Every item of ours with that
+    /// entry still waiting on its create's request finishes its set-up (`0x5d8390` into
+    /// `0x5d8440`), in guid order, while in the world; then each [`ItemNotice::Entry`] miss
+    /// waiting on it (`entry_waiters`, in request order) runs its callback `0x5d96b0`, ungated.
+    /// `held` lists the live objects.
     pub(crate) fn record_landed<'b>(
         &self,
         entry: u32,
         held: impl IntoIterator<Item = (u64, &'b ObjectFields)>,
+        entry_waiters: &[u64],
     ) -> Vec<ItemNotice> {
-        if !self.in_world() {
-            return Vec::new();
-        }
-        let mut guids: Vec<u64> = held
-            .into_iter()
-            .filter(|(_, f)| self.ours(f) && f.object_entry() == Some(entry))
-            .map(|(g, _)| g)
-            .collect();
+        let mut guids: Vec<u64> = if self.in_world() {
+            held.into_iter()
+                .filter(|(g, f)| {
+                    self.ours(f) && f.object_entry() == Some(entry) && !entry_waiters.contains(g)
+                })
+                .map(|(g, _)| g)
+                .collect()
+        } else {
+            Vec::new()
+        };
         guids.sort_unstable();
         guids
             .into_iter()
             .map(|guid| ItemNotice::Record { guid, entry })
+            .chain(
+                entry_waiters
+                    .iter()
+                    .map(|&guid| ItemNotice::EntryRecord { guid, entry }),
+            )
             .collect()
     }
 }
@@ -685,13 +700,13 @@ mod tests {
         assert_eq!(w.watch().created(POTION, &potion), None);
         assert!(w
             .watch()
-            .record_landed(POTION_ID, [(POTION, &potion)])
+            .record_landed(POTION_ID, [(POTION, &potion)], &[])
             .is_empty());
         w.objects.insert(ME, player(&[]));
         let other = item(POTION_ID, ME);
         assert_eq!(
             w.watch()
-                .record_landed(POTION_ID, [(ARROWS, &other), (POTION, &potion)]),
+                .record_landed(POTION_ID, [(ARROWS, &other), (POTION, &potion)], &[]),
             [
                 ItemNotice::Record {
                     guid: POTION,
@@ -716,5 +731,45 @@ mod tests {
         assert_eq!(gone.trade(), Some(TradeTouch::Gone(POTION)));
         assert_eq!(w.watch().destroyed(ARROWS), None);
         assert_eq!(w.watch().destroyed(BAG), None);
+    }
+
+    /// An entry change that missed the cache waits on the answer with its own callback
+    /// (`0x5d96b0`): no world latch, no Record set-up for that item, the request's entry.
+    #[test]
+    fn an_entry_miss_runs_its_own_callback_when_the_answer_lands() {
+        let mut w = World::new();
+        let potion = item(POTION_ID, ME);
+        let changed = item(POTION_ID, ME);
+        let both = || [(POTION, &potion), (ARROWS, &changed)];
+        assert_eq!(
+            w.watch().record_landed(POTION_ID, both(), &[ARROWS]),
+            [
+                ItemNotice::Record {
+                    guid: POTION,
+                    entry: POTION_ID
+                },
+                ItemNotice::EntryRecord {
+                    guid: ARROWS,
+                    entry: POTION_ID
+                }
+            ]
+        );
+        w.objects.remove(&ME);
+        assert_eq!(
+            w.watch().record_landed(POTION_ID, both(), &[ARROWS]),
+            [ItemNotice::EntryRecord {
+                guid: ARROWS,
+                entry: POTION_ID
+            }],
+            "out of the world only the callback runs"
+        );
+        assert_eq!(
+            ItemNotice::EntryRecord {
+                guid: ARROWS,
+                entry: POTION_ID
+            }
+            .recounts(),
+            [POTION_ID]
+        );
     }
 }

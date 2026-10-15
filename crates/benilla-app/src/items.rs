@@ -371,6 +371,9 @@ pub(crate) struct Items {
     /// when the item is set up (`0x5d8440`), counting seconds from then; they live as long as the
     /// player, here the session. `SMSG_ITEM_TIME_UPDATE` has no such list.
     pending_enchant_times: Vec<(u64, u32, u32)>,
+    /// `(guid, entry)` of our items whose entry changed to one the cache missed, each waiting on
+    /// the answer with the entry watcher's callback `0x5d96b0`, in request order.
+    entry_waiters: Vec<(u64, u32)>,
 }
 
 impl Items {
@@ -379,6 +382,24 @@ impl Items {
     pub(crate) fn queue_enchant_time(&mut self, guid: u64, slot: u32, seconds: u32) {
         debug!("enchant timer: item {guid:#x} not held — queued for its arrival");
         self.pending_enchant_times.push((guid, slot, seconds));
+    }
+
+    /// An entry change asked for the record of `entry` with the callback `0x5d96b0`.
+    pub(crate) fn wait_for_entry(&mut self, guid: u64, entry: u32) {
+        self.entry_waiters.push((guid, entry));
+    }
+
+    /// The answer for `entry` landed: the items whose entry change waited on it, in request order.
+    pub(crate) fn take_entry_waiters(&mut self, entry: u32) -> Vec<u64> {
+        let mut taken = Vec::new();
+        self.entry_waiters.retain(|&(g, e)| {
+            let hit = e == entry;
+            if hit {
+                taken.push(g);
+            }
+            !hit
+        });
+        taken
     }
 
     /// The item `guid` arrived: its queued enchant updates in arrival order, unlinked (`0x5ebde0`).
@@ -470,6 +491,7 @@ impl Items {
     /// item objects and their countdowns go with the index's sweep.
     pub(crate) fn clear_session(&mut self) {
         self.pending_enchant_times.clear();
+        self.entry_waiters.clear();
         self.templates.clear_pending();
     }
 }

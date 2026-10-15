@@ -141,6 +141,18 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
     };
     let notices = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
         .values(guid, kind, fields, edges);
+    // An entry change that missed the cache waits on the answer (`0x5d9652` asks with `0x5d96b0`).
+    for n in &notices {
+        if let crate::item_watch::ItemNotice::Entry {
+            guid,
+            new,
+            new_cached: false,
+            ..
+        } = *n
+        {
+            sc.items.wait_for_entry(guid, new);
+        }
+    }
     sc.item_notices.write_batch(notices);
 }
 
@@ -226,6 +238,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
             // negative answer finishes nothing (its found byte is clear, `0x5d83b8`).
             let landed = info.is_some() && sc.items.template_cached(entry).is_none();
             sc.items.insert_template(entry, info);
+            // A negative answer releases the waiters with nothing run (`0x5d96bb`).
+            let waiters = sc.items.take_entry_waiters(entry);
             if landed {
                 let notices = {
                     let (index, stores) = (&sc.index, &sc.stores);
@@ -233,7 +247,8 @@ fn on_item(In(ev): In<SessionEvent>, mut sc: Scene) {
                         .0
                         .iter()
                         .filter_map(|(&g, &e)| stores.get(e).ok().map(|s| (g, &s.0)));
-                    item_watch(index, stores, &sc.self_guid, &sc.items).record_landed(entry, held)
+                    item_watch(index, stores, &sc.self_guid, &sc.items)
+                        .record_landed(entry, held, &waiters)
                 };
                 sc.item_notices.write_batch(notices);
             }
@@ -1356,6 +1371,113 @@ mod tests {
                     entry: POTION
                 },
             ]
+        );
+    }
+
+    /// The object handlers over a headless client with our player live (an empty store created
+    /// as a player), the potion's template cached; the items it lists created, our own.
+    fn watch_world(items: &[(u64, u32, bool)]) -> App {
+        use benilla_protocol::messages::ObjectType;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        let me = world
+            .spawn((
+                Guid(WATCH_ME),
+                ObjectStore(ObjectFields::default().into_created(ObjectType::Player)),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(WATCH_ME, me);
+        world.resource_mut::<SelfGuid>().0 = Some(WATCH_ME);
+        world
+            .resource_mut::<Items>()
+            .insert_template(118, Some(crate::items::test_template("Potion")));
+        let creates = items
+            .iter()
+            .map(|&(guid, entry, container)| watched_item(guid, entry, container))
+            .collect();
+        super::super::handlers::dispatch(world, creates);
+        drain_notices(world);
+        app
+    }
+
+    const WATCH_ME: u64 = 0x0000_0000_0000_0007;
+
+    /// Our item's create block: type item (or container, 4 seats), the entry, ourselves as owner
+    /// and a stack of one.
+    fn watched_item(guid: u64, entry: u32, container: bool) -> SessionEvent {
+        use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY};
+        use benilla_protocol::messages::ObjectType;
+        let mut pairs = vec![
+            (2, if container { 0x7 } else { 0x3 }),
+            (FIELD_OBJECT_ENTRY, entry),
+            (6, WATCH_ME as u32),
+            (7, 0),
+            (FIELD_ITEM_STACK_COUNT, 1),
+        ];
+        if container {
+            pairs.push((48, 4));
+        }
+        SessionEvent::ItemCreate {
+            guid,
+            container,
+            fields: ObjectFields::from_pairs(&pairs).into_created(if container {
+                ObjectType::Container
+            } else {
+                ObjectType::Item
+            }),
+        }
+    }
+
+    fn drain_notices(world: &mut World) -> Vec<crate::item_watch::ItemNotice> {
+        world
+            .resource_mut::<Messages<crate::item_watch::ItemNotice>>()
+            .drain()
+            .collect()
+    }
+
+    /// An entry change to an uncached entry waits on the answer with its own callback
+    /// (`0x5d96b0`), not the create's set-up; a negative answer runs nothing.
+    #[test]
+    fn an_entry_change_that_misses_the_cache_runs_its_callback_on_the_answer() {
+        use crate::item_watch::ItemNotice;
+        use benilla_protocol::field::FIELD_OBJECT_ENTRY;
+        const POTIONS: u64 = 0x4000_0000_0000_0042;
+        let mut app = watch_world(&[(POTIONS, 118, false)]);
+        let world = app.world_mut();
+        let to = |entry: u32| SessionEvent::ObjectValues {
+            guid: POTIONS,
+            fields: ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, entry)]),
+        };
+        let answer = |entry: u32, known: bool| SessionEvent::ItemTemplate {
+            entry,
+            info: known.then(|| Box::new(crate::items::test_template("Scroll"))),
+        };
+        super::super::handlers::dispatch(world, vec![to(955), answer(955, true)]);
+        assert_eq!(
+            drain_notices(world),
+            [
+                ItemNotice::Entry {
+                    guid: POTIONS,
+                    old: 118,
+                    new: 955,
+                    new_cached: false
+                },
+                ItemNotice::EntryRecord {
+                    guid: POTIONS,
+                    entry: 955
+                },
+            ]
+        );
+        super::super::handlers::dispatch(world, vec![to(956), answer(956, false)]);
+        assert_eq!(
+            drain_notices(world),
+            [ItemNotice::Entry {
+                guid: POTIONS,
+                old: 955,
+                new: 956,
+                new_cached: false
+            }],
+            "a negative answer runs nothing"
         );
     }
 
