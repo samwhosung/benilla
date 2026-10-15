@@ -4,7 +4,11 @@
 //! Only `exact` rows gate: an `advisory` row's site declares more varargs than its caller pushes,
 //! and a `none` row has no producer in the census, which does not mean it has none. Only a
 //! `ScriptValue::` element's kind is asserted; any other argument counts toward the arity alone.
+//! A site of a gated event whose list is not written out at the call (`vec![…]`, `&[…]`,
+//! `Vec::new()`) is refused, since nothing then says what it pushes.
 use std::collections::BTreeMap;
+
+use super::fire_scan::{scan, Name, Scan};
 
 /// One row of `reference/event_args.tsv`.
 struct Row {
@@ -55,146 +59,61 @@ fn table() -> BTreeMap<String, Row> {
     out
 }
 
-/// Splits `body` at its top-level commas: `vec![…]`'s elements, nested calls left whole.
-fn elements(body: &str) -> Vec<String> {
+/// Every `(event, argument kinds, where)` the scan finds fired under a name it reads: a literal,
+/// or the literal arms of an `if`. The kinds are `None` when the list is built away from the
+/// site. A relay carries neither name nor list, and a name held in a binding is read by no gate.
+type Fired = (String, Option<Vec<char>>, String);
+
+fn fired_in(scan: &Scan) -> Vec<Fired> {
     let mut out = Vec::new();
-    let (mut depth, mut cur, mut in_str, mut esc) = (0i32, String::new(), false, false);
-    for c in body.chars() {
-        if in_str {
-            cur.push(c);
-            if esc {
-                esc = false;
-            } else if c == '\\' {
-                esc = true;
-            } else if c == '"' {
-                in_str = false;
-            }
+    for site in &scan.sites {
+        let Name::Lit(names) = &site.name else {
             continue;
-        }
-        match c {
-            '"' => {
-                in_str = true;
-                cur.push(c);
-            }
-            '(' | '[' | '{' => {
-                depth += 1;
-                cur.push(c);
-            }
-            ')' | ']' | '}' => {
-                depth -= 1;
-                cur.push(c);
-            }
-            ',' if depth == 0 => {
-                out.push(std::mem::take(&mut cur));
-            }
-            _ => cur.push(c),
-        }
-    }
-    if !cur.trim().is_empty() {
-        out.push(cur);
-    }
-    out.into_iter()
-        .map(|e| e.trim().to_string())
-        .filter(|e| !e.is_empty())
-        .collect()
-}
-
-/// The kind an argument expression pushes: `s` string, `n` number, `b` boolean, `x` nil,
-/// `?` not determinable from the source.
-fn kind_of(expr: &str) -> char {
-    let e = expr.trim_start_matches('&').trim();
-    for (variant, k) in [
-        ("ScriptValue::Str", 's'),
-        ("ScriptValue::Int", 'n'),
-        ("ScriptValue::Number", 'n'),
-        ("ScriptValue::Bool", 'b'),
-        ("ScriptValue::Nil", 'x'),
-    ] {
-        if e.starts_with(variant) {
-            return k;
-        }
-    }
-    '?'
-}
-
-/// Every `(event, argument kinds, where)` benilla fires with a literal name.
-fn fire_sites() -> Vec<(String, Vec<char>, String)> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("workspace root")
-        .join("crates");
-    let mut out = Vec::new();
-    let mut stack = vec![root];
-    while let Some(dir) = stack.pop() {
-        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-                continue;
-            }
-            if p.extension().is_none_or(|x| x != "rs") {
-                continue;
-            }
-            // Test fires are not shipped: skip test files and every `#[cfg(test)]` tail.
-            if p.to_string_lossy().contains("test") {
-                continue;
-            }
-            let whole = std::fs::read_to_string(&p).unwrap_or_default();
-            let text = whole
-                .split_once("#[cfg(test)]")
-                .map_or(whole.as_str(), |(head, _)| head);
-            // Split so this file cannot match its own scanner.
-            for call in [
-                concat!("fire_event", "("),
-                concat!("fire_event_into", "("),
-                concat!("model.raise", "("),
-                concat!("pending_events.push", "(("),
-            ] {
-                let mut from = 0;
-                while let Some(i) = text[from..].find(call) {
-                    let at = from + i + call.len();
-                    from = at;
-                    let rest = text[at..].trim_start();
-                    let rest = rest.strip_prefix("lua,").map_or(rest, str::trim_start);
-                    let Some(body) = rest.strip_prefix('"') else {
-                        continue;
-                    };
-                    let Some(end) = body.find('"') else { continue };
-                    let (name, after) = (&body[..end], &body[end + 1..]);
-                    let Some(args) = after.trim_start().strip_prefix(',') else {
-                        continue;
-                    };
-                    let args = args.trim_start();
-                    let kinds = if let Some(v) = args.strip_prefix("vec![") {
-                        let mut depth = 1i32;
-                        let mut close = v.len();
-                        for (k, c) in v.char_indices() {
-                            match c {
-                                '[' => depth += 1,
-                                ']' => {
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        close = k;
-                                        break;
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        elements(&v[..close]).iter().map(|e| kind_of(e)).collect()
-                    } else if args.starts_with("Vec::new()") {
-                        Vec::new()
-                    } else {
-                        // An argument list built elsewhere: arity unknowable here.
-                        continue;
-                    };
-                    out.push((name.to_string(), kinds, p.display().to_string()));
-                }
-            }
+        };
+        for name in names {
+            out.push((name.clone(), site.kinds(), site.at()));
         }
     }
     out
+}
+
+fn fire_sites() -> Vec<Fired> {
+    fired_in(scan())
+}
+
+/// What the table says of `sites`: how many it could measure, the shapes that do not fit, and the
+/// gated events whose list is built away from the call.
+fn judge(table: &BTreeMap<String, Row>, sites: &[Fired]) -> (usize, Vec<String>, Vec<String>) {
+    let (mut checked, mut wrong, mut unreadable) = (0usize, Vec::new(), Vec::new());
+    for (name, kinds, at) in sites {
+        let Some(row) = table.get(name) else { continue };
+        let Some(kinds) = kinds else {
+            unreadable.push(format!("{name} from {at}"));
+            continue;
+        };
+        checked += 1;
+        let fits = row.shapes.iter().any(|want| {
+            want.len() == kinds.len() && want.iter().zip(kinds).all(|(w, g)| *g == '?' || g == w)
+        });
+        if !fits {
+            let shapes: Vec<String> = row
+                .shapes
+                .iter()
+                .map(|s| format!("({})", s.iter().collect::<String>()))
+                .collect();
+            wrong.push(format!(
+                "{name} fired as ({}) from {at} — the reference's {} producer(s) push {}",
+                kinds.iter().collect::<String>(),
+                row.producers,
+                shapes.join(" | ")
+            ));
+        }
+    }
+    wrong.sort();
+    wrong.dedup();
+    unreadable.sort();
+    unreadable.dedup();
+    (checked, wrong, unreadable)
 }
 
 #[test]
@@ -213,38 +132,19 @@ fn every_event_we_fire_carries_the_reference_s_arguments() {
         sites.len()
     );
 
-    let mut checked = 0usize;
-    let mut wrong: Vec<String> = Vec::new();
-    for (name, kinds, at) in &sites {
-        let Some(row) = table.get(name) else { continue };
-        checked += 1;
-        let fits = row.shapes.iter().any(|want| {
-            want.len() == kinds.len()
-                && want
-                    .iter()
-                    .zip(kinds)
-                    .all(|(w, g)| *g == '?' || *g == *w || (*w == 'n' && *g == 'n'))
-        });
-        if !fits {
-            let shapes: Vec<String> = row
-                .shapes
-                .iter()
-                .map(|s| format!("({})", s.iter().collect::<String>()))
-                .collect();
-            wrong.push(format!(
-                "{name} fired as ({}) from {at} — the reference's {} producer(s) push {}",
-                kinds.iter().collect::<String>(),
-                row.producers,
-                shapes.join(" | ")
-            ));
-        }
-    }
+    let (checked, wrong, unreadable) = judge(&table, &sites);
+    assert!(
+        unreadable.is_empty(),
+        "{} fire site(s) of a gated event build their argument list away from the call, so this \
+         gate cannot see what they push. Write the list at the call (`vec![…]`, `Vec::new()`), \
+         one call per shape:\n  {}",
+        unreadable.len(),
+        unreadable.join("\n  ")
+    );
     assert!(
         checked >= 175,
         "only {checked} fires were measurable against the table — coverage collapsed"
     );
-    wrong.sort();
-    wrong.dedup();
     assert!(
         wrong.is_empty(),
         "{} fire site(s) push the wrong argument shape. An event name is a plain string at both \
@@ -353,4 +253,60 @@ fn every_unit_field_bridge_event_has_a_producer() {
         "these now HAVE a producer — take them out of UNPRODUCED so the list keeps meaning what \
          it says: {now_fired:?}"
     );
+}
+
+#[cfg(test)]
+mod bite {
+    use super::*;
+    use crate::ui_script::fire_scan::scan_of;
+
+    const WRAPPER: &str = "impl UiScript { fn fire_event(&mut self, event: &str, \
+                           args: Vec<ScriptValue>) {} }";
+
+    fn judged(body: &str) -> (Vec<String>, Vec<String>) {
+        let s = scan_of(&[("w.rs", WRAPPER), ("a.rs", body)]);
+        let (_, wrong, unreadable) = judge(&table(), &fired_in(&s));
+        (wrong, unreadable)
+    }
+
+    /// An argument on an event the reference signals bare is the wrong shape.
+    #[test]
+    fn an_argument_on_a_bare_event_is_refused() {
+        let (wrong, unreadable) = judged(
+            r#"fn f(s: &mut UiScript) {
+                s.fire_event("GOSSIP_SHOW", vec![ScriptValue::Str(String::new())]);
+            }"#,
+        );
+        assert_eq!(wrong.len(), 1, "{wrong:?}");
+        assert!(unreadable.is_empty());
+        let (wrong, unreadable) =
+            judged(r#"fn f(s: &mut UiScript) { s.fire_event("GOSSIP_SHOW", vec![]); }"#);
+        assert!(wrong.is_empty() && unreadable.is_empty());
+    }
+
+    /// A list built away from the call is refused, not skipped: through a call, a binding, or a
+    /// closure that forwards it.
+    #[test]
+    fn a_list_built_away_from_the_call_is_refused() {
+        for body in [
+            r#"fn f(s: &mut UiScript) { s.fire_event("GOSSIP_SHOW", name_arg()); }"#,
+            r#"fn f(s: &mut UiScript) { let args = make(); s.fire_event("GOSSIP_SHOW", args); }"#,
+            r#"fn f(lua: &Lua) {
+                let fire = |event: &str, args: Vec<ScriptValue>| s.fire_event(event, args);
+                fire("GOSSIP_SHOW", name_arg());
+            }"#,
+        ] {
+            let (wrong, unreadable) = judged(body);
+            assert!(wrong.is_empty());
+            assert_eq!(unreadable.len(), 1, "{body}: {unreadable:?}");
+        }
+    }
+
+    /// An event the table does not gate (a glue event, an advisory row) is not refused for it.
+    #[test]
+    fn an_event_the_table_does_not_gate_is_not_refused() {
+        let (wrong, unreadable) =
+            judged(r#"fn f(s: &mut UiScript) { s.fire_event("NOT_AN_EVENT", name_arg()); }"#);
+        assert!(wrong.is_empty() && unreadable.is_empty());
+    }
 }

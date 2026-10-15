@@ -237,6 +237,7 @@ fn is_word(c: char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fire_scan;
     use benilla_ui::script::UiScript;
 
     /// A bare name finds its loose file whatever the case on disk, the install root ahead of
@@ -1827,26 +1828,6 @@ mod tests {
             stale.join("\n  ")
         );
     }
-    /// `text` with every whitespace run before a `.` removed, so a chain rustfmt split across lines
-    /// reads as one call.
-    fn glue_chains(text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut pending = String::new();
-        for c in text.chars() {
-            if c.is_whitespace() {
-                pending.push(c);
-            } else {
-                if c != '.' {
-                    out.push_str(&pending);
-                }
-                pending.clear();
-                out.push(c);
-            }
-        }
-        out.push_str(&pending);
-        out
-    }
-
     /// Every event a chain file registers is fired by something here or listed in `UNPRODUCED`. An
     /// event name is a plain string at both ends, so a listener nothing feeds is silent; a new one
     /// means a window migration brought it.
@@ -1883,18 +1864,10 @@ mod tests {
                 "UIParent.lua — the macro half of ADDON_ACTION_FORBIDDEN, same reason",
             ),
             (
-                "AUTOEQUIP_BIND_CONFIRM",
-                "UIParent.lua — the bind-on-equip confirm for an AUTOEQUIP (right-click) path; \
-                 benilla's equip path fires the EQUIP_BIND_CONFIRM sibling only",
-            ),
-            (
-                "EQUIP_BIND_CONFIRM",
-                "UIParent.lua — the bind-on-equip confirm; benilla's inventory feed does not \
-                 derive the server's confirm ask yet",
-            ),
-            (
-                "USE_BIND_CONFIRM",
-                "UIParent.lua — the bind-on-use confirm, the same gap from the use path",
+                "GUILD_INVITE_CANCEL",
+                "UIParent.lua — the invite popup's hide. The 5875 client registers it, and its \
+                 signal wrapper `0x48f470` has no caller and no stored address, so nothing \
+                 signals it THERE either: producing it would be a divergence, not a fix",
             ),
             (
                 "BILLING_NAG_DIALOG",
@@ -1938,9 +1911,10 @@ mod tests {
             ),
             (
                 "CLOSE_WORLD_MAP",
-                "WorldMapFrame.lua — the engine-side close the reference fires when the map is \
-                 shut from outside its own frame; benilla closes the map through the frame's own \
-                 hide path only",
+                "WorldMapFrame.lua — registered, and signalled from NOWHERE reachable: its one \
+                 fire site (`0x4a7835`) ends `0x4a76e0`, which sends `CMSG_WORLD_TELEPORT` and \
+                 has no caller or stored address, so, like TRADE_REQUEST, producing it would be \
+                 a divergence, not a fix",
             ),
             ("DISPLAY_SIZE_CHANGED", "the four paperdoll files"),
             (
@@ -1974,123 +1948,46 @@ mod tests {
             ("UNIT_PORTRAIT_UPDATE", "three files — the portrait refresh"),
             (
                 "ZONE_UNDER_ATTACK",
-                "ChatFrame.lua — the reference's `SMSG_ZONE_UNDER_ATTACK` line (\"%s is under \
-                 attack!\"); the wire handler is not built",
+                "ChatFrame.lua — registered, but the name is no row of the client's event table \
+                 (`reference/events.tsv`), so `RegisterEvent` drops it (`0x702140`) and nothing \
+                 signals it. `SMSG_ZONE_UNDER_ATTACK` prints its LocalDefense line itself \
+                 (`0x49dcc0`, the global string `ZONE_UNDER_ATTACK`), which `ui_chat/broadcast.rs` \
+                 builds",
             ),
         ];
 
         let mut fired: std::collections::HashSet<String> =
             CONSTRUCTED.iter().map(|s| (*s).to_string()).collect();
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root")
-            .join("crates");
-        let caps = |lit: &str| {
-            !lit.is_empty()
-                && lit
-                    .chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
-        };
-        // The event-name table an indirect fire reads: `"EVENT", vec!`, a match arm
-        // `=> "EVENT",`, or a lone `"EVENT"` as a block arm's value.
-        let scan_arms = |text: &str, fired: &mut std::collections::HashSet<String>| {
-            const SHAPE: &str = "\", vec!";
-            for (i, _) in text.match_indices(SHAPE) {
-                let before = &text[..i];
-                let Some(q) = before.rfind('"') else { continue };
-                let lit = &before[q + 1..];
-                if caps(lit) {
-                    fired.insert(lit.to_string());
-                }
-            }
-            let lines: Vec<&str> = text.lines().map(str::trim).collect();
-            for (i, t) in lines.iter().enumerate() {
-                let (t, arm_value) = match t.find("=> \"") {
-                    Some(k) => (t[k + 3..].trim_end_matches(','), true),
-                    None => (*t, false),
-                };
-                let Some(lit) = t.strip_prefix('"').and_then(|x| x.strip_suffix('"')) else {
-                    continue;
-                };
-                if arm_value && caps(lit) {
-                    fired.insert(lit.to_string());
-                    continue;
-                }
-                let arm = i > 0
-                    && lines[i - 1].ends_with('{')
-                    && lines.get(i + 1).is_some_and(|n| n.starts_with('}'));
-                if arm && caps(lit) {
-                    fired.insert(lit.to_string());
-                }
-            }
-        };
-        // An indirect fire names a const or a function, whose literal may live in another file
-        // (`ui_chat::event::event_name`, for the fire in `ui_chat::frames`).
+        // Every fire site of the scan names its event or does not. A name held in a binding or
+        // built by a call is an indirect fire, and any event-shaped literal of its file counts as
+        // fired, as does any of the file that defines the const or function it names (which may
+        // be another: `ui_chat::event::event_name`, for the fire in `ui_chat::frames`).
+        let scan = fire_scan::scan();
         let mut indirect: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut texts: Vec<String> = Vec::new();
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
-            for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                } else if p.extension().is_some_and(|x| x == "rs") {
-                    let text = std::fs::read_to_string(&p).unwrap_or_default();
-                    // rustfmt splits a long chain at its dots, so the three shapes are matched
-                    // with the whitespace before each `.` removed.
-                    let text = glue_chains(&text);
-                    // A verb's `model.raise(name, args)` and the host queue,
-                    // `pending_events.push((name, args))`, fire too.
-                    const CALLS: [&str; 4] = [
-                        concat!("fire_event", "("),
-                        concat!("fire_event_into", "("),
-                        concat!("model.raise", "("),
-                        concat!("pending_events.push", "(("),
-                    ];
-                    let mut fires_indirectly = false;
-                    for call in CALLS {
-                        let mut from = 0;
-                        while let Some(i) = text[from..].find(call) {
-                            let at = from + i + call.len();
-                            from = at;
-                            let rest = text[at..].trim_start();
-                            let rest = rest.strip_prefix("lua,").map_or(rest, str::trim_start);
-                            if let Some(body) = rest.strip_prefix('"') {
-                                if let Some(end) = body.find('"') {
-                                    fired.insert(body[..end].to_string());
-                                }
-                            } else {
-                                fires_indirectly = true;
-                                let ident: String = rest
-                                    .chars()
-                                    .take_while(|c| c.is_alphanumeric() || *c == '_')
-                                    .collect();
-                                if !ident.is_empty() {
-                                    indirect.insert(ident);
-                                }
-                            }
-                        }
+        let mut indirect_files: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for site in &scan.sites {
+            match &site.name {
+                fire_scan::Name::Lit(names) => fired.extend(names.iter().cloned()),
+                fire_scan::Name::Other(expr) if !site.relay => {
+                    indirect_files.insert(&site.path);
+                    let ident: String = expr
+                        .trim_start_matches('&')
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !ident.is_empty() {
+                        indirect.insert(ident);
                     }
-                    if fires_indirectly {
-                        scan_arms(&text, &mut fired);
-                    }
-                    texts.push(text);
                 }
+                fire_scan::Name::Other(_) => {}
             }
         }
-        for text in &texts {
-            for ident in &indirect {
-                let decl = format!("const {ident}: &str = \"");
-                if let Some(k) = text.find(&decl) {
-                    let body = &text[k + decl.len()..];
-                    if let Some(end) = body.find('"') {
-                        fired.insert(body[..end].to_string());
-                    }
-                }
-                if text.contains(&format!("fn {ident}(")) {
-                    scan_arms(text, &mut fired);
-                }
+        for src in &scan.sources {
+            let names_one = indirect.iter().any(|i| {
+                src.code.contains(&format!("fn {i}(")) || src.code.contains(&format!("const {i}:"))
+            });
+            if names_one || indirect_files.contains(src.path.as_str()) {
+                fired.extend(src.event_literals());
             }
         }
 
@@ -2168,43 +2065,12 @@ mod tests {
             return;
         };
 
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .expect("workspace root")
-            .join("crates");
         let mut fired: std::collections::BTreeMap<String, String> =
             std::collections::BTreeMap::new();
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
-            for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                    continue;
-                }
-                if p.extension().is_none_or(|x| x != "rs") {
-                    continue;
-                }
-                // A test's own synthetic events are not a surface we ship.
-                if p.to_string_lossy().contains("test") {
-                    continue;
-                }
-                let text = std::fs::read_to_string(&p).unwrap_or_default();
-                // Split so this file cannot match its own walker.
-                const CALL: &str = concat!("fire_event", "(");
-                let mut from = 0;
-                while let Some(i) = text[from..].find(CALL) {
-                    let at = from + i + CALL.len();
-                    from = at;
-                    let rest = text[at..].trim_start();
-                    if let Some(body) = rest.strip_prefix('"') {
-                        if let Some(end) = body.find('"') {
-                            fired
-                                .entry(body[..end].to_string())
-                                .or_insert_with(|| p.display().to_string());
-                        }
-                    }
+        for site in &fire_scan::scan().sites {
+            if let fire_scan::Name::Lit(names) = &site.name {
+                for name in names {
+                    fired.entry(name.clone()).or_insert_with(|| site.at());
                 }
             }
         }
@@ -2217,8 +2083,6 @@ mod tests {
 
         let ghosts: Vec<String> = fired
             .iter()
-            // A `BENILLA_` prefix marks an event as ours, never mistaken for a 1.12 name.
-            .filter(|(ev, _)| !ev.starts_with("BENILLA_"))
             .filter(|(ev, _)| {
                 let needle: Vec<u8> = ev.bytes().chain(std::iter::once(0)).collect();
                 !bytes.windows(needle.len()).any(|w| w == needle)
