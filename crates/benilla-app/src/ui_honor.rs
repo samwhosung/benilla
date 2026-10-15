@@ -137,17 +137,22 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
     })
 }
 
-/// `(kills changed, rank changed)` between two snapshots, from the three watched fields only; a
-/// first push fires both. The watched fields are listed so that a new field fires nothing.
-fn events_for(before: Option<&HonorState>, after: &HonorState) -> (bool, bool) {
+/// How many times each event fires between two snapshots, `(kills, ranks)`, from the watched
+/// fields only: each watch fires `"player"` once when its own bytes change (`0x4655bb`), so a
+/// rank move that also moves the bar fires the rank event twice. A first push fires each once.
+/// The watched fields are listed so that a new field fires nothing.
+fn events_for(before: Option<&HonorState>, after: &HonorState) -> (usize, usize) {
     let Some(b) = before else {
-        return (true, true);
+        return (1, 1);
     };
-    // `PLAYER_FIELD_SESSION_KILLS`, both halves.
+    // `PLAYER_FIELD_SESSION_KILLS`, both halves (`0x5ddc35`).
     let kills = |h: &HonorState| (h.session_hk, h.session_dk);
-    // `PLAYER_BYTES_3` byte 3 and `PLAYER_FIELD_BYTES2` byte 0; not `highest_rank`, unwatched.
-    let ranks = |h: &HonorState| (h.rank, h.rank_bar);
-    (kills(b) != kills(after), ranks(b) != ranks(after))
+    (
+        usize::from(kills(b) != kills(after)),
+        // `PLAYER_BYTES_3` byte 3 (`0x5ddc5c`) and `PLAYER_FIELD_BYTES2` byte 0 (`0x5ddc83`), one
+        // watch each; not `highest_rank`, unwatched.
+        usize::from(b.rank != after.rank) + usize::from(b.rank_bar != after.rank_bar),
+    )
 }
 
 /// Push the self snapshot and the inspect reply, fire what moved, and drain the pane's request.
@@ -173,11 +178,17 @@ fn feed_honor(
                 let (kills, ranks) = events_for(memo.last.as_ref(), &fresh);
                 script.set_honor(Some(fresh));
                 memo.last = Some(fresh);
-                if kills {
-                    script.fire_event("PLAYER_PVP_KILLS_CHANGED", vec![]);
+                for _ in 0..kills {
+                    script.fire_event(
+                        "PLAYER_PVP_KILLS_CHANGED",
+                        vec![crate::ui_unit::player_token()],
+                    );
                 }
-                if ranks {
-                    script.fire_event("PLAYER_PVP_RANK_CHANGED", vec![]);
+                for _ in 0..ranks {
+                    script.fire_event(
+                        "PLAYER_PVP_RANK_CHANGED",
+                        vec![crate::ui_unit::player_token()],
+                    );
                 }
             }
         }
@@ -266,16 +277,16 @@ mod tests {
 
         let mut killed = base;
         killed.session_hk += 1;
-        assert_eq!(events_for(Some(&base), &killed), (true, false));
+        assert_eq!(events_for(Some(&base), &killed), (1, 0));
 
         let mut ranked = base;
         ranked.rank = 9;
-        assert_eq!(events_for(Some(&base), &ranked), (false, true));
+        assert_eq!(events_for(Some(&base), &ranked), (0, 1));
 
         // The rank bar is `PLAYER_FIELD_BYTES2` byte 0, a rank event.
         let mut barred = base;
         barred.rank_bar = 200;
-        assert_eq!(events_for(Some(&base), &barred), (false, true));
+        assert_eq!(events_for(Some(&base), &barred), (0, 1));
 
         // Unwatched in the reference (`0x467e70`), so these fire nothing.
         for mutate in [
@@ -288,16 +299,27 @@ mod tests {
             mutate(&mut quiet);
             assert_eq!(
                 events_for(Some(&base), &quiet),
-                (false, false),
+                (0, 0),
                 "an unwatched field must fire nothing"
             );
         }
     }
 
+    /// The rank event has two watches, `PLAYER_BYTES_3` and `PLAYER_FIELD_BYTES2` byte 0, and
+    /// each fires on its own bytes: a rank-up that also moves the bar fires it twice.
+    #[test]
+    fn a_rank_that_moves_the_bar_too_fires_the_rank_event_twice() {
+        let base = state();
+        let mut both = base;
+        both.rank = 9;
+        both.rank_bar = 3;
+        assert_eq!(events_for(Some(&base), &both), (0, 2));
+    }
+
     /// Otherwise a pane whose numbers arrived before it existed would never paint.
     #[test]
     fn the_first_push_fires_both() {
-        assert_eq!(events_for(None, &state()), (true, true));
+        assert_eq!(events_for(None, &state()), (1, 1));
     }
 
     fn vm(src: &str) -> UiScript {

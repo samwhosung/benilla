@@ -1246,6 +1246,12 @@ fn player_snapshot(
     s
 }
 
+/// `"player"`, the `arg1` of the player-field watcher `0x5de4b0` (`"%s"` at `0x82e280`, `"player"`
+/// at `0x847894`).
+pub(crate) fn player_token() -> ScriptValue {
+    ScriptValue::Str("player".to_string())
+}
+
 /// `UnitXP("player")` and `UnitXPMax("player")` off our own descriptor, zero while unsent.
 fn xp_pair(store: &ObjectStore) -> (u32, u32) {
     (
@@ -1495,14 +1501,22 @@ fn feed_units(
 
     // The XP pair and `PLAYER_XP_UPDATE`, ahead of the world-enter events so `PLAYER_LOGIN` and
     // `PLAYER_ENTERING_WORLD` handlers read real values. The event fires on first sight too, at
-    // login and after a `/reload`, where the reference's field watchers stay silent.
+    // login and after a `/reload`, where the reference's field watchers stay silent. Each field
+    // has a watch of its own (`0x5ddb4b` XP, `0x5ddb72` next-level XP), each firing
+    // `PLAYER_XP_UPDATE("player")` through `0x5de4b0` when its four bytes change, so a level-up,
+    // which moves both, fires it twice.
     if let Some((store, _)) = self_q.iter().next() {
         let (xp, next) = xp_pair(store);
         if memo.last_xp != Some((xp, next)) {
             gate.audit("feed_units", "the XP pair");
-            memo.last_xp = Some((xp, next));
+            let prev = memo.last_xp.replace((xp, next));
             script.set_player_xp(xp, next);
-            script.fire_event("PLAYER_XP_UPDATE", vec![]);
+            let fires = prev.map_or(1, |(p_xp, p_next)| {
+                usize::from(p_xp != xp) + usize::from(p_next != next)
+            });
+            for _ in 0..fires {
+                script.fire_event("PLAYER_XP_UPDATE", vec![player_token()]);
+            }
         }
     }
 
@@ -1510,8 +1524,11 @@ fn feed_units(
     // as the reference's descriptor is. Below `0x5ee990`'s local-GUID gate (`0x5eea93`) each arm
     // tests its own bits: `PLAYER_UPDATE_RESTING` on either edge of `0x20` (`0x5eead0`, fire
     // `0x5eeaf2`), `PLAYTIME_CHANGED` on `0x3000` (`0x5eeb65`, fire `0x5eeb6f`).
-    // `UPDATE_EXHAUSTION` is two other watchers, `0x5de4e0` on the byte and `0x5de4b0` on the pool;
-    // here it also fires on first sight, where they stay silent on a create and on `/reload`.
+    // `UPDATE_EXHAUSTION` is two watchers: `0x5de4e0` on the rest-state byte fires it bare
+    // through `0x703e50`, and `0x5de4b0` on the pool fires it with `"player"` (`0x5ddb24`). Each
+    // fires when its own bytes change, the byte's first (`PLAYER_BYTES_2` precedes the pool in
+    // the notify pass). Here it also fires once, bare, on first sight, where both stay silent on
+    // a create and on `/reload`.
     if let Some((store, _)) = self_q.iter().next() {
         let rest = (
             store.0.player_rest_state().unwrap_or(0),
@@ -1528,8 +1545,16 @@ fn feed_units(
                 rest.2 & PLAYER_FLAGS_PARTIAL_PLAY_TIME != 0,
                 rest.2 & PLAYER_FLAGS_NO_PLAY_TIME != 0,
             );
-            if prev.map(|p| (p.0, p.1)) != Some((rest.0, rest.1)) {
-                script.fire_event("UPDATE_EXHAUSTION", vec![]);
+            match prev {
+                None => script.fire_event("UPDATE_EXHAUSTION", vec![]),
+                Some(p) => {
+                    if p.0 != rest.0 {
+                        script.fire_event("UPDATE_EXHAUSTION", vec![]);
+                    }
+                    if p.1 != rest.1 {
+                        script.fire_event("UPDATE_EXHAUSTION", vec![player_token()]);
+                    }
+                }
             }
             // Only the byte watcher messages, and only on a real change: `prev` None is the login
             // descriptor, a create the reference never runs through the notify pass.
@@ -3131,6 +3156,113 @@ mod tests {
                 "PLAYER_UPDATE_RESTING".to_string(),
                 "PLAYTIME_CHANGED".to_string()
             ]
+        );
+    }
+
+    /// The player-field watcher `0x5de4b0` signals `("player")` once per watch whose own four
+    /// bytes changed: XP (`0x5ddb4b`) and next-level XP (`0x5ddb72`) are two watches, and the
+    /// rest pool (`0x5ddb24`) is a third, beside the rest-state byte's bare signal (`0x5de4e0`).
+    #[test]
+    fn the_xp_and_rest_watches_each_fire_on_their_own_bytes() {
+        use bevy::ecs::system::RunSystemOnce;
+        const FIELD_PLAYER_BYTES_2: u16 = 194;
+        const FIELD_PLAYER_XP: u16 = 716;
+        const FIELD_PLAYER_NEXT_LEVEL_XP: u16 = 717;
+        const FIELD_PLAYER_REST_STATE_EXPERIENCE: u16 = 1175;
+
+        let mut app = App::new();
+        app.add_message::<FieldChanged>();
+        app.init_resource::<Selection>()
+            .init_resource::<UnitFeedState>()
+            .init_resource::<NameCache>()
+            .init_resource::<Reputations>()
+            .init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_guild::GuildState>();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let script = UiScript::new().unwrap();
+        script
+            .run(
+                r#"
+                SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("PLAYER_XP_UPDATE")
+                f:RegisterEvent("UPDATE_EXHAUSTION")
+                f:SetScript("OnEvent", function()
+                    table.insert(SEEN, event .. " " .. tostring(arg1))
+                end)
+            "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        let me = app
+            .world_mut()
+            .spawn((
+                SelfPlayer,
+                Guid(0x77),
+                ObjectStore(
+                    benilla_protocol::ObjectFields::from_pairs(&[])
+                        .into_created(benilla_protocol::messages::ObjectType::Player),
+                ),
+            ))
+            .id();
+        let step = |app: &mut App, pairs: &[(u16, u32)]| -> Vec<String> {
+            app.world_mut()
+                .entity_mut(me)
+                .get_mut::<ObjectStore>()
+                .unwrap()
+                .0
+                .merge(benilla_protocol::ObjectFields::from_pairs(pairs));
+            app.world_mut().run_system_once(feed_units).unwrap();
+            let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+            s.resolve();
+            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            out
+        };
+
+        // The first sight is one fire of each, for the bars' first paint.
+        assert_eq!(
+            step(
+                &mut app,
+                &[(FIELD_PLAYER_XP, 10), (FIELD_PLAYER_NEXT_LEVEL_XP, 100)]
+            ),
+            vec!["PLAYER_XP_UPDATE player", "UPDATE_EXHAUSTION nil"]
+        );
+        assert_eq!(
+            step(&mut app, &[(FIELD_PLAYER_XP, 20)]),
+            vec!["PLAYER_XP_UPDATE player"]
+        );
+        // A level-up moves both fields: two watches, two signals.
+        assert_eq!(
+            step(
+                &mut app,
+                &[(FIELD_PLAYER_XP, 0), (FIELD_PLAYER_NEXT_LEVEL_XP, 200)]
+            ),
+            vec!["PLAYER_XP_UPDATE player"; 2]
+        );
+        assert!(step(&mut app, &[(FIELD_PLAYER_XP, 0)]).is_empty());
+        // The pool is the watcher's, the state byte is the bare one.
+        assert_eq!(
+            step(&mut app, &[(FIELD_PLAYER_REST_STATE_EXPERIENCE, 500)]),
+            vec!["UPDATE_EXHAUSTION player"]
+        );
+        assert_eq!(
+            step(&mut app, &[(FIELD_PLAYER_BYTES_2, 1 << 24)]),
+            vec!["UPDATE_EXHAUSTION nil"]
+        );
+        assert_eq!(
+            step(
+                &mut app,
+                &[
+                    (FIELD_PLAYER_BYTES_2, 2 << 24),
+                    (FIELD_PLAYER_REST_STATE_EXPERIENCE, 0)
+                ]
+            ),
+            vec!["UPDATE_EXHAUSTION nil", "UPDATE_EXHAUSTION player"],
+            "the byte's watch runs before the pool's in the notify pass"
         );
     }
 

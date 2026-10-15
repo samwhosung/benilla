@@ -676,7 +676,7 @@ fn demo_unit_feed(script: Option<NonSendMut<UiScript>>, mut fired: Local<VmMemo<
                  if MultiActionBar_Update then MultiActionBar_Update() end",
             );
         }
-        script.fire_event("PLAYER_XP_UPDATE", vec![]);
+        script.fire_event("PLAYER_XP_UPDATE", vec![ScriptValue::Str("player".into())]);
         for token in ["player", "target"] {
             script.fire_event("UNIT_HEALTH", vec![ScriptValue::Str(token.into())]);
         }

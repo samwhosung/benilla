@@ -274,9 +274,27 @@ fn feed_reputation(
     if last.as_ref() == Some(&fresh) {
         return;
     }
+    let (list_moved, watched_moved) = faction_fires(last.as_ref(), &fresh);
     script.set_reputation(fresh.clone());
     *last = Some(fresh);
-    script.fire_event("UPDATE_FACTION", vec![]);
+    if list_moved {
+        script.fire_event("UPDATE_FACTION", vec![]);
+    }
+    if watched_moved {
+        script.fire_event("UPDATE_FACTION", vec![crate::ui_unit::player_token()]);
+    }
+}
+
+/// Which `UPDATE_FACTION` producers a transition runs, `(list, watched)`. The standing, flag and
+/// rebuild producers (`0x4d569e`, `0x4d56f6`, `0x4d5984`, `0x4d5db0`) signal bare through
+/// `0x703e50`; the watch on `PLAYER_FIELD_WATCHED_FACTION_INDEX` (`0x5ddcce`) signals
+/// `("player")` through `0x5de4b0`, when its own four bytes change. A first push is the
+/// initialize message's bare signal (`0x4d569e`).
+fn faction_fires(prev: Option<&ReputationState>, fresh: &ReputationState) -> (bool, bool) {
+    match prev {
+        None => (true, false),
+        Some(p) => (p.entries != fresh.entries, p.watched != fresh.watched),
+    }
 }
 
 /// Send the pane's queued verbs; none is acked, and the engine already holds its own copy.
@@ -314,6 +332,48 @@ fn drain_reputation_sends(script: Option<NonSendMut<UiScript>>, commands: Res<Ne
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The list producers signal bare and the watched-index watch signals `"player"`, each on its
+    /// own change; a first push is the bare initialize signal.
+    #[test]
+    fn the_list_and_the_watched_index_are_two_producers() {
+        let entry = |id: u32| FactionEntry {
+            faction_id: id,
+            rep_list_id: id,
+            parent_id: 0,
+            name: String::new(),
+            description: String::new(),
+            standing: 0,
+            standing_id: 4,
+            bar_min: 0,
+            bar_max: 3000,
+            visible: true,
+            is_header: false,
+            at_war: false,
+            can_toggle_at_war: true,
+            inactive: false,
+        };
+        let base = ReputationState {
+            entries: vec![entry(1)],
+            watched: None,
+        };
+        assert_eq!(faction_fires(None, &base), (true, false));
+        let watched = ReputationState {
+            watched: Some(3),
+            ..base.clone()
+        };
+        assert_eq!(faction_fires(Some(&base), &watched), (false, true));
+        let listed = ReputationState {
+            entries: vec![entry(1), entry(2)],
+            ..base.clone()
+        };
+        assert_eq!(faction_fires(Some(&base), &listed), (true, false));
+        let both = ReputationState {
+            entries: vec![entry(2)],
+            watched: Some(1),
+        };
+        assert_eq!(faction_fires(Some(&base), &both), (true, true));
+    }
 
     /// The pane's bar reads [`RANK_BOUNDS`], the nameplate the rank function: they must agree.
     #[test]
