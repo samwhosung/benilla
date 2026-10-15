@@ -221,7 +221,7 @@ type ReputationInputs = Option<(u8, u8, Option<u32>)>;
 /// descriptions) runs only when the wire slots, the catalog, race/class or the watched index
 /// move, and the equality check behind it keeps a change to no listed row quiet. The first push
 /// fires too: the stock watch bar initializes off `UPDATE_FACTION` at login.
-fn feed_reputation(
+pub(crate) fn feed_reputation(
     script: Option<NonSendMut<UiScript>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     reputations: Res<Reputations>,

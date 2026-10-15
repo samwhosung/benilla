@@ -190,6 +190,29 @@ mod tests {
         }
     }
 
+    /// The bridge watches exactly the fields the event table names for the seven events fired
+    /// here: every id below `0xb6` (`0x51bbb0`'s bound, `0x51bc1d`) whose row names one of them.
+    #[test]
+    fn the_bridge_ids_are_every_field_the_table_names_for_these_events() {
+        const EVENTS: [&str; 7] = [
+            "UNIT_ATTACK_SPEED",
+            "UNIT_RANGEDDAMAGE",
+            "UNIT_DAMAGE",
+            "UNIT_STATS",
+            "UNIT_RESISTANCES",
+            "UNIT_ATTACK_POWER",
+            "UNIT_RANGED_ATTACK_POWER",
+        ];
+        let want: std::collections::BTreeSet<u16> = event_table()
+            .into_iter()
+            .filter(|(id, name)| *id < 0xb6 && EVENTS.contains(&name.as_str()))
+            .map(|(id, _)| id)
+            .collect();
+        let have: std::collections::BTreeSet<u16> =
+            crate::field_watch::BRIDGE_IDS.into_iter().collect();
+        assert_eq!(have, want);
+    }
+
     /// A world whose VM records every event the notices fire, with `guids` seated.
     fn world(guids: benilla_ui::script::UnitGuids) -> App {
         let mut app = App::new();
@@ -332,5 +355,167 @@ mod tests {
         // An entry load pending is the interface not up yet.
         app.insert_resource(crate::ui_script::PendingEntryUiLoad);
         assert_eq!(unread(&mut app, FieldNotice::Player { id: 406 }), 0);
+    }
+
+    /// A self player seated in a world that runs `feed_units` and the honor feed, its VM
+    /// recording what `lua` registers.
+    fn feed_world(pairs: &[(u16, u32)], lua: &str) -> (App, Entity) {
+        use crate::net::{Guid, NetCommands, ObjectStore, SelfPlayer};
+        let mut app = App::new();
+        app.add_message::<crate::net::FieldChanged>()
+            .add_message::<FieldNotice>()
+            .init_resource::<FieldNoticeCursor>()
+            .init_resource::<crate::target::Selection>()
+            .init_resource::<super::super::UnitFeedState>()
+            .init_resource::<crate::names::NameCache>()
+            .init_resource::<crate::net::Reputations>()
+            .init_resource::<crate::ui_party::GroupState>()
+            .init_resource::<crate::ui_chat::ChatLog>()
+            .init_resource::<crate::sound::MessageSounds>()
+            .init_resource::<crate::ui_guild::GuildState>()
+            .init_resource::<crate::ui_honor::HonorFeedState>()
+            .init_resource::<crate::ui_honor::InspectHonor>()
+            .init_resource::<crate::ui_inspect::InspectTarget>();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let mut script = UiScript::new().unwrap();
+        script.run(lua).unwrap();
+        script.set_unit_guids(&benilla_ui::script::UnitGuids {
+            player: ME,
+            ..Default::default()
+        });
+        app.insert_non_send_resource(script);
+        let me = app
+            .world_mut()
+            .spawn((
+                SelfPlayer,
+                Guid(ME),
+                ObjectStore(
+                    benilla_protocol::ObjectFields::from_pairs(pairs)
+                        .into_created(benilla_protocol::messages::ObjectType::Player),
+                ),
+            ))
+            .id();
+        (app, me)
+    }
+
+    fn seen(app: &mut App) -> Vec<String> {
+        let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
+        s.resolve();
+        let out = s.eval::<Vec<String>>("return SEEN").unwrap();
+        s.run("SEEN = {}").unwrap();
+        out
+    }
+
+    /// A values block with new XP: `PLAYER_XP_UPDATE`'s handler reads the new `UnitXP`, because
+    /// the schedule runs every push the field events' handlers read ahead of the firing.
+    #[test]
+    fn the_xp_handler_reads_the_xp_its_block_wrote() {
+        const XP: u16 = 716;
+        let mut headless = crate::game_plugins::schedule_tests::headless_client();
+        let ahead = [
+            crate::test_support::runs_before(
+                &mut headless,
+                super::super::feed_units,
+                fire_field_notices,
+            ),
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_char::feed_char,
+                fire_field_notices,
+            ),
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_pet_doll::feed_pet_doll,
+                fire_field_notices,
+            ),
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_honor::feed_honor,
+                fire_field_notices,
+            ),
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_reputation::feed_reputation,
+                fire_field_notices,
+            ),
+        ];
+        assert_eq!(
+            ahead, [true; 5],
+            "feed_units, char, pet doll, honor, reputation"
+        );
+
+        // In that order: the block lands, the push, the firing.
+        let (mut app, me) = feed_world(
+            &[(XP, 10), (XP + 1, 100)],
+            r#"SEEN = {}
+               local f = CreateFrame("Frame")
+               f:RegisterEvent("PLAYER_XP_UPDATE")
+               f:SetScript("OnEvent", function()
+                   table.insert(SEEN, event .. " " .. UnitXP("player"))
+               end)"#,
+        );
+        app.world_mut()
+            .run_system_once(super::super::feed_units)
+            .unwrap();
+        let mut edges = Vec::new();
+        let fields = {
+            let mut store = app
+                .world_mut()
+                .get_mut::<crate::net::ObjectStore>(me)
+                .unwrap();
+            store.0.merge_diff(
+                benilla_protocol::ObjectFields::from_pairs(&[(XP, 30)]),
+                |i, o, n| edges.push((i, o, n)),
+            );
+            store.0.clone()
+        };
+        let notices = crate::field_watch::values(
+            Some(ME),
+            ME,
+            benilla_protocol::messages::ObjectType::Player,
+            &fields,
+            &edges,
+        );
+        app.world_mut()
+            .resource_mut::<Messages<FieldNotice>>()
+            .write_batch(notices);
+        app.world_mut()
+            .run_system_once(super::super::feed_units)
+            .unwrap();
+        app.world_mut().run_system_once(fire_field_notices).unwrap();
+        assert_eq!(seen(&mut app), ["PLAYER_XP_UPDATE 30"]);
+    }
+
+    /// `PLAYER_ENTERING_WORLD`'s handler reads the honor block, since the schedule pushes it ahead
+    /// of the unit feed that fires the cascade: `HonorFrame_Update(1)` reads the weekly values
+    /// only then (`HonorFrame.lua:10-11`).
+    #[test]
+    fn the_honor_block_is_pushed_before_the_world_enter_events() {
+        const SESSION_KILLS: u16 = 1250;
+        let mut headless = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut headless,
+            crate::ui_honor::feed_honor,
+            super::super::feed_units
+        ));
+
+        // In that order: the push, then the cascade.
+        let (mut app, _) = feed_world(
+            &[(SESSION_KILLS, 3)],
+            r#"SEEN = {}
+               local f = CreateFrame("Frame")
+               f:RegisterEvent("PLAYER_ENTERING_WORLD")
+               f:SetScript("OnEvent", function()
+                   table.insert(SEEN, event .. " " .. GetPVPSessionStats())
+               end)"#,
+        );
+        app.world_mut()
+            .run_system_once(crate::ui_honor::feed_honor)
+            .unwrap();
+        app.world_mut()
+            .run_system_once(super::super::feed_units)
+            .unwrap();
+        assert_eq!(seen(&mut app), ["PLAYER_ENTERING_WORLD 3"]);
     }
 }

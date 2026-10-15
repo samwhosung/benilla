@@ -26,7 +26,7 @@ pub(crate) struct InspectHonor(pub(crate) Option<benilla_protocol::messages::Ins
 
 /// What the last push told this VM, keyed on the VM so a `/reload`'s fresh VM is told again.
 #[derive(Resource, Default)]
-struct HonorFeedState {
+pub(crate) struct HonorFeedState {
     vm: VmMemo<HonorFeedMemo>,
 }
 
@@ -145,7 +145,7 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
 }
 
 /// Push the self snapshot and the inspect reply, and drain the pane's request.
-fn feed_honor(
+pub(crate) fn feed_honor(
     script: Option<NonSendMut<UiScript>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
     inspect_target: Res<crate::ui_inspect::InspectTarget>,

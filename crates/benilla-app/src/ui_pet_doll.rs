@@ -33,7 +33,7 @@ impl Plugin for UiPetDollPlugin {
     }
 }
 
-fn feed_pet_doll(
+pub(crate) fn feed_pet_doll(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
     pet: PetUnit,
