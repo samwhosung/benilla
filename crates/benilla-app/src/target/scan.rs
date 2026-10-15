@@ -552,9 +552,14 @@ pub(super) fn cycle(
         }
     };
     // `0x4941e6`: the pick goes to `SelectTarget`, whose front may bind it to the cursor's cast
-    // instead. The cycle's cursor has moved on (`0x4941d4`) but the selection has not, so the
-    // history, which stands in for the cursor, is left to the next press.
+    // instead. The cycle's index was stored before that call (`0x4941d4`), so the next press moves
+    // past the pick whatever became of it; the history, which stands in for the index, records it
+    // as visited without a selection to push.
     if front.takes(entity, guid) {
+        if wrapped {
+            history.visited.clear();
+        }
+        history.push(guid, now);
         return;
     }
     if wrapped {

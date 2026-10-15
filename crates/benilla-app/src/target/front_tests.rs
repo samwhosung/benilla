@@ -42,7 +42,8 @@ fn fix(charmed: bool) -> Fix {
             ])),
         )
     };
-    let mut mine = vec![(2, 0x19), (22, 100), (28, 100)];
+    // `UNIT_FLAG_PVP_ATTACKABLE`: with no faction table a plain unit is attackable.
+    let mut mine = vec![(2, 0x19), (22, 100), (28, 100), (46, 0x8)];
     if charmed {
         mine.extend([(10, 0x99), (11, 0)]);
     }
@@ -50,6 +51,7 @@ fn fix(charmed: bool) -> Fix {
         .spawn((
             SelfPlayer,
             Guid(ME),
+            Transform::default(),
             GlobalTransform::default(),
             ObjectStore(benilla_protocol::ObjectFields::from_pairs(&mine)),
         ))
@@ -92,6 +94,39 @@ impl Fix {
         world
             .resource_mut::<Messages<WorldClick>>()
             .write(WorldClick);
+    }
+
+    /// A unit the TAB scan can pick, `x` yards along.
+    fn scannable_at(&mut self, guid: u64, x: f32) -> Entity {
+        let world = self.app.world_mut();
+        let e = world
+            .spawn((
+                Guid(guid),
+                crate::net::NetEntity {
+                    kind: benilla_protocol::EntityKind::Unit,
+                    display_id: None,
+                    scale: 1.0,
+                },
+                Transform::from_xyz(x, 0.0, 0.0),
+                GlobalTransform::from_translation(Vec3::new(x, 0.0, 0.0)),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                    (22, 100),
+                    (28, 100),
+                ])),
+            ))
+            .id();
+        world.resource_mut::<GuidIndex>().0.insert(guid, e);
+        e
+    }
+
+    /// One TAB from a key's body, applied.
+    fn tab(&mut self) {
+        self.app
+            .world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .run_binding("TargetNearestEnemy()")
+            .expect("the key runs");
+        self.bind();
     }
 
     fn over_the_mob(&self) -> Hovered {
@@ -328,4 +363,59 @@ fn an_attacker_acquired_with_the_cursor_up_is_bound() {
     assert_eq!(f.wire(), (vec![Some(MOB)], vec![]));
     assert_eq!(f.selected(), None);
     assert!(!f.cursor_is_up());
+}
+
+/// 1.12.1 stores the cycle's index before `SelectTarget` (`0x4941d4`, `0x4941e6`), so a pick the
+/// cursor took, or refused, is behind the next press. Here the nearest enemy is inside the spell's
+/// minimum range, which the bind refuses with the cursor standing; the second press must go on
+/// to the next, not take the first again.
+#[test]
+fn a_tab_goes_on_past_a_unit_the_cursor_refused() {
+    const TOO_CLOSE: u64 = 0x41;
+    const IN_RANGE: u64 = 0x42;
+    let mut f = fix(false);
+    f.scannable_at(TOO_CLOSE, 3.0);
+    f.scannable_at(IN_RANGE, 20.0);
+    let mut spells = crate::ui_action::Spells::empty_for_tests();
+    spells.catalog = benilla_formats::SpellCatalog::from_displays(
+        [(
+            HEAL,
+            benilla_formats::SpellDisplay {
+                range_index: 114,
+                ..Default::default()
+            },
+        )]
+        .into(),
+    );
+    spells.ranges = benilla_formats::SpellRangeCatalog::from_rows(
+        [(
+            114,
+            benilla_formats::SpellRange {
+                min: 8.0,
+                max: 35.0,
+                flags: 0,
+            },
+        )]
+        .into(),
+    );
+    f.app.world_mut().insert_resource(spells);
+    f.app
+        .world_mut()
+        .insert_non_send_resource(benilla_ui::script::UiScript::new().expect("a VM"));
+    f.cursor_up();
+
+    f.tab();
+    assert_eq!(
+        f.wire(),
+        (vec![], vec![]),
+        "the first pick is too close to bind"
+    );
+    assert!(f.cursor_is_up(), "and the cursor stands");
+    f.tab();
+    assert_eq!(
+        f.wire(),
+        (vec![Some(IN_RANGE)], vec![]),
+        "the second press has moved on to the next"
+    );
+    assert_eq!(f.selected(), Some(OLD), "the target never moved");
 }
