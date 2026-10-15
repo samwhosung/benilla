@@ -17,7 +17,7 @@ use crate::ui_items::{count_of, InventoryScope};
 const ACTION_SLOTS: std::ops::RangeInclusive<u32> = 1..=120;
 
 /// Run the recounts the frame's item notices owe, in their order.
-pub(super) fn recount_item_actions(
+pub(crate) fn recount_item_actions(
     script: Option<NonSendMut<UiScript>>,
     mut notices: MessageReader<ItemNotice>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,

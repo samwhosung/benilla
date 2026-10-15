@@ -109,6 +109,66 @@ impl super::UiScript {
         );
     }
 
+    /// The scans `0x4bfb10` and `0x4bfb60`: the first of our seven slots whose stored item is
+    /// `guid`, with the bag position it was placed from, `(slot, bag, bag_slot)`, 0-based slot;
+    /// none for a zero guid (`0x4bfb1e`). The table outlives a local close, as the reference's
+    /// does (`0xb716d0`).
+    pub fn trade_slot_holding(&self, guid: u64) -> Option<(u8, i64, u32)> {
+        if guid == 0 {
+            return None;
+        }
+        let model = self.model_ref();
+        model
+            .trade_offered
+            .iter()
+            .enumerate()
+            .find_map(|(i, cell)| {
+                cell.as_ref()
+                    .filter(|item| item.guid == guid)
+                    .map(|item| (i as u8, item.bag, item.slot))
+            })
+    }
+
+    /// `0x4bfa70` with a zero item, which `0x4bfb10` runs once the slot's item is gone: the slot
+    /// empties, with no unlock (the item and its lock went together), and
+    /// `TRADE_PLAYER_ITEM_CHANGED(slot)` fires (`0x4bfaef`), now. The app has sent
+    /// `CMSG_CLEAR_TRADE_ITEM`.
+    pub fn empty_trade_slot(&mut self, slot: u8) {
+        let cell = usize::from(slot);
+        if cell >= TRADE_SLOTS {
+            return;
+        }
+        {
+            let mut model = self.model_mut();
+            model.trade_offered[cell] = None;
+            if let Some(trade) = model.trade.as_mut() {
+                trade.player.slots[cell] = None;
+            }
+        }
+        self.fire_event(
+            "TRADE_PLAYER_ITEM_CHANGED",
+            vec![super::ScriptValue::Int(i64::from(slot) + 1)],
+        );
+    }
+
+    /// `0x4bfa70` placing the same item again, which `0x4bfb60` runs when the slot's item
+    /// restacks or takes an enchantment: the slot shows `row`, the item as the getter reads it
+    /// live (`0x4c05d1` reads the object), and `TRADE_PLAYER_ITEM_CHANGED(slot)` fires
+    /// (`0x4bfaef`), now. The app has sent `CMSG_SET_TRADE_ITEM`.
+    pub fn replace_trade_slot(&mut self, slot: u8, row: TradeSlotItem) {
+        let cell = usize::from(slot);
+        if cell >= TRADE_SLOTS {
+            return;
+        }
+        if let Some(trade) = self.model_mut().trade.as_mut() {
+            trade.player.slots[cell] = Some(row);
+        }
+        self.fire_event(
+            "TRADE_PLAYER_ITEM_CHANGED",
+            vec![super::ScriptValue::Int(i64::from(slot) + 1)],
+        );
+    }
+
     /// A placement the app could not send (its bag position has no wire form): the slot gives
     /// the item back, unlocked, as the reference's failed send never writes it (`0x4bfab1`), and
     /// the slot's handler repaints with `TRADE_PLAYER_ITEM_CHANGED`.

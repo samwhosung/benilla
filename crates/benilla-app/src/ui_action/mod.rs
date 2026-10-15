@@ -29,6 +29,7 @@ mod feed_tests;
 mod net;
 mod ranks;
 mod recount;
+pub(crate) use recount::recount_item_actions;
 mod state;
 pub(crate) mod toggle;
 mod weapon_icon;

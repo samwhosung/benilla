@@ -380,6 +380,8 @@ impl Plugin for UiTradePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_cvar);
         net::register(app);
+        // A UI-only harness has no net stack; declaring a message twice is idempotent.
+        app.add_message::<crate::item_watch::ItemNotice>();
         app.init_resource::<TradeSession>()
             .init_resource::<BlockTrades>()
             .add_latched_window::<TradeSession>()
@@ -391,6 +393,11 @@ impl Plugin for UiTradePlugin {
                     // the input pass, with the drain after it, so each lands the same frame. The
                     // latch's watchdog leashes the partner at 14 yd.
                     feed_trade.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
+                    // Each item handler runs the action bar's recount before the trade scan
+                    // (`0x5d94e1` then `0x5d94f0`).
+                    resignal_trade_items
+                        .in_set(crate::ui_unit::UnitFeed)
+                        .after(crate::ui_action::recount_item_actions),
                     // Ahead of the feed, so an accepted partner shows the frame the window opens.
                     answer_trade_request
                         .after(crate::player::ControlRestore)
@@ -564,6 +571,17 @@ fn own_item_at(
     if guid == 0 {
         return None;
     }
+    own_item(guid, count, objects, items, commands)
+}
+
+/// Our item object `guid` as a wire [`TradeItem`] of `count`, with its `ITEM_FIELD_FLAGS`.
+fn own_item(
+    guid: u64,
+    count: u32,
+    objects: &Objects,
+    items: &Items,
+    commands: &NetCommands,
+) -> Option<(TradeItem, u32)> {
     let fields = objects.object(guid)?;
     let entry = fields.object_entry()?;
     let flags = fields.item_flags().unwrap_or(0);
@@ -626,6 +644,74 @@ fn snapshot(
         player: resolve_side(&trade.our, true, items, icons, commands),
         target: resolve_side(&trade.their, false, items, icons, commands),
     })
+}
+
+/// The item watchers' trade half, after the action bar's recount in each handler: an item of
+/// ours that one of our slots holds re-signals the slot (`0x4bfb10`, `0x4bfb60` into `0x4bfa70`).
+/// Gone, the slot clears with `CMSG_CLEAR_TRADE_ITEM` (`0x5d4480`), as a click's clear does;
+/// restacked or enchanted, the same item is placed again with `CMSG_SET_TRADE_ITEM` from the
+/// position it was placed from (`0x5d4380`), which vmangos takes as no change
+/// (`TradeData::SetItem` returns on the same guid), so neither side's accept drops. Neither scan
+/// asks whether a trade is open.
+fn resignal_trade_items(
+    script: Option<NonSendMut<UiScript>>,
+    mut notices: MessageReader<crate::item_watch::ItemNotice>,
+    mut trade: ResMut<TradeSession>,
+    commands: Res<NetCommands>,
+    objects: Objects,
+    items: Res<Items>,
+    icons: Option<Res<ItemDisplays>>,
+) {
+    use crate::item_watch::TradeTouch;
+    let touches: Vec<TradeTouch> = notices
+        .read()
+        .filter_map(crate::item_watch::ItemNotice::trade)
+        .collect();
+    let Some(mut script) = script else {
+        return;
+    };
+    for touch in touches {
+        match touch {
+            TradeTouch::Gone(guid) => {
+                let Some((slot, _, _)) = script.trade_slot_holding(guid) else {
+                    continue;
+                };
+                info!(target: "trade", "item {guid:#x} gone from slot {}; sending CMSG_CLEAR_TRADE_ITEM", slot + 1);
+                let _ = commands
+                    .0
+                    .send(ClientCommand::ClearTradeItem { trade_slot: slot });
+                trade.clear_own_item(u32::from(slot) + 1);
+                script.empty_trade_slot(slot);
+            }
+            TradeTouch::Changed(guid) => {
+                let Some((slot, bag, bag_slot)) = script.trade_slot_holding(guid) else {
+                    continue;
+                };
+                // The send refuses with no active player or no item object (`0x5d43af`,
+                // `0x5d43da`), and then nothing is stored or signalled (`0x4bfab3`).
+                let count = objects
+                    .object(guid)
+                    .and_then(|f| f.item_stack_count())
+                    .unwrap_or(1);
+                let (Some(_), Some((item, flags)), Some((wire_bag, wire_slot))) = (
+                    objects.player(),
+                    own_item(guid, count, &objects, &items, &commands),
+                    crate::ui_items::wire_pos(bag, bag_slot),
+                ) else {
+                    continue;
+                };
+                info!(target: "trade", "item {guid:#x} in slot {} changed; sending CMSG_SET_TRADE_ITEM", slot + 1);
+                let _ = commands.0.send(ClientCommand::SetTradeItem {
+                    trade_slot: slot,
+                    bag: wire_bag,
+                    slot: wire_slot,
+                });
+                let mut row = resolve_slot(&item, &items, icons.as_deref(), &commands);
+                row.object_flags = Some(flags);
+                script.replace_trade_slot(slot, row);
+            }
+        }
+    }
 }
 
 /// Push the trade into the VM and fire its events on a change, diffed against `Local` memory;
@@ -2127,5 +2213,153 @@ mod tests {
                 "TRADE_CLOSED"
             ]
         );
+    }
+
+    /// The offered linen (backpack slot 1, our trade slot 1) as a live item object of ours, with
+    /// our player, the re-signal system ahead of the feed, and the spy's list emptied.
+    fn resignal_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY};
+        use benilla_protocol::ObjectFields;
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = offered_app();
+        app.insert_resource(NetCommands(tx))
+            .add_message::<crate::item_watch::ItemNotice>()
+            .add_systems(Update, resignal_trade_items.before(feed_trade));
+        let world = app.world_mut();
+        crate::items::test_spawn_item(
+            world,
+            LINEN,
+            ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, 2589), (FIELD_ITEM_STACK_COUNT, 1)]),
+            false,
+        );
+        world.spawn(crate::net::SelfPlayer);
+        seen(&mut app);
+        (app, rx)
+    }
+
+    /// The offered linen's guid in [`offered_app`].
+    const LINEN: u64 = 0x4000_0000_0000_2589;
+
+    fn notify(app: &mut App, notice: crate::item_watch::ItemNotice) {
+        app.world_mut()
+            .resource_mut::<Messages<crate::item_watch::ItemNotice>>()
+            .write(notice);
+        app.update();
+    }
+
+    /// `0x4bfb10` from the destroy: the slot holding the item clears on the wire and in the VM,
+    /// and signals once; nothing unlocks, the lock having gone with the item.
+    #[test]
+    fn a_destroyed_offer_clears_its_slot_and_tells_the_server() {
+        let (mut app, rx) = resignal_app();
+        notify(
+            &mut app,
+            crate::item_watch::ItemNotice::Destroyed {
+                guid: LINEN,
+                entry: 2589,
+            },
+        );
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            sent.iter()
+                .any(|c| matches!(c, ClientCommand::ClearTradeItem { trade_slot: 0 })),
+            "CMSG_CLEAR_TRADE_ITEM for slot 1: {sent:?}"
+        );
+        assert_eq!(seen(&mut app), ["TRADE_PLAYER_ITEM_CHANGED"]);
+        let name: Option<String> = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("return (GetTradePlayerItemInfo(1))")
+            .unwrap();
+        assert_eq!(name, None, "the slot is empty");
+        // Another item's destroy, or the same one again, touches no slot.
+        notify(
+            &mut app,
+            crate::item_watch::ItemNotice::Destroyed {
+                guid: LINEN,
+                entry: 2589,
+            },
+        );
+        assert!(rx.try_iter().next().is_none());
+        assert!(seen(&mut app).is_empty());
+    }
+
+    /// `0x4bfb60` from the stack and enchantment watchers: the same item placed again from its
+    /// position, the slot showing the live count, and one signal; a placement of an item that
+    /// is no longer an object sends and signals nothing (`0x5d43da`).
+    #[test]
+    fn a_restacked_offer_is_placed_again_with_its_live_count() {
+        use benilla_protocol::field::FIELD_ITEM_STACK_COUNT;
+        use benilla_protocol::ObjectFields;
+        let (mut app, rx) = resignal_app();
+        let linen = app.world().resource::<GuidIndex>().0[&LINEN];
+        app.world_mut()
+            .get_mut::<ObjectStore>(linen)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[(FIELD_ITEM_STACK_COUNT, 7)]));
+        notify(
+            &mut app,
+            crate::item_watch::ItemNotice::StackCount {
+                guid: LINEN,
+                entry: 2589,
+            },
+        );
+        let sent: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            sent.iter().any(|c| matches!(
+                c,
+                ClientCommand::SetTradeItem {
+                    trade_slot: 0,
+                    bag: 255,
+                    slot: 23
+                }
+            )),
+            "CMSG_SET_TRADE_ITEM from backpack slot 1: {sent:?}"
+        );
+        assert_eq!(seen(&mut app), ["TRADE_PLAYER_ITEM_CHANGED"]);
+        let count: i64 = app
+            .world_mut()
+            .non_send_resource::<UiScript>()
+            .eval("local _, _, n = GetTradePlayerItemInfo(1) return n")
+            .unwrap();
+        assert_eq!(count, 7, "the slot reads the live stack");
+        notify(
+            &mut app,
+            crate::item_watch::ItemNotice::Enchantment {
+                guid: LINEN,
+                entry: 2589,
+            },
+        );
+        assert_eq!(rx.try_iter().count(), 1, "the enchantment places it again");
+        assert_eq!(seen(&mut app), ["TRADE_PLAYER_ITEM_CHANGED"]);
+        app.world_mut().resource_mut::<GuidIndex>().0.remove(&LINEN);
+        notify(
+            &mut app,
+            crate::item_watch::ItemNotice::StackCount {
+                guid: LINEN,
+                entry: 2589,
+            },
+        );
+        assert!(rx.try_iter().next().is_none(), "no item, no send");
+        assert!(seen(&mut app).is_empty());
+    }
+
+    /// Each item handler refreshes the action bar before it scans the trade (`0x5d8798` before
+    /// `0x5d87a7`, `0x5d94e1` before `0x5d94f0`, `0x5d9afd` before `0x5d9b0c`), and the slot's
+    /// signal lands before the feed's push of the column.
+    #[test]
+    fn the_trade_re_signal_follows_the_bar_recount_and_precedes_the_feed() {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        assert!(crate::test_support::runs_before(
+            &mut app,
+            crate::ui_action::recount_item_actions,
+            resignal_trade_items
+        ));
+        assert!(crate::test_support::runs_before(
+            &mut app,
+            resignal_trade_items,
+            feed_trade
+        ));
     }
 }

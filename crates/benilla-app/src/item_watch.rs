@@ -57,6 +57,16 @@ pub(crate) enum ItemNotice {
     Visible { old: u32, new: u32 },
 }
 
+/// What a notice asks of the trade's own column (`0x4bfb10`, `0x4bfb60`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TradeTouch {
+    /// The item is gone: its slot clears (`0x5d87a7`).
+    Gone(u64),
+    /// The item restacked or took an enchantment: its slot is placed again (`0x5d94f0`,
+    /// `0x5d9b0c`).
+    Changed(u64),
+}
+
 impl ItemNotice {
     /// The entries the handler passes to the action bar's `0x4e5c70`, in call order.
     pub(crate) fn recounts(&self) -> Vec<u32> {
@@ -81,6 +91,19 @@ impl ItemNotice {
             Self::Seat { old, new } => old.iter().chain(new.iter()).copied().collect(),
             Self::Bag { entries } => entries.clone(),
             Self::Visible { old, new } => vec![*old, *new],
+        }
+    }
+
+    /// The trade's part, after the action bar's: each handler calls `0x4e5c70` before the trade
+    /// scan (`0x5d8798` then `0x5d87a7`, `0x5d94e1` then `0x5d94f0`, `0x5d9afd` then
+    /// `0x5d9b0c`).
+    pub(crate) fn trade(&self) -> Option<TradeTouch> {
+        match *self {
+            Self::Destroyed { guid, .. } => Some(TradeTouch::Gone(guid)),
+            Self::StackCount { guid, .. } | Self::Enchantment { guid, .. } => {
+                Some(TradeTouch::Changed(guid))
+            }
+            _ => None,
         }
     }
 }
@@ -690,6 +713,7 @@ mod tests {
         w.objects.insert(ARROWS, item(ARROWS_ID, OTHER));
         let gone = w.watch().destroyed(POTION).unwrap();
         assert_eq!(gone.recounts(), [POTION_ID]);
+        assert_eq!(gone.trade(), Some(TradeTouch::Gone(POTION)));
         assert_eq!(w.watch().destroyed(ARROWS), None);
         assert_eq!(w.watch().destroyed(BAG), None);
     }
