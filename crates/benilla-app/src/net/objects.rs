@@ -317,8 +317,14 @@ fn on_object_destroyed(In(ev): In<SessionEvent>, mut sc: Scene) {
 
 /// OUT_OF_RANGE takes the same deactivate as DESTROY in the reference, so a member walking out of
 /// range also gets the snapshot and `CMSG_REQUEST_PARTY_MEMBER_STATS`.
+///
+/// The active player is never released: the reference compares each listed guid with
+/// `ClntObjMgrGetActivePlayer` (`0x465f39` → `0x468550`, `0x465f3e`, `0x465f42`) and jumps past
+/// `0x464920` (`0x465f45` → `0x465f54`), the deactivate included; a player's guid is outside the
+/// second round's types (`0x465f19`, `0x465f28`), so no later pass reaches it.
 fn on_objects_removed(In(ev): In<SessionEvent>, mut sc: Scene) {
-    if let SessionEvent::ObjectsRemoved(guids) = ev {
+    if let SessionEvent::ObjectsRemoved(mut guids) = ev {
+        guids.retain(|g| sc.self_guid.0 != Some(*g));
         for guid in &guids {
             let held = |g: u64| sc.index.0.get(&g).and_then(|e| sc.stores.get(*e).ok());
             crate::ui_party::net::member_deactivated(
@@ -1144,6 +1150,9 @@ fn speed_changed(
         debug!("net: {kind:?} speed change for untracked mover {guid:#x} — nothing to write");
     }
 }
+
+#[cfg(test)]
+mod update_tests;
 
 #[cfg(test)]
 mod tests {
