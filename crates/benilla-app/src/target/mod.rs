@@ -21,6 +21,8 @@ pub(crate) mod click;
 pub(crate) mod cursor_mode;
 mod flash;
 mod front;
+#[cfg(test)]
+mod front_tests;
 mod highlight;
 pub(crate) mod hover;
 mod hover_probe;

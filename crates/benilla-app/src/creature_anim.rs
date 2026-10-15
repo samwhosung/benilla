@@ -276,6 +276,8 @@ pub(crate) struct AttackSeam<'w, 's> {
     pub(crate) ecs: Commands<'w, 's>,
     /// Our own entity.
     pub(crate) me: Query<'w, 's, Entity, With<crate::net::SelfPlayer>>,
+    /// Our own descriptor, for [`Self::player_is_charmed`].
+    self_store: Query<'w, 's, &'static crate::net::ObjectStore, With<crate::net::SelfPlayer>>,
     /// The open loot, which the selection teardown closes when it loots the outgoing target.
     pub(crate) loot: ResMut<'w, crate::ui_loot::LootState>,
     /// The loot latch: the teardown's close drops it, and the right-click loot legs arm it.
@@ -283,6 +285,16 @@ pub(crate) struct AttackSeam<'w, 's> {
 }
 
 impl AttackSeam<'_, '_> {
+    /// `SelectTarget`'s first return (`0x493589`-`0x49359c`): the active player is charmed
+    /// (`UNIT_FIELD_CHARMEDBY`), and whatever the guid, a select and a deselect alike return before
+    /// they touch anything.
+    pub(crate) fn player_is_charmed(&self) -> bool {
+        self.self_store
+            .iter()
+            .next()
+            .is_some_and(|me| me.0.unit_charmed_by().is_some())
+    }
+
     /// The selection teardown's loot close (`0x493910`, `0x493959`–`0x493974`): a window looting
     /// the outgoing selection closes as `CloseLoot` does, its release ahead of anything the new
     /// selection sends. The close's dead-unit deselect (`0x48f369`) targets the selection already

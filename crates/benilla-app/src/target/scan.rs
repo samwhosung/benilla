@@ -456,6 +456,10 @@ pub(super) fn commit(
     self_guid: Option<u64>,
     new_attackable: bool,
 ) -> CommitOutcome {
+    // `SelectTarget`'s charmed return (`0x49359c`) is ahead of everything, for every writer.
+    if seam.player_is_charmed() {
+        return CommitOutcome::default();
+    }
     // `IsSelectable`, before the dedup (`0x4935ec`–`0x4935f3`): a non-selectable unit is a complete
     // no-op that keeps the current target, for every selection writer.
     if !super::relations::is_selectable(target_store, self_guid) {

@@ -84,6 +84,16 @@ pub(crate) struct BindChecks<'w, 's> {
 }
 
 impl BindChecks<'_, '_> {
+    /// `SelectTarget`'s first return (`0x49359c`): the active player is charmed, and the click's
+    /// bind (`0x4935d5`) is never reached.
+    fn player_is_charmed(&self) -> bool {
+        self.self_q
+            .iter()
+            .next()
+            .and_then(|(_, store)| store)
+            .is_some_and(|store| store.0.unit_charmed_by().is_some())
+    }
+
     fn is_self(&self, entity: Entity) -> bool {
         self.self_q
             .iter()

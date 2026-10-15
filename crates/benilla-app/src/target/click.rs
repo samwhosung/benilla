@@ -1506,6 +1506,10 @@ pub(super) fn deselect(
     seam: &mut crate::creature_anim::AttackSeam,
     engaged: bool,
 ) {
+    // Charmed returns before the guid test (`0x49359c`), so a deselect is refused too.
+    if seam.player_is_charmed() {
+        return;
+    }
     if selection.guid.is_some() {
         selection.last = selection.guid;
     }
