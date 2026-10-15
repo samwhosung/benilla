@@ -161,6 +161,7 @@ pub(super) struct BoothEffects {
     pub(super) bone: u16,
     pub(super) offset: Vec3,
     pub(super) emitters: Vec<benilla_assets::ModelEmitter>,
+    pub(super) rig: Option<super::EffectRig>,
 }
 
 /// The in-flight bake's rig: the booth root and its pending [`RigPose`] buffer (`None` for a
@@ -254,6 +255,22 @@ pub(super) fn spawn_booth_effects(
             host.insert(benilla_world::model_fade::ModelFade(instance.alpha));
         }
         let host = host.id();
+        // The model's idle poses the bones its emitters ride, as the world's item does.
+        let mut pose = fx.rig.as_ref().map(|r| {
+            let mut player = AnimationPlayer::default();
+            if let Some(idle) = r.animations.idle_clip() {
+                let active = player.play(idle.node);
+                if idle.looping {
+                    active.repeat();
+                }
+            }
+            commands.entity(host).insert((
+                player,
+                AnimationGraphHandle(r.animations.graph.clone()),
+                r.animations.clone(),
+            ));
+            benilla_world::rig_anim::RigPose::new(host, &r.skeleton).without_camera_billboards()
+        });
         for em in &fx.emitters {
             // A billboard bone in the chain puts the origin at
             // `pivot + camBasis·(position − pivot)`, so a mesh-less `BoothBillboard` at the pivot
@@ -274,7 +291,10 @@ pub(super) fn spawn_booth_effects(
                     frames += 1;
                     (frame, bb.pivot)
                 }
-                None => (host, [0.0; 3]),
+                None => pose
+                    .as_mut()
+                    .and_then(|p| p.anchor_for(commands, host, em.def.bone))
+                    .map_or((host, [0.0; 3]), |anchor| (anchor, em.bone_pivot)),
             };
             let Some(e) = benilla_world::particles::spawn_emitter(
                 commands,
@@ -303,6 +323,9 @@ pub(super) fn spawn_booth_effects(
                     ));
             }
             spawned += 1;
+        }
+        if let Some(pose) = pose {
+            commands.entity(host).insert((pose, super::StageRig));
         }
     }
     (spawned, frames)
@@ -1419,6 +1442,113 @@ mod tests {
                 if follows { "a live" } else { "a still" }
             );
         }
+    }
+
+    /// An effect model with a rig poses its bones by its idle, so its emitter rides its bone's
+    /// anchor on the effect host, as the world's item does.
+    #[test]
+    fn a_rigged_effect_model_poses_the_bone_its_emitter_rides() {
+        let mut app = App::new();
+        app.init_resource::<benilla_world::rig_palette::RigPalettes>();
+        app.init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>();
+        let joint = |parent, local_translation| benilla_assets::ModelJoint {
+            parent,
+            local_translation,
+            billboard: None,
+            parent_arm: None,
+        };
+        let skeleton = benilla_assets::ModelSkeleton {
+            joints: vec![joint(-1, Vec3::ZERO), joint(0, Vec3::Y)],
+            spine_bone: None,
+            head_bone: None,
+        };
+        let animations = benilla_assets::ModelAnimations {
+            graph: Handle::default(),
+            clips: Vec::new(),
+            hand_close: [None, None],
+            playable_animation_lookup: Vec::new(),
+            animation_lookup: Vec::new(),
+            global_bones: Vec::new(),
+            first_seq: None,
+            pose: Default::default(),
+        };
+        let mut em = benilla_assets::ModelEmitter {
+            def: benilla_world::testing::plain_particle_def(),
+            texture: Some(Handle::default()),
+            bone_pivot: [0.0; 3],
+            billboard: None,
+            recursion: None,
+            geometry: None,
+            owner_reach: 0.0,
+            water_bound: (Vec3::ZERO, 0.0),
+            idle_seq: 0,
+        };
+        em.def.bone = 1;
+        let effects = [BoothEffects {
+            bone: 1,
+            offset: Vec3::ZERO,
+            emitters: vec![em],
+            rig: Some(super::super::EffectRig {
+                skeleton: skeleton.clone(),
+                animations,
+            }),
+        }];
+        let ibp = Handle::default();
+
+        let root = app.world_mut().spawn(Transform::IDENTITY).id();
+        let mut palettes = app
+            .world_mut()
+            .remove_resource::<benilla_world::rig_palette::RigPalettes>()
+            .expect("just inserted");
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let spawned = {
+            let mut commands = Commands::new(&mut queue, app.world());
+            let mut rig = spawn_booth_model(
+                &mut commands,
+                &mut palettes,
+                root,
+                RenderLayers::layer(9),
+                &[],
+                &[],
+                Some((&skeleton, &ibp, None)),
+                None,
+                BoothMotion::Frozen,
+                [false, false],
+                &[],
+                BoothInstance::default(),
+            );
+            let (spawned, _) = spawn_booth_effects(
+                &mut commands,
+                &mut rig,
+                &RenderLayers::layer(9),
+                None,
+                &effects,
+                BoothInstance::default(),
+            );
+            rig.finish(&mut commands);
+            spawned
+        };
+        queue.apply(app.world_mut());
+        assert_eq!(spawned, 1);
+
+        let host = app
+            .world_mut()
+            .query_filtered::<Entity, (
+                With<benilla_world::rig_anim::RigPose>,
+                With<AnimationPlayer>,
+                With<super::super::StageRig>,
+            )>()
+            .iter(app.world())
+            .find(|&e| e != root)
+            .expect("the effect host is posed by its idle, outside the world parker");
+        let anchors: Vec<u16> = app
+            .world_mut()
+            .query::<&benilla_world::rig_anim::RigAnchor>()
+            .iter(app.world())
+            .filter(|a| a.rig == host)
+            .map(|a| a.bone)
+            .collect();
+        assert_eq!(anchors, vec![1], "the emitter rides its own bone's anchor");
     }
 
     /// World parts carry `MatAnim` too; their alpha belongs to the world's visibility pass.

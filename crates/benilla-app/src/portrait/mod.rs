@@ -260,6 +260,14 @@ pub(crate) struct PortraitEffects {
     /// The host's offset in the bone's joint frame: the attach point, plus the glow slot's offset.
     pub(crate) offset: Vec3,
     pub(crate) emitters: Vec<benilla_assets::ModelEmitter>,
+    pub(crate) rig: Option<EffectRig>,
+}
+
+/// An effect model's skeleton and idle, for a booth to pose the bones its emitters ride.
+#[derive(Clone)]
+pub(crate) struct EffectRig {
+    pub(crate) skeleton: benilla_assets::ModelSkeleton,
+    pub(crate) animations: benilla_assets::ModelAnimations,
 }
 
 /// A bodiless subject built from the display cache only to be mirrored: how a body booth draws a
@@ -1936,6 +1944,7 @@ fn sync_body_booth(
                 bone: fx.bone,
                 offset: fx.offset,
                 emitters: fx.emitters.clone(),
+                rig: fx.rig.clone(),
             })
             .collect();
         // Never latch a world-lane material into the pane.
@@ -2501,6 +2510,7 @@ mod tests {
                     idle_seq: 0,
                 })
                 .collect(),
+            rig: None,
         }
     }
 

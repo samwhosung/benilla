@@ -700,6 +700,7 @@ pub(crate) struct PreviewEffects {
     pub(crate) bone: u16,
     pub(crate) offset: Vec3,
     pub(crate) emitters: Vec<benilla_assets::ModelEmitter>,
+    pub(crate) rig: Option<super::EffectRig>,
 }
 
 /// The select screen's ghost treatment of the body, applied by the reference at `0x4727f0` for a
@@ -1718,6 +1719,7 @@ pub(super) fn sync_glue_booth(
                 bone: fx.bone,
                 offset: fx.offset,
                 emitters: fx.emitters.clone(),
+                rig: fx.rig.clone(),
             })
             .collect();
         let hung = Hung::of(

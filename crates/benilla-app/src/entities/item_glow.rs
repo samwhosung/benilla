@@ -219,6 +219,7 @@ pub(super) fn attach_item_glows(
                         offset: seat,
                         attach: Some(glow.attach),
                         emitters: dm.emitters.clone(),
+                        rig: None,
                     });
             }
             attach_effect_visuals(

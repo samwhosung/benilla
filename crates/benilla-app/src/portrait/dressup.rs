@@ -280,6 +280,7 @@ pub(super) fn sync_dressup_booth(
                     bone: fx.bone,
                     offset: fx.offset,
                     emitters: fx.emitters.clone(),
+                    rig: fx.rig.clone(),
                 })
                 .collect::<Vec<_>>(),
             BoothInstance::default(),

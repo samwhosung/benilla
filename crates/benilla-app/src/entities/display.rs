@@ -182,6 +182,25 @@ pub(crate) struct DisplayModel {
 }
 
 impl DisplayModel {
+    /// Whether an emitter rides a bone the idle poses: the Corrupted Ashbringer's glow bones carry
+    /// constant turns that set the plane of its XY quads.
+    pub(super) fn poses_emitters(&self) -> bool {
+        !self.skeleton.joints.is_empty()
+            && self.animations.is_some()
+            && self.emitters.iter().any(|e| e.billboard.is_none())
+    }
+
+    /// The skeleton and idle a booth poses this model's emitters with, if they need one.
+    pub(super) fn emitter_rig(&self) -> Option<crate::portrait::EffectRig> {
+        if !self.poses_emitters() {
+            return None;
+        }
+        Some(crate::portrait::EffectRig {
+            skeleton: self.skeleton.clone(),
+            animations: self.animations.clone()?,
+        })
+    }
+
     /// Whether a built part is welded to a billboard bone: it has no rigid placement (the reference
     /// blends it per vertex), so even the item lane must rig for it (seven shoulder models).
     pub(super) fn welds_billboard(&self) -> bool {
