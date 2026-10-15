@@ -2169,4 +2169,47 @@ mod tests {
         assert_eq!(casts(&f), vec![(HEAL, Some(MOB))]);
         assert_eq!(selected(&f), Some(OLD));
     }
+
+    /// `CastBookSpell` (`0x4b3300`) asks `GetTargetingSpellId` (`0x6e48e0`) ahead of the cast and the
+    /// gate: if the book spell is the one awaiting its target, the press stops targeting
+    /// (`StopSpellTargeting`, `0x4b347d`) and casts nothing, a macro's refused one as well. A
+    /// different spell's cursor is not its to stop: the cast goes and the cursor with it.
+    #[test]
+    fn a_book_cast_of_the_spell_awaiting_its_target_stops_targeting() {
+        for lua in [
+            r#"CastSpellByName("Heal")"#,
+            "CastSpell(1, BOOKTYPE_SPELL)",
+            r#"RunScript('CastSpellByName("Heal")')"#,
+            r#"RunScript("CastSpell(1, BOOKTYPE_SPELL)")"#,
+        ] {
+            let mut f = frame(true);
+            with_the_cursor_up(&mut f);
+            let before = f
+                .app
+                .world()
+                .resource::<crate::spell::SpellTargeting>()
+                .aborts();
+            run(&mut f, lua);
+            assert!(!cursor_is_up(&f), "{lua}: the press stopped targeting");
+            assert_eq!(
+                f.app
+                    .world()
+                    .resource::<crate::spell::SpellTargeting>()
+                    .aborts(),
+                before.wrapping_add(1),
+                "{lua}: as a cancel, not a commit"
+            );
+            assert_eq!(casts(&f), vec![], "{lua}: and cast nothing");
+        }
+
+        // Heal's cursor, Ghost Wolf's press: nothing to stop on its account; it casts.
+        let mut f = frame(true);
+        with_ghost_wolf_up(&mut f, false);
+        with_the_cursor_up(&mut f);
+        run(&mut f, r#"CastSpellByName("Ghost Wolf")"#);
+        assert_eq!(
+            casts(&f).iter().map(|c| c.0).collect::<Vec<_>>(),
+            vec![GHOST_WOLF]
+        );
+    }
 }

@@ -453,36 +453,49 @@ fn leading_number(s: &str) -> u32 {
 /// with `onSelf` at the caster.
 pub(crate) fn cast_spell(cast: &mut crate::spell::ScriptCast, spell_id: u32, on_self: bool) {
     let crate::spell::ScriptCast { targeting, ladder } = cast;
-    // `CastSpell`'s two cancel forks (`0x4b3300`), in order: the active-action toggle
-    // (`0x4b36f0`), then the form match (`0x4b348b`), which `UseAction` lacks, with its silent
-    // no-op (`0x4b35cf`).
-    if let (Some(sp), Some(store)) = (ladder.spells.as_ref(), targeting.self_store.iter().next()) {
-        if let Some(d) = sp.catalog.get(spell_id) {
-            if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {
-                debug!("ui_spellbook: cast {spell_id} re-pressed — aura cancels");
+    // `CastSpell`'s three forks ahead of the cast (`0x4b3300`), in order, all ahead of the gate:
+    // the active-action toggle (`0x4b36f0`), the stop of the targeting cursor this spell armed
+    // (`0x4b3474`-`0x4b347d`), then the form match (`0x4b348b`), which `UseAction` lacks, with its
+    // silent no-op (`0x4b35cf`).
+    let catalog_row = ladder
+        .spells
+        .as_ref()
+        .and_then(|sp| Some((sp, targeting.self_store.iter().next()?)))
+        .and_then(|(sp, store)| Some((sp, store, sp.catalog.get(spell_id)?)));
+    if let Some((_, store, d)) = catalog_row {
+        if crate::ui_action::toggle::active_action_toggle(spell_id, d, store) {
+            debug!("ui_spellbook: cast {spell_id} re-pressed — aura cancels");
+            let _ = ladder
+                .commands
+                .0
+                .send(crate::net::ClientCommand::CancelAura { spell_id });
+            return;
+        }
+    }
+    // `GetTargetingSpellId 0x6e48e0` is this spell: the press toggles the cursor off and casts
+    // nothing. Any other spell's cursor is aborted by the cast itself (`TryCast`, `0x6e4d62`).
+    if ladder.ground.spell() == Some(spell_id) {
+        debug!("ui_spellbook: cast {spell_id} re-pressed — targeting toggles off");
+        ladder.ground.cancel();
+        return;
+    }
+    if let Some((sp, store, d)) = catalog_row {
+        let form = store.0.unit_shapeshift_form();
+        let row = sp.forms.get(&u32::from(form));
+        match crate::ui_action::toggle::form_recast_disposition(d, form, row) {
+            Some(true) => {
+                debug!("ui_spellbook: cast {spell_id} — the active form cancels");
                 let _ = ladder
                     .commands
                     .0
                     .send(crate::net::ClientCommand::CancelAura { spell_id });
                 return;
             }
-            let form = store.0.unit_shapeshift_form();
-            let row = sp.forms.get(&u32::from(form));
-            match crate::ui_action::toggle::form_recast_disposition(d, form, row) {
-                Some(true) => {
-                    debug!("ui_spellbook: cast {spell_id} — the active form cancels");
-                    let _ = ladder
-                        .commands
-                        .0
-                        .send(crate::net::ClientCommand::CancelAura { spell_id });
-                    return;
-                }
-                Some(false) => {
-                    debug!("ui_spellbook: cast {spell_id} — non-cancelable form, silent no-op");
-                    return;
-                }
-                None => {}
+            Some(false) => {
+                debug!("ui_spellbook: cast {spell_id} — non-cancelable form, silent no-op");
+                return;
             }
+            None => {}
         }
     }
     debug!(

@@ -253,9 +253,9 @@ pub(crate) fn use_action(
             return UseOutcome::Attack;
         }
         Some(b) if b.kind == ACTION_KIND_SPELL => {
-            // In `UseAction 0x4e5ee0` only: re-pressing the spell whose targeting cursor is
-            // up cancels it before `TryCast` (`GetTargetingSpellId 0x6e48e0`,
-            // `StopTargeting 0x6e4900`). A spellbook re-press aborts and re-enters.
+            // Re-pressing the spell whose targeting cursor is up cancels it before `TryCast`
+            // (`GetTargetingSpellId 0x6e48e0`, `StopTargeting 0x6e4900`), as `CastBookSpell`
+            // does for the spellbook (`0x4b3474`, [`crate::ui_spellbook::cast_spell`]).
             if ladder.ground.spell() == Some(b.action) {
                 debug!(
                     "ui_action: cast {} re-pressed — targeting toggles off",
