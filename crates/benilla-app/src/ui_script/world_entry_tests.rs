@@ -449,7 +449,7 @@ fn sweep_lock_legs(world: &mut World) {
     super::sweep::install_world_leave_sweep(world, |s| {
         s.add_systems((
             crate::ui_loot::close_loot_on_leave_world.in_set(SweepLeg::Loot),
-            crate::ui_merchant::close_merchant_on_leave_world.in_set(SweepLeg::Merchant),
+            crate::ui_merchant::close_core.in_set(SweepLeg::Merchant),
             crate::ui_mail::close_mail_on_leave_world.in_set(SweepLeg::Mail),
             crate::ui_auction::close_auction_on_leave_world.in_set(SweepLeg::Auction),
         ));

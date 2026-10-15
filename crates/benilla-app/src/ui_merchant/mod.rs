@@ -17,7 +17,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, Objects, SelfPlayer};
 use crate::ui_items::{item_link, slot_guid, wire_pos};
 use crate::ui_script::{gate, SweepApp, SweepLeg, UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, sweep_close, NpcSession};
+use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 use benilla_protocol::messages::BAG_PLAYER_INVENTORY;
 
 /// A vendor row's unlimited `current_count` (vmangos `ItemHandler.cpp:795`), `-1` to Lua.
@@ -108,14 +108,14 @@ impl Plugin for UiMerchantPlugin {
         net::register(app);
         app.init_resource::<MerchantOpen>()
             .init_resource::<MerchantErrors>()
-            .add_sweep_leg(SweepLeg::Merchant, close_merchant_on_leave_world)
+            .add_latched_window::<MerchantOpen>()
+            // `0x490ada` → `0x4facc0` → `0x4fadf0`, the core itself.
+            .add_sweep_leg(SweepLeg::Merchant, close_core)
             .add_systems(
                 Update,
                 (
-                    // Range-close first so the clear fires `MERCHANT_CLOSED` the same frame. The
-                    // feed follows `UnitFeed`: `MERCHANT_SHOW`'s paint reads the item and
+                    // After `UnitFeed`: `MERCHANT_SHOW`'s paint reads the item and
                     // player-requirement stores for `GetMerchantItemInfo`'s `isUsable`.
-                    close_npc_session_out_of_range::<MerchantOpen>.before(feed_merchant),
                     feed_merchant.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     // Before `feed_char`: the `UNIT_INVENTORY_CHANGED` a repair fires refreshes the
                     // Repair All button from this total (`PaperDollFrame.lua:717-724`).
@@ -565,7 +565,7 @@ fn snapshot(
 }
 
 /// Push the merchant into the VM and fire its events on a change; show the refusals and push the
-/// purse.
+/// purse. The close is the core's ([`close_core`]).
 fn feed_merchant(
     script: Option<NonSendMut<UiScript>>,
     open: Res<MerchantOpen>,
@@ -580,7 +580,7 @@ fn feed_merchant(
     mut last: crate::ui_script::WindowMemo<Option<MerchantState>>,
     mut last_money: Local<crate::ui_script::VmMemo<Option<u64>>>,
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
-    mut last_vendor: crate::ui_script::WindowMemo<Option<u64>>,
+    mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
     let Some(mut script) = script else {
@@ -589,7 +589,10 @@ fn feed_merchant(
     let last = last.get(&script);
     let last_money = last_money.get(&script);
     let last_name = last_name.get(&script);
-    let last_vendor = last_vendor.get(&script);
+    if closes.since_last(&script, NpcWindow::Merchant) {
+        *last = None;
+        *last_name = None;
+    }
     // Refusals show, and speak, as their message rows say; a silent code has no key.
     let refusals: Vec<_> = errors
         .0
@@ -634,67 +637,63 @@ fn feed_merchant(
         .vendor
         .and_then(|g| names.resolve(g, &commands).map(str::to_string));
     let name_changed = *last_name != vendor_name;
-    // A different vendor while open is a close then an open: `ShowUIPanel` returns early on a
-    // visible frame, so only a hide replays the open sound.
-    let switched = npc_switched(*last_vendor, open.vendor);
-    if fresh == *last && !name_changed && !switched {
+    if fresh == *last && !name_changed {
         return;
     }
     script.set_merchant(fresh.clone());
     let name_arg = || vec![ScriptValue::Str(vendor_name.clone().unwrap_or_default())];
-    if switched {
-        // `MERCHANT_CLOSED` queues a close intent through OnHide; consume it so the drain keeps
-        // the new vendor.
-        script.fire_event("MERCHANT_CLOSED", vec![]);
-        drop_held_vendor_row(&mut script);
-        script.fire_event("MERCHANT_SHOW", name_arg());
-        let _ = script.take_merchant_close();
-    } else {
-        match (&*last, &fresh) {
-            (None, Some(_)) => script.fire_event("MERCHANT_SHOW", name_arg()),
-            // A change while open: an item or the name landed, or the stock moved.
-            (Some(_), Some(_)) => script.fire_event("MERCHANT_UPDATE", name_arg()),
-            // `CloseMerchant` (`0x4fb120`) and the walk-away (`0x4933f8`) share the close core
-            // `0x4fadf0`, the leave-world sweep's too.
-            (Some(_), None) => {
-                script.fire_event("MERCHANT_CLOSED", vec![]);
-                drop_held_vendor_row(&mut script);
-            }
-            (None, None) => {}
-        }
+    match (&*last, &fresh) {
+        (None, Some(_)) => script.fire_event("MERCHANT_SHOW", name_arg()),
+        // A change while open: an item or the name landed, or the stock moved.
+        (Some(_), Some(_)) => script.fire_event("MERCHANT_UPDATE", name_arg()),
+        // The core told the VM; a disconnect's clear tells it nothing.
+        (Some(_), None) | (None, None) => {}
     }
     *last = fresh;
     *last_name = vendor_name;
-    *last_vendor = open.vendor;
 }
 
-/// The range guard closes the window, as `CloseMerchant` does, when the vendor is out of range or
-/// gone.
-impl NpcSession for MerchantOpen {
-    fn npc(&self) -> Option<u64> {
+/// The vendor's cell `[0xbddfa0]`; `CloseMerchant` (`0x4fb120`) is the core itself.
+impl LatchedWindow for MerchantOpen {
+    const WINDOW: NpcWindow = NpcWindow::Merchant;
+
+    fn cell(&self) -> Option<u64> {
         self.vendor
     }
 
-    fn close(&mut self) {
-        self.clear();
+    fn dispatched(world: &mut World) {
+        close_core(world);
+    }
+
+    fn take_close_verb(script: &mut UiScript) -> bool {
+        script.take_merchant_close()
     }
 }
 
-/// The leave-world sweep's merchant leg (`0x490ada` → `0x4facc0` → `0x4fadf0`): an open window
-/// closes with `MERCHANT_CLOSED` (`0x4fae2c`) in the VM the sweep runs in, then the close core's
-/// tail ([`drop_held_vendor_row`]).
-pub(crate) fn close_merchant_on_leave_world(
-    script: Option<NonSendMut<UiScript>>,
-    mut open: ResMut<MerchantOpen>,
-) {
-    if sweep_close(&mut *open).is_none() {
+/// The close core `0x4fadf0`, every close's: with a vendor open, the latch release (`0x4fae04`),
+/// the cell cleared, `MERCHANT_CLOSED` (`0x4fae2c`), then the tail ([`drop_held_vendor_row`]).
+/// The leave-world sweep's leg (`0x490ada` → `0x4facc0`) calls it as it is.
+pub(crate) fn close_core(world: &mut World) {
+    let Some(vendor) = world.resource::<MerchantOpen>().vendor else {
         return;
-    }
-    if let Some(mut script) = script {
+    };
+    crate::ui_session::release(world, vendor);
+    world.resource_mut::<MerchantOpen>().clear();
+    crate::ui_session::note_closed(world, NpcWindow::Merchant);
+    crate::ui_session::fire(world, |script| {
         script.set_merchant(None);
         script.fire_event("MERCHANT_CLOSED", vec![]);
-        drop_held_vendor_row(&mut script);
-    }
+        drop_held_vendor_row(script);
+    });
+}
+
+/// `SMSG_LIST_INVENTORY` opens the window on the vendor's rows (`0x4facf0`): it registers on the
+/// latch first with no test of its own cell (`0x4fad40`), so a list from the open vendor closes
+/// it and opens it again, then writes the cell (`0x4fad4b`).
+pub(crate) fn open_merchant(world: &mut World, vendor: u64, items: Vec<VendorItem>) {
+    debug!("net: vendor {vendor:#x} listed {} items", items.len());
+    crate::ui_session::register(world, vendor);
+    world.resource_mut::<MerchantOpen>().open(vendor, items);
 }
 
 /// The close core's tail (`0x4fadf0`, every close's): a vendor row held on the cursor, mode 5 with
@@ -714,11 +713,12 @@ fn drop_held_vendor_row(script: &mut UiScript) {
 /// 0 when the purse covers the worn gear, and a close clears locally, as there is no close packet.
 fn drain_merchant(
     script: Option<NonSendMut<UiScript>>,
-    mut open: ResMut<MerchantOpen>,
+    open: Res<MerchantOpen>,
     commands: Res<NetCommands>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     objects: Objects,
     mut purse: RepairPurse,
+    mut commands_q: Commands,
 ) {
     let Some(mut script) = script else {
         return;
@@ -826,7 +826,7 @@ fn drain_merchant(
     }
     if script.take_merchant_close() {
         debug!("ui_merchant: client-side close (no packet)");
-        open.clear();
+        crate::ui_session::queue(&mut commands_q, close_core);
     }
 }
 

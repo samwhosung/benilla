@@ -1,6 +1,5 @@
 //! The vendor window's packet handlers: they fill [`MerchantOpen`] and [`MerchantErrors`].
 
-use benilla_protocol::messages::VendorItem;
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
@@ -17,9 +16,9 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-fn on_inventory(In(ev): In<SessionEvent>, mut merchant: ResMut<MerchantOpen>) {
+fn on_inventory(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::VendorInventory { vendor, items } = ev {
-        vendor_inventory(vendor, items, &mut merchant);
+        commands.queue(move |world: &mut World| super::open_merchant(world, vendor, items));
     }
 }
 
@@ -66,12 +65,6 @@ fn on_sell_failed(
 /// The vendor window closes with the connection.
 fn on_session_end(In(_): In<SessionEvent>, mut merchant: ResMut<MerchantOpen>) {
     merchant.clear_session();
-}
-
-/// `SMSG_LIST_INVENTORY` opens the window on the vendor's rows.
-fn vendor_inventory(vendor: u64, items: Vec<VendorItem>, merchant: &mut MerchantOpen) {
-    debug!("net: vendor {vendor:#x} listed {} items", items.len());
-    merchant.open(vendor, items);
 }
 
 /// `SMSG_BUY_ITEM`'s new stock count, applied only to the open vendor.

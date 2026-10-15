@@ -1,6 +1,6 @@
-//! The NPC-session range guard: a window bound to a live NPC (merchant, gossip, questgiver and the
-//! rest) closes client-side, sending nothing as 1.12 does, when the player walks out of range or
-//! the NPC despawns; the window's feed then fires its `*_CLOSED`.
+//! The NPC interaction: the latch every NPC window registers on and closes through ([`latch`]),
+//! the `"npc"` unit it publishes ([`InteractNpc`]), and the range guard of the questions that keep
+//! a guid of their own ([`NpcSession`]).
 //!
 //! The reference's watchdog is `0x493230`, run every frame from `CGWorldFrame`'s layer update. The
 //! NPC range is the cursor's own 50/9 yd service gate ([`SERVICE_RANGE_SQ`], 5.5556 yd centre to
@@ -8,51 +8,74 @@
 
 use bevy::prelude::*;
 
-use crate::net::{ClientCommand, GuidIndex, NetCommands, SelfPlayer};
+use crate::net::{GuidIndex, NetHandlerApp, SelfPlayer};
 use crate::target::SERVICE_RANGE_SQ;
+use crate::ui_script::SweepApp;
+use benilla_protocol::SessionEventKind;
 use benilla_world::schedule::WorldStage;
 
-/// Owns [`InteractNpc`] and its feed, read by the `"npc"` portrait and the interaction face-me.
+mod latch;
+#[cfg(test)]
+mod latch_tests;
+
+pub(crate) use latch::{
+    dispatch, fire, note_closed, queue, register, release, with_script, CoreCloses, InteractLatch,
+    LatchApp, LatchedWindow, NpcWindow,
+};
+
+/// Owns [`InteractLatch`], its watchdog and [`InteractNpc`], read by the `"npc"` portrait and the
+/// interaction face-me.
 pub(crate) struct UiSessionPlugin;
 
 impl Plugin for UiSessionPlugin {
     fn build(&self, app: &mut App) {
-        // Inside the net chain, after the apply pass that opens and swaps sessions and before the
-        // facing chain: a `MERCHANT_SHOW` handler reads `UnitName("NPC")` the frame it opens.
-        app.init_resource::<InteractNpc>().add_systems(
-            Update,
-            feed_interact_npc
-                .in_set(WorldStage::Net)
-                .after(crate::net::apply_net_updates)
-                .before(crate::net::drive_display_facing),
-        );
+        app.init_resource::<InteractLatch>()
+            .init_resource::<InteractNpc>()
+            .net_handler(
+                SessionEventKind::Disconnected,
+                latch::clear_latch_on_session_end,
+            )
+            // `0x490b5f` → `0x493310`: whatever window still holds the latch past
+            // `PLAYER_LEAVING_WORLD` closes through the dispatcher.
+            // The trade partner's arm is tested before the bank's (`0x49335f`, `0x493449`).
+            .add_sweep_leg(
+                crate::ui_script::SweepLeg::Interaction,
+                dispatch.after(crate::ui_trade::close_trade_on_leave_world),
+            )
+            .add_systems(
+                Update,
+                (
+                    // Before the feeds, so a walk-away's `*_CLOSED` lands the frame it happens.
+                    latch::watch_interaction_range.before(crate::ui_script::UiFeed),
+                    // Inside the net chain, after the apply pass that opens and closes windows
+                    // and before the facing chain: a `MERCHANT_SHOW` handler reads
+                    // `UnitName("NPC")` the frame it opens.
+                    feed_interact_npc
+                        .in_set(WorldStage::Net)
+                        .after(crate::net::apply_net_updates)
+                        .before(crate::net::drive_display_facing),
+                ),
+            );
     }
 }
 
-/// A UI session bound to a live NPC, or a GameObject for the mailbox: what the range guard closes.
-/// The binder and talent-wipe questions are sessions too, as the reference re-runs its
-/// interact-range test against a latched guid. Each NPC window registers
-/// [`close_npc_session_out_of_range::<T>`] ahead of its feed so the close fires its `*_CLOSED` the
-/// same frame; trade does not, as its cancel is server-driven.
+/// A window or question bound to a live NPC that keeps its own guid off the latch, and closes
+/// itself through [`close_npc_session_out_of_range::<T>`] ahead of its feed: the binder and
+/// talent-wipe questions and the pet trainer's, as the reference re-runs its interact-range test
+/// against each one's latched guid, and the windows not yet on [`InteractLatch`] (trade, the
+/// registrar, the tabard designer, the mailbox and the auction house).
 pub(crate) trait NpcSession: Resource {
-    /// The bound NPC's guid; `None` when no window is open.
+    /// The bound NPC's guid; `None` when nothing is open.
     fn npc(&self) -> Option<u64>;
-    /// The window's client-side close, with no packet: the same clear its close button does.
+    /// The client-side close, with no packet.
     fn close(&mut self);
-    /// What a walk-away close sends first, if anything. The reference's watchdog (`0x4933da`)
-    /// calls the quest session's end (`0x501130`) directly, not `DeclineQuest`, so walking away
-    /// from an NPC's quest panel sends nothing, while a shared quest still owes the sharer
-    /// `MSG_QUEST_PUSH_RESULT{DECLINE_QUEST}`.
-    fn walk_away_send(&self, _npc: u64) -> Option<ClientCommand> {
-        None
-    }
 }
 
 /// The walk-away leash, set by the latched object's type, not the window: the reference's
 /// `0x4930d0` stores the opener's range and overwrites it for an object with the PLAYER typemask
 /// bit (`0x493156`). Thirteen of the client's fourteen arming sites push 50/9 yd
 /// ([`SERVICE_RANGE_SQ`]); a player gets `10.0 + 4.0 = 14.0` yd (`[0x8044b0] + [0x80306c]`,
-/// squared at `0x49316d`), which here means a shared quest's sharer.
+/// squared at `0x49316d`), which here means a shared quest's sharer or a trade partner.
 fn leash_sq(npc: u64) -> f32 {
     if benilla_protocol::guid::is_player(npc) {
         PLAYER_LEASH_SQ
@@ -64,19 +87,25 @@ fn leash_sq(npc: u64) -> f32 {
 /// `14.0²`, the leash for a session latched onto a player.
 const PLAYER_LEASH_SQ: f32 = 196.0;
 
-/// Whether an open NPC window switched to a different NPC (`Some(a)` to `Some(b)`). Stock
-/// `ShowUIPanel` returns early for a visible frame (`UIParent.lua:650`), so the client fires
-/// `*_CLOSED` then `*_SHOW`, both sounds; each feed does the same, then consumes the close intent
-/// its own `*_CLOSED` queued so the drain does not wipe the new session.
+/// Whether a window off the latch switched to a different NPC (`Some(a)` to `Some(b)`): its feed
+/// fires `*_CLOSED` then `*_SHOW`, then consumes the close intent its own `*_CLOSED` queued so the
+/// drain does not wipe the new session. A window on the latch closes through its core instead.
 pub(crate) fn npc_switched(prev: Option<u64>, now: Option<u64>) -> bool {
     matches!((prev, now), (Some(a), Some(b)) if a != b)
 }
 
-/// Close `T`'s open session when the player leaves the leash or the NPC despawns.
+/// Close `T`'s open session as its leave-world sweep leg does, client-side with no packet: the
+/// NPC it was bound to, or `None` when nothing was open. The leg then tells the VM.
+pub(crate) fn sweep_close<T: NpcSession>(session: &mut T) -> Option<u64> {
+    let npc = session.npc()?;
+    session.close();
+    Some(npc)
+}
+
+/// Close `T`'s open question when the player leaves the leash or the NPC despawns.
 pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
     mut session: ResMut<T>,
     index: Res<GuidIndex>,
-    commands: Res<NetCommands>,
     self_q: Query<&Transform, With<SelfPlayer>>,
     transforms: Query<&Transform>,
 ) {
@@ -88,63 +117,41 @@ pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
     // compare (`0x4932f2`, `0x4932fe`).
     let out = match index.0.get(&npc).and_then(|e| transforms.get(*e).ok()) {
         Some(tf) => tf.translation.distance_squared(self_tf.translation) > leash_sq(npc),
-        None => true, // the NPC despawned out from under the window
+        None => true, // the NPC despawned out from under the question
     };
     if out {
         debug!("ui_session: NPC {npc:#x} out of range/gone — client-side close");
-        if let Some(cmd) = session.walk_away_send(npc) {
-            let _ = commands.0.send(cmd);
-        }
         session.close();
     }
 }
 
-/// Close `T`'s open session as its leave-world sweep leg does, client-side with no packet: the
-/// NPC it was bound to, or `None` when nothing was open. The leg then tells the VM.
-pub(crate) fn sweep_close<T: NpcSession>(session: &mut T) -> Option<u64> {
-    let npc = session.npc()?;
-    session.close();
-    Some(npc)
-}
-
-/// The `"npc"` unit: the open [`NpcSession`]'s world entity and guid, read by the portrait booth
-/// as it reads [`crate::target::Selection`] for `"target"`. Only one session is open in play.
-#[derive(Resource, Default, PartialEq, Eq)]
+/// The `"npc"` unit: the latched object's world entity and guid, read by the portrait booth as it
+/// reads [`crate::target::Selection`] for `"target"`.
+#[derive(Resource, Default, PartialEq, Eq, Debug)]
 pub(crate) struct InteractNpc(pub(crate) Option<Entity>, pub(crate) Option<u64>);
 
-/// Collapse the portrait-bound sessions into [`InteractNpc`]: they are mutually exclusive, so the
-/// first open one in the chain wins. `Option<Res<_>>` lets a test mount it without every window.
+/// Publish the latch as [`InteractNpc`]. The reference's `"npc"` is the latch itself (`0x515c00`),
+/// but a quest panel opened from a bag item publishes none here: there is no unit bake for an
+/// item. The windows not yet on the latch follow it, as before them. `Option<Res<_>>` lets a test mount it without every window.
+#[allow(clippy::too_many_arguments)] // one Bevy system's full input set
 pub(crate) fn feed_interact_npc(
-    gossip: Option<Res<crate::ui_gossip::GossipState>>,
-    quest: Option<Res<crate::ui_quest::QuestGiver>>,
-    merchant: Option<Res<crate::ui_merchant::MerchantOpen>>,
-    trainer: Option<Res<crate::ui_trainer::TrainerOpen>>,
-    taxi: Option<Res<crate::ui_taxi::TaxiState>>,
+    latch: Option<Res<InteractLatch>>,
     // Trade's "npc" is the partner, a live player.
     trade: Option<Res<crate::ui_trade::TradeSession>>,
-    bank: Option<Res<crate::ui_bank::BankOpen>>,
     auction: Option<Res<crate::ui_auction::AuctionOpen>>,
-    // Not covered by the gossip arm: vmangos closes the gossip menu before it sends
-    // `SMSG_PETITION_SHOWLIST` (`Player.cpp:12428-12431`).
+    // vmangos closes the gossip menu before it sends `SMSG_PETITION_SHOWLIST`
+    // (`Player.cpp:12428-12431`).
     registrar: Option<Res<crate::ui_petition::GuildRegistrarState>>,
-    // A menuless stable master is asked for its list straight from the interact, the reference's
-    // `0x5f05bc` path, with no gossip session behind it.
-    stable: Option<Res<crate::ui_stable::StableOpen>>,
     tabard: Option<Res<crate::ui_tabard::TabardOpen>>,
     index: Option<Res<GuidIndex>>,
     mut out: ResMut<InteractNpc>,
 ) {
-    let guid = gossip
-        .and_then(|s| s.npc())
-        .or_else(|| quest.and_then(|s| s.npc()))
-        .or_else(|| merchant.and_then(|s| s.npc()))
-        .or_else(|| trainer.and_then(|s| s.npc()))
-        .or_else(|| taxi.and_then(|s| s.npc()))
+    let guid = latch
+        .and_then(|l| l.guid())
+        .filter(|&g| !benilla_protocol::guid::is_item(g))
         .or_else(|| trade.and_then(|s| s.npc()))
-        .or_else(|| bank.and_then(|s| s.npc()))
         .or_else(|| auction.and_then(|s| s.npc()))
         .or_else(|| registrar.and_then(|s| s.npc()))
-        .or_else(|| stable.and_then(|s| s.npc()))
         .or_else(|| tabard.and_then(|s| s.npc()));
     // Field 0 is the entity the booth bakes and the facing chain steers by; field 1 is the guid
     // `crate::ui_unit` names the token by, which holds even when the entity is not streamed.
@@ -159,51 +166,57 @@ pub(crate) fn feed_interact_npc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::NetCommands;
     use crate::ui_merchant::MerchantOpen;
 
     /// A `HIGHGUID_UNIT` guid: a bare `0x42` would be a player's (`guid::is_player`) and get the
     /// 14 yd leash.
     const VENDOR: u64 = 0xF130_0000_0000_0042;
 
-    #[test]
-    fn out_of_range_or_despawned_npc_closes_the_session() {
+    /// An app with `T`'s window on the latch, its watchdog, the player at the origin and `guid`'s
+    /// object `dist` yd down the x axis.
+    fn latched_app<T: LatchedWindow + Default>(guid: u64, dist: f32) -> (App, Entity) {
         let mut app = App::new();
-        app.init_resource::<MerchantOpen>();
-        app.init_resource::<GuidIndex>();
-        // The merchant owes no walk-away send, but the system needs the channel.
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        app.insert_resource(NetCommands(tx));
-        app.add_systems(Update, close_npc_session_out_of_range::<MerchantOpen>);
+        app.init_resource::<T>()
+            .init_resource::<GuidIndex>()
+            .add_latched_window::<T>()
+            .add_systems(Update, latch::watch_interaction_range);
         app.world_mut()
             .spawn((SelfPlayer, Transform::from_xyz(0.0, 0.0, 0.0)));
-        let vendor = app
+        let e = app
             .world_mut()
-            .spawn(Transform::from_xyz(5.0, 0.0, 0.0))
+            .spawn(Transform::from_xyz(dist, 0.0, 0.0))
             .id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
             .0
-            .insert(VENDOR, vendor);
+            .insert(guid, e);
+        (app, e)
+    }
+
+    /// The watchdog `0x493230` closes the latched window when its NPC leaves the 50/9 yd service
+    /// gate or despawns, and leaves it inside the gate (`dist² <= leash²`).
+    #[test]
+    fn out_of_range_or_despawned_npc_closes_the_latched_window() {
+        let (mut app, vendor) = latched_app::<MerchantOpen>(VENDOR, 5.0);
+        crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, vec![]);
 
         // 5.0 yd < the 5.5556 yd service gate: stays open.
-        app.world_mut()
-            .resource_mut::<MerchantOpen>()
-            .open(VENDOR, vec![]);
         app.update();
         assert!(app.world().resource::<MerchantOpen>().is_open());
+        assert_eq!(app.world().resource::<InteractLatch>().guid(), Some(VENDOR));
 
-        // 6 yd: past the gate, so it closes.
+        // 6 yd: past the gate, so it closes, and the latch with it.
         *app.world_mut()
             .entity_mut(vendor)
             .get_mut::<Transform>()
             .unwrap() = Transform::from_xyz(6.0, 0.0, 0.0);
         app.update();
         assert!(!app.world().resource::<MerchantOpen>().is_open());
+        assert_eq!(app.world().resource::<InteractLatch>().guid(), None);
 
         // Re-open, then the NPC despawns out from under the window: closes too.
-        app.world_mut()
-            .resource_mut::<MerchantOpen>()
-            .open(VENDOR, vec![]);
+        crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, vec![]);
         app.world_mut()
             .resource_mut::<GuidIndex>()
             .0
@@ -213,7 +226,8 @@ mod tests {
     }
 
     /// A player-latched quest panel is leashed at 14 yd and an NPC-latched one at 5.56 yd; walking
-    /// away from a share still declines it, from an NPC's panel it sends nothing.
+    /// away from a share still declines it (`0x4933d3` → `0x501130(0, 1)`), from an NPC's panel
+    /// it sends nothing.
     #[test]
     fn the_walk_away_leash_is_the_givers_own_and_a_share_still_answers() {
         use crate::ui_quest::{QuestGiver, QuestView};
@@ -236,27 +250,13 @@ mod tests {
         const SHARER: u64 = 0x0000_0000_0000_002A; // HIGHGUID_PLAYER: a zero high word
         const NPC: u64 = 0xF130_0000_0000_0007; // HIGHGUID_UNIT
 
-        /// One guard pass with the panel on `giver` at `dist` yd: whether it stays, what is sent.
-        fn walk(giver: u64, dist: f32) -> (bool, Vec<ClientCommand>) {
+        /// One watchdog pass with the panel on `giver` at `dist` yd: whether it stays, what is
+        /// sent.
+        fn walk(giver: u64, dist: f32) -> (bool, Vec<crate::net::ClientCommand>) {
             let (tx, rx) = crossbeam_channel::unbounded();
-            let mut app = App::new();
+            let (mut app, _) = latched_app::<QuestGiver>(giver, dist);
             app.insert_resource(NetCommands(tx));
-            app.init_resource::<QuestGiver>();
-            app.init_resource::<GuidIndex>();
-            app.add_systems(Update, close_npc_session_out_of_range::<QuestGiver>);
-            app.world_mut()
-                .spawn((SelfPlayer, Transform::from_xyz(0.0, 0.0, 0.0)));
-            let e = app
-                .world_mut()
-                .spawn(Transform::from_xyz(dist, 0.0, 0.0))
-                .id();
-            app.world_mut()
-                .resource_mut::<GuidIndex>()
-                .0
-                .insert(giver, e);
-            app.world_mut()
-                .resource_mut::<QuestGiver>()
-                .open(giver, detail(giver));
+            crate::ui_quest::open_panel(app.world_mut(), giver, detail(giver));
             app.update();
             (
                 app.world().resource::<QuestGiver>().is_open(),
@@ -275,7 +275,7 @@ mod tests {
         assert!(
             matches!(
                 sent.as_slice(),
-                [ClientCommand::QuestPushResult {
+                [crate::net::ClientCommand::QuestPushResult {
                     sharer: SHARER,
                     msg: benilla_protocol::messages::QuestShareMsg::DECLINE_QUEST,
                 }]
@@ -293,17 +293,21 @@ mod tests {
 
         // Boundary-inclusive: exactly on the leash keeps the window (`dist² <= leash²`).
         assert!(walk(SHARER, 14.0).0, "14.0 yd exactly is still in range");
+
+        // A quest-starter item is never leashed (`0x4932b5`): its panel stays however far.
+        const ITEM: u64 = 0x4000_0000_0000_0BAD; // HIGHGUID_ITEM
+        assert!(
+            walk(ITEM, 100.0).0,
+            "an item's panel is never walked away from"
+        );
     }
 
-    /// No window is `None`, an unstreamed NPC is `None` and never a stale entity, and gossip wins
-    /// the chain when two sessions hold a guid (the same NPC on a browse-goods hop).
+    /// No latch is `None`, an unstreamed NPC is `None` and never a stale entity, an item's quest
+    /// panel publishes none, and a window off the latch still publishes its own.
     #[test]
-    fn interact_npc_resolves_the_open_session_to_its_entity() {
-        use crate::ui_gossip::GossipState;
-
+    fn interact_npc_publishes_the_latch_as_its_entity() {
         let mut app = App::new();
-        app.init_resource::<GossipState>();
-        app.init_resource::<MerchantOpen>();
+        app.init_resource::<InteractLatch>();
         app.init_resource::<GuidIndex>();
         app.init_resource::<InteractNpc>();
         app.add_systems(Update, feed_interact_npc);
@@ -318,24 +322,34 @@ mod tests {
         assert_eq!(app.world().resource::<InteractNpc>().0, None);
 
         app.world_mut()
-            .resource_mut::<MerchantOpen>()
-            .open(VENDOR, vec![]);
+            .resource_mut::<InteractLatch>()
+            .latch_for_test(VENDOR);
         app.update();
-        assert_eq!(app.world().resource::<InteractNpc>().0, Some(npc));
+        assert_eq!(
+            *app.world().resource::<InteractNpc>(),
+            InteractNpc(Some(npc), Some(VENDOR))
+        );
 
-        // A browse-goods hop: gossip holds the same guid and wins the chain.
-        app.world_mut().resource_mut::<GossipState>().npc = Some(VENDOR);
-        app.update();
-        assert_eq!(app.world().resource::<InteractNpc>().0, Some(npc));
-
-        // A guid with no index entry, an NPC not streamed.
-        app.world_mut().resource_mut::<GossipState>().npc = Some(0xdead);
+        // A guid with no index entry, an NPC not streamed: the guid names the token, no entity.
+        app.world_mut()
+            .resource_mut::<InteractLatch>()
+            .latch_for_test(0xF130_0000_0000_DEAD);
         app.update();
         assert_eq!(app.world().resource::<InteractNpc>().0, None);
 
-        // A session missing from the chain renders a black disc where the NPC's face goes.
-        app.world_mut().resource_mut::<GossipState>().npc = None;
-        app.world_mut().resource_mut::<MerchantOpen>().close();
+        // A quest-starter item holds the latch: no unit to name.
+        const ITEM: u64 = 0x4000_0000_0000_0BAD;
+        app.world_mut()
+            .resource_mut::<InteractLatch>()
+            .latch_for_test(ITEM);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<InteractNpc>(),
+            InteractNpc(None, None)
+        );
+
+        // The latch clear, a window off it (the auctioneer) publishes its own.
+        dispatch(app.world_mut());
         app.init_resource::<crate::ui_auction::AuctionOpen>();
         app.world_mut()
             .resource_mut::<crate::ui_auction::AuctionOpen>()
@@ -346,30 +360,6 @@ mod tests {
             Some(npc),
             "the auctioneer's own portrait"
         );
-
-        app.world_mut()
-            .resource_mut::<crate::ui_auction::AuctionOpen>()
-            .clear();
-
-        // The stable master: no gossip session carries it.
-        app.init_resource::<crate::ui_stable::StableOpen>();
-        app.world_mut()
-            .resource_mut::<crate::ui_stable::StableOpen>()
-            .open(VENDOR, 2, vec![]);
-        app.update();
-        assert_eq!(
-            app.world().resource::<InteractNpc>().0,
-            Some(npc),
-            "the stable master's own portrait"
-        );
-
-        app.world_mut().resource_mut::<GossipState>().close();
-        app.world_mut().resource_mut::<MerchantOpen>().close();
-        app.world_mut()
-            .resource_mut::<crate::ui_stable::StableOpen>()
-            .clear();
-        app.update();
-        assert_eq!(app.world().resource::<InteractNpc>().0, None);
     }
 
     /// Every `NpcSession` implementor in the app's sources must be in [`feed_interact_npc`]'s

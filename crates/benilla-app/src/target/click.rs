@@ -157,7 +157,7 @@ pub(crate) struct ServiceArms<'w> {
 /// The re-click gate (`0x5f0251`), before the ladder: a right-click on the NPC whose window is
 /// open (`[0xb4e2d0]`) does nothing, no packet, no error, no gesture. The reference arms that NPC
 /// only from window openers (`0x4930d0`, cleared at `0x493310`), never on the click, the set
-/// [`crate::ui_session::feed_interact_npc`] collapses (less the mailbox and text reader).
+/// [`crate::ui_session::feed_interact_npc`] publishes.
 fn interaction_already_open_on(target: u64, interact: &crate::ui_session::InteractNpc) -> bool {
     interact.1 == Some(target)
 }
@@ -1941,21 +1941,30 @@ mod tests {
         assert!(!interaction_already_open_on(NPC, &idle));
         assert!(!interaction_already_open_on(OTHER, &idle));
 
-        // One opener per family (a menu, a quest panel, a specialized window) arms its own NPC.
+        // One opener per family (a menu, a quest panel, a specialized window) arms its own NPC,
+        // through the latch it registers on (`0x4930d0`).
         let with_gossip = armed(&|w| {
-            let mut g = crate::ui_gossip::GossipState::default();
-            g.npc = Some(NPC);
-            w.insert_resource(g);
+            w.init_resource::<crate::ui_gossip::GossipState>();
+            crate::ui_session::register(w, NPC);
+            w.resource_mut::<crate::ui_gossip::GossipState>().npc = Some(NPC);
         });
         let with_quest = armed(&|w| {
-            let mut q = crate::ui_quest::QuestGiver::default();
-            q.npc = Some(NPC);
-            w.insert_resource(q);
+            w.init_resource::<crate::ui_quest::QuestGiver>();
+            crate::ui_quest::open_panel(
+                w,
+                NPC,
+                crate::ui_quest::QuestView::Greeting(benilla_protocol::messages::QuestGiverList {
+                    npc: NPC,
+                    greeting: String::new(),
+                    emote_delay: 0,
+                    emote: 0,
+                    quests: Vec::new(),
+                }),
+            );
         });
         let with_trainer = armed(&|w| {
-            let mut t = crate::ui_trainer::TrainerOpen::default();
-            t.open(NPC, 0, Vec::new(), String::new());
-            w.insert_resource(t);
+            w.init_resource::<crate::ui_trainer::TrainerOpen>();
+            crate::ui_trainer::open_trainer(w, NPC, 0, Vec::new(), String::new());
         });
         for (what, armed) in [
             ("gossip", &with_gossip),
@@ -1977,10 +1986,9 @@ mod tests {
 
         // Closing the window disarms it, as the reference's `0x493310` zeroes the pair.
         let closed = armed(&|w| {
-            let mut t = crate::ui_trainer::TrainerOpen::default();
-            t.open(NPC, 0, Vec::new(), String::new());
-            t.clear();
-            w.insert_resource(t);
+            w.init_resource::<crate::ui_trainer::TrainerOpen>();
+            crate::ui_trainer::open_trainer(w, NPC, 0, Vec::new(), String::new());
+            crate::ui_trainer::close_core(w);
         });
         assert_eq!(closed.1, None);
         assert!(!interaction_already_open_on(NPC, &closed));

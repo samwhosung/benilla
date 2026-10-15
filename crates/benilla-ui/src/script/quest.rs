@@ -148,6 +148,15 @@ impl super::UiScript {
     pub fn take_quest_actions(&mut self) -> Vec<QuestAction> {
         std::mem::take(&mut self.model_mut().quest_actions)
     }
+
+    /// Take the `CloseQuest()` calls queued since the last drain, leaving the other intents in
+    /// order: a close core answers the call its own `QUEST_FINISHED` raised through `OnHide`.
+    pub fn take_quest_close(&mut self) -> bool {
+        let actions = &mut self.model_mut().quest_actions;
+        let before = actions.len();
+        actions.retain(|a| !matches!(a, QuestAction::Close));
+        actions.len() != before
+    }
 }
 
 /// `GetRewardSpell`'s three returns: `texture, name, isTradeskillSpell`, the third 1 or nil.

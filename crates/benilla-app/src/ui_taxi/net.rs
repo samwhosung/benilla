@@ -1,7 +1,6 @@
 //! The taxi map's packet handlers: they fill [`TaxiState`] and the flight masters' overhead
 //! status.
 
-use benilla_protocol::messages::TaxiMask;
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
@@ -18,14 +17,17 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-fn on_nodes_shown(In(ev): In<SessionEvent>, mut taxi: ResMut<TaxiState>) {
+fn on_nodes_shown(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::TaxiNodesShown {
         flightmaster,
         nearest_node,
         known_mask,
     } = ev
     {
-        taxi_nodes_shown(flightmaster, nearest_node, known_mask, &mut taxi);
+        debug!("net: taxi map on {flightmaster:#x} — nearest node {nearest_node}");
+        commands.queue(move |world: &mut World| {
+            super::open_map(world, flightmaster, nearest_node, known_mask);
+        });
     }
 }
 
@@ -35,9 +37,17 @@ fn on_node_status(In(ev): In<SessionEvent>, mut commands: Commands, index: Res<G
     }
 }
 
-fn on_activate_reply(In(ev): In<SessionEvent>, mut taxi: ResMut<TaxiState>) {
+fn on_activate_reply(
+    In(ev): In<SessionEvent>,
+    mut taxi: ResMut<TaxiState>,
+    mut commands: Commands,
+) {
     if let SessionEvent::ActivateTaxiReply { code } = ev {
         taxi_activate_reply(code, &mut taxi);
+        // `OK` closes the map through the core (`0x5ed1ed` → `0x5ed203`).
+        if code == benilla_protocol::messages::taxi_reply::OK {
+            crate::ui_session::queue(&mut commands, super::close_core);
+        }
     }
 }
 
@@ -50,17 +60,6 @@ fn on_new_path(In(ev): In<SessionEvent>, mut taxi: ResMut<TaxiState>) {
 /// The map and its staged replies end with the connection.
 fn on_session_end(In(_): In<SessionEvent>, mut taxi: ResMut<TaxiState>) {
     taxi.clear_session();
-}
-
-/// `SMSG_SHOWTAXINODES` opens the map.
-fn taxi_nodes_shown(
-    flightmaster: u64,
-    nearest_node: u32,
-    known_mask: TaxiMask,
-    taxi: &mut TaxiState,
-) {
-    debug!("net: taxi map on {flightmaster:#x} — nearest node {nearest_node}");
-    taxi.open(flightmaster, nearest_node, known_mask);
 }
 
 /// `SMSG_TAXINODE_STATUS`, the answer to `CMSG_TAXINODE_STATUS_QUERY` and the second half of a
@@ -76,7 +75,7 @@ fn taxi_node_status(guid: u64, known: bool, commands: &mut Commands, index: &Gui
     }
 }
 
-/// `SMSG_ACTIVATETAXIREPLY`, staged for the feed.
+/// `SMSG_ACTIVATETAXIREPLY`, staged for the feed, which shows a refusal.
 fn taxi_activate_reply(code: u32, taxi: &mut TaxiState) {
     debug!("net: activate taxi reply — code {code}");
     taxi.reply = Some(code);

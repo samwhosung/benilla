@@ -16,7 +16,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::ui_pet_stats::{PetFamilyTables, PetStatTables};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, sweep_close, NpcSession};
+use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
 
@@ -27,12 +27,12 @@ impl Plugin for UiStablePlugin {
         net::register(app);
         app.init_resource::<StableOpen>()
             .init_resource::<StableErrors>()
-            .add_sweep_leg(SweepLeg::Stable, close_stable_on_leave_world)
+            .add_latched_window::<StableOpen>()
+            // `0x490b2a` → `0x4caae0` → `0x4cae10`, the core.
+            .add_sweep_leg(SweepLeg::Stable, close_core)
             .add_systems(
                 Update,
                 (
-                    // Range-close first so the clear fires `PET_STABLE_CLOSED` the same frame.
-                    close_npc_session_out_of_range::<StableOpen>.before(feed_stable),
                     feed_stable.in_set(UiFeed),
                     drain_stable.after(UiInput),
                     // After the VM ticks: the selection is written by a click during `UiInput`
@@ -85,16 +85,54 @@ impl StableOpen {
     }
 }
 
-/// The range guard closes the stable when its master is out of range or gone; the server checks
-/// range on every verb (`CheckStableMaster`), failing with code 6, which shows nothing.
-impl NpcSession for StableOpen {
-    fn npc(&self) -> Option<u64> {
+/// The stable master's cell `[0xb72240]`; `ClosePetStables` (`0x4cae40`) is the core itself. The
+/// server also checks range on every verb (`CheckStableMaster`), failing with code 6, which shows
+/// nothing.
+impl LatchedWindow for StableOpen {
+    const WINDOW: NpcWindow = NpcWindow::Stable;
+
+    fn cell(&self) -> Option<u64> {
         self.npc
     }
 
-    fn close(&mut self) {
-        self.clear();
+    fn dispatched(world: &mut World) {
+        close_core(world);
     }
+
+    fn take_close_verb(script: &mut UiScript) -> bool {
+        script.take_stable_close()
+    }
+}
+
+/// The close core `0x4cae10`: with a stable open, the latch release (`0x4cae24`), the cell
+/// cleared, then `PET_STABLE_CLOSED` (`0x4cae3a`).
+pub(crate) fn close_core(world: &mut World) {
+    let Some(npc) = world.resource::<StableOpen>().npc else {
+        return;
+    };
+    crate::ui_session::release(world, npc);
+    world.resource_mut::<StableOpen>().clear();
+    crate::ui_session::note_closed(world, NpcWindow::Stable);
+    crate::ui_session::fire(world, |script| {
+        script.set_stable(None);
+        script.fire_event("PET_STABLE_CLOSED", vec![]);
+    });
+}
+
+/// `MSG_LIST_STABLED_PETS`'s open, `0x4cadc0`: the open stable master's own list re-lists in place
+/// (`0x4cadd6`); any other registers on the latch (`0x4cade2`), then the cell (`0x4caded`).
+pub(crate) fn open_stable(
+    world: &mut World,
+    npc: u64,
+    num_stable_slots: u8,
+    pets: Vec<StabledPet>,
+) {
+    if world.resource::<StableOpen>().npc != Some(npc) {
+        crate::ui_session::register(world, npc);
+    }
+    world
+        .resource_mut::<StableOpen>()
+        .open(npc, num_stable_slots, pets);
 }
 
 /// One wire row as a Lua slot; icon, family and diet stay `None` until the creature query answers.
@@ -172,19 +210,8 @@ fn snapshot(
     })
 }
 
-/// Push the stable into the VM and fire its events on a change.
-/// The leave-world sweep's stable leg (`0x490b2a` → `0x4caae0` → `0x4cae10`): an open stable
-/// closes with `PET_STABLE_CLOSED` (`0x4cae3a`) in the VM the sweep runs in.
-fn close_stable_on_leave_world(script: Option<NonSendMut<UiScript>>, mut open: ResMut<StableOpen>) {
-    if sweep_close(&mut *open).is_none() {
-        return;
-    }
-    if let Some(mut script) = script {
-        script.set_stable(None);
-        script.fire_event("PET_STABLE_CLOSED", vec![]);
-    }
-}
-
+/// Push the stable into the VM and fire its events on a change; the close is the core's
+/// ([`close_core`]).
 fn feed_stable(
     script: Option<NonSendMut<UiScript>>,
     // Mutable only to take the fresh-list latch.
@@ -197,14 +224,16 @@ fn feed_stable(
     names: Res<NameCache>,
     mut errors: ResMut<StableErrors>,
     mut last: crate::ui_script::WindowMemo<Option<StableState>>,
-    mut last_npc: crate::ui_script::WindowMemo<Option<u64>>,
+    mut closes: CoreCloses,
     mut sink: crate::ui_action::MessageSink,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let last = last.get(&script);
-    let last_npc = last_npc.get(&script);
+    if closes.since_last(&script, NpcWindow::Stable) {
+        *last = None;
+    }
     // Refusals show, and speak, as their message rows say.
     let lines: Vec<_> = errors
         .0
@@ -233,44 +262,32 @@ fn feed_stable(
         has_live_pet,
         &commands,
     );
-    let switched = npc_switched(*last_npc, open.npc);
     let fresh_list = std::mem::take(&mut open.fresh_list);
-    if fresh == *last && !switched && !fresh_list {
+    if fresh == *last && !fresh_list {
         return;
     }
     // Push before firing: `fire_event` runs the Lua handlers synchronously.
     script.set_stable(fresh.clone());
-    if switched {
-        // A new stable master while open is a close then an open; consume the close intent
-        // OnHide queues so the drain keeps the new stable.
-        script.fire_event("PET_STABLE_CLOSED", vec![]);
-        script.fire_event("PET_STABLE_SHOW", vec![]);
-        let _ = script.take_stable_close();
-    } else if fresh_list && fresh.is_some() {
+    if fresh_list && fresh.is_some() {
         // Every list fires `PET_STABLE_SHOW` (`0x4cac9b`); on the visible window it only repaints.
         script.fire_event("PET_STABLE_SHOW", vec![]);
-    } else {
-        match (&*last, &fresh) {
-            // A change with no new list is a creature-query answer, the reference's callback edge.
-            (Some(_), Some(_)) => {
-                script.fire_event("PET_STABLE_UPDATE", vec![]);
-                script.fire_event("PET_STABLE_UPDATE_PAPERDOLL", vec![]);
-            }
-            (Some(_), None) => script.fire_event("PET_STABLE_CLOSED", vec![]),
-            // A first snapshot always comes with the list latch.
-            (None, _) => {}
-        }
+    } else if last.is_some() && fresh.is_some() {
+        // A change with no new list is a creature-query answer, the reference's callback edge. A
+        // close is the core's, which told the VM, and a disconnect's clear tells it nothing; a
+        // first snapshot always comes with the list latch.
+        script.fire_event("PET_STABLE_UPDATE", vec![]);
+        script.fire_event("PET_STABLE_UPDATE_PAPERDOLL", vec![]);
     }
     *last = fresh;
-    *last_npc = open.npc;
 }
 
 /// Drain the Lua intents into the four stable verbs, each aimed at the open session's NPC; a close
-/// clears locally, as there is no close opcode.
+/// runs the core, as there is no close opcode.
 fn drain_stable(
     script: Option<NonSendMut<UiScript>>,
-    mut open: ResMut<StableOpen>,
+    open: Res<StableOpen>,
     commands: Res<NetCommands>,
+    mut world_commands: Commands,
 ) {
     let Some(mut script) = script else {
         return;
@@ -291,7 +308,7 @@ fn drain_stable(
     }
     if script.take_stable_close() {
         debug!("ui_stable: client-side close (no packet)");
-        open.clear();
+        crate::ui_session::queue(&mut world_commands, close_core);
     }
 }
 

@@ -22,18 +22,17 @@ fn on_session_end(In(_): In<SessionEvent>, mut stable_open: ResMut<StableOpen>) 
     stable_open.clear();
 }
 
-fn on_list(
-    In(ev): In<SessionEvent>,
-    mut stable_open: ResMut<StableOpen>,
-    mut names: ResMut<NameCache>,
-) {
+fn on_list(In(ev): In<SessionEvent>, mut names: ResMut<NameCache>, mut commands: Commands) {
     if let SessionEvent::ListStabledPets {
         npc,
         num_stable_slots,
         pets,
     } = ev
     {
-        list_stabled_pets(npc, num_stable_slots, pets, &mut stable_open, &mut names);
+        list_stabled_pets(npc, &pets, &mut names, num_stable_slots);
+        commands.queue(move |world: &mut World| {
+            super::open_stable(world, npc, num_stable_slots, pets);
+        });
     }
 }
 
@@ -49,14 +48,8 @@ fn on_result(
 }
 
 /// `MSG_LIST_STABLED_PETS`, sent unprompted for the gossip stable option, which opens the window,
-/// and in answer to a refresh.
-fn list_stabled_pets(
-    npc: u64,
-    num_stable_slots: u8,
-    pets: Vec<StabledPet>,
-    stable_open: &mut StableOpen,
-    names: &mut NameCache,
-) {
+/// and in answer to a refresh: the pet names it carries, before the open.
+fn list_stabled_pets(npc: u64, pets: &[StabledPet], names: &mut NameCache, num_stable_slots: u8) {
     debug!(
         "net: stable master {npc:#x} listed {} pets ({num_stable_slots} slots bought)",
         pets.len()
@@ -64,12 +57,11 @@ fn list_stabled_pets(
     // Seed the pet-name cache from the rows, the pair `SMSG_PET_NAME_QUERY_RESPONSE` would carry:
     // stock `PetStable.lua:163` hands `UnitName("pet")` to a tooltip whose `SetText` raises on nil
     // (`0x531b90`), and unlike the reference's `petnamecache.wdb` this cache starts empty.
-    for pet in &pets {
+    for pet in pets {
         if !pet.name.is_empty() {
             names.insert_pet(pet.pet_number, pet.name.clone());
         }
     }
-    stable_open.open(npc, num_stable_slots, pets);
 }
 
 /// `SMSG_STABLE_RESULT`, handled as the reference's jump table (`0x4cadac`, `0x4cad98`) does: 1

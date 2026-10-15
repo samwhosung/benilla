@@ -19,7 +19,7 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::ui_action::{show_messages, ui_error_text, MessageSink, Shown, Spells, UiError};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, npc_switched, NpcSession};
+use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 /// The wire packet that opened the current panel.
 pub(crate) enum QuestView {
@@ -205,13 +205,13 @@ impl Plugin for UiQuestPlugin {
         net::register(app);
         lines::register(app);
         app.init_resource::<QuestGiver>()
+            .add_latched_window::<QuestGiver>()
             .add_sweep_leg(SweepLeg::Quest, close_quest_on_leave_world)
             .add_systems(
                 Update,
                 (
-                    // Range-close before the feed so the close fires the same frame; the feed before
-                    // the input pass and the drain after it, so a click goes out the same frame.
-                    close_npc_session_out_of_range::<QuestGiver>.before(feed_quest),
+                    // The feed before the input pass and the drain after it, so a click goes out
+                    // the same frame.
                     feed_quest.in_set(UiFeed),
                     drain_quest.after(UiInput),
                 ),
@@ -219,48 +219,65 @@ impl Plugin for UiQuestPlugin {
     }
 }
 
-/// The leave-world sweep's quest leg (`0x490ac6` → `0x500bc0` → `0x501130(0, 1)`): an open
-/// panel, an item's included, ends as the walk-away does, a shared quest declined to its sharer
-/// (`MSG_QUEST_PUSH_RESULT` 3), then `QUEST_FINISHED` (`0x501217`) in the VM the sweep runs in.
-fn close_quest_on_leave_world(
-    script: Option<NonSendMut<UiScript>>,
-    mut giver: ResMut<QuestGiver>,
-    commands: Res<NetCommands>,
-) {
-    let Some(source) = giver.npc else {
-        return;
-    };
-    if let Some(cmd) = giver.walk_away_send(source) {
-        let _ = commands.0.send(cmd);
+/// The leave-world sweep's quest leg (`0x490ac6` → `0x500bc0` → `0x501130(0, 1)`): the core with
+/// its report set, so a shared quest is declined to its sharer.
+fn close_quest_on_leave_world(world: &mut World) {
+    close_core(world, true);
+}
+
+/// The giver's cell `[0xbe0810]`, which an item's or a GameObject's guid fills as well as an
+/// NPC's. `0x493310` calls the core with its report set (`0x4933d3`), and so does `CloseQuest`
+/// (`0x501a10`), so a walk-away from a shared quest still declines it while an NPC's panel closes
+/// with no giver re-open.
+impl LatchedWindow for QuestGiver {
+    const WINDOW: NpcWindow = NpcWindow::Quest;
+
+    fn cell(&self) -> Option<u64> {
+        self.npc
     }
-    giver.clear();
-    if let Some(mut script) = script {
-        script.set_quest(None);
-        script.fire_event("QUEST_FINISHED", vec![]);
+
+    fn dispatched(world: &mut World) {
+        close_core(world, true);
+    }
+
+    fn take_close_verb(script: &mut UiScript) -> bool {
+        script.take_quest_close()
     }
 }
 
-impl NpcSession for QuestGiver {
-    /// `None` for a quest-starter item, whose guid the range guard would read as a despawned giver
-    /// and close the panel at once. The drain still sends to the item guid, which vmangos resolves
-    /// as a giver (`QuestHandler.cpp:109`).
-    fn npc(&self) -> Option<u64> {
-        self.npc.filter(|g| !benilla_protocol::guid::is_item(*g))
+/// The panel's one teardown `0x501130(0, report)`: nothing with no giver (`0x501149`); with
+/// `report`, a sharing player is sent `MSG_QUEST_PUSH_RESULT` DECLINE (`0x501159`-`0x5011e0`), as
+/// the reference's player lookup there resolves only a player; then the cell is zeroed
+/// (`0x501201`) before the latch release (`0x50120d`), so the core never re-enters, and
+/// `QUEST_FINISHED` fires once (`0x501217`).
+pub(crate) fn close_core(world: &mut World, report: bool) {
+    let Some(giver) = world.resource::<QuestGiver>().npc else {
+        return;
+    };
+    if report && benilla_protocol::guid::is_player(giver) {
+        debug!("ui_quest: closing {giver:#x}'s shared quest — declining it");
+        if let Some(net) = world.get_resource::<NetCommands>() {
+            let _ = net.0.send(ClientCommand::QuestPushResult {
+                sharer: giver,
+                msg: QuestShareMsg::DECLINE_QUEST,
+            });
+        }
     }
+    world.resource_mut::<QuestGiver>().clear();
+    crate::ui_session::note_closed(world, NpcWindow::Quest);
+    crate::ui_session::with_script(world, |script| script.set_quest(None));
+    crate::ui_session::release(world, giver);
+    crate::ui_session::fire(world, |script| {
+        script.fire_event("QUEST_FINISHED", vec![]);
+    });
+}
 
-    /// Walking away from a shared quest (a 14 yd leash) still declines it to the sharer. The
-    /// reference's watchdog calls the teardown directly (`0x4933da` to `0x501130`), not
-    /// `DeclineQuest`, so an NPC's panel closes with no giver re-open.
-    fn walk_away_send(&self, npc: u64) -> Option<ClientCommand> {
-        benilla_protocol::guid::is_player(npc).then_some(ClientCommand::QuestPushResult {
-            sharer: npc,
-            msg: QuestShareMsg::DECLINE_QUEST,
-        })
-    }
-
-    fn close(&mut self) {
-        self.clear();
-    }
+/// A panel's open (`0x500bd0`, every panel packet's): the latch first, with no test of the cell
+/// (`0x500d74`), so a panel replacing the giver's own closes it, `QUEST_FINISHED` ahead of the new
+/// panel's event; then the cell (`0x500d86`).
+pub(crate) fn open_panel(world: &mut World, npc: u64, view: QuestView) {
+    crate::ui_session::register(world, npc);
+    world.resource_mut::<QuestGiver>().open(npc, view);
 }
 
 /// A greeting row is active when its wire icon is 3 or 4 and available otherwise, never by the
@@ -411,7 +428,7 @@ fn panel_event(panel: QuestPanel) -> &'static str {
 }
 
 /// Push the quest view into the VM and fire its events: a panel's open event on a new panel,
-/// `QUEST_ITEM_UPDATE` on a content change, `QUEST_FINISHED` on close.
+/// `QUEST_ITEM_UPDATE` on a content change. The close is the core's ([`close_core`]).
 pub(crate) fn feed_quest(
     script: Option<NonSendMut<UiScript>>,
     mut giver: ResMut<QuestGiver>,
@@ -428,14 +445,17 @@ pub(crate) fn feed_quest(
     mut sink: MessageSink,
     mut last: crate::ui_script::WindowMemo<Option<QuestState>>,
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
-    mut last_npc: crate::ui_script::WindowMemo<Option<u64>>,
+    mut closes: CoreCloses,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let last = last.get(&script);
     let last_name = last_name.get(&script);
-    let last_npc = last_npc.get(&script);
+    if closes.since_last(&script, NpcWindow::Quest) {
+        *last = None;
+        *last_name = None;
+    }
     if giver.take_completed_fanfare() {
         script.queue_sound_kit("QUESTCOMPLETED");
     }
@@ -480,49 +500,36 @@ pub(crate) fn feed_quest(
         .npc
         .and_then(|g| names.resolve(g, &commands).map(str::to_string));
     let name_changed = *last_name != npc_name;
-    // A different giver while a panel is open is a close then an open.
-    let switched = npc_switched(*last_npc, giver.npc);
-    if fresh == *last && !name_changed && !switched {
+    if fresh == *last && !name_changed {
         return;
     }
     script.set_quest(fresh.clone());
     // The panel events carry no argument: the frame reads `UnitName("npc")` (`QuestFrame.lua:63`).
-    match (&*last, &fresh) {
-        (_, Some(f)) if switched => {
-            // `QUEST_FINISHED` runs `CloseQuest` through `OnHide`, queueing a `Close` that would
-            // clear the new giver, so drop the queued actions; a net-driven switch has no others.
-            script.fire_event("QUEST_FINISHED", vec![]);
-            script.fire_event(panel_event(f.panel), vec![]);
-            let _ = script.take_quest_actions();
-        }
-        (_, Some(f)) => {
-            let same_panel = last.as_ref().is_some_and(|l| l.panel == f.panel);
-            let event = if same_panel {
-                "QUEST_ITEM_UPDATE"
-            } else {
-                panel_event(f.panel)
-            };
-            script.fire_event(event, vec![]);
-        }
-        (Some(_), None) => script.fire_event("QUEST_FINISHED", vec![]),
-        (None, None) => {}
+    // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
+    if let Some(f) = &fresh {
+        let same_panel = last.as_ref().is_some_and(|l| l.panel == f.panel);
+        let event = if same_panel {
+            "QUEST_ITEM_UPDATE"
+        } else {
+            panel_event(f.panel)
+        };
+        script.fire_event(event, vec![]);
     }
     *last = fresh;
     *last_name = npc_name;
-    *last_npc = giver.npc;
 }
 
-/// `CloseQuest()`: its binding `0x501a10` calls only the teardown `0x501130(0,1)`, which declines
-/// a sharing player's quest and closes anything else silently. The player test is the guid's
-/// shape; the reference's `0x468460` also needs the sharer in view, which the range guard ensures.
-fn close_quest(npc: u64, commands: &NetCommands) {
-    if benilla_protocol::guid::is_player(npc) {
-        debug!("ui_quest: closing {npc:#x}'s shared quest — declining it");
-        let _ = commands.0.send(ClientCommand::QuestPushResult {
-            sharer: npc,
-            msg: QuestShareMsg::DECLINE_QUEST,
-        });
-    }
+/// `CloseQuest()`'s binding `0x501a10`, and `DeclineQuest`'s teardown leg (`0x5014aa`): the core
+/// with its report set, which declines a sharing player's quest and closes anything else
+/// silently. The player test is the guid's shape; the reference's `0x468460` also needs the
+/// sharer in view, which the watchdog's 14 yd leash ensures.
+fn close_quest_reporting(world: &mut World) {
+    close_core(world, true);
+}
+
+/// `AcceptQuest()`'s close (`0x5013d3`): the core with no report.
+fn close_quest_silently(world: &mut World) {
+    close_core(world, false);
 }
 
 /// The leg of `DeclineQuest()`'s core `0x5013f0` a source takes.
@@ -576,6 +583,7 @@ fn drain_quest(
     index: Res<GuidIndex>,
     stores: Query<&ObjectStore>,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
+    mut world_commands: Commands,
 ) {
     let Some(mut script) = script else {
         return;
@@ -630,9 +638,10 @@ fn drain_quest(
     });
     for action in script.take_quest_actions() {
         match action {
+            // A close ends the drain: the reference's verbs after it find no panel.
             QuestAction::Close => {
-                close_quest(npc, &commands);
-                giver.clear();
+                crate::ui_session::queue(&mut world_commands, close_quest_reporting);
+                return;
             }
             QuestAction::Decline => {
                 let leg = decline_leg(npc, giver.acted, giver.close_on_cancel, npc_flags);
@@ -640,8 +649,8 @@ fn drain_quest(
                 match leg {
                     DeclineLeg::Nothing => {}
                     DeclineLeg::Teardown => {
-                        close_quest(npc, &commands);
-                        giver.clear();
+                        crate::ui_session::queue(&mut world_commands, close_quest_reporting);
+                        return;
                     }
                     DeclineLeg::GossipHello => {
                         let _ = commands.0.send(ClientCommand::GossipHello { guid: npc });
@@ -671,7 +680,8 @@ fn drain_quest(
                     }
                     // The reference closes on the click, not on an answer: it sends `0x189`
                     // (`0x5eac10`), then clears with `0x501130(0,0)`, firing `QUEST_FINISHED`.
-                    giver.clear();
+                    crate::ui_session::queue(&mut world_commands, close_quest_silently);
+                    return;
                 }
             }
             QuestAction::Continue => {
@@ -745,32 +755,6 @@ mod tests {
         for icon in [1, 2, 3, 4, 5, u32::MAX] {
             assert!(!row_is_one_click(icon));
         }
-    }
-
-    #[test]
-    fn an_item_giver_is_not_an_npc_session() {
-        let item = 0x4000_0000_0000_0BAD_u64; // HIGHGUID_ITEM
-        let creature = 0xF130_0000_00C5_0001_u64; // HIGHGUID_UNIT
-        let detail = |npc: u64| {
-            QuestView::Detail(QuestDetails {
-                npc,
-                quest_id: 373,
-                title: "The Unsent Letter".into(),
-                details: String::new(),
-                objectives: String::new(),
-                auto_finish: 0,
-                choices: Vec::new(),
-                rewards: Vec::new(),
-                money: 0,
-                reward_spell: 0,
-            })
-        };
-        let mut giver = QuestGiver::default();
-        giver.open(item, detail(item));
-        assert_eq!(NpcSession::npc(&giver), None, "an item is not a live NPC");
-        assert_eq!(giver.npc, Some(item), "the wire address is unchanged");
-        giver.open(creature, detail(creature));
-        assert_eq!(NpcSession::npc(&giver), Some(creature));
     }
 
     #[test]

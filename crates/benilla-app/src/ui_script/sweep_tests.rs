@@ -70,6 +70,7 @@ fn legs_app() -> (App, crossbeam_channel::Receiver<ClientCommand>) {
         crate::ui_stable::UiStablePlugin,
         crate::ui_bank::UiBankPlugin,
         crate::cinematic::CinematicPlugin,
+        crate::ui_session::UiSessionPlugin,
     ))
     .insert_resource(NetCommands(tx))
     .init_resource::<crate::net::GuidIndex>()
@@ -121,9 +122,9 @@ fn open_everything(world: &mut World) {
     world
         .resource_mut::<crate::ui_stable::StableOpen>()
         .open(STABLE_MASTER, 0, Vec::new());
-    world
-        .resource_mut::<crate::ui_bank::BankOpen>()
-        .open(BANKER);
+    // The bank last, so it holds the latch: every leg above releases its own, and the interaction
+    // close finds the banker.
+    crate::ui_bank::open_bank(world, BANKER);
     world.insert_resource(crate::cinematic::Cinematic::playing_for_test());
 }
 

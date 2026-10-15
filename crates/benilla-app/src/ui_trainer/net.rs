@@ -1,6 +1,5 @@
 //! The trainer window's packet handlers, filling [`TrainerOpen`] and [`TrainerErrors`].
 
-use benilla_protocol::messages::TrainerSpell;
 use benilla_protocol::{SessionEvent, SessionEventKind};
 use bevy::prelude::*;
 
@@ -58,7 +57,7 @@ fn on_pet_spells(In(ev): In<SessionEvent>, mut trainer_open: ResMut<TrainerOpen>
     }
 }
 
-fn on_list(In(ev): In<SessionEvent>, mut trainer_open: ResMut<TrainerOpen>) {
+fn on_list(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::TrainerList {
         trainer,
         trainer_type,
@@ -66,7 +65,13 @@ fn on_list(In(ev): In<SessionEvent>, mut trainer_open: ResMut<TrainerOpen>) {
         greeting,
     } = ev
     {
-        trainer_list(trainer, trainer_type, services, greeting, &mut trainer_open);
+        debug!(
+            "net: trainer {trainer:#x} (type {trainer_type}) listed {} services",
+            services.len()
+        );
+        commands.queue(move |world: &mut World| {
+            super::open_trainer(world, trainer, trainer_type, services, greeting);
+        });
     }
 }
 
@@ -88,20 +93,6 @@ fn on_session_end(In(_): In<SessionEvent>, mut trainer_open: ResMut<TrainerOpen>
 }
 
 /// `SMSG_TRAINER_LIST`: open the window on the trainer's services.
-fn trainer_list(
-    trainer: u64,
-    trainer_type: u32,
-    services: Vec<TrainerSpell>,
-    greeting: String,
-    trainer_open: &mut TrainerOpen,
-) {
-    debug!(
-        "net: trainer {trainer:#x} (type {trainer_type}) listed {} services",
-        services.len()
-    );
-    trainer_open.open(trainer, trainer_type, services, greeting);
-}
-
 /// `SMSG_TRAINER_BUY_SUCCEEDED`, logged only: the reference registers no handler for it
 /// (`0x5ab650`/`0x537a60`), the bought row repaints on `SMSG_LEARNED_SPELL`'s re-evaluation, and
 /// vmangos sends no fresh list (`NPCHandler.cpp:262-343`).
