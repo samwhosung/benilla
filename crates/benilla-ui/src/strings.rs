@@ -46,7 +46,7 @@ pub(crate) fn swap_number_separators(text: &str) -> String {
     const CAP: usize = 0xfff;
     let b = text.as_bytes();
     // `cmp al,0x30; jl` / `cmp al,0x39; jg` are signed, so a byte of 0x80 or more is below `0`.
-    let digit = |c: u8| (b'0'..=b'9').contains(&c);
+    let digit = |c: u8| c.is_ascii_digit();
     let number_byte = |c: u8| digit(c) || c == b'.' || c == b',';
     let signed_at = |k: usize| b.get(k).copied().unwrap_or(0) as i8;
     let mut out = Vec::with_capacity(b.len().min(CAP));
