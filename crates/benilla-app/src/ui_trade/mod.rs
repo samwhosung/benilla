@@ -932,14 +932,12 @@ fn feed_trade(
         let empty = TradeState::default();
         let old = last.as_ref().unwrap_or(&empty);
         if let Some(new) = fresh.as_ref() {
-            // The record compare (`0x4bf2c7`-`0x4bf378`) reads the item fields, never the
-            // enchant slot's spell, which signals on its own below.
-            let record = |s: &Option<TradeSlotItem>| {
-                s.as_ref().map(|s| TradeSlotItem {
-                    enchantment: None,
-                    ..s.clone()
-                })
-            };
+            // The record compare (`0x4bf2c7`-`0x4bf378`) reads the wire's item fields, run only on a
+            // status: never the enchant slot's spell, which signals on its own below, and never
+            // what the template cache resolved (name, icon, quality, link), so a template
+            // landing repaints through `TRADE_UPDATE` and signals no slot.
+            let record =
+                |s: &Option<TradeSlotItem>| s.as_ref().map(|s| (s.item_id, s.count, s.lock_id));
             let changed_slots = |mine: &[Option<TradeSlotItem>],
                                  theirs: &[Option<TradeSlotItem>]| {
                 mine.iter()
@@ -2617,6 +2615,11 @@ mod tests {
             counts(&app).0,
             2,
             "one TRADE_UPDATE per registered callback"
+        );
+        assert_eq!(
+            counts(&app).1,
+            1,
+            "the landing changed the row, not the offer: no slot event (`0x4bf2b0` runs on a status)"
         );
         let seen: Vec<String> = app
             .world()
