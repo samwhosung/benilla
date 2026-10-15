@@ -248,7 +248,7 @@ fn a_rescaled_frame_rebuilds_its_buttons() {
     s.mouse_move(130.0, 127.0);
     s.run("CF:SetScale(0.9)").unwrap();
     s.resolve();
-    set_link(&mut s);
+    set_link(&mut s, "CF");
     s.mouse_move(131.0, 127.0);
     assert_eq!(
         log_of(&s),

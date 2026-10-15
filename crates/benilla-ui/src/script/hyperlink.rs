@@ -97,7 +97,6 @@ type Span = (Rect, String, String);
 #[derive(Default)]
 pub(crate) struct LinkPool {
     live: Vec<FrameHandle>,
-    spans: Vec<Span>,
     free: VecDeque<FrameHandle>,
     /// The text frame's on-screen size at the last pass, for the resize relayout.
     size: Option<(f32, f32)>,
@@ -146,9 +145,9 @@ pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String
     let mut moved = false;
     for (owner, list) in by_owner {
         moved |= if due(lua, owner, &list) {
-            rebuild(lua, owner, list)
+            rebuild(lua, owner, &list)
         } else {
-            follow(lua, owner, list)
+            follow(lua, owner, &list)
         };
     }
     // The pointer hit-tests resolved rects, so a moved button is solved before the next input.
@@ -157,9 +156,8 @@ pub(super) fn set_spans(lua: &Lua, spans: Vec<(FrameHandle, Rect, String, String
     }
 }
 
-/// Whether `owner` rebuilds this pass. A ScrollingMessageFrame does when its flag is up, which
-/// this spends, or its on-screen size moved (`0x788394`, `0x7883b2`); any other text frame when
-/// its links or their count changed.
+/// Whether `owner`, a ScrollingMessageFrame, rebuilds this pass: when its flag is up, which this
+/// spends, or its on-screen size moved (`0x788394`, `0x7883b2`).
 /// Deviation: a span count that no longer matches the live set always rebuilds, so a state this
 /// model does not flag (a ring wiped by `SetMaxLines`, a hidden frame) leaves no stale button.
 fn due(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
@@ -170,28 +168,17 @@ fn due(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
         .get(&owner)
         .map(|r| (r.right - r.left, r.top - r.bottom));
     let flagged = match model.arena.frame_mut(owner).map(|f| &mut f.kind_state) {
-        Some(KindState::ScrollingMessage(smf)) => Some(std::mem::take(&mut smf.links_dirty)),
-        _ => None,
+        Some(KindState::ScrollingMessage(smf)) => std::mem::take(&mut smf.links_dirty),
+        _ => false,
     };
     let pool = model.link_buttons.entry(owner).or_default();
     let resized = std::mem::replace(&mut pool.size, size).is_some_and(|was| Some(was) != size);
-    let recount = pool.live.len() != list.len();
-    match flagged {
-        Some(flag) => flag || resized || recount,
-        None => {
-            recount
-                || pool
-                    .spans
-                    .iter()
-                    .zip(list)
-                    .any(|((_, l, t), (_, nl, nt))| l != nl || t != nt)
-        }
-    }
+    flagged || resized || pool.live.len() != list.len()
 }
 
 /// Re-seat `owner`'s live buttons on `list`, one each, with no hide and no show. True when a
 /// button's anchors or size changed.
-fn follow(lua: &Lua, owner: FrameHandle, list: Vec<Span>) -> bool {
+fn follow(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
     let mut model = lua.app_data_mut::<Model>().expect("model");
     let model = &mut *model;
     let live = model
@@ -200,24 +187,20 @@ fn follow(lua: &Lua, owner: FrameHandle, list: Vec<Span>) -> bool {
         .map(|p| p.live.clone())
         .unwrap_or_default();
     let mut moved = false;
-    for (&h, (rect, link, text)) in live.iter().zip(&list) {
+    for (&h, (rect, link, text)) in live.iter().zip(list) {
         moved |= place(model, h, *rect, link, text);
-    }
-    if let Some(pool) = model.link_buttons.get_mut(&owner) {
-        pool.spans = list;
     }
     moved
 }
 
 /// One text frame's rebuild (`0x788c00`) onto `list`. True when a button's anchors or size
 /// changed.
-fn rebuild(lua: &Lua, owner: FrameHandle, list: Vec<Span>) -> bool {
+fn rebuild(lua: &Lua, owner: FrameHandle, list: &[Span]) -> bool {
     let released = {
         let mut model = lua.app_data_mut::<Model>().expect("model");
         let pool = model.link_buttons.entry(owner).or_default();
         let released = std::mem::take(&mut pool.live);
         pool.free.extend(released.iter().copied());
-        pool.spans.clear();
         released
     };
     // `0x7a3920`: each hides before any is re-placed, so a hovered one leaves with its old link.
@@ -234,7 +217,7 @@ fn rebuild(lua: &Lua, owner: FrameHandle, list: Vec<Span>) -> bool {
             model.link_buttons.remove(&owner);
             return false;
         }
-        for (rect, link, text) in &list {
+        for (rect, link, text) in list {
             let free = model
                 .link_buttons
                 .get_mut(&owner)
@@ -245,7 +228,6 @@ fn rebuild(lua: &Lua, owner: FrameHandle, list: Vec<Span>) -> bool {
         }
         let pool = model.link_buttons.entry(owner).or_default();
         pool.live = shows.clone();
-        pool.spans = list;
     }
     for h in shows {
         visibility::set_shown(lua, h, true);
