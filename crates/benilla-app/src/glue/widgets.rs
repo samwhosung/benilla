@@ -149,10 +149,12 @@ pub(crate) fn outlined_text_centered<W: Bundle, T: Bundle>(
 /// An escape overrides `base` until `|r`, its alpha discarded (`0x5c2ab2`); a link keeps only its
 /// text; `||` draws one `|`. A line break breaks the line whatever the string's wrap flag: `\n`
 /// and `\r` are classed before any flag is read (`0x5c286e`, `0x5c2896`), and `|n` is refused
-/// only under decoder flag `0x200` (`0x5c29e7`), which a font string's style word gives from its
-/// bit `0x4000` (`0x44d4da`) and which none of its writers sets (the ctor's `0x212` at `0x770dd3`,
-/// `0x7712ed`, `0x771351`, `0x77162d`, `0x7722ee`, `0x7723a0`, `0x77350e`). An empty string yields
-/// one empty span.
+/// only under decoder flag `0x200` (`0x5c29e7`), which a font string's style word (`+0x120`,
+/// passed at `0x77256a`) gives from its bit `0x4000` (`0x44d4da`) and which none of its writers
+/// sets (the ctor's `0x212` at `0x770dd3`, `0x7712ed`, `0x771351`, `0x77162d`, `0x7722ee`,
+/// `0x7723a0`, `0x77350e`, and a Font object's word copied in at `0x770876`, itself `0x212` from
+/// `0x783a87`, whose justify setters write bits `0x38` and `0x7` (`0x783f8a`, `0x783fd2`)). An
+/// empty string yields one empty span.
 pub(crate) fn markup_spans(text: &str, base: Color) -> Vec<(String, Color)> {
     let mut spans: Vec<(String, Color)> = Vec::new();
     let mut cur = String::new();
