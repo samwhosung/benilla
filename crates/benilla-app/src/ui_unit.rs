@@ -21,7 +21,7 @@ use crate::net::{
 use crate::target::{ring_reaction, Factions, Selection};
 use crate::ui_script::{gate, SweepApp, UiInput};
 
-mod control_gate;
+pub(crate) mod control_gate;
 mod held;
 
 /// The unit-feed pass, gated so none of its login one-shots or per-VM memos runs before the in-game

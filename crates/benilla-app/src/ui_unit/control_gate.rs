@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 
-use benilla_formats::{cc_exemption, SpellCatalog};
+use benilla_formats::{cc_exemption, SpellCatalog, SpellDisplay};
 use benilla_protocol::ObjectFields;
 use benilla_ui::script::UiScript;
 
@@ -22,30 +22,37 @@ const UNIT_FLAG_FLEEING: u32 = 0x0080_0000;
 /// (`0x6e9d7e`-`0x6e9d83`): without it no spell can pass, so only these are candidates.
 const ATTR_EX_BIT_15: u32 = 0x0000_8000;
 
-/// The on-use spells that pass the gate now. Each helper of the reference asks its scanner
-/// (`0x6e9ca0`) about the caster's aura slots: fleeing (flag bit 23) is `0x6e9f20`, aura type 7;
-/// confused (bit 22) `0x6e9f40`, type 5; charmed (`UNIT_FIELD_CHARMEDBY` nonzero, whoever holds it)
-/// `0x6e9f60`, types 6, 177 and 2. A spell passes if any applicable arm exempts it, the arms
-/// ORed, and the scanner exempts when an aura of the type is on the caster and the spell's
-/// immunity effects cover every such effect ([`benilla_formats::grants_immunity`]).
+/// Whether `cast` passes the lost-control gate for `caster`, the three arms of the item
+/// dispatcher (`0x5d8ef9`-`0x5d8f66`) and the usability predicate (`0x6e3dd0`-`0x6e3e4c`) alike.
+/// Each helper of the reference asks its scanner (`0x6e9ca0`) about the caster's aura slots:
+/// fleeing (flag bit 23) is `0x6e9f20`, aura type 7; confused (bit 22) `0x6e9f40`, type 5; charmed
+/// (`UNIT_FIELD_CHARMEDBY` nonzero, whoever holds it) `0x6e9f60`, types 6, 177 and 2. A spell
+/// passes if any applicable arm exempts it, the arms ORed, and the scanner exempts when an aura
+/// of the type is on the caster and the spell's immunity effects cover every such effect
+/// ([`benilla_formats::grants_immunity`]).
+pub(crate) fn exempts_lost_control(
+    catalog: &SpellCatalog,
+    cast: &SpellDisplay,
+    caster: &ObjectFields,
+) -> bool {
+    let flags = caster.unit_flags();
+    let scan =
+        |ty: u32| cc_exemption(cast, caster.unit_aura_ids(), ty, |id| catalog.get(id)).exempt;
+    (flags & UNIT_FLAG_FLEEING != 0 && scan(7))
+        || (flags & UNIT_FLAG_CONFUSED != 0 && scan(5))
+        || (caster.unit_charmed_by().is_some() && [6, 177, 2].into_iter().any(scan))
+}
+
+/// The on-use spells that pass the gate now ([`exempts_lost_control`]).
 pub(crate) fn control_bypass_spells(
     catalog: &SpellCatalog,
     candidates: &[u32],
     caster: &ObjectFields,
 ) -> HashSet<u32> {
-    let flags = caster.unit_flags();
-    let charmed = caster.unit_charmed_by().is_some();
     candidates
         .iter()
         .filter_map(|&id| catalog.get(id).map(|cast| (id, cast)))
-        .filter(|(_, cast)| {
-            let scan = |ty: u32| {
-                cc_exemption(cast, caster.unit_aura_ids(), ty, |id| catalog.get(id)).exempt
-            };
-            (flags & UNIT_FLAG_FLEEING != 0 && scan(7))
-                || (flags & UNIT_FLAG_CONFUSED != 0 && scan(5))
-                || (charmed && [6, 177, 2].into_iter().any(scan))
-        })
+        .filter(|(_, cast)| exempts_lost_control(catalog, cast, caster))
         .map(|(id, _)| id)
         .collect()
 }
@@ -93,7 +100,6 @@ pub(super) fn feed_control_bypass(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use benilla_formats::SpellDisplay;
 
     const FEAR_AURA: u32 = 5782;
     const INSIGNIA: u32 = 7744;

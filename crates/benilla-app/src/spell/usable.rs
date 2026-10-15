@@ -2,13 +2,13 @@
 //! `IsUsableAction`'s grey tint. Any tripped gate answers `(usable, oom) = (false, false)`; only
 //! the power leg, the last, sets `notEnoughMana`.
 //!
-//! Built: the TRADE_SKILL early-out, dead (leg 1), reagents and totems (3), the equipped item (4),
+//! Built: the TRADE_SKILL early-out, dead (leg 1), lost control (2), reagents and totems (3), the
+//! equipped item (4),
 //! combo points (5), shapeshift form (6), only-stealthed (7), not-in-combat (8), CasterAuraState
 //! (9), TargetAuraState and its CanAttack/CanAssist fork (10/10b, the only legs that read the
 //! current target), the bit-25 cooldown fold (11) and power (12).
 //!
-//! Not built, each answering usable: leg 2's caster aura-immunity helpers (`0x6e9f20/40/60`), leg
-//! 4's `AttributesEx3` sub-conditions. CanAssist in leg 10b is a reaction-rank test (friendly or
+//! Not built, answering usable: leg 4's `AttributesEx3` sub-conditions. CanAssist in leg 10b is a reaction-rank test (friendly or
 //! better), not the reference's `0x6066f0`.
 
 use benilla_protocol::messages::ItemUseSpell;
@@ -44,6 +44,9 @@ pub(crate) struct UsableCtx<'a> {
     pub(crate) cooldowns: &'a Cooldowns,
     /// The talent spell-modifier tables leg 12's cost goes through.
     pub(crate) spell_mods: &'a SpellModifiers,
+    /// `[0xb4b3e4]` clear (`0x4958e0`): the player does not control the character. Leg 2 greys
+    /// every spell its immunity scans do not exempt.
+    pub(crate) control_lost: bool,
     /// Every carried entry's count for the frame ([`crate::ui_items::carried_counts`]).
     pub(crate) carried: &'a std::collections::HashMap<u32, u32>,
 }
@@ -303,7 +306,8 @@ fn equipped_slots_match(
 /// 3. the item's first on-use spell runs the whole plain-spell walk, [`spell_usable`] (`0x4e5a50`
 ///    hands it back with type 0; `4e51b0`). This is where food greys in combat: its rows carry
 ///    [`ATTR_NOT_IN_COMBAT`], leg 8.
-/// 4. an item with no on-use spell, or no template yet, is usable (`4e5127`..`4e5135`).
+/// 4. an item with no on-use spell, or no template yet, is usable (`4e5127`..`4e5135`) while the
+///    player has control (`4e50f4`).
 ///
 /// An on-use spell with no catalog row reads grey with `notEnoughMana = 0` (`4e51aa`).
 pub(crate) fn item_usable(
@@ -321,7 +325,8 @@ pub(crate) fn item_usable(
     }
     // Gate 4: no on-use spell, or no template yet.
     let Some(use_spell) = use_spell else {
-        return (true, false);
+        // The spell-less leg (`0x4e50f4`): lost control greys it before the item word is read.
+        return (!ctx.control_lost, false);
     };
     let spell_id = use_spell.spell_id;
     let d = spells.and_then(|s| s.catalog.get(spell_id));
@@ -357,6 +362,13 @@ pub(crate) fn spell_usable(
     // Leg 1 (`0x6e3dad`): a dead or ghost caster (`0x605f30`) needs the castable-while-dead
     // attribute (`0x6e3db6`).
     if ctx.store.0.is_dead_or_ghost() && d.attributes & ATTR_CASTABLE_WHILE_DEAD == 0 {
+        return (false, false);
+    }
+    // Leg 2 (`0x6e3dc3`-`0x6e3e4c`): without control, only a spell whose immunity covers the aura
+    // that took it (fear, confusion, charm) passes.
+    if ctx.control_lost
+        && !crate::ui_unit::control_gate::exempts_lost_control(&spells.catalog, d, &ctx.store.0)
+    {
         return (false, false);
     }
     // Leg 3 (`0x6e4000`): every reagent count carried, every totem tool present.
@@ -740,6 +752,7 @@ mod tests {
             cooldowns,
             carried,
             spell_mods,
+            control_lost: false,
         }
     }
 
@@ -1001,11 +1014,104 @@ mod tests {
                 cooldowns: &cooldowns,
                 carried: &carried,
                 spell_mods: &SpellModifiers::default(),
+                control_lost: false,
             };
             assert_eq!(
                 spell_usable(5308, &execute, &spells, &ctx, &objects, &items, &commands),
                 (expect, false)
             );
         }
+    }
+
+    /// The walk with the control flag set as given, against `spells`' catalog.
+    fn walk_lost(
+        d: &SpellDisplay,
+        store: &ObjectStore,
+        spells: &Spells,
+        control_lost: bool,
+    ) -> (bool, bool) {
+        let cooldowns = Cooldowns::default();
+        let reputations = Reputations::default();
+        let items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut objs = crate::ui_items::TestObjects::new();
+        let objects = objs.get();
+        let carried = crate::ui_items::carried_counts(&store.0, &objects);
+        let spell_mods = SpellModifiers::default();
+        let mut c = ctx(store, &cooldowns, &reputations, &carried, &spell_mods);
+        c.control_lost = control_lost;
+        spell_usable(1, d, spells, &c, &objects, &items, &commands)
+    }
+
+    /// `UNIT_FIELD_FLAGS` (46) bit 23 and the first `UNIT_FIELD_AURA` slot (47).
+    const FLEEING: u32 = 0x0080_0000;
+
+    /// Leg 2 (`0x6e3dc3`-`0x6e3e4c`): with `[0xb4b3e4]` clear every spell greys, but the one whose
+    /// immunity covers the fear that took control (Will of the Forsaken's shape) stays lit.
+    #[test]
+    fn lost_control_greys_every_spell_an_immunity_scan_does_not_exempt() {
+        const FEAR_AURA: u32 = 5782;
+        let mut fear = SpellDisplay {
+            mechanic: 5,
+            ..Default::default()
+        };
+        fear.effects[0] = 6;
+        fear.effect_apply_aura[0] = 7;
+        let mut immunity = SpellDisplay {
+            attributes_ex: 0x8000,
+            ..Default::default()
+        };
+        immunity.effects[0] = 6;
+        immunity.effect_apply_aura[0] = 77;
+        immunity.effect_misc_value[0] = 5;
+        let mut spells = Spells::empty_for_tests();
+        spells.catalog = benilla_formats::SpellCatalog::from_displays([(FEAR_AURA, fear)].into());
+        let plain = SpellDisplay::default();
+
+        let feared = player(&[(46, (1 << 3) | FLEEING), (47, FEAR_AURA)]);
+        assert_eq!(walk_lost(&plain, &feared, &spells, false), (true, false));
+        assert_eq!(
+            walk_lost(&plain, &feared, &spells, true),
+            (false, false),
+            "a plain spell greys while control is lost"
+        );
+        assert_eq!(
+            walk_lost(&immunity, &feared, &spells, true),
+            (true, false),
+            "the fear immunity passes the scan"
+        );
+        // The same spell without the fear flag asks no scan: control lost for another reason.
+        let rooted = player(&[(47, FEAR_AURA)]);
+        assert_eq!(walk_lost(&immunity, &rooted, &spells, true), (false, false));
+        // A charm reads `UNIT_FIELD_CHARMEDBY` (10) with no aura of its type on the caster: no
+        // aura found, no exemption.
+        let charmed = player(&[(10, 0x77)]);
+        assert_eq!(
+            walk_lost(&immunity, &charmed, &spells, true),
+            (false, false)
+        );
+    }
+
+    /// The spell-less leg (`0x4e50f4`) of the item arm: an item with no on-use spell greys while
+    /// control is lost.
+    #[test]
+    fn an_item_with_no_on_use_spell_greys_without_control() {
+        let cooldowns = Cooldowns::default();
+        let reputations = Reputations::default();
+        let items = Items::default();
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut objs = crate::ui_items::TestObjects::new();
+        let objects = objs.get();
+        let store = player(&[]);
+        let carried = std::collections::HashMap::new();
+        let spell_mods = SpellModifiers::default();
+        let mut c = ctx(&store, &cooldowns, &reputations, &carried, &spell_mods);
+        let usable =
+            |c: &UsableCtx| item_usable(6948, None, true, c, None, &objects, &items, &commands);
+        assert_eq!(usable(&c), (true, false));
+        c.control_lost = true;
+        assert_eq!(usable(&c), (false, false));
     }
 }
