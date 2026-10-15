@@ -175,7 +175,6 @@ fn snapshot(
     stats: Option<&PetStatTables>,
     next_slot_cost: u32,
     has_live_pet: bool,
-    live_pet_display: Option<u32>,
     commands: &NetCommands,
 ) -> Option<StableState> {
     open.npc?;
@@ -195,7 +194,6 @@ fn snapshot(
         next_slot_cost,
         slots,
         has_live_pet,
-        live_pet_display,
     })
 }
 
@@ -243,12 +241,16 @@ fn feed_stable(
 
     // The reference's live-pet test, `[0xb714a0]|[0xb714a4]`; a dismissed pet fails it.
     let has_live_pet = bar.spells.pet_guid != 0;
-    // The summoned pet's own display while its object is held (`[unit+0xb30]`, `0x4cb99e`).
+    // The summoned pet's cache record while its object is held, `[unit+0xb30]` (`0x60b131`): the
+    // template's display, which `0x505a70` reads at `[rec+0x2c]`. Apart from the snapshot, so it
+    // fires nothing.
     let live_pet_display = has_live_pet
         .then(|| pet.store(bar.spells.pet_guid))
         .flatten()
-        .and_then(|s| s.0.unit_displayid())
-        .and_then(|d| u32::try_from(d).ok());
+        .and_then(|s| s.0.object_entry())
+        .and_then(|entry| names.creature_record(entry))
+        .map(|r| r.display_id);
+    script.set_stable_live_pet_display(live_pet_display);
     let fresh = snapshot(
         &open,
         &names,
@@ -256,7 +258,6 @@ fn feed_stable(
         stats.as_deref(),
         next_slot_cost,
         has_live_pet,
-        live_pet_display,
         &commands,
     );
     let fresh_list = std::mem::take(&mut open.fresh_list);

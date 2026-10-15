@@ -186,8 +186,8 @@ fn the_stable_pane_shows_the_selected_pets_display() {
             None,
         ],
         has_live_pet: true,
-        live_pet_display: Some(4449),
     }));
+    s.set_stable_live_pet_display(Some(4449));
     s.fire_event("PET_STABLE_SHOW", vec![]);
     let pane = |s: &UiScript| {
         s.character_pane(s.frame_handle("PetStableModel").unwrap())

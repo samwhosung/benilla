@@ -896,7 +896,9 @@ impl Plugin for MinimapPlugin {
                         .before(emit_minimap),
                     // Not in `LightingConsumeSet` though it reads `WowLighting`: at most one frame
                     // of late tint on a 140 px map, not worth a world API item.
-                    emit_minimap.in_set(UiQuadAppend),
+                    emit_minimap
+                        .in_set(UiQuadAppend)
+                        .before(crate::portrait::PaneComposite),
                     // After the emit that fills it, so the blit never samples a frame-old target.
                     composite::drive_composite.after(UiQuadAppend),
                     // Before the script tick, so a zoom button routes to the live index.

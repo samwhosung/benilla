@@ -70,7 +70,8 @@ struct Copy {
 }
 
 impl Copy {
-    /// A copy as [`build`] leaves it: the spawn's head Stand looping, and no arm played.
+    /// A copy as [`build`] leaves it: the idle its load arms, Stand variation 0, and no arm
+    /// played.
     fn spawned(anims: benilla_assets::ModelAnimations) -> Self {
         let mut player = AnimationPlayer::default();
         player.play(node(1)).repeat();
@@ -106,23 +107,23 @@ impl Copy {
     }
 }
 
-/// The copy is a fresh instance (`0x5059a0` → `0x707400`): the Stand armed on it has no pose to
-/// fade out of, so it lands at once, a rolled variation in place of the spawn's head.
+/// The copy's load arms its idle at once (`0x71d5d0` → `0x70ebd0`), so the Stand `0x505a2f`
+/// arms, blend 1 with the latch clear, fades from it (`0x7125d6`) to a rolled variation.
 #[test]
-fn the_first_arm_on_a_fresh_copy_cuts_to_a_rolled_stand() {
+fn the_first_arm_on_a_fresh_copy_blends_from_its_idle() {
     let c = Copy::standing();
     assert_eq!(
         c.turn.playing,
         Some(node(2)),
-        "a frequency roll, not the head"
+        "a frequency roll, not the idle"
     );
     assert_eq!(
-        weight(&c.player, 2),
-        Some(1.0),
-        "at full weight on its first frame"
+        c.turn.fade.map(|f| (f.node, f.until)),
+        Some((node(1), 0.5)),
+        "fading out of the idle over Stand's own 0.5 s"
     );
-    assert_eq!(weight(&c.player, 1), None, "the spawn's head is stopped");
-    assert!(c.turn.fade.is_none());
+    assert_eq!(weight(&c.player, 2), Some(0.0), "the pose does not jump");
+    assert_eq!(weight(&c.player, 1), Some(1.0));
 }
 
 /// Every arm `0x505bb0`/`0x505c50` makes carries `blendFlag = 1`, each over the incoming clip's
@@ -282,6 +283,18 @@ fn an_arm_reports_its_natural_end_once() {
     );
     assert_eq!(c.step(stand, 0.6), None, "reported once");
 
+    // The callback's Stand (`0x5062e4`), blend 1 with the latch set: the same sequence restarts
+    // with no blend slot (`0x712553`).
+    c.player.play(node(2)).seek_to(0.4);
+    c.step(arm(ANIM_STAND, 2, true), 0.6);
+    assert_eq!(c.turn.playing, Some(node(2)));
+    assert!(c.turn.fade.is_none(), "no blend slot");
+    assert_eq!(
+        c.player.animation(node(2)).map(|a| a.seek_time()),
+        Some(0.0),
+        "restarted"
+    );
+
     // Two plays drawn from the replay range: the window doubles.
     let mut anims = turning_model();
     for clip in &mut anims.clips {
@@ -302,8 +315,12 @@ fn an_arm_reports_its_natural_end_once() {
     assert_eq!(c.step(late, 1.3), Some(2));
 }
 
+/// `0x7121a0` resolves an id the model lacks through its fallback (`0x711bf0`, default Stand),
+/// so a pet with no shuffles plays Stand for one; the paint's Stand return then re-arms the
+/// running sequence with the latch clear, which blends (`0x71255f`) rather than snapping the idle
+/// back to its first frame.
 #[test]
-fn a_display_with_no_shuffle_never_leaves_stand() {
+fn a_display_with_no_shuffle_turns_on_stand_and_returns_without_a_snap() {
     let mut anims = turning_model();
     anims.clips.retain(|c| c.anim_id == ANIM_STAND);
     // The model's own baked resolution: both shuffles fall back to Stand.
@@ -314,17 +331,25 @@ fn a_display_with_no_shuffle_never_leaves_stand() {
         };
         usize::from(ANIM_SHUFFLE_RIGHT) + 1
     ];
+    // A long idle, so no window closes inside the test.
+    for clip in &mut anims.clips {
+        clip.duration = 5.0;
+    }
     let mut c = Copy::spawned(anims);
     c.step(arm(ANIM_STAND, 1, true), 0.0);
-    for (serial, t) in [(2, 0.1), (3, 0.2), (4, 0.3)] {
-        assert_eq!(c.step(arm(ANIM_SHUFFLE_LEFT, serial, true), t), None);
-    }
-    assert!(c.turn.fade.is_none(), "nothing was cross-faded");
-    assert_eq!(weight(&c.player, 2), Some(1.0), "Stand, untouched");
+    c.step(arm(ANIM_STAND, 1, true), 0.6); // the idle's fade done
+    c.player.play(node(2)).seek_to(0.3);
+    c.step(arm(ANIM_SHUFFLE_LEFT, 2, true), 1.0);
+    assert_eq!(c.turn.playing, Some(node(2)), "the substitute plays");
+    assert!(c.turn.ends.is_some(), "an arm that played owes its end");
+    // The paint's return, 100 ms on.
+    c.step(arm(ANIM_STAND, 3, true), 1.11);
+    assert!(c.turn.fade.is_none(), "nothing else to fade from");
+    assert_eq!(weight(&c.player, 2), Some(1.0));
     assert_eq!(
-        c.step(arm(ANIM_SHUFFLE_LEFT, 4, true), 5.0),
-        None,
-        "an arm that never played owes no end"
+        c.player.animation(node(2)).map(|a| a.seek_time()),
+        Some(0.3),
+        "the idle runs on, no snap to frame 0"
     );
 }
 
@@ -610,6 +635,7 @@ fn hiding_releases_the_booth_and_showing_builds_again() {
     let pane = h.handle(Some("Doll"));
     h.frame();
     assert!(h.meshes(pane).is_some());
+    let target = h.target(pane);
 
     h.run("m:Hide()");
     h.frame();
@@ -623,6 +649,18 @@ fn hiding_releases_the_booth_and_showing_builds_again() {
     assert_eq!(h.meshes(pane), Some(vec![h.me_mesh.clone()]));
     let copy = h.script().character_pane(pane).unwrap().copy;
     assert!(copy.is_some_and(|c| c.build == 2), "a new copy: {copy:?}");
+    assert_eq!(
+        h.target(pane),
+        target,
+        "drawn into the same target, not a new one"
+    );
+}
+
+/// A pane past the target cap keeps its shape.
+#[test]
+fn an_oversized_pane_target_scales_down_whole() {
+    assert_eq!(target_size(UVec2::new(233, 224)), UVec2::new(233, 224));
+    assert_eq!(target_size(UVec2::new(8192, 2048)), UVec2::new(4096, 1024));
 }
 
 /// `RefreshUnit` (`0x505e40`) rebuilds from the GUID `SetUnit` stored, not from what the token
@@ -654,7 +692,8 @@ fn refresh_unit_rebuilds_the_stored_guid() {
     assert_eq!(h.meshes(pane), Some(vec![h.me_mesh.clone()]));
 }
 
-/// A GUID the client holds no unit for builds nothing (`0x505b8d`), and the old copy stays.
+/// A GUID the client holds no unit for builds nothing (`0x505b8d`) and the old copy stays; the
+/// unit appearing later builds nothing either, until the next request.
 #[test]
 fn a_unit_the_client_does_not_hold_leaves_the_old_copy() {
     let mut h =
@@ -679,7 +718,25 @@ fn a_unit_the_client_does_not_hold_leaves_the_old_copy() {
         c.copy.is_some_and(|c| c.build == 1),
         "the engine's old copy: {c:?}"
     );
-    assert!(c.pending(), "the request waits for the unit");
+    assert!(!c.pending(), "the request is spent");
+
+    // The unit streams in: nothing builds on its own.
+    let other = h.app.world().resource::<crate::net::GuidIndex>().0[&OTHER];
+    h.app
+        .world_mut()
+        .resource_mut::<crate::net::GuidIndex>()
+        .0
+        .insert(0x777, other);
+    h.frame();
+    assert_eq!(
+        h.meshes(pane),
+        Some(vec![h.me_mesh.clone()]),
+        "still the old copy"
+    );
+    // The next request does.
+    h.run("m:RefreshUnit()");
+    h.frame();
+    assert_eq!(h.meshes(pane), Some(vec![h.other_mesh.clone()]));
 }
 
 /// A `SetModel` file takes `+0x318` from the copy; the booth goes, and a later `SetUnit` builds

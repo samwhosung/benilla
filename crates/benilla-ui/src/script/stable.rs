@@ -58,9 +58,6 @@ pub struct StableState {
     /// stabled pet's drop between swap and unstable. Not `slots[0].is_some()`: a dismissed or
     /// distant pet keeps its slot-0 row with no live guid.
     pub has_live_pet: bool,
-    /// The summoned pet's own display while the client holds its unit (`[unit+0xb30]`, read by
-    /// `SetPetStablePaperdoll` at `0x4cb99e`); `None` when it holds none.
-    pub live_pet_display: Option<u32>,
 }
 
 impl StableState {
@@ -92,6 +89,10 @@ pub(crate) struct StableModel {
     pub(crate) selected: i32,
     pub(crate) intents: Vec<StableIntent>,
     pub(crate) close: bool,
+    /// The summoned pet's creature-cache display while the client holds its unit: `[unit+0xb30]`
+    /// is the unit's cache record (`0x60b131`), whose display `0x505a70` reads at `[rec+0x2c]`
+    /// (`0x505a83`). Apart from the snapshot, whose changes fire the window's events.
+    pub(crate) live_pet_display: Option<u32>,
 }
 
 /// Nothing selected, the client's reset (`0x4caad3`); Lua reads it as -1 through
@@ -103,6 +104,7 @@ impl Default for StableModel {
             selected: 0,
             intents: Vec::new(),
             close: false,
+            live_pet_display: None,
         }
     }
 }
@@ -117,6 +119,13 @@ impl super::UiScript {
         // A held pet stays on the cursor: the reference's close clears only the stable-master
         // guid (`0x4cae10`).
         model.stable.state = state;
+    }
+
+    /// Push the summoned pet's creature-cache display, `None` while the client holds no pet unit
+    /// or its record has not answered ([`StableModel::live_pet_display`]). Fires nothing: the
+    /// reference's paperdoll event comes only from the cache callbacks (`0x4cba50`, `0x4cb3b0`).
+    pub fn set_stable_live_pet_display(&mut self, display: Option<u32>) {
+        self.model_mut().stable.live_pet_display = display;
     }
 
     /// Drain the queued stable verbs.
@@ -175,7 +184,7 @@ fn paperdoll_display(m: &StableModel) -> Option<u32> {
     };
     match m.selected {
         0 => None,
-        -1 => state
+        -1 => m
             .live_pet_display
             .or_else(|| state.slots[0].as_ref().and_then(|p| p.display_id)),
         pet_number => row(i64::from(pet_number)).and_then(|p| p.display_id),
@@ -471,6 +480,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 )
             })?;
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            // The object type check (`0x4cb904`): a character pane, else the error at `0x848fd8`.
+            let character = matches!(
+                model.arena.frame(h).map(|f| &f.kind_state),
+                Some(crate::widget::KindState::Model(m)) if m.character.is_some()
+            );
+            if !character {
+                return Err(mlua::Error::runtime(
+                    "SetPetStablePaperdoll(): Wrong object type, expected frame",
+                ));
+            }
             if let Some(display) = paperdoll_display(&model.stable) {
                 model.set_pane_display(h, display);
             }
@@ -536,7 +555,6 @@ mod tests {
             next_slot_cost: 50_000,
             slots,
             has_live_pet: true,
-            live_pet_display: Some(4449),
         }
     }
 
@@ -798,6 +816,14 @@ mod tests {
                 .contains("Usage: SetPetStablePaperdoll(characterModel)"),
             "{err}"
         );
+        // A frame, but no character pane: the object type check (`0x4cb904`, `0x848fd8`).
+        s.run(r#"plain = CreateFrame("Model")"#).unwrap();
+        let err = s.eval::<()>("SetPetStablePaperdoll(plain)").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("SetPetStablePaperdoll(): Wrong object type, expected frame"),
+            "{err}"
+        );
     }
 
     /// The pane shows a creature display, never a unit copy: the summoned pet's live one, else
@@ -814,6 +840,8 @@ mod tests {
             (c.guid, c.display)
         };
         open(&mut s);
+        // The summoned pet's cache record, held apart from the snapshot.
+        s.set_stable_live_pet_display(Some(4449));
         // Nothing selected after a list: the call sets nothing (`0x4cb931`).
         s.eval::<()>("SetPetStablePaperdoll(m)").unwrap();
         assert_eq!(shown(&s), (0, 0));
@@ -834,8 +862,8 @@ mod tests {
         // The pet dismissed: the current pet's row.
         let mut dismissed = state([Some(pet(7, "Rex", 41)), Some(pet(8, "Bruiser", 38)), None]);
         dismissed.has_live_pet = false;
-        dismissed.live_pet_display = None;
         s.set_stable(Some(dismissed));
+        s.set_stable_live_pet_display(None);
         s.eval::<()>("ClickStablePet(0) SetPetStablePaperdoll(m)")
             .unwrap();
         assert_eq!(shown(&s), (0, 1007));

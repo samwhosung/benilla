@@ -665,6 +665,90 @@ fn a_file_after_set_unit_overtakes_the_copy_in_flight() {
     assert!(!pane(&s).pending());
 }
 
+/// The armed id and whether a file sits at `+0x318`, read off the arena.
+fn file_arm(s: &UiScript, name: &str) -> (Option<i32>, bool) {
+    let lua = s.lua();
+    let model = lua.app_data_ref::<crate::script::Model>().expect("model");
+    let fh = model.arena.lookup(name).expect("frame");
+    match &model.arena.frame(fh).expect("live frame").kind_state {
+        crate::widget::KindState::Model(m) => (m.armed.map(|a| a.anim_id), m.path.is_some()),
+        _ => panic!("{name} is not a Model"),
+    }
+}
+
+/// `0x505bb0` and `0x505c50` act on whatever `+0x318` holds, a file `SetModel` put there
+/// included, and the hide hook releases it (`0x505ce7`): a re-show builds from the subject
+/// alone, so a pane with none shows nothing.
+#[test]
+fn a_character_pane_turns_and_releases_a_file_as_it_does_a_copy() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        p = CreateFrame("PlayerModel", "FilePane", UIParent)
+        p:SetWidth(90) p:SetHeight(90) p:SetPoint("CENTER", 0, 0)
+        p:SetModel("Creature\\Wolf\\Wolf.mdx")
+        p:SetSequence(0)
+        p:SetRotation(0.5)
+    "#,
+    )
+    .unwrap();
+    assert_eq!(
+        file_arm(&s, "FilePane"),
+        (Some(12), true),
+        "the file shuffles"
+    );
+    s.tick(0.05);
+    s.tick(0.2);
+    assert_eq!(
+        file_arm(&s, "FilePane"),
+        (Some(0), true),
+        "the paint returns the file to Stand"
+    );
+
+    s.run("p:Hide() p:Show()").unwrap();
+    assert_eq!(
+        file_arm(&s, "FilePane"),
+        (None, false),
+        "the hide released it"
+    );
+    assert_eq!(
+        char_state(&s, "FilePane").builds,
+        0,
+        "no subject, nothing asked"
+    );
+}
+
+/// An arm in the same chunk as the build lands on the copy on its way (the reference builds
+/// inside `SetUnit` and the show hook, `0x505b99`, `0x505d3c`), after its Stand; and a request the
+/// host found no unit for is spent, so nothing builds until the next one (`0x505b8d`).
+#[test]
+fn an_arm_waits_for_the_copy_on_its_way_and_a_missed_unit_is_spent() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.set_unit_guids(&guids(ORC, 0));
+    s.run(r#"p = CreateFrame("PlayerModel", "Queue", UIParent) p:SetUnit("player") p:SetSequence(60)"#)
+        .unwrap();
+    let h = s.frame_handle("Queue").unwrap();
+    assert!(char_state(&s, "Queue").copy.is_none());
+    s.character_copy_built(h, 1);
+    let arm = char_state(&s, "Queue").copy.unwrap().arm;
+    assert_eq!((arm.anim_id, arm.blend, arm.serial), (60, false, 2));
+
+    s.run("p:Hide() p:Show() p:SetSequence(61)").unwrap();
+    let c = char_state(&s, "Queue");
+    assert!(c.pending());
+    s.character_copy_missed(h, c.builds);
+    let c = char_state(&s, "Queue");
+    assert!(!c.pending(), "spent");
+    assert!(c.queued.is_none() && c.copy.is_none());
+    s.character_copy_built(h, c.builds);
+    assert!(
+        char_state(&s, "Queue").copy.is_none(),
+        "a late copy for a spent request is refused"
+    );
+}
+
 /// Hiding drops the copy and keeps the subject (`0x505ce0`); showing asks for a fresh copy
 /// (`0x505d00`); a build answered for a replaced request is dropped.
 #[test]
@@ -745,19 +829,25 @@ fn the_turn_latch_arms_shuffles_and_the_paint_returns_to_stand() {
     let h = s.frame_handle("Turner").unwrap();
     let arm = |s: &UiScript| char_state(s, "Turner").copy.unwrap().arm;
 
-    // No copy yet: the facing moves and the latch sets, but nothing is armed.
+    // The copy on its way takes the turn: the reference builds inside `SetUnit` (`0x505b99`), so
+    // the shuffle lands on the new copy after its Stand.
     s.run("p:SetRotation(0.5)").unwrap();
     assert!(char_state(&s, "Turner").turn_latch);
     s.tick(0.0);
     s.character_copy_built(h, 1);
-    let stand = arm(&s);
-    assert_eq!(stand.anim_id, 0);
-
-    // Growing: ShuffleRight; held the same way, armed once.
-    s.run("p:SetRotation(0.6)").unwrap();
     let right = arm(&s);
-    assert_eq!(right.anim_id, 12);
-    assert!(right.blend && right.serial > stand.serial);
+    assert_eq!(
+        right.anim_id, 12,
+        "facing grew: ShuffleRight, held for the copy"
+    );
+    assert!(
+        right.blend && right.serial == 2,
+        "after the copy's Stand (serial 1)"
+    );
+
+    // Held the same way, armed once.
+    s.run("p:SetRotation(0.6)").unwrap();
+    assert_eq!(arm(&s), right);
     s.run("p:SetRotation(0.7)").unwrap();
     assert_eq!(arm(&s), right, "a held direction arms once");
     // Shrinking: ShuffleLeft at once.

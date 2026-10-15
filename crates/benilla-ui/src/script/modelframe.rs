@@ -197,19 +197,7 @@ fn num(v: &Value) -> f32 {
 /// wrappers push blend 0, `0x76cf60`), a file pane its own sequence. A character pane holding a
 /// file arms the file.
 fn arm_pane(m: &mut ModelState, id: i32, ms: i64, facts: Option<&ModelFileFacts>) {
-    match m.character.as_mut().filter(|c| c.copy.is_some()) {
-        Some(c) if m.path.is_none() => {
-            m.sequence = id;
-            // An id past the sequence table arms nothing (`0x712484`).
-            if let Ok(id) = u16::try_from(id) {
-                c.arm(id, false);
-                if let Some(copy) = &mut c.copy {
-                    copy.arm.offset_ms = u32::try_from(ms).unwrap_or(0);
-                }
-            }
-        }
-        _ => m.arm(id, ms, facts),
-    }
+    m.arm_key_bone(id, ms, false, facts);
 }
 
 /// Same, as an integer (sequence and camera indices).
@@ -628,8 +616,8 @@ pub(super) fn install_player_model(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // `SetRotation(rad)` (`0x84f1fc[2]` → `0x505f00` → `0x505bb0`) turns the copy toward the angle
-    // ([`crate::widget::CharacterPane::rotate`]) and writes the yaw `SetFacing` writes
+    // `SetRotation(rad)` (`0x84f1fc[2]` → `0x505f00` → `0x505bb0`) turns whatever `+0x318` holds
+    // toward the angle ([`crate::widget::ModelState::rotate`]) and writes the yaw `SetFacing` writes
     // (`0x505c44`).
     m.set(
         "SetRotation",
@@ -639,10 +627,9 @@ pub(super) fn install_player_model(lua: &Lua) -> mlua::Result<()> {
                 .app_data_ref::<Model>()
                 .expect("model app_data")
                 .now_ms();
+            let facts = facts_of_pane(lua, &this)?;
             with_model(lua, &this, |m| {
-                if let Some(c) = &mut m.character {
-                    c.rotate(m.facing, rad, now_ms);
-                }
+                m.rotate(rad, now_ms, facts.as_deref());
                 m.facing = rad;
             })
         })?,
@@ -745,6 +732,17 @@ impl crate::script::UiScript {
             m.armed = None;
             m.pending_seed = false;
             m.icon = None;
+        }
+    }
+
+    /// The host found no unit for request `build` of the pane `h` (`0x468460` finds none at
+    /// `0x505b8d`/`0x505d30`): nothing was built, and nothing builds until the next request.
+    pub fn character_copy_missed(&mut self, h: FrameHandle, build: u64) {
+        let mut model = self.model_mut();
+        if let Some(KindState::Model(m)) = model.arena.frame_mut(h).map(|f| &mut f.kind_state) {
+            if let Some(c) = &mut m.character {
+                c.copy_missed(build);
+            }
         }
     }
 

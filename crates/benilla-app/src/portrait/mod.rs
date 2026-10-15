@@ -87,6 +87,16 @@ const SLOTS: [&str; 14] = [
     "partypet4",
     benilla_ui::script::LOOT_PORTRAIT_UNIT,
 ];
+/// The character panes' booth pass ([`panes::sync_panes`]), for the systems that share its
+/// booths and light pool.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PaneSync;
+
+/// The character panes' composite into the UI append lane; the lane's other writers order
+/// against it.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PaneComposite;
+
 /// The systems that write [`GluePreview`], one per glue screen set (the native screens', the
 /// stock glue VM's); the glue booth reads it after them, the same frame.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -675,19 +685,31 @@ impl Plugin for PortraitPlugin {
                     crate::ui_panes::feed_character_panes
                         .after(crate::ui_script::UiPaint)
                         .before(panes::sync_panes),
+                    // After the world's visuals (the display cache, the dressing room's
+                    // assembly, the animation driver it shares the variation roll with), the
+                    // window aspect and the portrait chain's booths.
                     panes::sync_panes
                         .after(crate::ui_script::UiPaint)
+                        .after(crate::entities::EntityVisualsSet)
+                        .after(feed_gx_aspect)
+                        .after(glue_booth::pace_glue_clock)
+                        .after(crate::aura_visual::apply_aura_anim_rate)
+                        .in_set(PaneSync)
                         .after(test_bake::sync_test_portraits)
                         .before(gate_booth_cameras),
                     // After the camera gate, the chain's last writer of the booths it samples.
                     panes::compose_panes
                         .after(panes::sync_panes)
                         .after(gate_booth_cameras)
+                        // The append lane's other writers, in a fixed order.
+                        .after(crate::ui_models::compose_tiles)
+                        .after(crate::combat_text::float_combat_text)
+                        .in_set(PaneComposite)
                         .in_set(crate::ui_pass::UiQuadAppend),
                 ),
             )
             // Re-face each booth's eye-glow cards to its own camera.
-            .add_systems(Update, booth::face_booth_billboards)
+            .add_systems(Update, booth::face_booth_billboards.after(PaneSync))
             // Push each booth part's sampled `MatAnim` alpha, after the sampler.
             .add_systems(
                 Update,
@@ -698,7 +720,7 @@ impl Plugin for PortraitPlugin {
             // `WOW_BOOTH_DUMP=<token>:<path>:<secs>`: write a booth's target to disk.
             .add_systems(Update, test_bake::dump_booth_target)
             // `WOW_BOOTH_LOG=1`: the model half of the framing instrument.
-            .add_systems(Update, log_booth_pose);
+            .add_systems(Update, log_booth_pose.after(PaneSync));
     }
 }
 

@@ -297,7 +297,8 @@ impl UiScript {
                 .collect();
             model.on_update_model_frames = live;
         }
-        // The character copies paint whether or not a script listens.
+        // The character panes paint whether or not a script listens: their turn timer runs on
+        // whatever `+0x318` holds.
         let copies: Vec<FrameHandle> = model
             .arena
             .model_kinds()
@@ -307,7 +308,7 @@ impl UiScript {
                 model
                     .arena
                     .frame(h)
-                    .is_some_and(|f| f.effective_visible && holds_copy(f))
+                    .is_some_and(|f| f.effective_visible && is_character(f) && has_model_file(f))
             })
             .collect();
         if model.on_update_model_frames.is_empty() && copies.is_empty() {
@@ -354,20 +355,29 @@ impl UiScript {
                     }
                 }
                 // The turn timer, against the latch the handler may just have set.
+                // It reads whatever `+0x318` holds, a file included.
                 let mut model = self.model_mut();
                 let now_ms = model.now_ms();
+                let path = match model.arena.frame(h).map(|f| &f.kind_state) {
+                    Some(crate::widget::KindState::Model(m)) if m.character.is_some() => {
+                        m.path.clone()
+                    }
+                    _ => continue,
+                };
+                let facts = path.and_then(|p| model.model_facts_for(&p));
                 if let Some(crate::widget::KindState::Model(m)) =
                     model.arena.frame_mut(h).map(|f| &mut f.kind_state)
                 {
-                    if m.path.is_none() {
-                        if let Some(c) = &mut m.character {
-                            c.paint(now_ms);
-                        }
-                    }
+                    m.turn_paint(now_ms, facts.as_deref());
                 }
             }
         }
     }
+}
+
+/// A `PlayerModel`, `DressUpModel` or `TabardModel`.
+fn is_character(f: &crate::widget::Frame) -> bool {
+    matches!(&f.kind_state, crate::widget::KindState::Model(m) if m.character.is_some())
 }
 
 /// A character pane whose copy sits at `+0x318`, rather than a file `SetModel` put there.

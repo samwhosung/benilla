@@ -45,16 +45,14 @@ impl WidgetArena {
 
     /// The hide transition's own step (`0x76ad50` up to its child walk): nothing unless the frame
     /// is visible (`0x76ad5b`); otherwise it marks itself invisible (`0x76ad93`). The shown bit is
-    /// not consulted. Whether it transitioned. A character pane drops its copy (`0x505ce7`, slot
-    /// 36 with null) and keeps the subject it was built from.
+    /// not consulted. Whether it transitioned. A character pane releases what `+0x318` holds
+    /// ([`super::ModelState::release_on_hide`]) and keeps the subject it was built from.
     pub fn hide_step(&mut self, h: FrameHandle) -> bool {
         match self.frame_mut(h) {
             Some(f) if f.effective_visible => {
                 f.effective_visible = false;
                 if let KindState::Model(m) = &mut f.kind_state {
-                    if let Some(c) = &mut m.character {
-                        c.copy = None;
-                    }
+                    m.release_on_hide();
                 }
                 true
             }

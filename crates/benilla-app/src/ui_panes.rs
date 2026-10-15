@@ -4,7 +4,8 @@
 //! A pane asks for a copy of its subject (`SetUnit`, `RefreshUnit`, `SetPetStablePaperdoll`, the
 //! show hook) and arms sequences on it; the booth builds the copy and plays the arms. Each frame,
 //! after the paint pass armed this frame's turns, the answers the booths gave last frame go in
-//! (the copy built, `0x5059a0`; a natural end, `0x5062a0`) and the panes come out.
+//! (the copy built, `0x5059a0`; no unit to build from, `0x505b8d`; a natural end, `0x5062a0`) and
+//! the panes come out.
 
 use bevy::prelude::*;
 
@@ -26,6 +27,8 @@ pub(crate) struct PaneAnswers {
     pub(crate) session: u64,
     /// `(pane, request)`: the copy for that build request stands in the pane's booth.
     pub(crate) built: Vec<(FrameHandle, u64)>,
+    /// `(pane, request)`: the client held no unit for that request's GUID.
+    pub(crate) missed: Vec<(FrameHandle, u64)>,
     /// `(pane, build, serial)`: that arm on that copy ran to its natural end.
     pub(crate) finished: Vec<(FrameHandle, u64, u64)>,
 }
@@ -40,6 +43,7 @@ pub(crate) fn feed_character_panes(
         panes.session = 0;
         panes.rows.clear();
         answers.built.clear();
+        answers.missed.clear();
         answers.finished.clear();
         return;
     };
@@ -50,6 +54,11 @@ pub(crate) fn feed_character_panes(
     for (h, build) in answers.built.drain(..) {
         if current {
             script.character_copy_built(h, build);
+        }
+    }
+    for (h, build) in answers.missed.drain(..) {
+        if current {
+            script.character_copy_missed(h, build);
         }
     }
     for (h, build, serial) in answers.finished.drain(..) {
