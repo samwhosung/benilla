@@ -266,14 +266,19 @@ pub(super) fn feed_action_state(
                 // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too: the
                 // gate reads the cache the recount wrote, never the bags (`0x4e50ab`).
                 let count = script.action_slot(action).map_or(0, |slot| slot.count);
-                // `IsEquippedAction`, the green border: worn in any equipment slot (0..18).
+                // `IsEquippedAction`, the green border: `0x622270` at mask 1 (`0x4e5377`-`0x4e5380`),
+                // the walker over the worn slots, so a broken copy is not worn.
                 st.equipped = me.is_some_and(|(s, _, _, _)| {
-                    (0..19).any(|i| {
-                        s.0.player_inv_slot(i)
-                            .and_then(|g| objects.object(g))
-                            .and_then(|o| o.object_entry())
-                            == Some(button.action)
-                    })
+                    crate::ui_items::find_item(
+                        &s.0,
+                        &objects,
+                        button.action,
+                        crate::ui_items::ItemSearch {
+                            equipment_only: true,
+                            ..Default::default()
+                        },
+                    )
+                    .is_some()
                 });
                 // `0x4e5050`'s item arm runs the count, `IsItemOnCooldown` and the on-use spell
                 // through the same `0x6e3d60` walk. With no player the reference answers (0, 0)
@@ -945,6 +950,94 @@ mod tests {
         assert!(
             !lit(0, true),
             "a stored zero greys it with a copy in the pack"
+        );
+    }
+
+    /// `IsEquippedAction` asks `0x622270` at mask 1 (`0x4e5380`), the walker over the worn slots,
+    /// which skips a broken item (`0x6224f4`-`0x62250e`): a worn weapon at durability 0 draws no
+    /// border, a whole one does, and a copy in the pack is not worn. The slot's count comes from
+    /// the recount (`0x4e6d20`, mask 0), and the usable gate reads that count (`0x4e50ab`): a worn
+    /// whole copy lights the slot, a broken one counts 0 and greys it.
+    #[test]
+    fn a_broken_worn_weapon_draws_no_equipped_border() {
+        use benilla_protocol::messages::ActionButton;
+        use benilla_protocol::ObjectFields;
+
+        const SWORD: u32 = 2025;
+        let equipped = |seat_field: u16, durability: u32| {
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            let mut actions = PlayerActions::default();
+            actions.buttons.insert(
+                0,
+                ActionButton {
+                    slot: 0,
+                    action: SWORD,
+                    kind: ACTION_KIND_ITEM,
+                },
+            );
+            let mut items = Items::default();
+            items.insert_template(SWORD, Some(crate::items::test_template("Sword")));
+            app.insert_resource(actions)
+                .insert_resource(crate::ui_macro::MacroBoundSpells::default())
+                .insert_resource(Spells::empty_for_tests())
+                .add_message::<crate::item_watch::ItemNotice>()
+                .add_message::<crate::net::WorldEnterCascadeMessage>()
+                .init_resource::<Cooldowns>()
+                .init_resource::<crate::spell::SpellModifiers>()
+                .init_resource::<crate::ui_script::UiClock>()
+                .init_resource::<AutoRepeatActive>()
+                .init_resource::<crate::spell::PendingCast>()
+                .init_resource::<crate::spell::QueuedMeleeSpell>()
+                .init_resource::<crate::spell::ActiveChannel>()
+                .init_resource::<crate::spell::SpellTargeting>()
+                .init_resource::<crate::spell::HeldForPick>()
+                .init_resource::<Selection>()
+                .init_resource::<crate::net::GuidIndex>()
+                .init_resource::<crate::net::Reputations>()
+                .insert_resource(items)
+                .insert_resource(NetCommands(tx));
+            // The sword: flags 0, durability, maximum 40.
+            crate::items::test_spawn_item(
+                app.world_mut(),
+                0xF0,
+                ObjectFields::from_pairs(&[(3, SWORD), (14, 1), (46, durability), (47, 40)]),
+                false,
+            );
+            app.world_mut().spawn((
+                SelfPlayer,
+                Transform::default(),
+                ObjectStore(ObjectFields::from_pairs(&[
+                    (22, 100),
+                    (23, 500),
+                    (46, 1 << 3),
+                    (seat_field, 0xF0),
+                ])),
+            ));
+            let mut script = UiScript::new().unwrap();
+            script.set_action(
+                1,
+                Some(benilla_ui::script::ActionSlot {
+                    kind: ACTION_KIND_ITEM,
+                    action: SWORD,
+                    count: 1,
+                    ..Default::default()
+                }),
+            );
+            app.insert_non_send_resource(script);
+            app.add_systems(Update, feed_action_state);
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<bool>("return (IsEquippedAction(1)) and true or false")
+                .unwrap()
+        };
+        // Player slot 15 is the main hand, 23 the first backpack seat.
+        assert!(equipped(486 + 2 * 15, 12), "a whole worn sword");
+        assert!(!equipped(486 + 2 * 15, 0), "a broken one");
+        assert!(
+            !equipped(486 + 2 * 23, 12),
+            "a copy in the pack is not worn"
         );
     }
 

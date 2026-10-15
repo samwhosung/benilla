@@ -252,6 +252,18 @@ impl InventoryScope {
     };
 }
 
+/// The walker's per-item gate (`0x6224f4`-`0x622513`): `ITEM_FIELD_FLAGS` (field 21) bit `0x8`
+/// (wrapped) exempts an item from the durability test; otherwise a maximum above 0
+/// (`+0xa4`, field 47) with durability 0 (`+0xa0`, field 46) is broken and skipped; bit `0x10`
+/// skips it either way.
+fn item_is_whole(fields: &ObjectFields) -> bool {
+    let flags = fields.item_flags().unwrap_or(0);
+    let broken = flags & 0x8 == 0
+        && fields.item_max_durability().unwrap_or(0) > 0
+        && fields.item_durability().unwrap_or(0) == 0;
+    !broken && flags & 0x10 == 0
+}
+
 /// The reference's inventory walk (`0x622420`): one ascending pass over the player's slot array,
 /// recursing into each container as it is passed, `scope` gating the sections. `visit` gets the
 /// wire `(bag_index, slot)` and the guid, and returns `Some` to stop. The order is the reference's
@@ -261,8 +273,22 @@ fn walk_inventory<T>(
     store: &ObjectFields,
     objects: &Objects,
     scope: InventoryScope,
-    mut visit: impl FnMut(u8, u8, u64) -> Option<T>,
+    mut raw: impl FnMut(u8, u8, u64) -> Option<T>,
 ) -> Option<T> {
+    // The walker passes an item to its callback only when it is whole (`0x6224f4`-`0x622513`):
+    // an unwrapped item with durability 0 of a nonzero maximum is broken and skipped, and so is
+    // one with flags bit `0x10`. Skipped, a container is not entered either (`0x622576`). The
+    // reference also skips a released object (`0x6224e1`, `0x614ea0`); a released item is no
+    // object here, so the lookups below already find none. An item whose object is not held is
+    // still visited, for the callers that judge it themselves.
+    let whole = |guid: u64| objects.object(guid).is_none_or(item_is_whole);
+    let mut visit = |bag: u8, slot: u8, guid: u64| {
+        if whole(guid) {
+            raw(bag, slot, guid)
+        } else {
+            None
+        }
+    };
     // A container's contents, addressed by its player-array slot as the wire bag byte.
     let contents =
         |bag_slot: u8, bag_guid: u64, visit: &mut dyn FnMut(u8, u8, u64) -> Option<T>| {
@@ -289,6 +315,9 @@ fn walk_inventory<T>(
             let bag_slot = BAG_SLOT_FIRST + bag;
             let bag_guid = store.player_inv_slot(bag_slot).unwrap_or(0);
             if bag_guid == 0 {
+                continue;
+            }
+            if !whole(bag_guid) {
                 continue;
             }
             // The bag object is a candidate itself, before its contents.
@@ -322,7 +351,7 @@ fn walk_inventory<T>(
         for bag in 0..BANK_BAGS {
             let bag_slot = BANK_BAG_SLOT_FIRST + bag;
             let bag_guid = store.player_bank_bag_slot(bag).unwrap_or(0);
-            if bag_guid == 0 {
+            if bag_guid == 0 || !whole(bag_guid) {
                 continue;
             }
             if let Some(hit) = visit(BAG_PLAYER_INVENTORY, bag_slot, bag_guid) {
@@ -1575,7 +1604,9 @@ mod find_item_tests {
 /// action slot's count ([`action_count`]) walks mask `0` and sums charges for a charged template.
 #[cfg(test)]
 mod count_of_tests {
-    use super::{action_count, count_of, stack_counts, InventoryScope, TestObjects};
+    use super::{
+        action_count, count_of, find_item, stack_counts, InventoryScope, ItemSearch, TestObjects,
+    };
     use benilla_protocol::ObjectFields;
 
     // Descriptor field indices, raw.
@@ -1760,6 +1791,61 @@ mod count_of_tests {
         assert_eq!(
             count_of(&store, &objs.get(), AMMO, InventoryScope::DEFAULT),
             5
+        );
+    }
+
+    /// `0x6224f4`-`0x622513`: the walker skips an unwrapped item with durability 0 of a nonzero
+    /// maximum, and any item with flags bit `0x10`; a wrapped broken item and a whole one pass.
+    /// A skipped container is not entered (`0x622576`).
+    #[test]
+    fn the_walker_skips_a_broken_item_and_a_flagged_one() {
+        const FLAGS: u16 = 21; // ITEM_FIELD_FLAGS
+        const DURABILITY: u16 = 46;
+        const MAX_DURABILITY: u16 = 47;
+        let store = player(&[(15, 0xA1), (16, 0xA2), (17, 0xA3), (18, 0xA4), (19, 0xBA)]);
+        let mut objs = TestObjects::new();
+        let item = |objs: &mut TestObjects, guid: u64, flags: u32, durability: u32, max: u32| {
+            objs.spawn(
+                guid,
+                ObjectFields::from_pairs(&[
+                    (ENTRY, AMMO),
+                    (STACK, 1),
+                    (FLAGS, flags),
+                    (DURABILITY, durability),
+                    (MAX_DURABILITY, max),
+                ]),
+            );
+        };
+        item(&mut objs, 0xA1, 0, 0, 40); // broken
+        item(&mut objs, 0xA2, 0x8, 0, 40); // wrapped: exempt from the durability test
+        item(&mut objs, 0xA3, 0, 12, 40); // whole
+        item(&mut objs, 0xA4, 0x10, 40, 40); // flag 0x10
+                                             // A broken bag: its contents are never reached.
+        let mut pairs = vec![
+            (ENTRY, 4_500),
+            (NUM_SLOTS, 16),
+            (DURABILITY, 0),
+            (MAX_DURABILITY, 10),
+            (SLOT_1, 0xC1u32),
+            (SLOT_1 + 1, 0),
+        ];
+        pairs.push((FLAGS, 0));
+        objs.spawn_container(0xBA, ObjectFields::from_pairs(&pairs));
+        stack(&mut objs, 0xC1, AMMO, 9);
+        assert_eq!(
+            count_of(&store, &objs.get(), AMMO, InventoryScope::DEFAULT),
+            2,
+            "the wrapped and the whole copy; the broken, the flagged and the broken bag's are not"
+        );
+        assert_eq!(
+            find_item(&store, &objs.get(), AMMO, ItemSearch::default()).map(|h| h.2),
+            Some(0xA2),
+            "the first hit skips the broken copy before it"
+        );
+        assert_eq!(
+            action_count(&store, &objs.get(), AMMO, None),
+            2,
+            "and so does the bar's count"
         );
     }
 
