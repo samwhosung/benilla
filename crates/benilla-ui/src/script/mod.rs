@@ -67,7 +67,7 @@ mod follow;
 pub(crate) mod font;
 mod font_block;
 mod frame_enum;
-pub use char_name::{check_char_name, NameLists, NoNameLists, CHAR_NAME_SUCCESS};
+pub use char_name::{check_char_name, NameCharsets, NameLists, NoNameLists, CHAR_NAME_SUCCESS};
 mod glue;
 mod glue_addons;
 mod glue_core;

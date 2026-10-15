@@ -162,6 +162,12 @@ pub(crate) fn client_locale() -> benilla_formats::Locale {
     chain().map(Chain::locale).unwrap_or_default()
 }
 
+/// `Wow.ini`'s `Region`, which start-up hands the character name check once (`0x402b7f`); 0 with
+/// no install, the file or the key. Signed, as the name check compares it (`0x6c9a78`).
+pub(crate) fn client_region() -> i32 {
+    chain().map_or(0, |c| benilla_formats::client_region(c) as i32)
+}
+
 /// Files a test lays over the chain, per test thread: an entry with bytes reads as a chain file,
 /// one with `None` as a file the chain lacks, and any other path falls through to the chain.
 #[cfg(test)]

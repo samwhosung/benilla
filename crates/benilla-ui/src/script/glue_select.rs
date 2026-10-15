@@ -597,7 +597,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             if name.is_empty() {
                 return Ok(MultiValue::new());
             }
-            let (guid, old, lists) = {
+            let (guid, old, lists, charsets) = {
                 let m = model(lua);
                 let Some(record) = usize::try_from(index)
                     .ok()
@@ -610,6 +610,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                     record.character.guid,
                     record.character.name.clone(),
                     m.glue.name_lists(),
+                    m.name_charsets(),
                 )
             };
             let force_rename = |key: &str| {
@@ -625,7 +626,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             }
             // `0x46b340`: a zero guid sends nothing and answers 1 (`0x46b355`).
             if guid != 0 {
-                let status = check_char_name(Some(&name), &*lists);
+                let status = check_char_name(Some(&name), &*lists, charsets);
                 if status != CHAR_NAME_SUCCESS {
                     force_rename(glue_status_key(i32::from(status)));
                     return Ok(MultiValue::from_vec(vec![Value::Nil]));
@@ -1336,6 +1337,51 @@ mod tests {
                 ] if a == "Newname" && b == "Zoë"
             ),
             "{queued:?}"
+        );
+    }
+
+    /// The rename's check holds the name to the client's charsets (`0x46b36f` → `0x5abd50`): a
+    /// Hangul name is the host's on a koKR client and invalid on an enUS one, and a `Region` of
+    /// 2 gives enUS the same Hangul pair.
+    #[test]
+    fn rename_character_checks_the_clients_charsets() {
+        let hangul = "RenameCharacter(2, '한글')";
+        let key = |s: &mut super::super::UiScript| {
+            s.run("FIRED = {}").unwrap();
+            s.eval::<f64>(&format!(
+                "local function n(...) return arg.n end return n({hangul})"
+            ))
+            .unwrap();
+            fired(s)
+        };
+        let mut s = rename_vm();
+        assert_eq!(
+            key(&mut s),
+            ["FORCE_RENAME_CHARACTER CHAR_NAME_INVALID_CHARACTER"]
+        );
+        assert!(s.take_glue_calls().is_empty());
+
+        s.set_locale(1);
+        assert!(key(&mut s).is_empty(), "koKR takes Hangul");
+        assert!(matches!(
+            s.take_glue_calls().as_slice(),
+            [GlueCall::RenameCharacter { guid: 2, name }] if name == "한글"
+        ));
+
+        s.set_locale(0);
+        s.set_client_region(2);
+        assert!(
+            key(&mut s).is_empty(),
+            "Region 2 takes Hangul on any locale"
+        );
+        assert_eq!(s.take_glue_calls().len(), 1);
+
+        s.set_client_region(1);
+        s.set_locale(1);
+        assert_eq!(
+            key(&mut s),
+            ["FORCE_RENAME_CHARACTER CHAR_NAME_INVALID_CHARACTER"],
+            "Region 1 is Latin even on koKR"
         );
     }
 

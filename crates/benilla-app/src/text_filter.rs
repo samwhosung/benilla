@@ -433,7 +433,7 @@ mod tests {
             (names.len(), profanity.len(), reserved.len()),
             "every row of the three compiled"
         );
-        let check = |name: &str| check_char_name(Some(name), &*filter.0);
+        let check = |name: &str| check_char_name(Some(name), &*filter.0, Default::default());
         // NamesReserved's `\<thrall\>` and `blizzard`; NamesProfanity's `\<pussy`; ChatProfanity's
         // unanchored `shit`.
         for name in ["Thrall", "THRALL", "Blizzardbob", "Pussycat", "Bullshit"] {

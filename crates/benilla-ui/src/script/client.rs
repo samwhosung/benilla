@@ -316,6 +316,17 @@ impl UiScript {
             0
         };
     }
+
+    /// `Wow.ini`'s `Region` as seated, 0 until the host seats the install's.
+    pub fn client_region(&self) -> i32 {
+        self.model_ref().client_region
+    }
+
+    /// Seat `Wow.ini`'s `Region`, which start-up hands the name check once (`0x402b7f`); a signed
+    /// word there, and only 1 to 5 picks a charset pair of its own.
+    pub fn set_client_region(&mut self, region: i32) {
+        self.model_mut().client_region = region;
+    }
 }
 
 /// The locale name table `0x8558a4` at the VM's locale index, `GetLocale`'s answer in either state.

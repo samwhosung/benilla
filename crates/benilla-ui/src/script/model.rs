@@ -744,6 +744,9 @@ pub(crate) struct Model {
     /// The client's locale index, `[0xc0e080]` (0, enUS, until the host seats the install's): the
     /// name `GetLocale` answers is the table `0x8558a4` at it ([`crate::toc::LOCALES`]).
     pub(crate) locale: usize,
+    /// `Wow.ini`'s `Region` as start-up hands it to the name check (`0x402b7f` → `0x6c91b8`,
+    /// `[0x86c9e0]`): 0 until the host seats the install's.
+    pub(crate) client_region: i32,
     /// A Slider thumb drag, left press to release or pointer leave, handled here with no Lua.
     pub(crate) slider_drag: Option<slider::SliderDrag>,
     /// A ColorSelect wheel or value-bar drag, press to release.
@@ -1188,6 +1191,11 @@ impl Model {
 }
 
 impl Model {
+    /// The charsets the character name check holds a name to: this client's `Region` and locale.
+    pub(crate) fn name_charsets(&self) -> super::NameCharsets {
+        super::NameCharsets::for_client(self.client_region, self.locale)
+    }
+
     /// The text a `SetText` stores (`0x771d80` with its expand flag): the separator pass
     /// `0x771c50` while `SetEuropeanNumbers` holds the switch (`0x771d9f`), else the text itself.
     pub(crate) fn localized_text(&self, text: String) -> String {
@@ -1537,6 +1545,7 @@ impl Model {
             layout_mode: 0,
             european_numbers: false,
             locale: 0,
+            client_region: 0,
             slider_drag: None,
             color_drag: None,
             gossip: None,

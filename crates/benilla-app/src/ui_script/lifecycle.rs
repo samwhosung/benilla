@@ -152,6 +152,8 @@ fn new_vm<E: std::fmt::Display>(
     script.set_european_numbers(european_numbers);
     // `[0xc0e080]`, which start-up sets once from `Wow.ini`, so every VM answers `GetLocale` alike.
     script.set_locale(super::client_locale().index());
+    // `[0x882730]`, `Wow.ini`'s `Region`, read once alike and handed to the name check.
+    script.set_client_region(super::client_region());
     seed_vm_clock(world, &mut script);
     install_addon_asset_resolvers(world, &mut script);
     info!("ui_script: new VM, session {}", script.session());
@@ -1111,6 +1113,7 @@ mod tests {
             assert_eq!(script.locale(), want.index());
             let answer = script.eval::<String>("return GetLocale()").unwrap();
             assert_eq!(answer, want.name());
+            assert_eq!(script.client_region(), super::super::client_region());
         }
     }
 
