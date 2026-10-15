@@ -253,7 +253,9 @@ impl TooltipAnchor {
 pub struct TooltipState {
     /// Lines currently filled (`NumLines`). Regions past this index exist but are hidden.
     pub num_lines: usize,
-    /// The left-column FontString pool, index i = line i+1, grown on demand up to [`Self::line_cap`].
+    /// The left-column FontString array (`+0x32c`), index i = line i+1: the `<name>TextLeft<n>`
+    /// pairs the post-load pass found (`0x529650`), then one per `AddFontStrings` (`0x529940`). Its
+    /// length is the line limit (`+0x320`), `0x530270` adding no line past it (`0x530291`).
     pub left_lines: Vec<RegionHandle>,
     /// The right-column pool (the `AddDoubleLine`/`TextRightN` half), parallel to `left_lines`.
     pub right_lines: Vec<RegionHandle>,
@@ -279,11 +281,8 @@ pub struct TooltipState {
     pub equipped_header_armed: bool,
     /// `SetPadding`: extra width past the content (`ItemRef.xml:40` sets 16 for the close button).
     pub padding: f32,
-    /// The line limit (`+0x320`), read once at the first line: the count of consecutive declared
-    /// `<name>TextLeft<n>`/`TextRight<n>` pairs, which the post-load pass counts (`0x529650`).
-    pub line_cap: usize,
-    /// [`Self::line_cap`] has been read.
-    pub line_cap_read: bool,
+    /// How many leading pairs the line writers have seated (anchored, justified, hidden).
+    pub seated: usize,
     /// A relayout (`0x530640`) is owed: Show and the line writers run it with an owner, and it
     /// ends by invalidating the plate (`0x530a52`). The layout pre-pass pays it.
     pub relayout_owed: bool,

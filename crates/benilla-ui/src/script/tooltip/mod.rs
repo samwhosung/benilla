@@ -3,8 +3,8 @@
 //!
 //! Lines are named FontString regions published as Lua globals (`<name>TextLeft1` …), since
 //! FrameXML addresses them by name (`GameTooltipTextLeft1:SetTextColor`, `UnitFrame.lua:76`). The
-//! template declares 30 pairs, which are adopted; the reference grows past them through
-//! `AddFontStrings`, and this also creates pairs on demand.
+//! post-load pass ([`post_load`]) fixes the pairs a tooltip holds, the template's 30 in the stock
+//! one, and only `AddFontStrings` adds to them; a tooltip with none holds no line.
 //!
 //! Layout is a pre-pass of every `resolve` ([`layout_tooltips`]): the width is the widest line (a
 //! double line adds the column gap) plus padding, floored by `SetMinimumWidth`; the height is the
@@ -54,95 +54,99 @@ pub(super) fn tip_mut(model: &mut Model, h: FrameHandle) -> mlua::Result<&mut To
     }
 }
 
-/// The tooltip's declared `<name>Text<cell><i>` FontString, if it owns one.
-fn declared_cell(
-    model: &Model,
-    h: FrameHandle,
-    frame_name: &str,
-    cell: &str,
-    i: usize,
-) -> Option<crate::widget::RegionHandle> {
-    if frame_name.is_empty() {
+/// The FontString a global of that name holds, as `FindFrameOfType` (`0x76c760`) finds it: a Lua
+/// global lookup and a type test, no owner check.
+fn global_font_string(lua: &Lua, name: &str) -> Option<crate::widget::RegionHandle> {
+    let Value::Table(t) = lua.globals().get::<Value>(name).ok()? else {
         return None;
-    }
-    let id = model
-        .region_by_name
-        .get(&format!("{frame_name}Text{cell}{i}"))
-        .copied()?;
-    let rh = model.id_to_region.get(&id).copied()?;
-    (model.arena.region(rh)?.owner == h).then_some(rh)
-}
-
-/// The line limit (`+0x320`): the post-load pass counts `<name>TextLeft<n>` and `TextRight<n>`
-/// pairs from 1 until either is missing (`0x52972d`-`0x52983d`), and `0x530270` adds no line at
-/// that count (`0x530291`). The stock template declares 30; a tooltip with none holds no line.
-fn read_line_cap(lua: &Lua, this: &Table) -> mlua::Result<usize> {
-    let h = frame_handle_of(lua, this)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let frame_name = model
-        .arena
-        .frame(h)
-        .and_then(|f| f.name.clone())
-        .unwrap_or_default();
-    let mut cap = 0;
-    while declared_cell(&model, h, &frame_name, "Left", cap + 1).is_some()
-        && declared_cell(&model, h, &frame_name, "Right", cap + 1).is_some()
-    {
-        cap += 1;
-    }
-    let t = tip_mut(&mut model, h)?;
-    t.line_cap = cap;
-    t.line_cap_read = true;
-    Ok(cap)
-}
-
-/// `AddFontStrings` (`0x530c40` into `0x529940`) raises the line limit by one and seats the caller's
-/// pair as the last: the declared pairs are seated first, so it lands after them.
-pub(super) fn grow_line_cap(lua: &Lua, this: &Table) -> mlua::Result<()> {
-    let h = frame_handle_of(lua, this)?;
-    let read = with_tip(lua, this, |t| t.line_cap_read)?;
-    let cap = if read {
-        with_tip(lua, this, |t| t.line_cap)?
-    } else {
-        read_line_cap(lua, this)?
     };
-    ensure_lines(lua, this, cap)?;
-    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    tip_mut(&mut model, h)?.line_cap = cap + 1;
-    Ok(())
+    let rh = super::region::region_handle_of(lua, &t).ok()?;
+    let model = lua.app_data_ref::<Model>().expect("model app_data");
+    (model.arena.region(rh)?.kind == crate::widget::RegionKind::FontString).then_some(rh)
 }
 
-/// Seats line pairs up to `n`: the declared `<name>TextLeft<i>` and `TextRight<i>` are the line's
-/// cells (`0x5297c9`-`0x529812`), kept with their declared faces, and the engine owns their
-/// justify, visibility and anchors. `n` never passes the line limit ([`read_line_cap`]).
+/// A GameTooltip's post-load pass (`CGTooltip::PostLoadXML`, `0x529650`), run when the frame is
+/// made, after its template: it finds `<name>TextLeft<n>` and `<name>TextRight<n>` from 1 until
+/// either is missing (`0x52972d`-`0x52983d`; `<unnamed>` for an unnamed tooltip, `0x84c7f0`) and
+/// keeps the pairs as the line arrays. Their count is the line limit: the stock template declares
+/// 30, and a tooltip made without a template holds none.
+pub(crate) fn post_load(lua: &Lua, wrapper: &Table) {
+    let Ok(h) = frame_handle_of(lua, wrapper) else {
+        return;
+    };
+    let name = {
+        let model = lua.app_data_ref::<Model>().expect("model app_data");
+        if !matches!(
+            model.arena.frame(h).map(|f| &f.kind_state),
+            Some(KindState::Tooltip(_))
+        ) {
+            return;
+        }
+        model
+            .arena
+            .frame(h)
+            .and_then(|f| f.name.clone())
+            .unwrap_or_else(|| "<unnamed>".to_string())
+    };
+    let mut pairs = Vec::new();
+    loop {
+        let n = pairs.len() + 1;
+        let (Some(left), Some(right)) = (
+            global_font_string(lua, &format!("{name}TextLeft{n}")),
+            global_font_string(lua, &format!("{name}TextRight{n}")),
+        ) else {
+            break;
+        };
+        pairs.push((left, right));
+    }
+    let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+    if let Ok(t) = tip_mut(&mut model, h) {
+        t.left_lines = pairs.iter().map(|p| p.0).collect();
+        t.right_lines = pairs.iter().map(|p| p.1).collect();
+        t.seated = 0;
+    }
+}
+
+/// `AddFontStrings` (`0x530c40` into `0x529940`): the caller's pair becomes the last of the line
+/// arrays, raising the line limit by one. The pairs before it are seated first, in order.
+pub(super) fn add_font_strings(
+    lua: &Lua,
+    this: &Table,
+    left: crate::widget::RegionHandle,
+    right: crate::widget::RegionHandle,
+) -> mlua::Result<()> {
+    with_tip(lua, this, |t| {
+        t.left_lines.push(left);
+        t.right_lines.push(right);
+    })?;
+    let n = with_tip(lua, this, |t| t.left_lines.len())?;
+    ensure_lines(lua, this, n)
+}
+
+/// Seats line pairs up to `n`, each cell keeping its own faces: the engine owns their justify,
+/// visibility and anchors. `n` never passes the line limit.
 fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
     let h = frame_handle_of(lua, this)?;
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-    let frame_name = model
-        .arena
-        .frame(h)
-        .and_then(|f| f.name.clone())
-        .unwrap_or_default();
     let frame_id = model.frame_id(h);
     loop {
-        let (have, prev_left) = match model.arena.frame(h).map(|f| &f.kind_state) {
-            Some(KindState::Tooltip(t)) => (t.left_lines.len(), t.left_lines.last().copied()),
+        let (i, left, right, prev_left) = match model.arena.frame(h).map(|f| &f.kind_state) {
+            Some(KindState::Tooltip(t)) => {
+                let i = t.seated;
+                if i >= n {
+                    return Ok(());
+                }
+                let (Some(&left), Some(&right)) = (t.left_lines.get(i), t.right_lines.get(i))
+                else {
+                    return Err(mlua::Error::runtime("a tooltip line past its limit"));
+                };
+                (i, left, right, i.checked_sub(1).map(|p| t.left_lines[p]))
+            }
             _ => return Err(mlua::Error::runtime("not a GameTooltip")),
-        };
-        if have >= n {
-            return Ok(());
-        }
-        let i = have + 1;
-        let (Some(left), Some(right)) = (
-            declared_cell(&model, h, &frame_name, "Left", i),
-            declared_cell(&model, h, &frame_name, "Right", i),
-        ) else {
-            return Err(mlua::Error::runtime("a declared tooltip line is gone"));
         };
 
         let left_drew = model.region_draws(left);
         {
-            // Keep the declared faces.
             let mut d = model.region_data.remove(&left).unwrap_or_default();
             d.hidden = true;
             // Left-justified as in the template; it shows once a wrap line pins its width.
@@ -168,7 +172,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
             }]);
             model.region_data.insert(left, d);
             model.note_region_draw(left, left_drew);
-            model.touch_measure(left); // an adopted cell can arrive text-in-hand
+            model.touch_measure(left); // a cell can arrive text-in-hand
                                        // A line row's points are set with the invalidate flag (`0x530197`).
             model.invalidate_region(left, true);
         }
@@ -189,9 +193,7 @@ fn ensure_lines(lua: &Lua, this: &Table, n: usize) -> mlua::Result<()> {
         }
         model.region_id(right);
 
-        let t = tip_mut(&mut model, h)?;
-        t.left_lines.push(left);
-        t.right_lines.push(right);
+        tip_mut(&mut model, h)?.seated = i + 1;
     }
 }
 
@@ -602,8 +604,7 @@ pub(super) fn append_line(
     }
     let wrap = wrap && right_empty;
     let h = frame_handle_of(lua, this)?;
-    let (read, cap, have) = with_tip(lua, this, |t| (t.line_cap_read, t.line_cap, t.num_lines))?;
-    let cap = if read { cap } else { read_line_cap(lua, this)? };
+    let (cap, have) = with_tip(lua, this, |t| (t.left_lines.len(), t.num_lines))?;
     // A full line array adds nothing (`0x530291`).
     if have >= cap {
         return Ok(());

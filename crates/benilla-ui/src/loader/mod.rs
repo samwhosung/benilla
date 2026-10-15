@@ -739,6 +739,7 @@ impl Loader<'_> {
         // 7 · the post-load hook (`0x76a2f0`): close the window (`0x76a2ff`), then the nested
         //     <Frames>, whose OnLoads fire before ours (`0x76a060`).
         crate::script::visibility::set_load_window(self.lua(), wrapper, false);
+        crate::script::tooltip_post_load(self.lua(), wrapper);
         for frames_el in children_named(el, "Frames") {
             for child in &frames_el.children {
                 let expanded = self.expand(child);

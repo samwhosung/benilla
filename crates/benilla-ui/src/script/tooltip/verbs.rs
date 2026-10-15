@@ -2,16 +2,15 @@
 
 use mlua::{Lua, Table, Value, Variadic};
 
-use crate::layout::{Anchor, Anchors, Point};
 use crate::script::binding_abi::optional_string;
 use crate::script::object::frame_handle_of;
 use crate::script::region::region_handle_of;
 use crate::script::Model;
-use crate::widget::{KindState, TooltipAnchor, TOOLTIP_LINE_GAP, TOOLTIP_PAD};
+use crate::widget::{KindState, TooltipAnchor};
 
 use super::{
     append_line, clear, color_num, parse_line_color, parse_line_tail, set_owner_core, set_shown,
-    text_of, tip_mut, with_tip, wrap_arg, write_cell, REG_TOOLTIP_METHODS,
+    text_of, with_tip, wrap_arg, write_cell, REG_TOOLTIP_METHODS,
 };
 
 pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
@@ -196,64 +195,14 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
         "NumLines",
         lua.create_function(|lua, this: Table| with_tip(lua, &this, |t| t.num_lines as i64))?,
     )?;
-    // AddFontStrings(left, right) (`0x530c40`): adopts two caller-made FontStrings as the next
-    // line pair, placed like an engine-grown pair but keeping the caller's fonts.
+    // AddFontStrings(left, right) (`0x530c40`): the caller's FontStrings become the next line
+    // pair and raise the line limit by one (`0x529940`), keeping the caller's fonts.
     m.set(
         "AddFontStrings",
         lua.create_function(|lua, (this, left, right): (Table, Table, Table)| {
-            let h = frame_handle_of(lua, &this)?;
             let lh = region_handle_of(lua, &left)?;
             let rh = region_handle_of(lua, &right)?;
-            super::grow_line_cap(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            let frame_id = model.frame_id(h);
-            let prev_left = match model.arena.frame(h).map(|f| &f.kind_state) {
-                Some(KindState::Tooltip(t)) => t.left_lines.last().copied(),
-                _ => return Err(mlua::Error::runtime("not a GameTooltip")),
-            };
-            let anchor = match prev_left {
-                None => Anchor::new(
-                    Point::TopLeft,
-                    frame_id,
-                    Point::TopLeft,
-                    TOOLTIP_PAD,
-                    -TOOLTIP_PAD,
-                ),
-                Some(prev) => {
-                    let prev_id = model.region_id(prev);
-                    Anchor::new(
-                        Point::TopLeft,
-                        prev_id,
-                        Point::BottomLeft,
-                        0.0,
-                        -TOOLTIP_LINE_GAP,
-                    )
-                }
-            };
-            let left_id = model.region_id(lh);
-            let (left_drew, right_drew) = (model.region_draws(lh), model.region_draws(rh));
-            {
-                let d = model.region_data.entry(lh).or_default();
-                d.hidden = true;
-                d.justify.set_h(crate::script::JustifyH::Left);
-                d.anchors = Anchors::from([anchor]);
-            }
-            {
-                let d = model.region_data.entry(rh).or_default();
-                d.hidden = true;
-                d.justify.set_h(crate::script::JustifyH::Right);
-                d.anchors =
-                    Anchors::from([Anchor::new(Point::Right, left_id, Point::Right, 0.0, 0.0)]);
-            }
-            model.note_region_draw(lh, left_drew);
-            model.note_region_draw(rh, right_drew);
-            // Two line rows, their points set with the invalidate flag.
-            model.invalidate_region(lh, true);
-            model.invalidate_region(rh, true);
-            let t = tip_mut(&mut model, h)?;
-            t.left_lines.push(lh);
-            t.right_lines.push(rh);
-            Ok(())
+            super::add_font_strings(lua, &this, lh, rh)
         })?,
     )?;
     // SetMinimumWidth(w): a floor on the auto-sized width (`SetTooltipMoney` passes the money

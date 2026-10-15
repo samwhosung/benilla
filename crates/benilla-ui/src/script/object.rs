@@ -661,6 +661,8 @@ pub(super) fn create_frame(
         for w in report.warnings {
             model.record_warning(w);
         }
+    } else {
+        super::tooltip_post_load(lua, &wrapper);
     }
     Ok(wrapper)
 }
