@@ -466,7 +466,7 @@ fn stationeries(
                 &s.0,
                 objects,
                 row.item,
-                crate::ui_items::InventoryScope::CARRIED,
+                crate::ui_items::InventoryScope::DEFAULT,
             ) > 0
         });
         if row.flags & 1 == 0 && !carried {

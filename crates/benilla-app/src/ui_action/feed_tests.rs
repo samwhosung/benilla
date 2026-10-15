@@ -779,3 +779,82 @@ fn a_bag_count_moving_between_resolves_is_not_polled_into_the_bar() {
     assert_eq!(events, 0, "the feed polled the count into the bar");
     assert_eq!(count(&mut app), 4, "the slot keeps its stored count");
 }
+
+/// Our player holding `(player slot, guid)` pairs: slot 17 (the ranged slot) is worn, 23 the
+/// backpack's first, 81 the keyring's first.
+fn hold(world: &mut World, items: &[(u16, u64, u32, u32, u32)]) {
+    use benilla_protocol::field::{FIELD_ITEM_SPELL_CHARGES, FIELD_ITEM_STACK_COUNT};
+    use benilla_protocol::field::{FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD};
+    use benilla_protocol::ObjectFields;
+    let mut player = Vec::new();
+    for &(seat, guid, entry, stack, charges) in items {
+        crate::items::test_spawn_item(
+            world,
+            guid,
+            ObjectFields::from_pairs(&[
+                (FIELD_OBJECT_ENTRY, entry),
+                (FIELD_ITEM_STACK_COUNT, stack),
+                (FIELD_ITEM_SPELL_CHARGES, charges),
+            ]),
+            false,
+        );
+        let lo = FIELD_PLAYER_INV_SLOT_HEAD + 2 * seat;
+        player.push((lo, guid as u32));
+        player.push((lo + 1, (guid >> 32) as u32));
+    }
+    world.spawn((
+        crate::net::SelfPlayer,
+        crate::net::ObjectStore(ObjectFields::from_pairs(&player)),
+    ));
+}
+
+fn jerky_count(app: &mut App) -> i64 {
+    app.world_mut()
+        .non_send_resource::<UiScript>()
+        .eval::<i64>(&format!("return GetActionCount({JERKY_ACTION})"))
+        .unwrap()
+}
+
+/// `0x4e6d20` walks mask 0 (`0x47`): worn gear and the keyring count beside the bags, so a thrown
+/// stack worn in the ranged slot reads its stack on the bar.
+#[test]
+fn a_slot_counts_a_worn_stack_and_a_keyring_copy_beside_the_bags() {
+    let (mut app, _rx) = app_with_food_on_the_bar();
+    let mut info = test_template("Throwing Knife");
+    info.display_info_id = JERKY_DISPLAY;
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(JERKY, Some(info));
+    hold(
+        app.world_mut(),
+        &[
+            (17, 0x4000_0000_0000_0201, JERKY, 18, 0),
+            (23, 0x4000_0000_0000_0202, JERKY, 2, 0),
+            (81, 0x4000_0000_0000_0203, JERKY, 1, 0),
+        ],
+    );
+    app.update();
+    assert_eq!(jerky_count(&mut app), 21);
+}
+
+/// With the template's first charges neither 0 nor -1 the slot shows the uses left: the sum of
+/// the copies' absolute `ITEM_FIELD_SPELL_CHARGES[0]` (`0x4e6d81`-`0x4e6d9c`, `0x6221c7`), not the
+/// stack count. A cold template falls to the stack, and the answer re-resolves it.
+#[test]
+fn a_charged_item_slot_shows_the_uses_left() {
+    let (mut app, _rx) = app_with_food_on_the_bar();
+    hold(
+        app.world_mut(),
+        &[(23, 0x4000_0000_0000_0202, JERKY, 1, (-2i32) as u32)],
+    );
+    app.update();
+    assert_eq!(jerky_count(&mut app), 1, "no template yet: the stack count");
+    let mut info = test_template("Tough Jerky");
+    info.display_info_id = JERKY_DISPLAY;
+    info.spell_charges_0 = -3;
+    app.world_mut()
+        .resource_mut::<Items>()
+        .insert_template(JERKY, Some(info));
+    app.update();
+    assert_eq!(jerky_count(&mut app), 2, "|-2| charges, one item");
+}

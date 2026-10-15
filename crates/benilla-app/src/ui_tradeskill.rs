@@ -257,7 +257,7 @@ fn resolve_recipe(
     let mut reagents = Vec::new();
     let mut num_available = u32::MAX;
     for &(entry, need) in d.reagents.iter().filter(|&&(e, n)| e != 0 && n != 0) {
-        let have = count_of(&store.0, objects, entry, InventoryScope::CARRIED);
+        let have = count_of(&store.0, objects, entry, InventoryScope::DEFAULT);
         let (name, icon) = match items.template(entry, 0, commands) {
             Some(t) => (Some(t.name.clone()), item_icon(icons, t.display_info_id)),
             None => (None, None),
@@ -315,7 +315,7 @@ fn resolve_recipe(
         }
     }
     for &t in d.totems.iter().filter(|&&t| t != 0) {
-        let have = count_of(&store.0, objects, t, InventoryScope::CARRIED) > 0;
+        let have = count_of(&store.0, objects, t, InventoryScope::DEFAULT) > 0;
         if let Some(info) = items.template(t, 0, commands) {
             tools.push((info.name.clone(), have));
         }

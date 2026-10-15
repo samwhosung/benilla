@@ -10,8 +10,9 @@ use benilla_protocol::messages::ACTION_KIND_ITEM;
 use benilla_ui::script::{ScriptValue, UiScript};
 
 use crate::item_watch::ItemNotice;
-use crate::net::{ObjectStore, Objects, SelfPlayer, WorldEnterCascadeMessage};
-use crate::ui_items::{count_of, InventoryScope};
+use crate::items::Items;
+use crate::net::{NetCommands, ObjectStore, Objects, SelfPlayer, WorldEnterCascadeMessage};
+use crate::ui_items::action_count;
 
 /// The bar's 120 slots, as Lua action ids.
 const ACTION_SLOTS: std::ops::RangeInclusive<u32> = 1..=120;
@@ -24,6 +25,8 @@ pub(crate) fn recount_item_actions(
     mut arrivals: MessageReader<WorldEnterCascadeMessage>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
+    items: Res<Items>,
+    commands: Res<NetCommands>,
 ) {
     let arrived = arrivals.read().count() > 0;
     let notices: Vec<ItemNotice> = notices.read().cloned().collect();
@@ -31,11 +34,17 @@ pub(crate) fn recount_item_actions(
         return;
     };
     let store = self_q.iter().next();
+    let counter = Counter {
+        store,
+        objects: &objects,
+        items: &items,
+        commands: &commands,
+    };
     if arrived {
-        arrival_counts(&mut script, store, &objects);
+        arrival_counts(&mut script, &counter);
     }
     for entry in notices.iter().flat_map(ItemNotice::recounts) {
-        recount(&mut script, store, &objects, entry);
+        recount(&mut script, &counter, entry);
     }
 }
 
@@ -44,7 +53,7 @@ pub(crate) fn recount_item_actions(
 /// word is recounted (`0x4e5d90`) with no signal, then signals `ACTIONBAR_SLOT_CHANGED` once with
 /// 0 (`0x5deb20`). Nothing else recounts a worldport: its items are created again before our
 /// player, outside the world latch, and run no record set-up.
-fn arrival_counts(script: &mut UiScript, store: Option<&ObjectStore>, objects: &Objects) {
+fn arrival_counts(script: &mut UiScript, counter: &Counter) {
     let mut counts = std::collections::HashMap::new();
     for action in ACTION_SLOTS {
         let Some(mut slot) = script
@@ -55,23 +64,35 @@ fn arrival_counts(script: &mut UiScript, store: Option<&ObjectStore>, objects: &
         };
         slot.count = *counts
             .entry(slot.action)
-            .or_insert_with(|| count(store, objects, slot.action));
+            .or_insert_with(|| counter.count(slot.action));
         script.set_action(action, Some(slot));
     }
     script.fire_event("ACTIONBAR_SLOT_CHANGED", vec![ScriptValue::Int(0)]);
 }
 
-/// `0x4e6d20(entry)`: 0 without an active player.
-fn count(store: Option<&ObjectStore>, objects: &Objects, entry: u32) -> u32 {
-    store.map_or(0, |s| {
-        count_of(&s.0, objects, entry, InventoryScope::CARRIED)
-    })
+/// What `0x4e6d20` reads: the active player, the item objects and the template cache.
+struct Counter<'a> {
+    store: Option<&'a ObjectStore>,
+    objects: &'a Objects<'a, 'a>,
+    items: &'a Items,
+    commands: &'a NetCommands,
+}
+
+impl Counter<'_> {
+    /// `0x4e6d20(entry)`: 0 without an active player, else [`action_count`] over the entry's
+    /// template, requested here as the reference does (`0x4e6d78`).
+    fn count(&self, entry: u32) -> u32 {
+        self.store.map_or(0, |s| {
+            let template = self.items.template(entry, 0, self.commands);
+            action_count(&s.0, self.objects, entry, template)
+        })
+    }
 }
 
 /// `0x4e5c70(entry)`: no active player counts 0 (`0x4e6d20`). Each slot is read as the VM holds it
 /// when its turn comes, so a handler that rewrites a later slot is seen.
-fn recount(script: &mut UiScript, store: Option<&ObjectStore>, objects: &Objects, entry: u32) {
-    let count = count(store, objects, entry);
+fn recount(script: &mut UiScript, counter: &Counter, entry: u32) {
+    let count = counter.count(entry);
     for action in ACTION_SLOTS {
         let Some(mut slot) = script
             .action_slot(action)
@@ -106,10 +127,14 @@ mod tests {
     /// with five potions in backpack slot 1, and a spy on `ACTIONBAR_SLOT_CHANGED`.
     fn app() -> App {
         let mut app = App::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
         app.add_message::<ItemNotice>()
             .add_message::<WorldEnterCascadeMessage>()
             .init_resource::<crate::net::GuidIndex>()
+            .init_resource::<Items>()
+            .insert_resource(NetCommands(tx))
             .add_systems(Update, recount_item_actions);
+        app.insert_non_send_resource(rx); // a send must not fail
         let world = app.world_mut();
         crate::items::test_spawn_item(
             world,
@@ -232,6 +257,59 @@ mod tests {
         );
         assert_eq!(seen(&mut app), ["3=2", "50=2"]);
         assert_eq!(count(&mut app), 2);
+    }
+
+    /// `0x4e6d20`: the recount walks mask 0, so a copy worn in the ranged slot (player slot 17)
+    /// adds to the bag's, and a template whose first charges are neither 0 nor -1 stores the
+    /// summed absolute charges instead of the stacks.
+    #[test]
+    fn a_recount_stores_worn_stacks_and_then_charges() {
+        use benilla_protocol::field::FIELD_ITEM_SPELL_CHARGES;
+        const WORN: u64 = 0x4000_0000_0000_0102;
+        /// Player slot 17, the ranged slot.
+        const F_RANGED: u16 = 486 + 2 * 17;
+        let mut app = app();
+        let world = app.world_mut();
+        crate::items::test_spawn_item(
+            world,
+            WORN,
+            ObjectFields::from_pairs(&[
+                (FIELD_OBJECT_ENTRY, POTION),
+                (FIELD_ITEM_STACK_COUNT, 2),
+                (FIELD_ITEM_SPELL_CHARGES, (-4i32) as u32),
+            ]),
+            false,
+        );
+        let me = world
+            .query_filtered::<Entity, With<SelfPlayer>>()
+            .single(world)
+            .unwrap();
+        world
+            .get_mut::<ObjectStore>(me)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[
+                (F_RANGED, WORN as u32),
+                (F_RANGED + 1, (WORN >> 32) as u32),
+            ]));
+        let stacked = || ItemNotice::StackCount {
+            guid: POTIONS,
+            entry: POTION,
+        };
+        notify(&mut app, [stacked()]);
+        assert_eq!(seen(&mut app), ["3=7", "50=7"], "5 in the pack and 2 worn");
+
+        let mut template = crate::items::test_template("Elixir");
+        template.spell_charges_0 = -2;
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(POTION, Some(template));
+        notify(&mut app, [stacked()]);
+        assert_eq!(
+            seen(&mut app),
+            ["3=4", "50=4"],
+            "the worn copy's |-4| charges and the pack copy's none"
+        );
     }
 
     /// Our player's arrival stores every item slot's count with no per-slot signal, then signals

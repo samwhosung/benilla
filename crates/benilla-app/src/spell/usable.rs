@@ -46,8 +46,9 @@ pub(crate) struct UsableCtx<'a> {
     /// `[0xb4b3e4]` clear (`0x4958e0`): the player does not control the character. Leg 2 greys
     /// every spell its immunity scans do not exempt.
     pub(crate) control_lost: bool,
-    /// Every carried entry's count for the frame ([`crate::ui_items::carried_counts`]).
-    pub(crate) carried: &'a std::collections::HashMap<u32, u32>,
+    /// Every entry's stack count at mask 0 for the frame ([`crate::ui_items::stack_counts`]):
+    /// the reagent and totem counts of `0x6e4000`.
+    pub(crate) stacks: &'a std::collections::HashMap<u32, u32>,
 }
 
 /// The search covers equipment indices `0..=22` (`0x5f0c50`'s `cmp ebx,0x17; jl`): the 19 worn
@@ -294,11 +295,9 @@ fn equipped_slots_match(
 
 /// The item arm of the usable compute (`0x4e5050`), gate by gate:
 ///
-/// 1. a held count of 0 (the cache at `0xbc6390`) answers `(false, false)` (`4e50ab`). `held`
-///    is carried copies ([`crate::ui_items::InventoryScope::CARRIED`]) or a worn copy. The
-///    reference's count (`0x4e6d20`, mask `0x47`) also takes the keyring and sums spell charges
-///    for a charged item; ours does neither, so a key reads count 0 and a spent charged copy
-///    stays lit.
+/// 1. a held count of 0 (the cache at `0xbc6390`) answers `(false, false)` (`4e50ab`). `held` is
+///    that cached count nonzero: the slot's stored count, which [`crate::ui_items::action_count`]
+///    (`0x4e6d20`) wrote at the last recount.
 /// 2. `IsItemOnCooldown 0x6e2fc0` (`4e50d0`) answers `(false, false)`. It asks `0x6e1690` with
 ///    the item's first on-use spell and the item entry as the key: an on-hold-record test, so a
 ///    running cooldown or the GCD never greys an item.
@@ -370,15 +369,15 @@ pub(crate) fn spell_usable(
     {
         return (false, false);
     }
-    // Leg 3 (`0x6e4000`): every reagent count carried, every totem tool present.
-    let carried = |entry: u32| ctx.carried.get(&entry).copied().unwrap_or(0);
+    // Leg 3 (`0x6e4000`): every reagent count stacks, every totem tool present.
+    let stacks = |entry: u32| ctx.stacks.get(&entry).copied().unwrap_or(0);
     for &(entry, count) in &d.reagents {
-        if entry != 0 && carried(entry) < count {
+        if entry != 0 && stacks(entry) < count {
             return (false, false);
         }
     }
     for &totem in &d.totems {
-        if totem != 0 && carried(totem) == 0 {
+        if totem != 0 && stacks(totem) == 0 {
             return (false, false);
         }
     }
@@ -740,7 +739,7 @@ mod tests {
         store: &'a ObjectStore,
         cooldowns: &'a Cooldowns,
         reputations: &'a Reputations,
-        carried: &'a std::collections::HashMap<u32, u32>,
+        stacks: &'a std::collections::HashMap<u32, u32>,
         spell_mods: &'a SpellModifiers,
     ) -> UsableCtx<'a> {
         UsableCtx {
@@ -749,7 +748,7 @@ mod tests {
             factions: None,
             reputations,
             cooldowns,
-            carried,
+            stacks,
             spell_mods,
             control_lost: false,
         }
@@ -764,13 +763,13 @@ mod tests {
         let commands = NetCommands(tx);
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
-        let carried = crate::ui_items::carried_counts(&store.0, &objects);
+        let stacks = crate::ui_items::stack_counts(&store.0, &objects);
         let spell_mods = SpellModifiers::default();
         spell_usable(
             1,
             d,
             &spells,
-            &ctx(store, &cooldowns, &reputations, &carried, &spell_mods),
+            &ctx(store, &cooldowns, &reputations, &stacks, &spell_mods),
             &objects,
             &items,
             &commands,
@@ -1003,7 +1002,7 @@ mod tests {
         let low = ObjectStore(ObjectFields::from_pairs(&[(22, 10), (125, 0x2)]));
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
-        let carried = crate::ui_items::carried_counts(&me.0, &objects);
+        let stacks = crate::ui_items::stack_counts(&me.0, &objects);
         for (target, expect) in [(&healthy, false), (&low, true)] {
             let ctx = UsableCtx {
                 store: &me,
@@ -1011,7 +1010,7 @@ mod tests {
                 factions: None,
                 reputations: &reputations,
                 cooldowns: &cooldowns,
-                carried: &carried,
+                stacks: &stacks,
                 spell_mods: &SpellModifiers::default(),
                 control_lost: false,
             };
@@ -1036,9 +1035,9 @@ mod tests {
         let commands = NetCommands(tx);
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
-        let carried = crate::ui_items::carried_counts(&store.0, &objects);
+        let stacks = crate::ui_items::stack_counts(&store.0, &objects);
         let spell_mods = SpellModifiers::default();
-        let mut c = ctx(store, &cooldowns, &reputations, &carried, &spell_mods);
+        let mut c = ctx(store, &cooldowns, &reputations, &stacks, &spell_mods);
         c.control_lost = control_lost;
         spell_usable(1, d, spells, &c, &objects, &items, &commands)
     }
@@ -1104,9 +1103,9 @@ mod tests {
         let mut objs = crate::ui_items::TestObjects::new();
         let objects = objs.get();
         let store = player(&[]);
-        let carried = std::collections::HashMap::new();
+        let stacks = std::collections::HashMap::new();
         let spell_mods = SpellModifiers::default();
-        let mut c = ctx(&store, &cooldowns, &reputations, &carried, &spell_mods);
+        let mut c = ctx(&store, &cooldowns, &reputations, &stacks, &spell_mods);
         let usable =
             |c: &UsableCtx| item_usable(6948, None, true, c, None, &objects, &items, &commands);
         assert_eq!(usable(&c), (true, false));

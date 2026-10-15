@@ -6,7 +6,7 @@
 //! `IsSpellUsableNow 0x6e3d60` ([`crate::spell::usable`]), auto-repeat the `0xceac30` key, and
 //! range the squared distance against `GetMinMaxRange 0x6e3480`.
 
-use crate::ui_items::carried_counts;
+use crate::ui_items::stack_counts;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -126,9 +126,9 @@ pub(super) fn feed_action_state(
         &cast_state;
     let me = self_q.iter().next();
     let control_lost = player.as_ref().is_some_and(|p| p.own_control_lost);
-    // The bags, walked once per frame for every reagent, totem and item count below.
-    let carried = me
-        .map(|(s, _, _, _)| carried_counts(&s.0, &objects))
+    // The bags, walked once per frame for every reagent and totem count below.
+    let stacks = me
+        .map(|(s, _, _, _)| stack_counts(&s.0, &objects))
         .unwrap_or_default();
     let engaged = me.is_some_and(|(_, _, e, _)| e);
     let form_byte = me
@@ -204,7 +204,7 @@ pub(super) fn feed_action_state(
                         factions: factions.as_deref(),
                         reputations: &reputations,
                         cooldowns: &cooldowns,
-                        carried: &carried,
+                        stacks: &stacks,
                         spell_mods,
                         control_lost,
                     };
@@ -263,9 +263,9 @@ pub(super) fn feed_action_state(
                 let use_spell = items
                     .template(button.action, 0, &commands)
                     .and_then(|t| t.use_spell);
-                // `IsConsumableAction` (`0x4e5250`) reads only the template, so the identity
-                // feed pushes it with the count it gates, not this one.
-                let count = carried.get(&button.action).copied().unwrap_or(0);
+                // The count the slot holds (`0xbc6390`), which `GetActionCount` answers too: the
+                // gate reads the cache the recount wrote, never the bags (`0x4e50ab`).
+                let count = script.action_slot(action).map_or(0, |slot| slot.count);
                 // `IsEquippedAction`, the green border: worn in any equipment slot (0..18).
                 st.equipped = me.is_some_and(|(s, _, _, _)| {
                     (0..19).any(|i| {
@@ -285,14 +285,14 @@ pub(super) fn feed_action_state(
                         factions: factions.as_deref(),
                         reputations: &reputations,
                         cooldowns: &cooldowns,
-                        carried: &carried,
+                        stacks: &stacks,
                         spell_mods,
                         control_lost,
                     };
                     let (u, oom) = usable::item_usable(
                         button.action,
                         use_spell.as_ref(),
-                        count > 0 || st.equipped,
+                        count > 0,
                         &ctx,
                         spells.as_deref(),
                         &objects,
@@ -837,7 +837,18 @@ mod tests {
                     (PACK_SLOT_1, 0xF0),
                 ])),
             ));
-            app.insert_non_send_resource(UiScript::new().unwrap());
+            // The slot as the identity feed pushed it, with the ten muffins it counted.
+            let mut script = UiScript::new().unwrap();
+            script.set_action(
+                1,
+                Some(benilla_ui::script::ActionSlot {
+                    kind: ACTION_KIND_ITEM,
+                    action: FOOD_ITEM,
+                    count: 10,
+                    ..Default::default()
+                }),
+            );
+            app.insert_non_send_resource(script);
             app.add_systems(Update, feed_action_state);
             app.update();
             app.world()
@@ -850,6 +861,90 @@ mod tests {
         assert!(
             !lit(true),
             "in combat the food's on-use spell fails leg 8 and the button greys"
+        );
+    }
+
+    /// `0x4e5050` reads the slot's cached count (`[0xbc6390]`, the one `GetActionCount` answers),
+    /// not the bags: a zero there greys the slot while a copy sits in the pack, and a count there
+    /// lights it with nothing in the bags, as for a worn copy the recount stored.
+    #[test]
+    fn an_item_slot_is_held_by_its_stored_count_not_the_bags() {
+        use benilla_protocol::messages::ActionButton;
+        use benilla_protocol::ObjectFields;
+
+        const ITEM: u32 = 2512;
+        // `PLAYER_FIELD_PACK_SLOT_1`, backpack slot 1.
+        const PACK_SLOT_1: u16 = 532;
+
+        let lit = |stored: u32, in_pack: bool| {
+            let (tx, _rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            let mut actions = PlayerActions::default();
+            actions.buttons.insert(
+                0,
+                ActionButton {
+                    slot: 0,
+                    action: ITEM,
+                    kind: ACTION_KIND_ITEM,
+                },
+            );
+            let mut items = Items::default();
+            items.insert_template(ITEM, Some(crate::items::test_template("Rough Arrow")));
+            app.insert_resource(actions)
+                .insert_resource(crate::ui_macro::MacroBoundSpells::default())
+                .insert_resource(Spells::empty_for_tests())
+                .init_resource::<Cooldowns>()
+                .init_resource::<crate::spell::SpellModifiers>()
+                .init_resource::<crate::ui_script::UiClock>()
+                .init_resource::<AutoRepeatActive>()
+                .init_resource::<crate::spell::PendingCast>()
+                .init_resource::<crate::spell::QueuedMeleeSpell>()
+                .init_resource::<crate::spell::ActiveChannel>()
+                .init_resource::<crate::spell::SpellTargeting>()
+                .init_resource::<crate::spell::HeldForPick>()
+                .init_resource::<Selection>()
+                .init_resource::<crate::net::GuidIndex>()
+                .init_resource::<crate::net::Reputations>()
+                .insert_resource(items)
+                .insert_resource(NetCommands(tx));
+            crate::items::test_spawn_item(
+                app.world_mut(),
+                0xF0,
+                ObjectFields::from_pairs(&[(3, ITEM), (14, 10)]),
+                false,
+            );
+            let mut store = vec![(22, 100), (23, 500), (46, 1 << 3)];
+            if in_pack {
+                store.push((PACK_SLOT_1, 0xF0));
+            }
+            app.world_mut().spawn((
+                SelfPlayer,
+                Transform::default(),
+                ObjectStore(ObjectFields::from_pairs(&store)),
+            ));
+            let mut script = UiScript::new().unwrap();
+            script.set_action(
+                1,
+                Some(benilla_ui::script::ActionSlot {
+                    kind: ACTION_KIND_ITEM,
+                    action: ITEM,
+                    count: stored,
+                    ..Default::default()
+                }),
+            );
+            app.insert_non_send_resource(script);
+            app.add_systems(Update, feed_action_state);
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<bool>("return (IsUsableAction(1)) and true or false")
+                .unwrap()
+        };
+
+        assert!(lit(3, false), "a stored count lights it, bags or none");
+        assert!(
+            !lit(0, true),
+            "a stored zero greys it with a copy in the pack"
         );
     }
 

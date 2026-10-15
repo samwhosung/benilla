@@ -343,7 +343,7 @@ pub(super) fn build_view(
                 name
             };
             let short = vctx.store.is_some_and(|s| {
-                count_of(&s.0, vctx.objects, entry, InventoryScope::CARRIED) < count
+                count_of(&s.0, vctx.objects, entry, InventoryScope::DEFAULT) < count
             });
             parts.push(if short {
                 format!("|cffff2020{text}|r")
@@ -468,7 +468,7 @@ pub(super) fn reagent_state(
 ) -> (u32, bool) {
     let named = items.template(entry, 0, commands).is_some();
     let owned = store.map_or(0, |s| {
-        count_of(&s.0, objects, entry, InventoryScope::CARRIED)
+        count_of(&s.0, objects, entry, InventoryScope::DEFAULT)
     });
     (owned, named)
 }
@@ -751,4 +751,36 @@ fn build_views(
         pushed.insert(id, deps);
     }
     built
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use benilla_protocol::field::{
+        FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD,
+    };
+    use benilla_protocol::ObjectFields;
+
+    /// The reagent line's carried test is `0x622270` at mask 0 (`0x52f49f`): a copy in the keyring
+    /// or worn in a slot is carried, so its count shows.
+    #[test]
+    fn a_reagent_line_counts_the_keyring_and_worn_gear() {
+        let mut deps = crate::items::TestDeps::new();
+        deps.spawn_item(
+            0xA1,
+            ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, 17056), (FIELD_ITEM_STACK_COUNT, 3)]),
+        );
+        let seat = |slot: u16| {
+            let lo = FIELD_PLAYER_INV_SLOT_HEAD + 2 * slot;
+            [(lo, 0xA1), (lo + 1, 0)]
+        };
+        for slot in [81, 17] {
+            let store = ObjectStore(ObjectFields::from_pairs(&seat(slot)));
+            let (items, commands) = (&mut deps.items, &deps.commands);
+            let mut state = bevy::ecs::system::SystemState::<Objects>::new(&mut deps.world);
+            let objects = state.get(&deps.world);
+            let (owned, _) = reagent_state(17056, Some(&store), &objects, items, commands);
+            assert_eq!(owned, 3, "player slot {slot}");
+        }
+    }
 }

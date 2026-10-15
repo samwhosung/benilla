@@ -196,8 +196,8 @@ fn feed_shapeshift_bar(
     });
 
     // The bags, walked once for every form's reagent leg.
-    let carried = store
-        .map(|s| crate::ui_items::carried_counts(&s.0, &objects))
+    let stacks = store
+        .map(|s| crate::ui_items::stack_counts(&s.0, &objects))
         .unwrap_or_default();
     let fresh: Vec<ShapeshiftFormView> = rows
         .into_iter()
@@ -213,7 +213,7 @@ fn feed_shapeshift_bar(
                         factions: factions.as_deref(),
                         reputations: &reputations,
                         cooldowns: &cooldowns,
-                        carried: &carried,
+                        stacks: &stacks,
                         spell_mods: &spell_mods,
                         control_lost: player.as_ref().is_some_and(|p| p.own_control_lost),
                     };

@@ -438,7 +438,7 @@ pub(super) fn first_missing_totem(
         .iter()
         .copied()
         .filter(|&t| t != 0)
-        .find(|&t| count_of(&store.0, objects, t, InventoryScope::CARRIED) == 0)
+        .find(|&t| count_of(&store.0, objects, t, InventoryScope::DEFAULT) == 0)
 }
 
 /// The first reagent we hold too few of: `0x6e4000`'s failing slot.
@@ -451,7 +451,7 @@ pub(super) fn first_short_reagent(
         .iter()
         .copied()
         .filter(|&(id, _)| id != 0)
-        .find(|&(id, n)| count_of(&store.0, objects, id, InventoryScope::CARRIED) < n)
+        .find(|&(id, n)| count_of(&store.0, objects, id, InventoryScope::DEFAULT) < n)
         .map(|(id, _)| id)
 }
 
@@ -884,6 +884,41 @@ mod totem_reagent_tests {
             &mut errors
         ));
         assert!(errors.0.is_empty());
+    }
+
+    /// `0x6e4000` counts the reagent with `0x622130` and finds the totem with `0x622270`, both at
+    /// mask 0: a reagent in the keyring and a totem worn in a slot are held.
+    #[test]
+    fn a_reagent_in_the_keyring_and_a_worn_totem_are_held() {
+        use benilla_protocol::field::{
+            FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD,
+        };
+        let mut objs = objects();
+        for (guid, entry, n) in [(0xA1u64, 17056u32, 3u32), (0xA2, 7005, 1)] {
+            objs.spawn(
+                guid,
+                ObjectFields::from_pairs(&[
+                    (FIELD_OBJECT_ENTRY, entry),
+                    (FIELD_ITEM_STACK_COUNT, n),
+                ]),
+            );
+        }
+        // Player slot 81 (the keyring) and slot 17 (worn).
+        let seat = |slot: u16, guid: u64| {
+            let lo = FIELD_PLAYER_INV_SLOT_HEAD + 2 * slot;
+            [(lo, guid as u32), (lo + 1, (guid >> 32) as u32)]
+        };
+        let st = ObjectStore(ObjectFields::from_pairs(
+            &[seat(81, 0xA1), seat(17, 0xA2)].concat(),
+        ));
+        let mut reagents = [(0, 0); 8];
+        reagents[0] = (17056, 3);
+        let d = spell([0, 7005], reagents);
+        assert_eq!(first_missing_totem(&d, &st, &objs.get()), None);
+        assert_eq!(first_short_reagent(&d, &st, &objs.get()), None);
+        reagents[0] = (17056, 4);
+        let d = spell([0, 0], reagents);
+        assert_eq!(first_short_reagent(&d, &st, &objs.get()), Some(17056));
     }
 
     /// Against empty bags, the first nonzero totem and reagent.

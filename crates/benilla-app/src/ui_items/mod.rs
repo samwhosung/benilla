@@ -250,15 +250,6 @@ impl InventoryScope {
         bank: true,
         ..Self::DEFAULT
     };
-    /// Bags and backpack only, narrower than any reference mask: the action-bar and reagent counts
-    /// use it, where the reference's `0x47` also counts worn gear and the keyring.
-    pub(crate) const CARRIED: Self = Self {
-        equipment: false,
-        bags: true,
-        backpack: true,
-        bank: false,
-        keyring: false,
-    };
 }
 
 /// The reference's inventory walk (`0x622420`): one ascending pass over the player's slot array,
@@ -359,19 +350,33 @@ fn walk_inventory<T>(
 /// How many of `entry` the player holds within `scope`, summing each copy's
 /// `ITEM_FIELD_STACK_COUNT`: the reference's `0x622130(itemId, mask)`, whose per-item predicate
 /// `0x622160` tests `OBJECT_FIELD_ENTRY` (`0x622166`) and adds `[+0x20]` (`0x622177`). A quest
-/// objective counts banked copies ([`InventoryScope::QUEST_ITEMS`]); an action-button or reagent
-/// count does not.
+/// objective counts banked copies ([`InventoryScope::QUEST_ITEMS`]); the reagent, craft and
+/// tradeskill counts pass mask 0 ([`InventoryScope::DEFAULT`]: `0x6e405f`, `0x4f62cc`, `0x4fccfc`,
+/// `0x4f76b2`, `0x4ff7a2`).
 pub(crate) fn count_of(
     store: &ObjectFields,
     objects: &Objects,
     entry: u32,
     scope: InventoryScope,
 ) -> u32 {
+    sum_of(store, objects, entry, scope, |fields| {
+        fields.item_stack_count().unwrap_or(1)
+    })
+}
+
+/// The sum of `weight` over every copy of `entry` within `scope`; a dword add, so it wraps.
+fn sum_of(
+    store: &ObjectFields,
+    objects: &Objects,
+    entry: u32,
+    scope: InventoryScope,
+    weight: impl Fn(&ObjectFields) -> u32,
+) -> u32 {
     let mut total = 0u32;
     walk_inventory::<()>(store, objects, scope, |_, _, guid| {
         if let Some(fields) = objects.object(guid) {
             if fields.object_entry() == Some(entry) {
-                total += fields.item_stack_count().unwrap_or(1);
+                total = total.wrapping_add(weight(fields));
             }
         }
         None
@@ -379,17 +384,39 @@ pub(crate) fn count_of(
     total
 }
 
-/// Every carried entry's count in one walk ([`InventoryScope::CARRIED`]): [`count_of`] for a
-/// caller asking about many entries in a frame.
-pub(crate) fn carried_counts(
+/// An action slot's item count, `0x4e6d20(entry)`: with the entry's template cached and its first
+/// spell's charges (`template+0x144`) neither 0 nor -1, the sum of each copy's absolute
+/// `ITEM_FIELD_SPELL_CHARGES[0]` (`0x4e6d9c` into `0x622180`, `0x6221c7`-`0x6221d0`), else the
+/// stack counts (`0x4e6db6` into `0x622130`). Both walk mask 0 ([`InventoryScope::DEFAULT`]), so a
+/// worn copy and the keyring count; a template that has not answered takes the stack branch
+/// (`0x55ba30` returns null, `0x4e6d7f`).
+pub(crate) fn action_count(
+    store: &ObjectFields,
+    objects: &Objects,
+    entry: u32,
+    template: Option<&benilla_protocol::ItemInfo>,
+) -> u32 {
+    if template.is_some_and(benilla_protocol::ItemInfo::has_finite_charges) {
+        sum_of(store, objects, entry, InventoryScope::DEFAULT, |fields| {
+            fields.item_spell_charges(0).unwrap_or(0).unsigned_abs()
+        })
+    } else {
+        count_of(store, objects, entry, InventoryScope::DEFAULT)
+    }
+}
+
+/// Every entry's stack count in one walk at mask 0 ([`InventoryScope::DEFAULT`]): [`count_of`] for
+/// a caller asking about many entries in a frame.
+pub(crate) fn stack_counts(
     store: &ObjectFields,
     objects: &Objects,
 ) -> std::collections::HashMap<u32, u32> {
     let mut counts = std::collections::HashMap::new();
-    walk_inventory::<()>(store, objects, InventoryScope::CARRIED, |_, _, guid| {
+    walk_inventory::<()>(store, objects, InventoryScope::DEFAULT, |_, _, guid| {
         if let Some(fields) = objects.object(guid) {
             if let Some(entry) = fields.object_entry() {
-                *counts.entry(entry).or_insert(0) += fields.item_stack_count().unwrap_or(1);
+                let n = counts.entry(entry).or_insert(0u32);
+                *n = n.wrapping_add(fields.item_stack_count().unwrap_or(1));
             }
         }
         None
@@ -1544,15 +1571,17 @@ mod find_item_tests {
 }
 
 /// [`count_of`]'s scope: the quest surfaces pass mask `8`, rewritten to `0x4F`, and count banked
-/// copies; mask `0` becomes `0x47`, which does not.
+/// copies; mask `0` becomes `0x47`, which does not but reaches worn gear and the keyring. The
+/// action slot's count ([`action_count`]) walks mask `0` and sums charges for a charged template.
 #[cfg(test)]
 mod count_of_tests {
-    use super::{count_of, InventoryScope, TestObjects};
+    use super::{action_count, count_of, stack_counts, InventoryScope, TestObjects};
     use benilla_protocol::ObjectFields;
 
     // Descriptor field indices, raw.
     const ENTRY: u16 = 3; // OBJECT_FIELD_ENTRY
     const STACK: u16 = 14; // ITEM_FIELD_STACK_COUNT
+    const CHARGES: u16 = 16; // ITEM_FIELD_SPELL_CHARGES[0]
     const NUM_SLOTS: u16 = 48; // CONTAINER_FIELD_NUM_SLOTS
     const SLOT_1: u16 = 50; // CONTAINER_FIELD_SLOT_1 (2 fields per guid)
     const INV_SLOT_HEAD: u16 = 486; // player slots 0..22
@@ -1612,7 +1641,7 @@ mod count_of_tests {
             "mask 0x4F sees the bank"
         );
         assert_eq!(
-            count_of(&store, &objs.get(), AMMO, InventoryScope::CARRIED),
+            count_of(&store, &objs.get(), AMMO, InventoryScope::DEFAULT),
             3,
             "an action-bar/reagent count must NOT see the bank"
         );
@@ -1631,26 +1660,89 @@ mod count_of_tests {
             8
         );
         assert_eq!(
-            count_of(&store, &objs.get(), AMMO, InventoryScope::CARRIED),
+            count_of(&store, &objs.get(), AMMO, InventoryScope::DEFAULT),
             0
         );
     }
 
-    /// Worn gear and the keyring: in `0x47` and the quest scope, not [`InventoryScope::CARRIED`].
+    /// Worn gear and the keyring: in mask 0's `0x47` and in the quest scope. The reagent, craft and
+    /// tradeskill counts (`0x6e405f`, `0x4f62cc`, `0x4fccfc`, `0x4f76b2`, `0x4ff7a2`) pass mask 0.
     #[test]
-    fn the_quest_scope_also_reaches_worn_gear_and_the_keyring() {
-        let store = player(&[(5, 0xE1), (81, 0xF1)]); // a worn copy and one in the keyring
+    fn mask_zero_also_reaches_worn_gear_and_the_keyring() {
+        let store = player(&[(5, 0xE1), (81, 0xF1), (39, 0xB1)]); // worn, keyring, bank
         let mut objs = TestObjects::new();
         stack(&mut objs, 0xE1, AMMO, 1);
         stack(&mut objs, 0xF1, AMMO, 1);
+        stack(&mut objs, 0xB1, AMMO, 4);
         assert_eq!(
             count_of(&store, &objs.get(), AMMO, InventoryScope::QUEST_ITEMS),
-            2
+            6
         );
         assert_eq!(
-            count_of(&store, &objs.get(), AMMO, InventoryScope::CARRIED),
-            0,
-            "the carried scope reaches neither worn gear nor the keyring — the named narrowing"
+            count_of(&store, &objs.get(), AMMO, InventoryScope::DEFAULT),
+            2,
+            "worn and keyring count, the bank does not"
+        );
+        assert_eq!(
+            stack_counts(&store, &objs.get()).get(&AMMO),
+            Some(&2),
+            "the per-frame map walks the same mask"
+        );
+    }
+
+    /// `0x4e6d20`: a thrown stack worn in the ranged slot counts as the stack.
+    #[test]
+    fn an_action_count_reaches_a_worn_stack_and_the_keyring() {
+        let store = player(&[(17, 0xE1), (25, 0xA1), (81, 0xF1)]);
+        let mut objs = TestObjects::new();
+        stack(&mut objs, 0xE1, AMMO, 18);
+        stack(&mut objs, 0xA1, AMMO, 2);
+        stack(&mut objs, 0xF1, AMMO, 1);
+        assert_eq!(action_count(&store, &objs.get(), AMMO, None), 21);
+        let plain = benilla_protocol::ItemInfo {
+            spell_charges_0: 0,
+            ..crate::items::test_template("Thrown")
+        };
+        assert_eq!(action_count(&store, &objs.get(), AMMO, Some(&plain)), 21);
+    }
+
+    /// `0x4e6d81`-`0x4e6d8c`: a template whose first spell's charges are neither 0 nor -1 sums the
+    /// copies' absolute charges (`0x6221c7`-`0x6221d0`); -1 and 0 keep the stack counts.
+    #[test]
+    fn a_charged_template_counts_absolute_charges_not_stacks() {
+        let store = player(&[(23, 0xA1), (24, 0xA2), (25, 0xA3)]);
+        let mut objs = TestObjects::new();
+        // Charges -2 (consumed at 0), 3 and 0; stacks 1, 1 and 5.
+        for (guid, charges, n) in [(0xA1u64, (-2i32) as u32, 1u32), (0xA2, 3, 1), (0xA3, 0, 5)] {
+            objs.spawn(
+                guid,
+                ObjectFields::from_pairs(&[(ENTRY, AMMO), (STACK, n), (CHARGES, charges)]),
+            );
+        }
+        let with = |charges: i32| benilla_protocol::ItemInfo {
+            spell_charges_0: charges,
+            ..crate::items::test_template("Elixir")
+        };
+        assert_eq!(
+            action_count(&store, &objs.get(), AMMO, Some(&with(-2))),
+            5,
+            "|-2| + |3| + |0|"
+        );
+        assert_eq!(action_count(&store, &objs.get(), AMMO, Some(&with(5))), 5);
+        assert_eq!(
+            action_count(&store, &objs.get(), AMMO, Some(&with(-1))),
+            7,
+            "unlimited charges (-1) counts stacks"
+        );
+        assert_eq!(
+            action_count(&store, &objs.get(), AMMO, Some(&with(0))),
+            7,
+            "no charges counts stacks"
+        );
+        assert_eq!(
+            action_count(&store, &objs.get(), AMMO, None),
+            7,
+            "an unanswered template takes the stack branch"
         );
     }
 
@@ -1666,7 +1758,7 @@ mod count_of_tests {
             5
         );
         assert_eq!(
-            count_of(&store, &objs.get(), AMMO, InventoryScope::CARRIED),
+            count_of(&store, &objs.get(), AMMO, InventoryScope::DEFAULT),
             5
         );
     }

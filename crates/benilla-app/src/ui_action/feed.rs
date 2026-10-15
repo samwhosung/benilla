@@ -4,7 +4,7 @@
 //! and feeds the stance page (`GetBonusBarOffset`: the form's `SpellShapeshiftForm.dbc`
 //! BonusActionBar column, `0x4e4fc0`).
 
-use crate::ui_items::{count_of, InventoryScope};
+use crate::ui_items::action_count;
 use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
@@ -391,7 +391,7 @@ pub(super) fn feed_actions(
                         .and_then(|t| icons.as_ref()?.catalog.get(t.display_info_id)?.icon.clone())
                         .unwrap_or_else(|| MISSING_ITEM_ICON.to_string());
                     let count = store
-                        .map(|s| count_of(&s.0, &objects, button.action, InventoryScope::CARRIED))
+                        .map(|s| action_count(&s.0, &objects, button.action, template.as_ref()))
                         .unwrap_or(0);
                     // The Count gate (`0x4e5250`, [`ItemInfo::is_consumable`]) reads the icon's
                     // template, so it rides the same push.
