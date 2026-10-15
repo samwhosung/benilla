@@ -9,8 +9,9 @@ use common::hx;
 
 #[test]
 fn update_object_fixture_decodes() {
-    // A unit create (0xAA), a gameobject create (0xBB) and an out-of-range block [0x10, 0x20].
-    let body = hx("03000000000301aa03200000000000000000cdd70bc6357e04c3f90fa74200000040000000000000803f0000e040000090400000000000000000db0f4940051700000000000000000000000000000008000000aa00000000000000090000000000c03f320000000301bb05000117810700bb000000000000002100000000000040630000000000c84200004843000096430000803f040200000001100120");
+    // A unit create (0xAA), a gameobject create (0xBB, a HAS_POSITION block at (100, 200, 300), as
+    // vmangos sends one) and an out-of-range block [0x10, 0x20].
+    let body = hx("03000000000301aa03200000000000000000cdd70bc6357e04c3f90fa74200000040000000000000803f0000e040000090400000000000000000db0f4940051700000000000000000000000000000008000000aa00000000000000090000000000c03f320000000301bb05400000c84200004843000096430000803f0117810700bb000000000000002100000000000040630000000000c84200004843000096430000803f040200000001100120");
     let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
     let events = decode(packet);
 
@@ -592,6 +593,43 @@ fn unit_living_block_surfaces_the_walk_it_is_already_on() {
                 Some(1234),
                 "the descriptor mask behind the spline still parses — the block was sized right"
             );
+        }
+        other => panic!("expected one ObjectCreate, got {other:?}"),
+    }
+}
+
+/// The GameObject constructor copies the create block's position over `GAMEOBJECT_POS_X`..`FACING`
+/// (`0x5f7046`..`0x5f706b`), so a create whose descriptor and block disagree is placed by the block.
+#[test]
+fn gameobject_create_is_placed_by_the_block_over_its_position_fields() {
+    let mut body = 1u32.to_le_bytes().to_vec();
+    body.push(0); // has_transport
+    body.push(2); // CREATE_OBJECT
+    write_packed_guid(0xBB, &mut body).unwrap();
+    body.push(5); // TypeId::GameObject
+    body.push(0x40); // HAS_POSITION
+    for v in [5000.0f32, 6000.0, 15.0, 2.0] {
+        body.extend_from_slice(&v.to_le_bytes()); // the block's pose
+    }
+    // Fields 8 (GAMEOBJECT_DISPLAYID) and 15..=18 (GAMEOBJECT_POS_X, _Y, _Z, FACING) in block 0.
+    body.push(1);
+    body.extend_from_slice(&((1u32 << 8) | (0xF << 15)).to_le_bytes());
+    body.extend_from_slice(&3015u32.to_le_bytes());
+    for v in [100.0f32, 200.0, 300.0, 1.0] {
+        body.extend_from_slice(&v.to_le_bytes()); // the descriptor's pose
+    }
+
+    let packet = messages::parse_server(messages::opcode::SMSG_UPDATE_OBJECT, &body).unwrap();
+    match decode(packet).as_slice() {
+        [SessionEvent::ObjectCreate {
+            position,
+            orientation,
+            display_id,
+            ..
+        }] => {
+            assert_eq!(*display_id, Some(3015), "control: the fields were sent");
+            assert_eq!(*position, [5000.0, 6000.0, 15.0], "the block wins");
+            assert_eq!(*orientation, 2.0);
         }
         other => panic!("expected one ObjectCreate, got {other:?}"),
     }

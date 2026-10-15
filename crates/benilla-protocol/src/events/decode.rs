@@ -1,6 +1,6 @@
 //! The [`ServerPacket`] to [`SessionEvent`] mapping: pure functions of the packet, no state.
 
-use crate::messages::{CastOutcome, MovementBlock, Object, ObjectFields, ObjectType, ServerPacket};
+use crate::messages::{CastOutcome, Object, ObjectFields, ObjectType, ServerPacket};
 use crate::wire::Vector3d;
 
 use super::{EntityKind, MoveSpeeds, SessionEvent};
@@ -1127,9 +1127,10 @@ fn decode_objects(objects: Vec<Object>) -> Vec<SessionEvent> {
                     });
                     continue;
                 }
-                if let Some((position, orientation)) =
-                    create_placement(object_type, &mask, &movement)
-                {
+                // The block's own position, for every type: the GameObject constructor copies it
+                // over `GAMEOBJECT_POS_X`..`FACING` (`0x5f7046`..`0x5f706b`), so the descriptor's
+                // copy never places anything.
+                if let Some((position, orientation)) = movement.position {
                     let display = display_id(object_type, &mask);
                     let scale = object_scale(object_type, &mask);
                     let speeds = movement.speeds.map(MoveSpeeds::from_wire);
@@ -1214,19 +1215,4 @@ fn object_scale(t: ObjectType, mask: &ObjectFields) -> f32 {
         _ => None,
     };
     raw.filter(|s| *s > 0.0).unwrap_or(1.0)
-}
-
-/// A create's pose: a GameObject's `GAMEOBJECT_POS_*` when sent, else the movement block, since
-/// vmangos never sets those fields on a transport. Gate on `gameobject_pos_sent`, not `.or`: a
-/// create reads absent fields as zero, so `gameobject_position()` is `Some` even when unsent.
-fn create_placement(
-    object_type: ObjectType,
-    mask: &ObjectFields,
-    movement: &MovementBlock,
-) -> Option<(Vector3d, f32)> {
-    if object_type == ObjectType::GameObject && mask.gameobject_pos_sent() {
-        mask.gameobject_position()
-    } else {
-        movement.position
-    }
 }

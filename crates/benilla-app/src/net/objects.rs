@@ -555,7 +555,7 @@ fn object_create(
     trace_create_spline(guid, spline.as_ref());
     let walk = spline.and_then(create_spline);
     if let Some(&e) = index.0.get(&guid) {
-        // A re-create is a fresh snapshot: refresh identity and pose, drop any extrapolation.
+        // A re-create is a fresh snapshot: refresh identity and a unit's pose, drop any extrapolation.
         commands.entity(e).insert(net).remove::<RemoteMotion>();
         // The set is replaced whole; a `SMSG_FORCE_*_SPEED_CHANGE` in the same tick lands on top,
         // since this insert applies before the next packet's handler (`apply::seam_tests`).
@@ -587,7 +587,11 @@ fn object_create(
                 commands.entity(e).remove::<Spline>();
             }
         }
-        write_pose(commands, transforms, e, position, placement);
+        // Only a unit takes the block's movement (type-mask bit 3, `0x46638c`); any other type
+        // reads the position and drops it (`0x4664c3`..`0x46656b`), so it stays where it stands.
+        if matches!(kind, EntityKind::Unit | EntityKind::Player) {
+            write_pose(commands, transforms, e, position, placement);
+        }
         // The reference refreshes a live guid in place, notifying field watchers like any delta.
         merge_fields(commands, stores, edges, e, guid, fields);
     } else {

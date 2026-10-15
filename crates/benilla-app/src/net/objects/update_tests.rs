@@ -82,3 +82,63 @@ fn a_movement_block_for_the_unit_we_move_is_dropped() {
     );
     assert_eq!(at(world, lost), pose, "control: an unsteered unit takes it");
 }
+
+fn create(guid: u64, kind: EntityKind, position: [f32; 3]) -> SessionEvent {
+    SessionEvent::ObjectCreate {
+        guid,
+        kind,
+        display_id: None,
+        position,
+        orientation: 0.0,
+        scale: 1.0,
+        speeds: None,
+        mover: None,
+        transport_progress: None,
+        transport: None,
+        spline: None,
+        fields: ObjectFields::default(),
+    }
+}
+
+/// A create of a known guid moves only a unit (type-mask bit 3, `0x46638c`); a GameObject's
+/// block position is read and dropped (`0x4664c3`), so it keeps its place.
+#[test]
+fn a_recreate_re_poses_units_only() {
+    const GO: u64 = 0xF110_0000_0000_0009;
+    let mut app = client();
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    app.insert_resource(NetCommands(tx));
+    let world = app.world_mut();
+    let at = |world: &World, guid: u64| {
+        let e = world.resource::<GuidIndex>().0[&guid];
+        world.get::<Transform>(e).unwrap().translation
+    };
+    super::super::handlers::dispatch(
+        world,
+        vec![
+            create(MOB, EntityKind::Unit, [1.0, 2.0, 3.0]),
+            create(GO, EntityKind::GameObject, [1.0, 2.0, 3.0]),
+        ],
+    );
+    let first = wow_to_bevy([1.0, 2.0, 3.0]);
+    assert_eq!(
+        at(world, MOB),
+        first,
+        "control: the first create places both"
+    );
+    assert_eq!(at(world, GO), first);
+
+    super::super::handlers::dispatch(
+        world,
+        vec![
+            create(MOB, EntityKind::Unit, [10.0, 20.0, 30.0]),
+            create(GO, EntityKind::GameObject, [10.0, 20.0, 30.0]),
+        ],
+    );
+    assert_eq!(
+        at(world, MOB),
+        wow_to_bevy([10.0, 20.0, 30.0]),
+        "a unit takes the new pose"
+    );
+    assert_eq!(at(world, GO), first, "a GameObject stays where it stands");
+}
