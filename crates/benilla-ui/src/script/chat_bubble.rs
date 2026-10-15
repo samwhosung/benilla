@@ -351,6 +351,9 @@ fn lay_out(model: &mut Model, i: usize, g: BubbleGeometry) {
     model.chat_bubbles.bubbles[i].laid_out = Some(g);
 }
 
+/// koKR's locale index (`0x8558a4`), the one `StartChatBubble` compares `[0xc0e080]` with.
+const KO_KR: usize = 1;
+
 /// Show a new line (`0x4b1600`): its text and colour, its width fitted, then `Show` through the
 /// fade-in's start (`0x4b17f7` → `0x4b0ea0` → vtable `+0x88`), which fires `OnShow` on a reused,
 /// hidden frame.
@@ -371,6 +374,15 @@ fn set_line(
     let data = model.region_data.entry(text).or_default();
     data.text = Some(line);
     data.set_vertex_color(Some([c[0], c[1], c[2], 1.0]));
+    // koKR left-justifies the text (`0x4b16e7` compares the locale with 1): the word's horizontal
+    // bits set to LEFT and the same bits of its inherit mask cleared, as `SetJustifyH` does
+    // (`0x4b1704`-`0x4b1717`, `0x79e776`-`0x79e788`), before the width is measured (`0x4b175d`).
+    // Every other locale keeps the FontString's CENTER.
+    if model.locale == KO_KR {
+        let data = model.region_data.entry(text).or_default();
+        data.justify.set_h(super::types::JustifyH::Left);
+        data.font_explicit.justify_h = true;
+    }
     fit_width(model, i, g);
     if !was_shown {
         visibility.push((frame, true));

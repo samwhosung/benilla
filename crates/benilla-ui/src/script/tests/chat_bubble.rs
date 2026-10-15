@@ -470,3 +470,31 @@ fn the_text_takes_the_nameplate_font_global() {
         )
         .unwrap());
 }
+
+/// The bubble text's justification as a Lua reader sees it.
+fn text_justify(s: &mut UiScript) -> String {
+    s.eval::<String>(
+        r#"local regions = { (WorldFrame:GetChildren()):GetRegions() }
+           return regions[11]:GetJustifyH()"#,
+    )
+    .unwrap()
+}
+
+/// `0x4b16e7`: only koKR left-justifies the text; every other locale keeps the FontString's
+/// CENTER. A reused bubble takes the new line's justify alike, and the VM's seated locale is the
+/// one read.
+#[test]
+fn only_a_korean_client_left_justifies_the_bubble_text() {
+    for index in 0..8 {
+        let mut s = vm();
+        s.set_locale(index);
+        drive(
+            &mut s,
+            &[say(7, 1, "Well met, traveller, and well met again!")],
+        );
+        let want = if index == 1 { "LEFT" } else { "CENTER" };
+        assert_eq!(text_justify(&mut s), want, "locale {index}");
+        drive(&mut s, &[say(7, 2, "Farewell.")]);
+        assert_eq!(text_justify(&mut s), want, "locale {index}, second line");
+    }
+}
