@@ -151,7 +151,7 @@ fn the_right_column_write_sets_the_right_slot_only() {
     );
 }
 
-/// An empty line is a one-unit row plus its 2 px gap, as the reference's size getters floor a
+/// An empty left cell is a one-unit row plus its 2 px gap, as the reference's size getters floor a
 /// FontString at one FrameXML unit; the row and the plate read that floor from one constant.
 #[test]
 fn empty_line_is_a_one_unit_row_and_the_chain_stays_inside_the_plate() {
@@ -164,11 +164,11 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_inside_the_plate() {
         local tt = CreateFrame("GameTooltip", "TTE")
         tt:SetOwner(owner, "ANCHOR_RIGHT")
         tt:AddLine("Marshal McBride", 0.25, 0.75, 0.25)
-        tt:AddLine("")
+        tt:AddDoubleLine("", "R")
         tt:AddLine("Level 20")
         tt:AddLine("PvP")
         tt:Show()
-        assert(tt:NumLines() == 4, "NumLines counts the empty line")
+        assert(tt:NumLines() == 4, "NumLines counts the row with a right text")
     "#,
     )
     .unwrap();
@@ -177,12 +177,12 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_inside_the_plate() {
         &mut s,
         &[
             ("Marshal McBride", 90.0, 14.0),
+            ("R", 6.0, 1.0),
             ("Level 20", 50.0, 12.0),
             ("PvP", 24.0, 12.0),
         ],
     );
     // Rows 14 + 1 + 12 + 12 with 3 slot gaps ⇒ totalh 45, height 65; maxw 90 ⇒ width 110.
-    // The reference's `AddLine("")` returns without adding a line (`0x530270`); ours adds this row.
     s.run(
         r#"
         assert(TTE:GetWidth() == 110, "auto width, got " .. tostring(TTE:GetWidth()))
@@ -198,6 +198,60 @@ fn empty_line_is_a_one_unit_row_and_the_chain_stays_inside_the_plate() {
     "#,
     )
     .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// The line core (`0x530270`) adds no line when both texts are NULL or empty (`0x5302a9`–
+/// `0x5302b4`); `AddLine` passes no right text and a non-string text as NULL (`0x531630`).
+#[test]
+fn a_line_with_no_text_on_either_side_is_not_added() {
+    let mut s = script();
+    s.run(
+        r#"
+        local tt = CreateFrame("GameTooltip", "TTN")
+        tt:AddLine("")
+        tt:AddLine()
+        tt:AddLine(nil, 1, 1, 1)
+        tt:AddLine(true)
+        tt:AddDoubleLine("", "")
+        tt:AddDoubleLine()
+        assert(tt:NumLines() == 0, "no text, no line: " .. tt:NumLines())
+        tt:AddLine(" ")
+        assert(tt:NumLines() == 1, "a space is text")
+        tt:AddDoubleLine("", "R")
+        assert(tt:NumLines() == 2, "a right text alone is a line")
+        tt:AddDoubleLine("L", "")
+        assert(tt:NumLines() == 3, "a left text alone is a line")
+        tt:AddLine(5)
+        assert(tt:NumLines() == 4 and TTNTextLeft4:GetText() == "5", "a number is a string")
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
+/// `0x530270` clears the wrap flag only when the right text is non-empty (`0x53027d`–`0x530284`);
+/// `AddDoubleLine` reads it from its tenth argument (`0x531b60`–`0x531b69`).
+#[test]
+fn double_line_wraps_only_with_an_empty_right_text() {
+    let mut s = script();
+    s.run(
+        r#"
+        local tt = CreateFrame("GameTooltip", "TTW")
+        tt:AddDoubleLine("wrapped", "", 1, 1, 1, 1, 1, 1, true)
+        tt:AddDoubleLine("plain", "R", 1, 1, 1, 1, 1, 1, true)
+        tt:AddDoubleLine("unflagged", "", 1, 1, 1, 1, 1, 1)
+        tt:AddDoubleLine("", "right only", 1, 1, 1, 1, 1, 1, true)
+        W1, W2, W3, W4 = TTWTextLeft1:GetWidth(), TTWTextLeft2:GetWidth(), TTWTextLeft3:GetWidth(), TTWTextLeft4:GetWidth()
+    "#,
+    )
+    .unwrap();
+    let (w1, w2, w3, w4): (f64, f64, f64, f64) = s.eval("return W1, W2, W3, W4").unwrap();
+    let pin = crate::widget::TOOLTIP_WRAP_WIDTH as f64;
+    assert!(
+        w1 == pin && w2 < pin && w3 < pin && w4 < pin,
+        "{w1} {w2} {w3} {w4}"
+    );
     assert!(s.take_errors().is_empty());
 }
 
@@ -615,14 +669,18 @@ fn an_emptied_pooled_line_drops_its_stale_box_and_the_plate_still_contains_the_c
         r#"
         TTR:ClearLines()
         TTR:AddLine("Marshal McBride")
-        -- WRAPPED, as the set spacer is (`render.rs`'s `addw`): the wrap pin writes a non-zero
-        -- width into `size`, so only the HEIGHT falls through to the measure cache.
-        TTR:AddLine("", 1, 0.82, 0, true)
+        -- An empty left cell is only reachable beside a right text (`0x5302a9`–`0x5302b4`).
+        TTR:AddDoubleLine("", "R", 1, 0.82, 0, 1, 1, 1)
         TTR:AddLine("PvP")
     "#,
     )
     .unwrap();
     s.resolve();
+    let sizes = &[
+        ("Marshal McBride", 90.0, 14.0),
+        ("R", 6.0, 1.0),
+        ("PvP", 24.0, 12.0),
+    ];
     measure_all(&mut s, sizes);
     s.run(
         r#"

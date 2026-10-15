@@ -628,8 +628,9 @@ fn text_of(v: Option<&Value>) -> String {
 }
 
 /// Appends one line, without showing the tooltip or touching a fade (`0x5303b0`): `AddLine`
-/// callers call `Show`. The reference's line core drops a line whose sides are both empty
-/// (`0x530270`); this appends it.
+/// callers call `Show`. The line core (`0x530270`) clears the wrap flag when the right text is
+/// non-empty (`0x53027d`–`0x530284`) and adds no line when both texts are empty
+/// (`0x5302a9`–`0x5302b4`).
 pub(super) fn append_line(
     lua: &Lua,
     this: &Table,
@@ -637,6 +638,11 @@ pub(super) fn append_line(
     right: Option<(String, [f32; 4])>,
     wrap: bool,
 ) -> mlua::Result<()> {
+    let right_empty = right.as_ref().is_none_or(|(text, _)| text.is_empty());
+    if left.0.is_empty() && right_empty {
+        return Ok(());
+    }
+    let wrap = wrap && right_empty;
     let h = frame_handle_of(lua, this)?;
     let n = with_tip(lua, this, |t| t.num_lines + 1)?;
     ensure_lines(lua, this, n)?;

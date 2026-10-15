@@ -173,9 +173,7 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                 let left_color = parse_line_color(lua, cl.first(), cl.get(1), cl.get(2));
                 let right_color = parse_line_color(lua, cl.get(3), cl.get(4), cl.get(5));
                 let right = text_of(Some(&tr));
-                // The line core (`0x530270`) clears the flag when the right text is non-empty
-                // (`0x530284`), so only a double line with an empty right side can wrap.
-                let wrap = right.is_empty() && wrap_arg(cl.get(6));
+                let wrap = wrap_arg(cl.get(6));
                 append_line(
                     lua,
                     &this,
