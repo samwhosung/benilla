@@ -1059,6 +1059,9 @@ pub(crate) struct Model {
     pub(crate) skills_selected: Option<u32>,
     /// `AbandonSkill` ids for `CMSG_UNLEARN_SKILL`; nothing changes until the server's update.
     pub(crate) skill_abandons: Vec<u32>,
+    /// The skill points chosen on each line and not yet accepted (row `+0x10`): `AddSkillUp` and
+    /// `RemoveSkillUp` move them, a rebuild or `CancelSkillUps` clears them.
+    pub(crate) skills_pending: HashMap<u32, u32>,
 
     /// The reputation pane's snapshot and the display tree built from it.
     pub(crate) reputation: reputation::ReputationState,
@@ -1693,6 +1696,7 @@ impl Model {
             skills_collapsed: HashSet::new(),
             skills_selected: None,
             skill_abandons: Vec::new(),
+            skills_pending: HashMap::new(),
             reputation: reputation::ReputationState::default(),
             reputation_groups: Vec::new(),
             reputation_collapsed: HashSet::new(),

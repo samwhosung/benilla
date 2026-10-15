@@ -1281,69 +1281,6 @@ mod tests {
         // refuses an entry whose gap has closed.
         const KNOWN: &[(&str, &str, &str)] = &[
             (
-                "SkillFrame.xml",
-                "BuySkillTier",
-                "a 5875 binding (`0x4d3e50`: marshals and delegates to a C++ \
-                 method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's LearnSkillButton calls it, and \
-                 that button shows only while `UnitCharacterPoints`'s second value or a row's \
-                 step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
-                 skill-point wire exists; not built.",
-            ),
-            (
-                "SkillFrame.xml",
-                "AddSkillUp",
-                "a 5875 binding (`0x4d3c30`: marshals and delegates to a C++ \
-                 method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's RightArrow calls it, and \
-                 that button shows only while `UnitCharacterPoints`'s second value or a row's \
-                 step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
-                 skill-point wire exists; not built.",
-            ),
-            (
-                "SkillFrame.xml",
-                "RemoveSkillUp",
-                "a 5875 binding (`0x4d3c70`: marshals and delegates to a C++ \
-                 method/net-send) of the pre-1.12 skill-point purchase UI. the detail bar's LeftArrow calls it, and \
-                 that button shows only while `UnitCharacterPoints`'s second value or a row's \
-                 step/rank cost is non-zero — which no 1.12 server sends. Unreachable until the \
-                 skill-point wire exists; not built.",
-            ),
-            (
-                "Blizzard_GMSurveyUI.xml",
-                "GMSurveyAnswerSubmit",
-                "one of the GM survey's four engine verbs, none built: the survey window opens on \
-                 GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
-                 trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (the producer gate carries the event). Gated as the addon is a reached \
-                 LoadOnDemand row.",
-            ),
-            (
-                "Blizzard_GMSurveyUI.xml",
-                "GMSurveyCommentSubmit",
-                "one of the GM survey's four engine verbs, none built: the survey window opens on \
-                 GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
-                 trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (the producer gate carries the event). Gated as the addon is a reached \
-                 LoadOnDemand row.",
-            ),
-            (
-                "Blizzard_GMSurveyUI.xml",
-                "GMSurveyQuestion",
-                "one of the GM survey's four engine verbs, none built: the survey window opens on \
-                 GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
-                 trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (the producer gate carries the event). Gated as the addon is a reached \
-                 LoadOnDemand row.",
-            ),
-            (
-                "Blizzard_GMSurveyUI.xml",
-                "GMSurveySubmit",
-                "one of the GM survey's four engine verbs, none built: the survey window opens on \
-                 GMSURVEY_DISPLAY, which the stock HelpFrame.lua registers and nothing fires — the \
-                 trigger is ticket status 3 on SMSG_GMTICKET_GETTICKET, which vmangos never sends \
-                 (the producer gate carries the event). Gated as the addon is a reached \
-                 LoadOnDemand row.",
-            ),
-            (
                 "StaticPopup.xml",
                 "ReplaceTradeEnchant",
                 "a registered 1.12 binding (`0x48d330`) whose body is not yet known; it is built \

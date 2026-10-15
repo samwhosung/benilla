@@ -88,11 +88,15 @@ pub use glue_realm::{
     GlueRealmType, RealmSortKey,
 };
 pub use glue_select::{GlueCharacter, GlueScenePane, GlueSelectCells};
+mod denied;
+mod gm_survey;
 mod gm_ticket;
 mod gossip;
 mod guild;
 mod handler_prof;
 mod hyperlink;
+mod lfg;
+mod lottery;
 mod screenshot;
 mod tabard;
 pub use handler_prof::HandlerRow;
@@ -618,6 +622,10 @@ fn install_in_game(lua: &Lua) -> mlua::Result<()> {
     bind_confirm::install(lua)?;
     instance::install(lua)?;
     gm_ticket::install(lua)?;
+    gm_survey::install(lua)?;
+    denied::install(lua)?;
+    lfg::install(lua)?;
+    lottery::install(lua)?;
     duel::install(lua)?;
     follow::install(lua)?;
     camera_view::install(lua)?;

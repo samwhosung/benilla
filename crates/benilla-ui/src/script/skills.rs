@@ -7,8 +7,11 @@
 //! the selection is held by skill id, so it survives a re-push, and selecting a header clears it.
 //! Which lines reach the engine at all is the app's half (`feed_skills`).
 //!
-//! `numTempPoints` answers 0: the model carries no temp points, and on 1.12's data nothing a player
-//! holds moves the reference's field (`+0x10`), which only `AddSkillUp` increments (`0x4d345b`).
+//! `numTempPoints` is the points `AddSkillUp` chose on the line (`+0x10`, `0x4d345b`), which
+//! `RemoveSkillUp`, `CancelSkillUps` and every rebuild take back. Each point costs 0: the cost
+//! comes from `SkillCostsData.dbc` through `SkillLine.skillCostsID` (`0x6de110`), and that id is 0
+//! in every row, so no pending point ever uses the player's skill points, `AcceptSkillUps` finds
+//! nothing to send, and the points left (`GetAdjustedSkillPoints`) stay the points held.
 //! `stepCost` and `rankCost` are always nil, by the data: `SkillLine.skillCostsID` is 0 in every
 //! row and no line a player holds carries the step-cost flags.
 
@@ -82,6 +85,8 @@ impl super::UiScript {
         let mut model = self.model_mut();
         let groups = build_groups(&state.entries);
         model.skills_collapsed.clear();
+        // A rebuild resets the points chosen (`0x4d2cfb`).
+        model.skills_pending.clear();
         if let Some(sid) = model.skills_selected {
             if !state.entries.iter().any(|e| e.skill_id == sid) {
                 model.skills_selected = None;
@@ -263,6 +268,19 @@ fn displayed_ranks(e: &SkillEntry) -> (i64, i64) {
     (rank, max)
 }
 
+/// A line's rank and maximum as the skill-point verbs read them (`0x4d33a8`..`0x4d340b`): each
+/// plus the permanent bonus when it is above 0, with no single-rank cap.
+fn held_ranks(e: &SkillEntry) -> (i64, i64) {
+    let fold = |v: u32| {
+        if v > 0 {
+            i64::from(v) + i64::from(e.perm_bonus)
+        } else {
+            0
+        }
+    };
+    (fold(e.value), fold(e.max))
+}
+
 /// Register the skills-pane globals.
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
@@ -316,7 +334,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         Value::Nil, // isHeader
                         Value::Nil, // isExpanded
                         Value::Integer(rank),
-                        Value::Integer(0),                       // numTempPoints
+                        // numTempPoints
+                        Value::Integer(i64::from(
+                            model.skills_pending.get(&e.skill_id).copied().unwrap_or(0),
+                        )),
                         Value::Integer(i64::from(e.temp_bonus)), // skillModifier: temp only
                         Value::Integer(max),
                         binding_abi::flag(e.abandonable), // isAbandonable
@@ -370,7 +391,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // GetAdjustedSkillPoints() → 0 here; the reference answers `PLAYER_CHARACTER_POINTS2` less the
-    // points `AddSkillUp` has pending (`0x4d3cb0`). The stock pane reads it only under its
+    // cost of the points `AddSkillUp` has chosen (`0x4d3cb0`), 0 each (module doc). The stock pane reads it only under its
     // `stepCost` and `rankCost` branches, which 1.12 data never opens.
     g.set(
         "GetAdjustedSkillPoints",
@@ -390,9 +411,84 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // CancelSkillUps() (`0x4d3e30`): zeroes every `numTempPoints` (`0x4d35c9`); the stock Close
-    // button calls it (`SkillFrame.xml:352`). No temp points are modelled, so nothing resets.
-    g.set("CancelSkillUps", lua.create_function(|_, ()| Ok(()))?)?;
+    // CancelSkillUps() (`0x4d3e30`): clears every line's chosen points (`0x4d35b0`) and signals
+    // `SKILL_LINES_CHANGED`; the stock Close button calls it (`SkillFrame.xml:352`).
+    g.set(
+        "CancelSkillUps",
+        lua.create_function(|lua, ()| {
+            super::tick::verb(lua, |model| {
+                model.skills_pending.clear();
+                model.raise("SKILL_LINES_CHANGED", Vec::new());
+            });
+            Ok(())
+        })?,
+    )?;
+
+    // AddSkillUp(index) (`0x4d3c30` over `0x4d32d0`): choose one more point on a skill line, when
+    // the line's rank plus the points already chosen is below its maximum (each plus the permanent
+    // bonus, as `GetSkillLineInfo` folds them) and the points' cost fits the player's skill points
+    // (`0x4d3449`). The cost is 0 (module doc), so only the rank test can refuse. A header, an
+    // index past the visible rows (the reference indexes its hidden rows too) and a non-line do
+    // nothing; a point taken signals `SKILL_LINES_CHANGED` (`0x4d346f`).
+    g.set(
+        "AddSkillUp",
+        lua.create_function(|lua, index: Value| {
+            let index = binding_abi::index_arg(lua, index, "Usage: AddSkillUp(index)")?;
+            super::tick::verb(lua, |model| {
+                let Some(e) = entry_at(model, index) else {
+                    return;
+                };
+                let (rank, max) = held_ranks(e);
+                let id = e.skill_id;
+                let chosen = model.skills_pending.get(&id).copied().unwrap_or(0);
+                if i64::from(chosen) + rank >= max {
+                    return;
+                }
+                *model.skills_pending.entry(id).or_insert(0) += 1;
+                model.raise("SKILL_LINES_CHANGED", Vec::new());
+            });
+            Ok(())
+        })?,
+    )?;
+
+    // RemoveSkillUp(index) (`0x4d3c70` over `0x4d3480`): give a chosen point back; a line with none
+    // chosen does nothing (`0x4d34cb`).
+    g.set(
+        "RemoveSkillUp",
+        lua.create_function(|lua, index: Value| {
+            let index = binding_abi::index_arg(lua, index, "Usage: RemoveSkillUp(index)")?;
+            super::tick::verb(lua, |model| {
+                let Some(id) = entry_at(model, index).map(|e| e.skill_id) else {
+                    return;
+                };
+                let Some(chosen) = model.skills_pending.get_mut(&id).filter(|c| **c > 0) else {
+                    return;
+                };
+                *chosen -= 1;
+                if *chosen == 0 {
+                    model.skills_pending.remove(&id);
+                }
+                model.raise("SKILL_LINES_CHANGED", Vec::new());
+            });
+            Ok(())
+        })?,
+    )?;
+
+    // AcceptSkillUps() (`0x4d3d40`): returns at once while the chosen points cost nothing
+    // (`0xb731d0` is 0, `0x4d3d4e`), which with the costs of module doc is always; the `0x220`
+    // it would send and the clear it would make never happen.
+    g.set("AcceptSkillUps", lua.create_function(|_, ()| Ok(()))?)?;
+
+    // BuySkillTier(index) (`0x4d3e50`): `is-number`, then the line's tier step value from
+    // `SkillTiers.dbc` (`0x6de1c0`) decides whether `0x21f` goes out. That table is not loaded,
+    // which is the reference's own empty answer: a step value of 0, and `0x4d3f7b` returns.
+    g.set(
+        "BuySkillTier",
+        lua.create_function(|lua, index: Value| {
+            binding_abi::number_arg(lua, index, "Usage: BuySkillTier(index)")?;
+            Ok(())
+        })?,
+    )?;
 
     Ok(())
 }
@@ -475,6 +571,99 @@ mod tests {
             .eval::<(String, i64, Option<i64>)>("local n,h,e = GetSkillLineInfo(1) return n,h,e")
             .unwrap();
         assert_eq!((h1, e1), (1, Some(1)));
+    }
+
+    /// `AddSkillUp` / `RemoveSkillUp` / `CancelSkillUps` over the points chosen on a line:
+    /// `GetSkillLineInfo`'s `numTempPoints` follows them, a point is refused at the maximum, and
+    /// each change signals `SKILL_LINES_CHANGED`.
+    #[test]
+    fn chosen_skill_points_follow_add_remove_and_cancel() {
+        let mut s = UiScript::new().unwrap();
+        let mut st = state();
+        // First Aid at 73 of 75 with a permanent bonus of +2: room for 2 more (75 + 2 = 77).
+        let fa = st.entries.iter_mut().find(|e| e.skill_id == 129).unwrap();
+        fa.value = 73;
+        fa.max = 75;
+        fa.perm_bonus = 2;
+        s.set_skills(st);
+        s.run(
+            "n = 0 local f = CreateFrame('Frame') f:RegisterEvent('SKILL_LINES_CHANGED') \
+             f:SetScript('OnEvent', function() n = n + 1 end)",
+        )
+        .unwrap();
+        // Rows: 1 Weapon Skills, 2 Defense, 3 Swords, 4 Professions, 5 First Aid, 6 Fishing.
+        let temp = |s: &UiScript, i: i64| -> i64 {
+            s.eval(&format!("local _,_,_,_,t = GetSkillLineInfo({i}) return t"))
+                .unwrap()
+        };
+        let events = |s: &UiScript| s.eval::<i64>("return n").unwrap();
+        assert_eq!(temp(&s, 5), 0);
+        s.run("AddSkillUp(5)").unwrap();
+        s.run("AddSkillUp(5)").unwrap();
+        assert_eq!((temp(&s, 5), events(&s)), (2, 2));
+        // 75 + 2 chosen = 77 is the cap: a third point is refused, silently.
+        s.run("AddSkillUp(5)").unwrap();
+        assert_eq!((temp(&s, 5), events(&s)), (2, 2));
+        // Another line keeps its own count.
+        s.run("AddSkillUp(2)").unwrap();
+        assert_eq!((temp(&s, 2), temp(&s, 5), events(&s)), (1, 2, 3));
+        s.run("RemoveSkillUp(5)").unwrap();
+        assert_eq!((temp(&s, 5), events(&s)), (1, 4));
+        // A line with no point chosen, a header, and an index outside the rows do nothing.
+        s.run("RemoveSkillUp(6) RemoveSkillUp(1) RemoveSkillUp(0) RemoveSkillUp(99)")
+            .unwrap();
+        s.run("AddSkillUp(1) AddSkillUp(0) AddSkillUp(-1) AddSkillUp(99)")
+            .unwrap();
+        assert_eq!((temp(&s, 5), temp(&s, 6), events(&s)), (1, 0, 4));
+        // Cancel takes every point back and signals once.
+        s.run("CancelSkillUps()").unwrap();
+        assert_eq!((temp(&s, 2), temp(&s, 5), events(&s)), (0, 0, 5));
+        // A rebuild takes them back too.
+        s.run("AddSkillUp(5)").unwrap();
+        assert_eq!(temp(&s, 5), 1);
+        let st = state();
+        s.set_skills(st);
+        assert_eq!(temp(&s, 5), 0);
+        // A line already at its maximum takes none.
+        s.run("AddSkillUp(3)").unwrap();
+        let mut st = state();
+        st.entries
+            .iter_mut()
+            .find(|e| e.skill_id == 43)
+            .unwrap()
+            .value = 300;
+        s.set_skills(st);
+        let before = events(&s);
+        s.run("AddSkillUp(3)").unwrap();
+        assert_eq!((temp(&s, 3), events(&s)), (0, before));
+    }
+
+    /// The usage texts and the two that cost nothing: `AcceptSkillUps` and `BuySkillTier`.
+    #[test]
+    fn skill_point_verbs_raise_their_usage_and_the_empty_ones_do_nothing() {
+        let mut s = UiScript::new().unwrap();
+        s.set_skills(state());
+        for (verb, usage) in [
+            ("AddSkillUp", "Usage: AddSkillUp(index)"),
+            ("RemoveSkillUp", "Usage: RemoveSkillUp(index)"),
+            ("BuySkillTier", "Usage: BuySkillTier(index)"),
+        ] {
+            for arg in ["", "nil", "'x'", "{}"] {
+                let call = format!("{verb}({arg})");
+                let err = s.run(&call).expect_err(&call).to_string();
+                assert!(err.contains(usage), "{call}: {err}");
+            }
+            assert_eq!(s.arity(&format!("{verb}('2')")).unwrap(), 0, "{verb}");
+        }
+        assert_eq!(s.arity("AcceptSkillUps()").unwrap(), 0);
+        // Choosing a point and accepting changes nothing the pane shows: the points cost 0, so
+        // there is nothing to accept and nothing is cleared.
+        s.run("AddSkillUp(2) AcceptSkillUps() BuySkillTier(2)")
+            .unwrap();
+        let temp: i64 = s
+            .eval("local _,_,_,_,t = GetSkillLineInfo(2) return t")
+            .unwrap();
+        assert_eq!(temp, 1);
     }
 
     #[test]
