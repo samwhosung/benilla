@@ -445,7 +445,7 @@ pub(crate) fn feed_quest(
     names: Res<NameCache>,
     states: Res<crate::world_state::WorldStates>,
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
-    spells: Option<Res<Spells>>,
+    (spells, unit_names): (Option<Res<Spells>>, crate::ui_unit::NameTables),
     go_templates: Res<crate::go_templates::GameObjectTemplates>,
     materials: Option<Res<crate::ui_item_text::PageMaterials>>,
     mut sink: MessageSink,
@@ -475,7 +475,7 @@ pub(crate) fn feed_quest(
         })
         .collect();
     show_messages(&mut script, &mut sink, "ui_quest", lines);
-    let player = crate::npc_text::player_identity(&self_q, &names, &commands);
+    let player = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
     let fresh = snapshot(
         &giver,
         &items,
@@ -787,8 +787,8 @@ mod tests {
         let commands = NetCommands(tx);
         let player = crate::npc_text::Subject {
             name: "Tri".into(),
-            race: 1,
-            class: 1,
+            race: "Human".into(),
+            class: "Warrior".into(),
             gender: 0,
         };
         let snap = snapshot(

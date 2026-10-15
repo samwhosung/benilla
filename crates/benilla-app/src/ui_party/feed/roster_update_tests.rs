@@ -314,6 +314,7 @@ fn the_stock_raid_ui_repaints_a_member_who_dies_out_of_view() {
     assert!(failures.is_empty(), "load failures: {failures:?}");
     crate::ui_script::test_ui::seat_chain_addon(&mut script, "Blizzard_RaidUI");
     let mut app = app_with(script);
+    crate::ui_unit::TestNames::english().insert(&mut app);
     // A warrior, so the alive colour is the class's and the dead one is not.
     app.world_mut().resource_mut::<NameCache>().insert_player(
         member(1),

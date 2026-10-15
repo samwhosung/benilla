@@ -11,16 +11,20 @@
 use benilla_formats::AreaTableCatalog;
 use benilla_protocol::messages::WhoRequest;
 
-use crate::ui_unit::{class_names, race_names};
+use crate::ui_unit::UnitNames;
 
 /// The 1.12 class ids a `c-` word can name; 6 and 10 do not exist in 1.12.
 const CLASS_IDS: [u8; 9] = [1, 2, 3, 4, 5, 7, 8, 9, 11];
-/// The 1.12 playable race ids (`race_names`' domain).
+/// The 1.12 playable race ids.
 const RACE_IDS: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
 
 /// Parse a `/who` filter into the wire request. A `z-` name that `areas` cannot resolve becomes a
 /// search term, which the server still matches against zone names.
-pub(crate) fn parse(filter: &str, areas: Option<&AreaTableCatalog>) -> WhoRequest {
+pub(crate) fn parse(
+    filter: &str,
+    areas: Option<&AreaTableCatalog>,
+    names: UnitNames<'_>,
+) -> WhoRequest {
     let mut request = WhoRequest::default();
     let mut class_mask = 0u32;
     let mut race_mask = 0u32;
@@ -34,11 +38,11 @@ pub(crate) fn parse(filter: &str, areas: Option<&AreaTableCatalog>) -> WhoReques
                 Some(id) => request.zones.push(id),
                 None => request.search_terms.push(value.to_string()),
             },
-            Some('c') => match mask_bit(value, &CLASS_IDS, class_names) {
+            Some('c') => match mask_bit(value, &CLASS_IDS, |id| names.class(id)) {
                 Some(bit) => class_mask |= bit,
                 None => request.search_terms.push(value.to_string()),
             },
-            Some('r') => match mask_bit(value, &RACE_IDS, race_names) {
+            Some('r') => match mask_bit(value, &RACE_IDS, |id| names.race(id)) {
                 Some(bit) => race_mask |= bit,
                 None => request.search_terms.push(value.to_string()),
             },
@@ -115,10 +119,10 @@ fn level_range(value: &str) -> Option<(u32, u32)> {
 }
 
 /// Match a class/race word against the display names and return its `1 << id` bit.
-fn mask_bit(
+fn mask_bit<'n>(
     value: &str,
     ids: &[u8],
-    names: fn(u8) -> Option<(&'static str, &'static str)>,
+    names: impl Fn(u8) -> Option<(&'n str, &'n str)>,
 ) -> Option<u32> {
     ids.iter().copied().find_map(|id| {
         let (display, token) = names(id)?;
@@ -137,16 +141,21 @@ fn zone_id(areas: &AreaTableCatalog, name: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_unit::TestNames;
+
+    fn en() -> TestNames {
+        TestNames::english()
+    }
 
     #[test]
     fn an_empty_filter_is_the_default_query() {
-        assert_eq!(parse("", None), WhoRequest::default());
-        assert_eq!(parse("   ", None), WhoRequest::default());
+        assert_eq!(parse("", None, en().names()), WhoRequest::default());
+        assert_eq!(parse("   ", None, en().names()), WhoRequest::default());
     }
 
     #[test]
     fn tags_route_to_their_fields() {
-        let q = parse("n-bob g-\"Legacy of Steel\" 10-20", None);
+        let q = parse("n-bob g-\"Legacy of Steel\" 10-20", None, en().names());
         assert_eq!(q.player_name, "bob");
         assert_eq!(q.guild_name, "Legacy of Steel");
         assert_eq!((q.level_min, q.level_max), (10, 20));
@@ -155,7 +164,7 @@ mod tests {
 
     #[test]
     fn a_bare_number_is_an_exact_level() {
-        let q = parse("60", None);
+        let q = parse("60", None, en().names());
         assert_eq!((q.level_min, q.level_max), (60, 60));
         assert!(q.search_terms.is_empty());
     }
@@ -163,28 +172,51 @@ mod tests {
     /// By display name or file token, without case.
     #[test]
     fn class_and_race_terms_become_mask_bits() {
-        let q = parse("c-Warrior r-\"night elf\"", None);
+        let q = parse("c-Warrior r-\"night elf\"", None, en().names());
         assert_eq!(q.class_mask, 1 << 1, "warrior is class 1");
         assert_eq!(q.race_mask, 1 << 4, "night elf is race 4");
 
-        let token_spelling = parse("r-nightelf", None);
+        let token_spelling = parse("r-nightelf", None, en().names());
         assert_eq!(token_spelling.race_mask, 1 << 4);
 
         // Two of a kind union rather than overwrite.
-        let both = parse("c-mage c-warlock", None);
+        let both = parse("c-mage c-warlock", None, en().names());
         assert_eq!(both.class_mask, (1 << 8) | (1 << 9));
+    }
+
+    /// The words are the install's locale column: a koKR client names a class or race in Korean,
+    /// the English word is no name there (it falls through to a search term), and the token
+    /// spelling, which is not localized, answers in every locale.
+    #[test]
+    fn class_and_race_words_follow_the_installs_names() {
+        let ko = TestNames::korean();
+        let q = parse("c-마법사 r-\"나이트 엘프\"", None, ko.names());
+        assert_eq!(q.class_mask, 1 << 8);
+        assert_eq!(q.race_mask, 1 << 4);
+        // The English display name is no word there (`night elf` is not the token `NightElf`).
+        let q = parse("r-\"night elf\"", None, ko.names());
+        assert_eq!(q.race_mask, u32::MAX, "Night Elf is no koKR race word");
+        assert_eq!(q.search_terms, vec!["night elf".to_string()]);
+        assert_eq!(
+            parse("c-mage r-nightelf", None, ko.names()).class_mask,
+            1 << 8
+        );
+        assert_eq!(
+            parse("c-mage r-nightelf", None, ko.names()).race_mask,
+            1 << 4
+        );
     }
 
     #[test]
     fn an_unknown_class_word_falls_through_to_a_search_term() {
-        let q = parse("c-necromancer", None);
+        let q = parse("c-necromancer", None, en().names());
         assert_eq!(q.class_mask, u32::MAX, "still every class");
         assert_eq!(q.search_terms, vec!["necromancer".to_string()]);
     }
 
     #[test]
     fn an_unresolvable_zone_degrades_to_a_search_term() {
-        let q = parse("z-\"Elwynn Forest\"", None);
+        let q = parse("z-\"Elwynn Forest\"", None, en().names());
         assert!(q.zones.is_empty());
         assert_eq!(q.search_terms, vec!["Elwynn Forest".to_string()]);
     }
@@ -201,16 +233,16 @@ mod tests {
     /// A hyphenated word is a search term, and the reversed range `20-10` reads as level 20.
     #[test]
     fn hyphens_that_are_not_tags() {
-        let q = parse("well-met", None);
+        let q = parse("well-met", None, en().names());
         assert_eq!(q.search_terms, vec!["well-met".to_string()]);
 
-        let reversed = parse("20-10", None);
+        let reversed = parse("20-10", None, en().names());
         assert_eq!((reversed.level_min, reversed.level_max), (20, 20));
     }
 
     #[test]
     fn levels_clamp_to_the_clients_window() {
-        let q = parse("0-9999", None);
+        let q = parse("0-9999", None, en().names());
         assert_eq!((q.level_min, q.level_max), (1, 100));
     }
 
@@ -220,7 +252,7 @@ mod tests {
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
         let areas = benilla_formats::load_area_table_catalog(&mut chain).expect("AreaTable.dbc");
 
-        let q = parse("z-\"elwynn forest\" 1-10", Some(&areas));
+        let q = parse("z-\"elwynn forest\" 1-10", Some(&areas), en().names());
         assert_eq!(q.zones.len(), 1, "one zone id, resolved case-insensitively");
         assert_eq!(
             areas.name(q.zones[0]),

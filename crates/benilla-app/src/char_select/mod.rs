@@ -846,6 +846,7 @@ fn debug_select_dialog(
     mut dialog: ResMut<dialog::DeleteDialog>,
     time: Res<Time>,
     entered_at: Res<CharSelectEnteredAt>,
+    unit_names: crate::ui_unit::NameTables,
     mut done: Local<bool>,
 ) {
     if *done {
@@ -861,7 +862,12 @@ fn debug_select_dialog(
     let Some(c) = roster.selected_char() else {
         return;
     };
-    let (guid, name, level, class) = (c.guid, c.name.clone(), c.level, class_name(c.class));
+    let (guid, name, level, class) = (
+        c.guid,
+        c.name.clone(),
+        c.level,
+        class_name(unit_names.get(), c.class),
+    );
     dialog.open_for(guid, name, level, class);
     dialog.typed.set_text(&typed);
     info!("char select: dialog instrument opened the delete confirm");
@@ -941,33 +947,15 @@ pub(crate) fn wow_font(assets: &AssetServer) -> Handle<Font> {
 
 // ── 1.12 display names ──────────────────────────────────────────────────────────────────────────
 
-pub(crate) fn race_name(race: u8) -> &'static str {
-    match race {
-        1 => "Human",
-        2 => "Orc",
-        3 => "Dwarf",
-        4 => "Night Elf",
-        5 => "Undead",
-        6 => "Tauren",
-        7 => "Gnome",
-        8 => "Troll",
-        _ => "?",
-    }
+/// A race's display name from `ChrRaces.dbc` at the install's locale column; `?` for an id with no
+/// row, which the roster's own bytes should not carry.
+pub(crate) fn race_name<'a>(names: crate::ui_unit::UnitNames<'a>, race: u8) -> &'a str {
+    names.race(race).map_or("?", |(name, _)| name)
 }
 
-pub(crate) fn class_name(class: u8) -> &'static str {
-    match class {
-        1 => "Warrior",
-        2 => "Paladin",
-        3 => "Hunter",
-        4 => "Rogue",
-        5 => "Priest",
-        7 => "Shaman",
-        8 => "Mage",
-        9 => "Warlock",
-        11 => "Druid",
-        _ => "?",
-    }
+/// A class's display name from `ChrClasses.dbc` at the install's locale column; `?` for no row.
+pub(crate) fn class_name<'a>(names: crate::ui_unit::UnitNames<'a>, class: u8) -> &'a str {
+    names.class(class).map_or("?", |(name, _)| name)
 }
 
 /// A `Character` with only its identity filled in.
@@ -1015,6 +1003,18 @@ pub(crate) fn add_test_systems(app: &mut App, pick: crossbeam_channel::Sender<Ch
 
 #[cfg(test)]
 mod tests {
+    /// The screens' race and class words are the tables' at the install's locale; an id with no
+    /// row, or no table, reads `?`.
+    #[test]
+    fn the_screens_name_race_and_class_from_the_tables() {
+        let korean = crate::ui_unit::TestNames::korean();
+        assert_eq!(race_name(korean.names(), 5), "언데드");
+        assert_eq!(class_name(korean.names(), 11), "드루이드");
+        assert_eq!(race_name(korean.names(), 0), "?");
+        assert_eq!(class_name(korean.names(), 6), "?");
+        assert_eq!(class_name(Default::default(), 1), "?");
+    }
+
     use super::*;
 
     use super::test_character as character;

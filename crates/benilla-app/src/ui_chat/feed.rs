@@ -677,6 +677,7 @@ pub(super) fn feed_chat(
     langs: Res<super::language::ChatLanguages>,
     // Item names for `TRADESKILL_LOG`, `FEEDPET_LOG`, `ITEMENCHANTMENT*`, `SPELLDURABILITYDAMAGE`.
     items: Res<crate::items::Items>,
+    unit_names: crate::ui_unit::NameTables,
     // The spam and profanity filters, which run in the reference's display function `0x49a870`.
     mut text_filter: crate::text_filter::ChatTextFilter,
 ) {
@@ -740,6 +741,7 @@ pub(super) fn feed_chat(
                         &stores,
                         &names,
                         &commands,
+                        unit_names.get(),
                     );
                     let (text, clean) = crate::npc_text::substitute_checked(
                         &msg.text,

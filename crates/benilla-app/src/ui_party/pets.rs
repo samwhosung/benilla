@@ -149,7 +149,7 @@ pub(super) fn member_pet(
                 .names
                 .resolve_unit(guid, Some(store), look.commands)
                 .map(str::to_string);
-            crate::ui_unit::snapshot(store, guid, name, 0, None, look.types)
+            crate::ui_unit::snapshot(store, guid, name, 0, Default::default(), look.types)
         }
         None => record_state(
             group,

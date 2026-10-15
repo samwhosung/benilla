@@ -6,17 +6,25 @@
 use bevy::prelude::*;
 
 use benilla_assets::{AssetSet, LockRecover, WorldAssets};
-use benilla_formats::ChrClasses;
+use benilla_formats::{ChrClasses, ChrRaces};
 
 /// The parsed table; [`benilla_formats::ChrClasses`] documents the columns.
 #[derive(Resource)]
 pub(crate) struct ChrClassTable(pub(crate) ChrClasses);
 
+/// `ChrRaces.dbc`'s names and tokens, at the install's locale column; `UnitRace` and the race words
+/// the chat and social lists print come from it. Absent when the load fails, and no race has a name.
+#[derive(Resource)]
+pub(crate) struct ChrRaceTable(pub(crate) ChrRaces);
+
 pub(crate) struct ChrClassesPlugin;
 
 impl Plugin for ChrClassesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_chr_classes.after(AssetSet::Open));
+        app.add_systems(
+            Startup,
+            (load_chr_classes, load_chr_races).after(AssetSet::Open),
+        );
     }
 }
 
@@ -33,6 +41,21 @@ fn load_chr_classes(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
              own \"PET\" fallback, so a warlock's says Pet rather than Demon, no class reads \
              as having a relic slot, and no talent spell modifier can apply (the gate has no \
              class family to match): {e:#}"
+        ),
+    }
+}
+
+fn load_chr_races(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
+    let Some(assets) = assets else { return };
+    let loaded = {
+        let mut chain = assets.chain.lock_recover();
+        benilla_formats::load_chr_races(&mut chain)
+    };
+    match loaded {
+        Ok(table) => commands.insert_resource(ChrRaceTable(table)),
+        Err(e) => warn!(
+            "chr_races: ChrRaces.dbc failed to load — no unit has a race name or token, so \
+             `UnitRace` answers nil and the social lists print no race: {e:#}"
         ),
     }
 }

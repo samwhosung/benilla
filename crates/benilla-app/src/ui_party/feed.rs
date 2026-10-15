@@ -155,7 +155,7 @@ pub(super) fn feed_party(
             line,
         ));
     }
-    let chr = tables.classes();
+    let chr = tables.unit_names();
     let types = tables.types(&names);
     // The gate also opens on a despawn, which `Changed` misses. Solo, it almost always stays shut.
     let names_moved = fed.names_generation.moved(names.generation());
@@ -289,7 +289,7 @@ pub(super) fn feed_party(
             .name(areas.0.top_zone(area).unwrap_or(area))
             .map(str::to_string)
     };
-    let raid = raid_roster(&group, me.as_ref(), &names, &zone_name);
+    let raid = raid_roster(&group, me.as_ref(), &names, chr, &zone_name);
     // The `RAID_ROSTER_UPDATE` key, taken before the roster moves into the snapshot.
     let raid_key: Vec<(u64, u32, u32, bool)> = raid
         .iter()
@@ -676,6 +676,7 @@ fn raid_roster(
     group: &GroupState,
     me: Option<&RaidSelf>,
     names: &NameCache,
+    unit_names: crate::ui_unit::UnitNames<'_>,
     zone_name: &dyn Fn(u32) -> Option<String>,
 ) -> Vec<RaidMemberInfo> {
     if group.group_type != GROUPTYPE_RAID {
@@ -701,7 +702,7 @@ fn raid_roster(
                online: bool,
                ninth: bool,
                class_byte: Option<u8>| {
-        let class = class_byte.and_then(crate::ui_unit::class_names);
+        let class = class_byte.and_then(|c| unit_names.class(c));
         RaidMemberInfo {
             name,
             guid,
@@ -759,9 +760,9 @@ fn member_unit_state(
     store: Option<&ObjectStore>,
     group: &GroupState,
     own_group: Option<String>,
-    // `ChrClasses.dbc`, for the relic slot alone: only the live leg has a class byte to key it
-    // by, so an unstreamed paladin reads no relic slot.
-    classes: Option<&benilla_formats::ChrClasses>,
+    // `ChrRaces.dbc` and `ChrClasses.dbc`: the names and the relic slot, which only the live leg
+    // has a class byte to key by, so an unstreamed paladin reads no relic slot.
+    classes: crate::ui_unit::UnitNames<'_>,
     // The creature type resolves from the live descriptor alone, so an unstreamed member has none.
     types: CreatureTypeSources<'_>,
 ) -> UnitState {
@@ -1524,7 +1525,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
-            None,
+            Default::default(),
             Default::default(),
         );
         assert_eq!(
@@ -1547,7 +1548,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
-            None,
+            Default::default(),
             Default::default(),
         );
         assert_eq!((bare.health, bare.max_health, bare.power), (0, 0, 0));
@@ -1575,7 +1576,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
-            None,
+            Default::default(),
             Default::default(),
         );
         assert!(
@@ -1594,7 +1595,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
-            None,
+            Default::default(),
             Default::default(),
         );
         assert!(s.ghost);
@@ -1611,7 +1612,7 @@ mod tests {
             None,
             &GroupState::default(),
             None,
-            None,
+            Default::default(),
             Default::default(),
         );
         assert!(s.dead);
@@ -2170,7 +2171,8 @@ mod tests {
             class: Some(11),
         };
 
-        let roster = raid_roster(&group, Some(&me), &names, &zone);
+        let korean = crate::ui_unit::TestNames::korean();
+        let roster = raid_roster(&group, Some(&me), &names, korean.names(), &zone);
         assert_eq!(roster.len(), 3, "the player is spliced back in");
 
         // Row 1, us: leader (rank 2), subgroup stored 0, class off the descriptor.
@@ -2182,6 +2184,11 @@ mod tests {
         );
         assert_eq!(roster[0].level, 60);
         assert_eq!(roster[0].class_file.as_deref(), Some("DRUID"));
+        assert_eq!(
+            roster[0].class.as_deref(),
+            Some("드루이드"),
+            "the display name is the table's, the token is not localized"
+        );
         assert_eq!(roster[0].zone.as_deref(), Some("Ironforge"));
         assert!(roster[0].online && !roster[0].ninth);
 
@@ -2200,7 +2207,7 @@ mod tests {
         // A party is not a raid: the list is empty, so `GetNumRaidMembers()` answers 0, while
         // `IsRaidLeader()` still answers 1.
         group.group_type = 0;
-        assert!(raid_roster(&group, Some(&me), &names, &zone).is_empty());
+        assert!(raid_roster(&group, Some(&me), &names, korean.names(), &zone).is_empty());
     }
 
     #[test]

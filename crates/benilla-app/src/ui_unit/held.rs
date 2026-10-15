@@ -11,7 +11,6 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use benilla_formats::ChrClasses;
 use benilla_ui::script::{NameCandidate, UiScript, UnitState};
 
 use super::{enrich_unit, faction_group, faction_group_localized, snapshot, unit_reaction};
@@ -30,7 +29,7 @@ pub(super) struct HeldUnits<'a> {
     pub(super) group: &'a crate::ui_party::GroupState,
     /// Our own descriptor, which reaction, attackability and the faction line read.
     pub(super) self_store: Option<&'a ObjectStore>,
-    pub(super) classes: Option<&'a ChrClasses>,
+    pub(super) unit_names: super::UnitNames<'a>,
     pub(super) types: CreatureTypeSources<'a>,
     /// The object manager's lookup by guid (`0x468460`), which `CanAssist`'s owner leg reads.
     pub(super) by_guid: &'a dyn Fn(u64) -> Option<ObjectStore>,
@@ -51,7 +50,7 @@ impl HeldUnits<'_> {
     /// [`Self::state`] under a name the caller looked up, which sends no name query.
     fn state_named(&self, store: &ObjectStore, guid: u64, name: Option<String>) -> UnitState {
         let reaction = unit_reaction(self.factions, self.reputations, store, self.self_store);
-        let mut s = snapshot(store, guid, name, reaction, self.classes, self.types);
+        let mut s = snapshot(store, guid, name, reaction, self.unit_names, self.types);
         s.raid_target = self.group.raid_target_index(guid);
         s.faction_group = faction_group(store, self.factions);
         s.faction_group_localized = faction_group_localized(store, self.factions);
@@ -168,7 +167,7 @@ pub(super) fn feed_chain_units(
         reputations: &reputations,
         group: &group,
         self_store: self_q.iter().next(),
-        classes: tables.classes(),
+        unit_names: tables.unit_names(),
         types: tables.types(&names),
         by_guid: &by_guid,
     };
@@ -255,7 +254,7 @@ pub(crate) fn feed_name_candidates(
         reputations: &reputations,
         group: &group,
         self_store: me.and_then(|(_, _, s)| s),
-        classes: tables.classes(),
+        unit_names: tables.unit_names(),
         types: tables.types(&names),
         by_guid: &by_guid,
     };

@@ -92,7 +92,7 @@ pub(super) fn feed_pet_unit(
                 spells.as_deref(),
                 creature_types.as_deref(),
             );
-            snapshot(store, pet_guid, name, 0, None, types)
+            snapshot(store, pet_guid, name, 0, Default::default(), types)
         });
 
     let dirty = match (&fresh, &memory.pushed) {

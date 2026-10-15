@@ -532,6 +532,7 @@ struct MailFeedExtras<'w, 's> {
     /// The package rows went to this VM.
     packages_pushed: Local<'s, crate::ui_script::VmMemo<bool>>,
     closes: CoreCloses<'w, 's>,
+    unit_names: crate::ui_unit::NameTables<'w>,
 }
 
 /// `0x4ad050`'s order for each result: the arm's message line and a send's compose reset
@@ -609,6 +610,7 @@ fn feed_mail(
         packages,
         mut packages_pushed,
         mut closes,
+        unit_names,
     } = extras;
     if let Some(packages) = packages.as_deref() {
         let pushed = packages_pushed.get(&script);
@@ -630,7 +632,7 @@ fn feed_mail(
     }
 
     // `None` until the player is named; the diff re-substitutes an open letter when it lands.
-    let subject = crate::npc_text::player_identity(&self_q, &names, &commands);
+    let subject = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
     let macros = crate::npc_text::MacroContext {
         subject: subject.as_ref(),
         states: &states,

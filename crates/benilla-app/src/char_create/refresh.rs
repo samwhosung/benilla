@@ -27,6 +27,7 @@ pub(super) fn refresh_dynamic(
     catalog: Option<Res<CharCreate>>,
     art: Res<GlueArt>,
     strings: Option<Res<GlueStrings>>,
+    unit_names: crate::ui_unit::NameTables,
     root: Query<Ref<CharCreateUi>>,
     mut icons: Query<(&DynIcon, &mut ImageNode)>,
     mut texts: Query<(&DynText, &mut Text)>,
@@ -123,8 +124,10 @@ pub(super) fn refresh_dynamic(
                     if alliance { "Alliance" } else { "Horde" },
                 )
                 .to_string(),
-            DynText::InfoTitle(InfoKind::Race) => race_name(sel.race).to_string(),
-            DynText::InfoTitle(InfoKind::Class) => class_name(sel.class).to_string(),
+            DynText::InfoTitle(InfoKind::Race) => race_name(unit_names.get(), sel.race).to_string(),
+            DynText::InfoTitle(InfoKind::Class) => {
+                class_name(unit_names.get(), sel.class).to_string()
+            }
             // Never trimmed: each `FACTION_INFO_*`, `RACE_INFO_*` and `CLASS_*` string opens with
             // eight spaces, which is the reference's first-line clearance past the header icon.
             DynText::InfoBody(InfoKind::Faction) => strings
@@ -155,7 +158,7 @@ pub(super) fn refresh_dynamic(
                 .to_string(),
             DynText::ClassSlotLabel(i) => classes
                 .get(*i as usize)
-                .map(|&c| class_name(c).to_string())
+                .map(|&c| class_name(unit_names.get(), c).to_string())
                 .unwrap_or_default(),
         };
         if t.0 != new {

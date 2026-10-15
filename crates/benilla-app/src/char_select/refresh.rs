@@ -21,6 +21,7 @@ pub(super) fn refresh_list(
     realms: Option<Res<crate::realm_select::Realms>>,
     strings: Option<Res<GlueStrings>>,
     status: Res<NetStatus>,
+    unit_names: crate::ui_unit::NameTables,
     mut rows: Query<(&SelectAction, &mut Visibility), (With<Button>, Without<Hilight>)>,
     mut texts: Query<(&RowText, &mut Text), Without<SelectedName>>,
     mut name: Query<&mut Text, (With<SelectedName>, Without<RealmBanner>, Without<RowText>)>,
@@ -64,7 +65,7 @@ pub(super) fn refresh_list(
                     strings
                         .text(key.0, key.1)
                         .replacen("%d", &c.level.to_string(), 1)
-                        .replacen("%s", class_name(c.class), 1)
+                        .replacen("%s", class_name(unit_names.get(), c.class), 1)
                 }
                 _ => areas
                     .as_deref()

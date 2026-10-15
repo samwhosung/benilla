@@ -244,7 +244,8 @@ mod tests {
             words: Some(&words),
         };
         let word = |store: &ObjectStore| {
-            crate::ui_unit::snapshot(store, 0, None, 0, None, sources).creature_type_name
+            crate::ui_unit::snapshot(store, 0, None, 0, Default::default(), sources)
+                .creature_type_name
         };
         assert_eq!(word(&store(0, 1, 1)).as_deref(), Some("야수"), "cat form");
         assert_eq!(word(&store(0, 1, 0)).as_deref(), Some("인간형"), "no form");
@@ -259,7 +260,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            crate::ui_unit::snapshot(&store(71, 0, 0), 0, None, 0, None, sources)
+            crate::ui_unit::snapshot(&store(71, 0, 0), 0, None, 0, Default::default(), sources)
                 .creature_type_name,
             None
         );
@@ -270,7 +271,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            crate::ui_unit::snapshot(&store(0, 1, 1), 0, None, 0, None, sources).creature_type_name,
+            crate::ui_unit::snapshot(&store(0, 1, 1), 0, None, 0, Default::default(), sources)
+                .creature_type_name,
             None
         );
     }
@@ -287,7 +289,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(sources.word(10), Some("지정되지 않음"));
-        let snap = crate::ui_unit::snapshot(&store(72, 0, 0), 0, None, 0, None, sources);
+        let snap =
+            crate::ui_unit::snapshot(&store(72, 0, 0), 0, None, 0, Default::default(), sources);
         assert_eq!(snap.creature_type, 10);
         assert_eq!(snap.creature_type_name.as_deref(), Some("지정되지 않음"));
     }

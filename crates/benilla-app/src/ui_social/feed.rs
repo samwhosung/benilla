@@ -11,7 +11,7 @@ use crate::area::AreaTableRes;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::ui_action::{MessageSink, Shown, UiError};
-use crate::ui_unit::{class_names, race_names};
+use crate::ui_unit::{NameTables, UnitNames};
 
 use super::{name_pushes, result_key, status_flag_key, SocialState};
 
@@ -46,6 +46,7 @@ pub(super) fn feed_social(
     mut social: ResMut<SocialState>,
     names: Res<NameCache>,
     areas: Option<Res<AreaTableRes>>,
+    unit_names: NameTables,
     dungeons: Option<Res<super::LfgDungeonsRes>>,
     commands: Res<NetCommands>,
     mut sink: MessageSink,
@@ -75,7 +76,8 @@ pub(super) fn feed_social(
             })
             .collect();
         let away = |status: u8| status_flag_key(status).and_then(&get).unwrap_or_default();
-        let (friends, display_order) = friend_rows(&social, &names, &commands, areas, &away);
+        let (friends, display_order) =
+            friend_rows(&social, &names, &commands, areas, unit_names.get(), &away);
         (owed, friends, display_order)
     };
 
@@ -84,7 +86,7 @@ pub(super) fn feed_social(
     crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", owed);
 
     let (ignores, ignore_order) = ignore_rows(&social, &names, &commands);
-    let who = who_rows(&social, areas);
+    let who = who_rows(&social, areas, unit_names.get());
 
     let selected_friend = index_of(&display_order, social.selected_friend);
     let selected_ignore = index_of(&ignore_order, social.selected_ignore);
@@ -124,8 +126,11 @@ pub(super) fn feed_social(
             // `qsort` at `0x5ae0e2` orders the array `GetWhoInfo` reads.
             let printed = {
                 let get = |key: &str| script.lua().globals().get::<String>(key).ok();
-                let wire_order: Vec<WhoInfo> =
-                    social.who.iter().map(|e| who_row(e, areas)).collect();
+                let wire_order: Vec<WhoInfo> = social
+                    .who
+                    .iter()
+                    .map(|e| who_row(e, areas, unit_names.get()))
+                    .collect();
                 who_lines(&wire_order, social.who_total, &get)
             };
             crate::ui_action::show_messages(&mut script, &mut sink, "ui_social", printed);
@@ -216,6 +221,7 @@ fn friend_rows(
     names: &NameCache,
     commands: &NetCommands,
     areas: Option<&AreaTableCatalog>,
+    unit_names: UnitNames<'_>,
     away: &dyn Fn(u8) -> String,
 ) -> (Vec<FriendInfo>, Vec<u64>) {
     let mut rows: Vec<(u64, FriendInfo)> = social
@@ -235,7 +241,7 @@ fn friend_rows(
                     // An offline friend has no class or zone on the wire; empty, the frame prints
                     // its Offline template.
                     class: online
-                        .then(|| class_names(entry.class as u8))
+                        .then(|| unit_names.class(entry.class as u8))
                         .flatten()
                         .map(|(display, _)| display.to_string())
                         .unwrap_or_default(),
@@ -290,23 +296,33 @@ fn ignore_rows(
 
 /// The `/who` rows, resolved, then sorted by the chain as the reference sorts every answer
 /// (`0x5ae0e2`); the comparator compares resolved names, so the sort runs after [`who_row`].
-fn who_rows(social: &SocialState, areas: Option<&AreaTableCatalog>) -> Vec<WhoInfo> {
-    let mut rows: Vec<WhoInfo> = social.who.iter().map(|e| who_row(e, areas)).collect();
+fn who_rows(
+    social: &SocialState,
+    areas: Option<&AreaTableCatalog>,
+    names: UnitNames<'_>,
+) -> Vec<WhoInfo> {
+    let mut rows: Vec<WhoInfo> = social
+        .who
+        .iter()
+        .map(|e| who_row(e, areas, names))
+        .collect();
     social.who_sort.sort(&mut rows);
     rows
 }
 
 /// One `/who` row, ids resolved; the wire carries class before race, the Lua API race first.
-fn who_row(entry: &WhoEntry, areas: Option<&AreaTableCatalog>) -> WhoInfo {
+fn who_row(entry: &WhoEntry, areas: Option<&AreaTableCatalog>, names: UnitNames<'_>) -> WhoInfo {
     WhoInfo {
         name: entry.name.clone(),
         guild: entry.guild.clone(),
         level: entry.level,
-        race: race_names(entry.race as u8)
+        race: names
+            .race(entry.race as u8)
             .map(|(display, _)| display)
             .unwrap_or_default()
             .to_string(),
-        class: class_names(entry.class as u8)
+        class: names
+            .class(entry.class as u8)
             .map(|(display, _)| display)
             .unwrap_or_default()
             .to_string(),
@@ -337,6 +353,7 @@ pub(super) fn drain_social(
     names: Res<NameCache>,
     commands: Res<NetCommands>,
     areas: Option<Res<AreaTableRes>>,
+    unit_names: NameTables,
     mut tutorials: Option<MessageWriter<crate::tutorial::TutorialEvent>>,
 ) {
     let Some(mut script) = script else {
@@ -406,7 +423,8 @@ pub(super) fn drain_social(
                 social.selected_ignore = row_guid(&social.ignore_display_order, index).unwrap_or(0);
             }
             SocialRequest::Who(filter) => {
-                let request = super::who_query(&filter, areas.as_deref().map(|a| &a.0));
+                let request =
+                    super::who_query(&filter, areas.as_deref().map(|a| &a.0), unit_names.get());
                 let _ = commands.0.send(ClientCommand::Who {
                     request: Box::new(request),
                 });
@@ -474,18 +492,24 @@ mod tests {
         // The seeded chain is zone → level → class → group → name → …: one zone and one class
         // here, so it resolves on level, then name.
         assert_eq!(
-            names(&who_rows(&social, None)),
+            names(&who_rows(&social, None, Default::default())),
             ["erdrin", "Bruk", "Galas"],
             "wire order was Galas, erdrin, Bruk"
         );
 
         // A Name click: ascending and case-folded, so `erdrin` sorts among the capitals.
         social.who_sort.promote("name");
-        assert_eq!(names(&who_rows(&social, None)), ["Bruk", "erdrin", "Galas"]);
+        assert_eq!(
+            names(&who_rows(&social, None, Default::default())),
+            ["Bruk", "erdrin", "Galas"]
+        );
 
         // The same click again reverses.
         social.who_sort.promote("name");
-        assert_eq!(names(&who_rows(&social, None)), ["Galas", "erdrin", "Bruk"]);
+        assert_eq!(
+            names(&who_rows(&social, None, Default::default())),
+            ["Galas", "erdrin", "Bruk"]
+        );
 
         // A fresh answer arrives into that same chain.
         social.apply_who(WhoResults {
@@ -493,7 +517,10 @@ mod tests {
             total: 2,
             entries: vec![entry("Aaa", 1, ""), entry("Zzz", 1, "")],
         });
-        assert_eq!(names(&who_rows(&social, None)), ["Zzz", "Aaa"]);
+        assert_eq!(
+            names(&who_rows(&social, None, Default::default())),
+            ["Zzz", "Aaa"]
+        );
     }
 
     #[test]
@@ -518,12 +545,16 @@ mod tests {
         // A chain that would order them the other way round, to prove it is not consulted.
         social.who_sort.promote("name");
         assert_eq!(
-            names(&who_rows(&social, None)),
+            names(&who_rows(&social, None, Default::default())),
             ["Aaa", "Zzz"],
             "the frame's order"
         );
 
-        let wire: Vec<WhoInfo> = social.who.iter().map(|e| who_row(e, None)).collect();
+        let wire: Vec<WhoInfo> = social
+            .who
+            .iter()
+            .map(|e| who_row(e, None, Default::default()))
+            .collect();
         // The shipped templates: FrameXML never names these keys, so a stub would echo a guess.
         let data = benilla_formats::wow_data_or_skip!();
         let mut chain = benilla_formats::open_chain(&data).expect("open chain");
@@ -563,6 +594,7 @@ mod tests {
                 zone: 999_999,
             },
             None,
+            crate::ui_unit::TestNames::english().names(),
         );
         assert_eq!(
             (row.class.as_str(), row.race.as_str(), row.zone.as_str()),
@@ -630,23 +662,51 @@ mod tests {
         );
     }
 
+    /// An online friend's class is the table's word at the install's locale; an offline one has
+    /// none on the wire and carries none.
     #[test]
-    fn an_offline_row_carries_no_class_or_zone() {
-        let entry = benilla_protocol::messages::FriendEntry {
-            guid: 7,
-            status: friend_status::OFFLINE,
+    fn a_friends_class_is_the_installs_word_and_an_offline_row_has_none() {
+        let mut social = SocialState::default();
+        let entry = |guid, status| benilla_protocol::messages::FriendEntry {
+            guid,
+            status,
             area: 12,
             level: 60,
             class: 4,
         };
-        // The class resolution `friend_rows` uses.
-        let online = entry.is_online();
-        assert!(!online);
-        let class = online
-            .then(|| class_names(entry.class as u8))
-            .flatten()
-            .map(|(d, _)| d.to_string())
-            .unwrap_or_default();
-        assert_eq!(class, "");
+        social.friends = vec![
+            entry(7, friend_status::ONLINE),
+            entry(8, friend_status::OFFLINE),
+        ];
+        let mut names = NameCache::default();
+        names.insert_player(7, "Aaa".into(), None);
+        names.insert_player(8, "Bbb".into(), None);
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let korean = crate::ui_unit::TestNames::korean();
+        let (rows, _) = friend_rows(&social, &names, &commands, None, korean.names(), &|_| {
+            String::new()
+        });
+        assert_eq!(rows[0].class, "도적", "online: Rogue at the koKR column");
+        assert_eq!(rows[1].class, "", "offline: nothing on the wire");
+    }
+
+    /// A `/who` row's race and class are the table's words at the install's locale.
+    #[test]
+    fn a_who_row_names_race_and_class_at_the_installs_locale() {
+        let entry = WhoEntry {
+            name: "Bob".into(),
+            guild: String::new(),
+            level: 60,
+            class: 8,
+            race: 5,
+            zone: 0,
+        };
+        let korean = crate::ui_unit::TestNames::korean();
+        let row = who_row(&entry, None, korean.names());
+        assert_eq!(
+            (row.race.as_str(), row.class.as_str()),
+            ("언데드", "마법사")
+        );
     }
 }

@@ -1847,6 +1847,7 @@ fn the_entry_load_seeds_a_record_the_feed_cannot_take_away() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let (tmp, _capture, _home) = hermetic_probe("nameseed");
     let mut world = booted_world();
+    crate::ui_unit::TestNames::english().insert_world(&mut world);
     log_in_as(&mut world, "Nelprifour", 0x2A);
 
     assert_eq!(

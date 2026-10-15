@@ -470,7 +470,7 @@ pub(crate) fn feed_quest_log(
     header_names: Option<Res<QuestHeaderNamesRes>>,
     tag_names: Option<Res<QuestTagNamesRes>>,
     states: Res<crate::world_state::WorldStates>,
-    spells: Option<Res<Spells>>,
+    (spells, unit_names): (Option<Res<Spells>>, crate::ui_unit::NameTables),
     // The completion toast is a message-catalog row, whose surface and sound the sink reads.
     mut sink: crate::ui_action::MessageSink,
     mut last: Local<crate::ui_script::VmMemo<QuestLogState>>,
@@ -569,7 +569,7 @@ pub(crate) fn feed_quest_log(
     };
     let groups = ordered;
 
-    let player = crate::npc_text::player_identity(&self_q, &names, &commands);
+    let player = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
     let macros = crate::npc_text::MacroContext {
         subject: player.as_ref(),
         states: &states,

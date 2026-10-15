@@ -77,6 +77,25 @@ struct ChrClass {
 pub struct ChrClasses(HashMap<u32, ChrClass>);
 
 impl ChrClasses {
+    /// A table of `(id, name, file)` rows, the other columns at their zero values.
+    pub fn from_rows<'a>(rows: impl IntoIterator<Item = (u32, &'a str, &'a str)>) -> Self {
+        Self(
+            rows.into_iter()
+                .map(|(id, name, file)| {
+                    let row = ChrClass {
+                        damage_bonus_stat: 0,
+                        pet_name_token: None,
+                        name: Some(name.to_string()).filter(|n| !n.is_empty()),
+                        file: Some(file.to_string()).filter(|f| !f.is_empty()),
+                        has_relic_slot: false,
+                        spell_family: 0,
+                    };
+                    (id, row)
+                })
+                .collect(),
+        )
+    }
+
     /// `HasPetSpells`' second return: always a string, never nil, and the literal
     /// [`PET_NAME_TOKEN_FALLBACK`] for a class with no row (`0x4b44a6`).
     pub fn pet_name_token(&self, class: u32) -> &str {

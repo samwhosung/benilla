@@ -448,7 +448,7 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
     // streams in.
     if let Some(record) = world
         .get_resource::<crate::char_select::Roster>()
-        .and_then(record_from_roster)
+        .and_then(|roster| record_from_roster(roster, crate::ui_unit::world_unit_names(world)))
     {
         script.set_player_record(record);
     }
@@ -461,9 +461,12 @@ fn load_ingame_ui_seated(world: &mut World, seat: LoadSeat) {
             script.set_player_xp(live.xp.0, live.xp.1);
         }
         None => {
-            if let Some(seat) = world
-                .get_resource::<crate::char_select::Roster>()
-                .and_then(seat_from_roster)
+            if let Some(seat) =
+                world
+                    .get_resource::<crate::char_select::Roster>()
+                    .and_then(|roster| {
+                        seat_from_roster(roster, crate::ui_unit::world_unit_names(world))
+                    })
             {
                 script.set_unit("player", Some(seat));
             }
@@ -610,10 +613,11 @@ fn roster_sex(gender: u8) -> u8 {
 /// the descriptor.
 pub(crate) fn record_from_roster(
     roster: &crate::char_select::Roster,
+    names: crate::ui_unit::UnitNames<'_>,
 ) -> Option<benilla_ui::script::PlayerRecord> {
     let row = roster.pending_row()?;
-    let race = crate::ui_unit::race_names(row.race);
-    let class = crate::ui_unit::class_names(row.class);
+    let race = names.race(row.race);
+    let class = names.class(row.class);
     Some(benilla_ui::script::PlayerRecord {
         name: row.name.clone(),
         race: race.map(|(n, f)| (n.to_string(), f.to_string())),
@@ -629,10 +633,11 @@ pub(crate) fn record_from_roster(
 /// to say.
 pub(crate) fn seat_from_roster(
     roster: &crate::char_select::Roster,
+    names: crate::ui_unit::UnitNames<'_>,
 ) -> Option<benilla_ui::script::UnitState> {
     let row = roster.pending_row()?;
-    let race = crate::ui_unit::race_names(row.race);
-    let class = crate::ui_unit::class_names(row.class);
+    let race = names.race(row.race);
+    let class = names.class(row.class);
     let sex = roster_sex(row.gender);
     Some(benilla_ui::script::UnitState {
         // Before the player object exists the reference answers `UnitExists("player")`
@@ -1101,6 +1106,31 @@ pub(crate) fn is_emote_token_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The roster's stand-in `"player"` and the record `UnitRace`/`UnitClass` read carry the
+    /// table's names at the install's locale, and the tokens beside them.
+    #[test]
+    fn the_roster_seat_and_record_name_race_and_class_from_the_tables() {
+        let mut c = crate::char_select::test_character(7, "Harness");
+        c.race = 4; // Night Elf
+        c.class = 5; // Priest
+        let roster = crate::char_select::Roster::with_pending_pick(vec![c], 7);
+        let korean = crate::ui_unit::TestNames::korean();
+        let seat = seat_from_roster(&roster, korean.names()).expect("a pick seats");
+        assert_eq!(seat.race.as_deref(), Some("나이트 엘프"));
+        assert_eq!(seat.race_file.as_deref(), Some("NightElf"));
+        assert_eq!(seat.class.as_deref(), Some("사제"));
+        assert_eq!(seat.class_file.as_deref(), Some("PRIEST"));
+        let record = record_from_roster(&roster, korean.names()).expect("a pick records");
+        assert_eq!(
+            record.race,
+            Some(("나이트 엘프".to_string(), "NightElf".to_string()))
+        );
+        assert_eq!(
+            record.class,
+            Some(("사제".to_string(), "PRIEST".to_string()))
+        );
+    }
 
     /// Every VM, glue and in-game, answers `GetLocale` with the install's locale (`[0xc0e080]`).
     #[test]

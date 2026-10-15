@@ -417,6 +417,7 @@ fn feed_item_text(
     // The `$`-macro subject for the page body: the local player.
     self_q: Query<(&crate::net::ObjectStore, &crate::net::Guid), With<crate::net::SelfPlayer>>,
     states: Res<crate::world_state::WorldStates>,
+    unit_names: crate::ui_unit::NameTables,
 ) {
     let Some(mut script) = script else {
         return;
@@ -485,7 +486,7 @@ fn feed_item_text(
     };
 
     // Server-authored text runs the `$`-macro expander, as in the reference's `ItemTextFrame.cpp`.
-    let subject = crate::npc_text::player_identity(&self_q, &names, &commands);
+    let subject = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
     let text = crate::npc_text::substitute(
         &text,
         &crate::npc_text::MacroContext {

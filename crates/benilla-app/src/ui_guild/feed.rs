@@ -15,7 +15,7 @@ use bevy::prelude::*;
 
 use crate::area::AreaTableRes;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, SelfPlayer};
-use crate::ui_unit::class_names;
+use crate::ui_unit::{NameTables, UnitNames};
 
 use super::{last_online, GuildState, Identity, RosterRow, ROSTER_REQUEST_THROTTLE_SECS};
 
@@ -40,6 +40,7 @@ pub(super) fn feed_guild(
     mut guild: ResMut<GuildState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     areas: Option<Res<AreaTableRes>>,
+    unit_names: NameTables,
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
     mut fed: Local<crate::ui_script::VmMemo<FedGuild>>,
@@ -73,7 +74,12 @@ pub(super) fn feed_guild(
     let identity = guild.identity(guild_id).cloned();
     let identity = identity.as_ref();
 
-    let rows = display_rows(&guild, areas.as_deref().map(|a| &a.0), identity);
+    let rows = display_rows(
+        &guild,
+        areas.as_deref().map(|a| &a.0),
+        identity,
+        unit_names.get(),
+    );
     let display_order: Vec<u64> = rows.iter().map(|r| r.guid).collect();
     let selection = index_of(&display_order, guild.selection);
     guild.display_order = display_order;
@@ -203,11 +209,12 @@ pub(super) fn display_rows(
     guild: &GuildState,
     areas: Option<&AreaTableCatalog>,
     identity: Option<&Identity>,
+    names: UnitNames<'_>,
 ) -> Vec<RosterRow> {
     let mut rows: Vec<RosterRow> = guild
         .members
         .iter()
-        .map(|m| row(m, areas, identity))
+        .map(|m| row(m, areas, identity, names))
         .collect();
     guild.sort.order(&mut rows, guild.show_offline);
     rows
@@ -219,6 +226,7 @@ fn row(
     m: &GuildRosterMember,
     areas: Option<&AreaTableCatalog>,
     identity: Option<&Identity>,
+    names: UnitNames<'_>,
 ) -> RosterRow {
     let online = m.is_online();
     RosterRow {
@@ -231,7 +239,8 @@ fn row(
                 .unwrap_or_default(),
             rank_index: m.rank_id,
             level: u32::from(m.level),
-            class: class_names(m.class)
+            class: names
+                .class(m.class)
                 .map(|(display, _)| display.to_string())
                 .unwrap_or_default(),
             zone: areas
@@ -469,9 +478,13 @@ mod tests {
             public_note: "alt".into(),
             officer_note: String::new(),
         };
-        let row = row(&member, None, None);
+        let korean = crate::ui_unit::TestNames::korean();
+        let row = row(&member, None, None, korean.names());
         assert_eq!(row.info.level, 42);
-        assert_eq!(row.info.class, "Mage");
+        assert_eq!(
+            row.info.class, "마법사",
+            "the table's word at the install's locale"
+        );
         assert!(!row.info.online);
         assert_eq!(row.info.last_online.days, 3);
         assert_eq!(row.info.status, "");
@@ -487,7 +500,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            row(&member, None, None).info.last_online,
+            row(&member, None, None, Default::default())
+                .info
+                .last_online,
             Default::default()
         );
     }

@@ -25,7 +25,7 @@ use super::wow_font;
 pub(super) struct DeleteDialog {
     pub(super) open: bool,
     /// The snapshotted target: guid, name, level, class name.
-    target: Option<(u64, String, u8, &'static str)>,
+    target: Option<(u64, String, u8, String)>,
     /// The confirm box's text; the reference's `letters="32"` cap is its `max_letters`.
     pub(super) typed: EditBoxState,
     /// The spawned dialog root, while up.
@@ -35,9 +35,9 @@ pub(super) struct DeleteDialog {
 }
 
 impl DeleteDialog {
-    pub(super) fn open_for(&mut self, guid: u64, name: String, level: u8, class: &'static str) {
+    pub(super) fn open_for(&mut self, guid: u64, name: String, level: u8, class: &str) {
         self.open = true;
-        self.target = Some((guid, name, level, class));
+        self.target = Some((guid, name, level, class.to_string()));
         self.typed.set_text("");
     }
 
@@ -204,7 +204,7 @@ fn spawn_dialog(
     let (name, level, class) = dialog
         .target
         .as_ref()
-        .map(|(_, n, l, c)| (n.clone(), *l, *c))
+        .map(|(_, n, l, c)| (n.clone(), *l, c.clone()))
         .unwrap_or_default();
     // `CONFIRM_CHAR_DELETE`'s `|cffffffff` span splits it: gold lead above, white identity below.
     let raw = strings.text(
@@ -214,7 +214,7 @@ fn spawn_dialog(
     let filled = raw
         .replacen("%s", &name, 1)
         .replacen("%d", &level.to_string(), 1)
-        .replacen("%s", class, 1);
+        .replacen("%s", &class, 1);
     let (lead, identity) = match filled.split_once("|cffffffff") {
         Some((a, b)) => (a.trim_end_matches('\n').to_string(), b.replace("|r", "")),
         None => (filled.clone(), String::new()),

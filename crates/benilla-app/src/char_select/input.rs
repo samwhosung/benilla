@@ -37,6 +37,7 @@ pub(super) fn select_input(
     mut intent: ResMut<crate::login::LoginIntent>,
     glue_dialog: Res<crate::glue::dialog::GlueDialog>,
     time: Res<Time>,
+    unit_names: crate::ui_unit::NameTables,
     mut last_click: Local<Option<(usize, f32)>>,
 ) {
     // A modal owns the input while it is up: the delete confirm, the AddOns list, the realm list
@@ -71,7 +72,12 @@ pub(super) fn select_input(
                 // With no selection the click only plays the sound (`selectedIndex > 0` gate).
                 sounds.write(GlueSound("gsCharacterSelectionDelCharacter"));
                 if let Some(c) = roster.selected_char() {
-                    dialog.open_for(c.guid, c.name.clone(), c.level, class_name(c.class));
+                    dialog.open_for(
+                        c.guid,
+                        c.name.clone(),
+                        c.level,
+                        class_name(unit_names.get(), c.class),
+                    );
                 }
             }
             SelectAction::CreateChar => {

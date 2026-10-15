@@ -260,6 +260,7 @@ fn feed_gossip(
     self_q: Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     names: Res<NameCache>,
     commands: Res<NetCommands>,
+    unit_names: crate::ui_unit::NameTables,
     states: Res<crate::world_state::WorldStates>,
     mut last: crate::ui_script::WindowMemo<Option<GossipMenu>>,
     mut last_name: crate::ui_script::WindowMemo<Option<String>>,
@@ -289,7 +290,7 @@ fn feed_gossip(
     let mut fresh = snapshot(&state);
     // Expand the greeting's `$N`/`$B`/`$G`/`$<n>w` macros client-side, as the reference does.
     if let Some(greeting) = fresh.as_mut().map(|m| &mut m.greeting) {
-        let player = crate::npc_text::player_identity(&self_q, &names, &commands);
+        let player = crate::npc_text::player_identity(&self_q, &names, &commands, unit_names.get());
         *greeting = crate::npc_text::substitute(
             greeting,
             &crate::npc_text::MacroContext {

@@ -15,15 +15,16 @@ use bevy::prelude::*;
 
 use crate::names::NameCache;
 use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::ui_unit::UnitNames;
 
 /// The unit a `$`-macro expands against: the self player, or the speaker at the reference's four
 /// chat sites.
 pub(crate) struct Subject {
     pub name: String,
-    /// `UNIT_FIELD_BYTES_0` bytes 0 and 1, into `ChrRaces` and `ChrClasses`, which the reference
-    /// reads at the client's locale column, as [`crate::ui_unit`]'s rows are read.
-    pub race: u8,
-    pub class: u8,
+    /// `UNIT_FIELD_BYTES_0` bytes 0 and 1 resolved through `ChrRaces` and `ChrClasses`, at the
+    /// client's locale column; empty for an id with no row, which the reference faults on.
+    pub race: String,
+    pub class: String,
     /// `UNIT_FIELD_BYTES_0` byte 2; `$G` takes the first arm on 0, the second on anything else.
     pub gender: u8,
 }
@@ -99,9 +100,9 @@ pub(crate) fn substitute_checked(text: &str, ctx: &MacroContext) -> (String, boo
                 Some(s) => {
                     // An id outside the table faults the reference; we emit nothing.
                     let name = if matches!(tok, 'R' | 'r') {
-                        crate::ui_unit::race_names(s.race).map_or("", |(display, _)| display)
+                        s.race.as_str()
                     } else {
-                        crate::ui_unit::class_names(s.class).map_or("", |(display, _)| display)
+                        s.class.as_str()
                     };
                     if tok.is_ascii_lowercase() {
                         out.push_str(&name.to_ascii_lowercase());
@@ -170,14 +171,29 @@ pub(crate) fn player_identity(
     self_q: &Query<(&ObjectStore, &Guid), With<SelfPlayer>>,
     names: &NameCache,
     commands: &NetCommands,
+    unit_names: UnitNames<'_>,
 ) -> Option<Subject> {
     let (store, guid) = self_q.iter().next()?;
     Some(Subject {
         name: names.resolve(guid.0, commands)?.to_string(),
-        race: store.0.unit_race().unwrap_or(0),
-        class: store.0.unit_class().unwrap_or(0),
+        race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
+        class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
         gender: store.0.unit_gender().unwrap_or(0),
     })
+}
+
+/// A race byte's display name, empty with no row.
+fn race_word(names: UnitNames<'_>, race: u8) -> String {
+    names
+        .race(race)
+        .map_or_else(String::new, |(n, _)| n.to_string())
+}
+
+/// A class byte's display name, empty with no row.
+fn class_word(names: UnitNames<'_>, class: u8) -> String {
+    names
+        .class(class)
+        .map_or_else(String::new, |(n, _)| n.to_string())
 }
 
 /// The chat feed's [`Subject`] for any guid: the object manager's descriptors, else the name
@@ -188,6 +204,7 @@ pub(crate) fn subject_for_guid(
     stores: &Query<&ObjectStore>,
     names: &NameCache,
     commands: &NetCommands,
+    unit_names: UnitNames<'_>,
 ) -> Option<Subject> {
     if guid == 0 {
         return None;
@@ -197,8 +214,8 @@ pub(crate) fn subject_for_guid(
     if let Some(store) = store {
         return Some(Subject {
             name,
-            race: store.0.unit_race().unwrap_or(0),
-            class: store.0.unit_class().unwrap_or(0),
+            race: race_word(unit_names, store.0.unit_race().unwrap_or(0)),
+            class: class_word(unit_names, store.0.unit_class().unwrap_or(0)),
             gender: store.0.unit_gender().unwrap_or(0),
         });
     }
@@ -207,8 +224,8 @@ pub(crate) fn subject_for_guid(
     let (race, class, gender) = names.player_traits(guid).unwrap_or((0, 0, 0));
     Some(Subject {
         name,
-        race,
-        class,
+        race: race_word(unit_names, race),
+        class: class_word(unit_names, class),
         gender,
     })
 }
@@ -216,16 +233,21 @@ pub(crate) fn subject_for_guid(
 #[cfg(test)]
 mod tests {
     use super::{substitute, substitute_checked, MacroContext, Subject};
+    use crate::ui_unit::TestNames;
     use crate::world_state::WorldStates;
 
-    /// Race 4, class 5: both real rows.
-    fn subject(gender: u8) -> Subject {
+    /// Race 4, class 5: both real rows, named by the table at the install's locale.
+    fn subject_in(names: &TestNames, gender: u8) -> Subject {
         Subject {
             name: "Thrall".into(),
-            race: 4,
-            class: 5,
+            race: super::race_word(names.names(), 4),
+            class: super::class_word(names.names(), 5),
             gender,
         }
+    }
+
+    fn subject(gender: u8) -> Subject {
+        subject_in(&TestNames::english(), gender)
     }
 
     fn expand(text: &str, subject: Option<&Subject>) -> String {
@@ -285,10 +307,17 @@ mod tests {
         assert_eq!(expand("A $C of $R", Some(&s)), "A Priest of Night Elf");
         assert_eq!(expand("a $c of $r", Some(&s)), "a priest of night elf");
         let unknown = Subject {
-            class: 6,
+            class: super::class_word(TestNames::english().names(), 6),
             ..subject(0)
         };
         assert_eq!(expand("[$C]", Some(&unknown)), "[]");
+    }
+
+    /// `$R` and `$C` are the table's words at the install's locale, not English.
+    #[test]
+    fn race_and_class_are_the_installs_words() {
+        let s = subject_in(&TestNames::korean(), 0);
+        assert_eq!(expand("$C / $R", Some(&s)), "사제 / 나이트 엘프");
     }
 
     #[test]

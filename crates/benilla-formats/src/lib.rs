@@ -129,6 +129,8 @@ pub use lock::{
 };
 mod lock_type;
 pub use lock_type::{load_lock_type_catalog, LockTypeCatalog};
+mod chr_races;
+pub use chr_races::{load_chr_races, ChrRaces};
 mod chr_classes;
 pub use chr_classes::{load_chr_classes, ChrClasses, PET_NAME_TOKEN_FALLBACK};
 mod pet_stats;

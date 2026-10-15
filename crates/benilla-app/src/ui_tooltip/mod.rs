@@ -126,7 +126,7 @@ fn drive_mouseover_tooltip(
     let last = script.world_mouseover();
     let published = memo.published.get(&script);
     let self_store = self_q.iter().next();
-    let chr = tables.classes();
+    let chr = tables.unit_names();
     let types = tables.types(&names);
 
     // A plate's pick stands for its enter's publish (`0x7cb850`), so it holds only while that plate

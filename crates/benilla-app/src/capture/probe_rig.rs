@@ -175,8 +175,9 @@ impl RigSpec {
                 format!(
                     "{} {} {}",
                     if g == 1 { "female" } else { "male" },
-                    crate::ui_unit::race_names(r).map_or("?", |(d, _)| d),
-                    crate::ui_unit::class_names(c).map_or("?", |(d, _)| d),
+                    // The echo runs before any table loads: the ids, not the words.
+                    format_args!("race {r}"),
+                    format_args!("class {c}"),
                 )
             });
         let mut extras = Vec::new();

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use benilla_formats::ChrClasses;
+use benilla_formats::{ChrClasses, ChrRaces};
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{
     parse_unit_token, power_token, ScriptValue, UiScript, UnitBase, UnitState, UnitTokenParse,
@@ -488,36 +488,145 @@ fn fire_unit_combat(
     }
 }
 
-/// The race id to `UnitRace`'s display name and `raceFile` token (`"Scourge"`, `"NightElf"`); the
-/// display name is also what `$R`/`$r` expand to.
-pub(crate) fn race_names(race: u8) -> Option<(&'static str, &'static str)> {
-    Some(match race {
-        1 => ("Human", "Human"),
-        2 => ("Orc", "Orc"),
-        3 => ("Dwarf", "Dwarf"),
-        4 => ("Night Elf", "NightElf"),
-        5 => ("Undead", "Scourge"),
-        6 => ("Tauren", "Tauren"),
-        7 => ("Gnome", "Gnome"),
-        8 => ("Troll", "Troll"),
-        _ => return None,
-    })
+/// The `ChrRaces.dbc` and `ChrClasses.dbc` rows a unit's race and class are read from, as one
+/// parameter: the display name at the install's locale column and the token beside it, the pair
+/// `UnitRace` (`0x5182e0`) and `UnitClass` (`0x518430`) push. A table that did not load names
+/// nothing.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct UnitNames<'a> {
+    pub(crate) races: Option<&'a ChrRaces>,
+    pub(crate) classes: Option<&'a ChrClasses>,
 }
 
-/// The class id to `UnitClass`'s display name and uppercase `classFileName`.
-pub(crate) fn class_names(class: u8) -> Option<(&'static str, &'static str)> {
-    Some(match class {
-        1 => ("Warrior", "WARRIOR"),
-        2 => ("Paladin", "PALADIN"),
-        3 => ("Hunter", "HUNTER"),
-        4 => ("Rogue", "ROGUE"),
-        5 => ("Priest", "PRIEST"),
-        7 => ("Shaman", "SHAMAN"),
-        8 => ("Mage", "MAGE"),
-        9 => ("Warlock", "WARLOCK"),
-        11 => ("Druid", "DRUID"),
-        _ => return None,
-    })
+/// Race and class rows for a test: an enUS install's, and a koKR install's for a test that must
+/// tell the table's word from English.
+#[cfg(test)]
+pub(crate) struct TestNames {
+    pub(crate) races: ChrRaces,
+    pub(crate) classes: ChrClasses,
+}
+
+#[cfg(test)]
+impl TestNames {
+    /// The stock enUS names.
+    pub(crate) fn english() -> Self {
+        Self {
+            races: ChrRaces::from_rows([
+                (1, "Human", "Human"),
+                (2, "Orc", "Orc"),
+                (3, "Dwarf", "Dwarf"),
+                (4, "Night Elf", "NightElf"),
+                (5, "Undead", "Scourge"),
+                (6, "Tauren", "Tauren"),
+                (7, "Gnome", "Gnome"),
+                (8, "Troll", "Troll"),
+            ]),
+            classes: ChrClasses::from_rows([
+                (1, "Warrior", "WARRIOR"),
+                (2, "Paladin", "PALADIN"),
+                (3, "Hunter", "HUNTER"),
+                (4, "Rogue", "ROGUE"),
+                (5, "Priest", "PRIEST"),
+                (7, "Shaman", "SHAMAN"),
+                (8, "Mage", "MAGE"),
+                (9, "Warlock", "WARLOCK"),
+                (11, "Druid", "DRUID"),
+            ]),
+        }
+    }
+
+    /// The koKR names, tokens unchanged.
+    pub(crate) fn korean() -> Self {
+        Self {
+            races: ChrRaces::from_rows([
+                (1, "인간", "Human"),
+                (2, "오크", "Orc"),
+                (3, "드워프", "Dwarf"),
+                (4, "나이트 엘프", "NightElf"),
+                (5, "언데드", "Scourge"),
+                (6, "타우렌", "Tauren"),
+                (7, "노움", "Gnome"),
+                (8, "트롤", "Troll"),
+            ]),
+            classes: ChrClasses::from_rows([
+                (1, "전사", "WARRIOR"),
+                (2, "성기사", "PALADIN"),
+                (3, "사냥꾼", "HUNTER"),
+                (4, "도적", "ROGUE"),
+                (5, "사제", "PRIEST"),
+                (7, "주술사", "SHAMAN"),
+                (8, "마법사", "MAGE"),
+                (9, "흑마법사", "WARLOCK"),
+                (11, "드루이드", "DRUID"),
+            ]),
+        }
+    }
+
+    pub(crate) fn names(&self) -> UnitNames<'_> {
+        UnitNames {
+            races: Some(&self.races),
+            classes: Some(&self.classes),
+        }
+    }
+
+    /// The same rows as the resources the systems read.
+    pub(crate) fn insert(&self, app: &mut App) {
+        self.insert_world(app.world_mut());
+    }
+
+    pub(crate) fn insert_world(&self, world: &mut World) {
+        world.insert_resource(crate::chr_classes::ChrRaceTable(self.races.clone()));
+        world.insert_resource(crate::chr_classes::ChrClassTable(self.classes.clone()));
+    }
+}
+
+/// The tables a `World` holds, for the loads that run with exclusive access.
+pub(crate) fn world_unit_names(world: &World) -> UnitNames<'_> {
+    UnitNames {
+        races: world
+            .get_resource::<crate::chr_classes::ChrRaceTable>()
+            .map(|t| &t.0),
+        classes: world
+            .get_resource::<crate::chr_classes::ChrClassTable>()
+            .map(|t| &t.0),
+    }
+}
+
+/// The two tables as a system holds them: [`UnitNames`] once borrowed.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct NameTables<'w> {
+    races: Option<Res<'w, crate::chr_classes::ChrRaceTable>>,
+    classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
+}
+
+impl NameTables<'_> {
+    pub(crate) fn get(&self) -> UnitNames<'_> {
+        UnitNames {
+            races: self.races.as_deref().map(|t| &t.0),
+            classes: self.classes.as_deref().map(|t| &t.0),
+        }
+    }
+}
+
+impl<'a> UnitNames<'a> {
+    /// The race byte's display name and its token (`"Night Elf"`, `"NightElf"`; `$R`/`$r` expand
+    /// the name); `None` for a race with no row.
+    pub(crate) fn race(&self, race: u8) -> Option<(&'a str, &'a str)> {
+        self.races?.names(u32::from(race))
+    }
+
+    /// The class byte's display name and its uppercase token (`"Warrior"`, `"WARRIOR"`); `None`
+    /// for a class with no row. A row with a blank column pushes the blank (`0x518451`).
+    pub(crate) fn class(&self, class: u8) -> Option<(&'a str, &'a str)> {
+        let classes = self.classes?;
+        let class = u32::from(class);
+        classes.has_row(class).then(|| {
+            (
+                classes.name(class).unwrap_or_default(),
+                classes.file(class).unwrap_or_default(),
+            )
+        })
+    }
 }
 
 /// A playable race's fixed side, for where no faction template is at hand, as at world entry,
@@ -825,15 +934,16 @@ pub(crate) struct UnitStores<'w, 's> {
 /// without game data.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct SnapshotTables<'w> {
-    classes: Option<Res<'w, crate::chr_classes::ChrClassTable>>,
+    names: NameTables<'w>,
     spells: Option<Res<'w, crate::ui_action::Spells>>,
     creature_types: Option<Res<'w, crate::target::CreatureTypes>>,
 }
 
 impl SnapshotTables<'_> {
-    /// `ChrClasses.dbc`; without it no class has a relic slot, the reference's bounds leg.
-    pub(crate) fn classes(&self) -> Option<&ChrClasses> {
-        self.classes.as_deref().map(|t| &t.0)
+    /// The race and class tables; without `ChrClasses.dbc` no class has a relic slot, the
+    /// reference's bounds leg.
+    pub(crate) fn unit_names(&self) -> UnitNames<'_> {
+        self.names.get()
     }
 
     /// The creature-type resolver's sources: the name cache, the form table and the type words.
@@ -859,20 +969,21 @@ pub(crate) fn unit_reaction(
 }
 
 /// Build a unit snapshot from a streamed descriptor, its guid, its cached name and its
-/// `UnitReaction` (`1..=7`, or `0` where none is resolved, as for `"player"`); `classes` feeds the
-/// relic column and `types` the creature type, which every unit carries, players included.
+/// `UnitReaction` (`1..=7`, or `0` where none is resolved, as for `"player"`); `tables` feeds the
+/// race and class names and the relic column, and `types` the creature type, which every unit carries, players included.
 pub(crate) fn snapshot(
     store: &ObjectStore,
     guid: u64,
     name: Option<String>,
     reaction: u8,
-    classes: Option<&ChrClasses>,
+    tables: UnitNames<'_>,
     types: CreatureTypeSources<'_>,
 ) -> UnitState {
     let power_type = store.0.unit_power_type();
-    let race = store.0.unit_race().and_then(race_names);
+    let race = store.0.unit_race().and_then(|r| tables.race(r));
     let class_id = store.0.unit_class();
-    let class = class_id.and_then(class_names);
+    let class = class_id.and_then(|c| tables.class(c));
+    let classes = tables.classes;
     let creature_type = types.of(store);
     UnitState {
         exists: true,
@@ -1230,7 +1341,14 @@ fn player_snapshot(
     let name = names
         .resolve_unit(guid, Some(store), commands)
         .map(str::to_string);
-    let mut s = snapshot(store, guid, name, 0, tables.classes(), tables.types(names));
+    let mut s = snapshot(
+        store,
+        guid,
+        name,
+        0,
+        tables.unit_names(),
+        tables.types(names),
+    );
     s.is_player = true;
     s.can_assist = self_can_assist(store);
     s.raid_target = group.raid_target_index(guid);
@@ -1332,7 +1450,7 @@ fn feed_units(
     {
         script.set_billing_time_rested(entered);
     }
-    let chr = tables.classes();
+    let chr = tables.unit_names();
     let types = tables.types(&names);
     // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
     let feed = &mut *feed;
@@ -1426,7 +1544,7 @@ fn feed_units(
         reputations: &reputations,
         group: &group,
         self_store: self_pair.map(|(s, _)| s),
-        classes: chr,
+        unit_names: chr,
         types,
         by_guid: &by_guid,
     };
@@ -2546,6 +2664,49 @@ mod tests {
         );
     }
 
+    /// `UnitRace` and `UnitClass` push the table's name at the install's locale column beside the
+    /// token (`0x518301`/`0x51830c`, `0x518451`/`0x51845c`): a koKR table gives Korean names and
+    /// the same tokens, a unit whose race or class has no row gets neither, and no table names
+    /// nothing.
+    #[test]
+    fn the_snapshot_names_race_and_class_from_the_tables() {
+        const BYTES_0: u16 = 36;
+        let snap = |bytes: u32, names: UnitNames<'_>| {
+            snapshot(
+                &ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                    BYTES_0, bytes,
+                )])),
+                0,
+                None,
+                0,
+                names,
+                Default::default(),
+            )
+        };
+        // Night Elf (4) Priest (5).
+        let bytes = 4 | (5 << 8);
+        let korean = TestNames::korean();
+        let s = snap(bytes, korean.names());
+        assert_eq!(s.race.as_deref(), Some("나이트 엘프"));
+        assert_eq!(s.race_file.as_deref(), Some("NightElf"));
+        assert_eq!(s.class.as_deref(), Some("사제"));
+        assert_eq!(s.class_file.as_deref(), Some("PRIEST"));
+        let english = TestNames::english();
+        let s = snap(bytes, english.names());
+        assert_eq!(
+            (s.race.as_deref(), s.class.as_deref()),
+            (Some("Night Elf"), Some("Priest"))
+        );
+        // Class 6 has no row in 1.12; race 0 none either.
+        let s = snap(4 | (6 << 8), korean.names());
+        assert_eq!((s.class, s.class_file), (None, None));
+        let s = snap(5 << 8, korean.names());
+        assert_eq!((s.race, s.race_file), (None, None));
+        // No table loaded: no names, as the reference with no row.
+        let s = snap(bytes, UnitNames::default());
+        assert_eq!((s.race, s.class), (None, None));
+    }
+
     /// The team digit comes off the race byte, whatever template sits beside it (a GM's 35).
     #[test]
     fn the_team_digit_comes_off_the_race_byte_not_the_faction_template() {
@@ -2562,7 +2723,7 @@ mod tests {
                 0,
                 None,
                 0,
-                None,
+                Default::default(),
                 Default::default(),
             )
             .pvp_team
@@ -3399,7 +3560,7 @@ mod tests {
             0,
             Some("Hunter".into()),
             0,
-            None,
+            Default::default(),
             Default::default(),
         );
         assert_eq!((alive.health, alive.max_health), (1200, 1500));
@@ -3413,7 +3574,7 @@ mod tests {
             0,
             Some("Hunter".into()),
             0,
-            None,
+            Default::default(),
             Default::default(),
         );
         assert_eq!(
@@ -3463,7 +3624,7 @@ mod tests {
                 0,
                 None,
                 0,
-                None,
+                Default::default(),
                 Default::default(),
             )
         };
