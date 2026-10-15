@@ -7,10 +7,12 @@ use std::time::{Duration, Instant};
 
 use bevy::prelude::*;
 
+use super::SpellTargeting;
 use crate::creature_anim::{CastEvent, CastEventKind, Casting, PlaySeq};
 use crate::net::{ClientCommand, GuidIndex, NetCommands, SelfGuid};
 use crate::ui_action::Spells;
 use crate::ui_cast::{CastBarEdge, CastBarFeed};
+use benilla_protocol::messages::ITEM_FLAG_PLAYERCAST;
 
 /// The in-flight window from send until `SMSG_SPELL_START` names the cast time; the server
 /// answers every `CMSG_CAST_SPELL`, so a packet always clears it first.
@@ -25,10 +27,17 @@ const ITEM_SEND_PROVISIONAL: Duration = Duration::from_millis(1_500);
 /// delays (`SMSG_SPELL_DELAYED`) still guards past its stretched end.
 const CAST_SLACK: Duration = Duration::from_secs(2);
 
-/// Our outstanding cast, armed at send. `TryCast 0x6e4b60` refuses a second cast while the
-/// inflight id `0xceca88` is set: the same spell bails silently (`0x6e4d43`), another errors 0x61
-/// (`0x6e4d97`) unless the inflight spell is on-next-swing (`Attributes & 0x404`). On-next-swing
-/// spells arm [`QueuedMeleeSpell`] instead, so this guard needs no attribute test.
+/// Our outstanding cast: the reference's in-flight slot `0xceca88` for everything that is sent.
+///
+/// The attempt pushes the cast at `0x6e5026` (`SetInFlightSpell 0x6e4ad0`) whenever the caster's
+/// cast time is not negative (`0x6e4ff5`; `GetSpellCastTime 0x5ee150` returns 0 or more for the
+/// active player, so every cast, an instant too) and there is no item or the item's flags carry
+/// `ITEM_FLAG_PLAYERCAST` (`0x6e500b`–`0x6e501f`). Only an auto-repeat spell is popped after the
+/// send (`0x6e5935` → `0x6e5989`). While the slot holds a spell that is not on-next-swing, a press
+/// of another spell is refused with 0x61 (`TryCast 0x6e4d97`–`0x6e4dbe`) and the same spell bails
+/// silently (`0x6e4d43`). On-next-swing spells (`Attributes & 0x404`) live in [`QueuedMeleeSpell`]
+/// instead, and the spell awaiting its click is read off [`SpellTargeting`]; [`inflight`] joins the
+/// three into the reference's one slot.
 ///
 /// Cleared by the cast's resolution (`SMSG_SPELL_GO`, a failing `SMSG_CAST_RESULT`,
 /// `SMSG_SPELL_FAILED_OTHER`), keyed on the spell id, or by [`local_self_cancel`]; `deadline`
@@ -39,56 +48,61 @@ pub(crate) struct PendingCast(Option<PendingCastState>);
 struct PendingCastState {
     spell_id: u32,
     deadline: Instant,
-    /// This record refuses the next press, lights the in-flight ring and gates the by-name walk:
-    /// ordinary casts and item uses. The reference writes `0xceca88` for every committed cast
-    /// (`0x6e5026`) and discriminates at the gate instead; a ranged shot is recorded here without
-    /// guarding, so the `modalNextSpell` test (`0x6e7408`) still matches it.
-    guards: bool,
 }
 
 impl PendingCast {
-    /// A guarding cast is outstanding, inside its deadline.
+    /// A cast is outstanding, inside its deadline: the next press meets `0x6e4d97`'s refusal.
     pub(crate) fn in_flight(&self, now: Instant) -> bool {
-        self.0
-            .as_ref()
-            .is_some_and(|p| p.guards && now < p.deadline)
+        self.current(now).is_some()
     }
 
-    /// The reference's `0xceca88`: the last committed, unresolved cast of any class, which
-    /// `HandleCastResult 0x6e7330` tests at `0x6e7408` before reading `modalNextSpell`.
-    pub(crate) fn committed(&self, now: Instant) -> Option<u32> {
+    /// The outstanding cast's spell id, which `HandleCastResult 0x6e7330` (`0x6e7408`) and
+    /// `IsCurrentAction`'s checked state key on.
+    pub(crate) fn current(&self, now: Instant) -> Option<u32> {
         self.0
             .as_ref()
             .filter(|p| now < p.deadline)
             .map(|p| p.spell_id)
     }
 
-    /// The guarding cast's spell id, which `IsCurrentAction`'s checked state keys on.
-    pub(crate) fn current(&self, now: Instant) -> Option<u32> {
-        self.0
-            .as_ref()
-            .filter(|p| p.guards && now < p.deadline)
-            .map(|p| p.spell_id)
-    }
-
-    /// Arm at send, the client's `0xceca88` write; a ranged shot passes `guards = false`.
-    pub(crate) fn arm(&mut self, spell_id: u32, now: Instant, guards: bool) {
+    /// `SetInFlightSpell(spell, item)` as the attempt calls it (`0x6e5026`). `item_flags` is the
+    /// used item's template flags, `None` for a cast with no item: an item whose flags lack
+    /// [`ITEM_FLAG_PLAYERCAST`] never enters the slot (a potion, food, a healthstone), so it
+    /// blocks nothing. An item's deadline is short: vmangos refuses some `CMSG_USE_ITEM`s with
+    /// only `SMSG_INVENTORY_CHANGE_FAILURE` and no cast result (`HandleUseItemOpcode`), and this
+    /// deadline is what reopens casting.
+    pub(crate) fn push(&mut self, spell_id: u32, item_flags: Option<u32>, now: Instant) {
+        if item_flags.is_some_and(|flags| flags & ITEM_FLAG_PLAYERCAST == 0) {
+            return;
+        }
+        let window = if item_flags.is_some() {
+            ITEM_SEND_PROVISIONAL
+        } else {
+            SEND_PROVISIONAL
+        };
         self.0 = Some(PendingCastState {
             spell_id,
-            deadline: now + SEND_PROVISIONAL,
-            guards,
+            deadline: now + window,
         });
     }
 
-    /// Arm on an item use: the client's item use (`0x5d9258`) goes through `TryCast 0x6e4b60`
-    /// via `0x6e5a90`, so it writes the same inflight id and meets the same gate. Only the
-    /// deadline differs.
-    pub(crate) fn arm_item(&mut self, spell_id: u32, now: Instant) {
-        self.0 = Some(PendingCastState {
-            spell_id,
-            deadline: now + ITEM_SEND_PROVISIONAL,
-            guards: true,
-        });
+    /// The attempt's push and `SendCast`'s pop: an auto-repeat spell (`AttributesEx2 & 0x20`, Auto
+    /// Shot and wand Shoot) is popped once its packet is out (`0x6e5935` → `0x6e5989`), so only a
+    /// ranged shot that is not auto-repeat (Aimed Shot, Arcane Shot, Throw) stays in flight until
+    /// its result. The send's other pop (`0x6e58a2`–`0x6e58bd`) is for a record the push did not
+    /// make (an item without the flag) or another caster's (the pet bar), neither of which holds
+    /// this slot.
+    pub(crate) fn commit(
+        &mut self,
+        spell_id: u32,
+        item_flags: Option<u32>,
+        auto_repeat: bool,
+        now: Instant,
+    ) {
+        self.push(spell_id, item_flags, now);
+        if auto_repeat {
+            self.clear_if(spell_id);
+        }
     }
 
     /// Tighten the deadline to the server's real cast time once `SMSG_SPELL_START` names it.
@@ -146,8 +160,9 @@ impl QueuedMeleeSpell {
     }
 }
 
-/// What the reference's one inflight id `0xceca88` holds, joined from our two slots: `IsCasting
-/// 0x6e3d30` and `AbortCast 0x6e4940` treat a cast and a queued strike alike.
+/// What the reference's one inflight id `0xceca88` holds, joined from our slots: `IsCasting
+/// 0x6e3d30` and `AbortCast 0x6e4940` treat a cast, a spell awaiting its click and a queued strike
+/// alike.
 ///
 /// A cast started over a queued strike pushes it into the save `0xcecaa8` (`0x6e5026`), so the
 /// cast comes first and the first Esc takes it, the second the strike. Deviation: the reference's
@@ -161,29 +176,35 @@ pub(crate) enum Inflight {
     /// A queued on-next-swing strike: no bar and no [`Casting`], so a cancel is the wire message
     /// and the slot.
     Strike(u32),
+    /// The spell awaiting its click. The attempt pushes it (`0x6e5026`) before the arm raises the
+    /// cursor (`0x6e5250`), and nothing on the cursor path pops it. Nothing is on the wire, so a
+    /// cancel is the local drop, and the movement cancels spare it (`IsTargeting` gates
+    /// `0x515090` and `Script::Jump`).
+    Targeting(u32),
 }
 
 impl Inflight {
     /// What a cancel names on the wire.
     pub(crate) fn spell_id(self) -> u32 {
         match self {
-            Self::Cast(id) | Self::Strike(id) => id,
+            Self::Cast(id) | Self::Strike(id) | Self::Targeting(id) => id,
         }
     }
 }
 
-/// The reference's inflight slot from our two. `started` is the self [`Casting`] spell id, which
+/// The reference's inflight slot from ours. `started` is the self [`Casting`] spell id, which
 /// covers a started cast that never armed the send guard.
 pub(crate) fn inflight(
     pending: &PendingCast,
     queued_melee: &QueuedMeleeSpell,
+    targeting: &SpellTargeting,
     started: Option<u32>,
     now: Instant,
 ) -> Option<Inflight> {
-    pending
-        .current(now)
-        .or(started)
-        .map(Inflight::Cast)
+    targeting
+        .spell()
+        .map(Inflight::Targeting)
+        .or_else(|| pending.current(now).or(started).map(Inflight::Cast))
         .or_else(|| queued_melee.current().map(Inflight::Strike))
 }
 
@@ -294,30 +315,29 @@ impl SelfCancel<'_, '_> {
     /// cancels' `cl=0` fires `SPELLCAST_STOP`. The caller disarms the trade-skill repeat
     /// (`0x4fd790`), which every branch does.
     pub(crate) fn abort_cast(&mut self) {
-        if self.ground.active() {
-            // `StopTargeting` counts for the trade-skill disarm watcher; `TryCast` wrote the cast
-            // record (`[0xceac50]`, `0x6e4fb1`) before entering targeting, so the event gate
-            // (`0x6e4a04`-`0x6e4a1e`) fires FAILED here too.
-            self.ground.cancel();
-            self.feed.0.push(CastBarEdge::Failed);
-        } else {
-            let now = Instant::now();
-            let self_e = self
-                .self_guid
-                .0
-                .as_ref()
-                .and_then(|g| self.index.0.get(g))
-                .copied();
-            let started = self_e
-                .and_then(|e| self.casting.get(e).ok())
-                .map(|c| c.spell_id);
-            if let Some(slot) = inflight(&self.pending, &self.queued_melee, started, now) {
-                self.cancel_inflight(slot, self_e, CastBarEdge::Failed, "soulstone");
-            }
+        let now = Instant::now();
+        let self_e = self
+            .self_guid
+            .0
+            .as_ref()
+            .and_then(|g| self.index.0.get(g))
+            .copied();
+        let started = self_e
+            .and_then(|e| self.casting.get(e).ok())
+            .map(|c| c.spell_id);
+        if let Some(slot) = inflight(
+            &self.pending,
+            &self.queued_melee,
+            &self.ground,
+            started,
+            now,
+        ) {
+            self.cancel_inflight(slot, self_e, CastBarEdge::Failed, "soulstone");
         }
     }
 
-    /// Cancel the cast or queued strike `slot` on the wire and tear it down locally: `first` is
+    /// Cancel what `slot` holds and tear it down locally (`AbortCast 0x6e4940`): a cast or queued
+    /// strike goes on the wire, the cursor's spell drops with no packet (`0x6e4955`). `first` is
     /// the bar edge the client's own event arms (STOP for the move and Esc cancels, FAILED for
     /// `UseSoulstone`'s), and the echo's INTERRUPTED follows for a cast.
     fn cancel_inflight(
@@ -336,14 +356,23 @@ impl SelfCancel<'_, '_> {
             cast_events,
             play_seq,
             ecs,
+            ground,
             ..
         } = self;
         let spell_id = slot.spell_id();
         if *crate::net::CAST_TRACE {
-            info!("cast-trace: LOCAL self-cancel — {slot:?} ({why}), CMSG_CANCEL_CAST");
+            info!("cast-trace: LOCAL self-cancel — {slot:?} ({why})");
         }
-        let _ = net.0.send(ClientCommand::CancelCast { spell_id });
+        if !matches!(slot, Inflight::Targeting(_)) {
+            let _ = net.0.send(ClientCommand::CancelCast { spell_id });
+        }
         match slot {
+            Inflight::Targeting(_) => {
+                // The word drops, the event fires, and the pop restores what the cursor's push
+                // saved: a queued strike, which our own slot never left.
+                ground.cancel();
+                feed.0.push(first);
+            }
             Inflight::Cast(_) => {
                 pending.clear_if(spell_id);
                 // The client's own event arms the flash, INTERRUPTED paints red and holds, so the
@@ -413,16 +442,24 @@ impl SelfCancel<'_, '_> {
         let started = self_e
             .and_then(|e| self.casting.get(e).ok())
             .map(|c| c.spell_id);
-        if let Some(slot) = inflight(&self.pending, &self.queued_melee, started, now) {
+        if let Some(slot) = inflight(
+            &self.pending,
+            &self.queued_melee,
+            &self.ground,
+            started,
+            now,
+        ) {
             let spell_id = slot.spell_id();
             // Movement tests `InterruptFlags`, which spares a queued strike: Heroic Strike 78,
-            // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`).
+            // Cleave 845 and Raptor Strike 2973 ship 0 (Fireball `0xf`). It also spares the
+            // cursor's spell: `0x515090` and `Script::Jump` skip the whole test while targeting.
             if esc
-                || flags_open(
-                    &self.spells,
-                    |d| d.interrupt_flags & SPELL_INTERRUPT_MOVEMENT != 0,
-                    spell_id,
-                )
+                || (!matches!(slot, Inflight::Targeting(_))
+                    && flags_open(
+                        &self.spells,
+                        |d| d.interrupt_flags & SPELL_INTERRUPT_MOVEMENT != 0,
+                        spell_id,
+                    ))
             {
                 let why = if esc { "esc" } else { "moved" };
                 self.cancel_inflight(slot, self_e, CastBarEdge::Stop, why);
@@ -484,7 +521,7 @@ mod tests {
     fn arming_closes_the_guard_and_a_matching_resolution_opens_it() {
         let t0 = Instant::now();
         let mut g = PendingCast::default();
-        g.arm(FIREBALL, t0, true);
+        g.push(FIREBALL, None, t0);
         assert!(
             g.in_flight(t0),
             "a cast is in flight — a second one is refused"
@@ -496,11 +533,43 @@ mod tests {
         );
     }
 
+    /// `0x6e500b`–`0x6e501f`: an item use is pushed only when its template flags carry
+    /// `ITEM_FLAG_PLAYERCAST` (`0x40`); a spell has no item and is always pushed. The item's
+    /// window is the short one.
+    #[test]
+    fn an_item_use_enters_the_slot_only_with_the_playercast_flag() {
+        let t0 = Instant::now();
+        let mut g = PendingCast::default();
+        g.push(FIREBALL, Some(0), t0);
+        assert!(!g.in_flight(t0), "flags 0 (a potion) push nothing");
+        g.push(FIREBALL, Some(0x2 | 0x200), t0);
+        assert!(!g.in_flight(t0), "other bits do not count");
+        g.push(FIREBALL, Some(0x40), t0);
+        assert!(g.in_flight(t0), "the flag pushes");
+        assert!(
+            !g.in_flight(t0 + ITEM_SEND_PROVISIONAL + Duration::from_millis(1)),
+            "on the item's own deadline"
+        );
+        g.push(FIREBALL, None, t0);
+        assert!(g.in_flight(t0 + ITEM_SEND_PROVISIONAL + Duration::from_millis(1)));
+    }
+
+    /// `0x6e5935` → `0x6e5989`: the send pops an auto-repeat spell and nothing else.
+    #[test]
+    fn the_send_pops_only_an_auto_repeat_spell() {
+        let t0 = Instant::now();
+        let mut g = PendingCast::default();
+        g.commit(FIREBALL, None, false, t0);
+        assert_eq!(g.current(t0), Some(FIREBALL));
+        g.commit(75, None, true, t0);
+        assert_eq!(g.current(t0), None, "Auto Shot is pushed and popped");
+    }
+
     #[test]
     fn a_different_spells_resolution_leaves_the_guard_closed() {
         let t0 = Instant::now();
         let mut g = PendingCast::default();
-        g.arm(FIREBALL, t0, true);
+        g.push(FIREBALL, None, t0);
         g.clear_if(FIREBALL + 1); // a triggered proc's GO for some other spell mid-cast
         assert!(
             g.in_flight(t0),
@@ -512,7 +581,7 @@ mod tests {
     fn the_guard_opens_when_its_safety_deadline_lapses() {
         let t0 = Instant::now();
         let mut g = PendingCast::default();
-        g.arm(FIREBALL, t0, true);
+        g.push(FIREBALL, None, t0);
         assert!(g.in_flight(t0 + SEND_PROVISIONAL - Duration::from_secs(1)));
         assert!(!g.in_flight(t0 + SEND_PROVISIONAL + Duration::from_secs(1)));
     }
@@ -521,7 +590,7 @@ mod tests {
     fn a_pushback_extends_the_guard_so_it_holds_past_the_stretched_cast() {
         let t0 = Instant::now();
         let mut g = PendingCast::default();
-        g.arm(FIREBALL, t0, true);
+        g.push(FIREBALL, None, t0);
         g.refine(1_000, t0); // deadline t0 + 1 s + 2 s slack
         g.delay(500, t0); // pushed to t0 + 3.5 s
         assert!(
@@ -534,7 +603,7 @@ mod tests {
     fn spell_start_tightens_the_deadline_to_the_real_cast_time() {
         let t0 = Instant::now();
         let mut g = PendingCast::default();
-        g.arm(FIREBALL, t0, true);
+        g.push(FIREBALL, None, t0);
         g.refine(1_500, t0); // SMSG_SPELL_START: 1.5 s + 2 s slack
         let at_four = t0 + Duration::from_secs(4);
         assert!(
@@ -648,7 +717,7 @@ mod tests {
             )]));
             app.world_mut()
                 .resource_mut::<PendingCast>()
-                .arm(FIREBALL, Instant::now(), true);
+                .push(FIREBALL, None, Instant::now());
             mark_casting(&mut app, FIREBALL);
 
             run(&mut app, true);
@@ -701,7 +770,7 @@ mod tests {
             )]));
             app.world_mut()
                 .resource_mut::<PendingCast>()
-                .arm(FIREBALL, Instant::now(), true);
+                .push(FIREBALL, None, Instant::now());
 
             run(&mut app, true);
 
@@ -720,7 +789,7 @@ mod tests {
             let (mut app, rx) = harness(HashMap::new());
             app.world_mut()
                 .resource_mut::<PendingCast>()
-                .arm(FIREBALL, Instant::now(), true);
+                .push(FIREBALL, None, Instant::now());
 
             run(&mut app, true);
 
@@ -769,7 +838,7 @@ mod tests {
             )]));
             app.world_mut()
                 .resource_mut::<PendingCast>()
-                .arm(FIREBALL, Instant::now(), true);
+                .push(FIREBALL, None, Instant::now());
 
             run(&mut app, false);
 
@@ -820,7 +889,7 @@ mod tests {
             app.world_mut().resource_mut::<AutoRepeatActive>().0 = Some(AUTO_SHOT);
             app.world_mut()
                 .resource_mut::<PendingCast>()
-                .arm(FIREBALL, Instant::now(), true);
+                .push(FIREBALL, None, Instant::now());
             mark_casting(&mut app, FIREBALL);
 
             // Press 1 stops the auto-repeat only.
@@ -924,6 +993,99 @@ mod tests {
             );
         }
 
+        /// The spell awaiting its click is in flight (`0x6e5026` precedes the arm that raises the
+        /// cursor), so `SpellStopCasting` (`0x6e6eb4`) answers 1 and `AbortCast(cl=0)` drops the
+        /// word with no packet and fires `SPELLCAST_STOP` (`0x152`), where `SpellStopTargeting`'s
+        /// `cl=1` would fire FAILED.
+        #[test]
+        fn esc_during_targeting_answers_one_drops_the_cursor_and_fires_stop() {
+            let (mut app, rx) = harness(HashMap::from([(
+                FIREBALL,
+                SpellDisplay {
+                    interrupt_flags: 0xf,
+                    ..Default::default()
+                },
+            )]));
+            app.insert_non_send_resource(UiScript::new().unwrap());
+            app.world_mut()
+                .non_send_resource::<UiScript>()
+                .run(
+                    "STOPS, FAILS = 0, 0 \
+                     local f = CreateFrame('Frame') \
+                     f:RegisterEvent('SPELLCAST_STOP') \
+                     f:RegisterEvent('SPELLCAST_FAILED') \
+                     f:SetScript('OnEvent', function() \
+                         if event == 'SPELLCAST_STOP' then STOPS = STOPS + 1 else FAILS = FAILS + 1 end \
+                     end)",
+                )
+                .unwrap();
+            app.world_mut()
+                .resource_mut::<crate::spell::targeting::SpellTargeting>()
+                .enter(FIREBALL, crate::spell::CastCommit::Spell, 0x40);
+
+            app.world_mut().run_system_once(feed_cast_bar).unwrap();
+            assert_eq!(
+                app.world()
+                    .non_send_resource::<UiScript>()
+                    .eval::<Option<i64>>("return SpellStopCasting()")
+                    .unwrap(),
+                Some(1),
+                "the targeting spell is in flight, so IsCasting is true and the press is eaten"
+            );
+            apply_stops(&mut app);
+
+            assert!(
+                !app.world()
+                    .resource::<crate::spell::targeting::SpellTargeting>()
+                    .active(),
+                "the cursor drops"
+            );
+            assert!(rx.try_recv().is_err(), "a targeting abort sends nothing");
+            assert!(
+                matches!(
+                    app.world().resource::<CastBarFeed>().0[..],
+                    [CastBarEdge::Stop]
+                ),
+                "STOP and nothing else: no wire echo follows, so no INTERRUPTED"
+            );
+            app.world_mut().run_system_once(feed_cast_bar).unwrap();
+            let script = app.world().non_send_resource::<UiScript>();
+            assert_eq!(script.eval::<i64>("return STOPS").unwrap(), 1);
+            assert_eq!(script.eval::<i64>("return FAILS").unwrap(), 0);
+            assert_eq!(
+                script
+                    .eval::<Option<i64>>("return SpellStopCasting()")
+                    .unwrap(),
+                None,
+                "and the next press finds nothing in flight"
+            );
+        }
+
+        /// `0x515090` and `Script::Jump` skip their cast test while `IsTargeting`, so a move edge
+        /// leaves the cursor up whatever the spell's `InterruptFlags`.
+        #[test]
+        fn a_move_edge_leaves_the_targeting_cursor_up() {
+            let (mut app, rx) = harness(HashMap::from([(
+                FIREBALL,
+                SpellDisplay {
+                    interrupt_flags: 0xf,
+                    ..Default::default()
+                },
+            )]));
+            app.world_mut()
+                .resource_mut::<crate::spell::targeting::SpellTargeting>()
+                .enter(FIREBALL, crate::spell::CastCommit::Spell, 0x40);
+
+            run(&mut app, true);
+
+            assert!(rx.try_recv().is_err());
+            assert!(app
+                .world()
+                .resource::<crate::spell::targeting::SpellTargeting>()
+                .active());
+            assert!(app.world().resource::<CastBarFeed>().0.is_empty());
+        }
+
         /// Heroic Strike's `InterruptFlags` are 0, so movement leaves it queued.
         #[test]
         fn a_move_edge_leaves_a_queued_strike_queued() {
@@ -958,7 +1120,7 @@ mod tests {
                 .arm(HEROIC_STRIKE);
             app.world_mut()
                 .resource_mut::<PendingCast>()
-                .arm(FIREBALL, Instant::now(), true);
+                .push(FIREBALL, None, Instant::now());
             mark_casting(&mut app, FIREBALL);
 
             app.world_mut().run_system_once(feed_cast_bar).unwrap();

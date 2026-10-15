@@ -178,6 +178,9 @@ impl ItemInfo {
 
 /// Template bit: right-click opens a loot window, as on a clam or lockbox (`ItemPrototype.h:66`).
 pub const ITEM_FLAG_LOOTABLE: u32 = 0x0000_0004;
+/// Template bit `ITEM_FLAG_PLAYERCAST` (`ItemPrototype.h:70`): the bit a use of the item must carry
+/// to hold the in-flight slot (`0x6e501d`).
+pub const ITEM_FLAG_PLAYERCAST: u32 = 0x0000_0040;
 /// Template bit for gift wrapping (`ItemPrototype.h:73`).
 pub const ITEM_FLAG_WRAPPER: u32 = 0x0000_0200;
 /// Instance (`ITEM_FIELD_FLAGS`) bit a lockbox gains once picked or keyed open.

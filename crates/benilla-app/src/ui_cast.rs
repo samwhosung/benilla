@@ -90,14 +90,16 @@ fn channel_start_args(
 /// `SPELLCAST_CHANNEL_STOP`: vmangos ends a channel that way, finished or interrupted.
 ///
 /// First it pushes the flag `SpellStopCasting` (`0x6e6e80`) answers from: auto-repeat or the
-/// in-flight slot, never a channel, taken after the local cancel. A queued strike counts, so the
-/// first Esc stops it and `ToggleGameMenu` skips `ClearTarget()` (`UIParent.lua:1489-1492`).
+/// in-flight slot, never a channel, taken after the local cancel. A queued strike and the spell
+/// awaiting its click count, so the first Esc stops it and `ToggleGameMenu` skips `ClearTarget()`
+/// (`UIParent.lua:1489-1492`).
 pub(crate) fn feed_cast_bar(
     script: Option<NonSendMut<UiScript>>,
     mut feed: ResMut<CastBarFeed>,
     spells: Option<Res<Spells>>,
     pending: Res<PendingCast>,
     queued_melee: Res<QueuedMeleeSpell>,
+    targeting: Res<crate::spell::SpellTargeting>,
     auto_repeat: Res<crate::spell::AutoRepeatActive>,
     self_guid: Res<SelfGuid>,
     index: Res<GuidIndex>,
@@ -116,7 +118,8 @@ pub(crate) fn feed_cast_bar(
         .and_then(|&e| casting.get(e).ok())
         .map(|c| c.spell_id);
     script.set_casting(
-        auto_repeat.0.is_some() || inflight(&pending, &queued_melee, started, now).is_some(),
+        auto_repeat.0.is_some()
+            || inflight(&pending, &queued_melee, &targeting, started, now).is_some(),
     );
     for edge in feed.0.drain(..) {
         let Some((event, args)): Option<(&str, Vec<ScriptValue>)> = (match edge {
