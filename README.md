@@ -65,7 +65,8 @@ Not planned: other expansions or client versions, Warden (anticheat).
 
 benilla builds and runs on macOS, Linux and Windows. You need:
 
-- **A 1.12.1 client (build 5875, any locale)** for the game data. benilla only reads it.
+- **A 1.12.1 client (build 5875)** for the game data, in any locale. benilla only reads it, and
+  shows its text in the client's language; development runs on English clients.
 - **A 1.12.1 server with Warden off.** [vmangos](https://github.com/vmangos/core) is what
   development runs against, and it ships with Warden off; cMaNGOS and the other 1.12.1 cores speak
   the same protocol.
