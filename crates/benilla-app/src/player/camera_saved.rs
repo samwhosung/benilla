@@ -185,7 +185,10 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             // Before the controller, so the first in-world frame renders the restored pose. A
             // capture resolves no state path, so this is inert there.
-            load_camera_pose.before(super::control).in_set(InWorldGated),
+            load_camera_pose
+                .after(super::ControlRestore)
+                .before(super::control)
+                .in_set(InWorldGated),
         )
         .add_systems(OnExit(ClientState::InWorld), save_on_session_end);
     // On the exit edge, never `Update`: the close button's `AppExit` is written in `PostUpdate`.

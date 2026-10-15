@@ -128,6 +128,7 @@ impl Plugin for UiShapeshiftPlugin {
             // cast is a script call (`cast_form`).
             feed_shapeshift_bar
                 .in_set(UnitFeed)
+                .after(crate::player::ControlRestore)
                 .before(crate::ui_action::CooldownEvents)
                 .before(crate::ui_aura::AuraEvents),
         );

@@ -95,7 +95,13 @@ impl Plugin for CharSelectPlugin {
                 OnEnter(ClientState::InWorld),
                 refresh::reset_select_background,
             )
-            .add_systems(Update, (debug_glue_roundtrip, debug_logout_smoke))
+            .add_systems(
+                Update,
+                (
+                    debug_glue_roundtrip,
+                    debug_logout_smoke.after(crate::player::ControlRestore),
+                ),
+            )
             .add_systems(
                 Update,
                 (

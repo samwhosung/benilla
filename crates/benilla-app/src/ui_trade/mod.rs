@@ -392,7 +392,9 @@ impl Plugin for UiTradePlugin {
                     // latch's watchdog leashes the partner at 14 yd.
                     feed_trade.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     // Ahead of the feed, so an accepted partner shows the frame the window opens.
-                    answer_trade_request.before(feed_trade),
+                    answer_trade_request
+                        .after(crate::player::ControlRestore)
+                        .before(feed_trade),
                     // The coinage-change reflex's trade half, after the world's fields land.
                     trim_offer_to_purse
                         .after(crate::ui_unit::UnitFeed)

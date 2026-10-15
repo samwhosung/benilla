@@ -557,7 +557,10 @@ impl Plugin for TutorialPlugin {
                     on_world_enter.before(run_world_enter_cascade),
                     run_world_enter_cascade.before(feed_tutorials),
                     watch_windows.before(feed_tutorials),
-                    watch_self.after(on_world_enter).before(feed_tutorials),
+                    watch_self
+                        .after(on_world_enter)
+                        .after(crate::player::ControlRestore)
+                        .before(feed_tutorials),
                     // Not before the in-game UI exists: `fired` is taken once, with no `VmMemo`
                     // behind it, so the login's Welcome and Questgivers fired into the boot VM
                     // during the one frame it is still live in the world would be lost. `fired`

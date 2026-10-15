@@ -145,8 +145,13 @@ impl Plugin for PoiMarkerPlugin {
             use benilla_protocol::SessionEventKind as K;
             app.net_handler(K::GossipPoi, on_gossip_poi);
         }
-        app.init_resource::<PoiMarker>()
-            .add_systems(Update, (expire_marker, clear_on_world_entry));
+        app.init_resource::<PoiMarker>().add_systems(
+            Update,
+            (
+                expire_marker.after(crate::player::ControlRestore),
+                clear_on_world_entry,
+            ),
+        );
     }
 }
 

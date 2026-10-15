@@ -273,6 +273,7 @@ impl Plugin for UiActionPlugin {
                     state::feed_action_state
                         .in_set(UnitFeed)
                         .in_set(CooldownEvents)
+                        .after(crate::player::ControlRestore)
                         .after(feed::feed_actions),
                     drain::drain_action_sets.after(UiInput),
                     // The target chain queues the openers earlier in the frame.
