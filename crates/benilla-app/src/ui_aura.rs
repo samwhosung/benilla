@@ -79,8 +79,9 @@ pub(crate) struct PlayerAuraCache {
     auras: Vec<CachedAura>,
 }
 
-/// [`feed_auras`] fires `PLAYER_AURAS_CHANGED` and `UNIT_AURA` inline, so a feed whose state their
-/// handlers re-read (the stance feed) runs `.before(AuraEvents)` or they read last frame's.
+/// [`feed_auras`] fires `PLAYER_AURAS_CHANGED` inline and seats the unit tokens the field events
+/// fan out over, so a feed whose state their handlers re-read (the stance feed) runs
+/// `.before(AuraEvents)` or they read last frame's.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct AuraEvents;
 
@@ -141,8 +142,8 @@ fn reconcile(cache: &mut Vec<CachedAura>, live: &[UnitAuraSlot], now: f64) {
 /// What a frame repaints on; not the countdown, which the button polls.
 type AuraProjection = (u32, u8, bool, Option<String>);
 
-/// The feed's edge memory: per token, the projection last pushed. Behind a
-/// [`crate::ui_script::VmMemo`], so a `/reload`'s new VM reads it fresh and `UNIT_AURA` re-fires.
+/// The feed's memory of what each VM holds. Behind a [`crate::ui_script::VmMemo`], so a
+/// `/reload`'s new VM reads it fresh and `PLAYER_AURAS_CHANGED` re-fires.
 #[derive(Resource, Default)]
 struct AuraFeedMemory {
     /// What this VM was last told.
@@ -151,7 +152,7 @@ struct AuraFeedMemory {
     traced_at: f64,
 }
 
-/// The per-VM `UNIT_AURA` edge keys.
+/// One VM's: the player's projection, `PLAYER_AURAS_CHANGED`'s edge key, and every other list.
 #[derive(Default)]
 struct AuraFeedMemo {
     present: bool,

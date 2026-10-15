@@ -799,7 +799,7 @@ fn dist_sq(q: Vec3, p: Vec3) -> f64 {
 /// repaints its plate (`TargetFrame.lua:75-79`). The table is no descriptor field, so no field
 /// edge reaches this. Tokens come from the resolver's inputs the aura feed pushes
 /// ([`UiScript::bound_unit_tokens`]), the fan-out `0x515c50` builds; the first sight of a VM only
-/// seats the count, as a login's own first snapshots fire the event.
+/// seats the count, since a table that landed before it signalled no interface that exists now.
 fn fire_faction_on_forced_table(
     script: Option<NonSendMut<UiScript>>,
     reputations: Res<Reputations>,
