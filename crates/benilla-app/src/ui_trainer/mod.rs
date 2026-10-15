@@ -5,7 +5,9 @@
 
 use std::collections::BTreeSet;
 
-use benilla_formats::{SkillLineCatalog, SpellCatalog, TokenContext};
+use benilla_formats::{
+    LearnEffect, SkillLineCatalog, SpellCatalog, TokenContext, SPELL_EFFECT_SKILL_STEP,
+};
 use benilla_protocol::messages::TrainerSpell;
 use bevy::prelude::*;
 
@@ -23,7 +25,9 @@ use benilla_protocol::field::{
 use benilla_protocol::messages::PLAYER_SKILL_SLOTS;
 use bevy::ecs::system::SystemParam;
 
-use crate::net::{ClientCommand, FieldChanged, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+use crate::net::{
+    ClientCommand, FieldChanged, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer,
+};
 use crate::ui_action::{PlayerActions, Spells};
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
 use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
@@ -237,7 +241,43 @@ fn resolve_service(
         group_key,
         group_name,
         tooltip: service_tooltip(wire.spell, spells),
+        skill_step: display.is_some_and(|d| d.effects.contains(&SPELL_EFFECT_SKILL_STEP)),
+        step_increase: step_increase(wire.spell, spells, skill_lines, get),
+        line_name: skill_lines
+            .and_then(|c| c.line(group_key))
+            .map(|l| l.name.clone()),
     }
+}
+
+/// `GetTrainerServiceStepIncrease`'s text (`0x4da030`) for a wire spell's first skill-step effect:
+/// `INCREASE_POTENTIAL` over the effect's skill line name and five times its step (the previous
+/// step, record `+0x20`, is always 0). Nothing when there is no such effect, the step is 0 or the
+/// line has no row; the binding adds the used-row refusal.
+fn step_increase(
+    wire_spell: u32,
+    spells: &SpellCatalog,
+    skill_lines: Option<&SkillLineCatalog>,
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let (skill, step) = spells
+        .learn_effects(wire_spell)
+        .iter()
+        .find_map(|e| match *e {
+            LearnEffect::SkillStep { skill, step } => Some((skill, step)),
+            _ => None,
+        })?;
+    if step == 0 {
+        return None;
+    }
+    let line = skill_lines?.line(skill)?;
+    let template = get("INCREASE_POTENTIAL")?;
+    Some(benilla_ui::strings::fill(
+        &template,
+        &[
+            benilla_ui::strings::Arg::S(&line.name),
+            benilla_ui::strings::Arg::D(5 * i64::from(step)),
+        ],
+    ))
 }
 
 /// Build the Lua snapshot from [`TrainerOpen`] and the spell and skill catalogs.
@@ -591,13 +631,15 @@ pub(crate) fn open_trainer(
         .open(trainer, trainer_type, services, greeting);
 }
 
-/// Each `BuyTrainerService` becomes `CMSG_TRAINER_BUY_SPELL`; `CloseTrainer` runs the core and
+/// Each `BuyTrainerService` becomes `CMSG_TRAINER_BUY_SPELL` and `OpenTrainer` a
+/// `CMSG_TRAINER_LIST` for the player after the close core; `CloseTrainer` runs the core and
 /// sends nothing.
 fn drain_trainer(
     script: Option<NonSendMut<UiScript>>,
     open: Res<TrainerOpen>,
     commands: Res<NetCommands>,
     mut world_commands: Commands,
+    me: Query<&Guid, With<SelfPlayer>>,
 ) {
     let Some(mut script) = script else {
         return;
@@ -613,6 +655,15 @@ fn drain_trainer(
         let _ = commands
             .0
             .send(ClientCommand::TrainerBuySpell { trainer, spell_id });
+    }
+    // `OpenTrainer` closes the window and then asks for the player's own list (`0x5df680`), which
+    // the server answers with nothing for a player. All of it waits on the player (`0x4d8d24`).
+    if script.take_trainer_open_own() {
+        if let Ok(&Guid(trainer)) = me.single() {
+            debug!("ui_trainer: OpenTrainer closes the window and asks for the player's own list");
+            crate::ui_session::queue(&mut world_commands, close_core);
+            let _ = commands.0.send(ClientCommand::TrainerList { trainer });
+        }
     }
     if script.take_trainer_close() {
         debug!("ui_trainer: client-side close (no packet)");

@@ -778,6 +778,10 @@ pub(crate) struct Model {
     pub(crate) trainer_filter: [bool; 3],
     /// Collapsed skill-line ids, kept across a re-push and cleared when the trainer closes.
     pub(crate) trainer_collapsed: HashSet<u32>,
+    /// The skill-line filter `ds:0xb73a20`: bit n set shows header group n, every bit on a list.
+    pub(crate) trainer_line_filter: u32,
+    /// `OpenTrainer` asked for the player's own trainer list; the app drains it.
+    pub(crate) trainer_open_own: bool,
 
     /// The open taxi map, the `TakeTaxiNode` calls, whether `CloseTaxiMap` ran and whether we ride.
     pub(crate) taxi: Option<taxi::TaxiUiState>,
@@ -1510,6 +1514,8 @@ impl Model {
             trainer_close: false,
             trainer_filter: [true; 3],
             trainer_collapsed: HashSet::new(),
+            trainer_line_filter: u32::MAX,
+            trainer_open_own: false,
             taxi: None,
             taxi_takes: Vec::new(),
             taxi_close: false,

@@ -4,6 +4,7 @@ use super::*;
 use benilla_formats::{
     ItemDisplay, ItemDisplayCatalog, SpellDisplay, SPELL_ATTR_IS_TRADESKILL,
     SPELL_EFFECT_CREATE_ITEM, SPELL_EFFECT_LEARN_PET_SPELL, SPELL_EFFECT_LEARN_SPELL,
+    SPELL_EFFECT_SKILL_STEP,
 };
 use benilla_protocol::messages::trainer_spell_state;
 use benilla_ui::script::TrainerTooltip;
@@ -23,6 +24,7 @@ fn probe_strings(key: &str) -> Option<String> {
         "TRADESKILL_SERVICE_STEP" => Some("<STEP>".into()),
         "TRADESKILL_SERVICE_LEARN" => Some("<LEARN>".into()),
         "KNOWN_TALENTS_HEADER" => Some("<KNOWN>".into()),
+        "INCREASE_POTENTIAL" => Some("Increases potential in %s by %d".into()),
         _ => None,
     }
 }
@@ -198,6 +200,91 @@ fn trainer_icon_substitutes_the_product_only_at_a_tradeskill_trainer() {
 
     // A spell with no record: nil, where every failure ends (`0x4d911c`).
     assert_eq!(icon_of(&spells, TRAINER_TYPE_TRADESKILL, 999, true), None);
+}
+
+/// A skill-step wire spell is flagged for `IsTrainerServiceSkillStep` (`0x4d9dd0`, effect 44 in
+/// any slot) and carries `GetTrainerServiceStepIncrease`'s text (`0x4da030`): `INCREASE_POTENTIAL`
+/// over the first skill-step effect's line name and five times its step. A spell that lacks the
+/// effect, a step of 0 and a line with no row carry none; a service's group line name is the
+/// `SkillLine.dbc` row of its key.
+#[test]
+fn a_skill_step_service_carries_its_flag_its_increase_text_and_its_line_name() {
+    let step_spell = || SpellDisplay {
+        name: "Journeyman".into(),
+        effects: [0, SPELL_EFFECT_SKILL_STEP, 0],
+        ..Default::default()
+    };
+    let plain = SpellDisplay {
+        name: "Heroic Strike".into(),
+        ..Default::default()
+    };
+    let spells = SpellCatalog::from_displays_and_effects(
+        HashMap::from([
+            (7000, step_spell()),
+            (7001, step_spell()),
+            (7002, step_spell()),
+            (78, plain),
+        ]),
+        HashMap::from([
+            (
+                7000,
+                vec![LearnEffect::SkillStep {
+                    skill: 164,
+                    step: 150,
+                }],
+            ),
+            (
+                7001,
+                vec![LearnEffect::SkillStep {
+                    skill: 999,
+                    step: 150,
+                }],
+            ),
+            (
+                7002,
+                vec![LearnEffect::SkillStep {
+                    skill: 164,
+                    step: 0,
+                }],
+            ),
+        ]),
+    );
+    let lines = SkillLineCatalog::from_spell_lines([(78, 26)])
+        .with_line_names([(164, "Blacksmithing"), (26, "Arms")]);
+    let make = |spell: u32, trainer_type: u32| {
+        resolve_service(
+            &wire(spell, trainer_state(), 100, 1, 0),
+            trainer_type,
+            &spells,
+            Some(&lines),
+            &BTreeSet::new(),
+        )
+    };
+    fn trainer_state() -> u8 {
+        trainer_spell_state::GREEN
+    }
+    let step = make(7000, TRAINER_TYPE_TRADESKILL);
+    assert!(step.skill_step);
+    assert_eq!(
+        step.step_increase.as_deref(),
+        Some("Increases potential in Blacksmithing by 750")
+    );
+    // A tradeskill trainer keys its tree 1 or 2, which `SkillLine.dbc` lacks here.
+    assert_eq!(step.line_name, None);
+    // The line has no row, or the step is 0: no text, but still a step row.
+    for spell in [7001, 7002] {
+        let s = make(spell, TRAINER_TYPE_TRADESKILL);
+        assert!(s.skill_step, "{spell}");
+        assert_eq!(s.step_increase, None, "{spell}");
+    }
+    // A plain ability: neither, and its group's line name is the `SkillLine.dbc` row of its key.
+    let plain = make(78, 0);
+    assert!(!plain.skill_step);
+    assert_eq!(plain.step_increase, None);
+    assert_eq!(plain.group_key, 26);
+    assert_eq!(plain.line_name.as_deref(), Some("Arms"));
+    // A spell with no record is no step.
+    assert!(!make(31337, 0).skill_step);
 }
 
 #[test]
@@ -1509,4 +1596,43 @@ fn the_group_header_keys_resolve_in_the_real_global_strings() {
         let text = vm.lua().globals().get::<String>(key).unwrap_or_default();
         assert!(!text.is_empty(), "{key} missing");
     }
+}
+
+/// `OpenTrainer` (`0x4d8cf0`): the open window closes and `CMSG_TRAINER_LIST` goes out for the
+/// player's own guid (`TalkToTrainer`, `0x5df680`); with no player nothing happens at all
+/// (`0x4d8d24`), the open window included.
+#[test]
+fn open_trainer_closes_the_window_and_asks_for_the_players_own_list() {
+    const ME: u64 = 0x10;
+    const TRAINER: u64 = 0xF130_0000_4500_0001;
+    let run = |with_player: bool| {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        app.insert_resource(NetCommands(tx))
+            .init_resource::<TrainerOpen>()
+            .add_systems(Update, drain_trainer);
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        if with_player {
+            app.world_mut().spawn((Guid(ME), SelfPlayer));
+        }
+        app.world_mut()
+            .resource_mut::<TrainerOpen>()
+            .open(TRAINER, 0, Vec::new(), String::new());
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .run("OpenTrainer()")
+            .unwrap();
+        app.update();
+        let open = app.world().resource::<TrainerOpen>().trainer;
+        (open, rx.try_iter().collect::<Vec<_>>())
+    };
+    let (open, sent) = run(true);
+    assert_eq!(open, None, "the window closes");
+    assert!(
+        matches!(sent.as_slice(), [ClientCommand::TrainerList { trainer }] if *trainer == ME),
+        "{sent:?}"
+    );
+    let (open, sent) = run(false);
+    assert_eq!(open, Some(TRAINER), "no player: nothing happens");
+    assert!(sent.is_empty(), "no player, no request: {sent:?}");
 }

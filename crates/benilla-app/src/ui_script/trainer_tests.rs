@@ -142,6 +142,9 @@ fn service(
         is_trade_skill: false,
         group_key: skill_line,
         group_name: line_name.into(),
+        skill_step: false,
+        step_increase: None,
+        line_name: Some(line_name.into()),
     }
 }
 

@@ -195,6 +195,23 @@ impl SkillLineCatalog {
         }
     }
 
+    /// This catalog with `SkillLine.dbc` display rows for `(id, name)` pairs, for tests and
+    /// fixtures.
+    pub fn with_line_names<'a>(mut self, lines: impl IntoIterator<Item = (u32, &'a str)>) -> Self {
+        for (id, name) in lines {
+            self.lines.insert(
+                id,
+                SkillLineInfo {
+                    name: name.to_string(),
+                    category_id: 0,
+                    icon: None,
+                    description: String::new(),
+                },
+            );
+        }
+        self
+    }
+
     /// The skill line a spell belongs to, if `SkillLineAbility.dbc` names one.
     pub fn spell_to_line(&self, spell_id: u32) -> Option<u32> {
         self.abilities.get(&spell_id).map(|a| a.skill_id)

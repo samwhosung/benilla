@@ -132,6 +132,18 @@ pub struct TrainerService {
     /// type 2 `TRADESKILL_SERVICE_STEP`/`_LEARN`.
     pub group_name: String,
     pub tooltip: TrainerTooltip,
+    /// The wire spell has a skill-step effect (id 44, `0x2c`) in any of its three slots:
+    /// `IsTrainerServiceSkillStep` (`0x4d9dd0`).
+    pub skill_step: bool,
+    /// `GetTrainerServiceStepIncrease`'s text (`0x4da030`) for the wire spell's first skill-step
+    /// effect: `INCREASE_POTENTIAL` filled with the effect's skill line and five times its step.
+    /// `None` when the spell has no such effect, the step is 0 or the line has no row; the binding
+    /// answers nil for a used service whatever this holds.
+    pub step_increase: Option<String>,
+    /// The name of the skill line whose id is [`Self::group_key`] (`SkillLine.dbc`), which
+    /// `GetTrainerSkillLines` (`0x4da660`) lists per header; `None` for a key with no row, the
+    /// known-talents group's -1 and a tradeskill trainer's 1 and 2 included.
+    pub line_name: Option<String>,
 }
 
 /// One header and its services, built by [`UiScript::set_trainer`].
@@ -140,6 +152,8 @@ pub struct TrainerGroup {
     /// Also the collapse key.
     pub key: u32,
     pub name: String,
+    /// [`TrainerService::line_name`] of the group's first service: a group's services share a key.
+    pub line_name: Option<String>,
     /// Positions into [`TrainerState::services`], in display order.
     pub services: Vec<usize>,
 }
@@ -191,6 +205,8 @@ impl super::UiScript {
             [true, true, false]
         };
         model.trainer_collapsed.clear();
+        // The skill-line filter resets to every group with the list (`0x4d7560`).
+        model.trainer_line_filter = u32::MAX;
         model.trainer_selection = None;
     }
 
@@ -202,6 +218,13 @@ impl super::UiScript {
     /// Whether `CloseTrainer` was called since the last drain; the close sends no packet.
     pub fn take_trainer_close(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().trainer_close)
+    }
+
+    /// Whether `OpenTrainer` was called since the last drain: with a player, the app closes the
+    /// window and asks the server for the player's own trainer list (`CMSG_TRAINER_LIST`), as
+    /// `TalkToTrainer` (`0x5df680`) does.
+    pub fn take_trainer_open_own(&mut self) -> bool {
+        std::mem::take(&mut self.model_mut().trainer_open_own)
     }
 }
 
@@ -277,6 +300,7 @@ fn build_groups(services: &[TrainerService], trainer_type: u32) -> Vec<TrainerGr
             .or_insert_with(|| TrainerGroup {
                 key: s.group_key,
                 name: s.group_name.clone(),
+                line_name: s.line_name.clone(),
                 services: Vec::new(),
             })
             .services
@@ -325,7 +349,12 @@ fn rows(model: &Model) -> (Vec<Row>, usize) {
             .iter()
             .copied()
             .partition(|&si| model.trainer_filter[t.services[si].category.filter_slot()]);
-        if passes.is_empty() {
+        // A group the skill-line filter clears is hidden whole (`0x4d8508`), header included.
+        let line_shown = model.trainer_line_filter & 1u32.wrapping_shl(gi as u32) != 0;
+        if !line_shown {
+            tail.push(Row::Header(gi));
+            tail.extend(passes.into_iter().map(Row::Service));
+        } else if passes.is_empty() {
             // The filter hid every service, so the header goes too.
             tail.push(Row::Header(gi));
         } else {
@@ -678,6 +707,140 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 });
             }
             Ok(())
+        })?,
+    )?;
+
+    // OpenTrainer() (`0x4d8cf0`): `TalkToTrainer` (`0x5df680`) with the player's own guid, which
+    // first closes the window (`0x4d7440` with a zero guid) and then sends `CMSG_TRAINER_LIST`
+    // for that guid. All of it waits on the player (`0x4d8d24`), which only the app can see.
+    g.set(
+        "OpenTrainer",
+        lua.create_function(|lua, ()| {
+            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+            model.trainer_open_own = true;
+            Ok(())
+        })?,
+    )?;
+
+    // IsTrainerServiceSkillStep(index) (`0x4d9dd0`): 1 when the row's wire spell has a skill-step
+    // effect, nil for a header, a missing row or a spell without one.
+    g.set(
+        "IsTrainerServiceSkillStep",
+        lua.create_function(|lua, index: Value| {
+            let index =
+                binding_abi::index_arg(lua, index, "Usage: IsTrainerServiceSkillStep(index)")?;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            Ok(binding_abi::flag(
+                service(&model, index).is_some_and(|s| s.skill_step),
+            ))
+        })?,
+    )?;
+
+    // GetTrainerServiceStepIncrease(index) (`0x4da030`): the `INCREASE_POTENTIAL` text of a
+    // skill-step row, nil for a used row (state 2, `0x4da0eb`) and wherever the text cannot form.
+    g.set(
+        "GetTrainerServiceStepIncrease",
+        lua.create_function(|lua, index: Value| {
+            let index =
+                binding_abi::index_arg(lua, index, "Usage: GetTrainerServiceStepIncrease(index)")?;
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let text = service(&model, index)
+                .filter(|s| s.category != TrainerServiceCategory::Used)
+                .and_then(|s| s.step_increase.as_ref());
+            opt_str(lua, text)
+        })?,
+    )?;
+
+    // SetTrainerSkillLineFilter(index [, on, exclusive]) (`0x4da3f0`): an index below 1 shows every
+    // group; otherwise the group `index - 1` must exist, `on` must be a number, and a zero clears
+    // its bit, a nonzero `on` with a nonzero `exclusive` leaves only that bit, any other nonzero
+    // `on` adds it. The mask is committed through `0x4d8cb0`: the finalizer, then `TRAINER_UPDATE`.
+    g.set(
+        "SetTrainerSkillLineFilter",
+        lua.create_function(|lua, (index, on, exclusive): (Value, Value, Value)| {
+            let index = binding_abi::number_arg(
+                lua,
+                index,
+                r"Usage: SetTrainerSkillLineFilter(index [, on\off, exclusive])",
+            )?
+            .wrapping_sub(1);
+            let groups = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                model.trainer.as_ref().map_or(0, |t| t.groups.len())
+            };
+            let mask = if index < 0 {
+                u32::MAX
+            } else {
+                if index as usize >= groups {
+                    return Err(mlua::Error::runtime(
+                        "Bad skill line in SetTrainerSkillLineFilter",
+                    ));
+                }
+                let on = binding_abi::number_arg(
+                    lua,
+                    on,
+                    "Missing on//off parameter in SetTrainerSkillLineFilter",
+                )?;
+                let current = lua
+                    .app_data_ref::<Model>()
+                    .expect("model app_data")
+                    .trainer_line_filter;
+                let bit = 1u32.wrapping_shl(index as u32);
+                if on == 0 {
+                    current & !bit
+                } else if lua
+                    .coerce_number(exclusive)?
+                    .is_some_and(|n| binding_abi::ftol(n) != 0)
+                {
+                    bit
+                } else {
+                    current | bit
+                }
+            };
+            super::tick::verb(lua, |model| {
+                model.trainer_line_filter = mask;
+                raise_trainer_update(model);
+            });
+            Ok(())
+        })?,
+    )?;
+
+    // GetTrainerSkillLineFilter(index) (`0x4da590`): 1 when the group `index - 1` is shown, nil when
+    // it is not; an index below 1 asks whether every group is. Past the group count it raises.
+    g.set(
+        "GetTrainerSkillLineFilter",
+        lua.create_function(|lua, index: Value| {
+            let index =
+                binding_abi::number_arg(lua, index, "Usage: GetTrainerSkillLineFilter(index)")?
+                    .wrapping_sub(1);
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let groups = model.trainer.as_ref().map_or(0, |t| t.groups.len());
+            let shown = |g: usize| model.trainer_line_filter & 1u32.wrapping_shl(g as u32) != 0;
+            if index < 0 {
+                return Ok(binding_abi::flag((0..groups).all(shown)));
+            }
+            if index as usize >= groups {
+                return Err(mlua::Error::runtime(
+                    "Bad skill line in GetTrainerSkillLineFilter",
+                ));
+            }
+            Ok(binding_abi::flag(shown(index as usize)))
+        })?,
+    )?;
+
+    // GetTrainerSkillLines() (`0x4da660`): the skill line name of each group's key, nil for a key
+    // with no `SkillLine.dbc` row (the known group's -1 too), one value per group, and the count.
+    g.set(
+        "GetTrainerSkillLines",
+        lua.create_function(|lua, ()| {
+            let model = lua.app_data_ref::<Model>().expect("model app_data");
+            let mut out = Vec::new();
+            if let Some(t) = model.trainer.as_ref() {
+                for g in &t.groups {
+                    out.push(opt_str(lua, g.line_name.as_ref())?);
+                }
+            }
+            Ok(MultiValue::from_vec(out))
         })?,
     )?;
 
