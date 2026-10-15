@@ -1,5 +1,5 @@
 //! The pure side of the FontString overflow law: the height-limit line stack (`CGxString+0x40`)
-//! and the height-gated ellipsis truncate (`CSimpleFontString` `0x771ec0`). The tests run on stub
+//! and the ellipsis truncate (`CSimpleFontString` `0x771ec0`). The tests run on stub
 //! row counts; [`super::ellipsize_to_fit`] binds the real one.
 
 /// The reference's truncation marker, three ASCII dots (`.rdata 0x800188`), not the `…` glyph.
@@ -41,10 +41,10 @@ pub(super) fn ellipsize_in_box<F: FnMut(&str) -> usize>(
     ellipsize(text, lines_fitting(box_h.max(size + gap), size, gap), rows)
 }
 
-/// The height-gated ellipsis truncate (`0x771ec0`): past `allowed` rows, back off one char at a
+/// The ellipsis truncate (`0x771ec0`): past `allowed` rows, back off one char at a
 /// time (the reference skips UTF-8 continuation bytes) behind [`ELLIPSIS`] until `rows` fits; an
 /// empty prefix ships the bare `"..."`. `None`: the text fits and draws raw. The caller owns the
-/// gate (`boxW > 0 && boxH > 0`; `maxLines` is not modelled).
+/// gate (a width, and a height or `maxLines`) and the box's height ([`super::ellipsize_text`]).
 pub(super) fn ellipsize<F: FnMut(&str) -> usize>(
     text: &str,
     allowed: usize,

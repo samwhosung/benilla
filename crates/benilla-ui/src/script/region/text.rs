@@ -160,15 +160,18 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     )?;
 
     // SetNonSpaceWrap/CanNonSpaceWrap (`0x79e9f0`/`0x79ead0`), FontString only: the getter
-    // answers 1 or nil. The flag is `GetBoolOrDefault` (`0x6f1c10`, default 1, `0x79ea7e`): a call
-    // with no argument enables, an explicit nil disables.
+    // answers 1 or nil, off from the constructor (`0x770dd3`). The flag is `GetBoolOrDefault`
+    // (`0x6f1c10`, default 1, `0x79ea7e`): a call with no argument enables, an explicit nil
+    // disables.
     m.set(
         "SetNonSpaceWrap",
         lua.create_function(|lua, (this, args): (Table, MultiValue)| {
             let on = crate::script::binding_abi::bool_or_default(args.front(), true);
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
-            model.region_data.entry(rh).or_default().non_space_wrap = Some(on);
+            model.region_data.entry(rh).or_default().non_space_wrap = on;
+            // The flag moves the wrap, so the measure.
+            model.touch_measure(rh);
             Ok(())
         })?,
     )?;
@@ -177,12 +180,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "CanNonSpaceWrap",
         lua.create_function(|lua, this: Table| {
             let rh = region_handle_of(lua, &this)?;
-            let model = lua.app_data_mut::<Model>().expect("model");
-            let on = model
-                .region_data
-                .get(&rh)
-                .and_then(|d| d.non_space_wrap)
-                .unwrap_or(true);
+            let model = lua.app_data_ref::<Model>().expect("model");
+            let on = model.region_data.get(&rh).is_some_and(|d| d.non_space_wrap);
             Ok(if on { Some(1i64) } else { None })
         })?,
     )?;

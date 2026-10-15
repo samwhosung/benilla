@@ -2079,6 +2079,8 @@ pub(super) fn measure_request_for(model: &mut Model, rh: RegionHandle) -> Option
     let outline = d.outline;
     let spacing = d.line_gap();
     let shadow_x = d.shadow_x();
+    let max_lines = d.max_lines;
+    let non_space_wrap = model.non_space_wrap_of(rh);
     let id = model.region_id(rh);
     Some(MeasureRequest {
         id,
@@ -2089,6 +2091,8 @@ pub(super) fn measure_request_for(model: &mut Model, rh: RegionHandle) -> Option
         outline,
         spacing,
         shadow_x,
+        non_space_wrap,
+        max_lines,
         scale,
         text,
         key,

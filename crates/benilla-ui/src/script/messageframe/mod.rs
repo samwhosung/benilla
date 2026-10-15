@@ -533,6 +533,9 @@ impl UiScript {
                     alpha_gradient: None,
                     world_seat: false, // interface, not world
                     edit_line: false,
+                    // A line is a FontString with the flag off and no `maxLines` (`0x7865f0`).
+                    non_space_wrap: false,
+                    max_lines: 0,
                 },
                 scale: paint.scale,
             });

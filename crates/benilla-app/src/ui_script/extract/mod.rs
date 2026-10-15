@@ -566,6 +566,8 @@ pub(super) fn tick_script(
                             // The drawn shadow seeds each row, as the draw's does.
                             shadow_x: r.shadow_x * s * r.scale,
                             alpha_gradient: None,
+                            non_space_wrap: false,
+                            max_lines: 0,
                         },
                     );
                     (r.frame, r.index, n, r.key)
@@ -1478,6 +1480,8 @@ fn convert_entry(
             alpha_gradient,
             world_seat,
             edit_line,
+            non_space_wrap,
+            max_lines,
         } => {
             // No atlas (no client data, or an unreadable font) draws no text.
             let (Some(atlas), Some(text)) = (font_atlas.as_deref_mut(), text) else {
@@ -1499,6 +1503,8 @@ fn convert_entry(
                     alpha_gradient,
                     world_seat,
                     edit_line,
+                    non_space_wrap,
+                    max_lines,
                 },
                 text::TextHost {
                     z: eq.z,

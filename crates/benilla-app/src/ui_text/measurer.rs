@@ -32,6 +32,8 @@ pub(crate) fn measure_request(
         // The drawn rows' seed rides the frame scale, as the draw's does (`0x7726a4`).
         shadow_x: r.shadow_x * rs,
         alpha_gradient: None, // alpha never changes metrics
+        non_space_wrap: r.non_space_wrap,
+        max_lines: r.max_lines,
     };
     let wrap = r.wrap_width.map(|w| w * rs);
     // `GetStringWidth` answers the unwrapped width (the extent measure `0x5c6940`), its line seeded
@@ -39,7 +41,14 @@ pub(crate) fn measure_request(
     let natural = super::string_width(e, &r.text, spec(), r.shadow_x * seam);
     // Unwrapped, the laid-out width is that same measure (`[fs+0xfc]`).
     let (w, h) = match wrap {
-        Some(_) => super::measure_text(e, &r.text, wrap, spec()),
+        Some(w) => {
+            // `0x7729b0` measures the string `0x771ec0` returns: with `maxLines` the text is cut
+            // to that many lines first, and a FontString with no height takes its own from it.
+            let cut = (r.max_lines > 0)
+                .then(|| super::ellipsize_text(e, &r.text, w, 0.0, spec()))
+                .flatten();
+            super::measure_text(e, cut.as_deref().unwrap_or(&r.text), wrap, spec())
+        }
         None => (natural, super::unwrapped_height(e, &r.text, spec())),
     };
     (w / rs, h / rs, natural / rs)
@@ -63,6 +72,9 @@ pub(crate) fn editbox_advances(
         // The draw's row seed, at the box's drawn scale.
         shadow_x: req.shadow_x * seam * req.scale,
         alpha_gradient: None, // alpha never changes metrics
+        // A multi-line box's text is nonspacewrap (`0x77a58f`); a single line never wraps.
+        non_space_wrap: true,
+        max_lines: 0,
     };
     let cum = super::line_advances(e, &req.text, spec)
         .iter()
@@ -202,6 +214,58 @@ mod tests {
             "the gap rounds up to the device pixel"
         );
         assert!((height(-5.0) - flush).abs() < 1e-4, "a negative gap is 0");
+    }
+
+    /// A FontString with a width and no height takes its height from the text `0x771ec0` returns
+    /// (`0x7729b0` measures it): with `maxLines` that is the text cut to that many lines and
+    /// "...", however many lines it wraps to whole. `$parentSpellName` of the stock spellbook
+    /// (103 wide, `maxLines="3"`) is the one stock user.
+    #[test]
+    fn an_auto_height_fontstring_with_maxlines_is_as_tall_as_the_cut_text() {
+        benilla_formats::wow_data_or_skip!();
+        let engine = super::super::engine::test_engine(1.0).expect("the client faces open");
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(1024.0, 768.0);
+        s.set_text_measurer(Box::new(AtlasMeasurer::new(
+            Arc::new(Mutex::new(engine)),
+            1.0,
+        )));
+        let region = |name: &str, extra: &str, y: i32| {
+            format!(
+                r#"<FontString name="{name}" font="Fonts\FRIZQT__.TTF" justifyH="LEFT" {extra}>
+                     <Size><AbsDimension x="103"/></Size>
+                     <FontHeight><AbsValue val="12"/></FontHeight>
+                     <Anchors><Anchor point="TOPLEFT"><Offset><AbsDimension x="0" y="{y}"/></Offset></Anchor></Anchors>
+                   </FontString>"#
+            )
+        };
+        let xml = format!(
+            r#"<Ui><Frame name="CapHost"><Size><AbsDimension x="300" y="300"/></Size>
+                 <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                 <Layers><Layer level="ARTWORK">{}{}{}</Layer></Layers></Frame></Ui>"#,
+            region("Capped", r#"maxLines="2""#, 0),
+            region("Whole", "", -100),
+            region("Spare", r#"maxLines="9""#, -200),
+        );
+        let doc = benilla_ui::framexml::parse(&xml).expect("valid FrameXML");
+        let report = benilla_ui::loader::load(&s, &doc, &|_| None);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let long = "Two-Handed Weapon Specialization of the Unyielding Mountain King";
+        s.run(&format!(
+            "for _, n in ipairs({{'Capped', 'Whole', 'Spare'}}) do _G[n]:SetText({long:?}) end"
+        ))
+        .unwrap();
+        s.tick(0.016);
+        s.resolve();
+        let height = |n: &str| s.eval::<f32>(&format!("return {n}:GetHeight()")).unwrap();
+        let whole = height("Whole");
+        assert!(whole > 36.0, "the text wraps to over three lines: {whole}");
+        assert_eq!(height("Capped"), 24.0, "two lines of 12");
+        assert_eq!(
+            height("Spare"),
+            whole,
+            "text within its lines is measured as it is"
+        );
     }
 
     /// `GetStringWidth` (`0x79e510` → `0x772890`) answers the measure kernel's width divided by the

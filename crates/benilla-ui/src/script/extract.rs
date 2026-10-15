@@ -368,6 +368,8 @@ impl UiScript {
                                 Some(crate::widget::KindState::EditBox(eb))
                                     if eb.text_region == Some(rh) && !eb.multi_line
                             ),
+                            non_space_wrap: model.non_space_wrap_of(rh),
+                            max_lines: data.max_lines,
                         }
                     } else {
                         // The draw gate is the texture slot, never the colour (`0x7706e0`: empty

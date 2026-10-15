@@ -11,13 +11,16 @@ use crate::ui_pass::{UiQuad, UvRect};
 use super::engine::{GlyphRef, TextEngine};
 use super::markup::{fontstring_lines, ColorRun};
 
+mod breaks;
 mod measure;
 mod overflow;
 mod wrap;
+#[cfg(test)]
+mod wrap_laws;
 
 pub(crate) use measure::{
-    ellipsize_to_fit, line_advances, line_origin, line_rows, measure_text, measure_wrapped_rows,
-    string_width, unwrapped_height,
+    ellipsize_text, ellipsize_to_fit, line_advances, line_origin, line_rows, measure_text,
+    measure_wrapped_rows, string_width, unwrapped_height,
 };
 
 /// A rect this narrow is no wrap constraint: an unsized single-point `FontString` resolves to ~0.
@@ -64,6 +67,13 @@ pub(crate) struct FontSpec<'a> {
     pub shadow_x: f32,
     /// The `SetAlphaGradient` reveal `(start, length)`; on the spec, shadows fade with their fill.
     pub alpha_gradient: Option<(f32, f32)>,
+    /// `nonspacewrap` (ui flag `0x1000`, the line kernel's flag `0x40`): a force-broken line then
+    /// leaves the next its first break opportunity, and the ellipsis fit walk goes on past it
+    /// (`0x5c76ea`-`0x5c76f5`, `0x5c22e8`-`0x5c22f5`).
+    pub non_space_wrap: bool,
+    /// `maxLines` (`+0x128`): the ellipsis fits the text into this many lines, with or without a
+    /// height (`0x771f0f`, `0x771f48`-`0x771f61`); 0 for none.
+    pub max_lines: u32,
 }
 
 /// The step law's bias over the whole-pixel advance ([`TextEngine::step`]): `+1` (glyph rasterizer
@@ -195,7 +205,7 @@ fn layout_text_quads_inner(
     // Wrap only within a pinned width; `rect` is in the pen's own space, so no conversion. Each
     // row keeps the source character after it, which prices its last glyph for the justify.
     let mut render_lines: Vec<(Vec<ColorRun>, Option<char>)> = if rect.width() > WRAP_MIN_WIDTH {
-        measure::wrap_rows(e, r, &lines, rect.width())
+        measure::wrap_rows(e, r, &lines, rect.width(), font.non_space_wrap)
     } else {
         lines.into_iter().map(|line| (line, None)).collect()
     };
@@ -435,6 +445,8 @@ mod measure_fits_render {
             spacing: 0.0,
             shadow_x: 0.0,
             alpha_gradient: None,
+            non_space_wrap: false,
+            max_lines: 0,
         }
     }
 
@@ -457,8 +469,7 @@ mod measure_fits_render {
                     let r = measure::resolve(&mut e, &s);
                     e.ensure_metrics(r.face, r.ppem, label);
                     let runs = parse_markup(label, [1.0, 1.0, 1.0, 1.0]);
-                    let line = runs.first().expect("one line");
-                    let rows = measure::wrap_line(&e, r, line, measured);
+                    let rows = measure::wrap_lines(&e, r, &runs, measured, false, usize::MAX).rows;
                     assert_eq!(
                         rows.len(),
                         1,
@@ -495,14 +506,16 @@ mod measure_fits_render {
             ] {
                 e.ensure_metrics(r.face, r.ppem, title);
                 e.ensure_metrics(r.face, r.ppem, "...");
-                // The cap bites: uncapped the title is one line, capped it needs more.
+                let own = measure_text(&mut e, title, None, s).0;
+                // The cap bites: in its own measured width, indent included (`0x5c7470` skips no
+                // leading whitespace), the title is one line; capped it needs more.
                 assert_eq!(
-                    measure::wrapped_rows_for_test(&e, r, title, 275.0),
+                    measure::wrapped_rows_for_test(&e, r, title, own, true),
                     1,
                     "{title:?} fits the uncapped row"
                 );
                 assert!(
-                    measure::wrapped_rows_for_test(&e, r, title, cap) > 1,
+                    measure::wrapped_rows_for_test(&e, r, title, cap, true) > 1,
                     "{title:?} must overflow the {cap}px cap for this test to mean anything"
                 );
                 // The line stack: a 10-tall box emits one line whatever the wrap says.
@@ -515,7 +528,7 @@ mod measure_fits_render {
                 let cap_rows = overflow::lines_fitting(BOX_H.max(r.size), r.size, r.gap) + 1;
                 let display =
                     overflow::ellipsize_in_box(title, BOX_H, r.size, r.gap, |candidate| {
-                        measure::wrapped_rows_capped_for_test(&e, r, candidate, cap, cap_rows)
+                        measure::fit_rows_for_test(&e, r, candidate, cap, cap_rows, true)
                     })
                     .unwrap_or_else(|| panic!("{title:?} at cap {cap} must ellipsize"));
                 assert!(
@@ -523,7 +536,7 @@ mod measure_fits_render {
                     "the truncation marker is three dots, got {display:?}"
                 );
                 assert_eq!(
-                    measure::wrapped_rows_for_test(&e, r, &display, cap),
+                    measure::wrapped_rows_for_test(&e, r, &display, cap, true),
                     1,
                     "{display:?} must fit the row's single line at cap {cap}"
                 );
@@ -957,6 +970,8 @@ mod ellipsis_cost {
             spacing: 0.0,
             shadow_x: 0.0,
             alpha_gradient: None,
+            non_space_wrap: false,
+            max_lines: 0,
         };
         let r = measure::resolve(&mut e, &s);
         let fits = overflow::lines_fitting(BOX_H, r.size, r.gap);
@@ -965,7 +980,7 @@ mod ellipsis_cost {
             let text = page_body(page);
             e.ensure_metrics(r.face, r.ppem, &text);
             e.ensure_metrics(r.face, r.ppem, "...");
-            let full = measure::wrapped_rows_for_test(&e, r, &text, BOX_W);
+            let full = measure::wrapped_rows_for_test(&e, r, &text, BOX_W, false);
             eprintln!(
                 "[ellipsis-cost] {label:<11} {:>4} chars -> {full:>2} rows in a {fits}-row box",
                 text.chars().count(),
@@ -981,7 +996,7 @@ mod ellipsis_cost {
                 let got = overflow::ellipsize_in_box(&text, BOX_H, r.size, r.gap, |candidate| {
                     probes.set(probes.get() + 1);
                     chars.set(chars.get() + candidate.chars().count());
-                    measure::wrapped_rows_capped_for_test(&e, r, candidate, BOX_W, cap)
+                    measure::fit_rows_for_test(&e, r, candidate, BOX_W, cap, false)
                 });
                 let us = t.elapsed().as_secs_f64() * 1e6;
                 eprintln!(

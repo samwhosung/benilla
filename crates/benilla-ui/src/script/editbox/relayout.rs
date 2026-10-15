@@ -230,6 +230,9 @@ pub(super) fn line_height(lua: &Lua, h: FrameHandle, rh: RegionHandle) -> Option
             // One line has no gap: `0x5c2070` charges `(N−1)·gap`.
             spacing: d.line_gap(),
             shadow_x: d.shadow_x(),
+            // One unwrapped line: neither moves its height.
+            non_space_wrap: false,
+            max_lines: 0,
             scale,
             text: ONE_LINE.to_string(),
             key,

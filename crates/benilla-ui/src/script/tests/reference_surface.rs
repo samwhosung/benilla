@@ -535,10 +535,11 @@ fn button_set_font_returns_nothing_and_is_a_no_op_without_a_label() {
     );
 }
 
-/// FontString's `SetNonSpaceWrap`/`CanNonSpaceWrap` (`0x79e9f0`/`0x79ead0`): on by default, the
-/// getter answers `1` or nil, and a bare `SetNonSpaceWrap()` turns it on.
+/// FontString's `SetNonSpaceWrap`/`CanNonSpaceWrap` (`0x79e9f0`/`0x79ead0`): off from the
+/// constructor (`0x770dd3` stores `0x212`), the getter answers `1` or nil, and a bare
+/// `SetNonSpaceWrap()` turns it on.
 #[test]
-fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
+fn non_space_wrap_defaults_off_and_answers_one_or_nil() {
     let s = crate::script::UiScript::new().unwrap();
     s.run(r#"f = CreateFrame("Frame", "NSF") fs = f:CreateFontString("NSFText", "ARTWORK")"#)
         .unwrap();
@@ -546,8 +547,16 @@ fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
     assert_eq!(
         s.eval::<Option<i64>>("return NSFText:CanNonSpaceWrap()")
             .unwrap(),
+        None,
+        "off from the constructor, answered nil"
+    );
+
+    s.run("NSFText:SetNonSpaceWrap()").unwrap();
+    assert_eq!(
+        s.eval::<Option<i64>>("return NSFText:CanNonSpaceWrap()")
+            .unwrap(),
         Some(1),
-        "default on, answered as 1"
+        "a bare SetNonSpaceWrap() turns it ON, answered as 1"
     );
     assert!(
         !s.eval::<bool>("return NSFText:CanNonSpaceWrap() == true")
@@ -561,14 +570,6 @@ fn non_space_wrap_defaults_on_and_answers_one_or_nil() {
             .unwrap(),
         None,
         "off answers nil, not 0 and not false"
-    );
-
-    s.run("NSFText:SetNonSpaceWrap()").unwrap();
-    assert_eq!(
-        s.eval::<Option<i64>>("return NSFText:CanNonSpaceWrap()")
-            .unwrap(),
-        Some(1),
-        "a bare SetNonSpaceWrap() turns it ON"
     );
 }
 

@@ -806,6 +806,8 @@ mod line_law_tests {
                     spacing: 0.0,
                     shadow_x: 0.0,
                     alpha_gradient: None,
+                    non_space_wrap: false,
+                    max_lines: 0,
                 };
                 let got = string_width(&mut e, text, spec, shadow / dpi);
                 assert_eq!(
@@ -845,6 +847,8 @@ mod line_law_tests {
                 spacing: 0.0,
                 shadow_x: 0.0,
                 alpha_gradient: None,
+                non_space_wrap: false,
+                max_lines: 0,
             };
             assert_eq!(
                 string_width(&mut e, text, spec, 0.0),

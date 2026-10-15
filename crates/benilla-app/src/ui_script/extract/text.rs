@@ -32,6 +32,10 @@ pub(super) struct TextStyle {
     pub world_seat: bool,
     /// A single-line EditBox's window: one unwrapped line, cut at the rect, never ellipsized.
     pub edit_line: bool,
+    /// `nonspacewrap`: what a force-broken line leaves to the next, and where the fit stops.
+    pub non_space_wrap: bool,
+    /// `maxLines`: the ellipsis cuts the text to this many lines, 0 for the rect's height.
+    pub max_lines: u32,
 }
 
 /// The extraction loop's context for one Text quad.
@@ -87,6 +91,8 @@ pub(super) fn emit(
             .shadow
             .map_or(0.0, |sh| sh.offset[0] * host.scale * host.font_scale),
         alpha_gradient: style.alpha_gradient,
+        non_space_wrap: style.non_space_wrap,
+        max_lines: style.max_lines,
     };
     // A single-line editbox's region holds its window (`0x77d858`), drawn from the line origin,
     // unwrapped and cut at the box edge, focused or not; the focused box's selection goes behind

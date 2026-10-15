@@ -203,6 +203,8 @@ pub(super) fn pill_quads(
                 spacing: 0.0,
                 shadow_x: 0.0,
                 alpha_gradient: None,
+                non_space_wrap: false,
+                max_lines: 0,
             },
             // Our own dev overlay: measured off a degenerate rect, then shifted into the pill.
             crate::ui_text::TextSeat::Exact,

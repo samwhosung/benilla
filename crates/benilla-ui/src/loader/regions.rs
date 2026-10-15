@@ -186,6 +186,26 @@ impl Loader<'_> {
         }
     }
 
+    /// A FontString's `nonspacewrap` and `maxLines` (`0x77103f`-`0x7710cd`), which the loader reads
+    /// ahead of the font attributes, so a Button's `<NormalText>` takes them too. A boolean goes
+    /// through the string-to-bool `0x6f1b30`; `maxLines` through `0x64ade0`, its leading digits
+    /// (none is 0), wrapping in 32 bits.
+    pub(super) fn apply_wrap_attrs(&mut self, region: &Element, wrapper: &Table, dbg: &str) {
+        let non_space_wrap = region.attr_bool_opt("nonspacewrap");
+        let max_lines = region
+            .attr("maxLines")
+            .filter(|v| !v.is_empty())
+            .map(leading_digits);
+        if non_space_wrap.is_none() && max_lines.is_none() {
+            return;
+        }
+        if let Err(e) =
+            crate::script::apply_wrap_attrs(self.lua, wrapper, non_space_wrap, max_lines)
+        {
+            self.report.fault(format!("{dbg}: region wrap attrs: {e}"));
+        }
+    }
+
     /// A region's geometry: `<Size>`, a FontString's justify when [`FontAttrs::Own`],
     /// `setAllPoints` and `<Anchors>`, whose `$parent` is the owner's name, or a nameless owner's
     /// nearest named ancestor's.
@@ -323,6 +343,7 @@ impl Loader<'_> {
                 let text = self.resolve_text(text, dbg);
                 self.call_region(region_wrapper, "SetText", Some(text), dbg);
             }
+            self.apply_wrap_attrs(region, region_wrapper, dbg);
             if let Some(c) = color {
                 self.call_region(
                     region_wrapper,
@@ -420,4 +441,12 @@ impl Loader<'_> {
             None => {}
         }
     }
+}
+
+/// The client's decimal parse `0x64ade0`: the leading digits of `s`, wrapping in 32 bits, and 0
+/// when `s` does not open with one.
+fn leading_digits(s: &str) -> u32 {
+    s.bytes().take_while(u8::is_ascii_digit).fold(0u32, |n, b| {
+        n.wrapping_mul(10).wrapping_add(u32::from(b - b'0'))
+    })
 }

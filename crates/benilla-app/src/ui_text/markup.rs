@@ -14,6 +14,10 @@ pub(super) struct ColorRun {
     pub(super) text: String,
     pub(super) color: [f32; 4],
     pub(super) link: Option<std::sync::Arc<LinkInfo>>,
+    /// How many colour, restore and link codes sit just before the text in the raw string (or, on
+    /// an empty run, at the line's end): they draw nothing, but the reference's line kernel
+    /// steps over each as a token of its own (`0x5c7580`).
+    pub(super) marks: u32,
 }
 
 /// Resolve `input`'s inline markup, whose grammar is [`benilla_ui::markup`]'s, into lines of
@@ -30,30 +34,36 @@ pub(super) fn parse_markup(input: &str, base_color: [f32; 4]) -> Vec<Vec<ColorRu
     // The open hyperlink: payload, visible text, and the runs flushed under it, which get the
     // `Arc` built at the closing `|h`.
     let mut link: Option<(String, String, Vec<usize>)> = None;
+    // The codes seen since the last text, which the next run (or the line's end) carries.
+    let mut marks = 0u32;
 
     for (_, token) in benilla_ui::markup::tokens(input) {
         match token.kind {
             T::Color(rgba) => {
-                flush(&mut runs, &mut cur, color, &mut link);
+                flush(&mut runs, &mut cur, color, &mut link, &mut marks);
+                marks += 1;
                 // At the string's alpha: the escape's `AA` is discarded (`0x5c2ab2`) and the
                 // emitter patches in the FontString's own (`0x5cceb0`), so a fading link fades.
                 color = rgba.to_f32_at(base_color[3]);
             }
             T::ColorReset => {
-                flush(&mut runs, &mut cur, color, &mut link);
+                flush(&mut runs, &mut cur, color, &mut link, &mut marks);
+                marks += 1;
                 color = base_color;
             }
             T::LineBreak => {
-                flush(&mut runs, &mut cur, color, &mut link);
+                end_line(&mut runs, &mut cur, color, &mut link, &mut marks);
                 lines.push(std::mem::take(&mut runs));
             }
             T::EscapedPipe => push_visible('|', &mut cur, &mut link),
             T::LinkOpen { payload } => {
-                flush(&mut runs, &mut cur, color, &mut link);
+                flush(&mut runs, &mut cur, color, &mut link, &mut marks);
+                marks += 1;
                 link = Some((payload.to_string(), String::new(), Vec::new()));
             }
             T::LinkClose => {
-                flush(&mut runs, &mut cur, color, &mut link);
+                flush(&mut runs, &mut cur, color, &mut link, &mut marks);
+                marks += 1;
                 // A close with no open is a stray token: nothing to back-patch, nothing drawn.
                 if let Some((payload, visible, idxs)) = link.take() {
                     let info = std::sync::Arc::new(LinkInfo {
@@ -69,7 +79,7 @@ pub(super) fn parse_markup(input: &str, base_color: [f32; 4]) -> Vec<Vec<ColorRu
         }
     }
     // An unterminated link's runs stay plain text: the `|H` is consumed, the text still shows.
-    flush(&mut runs, &mut cur, color, &mut link);
+    end_line(&mut runs, &mut cur, color, &mut link, &mut marks);
     lines.push(runs);
     lines
 }
@@ -84,10 +94,11 @@ pub(super) fn fontstring_lines(input: &str, base_color: [f32; 4]) -> Vec<Vec<Col
         return Vec::new();
     }
     let mut lines = parse_markup(input, base_color);
+    // A line of codes alone is a line: the kernel lays a row for its bytes (`0x5cddeb`).
     if lines.len() > 1
         && lines
             .last()
-            .is_some_and(|l| l.iter().all(|r| r.text.is_empty()))
+            .is_some_and(|l| l.iter().all(|r| r.text.is_empty() && r.marks == 0))
     {
         lines.pop();
     }
@@ -107,6 +118,7 @@ fn flush(
     cur: &mut String,
     color: [f32; 4],
     link: &mut Option<(String, String, Vec<usize>)>,
+    marks: &mut u32,
 ) {
     if !cur.is_empty() {
         if let Some((_, _, idxs)) = link {
@@ -116,6 +128,26 @@ fn flush(
             text: std::mem::take(cur),
             color,
             link: None, // back-patched at the closing |h
+            marks: std::mem::take(marks),
+        });
+    }
+}
+
+/// [`flush`] at a line's end: codes with no text after them ride an empty run.
+fn end_line(
+    runs: &mut Vec<ColorRun>,
+    cur: &mut String,
+    color: [f32; 4],
+    link: &mut Option<(String, String, Vec<usize>)>,
+    marks: &mut u32,
+) {
+    flush(runs, cur, color, link, marks);
+    if *marks > 0 {
+        runs.push(ColorRun {
+            text: String::new(),
+            color,
+            link: None,
+            marks: std::mem::take(marks),
         });
     }
 }
@@ -234,9 +266,12 @@ mod markup_tests {
     #[test]
     fn color_change_inside_a_link_still_shares_one_link() {
         let lines = parse_markup("|Hplayer:Bob|h[|cffff0000Bob|r]|h", WHITE);
-        assert_eq!(lines[0].len(), 3);
+        // The closing `|h` rides an empty run of its own.
+        assert_eq!(lines[0].len(), 4);
+        assert_eq!((lines[0][3].text.as_str(), lines[0][3].marks), ("", 1));
+        assert_eq!(lines[0][1].marks, 1, "the colour code before `Bob`");
         let first = lines[0][0].link.as_ref().expect("linked");
-        for run in &lines[0] {
+        for run in lines[0].iter().filter(|r| !r.text.is_empty()) {
             let l = run.link.as_ref().expect("all runs linked");
             assert!(std::sync::Arc::ptr_eq(first, l));
         }

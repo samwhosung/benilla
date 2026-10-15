@@ -164,6 +164,11 @@ pub enum QuadContent {
         /// A single-line EditBox's text, which holds the box's window (`0x77d858`): one line from
         /// the region's left, never wrapped or ellipsized, cut at the region's rect.
         edit_line: bool,
+        /// `nonspacewrap` ([`RegionData::non_space_wrap`]); a multi-line EditBox's text is always
+        /// on (`0x77a58f`).
+        non_space_wrap: bool,
+        /// `maxLines` ([`RegionData::max_lines`]).
+        max_lines: u32,
     },
 }
 
@@ -396,9 +401,14 @@ pub(crate) struct RegionData {
     pub(crate) anchors: Anchors,
     /// `SetDesaturated` (`0x79c1e0`): the renderer greys the texel, so the binding reports support.
     pub(crate) desaturated: bool,
-    /// `SetNonSpaceWrap`/`CanNonSpaceWrap` (`0x79e9f0`/`0x79ead0`), `None` on. Stored, not applied:
-    /// the reference's flag `0x40` drives a mid-word wrap and the ellipsis fit count (`0x771ec0`).
-    pub(crate) non_space_wrap: Option<bool>,
+    /// `nonspacewrap` / `SetNonSpaceWrap` / `CanNonSpaceWrap` (`0x77103f`, `0x79e9f0`,
+    /// `0x79ead0`): bit `0x1000` of the justify word, off from the constructor (`0x770dd3`). The
+    /// text layer takes it as flag `0x40` (`0x44d4c7`, `0x44d9c5`): it decides what a force-broken
+    /// line leaves to the next and where the ellipsis fit stops.
+    pub(crate) non_space_wrap: bool,
+    /// XML `maxLines` (`0x7710b2`-`0x7710cd`, `+0x128`), 0 for none: the ellipsis truncate fits the
+    /// text into that many lines, with or without a height (`0x771ec0`).
+    pub(crate) max_lines: u32,
     /// The client's dword at `CSimpleFontString+0x120`: bits 0-2 horizontal, 3-5 vertical, `0x212`
     /// from the constructor. A cleared axis answers `"UNKNOWN"` to the getter and draws centred.
     pub(crate) justify: crate::justify::Justify,
@@ -527,6 +537,9 @@ impl RegionData {
         (self.outline as u8).hash(&mut hasher);
         self.line_gap().to_bits().hash(&mut hasher);
         self.shadow_x().to_bits().hash(&mut hasher);
+        // The flag moves the wrap and `maxLines` the cut text the height is measured from.
+        self.non_space_wrap.hash(&mut hasher);
+        self.max_lines.hash(&mut hasher);
         scale.to_bits().hash(&mut hasher);
         hasher.finish()
     }
@@ -607,6 +620,10 @@ pub struct MeasureRequest {
     /// The shadow's x offset in UI units, 0 for none: `GetStringWidth` seeds its line with it,
     /// unscaled by the frame (`0x772890` hands `[fs+0x108]` to the kernel as it is).
     pub shadow_x: f32,
+    /// `nonspacewrap`: what a force-broken line leaves to the next one ([`RegionData::non_space_wrap`]).
+    pub non_space_wrap: bool,
+    /// `maxLines`: the text is cut to that many lines before it is measured, 0 for no cut.
+    pub max_lines: u32,
     /// The owner's `effective_scale`. The host measures at `font_height × scale × seam` and
     /// divides by that whole product: advances step to whole pixels, so a measure at the
     /// unscaled size is not proportional to the drawn one.

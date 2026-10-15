@@ -279,7 +279,9 @@ pub use quest::{
     QuestAction, QuestItemView, QuestPanel, QuestRewardSpell, QuestSelect, QuestState,
 };
 pub use quest_log::{QuestLogDetail, QuestLogEntryView, QuestLogObjectiveView, QuestLogState};
-pub(crate) use region::{apply_font_parts, implicit_creation_anchor_lua, install_loaded_texture};
+pub(crate) use region::{
+    apply_font_parts, apply_wrap_attrs, implicit_creation_anchor_lua, install_loaded_texture,
+};
 pub use reputation::{FactionEntry, ReputationSend, ReputationState};
 pub use session::SessionRequest;
 pub use shapeshift::ShapeshiftFormView;

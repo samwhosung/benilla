@@ -312,6 +312,27 @@ pub(crate) fn apply_font_parts(
     Ok(())
 }
 
+/// A FontString's XML `nonspacewrap` and `maxLines` (`0x77103f`-`0x7710cd`), each written only when
+/// the attribute is there, straight into its state: `maxLines` has no Lua verb in 1.12.
+pub(crate) fn apply_wrap_attrs(
+    lua: &Lua,
+    this: &Table,
+    non_space_wrap: Option<bool>,
+    max_lines: Option<u32>,
+) -> mlua::Result<()> {
+    let rh = region_handle_of(lua, this)?;
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    let d = model.region_data.entry(rh).or_default();
+    if let Some(on) = non_space_wrap {
+        d.non_space_wrap = on;
+    }
+    if let Some(n) = max_lines {
+        d.max_lines = n;
+    }
+    model.touch_measure(rh);
+    Ok(())
+}
+
 /// Get or create the wrapper table for a region id, with its kind's metatable.
 pub(super) fn region_wrapper(lua: &Lua, id: u32) -> mlua::Result<Table> {
     let wrappers: Table = lua.named_registry_value(REG_WRAPPERS)?;

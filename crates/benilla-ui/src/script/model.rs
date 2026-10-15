@@ -2417,6 +2417,22 @@ impl Model {
         }
     }
 
+    /// The `nonspacewrap` flag `rh`'s text lays out under: its own, or on a multi-line EditBox's
+    /// text region always, as the box sets bit `0x1000` of its label (`0x77a58f`).
+    pub(crate) fn non_space_wrap_of(&self, rh: RegionHandle) -> bool {
+        let own = self.region_data.get(&rh).is_some_and(|d| d.non_space_wrap);
+        own || self
+            .arena
+            .region(rh)
+            .and_then(|r| self.arena.frame(r.owner))
+            .is_some_and(|f| {
+                matches!(
+                    &f.kind_state,
+                    crate::widget::KindState::EditBox(eb) if eb.text_region == Some(rh) && eb.multi_line
+                )
+            })
+    }
+
     /// Names `rh` on the measure ledger for a write that may move its measure key.
     pub(crate) fn touch_measure(&mut self, rh: RegionHandle) {
         if let Some(list) = &mut self.measure_dirty {
