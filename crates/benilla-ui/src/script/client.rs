@@ -11,6 +11,18 @@ pub(super) const VERSION: &str = "1.12.1";
 pub(super) const BUILD: &str = "5875";
 pub(super) const BUILD_DATE: &str = "Sep 19 2006";
 
+/// The release client's debug globals that do nothing (`0x83dec0`-`0x83ded0`, `0x83df80`-`0x83dfa0`).
+const DEBUG_TOGGLES: [&str; 8] = [
+    "ToggleTris",
+    "TogglePortals",
+    "ToggleCollision",
+    "ToggleCollisionDisplay",
+    "TogglePlayerBounds",
+    "TogglePerformanceValues",
+    "ResetPerformanceValues",
+    "TogglePerformanceDisplay",
+];
+
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
@@ -39,6 +51,18 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         "GetDebugStats",
         lua.create_function(|_, _: MultiValue| Ok(MultiValue::new()))?,
     )?;
+
+    // The eight debug toggles, each returning zero values and reading no argument:
+    // `ToggleTris`, `TogglePortals`, `ToggleCollision`, `ToggleCollisionDisplay` and
+    // `TogglePlayerBounds` are `xor eax,eax; ret` (`0x489330`-`0x489360`, `0x489440`);
+    // `TogglePerformanceValues` and `ResetPerformanceValues` call a bare `ret` (`0x489420`,
+    // `0x489430`); `TogglePerformanceDisplay` (`0x489400`) flips `[0x885644]`, which nothing reads.
+    for name in DEBUG_TOGGLES {
+        g.set(
+            name,
+            lua.create_function(|_, _: MultiValue| Ok(MultiValue::new()))?,
+        )?;
+    }
 
     // `OpeningCinematic()` (`0x48c8c0`): sends an empty `CMSG_OPENING_CINEMATIC` (`0xf9`,
     // `0x48c8c9` into `0x5ab630`) and returns nothing; the server may answer with
@@ -385,5 +409,27 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The eight debug globals exist and do nothing: an addon or a `/script` calling one with any
+    /// arguments gets zero values and no error, where an undefined global raises.
+    #[test]
+    fn the_eight_debug_toggles_exist_and_return_nothing() {
+        let s = UiScript::new().unwrap();
+        for name in super::DEBUG_TOGGLES {
+            assert_eq!(
+                s.eval::<String>(&format!("return type({name})")).unwrap(),
+                "function"
+            );
+            for args in ["", "1", "nil, {}"] {
+                assert_eq!(
+                    s.arity(&format!("{name}({args})")).unwrap(),
+                    0,
+                    "{name}({args})"
+                );
+            }
+        }
+        s.run("TogglePerformanceDisplay() TogglePerformanceDisplay() ToggleTris()")
+            .expect("a call from a script raises nothing");
     }
 }
