@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 use benilla_mpq::Archive;
 
-use crate::VANILLA_BASE_ORDER;
+use crate::{Locale, VANILLA_BASE_ORDER};
 
 /// One entry from a chain listing: an internal path and its uncompressed size.
 pub struct ChainEntry {
@@ -20,6 +20,8 @@ pub struct ChainEntry {
 pub struct Chain {
     /// Ascending priority: later archives win.
     archives: Vec<Archive>,
+    /// The locale the chain's `Wow.ini` names, read once at open as start-up reads it once.
+    locale: Locale,
 }
 
 /// `patch-?.MPQ` as the reference's `FindFirstFileW` glob matches it (template `0x82edbc`, wrapper
@@ -93,7 +95,25 @@ impl Chain {
                 Archive::open(path).with_context(|| format!("opening MPQ {}", path.display()))?,
             );
         }
-        Ok(Self { archives })
+        let mut chain = Self {
+            archives,
+            locale: Locale::default(),
+        };
+        chain.locale = crate::wow_ini::client_locale(&chain);
+        Ok(chain)
+    }
+
+    /// The client locale, from the chain's `Wow.ini` (`0x402350`): its index picks the column of
+    /// every localized DBC string.
+    pub fn locale(&self) -> Locale {
+        self.locale
+    }
+
+    /// The same archives read as another locale, for a test of the column a loader reads.
+    #[cfg(test)]
+    pub(crate) fn with_locale(mut self, locale: Locale) -> Self {
+        self.locale = locale;
+        self
     }
 
     /// The highest-priority archive with an entry for `name`, a delete marker included, as a

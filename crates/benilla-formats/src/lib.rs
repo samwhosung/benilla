@@ -69,6 +69,9 @@ mod cfg_configs;
 pub use cfg_configs::{load_realm_configs, RealmConfig, RealmConfigs};
 mod wow_ini;
 pub use wow_ini::client_region;
+/// The client locale, the column a localized DBC string is read from.
+mod locale;
+pub use locale::Locale;
 mod itembagfamily;
 pub use itembagfamily::{load_item_bag_families, ItemBagFamilyCatalog};
 mod itemclass;
