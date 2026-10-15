@@ -7,14 +7,14 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const SPELL_FOCUS_OBJECT: &str = "DBFilesClient\\SpellFocusObject.dbc";
 const SPELL_FOCUS_FIELDS: usize = 10;
-const COL_NAME_ENUS: usize = 1;
+const COL_NAME: usize = 1;
 
-/// `SpellFocusObject` id → its enUS name.
+/// `SpellFocusObject` id → its name in the locale's column.
 pub struct SpellFocusCatalog {
     names: HashMap<u32, String>,
 }
@@ -37,7 +37,7 @@ impl SpellFocusCatalog {
 fn schema() -> Schema {
     let mut s = Schema::new("SpellFocusObject");
     for i in 0..SPELL_FOCUS_FIELDS {
-        let ty = if i == COL_NAME_ENUS {
+        let ty = if i == COL_NAME {
             FieldType::String
         } else {
             FieldType::UInt32
@@ -53,10 +53,11 @@ pub fn load_spell_focus_catalog(chain: &mut Chain) -> Result<SpellFocusCatalog> 
         .read_file(SPELL_FOCUS_OBJECT)
         .with_context(|| format!("reading {SPELL_FOCUS_OBJECT}"))?;
     let rs = parse(&bytes, schema(), "SpellFocusObject.dbc")?;
+    let locale = chain.locale();
     let mut names = HashMap::new();
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
-        if let Some(name) = str_at(&rs, r, COL_NAME_ENUS) {
+        if let Some(name) = loc_str(&rs, r, COL_NAME, locale) {
             names.insert(id, name);
         }
     }

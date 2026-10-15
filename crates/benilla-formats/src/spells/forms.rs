@@ -7,7 +7,7 @@ use crate::Chain;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{i32_at, parse, str_at, u32_at};
+use crate::dbc::{i32_at, loc_str, parse, u32_at};
 
 const SHAPESHIFT_FORM: &str = "DBFilesClient\\SpellShapeshiftForm.dbc";
 
@@ -16,7 +16,7 @@ const SHAPESHIFT_FORM: &str = "DBFilesClient\\SpellShapeshiftForm.dbc";
 pub struct ShapeshiftForm {
     /// `BonusActionBar` (column 1): the page the action bar flips to, 0 for none.
     pub bonus_bar: u32,
-    /// The enUS name (column 2), the tooltip's `SPELL_REQUIRED_FORM` "Requires %s"
+    /// The name (the block at column 2, read at the locale), the tooltip's `SPELL_REQUIRED_FORM` "Requires %s"
     /// (`0x52f10a`-`0x52f2ae`).
     pub name: String,
     /// `flags1` (column 11): bit 0 marks a stance, bit 1 blocks cancelling the active form.
@@ -62,12 +62,13 @@ pub fn load_shapeshift_forms(chain: &mut Chain) -> Result<HashMap<u32, Shapeshif
     let mut schema = Schema::new("SpellShapeshiftForm");
     for i in 0..14 {
         match i {
-            // Column 2: the enUS slot of the name locstring (2..10, eight locales and a flag word).
+            // Column 2: the name locstring's first column (2..10, eight locales and a flag word).
             2 => schema.add_field(SchemaField::new("Name", FieldType::String)),
             _ => schema.add_field(SchemaField::new(format!("F{i}"), FieldType::UInt32)),
         }
     }
     let set = parse(&bytes, schema, "SpellShapeshiftForm.dbc")?;
+    let locale = chain.locale();
     // AttackIconID resolves through SpellIcon.dbc like a spell's own icon (`0x4e68af`-`0x4e68da`).
     let icons = crate::dbc::load_spell_icon_map(chain)?;
     let mut map = HashMap::new();
@@ -77,7 +78,7 @@ pub fn load_shapeshift_forms(chain: &mut Chain) -> Result<HashMap<u32, Shapeshif
                 id,
                 ShapeshiftForm {
                     bonus_bar: u32_at(r, 1).unwrap_or(0),
-                    name: str_at(&set, r, 2).unwrap_or_default(),
+                    name: loc_str(&set, r, 2, locale).unwrap_or_default(),
                     flags: u32_at(r, 11).unwrap_or(0),
                     creature_type: i32_at(r, 12).unwrap_or(0),
                     attack_icon: u32_at(r, 13)

@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const GM_TICKET_CATEGORY: &str = "DBFilesClient\\GMTicketCategory.dbc";
@@ -22,7 +22,7 @@ pub struct GmTicketCategoryCatalog {
 pub struct GmTicketCategory {
     /// The id `CMSG_GMTICKET_CREATE` carries.
     pub id: u32,
-    /// The button label, from the enUS `Name_Lang` slot.
+    /// The button label, from the `Name_Lang` block's column at the locale.
     pub name: String,
 }
 
@@ -58,10 +58,13 @@ pub fn load_gm_ticket_categories(chain: &mut Chain) -> Result<GmTicketCategoryCa
         .read_file(GM_TICKET_CATEGORY)
         .with_context(|| format!("reading {GM_TICKET_CATEGORY}"))?;
     let rs = parse(&bytes, gm_ticket_category_schema(), "GMTicketCategory")?;
+    let locale = chain.locale();
     let mut categories = Vec::with_capacity(rs.records().len());
     for r in rs.records() {
-        let (Some(id), Some(name)) = (u32_at(r, 0), str_at(&rs, r, 1).filter(|n| !n.is_empty()))
-        else {
+        let (Some(id), Some(name)) = (
+            u32_at(r, 0),
+            loc_str(&rs, r, 1, locale).filter(|n| !n.is_empty()),
+        ) else {
             continue;
         };
         categories.push(GmTicketCategory { id, name });

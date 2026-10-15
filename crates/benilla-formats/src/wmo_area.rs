@@ -1,14 +1,14 @@
 //! `WMOAreaTable.dbc`, a WMO interior's audio identity per building and per group; the Northshire
 //! Abbey chant is its whole-WMO row's `ZoneIntroMusicTable` 221. Rows key on the root's
 //! `MOHD.wmoID`, the placement's `MODF.nameSet` and each group's `MOGP.uniqueID` (`+0x38`), with
-//! `WMOGroupID` `-1` for the whole-WMO row; the enUS `AreaName` is column 11 of 20.
+//! `WMOGroupID` `-1` for the whole-WMO row; the `AreaName` block starts at column 11 of 20.
 
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 /// One `WMOAreaTable` row's audio fields, `0` for none or inherit.
@@ -28,7 +28,7 @@ pub struct WmoArea {
     /// The `AreaTable.dbc` area this group counts as (0 = none), read by the area resolver
     /// `0x670250` when the down-ray keeps the WMO over the terrain: Ironforge reports its own area.
     pub area_table_id: u32,
-    /// The interior's enUS display name, empty for an unnamed row.
+    /// The interior's display name in the locale's column, empty for an unnamed row.
     pub name: String,
 }
 
@@ -136,6 +136,7 @@ pub fn load_wmo_area_catalog(chain: &mut Chain) -> Result<WmoAreaCatalog> {
         .read_file("DBFilesClient\\WMOAreaTable.dbc")
         .context("reading WMOAreaTable.dbc")?;
     let rs = parse(&bytes, schema(), "WMOAreaTable")?;
+    let locale = chain.locale();
     let mut groups = HashMap::new();
     let mut defaults = HashMap::new();
     for r in rs.records() {
@@ -149,7 +150,7 @@ pub fn load_wmo_area_catalog(chain: &mut Chain) -> Result<WmoAreaCatalog> {
             zone_music: u32_at(r, 7).unwrap_or(0),
             intro_sound: u32_at(r, 8).unwrap_or(0),
             area_table_id: u32_at(r, 10).unwrap_or(0),
-            name: str_at(&rs, r, 11).unwrap_or_default(),
+            name: loc_str(&rs, r, 11, locale).unwrap_or_default(),
         };
         if group == u32::MAX {
             defaults.insert((wmo_id, name_set), area);
@@ -196,7 +197,7 @@ mod tests {
         assert_eq!(chapel.ambience, 50);
         assert_eq!(chapel.zone_music, 0);
 
-        // A named row reads through the enUS column.
+        // A named row reads through the locale's column.
         let inn = cat
             .resolve(53, 2, 9999)
             .or_else(|| cat.resolve(53, 0, 9999));

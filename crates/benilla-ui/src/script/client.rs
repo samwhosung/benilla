@@ -26,8 +26,8 @@ const DEBUG_TOGGLES: [&str; 8] = [
 pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
 
-    // `GetLocale()` (glue `0x46ce40`, in-game `0x48d8b0`) returns one string, `enUS`, as benilla
-    // is enUS-only. `IsMacClient()` (`0x48c980`) returns one nil, the PC build's answer, which
+    // `GetLocale()` (glue `0x46ce40`, in-game `0x48d8b0`) returns one string, the name at the locale
+    // index; this answers `enUS` whatever the install's locale. `IsMacClient()` (`0x48c980`) returns one nil, the PC build's answer, which
     // takes FrameXML's PC key-label arm.
     g.set(
         "GetLocale",

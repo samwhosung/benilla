@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::chain::Chain;
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 
 const SERVER_MESSAGES: &str = "DBFilesClient\\ServerMessages.dbc";
 
@@ -68,9 +68,10 @@ pub fn load_server_messages_catalog(chain: &mut Chain) -> Result<ServerMessagesC
         .read_file(SERVER_MESSAGES)
         .context("reading ServerMessages.dbc")?;
     let rs = parse(&bytes, schema(), "ServerMessages")?;
+    let locale = chain.locale();
     let mut rows = Vec::with_capacity(rs.records().len());
     for r in rs.records() {
-        let (Some(id), Some(text)) = (u32_at(r, 0), str_at(&rs, r, 1)) else {
+        let (Some(id), Some(text)) = (u32_at(r, 0), loc_str(&rs, r, 1, locale)) else {
             continue;
         };
         rows.push((id, text));

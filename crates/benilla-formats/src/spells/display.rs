@@ -17,7 +17,7 @@ pub struct SpellDisplay {
     /// `0x6e3130` (`0x6e384b`).
     pub id: u32,
     pub name: String,
-    /// `SpellNameSubtext` enUS (column 129): "Rank N", even "Rank 1", or a word such as "Racial".
+    /// `SpellNameSubtext` (the block at column 129, read at the locale): "Rank N", even "Rank 1", or a word such as "Racial".
     pub rank: Option<String>,
     /// The icon's MPQ path, without extension; `None` for icon 0 or an id not in `SpellIcon.dbc`.
     pub icon: Option<String>,
@@ -147,9 +147,9 @@ pub struct SpellDisplay {
     /// `ActiveIconID` (column 118) as stored: nonzero makes a second press cancel the spell's
     /// live aura. The client tests the id, not the texture (`0x4e55f0`, `0x4b36f0`).
     pub active_icon_id: u32,
-    /// `Description` enUS (column 138): the tooltip body, its `$` tokens unsubstituted.
+    /// `Description` (the block at column 138): the tooltip body, its `$` tokens unsubstituted.
     pub description: Option<String>,
-    /// `AuraDescription` enUS (column 147): the buff or debuff icon's tooltip.
+    /// `AuraDescription` (the block at column 147): the buff or debuff icon's tooltip.
     pub aura_description: Option<String>,
     /// `DurationIndex` (column 30): the `SpellDuration.dbc` row; 0 for no duration.
     pub duration_index: u32,

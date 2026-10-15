@@ -9,7 +9,7 @@ use crate::Chain;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, str_at, u32_at};
 
 /// The audio-relevant slice of one `AreaTable` row.
 pub struct AreaEntry {
@@ -27,7 +27,7 @@ pub struct AreaEntry {
     pub sound_provider: u32,
     /// The preset while the listener is submerged (11 is "Underwater"), `0` to inherit.
     pub sound_provider_underwater: u32,
-    /// The zone/subzone display name (enUS column).
+    /// The zone/subzone display name, the locale's column.
     pub name: String,
 }
 
@@ -207,6 +207,7 @@ fn ambience_schema() -> Schema {
 
 /// Read the four tables off the patch chain.
 pub fn load_area_sound_catalog(chain: &mut Chain) -> Result<AreaSoundCatalog> {
+    let locale = chain.locale();
     let read = |chain: &mut Chain, file: &str, schema: Schema, what: &str| {
         let bytes = chain
             .read_file(file)
@@ -233,7 +234,7 @@ pub fn load_area_sound_catalog(chain: &mut Chain) -> Result<AreaSoundCatalog> {
                 intro_sound: u32_at(r, 9).unwrap_or(0),
                 sound_provider: u32_at(r, 5).unwrap_or(0),
                 sound_provider_underwater: u32_at(r, 6).unwrap_or(0),
-                name: str_at(&rs, r, 11).unwrap_or_default(),
+                name: loc_str(&rs, r, 11, locale).unwrap_or_default(),
             },
         );
     }

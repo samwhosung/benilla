@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{i32_at, parse, u32_at};
+use crate::dbc::{i32_at, loc_str, parse, u32_at};
 use crate::Chain;
 
 const ITEM_SUB_CLASS: &str = "DBFilesClient\\ItemSubClass.dbc";
@@ -217,6 +217,7 @@ fn item_sub_class_mask_schema() -> Schema {
 
 /// Load `ItemSubClass.dbc` and the `ItemSubClassMask.dbc` group names off the patch chain.
 pub fn load_item_sub_classes(chain: &mut Chain) -> Result<ItemSubClassCatalog> {
+    let locale = chain.locale();
     let bytes = chain
         .read_file(ITEM_SUB_CLASS)
         .with_context(|| format!("reading {ITEM_SUB_CLASS}"))?;
@@ -234,7 +235,7 @@ pub fn load_item_sub_classes(chain: &mut Chain) -> Result<ItemSubClassCatalog> {
         let (Some(class), Some(mask), Some(name)) = (
             u32_at(r, 0),
             u32_at(r, 1),
-            crate::dbc::str_at(&mask_rs, r, 2).filter(|n| !n.is_empty()),
+            loc_str(&mask_rs, r, 2, locale).filter(|n| !n.is_empty()),
         ) else {
             continue;
         };
@@ -259,9 +260,9 @@ pub fn load_item_sub_classes(chain: &mut Chain) -> Result<ItemSubClassCatalog> {
                 weapon_swing_size: u32_at(r, 9).unwrap_or(0),
             },
         );
-        // The enUS verbose name (column 19) first, the display name (column 10) as fallback.
-        let display = crate::dbc::str_at(&rs, r, 10).filter(|n| !n.is_empty());
-        let name = crate::dbc::str_at(&rs, r, 19)
+        // The verbose name (column 19) first, the display name (column 10) as fallback.
+        let display = loc_str(&rs, r, 10, locale).filter(|n| !n.is_empty());
+        let name = loc_str(&rs, r, 19, locale)
             .filter(|n| !n.is_empty())
             .or_else(|| display.clone());
         if let Some(name) = name {

@@ -1,19 +1,19 @@
 //! The GM survey's three tables, which the client joins to a questionnaire: `GMSurveyCurrentSurvey`
 //! (a language to a survey id, `0x496440`), `GMSurveySurveys` (a survey id to its ten question
 //! ids, `0x496470`) and `GMSurveyQuestions` (a question id to its text, `0x4964b0`). The language
-//! is the row id: benilla reads enUS, language 0.
+//! is the row id, the client's locale index (`[0xc0e080]` at `0x496440`).
 
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const CURRENT: &str = "DBFilesClient\\GMSurveyCurrentSurvey.dbc";
 const SURVEYS: &str = "DBFilesClient\\GMSurveySurveys.dbc";
 const QUESTIONS: &str = "DBFilesClient\\GMSurveyQuestions.dbc";
 
-/// The survey the client offers in language 0: its id, its ten question slots (0 for none), and
+/// The survey the client offers in its locale: its id, its ten question slots (0 for none), and
 /// the text of each question the slots name that `GMSurveyQuestions.dbc` holds.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GmSurvey {
@@ -21,7 +21,8 @@ pub struct GmSurvey {
     pub id: u32,
     /// The survey row's question ids in slot order; all 0 when the survey has no row.
     pub questions: [u32; 10],
-    /// `(question id, enUS text)` for every question row, in file order.
+    /// `(question id, text)` for every question row, in file order, the locale's column
+    /// (`+4 + 4·locale`).
     pub texts: Vec<(u32, String)>,
 }
 
@@ -42,6 +43,7 @@ fn schema(name: &str, strings: usize, ints: usize) -> Schema {
 
 /// Load the three tables from the patch chain.
 pub fn load_gm_survey(chain: &mut Chain) -> Result<GmSurvey> {
+    let locale = chain.locale();
     let current = chain
         .read_file(CURRENT)
         .with_context(|| format!("reading {CURRENT}"))?;
@@ -50,11 +52,11 @@ pub fn load_gm_survey(chain: &mut Chain) -> Result<GmSurvey> {
         schema("GMSurveyCurrentSurvey", 0, 1),
         "GMSurveyCurrentSurvey",
     )?;
-    // The row whose id is the language, 0.
+    // The row whose id is the locale index.
     let id = current
         .records()
         .iter()
-        .find(|r| u32_at(r, 0) == Some(0))
+        .find(|r| u32_at(r, 0) == Some(locale.index() as u32))
         .and_then(|r| u32_at(r, 1))
         .unwrap_or(0);
 
@@ -84,7 +86,7 @@ pub fn load_gm_survey(chain: &mut Chain) -> Result<GmSurvey> {
     let texts = texts
         .records()
         .iter()
-        .filter_map(|r| Some((u32_at(r, 0)?, str_at(&texts, r, 1)?)))
+        .filter_map(|r| Some((u32_at(r, 0)?, loc_str(&texts, r, 1, locale)?)))
         .collect();
     Ok(GmSurvey {
         id,

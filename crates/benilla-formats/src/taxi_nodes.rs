@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{f32_at, parse, str_at, u32_at};
+use crate::dbc::{f32_at, loc_str, parse, u32_at};
 use crate::Chain;
 
 const TAXI_NODES: &str = "DBFilesClient\\TaxiNodes.dbc";
@@ -22,7 +22,7 @@ pub struct TaxiNode {
     pub map_id: u32,
     /// World position `(x, y, z)` on `map_id`.
     pub pos: [f32; 3],
-    /// The enUS name (locale slot 0), the taxi map's node label.
+    /// The name in the locale's column, the taxi map's node label.
     pub name: String,
     /// The `creature_template` entry of a Horde rider's taxi mount here, `0` for no Horde service.
     pub mount_horde: u32,
@@ -61,7 +61,7 @@ fn schema() -> Schema {
     for name in ["X", "Y", "Z"] {
         s.add_field(SchemaField::new(name, FieldType::Float32));
     }
-    s.add_field(SchemaField::new("Name", FieldType::String)); // enUS (locale 0)
+    s.add_field(SchemaField::new("Name", FieldType::String)); // locale 0
     s.add_field(SchemaField::new_array(
         "NameOtherLocales",
         FieldType::String,
@@ -79,6 +79,7 @@ pub fn load_taxi_nodes(chain: &mut Chain) -> Result<TaxiNodes> {
         .read_file(TAXI_NODES)
         .context("reading TaxiNodes.dbc")?;
     let rs = parse(&bytes, schema(), "TaxiNodes")?;
+    let locale = chain.locale();
     let mut rows = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
@@ -89,7 +90,7 @@ pub fn load_taxi_nodes(chain: &mut Chain) -> Result<TaxiNodes> {
             id,
             map_id: u32_at(r, 1).unwrap_or(0),
             pos: [x, y, z],
-            name: str_at(&rs, r, 5).unwrap_or_default(),
+            name: loc_str(&rs, r, 5, locale).unwrap_or_default(),
             mount_horde: u32_at(r, 14).unwrap_or(0),
             mount_alliance: u32_at(r, 15).unwrap_or(0),
         };

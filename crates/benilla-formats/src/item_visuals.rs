@@ -14,7 +14,7 @@ use crate::Chain;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, str_at, u32_at};
 
 const ITEM_VISUALS: &str = "DBFilesClient\\ItemVisuals.dbc";
 const ITEM_VISUAL_EFFECTS: &str = "DBFilesClient\\ItemVisualEffects.dbc";
@@ -50,7 +50,7 @@ impl ItemVisualCatalog {
     }
 }
 
-/// `SpellItemEnchantment.dbc`'s visual, enUS name and `Flags`, one load for the glow chain, the
+/// `SpellItemEnchantment.dbc`'s visual, name and `Flags`, one load for the glow chain, the
 /// tooltip's enchant line and the bind confirms.
 pub struct EnchantCatalog {
     visuals: HashMap<u32, i32>,
@@ -150,8 +150,8 @@ pub(crate) fn item_visual_effects_schema() -> Schema {
     s
 }
 
-/// `SpellItemEnchantment.dbc`: 24 fields, 96-byte records. The reference reads the enUS name at
-/// `+0x34` (field 13, `0x4960d0`), the visual at `+0x58` (field 22, `0x5d9be1`) and `Flags` at
+/// `SpellItemEnchantment.dbc`: 24 fields, 96-byte records. The reference reads the name block at
+/// `+0x34 + 4·locale` (field 13, `0x4960d0`), the visual at `+0x58` (field 22, `0x5d9be1`) and `Flags` at
 /// `+0x5c` (field 23).
 pub(crate) fn spell_item_enchantment_schema() -> Schema {
     let mut s = Schema::new("SpellItemEnchantment");
@@ -213,6 +213,7 @@ pub fn load_enchant_catalog(chain: &mut Chain) -> Result<EnchantCatalog> {
         spell_item_enchantment_schema(),
         "SpellItemEnchantment",
     )?;
+    let locale = chain.locale();
     let mut visuals = HashMap::new();
     let mut names = HashMap::new();
     let mut flags = HashMap::with_capacity(rs.records().len());
@@ -224,8 +225,8 @@ pub fn load_enchant_catalog(chain: &mut Chain) -> Result<EnchantCatalog> {
         if visual != 0 {
             visuals.insert(id, visual);
         }
-        // `str_at` drops an empty name.
-        if let Some(name) = str_at(&rs, r, 13) {
+        // `loc_str` drops an empty name.
+        if let Some(name) = loc_str(&rs, r, 13, locale) {
             names.insert(id, name);
         }
     }

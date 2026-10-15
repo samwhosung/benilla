@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{i32_at, parse, str_at, u32_at};
+use crate::dbc::{i32_at, loc_str, parse, u32_at};
 use crate::Chain;
 
 const LFG_DUNGEONS: &str = "DBFilesClient\\LFGDungeons.dbc";
@@ -14,7 +14,7 @@ const LFG_DUNGEONS: &str = "DBFilesClient\\LFGDungeons.dbc";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LfgDungeon {
     pub id: u32,
-    /// The enUS name.
+    /// The name, in the locale's column.
     pub name: String,
     /// `+0x28` and `+0x2c`: the player levels the row is offered to.
     pub min_level: u32,
@@ -43,13 +43,14 @@ pub fn load_lfg_dungeons(chain: &mut Chain) -> Result<Vec<LfgDungeon>> {
         .read_file(LFG_DUNGEONS)
         .with_context(|| format!("reading {LFG_DUNGEONS}"))?;
     let rs = parse(&bytes, schema(), "LFGDungeons")?;
+    let locale = chain.locale();
     Ok(rs
         .records()
         .iter()
         .filter_map(|r| {
             Some(LfgDungeon {
                 id: u32_at(r, 0)?,
-                name: str_at(&rs, r, 1).unwrap_or_default(),
+                name: loc_str(&rs, r, 1, locale).unwrap_or_default(),
                 min_level: u32_at(r, 10)?,
                 max_level: u32_at(r, 11)?,
                 kind: u32_at(r, 12)?,

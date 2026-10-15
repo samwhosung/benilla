@@ -2137,7 +2137,7 @@ struct RosterNames<'a> {
 
 /// A roster entry as the glue VM's records take it (`0x4732a0`). The race and class names are
 /// the `Name_Lang` of the race and class rows (`ChrRaces` `+0x44`, `ChrClasses` `+0x14`) at the
-/// enUS slot (the one locale benilla reads, #429), the file string the race row's (`ChrRaces` column 15), and the model flag
+/// install's locale column, the file string the race row's (`ChrRaces` column 15), and the model flag
 /// whether the race row's body for the gender resolves to a model. A race, class or zone with no row reads
 /// empty, empty, nil as the reference's does, and so does one whose catalog did not load.
 fn glue_character(c: &Character, names: &RosterNames) -> GlueCharacter {

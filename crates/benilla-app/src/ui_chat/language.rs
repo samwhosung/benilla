@@ -160,7 +160,7 @@ pub(super) fn feed_default_language(
         .next()
         .and_then(|store| store.0.unit_race())
         .zip(langs.as_ref())
-        .and_then(|(race, langs)| langs.0.name(u32::from(race), 0))
+        .and_then(|(race, langs)| langs.0.name(u32::from(race)))
         .unwrap_or_default();
     if windows.default_language != name {
         windows.default_language = name.to_string();

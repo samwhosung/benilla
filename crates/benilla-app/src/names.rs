@@ -320,7 +320,8 @@ const CACHE_MAGIC: &str = "benilla-namecache";
 const CACHE_FORMAT: u32 = 2;
 /// The client build, the reference's `0x16f3`.
 const CACHE_BUILD: u32 = 5875;
-/// In the header as in the reference's; benilla reads DBC locale slot 0 only.
+/// In the header as in the reference's: the server names creatures in the locale the logon
+/// challenge sends, which benilla-protocol's `auth.rs` fixes at enUS.
 const CACHE_LOCALE: &str = "enUS";
 
 impl NameCache {

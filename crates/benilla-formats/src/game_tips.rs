@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::chain::Chain;
-use crate::dbc::{parse, str_at};
+use crate::dbc::{loc_str, parse};
 
 const GAME_TIPS: &str = "DBFilesClient\\GameTips.dbc";
 
@@ -50,10 +50,11 @@ fn schema() -> Schema {
 pub fn load_game_tips(chain: &mut Chain) -> Result<GameTipsCatalog> {
     let bytes = chain.read_file(GAME_TIPS).context("reading GameTips.dbc")?;
     let rs = parse(&bytes, schema(), "GameTips")?;
+    let locale = chain.locale();
     let mut tips = Vec::with_capacity(rs.records().len());
     for r in rs.records() {
         // A row with an empty text slot is dropped, not shown blank; the shipped file has none.
-        match str_at(&rs, r, 1) {
+        match loc_str(&rs, r, 1, locale) {
             Some(text) if !text.trim().is_empty() => tips.push(text),
             _ => {}
         }

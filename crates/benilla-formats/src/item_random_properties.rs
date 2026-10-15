@@ -14,7 +14,7 @@ use crate::Chain;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 
 const ITEM_RANDOM_PROPERTIES: &str = "DBFilesClient\\ItemRandomProperties.dbc";
 
@@ -28,7 +28,7 @@ pub const RANDOM_PROPERTY_FIRST_SLOT: u8 = 2;
 /// One `ItemRandomProperties` row: the suffix the name takes, and the enchants the roll grants.
 #[derive(Clone, Debug, Default)]
 pub struct RandomProperty {
-    /// The enUS suffix (`"of the Bear"`), never empty: a suffix-less row is the formatter's
+    /// The suffix in the locale's column (`"of the Bear"`), never empty: a suffix-less row is the formatter's
     /// plain-name exit and is not loaded.
     pub suffix: String,
     /// The five `SpellItemEnchantment` ids for enchant slots 2..6, `0` where the row grants none.
@@ -92,7 +92,7 @@ pub(crate) fn item_random_properties_schema() -> Schema {
     s
 }
 
-/// Load `ItemRandomProperties.dbc` off the patch chain, dropping a row with no enUS suffix, the
+/// Load `ItemRandomProperties.dbc` off the patch chain, dropping a row with no suffix, the
 /// formatter's plain-name exit.
 pub fn load_random_property_catalog(chain: &mut Chain) -> Result<RandomPropertyCatalog> {
     let bytes = chain
@@ -103,11 +103,12 @@ pub fn load_random_property_catalog(chain: &mut Chain) -> Result<RandomPropertyC
         item_random_properties_schema(),
         "ItemRandomProperties",
     )?;
+    let locale = chain.locale();
     let mut rows = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
-        // Field 7, `Suffix0`: the enUS string at `0x1c`, the one the name formatter reads.
-        let Some(suffix) = str_at(&rs, r, 7) else {
+        // The suffix block at field 7, `0x1c + 4·locale`, the string the name formatter reads.
+        let Some(suffix) = loc_str(&rs, r, 7, locale) else {
             continue;
         };
         let mut enchants = [0u32; RANDOM_PROPERTY_SLOTS];

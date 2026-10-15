@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::chain::Chain;
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 
 const CHAT_CHANNELS: &str = "DBFilesClient\\ChatChannels.dbc";
 
@@ -40,9 +40,9 @@ pub struct ChatChannelRow {
     pub id: u32,
     /// Bits from [`flags`].
     pub flags: u32,
-    /// The enUS name pattern, `%s` intact ("General - %s").
+    /// The name pattern in the locale's column, `%s` intact ("General - %s").
     pub pattern: String,
-    /// The enUS shortcut ("General"), the name without number or zone.
+    /// The shortcut in the locale's column ("General"), the name without number or zone.
     pub shortcut: String,
 }
 
@@ -150,10 +150,11 @@ pub fn load_chat_channels_catalog(chain: &mut Chain) -> Result<ChatChannelsCatal
         .read_file(CHAT_CHANNELS)
         .context("reading ChatChannels.dbc")?;
     let rs = parse(&bytes, schema(), "ChatChannels")?;
+    let locale = chain.locale();
     let mut rows = Vec::with_capacity(rs.records().len());
     for r in rs.records() {
         let (Some(id), Some(flags), Some(pattern)) =
-            (u32_at(r, 0), u32_at(r, 1), str_at(&rs, r, 3))
+            (u32_at(r, 0), u32_at(r, 1), loc_str(&rs, r, 3, locale))
         else {
             continue;
         };
@@ -161,7 +162,7 @@ pub fn load_chat_channels_catalog(chain: &mut Chain) -> Result<ChatChannelsCatal
             id,
             flags,
             pattern,
-            shortcut: str_at(&rs, r, 12).unwrap_or_default(),
+            shortcut: loc_str(&rs, r, 12, locale).unwrap_or_default(),
         });
     }
     Ok(ChatChannelsCatalog { rows })

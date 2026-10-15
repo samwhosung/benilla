@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const ITEM_BAG_FAMILY: &str = "DBFilesClient\\ItemBagFamily.dbc";
@@ -52,10 +52,13 @@ pub fn load_item_bag_families(chain: &mut Chain) -> Result<ItemBagFamilyCatalog>
         .read_file(ITEM_BAG_FAMILY)
         .with_context(|| format!("reading {ITEM_BAG_FAMILY}"))?;
     let rs = parse(&bytes, item_bag_family_schema(), "ItemBagFamily")?;
+    let locale = chain.locale();
     let mut names = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
-        let (Some(id), Some(name)) = (u32_at(r, 0), str_at(&rs, r, 1).filter(|n| !n.is_empty()))
-        else {
+        let (Some(id), Some(name)) = (
+            u32_at(r, 0),
+            loc_str(&rs, r, 1, locale).filter(|n| !n.is_empty()),
+        ) else {
             continue;
         };
         names.insert(id, name);

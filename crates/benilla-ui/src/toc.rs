@@ -35,9 +35,8 @@ const LOCALES: [&str; 8] = [
     "enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "xxYY",
 ];
 
-/// The client's locale slot (`[0xc0e080]`). benilla answers `GetLocale()` with `enUS`
-/// (`script/client.rs`) and reads the locale-0 column everywhere, so this is the slot 0; the
-/// install's own locale is not consulted.
+/// The client's locale slot (`[0xc0e080]`), fixed at 0 as `GetLocale()` answers `enUS`
+/// (`script/client.rs`); the install's own locale is not consulted here.
 pub const CLIENT_LOCALE: usize = 0;
 
 /// A directive the reference reads, with the literal its reader tests (`SStrCmpI` with the

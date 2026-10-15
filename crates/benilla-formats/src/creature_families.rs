@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::chain::Chain;
-use crate::dbc::{f32_at, parse, str_at, u32_at};
+use crate::dbc::{f32_at, loc_str, parse, str_at, u32_at};
 
 const CREATURE_FAMILY: &str = "DBFilesClient\\CreatureFamily.dbc";
 const ITEM_PET_FOOD: &str = "DBFilesClient\\ItemPetFood.dbc";
@@ -28,11 +28,11 @@ const FAMILY_MIN_SCALE_LEVEL_FIELD: usize = 2;
 const FAMILY_MAX_SCALE_FIELD: usize = 3;
 const FAMILY_MAX_SCALE_LEVEL_FIELD: usize = 4;
 const FAMILY_FOOD_MASK_FIELD: usize = 0x1c / 4;
-/// The enUS name, the localized block's first slot.
+/// The name, the localized block's first column.
 const FAMILY_NAME_FIELD: usize = 0x20 / 4;
 /// `iconFile`, after the name block's locale flags.
 const FAMILY_ICON_FIELD: usize = 0x44 / 4;
-/// `ItemPetFood.dbc`'s enUS name.
+/// `ItemPetFood.dbc`'s name, the localized block's first column.
 const FOOD_NAME_FIELD: usize = 1;
 
 /// The reference tests `1 << (row - 1)` for each of the 8 food rows, so higher bits name nothing.
@@ -174,11 +174,13 @@ pub fn load_creature_families(chain: &mut Chain) -> Result<CreatureFamilies> {
         .read_file(CREATURE_FAMILY)
         .with_context(|| format!("reading {CREATURE_FAMILY}"))?;
     let rs = parse(&bytes, family_schema(), "CreatureFamily.dbc")?;
+    let locale = chain.locale();
     let mut by_id = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
         // A nameless row is dropped: `UnitCreatureFamily` answers a word or nil, never "".
-        let Some(name) = str_at(&rs, r, FAMILY_NAME_FIELD).filter(|n| !n.is_empty()) else {
+        let Some(name) = loc_str(&rs, r, FAMILY_NAME_FIELD, locale).filter(|n| !n.is_empty())
+        else {
             continue;
         };
         by_id.insert(
@@ -203,10 +205,11 @@ pub fn load_pet_food_names(chain: &mut Chain) -> Result<PetFoodNames> {
         .read_file(ITEM_PET_FOOD)
         .with_context(|| format!("reading {ITEM_PET_FOOD}"))?;
     let rs = parse(&bytes, food_schema(), "ItemPetFood.dbc")?;
+    let locale = chain.locale();
     let mut by_id = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
-        if let Some(name) = str_at(&rs, r, FOOD_NAME_FIELD) {
+        if let Some(name) = loc_str(&rs, r, FOOD_NAME_FIELD, locale) {
             by_id.insert(id, name);
         }
     }

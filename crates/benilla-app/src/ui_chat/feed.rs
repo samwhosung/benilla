@@ -24,9 +24,6 @@ const NAME_MAX_TRIES: u16 = 120;
 #[derive(Resource)]
 pub(crate) struct EmoteTexts(pub(crate) EmoteTextCatalog);
 
-/// The DBC string column: 0, enUS; the reference reads its locale slot `[0xc0e080]`.
-const LOCALE: usize = 0;
-
 /// Load `EmotesText.dbc` with `EmotesTextData.dbc`; before `AssetSet::Open` it loads nothing.
 pub(super) fn load_emote_texts(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let Some(assets) = assets else { return };
@@ -139,7 +136,7 @@ pub(super) fn text_emote_event(
 ) -> Option<ChatEvent> {
     Some(ChatEvent {
         kind: Some(ChatEventKind::TextEmote),
-        text: cat.compose(text_id, line, LOCALE)?,
+        text: cat.compose(text_id, line)?,
         sender: line.performer.to_string(),
         ..Default::default()
     })

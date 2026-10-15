@@ -21,7 +21,7 @@ use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 pub(crate) struct Subject {
     pub name: String,
     /// `UNIT_FIELD_BYTES_0` bytes 0 and 1, into `ChrRaces` and `ChrClasses`, which the reference
-    /// reads at the client's locale column; we read [`crate::ui_unit`]'s rows, the enUS column's.
+    /// reads at the client's locale column, as [`crate::ui_unit`]'s rows are read.
     pub race: u8,
     pub class: u8,
     /// `UNIT_FIELD_BYTES_0` byte 2; `$G` takes the first arm on 0, the second on anything else.

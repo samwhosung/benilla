@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{load_spell_icon_map, parse, str_at, u32_at};
+use crate::dbc::{load_spell_icon_map, loc_str, parse, str_at, u32_at};
 use crate::Chain;
 
 const TALENT: &str = "DBFilesClient\\Talent.dbc";
@@ -28,7 +28,7 @@ const COL_T_FLAGS: usize = 19;
 const COL_T_REQUIRED_SPELL: usize = 20;
 
 const TALENT_TAB_FIELDS: usize = 15;
-const COL_TT_NAME_ENUS: usize = 1;
+const COL_TT_NAME: usize = 1;
 const COL_TT_SPELL_ICON: usize = 10;
 const COL_TT_RACE_MASK: usize = 11;
 const COL_TT_CLASS_MASK: usize = 12;
@@ -136,7 +136,7 @@ fn talent_schema() -> Schema {
 fn talent_tab_schema() -> Schema {
     let mut s = Schema::new("TalentTab");
     for i in 0..TALENT_TAB_FIELDS {
-        if i == COL_TT_NAME_ENUS {
+        if i == COL_TT_NAME {
             s.add_field(SchemaField::new("NameEnUs", FieldType::String));
         } else if i == COL_TT_BACKGROUND {
             s.add_field(SchemaField::new("BackgroundFile", FieldType::String));
@@ -154,12 +154,13 @@ pub fn load_talent_catalog(chain: &mut Chain) -> Result<TalentCatalog> {
         .context("reading TalentTab.dbc")?;
     let tab_set = parse(&tab_bytes, talent_tab_schema(), "TalentTab.dbc")?;
     let icons = load_spell_icon_map(chain)?;
+    let locale = chain.locale();
     let mut tabs = Vec::new();
     for r in tab_set.records() {
         let Some(id) = u32_at(r, 0) else { continue };
         tabs.push(TalentTabInfo {
             id,
-            name: str_at(&tab_set, r, COL_TT_NAME_ENUS).unwrap_or_default(),
+            name: loc_str(&tab_set, r, COL_TT_NAME, locale).unwrap_or_default(),
             race_mask: u32_at(r, COL_TT_RACE_MASK).unwrap_or(0),
             class_mask: u32_at(r, COL_TT_CLASS_MASK).unwrap_or(0),
             background: str_at(&tab_set, r, COL_TT_BACKGROUND).unwrap_or_default(),

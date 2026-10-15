@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const SPELL_MECHANIC: &str = "DBFilesClient\\SpellMechanic.dbc";
 const SPELL_MECHANIC_FIELDS: usize = 10;
-const COL_NAME_ENUS: usize = 1;
+const COL_NAME: usize = 1;
 
 /// Mechanic id → name, lower-case in the data ("stunned") and left so, as the reference does.
 pub struct SpellMechanicCatalog {
@@ -37,7 +37,7 @@ impl SpellMechanicCatalog {
 fn schema() -> Schema {
     let mut s = Schema::new("SpellMechanic");
     for i in 0..SPELL_MECHANIC_FIELDS {
-        let ty = if i == COL_NAME_ENUS {
+        let ty = if i == COL_NAME {
             FieldType::String
         } else {
             FieldType::UInt32
@@ -53,10 +53,11 @@ pub fn load_spell_mechanic_catalog(chain: &mut Chain) -> Result<SpellMechanicCat
         .read_file(SPELL_MECHANIC)
         .with_context(|| format!("reading {SPELL_MECHANIC}"))?;
     let rs = parse(&bytes, schema(), "SpellMechanic.dbc")?;
+    let locale = chain.locale();
     let mut names = HashMap::new();
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
-        if let Some(name) = str_at(&rs, r, COL_NAME_ENUS) {
+        if let Some(name) = loc_str(&rs, r, COL_NAME, locale) {
             names.insert(id, name);
         }
     }

@@ -10,14 +10,14 @@ use crate::Chain;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, str_at, u32_at};
 
 const LOCK_TYPE: &str = "DBFilesClient\\LockType.dbc";
 /// The file's column count, which `benilla-dbc` checks against the header.
 const LOCK_TYPE_FIELDS: usize = 29;
 /// `CursorName`, the `[row+0x70]` that `0x5f3070` reads.
 const CURSOR_NAME_FIELD: usize = 28;
-/// The `Name` block's enUS column, the toast's `[row + locale*4 + 4]` at locale 0.
+/// The `Name` block's first column, the toast's `[row + locale*4 + 4]`.
 const NAME_FIELD: usize = 1;
 
 /// `LockType.Id` → `CursorName` for the three rows with one, plus every row's `Name`.
@@ -68,6 +68,7 @@ pub fn load_lock_type_catalog(chain: &mut Chain) -> Result<LockTypeCatalog> {
         .read_file(LOCK_TYPE)
         .with_context(|| format!("reading {LOCK_TYPE}"))?;
     let rs = parse(&bytes, schema(), "LockType.dbc")?;
+    let locale = chain.locale();
     let mut cursors = HashMap::new();
     let mut names = HashMap::new();
     for r in rs.records() {
@@ -75,7 +76,7 @@ pub fn load_lock_type_catalog(chain: &mut Chain) -> Result<LockTypeCatalog> {
         if let Some(name) = str_at(&rs, r, CURSOR_NAME_FIELD) {
             cursors.insert(id, name);
         }
-        if let Some(name) = str_at(&rs, r, NAME_FIELD) {
+        if let Some(name) = loc_str(&rs, r, NAME_FIELD, locale) {
             names.insert(id, name);
         }
     }

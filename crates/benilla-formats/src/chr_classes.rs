@@ -31,7 +31,7 @@ use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
 use crate::chain::Chain;
-use crate::dbc::{name_lang_at, parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, str_at, u32_at};
 
 const CHR_CLASSES: &str = "DBFilesClient\\ChrClasses.dbc";
 
@@ -151,6 +151,7 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
         .read_file(CHR_CLASSES)
         .with_context(|| format!("reading {CHR_CLASSES}"))?;
     let rs = parse(&bytes, schema(), "ChrClasses.dbc")?;
+    let locale = chain.locale();
     let mut by_id = HashMap::new();
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
@@ -159,7 +160,7 @@ pub fn load_chr_classes(chain: &mut Chain) -> Result<ChrClasses> {
             ChrClass {
                 damage_bonus_stat: u32_at(r, DAMAGE_BONUS_STAT_FIELD).unwrap_or(0),
                 pet_name_token: str_at(&rs, r, PET_NAME_TOKEN_FIELD),
-                name: name_lang_at(&rs, r, NAME_FIELD),
+                name: loc_str(&rs, r, NAME_FIELD, locale),
                 file: str_at(&rs, r, FILE_FIELD),
                 has_relic_slot: u32_at(r, RELIC_SLOT_FIELD).is_some_and(|v| v != 0),
                 spell_family: u32_at(r, SPELL_FAMILY_FIELD).unwrap_or(0),

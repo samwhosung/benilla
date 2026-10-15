@@ -3,7 +3,7 @@
 //!
 //! The binding (`0x49fcd0`) is a two-hop walk: the race's `ChrRaces` record (`[0xc0dee0]`) at
 //! `+0x20`, field 8, names a language, whose `Languages` record (`[0xc0db48]`) holds the name at
-//! `+4 + 4 * locale` (`[0xc0e080]`). Field 8 is the faction language, Common or Orcish, never the
+//! `+4 + 4 * locale` (`[0xc0e080]`), the chain's locale. Field 8 is the faction language, Common or Orcish, never the
 //! racial one: Darnassian and Gutterspeak are extra languages `GetLanguageByIndex` lists.
 
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, str_at, u32_at};
 use crate::Chain;
 
 const LANGUAGES: &str = "DBFilesClient\\Languages.dbc";
@@ -21,15 +21,15 @@ const LANGUAGE_WORDS: &str = "DBFilesClient\\LanguageWords.dbc";
 /// Locale columns in a 5875 `Name_lang` block.
 const LOCALES: usize = 8;
 
-/// Race id to its base language's name, per locale column.
+/// Race id to its base language's name, in the locale's column.
 #[derive(Debug, Default, Clone)]
-pub struct DefaultLanguages(HashMap<u32, [Option<String>; LOCALES]>);
+pub struct DefaultLanguages(HashMap<u32, Option<String>>);
 
 impl DefaultLanguages {
-    /// The race's default language name in `locale`'s column. `None` is the reference's answer at
-    /// three of its four failure edges, which push no Lua value at all, not `nil`.
-    pub fn name(&self, race: u32, locale: usize) -> Option<&str> {
-        self.0.get(&race)?.get(locale)?.as_deref()
+    /// The race's default language name. `None` is the reference's answer at three of its four
+    /// failure edges, which push no Lua value at all, not `nil`.
+    pub fn name(&self, race: u32) -> Option<&str> {
+        self.0.get(&race)?.as_deref()
     }
 
     pub fn len(&self) -> usize {
@@ -64,17 +64,16 @@ fn chr_races_schema() -> Schema {
 const CHR_RACES_BASE_LANGUAGE: usize = 8;
 
 /// `Languages.dbc` in row order, the order `GetNumLanguages` and `GetLanguageByIndex` count in
-/// (`0x49fb30`, `0x49fbe0`).
+/// (`0x49fb30`, `0x49fbe0`), each name in the locale's column.
 #[derive(Debug, Default, Clone)]
-pub struct Languages(Vec<(u32, [Option<String>; LOCALES])>);
+pub struct Languages(Vec<(u32, Option<String>)>);
 
 impl Languages {
-    /// `(id, name)` per row for `locale`. A row with no name there is skipped, where the binding
-    /// would push `""`.
-    pub fn names(&self, locale: usize) -> impl Iterator<Item = (u32, &str)> + '_ {
+    /// `(id, name)` per row. A row with no name is skipped, where the binding would push `""`.
+    pub fn names(&self) -> impl Iterator<Item = (u32, &str)> + '_ {
         self.0
             .iter()
-            .filter_map(move |(id, names)| Some((*id, names.get(locale)?.as_deref()?)))
+            .filter_map(|(id, name)| Some((*id, name.as_deref()?)))
     }
 
     pub fn len(&self) -> usize {
@@ -84,52 +83,38 @@ impl Languages {
         self.0.is_empty()
     }
 
-    /// A hand-built table for tests: `(id, enUS name)` rows.
+    /// A hand-built table for tests: `(id, name)` rows.
     pub fn from_rows(rows: &[(u32, &str)]) -> Self {
         Self(
             rows.iter()
-                .map(|(id, name)| {
-                    let mut names: [Option<String>; LOCALES] = Default::default();
-                    names[0] = Some((*name).to_string());
-                    (*id, names)
-                })
+                .map(|(id, name)| (*id, Some((*name).to_string())))
                 .collect(),
         )
     }
 }
 
-pub fn load_languages(chain: &mut Chain) -> Result<Languages> {
+/// `Languages.dbc`'s `(id, name)` rows, the name block at field 1 read at `locale`
+/// (`+4 + 4·locale`).
+fn language_rows(chain: &mut Chain) -> Result<Vec<(u32, Option<String>)>> {
     let bytes = chain
         .read_file(LANGUAGES)
         .with_context(|| format!("reading {LANGUAGES}"))?;
     let langs = parse(&bytes, languages_schema(), "Languages.dbc")?;
-    let mut rows = Vec::with_capacity(langs.records().len());
-    for r in langs.records() {
-        let Some(id) = u32_at(r, 0) else { continue };
-        let mut names: [Option<String>; LOCALES] = Default::default();
-        for (locale, slot) in names.iter_mut().enumerate() {
-            *slot = str_at(&langs, r, 1 + locale);
-        }
-        rows.push((id, names));
-    }
-    Ok(Languages(rows))
+    let locale = chain.locale();
+    Ok(langs
+        .records()
+        .iter()
+        .filter_map(|r| Some((u32_at(r, 0)?, loc_str(&langs, r, 1, locale))))
+        .collect())
+}
+
+pub fn load_languages(chain: &mut Chain) -> Result<Languages> {
+    language_rows(chain).map(Languages)
 }
 
 /// Load and join both tables into the race-to-language-name map.
 pub fn load_default_languages(chain: &mut Chain) -> Result<DefaultLanguages> {
-    let lang_bytes = chain
-        .read_file(LANGUAGES)
-        .with_context(|| format!("reading {LANGUAGES}"))?;
-    let langs = parse(&lang_bytes, languages_schema(), "Languages.dbc")?;
-    let mut by_id: HashMap<u32, [Option<String>; LOCALES]> = HashMap::new();
-    for r in langs.records() {
-        let Some(id) = u32_at(r, 0) else { continue };
-        let mut names: [Option<String>; LOCALES] = Default::default();
-        for (locale, slot) in names.iter_mut().enumerate() {
-            *slot = str_at(&langs, r, 1 + locale);
-        }
-        by_id.insert(id, names);
-    }
+    let by_id: HashMap<u32, Option<String>> = language_rows(chain)?.into_iter().collect();
 
     let race_bytes = chain
         .read_file(CHR_RACES)
@@ -140,8 +125,8 @@ pub fn load_default_languages(chain: &mut Chain) -> Result<DefaultLanguages> {
         let (Some(race), Some(lang)) = (u32_at(r, 0), u32_at(r, CHR_RACES_BASE_LANGUAGE)) else {
             continue;
         };
-        if let Some(names) = by_id.get(&lang) {
-            out.insert(race, names.clone());
+        if let Some(name) = by_id.get(&lang) {
+            out.insert(race, name.clone());
         }
     }
     Ok(DefaultLanguages(out))
@@ -268,15 +253,13 @@ mod tests {
         assert_eq!(langs.len(), 9, "one entry per ChrRaces row");
         // Alliance speaks Common, Horde Orcish; the racial language would give Darnassian.
         for race in [1, 3, 4, 7] {
-            assert_eq!(langs.name(race, 0), Some("Common"), "race {race}");
+            assert_eq!(langs.name(race), Some("Common"), "race {race}");
         }
         for race in [2, 5, 6, 8] {
-            assert_eq!(langs.name(race, 0), Some("Orcish"), "race {race}");
+            assert_eq!(langs.name(race), Some("Orcish"), "race {race}");
         }
         // No such race: the reference's no-record edge.
-        assert_eq!(langs.name(99, 0), None);
-        // An enUS install fills only column 0; another is empty, not a panic.
-        assert_eq!(langs.name(1, 5), None);
+        assert_eq!(langs.name(99), None);
     }
 
     #[test]

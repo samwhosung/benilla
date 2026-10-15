@@ -45,7 +45,7 @@ use crate::Chain;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{f32_at, i32_at, parse, str_at, u32_at};
+use crate::dbc::{f32_at, i32_at, loc_str, parse, u32_at};
 
 const SPELL: &str = "DBFilesClient\\Spell.dbc";
 
@@ -156,10 +156,10 @@ const COL_ACTIVE_ICON_ID: usize = 118;
 /// Stealth is -1.
 const COL_STANCE_BAR_ORDER: usize = 166;
 const COL_VISUAL_ID: usize = 115;
-const COL_NAME_ENUS: usize = 120;
-const COL_NAME_SUBTEXT_ENUS: usize = 129;
-const COL_DESCRIPTION_ENUS: usize = 138;
-const COL_AURA_DESCRIPTION_ENUS: usize = 147;
+const COL_NAME: usize = 120;
+const COL_NAME_SUBTEXT: usize = 129;
+const COL_DESCRIPTION: usize = 138;
+const COL_AURA_DESCRIPTION: usize = 147;
 
 /// `DurationIndex` (`+0x78`): `Spell_C::GetSpellDuration` (`0x6ea000`) looks it up at `0xc0d828`.
 const COL_DURATION_INDEX: usize = 30;
@@ -367,18 +367,18 @@ impl SpellCatalog {
     }
 }
 
-/// 173 fields, `u32` but for `Speed`, the four float effect arrays and the four enUS string heads;
+/// 173 fields, `u32` but for `Speed`, the four float effect arrays and the four string blocks' first columns;
 /// the signed columns stay `u32`, as [`i32_at`] reads the same bits.
 fn spell_schema() -> Schema {
     let mut s = Schema::new("Spell");
     for i in 0..SPELL_FIELDS {
-        if i == COL_NAME_ENUS {
+        if i == COL_NAME {
             s.add_field(SchemaField::new("NameEnUs", FieldType::String));
-        } else if i == COL_NAME_SUBTEXT_ENUS {
+        } else if i == COL_NAME_SUBTEXT {
             s.add_field(SchemaField::new("NameSubtextEnUs", FieldType::String));
-        } else if i == COL_DESCRIPTION_ENUS {
+        } else if i == COL_DESCRIPTION {
             s.add_field(SchemaField::new("DescriptionEnUs", FieldType::String));
-        } else if i == COL_AURA_DESCRIPTION_ENUS {
+        } else if i == COL_AURA_DESCRIPTION {
             s.add_field(SchemaField::new("AuraDescriptionEnUs", FieldType::String));
         } else if i == COL_SPEED {
             s.add_field(SchemaField::new("Speed", FieldType::Float32));
@@ -448,6 +448,7 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
 
     let spell_bytes = chain.read_file(SPELL).context("reading Spell.dbc")?;
     let spells_set = parse(&spell_bytes, spell_schema(), "Spell.dbc")?;
+    let locale = chain.locale();
     let mut spells: HashMap<u32, SpellDisplay> = HashMap::new();
     let mut learned_spell: HashMap<u32, u32> = HashMap::new();
     let mut learn_effects: HashMap<u32, Vec<LearnEffect>> = HashMap::new();
@@ -493,8 +494,8 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 declared_language.insert(id, lang as u32);
             }
         }
-        let name = str_at(&spells_set, r, COL_NAME_ENUS).unwrap_or_default();
-        let rank = str_at(&spells_set, r, COL_NAME_SUBTEXT_ENUS);
+        let name = loc_str(&spells_set, r, COL_NAME, locale).unwrap_or_default();
+        let rank = loc_str(&spells_set, r, COL_NAME_SUBTEXT, locale);
         let icon = u32_at(r, COL_ICON_ID)
             .filter(|&i| i != 0)
             .and_then(|i| icons.get(&i).cloned());
@@ -598,8 +599,8 @@ pub fn load_spell_catalog(chain: &mut Chain) -> Result<SpellCatalog> {
                 active_icon: u32_at(r, COL_ACTIVE_ICON_ID)
                     .filter(|&i| i != 0)
                     .and_then(|i| icons.get(&i).cloned()),
-                description: str_at(&spells_set, r, COL_DESCRIPTION_ENUS),
-                aura_description: str_at(&spells_set, r, COL_AURA_DESCRIPTION_ENUS),
+                description: loc_str(&spells_set, r, COL_DESCRIPTION, locale),
+                aura_description: loc_str(&spells_set, r, COL_AURA_DESCRIPTION, locale),
                 duration_index: u32_at(r, COL_DURATION_INDEX).unwrap_or(0),
                 casting_time_index: u32_at(r, COL_CASTING_TIME_INDEX).unwrap_or(0),
                 proc_flags: u32_at(r, COL_PROC_FLAGS).unwrap_or(0),

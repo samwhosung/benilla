@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const CFG_CATEGORIES: &str = "DBFilesClient\\Cfg_Categories.dbc";
@@ -17,7 +17,7 @@ const CFG_CATEGORIES: &str = "DBFilesClient\\Cfg_Categories.dbc";
 pub struct RealmCategory {
     /// Column 0, compared for equality with a realm's category byte (`0x46e60b`).
     pub id: u32,
-    /// The enUS `Name_Lang` slot, the column the reference reads on an enUS or enGB client.
+    /// The `Name_Lang` block's column at the client's locale (`0x46f238`).
     pub name: String,
 }
 
@@ -41,6 +41,7 @@ pub fn load_realm_categories(chain: &mut Chain, region: u32) -> Result<Vec<Realm
         .read_file(CFG_CATEGORIES)
         .with_context(|| format!("reading {CFG_CATEGORIES}"))?;
     let rs = parse(&bytes, cfg_categories_schema(), "Cfg_Categories")?;
+    let locale = chain.locale();
     Ok(rs
         .records()
         .iter()
@@ -49,7 +50,7 @@ pub fn load_realm_categories(chain: &mut Chain, region: u32) -> Result<Vec<Realm
             Some(RealmCategory {
                 id: u32_at(r, 0)?,
                 // An empty name is pushed as the empty string; only a missing row reads "UNKNOWN".
-                name: str_at(&rs, r, 2).unwrap_or_default(),
+                name: loc_str(&rs, r, 2, locale).unwrap_or_default(),
             })
         })
         .collect())

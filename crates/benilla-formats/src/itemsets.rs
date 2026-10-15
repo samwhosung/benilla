@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const ITEM_SET: &str = "DBFilesClient\\ItemSet.dbc";
@@ -70,9 +70,10 @@ pub fn load_item_sets(chain: &mut Chain) -> Result<ItemSetCatalog> {
         .read_file(ITEM_SET)
         .with_context(|| format!("reading {ITEM_SET}"))?;
     let rs = parse(&bytes, item_set_schema(), "ItemSet")?;
+    let locale = chain.locale();
     let mut sets = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
-        let (Some(id), Some(name)) = (u32_at(r, 0), str_at(&rs, r, 1)) else {
+        let (Some(id), Some(name)) = (u32_at(r, 0), loc_str(&rs, r, 1, locale)) else {
             continue;
         };
         let at = |i| u32_at(r, i).unwrap_or(0);

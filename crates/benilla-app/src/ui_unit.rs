@@ -205,7 +205,7 @@ pub(crate) fn known_languages(
         }
     }
     languages
-        .names(0)
+        .names()
         .filter(|(id, _)| {
             declared.get(id).is_some_and(|spells| {
                 spells.iter().any(|&spell| {
@@ -299,11 +299,11 @@ pub(crate) fn seed_default_language(world: &mut World, script: &mut UiScript) {
     let Some(row) = roster.pending_row() else {
         return;
     };
-    script.set_default_language(langs.0.name(u32::from(row.race), 0).map(str::to_string));
+    script.set_default_language(langs.0.name(u32::from(row.race)).map(str::to_string));
 }
 
 /// Seed a new VM with `Languages.dbc`, the static table `SendChatMessage` resolves its language
-/// name against (`0x49f8a0`); locale column 0, as [`feed_default_language`] reads.
+/// name against (`0x49f8a0`), in the install's locale column, as [`feed_default_language`] reads.
 pub(crate) fn seed_language_table(world: &World, script: &mut UiScript) {
     let Some(langs) = world.get_resource::<LanguagesRes>() else {
         return;
@@ -311,14 +311,14 @@ pub(crate) fn seed_language_table(world: &World, script: &mut UiScript) {
     script.set_language_table(
         langs
             .0
-            .names(0)
+            .names()
             .map(|(id, name)| (id, name.to_string()))
             .collect(),
     );
 }
 
 /// Push `GetDefaultLanguage()`'s string on a change of race; `None` is the reference's zero value.
-/// Locale column 0 (the client's slot is `[0xc0e080]`): only enUS is populated in the 1.12 data.
+/// The name is the install's locale column (`[0xc0e080]`).
 fn feed_default_language(
     script: Option<NonSendMut<UiScript>>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
@@ -334,7 +334,7 @@ fn feed_default_language(
         .next()
         .and_then(|store| store.0.unit_race())
         .zip(langs.as_ref())
-        .and_then(|(race, langs)| langs.0.name(u32::from(race), 0))
+        .and_then(|(race, langs)| langs.0.name(u32::from(race)))
         .map(str::to_string);
     if pushed.as_ref() != Some(&name) {
         script.set_default_language(name.clone());

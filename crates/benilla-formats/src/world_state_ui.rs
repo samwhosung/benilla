@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, str_at, u32_at};
 use crate::Chain;
 
 const WORLD_STATE_UI: &str = "DBFilesClient\\WorldStateUI.dbc";
@@ -78,7 +78,7 @@ fn schema() -> Schema {
     }
     s.add_field(SchemaField::new("Icon", FieldType::String));
     let loc = |s: &mut Schema, name: &str| {
-        s.add_field(SchemaField::new(name, FieldType::String)); // enUS (locale 0)
+        s.add_field(SchemaField::new(name, FieldType::String)); // locale 0
         s.add_field(SchemaField::new_array(
             format!("{name}OtherLocales"),
             FieldType::String,
@@ -109,6 +109,7 @@ pub fn load_world_state_ui_catalog(chain: &mut Chain) -> Result<WorldStateUiCata
         .read_file(WORLD_STATE_UI)
         .context("reading WorldStateUI.dbc")?;
     let rs = parse(&bytes, schema(), "WorldStateUI")?;
+    let locale = chain.locale();
     let mut rows = Vec::with_capacity(rs.records().len());
     for r in rs.records() {
         let Some(id) = u32_at(r, 0) else { continue };
@@ -118,12 +119,12 @@ pub fn load_world_state_ui_catalog(chain: &mut Chain) -> Result<WorldStateUiCata
                 map_id: u32_at(r, 1).unwrap_or(0),
                 area_id: u32_at(r, 2).unwrap_or(0),
                 icon: str_at(&rs, r, 3).unwrap_or_default(),
-                text: str_at(&rs, r, 4).unwrap_or_default(),
-                tooltip: str_at(&rs, r, 13).unwrap_or_default(),
+                text: loc_str(&rs, r, 4, locale).unwrap_or_default(),
+                tooltip: loc_str(&rs, r, 13, locale).unwrap_or_default(),
                 state_variable: u32_at(r, 23).unwrap_or(0),
                 ui_type: u32_at(r, 24).unwrap_or(0),
                 dynamic_icon: str_at(&rs, r, 25).unwrap_or_default(),
-                dynamic_tooltip: str_at(&rs, r, 26).unwrap_or_default(),
+                dynamic_tooltip: loc_str(&rs, r, 26, locale).unwrap_or_default(),
                 extended_ui: str_at(&rs, r, 35).unwrap_or_default(),
                 extended_ui_state: [
                     u32_at(r, 36).unwrap_or(0),

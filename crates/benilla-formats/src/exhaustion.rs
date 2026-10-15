@@ -6,7 +6,7 @@
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{f32_at, parse, str_at, u32_at};
+use crate::dbc::{f32_at, loc_str, parse, u32_at};
 use crate::Chain;
 
 const EXHAUSTION: &str = "DBFilesClient\\Exhaustion.dbc";
@@ -15,7 +15,7 @@ const EXHAUSTION: &str = "DBFilesClient\\Exhaustion.dbc";
 pub struct ExhaustionRow {
     /// Also the wire's rest-state byte, which the client indexes by.
     pub id: u32,
-    /// The state name, from the enUS slot.
+    /// The state name, from the locale's column.
     pub name: String,
     /// The XP multiplier.
     pub factor: f32,
@@ -42,12 +42,13 @@ pub fn load_exhaustion(chain: &mut Chain) -> Result<Vec<ExhaustionRow>> {
         .read_file(EXHAUSTION)
         .with_context(|| format!("reading {EXHAUSTION}"))?;
     let rs = parse(&bytes, exhaustion_schema(), "Exhaustion")?;
+    let locale = chain.locale();
     let mut rows = Vec::with_capacity(rs.records().len());
     for r in rs.records() {
         let (Some(id), Some(factor)) = (u32_at(r, 0), f32_at(r, 2)) else {
             continue;
         };
-        let name = str_at(&rs, r, 5).unwrap_or_default();
+        let name = loc_str(&rs, r, 5, locale).unwrap_or_default();
         rows.push(ExhaustionRow { id, name, factor });
     }
     Ok(rows)

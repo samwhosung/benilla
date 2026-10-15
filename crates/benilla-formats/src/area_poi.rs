@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{f32_at, parse, str_at, u32_at};
+use crate::dbc::{f32_at, loc_str, parse, u32_at};
 use crate::Chain;
 
 const AREA_POI: &str = "DBFilesClient\\AreaPOI.dbc";
@@ -30,9 +30,9 @@ pub struct AreaPoi {
     pub flags: u32,
     /// `AreaTable.dbc` id, or `u32::MAX` (raw `-1`) for a continent-wide POI.
     pub area_id: u32,
-    /// enUS display name (locale slot 0).
+    /// The display name, in the locale's column.
     pub name: String,
-    /// enUS live status text (`"In Conflict"`), empty on most rows.
+    /// The live status text in the locale's column (`"In Conflict"`), empty on most rows.
     pub description: String,
     /// The `WorldState` id driving the live label and icon (a battleground node's capture
     /// state), `0` for none.
@@ -76,7 +76,7 @@ fn schema() -> Schema {
         s.add_field(SchemaField::new(name, FieldType::UInt32));
     }
     for (name_col, flags_col) in [("Name", "NameFlags"), ("Description", "DescriptionFlags")] {
-        s.add_field(SchemaField::new(name_col, FieldType::String)); // enUS (locale 0)
+        s.add_field(SchemaField::new(name_col, FieldType::String)); // locale 0
         s.add_field(SchemaField::new_array(
             format!("{name_col}OtherLocales"),
             FieldType::String,
@@ -92,6 +92,7 @@ fn schema() -> Schema {
 pub fn load_area_poi_catalog(chain: &mut Chain) -> Result<AreaPoiCatalog> {
     let bytes = chain.read_file(AREA_POI).context("reading AreaPOI.dbc")?;
     let rs = parse(&bytes, schema(), "AreaPOI")?;
+    let locale = chain.locale();
     let mut rows = Vec::with_capacity(rs.records().len());
     let mut by_id = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
@@ -107,8 +108,8 @@ pub fn load_area_poi_catalog(chain: &mut Chain) -> Result<AreaPoiCatalog> {
             continent_id: u32_at(r, 7).unwrap_or(0),
             flags: u32_at(r, 8).unwrap_or(0),
             area_id: u32_at(r, 9).unwrap_or(0),
-            name: str_at(&rs, r, 10).unwrap_or_default(),
-            description: str_at(&rs, r, 19).unwrap_or_default(),
+            name: loc_str(&rs, r, 10, locale).unwrap_or_default(),
+            description: loc_str(&rs, r, 19, locale).unwrap_or_default(),
             world_state_id: u32_at(r, 28).unwrap_or(0),
         };
         by_id.insert(id, rows.len());
@@ -145,7 +146,7 @@ mod tests {
                 worldstate_nonzero += 1;
             }
         }
-        assert_eq!(nonempty_names, 339, "every row has a readable enUS name");
+        assert_eq!(nonempty_names, 339, "every row has a readable name");
         assert!(
             worldstate_nonzero >= 100,
             "a meaningful share of rows carry a live WorldStateID: {worldstate_nonzero}"

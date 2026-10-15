@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use benilla_dbc::{FieldType, Schema, SchemaField};
 
-use crate::dbc::{parse, str_at, u32_at};
+use crate::dbc::{loc_str, parse, u32_at};
 use crate::Chain;
 
 const AUCTION_HOUSE: &str = "DBFilesClient\\AuctionHouse.dbc";
@@ -74,6 +74,7 @@ pub fn load_auction_houses(chain: &mut Chain) -> Result<AuctionHouseCatalog> {
         .read_file(AUCTION_HOUSE)
         .with_context(|| format!("reading {AUCTION_HOUSE}"))?;
     let rs = parse(&bytes, auction_house_schema(), "AuctionHouse")?;
+    let locale = chain.locale();
     let mut houses = HashMap::with_capacity(rs.records().len());
     for r in rs.records() {
         let (Some(id), Some(faction), Some(deposit_percent), Some(cut_percent)) =
@@ -87,7 +88,7 @@ pub fn load_auction_houses(chain: &mut Chain) -> Result<AuctionHouseCatalog> {
                 faction,
                 deposit_percent,
                 cut_percent,
-                name: str_at(&rs, r, 4).unwrap_or_default(),
+                name: loc_str(&rs, r, 4, locale).unwrap_or_default(),
             },
         );
     }
