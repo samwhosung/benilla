@@ -1481,6 +1481,107 @@ mod tests {
         );
     }
 
+    /// A create block for a live item runs the watchers over what it moved, never the create's
+    /// record set-up (`0x465d79`, the object already shown).
+    #[test]
+    fn a_re_create_of_a_live_item_runs_its_watchers() {
+        use crate::item_watch::ItemNotice;
+        use benilla_protocol::field::FIELD_ITEM_STACK_COUNT;
+        use benilla_protocol::messages::ObjectType;
+        const POTIONS: u64 = 0x4000_0000_0000_0042;
+        let mut app = watch_world(&[(POTIONS, 118, false)]);
+        let world = app.world_mut();
+        let SessionEvent::ItemCreate { fields, .. } = watched_item(POTIONS, 118, false) else {
+            unreachable!()
+        };
+        let mut fields = fields;
+        fields.merge(ObjectFields::from_pairs(&[(FIELD_ITEM_STACK_COUNT, 4)]));
+        let again = SessionEvent::ItemCreate {
+            guid: POTIONS,
+            container: false,
+            fields: fields.into_created(ObjectType::Item),
+        };
+        super::super::handlers::dispatch(world, vec![again]);
+        assert_eq!(
+            drain_notices(world),
+            [ItemNotice::StackCount {
+                guid: POTIONS,
+                entry: 118
+            }]
+        );
+    }
+
+    /// The out-of-range list releases our item through the same deactivate as a destroy
+    /// (`0x464920`); our own player in the list is skipped.
+    #[test]
+    fn an_item_of_ours_out_of_range_is_destroyed_for_the_watchers() {
+        use crate::item_watch::ItemNotice;
+        const POTIONS: u64 = 0x4000_0000_0000_0042;
+        let mut app = watch_world(&[(POTIONS, 118, false)]);
+        let world = app.world_mut();
+        super::super::handlers::dispatch(
+            world,
+            vec![SessionEvent::ObjectsRemoved(vec![WATCH_ME, POTIONS])],
+        );
+        assert_eq!(
+            drain_notices(world),
+            [ItemNotice::Destroyed {
+                guid: POTIONS,
+                entry: 118
+            }]
+        );
+    }
+
+    /// A bag seated in one of our bag seats has its own seats watched (`0x4f90d0`); the same bag
+    /// before it is seated, or another in the backpack, has none.
+    #[test]
+    fn a_seated_bags_seats_run_their_watcher_through_the_handlers() {
+        use crate::item_watch::ItemNotice;
+        use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_PLAYER_INV_SLOT_HEAD};
+        const POTIONS: u64 = 0x4000_0000_0000_0042;
+        const BAG: u64 = 0x4000_0000_0000_0050;
+        let mut app = watch_world(&[(POTIONS, 118, false), (BAG, 4496, true)]);
+        let world = app.world_mut();
+        let seat = |j: u16, g: u64| SessionEvent::ObjectValues {
+            guid: BAG,
+            fields: ObjectFields::from_pairs(&[
+                (FIELD_CONTAINER_SLOT_1 + 2 * j, g as u32),
+                (FIELD_CONTAINER_SLOT_1 + 2 * j + 1, (g >> 32) as u32),
+            ]),
+        };
+        let bag_seat = FIELD_PLAYER_INV_SLOT_HEAD + 2 * 19;
+        super::super::handlers::dispatch(
+            world,
+            vec![
+                seat(1, POTIONS),
+                SessionEvent::ObjectValues {
+                    guid: WATCH_ME,
+                    fields: ObjectFields::from_pairs(&[
+                        (bag_seat, BAG as u32),
+                        (bag_seat + 1, (BAG >> 32) as u32),
+                    ]),
+                },
+                seat(1, 0),
+                seat(2, POTIONS),
+            ],
+        );
+        assert_eq!(
+            drain_notices(world),
+            [
+                ItemNotice::Bag { entries: vec![118] },
+                ItemNotice::Seat {
+                    old: Some(118),
+                    new: None
+                },
+                ItemNotice::Seat {
+                    old: None,
+                    new: Some(118)
+                },
+            ],
+            "the unseated bag's change ran nothing; the seated one's two did"
+        );
+    }
+
     /// `0x1EB` for an unheld item waits on the active player and replays at its create; `0x1EA`
     /// for one is dropped; the destroy takes the cells.
     #[test]
