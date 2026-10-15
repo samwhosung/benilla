@@ -129,30 +129,76 @@ fn read_loose(index: &benilla_formats::LooseIndex, req: &str) -> Option<Option<V
     Some(file.read())
 }
 
-/// The player's patch chain, opened once per process and shared by every VM. Process-local, not
-/// the one [`benilla_assets`] holds: tests, the addon harness and a bare `UiScript` load the
-/// interface with no Bevy world to ask.
-fn chain() -> Option<&'static Chain> {
+/// What opening the chain has to say, kept until something can log it.
+enum Notice {
+    Warn(String),
+    Error(String),
+}
+
+/// The chain `data` names, and the one thing to say if there is none.
+fn open(data: Option<std::path::PathBuf>) -> (Option<Chain>, Option<Notice>) {
+    let Some(data) = data else {
+        return (
+            None,
+            Some(Notice::Warn(
+                "ui_script: no client data — the stock interface, `FrameXML.toc` and every \
+                 file it lists, is absent off the player's install, so its windows do not \
+                 exist and addons that call their globals will raise"
+                    .to_string(),
+            )),
+        );
+    };
+    match benilla_formats::open_chain(&data) {
+        Ok(chain) => (Some(chain), None),
+        Err(e) => (
+            None,
+            Some(Notice::Error(format!(
+                "ui_script: opening the patch chain to source the reference UI: {e:#}"
+            ))),
+        ),
+    }
+}
+
+/// The notice of the open, until [`chain`] logs it.
+static NOTICE: std::sync::Mutex<Option<Notice>> = std::sync::Mutex::new(None);
+
+/// The patch chain, opened once per process, logging nothing: the window is born before the log
+/// plugin exists ([`boot_client_locale`]), where a message would be dropped.
+fn chain_quiet() -> Option<&'static Chain> {
     static CHAIN: OnceLock<Option<Chain>> = OnceLock::new();
     CHAIN
         .get_or_init(|| {
-            let Some(data) = benilla_formats::wow_data() else {
-                warn!(
-                    "ui_script: no client data — the stock interface, `FrameXML.toc` and every \
-                     file it lists, is absent off the player's install, so its windows do not \
-                     exist and addons that call their globals will raise"
-                );
-                return None;
-            };
-            match benilla_formats::open_chain(&data) {
-                Ok(chain) => Some(chain),
-                Err(e) => {
-                    error!("ui_script: opening the patch chain to source the reference UI: {e:#}");
-                    None
-                }
-            }
+            let (chain, notice) = open(benilla_formats::wow_data());
+            *NOTICE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = notice;
+            chain
         })
         .as_ref()
+}
+
+/// The player's patch chain, opened once per process and shared by every VM. Process-local, not
+/// the one [`benilla_assets`] holds: tests, the addon harness and a bare `UiScript` load the
+/// interface with no Bevy world to ask. The open's one message is logged here, the first time
+/// anything past start-up asks.
+fn chain() -> Option<&'static Chain> {
+    let chain = chain_quiet();
+    let notice = NOTICE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    match notice {
+        Some(Notice::Warn(m)) => warn!("{m}"),
+        Some(Notice::Error(m)) => error!("{m}"),
+        None => {}
+    }
+    chain
+}
+
+/// [`client_locale`] for the one caller that runs before the log plugin: the primary window's
+/// birth. It opens the same chain, but whatever the open has to say waits for [`chain`].
+pub(crate) fn boot_client_locale() -> benilla_formats::Locale {
+    chain_quiet().map(Chain::locale).unwrap_or_default()
 }
 
 /// The client's locale, from the player's `Wow.ini` as start-up reads it once (`0x402350`): the
@@ -219,6 +265,35 @@ fn is_word(c: char) -> bool {
 mod tests {
     use super::super::fire_scan;
     use benilla_ui::script::UiScript;
+
+    /// The open's message is returned, not logged, so a caller before the log plugin loses
+    /// nothing: no install is a warning naming the missing interface, a folder with no archives
+    /// an error carrying the cause, and a good open says nothing.
+    #[test]
+    fn the_open_returns_its_message_for_the_first_logging_caller() {
+        let (chain, notice) = super::open(None);
+        assert!(chain.is_none());
+        assert!(
+            matches!(&notice, Some(super::Notice::Warn(m)) if m.contains("no client data")),
+            "no install"
+        );
+        let empty = std::env::temp_dir().join(format!("benilla-empty-data-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).unwrap();
+        let (chain, notice) = super::open(Some(empty.clone()));
+        std::fs::remove_dir_all(&empty).ok();
+        assert!(chain.is_none());
+        assert!(
+            matches!(&notice, Some(super::Notice::Error(m)) if m.contains("opening the patch chain")),
+            "no archives"
+        );
+        if let Some(data) = benilla_formats::wow_data() {
+            let (chain, notice) = super::open(Some(data));
+            assert!(
+                chain.is_some() && notice.is_none(),
+                "an install opens silently"
+            );
+        }
+    }
 
     /// An interface file loose in the install answers by its path below the install folder or
     /// `Data\`, whatever its case and separators, ahead of the chain; a bare name finds a file at
