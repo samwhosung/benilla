@@ -604,6 +604,9 @@ fn slot_view(
         .and_then(|d| d.icon.clone());
     Some(InvSlotView {
         bonding: t.map_or(0, |t| t.bonding),
+        // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
+        occupied_seats: is_container
+            .then(|| content_guids.iter().filter(|&&g| g != 0).count() as u32),
         use_spell: t.and_then(|t| t.use_spell).map_or(0, |u| u.spell_id),
         use_fork: t.map_or(Default::default(), |t| {
             crate::ui_items::dispatch_fork(t, flags, obj.item_text_id().unwrap_or(0))
@@ -696,6 +699,7 @@ fn inventory_slots(
             // Ammo has no item object, only its template, so there is no bind to read.
             already_bound: false,
             bonding: 0,
+            occupied_seats: None,
             use_spell: 0,
             use_fork: Default::default(),
             item_id: ammo_id,
@@ -1064,6 +1068,54 @@ fn weapon_enchant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A worn bag's view says how many of its seats are filled, which `ClickTradeButton` reads
+    /// to refuse it (`0x4bff50`, then `0x4bffae` for an empty one in a bag slot).
+    #[test]
+    fn a_worn_bag_view_counts_its_filled_seats() {
+        use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_OBJECT_ENTRY};
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut objs = crate::ui_items::TestObjects::new();
+        // `OBJECT_FIELD_TYPE` container, `CONTAINER_FIELD_NUM_SLOTS` 4, seat 2 filled.
+        objs.spawn_container(
+            0xB1,
+            ObjectFields::from_pairs(&[
+                (2, 0x7),
+                (FIELD_OBJECT_ENTRY, 4496),
+                (48, 4),
+                (FIELD_CONTAINER_SLOT_1 + 4, 0xC1),
+            ]),
+        );
+        objs.spawn_container(
+            0xB2,
+            ObjectFields::from_pairs(&[(2, 0x7), (FIELD_OBJECT_ENTRY, 4496), (48, 4)]),
+        );
+        objs.spawn(
+            0xB3,
+            ObjectFields::from_pairs(&[(2, 0x3), (FIELD_OBJECT_ENTRY, 2589)]),
+        );
+        let items = Items::default();
+        let names = crate::names::NameCache::default();
+        let mut seats = |guid: u64| {
+            slot_view(
+                &objs.get(),
+                &items,
+                None,
+                crate::items::RollCatalogs::NONE,
+                &commands,
+                &names,
+                None,
+                false,
+                guid,
+            )
+            .expect("a view")
+            .occupied_seats
+        };
+        assert_eq!(seats(0xB1), Some(1));
+        assert_eq!(seats(0xB2), Some(0));
+        assert_eq!(seats(0xB3), None);
+    }
     use benilla_protocol::messages::ObjectFields;
     use bevy::ecs::system::RunSystemOnce;
 

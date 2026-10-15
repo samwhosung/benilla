@@ -344,6 +344,7 @@ mod tests {
         slots[1] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            occupied_seats: None,
             bonding: 0,
             use_spell: 0,
             use_fork: Default::default(),
@@ -366,6 +367,7 @@ mod tests {
         slots[11] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            occupied_seats: None,
             bonding: 0,
             use_spell: 0,
             use_fork: Default::default(),
@@ -388,6 +390,7 @@ mod tests {
         slots[19] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            occupied_seats: None,
             bonding: 0,
             use_spell: 0,
             use_fork: Default::default(),
@@ -420,6 +423,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                occupied_seats: None,
                 bonding: 0,
                 use_spell: 0,
                 bar_placeable: true,
@@ -576,6 +580,7 @@ mod tests {
         slots[20] = Some(InvSlotView {
             duration_ms: None,
             already_bound: false,
+            occupied_seats: None,
             bonding: 0,
             use_spell: 0,
             use_fork: Default::default(),
@@ -620,6 +625,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                occupied_seats: None,
                 bonding: 0,
                 use_spell: 0,
                 bar_placeable: true,

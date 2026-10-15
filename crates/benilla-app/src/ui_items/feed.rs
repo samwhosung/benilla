@@ -703,6 +703,13 @@ fn resolve_slot(
             rolls.enchants,
         ),
     );
+    // A container's filled seats, which `ClickTradeButton` counts (`0x4bff50`).
+    let occupied_seats = fields.is_container().then(|| {
+        let n = fields.container_num_slots().unwrap_or(0).min(36) as u8;
+        (0..n)
+            .filter(|&j| fields.container_slot(j).is_some_and(|g| g != 0))
+            .count() as u32
+    });
     // The guid rides every shape, so the slot's lock reads from its first push.
     if entry == 0 {
         return Some(ContainerSlot {
@@ -722,6 +729,7 @@ fn resolve_slot(
             creator,
             flags,
             already_bound,
+            occupied_seats,
             enchants: enchant_lines,
             duration_ms,
             ..Default::default()
@@ -767,6 +775,7 @@ fn resolve_slot(
         creator,
         flags,
         already_bound,
+        occupied_seats,
         enchants: enchant_lines,
         duration_ms,
         equip_slots: find_equip_slot(t.inventory_type, has_relic_slot),
@@ -1527,6 +1536,69 @@ mod tests {
         // auto-equip's unlock reads the other (`0x5e1704`).
         assert_eq!((sword.guid, sword.item_class), (0xA1, Some(sword_class)));
         assert_eq!((pending.guid, pending.item_class), (0xA3, None));
+    }
+
+    /// A bag slot holding a container says how many of its seats are filled, which
+    /// `ClickTradeButton` refuses a bag on (`0x4bff50`); any other item says nothing.
+    #[test]
+    fn a_resolved_bag_counts_its_filled_seats() {
+        use crate::items::{test_template, Items, RollCatalogs};
+        use crate::names::NameCache;
+        use crate::net::NetCommands;
+        use crate::ui_items::TestObjects;
+        use benilla_protocol::field::{FIELD_CONTAINER_SLOT_1, FIELD_OBJECT_ENTRY};
+        use benilla_protocol::ObjectFields;
+
+        // `OBJECT_FIELD_TYPE` item or container, `CONTAINER_FIELD_NUM_SLOTS`.
+        const TYPE: u16 = 2;
+        const NUM_SLOTS: u16 = 48;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut objs = TestObjects::new();
+        let seat = |j: u16, g: u64| {
+            [
+                (FIELD_CONTAINER_SLOT_1 + 2 * j, g as u32),
+                (FIELD_CONTAINER_SLOT_1 + 2 * j + 1, 0),
+            ]
+        };
+        let bag = |contents: &[(u16, u64)]| {
+            let mut pairs = vec![(TYPE, 0x7), (FIELD_OBJECT_ENTRY, 4496), (NUM_SLOTS, 6)];
+            pairs.extend(contents.iter().flat_map(|&(j, g)| seat(j, g)));
+            ObjectFields::from_pairs(&pairs)
+        };
+        objs.spawn(0xB1, bag(&[(0, 0xC1), (4, 0xC2)]));
+        objs.spawn(0xB2, bag(&[]));
+        objs.spawn(
+            0xB3,
+            ObjectFields::from_pairs(&[(TYPE, 0x3), (FIELD_OBJECT_ENTRY, 4496)]),
+        );
+        let mut items = Items::default();
+        items.insert_template(4496, Some(test_template("Small Brown Pouch")));
+        let names = NameCache::default();
+        let cooldowns = crate::spell::Cooldowns::default();
+        let mut petitions = crate::ui_petition::PetitionState::default();
+        let mut seats = |guid: u64| {
+            resolve_slot(
+                guid,
+                &objs.get(),
+                &items,
+                None,
+                RollCatalogs::NONE,
+                &commands,
+                &cooldowns,
+                None,
+                &names,
+                &mut petitions,
+                std::time::Instant::now(),
+                0.0,
+                false,
+            )
+            .expect("an occupied slot")
+            .occupied_seats
+        };
+        assert_eq!(seats(0xB1), Some(2));
+        assert_eq!(seats(0xB2), Some(0));
+        assert_eq!(seats(0xB3), None, "not a container");
     }
 
     /// No bags and an empty vault.

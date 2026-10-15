@@ -1599,6 +1599,7 @@ fn seed_cooldown_filmstrip(
                 creator: None,
                 flags: 0,
                 already_bound: false,
+                occupied_seats: None,
                 enchants: Vec::new(),
             },
         );
@@ -1657,6 +1658,7 @@ fn seed_bag_window(
             creator: None,
             flags: 0,
             already_bound: false,
+            occupied_seats: None,
             enchants: Vec::new(),
         }
     };
@@ -1749,6 +1751,7 @@ fn seed_equipped_bags(
             creator: None,
             flags: 0,
             already_bound: false,
+            occupied_seats: None,
             enchants: Vec::new(),
         };
 

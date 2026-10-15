@@ -70,6 +70,9 @@ pub struct ContainerSlot {
     /// Bound at runtime (`0x5da2c0`): `ITEM_FIELD_FLAGS & 1`, or an enchant whose
     /// `SpellItemEnchantment` row binds. The tooltip's bind line then says Soulbound.
     pub already_bound: bool,
+    /// For a container (`TYPEMASK_CONTAINER`), how many of its seats hold an item, which
+    /// `ClickTradeButton` counts (`0x4bff50`); `None` for any other item.
+    pub occupied_seats: Option<u32>,
     /// The enchant slots in slot order, named from `SpellItemEnchantment.dbc`; empty when none.
     pub enchants: Vec<super::EnchantView>,
     /// A timed item's lifetime left in ms (`SMSG_ITEM_TIME_UPDATE`), floored to the second.
@@ -972,6 +975,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                occupied_seats: None,
                 bonding: 0,
                 use_spell: 0,
                 bar_placeable: true,
@@ -1630,6 +1634,7 @@ mod tests {
                 duration_ms: None,
                 petition: None,
                 already_bound: false,
+                occupied_seats: None,
                 bonding: 0,
                 use_spell: 0,
                 bar_placeable: true,

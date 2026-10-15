@@ -19,6 +19,7 @@ fn one_item_backpack(item_id: u32, name: &str, quality: u32) -> ContainerState {
             duration_ms: None,
             petition: None,
             already_bound: false,
+            occupied_seats: None,
             bonding: 0,
             use_spell: 0,
             bar_placeable: true,

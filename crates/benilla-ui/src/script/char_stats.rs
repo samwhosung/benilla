@@ -193,6 +193,9 @@ pub struct InvSlotView {
     pub already_bound: bool,
     /// The template's bonding (`[rec+0x194]`), 0 while unresolved: the equip arms ask on 2.
     pub bonding: u32,
+    /// For a container, how many of its seats hold an item, as
+    /// [`super::container::ContainerSlot::occupied_seats`].
+    pub occupied_seats: Option<u32>,
     /// The on-use spell the dispatcher reads (`0x5d8c80`), 0 for none or while unresolved.
     pub use_spell: u32,
     /// The arm `UseInventoryItem` takes in the dispatcher, with no equip fork; `link` is set once
@@ -509,6 +512,7 @@ impl InvSlotView {
             durability: slot.durability,
             already_bound: slot.already_bound,
             bonding: slot.bonding,
+            occupied_seats: slot.occupied_seats,
             use_spell: slot.use_spell,
             link: slot.link.clone(),
             guid: slot.guid,
