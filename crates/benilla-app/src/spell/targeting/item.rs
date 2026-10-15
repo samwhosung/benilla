@@ -275,6 +275,132 @@ pub(crate) fn commit_item_cast_on_pick(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::{ClientCommand, NetCommands};
+    use bevy::ecs::system::RunSystemOnce;
+
+    const ITEM: u64 = 0x4000_0000_0000_0123;
+    const ENTRY: u32 = 777;
+    const SPELL: u32 = 5555;
+
+    /// A world with one carried item (`template` gives it a cached template and the spell a
+    /// record, so the pick takes the verdict arm; without them it takes the ungated one), a VM
+    /// whose bag shows it, and a spell awaiting an item.
+    fn item_targeting(template: bool) -> (App, crossbeam_channel::Receiver<ClientCommand>) {
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.insert_resource(NetCommands(tx));
+        let world = app.world_mut();
+        world.spawn((
+            SelfPlayer,
+            crate::net::ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
+                (532, ITEM as u32),
+                (533, (ITEM >> 32) as u32),
+            ])),
+        ));
+        crate::items::test_spawn_item(
+            world,
+            ITEM,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, ENTRY)]),
+            false,
+        );
+        if template {
+            world
+                .resource_mut::<crate::items::Items>()
+                .insert_template(ENTRY, Some(crate::items::test_template("Rune")));
+            world.insert_resource(crate::ui_action::Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(SPELL, benilla_formats::SpellDisplay::default())].into(),
+                ),
+                ..crate::ui_action::Spells::empty_for_tests()
+            });
+        }
+        world.resource_mut::<crate::spell::SpellTargeting>().enter(
+            SPELL,
+            crate::spell::CastCommit::Spell,
+            0x0010,
+        );
+        let mut script = benilla_ui::script::UiScript::new().unwrap();
+        let mut slots = std::collections::HashMap::new();
+        slots.insert(
+            1,
+            benilla_ui::script::ContainerSlot {
+                item_id: ENTRY,
+                guid: ITEM,
+                count: 1,
+                ..Default::default()
+            },
+        );
+        script.set_container(
+            0,
+            Some(benilla_ui::script::ContainerState {
+                name: Some("Backpack".into()),
+                num_slots: 16,
+                slots,
+            }),
+        );
+        script.set_item_pick_armed(true);
+        world.insert_non_send_resource(script);
+        (app, rx)
+    }
+
+    /// Run `lua` in the VM, then the item-pick commit; the item casts sent, and whether the spell
+    /// still awaits its item.
+    fn pick(
+        app: &mut App,
+        rx: &crossbeam_channel::Receiver<ClientCommand>,
+        lua: &str,
+    ) -> (usize, bool) {
+        app.world_mut()
+            .non_send_resource_mut::<benilla_ui::script::UiScript>()
+            .run(lua)
+            .unwrap();
+        app.world_mut()
+            .run_system_once(commit_item_cast_on_pick)
+            .unwrap();
+        let sent = rx
+            .try_iter()
+            .filter(|c| matches!(c, ClientCommand::CastSpellItem { .. }))
+            .count();
+        let waiting = app
+            .world()
+            .resource::<crate::spell::SpellTargeting>()
+            .pending_for(TargetingWants::Item)
+            .is_some();
+        (sent, waiting)
+    }
+
+    /// The bind that ends `ValidateSpellItemTarget` is `BindSpellTargetObject`, which asks the
+    /// gate's tag 2 first (`0x6e5b9e`): a click a macro made outside an input event binds nothing
+    /// and leaves the cursor up, on the ungated arm (an unresolved template) and the verdict's.
+    #[test]
+    fn a_refused_item_pick_binds_nothing_and_keeps_the_cursor() {
+        for template in [false, true] {
+            let (mut app, rx) = item_targeting(template);
+            assert_eq!(
+                pick(&mut app, &rx, r#"RunScript("PickupContainerItem(0, 1)")"#),
+                (0, true),
+                "template {template}: refused"
+            );
+            assert_eq!(
+                pick(&mut app, &rx, "PickupContainerItem(0, 1)"),
+                (1, false),
+                "template {template}: the client's own click binds"
+            );
+        }
+    }
+
+    /// `ReplaceEnchant` binds the parked item through `BindSpellTargetObject` directly (`0x48d300`
+    /// → `0x6e5b40`), behind the same gate.
+    #[test]
+    fn a_refused_replace_enchant_binds_nothing() {
+        let (mut app, rx) = item_targeting(true);
+        app.world_mut().resource_mut::<EnchantConfirmItem>().0 = Some(ITEM);
+        assert_eq!(
+            pick(&mut app, &rx, r#"RunScript("ReplaceEnchant()")"#),
+            (0, true)
+        );
+        assert_eq!(pick(&mut app, &rx, "ReplaceEnchant()"), (1, false));
+    }
 
     #[test]
     fn the_item_bind_gate_mirrors_0x495d60() {

@@ -1409,6 +1409,85 @@ mod tests {
         let _ = f.rx.try_iter().count();
     }
 
+    /// `CGItem::Use` casts an item's on-use spell through `TryCastSpell`, behind the gate's tag 2
+    /// (`0x4fa430` and `0x4c7af0` → `0x5d8d00` → `0x5d9258` → `0x6e5a90` → `0x6e4bc1`). A bag
+    /// click, a worn item's click and a bar press queue whatever the gate said, and the cast
+    /// ladder refuses the refused ones: the client's own call sends `CMSG_USE_ITEM`, a macro's
+    /// outside an input event sends nothing.
+    #[test]
+    fn a_refused_item_use_never_reaches_the_cast() {
+        const HEAD_ITEM: u64 = 0x4000_0000_0000_0f08;
+        let template = || {
+            let mut t = crate::items::test_template("Trinket");
+            t.spells = vec![benilla_protocol::messages::ItemSpellEntry {
+                index: 0,
+                spell_id: 4321,
+                trigger: 0,
+                charges: 0,
+                cooldown_ms: -1,
+                category: 0,
+                category_cooldown_ms: -1,
+            }];
+            t.use_spell = Some(benilla_protocol::messages::ItemUseSpell {
+                spell_id: 4321,
+                cooldown_ms: -1,
+                category: 0,
+                category_cooldown_ms: -1,
+            });
+            t
+        };
+        let uses = |f: &Frame| {
+            f.rx.try_iter()
+                .filter(|c| matches!(c, ClientCommand::UseItem { .. }))
+                .count()
+        };
+        for lua in [
+            "UseContainerItem(0, 1)",
+            "UseAction(1)",
+            "UseInventoryItem(1)",
+        ] {
+            for (call, want) in [(lua.to_string(), 1), (format!("RunScript({lua:?})"), 0)] {
+                let mut f = frame(false);
+                with_potion(&mut f, template());
+                // The worn item: slot 1 of the doll, the head, a copy of the same trinket.
+                let world = f.app.world_mut();
+                let me = world.resource::<GuidIndex>().0[&ME];
+                world.entity_mut(me).insert(ObjectStore(
+                    benilla_protocol::ObjectFields::from_pairs(&[
+                        (2, 0x19),
+                        (22, 100),
+                        (28, 100),
+                        (46, 0x8),
+                        (486, HEAD_ITEM as u32),
+                        (487, (HEAD_ITEM >> 32) as u32),
+                        (532, POTION as u32),
+                        (533, (POTION >> 32) as u32),
+                    ]),
+                ));
+                crate::items::test_spawn_item(
+                    world,
+                    HEAD_ITEM,
+                    benilla_protocol::ObjectFields::from_pairs(&[(3, POTION_ENTRY)]),
+                    false,
+                );
+                let mut slots: benilla_ui::script::InventorySlots = Default::default();
+                slots[1] = Some(benilla_ui::script::InvSlotView {
+                    item_id: POTION_ENTRY,
+                    guid: HEAD_ITEM,
+                    count: 1,
+                    use_spell: 4321,
+                    ..Default::default()
+                });
+                world
+                    .non_send_resource_mut::<UiScript>()
+                    .set_inventory_slots(slots);
+                let _ = f.rx.try_iter().count();
+                run(&mut f, &call);
+                assert_eq!(uses(&f), want, "{call}");
+            }
+        }
+    }
+
     /// The bar's item use tests its copy's lock inside the call (`0x4e607b` → `0x5d8d32`): a
     /// pickup after it in the frame does not stop it, and one before it does, though the cursor
     /// let the item go again before the frame applied the press.
