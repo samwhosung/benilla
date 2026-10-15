@@ -541,7 +541,7 @@ fn send_spell_cast(
         .and_then(|t| t.use_spell)
         .filter(|u| u.spell_id == spell_id)
         .map_or(0, |u| u.category);
-    if cooldowns.not_ready_item(spell_id, queried_item, item_category, def, now) {
+    if cooldowns.not_ready(spell_id, queried_item, item_category, def, now) {
         debug!("ui_action: cast {spell_id} refused locally — not ready (the validator's rung 1)");
         // The one packet a local refusal sends (`0x609576–0x60960f`, spell leg only): a running
         // repeat with AttributesEx3 0x400000 (wand Shoot) gets `CMSG_CANCEL_CAST`, then the local

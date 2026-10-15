@@ -574,18 +574,8 @@ impl Cooldowns {
     /// refused whatever its own `startRecoveryTime`. The caller picks the reason (`0x60952b`):
     /// 0x28 for an item, 0x3c for a spell. Refusing locally matters: the server's NOT_READY
     /// failure would clear the running GCD.
+    /// `item_category` is [`Self::info_item`]'s: the item's own for an item press, else 0.
     pub(crate) fn not_ready(
-        &self,
-        spell_id: u32,
-        item_entry: u32,
-        spell: Option<&SpellDisplay>,
-        now: Instant,
-    ) -> bool {
-        self.info(spell_id, item_entry, spell, now).remaining_ms > 0
-    }
-
-    /// [`Self::not_ready`] for an item press, with [`Self::info_item`]'s category.
-    pub(crate) fn not_ready_item(
         &self,
         spell_id: u32,
         item_entry: u32,
@@ -809,7 +799,7 @@ mod tests {
         assert_eq!(ch.remaining_ms, 0, "no startRecoveryCategory — no GCD read");
 
         // The press gate reads the same getter; `0x6e1690` stays false with nothing parked.
-        assert!(cds.not_ready(133, 0, Some(&fireball()), mid));
+        assert!(cds.not_ready(133, 0, 0, Some(&fireball()), mid));
         assert!(!cds.has_on_hold_record(133, 0, fireball().category));
     }
 
@@ -832,7 +822,7 @@ mod tests {
             "the GO self-insert must not eat the GCD node"
         );
         assert!(
-            cds.not_ready(133, 0, Some(&fireball()), mid),
+            cds.not_ready(133, 0, 0, Some(&fireball()), mid),
             "the local lock holds too"
         );
         // Frost Nova's own button reads the longer, its own cooldown.
@@ -848,12 +838,12 @@ mod tests {
         cds.start_gcd(5384, &fd, t0, &super::SpellModifiers::default());
         cds.start_spell(5384, &fd, 0, t0, None);
         let mid = t0 + Duration::from_millis(100);
-        assert!(cds.not_ready(5384, 0, Some(&fd), mid));
+        assert!(cds.not_ready(5384, 0, 0, Some(&fd), mid));
 
         // The fail path (0x6e1a00): GCD cleared (0x6e1630), the record removed (0x6e3050).
         cds.clear_gcd(5384, mid);
         cds.clear_spell(5384);
-        assert!(!cds.not_ready(5384, 0, Some(&fd), mid));
+        assert!(!cds.not_ready(5384, 0, 0, Some(&fd), mid));
         assert_eq!(cds.info(5384, 0, Some(&fd), mid).remaining_ms, 0);
     }
 
@@ -869,7 +859,7 @@ mod tests {
         let s = cds.info(999, 0, Some(&sibling), mid);
         assert_eq!((s.remaining_ms, s.duration_ms), (10_000, 15_000));
         assert!(
-            cds.not_ready(999, 0, Some(&sibling), mid),
+            cds.not_ready(999, 0, 0, Some(&sibling), mid),
             "category lock is a not-ready"
         );
         // An unrelated spell reads nothing.
@@ -891,7 +881,7 @@ mod tests {
             (30_001, false),
             "an on-hold record never elapses on its own"
         );
-        assert!(cds.not_ready(5384, 0, Some(&fd), t0 + Duration::from_secs(60)));
+        assert!(cds.not_ready(5384, 0, 0, Some(&fd), t0 + Duration::from_secs(60)));
         assert!(
             cds.has_on_hold_record(5384, 0, fd.category),
             "the corrected 0x6e1690: an on-hold record — the usable walk's grey-while-parked"
@@ -1002,7 +992,7 @@ mod tests {
             ),
             (t0, 1, 1, false)
         );
-        assert!(cds.not_ready(15473, 0, Some(&form), t0));
+        assert!(cds.not_ready(15473, 0, 0, Some(&form), t0));
     }
 
     /// `0x6e185a`-`0x6e1863`, `0x6e15d8`: the event moves the one start the GCD leg reads, so the
@@ -1033,7 +1023,7 @@ mod tests {
         // A sibling of the GCD category reads the same run.
         let sibling = spell(0, 0, 0, (133, 1_500), 0);
         assert_eq!(cds.info(133, 0, Some(&sibling), now).remaining_ms, 1_000);
-        assert!(cds.not_ready(133, 0, Some(&sibling), now));
+        assert!(cds.not_ready(133, 0, 0, Some(&sibling), now));
     }
 
     #[test]
@@ -1156,7 +1146,7 @@ mod tests {
         // The oil's own query, and a second item of category 28 over the same spell.
         let own = cds.info_item(1322, 1322, 28, Some(&oil_spell), mid);
         assert_eq!((own.remaining_ms, own.duration_ms), (15_000, 20_000));
-        assert!(cds.not_ready_item(1322, 1322, 28, Some(&oil_spell), mid));
+        assert!(cds.not_ready(1322, 1322, 28, Some(&oil_spell), mid));
         // Another item whose slot carries category 28 reads the oil's category timer; the spell's
         // own category 4 does not match the record's 28.
         let other = cds.info_item(1322, 4096, 28, Some(&oil_spell), mid);
@@ -1426,24 +1416,30 @@ mod tests {
         let t0 = Instant::now();
         let mut cds = Cooldowns::default();
         assert!(
-            !cds.not_ready(133, 0, Some(&fireball()), t0),
+            !cds.not_ready(133, 0, 0, Some(&fireball()), t0),
             "no GCD running — nothing locks"
         );
 
         cds.start_gcd(772, &fireball(), t0, &super::SpellModifiers::default());
         let mid = t0 + Duration::from_millis(200);
         assert!(
-            cds.not_ready(133, 0, Some(&fireball()), mid),
+            cds.not_ready(133, 0, 0, Some(&fireball()), mid),
             "the spam press 200 ms later is locked — refused, never sent, the GCD lives"
         );
         // Scroll of Armor's shape.
         let scroll = spell(0, 0, 0, (133, 0), 0x10000);
         assert!(
-            cds.not_ready(8091, 0, Some(&scroll), mid),
+            cds.not_ready(8091, 0, 0, Some(&scroll), mid),
             "a zero-GCD press in the shared category is locked on the reference"
         );
-        assert!(!cds.not_ready(100, 0, Some(&charge()), mid));
-        assert!(!cds.not_ready(133, 0, Some(&fireball()), t0 + Duration::from_millis(1_501)));
+        assert!(!cds.not_ready(100, 0, 0, Some(&charge()), mid));
+        assert!(!cds.not_ready(
+            133,
+            0,
+            0,
+            Some(&fireball()),
+            t0 + Duration::from_millis(1_501)
+        ));
     }
 
     /// The getter's exclusion (`0x6e1439`, `0x6e1442`).
@@ -1459,7 +1455,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(cds.info(6603, 0, Some(&attack), mid).remaining_ms, 0);
-        assert!(!cds.not_ready(6603, 0, Some(&attack), mid));
+        assert!(!cds.not_ready(6603, 0, 0, Some(&attack), mid));
     }
 
     /// The wildcard leg (`0x6e1563`): wand Shoot's category 351 sweeps every button.
@@ -1479,8 +1475,14 @@ mod tests {
         // Unrelated Fireball reads the wand swing and is not ready for its duration.
         let fb = cds.info(133, 0, Some(&fireball()), mid);
         assert_eq!((fb.remaining_ms, fb.duration_ms), (1000, 1500));
-        assert!(cds.not_ready(133, 0, Some(&fireball()), mid));
-        assert!(!cds.not_ready(133, 0, Some(&fireball()), t0 + Duration::from_millis(1_501)));
+        assert!(cds.not_ready(133, 0, 0, Some(&fireball()), mid));
+        assert!(!cds.not_ready(
+            133,
+            0,
+            0,
+            Some(&fireball()),
+            t0 + Duration::from_millis(1_501)
+        ));
     }
 
     #[test]
@@ -1512,9 +1514,9 @@ mod tests {
         assert_eq!(info.duration_ms, 2200, "the sweep is the weapon speed");
         assert_eq!(info.remaining_ms, 1200);
         assert!(info.enabled, "running, not parked");
-        assert!(cds.not_ready(2764, 0, Some(&throw), mid));
+        assert!(cds.not_ready(2764, 0, 0, Some(&throw), mid));
         assert!(
-            !cds.not_ready(2764, 0, Some(&throw), t0 + Duration::from_millis(2300)),
+            !cds.not_ready(2764, 0, 0, Some(&throw), t0 + Duration::from_millis(2300)),
             "free again after the weapon speed elapses"
         );
     }
@@ -1533,7 +1535,7 @@ mod tests {
             "no sweep for a category-0 record"
         );
         assert!(
-            !cds.not_ready(75, 0, Some(&auto_shot), mid),
+            !cds.not_ready(75, 0, 0, Some(&auto_shot), mid),
             "no local refusal either"
         );
     }

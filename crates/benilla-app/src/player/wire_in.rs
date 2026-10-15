@@ -504,7 +504,7 @@ fn apply_self_move(
 /// was down) and `0x4958a0` (`0x5deb5b`) stores 1 and re-claims our own mover (the claim is sent
 /// by `enter_world_on_self_create`). vmangos sends a battleground's closing `control 0` and no
 /// restore (`BattleGround.cpp:905-908`). The event is the `ui_unit::feed_player_control` edge.
-pub(super) fn regain_control_on_arrival(
+pub(crate) fn regain_control_on_arrival(
     mut arrivals: MessageReader<crate::net::WorldEnterCascadeMessage>,
     mut player: ResMut<Player>,
 ) {
@@ -856,6 +856,29 @@ mod arrival_tests {
         assert!(!player.own_control_lost, "the bar's flag is back");
         assert!(!player.control_lost, "and the controller's movement lock");
         assert_eq!(player.foreign_mover, None);
+    }
+
+    /// The real create system feeds it: a control-0 packet's verdict, then our own player's
+    /// create (`enter_world_on_self_create`), and the lock and the flag are gone.
+    #[test]
+    fn our_own_create_system_gives_control_back() {
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = harness();
+        app.insert_resource(crate::net::NetCommands(tx))
+            .add_systems(
+                Update,
+                crate::net::enter_world_on_self_create.before(regain_control_on_arrival),
+            );
+        let mut player = app.world_mut().resource_mut::<Player>();
+        track_control(&mut player, control_verdict(ME, false, Some(ME)));
+        app.update();
+        assert!(app.world().resource::<Player>().own_control_lost);
+
+        app.world_mut()
+            .spawn((crate::net::Guid(ME), crate::net::SelfPlayer));
+        app.update();
+        let player = app.world().resource::<Player>();
+        assert!(!player.own_control_lost && !player.control_lost);
     }
 
     /// A possession does not outlive the world either: the create claims our own mover.

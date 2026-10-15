@@ -65,6 +65,7 @@ mod swim;
 mod view_subject;
 mod walk;
 mod wire_in;
+pub(crate) use wire_in::regain_control_on_arrival;
 
 // The last writer of a self body part's render alpha: `entities::apply_unit_mat_alpha` orders
 // itself before it.
@@ -297,13 +298,6 @@ impl Plugin for PlayerPlugin {
         .add_systems(
             Update,
             wire_in::release_on_session_end.in_set(WorldStage::Input),
-        )
-        // A create gives control back; before `control`, which reads the flags.
-        .add_systems(
-            Update,
-            wire_in::regain_control_on_arrival
-                .in_set(WorldStage::Input)
-                .before(control),
         )
         // Embodiment, before every reader of the marker.
         .add_systems(
