@@ -16,8 +16,8 @@ use super::{SpellKitFx, SwingImpact, SwingMessage};
 
 /// The gore level, the client's `violenceLevel` (0 none, 1 green, 2 true colors). The reference
 /// defaults it to its region's maximum (`0x6c5aa0`, from the table at `0x86c3f8`, which the setter
-/// `0x6c5af0` also clamps to): 2 for enUS, 1 only for koKR, whose blood turns green. Fixed here,
-/// not a CVar row: `cvars::REGISTERED` holds only the knobs a settings page wires.
+/// `0x6c5af0` also clamps to): 2 for enUS, 1 only for koKR, whose blood turns green. Fixed here:
+/// the `violenceLevel` row is inert (`cvars::inert`), so writing it changes nothing.
 const VIOLENCE_LEVEL: usize = 2;
 
 /// The victim attachments the spurt hangs on, `0xf` front and `0x10` back (`0x625010`).

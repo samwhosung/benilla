@@ -68,7 +68,7 @@ pub(crate) enum Reference {
 }
 
 /// A row whose default is the reference's own registered string.
-const fn same(name: &'static str, default: &'static str) -> Registered {
+pub(super) const fn same(name: &'static str, default: &'static str) -> Registered {
     Registered {
         name,
         default,
@@ -123,16 +123,20 @@ const fn ours(name: &'static str, default: &'static str, why: &'static str) -> R
 
 /// The table as the script VM's registrar wants it: `(name, default)` pairs in table order.
 pub(crate) fn registered_pairs() -> impl Iterator<Item = (&'static str, &'static str)> {
-    REGISTERED.iter().map(|r| (r.name, r.default))
+    all_rows().map(|r| (r.name, r.default))
+}
+
+/// Every registered row: the knobs something reads ([`REGISTERED`]), then the reference's other
+/// script-visible CVars, which nothing here reads ([`super::inert::INERT`]).
+pub(crate) fn all_rows() -> impl Iterator<Item = &'static Registered> {
+    REGISTERED.iter().chain(super::inert::INERT)
 }
 
 /// The host-backed CVars, one row per knob that has a reader: a host knob, or a Lua consumer
-/// such as the stock Video Options window's verbs.
-///
-/// Not registered for want of a reader, though pfUI's `hdgraphic` writes them: `lodDist`
-/// (`0x688524`, "100.0", read at `0x6afb1d` for the doodad LOD swap), `footstepBias` (`0x6888b4`,
-/// "0.125", read at `0x68fcb6`), `mapObjLightLOD` (`0x6886ec`, "0") and `SkyCloudLOD` (`0x6d1d33`,
-/// "0"). `DistCull` (`0x688570`) has no reader in the reference either. `maxLOD` is no 1.12 CVar.
+/// such as the stock Video Options window's verbs. The reference's other script-visible CVars,
+/// which nothing here reads, are `super::inert::INERT`: `lodDist`, `footstepBias`,
+/// `mapObjLightLOD`, `SkyCloudLOD` and `DistCull` among them, which pfUI's `hdgraphic` writes.
+/// `maxLOD` is no 1.12 CVar and stays unregistered.
 pub(crate) const REGISTERED: &[Registered] = &[
     // `realmName` (`0x83f2d0`): registered `""` (`0x882748`), help "Last realm connected to"
     // (`0x85d684`); the client builds its SavedVariables path from it (`0x5ab7d0`). Written from

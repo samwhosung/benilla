@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use super::table::{Reference, REGISTERED};
+use super::table::{all_rows, Reference};
 
 /// `same` rows whose shipped default is not yet the registered string, each with the issue that
 /// fixes it. The test fails on any other, and on a listed row that has come right.
@@ -58,7 +58,7 @@ fn the_reference_columns_hold_against_the_registered_cvars() {
     let mut absent = Vec::new();
     let mut differs = Vec::new();
     let mut known_hit = Vec::new();
-    for row in REGISTERED {
+    for row in all_rows() {
         let name = row.name;
         let known = KNOWN.iter().find(|(n, _)| *n == name);
         let Some(defaults) = reg.get(&name.to_ascii_lowercase()) else {
@@ -115,5 +115,53 @@ fn the_reference_columns_hold_against_the_registered_cvars() {
         "{} row(s) against reference/cvars.tsv:\n  {}",
         all.len(),
         all.join("\n  ")
+    );
+}
+
+/// Every script-visible `CVar::Register` of the reference is registered here: Lua's lookup
+/// (`0x63dec0`) finds only a record with flag bit 31, and `GetCVar`, `SetCVar` and `GetCVarDefault`
+/// raise on a name it misses (`0x488be7`, `0x488c53`, `0x488d37`). The `script_hidden` column is 1
+/// for a variable Lua cannot see; `?` rows are the three sites whose arguments sit in a register
+/// the generator does not follow, read from the image to push `esi` = 0 (`0x6039b5`-`0x6039ee`), or
+/// registered elsewhere too (`showGameTips`, `realmName`).
+#[test]
+fn every_script_visible_reference_row_is_registered() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/cvars.tsv");
+    let text = std::fs::read_to_string(path).expect("reference/cvars.tsv");
+    let mut visible = BTreeMap::new();
+    for line in text.lines().skip(1) {
+        let f: Vec<&str> = line.split('\t').collect();
+        let (name, hidden) = (f[1], f[8]);
+        // `?` names are the `RegisterCVar` verb's own call (`0x488b8a`) and the console `set`
+        // command's (`0x63d582`), which make a record per call.
+        if name == "?" || hidden == "1" {
+            continue;
+        }
+        visible.insert(name.to_ascii_lowercase(), name);
+    }
+    let ours: std::collections::BTreeSet<String> =
+        all_rows().map(|r| r.name.to_ascii_lowercase()).collect();
+    let missing: Vec<&str> = visible
+        .iter()
+        .filter(|(key, _)| !ours.contains(*key))
+        .map(|(_, name)| *name)
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "{} script-visible reference CVars are unregistered, so `GetCVar` and `SetCVar` raise on \
+         them: {missing:?}",
+        missing.len()
+    );
+    // And nothing is registered that the reference lacks, unless it is a documented `ours` row.
+    let undocumented: Vec<&str> = all_rows()
+        .filter(|r| !visible.contains_key(&r.name.to_ascii_lowercase()))
+        .filter(|r| !matches!(r.reference, Reference::Ours(_)))
+        .filter(|r| !KNOWN.iter().any(|(n, _)| *n == r.name))
+        .map(|r| r.name)
+        .collect();
+    assert!(
+        undocumented.is_empty(),
+        "registered but not in reference/cvars.tsv, and neither an `ours` row nor on KNOWN: \
+         {undocumented:?}"
     );
 }

@@ -4,8 +4,10 @@
 //! what `config.toml` is composed from; the script VM keeps a mirror for Lua's synchronous
 //! `GetCVar`/`SetCVar` ([`benilla_ui::script::UiScript::seed_cvars`]) whose writes queue back here.
 //!
-//! - [`REGISTERED`] holds only vars something reads, a host knob or a Lua consumer. A row's default
-//!   is the reference's, and [`table::Registered::reference`] says where it stands against it.
+//! - [`REGISTERED`] holds the vars something reads, a host knob or a Lua consumer, and
+//!   [`inert::INERT`] the reference's other script-visible ones, which `GetCVar` and `SetCVar`
+//!   would otherwise raise on. A row's default is the reference's, and
+//!   [`table::Registered::reference`] says where it stands against it.
 //! - The change callback is a Bevy observer on [`CvarChanged`], beside the knob it writes; the
 //!   registry applies nothing itself. A callback that can refuse a write is also the row's
 //!   [`CvarCheck`], which the registry and the VM's mirror run before storing.
@@ -28,12 +30,13 @@ use bevy::prelude::*;
 use crate::ui_script::VmMemo;
 use benilla_ui::script::{CvarCheck, SeededCvar, UiScript};
 
+mod inert;
 #[cfg(test)]
 mod reference_table;
 mod table;
 #[cfg(test)]
 use table::Reference;
-pub(crate) use table::{registered_pairs, REGISTERED};
+pub(crate) use table::{all_rows, registered_pairs, REGISTERED};
 
 /// `config.toml`: a `[cvars]` table of `Name = "value"` strings, sorted so every save is stable.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -152,8 +155,8 @@ pub(crate) struct Cvars {
 impl Default for Cvars {
     fn default() -> Self {
         let mut cvars = Self {
-            rows: Vec::with_capacity(REGISTERED.len()),
-            index: HashMap::with_capacity(REGISTERED.len()),
+            rows: Vec::with_capacity(REGISTERED.len() + inert::INERT.len()),
+            index: HashMap::with_capacity(REGISTERED.len() + inert::INERT.len()),
             file: BTreeMap::new(),
             session_owned: HashSet::new(),
             events: Vec::new(),
@@ -163,7 +166,7 @@ impl Default for Cvars {
             console: Vec::new(),
             lua_created: 0,
         };
-        for r in REGISTERED {
+        for r in all_rows() {
             cvars.insert_row(Row {
                 name: r.name.to_string(),
                 default: r.default.to_string(),
@@ -1861,6 +1864,56 @@ mod tests {
         assert_eq!(out.get("uiScale").map(String::as_str), Some("0.8"));
         assert!(!out.contains_key("farclip"));
         assert_eq!(out.get("FutureKnob").map(String::as_str), Some("3"));
+    }
+
+    /// A reference CVar nothing here reads (pfUI's afkcam sets `cameraCustomViewSmoothing`,
+    /// `0x50bad0`) is found by Lua's lookup, so `SetCVar` neither raises nor warns; it persists as
+    /// a diff like any row, and its flag-bit1 neighbour stays latched.
+    #[test]
+    fn a_reference_cvar_nothing_reads_is_settable_and_persists_as_a_diff() {
+        let mut cvars = Cvars::default();
+        let mut script = UiScript::new().expect("VM");
+        script.seed_cvars(cvars.vm_seed());
+        script
+            .run(r#"SetCVar("cameraCustomViewSmoothing", "1") SetCVar("SoundOutputSystem", "1")"#)
+            .expect("both names are the reference's registered ones");
+        assert_eq!(
+            script
+                .eval::<String>(r#"return GetCVarDefault("cameraCustomViewSmoothing")"#)
+                .unwrap(),
+            "0"
+        );
+        assert_eq!(
+            script
+                .eval::<String>(r#"return GetCVar("cameraCustomViewSmoothing")"#)
+                .unwrap(),
+            "1"
+        );
+        assert_eq!(
+            script
+                .eval::<String>(r#"return GetCVar("SoundOutputSystem")"#)
+                .unwrap(),
+            "-1",
+            "flag bit1 keeps the write staged"
+        );
+        assert!(script.take_warnings().is_empty());
+        for (name, value) in script.take_cvar_changes() {
+            cvars.set_from_vm(&name, &value);
+        }
+        let out = cvars.compose();
+        assert_eq!(
+            out.get("cameraCustomViewSmoothing").map(String::as_str),
+            Some("1")
+        );
+        assert!(
+            !out.contains_key("SoundOutputSystem"),
+            "a stage is not applied"
+        );
+        cvars.set("cameraCustomViewSmoothing", "0");
+        assert!(!cvars.compose().contains_key("cameraCustomViewSmoothing"));
+        // The camera block's range check rides along (`0x50c000`).
+        let rate = cvars.set("cameraFoVSmoothSpeed", "9000");
+        assert_eq!(rate, SetOutcome::Vetoed);
     }
 
     #[test]
