@@ -37,8 +37,8 @@ pub struct TradeSlotItem {
     /// slot holds a live item object, which the tooltip builder's LOCKED gate reads (`0x5342ed`);
     /// the partner's side has none.
     pub object_flags: Option<u32>,
-    /// The name of the enchant being applied to slot 7, which stock shows in green
-    /// (`TradeFrame.lua:62`); the app always sends `None`.
+    /// Slot 7 only: the name of the spell being cast on the item, which stock shows in green
+    /// (`TradeFrame.lua:62`); `None` on every other slot and while nothing is cast.
     pub enchantment: Option<String>,
     /// The escaped item link the link verbs answer; `None` while the template is in flight, since
     /// it embeds the name and the quality.
