@@ -8,6 +8,11 @@
 //!
 //! The events follow `ItemTextFrame.lua:10-96`; `ITEM_TEXT_TRANSLATION`, the foreign-language
 //! bar, never fires, as neither source carries the language column.
+//!
+//! The reader is a window on the interaction latch. Its cell is written at the read
+//! (`0x4e3364`), but it registers only once the text resolves (`0x4e349a`), right before
+//! `ITEM_TEXT_BEGIN`, so the window it opens over closes first; its release (`0x4e3323`,
+//! `0x4e3357`) re-enters the core while latched, firing `ITEM_TEXT_CLOSED` twice.
 
 use bevy::prelude::*;
 
@@ -20,6 +25,7 @@ use crate::net::{ClientCommand, NetCommands, Objects};
 use crate::query_cache::QueryCache;
 use crate::ui_mail::MailOpen;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
+use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// One page of a book as the wire gave it (`SMSG_PAGE_TEXT_QUERY_RESPONSE`).
 pub(crate) struct PageText {
@@ -71,6 +77,9 @@ pub(crate) struct ReadSession {
     /// An item's or a GameObject's guid; reading the same object again closes the reader.
     pub(crate) object_guid: u64,
     pub(crate) source: ReadSource,
+    /// The open's tail ran (`0x4e349a`): the latch holds this reader. The cell alone cannot say
+    /// so, as another window may hold the latch on the same guid (a trade partner's).
+    registered: bool,
     /// Keyed on the VM; the leave-world sweep closes the reader, so no later VM inherits one.
     told: crate::ui_script::VmMemo<ItemTextTold>,
 }
@@ -85,51 +94,199 @@ struct ItemTextTold {
 #[derive(Resource, Default)]
 pub(crate) struct ItemTextOpen {
     pub(crate) pending: Option<ReadSession>,
-    /// A toggle closed the reader and the frame is not told yet; the feed holds the script.
-    closing: bool,
+    /// Reads a click or a bag use asked for, in order; [`apply_reads`] runs each as `0x4e32e0`
+    /// with flag 0, with the world in hand for the latch.
+    reads: Vec<(u64, ReadSource)>,
 }
 
 impl ItemTextOpen {
-    /// Open a bag letter; re-opening restarts from `ITEM_TEXT_BEGIN`.
-    pub(crate) fn open_letter(&mut self, item_guid: u64, text_id: u32) {
-        self.open(item_guid, ReadSource::Letter { text_id });
+    /// Read a bag letter; reading the open one again closes it. `true` when it is the open one.
+    pub(crate) fn read_letter(&mut self, item_guid: u64, text_id: u32) -> bool {
+        self.read(item_guid, ReadSource::Letter { text_id })
     }
 
-    /// Open a page chain; the feed asks the object's template for the first page.
-    pub(crate) fn open_pages(&mut self, object_guid: u64) {
-        self.open(
+    /// Read a page chain; the begin asks the object's template for the first page. `true` when
+    /// it is the open one, which the read closes.
+    pub(crate) fn read_pages(&mut self, object_guid: u64) -> bool {
+        self.read(
             object_guid,
             ReadSource::Pages {
                 visited: Vec::new(),
             },
-        );
+        )
     }
 
-    /// The reference's toggle, `0x4e32e0` with flag 0 from both click routes (`0x5d8e5e`,
-    /// `0x5f58e7`): reading the open object again closes it. Returns whether it closed.
-    pub(crate) fn toggle_closed(&mut self, object_guid: u64) -> bool {
-        let open = self
-            .pending
-            .as_ref()
-            .is_some_and(|s| s.object_guid == object_guid);
-        if open {
-            self.pending = None;
-            self.closing = true;
-        }
-        open
+    fn read(&mut self, object_guid: u64, source: ReadSource) -> bool {
+        let reread = self.object() == Some(object_guid);
+        self.reads.push((object_guid, source));
+        reread
     }
 
-    fn take_closing(&mut self) -> bool {
-        std::mem::take(&mut self.closing)
+    /// The reader's cell `[0xbc3fa0]`: the object read, from the read on.
+    pub(crate) fn object(&self) -> Option<u64> {
+        self.pending.as_ref().map(|s| s.object_guid)
     }
 
-    fn open(&mut self, object_guid: u64, source: ReadSource) {
+    /// A session on `object_guid` with `source`, written as the cell is (`0x4e3364`).
+    pub(crate) fn open(&mut self, object_guid: u64, source: ReadSource) {
         self.pending = Some(ReadSession {
             object_guid,
             source,
+            registered: false,
             told: Default::default(),
         });
     }
+
+    /// A bag letter's session written directly, for a test that seats it.
+    #[cfg(test)]
+    pub(crate) fn open_letter(&mut self, item_guid: u64, text_id: u32) {
+        self.open(item_guid, ReadSource::Letter { text_id });
+    }
+}
+
+/// `CloseItemText` (`0x4e3b70` → `0x4e32e0(0, 0)`) is the core itself.
+impl LatchedWindow for ItemTextOpen {
+    const WINDOW: NpcWindow = NpcWindow::ItemText;
+
+    fn cell(&self) -> Option<u64> {
+        self.object()
+    }
+
+    fn dispatched(world: &mut World) {
+        close_core(world);
+    }
+
+    fn take_close_verb(script: &mut UiScript) -> bool {
+        script.take_item_text_close()
+    }
+}
+
+/// The close, `0x4e32e0` with a zero guid: with an object read, the latch release on the cell
+/// (`0x4e3357`), the cell cleared (`0x4e3364`) and `ITEM_TEXT_CLOSED` (`0x4e33a2`). While the
+/// reader holds the latch, the release's `0x493310` runs this once more inside it (`0x49338e`).
+pub(crate) fn close_core(world: &mut World) {
+    let Some(object) = world.resource::<ItemTextOpen>().object() else {
+        return;
+    };
+    crate::ui_session::release(world, object);
+    world.resource_mut::<ItemTextOpen>().pending = None;
+    crate::ui_session::note_closed(world, NpcWindow::ItemText);
+    crate::ui_session::fire(world, |script| {
+        script.set_item_text(None);
+        script.fire_event("ITEM_TEXT_CLOSED", vec![]);
+    });
+}
+
+/// The queued reads, each `0x4e32e0(guid, 0)`, run with the world in hand ([`read_core`]).
+fn apply_reads(mut open: ResMut<ItemTextOpen>, mut commands: Commands) {
+    for (guid, source) in std::mem::take(&mut open.reads) {
+        commands.queue(move |world: &mut World| read_core(world, guid, source));
+    }
+}
+
+/// One read, `0x4e32e0(guid, 0)`. The open object again (`0x4e330c`) releases the latch on the
+/// cell (`0x4e3323`), which closes the reader if it holds it, then fires `ITEM_TEXT_CLOSED`
+/// (`0x4e332d`); one never begun keeps its cell. Another object releases the latch on the old cell
+/// (`0x4e3357`), closing a begun reader through `0x493310` once, then takes the cell (`0x4e3364`)
+/// and starts over.
+fn read_core(world: &mut World, guid: u64, source: ReadSource) {
+    let cell = world.resource::<ItemTextOpen>().object();
+    if cell == Some(guid) {
+        crate::ui_session::release(world, guid);
+        let closed = world.resource::<ItemTextOpen>().object().is_none();
+        crate::ui_session::fire(world, |script| {
+            if closed {
+                script.set_item_text(None);
+            }
+            script.fire_event("ITEM_TEXT_CLOSED", vec![]);
+        });
+        return;
+    }
+    if let Some(old) = cell {
+        crate::ui_session::release(world, old);
+    }
+    world.resource_mut::<ItemTextOpen>().open(guid, source);
+}
+
+/// The open's tail once the object's text resolves (`0x4e33b0`-`0x4e349f`): the latch, whose
+/// holder closes first (`0x4e349a`), then `ITEM_TEXT_BEGIN` (`0x4e34a4`) with the title and the
+/// material, as the stock handler takes the text colour from the material
+/// (`ItemTextFrame.lua:18-23`). A page chain with no page bails before both (`0x4e341d`) and is
+/// dropped.
+fn begin_item_text(
+    mut open: ResMut<ItemTextOpen>,
+    objects: Objects,
+    items: Res<Items>,
+    go_templates: Res<GameObjectTemplates>,
+    materials: Option<Res<PageMaterials>>,
+    net: Res<NetCommands>,
+    mut commands: Commands,
+) {
+    let Some(sess) = open.pending.as_ref() else {
+        return;
+    };
+    if sess.registered {
+        return;
+    }
+    let object = sess.object_guid;
+    let is_pages = matches!(sess.source, ReadSource::Pages { .. });
+    let Some(readable) = readable(
+        object,
+        &objects,
+        &items,
+        &go_templates,
+        materials.as_deref(),
+        &net,
+    ) else {
+        return; // template in flight; the reference re-enters the open when it lands
+    };
+    if is_pages && readable.page_head == 0 {
+        debug!("item text: {object:#x} has no page to read — closing");
+        open.pending = None;
+        return;
+    }
+    let begun = ItemTextState {
+        item: readable.title,
+        creator: None,
+        text: String::new(),
+        page: 1,
+        has_next: false,
+        material: readable.material,
+    };
+    commands.queue(move |world: &mut World| begin_core(world, object, begun));
+}
+
+/// [`begin_item_text`]'s world half: the latch, then `ITEM_TEXT_BEGIN`, told once per VM.
+fn begin_core(world: &mut World, object: u64, begun: ItemTextState) {
+    match world.resource_mut::<ItemTextOpen>().pending.as_mut() {
+        Some(sess) if sess.object_guid == object && !sess.registered => sess.registered = true,
+        _ => return,
+    }
+    crate::ui_session::register(world, object);
+    crate::ui_session::fire(world, |script| {
+        script.set_item_text(Some(begun));
+        script.fire_event("ITEM_TEXT_BEGIN", vec![]);
+    });
+    world.resource_scope(|world, mut open: Mut<ItemTextOpen>| {
+        if let (Some(sess), Some(script)) = (
+            open.pending.as_mut(),
+            world.get_non_send_resource::<UiScript>(),
+        ) {
+            sess.told.get(script).begun = true;
+        }
+    });
+}
+
+/// A read of `object_guid`'s pages run to its begin, as a click and the next feed's reads and
+/// begin would, for a test.
+#[cfg(test)]
+pub(crate) fn read_now(world: &mut World, object_guid: u64) {
+    use bevy::ecs::system::RunSystemOnce;
+    world.resource_mut::<ItemTextOpen>().read_pages(object_guid);
+    world.run_system_once(apply_reads).expect("reads");
+    world.flush();
+    world.run_system_once(begin_item_text).expect("begin");
+    world.flush();
 }
 
 /// The page-text reply's handler.
@@ -165,33 +322,20 @@ impl Plugin for UiItemTextPlugin {
         crate::query_cache::register::<PageTexts>(app);
         app.init_resource::<ItemTextOpen>()
             .init_resource::<PageTexts>()
-            .add_sweep_leg(SweepLeg::ItemText, close_item_text_on_leave_world)
+            .add_latched_window::<ItemTextOpen>()
+            // `0x490abc` → `0x4e3240` → `0x4e32e0(0, 0)`, the core.
+            .add_sweep_leg(SweepLeg::ItemText, close_core)
             .add_systems(
                 Update,
                 (
-                    // Feed before the input pass so an open paints this frame; drain after it
-                    // so a close clears this frame.
-                    feed_item_text.in_set(UiFeed),
+                    // The reads and the begin ahead of the feed, so a read that resolves paints
+                    // this frame; the drain after the input pass so a close clears this frame.
+                    (apply_reads, begin_item_text, feed_item_text)
+                        .chain()
+                        .in_set(UiFeed),
                     drain_item_text.after(UiInput),
                 ),
             );
-    }
-}
-
-/// The leave-world sweep's item-text leg (`0x490abc` → `0x4e3240` → `0x4e32e0(0, 0)`): an open
-/// reader, or one a toggle closed this frame, is told closed in the VM the sweep runs in
-/// (`ITEM_TEXT_CLOSED`, `0x4e33a2`).
-fn close_item_text_on_leave_world(
-    script: Option<NonSendMut<UiScript>>,
-    mut open: ResMut<ItemTextOpen>,
-) {
-    let was_open = open.pending.take().is_some();
-    if !(open.take_closing() || was_open) {
-        return;
-    }
-    if let Some(mut script) = script {
-        script.set_item_text(None);
-        script.fire_event("ITEM_TEXT_CLOSED", vec![]);
     }
 }
 
@@ -257,9 +401,8 @@ fn readable(
     })
 }
 
-/// Drive the open session to `ITEM_TEXT_BEGIN` once the template resolves, as the stock handler
-/// takes the text colour from the material (`ItemTextFrame.lua:18-23`), then to
-/// `ITEM_TEXT_READY`, which shows the window, once the body and any creator line are in.
+/// Drive the begun session to `ITEM_TEXT_READY`, which shows the window, once the body and any
+/// creator line are in.
 fn feed_item_text(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<ItemTextOpen>,
@@ -278,15 +421,11 @@ fn feed_item_text(
     let Some(mut script) = script else {
         return;
     };
-    // A toggle closed the reader; the frame is told here, where the script is.
-    if open.take_closing() {
-        script.set_item_text(None);
-        script.fire_event("ITEM_TEXT_CLOSED", vec![]);
-    }
     let Some(sess) = open.pending.as_mut() else {
         return;
     };
-    if sess.told.get(&script).ready {
+    // The begin ([`begin_item_text`]) fires first, latching the reader.
+    if sess.told.get(&script).ready || !sess.told.get(&script).begun {
         return;
     }
     let Some(readable) = readable(
@@ -299,29 +438,6 @@ fn feed_item_text(
     ) else {
         return; // template in flight; the reference re-enters the open when it lands
     };
-
-    // No page to show: the reference bails before firing anything (`0x4e341d`).
-    if matches!(sess.source, ReadSource::Pages { .. }) && readable.page_head == 0 {
-        debug!(
-            "item text: {:#x} has no page to read — closing",
-            sess.object_guid
-        );
-        open.pending = None;
-        return;
-    }
-
-    if !sess.told.get(&script).begun {
-        script.set_item_text(Some(ItemTextState {
-            item: readable.title.clone(),
-            creator: None,
-            text: String::new(),
-            page: 1,
-            has_next: false,
-            material: readable.material.clone(),
-        }));
-        script.fire_event("ITEM_TEXT_BEGIN", vec![]);
-        sess.told.get(&script).begun = true;
-    }
 
     let (creator, text, page, has_next) = match &mut sess.source {
         ReadSource::Letter { text_id } => {
@@ -393,12 +509,13 @@ fn feed_item_text(
 #[derive(Resource)]
 pub(crate) struct PageMaterials(pub(crate) benilla_formats::PageTextMaterialCatalog);
 
-/// Drain the reader's intents: `CloseItemText()` clears the session and fires `ITEM_TEXT_CLOSED`;
-/// a page turn re-runs the feed from `ITEM_TEXT_READY`, as the reference does not re-fire BEGIN.
+/// Drain the reader's intents: `CloseItemText()` runs the core; a page turn re-runs the feed from
+/// `ITEM_TEXT_READY`, as the reference does not re-fire BEGIN.
 fn drain_item_text(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<ItemTextOpen>,
     pages: Res<PageTexts>,
+    mut world_commands: Commands,
 ) {
     let Some(mut script) = script else {
         return;
@@ -415,9 +532,8 @@ fn drain_item_text(
             sess.told.get(&script).ready = false;
         }
     }
-    if script.take_item_text_close() && open.pending.take().is_some() {
-        script.set_item_text(None);
-        script.fire_event("ITEM_TEXT_CLOSED", vec![]);
+    if script.take_item_text_close() {
+        crate::ui_session::queue(&mut world_commands, close_core);
     }
 }
 
@@ -477,26 +593,16 @@ mod tests {
     }
 
     #[test]
-    fn re_reading_the_same_object_toggles_closed() {
-        let mut open = ItemTextOpen::default();
-        open.open_pages(0xF110_0000_0000_0001);
-        assert!(!open.toggle_closed(0xF110_0000_0000_0002), "another book");
-        assert!(open.pending.is_some());
-        assert!(open.toggle_closed(0xF110_0000_0000_0001));
-        assert!(open.pending.is_none());
-        assert!(
-            open.take_closing(),
-            "the frame must be told — a cleared session alone leaves the window on screen"
-        );
-        assert!(!open.take_closing(), "drained");
-        assert!(!open.toggle_closed(0xF110_0000_0000_0001), "nothing open");
-        assert!(!open.take_closing(), "a no-op toggle closes nothing");
-    }
-
-    #[test]
     fn a_page_read_opens_before_its_template_lands() {
-        let mut open = ItemTextOpen::default();
-        open.open_pages(0xF110_0000_0000_0001);
+        let mut world = World::new();
+        world.init_resource::<ItemTextOpen>();
+        assert!(!world
+            .resource_mut::<ItemTextOpen>()
+            .read_pages(0xF110_0000_0000_0001));
+        use bevy::ecs::system::RunSystemOnce;
+        world.run_system_once(apply_reads).unwrap();
+        world.flush();
+        let open = world.resource::<ItemTextOpen>();
         let sess = open.pending.as_ref().expect("open");
         assert!(matches!(&sess.source, ReadSource::Pages { visited } if visited.is_empty()));
     }

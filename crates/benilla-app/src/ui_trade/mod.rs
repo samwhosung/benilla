@@ -14,7 +14,7 @@ use crate::net::{ClientCommand, GuidIndex, NetCommands, ObjectStore, Objects, Se
 use crate::target::Selection;
 use crate::ui_party::GroupState;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
-use crate::ui_session::NpcSession;
+use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
 
@@ -49,13 +49,6 @@ pub(crate) struct TradeSession {
     our_accept: bool,
     /// The partner pressed Trade (`TRADE_ACCEPT`).
     their_accept: bool,
-    /// A `TRADE_REQUEST_CANCEL` owed to [`feed_trade`]. `CANCELED` signals it (`0x4bf832`)
-    /// before it clears the window (`0x4bf842`), so it survives [`Self::close_window`].
-    request_cancel: bool,
-    /// `UnlockTradeItems` owed to [`feed_trade`]: the `CANCELED`, `COMPLETE` and `CLOSE_WINDOW`
-    /// arms run it before the close (`0x4bf837`, `0x4bf859`, `0x4bf87e`), a local `CloseTrade`
-    /// never (`0x4bfdc0`). It survives [`Self::close_window`].
-    unlock_items: bool,
     /// Our 0-based slots `InvalidateTradeSlot` (`0x4bfbd0`) runs on, owed to [`feed_trade`].
     invalidated: Vec<u8>,
     /// Owed lines whose `%s` names a player, parked until [`NameCache`] answers. The reference
@@ -208,25 +201,6 @@ impl TradeSession {
         self.our_accept = false;
     }
 
-    /// Owe `TRADE_REQUEST_CANCEL`, the one Lua event the status dispatcher fires (`0x4bf832`, the
-    /// sole `SignalEvent` in `[0x4bf720, 0x4bfa08)`).
-    pub(crate) fn signal_request_cancel(&mut self) {
-        self.request_cancel = true;
-    }
-
-    fn take_request_cancel(&mut self) -> bool {
-        std::mem::take(&mut self.request_cancel)
-    }
-
-    /// Owe `UnlockTradeItems` (`0x4bfcf0`): a server-driven close.
-    pub(crate) fn unlock_items(&mut self) {
-        self.unlock_items = true;
-    }
-
-    fn take_unlock_items(&mut self) -> bool {
-        std::mem::take(&mut self.unlock_items)
-    }
-
     fn take_invalidated(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.invalidated)
     }
@@ -250,14 +224,10 @@ impl TradeSession {
         self.initiated.then_some(self.partner).flatten()
     }
 
-    /// Close the window, the reference's `SetTradePartner(0, 0)` (`0x4bf4e0`), from `CANCELED`,
-    /// `COMPLETE`, `CLOSE_WINDOW` or the local `CloseTrade` (`0x4bfdc0`): a full reset, a superset
-    /// of [`Self::clear_pending`], keeping the two signals the reference raises before it,
-    /// [`Self::request_cancel`] and [`Self::named_lines`].
+    /// The window's state cleared, as the close core does (`0x4bf516`): a full reset, a superset
+    /// of [`Self::clear_pending`], keeping [`Self::named_lines`], which hang off the name query.
     pub(crate) fn close_window(&mut self) {
         *self = TradeSession {
-            request_cancel: self.request_cancel,
-            unlock_items: self.unlock_items,
             named_lines: std::mem::take(&mut self.named_lines),
             ..Default::default()
         };
@@ -323,42 +293,77 @@ impl TradeSession {
     }
 }
 
-/// The `"npc"` portrait points at the partner only while the window is open.
-impl NpcSession for TradeSession {
-    fn npc(&self) -> Option<u64> {
+/// The partner's cell `[0xb71728]`, set only while the window is open; `CloseTrade` (`0x4bfdc0`)
+/// enters the core.
+impl LatchedWindow for TradeSession {
+    const WINDOW: NpcWindow = NpcWindow::Trade;
+
+    fn cell(&self) -> Option<u64> {
         self.open.then_some(self.partner).flatten()
     }
 
-    fn close(&mut self) {
-        self.close_window();
+    fn dispatched(world: &mut World) {
+        close_core(world);
     }
+
+    fn take_close_verb(script: &mut UiScript) -> bool {
+        script.take_trade_close()
+    }
+}
+
+/// `OPEN_WINDOW`'s open, `0x4bf4e0` with the pending partner (`0x4bf7f8`): the latch first, with
+/// no test of the cell (`0x4bf53e`), so the window a trade opens over, an NPC's or a trade's,
+/// closes first; then the cell and a fresh offer (`0x4bf549`-`0x4bf5ea`). The feed fires
+/// `TRADE_SHOW` (`0x4bf644`). With no partner the call is the close (`0x4bf4ed`).
+pub(crate) fn open_window(world: &mut World) {
+    let Some(partner) = world.resource::<TradeSession>().partner else {
+        close_core(world);
+        return;
+    };
+    crate::ui_session::register(world, partner);
+    let mut trade = world.resource_mut::<TradeSession>();
+    trade.partner = Some(partner);
+    trade.open_window();
+}
+
+/// The close core, `0x4bf4e0` with a zero guid: with a window open, the latch release
+/// (`0x4bf50a`), the cell cleared and `TRADE_CLOSED` (`0x4bf522`); then `CMSG_CANCEL_TRADE`
+/// (`0x4bf527` → `0x5d4310`), open or not. Entered while the partner holds the latch, the
+/// release's `0x493310` runs this once more inside it (`0x493365`), so a direct close fires
+/// `TRADE_CLOSED` twice and sends the cancel twice.
+pub(crate) fn close_core(world: &mut World) {
+    if let Some(partner) = world.resource::<TradeSession>().cell() {
+        crate::ui_session::release(world, partner);
+        world.resource_mut::<TradeSession>().close_window();
+        crate::ui_session::note_closed(world, NpcWindow::Trade);
+        crate::ui_session::fire(world, |script| {
+            script.set_trade(None);
+            script.fire_event("TRADE_CLOSED", vec![]);
+        });
+    }
+    if let Some(net) = world.get_resource::<NetCommands>() {
+        let _ = net.0.send(ClientCommand::CancelTrade);
+    }
+}
+
+/// The status dispatcher's three closing arms (`0x4bf720`): `CANCELED` signals
+/// `TRADE_REQUEST_CANCEL` (`0x4bf832`), and each runs `UnlockTradeItems` (`0x4bf837`, `0x4bf859`,
+/// `0x4bf87e`) before the close core (`0x4bf842`, `0x4bf867`, `0x4bf89c`).
+pub(crate) fn server_close(world: &mut World, canceled: bool) {
+    crate::ui_session::fire(world, |script| {
+        if canceled {
+            script.fire_event("TRADE_REQUEST_CANCEL", vec![]);
+        }
+        script.unlock_trade_items();
+    });
+    close_core(world);
 }
 
 /// The leave-world sweep's trade leg (`0x490adf` → `0x4bf220` → `0x5d4310`): `CMSG_CANCEL_TRADE`,
 /// sent whether or not a trade is open; vmangos ignores one with no trade
 /// (`TradeHandler.cpp:560-565` → `Player.cpp:11663`). The window itself stays until the sweep's
-/// last step, [`close_trade_on_leave_world`].
+/// interaction close (`0x490b5f` → `0x493310` → `0x493365`) runs the core on the latched partner.
 fn cancel_trade_on_leave_world(commands: Res<NetCommands>) {
-    let _ = commands.0.send(ClientCommand::CancelTrade);
-}
-
-/// The sweep's interaction close (`0x490b5f` → `0x493310`), past `PLAYER_LEAVING_WORLD`: an open
-/// trade is the latched interaction, as opening anything else would have closed it, so its arm
-/// runs `0x4bf4e0(0, 0)`: `TRADE_CLOSED` (`0x4bf522`) in the VM the sweep runs in, with no
-/// `UnlockTradeItems`, then one more `CMSG_CANCEL_TRADE` (`0x4bf527`).
-pub(crate) fn close_trade_on_leave_world(
-    script: Option<NonSendMut<UiScript>>,
-    mut trade: ResMut<TradeSession>,
-    commands: Res<NetCommands>,
-) {
-    if !trade.is_open() {
-        return;
-    }
-    trade.close_window();
-    if let Some(mut script) = script {
-        script.set_trade(None);
-        script.fire_event("TRADE_CLOSED", vec![]);
-    }
     let _ = commands.0.send(ClientCommand::CancelTrade);
 }
 
@@ -377,14 +382,14 @@ impl Plugin for UiTradePlugin {
         net::register(app);
         app.init_resource::<TradeSession>()
             .init_resource::<BlockTrades>()
+            .add_latched_window::<TradeSession>()
             .add_sweep_leg(SweepLeg::Trade, cancel_trade_on_leave_world)
-            .add_sweep_leg(SweepLeg::Interaction, close_trade_on_leave_world)
             .add_systems(
                 Update,
                 (
                     // The feed runs after `UnitFeed`, whose item templates it reads, and before
-                    // the input pass, with the drain after it, so each lands the same frame. No
-                    // range guard: vmangos cancels a trade on distance (`Player.cpp:6117`).
+                    // the input pass, with the drain after it, so each lands the same frame. The
+                    // latch's watchdog leashes the partner at 14 yd.
                     feed_trade.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     // Ahead of the feed, so an accepted partner shows the frame the window opens.
                     answer_trade_request.before(feed_trade),
@@ -639,6 +644,7 @@ fn feed_trade(
     mut last_accept: crate::ui_script::WindowMemo<(bool, bool)>,
     mut last_player_gold: crate::ui_script::WindowMemo<u32>,
     mut last_their_gold: crate::ui_script::WindowMemo<u32>,
+    mut closes: CoreCloses,
 ) {
     let Some(mut script) = script else {
         return;
@@ -648,10 +654,17 @@ fn feed_trade(
     let last_accept = last_accept.get(&script);
     let last_player_gold = last_player_gold.get(&script);
     let last_their_gold = last_their_gold.get(&script);
+    if closes.since_last(&script, NpcWindow::Trade) {
+        *last = None;
+        *last_open = false;
+        *last_accept = (false, false);
+        *last_player_gold = 0;
+        *last_their_gold = 0;
+    }
 
     let fresh = snapshot(&trade, &items, icons.as_deref(), &commands);
+    // A close is the core's, which told the VM; a disconnect's clear tells it nothing.
     let opened = !*last_open && trade.is_open();
-    let closed = *last_open && !trade.is_open();
     let changed = fresh != *last;
     // Our column as `ClickTradeButton` left it: its write signalled in place (`0x4bfaef`). A slot
     // whose source has not moved since the last push keeps the VM's value, so a click this
@@ -734,16 +747,6 @@ fn feed_trade(
             None => trade.owe_named_line(line),
         }
     }
-    // `TRADE_REQUEST_CANCEL`, ahead of the `TRADE_CLOSED` the same arm fires: `0x4bf832` signals,
-    // then `0x4bf842` calls `0x4bf4e0`, which fires `TRADE_CLOSED` at `0x4bf522`. Stock
-    // `UIParent.lua:395` only hides the never-shown `TRADE` popup on it; addons may listen.
-    if trade.take_request_cancel() {
-        script.fire_event("TRADE_REQUEST_CANCEL", vec![]);
-    }
-    // Then `UnlockTradeItems` (`0x4bf837`), before the close's `TRADE_CLOSED`.
-    if trade.take_unlock_items() {
-        script.unlock_trade_items();
-    }
     if opened {
         // `SetTradePartner`'s open leg (`0x4bf4e0`): coins held on the cursor fold into the offer
         // first and fire the two money events locally; the send goes out with the money intent.
@@ -753,8 +756,6 @@ fn feed_trade(
             script.fire_event("PLAYER_MONEY", vec![]);
         }
         script.fire_event("TRADE_SHOW", vec![]);
-    } else if closed {
-        script.fire_event("TRADE_CLOSED", vec![]);
     } else if trade.is_open() && changed {
         script.fire_event("TRADE_UPDATE", vec![]);
     }
@@ -770,11 +771,11 @@ fn feed_trade(
             ],
         );
     }
-    if closed {
-        *last_accept = (false, false);
+    *last_accept = if trade.is_open() {
+        accept
     } else {
-        *last_accept = accept;
-    }
+        (false, false)
+    };
 
     // Our gold reaches the money input through `PLAYER_TRADE_MONEY` (`TradeFrame.xml:565`), never
     // `TRADE_UPDATE`, so a repaint never overwrites what the player is typing.
@@ -796,11 +797,11 @@ fn feed_trade(
     *last_open = trade.is_open();
 }
 
-/// Drain the Lua intents into the trade `CMSG`s. `CloseTrade` clears the session, sending
-/// `CMSG_CANCEL_TRADE` only while one is live.
+/// Drain the Lua intents into the trade `CMSG`s; `CloseTrade` runs the close core.
 fn drain_trade(
     script: Option<NonSendMut<UiScript>>,
     mut trade: ResMut<TradeSession>,
+    mut world_commands: Commands,
     commands: Res<NetCommands>,
     selection: Res<Selection>,
     group: Res<GroupState>,
@@ -885,11 +886,9 @@ fn drain_trade(
                 .send(ClientCommand::ClearTradeItem { trade_slot });
         }
     }
+    // `CloseTrade` (`0x4bfdc0`) runs the core, whose cancel goes out open or not (`0x4bf527`).
     if script.take_trade_close() {
-        if trade.is_open() || trade.partner.is_some() {
-            let _ = commands.0.send(ClientCommand::CancelTrade);
-        }
-        trade.close_window();
+        crate::ui_session::queue(&mut world_commands, close_core);
     }
     // The `TRADE` popup's verbs: an empty `0x117` or `0x11C` and no local teardown; the status
     // reply drives the window.
@@ -1001,16 +1000,16 @@ mod tests {
         s.initiate(0x1234);
         assert_eq!(s.partner, Some(0x1234));
         assert!(!s.is_open());
-        assert_eq!(s.npc(), None);
+        assert_eq!(s.cell(), None);
 
         s.open_window();
         assert!(s.is_open());
-        assert_eq!(s.npc(), Some(0x1234));
+        assert_eq!(s.cell(), Some(0x1234));
 
         s.close_window();
         assert!(!s.is_open());
         assert_eq!(s.partner, None);
-        assert_eq!(s.npc(), None);
+        assert_eq!(s.cell(), None);
     }
 
     #[test]
@@ -1020,7 +1019,7 @@ mod tests {
         assert_eq!(s.pending_request(), Some(0xABCD));
         assert_eq!(s.partner, None, "an unanswered request has no partner");
         assert!(!s.is_open(), "BEGIN_TRADE does not itself open the window");
-        assert_eq!(s.npc(), None);
+        assert_eq!(s.cell(), None);
     }
 
     #[test]
@@ -1197,8 +1196,26 @@ mod tests {
             .insert_resource(names)
             .insert_resource(NetCommands(tx));
         app.insert_non_send_resource(UiScript::new().unwrap());
-        app.add_systems(Update, feed_trade);
+        app.add_latched_window::<TradeSession>()
+            .add_systems(Update, feed_trade);
+        net::register(&mut app);
         (app, rx)
+    }
+
+    /// The server's status `status`, through the handler table.
+    fn status(app: &mut App, status: TradeStatus) {
+        crate::net::handlers::dispatch(
+            app.world_mut(),
+            vec![benilla_protocol::SessionEvent::TradeStatus { status }],
+        );
+    }
+
+    /// A trade accepted with `partner` and its `OPEN_WINDOW`, the window holding the latch.
+    fn open_with(app: &mut App, partner: u64) {
+        app.world_mut()
+            .resource_mut::<TradeSession>()
+            .begin(partner);
+        status(app, TradeStatus::OpenWindow);
     }
 
     /// The number of `TRADE_REQUEST_CANCEL`s a spy frame has seen.
@@ -1227,30 +1244,31 @@ mod tests {
         app.update();
         assert_eq!(cancels_seen(&mut app), 0, "nothing has cancelled anything");
 
-        // A plain close, as `COMPLETE` and `CLOSE_WINDOW` do, signals nothing.
-        app.world_mut()
-            .resource_mut::<TradeSession>()
-            .close_window();
-        app.update();
-        assert_eq!(
-            cancels_seen(&mut app),
-            0,
-            "closing the window is not itself a cancel signal"
-        );
-
-        {
-            let mut trade = app.world_mut().resource_mut::<TradeSession>();
-            trade.signal_request_cancel();
-            trade.close_window();
+        // `COMPLETE` and `CLOSE_WINDOW` close without the signal.
+        for closing in [
+            TradeStatus::Complete,
+            TradeStatus::CloseWindow {
+                result: 0,
+                item_limit_category: 0,
+            },
+        ] {
+            open_with(&mut app, 0x7);
+            app.update();
+            status(&mut app, closing);
+            app.update();
+            assert_eq!(
+                cancels_seen(&mut app),
+                0,
+                "closing the window is not itself a cancel signal"
+            );
         }
+
+        open_with(&mut app, 0x7);
         app.update();
+        status(&mut app, TradeStatus::Canceled);
         assert_eq!(cancels_seen(&mut app), 1, "CANCELED signals it, once");
         app.update();
-        assert_eq!(
-            cancels_seen(&mut app),
-            1,
-            "and only once — the flag is taken"
-        );
+        assert_eq!(cancels_seen(&mut app), 1, "and only once");
     }
 
     /// `ClickTradeButton` signals its slot in place (`0x4bfaef`), so the store catching up with
@@ -1897,11 +1915,7 @@ mod tests {
     /// a spy that lists the trade-close and lock events in order.
     fn offered_app() -> App {
         let (mut app, _rx) = feed_app();
-        {
-            let mut trade = app.world_mut().resource_mut::<TradeSession>();
-            trade.begin(0x7);
-            trade.open_window();
-        }
+        open_with(&mut app, 0x7);
         app.update();
         let mut vm = app.world_mut().non_send_resource_mut::<UiScript>();
         let mut bag = benilla_ui::script::ContainerState::default();
@@ -1944,43 +1958,53 @@ mod tests {
     }
 
     /// `CANCELED` fires `TRADE_REQUEST_CANCEL` (`0x4bf832`), then unlocks the offered items
-    /// (`0x4bf837`), then closes with `TRADE_CLOSED` (`0x4bf522`); a local `CloseTrade`
-    /// (`0x4bfdc0`) closes without unlocking, which waits for the server's `CANCELED`.
+    /// (`0x4bf837`), then runs the close core while the partner holds the latch: `TRADE_CLOSED`
+    /// twice (`0x4bf522`, once inside `0x493365`'s re-entry) and `CMSG_CANCEL_TRADE` after each
+    /// (`0x4bf527`). A local `CloseTrade` (`0x4bfdc0`) runs the same core without unlocking, which
+    /// waits for the server's `CANCELED`; that close finds no window and only cancels again.
     #[test]
     fn a_canceled_trade_unlocks_between_its_signals_and_a_local_close_does_not() {
+        let (tx, rx) = crossbeam_channel::unbounded();
         let mut app = offered_app();
-        {
-            let mut trade = app.world_mut().resource_mut::<TradeSession>();
-            trade.signal_request_cancel();
-            trade.unlock_items();
-            trade.close_window();
-        }
-        app.update();
+        app.insert_resource(NetCommands(tx.clone()));
+        status(&mut app, TradeStatus::Canceled);
         assert_eq!(
             seen(&mut app),
-            ["TRADE_REQUEST_CANCEL", "ITEM_LOCK_CHANGED", "TRADE_CLOSED"]
+            [
+                "TRADE_REQUEST_CANCEL",
+                "ITEM_LOCK_CHANGED",
+                "TRADE_CLOSED",
+                "TRADE_CLOSED"
+            ]
         );
         assert!(!bag_locked(&mut app));
+        assert_eq!(cancels(&rx), 2, "the re-entered core's and the outer one's");
+        assert_eq!(
+            app.world()
+                .resource::<crate::ui_session::InteractLatch>()
+                .guid(),
+            None
+        );
 
         let mut app = offered_app();
-        app.world_mut()
-            .resource_mut::<TradeSession>()
-            .close_window();
+        app.insert_resource(NetCommands(tx));
+        // `CloseTrade` (`0x4bfdc0` → `0x4bf4e0(0, 0)`), as the drain runs it.
+        close_core(app.world_mut());
         app.update();
-        assert_eq!(seen(&mut app), ["TRADE_CLOSED"]);
+        assert_eq!(seen(&mut app), ["TRADE_CLOSED", "TRADE_CLOSED"]);
+        assert_eq!(cancels(&rx), 2);
         assert!(bag_locked(&mut app), "held until the server answers");
-        {
-            let mut trade = app.world_mut().resource_mut::<TradeSession>();
-            trade.signal_request_cancel();
-            trade.unlock_items();
-            trade.close_window();
-        }
-        app.update();
+        status(&mut app, TradeStatus::Canceled);
         assert_eq!(
             seen(&mut app),
             ["TRADE_REQUEST_CANCEL", "ITEM_LOCK_CHANGED"]
         );
         assert!(!bag_locked(&mut app));
+        assert_eq!(
+            cancels(&rx),
+            1,
+            "the core's cancel goes out with no window open"
+        );
     }
 
     /// `ONLY_CONJURED` invalidates the slot (`0x4bf9fd` into `0x4bfbd0`): the item unlocks and
@@ -2035,7 +2059,7 @@ mod tests {
         use crate::ui_script::SweepApp;
         let (mut app, rx) = feed_app();
         app.add_sweep_leg(SweepLeg::Trade, cancel_trade_on_leave_world)
-            .add_sweep_leg(SweepLeg::Interaction, close_trade_on_leave_world);
+            .add_sweep_leg(SweepLeg::Interaction, crate::ui_session::dispatch);
         (app, rx)
     }
 
@@ -2055,11 +2079,7 @@ mod tests {
         use crate::ui_script::sweep_test::{reload_in_place, seen, seen_in, spied_vm};
         let (mut app, rx) = sweep_trade_app();
         app.insert_non_send_resource(spied_vm(&EVENTS));
-        {
-            let mut trade = app.world_mut().resource_mut::<TradeSession>();
-            trade.begin(0x7);
-            trade.open_window();
-        }
+        open_with(&mut app, 0x7);
         app.update();
         assert_eq!(seen_in(&app), ["TRADE_SHOW"]);
         let _ = rx.try_iter().count();
@@ -2091,11 +2111,7 @@ mod tests {
         );
         assert_eq!(seen_in(&app), ["PLAYER_LEAVING_WORLD"]);
 
-        {
-            let mut trade = app.world_mut().resource_mut::<TradeSession>();
-            trade.begin(0x7);
-            trade.open_window();
-        }
+        open_with(&mut app, 0x7);
         app.update();
         sweep_in_place(&mut app);
         app.update();

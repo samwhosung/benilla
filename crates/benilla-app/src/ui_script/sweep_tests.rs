@@ -17,7 +17,6 @@ const SHARER: u64 = 0x0000_0000_0000_0007;
 const FLIGHT_MASTER: u64 = 0xF130_0000_0000_0002;
 const TRAINER: u64 = 0xF130_0000_0000_0003;
 const VENDOR: u64 = 0xF130_0000_0000_0004;
-const PARTNER: u64 = 0x0000_0000_0000_0008;
 const TABARD_VENDOR: u64 = 0xF130_0000_0000_0005;
 const REGISTRAR: u64 = 0xF130_0000_0000_0006;
 const MAILBOX: u64 = 0xF110_0000_0000_0B0C;
@@ -101,11 +100,6 @@ fn open_everything(world: &mut World) {
     world
         .resource_mut::<crate::ui_merchant::MerchantOpen>()
         .open(VENDOR, Vec::new());
-    {
-        let mut trade = world.resource_mut::<crate::ui_trade::TradeSession>();
-        trade.begin(PARTNER);
-        trade.open_window();
-    }
     world.resource_mut::<crate::ui_duel::DuelState>().arbiter = 0xF130_0000_0000_00D1;
     world
         .resource_mut::<crate::ui_tabard::TabardOpen>()
@@ -129,8 +123,9 @@ fn open_everything(world: &mut World) {
 }
 
 /// One sweep closes every window in the reference's order: the legs from `0x490ab2` to
-/// `0x490b2a`, `PLAYER_LEAVING_WORLD` (`0x490b4d`), then the interaction close (`0x490b5f`), whose
-/// trade arm is tested before its bank arm, then the cinematic (`0x490b77`). The mail leg and the
+/// `0x490b2a`, `PLAYER_LEAVING_WORLD` (`0x490b4d`), then the interaction close (`0x490b5f`) on the
+/// window still latched, here the bank, which no leg closes, then the cinematic (`0x490b77`). A
+/// latched trade closes there too, which `ui_trade`'s own sweep tests pin. The mail leg and the
 /// duel leg are silent, and the charter window is no leg's.
 #[test]
 fn the_sweep_closes_every_window_in_the_references_order() {
@@ -153,7 +148,6 @@ fn the_sweep_closes_every_window_in_the_references_order() {
             "AUCTION_HOUSE_CLOSED",
             "PET_STABLE_CLOSED",
             "PLAYER_LEAVING_WORLD",
-            "TRADE_CLOSED",
             "BANKFRAME_CLOSED",
             "CINEMATIC_STOP",
         ]
@@ -166,11 +160,10 @@ fn the_sweep_closes_every_window_in_the_references_order() {
                 ClientCommand::LootRelease { guid: CORPSE },
                 ClientCommand::QuestPushResult { sharer: SHARER, .. },
                 ClientCommand::CancelTrade,
-                ClientCommand::CancelTrade,
             ]
         ),
-        "the release (`0x48f2da`), the sharer's decline (`0x501173`), the trade leg's cancel \
-         (`0x5d4310`) and the interaction close's (`0x4bf527`): {sent:?}"
+        "the release (`0x48f2da`), the sharer's decline (`0x501173`) and the trade leg's cancel \
+         (`0x5d4310`), sent with no trade open: {sent:?}"
     );
 
     let world = app.world();

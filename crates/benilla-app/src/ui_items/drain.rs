@@ -376,27 +376,25 @@ impl ScriptItemUse<'_, '_> {
             }
             // The reader, with no packet (`0x4e32e0`); a re-click closes it.
             (UseFork::Read, Some(c)) => {
-                if item_text.toggle_closed(c.guid) {
+                if item_text.read_pages(c.guid) {
                     debug!("ui_items: re-click closes the book {:#x}", c.guid);
                 } else {
                     debug!(
                         "ui_items: read book {:#x} (page {}, lua bag {bag} slot {slot})",
                         c.guid, c.page_text
                     );
-                    item_text.open_pages(c.guid);
                 }
             }
             // vmangos's `CMSG_READ_ITEM` wants a template `PageText`, so a letter's text comes by
             // item-text query.
             (UseFork::Letter, Some(c)) => {
-                if item_text.toggle_closed(c.guid) {
+                if item_text.read_letter(c.guid, c.item_text_id) {
                     debug!("ui_items: re-click closes the letter {:#x}", c.guid);
                 } else {
                     debug!(
                         "ui_items: read letter {:#x} (text {}, lua bag {bag} slot {slot})",
                         c.guid, c.item_text_id
                     );
-                    item_text.open_letter(c.guid, c.item_text_id);
                 }
             }
             // The server answers with a loot window on the item (`SpellHandler.cpp:227`). The send

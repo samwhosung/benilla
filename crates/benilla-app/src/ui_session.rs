@@ -37,11 +37,7 @@ impl Plugin for UiSessionPlugin {
             )
             // `0x490b5f` → `0x493310`: whatever window still holds the latch past
             // `PLAYER_LEAVING_WORLD` closes through the dispatcher.
-            // The trade partner's arm is tested before the bank's (`0x49335f`, `0x493449`).
-            .add_sweep_leg(
-                crate::ui_script::SweepLeg::Interaction,
-                dispatch.after(crate::ui_trade::close_trade_on_leave_world),
-            )
+            .add_sweep_leg(crate::ui_script::SweepLeg::Interaction, dispatch)
             .add_systems(
                 Update,
                 (
@@ -59,10 +55,10 @@ impl Plugin for UiSessionPlugin {
     }
 }
 
-/// A window or question bound to a live NPC that keeps its own guid off the latch, and closes
-/// itself through [`close_npc_session_out_of_range::<T>`] ahead of its feed: the binder and
+/// A question bound to a live NPC with a guid of its own, not the latch: the binder and
 /// talent-wipe questions and the pet trainer's, as the reference re-runs its interact-range test
-/// against each one's latched guid, and the trade window, not yet on [`InteractLatch`].
+/// against each one's latched guid. Each registers [`close_npc_session_out_of_range::<T>`] ahead
+/// of its feed.
 pub(crate) trait NpcSession: Resource {
     /// The bound NPC's guid; `None` when nothing is open.
     fn npc(&self) -> Option<u64>;
@@ -115,24 +111,21 @@ pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
 pub(crate) struct InteractNpc(pub(crate) Option<Entity>, pub(crate) Option<u64>);
 
 /// Publish the latch as [`InteractNpc`]. The reference's `"npc"` is the latch itself (`0x515c00`),
-/// but a quest panel opened from a bag item and the mailbox publish none here, as before the
-/// latch: there is no unit bake for an item or a mailbox. The trade window, not yet on the latch,
-/// follows it. `Option<Res<_>>` lets a test mount it without every window.
+/// a trade's partner included, but a quest panel opened from a bag item, the mailbox and the text
+/// reader publish none here, as before the latch: there is no unit bake for an item or a game
+/// object window. `Option<Res<_>>` lets a test mount it without every window.
 pub(crate) fn feed_interact_npc(
     latch: Option<Res<InteractLatch>>,
     mail: Option<Res<crate::ui_mail::MailOpen>>,
-    // Trade's "npc" is the partner, a live player.
-    trade: Option<Res<crate::ui_trade::TradeSession>>,
+    reader: Option<Res<crate::ui_item_text::ItemTextOpen>>,
     index: Option<Res<GuidIndex>>,
     mut out: ResMut<InteractNpc>,
 ) {
-    let guid = latch
-        .and_then(|l| l.guid())
-        .filter(|&g| {
-            !benilla_protocol::guid::is_item(g)
-                && mail.as_ref().is_none_or(|m| m.mailbox != Some(g))
-        })
-        .or_else(|| trade.and_then(|s| s.npc()));
+    let guid = latch.and_then(|l| l.guid()).filter(|&g| {
+        !benilla_protocol::guid::is_item(g)
+            && mail.as_ref().is_none_or(|m| m.mailbox != Some(g))
+            && reader.as_ref().is_none_or(|r| r.object() != Some(g))
+    });
     // Field 0 is the entity the booth bakes and the facing chain steers by; field 1 is the guid
     // `crate::ui_unit` names the token by, which holds even when the entity is not streamed.
     // Written only on a change: the unit feed's dirty gate reads `is_changed()` on it.
@@ -343,22 +336,16 @@ mod tests {
             InteractNpc(None, None)
         );
 
-        // The latch clear, a window off it (a trade's partner) publishes its own.
+        // A trade's partner holds the latch: the partner's own portrait.
         const PARTNER: u64 = 0x0000_0000_0000_0008;
         let partner = app.world_mut().spawn_empty().id();
         app.world_mut()
             .resource_mut::<GuidIndex>()
             .0
             .insert(PARTNER, partner);
-        dispatch(app.world_mut());
-        app.init_resource::<crate::ui_trade::TradeSession>();
-        {
-            let mut trade = app
-                .world_mut()
-                .resource_mut::<crate::ui_trade::TradeSession>();
-            trade.begin(PARTNER);
-            trade.open_window();
-        }
+        app.world_mut()
+            .resource_mut::<InteractLatch>()
+            .latch_for_test(PARTNER);
         app.update();
         assert_eq!(
             app.world().resource::<InteractNpc>().0,

@@ -23,10 +23,26 @@ fn on_trade_status(
     mut trade: ResMut<TradeSession>,
     mut errors: ResMut<UiErrorKeys>,
     commands: Res<NetCommands>,
+    mut world_commands: Commands,
 ) {
     if let SessionEvent::TradeStatus { status } = ev {
-        trade_status(status, &mut trade, &mut errors, &commands);
+        if let Some(window) = trade_status(status, &mut trade, &mut errors, &commands) {
+            world_commands.queue(move |world: &mut World| match window {
+                Window::Open => super::open_window(world),
+                Window::Close { canceled } => super::server_close(world, canceled),
+            });
+        }
     }
+}
+
+/// What a status arm does to the window, run with the world in hand after the arm's line and the
+/// handler's tail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Window {
+    /// `OPEN_WINDOW` (`0x4bf7f8` → `0x4bf4e0(partner)`).
+    Open,
+    /// `CANCELED`, `COMPLETE` or `CLOSE_WINDOW`; only `CANCELED` signals `TRADE_REQUEST_CANCEL`.
+    Close { canceled: bool },
 }
 
 fn on_trade_status_extended(In(ev): In<SessionEvent>, mut trade: ResMut<TradeSession>) {
@@ -50,7 +66,7 @@ fn trade_status(
     trade: &mut TradeSession,
     errors: &mut UiErrorKeys,
     commands: &NetCommands,
-) {
+) -> Option<Window> {
     bevy::log::info!(target: "trade", "SMSG_TRADE_STATUS {status:?}");
 
     // The line first: a naming arm reads the guid cells before the tail clears them, the
@@ -72,7 +88,7 @@ fn trade_status(
 
     match status {
         TradeStatus::BeginTrade { partner } => trade.request(partner),
-        TradeStatus::OpenWindow => trade.open_window(),
+        TradeStatus::OpenWindow => return Some(Window::Open),
         // Case 4 (`0x4bf80b`) sets the partner's accept flag and case 9 (`0x4bf821`) clears it;
         // neither touches ours, closes anything or is in the tail's clear set.
         TradeStatus::Accept => trade.partner_accepted(),
@@ -86,18 +102,16 @@ fn trade_status(
             }
             trade.back_to_trade();
         }
-        // The three that close the window; `CANCELED` signals `TRADE_REQUEST_CANCEL` (`0x4bf832`)
-        // before the close. The reference also sends `CMSG_CANCEL_TRADE` from inside `0x4bf4e0`;
-        // benilla sends none on a server-driven close (the frame's `CloseTrade` drains after the
-        // session is clear), and vmangos ignores it once the trade is gone (`Player.cpp:11739`).
+        // The three that close the window through the core ([`super::server_close`]), which sends
+        // `CMSG_CANCEL_TRADE` as the reference's does (`0x4bf527`); vmangos ignores it once the
+        // trade is gone (`Player.cpp:11739`). The tail's clear runs here, the core's reset later.
         TradeStatus::Canceled => {
-            trade.signal_request_cancel();
-            trade.unlock_items();
-            trade.close_window();
+            trade.clear_pending();
+            return Some(Window::Close { canceled: true });
         }
         TradeStatus::Complete | TradeStatus::CloseWindow { .. } => {
-            trade.unlock_items();
-            trade.close_window();
+            trade.clear_pending();
+            return Some(Window::Close { canceled: false });
         }
         // The placement is bounced, not the window (case 22, `0x4bf9ec` → `0x4bfbd0`).
         TradeStatus::OnlyConjured { slot } => trade.bounce_own_offer(slot),
@@ -119,6 +133,7 @@ fn trade_status(
         // Past `0x16`: the bare epilogue `0x4bfa02`, as for case 13; vmangos never sends one.
         TradeStatus::Unknown(_) => {}
     }
+    None
 }
 
 /// A status arm's line: a plain key, or one whose `%s` waits for a player's name.
@@ -179,6 +194,7 @@ mod tests {
     use benilla_ui::messages::{kind_of, MsgKind};
 
     use super::*;
+    use crate::ui_session::LatchApp;
 
     fn every_status() -> Vec<TradeStatus> {
         vec![
@@ -257,7 +273,9 @@ mod tests {
             .init_resource::<TradeSession>()
             .init_resource::<UiErrorKeys>()
             .insert_resource(commands);
+        app.add_latched_window::<TradeSession>();
         register(&mut app);
+        app.world_mut().resource_mut::<TradeSession>().begin(0x7);
 
         crate::net::handlers::dispatch(
             app.world_mut(),
@@ -314,20 +332,27 @@ mod tests {
         assert_eq!(kind_of("ERR_TRADE_TARGET_DEAD"), MsgKind::Error);
     }
 
-    /// `0x4bf4e0` has four call sites in the dispatcher: one opens the window, three close it.
+    /// `0x4bf4e0` has four call sites in the dispatcher: one opens the window, three close it,
+    /// and only `CANCELED`'s signals `TRADE_REQUEST_CANCEL` first (`0x4bf832`).
     #[test]
     fn only_canceled_complete_and_close_window_tear_the_window_down() {
-        let closes: Vec<u32> = every_status()
+        let windows: Vec<(u32, Window)> = every_status()
             .into_iter()
-            .filter(|status| {
+            .filter_map(|status| {
                 let (mut errors, commands, _rx) = sink();
                 let mut trade = open_trade();
-                trade_status(*status, &mut trade, &mut errors, &commands);
-                !trade.is_open()
+                trade_status(status, &mut trade, &mut errors, &commands).map(|w| (status.code(), w))
             })
-            .map(TradeStatus::code)
             .collect();
-        assert_eq!(closes, vec![3, 8, 12]);
+        assert_eq!(
+            windows,
+            vec![
+                (2, Window::Open),
+                (3, Window::Close { canceled: true }),
+                (8, Window::Close { canceled: false }),
+                (12, Window::Close { canceled: false }),
+            ]
+        );
     }
 
     /// The tail's clear set minus the three closing codes.

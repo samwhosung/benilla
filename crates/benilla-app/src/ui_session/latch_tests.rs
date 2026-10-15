@@ -4,11 +4,12 @@
 
 use bevy::prelude::*;
 
-use super::{dispatch, register, InteractLatch, LatchApp, NpcWindow as W};
+use super::{dispatch, InteractLatch, LatchApp, LatchedWindow, NpcWindow as W};
 use crate::net::NetCommands;
 use crate::ui_auction::AuctionOpen;
 use crate::ui_bank::BankOpen;
 use crate::ui_gossip::GossipState;
+use crate::ui_item_text::ItemTextOpen;
 use crate::ui_mail::MailOpen;
 use crate::ui_merchant::MerchantOpen;
 use crate::ui_petition::GuildRegistrarState;
@@ -17,14 +18,17 @@ use crate::ui_script::sweep_test::{seen_in, spied_vm};
 use crate::ui_stable::StableOpen;
 use crate::ui_tabard::TabardOpen;
 use crate::ui_taxi::TaxiState;
+use crate::ui_trade::TradeSession;
 use crate::ui_trainer::TrainerOpen;
 
 const VENDOR: u64 = 0xF130_0000_0000_0001;
 const BANKER: u64 = 0xF130_0000_0000_0002;
 const NPC: u64 = 0xF130_0000_0000_0003;
 
-/// The windows this harness opens, in `0x493310`'s order.
-const WINDOWS: [W; 11] = [
+/// The windows this harness opens, in `0x493310`'s order: every window on the latch.
+const WINDOWS: [W; 13] = [
+    W::Trade,
+    W::ItemText,
     W::Gossip,
     W::Quest,
     W::Merchant,
@@ -41,6 +45,8 @@ const WINDOWS: [W; 11] = [
 /// Each window's close event.
 fn event(window: W) -> &'static str {
     match window {
+        W::Trade => "TRADE_CLOSED",
+        W::ItemText => "ITEM_TEXT_CLOSED",
         W::Gossip => "GOSSIP_CLOSED",
         W::Quest => "QUEST_FINISHED",
         W::Merchant => "MERCHANT_CLOSED",
@@ -52,15 +58,30 @@ fn event(window: W) -> &'static str {
         W::Mail => "MAIL_CLOSED",
         W::Auction => "AUCTION_HOUSE_CLOSED",
         W::Stable => "PET_STABLE_CLOSED",
-        other => unreachable!("{other:?} is not in this harness"),
     }
 }
 
-/// The windows on the latch with their cells, a wire, and a VM that records their closes.
+/// The windows on the latch with their cells, a wire, and a VM that records their closes. Every
+/// unit guid's entry is 0, which a type-9 template makes a book, so any NPC here can be read.
 fn harness() -> App {
-    let (tx, _rx) = crossbeam_channel::unbounded();
+    harness_with_wire().0
+}
+
+fn harness_with_wire() -> (App, crossbeam_channel::Receiver<crate::net::ClientCommand>) {
+    let (tx, rx) = crossbeam_channel::unbounded();
     let mut app = App::new();
+    let mut books = crate::go_templates::GameObjectTemplates::default();
+    let mut data = [0i32; 24];
+    data[0] = 1;
+    books.insert(0, 9, "Book".into(), &data);
     app.insert_resource(NetCommands(tx))
+        .insert_resource(books)
+        .init_resource::<crate::net::GuidIndex>()
+        .init_resource::<crate::items::Items>()
+        .init_resource::<TradeSession>()
+        .init_resource::<ItemTextOpen>()
+        .add_latched_window::<TradeSession>()
+        .add_latched_window::<ItemTextOpen>()
         .init_resource::<MerchantOpen>()
         .init_resource::<BankOpen>()
         .init_resource::<GossipState>()
@@ -84,7 +105,7 @@ fn harness() -> App {
         .add_latched_window::<MailOpen>()
         .add_latched_window::<AuctionOpen>()
         .insert_non_send_resource(spied_vm(&WINDOWS.map(event)));
-    app
+    (app, rx)
 }
 
 fn latch(app: &App) -> Option<u64> {
@@ -92,9 +113,11 @@ fn latch(app: &App) -> Option<u64> {
 }
 
 /// The guid in each window's cell, in [`WINDOWS`]' order.
-fn cells(app: &App) -> [Option<u64>; 11] {
+fn cells(app: &App) -> [Option<u64>; 13] {
     let world = app.world();
     let cell = |window: W| match window {
+        W::Trade => world.resource::<TradeSession>().cell(),
+        W::ItemText => world.resource::<ItemTextOpen>().object(),
         W::Gossip => world.resource::<GossipState>().npc,
         W::Quest => world.resource::<QuestGiver>().npc,
         W::Merchant => world.resource::<MerchantOpen>().vendor,
@@ -110,7 +133,6 @@ fn cells(app: &App) -> [Option<u64>; 11] {
         W::Mail => world.resource::<MailOpen>().mailbox,
         W::Auction => world.resource::<AuctionOpen>().auctioneer,
         W::Stable => world.resource::<StableOpen>().npc,
-        other => unreachable!("{other:?} is not in this harness"),
     };
     WINDOWS.map(cell)
 }
@@ -129,12 +151,14 @@ fn greeting(npc: u64) -> QuestView {
 fn open(app: &mut App, window: W, npc: u64) {
     let world = app.world_mut();
     match window {
+        W::Trade => {
+            world.resource_mut::<TradeSession>().begin(npc);
+            crate::ui_trade::open_window(world);
+        }
+        W::ItemText => crate::ui_item_text::read_now(world, npc),
         W::Merchant => crate::ui_merchant::open_merchant(world, npc, Vec::new()),
         W::Bank => crate::ui_bank::open_bank(world, npc),
-        W::Gossip => {
-            register(world, npc);
-            world.resource_mut::<GossipState>().npc = Some(npc);
-        }
+        W::Gossip => crate::ui_gossip::open_menu(world, npc, 0, Vec::new(), Vec::new()),
         W::Quest => crate::ui_quest::open_panel(world, npc, greeting(npc)),
         W::Trainer => crate::ui_trainer::open_trainer(world, npc, 0, Vec::new(), String::new()),
         W::Taxi => crate::ui_taxi::open_map(world, npc, 1, Default::default()),
@@ -156,7 +180,6 @@ fn open(app: &mut App, window: W, npc: u64) {
         W::Tabard => crate::ui_tabard::open_tabard(world, npc),
         W::Mail => crate::ui_mail::open_mailbox(world, npc),
         W::Auction => crate::ui_auction::open_auction(world, npc, 1),
-        other => unreachable!("{other:?} is not in this harness"),
     }
 }
 
@@ -164,6 +187,8 @@ fn open(app: &mut App, window: W, npc: u64) {
 fn close(app: &mut App, window: W) {
     let world = app.world_mut();
     match window {
+        W::Trade => crate::ui_trade::close_core(world),
+        W::ItemText => crate::ui_item_text::close_core(world),
         W::Merchant => crate::ui_merchant::close_core(world),
         W::Bank => crate::ui_bank::close_core(world),
         W::Gossip => crate::ui_gossip::close_core(world),
@@ -175,7 +200,6 @@ fn close(app: &mut App, window: W) {
         W::Tabard => crate::ui_tabard::close_core(world),
         W::Mail => crate::ui_mail::close_core(world),
         W::Auction => crate::ui_auction::close_core(world),
-        other => unreachable!("{other:?} is not in this harness"),
     }
 }
 
@@ -207,6 +231,12 @@ fn opening_a_bank_or_a_vendor_closes_the_other_first() {
 fn every_open_closes_the_holder_so_one_window_is_open() {
     for first in WINDOWS {
         for second in WINDOWS {
+            // One trade over another needs a second `OPEN_WINDOW` while the first stands, which
+            // no server sends; benilla's session keeps one partner for the pending guid and the
+            // window's, so it cannot stage one.
+            if first == W::Trade && second == W::Trade {
+                continue;
+            }
             for npc in [NPC, VENDOR] {
                 let mut app = harness();
                 open(&mut app, first, NPC);
@@ -217,8 +247,27 @@ fn every_open_closes_the_holder_so_one_window_is_open() {
                     .zip(cells(&app))
                     .filter_map(|(w, c)| c.map(|_| w))
                     .collect();
-                assert_eq!(latch(&app), Some(npc), "{what}");
                 let same_npc = npc == NPC;
+                // Reading the open object again is the toggle (`0x4e330c`): the release closes
+                // the latched reader inside it, then the read fires its own close, and nothing
+                // is latched.
+                if first == W::ItemText && second == W::ItemText && same_npc {
+                    assert_eq!(seen_in(&app), [event(first); 2], "{what}");
+                    assert_eq!(open_cells, [], "{what}");
+                    assert_eq!(latch(&app), None, "{what}");
+                    continue;
+                }
+                assert_eq!(latch(&app), Some(npc), "{what}");
+                // The reader writes its cell at the read (`0x4e3364`) and registers only once
+                // the text resolves (`0x4e349a`): on the guid a later arm's window holds,
+                // `0x493310` finds the reader's own cell first and closes it, the holder stays,
+                // and `ITEM_TEXT_BEGIN` fires anyway (`0x4e34a4`). No book shares a guid with an
+                // NPC window, so only the matrix stages it.
+                if second == W::ItemText && same_npc && first > W::ItemText {
+                    assert_eq!(seen_in(&app), [event(second)], "{what}");
+                    assert_eq!(open_cells, [first], "{what}");
+                    continue;
+                }
                 // The designer writes its cell before it registers (`0x4f5845`, `0x4f5882`): on the
                 // NPC whose window holds the latch, `0x493310` finds the first cell holding it,
                 // the designer's own when the holder comes after it in the test order.
@@ -234,14 +283,14 @@ fn every_open_closes_the_holder_so_one_window_is_open() {
                     continue;
                 }
                 assert_eq!(open_cells, [second], "{what}");
-                // The taxi map and the trainer and stable lists re-list in place on their own
-                // NPC (`0x4db730`, `0x4d7459`, `0x4cadd6`). A map from another flight master
+                // A menu, the taxi map and the trainer and stable lists re-list in place on their
+                // own NPC (`0x4e1fb8`, `0x4db730`, `0x4d7459`, `0x4cadd6`). A map from another flight master
                 // closes the open one through its core first (`0x4db73a`), while it still holds
                 // the latch: twice. A designer from another vendor overwrites the cell before it
                 // registers, so `0x493310` finds no cell holding the old vendor: none. Every other
                 // pair is one close, through the dispatcher.
                 let expected = match (first == second, same_npc, first) {
-                    (true, true, W::Taxi | W::Trainer | W::Stable) => vec![],
+                    (true, true, W::Gossip | W::Taxi | W::Trainer | W::Stable) => vec![],
                     (true, false, W::Taxi) => vec![event(first); 2],
                     (true, false, W::Tabard) => vec![],
                     _ => vec![event(first)],
@@ -264,7 +313,7 @@ fn a_direct_close_of_the_latched_window_fires_its_event_twice_and_quest_once() {
         close(&mut app, window);
         assert_eq!(seen_in(&app), vec![event(window); times], "{window:?}");
         assert_eq!(latch(&app), None, "{window:?}");
-        assert_eq!(cells(&app), [None; 11], "{window:?}");
+        assert_eq!(cells(&app), [None; 13], "{window:?}");
 
         // Entered through `0x493310` (the watchdog, an open, the leave-world interaction close),
         // the latch is already clear: once.
@@ -341,4 +390,100 @@ fn a_stock_on_hide_close_inside_the_fire_runs_as_the_reference() {
                 .is_empty());
         }
     }
+}
+
+/// A trade holds the latch like an NPC window: a vendor's list closes it through the trade arm
+/// (`0x493365`), `TRADE_CLOSED` once and `CMSG_CANCEL_TRADE` once (`0x4bf527`); a trade's open
+/// closes the vendor and sends nothing of its own.
+#[test]
+fn a_trade_and_an_npc_window_close_each_other() {
+    use crate::net::ClientCommand;
+    const PARTNER: u64 = 0x0000_0000_0000_0008;
+    let (mut app, rx) = harness_with_wire();
+    app.world_mut()
+        .resource_mut::<TradeSession>()
+        .begin(PARTNER);
+    crate::ui_trade::open_window(app.world_mut());
+    assert_eq!(latch(&app), Some(PARTNER));
+    assert!(rx.try_iter().next().is_none(), "the open sends nothing");
+
+    crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, Vec::new());
+    assert_eq!(seen_in(&app), ["TRADE_CLOSED"]);
+    let sent: Vec<ClientCommand> = rx.try_iter().collect();
+    assert!(
+        matches!(sent.as_slice(), [ClientCommand::CancelTrade]),
+        "{sent:?}"
+    );
+    assert!(!app.world().resource::<TradeSession>().is_open());
+    assert_eq!(latch(&app), Some(VENDOR));
+
+    app.world_mut()
+        .resource_mut::<TradeSession>()
+        .begin(PARTNER);
+    crate::ui_trade::open_window(app.world_mut());
+    assert_eq!(seen_in(&app), ["TRADE_CLOSED", "MERCHANT_CLOSED"]);
+    assert!(
+        rx.try_iter().next().is_none(),
+        "the vendor's close sends nothing"
+    );
+    assert_eq!(latch(&app), Some(PARTNER));
+
+    // `CloseTrade` while latched: two closes, each with its cancel.
+    crate::ui_trade::close_core(app.world_mut());
+    assert_eq!(
+        seen_in(&app),
+        [
+            "TRADE_CLOSED",
+            "MERCHANT_CLOSED",
+            "TRADE_CLOSED",
+            "TRADE_CLOSED"
+        ]
+    );
+    let sent: Vec<ClientCommand> = rx.try_iter().collect();
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [ClientCommand::CancelTrade, ClientCommand::CancelTrade]
+        ),
+        "{sent:?}"
+    );
+}
+
+/// A book read during a trade registers at `0x4e349a`, whose `0x493310` takes the dispatcher's
+/// trade arm (`0x493365`): `TRADE_CLOSED` and one `CMSG_CANCEL_TRADE` (`0x4bf527`), then
+/// `ITEM_TEXT_BEGIN` (`0x4e34a4`).
+#[test]
+fn a_book_over_a_trade_cancels_it_before_the_begin() {
+    use crate::net::ClientCommand;
+    const PARTNER: u64 = 0x0000_0000_0000_0008;
+    let (mut app, rx) = harness_with_wire();
+    app.insert_non_send_resource(spied_vm(&["TRADE_CLOSED", "ITEM_TEXT_BEGIN"]));
+    app.world_mut()
+        .resource_mut::<TradeSession>()
+        .begin(PARTNER);
+    crate::ui_trade::open_window(app.world_mut());
+    crate::ui_item_text::read_now(app.world_mut(), NPC);
+    assert_eq!(seen_in(&app), ["TRADE_CLOSED", "ITEM_TEXT_BEGIN"]);
+    let sent: Vec<ClientCommand> = rx.try_iter().collect();
+    assert!(
+        matches!(sent.as_slice(), [ClientCommand::CancelTrade]),
+        "{sent:?}"
+    );
+    assert!(!app.world().resource::<TradeSession>().is_open());
+    assert_eq!(latch(&app), Some(NPC));
+}
+
+/// A book read over a vendor closes the vendor before the reader registers (`0x4e349a`), and a
+/// vendor's list over a begun book closes the book once.
+#[test]
+fn a_book_and_an_npc_window_close_each_other() {
+    let mut app = harness();
+    crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, Vec::new());
+    crate::ui_item_text::read_now(app.world_mut(), NPC);
+    assert_eq!(seen_in(&app), ["MERCHANT_CLOSED"]);
+    assert_eq!(latch(&app), Some(NPC));
+
+    crate::ui_merchant::open_merchant(app.world_mut(), VENDOR, Vec::new());
+    assert_eq!(seen_in(&app), ["MERCHANT_CLOSED", "ITEM_TEXT_CLOSED"]);
+    assert_eq!(app.world().resource::<ItemTextOpen>().object(), None);
 }
