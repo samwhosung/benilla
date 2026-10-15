@@ -33,6 +33,15 @@ pub(crate) fn chat_frame() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\FloatingChatFrame.xml");
     super::fire_chat_login(&mut s);
     s.set_screen_size(1600.0, 900.0);
+    // The local player `SendChatMessage` needs (`0x49f223`).
+    s.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            name: Some("Probe".into()),
+            ..Default::default()
+        }),
+    );
     s.resolve();
     s
 }

@@ -2599,6 +2599,14 @@ mod tests {
             benilla_formats::load_languages(&mut chain).expect("Languages.dbc"),
         ));
         let mut script = UiScript::new().expect("VM");
+        // `SendChatMessage` needs a local player (`0x49f223`).
+        script.set_unit(
+            "player",
+            Some(UnitState {
+                exists: true,
+                ..Default::default()
+            }),
+        );
         seed_language_table(&world, &mut script);
         let want = [
             ("Orcish", 1),

@@ -3,8 +3,9 @@
 //! `"SAY"`, also when it is not a string or a number; the fourth argument is the whisper target or
 //! the channel's number.
 //!
-//! The call raises where the reference does, ahead of anything queued: a string `chatType` outside
-//! [`SEND_CHAT_TOKENS`] raises `Unknown chat type` (`0x49f27f`), and past the empty-line gate and
+//! The call returns quietly with no local player (`0x49f223`) and raises the usage error for a text
+//! that is no string (`0x49f77c`). It raises where the reference does, ahead of anything queued: a
+//! string `chatType` outside [`SEND_CHAT_TOKENS`] raises `Unknown chat type` (`0x49f27f`), and past the empty-line gate and
 //! the language, a WHISPER with no target raises `Whisper message missing target player!`
 //! (`0x49f325`) and a CHANNEL with none `Channel send missing channel number` (`0x49f535`). A
 //! CHANNEL target naming no joined channel is no error (`0x49f4ea`): the drain ends the call.
@@ -56,6 +57,10 @@ pub const SEND_CHAT_TOKENS: [&str; 13] = [
     "BATTLEGROUND",
 ];
 
+/// `Usage: SendChatMessage(text [,type] [,language] [,targetPlayer])`, `0x844a08`.
+const USAGE_SEND_CHAT_MESSAGE: &str =
+    "Usage: SendChatMessage(text [,type] [,language] [,targetPlayer])";
+
 /// `Unknown chat type`, `0x844b10`.
 const UNKNOWN_CHAT_TYPE: &str = "Unknown chat type";
 
@@ -74,8 +79,9 @@ pub struct ChatSend {
     /// reference's compare ignores case; always one of [`SEND_CHAT_TOKENS`].
     pub chat_type: String,
     /// The fourth argument as `lua_tostring` gives it (`0x49f306`): the whisper target, or the
-    /// channel number the app resolves to a joined channel's name. Never absent or empty for
-    /// WHISPER and CHANNEL, which raise without one.
+    /// channel number the app resolves to a joined channel's name. For WHISPER and CHANNEL it is
+    /// never absent or empty past the empty-line gate, which raise without one; an empty line is
+    /// queued unchecked and the drain drops it.
     pub target: Option<String>,
     /// The `Languages.dbc` id the third argument named; `None` is the speaker's default.
     pub language: Option<u32>,
@@ -218,7 +224,17 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "SendChatMessage",
         lua.create_function(
-            |lua, (text, chat_type, language, target): (String, Value, Value, Value)| {
+            |lua, (text, chat_type, language, target): (Value, Value, Value, Value)| {
+                // No local player ends the call quietly, ahead of every check (`0x49f219`-
+                // `0x49f223` to `0x49f78a`).
+                if !super::battlefield_queue::player_exists(
+                    &lua.app_data_ref::<Model>().expect("model app_data"),
+                ) {
+                    return Ok(());
+                }
+                // `lua_isstring(1)` (`0x49f230`): a string or a number, else the usage error
+                // (`0x844a08`, at `0x49f77c`).
+                let text = super::binding_abi::string_arg(lua, text, USAGE_SEND_CHAT_MESSAGE)?;
                 // `lua_isstring(2)` (`0x49f25c`): anything that is not a string or a number leaves
                 // the type at 0, SAY (`0x49f255`).
                 let chat_type = super::binding_abi::optional_string(lua, &chat_type)
@@ -246,7 +262,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let target = super::binding_abi::optional_string(lua, &target);
                 // Past the gate and the language, a WHISPER or CHANNEL with a NULL or empty
                 // target raises (`0x49f310`-`0x49f32b`, `0x49f4ca`-`0x49f4d6`, `0x49f535`).
-                if reads_language && target.as_deref().is_none_or(str::is_empty) {
+                // NULL, or a first byte of NUL (`cmp byte [esi],0`), as the empty-line gate reads.
+                if reads_language
+                    && target
+                        .as_deref()
+                        .is_none_or(|t| t.bytes().next().unwrap_or(0) == 0)
+                {
                     match chat_type.as_str() {
                         "WHISPER" => return Err(mlua::Error::runtime(WHISPER_MISSING_TARGET)),
                         "CHANNEL" => return Err(mlua::Error::runtime(CHANNEL_MISSING_NUMBER)),
@@ -281,9 +302,23 @@ mod tests {
     use super::*;
     use crate::script::UiScript;
 
+    /// A VM with a local player, as every in-world `SendChatMessage` has (`0x49f223`).
+    fn vm() -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.set_unit(
+            "player",
+            Some(crate::script::UnitState {
+                exists: true,
+                name: Some("Probe".into()),
+                ..Default::default()
+            }),
+        );
+        s
+    }
+
     #[test]
     fn send_chat_message_queues_a_line_without_parsing_it() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.run(r#"SendChatMessage("hello")"#).unwrap();
         s.run(r#"SendChatMessage("/dance", "say")"#).unwrap();
         assert_eq!(
@@ -308,7 +343,7 @@ mod tests {
 
     #[test]
     fn the_target_argument_is_its_lua_tostring_text() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         s.run(r#"SendChatMessage("hi", "WHISPER", nil, "Bob")"#)
             .unwrap();
         s.run(r#"SendChatMessage("lf1m", "CHANNEL", nil, 1)"#)
@@ -347,7 +382,7 @@ mod tests {
     /// `0x49f276`-`0x49f285`: a string outside the table at `0x49f7a0` raises in the call.
     #[test]
     fn an_unknown_chat_type_raises_and_queues_nothing() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         with_languages(&mut s);
         for ty in [
             r#""INSTANCE_CHAT""#,
@@ -384,7 +419,7 @@ mod tests {
     /// type at SAY (`0x49f255`): no error, no conversion failure.
     #[test]
     fn a_chat_type_that_is_no_string_is_say() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         for ty in ["nil", "true", "false", "{}", "print"] {
             call(&s, &format!(r#""hi", {ty}"#)).unwrap_or_else(|e| panic!("{ty}: {e}"));
         }
@@ -440,11 +475,49 @@ mod tests {
         );
     }
 
+    /// `0x49f219`-`0x49f223`: with no local player the call ends quietly, ahead of the usage,
+    /// type and language checks; with one, a text that is no string raises the usage error.
+    #[test]
+    fn no_player_ends_quietly_and_a_non_string_text_raises_usage() {
+        let mut bare = UiScript::new().unwrap();
+        call(&bare, "nil").expect("no player: no usage error either");
+        call(&bare, r#""hi", "BOGUS", "Klingon""#).expect("no player: nothing is checked");
+        assert!(bare.take_chat_sends().is_empty());
+
+        let mut s = vm();
+        for text in ["nil", "true", "{}", ""] {
+            let err = call(&s, text).expect_err(text);
+            assert!(
+                err.contains("Usage: SendChatMessage(text [,type] [,language] [,targetPlayer])"),
+                "{text:?}: {err}"
+            );
+        }
+        call(&s, "42").expect("a number is a text");
+        assert_eq!(s.take_chat_sends()[0].text, "42");
+        s.set_unit("player", None);
+        call(&s, "nil").expect("the player gone: quiet again");
+    }
+
+    /// `cmp byte [esi],0` (`0x49f31c`, `0x49f4d3`): a target whose first byte is NUL is empty.
+    #[test]
+    fn a_target_that_starts_with_nul_is_empty() {
+        let mut s = vm();
+        let err = call(&s, r#""hi", "WHISPER", nil, "\0Bob""#).expect_err("whisper");
+        assert!(
+            err.contains("Whisper message missing target player!"),
+            "{err}"
+        );
+        let err = call(&s, r#""hi", "CHANNEL", nil, "\0001""#).expect_err("channel");
+        assert!(err.contains("Channel send missing channel number"), "{err}");
+        call(&s, r#""hi", "WHISPER", nil, "B\0ob""#).expect("a later NUL ends nothing");
+        assert_eq!(s.take_chat_sends().len(), 1);
+    }
+
     /// `0x49f310`-`0x49f32b` and `0x49f4ca`-`0x49f4d6`, `0x49f535`: a WHISPER or CHANNEL whose
     /// fourth argument is not a non-empty string raises, past the empty-line gate and the language.
     #[test]
     fn a_whisper_or_channel_without_a_target_raises_and_queues_nothing() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         with_languages(&mut s);
         let whisper = "Whisper message missing target player!";
         let channel = "Channel send missing channel number";
@@ -487,7 +560,7 @@ mod tests {
 
     #[test]
     fn a_language_name_sends_its_languages_dbc_id() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         with_languages(&mut s);
         s.run(r#"SendChatMessage("hi", "SAY", "Darnassian")"#)
             .unwrap();
@@ -508,7 +581,7 @@ mod tests {
 
     #[test]
     fn no_language_argument_speaks_the_default() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         with_languages(&mut s);
         s.run(r#"SendChatMessage("hi")"#).unwrap();
         s.run(r#"SendChatMessage("hi", "SAY", nil)"#).unwrap();
@@ -524,7 +597,7 @@ mod tests {
 
     #[test]
     fn an_unknown_language_raises_and_sends_nothing() {
-        let mut s = UiScript::new().unwrap();
+        let mut s = vm();
         with_languages(&mut s);
         for arg in [r#""Klingon""#, r#""""#, "7", r#""Darnassian ""#] {
             let err = s

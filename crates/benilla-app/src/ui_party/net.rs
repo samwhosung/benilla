@@ -873,4 +873,98 @@ mod tests {
         send(&mut group, member_status::ONLINE);
         assert!(group.stats[&far].is_online());
     }
+
+    /// The group feed's mapping reaches the chat gate: `SMSG_GROUP_LIST` through its handler, the
+    /// roster feed into the VM, then `SendChatMessage` through the drain. We lead a raid, so RAID
+    /// goes out as RAID_LEADER (`0x49f3bf`); led by another member it goes out plain; ungrouped it
+    /// is refused (`0x49f379`).
+    #[test]
+    fn a_group_list_through_the_feed_decides_the_raid_leaders_chat_type() {
+        use super::super::pets::tests::{app_with, ME};
+        use crate::net::{ChatKind, Guid, SelfPlayer};
+        use benilla_ui::script::{UiScript, UnitState};
+        use bevy::ecs::system::RunSystemOnce;
+
+        let run =
+            |leader: u64, members: Vec<GroupMemberEntry>| -> (Vec<ChatKind>, Vec<&'static str>) {
+                let mut script = UiScript::new().unwrap();
+                script.set_unit(
+                    "player",
+                    Some(UnitState {
+                        exists: true,
+                        name: Some("Me".into()),
+                        ..Default::default()
+                    }),
+                );
+                let mut app = app_with(script);
+                let (tx, rx) = crossbeam_channel::unbounded();
+                app.insert_resource(NetCommands(tx));
+                app.init_resource::<UiErrorKeys>()
+                    .init_resource::<MessageSounds>()
+                    .init_resource::<QuestGiver>()
+                    .init_resource::<crate::ui_chat::AfkMirror>()
+                    .init_resource::<crate::cvars::Cvars>()
+                    .init_resource::<crate::ui_chat::ChannelState>()
+                    .insert_resource(SelfGuid(Some(ME)));
+                let me = app
+                    .world_mut()
+                    .spawn((SelfPlayer, Guid(ME), ObjectStore::default()))
+                    .id();
+                app.world_mut().resource_mut::<GuidIndex>().0.insert(ME, me);
+                let group_type = if members.is_empty() {
+                    0
+                } else {
+                    GROUPTYPE_RAID
+                };
+                app.world_mut()
+                    .run_system_once_with(
+                        on_list,
+                        SessionEvent::GroupList {
+                            group_type,
+                            own_flags: 0,
+                            members,
+                            leader,
+                            loot: None,
+                        },
+                    )
+                    .expect("the group-list handler");
+                app.update();
+                app.world_mut()
+                    .non_send_resource_mut::<UiScript>()
+                    .run(r#"SendChatMessage("go", "RAID")"#)
+                    .expect("lua");
+                app.world_mut()
+                    .run_system_once(crate::ui_chat::drain_addon_chat_sends)
+                    .expect("drain");
+                let sent = rx
+                    .try_iter()
+                    .filter_map(|c| match c {
+                        ClientCommand::Chat { kind, .. } => Some(kind),
+                        _ => None,
+                    })
+                    .collect();
+                let refused = app
+                    .world()
+                    .resource::<UiErrorKeys>()
+                    .0
+                    .iter()
+                    .map(|e| e.key)
+                    .collect();
+                (sent, refused)
+            };
+        let listed = |guid: u64, name: &str| GroupMemberEntry {
+            name: name.into(),
+            guid,
+            status: member_status::ONLINE,
+            flags: 0,
+        };
+
+        let (sent, refused) = run(ME, vec![listed(0x1001, "Aldwyn")]);
+        assert_eq!(sent, vec![ChatKind::RaidLeader], "{refused:?}");
+        let (sent, _) = run(0x1001, vec![listed(0x1001, "Aldwyn")]);
+        assert_eq!(sent, vec![ChatKind::Raid], "another member leads");
+        let (sent, refused) = run(0, vec![]);
+        assert!(sent.is_empty());
+        assert_eq!(refused, ["ERR_NOT_IN_RAID"]);
+    }
 }

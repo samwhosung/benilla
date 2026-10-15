@@ -1462,7 +1462,7 @@ fn group_gate(
 /// Turn `SendChatMessage` calls into sends. No slash grammar runs here: an addon sending
 /// `"/dance"` says six characters. An empty line of any type but AFK and DND sends nothing and
 /// prints nothing.
-pub(super) fn drain_addon_chat_sends(
+pub(crate) fn drain_addon_chat_sends(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     commands: Res<NetCommands>,
     mut chat_log: ResMut<super::feed::ChatLog>,

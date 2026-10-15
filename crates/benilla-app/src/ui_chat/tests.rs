@@ -2528,6 +2528,20 @@ fn the_chat_cache_restore_is_finished_before_player_login() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A VM with the local player `SendChatMessage` needs (`0x49f223`), as in game.
+fn in_world_vm() -> benilla_ui::script::UiScript {
+    let mut script = benilla_ui::script::UiScript::new().expect("VM");
+    script.set_unit(
+        "player",
+        Some(benilla_ui::script::UnitState {
+            exists: true,
+            name: Some("Probe".into()),
+            ..Default::default()
+        }),
+    );
+    script
+}
+
 /// `/afk` then `/dnd` through the real drain: every type but AFK clears a standing AFK first
 /// (`0x49f4f6 jne 0x49f3c7`), so `/dnd` (`0x15`) prints the clear and sends the empty `0x14` ahead
 /// of its own line and packet, three lines in all.
@@ -2537,7 +2551,7 @@ fn afk_then_dnd_clears_the_afk_first() {
     use bevy::ecs::system::RunSystemOnce;
 
     let mut world = bevy::prelude::World::new();
-    world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"));
+    world.insert_non_send_resource(in_world_vm());
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::feed::ChatLog>();
@@ -2598,7 +2612,7 @@ fn a_named_language_rides_the_chat_command() {
     use bevy::ecs::system::RunSystemOnce;
 
     let mut world = bevy::prelude::World::new();
-    let mut script = benilla_ui::script::UiScript::new().expect("VM");
+    let mut script = in_world_vm();
     script.set_language_table(vec![(2, "Darnassian".into()), (7, "Common".into())]);
     world.insert_non_send_resource(script);
     let (tx, rx) = crossbeam_channel::unbounded();
@@ -2652,7 +2666,7 @@ fn a_channel_send_carries_the_numbered_slots_name() {
     use bevy::ecs::system::RunSystemOnce;
 
     let mut world = bevy::prelude::World::new();
-    world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"));
+    world.insert_non_send_resource(in_world_vm());
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::feed::ChatLog>();
@@ -2729,7 +2743,7 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
     use bevy::ecs::system::RunSystemOnce;
 
     let mut world = bevy::prelude::World::new();
-    world.insert_non_send_resource(benilla_ui::script::UiScript::new().expect("VM"));
+    world.insert_non_send_resource(in_world_vm());
     let (tx, rx) = crossbeam_channel::unbounded();
     world.insert_resource(NetCommands(tx));
     world.init_resource::<super::feed::ChatLog>();
@@ -2816,7 +2830,7 @@ fn group_chat_sends(
     use bevy::ecs::system::RunSystemOnce;
 
     let mut world = bevy::prelude::World::new();
-    let mut script = benilla_ui::script::UiScript::new().expect("VM");
+    let mut script = in_world_vm();
     script.set_party(group);
     world.insert_non_send_resource(script);
     let (tx, rx) = crossbeam_channel::unbounded();

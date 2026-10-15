@@ -29,6 +29,9 @@ mod frames;
 /// The idle handler: the 5-minute auto-sit and auto-AFK, and the 30-minute camp.
 pub(crate) mod idle;
 mod input;
+/// The `SendChatMessage` drain, for the tests that feed it a real group.
+#[cfg(test)]
+pub(crate) use input::drain_addon_chat_sends;
 /// The language gate: the exemptions and fluency lookup behind the chat garble.
 mod language;
 /// `LoggingChat`/`LoggingCombat`: the two log files `/chatlog` and `/combatlog` toggle.
