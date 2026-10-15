@@ -33,6 +33,58 @@ pub fn string_to_bool(s: &str) -> bool {
     keyword_bool(s.as_bytes()).unwrap_or(false)
 }
 
+/// The number-separator pass `0x771c50` that `SetText` (`0x771d80`) runs on its text while
+/// `SetEuropeanNumbers` holds `[0xcf4d24]` set (`0x771d9f`-`0x771daa`). A number is a run of ASCII
+/// digits, `.` and `,` that starts at a digit. Its `.` and `,` trade places (`0x771d16`,
+/// `0x771d23`) when it has exactly one `.` (`0x771cc3`), no `,` after that `.` (`0x771ccc`), a byte
+/// after the `.` that is at least `0` and a byte after that which is at most `9` (`0x771cd1`,
+/// `0x771cd7`), both compared as signed bytes, so `1.5g` stays and `1.55g` becomes `1,55g`.
+/// Every other number, and every other character, is copied unchanged. The result stops at the
+/// 4095th byte of the static buffer `0xcf1cc8` (`0x771c70`, `0x771cf5`).
+pub(crate) fn swap_number_separators(text: &str) -> String {
+    /// `0xcf2cc7 - 0xcf1cc8`: the bytes the pass writes before it stops.
+    const CAP: usize = 0xfff;
+    let b = text.as_bytes();
+    // `cmp al,0x30; jl` / `cmp al,0x39; jg` are signed, so a byte of 0x80 or more is below `0`.
+    let digit = |c: u8| (b'0'..=b'9').contains(&c);
+    let number_byte = |c: u8| digit(c) || c == b'.' || c == b',';
+    let signed_at = |k: usize| b.get(k).copied().unwrap_or(0) as i8;
+    let mut out = Vec::with_capacity(b.len().min(CAP));
+    let mut i = 0;
+    while i < b.len() && out.len() < CAP {
+        if !digit(b[i]) {
+            out.push(b[i]);
+            i += 1;
+            continue;
+        }
+        let end = (i..b.len())
+            .find(|&k| !number_byte(b[k]))
+            .unwrap_or(b.len());
+        let run = &b[i..end];
+        let dots = run.iter().filter(|&&c| c == b'.').count();
+        let swap = dots == 1 && {
+            let dot = i + run.iter().position(|&c| c == b'.').unwrap_or(0);
+            let comma_after = run
+                .iter()
+                .rposition(|&c| c == b',')
+                .is_some_and(|k| i + k >= dot);
+            !comma_after && signed_at(dot + 1) >= b'0' as i8 && signed_at(dot + 2) <= b'9' as i8
+        };
+        for &c in run {
+            if out.len() >= CAP {
+                break;
+            }
+            out.push(match c {
+                b'.' if swap => b',',
+                b',' if swap => b'.',
+                c => c,
+            });
+        }
+        i = end;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// One argument to [`fill`]; any variant renders in any hole, so the template's order decides.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Arg<'a> {
@@ -507,5 +559,57 @@ mod tests {
         assert_eq!(fill("%.1f and %.1f", &[Arg::F(1.0)]), "1.0 and %.1f");
         // `%1 ` never reaches a conversion letter, so the `%` stays literal.
         assert_eq!(fill("100%1 of it", &[Arg::D(3)]), "100%1 of it");
+    }
+
+    /// `0x771c50`, byte for byte: a number with one `.` and no `,` after it trades them when the
+    /// byte after the `.` is at least `0` and the next is at most `9`, so the quirks below are the
+    /// reference's, not slips.
+    #[test]
+    fn number_separators_swap_as_the_bytes_decide() {
+        let swapped = swap_number_separators;
+        for (text, want) in [
+            ("1.5", "1,5"),
+            ("1,234.56", "1.234,56"),
+            ("12.50 gold", "12,50 gold"),
+            ("1.5 to 2.5", "1,5 to 2,5"),
+            ("10.5%", "10,5%"),
+            // No `.`: unchanged. Two `.`: unchanged. A `,` after the `.`: unchanged.
+            ("1,234,567", "1,234,567"),
+            ("1.2.3", "1.2.3"),
+            ("1.234,5", "1.234,5"),
+            // A number starts at a digit, so a leading `.` is text.
+            (".5", ".5"),
+            ("a.b", "a.b"),
+            // The byte after the `.` must be at least `0`: a space, a newline or the end is below.
+            ("Level 5. Next", "Level 5. Next"),
+            ("5.", "5."),
+            ("5.\n", "5.\n"),
+            // The second byte after the `.` must be at most `9`: a letter there leaves the number
+            // whole (`1.5g`), while a two-digit fraction before a letter swaps (`1.55g`).
+            ("1.5g", "1.5g"),
+            ("0.5s", "0.5s"),
+            ("1.55g", "1,55g"),
+            ("1.5 g", "1,5 g"),
+            // A letter straight after the `.` passes the first test, so `3.x ` swaps.
+            ("3.x ", "3,x "),
+            // Bytes of 0x80 and over are below `0` as signed bytes: after the `.` they refuse the
+            // swap, and in the second place they pass it.
+            ("1.\u{e9}", "1.\u{e9}"),
+            ("1.5\u{e9}", "1,5\u{e9}"),
+            ("", ""),
+        ] {
+            assert_eq!(swapped(text), want, "{text:?}");
+        }
+    }
+
+    /// The pass writes into a 4095-byte static buffer and stops there.
+    #[test]
+    fn number_separators_stop_at_the_static_buffer() {
+        let long = "ab".repeat(3000);
+        assert_eq!(swap_number_separators(&long).len(), 4095);
+        let numbers = "1.5 ".repeat(2000);
+        let out = swap_number_separators(&numbers);
+        assert_eq!(out.len(), 4095);
+        assert!(out.starts_with("1,5 1,5 "));
     }
 }

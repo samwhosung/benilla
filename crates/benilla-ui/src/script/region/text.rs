@@ -17,6 +17,8 @@ pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let text = crate::script::binding_abi::text_arg(lua, text)?;
             let rh = region_handle_of(lua, &this)?;
             let mut model = lua.app_data_mut::<Model>().expect("model");
+            // The separator pass runs before the same-text test (`0x771d9f`, `0x771dea`).
+            let text = text.map(|t| model.localized_text(t));
             let data = model.region_data.entry(rh).or_default();
             let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());
             let same = data.text == text;

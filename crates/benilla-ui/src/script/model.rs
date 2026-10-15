@@ -733,6 +733,9 @@ pub(crate) struct Model {
     /// `SetLayoutMode`'s value, the root's `+0xcf8` (0 at start, `0x7642a5`): while non-zero, a
     /// press with Control or Alt held is a layout drag (`0x766301`).
     pub(crate) layout_mode: i32,
+    /// `SetEuropeanNumbers`'s switch, `[0xcf4d24]` (0 at start): while set, a FontString's or a
+    /// Button's `SetText` swaps the dots and commas of its numbers (`0x771d9f`, `0x771c50`).
+    pub(crate) european_numbers: bool,
     /// A Slider thumb drag, left press to release or pointer leave, handled here with no Lua.
     pub(crate) slider_drag: Option<slider::SliderDrag>,
     /// A ColorSelect wheel or value-bar drag, press to release.
@@ -1168,6 +1171,16 @@ impl Model {
 }
 
 impl Model {
+    /// The text a `SetText` stores (`0x771d80` with its expand flag): the separator pass
+    /// `0x771c50` while `SetEuropeanNumbers` holds the switch (`0x771d9f`), else the text itself.
+    pub(crate) fn localized_text(&self, text: String) -> String {
+        if self.european_numbers {
+            crate::strings::swap_number_separators(&text)
+        } else {
+            text
+        }
+    }
+
     /// A named font object, matched case-insensitively (ASCII) as the client's `SStrCmpI` does.
     pub(crate) fn font_object(&self, name: &str) -> Option<&FontObject> {
         if name.bytes().any(|b| b.is_ascii_uppercase()) {
@@ -1503,6 +1516,7 @@ impl Model {
             drag: None,
             moving: None,
             layout_mode: 0,
+            european_numbers: false,
             slider_drag: None,
             color_drag: None,
             gossip: None,

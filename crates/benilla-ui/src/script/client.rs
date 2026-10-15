@@ -92,19 +92,28 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         })?,
     )?;
 
-    // Two setters whose state has no reader here, so each takes its argument as the reference
-    // does, never raising, and stores nothing; both return zero values.
-    // - `SetEuropeanNumbers(flag)` (`0x48dec0`): `GetBoolOrDefault(1, true)` into `[0xcf4d24]`,
-    //   which turns on `FontString:SetText`'s digit-group pass (`0x771daa` into `0x771c50`).
-    //   benilla's `SetText` has no such pass.
-    // - `SetConsoleKey(key)` (`0x488640`): a one-character or named key becomes the console's
-    //   toggle key (`0x63cb00`), a non-string the default `0x30e`. benilla has no console screen.
-    for name in ["SetEuropeanNumbers", "SetConsoleKey"] {
-        g.set(
-            name,
-            lua.create_function(|_, _: MultiValue| Ok(MultiValue::new()))?,
-        )?;
-    }
+    // `SetConsoleKey(key)` (`0x488640`): a one-character or named key becomes the console's
+    // toggle key (`0x63cb00`), a non-string the default `0x30e`. Its state has no reader here, so
+    // it takes any argument, never raises, stores nothing and returns zero values: benilla has no
+    // console screen.
+    g.set(
+        "SetConsoleKey",
+        lua.create_function(|_, _: MultiValue| Ok(MultiValue::new()))?,
+    )?;
+
+    // `SetEuropeanNumbers([flag])` (`0x48dec0`): `GetBoolOrDefault(1, true)` ([`bool_or_default`],
+    // `0x6f1c10`) into `[0xcf4d24]` (`0x771c40`), which makes `SetText` swap the dots and commas of
+    // its numbers (`0x771d9f`; [`crate::strings::swap_number_separators`]). Returns zero values.
+    g.set(
+        "SetEuropeanNumbers",
+        lua.create_function(|lua, args: MultiValue| {
+            let on = super::binding_abi::bool_or_default(args.front(), true);
+            lua.app_data_mut::<Model>()
+                .expect("model app_data")
+                .european_numbers = on;
+            Ok(())
+        })?,
+    )?;
 
     // `FrameXML_Debug([v])` (`0x488440`): get-or-set of the XML loader's trace flag `[0xceea30]`,
     // which gates `crate::loader::LoadReport::traces`. The set arm runs only when `lua_isnumber`
@@ -431,5 +440,56 @@ mod tests {
         }
         s.run("TogglePerformanceDisplay() TogglePerformanceDisplay() ToggleTris()")
             .expect("a call from a script raises nothing");
+    }
+
+    /// `SetEuropeanNumbers` stores its flag (`GetBoolOrDefault(1, true)`: absent is on, nil and 0
+    /// are off) and, while it is set, a FontString's and a Button's `SetText` swap the dots and
+    /// commas of their numbers; with it off the text is stored as given. An addon sets and
+    /// reads it back through `GetText`.
+    #[test]
+    fn set_european_numbers_makes_set_text_swap_number_separators() {
+        let s = UiScript::new().unwrap();
+        s.run(
+            r#"
+            local f = CreateFrame("Frame", "Owner")
+            fs = f:CreateFontString("FS", "ARTWORK")
+            btn = CreateFrame("Button", "Btn")
+            function Put(text)
+                fs:SetText(text)
+                btn:SetText(text)
+                return fs:GetText(), btn:GetText()
+            end
+        "#,
+        )
+        .unwrap();
+        let put =
+            |text: &str| -> (String, String) { s.eval(&format!("return Put({text:?})")).unwrap() };
+        let same = |text: &str| (text.to_string(), text.to_string());
+        assert_eq!(put("1,234.56"), same("1,234.56"), "off at boot");
+
+        s.run("SetEuropeanNumbers()").unwrap();
+        assert_eq!(put("1,234.56"), ("1.234,56".into(), "1.234,56".into()));
+        assert_eq!(put("Costs 12.50 gold"), same("Costs 12,50 gold"));
+        s.run("SetEuropeanNumbers(false)").unwrap();
+        assert_eq!(put("1,234.56"), same("1,234.56"), "false is off");
+
+        for (arg, on) in [
+            ("1", true),
+            ("0", false),
+            ("nil", false),
+            ("true", true),
+            ("\"off\"", false),
+            ("\"yes\"", true),
+            ("{}", true),
+            ("", true),
+        ] {
+            s.run(&format!("SetEuropeanNumbers({arg})")).unwrap();
+            let want = if on { "3,5" } else { "3.5" };
+            assert_eq!(put("3.5"), same(want), "SetEuropeanNumbers({arg})");
+        }
+
+        // A number argument is turned into its string first (`lua_tostring`), then swapped.
+        s.run("SetEuropeanNumbers(1) fs:SetText(2.5)").unwrap();
+        assert_eq!(s.eval::<String>("return fs:GetText()").unwrap(), "2,5");
     }
 }
