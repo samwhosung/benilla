@@ -623,6 +623,8 @@ pub const SMSG_GMTICKET_SYSTEMSTATUS: u16 = 0x021B; // 539
 pub const CMSG_GMSURVEY_SUBMIT: u16 = 0x032A; // 810
 /// The lottery window's two sends: the last numbers' query (`0x4c4220`) and the ticket purchase
 /// (`0x4c4290`, `0x4c4400`). No 1.12 server handles either.
+/// `BuySkillTier`'s send (`0x4d3fbc`), the skill-point purchase of a step.
+pub const CMSG_SKILL_BUY_STEP: u16 = 0x021F; // 543
 pub const CMSG_LOTTERY_QUERY_OBSOLETE: u16 = 0x0334; // 820
 pub const CMSG_BUY_LOTTERY_TICKET_OBSOLETE: u16 = 0x0336; // 822
 

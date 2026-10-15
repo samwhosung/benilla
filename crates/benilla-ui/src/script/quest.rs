@@ -112,6 +112,13 @@ impl Default for QuestState {
     }
 }
 
+/// The levels of the last greeting's active and available rows, one per row.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PoolLevels {
+    active: Vec<u32>,
+    available: Vec<u32>,
+}
+
 /// A greeting row picked by `SelectActiveQuest` or `SelectAvailableQuest`, 1-based in its list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuestSelect {
@@ -142,8 +149,23 @@ pub enum QuestAction {
 
 impl super::UiScript {
     /// Push (or clear, with `None`) the open questgiver panel snapshot.
+    ///
+    /// A greeting also refills the two level pools, which stay when the panel closes or another
+    /// panel opens, as the reference's pools do until its next quest list (`0x5dbb10`).
     pub fn set_quest(&mut self, state: Option<QuestState>) {
-        self.model_mut().quest = state;
+        let mut model = self.model_mut();
+        if let Some(q) = state.as_ref().filter(|q| q.panel == QuestPanel::Greeting) {
+            let pool = |titles: &[String], levels: &[u32]| {
+                (0..titles.len())
+                    .map(|i| levels.get(i).copied().unwrap_or(0))
+                    .collect()
+            };
+            model.quest_pool_levels = PoolLevels {
+                active: pool(&q.active_titles, &q.active_levels),
+                available: pool(&q.available_titles, &q.available_levels),
+            };
+        }
+        model.quest = state;
     }
 
     /// Drain the greeting-panel row selects queued since the last call.
@@ -285,7 +307,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // GetActiveLevel(index) (`0x501c20`) and GetAvailableLevel(index) (`0x501ba0`): the level stored
     // beside the greeting row, 0 for an index outside the pool (`dec`, then an unsigned compare
     // against the count, so 0 and negatives miss too). The pools hold the rows of the last
-    // greeting; here the open greeting's, and 0 with none. The usage texts are the exe's own,
+    // greeting, whether or not its panel is still open, and 0 before any. The usage texts are the exe's own,
     // `Get` twice (`0x84ed40`, `0x84ed1c`).
     fn install_level(lua: &Lua, name: &str, usage: &'static str, active: bool) -> mlua::Result<()> {
         lua.globals().set(
@@ -293,18 +315,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             lua.create_function(move |lua, index: Value| {
                 let row = binding_abi::number_arg(lua, index, usage)?.wrapping_sub(1) as u32;
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
-                let level = model.quest.as_ref().map_or(0, |q| {
-                    let (titles, levels) = if active {
-                        (&q.active_titles, &q.active_levels)
-                    } else {
-                        (&q.available_titles, &q.available_levels)
-                    };
-                    if (row as usize) < titles.len() {
-                        levels.get(row as usize).copied().unwrap_or(0)
-                    } else {
-                        0
-                    }
-                });
+                let pool = &model.quest_pool_levels;
+                let levels = if active {
+                    &pool.active
+                } else {
+                    &pool.available
+                };
+                let level = levels.get(row as usize).copied().unwrap_or(0);
                 // The level is pushed through `fild` of a signed dword.
                 Ok(i64::from(level as i32))
             })?,
@@ -799,6 +816,26 @@ mod tests {
                 "{call}"
             );
         }
+        // The pools outlive the panel: closing it, or opening another, keeps the last list's
+        // levels until a new list replaces them.
+        s.set_quest(Some(QuestState {
+            panel: QuestPanel::Greeting,
+            active_titles: vec!["Report to Goldshire".into(), "Wolves".into()],
+            active_levels: vec![1, 7],
+            ..QuestState::default()
+        }));
+        s.set_quest(None);
+        assert_eq!(s.eval::<i64>("return GetActiveLevel(2)").unwrap(), 7);
+        s.set_quest(Some(QuestState::default()));
+        assert_eq!(s.eval::<i64>("return GetActiveLevel(1)").unwrap(), 1);
+        s.set_quest(Some(QuestState {
+            panel: QuestPanel::Greeting,
+            active_titles: vec!["Another".into()],
+            active_levels: vec![9],
+            ..QuestState::default()
+        }));
+        assert_eq!(s.eval::<i64>("return GetActiveLevel(1)").unwrap(), 9);
+        assert_eq!(s.eval::<i64>("return GetActiveLevel(2)").unwrap(), 0);
         // A level of the wire's top bit reads as the signed dword the reference pushes.
         s.set_quest(Some(QuestState {
             panel: QuestPanel::Greeting,

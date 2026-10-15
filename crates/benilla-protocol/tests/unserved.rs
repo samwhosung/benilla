@@ -108,3 +108,10 @@ fn gm_survey_submit_body_golden() {
         ))
     );
 }
+
+/// `BuySkillTier`'s send: `0x21f` (pushed at `0x4d3fbc`) and the skill line id (`0x4d3fe0`).
+#[test]
+fn skill_buy_step_body_golden() {
+    assert_eq!(opcode::CMSG_SKILL_BUY_STEP, 0x21f);
+    assert_eq!(messages::skill_buy_step(493), hx("ed010000"));
+}

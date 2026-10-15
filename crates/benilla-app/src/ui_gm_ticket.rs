@@ -177,6 +177,7 @@ fn drain_gm_ticket(
     // unbuilt), in call order.
     for send in script.take_unserved_sends() {
         let _ = commands.0.send(match send {
+            UnservedSend::SkillBuyStep { skill_id } => ClientCommand::SkillBuyStep { skill_id },
             UnservedSend::LotteryQuery => ClientCommand::LotteryQuery,
             UnservedSend::BuyLotteryTicket { first, second } => {
                 ClientCommand::BuyLotteryTicket { first, second }
@@ -493,12 +494,47 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        // `BuySkillTier` on a line its tier prices within the player's points: once.
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_skills(benilla_ui::script::SkillsState {
+                entries: vec![benilla_ui::script::SkillEntry {
+                    skill_id: 129,
+                    name: "First Aid".into(),
+                    value: 1,
+                    max: 75,
+                    temp_bonus: 0,
+                    perm_bonus: 0,
+                    min_level: 0,
+                    cost_index: 0,
+                    category_id: 2,
+                    category_name: "Professions".into(),
+                    category_order: 2,
+                    description: String::new(),
+                    abandonable: false,
+                    mono: false,
+                    step: 0,
+                    flags: 0x8,
+                    tier_id: 5,
+                }],
+            });
+            script.set_skill_tiers([(5, [30; 16])]);
+            script.set_talents(benilla_ui::script::TalentUiState {
+                points: (0, 30),
+                ..Default::default()
+            });
+        }
+        assert!(matches!(
+            one(run(&mut app, "BuySkillTier(2)")),
+            ClientCommand::SkillBuyStep { skill_id: 129 }
+        ));
         // Refused, or a verb that sends nothing in the state this client holds.
         for call in [
             "BuyRandomPicks(0)",
             "SubmitNumbers(1, 1, 2, 3)",
             "AcceptSkillUps()",
             "BuySkillTier(1)",
+            "BuySkillTier(3)",
             "LFGQuery(1, 0)",
         ] {
             assert!(run(&mut app, call).is_empty(), "{call}");

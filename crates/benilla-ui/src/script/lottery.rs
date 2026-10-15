@@ -25,6 +25,8 @@ pub enum UnservedSend {
     /// `CMSG_BUY_LOTTERY_TICKET_OBSOLETE` with its two dwords: `BuyRandomPicks` sends `(count, 0)`,
     /// `SubmitNumbers` `(0, mask)`.
     BuyLotteryTicket { first: u32, second: u32 },
+    /// `CMSG_SKILL_BUY_STEP`: `BuySkillTier`, the skill line id.
+    SkillBuyStep { skill_id: u32 },
     /// `CMSG_GMSURVEY_SUBMIT`: the survey id, the answered questions in slot order and the overall
     /// comment.
     GmSurveySubmit {

@@ -1531,6 +1531,7 @@ pub(super) fn writer_loop(
                         w.gm_ticket_updatetext(category, &text)
                     }
                     ClientCommand::GmTicketGet => w.gm_ticket_get(),
+                    ClientCommand::SkillBuyStep { skill_id } => w.skill_buy_step(skill_id),
                     ClientCommand::LotteryQuery => w.lottery_query(),
                     ClientCommand::BuyLotteryTicket { first, second } => {
                         w.buy_lottery_ticket(first, second)

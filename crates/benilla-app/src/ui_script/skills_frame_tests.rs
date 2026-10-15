@@ -27,6 +27,9 @@ fn skill(
         category_order,
         description: String::new(),
         abandonable: false,
+        step: 0,
+        flags: 0,
+        tier_id: 0,
         mono,
     }
 }
@@ -571,4 +574,43 @@ fn the_list_reaches_its_last_row_at_the_bars_end() {
         last_name,
         "the twelfth row is the block's last line"
     );
+}
+
+/// `AddSkillUp` acts only on a line whose `SkillRaceClassInfo` row exists for the player's race and
+/// class (`0x4d3342`..`0x4d3354`). The list never holds a line without that row (`0x4d2d60`), so
+/// there is no row for the verb to reach: a skill with no row is dropped from the block, and the
+/// verb finds nothing at its index.
+#[test]
+fn a_line_without_a_race_class_row_is_not_in_the_list_the_skill_up_verbs_index() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = benilla_formats::open_chain(&data).expect("open chain");
+    let catalog = benilla_formats::load_skill_line_catalog(&mut chain).expect("skill lines");
+    let slot = |skill_id: u16| benilla_protocol::messages::PlayerSkillSlot {
+        skill_id,
+        step: 0,
+        value: 10,
+        max: 300,
+        temp_bonus: 0,
+        perm_bonus: 0,
+    };
+    // A tauren (6) hunter (3): Axes (44) has a row; some existing line has none.
+    let rowless = (1..600u16)
+        .find(|&id| {
+            catalog.line(u32::from(id)).is_some()
+                && catalog.race_class(u32::from(id), 6, 3).is_none()
+        })
+        .expect("a SkillLine with no row for this race and class");
+    assert!(crate::ui_char::skills_row(&slot(rowless), &catalog, 6, 3, 60).is_none());
+    let with_row = crate::ui_char::skills_row(&slot(44), &catalog, 6, 3, 60).expect("Axes");
+    let mut s = UiScript::new().unwrap();
+    s.set_skills(SkillsState {
+        entries: vec![with_row],
+    });
+    // Rows: 1 the header, 2 Axes. The verb takes the one with a row and no other.
+    s.run("AddSkillUp(2) AddSkillUp(3)").unwrap();
+    let temp = |i: i64| -> i64 {
+        s.eval(&format!("local _,_,_,_,t = GetSkillLineInfo({i}) return t"))
+            .unwrap()
+    };
+    assert_eq!((temp(2), temp(3)), (1, 0));
 }

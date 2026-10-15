@@ -59,6 +59,12 @@ pub struct SkillEntry {
     /// `isAbandonable`, the 8th return: a nonzero skill step and `SkillRaceClassInfo.flags & 0x20`
     /// (`SKILL_FLAG_UNLEARNABLE`), both checked by the client (`0x4d3953`–`0x4d3975`).
     pub abandonable: bool,
+    /// The slot's step word (`+0x84a`), which `BuySkillTier` reads (`0x4d3f4f`).
+    pub step: u32,
+    /// `SkillRaceClassInfo.flags`: bits `0x8` and `0x4` admit `BuySkillTier` (`0x4d3f62`).
+    pub flags: u32,
+    /// `SkillRaceClassInfo.skillTierID`: the `SkillTiers.dbc` row that prices a step.
+    pub tier_id: u32,
 }
 
 /// A flat, unordered push of every known skill line; the engine groups and sorts it.
@@ -94,6 +100,11 @@ impl super::UiScript {
         }
         model.skills_groups = groups;
         model.skills = state;
+    }
+
+    /// Push `SkillTiers.dbc` as `(tier id, step costs)`.
+    pub fn set_skill_tiers(&mut self, tiers: impl IntoIterator<Item = (u32, [u32; 16])>) {
+        self.model_mut().skill_tiers = tiers.into_iter().collect();
     }
 
     /// Drain the skill ids `AbandonSkill` queued, one `CMSG_UNLEARN_SKILL` each; the removal comes
@@ -429,7 +440,9 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // bonus, as `GetSkillLineInfo` folds them) and the points' cost fits the player's skill points
     // (`0x4d3449`). The cost is 0 (module doc), so only the rank test can refuse. A header, an
     // index past the visible rows (the reference indexes its hidden rows too) and a non-line do
-    // nothing; a point taken signals `SKILL_LINES_CHANGED` (`0x4d346f`).
+    // nothing; a point taken signals `SKILL_LINES_CHANGED` (`0x4d346f`). Its `SkillRaceClassInfo`
+    // gate (`0x4d3342`..`0x4d3354`) holds for every row of the list, which the list build keeps
+    // only for lines with such a row (`0x4d2d60`).
     g.set(
         "AddSkillUp",
         lua.create_function(|lua, index: Value| {
@@ -479,13 +492,35 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // it would send and the clear it would make never happen.
     g.set("AcceptSkillUps", lua.create_function(|_, ()| Ok(()))?)?;
 
-    // BuySkillTier(index) (`0x4d3e50`): `is-number`, then the line's tier step value from
-    // `SkillTiers.dbc` (`0x6de1c0`) decides whether `0x21f` goes out. That table is not loaded,
-    // which is the reference's own empty answer: a step value of 0, and `0x4d3f7b` returns.
+    // BuySkillTier(index) (`0x4d3e50`): `is-number`, then a line of the list whose
+    // `SkillRaceClassInfo` flags carry `0x8`, or `0x4` with a step word of 0 (`0x4d3f62`..
+    // `0x4d3f70`), is priced by `SkillTiers.dbc`: the cost at the step in the line's tier
+    // (`0x6de1c0`). A cost of 0 ends it; a cost above the player's skill points
+    // (`PLAYER_CHARACTER_POINTS2`, `0x4d3faf`) ends it; else `CMSG_SKILL_BUY_STEP` carries the
+    // line id. On the 1.12 data every tier id is 0, so nothing is ever sent.
     g.set(
         "BuySkillTier",
         lua.create_function(|lua, index: Value| {
-            binding_abi::number_arg(lua, index, "Usage: BuySkillTier(index)")?;
+            let index = binding_abi::index_arg(lua, index, "Usage: BuySkillTier(index)")?;
+            let send = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                entry_at(&model, index).and_then(|e| {
+                    let admitted = e.flags & 0x8 != 0 || (e.step == 0 && e.flags & 0x4 != 0);
+                    let cost = model
+                        .skill_tiers
+                        .get(&e.tier_id)
+                        .filter(|_| e.tier_id != 0)
+                        .and_then(|c| c.get(e.step as usize))
+                        .copied()
+                        .unwrap_or(0);
+                    // The cost and the points are compared as signed dwords.
+                    let points = model.talents.points.1;
+                    (admitted && cost != 0 && cost as i32 <= points as i32).then_some(e.skill_id)
+                })
+            };
+            if let Some(skill_id) = send {
+                super::lottery::queue(lua, super::lottery::UnservedSend::SkillBuyStep { skill_id });
+            }
             Ok(())
         })?,
     )?;
@@ -523,6 +558,9 @@ mod tests {
             description: format!("About {name}."),
             // Fixture rule: Professions (id 2) is abandonable, as the 0x20 flag splits it.
             abandonable: category_id == 2,
+            step: 0,
+            flags: 0,
+            tier_id: 0,
             // Fixture rule: Class Skills (id 3) is single-rank, as the 0x400 flag splits it.
             mono: category_id == 3,
         }
@@ -636,6 +674,86 @@ mod tests {
         let before = events(&s);
         s.run("AddSkillUp(3)").unwrap();
         assert_eq!((temp(&s, 3), events(&s)), (0, before));
+    }
+
+    /// `BuySkillTier` (`0x4d3e50`) sends the step purchase for a line admitted by its race-class
+    /// flags (`0x8`, or `0x4` with step 0), whose tier prices the step above 0 and within the
+    /// player's skill points, and for no other.
+    #[test]
+    fn buy_skill_tier_follows_the_flags_the_tier_cost_and_the_points() {
+        use crate::script::{TalentUiState, UnservedSend::SkillBuyStep};
+        let mut s = UiScript::new().unwrap();
+        let mut st = state();
+        // Rows: 1 Weapon Skills, 2 Defense, 3 Swords, 4 Professions, 5 First Aid, 6 Fishing.
+        let fa = st.entries.iter_mut().find(|e| e.skill_id == 129).unwrap();
+        fa.flags = 0x8;
+        fa.step = 1;
+        fa.tier_id = 5;
+        s.set_skills(st.clone());
+        let mut costs = [0u32; 16];
+        costs[0] = 10;
+        costs[1] = 40;
+        s.set_skill_tiers([(5, costs)]);
+        let points = |s: &mut UiScript, p: u32| {
+            s.set_talents(TalentUiState {
+                points: (0, p),
+                ..Default::default()
+            });
+        };
+        let buy = |s: &mut UiScript, row: i64| {
+            s.run(&format!("BuySkillTier({row})")).unwrap();
+            s.take_unserved_sends()
+        };
+        // Cost 40 at step 1: sent with 40 points, not with 39, and a header buys nothing.
+        points(&mut s, 40);
+        assert_eq!(buy(&mut s, 5), [SkillBuyStep { skill_id: 129 }]);
+        points(&mut s, 39);
+        assert!(buy(&mut s, 5).is_empty(), "above the player's points");
+        points(&mut s, 100);
+        assert!(buy(&mut s, 4).is_empty(), "a header");
+        assert!(buy(&mut s, 99).is_empty() && buy(&mut s, 0).is_empty());
+        assert!(buy(&mut s, 6).is_empty(), "Fishing carries no flag");
+        // Flag 0x4 admits only a step of 0, at that step's cost.
+        let mut other = st.clone();
+        let fa = other
+            .entries
+            .iter_mut()
+            .find(|e| e.skill_id == 129)
+            .unwrap();
+        fa.flags = 0x4;
+        s.set_skills(other.clone());
+        assert!(buy(&mut s, 5).is_empty(), "flag 4 with a step of 1");
+        let fa = other
+            .entries
+            .iter_mut()
+            .find(|e| e.skill_id == 129)
+            .unwrap();
+        fa.step = 0;
+        s.set_skills(other.clone());
+        assert_eq!(buy(&mut s, 5), [SkillBuyStep { skill_id: 129 }]);
+        // A tier with no cost at the step, tier 0, and no table all price 0.
+        points(&mut s, 100);
+        let fa = other
+            .entries
+            .iter_mut()
+            .find(|e| e.skill_id == 129)
+            .unwrap();
+        fa.step = 2;
+        fa.flags = 0x8;
+        s.set_skills(other.clone());
+        assert!(buy(&mut s, 5).is_empty(), "cost[2] is 0");
+        let fa = other
+            .entries
+            .iter_mut()
+            .find(|e| e.skill_id == 129)
+            .unwrap();
+        fa.step = 1;
+        fa.tier_id = 0;
+        s.set_skills(other);
+        assert!(buy(&mut s, 5).is_empty(), "tier 0");
+        s.set_skills(st);
+        s.set_skill_tiers([]);
+        assert!(buy(&mut s, 5).is_empty(), "no SkillTiers rows");
     }
 
     /// The usage texts and the two that cost nothing: `AcceptSkillUps` and `BuySkillTier`.

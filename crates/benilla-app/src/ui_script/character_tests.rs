@@ -680,6 +680,9 @@ fn tab_round_trip_with_a_selected_skill_by_point() {
                 category_order: 1,
                 description: "Defensive expertise.".into(),
                 abandonable: false,
+                step: 0,
+                flags: 0,
+                tier_id: 0,
                 mono: false,
             },
             SkillEntry {
@@ -697,6 +700,9 @@ fn tab_round_trip_with_a_selected_skill_by_point() {
                 description: "Working with metals.".into(),
                 // A primary profession: SkillRaceClassInfo flag 0x20, `SKILL_FLAG_UNLEARNABLE`.
                 abandonable: true,
+                step: 0,
+                flags: 0,
+                tier_id: 0,
                 mono: false,
             },
         ],

@@ -931,6 +931,9 @@ pub(crate) struct Model {
 
     /// The open questgiver panel, its greeting-row selects and its button calls.
     pub(crate) quest: Option<quest::QuestState>,
+    /// The levels of the last greeting's two pools (`0xbde690`, `0xbdfe60`), which outlive the
+    /// panel until the next list fills them.
+    pub(crate) quest_pool_levels: quest::PoolLevels,
     pub(crate) quest_selects: Vec<quest::QuestSelect>,
     pub(crate) quest_actions: Vec<quest::QuestAction>,
 
@@ -1062,6 +1065,8 @@ pub(crate) struct Model {
     /// The skill points chosen on each line and not yet accepted (row `+0x10`): `AddSkillUp` and
     /// `RemoveSkillUp` move them, a rebuild or `CancelSkillUps` clears them.
     pub(crate) skills_pending: HashMap<u32, u32>,
+    /// `SkillTiers.dbc`: tier id to its sixteen step costs.
+    pub(crate) skill_tiers: HashMap<u32, [u32; 16]>,
     /// Sends the lottery and GM survey verbs queued, for the app to put on the wire.
     pub(crate) unserved_sends: Vec<super::lottery::UnservedSend>,
     /// The GM survey's tables and answer buffer.
@@ -1602,6 +1607,7 @@ impl Model {
             trade_clear_items: Vec::new(),
             trade_offered: Default::default(),
             quest: None,
+            quest_pool_levels: Default::default(),
             quest_selects: Vec::new(),
             quest_actions: Vec::new(),
             death: death::DeathUiState::default(),
@@ -1701,6 +1707,7 @@ impl Model {
             skills_selected: None,
             skill_abandons: Vec::new(),
             skills_pending: HashMap::new(),
+            skill_tiers: HashMap::new(),
             unserved_sends: Vec::new(),
             gm_survey: Default::default(),
             reputation: reputation::ReputationState::default(),
