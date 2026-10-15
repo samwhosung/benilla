@@ -749,16 +749,17 @@ pub(in crate::ui_party) mod tests {
             Some(1.0),
             "the push alone"
         );
-        let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
-        script.set_unit_guids(&benilla_ui::script::UnitGuids {
-            player: ME,
-            party: [member(1), 0, 0, 0],
-            ..Default::default()
-        });
-        for notice in super::super::records::record_notices(member(1), &old, &new) {
-            crate::ui_unit::field_events::fire_unit_notice(&mut script, notice);
+        {
+            let mut script = app.world_mut().non_send_resource_mut::<UiScript>();
+            script.set_unit_guids(&benilla_ui::script::UnitGuids {
+                player: ME,
+                party: [member(1), 0, 0, 0],
+                ..Default::default()
+            });
+            for notice in super::super::records::record_notices(member(1), &old, &new) {
+                crate::ui_unit::field_events::fire_unit_notice(&mut script, notice);
+            }
         }
-        drop(script);
         assert_eq!(flag(&mut app, "PartyMemberFrame1PetFrame:IsShown()"), None);
         let errors = app.world().non_send_resource::<UiScript>().errors();
         assert!(errors.is_empty(), "script errors: {errors:?}");
