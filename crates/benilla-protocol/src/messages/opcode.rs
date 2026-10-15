@@ -619,7 +619,7 @@ pub const SMSG_GMTICKET_DELETETICKET: u16 = 0x0218; // 536
 pub const CMSG_GMTICKET_SYSTEMSTATUS: u16 = 0x021A; // 538
 pub const SMSG_GMTICKET_SYSTEMSTATUS: u16 = 0x021B; // 539
 
-/// The GM survey's submission, sent from `0x4966a0`'s builder (`0x496630`) by `GMSurveySubmit`.
+/// The GM survey's submission, built and sent by `0x496630` for `GMSurveySubmit` (`0x48cf80`).
 pub const CMSG_GMSURVEY_SUBMIT: u16 = 0x032A; // 810
 /// The lottery window's two sends: the last numbers' query (`0x4c4220`) and the ticket purchase
 /// (`0x4c4290`, `0x4c4400`). No 1.12 server handles either.

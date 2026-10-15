@@ -1064,8 +1064,8 @@ pub(crate) struct Model {
     pub(crate) skills_pending: HashMap<u32, u32>,
     /// Sends the lottery and GM survey verbs queued, for the app to put on the wire.
     pub(crate) unserved_sends: Vec<super::lottery::UnservedSend>,
-    /// The GM survey's overall comment (`0xb4e3a8`), kept until `GMSurveySubmit`.
-    pub(crate) gm_survey_comment: Option<String>,
+    /// The GM survey's tables and answer buffer.
+    pub(crate) gm_survey: super::gm_survey::SurveyState,
 
     /// The reputation pane's snapshot and the display tree built from it.
     pub(crate) reputation: reputation::ReputationState,
@@ -1702,7 +1702,7 @@ impl Model {
             skill_abandons: Vec::new(),
             skills_pending: HashMap::new(),
             unserved_sends: Vec::new(),
-            gm_survey_comment: None,
+            gm_survey: Default::default(),
             reputation: reputation::ReputationState::default(),
             reputation_groups: Vec::new(),
             reputation_collapsed: HashSet::new(),

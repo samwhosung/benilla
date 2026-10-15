@@ -24,8 +24,13 @@ pub enum UnservedSend {
     /// `CMSG_BUY_LOTTERY_TICKET_OBSOLETE` with its two dwords: `BuyRandomPicks` sends `(count, 0)`,
     /// `SubmitNumbers` `(0, mask)`.
     BuyLotteryTicket { first: u32, second: u32 },
-    /// `CMSG_GMSURVEY_SUBMIT` with the overall comment `GMSurveyCommentSubmit` stored.
-    GmSurveySubmit { comment: String },
+    /// `CMSG_GMSURVEY_SUBMIT`: the survey id, the answered questions in slot order and the overall
+    /// comment.
+    GmSurveySubmit {
+        survey: u32,
+        answers: Vec<super::gm_survey::SurveyAnswerSend>,
+        comment: String,
+    },
 }
 
 impl super::UiScript {

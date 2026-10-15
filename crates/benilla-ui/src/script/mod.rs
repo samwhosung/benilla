@@ -241,6 +241,7 @@ pub use death::{DeathAction, DeathUiState};
 pub use dressup::DressUpIntent;
 pub use duel::DuelRequest;
 pub use follow::FollowRequest;
+pub use gm_survey::{GmSurveyTables, SurveyAnswerSend};
 pub use gm_ticket::{GmTicketIntent, GmTicketWrite};
 pub use gossip::{GossipMenu, GossipOptionView, GossipQuestRow};
 pub use guild::{

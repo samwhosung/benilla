@@ -82,6 +82,7 @@ struct FedTicket {
     answers: u32,
     queue_answers: u32,
     categories_pushed: bool,
+    survey_pushed: bool,
 }
 
 /// Fire `UPDATE_TICKET` and `UPDATE_GM_STATUS` for unheard answers; push the categories once.
@@ -89,6 +90,7 @@ fn feed_gm_ticket(
     script: Option<NonSendMut<UiScript>>,
     state: Res<GmTicketState>,
     categories: Option<Res<GmTicketCategories>>,
+    survey: Option<Res<GmSurveyResource>>,
     mut feed: ResMut<GmTicketFeedState>,
 ) {
     let Some(mut script) = script else {
@@ -100,6 +102,13 @@ fn feed_gm_ticket(
         if let Some(categories) = categories.as_deref() {
             script.set_gm_ticket_categories(categories.0.clone());
             fed.categories_pushed = true;
+        }
+    }
+
+    if !fed.survey_pushed {
+        if let Some(survey) = survey.as_deref() {
+            script.set_gm_survey_tables(survey.0.clone());
+            fed.survey_pushed = true;
         }
     }
 
@@ -172,7 +181,18 @@ fn drain_gm_ticket(
             UnservedSend::BuyLotteryTicket { first, second } => {
                 ClientCommand::BuyLotteryTicket { first, second }
             }
-            UnservedSend::GmSurveySubmit { comment } => ClientCommand::GmSurveySubmit { comment },
+            UnservedSend::GmSurveySubmit {
+                survey,
+                answers,
+                comment,
+            } => ClientCommand::GmSurveySubmit {
+                survey,
+                answers: answers
+                    .into_iter()
+                    .map(|a| (a.question, a.rating, a.comment))
+                    .collect(),
+                comment,
+            },
         });
     }
 
@@ -239,6 +259,10 @@ const GM_TICKET_CATEGORY_MAX: u8 = 10;
 #[derive(Resource)]
 pub(crate) struct GmTicketCategories(pub(crate) Vec<(u32, String)>);
 
+/// The survey tables ([`benilla_formats::load_gm_survey`]), for the VM.
+#[derive(Resource)]
+pub(crate) struct GmSurveyResource(benilla_ui::script::GmSurveyTables);
+
 /// Startup, after the MPQ chain opens: a bare `Startup` races the open and can leave the category
 /// list empty for the whole session.
 fn load_gm_ticket_dbc(
@@ -264,6 +288,17 @@ fn load_gm_ticket_dbc(
             ));
         }
         Err(e) => warn!("gm ticket: GMTicketCategory.dbc failed to load: {e:#}"),
+    }
+    match benilla_formats::load_gm_survey(&mut chain) {
+        Ok(survey) => {
+            info!("gm survey: survey {} loaded", survey.id);
+            commands.insert_resource(GmSurveyResource(benilla_ui::script::GmSurveyTables {
+                id: survey.id,
+                questions: survey.questions,
+                texts: survey.texts,
+            }));
+        }
+        Err(e) => warn!("gm survey: the survey tables failed to load: {e:#}"),
     }
 }
 
@@ -436,11 +471,26 @@ mod tests {
                 second: 0b1111
             }
         ));
+        app.world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .set_gm_survey_tables(benilla_ui::script::GmSurveyTables {
+                id: 6,
+                questions: [28, 29, 0, 0, 0, 0, 0, 0, 0, 0],
+                texts: vec![],
+            });
         match one(run(
             &mut app,
-            "GMSurveyCommentSubmit('hi') GMSurveySubmit()",
+            "GMSurveyAnswerSubmit(2, 4, 'ok') GMSurveyCommentSubmit('hi') GMSurveySubmit()",
         )) {
-            ClientCommand::GmSurveySubmit { comment } => assert_eq!(comment, "hi"),
+            ClientCommand::GmSurveySubmit {
+                survey,
+                answers,
+                comment,
+            } => {
+                assert_eq!(survey, 6);
+                assert_eq!(answers, [(28, 0, String::new()), (29, 4, "ok".to_string())]);
+                assert_eq!(comment, "hi");
+            }
             other => panic!("{other:?}"),
         }
         // Refused, or a verb that sends nothing in the state this client holds.

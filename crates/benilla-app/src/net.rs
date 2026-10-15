@@ -1305,9 +1305,11 @@ pub(crate) enum ClientCommand {
         first: u32,
         second: u32,
     },
-    /// `CMSG_GMSURVEY_SUBMIT` with no answered question and the overall comment: `GMSurveySubmit()`
-    /// over the survey tables benilla does not load (survey id 0).
+    /// `CMSG_GMSURVEY_SUBMIT`: `GMSurveySubmit()`, the survey id, each answered question as
+    /// `(question id, rating, comment)` and the overall comment.
     GmSurveySubmit {
+        survey: u32,
+        answers: Vec<(u32, u8, String)>,
         comment: String,
     },
     /// `CMSG_GMTICKET_DELETETICKET`.

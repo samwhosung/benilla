@@ -30,7 +30,8 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Result};
 use benilla_assets::LockRecover;
 use benilla_protocol::{
-    messages, AuthReject, CharAction, LoginStage, Poll, RosterCause, SessionEnd, SessionEvent,
+    messages::{self, SurveyAnswer},
+    AuthReject, CharAction, LoginStage, Poll, RosterCause, SessionEnd, SessionEvent,
     WardenRequired, WorldReader, WorldSession, WorldWriter,
 };
 use crossbeam_channel::{Receiver, Sender};
@@ -98,10 +99,6 @@ const REALM_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The reference's 30 s ping timer (`0x537ff0`). vmangos kicks a socket whose pings come faster
 /// than 27 s apart more than twice (`WorldSocket::_HandlePing`), so this must not shrink.
-/// `GMSurveySubmit`'s survey id with `GMSurveyCurrentSurvey.dbc` unloaded: `0x496440` finds no row
-/// and answers 0 (`0x49645e`).
-const GM_SURVEY_ID_WITHOUT_TABLES: u32 = 0;
-
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Round trips [`PingClock`] keeps: 15. The reference's ring (`conn+0x1a6c`) has 16 slots, but
@@ -1538,8 +1535,20 @@ pub(super) fn writer_loop(
                     ClientCommand::BuyLotteryTicket { first, second } => {
                         w.buy_lottery_ticket(first, second)
                     }
-                    ClientCommand::GmSurveySubmit { comment } => {
-                        w.gm_survey_submit(GM_SURVEY_ID_WITHOUT_TABLES, &[], &comment)
+                    ClientCommand::GmSurveySubmit {
+                        survey,
+                        answers,
+                        comment,
+                    } => {
+                        let answers: Vec<_> = answers
+                            .iter()
+                            .map(|(question, rating, comment)| SurveyAnswer {
+                                question: *question,
+                                rating: *rating,
+                                comment,
+                            })
+                            .collect();
+                        w.gm_survey_submit(survey, &answers, &comment)
                     }
                     ClientCommand::GmTicketDelete => w.gm_ticket_delete(),
                     ClientCommand::GmTicketSystemStatus => w.gm_ticket_system_status(),

@@ -83,4 +83,28 @@ fn gm_survey_submit_body_golden() {
         &body[body.len() - 7..],
         hx(concat!("0a000000", "00", "00", "00")).as_slice()
     );
+
+    // The shipped survey (6; questions 28..=32; two answered): the id, five (id, rating, comment)
+    // triples, the zero id of the sixth slot (0x49668b), then the overall comment.
+    let answers: Vec<SurveyAnswer<'_>> = [
+        (28, 5, "a"),
+        (29, 0, ""),
+        (30, 0, ""),
+        (31, 2, "b"),
+        (32, 0, ""),
+    ]
+    .into_iter()
+    .map(|(question, rating, comment)| SurveyAnswer {
+        question,
+        rating,
+        comment,
+    })
+    .collect();
+    assert_eq!(
+        messages::gm_survey_submit(6, &answers, "z"),
+        hx(concat!(
+            "06000000", "1c000000", "05", "6100", "1d000000", "00", "00", "1e000000", "00", "00",
+            "1f000000", "02", "6200", "20000000", "00", "00", "00000000", "7a00"
+        ))
+    );
 }
