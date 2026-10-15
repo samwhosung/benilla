@@ -1459,6 +1459,29 @@ fn group_gate(
     }
 }
 
+/// Whether a dead or ghost player may send `kind`: the compare chain `0x49f5a3`-`0x49f5da` allows
+/// whisper, party, raid, raid leader, raid warning, guild, officer, channel, AFK, DND, battleground
+/// and battleground leader, so only say, yell and emote are refused (message 0xef,
+/// `ERR_CHAT_WHILE_DEAD`).
+fn dead_may_send(kind: super::edit::SendType) -> bool {
+    use super::edit::SendType as T;
+    match kind {
+        T::Say | T::Yell | T::Emote => false,
+        T::Whisper
+        | T::Party
+        | T::Raid
+        | T::RaidLeader
+        | T::RaidWarning
+        | T::Guild
+        | T::Officer
+        | T::Channel
+        | T::Afk
+        | T::Dnd
+        | T::Battleground
+        | T::BattlegroundLeader => true,
+    }
+}
+
 /// Turn `SendChatMessage` calls into sends. No slash grammar runs here: an addon sending
 /// `"/dance"` says six characters. An empty line of any type but AFK and DND sends nothing and
 /// prints nothing.
@@ -1544,6 +1567,14 @@ pub(crate) fn drain_addon_chat_sends(
                     language: None,
                 });
             }
+        }
+        // A dead or ghost player's line is refused after the AFK clear (`0x49f592`-`0x49f5e4`,
+        // `0x605f30`) unless its type is on the allowed chain (`0x49f5a3`-`0x49f5da`).
+        if !dead_may_send(kind) && self_q.iter().next().is_some_and(|s| s.0.is_dead_or_ghost()) {
+            errors
+                .0
+                .push(crate::ui_action::UiError::key("ERR_CHAT_WHILE_DEAD"));
+            continue;
         }
         let text = match wire {
             crate::net::ChatKind::Afk => {

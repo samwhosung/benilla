@@ -2826,7 +2826,23 @@ fn group_chat_sends(
     group: benilla_ui::script::PartyState,
     lua: &str,
 ) -> (Vec<(crate::net::ChatKind, String)>, Vec<&'static str>, bool) {
-    use crate::net::{ClientCommand, NetCommands};
+    let (sent, refused, afk) = chat_sends_as(group, None, lua);
+    // Without the empty AFK packet that tells the server a sent line cleared the standing AFK.
+    let sent = sent
+        .into_iter()
+        .filter(|(kind, text)| !(*kind == crate::net::ChatKind::Afk && text.is_empty()))
+        .collect();
+    (sent, refused, afk)
+}
+
+/// [`group_chat_sends`] with our descriptor's `(field, value)` pairs, when the player has one, and
+/// every packet kept.
+fn chat_sends_as(
+    group: benilla_ui::script::PartyState,
+    fields: Option<&[(u16, u32)]>,
+    lua: &str,
+) -> (Vec<(crate::net::ChatKind, String)>, Vec<&'static str>, bool) {
+    use crate::net::{ClientCommand, Guid, NetCommands, ObjectStore, SelfPlayer};
     use bevy::ecs::system::RunSystemOnce;
 
     let mut world = bevy::prelude::World::new();
@@ -2840,6 +2856,13 @@ fn group_chat_sends(
     world.insert_resource(super::away::AfkMirror(2));
     world.init_resource::<crate::cvars::Cvars>();
     world.init_resource::<super::edit::ChannelState>();
+    if let Some(pairs) = fields {
+        world.spawn((
+            SelfPlayer,
+            Guid(1),
+            ObjectStore(benilla_protocol::messages::ObjectFields::from_pairs(pairs)),
+        ));
+    }
     world
         .non_send_resource::<benilla_ui::script::UiScript>()
         .run(lua)
@@ -2847,14 +2870,12 @@ fn group_chat_sends(
     world
         .run_system_once(super::input::drain_addon_chat_sends)
         .expect("drain");
-    // Without the empty AFK packet that tells the server a sent line cleared the standing AFK.
     let sent = rx
         .try_iter()
         .map(|c| match c {
             ClientCommand::Chat { kind, text, .. } => (kind, text),
             other => panic!("unexpected command {other:?}"),
         })
-        .filter(|(kind, text)| !(*kind == crate::net::ChatKind::Afk && text.is_empty()))
         .collect();
     let refused = world
         .resource::<crate::ui_action::UiErrorKeys>()
@@ -2974,4 +2995,61 @@ fn the_group_leaders_raid_and_battleground_lines_go_out_as_leader_types() {
     unknown.own_guid = 0;
     let (sent, _, _) = group_chat_sends(unknown, r#"SendChatMessage("r", "RAID")"#);
     assert_eq!(sent, vec![(ChatKind::Raid, "r".into())]);
+}
+
+/// `SendChatMessage` from a dead or ghost player (`0x49f592`-`0x49f5e4`, test `0x605f30`: health 0,
+/// or the ghost flag): say, yell and emote are refused with `ERR_CHAT_WHILE_DEAD` after the AFK
+/// clear has run, and every type on the allowed chain (`0x49f5a3`-`0x49f5da`) goes out.
+#[test]
+fn a_dead_or_ghost_players_say_yell_and_emote_are_refused_after_the_afk_clear() {
+    use crate::net::ChatKind;
+    // `UNIT_FIELD_HEALTH` 22 and `MAXHEALTH` 28; `PLAYER_FLAGS` 190, ghost bit `0x10`.
+    let ghost: &[(u16, u32)] = &[(22, 1), (28, 100), (190, 0x10)];
+    let dead: &[(u16, u32)] = &[(22, 0), (28, 100)];
+    let alive: &[(u16, u32)] = &[(22, 100), (28, 100)];
+    let refused_types = r#"SendChatMessage("a", "SAY") SendChatMessage("b", "YELL")
+        SendChatMessage("c", "EMOTE")"#;
+
+    for (who, fields) in [("ghost", ghost), ("dead", dead)] {
+        let (sent, refused, afk) = chat_sends_as(raid_group(2, 9), Some(fields), refused_types);
+        assert_eq!(
+            sent,
+            vec![(ChatKind::Afk, String::new())],
+            "{who}: only the AFK clear's empty packet, once"
+        );
+        assert_eq!(refused, ["ERR_CHAT_WHILE_DEAD"; 3], "{who}");
+        assert!(!afk, "{who}: the clear ran ahead of the refusal");
+    }
+
+    // Every other sendable type is allowed to the dead (the party is the raid's).
+    let (sent, refused, _) = chat_sends_as(
+        raid_group(2, 9),
+        Some(ghost),
+        r#"SendChatMessage("w", "WHISPER", nil, "Bob") SendChatMessage("p", "PARTY")
+        SendChatMessage("g", "GUILD") SendChatMessage("o", "OFFICER")
+        SendChatMessage("r", "RAID") SendChatMessage("rw", "RAID_WARNING")
+        SendChatMessage("bg", "BATTLEGROUND")"#,
+    );
+    assert!(refused.is_empty(), "{refused:?}");
+    let kinds: Vec<ChatKind> = sent.iter().skip(1).map(|(k, _)| *k).collect();
+    assert_eq!(
+        kinds,
+        [
+            ChatKind::Whisper,
+            ChatKind::Party,
+            ChatKind::Guild,
+            ChatKind::Officer,
+            ChatKind::Raid,
+            ChatKind::RaidWarning,
+            ChatKind::Battleground
+        ]
+    );
+
+    // The living, and a player with no descriptor yet, are not refused.
+    let (sent, refused, _) =
+        chat_sends_as(raid_group(2, 9), Some(alive), r#"SendChatMessage("a")"#);
+    assert!(refused.is_empty());
+    assert_eq!(sent.last(), Some(&(ChatKind::Say, "a".to_string())));
+    let (_, refused, _) = chat_sends_as(raid_group(2, 9), None, r#"SendChatMessage("a")"#);
+    assert!(refused.is_empty());
 }
