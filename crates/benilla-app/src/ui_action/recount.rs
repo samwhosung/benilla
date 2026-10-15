@@ -1,0 +1,202 @@
+//! The action bar's item recount, `0x4e5c70(entry)`, for each entry an item watcher passes it
+//! ([`ItemNotice::recounts`]): the entry is counted once (`0x4e5c75`), and every item slot holding
+//! it, in slot order, stores that count (`0x4e5caa`) and signals `ACTIONBAR_SLOT_CHANGED` with no
+//! change test (`0x4e5cb1` into `0x4e58e0`). An item slot's count moves only here and where a
+//! slot is written (`0x4e5d90`, `0x4e66f1`), never by polling the bags.
+
+use bevy::prelude::*;
+
+use benilla_protocol::messages::ACTION_KIND_ITEM;
+use benilla_ui::script::{ScriptValue, UiScript};
+
+use crate::item_watch::ItemNotice;
+use crate::net::{ObjectStore, Objects, SelfPlayer};
+use crate::ui_items::{count_of, InventoryScope};
+
+/// The bar's 120 slots, as Lua action ids.
+const ACTION_SLOTS: std::ops::RangeInclusive<u32> = 1..=120;
+
+/// Run the recounts the frame's item notices owe, in their order.
+pub(super) fn recount_item_actions(
+    script: Option<NonSendMut<UiScript>>,
+    mut notices: MessageReader<ItemNotice>,
+    self_q: Query<&ObjectStore, With<SelfPlayer>>,
+    objects: Objects,
+) {
+    let notices: Vec<ItemNotice> = notices.read().cloned().collect();
+    let Some(mut script) = script else {
+        return;
+    };
+    let store = self_q.iter().next();
+    for entry in notices.iter().flat_map(ItemNotice::recounts) {
+        recount(&mut script, store, &objects, entry);
+    }
+}
+
+/// `0x4e5c70(entry)`: no active player counts 0 (`0x4e6d20`). Each slot is read as the VM holds it
+/// when its turn comes, so a handler that rewrites a later slot is seen.
+fn recount(script: &mut UiScript, store: Option<&ObjectStore>, objects: &Objects, entry: u32) {
+    let count = store.map_or(0, |s| {
+        count_of(&s.0, objects, entry, InventoryScope::CARRIED)
+    });
+    for action in ACTION_SLOTS {
+        let Some(mut slot) = script
+            .action_slot(action)
+            .filter(|s| s.kind == ACTION_KIND_ITEM && s.action == entry)
+        else {
+            continue;
+        };
+        slot.count = count;
+        script.set_action(action, Some(slot));
+        script.fire_event(
+            "ACTIONBAR_SLOT_CHANGED",
+            vec![ScriptValue::Int(i64::from(action))],
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY};
+    use benilla_protocol::ObjectFields;
+    use benilla_ui::script::ActionSlot;
+
+    const ME: u64 = 0x7;
+    const POTIONS: u64 = 0x4000_0000_0000_0101;
+    const POTION: u32 = 118;
+    const ARROW: u32 = 2512;
+    /// `PLAYER_FIELD_PACK_SLOT_1`, backpack slot 1's guid pair.
+    const F_PACK_SLOT_1: u16 = 532;
+
+    /// The recount over a VM whose bar holds the potion on slots 50 and 3 and an arrow on 7,
+    /// with five potions in backpack slot 1, and a spy on `ACTIONBAR_SLOT_CHANGED`.
+    fn app() -> App {
+        let mut app = App::new();
+        app.add_message::<ItemNotice>()
+            .init_resource::<crate::net::GuidIndex>()
+            .add_systems(Update, recount_item_actions);
+        let world = app.world_mut();
+        crate::items::test_spawn_item(
+            world,
+            POTIONS,
+            ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, POTION), (FIELD_ITEM_STACK_COUNT, 5)]),
+            false,
+        );
+        world.spawn((
+            SelfPlayer,
+            crate::net::Guid(ME),
+            ObjectStore(ObjectFields::from_pairs(&[
+                (F_PACK_SLOT_1, POTIONS as u32),
+                (F_PACK_SLOT_1 + 1, (POTIONS >> 32) as u32),
+            ])),
+        ));
+        let mut script = UiScript::new().unwrap();
+        for (action, entry) in [(50, POTION), (3, POTION), (7, ARROW)] {
+            script.set_action(
+                action,
+                Some(ActionSlot {
+                    kind: ACTION_KIND_ITEM,
+                    action: entry,
+                    ..Default::default()
+                }),
+            );
+        }
+        script
+            .run(
+                r#"
+                SEEN = {}
+                local f = CreateFrame("Frame")
+                f:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+                f:SetScript("OnEvent", function()
+                    table.insert(SEEN, arg1 .. "=" .. GetActionCount(arg1))
+                end)
+                "#,
+            )
+            .unwrap();
+        app.insert_non_send_resource(script);
+        app
+    }
+
+    fn seen(app: &mut App) -> Vec<String> {
+        app.world_mut()
+            .non_send_resource::<UiScript>()
+            .eval::<Vec<String>>("local s = SEEN SEEN = {} return s")
+            .unwrap()
+    }
+
+    fn notify(app: &mut App, notices: impl IntoIterator<Item = ItemNotice>) {
+        app.world_mut()
+            .resource_mut::<Messages<ItemNotice>>()
+            .write_batch(notices);
+        app.update();
+    }
+
+    /// `0x4e5c70`: the entry's slots in slot order, each with the count it stores, and the same
+    /// count again signals again.
+    #[test]
+    fn a_notice_signals_every_slot_of_its_entry_in_slot_order_with_no_change_test() {
+        let mut app = app();
+        notify(
+            &mut app,
+            [ItemNotice::StackCount {
+                guid: POTIONS,
+                entry: POTION,
+            }],
+        );
+        assert_eq!(seen(&mut app), ["3=5", "50=5"]);
+        notify(
+            &mut app,
+            [ItemNotice::Enchantment {
+                guid: POTIONS,
+                entry: POTION,
+            }],
+        );
+        assert_eq!(
+            seen(&mut app),
+            ["3=5", "50=5"],
+            "nothing moved, both signal again"
+        );
+        // A seat change recounts the entry that left, then the one that came.
+        notify(
+            &mut app,
+            [ItemNotice::Seat {
+                old: Some(ARROW),
+                new: Some(POTION),
+            }],
+        );
+        assert_eq!(seen(&mut app), ["7=0", "3=5", "50=5"]);
+    }
+
+    /// The count is taken at the notice: a stack the store changes runs nothing by itself, and
+    /// the next notice of the entry stores what the bags hold then.
+    #[test]
+    fn the_count_is_stored_at_the_notice() {
+        let mut app = app();
+        let potions = app.world().resource::<crate::net::GuidIndex>().0[&POTIONS];
+        app.world_mut()
+            .get_mut::<ObjectStore>(potions)
+            .unwrap()
+            .0
+            .merge(ObjectFields::from_pairs(&[(FIELD_ITEM_STACK_COUNT, 2)]));
+        app.update();
+        app.update();
+        assert!(seen(&mut app).is_empty(), "no notice, no signal");
+        let count = |app: &mut App| {
+            app.world_mut()
+                .non_send_resource::<UiScript>()
+                .eval::<i64>("return GetActionCount(3)")
+                .unwrap()
+        };
+        assert_eq!(count(&mut app), 0, "the slot keeps what it last stored");
+        notify(
+            &mut app,
+            [ItemNotice::Destroyed {
+                guid: 0x4000_0000_0000_0999,
+                entry: POTION,
+            }],
+        );
+        assert_eq!(seen(&mut app), ["3=2", "50=2"]);
+        assert_eq!(count(&mut app), 2);
+    }
+}

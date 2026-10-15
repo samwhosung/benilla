@@ -1,5 +1,6 @@
 //! The action bar's identity feed: each of the 120 slots' icon and count, pushed to the VM with
-//! `ACTIONBAR_SLOT_CHANGED` per changed slot. [`feed_actions`] also drains the UI error queues
+//! `ACTIONBAR_SLOT_CHANGED` per changed slot; between resolves an item slot's count moves by the
+//! item watchers' recount ([`super::recount`]). [`feed_actions`] also drains the UI error queues
 //! and feeds the stance page (`GetBonusBarOffset`: the form's `SpellShapeshiftForm.dbc`
 //! BonusActionBar column, `0x4e4fc0`).
 
@@ -473,19 +474,11 @@ pub(super) fn feed_actions(
         }
     }
 
-    // An item slot's count and a live icon change without an action-table edit (eating a stack
-    // sends no `SMSG_ACTION_BUTTONS`), so the pushed slots refresh every frame.
+    // A live icon changes without an action-table edit, so the pushed spell slots refresh every
+    // frame. An item slot's count is the item watchers' (`super::recount`), never polled.
     if let Some(store) = store {
         for (&action, slot) in memory.pushed.iter_mut() {
             let changed = match slot.kind {
-                ACTION_KIND_ITEM => {
-                    let fresh = count_of(&store.0, &objects, slot.action, InventoryScope::CARRIED);
-                    let changed = fresh != slot.count;
-                    if changed {
-                        slot.count = fresh;
-                    }
-                    changed
-                }
                 // Live icons: a weapon face follows the equipped weapon and form (Attack's
                 // `0x4e6870`), and a toggle's `ActiveIconID` follows its own aura (`0x4e6bbd`).
                 ACTION_KIND_SPELL => {
@@ -529,7 +522,6 @@ pub(super) fn feed_actions(
                     .is_some_and(|h| (h.kind, h.action) == (slot.kind, slot.action))
                 {
                     let mut next = held.unwrap_or_default();
-                    next.count = slot.count;
                     next.texture = slot.texture.clone();
                     script.set_action(action, Some(next));
                     script.fire_event(

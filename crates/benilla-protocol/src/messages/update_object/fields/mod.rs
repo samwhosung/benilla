@@ -6,6 +6,7 @@ use super::movement::ObjectType;
 
 // Descriptor field indices for build 5875.
 const FIELD_OBJECT_TYPE: u16 = 2;
+pub const FIELD_OBJECT_ENTRY: u16 = 3;
 const FIELD_OBJECT_SCALE_X: u16 = 4;
 // The creator of a spell-spawned object (bobber, ritual portal); 0 for a world spawn.
 const FIELD_GAMEOBJECT_CREATED_BY: u16 = 6;
@@ -187,9 +188,11 @@ pub mod field {
     /// The bit a watcher tests on a raw `UNIT_DYNAMIC_FLAGS` edge (feign death).
     pub use super::unit::UNIT_DYNFLAG_DEAD;
     pub use super::{
-        FIELD_CORPSE_DYNAMIC_FLAGS, FIELD_GAMEOBJECT_STATE, FIELD_PLAYER_FIELD_COINAGE,
-        FIELD_PLAYER_FLAGS, FIELD_PLAYER_INV_SLOT_HEAD, FIELD_PLAYER_QUEST_LOG_1_1,
-        FIELD_PLAYER_SKILL_INFO_1_1, FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS,
+        FIELD_CONTAINER_SLOT_1, FIELD_CORPSE_DYNAMIC_FLAGS, FIELD_GAMEOBJECT_STATE,
+        FIELD_ITEM_ENCHANTMENT, FIELD_ITEM_SPELL_CHARGES, FIELD_ITEM_STACK_COUNT,
+        FIELD_OBJECT_ENTRY, FIELD_PLAYER_FIELD_COINAGE, FIELD_PLAYER_FLAGS,
+        FIELD_PLAYER_INV_SLOT_HEAD, FIELD_PLAYER_QUEST_LOG_1_1, FIELD_PLAYER_SKILL_INFO_1_1,
+        FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR, FIELD_UNIT_AURA, FIELD_UNIT_AURAAPPLICATIONS,
         FIELD_UNIT_AURAFLAGS, FIELD_UNIT_BYTES_1, FIELD_UNIT_CHANNEL_SPELL,
         FIELD_UNIT_DYNAMIC_FLAGS, FIELD_UNIT_FACTIONTEMPLATE, FIELD_UNIT_FLAGS, FIELD_UNIT_HEALTH,
         FIELD_UNIT_LEVEL, FIELD_UNIT_MAXHEALTH, FIELD_UNIT_MOUNTDISPLAYID, FIELD_UNIT_NPC_FLAGS,
@@ -219,14 +222,15 @@ pub mod quest_slot_state {
     pub const FAIL: u8 = 0x02;
 }
 // Inventory fields. The PLAYER slot arrays are private, and each slot is a 2-field guid.
-const FIELD_ITEM_STACK_COUNT: u16 = 14; // OBJECT_END + 0x8
-const FIELD_ITEM_ENCHANTMENT: u16 = 22; // OBJECT_END + 0x10; 7 slots × 3 (id, duration, charges)
+pub const FIELD_ITEM_STACK_COUNT: u16 = 14; // OBJECT_END + 0x8
+pub const FIELD_ITEM_SPELL_CHARGES: u16 = 16; // OBJECT_END + 0xA; 5 spells
+pub const FIELD_ITEM_ENCHANTMENT: u16 = 22; // OBJECT_END + 0x10; 7 slots × 3 (id, duration, charges)
 const FIELD_CONTAINER_NUM_SLOTS: u16 = 48; // ITEM_END = 6 + 0x2A
-const FIELD_CONTAINER_SLOT_1: u16 = 50; // ITEM_END + 0x2; 36 slots × 2
+pub const FIELD_CONTAINER_SLOT_1: u16 = 50; // ITEM_END + 0x2; 36 slots × 2
 
 // From the CONTAINER block on, the hex comments in vmangos `UpdateFields_1_12_1.h` run 6 low. The
 // indices here follow its enum arithmetic, which the server compiles: INV_SLOT_HEAD = 188 + 0x12A.
-const FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR: u16 = 258; // UNIT_END + 0x46; 12 fields per slot
+pub const FIELD_PLAYER_VISIBLE_ITEM_1_CREATOR: u16 = 258; // UNIT_END + 0x46; 12 fields per slot
 pub const FIELD_PLAYER_INV_SLOT_HEAD: u16 = 486; // 23 slots × 2 (equipment 0–18, bags 19–22)
 const FIELD_PLAYER_PACK_SLOT_1: u16 = 532; // 16 slots × 2 (the backpack)
 const FIELD_PLAYER_BANK_SLOT_1: u16 = 564; // 24 slots × 2

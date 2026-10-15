@@ -28,6 +28,7 @@ pub(crate) use feed::{spell_action_icon, MISSING_ITEM_ICON};
 mod feed_tests;
 mod net;
 mod ranks;
+mod recount;
 mod state;
 pub(crate) mod toggle;
 mod weapon_icon;
@@ -62,8 +63,8 @@ pub(crate) struct PlayerActions {
     /// by array order, which is ascending id: the server sends the book from a `std::map`.
     pub spells: BTreeSet<u32>,
     /// Set by every book or bar change, cleared once the feed re-resolves slot identity, which a
-    /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Item counts
-    /// refresh every frame regardless.
+    /// landed item template ([`crate::items::Items::template_epoch`]) also triggers. Between
+    /// resolves an item slot's count moves only by the item watchers' recount (`recount`).
     pub dirty: bool,
 }
 
@@ -249,7 +250,9 @@ pub(crate) struct UiActionPlugin;
 impl Plugin for UiActionPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        app.init_resource::<PlayerActions>()
+        // A UI-only harness has no net stack; declaring a message twice is idempotent.
+        app.add_message::<crate::item_watch::ItemNotice>()
+            .init_resource::<PlayerActions>()
             .init_resource::<LearnedAbilities>()
             .init_resource::<CastErrors>()
             .init_resource::<MountErrors>()
@@ -268,6 +271,12 @@ impl Plugin for UiActionPlugin {
                     // input pass, in any order: a gesture fills only one of their queues.
                     ranks::normalize_action_ranks
                         .in_set(UnitFeed)
+                        .before(feed::feed_actions),
+                    // The item watchers' recounts, after the server's unlocks, which each handler
+                    // runs first (`0x5d94af` before `0x5d94e1`).
+                    recount::recount_item_actions
+                        .in_set(UnitFeed)
+                        .after(crate::ui_items::locks::apply_item_releases)
                         .before(feed::feed_actions),
                     feed::feed_actions.in_set(UnitFeed),
                     state::feed_action_state

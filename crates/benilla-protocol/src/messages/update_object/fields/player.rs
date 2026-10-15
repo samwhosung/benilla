@@ -6,7 +6,7 @@ impl ObjectFields {
     /// `OBJECT_FIELD_ENTRY` (3): the template entry. The only route to a pet's template: its guid
     /// holds a pet number instead, but vmangos writes the entry here (`Creature.cpp:376`).
     pub fn object_entry(&self) -> Option<u32> {
-        self.get_u32(3)
+        self.get_u32(FIELD_OBJECT_ENTRY)
     }
     /// `ITEM_FIELD_OWNER` (field 6): the item's owner, which the client's lock watchers compare
     /// with the active player.
@@ -25,7 +25,7 @@ impl ObjectFields {
     /// charges left on spell `i`, signed; negative is consumed when empty, 0 is spent.
     pub fn item_spell_charges(&self, i: u8) -> Option<i32> {
         (i < 5)
-            .then(|| self.get_u32(FIELD_ITEM_STACK_COUNT + 2 + u16::from(i)))?
+            .then(|| self.get_u32(FIELD_ITEM_SPELL_CHARGES + u16::from(i)))?
             .map(|v| v as i32)
     }
     /// `ITEM_FIELD_FLAGS` (field 21): `0x08` wrapped, never alerts; `0x10` forces red status 4.
