@@ -9,15 +9,12 @@ use bevy::prelude::*;
 use benilla_formats::{ChrClasses, ChrRaces};
 use benilla_protocol::messages::ObjectType;
 use benilla_ui::script::{
-    parse_unit_token, power_token, ScriptValue, UiScript, UnitBase, UnitState, UnitTokenParse,
-    WornDisplay,
+    parse_unit_token, ScriptValue, UiScript, UnitBase, UnitState, UnitTokenParse, WornDisplay,
 };
 
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
-use crate::net::{
-    FieldChanged, FieldEdges, Guid, NetCommands, ObjectStore, Reputations, SelfPlayer,
-};
+use crate::net::{Guid, NetCommands, ObjectStore, Reputations, SelfPlayer};
 use crate::target::{ring_reaction, Factions, Selection};
 use crate::ui_script::{gate, SweepApp, UiInput};
 
@@ -117,7 +114,6 @@ impl Plugin for UiUnitPlugin {
         .add_message::<UnitCombatFeedback>()
         .add_message::<CombatTextEvent>()
         .add_message::<crate::net::WorldportMessage>()
-        .add_message::<crate::net::FieldChanged>()
         .add_message::<crate::field_watch::FieldNotice>()
         .init_world_leave_sweep()
         // Ahead of the unit feed, so a worldport's leaving edge precedes the entering edge
@@ -924,8 +920,6 @@ pub(crate) struct UnitStores<'w, 's> {
     changed: Query<'w, 's, (), (Changed<ObjectStore>, Without<crate::items::ItemObject>)>,
     /// Whose object left the manager, by [`Guid`]: a fading model keeps its store 2 s longer.
     removed: RemovedComponents<'w, 's, Guid>,
-    /// This run's per-field edges, which [`fire_transitions`]' watch-bridge arms fire off.
-    edges: MessageReader<'w, 's, FieldChanged>,
 }
 
 /// The client tables [`snapshot`] reads beside a descriptor, as one parameter for the feeders that
@@ -1225,99 +1219,6 @@ pub(crate) fn faction_group_localized(
         .map(str::to_string)
 }
 
-/// Diff a token's snapshot against the last pushed and fire the per-field `UNIT_*` events. The
-/// watch-bridge arms fire off `edges`, as the reference's create runs no notify pass; the rest fire
-/// on a token's first snapshot (`prev = None`) too, where the reference's behaviour is untraced.
-pub(crate) fn fire_transitions(
-    script: &mut UiScript,
-    token: &str,
-    prev: Option<&UnitState>,
-    cur: &UnitState,
-    edges: &FieldEdges,
-) {
-    let tok = || ScriptValue::Str(token.to_string());
-    let changed = |f: fn(&UnitState) -> u64| prev.is_none_or(|p| f(p) != f(cur));
-
-    if changed(|u| u64::from(u.health)) {
-        script.fire_event("UNIT_HEALTH", vec![tok()]);
-    }
-    if changed(|u| u64::from(u.max_health)) {
-        script.fire_event("UNIT_MAXHEALTH", vec![tok()]);
-    }
-    if changed(|u| u64::from(u.level)) {
-        script.fire_event("UNIT_LEVEL", vec![tok()]);
-    }
-    if changed(|u| u64::from(u.power_type)) {
-        script.fire_event("UNIT_DISPLAYPOWER", vec![tok()]);
-    }
-    // `UNIT_FLAGS` (id 40), the per-field watch bridge: `0x51bbb0` registers one watch per named
-    // unit field, and on any change of the dword the notifier `0x465570` fires `0x51bd50` →
-    // `0x515e50`, once per token naming the unit, `arg1` the token. The stock pet bar reads it.
-    if edges.moved(cur.guid, benilla_protocol::field::FIELD_UNIT_FLAGS) {
-        script.fire_event("UNIT_FLAGS", vec![tok()]);
-    }
-    // `PLAYER_FLAGS_CHANGED` (id 407, `0x5eea35` into `0x515e50`): no bit test after the XOR diff
-    // (`0x5ee9b8`) and above the local-GUID gate (`0x5eea93`), so any bit of any player fires it,
-    // once per token naming it (none, nothing: `0x515e63`). The sole 1.12 consumer is the target
-    // frame's leader icon (`TargetFrame.lua:88-95`); 1.12 has no AFK/DND unit-frame badge.
-    if edges.moved(cur.guid, benilla_protocol::field::FIELD_PLAYER_FLAGS) {
-        script.fire_event("PLAYER_FLAGS_CHANGED", vec![tok()]);
-    }
-    // `UNIT_DYNAMIC_FLAGS` (id 137), the bridge's third arm: the watch is one dword, so any bit
-    // fires it. No stock file registers it; addons do, to repaint the tapped state.
-    if edges.moved(cur.guid, benilla_protocol::field::FIELD_UNIT_DYNAMIC_FLAGS) {
-        script.fire_event("UNIT_DYNAMIC_FLAGS", vec![tok()]);
-    }
-    // `UNIT_QUEST_LOG_CHANGED` (id 522), the player-window watch over the quest-log slots
-    // (`0x51bc63`: offset `0x28`, length `0xf0`, callback `0x51bd90`): one compare over the 60
-    // dwords, so one event however many moved. A group mate's ids are all of it on the wire.
-    let log = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
-    if (log..log + 3 * u16::from(benilla_protocol::messages::PLAYER_QUEST_LOG_SLOTS))
-        .any(|i| edges.moved(cur.guid, i))
-    {
-        script.fire_event("UNIT_QUEST_LOG_CHANGED", vec![tok()]);
-    }
-    // 1.12 names the power events per resource (`UNIT_MANA`, `UNIT_MAXRAGE`, …;
-    // `UnitFrame.lua:190-199`), and `power_token` yields the suffix.
-    if changed(|u| u64::from(u.power)) {
-        script.fire_event(
-            &format!("UNIT_{}", power_token(cur.power_type)),
-            vec![tok()],
-        );
-    }
-    if changed(|u| u64::from(u.max_power)) {
-        script.fire_event(
-            &format!("UNIT_MAX{}", power_token(cur.power_type)),
-            vec![tok()],
-        );
-    }
-    if prev.is_none_or(|p| p.name != cur.name) {
-        script.fire_event("UNIT_NAME_UPDATE", vec![tok()]);
-    }
-    // `UNIT_CLASSIFICATION_CHANGED`, the target frame's border repaint, on a change of the gated
-    // rank, which is the classification: the creature query landing, a mob enslaved or released.
-    if prev.is_none_or(|p| p.rank != cur.rank) {
-        script.fire_event("UNIT_CLASSIFICATION_CHANGED", vec![tok()]);
-    }
-    // `UNIT_FACTION`, the PvP-icon repaint, on the fields the icon reads and on the tapped bit: the
-    // reference's dynamic-flags watcher (`0x600440`) fires event 29 on bit `0x4` (`0x6005a1` →
-    // `0x6005b0`) and has no arm for `0x8`. Also on any change of `UNIT_FIELD_FACTIONTEMPLATE`, the
-    // watch bridge's id 29 (`0x51bbb0`, as for `UNIT_FLAGS` above): a template swap between two
-    // that name no faction group moves nothing in the tuple, yet changes the reaction.
-    let template_moved = edges.moved(
-        cur.guid,
-        benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE,
-    );
-    if template_moved
-        || prev.is_none_or(|p| {
-            (p.pvp, p.is_pvp_ffa, &p.faction_group, p.tapped)
-                != (cur.pvp, cur.is_pvp_ffa, &cur.faction_group, cur.tapped)
-        })
-    {
-        script.fire_event("UNIT_FACTION", vec![tok()]);
-    }
-}
-
 /// `CanAssist` (`0x6066f0`) of the player toward itself, `UnitCanAssist("player", "player")`: one
 /// object toward itself is friendly (`0x606200`), so `UNIT_FLAG_NOT_SELECTABLE` is the only refusal
 /// left.
@@ -1455,7 +1356,6 @@ fn feed_units(
     // One reborrow, so the memo and `warned_sideless` borrow disjointly rather than alias.
     let feed = &mut *feed;
     let (memo, vm_reset) = feed.vm.get_reset(&script);
-    let edges = FieldEdges::collect(&mut stores.edges);
 
     // The gate: every input read below, despawns included (invisible to `Changed`).
     let names_moved = memo.names_generation.moved(names.generation());
@@ -1555,8 +1455,10 @@ fn feed_units(
         Some(s)
     });
 
-    // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only. No guild
-    // leg: nothing asks it for one, and a lazy-cache miss sends a query.
+    // `"targettarget"`: one hop off the target's `UNIT_FIELD_TARGET`, streamed guids only, for the
+    // stock frame's poll (`TargetofTarget_OnUpdate`, `TargetFrame.lua:494-538`): no unit event
+    // carries the hop, whose token is none of `0x515c50`'s. No guild leg: nothing asks it for one,
+    // and a lazy-cache miss sends a query.
     let tot = selection
         .target
         .and_then(|e| stores.all.get(e).ok())
@@ -1601,8 +1503,7 @@ fn feed_units(
         .as_deref()
         .and_then(|i| Some((i.0?, i.1?)))
         .and_then(|(entity, guid)| Some(held.state(stores.all.get(entity).ok()?, guid)));
-    // Closing the window must clear the token, so the memo is written here, not only read. No
-    // `fire_transitions`: nothing draws `"npc"` as a unit frame.
+    // Closing the window must clear the token, so the memo is written here, not only read.
     let npc_dirty = match (&npc, memo.last.get("npc")) {
         (Some(cur), Some(prev)) => cur != prev,
         (None, None) => false,
@@ -1739,6 +1640,9 @@ fn feed_units(
         memo.action_bar_toggles = None;
     }
 
+    // The memo the pushes above diff against. Pushing fires nothing: a unit's events are its own
+    // changes' (`crate::field_watch`), and a token that comes to name another unit is announced by
+    // `PLAYER_TARGET_CHANGED` below alone (`0x493540` signals only that, `0x49389c`).
     for (token, snap) in [
         ("player", &player),
         ("target", &target),
@@ -1746,18 +1650,12 @@ fn feed_units(
     ] {
         match snap {
             Some(cur) => {
-                let prev = memo.last.get(token);
-                if prev != Some(cur) {
-                    gate.audit("feed_units", "a unit-token transition");
-                    fire_transitions(&mut script, token, prev, cur, &edges);
+                if memo.last.get(token) != Some(cur) {
                     memo.last.insert(token.to_string(), cur.clone());
                 }
             }
             None => {
-                // A clear fires nothing; the target frame hears `PLAYER_TARGET_CHANGED` below.
-                if memo.last.remove(token).is_some() {
-                    gate.audit("feed_units", "a unit-token clear");
-                }
+                memo.last.remove(token);
             }
         }
     }
@@ -1865,12 +1763,22 @@ fn combo_edge(last: Option<(u8, u64)>, now: (u8, u64)) -> Option<bool> {
 #[cfg(test)]
 pub(crate) use held::feed_name_candidates;
 
-/// The bare unit feed, for a test driving the stock unit frames off engine state.
+/// The bare unit feed, for a test driving the stock unit frames off engine state: the pushes,
+/// then the field notices' events.
 #[cfg(test)]
 pub(crate) fn add_unit_feed(app: &mut App) {
     app.init_resource::<UnitFeedState>()
-        .add_message::<crate::net::FieldChanged>()
-        .add_systems(Update, (feed_units, fire_faction_on_forced_table).chain());
+        .add_message::<crate::field_watch::FieldNotice>()
+        .init_resource::<field_events::FieldNoticeCursor>()
+        .add_systems(
+            Update,
+            (
+                feed_units,
+                fire_faction_on_forced_table,
+                field_events::fire_field_notices,
+            )
+                .chain(),
+        );
 }
 
 #[cfg(test)]
@@ -2815,107 +2723,6 @@ mod tests {
         }
     }
 
-    /// A unit's first snapshot is no transition: the reference's create runs no notify pass.
-    #[test]
-    fn a_flags_change_fires_unit_flags_with_the_token() {
-        let fired = |prev: Option<UnitState>, cur: UnitState, edges: &FieldEdges| -> Vec<String> {
-            let mut s = UiScript::new().unwrap();
-            s.run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("UNIT_FLAGS")
-                f:SetScript("OnEvent", function() table.insert(SEEN, event .. ":" .. arg1) end)
-            "#,
-            )
-            .unwrap();
-            fire_transitions(&mut s, "pet", prev.as_ref(), &cur, edges);
-            s.eval::<Vec<String>>("return SEEN").unwrap()
-        };
-        const PET: u64 = 0xF140_0000_0000_0001;
-        let base = UnitState {
-            exists: true,
-            has_object: true,
-            guid: PET,
-            flags: 0x8,
-            ..Default::default()
-        };
-        let moved = FieldEdges::of(&[(PET, benilla_protocol::field::FIELD_UNIT_FLAGS)]);
-        assert_eq!(
-            fired(
-                Some(base.clone()),
-                UnitState {
-                    flags: 0x8 | 0x0400_0000,
-                    ..base.clone()
-                },
-                &moved,
-            ),
-            vec!["UNIT_FLAGS:pet".to_string()]
-        );
-        assert_eq!(
-            fired(Some(base.clone()), base.clone(), &FieldEdges::default()),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            fired(None, base.clone(), &FieldEdges::default()),
-            Vec::<String>::new()
-        );
-        // The unit's edge, not the token's history: a token acquired as the field moved hears it
-        // (the reference fans out at notify time), and another unit's edge does not.
-        assert_eq!(
-            fired(None, base.clone(), &moved),
-            vec!["UNIT_FLAGS:pet".to_string()]
-        );
-        assert_eq!(
-            fired(
-                Some(base.clone()),
-                base.clone(),
-                &FieldEdges::of(&[(PET + 1, benilla_protocol::field::FIELD_UNIT_FLAGS)]),
-            ),
-            Vec::<String>::new()
-        );
-    }
-
-    /// `UNIT_QUEST_LOG_CHANGED` (id 522) is the player-window watch over the 60 quest-log dwords
-    /// (`0x51bc63`: offset `0x28`, length `0xf0`, callback `0x51bd90`): any of them moving fires it
-    /// once with the token, and a dword either side does not.
-    #[test]
-    fn a_quest_log_change_fires_unit_quest_log_changed_with_the_token() {
-        let fired = |prev: &UnitState, cur: &UnitState, edges: &[(u64, u16)]| -> Vec<String> {
-            let mut s = UiScript::new().unwrap();
-            s.run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("UNIT_QUEST_LOG_CHANGED")
-                f:SetScript("OnEvent", function() table.insert(SEEN, event .. ":" .. arg1) end)
-            "#,
-            )
-            .unwrap();
-            fire_transitions(&mut s, "party1", Some(prev), cur, &FieldEdges::of(edges));
-            s.eval::<Vec<String>>("return SEEN").unwrap()
-        };
-        const MATE: u64 = 0x300;
-        const LOG: u16 = benilla_protocol::field::FIELD_PLAYER_QUEST_LOG_1_1;
-        let before = UnitState {
-            exists: true,
-            has_object: true,
-            guid: MATE,
-            ..Default::default()
-        };
-        let mut after = before.clone();
-        after.quest_log[4][0] = 783;
-        let once = vec!["UNIT_QUEST_LOG_CHANGED:party1".to_string()];
-        assert_eq!(fired(&before, &after, &[(MATE, LOG + 12)]), once);
-        // One watch over the window: two slots moving in one pass is one event.
-        assert_eq!(
-            fired(&before, &after, &[(MATE, LOG), (MATE, LOG + 59)]),
-            once
-        );
-        assert!(fired(&before, &after, &[(MATE, LOG - 1), (MATE, LOG + 60)]).is_empty());
-        assert!(fired(&before, &after, &[(MATE + 1, LOG + 12)]).is_empty());
-    }
-
     /// LOST going down, GAINED going up (boot is in control); far sight on every change.
     #[test]
     fn the_control_and_far_sight_edges_fire_once_each_way() {
@@ -3007,178 +2814,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_tapped_bit_fires_unit_faction_and_the_by_player_bit_fires_nothing() {
-        let fired = |prev: UnitState, cur: UnitState| -> Vec<String> {
-            let mut s = UiScript::new().unwrap();
-            s.run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("UNIT_FACTION")
-                f:SetScript("OnEvent", function() table.insert(SEEN, event) end)
-            "#,
-            )
-            .unwrap();
-            fire_transitions(&mut s, "target", Some(&prev), &cur, &FieldEdges::default());
-            s.eval::<Vec<String>>("return SEEN").unwrap()
-        };
-        let base = UnitState {
-            exists: true,
-            has_object: true,
-            ..Default::default()
-        };
-
-        // The `0x4` edge fires `UNIT_FACTION`, the reference's event 29 (`0x6005a1`).
-        assert_eq!(
-            fired(
-                base.clone(),
-                UnitState {
-                    tapped: true,
-                    ..base.clone()
-                }
-            ),
-            vec!["UNIT_FACTION".to_string()],
-            "a unit becoming tapped must repaint the frames that draw it"
-        );
-        assert_eq!(
-            fired(
-                UnitState {
-                    tapped: true,
-                    ..base.clone()
-                },
-                base.clone()
-            ),
-            vec!["UNIT_FACTION".to_string()],
-        );
-        // The `0x8` edge fires nothing: the reference's watcher has no arm for it.
-        assert!(
-            fired(
-                UnitState {
-                    tapped: true,
-                    ..base.clone()
-                },
-                UnitState {
-                    tapped: true,
-                    tapped_by_player: true,
-                    ..base.clone()
-                }
-            )
-            .is_empty(),
-            "bit 0x8 has no delta arm — firing on it would be an invention"
-        );
-        // The control against firing always.
-        assert!(fired(base.clone(), base.clone()).is_empty());
-    }
-
-    /// The control is a bit no `UnitState` field decodes, so the trigger is the raw dword.
-    #[test]
-    fn player_flags_changed_fires_per_token_on_any_bit_and_never_on_first_sight() {
-        let fired = |prev: Option<UnitState>, cur: UnitState, edges: &FieldEdges| -> Vec<String> {
-            let mut s = UiScript::new().unwrap();
-            s.run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("PLAYER_FLAGS_CHANGED")
-                f:SetScript("OnEvent", function() table.insert(SEEN, event .. ":" .. arg1) end)
-            "#,
-            )
-            .unwrap();
-            fire_transitions(&mut s, "target", prev.as_ref(), &cur, edges);
-            s.eval::<Vec<String>>("return SEEN").unwrap()
-        };
-        const THEM: u64 = 0x2a;
-        let base = UnitState {
-            exists: true,
-            has_object: true,
-            guid: THEM,
-            ..Default::default()
-        };
-        let with = |flags: u32| UnitState {
-            player_flags: flags,
-            group_leader: flags & 0x1 != 0,
-            ghost: flags & 0x10 != 0,
-            ..base.clone()
-        };
-        let moved = FieldEdges::of(&[(THEM, benilla_protocol::field::FIELD_PLAYER_FLAGS)]);
-        let still = FieldEdges::default();
-
-        // `PLAYER_FLAGS_GROUP_LEADER`, the bit the 1.12 target frame reads.
-        assert_eq!(
-            fired(Some(with(0)), with(0x1), &moved),
-            vec!["PLAYER_FLAGS_CHANGED:target".to_string()],
-            "arg1 is the unit token, and there is no arg2 (0x515e50 -> 0x703f50(id, \"%s\", token))"
-        );
-        // And back down: the reference tests the XOR diff, not the new value.
-        assert_eq!(
-            fired(Some(with(0x1)), with(0), &moved),
-            vec!["PLAYER_FLAGS_CHANGED:target".to_string()]
-        );
-
-        // `PLAYER_FLAGS_HIDE_HELM`: no `UnitState` field decodes it, and `0x5eea35` tests no bit.
-        assert_eq!(
-            fired(Some(with(0)), with(0x400), &moved),
-            vec!["PLAYER_FLAGS_CHANGED:target".to_string()],
-            "an undecoded bit still fires it — the handler tests no bit at all"
-        );
-
-        assert!(
-            fired(None, with(0x1), &still).is_empty(),
-            "a unit's first snapshot is its create, not a transition"
-        );
-        // The control against firing always.
-        assert!(fired(Some(with(0x1)), with(0x1), &still).is_empty());
-    }
-
-    /// Event 137 watches descriptor field 143 over one dword (`repe cmpsb`), so any bit fires it;
-    /// the control is `0x2` (`UNIT_DYNFLAG_TRACK_UNIT`), which no `UnitState` field decodes.
-    #[test]
-    fn unit_dynamic_flags_fires_per_token_on_any_bit_and_never_on_first_sight() {
-        let fired = |prev: Option<UnitState>, cur: UnitState, edges: &FieldEdges| -> Vec<String> {
-            let mut s = UiScript::new().unwrap();
-            s.run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("UNIT_DYNAMIC_FLAGS")
-                f:SetScript("OnEvent", function() table.insert(SEEN, event .. ":" .. arg1) end)
-            "#,
-            )
-            .unwrap();
-            fire_transitions(&mut s, "target", prev.as_ref(), &cur, edges);
-            s.eval::<Vec<String>>("return SEEN").unwrap()
-        };
-        const MOB: u64 = 0xF130_0000_0000_0007;
-        let moved = FieldEdges::of(&[(MOB, benilla_protocol::field::FIELD_UNIT_DYNAMIC_FLAGS)]);
-        let still = FieldEdges::default();
-        let with = |dyn_flags: u32| UnitState {
-            exists: true,
-            has_object: true,
-            guid: MOB,
-            dynamic_flags: dyn_flags,
-            tapped: dyn_flags & 0x4 != 0,
-            tapped_by_player: dyn_flags & 0x8 != 0,
-            ..Default::default()
-        };
-
-        // `0x4` TAPPED, the grey-bar state addons register this event for.
-        assert_eq!(
-            fired(Some(with(0)), with(0x4), &moved),
-            vec!["UNIT_DYNAMIC_FLAGS:target".to_string()],
-            "arg1 is the unit token, and there is no arg2"
-        );
-        assert_eq!(
-            fired(Some(with(0)), with(0x2), &moved),
-            vec!["UNIT_DYNAMIC_FLAGS:target".to_string()],
-            "an undecoded bit still fires it — the watch is a memcmp over the dword"
-        );
-        // The create runs no notify pass.
-        assert!(fired(None, with(0x4), &still).is_empty());
-        // The control against firing always.
-        assert!(fired(Some(with(0x4)), with(0x4), &still).is_empty());
-    }
-
     /// `PLAYER_UPDATE_RESTING` fires at `0x5eeaf2`, inside the `0x20` arm whose `je` (`0x5eead4`)
     /// skips to `0x5eeafc`.
     #[test]
@@ -3187,7 +2822,6 @@ mod tests {
         const FIELD_PLAYER_FLAGS: u16 = 190;
 
         let mut app = App::new();
-        app.add_message::<FieldChanged>();
         app.init_resource::<Selection>()
             .init_resource::<UnitFeedState>()
             .init_resource::<NameCache>()
@@ -3306,7 +2940,6 @@ mod tests {
         const FIELD_PLAYER_REST_STATE_EXPERIENCE: u16 = 1175;
 
         let mut app = App::new();
-        app.add_message::<FieldChanged>();
         app.init_resource::<Selection>()
             .init_resource::<UnitFeedState>()
             .init_resource::<NameCache>()
@@ -3890,7 +3523,6 @@ mod tests {
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::ui_guild::GuildState>()
             .init_resource::<InteractNpc>();
-        app.add_message::<FieldChanged>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         app.insert_non_send_resource(UiScript::new().unwrap());
@@ -3966,7 +3598,6 @@ mod tests {
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::ui_guild::GuildState>();
-        app.add_message::<FieldChanged>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         app.insert_non_send_resource(UiScript::new().unwrap());
@@ -4091,7 +3722,6 @@ mod tests {
             .init_resource::<crate::ui_chat::ChatLog>()
             .init_resource::<crate::sound::MessageSounds>()
             .init_resource::<crate::ui_guild::GuildState>();
-        app.add_message::<FieldChanged>();
         let (tx, _rx) = crossbeam_channel::unbounded();
         app.insert_resource(NetCommands(tx));
         app.insert_non_send_resource(UiScript::new().unwrap());

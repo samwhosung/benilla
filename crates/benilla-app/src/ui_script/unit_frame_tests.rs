@@ -959,18 +959,25 @@ fn an_exalted_npc_target_reads_revered_and_its_plate_is_green() {
 }
 
 /// A target whose faction template the server changes live recolours its plate: template 35
-/// (friendly) to 14 (hostile) names no side either way, so only the template's own edge fires
-/// `UNIT_FACTION`. No edge, or another unit's, leaves the plate as it was.
+/// (friendly) to 14 (hostile) names no side either way, so only the template's own watch fires
+/// `UNIT_FACTION` (bridge id 29). Pushing the new reaction alone, or another unit's watch, leaves
+/// the plate as it was.
 #[test]
 fn a_live_faction_template_change_recolours_the_target_plate() {
     benilla_formats::wow_data_or_skip!();
-    use crate::net::FieldEdges;
-    use benilla_protocol::field::FIELD_UNIT_FACTIONTEMPLATE;
+    use crate::field_watch::FieldNotice;
+    use crate::ui_unit::field_events::fire_unit_notice;
 
+    const ME: u64 = 0x77;
     const MOB: u64 = 0xF130_0000_3796_0001;
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_unit_frames(&s);
+    s.set_unit_guids(&benilla_ui::script::UnitGuids {
+        player: ME,
+        target: MOB,
+        ..Default::default()
+    });
     let mob = |reaction: u8| UnitState {
         exists: true,
         has_object: true,
@@ -986,27 +993,214 @@ fn a_live_faction_template_change_recolours_the_target_plate() {
     let is_green = |c: [f32; 4]| c[0].abs() < 1e-6 && (c[1] - 1.0).abs() < 1e-6;
     let is_red = |c: [f32; 4]| (c[0] - 1.0).abs() < 1e-6 && c[1].abs() < 1e-6;
 
-    let friendly = mob(5);
-    s.set_unit("target", Some(friendly.clone()));
+    s.set_unit("target", Some(mob(5)));
     s.fire_event("PLAYER_TARGET_CHANGED", vec![]);
     let before = plate_color(&mut s);
     assert!(is_green(before), "template 35 reads green, got {before:?}");
 
-    let hostile = mob(2);
-    s.set_unit("target", Some(hostile.clone()));
-    let fire = |s: &mut UiScript, prev: &UnitState, edges: &[(u64, u16)]| {
-        crate::ui_unit::fire_transitions(s, "target", Some(prev), &hostile, &FieldEdges::of(edges));
-    };
-    fire(&mut s, &friendly, &[]);
+    s.set_unit("target", Some(mob(2)));
     let stale = plate_color(&mut s);
-    assert!(is_green(stale), "no edge, no repaint, got {stale:?}");
-    fire(&mut s, &hostile, &[(MOB + 1, FIELD_UNIT_FACTIONTEMPLATE)]);
+    assert!(is_green(stale), "a push alone, no repaint, got {stale:?}");
+    fire_unit_notice(
+        &mut s,
+        FieldNotice::Unit {
+            guid: MOB + 1,
+            id: 29,
+        },
+    );
     let other = plate_color(&mut s);
-    assert!(is_green(other), "another unit's edge, got {other:?}");
-    fire(&mut s, &hostile, &[(MOB, FIELD_UNIT_FACTIONTEMPLATE)]);
+    assert!(is_green(other), "another unit's watch, got {other:?}");
+    fire_unit_notice(&mut s, FieldNotice::Unit { guid: MOB, id: 29 });
     let after = plate_color(&mut s);
     assert!(is_red(after), "template 14 reads red, got {after:?}");
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
+}
+
+/// The stock target frame's health bar off the real pipeline: a values block on the target runs
+/// its health watch, whose `UNIT_HEALTH("target")` the bar answers (`TargetFrame.lua:40`), and a
+/// retarget is `PLAYER_TARGET_CHANGED` alone (`0x493540` signals only that, `0x49389c`), on which
+/// the frame rereads the new unit whole. No unit event carries `"targettarget"`, though the token is
+/// pushed for the stock poll.
+#[test]
+fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event() {
+    use crate::field_watch::FieldNotice;
+    use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
+    use crate::target::Selection;
+    use benilla_protocol::field::{FIELD_UNIT_HEALTH, FIELD_UNIT_MAXHEALTH};
+    use benilla_protocol::messages::ObjectType;
+    use benilla_protocol::ObjectFields;
+    use benilla_ui::script::UnitGuids;
+    use bevy::prelude::*;
+
+    /// `UNIT_FIELD_TARGET`, absolute descriptor index.
+    const TARGET: u16 = 16;
+    const ME: u64 = 0x77;
+    const WOLF: u64 = 0xF130_0000_0044_0001;
+    const BOAR: u64 = 0xF130_0000_0045_0002;
+
+    benilla_formats::wow_data_or_skip!();
+    let mut s = UiScript::new().unwrap();
+    s.set_screen_size(1024.0, 768.0);
+    load_unit_frames(&s);
+    s.run(
+        r#"
+        SEEN = {}
+        local f = CreateFrame("Frame")
+        f:RegisterAllEvents()
+        f:SetScript("OnEvent", function()
+            if string.find(event, "^UNIT_") then
+                table.insert(SEEN, event .. ":" .. tostring(arg1))
+            end
+        end)
+    "#,
+    )
+    .unwrap();
+
+    let mut app = App::new();
+    app.init_resource::<Selection>()
+        .init_resource::<GuidIndex>()
+        .init_resource::<crate::names::NameCache>()
+        .init_resource::<crate::net::Reputations>()
+        .init_resource::<crate::ui_party::GroupState>()
+        .init_resource::<crate::ui_chat::ChatLog>()
+        .init_resource::<crate::sound::MessageSounds>()
+        .init_resource::<crate::ui_guild::GuildState>()
+        .insert_resource(NetCommands(crossbeam_channel::unbounded().0))
+        .insert_non_send_resource(s);
+    crate::ui_unit::add_unit_feed(&mut app);
+    app.world_mut().spawn((
+        SelfPlayer,
+        Guid(ME),
+        ObjectStore(ObjectFields::from_pairs(&[]).into_created(ObjectType::Player)),
+    ));
+    let mob = |health: u32, max: u32, target: u64| {
+        ObjectStore(
+            ObjectFields::from_pairs(&[
+                (FIELD_UNIT_HEALTH, health),
+                (FIELD_UNIT_MAXHEALTH, max),
+                (TARGET, target as u32),
+                (TARGET + 1, (target >> 32) as u32),
+            ])
+            .into_created(ObjectType::Unit),
+        )
+    };
+    // The wolf targets the boar, so `"targettarget"` names it while the wolf is ours.
+    let wolf = app
+        .world_mut()
+        .spawn((Guid(WOLF), mob(100, 100, BOAR)))
+        .id();
+    let boar = app.world_mut().spawn((Guid(BOAR), mob(50, 80, ME))).id();
+    app.world_mut()
+        .resource_mut::<GuidIndex>()
+        .0
+        .extend([(WOLF, wolf), (BOAR, boar)]);
+
+    fn script(app: &mut App) -> Mut<'_, UiScript> {
+        app.world_mut().non_send_resource_mut()
+    }
+    let seen = |app: &mut App| -> Vec<String> {
+        let s = script(app);
+        let out = s.eval::<Vec<String>>("return SEEN").unwrap();
+        s.run("SEEN = {}").unwrap();
+        out
+    };
+    let bar = |app: &mut App| -> (f64, f64) {
+        let s = script(app);
+        s.eval::<(f64, f64)>(
+            "local lo, hi = TargetFrameHealthBar:GetMinMaxValues() \
+             return TargetFrameHealthBar:GetValue(), hi",
+        )
+        .unwrap()
+    };
+    // Target `guid` as the selection and the resolver's seat move together.
+    let select = |app: &mut App, entity: Entity, guid: u64, held: &[(u64, u64)]| {
+        *app.world_mut().resource_mut::<Selection>() = Selection {
+            target: Some(entity),
+            guid: Some(guid),
+            ..Default::default()
+        };
+        script(app).set_unit_guids(&UnitGuids {
+            player: ME,
+            target: guid,
+            held: held.iter().copied().collect(),
+            ..Default::default()
+        });
+        app.update();
+    };
+
+    select(&mut app, wolf, WOLF, &[(ME, 0), (WOLF, BOAR), (BOAR, ME)]);
+    assert!(
+        seen(&mut app).is_empty(),
+        "a first target fires no unit event"
+    );
+    assert_eq!(bar(&mut app), (100.0, 100.0));
+    assert_eq!(
+        script(&mut app)
+            .eval::<Option<f64>>("return UnitHealth('targettarget')")
+            .unwrap(),
+        Some(50.0),
+        "the hop is pushed for the poll"
+    );
+
+    // A values block on the wolf: the object handler's merge and its watches, then a frame.
+    let notices = {
+        let mut store = app.world_mut().get_mut::<ObjectStore>(wolf).unwrap();
+        let mut edges = Vec::new();
+        store.0.merge_diff(
+            ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, 60)]),
+            |i, o, n| edges.push((i, o, n)),
+        );
+        crate::field_watch::values(
+            &crate::field_watch::Around {
+                me: Some(ME),
+                creature_cached: &|_| false,
+                others: &Vec::new,
+            },
+            WOLF,
+            ObjectType::Unit,
+            &store.0,
+            &edges,
+        )
+    };
+    app.world_mut()
+        .resource_mut::<Messages<FieldNotice>>()
+        .write_batch(notices);
+    app.update();
+    assert_eq!(seen(&mut app), ["UNIT_HEALTH:target"]);
+    assert_eq!(bar(&mut app), (60.0, 100.0), "the bar follows the event");
+
+    // A values block on the boar, the hop: nothing, since no token of the fan-out names it.
+    let notices = {
+        let mut store = app.world_mut().get_mut::<ObjectStore>(boar).unwrap();
+        let mut edges = Vec::new();
+        store.0.merge_diff(
+            ObjectFields::from_pairs(&[(FIELD_UNIT_HEALTH, 40)]),
+            |i, o, n| edges.push((i, o, n)),
+        );
+        crate::field_watch::values(
+            &crate::field_watch::Around {
+                me: Some(ME),
+                creature_cached: &|_| false,
+                others: &Vec::new,
+            },
+            BOAR,
+            ObjectType::Unit,
+            &store.0,
+            &edges,
+        )
+    };
+    app.world_mut()
+        .resource_mut::<Messages<FieldNotice>>()
+        .write_batch(notices);
+    app.update();
+    assert!(seen(&mut app).is_empty(), "no targettarget unit event");
+
+    // The retarget: `PLAYER_TARGET_CHANGED` alone, and the frame reads the boar whole.
+    select(&mut app, boar, BOAR, &[(ME, 0), (BOAR, ME)]);
+    assert!(seen(&mut app).is_empty(), "a retarget fires no unit event");
+    assert_eq!(bar(&mut app), (40.0, 80.0));
+    let errors = script(&mut app).errors();
+    assert!(errors.is_empty(), "script errors: {errors:?}");
 }
 
 /// A forced-reaction table arriving recolours the target plate: the reference's handler `0x4d59a0`

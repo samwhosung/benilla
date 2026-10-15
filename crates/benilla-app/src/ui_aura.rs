@@ -13,7 +13,7 @@ use bevy::prelude::*;
 
 use benilla_formats::SpellCatalog;
 use benilla_protocol::messages::{UnitAuraSlot, AURA_FLAG_CANCELABLE, UNIT_AURA_POSITIVE_SLOTS};
-use benilla_ui::script::{AuraState, ScriptValue, TrackingState, UiScript};
+use benilla_ui::script::{AuraState, TrackingState, UiScript};
 
 use crate::char_select::ClientState;
 use crate::net::{
@@ -555,7 +555,7 @@ fn feed_auras(
         &mut script,
         units::Inputs {
             group: units.group.as_deref(),
-            me: (self_guid.0, changed),
+            me: self_guid.0,
             pet: pet_guid,
             target: target_guid,
             mouseover,
@@ -567,7 +567,9 @@ fn feed_auras(
         },
     );
 
-    if unit_changed.contains(&"target") && std::env::var_os("BENILLA_AURA_DUMP").is_some() {
+    let target_moved =
+        unit_changed.contains(&target_guid) || (target_guid == self_guid.0 && changed);
+    if target_moved && std::env::var_os("BENILLA_AURA_DUMP").is_some() {
         let l = if target_guid == self_guid.0 {
             Some(list.as_slice())
         } else {
@@ -589,17 +591,12 @@ fn feed_auras(
     script.set_player_auras(list);
     script.set_tracking(tracking);
     if changed {
-        script.fire_event("UNIT_AURA", vec![ScriptValue::Str("player".into())]);
         // The cache rebuild's own event, no arguments (`0x4e437f`): the stock buff bar and
-        // `MiniMapTrackingFrame` register it, the unit frames `UNIT_AURA`.
+        // `MiniMapTrackingFrame` register it. The unit frames' `UNIT_AURA` is the aura fields'
+        // watches (ids 41 and 107), the flags watcher's bit 27 and the stats packet's record diff
+        // (`0x5e57d8`, the pet's `0x5e58f1`), all fired by `crate::ui_unit` after this push; a
+        // token that comes to name another unit hears it from its own event, not from here.
         script.fire_event("PLAYER_AURAS_CHANGED", vec![]);
-    }
-    // The reference fires these from the live descriptor's aura fields and the record's aura bits
-    // (`0x5e57d8`, the pet's `0x5e58f1`), to every token naming the guid (`0x515e50`); a token
-    // naming a new unit fires too, and a token clearing fires nothing, since the frames react to
-    // their own events (`PLAYER_TARGET_CHANGED`, `UNIT_PET`, `PARTY_MEMBERS_CHANGED`).
-    for token in unit_changed {
-        script.fire_event("UNIT_AURA", vec![ScriptValue::Str(token.into())]);
     }
 }
 

@@ -149,9 +149,19 @@ fn on_command_result(
     }
 }
 
-fn on_member_stats(In(ev): In<SessionEvent>, mut group: ResMut<GroupState>) {
+/// The record lands, then the unit events of what it changed go out (`0x5e54fa`), the old record
+/// the stored one or, for a member neither list holds, an empty one (`0x5e519b`).
+fn on_member_stats(
+    In(ev): In<SessionEvent>,
+    mut group: ResMut<GroupState>,
+    mut notices: MessageWriter<crate::field_watch::FieldNotice>,
+) {
     if let SessionEvent::PartyMemberStats { guid, full, info } = ev {
+        let old = group.stats.get(&guid).cloned().unwrap_or_default();
         group.apply_stats(guid, full, *info);
+        if let Some(new) = group.stats.get(&guid) {
+            notices.write_batch(super::records::record_notices(guid, &old, new));
+        }
     }
 }
 
@@ -966,5 +976,77 @@ mod tests {
         let (sent, refused) = run(0, vec![]);
         assert!(sent.is_empty());
         assert_eq!(refused, ["ERR_NOT_IN_RAID"]);
+    }
+
+    /// A stats packet lands its record, then writes the unit events of what it changed, against
+    /// the stored record; an unknown member's old record is the empty one.
+    #[test]
+    fn a_stats_packet_writes_the_events_of_the_record_it_changed() {
+        use crate::field_watch::FieldNotice;
+        use bevy::ecs::system::RunSystemOnce;
+        const MATE: u64 = 0x2001;
+        let mut app = App::new();
+        app.init_resource::<GroupState>()
+            .add_message::<FieldNotice>();
+        let mut packet = |full: bool, info: PartyMemberStatsInfo| -> Vec<FieldNotice> {
+            app.world_mut()
+                .run_system_once_with(
+                    on_member_stats,
+                    SessionEvent::PartyMemberStats {
+                        guid: MATE,
+                        full,
+                        info: Box::new(info),
+                    },
+                )
+                .unwrap();
+            app.world_mut()
+                .resource_mut::<Messages<FieldNotice>>()
+                .drain()
+                .collect()
+        };
+        let signal = |id: u16| FieldNotice::Signal { guid: MATE, id };
+        assert_eq!(
+            packet(
+                true,
+                PartyMemberStatsInfo {
+                    cur_hp: Some(100),
+                    level: Some(60),
+                    ..Default::default()
+                }
+            ),
+            [signal(28), signal(16)]
+        );
+        assert_eq!(
+            packet(
+                false,
+                PartyMemberStatsInfo {
+                    cur_hp: Some(90),
+                    ..Default::default()
+                }
+            ),
+            [signal(16)]
+        );
+        assert!(
+            packet(
+                false,
+                PartyMemberStatsInfo {
+                    cur_hp: Some(90),
+                    ..Default::default()
+                }
+            )
+            .is_empty(),
+            "an equal resend"
+        );
+        // A full packet starts from an empty record: what it leaves out reads as cleared.
+        assert_eq!(
+            packet(
+                true,
+                PartyMemberStatsInfo {
+                    cur_hp: Some(90),
+                    ..Default::default()
+                }
+            ),
+            [signal(28)]
+        );
     }
 }

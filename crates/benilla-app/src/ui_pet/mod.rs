@@ -29,7 +29,7 @@ use drain::drain_pet_actions;
 pub(crate) use drain::pet_stop_on_old_target_clear;
 pub(crate) use drain::PetPress;
 use menu::{drain_pet_menu, feed_pet_menu};
-use unit::feed_pet_unit;
+pub(crate) use unit::feed_pet_unit;
 
 #[cfg(test)]
 mod flush_tests;
@@ -111,6 +111,7 @@ impl Plugin for UiPetPlugin {
                     .after(CooldownEvents),
                 feed_pet_unit
                     .in_set(UnitFeed)
+                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
                     .after(crate::ui_pet_stats::PetSnapshot),
                 feed_pet_menu.in_set(UnitFeed),
                 // After this frame's presses, as the one drain before it ran them ahead of the

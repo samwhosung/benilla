@@ -1,7 +1,7 @@
-//! The interface events of the field watches ([`crate::field_watch`]): each notice the object
-//! packets wrote this frame fires its callback's signals, in wire order, after every snapshot those
-//! events' handlers read is pushed ([`FieldEventPushes`]) and the unit tokens are seated
-//! ([`crate::ui_aura::AuraEvents`]).
+//! The interface events of the field watches and the packet handlers that signal unit events
+//! ([`crate::field_watch`]): each notice the packets wrote this frame fires its callback's
+//! signals, in wire order, after every snapshot those events' handlers read is pushed
+//! ([`FieldEventPushes`]) and the unit tokens are seated ([`crate::ui_aura::AuraEvents`]).
 
 use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
@@ -10,9 +10,10 @@ use benilla_ui::script::{ScriptValue, UiScript};
 
 use crate::field_watch::FieldNotice;
 
-/// The feeds that push what a field event's handlers read: the XP and rest values (`feed_units`),
-/// the combat stats of the player and of the pet, the honor block and the watched faction. The
-/// firing runs after all of them, as the reference writes a whole block before its notify pass.
+/// The feeds that push what a field event's handlers read: the unit tokens' snapshots with the XP
+/// and rest values (`feed_units`), the group's and the pet's tokens, the pet's stats, the combat
+/// stats of the player and of the pet, the honor block and the watched faction. The firing runs
+/// after all of them, as the reference writes a whole block before its notify pass.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FieldEventPushes;
 
@@ -69,7 +70,13 @@ pub(super) fn drop_field_notices(
 /// One callback's signals.
 fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice: FieldNotice) {
     match notice {
-        FieldNotice::Unit { guid, id } => fire_unit(script, guid, id),
+        // A unit with no token flags carries no bridge (`0x60c4a0`).
+        FieldNotice::Unit { guid, id } => {
+            if script.unit_has_field_watchers(guid) {
+                signal_unit(script, guid, id);
+            }
+        }
+        FieldNotice::Signal { guid, id } => signal_unit(script, guid, id),
         FieldNotice::Player { id } => fire_player(script, id),
         FieldNotice::RestState { old, new } => {
             // `0x5de4e0`: the signal, then the line for the new state.
@@ -97,15 +104,27 @@ fn fire(script: &mut UiScript, sink: &mut crate::ui_action::MessageSink, notice:
     }
 }
 
-/// The unit-field bridge `0x51bd50` → `0x515e50`: the event named by the field, once per token
-/// naming the unit, `arg1` the token. A unit with no token flags has no watchers (`0x60c4a0`).
-fn fire_unit(script: &mut UiScript, guid: u64, id: u16) {
-    let Some(event) = bridge_event(id) else {
+/// A unit notice's signals into a bare VM, for the stock-file tests that drive the frames off the
+/// notices: [`fire`]'s two unit arms.
+#[cfg(test)]
+pub(crate) fn fire_unit_notice(script: &mut UiScript, notice: FieldNotice) {
+    match notice {
+        FieldNotice::Unit { guid, id } => {
+            if script.unit_has_field_watchers(guid) {
+                signal_unit(script, guid, id);
+            }
+        }
+        FieldNotice::Signal { guid, id } => signal_unit(script, guid, id),
+        other => panic!("not a unit notice: {other:?}"),
+    }
+}
+
+/// `0x515e50(guid, id)`: the event `id` names, once per token naming the unit (`0x515c50`), `arg1`
+/// the token (`0x515e7a`); nothing for a unit no token names.
+fn signal_unit(script: &mut UiScript, guid: u64, id: u16) {
+    let Some(event) = unit_event(id) else {
         return;
     };
-    if !script.unit_has_field_watchers(guid) {
-        return;
-    }
     for token in script.unit_tokens_of(guid) {
         script.fire_event(event, vec![ScriptValue::Str(token)]);
     }
@@ -119,17 +138,46 @@ fn fire_player(script: &mut UiScript, id: u16) {
     script.fire_event(event, vec![super::player_token()]);
 }
 
-/// The event-table name of a bridge id ([`crate::field_watch::BRIDGE_IDS`]), as the table the
-/// static initializers write at `0x51ab30`-`0x51acb9` gives it.
-fn bridge_event(id: u16) -> Option<&'static str> {
+/// The event-table name of an id a [`FieldNotice::Unit`] or [`FieldNotice::Signal`] carries, as
+/// the static initializers write the table at `0x51ab30`-`0x51bb17`: every bridge id
+/// ([`crate::field_watch::BRIDGE_IDS`]), the power events a power type reaches, and the fixed ids
+/// of the other producers. An id past them, as a power type the server never sends would reach,
+/// signals nothing here.
+fn unit_event(id: u16) -> Option<&'static str> {
     Some(match id {
+        0 | 2 => "UNIT_PET",
+        16 => "UNIT_HEALTH",
+        17 | 167 | 174 => "UNIT_MANA",
+        18 => "UNIT_RAGE",
+        19 => "UNIT_FOCUS",
+        20 => "UNIT_ENERGY",
+        21 => "UNIT_HAPPINESS",
+        22 => "UNIT_MAXHEALTH",
+        23 => "UNIT_MAXMANA",
+        24 => "UNIT_MAXRAGE",
+        25 => "UNIT_MAXFOCUS",
+        26 => "UNIT_MAXENERGY",
+        27 => "UNIT_MAXHAPPINESS",
+        28 => "UNIT_LEVEL",
+        29 => "UNIT_FACTION",
+        30 => "UNIT_DISPLAYPOWER",
+        40 => "UNIT_FLAGS",
+        41 | 107 => "UNIT_AURA",
         120 | 121 => "UNIT_ATTACK_SPEED",
         122 | 165 | 166 => "UNIT_RANGEDDAMAGE",
         128..=131 => "UNIT_DAMAGE",
+        132 => "UNIT_LOYALTY",
+        135 | 136 => "UNIT_PET_EXPERIENCE",
+        137 => "UNIT_DYNAMIC_FLAGS",
+        143 => "UNIT_PET_TRAINING_POINTS",
         144..=148 => "UNIT_STATS",
         149..=155 => "UNIT_RESISTANCES",
         159..=161 => "UNIT_ATTACK_POWER",
         162..=164 => "UNIT_RANGED_ATTACK_POWER",
+        183 => "UNIT_NAME_UPDATE",
+        187 => "UNIT_CLASSIFICATION_CHANGED",
+        407 => "PLAYER_FLAGS_CHANGED",
+        522 => "UNIT_QUEST_LOG_CHANGED",
         _ => return None,
     })
 }
@@ -170,16 +218,18 @@ mod tests {
             .collect()
     }
 
-    /// Each watched id fires the event the reference's table names for it.
+    /// Every id a unit notice can carry fires the event the reference's table names for it, and
+    /// every bridge id names one.
     #[test]
     fn each_id_fires_the_event_the_table_names() {
         let table = event_table();
+        for id in 0..=600 {
+            if let Some(event) = unit_event(id) {
+                assert_eq!(Some(event), table.get(&id).map(String::as_str), "id {id}");
+            }
+        }
         for id in crate::field_watch::BRIDGE_IDS {
-            assert_eq!(
-                bridge_event(id),
-                table.get(&id).map(String::as_str),
-                "bridge id {id}"
-            );
+            assert!(unit_event(id).is_some(), "bridge id {id}");
         }
         for id in [149, 189, 201, 372, 406, 523, 524] {
             assert_eq!(
@@ -190,23 +240,13 @@ mod tests {
         }
     }
 
-    /// The bridge watches exactly the fields the event table names for the seven events fired
-    /// here: every id below `0xb6` (`0x51bbb0`'s bound, `0x51bc1d`) whose row names one of them.
+    /// The bridge watches every field below `0xb6` (`0x51bbb0`'s bound, `0x51bc1d`) whose row in
+    /// the table is set, but `UNIT_HAPPINESS`'s, which the pet stats feed fires.
     #[test]
-    fn the_bridge_ids_are_every_field_the_table_names_for_these_events() {
-        const EVENTS: [&str; 7] = [
-            "UNIT_ATTACK_SPEED",
-            "UNIT_RANGEDDAMAGE",
-            "UNIT_DAMAGE",
-            "UNIT_STATS",
-            "UNIT_RESISTANCES",
-            "UNIT_ATTACK_POWER",
-            "UNIT_RANGED_ATTACK_POWER",
-        ];
+    fn the_bridge_ids_are_every_named_field_of_the_table() {
         let want: std::collections::BTreeSet<u16> = event_table()
-            .into_iter()
-            .filter(|(id, name)| *id < 0xb6 && EVENTS.contains(&name.as_str()))
-            .map(|(id, _)| id)
+            .into_keys()
+            .filter(|&id| id < 0xb6 && id != 21)
             .collect();
         let have: std::collections::BTreeSet<u16> =
             crate::field_watch::BRIDGE_IDS.into_iter().collect();
@@ -261,7 +301,9 @@ mod tests {
     }
 
     /// The bridge fires once per token naming the unit, in the fan-out's order; a unit with no
-    /// token flags fires nothing, the mouseover alone included.
+    /// token flags fires nothing, the mouseover alone included. Another producer's signal needs
+    /// no watcher of the unit's, so it reaches the mouseover's token too; an id past the table's
+    /// unit events fires nothing.
     #[test]
     fn the_bridge_fires_once_per_token_naming_the_unit() {
         let mut app = world(seated());
@@ -273,6 +315,9 @@ mod tests {
                     FieldNotice::Unit { guid: ME, id: 145 },
                     FieldNotice::Unit { guid: PET, id: 128 },
                     FieldNotice::Unit { guid: MOB, id: 144 },
+                    FieldNotice::Signal { guid: MOB, id: 183 },
+                    FieldNotice::Signal { guid: PET, id: 167 },
+                    FieldNotice::Signal { guid: PET, id: 300 },
                 ]
             ),
             [
@@ -281,6 +326,8 @@ mod tests {
                 "UNIT_STATS player",
                 "UNIT_STATS target",
                 "UNIT_DAMAGE pet",
+                "UNIT_NAME_UPDATE mouseover",
+                "UNIT_MANA pet",
             ]
         );
     }
@@ -439,10 +486,25 @@ mod tests {
                 crate::ui_reputation::feed_reputation,
                 fire_field_notices,
             ),
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_party::feed_party,
+                fire_field_notices,
+            ),
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_pet::feed_pet_unit,
+                fire_field_notices,
+            ),
+            crate::test_support::runs_before(
+                &mut headless,
+                crate::ui_pet_stats::feed_pet_stats,
+                fire_field_notices,
+            ),
         ];
         assert_eq!(
-            ahead, [true; 5],
-            "feed_units, char, pet doll, honor, reputation"
+            ahead, [true; 8],
+            "feed_units, char, pet doll, honor, reputation, party, pet, pet stats"
         );
 
         // In that order: the block lands, the push, the firing.
@@ -471,7 +533,11 @@ mod tests {
             store.0.clone()
         };
         let notices = crate::field_watch::values(
-            Some(ME),
+            &crate::field_watch::Around {
+                me: Some(ME),
+                creature_cached: &|_| false,
+                others: &Vec::new,
+            },
             ME,
             benilla_protocol::messages::ObjectType::Player,
             &fields,

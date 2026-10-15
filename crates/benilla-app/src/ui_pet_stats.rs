@@ -51,7 +51,13 @@ pub(crate) struct UiPetStatsPlugin;
 impl Plugin for UiPetStatsPlugin {
     fn build(&self, app: &mut App) {
         // In the unit feed, so the pet frame repaints in the pass that pushes its health.
-        app.add_systems(Update, feed_pet_stats.in_set(UnitFeed).in_set(PetSnapshot));
+        app.add_systems(
+            Update,
+            feed_pet_stats
+                .in_set(UnitFeed)
+                .in_set(PetSnapshot)
+                .in_set(crate::ui_unit::field_events::FieldEventPushes),
+        );
     }
 }
 
@@ -154,7 +160,7 @@ fn stats_for(
     )
 }
 
-fn feed_pet_stats(
+pub(crate) fn feed_pet_stats(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
     pet: PetUnit,
@@ -189,11 +195,6 @@ fn feed_pet_stats(
         fresh.1.damage_percentage.to_bits(),
         fresh.1.loyalty_rate.to_bits(),
     ));
-    // The pet page's other repaint events (`PetPaperDollFrame.lua:9,21`), each fired off its own
-    // values so happiness drift leaves them alone; `UNIT_PET_EXPERIENCE` repaints only the XP bar.
-    let xp_moved = last.as_ref().map(|(_, s)| s.experience) != Some(fresh.1.experience);
-    let training_moved =
-        last.as_ref().map(|(_, s)| s.training_points) != Some(fresh.1.training_points);
     if happiness_moved {
         debug!(
             "ui_pet_stats: happiness {:?} ({}% damage), loyalty {:?}",
@@ -216,18 +217,9 @@ fn feed_pet_stats(
         // `arg1` is the unit token, as on every 1.12 `UNIT_*` event; its handlers gate on it.
         script.fire_event("UNIT_HAPPINESS", vec![ScriptValue::Str("pet".into())]);
     }
-    // Fields 141/142 and 149 fire through the same token fan-out (`0x515e50`,
-    // `SignalEvent2(id, "%s", token)`); `UNIT_PET_TRAINING_POINTS` reaches the page only through
-    // its `arg1 == "pet"` arm (`PetPaperDollFrame.lua:45`).
-    if xp_moved {
-        script.fire_event("UNIT_PET_EXPERIENCE", vec![ScriptValue::Str("pet".into())]);
-    }
-    if training_moved {
-        script.fire_event(
-            "UNIT_PET_TRAINING_POINTS",
-            vec![ScriptValue::Str("pet".into())],
-        );
-    }
+    // The pet page's other repaint events, `UNIT_PET_EXPERIENCE` and `UNIT_PET_TRAINING_POINTS`
+    // (`PetPaperDollFrame.lua:9,21`), are the bridge's watches on fields 141/142 and 149
+    // (`crate::field_watch`), fired after this push.
 }
 
 #[cfg(test)]

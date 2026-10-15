@@ -227,14 +227,7 @@ fn every_event_we_fire_is_in_the_reference_table() {
 fn every_unit_field_bridge_event_has_a_producer() {
     /// Bridge events nothing here produces, each with its reason; an entry that gains a producer
     /// fails the gate.
-    const UNPRODUCED: &[(&str, &str)] = &[(
-        "UNIT_LOYALTY",
-        "field 138, the hunter pet's loyalty level. benilla's pet-stat feed (`ui_pet_stats`) \
-         reads happiness and training points off `PET_BYTES` but never the loyalty field, and no \
-         window it feeds shows a loyalty line — `PetPaperDollFrame` does not register it either. \
-         Unbuilt, not wrong: the day the pet page grows the line, this entry goes with it",
-    )];
-
+    const UNPRODUCED: &[(&str, &str)] = &[];
     let table = table();
     let bridge: Vec<&String> = table
         .iter()

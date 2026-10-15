@@ -1,10 +1,118 @@
 //! The roster records' readers for a guid the object manager does not hold: the member record
 //! (`0x496400`), the pet record (`0x496420`) and the party and raid pets' guids (`0x4e81d0`,
-//! `0x491960`).
+//! `0x491960`); and the unit events a stats packet's change of a record raises (`0x5e5720`).
 
 use benilla_protocol::messages::{ObjectFields, PartyMemberStatsInfo};
 
 use super::GroupState;
+use crate::field_watch::{id, FieldNotice};
+
+/// `0x5e5510(old, new)`: the bits of what the stats packet changed in the member's record. The
+/// record's zero is an absent field here.
+fn record_changes(old: &PartyMemberStatsInfo, new: &PartyMemberStatsInfo) -> u32 {
+    fn differ<T: PartialEq + Default + Copy>(a: Option<T>, b: Option<T>) -> bool {
+        a.unwrap_or_default() != b.unwrap_or_default()
+    }
+    fn auras(a: &Option<Vec<(u8, u16)>>, b: &Option<Vec<(u8, u16)>>) -> bool {
+        a.as_deref().unwrap_or_default() != b.as_deref().unwrap_or_default()
+    }
+    let arms: [(bool, u32); 21] = [
+        (differ(old.status, new.status), 0x1),
+        (differ(old.cur_hp, new.cur_hp), 0x2),
+        (differ(old.max_hp, new.max_hp), 0x4),
+        (differ(old.power_type, new.power_type), 0x8),
+        (differ(old.cur_power, new.cur_power), 0x10),
+        (differ(old.max_power, new.max_power), 0x20),
+        (differ(old.level, new.level), 0x40),
+        (differ(old.zone, new.zone), 0x80),
+        (differ(old.position, new.position), 0x100),
+        (auras(&old.auras, &new.auras), 0x200),
+        (auras(&old.auras_negative, &new.auras_negative), 0x400),
+        (differ(old.pet_guid, new.pet_guid), 0x800),
+        (
+            old.pet_name.as_deref().unwrap_or_default()
+                != new.pet_name.as_deref().unwrap_or_default(),
+            0x1000,
+        ),
+        (differ(old.pet_model_id, new.pet_model_id), 0x2000),
+        (differ(old.pet_cur_hp, new.pet_cur_hp), 0x4000),
+        (differ(old.pet_max_hp, new.pet_max_hp), 0x8000),
+        (differ(old.pet_power_type, new.pet_power_type), 0x10000),
+        (differ(old.pet_cur_power, new.pet_cur_power), 0x20000),
+        (differ(old.pet_max_power, new.pet_max_power), 0x40000),
+        (auras(&old.pet_auras, &new.pet_auras), 0x80000),
+        (
+            auras(&old.pet_auras_negative, &new.pet_auras_negative),
+            0x100000,
+        ),
+    ];
+    arms.iter()
+        .filter(|(moved, _)| *moved)
+        .fold(0, |mask, (_, bit)| mask | bit)
+}
+
+/// The unit events a stats packet raises for `member`, whose record went from `old` to `new`
+/// (`0x5e54fa`): `0x5e5720` through `0x515e50`, in its order. A status change signals the health
+/// and the power and drops their own bits (`0x5e572f`-`0x5e574a`); then the level, health, maximum,
+/// display power, power and maximum power, `UNIT_FACTION` for the PvP and free-for-all status bits
+/// (`0x5e57c8`), `UNIT_AURA` for either aura block and `UNIT_PET` for a new pet (`0x5e584f`).
+/// With a pet the record names, its own: the name, health, maximum, display power, power, maximum
+/// power and auras (`0x5e586c`-`0x5e5900`). The power events add the new record's power type.
+pub(crate) fn record_notices(
+    member: u64,
+    old: &PartyMemberStatsInfo,
+    new: &PartyMemberStatsInfo,
+) -> Vec<FieldNotice> {
+    let mut mask = record_changes(old, new);
+    let mut out = Vec::new();
+    let mut signal = |guid: u64, id: u16| out.push(FieldNotice::Signal { guid, id });
+    let power = u16::from(new.power_type.unwrap_or(0));
+    if mask & 0x1 != 0 {
+        signal(member, id::UNIT_HEALTH);
+        signal(member, id::POWER + power);
+        mask &= !0x12;
+    }
+    for (bit, event) in [
+        (0x40, id::UNIT_LEVEL),
+        (0x2, id::UNIT_HEALTH),
+        (0x4, id::UNIT_MAXHEALTH),
+        (0x8, id::UNIT_DISPLAYPOWER),
+        (0x10, id::POWER + power),
+        (0x20, id::MAX_POWER + power),
+    ] {
+        if mask & bit != 0 {
+            signal(member, event);
+        }
+    }
+    if (old.status.unwrap_or(0) ^ new.status.unwrap_or(0)) & 0x12 != 0 {
+        signal(member, id::UNIT_FACTION);
+    }
+    if mask & 0x600 != 0 {
+        signal(member, id::UNIT_AURA);
+    }
+    if mask & 0x800 != 0 {
+        signal(member, id::UNIT_PET);
+    }
+    let pet = new.pet_guid.unwrap_or(0);
+    if pet != 0 {
+        let power = u16::from(new.pet_power_type.unwrap_or(0));
+        // 0x2000, the display, refreshes the portrait alone (`0x5e587f`).
+        for (bit, event) in [
+            (0x1000, id::UNIT_NAME_UPDATE),
+            (0x4000, id::UNIT_HEALTH),
+            (0x8000, id::UNIT_MAXHEALTH),
+            (0x10000, id::UNIT_DISPLAYPOWER),
+            (0x20000, id::POWER + power),
+            (0x40000, id::MAX_POWER + power),
+            (0x180000, id::UNIT_AURA),
+        ] {
+            if mask & bit != 0 {
+                signal(pet, event);
+            }
+        }
+    }
+    out
+}
 
 impl GroupState {
     /// The member record for `guid`, party or raid (`0x496400`).
@@ -44,16 +152,6 @@ impl GroupState {
     /// member's descriptor while it is held (`0x491993`-`0x4919a9`), else the record's pet guid
     /// with no online test (`0x4919ae`), where `partypetN` has one.
     pub(crate) fn raid_pet_guid(&self, member: u64, live: Option<&ObjectFields>) -> Option<u64> {
-        self.pet_guid_of(member, live, false)
-    }
-
-    /// The guid `UNIT_PET` for the owner `member` keys on, party or raid: `CHARM`, else `SUMMON`, off
-    /// the member's descriptor while it is held, else the record's pet guid, with no online test.
-    /// The stats handler's diff fires it on a moved pet guid (`0x5e55fb`-`0x5e5617`, `0x5e57e9`); a
-    /// moved status byte sets another bit (`0x5e5519`-`0x5e552a`), which is health and power events,
-    /// and the list's own write of the online bit fires nothing (`0x4e8361`). A `partypetN` that
-    /// appears or vanishes behind the bit is therefore no move of this guid.
-    pub(crate) fn pet_edge_guid(&self, member: u64, live: Option<&ObjectFields>) -> Option<u64> {
         self.pet_guid_of(member, live, false)
     }
 
@@ -248,5 +346,132 @@ mod tests {
             g.roster_aura_slots(PET).next().is_none(),
             "named, but the pet record is not found behind an offline owner"
         );
+    }
+
+    fn signals(pairs: &[(u64, u16)]) -> Vec<FieldNotice> {
+        pairs
+            .iter()
+            .map(|&(guid, id)| FieldNotice::Signal { guid, id })
+            .collect()
+    }
+
+    /// A delta's fields each raise their own event for the member, in `0x5e5720`'s order and not
+    /// the wire's; the power events add the new power type; zone and position raise nothing.
+    #[test]
+    fn each_changed_field_raises_its_event_in_the_handlers_order() {
+        let old = PartyMemberStatsInfo {
+            status: Some(member_status::ONLINE),
+            cur_hp: Some(100),
+            max_hp: Some(200),
+            power_type: Some(1),
+            cur_power: Some(10),
+            max_power: Some(100),
+            level: Some(40),
+            ..Default::default()
+        };
+        let new = PartyMemberStatsInfo {
+            cur_hp: Some(90),
+            max_hp: Some(210),
+            cur_power: Some(20),
+            max_power: Some(110),
+            level: Some(41),
+            zone: Some(12),
+            position: Some((5, 6)),
+            ..old.clone()
+        };
+        // Rage, power type 1: `UNIT_RAGE` 18 and `UNIT_MAXRAGE` 24.
+        assert_eq!(
+            record_notices(MEMBER, &old, &new),
+            signals(&[
+                (MEMBER, 28),
+                (MEMBER, 16),
+                (MEMBER, 22),
+                (MEMBER, 18),
+                (MEMBER, 24)
+            ])
+        );
+        let moved = PartyMemberStatsInfo {
+            zone: Some(1),
+            position: Some((0, 1)),
+            ..old.clone()
+        };
+        assert!(record_notices(MEMBER, &old, &moved).is_empty());
+        assert!(record_notices(MEMBER, &old, &old).is_empty());
+    }
+
+    /// A status change raises the health and the power and drops their own bits, so a death in one
+    /// delta is one of each; the PvP and free-for-all bits add `UNIT_FACTION`, the dead bit not.
+    #[test]
+    fn a_status_change_raises_health_power_and_on_pvp_the_faction() {
+        let old = PartyMemberStatsInfo {
+            status: Some(member_status::ONLINE),
+            cur_hp: Some(100),
+            power_type: Some(0),
+            cur_power: Some(50),
+            ..Default::default()
+        };
+        let dead = PartyMemberStatsInfo {
+            status: Some(member_status::ONLINE | member_status::DEAD),
+            cur_hp: Some(0),
+            cur_power: Some(0),
+            ..old.clone()
+        };
+        assert_eq!(
+            record_notices(MEMBER, &old, &dead),
+            signals(&[(MEMBER, 16), (MEMBER, 17)])
+        );
+        let flagged = PartyMemberStatsInfo {
+            status: Some(member_status::ONLINE | member_status::PVP),
+            ..old.clone()
+        };
+        assert_eq!(
+            record_notices(MEMBER, &old, &flagged),
+            signals(&[(MEMBER, 16), (MEMBER, 17), (MEMBER, 29)])
+        );
+    }
+
+    /// Either aura block raises one `UNIT_AURA`; a new pet guid `UNIT_PET` for the member; the
+    /// pet's own fields their events for the pet, the display none.
+    #[test]
+    fn the_auras_the_pet_and_its_fields_raise_theirs() {
+        let old = record(member_status::ONLINE);
+        let new = PartyMemberStatsInfo {
+            auras: Some(vec![(0, 1126)]),
+            auras_negative: Some(vec![]),
+            ..old.clone()
+        };
+        assert_eq!(record_notices(MEMBER, &old, &new), signals(&[(MEMBER, 41)]));
+        let other_pet = PartyMemberStatsInfo {
+            pet_guid: Some(PET + 1),
+            ..old.clone()
+        };
+        assert_eq!(
+            record_notices(MEMBER, &old, &other_pet),
+            signals(&[(MEMBER, 0)])
+        );
+        let pet_moved = PartyMemberStatsInfo {
+            pet_name: Some("Fang".into()),
+            pet_model_id: Some(903),
+            pet_cur_hp: Some(5),
+            pet_power_type: Some(2),
+            pet_cur_power: Some(7),
+            pet_auras: Some(vec![]),
+            ..old.clone()
+        };
+        // Focus, power type 2: `UNIT_FOCUS` 19.
+        assert_eq!(
+            record_notices(MEMBER, &old, &pet_moved),
+            signals(&[(PET, 183), (PET, 16), (PET, 30), (PET, 19), (PET, 41)])
+        );
+        // With no pet the record names, the pet's bits raise nothing.
+        let petless = PartyMemberStatsInfo {
+            pet_guid: None,
+            ..pet_moved.clone()
+        };
+        let without = PartyMemberStatsInfo {
+            pet_guid: None,
+            ..old.clone()
+        };
+        assert!(record_notices(MEMBER, &without, &petless).is_empty());
     }
 }

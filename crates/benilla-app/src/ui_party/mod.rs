@@ -18,9 +18,11 @@ mod feed;
 pub(crate) mod net;
 mod pets;
 mod records;
+#[cfg(test)]
+pub(crate) use feed::{feed_party, PARTY_PET_TOKENS};
 pub(crate) use feed::{
     raid_row_guid, raid_row_guids, synthetic_raid, synthetic_roster, GROUPTYPE_RAID,
-    GROUP_MEMBER_SUBGROUP, PARTY_PET_TOKENS, PARTY_TOKENS, RAID_PET_TOKENS, RAID_TOKENS,
+    GROUP_MEMBER_SUBGROUP,
 };
 
 pub(crate) struct UiPartyPlugin;
@@ -28,13 +30,18 @@ pub(crate) struct UiPartyPlugin;
 impl Plugin for UiPartyPlugin {
     fn build(&self, app: &mut App) {
         net::register(app);
-        // A UI-only harness has no sound stack; the list handler queues the join chime.
+        // A UI-only harness has no sound stack; the list handler queues the join chime, the stats
+        // handler the unit events of a record.
         app.init_resource::<GroupState>()
             .init_resource::<crate::sound::MessageSounds>()
+            .add_message::<crate::field_watch::FieldNotice>()
             .add_systems(
                 Update,
                 (
-                    feed::feed_party.in_set(UiFeed),
+                    // Ahead of the field events, whose handlers read the group tokens.
+                    feed::feed_party
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_unit::field_events::FieldEventPushes),
                     feed::drain_party.after(UiInput),
                 ),
             );

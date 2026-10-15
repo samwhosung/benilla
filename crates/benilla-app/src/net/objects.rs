@@ -141,7 +141,22 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
     let Some(kind) = fields.created_as() else {
         return;
     };
-    let fired = crate::field_watch::values(sc.self_guid.0, guid, kind, fields, edges);
+    let me = sc.self_guid.0;
+    let (names, index, stores) = (&sc.names, &sc.index, &sc.stores);
+    let others = || {
+        let units = index.0.iter().filter_map(|(&g, &e)| {
+            let s = stores.get(e).ok()?;
+            s.is_unit().then_some((g, &s.0))
+        });
+        me.map(|me| crate::field_watch::reaction_sweep(me, units))
+            .unwrap_or_default()
+    };
+    let around = crate::field_watch::Around {
+        me,
+        creature_cached: &|entry| names.creature_record(entry).is_some(),
+        others: &others,
+    };
+    let fired = crate::field_watch::values(&around, guid, kind, fields, edges);
     let notices = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
         .values(guid, kind, fields, edges);
     // An entry change that missed the cache waits on the answer (`0x5d9652` asks with `0x5d96b0`).

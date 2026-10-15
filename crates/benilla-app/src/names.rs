@@ -434,18 +434,60 @@ pub(crate) mod net {
     use bevy::prelude::*;
 
     use super::{CreatureRecord, NameCache};
-    use crate::net::NetHandlerApp;
+    use crate::field_watch::{id, FieldNotice};
+    use crate::net::{GuidIndex, NetHandlerApp, ObjectStore};
 
     /// Register the four handlers.
     pub(crate) fn register(app: &mut App) {
         use SessionEventKind as K;
-        app.net_handler(K::PlayerName, on_player_name)
+        app.add_message::<FieldNotice>()
+            .net_handler(K::PlayerName, on_player_name)
             .net_handler(K::PetName, on_pet_name)
             .net_handler(K::CreatureName, on_creature_name)
             .net_handler(K::InvalidatePlayer, on_invalidate_player);
     }
 
-    fn on_player_name(In(ev): In<SessionEvent>, mut names: ResMut<NameCache>) {
+    /// The units the object manager holds, which an answer's callbacks name (`0x468460` with the
+    /// unit mask, 8): the waiting units' own lookups.
+    #[derive(bevy::ecs::system::SystemParam)]
+    pub(crate) struct HeldUnits<'w, 's> {
+        index: Option<Res<'w, GuidIndex>>,
+        stores: Query<'w, 's, &'static ObjectStore>,
+    }
+
+    impl HeldUnits<'_, '_> {
+        /// Each held unit `pick` takes, in guid order.
+        fn matching(&self, pick: impl Fn(&ObjectStore) -> bool) -> Vec<u64> {
+            let Some(index) = &self.index else {
+                return Vec::new();
+            };
+            let mut out: Vec<u64> = index
+                .0
+                .iter()
+                .filter(|&(_, &e)| self.stores.get(e).is_ok_and(|s| s.is_unit() && pick(s)))
+                .map(|(&g, _)| g)
+                .collect();
+            out.sort_unstable();
+            out
+        }
+
+        fn holds(&self, guid: u64) -> bool {
+            self.index
+                .as_ref()
+                .and_then(|i| i.0.get(&guid))
+                .and_then(|&e| self.stores.get(e).ok())
+                .is_some_and(ObjectStore::is_unit)
+        }
+    }
+
+    /// The name callback `0x5fb840` of a unit the answer names: for a found name (`0x5fb84b`) of a
+    /// held unit (`0x5fb86a`), `UNIT_NAME_UPDATE` through `0x491a00`.
+    fn on_player_name(
+        In(ev): In<SessionEvent>,
+        mut names: ResMut<NameCache>,
+        units: HeldUnits,
+        mut notices: MessageWriter<FieldNotice>,
+    ) {
         if let SessionEvent::PlayerName {
             guid,
             name,
@@ -454,17 +496,48 @@ pub(crate) mod net {
             gender,
         } = ev
         {
+            let found = !name.is_empty();
             player_name(guid, name, race, class, gender, &mut names);
+            if found && units.holds(guid) {
+                notices.write(FieldNotice::Signal {
+                    guid,
+                    id: id::UNIT_NAME_UPDATE,
+                });
+            }
         }
     }
 
-    fn on_pet_name(In(ev): In<SessionEvent>, mut names: ResMut<NameCache>) {
+    /// The pet name cache answers through the same callback, `0x5fb840` (`0x6092b8`,
+    /// `0x609307`), for each held unit whose `UNIT_FIELD_PETNUMBER` asked it.
+    fn on_pet_name(
+        In(ev): In<SessionEvent>,
+        mut names: ResMut<NameCache>,
+        units: HeldUnits,
+        mut notices: MessageWriter<FieldNotice>,
+    ) {
         if let SessionEvent::PetName { pet_number, name } = ev {
+            let found = !name.is_empty();
             pet_name(pet_number, name, &mut names);
+            if found && pet_number != 0 {
+                for guid in units.matching(|s| s.0.unit_pet_number() == pet_number) {
+                    notices.write(FieldNotice::Signal {
+                        guid,
+                        id: id::UNIT_NAME_UPDATE,
+                    });
+                }
+            }
         }
     }
 
-    fn on_creature_name(In(ev): In<SessionEvent>, mut names: ResMut<NameCache>) {
+    /// The creature cache's callback `0x604660`, for each held unit of the entry that missed it
+    /// (`0x60b146`, `0x604630`): for a found record (`0x60469c`), `UNIT_NAME_UPDATE` (`0x6046d1`)
+    /// then `UNIT_CLASSIFICATION_CHANGED` (`0x6046dd`).
+    fn on_creature_name(
+        In(ev): In<SessionEvent>,
+        mut names: ResMut<NameCache>,
+        units: HeldUnits,
+        mut notices: MessageWriter<FieldNotice>,
+    ) {
         if let SessionEvent::CreatureName {
             entry,
             name,
@@ -478,6 +551,7 @@ pub(crate) mod net {
             racial_leader,
         } = ev
         {
+            let found = name.is_some();
             creature_name(
                 entry,
                 name,
@@ -491,6 +565,20 @@ pub(crate) mod net {
                 display_id,
                 &mut names,
             );
+            if found {
+                for guid in units.matching(|s| s.0.object_entry() == Some(entry)) {
+                    notices.write_batch([
+                        FieldNotice::Signal {
+                            guid,
+                            id: id::UNIT_NAME_UPDATE,
+                        },
+                        FieldNotice::Signal {
+                            guid,
+                            id: id::UNIT_CLASSIFICATION_CHANGED,
+                        },
+                    ]);
+                }
+            }
         }
     }
 
@@ -553,6 +641,130 @@ pub(crate) mod net {
                 display_id,
             }),
         );
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use benilla_protocol::messages::ObjectType;
+        use benilla_protocol::ObjectFields;
+        use bevy::ecs::system::RunSystemOnce;
+
+        const PLAYER: u64 = 0x42;
+        const WOLF_A: u64 = 0xF130_0000_0044_0002;
+        const WOLF_B: u64 = 0xF130_0000_0044_0001;
+        const BOAR: u64 = 0xF130_0000_0045_0003;
+        const PET: u64 = 0xF140_0000_0000_0007;
+
+        /// The units held: two wolves of entry 299, a boar of 300, a player and a pet numbered 9.
+        fn world() -> App {
+            let mut app = App::new();
+            app.init_resource::<NameCache>()
+                .init_resource::<GuidIndex>()
+                .add_message::<FieldNotice>();
+            for (guid, kind, pairs) in [
+                // `OBJECT_FIELD_TYPE` (2): the unit and player type masks.
+                (WOLF_A, ObjectType::Unit, vec![(2, 0x9), (3, 299)]),
+                (WOLF_B, ObjectType::Unit, vec![(2, 0x9), (3, 299)]),
+                (BOAR, ObjectType::Unit, vec![(2, 0x9), (3, 300)]),
+                (PLAYER, ObjectType::Player, vec![(2, 0x19)]),
+                (PET, ObjectType::Unit, vec![(2, 0x9), (3, 299), (139, 9)]),
+            ] {
+                let fields = ObjectFields::from_pairs(&pairs).into_created(kind);
+                let e = app.world_mut().spawn(ObjectStore(fields)).id();
+                app.world_mut()
+                    .resource_mut::<GuidIndex>()
+                    .0
+                    .insert(guid, e);
+            }
+            app
+        }
+
+        fn notices(app: &mut App) -> Vec<FieldNotice> {
+            app.world_mut()
+                .resource_mut::<Messages<FieldNotice>>()
+                .drain()
+                .collect()
+        }
+
+        fn signal(guid: u64, id: u16) -> FieldNotice {
+            FieldNotice::Signal { guid, id }
+        }
+
+        fn creature(entry: u32, name: Option<&str>) -> SessionEvent {
+            SessionEvent::CreatureName {
+                entry,
+                name: name.map(str::to_string),
+                subname: None,
+                creature_type: None,
+                pet_family: 0,
+                rank: 0,
+                type_flags: 0,
+                display_id: 0,
+                civilian: false,
+                racial_leader: false,
+            }
+        }
+
+        /// A creature record names each held unit of its entry, then signals its classification;
+        /// a miss signals nothing.
+        #[test]
+        fn a_creature_answer_signals_each_held_unit_of_its_entry() {
+            let mut app = world();
+            app.world_mut()
+                .run_system_once_with(on_creature_name, creature(299, Some("Wolf")))
+                .unwrap();
+            assert_eq!(
+                notices(&mut app),
+                [
+                    signal(WOLF_B, 183),
+                    signal(WOLF_B, 187),
+                    signal(WOLF_A, 183),
+                    signal(WOLF_A, 187),
+                    signal(PET, 183),
+                    signal(PET, 187)
+                ]
+            );
+            app.world_mut()
+                .run_system_once_with(on_creature_name, creature(300, None))
+                .unwrap();
+            assert!(notices(&mut app).is_empty(), "no such entry");
+        }
+
+        /// A found player name signals the held player alone; an empty one, or a guid not held,
+        /// nothing. A pet name signals the held unit its pet number names.
+        #[test]
+        fn a_name_answer_signals_the_held_unit_it_names() {
+            let mut app = world();
+            let player = |guid: u64, name: &str| SessionEvent::PlayerName {
+                guid,
+                name: name.into(),
+                race: 1,
+                gender: 0,
+                class: 1,
+            };
+            app.world_mut()
+                .run_system_once_with(on_player_name, player(PLAYER, "Brisca"))
+                .unwrap();
+            assert_eq!(notices(&mut app), [signal(PLAYER, 183)]);
+            app.world_mut()
+                .run_system_once_with(on_player_name, player(0x43, "Far"))
+                .unwrap();
+            app.world_mut()
+                .run_system_once_with(on_player_name, player(PLAYER, ""))
+                .unwrap();
+            assert!(notices(&mut app).is_empty());
+            app.world_mut()
+                .run_system_once_with(
+                    on_pet_name,
+                    SessionEvent::PetName {
+                        pet_number: 9,
+                        name: "Fang".into(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(notices(&mut app), [signal(PET, 183)]);
+        }
     }
 }
 

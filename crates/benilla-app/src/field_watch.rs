@@ -1,30 +1,39 @@
-//! The field watches on units and the active player whose callbacks signal interface events. The
-//! object packets write one [`FieldNotice`] per callback run, in wire order, and the unit feed
-//! fires each (`crate::ui_unit`), so an event follows the field change that ran its watch and
-//! nothing else: not a login, not a `/reload`, not a value read for the first time.
+//! The reference callbacks that signal interface events from the object packets: the field watches
+//! on units and the active player, and the packet handlers that signal unit events through the
+//! token fan-out `0x515e50`. The packets write one [`FieldNotice`] per signal, in wire order, and
+//! the unit feed fires each (`crate::ui_unit`), so an event follows the change that raised it and
+//! nothing else: not a login, not a `/reload`, not a value read for the first time, not a token
+//! that comes to name another unit.
 //!
 //! A values block runs each watch whose bytes now differ from the copy taken before the block was
 //! written, once, at the first sent field of its range (`0x465570` sets the record's countdown to
-//! 1; `repz cmpsb` at `0x4655bb`), so the notices of one block come out in field order. The
-//! notify pass `0x465330` has two callers, a values block (`0x465277`) and a create of an object
-//! that already exists (`0x465d8e`); a first create runs none (`0x465d80 je 0x465d98`), and a
-//! `/reload` receives no update at all.
+//! 1; `repz cmpsb` at `0x4655bb`), so the notices of one block come out in field order. At one
+//! field the notify pass splices the type watchers' list ahead of the object's own (`0x46544a`,
+//! `0x465463`), each appended at the pending list's tail (`0x465a14`) behind the watches a lower
+//! field already spliced. The notify pass `0x465330` has two callers, a values block (`0x465277`)
+//! and a create of an object that already exists (`0x465d8e`); a first create runs none
+//! (`0x465d80 je 0x465d98`), and a `/reload` receives no update at all.
 //!
-//! The watches here: the unit-field bridge `0x51bbb0` on every unit with token flags, the active
-//! player's `0x5de4b0` and rest-state watches registered in `0x5dd8a0`, its skill watches
-//! `0x5de180` and `0x5de470`, and the weapon arms of the visible-item watch `0x5e2810`.
+//! The watches here: the unit-field bridge `0x51bbb0` on every unit with token flags; the unit
+//! type watchers `0x6041f0` and the player type watchers `0x5e2510` whose callbacks signal; the
+//! active player's `0x5de4b0`, rest-state and charmed-by watches registered in `0x5dd8a0`, its
+//! skill watches `0x5de180` and `0x5de470`, and the weapon arms of the visible-item watch
+//! `0x5e2810`.
 
 use benilla_protocol::messages::ObjectType;
-use benilla_protocol::ObjectFields;
+use benilla_protocol::{ObjectFields, OwnerFallback};
 use bevy::prelude::*;
 
-/// One run of a reference field watch whose callback signals interface events, in the order the
-/// packets ran them.
+/// One signal a reference callback raised, in the order the packets raised them.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FieldNotice {
     /// The unit-field bridge `0x51bd50`: event `id`, the watched field's byte offset in the unit
-    /// section over 4 (`0x51bd55`), through `0x515e50` once per token naming `guid`.
+    /// section over 4 (`0x51bd55`), or the fixed id of a player-block watch (`0x51bd90`), through
+    /// `0x515e50` once per token naming `guid`. Only a unit with token flags carries the bridge.
     Unit { guid: u64, id: u16 },
+    /// Any other callback's own `0x515e50(guid, id)`: a type watcher's, a packet handler's or a
+    /// cache answer's. It reaches every token naming `guid`, with no watcher of the unit's own.
+    Signal { guid: u64, id: u16 },
     /// `0x5de4b0` on the active player: the event its registration pushes as the argument
     /// (`0x5de4b3`), with `"player"` (`0x5de4c1`).
     Player { id: u16 },
@@ -41,19 +50,58 @@ pub(crate) enum FieldNotice {
     Weapon { slot: u8 },
 }
 
-/// The first field of the unit and the player sections: their byte offsets in the field array,
-/// 0x18 and 0x2f0 (`0x465690`), over 4.
+/// The event ids the producers pass to `0x515e50`, by their event-table names.
+pub(crate) mod id {
+    pub(crate) const UNIT_PET: u16 = 0;
+    pub(crate) const UNIT_HEALTH: u16 = 16;
+    /// `UNIT_MANA`; a power event is this plus the power type (`add edx,0x11`).
+    pub(crate) const POWER: u16 = 17;
+    pub(crate) const UNIT_MAXHEALTH: u16 = 22;
+    /// `UNIT_MAXMANA`; a maximum-power event is this plus the power type (`add edx,0x17`).
+    pub(crate) const MAX_POWER: u16 = 23;
+    pub(crate) const UNIT_LEVEL: u16 = 28;
+    pub(crate) const UNIT_FACTION: u16 = 29;
+    pub(crate) const UNIT_DISPLAYPOWER: u16 = 30;
+    pub(crate) const UNIT_AURA: u16 = 41;
+    pub(crate) const UNIT_NAME_UPDATE: u16 = 183;
+    pub(crate) const UNIT_CLASSIFICATION_CHANGED: u16 = 187;
+    pub(crate) const PLAYER_FLAGS_CHANGED: u16 = 407;
+    pub(crate) const UNIT_QUEST_LOG_CHANGED: u16 = 522;
+}
+
+/// The first field of the object, unit and player sections: their byte offsets in the field
+/// array, 0, 0x18 and 0x2f0 (`0x465690`), over 4.
+const OBJECT_SECTION: u16 = 0;
 const UNIT_SECTION: u16 = 6;
 const PLAYER_SECTION: u16 = 188;
 
-/// The bridge ids whose events fire through [`FieldNotice::Unit`]: the attack times, damage,
-/// stat, resistance and attack-power fields. `0x51bbb0` registers each as a 4-byte watch (its
-/// length selector `0x51bc98` gives 4 for all of them); the other named ids of the event table
-/// still fire from the unit feed's snapshot diff.
-pub(crate) const BRIDGE_IDS: [u16; 27] = [
-    120, 121, 122, 128, 129, 130, 131, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155,
-    159, 160, 161, 162, 163, 164, 165, 166,
+/// The bridge ids: every unit field below `0xb6` (`0x51bc1d`) whose name in the event table
+/// `0xbe1198` is set (`0x51bbc3`), each one watch of [`bridge_len`] bytes. `UNIT_HAPPINESS` (21)
+/// is left out: the pet stats feed fires it under its own `Deviation:`.
+pub(crate) const BRIDGE_IDS: [u16; 53] = [
+    0, 2, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 40, 41, 107, 120, 121, 122, 128,
+    129, 130, 131, 132, 135, 136, 137, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154,
+    155, 159, 160, 161, 162, 163, 164, 165, 166, 167, 174,
 ];
+
+/// A bridge watch's length: the selector byte at `0x51bc98 + id`, through the jump table
+/// `0x51bc84`, picks 8 (`0x51bbdd`), 0xd8 (`0x51bbe4`), 0x30 (`0x51bbeb`) or 0x1c (`0x51bbf2`);
+/// every other id, and any past 0xae (`0x51bbc7`), is 4 (`0x51bbf9`).
+pub(crate) fn bridge_len(id: u16) -> u16 {
+    match id {
+        0 | 2 | 4 | 10 => 8,
+        41 => 0xd8,
+        107 => 0x30,
+        167 | 174 => 0x1c,
+        _ => 4,
+    }
+}
+
+/// The bridge's player-block watch, registered on a unit whose type mask has the player bit
+/// (`0x51bc2b`-`0x51bc31`): the quest log, 0xf0 bytes at the player section's `+0x28`, signalling
+/// `0x20a` through `0x51bd90` (`0x51bc63`). Its twin over the visible items, `0x51bd70` with
+/// `0xba` (`0x51bc3c`), is not run here: `UNIT_INVENTORY_CHANGED` keeps its own producers.
+const QUEST_LOG_WATCH: (u16, u16) = (0x28, 0xf0);
 
 /// `0x5de4b0`'s registrations in `0x5dd8a0`, in registration order: the byte offset in the player
 /// section, the length, and the event id pushed as the argument.
@@ -97,6 +145,50 @@ const VISIBLE_ITEM: u16 = 0x118;
 const VISIBLE_STRIDE: u16 = 0x30;
 const WEAPON_SLOTS: [u8; 3] = [15, 16, 17];
 
+/// The unit type watchers of `0x6041f0` whose callbacks signal, as (byte offset, length) in the
+/// unit section: `UNIT_FIELD_FLAGS` (`0x6042e2`, `0x6044b0` → `0x5ff580`), the faction template
+/// (`0x60434a`, `0x6048d0`), `CHARMEDBY` and `SUMMONEDBY` (`0x604364`, `0x604910`), `PERSUADED`
+/// (`0x60437e`, `0x604950`), the pet number (`0x604468`, `0x604bf0`) and the dynamic flags
+/// (`0x60441a`, `0x604b30` → `0x600440`); and in the object section `OBJECT_FIELD_ENTRY`
+/// (`0x60427d`, `0x604600`).
+const UNIT_FLAGS: (u16, u16) = (0xa0, 4);
+const FACTION_TEMPLATE: (u16, u16) = (0x74, 4);
+const OWNERS: (u16, u16) = (0x10, 0x10);
+const PERSUADED: (u16, u16) = (0x30, 8);
+const PET_NUMBER: (u16, u16) = (0x214, 4);
+const DYNAMIC_FLAGS: (u16, u16) = (0x224, 4);
+const ENTRY: (u16, u16) = (0xc, 4);
+
+/// The player type watchers of `0x5e2510` whose callbacks signal, as (byte offset, length) in the
+/// player section: `PLAYER_FLAGS` (`0x5e2850` → `0x5ee990`), `PLAYER_BYTES_3` bytes 2 and 3
+/// (`0x5e2a30`, `0x5e2a50`) and the duel team (`0x5e27d0`).
+const PLAYER_FLAGS: (u16, u16) = (0x08, 4);
+const BYTES_3_BYTE_2: (u16, u16) = (0x1e, 1);
+const BYTES_3_BYTE_3: (u16, u16) = (0x1f, 1);
+const DUEL_TEAM: (u16, u16) = (0x20, 4);
+
+/// The active player's own `CHARMEDBY` watch, `0x5de090` (`0x5dd9f4`): 8 bytes at the unit
+/// section's `+0x10`, refreshing its reaction (`0x5de0b5`).
+const CHARMED_BY: (u16, u16) = (0x10, 8);
+
+/// Which list a watch sits on: at one field the type watchers run ahead of the object's own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum List {
+    Type,
+    Object,
+}
+
+/// What the watches read of the world around the block's object.
+pub(crate) struct Around<'a> {
+    /// The active player's guid.
+    pub(crate) me: Option<u64>,
+    /// Whether the creature cache holds `entry`'s record: `0x556aa0`'s hit, which `0x604600`
+    /// answers with the name signal at once; a miss waits for the answer (`crate::names`).
+    pub(crate) creature_cached: &'a dyn Fn(u32) -> bool,
+    /// `CGUnit_C::RefreshReaction`'s sweep for the active player ([`reaction_sweep`]).
+    pub(crate) others: &'a dyn Fn() -> Vec<u64>,
+}
+
 /// One values block's changed dwords, `(index, old, new)` ascending, as the store's merge reports
 /// them; an absent dword did not change.
 struct Block<'a>(&'a [(u16, u32, u32)]);
@@ -110,9 +202,16 @@ impl Block<'_> {
             .map(|at| (self.0[at].1, self.0[at].2))
     }
 
-    /// Whether any byte of `len` bytes at byte `offset` of the section starting at field `base`
-    /// differs from the copy taken before the block: the watch's `repz cmpsb` (`0x4655bb`).
-    fn moved(&self, base: u16, offset: u16, len: u16) -> bool {
+    /// The bits of dword `index` the block flipped.
+    fn flipped(&self, index: u16) -> u32 {
+        self.edge(index).map_or(0, |(old, new)| old ^ new)
+    }
+
+    /// The field a watch of `len` bytes at byte `offset` of the section starting at field `base`
+    /// runs at, when any of its bytes differs from the copy taken before the block (the watch's
+    /// `repz cmpsb`, `0x4655bb`): the first sent field of its range, for which the first changed
+    /// dword stands.
+    fn fired(&self, base: u16, offset: u16, len: u16) -> Option<u16> {
         let (start, end) = (u32::from(offset), u32::from(offset) + u32::from(len));
         let below = |n: u32| {
             if n >= 4 {
@@ -121,26 +220,69 @@ impl Block<'_> {
                 (1u32 << (8 * n)) - 1
             }
         };
+        let mut first = None;
+        let mut moved = false;
         let mut at = start & !3;
         while at < end {
-            if let Some((old, new)) = self.edge(base + (at / 4) as u16) {
+            let field = base + (at / 4) as u16;
+            if let Some((old, new)) = self.edge(field) {
+                first.get_or_insert(field);
                 let mask = below(end.min(at + 4) - at) & !below(start.max(at) - at);
-                if (old ^ new) & mask != 0 {
-                    return true;
-                }
+                moved |= (old ^ new) & mask != 0;
             }
             at += 4;
         }
-        false
+        first.filter(|_| moved)
+    }
+}
+
+/// A watch's place in the notify pass: the field it ran at, its range's first field, its list.
+type Place = (u16, u16, List);
+
+/// The signals of one block in the notify pass's order. A stable sort keeps one callback's
+/// signals, and the watches of one list at one field, in the order they ran.
+#[derive(Default)]
+struct Pass(Vec<(Place, FieldNotice)>);
+
+impl Pass {
+    fn push(&mut self, at: Place, notice: FieldNotice) {
+        self.0.push((at, notice));
+    }
+
+    fn signal(&mut self, at: Place, guid: u64, id: u16) {
+        if guid != 0 {
+            self.push(at, FieldNotice::Signal { guid, id });
+        }
+    }
+
+    /// `CGUnit_C::RefreshReaction` (`0x606e20`) on `guid`: `UNIT_FACTION` for it (`0x606e57`),
+    /// for its `SUMMON` (`0x606e9d`) and its `CHARM` (`0x606edf`) when set, then, for the active
+    /// player, for every other unit not its own (`0x606efb`).
+    fn reaction(&mut self, at: Place, guid: u64, fields: &ObjectFields, around: &Around) {
+        self.signal(at, guid, id::UNIT_FACTION);
+        for pet in [fields.unit_summon(), fields.unit_charm()]
+            .into_iter()
+            .flatten()
+        {
+            self.signal(at, pet, id::UNIT_FACTION);
+        }
+        if around.me == Some(guid) {
+            for other in (around.others)() {
+                self.signal(at, other, id::UNIT_FACTION);
+            }
+        }
+    }
+
+    fn into_notices(mut self) -> Vec<FieldNotice> {
+        self.0.sort_by_key(|&(at, _)| at);
+        self.0.into_iter().map(|(_, n)| n).collect()
     }
 }
 
 /// The notices of one values block on `guid`, created as `kind`: `fields` is the store after the
-/// merge and `edges` the changed dwords as `(index, old, new)`, ascending. `me` is the active
-/// player's guid. Sorted by the first field of each watch's range, which for these disjoint
-/// ranges is the notify pass's order; a stable sort keeps registration order within one field.
+/// merge and `edges` the changed dwords as `(index, old, new)`, ascending.
 pub(crate) fn values(
-    me: Option<u64>,
+    around: &Around,
     guid: u64,
     kind: ObjectType,
     fields: &ObjectFields,
@@ -150,52 +292,132 @@ pub(crate) fn values(
     if edges.is_empty() || !matches!(kind, ObjectType::Unit | ObjectType::Player) {
         return Vec::new();
     }
-    let mut out: Vec<(u16, FieldNotice)> = Vec::new();
-    for id in BRIDGE_IDS {
-        if block.moved(UNIT_SECTION, 4 * id, 4) {
-            out.push((UNIT_SECTION + id, FieldNotice::Unit { guid, id }));
+    let at = |base: u16, (offset, len): (u16, u16), list: List| -> Option<Place> {
+        block
+            .fired(base, offset, len)
+            .map(|fired| (fired, base + offset / 4, list))
+    };
+    let mut pass = Pass::default();
+
+    // The unit type watchers (`0x6041f0`), on every unit.
+    if let Some(at) = at(OBJECT_SECTION, ENTRY, List::Type) {
+        // `0x604600`: a cached record names the unit at once (`0x604651`).
+        if (around.creature_cached)(fields.object_entry().unwrap_or(0)) {
+            pass.signal(at, guid, id::UNIT_NAME_UPDATE);
         }
     }
-    if kind == ObjectType::Player && me == Some(guid) {
-        let first = |offset: u16| PLAYER_SECTION + offset / 4;
-        if let Some((old, new)) = block.edge(first(REST_STATE)) {
+    for range in [OWNERS, PERSUADED, FACTION_TEMPLATE] {
+        if let Some(at) = at(UNIT_SECTION, range, List::Type) {
+            pass.reaction(at, guid, fields, around);
+        }
+    }
+    if let Some(at) = at(UNIT_SECTION, UNIT_FLAGS, List::Type) {
+        // `0x5ff580` on the flipped bits: the reaction on 0x4080 (`0x5ff71c`) and again on 0x1000
+        // (`0x5ff72b`), `UNIT_AURA` on 0x8000000 (`0x5ff7e2`).
+        let flipped = block.flipped(UNIT_SECTION + UNIT_FLAGS.0 / 4);
+        if flipped & 0x4080 != 0 {
+            pass.reaction(at, guid, fields, around);
+        }
+        if flipped & 0x1000 != 0 {
+            pass.reaction(at, guid, fields, around);
+        }
+        if flipped & 0x0800_0000 != 0 {
+            pass.signal(at, guid, id::UNIT_AURA);
+        }
+    }
+    if let Some(at) = at(UNIT_SECTION, PET_NUMBER, List::Type) {
+        // `0x604bf0`: `UNIT_CLASSIFICATION_CHANGED` on any change (`0x604bfb`).
+        pass.signal(at, guid, id::UNIT_CLASSIFICATION_CHANGED);
+    }
+    if let Some(at) = at(UNIT_SECTION, DYNAMIC_FLAGS, List::Type) {
+        // `0x600440` on the flipped bits: 0x20, the dead look, signals `UNIT_HEALTH` and the power
+        // event of `UNIT_FIELD_BYTES_0` byte 3 (`0x6004cd`, `0x6004f0`); 0x4, the tap,
+        // `UNIT_FACTION` (`0x6005bb`).
+        let flipped = block.flipped(UNIT_SECTION + DYNAMIC_FLAGS.0 / 4);
+        if flipped & 0x20 != 0 {
+            pass.signal(at, guid, id::UNIT_HEALTH);
+            pass.signal(at, guid, id::POWER + u16::from(fields.unit_power_type()));
+        }
+        if flipped & 0x4 != 0 {
+            pass.signal(at, guid, id::UNIT_FACTION);
+        }
+    }
+
+    // The bridge (`0x51bbb0`), the object's own watches.
+    for bridge in BRIDGE_IDS {
+        if let Some(at) = at(UNIT_SECTION, (4 * bridge, bridge_len(bridge)), List::Object) {
+            pass.push(at, FieldNotice::Unit { guid, id: bridge });
+        }
+    }
+
+    if kind == ObjectType::Player {
+        // The player type watchers (`0x5e2510`), on every player.
+        if let Some(at) = at(PLAYER_SECTION, PLAYER_FLAGS, List::Type) {
+            // `0x5ee990`: the reaction on 0x180 (`0x5eea04`), then `PLAYER_FLAGS_CHANGED` on any
+            // bit (`0x5eea35`).
+            if block.flipped(PLAYER_SECTION + PLAYER_FLAGS.0 / 4) & 0x180 != 0 {
+                pass.reaction(at, guid, fields, around);
+            }
+            pass.signal(at, guid, id::PLAYER_FLAGS_CHANGED);
+        }
+        if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_2, List::Type) {
+            pass.signal(at, guid, id::UNIT_NAME_UPDATE);
+        }
+        if let Some(at) = at(PLAYER_SECTION, BYTES_3_BYTE_3, List::Type) {
+            pass.signal(at, guid, id::UNIT_NAME_UPDATE);
+            pass.reaction(at, guid, fields, around);
+        }
+        if let Some(at) = at(PLAYER_SECTION, DUEL_TEAM, List::Type) {
+            pass.reaction(at, guid, fields, around);
+        }
+        // The bridge's player-block watch.
+        if let Some(at) = at(PLAYER_SECTION, QUEST_LOG_WATCH, List::Object) {
+            let id = id::UNIT_QUEST_LOG_CHANGED;
+            pass.push(at, FieldNotice::Unit { guid, id });
+        }
+    }
+
+    if kind == ObjectType::Player && around.me == Some(guid) {
+        if let Some(at) = at(UNIT_SECTION, CHARMED_BY, List::Object) {
+            pass.reaction(at, guid, fields, around);
+        }
+        let rest = PLAYER_SECTION + REST_STATE / 4;
+        if let Some((old, new)) = block.edge(rest) {
             let byte = |v: u32| (v >> (8 * (REST_STATE % 4))) as u8;
             if byte(old) != byte(new) {
-                out.push((
-                    first(REST_STATE),
-                    FieldNotice::RestState {
-                        old: byte(old),
-                        new: byte(new),
-                    },
-                ));
+                let (old, new) = (byte(old), byte(new));
+                pass.push(
+                    (rest, rest, List::Object),
+                    FieldNotice::RestState { old, new },
+                );
             }
         }
         for (offset, len, id) in PLAYER_EVENT_WATCHES {
-            if block.moved(PLAYER_SECTION, offset, len) {
-                out.push((first(offset), FieldNotice::Player { id }));
+            if let Some(at) = at(PLAYER_SECTION, (offset, len), List::Object) {
+                pass.push(at, FieldNotice::Player { id });
             }
         }
         for k in 0..SKILLS {
             let value = SKILL_VALUE + SKILL_STRIDE * k;
-            if let Some((old, _)) = block.edge(first(value)) {
-                if block.moved(PLAYER_SECTION, value, 2) && skill_value_signals(fields, k, old) {
-                    out.push((first(value), FieldNotice::CombatSkill));
+            if let Some(at) = at(PLAYER_SECTION, (value, 2), List::Object) {
+                let (old, _) = block.edge(at.0).unwrap_or_default();
+                if skill_value_signals(fields, k, old) {
+                    pass.push(at, FieldNotice::CombatSkill);
                 }
             }
             let bonus = SKILL_TEMP_BONUS + SKILL_STRIDE * k;
-            if block.moved(PLAYER_SECTION, bonus, 2) {
-                out.push((first(bonus), FieldNotice::CombatSkill));
+            if let Some(at) = at(PLAYER_SECTION, (bonus, 2), List::Object) {
+                pass.push(at, FieldNotice::CombatSkill);
             }
         }
         for slot in WEAPON_SLOTS {
             let offset = VISIBLE_ITEM + VISIBLE_STRIDE * u16::from(slot);
-            if block.moved(PLAYER_SECTION, offset, VISIBLE_STRIDE) {
-                out.push((first(offset), FieldNotice::Weapon { slot }));
+            if let Some(at) = at(PLAYER_SECTION, (offset, VISIBLE_STRIDE), List::Type) {
+                pass.push(at, FieldNotice::Weapon { slot });
             }
         }
     }
-    out.sort_by_key(|&(at, _)| at);
-    out.into_iter().map(|(_, n)| n).collect()
+    pass.into_notices()
 }
 
 /// `0x5de180`'s gate ahead of its `0x5ed990` call: the new shown value, the value plus the
@@ -213,6 +435,24 @@ fn skill_value_signals(fields: &ObjectFields, k: u16, old: u32) -> bool {
         0
     };
     shown != old & 0xffff
+}
+
+/// `RefreshReaction`'s sweep for the active player `me` (`0x468380` with `0x606f20`) over the held
+/// units, each a guid and its descriptor: all but `me` (`0x606f6b`) and those whose charmer, else
+/// summoner, is `me` (`0x606f7c`-`0x606f9e`), in guid order.
+pub(crate) fn reaction_sweep<'a>(
+    me: u64,
+    units: impl IntoIterator<Item = (u64, &'a ObjectFields)>,
+) -> Vec<u64> {
+    let mut out: Vec<u64> = units
+        .into_iter()
+        .filter(|&(guid, fields)| {
+            guid != me && fields.unit_owner(OwnerFallback::SummonedBy) != Some(me)
+        })
+        .map(|(guid, _)| guid)
+        .collect();
+    out.sort_unstable();
+    out
 }
 
 #[cfg(test)]
@@ -234,7 +474,17 @@ mod tests {
             edges.push((i, o, n))
         });
         let kind = store.created_as().expect("created");
-        values(me, guid, kind, store, &edges)
+        values(
+            &Around {
+                me,
+                creature_cached: &|_| false,
+                others: &Vec::new,
+            },
+            guid,
+            kind,
+            store,
+            &edges,
+        )
     }
 
     fn player() -> ObjectFields {
@@ -276,8 +526,11 @@ mod tests {
                 FieldNotice::Unit { guid: MOB, id: 164 }
             ]
         );
-        // `UNIT_FIELD_HEALTH` (id 16) fires from the feed's diff, not here.
-        assert!(block(&mut mob, Some(ME), MOB, &[(22, 90)]).is_empty());
+        // `UNIT_FIELD_HEALTH` is id 16, `UNIT_HAPPINESS`'s `POWER5` (id 21) no watch of the bridge.
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(22, 90), (27, 50)]),
+            [FieldNotice::Unit { guid: MOB, id: 16 }]
+        );
     }
 
     /// The active player's own watches run for it alone, and in field order across sections.
@@ -432,5 +685,280 @@ mod tests {
             &[(slot(4) + 2, 1), (slot(10) + 2, 1)]
         )
         .is_empty());
+    }
+
+    const PET: u64 = 0xF140_0000_0000_0077;
+    const OTHER: u64 = 0xF130_0000_0000_0009;
+
+    fn unit() -> ObjectFields {
+        ObjectFields::from_pairs(&[]).into_created(ObjectType::Unit)
+    }
+
+    /// [`block`] with the world's answers given: the creature cache's and the reaction sweep's.
+    fn block_around(
+        store: &mut ObjectFields,
+        around: &Around,
+        guid: u64,
+        delta: &[(u16, u32)],
+    ) -> Vec<FieldNotice> {
+        let mut edges = Vec::new();
+        store.merge_diff(ObjectFields::from_pairs(delta), |i, o, n| {
+            edges.push((i, o, n))
+        });
+        let kind = store.created_as().expect("created");
+        values(around, guid, kind, store, &edges)
+    }
+
+    fn signal(guid: u64, id: u16) -> FieldNotice {
+        FieldNotice::Signal { guid, id }
+    }
+
+    fn bridge(guid: u64, id: u16) -> FieldNotice {
+        FieldNotice::Unit { guid, id }
+    }
+
+    /// The wide watches are one each, run by any of their dwords: the charm and summon guids (8
+    /// bytes), the aura array with its flags (0xd8), the applications (0x30), and the power-cost
+    /// modifier and multiplier (0x1c each) whose id names `UNIT_MANA`.
+    #[test]
+    fn a_wide_bridge_watch_is_one_signal_from_any_of_its_dwords() {
+        let mut mob = unit();
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(9, 1)]),
+            [bridge(MOB, 2)],
+            "SUMMON's high half alone"
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(9, 0), (8, 2)]),
+            [bridge(MOB, 2)],
+            "both halves, one watch"
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(47, 133), (100, 3)]),
+            [bridge(MOB, 41)],
+            "the first aura slot and the last flag dword"
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(124, 1)]),
+            [bridge(MOB, 107)]
+        );
+        // `UNIT_FIELD_POWER_COST_MODIFIER` 173-179 and `_MULTIPLIER` 180-186.
+        assert_eq!(
+            block(
+                &mut mob,
+                Some(ME),
+                MOB,
+                &[(179, 5), (180, 0.9f32.to_bits())]
+            ),
+            [bridge(MOB, 167), bridge(MOB, 174)]
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(176, 2)]),
+            [bridge(MOB, 167)]
+        );
+        // `UNIT_FIELD_CHARMEDBY` (id 4) is 8 bytes in the selector but has no name, so no bridge
+        // watch: the reaction of the owner type watcher alone, naming the summon set above.
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(10, 7)]),
+            [signal(MOB, 29), signal(2, 29)]
+        );
+    }
+
+    /// At one field the type watcher runs ahead of the bridge: `0x5ff580`'s `UNIT_AURA` on bit 27
+    /// before `UNIT_FLAGS`; its reaction on the PvP bit names the unit, then its summon and charm.
+    #[test]
+    fn the_flags_type_watcher_runs_ahead_of_the_bridge() {
+        let mut mob = ObjectFields::from_pairs(&[(8, PET as u32), (9, (PET >> 32) as u32)])
+            .into_created(ObjectType::Unit);
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(46, 0x0800_0000)]),
+            [signal(MOB, 41), bridge(MOB, 40)]
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(46, 0x0800_1000)]),
+            [signal(MOB, 29), signal(PET, 29), bridge(MOB, 40)]
+        );
+        // 0x80 and 0x1000 together: two refreshes (`0x5ff71c`, `0x5ff72b`).
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(46, 0x0800_0080)]),
+            [
+                signal(MOB, 29),
+                signal(PET, 29),
+                signal(MOB, 29),
+                signal(PET, 29),
+                bridge(MOB, 40)
+            ]
+        );
+        // A bit no arm tests: the bridge alone.
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(46, 0x0800_0088)]),
+            [bridge(MOB, 40)]
+        );
+    }
+
+    /// The active player's reaction sweeps every other unit the sweep hands it, after its own pet.
+    #[test]
+    fn the_players_reaction_sweeps_the_other_units() {
+        let mut me = ObjectFields::from_pairs(&[(8, PET as u32), (9, (PET >> 32) as u32)])
+            .into_created(ObjectType::Player);
+        let around = Around {
+            me: Some(ME),
+            creature_cached: &|_| false,
+            others: &|| vec![MOB, OTHER],
+        };
+        assert_eq!(
+            block_around(&mut me, &around, ME, &[(35, 2)]),
+            [
+                signal(ME, 29),
+                signal(PET, 29),
+                signal(MOB, 29),
+                signal(OTHER, 29),
+                bridge(ME, 29)
+            ]
+        );
+        // Another unit's reaction does not sweep.
+        let mut mob = unit();
+        assert_eq!(
+            block_around(&mut mob, &around, MOB, &[(35, 2)]),
+            [signal(MOB, 29), bridge(MOB, 29)]
+        );
+    }
+
+    /// `0x600440`: the dead look signals the health and the power of the unit's power type, the
+    /// tap `UNIT_FACTION`, any other bit nothing of its own; the bridge follows.
+    #[test]
+    fn the_dynamic_flags_watcher_signals_on_its_two_bits() {
+        // Rage: `UNIT_FIELD_BYTES_0` byte 3 is 1.
+        let mut mob = ObjectFields::from_pairs(&[(36, 1 << 24)]).into_created(ObjectType::Unit);
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(143, 0x20)]),
+            [signal(MOB, 16), signal(MOB, 18), bridge(MOB, 137)]
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(143, 0x24)]),
+            [signal(MOB, 29), bridge(MOB, 137)]
+        );
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(143, 0x2c)]),
+            [bridge(MOB, 137)]
+        );
+    }
+
+    /// Every player's flags signal `PLAYER_FLAGS_CHANGED` on any bit, after the reaction 0x180
+    /// runs; `PLAYER_BYTES_3` bytes 2 and 3 name the player, byte 3 refreshing its reaction too,
+    /// ahead of the active player's own rank watch on the same dword.
+    #[test]
+    fn the_player_type_watchers_reach_every_player() {
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(190, 0x2)]),
+            [signal(OTHER, 407)]
+        );
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(190, 0x102)]),
+            [signal(OTHER, 29), signal(OTHER, 407)]
+        );
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(195, 0x0100_0000)]),
+            [signal(OTHER, 183), signal(OTHER, 29)]
+        );
+        let mut me = player();
+        assert_eq!(
+            block(&mut me, Some(ME), ME, &[(195, 0x0001_0000)]),
+            [signal(ME, 183), FieldNotice::Player { id: 524 }]
+        );
+        // The duel team.
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(196, 1)]),
+            [signal(OTHER, 29)]
+        );
+    }
+
+    /// The quest-log watch is a player's, one for the whole log; a creature has none.
+    #[test]
+    fn the_quest_log_watch_is_one_per_block_on_a_player() {
+        let mut other = player();
+        assert_eq!(
+            block(&mut other, Some(ME), OTHER, &[(198, 5), (257, 1)]),
+            [bridge(OTHER, 522)]
+        );
+        // Field 258, past the 60 dwords, is outside it.
+        assert!(block(&mut other, Some(ME), OTHER, &[(258, 1)]).is_empty());
+    }
+
+    /// The pet number signals the classification; an entry change names the unit only when the
+    /// creature cache holds the new entry, a miss waiting for the answer.
+    #[test]
+    fn the_pet_number_and_a_cached_entry_signal() {
+        let mut mob = unit();
+        assert_eq!(
+            block(&mut mob, Some(ME), MOB, &[(139, 4)]),
+            [signal(MOB, 187)]
+        );
+        let cached = Around {
+            me: Some(ME),
+            creature_cached: &|entry| entry == 299,
+            others: &Vec::new,
+        };
+        assert_eq!(
+            block_around(&mut mob, &cached, MOB, &[(3, 299)]),
+            [signal(MOB, 183)]
+        );
+        assert!(block_around(&mut mob, &cached, MOB, &[(3, 300)]).is_empty());
+    }
+
+    /// The active player's own charmed-by watch refreshes after the type watcher on the same
+    /// field: two sweeps.
+    #[test]
+    fn the_active_players_charmed_by_watch_follows_the_type_watcher() {
+        let mut me = player();
+        let around = Around {
+            me: Some(ME),
+            creature_cached: &|_| false,
+            others: &|| vec![MOB],
+        };
+        assert_eq!(
+            block_around(&mut me, &around, ME, &[(10, 0x55)]),
+            [
+                signal(ME, 29),
+                signal(MOB, 29),
+                signal(ME, 29),
+                signal(MOB, 29)
+            ]
+        );
+        // `SUMMONEDBY` reaches the type watcher alone.
+        assert_eq!(
+            block_around(&mut me, &around, ME, &[(12, 0x55)]),
+            [signal(ME, 29), signal(MOB, 29)]
+        );
+    }
+
+    /// The sweep leaves out the player and what it charms or summoned, by charmer first.
+    #[test]
+    fn the_sweep_leaves_out_the_player_and_its_own() {
+        let owned_by = |field: u16, owner: u64| {
+            ObjectFields::from_pairs(&[(field, owner as u32), (field + 1, (owner >> 32) as u32)])
+        };
+        let mine = owned_by(12, ME);
+        let charmed_away = {
+            // Summoned by us but charmed by another: the charmer decides.
+            let mut f = owned_by(12, ME);
+            f.merge(owned_by(10, OTHER));
+            f
+        };
+        let theirs = owned_by(12, OTHER);
+        let me = ObjectFields::from_pairs(&[]);
+        assert_eq!(
+            reaction_sweep(
+                ME,
+                [
+                    (ME, &me),
+                    (PET, &mine),
+                    (MOB, &charmed_away),
+                    (OTHER, &theirs)
+                ]
+            ),
+            [MOB, OTHER]
+        );
     }
 }

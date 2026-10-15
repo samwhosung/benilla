@@ -6,7 +6,7 @@
 //! It runs in [`WorldStage::Net`], before `Input`, so a server teleport snaps, streams and covers
 //! in one frame. Coordinates cross from WoW into Bevy space here (`wow_to_bevy`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use benilla_protocol::{
@@ -286,24 +286,6 @@ impl FieldChanged {
     /// The edge's slot in a unit-block array of `len` dwords at `base` (`UNIT_FIELD_AURA[48]`).
     pub fn unit_array_slot(&self, base: u16, len: u16) -> Option<u16> {
         (self.is_unit() && (base..base + len).contains(&self.index)).then(|| self.index - base)
-    }
-}
-
-/// The field edges one feed saw this run, by guid and index: the reference fans a moved field out
-/// to every unit token naming the unit (`0x515e50`).
-#[derive(Default)]
-pub(crate) struct FieldEdges(HashSet<(u64, u16)>);
-
-impl FieldEdges {
-    pub fn collect(reader: &mut MessageReader<FieldChanged>) -> Self {
-        Self(reader.read().map(|e| (e.guid, e.index)).collect())
-    }
-    pub fn moved(&self, guid: u64, index: u16) -> bool {
-        self.0.contains(&(guid, index))
-    }
-    #[cfg(test)]
-    pub fn of(edges: &[(u64, u16)]) -> Self {
-        Self(edges.iter().copied().collect())
     }
 }
 

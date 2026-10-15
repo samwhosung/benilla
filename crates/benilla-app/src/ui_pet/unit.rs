@@ -9,14 +9,14 @@ use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
 use crate::net::{NetCommands, ObjectStore};
 use crate::ui_script::gate;
-use crate::ui_unit::{fire_transitions, snapshot};
+use crate::ui_unit::snapshot;
 
 use super::{PetBar, PetUnit};
 
 /// What the `"pet"` feed last pushed, for its edges.
 #[derive(Default)]
-pub(super) struct PetUnitMemory {
-    /// The last snapshot pushed under `"pet"`, for [`fire_transitions`]' per-field diff.
+pub(crate) struct PetUnitMemory {
+    /// The last snapshot pushed under `"pet"`.
     pushed: Option<UnitState>,
     /// `UNIT_PET`'s trigger; `None` until the first feed, so a pet out at login announces once.
     guid: Option<u64>,
@@ -36,12 +36,10 @@ pub(super) const UNIT_FLAG_PET_IN_COMBAT: u32 = 0x0000_0800;
 /// Feed the `"pet"` token and the pet frame's events. The token follows the bar's guid, as
 /// `UNIT_PET` does (`SetPet`, `0x4bc7e0`), not our `UNIT_FIELD_SUMMON`, so a charmed unit has a
 /// frame. The reaction is 0: the pet frame reads none.
-pub(super) fn feed_pet_unit(
+pub(crate) fn feed_pet_unit(
     script: Option<NonSendMut<UiScript>>,
     bar: Res<PetBar>,
     pet: PetUnit,
-    // The per-field edges, for `fire_transitions`' watch-bridge arms.
-    mut field_edges: MessageReader<crate::net::FieldChanged>,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
     mut names: ResMut<NameCache>,
@@ -55,7 +53,6 @@ pub(super) fn feed_pet_unit(
         return;
     };
     let (memory, vm_reset) = memory.get_reset(&script);
-    let edges = crate::net::FieldEdges::collect(&mut field_edges);
     let names_moved = memory.names_generation.moved(names.generation());
     let bar_changed = bar.is_changed();
     let stores_changed = !changed_stores.is_empty();
@@ -115,11 +112,11 @@ pub(super) fn feed_pet_unit(
                         cur.max_health,
                     );
                 }
-                fire_transitions(&mut script, "pet", memory.pushed.as_ref(), cur, &edges);
                 memory.pushed = Some(cur.clone());
             }
         }
-        // Clearing the token fires no UNIT_* event; the frame repaints on UNIT_PET.
+        // Pushing fires nothing: the pet's unit events are its field watches
+        // (`crate::field_watch`), and the frame repaints a new pet on `UNIT_PET`.
         None => memory.pushed = None,
     }
 

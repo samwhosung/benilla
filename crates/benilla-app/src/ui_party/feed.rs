@@ -13,9 +13,7 @@ use bevy::prelude::*;
 
 use crate::creature_type::CreatureTypeSources;
 use crate::names::NameCache;
-use crate::net::{
-    ClientCommand, FieldChanged, FieldEdges, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer,
-};
+use crate::net::{ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, SelfPlayer};
 use crate::target::Selection;
 use crate::ui_script::gate;
 
@@ -26,7 +24,7 @@ use super::GroupState;
 
 /// What the feed last pushed: the values its event edges fire on.
 #[derive(Default)]
-pub(super) struct FedParty {
+pub(crate) struct FedParty {
     /// The group lists the feed has answered with `PARTY_MEMBERS_CHANGED`.
     lists_applied: u32,
     leader: u64,
@@ -42,7 +40,7 @@ pub(super) struct FedParty {
     names_generation: gate::Watch,
     area: gate::Watch,
     raid_units: Vec<Option<UnitState>>,
-    /// `partypet1..4` and `raidpet1..40`, with the `UNIT_PET` edges (see [`pets`]).
+    /// `partypet1..4` and `raidpet1..40` (see [`pets`]).
     pets: pets::FedPets,
     /// The group lists' `RAID_ROSTER_UPDATE`s the feed has answered.
     roster_updates: u32,
@@ -120,7 +118,7 @@ pub(crate) const GROUP_MEMBER_SUBGROUP: u8 = 0x07;
 
 /// Push the roster and the party unit snapshots into the VM and fire the party events on their
 /// edges. A member's unit state is their live descriptor when streamed, else their roster record.
-pub(super) fn feed_party(
+pub(crate) fn feed_party(
     // `ChrClasses.dbc` field 16, `UnitHasRelicSlot`'s input, and the form table the creature type
     // reads.
     tables: crate::ui_unit::SnapshotTables,
@@ -130,7 +128,6 @@ pub(super) fn feed_party(
     stores: Query<&ObjectStore>,
     changed_stores: Query<(), Changed<ObjectStore>>,
     mut removed_stores: RemovedComponents<ObjectStore>,
-    mut edges: MessageReader<FieldChanged>,
     self_q: Query<(Entity, &Guid, &ObjectStore), With<SelfPlayer>>,
     factions: Option<Res<crate::target::Factions>>,
     names: pets::Names,
@@ -146,7 +143,6 @@ pub(super) fn feed_party(
         return;
     };
     let (fed, vm_reset) = fed.get_reset(&script);
-    let edges = FieldEdges::collect(&mut edges);
     // The ready-check summary lines the timeout tick composed, pushed as system chat ahead of the
     // gate: the tick runs on the frame clock, which the gate does not watch.
     for line in script.take_ready_check_lines() {
@@ -330,15 +326,6 @@ pub(super) fn feed_party(
         if fed.units[i] != snap {
             gate.audit("feed_party", "a party-token snapshot");
             script.set_unit(token, snap.clone());
-            if let Some(cur) = &snap {
-                crate::ui_unit::fire_transitions(
-                    &mut script,
-                    token,
-                    fed.units[i].as_ref(),
-                    cur,
-                    &edges,
-                );
-            }
             fed.units[i] = snap;
         }
         // ── PARTY_MEMBER_ENABLE / PARTY_MEMBER_DISABLE ──────────────────────
@@ -370,16 +357,7 @@ pub(super) fn feed_party(
     for (i, token) in PARTY_PET_TOKENS.iter().enumerate() {
         let owner = slots.get(i).map_or(0, |m| m.guid);
         let now = pets::member_pet(&look, &group, owner, look.store(owner), Roster::Party);
-        pets::feed_token(
-            &mut script,
-            &gate,
-            &edges,
-            &mut fed.pets.party[i],
-            token,
-            Some(PARTY_TOKENS[i]),
-            owner,
-            now,
-        );
+        pets::feed_token(&mut script, &gate, &mut fed.pets.party[i], token, now);
     }
 
     // ── raid1..raid40 ──────────────────────────────────────────────────────
@@ -416,22 +394,13 @@ pub(super) fn feed_party(
         if fed.raid_units[i] != snap {
             gate.audit("feed_party", "a raid-token snapshot");
             script.set_unit(token, snap.clone());
-            if let Some(cur) = &snap {
-                crate::ui_unit::fire_transitions(
-                    &mut script,
-                    token,
-                    fed.raid_units[i].as_ref(),
-                    cur,
-                    &edges,
-                );
-            }
             fed.raid_units[i] = snap;
         }
     }
 
     // ── raidpet1..raidpet40 ────────────────────────────────────────────────
     //
-    // Row N's pet. Our own row's pet is `"pet"`, whose own feed fires `UNIT_PET("player")`.
+    // Row N's pet; our own row's is `"pet"`'s unit.
     fed.pets
         .raid
         .resize_with(RAID_PET_TOKENS.len(), Default::default);
@@ -444,16 +413,7 @@ pub(super) fn feed_party(
             look.store(owner)
         };
         let now = pets::member_pet(&look, &group, owner, held, Roster::Raid);
-        pets::feed_token(
-            &mut script,
-            &gate,
-            &edges,
-            &mut fed.pets.raid[i],
-            token,
-            (!ours).then_some(RAID_TOKENS[i]),
-            owner,
-            now,
-        );
+        pets::feed_token(&mut script, &gate, &mut fed.pets.raid[i], token, now);
     }
 
     // ── PARTY_MEMBERS_CHANGED ───────────────────────────────────────────────
