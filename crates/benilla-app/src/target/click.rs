@@ -105,8 +105,20 @@ pub(super) fn select_on_click(
     if !clicked || inspect.enabled {
         return;
     }
-    // The ground cursor owns the click (`0x492580`); its commit system runs after this one.
+    // The click router returns for a charmed player before anything (`0x481f98`), greeting included.
+    if seam.player_is_charmed() {
+        return;
+    }
+    // The ground cursor owns the click (`0x492580`); its commit system runs after this one. The
+    // greeter runs ahead of `SelectTarget` for every unit the click names (`0x4927fd`) and nothing
+    // before it tests targeting, so the unit the cursor's click binds is greeted as well, unless a
+    // nearer GameObject takes the click.
     if ground.active() {
+        let object_click = ground.wants(crate::spell::TargetingWants::GameObject)
+            && go_is_nearest(&hovered, &press.object);
+        if let Some(entity) = hovered.target.filter(|_| !object_click) {
+            greeting.write(crate::sound::NpcGreetingRequest { npc: entity });
+        }
         return;
     }
     let (self_guid, engaged) = self_q

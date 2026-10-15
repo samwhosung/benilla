@@ -129,6 +129,16 @@ impl Fix {
         self.bind();
     }
 
+    /// The `NpcGreetingRequest`s written since the last look.
+    fn greetings(&mut self) -> Vec<Entity> {
+        self.app
+            .world_mut()
+            .resource_mut::<Messages<crate::sound::NpcGreetingRequest>>()
+            .drain()
+            .map(|g| g.npc)
+            .collect()
+    }
+
     fn over_the_mob(&self) -> Hovered {
         Hovered {
             target: Some(self.mob),
@@ -418,4 +428,81 @@ fn a_tab_goes_on_past_a_unit_the_cursor_refused() {
         "the second press has moved on to the next"
     );
     assert_eq!(f.selected(), Some(OLD), "the target never moved");
+}
+
+/// The greeter (`PlayGreetingSound`, `0x60c270`) runs at `0x4927fd` for every unit a body click
+/// names, ahead of `SelectTarget`, with nothing in between that tests targeting: a click the
+/// cursor binds greets too. The click router returns for a charmed player first (`0x481f98`), so
+/// that one is not greeted; a nearer GameObject takes the click from the unit.
+#[test]
+fn a_body_click_greets_with_the_cursor_up_unless_charmed_or_on_an_object() {
+    let click = |f: &mut Fix| {
+        let pick = f.over_the_mob();
+        f.click(pick);
+        f.app
+            .world_mut()
+            .run_system_once(click::select_on_click)
+            .expect("the click runs");
+        f.greetings()
+    };
+    let mut up = fix(false);
+    up.cursor_up();
+    let mob = up.mob;
+    assert_eq!(click(&mut up), vec![mob], "cursor up");
+    assert_eq!(up.selected(), Some(OLD), "and the click selected nothing");
+
+    let mut down = fix(false);
+    let mob = down.mob;
+    assert_eq!(click(&mut down), vec![mob], "cursor down, as ever");
+
+    for cursor in [true, false] {
+        let mut charmed = fix(true);
+        if cursor {
+            charmed.cursor_up();
+        }
+        assert_eq!(click(&mut charmed), vec![], "charmed, cursor {cursor}");
+    }
+
+    // A lock word takes GameObjects; the chest is nearer than the unit.
+    let mut chest = fix(false);
+    chest
+        .app
+        .world_mut()
+        .resource_mut::<crate::spell::SpellTargeting>()
+        .enter(HEAL, crate::spell::CastCommit::Spell, 0x4800);
+    let mob = chest.mob;
+    chest.app.world_mut().resource_mut::<PressPick>().object = crate::target::HoveredObject {
+        target: Some(mob),
+        guid: Some(0xF110_0000_0000_0001),
+        distance: 1.0,
+    };
+    assert_eq!(click(&mut chest), vec![], "the chest has the click");
+}
+
+/// A plate click greets before it selects (`0x7cb910` → `0x4949f0` → `0x4925d0` → `0x4927fd`), the
+/// cursor up or down; the router's charmed return (`0x481f98`) is the body click's, not the
+/// plate's, so a charmed player's plate click greets too.
+#[test]
+fn a_plate_click_greets_with_the_cursor_up() {
+    for (charmed, cursor) in [(false, true), (false, false), (true, true)] {
+        let mut f = fix(charmed);
+        if cursor {
+            f.cursor_up();
+        }
+        let mob = f.mob;
+        f.app
+            .world_mut()
+            .resource_mut::<PlateClicks>()
+            .left
+            .push(mob);
+        f.app
+            .world_mut()
+            .run_system_once(click::select_on_plate_click)
+            .expect("the plate click runs");
+        assert_eq!(
+            f.greetings(),
+            vec![mob],
+            "charmed {charmed}, cursor {cursor}"
+        );
+    }
 }
