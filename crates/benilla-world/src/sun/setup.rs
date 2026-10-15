@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 use benilla_assets::coords::wow_to_bevy;
 use benilla_assets::LockRecover;
-use benilla_assets::WorldAssets;
+use benilla_assets::{LooseOpen, WorldAssets};
 use benilla_formats::load_m2_mesh;
 
 use super::materials::{CelestialExt, CelestialMaterial, StarExt, StarMaterial, DISC_HORIZON_FADE};
@@ -41,10 +41,14 @@ pub(super) fn setup_sun(
             span: Vec4::ZERO,                    // unused in glare mode
         },
     };
-    // The sun disc, `sunCenter.blp`, or a generated soft disc without assets.
+    // The sun disc, `sunCenter.blp`, or a generated soft disc without assets. Every celestial
+    // texture opens from the archives alone: its `TextureCreate` calls (`0x7e5052`, `0x7e5b62`)
+    // pass file flag 0.
     let sun_tex = world_assets
         .as_mut()
-        .and_then(|a| a.sprite_texture("Textures\\sunCenter.blp", &mut images))
+        .and_then(|a| {
+            a.sprite_texture_opened("Textures\\sunCenter.blp", LooseOpen::Archives, &mut images)
+        })
         .unwrap_or_else(|| images.add(radial_sprite(128, 0.55, 0.95)));
     let disc = disc_mats.add(clip(
         StandardMaterial {
@@ -61,7 +65,9 @@ pub(super) fn setup_sun(
     // The sun glare, `sunGlare.blp`: dark texels on a huge quad keep the added light gentle.
     let glare_tex = world_assets
         .as_mut()
-        .and_then(|a| a.sprite_texture("Textures\\sunGlare.blp", &mut images))
+        .and_then(|a| {
+            a.sprite_texture_opened("Textures\\sunGlare.blp", LooseOpen::Archives, &mut images)
+        })
         .unwrap_or_else(|| images.add(radial_sprite(128, 0.0, 1.0)));
     let glow = disc_mats.add(glare(StandardMaterial {
         base_color: Color::WHITE, // per-frame: band tint × the lens-flare envelope (follow_sun)
@@ -91,7 +97,9 @@ pub(super) fn setup_sun(
     // The white moon, `moon.blp`, opaque but for its feathered texture alpha.
     let moon_tex = world_assets
         .as_mut()
-        .and_then(|a| a.sprite_texture("textures\\moon.blp", &mut images))
+        .and_then(|a| {
+            a.sprite_texture_opened("textures\\moon.blp", LooseOpen::Archives, &mut images)
+        })
         .unwrap_or_else(|| images.add(radial_sprite(128, 0.7, 0.97)));
     let white_moon = disc_mats.add(clip(
         StandardMaterial {
@@ -118,7 +126,9 @@ pub(super) fn setup_sun(
     // seed ever show it.
     let moon02_tex = world_assets
         .as_mut()
-        .and_then(|a| a.sprite_texture("textures\\moon02.blp", &mut images))
+        .and_then(|a| {
+            a.sprite_texture_opened("textures\\moon02.blp", LooseOpen::Archives, &mut images)
+        })
         .unwrap_or_else(|| images.add(radial_sprite(128, 0.7, 0.97)));
     let moon02 = disc_mats.add(clip(
         StandardMaterial {
@@ -144,7 +154,9 @@ pub(super) fn setup_sun(
     // dome's night bands through the disc's feathered edge.
     let white_glare_tex = world_assets
         .as_mut()
-        .and_then(|a| a.sprite_texture("textures\\moonglare.blp", &mut images))
+        .and_then(|a| {
+            a.sprite_texture_opened("textures\\moonglare.blp", LooseOpen::Archives, &mut images)
+        })
         .unwrap_or_else(|| images.add(radial_sprite(64, 0.0, 1.0)));
     let white_glare = disc_mats.add(glare(StandardMaterial {
         base_color: Color::WHITE, // per-frame: band tint × the envelope (follow_moons)

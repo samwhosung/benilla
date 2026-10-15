@@ -57,7 +57,8 @@ pub(super) fn backdrop_edges(
     path: &str,
     images: &mut Assets<Image>,
 ) -> Option<BackdropEdges> {
-    let (w, h, rgba) = assets.decode_rgba(path)?;
+    // A backdrop's pieces are textures of the frame, set through `SetTexture` (`0x770200`).
+    let (w, h, rgba) = assets.decode_rgba(path, benilla_assets::LooseOpen::Index)?;
     let e = h as usize;
     if e == 0 || w as usize != 8 * e {
         warn!("glue art: {path} is {w}x{h}, not an 8-cell edge strip");

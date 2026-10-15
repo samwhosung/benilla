@@ -578,10 +578,10 @@ fn start_music_stream(
     let Some((path, kit_vol)) = kits.pick_stream(kit_id) else {
         return false;
     };
-    let bytes = {
-        let chain = assets.chain.lock_recover();
-        chain.read(&path)
-    };
+    // Every file FMOD opens is a loose-flagged open (`0x7a8860`).
+    let bytes = assets
+        .read_file_or_loose(&path)
+        .ok_or_else(|| anyhow::anyhow!("not in the loose files or the patch chain"));
     let data = match bytes.and_then(mixer::stream_from_bytes) {
         Ok(d) => d,
         Err(e) => {

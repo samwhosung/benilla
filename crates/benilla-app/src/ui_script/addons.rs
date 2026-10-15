@@ -244,14 +244,17 @@ fn is_lua(entry: &str) -> bool {
 
 /// The one file namespace, install-relative, as in the reference: `0x647e60` answers a name from
 /// the install tree's hash index, then the archive chain, after `0x6ede10` collapses `..`. So an
-/// addon's `..\Blizzard_AuctionUI\…` reaches the archive behind a `.pub`-only folder. Only a path
-/// under `Interface/AddOns/` touches the filesystem, never above the AddOns root, and each of its
-/// components matches case-insensitively, as on the reference's Windows filesystem: the resolver
-/// addon art and sound use ([`benilla_assets::loose_addon_file`]).
+/// addon's `..\Blizzard_AuctionUI\…` reaches the archive behind a `.pub`-only folder. A path under
+/// `Interface/AddOns/` reads the AddOns root, never above it, each of its components matched
+/// case-insensitively, as on the reference's Windows filesystem: the resolver addon art and sound
+/// use ([`benilla_assets::loose_addon_file`]). Any other reads as an interface file
+/// ([`super::reference_ui::read`]), as does one the root lacks. A loose file that will not read is a
+/// miss (`0x647865`).
 pub(crate) fn read_addon_file(root: &Path, req: &str) -> Option<Vec<u8>> {
-    benilla_assets::loose_addon_file(root, &benilla_assets::normalize_path(req))
-        .and_then(|file| std::fs::read(file).ok())
-        .or_else(|| super::reference_ui::read(&req.replace('/', "\\")))
+    match benilla_assets::loose_addon_file(root, &benilla_assets::normalize_path(req)) {
+        Some(file) => std::fs::read(file).ok(),
+        None => super::reference_ui::read(&req.replace('/', "\\")),
+    }
 }
 
 /// A `Dir` addon's base before its folder name ([`Addon::prefix`]), `/`-separated as `join_ref` is.
@@ -359,7 +362,13 @@ fn discover_folder() -> Vec<Addon> {
     let Some(root) = root() else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(&root) else {
+    discover_in(&root)
+}
+
+/// [`discover_folder`] under `root`. A `Blizzard*` folder holding its own `.toc` is one the glue
+/// build moves aside before the scan ([`benilla_assets::moved_aside`]), so it is not registered.
+fn discover_in(root: &Path) -> Vec<Addon> {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return Vec::new(); // no addon folder is the normal case, not an error
     };
     let mut names: Vec<String> = entries
@@ -372,13 +381,17 @@ fn discover_folder() -> Vec<Addon> {
         .into_iter()
         .filter_map(|name| {
             let dir = root.join(&name);
+            if benilla_assets::moved_aside(&dir, &name) {
+                info!("ui_script: {name} is a loose copy of a Blizzard add-on — not loaded");
+                return None;
+            }
             // A folder with no `<Name>.toc` is not an addon; the reference skips it silently too.
             let text = manifest_in(&dir, &name)?;
             Some(Addon {
                 name,
                 toc: Toc::parse(&text),
                 // The root, not `dir`, so a sibling library addon is reachable.
-                source: Source::Dir(root.clone()),
+                source: Source::Dir(root.to_path_buf()),
             })
         })
         .collect()
@@ -1519,6 +1532,30 @@ mod tests {
         std::fs::write(tmp.join("Bare/notes.txt"), "not an addon").unwrap();
         assert!(manifest_in(&tmp.join("Cased"), "Cased").is_some());
         assert!(manifest_in(&tmp.join("Bare"), "Bare").is_none());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A loose `Blizzard*` folder holding its own `.toc`, in any case, is not registered, as the
+    /// glue build moves it aside before the scan (`0x51fb50`); one with only a `.pub`, as an
+    /// install ships them, has no `.toc` to register, and any other name with its `.toc` is.
+    #[test]
+    fn a_loose_blizzard_addon_with_its_toc_is_not_registered() {
+        let tmp = std::env::temp_dir().join(format!(
+            "benilla-addon-blizzard-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let put = |rel: &str| {
+            let path = tmp.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "## Interface: 11200\nMain.lua\n").unwrap();
+        };
+        put("Blizzard_Foo/Blizzard_Foo.toc");
+        put("blizzard_auctionui/BLIZZARD_AUCTIONUI.toc");
+        put("Blizzard_RaidUI/Blizzard_RaidUI.pub");
+        put("MyBlizzard/MyBlizzard.toc");
+        let names: Vec<String> = discover_in(&tmp).into_iter().map(|a| a.name).collect();
+        assert_eq!(names, ["MyBlizzard"]);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

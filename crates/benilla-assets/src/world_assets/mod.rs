@@ -13,6 +13,7 @@ use bevy::render::render_resource::{Buffer, Face};
 use crate::materials::{WowModelExt, WowModelMaterial, VANILLA_ALPHA_KEY_REF};
 use crate::SpatialCache;
 use benilla_formats::{blp_to_rgba, read_texture_native_chain, tga_to_rgba, Chain, ModelBlend};
+pub use benilla_formats::{LooseIndex, LooseOpen};
 
 /// BLP and RGBA to `Image` helpers, re-exported.
 mod images;
@@ -28,9 +29,10 @@ pub struct WorldAssets {
     /// Decoded GPU textures by `(normalized path, wrap_u, wrap_v)`: one BLP can be sampled both
     /// ways (tiled on a wall, clamped on a cutout card), and the address mode lives on the sampler.
     pub textures: SpatialCache<(String, bool, bool), Handle<Image>>,
-    /// UI sprites by resolved path, misses cached as `None` so a bad path never re-walks the chain
-    /// per frame.
-    sprites: HashMap<String, Option<Handle<Image>>>,
+    /// UI sprites by resolved path and open, misses cached as `None` so a bad path never re-walks
+    /// the chain per frame; the open is in the key as the reference's texture cache keys on the
+    /// file flag (`0x449d90`).
+    sprites: HashMap<(String, LooseOpen), Option<Handle<Image>>>,
     /// UI sprites by path and per-axis wrap, since the sampler bakes into the `Image`.
     tiled_sprites: HashMap<(String, bool, bool), Option<Handle<Image>>>,
     /// Sprites resampled to an exact physical size, by `(path, w, h)`.
@@ -39,13 +41,13 @@ pub struct WorldAssets {
     resample_sources: HashMap<String, Option<(u32, u32, Vec<u8>)>>,
     /// Portrait sprites, the circular mask baked in ([`portrait_image`]).
     portraits: HashMap<String, Option<Handle<Image>>>,
-    /// Coverage masks ([`mask_image`]): the minimap's circular clip.
-    masks: HashMap<String, Option<Handle<Image>>>,
+    /// Coverage masks ([`mask_image`]) by path and open: the minimap's circular clip.
+    masks: HashMap<(String, LooseOpen), Option<Handle<Image>>>,
     /// UI sprites whose pixels the client computes ([`Self::generated_sprite`]).
     generated: HashMap<&'static str, Handle<Image>>,
-    /// The AddOns folder, where `Interface\AddOns\` paths resolve as loose files, as the reference
-    /// reads them from the game directory; `None` until the app installs it and in capture runs.
-    loose_root: Option<PathBuf>,
+    /// The loose files a flagged open reads before the chain: the install's index, and the AddOns
+    /// folder once the app installs it (never in capture runs).
+    loose: LooseFiles,
     /// Materials deduped by [`MaterialKey`].
     pub model_materials: SpatialCache<MaterialKey, Handle<WowModelMaterial>>,
     /// The shared global-light buffer, cloned into every deduped model material's `light_buf`.
@@ -95,29 +97,31 @@ pub fn sprite_candidates(path: &str) -> [String; 2] {
 
 /// The texel size of a UI sprite, which `CSimpleTexture`'s size getters read (`[tex+0x144]`,
 /// `[tex+0x148]`; `0x770720`, `0x770790`) for a region with no authored size, one texel per
-/// FrameXML unit. Decoded, so layout gets the size the screen shows.
+/// FrameXML unit. Decoded, so layout gets the size the screen shows, and read by an
+/// interface texture's open ([`LooseOpen::Index`]).
 pub fn sprite_dimensions(
     chain: &Mutex<Chain>,
-    loose_root: Option<&Path>,
+    loose: &LooseFiles,
     path: &str,
 ) -> Option<(u32, u32)> {
-    decode_sprite(chain, loose_root, path).map(|(w, h, _)| (w, h))
+    decode_sprite(chain, loose, path, LooseOpen::Index).map(|(w, h, _)| (w, h))
 }
 
 /// Decode the first of [`sprite_candidates`] that reads and decodes, each read by
-/// [`read_loose_or_chain`]'s rule, as the reference's two loaders fail silently. A miss warns, once
-/// per key since every cache stores its misses: a missing sprite draws nothing, and nothing else
-/// says why.
+/// [`read_loose_or_chain`]'s rule for `open`, as the reference's two loaders fail silently. A miss
+/// warns, once per key since every cache stores its misses: a missing sprite draws nothing, and
+/// nothing else says why.
 fn decode_sprite(
     chain: &Mutex<Chain>,
-    loose_root: Option<&Path>,
+    loose: &LooseFiles,
     path: &str,
+    open: LooseOpen,
 ) -> Option<(u32, u32, Vec<u8>)> {
     let candidates = sprite_candidates(path);
     let mut chain = chain.lock_recover();
     for candidate in &candidates {
         // A loose file answers the candidate whether or not it decodes ([`read_loose_or_chain`]).
-        let bytes = match loose_root.and_then(|root| loose_addon_file(root, candidate)) {
+        let bytes = match loose.find(candidate, open) {
             Some(file) => std::fs::read(&file).ok(),
             None => chain.read_file(candidate).ok(),
         };
@@ -128,18 +132,15 @@ fn decode_sprite(
     // "Not there" and "there but would not decode" are different faults; say which.
     let found_but_undecodable: Vec<&String> = candidates
         .iter()
-        .filter(|c| {
-            chain.read_file(c).is_ok()
-                || loose_root.is_some_and(|root| loose_addon_file(root, c).is_some())
-        })
+        .filter(|c| chain.read_file(c).is_ok() || loose.find(c, open).is_some())
         .collect();
     if found_but_undecodable.is_empty() {
         warn!(
             "texture miss: '{path}' does not resolve in the patch chain{} (tried {})",
-            if loose_root.is_some() {
-                " or the AddOns folder"
-            } else {
+            if open == LooseOpen::Archives {
                 ""
+            } else {
+                ", the install's loose files or the AddOns folder"
             },
             candidates.join(", ")
         );
@@ -167,29 +168,79 @@ fn decode_sprite_bytes(bytes: &[u8]) -> anyhow::Result<(u32, u32, Vec<u8>)> {
     }
 }
 
-/// Read a file by path: an `Interface\AddOns\` path from the loose addon folder when the file is
-/// there, any other from the patch chain. The reference's resolver (`0x647e60`) answers from the
-/// install tree's index (`0x647f89`) before the archive chain (`0x648116`) for an open that sets
-/// the index flag, as the UI texture (`0x770281`) and sound (`0x7a8860`) opens do; a file the
-/// index answers and the open then fails is a miss, with no turn to the chain (`0x6478d5`).
+/// The loose files an open that sets the loose flag reads before the archive chain, as the
+/// reference's resolver (`0x647e60`) answers from its index of the install (`0x647f89`) before the
+/// chain (`0x648116`): the install's index for any path, and benilla's AddOns folder for an
+/// `Interface\AddOns\` path ([`loose_addon_file`]), which stands in for the install's by a
+/// written deviation (`benilla-app`'s `ui_script::addons::root`).
+#[derive(Clone, Default)]
+pub struct LooseFiles {
+    /// benilla's AddOns folder, or `None` (always under `$WOW_CAPTURE`).
+    pub addons: Option<PathBuf>,
+    /// The install's index ([`benilla_formats::install_index`]), or `None` for a test's chain.
+    pub install: Option<Arc<LooseIndex>>,
+}
+
+impl LooseFiles {
+    /// The player's install, with no AddOns folder until the app installs one.
+    pub fn install() -> Self {
+        LooseFiles {
+            addons: None,
+            install: Some(benilla_formats::install_index()),
+        }
+    }
+
+    /// The disk file that answers an open of `path` with `open`, or `None` for the archives:
+    /// the font open's bare name first ([`LooseOpen::BareNameFirst`]), then the whole name, an
+    /// `Interface\AddOns\` one in the AddOns folder, which the install's index leaves out.
+    pub fn find(&self, path: &str, open: LooseOpen) -> Option<PathBuf> {
+        let install = self.install.as_deref();
+        match open {
+            LooseOpen::Archives => return None,
+            LooseOpen::BareNameFirst => {
+                let bare = path.rsplit(['\\', '/']).next().unwrap_or(path);
+                if let Some(file) = install.and_then(|ix| ix.get(bare)) {
+                    return Some(file.to_path_buf());
+                }
+            }
+            LooseOpen::Index => {}
+        }
+        let norm = normalize_path(path);
+        if norm.starts_with(ADDONS_PREFIX) {
+            return self
+                .addons
+                .as_deref()
+                .and_then(|root| loose_addon_file(root, &norm));
+        }
+        install.and_then(|ix| ix.get(&norm)).map(Path::to_path_buf)
+    }
+}
+
+/// Read a file by path for an open of kind `open`: the loose file that answers it
+/// ([`LooseFiles::find`]), else the patch chain. A file the loose files answer and the read then
+/// fails is a miss, with no turn to the chain (`0x647865`).
 pub fn read_loose_or_chain(
     chain: &Mutex<Chain>,
-    loose_root: Option<&Path>,
+    loose: &LooseFiles,
     path: &str,
+    open: LooseOpen,
 ) -> Option<Vec<u8>> {
-    match loose_root.and_then(|root| loose_addon_file(root, &normalize_path(path))) {
+    match loose.find(path, open) {
         Some(file) => std::fs::read(file).ok(),
         None => chain.lock_recover().read(path).ok(),
     }
 }
 
+/// The normalized prefix of an addon path.
+const ADDONS_PREFIX: &str = "interface\\addons\\";
+
 /// Map a normalized `interface\addons\…` path onto a file under the addon root, matching each
 /// component case-insensitively as the Windows reference does; a dot-component, or one the host
 /// reads as more than a plain name (a Windows `C:`), is refused, so a path cannot escape the root.
 pub fn loose_addon_file(root: &Path, candidate: &str) -> Option<PathBuf> {
-    let rel = candidate.strip_prefix("interface\\addons\\")?;
+    let rel = candidate.strip_prefix(ADDONS_PREFIX)?;
     let mut at = root.to_path_buf();
-    for comp in rel.split('\\') {
+    for (depth, comp) in rel.split('\\').enumerate() {
         let plain = matches!(
             Path::new(comp).components().collect::<Vec<_>>()[..],
             [std::path::Component::Normal(_)]
@@ -197,19 +248,36 @@ pub fn loose_addon_file(root: &Path, candidate: &str) -> Option<PathBuf> {
         if !plain || comp.starts_with('.') {
             return None;
         }
-        let direct = at.join(comp);
-        if direct.exists() {
-            at = direct;
-            continue;
+        at = child_ignoring_case(&at, comp)?;
+        if depth == 0 && moved_aside(&at, comp) {
+            return None;
         }
-        let found = std::fs::read_dir(&at).ok()?.flatten().find(|e| {
-            e.file_name()
-                .to_str()
-                .is_some_and(|n| n.eq_ignore_ascii_case(comp))
-        })?;
-        at = found.path();
     }
     at.is_file().then_some(at)
+}
+
+/// `dir`'s entry named `name` without regard to case, as on the reference's Windows filesystem.
+fn child_ignoring_case(dir: &Path, name: &str) -> Option<PathBuf> {
+    let direct = dir.join(name);
+    if direct.exists() {
+        return Some(direct);
+    }
+    let found = std::fs::read_dir(dir).ok()?.flatten().find(|e| {
+        e.file_name()
+            .to_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+    })?;
+    Some(found.path())
+}
+
+/// Whether the AddOns folder `dir`, named `name`, is one the glue build moves aside before the
+/// add-on scan: a `Blizzard*` folder holding `<name>\<name>.toc` (`0x51fbf0`, walked by `0x51fb50`
+/// at `0x46a8eb`), renamed `%s.old` so the stock add-on loads from the archive. benilla moves
+/// nothing a player put there; it registers no add-on from such a folder and reads no file in it.
+pub fn moved_aside(dir: &Path, name: &str) -> bool {
+    name.get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("blizzard"))
+        && child_ignoring_case(dir, &format!("{name}.toc")).is_some_and(|toc| toc.is_file())
 }
 
 /// Mutate an asset only when `differs` says it does not already match: `Assets::get_mut` alone
@@ -269,36 +337,42 @@ impl WorldAssets {
             portraits: HashMap::new(),
             masks: HashMap::new(),
             generated: HashMap::new(),
-            loose_root: None,
+            loose: LooseFiles::install(),
             model_materials: SpatialCache::default(),
             shared_light,
         }
     }
 
-    /// [`read_loose_or_chain`] over this store, for an asset class with no decoder here (audio:
-    /// `PlayMusic`, `PlaySoundFile`).
+    /// [`read_loose_or_chain`] over this store with the loose flag set ([`LooseOpen::Index`]), for
+    /// an open with no decoder here: every sound file (`0x7a8860`), as FMOD's file callbacks open
+    /// with flag 1, and the glue's own interface files.
     pub fn read_file_or_loose(&self, path: &str) -> Option<Vec<u8>> {
-        read_loose_or_chain(&self.chain, self.loose_root.as_deref(), path)
+        read_loose_or_chain(&self.chain, &self.loose, path, LooseOpen::Index)
+    }
+
+    /// The loose files this store reads, for a probe that must answer what draws.
+    pub fn loose(&self) -> &LooseFiles {
+        &self.loose
     }
 
     /// Install or clear the AddOns folder. Cached misses are evicted so a path asked before it
     /// existed gets a second look, and so is every `Interface\AddOns\` entry, since a loose file
     /// shadows the chain's ([`read_loose_or_chain`]); any other hit came from the chain and stays.
     pub fn set_loose_addon_root(&mut self, root: Option<PathBuf>) {
-        if self.loose_root == root {
+        if self.loose.addons == root {
             return;
         }
-        self.loose_root = root;
+        self.loose.addons = root;
         // `emblem_mask_texture` prefixes its `sprites` key, so the test looks past a tag.
         let stays =
             |key: &str, hit: bool| hit && !normalize_path(key).contains("interface\\addons\\");
-        self.sprites.retain(|k, v| stays(k, v.is_some()));
+        self.sprites.retain(|k, v| stays(&k.0, v.is_some()));
         self.tiled_sprites.retain(|k, v| stays(&k.0, v.is_some()));
         self.resampled_sprites
             .retain(|k, v| stays(&k.0, v.is_some()));
         self.resample_sources.retain(|k, v| stays(k, v.is_some()));
         self.portraits.retain(|k, v| stays(k, v.is_some()));
-        self.masks.retain(|k, v| stays(k, v.is_some()));
+        self.masks.retain(|k, v| stays(&k.0, v.is_some()));
     }
 
     /// Decode and upload a BLP once per path and wrap; later requests share the handle.
@@ -319,27 +393,41 @@ impl WorldAssets {
         Some(handle)
     }
 
-    /// A clamp-sampled sRGB sprite, mip 0 only: the celestial discs and every UI quad.
+    /// A clamp-sampled sRGB sprite, mip 0 only, opened as an interface texture
+    /// ([`LooseOpen::Index`], as `CSimpleTexture::SetTexture` loads at `0x770281`): every UI quad.
     pub fn sprite_texture(
         &mut self,
         path: &str,
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
-        let key = sprite_key(path);
+        self.sprite_texture_opened(path, LooseOpen::Index, images)
+    }
+
+    /// [`Self::sprite_texture`] with the open the caller's reference load makes: the celestial
+    /// discs, the loading screen and the minimap's default art open with flag 0
+    /// ([`LooseOpen::Archives`]).
+    pub fn sprite_texture_opened(
+        &mut self,
+        path: &str,
+        open: LooseOpen,
+        images: &mut Assets<Image>,
+    ) -> Option<Handle<Image>> {
+        let key = (sprite_key(path), open);
         // Hits and misses are cached: the UI extractor asks per quad per frame, and a fresh handle
         // would defeat its dirty check.
         if let Some(cached) = self.sprites.get(&key) {
             return cached.clone();
         }
-        let loaded = decode_sprite(&self.chain, self.loose_root.as_deref(), path)
+        let loaded = decode_sprite(&self.chain, &self.loose, path, open)
             .map(|(w, h, rgba)| images.add(sprite_image(w, h, rgba)));
         self.sprites.insert(key, loaded.clone());
         loaded
     }
 
-    /// Decode a UI sprite to raw RGBA8 without uploading or caching, for a caller that resamples.
-    pub fn decode_rgba(&mut self, path: &str) -> Option<(u32, u32, Vec<u8>)> {
-        decode_sprite(&self.chain, self.loose_root.as_deref(), path)
+    /// Decode a sprite to raw RGBA8 without uploading or caching, for a caller that resamples,
+    /// read by `open`.
+    pub fn decode_rgba(&mut self, path: &str, open: LooseOpen) -> Option<(u32, u32, Vec<u8>)> {
+        decode_sprite(&self.chain, &self.loose, path, open)
     }
 
     /// A UI sprite resampled to an exact pixel size by the caller's kernel, cached by size: the
@@ -356,7 +444,7 @@ impl WorldAssets {
             return cached.clone();
         }
         if !self.resample_sources.contains_key(path) {
-            let decoded = decode_sprite(&self.chain, self.loose_root.as_deref(), path);
+            let decoded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index);
             self.resample_sources.insert(path.to_string(), decoded);
         }
         let made = self.resample_sources[path]
@@ -377,7 +465,7 @@ impl WorldAssets {
         if let Some(cached) = self.tiled_sprites.get(&key) {
             return cached.clone();
         }
-        let loaded = decode_sprite(&self.chain, self.loose_root.as_deref(), path)
+        let loaded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index)
             .map(|(w, h, rgba)| images.add(sprite_image_wrapped(w, h, rgba, wrap)));
         self.tiled_sprites.insert(key, loaded.clone());
         loaded
@@ -400,7 +488,8 @@ impl WorldAssets {
         handle
     }
 
-    /// A unit-frame portrait, the circular mask baked in ([`portrait_image`]).
+    /// A unit-frame portrait, the circular mask baked in ([`portrait_image`]), opened with the loose
+    /// flag as `SetPortraitTexture` opens it (through `0x5a7b40`).
     pub fn portrait_texture(
         &mut self,
         path: &str,
@@ -410,7 +499,7 @@ impl WorldAssets {
         if let Some(cached) = self.portraits.get(&key) {
             return cached.clone();
         }
-        let loaded = decode_sprite(&self.chain, self.loose_root.as_deref(), path)
+        let loaded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index)
             .map(|(w, h, rgba)| images.add(portrait_image(w, h, rgba)));
         self.portraits.insert(key, loaded.clone());
         loaded
@@ -418,18 +507,22 @@ impl WorldAssets {
 
     /// The tabard designer's emblem cell for the caller to tint: white carrying its own alpha,
     /// `(a << 24) | 0x00FFFFFF` per texel (the reference's `0x503431` loop). A file that fails to
-    /// open gives `None`, where the reference keeps its static array's stale contents.
+    /// open gives `None`, where the reference keeps its static array's stale contents. Read from
+    /// the archives alone, as the emblems' `0x5a7b40` opens with flag 0.
     pub fn emblem_mask_texture(
         &mut self,
         path: &str,
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
-        let key = format!("emblem-mask:{}", sprite_key(path));
+        let key = (
+            format!("emblem-mask:{}", sprite_key(path)),
+            LooseOpen::Archives,
+        );
         if let Some(cached) = self.sprites.get(&key) {
             return cached.clone();
         }
         let loaded =
-            decode_sprite(&self.chain, self.loose_root.as_deref(), path).map(|(w, h, mut rgba)| {
+            decode_sprite(&self.chain, &self.loose, path, key.1).map(|(w, h, mut rgba)| {
                 for px in rgba.as_chunks_mut::<4>().0 {
                     px[0] = 0xFF;
                     px[1] = 0xFF;
@@ -441,35 +534,45 @@ impl WorldAssets {
         loaded
     }
 
-    /// A coverage mask, its bytes handed to the shader 1:1 ([`mask_image`]): the minimap's circle.
+    /// A coverage mask, its bytes handed to the shader 1:1 ([`mask_image`]), read by `open`: the
+    /// minimap's circle.
     pub fn mask_texture(
         &mut self,
         path: &str,
+        open: LooseOpen,
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
-        let key = sprite_key(path);
+        let key = (sprite_key(path), open);
         if let Some(cached) = self.masks.get(&key) {
             return cached.clone();
         }
-        let loaded = decode_sprite(&self.chain, self.loose_root.as_deref(), path)
+        let loaded = decode_sprite(&self.chain, &self.loose, path, open)
             .map(|(w, h, rgba)| images.add(mask_image(w, h, rgba)));
         self.masks.insert(key, loaded.clone());
         loaded
     }
 
-    /// Decode a cursor BLP (`Interface\Cursor\Point.blp`) for winit's custom OS cursor; macOS
-    /// drives `NSCursor` from the raw RGBA instead.
+    /// A cursor BLP's RGBA (`Interface\Cursor\Point.blp`), opened with the loose flag as the
+    /// cursor code's `0x449610` opens it.
+    pub fn cursor_rgba(&self, path: &str) -> Option<(u32, u32, Vec<u8>)> {
+        let bytes = read_loose_or_chain(
+            &self.chain,
+            &self.loose,
+            &normalize_path(path),
+            LooseOpen::Index,
+        )?;
+        blp_to_rgba(&bytes).ok()
+    }
+
+    /// Decode a cursor BLP ([`Self::cursor_rgba`]) for winit's custom OS cursor; macOS drives
+    /// `NSCursor` from the raw RGBA instead.
     #[cfg(not(target_os = "macos"))]
     pub fn decode_cursor(
         &mut self,
         path: &str,
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
-        let (w, h, rgba) = benilla_formats::read_texture_rgba(
-            &mut self.chain.lock_recover(),
-            &normalize_path(path),
-        )
-        .ok()?;
+        let (w, h, rgba) = self.cursor_rgba(path)?;
         Some(images.add(cursor_texture(w, h, rgba)))
     }
 
@@ -636,12 +739,19 @@ mod tests {
         let addons = root.join("AddOns");
         std::fs::create_dir_all(addons.join("Jukebox")).unwrap();
         std::fs::write(addons.join("Jukebox").join("Track.mp3"), b"ID3!").unwrap();
+        let folder = LooseFiles {
+            addons: Some(addons.clone()),
+            install: None,
+        };
+        let none = LooseFiles::default();
+        let open = LooseOpen::Index;
 
         // The archive leg: a client track the chain does carry.
         let theme = read_loose_or_chain(
             &chain,
-            Some(&addons),
+            &folder,
             "Sound\\Music\\GlueScreenMusic\\wow_main_theme.mp3",
+            open,
         )
         .expect("the glue theme lives in sound.MPQ");
         assert!(theme.len() > 1_000_000, "the theme is a ~3 MB stored MP3");
@@ -650,8 +760,9 @@ mod tests {
         assert_eq!(
             read_loose_or_chain(
                 &chain,
-                Some(&addons),
-                "Interface\\AddOns\\Jukebox\\Track.mp3"
+                &folder,
+                "Interface\\AddOns\\Jukebox\\Track.mp3",
+                open
             )
             .as_deref(),
             Some(&b"ID3!"[..])
@@ -664,7 +775,7 @@ mod tests {
             .read(stock)
             .expect("interface.MPQ carries it");
         assert_eq!(
-            read_loose_or_chain(&chain, None, stock).as_deref(),
+            read_loose_or_chain(&chain, &none, stock, open).as_deref(),
             Some(&archived[..]),
             "with no folder the archive answers"
         );
@@ -677,12 +788,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_loose_or_chain(&chain, Some(&addons), stock).as_deref(),
+            read_loose_or_chain(&chain, &folder, stock, open).as_deref(),
             Some(&b"-- loose"[..]),
             "the loose copy shadows the archive's"
         );
+        // An open with flag 0 never sees it.
+        assert_eq!(
+            read_loose_or_chain(&chain, &folder, stock, LooseOpen::Archives).as_deref(),
+            Some(&archived[..]),
+            "a flag-0 open reads the archive"
+        );
         // A loose file that will not read is a miss: the index answered, so the archive is not
-        // asked (`0x6478d5`).
+        // asked (`0x647865`).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -691,19 +808,147 @@ mod tests {
                 .join("Blizzard_AuctionUI.lua");
             std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o000)).unwrap();
             let unreadable = std::fs::read(&loose).is_err();
-            let got = read_loose_or_chain(&chain, Some(&addons), stock);
+            let got = read_loose_or_chain(&chain, &folder, stock, open);
             std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).unwrap();
             if unreadable {
                 assert_eq!(got, None, "no fallback to the archive copy");
             }
         }
 
+        // The folder holding its own `.toc` is moved aside: the archive's copy answers again.
+        std::fs::write(
+            addons
+                .join("Blizzard_AuctionUI")
+                .join("Blizzard_AuctionUI.toc"),
+            b"## Interface: 11200",
+        )
+        .unwrap();
+        assert_eq!(
+            read_loose_or_chain(&chain, &folder, stock, open).as_deref(),
+            Some(&archived[..]),
+            "a moved-aside folder answers nothing"
+        );
+
         // In neither store: a plain miss, which every caller renders as silence.
-        assert!(read_loose_or_chain(&chain, Some(&addons), "Sound\\Music\\nope.mp3").is_none());
+        assert!(read_loose_or_chain(&chain, &folder, "Sound\\Music\\nope.mp3", open).is_none());
         // No folder configured (a capture run, where `local_state` is hermetic): chain only.
         assert!(
-            read_loose_or_chain(&chain, None, "Interface\\AddOns\\Jukebox\\Track.mp3").is_none()
+            read_loose_or_chain(&chain, &none, "Interface\\AddOns\\Jukebox\\Track.mp3", open)
+                .is_none()
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A fresh folder under the temp dir, removed when dropped.
+    struct Tree(PathBuf);
+
+    impl Tree {
+        fn new(tag: &str) -> Tree {
+            let dir = std::env::temp_dir().join(format!(
+                "benilla-loose-files-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Tree(dir)
+        }
+
+        fn file(&self, rel: &str, body: &str) {
+            let path = self.0.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, body).unwrap();
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn body(path: Option<PathBuf>) -> Option<String> {
+        path.map(|p| std::fs::read_to_string(p).unwrap())
+    }
+
+    /// A flagged open finds an install's loose file by its path below the install or `Data\`, a
+    /// font's by its bare name first; an `Interface\AddOns\` path reads benilla's AddOns folder
+    /// alone; an open with flag 0 finds nothing loose.
+    #[test]
+    fn loose_files_answer_the_flagged_opens_from_the_install_and_the_addons_folder() {
+        let install = Tree::new("install");
+        install.file("Fonts/FRIZQT__.TTF", "fonts dir");
+        install.file("Data/FRIZQT__.TTF", "data root");
+        install.file("Data/Interface/Glues/Common/Glues-WoW-Logo.blp", "logo");
+        install.file("Interface/AddOns/Atlas/Atlas.toc", "install addon");
+        let addons = Tree::new("addons");
+        addons.file("Atlas/Atlas.toc", "benilla addon");
+        let ix = LooseIndex::build(Some(&install.0), &install.0.join("Data"));
+        let loose = LooseFiles {
+            addons: Some(addons.0.clone()),
+            install: Some(Arc::new(ix)),
+        };
+        let logo = "Interface\\Glues\\Common\\Glues-WoW-Logo.blp";
+        assert_eq!(
+            body(loose.find(logo, LooseOpen::Index)).as_deref(),
+            Some("logo")
+        );
+        assert_eq!(loose.find(logo, LooseOpen::Archives), None);
+        let font = "Fonts\\FRIZQT__.TTF";
+        assert_eq!(
+            body(loose.find(font, LooseOpen::Index)).as_deref(),
+            Some("fonts dir")
+        );
+        assert_eq!(
+            body(loose.find(font, LooseOpen::BareNameFirst)).as_deref(),
+            Some("data root")
+        );
+        assert_eq!(
+            body(loose.find("Interface/AddOns/atlas/ATLAS.toc", LooseOpen::Index)).as_deref(),
+            Some("benilla addon")
+        );
+        let no_folder = LooseFiles {
+            addons: None,
+            install: loose.install.clone(),
+        };
+        assert_eq!(
+            no_folder.find("Interface\\AddOns\\Atlas\\Atlas.toc", LooseOpen::Index),
+            None,
+            "the install's AddOns folder is never read"
+        );
+    }
+
+    /// A `Blizzard*` folder holding its own `.toc`, any case, is moved aside and answers no path;
+    /// one without it, or a folder of another name, answers as before.
+    #[test]
+    fn a_blizzard_folder_with_its_toc_is_moved_aside() {
+        let addons = Tree::new("aside");
+        addons.file("Blizzard_Foo/Blizzard_Foo.toc", "toc");
+        addons.file("Blizzard_Foo/Foo.lua", "foo");
+        addons.file("BLIZZARD_Bar/blizzard_bar.TOC", "toc");
+        addons.file("BLIZZARD_Bar/Bar.lua", "bar");
+        addons.file("Blizzard_AuctionUI/Blizzard_AuctionUI.pub", "pub");
+        addons.file("Blizzard_AuctionUI/Templates.xml", "templates");
+        addons.file("MyBlizzard/MyBlizzard.toc", "toc");
+        addons.file("MyBlizzard/Mine.lua", "mine");
+        let root = &addons.0;
+        assert!(moved_aside(&root.join("Blizzard_Foo"), "Blizzard_Foo"));
+        assert!(moved_aside(&root.join("BLIZZARD_Bar"), "BLIZZARD_Bar"));
+        assert!(!moved_aside(
+            &root.join("Blizzard_AuctionUI"),
+            "Blizzard_AuctionUI"
+        ));
+        assert!(!moved_aside(&root.join("MyBlizzard"), "MyBlizzard"));
+        let get = |p: &str| body(loose_addon_file(root, &normalize_path(p)));
+        assert_eq!(get("Interface\\AddOns\\Blizzard_Foo\\Foo.lua"), None);
+        assert_eq!(get("Interface\\AddOns\\blizzard_bar\\Bar.lua"), None);
+        assert_eq!(
+            get("Interface\\AddOns\\Blizzard_AuctionUI\\Templates.xml").as_deref(),
+            Some("templates")
+        );
+        assert_eq!(
+            get("Interface\\AddOns\\MyBlizzard\\Mine.lua").as_deref(),
+            Some("mine")
+        );
     }
 }

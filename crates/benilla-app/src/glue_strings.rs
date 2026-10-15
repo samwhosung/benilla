@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use benilla_assets::{LockRecover, WorldAssets};
+use benilla_assets::WorldAssets;
 
 const GLUE_STRINGS: &str = "Interface\\GlueXML\\GlueStrings.lua";
 const GLUE_LOCALIZATION: &str = "Interface\\GlueXML\\GlueLocalization.lua";
@@ -46,22 +46,22 @@ impl GlueStrings {
 /// Either may be missing on its own.
 pub(crate) fn load_glue_strings(mut commands: Commands, assets: Option<Res<WorldAssets>>) {
     let mut table = GlueStrings::default();
+    // Interface files open with the loose flag, as `SFile::Load` does for the glue's `.lua`.
     if let Some(assets) = assets {
-        let mut chain = assets.chain.lock_recover();
-        match chain.read_file(GLUE_STRINGS) {
-            Ok(bytes) => {
+        match assets.read_file_or_loose(GLUE_STRINGS) {
+            Some(bytes) => {
                 table.0 = parse_glue_strings(&String::from_utf8_lossy(&bytes));
                 info!("glue strings: {} entries", table.0.len());
             }
-            Err(e) => warn!("glue strings unavailable ({e:#}) — built-in captions only"),
+            None => warn!("glue strings unavailable — built-in captions only"),
         }
-        match chain.read_file(GLUE_LOCALIZATION) {
-            Ok(bytes) => {
+        match assets.read_file_or_loose(GLUE_LOCALIZATION) {
+            Some(bytes) => {
                 let patch = parse_localize_overrides(&String::from_utf8_lossy(&bytes));
                 info!("glue strings: {} locale overrides", patch.len());
                 table.0.extend(patch);
             }
-            Err(e) => warn!("glue localization unavailable ({e:#}) — unpatched glue strings"),
+            None => warn!("glue localization unavailable — unpatched glue strings"),
         }
     }
     commands.insert_resource(table);

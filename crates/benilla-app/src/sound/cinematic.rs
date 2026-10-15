@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 
-use benilla_assets::{LockRecover, WorldAssets};
+use benilla_assets::WorldAssets;
 use benilla_world::schedule::WorldStage;
 
 use super::mixer::{self, StreamingSoundHandle};
@@ -100,10 +100,10 @@ fn narrate(
         warn!("cinematic voice: sound {sound_id} has no file");
         return;
     };
-    let bytes = {
-        let chain = assets.chain.lock_recover();
-        chain.read(&path)
-    };
+    // Every file FMOD opens is a loose-flagged open (`0x7a8860`).
+    let bytes = assets
+        .read_file_or_loose(&path)
+        .ok_or_else(|| anyhow::anyhow!("not in the loose files or the patch chain"));
     let data = match bytes.and_then(mixer::stream_from_bytes) {
         Ok(d) => d,
         Err(e) => {

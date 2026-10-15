@@ -284,7 +284,7 @@ fn the_reported_book_crest_draws_at_the_blps_own_size() {
     let mut s = UiScript::new().unwrap();
     // Wired as `ui_script::lifecycle::install_addon_asset_resolvers` wires the live one.
     s.set_texture_size_probe(Box::new(move |path| {
-        benilla_assets::sprite_dimensions(&chain, None, path)
+        benilla_assets::sprite_dimensions(&chain, &benilla_assets::LooseFiles::default(), path)
     }));
     load_ui(&s);
     s.set_item_text(Some(ItemTextState {

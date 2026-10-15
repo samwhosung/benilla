@@ -20,7 +20,7 @@ use benilla_formats::{load_loading_screens, LoadingScreenCatalog};
 
 use benilla_assets::LockRecover;
 use benilla_assets::MapCatalogRes;
-use benilla_assets::{AssetSet, WorldAssets};
+use benilla_assets::{AssetSet, LooseOpen, WorldAssets};
 use benilla_world::schedule::WorldStage;
 use benilla_world::terrain_stream::WorldLoadProgress;
 use benilla_world::world_map::CurrentMap;
@@ -314,8 +314,9 @@ fn setup_loading_screen(
         }
     }
 
-    // The two layers 1.12 draws, as sRGB clamp sprites.
-    let mut tex = |path: &str| assets.sprite_texture(path, &mut images);
+    // The two layers 1.12 draws, as sRGB clamp sprites, from the archives alone: the loading
+    // screen's `TextureCreate` calls (`0x406891`) pass file flag 0.
+    let mut tex = |path: &str| assets.sprite_texture_opened(path, LooseOpen::Archives, &mut images);
     let Some(border) = tex("Interface\\Glues\\LoadingBar\\Loading-BarBorder.blp") else {
         error!("loading bar textures missing — plain black cover, no art");
         return;
@@ -613,9 +614,11 @@ fn drive_loading_screen(
                 .map(str::to_string);
             let handle = path.and_then(|path| match screen.art_cache.get(&path) {
                 Some(h) => Some(h.clone()),
-                None => assets.sprite_texture(&path, &mut images).inspect(|h| {
-                    screen.art_cache.insert(path.clone(), h.clone());
-                }),
+                None => assets
+                    .sprite_texture_opened(&path, LooseOpen::Archives, &mut images)
+                    .inspect(|h| {
+                        screen.art_cache.insert(path.clone(), h.clone());
+                    }),
             });
             match (handle, backdrop.single_mut()) {
                 (Some(handle), Ok((mut img, _))) => {

@@ -32,7 +32,7 @@ use crate::particles::buffer::{
 use crate::schedule::WorldStage;
 use crate::view::WorldCamera;
 use crate::world_unit::{ViewerUnit, WorldUnit};
-use benilla_assets::{AssetSet, WorldAssets};
+use benilla_assets::{AssetSet, LooseOpen, WorldAssets};
 
 use params::{foam_params, foam_uv, rand01, record_alpha, record_size, WadeState};
 use params::{wake_cooldown, RING_INTERVAL};
@@ -167,13 +167,14 @@ fn setup_water_fx(
     commands.insert_resource(FoamAssets { ring, wake });
 }
 
-/// Decodes a foam stencil with its authored RGBA verbatim, as raw gamma bytes.
+/// Decodes a foam stencil with its authored RGBA verbatim, as raw gamma bytes, from the archives
+/// alone: a world texture's open passes flag 0.
 fn foam_image(
     world_assets: &mut WorldAssets,
     path: &str,
     images: &mut Assets<Image>,
 ) -> Option<Handle<Image>> {
-    let Some((w, h, rgba)) = world_assets.decode_rgba(path) else {
+    let Some((w, h, rgba)) = world_assets.decode_rgba(path, LooseOpen::Archives) else {
         warn!("water foam: {path} unavailable — no water foam");
         return None;
     };

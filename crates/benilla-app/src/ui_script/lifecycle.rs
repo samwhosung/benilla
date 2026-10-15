@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 
-use benilla_assets::LockRecover;
+use benilla_assets::{LockRecover, LooseOpen};
 use benilla_ui::script::{GlueNotice, UiScript};
 
 use super::manifest::silenced_ui_load;
@@ -170,29 +170,28 @@ fn seed_vm_clock(world: &mut World, script: &mut UiScript) {
     }
 }
 
-/// Wire `Interface\AddOns\` art and fonts: the decoder's loose-file root and the VM's texture,
-/// size and font probes, so the path forms of `SetTexture` and `SetFont` answer the reference's
-/// 1|nil load verdict, and a region with no authored size on an axis takes it from its art as the
-/// client's virtual size getters do. Each probe resolves [`addons::root`] through the store its
-/// renderer reads, so the answer is what draws; they test existence, not decode.
+/// Wire the loose files into art and fonts: the decoder's AddOns folder, beside the install's
+/// index it already reads, and the VM's texture, size and font probes, so the path forms of
+/// `SetTexture` and `SetFont` answer the reference's 1|nil load verdict, and a region with no
+/// authored size on an axis takes it from its art as the client's virtual size getters do. Each
+/// probe resolves through the store and the open its renderer reads (an interface texture's,
+/// [`LooseOpen::Index`], and a font face's, [`LooseOpen::BareNameFirst`]), so the answer is what
+/// draws; they test existence, not decode.
 fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
-    let root = addons::root();
     let Some(mut assets) = world.get_resource_mut::<benilla_assets::WorldAssets>() else {
         return;
     };
-    assets.set_loose_addon_root(root.clone());
+    assets.set_loose_addon_root(addons::root());
+    let loose = assets.loose().clone();
     let chain = assets.chain.clone();
     let size_chain = chain.clone();
-    let size_root = root.clone();
+    let size_loose = loose.clone();
     let font_chain = chain.clone();
-    let font_root = root.clone();
+    let font_loose = loose.clone();
     script.set_texture_probe(Box::new(move |path| {
-        benilla_assets::sprite_candidates(path).iter().any(|c| {
-            chain.lock_recover().contains(c)
-                || root
-                    .as_deref()
-                    .is_some_and(|r| benilla_assets::loose_addon_file(r, c).is_some())
-        })
+        benilla_assets::sprite_candidates(path)
+            .iter()
+            .any(|c| chain.lock_recover().contains(c) || loose.find(c, LooseOpen::Index).is_some())
     }));
     // Keyed by the path exactly as the region carries it, so a hit allocates nothing (this is
     // asked per zero-size textured region per layout pass); misses are cached too.
@@ -202,11 +201,11 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
         if let Some(cached) = sizes.borrow().get(path) {
             return *cached;
         }
-        let measured = benilla_assets::sprite_dimensions(&size_chain, size_root.as_deref(), path);
+        let measured = benilla_assets::sprite_dimensions(&size_chain, &size_loose, path);
         sizes.borrow_mut().insert(path.to_string(), measured);
         measured
     }));
-    // Existence over the same two stores, in the same order, as `ui_text::engine`'s face loader,
+    // Existence over the same stores, in the same order, as `ui_text::engine`'s face loader,
     // memoised because a path's answer cannot change and an addon may call `SetFont` every frame.
     let seen: std::cell::RefCell<std::collections::HashMap<String, bool>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
@@ -214,9 +213,8 @@ fn install_addon_asset_resolvers(world: &mut World, script: &mut UiScript) {
         if let Some(&cached) = seen.borrow().get(path) {
             return cached;
         }
-        let found = font_root.as_deref().is_some_and(|r| {
-            benilla_assets::loose_addon_file(r, &benilla_assets::normalize_path(path)).is_some()
-        }) || font_chain.lock_recover().contains(path);
+        let found = font_loose.find(path, LooseOpen::BareNameFirst).is_some()
+            || font_chain.lock_recover().contains(path);
         seen.borrow_mut().insert(path.to_string(), found);
         found
     }));
