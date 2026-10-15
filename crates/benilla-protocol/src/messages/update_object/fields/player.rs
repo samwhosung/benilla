@@ -415,11 +415,6 @@ impl ObjectFields {
         self.get_u32(FIELD_PLAYER_FIELD_BYTES)
             .map(|b| ((b >> 24) & 0xff) as u8)
     }
-    /// `PLAYER_BYTES_3` whole (public): gender, drunkenness, the city-protector title and the
-    /// rank, bytes 0 to 3; the four bytes the reference's rank watch `0x5ddc5c` compares.
-    pub fn player_bytes_3(&self) -> Option<u32> {
-        self.get_u32(FIELD_PLAYER_BYTES_3)
-    }
     /// `PLAYER_BYTES_3` byte 3 (public, `UpdateFields_1_12_1.h:125`): the current internal rank
     /// (`HonorMgr.cpp:900`), 0 unranked, 1-4 negative, 5 up positive, indexing `PVP_RANK_*`;
     /// the drawn rank is `rank > 4 ? rank - 4 : -rank` (`HonorMgr.cpp:991`).
