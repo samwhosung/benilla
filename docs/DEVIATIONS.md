@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 228
+- [benilla-app](#benilla-app): 227
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 16
@@ -346,8 +346,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_honor
 
-- The reference watches the whole `PLAYER_BYTES_3` dword, so a drunkenness change also fires `PLAYER_PVP_RANK_CHANGED`; we watch byte 3 alone, because that repaint is identical. ([`src/ui_honor.rs:13`](../crates/benilla-app/src/ui_honor.rs#L13))
-- We clear it whenever the inspected token's guid moves, because our window re-resolves its token each frame and both tabs read it, so the reference's rule would let the two tabs show different players. `ClearInspectPlayer` drops the token, which clears the slot here too. ([`src/ui_honor.rs:188`](../crates/benilla-app/src/ui_honor.rs#L188))
+- We clear it whenever the inspected token's guid moves, because our window re-resolves its token each frame and both tabs read it, so the reference's rule would let the two tabs show different players. `ClearInspectPlayer` drops the token, which clears the slot here too. ([`src/ui_honor.rs:206`](../crates/benilla-app/src/ui_honor.rs#L206))
 
 #### ui_instance
 
