@@ -399,6 +399,122 @@ mod tests {
         assert_eq!(craft_tooltip(5149, &teacher), CraftTooltip::Spell(999_999));
     }
 
+    /// `0x4f62cc`/`0x4f76b2` count a reagent with `0x622130` and `0x4ffb10` finds a tool with
+    /// `0x622270`, both at mask 0: a copy worn in a slot or in the keyring counts, one in the bank
+    /// does not.
+    #[test]
+    fn a_recipe_counts_a_worn_copy_and_the_keyring_but_not_the_bank() {
+        use benilla_protocol::field::{FIELD_ITEM_STACK_COUNT, FIELD_OBJECT_ENTRY};
+        use benilla_protocol::ObjectFields;
+        const DUST: u32 = 10_940;
+        const ROD: u32 = 6_218;
+        const SPELL: u32 = 7_000;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut actions = PlayerActions::default();
+        actions.spells.insert(SPELL);
+        let mut items = Items::default();
+        items.insert_template(DUST, Some(crate::items::test_template("Strange Dust")));
+        items.insert_template(ROD, Some(crate::items::test_template("Runed Rod")));
+        app.init_resource::<CraftOpen>()
+            .insert_resource(actions)
+            .init_resource::<crate::spell::SpellModifiers>()
+            .init_resource::<crate::net::GuidIndex>()
+            .insert_resource(items)
+            .insert_resource(NetCommands(tx))
+            .insert_resource(crate::ui_action::Spells {
+                catalog: benilla_formats::SpellCatalog::from_displays(
+                    [(
+                        SPELL,
+                        SpellDisplay {
+                            name: "Enchant".into(),
+                            cast_ui: 3,
+                            reagents: [
+                                (DUST, 2),
+                                (0, 0),
+                                (0, 0),
+                                (0, 0),
+                                (0, 0),
+                                (0, 0),
+                                (0, 0),
+                                (0, 0),
+                            ],
+                            totems: [ROD, 0],
+                            ..Default::default()
+                        },
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+                ..crate::ui_action::Spells::empty_for_tests()
+            })
+            .insert_resource(SkillLines {
+                catalog: benilla_formats::SkillLineCatalog::from_abilities([(
+                    SPELL,
+                    benilla_formats::SlaInfo {
+                        skill_id: 333,
+                        req_skill_value: 1,
+                        forward_spell_id: 0,
+                        trivial_low: 1,
+                        trivial_high: 2,
+                    },
+                )]),
+            });
+        for (guid, entry, n) in [
+            (0x4000_0000_0000_0001u64, DUST, 2u32),
+            (0x4000_0000_0000_0002, ROD, 1),
+        ] {
+            crate::items::test_spawn_item(
+                app.world_mut(),
+                guid,
+                ObjectFields::from_pairs(&[
+                    (FIELD_OBJECT_ENTRY, entry),
+                    (FIELD_ITEM_STACK_COUNT, n),
+                ]),
+                false,
+            );
+        }
+        let player = app
+            .world_mut()
+            .spawn((SelfPlayer, ObjectStore(Default::default())))
+            .id();
+        app.insert_non_send_resource(UiScript::new().unwrap());
+        app.add_systems(Update, feed_craft);
+        {
+            let mut open = app.world_mut().resource_mut::<CraftOpen>();
+            open.line = Some(333);
+            open.craft_type = 3;
+        }
+        // Where the dust and the rod sit: player slots, 17 worn, 81 the keyring, 39 the bank.
+        let mut read = |dust_slot: u16, rod_slot: u16| -> (i64, bool) {
+            let seat = |slot: u16, guid: u64| {
+                let lo = 486 + 2 * slot;
+                [(lo, guid as u32), (lo + 1, (guid >> 32) as u32)]
+            };
+            app.world_mut()
+                .entity_mut(player)
+                .insert(ObjectStore(ObjectFields::from_pairs(
+                    &[
+                        seat(dust_slot, 0x4000_0000_0000_0001),
+                        seat(rod_slot, 0x4000_0000_0000_0002),
+                    ]
+                    .concat(),
+                )));
+            app.update();
+            app.world()
+                .non_send_resource::<UiScript>()
+                .eval::<(i64, bool)>(
+                    "local _, _, _, have = GetCraftReagentInfo(1, 1) \
+                     local _, hasTool = GetCraftSpellFocus(1) return have, hasTool == 1",
+                )
+                .unwrap()
+        };
+        assert_eq!(read(23, 24), (2, true), "the backpack, as before");
+        assert_eq!(read(17, 18), (2, true), "worn copies");
+        assert_eq!(read(81, 82), (2, true), "the keyring");
+        assert_eq!(read(39, 40), (0, false), "the bank is outside mask 0");
+    }
+
     #[test]
     fn the_session_end_closes_the_craft_window() {
         let mut app = App::new();

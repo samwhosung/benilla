@@ -904,6 +904,75 @@ mod tests {
     use super::*;
     use benilla_protocol::messages::MailAttachment;
 
+    /// `0x4ad9fc` finds the paper with `0x622270` at mask 0: a copy worn in a slot or in the
+    /// keyring is carried (no cost line), one in the bank is not (the paper costs its price).
+    #[test]
+    fn a_paper_worn_or_in_the_keyring_is_carried_and_one_in_the_bank_is_not() {
+        use bevy::ecs::system::RunSystemOnce;
+        const PAPER: u32 = 9_311;
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let mut app = App::new();
+        let mut items = Items::default();
+        let mut paper = crate::items::test_template("Blank Paper");
+        paper.buy_price = 40;
+        items.insert_template(PAPER, Some(paper));
+        app.init_resource::<crate::net::GuidIndex>()
+            .insert_resource(items)
+            .insert_resource(NetCommands(tx));
+        crate::items::test_spawn_item(
+            app.world_mut(),
+            0x4000_0000_0000_0001,
+            benilla_protocol::ObjectFields::from_pairs(&[(3, PAPER), (14, 1)]),
+            false,
+        );
+        let player = app
+            .world_mut()
+            .spawn((
+                SelfPlayer,
+                crate::net::Guid(7),
+                ObjectStore(Default::default()),
+            ))
+            .id();
+        let catalog = std::sync::Arc::new(Stationery(
+            benilla_formats::StationeryCatalog::from_rows(vec![benilla_formats::StationeryRow {
+                id: 5,
+                item: PAPER,
+                texture: "PAPER".into(),
+                flags: 0,
+            }]),
+        ));
+        let mut costs = |slot: u16| -> Vec<Option<u32>> {
+            let lo = 486 + 2 * slot;
+            app.world_mut().entity_mut(player).insert(ObjectStore(
+                benilla_protocol::ObjectFields::from_pairs(&[
+                    (lo, 0x4000_0000_0000_0001u64 as u32),
+                    (lo + 1, 0x4000_0000),
+                ]),
+            ));
+            let catalog = std::sync::Arc::clone(&catalog);
+            app.world_mut()
+                .run_system_once(
+                    move |self_q: Query<(&ObjectStore, &crate::net::Guid), With<SelfPlayer>>,
+                          objects: Objects,
+                          items: Res<Items>,
+                          commands: Res<NetCommands>| {
+                        stationeries(&catalog, &self_q, &objects, &items, None, &commands)
+                            .into_iter()
+                            .map(|v| v.cost)
+                            .collect::<Vec<_>>()
+                    },
+                )
+                .unwrap()
+        };
+        assert_eq!(costs(23), [None], "the backpack, as before");
+        assert_eq!(costs(17), [None], "worn");
+        assert_eq!(costs(81), [None], "the keyring");
+        assert!(
+            costs(39).is_empty(),
+            "the bank is outside mask 0, and the paper is not free"
+        );
+    }
+
     /// `GetPackageInfo`'s icon is the basename under `Interface\Icons` (`0x4ae4c6`, `0x4ae4eb`).
     #[test]
     fn a_package_row_answers_its_icon_under_the_icon_folder() {
