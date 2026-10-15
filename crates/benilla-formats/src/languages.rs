@@ -260,6 +260,15 @@ mod tests {
         }
         // No such race: the reference's no-record edge.
         assert_eq!(langs.name(99), None);
+
+        // A locale whose column the install leaves empty: every race reads no name, not a panic.
+        let other = crate::Locale::from_index((chain.locale().index() + 5) % 8).unwrap();
+        let mut chain = Chain::open(&data)
+            .expect("open patch chain")
+            .with_locale(other);
+        let langs = load_default_languages(&mut chain).expect("load");
+        assert_eq!(langs.len(), 9, "the join still finds every row");
+        assert_eq!(langs.name(1), None);
     }
 
     #[test]

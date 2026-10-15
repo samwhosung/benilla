@@ -286,13 +286,22 @@ mod tests {
         );
     }
 
-    /// An id with no row has no ladder at all: no line.
+    /// A locale whose column the install leaves empty runs every ladder dry (`0x49b4bd`), and an id
+    /// with no row has no ladder at all: no line either way.
     #[test]
-    fn an_unknown_emote_composes_nothing() {
+    fn an_unshipped_locale_composes_nothing() {
         let data = crate::wow_data_or_skip!();
         let mut chain = Chain::open(&data).expect("open patch chain");
         let cat = load_emote_text_catalog(&mut chain).expect("load");
         assert_eq!(cat.compose(9999, &line("Bob", "Jane", "Me")), None);
+
+        let other = crate::Locale::from_index((chain.locale().index() + 5) % 8).unwrap();
+        let mut chain = Chain::open(&data)
+            .expect("open patch chain")
+            .with_locale(other);
+        let cat = load_emote_text_catalog(&mut chain).expect("load");
+        assert_eq!(cat.len(), 169, "the sentence table is the same");
+        assert_eq!(cat.compose(WAVE, &line("Bob", "Jane", "Me")), None);
     }
 
     /// Three rows are silent as shipped: `SIT` (86) points columns 4 and 6 at `EmotesTextData`

@@ -73,6 +73,8 @@ pub use wow_ini::client_region;
 mod locale;
 pub use locale::Locale;
 mod itembagfamily;
+#[cfg(test)]
+mod locale_routing;
 pub use itembagfamily::{load_item_bag_families, ItemBagFamilyCatalog};
 mod itemclass;
 pub use itemclass::{load_item_classes, ItemClassCatalog};

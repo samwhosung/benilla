@@ -215,17 +215,30 @@ mod tests {
         assert!(!categories.is_empty(), "Region {region} has no categories");
     }
 
-    /// The install's `Wow.ini` names a locale, and the chain carries the one it names.
+    /// The install's `Wow.ini` names a locale, and the chain carries the one it names: the tag is
+    /// the language then the country, read off the file's own lines.
     #[test]
     fn the_chain_carries_the_installs_locale() {
         let data = crate::wow_data_or_skip!();
         let chain = crate::open_chain(&data).expect("open chain");
-        let locale = chain.locale();
-        assert_ne!(
-            locale.tag(),
-            0,
-            "the shipped Wow.ini names a language and country"
-        );
-        assert_eq!(locale, client_locale(&chain));
+        let text = String::from_utf8(chain.read(WOW_INI).expect("Wow.ini")).expect("ASCII");
+        let line = |key: &str| {
+            text.lines()
+                .find_map(|l| l.strip_prefix(key)?.strip_prefix('='))
+                .expect("the shipped file names the key")
+                .to_string()
+        };
+        let joined = format!("{}{}", line("Language"), line("Country"));
+        let packed = joined
+            .bytes()
+            .take(4)
+            .fold(0u32, |acc, b| (acc << 8) | u32::from(b));
+        assert_ne!(packed, 0);
+        assert_eq!(chain.locale().tag(), packed, "{joined}");
+        let index = crate::locale::LOCALE_NAMES
+            .iter()
+            .position(|n| n.eq_ignore_ascii_case(&joined))
+            .unwrap_or(0);
+        assert_eq!(chain.locale().index(), index, "{joined}");
     }
 }
