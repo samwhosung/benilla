@@ -27,7 +27,12 @@
 //! - the reset a script slot's own run does to the context (`0x7026ad`), so a stock handler an
 //!   addon's call fires in place still reads as tainted;
 //! - the rule that a binding body starts clean (`0x4b7aee`) is kept by `execute_binding` running
-//!   only from Rust at the top of the stack (`bindings.rs:632`, `:647`), which the scan relies on.
+//!   only from Rust at the top of the stack (`bindings.rs:632`, `:647`), which the scan relies on;
+//! - an event the app fires after the input event that caused it has returned (a handler of
+//!   `PLAYER_TARGET_CHANGED` after a TAB, say) runs with no input event up, where the reference
+//!   fires it inside the key's `ExecuteBinding` with the binding flag still raised
+//!   ([`super::protected`]). Only a macro's lines, which the app runs inside `UseAction`, get the
+//!   events back.
 
 use mlua::{Function, Lua, Table, Value};
 

@@ -6,6 +6,7 @@
 
 use mlua::Lua;
 
+use super::protected::{self, Tag};
 use super::Model;
 
 /// A duel intent queued by the globals, drained by `UiScript::take_duel_requests`.
@@ -63,8 +64,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "StartDuel",
         lua.create_function(|lua, name: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.duel_requests.push(DuelRequest::StartByName(name));
+            // The challenge is a plain cast (`CastDuelSpell 0x4d4810` → `0x6e5a90`), behind the
+            // gate's tag 2 (`0x6e4bc1`).
+            if protected::gate(lua, Tag::CAST) {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.duel_requests.push(DuelRequest::StartByName(name));
+            }
             Ok(())
         })?,
     )?;
@@ -72,8 +77,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "StartDuelUnit",
         lua.create_function(|lua, unit: String| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.duel_requests.push(DuelRequest::StartByUnit(unit));
+            if protected::gate(lua, Tag::CAST) {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.duel_requests.push(DuelRequest::StartByUnit(unit));
+            }
             Ok(())
         })?,
     )?;

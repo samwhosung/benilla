@@ -7,6 +7,7 @@ use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi::{flag, number_arg};
 use super::cursor::{self, CursorItem, CursorPayload};
+use super::protected::{self, Tag};
 use super::Model;
 
 /// The petition lines an item tooltip prints under the name (`0x854d7c..0x854dd0`): the title and
@@ -157,6 +158,9 @@ pub struct ContainerUse {
     pub asks: bool,
     /// `onSelf`: the use targets the player in place of the selection (`0x4fa17d`-`0x4fa18e`).
     pub on_self: bool,
+    /// What the protected-action gate's tag 2 allowed the call: an item's on-use spell casts
+    /// through `TryCastSpell`, behind it (`0x4fa1a6` → `0x5d8d00` → `0x5d9258` → `0x6e5a90`).
+    pub may_cast: bool,
 }
 
 /// One enchant slot as the tooltip renders it (`0x52c9f9`..`0x52ca23`); the app resolves the row.
@@ -364,7 +368,13 @@ pub enum UiCursorMode {
 /// deposit (`0x4fa312`, `0x4fa34b`), the sale (`0x4fa37f`), the open (`0x5edcd9`) and the wrap
 /// paper (`0x5edea0`). The equip arm is not done here: it returns its item, which the call puts on
 /// the cursor ([`use_equip_arm`]). The app sends each arm.
-fn use_cleared(model: &mut super::Model, bag: i64, slot: u32, on_self: bool) -> Option<CursorItem> {
+fn use_cleared(
+    model: &mut super::Model,
+    bag: i64,
+    slot: u32,
+    on_self: bool,
+    may_cast: bool,
+) -> Option<CursorItem> {
     let s = model
         .containers
         .get(&bag)
@@ -415,6 +425,7 @@ fn use_cleared(model: &mut super::Model, bag: i64, slot: u32, on_self: bool) -> 
             arm,
             asks: false,
             on_self,
+            may_cast,
         }));
     match arm {
         UseArm::Withdraw | UseArm::Deposit | UseArm::Sell | UseArm::Item(UseFork::Open) => {
@@ -430,7 +441,7 @@ fn use_cleared(model: &mut super::Model, bag: i64, slot: u32, on_self: bool) -> 
 /// `AutoEquipCursorItem` (`0x4fa3ff`), then the item locks unless it is a projectile
 /// (`0x4fa40b`, `0x4fa418`), whose clear unlocked it instead (`0x5e1711`). A bind-on-equip item
 /// sends nothing: it stays held and locked under the question.
-fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem, on_self: bool) {
+fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem, on_self: bool, may_cast: bool) {
     let guid = item.guid;
     let projectile = item.item_class == Some(cursor::ITEM_CLASS_PROJECTILE);
     let step = cursor::equip::auto_equip_from(lua, item, false);
@@ -449,6 +460,7 @@ fn use_equip_arm(lua: &Lua, bag: i64, slot: u32, item: CursorItem, on_self: bool
                     arm: UseArm::Item(UseFork::Equip),
                     asks: matches!(step, cursor::equip::AutoEquip::Asked { .. }),
                     on_self,
+                    may_cast,
                 }));
         }
         if !projectile {
@@ -482,7 +494,12 @@ fn arm_gift_wrap(model: &mut super::Model, bag: i64, slot: u32) {
 ///
 /// Returns the item a pickup puts on the cursor, which the binding sets past this segment
 /// ([`cursor::pick_up_item`]), so the setter's inner clear signals on its own.
-fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Option<CursorItem> {
+fn pickup_container_item(
+    model: &mut super::Model,
+    bag: i64,
+    slot: u32,
+    may_cast: bool,
+) -> Option<CursorItem> {
     // An armed gift wrap completes here, before the cursor is read. `PickupContainerItem` is the
     // only caller of the wrap sender `0x5edfc0`, so an equipped item cannot be wrapped.
     if let Some(wrap) = model.pending_wrap {
@@ -531,7 +548,11 @@ fn pickup_container_item(model: &mut super::Model, bag: i64, slot: u32) -> Optio
             .and_then(|c| c.slots.get(&slot))
             .is_some_and(|s| s.item_id != 0);
         if occupied && model.item_pick_armed {
-            model.item_picks.push((bag, slot));
+            model.item_picks.push(cursor::ItemPick {
+                bag,
+                slot,
+                may_cast,
+            });
         } else if occupied {
             model.container_repairs.push((bag, slot));
         }
@@ -856,10 +877,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // payload goes back, never placed, and an armed gift wrap is cancelled. The clear's
             // events run first, as the reference's do before it reads the slot.
             super::tick::verb(lua, cursor::clear_cursor);
-            if let Some(item) =
-                super::tick::verb(lua, |model| use_cleared(model, bag, slot, on_self))
-            {
-                use_equip_arm(lua, bag, slot, item, on_self);
+            // The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2.
+            let may_cast = protected::gate(lua, Tag::CAST);
+            if let Some(item) = super::tick::verb(lua, |model| {
+                use_cleared(model, bag, slot, on_self, may_cast)
+            }) {
+                use_equip_arm(lua, bag, slot, item, on_self, may_cast);
             }
             Ok(())
         })?,
@@ -870,9 +893,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     lua.globals().set(
         "PickupContainerItem",
         lua.create_function(|lua, (bag, slot): (i64, u32)| {
-            if let Some(item) =
-                super::tick::verb(lua, |model| pickup_container_item(model, bag, slot))
-            {
+            // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind
+            // the gate's tag 2.
+            let may_cast = protected::gate(lua, Tag::CAST);
+            if let Some(item) = super::tick::verb(lua, |model| {
+                pickup_container_item(model, bag, slot, may_cast)
+            }) {
                 cursor::pick_up_item(lua, item);
             }
             Ok(())
@@ -1264,6 +1290,44 @@ mod tests {
             shape(&mut s, 1),
             "5:number:1:nil:nil",
             "the held item reads locked"
+        );
+    }
+
+    /// The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2 (`0x4fa1a6` →
+    /// `0x5d8d00` → `0x5d9258` → `0x6e5a90` → `0x6e4bc1`). The call keeps its other arms, so it is
+    /// queued whatever the gate said, carrying the answer; an armed item-targeting spell's pick
+    /// carries it the same way (`0x4f9c54` → `0x495d60` → `0x6e5b9e`).
+    #[test]
+    fn container_uses_and_picks_carry_what_the_gate_allowed() {
+        let may_cast = |s: &mut UiScript| -> Vec<bool> {
+            s.take_script_calls()
+                .into_iter()
+                .map(|c| c.may_cast())
+                .collect()
+        };
+        let mut s = UiScript::new().unwrap();
+        s.set_container(0, Some(backpack()));
+        s.run("UseContainerItem(0, 1)").unwrap();
+        s.run(r#"RunScript("UseContainerItem(0, 1)")"#).unwrap();
+        s.run_binding(r#"RunScript("UseContainerItem(0, 1)")"#)
+            .unwrap();
+        assert_eq!(
+            may_cast(&mut s),
+            [true, false, true],
+            "the client's own, a macro outside an input event, a macro inside a key's body"
+        );
+
+        s.set_item_pick_armed(true);
+        s.run("PickupContainerItem(0, 1)").unwrap();
+        s.run(r#"RunScript("PickupContainerItem(0, 1)")"#).unwrap();
+        s.run_binding(r#"RunScript("PickupContainerItem(0, 1)")"#)
+            .unwrap();
+        assert_eq!(
+            s.take_item_picks()
+                .iter()
+                .map(|p| (p.bag, p.slot, p.may_cast))
+                .collect::<Vec<_>>(),
+            [(0, 1, true), (0, 1, false), (0, 1, true)]
         );
     }
 

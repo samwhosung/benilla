@@ -16,7 +16,7 @@ use crate::order;
 use crate::widget::{ButtonState, FrameHandle};
 
 use super::clip::{hit_clip, hit_rect};
-use super::{button, cursor, editbox, event, Model, UiScript};
+use super::{button, cursor, editbox, event, protected, Model, UiScript};
 
 /// The double-click interval, 300 ms, a constant in the Button mouse-up dispatcher `0x7792d0`
 /// (`0x77937b cmp ecx, 0x12c` on the `0x42c010` millisecond clock). It is not the OS double-click
@@ -605,7 +605,9 @@ impl UiScript {
         }
         if let Some(id) = click_id {
             // Shared with `Click()`: gated on the Button being enabled; a CheckButton toggles
-            // before `OnClick` fires.
+            // before `OnClick` fires. The mouse raises the gate's click flag around the slot
+            // (`0x779275`-`0x77928b`); `Click()` does not.
+            let _click = protected::raise(&self.lua, protected::Event::Click);
             button::click_button(&self.lua, id, button, down, false);
         }
         // The press art last (`0x7792b1` follows the Down click `0x779285`): `OnMouseDown`
@@ -665,6 +667,8 @@ impl UiScript {
         };
         let id = self.model_ref().frame_to_id.get(&h).copied();
         if let (true, Some(id)) = (click, id) {
+            // The release raises the click flag around slot `+0x98` or `+0x94` (`0x779352`-`0x7793b8`).
+            let _click = protected::raise(&self.lua, protected::Event::Click);
             if double {
                 if let Err(e) =
                     event::fire_widget_handler(&self.lua, id, "OnDoubleClick", vec![btn.clone()])

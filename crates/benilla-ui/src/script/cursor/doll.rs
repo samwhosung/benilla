@@ -5,6 +5,7 @@ use mlua::{Lua, Value};
 
 use crate::script::binding_abi::flag;
 use crate::script::container::ContainerMove;
+use crate::script::protected::{self, Tag};
 use crate::script::tick::verb;
 use crate::script::Model;
 
@@ -17,7 +18,10 @@ use super::{
 /// fitting whole item moves in and the cursor clears, with no hop; a split or a misfit stays
 /// held. Returns whether to repaint.
 pub(super) fn pickup_inventory_item(lua: &Lua, id: u32) -> bool {
-    match verb(lua, |model| doll_click(model, id)) {
+    // An armed item-targeting spell binds the item through `BindSpellTargetObject`, behind the
+    // gate's tag 2.
+    let may_cast = protected::gate(lua, Tag::CAST);
+    match verb(lua, |model| doll_click(model, id, may_cast)) {
         DollClick::Done(repaint) => repaint,
         DollClick::PickUp(item) => {
             pick_up_item(lua, item);
@@ -36,7 +40,7 @@ pub(super) enum DollClick {
 }
 
 /// [`pickup_inventory_item`]'s decision and every arm but the pickup.
-pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
+pub(super) fn doll_click(model: &mut Model, id: u32, may_cast: bool) -> DollClick {
     // Head 1 to Tabard 19, the bag slots 20-23, and the bank bag slots, which only `PutItemInBag`
     // reaches (`0x4c7c00` calls `0x4c7300`). Ammo (0) is refused; its leg is not built.
     if !(1..=23).contains(&id) && !super::bag_verbs::BANK_BAG_INV_SLOTS.contains(&id) {
@@ -61,7 +65,11 @@ pub(super) fn doll_click(model: &mut Model, id: u32) -> DollClick {
             .inv_slot("player", id as usize)
             .is_some_and(|s| s.item_id != 0 && !item_locked(model, s.guid));
         if usable && model.item_pick_armed {
-            model.item_picks.push((EQUIPMENT_BAG, id));
+            model.item_picks.push(super::ItemPick {
+                bag: EQUIPMENT_BAG,
+                slot: id,
+                may_cast,
+            });
         } else if usable && (1..=19).contains(&id) {
             model.inventory_repairs.push(id);
         }
@@ -188,13 +196,15 @@ pub(super) fn cursor_can_go_in_slot(model: &Model, id: u32) -> bool {
 /// (`0x4c79c4`).
 pub(super) fn use_inventory_item(lua: &Lua, id: u32, on_self: bool) {
     verb(lua, clear_cursor);
-    verb(lua, |model| use_cleared(model, id, on_self));
+    // The item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2.
+    let may_cast = protected::gate(lua, Tag::CAST);
+    verb(lua, |model| use_cleared(model, id, on_self, may_cast));
 }
 
 /// `UseInventoryItem` past its clear. Outside repair mode a locked worn item is refused in the
 /// call, `CGItem::Use`'s first gate (`0x4c7af0` → `0x5d8d32`), so a later call's lock does not
 /// reach it.
-fn use_cleared(model: &mut Model, id: u32, on_self: bool) {
+fn use_cleared(model: &mut Model, id: u32, on_self: bool, may_cast: bool) {
     if !model.repair_mode {
         let locked = model
             .inv_slot("player", id as usize)
@@ -219,7 +229,11 @@ fn use_cleared(model: &mut Model, id: u32, on_self: bool) {
         } else if !locked {
             model
                 .script_calls
-                .push(crate::script::ScriptCall::UseInventoryItem { slot: id, on_self });
+                .push(crate::script::ScriptCall::UseInventoryItem {
+                    slot: id,
+                    on_self,
+                    may_cast,
+                });
         }
         return;
     }
@@ -307,6 +321,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
 mod tests {
     use super::{auto_equip_cursor_item, equip_cursor_item, pickup_inventory_item};
     use crate::script::cursor::{CursorAction, CursorPayload, CursorSpell, EQUIPMENT_BAG};
+    use crate::script::ItemPick;
     use crate::script::{ContainerMove, ContainerSlot, ContainerState, InvSlotView, UiScript};
 
     /// `IsInventoryItemLocked`'s slot reader (`0x4c8520`) raises for any id outside {0, 1-23,
@@ -862,7 +877,11 @@ mod tests {
             s.run(chunk).unwrap();
             assert_eq!(
                 s.take_script_calls(),
-                [crate::script::ScriptCall::UseInventoryItem { slot: 1, on_self }],
+                [crate::script::ScriptCall::UseInventoryItem {
+                    slot: 1,
+                    on_self,
+                    may_cast: true
+                }],
                 "{chunk}"
             );
         }
@@ -1003,6 +1022,39 @@ mod tests {
 
     /// The held-payload test runs first in both seams: `0x4f9c38` before `0x4f9c54` in the bag,
     /// `0x4c73af` before `0x4c76df` on the doll.
+    /// The worn item's on-use spell casts through `TryCastSpell`, behind the gate's tag 2 (`0x4c7af0`
+    /// → `0x5d8d00` → `0x6e4bc1`); an armed item-targeting spell's pick binds through
+    /// `BindSpellTargetObject`, behind it too (`0x4c76df` → `0x495d60` → `0x6e5b9e`).
+    #[test]
+    fn doll_uses_and_picks_carry_what_the_gate_allowed() {
+        let mut s = UiScript::new().unwrap();
+        s.set_inventory_slots(doll_slots());
+        s.run("UseInventoryItem(1)").unwrap();
+        s.run(r#"RunScript("UseInventoryItem(1)")"#).unwrap();
+        s.run_binding(r#"RunScript("UseInventoryItem(1)")"#)
+            .unwrap();
+        assert_eq!(
+            s.take_script_calls()
+                .into_iter()
+                .map(|c| c.may_cast())
+                .collect::<Vec<_>>(),
+            [true, false, true]
+        );
+
+        s.set_item_pick_armed(true);
+        s.run("PickupInventoryItem(1)").unwrap();
+        s.run(r#"RunScript("PickupInventoryItem(1)")"#).unwrap();
+        s.run_binding(r#"RunScript("PickupInventoryItem(1)")"#)
+            .unwrap();
+        assert_eq!(
+            s.take_item_picks()
+                .iter()
+                .map(|p| (p.slot, p.may_cast))
+                .collect::<Vec<_>>(),
+            [(1, true), (1, false), (1, true)]
+        );
+    }
+
     #[test]
     fn the_armed_item_half_reroutes_bag_and_doll_clicks() {
         let mut s = UiScript::new().unwrap();
@@ -1033,7 +1085,18 @@ mod tests {
         s.run("PickupContainerItem(0, 1)").unwrap();
         assert_eq!(
             s.take_item_picks(),
-            vec![(EQUIPMENT_BAG, 1), (0, 1)],
+            vec![
+                ItemPick {
+                    bag: EQUIPMENT_BAG,
+                    slot: 1,
+                    may_cast: true
+                },
+                ItemPick {
+                    bag: 0,
+                    slot: 1,
+                    may_cast: true
+                }
+            ],
             "the doll reports in the ONE bag space; the bag reports its own id"
         );
         assert!(s.cursor_item().is_none(), "a bind never stages a payload");

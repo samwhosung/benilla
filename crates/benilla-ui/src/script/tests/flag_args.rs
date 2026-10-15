@@ -342,6 +342,8 @@ fn queued_verbs_read_their_flags_through_get_bool_or_default() {
                 action: 1,
                 on_self: want,
                 item_locks: Vec::new(),
+                may_cast: true,
+                input: crate::script::InputEvents::default(),
             })],
             "UseAction(1, 0, {arg})"
         );

@@ -26,7 +26,11 @@ pub enum ScriptCall {
     ClearTarget,
     /// `AttackTarget()` (`0x489b50` → `0x6131a0(0,0)`): the attack validator's pick from the
     /// selection as it stands then, which may move it to the nearest enemy, then the toggle.
-    AttackTarget,
+    AttackTarget {
+        /// The gate's tag 4 allowed the pick (`0x6130bc` → `0x493f9b`): with none, the validator
+        /// takes the selection as it stands.
+        may_pick: bool,
+    },
     /// `SpellTargetUnit(unit)` (`0x6e6d90`), made while the cursor was up.
     SpellTargetUnit(String),
     /// `SpellStopTargeting()` (`0x6e6e30`), made while the cursor was up.
@@ -48,7 +52,12 @@ pub enum ScriptCall {
     UseContainerItem(super::ContainerUse),
     /// `UseInventoryItem(slot, onSelf)` outside repair mode: `on_self` makes the player the
     /// use's target in place of the selection (`0x4c8e37`-`0x4c8e48`).
-    UseInventoryItem { slot: u32, on_self: bool },
+    UseInventoryItem {
+        slot: u32,
+        on_self: bool,
+        /// The gate's tag 2 allowed the cast ([`super::ContainerUse::may_cast`]).
+        may_cast: bool,
+    },
     /// `CastPetAction(slot)`, a 1-based pet bar slot.
     PetAction(u32),
     /// `PetAttack` and the other one-shot orders, as their bar slot's packed word.
@@ -67,6 +76,20 @@ pub enum NearestMode {
     PartyMember,
     /// Mode 4, `TargetNearestRaidMember`: a party or raid member other than us.
     RaidMember,
+}
+
+impl ScriptCall {
+    /// What the protected-action gate's tag 2 allowed the verb that queued this call, for the casts
+    /// applying it starts (`TryCastSpell`, `0x6e4bc1`); a call that casts nothing, or that was
+    /// refused at the verb and never queued, reads passed.
+    pub fn may_cast(&self) -> bool {
+        match self {
+            ScriptCall::UseAction(press) => press.may_cast,
+            ScriptCall::UseContainerItem(item) => item.may_cast,
+            ScriptCall::UseInventoryItem { may_cast, .. } => *may_cast,
+            _ => true,
+        }
+    }
 }
 
 impl UiScript {

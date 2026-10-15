@@ -118,7 +118,7 @@ impl PetPress<'_, '_> {
         let mut target_guid = selection.guid.unwrap_or(0);
         let refused = if is_attack_order(entry) {
             crate::ui_action::attack_actor_refusal(Some(pet_store), pet.self_guid.0, ui_errors)
-                || match pick.target(None, selection, seam, ui_errors) {
+                || match pick.target(None, true, selection, seam, ui_errors) {
                     Some(guid) => {
                         target_guid = guid;
                         false

@@ -84,7 +84,9 @@ pub(super) fn put_item_in_bag(model: &mut Model, live: u32) -> bool {
         // An empty slot: the doll handler equips the bag (`0x4c7300`), and the answer is nil
         // whether or not it went in (`0x4c7cae xor eax,eax`). With an item held the doll click
         // only places, so it owes no pickup.
-        let click = doll_click(model, live);
+        // A held item takes the click before an armed item pick (`0x4c769a`), so no bind, and no
+        // gate, is reached.
+        let click = doll_click(model, live, true);
         debug_assert!(matches!(click, DollClick::Done(_)));
         return false;
     }

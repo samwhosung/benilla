@@ -431,6 +431,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
             let count = count
                 .and_then(|v| lua.coerce_number(v).ok().flatten())
                 .map_or(1, |n| i64::from(super::super::binding_abi::ftol(n)));
+            // The cast is `TryCastSpell` (`0x500314` → `0x6e5a90`), behind the gate's tag 2
+            // (`0x6e4bc1`); the repeat is armed ahead of it (`0x500307`), so a refused call arms it.
+            let may_cast = crate::script::protected::gate(lua, crate::script::protected::Tag::CAST);
             crate::script::tick::verb(lua, |model| {
                 let Some((spell_id, avail)) =
                     recipe_at(model, index).map(|r| (r.spell_id, r.num_available))
@@ -445,7 +448,9 @@ pub(in crate::script) fn install(lua: &Lua) -> mlua::Result<()> {
                     model.trade_skill_repeat_count = n;
                     model.raise("UPDATE_TRADESKILL_RECAST", Vec::new());
                 }
-                model.trade_skill_dos.push((spell_id, n));
+                if may_cast {
+                    model.trade_skill_dos.push((spell_id, n));
+                }
             });
             Ok(())
         })?,

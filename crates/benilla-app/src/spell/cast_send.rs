@@ -80,10 +80,25 @@ pub(crate) struct HeldCast {
     pub(crate) on_self: bool,
 }
 
+/// Whether the script call being applied passed the protected-action gate's tag 2, which opens
+/// `TryCastSpell` (`0x6e4bc1`, `0x494a50`): the answer the Lua verb got, where the stack that decides
+/// it was still there. A cast the engine starts (a click, a chain, a held press resumed) asks no
+/// gate, so it reads the default, passed; [`crate::script_calls`] sets it per call and resets it.
+#[derive(Resource)]
+pub(crate) struct ScriptCastPermit(bool);
+
+impl Default for ScriptCastPermit {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
 /// Everything the cast-send path reads, as one [`SystemParam`]: [`CastLadder::send`] is the only
 /// way into [`send_spell_cast`], for every caster surface.
 #[derive(SystemParam)]
 pub(crate) struct CastLadder<'w, 's> {
+    /// Absent in a world that never applies script calls.
+    permit: Option<ResMut<'w, ScriptCastPermit>>,
     pub(crate) commands: Res<'w, NetCommands>,
     pub(crate) self_player:
         Query<'w, 's, (Entity, Has<crate::creature_anim::Engaged>), With<SelfPlayer>>,
@@ -125,6 +140,18 @@ pub(crate) enum TargetedBind {
 }
 
 impl CastLadder<'_, '_> {
+    /// Set what the gate's tag 2 allowed the script call about to be applied.
+    pub(crate) fn permit(&mut self, may_cast: bool) {
+        if let Some(permit) = self.permit.as_mut() {
+            permit.0 = may_cast;
+        }
+    }
+
+    /// Whether the ladder may start: `TryCastSpell`'s gate, before its first rung.
+    pub(crate) fn permitted(&self) -> bool {
+        self.permit.as_ref().is_none_or(|p| p.0)
+    }
+
     /// The targeting cursor's commit: the ladder ran when the cursor went up, so the click owes
     /// only `SendCast 0x6e54f0`'s tail (the packet, the pending arm, the GCD), then clears the
     /// word.
@@ -251,6 +278,10 @@ impl CastLadder<'_, '_> {
         on_object: Option<u64>,
         hold: Option<HeldCast>,
     ) {
+        if !self.permitted() {
+            debug!("cast {spell_id} refused by the protected-action gate, silently");
+            return;
+        }
         send_spell_cast(
             spell_id,
             ctx,

@@ -1,6 +1,6 @@
 //! The stock enchant confirms, driven as the item gate in `spell::targeting` fires them.
 
-use benilla_ui::script::{EnchantConfirm, ScriptValue, UiScript};
+use benilla_ui::script::{EnchantAnswer, EnchantConfirm, ScriptValue, UiScript};
 
 use super::test_ui::load_ui as load_xml;
 
@@ -36,7 +36,14 @@ fn the_bind_confirm_shows_and_its_okay_queues_bind_enchant() {
         "Enchanting this item will bind it to you."
     );
     s.run("StaticPopup_OnClick(StaticPopup1, 1)").unwrap();
-    assert_eq!(s.take_enchant_confirms(), vec![EnchantConfirm::Bind]);
+    assert_eq!(
+        s.take_enchant_confirms(),
+        vec![EnchantAnswer {
+            confirm: EnchantConfirm::Bind,
+            may_cast: true
+        }],
+        "the popup's OnAccept is the client's own code, so the gate passes it"
+    );
     assert!(!s.eval::<bool>("return StaticPopup1:IsVisible()").unwrap());
 }
 
@@ -58,7 +65,13 @@ fn the_replace_confirm_names_the_old_enchant_first() {
         "Do you want to replace \"Crusader\" with \"Agility +15\"?"
     );
     s.run("StaticPopup_OnClick(StaticPopup1, 1)").unwrap();
-    assert_eq!(s.take_enchant_confirms(), vec![EnchantConfirm::Replace]);
+    assert_eq!(
+        s.take_enchant_confirms(),
+        vec![EnchantAnswer {
+            confirm: EnchantConfirm::Replace,
+            may_cast: true
+        }]
+    );
 }
 
 /// The gate returned before `BindTarget`, so declining sends nothing and the cursor stays up.

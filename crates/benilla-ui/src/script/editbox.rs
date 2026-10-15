@@ -96,6 +96,8 @@ pub(super) fn key_input(lua: &Lua, key: &str) -> bool {
             if with_eb(lua, h, |eb| eb.multi_line).unwrap_or(false) {
                 insert(lua, h, "\n", false);
             } else {
+                // The enter script runs with the gate's edit-box flag up (`0x77b438`-`0x77b459`).
+                let _enter = super::protected::raise(lua, super::protected::Event::Enter);
                 fire_script(lua, id, "OnEnterPressed");
             }
         }

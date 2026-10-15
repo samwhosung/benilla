@@ -7,6 +7,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
+use super::protected::{self, Tag};
 use super::Model;
 use crate::script::binding_abi::Idx32;
 
@@ -441,6 +442,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "CastPetAction",
         lua.create_function(|lua, i: u32| {
+            // `PressPetAction 0x4bd1d0` opens on the gate's tag 2 (`0x4bd1e5`), ahead of its bar
+            // test and every effect; a refusal is silent.
+            if !protected::gate(lua, Tag::CAST) {
+                return Ok(());
+            }
             super::tick::verb(lua, |model| {
                 let Some(packed) = slot_at(model, i)
                     .filter(|s| s.view.name.is_some())
@@ -473,6 +479,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 ));
             }
             if super::cursor::pet::clear_and_drop(lua, i).is_some() {
+                return Ok(());
+            }
+            // `TogglePetSlotAutocast 0x4bcbb0` opens on the gate's tag 2 (`0x4bcbc2`).
+            if !protected::gate(lua, Tag::CAST) {
                 return Ok(());
             }
             super::tick::verb(lua, |model| {
@@ -649,6 +659,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, ()| {
+                // Each re-enters `PressPetAction`, whose gate (tag 2) opens it.
+                if !protected::gate(lua, Tag::CAST) {
+                    return Ok(());
+                }
                 super::tick::verb(lua, |model| {
                     if model.pet_bar.has_bar {
                         latch_press(model, packed);
@@ -691,8 +705,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PetAbandon",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.pet_abandons += 1;
+            // `SendPetAbandon 0x4bd740` opens on the gate's tag 2 (`0x4bd74b`).
+            if protected::gate(lua, Tag::CAST) {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.pet_abandons += 1;
+            }
             Ok(())
         })?,
     )?;
@@ -701,8 +718,11 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "PetDismiss",
         lua.create_function(|lua, ()| {
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            model.pet_dismisses += 1;
+            // `PressPetDismiss 0x4bd6e0` re-enters `PressPetAction`, behind its tag-2 gate.
+            if protected::gate(lua, Tag::CAST) {
+                let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+                model.pet_dismisses += 1;
+            }
             Ok(())
         })?,
     )?;

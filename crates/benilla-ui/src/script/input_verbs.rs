@@ -7,24 +7,16 @@
 //! ([`ScriptCall`]), so a macro's `TargetNearestEnemy()` then `/cast` casts at the new target.
 //!
 //! Every movement function but the mouselook three opens on the protected-action gate `0x494a50`
-//! with tag 0, which is all twenty-three of its tag-0 callers. Whose code runs ([`taint`]) decides
-//! first. Context 0 passes only inside a real input event, which for a binding body is
-//! `CBindings::ExecuteBinding 0x4b7990` on the stack (`[[0xb71290]+0xd8]`, raised at `0x4b7b02`),
-//! and is refused silently otherwise. Any other context is refused whatever input event runs
-//! (`0x494ab8`), and the refusal signals `MACRO_ACTION_FORBIDDEN` for a `RunScript` chunk or
-//! `ADDON_ACTION_FORBIDDEN` with the addon's name for any other (`0x494ac6`-`0x494afb`), once at
-//! a time ([`InputState::refusing`]). So a key's stock body moves, and `/script MoveForwardStart()`,
-//! an addon's own call and an insecure addon's binding body do not and say so. The edit box's enter
-//! script and a mouse handler, the other two input events the gate reads (`0xcf4dc4`, `0xcf4da0`),
-//! are not raised here. The camera table and the main-table verbs have no tag-0 gate.
+//! with tag 0 ([`protected`]), which is all twenty-three of its tag-0 callers. The four
+//! `TargetNearest*` shims reach it with tag 4 (`0x493f9b`): a call it refuses picks nothing.
+//! The camera table and the other main-table verbs have no gate.
 
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
 use super::calls::{NearestMode, ScriptCall};
-use super::taint::{self, Context};
-use super::tick::fire_event_into;
-use super::{Model, ScriptValue, UiScript};
+use super::protected::{self, Event, Tag};
+use super::{Model, UiScript};
 
 /// A held movement command: one bit of the reference's `[InputControl+4]` word, set by its Start
 /// and cleared by its Stop through `0x515090`.
@@ -80,11 +72,6 @@ pub enum BindingInput {
 pub(crate) struct InputState {
     /// The calls made since the app last drained them.
     queue: Vec<BindingInput>,
-    /// How many binding bodies are running: the hardware-event gate's `[[0xb71290]+0xd8]`.
-    binding_depth: u32,
-    /// `[0xb4e3e4]`: set while a refusal's event is being signalled, so a handler that calls a
-    /// gated function in turn is refused without a second event (`0x494abf`, `0x494acc`).
-    refusing: bool,
     /// `[InputControl+4] & 1`, the TurnOrAction channel `IsMouselooking` tests (`0x514278`), as
     /// the app pushed it or a `MouselookStart`/`Stop` since moved it.
     turn_or_action: bool,
@@ -101,10 +88,8 @@ impl UiScript {
     /// Run a binding body as `CBindings::RunCommand` (`0x4b7b50`) does from inside
     /// `ExecuteBinding`: the movement functions' hardware-event gate passes while it runs.
     pub fn run_binding(&self, chunk: &str) -> mlua::Result<()> {
-        self.model_mut().input.binding_depth += 1;
-        let result = self.run(chunk);
-        self.model_mut().input.binding_depth -= 1;
-        result
+        let _event = protected::raise(self.lua(), Event::Binding);
+        self.run(chunk)
     }
 
     /// `CBindings::ExecuteBinding` (`0x4b7990`) once the chord has resolved to `command`: its
@@ -112,10 +97,8 @@ impl UiScript {
     /// `down`, else the release, which runs only a `runOnUp` body. `Ok(false)` when nothing ran:
     /// no such command, or a release of one that is not `runOnUp`.
     pub fn execute_binding(&self, command: &str, down: bool) -> mlua::Result<bool> {
-        self.model_mut().input.binding_depth += 1;
-        let result = super::keybind::run_command(&self.lua, command, down);
-        self.model_mut().input.binding_depth -= 1;
-        result
+        let _event = protected::raise(self.lua(), Event::Binding);
+        super::keybind::run_command(&self.lua, command, down)
     }
 
     /// Push whether the TurnOrAction channel is held: the world holds the right mouse button, or
@@ -131,46 +114,9 @@ impl UiScript {
     }
 }
 
-/// Whether a binding body is running: the gate's input-event flag `[[0xb71290]+0xd8]`.
-fn in_binding(lua: &Lua) -> bool {
-    let model = lua.app_data_ref::<Model>().expect("model app_data");
-    model.input.binding_depth > 0
-}
-
-/// The gate `0x494a50(0)`, whether the call may go on. Code of the client's own passes inside a
-/// binding body (`0x494b1a`-`0x494b3c`); any other code is refused with its event.
+/// The gate `0x494a50(0)`, whether a movement call may go on.
 fn gate(lua: &Lua) -> bool {
-    match taint::current(lua) {
-        Context::Client => in_binding(lua),
-        context => {
-            refuse(lua, &context);
-            false
-        }
-    }
-}
-
-/// The refusal arm `0x494ab8`: `MACRO_ACTION_FORBIDDEN` (`0x1af`) for a `RunScript` chunk's
-/// context, else `ADDON_ACTION_FORBIDDEN` (`0x1b0`) with the context's text, signalled in place.
-fn refuse(lua: &Lua, context: &Context) {
-    {
-        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-        if std::mem::replace(&mut model.input.refusing, true) {
-            return;
-        }
-    }
-    match context {
-        Context::Macro => fire_event_into(lua, "MACRO_ACTION_FORBIDDEN", Vec::new()),
-        Context::Addon(name) => fire_event_into(
-            lua,
-            "ADDON_ACTION_FORBIDDEN",
-            vec![ScriptValue::Str(name.clone())],
-        ),
-        Context::Client => {}
-    }
-    lua.app_data_mut::<Model>()
-        .expect("model app_data")
-        .input
-        .refusing = false;
+    protected::gate(lua, Tag::MOVEMENT)
 }
 
 fn push(lua: &Lua, input: BindingInput) {
@@ -380,6 +326,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, reverse: Option<Value>| {
+                // `0x493f9b`: tag 4, ahead of the TAB cycle, refused with nothing signalled.
+                if !protected::gate(lua, Tag::TARGET) {
+                    return Ok(());
+                }
                 let reverse = bool_or_default(reverse.as_ref(), false);
                 push_call(lua, ScriptCall::TargetNearest { mode, reverse });
                 Ok(())
@@ -397,7 +347,10 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "AttackTarget",
         lua.create_function(|lua, _: MultiValue| {
-            push_call(lua, ScriptCall::AttackTarget);
+            // The validator's pick of the nearest enemy asks the gate's tag 4 (`0x493f9b`); the rest
+            // of the attack has no gate.
+            let may_pick = protected::gate(lua, Tag::TARGET);
+            push_call(lua, ScriptCall::AttackTarget { may_pick });
             Ok(())
         })?,
     )?;
@@ -599,7 +552,7 @@ mod tests {
                     reverse: true
                 },
                 ScriptCall::TargetLastTarget,
-                ScriptCall::AttackTarget,
+                ScriptCall::AttackTarget { may_pick: true },
                 ScriptCall::ClearTarget,
             ]
         );

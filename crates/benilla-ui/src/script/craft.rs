@@ -434,8 +434,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "DoCraft",
         lua.create_function(|lua, index: usize| {
+            // The recipe's cast is `TryCastSpell` (`0x4f7d64` → `0x6e5a90`), behind the gate's
+            // tag 2 (`0x6e4bc1`).
+            let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(spell_id) = recipe(&model, index).map(|r| r.spell_id) {
+            if let Some(spell_id) = recipe(&model, index)
+                .map(|r| r.spell_id)
+                .filter(|_| may_cast)
+            {
                 model.craft_dos.push(spell_id);
             }
             Ok(())
@@ -685,6 +691,21 @@ mod tests {
         without_7418.recipes.remove(0);
         s.set_craft(Some(without_7418));
         assert_eq!(s.eval::<i64>("return GetCraftSelectionIndex()").unwrap(), 0);
+    }
+
+    /// The recipe's cast is `TryCastSpell`'s, behind the gate's tag 2 (`0x4f7d64` → `0x6e4bc1`).
+    #[test]
+    fn do_craft_casts_only_inside_an_input_event() {
+        let mut s = UiScript::new().unwrap();
+        s.set_craft(Some(state()));
+
+        s.run(r#"RunScript("DoCraft(1)")"#).unwrap();
+        assert!(
+            s.take_craft_dos().is_empty(),
+            "a macro outside an input event"
+        );
+        s.run_binding(r#"RunScript("DoCraft(1)")"#).unwrap();
+        assert_eq!(s.take_craft_dos(), vec![683], "inside a key's body");
     }
 
     #[test]

@@ -1020,6 +1020,8 @@ mod dressup_tests;
 mod minimap_tests;
 
 #[cfg(test)]
+mod protected_gate_tests;
+#[cfg(test)]
 mod spellbook_tests;
 
 #[cfg(test)]

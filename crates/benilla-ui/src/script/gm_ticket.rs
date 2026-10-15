@@ -109,9 +109,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "Stuck",
         lua.create_function(|lua, ()| {
-            lua.app_data_mut::<Model>()
-                .expect("model app_data")
-                .stuck_casts += 1;
+            // `0x48937c` → `TryCastSpell`, behind the gate's tag 2 (`0x6e4bc1`).
+            if super::protected::gate(lua, super::protected::Tag::CAST) {
+                lua.app_data_mut::<Model>()
+                    .expect("model app_data")
+                    .stuck_casts += 1;
+            }
             Ok(())
         })?,
     )?;

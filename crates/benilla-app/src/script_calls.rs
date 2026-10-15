@@ -37,6 +37,9 @@ pub(crate) fn apply_script_calls(
         return;
     };
     in_call_order(&mut script, |script, call| {
+        // The gate's answer for this call, made where the Lua verb ran: its casts start only if
+        // tag 2 passed there. The ladder reads it for as long as this call applies.
+        appliers.p3().ladder.permit(call.may_cast());
         match call {
             ScriptCall::Select(request) => appliers.p0().select(request),
             ScriptCall::TargetByName { name, exact } => appliers.p0().target_by_name(&name, exact),
@@ -45,7 +48,7 @@ pub(crate) fn apply_script_calls(
             }
             ScriptCall::TargetLastTarget => appliers.p0().target_last_target(),
             ScriptCall::ClearTarget => appliers.p0().clear_target(),
-            ScriptCall::AttackTarget => appliers.p7().attack_target(),
+            ScriptCall::AttackTarget { may_pick } => appliers.p7().attack_target(may_pick),
             ScriptCall::SpellTargetUnit(token) => appliers.p1().spell_target_unit(&token),
             ScriptCall::SpellStopTargeting => appliers.p1().stop_targeting(),
             ScriptCall::SpellStopCasting => appliers.p2().stop_casting(),
@@ -57,14 +60,16 @@ pub(crate) fn apply_script_calls(
             }
             ScriptCall::UseAction(press) => {
                 let used = crate::ui_action::use_action(&mut appliers.p4(), script, press);
+                // The Attack slot is a cast, so the gate's tag 4 (the pick) is asked only after
+                // tag 2 passed, and so passes as well.
                 if used == crate::ui_action::UseOutcome::Attack {
-                    appliers.p7().attack_target();
+                    appliers.p7().attack_target(true);
                 }
             }
             ScriptCall::UseContainerItem(call) => {
                 appliers.p5().use_container_item(script, call);
             }
-            ScriptCall::UseInventoryItem { slot, on_self } => {
+            ScriptCall::UseInventoryItem { slot, on_self, .. } => {
                 appliers.p5().use_inventory_item(script, slot, on_self)
             }
             ScriptCall::CastPetSpell { spell_id, on_self } => {
@@ -78,12 +83,15 @@ pub(crate) fn apply_script_calls(
         let Some(held) = appliers.p3().ladder.take_held() else {
             return;
         };
+        // A held press passed tag 2 to be held, so the pick's tag 4 passes as well.
         if appliers.p7().pick_for_cast(held) {
             let mut cast = appliers.p3();
             let ctx = cast.targeting.context();
             cast.ladder.resume_after_pick(held, &ctx);
         }
     });
+    // Whatever casts next is the engine's own, which asks no gate.
+    appliers.p3().ladder.permit(true);
 }
 
 /// Apply every queued call front to back. Applying one may queue more: a macro's lines run
@@ -240,6 +248,20 @@ mod tests {
             .world_mut()
             .non_send_resource_mut::<UiScript>()
             .run(lua)
+            .expect("the script runs");
+        f.app
+            .world_mut()
+            .run_system_once(apply_script_calls)
+            .expect("the calls apply as a one-shot system");
+    }
+
+    /// [`run`] with `lua` as a key's body, an input event of the protected-action gate
+    /// (`[[0xb71290]+0xd8]`): the press a macro's `/script` line needs to cast.
+    fn run_pressed(f: &mut Frame, lua: &str) {
+        f.app
+            .world_mut()
+            .non_send_resource_mut::<UiScript>()
+            .run_binding(lua)
             .expect("the script runs");
         f.app
             .world_mut()
@@ -840,9 +862,124 @@ mod tests {
                     },
                 );
         }
-        run(&mut f, r#"UseAction(1) TargetUnit("party1")"#);
+        // The macro's line is a `RunScript` chunk, which casts only inside an input event: the
+        // press is a key's body, and the line runs inside it in the reference.
+        run_pressed(&mut f, r#"UseAction(1) TargetUnit("party1")"#);
         assert_eq!(casts(&f), vec![(HEAL, Some(OLD))]);
         assert_eq!(selected(&f), Some(NEW));
+    }
+
+    /// The macro's lines run inside the press (`0x4e6098`), so the input event that pressed it is
+    /// still up for them; here the press has returned by the time the app runs them, so they run
+    /// with it raised again. A press that was no input event (an addon's `OnUpdate`) hands them
+    /// none, and a `/script` cast in them is refused, silently.
+    #[test]
+    fn a_macros_script_line_casts_only_when_its_press_was_an_input_event() {
+        for (pressed, want) in [(true, vec![(HEAL, Some(OLD))]), (false, vec![])] {
+            let mut f = frame(true);
+            {
+                let world = f.app.world_mut();
+                let script = world.non_send_resource::<UiScript>();
+                script
+                    .run(
+                        r#"local f = CreateFrame("Frame")
+                        f:RegisterEvent("EXECUTE_CHAT_LINE")
+                        f:SetScript("OnEvent", function() RunScript(arg1) end)
+                        MACRO_INDEX = CreateMacro("heal", 1, 'CastSpellByName("Heal")', 1, nil)"#,
+                    )
+                    .expect("the macro is made");
+                let index: u32 = script.eval("return MACRO_INDEX").expect("an index");
+                world
+                    .resource_mut::<crate::ui_action::PlayerActions>()
+                    .buttons
+                    .insert(
+                        0,
+                        ActionButton {
+                            slot: 0,
+                            action: index,
+                            kind: ACTION_KIND_MACRO,
+                        },
+                    );
+            }
+            if pressed {
+                run_pressed(&mut f, "UseAction(1)");
+            } else {
+                run(&mut f, "UseAction(1)");
+            }
+            assert_eq!(casts(&f), want, "pressed in an input event: {pressed}");
+        }
+    }
+
+    /// `UseAction` on a spell is `TryCastSpell`, whose gate is its first rung (`0x6e4bc1`): a macro's
+    /// call outside an input event queues the press, which the app finds refused and sends
+    /// nothing, where the client's own press casts. The same press on a macro slot still runs it.
+    #[test]
+    fn a_use_action_the_gate_refused_casts_nothing() {
+        for (lua, want) in [
+            ("UseAction(1)", vec![(HEAL, Some(OLD))]),
+            (r#"RunScript("UseAction(1)")"#, vec![]),
+        ] {
+            let mut f = frame(true);
+            f.app
+                .world_mut()
+                .resource_mut::<crate::ui_action::PlayerActions>()
+                .buttons
+                .insert(
+                    0,
+                    ActionButton {
+                        slot: 0,
+                        action: HEAL,
+                        kind: ACTION_KIND_SPELL,
+                    },
+                );
+            run(&mut f, lua);
+            assert_eq!(casts(&f), want, "{lua}");
+        }
+    }
+
+    /// The Attack slot is a cast too (`UseAction` → `TryCast`, `0x6e4c90`), behind the same first
+    /// rung: a macro's press outside an input event swings at nothing, not even at a target
+    /// already selected.
+    #[test]
+    fn a_use_action_on_attack_the_gate_refused_swings_at_nothing() {
+        for (lua, want) in [
+            ("UseAction(1)", vec![OLD]),
+            (r#"RunScript("UseAction(1)")"#, vec![]),
+        ] {
+            let mut f = frame(true);
+            f.app
+                .world_mut()
+                .resource_mut::<crate::ui_action::PlayerActions>()
+                .buttons
+                .insert(
+                    0,
+                    ActionButton {
+                        slot: 0,
+                        action: crate::ui_action::SPELL_ATTACK,
+                        kind: ACTION_KIND_SPELL,
+                    },
+                );
+            run(&mut f, lua);
+            assert_eq!(swings(&f), (want, false), "{lua}");
+        }
+    }
+
+    /// The attack validator's pick of the nearest enemy asks the gate's tag 4 (`0x6130bc` →
+    /// `0x493f9b`): refused, nothing is picked and the selection stands, so the friend selected is
+    /// refused as the target and no swing goes out.
+    #[test]
+    fn an_attack_target_the_gate_refused_picks_no_enemy() {
+        for (lua, selected_after, swung) in [
+            ("AttackTarget()", MOB, vec![MOB]),
+            (r#"RunScript("AttackTarget()")"#, OLD, vec![]),
+        ] {
+            let mut f = frame(true);
+            with_factions(&mut f, FRIEND, &[]);
+            spawn_mob(&mut f, &[(TEMPLATE, FOE)]);
+            run(&mut f, lua);
+            assert_eq!(selected(&f), Some(selected_after), "{lua}");
+            assert_eq!(swings(&f), (swung, false), "{lua}");
+        }
     }
 
     /// Sinister Strike: `AttributesEx & 0x200`, one of predicate `0x6e5200`'s bits, and the enemy

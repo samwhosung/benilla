@@ -231,6 +231,7 @@ impl ScriptItemUse<'_, '_> {
             arm,
             asks,
             on_self,
+            ..
         } = call;
         // A bind-on-equip equip the call asked about is filed whatever the slot holds now: the
         // reference raised the question inside the call (`0x5e16c6`), the item is on the cursor,
@@ -1329,6 +1330,7 @@ mod tests {
                             if let benilla_ui::script::ScriptCall::UseInventoryItem {
                                 slot: id,
                                 on_self,
+                                ..
                             } = call
                             {
                                 items.use_inventory_item(script, id, on_self);

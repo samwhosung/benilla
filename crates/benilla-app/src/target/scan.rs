@@ -616,15 +616,18 @@ impl AttackPick<'_, '_> {
     /// pick before this returns, so a call after this one reads it. The target is then the
     /// selection as it stands (`0x6130c1`): a fruitless scan leaves a friendly unit selected for
     /// the final gate to refuse, and only an empty selection is `ERR_NO_ATTACK_TARGET`
-    /// (`0x6130d9`).
+    /// (`0x6130d9`). `may_pick` is the protected-action gate's tag 4, which opens the cycle
+    /// (`0x493f9b`): refused, the cycle returns having picked nothing and the target is the
+    /// selection as it stands.
     pub(crate) fn target(
         &mut self,
         passed: Option<u64>,
+        may_pick: bool,
         selection: &mut Selection,
         seam: &mut crate::creature_anim::AttackSeam,
         errors: &mut crate::ui_action::UiErrorKeys,
     ) -> Option<u64> {
-        if !passed.or(selection.guid).is_some_and(|g| self.keeps(g)) {
+        if may_pick && !passed.or(selection.guid).is_some_and(|g| self.keeps(g)) {
             let engaged = self.engaged();
             cycle(
                 ScanSide::Enemy,

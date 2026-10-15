@@ -134,8 +134,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "CastShapeshiftForm",
         lua.create_function(|lua, i: u32| {
+            // The form's cast is `TryCastSpell` (`0x4b4992` → `0x6e5a90`), behind the gate's tag 2.
+            let may_cast = super::protected::gate(lua, super::protected::Tag::CAST);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            if let Some(spell_id) = form_at(&model, i).map(|f| f.view.spell_id) {
+            if let Some(spell_id) = form_at(&model, i)
+                .map(|f| f.view.spell_id)
+                .filter(|_| may_cast)
+            {
                 model
                     .script_calls
                     .push(super::ScriptCall::CastShapeshiftForm(spell_id));

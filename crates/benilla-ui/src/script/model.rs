@@ -369,8 +369,10 @@ pub(crate) struct Model {
     pub(crate) tracking: Option<super::aura::TrackingState>,
     /// The calls that touch the selection, the cast or the targeting cursor, in call order.
     pub(crate) script_calls: Vec<super::calls::ScriptCall>,
-    /// The binding functions' queue, gate depth and mouselook state.
+    /// The binding functions' queue and mouselook state.
     pub(crate) input: super::input_verbs::InputState,
+    /// The protected-action gate's input events ([`super::protected`]).
+    pub(crate) protected: super::protected::Flags,
     /// `DropItemOnUnit` tokens (`0x48d960`), gated by the app; a refusal silently keeps the item.
     pub(crate) drop_item_on_unit: Vec<String>,
 
@@ -698,9 +700,9 @@ pub(crate) struct Model {
     /// Targeting wants an item (`0x6e6330`): a bag or paper-doll click becomes a pick.
     pub(crate) item_pick_armed: bool,
     /// Picked `(bag, slot)`s; a paper-doll click is `EQUIPMENT_BAG` and its 1-based inventory slot.
-    pub(crate) item_picks: Vec<(i64, u32)>,
+    pub(crate) item_picks: Vec<cursor::ItemPick>,
     /// `BindEnchant()` and `ReplaceEnchant()`, the enchant popups' answers.
-    pub(crate) enchant_confirms: Vec<cursor::EnchantConfirm>,
+    pub(crate) enchant_confirms: Vec<cursor::EnchantAnswer>,
     /// `DeleteCursorItem`'s `(bag, slot, count)`, 0 for the whole stack, as `CMSG_DESTROYITEM`.
     pub(crate) container_destroys: Vec<(i64, u32, u32)>,
     /// The wrapping paper a right-click armed (`0x5edea0`: lock it, cursor mode 2, no packet). Not
@@ -1357,6 +1359,7 @@ impl Model {
             tracking: None,
             script_calls: Vec::new(),
             input: Default::default(),
+            protected: Default::default(),
             drop_item_on_unit: Vec::new(),
             joined_channels: Vec::new(),
             party: party::PartyState::default(),

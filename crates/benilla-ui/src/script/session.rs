@@ -81,6 +81,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
         g.set(
             name,
             lua.create_function(move |lua, ()| {
+                // `ReloadUI` (`0x4884d0`) sets the reload byte only if `CGGameUI::Reload`'s gate
+                // (`0x491380`, tag 10) allows: a script's own call needs an input event, and is
+                // otherwise ignored with no message.
+                if request == SessionRequest::ReloadUi
+                    && !super::protected::gate(lua, super::protected::Tag::RELOAD)
+                {
+                    return Ok(());
+                }
                 let mut model = lua.app_data_mut::<Model>().expect("model app_data");
                 model.session_requests.push(request);
                 Ok(())

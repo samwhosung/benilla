@@ -125,16 +125,24 @@ pub(crate) fn commit_item_cast_on_pick(
     };
     // Fresh clicks, then the bind popup's Yes, go through the gate; the replace popup's Yes does
     // not.
-    let mut asks: Vec<(u64, bool)> = Vec::new();
-    let mut bind_outright: Vec<u64> = Vec::new();
-    for (bag, slot) in script.take_item_picks() {
+    // Each carries what the protected-action gate's tag 2 allowed the call that made it: the bind
+    // is `BindSpellTargetObject 0x6e5b40`, which asks it first (`0x6e5b9e`), after every
+    // validation above it has run and shown its line or popup.
+    let mut asks: Vec<(u64, bool, bool)> = Vec::new();
+    let mut bind_outright: Vec<(u64, bool)> = Vec::new();
+    for benilla_ui::script::ItemPick {
+        bag,
+        slot,
+        may_cast,
+    } in script.take_item_picks()
+    {
         let slot0 = u8::try_from(slot.saturating_sub(1)).unwrap_or(0);
         match self_q
             .iter()
             .next()
             .and_then(|store| crate::ui_items::slot_guid(&store.0, bag, slot0, &ladder.objects))
         {
-            Some(guid) => asks.push((guid, false)),
+            Some(guid) => asks.push((guid, false, may_cast)),
             None => {
                 debug!("ui_action: item pick on an empty slot (bag {bag} slot {slot}) — mode kept")
             }
@@ -142,13 +150,15 @@ pub(crate) fn commit_item_cast_on_pick(
     }
     for answer in script.take_enchant_confirms() {
         let Some(guid) = parked.0 else { continue };
-        match answer {
-            benilla_ui::script::EnchantConfirm::Bind => asks.push((guid, true)),
-            benilla_ui::script::EnchantConfirm::Replace => bind_outright.push(guid),
+        match answer.confirm {
+            benilla_ui::script::EnchantConfirm::Bind => asks.push((guid, true, answer.may_cast)),
+            benilla_ui::script::EnchantConfirm::Replace => {
+                bind_outright.push((guid, answer.may_cast));
+            }
         }
     }
 
-    for (item_guid, confirmed) in asks {
+    for (item_guid, confirmed, may_cast) in asks {
         let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Item) else {
             continue; // a click raced a cancel
         };
@@ -170,6 +180,9 @@ pub(crate) fn commit_item_cast_on_pick(
             .and_then(|s| s.catalog.get(spell_id));
         let (Some(def), Some((class, subclass, inventory_type))) = (def, clicked) else {
             debug!("ui_action: item pick — cast {spell_id} at item {item_guid:#x} (ungated)");
+            if !may_cast {
+                continue;
+            }
             ladder.commit_targeted(
                 spell_id,
                 commit,
@@ -226,6 +239,11 @@ pub(crate) fn commit_item_cast_on_pick(
                     ],
                 );
             }
+            ItemBind::Bind if !may_cast => {
+                debug!(
+                    "ui_action: item pick — cast {spell_id} refused by the protected-action gate"
+                );
+            }
             ItemBind::Bind => {
                 debug!("ui_action: item pick — cast {spell_id} at item {item_guid:#x}");
                 ladder.commit_targeted(
@@ -238,10 +256,13 @@ pub(crate) fn commit_item_cast_on_pick(
     }
 
     // `ReplaceEnchant 0x48d300`: bind the parked guid with no gate re-run.
-    for item_guid in bind_outright {
+    for (item_guid, may_cast) in bind_outright {
         let Some((spell_id, commit)) = ladder.ground.pending_for(TargetingWants::Item) else {
             continue;
         };
+        if !may_cast {
+            continue;
+        }
         debug!("ui_action: replace-enchant accepted — cast {spell_id} at item {item_guid:#x}");
         ladder.commit_targeted(
             spell_id,

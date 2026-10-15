@@ -473,6 +473,30 @@ fn do_trade_skill_drains_spell_id_and_count() {
     assert!(s.take_trade_skill_dos().is_empty());
 }
 
+/// The craft is `TryCastSpell`'s, behind the gate's tag 2 (`0x500314` → `0x6e4bc1`), but the repeat is
+/// armed ahead of it (`0x500307`), so a macro's call outside an input event arms the repeat and
+/// casts nothing, and the same call inside a key's body casts.
+#[test]
+fn do_trade_skill_arms_the_repeat_and_casts_only_inside_an_input_event() {
+    let mut s = UiScript::new().unwrap();
+    s.set_trade_skill(Some(two_recipe_state()));
+    s.run("SelectTradeSkill(3)").unwrap();
+
+    s.run(r#"RunScript("DoTradeSkill(3, 5)")"#).unwrap();
+    assert!(
+        s.take_trade_skill_dos().is_empty(),
+        "no input event: the cast is refused, silently"
+    );
+    assert_eq!(
+        s.eval::<i64>("return GetTradeskillRepeatCount()").unwrap(),
+        5,
+        "the repeat was armed before the gate"
+    );
+
+    s.run_binding(r#"RunScript("DoTradeSkill(3, 5)")"#).unwrap();
+    assert_eq!(s.take_trade_skill_dos(), vec![(2963, 5)]);
+}
+
 #[test]
 fn no_snapshot_shapes_unknown_line_and_nil_info() {
     let mut s = UiScript::new().unwrap();

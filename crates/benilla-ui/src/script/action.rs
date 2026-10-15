@@ -8,6 +8,7 @@
 use mlua::{Lua, MultiValue, Value};
 
 use super::binding_abi::{bool_or_default, flag};
+use super::protected::{self, Tag};
 use super::Model;
 use crate::script::binding_abi::Idx32;
 
@@ -81,6 +82,12 @@ pub struct ActionUse {
     /// the call (`0x4e607b` → `0x5d8d32`), so the app, which finds the copy, tests it against
     /// these and not the locks a later call in the frame took or released.
     pub item_locks: Vec<u64>,
+    /// What the protected-action gate's tag 2 allowed the call (`0x6e4bc1`): a spell or an item's
+    /// on-use spell casts through `TryCastSpell`, behind it. The equip arm and a macro are not.
+    pub may_cast: bool,
+    /// The input events running when the call was made. A macro's lines run inside the call in the
+    /// reference, so the app runs them with these raised again.
+    pub input: super::InputEvents,
 }
 
 impl ActionUse {
@@ -271,6 +278,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             // Both flags go through `GetBoolOrDefault` (`0x4e717e`, `0x4e716f`), default 0.
             let check_cursor = bool_or_default(rest.front(), false);
             let on_self = bool_or_default(rest.get(1), false);
+            let may_cast = protected::gate(lua, Tag::CAST);
+            let input = protected::events(lua);
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             if check_cursor && model.cursor.is_some() {
                 drop(model);
@@ -283,6 +292,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                         action,
                         on_self,
                         item_locks,
+                        may_cast,
+                        input,
                     }));
             }
             Ok(())
