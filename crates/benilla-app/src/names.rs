@@ -481,7 +481,8 @@ pub(crate) mod net {
     }
 
     /// The name callback `0x5fb840` of a unit the answer names: for a found name (`0x5fb84b`) of a
-    /// held unit (`0x5fb86a`), `UNIT_NAME_UPDATE` through `0x491a00`.
+    /// held unit (`0x5fb86a`), `UNIT_NAME_UPDATE` through `0x491a00`. The callbacks are the
+    /// lookups that missed, so an answer for a name the cache already holds runs none.
     fn on_player_name(
         In(ev): In<SessionEvent>,
         mut names: ResMut<NameCache>,
@@ -496,7 +497,8 @@ pub(crate) mod net {
             gender,
         } = ev
         {
-            let found = !name.is_empty();
+            // A guid already cached has no lookup waiting, so no callback runs.
+            let found = !name.is_empty() && names.players.get(guid).is_none();
             player_name(guid, name, race, class, gender, &mut names);
             if found && units.holds(guid) {
                 notices.write(FieldNotice::Signal {
@@ -516,7 +518,7 @@ pub(crate) mod net {
         mut notices: MessageWriter<FieldNotice>,
     ) {
         if let SessionEvent::PetName { pet_number, name } = ev {
-            let found = !name.is_empty();
+            let found = !name.is_empty() && names.pets.get(pet_number).is_none();
             pet_name(pet_number, name, &mut names);
             if found && pet_number != 0 {
                 for guid in units.matching(|s| s.0.unit_pet_number() == pet_number) {
@@ -551,7 +553,7 @@ pub(crate) mod net {
             racial_leader,
         } = ev
         {
-            let found = name.is_some();
+            let found = name.is_some() && names.creatures.get(entry).is_none();
             creature_name(
                 entry,
                 name,
@@ -729,6 +731,13 @@ pub(crate) mod net {
                 .run_system_once_with(on_creature_name, creature(300, None))
                 .unwrap();
             assert!(notices(&mut app).is_empty(), "no such entry");
+            app.world_mut()
+                .run_system_once_with(on_creature_name, creature(299, Some("Wolf")))
+                .unwrap();
+            assert!(
+                notices(&mut app).is_empty(),
+                "a repeat finds no lookup waiting"
+            );
         }
 
         /// A found player name signals the held player alone; an empty one, or a guid not held,
@@ -748,6 +757,13 @@ pub(crate) mod net {
                 .unwrap();
             assert_eq!(notices(&mut app), [signal(PLAYER, 183)]);
             app.world_mut()
+                .run_system_once_with(on_player_name, player(PLAYER, "Brisca"))
+                .unwrap();
+            assert!(
+                notices(&mut app).is_empty(),
+                "a repeat finds no lookup waiting"
+            );
+            app.world_mut()
                 .run_system_once_with(on_player_name, player(0x43, "Far"))
                 .unwrap();
             app.world_mut()
@@ -764,6 +780,16 @@ pub(crate) mod net {
                 )
                 .unwrap();
             assert_eq!(notices(&mut app), [signal(PET, 183)]);
+            app.world_mut()
+                .run_system_once_with(
+                    on_pet_name,
+                    SessionEvent::PetName {
+                        pet_number: 9,
+                        name: "Fang".into(),
+                    },
+                )
+                .unwrap();
+            assert!(notices(&mut app).is_empty(), "a repeat pet name");
         }
     }
 }
