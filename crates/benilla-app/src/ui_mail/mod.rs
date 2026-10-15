@@ -23,7 +23,7 @@ use crate::net::{
 };
 use crate::query_cache::QueryCache;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, sweep_close, NpcSession};
+use crate::ui_session::{CoreCloses, LatchApp, LatchedWindow, NpcWindow};
 
 mod net;
 mod pending;
@@ -115,9 +115,9 @@ impl crate::query_cache::AskOnce for MailOpen {
 }
 
 impl MailOpen {
-    /// A mailbox right-click: the open core stores the guid (`0x4acd27`) and keeps the rows,
-    /// whichever mailbox they came from, and re-shows, as the reference fires `MAIL_SHOW` on
-    /// every use.
+    /// The open core's cell write (`0x4acd27`): the guid, keeping the rows whichever mailbox they
+    /// came from, and `MAIL_SHOW` owed, as the reference fires it on every use. [`open_mailbox`]
+    /// registers on the latch first.
     pub(crate) fn click(&mut self, mailbox: u64) {
         self.mailbox = Some(mailbox);
         self.show_requested = true;
@@ -165,16 +165,57 @@ impl MailOpen {
     }
 }
 
-/// The range guard ([`crate::ui_session`]) closes the window, the `CloseMail` clear, past the
-/// client's own interaction gate (`0x493230`, 5.5556 yd); the server's `CheckMailBox`
-/// (`MailHandler.cpp:69`) checks 5 yd on each mailbox `CMSG`.
-impl NpcSession for MailOpen {
-    fn npc(&self) -> Option<u64> {
+/// The mailbox's cell `[0xb6ef88]`; `CloseMail` (`0x4aded0`) is the core's ordinary arm. The
+/// server's `CheckMailBox` (`MailHandler.cpp:69`) also checks 5 yd on each mailbox `CMSG`.
+impl LatchedWindow for MailOpen {
+    const WINDOW: NpcWindow = NpcWindow::Mail;
+
+    fn cell(&self) -> Option<u64> {
         self.mailbox
     }
 
-    fn close(&mut self) {
-        self.clear();
+    fn dispatched(world: &mut World) {
+        close_core(world);
+    }
+
+    fn take_close_verb(script: &mut UiScript) -> bool {
+        script.take_mail_close()
+    }
+}
+
+/// A mailbox use (`0x5f6820` → `0x4acd10`): the latch first, with no test of the cell
+/// (`0x4acd1c`), so a use of the open mailbox closes the window and opens it again; then the cell
+/// (`0x4acd27`); the feed resets the compose tab and fires `MAIL_SHOW` (`0x4acd38`, `0x4acd42`).
+pub(crate) fn open_mailbox(world: &mut World, mailbox: u64) {
+    crate::ui_session::register(world, mailbox);
+    world.resource_mut::<MailOpen>().click(mailbox);
+}
+
+/// The close core's ordinary arm, `0x4acd50` with `cl = 0`: the compose tab's silent reset first
+/// and always (`0x4acd55` → `0x4acdc0(0)`), then, with a mailbox open, the latch release
+/// (`0x4acd85`), the cell cleared, `MAIL_CLOSED` (`0x4acda3`) and the tail (`0x4acda8`,
+/// `0x4acdb1`): after a read, or an arrival while open, the next-mail-time query, stamping "no
+/// mail".
+pub(crate) fn close_core(world: &mut World) {
+    crate::ui_session::with_script(world, |script| script.reset_compose_tab_silently());
+    let Some(mailbox) = world.resource::<MailOpen>().mailbox else {
+        return;
+    };
+    crate::ui_session::release(world, mailbox);
+    world.resource_mut::<MailOpen>().clear();
+    crate::ui_session::note_closed(world, NpcWindow::Mail);
+    crate::ui_session::fire(world, |script| {
+        script.mail_closed();
+        script.fire_event("MAIL_CLOSED", vec![]);
+    });
+    let refresh = world
+        .get_resource_mut::<MailPending>()
+        .is_some_and(|mut p| p.take_refresh());
+    if refresh {
+        world.resource_mut::<MailPending>().on_query_sent();
+        if let Some(net) = world.get_resource::<NetCommands>() {
+            let _ = net.0.send(ClientCommand::QueryNextMailTime);
+        }
     }
 }
 
@@ -182,7 +223,8 @@ impl NpcSession for MailOpen {
 /// tab's silent reset runs first and always (`0x4acd55` → `0x4acdc0(0)`), lifting the
 /// attachment's lock in the VM the sweep runs in (`0x4acdd6`); then the mailbox is forgotten with
 /// no `MAIL_CLOSED`, no interaction release and no refresh (`0x4acd5f`-`0x4acd6b`), the `cl`
-/// arm the close button's `0x4acd71` skips to.
+/// arm the close button's `0x4acd71` skips to. The latch still names the mailbox, which the
+/// sweep's interaction close then finds no window for.
 pub(crate) fn close_mail_on_leave_world(
     script: Option<NonSendMut<UiScript>>,
     mut mail: ResMut<MailOpen>,
@@ -190,7 +232,7 @@ pub(crate) fn close_mail_on_leave_world(
     if let Some(mut script) = script {
         script.reset_compose_tab_silently();
     }
-    sweep_close(&mut *mail);
+    mail.clear();
 }
 
 pub(crate) struct UiMailPlugin;
@@ -201,13 +243,13 @@ impl Plugin for UiMailPlugin {
         net::register(app);
         app.init_resource::<MailOpen>()
             .init_resource::<MailPending>()
+            .add_latched_window::<MailOpen>()
             .add_sweep_leg(SweepLeg::Mail, close_mail_on_leave_world)
             .add_systems(
                 Update,
                 (
-                    // Range-close, feed, then drain after input, so each edge lands the same
-                    // frame; the feed runs after `UnitFeed` so `SetInboxItem` reads the template.
-                    close_npc_session_out_of_range::<MailOpen>.before(feed_mail),
+                    // Feed, then drain after input, so each edge lands the same frame; the feed
+                    // runs after `UnitFeed` so `SetInboxItem` reads the template.
                     feed_mail.after(crate::ui_unit::UnitFeed).in_set(UiFeed),
                     drain_mail.after(UiInput),
                     // The cascade's order: the time query, this, then the battlefield status.
@@ -489,6 +531,7 @@ struct MailFeedExtras<'w, 's> {
     packages: Option<Res<'w, Packages>>,
     /// The package rows went to this VM.
     packages_pushed: Local<'s, crate::ui_script::VmMemo<bool>>,
+    closes: CoreCloses<'w, 's>,
 }
 
 /// `0x4ad050`'s order for each result: the arm's message line and a send's compose reset
@@ -565,6 +608,7 @@ fn feed_mail(
         stationeries: mut last_stationeries,
         packages,
         mut packages_pushed,
+        mut closes,
     } = extras;
     if let Some(packages) = packages.as_deref() {
         let pushed = packages_pushed.get(&script);
@@ -580,6 +624,10 @@ fn feed_mail(
     let last = last.get(&script);
     let last_mailbox = last_mailbox.get(&script);
     let last_has_new_mail = last_has_new_mail.get(&script);
+    if closes.since_last(&script, NpcWindow::Mail) {
+        *last = None;
+        *last_mailbox = None;
+    }
 
     // `None` until the player is named; the diff re-substitutes an open letter when it lands.
     let subject = crate::npc_text::player_identity(&self_q, &names, &commands);
@@ -602,8 +650,9 @@ fn feed_mail(
             &get_text,
         )
     };
+    // A close is the core's, which told the VM; the leave-world sweep's and a disconnect's tell
+    // it nothing.
     let opened = last_mailbox.is_none() && mail.mailbox.is_some();
-    let closed = last_mailbox.is_some() && mail.mailbox.is_none();
     let show_requested = std::mem::take(&mut mail.show_requested);
     let lists = std::mem::take(&mut mail.list_results);
     let changed = fresh != *last;
@@ -650,16 +699,6 @@ fn feed_mail(
         // `MAIL_SEND_SUCCESS`, page-turn sound and all, is the reference's too.
         script.reset_compose_tab();
         script.fire_event("MAIL_SHOW", vec![]);
-    } else if closed {
-        // The close core's silent reset (`0x4acd50` → `0x4acdc0(0)`).
-        script.reset_compose_tab_silently();
-        script.fire_event("MAIL_CLOSED", vec![]);
-        // The close core's tail (`0x4acdad`, `0x4acdb1`): after a read, or an arrival while open,
-        // re-ask the server, stamping "no mail". `CloseMail` and the range close both land here.
-        if pending.take_refresh() {
-            pending.on_query_sent();
-            let _ = commands.0.send(ClientCommand::QueryNextMailTime);
-        }
     } else if mail.mailbox.is_some() {
         // A re-click re-shows the open window; `MAIL_SHOW`'s `CheckInbox` refreshes the list.
         if show_requested {
@@ -699,10 +738,11 @@ fn feed_mail(
     }
 }
 
-/// The Lua intents out as the mail `CMSG`s; `CloseMail` is a local clear that sends nothing.
+/// The Lua intents out as the mail `CMSG`s; `CloseMail` runs the core, which sends nothing.
 fn drain_mail(
     script: Option<NonSendMut<UiScript>>,
     mut mail: ResMut<MailOpen>,
+    mut world_commands: Commands,
     commands: Res<NetCommands>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     objects: Objects,
@@ -716,7 +756,7 @@ fn drain_mail(
         // the VM let through took its lock; dropped unsent, it gives the lock back, so no verb
         // waits on an answer that never comes.
         if script.take_mail_close() {
-            mail.clear();
+            crate::ui_session::queue(&mut world_commands, close_core);
         }
         let _ = script.take_mail_opens();
         let mut dropped = script.take_mail_check_inbox();
@@ -855,7 +895,7 @@ fn drain_mail(
     }
 
     if script.take_mail_close() {
-        mail.clear();
+        crate::ui_session::queue(&mut world_commands, close_core);
     }
 }
 
@@ -1483,7 +1523,8 @@ mod tests {
         // The leave-world sweep's mail leg (`0x4acd50`, `cl=1`) forgets the mailbox the same way
         // and touches no pending result.
         m.click(0x1);
-        assert!(crate::ui_session::sweep_close(&mut m).is_some());
+        m.clear();
+        assert_eq!(m.mailbox, None);
         assert_eq!(m.results.len(), 1);
         m.clear_session();
         assert!(m.results.is_empty());

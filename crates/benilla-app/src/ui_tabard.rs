@@ -2,8 +2,8 @@
 //! `MSG_TABARDVENDOR_ACTIVATE` opens it (`0x5e70c0` → `0x4f5840`); no Lua verb does. Our own body
 //! wears the design over a forced tabard geoset (`[cc+0xc]`, `0x47a610`).
 //!
-//! `CLOSE_TABARD_FRAME` fires once per close; the reference fires it twice on the Lua route, a
-//! re-entrancy (`0x4f58a0 → 0x4931c0 → 0x493310 → 0x4934a0`) the stock `HideUIPanel` absorbs.
+//! The designer is a window on the latch, so its core run while it holds the latch fires
+//! `CLOSE_TABARD_FRAME` twice, the re-entrancy `0x4f58a0` → `0x4931c0` → `0x493310` → `0x4934a0`.
 
 use bevy::prelude::*;
 
@@ -15,33 +15,31 @@ use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, S
 use crate::portrait::PaperDollBooth;
 use crate::ui_guild::GuildState;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
-use crate::ui_session::{close_npc_session_out_of_range, NpcSession};
+use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 /// The open designer: its vendor (`[0xbdcee8]`), the save-in-flight latch (`[0xc4d780]`), and
-/// the events and lines owed to the next feed.
+/// the open and lines owed to the next feed. The close is the core's ([`close_core`]).
 #[derive(Resource, Default)]
 pub(crate) struct TabardOpen {
     vendor: Option<u64>,
     save_pending: bool,
     open_event: bool,
-    close_event: bool,
     pending_events: u32,
     lines: Vec<&'static str>,
 }
 
 impl TabardOpen {
-    /// `MSG_TABARDVENDOR_ACTIVATE` in (`0x4f5840`).
+    /// The designer's vendor, the cell `[0xbdcee8]`; `None` when it is closed.
+    pub(crate) fn npc(&self) -> Option<u64> {
+        self.vendor
+    }
+
+    /// An open designer on `vendor`, its `OPEN_TABARD_FRAME` owed, for a test that seats it
+    /// directly.
+    #[cfg(test)]
     pub(crate) fn open(&mut self, vendor: u64) {
         self.vendor = Some(vendor);
         self.open_event = true;
-    }
-
-    /// The close core (`0x4f58a0`) that `CloseTabardCreation()`, the walk-away leash and the
-    /// world leave share; it fires only with a vendor stored.
-    fn close_core(&mut self) {
-        if self.vendor.take().is_some() {
-            self.close_event = true;
-        }
     }
 
     /// `MSG_SAVE_GUILD_EMBLEM` in (`0x5e70f0`), true on success; a failure re-fires
@@ -64,13 +62,53 @@ impl TabardOpen {
     }
 }
 
-impl NpcSession for TabardOpen {
-    fn npc(&self) -> Option<u64> {
+/// `CloseTabardCreation` (`0x4f5900` → `0x4f58a0`) is the core itself.
+impl LatchedWindow for TabardOpen {
+    const WINDOW: NpcWindow = NpcWindow::Tabard;
+
+    fn cell(&self) -> Option<u64> {
         self.vendor
     }
-    fn close(&mut self) {
-        self.close_core();
+
+    fn dispatched(world: &mut World) {
+        close_core(world);
     }
+
+    fn take_close_verb(script: &mut UiScript) -> bool {
+        script.take_tabard_close()
+    }
+}
+
+/// `MSG_TABARDVENDOR_ACTIVATE` in (`0x5e70c0` → `0x4f5840`): the opener writes the cell first
+/// (`0x4f5845`) and registers on the latch after (`0x4f5882`), so an activate from the vendor
+/// whose designer is already open closes it through `0x493310`, cell and all, and the designer
+/// reopens holding the latch with its cell clear; then `OPEN_TABARD_FRAME` (`0x4f588d`).
+pub(crate) fn open_tabard(world: &mut World, vendor: u64) {
+    world.resource_mut::<TabardOpen>().vendor = Some(vendor);
+    crate::ui_session::register(world, vendor);
+    world.resource_mut::<TabardOpen>().open_event = true;
+}
+
+/// The close core `0x4f58a0`: with a vendor stored, the preview ends (`0x5e0830`), the latch is
+/// released (`0x4f58da`), the cell cleared, then `CLOSE_TABARD_FRAME` (`0x4f58f8`). An open not
+/// yet told goes first, as the reference fired it at the open.
+pub(crate) fn close_core(world: &mut World) {
+    let Some(vendor) = world.resource::<TabardOpen>().vendor else {
+        return;
+    };
+    crate::ui_session::release(world, vendor);
+    let opened = {
+        let mut open = world.resource_mut::<TabardOpen>();
+        open.vendor = None;
+        std::mem::take(&mut open.open_event)
+    };
+    crate::ui_session::note_closed(world, NpcWindow::Tabard);
+    crate::ui_session::fire(world, |script| {
+        if opened {
+            script.fire_event("OPEN_TABARD_FRAME", vec![]);
+        }
+        script.fire_event("CLOSE_TABARD_FRAME", vec![]);
+    });
 }
 
 /// The design our own body wears while the frame is open.
@@ -154,9 +192,6 @@ fn feed_tabard(
     if std::mem::take(&mut open.open_event) {
         script.fire_event("OPEN_TABARD_FRAME", vec![]);
     }
-    if std::mem::take(&mut open.close_event) {
-        script.fire_event("CLOSE_TABARD_FRAME", vec![]);
-    }
     for _ in 0..std::mem::take(&mut open.pending_events) {
         script.fire_event("TABARD_SAVE_PENDING", vec![]);
     }
@@ -190,27 +225,10 @@ fn feed_tabard(
     }
 }
 
-/// The leave-world sweep's tabard leg (`0x490b02` → `0x4f5830` → `0x4f58a0`): the close core,
-/// told to the VM the sweep runs in (`CLOSE_TABARD_FRAME`, `0x4f58f8`) rather than left to the
-/// feed, which a `/reload` hands the next VM. An open not yet told goes first, as the reference
-/// fired it at the open.
-fn close_tabard_on_leave_world(script: Option<NonSendMut<UiScript>>, mut open: ResMut<TabardOpen>) {
-    open.close_core();
-    let opened = std::mem::take(&mut open.open_event);
-    let closed = std::mem::take(&mut open.close_event);
-    if let Some(mut script) = script {
-        if opened {
-            script.fire_event("OPEN_TABARD_FRAME", vec![]);
-        }
-        if closed {
-            script.fire_event("CLOSE_TABARD_FRAME", vec![]);
-        }
-    }
-}
-
 fn drain_tabard(
     script: Option<NonSendMut<UiScript>>,
     mut open: ResMut<TabardOpen>,
+    mut world_commands: Commands,
     guilds: Res<GuildState>,
     self_q: Query<&ObjectStore, With<SelfPlayer>>,
     commands: Res<NetCommands>,
@@ -221,7 +239,7 @@ fn drain_tabard(
     };
     for intent in script.take_tabard_intents() {
         match intent {
-            TabardIntent::Close => open.close_core(),
+            TabardIntent::Close => crate::ui_session::queue(&mut world_commands, close_core),
             TabardIntent::Save(design) => {
                 // The reference sends the global interaction target (`0x502a60` reads
                 // `[0xb4e2d0]`), which the open set to this vendor: the same guid.
@@ -291,9 +309,9 @@ mod net {
             .net_handler(K::SaveGuildEmblemResult, on_save_result);
     }
 
-    fn on_activate(In(ev): In<SessionEvent>, mut tabard: ResMut<TabardOpen>) {
+    fn on_activate(In(ev): In<SessionEvent>, mut commands: Commands) {
         if let SessionEvent::TabardVendorActivate(vendor) = ev {
-            tabard.open(vendor);
+            commands.queue(move |world: &mut World| super::open_tabard(world, vendor));
         }
     }
 
@@ -319,12 +337,13 @@ impl Plugin for TabardUiPlugin {
         net::register(app);
         app.init_resource::<TabardOpen>()
             .init_resource::<TabardDesign>()
-            .add_sweep_leg(SweepLeg::Tabard, close_tabard_on_leave_world)
+            .add_latched_window::<TabardOpen>()
+            // `0x490b02` → `0x4f5830` → `0x4f58a0`, the core.
+            .add_sweep_leg(SweepLeg::Tabard, close_core)
             .add_systems(
                 Update,
                 (
                     reset_on_world_enter.before(feed_tabard),
-                    close_npc_session_out_of_range::<TabardOpen>.before(feed_tabard),
                     feed_tabard.in_set(UiFeed),
                     drain_tabard.after(UiInput),
                 ),
@@ -401,17 +420,52 @@ mod tests {
         assert!(t.save_pending);
     }
 
+    /// The core fires only with a vendor stored, twice while the designer holds the latch, and
+    /// tells an open not yet fed first.
     #[test]
     fn the_close_core_fires_only_with_a_vendor_stored() {
-        let mut t = TabardOpen::default();
-        t.close_core();
-        assert!(!t.close_event);
-        t.open(0xF130_0000_0000_0042);
-        assert!(t.open_event);
-        t.close_core();
-        assert!(t.close_event && t.vendor.is_none());
-        t.close_event = false;
-        t.close_core();
-        assert!(!t.close_event, "a second close is silent");
+        use crate::ui_script::sweep_test::{seen_in, spied_vm};
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        let mut app = App::new();
+        app.init_resource::<TabardOpen>()
+            .add_latched_window::<TabardOpen>()
+            .insert_non_send_resource(spied_vm(&["OPEN_TABARD_FRAME", "CLOSE_TABARD_FRAME"]));
+        close_core(app.world_mut());
+        assert!(seen_in(&app).is_empty(), "no vendor, no close");
+
+        open_tabard(app.world_mut(), VENDOR);
+        close_core(app.world_mut());
+        assert_eq!(
+            seen_in(&app),
+            [
+                "OPEN_TABARD_FRAME",
+                "CLOSE_TABARD_FRAME",
+                "CLOSE_TABARD_FRAME"
+            ]
+        );
+        assert_eq!(app.world().resource::<TabardOpen>().npc(), None);
+        close_core(app.world_mut());
+        assert_eq!(seen_in(&app).len(), 3, "a second close is silent");
+    }
+
+    /// An activate from the vendor whose designer is open writes the cell before it registers,
+    /// so `0x493310` finds the designer and closes it, cell and all: it reopens holding the latch
+    /// with no cell.
+    #[test]
+    fn a_second_activate_from_the_open_vendor_closes_the_designer_cell_and_all() {
+        const VENDOR: u64 = 0xF130_0000_0000_0042;
+        let mut app = App::new();
+        app.init_resource::<TabardOpen>()
+            .add_latched_window::<TabardOpen>();
+        open_tabard(app.world_mut(), VENDOR);
+        open_tabard(app.world_mut(), VENDOR);
+        assert_eq!(app.world().resource::<TabardOpen>().npc(), None);
+        assert_eq!(
+            app.world()
+                .resource::<crate::ui_session::InteractLatch>()
+                .guid(),
+            Some(VENDOR)
+        );
+        assert!(app.world().resource::<TabardOpen>().open_event);
     }
 }

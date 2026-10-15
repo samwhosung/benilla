@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands, ObjectStore, Objects, SelfGuid, SelfPlayer};
 use crate::ui_items::{find_item, ItemSearch};
-use crate::ui_session::{npc_switched, sweep_close, NpcSession};
+use crate::ui_session::{CoreCloses, NpcWindow};
 
 use super::{lines, GuildRegistrarState, PetitionState};
 
@@ -38,21 +38,6 @@ impl FedPetition {
     }
 }
 
-/// The leave-world sweep's registrar leg (`0x490b07` → `0x4f4fa0` → `0x4f5010`): an open
-/// registrar closes with `GUILD_REGISTRAR_CLOSED` (`0x4f503a`) in the VM the sweep runs in. The
-/// charter window is no leg's: the sweep frees only its signer list (`0x490b11` → `0x4f3eb0`).
-pub(super) fn close_registrar_on_leave_world(
-    script: Option<NonSendMut<UiScript>>,
-    mut registrar: ResMut<GuildRegistrarState>,
-) {
-    if sweep_close(&mut *registrar).is_none() {
-        return;
-    }
-    if let Some(mut script) = script {
-        script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
-    }
-}
-
 /// The leave-world sweep's petition leg (`0x490b11` → `0x4f3eb0`): the signer list is freed, its
 /// count zeroed, with no event; the charter window stays.
 pub(super) fn free_petition_signers_on_leave_world(mut petition: ResMut<PetitionState>) {
@@ -69,14 +54,18 @@ pub(super) fn feed_petition(
     self_guid: Res<SelfGuid>,
     commands: Res<NetCommands>,
     mut sink: crate::ui_action::MessageSink,
-    // Apart from the charter's: the leave-world sweep closes the registrar and tells the VM, and
-    // leaves the charter open.
+    // Apart from the charter's: the registrar's close core tells the VM, and leaves the charter
+    // open.
     mut fed_registrar: crate::ui_script::WindowMemo<Option<u64>>,
+    mut closes: CoreCloses,
 ) {
     let Some(mut script) = script else {
         return;
     };
     let fed_registrar = fed_registrar.get(&script);
+    if closes.since_last(&script, NpcWindow::Registrar) {
+        *fed_registrar = None;
+    }
 
     // Shown before the snapshot, so a refusal lands the same frame as its state change; a key the
     // VM's `GlobalStrings.lua` lacks shows nothing, as in the reference.
@@ -151,20 +140,11 @@ pub(super) fn feed_petition(
         can_sign,
     });
 
-    // ── The registrar's edges. Switching registrars is a close then an open: `ShowUIPanel`
-    //    returns early on a visible frame, so the open sound would not replay.
+    // ── The registrar's open; its close is the core's ([`super::close_core`]), and a disconnect's
+    //    clear tells the VM nothing.
     let now_registrar = registrar.npc();
-    if npc_switched(*fed_registrar, now_registrar) {
-        script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
+    if now_registrar.is_some() && *fed_registrar != now_registrar {
         script.fire_event("GUILD_REGISTRAR_SHOW", vec![]);
-        // Drop the close intent `OnHide` just queued, or the drain would close the new registrar.
-        let _ = script.drop_petition_close_intents();
-    } else {
-        match (*fed_registrar, now_registrar) {
-            (None, Some(_)) => script.fire_event("GUILD_REGISTRAR_SHOW", vec![]),
-            (Some(_), None) => script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]),
-            _ => {}
-        }
     }
     *fed_registrar = now_registrar;
 
@@ -198,7 +178,7 @@ pub(super) fn feed_petition(
 /// (`0x4f3f60`, `decline_on_close`); `CloseGuildRegistrar` sends nothing.
 pub(super) fn drain_petition(
     script: Option<NonSendMut<UiScript>>,
-    mut registrar: ResMut<GuildRegistrarState>,
+    registrar: Res<GuildRegistrarState>,
     mut petition: ResMut<PetitionState>,
     names: Res<NameCache>,
     objects: Objects,
@@ -208,6 +188,7 @@ pub(super) fn drain_petition(
     commands: Res<NetCommands>,
     tabard: Res<crate::ui_tabard::TabardOpen>,
     mut errors: ResMut<crate::ui_action::UiErrorKeys>,
+    mut world_commands: Commands,
 ) {
     let Some(mut script) = script else {
         return;
@@ -245,8 +226,10 @@ pub(super) fn drain_petition(
                     None => petition.lines.push(lines::no_charter_line()),
                 }
             }
-            // Sends nothing.
-            PetitionRequest::CloseRegistrar => registrar.close(),
+            // Sends nothing; the core runs.
+            PetitionRequest::CloseRegistrar => {
+                crate::ui_session::queue(&mut world_commands, super::close_core);
+            }
             PetitionRequest::TabardInfo => {
                 let npc = registrar.npc().unwrap_or(0);
                 if let Some(store) = self_q.iter().next() {
@@ -258,7 +241,7 @@ pub(super) fn drain_petition(
                         &mut errors,
                     );
                 }
-                registrar.close();
+                crate::ui_session::queue(&mut world_commands, super::close_core);
             }
             PetitionRequest::ClosePetition => {
                 petition.decline_on_close(me, &commands);

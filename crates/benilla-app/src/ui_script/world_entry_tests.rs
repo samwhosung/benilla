@@ -451,7 +451,7 @@ fn sweep_lock_legs(world: &mut World) {
             crate::ui_loot::close_loot_on_leave_world.in_set(SweepLeg::Loot),
             crate::ui_merchant::close_core.in_set(SweepLeg::Merchant),
             crate::ui_mail::close_mail_on_leave_world.in_set(SweepLeg::Mail),
-            crate::ui_auction::close_auction_on_leave_world.in_set(SweepLeg::Auction),
+            crate::ui_auction::close_core.in_set(SweepLeg::Auction),
         ));
     });
     let (tx, _rx) = crossbeam_channel::unbounded();

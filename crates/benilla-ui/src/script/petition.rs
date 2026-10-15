@@ -96,6 +96,16 @@ impl super::UiScript {
         std::mem::take(&mut self.model_mut().petition_requests)
     }
 
+    /// Take the `CloseGuildRegistrar()` calls queued since the last drain, leaving the other
+    /// intents in order: a close core answers the call its own `GUILD_REGISTRAR_CLOSED` raised
+    /// through `OnHide`.
+    pub fn take_registrar_close(&mut self) -> bool {
+        let requests = &mut self.model_mut().petition_requests;
+        let before = requests.len();
+        requests.retain(|r| !matches!(r, PetitionRequest::CloseRegistrar));
+        requests.len() != before
+    }
+
     /// Drop the queued close intents, returning how many. Firing `PETITION_CLOSED` runs `OnHide`,
     /// whose `ClosePetition()` queues a close; on a switch to a newly offered charter that close
     /// would shut the new window and decline it on the wire. A user's close survives, as the feed

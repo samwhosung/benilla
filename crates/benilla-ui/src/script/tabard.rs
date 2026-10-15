@@ -63,6 +63,15 @@ impl super::UiScript {
     pub fn take_tabard_intents(&mut self) -> Vec<TabardIntent> {
         std::mem::take(&mut self.model_mut().tabard_intents)
     }
+
+    /// Take the `CloseTabardCreation()` calls queued since the last drain, leaving the saves in
+    /// order: a close core answers the call its own `CLOSE_TABARD_FRAME` raised through `OnHide`.
+    pub fn take_tabard_close(&mut self) -> bool {
+        let intents = &mut self.model_mut().tabard_intents;
+        let before = intents.len();
+        intents.retain(|i| !matches!(i, TabardIntent::Close));
+        intents.len() != before
+    }
 }
 
 /// The three `this` raises every method shares (`0x847ef8`, `0x847ec0`, `0x847e98`).

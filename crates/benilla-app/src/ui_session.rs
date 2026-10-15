@@ -62,8 +62,7 @@ impl Plugin for UiSessionPlugin {
 /// A window or question bound to a live NPC that keeps its own guid off the latch, and closes
 /// itself through [`close_npc_session_out_of_range::<T>`] ahead of its feed: the binder and
 /// talent-wipe questions and the pet trainer's, as the reference re-runs its interact-range test
-/// against each one's latched guid, and the windows not yet on [`InteractLatch`] (trade, the
-/// registrar, the tabard designer, the mailbox and the auction house).
+/// against each one's latched guid, and the trade window, not yet on [`InteractLatch`].
 pub(crate) trait NpcSession: Resource {
     /// The bound NPC's guid; `None` when nothing is open.
     fn npc(&self) -> Option<u64>;
@@ -86,21 +85,6 @@ fn leash_sq(npc: u64) -> f32 {
 
 /// `14.0²`, the leash for a session latched onto a player.
 const PLAYER_LEASH_SQ: f32 = 196.0;
-
-/// Whether a window off the latch switched to a different NPC (`Some(a)` to `Some(b)`): its feed
-/// fires `*_CLOSED` then `*_SHOW`, then consumes the close intent its own `*_CLOSED` queued so the
-/// drain does not wipe the new session. A window on the latch closes through its core instead.
-pub(crate) fn npc_switched(prev: Option<u64>, now: Option<u64>) -> bool {
-    matches!((prev, now), (Some(a), Some(b)) if a != b)
-}
-
-/// Close `T`'s open session as its leave-world sweep leg does, client-side with no packet: the
-/// NPC it was bound to, or `None` when nothing was open. The leg then tells the VM.
-pub(crate) fn sweep_close<T: NpcSession>(session: &mut T) -> Option<u64> {
-    let npc = session.npc()?;
-    session.close();
-    Some(npc)
-}
 
 /// Close `T`'s open question when the player leaves the leash or the NPC despawns.
 pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
@@ -133,26 +117,17 @@ pub(crate) struct InteractNpc(pub(crate) Option<Entity>, pub(crate) Option<u64>)
 /// Publish the latch as [`InteractNpc`]. The reference's `"npc"` is the latch itself (`0x515c00`),
 /// but a quest panel opened from a bag item publishes none here: there is no unit bake for an
 /// item. The windows not yet on the latch follow it, as before them. `Option<Res<_>>` lets a test mount it without every window.
-#[allow(clippy::too_many_arguments)] // one Bevy system's full input set
 pub(crate) fn feed_interact_npc(
     latch: Option<Res<InteractLatch>>,
     // Trade's "npc" is the partner, a live player.
     trade: Option<Res<crate::ui_trade::TradeSession>>,
-    auction: Option<Res<crate::ui_auction::AuctionOpen>>,
-    // vmangos closes the gossip menu before it sends `SMSG_PETITION_SHOWLIST`
-    // (`Player.cpp:12428-12431`).
-    registrar: Option<Res<crate::ui_petition::GuildRegistrarState>>,
-    tabard: Option<Res<crate::ui_tabard::TabardOpen>>,
     index: Option<Res<GuidIndex>>,
     mut out: ResMut<InteractNpc>,
 ) {
     let guid = latch
         .and_then(|l| l.guid())
         .filter(|&g| !benilla_protocol::guid::is_item(g))
-        .or_else(|| trade.and_then(|s| s.npc()))
-        .or_else(|| auction.and_then(|s| s.npc()))
-        .or_else(|| registrar.and_then(|s| s.npc()))
-        .or_else(|| tabard.and_then(|s| s.npc()));
+        .or_else(|| trade.and_then(|s| s.npc()));
     // Field 0 is the entity the booth bakes and the facing chain steers by; field 1 is the guid
     // `crate::ui_unit` names the token by, which holds even when the entity is not streamed.
     // Written only on a change: the unit feed's dirty gate reads `is_changed()` on it.
@@ -348,17 +323,27 @@ mod tests {
             InteractNpc(None, None)
         );
 
-        // The latch clear, a window off it (the auctioneer) publishes its own.
-        dispatch(app.world_mut());
-        app.init_resource::<crate::ui_auction::AuctionOpen>();
+        // The latch clear, a window off it (a trade's partner) publishes its own.
+        const PARTNER: u64 = 0x0000_0000_0000_0008;
+        let partner = app.world_mut().spawn_empty().id();
         app.world_mut()
-            .resource_mut::<crate::ui_auction::AuctionOpen>()
-            .open(VENDOR, 1);
+            .resource_mut::<GuidIndex>()
+            .0
+            .insert(PARTNER, partner);
+        dispatch(app.world_mut());
+        app.init_resource::<crate::ui_trade::TradeSession>();
+        {
+            let mut trade = app
+                .world_mut()
+                .resource_mut::<crate::ui_trade::TradeSession>();
+            trade.begin(PARTNER);
+            trade.open_window();
+        }
         app.update();
         assert_eq!(
             app.world().resource::<InteractNpc>().0,
-            Some(npc),
-            "the auctioneer's own portrait"
+            Some(partner),
+            "the trade partner's own portrait"
         );
     }
 

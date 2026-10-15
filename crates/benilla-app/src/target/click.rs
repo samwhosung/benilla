@@ -164,10 +164,11 @@ fn interaction_already_open_on(target: u64, interact: &crate::ui_session::Intera
 
 /// The refusals and openers the dispatchers raise.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(crate) struct Feedback<'w> {
+pub(crate) struct Feedback<'w, 's> {
     errors: ResMut<'w, crate::ui_action::UiErrorKeys>,
     cast_errors: ResMut<'w, crate::ui_action::CastErrors>,
-    mail: ResMut<'w, crate::ui_mail::MailOpen>,
+    // The mailbox's open, which registers on the interaction latch with the world in hand.
+    windows: Commands<'w, 's>,
     item_text: ResMut<'w, crate::ui_item_text::ItemTextOpen>,
     // The opener queue: this system cannot also hold `CastLadder` (a second `Items` and
     // `CastErrors` borrow), so the lock verdict goes to `ui_action::drain::drain_go_openers`.
@@ -176,7 +177,7 @@ pub(crate) struct Feedback<'w> {
     stone_uses: MessageWriter<'w, crate::ui_dialog_verbs::MeetingStoneUse>,
 }
 
-impl Feedback<'_> {
+impl Feedback<'_, '_> {
     /// Whether a walk started; the leash's refusal says `ERR_AUTOFOLLOW_TOO_FAR` (`0x61110c`).
     fn walked(&mut self, started: Result<(), crate::player::Refused>) -> bool {
         match started {
@@ -222,7 +223,7 @@ pub(crate) struct Dispatch<'w, 's> {
     >,
     places: Query<'w, 's, &'static Transform>,
     service: ServiceArms<'w>,
-    feedback: Feedback<'w>,
+    feedback: Feedback<'w, 's>,
     auto: crate::player::AutoMove<'w, 's>,
     player: Res<'w, crate::player::Player>,
 }
@@ -368,7 +369,9 @@ impl Dispatch<'_, '_> {
         if go_type == cursor_mode::GO_TYPE_MAILBOX {
             if in_reach {
                 debug!("right-click mailbox: open mail window {guid:#x}");
-                self.feedback.mail.click(guid);
+                self.feedback
+                    .windows
+                    .queue(move |world: &mut World| crate::ui_mail::open_mailbox(world, guid));
             } else {
                 self.walk_to_object(entity, guid, go_type, walk);
             }

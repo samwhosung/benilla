@@ -161,6 +161,14 @@ impl super::UiScript {
         self.model_mut().mail = state;
     }
 
+    /// The close core zeroed the mailbox (`0x4acd8f`): the verbs find none from here, ahead of
+    /// the snapshot the next feed pushes.
+    pub fn mail_closed(&mut self) {
+        if let Some(mail) = self.model_mut().mail.as_mut() {
+            mail.open = false;
+        }
+    }
+
     /// Take the `CheckInbox` flag; the app answers it with `CMSG_GET_MAIL_LIST`.
     pub fn take_mail_check_inbox(&mut self) -> bool {
         std::mem::take(&mut self.model_mut().mail_check_inbox)

@@ -38,7 +38,6 @@ use crate::target::cursor_mode::npc_flags;
 use crate::ui_gossip::GossipState;
 use crate::ui_items::{find_item, ItemSearch, PACK_SLOTS};
 use crate::ui_petition::GuildRegistrarState;
-use crate::ui_session::NpcSession;
 
 /// Aldwin Laughlin's spawn, the `.go xyz` target.
 const REGISTRAR_AT: [f32; 3] = [-8885.25, 614.395, 95.2576];

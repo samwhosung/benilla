@@ -1,12 +1,10 @@
 //! The guild-charter session: the registrar window, the petition window, and the verbs that
 //! found a guild.
 //!
-//! The registrar is an NPC session: its `GUILD_REGISTRAR_SHOW` firer (`0x4f4fb0`, firing at
-//! `0x4f5003`) calls `CGGameUI::SetInteractNPC` (`0x4930d0`) like every NPC window. The petition
-//! window is bound to a charter item with no NPC, so walking away from the registrar leaves it
-//! open. vmangos sends `SMSG_GOSSIP_COMPLETE` before the showlist (`Player.cpp:12428-12431`,
-//! `GossipDef.cpp:231-236`), so forcing the gossip close here, as the bank must, would close it
-//! twice.
+//! The registrar is an NPC window on the latch: its `GUILD_REGISTRAR_SHOW` firer (`0x4f4fb0`,
+//! firing at `0x4f5003`) registers through `CGGameUI::SetInteractNPC` (`0x4930d0`) like every NPC
+//! window, closing whichever window holds it. The petition window is bound to a charter item with
+//! no NPC, so walking away from the registrar leaves it open.
 //!
 //! `SMSG_PETITION_SHOW_SIGNATURES` carries no text: the name and requirement come from
 //! `SMSG_PETITION_QUERY_RESPONSE`, the signer names from the name cache. It answers our request
@@ -22,12 +20,12 @@ use crate::names::NameCache;
 use crate::net::{ClientCommand, NetCommands};
 use crate::query_cache::QueryCache;
 use crate::ui_script::{SweepApp, SweepLeg, UiFeed, UiInput};
-use crate::ui_session::NpcSession;
+use crate::ui_session::{LatchApp, LatchedWindow, NpcWindow};
 
 mod feed;
 mod lines;
 
-/// The open registrar, apart from [`PetitionState`] so the walk-away guard closes only it.
+/// The open registrar, apart from [`PetitionState`] so a close of the registrar leaves the charter.
 #[derive(Resource, Default)]
 pub(crate) struct GuildRegistrarState {
     open: Option<Registrar>,
@@ -50,7 +48,7 @@ impl GuildRegistrarState {
     /// `SMSG_PETITION_SHOWLIST` (`0x5eeb80`) opens the registrar only if the NPC resolves as a
     /// unit (`0x5eec1a`) with both [`REGISTRAR_NPC_FLAGS`] and entry\[0\], never the first visible
     /// row, has `entryFlags & 1` (`0x5eec42`); anything else is dropped silently.
-    fn open(&mut self, list: &PetitionShowList, npc_flags: Option<u32>) -> bool {
+    fn passes(list: &PetitionShowList, npc_flags: Option<u32>) -> bool {
         if npc_flags.is_none_or(|f| f & REGISTRAR_NPC_FLAGS != REGISTRAR_NPC_FLAGS) {
             debug!(
                 "ui_petition: showlist from {:#x} without both registrar npc flags — dropped",
@@ -58,13 +56,22 @@ impl GuildRegistrarState {
             );
             return false;
         }
-        let Some(first) = list.entries.first().filter(|e| e.entry_flags & 1 != 0) else {
+        if list.entries.first().is_none_or(|e| e.entry_flags & 1 == 0) {
             debug!("ui_petition: showlist entry[0] not flagged visible — dropped");
             return false;
-        };
+        }
+        true
+    }
+
+    /// Write the cell and the price for a showlist that [`Self::passes`]; `false` when it does
+    /// not.
+    fn open(&mut self, list: &PetitionShowList, npc_flags: Option<u32>) -> bool {
+        if !Self::passes(list, npc_flags) {
+            return false;
+        }
         self.open = Some(Registrar {
             npc: list.npc,
-            cost: first.charter_cost as u32,
+            cost: list.entries[0].charter_cost as u32,
         });
         true
     }
@@ -81,14 +88,60 @@ impl GuildRegistrarState {
     }
 }
 
-impl NpcSession for GuildRegistrarState {
-    fn npc(&self) -> Option<u64> {
+impl GuildRegistrarState {
+    /// The registrar's NPC, the cell `[0xbdceb0]`; `None` when it is closed.
+    pub(crate) fn npc(&self) -> Option<u64> {
         self.open.as_ref().map(|r| r.npc)
     }
 
-    fn close(&mut self) {
+    /// The disconnect clear, which tells the VM nothing.
+    fn clear(&mut self) {
         self.open = None;
     }
+}
+
+/// `CloseGuildRegistrar` (`0x4f5010`) is the core itself.
+impl LatchedWindow for GuildRegistrarState {
+    const WINDOW: NpcWindow = NpcWindow::Registrar;
+
+    fn cell(&self) -> Option<u64> {
+        self.npc()
+    }
+
+    fn dispatched(world: &mut World) {
+        close_core(world);
+    }
+
+    fn take_close_verb(script: &mut benilla_ui::script::UiScript) -> bool {
+        script.take_registrar_close()
+    }
+}
+
+/// The close core `0x4f5010`: with a registrar open, the latch release (`0x4f5024`), the cell
+/// cleared, then `GUILD_REGISTRAR_CLOSED` (`0x4f503a`).
+pub(crate) fn close_core(world: &mut World) {
+    let Some(npc) = world.resource::<GuildRegistrarState>().npc() else {
+        return;
+    };
+    crate::ui_session::release(world, npc);
+    world.resource_mut::<GuildRegistrarState>().clear();
+    crate::ui_session::note_closed(world, NpcWindow::Registrar);
+    crate::ui_session::fire(world, |script| {
+        script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
+    });
+}
+
+/// `SMSG_PETITION_SHOWLIST` past its gates ([`GuildRegistrarState::open`]) opens the registrar
+/// through `0x4f4fb0`: the latch first, with no test of the cell (`0x4f4fc0`), then the cell
+/// (`0x4f4fdc`); the feed fires `GUILD_REGISTRAR_SHOW` (`0x4f5003`).
+pub(crate) fn open_registrar(world: &mut World, list: &PetitionShowList, npc_flags: Option<u32>) {
+    if !GuildRegistrarState::passes(list, npc_flags) {
+        return;
+    }
+    crate::ui_session::register(world, list.npc);
+    world
+        .resource_mut::<GuildRegistrarState>()
+        .open(list, npc_flags);
 }
 
 /// The open charter and the petition-record cache.
@@ -275,7 +328,7 @@ impl PetitionState {
     }
 }
 
-/// The two resources, the registrar's walk-away guard, and the feed and drain.
+/// The two resources, the registrar on the latch, and the feed and drain.
 pub(crate) struct UiPetitionPlugin;
 
 impl Plugin for UiPetitionPlugin {
@@ -284,7 +337,9 @@ impl Plugin for UiPetitionPlugin {
         crate::query_cache::register::<PetitionState>(app);
         app.init_resource::<GuildRegistrarState>()
             .init_resource::<PetitionState>()
-            .add_sweep_leg(SweepLeg::Registrar, feed::close_registrar_on_leave_world)
+            .add_latched_window::<GuildRegistrarState>()
+            // `0x490b07` → `0x4f4fa0` → `0x4f5010`, the core.
+            .add_sweep_leg(SweepLeg::Registrar, close_core)
             .add_sweep_leg(
                 SweepLeg::Petition,
                 feed::free_petition_signers_on_leave_world,
@@ -292,9 +347,6 @@ impl Plugin for UiPetitionPlugin {
             .add_systems(
                 Update,
                 (
-                    // Before the feed, so a walk-away fires GUILD_REGISTRAR_CLOSED the same frame.
-                    crate::ui_session::close_npc_session_out_of_range::<GuildRegistrarState>
-                        .before(feed::feed_petition),
                     feed::feed_petition.in_set(UiFeed),
                     feed::drain_petition.after(UiInput),
                 ),
@@ -333,15 +385,15 @@ pub(crate) mod net {
         mut registrar: ResMut<GuildRegistrarState>,
     ) {
         petition.clear_session();
-        registrar.close();
+        registrar.clear();
     }
 
     /// The flags gate reads the live NPC; an unstreamed guid fails, as the client's resolve does.
     fn on_show_list(
         In(ev): In<SessionEvent>,
-        mut registrar: ResMut<GuildRegistrarState>,
         index: Res<GuidIndex>,
         stores: Query<&ObjectStore>,
+        mut commands: Commands,
     ) {
         if let SessionEvent::PetitionShowList(list) = ev {
             let flags = index
@@ -349,7 +401,7 @@ pub(crate) mod net {
                 .get(&list.npc)
                 .and_then(|e| stores.get(*e).ok())
                 .map(|s| s.0.unit_npc_flags());
-            show_list(&mut registrar, list, flags);
+            commands.queue(move |world: &mut World| super::open_registrar(world, &list, flags));
         }
     }
 
@@ -393,10 +445,16 @@ pub(crate) mod net {
     fn on_turn_in_results(
         In(ev): In<SessionEvent>,
         mut petition: ResMut<PetitionState>,
-        mut registrar: ResMut<GuildRegistrarState>,
+        mut commands: Commands,
     ) {
         if let SessionEvent::TurnInPetitionResults { result } = ev {
-            turn_in_results(&mut petition, &mut registrar, result);
+            if turn_in_results(&mut petition, result) {
+                commands.queue(|world: &mut World| {
+                    crate::ui_session::fire(world, |script| {
+                        script.fire_event("GUILD_REGISTRAR_CLOSED", vec![]);
+                    });
+                });
+            }
         }
     }
 
@@ -414,15 +472,6 @@ pub(crate) mod net {
         if let SessionEvent::PetitionRenamed(rename) = ev {
             renamed(&mut petition, rename);
         }
-    }
-
-    /// `SMSG_PETITION_SHOWLIST`; `npc_flags` is the NPC's live `UNIT_NPC_FLAGS`.
-    pub(crate) fn show_list(
-        registrar: &mut GuildRegistrarState,
-        list: PetitionShowList,
-        npc_flags: Option<u32>,
-    ) {
-        registrar.open(&list, npc_flags);
     }
 
     /// `SMSG_PETITION_SHOW_SIGNATURES`: our charter or one offered to us. An ignored owner
@@ -474,22 +523,20 @@ pub(crate) mod net {
         }
     }
 
-    /// `SMSG_TURN_IN_PETITION_RESULTS`: success prints nothing and closes the registrar
-    /// (`0x5ef166` fires `GUILD_REGISTRAR_CLOSED`); only the two refusals print, both red.
-    pub(crate) fn turn_in_results(
-        petition: &mut PetitionState,
-        registrar: &mut GuildRegistrarState,
-        result: u32,
-    ) {
+    /// `SMSG_TURN_IN_PETITION_RESULTS`: success prints nothing and fires `GUILD_REGISTRAR_CLOSED`
+    /// bare (`0x5ef166`), with the cell and the latch left for the frame's `OnHide`, whose
+    /// `CloseGuildRegistrar()` runs the core; `true` when that event is owed. Only the two
+    /// refusals print, both red.
+    pub(crate) fn turn_in_results(petition: &mut PetitionState, result: u32) -> bool {
         if result == petition_result::OK {
             // The server destroyed the charter, so the item-bound window closes too.
             petition.close();
-            registrar.close();
-            return;
+            return true;
         }
         if let Some(line) = lines::turn_in_line(result) {
             petition.lines.push(line);
         }
+        false
     }
 
     /// `MSG_PETITION_DECLINE` inbound: a line only if the decliner's name is already cached, with
@@ -603,18 +650,33 @@ mod tests {
         }
     }
 
+    /// The registrar's core, which the watchdog reaches through `0x493310`, clears only its own
+    /// cell: the charter window is item-bound and stays.
     #[test]
-    fn walking_away_from_the_registrar_leaves_an_open_charter_alone() {
+    fn closing_the_registrar_leaves_an_open_charter_alone() {
         let (commands, _rx) = commands();
-        let mut registrar = GuildRegistrarState::default();
-        let mut petition = PetitionState::default();
-        registrar.open(&show_list(0x2a1f, &[(1000, 1)]), Some(REGISTRAR_NPC_FLAGS));
-        petition.show(signatures(0x99, 0xaa, 7, &[0xbb]), &commands);
-
-        registrar.close();
-        assert_eq!(registrar.npc(), None);
+        let mut app = App::new();
+        app.init_resource::<GuildRegistrarState>()
+            .init_resource::<PetitionState>()
+            .add_latched_window::<GuildRegistrarState>();
+        let world = app.world_mut();
+        open_registrar(
+            world,
+            &show_list(0x2a1f, &[(1000, 1)]),
+            Some(REGISTRAR_NPC_FLAGS),
+        );
         assert_eq!(
-            petition.open_item(),
+            world.resource::<crate::ui_session::InteractLatch>().guid(),
+            Some(0x2a1f)
+        );
+        world
+            .resource_mut::<PetitionState>()
+            .show(signatures(0x99, 0xaa, 7, &[0xbb]), &commands);
+
+        crate::ui_session::dispatch(world);
+        assert_eq!(world.resource::<GuildRegistrarState>().npc(), None);
+        assert_eq!(
+            world.resource::<PetitionState>().open_item(),
             Some(0x99),
             "the charter window is item-bound and survives the walk-away"
         );

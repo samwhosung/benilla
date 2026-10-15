@@ -26,13 +26,16 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::Disconnected, on_session_end);
 }
 
-fn on_hello(In(ev): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
+/// The `MSG_AUCTION_HELLO` reply opens the window, as in the reference's hello handler `0x4cc420`.
+fn on_hello(In(ev): In<SessionEvent>, mut commands: Commands) {
     if let SessionEvent::AuctionHello {
         auctioneer,
         house_id,
     } = ev
     {
-        auction_hello(auctioneer, house_id, &mut auction);
+        commands.queue(move |world: &mut World| {
+            super::open_auction(world, auctioneer, house_id);
+        });
     }
 }
 
@@ -100,11 +103,6 @@ fn on_removed_notification(In(ev): In<SessionEvent>, mut auction: ResMut<Auction
 /// a window kept across a reconnect would fail silently.
 fn on_session_end(In(_): In<SessionEvent>, mut auction: ResMut<AuctionOpen>) {
     auction.clear_session();
-}
-
-/// The `MSG_AUCTION_HELLO` reply opens the window, as in the reference's hello handler `0x4cc420`.
-fn auction_hello(auctioneer: u64, house_id: u32, auction: &mut AuctionOpen) {
-    auction.open(auctioneer, house_id);
 }
 
 /// Any of the three list results, which share a record and differ only in their tab.

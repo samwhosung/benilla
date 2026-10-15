@@ -174,7 +174,8 @@ fn last_event(script: &UiScript) -> String {
 fn mail_probe(
     time: ProbeClock,
     mut probe: ResMut<MailProbe>,
-    mut mail: ResMut<MailOpen>,
+    mail: Res<MailOpen>,
+    mut windows: Commands,
     script: Option<NonSendMut<UiScript>>,
     self_player: Query<(), With<SelfPlayer>>,
     player: Res<Player>,
@@ -252,7 +253,10 @@ fn mail_probe(
                     "PROBE_MAIL: mailbox {:#x} in range — clicking (local open, no packet)",
                     guid.0
                 );
-                mail.click(guid.0);
+                let mailbox = guid.0;
+                windows.queue(move |world: &mut World| {
+                    crate::ui_mail::open_mailbox(world, mailbox);
+                });
                 probe.phase = Phase::WaitList { clicked_at: now };
             } else if now - sent_at > SCAN_TIMEOUT_SECS {
                 error!("PROBE_MAIL: FAIL (a) — no type-19 GameObject streamed in within {SCAN_TIMEOUT_SECS}s of the mailbox spawn");
