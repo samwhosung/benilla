@@ -2,6 +2,12 @@
 //! addon speaks through, with no FrameXML between it and the wire. `chatType` defaults to
 //! `"SAY"`; the fourth argument is the whisper target or the channel's number.
 //!
+//! The call raises where the reference does, ahead of anything queued: a string `chatType` outside
+//! [`SEND_CHAT_TOKENS`] raises `Unknown chat type` (`0x49f27f`), and past the empty-line gate and
+//! the language, a WHISPER with no target raises `Whisper message missing target player!`
+//! (`0x49f325`) and a CHANNEL with none `Channel send missing channel number` (`0x49f535`). A
+//! CHANNEL target naming no joined channel is no error (`0x49f4ea`): the drain ends the call.
+//!
 //! It queues a [`ChatSend`] rather than going through the edit box, whose drain runs the slash
 //! grammar: an addon's `SendChatMessage("/dance")` says the characters. The reference splits the
 //! same way, `ChatEdit_SendText` parsing and `SendChatMessage` not.
@@ -29,16 +35,46 @@ impl super::UiScript {
     }
 }
 
+/// The chat types a string `chatType` names (the table `0x49f7a0` builds, tested at `0x49f276`),
+/// matched ignoring case (`SStrCmpI` `0x64a4c0`). `RAID_LEADER` and `BATTLEGROUND_LEADER` are
+/// not in it: the reference derives those types itself from `RAID` and `BATTLEGROUND`
+/// (`0x49f3bf`, `0x49f48b`).
+pub const SEND_CHAT_TOKENS: [&str; 13] = [
+    "SAY",
+    "PARTY",
+    "RAID",
+    "GUILD",
+    "OFFICER",
+    "YELL",
+    "WHISPER",
+    "EMOTE",
+    "CHANNEL",
+    "AFK",
+    "DND",
+    "RAID_WARNING",
+    "BATTLEGROUND",
+];
+
+/// `Unknown chat type`, `0x844b10`.
+const UNKNOWN_CHAT_TYPE: &str = "Unknown chat type";
+
+/// `Whisper message missing target player!`, `0x844ad4`.
+const WHISPER_MISSING_TARGET: &str = "Whisper message missing target player!";
+
+/// `Channel send missing channel number`, `0x844a7c`.
+const CHANNEL_MISSING_NUMBER: &str = "Channel send missing channel number";
+
 /// One queued `SendChatMessage` line, plain data: this crate holds no wire types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatSend {
     /// The line, verbatim: a leading `/` is text, not a command.
     pub text: String,
     /// The chat type token (`"SAY"`, `"WHISPER"`, `"CHANNEL"`, …), uppercased, since the
-    /// reference's compare ignores case.
+    /// reference's compare ignores case; always one of [`SEND_CHAT_TOKENS`].
     pub chat_type: String,
     /// The fourth argument as `lua_tostring` gives it (`0x49f306`): the whisper target, or the
-    /// channel number the app resolves to a joined channel's name.
+    /// channel number the app resolves to a joined channel's name. Never absent or empty for
+    /// WHISPER and CHANNEL, which raise without one.
     pub target: Option<String>,
     /// The `Languages.dbc` id the third argument named; `None` is the speaker's default.
     pub language: Option<u32>,
@@ -47,7 +83,8 @@ pub struct ChatSend {
 impl ChatSend {
     /// The empty-line gate (`0x49f28d`-`0x49f2a1`): a line whose first byte is NUL ends the call,
     /// before the language is read or anything is sent, unless its type is AFK (`0x14`) or DND
-    /// (`0x15`). The chat-type lookup and its "Unknown chat type" (`0x49f27f`) come first.
+    /// (`0x15`). The chat-type lookup and its "Unknown chat type" (`0x49f27f`) come first, in the
+    /// binding.
     pub fn ends_at_empty_line(&self) -> bool {
         ends_at_empty_line(&self.text, &self.chat_type)
     }
@@ -145,9 +182,12 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 let chat_type = chat_type
                     .unwrap_or_else(|| "SAY".into())
                     .to_ascii_uppercase();
+                // The type check precedes the empty-line gate (`0x49f276`-`0x49f285`).
+                if !SEND_CHAT_TOKENS.contains(&chat_type.as_str()) {
+                    return Err(mlua::Error::runtime(UNKNOWN_CHAT_TYPE));
+                }
                 // The language is read only past the empty-line gate. The line is queued
-                // anyway: the type check that precedes the gate is the app's, and the drain
-                // applies the gate after it.
+                // anyway and the drain applies the gate.
                 let reads_language = !ends_at_empty_line(&text, &chat_type);
                 let language = match super::binding_abi::optional_string(lua, &language) {
                     Some(name) if reads_language => {
@@ -162,6 +202,15 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 // `lua_isstring` then `lua_tostring` (`0x49f2f6`, `0x49f306`): a number is its
                 // text, so `2.7` reaches the channel's `SStrToInt` as "2.7", which reads 2.
                 let target = super::binding_abi::optional_string(lua, &target);
+                // Past the gate and the language, a WHISPER or CHANNEL with a NULL or empty
+                // target raises (`0x49f310`-`0x49f32b`, `0x49f4ca`-`0x49f4d6`, `0x49f535`).
+                if reads_language && target.as_deref().is_none_or(str::is_empty) {
+                    match chat_type.as_str() {
+                        "WHISPER" => return Err(mlua::Error::runtime(WHISPER_MISSING_TARGET)),
+                        "CHANNEL" => return Err(mlua::Error::runtime(CHANNEL_MISSING_NUMBER)),
+                        _ => {}
+                    }
+                }
                 lua.app_data_mut::<Model>()
                     .expect("model app_data")
                     .chat_sends
@@ -226,8 +275,6 @@ mod tests {
             .unwrap();
         s.run(r#"SendChatMessage("lf1m", "CHANNEL", nil, 2.7)"#)
             .unwrap();
-        s.run(r#"SendChatMessage("lf1m", "CHANNEL", nil, {})"#)
-            .unwrap();
         let sent = s.take_chat_sends();
         assert_eq!(sent[0].target.as_deref(), Some("Bob"));
         assert_eq!(sent[1].target.as_deref(), Some("1"));
@@ -237,8 +284,94 @@ mod tests {
             Some("2.7"),
             "not rounded: the app's `SStrToInt` reads 2"
         );
-        assert_eq!(sent[4].target, None, "a table is no string");
         assert_eq!(sent[1].chat_type, "CHANNEL");
+    }
+
+    /// What `pcall` leaves of `SendChatMessage(args)`: `Ok(())` or the error text.
+    fn call(s: &UiScript, args: &str) -> Result<(), String> {
+        let (ok, err): (bool, String) = s
+            .eval(&format!(
+                "local ok, err = pcall(function() SendChatMessage({args}) end) \
+                 return ok, tostring(err)"
+            ))
+            .unwrap();
+        if ok {
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+
+    /// `0x49f276`-`0x49f285`: a string outside the table at `0x49f7a0` raises in the call.
+    #[test]
+    fn an_unknown_chat_type_raises_and_queues_nothing() {
+        let mut s = UiScript::new().unwrap();
+        with_languages(&mut s);
+        for ty in [
+            r#""INSTANCE_CHAT""#,
+            r#""BOGUS""#,
+            r#""""#,
+            r#""SAY ""#,
+            r#""RAID_LEADER""#,
+            r#""BATTLEGROUND_LEADER""#,
+            "7",
+        ] {
+            let err = call(&s, &format!(r#""hi", {ty}"#)).expect_err(ty);
+            assert!(err.contains("Unknown chat type"), "{ty}: {err}");
+        }
+        // Ahead of the empty-line gate (`0x49f28d`) and the language (`0x49f2c5`).
+        let err = call(&s, r#""", "BOGUS""#).expect_err("an empty line still checks the type");
+        assert!(err.contains("Unknown chat type"), "{err}");
+        let err = call(&s, r#""hi", "BOGUS", "Klingon""#).expect_err("type before language");
+        assert!(err.contains("Unknown chat type"), "{err}");
+        assert!(s.take_chat_sends().is_empty());
+        // The compare ignores case (`SStrCmpI`), and every table entry passes.
+        for token in SEND_CHAT_TOKENS {
+            let target = if matches!(token, "WHISPER" | "CHANNEL") {
+                r#", nil, "1""#
+            } else {
+                ""
+            };
+            let args = format!(r#""hi", "{}"{target}"#, token.to_lowercase());
+            call(&s, &args).expect(token);
+        }
+        assert_eq!(s.take_chat_sends().len(), SEND_CHAT_TOKENS.len());
+    }
+
+    /// `0x49f310`-`0x49f32b` and `0x49f4ca`-`0x49f4d6`, `0x49f535`: a WHISPER or CHANNEL whose
+    /// fourth argument is not a non-empty string raises, past the empty-line gate and the language.
+    #[test]
+    fn a_whisper_or_channel_without_a_target_raises_and_queues_nothing() {
+        let mut s = UiScript::new().unwrap();
+        with_languages(&mut s);
+        let whisper = "Whisper message missing target player!";
+        let channel = "Channel send missing channel number";
+        for target in ["", ", nil, nil", r#", nil, """#, ", nil, {}", ", nil, true"] {
+            let err = call(&s, &format!(r#""hi", "WHISPER"{target}"#)).expect_err(target);
+            assert!(err.contains(whisper), "{target:?}: {err}");
+            let err = call(&s, &format!(r#""hi", "channel"{target}"#)).expect_err(target);
+            assert!(err.contains(channel), "{target:?}: {err}");
+        }
+        assert!(s.take_chat_sends().is_empty());
+        // The empty-line gate (`0x49f28d`) and the language (`0x49f2e1`) come first.
+        call(&s, r#""", "WHISPER""#).expect("an empty line ends quietly");
+        call(&s, r#""", "CHANNEL""#).expect("an empty line ends quietly");
+        let err = call(&s, r#""hi", "WHISPER", "Klingon""#).expect_err("language first");
+        assert!(err.contains("Unknown language"), "{err}");
+        s.take_chat_sends();
+        // No other type needs a target, and a target naming no channel is the drain's quiet end
+        // (`0x49f4ea`), not an error here.
+        call(&s, r#""hi", "SAY""#).unwrap();
+        call(&s, r#""hi", "GUILD""#).unwrap();
+        call(&s, r#""hi", "CHANNEL", nil, "General""#).unwrap();
+        call(&s, r#""hi", "WHISPER", nil, "Bob""#).unwrap();
+        let sent = s.take_chat_sends();
+        assert_eq!(
+            sent.iter()
+                .map(|c| c.chat_type.as_str())
+                .collect::<Vec<_>>(),
+            ["SAY", "GUILD", "CHANNEL", "WHISPER"]
+        );
     }
 
     /// Three `Languages.dbc` rows, in the shipped file's order.

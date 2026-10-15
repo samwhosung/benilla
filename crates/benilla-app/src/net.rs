@@ -888,8 +888,6 @@ pub(crate) enum ChatKind {
     Party,
     /// `/ra`; needs a raid (`ChatHandler.cpp:514-536`).
     Raid,
-    /// `/rl`, leader only (`ChatHandler.cpp:538-559`).
-    RaidLeader,
     /// `/rw`, leader or assistant only (`ChatHandler.cpp:561-576`).
     RaidWarning,
     /// `/g`; needs a guild (`ChatHandler.cpp:494-503`).
@@ -898,8 +896,6 @@ pub(crate) enum ChatKind {
     Officer,
     /// Needs a battleground group (`ChatHandler.cpp:579-593`).
     Battleground,
-    /// Battleground leader only (`ChatHandler.cpp:595-609`).
-    BattlegroundLeader,
     /// Toggles AFK, the text the auto-reply if any; it clears DND (`ChatHandler.cpp:611-630`).
     Afk,
     /// Toggles DND, which clears AFK (`ChatHandler.cpp:632-648`).
@@ -919,12 +915,10 @@ impl ChatKind {
             Self::Whisper => m::CHAT_TYPE_WHISPER,
             Self::Party => m::CHAT_TYPE_PARTY,
             Self::Raid => m::CHAT_TYPE_RAID,
-            Self::RaidLeader => m::CHAT_TYPE_RAID_LEADER,
             Self::RaidWarning => m::CHAT_TYPE_RAID_WARNING,
             Self::Guild => m::CHAT_TYPE_GUILD,
             Self::Officer => m::CHAT_TYPE_OFFICER,
             Self::Battleground => m::CHAT_TYPE_BATTLEGROUND,
-            Self::BattlegroundLeader => m::CHAT_TYPE_BATTLEGROUND_LEADER,
             Self::Afk => m::CHAT_TYPE_AFK,
             Self::Dnd => m::CHAT_TYPE_DND,
             Self::Channel => m::CHAT_TYPE_CHANNEL,

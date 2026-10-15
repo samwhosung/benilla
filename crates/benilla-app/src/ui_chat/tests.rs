@@ -2641,7 +2641,8 @@ fn a_named_language_rides_the_chat_command() {
 
 /// `SendChatMessage`'s `CHANNEL` target through the real drain: `SStrToInt` into `0x49be50`
 /// (`0x49f4d9`-`0x49f4ea`), so the packet carries the numbered slot's name, and a number naming
-/// no confirmed slot, or a name, sends nothing at all.
+/// no confirmed slot, or a name, sends nothing at all. A call with no number raises instead
+/// (`0x49f535`), so it never reaches the drain.
 #[test]
 fn a_channel_send_carries_the_numbered_slots_name() {
     use super::edit::{ChannelSlot, ChannelState, SlotState};
@@ -2679,7 +2680,6 @@ fn a_channel_send_carries_the_numbered_slots_name() {
             SendChatMessage("past the end", "CHANNEL", nil, 9)
             SendChatMessage("by name", "CHANNEL", nil, "General - Elwynn Forest")
             SendChatMessage("zero", "CHANNEL", nil, "0")
-            SendChatMessage("none", "CHANNEL")
             SendChatMessage("tell", "WHISPER", nil, "2")
             "#,
         )
@@ -2717,8 +2717,8 @@ fn a_channel_send_carries_the_numbered_slots_name() {
 
 /// `SendChatMessage`'s empty-line gate through the real drain (`0x49f28d`-`0x49f2a1`): an empty
 /// line, or one whose first byte is NUL, of any type but AFK and DND sends nothing and leaves a
-/// standing AFK set, since the gate is ahead of the AFK clear. The type check comes first, so an
-/// unknown type still reports.
+/// standing AFK set, since the gate is ahead of the AFK clear. The binding's type check comes
+/// first, so an unknown type still raises.
 #[test]
 fn an_empty_line_sends_nothing_but_afk_and_dnd() {
     use super::edit::{ChannelSlot, ChannelState};
@@ -2761,17 +2761,26 @@ fn an_empty_line_sends_nothing_but_afk_and_dnd() {
         SendChatMessage("", "WHISPER", nil, "Bob")
         SendChatMessage("", "CHANNEL", nil, 1)
         SendChatMessage("\0hidden", "YELL")
-        SendChatMessage("", "BOGUS")
         "#,
+    );
+    let unknown = world
+        .non_send_resource::<benilla_ui::script::UiScript>()
+        .run(r#"SendChatMessage("", "BOGUS")"#)
+        .expect_err("the type check precedes the gate");
+    assert!(
+        unknown.to_string().contains("Unknown chat type"),
+        "{unknown}"
     );
     world
         .run_system_once(super::input::drain_addon_chat_sends)
         .expect("drain");
     assert_eq!(sent(&rx), vec![], "no empty line reaches the wire");
-    assert_eq!(
-        world.resource::<super::feed::ChatLog>().pending_lines(),
-        vec!["Unknown chat type \"BOGUS\"."],
-        "no AFK clear; the type check precedes the gate"
+    assert!(
+        world
+            .resource::<super::feed::ChatLog>()
+            .pending_lines()
+            .is_empty(),
+        "no AFK clear, no line"
     );
     assert!(world.resource::<super::away::AfkMirror>().is_afk());
 

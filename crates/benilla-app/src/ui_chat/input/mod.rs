@@ -1437,8 +1437,8 @@ fn auto_clear_afk(cvars: &crate::cvars::Cvars) -> bool {
 }
 
 /// Turn `SendChatMessage` calls into sends. No slash grammar runs here: an addon sending
-/// `"/dance"` says six characters. An unknown chat-type token prints a system line and sends
-/// nothing; an empty line of any other type but AFK and DND sends nothing and prints nothing.
+/// `"/dance"` says six characters. An empty line of any type but AFK and DND sends nothing and
+/// prints nothing.
 pub(super) fn drain_addon_chat_sends(
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     commands: Res<NetCommands>,
@@ -1456,19 +1456,12 @@ pub(super) fn drain_addon_chat_sends(
         return;
     };
     for mut send in script.take_chat_sends() {
+        // The binding has raised on any other token (`0x49f27f`), so none reaches here.
         let Some(kind) = super::edit::SendType::from_token(&send.chat_type) else {
-            warn!(
-                "chat: SendChatMessage with unknown type {:?}",
-                send.chat_type
-            );
-            chat_log.push_event(super::event::ChatEvent::text_only(
-                super::event::ChatEventKind::System,
-                format!("Unknown chat type \"{}\".", send.chat_type),
-            ));
             continue;
         };
-        // An empty line of any type but AFK and DND ends the call here, after the type check and
-        // ahead of the target checks, the AFK clear and the tutorial acknowledge (`0x49f2a1`).
+        // An empty line of any type but AFK and DND ends the call here, ahead of the target
+        // checks, the AFK clear and the tutorial acknowledge (`0x49f2a1`).
         if send.ends_at_empty_line() {
             continue;
         }

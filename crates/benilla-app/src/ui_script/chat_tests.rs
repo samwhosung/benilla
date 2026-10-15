@@ -1209,6 +1209,28 @@ fn a_quick_exit_and_reentry_keeps_the_plates_hover_fade() {
     );
 }
 
+/// The Lua binding's chat-type table (`0x49f7a0`) and the drain's token map are one list: every
+/// token the binding accepts is a send, and `RAID_LEADER` and `BATTLEGROUND_LEADER`, which the
+/// reference derives itself (`0x49f3bf`, `0x49f48b`), are neither, so a token the binding lets
+/// through is never dropped by the drain.
+#[test]
+fn the_binding_and_the_drain_share_one_chat_type_list() {
+    use crate::ui_chat::edit::SendType;
+    use std::collections::HashSet;
+
+    let mut wires = HashSet::new();
+    for token in benilla_ui::script::SEND_CHAT_TOKENS {
+        let kind = SendType::from_token(token).unwrap_or_else(|| panic!("{token} has no send"));
+        assert!(
+            wires.insert(format!("{:?}", kind.wire())),
+            "{token} repeats a wire kind"
+        );
+    }
+    for token in ["RAID_LEADER", "BATTLEGROUND_LEADER"] {
+        assert!(SendType::from_token(token).is_none(), "{token}");
+    }
+}
+
 /// The stock `/afk` and `/dnd` call `SendChatMessage(msg, "AFK")` or `"DND"`
 /// (`ChatFrame.lua:1005-1011`), and the token must resolve to `CMSG_MESSAGECHAT` type `0x14` or
 /// `0x15`: the server toggles the flag. Either half alone passes with the seam between them broken.
