@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 227
+- [benilla-app](#benilla-app): 226
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 16
@@ -117,12 +117,12 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### cvars
 
-- The reference's `SaveConfig` (`0x63d980`) writes only at world entry (`0x46b6f6`), at the leave-world tail (`0x490c35`-`0x490c64`) and at shutdown (`0x63daf0`), so a crash or a kill loses every change since; here a player's settings survive one. ([`src/cvars/mod.rs:897`](../crates/benilla-app/src/cvars/mod.rs#L897))
-- The reference clips at full scale and has no headroom mechanism (its SFX-bus duck `0x457960` is a sidechain armed only by server-pushed voice lines); benilla limits because every SFX is mastered to full scale and overlapping kits clip. ([`src/cvars/table.rs:191`](../crates/benilla-app/src/cvars/table.rs#L191))
-- Here the dial multiplies the camera's own rate, because benilla does not change the OS pointer speed, a system-wide setting. ([`src/cvars/table.rs:424`](../crates/benilla-app/src/cvars/table.rs#L424))
-- Nothing caps the heap here; the row holds what the screen's box was set to. ([`src/cvars/table.rs:524`](../crates/benilla-app/src/cvars/table.rs#L524))
-- "0" raises a borderless fullscreen window instead of mode-setting the display, because Wayland and macOS offer no mode-set and X11's leaves the desktop changed after a crash (`crate::video`). ([`src/cvars/table.rs:546`](../crates/benilla-app/src/cvars/table.rs#L546))
-- Benilla, which has no exclusive mode, applies the same curve in the composite pass (`crate::ui_gamma::DisplayGamma`), because the skipped upload would make a slider that moves no pixel. ([`src/cvars/table.rs:654`](../crates/benilla-app/src/cvars/table.rs#L654))
+- The reference's `SaveConfig` (`0x63d980`) writes only at world entry (`0x46b6f6`), at the leave-world tail (`0x490c35`-`0x490c64`) and at shutdown (`0x63daf0`), so a crash or a kill loses every change since; here a player's settings survive one. ([`src/cvars/mod.rs:937`](../crates/benilla-app/src/cvars/mod.rs#L937))
+- The reference clips at full scale and has no headroom mechanism (its SFX-bus duck `0x457960` is a sidechain armed only by server-pushed voice lines); benilla limits because every SFX is mastered to full scale and overlapping kits clip. ([`src/cvars/table.rs:231`](../crates/benilla-app/src/cvars/table.rs#L231))
+- Here the dial multiplies the camera's own rate, because benilla does not change the OS pointer speed, a system-wide setting. ([`src/cvars/table.rs:465`](../crates/benilla-app/src/cvars/table.rs#L465))
+- Nothing caps the heap here; the row holds what the screen's box was set to. ([`src/cvars/table.rs:565`](../crates/benilla-app/src/cvars/table.rs#L565))
+- "0" raises a borderless fullscreen window instead of mode-setting the display, because Wayland and macOS offer no mode-set and X11's leaves the desktop changed after a crash (`crate::video`). ([`src/cvars/table.rs:586`](../crates/benilla-app/src/cvars/table.rs#L586))
+- Benilla, which has no exclusive mode, applies the same curve in the composite pass (`crate::ui_gamma::DisplayGamma`), because the skipped upload would make a slider that moves no pixel. ([`src/cvars/table.rs:695`](../crates/benilla-app/src/cvars/table.rs#L695))
 
 #### death
 
@@ -276,9 +276,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - It runs on the first frame with none, so an arrival that sends no stop (mid-air, rooted, under a held turn key) acts at once or on landing or release, where the reference waits for the next ground stop and can act long after, wherever the player then is. ([`src/target/click.rs:1031`](../crates/benilla-app/src/target/click.rs#L1031))
 - The rank is held to 7, the top of the ring scale's eight entries (`0..=7`), where the reference keeps any value; a server rank past 7 would index outside our palette. ([`src/target/ring.rs:524`](../crates/benilla-app/src/target/ring.rs#L524))
 - TAB uses Classic Era's screen-space priority, not 1.12's ±30° facing cone and snapshot cursor (`0x493f60`), because the cone skips a close mob in front of the camera, which sits behind the character. ([`src/target/scan.rs:3`](../crates/benilla-app/src/target/scan.rs#L3))
-- Our own body is never a candidate. The reference's friendly scan picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press. ([`src/target/scan.rs:178`](../crates/benilla-app/src/target/scan.rs#L178))
-- No scene-attach gate (the reference's `0x6704c0`), because the draw election hides every body outside the frustum, which would empty the off-screen tier. ([`src/target/scan.rs:357`](../crates/benilla-app/src/target/scan.rs#L357))
-- Sampled each frame, not stamped in `SetSelection`, so every selection writer is covered; a selected unit that turns hostile is remembered, where the reference's is not. ([`src/target/scan.rs:754`](../crates/benilla-app/src/target/scan.rs#L754))
+- Our own body is never a candidate. The reference's friendly scan picks the player at some facings (`CanAssist(P, P)` is true, `0x6061e0`; the cone test `0x47f220`), but our scoring always puts the player dead centre at distance 0, so CTRL-TAB would pick us on every press. ([`src/target/scan.rs:193`](../crates/benilla-app/src/target/scan.rs#L193))
+- No scene-attach gate (the reference's `0x6704c0`), because the draw election hides every body outside the frustum, which would empty the off-screen tier. ([`src/target/scan.rs:372`](../crates/benilla-app/src/target/scan.rs#L372))
+- Sampled each frame, not stamped in `SetSelection`, so every selection writer is covered; a selected unit that turns hostile is remembered, where the reference's is not. ([`src/target/scan.rs:769`](../crates/benilla-app/src/target/scan.rs#L769))
 
 #### textinput
 
@@ -337,7 +337,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_guild
 
-- A script's 16-letter name, which the reference's bindings pass (1 to 16 units, `0x4d20d0`, `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session. ([`src/ui_guild/feed.rs:418`](../crates/benilla-app/src/ui_guild/feed.rs#L418))
+- A script's 16-letter name, which the reference's bindings pass (1 to 16 units, `0x4d20d0`, `0x4d2210`), is dropped rather than sent or truncated, because vmangos would kick the session. ([`src/ui_guild/feed.rs:427`](../crates/benilla-app/src/ui_guild/feed.rs#L427))
 - Bounded at the ten slots, because the reference's read (`0x4c93e7`) runs past its array. ([`src/ui_guild/mod.rs:44`](../crates/benilla-app/src/ui_guild/mod.rs#L44))
 - Clamped to ten, because the reference's unbounded loop (`0x4d0bb0`) overruns its ten-slot array on a hostile `rankCount >= 12`. ([`src/ui_guild/mod.rs:262`](../crates/benilla-app/src/ui_guild/mod.rs#L262))
 - The identity cache goes too, where the reference keeps it in `guildcache.wdb`, because a renamed guild would otherwise show its old name. ([`src/ui_guild/mod.rs:568`](../crates/benilla-app/src/ui_guild/mod.rs#L568))
@@ -454,14 +454,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - An out-of-range slot is dropped, where the reference indexes its 7-slot mirror unchecked, because an out-of-bounds write is not a behaviour to reproduce. ([`src/ui_trade/mod.rs:303`](../crates/benilla-app/src/ui_trade/mod.rs#L303))
 
-#### ui_unit
-
-- 10, "Not specified", answers None because the word would print in the tooltip's level line; `UnitCreatureType` then answers nil where the reference names it. ([`src/ui_unit.rs:1123`](../crates/benilla-app/src/ui_unit.rs#L1123))
-
 #### video
 
 - `gxWindow "0"` is borderless fullscreen, not 1.12's exclusive mode-set at `gxResolution`, because Wayland has no client mode-setting (winit ignores `Fullscreen::Exclusive` there), X11's XRandR changes the desktop's mode and a crash leaves it changed, and macOS has no exclusive mode. ([`src/video.rs:4`](../crates/benilla-app/src/video.rs#L4))
-- Sizes are logical px, because `gxResolution` is a logical inner size here. ([`src/video.rs:431`](../crates/benilla-app/src/video.rs#L431))
+- Sizes are logical px, because `gxResolution` is a logical inner size here. ([`src/video.rs:455`](../crates/benilla-app/src/video.rs#L455))
 
 #### vplates
 
@@ -626,7 +622,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - A hovered or disabled label still reports the normal font, since the state fonts are overlaid at paint and a link made here would outlive the state. `font::repaint` keeps what the label set itself (its severance mask, `CSimpleFontString+0xd4`), and the local justify obeys the same mask. ([`src/script/button.rs:130`](../crates/benilla-ui/src/script/button.rs#L130))
 - The slot is read before the handler, where the reference reads it after (`[esi+0x4dc]`), because reading first keeps the borrow simple and no stock handler re-slots its row. ([`src/script/button.rs:1042`](../crates/benilla-ui/src/script/button.rs#L1042))
 - The reference composes the Shortcut with `GetRealZoneText` alone (`0x49efe8`), so in a capital `/leave Trade` sends `Trade - Stormwind City` and leaves nothing; ours uses the join's city-aware name, because the reference's form cannot leave the channel it joined. ([`src/script/channel.rs:480`](../crates/benilla-ui/src/script/channel.rs#L480))
-- The frame's bottom-left origin is snapped onto the device grid so the border art blits 1:1; the reference ceils the anchor point itself onto it (`0x7666a0`, `0x766750`). ([`src/script/chat_bubble.rs:437`](../crates/benilla-ui/src/script/chat_bubble.rs#L437))
+- The frame's bottom-left origin is snapped onto the device grid so the border art blits 1:1; the reference ceils the anchor point itself onto it (`0x7666a0`, `0x766750`). ([`src/script/chat_bubble.rs:449`](../crates/benilla-ui/src/script/chat_bubble.rs#L449))
 - No truncation at 255 characters (`0x49f604`), because vmangos refuses a longer line itself (`Chat.cpp:2177`): it is dropped where the reference sends its first 255. ([`src/script/chat_send.rs:23`](../crates/benilla-ui/src/script/chat_send.rs#L23))
 - A value outside 0..1 clamps, where the reference keeps the low byte (alpha 2.0 stores 254, -1.0 stores 1), because no FrameXML or addon caller passes one. ([`src/script/chat_window.rs:17`](../crates/benilla-ui/src/script/chat_window.rs#L17))
 - An id outside the seven built windows raises, where the reference serves ten records and silently ignores any other id (`0x4a0be1`), because benilla keeps only the seven and every caller loops `1, NUM_CHAT_WINDOWS`. ([`src/script/chat_window.rs:220`](../crates/benilla-ui/src/script/chat_window.rs#L220))
