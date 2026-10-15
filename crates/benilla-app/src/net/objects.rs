@@ -94,6 +94,7 @@ pub(crate) struct Scene<'w, 's> {
     speeds: Query<'w, 's, &'static mut UnitSpeeds>,
     field_changes: MessageWriter<'w, FieldChanged>,
     item_notices: MessageWriter<'w, crate::item_watch::ItemNotice>,
+    field_notices: MessageWriter<'w, crate::field_watch::FieldNotice>,
     speed_changes: MessageWriter<'w, SpeedChangeMessage>,
     self_moves: MessageWriter<'w, super::SelfMoveMessage>,
     hard_landings: MessageWriter<'w, crate::creature_anim::HardLanding>,
@@ -125,7 +126,8 @@ fn item_watch<'a, 'w, 's>(
     }
 }
 
-/// Run the item watchers over one values block that merged into `guid`'s store.
+/// Run the watchers over one values block that merged into `guid`'s store: the item watchers and
+/// the field watches whose callbacks signal interface events ([`crate::field_watch`]).
 fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
     let Some(fields) = sc
         .index
@@ -139,6 +141,7 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
     let Some(kind) = fields.created_as() else {
         return;
     };
+    let fired = crate::field_watch::values(sc.self_guid.0, guid, kind, fields, edges);
     let notices = item_watch(&sc.index, &sc.stores, &sc.self_guid, &sc.items)
         .values(guid, kind, fields, edges);
     // An entry change that missed the cache waits on the answer (`0x5d9652` asks with `0x5d96b0`).
@@ -154,6 +157,7 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
         }
     }
     sc.item_notices.write_batch(notices);
+    sc.field_notices.write_batch(fired);
 }
 
 fn on_object_create(In(ev): In<SessionEvent>, mut sc: Scene) {
@@ -1429,6 +1433,87 @@ mod tests {
                 .drain()
                 .collect::<Vec<_>>(),
             [ItemNotice::TradeRecord { entry: 2592 }]
+        );
+    }
+
+    /// The object packets run the field watches per block in wire order: our first create none
+    /// (`0x465d80`), a values block each watch it moved once, a re-create of a live guid like a
+    /// values block (`0x465d8e`); another unit only its bridge.
+    #[test]
+    fn the_object_packets_write_the_field_watches_notices_per_block() {
+        use crate::field_watch::FieldNotice;
+        use benilla_protocol::messages::ObjectType;
+        const ME: u64 = 0x0000_0000_0000_0007;
+        const MOB: u64 = 0xF130_0000_0000_0001;
+        const XP: u16 = 716;
+        const STAT0: u16 = 150;
+        let create = |guid: u64, kind: EntityKind, pairs: &[(u16, u32)]| {
+            let created = if kind == EntityKind::Player {
+                ObjectType::Player
+            } else {
+                ObjectType::Unit
+            };
+            SessionEvent::ObjectCreate {
+                guid,
+                kind,
+                display_id: None,
+                position: [0.0; 3],
+                orientation: 0.0,
+                scale: 1.0,
+                speeds: None,
+                mover: None,
+                transport_progress: None,
+                transport: None,
+                spline: None,
+                fields: ObjectFields::from_pairs(pairs).into_created(created),
+            }
+        };
+        let values = |guid: u64, pairs: &[(u16, u32)]| SessionEvent::ObjectValues {
+            guid,
+            fields: ObjectFields::from_pairs(pairs),
+        };
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        world.resource_mut::<SelfGuid>().0 = Some(ME);
+        let drain = |world: &mut World| -> Vec<FieldNotice> {
+            world
+                .resource_mut::<Messages<FieldNotice>>()
+                .drain()
+                .collect()
+        };
+        super::super::handlers::dispatch(
+            world,
+            vec![
+                create(ME, EntityKind::Player, &[(STAT0, 20), (XP, 10)]),
+                create(MOB, EntityKind::Unit, &[(STAT0, 5)]),
+            ],
+        );
+        assert!(
+            drain(world).is_empty(),
+            "a first create runs no notify pass"
+        );
+        super::super::handlers::dispatch(
+            world,
+            vec![
+                values(ME, &[(XP, 30)]),
+                values(MOB, &[(STAT0, 6), (STAT0 + 1, 2)]),
+                // Two blocks on one watch: two runs.
+                values(ME, &[(XP, 40)]),
+                values(ME, &[(STAT0, 21), (XP, 40)]),
+                // A re-create compares like a values block.
+                create(ME, EntityKind::Player, &[(STAT0, 21), (XP, 50)]),
+            ],
+        );
+        assert_eq!(
+            drain(world),
+            [
+                FieldNotice::Player { id: 189 },
+                FieldNotice::Unit { guid: MOB, id: 144 },
+                FieldNotice::Unit { guid: MOB, id: 145 },
+                FieldNotice::Player { id: 189 },
+                FieldNotice::Unit { guid: ME, id: 144 },
+                FieldNotice::Player { id: 189 },
+            ]
         );
     }
 

@@ -1,6 +1,7 @@
 //! The character-window feed: the [`UnitCombatStats`] and `InventorySlots` snapshots the paper
-//! doll's Lua bindings read, built from our avatar's descriptor and item stores; the events that
-//! repaint it; and the booth's yaw from the stock `CharacterModelFrame`. [`unit_combat_stats`] is
+//! doll's Lua bindings read, built from our avatar's descriptor and item stores, pushed ahead of
+//! the stat events that repaint it ([`crate::ui_unit::field_events`]); the inventory events; and
+//! the booth's yaw from the stock `CharacterModelFrame`. [`unit_combat_stats`] is
 //! the half any unit shares: a creature has no player fields, so those read absent and keep their
 //! defaults.
 
@@ -28,13 +29,9 @@ const ITEM_CLASS_WEAPON: u32 = 2;
 /// Weapon subclass 19, wand (`ItemPrototype.h:211`), for `HasWandEquipped`.
 const SUBCLASS_WAND: u32 = 19;
 
-/// An f32 snapshot field as a diff key, quantized to 1/32 so equal wire values compare equal.
-fn fixed(v: f32) -> i64 {
-    (v * 32.0).round() as i64
-}
-
-/// The last snapshots pushed, so events fire on transitions only; held per VM
-/// ([`crate::ui_script::VmMemo`]), so a `/reload` re-pushes and re-fires as a login does.
+/// The last snapshots pushed, so a push happens on change only; held per VM
+/// ([`crate::ui_script::VmMemo`]), so a `/reload` re-pushes. The stat events are field watches
+/// ([`crate::field_watch`]), never fired off these diffs.
 #[derive(Resource, Default)]
 pub(crate) struct CharFeedState {
     vm: crate::ui_script::VmMemo<CharFeedMemo>,
@@ -44,8 +41,6 @@ pub(crate) struct CharFeedState {
 #[derive(Default)]
 struct CharFeedMemo {
     last_stats: Option<UnitCombatStats>,
-    /// The raw words of the three damage-done arrays, `PLAYER_DAMAGE_DONE_MODS`'s three watches.
-    last_damage_mods: Option<[[u32; 7]; 3]>,
     last_inv: Option<InventorySlots>,
     last_bank_bags: Option<BankBagSlots>,
     /// The bag guid in each bank bag slot, `PLAYERBANKSLOTS_CHANGED`'s discriminator: the pushed
@@ -77,7 +72,8 @@ impl Plugin for UiCharPlugin {
                     // inventory push lands first.
                     feed_char
                         .before(crate::ui_items::feed::feed_containers)
-                        .in_set(UiFeed),
+                        .in_set(UiFeed)
+                        .in_set(crate::ui_unit::field_events::FieldEventPushes),
                     watch_skill_ups.in_set(UiFeed),
                     feed_skills.in_set(UiFeed),
                     drain_skill_abandons.after(UiInput),
@@ -467,18 +463,6 @@ pub(crate) fn unit_combat_stats(store: &ObjectStore) -> UnitCombatStats {
     }
 }
 
-/// The seven words of each damage-done array the reference watches (`+0xfd4`, `+0xff0`, `+0x100c`
-/// of the player section): positive, negative, percent. The percent array is floats, compared by
-/// bits as the watch compares bytes.
-fn damage_done_mods(f: &benilla_protocol::ObjectFields) -> [[u32; 7]; 3] {
-    let school = |read: &dyn Fn(u8) -> u32| std::array::from_fn(|i| read(i as u8));
-    [
-        school(&|i| f.player_mod_damage_done_pos(i).unwrap_or(0) as u32),
-        school(&|i| f.player_mod_damage_done_neg(i).unwrap_or(0) as u32),
-        school(&|i| f.player_mod_damage_done_pct(i).unwrap_or(1.0).to_bits()),
-    ]
-}
-
 /// The player's snapshot: [`unit_combat_stats`] plus the equipment flags and the skill pairs.
 fn combat_stats(
     store: &ObjectStore,
@@ -790,99 +774,6 @@ fn bank_bag_slots(
     bags
 }
 
-/// Fire the paper doll's repaint events for one unit's snapshot transition, `arg1 = token`: the
-/// eight unit-stat events both pages register (`PaperDollFrame.lua:14-28`,
-/// `PetPaperDollFrame.lua:12-20`), each when a value its handlers read moved. A first snapshot
-/// fires them all.
-pub(crate) fn fire_stat_transitions(
-    script: &mut UiScript,
-    token: &str,
-    prev: Option<&UnitCombatStats>,
-    stats: &UnitCombatStats,
-) {
-    let tok = || ScriptValue::Str(token.to_string());
-    let changed = |sel: fn(&UnitCombatStats) -> Vec<i64>| prev.is_none_or(|p| sel(p) != sel(stats));
-    if changed(|s| {
-        let mut v: Vec<i64> = s.stats.iter().map(|&x| i64::from(x)).collect();
-        v.extend(
-            s.stat_pos
-                .iter()
-                .chain(s.stat_neg.iter())
-                .map(|&x| i64::from(x)),
-        );
-        v
-    }) {
-        script.fire_event("UNIT_STATS", vec![tok()]);
-    }
-    if changed(|s| {
-        s.resistances
-            .iter()
-            .chain(s.resistance_pos.iter())
-            .chain(s.resistance_neg.iter())
-            .map(|&x| i64::from(x))
-            .collect()
-    }) {
-        script.fire_event("UNIT_RESISTANCES", vec![tok()]);
-    }
-    if changed(|s| {
-        vec![
-            fixed(s.min_damage),
-            fixed(s.max_damage),
-            fixed(s.min_offhand_damage),
-            fixed(s.max_offhand_damage),
-        ]
-    }) {
-        script.fire_event("UNIT_DAMAGE", vec![tok()]);
-    }
-    if changed(|s| {
-        vec![
-            i64::from(s.main_attack_time_ms),
-            i64::from(s.offhand_attack_time_ms),
-            i64::from(s.has_offhand),
-        ]
-    }) {
-        script.fire_event("UNIT_ATTACK_SPEED", vec![tok()]);
-    }
-    if changed(|s| {
-        vec![
-            i64::from(s.attack_power),
-            i64::from(s.attack_power_pos),
-            i64::from(s.attack_power_neg),
-        ]
-    }) {
-        script.fire_event("UNIT_ATTACK_POWER", vec![tok()]);
-    }
-    if changed(|s| {
-        vec![
-            i64::from(s.ranged_attack_power),
-            i64::from(s.ranged_attack_power_pos),
-            i64::from(s.ranged_attack_power_neg),
-            i64::from(s.has_wand),
-        ]
-    }) {
-        script.fire_event("UNIT_RANGED_ATTACK_POWER", vec![tok()]);
-    }
-    if changed(|s| {
-        vec![
-            fixed(s.ranged_min_damage),
-            fixed(s.ranged_max_damage),
-            i64::from(s.ranged_attack_time_ms),
-        ]
-    }) {
-        script.fire_event("UNIT_RANGEDDAMAGE", vec![tok()]);
-    }
-    if changed(|s| {
-        vec![
-            i64::from(s.main_weapon_skill.0),
-            i64::from(s.main_weapon_skill.1),
-            i64::from(s.ranged_weapon_skill.0),
-            i64::from(s.ranged_weapon_skill.1),
-        ]
-    }) {
-        script.fire_event("UNIT_ATTACK", vec![tok()]);
-    }
-}
-
 pub(crate) fn feed_char(
     // `ChrClasses.dbc` field 16, the relic flag `find_equip_slot` reads; absent, no class has one.
     classes: Option<Res<crate::chr_classes::ChrClassTable>>,
@@ -901,7 +792,7 @@ pub(crate) fn feed_char(
     let Some(mut script) = script else {
         return;
     };
-    // Per VM: after a `/reload` both snapshots re-push and their events re-fire.
+    // Per VM: after a `/reload` both snapshots re-push, and `UNIT_INVENTORY_CHANGED` re-fires.
     let (memo, vm_reset) = feed.vm.get_reset(&script);
 
     let Some(store) = inv.self_store.iter().next() else {
@@ -961,30 +852,13 @@ pub(crate) fn feed_char(
         return;
     }
 
+    // The paper doll's getters read this; the stat events that repaint it are field watches,
+    // fired after this push (`crate::ui_unit::field_events`).
     let stats = combat_stats(store, objects, &items, &commands);
     if memo.last_stats.as_ref() != Some(&stats) {
         gate.audit("feed_char", "the combat-stats snapshot");
-        // Push before firing: handlers run synchronously and would paint the old values.
-        let prev = memo.last_stats.take();
         script.set_player_combat_stats(Some(stats.clone()));
-        fire_stat_transitions(&mut script, "player", prev.as_ref(), &stats);
         memo.last_stats = Some(stats);
-    }
-
-    // `PLAYER_DAMAGE_DONE_MODS("player")`: three watches of seven dwords each, the positive, the
-    // negative and the percent array (`0x5ddbc0`, `0x5ddbe7`, `0x5ddc0e`), each firing through
-    // `0x5de4b0` when its own bytes change. A create runs no watcher, so a first look is silent.
-    let mods = damage_done_mods(&store.0);
-    if let Some(prev) = memo.last_damage_mods.replace(mods) {
-        for (was, now) in prev.iter().zip(&mods) {
-            if was != now {
-                gate.audit("feed_char", "a damage-done array");
-                script.fire_event(
-                    "PLAYER_DAMAGE_DONE_MODS",
-                    vec![crate::ui_unit::player_token()],
-                );
-            }
-        }
     }
 
     let inv = inventory_slots(
@@ -1206,106 +1080,6 @@ mod tests {
             .copied()
             .expect("the item was streamed");
         *app.world_mut().get_mut::<ObjectStore>(entity).unwrap() = ObjectStore(fields);
-    }
-
-    /// A self player holding `fields`, and a frame recording the damage events.
-    fn world_with_damage_mods(fields: &[(u16, u32)]) -> App {
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let mut app = App::new();
-        app.init_resource::<CharFeedState>()
-            .init_resource::<Items>()
-            .init_resource::<crate::net::GuidIndex>()
-            .init_resource::<crate::names::NameCache>()
-            .insert_resource(NetCommands(tx));
-        app.world_mut()
-            .spawn((SelfPlayer, ObjectStore(ObjectFields::from_pairs(fields))));
-        let script = UiScript::new().unwrap();
-        script
-            .run(
-                r#"
-                SEEN = {}
-                local f = CreateFrame("Frame")
-                f:RegisterEvent("PLAYER_DAMAGE_DONE_MODS")
-                f:RegisterEvent("UNIT_DAMAGE")
-                f:SetScript("OnEvent", function()
-                    table.insert(SEEN, event .. " " .. tostring(arg1))
-                end)
-            "#,
-            )
-            .unwrap();
-        app.insert_non_send_resource(script);
-        app
-    }
-
-    fn restore_self(app: &mut App, fields: &[(u16, u32)]) {
-        let mut q = app
-            .world_mut()
-            .query_filtered::<&mut ObjectStore, With<SelfPlayer>>();
-        let mut store = q.single_mut(app.world_mut()).unwrap();
-        *store = ObjectStore(ObjectFields::from_pairs(fields));
-    }
-
-    /// Each of the three damage-done arrays is one watch (`0x5ddbc0`, `0x5ddbe7`, `0x5ddc0e`) that
-    /// signals `("player")` when its own seven dwords change, once per array; a first look and an
-    /// equal rewrite signal nothing, and the physical bonus is no `UNIT_DAMAGE` (whose bridge
-    /// watches only the four damage-range fields).
-    #[test]
-    fn each_damage_done_array_signals_player_on_its_own_change() {
-        const POS: u16 = 1201;
-        const NEG: u16 = 1208;
-        const PCT: u16 = 1215;
-        let pct = |v: f32| v.to_bits();
-        let mut app = world_with_damage_mods(&[(POS, 25), (NEG, 0), (PCT, pct(1.0))]);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        // The first snapshot fires the paper doll's unit events, whose bridge it stands in for.
-        assert_eq!(
-            seen(&mut app),
-            vec!["UNIT_DAMAGE player"],
-            "a create runs no damage-done watcher"
-        );
-
-        // The physical positive bonus: the damage-done event, never `UNIT_DAMAGE`.
-        restore_self(&mut app, &[(POS, 40), (NEG, 0), (PCT, pct(1.0))]);
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert_eq!(seen(&mut app), vec!["PLAYER_DAMAGE_DONE_MODS player"]);
-
-        // A fire school's slot is in the same array: the same one watch.
-        restore_self(
-            &mut app,
-            &[(POS, 40), (POS + 2, 7), (NEG, 0), (PCT, pct(1.0))],
-        );
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert_eq!(seen(&mut app), vec!["PLAYER_DAMAGE_DONE_MODS player"]);
-
-        // Two arrays moving in one block is two watches, two signals.
-        restore_self(
-            &mut app,
-            &[
-                (POS, 40),
-                (POS + 2, 7),
-                (NEG, 5u32.wrapping_neg()),
-                (PCT, pct(1.1)),
-            ],
-        );
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert_eq!(
-            seen(&mut app),
-            vec!["PLAYER_DAMAGE_DONE_MODS player"; 2],
-            "the negative and the percent arrays"
-        );
-
-        // An equal rewrite changes no watched byte.
-        restore_self(
-            &mut app,
-            &[
-                (POS, 40),
-                (POS + 2, 7),
-                (NEG, 5u32.wrapping_neg()),
-                (PCT, pct(1.1)),
-            ],
-        );
-        app.world_mut().run_system_once(feed_char).unwrap();
-        assert!(seen(&mut app).is_empty());
     }
 
     /// A world with `bag`, or nothing, in the first bank bag slot, and a frame recording events.

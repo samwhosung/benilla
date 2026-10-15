@@ -3,8 +3,10 @@
 //!
 //! The pet's [`UnitCombatStats`] come from the character sheet's descriptor-only core and
 //! bindings, as in the reference, whose page calls the `PaperDollFrame_Set*` setters with `"pet"`
-//! (`PetPaperDollFrame.lua:73-81`). The stat events fire with `arg1 = "pet"` for the page's
-//! registrations (`PetPaperDollFrame.lua:12-20`) except `UNIT_DEFENSE`, which nothing fires.
+//! (`PetPaperDollFrame.lua:73-81`). The stat events the page registers (`PetPaperDollFrame.lua:12-20`)
+//! are the unit-field bridge's, fired with `arg1 = "pet"` when the pet's own fields change
+//! ([`crate::ui_unit::field_events`]); this feed only pushes what their handlers read. Nothing
+//! fires `UNIT_DEFENSE` for a pet: its one producer, `0x5ed990`, signals `"player"`.
 //! `UNIT_LEVEL` and the `UNIT_PET*` events come from [`crate::ui_pet`] and
 //! [`crate::ui_pet_stats`]; nothing fires `PET_UI_UPDATE` or `PET_UI_CLOSE`.
 
@@ -12,7 +14,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{UiScript, UnitCombatStats};
 
-use crate::ui_char::{fire_stat_transitions, unit_combat_stats};
+use crate::ui_char::unit_combat_stats;
 use crate::ui_pet::{PetBar, PetUnit};
 use crate::ui_unit::UnitFeed;
 
@@ -20,8 +22,14 @@ pub(crate) struct UiPetDollPlugin;
 
 impl Plugin for UiPetDollPlugin {
     fn build(&self, app: &mut App) {
-        // In the unit feed, so the page repaints in the pass that pushes the pet's health.
-        app.add_systems(Update, feed_pet_doll.in_set(UnitFeed));
+        // In the unit feed, so the page repaints in the pass that pushes the pet's health, and
+        // ahead of the field events whose handlers read it.
+        app.add_systems(
+            Update,
+            feed_pet_doll
+                .in_set(UnitFeed)
+                .in_set(crate::ui_unit::field_events::FieldEventPushes),
+        );
     }
 }
 
@@ -39,23 +47,17 @@ fn feed_pet_doll(
     let store = (pet_guid != 0).then(|| pet.store(pet_guid)).flatten();
 
     let fresh = store.map(unit_combat_stats);
-    // Push only on change: the page repaints off the `UNIT_*` events below.
+    // Push only on change; the page repaints off the bridge's `UNIT_*` events.
     if *last == fresh {
         return;
     }
-    // Push, then fire: the handlers run synchronously, and fired first they would paint the old
-    // values for good.
-    let prev = last.take();
-    script.set_pet_combat_stats(fresh.clone());
-    if let Some(stats) = &fresh {
-        if prev.is_none() {
-            debug!(
-                "ui_pet_doll: pet stats resolved — {} armor, {}-{} damage",
-                stats.resistances[0], stats.min_damage, stats.max_damage
-            );
-        }
-        fire_stat_transitions(&mut script, "pet", prev.as_ref(), stats);
+    if let (None, Some(stats)) = (&*last, &fresh) {
+        debug!(
+            "ui_pet_doll: pet stats resolved — {} armor, {}-{} damage",
+            stats.resistances[0], stats.min_damage, stats.max_damage
+        );
     }
+    script.set_pet_combat_stats(fresh.clone());
     // A pet going away fires nothing here: the page hides on `crate::ui_pet`'s `UNIT_PET`.
     *last = fresh;
 }

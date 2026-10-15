@@ -4,12 +4,12 @@
 //! refuses by not answering (`MiscHandler.cpp:962-972`); the stock pane re-asks from its `OnShow`
 //! while it holds nothing, the only retry.
 //!
-//! The reference fires the pane's events from three field watches (`0x467e70`, callback
-//! `0x5de4b0`): `PLAYER_FIELD_SESSION_KILLS` fires `PLAYER_PVP_KILLS_CHANGED`, and the whole
-//! `PLAYER_BYTES_3` dword (`+0x1c`, four bytes: gender, drunkenness, the city-protector title and
-//! the rank) and `PLAYER_FIELD_BYTES2` byte 0 fire `PLAYER_PVP_RANK_CHANGED`. Nothing watches the
-//! weekly, lifetime or highest-rank fields, which `HonorFrame.lua:10-11` repaints only on
-//! `PLAYER_ENTERING_WORLD`.
+//! The pane's events are three field watches (`0x467e70`, callback `0x5de4b0`):
+//! `PLAYER_FIELD_SESSION_KILLS` fires `PLAYER_PVP_KILLS_CHANGED`, and the whole `PLAYER_BYTES_3`
+//! dword and `PLAYER_FIELD_BYTES2` byte 0 fire `PLAYER_PVP_RANK_CHANGED`, from
+//! [`crate::field_watch`]; this feed pushes what their handlers read, ahead of them and of the
+//! world-enter events. Nothing watches the weekly, lifetime or highest-rank fields, which
+//! `HonorFrame.lua:10-11` repaints only on `PLAYER_ENTERING_WORLD`.
 
 use std::collections::HashMap;
 
@@ -34,8 +34,6 @@ struct HonorFeedState {
 #[derive(Default)]
 struct HonorFeedMemo {
     last: Option<HonorState>,
-    /// The whole `PLAYER_BYTES_3` dword of the last push, which the rank watch compares.
-    last_bytes_3: u32,
     last_inspect: Option<u64>,
 }
 
@@ -67,7 +65,16 @@ impl Plugin for UiHonorPlugin {
         app.init_resource::<InspectHonor>()
             .init_resource::<HonorFeedState>()
             .init_resource::<crate::nameplates::PvpNameStrings>()
-            .add_systems(Update, feed_honor.in_set(UiFeed))
+            // Ahead of the unit feed: the reference writes the block with the create whose hook
+            // runs the world-enter cascade, so `PLAYER_ENTERING_WORLD`'s repaint reads it, and
+            // the field events' handlers read it too.
+            .add_systems(
+                Update,
+                feed_honor
+                    .in_set(UiFeed)
+                    .in_set(crate::ui_unit::field_events::FieldEventPushes)
+                    .before(crate::ui_unit::UnitFeed),
+            )
             // A VM holder, so after the tick; before the driver, so a new VM's strings reach the
             // lines the frame it arrives.
             .add_systems(
@@ -137,27 +144,7 @@ fn honor_snapshot(store: &ObjectStore) -> Option<HonorState> {
     })
 }
 
-/// How many times each event fires between two snapshots, `(kills, ranks)`, from the watched
-/// fields only: each watch fires `"player"` once when its own bytes change (`0x4655bb`), so a
-/// rank move that also moves the bar fires the rank event twice. `bytes_3` is the whole
-/// `PLAYER_BYTES_3` dword. A first push fires each once. The watched fields are listed so that a
-/// new field fires nothing.
-fn events_for(before: Option<(&HonorState, u32)>, after: (&HonorState, u32)) -> (usize, usize) {
-    let Some((b, b_bytes_3)) = before else {
-        return (1, 1);
-    };
-    let (a, a_bytes_3) = after;
-    // `PLAYER_FIELD_SESSION_KILLS`, both halves (`0x5ddc35`).
-    let kills = |h: &HonorState| (h.session_hk, h.session_dk);
-    (
-        usize::from(kills(b) != kills(a)),
-        // `PLAYER_BYTES_3` whole (`0x5ddc5c`) and `PLAYER_FIELD_BYTES2` byte 0 (`0x5ddc83`), one
-        // watch each; not `highest_rank`, unwatched.
-        usize::from(b_bytes_3 != a_bytes_3) + usize::from(b.rank_bar != a.rank_bar),
-    )
-}
-
-/// Push the self snapshot and the inspect reply, fire what moved, and drain the pane's request.
+/// Push the self snapshot and the inspect reply, and drain the pane's request.
 fn feed_honor(
     script: Option<NonSendMut<UiScript>>,
     self_store: Query<&ObjectStore, With<SelfPlayer>>,
@@ -176,27 +163,9 @@ fn feed_honor(
     // --- the self snapshot -------------------------------------------------------------------
     if let Ok(store) = self_store.single() {
         if let Some(fresh) = honor_snapshot(store) {
-            let bytes_3 = store.0.player_bytes_3().unwrap_or(0);
-            if memo.last.as_ref() != Some(&fresh) || memo.last_bytes_3 != bytes_3 {
-                let (kills, ranks) = events_for(
-                    memo.last.as_ref().map(|l| (l, memo.last_bytes_3)),
-                    (&fresh, bytes_3),
-                );
+            if memo.last.as_ref() != Some(&fresh) {
                 script.set_honor(Some(fresh));
                 memo.last = Some(fresh);
-                memo.last_bytes_3 = bytes_3;
-                for _ in 0..kills {
-                    script.fire_event(
-                        "PLAYER_PVP_KILLS_CHANGED",
-                        vec![crate::ui_unit::player_token()],
-                    );
-                }
-                for _ in 0..ranks {
-                    script.fire_event(
-                        "PLAYER_PVP_RANK_CHANGED",
-                        vec![crate::ui_unit::player_token()],
-                    );
-                }
             }
         }
     }
@@ -267,95 +236,12 @@ fn feed_honor(
 mod tests {
     use super::*;
 
-    fn state() -> HonorState {
-        HonorState {
-            session_hk: 3,
-            lifetime_hk: 900,
-            rank: 8,
-            highest_rank: 9,
-            rank_bar: 128,
-            ..Default::default()
-        }
-    }
-
-    /// `PLAYER_BYTES_3` for `state()`: gender 1, drunkenness 0x40, no protector, rank 8.
-    const BYTES_3: u32 = (8 << 24) | 0x4001;
-
-    /// The events between two pushes, each with the dword it was read with.
-    fn between(b: (&HonorState, u32), a: (&HonorState, u32)) -> (usize, usize) {
-        events_for(Some(b), a)
-    }
-
+    /// The block is pushed on first sight and on change, and the push fires nothing: the PvP
+    /// events are the field watches' (`0x5ddc35`, `0x5ddc5c`, `0x5ddc83`), which a create and a
+    /// `/reload` never run.
     #[test]
-    fn each_event_fires_only_for_its_own_half() {
-        let base = state();
-        let was = (&base, BYTES_3);
-
-        let mut killed = base;
-        killed.session_hk += 1;
-        assert_eq!(between(was, (&killed, BYTES_3)), (1, 0));
-
-        let mut ranked = base;
-        ranked.rank = 9;
-        assert_eq!(between(was, (&ranked, (9 << 24) | 0x4001)), (0, 1));
-
-        // The rank bar is `PLAYER_FIELD_BYTES2` byte 0, a rank event.
-        let mut barred = base;
-        barred.rank_bar = 200;
-        assert_eq!(between(was, (&barred, BYTES_3)), (0, 1));
-
-        // Unwatched in the reference (`0x467e70`), so these fire nothing.
-        for mutate in [
-            (|h: &mut HonorState| h.last_week_standing = 42) as fn(&mut HonorState),
-            |h: &mut HonorState| h.lifetime_hk = 5_000,
-            |h: &mut HonorState| h.yesterday_honor = 900,
-            |h: &mut HonorState| h.highest_rank = 18,
-        ] {
-            let mut quiet = base;
-            mutate(&mut quiet);
-            assert_eq!(
-                between(was, (&quiet, BYTES_3)),
-                (0, 0),
-                "an unwatched field must fire nothing"
-            );
-        }
-    }
-
-    /// The rank event has two watches, `PLAYER_BYTES_3` and `PLAYER_FIELD_BYTES2` byte 0, and
-    /// each fires on its own bytes: a rank-up that also moves the bar fires it twice.
-    #[test]
-    fn a_rank_that_moves_the_bar_too_fires_the_rank_event_twice() {
-        let base = state();
-        let mut both = base;
-        both.rank = 9;
-        both.rank_bar = 3;
-        assert_eq!(
-            between((&base, BYTES_3), (&both, (9 << 24) | 0x4001)),
-            (0, 2)
-        );
-    }
-
-    /// The watch `0x5ddc5c` covers all four bytes of `PLAYER_BYTES_3` (`+0x1c`, length 4), so a
-    /// byte that is not the rank fires the rank event too: gender (byte 0), drunkenness (byte 1),
-    /// the city-protector title (byte 2).
-    #[test]
-    fn any_byte_of_player_bytes_3_fires_the_rank_event() {
-        let base = state();
-        for moved in [BYTES_3 ^ 0x01, BYTES_3 ^ 0x100, BYTES_3 ^ 0x40_0000] {
-            assert_eq!(
-                between((&base, BYTES_3), (&base, moved)),
-                (0, 1),
-                "{moved:#x}"
-            );
-        }
-    }
-
-    /// Through the feed: a change of the gender byte alone moves no snapshot field, and the rank
-    /// event still fires once with `"player"`.
-    #[test]
-    fn the_feed_fires_the_rank_event_for_a_non_rank_byte_of_player_bytes_3() {
+    fn the_feed_pushes_the_block_and_fires_nothing() {
         use bevy::ecs::system::RunSystemOnce;
-        const FIELD_PLAYER_BYTES_3: u16 = 195;
         const FIELD_SESSION_KILLS: u16 = 1250;
         let mut app = App::new();
         app.init_resource::<HonorFeedState>()
@@ -377,43 +263,31 @@ mod tests {
             .world_mut()
             .spawn((
                 SelfPlayer,
-                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                    (FIELD_SESSION_KILLS, 3),
-                    (FIELD_PLAYER_BYTES_3, BYTES_3),
-                ])),
+                ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[(
+                    FIELD_SESSION_KILLS,
+                    3,
+                )])),
             ))
             .id();
-        let seen = |app: &mut App| {
+        // The session's honorable kills as the pane reads them, and what the VM heard.
+        let step = |app: &mut App| {
             app.world_mut().run_system_once(feed_honor).unwrap();
             let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
             s.resolve();
-            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
+            let kills = s.eval::<i64>("return (GetPVPSessionStats())").unwrap();
+            let heard = s.eval::<Vec<String>>("return SEEN").unwrap();
             s.run("SEEN = {}").unwrap();
-            out
+            (kills, heard)
         };
-        // The first push fires each once.
-        assert_eq!(
-            seen(&mut app),
-            vec![
-                "PLAYER_PVP_KILLS_CHANGED player",
-                "PLAYER_PVP_RANK_CHANGED player"
-            ]
+        assert_eq!(step(&mut app), (3, vec![]), "the first push is silent");
+        *app.world_mut().get_mut::<ObjectStore>(me).unwrap() = ObjectStore(
+            benilla_protocol::ObjectFields::from_pairs(&[(FIELD_SESSION_KILLS, 4)]),
         );
-        // Nothing moved: nothing fires.
-        assert!(seen(&mut app).is_empty());
-        // The gender byte alone.
-        *app.world_mut().get_mut::<ObjectStore>(me).unwrap() =
-            ObjectStore(benilla_protocol::ObjectFields::from_pairs(&[
-                (FIELD_SESSION_KILLS, 3),
-                (FIELD_PLAYER_BYTES_3, BYTES_3 ^ 0x01),
-            ]));
-        assert_eq!(seen(&mut app), vec!["PLAYER_PVP_RANK_CHANGED player"]);
-    }
-
-    /// Otherwise a pane whose numbers arrived before it existed would never paint.
-    #[test]
-    fn the_first_push_fires_both() {
-        assert_eq!(events_for(None, (&state(), BYTES_3)), (1, 1));
+        assert_eq!(
+            step(&mut app),
+            (4, vec![]),
+            "a change is the watch's to fire"
+        );
     }
 
     fn vm(src: &str) -> UiScript {
