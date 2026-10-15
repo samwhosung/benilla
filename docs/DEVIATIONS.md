@@ -572,7 +572,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - Zone and position are kept, not set to the viewer's zone and the object's position, because nothing in benilla reads them. ([`src/messages/group.rs:255`](../crates/benilla-protocol/src/messages/group.rs#L255))
 - String reads are unbounded. The reference `0x4191b0` caps each field, counting the NUL (roster name `0x30`, notes `0x80`, MOTD `0x200`, info `0x7d0`, guild name `0x60`, rank name `0x40`), and on overflow empties it and no-ops every later read in the packet. ([`src/messages/guild.rs:4`](../crates/benilla-protocol/src/messages/guild.rs#L4))
 - A reason of 3 or more is silent, where the reference prints an uninitialized stack buffer, because 3 is the server's `INSTANCERESET_FAIL_SILENTLY`. ([`src/messages/instance.rs:70`](../crates/benilla-protocol/src/messages/instance.rs#L70))
-- Benilla has no Warden, so the connect refuses such a server (`crate::WardenRequired`) because a session there would only be kicked. ([`src/messages/opcode.rs:73`](../crates/benilla-protocol/src/messages/opcode.rs#L73))
+- Benilla cannot run a Warden module, so the connect refuses such a server; `crate::WardenRequired` says why. ([`src/messages/opcode.rs:73`](../crates/benilla-protocol/src/messages/opcode.rs#L73))
 - 2 or more prints nothing, because the reference prints an uninitialized buffer. ([`src/messages/opcode.rs:1003`](../crates/benilla-protocol/src/messages/opcode.rs#L1003))
 - The consumer refuses 64 and up, because there the reference's store overruns its table. ([`src/messages/packet.rs:607`](../crates/benilla-protocol/src/messages/packet.rs#L607))
 - A body too short for the position gives `None` where the client redisplays a stale global, because showing a stale queue position as current is a client bug. ([`src/messages/parse.rs:295`](../crates/benilla-protocol/src/messages/parse.rs#L295))
@@ -582,9 +582,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### world
 
 - The reference waits forever; a bound tells a server that died mid-queue from a long wait. ([`src/world/session.rs:17`](../crates/benilla-protocol/src/world/session.rs#L17))
-- Benilla does not implement it; vmangos ships with it off (`Warden.WinEnabled`, `Warden.OSXEnabled`). vmangos kicks a client that leaves a Warden request unanswered for 30 s (`Warden.cpp`), so the connect refuses. ([`src/world/session.rs:21`](../crates/benilla-protocol/src/world/session.rs#L21))
-- `0` when the body is too short, where the reference leaves its global as it was; this field lives per connection, with nothing earlier to keep. ([`src/world/session.rs:75`](../crates/benilla-protocol/src/world/session.rs#L75))
-- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:108`](../crates/benilla-protocol/src/world/session.rs#L108))
+- Benilla cannot answer it. The answers come from a module, native Win32 x86 code the server sends, which the client maps, links and runs in its own process (`0x7a79d0`); the client itself parses none of the payload (`0x6ca5c0`). benilla runs no such code on any platform, so it has nothing that could answer. vmangos ships Warden off (`Warden.WinEnabled`, `Warden.OSXEnabled`) and kicks a client that leaves a request unanswered for 30 s (`Warden.cpp`), so the connect refuses rather than log in to be kicked. ([`src/world/session.rs:21`](../crates/benilla-protocol/src/world/session.rs#L21))
+- `0` when the body is too short, where the reference leaves its global as it was; this field lives per connection, with nothing earlier to keep. ([`src/world/session.rs:78`](../crates/benilla-protocol/src/world/session.rs#L78))
+- Checked per queue packet where the reference checks each tick, so a cancel can lag one server update. ([`src/world/session.rs:111`](../crates/benilla-protocol/src/world/session.rs#L111))
 ### benilla-srp
 
 #### (crate root)
