@@ -452,7 +452,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_trade
 
-- An out-of-range slot is dropped, where the reference indexes its 7-slot mirror unchecked, because an out-of-bounds write is not a behaviour to reproduce. ([`src/ui_trade/mod.rs:275`](../crates/benilla-app/src/ui_trade/mod.rs#L275))
+- An out-of-range slot is dropped, where the reference indexes its 7-slot mirror unchecked, because an out-of-bounds write is not a behaviour to reproduce. ([`src/ui_trade/mod.rs:303`](../crates/benilla-app/src/ui_trade/mod.rs#L303))
 
 #### ui_unit
 
