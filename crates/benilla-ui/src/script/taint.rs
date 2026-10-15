@@ -77,21 +77,18 @@ pub(crate) fn tag_for_load(lua: &Lua, f: &Function) {
 }
 
 /// The addon a chunk name belongs to: `@Interface\AddOns\<Folder>\<file>`
-/// ([`super::addon_chunk_name`]), and only while that addon is insecure, since a secure one runs
-/// under context 0 (`0x51f37e`-`0x51f387`). The registry row's own spelling of the name is the
-/// context word; a folder it does not know is insecure, as a record starts (`0x5205b6`).
+/// ([`super::addon_chunk_name`]), and only while that addon is registered and insecure, since a
+/// secure one runs under context 0 (`0x51f37e`-`0x51f387`). The registry row's own spelling of the
+/// name is the context word. No code runs from a folder the registry lacks, so one is not an
+/// addon's, and benilla's own layer, which names its chunks that way, stays the client's.
 fn addon_of_chunk(model: &Model, source: &str) -> Option<String> {
     let rest = source.strip_prefix("@Interface\\AddOns\\")?;
     let folder = rest.split_once('\\')?.0;
     let row = model
         .addons
         .iter()
-        .find(|a| a.name.eq_ignore_ascii_case(folder));
-    match row {
-        Some(a) if a.security == super::AddonSecurity::Secure => None,
-        Some(a) => Some(a.name.clone()),
-        None => Some(folder.to_owned()),
-    }
+        .find(|a| a.name.eq_ignore_ascii_case(folder))?;
+    (row.security != super::AddonSecurity::Secure).then(|| row.name.clone())
 }
 
 /// The context word the running call carries: the innermost Lua frame's, [`Context::Client`] when

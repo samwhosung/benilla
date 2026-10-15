@@ -175,3 +175,20 @@ fn a_refusal_does_not_signal_itself() {
     s.run("Walker_Go()").unwrap();
     assert_eq!(events(&s).len(), 2);
 }
+
+/// A folder the registry does not know is no addon's: nothing runs from an unregistered addon,
+/// and benilla's own layer names its chunks `@Interface\AddOns\benilla\…`. Its calls are the
+/// client's, refused silently outside a binding body.
+#[test]
+fn a_folder_the_registry_lacks_is_the_clients_own() {
+    let mut s = walker(AddonSecurity::Insecure);
+    let name = crate::script::addon_chunk_name("Ghost", "Ghost.lua");
+    s.run_chunk_named(b"function Ghost_Go() Jump() end Ghost_Go()", &name)
+        .unwrap();
+    assert!(events(&s).is_empty());
+    assert!(s.take_binding_input().is_empty());
+    // The registered one beside it still is.
+    let name = crate::script::addon_chunk_name("walker", "Other.lua");
+    s.run_chunk_named(b"Jump()", &name).unwrap();
+    assert_eq!(events(&s), ["ADDON_ACTION_FORBIDDEN:Walker"]);
+}
