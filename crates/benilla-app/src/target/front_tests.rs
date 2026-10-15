@@ -506,3 +506,56 @@ fn a_plate_click_greets_with_the_cursor_up() {
         );
     }
 }
+
+/// The `Interact` API's attack leg selects through `StartMeleeAttack` (`0x5eccaa`), which is
+/// `SelectTarget`: with a targeting cursor up the unit is bound to its cast, and the swing goes on.
+#[test]
+fn an_interact_attack_with_the_cursor_up_binds_its_unit() {
+    const FOE: u64 = 0x43;
+    let attack = |cursor: bool| {
+        let mut f = fix(false);
+        let foe = f.scannable_at(FOE, 3.0);
+        f.app.world_mut().init_resource::<crate::player::Player>();
+        if cursor {
+            f.cursor_up();
+        }
+        f.app
+            .world_mut()
+            .resource_mut::<Messages<click::Interact>>()
+            .write(click::Interact(foe));
+        f.app
+            .world_mut()
+            .run_system_once(click::act_on_interact)
+            .expect("the interact runs");
+        f.bind();
+        let sent: Vec<_> = f.rx.try_iter().collect();
+        let swung = sent
+            .iter()
+            .any(|c| matches!(c, ClientCommand::AttackSwing { guid: FOE }));
+        let (casts, picks): (Vec<_>, Vec<_>) = (
+            sent.iter()
+                .filter_map(|c| match c {
+                    ClientCommand::CastSpell { target, .. } => Some(*target),
+                    _ => None,
+                })
+                .collect(),
+            sent.iter()
+                .filter_map(|c| match c {
+                    ClientCommand::SetSelection { guid } => Some(*guid),
+                    _ => None,
+                })
+                .collect(),
+        );
+        (f.selected(), swung, casts, picks)
+    };
+    assert_eq!(
+        attack(false),
+        (Some(FOE), true, vec![], vec![FOE]),
+        "cursor down: it selects and swings"
+    );
+    assert_eq!(
+        attack(true),
+        (Some(OLD), true, vec![Some(FOE)], vec![]),
+        "cursor up: it binds, selects nothing, and swings on"
+    );
+}

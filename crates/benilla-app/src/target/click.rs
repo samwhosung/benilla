@@ -224,6 +224,9 @@ enum MeleeApproach {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Dispatch<'w, 's> {
     seam: crate::creature_anim::AttackSeam<'w, 's>,
+    /// The returns ahead of the select both attack-or-click entries make (`SelectTarget`,
+    /// [`super::front`]).
+    front: super::front::SelectFront<'w, 's>,
     self_player: Query<'w, 's, (Entity, &'static Guid, Has<Engaged>), With<SelfPlayer>>,
     // Through `creature_anim::gesture`, the chat path's entry, as the reference's dispatcher does.
     gestures: ResMut<'w, crate::creature_anim::GestureQueue>,
@@ -877,7 +880,13 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
     // sword, not the fork, as the re-swing also needs the player's own legs.
     // Deref'd only where it commits: a leg that does not select leaves the change tick alone.
     let commit = |seam: &mut crate::creature_anim::AttackSeam,
+                  front: &mut super::front::SelectFront,
                   selection: &mut ResMut<Selection>| {
+        // Both selects are `SelectTarget`'s (`0x492870`, `0x5eccaa`): charmed, or a standing
+        // cursor's bind in its place.
+        if front.takes(entity, guid) {
+            return scan::CommitOutcome::default();
+        }
         scan::commit(
             selection,
             seam,
@@ -890,7 +899,7 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
         )
     };
     let mut outcome = match &mut select {
-        Select::First(selection) => commit(&mut dispatch.seam, selection),
+        Select::First(selection) => commit(&mut dispatch.seam, &mut dispatch.front, selection),
         Select::OnAttack(_) => scan::CommitOutcome::default(),
     };
     match unit_branch(attack, dead_fork, leg) {
@@ -921,7 +930,7 @@ fn interact(dispatch: &mut Dispatch, press: &PressPick, mut select: Select) {
                 // StartAttack's own select (`0x5eccaa`), past its gates and before the swing
                 // (`0x5eccfd`): the click's commit, with its stop and re-swing mid-combat.
                 if let Select::OnAttack(selection) = &mut select {
-                    outcome = commit(&mut dispatch.seam, selection);
+                    outcome = commit(&mut dispatch.seam, &mut dispatch.front, selection);
                 }
                 debug!("right-click attack: {guid:#x}");
                 // `0x5ecb70`'s body through the seam; `swung` means the commit's re-swing already
@@ -2112,6 +2121,8 @@ mod tests {
         world.init_resource::<Messages<WorldRightClick>>();
         world.init_resource::<PressPick>();
         world.init_resource::<Selection>();
+        world.init_resource::<crate::spell::SpellTargeting>();
+        world.init_resource::<crate::spell::CursorPicks>();
         world.init_resource::<crate::spell::QueuedMeleeSpell>();
         world.init_resource::<crate::spell::AutoRepeatActive>();
         world.init_resource::<Messages<crate::creature_anim::SheathRequest>>();
