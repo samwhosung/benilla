@@ -83,18 +83,16 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     }
 
     // `FrameXML_Debug([v])` (`0x488440`): get-or-set of the XML loader's trace flag `[0xceea30]`,
-    // which gates `crate::loader::LoadReport::traces`. A Lua-truthy argument sets it, truncated
-    // toward zero (`0x40a2b0`), so `FrameXML_Debug(0)` clears it; nil or false only reads. It
-    // returns the flag after the call.
+    // which gates `crate::loader::LoadReport::traces`. The set arm runs only when `lua_isnumber`
+    // (`0x6f34d0`, tested at `0x48845d`) accepts the argument, a number or a numeric string, and
+    // stores it truncated toward zero (`0x40a2b0`), so `FrameXML_Debug(0)` clears it; any other
+    // argument only reads. It returns the flag after the call.
     g.set(
         "FrameXML_Debug",
         lua.create_function(|lua, v: Value| {
             let model = lua.app_data_ref::<Model>().expect("model app_data");
-            let truthy = !matches!(v, Value::Nil | Value::Boolean(false));
-            if truthy {
-                // A value that will not coerce is 0, as `lua_tonumber` (`0x6f3620`) answers.
-                let n = lua.coerce_number(v)?.unwrap_or(0.0);
-                model.framexml_debug.set(n.trunc() as i32);
+            if let Some(n) = lua.coerce_number(v)? {
+                model.framexml_debug.set(super::binding_abi::ftol(n));
             }
             Ok(model.framexml_debug.get())
         })?,

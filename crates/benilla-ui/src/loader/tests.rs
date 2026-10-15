@@ -674,15 +674,31 @@ mod loader_tests {
             "{on:?}"
         );
 
+        // `lua_isnumber` refuses everything but a number or a numeric string, so the rest only
+        // read: the flag stays 1 (`true` coerces to no number and used to store 0).
+        for arg in ["nil", "true", "false", "\"x\"", "{}", "FrameXML_Debug"] {
+            assert_eq!(
+                s.eval::<i32>(&format!("return FrameXML_Debug({arg})"))
+                    .unwrap(),
+                1,
+                "{arg} is a pure GET — the flag is untouched"
+            );
+        }
+        assert_eq!(s.eval::<i32>("return FrameXML_Debug()").unwrap(), 1);
         assert_eq!(
-            s.eval::<i32>("return FrameXML_Debug(nil)").unwrap(),
-            1,
-            "nil is a pure GET — the flag is untouched"
+            s.eval::<i32>("return FrameXML_Debug(\"3.7\")").unwrap(),
+            3,
+            "a numeric string converts, truncated toward zero"
+        );
+        assert_eq!(
+            s.eval::<i32>("return FrameXML_Debug(-2.9)").unwrap(),
+            -2,
+            "…and a negative truncates toward zero too"
         );
         assert_eq!(
             s.eval::<i32>("return FrameXML_Debug(0)").unwrap(),
             0,
-            "…but 0 is TRUTHY in Lua, so it really does disable it"
+            "…and 0 is a number, so it really does disable it"
         );
         assert!(load(&s, &doc(), &no_files).traces.is_empty());
         // The stored value truncates toward zero (`0x40a2b0`).
