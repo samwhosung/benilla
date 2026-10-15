@@ -115,10 +115,12 @@ pub(crate) fn close_npc_session_out_of_range<T: NpcSession>(
 pub(crate) struct InteractNpc(pub(crate) Option<Entity>, pub(crate) Option<u64>);
 
 /// Publish the latch as [`InteractNpc`]. The reference's `"npc"` is the latch itself (`0x515c00`),
-/// but a quest panel opened from a bag item publishes none here: there is no unit bake for an
-/// item. The windows not yet on the latch follow it, as before them. `Option<Res<_>>` lets a test mount it without every window.
+/// but a quest panel opened from a bag item and the mailbox publish none here, as before the
+/// latch: there is no unit bake for an item or a mailbox. The trade window, not yet on the latch,
+/// follows it. `Option<Res<_>>` lets a test mount it without every window.
 pub(crate) fn feed_interact_npc(
     latch: Option<Res<InteractLatch>>,
+    mail: Option<Res<crate::ui_mail::MailOpen>>,
     // Trade's "npc" is the partner, a live player.
     trade: Option<Res<crate::ui_trade::TradeSession>>,
     index: Option<Res<GuidIndex>>,
@@ -126,7 +128,10 @@ pub(crate) fn feed_interact_npc(
 ) {
     let guid = latch
         .and_then(|l| l.guid())
-        .filter(|&g| !benilla_protocol::guid::is_item(g))
+        .filter(|&g| {
+            !benilla_protocol::guid::is_item(g)
+                && mail.as_ref().is_none_or(|m| m.mailbox != Some(g))
+        })
         .or_else(|| trade.and_then(|s| s.npc()));
     // Field 0 is the entity the booth bakes and the facing chain steers by; field 1 is the guid
     // `crate::ui_unit` names the token by, which holds even when the entity is not streamed.
@@ -323,6 +328,21 @@ mod tests {
             InteractNpc(None, None)
         );
 
+        // The mailbox holds the latch: no unit to name.
+        const MAILBOX: u64 = 0xF110_0000_0000_0B0C;
+        app.init_resource::<crate::ui_mail::MailOpen>();
+        app.world_mut()
+            .resource_mut::<crate::ui_mail::MailOpen>()
+            .click(MAILBOX);
+        app.world_mut()
+            .resource_mut::<InteractLatch>()
+            .latch_for_test(MAILBOX);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<InteractNpc>(),
+            InteractNpc(None, None)
+        );
+
         // The latch clear, a window off it (a trade's partner) publishes its own.
         const PARTNER: u64 = 0x0000_0000_0000_0008;
         let partner = app.world_mut().spawn_empty().id();
@@ -355,9 +375,7 @@ mod tests {
 
         /// Sessions that do not own the `"npc"` portrait token, each with its reason.
         const EXCLUDED: &[(&str, &str)] = &[
-            // Its icon is art, not a unit bake, and must not take a portrait window's token.
-            ("MailOpen", "its window icon is art, not a unit bake"),
-            // Reached from an open gossip menu, which stays open behind it and heads the chain;
+            // Reached from an open gossip menu, which stays open behind it holding the latch;
             // unlike the registrar's, the server does not close it first.
             ("TalentWipeState", "rides the still-open gossip session"),
             ("BinderState", "rides the still-open gossip session"),
