@@ -2989,7 +2989,6 @@
                                     <Anchor point="TOPRIGHT"><Offset><AbsDimension x="-10" y="-21"/></Offset></Anchor>
                                     <Anchor point="BOTTOMRIGHT"><Offset><AbsDimension x="-10" y="20"/></Offset></Anchor>
                                 </Anchors>
-                                <Scripts><OnValueChanged>BenillaScrollBar_OnValueChanged(this, arg1)</OnValueChanged></Scripts>
                             </Slider>
                         </Frames>
                     </ScrollFrame>

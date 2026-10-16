@@ -3,8 +3,8 @@
         Benilla's scroll parts: a `Slider` bar with its arrow helpers, an optional trough, and a
         real-scroll kit that pans a `<ScrollFrame>` child whose height is known only after layout.
         Faux lists use the stock `FauxScrollFrameTemplate`; this file declares only `Benilla` names.
-        A real-scroll bar overrides the template's OnValueChanged on its instance, which wins
-        because the loader runs every `<Scripts>` block in order.
+        The bar template carries the real-scroll OnValueChanged itself, as the reference's
+        `UIPanelScrollBarTemplate` does (UIPanelTemplates.xml:156-158); an instance adds nothing.
     -->
     <Script><![CDATA[
         -- One valueStep per step, where the reference's arrows and wheel move half the bar
@@ -24,23 +24,6 @@
             local down = getglobal(scrollBar:GetName() .. "ScrollDownButton")
             if val <= minV then up:Disable() else up:Enable() end
             if val >= maxV then down:Disable() else down:Enable() end
-        end
-
-        -- The value is pixels in steps of a row; the parent holds the 0-based top row in
-        -- `frame.offset` and its repaint in `frame.updateFunc`, which runs only when that row
-        -- changes, so a repaint that re-seats the thumb ends the loop. A ScrollFrame parent also
-        -- gets SetVerticalScroll, as UIPanelTemplates.xml:156-158 routes it.
-        function BenillaFauxScrollBar_OnValueChanged(scrollBar, value)
-            local frame = scrollBar:GetParent()
-            local step = scrollBar:GetValueStep()
-            if step <= 0 then step = 1 end
-            local newOffset = floor(value / step + 0.5)
-            if newOffset ~= frame.offset then
-                frame.offset = newOffset
-                if frame.updateFunc then frame.updateFunc() end
-            end
-            BenillaScrollBar_UpdateArrows(scrollBar)
-            if frame.SetVerticalScroll then frame:SetVerticalScroll(value) end
         end
 
         -- ReputationFrame's hang, 8 left, 21 above, 20 below (ReputationFrame.xml:573-599 against
@@ -190,7 +173,7 @@
             </Button>
         </Frames>
         <Scripts>
-            <OnValueChanged>BenillaFauxScrollBar_OnValueChanged(this, arg1)</OnValueChanged>
+            <OnValueChanged>BenillaScrollBar_OnValueChanged(this, arg1)</OnValueChanged>
         </Scripts>
         <ThumbTexture name="$parentThumbTexture" file="Interface\Buttons\UI-ScrollBar-Knob">
             <Size><AbsDimension x="16" y="16"/></Size>

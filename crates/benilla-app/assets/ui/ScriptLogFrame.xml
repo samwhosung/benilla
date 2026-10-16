@@ -318,7 +318,6 @@
                             <Anchor point="TOPLEFT" relativePoint="TOPRIGHT"><Offset><AbsDimension x="6" y="-16"/></Offset></Anchor>
                             <Anchor point="BOTTOMLEFT" relativePoint="BOTTOMRIGHT"><Offset><AbsDimension x="6" y="16"/></Offset></Anchor>
                         </Anchors>
-                        <Scripts><OnValueChanged>BenillaScrollBar_OnValueChanged(this, arg1)</OnValueChanged></Scripts>
                     </Slider>
                     <!-- Mouse-enabled and the pane's full height, as SendMailScrollChildFrame is
                          (MailFrame.xml:604-659): a click below the text focuses the box. -->
