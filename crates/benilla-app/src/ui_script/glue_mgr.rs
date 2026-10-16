@@ -1817,13 +1817,13 @@ pub(crate) fn drive_glue_mgr(
     mut realmlist: Option<ResMut<crate::realmlist::Realmlist>>,
     areas: Option<Res<crate::area::AreaTableRes>>,
     sources: super::glue_create::CreateSources,
-    state: Option<Res<State<crate::char_select::ClientState>>>,
+    state: Option<Res<State<crate::client_state::ClientState>>>,
     time: Res<Time>,
 ) {
     let shared = shared.clone();
     let now_ms = time.elapsed().as_millis() as u32;
     let mut script = script.filter(|s| s.vm_kind() == VmKind::Glue);
-    let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
+    let in_world = state.is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld);
     let glue_up = script.is_some() && !in_world;
 
     // A refused character login, ahead of the glue build it comes back to (`0x5aad70`).

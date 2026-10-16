@@ -94,7 +94,7 @@ impl Plugin for ProbeLookPlugin {
             drive_probe_look
                 .in_set(WorldStage::Input)
                 .before(crate::player::PlayerControlSet)
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         );
     }
 }

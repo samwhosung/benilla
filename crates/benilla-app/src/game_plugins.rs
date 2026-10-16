@@ -97,8 +97,8 @@ pub(crate) struct GamePlugins {
     /// [`NetPlugin::connect`]: `false` in capture mode, where no IO thread runs, so captures are
     /// deterministic whether or not a server is up.
     pub(crate) connect: bool,
-    /// [`crate::char_select::CharSelectPlugin::start`]: the screen this session opens on.
-    pub(crate) start: crate::char_select::ClientState,
+    /// [`crate::client_state::ClientStatePlugin::start`]: the screen this session opens on.
+    pub(crate) start: crate::client_state::ClientState,
 }
 
 impl PluginGroup for GamePlugins {
@@ -131,9 +131,10 @@ impl PluginGroup for GamePlugins {
                 connect: self.connect,
             })
             .add(crate::death::DeathPlugin)
+            .add(crate::client_state::ClientStatePlugin { start: self.start })
             .add(crate::glue_session::GlueSessionPlugin)
             .add(crate::glue::GluePlugin)
-            .add(crate::char_select::CharSelectPlugin { start: self.start })
+            .add(crate::char_select::CharSelectPlugin)
             .add(crate::login::LoginPlugin)
             .add(crate::realm_select::RealmSelectPlugin)
             .add(crate::char_create::CharCreatePlugin)
@@ -290,7 +291,7 @@ pub(crate) mod schedule_tests {
         app.add_plugins(benilla_world::world_plugins::WorldPlugins);
         app.add_plugins(GamePlugins {
             connect: false,
-            start: crate::char_select::ClientState::Login,
+            start: crate::client_state::ClientState::Login,
         });
         app.finish();
         app.cleanup();
@@ -567,7 +568,7 @@ pub(crate) mod schedule_tests {
     /// named here with why it cannot run against the other.
     #[test]
     fn the_glue_preview_has_one_feeder_per_switch() {
-        use crate::char_select::ClientState;
+        use crate::client_state::ClientState;
         // The create screen's state, which only the native select screen enters, and its
         // instrument.
         const EITHER: [&str; 2] = ["benilla_app::char_create::", "drive_create_test"];

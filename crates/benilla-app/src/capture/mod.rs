@@ -163,12 +163,12 @@ pub(crate) use probe_pitch::ProbePitchPlugin;
 ///
 /// One of three readers of `$WOW_CAPTURE`, with `run_mode` and `dev_state::deterministic_run`,
 /// one per layer and sharing no symbol: keep them in step.
-pub(crate) fn start_state() -> crate::char_select::ClientState {
+pub(crate) fn start_state() -> crate::client_state::ClientState {
     match glue_screen() {
-        Some(GlueScreen::CharCreate) => crate::char_select::ClientState::CharCreate,
-        Some(GlueScreen::Login | GlueScreen::RealmList) => crate::char_select::ClientState::Login,
-        None if crate::run_mode::scenario_active() => crate::char_select::ClientState::InWorld,
-        None => crate::char_select::ClientState::Login,
+        Some(GlueScreen::CharCreate) => crate::client_state::ClientState::CharCreate,
+        Some(GlueScreen::Login | GlueScreen::RealmList) => crate::client_state::ClientState::Login,
+        None if crate::run_mode::scenario_active() => crate::client_state::ClientState::InWorld,
+        None => crate::client_state::ClientState::Login,
     }
 }
 

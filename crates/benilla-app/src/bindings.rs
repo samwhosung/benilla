@@ -31,7 +31,7 @@ use bevy::prelude::*;
 use benilla_ui::script::keybind::KeybindRequest;
 use benilla_ui::script::{KeyUp, KeyWalk, UiScript};
 
-use crate::char_select::InWorldGated;
+use crate::client_state::InWorldGated;
 use crate::ui_script::{PlayerUiHover, UiKeyboardCapture};
 
 pub(crate) mod chord;

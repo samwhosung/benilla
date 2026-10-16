@@ -1031,7 +1031,7 @@ pub(super) fn plugin(app: &mut App) {
             ),
         )
         .add_systems(
-            OnExit(crate::char_select::ClientState::InWorld),
+            OnExit(crate::client_state::ClientState::InWorld),
             stop_all_channels,
         );
 }

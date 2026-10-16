@@ -311,7 +311,7 @@ impl Plugin for AreaPlugin {
         app.init_resource::<RealmPvp>()
             .add_systems(Startup, load_area_table.after(AssetSet::Open))
             .add_systems(
-                OnEnter(crate::char_select::ClientState::InWorld),
+                OnEnter(crate::client_state::ClientState::InWorld),
                 latch_realm_pvp,
             )
             .add_systems(

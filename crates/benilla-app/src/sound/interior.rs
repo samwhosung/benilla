@@ -62,7 +62,7 @@ pub(super) fn plugin(app: &mut App) {
                 .after(benilla_world::wmo_portal::WmoPvsSet),
         )
         .add_systems(
-            OnExit(crate::char_select::ClientState::InWorld),
+            OnExit(crate::client_state::ClientState::InWorld),
             leave_world,
         );
 }

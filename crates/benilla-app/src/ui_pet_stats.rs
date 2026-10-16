@@ -555,7 +555,7 @@ mod tests {
     /// only a real schedule orders the feeds, so this runs one `app.update()` on a cold pet.
     #[test]
     fn unit_pet_reaches_lua_with_has_pet_ui_already_true() {
-        use crate::char_select::ClientState;
+        use crate::client_state::ClientState;
         use crate::net::GuidIndex;
         use crate::ui_pet::UiPetPlugin;
 

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
-use crate::char_select::{ClientState, InWorldGated};
+use crate::client_state::{ClientState, InWorldGated};
 
 use super::camera::{CameraControl, FlyCam, CAM_PITCH_LIMIT};
 use super::camera_zoom::{CAM_DIST_DEFAULT, CAM_DIST_MAX, CAM_DIST_MIN};

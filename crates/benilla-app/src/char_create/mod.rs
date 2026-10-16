@@ -16,7 +16,8 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::input::ButtonState;
 use bevy::prelude::*;
 
-use crate::char_select::{ClientState, Roster};
+use crate::char_select::Roster;
+use crate::client_state::ClientState;
 use crate::entities::CharCreate;
 use crate::glue_strings::GlueStrings;
 use crate::net::{CharActionResultMessage, CharPick, CharRequest};

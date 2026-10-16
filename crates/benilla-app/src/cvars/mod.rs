@@ -2309,7 +2309,8 @@ mod tests {
     /// reach the file through the registry's dirty/compose path.
     #[test]
     fn entering_the_world_survives_the_quit_and_comes_back_selected() {
-        use crate::char_select::{ClientState, Roster};
+        use crate::char_select::Roster;
+        use crate::client_state::ClientState;
         use crate::local_state::test_env::{EnvGuard, ENV_LOCK};
         let _l = ENV_LOCK
             .lock()

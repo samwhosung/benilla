@@ -116,7 +116,7 @@ pub(super) fn plugin(app: &mut App) {
                 .in_set(WorldStage::Present),
         )
         .add_systems(
-            OnExit(crate::char_select::ClientState::InWorld),
+            OnExit(crate::client_state::ClientState::InWorld),
             leave_world,
         );
 }

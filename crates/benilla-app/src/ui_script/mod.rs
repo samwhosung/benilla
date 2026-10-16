@@ -338,12 +338,12 @@ impl Plugin for UiScriptPlugin {
             // The in-game UI loads on world entry, as the reference's does, once the loading cover
             // has presented, so its ~0.5 s never stalls the cover's first frame.
             .add_systems(
-                OnEnter(crate::char_select::ClientState::InWorld),
+                OnEnter(crate::client_state::ClientState::InWorld),
                 lifecycle::arm_entry_ui_load,
             )
             // The shutdown tail: events, then writes, in the reference's order.
             .add_systems(
-                OnExit(crate::char_select::ClientState::InWorld),
+                OnExit(crate::client_state::ClientState::InWorld),
                 end_ui_session,
             )
             // `init_` here and in `UiUnitPlugin`: either plugin may be built alone in a test.
@@ -388,10 +388,10 @@ impl Plugin for UiScriptPlugin {
                 (
                     extract::tick_script,
                     input::feed_ui_input.run_if(
-                        in_state(crate::char_select::ClientState::InWorld).or(glue::glue_ui_up),
+                        in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
                     ),
                     input::feed_ui_wheel.run_if(
-                        in_state(crate::char_select::ClientState::InWorld).or(glue::glue_ui_up),
+                        in_state(crate::client_state::ClientState::InWorld).or(glue::glue_ui_up),
                     ),
                     // Off the walk that just ran, for the pick and the arbiter after the pass.
                     crate::vplates::seed_plate_hover,

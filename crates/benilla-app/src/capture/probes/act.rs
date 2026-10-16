@@ -321,7 +321,7 @@ fn fire_probe_lua(
     time: ProbeClock,
     script: Option<NonSendMut<benilla_ui::script::UiScript>>,
     self_player: Query<(), With<crate::net::SelfPlayer>>,
-    state: Res<State<crate::char_select::ClientState>>,
+    state: Res<State<crate::client_state::ClientState>>,
     entry_ui_pending: Option<Res<crate::ui_script::PendingEntryUiLoad>>,
 ) {
     if probe.chunk.is_empty() {
@@ -336,7 +336,7 @@ fn fire_probe_lua(
     // Ready means the in-game VM, not the boot one: `InWorld` (the entered-world message and the
     // first object update can share a drain a frame before the VM is parked), the entry UI load
     // done, and a self player for `UnitName("player")`.
-    let in_world = *state.get() == crate::char_select::ClientState::InWorld;
+    let in_world = *state.get() == crate::client_state::ClientState::InWorld;
     let ready = in_world && entry_ui_pending.is_none() && !self_player.is_empty();
     let now = time.elapsed_secs();
     if ready && !probe.was_ready {

@@ -1114,7 +1114,7 @@ pub(super) fn plugin(app: &mut App) {
         // Unconditional, so the count falls to zero when the soundscape stops.
         .add_systems(Update, report_stream_voices)
         .add_systems(
-            OnExit(crate::char_select::ClientState::InWorld),
+            OnExit(crate::client_state::ClientState::InWorld),
             leave_world,
         );
 }

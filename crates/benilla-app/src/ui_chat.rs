@@ -173,7 +173,7 @@ impl Plugin for UiChatPlugin {
                     // Before the zone-channel walk renumbers or renames a slot, so a `/N` resolves
                     // against the roster the script's `GetChannelName` read this frame.
                     .before(channels::end_session_channels_on_disconnect)
-                    .in_set(crate::char_select::InWorldGated),
+                    .in_set(crate::client_state::InWorldGated),
             )
             // The zone-channel auto-join, which vmangos leaves to the client. The disconnect clear
             // runs first, so a same-frame drop cannot leave the walk diffing stale membership.
@@ -183,14 +183,15 @@ impl Plugin for UiChatPlugin {
                 Update,
                 (
                     channels::end_session_channels_on_disconnect,
-                    channels::auto_join_zone_channels.in_set(crate::char_select::InWorldGated),
-                    recruitment::guild_recruitment_cascade.in_set(crate::char_select::InWorldGated),
+                    channels::auto_join_zone_channels.in_set(crate::client_state::InWorldGated),
+                    recruitment::guild_recruitment_cascade
+                        .in_set(crate::client_state::InWorldGated),
                 )
                     .chain()
                     .after(benilla_world::terrain_stream::AreaAuthoritySet),
             )
             .add_systems(
-                OnExit(crate::char_select::ClientState::InWorld),
+                OnExit(crate::client_state::ClientState::InWorld),
                 (channels::end_session_channels, end_session_chat),
             );
         settings::plugin(app);

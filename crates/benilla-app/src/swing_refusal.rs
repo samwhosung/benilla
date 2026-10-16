@@ -171,7 +171,7 @@ impl Plugin for SwingRefusalPlugin {
                     .before(crate::ui_unit::UnitFeed),
             )
             .add_systems(
-                OnEnter(crate::char_select::ClientState::InWorld),
+                OnEnter(crate::client_state::ClientState::InWorld),
                 on_world_enter,
             );
     }

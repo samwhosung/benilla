@@ -1000,7 +1000,7 @@ impl Plugin for UiDialogVerbsPlugin {
                     poll_area_spirit_healer
                         .after(crate::target::TargetUpdate)
                         .run_if(crate::ui_script::ingame_ui_up)
-                        .in_set(crate::char_select::InWorldGated),
+                        .in_set(crate::client_state::InWorldGated),
                     // The cascade's order: the battlefield status, then this (`0x4909fb`,
                     // `0x490a14`), so `CMSG 0x296` follows `CMSG 0x2D3` on the wire.
                     meeting_stone_enter_world
@@ -1023,7 +1023,7 @@ impl Plugin for UiDialogVerbsPlugin {
                 ),
             )
             .add_systems(
-                OnExit(crate::char_select::ClientState::InWorld),
+                OnExit(crate::client_state::ClientState::InWorld),
                 area_spirit_healer_leave_world,
             );
     }

@@ -18,7 +18,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{CachedPipelineState, PipelineCache, PipelineDescriptor};
 use bevy::render::{Render, RenderApp, RenderSystems};
 
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::loading_screen::LoadingScreen;
 use benilla_assets::materials::WowModelMaterial;
 use benilla_world::model_render::MaterialCache;

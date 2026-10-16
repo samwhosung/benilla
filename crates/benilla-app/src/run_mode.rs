@@ -83,14 +83,14 @@ pub(crate) fn fatal_when_driverless(why: &str) -> bool {
 /// The screen the client starts on: a player at the login screen, a capture straight in the world,
 /// a glue capture on the screen it photographs. Needed before the plugins build, so it forwards
 /// into the dev half rather than reading a resource.
-pub(crate) fn start_state() -> crate::char_select::ClientState {
+pub(crate) fn start_state() -> crate::client_state::ClientState {
     #[cfg(feature = "dev")]
     {
         crate::capture::start_state()
     }
     #[cfg(not(feature = "dev"))]
     {
-        crate::char_select::ClientState::Login
+        crate::client_state::ClientState::Login
     }
 }
 

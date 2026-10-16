@@ -293,9 +293,10 @@ fn unpark_boot_vm(world: &mut World) {
 /// parks the VM runs at the next frame's `StateTransition`; the `InWorld` term covers that frame.
 pub(crate) fn ingame_ui_up(
     pending: Option<Res<PendingEntryUiLoad>>,
-    state: Option<Res<State<crate::char_select::ClientState>>>,
+    state: Option<Res<State<crate::client_state::ClientState>>>,
 ) -> bool {
-    pending.is_none() && state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld)
+    pending.is_none()
+        && state.is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld)
 }
 
 /// `PreUpdate`, after [`run_pending_reload`] so a reload never interleaves an armed entry load:
@@ -308,9 +309,9 @@ pub(crate) fn run_pending_entry_load(world: &mut World) {
         return;
     }
     let in_world = *world
-        .resource::<State<crate::char_select::ClientState>>()
+        .resource::<State<crate::client_state::ClientState>>()
         .get()
-        == crate::char_select::ClientState::InWorld;
+        == crate::client_state::ClientState::InWorld;
     if !in_world {
         // Left the world before the load ran: nothing to build a UI for.
         world.remove_resource::<PendingEntryUiLoad>();
@@ -839,10 +840,10 @@ pub(crate) fn end_ui_session(world: &mut World) {
     // `0x401ee0`'s glue leg: `"charselect"` after a logout, `"login"` after a disconnect
     // (`0x402084`); the state this exit enters says which.
     let screen = match world
-        .get_resource::<State<crate::char_select::ClientState>>()
+        .get_resource::<State<crate::client_state::ClientState>>()
         .map(|s| *s.get())
     {
-        Some(crate::char_select::ClientState::CharSelect) => super::glue::GlueScreen::CharSelect,
+        Some(crate::client_state::ClientState::CharSelect) => super::glue::GlueScreen::CharSelect,
         _ => super::glue::GlueScreen::Login,
     };
     install_glue_side_vm(world, screen.key());
@@ -923,9 +924,9 @@ pub(crate) fn run_pending_reload(world: &mut World) {
         return;
     }
     let in_world = *world
-        .resource::<State<crate::char_select::ClientState>>()
+        .resource::<State<crate::client_state::ClientState>>()
         .get()
-        == crate::char_select::ClientState::InWorld;
+        == crate::client_state::ClientState::InWorld;
     if !in_world {
         info!("ui_script: ReloadUI outside the world — dropped");
         return;
@@ -961,8 +962,8 @@ pub(crate) fn shutdown_on_exit(
         return;
     }
     let in_world = world
-        .get_resource::<State<crate::char_select::ClientState>>()
-        .is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
+        .get_resource::<State<crate::client_state::ClientState>>()
+        .is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld);
     // Same guard as [`end_ui_session`]: a quit inside the entry-load window has no UI to save.
     if !in_world || world.contains_resource::<PendingEntryUiLoad>() {
         return;
@@ -1221,7 +1222,7 @@ mod tests {
         };
         let world_with = |on: VPlateMode| {
             let mut world = World::new();
-            world.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+            world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
             world.insert_resource(crate::run_mode::CaptureMode);
             world.insert_resource(on);
             world
@@ -1247,7 +1248,7 @@ mod tests {
         use crate::net::WorldEnterCascadeMessage;
         let reload = |seated: bool| {
             let mut world = World::new();
-            world.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+            world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
             world.insert_resource(crate::run_mode::CaptureMode);
             world.init_resource::<Messages<WorldEnterCascadeMessage>>();
             world.init_resource::<super::super::SweptWorlds>();
@@ -1287,7 +1288,7 @@ mod tests {
             policy.0.store(!stock, Ordering::SeqCst);
             world.insert_resource(policy.clone());
             world.insert_resource(super::super::glue::GlueStock(stock));
-            world.insert_resource(State::new(crate::char_select::ClientState::Login));
+            world.insert_resource(State::new(crate::client_state::ClientState::Login));
             setup_script(&mut world);
             // The stock policy needs the stock files to have loaded: no install, no screen.
             let up = stock && benilla_formats::wow_data().is_some();
@@ -1300,7 +1301,7 @@ mod tests {
     /// not the EULA, and a first launch still shows the EULA.
     #[test]
     fn the_login_screen_comes_up_on_the_accepted_agreements() {
-        use crate::char_select::ClientState;
+        use crate::client_state::ClientState;
         let _ = benilla_formats::wow_data_or_skip!();
         let screens = |cvars: crate::cvars::Cvars| {
             let mut world = World::new();
@@ -1336,7 +1337,7 @@ mod tests {
     /// (`0x402090`); a `ReloadUI()` never builds the glue.
     #[test]
     fn the_stock_glue_stands_where_the_boot_vm_does() {
-        use crate::char_select::ClientState;
+        use crate::client_state::ClientState;
         use benilla_ui::script::VmKind;
         let shown = |world: &World, frame: &str| {
             benilla_formats::wow_data().is_none()
@@ -1633,7 +1634,7 @@ mod tests {
     fn a_quit_at_the_character_screen_runs_nothing() {
         use bevy::ecs::system::RunSystemOnce;
         let (mut world, rx) = front_world(false, false);
-        world.insert_resource(State::new(crate::char_select::ClientState::CharSelect));
+        world.insert_resource(State::new(crate::client_state::ClientState::CharSelect));
         world.init_resource::<AddOnIdentity>();
         world.init_resource::<Messages<AppExit>>();
         world

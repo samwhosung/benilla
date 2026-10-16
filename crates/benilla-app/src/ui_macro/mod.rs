@@ -6,7 +6,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{MacroState, ScriptValue, UiScript};
 
-use crate::char_select::InWorldGated;
+use crate::client_state::InWorldGated;
 use benilla_assets::{LockRecover, WorldAssets};
 
 pub(crate) mod run;

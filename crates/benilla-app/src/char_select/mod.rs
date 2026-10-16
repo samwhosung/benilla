@@ -1,5 +1,4 @@
-//! Character select: the app's lifecycle state ([`ClientState`]), the roster pick policy and the
-//! `CharacterSelect.xml` glue screen. The parked IO thread emits the roster ([`CharListMessage`]),
+//! Character select: the roster pick policy and the `CharacterSelect.xml` glue screen. The parked IO thread emits the roster ([`CharListMessage`]),
 //! answered by the pending pick (reconnect), `WOW_CHAR`, or a choice on the screen, which opens on
 //! the character last entered as (`lastCharacterIndex`).
 
@@ -15,6 +14,7 @@ mod screen;
 use benilla_protocol::{CharAction, Character};
 use bevy::prelude::*;
 
+use crate::client_state::ClientState;
 use crate::glue_strings::GlueStrings;
 
 use crate::net::{
@@ -22,58 +22,12 @@ use crate::net::{
     EnteredWorldMessage, LoggedOutMessage,
 };
 
-/// The app's lifecycle: which screen owns the session.
-#[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub(crate) enum ClientState {
-    /// Parked pre-logon at the login screen, the IO thread waiting for credentials. The realm list
-    /// is no state: `GlueParent.lua`'s `GlueScreenInfo` omits it, a `DIALOG` frame over any screen
-    /// ([`crate::realm_select::Realms::shown`]).
-    #[default]
-    Login,
-    /// Parked at character select, the IO thread waiting for a pick.
-    CharSelect,
-    /// The character-creation screen, still parked at select (the IO thread serves create and
-    /// delete in place).
-    CharCreate,
-    /// A character is in (or entering) the world.
-    InWorld,
-}
-
-/// The one "only while in the world" gate; a member's own `run_if` ANDs with it. Configured for
-/// `Update` only: a set's conditions are per schedule, so a member elsewhere needs the set
-/// configured there too.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct InWorldGated;
-
-/// The character-select subsystem: the state machine + the select screen.
-pub(crate) struct CharSelectPlugin {
-    /// The screen this session opens on: `Login` when connected, `InWorld` for a world capture,
-    /// the photographed glue screen for a glue capture.
-    pub(crate) start: ClientState,
-}
-
-/// Mirror the session's screen onto the engine's one-bit "is there a world" fact, in one place so
-/// no transition can forget it.
-fn publish_world_live(
-    state: Res<State<ClientState>>,
-    mut live: ResMut<benilla_world::schedule::WorldLive>,
-) {
-    let now = benilla_world::schedule::WorldLive(*state.get() == ClientState::InWorld);
-    if *live != now {
-        *live = now;
-    }
-}
+/// The character-select subsystem: the roster's policy and the select screen.
+pub(crate) struct CharSelectPlugin;
 
 impl Plugin for CharSelectPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_state(self.start)
-            .configure_sets(Update, InWorldGated.run_if(in_state(ClientState::InWorld)))
-            .init_resource::<Roster>()
-            // Ahead of every world stage, so `WorldLive` and its falling edge are this frame's.
-            .add_systems(
-                Update,
-                publish_world_live.before(benilla_world::schedule::WorldStage::Net),
-            )
+        app.init_resource::<Roster>()
             .init_resource::<dialog::DeleteDialog>()
             .init_resource::<addons::AddonsPanel>()
             .init_resource::<refresh::SelectBackground>()

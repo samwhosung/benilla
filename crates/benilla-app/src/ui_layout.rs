@@ -330,7 +330,7 @@ impl Plugin for UiLayoutPlugin {
                     .chain()
                     .after(crate::ui_script::UiInput),
             )
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         );
     }
 }

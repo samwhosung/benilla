@@ -10,7 +10,7 @@
 
 use bevy::prelude::*;
 
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use benilla_assets::WorldAssets;
 
 use super::kit::{self, KitRef, SoundCategory, SoundKits};

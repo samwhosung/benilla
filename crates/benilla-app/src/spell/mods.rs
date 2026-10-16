@@ -299,7 +299,7 @@ pub(super) fn track_class_family(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::char_select::ClientState;
+    use crate::client_state::ClientState;
 
     /// A mage spell (family 3) with the given bits set, against a mage player.
     fn mage(bits: &[u8]) -> SpellDisplay {

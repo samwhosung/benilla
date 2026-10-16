@@ -103,14 +103,14 @@ pub(crate) struct StockFeed {
 pub(crate) fn feed_stock_glue_preview(
     script: Option<NonSend<UiScript>>,
     mgr: NonSend<SharedGlueMgr>,
-    state: Option<Res<State<crate::char_select::ClientState>>>,
+    state: Option<Res<State<crate::client_state::ClientState>>>,
     mut preview: ResMut<GluePreview>,
     mut feed: Local<super::VmMemo<StockFeed>>,
     // The highest stage number given out, kept across VMs: a new VM's first scene must not take a
     // number a scene parked under the old one still holds.
     mut top: Local<u64>,
 ) {
-    let in_world = state.is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
+    let in_world = state.is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld);
     let script = script.filter(|s| s.vm_kind() == VmKind::Glue && !in_world);
     // A new VM's panes are new frames: the memo starts over with it.
     let feed = feed.get_for(script.as_deref());

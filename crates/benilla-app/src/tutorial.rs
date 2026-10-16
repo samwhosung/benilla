@@ -22,7 +22,7 @@ use bevy::prelude::*;
 
 use benilla_ui::script::{ScriptValue, UiScript};
 
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::net::{ClientCommand, EnteredWorldMessage, NetCommands, ObjectStore, SelfPlayer};
 use crate::player::Player;
 use crate::ui_script::{UiFeed, UiInput};
@@ -806,7 +806,7 @@ mod tests {
 
         // The deferral window: in the world on the wire, the entry load still owed, and a live
         // boot VM with no frames.
-        app.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         app.insert_resource(crate::ui_script::PendingEntryUiLoad);
         app.insert_non_send_resource(UiScript::new().expect("the boot VM"));
 

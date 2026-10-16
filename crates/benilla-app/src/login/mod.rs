@@ -27,7 +27,7 @@ use bevy::prelude::*;
 
 use benilla_protocol::{DialFailure, LoginRefusal, LoginStage};
 
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::glue::dialog::{DialogKind, GlueDialog};
 use crate::glue_strings::GlueStrings;
 use crate::net::{

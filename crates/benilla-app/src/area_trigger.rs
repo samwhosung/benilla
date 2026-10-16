@@ -67,7 +67,7 @@ impl Plugin for AreaTriggerPlugin {
                 Update,
                 check_area_triggers
                     .in_set(WorldStage::Stream)
-                    .in_set(crate::char_select::InWorldGated),
+                    .in_set(crate::client_state::InWorldGated),
             );
     }
 }

@@ -15,7 +15,7 @@ use benilla_formats::SpellCatalog;
 use benilla_protocol::messages::{UnitAuraSlot, AURA_FLAG_CANCELABLE, UNIT_AURA_POSITIVE_SLOTS};
 use benilla_ui::script::{AuraState, TrackingState, UiScript};
 
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::net::{
     ClientCommand, Guid, GuidIndex, NetCommands, ObjectStore, Reputations, SelfPlayer,
 };

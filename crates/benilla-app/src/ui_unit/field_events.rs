@@ -485,7 +485,7 @@ mod tests {
         };
         // No state yet: the login screen's side of the gate.
         assert_eq!(unread(&mut app, FieldNotice::Player { id: 189 }), 0);
-        app.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+        app.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         assert_eq!(
             unread(&mut app, FieldNotice::Player { id: 189 }),
             1,

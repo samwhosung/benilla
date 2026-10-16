@@ -631,13 +631,13 @@ pub(super) fn plugin(app: &mut App) {
             // After the tick: every write it watches is Lua's.
             watch_chat_looks
                 .after(crate::ui_script::UiInput)
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         )
         .add_systems(
             Update,
             save_chat_looks
                 .after(crate::ui_script::UiInput)
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         );
     // The session-end flush is `fold_dying_vm_chat_cache`; the quit flush rides the exit edge,
     // as the close button's `AppExit` is written in `PostUpdate`, after an `Update` save.
@@ -1053,7 +1053,7 @@ mod tests {
         );
 
         // `/reload` at once, inside `SAVE_QUIET`.
-        world.insert_resource(State::new(crate::char_select::ClientState::InWorld));
+        world.insert_resource(State::new(crate::client_state::ClientState::InWorld));
         world.resource_mut::<crate::ui_script::ReloadUiPending>().0 = true;
         crate::ui_script::run_pending_reload(&mut world);
 

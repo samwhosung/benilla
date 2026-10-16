@@ -250,7 +250,7 @@ mod tests {
     use benilla_ui::script::UiScript;
     use bevy::prelude::*;
 
-    use crate::char_select::ClientState;
+    use crate::client_state::ClientState;
     use crate::net::{Guid, GuidIndex, NetCommands, ObjectStore, Reputations, SelfPlayer};
     use crate::ui_party::GroupState;
 

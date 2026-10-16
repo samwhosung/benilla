@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 
 use super::Attempt;
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::net::LoginFailedMessage;
 
 /// Split `WOW_LOGIN_SMOKE=user:pass[:Character]` three ways: a `split_once(':')` would hand the

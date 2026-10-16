@@ -256,7 +256,7 @@ impl Plugin for PlayerPlugin {
                 )
                     .in_set(WorldStage::Input)
                     .before(control)
-                    .in_set(crate::char_select::InWorldGated),
+                    .in_set(crate::client_state::InWorldGated),
             );
         app.add_systems(
             Startup,
@@ -276,7 +276,7 @@ impl Plugin for PlayerPlugin {
                 .in_set(PlayerControlSet)
                 .in_set(WorldStage::Input)
                 .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         )
         // The posture queue (the `/sit` family), which `control` alone executes.
         .add_message::<StandStateRequest>()
@@ -288,7 +288,7 @@ impl Plugin for PlayerPlugin {
             land::land_here
                 .in_set(WorldStage::Input)
                 .before(control)
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         )
         // A server spline driving us (Charge, knockback, taxi) is mirrored into `Player` before
         // `control` reads `pos`; gated as `control` is.
@@ -298,7 +298,7 @@ impl Plugin for PlayerPlugin {
                 .in_set(WorldStage::Input)
                 .before(control)
                 .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         )
         // A session end (a `/logout` or a lost session) drops `active`, re-arming the take-control
         // latch for the next login; ungated, as the message lands while the state flips.
@@ -340,7 +340,7 @@ impl Plugin for PlayerPlugin {
                 .in_set(WorldStage::Input)
                 .before(control)
                 .before(follow::steer_follow)
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         )
         // The world's right mouse-down, off that latch and ahead of `control`, the button's
         // binding, as `0x483c40` runs its hook before `ExecuteBinding`; off in capture mode, like
@@ -352,7 +352,7 @@ impl Plugin for PlayerPlugin {
                 .after(camera::latch_world_mouse)
                 .before(control)
                 .run_if(not(resource_exists::<crate::run_mode::CaptureMode>))
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         )
         // `/follow` and Click to Move steer before `control`, so the player's own turn input
         // lands after them and wins over their steering.
@@ -362,7 +362,7 @@ impl Plugin for PlayerPlugin {
                 .chain()
                 .in_set(WorldStage::Input)
                 .before(control)
-                .in_set(crate::char_select::InWorldGated),
+                .in_set(crate::client_state::InWorldGated),
         )
         // The self-avatar fade shares the `MeshTag` and material channel with the interior
         // classifier and the appear and despawn fades, and writes `Visibility` for the

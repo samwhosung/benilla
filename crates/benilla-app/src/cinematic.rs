@@ -33,7 +33,7 @@ use benilla_world::schedule::WorldStage;
 use benilla_world::view::WorldCamera;
 use bevy::prelude::*;
 
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::loading_screen::LoadingScreen;
 use crate::net::{CinematicTriggeredMessage, ClientCommand, NetCommands};
 use crate::player::PlayerControlSet;

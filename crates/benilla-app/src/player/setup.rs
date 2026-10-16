@@ -138,12 +138,12 @@ pub(super) fn setup_player(
 /// is wider than `world_is_live`, as the world streams in under the cover, but waits until the
 /// cover is presented, so the cover's first frame is not spent on a cold world render.
 pub(super) fn gate_world_camera(
-    state: Res<State<crate::char_select::ClientState>>,
+    state: Res<State<crate::client_state::ClientState>>,
     loading: Res<crate::loading_screen::LoadingScreen>,
     cover: Res<crate::loading_screen::EntryCover>,
     mut cams: Query<&mut Camera, With<WorldCamera>>,
 ) {
-    let active = (*state.get() == crate::char_select::ClientState::InWorld || loading.covering())
+    let active = (*state.get() == crate::client_state::ClientState::InWorld || loading.covering())
         && !cover.owes_a_present();
     for mut cam in &mut cams {
         if cam.is_active != active {

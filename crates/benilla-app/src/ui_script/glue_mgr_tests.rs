@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use super::*;
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::net::{
     AddonInfoMessage, AddonInfoReply, LoginAbandon, LoginRequest, LoginSubmit, RosterFailedMessage,
     WorldAuthMessage,

@@ -37,6 +37,7 @@ mod char_select;
 mod chat_bubble;
 mod chr_classes;
 mod cinematic;
+mod client_state;
 mod combat_log;
 mod combat_text;
 mod console;

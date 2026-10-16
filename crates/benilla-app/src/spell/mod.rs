@@ -7,7 +7,7 @@
 
 use bevy::prelude::*;
 
-use crate::char_select::ClientState;
+use crate::client_state::ClientState;
 use crate::ui_script::{UiFeed, UiInput};
 use crate::ui_unit::UnitFeed;
 use benilla_world::schedule::WorldStage;

@@ -168,7 +168,7 @@ pub(super) fn feed_ui_input(
     // The keys this feed believes down, a fact about the keyboard and not the VM.
     mut pressed: Local<crate::bindings::KeyDownList>,
     // Who sends the key-ups: the bindings pass in the world, this feed on the glue screens.
-    state: Option<Res<State<crate::char_select::ClientState>>>,
+    state: Option<Res<State<crate::client_state::ClientState>>>,
     // The characters the active layout makes, which name a key for a keyboard frame.
     layout: Res<crate::bindings::LayoutNames>,
 ) {
@@ -177,7 +177,7 @@ pub(super) fn feed_ui_input(
     // follows; on the glue screens, which have none, this feed does.
     let releases = !state
         .as_ref()
-        .is_some_and(|s| *s.get() == crate::char_select::ClientState::InWorld);
+        .is_some_and(|s| *s.get() == crate::client_state::ClientState::InWorld);
     let world_pick = pointer.world_pick();
     // The OS pointer is not ours while a probe drives a gesture through the real pointer path or a
     // capture pins it: skip the mouse half whole, else-arm included, whose `pointer_left_window`
