@@ -12,7 +12,7 @@ impl WorldWriter {
         self.send(opcode::CMSG_NAME_QUERY, &messages::full_guid(guid))
     }
 
-    /// `CMSG_CREATURE_QUERY`: a template's name and subname; `entry` is guid bits 24 to 47.
+    /// `CMSG_CREATURE_QUERY`: a template's name and subname; `entry` is the creature template entry.
     pub fn creature_query(&mut self, entry: u32, guid: u64) -> Result<()> {
         self.send(
             opcode::CMSG_CREATURE_QUERY,

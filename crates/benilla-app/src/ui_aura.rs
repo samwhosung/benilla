@@ -46,18 +46,21 @@ impl AuraDurations {
     /// Records one `SMSG_UPDATE_AURA_DURATION`. The reference stores `now + ms` over the slot's
     /// expiry (`0x4e4390`) and its reader answers 0 once `now - expiry >= 0` (`0x4e4472`), so a
     /// negative span is a lapsed timer that replaces the slot's last one; here that is no stamp,
-    /// which every reader answers `(0, 0)`.
+    /// which every reader answers `(0, 0)`. The one exception is `i32::MIN`: the wrapped
+    /// difference `now - (now + 0x80000000)` is itself negative, so the `js` is taken and the
+    /// reader returns `expiry - now`, 2^31 ms (24.8 days) left, shrinking with the clock.
     pub(crate) fn set(&mut self, slot: u8, remaining_ms: i32, now: f64) {
         if trace_period().is_some() {
             info!(
                 "aura trace: SMSG_UPDATE_AURA_DURATION slot {slot} = {remaining_ms} ms @ {now:.2}"
             );
         }
-        if remaining_ms < 0 {
+        if remaining_ms < 0 && remaining_ms != i32::MIN {
             self.by_slot.remove(&slot);
             return;
         }
-        let total = f64::from(remaining_ms) / 1000.0;
+        // `i32::MIN` reads back as the unsigned 2^31.
+        let total = f64::from(remaining_ms.unsigned_abs()) / 1000.0;
         self.by_slot.insert(
             slot,
             DurationStamp {
@@ -904,8 +907,10 @@ mod tests {
             (0.0, 0.0),
             "-1 is not 4,294,967 seconds, and not the earlier 300"
         );
+        // The one negative the client's wrapped sign test reads as time left (`0x4e4472`).
         durations.set(1, i32::MIN, 16.0);
-        assert!(!durations.by_slot.contains_key(&1));
+        let (total, _) = join_duration(durations.by_slot.get(&1), 15.0, 16.0, 901.0);
+        assert_eq!(total, 2_147_483.648, "i32::MIN reads as 2^31 ms");
         durations.set(2, 0, 16.0);
         assert!(durations.by_slot.contains_key(&2), "0 ms is a stamp, now");
     }

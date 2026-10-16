@@ -12,7 +12,7 @@ impl WorldWriter {
         self.send(opcode::CMSG_GAMEOBJ_USE, &messages::gameobj_use(guid))
     }
 
-    /// Ask a GameObject template; `entry` is the guid's bits 24-47 ([`crate::guid::entry`]).
+    /// Ask a GameObject template; `entry` is the object's `OBJECT_FIELD_ENTRY`.
     pub fn gameobject_query(&mut self, entry: u32, guid: u64) -> Result<()> {
         self.send(
             opcode::CMSG_GAMEOBJECT_QUERY,
