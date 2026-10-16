@@ -267,25 +267,46 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
     let failures = super::load_default_ui(&s);
     assert!(failures.is_empty(), "manifest load errors: {failures:#?}");
 
-    s.run(
-        "for _, f in ipairs({BenillaBagFrame, BenillaBagFrame1, BenillaBagFrame2, \
-         BenillaBagFrame3, BenillaBagFrame4}) do if f then f:Show() end end",
-    )
-    .unwrap();
+    // The bags are the stock `ContainerFrame1`-`12` (`ContainerFrame.xml:247-258`), seated by
+    // `updateContainerFrameAnchors()` (`ContainerFrame.lua:472`) from `CONTAINER_OFFSET_X/Y`.
+    // The backpack and four worn bags, each large enough that the five stack into a second column.
+    for (bag, name, num_slots) in [
+        (0, "Backpack", 16),
+        (1, "Bag 1", 18),
+        (2, "Bag 2", 18),
+        (3, "Bag 3", 18),
+        (4, "Bag 4", 18),
+    ] {
+        s.set_container(
+            bag,
+            Some(benilla_ui::script::ContainerState {
+                name: Some(name.into()),
+                num_slots,
+                slots: std::collections::HashMap::new(),
+            }),
+        );
+    }
+    s.run("OpenAllBags(1)").unwrap();
+    // The cast bar is `hidden="true"` (`CastingBarFrame.xml:4`) until a cast shows it.
+    s.run("CastingBarFrame:Show()").unwrap();
+    assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
 
-    // The frames in the band that must clear the bars. Each is checked only while shown, hence
-    // the pair floor below.
+    // The frames in the band that must clear the bars. Each is checked only while shown, and
+    // `compared` below holds that each met every bar, so none can drop out unnoticed.
     const TENANTS: &[&str] = &[
-        "BenillaBagFrame",
-        "BenillaBagFrame1",
-        "BenillaBagFrame2",
-        "BenillaBagFrame3",
-        "BenillaBagFrame4",
+        "ContainerFrame1",
+        "ContainerFrame2",
+        "ContainerFrame3",
+        "ContainerFrame4",
+        "ContainerFrame5",
         "CastingBarFrame",
         "ChatFrame1",
     ];
+    for tenant in TENANTS {
+        assert!(shown(&s, tenant), "{tenant} is not shown: nothing to guard");
+    }
 
-    let mut pairs = 0usize;
+    let mut compared: std::collections::BTreeSet<(&str, &str)> = std::collections::BTreeSet::new();
     for mask in 0..(1u32 << RAISABLE_BARS.len()) {
         let mut raised = Vec::new();
         for (i, bar) in RAISABLE_BARS.iter().enumerate() {
@@ -323,7 +344,7 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
                     continue;
                 }
                 let v = rect(&s, victim);
-                pairs += 1;
+                compared.insert((victim, bar));
                 assert!(
                     !overlaps(bar_rect, v),
                     "with {raised:?} raised, {victim} {v:?} overlaps {bar} {bar_rect:?} — \
@@ -334,11 +355,17 @@ fn no_bottom_band_frame_overlaps_a_raised_bar() {
         }
     }
 
-    // A floor on the pairs compared, so the sweep cannot pass by comparing nothing.
+    // Every tenant met every bar at least once, so the sweep cannot pass by comparing nothing.
+    let missing: Vec<String> = TENANTS
+        .iter()
+        .flat_map(|t| RAISABLE_BARS.iter().map(move |b| (*t, *b)))
+        .filter(|pair| !compared.contains(pair))
+        .map(|(t, b)| format!("{t} / {b}"))
+        .collect();
     assert!(
-        pairs >= 24,
-        "only {pairs} bar/tenant pairs were actually compared — the sweep is not exercising the \
-         band it claims to guard"
+        missing.is_empty(),
+        "tenant/bar pairs never compared — the sweep is not exercising the band it claims to \
+         guard: {missing:?}"
     );
 }
 
