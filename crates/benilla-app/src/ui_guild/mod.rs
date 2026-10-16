@@ -13,7 +13,7 @@ use benilla_ui::script::{LastOnline, UnitGuild};
 use bevy::prelude::*;
 
 use crate::net::{ClientCommand, NetCommands};
-use crate::query_cache::QueryCache;
+use crate::query_cache::{QueryCache, Refused};
 use crate::ui_script::{UiFeed, UiInput};
 
 mod feed;
@@ -232,7 +232,9 @@ impl GuildState {
     fn apply_query_response(&mut self, response: GuildQueryResponse) {
         let ours = response.guild_id == self.guild_id;
         let found = !response.name.is_empty();
-        if found {
+        // A refusal redisplays only an identity it took away: every guild callback ignores
+        // status 0 (`0x4d1486`, `0x4c9476`, `0x5dd866`, `0x5e29c6`).
+        let moved = if found {
             self.identities.insert(
                 response.guild_id,
                 Identity {
@@ -247,11 +249,14 @@ impl GuildState {
                     },
                 },
             );
+            true
         } else {
-            self.identities.refuse(response.guild_id);
+            self.identities.refuse(response.guild_id) == Refused::Record
+        };
+        if moved {
+            self.identity_generation = self.identity_generation.wrapping_add(1);
+            self.dirty = true;
         }
-        self.identity_generation = self.identity_generation.wrapping_add(1);
-        self.dirty = true;
         if ours && found {
             // Our rank names landed: repaint, never re-request, as the reference's cache callback
             // `0x4d1480` does for a found record only (`0x4d1486`, `0x4d148c`).
@@ -460,6 +465,15 @@ pub(crate) fn unit_guild_emblem(
     commands: &NetCommands,
 ) -> Option<GuildEmblem> {
     guild_emblem(fields.player_guild_id(), guild, commands)
+}
+
+/// [`unit_guild_emblem`] without the ask: the crest of a guild record already held.
+pub(crate) fn unit_guild_emblem_cached(
+    fields: &ObjectFields,
+    guild: &GuildState,
+) -> Option<GuildEmblem> {
+    let emblem = guild.identity(fields.player_guild_id())?.emblem;
+    emblem.is_designed().then_some(emblem)
 }
 
 /// The same crest for a corpse, off its own `CORPSE_FIELD_GUILD` (`0x5d6edf`) through the same
@@ -872,12 +886,19 @@ mod tests {
         assert!(guild.resolve_identity(7, &commands).is_none());
         assert_eq!(rx.try_iter().count(), 1, "asked exactly once");
 
+        let generation = guild.identity_generation();
+        guild.dirty = false;
         guild.apply_query_response(GuildQueryResponse {
             guild_id: 7,
             name: String::new(),
             ..Default::default()
         });
         assert!(guild.identities.answered_unknown(7), "refused, not stored");
+        assert_eq!(
+            (guild.identity_generation(), guild.dirty),
+            (generation, false),
+            "nothing redisplays: every guild callback ignores status 0"
+        );
         assert!(!guild.identities.is_pending(7), "and no longer in flight");
         assert!(guild.identities.get(7).is_none());
         assert!(
@@ -887,7 +908,7 @@ mod tests {
         assert_eq!(
             rx.try_iter().count(),
             0,
-            "the readers still polling are not re-asked"
+            "a reader's ask within the window of the refusal is not sent"
         );
     }
 
@@ -1151,7 +1172,9 @@ mod tests {
         guild
             .identities
             .insert(7, identity("Legacy", &["GM", "Off"]));
-        // An empty answer is a refusal: no such guild.
+        // An empty answer to our ask is a refusal: no such guild.
+        guild.request_identity(8, &commands);
+        let _ = rx.try_iter().count();
         guild.identities.refuse(8);
 
         let guildless = ObjectFields::from_pairs(&[]);
@@ -1171,7 +1194,7 @@ mod tests {
         assert_eq!(
             rx.try_iter().count(),
             0,
-            "the negative cache re-asks nothing"
+            "a reader's ask within the window of the refusal asks nothing"
         );
 
         let member = ObjectFields::from_pairs(&[(191, 7), (192, 1)]);

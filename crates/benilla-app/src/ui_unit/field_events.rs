@@ -627,7 +627,7 @@ mod tests {
         let notices = crate::field_watch::values(
             &crate::field_watch::Around {
                 me: Some(ME),
-                creature_cached: &|_| false,
+                creature_lookup: &|_| false,
                 others: &Vec::new,
                 pet_bar: 0,
             },

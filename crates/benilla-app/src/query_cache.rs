@@ -1,23 +1,29 @@
 //! `QueryCache<K, V>`, the ask-once cache: the reference's `DBCache<T>` (vtable `0x80912c`). A
-//! miss sends the query once, a second lookup of a pending key does not re-send, and the response
-//! lands the record. Only an explicit eviction, or a refusal, removes a record.
+//! lookup that asks (the reference's lookup with a callback, `0x556aa0`) sends the query on a
+//! miss, once while it is pending (`0x556b2a`, `0x556bd2`); a lookup that only reads
+//! ([`QueryCache::get`], the same function with no callback, `0x556b1c`) never sends.
 //!
 //! The read that asks takes `&self` (the in-flight set is behind a lock), so read-only systems
 //! share the owning resource and its change detection means an answer landed.
 //!
-//! A refusal (an integer-keyed store's top-bit key, `0x556e67`; a player's or a guild's empty
-//! name, `0x55f6f0`, `0x561390`) is never stored as an answer. The reference runs the waiting
-//! callbacks with status 0 and frees the node (`0x556f05`, `0x556f35`), so the next lookup with a
-//! callback finds none and asks again (`0x556aa0`, `0x556b2a`). Its lookups are events (a hover, a
-//! window opening); benilla's readers poll, so the callbacks' one run is a held mark:
-//! [`QueryCache::answered_unknown`] says "unknown" to every reader that keeps reading the key, and
-//! the first read after [`RELOOK_AFTER`] without one is a new lookup, which drops the mark and asks.
-//! A mark is never persisted: [`QueryCache::iter`] yields records only.
+//! A refusal (an integer-keyed store's top-bit key, `0x556e67`; a player's, a guild's or a quest's
+//! empty name, `0x55f6f0`, `0x561390`, `0x563150`) is never stored as an answer. The reference runs
+//! the key's callbacks with status 0 and frees its node, pending or valid (`0x556f05`,
+//! `0x556f35`), so the next lookup that asks finds none and asks again; a refusal for a key with
+//! no node does nothing (`0x556ec9`). [`QueryCache::answered_unknown`] holds the status-0 answer
+//! for the readers until a lookup asks again. A refusal is never persisted: [`QueryCache::iter`]
+//! yields records only.
 //!
-//! Deviation: a read within [`RELOOK_AFTER`] of the last read of a refused key is the same lookup,
-//! where the reference's next lookup asks at once. A reader that polls each frame would otherwise
-//! ask again in the frame after every refusal, and a reader that waits for the answer would never
-//! be told it.
+//! Two lookups ask. [`QueryCache::lookup`] is the reference's, run where the reference looks up
+//! with a callback on an event (a unit's create, an entry change): a refused key is asked again at
+//! once. [`QueryCache::get_or_ask`] is for a reader that asks every time it runs, which in benilla
+//! is often every frame.
+//!
+//! Deviation: [`QueryCache::get_or_ask`] reads a refused key as unknown, sending nothing, until
+//! [`RELOOK_AFTER`] has passed since the refusal; no read moves that. The reference's next lookup
+//! with a callback asks at once, but its lookups run on events, where ours that poll would ask a
+//! refused key once per round trip. Each such reader is meant to become an event lookup and a
+//! [`QueryCache::get`].
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -29,12 +35,7 @@ use bevy::prelude::*;
 
 use crate::net::EnteredWorldMessage;
 
-/// How long a refused key may go unread before a read is a new lookup that asks again. Longer
-/// than any waiter's poll period, shorter than the time a person takes to come back to the same
-/// item or unit.
-pub(crate) const RELOOK_AFTER: Duration = Duration::from_secs(30);
-
-/// The clock the reads stamp refusals with; in a test, the real one moved on by `test_clock`.
+/// The clock refusals are stamped with; in a test, the real one moved on by `test_clock`.
 fn now() -> Instant {
     let now = Instant::now();
     #[cfg(test)]
@@ -42,7 +43,7 @@ fn now() -> Instant {
     now
 }
 
-/// A test's way past [`RELOOK_AFTER`] without waiting: per thread, so one test never moves
+/// A test's way past a refusal window without waiting: per thread, so one test never moves
 /// another's clock.
 #[cfg(test)]
 pub(crate) mod test_clock {
@@ -61,22 +62,35 @@ pub(crate) mod test_clock {
     pub(crate) fn advance(by: Duration) {
         SKEW.with(|s| s.set(s.get() + by));
     }
-
-    /// Moves it just past the gap after which a read of a refused key is a new lookup.
-    pub(crate) fn past_the_gap() {
-        advance(super::RELOOK_AFTER + Duration::from_secs(1));
-    }
 }
 
+/// How long after a refusal [`QueryCache::get_or_ask`] still reads the key as unknown: a reader
+/// asking every frame asks a refused key once per window, not once per round trip. Measured from
+/// the refusal; no read moves it.
+pub(crate) const RELOOK_AFTER: Duration = Duration::from_secs(30);
+
+/// What a refusal found under its key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refused {
+    /// No node: nothing happened (`0x556ec9` → `0x556fcf`).
+    Nothing,
+    /// A pending ask, now answered "unknown".
+    Pending,
+    /// A record, now gone (`0x556f35` frees a valid node too): what the readers showed changes.
+    Record,
+}
+
+/// The ask-once cache.
 pub(crate) struct QueryCache<K, V> {
     answered: HashMap<K, V>,
     /// The keys in flight, locked so the read that asks is `&self`; uncontended on the main
     /// thread.
     pending: Mutex<HashSet<K>>,
-    /// The refused keys, each with the instant of its last read (or its refusal): the reference's
-    /// status-0 callback run, held for the readers that poll. Locked like `pending`.
+    /// The refused keys with the instant of the refusal: the status-0 answer, held until the next
+    /// ask. Locked like `pending`, since that ask drops it.
     refused: Mutex<HashMap<K, Instant>>,
-    /// Bumped by every landing, refusal or eviction, the reference's `DBCACHECALLBACK` redisplay.
+    /// Bumped by every landing, and by every refusal that found a node: the reference's
+    /// `DBCACHECALLBACK` run, which a status-0 answer is too.
     generation: u64,
 }
 
@@ -92,18 +106,29 @@ impl<K: Copy + Eq + Hash, V> Default for QueryCache<K, V> {
 }
 
 impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
-    /// The answer for `key`; a miss runs `ask` once per key while it is in flight. `None` for a
-    /// miss and a refused key alike: a refused key reads as unknown ([`Self::answered_unknown`])
-    /// until a read comes [`RELOOK_AFTER`] after the last, which asks again.
-    pub(crate) fn get_or_ask(&self, key: K, ask: impl FnOnce()) -> Option<&V> {
-        self.get_or_ask_at(key, now, ask)
+    /// The reference's lookup with a callback (`0x556aa0`): the record, or `None` after running
+    /// `ask` on a miss, once while the key is pending. A refused key is a miss: the lookup drops
+    /// its "unknown" and asks again at once.
+    pub(crate) fn lookup(&self, key: K, ask: impl FnOnce()) -> Option<&V> {
+        self.ask_if(key, |_| true, ask)
     }
 
-    /// [`Self::get_or_ask`] with the clock given, read only when `key` is refused.
-    fn get_or_ask_at(
+    /// [`Self::lookup`] for a reader that asks every time it runs: a refused key reads unknown and
+    /// sends nothing until [`RELOOK_AFTER`] has passed since the refusal (the module's
+    /// `Deviation:`).
+    pub(crate) fn get_or_ask(&self, key: K, ask: impl FnOnce()) -> Option<&V> {
+        self.ask_if(
+            key,
+            |refused_at| now().saturating_duration_since(refused_at) >= RELOOK_AFTER,
+            ask,
+        )
+    }
+
+    /// The asking lookup; `relook` says whether a key refused at that instant is asked again.
+    fn ask_if(
         &self,
         key: K,
-        now: impl FnOnce() -> Instant,
+        relook: impl FnOnce(Instant) -> bool,
         ask: impl FnOnce(),
     ) -> Option<&V> {
         if let Some(answer) = self.answered.get(&key) {
@@ -111,10 +136,8 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
         }
         {
             let mut refused = self.refused.lock_recover();
-            if let Some(last) = refused.get_mut(&key) {
-                let now = now();
-                if now.saturating_duration_since(*last) < RELOOK_AFTER {
-                    *last = now;
+            if let Some(&at) = refused.get(&key) {
+                if !relook(at) {
                     return None;
                 }
                 refused.remove(&key);
@@ -126,7 +149,8 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
         None
     }
 
-    /// The record if it is already here, never asking.
+    /// The lookup that only reads: the record if it is here, never asking (`0x556b1c` →
+    /// `0x556bf9`).
     pub(crate) fn get(&self, key: K) -> Option<&V> {
         self.answered.get(&key)
     }
@@ -141,8 +165,8 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
         self.answered.contains_key(&key) || self.answered_unknown(key)
     }
 
-    /// Whether the server refused `key` and no read has since come after a gap, as opposed to a
-    /// still-pending ask: the status-0 answer the waiters are told.
+    /// Whether the server refused `key` and nothing has asked since, as opposed to a pending ask:
+    /// the status-0 answer the waiters are told.
     pub(crate) fn answered_unknown(&self, key: K) -> bool {
         self.refused.lock_recover().contains_key(&key)
     }
@@ -167,23 +191,27 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
         self.generation = self.generation.wrapping_add(1);
     }
 
-    /// Lands a refusal: the waiters read "unknown" and the key is not stored. A record the key
-    /// held goes too, as the reference frees the node whatever it held (`0x556f35`).
-    pub(crate) fn refuse(&mut self, key: K) {
-        self.refuse_at(key, now());
-    }
-
-    fn refuse_at(&mut self, key: K, now: Instant) {
-        self.pending
+    /// Lands a refusal (`0x556ec0`-`0x556f37`): a key with a node, pending or holding a record,
+    /// reads "unknown" and the node goes; a key with none is left as it was. Says which.
+    pub(crate) fn refuse(&mut self, key: K) -> Refused {
+        let was_pending = self
+            .pending
             .get_mut()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&key);
-        self.answered.remove(&key);
+        let found = if self.answered.remove(&key).is_some() {
+            Refused::Record
+        } else if was_pending {
+            Refused::Pending
+        } else {
+            return Refused::Nothing;
+        };
         self.refused
             .get_mut()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(key, now);
+            .insert(key, now());
         self.generation = self.generation.wrapping_add(1);
+        found
     }
 
     /// The reference's explicit eviction (`SMSG_INVALIDATE_PLAYER` for a player's name): the next
@@ -275,19 +303,6 @@ fn release_on_enter<T: AskOnce>(
 mod tests {
     use super::*;
 
-    /// The instant `ms` milliseconds after a fixed origin, the test's clock.
-    fn at(ms: u64) -> Instant {
-        thread_local! {
-            static ORIGIN: Instant = Instant::now();
-        }
-        ORIGIN.with(|o| *o + Duration::from_millis(ms))
-    }
-
-    /// A read of `key` at `ms`, counting the asks it sends in `asks`.
-    fn read(cache: &QueryCache<u32, &'static str>, key: u32, ms: u64, asks: &mut u32) -> bool {
-        cache.get_or_ask_at(key, || at(ms), || *asks += 1).is_some()
-    }
-
     #[test]
     fn a_miss_asks_once_and_a_landing_answers_it() {
         let mut cache: QueryCache<u32, &str> = QueryCache::default();
@@ -306,92 +321,61 @@ mod tests {
         assert_eq!(cache.generation(), 1);
     }
 
+    /// `0x556b1c` → `0x556bf9`: the lookup with no callback sends nothing on a miss.
+    #[test]
+    fn a_read_never_asks() {
+        let cache: QueryCache<u32, &str> = QueryCache::default();
+        assert!(cache.get(3).is_none());
+        assert!(!cache.is_pending(3));
+    }
+
     /// `0x556e20`'s refusal leg: the waiters run with status 0, the node is freed, and the next
-    /// lookup with a callback finds none and asks (`0x556aa0`).
+    /// lookup with a callback finds none and asks (`0x556aa0`); reads in between send nothing.
     #[test]
     fn a_refusal_tells_the_waiters_unknown_then_the_next_lookup_asks_again() {
         let mut cache: QueryCache<u32, &str> = QueryCache::default();
         let mut asks = 0;
-        assert!(!read(&cache, 1, 0, &mut asks));
-        assert!(cache.is_pending(1));
+        assert!(cache.lookup(1, || asks += 1).is_none());
         assert!(!cache.answered_unknown(1), "a pending ask is not unknown");
 
-        cache.refuse_at(1, at(40));
-        assert_eq!(cache.generation(), 1, "the redisplay counter moves");
+        assert_eq!(cache.refuse(1), Refused::Pending);
+        assert_eq!(cache.generation(), 1, "the status-0 run is a callback run");
         assert!(!cache.is_pending(1), "the refusal answers the ask");
         assert!(cache.answered_unknown(1), "the waiters are told unknown");
         assert!(cache.answered(1));
         assert!(cache.get(1).is_none(), "and nothing is stored");
 
-        assert!(!read(&cache, 1, 60, &mut asks));
-        assert_eq!(asks, 1, "a waiter's next poll is the same lookup");
-        assert!(cache.answered_unknown(1), "and still reads unknown");
+        for _ in 0..1_000 {
+            assert!(cache.get(1).is_none());
+        }
+        assert!(cache.answered_unknown(1), "reads leave the answer as it is");
 
-        let later = 60 + RELOOK_AFTER.as_millis() as u64;
-        assert!(!read(&cache, 1, later, &mut asks));
-        assert_eq!(asks, 2, "a read after a gap is a new lookup: it asks again");
+        assert!(cache.lookup(1, || asks += 1).is_none());
+        assert_eq!(asks, 2, "the next lookup asks again at once");
         assert!(cache.is_pending(1));
-        assert!(!cache.answered_unknown(1), "the mark is gone");
-
-        assert!(!read(&cache, 1, later + 1, &mut asks));
+        assert!(!cache.answered_unknown(1), "the unknown is gone");
+        assert!(cache.lookup(1, || asks += 1).is_none());
         assert_eq!(asks, 2, "never while one is pending");
     }
 
-    /// A reader that polls every frame, against a server that refuses every ask a frame later:
-    /// the literal reference (evict, ask at the next read) would ask in every frame.
+    /// `0x556ec9` → `0x556fcf`: a refusal for a key with no node does nothing.
     #[test]
-    fn a_per_frame_reader_asks_once_per_lookup_not_once_per_frame() {
+    fn a_refusal_with_nothing_pending_marks_nothing() {
         let mut cache: QueryCache<u32, &str> = QueryCache::default();
+        assert_eq!(cache.refuse(5), Refused::Nothing);
+        assert!(!cache.answered_unknown(5));
+        assert!(!cache.answered(5));
+        assert_eq!(cache.generation(), 0, "no callback ran");
         let mut asks = 0;
-        let mut waited_unknown = 0;
-        for frame in 0..1_200u64 {
-            let ms = frame * 16;
-            if cache.is_pending(5) {
-                cache.refuse_at(5, at(ms));
-            }
-            read(&cache, 5, ms, &mut asks);
-            waited_unknown += u32::from(cache.answered_unknown(5));
-        }
-        assert_eq!(asks, 1, "twenty seconds of frames: one lookup, one ask");
-        assert!(
-            waited_unknown > 1_100,
-            "and every frame after it reads unknown"
-        );
-    }
-
-    #[test]
-    fn a_per_frame_reader_never_asks_twice_while_one_is_pending() {
-        let cache: QueryCache<u32, &str> = QueryCache::default();
-        let mut asks = 0;
-        for frame in 0..2_000u64 {
-            read(&cache, 9, frame * 16, &mut asks);
-        }
-        assert_eq!(asks, 1, "no answer in thirty seconds: still the one ask");
-    }
-
-    /// Readers that look up now and then, each lookup past the gap, are each one ask: the round
-    /// trip bounds a refusing server's cost to one query per lookup.
-    #[test]
-    fn each_lookup_after_a_gap_asks_once() {
-        let mut cache: QueryCache<u32, &str> = QueryCache::default();
-        // Past the gap from the last poll of the lookup before (90 ms into it).
-        let step = RELOOK_AFTER.as_millis() as u64 + 200;
-        let mut asks = 0;
-        for lookup in 0..4u64 {
-            let ms = lookup * step;
-            // Three polls of the same lookup, the server refusing between the first and second.
-            read(&cache, 2, ms, &mut asks);
-            cache.refuse_at(2, at(ms + 30));
-            read(&cache, 2, ms + 60, &mut asks);
-            read(&cache, 2, ms + 90, &mut asks);
-        }
-        assert_eq!(asks, 4);
+        cache.get_or_ask(5, || asks += 1);
+        assert_eq!(asks, 1);
     }
 
     #[test]
     fn a_refusal_is_never_a_persisted_record() {
         let mut cache: QueryCache<u32, &str> = QueryCache::default();
         cache.insert(1, "one");
+        cache.get_or_ask(2, || {});
         cache.refuse(2);
         assert_eq!(cache.iter().map(|(&k, _)| k).collect::<Vec<_>>(), [1]);
         assert_eq!(cache.len(), 1);
@@ -403,7 +387,7 @@ mod tests {
     fn a_refusal_frees_a_record_the_key_held() {
         let mut cache: QueryCache<u32, &str> = QueryCache::default();
         cache.insert(4, "four");
-        cache.refuse(4);
+        assert_eq!(cache.refuse(4), Refused::Record);
         assert!(cache.get(4).is_none());
         assert!(cache.answered_unknown(4));
     }
@@ -411,10 +395,46 @@ mod tests {
     #[test]
     fn a_landing_after_a_refusal_answers_it() {
         let mut cache: QueryCache<u32, &str> = QueryCache::default();
+        cache.get_or_ask(6, || {});
         cache.refuse(6);
         cache.insert(6, "six");
         assert!(!cache.answered_unknown(6));
         assert_eq!(cache.get(6), Some(&"six"));
+    }
+
+    /// A polling ask within the window of the refusal sends nothing, however often it runs: the
+    /// window runs from the refusal, so a reader that asks every second asks once per window.
+    #[test]
+    fn a_polling_ask_asks_a_refusal_again_once_the_window_from_the_refusal_passes() {
+        let mut cache: QueryCache<u32, &str> = QueryCache::default();
+        let mut asks = 0;
+        cache.get_or_ask(9, || asks += 1);
+        cache.refuse(9);
+        for _ in 0..RELOOK_AFTER.as_secs() - 1 {
+            test_clock::advance(Duration::from_secs(1));
+            assert!(cache.get_or_ask(9, || asks += 1).is_none());
+        }
+        assert_eq!(asks, 1, "within the window only the first ask went");
+        assert!(cache.answered_unknown(9));
+        test_clock::advance(Duration::from_secs(2));
+        cache.get_or_ask(9, || asks += 1);
+        assert_eq!(
+            asks, 2,
+            "the first ask past the window from the refusal asks, though asks ran all along"
+        );
+    }
+
+    /// The event lookup is not held by the polling window.
+    #[test]
+    fn a_lookup_asks_a_refusal_again_within_the_window() {
+        let mut cache: QueryCache<u32, &str> = QueryCache::default();
+        let mut asks = 0;
+        cache.get_or_ask(9, || asks += 1);
+        cache.refuse(9);
+        assert!(cache.get_or_ask(9, || asks += 1).is_none());
+        assert_eq!(asks, 1);
+        cache.lookup(9, || asks += 1);
+        assert_eq!(asks, 2);
     }
 
     #[test]
@@ -441,12 +461,11 @@ mod tests {
     }
 
     #[test]
-    fn evicting_a_refusal_asks_at_the_next_read() {
+    fn evicting_a_refusal_drops_its_unknown() {
         let mut cache: QueryCache<u32, &str> = QueryCache::default();
+        cache.get_or_ask(8, || {});
         cache.refuse(8);
         assert!(cache.evict(8));
-        let mut asks = 0;
-        assert!(!read(&cache, 8, 0, &mut asks));
-        assert_eq!(asks, 1);
+        assert!(!cache.answered_unknown(8));
     }
 }

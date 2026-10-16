@@ -144,7 +144,7 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
         return;
     };
     let me = sc.self_guid.0;
-    let (names, index, stores) = (&sc.names, &sc.index, &sc.stores);
+    let (names, index, stores, net) = (&sc.names, &sc.index, &sc.stores, &sc.net);
     let others = || {
         let units = index.0.iter().filter_map(|(&g, &e)| {
             let s = stores.get(e).ok()?;
@@ -155,7 +155,8 @@ fn notify_values(sc: &mut Scene, guid: u64, edges: &[(u16, u32, u32)]) {
     };
     let around = crate::field_watch::Around {
         me,
-        creature_cached: &|entry| names.creature_record(entry).is_some(),
+        // An entry of 0 has no key (`0x556aad`).
+        creature_lookup: &|entry| entry != 0 && names.lookup_creature(entry, guid, net),
         others: &others,
         pet_bar: sc.pet_bar.as_ref().map_or(0, |bar| bar.spells.pet_guid),
     };
@@ -687,15 +688,11 @@ fn object_create(
             local_orientation: t.orientation,
         });
     // Warm the name cache as a unit streams in, the reference's timing: its create path
-    // (`0x5fb880`) queries every creature (`0x60afb0`, at `0x60b157`), whose name is the record's
-    // field 0 (`0x60934b`). Its `CreatureCache.wdb` answers without the wire; ours lasts a session.
+    // (`0x5fb880`) looks up every creature's record (`0x60afb0`, at `0x60b15b`), whose name is the
+    // record's field 0 (`0x60934b`). Its `CreatureCache.wdb` answers without the wire; ours lasts
+    // a session.
     if matches!(kind, EntityKind::Unit | EntityKind::Player) {
-        let _ = names.resolve_fields(guid, Some(&fields), net_commands);
-        // A pet guid carries a pet number, so `resolve` asks the pet-name query; the template is
-        // asked by the descriptor's entry as well, the reference's cache key (`[[unit+8]+0xc]`).
-        if let Some(entry) = fields.object_entry().filter(|&e| e != 0) {
-            let _ = names.resolve_creature(entry, guid, net_commands);
-        }
+        names.lookup_fields(guid, &fields, net_commands);
     }
     // Warm the template cache as a GameObject streams in: only the query carries its lockId,
     // which decides use-vs-cast on a right-click.
@@ -1760,8 +1757,7 @@ mod tests {
     }
 
     /// `0x5588e0`'s refusal leg: a game object entry the server refuses is no template, where a
-    /// zeroed one stood in for it. It reads unknown to the object that waited, and the next
-    /// lookup asks again.
+    /// zeroed one stood in for it. It reads unknown, and the next spawn of the entry asks again.
     #[test]
     fn a_refused_game_object_entry_is_no_template() {
         const ENTRY: u32 = 1731;
@@ -1788,20 +1784,105 @@ mod tests {
             "no zeroed template stands in"
         );
         assert!(templates.is_unknown(ENTRY));
-        templates.request(0x11, &fields, &commands);
-        assert!(
-            rx.try_recv().is_err(),
-            "the object that waited is not re-asked"
-        );
+        assert!(rx.try_recv().is_err(), "reading it asks nothing");
 
-        crate::query_cache::test_clock::past_the_gap();
-        templates.request(0x11, &fields, &commands);
+        templates.request(0x12, &fields, &commands);
         assert!(
             matches!(
                 rx.try_recv(),
-                Ok(ClientCommand::GameObjectQuery { entry: ENTRY, .. })
+                Ok(ClientCommand::GameObjectQuery {
+                    entry: ENTRY,
+                    guid: 0x12
+                })
             ),
-            "the next lookup is"
+            "the next spawn asks at once"
+        );
+    }
+
+    /// A refused creature with a unit of it in view: the next create block of a unit of that
+    /// entry asks at once (`0x60b15b`), with no window between.
+    #[test]
+    fn a_refused_creature_is_asked_again_when_a_new_unit_of_it_is_created() {
+        const ENTRY: u32 = 1234;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.world_mut().insert_resource(NetCommands(tx));
+        let create = |guid: u64| SessionEvent::ObjectCreate {
+            guid,
+            kind: EntityKind::Unit,
+            display_id: None,
+            position: [0.0; 3],
+            orientation: 0.0,
+            scale: 1.0,
+            speeds: None,
+            mover: None,
+            transport_progress: None,
+            transport: None,
+            spline: None,
+            fields: ObjectFields::from_pairs(&[(3, ENTRY)])
+                .into_created(benilla_protocol::messages::ObjectType::Unit),
+        };
+        let creature_asks = |rx: &crossbeam_channel::Receiver<ClientCommand>| {
+            rx.try_iter()
+                .filter(|c| matches!(c, ClientCommand::CreatureQuery { entry: ENTRY, .. }))
+                .count()
+        };
+        let unit =
+            |counter: u64| counter | (u64::from(ENTRY) << 24) | (u64::from(guid::HIGH_UNIT) << 48);
+        let (a, b) = (unit(1), unit(2));
+
+        super::super::handlers::dispatch(app.world_mut(), vec![create(a)]);
+        assert_eq!(creature_asks(&rx), 1, "the create asks");
+        app.world_mut()
+            .resource_mut::<NameCache>()
+            .insert_creature(ENTRY, None);
+        assert_eq!(creature_asks(&rx), 0, "the refusal itself asks nothing");
+
+        super::super::handlers::dispatch(app.world_mut(), vec![create(b)]);
+        assert_eq!(creature_asks(&rx), 1, "a new unit of it asks again");
+    }
+
+    /// `0x604600`, the entry watcher, looks the new entry up with a callback (`0x60463f`): a
+    /// values block that moves a unit's entry to one not cached asks for it.
+    #[test]
+    fn an_entry_change_asks_the_creature_cache_for_the_new_entry() {
+        const OLD: u32 = 299;
+        const NEW: u32 = 2_671;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        app.world_mut().insert_resource(NetCommands(tx));
+        let mob = (u64::from(OLD) << 24) | (u64::from(guid::HIGH_UNIT) << 48) | 1;
+        super::super::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::ObjectCreate {
+                guid: mob,
+                kind: EntityKind::Unit,
+                display_id: None,
+                position: [0.0; 3],
+                orientation: 0.0,
+                scale: 1.0,
+                speeds: None,
+                mover: None,
+                transport_progress: None,
+                transport: None,
+                spline: None,
+                fields: ObjectFields::from_pairs(&[(3, OLD)])
+                    .into_created(benilla_protocol::messages::ObjectType::Unit),
+            }],
+        );
+        let _ = rx.try_iter().count();
+        super::super::handlers::dispatch(
+            app.world_mut(),
+            vec![SessionEvent::ObjectValues {
+                guid: mob,
+                fields: ObjectFields::from_pairs(&[(3, NEW)]),
+            }],
+        );
+        assert!(
+            rx.try_iter().any(
+                |c| matches!(c, ClientCommand::CreatureQuery { entry: NEW, guid } if guid == mob)
+            ),
+            "the new entry is asked for"
         );
     }
 

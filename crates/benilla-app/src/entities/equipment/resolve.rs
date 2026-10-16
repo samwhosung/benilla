@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use crate::creature_anim::{
     HandGrip, NockLatch, NockedAmmo, VisualSheath, Wielded, UNIT_FLAG_DISARMED,
 };
-use crate::items::Items;
+use crate::items::{HeldTemplate, Items};
 use crate::net::{NetCommands, NetEntity, ObjectStore};
 
 use super::super::item_glow::{self, ItemGlows};
@@ -103,6 +103,62 @@ pub(in crate::entities) struct ResolveKey {
     latched: bool,
 }
 
+/// The item entries a player's resolve last looked up, by visible slot and by quiver bag slot.
+/// A slot whose entry differs looks up with a callback, asking on a miss, as the reference's
+/// visible-item change does (`0x5ed700`, `0x5ed764`); a slot whose entry held still only reads
+/// the cache, so a template landing for another unit never asks this one's refused entry again.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(in crate::entities) struct LookedUp {
+    visible: [u32; 19],
+    bags: [u32; 4],
+    /// `PLAYER_GUILDID`, whose change asks for the crest's guild record.
+    guild: u32,
+}
+
+/// One player's item template reads in a resolve pass ([`LookedUp`]).
+struct SlotReads<'a> {
+    templates: &'a Items,
+    net: &'a NetCommands,
+    prev: LookedUp,
+    now: LookedUp,
+}
+
+impl SlotReads<'_> {
+    fn read(&self, changed: bool, entry: u32) -> Option<HeldTemplate> {
+        if changed {
+            self.templates.held(entry, self.net)
+        } else {
+            self.templates.template_cached(entry).map(HeldTemplate::of)
+        }
+    }
+
+    /// Visible slot `slot`'s template, `entry` non-zero.
+    fn visible(&mut self, slot: u8, entry: u32) -> Option<HeldTemplate> {
+        let i = usize::from(slot);
+        self.now.visible[i] = entry;
+        self.read(self.prev.visible[i] != entry, entry)
+    }
+
+    /// The display a worn slot draws with: `None` while the answer is pending, `Some(0)` once the
+    /// server refused the entry. The reference holds the model update while `[player+0x1d20]`
+    /// counts a pending ask (`0x5ec8f0`, `0x5ed771`); the refusal runs the callback with status 0
+    /// (the item cache's response `0x555140` -> `0x55bdb0`, refusal at `0x55bdf5`, `push 0` at
+    /// `0x55be9f`, callback at `0x55bea8`), `0x5ed880` decrements without applying a display
+    /// (`0x5ed8c0`), and the player is drawn without that slot.
+    fn worn(&mut self, slot: u8, entry: u32) -> Option<u32> {
+        match self.visible(slot, entry) {
+            Some(t) => Some(t.display_info_id),
+            None => self.templates.template_answered_unknown(entry).then_some(0),
+        }
+    }
+
+    /// Bag slot `19 + i`'s template, for the quiver.
+    fn bag(&mut self, i: usize, entry: u32) -> Option<HeldTemplate> {
+        self.now.bags[i] = entry;
+        self.read(self.prev.bags[i] != entry, entry)
+    }
+}
+
 /// The dress half of the resolve, one of a model widget's re-take triggers (`0x5dee30`,
 /// `crate::portrait::SnapKey`). Its weapons are read above [`placement`], so a sheath that shows
 /// or hides one does not move it. Left out: the nocked ammo and quiver, which raise no model event
@@ -138,6 +194,7 @@ pub(in crate::entities) fn resolve_equipment(
         Option<&DressKey>,
         Option<&DisarmFreeze>,
         Has<crate::net::SelfPlayer>,
+        Option<&LookedUp>,
     )>,
     held: Option<ResMut<ItemDisplays>>,
     templates: Res<Items>,
@@ -188,6 +245,7 @@ pub(in crate::entities) fn resolve_equipment(
         current_dress,
         freeze,
         is_self,
+        looked_up,
     ) in &units
     {
         if !matches!(net_entity.kind, EntityKind::Unit | EntityKind::Player) {
@@ -214,6 +272,24 @@ pub(in crate::entities) fn resolve_equipment(
         // `PLAYER_FLAGS`' `HIDE_HELM 0x400` and `HIDE_CLOAK 0x800` are public, so another player's
         // choice shows here; a hidden piece is display id 0, so its model and `0x4799a0` masks go.
         let (hide_helm, hide_cloak) = (s.player_hides_helm(), s.player_hides_cloak());
+        let prev = looked_up.copied().unwrap_or_default();
+        let mut reads = SlotReads {
+            templates: &templates,
+            net: &net,
+            prev,
+            // A slot this pass does not read keeps what it last looked up; an emptied one is
+            // nothing looked up, so the same entry coming back is a change.
+            now: LookedUp {
+                visible: std::array::from_fn(|i| {
+                    let slot = i as u8;
+                    match s.player_visible_item_entry(slot) {
+                        Some(e) if e != 0 => prev.visible[i],
+                        _ => 0,
+                    }
+                }),
+                ..prev
+            },
+        };
         if net_entity.kind == EntityKind::Player {
             let mut eq = Equipment {
                 settled: true,
@@ -223,7 +299,7 @@ pub(in crate::entities) fn resolve_equipment(
                 let Some(entry) = s.player_visible_item_entry(slot).filter(|e| *e != 0) else {
                     continue;
                 };
-                match templates.worn_display(entry, &net) {
+                match reads.worn(slot, entry) {
                     Some(display) => eq.bodyslots[idx] = display,
                     None => eq.settled = false, // asked; answer pending
                 }
@@ -231,13 +307,13 @@ pub(in crate::entities) fn resolve_equipment(
             // The cloak (slot 14) and helm (slot 0). A hidden piece is still looked up and zeroed
             // after, so `settled` keeps its meaning and showing it again needs no round trip.
             if let Some(entry) = s.player_visible_item_entry(14).filter(|e| *e != 0) {
-                match templates.worn_display(entry, &net) {
+                match reads.worn(14, entry) {
                     Some(display) => eq.cloak = display,
                     None => eq.settled = false,
                 }
             }
             if let Some(entry) = s.player_visible_item_entry(0).filter(|e| *e != 0) {
-                match templates.worn_display(entry, &net) {
+                match reads.worn(0, entry) {
                     Some(display) => eq.helm = display,
                     None => eq.settled = false,
                 }
@@ -248,10 +324,19 @@ pub(in crate::entities) fn resolve_equipment(
             if hide_helm {
                 eq.helm = 0;
             }
-            // The emblem, for every player; the composite paints it only on a flagged tabard.
-            eq.emblem = guilds
-                .as_deref_mut()
-                .and_then(|g| crate::ui_guild::unit_guild_emblem(s, g, &net));
+            // The emblem, for every player; the composite paints it only on a flagged tabard. Its
+            // guild record is asked as the tabard is put on (`0x5e0720` → `0x6d6d20`): when the
+            // tabard slot or the guild id changes, and only read otherwise.
+            let guild_id = s.player_guild_id();
+            reads.now.guild = guild_id;
+            let tabard_moved = reads.now.visible[18] != prev.visible[18];
+            eq.emblem = guilds.as_deref_mut().and_then(|g| {
+                if guild_id != prev.guild || tabard_moved {
+                    crate::ui_guild::unit_guild_emblem(s, g, &net)
+                } else {
+                    crate::ui_guild::unit_guild_emblem_cached(s, g)
+                }
+            });
             // The designer's preview, our own body only (`[cc+0xc]`, the `0x47a610` install).
             if is_self {
                 if let Some(design) = tabard_design.as_deref().and_then(|d| d.preview()) {
@@ -300,7 +385,7 @@ pub(in crate::entities) fn resolve_equipment(
                 EntityKind::Player => s
                     .player_visible_item_entry(PLAYER_HELD_SLOTS[slot])
                     .filter(|e| *e != 0)
-                    .and_then(|entry| templates.held(entry, &net))
+                    .and_then(|entry| reads.visible(PLAYER_HELD_SLOTS[slot], entry))
                     .filter(|t| t.display_info_id != 0)
                     .map(|t| {
                         (
@@ -458,12 +543,19 @@ pub(in crate::entities) fn resolve_equipment(
             && sheath_of(2, ranged_inv_type.unwrap_or(0)) == 2
         {
             let mut quiver_display = None;
-            for bag in 19u8..23 {
+            for (i, bag) in (19u8..23).enumerate() {
                 let entry = s
                     .player_inv_slot(bag)
                     .and_then(|g| objects.object(g))
-                    .and_then(|o| o.object_entry());
-                let Some(t) = entry.and_then(|e| templates.held(e, &net)) else {
+                    .and_then(|o| o.object_entry())
+                    .filter(|&e| e != 0);
+                let Some(t) = (match entry {
+                    Some(e) => reads.bag(i, e),
+                    None => {
+                        reads.now.bags[i] = 0;
+                        None
+                    }
+                }) else {
                     continue;
                 };
                 if t.class == 11 && t.display_info_id != 0 {
@@ -486,10 +578,10 @@ pub(in crate::entities) fn resolve_equipment(
             EntityKind::Player if char_component => {
                 let race = s.unit_race().unwrap_or(1);
                 let sex = s.unit_gender().unwrap_or(0).min(1);
-                let resolve = |slot: u8| {
+                let mut resolve = |slot: u8| {
                     s.player_visible_item_entry(slot)
                         .filter(|e| *e != 0)
-                        .and_then(|entry| templates.held(entry, &net))
+                        .and_then(|entry| reads.visible(slot, entry))
                         .map(|t| t.display_info_id)
                         .filter(|d| *d != 0)
                         .unwrap_or(0)
@@ -531,6 +623,9 @@ pub(in crate::entities) fn resolve_equipment(
                     });
                 }
             }
+        }
+        if net_entity.kind == EntityKind::Player && looked_up != Some(&reads.now) {
+            commands.entity(entity).insert(reads.now);
         }
         let next = HeldItems { slots };
         // A weapon at a hand's attachment closes that hand (`0x60b590`); a forearm shield does not.
@@ -891,8 +986,10 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
         let mut items = Items::default();
         items.insert_template(100, Some(worn(900, 1))); // INVTYPE_HEAD
-        items.insert_template(300, None); // the server refused it
         let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        items.template(300, 0, &NetCommands(tx.clone()));
+        let _ = rx.try_recv();
+        items.insert_template(300, None); // the server refused it
         app.insert_resource(items);
         app.init_resource::<crate::net::GuidIndex>();
         app.insert_resource(NetCommands(tx));
@@ -937,6 +1034,61 @@ mod tests {
         let (eq, asked) = dress_with_refusal(&[(0, 100), (4, 300), (14, 400)]);
         assert!(!eq.settled, "a pending ask holds the player");
         assert_eq!(asked, vec![400], "only the unanswered entry is asked");
+    }
+
+    /// `0x5ed700` looks a slot's item up when the slot's entry changes: a template landing for
+    /// another item, past the refusal's window, does not ask a refused slot again or hold the
+    /// player.
+    #[test]
+    fn a_refused_slot_is_not_asked_again_when_another_template_lands() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        // The test clock is per thread: run the resolve on this one.
+        app.edit_schedule(Update, |s| {
+            s.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
+        });
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let mut items = Items::default();
+        items.template(300, 0, &NetCommands(tx.clone()));
+        let _ = rx.try_recv();
+        items.insert_template(300, None); // the server refused the chest
+        app.insert_resource(items);
+        app.init_resource::<crate::net::GuidIndex>();
+        app.insert_resource(NetCommands(tx));
+        app.insert_resource(ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::new()),
+        ));
+        let player = app
+            .world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Player,
+                    display_id: Some(49),
+                    scale: 1.0,
+                },
+                wearing(0, &[(4, 300)]),
+            ))
+            .id();
+        app.add_systems(Update, resolve_equipment);
+        app.update();
+        assert!(app.world().get::<Equipment>(player).unwrap().settled);
+
+        crate::query_cache::test_clock::advance(
+            crate::query_cache::RELOOK_AFTER + std::time::Duration::from_secs(1),
+        );
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(555, Some(worn(901, 1)));
+        app.update();
+        assert!(
+            !rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::ItemQuery { entry: 300, .. })),
+            "the refused chest is not asked again"
+        );
+        assert!(
+            app.world().get::<Equipment>(player).unwrap().settled,
+            "and the player is not held"
+        );
     }
 
     #[test]

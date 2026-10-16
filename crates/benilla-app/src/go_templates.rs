@@ -96,13 +96,13 @@ impl GameObjectTemplates {
     }
 
     /// Asks for an object's template once per entry; every spawn of a template shares the one
-    /// query. The creation hook asks with the descriptor's entry and the guid (`0x5f7c40`,
-    /// `0x5f7d81`).
+    /// query. The creation hook looks it up with a callback, by the descriptor's entry and the
+    /// guid (`0x5f7c40`, `0x5f7d81`), so a refused entry is asked again by the next spawn.
     pub(crate) fn request(&self, guid: u64, fields: &ObjectFields, commands: &NetCommands) {
         let Some(entry) = Self::key(fields) else {
             return;
         };
-        self.templates.get_or_ask(entry, || {
+        self.templates.lookup(entry, || {
             debug!("go: asking template (entry {entry}, guid {guid:#x})");
             let _ = commands
                 .0
@@ -116,7 +116,7 @@ impl GameObjectTemplates {
         self.templates.refuse(entry);
     }
 
-    /// Whether the server refused `entry` and the readers are still on that lookup.
+    /// Whether the server refused `entry` and nothing has asked for it since.
     #[cfg(test)]
     pub(crate) fn is_unknown(&self, entry: u32) -> bool {
         self.templates.answered_unknown(entry)

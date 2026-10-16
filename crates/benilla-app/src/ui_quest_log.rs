@@ -61,9 +61,9 @@ impl crate::query_cache::AskOnce for QuestLog {
 }
 
 impl QuestLog {
-    /// The template, asked once while in flight: a miss sends `CMSG_QUEST_QUERY`. A server that
-    /// refuses an id (the reference's top-bit key, `0x562fb7`) is not decoded: vmangos answers
-    /// nothing for one.
+    /// The template, asked once while in flight: a miss sends `CMSG_QUEST_QUERY`. vmangos answers
+    /// nothing for an id it does not know (`QuestHandler.cpp:229-231`); an answer with an empty
+    /// title is a refusal ([`Self::insert_template`]).
     pub(crate) fn template(&self, quest_id: u32, commands: &NetCommands) -> Option<&QuestTemplate> {
         self.templates.get_or_ask(quest_id, || {
             debug!("ui_quest_log: asking quest template (quest {quest_id})");
@@ -78,9 +78,16 @@ impl QuestLog {
         self.templates.answered_unknown(quest_id)
     }
 
-    /// Record a template answer (`SMSG_QUEST_QUERY_RESPONSE`).
+    /// Record a template answer (`SMSG_QUEST_QUERY_RESPONSE`). The handler `0x555300` tests the
+    /// title's first byte (`0x555410`): an empty title is a refusal, which runs the callbacks with
+    /// status 0 and frees the node (`0x55543c` → `0x563150`), and only a titled one is stored
+    /// (`0x562c80`).
     pub(crate) fn insert_template(&mut self, template: QuestTemplate) {
-        self.templates.insert(template.quest_id, template);
+        if template.title.is_empty() {
+            self.templates.refuse(template.quest_id);
+        } else {
+            self.templates.insert(template.quest_id, template);
+        }
     }
 
     /// The carry a dying VM left, dropped when the session ends.
@@ -1056,6 +1063,32 @@ fn drain_quest_log_abandons(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `0x555410`: an answer with an empty title is a refusal (`0x55543c` → `0x563150`), not a
+    /// stored record (`0x562c80`); a titled one is stored.
+    #[test]
+    fn an_empty_quest_title_is_a_refusal_not_a_record() {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut log = QuestLog::default();
+        assert!(log.template(77, &commands).is_none());
+        assert_eq!(rx.try_iter().count(), 1);
+
+        let mut t = quest_template(std::array::from_fn(|_| obj(0, 0, 0, 0, "")));
+        t.quest_id = 77;
+        t.title = String::new();
+        log.insert_template(t.clone());
+        assert!(log.templates.get(77).is_none(), "nothing is stored");
+        assert!(
+            log.template_answered_unknown(77),
+            "the waiters read unknown"
+        );
+
+        t.title = "Kobold Camp Cleanup".into();
+        log.insert_template(t);
+        assert!(log.templates.get(77).is_some());
+        assert!(!log.template_answered_unknown(77));
+    }
 
     // ── order_groups ────────────────────────────────────────────────────────────────────────────
 

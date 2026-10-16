@@ -486,10 +486,9 @@ pub(crate) fn drive_nameplates(
         if !show {
             continue;
         }
-        // Re-read by `peek`: resolve's `&mut`-tied return cannot outlive the subname read.
-        if names.resolve_unit(guid.0, store, &net_commands).is_none() {
-            continue;
-        }
+        // Read, never asked: this runs every frame, where the reference builds the text only when
+        // the plate is dirty (`0x6c6f80`). The unit's create asks for its name
+        // (`crate::net::objects`), and its landing redisplays.
         let Some(name) = names.peek_unit(guid.0, store) else {
             continue;
         };

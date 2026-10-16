@@ -334,6 +334,10 @@ mod tests {
             world
                 .resource_mut::<QuestLog>()
                 .insert_template(template(783, "A Threat Within", 7));
+            let (tx, _) = crossbeam_channel::unbounded();
+            world
+                .resource::<Items>()
+                .template(9_999, 0, &crate::net::NetCommands(tx));
             world.resource_mut::<Items>().insert_template(9_999, None);
             let mut lines = world.resource_mut::<QuestLines>();
             lines.push(QuestLine::Completed(783));

@@ -195,6 +195,19 @@ pub(crate) struct HeldTemplate {
     pub(crate) material: u32,
 }
 
+impl HeldTemplate {
+    pub(crate) fn of(i: &ItemInfo) -> Self {
+        Self {
+            display_info_id: i.display_info_id,
+            inventory_type: i.inventory_type,
+            sheath: i.sheath,
+            class: i.class,
+            subclass: i.subclass,
+            material: i.material,
+        }
+    }
+}
+
 /// `SpellItemEnchantment.dbc`, for the weapon glow ([`crate::entities::item_glow`]) and the
 /// tooltip enchant line ([`crate::ui_items`]). Optional: absent, neither draws.
 #[derive(Resource)]
@@ -396,8 +409,11 @@ impl RollCatalogs<'_> {
 /// Item templates by entry, asked once, and the enchant times queued for items not yet held.
 #[derive(Resource, Default)]
 pub(crate) struct Items {
-    /// A refused entry is the server's unknown one, read as such by [`Items::template_answered_unknown`]
-    /// and asked again by the next lookup ([`QueryCache::refuse`]); it is never kept as a record.
+    /// A refused entry is the server's unknown one, read as such by
+    /// [`Items::template_answered_unknown`] and asked again by a later lookup
+    /// ([`QueryCache::refuse`]); it is never kept as a record. Every reader asks as it reads, so
+    /// a refused entry is asked again once the window from the refusal has passed
+    /// ([`QueryCache::get_or_ask`]).
     templates: QueryCache<u32, ItemInfo>,
     /// Landed since the last [`Self::take_fresh`]; pushed to the UI unprompted.
     fresh: Vec<u32>,
@@ -472,8 +488,8 @@ impl Items {
     }
 
     /// The template for `entry` if known; a miss asks once while in flight (`guid` rides along, `0`
-    /// for template-only). A refused entry is also `None`, and asks again only at a new lookup
-    /// ([`QueryCache::get_or_ask`]).
+    /// for template-only). A refused entry is also `None`, and asks again once the window from
+    /// the refusal has passed ([`QueryCache::get_or_ask`]).
     pub(crate) fn template(
         &self,
         entry: u32,
@@ -495,27 +511,7 @@ impl Items {
 
     /// The [`HeldTemplate`] view of [`Self::template`], asked template-only.
     pub(crate) fn held(&self, entry: u32, commands: &NetCommands) -> Option<HeldTemplate> {
-        self.template(entry, 0, commands).map(|i| HeldTemplate {
-            display_info_id: i.display_info_id,
-            inventory_type: i.inventory_type,
-            sheath: i.sheath,
-            class: i.class,
-            subclass: i.subclass,
-            material: i.material,
-        })
-    }
-
-    /// The display id a worn `entry` draws with, asked template-only: `None` while the answer is
-    /// pending, `Some(0)` once the server refused the entry. The reference holds the model update
-    /// while `[player+0x1d20]` counts a pending ask (`0x5ec8f0`, `0x5ed771`); the refusal runs the
-    /// callback with status 0 (the item cache's response `0x555140` -> `0x55bdb0`, refusal at
-    /// `0x55bdf5`, `push 0` at `0x55be9f`, callback at `0x55bea8`), `0x5ed880` decrements without
-    /// applying a display (`0x5ed8c0`), and the player is drawn without that slot.
-    pub(crate) fn worn_display(&self, entry: u32, commands: &NetCommands) -> Option<u32> {
-        match self.held(entry, commands) {
-            Some(t) => Some(t.display_info_id),
-            None => self.template_answered_unknown(entry).then_some(0),
-        }
+        self.template(entry, 0, commands).map(HeldTemplate::of)
     }
 
     /// [`Self::template`] without the ask: the cached record only.
@@ -532,7 +528,9 @@ impl Items {
             }
             // A refusal moves the generation too: "still asking" to "unknown" is a display
             // transition for the cast-fail redisplay.
-            None => self.templates.refuse(entry),
+            None => {
+                self.templates.refuse(entry);
+            }
         }
     }
 
@@ -942,10 +940,11 @@ mod tests {
         assert!(gift_box.shows_open_line(ITEM_DYNFLAG_WRAPPED));
     }
 
-    /// `0x55bdf7`: an item key with its top bit set is a refusal. The waiters read unknown once
-    /// (`template_answered_unknown`), nothing is kept, and the next lookup asks again.
+    /// `0x55bdf7`: an item key with its top bit set is a refusal. The waiters read unknown
+    /// (`template_answered_unknown`), nothing is kept, and an ask once the window from the refusal
+    /// has passed asks again, however often the entry was read meanwhile.
     #[test]
-    fn a_refused_template_reads_unknown_and_the_next_lookup_asks_again() {
+    fn a_refused_template_reads_unknown_and_is_asked_again_after_the_window() {
         let (cmds, rx) = commands();
         let mut items = Items::default();
 
@@ -966,20 +965,24 @@ mod tests {
         assert!(items.template_cached(9999).is_none(), "and nothing is kept");
         assert!(items.cached_template_ids().is_empty());
 
-        assert!(items.template(9999, 0, &cmds).is_none());
+        // A reader asking every second through the window: no ask, and the window does not move.
+        for _ in 0..crate::query_cache::RELOOK_AFTER.as_secs() - 1 {
+            crate::query_cache::test_clock::advance(std::time::Duration::from_secs(1));
+            assert!(items.template(9999, 0, &cmds).is_none());
+        }
         assert!(
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
-            "a poll of the same lookup does not ask"
+            "an ask within the window does not send"
         );
 
-        crate::query_cache::test_clock::past_the_gap();
+        crate::query_cache::test_clock::advance(std::time::Duration::from_secs(2));
         assert!(items.template(9999, 0, &cmds).is_none());
         assert!(
             matches!(
                 rx.try_recv(),
                 Ok(ClientCommand::ItemQuery { entry: 9999, .. })
             ),
-            "the next lookup does"
+            "the first ask past the window from the refusal does"
         );
         assert!(!items.template_answered_unknown(9999), "pending again");
     }

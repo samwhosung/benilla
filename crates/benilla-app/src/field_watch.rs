@@ -218,9 +218,10 @@ enum List {
 pub(crate) struct Around<'a> {
     /// The active player's guid.
     pub(crate) me: Option<u64>,
-    /// Whether the creature cache holds `entry`'s record: `0x556aa0`'s hit, which `0x604600`
-    /// answers with the name signal at once; a miss waits for the answer (`crate::names`).
-    pub(crate) creature_cached: &'a dyn Fn(u32) -> bool,
+    /// The creature cache's lookup with a callback (`0x60463f`): whether it holds `entry`'s
+    /// record, which `0x604600` answers with the name signal at once; a miss asks for it and waits
+    /// for the answer (`crate::names`).
+    pub(crate) creature_lookup: &'a dyn Fn(u32) -> bool,
     /// `CGUnit_C::RefreshReaction`'s sweep for the active player ([`reaction_sweep`]).
     pub(crate) others: &'a dyn Fn() -> Vec<u64>,
     /// The pet bar's guid, the client's `[0xb714a0]`; 0 for no bar.
@@ -339,8 +340,8 @@ pub(crate) fn values(
 
     // The unit type watchers (`0x6041f0`), on every unit.
     if let Some(at) = at(OBJECT_SECTION, ENTRY, List::Type) {
-        // `0x604600`: a cached record names the unit at once (`0x604651`).
-        if (around.creature_cached)(fields.object_entry().unwrap_or(0)) {
+        // `0x604600`: a cached record names the unit at once (`0x604651`); a miss asks.
+        if (around.creature_lookup)(fields.object_entry().unwrap_or(0)) {
             pass.signal(at, guid, id::UNIT_NAME_UPDATE);
         }
     }
@@ -578,7 +579,7 @@ mod tests {
         values(
             &Around {
                 me,
-                creature_cached: &|_| false,
+                creature_lookup: &|_| false,
                 others: &Vec::new,
                 pet_bar: 0,
             },
@@ -905,7 +906,7 @@ mod tests {
             .into_created(ObjectType::Player);
         let around = Around {
             me: Some(ME),
-            creature_cached: &|_| false,
+            creature_lookup: &|_| false,
             others: &|| vec![MOB, OTHER],
             pet_bar: 0,
         };
@@ -1000,7 +1001,7 @@ mod tests {
         );
         let cached = Around {
             me: Some(ME),
-            creature_cached: &|entry| entry == 299,
+            creature_lookup: &|entry| entry == 299,
             others: &Vec::new,
             pet_bar: 0,
         };
@@ -1017,7 +1018,7 @@ mod tests {
     fn the_bar_pets_number_signals_the_pet_ui() {
         let bar = Around {
             me: Some(ME),
-            creature_cached: &|_| false,
+            creature_lookup: &|_| false,
             others: &Vec::new,
             pet_bar: PET,
         };
@@ -1193,7 +1194,7 @@ mod tests {
         let mut me = player();
         let around = Around {
             me: Some(ME),
-            creature_cached: &|_| false,
+            creature_lookup: &|_| false,
             others: &|| vec![MOB],
             pet_bar: 0,
         };

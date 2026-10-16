@@ -1153,7 +1153,7 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
         crate::field_watch::values(
             &crate::field_watch::Around {
                 me: Some(ME),
-                creature_cached: &|_| false,
+                creature_lookup: &|_| false,
                 others: &Vec::new,
                 pet_bar: 0,
             },
@@ -1181,7 +1181,7 @@ fn a_values_block_moves_the_target_health_bar_and_a_retarget_fires_no_unit_event
         crate::field_watch::values(
             &crate::field_watch::Around {
                 me: Some(ME),
-                creature_cached: &|_| false,
+                creature_lookup: &|_| false,
                 others: &Vec::new,
                 pet_bar: 0,
             },
