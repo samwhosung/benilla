@@ -58,6 +58,7 @@ mod fishing_line;
 mod footprints;
 mod game_plugins;
 mod glue;
+mod glue_session;
 mod glue_strings;
 mod go_anim;
 mod go_templates;

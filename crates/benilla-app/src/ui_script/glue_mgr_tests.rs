@@ -204,6 +204,92 @@ fn realm(name: &str) -> RealmInfo {
     }
 }
 
+/// A connect waiting on its list, nothing selected this process.
+fn connecting() -> GlueMgr {
+    let mut m = fresh();
+    m.state = ScreenState::Connect;
+    m.op = Operation::begin(OpKind::Connect, STATUS_CONNECTING);
+    m
+}
+
+/// The realm the connect dialled, if any.
+fn dialled(m: &GlueMgr) -> Option<&str> {
+    m.park_out.iter().find_map(|r| match r {
+        ParkRequest::Realm(RealmRequest::Enter { realm, .. }) => Some(realm.name.as_str()),
+        _ => None,
+    })
+}
+
+/// The `realmName` the manager wrote, if any.
+fn realm_name_set(m: &GlueMgr) -> Option<&str> {
+    m.outbox.iter().find_map(|o| match o {
+        Outgoing::Cvar { name, value } if *name == crate::glue_session::realm::CVAR_REALM_NAME => {
+            Some(value.as_str())
+        }
+        _ => None,
+    })
+}
+
+/// The run's own realm choice on the stock connect (#1433): `WOW_REALM` names a listed realm
+/// that is up, ahead of `realmName`; an unattended run with nothing named takes the first realm
+/// up with the most characters. Either is a selection: `realmName` is written and a realm is
+/// chosen this session. A player's run with no `realmName` fails `REALM_LIST_REALM_NOT_FOUND`
+/// into the list, and `realmName`'s own match writes nothing.
+#[test]
+fn the_runs_realm_choice_answers_the_stock_connect() {
+    let mut down = realm("Down");
+    down.flags = 0x02;
+    let mut played = realm("Played");
+    played.characters = 3;
+    let list = || vec![down.clone(), realm("Alpha"), realm("Bravo"), played.clone()];
+    let connect = |realm_name: &str, run: RunModeRealm| {
+        let mut m = connecting();
+        m.on_realm_list(list(), false, realm_name, &run);
+        m
+    };
+
+    let m = connect("alpha", RunModeRealm::new(Some("bravo"), false));
+    assert_eq!(dialled(&m), Some("Bravo"), "WOW_REALM outranks realmName");
+    assert_eq!(realm_name_set(&m), Some("Bravo"));
+    assert_eq!(m.realm_cells.chosen, Some(0));
+    assert!(m.cells_moved, "the chosen cell reaches the VM");
+
+    let m = connect("alpha", RunModeRealm::new(Some("Down"), true));
+    assert_eq!(
+        dialled(&m),
+        Some("Alpha"),
+        "a WOW_REALM that is down falls through to realmName"
+    );
+    assert_eq!(
+        realm_name_set(&m),
+        None,
+        "realmName's own match writes nothing"
+    );
+    assert_eq!(m.realm_cells.chosen, None);
+
+    let m = connect("", RunModeRealm::new(None, true));
+    assert_eq!(dialled(&m), Some("Played"), "the unattended pick");
+    assert_eq!(realm_name_set(&m), Some("Played"));
+    assert_eq!(m.realm_cells.chosen, Some(0));
+
+    let m = connect("Gone", RunModeRealm::default());
+    assert_eq!(dialled(&m), None, "a player's run dials nothing");
+    assert_eq!(realm_name_set(&m), None);
+    assert!(m.op.done && !m.op.ok);
+    assert_eq!(m.op.status, STATUS_REALM_LIST_REALM_NOT_FOUND);
+    assert_eq!(m.realm_cells.chosen, None);
+
+    let mut m = connecting();
+    m.selected = Some(realm("Alpha"));
+    m.on_realm_list(list(), false, "", &RunModeRealm::new(Some("Bravo"), true));
+    assert_eq!(
+        dialled(&m),
+        Some("Alpha"),
+        "the realm selected this process outranks the run's choice"
+    );
+    assert_eq!(realm_name_set(&m), None);
+}
+
 /// The world connect's failure arm: the status text, `OKAY_WITH_URL` with the URL key for the
 /// five codes of `0x803740`, then the realm list over it (`CLOSE_STATUS_DIALOG` and the rebuild);
 /// `AUTH_FAILED` instead goes from the character screen back to login.
@@ -1584,8 +1670,8 @@ fn the_realm_list_query_and_its_cancel_run_in_the_call() {
 fn change_realm_runs_its_half_in_the_call() {
     let shared = SharedGlueMgr::default();
     let mut s = seated(&shared);
-    s.register_cvars([(crate::realm_select::CVAR_REALM_NAME, "")]);
-    let (categories, types) = crate::realm_select::Realms::us_client().glue_setup();
+    s.register_cvars([(crate::glue_session::realm::CVAR_REALM_NAME, "")]);
+    let (categories, types) = crate::glue_session::realm::RealmTables::us_client().glue_setup();
     s.set_glue_realm_setup(categories, types);
     s.set_glue_realms(vec![glue_realm(&realm("Fake"))]);
     shared.get_mut().holder = vec![realm("Fake")];
@@ -1726,8 +1812,8 @@ fn a_verb_called_inside_another_verbs_fan_out_acts_before_its_operation_begins()
 fn get_server_name_reads_the_cvar_and_the_selected_realm_with_no_link() {
     let shared = SharedGlueMgr::default();
     let mut s = seated(&shared);
-    s.register_cvars([(crate::realm_select::CVAR_REALM_NAME, "aLPHA")]);
-    let (categories, types) = crate::realm_select::Realms::us_client().glue_setup();
+    s.register_cvars([(crate::glue_session::realm::CVAR_REALM_NAME, "aLPHA")]);
+    let (categories, types) = crate::glue_session::realm::RealmTables::us_client().glue_setup();
     s.set_glue_realm_setup(categories, types);
     let read = |s: &UiScript| {
         s.eval::<(String, Option<i64>, Option<i64>)>("return GetServerName()")
@@ -1746,7 +1832,7 @@ fn get_server_name_reads_the_cvar_and_the_selected_realm_with_no_link() {
     // With the link up the name is still the CVar's, in its own case, not the realm record's.
     shared.get_mut().connected = true;
     assert_eq!(read(&s), ("aLPHA".to_string(), Some(1), None));
-    s.set_cvar_host(crate::realm_select::CVAR_REALM_NAME, "Bravo");
+    s.set_cvar_host(crate::glue_session::realm::CVAR_REALM_NAME, "Bravo");
     assert_eq!(read(&s).0, "Bravo", "read as it stands, no frame between");
 }
 
@@ -1832,7 +1918,7 @@ fn a_world_failure_with_no_realm_held_asks_for_the_list_and_its_reply_closes_it(
     }
     shared
         .get_mut()
-        .on_realm_list(vec![realm("Fake")], false, "Fake");
+        .on_realm_list(vec![realm("Fake")], false, "Fake", &RunModeRealm::default());
     frame(&shared, &mut s);
     assert!(
         events(&s).contains(&"CLOSE".to_string()),
@@ -2161,8 +2247,8 @@ fn the_stock_select_with_no_link_shows_the_selected_realms_pvp() {
     let (mut app, _rx, _) = stock_app();
     {
         let mut s = app.world_mut().non_send_resource_mut::<UiScript>();
-        s.register_cvars([(crate::realm_select::CVAR_REALM_NAME, "aLPHA")]);
-        let (categories, types) = crate::realm_select::Realms::us_client().glue_setup();
+        s.register_cvars([(crate::glue_session::realm::CVAR_REALM_NAME, "aLPHA")]);
+        let (categories, types) = crate::glue_session::realm::RealmTables::us_client().glue_setup();
         s.set_glue_realm_setup(categories, types);
     }
     let mut pvp = realm("Alpha");
@@ -2441,7 +2527,7 @@ fn live_app_with(
         .insert_resource(crate::net::RealmChoice(cycles.realm.clone()))
         .insert_resource(crate::net::CharPick(cycles.pick.clone()))
         .insert_resource(crate::net::NetCommands(cycles.commands.clone()))
-        .insert_resource(crate::realm_select::Realms::us_client())
+        .insert_resource(crate::glue_session::realm::RealmTables::us_client())
         .insert_resource(crate::entities::CharCreate(
             benilla_formats::CharCreateCatalog::load(&mut chain).expect("ChrRaces"),
         ))
@@ -2498,7 +2584,7 @@ fn live_app_with(
     let mut s = UiScript::new_glue().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.register_cvars(crate::cvars::registered_pairs());
-    s.set_cvar_host(crate::realm_select::CVAR_REALM_NAME, realm_name);
+    s.set_cvar_host(crate::glue_session::realm::CVAR_REALM_NAME, realm_name);
     let _ = super::super::glue::load_glue(&mut s);
     super::super::glue::set_glue_screen(&mut s, super::super::glue::GlueScreen::Login);
     s.run("AcceptEULA() AcceptTOS() AccountLogin_ShowUserAgreements()")
@@ -2626,7 +2712,7 @@ fn a_fresh_account_is_asked_for_a_realm_and_suggested_one() {
     until(&mut app, "the character screen", screen_up);
     assert_eq!(
         vm(&app)
-            .cvar(crate::realm_select::CVAR_REALM_NAME)
+            .cvar(crate::glue_session::realm::CVAR_REALM_NAME)
             .as_deref(),
         Some("Bravo"),
         "ChangeRealm sets realmName"
@@ -2699,7 +2785,7 @@ fn closing_the_realm_list_lets_the_next_login_through() {
     until(&mut app, "the character screen", screen_up);
     assert_eq!(
         vm(&app)
-            .cvar(crate::realm_select::CVAR_REALM_NAME)
+            .cvar(crate::glue_session::realm::CVAR_REALM_NAME)
             .as_deref(),
         Some("Alpha")
     );
@@ -2722,6 +2808,58 @@ fn an_empty_realm_list_asks_again_and_shows_it() {
         0,
         "no fallback dial"
     );
+}
+
+/// A scripted run on the stock screens with no `realmName` (#1433), its account holding no
+/// characters: an unattended run's pick, or the realm `WOW_REALM` names, is dialled at the
+/// logon's list, `realmName` takes it, and the character screen comes up and stays, neither the
+/// realm list nor the wizard raised.
+#[test]
+fn a_scripted_run_reaches_the_character_screen_with_no_realm_name() {
+    let _ = benilla_formats::wow_data_or_skip!();
+    for (run, want) in [
+        (RunModeRealm::new(None, true), "Played"),
+        (RunModeRealm::new(Some("bravo"), false), "Bravo"),
+    ] {
+        let (mut app, realmd) = live_app(
+            |world| {
+                let mut down = FakeRealm::new("Down", world);
+                down.flags = 0x02;
+                let mut played = FakeRealm::new("Played", world);
+                played.characters = 2;
+                vec![
+                    down,
+                    FakeRealm::new("Alpha", world),
+                    FakeRealm::new("Bravo", world),
+                    played,
+                ]
+            },
+            "",
+        );
+        app.insert_resource(run.clone());
+        log_in(&mut app);
+        until(&mut app, "the character screen and its roster", |app| {
+            let m = mgr(app);
+            screen_up(app) && m.op.kind == OpKind::CharList && m.op.done
+        });
+        for _ in 0..20 {
+            app.update();
+        }
+        assert!(
+            shown(&app, "CharacterSelect")
+                && !shown(&app, "RealmList")
+                && !shown(&app, "RealmWizard"),
+            "{run:?}: the character screen stands alone"
+        );
+        assert_eq!(
+            vm(&app)
+                .cvar(crate::glue_session::realm::CVAR_REALM_NAME)
+                .as_deref(),
+            Some(want),
+            "{run:?}"
+        );
+        assert_eq!(realmd.logons(), 1, "{run:?}: dialled on the logon's link");
+    }
 }
 
 // ── The character screen's roster over the IO thread and a fake world server ────────────────────
@@ -3203,7 +3341,7 @@ fn showing_the_screen_then_changing_realm_asks_the_old_link_once() {
         assert_eq!(vm(&app).errors(), Vec::<String>::new(), "round {round}");
         assert_eq!(
             vm(&app)
-                .cvar(crate::realm_select::CVAR_REALM_NAME)
+                .cvar(crate::glue_session::realm::CVAR_REALM_NAME)
                 .as_deref(),
             Some("Bravo")
         );
@@ -4019,7 +4157,7 @@ fn entry_app(refuse: bool) -> (App, fake::World) {
     }
     // The registry as the player left it: the realm, and the agreements the login screen took.
     let mut cvars = crate::cvars::Cvars::default();
-    cvars.set(crate::realm_select::CVAR_REALM_NAME, "Alpha");
+    cvars.set(crate::glue_session::realm::CVAR_REALM_NAME, "Alpha");
     cvars.set("readTOS", "1");
     cvars.set("readEULA", "1");
     {

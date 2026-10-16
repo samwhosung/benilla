@@ -8,10 +8,11 @@
 //! The IO thread publishes the list from two parks (`crate::net::io`), the logon park and the
 //! character park, and takes one answer. The policy, in order:
 //!
-//! 1. `WOW_REALM`, matched case-insensitively; a name not on the list falls through.
+//! 1. `WOW_REALM` ([`RunModeRealm`]), matched case-insensitively; a name not on the list falls
+//!    through.
 //! 2. The realm this session is on, so an unattended reconnect returns to it.
 //! 3. The remembered realm, the persisted `realmName` CVar.
-//! 4. An unattended run (`crate::run_mode::unattended`) takes the first realm that is up.
+//! 4. An unattended run ([`RunModeRealm`]) takes the first realm that is up, in drawn order.
 //! 5. Otherwise the dialog.
 //!
 //! Change Realm costs a world dial, not a login. `RequestRealmList` (`0x46ecf0` -> `0x46b8d0`)
@@ -20,7 +21,8 @@
 //! chosen. So the character park serves the list in place and Cancel there does nothing.
 //!
 //! Under `WOW_GLUE_STOCK=1` the stock `RealmList` and its verbs take the list instead
-//! ([`crate::ui_script::glue_mgr`]), and this policy stands down.
+//! ([`crate::ui_script::glue_mgr`]), and this policy stands down; the stock connect takes the same
+//! [`RunModeRealm`].
 
 mod category;
 mod input;
@@ -34,13 +36,10 @@ pub(crate) use input::keys as list_keys;
 
 use bevy::prelude::*;
 
+use crate::glue_session::realm::{is_down, RealmTables, RunModeRealm, CVAR_REALM_NAME};
 use crate::net::{RealmChoice, RealmListMessage, RealmRequest};
 use benilla_formats::{RealmCategory, RealmConfigs};
 use benilla_protocol::RealmInfo;
-
-/// The persisted 1.12 CVar naming the last realm connected to (`0x83f2d0`); the SavedVariables
-/// path (`0x8539a8`) is built from it.
-pub(crate) const CVAR_REALM_NAME: &str = "realmName";
 
 /// `REALM_LIST_REFRESH_TIME` (`RealmList.lua:3`): the re-request interval while the
 /// dialog is up.
@@ -53,11 +52,11 @@ pub(crate) struct Realms {
     pub(super) realms: Vec<RealmInfo>,
     /// The highlighted row by realm name, so a refresh that adds or drops a realm cannot move it.
     selected: Option<String>,
-    /// The client Region's categories ([`category`]), read once at startup; `None` until then,
-    /// and every realm lists untabbed.
+    /// The client Region's categories ([`category`]), copied from [`RealmTables`] once read;
+    /// `None` until then, and every realm lists untabbed.
     pub(super) categories: Option<Vec<RealmCategory>>,
-    /// `Cfg_Configs.dbc`, the realm types ([`Self::pvp_rp`]), read once at startup; empty until
-    /// then, and every type reads Normal.
+    /// `Cfg_Configs.dbc`, the realm types ([`Self::pvp_rp`]), copied from [`RealmTables`] once
+    /// read; empty until then, and every type reads Normal.
     pub(super) types: RealmConfigs,
     /// The tab in front, `RealmList.selectedCategory`: a 1-based ordinal over the categories
     /// holding a realm.
@@ -83,9 +82,6 @@ pub(crate) struct Realms {
     current: Option<String>,
     /// Seconds until the next refresh request.
     refresh_in: f32,
-    /// `WOW_REALM`, read once.
-    env_realm: Option<String>,
-    env_read: bool,
 }
 
 /// One of the four sort columns, `SortRealms`' string argument.
@@ -188,44 +184,9 @@ impl Realms {
         rows
     }
 
-    /// The client Region's categories and the realm types, as the stock glue's realm verbs read
-    /// them; no categories until the DBC is read.
-    pub(crate) fn glue_setup(
-        &self,
-    ) -> (
-        Vec<benilla_ui::script::GlueRealmCategory>,
-        Vec<benilla_ui::script::GlueRealmType>,
-    ) {
-        let categories = self
-            .categories
-            .iter()
-            .flatten()
-            .map(|c| benilla_ui::script::GlueRealmCategory {
-                id: c.id,
-                name: c.name.clone(),
-            })
-            .collect();
-        let types = self
-            .types
-            .rows()
-            .iter()
-            .map(|t| benilla_ui::script::GlueRealmType {
-                realm_type: t.realm_type,
-                pvp: t.pvp,
-                rp: t.rp,
-            })
-            .collect();
-        (categories, types)
-    }
-
     /// A realm type's `(pvp, rp)` in `Cfg_Configs.dbc`, `(false, false)` for a type with no row.
     pub(crate) fn pvp_rp(&self, realm_type: u32) -> (bool, bool) {
-        load::pvp_rp(&self.types, realm_type)
-    }
-
-    /// A realm type's `PlayerKillingAllowed`, `None` for a type with no row.
-    pub(crate) fn row_pvp(&self, realm_type: u32) -> Option<bool> {
-        self.types.get(realm_type).map(|c| c.pvp)
+        crate::glue_session::realm::pvp_rp(&self.types, realm_type)
     }
 
     /// The load distribution, over every realm, not the selected category: `0x46e510` walks the
@@ -301,38 +262,26 @@ impl Realms {
 
 #[cfg(test)]
 impl Realms {
-    /// A US client's state at startup, read without an install: Region 1's two categories and the
-    /// shipped `Cfg_Configs.dbc` types 0, 1, 6 and 8.
+    /// A US client's state at startup, read without an install ([`RealmTables::us_client`]).
     pub(crate) fn us_client() -> Realms {
-        let ty = |realm_type, pvp, rp| benilla_formats::RealmConfig {
-            realm_type,
-            pvp,
-            rp,
-        };
+        let tables = RealmTables::us_client();
         Realms {
-            categories: Some(category::tests::us()),
-            types: RealmConfigs::from_rows(vec![
-                ty(0, false, false),
-                ty(1, true, false),
-                ty(6, false, true),
-                ty(8, true, true),
-            ]),
+            categories: tables.categories,
+            types: tables.types,
             ..Realms::default()
         }
     }
 }
 
-/// `GetRealmInfo`'s `realmDown`: flag bit 0x02 of the record's flags byte (`+0x08`, `0x46ef83`),
-/// greyed and not enterable. The reference's own pick, `SetPreferredInfo`'s `0x46ea20`, skips only
-/// bit 0x01 (`0x46ea7c`), so it can suggest a realm that is down; `auto_answer` skipping one is
-/// benilla's policy ladder, not the reference's.
-pub(crate) fn is_down(realm: &RealmInfo) -> bool {
-    realm.flags & 0x02 != 0
-}
-
 /// `GetRealmInfo`'s `invalidRealm`: flag bit 0x01, painted red but still enterable.
 pub(super) fn is_invalid(realm: &RealmInfo) -> bool {
     realm.flags & 0x01 != 0
+}
+
+/// Copy the realm tables once read: the list's tabs and its type column read the copy.
+fn take_tables(tables: Res<RealmTables>, mut realms: ResMut<Realms>) {
+    realms.categories.clone_from(&tables.categories);
+    realms.types = tables.types.clone();
 }
 
 /// Settle who owns this frame's input before the list or any glue screen reads it
@@ -356,9 +305,8 @@ impl Plugin for RealmSelectPlugin {
             // `shown` is written only in `Update`, so any slot here sees the frame's start.
             .add_systems(PreUpdate, take_input)
             .add_systems(
-                Startup,
-                (category::load_categories, load::load_realm_types)
-                    .after(benilla_assets::AssetSet::Open),
+                PreUpdate,
+                take_tables.run_if(resource_changed::<RealmTables>),
             )
             .add_systems(
                 Update,
@@ -402,13 +350,10 @@ fn apply_realm_policy(
     mut realms: ResMut<Realms>,
     choice: Res<RealmChoice>,
     cvars: Res<crate::cvars::Cvars>,
+    run: Res<RunModeRealm>,
     abandon: Option<Res<crate::net::LoginAbandon>>,
 ) {
     let generation = crate::net::LoginAbandon::now(abandon.as_deref());
-    if !realms.env_read {
-        realms.env_read = true;
-        realms.env_realm = std::env::var("WOW_REALM").ok().filter(|s| !s.is_empty());
-    }
     for msg in msgs.read() {
         // A query that got no answer leaves the list as it stands.
         if msg.failed {
@@ -435,11 +380,7 @@ fn apply_realm_policy(
         // A server that lists no realm gets the empty list, as the reference shows it once the
         // connect fails `REALM_LIST_REALM_NOT_FOUND` with no realm held (`0x46bf86` → `0x46c06e`):
         // no realm answers it.
-        match auto_answer(
-            &realms,
-            remembered.as_deref(),
-            crate::run_mode::unattended(),
-        ) {
+        match auto_answer(&realms, &run, remembered.as_deref()) {
             Some(name) => {
                 realms.select(&name);
                 realms.enter(&choice, name, generation);
@@ -451,36 +392,25 @@ fn apply_realm_policy(
 
 /// The realm that answers this list without the player, or `None` to show the dialog: the policy
 /// ladder in the module doc. Every arm requires the realm to be up.
-fn auto_answer(realms: &Realms, remembered: Option<&str>, unattended: bool) -> Option<String> {
-    // Case-insensitive: vmangos does not normalise realm names. `current` outranks the persisted
-    // CVar, which benilla writes only at world entry, so a logout before it still returns here.
-    let named = [
-        realms.env_realm.as_deref(),
-        realms.current.as_deref(),
-        remembered,
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(|want| {
-        realms
-            .realms
-            .iter()
-            .find(|r| r.name.eq_ignore_ascii_case(want) && !is_down(r))
-            .map(|r| r.name.clone())
-    });
-    named.or_else(|| {
-        // Nobody to click Okay: the first realm up, in drawn order.
-        unattended
-            .then(|| {
-                realms
-                    .rows()
-                    .into_iter()
-                    .map(|i| &realms.realms[i])
-                    .find(|r| !is_down(r))
-                    .map(|r| r.name.clone())
-            })
-            .flatten()
-    })
+fn auto_answer(realms: &Realms, run: &RunModeRealm, remembered: Option<&str>) -> Option<String> {
+    // `current` outranks the persisted CVar, which benilla writes only at world entry, so a logout
+    // before it still returns here.
+    let named = [run.named(), realms.current.as_deref(), remembered];
+    crate::glue_session::realm::first_named_up(&realms.realms, named.into_iter().flatten())
+        .map(|r| r.name.clone())
+        .or_else(|| {
+            // Nobody to click Okay: the first realm up, in drawn order.
+            run.unattended()
+                .then(|| {
+                    realms
+                        .rows()
+                        .into_iter()
+                        .map(|i| &realms.realms[i])
+                        .find(|r| !is_down(r))
+                        .map(|r| r.name.clone())
+                })
+                .flatten()
+        })
 }
 
 /// Change Realm: raise the dialog over character select and ask for a fresh list; the session is
@@ -536,7 +466,7 @@ mod tests {
     fn list(realms: Vec<RealmInfo>) -> Realms {
         Realms {
             realms,
-            categories: Some(category::tests::us()),
+            categories: RealmTables::us_client().categories,
             ..Realms::default()
         }
     }
@@ -714,20 +644,26 @@ mod tests {
 
     #[test]
     fn the_auto_answer_ladder_is_env_then_remembered_then_unattended() {
-        let mut r = list(vec![
+        let r = list(vec![
             realm("Alpha", 1, 0, 0, 0, 1.0),
             realm("Mu", 1, 0, 0, 0, 1.0),
         ]);
+        let (attended, unattended) = (
+            RunModeRealm::new(None, false),
+            RunModeRealm::new(None, true),
+        );
         assert_eq!(
-            auto_answer(&r, None, false),
+            auto_answer(&r, &attended, None),
             None,
             "attended: show the dialog"
         );
-        assert_eq!(auto_answer(&r, None, true).as_deref(), Some("Alpha"));
-        assert_eq!(auto_answer(&r, Some("mu"), false).as_deref(), Some("Mu"));
-        r.env_realm = Some("ALPHA".into());
+        assert_eq!(auto_answer(&r, &unattended, None).as_deref(), Some("Alpha"));
         assert_eq!(
-            auto_answer(&r, Some("Mu"), false).as_deref(),
+            auto_answer(&r, &attended, Some("mu")).as_deref(),
+            Some("Mu")
+        );
+        assert_eq!(
+            auto_answer(&r, &RunModeRealm::new(Some("ALPHA"), false), Some("Mu")).as_deref(),
             Some("Alpha"),
             "WOW_REALM outranks the remembered realm"
         );
@@ -740,11 +676,18 @@ mod tests {
             realm("Alpha", 1, 0, 0, 0, 1.0),
             realm("Mu", 1, 0, 0, 0, 1.0),
         ]);
-        assert_eq!(auto_answer(&r, None, false), None, "nothing to go on: ask");
-        r.current = Some("Mu".into());
-        assert_eq!(auto_answer(&r, None, false).as_deref(), Some("Mu"));
         assert_eq!(
-            auto_answer(&r, Some("Alpha"), false).as_deref(),
+            auto_answer(&r, &RunModeRealm::default(), None),
+            None,
+            "nothing to go on: ask"
+        );
+        r.current = Some("Mu".into());
+        assert_eq!(
+            auto_answer(&r, &RunModeRealm::default(), None).as_deref(),
+            Some("Mu")
+        );
+        assert_eq!(
+            auto_answer(&r, &RunModeRealm::default(), Some("Alpha")).as_deref(),
             Some("Mu"),
             "and it outranks the persisted realmName, which is the PREVIOUS session's"
         );
@@ -756,10 +699,16 @@ mod tests {
             realm("Down", 1, 0, 0x02, 0, 1.0),
             realm("Up", 1, 0, 0, 0, 1.0),
         ]);
-        assert_eq!(auto_answer(&r, Some("Gone"), false), None);
-        assert_eq!(auto_answer(&r, Some("Down"), false), None);
         assert_eq!(
-            auto_answer(&r, Some("Down"), true).as_deref(),
+            auto_answer(&r, &RunModeRealm::default(), Some("Gone")),
+            None
+        );
+        assert_eq!(
+            auto_answer(&r, &RunModeRealm::default(), Some("Down")),
+            None
+        );
+        assert_eq!(
+            auto_answer(&r, &RunModeRealm::new(None, true), Some("Down")).as_deref(),
             Some("Up"),
             "unattended skips the offline row rather than dialing it"
         );
@@ -773,6 +722,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<Realms>()
             .init_resource::<crate::cvars::Cvars>()
+            .init_resource::<RunModeRealm>()
             .insert_resource(RealmChoice(tx.into()))
             .add_message::<RealmListMessage>()
             .add_systems(Update, apply_realm_policy);
@@ -786,7 +736,10 @@ mod tests {
             app.world().resource::<Realms>().shown,
             "the empty list is up"
         );
-        assert_eq!(auto_answer(&list(Vec::new()), None, true), None);
+        assert_eq!(
+            auto_answer(&list(Vec::new()), &RunModeRealm::new(None, true), None),
+            None
+        );
     }
 
     /// Mode ascending is Normal, PvP, RP, RP-PvP: RP decides before PvP (`0x46e92c`-`0x46e978`).

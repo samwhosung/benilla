@@ -158,56 +158,15 @@ impl Realms {
     }
 }
 
-/// Read the client Region's category set once, after the archive chain opens.
-pub(super) fn load_categories(
-    mut realms: ResMut<Realms>,
-    assets: Option<Res<benilla_assets::WorldAssets>>,
-) {
-    use benilla_assets::LockRecover;
-    let Some(assets) = assets else {
-        return;
-    };
-    let mut chain = assets.chain.lock_recover();
-    let region = benilla_formats::client_region(&chain);
-    match benilla_formats::load_realm_categories(&mut chain, region) {
-        Ok(categories) => {
-            info!(
-                "realm list: Region {region}, categories {:?}",
-                categories
-                    .iter()
-                    .map(|c| (c.id, c.name.as_str()))
-                    .collect::<Vec<_>>()
-            );
-            if categories.is_empty() {
-                warn!(
-                    "realm list: Region {region} names no Cfg_Categories.dbc row, so every realm \
-                     lists on one untabbed page (the reference's Region is Wow.ini's [WoW Config] \
-                     Region)"
-                );
-            }
-            realms.categories = Some(categories);
-        }
-        Err(e) => warn!(
-            "realm list: Cfg_Categories.dbc failed to load, so every realm lists on one untabbed \
-             page: {e:#}"
-        ),
-    }
-}
-
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
 
-    fn cat(id: u32, name: &str) -> RealmCategory {
-        RealmCategory {
-            id,
-            name: name.into(),
-        }
-    }
-
     /// Region 1's rows, `Cfg_Categories.dbc` in file order.
     pub(in crate::realm_select) fn us() -> Vec<RealmCategory> {
-        vec![cat(1, "United States"), cat(5, "Oceanic")]
+        crate::glue_session::realm::RealmTables::us_client()
+            .categories
+            .expect("the US rows")
     }
 
     fn realm(name: &str, category: u8) -> RealmInfo {
@@ -233,15 +192,6 @@ pub(super) mod tests {
 
     fn names(r: &Realms) -> Vec<String> {
         r.rows().iter().map(|&i| r.realms[i].name.clone()).collect()
-    }
-
-    /// The US client reads its two categories from the install's own `Cfg_Categories.dbc`.
-    #[test]
-    fn the_us_categories_come_from_the_install() {
-        let data = benilla_formats::wow_data_or_skip!();
-        let mut chain = benilla_formats::open_chain(&data).expect("open chain");
-        let loaded = benilla_formats::load_realm_categories(&mut chain, 1).expect("DBC");
-        assert_eq!(loaded, us());
     }
 
     /// A category byte is an id, matched for equality: 1 and 5 are the two US tabs.
