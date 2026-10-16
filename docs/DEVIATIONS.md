@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 228
+- [benilla-app](#benilla-app): 216
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
@@ -87,11 +87,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - The shadow is gated on `InheritedVisibility`, though the reference draws one under an undrawn body (`0x48161d`), because benilla's exterior-scene election hides units the reference never loads, and their shadows would stay on the floor below. ([`src/blob_shadow.rs:27`](../crates/benilla-app/src/blob_shadow.rs#L27))
 
-#### char_select
-
-- No Script Memory dial, because there is no Lua heap cap here; no URL or update buttons, because launching a browser is an outward action (`## URL` shows in the tooltip); no security icon, because no installed addon carries `## Secure` honestly and it would always read insecure. ([`src/char_select/addons.rs:7`](../crates/benilla-app/src/char_select/addons.rs#L7))
-- `## URL` adds a line in place of the reference's launch button, because launching a browser is an outward action. ([`src/char_select/addons.rs:1407`](../crates/benilla-app/src/char_select/addons.rs#L1407))
-
 #### chat_bubble
 
 - Sizes ride the plates' damped diagonal basis (`plate_basis`), not the unbounded reference law, so bubble text and plate text keep one em at every window size. ([`src/chat_bubble.rs:23`](../crates/benilla-app/src/chat_bubble.rs#L23))
@@ -138,10 +133,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - It attaches at that clip's `$SHL`, where the reference attaches it at the draw's start, because it keys on the ranged slot's sheath so it arrives with the bow it feeds; the two are a few hundred ms apart in one clip and never seen apart. ([`src/entities/equipment/resolve.rs:453`](../crates/benilla-app/src/entities/equipment/resolve.rs#L453))
 - `Hold` is one repeating play where the reference re-arms it each pass with variation -1, a weighted random pick, because at most one `Spells\` model authors several variations. ([`src/entities/spell_fx/lifecycle.rs:11`](../crates/benilla-app/src/entities/spell_fx/lifecycle.rs#L11))
 
-#### glue
-
-- The edit box is 300 wide, not `GlueDialogEditBox`'s 130, because a realmlist is a hostname. ([`src/glue/dialog.rs:182`](../crates/benilla-app/src/glue/dialog.rs#L182))
-
 #### loading_screen
 
 - The wheel is swallowed, where the reference still zooms the hidden camera, because nothing should act through the screen. ([`src/loading_screen/input.rs:12`](../crates/benilla-app/src/loading_screen/input.rs#L12))
@@ -150,14 +141,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### local_state
 
 - The reference writes `Screenshots\\` inside the install, which benilla never writes to; the folder keeps the reference's name. ([`src/local_state.rs:378`](../crates/benilla-app/src/local_state.rs#L378))
-
-#### login
-
-- The Credits, Cinematics and TOS side of the reference screen is absent, because the screen keeps only what logging in needs. ([`src/login/mod.rs:5`](../crates/benilla-app/src/login/mod.rs#L5))
-- A dial that never opened a socket reads `AUTH_LOGIN_SERVER_NOT_FOUND` or `LOGIN_SERVER_DOWN` plus the address, because with an editable realmlist "Unable to connect" cannot tell a bad name from a server that is down. ([`src/login/mod.rs:200`](../crates/benilla-app/src/login/mod.rs#L200))
-- No URL button on the native screen, because `LaunchURL`'s whitelist (`0x85cc34`) names only Blizzard domains that no longer serve these pages. ([`src/login/mod.rs:249`](../crates/benilla-app/src/login/mod.rs#L249))
-- The reference prints the address, but those Blizzard pages no longer serve and a private realm's player is not served by them. ([`src/login/mod.rs:276`](../crates/benilla-app/src/login/mod.rs#L276))
-- The Credits, Cinematics and TOS buttons are absent, because the screen keeps only what logging in needs. ([`src/login/screen.rs:5`](../crates/benilla-app/src/login/screen.rs#L5))
 
 #### minimap
 
@@ -180,8 +163,8 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### net
 
 - The reference loads the world first and logs in after: the entry's first frame starts the load at the record's map and position (`0x401570`, called at `0x46c236`), and a later one, once its file reader is idle (`0x46c247`), sends the login (`0x46c272`). ([`src/net/io.rs:10`](../crates/benilla-app/src/net/io.rs#L10))
-- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:410`](../crates/benilla-app/src/net/io.rs#L410))
-- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1253`](../crates/benilla-app/src/net/io.rs#L1253))
+- The reference re-dials only from `RequestRealmList`, and only when the link is down (`[CLoginMgr+5]` clear, `0x5ab857` → `0x5b2200`), with the reconnect challenge (`0x5b2134`, `[Logon+0xc]`); the connect's query sends only on a link in state 6 (`0x5bc14c`) and otherwise nothing, leaving the screen on its connecting dialog for good. ([`src/net/io.rs:396`](../crates/benilla-app/src/net/io.rs#L396))
+- The reference's guard at `0x537e85` sends 0 whenever the write index is 0, one ping in sixteen; we send 0 only before the first pong, because the rest is an artefact of its index arithmetic that only the server stores. ([`src/net/io.rs:1156`](../crates/benilla-app/src/net/io.rs#L1156))
 - The reference places collision and culling by the raw facing, ours follow the display facing, because a capsule and a sphere barely change under rotation. ([`src/net/motion/facing.rs:9`](../crates/benilla-app/src/net/motion/facing.rs#L9))
 - The reference paces a self move through the same replay chain as a remote's, which would only delay a correction to our own pose. ([`src/net/motion/remote.rs:55`](../crates/benilla-app/src/net/motion/remote.rs#L55))
 - Its rate-limited hover climb (`0x636fa1`, 7 yd/s) is not reproduced, because the cache gate needs a pure function; it converges to this answer. ([`src/net/motion/spline.rs:568`](../crates/benilla-app/src/net/motion/spline.rs#L568))
@@ -207,14 +190,13 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### portrait
 
 - The auction house's `AuctionDressUpModel` draws the same one assembly, because the app's `TryOn`/`Dress` intents are not per-widget; the reference's two widgets each clone their own model. ([`src/portrait/dressup.rs:8`](../crates/benilla-app/src/portrait/dressup.rs#L8))
-- The authored 4:3 box is held instead, because the reference's diagonal law crops the character on wide panels and the GlueXML chrome holds its height at every width. ([`src/portrait/framing.rs:38`](../crates/benilla-app/src/portrait/framing.rs#L38))
 - A fixed neutral front-lit studio (`studio_light`) replaces the portrait bake's hard-coded rig (`0x525b10`: ambient 0.45 grey, white directional), because the studio is the look chosen for them. ([`src/portrait/light.rs:65`](../crates/benilla-app/src/portrait/light.rs#L65))
 - The round portraits bake at 256², not 64², because the 64² still is a resolution limit, not a look; and under a fixed studio light, not the ambient state, because that neutral light is the chosen portrait look (`light::BoothLight`). ([`src/portrait/mod.rs:16`](../crates/benilla-app/src/portrait/mod.rs#L16))
-- Only the four party slots hand over, capped at `Self::CAP`, instead of every portrait until `ClientDestroyGame` (`0x401ee0`), because a general cache would pay a texture per unit ever seen. ([`src/portrait/mod.rs:251`](../crates/benilla-app/src/portrait/mod.rs#L251))
-- This reads the window's aspect, not `gxResolution` (here only the windowed size) under `widescreen` (not registered), because fullscreen is the monitor's own size with no mode list, where the two agree. ([`src/portrait/mod.rs:566`](../crates/benilla-app/src/portrait/mod.rs#L566))
-- `boothHalfRate` is benilla's own CVar, because the reference draws its doll in the main pass and has no second view; a full-rate pass costs up to 7.6 ms a frame at 4K. ([`src/portrait/mod.rs:599`](../crates/benilla-app/src/portrait/mod.rs#L599))
-- The reference widget draws only its model; a body pane clears to near-black, the chosen look where nothing sits behind the pane. ([`src/portrait/mod.rs:837`](../crates/benilla-app/src/portrait/mod.rs#L837))
-- The reference probes a bake cache keyed by the record's display id (`0x525cb0`, `0xc0cea4`) before the stand-in, so a pet out of view keeps its face. benilla holds no such cache, and `PortraitBakes` is keyed by guid for the party slots alone: the stand-in shows. ([`src/portrait/mod.rs:1582`](../crates/benilla-app/src/portrait/mod.rs#L1582))
+- Only the four party slots hand over, capped at `Self::CAP`, instead of every portrait until `ClientDestroyGame` (`0x401ee0`), because a general cache would pay a texture per unit ever seen. ([`src/portrait/mod.rs:250`](../crates/benilla-app/src/portrait/mod.rs#L250))
+- This reads the window's aspect, not `gxResolution` (here only the windowed size) under `widescreen` (not registered), because fullscreen is the monitor's own size with no mode list, where the two agree. ([`src/portrait/mod.rs:565`](../crates/benilla-app/src/portrait/mod.rs#L565))
+- `boothHalfRate` is benilla's own CVar, because the reference draws its doll in the main pass and has no second view; a full-rate pass costs up to 7.6 ms a frame at 4K. ([`src/portrait/mod.rs:598`](../crates/benilla-app/src/portrait/mod.rs#L598))
+- The reference widget draws only its model; a body pane clears to near-black, the chosen look where nothing sits behind the pane. ([`src/portrait/mod.rs:836`](../crates/benilla-app/src/portrait/mod.rs#L836))
+- The reference probes a bake cache keyed by the record's display id (`0x525cb0`, `0xc0cea4`) before the stand-in, so a pet out of view keeps its face. benilla holds no such cache, and `PortraitBakes` is keyed by guid for the party slots alone: the stand-in shows. ([`src/portrait/mod.rs:1581`](../crates/benilla-app/src/portrait/mod.rs#L1581))
 
 #### quest_markers
 
@@ -225,12 +207,6 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### raid_marks
 
 - No depth write, as for the names, because blended sorting looks the same. ([`src/raid_marks.rs:14`](../crates/benilla-app/src/raid_marks.rs#L14))
-
-#### realm_select
-
-- No Region rows faults the reference on a NULL category (`0x46e5b8`); list all. ([`src/realm_select/category.rs:25`](../crates/benilla-app/src/realm_select/category.rs#L25))
-- The reference's X only cancels a pending realm query (`0x46ed10` -> `0x46b7e0`) and leaves the realmd link up; ours closes it as Cancel does, because the native login screen takes a new Login only once the attempt has ended. ([`src/realm_select/input.rs:167`](../crates/benilla-app/src/realm_select/input.rs#L167))
-- The reference shows the frame when `OPEN_REALM_LIST` arrives; ours shows at once against the list already in hand, so the click does not wait a round trip. ([`src/realm_select/mod.rs:424`](../crates/benilla-app/src/realm_select/mod.rs#L424))
 
 #### realmlist
 
@@ -423,10 +399,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 #### ui_script
 
 - The reference reads the install's `Interface\AddOns\`; benilla reads an install and does not live in one, so its addons live in its own state folder, and only there. ([`src/ui_script/addons.rs:264`](../crates/benilla-app/src/ui_script/addons.rs#L264))
-- The reference writes none (its file opens with a blank line); ours names the file, because players open this folder. ([`src/ui_script/addons.rs:752`](../crates/benilla-app/src/ui_script/addons.rs#L752))
+- The reference writes none (its file opens with a blank line); ours names the file, because players open this folder. ([`src/ui_script/addons.rs:697`](../crates/benilla-app/src/ui_script/addons.rs#L697))
 - The reference then re-reads the aspect (`0x492f13`), and on a change of 0.001 or more calls `0x491380`, which sets the reload trigger (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry` with it, because the window resizes freely and a reload on each resize would tear down every addon's state mid-play. ([`src/ui_script/extract/mod.rs:522`](../crates/benilla-app/src/ui_script/extract/mod.rs#L522))
 - The V-plate border is resampled sharp to the quad's physical size rather than GPU-magnified, so its 1 px bevel stays crisp; keyed by that size, so only a resize re-rasterises it. ([`src/ui_script/extract/mod.rs:1390`](../crates/benilla-app/src/ui_script/extract/mod.rs#L1390))
-- No signature or digest check (`0x46a90b`, `0x46a9d3`, `0x401560(9)`), so the chain's toc always loads and `FRAMES_LOADED` follows, because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/glue.rs:17`](../crates/benilla-app/src/ui_script/glue.rs#L17))
+- No signature or digest check (`0x46a90b`, `0x46a9d3`, `0x401560(9)`), so the chain's toc always loads and `FRAMES_LOADED` follows, because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/glue.rs:14`](../crates/benilla-app/src/ui_script/glue.rs#L14))
 - The reference's handler completes whichever operation is current; here only the character list's does, in state 3, and a reply of another cause (a roster nothing of the screen asked for) or of another link (before a realm change) completes nothing. ([`src/ui_script/glue_mgr.rs:1386`](../crates/benilla-app/src/ui_script/glue_mgr.rs#L1386))
 - The files are under `benilla-config/Logs/`, since the install is read-only. ([`src/ui_script/load_log.rs:5`](../crates/benilla-app/src/ui_script/load_log.rs#L5))
 - `FULLSCREEN_QUADS_RESEAT` re-sizes the full-screen quads, which the stock files size only in their OnLoads, because a resize here keeps the loaded UI and the blackout would stop short of the new screen. ([`src/ui_script/manifest.rs:64`](../crates/benilla-app/src/ui_script/manifest.rs#L64))
@@ -574,7 +550,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### events
 
-- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:670`](../crates/benilla-protocol/src/events.rs#L670))
+- `benilla::spell_mods` refuses an out-of-range pair, because the reference would overrun it. ([`src/events.rs:668`](../crates/benilla-protocol/src/events.rs#L668))
 
 #### examples
 
