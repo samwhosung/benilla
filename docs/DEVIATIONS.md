@@ -140,7 +140,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### local_state
 
-- The reference writes `Screenshots\\` inside the install, which benilla never writes to; the folder keeps the reference's name. ([`src/local_state.rs:378`](../crates/benilla-app/src/local_state.rs#L378))
+- The reference writes `Screenshots\\` inside the install, which benilla never writes to; the folder keeps the reference's name. ([`src/local_state.rs:382`](../crates/benilla-app/src/local_state.rs#L382))
 
 #### minimap
 
