@@ -210,6 +210,10 @@ impl super::UiScript {
         for (event, args) in pending {
             self.fire_event(&event, args);
         }
+        // The item tooltips the caches answered since the last tick rebuild (`0x52e530`).
+        for e in super::tooltip_item::build::answer_item_caches(&self.lua) {
+            self.push_error(e);
+        }
         self.resolve();
         self.update_walk(elapsed);
         self.resolve();

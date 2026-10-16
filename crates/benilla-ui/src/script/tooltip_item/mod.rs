@@ -14,14 +14,16 @@ use mlua::{Lua, MultiValue, Table, Value};
 
 use super::binding_abi::flag;
 use super::object::frame_handle_of;
-use super::tooltip::{append_line, clear, clear_silent, show_or_hide_empty};
+use super::tooltip::clear_silent;
 use super::{ItemTemplateView, Model};
 
+pub(in crate::script) mod build;
 pub(in crate::script) mod names;
 pub(in crate::script) mod render;
 
-use names::{quality_color, GRAY, WHITE};
-use render::{render_view, BuilderFlags};
+use build::{build_item, InFlight, ItemBuild, NameSource};
+use names::quality_color;
+use render::BuilderFlags;
 
 /// The body both compare bindings run (`0x536080`, `0x535d70`): walk `0x809200[InventoryType]`'s
 /// slots, skipping empty ones uncounted and ones whose worn item's class differs (`0x5d9f30`),
@@ -74,12 +76,29 @@ fn compare_against_worn(
     Ok(Value::Integer(1))
 }
 
-/// The cached template; a miss records the ask, and the hover's re-enter loop repaints on arrival.
+/// A compare's offered template; a miss asks with the tooltip as the answer's cookie (`0x5361ee`),
+/// so the answer rebuilds whatever item the tooltip keeps then.
+fn offered_view(
+    lua: &Lua,
+    h: crate::widget::FrameHandle,
+    item_id: u32,
+) -> Option<ItemTemplateView> {
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .item_cache_misses
+        .clear();
+    let v = view_of(lua, item_id);
+    build::keep_misses(&mut lua.app_data_mut::<Model>().expect("model app_data"), h);
+    v
+}
+
+/// The cached template; a miss records the ask and waits for its answer (`0x52b716`).
 fn view_of(lua: &Lua, item_id: u32) -> Option<ItemTemplateView> {
     let mut model = lua.app_data_mut::<Model>().expect("model app_data");
     let v = model.item_templates.get(&item_id).cloned();
     if v.is_none() && item_id != 0 {
         model.item_stat_asks.insert(item_id);
+        build::note_miss(&mut model, build::CacheWait::Template(item_id));
     }
     v
 }
@@ -245,38 +264,70 @@ pub(super) fn render_by_id(
     fb_name: Option<String>,
     fb_q: Option<u32>,
 ) -> mlua::Result<()> {
-    render_by_id_flagged(lua, this, item_id, fb_name, fb_q, None).map(|_| ())
+    let h = frame_handle_of(lua, this)?;
+    let in_flight = match fb_name {
+        Some(name) => InFlight::Name(name, quality_color(fb_q.unwrap_or(1))),
+        None => InFlight::Nothing,
+    };
+    build_item(
+        lua,
+        this,
+        h,
+        ItemBuild {
+            in_flight,
+            ..ItemBuild::new(item_id)
+        },
+    )
+    .map(|_| ())
 }
 
-/// [`render_by_id`] answering the item builder's return value (see [`render::render_view_flagged`]);
-/// a template still in flight answers false. `inst` is the live object the source holds, if any.
-pub(super) fn render_by_id_flagged(
+/// The player's own item of entry `item_id` through the builder, `inst` the object
+/// [`owned_instance`] found, if any; answers the builder's return value (see
+/// [`render::render_view_flagged`]), false while the template is in flight.
+pub(super) fn render_owned(
     lua: &Lua,
     this: &Table,
     item_id: u32,
-    fb_name: Option<String>,
-    fb_q: Option<u32>,
-    inst: Option<&render::ItemInstance>,
+    inst: Option<render::ItemInstance>,
 ) -> mlua::Result<bool> {
     let h = frame_handle_of(lua, this)?;
-    clear(lua, h);
-    let live = match view_of(lua, item_id) {
-        Some(v) => render::render_view_flagged(lua, this, &v, BuilderFlags::default(), inst)?,
-        None => {
-            if let Some(name) = fb_name {
-                append_line(
-                    lua,
-                    this,
-                    (name, quality_color(fb_q.unwrap_or(1))),
-                    None,
-                    false,
-                )?;
-            }
-            false
-        }
+    let names = inst.is_some().then_some(NameSource::Owned);
+    build_item(
+        lua,
+        this,
+        h,
+        ItemBuild {
+            inst,
+            names,
+            ..ItemBuild::new(item_id)
+        },
+    )
+}
+
+/// A block source with no name to wait on (a loot row, a roll): `inst`, its own name in the
+/// row's quality while the template is in flight.
+fn build_block(
+    lua: &Lua,
+    this: &Table,
+    h: crate::widget::FrameHandle,
+    item_id: u32,
+    inst: render::ItemInstance,
+    quality: Option<u32>,
+) -> mlua::Result<bool> {
+    let in_flight = match inst.name.clone() {
+        Some(name) => InFlight::Name(name, quality_color(quality.unwrap_or(1))),
+        None => InFlight::Nothing,
     };
-    show_or_hide_empty(lua, h);
-    Ok(live)
+    build_item(
+        lua,
+        this,
+        h,
+        ItemBuild {
+            inst: Some(inst),
+            in_flight,
+            ..ItemBuild::new(item_id)
+        },
+    )
 }
 
 fn set_quest_item_view(
@@ -384,7 +435,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 return Ok(());
             };
             let h = frame_handle_of(lua, &this)?;
-            clear(lua, h);
             // The reference's format is `"%s|Hitem:%d:%d:%d:%d|h[%s]|h%s"` (`0x8549c8`), and
             // `SetHyperlink` (`0x532181`) parses it into a block (p6=1): the enchant id to slot 0
             // (`+0x3d0`), the roll to `+0x424` (expanded into slots 2..6 by `0x52b7bf`), the
@@ -392,28 +442,28 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             // lines, never the placeholder (`0x52cc33`). The name is the link's own, built with
             // the suffix joined (`0x5d8b00`). The enchant id is parsed, not rendered: naming it
             // needs its `SpellItemEnchantment` row, and no link benilla composes carries one.
+            // The block's creator and giver are zeroed (`0x5321ad`, `0x5321b3`), so a link never
+            // shows a maker line.
+            let name = link_name(&link).map(str::to_string);
             let inst = render::ItemInstance {
-                name: link_name(&link).map(str::to_string),
+                name: name.clone(),
                 enchants: roll_enchants(lua, roll),
                 ..Default::default()
             };
-            match view_of(lua, id) {
-                Some(v) => {
-                    render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?;
-                }
-                None => {
-                    if let Some(name) = link_name(&link) {
-                        append_line(
-                            lua,
-                            &this,
-                            (name.to_string(), quality_color(1)),
-                            None,
-                            false,
-                        )?;
-                    }
-                }
-            }
-            show_or_hide_empty(lua, h);
+            let in_flight = match name {
+                Some(name) => InFlight::Name(name, quality_color(1)),
+                None => InFlight::Nothing,
+            };
+            build_item(
+                lua,
+                &this,
+                h,
+                ItemBuild {
+                    inst: Some(inst),
+                    in_flight,
+                    ..ItemBuild::new(id)
+                },
+            )?;
             Ok(())
         })?,
     )?;
@@ -507,36 +557,35 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     currently_equipped,
                     name_only,
                 };
-                clear(lua, h);
-                let live = match view_of(lua, item_id) {
-                    Some(v) => render::render_view_flagged(lua, &this, &v, flags, Some(&inst))?,
-                    None => {
-                        // Template in flight: the header and the slot's own name, as
-                        // `SetBagItem`'s miss path.
-                        if flags.currently_equipped {
-                            if let Some(t) = crate::strings::global(lua, "CURRENTLY_EQUIPPED") {
-                                append_line(lua, &this, (t, GRAY), None, false)?;
-                            }
-                        }
-                        if let Some(name) = name {
-                            let color = if flags.name_only {
-                                WHITE
-                            } else {
-                                quality_color(quality.max(0) as u32)
-                            };
-                            append_line(lua, &this, (name, color), None, false)?;
-                        }
-                        false
-                    }
+                let duration_ms = inst.duration_ms;
+                // Template in flight: the header and the slot's own name, as `SetBagItem`'s
+                // miss path.
+                let in_flight = match name {
+                    Some(name) => InFlight::Name(name, quality_color(quality.max(0) as u32)),
+                    None => InFlight::Nothing,
                 };
-                show_or_hide_empty(lua, h);
+                let live = build_item(
+                    lua,
+                    &this,
+                    h,
+                    ItemBuild {
+                        flags,
+                        inst: Some(inst),
+                        in_flight,
+                        names: Some(NameSource::Inventory {
+                            unit: unit.clone(),
+                            slot,
+                        }),
+                        ..ItemBuild::new(item_id)
+                    },
+                )?;
                 Ok(MultiValue::from_vec(vec![
                     Value::Integer(1),
                     // hasCooldown is the builder's `[ebp-0x38]`, set by four lines: LOCKED, the
                     // temporary-enchant countdown, the item's duration (`0x52ce0d`) and
                     // ITEM_COOLDOWN_TIME (`0x52e140`). A template still in flight draws only the
                     // name, but the slot's own expiry still counts.
-                    flag(live || inst.duration_ms.is_some()),
+                    flag(live || duration_ms.is_some()),
                     Value::Integer(i64::from(repair_cost)),
                 ]))
             },
@@ -589,50 +638,28 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     None => return Ok(MultiValue::from_vec(vec![Value::Nil])),
                 }
             };
-            clear(lua, h);
-            let live = match view_of(lua, item_id) {
-                Some(v) => {
-                    let live = render::render_view_flagged(
-                        lua,
-                        &this,
-                        &v,
-                        BuilderFlags::default(),
-                        Some(&inst),
-                    )?;
-                    let (merchant_open, repairing) = {
-                        let model = lua.app_data_mut::<Model>().expect("model app_data");
-                        (model.merchant.is_some(), model.repair_mode)
-                    };
-                    if merchant_open && !repairing {
-                        if v.sell_price > 0 {
-                            fire_add_money(lua, h, u64::from(v.sell_price) * u64::from(count));
-                        } else if let Some(t) = crate::strings::global(lua, "ITEM_UNSELLABLE") {
-                            append_line(lua, &this, (t, WHITE), None, false)?;
-                        }
-                    }
-                    live
-                }
-                None => {
-                    // Deviation: while the template is in flight the reference leaves the tooltip
-                    // empty (`0x52b6a3`); this shows the slot's name, because a blank plate under
-                    // an on-screen name reads as broken. The re-enter loop repaints on arrival.
-                    if let Some(name) = link.as_deref().and_then(link_name) {
-                        append_line(
-                            lua,
-                            &this,
-                            (name.to_string(), quality_color(quality)),
-                            None,
-                            false,
-                        )?;
-                    }
-                    false
-                }
+            let duration_ms = inst.duration_ms;
+            // The template in flight shows the slot's name ([`InFlight`]).
+            let in_flight = match link.as_deref().and_then(link_name) {
+                Some(name) => InFlight::Name(name.to_string(), quality_color(quality)),
+                None => InFlight::Nothing,
             };
-            show_or_hide_empty(lua, h);
+            let live = build_item(
+                lua,
+                &this,
+                h,
+                ItemBuild {
+                    inst: Some(inst),
+                    in_flight,
+                    sell_count: Some(count),
+                    names: Some(NameSource::Bag { bag, slot }),
+                    ..ItemBuild::new(item_id)
+                },
+            )?;
             Ok(MultiValue::from_vec(vec![
                 // The builder's `[ebp-0x38]`: LOCKED, a countdown, the item's duration line, or a
                 // running cooldown (ITEM_COOLDOWN_TIME, `0x52e140`).
-                flag(live || inst.duration_ms.is_some()),
+                flag(live || duration_ms.is_some()),
                 Value::Integer(i64::from(repair_cost)),
             ]))
         })?,
@@ -659,7 +686,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 let Some(item) = item.filter(|i| i.item_id != 0) else {
                     return Ok(());
                 };
-                clear(lua, h);
                 let inst = render::ItemInstance {
                     name: item.name.clone(),
                     // The target side's block carries the partner's lock id (`0x534563`), wrapped
@@ -673,21 +699,21 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     flags: item.object_flags.unwrap_or(0),
                     ..Default::default()
                 };
-                match view_of(lua, item.item_id) {
-                    Some(v) => render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?,
-                    None => {
-                        if let Some(name) = item.name.clone() {
-                            append_line(
-                                lua,
-                                &this,
-                                (name, quality_color(item.quality.unwrap_or(1))),
-                                None,
-                                false,
-                            )?;
-                        }
-                    }
-                }
-                show_or_hide_empty(lua, h);
+                let in_flight = match item.name {
+                    Some(name) => InFlight::Name(name, quality_color(item.quality.unwrap_or(1))),
+                    None => InFlight::Nothing,
+                };
+                build_item(
+                    lua,
+                    &this,
+                    h,
+                    ItemBuild {
+                        inst: Some(inst),
+                        in_flight,
+                        names: Some(NameSource::Trade { player_side, slot }),
+                        ..ItemBuild::new(item.item_id)
+                    },
+                )?;
                 Ok(())
             })?,
         )?;
@@ -713,7 +739,6 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let Some(row) = row else {
                 return Ok(());
             };
-            clear(lua, h);
             // The row's app-composed name has the suffix joined, as `0x5d8b00` does; the lines
             // come from the roll id, the reference's `+0x424` (`0x52b7bf`).
             let inst = render::ItemInstance {
@@ -721,22 +746,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 enchants: roll_enchants(lua, row.random_property_id),
                 ..Default::default()
             };
-            match view_of(lua, row.item_id) {
-                Some(v) => render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?,
-                // Template in flight: the row's name, as `SetBagItem`'s miss path.
-                None => {
-                    if let Some(name) = row.name.clone() {
-                        append_line(
-                            lua,
-                            &this,
-                            (name, quality_color(row.quality.unwrap_or(1))),
-                            None,
-                            false,
-                        )?;
-                    }
-                }
-            }
-            show_or_hide_empty(lua, h);
+            build_block(lua, &this, h, row.item_id, inst, row.quality)?;
             Ok(())
         })?,
     )?;
@@ -762,27 +772,12 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let Some(entry) = entry else {
                 return Ok(());
             };
-            clear(lua, h);
             let inst = render::ItemInstance {
                 name: entry.name.clone(),
                 enchants: roll_enchants(lua, entry.random_property_id),
                 ..Default::default()
             };
-            match view_of(lua, entry.item_id) {
-                Some(v) => render_view(lua, &this, &v, BuilderFlags::default(), Some(&inst))?,
-                None => {
-                    if let Some(name) = entry.name.clone() {
-                        append_line(
-                            lua,
-                            &this,
-                            (name, quality_color(entry.quality.unwrap_or(1))),
-                            None,
-                            false,
-                        )?;
-                    }
-                }
-            }
-            show_or_hide_empty(lua, h);
+            build_block(lua, &this, h, entry.item_id, inst, entry.quality)?;
             Ok(())
         })?,
     )?;
@@ -841,7 +836,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 }) else {
                     return Ok(Value::Nil);
                 };
-                let Some(offered) = view_of(lua, item_id) else {
+                let Some(offered) = offered_view(lua, h, item_id) else {
                     return Ok(Value::Nil);
                 };
 
@@ -909,7 +904,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 }) else {
                     return Ok(Value::Nil);
                 };
-                let Some(offered) = view_of(lua, item_id) else {
+                let Some(offered) = offered_view(lua, h, item_id) else {
                     return Ok(Value::Nil);
                 };
                 compare_against_worn(lua, &this, h, &offered, left)
@@ -937,37 +932,35 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     list.get(index.saturating_sub(1)).cloned()
                 };
                 let Some(row) = row else { return Ok(()) };
-                clear(lua, h);
-                match view_of(lua, row.item_id) {
-                    Some(v) => {
-                        render_view(lua, &this, &v, BuilderFlags::default(), None)?;
-                        // Nothing to arm: the vendor tab's row seats `ShoppingTooltip1/2` itself
-                        // (`MerchantFrame.xml:67-80`), and the buyback tab seats none.
-                    }
-                    None => {
-                        // Template in flight: the row's own stat head as a minimal view, the
-                        // same deviation as `SetBagItem`'s miss path.
-                        let head = row.stats.unwrap_or_default();
-                        let v = ItemTemplateView {
-                            name: row.name.clone().unwrap_or_default(),
-                            quality: head.quality,
-                            class: head.class,
-                            subclass: head.subclass,
-                            inventory_type: head.inventory_type,
-                            damages: if head.dmg_max > 0.0 {
-                                vec![(head.dmg_min, head.dmg_max, head.dmg_type)]
-                            } else {
-                                Vec::new()
-                            },
-                            delay_ms: head.delay_ms,
-                            armor: head.armor,
-                            block: head.block,
-                            ..Default::default()
-                        };
-                        render_view(lua, &this, &v, BuilderFlags::default(), None)?;
-                    }
-                }
-                show_or_hide_empty(lua, h);
+                // Nothing to arm: the vendor tab's row seats `ShoppingTooltip1/2` itself
+                // (`MerchantFrame.xml:67-80`), and the buyback tab seats none. Template in
+                // flight: the row's own stat head as a minimal view ([`InFlight`]).
+                let head = row.stats.unwrap_or_default();
+                let in_flight = InFlight::View(Box::new(ItemTemplateView {
+                    name: row.name.clone().unwrap_or_default(),
+                    quality: head.quality,
+                    class: head.class,
+                    subclass: head.subclass,
+                    inventory_type: head.inventory_type,
+                    damages: if head.dmg_max > 0.0 {
+                        vec![(head.dmg_min, head.dmg_max, head.dmg_type)]
+                    } else {
+                        Vec::new()
+                    },
+                    delay_ms: head.delay_ms,
+                    armor: head.armor,
+                    block: head.block,
+                    ..Default::default()
+                }));
+                build_item(
+                    lua,
+                    &this,
+                    h,
+                    ItemBuild {
+                        in_flight,
+                        ..ItemBuild::new(row.item_id)
+                    },
+                )?;
                 Ok(())
             })?,
         )?;
@@ -993,24 +986,21 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if item_id == 0 {
                 return Ok(Value::Nil);
             }
-            clear(lua, h);
             // A block source (`0x5355fa`, p6=1) carrying the attachment's roll: no placeholder.
             let inst = render::ItemInstance {
                 name,
                 enchants: roll_enchants(lua, roll),
                 ..Default::default()
             };
-            let live = match view_of(lua, item_id) {
-                Some(v) => render::render_view_flagged(
-                    lua,
-                    &this,
-                    &v,
-                    BuilderFlags::default(),
-                    Some(&inst),
-                )?,
-                None => false,
-            };
-            show_or_hide_empty(lua, h);
+            let live = build_item(
+                lua,
+                &this,
+                h,
+                ItemBuild {
+                    inst: Some(inst),
+                    ..ItemBuild::new(item_id)
+                },
+            )?;
             Ok(flag(live))
         })?,
     )?;
@@ -1039,24 +1029,21 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             if item_id == 0 {
                 return Ok(Value::Nil);
             }
-            clear(lua, h);
             // A block source (`0x5359d9`, p6=1) carrying the listing's roll: no placeholder.
             let inst = render::ItemInstance {
                 name,
                 enchants: roll_enchants(lua, roll),
                 ..Default::default()
             };
-            let live = match view_of(lua, item_id) {
-                Some(v) => render::render_view_flagged(
-                    lua,
-                    &this,
-                    &v,
-                    BuilderFlags::default(),
-                    Some(&inst),
-                )?,
-                None => false,
-            };
-            show_or_hide_empty(lua, h);
+            let live = build_item(
+                lua,
+                &this,
+                h,
+                ItemBuild {
+                    inst: Some(inst),
+                    ..ItemBuild::new(item_id)
+                },
+            )?;
             Ok(flag(live))
         })?,
     )?;
@@ -1071,28 +1058,33 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             // The slot's item is a live object (`0x5357b4`, `0x5353a0`), so its LOCKED gate,
             // expiry and temporary enchants follow the bag slot it came from.
-            let (item_id, inst) = {
+            let (item_id, inst, names) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model.auction_sell_item.as_ref() {
-                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
-                    None => (0, None),
+                    Some(it) => {
+                        let inst = held_instance(&model, it.bag, it.slot);
+                        let names = inst.is_some().then_some(NameSource::Bag {
+                            bag: it.bag,
+                            slot: it.slot,
+                        });
+                        (it.item_id, inst, names)
+                    }
+                    None => (0, None, None),
                 }
             };
             if item_id == 0 {
                 return Ok(Value::Nil);
             }
-            clear(lua, h);
-            let live = match view_of(lua, item_id) {
-                Some(v) => render::render_view_flagged(
-                    lua,
-                    &this,
-                    &v,
-                    BuilderFlags::default(),
-                    inst.as_ref(),
-                )?,
-                None => false,
-            };
-            show_or_hide_empty(lua, h);
+            let live = build_item(
+                lua,
+                &this,
+                h,
+                ItemBuild {
+                    inst,
+                    names,
+                    ..ItemBuild::new(item_id)
+                },
+            )?;
             Ok(flag(live))
         })?,
     )?;
@@ -1106,28 +1098,33 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             let h = frame_handle_of(lua, &this)?;
             // The slot's item is a live object (`0x5357b4`, `0x5353a0`), so its LOCKED gate,
             // expiry and temporary enchants follow the bag slot it came from.
-            let (item_id, inst) = {
+            let (item_id, inst, names) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 match model.mail_send_item.as_ref() {
-                    Some(it) => (it.item_id, held_instance(&model, it.bag, it.slot)),
-                    None => (0, None),
+                    Some(it) => {
+                        let inst = held_instance(&model, it.bag, it.slot);
+                        let names = inst.is_some().then_some(NameSource::Bag {
+                            bag: it.bag,
+                            slot: it.slot,
+                        });
+                        (it.item_id, inst, names)
+                    }
+                    None => (0, None, None),
                 }
             };
             if item_id == 0 {
                 return Ok(Value::Nil);
             }
-            clear(lua, h);
-            let live = match view_of(lua, item_id) {
-                Some(v) => render::render_view_flagged(
-                    lua,
-                    &this,
-                    &v,
-                    BuilderFlags::default(),
-                    inst.as_ref(),
-                )?,
-                None => false,
-            };
-            show_or_hide_empty(lua, h);
+            let live = build_item(
+                lua,
+                &this,
+                h,
+                ItemBuild {
+                    inst,
+                    names,
+                    ..ItemBuild::new(item_id)
+                },
+            )?;
             Ok(flag(live))
         })?,
     )?;

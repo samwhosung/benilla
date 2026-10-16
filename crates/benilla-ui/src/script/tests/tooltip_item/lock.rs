@@ -238,8 +238,8 @@ fn a_key_lock_names_its_key_in_white_under_locked() {
     }
 }
 
-/// A key the item cache lacks adds nothing (`0x52bf67`) and is asked for, so the hover's repaint
-/// draws it on arrival.
+/// A key the item cache lacks adds nothing (`0x52bf67`) and is asked for, so the answer's rebuild
+/// draws it.
 #[test]
 fn a_key_the_cache_lacks_adds_no_line_and_is_asked_for() {
     let mut s = fixture(vec![key_slot(KEY)], Some(LockOpeners::default()));

@@ -268,6 +268,8 @@ fn clear_content(model: &mut Model, h: FrameHandle) {
     }
     // New content replaces a spell render still waiting on its view.
     model.spell_tooltip_waits.remove(&h);
+    // The clear zeroes the kept item entry (`0x5300dd`), so a cache answer rebuilds nothing.
+    model.item_builds.remove(&h);
 }
 
 /// The tooltip's `<name>StatusBar` health bar (`[+0x348]`), if it has one.

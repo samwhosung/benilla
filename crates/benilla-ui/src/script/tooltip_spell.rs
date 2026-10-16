@@ -927,15 +927,9 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     if let Some(inst) = owned.as_mut() {
                         inst.cooldown_ms = remaining_ms;
                     }
-                    let live = super::tooltip_item::render_by_id_flagged(
-                        lua,
-                        &this,
-                        a.action,
-                        None,
-                        None,
-                        owned.as_ref(),
-                    )?;
-                    Ok(flag(owned.is_some() && live))
+                    let found = owned.is_some();
+                    let live = super::tooltip_item::render_owned(lua, &this, a.action, owned)?;
+                    Ok(flag(found && live))
                 }
                 0x40 => {
                     let h = frame_handle_of(lua, &this)?;

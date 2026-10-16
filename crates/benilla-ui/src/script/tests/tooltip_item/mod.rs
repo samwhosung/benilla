@@ -201,4 +201,5 @@ mod cooldown;
 mod law;
 mod lock;
 mod mechanics;
+mod rebuild;
 mod set;

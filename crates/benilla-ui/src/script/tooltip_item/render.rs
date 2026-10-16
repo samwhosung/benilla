@@ -11,11 +11,12 @@ use crate::script::tooltip::{append_line, duration_text, plural_template};
 use crate::script::{ItemTemplateView, Model};
 use crate::strings::{fill, Arg};
 
+use super::build::{note_miss, unnamed_members, CacheWait};
 use super::names::*;
 
 /// What a source knows beyond the template: an item object's fields, or a block source's name and
 /// roll. A template source passes `None`.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(in crate::script) struct ItemInstance {
     /// The name with its random suffix joined, which the reference composes in the builder
     /// (`0x52b7bf`, `0x5d8b00` through `ITEM_SUFFIX_TEMPLATE`); `None` takes the template's.
@@ -70,7 +71,7 @@ pub(in crate::script) struct ItemInstance {
 
 impl ItemInstance {
     /// The wrapped test the builder runs once: the object's WRAPPED flag, or the block's word.
-    fn wrapped(&self) -> bool {
+    pub(super) fn wrapped(&self) -> bool {
         self.flags & 0x8 != 0 || self.block_wrapped
     }
 }
@@ -83,7 +84,7 @@ const SET_SPACER: &str = " \n";
 
 /// The builder's two independent render flags, p4 and p5 of `0x52b650`.
 #[derive(Clone, Copy, Default)]
-pub(super) struct BuilderFlags {
+pub(in crate::script) struct BuilderFlags {
     /// p5 `[arg+0x18]`: prepend the gray `CURRENTLY_EQUIPPED` line. Only the two compare bindings
     /// set it, and both pass [`name_only`](Self::name_only) zero.
     pub currently_equipped: bool,
@@ -119,12 +120,26 @@ pub(super) fn render_view_flagged(
             .spell_triggers
             .iter()
             .any(|&(t, id, _)| t == 6 && id != 0 && knows(id));
-        // The set view (a miss records the ask) and the equipped ids the set block counts.
+        // The set view and the equipped ids the set block counts. A miss records the ask, and a
+        // member still unnamed skips its line (`0x52df5a`); either waits for its answer.
         let set_view = (v.item_set != 0)
             .then(|| {
                 let view = model.item_sets.get(&v.item_set).cloned();
-                if view.is_none() {
-                    model.item_set_asks.insert(v.item_set);
+                let wait = match &view {
+                    None => {
+                        model.item_set_asks.insert(v.item_set);
+                        Some(CacheWait::Set(v.item_set))
+                    }
+                    Some(view) => match unnamed_members(view) {
+                        0 => None,
+                        unnamed => Some(CacheWait::SetMembers {
+                            set: v.item_set,
+                            unnamed,
+                        }),
+                    },
+                };
+                if let Some(wait) = wait {
+                    note_miss(&mut model, wait);
                 }
                 view
             })
@@ -167,7 +182,7 @@ pub(super) fn render_view_flagged(
     add((name, name_color))?;
     // The petition lines, below the name: a charter's `GUILD_CHARTER_*` pair or a petition's
     // `PETITION_*`, by the record's charter bit (`GetPetitionInfo`'s first return). A line whose
-    // source is unresolved waits for the repaint, as the creator line does.
+    // source is unresolved waits for its answer's rebuild, as the creator line does.
     if let Some(p) = inst.and_then(|i| i.petition.as_ref()) {
         let (title_key, creator_key) = if p.is_charter {
             ("GUILD_CHARTER_TITLE", "GUILD_CHARTER_CREATOR")
@@ -723,9 +738,8 @@ struct LockSubLine {
 /// skill slot (`0x52bdde`..`0x52be3d`). The first slot's type then picks the line under it
 /// (`0x52be5d`):
 /// - a key (1) names the key item from the item cache, in white, and nothing on a miss
-///   (`0x52bf30`..`0x52bfa1`); a miss asks for the template, and the line appears on a redraw,
-///   which benilla runs only where stock re-runs `OnEnter` (a bag hover does, the trade
-///   target's does not);
+///   (`0x52bf30`..`0x52bfa1`); a miss asks for the template with the tooltip as the answer's
+///   cookie (`0x52bf48`), and the answer rebuilds the tooltip;
 /// - a skill (2) walks the lock a second time (`0x52be98`) and names the lock type in the ramp's
 ///   colour for the last open-lock spell it tried, even one whose skill falls short; no known
 ///   opener of the type adds nothing (`0x52bea2`);
@@ -761,6 +775,7 @@ fn lock_lines(lua: &Lua, v: &ItemTemplateView, inst: Option<&ItemInstance>) -> O
                 let name = model.item_templates.get(&entry).map(|t| t.name.clone());
                 if name.is_none() && entry != 0 {
                     model.item_stat_asks.insert(entry);
+                    note_miss(model, CacheWait::Template(entry));
                 }
                 name.map(|arg| LockSubLine {
                     key: "LOCKED_WITH_ITEM",

@@ -1009,6 +1009,14 @@ pub(crate) struct Model {
     pub(crate) pet_spell_tooltip_asks: HashSet<u32>,
     /// The tooltips whose spell render missed its view, re-rendered when the app answers.
     pub(crate) spell_tooltip_waits: HashMap<FrameHandle, super::tooltip_spell::SpellWait>,
+    /// Each tooltip's last item build, kept until its next clear for the rebuild a cache answer
+    /// runs (`+0x380`..`+0x440`, `0x52e530`).
+    pub(crate) item_builds: HashMap<FrameHandle, super::tooltip_item::build::ItemBuild>,
+    /// The caches each tooltip's item builds missed, the answer's cookie; an answer is taken
+    /// whether or not the tooltip still keeps a build.
+    pub(crate) item_cache_waits: HashMap<FrameHandle, Vec<super::tooltip_item::build::CacheWait>>,
+    /// The misses of the item build under way, handed to its tooltip as it ends.
+    pub(crate) item_cache_misses: Vec<super::tooltip_item::build::CacheWait>,
     /// Every quest-log row as the app pushed it, each header followed by all its quests, which
     /// [`quest_log::fold`] folds into the visible [`Self::quest_log`].
     pub(crate) quest_log_rows: Vec<quest_log::QuestLogEntryView>,
@@ -1694,6 +1702,9 @@ impl Model {
             pet_spell_tooltips: HashMap::new(),
             pet_spell_tooltip_asks: HashSet::new(),
             spell_tooltip_waits: HashMap::new(),
+            item_builds: HashMap::new(),
+            item_cache_waits: HashMap::new(),
+            item_cache_misses: Vec::new(),
             quest_log_rows: Vec::new(),
             quest_log_collapsed: HashSet::new(),
             quest_log_selection_seed: None,
