@@ -80,7 +80,7 @@ use super::ExtractedQuad;
 /// `perm[k]` is the original index now at `k`. A run of at most 8 takes the selection sort
 /// (`0x73f87b`), which moves the first-found largest to the end; a longer one partitions about
 /// its middle element swapped to the front (`0x73f7a6`), keeping the shorter side on a stack.
-fn crt_qsort_into(keys: &[u64], v: &mut Vec<usize>, stack: &mut Vec<(usize, usize)>) {
+pub(super) fn crt_qsort_into(keys: &[u64], v: &mut Vec<usize>, stack: &mut Vec<(usize, usize)>) {
     v.clear();
     v.extend(0..keys.len());
     if v.len() < 2 {

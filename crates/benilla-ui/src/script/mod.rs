@@ -294,6 +294,7 @@ pub use quest::{
 pub use quest_log::{QuestLogDetail, QuestLogEntryView, QuestLogObjectiveView, QuestLogState};
 pub(crate) use region::{
     apply_font_parts, apply_wrap_attrs, implicit_creation_anchor_lua, install_loaded_texture,
+    load_texture_file,
 };
 pub use reputation::{FactionEntry, ReputationSend, ReputationState};
 pub use session::SessionRequest;

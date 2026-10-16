@@ -177,12 +177,15 @@ fn a_header_row_paints_its_fold_icon_and_folds_on_click() {
     assert_eq!(text_of(&mut s, "ReputationHeader1"), "Alliance");
     assert!(shown(&mut s, "ReputationHeader1"), "slot 1 is a header");
     assert!(!shown(&mut s, "ReputationBar1"), "so its bar is down");
+    // Lower-cased: the XML names `-UP` and the Lua `-Up`, one file, so the Lua call is a no-op
+    // (`0x770225`) and the texture keeps the spelling it loaded under.
     let icon = |s: &mut UiScript| {
         s.eval::<String>("return ReputationHeader1:GetNormalTexture():GetTexture() or \"\"")
             .unwrap()
+            .to_ascii_lowercase()
     };
     assert!(
-        icon(&mut s).contains("UI-MinusButton-Up"),
+        icon(&mut s).contains("ui-minusbutton-up"),
         "an expanded header wears the MINUS: {}",
         icon(&mut s)
     );
@@ -195,7 +198,7 @@ fn a_header_row_paints_its_fold_icon_and_folds_on_click() {
     click_center(&mut s, "ReputationHeader1");
 
     assert!(
-        icon(&mut s).contains("UI-PlusButton-Up"),
+        icon(&mut s).contains("ui-plusbutton-up"),
         "a collapsed header wears the PLUS: {}",
         icon(&mut s)
     );

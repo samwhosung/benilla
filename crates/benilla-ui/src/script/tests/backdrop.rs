@@ -578,11 +578,19 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                     b
                 };
                 let mut want = pieces(fr, &spec, eff);
-                // The edges share one texture in one BORDER batch, which its End sorts
-                // (`0x7731a0`): on equal keys the CRT's selection sort (`0x73f87b`) swaps the
-                // front to the end each pass, so the first piece draws last, the rest in order.
+                // The four sides (wrap flag on) and the four corners (off) are two textures in one
+                // BORDER batch, the sides' made first, which its End sorts (`0x7731a0`) by the CRT's
+                // selection sort (`0x73f87b`): it swaps the first-found largest to the end each
+                // pass, so equal keys come out rotated.
                 if let Some(first_edge) = want.iter().position(|p| !p.is_bg) {
-                    want[first_edge..].rotate_left(1);
+                    let keys: Vec<u64> = (0..want.len() - first_edge)
+                        .map(|k| u64::from(k >= 4))
+                        .collect();
+                    let (mut perm, mut stack) = (Vec::new(), Vec::new());
+                    crate::script::layer_batch::crt_qsort_into(&keys, &mut perm, &mut stack);
+                    let edges: Vec<_> =
+                        perm.iter().map(|&k| want[first_edge + k].clone()).collect();
+                    want.splice(first_edge.., edges);
                 }
                 let ctx = format!("shape {i} scale {scale} size {w}x{h}");
                 assert_eq!(quads.len(), want.len(), "{ctx}");
@@ -852,4 +860,63 @@ fn a_teardown_leaves_what_anchored_to_a_piece_in_place() {
         drawn(&s),
         "its anchor target is gone, and nothing re-resolved it"
     );
+}
+
+/// A backdrop loads its pieces' files with a wrap flag of its own (`0x770200`, second argument):
+/// the background's is its `tile` flag (`0x77e9f1`), a side's is 1 and a corner's 0
+/// (`0x77ea9e`..`0x77ec9c`, `0x77ed94`..`0x77f09e`); the pieces' texcoords play no part.
+#[test]
+fn backdrop_pieces_load_with_the_reference_wrap_flags() {
+    let mut s = script();
+    s.set_screen_size(800.0, 600.0);
+    s.run(
+        r#"
+        for i, tile in ipairs({ true, false }) do
+            local f = CreateFrame("Frame", "Wrapped" .. i)
+            f:SetPoint("TOPLEFT", nil, "TOPLEFT", 100 * i, -100)
+            f:SetWidth(200); f:SetHeight(100)
+            f:SetBackdrop({
+                bgFile = "bg" .. i, edgeFile = "edge" .. i, tile = tile,
+                tileSize = 16, edgeSize = 16,
+                insets = { left = 5, right = 5, top = 5, bottom = 5 },
+            })
+        end
+    "#,
+    )
+    .unwrap();
+    s.resolve();
+    let quads = s.extract();
+    for (i, tile) in [(1, true), (2, false)] {
+        let wraps = |file: String| -> Vec<(bool, bool)> {
+            quads
+                .iter()
+                .filter_map(|q| match (&q.content, q.rect) {
+                    (
+                        QuadContent::Texture {
+                            path: Some(p),
+                            wrap,
+                            ..
+                        },
+                        Some(r),
+                    ) if *p == file => {
+                        // A corner is one edge size square; a side is a strip.
+                        Some((r.width() == 16.0 && r.height() == 16.0, *wrap))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            wraps(format!("bg{i}")),
+            vec![(false, tile)],
+            "the background wraps with `tile = {tile}`"
+        );
+        let edges = wraps(format!("edge{i}"));
+        assert_eq!(edges.len(), 8);
+        assert_eq!(edges.iter().filter(|(corner, _)| *corner).count(), 4);
+        assert!(
+            edges.iter().all(|(corner, wrap)| *wrap == !*corner),
+            "sides wrap and corners clamp: {edges:?}"
+        );
+    }
 }

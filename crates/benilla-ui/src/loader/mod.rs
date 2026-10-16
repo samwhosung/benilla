@@ -889,6 +889,27 @@ pub(super) fn tex_coords_of(el: &Element) -> Option<(f32, f32, f32, f32)> {
     Some((edge("left")?, edge("right")?, edge("top")?, edge("bottom")?))
 }
 
+/// Whether an XML `<Texture>` loads its file with the wrap flag on: some `<TexCoords>` child has
+/// an edge below 0 or above 1 (`0x76fff0`-`0x77006b` set the flag at `0x770071`, which `0x77012d`
+/// passes to `0x770200`). An edge left out or empty keeps its default 0, 1, 0, 1 (`0x76fef5`),
+/// and a NaN fails both tests.
+pub(super) fn tex_coords_wrap(el: &Element) -> bool {
+    children_named(el, "TexCoords").any(|tc| {
+        [("left", 0.0), ("right", 1.0), ("top", 0.0), ("bottom", 1.0)]
+            .into_iter()
+            .any(|(k, default)| {
+                // Not `contains`: a NaN edge is in range here.
+                #[allow(clippy::manual_range_contains)]
+                let out_of_range = |edge: f32| edge < 0.0 || edge > 1.0;
+                let edge = tc
+                    .attr(k)
+                    .filter(|v| !v.is_empty())
+                    .map_or(default, crate::framexml::atof);
+                out_of_range(edge)
+            })
+    })
+}
+
 /// A `<FontHeight>`-style scalar: its `<AbsValue val=>` child, else its own `val=`.
 pub(super) fn abs_value(el: &Element) -> Option<f32> {
     let src = children_named(el, "AbsValue").next().unwrap_or(el);

@@ -331,6 +331,7 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
                  layer: DrawLayer,
                  (anchors, size): PieceLayout,
                  texture: Option<String>,
+                 wrap: bool,
                  tex_coords: Option<TexCoords>|
      -> Option<RegionHandle> {
         // `0x76fc40(frame, layer, 1)`: a Texture on the frame, linked at the tail (`0x76a750`).
@@ -348,12 +349,27 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
             },
         );
         if let Some(path) = texture {
-            model.set_texel(rh, TexSet::File(path));
+            model.set_texel(
+                rh,
+                if wrap {
+                    TexSet::WrapFile(path)
+                } else {
+                    TexSet::File(path)
+                },
+            );
         }
         Some(rh)
     };
     if spec.has_bg() {
-        pieces[0] = build(model, DrawLayer::Background, bg_layout(&spec), bg_art, None);
+        // The background loads with the tile flag as its wrap flag (`0x77e9f1`).
+        pieces[0] = build(
+            model,
+            DrawLayer::Background,
+            bg_layout(&spec),
+            bg_art,
+            spec.tile,
+            None,
+        );
     }
     if spec.has_border() {
         for (k, edge) in EDGES.into_iter().enumerate() {
@@ -366,6 +382,9 @@ pub(crate) fn install(model: &mut Model, fh: FrameHandle, spec: Option<Backdrop>
                 DrawLayer::Border,
                 edge_layout(edge, spec.edge_size),
                 edge_art.clone(),
+                // A side loads with the wrap flag on, a corner with it off (`0x77ea9e`..`0x77ec9c`,
+                // `0x77ed94`..`0x77f09e`): the sides' strips run their texcoords past [0, 1].
+                !corner,
                 corner.then(|| TexCoords::Corners(corner_uvs(edge))),
             );
         }

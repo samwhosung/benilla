@@ -22,6 +22,10 @@ pub(crate) struct TexSlot {
     path: Option<String>,
     fill: Option<[f32; 4]>,
     id: Option<TexId>,
+    /// The wrap flag the file loaded with (`0x770200`'s second argument, bits 3 and 4 of the
+    /// texture's flags word): the image repeats on both axes, else clamps. Fixed at load, never
+    /// by a later `SetTexCoord`.
+    wrap: bool,
 }
 
 impl TexSlot {
@@ -33,6 +37,11 @@ impl TexSlot {
     /// The solid fill (`SetTexture(r, g, b, a)`, `<Color>` with no `file=`).
     pub(crate) fn fill(&self) -> Option<[f32; 4]> {
         self.fill
+    }
+
+    /// Whether the file loaded with the wrap flag, so it repeats past [0, 1] on both axes.
+    pub(crate) fn wrap(&self) -> bool {
+        self.wrap
     }
 
     /// The texture's entry, `None` for an empty slot.
@@ -55,9 +64,15 @@ pub(crate) struct TexId(u32);
 pub(crate) enum TexSet {
     /// Empty: no file, no fill.
     None,
-    /// A file, shared by name; one the install lacks is the cache's solid green (`0x449e7c` →
-    /// `0x44a9c0` with `0xff00ff00` at `0x90582c`).
+    /// A file loaded with the wrap flag off, so it clamps: every `0x770200` caller but the XML
+    /// `<Texture>` loader and the backdrop's tiled background and sides. Shared by name and flag;
+    /// one the install lacks is the cache's solid green (`0x449e7c` → `0x44a9c0` with
+    /// `0xff00ff00` at `0x90582c`).
     File(String),
+    /// [`Self::File`] loaded with the wrap flag on, so it repeats: an XML `<Texture>` whose
+    /// `<TexCoords>` leave [0, 1] (`0x77012d`), a backdrop's sides and its tiled background
+    /// (`0x77ea9e`..`0x77ec9c`, `0x77e9f1`).
+    WrapFile(String),
     /// A solid fill, shared by colour.
     Fill([f32; 4]),
     /// A `SetPortraitToTexture` image, generated and shared by its exact name (the portrait cache
@@ -71,8 +86,9 @@ pub(crate) enum TexSet {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Key {
     /// The name with a four-byte `.xxx` extension dropped (`0x449590`), upper-cased: the lookup
-    /// compares with `_strnicmp` (`0x449eb0` → `0x64a4c0`).
-    File(Box<str>),
+    /// compares with `_strnicmp` (`0x449eb0` → `0x64a4c0`); and the wrap flag, part of the flags
+    /// the lookup matches (`0x449eb0`, `+0x18`).
+    File(Box<str>, bool),
     /// The packed colour, a byte a channel.
     Fill(u32),
     Portrait(Box<str>),
@@ -108,13 +124,21 @@ impl Texels {
     /// found or made, and the old one loses a holder. `missing` answers whether the install lacks a
     /// file (the host's texture probe).
     pub(crate) fn set(&mut self, slot: &mut TexSlot, set: TexSet, missing: impl Fn(&str) -> bool) {
+        let wrap = matches!(set, TexSet::WrapFile(_));
+        if let TexSet::File(p) | TexSet::WrapFile(p) = &set {
+            // The file the texture already shows answers 1 before any load (`0x770225`), so its
+            // wrap flag stays as it loaded, whatever the new call passes.
+            if self.holds_file(slot, p) {
+                return;
+            }
+        }
         let (path, fill, key) = match set {
             TexSet::None => (None, None, None),
-            TexSet::File(p) => {
+            TexSet::File(p) | TexSet::WrapFile(p) => {
                 let key = if missing(&p) {
                     Key::Fill(pack(MISSING_FILL))
                 } else {
-                    Key::File(cache_name(&p))
+                    Key::File(cache_name(&p), wrap)
                 };
                 (Some(p), None, Some(key))
             }
@@ -127,6 +151,7 @@ impl Texels {
         };
         slot.path = path;
         slot.fill = fill;
+        slot.wrap = matches!(key, Some(Key::File(_, true)));
         let same = match (slot.id, &key) {
             (Some(id), Some(k)) => *k != Key::Own && self.entries[id.0 as usize].key == *k,
             (None, None) => true,
@@ -140,6 +165,14 @@ impl Texels {
             self.drop_ref(old);
         }
         slot.id = new;
+    }
+
+    /// Whether `slot` shows the file `path` names, by the cache's name and not its flags: the
+    /// test `0x770200` makes first (`0x44ac70`, over the held texture's name).
+    pub(crate) fn holds_file(&self, slot: &TexSlot, path: &str) -> bool {
+        slot.id.is_some_and(|id| {
+            matches!(&self.entries[id.0 as usize].key, Key::File(n, _) if **n == *cache_name(path))
+        })
     }
 
     /// `slot`'s region is gone: its texture loses the holder.
@@ -175,7 +208,7 @@ impl Texels {
                 return TexId(i);
             }
         }
-        let file = matches!(key, Key::File(_));
+        let file = matches!(key, Key::File(..));
         let stamp = if file {
             0
         } else {
@@ -312,5 +345,33 @@ mod tests {
         t.set(&mut lost, TexSet::File("Nowhere".into()), |_| true);
         assert_eq!(green.id(), lost.id());
         assert_eq!(lost.path().as_deref(), Some("Nowhere"));
+    }
+
+    /// The cache matches the wrap flag with the name (`0x449eb0`): one file loaded both ways is
+    /// two textures, and a call for the file a slot already shows leaves its flag alone.
+    #[test]
+    fn the_wrap_flag_is_part_of_a_texture_and_survives_a_same_file_call() {
+        let mut t = Texels::default();
+        let (mut clamped, mut wrapped) = (TexSlot::default(), TexSlot::default());
+        let a = set(&mut t, &mut clamped, TexSet::File("Strip".into()));
+        let b = set(&mut t, &mut wrapped, TexSet::WrapFile("strip.blp".into()));
+        assert_ne!(clamped.id(), wrapped.id());
+        assert_ne!(a, b);
+        assert!(!clamped.wrap() && wrapped.wrap());
+        assert!(t.holds_file(&wrapped, "STRIP"));
+        assert!(!t.holds_file(&wrapped, "Other"));
+
+        // A clamped call for the shown file is a no-op, in either direction.
+        let id = wrapped.id();
+        set(&mut t, &mut wrapped, TexSet::File("Strip".into()));
+        assert!(wrapped.wrap() && wrapped.id() == id);
+        set(&mut t, &mut clamped, TexSet::WrapFile("Strip".into()));
+        assert!(!clamped.wrap());
+
+        // Another file takes the call's flag; clearing drops it with the image.
+        set(&mut t, &mut wrapped, TexSet::File("Other".into()));
+        assert!(!wrapped.wrap());
+        set(&mut t, &mut clamped, TexSet::None);
+        assert!(!t.holds_file(&clamped, "Strip"));
     }
 }

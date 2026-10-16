@@ -114,6 +114,10 @@ pub enum QuadContent {
         additive: bool,
         /// `None` is the full texture.
         tex_coords: Option<TexCoords>,
+        /// The wrap flag the file loaded with (`0x770200`, bits 3 and 4 of the texture's flags):
+        /// the sampler repeats on both axes, else clamps to the edge, whatever the coordinates
+        /// say now.
+        wrap: bool,
         /// A portrait, masked to the inscribed circle.
         circular: bool,
         /// A live unit portrait's unit: the renderer samples the app's bake of it instead of

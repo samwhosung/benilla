@@ -3100,3 +3100,207 @@ fn join_ref_resolves_relative_framexml_paths() {
     // A leading `/` re-roots rather than meaning the filesystem root.
     assert_eq!(join_ref("a/b", "/c.xml"), "c.xml");
 }
+
+/// A texture's wrap is fixed when its file loads (`0x770200`'s second argument), never from the
+/// coordinates it draws with later: the XML loader passes 1 only when its `<TexCoords>` leave
+/// [0, 1] (`0x77012d`), the Lua `SetTexture` always 0 (`0x79bda5`).
+mod texture_wrap_tests {
+    use crate::framexml;
+    use crate::loader::*;
+    use crate::script::{QuadContent, UiScript};
+
+    fn no_files(_: &str) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// A host holding one frame whose XML textures are `layers`, plus a Button with a
+    /// `<NormalTexture>` from `normal`.
+    fn host(layers: &str, normal: &str) -> UiScript {
+        let mut s = UiScript::new().unwrap();
+        s.set_screen_size(800.0, 600.0);
+        let doc = framexml::parse(&format!(
+            r#"<Ui>
+                <Frame name="WrapHost">
+                    <Size><AbsDimension x="100" y="100"/></Size>
+                    <Anchors><Anchor point="CENTER"/></Anchors>
+                    <Layers><Layer level="ARTWORK">{layers}</Layer></Layers>
+                </Frame>
+                <Button name="WrapBtn">
+                    <Size><AbsDimension x="40" y="20"/></Size>
+                    <Anchors><Anchor point="TOPLEFT"/></Anchors>
+                    {normal}
+                </Button>
+            </Ui>"#
+        ))
+        .expect("valid FrameXML");
+        let report = load(&s, &doc, &no_files);
+        assert!(report.errors.is_empty(), "errors: {:?}", report.errors);
+        s
+    }
+
+    /// The load-time wrap of the drawn quad whose path holds `file`.
+    fn wrap_of(s: &mut UiScript, file: &str) -> bool {
+        s.resolve();
+        let wraps: Vec<bool> = s
+            .extract()
+            .into_iter()
+            .filter_map(|q| match q.content {
+                QuadContent::Texture {
+                    path: Some(p),
+                    wrap,
+                    ..
+                } if p.contains(file) => Some(wrap),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(wraps.len(), 1, "one quad draws {file}: {wraps:?}");
+        wraps[0]
+    }
+
+    /// A Lua texture whose coordinates run far past [0, 1] clamps: the taxi map's route lines
+    /// (`TaxiFrame.lua:178`) stretch one texture over a long box and must not repeat.
+    #[test]
+    fn a_lua_texture_with_uvs_past_one_clamps() {
+        let mut s = host("", "");
+        s.run(
+            r#"local t = WrapHost:CreateTexture("LuaLine", "ARTWORK")
+            t:SetAllPoints(WrapHost)
+            t:SetTexture("Interface\\LuaLine")
+            t:SetTexCoord(-2.4, 3.4, 0, 1)"#,
+        )
+        .unwrap();
+        assert!(!wrap_of(&mut s, "LuaLine"));
+        s.run("LuaLine:SetTexCoord(0, 5, -1, 7)").unwrap();
+        assert!(!wrap_of(&mut s, "LuaLine"));
+    }
+
+    /// An XML `<Texture>` repeats exactly when one `<TexCoords>` edge is below 0 or above 1; an
+    /// edge left out keeps its default 0 or 1, and no `<TexCoords>` is no wrap.
+    #[test]
+    fn an_xml_texture_repeats_when_its_texcoords_leave_the_unit_square() {
+        let tex = |name: &str, tc: &str| {
+            format!(
+                r#"<Texture name="{name}" file="Interface\{name}"><Anchors><Anchor point="TOPLEFT"/></Anchors>{tc}</Texture>"#
+            )
+        };
+        let layers = [
+            tex(
+                "TcOut",
+                r#"<TexCoords left="0" right="2" top="0" bottom="1"/>"#,
+            ),
+            tex(
+                "TcNeg",
+                r#"<TexCoords left="0" right="1" top="-0.5" bottom="1"/>"#,
+            ),
+            tex(
+                "TcIn",
+                r#"<TexCoords left="0" right="0.453125" top="0" bottom="1"/>"#,
+            ),
+            tex(
+                "TcFlip",
+                r#"<TexCoords left="1" right="0" top="0" bottom="1"/>"#,
+            ),
+            tex("TcNone", ""),
+            tex("TcDefault", r#"<TexCoords right="1"/>"#),
+            tex("TcPartOut", r#"<TexCoords left="0.25" bottom="3"/>"#),
+        ]
+        .concat();
+        let mut s = host(&layers, "");
+        for (file, want) in [
+            ("TcOut", true),
+            ("TcNeg", true),
+            ("TcIn", false),
+            ("TcFlip", false),
+            ("TcNone", false),
+            ("TcDefault", false),
+            ("TcPartOut", true),
+        ] {
+            assert_eq!(wrap_of(&mut s, file), want, "{file}");
+        }
+    }
+
+    /// `SetTexCoord` leaves the flag where the load put it, in either direction.
+    #[test]
+    fn set_tex_coord_never_changes_the_wrap() {
+        let mut s = host(
+            r#"<Texture name="Tiled" file="Interface\Tiled"><Anchors><Anchor point="TOPLEFT"/></Anchors>
+                   <TexCoords left="0" right="4" top="0" bottom="1"/></Texture>
+               <Texture name="Strip" file="Interface\Strip"><Anchors><Anchor point="TOPLEFT"/></Anchors>
+                   <TexCoords left="0" right="1" top="0" bottom="1"/></Texture>"#,
+            "",
+        );
+        s.run("Tiled:SetTexCoord(0, 1, 0, 1) Strip:SetTexCoord(0, 4, 0, 1)")
+            .unwrap();
+        assert!(
+            wrap_of(&mut s, "Tiled"),
+            "a tiled texture shown whole stays repeating"
+        );
+        assert!(
+            !wrap_of(&mut s, "Strip"),
+            "a clamped one stretched past 1 stays clamped"
+        );
+    }
+
+    /// The binding loads with the flag off: a different file clamps, and the same file answers 1
+    /// before any load (`0x770225`), so the flag the XML load set survives, whatever the spelling.
+    #[test]
+    fn lua_set_texture_on_a_repeating_xml_texture() {
+        let mut s = host(
+            r#"<Texture name="Tiled" file="Interface\Tiled"><Anchors><Anchor point="TOPLEFT"/></Anchors>
+                   <TexCoords left="0" right="4" top="0" bottom="1"/></Texture>"#,
+            "",
+        );
+        assert!(wrap_of(&mut s, "Tiled"));
+        s.run(r#"Tiled:SetTexture("interface\\TILED.blp")"#)
+            .unwrap();
+        assert!(
+            wrap_of(&mut s, "Tiled"),
+            "the file it already shows is a no-op"
+        );
+        s.run(r#"Tiled:SetTexture("Interface\\Other")"#).unwrap();
+        assert!(
+            !wrap_of(&mut s, "Other"),
+            "another file loads with the flag off"
+        );
+        s.run(r#"Tiled:SetTexture("Interface\\Tiled")"#).unwrap();
+        assert!(
+            !wrap_of(&mut s, "Tiled"),
+            "…and so does coming back to the first"
+        );
+    }
+
+    /// Clearing or filling the texture drops the loaded image with its flag; the next file loads
+    /// with the binding's 0.
+    #[test]
+    fn clearing_or_filling_a_texture_drops_the_flag_with_the_image() {
+        let mut s = host(
+            r#"<Texture name="Tiled" file="Interface\Tiled"><Anchors><Anchor point="TOPLEFT"/></Anchors>
+                   <TexCoords left="0" right="4" top="0" bottom="1"/></Texture>"#,
+            "",
+        );
+        s.run("Tiled:SetTexture(nil)").unwrap();
+        s.run(r#"Tiled:SetTexture("Interface\\Tiled")"#).unwrap();
+        assert!(!wrap_of(&mut s, "Tiled"));
+        s.run(r#"Tiled:SetTexture(1, 0, 0, 1) Tiled:SetTexture("Interface\\Tiled")"#)
+            .unwrap();
+        assert!(!wrap_of(&mut s, "Tiled"));
+    }
+
+    /// A Button's state texture is an XML `<Texture>` too; `SetNormalTexture(path)` reloads it
+    /// through `0x770200` with the flag off (`0x778f3a`).
+    #[test]
+    fn a_button_state_texture_follows_the_same_rule() {
+        let mut s = host(
+            "",
+            r#"<NormalTexture file="Interface\BtnTiled">
+                   <TexCoords left="0" right="3" top="0" bottom="1"/></NormalTexture>"#,
+        );
+        assert!(wrap_of(&mut s, "BtnTiled"));
+        s.run(r#"WrapBtn:SetNormalTexture("Interface\\BtnTiled")"#)
+            .unwrap();
+        assert!(wrap_of(&mut s, "BtnTiled"), "the same file keeps its load");
+        s.run(r#"WrapBtn:SetNormalTexture("Interface\\BtnOther")"#)
+            .unwrap();
+        assert!(!wrap_of(&mut s, "BtnOther"));
+    }
+}

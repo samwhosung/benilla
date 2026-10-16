@@ -290,19 +290,13 @@ pub fn portrait_image(width: u32, height: u32, mut rgba: Vec<u8>) -> Image {
     sprite_image(width, height, rgba)
 }
 
-/// [`sprite_image`] wrapping on both axes, for a frame `Backdrop`, whose `SetTexture` pushes one
-/// argument twice into the load descriptor (`0x770200`), read as U and V wrap but not traced to
-/// the sampler: an edge strip runs UVs `[0..N]` (N = frame side / edgeSize − 2) and a tiled
-/// background `[0..w/period]` (`0x77e8d0`, `0x77f0c0`). The edge strips are atlas crops kept off
-/// the image edge by half a texel, so their bounded axis does not bleed.
+/// [`sprite_image`] repeating on both axes: a texture loaded with the wrap flag (`0x770200`'s
+/// second argument), which `0x58a980` puts in bits 3 and 4 of the flags word as wrap in U and in
+/// V, and the samplers read as `ADDRESSU` and `ADDRESSV` (`0x5a29d0`). The reference sets it for a
+/// backdrop's sides and tiled background and for an XML `<Texture>` whose `<TexCoords>` leave
+/// [0, 1]. An edge strip is an atlas crop kept off the image edge by half a texel, so its bounded
+/// axis does not bleed.
 pub fn sprite_image_tiled(width: u32, height: u32, rgba: Vec<u8>) -> Image {
-    sprite_image_wrapped(width, height, rgba, (true, true))
-}
-
-/// [`sprite_image`] with `Repeat` on the axes `wrap` names and clamp elsewhere. The reference's
-/// `SetTexCoord(0, n, 0, 1)` strips tile along one axis only; repeat on the bounded axis would
-/// filter the last row into the first as a hairline along the strip's edge.
-pub fn sprite_image_wrapped(width: u32, height: u32, rgba: Vec<u8>, wrap: (bool, bool)) -> Image {
     let mut image = Image::new(
         Extent3d {
             width,
@@ -314,16 +308,9 @@ pub fn sprite_image_wrapped(width: u32, height: u32, rgba: Vec<u8>, wrap: (bool,
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
-    let mode = |repeat: bool| {
-        if repeat {
-            ImageAddressMode::Repeat
-        } else {
-            ImageAddressMode::ClampToEdge
-        }
-    };
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: mode(wrap.0),
-        address_mode_v: mode(wrap.1),
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
         mag_filter: ImageFilterMode::Linear,
         min_filter: ImageFilterMode::Linear,
         ..default()
@@ -562,21 +549,7 @@ mod wrap_tests {
     }
 
     #[test]
-    fn a_one_axis_tile_wraps_that_axis_and_clamps_the_other() {
-        let img = sprite_image_wrapped(2, 2, vec![0; 16], (true, false));
-        assert_eq!(
-            modes(&img),
-            (ImageAddressMode::Repeat, ImageAddressMode::ClampToEdge)
-        );
-        let img = sprite_image_wrapped(2, 2, vec![0; 16], (false, true));
-        assert_eq!(
-            modes(&img),
-            (ImageAddressMode::ClampToEdge, ImageAddressMode::Repeat)
-        );
-    }
-
-    #[test]
-    fn the_tiled_sprite_still_wraps_both_axes() {
+    fn the_tiled_sprite_wraps_both_axes() {
         let img = sprite_image_tiled(2, 2, vec![0; 16]);
         assert_eq!(
             modes(&img),

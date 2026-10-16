@@ -438,7 +438,7 @@ mod layout;
 mod paint;
 mod text;
 
-pub(crate) use paint::orientation;
+pub(crate) use paint::{load_texture_file, orientation};
 
 fn install_region_methods(lua: &Lua) -> mlua::Result<()> {
     let m = lua.create_table()?;

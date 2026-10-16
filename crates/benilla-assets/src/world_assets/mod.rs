@@ -331,8 +331,8 @@ impl<K: Eq + std::hash::Hash> Opened<K> {
 struct SpriteCaches {
     /// UI sprites by [`sprite_key`].
     sprites: Opened<String>,
-    /// UI sprites by key and per-axis wrap, since the sampler bakes into the `Image`.
-    tiled: Opened<(String, bool, bool)>,
+    /// UI sprites loaded with the wrap flag, by key: the sampler bakes into the `Image`.
+    tiled: Opened<String>,
     /// Sprites resampled to an exact physical size, by `(path, w, h)`, always opened loose.
     resampled: HashMap<(String, u32, u32), Option<Handle<Image>>>,
     /// The decoded pixels behind [`Self::resampled`], so a resize does not re-decode.
@@ -372,7 +372,7 @@ impl SpriteCaches {
         let stays =
             |key: &str, hit: bool| hit && !normalize_path(key).contains("interface\\addons\\");
         self.sprites.retain(|k, _, hit| stays(k, hit));
-        self.tiled.retain(|k, _, hit| stays(&k.0, hit));
+        self.tiled.retain(|k, _, hit| stays(k, hit));
         self.resampled.retain(|k, v| stays(&k.0, v.is_some()));
         self.resample_sources.retain(|k, v| stays(k, v.is_some()));
         self.portraits.retain(|k, _, hit| stays(k, hit));
@@ -551,20 +551,19 @@ impl WorldAssets {
         made
     }
 
-    /// A UI sprite repeating on the axes `wrap` names ([`sprite_image_wrapped`]).
+    /// A UI sprite loaded with the wrap flag, repeating on both axes ([`sprite_image_tiled`]).
     pub fn sprite_texture_wrapped(
         &mut self,
         path: &str,
-        wrap: (bool, bool),
         images: &mut Assets<Image>,
     ) -> Option<Handle<Image>> {
         self.sync_loose();
-        let key = (sprite_key(path), wrap.0, wrap.1);
+        let key = sprite_key(path);
         if let Some(cached) = self.cache.tiled.get(&key) {
             return cached;
         }
         let loaded = decode_sprite(&self.chain, &self.loose, path, LooseOpen::Index)
-            .map(|(w, h, rgba)| images.add(sprite_image_wrapped(w, h, rgba, wrap)));
+            .map(|(w, h, rgba)| images.add(sprite_image_tiled(w, h, rgba)));
         let open = loose_open_for(path, LooseOpen::Index);
         self.cache.tiled.insert(key, open, loaded.clone());
         loaded
@@ -1072,8 +1071,7 @@ mod tests {
         c.sprites.insert("miss".into(), LooseOpen::Index, None);
         c.sprites
             .insert("sun".into(), LooseOpen::Archives, hit.clone());
-        c.tiled
-            .insert(("ui".into(), true, false), LooseOpen::Index, hit.clone());
+        c.tiled.insert("ui".into(), LooseOpen::Index, hit.clone());
         c.portraits
             .insert("p".into(), LooseOpen::Index, hit.clone());
         c.masks
@@ -1088,7 +1086,7 @@ mod tests {
         assert!(c.sprites.get(&"ui".to_string()).is_none());
         assert!(c.sprites.get(&"miss".to_string()).is_none());
         assert!(c.sprites.get(&"sun".to_string()).is_some());
-        assert!(c.tiled.get(&("ui".into(), true, false)).is_none());
+        assert!(c.tiled.get(&"ui".to_string()).is_none());
         assert!(c.portraits.get(&"p".to_string()).is_none());
         assert!(c.masks.get(&"mask".to_string()).is_some());
         assert!(c.resampled.is_empty());

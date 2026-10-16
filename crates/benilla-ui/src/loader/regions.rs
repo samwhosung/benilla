@@ -3,7 +3,7 @@ use mlua::{ObjectLike, Table};
 use crate::framexml::{self, Element};
 use crate::status;
 
-use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, Loader};
+use super::{abs_dim, abs_value, children_named, color_of, tex_coords_of, tex_coords_wrap, Loader};
 
 /// Whether a region reads its own font attributes, the reference's `FONTSTRING+0x12c`: set by the
 /// ctor (`0x770de7`) and cleared only on a Button's `<NormalText>` (`0x778b7b`), whose string then
@@ -295,7 +295,14 @@ impl Loader<'_> {
             if let Some(file) = region.attr("file") {
                 // A `<Color>` beside `file=` is discarded, not a tint: `0x76fe20` applies it in its
                 // child loop, then the file, read after (`0x770102`), overwrites the same slot.
-                self.call_region(region_wrapper, "SetTexture", file.to_string(), dbg);
+                // The wrap flag follows the element's own `<TexCoords>`, fixed here: a later
+                // `SetTexCoord` leaves it, and `SetTexture` loads with it off (`0x77012d`).
+                let wrap = tex_coords_wrap(region);
+                if let Err(e) =
+                    crate::script::load_texture_file(self.lua, region_wrapper, file, wrap)
+                {
+                    self.report.fault(format!("{dbg}: region SetTexture: {e}"));
+                }
             } else if let Some(c) = color {
                 // No file: a solid fill, an 8×8 texture in the reference, so its alpha multiplies
                 // with `SetVertexColor` rather than being replaced by it.

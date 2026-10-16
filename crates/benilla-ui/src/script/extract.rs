@@ -383,6 +383,7 @@ impl UiScript {
                         let fill = data.tex.fill();
                         let has_path = data.tex.path().is_some();
                         let has_texture = has_path || fill.is_some();
+                        let wrap = data.tex.wrap();
                         QuadContent::Texture {
                             path: std::mem::take(&mut data.tex).into_path(),
                             color: has_texture
@@ -398,6 +399,7 @@ impl UiScript {
                             // answer `GetBlendMode` but draw as straight alpha.
                             additive: data.blend == crate::script::BlendMode::Add,
                             tex_coords: data.tex_coords,
+                            wrap,
                             circular: data.circular,
                             portrait_unit: data.portrait_unit,
                             rotation: data.rotation,
