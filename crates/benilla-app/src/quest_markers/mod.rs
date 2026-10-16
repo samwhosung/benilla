@@ -514,6 +514,8 @@ pub(crate) struct QuestMarkersPlugin;
 
 impl Plugin for QuestMarkersPlugin {
     fn build(&self, app: &mut App) {
+        // After the Net stage: a run between the drain's spawns and the self tag would see the
+        // creatures but no self.
         app.add_systems(
             Update,
             (
@@ -523,7 +525,8 @@ impl Plugin for QuestMarkersPlugin {
                 pose_markers,
                 bake_seat_scale,
             )
-                .chain(),
+                .chain()
+                .after(benilla_world::schedule::WorldStage::Net),
         )
         .add_systems(
             PostUpdate,
