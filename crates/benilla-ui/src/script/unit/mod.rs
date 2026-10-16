@@ -388,8 +388,8 @@ impl super::UiScript {
         model.no_play_time = none;
     }
 
-    /// Push `GetBillingTimeRested()`'s minutes, from the `SMSG_AUTH_RESPONSE` that admitted the
-    /// session; nothing else on the wire writes it.
+    /// Push `GetBillingTimeRested()`'s minutes, from the last `SMSG_AUTH_RESPONSE` that carried the
+    /// billing group; nothing else on the wire writes it.
     pub fn set_billing_time_rested(&mut self, minutes: u32) {
         self.model_mut().billing_time_rested = minutes;
     }

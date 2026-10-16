@@ -370,7 +370,7 @@ pub(crate) fn load_ingame_ui_on_world_entry(world: &mut World) {
     // Before the load, as `0x48f590` runs before `0x48fbf0`: an addon's file scope sets the mask
     // after it, and a `/reload` never takes this step.
     crate::minimap::restore_default_mask(world);
-    // `InitializeGame` arms the play-time warning before it jumps to `UI_Init` (`0x48f630`).
+    // `InitializeGame` arms the play-time warning before it jumps to `UI_Init` (`0x48f636`-`0x48f681`).
     crate::ui_billing::arm_at_world_entry(world);
     load_ingame_ui_seated(world, LoadSeat::Roster);
 }

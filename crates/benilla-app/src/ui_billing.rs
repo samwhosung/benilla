@@ -1,5 +1,5 @@
 //! The play-time warning. Every world entry arms a deadline from the connection's billing minutes
-//! (`CGGameUI::InitializeGame`, `0x48f630`-`0x48f679`), and each frame of the in-game interface
+//! (`CGGameUI::InitializeGame`, `0x48f636`-`0x48f679`), and each frame of the in-game interface
 //! polls it (`CGGameUI::Update`, `0x495679`-`0x495826`): `BILLING_NAG_DIALOG` with the minutes left
 //! once they are 30 or fewer, and, while they are, a `BILLING_NAG_WARNING` system line on the second
 //! frame and then at each 5-minute mark, each minute from 5. An internet-cafe plan gets
@@ -45,7 +45,9 @@ pub(crate) enum Nag {
 }
 
 /// The poller's minutes left: `ceil(left · k)` over the zero-extended dword (`0x49569b`-`0x4956b2`),
-/// so a deadline already passed, which wraps, reads as some 71,000 minutes.
+/// so a deadline already passed, which wraps, reads as some 71,000 minutes. The product is an
+/// f64 one: the client runs the x87 at 53 bits (`0x404100`), so `fild` then `fmul dword` rounds
+/// as a double.
 fn minutes_left(left_ms: u32) -> u32 {
     (f64::from(left_ms) * f64::from(MINUTES_PER_MS)).ceil() as u32
 }
