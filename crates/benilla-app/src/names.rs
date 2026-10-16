@@ -115,12 +115,9 @@ impl NameKey {
     /// With a descriptor this is `0x609210` exactly: the pet number and entry are the unit's
     /// fields, not the guid's bits (a vmangos companion pet has a `HIGHGUID_PET` guid but
     /// `PETNUMBER` 0; a charmed creature has a `HIGHGUID_UNIT` guid and a pet number). Without
-    /// one, the unit is not streamed, and the only reference read is the combat-log namer's
-    /// (`0x6264e0`): for an F-prefixed guid it keys the creature cache by the 16-bit word at
-    /// guid bits 32-47 (`0x6265c4`-`0x6265e0`), never a pet number.
-    /// Deviation: an unstreamed guid is read as the servers benilla targets lay it out, a
-    /// 24-bit entry at bits 24-47 (`guid::entry`) and a `HIGHGUID_PET` guid's slot as the pet
-    /// number, right only for a permanent pet.
+    /// one, the unit is not streamed: an unstreamed creature takes its entry from guid bits
+    /// 24-47 (`guid::entry`), and a `HIGHGUID_PET` guid's slot is taken as the pet number, right
+    /// only for a permanent pet.
     fn of(guid_val: u64, unit: Option<&ObjectFields>) -> Option<Self> {
         if guid::is_player(guid_val) {
             return Some(Self::Player(guid_val));
@@ -156,14 +153,17 @@ impl NameCache {
         self.resolve_unit(guid_val, objects.store(guid_val), commands)
     }
 
-    /// [`Self::resolve`] for a guid that is a player by construction (a chat sender, a roster
-    /// member, an item's creator): a player is named by its guid whether or not it is streamed.
+    /// The player-name cache by guid, whatever the guid is: the reference's `0x55f080` on
+    /// `0xc0e228`, which names a chat speaker (`0x49d560`), the summoner (`GetSummonConfirmSummoner`, `0x48b6a0`)
+    /// and every roster, mail, auction and petition guid the server sends as a player's. A guid
+    /// no player owns is asked and never answered.
     pub(crate) fn resolve_player(&self, guid_val: u64, commands: &NetCommands) -> Option<&str> {
-        debug_assert!(
-            guid::is_player(guid_val),
-            "{guid_val:#x} is not a player guid"
-        );
-        self.resolve_unit(guid_val, None, commands)
+        self.players
+            .get_or_ask(guid_val, || {
+                debug!("names: asking player name (guid {guid_val})");
+                let _ = commands.0.send(ClientCommand::NameQuery { guid: guid_val });
+            })
+            .map(String::as_str)
     }
 
     /// The name for a unit keyed off its descriptor, as `0x609210` keys it; asks once on a miss.
@@ -185,13 +185,7 @@ impl NameCache {
         commands: &NetCommands,
     ) -> Option<&str> {
         match NameKey::of(guid_val, unit)? {
-            NameKey::Player(guid_val) => self
-                .players
-                .get_or_ask(guid_val, || {
-                    debug!("names: asking player name (guid {guid_val})");
-                    let _ = commands.0.send(ClientCommand::NameQuery { guid: guid_val });
-                })
-                .map(String::as_str),
+            NameKey::Player(guid_val) => self.resolve_player(guid_val, commands),
             NameKey::Pet(pet_number) => self.resolve_pet(pet_number, guid_val, commands),
             NameKey::Creature(entry) => self.resolve_creature(entry, guid_val, commands),
         }
@@ -1301,6 +1295,21 @@ mod tests {
         // Not streamed: the bits are all there is.
         let stranger = compose(guid::HIGH_UNIT, 299, 5);
         assert_eq!(warm.resolve(&objects, stranger, &cmds), Some("Guid Bits"));
+    }
+
+    /// `0x55f080` on `0xc0e228` takes the guid as it is: a chat speaker or summoner that is not a
+    /// player is asked of the player cache, and never of the creature cache by its bits.
+    #[test]
+    fn resolve_player_asks_the_player_cache_for_any_guid() {
+        let (cmds, rx) = commands();
+        let cache = NameCache::default();
+        let creature = compose(guid::HIGH_UNIT, 299, 4);
+        assert_eq!(cache.resolve_player(creature, &cmds), None);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::NameQuery { guid }) if guid == creature
+        ));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]
