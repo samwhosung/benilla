@@ -19,8 +19,13 @@ fn harness() -> UiScript {
     load_xml(&s, r"Interface\FrameXML\MoneyFrame.xml");
     // `BuffButton_Update` asks `GameTooltip:IsOwned(this)` unguarded (`BuffFrame.lua:104`).
     load_xml(&s, "Interface\\FrameXML\\GameTooltip.xml");
+    load_xml(&s, "Interface\\FrameXML\\UIDropDownMenu.xml");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.lua");
     load_xml(&s, r"Interface\FrameXML\UIPanelTemplates.xml");
+    // The stock arm that pitches the rows, `UIOptionsFrame.lua:193-206`, on the stock options kit.
+    load_xml(&s, r"Interface\FrameXML\OptionsFrameTemplates.xml");
+    load_xml(&s, r"Interface\FrameXML\OptionsFrame.lua");
+    load_xml(&s, r"Interface\FrameXML\UIOptionsFrame.xml");
     load_xml(&s, r"Interface\FrameXML\StaticPopup.xml");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.lua");
     load_xml(&s, "Interface\\FrameXML\\TextStatusBar.xml");
@@ -34,7 +39,7 @@ fn harness() -> UiScript {
     load_xml(&s, "Interface\\FrameXML\\BonusActionBarFrame.xml");
     // As the app does: `BuffFrame_OnLoad` never calls `BuffButtons_UpdatePositions`, which 1.12
     // runs on `VARIABLES_LOADED` (`UIOptionsFrame.lua:206`).
-    super::manifest::apply_buff_durations(&s).unwrap();
+    s.fire_event("VARIABLES_LOADED", vec![]);
     s
 }
 

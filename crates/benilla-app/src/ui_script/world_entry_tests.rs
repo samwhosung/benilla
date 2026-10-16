@@ -2135,3 +2135,63 @@ fn a_reload_fires_player_login_once_against_the_live_player() {
     drop(app);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// ───────────────────── Addons load against the XML's buff anchors ─────────────────────
+
+/// Records, at file scope and in `ADDON_LOADED`, what `BuffButton8` is anchored to.
+const BUFF_PROBE_LUA: &str = "\
+local function anchor()
+    local _, rel = BuffButton8:GetPoint()
+    return rel and rel:GetName() or \"nil\"
+end
+BuffProbe = { file = anchor() }
+local f = CreateFrame(\"Frame\")
+f:RegisterEvent(\"ADDON_LOADED\")
+f:SetScript(\"OnEvent\", function()
+    if arg1 == \"BuffProbe\" then BuffProbe.loaded = anchor() end
+end)
+";
+
+/// `BuffFrame_OnLoad` does not pitch the buff rows. The stock `UIOptionsFrame.lua` does, in its
+/// `VARIABLES_LOADED` arm (l.206), which `CGGameUI::Initialize` fires after every addon has
+/// loaded (`0x4900a3`, then `0x4900b2`). So an addon's file scope and its `ADDON_LOADED` see
+/// `BuffFrame.xml`'s anchor, `BuffButton8` under `BuffButton0`, and the pass moves it under
+/// `TempEnchant1` once the saved variables are in.
+#[test]
+fn addons_load_against_the_buff_anchors_the_xml_gives() {
+    let _data = benilla_formats::wow_data_or_skip!();
+    let _l = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (tmp, _c, _h) = hermetic_addon(
+        "buff-anchor",
+        "BuffProbe",
+        "## Interface: 11200\nBuffProbe.lua\n",
+        BUFF_PROBE_LUA,
+    );
+    let mut world = booted_world();
+
+    log_in_as(&mut world, "Onehunter", 1);
+    let s = world
+        .get_non_send_resource::<benilla_ui::script::UiScript>()
+        .expect("in-world VM");
+    let probe = |field: &str| {
+        s.eval::<String>(&format!("return tostring(BuffProbe.{field})"))
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        (probe("file"), probe("loaded")),
+        ("BuffButton0".to_string(), "BuffButton0".to_string()),
+        "BuffFrame.xml's anchor (BuffFrame.xml:231-239) holds through the addon walk"
+    );
+    assert_eq!(
+        s.eval::<String>("local _, rel = BuffButton8:GetPoint() return rel:GetName()")
+            .as_deref()
+            .ok(),
+        Some("TempEnchant1"),
+        "VARIABLES_LOADED then runs the stock pass (BuffFrame.lua:152-160)"
+    );
+
+    drop(world);
+    let _ = std::fs::remove_dir_all(&tmp);
+}

@@ -52,9 +52,9 @@ fn harness_with(mut s: UiScript, definers: &[&str]) -> UiScript {
             super::test_ui::load_ui(&s, file);
         }
     }
-    // The app's post-load pass: `BuffFrame_OnLoad` never pitches the buff rows, and the stock arm
-    // that does waits for `VARIABLES_LOADED` (`UIOptionsFrame.lua:206`).
-    super::manifest::apply_buff_durations(&s).unwrap();
+    // `BuffFrame_OnLoad` never pitches the buff rows; the stock arm that does waits for
+    // `VARIABLES_LOADED` (`UIOptionsFrame.lua:206`).
+    s.fire_event("VARIABLES_LOADED", vec![]);
     assert!(s.errors().is_empty(), "script errors: {:?}", s.errors());
     s
 }
