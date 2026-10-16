@@ -870,4 +870,75 @@ mod tests {
         )));
         assert_eq!(text(&s), "second");
     }
+
+    /// A word is a run of non-spaces, punctuation inside it (`_iswspace`, `0x77c3f0`): Ctrl+W
+    /// takes "foo.bar" whole, and Ctrl+Delete likewise forward (`0x77c310`).
+    #[test]
+    fn a_word_is_a_run_of_non_spaces_punctuation_included() {
+        let mut eb = boxed("foo.bar", 7, false);
+        press(&mut eb, KeyCode::KeyW, false);
+        assert_eq!(eb.text, "");
+        let mut eb = boxed("foo.bar baz", 0, false);
+        press(&mut eb, KeyCode::Delete, false);
+        assert_eq!(eb.text, " baz");
+        // Spaces first, then the word, each way.
+        let mut eb = boxed("foo.bar  baz.", 7, false);
+        press(&mut eb, KeyCode::Delete, false);
+        assert_eq!(
+            eb.text, "foo.bar",
+            "the spaces after the caret, then 'baz.'"
+        );
+    }
+
+    /// Ctrl+Right crosses the rest of the word, then the spaces, and so stops at the next word's
+    /// start (`0x77c7a0`).
+    #[test]
+    fn ctrl_right_lands_on_the_next_words_start() {
+        let mut eb = boxed("foo bar. baz", 5, false); // "foo b|ar. baz"
+        press(&mut eb, KeyCode::ArrowRight, false);
+        assert_eq!(eb.cursor, 9, "start of 'baz', past 'ar.' and the space");
+        press(&mut eb, KeyCode::ArrowRight, false);
+        assert_eq!(eb.cursor, 12, "the text's end");
+        let mut eb = boxed("foo   bar", 0, false);
+        press(&mut eb, KeyCode::ArrowRight, true);
+        assert_eq!((eb.cursor, eb.sel_start, eb.sel_end), (6, 0, 6));
+    }
+
+    /// Ctrl+Left crosses the spaces before the caret, then the word before them (`0x77c8c0`).
+    #[test]
+    fn ctrl_left_crosses_spaces_then_the_word() {
+        let mut eb = boxed("a, b", 3, false); // "a, |b"
+        press(&mut eb, KeyCode::ArrowLeft, false);
+        assert_eq!(eb.cursor, 0, "the space, then 'a,'");
+        let mut eb = boxed("a.b, c", 3, false); // "a.b|, c"
+        press(&mut eb, KeyCode::ArrowLeft, false);
+        assert_eq!(eb.cursor, 0, "'a.b' is one word");
+        let mut eb = boxed("one two  ", 9, false);
+        press(&mut eb, KeyCode::ArrowLeft, false);
+        assert_eq!(eb.cursor, 4);
+    }
+
+    /// `_iswspace` on the box's UTF-8: the C table below U+0100 has TAB to CR and the space only,
+    /// so NBSP is a letter; U+3000 and the other Unicode spaces count (`GetStringTypeW`).
+    #[test]
+    fn which_characters_are_spaces() {
+        let mut eb = boxed("a\u{a0}b", 4, false);
+        press(&mut eb, KeyCode::KeyW, false);
+        assert_eq!(eb.text, "", "NBSP does not end the word");
+        let mut eb = boxed("a\u{3000}b", 5, false);
+        press(&mut eb, KeyCode::KeyW, false);
+        assert_eq!(eb.text, "a\u{3000}", "the ideographic space does");
+        let mut eb = boxed("a\tb", 3, false);
+        press(&mut eb, KeyCode::KeyW, false);
+        assert_eq!(eb.text, "a\t", "TAB does");
+    }
+
+    /// Ctrl+Left tests the byte before the caret (`0x77c8da`), where the deletes decode the
+    /// character: a multi-byte space reads as a letter to it.
+    #[test]
+    fn ctrl_left_reads_the_byte_before_the_caret() {
+        let mut eb = boxed("a\u{3000}b", 5, false);
+        press(&mut eb, KeyCode::ArrowLeft, false);
+        assert_eq!(eb.cursor, 0);
+    }
 }

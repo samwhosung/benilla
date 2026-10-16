@@ -5,7 +5,8 @@ use super::RegionHandle;
 pub enum EditUnit {
     /// One character, a whole link counting as one: plain arrow, Backspace, Delete.
     Char,
-    /// One word run ([`EditBoxState::word_boundary`]): Ctrl/Option+arrow.
+    /// One word run (`0x77c7a0`, `0x77c8c0`, `0x77c3f0`, `0x77c310`): Ctrl/Option+arrow and the
+    /// Ctrl and Option deletes.
     Word,
     /// The caret's line, which ends at a newline: HOME/END (`0x77c980`/`0x77c9f0`), and
     /// Cmd+Left/Right on a Mac.
@@ -394,30 +395,37 @@ impl EditBoxState {
         )
     }
 
-    /// The Ctrl+arrow target. A word here is a run of ASCII alphanumerics or non-ASCII bytes; the
-    /// reference walks its per-byte class array (`E+0x330`).
-    pub fn word_boundary(&self, forward: bool) -> usize {
-        let bytes = self.text.as_bytes();
-        let is_word = |b: u8| b.is_ascii_alphanumeric() || b >= 0x80;
-        if forward {
-            let mut i = self.cursor;
-            while i < bytes.len() && !is_word(bytes[i]) {
-                i += 1;
+    /// The target of Ctrl+Backspace / Ctrl+W (`0x77c3f0`, `forward` false) and Ctrl+Delete
+    /// (`0x77c310`): over the spaces next to the caret, then over the word, a run of non-spaces
+    /// (see [`is_space`]). Each step is one atomic token step, a whole link counting as one.
+    pub fn word_delete_target(&self, forward: bool) -> usize {
+        let map = crate::markup::ClassMap::new(&self.text);
+        let step = if forward { 1 } else { -1 };
+        // The character the step would take, decoded whole from its first byte.
+        let next_is_space = |at: usize| {
+            let c = if forward {
+                self.text[at..].chars().next()
+            } else {
+                self.text[..at].chars().next_back()
+            };
+            c.is_some_and(is_space)
+        };
+        let mut at = self.cursor;
+        for spaces in [true, false] {
+            while (if forward {
+                at < self.text.len()
+            } else {
+                at > 0
+            }) && next_is_space(at) == spaces
+            {
+                let next = map.advance(at, step, true);
+                if next == at {
+                    break;
+                }
+                at = next;
             }
-            while i < bytes.len() && is_word(bytes[i]) {
-                i += 1;
-            }
-            i
-        } else {
-            let mut i = self.cursor;
-            while i > 0 && !is_word(bytes[i - 1]) {
-                i -= 1;
-            }
-            while i > 0 && is_word(bytes[i - 1]) {
-                i -= 1;
-            }
-            i
         }
+        at
     }
 
     /// Show the caret and restart its blink, as the flush's caret leg does for the focused box
@@ -577,7 +585,7 @@ impl EditBoxState {
             EditAction::Delete { unit, back } => EditOutcome::changed(match unit {
                 EditUnit::Char => self.delete_dir(!back),
                 EditUnit::Word => {
-                    let t = self.word_boundary(!back);
+                    let t = self.word_delete_target(!back);
                     self.delete_to(t)
                 }
                 EditUnit::Edge => {
@@ -818,16 +826,31 @@ impl EditBoxState {
         }
     }
 
-    /// Ctrl/Option+arrow: the caret to the [`word_boundary`](Self::word_boundary) by single atomic
-    /// steps (`0x77c8c0`/`0x77c7a0` loop `0x77c6b0`), so it always lands on a reachable stop.
+    /// Ctrl/Option+arrow, by single atomic steps (`0x77c6b0`). Right (`0x77c7a0`) steps over the
+    /// non-spaces at the caret, then over the spaces, and so ends at the next word's start. Left
+    /// (`0x77c8c0`) steps back over the spaces before the caret, then over the non-spaces.
+    ///
+    /// Left tests the byte before the caret, not the character (`0x77c8da` decodes from
+    /// `caret - 1`), so any non-ASCII character before the caret reads as a non-space there.
     pub fn move_by_word(&mut self, right: bool, extend: bool) {
-        let word = self.word_boundary(right);
-        self.walk(right, extend, |_, _, next| {
-            if right {
-                next <= word
+        // Right crosses non-spaces, then spaces; left spaces, then non-spaces.
+        let first_is_space = !right;
+        let mut in_first = true;
+        self.walk(right, extend, |text, at, _| {
+            let sp = if right {
+                text[at..].chars().next().is_some_and(is_space)
             } else {
-                next >= word
+                at.checked_sub(1)
+                    .map(|i| text.as_bytes()[i])
+                    .is_some_and(|b| b.is_ascii() && is_space(char::from(b)))
+            };
+            if in_first {
+                if sp == first_is_space {
+                    return true;
+                }
+                in_first = false;
             }
+            sp != first_is_space
         });
     }
 
@@ -917,7 +940,12 @@ impl EditBoxState {
     /// The loops of single steps behind the word, line and edge moves (`0x77c6b0`, links atomic):
     /// the caret steps while `take(text, caret, next)` allows the step to `next`, each extending
     /// step dragging the selection by [`Self::extend_to`]; a plain move collapses it at the end.
-    fn walk(&mut self, right: bool, extend: bool, take: impl Fn(&str, usize, usize) -> bool) {
+    fn walk(
+        &mut self,
+        right: bool,
+        extend: bool,
+        mut take: impl FnMut(&str, usize, usize) -> bool,
+    ) {
         let from = self.cursor;
         let map = crate::markup::ClassMap::new(&self.text);
         loop {
@@ -1093,6 +1121,19 @@ fn colour_carry(display: &str, from: usize) -> Option<&str> {
 }
 
 /// The char boundary at or below `i`.
+/// The client's `_iswspace` (`0x74006f`) on a character of the box's UTF-8 text, which `sgetu8`
+/// (`0x41aab0`) decodes to a code point and `_iswctype` (`0x7458e4`) reads as a 16-bit unit. Below
+/// U+0100 that is the C table, which marks only TAB to CR and the space: NEL and NBSP are not
+/// spaces. From U+0100 it is the system's `GetStringTypeW` space type: the Unicode spaces, but not
+/// the zero-width ones. A code point past the 16-bit range is no space here; the client would read
+/// its low 16 bits.
+fn is_space(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x09..=0x0d | 0x20 | 0x1680 | 0x2000..=0x200a | 0x2028 | 0x2029 | 0x202f | 0x205f | 0x3000
+    )
+}
+
 fn snap_down(s: &str, i: usize) -> usize {
     let mut i = i.min(s.len());
     while i > 0 && !s.is_char_boundary(i) {

@@ -1105,7 +1105,8 @@ fn click_places_cursor_and_drag_selects() {
     s.mouse_button(124.9, 60.0, "LeftButton", false);
 }
 
-/// Ctrl+arrows jump word boundaries (alnum runs); Ctrl+Shift extends the selection there.
+/// Ctrl+arrows jump word boundaries (runs of non-spaces; Right ends at the next word's start);
+/// Ctrl+Shift extends the selection there.
 #[test]
 fn ctrl_arrows_jump_words() {
     let mut s = script();
@@ -1122,8 +1123,8 @@ fn ctrl_arrows_jump_words() {
     });
     assert_eq!(
         s.focused_editbox_text_ui().unwrap().caret_x,
-        21.0,
-        "end of 'abc'"
+        28.0,
+        "start of 'def', past the space"
     );
     s.editbox_action(EditAction::Move {
         unit: EditUnit::Word,
@@ -1133,7 +1134,7 @@ fn ctrl_arrows_jump_words() {
     assert_eq!(
         s.focused_editbox_text_ui().unwrap().caret_x,
         49.0,
-        "end of 'def'"
+        "end of the text"
     );
     s.editbox_action(EditAction::Move {
         unit: EditUnit::Word,

@@ -142,7 +142,7 @@ pub(super) fn action(lua: &Lua, a: EditAction) -> bool {
         },
         EditAction::Delete { unit, back } => match unit {
             EditUnit::Char => delete_dir(lua, h, !back),
-            EditUnit::Word => delete_span(lua, h, |eb| eb.word_boundary(!back)),
+            EditUnit::Word => delete_span(lua, h, |eb| eb.word_delete_target(!back)),
             EditUnit::Edge => delete_span(lua, h, |eb| if back { 0 } else { eb.text.len() }),
             // No keymap deletes by line or row.
             EditUnit::Line | EditUnit::Row => {}
