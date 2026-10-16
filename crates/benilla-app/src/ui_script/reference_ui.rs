@@ -1304,9 +1304,10 @@ mod tests {
 
     /// Every global a migrated window calls exists once the shipped interface is up. Loading never
     /// runs the body that calls it, so a missing one raises on the first click that reaches it.
-    /// Bare `name(` calls in each chain file and its `.lua`, minus its own functions and locals,
-    /// count when the reference's `_G` has them (`reference/lua_globals.tsv`). Blind to names
-    /// reached through `getglobal` and to widget methods; it checks existence, not the body.
+    /// Bare `name(` calls in each chain file and every file it loads (`entry_sources`: its
+    /// `<Script file=>` and `<Include file=>`), minus their own functions and locals, count when
+    /// the reference's `_G` has them (`reference/lua_globals.tsv`). Blind to names reached
+    /// through `getglobal` and to widget methods; it checks existence, not the body.
     #[test]
     fn every_global_a_migrated_window_calls_is_answered() {
         let _data = benilla_formats::wow_data_or_skip!();
@@ -1367,17 +1368,12 @@ mod tests {
                 continue;
             }
             let leaf = entry.rsplit(['\\', '/']).next().unwrap_or(entry);
-            let mut text = String::new();
-            let mut cands = vec![entry.replace('\\', "/")];
-            if let Some(stem) = entry.strip_suffix(".xml") {
-                cands.push(format!("{stem}.lua").replace('\\', "/"));
-            }
-            for cand in &cands {
-                if let Some(b) = super::read(cand) {
-                    text.push_str(&String::from_utf8_lossy(&b));
-                    text.push('\n');
-                }
-            }
+            // The entry's own text and every file it loads, as the loader does: each
+            // `<Script file=>` (`ActionBarFrame.xml` loads `ActionButton.lua`) and `<Include
+            // file=>` (`PartyFrame.xml` includes `PartyFrameTemplates.xml`), transitively.
+            let sources = entry_sources(entry);
+            assert!(!sources.is_empty(), "{entry}: the chain has no such file");
+            let text = sources.join("\n");
             let text = strip_strings(&strip_comments(&text));
             let defines: std::collections::HashSet<String> = text
                 .lines()
@@ -1401,18 +1397,15 @@ mod tests {
                     l.strip_prefix("for ")
                 };
                 if let Some(rest) = rest {
-                    for name in rest
-                        .split(['=', ' ', '\t'])
-                        .take_while(|w| *w != "in" && *w != "=" && !w.starts_with('('))
-                        .flat_map(|w| w.split(','))
-                        .map(|w| w.trim())
+                    // Only the names a statement binds: before its `=` (`local a, b = f()`
+                    // binds `a` and `b`, not `f`) and before a `for`'s `in`.
+                    let bound = rest.split('=').next().unwrap_or("");
+                    let bound = bound.split(" in ").next().unwrap_or("");
+                    for name in bound
+                        .split(['(', ')', ' ', '\t', ','])
                         .filter(|w| !w.is_empty())
                     {
-                        let name: String =
-                            name.chars().take_while(|c| super::is_word(*c)).collect();
-                        if !name.is_empty() {
-                            locals.insert(name);
-                        }
+                        locals.insert(name.to_string());
                     }
                 }
             }
@@ -1799,12 +1792,8 @@ mod tests {
             .ok()
         }
         let chain = super::is_chain_entry(entry);
-        let dir = {
-            let p = entry.replace('\\', "/");
-            p.rsplit_once('/').map(|(d, _)| d.to_string())
-        };
         let mut out = Vec::new();
-        let mut queue = vec![entry.to_string()];
+        let mut queue = vec![entry.replace('\\', "/")];
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         while let Some(path) = queue.pop() {
             if !seen.insert(path.clone()) {
@@ -1813,11 +1802,13 @@ mod tests {
             let Some(text) = read_one(&path, chain) else {
                 continue;
             };
+            // A file resolves what it loads beside itself, as the loader does.
+            let dir = path.rsplit_once('/').map(|(d, _)| d.to_string());
             for chunk in text.split('<').skip(1) {
                 let Some(end) = chunk.find('>') else { continue };
                 let tag = &chunk[..end];
                 // `<Include>` brings a sibling document and `<Script file=>` the code, where
-                // nearly every `RegisterEvent` lives; both resolve in the entry's own folder.
+                // nearly every `RegisterEvent` lives; both resolve in the including file's own folder.
                 let kind = tag.trim_start();
                 if !kind.starts_with("Include") && !kind.starts_with("Script") {
                     continue;
