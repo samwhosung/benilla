@@ -8,6 +8,8 @@ use crate::script::{PlateGeometry, PlateState, UiScript};
 fn vm() -> UiScript {
     let mut s = super::common::script();
     s.set_screen_size(1024.0, 768.0);
+    // Stock `Fonts.xml` sets it; a plate or bubble built without it has no font and draws no text.
+    s.run(r#"NAMEPLATE_FONT = "Fonts\\FRIZQT__.TTF""#).unwrap();
     s.run(r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()"#)
         .unwrap();
     s.resolve();
@@ -415,7 +417,8 @@ fn the_plates_texts_carry_the_world_seat_and_its_textures_do_not() {
     // A FontString on an ordinary frame stays on the grid.
     s.run(
         r#"local f = CreateFrame("Frame", "Chrome", UIParent) f:SetAllPoints()
-           local t = f:CreateFontString("ChromeText") t:SetAllPoints() t:SetText("Chrome")"#,
+           local t = f:CreateFontString("ChromeText") t:SetAllPoints()
+           t:SetFont("Fonts\\FRIZQT__.TTF", 12) t:SetText("Chrome")"#,
     )
     .unwrap();
     s.resolve();
@@ -427,7 +430,8 @@ fn the_plates_texts_carry_the_world_seat_and_its_textures_do_not() {
     // An addon's own string on the plate, as pfUI draws its text, gets the same seat.
     s.run(
         r#"local plate = WorldFrame:GetChildren()
-           local t = plate:CreateFontString() t:SetAllPoints() t:SetText("pfName")"#,
+           local t = plate:CreateFontString() t:SetAllPoints()
+           t:SetFont("Fonts\\FRIZQT__.TTF", 12) t:SetText("pfName")"#,
     )
     .unwrap();
     s.resolve();
@@ -1108,6 +1112,7 @@ fn a_missing_or_non_string_nameplate_font_leaves_the_plate_strings_without_a_fon
         ("NAMEPLATE_FONT = 12", Some("12")),
     ] {
         let mut s = vm();
+        s.run("NAMEPLATE_FONT = nil").unwrap();
         s.run(setup).unwrap();
         drive(&mut s, &[plate("Wolf", 30.0, 40.0)]);
         let want = want.map(str::to_string);
@@ -1122,7 +1127,8 @@ fn a_missing_or_non_string_nameplate_font_leaves_the_plate_strings_without_a_fon
 fn a_global_index_metamethod_may_touch_the_model_during_a_plates_font_lookup() {
     let mut s = vm();
     s.run(
-        r#"hits = 0
+        r#"NAMEPLATE_FONT = nil
+           hits = 0
            setmetatable(_G, { __index = function(t, k)
                if k == "NAMEPLATE_FONT" then
                    hits = hits + 1

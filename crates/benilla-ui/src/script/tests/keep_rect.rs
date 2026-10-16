@@ -185,7 +185,7 @@ fn a_new_measure_stores_the_fontstring_rect_without_the_keep_test() {
         r#"
         Holder = CreateFrame("Frame", "Holder")
         Holder:SetAllPoints(nil)
-        Label = Holder:CreateFontString("Label", "ARTWORK")
+        Label = Holder:CreateFontString("Label", "ARTWORK"); Label:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Label:SetText("abc")
         Label:SetPoint("BOTTOMLEFT", Holder, "BOTTOMLEFT", 100, 100)
     "#,

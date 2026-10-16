@@ -103,8 +103,8 @@ fn set_font_object_repoints_fontstring() {
         f = CreateFrame("Frame", "FoF")
         f:SetWidth(120); f:SetHeight(30); f:SetPoint("CENTER", 0, 0)
         fs = f:CreateFontString("FoText", "ARTWORK")
-        fs:SetText("Hi")
         fs:SetFontObject("Big")
+        fs:SetText("Hi")
     "#,
     )
     .unwrap();
@@ -161,7 +161,7 @@ fn justify_v_defaults_middle_and_overrides() {
         r#"
         f = CreateFrame("Frame", "JvF")
         f:SetWidth(100); f:SetHeight(30); f:SetPoint("CENTER", 0, 0)
-        fs = f:CreateFontString("JvText", "ARTWORK")
+        fs = f:CreateFontString("JvText", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetText("Hi")
     "#,
     )
@@ -206,8 +206,8 @@ fn justify_v_defaults_middle_and_overrides() {
     s.run(
         r#"
         fresh = f:CreateFontString(nil, "ARTWORK")
-        fresh:SetText("Fresh")
         fresh:SetFontObject('TopFont')
+        fresh:SetText("Fresh")
     "#,
     )
     .unwrap();

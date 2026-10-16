@@ -13,6 +13,8 @@ fn european() -> UiScript {
     let mut s = script();
     s.set_screen_size(1024.0, 768.0);
     s.set_european_numbers(true);
+    // Stock `Fonts.xml` sets it; a plate or bubble built without it has no font and draws no text.
+    s.run(r#"NAMEPLATE_FONT = "Fonts\\FRIZQT__.TTF""#).unwrap();
     s
 }
 
@@ -120,7 +122,7 @@ fn simple_html_blocks_swap_their_separators() {
 }
 
 /// XML `text=` on a FontString (`0x77103a`) and on a Button's label reach `SetText` with the flag.
-/// A guard, not a fix: the loader calls the `SetText` method, which already swapped.
+/// A guard, not a fix: the loader stores through the string's own setter, which swaps.
 #[test]
 fn xml_text_attributes_swap_their_separators() {
     let s = european();

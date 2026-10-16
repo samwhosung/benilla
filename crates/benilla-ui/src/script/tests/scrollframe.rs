@@ -792,7 +792,7 @@ fn the_recompute_measures_the_childs_text_before_it_reads_the_range() {
         sf:SetPoint("TOPLEFT", 0, 0); sf:SetWidth(100); sf:SetHeight(50)
         local child = CreateFrame("Frame", "SFChild", sf)
         child:SetWidth(100); child:SetHeight(50); sf:SetScrollChild(child)
-        local fs = child:CreateFontString("SFText", "ARTWORK")
+        local fs = child:CreateFontString("SFText", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetPoint("TOPLEFT", 0, 0); fs:SetWidth(70)
         sf:SetScript("OnScrollRangeChanged", function() RANGE = arg2 end)
         fs:SetText(string.rep("x", 40))   -- 280px of ink over a 70px column: four 14px rows

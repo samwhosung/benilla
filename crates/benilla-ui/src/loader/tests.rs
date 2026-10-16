@@ -1660,7 +1660,10 @@ mod loader_tests {
             QuadContent::Text { color: Some(c), font_height: Some(h), .. }
                 if *c == [0.1, 0.2, 0.3, 1.0] && *h == 12.0
         ));
-        assert!(s
+        // B's unknown font object leaves it with no font: it holds its text and draws none
+        // (`0x7724f8`).
+        assert_eq!(s.eval::<String>("return OVB:GetText()").unwrap(), "B");
+        assert!(!s
             .extract()
             .into_iter()
             .any(|q| matches!(&q.content, QuadContent::Text { text: Some(t), .. } if t == "B")));
@@ -1706,6 +1709,9 @@ mod loader_tests {
         s.set_screen_size(800.0, 600.0);
         let doc = parse(
             r#"<Ui>
+                <Font name="ChatFontNormal" font="Fonts\ARIALN.TTF" virtual="true">
+                    <FontHeight><AbsValue val="14"/></FontHeight>
+                </Font>
                 <EditBox name="EB" letters="255">
                     <Size><AbsDimension x="600" y="32"/></Size>
                     <Anchors>
@@ -1716,7 +1722,7 @@ mod loader_tests {
                     <TextInsets><AbsInset left="47" right="13" top="0" bottom="0"/></TextInsets>
                     <Layers>
                         <Layer level="ARTWORK">
-                            <FontString name="$parentHeader" text="Say:">
+                            <FontString name="$parentHeader" inherits="ChatFontNormal" text="Say:">
                                 <Anchors>
                                     <Anchor point="LEFT"><Offset><AbsDimension x="13" y="0"/></Offset></Anchor>
                                 </Anchors>

@@ -54,7 +54,7 @@ fn set_alpha_gradient_answers_one_or_nil() {
         r#"
         local function shape(...) return arg.n .. ':' .. type(arg[1]) .. ':' .. tostring(arg[1]) end
         local f = CreateFrame("Frame", "F")
-        local fs = f:CreateFontString("FS")
+        local fs = f:CreateFontString("FS"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetText("hello")
         assert(shape(fs:SetAlphaGradient(0, 5)) == "1:number:1", shape(fs:SetAlphaGradient(0, 5)))
         assert(shape(fs:SetAlphaGradient(5, 5)) == "1:nil:nil", shape(fs:SetAlphaGradient(5, 5)))

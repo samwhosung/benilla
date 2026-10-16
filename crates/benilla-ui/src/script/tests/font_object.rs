@@ -241,11 +241,11 @@ fn set_font_object_takes_the_object_or_the_name() {
         f = CreateFrame("Frame", "TwoWays")
         f:SetWidth(200); f:SetHeight(40); f:SetPoint("CENTER", 0, 0)
         byObject = f:CreateFontString(nil, "ARTWORK")
-        byObject:SetText("obj")
         byObject:SetFontObject(GameFontHighlightSmall)
+        byObject:SetText("obj")
         byName = f:CreateFontString(nil, "ARTWORK")
-        byName:SetText("str")
         byName:SetFontObject("GameFontHighlightSmall")
+        byName:SetText("str")
     "#,
     )
     .unwrap();
@@ -302,8 +302,8 @@ fn dewdrop_recolors_a_row_from_its_own_font_object() {
         f = CreateFrame("Frame", "DdRow")
         f:SetWidth(120); f:SetHeight(16); f:SetPoint("CENTER", 0, 0)
         button = { text = f:CreateFontString(nil, "ARTWORK") }
-        button.text:SetText("row")
         button.text:SetFontObject(GameFontHighlightSmall)
+        button.text:SetText("row")
         button.text:SetTextColor(button.text:GetFontObject():GetTextColor())
     "#,
     )
@@ -337,10 +337,10 @@ fn mutating_a_font_object_repaints_everything_that_inherits_it() {
         r#"
         f = CreateFrame("Frame", "ThemeHost")
         f:SetWidth(200); f:SetHeight(60); f:SetPoint("CENTER", 0, 0)
-        a = f:CreateFontString(nil, "ARTWORK"); a:SetText("inherited")
-        a:SetFontObject(ThemeFont)
-        b = f:CreateFontString(nil, "ARTWORK"); b:SetText("overridden")
-        b:SetFontObject(ThemeFont)
+        a = f:CreateFontString(nil, "ARTWORK"); a:SetFontObject(ThemeFont)
+        a:SetText("inherited")
+        b = f:CreateFontString(nil, "ARTWORK"); b:SetFontObject(ThemeFont)
+        b:SetText("overridden")
         b:SetTextColor(1, 0, 0)
     "#,
     )
@@ -412,8 +412,8 @@ fn propagation_is_scoped_to_the_object_that_changed() {
         r#"
         f = CreateFrame("Frame", "ScopeHost")
         f:SetWidth(200); f:SetHeight(60); f:SetPoint("CENTER", 0, 0)
-        one = f:CreateFontString(nil, "ARTWORK"); one:SetText("one"); one:SetFontObject(FontOne)
-        two = f:CreateFontString(nil, "ARTWORK"); two:SetText("two"); two:SetFontObject(FontTwo)
+        one = f:CreateFontString(nil, "ARTWORK"); one:SetFontObject(FontOne); one:SetText("one")
+        two = f:CreateFontString(nil, "ARTWORK"); two:SetFontObject(FontTwo); two:SetText("two")
         FontOne:SetFont("Fonts\\CHANGED.TTF", 30)
     "#,
     )
@@ -441,8 +441,8 @@ fn create_font_mints_publishes_and_paints() {
         f = CreateFrame("Frame", "PlateHost")
         f:SetWidth(120); f:SetHeight(20); f:SetPoint("CENTER", 0, 0)
         Name = f:CreateFontString(nil, "ARTWORK")
-        Name:SetText("plate")
         Name:SetFontObject(Nameplate.Font)
+        Name:SetText("plate")
     "#,
     )
     .expect("_Nameplates' font setup must not raise");
@@ -626,8 +626,8 @@ fn an_empty_font_object_copies_nothing_onto_a_fontstring() {
         f = CreateFrame("Frame", "EmptyFontHost")
         f:SetWidth(120); f:SetHeight(20); f:SetPoint("CENTER", 0, 0)
         fs = f:CreateFontString(nil, "ARTWORK")
-        fs:SetText("keep")
         fs:SetFontObject(DressedFont)
+        fs:SetText("keep")
         blank = CreateFont("ABlankFont")
         fs:SetFontObject(blank)
     "#,
@@ -790,6 +790,7 @@ fn a_cross_axis_token_erases_the_axis_but_still_draws_centred() {
         "f = CreateFrame('Frame', 'ClearAxisFrame')\n\
          f:SetWidth(200) f:SetHeight(40) f:SetPoint('CENTER', 0, 0)\n\
          fs = f:CreateFontString()\n\
+         fs:SetFont('Fonts\\\\FRIZQT__.TTF', 12)\n\
          fs:SetAllPoints(f)\n\
          fs:SetText('erased')",
     )

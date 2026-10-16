@@ -38,6 +38,7 @@ fn button_state_textures_switch_with_interaction() {
         b:SetPushedTexture("Interface\\P.blp")
         b:SetDisabledTexture("Interface\\D.blp")
         b:SetHighlightTexture("Interface\\H.blp")
+        b:SetFont("Fonts\\FRIZQT__.TTF", 12)
         b:SetText("Go")
     "#,
     )
@@ -548,6 +549,7 @@ fn button_label_repaints_by_state_font_object() {
         "GoldFont",
         FontObject {
             color: Some([1.0, 0.82, 0.0, 1.0]),
+            font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
         },
@@ -556,6 +558,7 @@ fn button_label_repaints_by_state_font_object() {
         "GrayFont",
         FontObject {
             color: Some([0.5, 0.5, 0.5, 1.0]),
+            font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
         },
@@ -622,6 +625,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
         "RowNormal",
         FontObject {
             color: Some([1.0, 0.82, 0.0, 1.0]),
+            font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
         },
@@ -630,6 +634,7 @@ fn a_locked_or_hovered_button_wears_its_highlight_font_over_its_normal_color() {
         "RowHighlight",
         FontObject {
             color: Some([1.0, 1.0, 1.0, 1.0]),
+            font: Some("Fonts\\FRIZQT__.TTF".into()),
             height: Some(12.0),
             ..Default::default()
         },
@@ -716,6 +721,7 @@ fn a_button_reports_its_labels_extent() {
         b = CreateFrame("Button", "WidthBtn", UIParent)
         b:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
         b:SetWidth(120) b:SetHeight(24)
+        b:SetFont("Fonts\\FRIZQT__.TTF", 12)
         b:SetText("A Label")
         plain = CreateFrame("Button", "LabellessBtn", UIParent)
     "#,

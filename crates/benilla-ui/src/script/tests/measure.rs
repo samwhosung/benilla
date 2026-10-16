@@ -14,7 +14,7 @@ fn measured_fontstring_height_feeds_frame_anchors() {
         r#"
         local w = CreateFrame("Frame", "Win")
         w:SetPoint("TOPLEFT", 0, -100); w:SetWidth(384); w:SetHeight(512)
-        local g = w:CreateFontString("Greeting", "ARTWORK")
+        local g = w:CreateFontString("Greeting", "ARTWORK"); g:SetFont("Fonts\\FRIZQT__.TTF", 12)
         g:SetText("a long greeting that wraps")
         g:SetWidth(270)
         g:SetPoint("TOPLEFT", 33, -91)
@@ -70,7 +70,7 @@ fn a_changed_text_reads_zero_until_its_own_measure_lands() {
         r#"
         local w = CreateFrame("Frame", "Win")
         w:SetPoint("TOPLEFT", 0, -100); w:SetWidth(384); w:SetHeight(512)
-        local h = w:CreateFontString("Header", "ARTWORK")
+        local h = w:CreateFontString("Header", "ARTWORK"); h:SetFont("Fonts\\FRIZQT__.TTF", 12)
         h:SetText("Say: ")
         h:SetPoint("LEFT", 13, 0)
     "#,
@@ -122,11 +122,11 @@ fn zero_width_fontstring_autosizes_to_its_line() {
         r#"
         local w = CreateFrame("Frame", "Win")
         w:SetPoint("TOPLEFT", 0, -100); w:SetWidth(384); w:SetHeight(512)
-        local label = w:CreateFontString("FromLabel", "ARTWORK")
+        local label = w:CreateFontString("FromLabel", "ARTWORK"); label:SetFont("Fonts\\FRIZQT__.TTF", 12)
         label:SetText("From:")
         label:SetWidth(0); label:SetHeight(16)
         label:SetPoint("TOPRIGHT", "Win", "TOPLEFT", 114, -45)
-        local value = w:CreateFontString("FromValue", "ARTWORK")
+        local value = w:CreateFontString("FromValue", "ARTWORK"); value:SetFont("Fonts\\FRIZQT__.TTF", 12)
         value:SetText("Thrall")
         value:SetWidth(110); value:SetHeight(0)
         value:SetPoint("LEFT", "FromLabel", "RIGHT", 5, 0)
@@ -172,7 +172,7 @@ fn frame_scale_rides_the_quads_and_the_measure_key() {
         local w = CreateFrame("Frame", "Win")
         w:SetPoint("TOPLEFT", 0, -100); w:SetWidth(400); w:SetHeight(300)
         w:SetScale(0.8)
-        local t = w:CreateFontString("ScaledLabel", "ARTWORK")
+        local t = w:CreateFontString("ScaledLabel", "ARTWORK"); t:SetFont("Fonts\\FRIZQT__.TTF", 12)
         t:SetText("Options")
         t:SetPoint("TOPLEFT", 10, -10)
     "#,
@@ -217,7 +217,7 @@ fn invalidate_text_measures_reopens_the_round_trip() {
         r#"
         local w = CreateFrame("Frame", "Win")
         w:SetPoint("TOPLEFT", 0, -100); w:SetWidth(400); w:SetHeight(300)
-        local t = w:CreateFontString("Label", "ARTWORK")
+        local t = w:CreateFontString("Label", "ARTWORK"); t:SetFont("Fonts\\FRIZQT__.TTF", 12)
         t:SetText("Keybindings")
         t:SetPoint("TOPLEFT", 10, -10)
     "#,
@@ -262,7 +262,7 @@ fn get_string_width_is_the_natural_width_not_the_box() {
         Win = CreateFrame("Frame")
         Win:SetWidth(400) Win:SetHeight(300)
         Win:SetPoint("TOPLEFT", 0, 0)
-        Label = Win:CreateFontString("Label")
+        Label = Win:CreateFontString("Label"); Label:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Label:SetText("a string that is wider than its box")
         Label:SetWidth(60) Label:SetHeight(13)
         Label:SetPoint("TOPLEFT", 10, -10)
@@ -340,7 +340,7 @@ fn a_width_read_in_the_tick_that_set_the_text_is_not_zero() {
         r#"
         local f = CreateFrame("Frame", "Host")
         f:SetPoint("TOPLEFT", 0, 0); f:SetWidth(400); f:SetHeight(300)
-        local fs = f:CreateFontString("Label", "ARTWORK")
+        local fs = f:CreateFontString("Label", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetPoint("TOPLEFT", 0, 0)
         -- the corpus idiom: set, then measure, in one statement sequence
         fs:SetText("Onewarrior")
@@ -365,7 +365,7 @@ fn with_no_engine_installed_the_round_trip_is_still_the_only_answer() {
         r#"
         local f = CreateFrame("Frame", "Host")
         f:SetPoint("TOPLEFT", 0, 0); f:SetWidth(400); f:SetHeight(300)
-        local fs = f:CreateFontString("Label", "ARTWORK")
+        local fs = f:CreateFontString("Label", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetPoint("TOPLEFT", 0, 0)
         fs:SetText("Onewarrior")
         Answer = fs:GetStringWidth()
@@ -391,7 +391,7 @@ fn resolve_closes_the_round_trip_when_an_engine_is_installed() {
         r#"
         local f = CreateFrame("Frame", "Host")
         f:SetPoint("TOPLEFT", 0, 0); f:SetWidth(400); f:SetHeight(300)
-        local fs = f:CreateFontString("Label", "ARTWORK")
+        local fs = f:CreateFontString("Label", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetPoint("TOPLEFT", 0, 0)
         fs:SetWidth(35)                 -- a declared width ⇒ the two extents differ
         fs:SetText("Onewarrior")        -- 70 natural, wraps to 2 rows inside 35
@@ -424,7 +424,7 @@ fn a_synchronous_measure_satisfies_the_batch_request_too() {
         r#"
         local f = CreateFrame("Frame", "Host")
         f:SetPoint("TOPLEFT", 0, 0); f:SetWidth(400); f:SetHeight(300)
-        local fs = f:CreateFontString("Label", "ARTWORK")
+        local fs = f:CreateFontString("Label", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetPoint("TOPLEFT", 0, 0)
         fs:SetText("hello")
         Answer = fs:GetStringWidth()
@@ -454,7 +454,7 @@ fn a_settled_region_is_refound_after_each_measure_input_write() {
         r#"
         local f = CreateFrame("Frame", "Host")
         f:SetPoint("TOPLEFT", 0, 0); f:SetWidth(400); f:SetHeight(300)
-        local fs = f:CreateFontString("Label", "ARTWORK")
+        local fs = f:CreateFontString("Label", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetPoint("TOPLEFT", 0, 0)
         fs:SetText("one")
     "#,
@@ -495,6 +495,7 @@ fn a_settled_region_is_refound_after_each_measure_input_write() {
         r#"
         local b = CreateFrame("Button", "Btn")
         b:SetPoint("TOPLEFT", 0, -50); b:SetWidth(80); b:SetHeight(22)
+        b:SetFont("Fonts\\FRIZQT__.TTF", 12)
     "#,
     )
     .unwrap();
@@ -527,7 +528,7 @@ fn an_emptied_fontstring_drops_to_the_floor_and_a_restored_one_regains_its_box()
         r#"
         local f = CreateFrame("Frame", "Host")
         f:SetPoint("BOTTOMLEFT", 0, 0); f:SetWidth(400); f:SetHeight(300)
-        Label = f:CreateFontString("Label", "ARTWORK")
+        Label = f:CreateFontString("Label", "ARTWORK"); Label:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Label:SetPoint("BOTTOMLEFT", 10, 10)
         Tail = CreateFrame("Frame", "Tail")
         Tail:SetPoint("LEFT", Label, "RIGHT", 0, 0); Tail:SetWidth(5); Tail:SetHeight(5)

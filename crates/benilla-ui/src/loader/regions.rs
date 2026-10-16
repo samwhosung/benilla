@@ -363,7 +363,13 @@ impl Loader<'_> {
             if let Some(text) = region.attr("text") {
                 // A global-string key, not a literal (`0x703bf0`).
                 let text = self.resolve_text(text, dbg);
-                self.call_region(region_wrapper, "SetText", Some(text), dbg);
+                // The string's own `SetText` (`0x77103a` → `0x771d80`), not Lua's, which raises on
+                // a string with no font (`0x79d7e5`); `LoadXML` sets the text before the font.
+                if let Err(e) =
+                    crate::script::region::store_text_of(self.lua, region_wrapper, Some(text))
+                {
+                    self.report.fault(format!("{dbg}: region SetText: {e}"));
+                }
             }
             self.apply_wrap_attrs(region, region_wrapper, dbg);
             if let Some(c) = color {

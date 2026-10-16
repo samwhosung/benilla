@@ -521,7 +521,7 @@ mod tests {
         s.run(
             r#"
             local f = CreateFrame("Frame", "Owner")
-            fs = f:CreateFontString("FS", "ARTWORK")
+            fs = f:CreateFontString("FS", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
             btn = CreateFrame("Button", "Btn")
             function Put(text)
                 fs:SetText(text)

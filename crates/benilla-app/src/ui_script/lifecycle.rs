@@ -1145,7 +1145,10 @@ mod tests {
         let text = |world: &World| {
             let script = world.non_send_resource::<UiScript>();
             script
-                .run("F = CreateFrame('Frame'):CreateFontString() F:SetText('1.5')")
+                .run(
+                    "F = CreateFrame('Frame'):CreateFontString() \
+                     F:SetFont('Fonts\\\\FRIZQT__.TTF', 12) F:SetText('1.5')",
+                )
                 .unwrap();
             script.eval::<String>("return F:GetText()").unwrap()
         };

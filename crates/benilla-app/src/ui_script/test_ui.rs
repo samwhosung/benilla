@@ -506,6 +506,7 @@ pub(super) const MERCHANT_UI: &[&str] = &[
 /// warns, losing the scrollbar silently. Needs client data.
 pub(crate) const GOSSIP_UI: &[&str] = &[
     r"Interface\FrameXML\GlobalStrings.lua",
+    r"Interface\FrameXML\Fonts.xml",
     r"Interface\FrameXML\BasicControls.xml",
     r"Interface\FrameXML\LocaleProperties.lua",
     r"Interface\FrameXML\UIParent.xml",

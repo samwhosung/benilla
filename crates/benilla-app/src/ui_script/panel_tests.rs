@@ -32,6 +32,7 @@ fn shipped_gossip_frame_drives_end_to_end() {
     // synchronous measurer the app always has; without one a row sizes from last frame's text.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
+    load_xml(&s, r"Interface\FrameXML\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
@@ -198,6 +199,7 @@ fn shipped_gossip_frame_renders_quest_rows_above_options() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
+    load_xml(&s, r"Interface\FrameXML\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
@@ -319,6 +321,7 @@ fn shipped_gossip_rows_grow_to_their_wrapped_labels() {
     // synchronous measurer the app always has; without one a row sizes from last frame's text.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
+    load_xml(&s, r"Interface\FrameXML\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
@@ -419,6 +422,7 @@ fn gossip_show_hide_plays_open_and_close_kits() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
+    load_xml(&s, r"Interface\FrameXML\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
@@ -768,6 +772,7 @@ fn an_overflowing_gossip_menu_scrolls_instead_of_spilling() {
     // synchronous measurer the app always has; without one a row sizes from last frame's text.
     s.set_text_measurer(Box::new(super::FixedWidthFont(6.0)));
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
+    load_xml(&s, r"Interface\FrameXML\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");
@@ -902,6 +907,7 @@ fn an_addons_own_frame_registered_in_uipanelwindows_takes_the_left_slot() {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     load_xml(&s, r"Interface\FrameXML\GlobalStrings.lua");
+    load_xml(&s, r"Interface\FrameXML\Fonts.xml");
     load_xml(&s, r"Interface\FrameXML\BasicControls.xml");
     load_xml(&s, r"Interface\FrameXML\LocaleProperties.lua");
     load_xml(&s, r"Interface\FrameXML\UIParent.xml");

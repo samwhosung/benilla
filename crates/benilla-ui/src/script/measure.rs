@@ -76,6 +76,11 @@ pub(super) fn ensure_measured_in(model: &mut Model, rh: RegionHandle) {
         natural_w,
         key: req.key,
     };
+    store_measured(model, rh, req.id, new);
+}
+
+/// Store `new` as region `rh`'s measure, touching the layout only when its box moved.
+pub(super) fn store_measured(model: &mut Model, rh: RegionHandle, id: u32, new: MeasuredText) {
     let mut moved = false;
     if let Some(d) = model.region_data.get_mut(&rh) {
         moved = super::types::MeasuredText::layout_moved(d.measured, new);
@@ -86,7 +91,7 @@ pub(super) fn ensure_measured_in(model: &mut Model, rh: RegionHandle) {
         // Only a box that moved touches the layout, as in `set_measured_text`: a same-width
         // re-measure (a countdown tick) must not cost a whole-roster hash. Stored whole, as there.
         model.touch_layout_region(rh);
-        model.queue_force(req.id);
+        model.queue_force(id);
     }
 }
 

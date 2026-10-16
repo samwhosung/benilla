@@ -31,6 +31,8 @@ fn vm() -> UiScript {
     let mut s = UiScript::new().unwrap();
     s.set_screen_size(1024.0, 768.0);
     s.set_text_measurer(Box::new(BlockFont));
+    // Stock `Fonts.xml` sets it; a plate or bubble built without it has no font and draws no text.
+    s.run(r#"NAMEPLATE_FONT = "Fonts\\FRIZQT__.TTF""#).unwrap();
     s.run(r#"WorldFrame = CreateFrame("WorldFrame", "WorldFrame") WorldFrame:SetAllPoints()"#)
         .unwrap();
     s.resolve();
@@ -463,6 +465,7 @@ fn the_text_takes_the_nameplate_font_global() {
     );
 
     let mut bare = vm();
+    bare.run("NAMEPLATE_FONT = nil").unwrap();
     drive(&mut bare, &[say(1, 1, "a")]);
     assert!(bare
         .eval::<bool>(
@@ -477,7 +480,8 @@ fn the_text_takes_the_nameplate_font_global() {
 fn a_global_index_metamethod_may_touch_the_model_during_a_bubbles_font_lookup() {
     let mut s = vm();
     s.run(
-        r#"hits = 0
+        r#"NAMEPLATE_FONT = nil
+           hits = 0
            setmetatable(_G, { __index = function(t, k)
                if k == "NAMEPLATE_FONT" then
                    hits = hits + 1

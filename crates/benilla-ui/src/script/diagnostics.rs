@@ -220,7 +220,7 @@ mod tests {
         s.run(
             r#"
             f = CreateFrame("Frame", "BytesFrame")
-            t = f:CreateFontString("BytesText")
+            t = f:CreateFontString("BytesText"); t:SetFont("Fonts\\FRIZQT__.TTF", 12)
             -- "a—b" is 5 bytes; cutting at 2 leaves the em dash's lead byte alone.
             local sliced = strsub("a\226\128\148b", 1, 2)
             t:SetText(sliced)

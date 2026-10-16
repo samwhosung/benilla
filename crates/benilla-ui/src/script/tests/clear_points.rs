@@ -179,7 +179,7 @@ fn a_failed_texture_keeps_its_quad_and_a_failed_fontstring_does_not() {
     let mut s = host();
     s.run(
         r#"
-        Label = Host:CreateFontString("Label", "ARTWORK")
+        Label = Host:CreateFontString("Label", "ARTWORK"); Label:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Label:SetText("x")
         Label:SetPoint("BOTTOMLEFT", Host, "BOTTOMLEFT", 10, 10)
         Label:SetWidth(20); Label:SetHeight(20)
@@ -218,7 +218,7 @@ fn stale_reader_of_a_label() -> UiScript {
     let mut s = host();
     s.run(
         r#"
-        FS = Host:CreateFontString("FS", "ARTWORK")
+        FS = Host:CreateFontString("FS", "ARTWORK"); FS:SetFont("Fonts\\FRIZQT__.TTF", 12)
         FS:SetText("AAAA")
         FS:SetPoint("BOTTOMLEFT", Host, "BOTTOMLEFT", 10, 10)
         FS:SetWidth(40); FS:SetHeight(20)

@@ -8,32 +8,57 @@ use crate::script::Model;
 
 use super::region_handle_of;
 
+/// `CSimpleFontString::SetText` (`0x771d80`) past Lua's font check: the loader's `text=`
+/// (`0x77103a`) reaches it directly, so a string with no font still holds its text.
+pub(crate) fn store_text_of(lua: &Lua, this: &Table, text: Option<String>) -> mlua::Result<()> {
+    let rh = region_handle_of(lua, this)?;
+    store_text(lua, rh, text);
+    Ok(())
+}
+
+/// [`store_text_of`] by handle, the tail Lua's `SetText` shares.
+fn store_text(lua: &Lua, rh: crate::widget::RegionHandle, text: Option<String>) {
+    let mut model = lua.app_data_mut::<Model>().expect("model");
+    // The separator pass runs before the same-text test (`0x771d9f`, `0x771dea`).
+    let text = text.map(|t| model.localized_text(t));
+    let data = model.region_data.entry(rh).or_default();
+    let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());
+    let same = data.text == text;
+    data.text = text;
+    // Fresh text draws whole: an armed write-on gradient belongs to the old string.
+    data.alpha_gradient = None;
+    // New text names itself on the measure ledger, and on the layout only when it empties or
+    // fills, which drops or takes up the measure the sweep reads.
+    model.touch_measure(rh);
+    model.touch_layout_text(rh, was_shown);
+    // A new string clears the valid bit and invalidates (`0x771ea4`); the same one returns first
+    // (`0x771df1`).
+    if !same {
+        model.clear_region_valid(rh);
+    }
+}
+
 /// Install the FontString methods into `m`.
 pub(super) fn install(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetText",
         lua.create_function(|lua, (this, text): (Table, Option<mlua::Value>)| {
+            let rh = region_handle_of(lua, &this)?;
+            // A string with no font raises before its argument is read and sets nothing
+            // (`0x79d7e5`, `0x79d810`), naming the receiver or `<unnamed>`.
+            let fonted = {
+                let model = lua.app_data_ref::<Model>().expect("model");
+                crate::script::font_block::has_font(&model, rh)
+            };
+            if !fonted {
+                return Err(mlua::Error::runtime(format!(
+                    "{}:SetText(): Font not set",
+                    crate::script::font_block::usage_name(&this)
+                )));
+            }
             // `text_arg`, since a Lua string is bytes and a slice of one need not be valid UTF-8.
             let text = crate::script::binding_abi::text_arg(lua, text)?;
-            let rh = region_handle_of(lua, &this)?;
-            let mut model = lua.app_data_mut::<Model>().expect("model");
-            // The separator pass runs before the same-text test (`0x771d9f`, `0x771dea`).
-            let text = text.map(|t| model.localized_text(t));
-            let data = model.region_data.entry(rh).or_default();
-            let was_shown = data.text.as_deref().is_some_and(|t| !t.is_empty());
-            let same = data.text == text;
-            data.text = text;
-            // Fresh text draws whole: an armed write-on gradient belongs to the old string.
-            data.alpha_gradient = None;
-            // New text names itself on the measure ledger, and on the layout only when it empties
-            // or fills, which drops or takes up the measure the sweep reads.
-            model.touch_measure(rh);
-            model.touch_layout_text(rh, was_shown);
-            // A new string clears the valid bit and invalidates (`0x771ea4`); the same one returns
-            // first (`0x771df1`).
-            if !same {
-                model.clear_region_valid(rh);
-            }
+            store_text(lua, rh, text);
             Ok(())
         })?,
     )?;

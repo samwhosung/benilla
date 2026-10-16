@@ -8,10 +8,11 @@ const TOOLTIP_PAIRS: usize = 30;
 
 /// Declares `TestTooltipTemplate`, the stock template's line ladder: a tooltip made without it holds
 /// no line, as on 1.12.1. A test makes one with
-/// `CreateFrame("GameTooltip", name, parent, "TestTooltipTemplate")`.
+/// `CreateFrame("GameTooltip", name, parent, "TestTooltipTemplate")`. Its lines' two font objects
+/// are declared first, face and height only, as a line with no font draws nothing.
 pub(in crate::script) fn load_tooltip_template(s: &UiScript) {
     let mut xml = String::from(
-        r#"<Ui><GameTooltip name="TestTooltipTemplate" virtual="true"><Layers><Layer level="ARTWORK">"#,
+        r#"<Ui><Font name="GameTooltipText" font="Fonts\FRIZQT__.TTF" virtual="true"><FontHeight><AbsValue val="12"/></FontHeight></Font><Font name="GameTooltipHeaderText" font="Fonts\FRIZQT__.TTF" virtual="true"><FontHeight><AbsValue val="14"/></FontHeight></Font><GameTooltip name="TestTooltipTemplate" virtual="true"><Layers><Layer level="ARTWORK">"#,
     );
     for i in 1..=TOOLTIP_PAIRS {
         let font = if i == 1 {

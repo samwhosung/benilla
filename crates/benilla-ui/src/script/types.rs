@@ -434,7 +434,8 @@ pub(crate) struct RegionData {
     pub(crate) font_object: Option<String>,
     /// What this region set for itself, which its font object no longer overwrites.
     pub(crate) font_explicit: FontExplicit,
-    /// Resolved font face path (`SetFont`/`SetFontObject`); `None` is the renderer's default.
+    /// Resolved font face path (`SetFont`/`SetFontObject`); `None` is no font, the reference's
+    /// null `+0xe0` (`font_block::has_font`).
     pub(crate) font_path: Option<String>,
     /// Resolved font height in logical px; `None` is the renderer's default.
     pub(crate) font_height: Option<f32>,

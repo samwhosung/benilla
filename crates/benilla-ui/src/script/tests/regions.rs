@@ -62,7 +62,7 @@ fn region_fontstring_span_floors_at_one_unit_until_measured() {
         local f = CreateFrame("Frame", "Owner")
         f:SetPoint("BOTTOMLEFT", 0, 0)   -- owner [0, 0, 50, 100]
         f:SetWidth(100); f:SetHeight(50)
-        local fs = f:CreateFontString("FS", "ARTWORK")
+        local fs = f:CreateFontString("FS", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetText("Name")
         fs:SetJustifyH("LEFT")
         fs:SetPoint("LEFT", 5, 0)        -- left edge pinned; no size
@@ -347,7 +347,7 @@ fn child_frame_layers_regions_render_after_the_fixpoint() {
         local child = CreateFrame("Frame", "SubPanel", parent)
         child:SetPoint("TOPLEFT", "Win", "TOPLEFT", 20, -20)
         child:SetWidth(200); child:SetHeight(100)
-        local fs = child:CreateFontString("SubText", "ARTWORK")
+        local fs = child:CreateFontString("SubText", "ARTWORK"); fs:SetFont("Fonts\\FRIZQT__.TTF", 12)
         fs:SetPoint("TOPLEFT", "SubPanel", "TOPLEFT", 5, -5)
         fs:SetWidth(150); fs:SetHeight(12)
         fs:SetText("hello from the child")
@@ -960,9 +960,9 @@ fn the_size_getters_take_the_author_first_then_the_natural_width_and_wrapped_hei
         r#"
         local f = CreateFrame("Frame", "Owner")
         f:SetPoint("BOTTOMLEFT", 0, 0); f:SetWidth(100); f:SetHeight(50)
-        Sized = f:CreateFontString("Sized", "ARTWORK")
+        Sized = f:CreateFontString("Sized", "ARTWORK"); Sized:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Sized:SetPoint("TOPLEFT", 0, 0); Sized:SetWidth(300); Sized:SetText("Name")
-        Auto = f:CreateFontString("Auto", "ARTWORK")
+        Auto = f:CreateFontString("Auto", "ARTWORK"); Auto:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Auto:SetPoint("TOPLEFT", 0, 0); Auto:SetText("Name")
     "#,
     )
@@ -998,9 +998,9 @@ fn an_empty_string_reads_back_one_unit_and_a_pending_measure_reads_back_zero() {
         r#"
         local f = CreateFrame("Frame", "Owner")
         f:SetPoint("BOTTOMLEFT", 0, 0); f:SetWidth(100); f:SetHeight(50)
-        Pending = f:CreateFontString("Pending", "ARTWORK")
+        Pending = f:CreateFontString("Pending", "ARTWORK"); Pending:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Pending:SetPoint("TOPLEFT", 0, 0); Pending:SetText("Name")
-        Empty = f:CreateFontString("Empty", "ARTWORK")
+        Empty = f:CreateFontString("Empty", "ARTWORK"); Empty:SetFont("Fonts\\FRIZQT__.TTF", 12)
         Empty:SetPoint("TOPLEFT", 0, 0); Empty:SetText("")
         assert(Pending:GetHeight() == 0, "a pending measure is not a size, got " .. tostring(Pending:GetHeight()))
         assert(Empty:GetHeight() == 1, "an EMPTY string is one unit, got " .. tostring(Empty:GetHeight()))
@@ -1160,8 +1160,8 @@ fn an_empty_fontstring_reads_back_nil_and_an_edit_box_does_not() {
     s.run(
         r#"
         local f = CreateFrame("Frame", "TextCell")
-        fresh = f:CreateFontString(nil, "OVERLAY")
-        held  = f:CreateFontString(nil, "OVERLAY")
+        fresh = f:CreateFontString(nil, "OVERLAY"); fresh:SetFont("Fonts\\FRIZQT__.TTF", 12)
+        held  = f:CreateFontString(nil, "OVERLAY"); held:SetFont("Fonts\\FRIZQT__.TTF", 12)
     "#,
     )
     .unwrap();

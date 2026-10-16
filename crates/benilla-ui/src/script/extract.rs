@@ -338,6 +338,14 @@ impl UiScript {
                         region.map(|r| r.kind),
                         Some(crate::widget::RegionKind::FontString)
                     );
+                    // A FontString with no font builds no string (`0x7724f8`) and emits nothing
+                    // (`0x772e5b`), whatever its text.
+                    if is_text
+                        && data.font_path.is_none()
+                        && !super::font_block::has_font(&model, rh)
+                    {
+                        continue;
+                    }
                     if bar_fill.is_none() && !thumb_fill && !color_thumb {
                         rect = model.region_resolved.get(&rh).copied().or_else(|| {
                             (!is_text)

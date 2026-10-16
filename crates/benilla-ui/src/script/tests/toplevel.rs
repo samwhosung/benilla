@@ -804,7 +804,7 @@ fn a_compaction_relinks_a_shared_level_in_creation_order() {
             f:SetPoint("BOTTOMLEFT", x, y)
             f:SetWidth(size); f:SetHeight(size)
             f:EnableMouse(true)
-            local t = f:CreateFontString(nil, "ARTWORK")
+            local t = f:CreateFontString(nil, "ARTWORK"); t:SetFont("Fonts\\FRIZQT__.TTF", 12)
             t:SetAllPoints(f); t:SetText(name)
             return f
         end

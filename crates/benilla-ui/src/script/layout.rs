@@ -2070,6 +2070,19 @@ impl UiScript {
 /// ([`super::measure::ensure_measured`]), as both must build the same cache key.
 pub(super) fn measure_request_for(model: &mut Model, rh: RegionHandle) -> Option<MeasureRequest> {
     let (key, scale) = stale_measure_key(model, rh)?;
+    // A string with no font measures 0 without asking the font engine (`0x772bd0`, `0x7728b6`,
+    // `0x7729d4`); it can hold text, as XML `text=` stores it unchecked (`0x77103a`).
+    if !super::font_block::has_font(model, rh) {
+        let id = model.region_id(rh);
+        let zero = super::MeasuredText {
+            w: 0.0,
+            h: 0.0,
+            natural_w: 0.0,
+            key,
+        };
+        super::measure::store_measured(model, rh, id, zero);
+        return None;
+    }
     let d = model.region_data.get(&rh)?;
     let text = d.text.clone().filter(|t| !t.is_empty())?;
     let wrap_width = d.size.map(|s| s.0).filter(|w| *w > 0.0);

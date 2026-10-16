@@ -27,7 +27,7 @@ fn end_to_end_two_frame_tree_extracts_in_zkey_order() {
         local cbg = child:CreateTexture(nil, "ARTWORK")
         cbg:SetTexture("Interface\\Child.blp")
         cbg:SetAllPoints()
-        local ctext = child:CreateFontString(nil, "OVERLAY")
+        local ctext = child:CreateFontString(nil, "OVERLAY"); ctext:SetFont("Fonts\\FRIZQT__.TTF", 12)
         ctext:SetText("Hello")
         ctext:SetVertexColor(1, 0, 0, 1)
         ctext:SetAllPoints()
