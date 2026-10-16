@@ -229,7 +229,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 - No Region rows faults the reference on a NULL category (`0x46e5b8`); list all. ([`src/realm_select/category.rs:25`](../crates/benilla-app/src/realm_select/category.rs#L25))
 - The reference's X only cancels a pending realm query (`0x46ed10` -> `0x46b7e0`) and leaves the realmd link up; ours closes it as Cancel does, because the native login screen takes a new Login only once the attempt has ended. ([`src/realm_select/input.rs:167`](../crates/benilla-app/src/realm_select/input.rs#L167))
-- The reference shows the frame when `OPEN_REALM_LIST` arrives; ours shows at once against the list already in hand, so the click does not wait a round trip. ([`src/realm_select/mod.rs:489`](../crates/benilla-app/src/realm_select/mod.rs#L489))
+- The reference shows the frame when `OPEN_REALM_LIST` arrives; ours shows at once against the list already in hand, so the click does not wait a round trip. ([`src/realm_select/mod.rs:419`](../crates/benilla-app/src/realm_select/mod.rs#L419))
 
 #### realmlist
 
@@ -308,7 +308,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### ui_chat
 
-- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), so the window keeps its scrollback there. ([`src/ui_chat.rs:205`](../crates/benilla-app/src/ui_chat.rs#L205))
+- Not run on benilla's same-character reconnect, which the reference lacks (it returns to the login screen), so the window keeps its scrollback there. ([`src/ui_chat.rs:206`](../crates/benilla-app/src/ui_chat.rs#L206))
 - A missing global prints nothing, where the reference prints an empty line (`0x703c02`), because benilla's other `DisplayError` routes do the same. ([`src/ui_chat/broadcast.rs:148`](../crates/benilla-app/src/ui_chat/broadcast.rs#L148))
 - With a blank city word the reference composes `"Trade - "` (its capital arm checks the row pointer, not the string, `0x49a2d0`-`0x49a2f6`); we decline, because a wrong channel name is joined silently and for good. ([`src/ui_chat/channels.rs:150`](../crates/benilla-app/src/ui_chat/channels.rs#L150))
 - A probe's bare `/assist` assists the live selection, where the stock handler (`ChatFrame.lua:740`) resolves a selected player's name through `AssistByName`, because a name resolve can land on a different player. ([`src/ui_chat/input/mod.rs:645`](../crates/benilla-app/src/ui_chat/input/mod.rs#L645))
@@ -425,7 +425,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference then re-reads the aspect (`0x492f13`), and on a change of 0.001 or more calls `0x491380`, which sets the reload trigger (`[0xb4b3f4]`) when the script-context check `0x494a50(0xa)` allows it; here a resize re-lays out the live UI, the chat bubbles' window-derived `BubbleGeometry` with it, because the window resizes freely and a reload on each resize would tear down every addon's state mid-play. ([`src/ui_script/extract/mod.rs:522`](../crates/benilla-app/src/ui_script/extract/mod.rs#L522))
 - The V-plate border is resampled sharp to the quad's physical size rather than GPU-magnified, so its 1 px bevel stays crisp; keyed by that size, so only a resize re-rasterises it. ([`src/ui_script/extract/mod.rs:1390`](../crates/benilla-app/src/ui_script/extract/mod.rs#L1390))
 - No signature or digest check (`0x46a90b`, `0x46a9d3`, `0x401560(9)`), so the chain's toc always loads and `FRAMES_LOADED` follows, because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/glue.rs:16`](../crates/benilla-app/src/ui_script/glue.rs#L16))
-- The reference's handler completes whichever operation is current; here only the character list's does, in state 3, and a reply of another cause (a roster nothing of the screen asked for) or of another link (before a realm change) completes nothing. ([`src/ui_script/glue_mgr.rs:1332`](../crates/benilla-app/src/ui_script/glue_mgr.rs#L1332))
+- The reference's handler completes whichever operation is current; here only the character list's does, in state 3, and a reply of another cause (a roster nothing of the screen asked for) or of another link (before a realm change) completes nothing. ([`src/ui_script/glue_mgr.rs:1376`](../crates/benilla-app/src/ui_script/glue_mgr.rs#L1376))
 - The files are under `benilla-config/Logs/`, since the install is read-only. ([`src/ui_script/load_log.rs:5`](../crates/benilla-app/src/ui_script/load_log.rs#L5))
 - `FULLSCREEN_QUADS_RESEAT` re-sizes the full-screen quads, which the stock files size only in their OnLoads, because a resize here keeps the loaded UI and the blackout would stop short of the new screen. ([`src/ui_script/manifest.rs:64`](../crates/benilla-app/src/ui_script/manifest.rs#L64))
 - No `FrameXML.toc` signature check, where `UI_Init` loads on a failed one and then quits (`0x401560(0xa)` at `0x48ff90`), because the check verifies Blizzard's signature with a key carried in the client binary, which benilla does not ship, and a modified interface file is loaded rather than refused. ([`src/ui_script/manifest.rs:161`](../crates/benilla-app/src/ui_script/manifest.rs#L161))
