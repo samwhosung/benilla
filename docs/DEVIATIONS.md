@@ -29,7 +29,7 @@ A setting boots at the reference's default unless it is listed here (`docs/METHO
 
 Each entry is the first sentence of a `Deviation:` comment, linking to where it lives.
 
-- [benilla-app](#benilla-app): 226
+- [benilla-app](#benilla-app): 227
 - [benilla-assets](#benilla-assets): 6
 - [benilla-blp](#benilla-blp): 1
 - [benilla-formats](#benilla-formats): 17
@@ -171,6 +171,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - `AlphaMode::Blend` writes no depth where the reference does, because overlapping names resolving by sort order look the same. ([`src/nameplates.rs:4`](../crates/benilla-app/src/nameplates.rs#L4))
 - A mounted plate keeps only this fraction of its seat's oscillation about a slow mean, because the raw seat, which the reference also rides, read more intense than the reference side by side. `1.0` is the raw seat; on-foot plates are untouched. ([`src/nameplates.rs:264`](../crates/benilla-app/src/nameplates.rs#L264))
 - Larger than the reference's 32 px `UNIT_NAME_FONT` raster, which it magnifies (`0x6c749b`), because a larger source is crisper up close. ([`src/nameplates.rs:273`](../crates/benilla-app/src/nameplates.rs#L273))
+
+#### names
+
+- The combat-log namer keys an unstreamed creature by guid bits 32-47 (`0x6265c4`), which on the servers in use (entry at bits 24-47) names it wrongly. ([`src/names.rs:122`](../crates/benilla-app/src/names.rs#L122))
 
 #### net
 
