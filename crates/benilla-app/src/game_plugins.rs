@@ -834,12 +834,16 @@ pub(crate) mod schedule_tests {
     ///   `PlayerActions`, so a book change seen a frame late is pushed the next;
     /// - the item gate's control-bypass feed (`ui_unit::control_gate::feed_control_bypass`)
     ///   against `player::camera_saved::load_camera_pose` over `Player`: the feed reads
-    ///   `own_control_lost` only, and the loader writes the saved camera pose.
+    ///   `own_control_lost` only, and the loader writes the saved camera pose;
+    /// - the loading screen's window fits (`loading_screen::fit_loading_area`,
+    ///   `game_tip::fit_game_tip`) against `video::apply_window_mode` and `apply_present_mode`
+    ///   over `Window`: the fits read the size, the appliers write the mode and the present
+    ///   mode, and a size seen a frame late is refit the next, since the fits are level-triggered.
     ///
     /// Raising the ceiling is a claim that a new undeclared order is acceptable: make it with the
     /// reason read off the dump, or declare the order (`.after`, a set, a `chain`). A resource
     /// that commutes by construction belongs in [`Classes`].
-    const UPDATE_ACTIONABLE_CEILING: usize = 3_348;
+    const UPDATE_ACTIONABLE_CEILING: usize = 3_352;
     const UPDATE_ACTIONABLE_SLACK: usize = 40;
 
     fn ratchet(what: &str, n: usize, ceiling: usize, slack: usize) {
