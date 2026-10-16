@@ -9,6 +9,7 @@ pub(crate) mod logout_smoke;
 pub(crate) mod queue;
 pub(crate) mod realm;
 pub(crate) mod realm_smoke;
+mod reconnect;
 pub(crate) mod roster;
 mod roundtrip;
 
@@ -28,6 +29,12 @@ impl Plugin for GlueSessionPlugin {
                 edges::session_edges()
                     .in_set(edges::SessionEdges)
                     .after(benilla_world::schedule::WorldStage::Net),
+            )
+            .add_systems(
+                Update,
+                reconnect::answer_reconnect
+                    .run_if(crate::ui_script::glue::stock_glue)
+                    .after(edges::SessionEdges),
             )
             // After the UI tick, the glue manager's frame and the session's edges, in one chain:
             // on the stock screens each reads the frames those moved and presses their verbs.
