@@ -36,7 +36,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - [benilla-lua](#benilla-lua): 3
 - [benilla-protocol](#benilla-protocol): 21
 - [benilla-srp](#benilla-srp): 2
-- [benilla-ui](#benilla-ui): 111
+- [benilla-ui](#benilla-ui): 112
 - [benilla-world](#benilla-world): 46
 
 ### benilla-app
@@ -627,7 +627,7 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - An id outside the seven built windows raises, where the reference serves ten records and silently ignores any other id (`0x4a0be1`), because benilla keeps only the seven and every caller loops `1, NUM_CHAT_WINDOWS`. ([`src/script/chat_window.rs:220`](../crates/benilla-ui/src/script/chat_window.rs#L220))
 - One past `i32::MAX` clamps where the reference keeps the low 32 bits, for the colours' reason. ([`src/script/chat_window.rs:430`](../crates/benilla-ui/src/script/chat_window.rs#L430))
 - With no wheel it scales by the strip's, because the reference reads the missing wheel unguarded. ([`src/script/colorselect.rs:364`](../crates/benilla-ui/src/script/colorselect.rs#L364))
-- A row that no longer resolves is refused, as `0x4c7300` does, because this path dereferences it unchecked (`0x4f9f35`), a latent null deref. ([`src/script/container.rs:661`](../crates/benilla-ui/src/script/container.rs#L661))
+- A row that no longer resolves is refused, as `0x4c7300` does, because this path dereferences it unchecked (`0x4f9f35`), a latent null deref. ([`src/script/container.rs:666`](../crates/benilla-ui/src/script/container.rs#L666))
 - A last `spell_id` key breaks the remaining ties (Charge's six ranks all have `spellLevel` 0), because the reference leaves them to its qsort over an array benilla does not reproduce; ascending id is ascending rank in every 1.12 pet-ability family. ([`src/script/craft.rs:104`](../crates/benilla-ui/src/script/craft.rs#L104))
 - On `Terrain` the reference keeps a spell, action, macro or pet action on the left button; we clear them, because otherwise a spell has no left-click way off the cursor. ([`src/script/cursor.rs:523`](../crates/benilla-ui/src/script/cursor.rs#L523))
 - Every lock lifts here, bag contents included. The reference's walk of a bag's contents indexes the bag by its own player-array index (`0x495528`, `0x495535`), at least 19, past a bag's slots in every case but the biggest bags, so it normally unlocks none of them; a lock it strands lasts until the item's seat or stack moves, which this does not copy. ([`src/script/cursor.rs:694`](../crates/benilla-ui/src/script/cursor.rs#L694))
@@ -685,8 +685,9 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 - The reference reads uninitialised fields before the seed; we answer the first legal design because that value is undefined. ([`src/script/tabard.rs:103`](../crates/benilla-ui/src/script/tabard.rs#L103))
 - Returns nothing. The handler ends `mov eax,1` with nothing pushed (`0x4dcd7c`), so Lua 5.0 hands back the stack top, the node argument: an accident of the handler, not an API, and copying a stack-top leak would copy a bug. ([`src/script/taxi.rs:138`](../crates/benilla-ui/src/script/taxi.rs#L138))
 - A handler that unregisters the saved next ends the dispatch, because the reference then reads a freed node. ([`src/script/tick.rs:30`](../crates/benilla-ui/src/script/tick.rs#L30))
-- While the template is in flight the reference leaves the tooltip empty (`0x52b6a3`); this shows the slot's name, because a blank plate under an on-screen name reads as broken. ([`src/script/tooltip_item/mod.rs:616`](../crates/benilla-ui/src/script/tooltip_item/mod.rs#L616))
-- The reference's padding repeats a mana stat once per zero entry; not emulated, since only the internal test ring 6674 has one. ([`src/script/tooltip_item/render.rs:383`](../crates/benilla-ui/src/script/tooltip_item/render.rs#L383))
+- The reference's builder hides and clears on a missing record (`0x52b72e`..`0x52b73f`), where a source that knows the item's name shows that, because a blank plate under an on-screen name reads as broken; the template's arrival then builds it whole. ([`src/script/tooltip_item/build.rs:53`](../crates/benilla-ui/src/script/tooltip_item/build.rs#L53))
+- An object no longer held, or a source that keeps no guid (the player's own trade slot), rebuilds from the instance the build read, where the reference's lookup finds no object and builds from the record and the block alone; benilla's views carry no object to read once it is gone, and the kept instance is what the plate showed. ([`src/script/tooltip_item/build.rs:154`](../crates/benilla-ui/src/script/tooltip_item/build.rs#L154))
+- The reference's padding repeats a mana stat once per zero entry; not emulated, since only the internal test ring 6674 has one. ([`src/script/tooltip_item/render.rs:417`](../crates/benilla-ui/src/script/tooltip_item/render.rs#L417))
 - The unknown-skill "Requires %s" shares it, though its reference red is `0xffff0000`, because a 32/255 difference in G and B does not show. ([`src/script/tooltip_unit.rs:30`](../crates/benilla-ui/src/script/tooltip_unit.rs#L30))
 - The selection clears to 0, because the header the reference re-selects (`0x4d7b42`, reading 1) has no spell id; the stock window's `> 1` test treats 0 and 1 alike. ([`src/script/trainer/mod.rs:197`](../crates/benilla-ui/src/script/trainer/mod.rs#L197))
 - A header clears it too, because it has no spell id; the reference stores its `0xffffffff` (`0x4d7b05`) and reads back 1, which the stock window's `> 1` test treats the same as 0. ([`src/script/trainer/mod.rs:871`](../crates/benilla-ui/src/script/trainer/mod.rs#L871))
