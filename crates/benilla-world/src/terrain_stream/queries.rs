@@ -14,6 +14,10 @@ use super::TerrainStreamer;
 #[derive(Resource, Default, PartialEq, Eq)]
 pub struct CurrentArea(pub Option<u32>);
 
+/// The map [`CurrentArea`] was last answered on, so a worldport drops the old map's zone.
+#[derive(Resource, Default)]
+pub(super) struct AreaMap(Option<u32>);
+
 /// The set of [`update_current_area`]. Every consumer that acts on the area orders after it, so
 /// leaf, indoor bit and names come from one frame (the reference resolves them in one pass).
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -113,8 +117,9 @@ pub fn terrain_height_under_cached<'a>(
 /// `Map.dbc` field 19 for any entity, read ahead of every other leg (`0x6703a4` to `0x6703d1`),
 /// and a 0 there fails the query rather than falling through. Elsewhere a WMO interior wins when
 /// the faces-only down-ray (`0x6a8a20`) finds it nearer, by its `WMOAreaTable.AreaTableID`;
-/// outdoors it is the chunk's MCNK `areaId`. Holds the last value while a tile decodes, and on a
-/// failed query (the zone caches keep their state in the reference, `0x67e54d`).
+/// outdoors it is the chunk's MCNK `areaId`. Within a map it holds the last value while a tile
+/// decodes, and on a failed query (the zone caches keep their state in the reference, `0x67e54d`);
+/// a worldport drops it, since it is the old map's.
 pub(super) fn update_current_area(
     mut area: ResMut<CurrentArea>,
     focus: Res<crate::terrain_stream::ViewFocus>,
@@ -122,6 +127,7 @@ pub(super) fn update_current_area(
     adt_tiles: Res<Assets<AdtTile>>,
     interior: Res<crate::wmo_portal::CurrentAreaInterior>,
     wmo_areas: Option<Res<crate::wmo_portal::WmoAreas>>,
+    mut area_map: ResMut<AreaMap>,
     current_map: Option<Res<crate::world_map::CurrentMap>>,
     maps: Option<Res<benilla_assets::MapCatalogRes>>,
 ) {
@@ -134,6 +140,12 @@ pub(super) fn update_current_area(
         }
         return;
     };
+    // The held answer is the previous map's after a worldport: the reference resolves each entity
+    // on its own map (`0x6703a0`), so no zone of the old map is ever read on the new one.
+    let map_id = focus.map(current_map.as_ref().map(|m| m.0));
+    if area_map.0.replace(map_id).is_some_and(|m| m != map_id) && area.0.is_some() {
+        *area = CurrentArea(None);
+    }
     if !focus.body_settled() {
         // A body whose world is still arriving holds the last answer: the reference is behind a
         // loading screen for this window.
@@ -141,7 +153,6 @@ pub(super) fn update_current_area(
     }
     // A one-object map answers its own `Map.dbc` area, with no WMO row and no terrain read.
     let one_object_area = maps.as_ref().and_then(|maps| {
-        let map_id = focus.map(current_map.as_ref().map(|m| m.0));
         let dir = maps.0.directory(map_id)?;
         streamer
             .is_one_object_map(dir)
@@ -184,6 +195,7 @@ mod tests {
     fn bare_world() -> World {
         let mut w = World::new();
         w.init_resource::<CurrentArea>();
+        w.init_resource::<AreaMap>();
         w.init_resource::<crate::terrain_stream::ViewFocus>();
         w.init_resource::<TerrainStreamer>();
         w.init_resource::<Assets<AdtTile>>();
@@ -356,5 +368,33 @@ mod tests {
         w.insert_resource(crate::terrain_stream::ViewFocus::body([0.0; 3], false));
         w.run_system_once(update_current_area).unwrap();
         assert_eq!(w.resource::<CurrentArea>().0, None);
+    }
+
+    /// The held area is the old map's after a worldport. Kept, it fed the zone text a stale leaf
+    /// with the new map's building claim, and the indoor dedup then skipped the real zone.
+    #[test]
+    fn a_worldport_drops_the_old_maps_area() {
+        let rows = [(0, "Azeroth", 0), (WAILING_CAVERNS, "WailingCaverns", 718)];
+        let mut w = map_world(0, &rows, "Azeroth", false);
+        w.insert_resource(CurrentArea(Some(1519)));
+        w.run_system_once(update_current_area).unwrap();
+        assert_eq!(
+            w.resource::<CurrentArea>().0,
+            Some(1519),
+            "within the map the held value stands while the tile decodes"
+        );
+
+        w.insert_resource(crate::world_map::CurrentMap(WAILING_CAVERNS));
+        w.insert_resource(crate::terrain_stream::ViewFocus::body([0.0; 3], false));
+        w.run_system_once(update_current_area).unwrap();
+        assert_eq!(w.resource::<CurrentArea>().0, None);
+
+        // The WDT arrives and the world settles: the new map's own answer.
+        let mut streamer = w.resource_mut::<TerrainStreamer>();
+        streamer.map_dir = Some("WailingCaverns".to_string());
+        streamer.one_object = true;
+        w.insert_resource(crate::terrain_stream::ViewFocus::body([0.0; 3], true));
+        w.run_system_once(update_current_area).unwrap();
+        assert_eq!(w.resource::<CurrentArea>().0, Some(WAILING_CAVERNS_AREA));
     }
 }

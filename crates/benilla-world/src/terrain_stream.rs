@@ -389,6 +389,7 @@ impl Plugin for TerrainPlugin {
             .init_resource::<StaticMerge>()
             .init_resource::<crate::model_forms::ModelForms>()
             .init_resource::<CurrentArea>()
+            .init_resource::<queries::AreaMap>()
             // In `WorldStage::Stream`, between the teleport snap (Input) and the loading cover
             // (Present), so a swap never renders uncovered. `finish_colliders` heads the chain so
             // the collider queue read downstream is this frame's.
