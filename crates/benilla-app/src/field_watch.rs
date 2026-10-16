@@ -130,9 +130,10 @@ pub(crate) fn bridge_len(id: u16) -> u16 {
 }
 
 /// The bridge's player-block watch, registered on a unit whose type mask has the player bit
-/// (`0x51bc2b`-`0x51bc31`): the quest log, 0xf0 bytes at the player section's `+0x28`, signalling
-/// `0x20a` through `0x51bd90` (`0x51bc63`). Its twin over the visible items, `0x51bd70` with
-/// `0xba` (`0x51bc3c`), is not run here: `UNIT_INVENTORY_CHANGED` keeps its own producers.
+/// (`0x51bc2b`-`0x51bc31`): the quest log, 0xf0 bytes at the player section's `+0x28` (`0x51bc63`),
+/// signalling `0x20a` through `0x51bd90` (`0x51bd93`). Its twin over the visible items, `0x51bd70`
+/// (`0x51bc3c`) with `0xba` (`0x51bd73`), is not run here: `UNIT_INVENTORY_CHANGED` keeps its own
+/// producers.
 const QUEST_LOG_WATCH: (u16, u16) = (0x28, 0xf0);
 
 /// `0x5de4b0`'s registrations in `0x5dd8a0`, in registration order: the byte offset in the player
