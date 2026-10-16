@@ -406,6 +406,21 @@ pub(crate) struct CastHold {
     pub(crate) ranged: bool,
 }
 
+/// The live aura state kits that carry an animation, `(spell id, kit AnimID)` newest first: the
+/// stage-2 effects on the unit's list `+0xb4`, each flagged 0x1000 (`0x60eecd`) and linked at the
+/// head (`0x620360`). While the unit is stationary (`[+0x9e8] & 0x20000f` clear) every play but a
+/// death plays the head's id in its place (`0x5fde80`, called at `0x5feab5`), so a sleeping peon
+/// lies down and a stunned unit plays Stun although the base pick never names either.
+#[derive(Component, Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StateKitPins(pub(crate) Vec<(u32, u16)>);
+
+impl StateKitPins {
+    /// The id the walk at `0x5fde80` finds first.
+    pub(crate) fn head(&self) -> Option<u16> {
+        self.0.first().map(|&(_, id)| id)
+    }
+}
+
 /// A hand's fingers close (`HandsClosed`, 15) purely because a weapon occupies its attach point,
 /// not on combat or sheath; a shield or empty hand stays open (`0x60b590`, paperdoll `0x5059a0`).
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
@@ -453,11 +468,11 @@ pub(crate) struct EmoteAnim {
     pub(crate) via_player: bool,
 }
 
-/// A state kit's `AnimID`, compared and never played: both field-4 callers (`0x5ff4c6`,
+/// A state kit's `AnimID`, compared and not played here: both field-4 callers (`0x5ff4c6`,
 /// `0x61dced`) pass stage 2, which `0x60edf0` diverts at `0x60f387`, and a mismatch with the armed
-/// id (`0x5fdb50`) recomputes the base (`0x5fd9e0`). So it only cuts: Charge's
-/// Knockdown (121) falls to Stand, since `0x5fd8b0` never yields its Stun (14). An in-place aura
-/// refresh emits nothing (`0x604d00`).
+/// requested id (`0x5fdb50`, `+0xf8`) recomputes the base (`0x5fd9e0`). The recompute's play is
+/// what [`StateKitPins`] turns into the kit's id on a stationary unit; `0x5fd8b0` itself never
+/// yields Charge's Stun (14). An in-place aura refresh emits nothing (`0x604d00`).
 #[derive(Message, Clone, Copy)]
 pub(crate) struct BaseAnimRecompute {
     pub(crate) entity: Entity,
@@ -590,6 +605,10 @@ pub(crate) struct AnimDriver {
     mode: Mode,
     /// The targeted gait id, to cross-fade only on a change; `None` forces a fresh pick.
     gait: Option<u16>,
+    /// Whether [`StateKitPins`] chose `gait`: once the aura goes, nothing re-picks
+    /// (`0x614150` stops the effect and calls no recompute), so the pinned clip plays out its
+    /// window before Stand takes over.
+    gait_pinned: bool,
     /// The movement flags the base was last armed for: the reference has no per-one-shot latch,
     /// so a root landing with a cast one-shot (Ice Block) still lets the base overwrite bone 0.
     gait_flags: u32,
@@ -711,6 +730,7 @@ impl Default for AnimDriver {
         Self {
             mode: Mode::Gait,
             gait: None,
+            gait_pinned: false,
             gait_flags: 0,
             interacting: false,
             interact_player: false,

@@ -3850,7 +3850,7 @@ mod base_anim_lock {
             "the impact kit's Knockdown holds the base"
         );
 
-        recompute(&mut app, unit, 14); // the state kit's `Stun`, which is never played
+        recompute(&mut app, unit, 14); // the state kit's `Stun`, played only through a pin
 
         assert_eq!(
             main_node(&app, unit),
@@ -4670,3 +4670,5 @@ fn the_emote_player_skips_an_id_already_armed_but_plays_a_different_one() {
     play(&mut app, 67, true);
     assert_eq!(swing(&app), Some(67));
 }
+
+mod state_kit_pin;

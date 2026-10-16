@@ -30,6 +30,8 @@ pub(super) struct Frame<'a> {
     pub(super) airborne_frozen: bool,
     pub(super) auto_repeat: bool,
     pub(super) cast_hold: Option<&'a CastHold>,
+    /// The head state kit's id while it pins this stationary unit ([`super::super::StateKitPins`]).
+    pub(super) kit_pin: Option<u16>,
     pub(super) wielded: Option<&'a Wielded>,
     pub(super) store: Option<&'a ObjectStore>,
     pub(super) emote_sounds: Option<&'a EmoteSounds>,
@@ -64,6 +66,7 @@ pub(super) fn run(
         airborne_frozen,
         auto_repeat,
         cast_hold,
+        kit_pin,
         wielded,
         store,
         emote_sounds,
@@ -363,15 +366,35 @@ pub(super) fn run(
                 } else {
                     cands
                 };
+                // The state-kit pin (`0x5fde80`) takes whatever the chain asked for; its window's
+                // end re-picks (`0x5fc3f0` slot 22) into the pin again while the aura lives.
+                let pin_cands;
+                let cands: &[u16] = match kit_pin {
+                    Some(pin) => {
+                        pin_cands = [pin, STAND];
+                        &pin_cands
+                    }
+                    None => cands,
+                };
                 let target = cands[0];
                 // A turn shuffle ends at its own clip window, not with the turn: `0x607ed0`'s
                 // per-frame tail can start one but not stop it (`0x5fce30` needs a turn bit, so
                 // `0x6084da je` skips), and the completion callback (`0x60781b`) ends it, so a
                 // step lasts `ceil(t_turn / span) · span`. Only against Stand: other targets
                 // arrive through `0x5fd9e0`'s edge sites at once.
+                // A pinned clip outlives its aura the same way: the aura's removal stops the effect
+                // (`0x614150`) and re-picks nothing, so the window's end is the next pick.
                 let target = match drv.gait {
                     Some(g @ (select::SHUFFLE_LEFT | select::SHUFFLE_RIGHT))
                         if target == STAND && !window_complete(drv, player) =>
+                    {
+                        g
+                    }
+                    Some(g)
+                        if drv.gait_pinned
+                            && kit_pin.is_none()
+                            && target == STAND
+                            && !window_complete(drv, player) =>
                     {
                         g
                     }
@@ -410,6 +433,14 @@ pub(super) fn run(
                                 ),
                             );
                         }
+                        // Every unit's pin arm, which only an aura makes: the requested id and the
+                        // clip the model plays for it.
+                        if kit_pin == Some(target) && benilla_assets::trace::enabled_for("anim") {
+                            benilla_assets::trace::line(
+                                "anim",
+                                &format!("PIN unit={entity} id={target} clip={}", c.anim_id),
+                            );
+                        }
                         // The ranged Load and Loot 50 are authored clamp: played once, they hold
                         // their last frame (full draw, the rummage pose), where a loop would wrap.
                         let repeat = if select::is_ranged_load(target) || target == select::LOOT {
@@ -425,12 +456,14 @@ pub(super) fn run(
                         armed = play_clip(&mut drv.base_lock, tr, player, c, repeat, rate);
                         if armed {
                             drv.gait = Some(target);
+                            drv.gait_pinned = kit_pin == Some(target);
                         } else {
                             drv.loop_window = None;
                         }
                     }
                 } else {
                     drv.gait = Some(target); // no clip (bind pose): record it so it does not churn
+                    drv.gait_pinned = kit_pin == Some(target);
                 }
                 if armed {
                     // What the base was armed for: a later one-shot's flag edge tests against it.

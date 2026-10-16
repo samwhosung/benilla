@@ -26,7 +26,7 @@ use super::sheath::{advance_sheath_ceremony, start_sheath_ceremony};
 use super::{
     find_resolved, move_flags, AnimData, AnimDriver, AutoRepeatArmed, BaseAnimRecompute, CastHold,
     DefenseAnim, EmoteAnim, Engaged, MovementState, NockLatch, Overlay, OverlayFade, SheathRequest,
-    SheathSwapMessage, SwingImpact, SwingMessage, SwingSlowdown, Wielded, WoundAnim,
+    SheathSwapMessage, StateKitPins, SwingImpact, SwingMessage, SwingSlowdown, Wielded, WoundAnim,
 };
 
 mod grip;
@@ -266,6 +266,8 @@ pub(super) fn drive_animations(
             Option<&crate::net::UnitMoveModes>,
             // A proc-11 rate node here (the freeze auras', `0x6201d0`) refuses the wound flinch.
             Option<&crate::aura_visual::AuraNodes>,
+            // The live state kits whose anim takes a stationary unit's plays (`0x5fde80`).
+            Option<&StateKitPins>,
         ),
     )>,
     // A mount child's movement view is its host's, fetched through `MountBody.host`.
@@ -436,6 +438,7 @@ pub(super) fn drive_animations(
             transform,
             move_modes,
             aura_nodes,
+            state_pins,
         ),
     ) in &mut units
     {
@@ -668,6 +671,34 @@ pub(super) fn drive_animations(
         // unit kneels rather than sits, but still jumps.
         let special = special.filter(|s| !(looting && matches!(s, select::Special::Pose(_))));
 
+        // The stationary state-kit pin (`0x5fde80`): with no `[+0x9e8] & 0x20000f` bit (turning
+        // keeps it), every play past `0x5fe2f0`'s lock and fast path plays the head state kit's
+        // id instead, so a pose's enter, loop and stand-up, a landing and a one-shot all become
+        // the pin. Deviation: a mounted rider is left unpinned, as its mount child, which the
+        // reference pins in the same pass, is driven apart.
+        let kit_pin = state_pins
+            .and_then(StateKitPins::head)
+            .filter(|_| !mounted && mv.flags & move_flags::CAST_PIN_MOVE == 0);
+        let special =
+            special.filter(|s| !(kit_pin.is_some() && matches!(s, select::Special::Pose(_))));
+        if kit_pin.is_some() {
+            match drv.mode {
+                Mode::Entering(select::Special::Pose(_))
+                | Mode::Looping(select::Special::Pose(_))
+                | Mode::Exiting(select::Special::Pose(_), _)
+                | Mode::Land { .. } => {
+                    drv.mode = Mode::Gait;
+                    drv.gait = None;
+                }
+                // A one-shot over a pose finishes into the pin, never the pose's loop.
+                Mode::Swing {
+                    id,
+                    under: Some(select::Special::Pose(_)),
+                } => drv.mode = Mode::Swing { id, under: None },
+                _ => {}
+            }
+        }
+
         // ── Sheath state: the committed cache (`[+0xd40]`), not the descriptor byte, adopting the
         // byte whenever it changes (`0x604c70`). Every SetSheatheState (`0x611cf0`) snaps except
         // the manual toggle's ceremony, which carries the draw/stow sound.
@@ -853,6 +884,15 @@ pub(super) fn drive_animations(
             }
             // A normal arm clears the cache (`0x5fe48e` writes −1).
             drv.deferred = None;
+            // The pin (`0x5feab5`): the request plays the pin's id, which the same-id dedup
+            // (`0x5fdba0`) drops while the pin already holds the base.
+            if let Some(pin) = kit_pin {
+                if !(drv.mode == Mode::Gait && drv.gait == Some(pin)) {
+                    drv.mode = Mode::Gait;
+                    drv.gait = None;
+                }
+                continue;
+            }
             // Same-id dedup (`0x5fdba0`): an id still playing in its slot is not re-armed, so an
             // eat/drink loop free-runs across the server's ~5 s kit resends.
             let overlay_live = drv.overlay.is_some_and(|ov| {
@@ -1015,15 +1055,21 @@ pub(super) fn drive_animations(
         }
         // ── Stage-2 base recompute (`0x60f389`–`0x60f399`): a state kit's id that differs from
         // the one playing (`0x5fdb50`: key bone, else bone 0) runs `0x5fd9e0(unit, -1)`; it never
-        // plays the id. It must run after this frame's one-shot arms, so the state kit cuts the
-        // impact kit (Charge 22911: Knockdown 121, then Stun 14). A unit inside a Special is left
-        // alone: the recompute would land in the same state, and forcing Gait replays its entry.
+        // plays the id itself, the pin does. It must run after this frame's one-shot arms, so the
+        // state kit cuts the impact kit (Charge 22911: Knockdown 121, then Stun 14). A unit inside
+        // a Special is left alone: the recompute would land in the same state, and forcing Gait
+        // replays its entry. The armed id is the one requested (`+0xf8`, `0x712090`), not the
+        // model's stand-in, so a pinned EmoteSleep (71) playing Sleep (100) is no mismatch.
         if let Some(&want) = pending_recompute.get(&entity) {
-            let armed = drv.overlay.map(|ov| ov.id).or_else(|| {
-                tr.get_main_animation()
-                    .and_then(|n| anims.clips.iter().find(|c| c.node == n))
-                    .map(|c| c.anim_id)
-            });
+            let armed = drv
+                .overlay
+                .map(|ov| ov.id)
+                .or_else(|| drv.active_anim())
+                .or_else(|| {
+                    tr.get_main_animation()
+                        .and_then(|n| anims.clips.iter().find(|c| c.node == n))
+                        .map(|c| c.anim_id)
+                });
             if armed != Some(want) && matches!(drv.mode, Mode::Swing { .. } | Mode::Gait) {
                 drv.deferred = None; // a normal arm clears the cache (`0x5fe48e`)
                 drv.mode = Mode::Gait;
@@ -1075,6 +1121,7 @@ pub(super) fn drive_animations(
                 airborne_frozen,
                 auto_repeat,
                 cast_hold,
+                kit_pin,
                 wielded,
                 store,
                 emote_sounds: emote_sounds.as_deref(),

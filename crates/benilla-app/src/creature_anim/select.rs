@@ -124,8 +124,9 @@ pub(crate) mod move_flags {
     pub const ROUTE_COMMITTED_MOVE: u32 =
         FORWARD | BACKWARD | STRAFE_LEFT | STRAFE_RIGHT | TURN_LEFT | TURN_RIGHT | SWIMMING;
 
-    /// The stationary-cast pin's moving test (`0x5fde80`): no turn bits, so a caster turning in
-    /// place keeps the pin, where [`ROUTE_COMMITTED_MOVE`]'s turn bits would flap it.
+    /// The stationary pins' moving test, `[+0x9e8] & 0x20000f` (`0x5fde80`), for the cast hold and
+    /// the state-kit pin: no turn bits, so a unit turning in place keeps the pin, where
+    /// [`ROUTE_COMMITTED_MOVE`]'s turn bits would flap it.
     pub const CAST_PIN_MOVE: u32 = ANY_MOVE | SWIMMING;
 }
 

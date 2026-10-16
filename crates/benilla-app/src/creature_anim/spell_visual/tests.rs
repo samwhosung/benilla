@@ -1656,3 +1656,140 @@ fn an_anim_only_state_kit_still_arms_on_the_aura_add_edge() {
         "an anim-only state kit is not nothing — its ADD edge owes a recompute"
     );
 }
+
+/// A state kit with an anim pins its unit while the aura lives, newest at the head (`0x620360`),
+/// and the aura's removal takes its pin (`0x614150` force 1).
+#[test]
+fn a_state_kits_anim_pins_its_unit_while_the_aura_lives() {
+    use benilla_protocol::messages::{ObjectFields, ObjectType};
+
+    const PEON_SLEEPING: u32 = 17743;
+    const SLEEP_VISUAL: u32 = 4762;
+    const SLEEP_KIT: u32 = 906; // EmoteSleep (71) and the head's Sleep_State_Head
+    const EMOTE_SLEEP: u16 = 71;
+    const SNEEZING_FIT: u32 = 6902;
+    const SNEEZE_VISUAL: u32 = 517;
+    const SNEEZE_KIT: u32 = 586; // anim-only Stun (14)
+    const STUN: u16 = 14;
+
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.add_message::<SpellKitFx>()
+        .add_message::<crate::net::FieldChanged>()
+        .add_message::<crate::aura_visual::AuraProc>()
+        .add_message::<SpellKitSound>()
+        .add_message::<super::BaseAnimRecompute>();
+    app.insert_resource(SpellVisuals(SpellVisualCatalog::from_tables(
+        HashMap::from([
+            (
+                SLEEP_VISUAL,
+                VisualStages {
+                    state: SLEEP_KIT,
+                    ..Default::default()
+                },
+            ),
+            (
+                SNEEZE_VISUAL,
+                VisualStages {
+                    state: SNEEZE_KIT,
+                    ..Default::default()
+                },
+            ),
+        ]),
+        HashMap::from([
+            (
+                SLEEP_KIT,
+                VisualKit {
+                    anim_id: Some(EMOTE_SLEEP),
+                    ..Default::default()
+                },
+            ),
+            (
+                SNEEZE_KIT,
+                VisualKit {
+                    anim_id: Some(STUN),
+                    ..Default::default()
+                },
+            ),
+        ]),
+    )));
+    app.insert_resource(crate::ui_action::Spells {
+        catalog: SpellCatalog::from_displays(HashMap::from([
+            (
+                PEON_SLEEPING,
+                SpellDisplay {
+                    visual: SLEEP_VISUAL,
+                    ..Default::default()
+                },
+            ),
+            (
+                SNEEZING_FIT,
+                SpellDisplay {
+                    visual: SNEEZE_VISUAL,
+                    ..Default::default()
+                },
+            ),
+        ])),
+        ..crate::ui_action::Spells::empty_for_tests()
+    });
+    app.add_systems(Update, super::arm_aura_state_fx);
+    let pins = |app: &App, unit: Entity| {
+        app.world()
+            .entity(unit)
+            .get::<super::super::StateKitPins>()
+            .cloned()
+    };
+
+    // vmangos puts the peon's aura in the first negative slot, 32 (field 79).
+    let unit = app
+        .world_mut()
+        .spawn(crate::net::ObjectStore(
+            ObjectFields::from_pairs(&[(79, PEON_SLEEPING), (99, 0x09)])
+                .into_created(ObjectType::Unit),
+        ))
+        .id();
+    app.update();
+    assert_eq!(
+        pins(&app, unit),
+        Some(super::super::StateKitPins(vec![(
+            PEON_SLEEPING,
+            EMOTE_SLEEP
+        )])),
+        "the sleeping aura pins EmoteSleep"
+    );
+
+    crate::net::apply_fields_for_test(
+        app.world_mut(),
+        unit,
+        ObjectFields::from_pairs(&[(80, SNEEZING_FIT), (99, 0x99)]),
+    );
+    app.update();
+    assert_eq!(
+        pins(&app, unit),
+        Some(super::super::StateKitPins(vec![
+            (SNEEZING_FIT, STUN),
+            (PEON_SLEEPING, EMOTE_SLEEP)
+        ])),
+        "the newer kit is the head"
+    );
+
+    crate::net::apply_fields_for_test(
+        app.world_mut(),
+        unit,
+        ObjectFields::from_pairs(&[(79, 0), (99, 0x90)]),
+    );
+    app.update();
+    assert_eq!(
+        pins(&app, unit),
+        Some(super::super::StateKitPins(vec![(SNEEZING_FIT, STUN)])),
+        "the sleep's removal takes its pin alone"
+    );
+
+    crate::net::apply_fields_for_test(
+        app.world_mut(),
+        unit,
+        ObjectFields::from_pairs(&[(80, 0), (99, 0)]),
+    );
+    app.update();
+    assert_eq!(pins(&app, unit), None, "no live kit, no pin");
+}
