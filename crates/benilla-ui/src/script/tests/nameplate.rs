@@ -1114,3 +1114,34 @@ fn a_missing_or_non_string_nameplate_font_leaves_the_plate_strings_without_a_fon
         assert_eq!(plate_fonts(&mut s, 1), (want.clone(), want), "{setup:?}");
     }
 }
+
+/// The lookup is a `lua_gettable` on the globals (`0x704373`), so an `_G` `__index` runs inside
+/// it and may call any verb, the Model's included: strict-mode and global-tracking addons do. The
+/// lookup is made for a new plate only, and outside the Model's borrow.
+#[test]
+fn a_global_index_metamethod_may_touch_the_model_during_a_plates_font_lookup() {
+    let mut s = vm();
+    s.run(
+        r#"hits = 0
+           setmetatable(_G, { __index = function(t, k)
+               if k == "NAMEPLATE_FONT" then
+                   hits = hits + 1
+                   CreateFrame("Frame", nil, UIParent):SetWidth(UIParent:GetWidth())
+               end
+               return nil
+           end })"#,
+    )
+    .unwrap();
+    drive(&mut s, &[plate("Wolf", 30.0, 40.0)]);
+    assert_eq!(s.eval::<i64>("return hits").unwrap(), 2, "name and level");
+    // A built plate is not looked up again, and a retaken slot is not a new plate.
+    drive(&mut s, &[plate("Wolf", 30.0, 40.0)]);
+    drive(&mut s, &[plate("Bear", 10.0, 90.0)]);
+    assert_eq!(s.eval::<i64>("return hits").unwrap(), 2);
+    drive(
+        &mut s,
+        &[plate("Bear", 10.0, 90.0), plate("Wolf", 30.0, 40.0)],
+    );
+    assert_eq!(s.eval::<i64>("return hits").unwrap(), 4);
+    assert!(s.take_errors().is_empty());
+}

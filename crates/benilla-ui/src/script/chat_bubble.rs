@@ -9,7 +9,7 @@
 //! The app owns each line's lifetime, fade and seat ([`BubbleState`]); this layer owns the frames:
 //! it hands one out per line, takes it back when the line ends, and writes what moved.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::layout::{Anchor, Anchors, Point};
 use crate::order::DrawLayer;
@@ -110,14 +110,28 @@ impl UiScript {
     /// each new one, then write each live bubble's level, alpha, visibility and seat.
     pub fn sync_chat_bubbles(&mut self, geometry: BubbleGeometry, states: &[BubbleState]) {
         let lua = self.lua();
-        let font = || super::font::nameplate_font(lua);
+        // One lookup per bubble about to be built (`0x4b0b36`), before the Model is borrowed: a
+        // lookup honours an `_G` `__index` (`lua_gettable` at `0x704373`), which may call any verb.
+        let mut fonts: VecDeque<Option<String>> = {
+            let built = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                // No WorldFrame, no bubbles, and no lookups for them.
+                if model.arena.lookup("WorldFrame").is_none() {
+                    return;
+                }
+                bubbles_to_build(&model, states)
+            };
+            (0..built)
+                .map(|_| super::font::nameplate_font(lua))
+                .collect()
+        };
         let visibility = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // No WorldFrame (no interface loaded), no bubbles: no addon walks an invented root.
             let Some(world) = model.arena.lookup("WorldFrame") else {
                 return;
             };
-            sync(&mut model, world, geometry, states, &font)
+            sync(&mut model, world, geometry, states, &mut fonts)
         };
         // Each a full transition with its handlers, in the order the sync issued them.
         for (frame, shown) in visibility {
@@ -138,13 +152,32 @@ pub(super) fn is_bubble(model: &Model, frame: FrameHandle) -> bool {
     model.chat_bubbles.by_frame.contains_key(&frame)
 }
 
+/// How many new bubbles [`sync`] builds for `states`: the new lines (a key without a live line of
+/// the same number) less the free list and the bubbles whose lines end this frame.
+fn bubbles_to_build(model: &Model, states: &[BubbleState]) -> usize {
+    let cb = &model.chat_bubbles;
+    let live = |key: u64, line: u64| states.iter().any(|s| s.key == key && s.line == line);
+    let ended = cb
+        .active
+        .iter()
+        .filter_map(|&i| cb.bubbles[i].line)
+        .filter(|&(key, line)| !live(key, line))
+        .collect::<Vec<_>>();
+    let arriving: HashSet<u64> = states
+        .iter()
+        .map(|s| s.key)
+        .filter(|k| !cb.assigned.contains_key(k) || ended.iter().any(|(e, _)| e == k))
+        .collect();
+    arriving.len().saturating_sub(cb.free.len() + ended.len())
+}
+
 /// The per-frame drive; returns the `Show`/`Hide` calls to run, in order.
 fn sync(
     model: &mut Model,
     world: FrameHandle,
     geometry: BubbleGeometry,
     states: &[BubbleState],
-    font: &dyn Fn() -> Option<String>,
+    fonts: &mut VecDeque<Option<String>>,
 ) -> Vec<(FrameHandle, bool)> {
     let mut visibility = Vec::new();
 
@@ -166,7 +199,7 @@ fn sync(
             Some(&i) => i,
             None => {
                 // A new line: the spawn's acquire (`0x4b1870`), then its text (`0x4b1600`).
-                let i = acquire(model, world, geometry, font);
+                let i = acquire(model, world, geometry, fonts);
                 model.chat_bubbles.assigned.insert(state.key, i);
                 if model.chat_bubbles.bubbles[i].laid_out != Some(geometry) {
                     lay_out(model, i, geometry);
@@ -198,12 +231,12 @@ fn acquire(
     model: &mut Model,
     world: FrameHandle,
     geometry: BubbleGeometry,
-    font: &dyn Fn() -> Option<String>,
+    fonts: &mut VecDeque<Option<String>>,
 ) -> usize {
     if let Some(i) = model.chat_bubbles.free.pop_front() {
         return i;
     }
-    let bubble = create(model, world, geometry, font());
+    let bubble = create(model, world, geometry, fonts.pop_front().flatten());
     let i = model.chat_bubbles.bubbles.len();
     model.chat_bubbles.by_frame.insert(bubble.frame, i);
     model.chat_bubbles.bubbles.push(bubble);

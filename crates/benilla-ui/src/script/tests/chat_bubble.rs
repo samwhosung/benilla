@@ -471,6 +471,31 @@ fn the_text_takes_the_nameplate_font_global() {
         .unwrap());
 }
 
+/// The lookup honours an `_G` `__index` (`lua_gettable`, `0x704373`), which may call any verb, the
+/// Model's included; it is made for a new bubble only, and outside the Model's borrow.
+#[test]
+fn a_global_index_metamethod_may_touch_the_model_during_a_bubbles_font_lookup() {
+    let mut s = vm();
+    s.run(
+        r#"hits = 0
+           setmetatable(_G, { __index = function(t, k)
+               if k == "NAMEPLATE_FONT" then
+                   hits = hits + 1
+                   CreateFrame("Frame", nil, UIParent):SetWidth(UIParent:GetWidth())
+               end
+               return nil
+           end })"#,
+    )
+    .unwrap();
+    drive(&mut s, &[say(1, 1, "a")]);
+    assert_eq!(s.eval::<i64>("return hits").unwrap(), 1);
+    // The same speaker's next line takes the freed frame; a second speaker needs a new one.
+    drive(&mut s, &[say(1, 2, "b")]);
+    assert_eq!(s.eval::<i64>("return hits").unwrap(), 1);
+    drive(&mut s, &[say(1, 2, "b"), say(2, 1, "c")]);
+    assert_eq!(s.eval::<i64>("return hits").unwrap(), 2);
+}
+
 /// The bubble text's justification as a Lua reader sees it.
 fn text_justify(s: &mut UiScript) -> String {
     s.eval::<String>(

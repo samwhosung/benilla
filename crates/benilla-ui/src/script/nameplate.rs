@@ -8,6 +8,8 @@
 //! Also the four verbs that switch plates on and off, which write two bits of the engine's
 //! runtime dword `[0xc4da34]` and nothing else.
 
+use std::collections::{HashSet, VecDeque};
+
 use mlua::Lua;
 
 use crate::layout::{Anchor, Anchors, Point};
@@ -253,15 +255,29 @@ impl UiScript {
     /// has its plate retired (hidden, never destroyed). An unchanged `geometry` costs nothing.
     pub fn sync_nameplates(&mut self, geometry: PlateGeometry, states: &[PlateState]) {
         let lua = self.lua();
-        // Read per new plate, never for a built one (`0x7cb3ee`, `0x7cb490`: the constructor).
-        let font = || super::font::nameplate_font(lua);
+        // The constructor's two lookups (`0x7cb3f9`, `0x7cb49b`), for each plate about to be built
+        // and none for a built one. Done before the Model is borrowed: a lookup honours an `_G`
+        // `__index` (`lua_gettable` at `0x704373`), which may call any verb.
+        let mut fonts: VecDeque<Option<String>> = {
+            let built = {
+                let model = lua.app_data_ref::<Model>().expect("model app_data");
+                // No WorldFrame, no plates, and no lookups for them.
+                if model.arena.lookup("WorldFrame").is_none() {
+                    return;
+                }
+                plates_to_build(&model, states)
+            };
+            (0..2 * built)
+                .map(|_| super::font::nameplate_font(lua))
+                .collect()
+        };
         let effects = {
             let mut model = lua.app_data_mut::<Model>().expect("model app_data");
             // No WorldFrame (no interface loaded), no plates: no addon walks an invented root.
             let Some(world) = model.arena.lookup("WorldFrame") else {
                 return;
             };
-            sync(&mut model, world, geometry, states, &font)
+            sync(&mut model, world, geometry, states, &mut fonts)
         };
         apply_visibility(lua, effects.visibility);
         for (bar, value) in effects.values {
@@ -360,13 +376,31 @@ pub(super) fn note_click(lua: &mlua::Lua, id: u32, button: &str) {
     });
 }
 
+/// How many new plates [`sync`] builds for `states`: the units without a plate, less the free
+/// slots, which are the retired ones and those the departing units are about to free.
+fn plates_to_build(model: &Model, states: &[PlateState]) -> usize {
+    let np = &model.nameplates;
+    let mut free = np.plates.iter().filter(|p| p.last.is_none()).count();
+    free += np
+        .assigned
+        .iter()
+        .filter(|(k, &i)| !states.iter().any(|s| s.key == **k) && np.plates[i].last.is_some())
+        .count();
+    let arriving: HashSet<u64> = states
+        .iter()
+        .map(|s| s.key)
+        .filter(|k| !np.assigned.contains_key(k))
+        .collect();
+    arriving.len().saturating_sub(free)
+}
+
 /// The per-frame drive: retire departed units, bind the rest, lay out, write what changed.
 fn sync(
     model: &mut Model,
     world: FrameHandle,
     geometry: PlateGeometry,
     states: &[PlateState],
-    font: &dyn Fn() -> Option<String>,
+    fonts: &mut VecDeque<Option<String>>,
 ) -> SyncEffects {
     let mut effects = SyncEffects::default();
     let relayout = model.nameplates.geometry != Some(geometry);
@@ -397,7 +431,7 @@ fn sync(
                 let free = (0..model.nameplates.plates.len())
                     .find(|i| model.nameplates.plates[*i].last.is_none());
                 let i = free.unwrap_or_else(|| {
-                    let plate = Plate::create(model, world, font);
+                    let plate = Plate::create(model, world, fonts);
                     model.nameplates.plates.push(plate);
                     model.nameplates.plates.len() - 1
                 });
@@ -425,7 +459,11 @@ fn sync(
 impl Plate {
     /// Build one plate: the Button, its six regions in the reference's order, and the health bar.
     /// Written once, so a region an addon blanks stays blank.
-    fn create(model: &mut Model, world: FrameHandle, font: &dyn Fn() -> Option<String>) -> Plate {
+    fn create(
+        model: &mut Model,
+        world: FrameHandle,
+        fonts: &mut VecDeque<Option<String>>,
+    ) -> Plate {
         // Anonymous, as the reference's name is zeroed (`0x76c50b`): plate addons reject a named
         // `WorldFrame` child.
         let frame = model.arena.create(FrameKind::Button, None, Some(world));
@@ -465,8 +503,8 @@ impl Plate {
         );
         // Each FontString looks `NAMEPLATE_FONT` up itself, name then level (`0x7cb3f9`,
         // `0x7cb49b`), at construction only.
-        let name = font_string(model, frame, JustifyV::Bottom, font());
-        let level = font_string(model, frame, JustifyV::Middle, font());
+        let name = font_string(model, frame, JustifyV::Bottom, fonts.pop_front().flatten());
+        let level = font_string(model, frame, JustifyV::Middle, fonts.pop_front().flatten());
         let skull = texture(
             model,
             frame,
