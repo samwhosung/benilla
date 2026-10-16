@@ -731,6 +731,38 @@ fn the_queue_retexts_every_frame() {
     assert_eq!(m.outbox, [Outgoing::Queue, Outgoing::Queue]);
 }
 
+/// The estimate is stored by the packets (`0x46aeda`, `0xb41df0`), counts down between them, and
+/// the next connect clears it with the samples (`0x5aab45`).
+#[test]
+fn the_queue_estimate_stands_between_packets_and_a_connect_clears_it() {
+    let mut m = fresh();
+    m.state = ScreenState::Connect;
+    for (i, place) in (93..=100).rev().enumerate() {
+        m.on_queued(Some(place), Some("Realm".into()), 1_000 + 10_000 * i as u32);
+    }
+    let last = 1_000 + 70_000;
+    let shown = |m: &GlueMgr, now| {
+        m.queue.text_by(now, Some("Realm"), |key| match key {
+            "QUEUE_NAME_TIME_LEFT" => "%s %d %d".to_string(),
+            other => other.to_string(),
+        })
+    };
+    assert_eq!(shown(&m, last), "Realm 93 15");
+    assert_eq!(shown(&m, last + 300_000), "Realm 93 10");
+    assert_eq!(
+        shown(&m, last + 1_000_000),
+        "QUEUE_NAME_TIME_LEFT_SECONDS",
+        "past zero"
+    );
+    m.begin_connect();
+    settle(&mut m);
+    assert_eq!(
+        shown(&m, last + 300_000),
+        "QUEUE_NAME_TIME_LEFT_UNKNOWN",
+        "a connect starts the queue over"
+    );
+}
+
 /// `StatusDialogClick` by state (`0x46b7a8`): the logon is cancelled; the world connect completes
 /// `RESPONSE_CANCELLED`, whose failure arm shows no dialog, drops the world attempt alone and
 /// raises the realm list; a query is cancelled to state 0; idle does nothing.

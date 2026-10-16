@@ -3,9 +3,10 @@
 //! ends with `AUTH_OK`; it is a wait, not a refusal.
 //!
 //! The arithmetic is the reference's (`CGlueMgr::UpdateQueuePosition`, `0x46ae50`), including
-//! its divide-before-multiply truncation. Three reference defects are not reproduced: the 32-bit
-//! overflow, the leading blank line and the stale-position redisplay on a truncated packet
-//! ([`benilla_protocol`]'s parser).
+//! its divide-before-multiply truncation: each packet computes the estimate once, against its own
+//! time, and stores it; the dialog counts the stored figure down. Three reference defects are not
+//! reproduced: the 32-bit overflow, the leading blank line and the stale-position redisplay on a
+//! truncated packet ([`benilla_protocol`]'s parser).
 
 /// The reference's ring of `(tick, position)` samples (`0xb41cf8..0xb41d14` ticks,
 /// `0xb41d18..0xb41d34` positions).
@@ -15,15 +16,22 @@ const MINUTE_MS: i64 = 60_000;
 
 /// The reference's queue-estimate ring: `[0]` is the newest sample, `[SAMPLES - 1]` the oldest.
 /// Sampled once per queue packet, on no timer, so its only clock is the server's send cadence.
+/// A new value is a fresh connect (`0x5aab20` zeroes the ring and the estimate together).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct QueueEstimate {
     tick_ms: [u32; SAMPLES],
     position: [u32; SAMPLES],
+    /// `[0xb41df0]`: the wait in ms the last packet that moved the queue forward computed; 0 until
+    /// one has, and kept by a packet that stalls or steps back.
+    estimate_ms: i64,
 }
 
 impl QueueEstimate {
     /// Fold one queue packet in at `now_ms`. Once the ring is full, a repeated position only
     /// restamps the newest tick (the reference's guard), so a repeating server keeps the history.
+    /// With the oldest sample set and the newest position below it, the estimate is recomputed
+    /// against this packet's time and stored (`0x46aeda`); otherwise it keeps its value
+    /// (`0x46aec0`, `0x46aece`).
     pub(crate) fn sample(&mut self, position: u32, now_ms: u32) {
         let repeat = position == self.position[0] && self.tick_ms[SAMPLES - 1] != 0;
         if !repeat {
@@ -32,19 +40,23 @@ impl QueueEstimate {
         }
         self.position[0] = position;
         self.tick_ms[0] = now_ms;
+        if let Some(ms) = self.computed_ms() {
+            self.estimate_ms = ms;
+        }
     }
 
     pub(crate) fn position(&self) -> Option<u32> {
         (self.tick_ms[0] != 0).then_some(self.position[0])
     }
 
-    /// The estimated wait in ms: `floor((now - oldest_tick) / (oldest_pos - newest_pos)) *
-    /// newest_pos`, dividing first (`idiv` at `0x46aed3` before `imul` at `0x46aed5`). None
-    /// until the ring is full and the queue has moved forward, as in the reference.
+    /// The wait the ring gives at its newest tick, in ms: `floor((newest_tick - oldest_tick) /
+    /// (oldest_pos - newest_pos)) * newest_pos`, dividing first (`idiv` at `0x46aed3` before
+    /// `imul` at `0x46aed5`). None until the ring is full and the queue has moved forward, as in
+    /// the reference.
     ///
     /// Computed in `i64`: the reference's 32-bit multiply overflows unguarded, which on a long
     /// queue shows an absurd countdown.
-    pub(crate) fn estimate_ms(&self, now_ms: u32) -> Option<i64> {
+    fn computed_ms(&self) -> Option<i64> {
         if self.tick_ms[SAMPLES - 1] == 0 {
             return None; // fewer than SAMPLES packets so far
         }
@@ -52,17 +64,23 @@ impl QueueEstimate {
         if moved <= 0 {
             return None; // stalled, or going backwards
         }
-        let elapsed = i64::from(now_ms.wrapping_sub(self.tick_ms[SAMPLES - 1]));
+        let elapsed = i64::from(self.tick_ms[0].wrapping_sub(self.tick_ms[SAMPLES - 1]));
         let per_place = elapsed / moved;
         Some(per_place * i64::from(self.position[0]))
+    }
+
+    /// The stored estimate, if there is one: `[0xb41df0]` above 0 (`0x46bcb8`).
+    pub(crate) fn estimate_ms(&self) -> Option<i64> {
+        (self.estimate_ms > 0).then_some(self.estimate_ms)
     }
 
     /// The dialog text. The reference reads `realm` from the `realmName` CVar it wrote on the way
     /// in, so the `_NAME` variants are the ones that render in practice.
     ///
-    /// The shown wait, `tick[0] + estimate - now`, is not a countdown: `estimate` grows with
-    /// `now`, so a silent queue's figure climbs (slope `places_left / places_moved - 1`) until
-    /// the next packet, as in the reference.
+    /// The shown wait is `tick[0] + estimate - now` (`0x46bcc9`-`0x46bcd7`): the estimate stands
+    /// between packets, so a silent queue counts down. Once it passes a minute short the text is
+    /// "< 1 minute" and stays so at zero and below (`0x46bcd9`, `0x46bcf4`); with no estimate yet
+    /// it is "Calculating...".
     ///
     /// The reference composes `"%s\n%s"` with an always-empty first half, a leading blank line in
     /// two of three states; that blank line is not reproduced.
@@ -107,9 +125,9 @@ impl QueueEstimate {
     /// The `QUEUE_*` key for this state, and the wait left in ms once there is an estimate.
     fn key(&self, now_ms: u32, realm: Option<&str>) -> (&'static str, Option<i64>) {
         let named = realm.is_some_and(|r| !r.is_empty());
-        let remaining = self.estimate_ms(now_ms).and_then(|est| {
-            (est > 0).then(|| i64::from(self.tick_ms[0]) + est - i64::from(now_ms))
-        });
+        let remaining = self
+            .estimate_ms()
+            .map(|est| i64::from(self.tick_ms[0]) + est - i64::from(now_ms));
         let key = match (named, remaining) {
             (true, None) => "QUEUE_NAME_TIME_LEFT_UNKNOWN",
             (true, Some(ms)) if ms < MINUTE_MS => "QUEUE_NAME_TIME_LEFT_SECONDS",
@@ -159,18 +177,18 @@ mod tests {
     fn an_estimate_needs_eight_samples() {
         for n in 1..SAMPLES {
             let places: Vec<u32> = (0..n as u32).map(|i| 100 - i).collect();
-            let (q, last) = ring_of(&places, 1_000);
-            assert_eq!(q.estimate_ms(last), None, "{n} samples is not enough");
+            let (q, _) = ring_of(&places, 1_000);
+            assert_eq!(q.estimate_ms(), None, "{n} samples is not enough");
         }
-        let (q, last) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
-        assert!(q.estimate_ms(last).is_some(), "eight is");
+        let (q, _) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
+        assert!(q.estimate_ms().is_some(), "eight is");
     }
 
     #[test]
     fn a_stalled_queue_has_no_estimate() {
-        let (q, last) = ring_of(&[50; SAMPLES], 1_000);
+        let (q, _) = ring_of(&[50; SAMPLES], 1_000);
         assert_eq!(
-            q.estimate_ms(last),
+            q.estimate_ms(),
             None,
             "it has not moved, so nothing divides"
         );
@@ -199,8 +217,8 @@ mod tests {
     /// 7 000 ms over 7 places is 1 000 ms each, times 93 still ahead.
     #[test]
     fn the_estimate_is_per_place_times_places_left() {
-        let (q, last) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
-        assert_eq!(q.estimate_ms(last), Some(93_000));
+        let (q, _) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
+        assert_eq!(q.estimate_ms(), Some(93_000));
     }
 
     /// A fixture where the two orders disagree: 10 000 ms over 7 places truncates to 1 428 ms.
@@ -212,7 +230,7 @@ mod tests {
         }
         let last = 1_000 + 10_000;
         let elapsed = i64::from(last - 1_000);
-        assert_eq!(q.estimate_ms(last), Some((elapsed / 7) * 93));
+        assert_eq!(q.estimate_ms(), Some((elapsed / 7) * 93));
         assert_ne!(
             (elapsed / 7) * 93,
             elapsed * 93 / 7,
@@ -220,16 +238,92 @@ mod tests {
         );
     }
 
-    /// Waiting raises the estimate, as in the reference: elapsed grows against a fixed divisor.
+    /// The estimate is computed once per packet (`0x46aeda`) and stands between packets, so the
+    /// shown wait (`tick[0] + estimate - now`, `0x46bcc9`-`0x46bcd7`) counts down by the time
+    /// that passed.
     #[test]
-    fn a_silent_queue_inflates_its_own_estimate() {
+    fn a_silent_queue_counts_down_from_the_stored_estimate() {
+        let strings = GlueStrings::default();
+        // Ten seconds a place with 93 ahead: 930 s, 15 minutes at the packet.
+        let (q, last) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 10_000);
+        assert_eq!(q.estimate_ms(), Some(930_000));
+        for (wait, minutes) in [(0, 15), (60_000, 14), (300_000, 10), (600_000, 5)] {
+            let text = q.text(last + wait, Some("Benilla"), &strings);
+            assert!(
+                text.ends_with(&format!("Estimated time: {minutes} min")),
+                "{wait} ms after the packet: {text}"
+            );
+        }
+    }
+
+    /// A packet whose position is not below the oldest sample's, a stall or a step back, keeps the
+    /// old estimate (`0x46aec0`, `0x46aece`), and the text keeps counting down from it rather than
+    /// falling back to "Calculating...".
+    #[test]
+    fn a_stalled_or_backward_packet_keeps_the_estimate() {
+        let strings = GlueStrings::default();
+        let places = [100, 99, 98, 97, 96, 95, 94, 93];
+        // Each packet's position, then what it leaves: 99 is the oldest sample's own place once
+        // the ring shifts, 200 is above it.
+        for (position, what) in [(99, "a stall"), (200, "a step back")] {
+            let (mut q, last) = ring_of(&places, 1_000);
+            assert_eq!(q.estimate_ms(), Some(93_000));
+            q.sample(position, last + 1_000);
+            assert!(q.position[0] >= q.position[SAMPLES - 1], "{what}");
+            assert_eq!(q.estimate_ms(), Some(93_000), "{what}");
+            let text = q.text(last + 1_000, Some("Benilla"), &strings);
+            assert!(!text.contains("Calculating"), "{what}: {text}");
+            assert!(
+                text.contains(&format!("Position in queue: {position}")),
+                "{what}: {text}"
+            );
+        }
+    }
+
+    /// A repeat of the newest position restamps its tick and, the ring being full, still
+    /// recomputes against it (`0x46ae67` skips only the shift): 17 000 ms over 7 places.
+    #[test]
+    fn a_repeated_position_recomputes_against_its_own_time() {
+        let (mut q, last) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
+        q.sample(93, last + 10_000);
+        assert_eq!(q.estimate_ms(), Some(17_000 / 7 * 93));
+    }
+
+    /// A packet that moves the queue forward recomputes the estimate against its own time.
+    #[test]
+    fn a_forward_packet_replaces_the_estimate() {
+        let (mut q, last) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
+        assert_eq!(q.estimate_ms(), Some(93_000));
+        // The oldest sample is now 99 at 2 000 ms: 7 places in 7 000 ms, 92 still ahead.
+        q.sample(92, last + 1_000);
+        assert_eq!(q.estimate_ms(), Some(92_000));
+    }
+
+    /// With no estimate yet the dialog says so, however long it waits.
+    #[test]
+    fn no_estimate_yet_reads_calculating() {
+        let strings = GlueStrings::default();
+        let (q, last) = ring_of(&[100, 99, 98, 97], 1_000);
+        assert_eq!(q.estimate_ms(), None);
+        for wait in [0, 60_000, 600_000] {
+            let text = q.text(last + wait, Some("Benilla"), &strings);
+            assert!(text.contains("Calculating..."), "{wait}: {text}");
+        }
+    }
+
+    /// The countdown passing zero reads "< 1 minute" and stays there (`0x46bcd9` takes zero and
+    /// `jl` at `0x46bcfa` takes every negative), never "Calculating..." and never minutes.
+    #[test]
+    fn a_countdown_past_zero_stays_under_a_minute() {
+        let strings = GlueStrings::default();
         let (q, last) = ring_of(&[100, 99, 98, 97, 96, 95, 94, 93], 1_000);
-        let at_packet = q.estimate_ms(last).unwrap();
-        let much_later = q.estimate_ms(last + 40_000).unwrap();
-        assert!(
-            much_later > at_packet,
-            "elapsed grows while the divisor does not: {at_packet} -> {much_later}",
-        );
+        for wait in [33_001, 93_000, 93_001, 200_000, 5_000_000] {
+            let text = q.text(last + wait, Some("Benilla"), &strings);
+            assert!(
+                text.ends_with("Estimated time: < 1 minute"),
+                "{wait}: {text}"
+            );
+        }
     }
 
     #[test]
