@@ -588,8 +588,7 @@ fn the_piece_quads_are_the_backdrop_geometry() {
                         .collect();
                     let (mut perm, mut stack) = (Vec::new(), Vec::new());
                     crate::script::layer_batch::crt_qsort_into(&keys, &mut perm, &mut stack);
-                    let edges: Vec<_> =
-                        perm.iter().map(|&k| want[first_edge + k].clone()).collect();
+                    let edges: Vec<_> = perm.iter().map(|&k| want[first_edge + k]).collect();
                     want.splice(first_edge.., edges);
                 }
                 let ctx = format!("shape {i} scale {scale} size {w}x{h}");
