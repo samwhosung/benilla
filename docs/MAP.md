@@ -182,7 +182,7 @@
 - `WOW_CAPTURE_STABLE` — benilla-app/src/capture/mod.rs
 - `WOW_CAPTURE_UI` — benilla-app/src/capture/scenarios.rs, benilla-app/src/ui_script/mod.rs, benilla-app/src/video.rs
 - `WOW_CAST_TRACE` — benilla-app/src/net.rs
-- `WOW_CHAR` — benilla-app/src/capture/probe_mail.rs, benilla-app/src/char_select/mod.rs, benilla-app/src/cvars/mod.rs, benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/realm_select/smoke.rs, benilla-app/src/run_mode.rs
+- `WOW_CHAR` — benilla-app/src/capture/probe_mail.rs, benilla-app/src/cvars/mod.rs, benilla-app/src/glue_session/roster.rs, benilla-app/src/login/mod.rs, benilla-app/src/net.rs, benilla-app/src/realm_select/smoke.rs, benilla-app/src/run_mode.rs
 - `WOW_CHARCREATE_DIALS` — benilla-app/src/char_create/mod.rs
 - `WOW_CHARCREATE_NAME` — benilla-app/src/char_create/mod.rs
 - `WOW_CHARCREATE_PICK` — benilla-app/src/capture/mod.rs, benilla-app/src/char_create/mod.rs
@@ -190,7 +190,7 @@
 - `WOW_CHARCREATE_SHOT_OUT` — benilla-app/src/char_create/mod.rs
 - `WOW_CHARSELECT_ADDONS` — benilla-app/src/char_select/mod.rs
 - `WOW_CHARSELECT_DIALOG` — benilla-app/src/char_select/mod.rs
-- `WOW_CHARSELECT_PICK` — benilla-app/src/char_select/mod.rs, benilla-app/src/cvars/mod.rs
+- `WOW_CHARSELECT_PICK` — benilla-app/src/cvars/mod.rs, benilla-app/src/glue_session/roster.rs
 - `WOW_CHARSELECT_SHOT` — benilla-world/src/bgwin.rs
 - `WOW_CHARSELECT_SHOT_AT` — benilla-app/src/char_select/mod.rs
 - `WOW_CHARSELECT_SHOT_OUT` — benilla-app/src/char_select/mod.rs
@@ -304,9 +304,9 @@
 - `WOW_LIVE_SHOT_EVERY` — benilla-app/src/capture/live_shot.rs
 - `WOW_LOGIN_SHOT` — benilla-world/src/bgwin.rs
 - `WOW_LOGIN_SHOT_OUT` — benilla-app/src/login/screen.rs
-- `WOW_LOGIN_SMOKE` — benilla-app/src/char_select/mod.rs, benilla-app/src/login/mod.rs, benilla-app/src/login/smoke.rs, benilla-world/src/bgwin.rs
+- `WOW_LOGIN_SMOKE` — benilla-app/src/glue_session/roster.rs, benilla-app/src/login/mod.rs, benilla-app/src/login/smoke.rs, benilla-world/src/bgwin.rs
 - `WOW_LOGIN_SMOKE_HOLD` — benilla-app/src/login/smoke.rs
-- `WOW_LOGOUT_SMOKE` — benilla-app/src/char_select/mod.rs, benilla-world/src/bgwin.rs
+- `WOW_LOGOUT_SMOKE` — benilla-app/src/glue_session/logout_smoke.rs, benilla-world/src/bgwin.rs
 - `WOW_MAP` — benilla-app/src/capture/mod.rs, benilla-world/src/world_map.rs
 - `WOW_MATANIM_DUTY` — benilla-world/src/doodad_anim/mat_anim.rs
 - `WOW_MATANIM_LIVE` — benilla-world/src/doodad_anim/mat_anim.rs
