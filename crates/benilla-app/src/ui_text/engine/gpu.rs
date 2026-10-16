@@ -31,12 +31,24 @@ struct GlyphUploads(Vec<CellUpload>);
 /// Loads the client's TTFs and drives the on-demand glyph cache.
 pub(crate) struct UiTextPlugin;
 
+/// The `Startup` build of the glyph cache, for a VM built at `Startup` to order after.
+#[derive(SystemSet, Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct FontAtlasInit;
+
 impl Plugin for UiTextPlugin {
     fn build(&self, app: &mut App) {
         // `init` retries each Update until the patch chain and the window's real `scale_factor`
         // exist. `publish_sheet` runs in `Last`, after every producer of text quads, so a cell
         // rasterized this frame is queued before the render extract.
+        // It runs at `Startup` too, so the stock glue's first screen, built then, measures its text
+        // inline as the reference's does: `AccountLogin_ShowUserAgreements` sizes the agreement
+        // header off `TOSFrameTitle:GetWidth()` in that show.
         app.init_resource::<GlyphUploadQueue>()
+            .add_systems(
+                Startup,
+                init.in_set(FontAtlasInit)
+                    .after(benilla_assets::AssetSet::Open),
+            )
             .add_systems(Update, init)
             .add_systems(Last, publish_sheet);
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
