@@ -21,6 +21,11 @@ fn push_catalog(s: &mut UiScript) {
             map_file: "Kalimdor".into(),
             world_rect: (0.08882, 0.07910, 0.40020, 0.86952),
             loc_rect: (17066.6, -19733.2, 12799.9, -11733.3),
+            sheet: Some(WorldMapSheetRow {
+                tiles: (23, 48, 9, 52),
+                offset: (-19.0, -0.322_498),
+                scale: 0.75,
+            }),
             zone_grid: Vec::new(),
             zones: vec![
                 WorldMapZoneView {
@@ -44,6 +49,11 @@ fn push_catalog(s: &mut UiScript) {
             map_file: "Azeroth".into(),
             world_rect: (0.62375, 0.02695, 0.92315, 0.87126),
             loc_rect: (16000.0, -19199.9, 7466.6, -16000.0),
+            sheet: Some(WorldMapSheetRow {
+                tiles: (23, 47, 15, 61),
+                offset: (14.5, -7.0),
+                scale: 0.75,
+            }),
             zone_grid: ek_grid,
             zones: vec![
                 WorldMapZoneView {
@@ -492,6 +502,114 @@ fn worldmap_click_containment_and_zone_grid() {
     s.run("SetMapZoom(0)").unwrap();
     s.run("ProcessMapClick(0.01, 0.99)").unwrap();
     assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
+}
+
+/// At world level `UpdateMapHighlight` lights the continent under the cursor (`0x4a7639`,
+/// `0x4a83b9`): its `Map.dbc` name, its art folder for `<file>\<file>Highlight`, the texture's
+/// share on each axis from the `WorldMapContinent` tile counts (the longer axis whole), and the
+/// quad over its sheet rect from that row: Kalimdor's 26 by 44 tiles at scale 0.75 from
+/// (5.5625, 3.302502) sheet tiles, the Eastern Kingdoms' 25 by 47 from (39.0625, 1.125).
+#[test]
+fn worldmap_world_level_hover_lights_the_continent() {
+    let mut s = script();
+    push_catalog(&mut s);
+    assert_eq!(s.eval::<i64>("return GetCurrentMapContinent()").unwrap(), 0);
+
+    type Answer = (Option<String>, Option<String>, f64, f64, f64, f64, f64, f64);
+    let hover = |s: &mut UiScript, x: f32, y: f32| {
+        s.eval::<Answer>(&format!("return UpdateMapHighlight({x}, {y})"))
+            .unwrap()
+    };
+    let close = |got: Answer, want: (&str, &str, [f64; 6])| {
+        assert_eq!(got.0.as_deref(), Some(want.0));
+        assert_eq!(got.1.as_deref(), Some(want.1));
+        let nums = [got.2, got.3, got.4, got.5, got.6, got.7];
+        for (i, (g, w)) in nums.iter().zip(want.2).enumerate() {
+            assert!(
+                (g - w).abs() < 1e-6,
+                "value {} of {}: {g} vs {w}",
+                i + 3,
+                want.0
+            );
+        }
+    };
+
+    close(
+        hover(&mut s, 0.25, 0.45),
+        (
+            "Kalimdor",
+            "Kalimdor",
+            [
+                26.0 / 44.0,
+                1.0,
+                19.5 / 62.625,
+                33.0 / 41.75,
+                5.5625 / 62.625,
+                3.302_502 / 41.75,
+            ],
+        ),
+    );
+    close(
+        hover(&mut s, 0.72, 0.63),
+        (
+            "Eastern Kingdoms",
+            "Azeroth",
+            [
+                25.0 / 47.0,
+                1.0,
+                18.75 / 62.625,
+                35.25 / 41.75,
+                39.0625 / 62.625,
+                1.125 / 41.75,
+            ],
+        ),
+    );
+    // The open sea between the sheet rects: the nil tail, which hides the quad.
+    let miss: Answer = (None, None, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    assert_eq!(hover(&mut s, 0.5, 0.5), miss);
+
+    // A wide continent gives its height the share (`0x4a83c6`); one with no row keeps 64 by 64
+    // tiles and a zero quad (`0x4a82a2`, `0x4a8401`).
+    s.set_world_map_catalog(vec![
+        WorldMapContinentView {
+            name: "Wide".into(),
+            map_file: "Wide".into(),
+            world_rect: (0.0, 0.0, 0.5, 1.0),
+            loc_rect: (1.0, 0.0, 1.0, 0.0),
+            sheet: Some(WorldMapSheetRow {
+                tiles: (0, 9, 0, 4),
+                offset: (0.0, 0.0),
+                scale: 1.0,
+            }),
+            ..Default::default()
+        },
+        WorldMapContinentView {
+            name: "Rowless".into(),
+            map_file: "Rowless".into(),
+            world_rect: (0.5, 0.0, 1.0, 1.0),
+            loc_rect: (1.0, 0.0, 1.0, 0.0),
+            ..Default::default()
+        },
+    ]);
+    close(
+        hover(&mut s, 0.25, 0.5),
+        (
+            "Wide",
+            "Wide",
+            [
+                1.0,
+                0.5,
+                10.0 / 62.625,
+                5.0 / 41.75,
+                -0.6875 / 62.625,
+                -11.125 / 41.75,
+            ],
+        ),
+    );
+    close(
+        hover(&mut s, 0.75, 0.5),
+        ("Rowless", "Rowless", [1.0, 1.0, 0.0, 0.0, 0.0, 0.0]),
+    );
 }
 
 /// At zone level `UpdateMapHighlight` answers a name only (`0x4a812e`): a revealed overlay's

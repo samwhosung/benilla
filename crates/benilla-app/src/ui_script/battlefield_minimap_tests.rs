@@ -79,6 +79,7 @@ fn catalog() -> Vec<WorldMapContinentView> {
         map_file: "Kalimdor".into(),
         world_rect: (0.0, 0.0, 1.0, 1.0),
         loc_rect: (10000.0, -10000.0, 10000.0, -10000.0),
+        sheet: None,
         zone_grid: Vec::new(),
         zones: vec![WorldMapZoneView {
             name: "Warsong Gulch".into(),

@@ -115,14 +115,28 @@ pub struct WorldMapContinentView {
     pub name: String,
     pub map_file: String,
     /// The rect on the world sheet in UV `(u0, v0, u1, v1)`, from the `WorldMapContinent` tile
-    /// bounds (`0x4a5d00`); a world-level click takes the first that holds it (`0x4a7100`).
+    /// bounds (`0x4a5d00`); a world-level hover or click takes the first that holds it.
     pub world_rect: (f32, f32, f32, f32),
     /// The `WorldMapArea` loc rect the cell law un-lerps a hover or click through.
     pub loc_rect: (f32, f32, f32, f32),
+    /// The `WorldMapContinent.dbc` row of the continent's map, which seats its world-level
+    /// highlight (`0x4a82c6`); `None` when the map has none.
+    pub sheet: Option<WorldMapSheetRow>,
     /// The 128×128 area bitmap (`<Continent>.zmp`, read at `0x4a5feb`) as 1-based indices into
     /// [`Self::zones`], 0 for none; empty when no bitmap ships, leaving hover and click inert.
     pub zone_grid: Vec<u16>,
     pub zones: Vec<WorldMapZoneView>,
+}
+
+/// A continent's place on the world sheet: the `WorldMapContinent.dbc` fields the world-level
+/// highlight reads (`0x4a82ed`, `0x4a8407`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WorldMapSheetRow {
+    /// The ADT tile bounds `(left, right, top, bottom)`, both ends inclusive.
+    pub tiles: (u32, u32, u32, u32),
+    /// `OffsetX` and `OffsetY`, in sheet tiles.
+    pub offset: (f32, f32),
+    pub scale: f32,
 }
 
 /// The `0x4a6ec0` cell law: clamp the UV, un-lerp through the loc rect to world coordinates,
@@ -278,7 +292,7 @@ enum Hover {
     Highlight {
         name: String,
         file: String,
-        tex_pct_y: f64,
+        tex_pct: (f64, f64),
         texture: (f64, f64),
         scroll: (f64, f64),
     },
@@ -314,23 +328,88 @@ fn continent_hover(cont: &WorldMapContinentView, zone: &WorldMapZoneView) -> Opt
     Some(Hover::Highlight {
         name: zone.name.clone(),
         file: zone.map_file.clone(),
-        tex_pct_y,
+        tex_pct: (1.0, tex_pct_y),
         texture: (texture_x, texture_y),
         scroll: (scroll_x, scroll_y),
     })
 }
 
-/// `0x4a7fa0`'s level dispatch. Continent level: the grid's zone highlights. Zone level: the
-/// overlay pre-search, then the grid through the displayed zone's rect (`0x4a7620`), naming a
-/// neighbour but never the displayed zone, name only (`0x4a812e`). World level: the tail, as the
-/// continent highlight the reference draws there is not built here.
+/// The 1-based continent whose sheet rect holds `(x, y)`, edges inclusive, the first in catalog
+/// order: the world-level leg of the hover (`0x4a7639`) and of the click (`0x4a755a`).
+fn sheet_continent(wm: &WorldMapState, x: f32, y: f32) -> Option<u32> {
+    wm.continents
+        .iter()
+        .position(|cont| {
+            let (u0, v0, u1, v1) = cont.world_rect;
+            (u0..=u1).contains(&x) && (v0..=v1).contains(&y)
+        })
+        .map(|i| i as u32 + 1)
+}
+
+/// The world-level highlight (`0x4a81de` → `0x4a825b` → `0x4a83b9`): the continent's `Map.dbc`
+/// name and art folder, drawn as `<file>\<file>Highlight`. The texture's long side is the tile
+/// rect's longer one, the other in proportion; the quad is the continent's sheet rect, recomputed
+/// from its `WorldMapContinent` row (`0x4a8407`) by the builder's law (`0x4a5f42`).
+fn world_hover(cont: &WorldMapContinentView) -> Hover {
+    // `[0x8029d4]`, 2^-22: a loc rect of four near-zeros is a miss (`0x4a81de..0x4a8224`).
+    const EPS: f32 = f32::from_bits(0x3480_0000);
+    // `[0x806528]` = 1/62.625 and `[0x806524]` = 1/41.75, the sheet's tile spans.
+    const K_U: f64 = f32::from_bits(0x3c82_cf75) as f64;
+    const K_V: f64 = f32::from_bits(0x3cc4_3730) as f64;
+    let (l, r, t, b) = cont.loc_rect;
+    if [l, r, t, b].iter().all(|v| v.abs() < EPS) {
+        return Hover::Miss;
+    }
+    // The tile counts, 64 by 64 with no row (`0x4a82a2`), and the quad zero (`0x4a8401`).
+    let count = |lo: u32, hi: u32| (hi as i32).wrapping_sub(lo as i32).wrapping_add(1) as f32;
+    let (w, h) = cont.sheet.map_or((64.0, 64.0), |row| {
+        let (left, right, top, bottom) = row.tiles;
+        (count(left, right), count(top, bottom))
+    });
+    // `0x4a83b9`: the strictly longer axis is 1.0.
+    let tex_pct = if w > h {
+        (1.0, f64::from(h) / f64::from(w))
+    } else {
+        (f64::from(w) / f64::from(h), 1.0)
+    };
+    let (texture, scroll) = cont.sheet.map_or(((0.0, 0.0), (0.0, 0.0)), |row| {
+        let s = f64::from(row.scale);
+        // The top-left corner in sheet tiles, stored as f32 (`0x4a8428`, `0x4a843e`).
+        let corner = |tile: u32, base: f64, offset: f32| {
+            (f64::from(tile as i32) * s + (base - 32.0 * s) + f64::from(offset)) as f32
+        };
+        let x = corner(row.tiles.0, 31.3125, row.offset.0);
+        let y = corner(row.tiles.2, 20.875, row.offset.1);
+        (
+            (f64::from(w) * s * K_U, f64::from(h) * s * K_V),
+            (f64::from(x) * K_U, f64::from(y) * K_V),
+        )
+    });
+    Hover::Highlight {
+        name: cont.name.clone(),
+        file: cont.map_file.clone(),
+        tex_pct,
+        texture,
+        scroll,
+    }
+}
+
+/// `0x4a7fa0`'s level dispatch. World level: the continent under the cursor (`0x4a7639`), lit.
+/// Continent level: the grid's zone highlights. Zone level: the overlay pre-search, then the grid
+/// through the displayed zone's rect (`0x4a7620`), naming a neighbour but never the displayed
+/// zone, name only (`0x4a812e`).
 fn hover(wm: &WorldMapState, x: f32, y: f32) -> Hover {
     // An instance map resolves no area (`0x4a7620` opens `cmp esi,-2; je 0x4a76d7`).
     if wm.direct_area.is_some() {
         return Hover::Miss;
     }
     let (c, z) = wm.selection;
-    let Some(cont) = c.checked_sub(1).and_then(|i| wm.continents.get(i as usize)) else {
+    if c == 0 {
+        return sheet_continent(wm, x, y)
+            .and_then(|ci| wm.continents.get(ci as usize - 1))
+            .map_or(Hover::Miss, world_hover);
+    }
+    let Some(cont) = wm.continents.get(c as usize - 1) else {
         return Hover::Miss;
     };
     if z != 0 {
@@ -778,7 +857,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // ProcessMapClick(x, y) (`0x4a7f30`): at world level the first continent whose sheet rect
-    // holds the click (`0x4a7100`); otherwise the zone or city under it through the displayed
+    // holds the click (`0x4a755a`); otherwise the zone or city under it through the displayed
     // rect (`0x4a6ec0`), which it drills into.
     g.set(
         "ProcessMapClick",
@@ -791,13 +870,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 if wm.direct_area.is_some() {
                     None
                 } else if wm.selection.0 == 0 {
-                    wm.continents
-                        .iter()
-                        .position(|cont| {
-                            let (u0, v0, u1, v1) = cont.world_rect;
-                            (u0..=u1).contains(&x) && (v0..=v1).contains(&y)
-                        })
-                        .map(|i| (i as i64 + 1, 0))
+                    sheet_continent(wm, x, y).map(|ci| (i64::from(ci), 0))
                 } else {
                     grid_area(wm, x, y).map(|zi| (i64::from(wm.selection.0), i64::from(zi)))
                 }
@@ -829,14 +902,14 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Hover::Highlight {
                     name,
                     file,
-                    tex_pct_y,
+                    tex_pct,
                     texture,
                     scroll,
                 } => (
                     string(&name)?,
                     string(&file)?,
-                    1.0f64,
-                    tex_pct_y,
+                    tex_pct.0,
+                    tex_pct.1,
                     texture.0,
                     texture.1,
                     scroll.0,

@@ -730,6 +730,80 @@ fn the_real_feralas_catalog_names_dire_maul_under_the_cursor() {
     );
 }
 
+/// The real catalog at the world level: the cursor over Kalimdor puts its `Map.dbc` name in the
+/// label and shows `Interface\WorldMap\Kalimdor\KalimdorHighlight` over its sheet rect, from its
+/// `WorldMapContinent` row (`0x4a83b9`): tiles 23..=48 by 9..=52 at scale 0.75, so 26 by 44 tiles
+/// of the 62.625 by 41.75 sheet, the texture's left 26/44 drawn.
+#[test]
+fn hovering_a_continent_on_the_world_map_lights_it() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut s = harness();
+
+    let mut chain = benilla_formats::open_chain(&data).expect("chain");
+    for file in ["Kalimdor", "Azeroth"] {
+        let path = format!("Interface\\WorldMap\\{file}\\{file}Highlight.blp");
+        assert!(chain.contains(&path), "{path} ships");
+    }
+    let areas = benilla_formats::load_area_table_catalog(&mut chain).expect("AreaTable");
+    let maps =
+        benilla_assets::MapCatalogRes(benilla_formats::load_map_catalog(&mut chain).expect("Map"));
+    let (views, _) =
+        crate::ui_world_map::build_catalog(&mut chain, &areas, &maps).expect("the real catalog");
+    // Every continent has its row, so no stock data reaches the rowless branch.
+    assert!(views.iter().all(|c| c.sheet.is_some()));
+    let kalimdor = views
+        .iter()
+        .find(|c| c.map_file == "Kalimdor")
+        .expect("Kalimdor is in the catalog");
+    let row = kalimdor
+        .sheet
+        .expect("Kalimdor has its WorldMapContinent row");
+    assert_eq!((row.tiles, row.scale), ((23, 48, 9, 52), 0.75));
+    s.set_world_map_catalog(views);
+    s.run("ToggleWorldMap()").unwrap();
+    s.run("SetMapZoom(0)").unwrap();
+    s.resolve();
+
+    let (l, r, t, b, eff) = s
+        .eval::<(f32, f32, f32, f32, f32)>(
+            "return WorldMapButton:GetLeft(), WorldMapButton:GetRight(), WorldMapButton:GetTop(), \
+             WorldMapButton:GetBottom(), WorldMapButton:GetEffectiveScale()",
+        )
+        .unwrap();
+    let (x, y) = ((l + (r - l) * 0.25) * eff, (t - (t - b) * 0.45) * eff);
+    s.mouse_move(x, y);
+    update(&mut s);
+    s.resolve();
+
+    assert_eq!(
+        s.eval::<String>("return WorldMapFrameAreaLabel:GetText()")
+            .unwrap(),
+        "Kalimdor"
+    );
+    let (shown, texture, w, h, dx, dy) = s
+        .eval::<(bool, String, f32, f32, f32, f32)>(
+            "return WorldMapHighlight:IsShown() == 1, WorldMapHighlight:GetTexture(), \
+             WorldMapHighlight:GetWidth(), WorldMapHighlight:GetHeight(), \
+             WorldMapHighlight:GetLeft() - WorldMapDetailFrame:GetLeft(), \
+             WorldMapDetailFrame:GetTop() - WorldMapHighlight:GetTop()",
+        )
+        .unwrap();
+    assert!(shown, "the stock OnUpdate shows the quad for a fileName");
+    assert!(
+        texture
+            .to_ascii_lowercase()
+            .ends_with("worldmap\\kalimdor\\kalimdorhighlight"),
+        "{texture}"
+    );
+    let (bw, bh) = (r - l, t - b);
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    assert!(near(w, 19.5 / 62.625 * bw), "width {w}");
+    assert!(near(h, 33.0 / 41.75 * bh), "height {h}");
+    // Seated on `WorldMapDetailFrame`'s top-left, in the button's own units.
+    assert!(near(dx, 5.5625 / 62.625 * bw), "left {dx}");
+    assert!(near(dy, 3.302_502 / 41.75 * bh), "top {dy}");
+}
+
 /// An addon that windows the map (Cartographer's `LookNFeel`) stamps userPlaced through a drag
 /// (`0x7652b0`, at `0x7652e5`). The layout cache gates both ends on `movable|resizable` too, as the
 /// reference does (writer `0x490e97`; apply `0x490600`, `0x490689`), and stock `WorldMapFrame` has

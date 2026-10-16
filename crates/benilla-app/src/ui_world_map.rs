@@ -18,7 +18,7 @@ use benilla_formats::{
 };
 use benilla_ui::script::{
     UiScript, WorldMapContinentView, WorldMapLandmarkSource, WorldMapLevel, WorldMapOverlayView,
-    WorldMapZoneView,
+    WorldMapSheetRow, WorldMapZoneView,
 };
 
 use crate::net::{ObjectStore, SelfPlayer};
@@ -221,6 +221,16 @@ pub(crate) fn build_catalog(
             map_file: cont.name.clone(),
             world_rect,
             loc_rect: (cont.loc_left, cont.loc_right, cont.loc_top, cont.loc_bottom),
+            sheet: wmc.get(cont.map_id).map(|c| WorldMapSheetRow {
+                tiles: (
+                    c.left_boundary,
+                    c.right_boundary,
+                    c.top_boundary,
+                    c.bottom_boundary,
+                ),
+                offset: (c.offset_x, c.offset_y),
+                scale: c.scale,
+            }),
             zone_grid,
             zones: zones
                 .iter()
