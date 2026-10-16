@@ -1,8 +1,8 @@
 //! The glue manager, `CGlueMgr` host side, under `WOW_GLUE_STOCK=1`: the screen-state machine of
-//! `CGlueMgr::Update` (`0x46b930`, `screenState` at `0xb41da0`) over the native login engine. The
-//! IO thread's parks and [`crate::glue_session::login`]'s policy still do the network; this maps their messages
-//! onto the reference's screen states and fires the glue events the stock GlueXML answers: the
-//! status dialog (`OPEN_STATUS_DIALOG`, `UPDATE_STATUS_DIALOG`, `CLOSE_STATUS_DIALOG`),
+//! `CGlueMgr::Update` (`0x46b930`, `screenState` at `0xb41da0`) over the login engine. The IO
+//! thread's parks and [`crate::glue_session::login`]'s policy still do the network; this maps their
+//! messages onto the reference's screen states and fires the glue events the stock GlueXML answers:
+//! the status dialog (`OPEN_STATUS_DIALOG`, `UPDATE_STATUS_DIALOG`, `CLOSE_STATUS_DIALOG`),
 //! `SET_GLUE_SCREEN` and `DISCONNECTED_FROM_SERVER`. Its verbs run inside their Lua call, as the
 //! reference's call `CGlueMgr` directly: the glue VM it seats holds it as its
 //! [`benilla_ui::script::GlueHost`] ([`SharedGlueMgr`]), so a verb's screen state, its dialog and
@@ -148,7 +148,7 @@
 //!    (`0x46c118` → `0x46c177`). The dialog's button in state 5 cancels the operation and goes to
 //!    state 0 (`0x46b776`), sending nothing.
 //!
-//! The native login reports a logon as one blocking step, so of the logon's states only
+//! The login engine reports a logon as one blocking step, so of the logon's states only
 //! `CONNECTING` and `AUTHENTICATED` are seen; its refusals map through the reference's own
 //! byte-to-result table ([`realmd_result`]).
 
@@ -1751,7 +1751,7 @@ fn status_text(code: u8) -> (Text, Option<u8>) {
     }
 }
 
-/// The native login's messages the manager reads, as one parameter.
+/// The login engine's messages the manager reads, as one parameter.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct LoginNews<'w, 's> {
     stages: MessageReader<'w, 's, LoginStageMessage>,
@@ -1801,7 +1801,7 @@ pub(crate) fn read_agreements(cvars: &crate::cvars::Cvars) -> [NoticeState; 4] {
     n
 }
 
-/// The glue manager's frame: the native login's news, the per-frame arms, then the events into the
+/// The glue manager's frame: the login engine's news, the per-frame arms, then the events into the
 /// glue VM and its slots seeded. The verbs ran in their own calls ([`GlueHost`]); what is left of
 /// them here is the effects they leave for the frame and the calls a VM made before it was seated.
 /// Runs under `WOW_GLUE_STOCK=1` only.
@@ -1952,7 +1952,7 @@ pub(crate) fn drive_glue_mgr(
 
     let (lists, latched) = {
         let mut mgr = shared.get_mut();
-        // The native login's news.
+        // The login engine's news.
         for msg in news.stages.read() {
             mgr.on_stage(msg.stage, glue_up);
         }

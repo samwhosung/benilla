@@ -2055,9 +2055,9 @@ fn a_call_before_the_seat_runs_on_the_seating_frame() {
     assert_eq!(shared.get().state, ScreenState::RealmList);
 }
 
-// ── The stock screens over the native login, end to end ─────────────────────────────────────────
+// ── The stock screens over the login engine, end to end ─────────────────────────────────────────
 
-/// An app with the manager, the native login's glue asks and the stock glue VM on the login
+/// An app with the manager, the login engine's glue asks and the stock glue VM on the login
 /// screen. Returns it, the credentials channel and the abandon generation.
 fn stock_app() -> (
     App,
@@ -2195,7 +2195,7 @@ fn the_select_cells_outlive_the_glue_vm() {
     );
 }
 
-/// The stock login screen's Login reaches the native login with the typed credentials, under the
+/// The stock login screen's Login reaches the login engine with the typed credentials, under the
 /// `CANCEL` dialog; the logon's stage and a refusal re-text it with the reference's keys; and the
 /// agreements gate it.
 #[test]
@@ -2217,7 +2217,7 @@ fn the_stock_login_reaches_the_native_login_and_shows_its_status() {
     app.update();
 
     type_and_login(&mut app);
-    let req = rx.try_recv().expect("the native login gets the attempt");
+    let req = rx.try_recv().expect("the login engine gets the attempt");
     assert_eq!((req.user.as_str(), req.pass.as_str()), ("probe", "secret"));
     let (which, _) = dialog(&app).expect("the status dialog is up");
     assert_eq!(which, "CANCEL");

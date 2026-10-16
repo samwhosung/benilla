@@ -1,9 +1,9 @@
 //! The native login screen, the reference's `AccountLogin` glue: the form, its input, its caret
 //! and its dialogs; the layout is [`screen`]. The login engine it drives, the credentials, the
 //! asks and the success edge, is [`crate::glue_session::login`]'s, which serves the stock screens
-//! too; this screen shows what it decides ([`LoginNotice`]). Everything here runs off the stock
-//! screens alone. Deviation: the Credits, Cinematics and TOS side of the reference screen is
-//! absent, because the screen keeps only what logging in needs.
+//! too; this screen shows what it decides ([`LoginNotice`]). All of it but the login shot runs on
+//! the native screens alone. Deviation: the Credits, Cinematics and TOS side of the reference
+//! screen is absent, because the screen keeps only what logging in needs.
 
 mod screen;
 mod smoke;
