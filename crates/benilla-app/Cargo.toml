@@ -37,6 +37,9 @@ half = "2"
 include_dir = "0.7"
 # The 1.12 chat filters (`text_filter`), with one `RegexSet` for the any-match pass per line.
 regex = "1"
+# The same filters' word boundaries: `regex` has no look-around, and the client's word class is
+# its own table, not Unicode's.
+fancy-regex = { version = "0.18", default-features = false, features = ["std", "unicode", "perf"] }
 # `getrusage` for perf CPU time; `localtime_r` for the log stamp; the audio clock and render
 # thread's realtime policy on macOS.
 libc = "0.2"

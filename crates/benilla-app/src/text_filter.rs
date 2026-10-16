@@ -20,13 +20,18 @@
 //! name check (`0x6c96c0`), which searches them with `ChatProfanity`'s compiled list, ungated by
 //! either CVar: [`NameFilter`], the glue VM's [`benilla_ui::script::NameLists`].
 //!
-//! Two PCRE translations are the reference's own behaviour. `\<` and `\>` are the non-directional
+//! Three PCRE translations are the reference's own behaviour. `\<` and `\>` are the non-directional
 //! `\b`: the client's patched escape table (`.rdata 0x812330`) gives all three the code -4.
 //! CASELESS folds ASCII only (the fold table `0x873c40` is the identity over `0x80..=0xff`), so
 //! the pattern literals and the subject are ASCII-lowercased and matched case-sensitively, which
 //! keeps every offset. The shipped patterns use no backreferences or lookaround.
+//!
+//! The word and space classes are the client's own tables, not Unicode's. `\b` and `\s` test a
+//! character below `0x100` against `.data 0x873e80` (bit `0x10` word, `0x01` space) and treat every
+//! code point from `0x100` up as neither (`0x724fc0`, `0x7252b8`, `0x72534c`; a `\S` matches one).
+//! So the word class is [`WORD_CLASS`] and the space class [`SPACE_CLASS`].
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use bevy::prelude::*;
 use regex::{Regex, RegexSet};
@@ -36,10 +41,89 @@ use benilla_formats::FilterPattern;
 /// `.rdata 0x806458`: the eight mask bytes, in order.
 const MASK_TOKENS: &[u8; 8] = b"!@#$%^&*";
 
-/// One compiled list: the set for the cheap pass beside the expressions, in list order.
+/// The body of the client's word class: the characters with bit `0x10` in the ctype table
+/// (`.data 0x873e80`), which PCRE reads as `md->ctypes` (`0x724512`, the default tables `0x873b40`
+/// plus `0x340`). ASCII digits, letters and `_`, and Latin-1 `0xC0..=0xFF` without `×` (`D7`),
+/// `Þ` (`DE`) and `÷` (`F7`); `ª µ º` (`AA B5 BA`) are not in it. Nothing from `0x100` up is.
+const WORD_CLASS: &str = r"0-9A-Z_a-z\x{C0}-\x{D6}\x{D8}-\x{DD}\x{DF}-\x{F6}\x{F8}-\x{FF}";
+
+/// The body of the client's space class: bit `0x01` of the same table, `\t \n \f \r`, the space and
+/// `NBSP` (`A0`). Not `\v`, not `NEL`, nothing from `0x100` up.
+const SPACE_CLASS: &str = r"\t\n\x0C\r \x{A0}";
+
+/// `\b` over [`WORD_CLASS`]: a word character on exactly one side, the ends of the subject being
+/// non-word. `regex` has no look-around and its `\b` is Unicode's (or ASCII's), so this is for
+/// `fancy_regex`.
+fn boundary() -> String {
+    format!("(?:(?<=[{WORD_CLASS}])(?![{WORD_CLASS}])|(?<![{WORD_CLASS}])(?=[{WORD_CLASS}]))")
+}
+
+/// One shipped pattern, translated: the `exact` expression, and the `relaxed` one with its word
+/// boundaries dropped, which matches wherever `exact` does and cheaply, for the set.
+struct Translated {
+    exact: String,
+    relaxed: String,
+    /// `exact` holds a boundary, so only `fancy_regex` can run it.
+    bounded: bool,
+}
+
+/// One row's matcher: `regex` where the pattern has no word boundary, `fancy_regex` where it has.
+enum Matcher {
+    Plain(Regex),
+    /// Compiled on first use: a `fancy_regex` look-around costs milliseconds to build, and the
+    /// set rules out nearly every row before one is asked. The pattern parsed at startup.
+    Bounded {
+        exact: String,
+        re: OnceLock<Option<fancy_regex::Regex>>,
+    },
+}
+
+impl Matcher {
+    fn compile(t: &Translated) -> Result<Self, String> {
+        if t.bounded {
+            fancy_regex::Expr::parse_tree(&t.exact)
+                .map(|_| Matcher::Bounded {
+                    exact: t.exact.clone(),
+                    re: OnceLock::new(),
+                })
+                .map_err(|e| e.to_string())
+        } else {
+            Regex::new(&t.exact)
+                .map(Matcher::Plain)
+                .map_err(|e| e.to_string())
+        }
+    }
+
+    /// The first match at or after byte `at`, with the text before `at` still in view of a
+    /// boundary, as `pcre_exec`'s start offset leaves it. A backtracking limit counts as no match,
+    /// as an error from `pcre_exec` does.
+    fn find_at(&self, subject: &str, at: usize) -> Option<(usize, usize)> {
+        match self {
+            Matcher::Plain(re) => re.find_at(subject, at).map(|m| (m.start(), m.end())),
+            Matcher::Bounded { exact, re } => re
+                .get_or_init(|| {
+                    fancy_regex::Regex::new(exact)
+                        .inspect_err(|e| warn!("text filter expression {exact:?}: {e}"))
+                        .ok()
+                })
+                .as_ref()?
+                .find_from_pos(subject, at)
+                .ok()
+                .flatten()
+                .map(|m| (m.start(), m.end())),
+        }
+    }
+
+    fn is_match(&self, subject: &str) -> bool {
+        self.find_at(subject, 0).is_some()
+    }
+}
+
+/// One compiled list: the set for the cheap pass beside the matchers, in list order.
 struct PatternList {
+    /// Over the `relaxed` expressions: a superset of the rows that match.
     set: RegexSet,
-    each: Vec<Regex>,
+    each: Vec<Matcher>,
 }
 
 impl PatternList {
@@ -49,10 +133,10 @@ impl PatternList {
         let mut each = Vec::with_capacity(rows.len());
         for row in rows {
             let translated = translate(&row.pattern);
-            match Regex::new(&translated) {
-                Ok(re) => {
-                    patterns.push(translated);
-                    each.push(re);
+            match Matcher::compile(&translated) {
+                Ok(m) => {
+                    patterns.push(translated.relaxed);
+                    each.push(m);
                 }
                 Err(e) => warn!(
                     "skipping {list} expression {:?} (record ID {}): {e}",
@@ -79,34 +163,82 @@ impl PatternList {
         self.each.len()
     }
 
+    /// The rows that may match `subject`, already folded by [`ascii_lower`], in list order: the
+    /// set's candidates, which a bounded row still has to confirm.
+    fn candidates(&self, subject: &str) -> Vec<usize> {
+        self.set.matches(subject).iter().collect()
+    }
+
     /// Whether any row matches `subject`, already folded by [`ascii_lower`].
     fn any(&self, subject: &str) -> bool {
-        self.len() != 0 && self.set.is_match(subject)
+        self.len() != 0
+            && self
+                .set
+                .matches(subject)
+                .iter()
+                .any(|p| match &self.each[p] {
+                    Matcher::Plain(_) => true,
+                    bounded => bounded.is_match(subject),
+                })
     }
 }
 
-/// Translate one shipped PCRE pattern to `regex`: `\<`/`\>` become `\b`, other escapes stay
-/// verbatim (never lowercased: `\S` is not `\s`), and literal ASCII is lowercased.
-fn translate(pattern: &str) -> String {
-    let mut out = String::with_capacity(pattern.len());
+/// Translate one shipped PCRE pattern to `regex`/`fancy_regex`: `\<`, `\>` and `\b` become a
+/// boundary over the client's word class and `\s` its space class, other escapes stay verbatim
+/// (never lowercased: `\S` is not `\s`), and literal ASCII is lowercased. A `\s` inside a bracket
+/// class contributes its members; a boundary there is left as written (PCRE's `\b` is a backspace
+/// in a class, and no shipped row has one).
+fn translate(pattern: &str) -> Translated {
+    let mut exact = String::with_capacity(pattern.len());
+    let mut relaxed = String::with_capacity(pattern.len());
+    let mut bounded = false;
+    let mut in_class = false;
     let mut chars = pattern.chars();
     while let Some(c) = chars.next() {
         if c != '\\' {
-            out.push(c.to_ascii_lowercase());
+            match c {
+                '[' if !in_class => in_class = true,
+                ']' => in_class = false,
+                _ => {}
+            }
+            let c = c.to_ascii_lowercase();
+            exact.push(c);
+            relaxed.push(c);
             continue;
         }
         match chars.next() {
-            // The patched escape table: both are `\b`.
-            Some('<' | '>') => out.push_str("\\b"),
+            // The patched escape table: all three are `\b`.
+            Some('<' | '>' | 'b') if !in_class => {
+                exact.push_str(&boundary());
+                bounded = true;
+            }
+            Some('s') => {
+                let class = if in_class {
+                    SPACE_CLASS.to_owned()
+                } else {
+                    format!("[{SPACE_CLASS}]")
+                };
+                exact.push_str(&class);
+                relaxed.push_str(&class);
+            }
             Some(next) => {
-                out.push('\\');
-                out.push(next);
+                exact.push('\\');
+                exact.push(next);
+                relaxed.push('\\');
+                relaxed.push(next);
             }
             // A trailing backslash is a compile error in PCRE too.
-            None => out.push('\\'),
+            None => {
+                exact.push('\\');
+                relaxed.push('\\');
+            }
         }
     }
-    out
+    Translated {
+        exact,
+        relaxed,
+        bounded,
+    }
 }
 
 /// The reference's ASCII-only `CASELESS` fold, byte-aligned with the original.
@@ -214,7 +346,7 @@ impl TextFilter {
         if !enabled || text.is_empty() || self.spam.len() == 0 {
             return false;
         }
-        self.spam.set.is_match(&ascii_lower(text))
+        self.spam.any(&ascii_lower(text))
     }
 
     /// `0x4a1a60` with `dl = 0`: mask in place, return whether anything matched. `enabled` is
@@ -231,15 +363,14 @@ impl TextFilter {
     fn mask_uncached(&mut self, text: &mut String) -> bool {
         // The subject is ASCII-lowercased, byte-aligned with `text` and masked in step.
         let mut subject = ascii_lower(text);
-        let mut candidates: Vec<usize> = self.profanity.set.matches(&subject).iter().collect();
+        let mut candidates = self.profanity.candidates(&subject);
         let mut any = false;
         let mut i = 0;
         while i < candidates.len() {
             let p = candidates[i];
             let mut wrote = false;
             let mut cursor = 0;
-            while let Some(m) = self.profanity.each[p].find_at(&subject, cursor) {
-                let (start, end) = (m.start(), m.end());
+            while let Some((start, end)) = self.profanity.each[p].find_at(&subject, cursor) {
                 any = true;
                 if start == end {
                     // The reference spins on an empty match; this stops instead. No shipped row
@@ -267,9 +398,8 @@ impl TextFilter {
                 // The buffer moved: re-derive the candidates past this pattern.
                 candidates = self
                     .profanity
-                    .set
-                    .matches(&subject)
-                    .iter()
+                    .candidates(&subject)
+                    .into_iter()
                     .filter(|&c| c > p)
                     .collect();
                 i = 0;
@@ -312,6 +442,130 @@ mod tests {
             );
             assert_eq!(miss, "atwatb");
         }
+    }
+
+    /// The 124 characters with bit `0x10` in the client's ctype table (`.data 0x873e80`), as read
+    /// from the bytes: ASCII digits, letters and `_`, and Latin-1 `C0..=FF` except `D7 DE F7`.
+    fn client_word_chars() -> Vec<char> {
+        let mut v: Vec<char> = ('0'..='9').chain('A'..='Z').chain('a'..='z').collect();
+        v.push('_');
+        v.extend(
+            (0xC0u32..=0xFF)
+                .filter(|c| ![0xD7, 0xDE, 0xF7].contains(c))
+                .filter_map(char::from_u32),
+        );
+        v
+    }
+
+    fn masked(pattern: &str, text: &str) -> String {
+        let mut f = TextFilter::new(&list(&[pattern]), &[]);
+        let mut line = text.to_string();
+        f.mask(true, &mut line);
+        line
+    }
+
+    #[test]
+    fn the_client_word_set_is_the_124_characters_of_its_table() {
+        assert_eq!(client_word_chars().len(), 124);
+    }
+
+    /// A letter above `0xFF` is not a word character (`0x724fc0`, `0x725052`: a code point of
+    /// `0x100` or more skips the table), so a word that touches Cyrillic, Greek or CJK text still
+    /// has its boundary there, whichever side the text is on.
+    #[test]
+    fn a_word_next_to_letters_above_latin1_has_its_boundary() {
+        for other in ["ы", "Ж", "α", "傻", "한", "😀"] {
+            assert_eq!(
+                masked(r"\<twat\>", &format!("{other}twat{other}")),
+                format!("{other}!@#${other}"),
+                "{other:?} around \\<twat\\>"
+            );
+            assert_eq!(
+                masked(r"\<twat", &format!("{other}twatty")),
+                format!("{other}!@#$ty"),
+                "{other:?} before \\<twat"
+            );
+            assert_eq!(
+                masked(r"twat\>", &format!("tw{other}twat{other}")),
+                format!("tw{other}!@#${other}"),
+                "{other:?} after twat\\>"
+            );
+        }
+    }
+
+    /// Each of the 256 Latin-1 characters beside a word is a word character exactly when the
+    /// client's table says so: a boundary falls between `x` and the word only if `x` is not one.
+    #[test]
+    fn every_latin1_character_is_a_word_character_as_the_client_table_says() {
+        let word = client_word_chars();
+        for code in 0u32..=0xFF {
+            let x = char::from_u32(code).unwrap();
+            // A line feed or a control byte may not be in a chat line, but the pattern does not care.
+            for (pattern, text, hit) in [
+                (r"\<twat\>", format!("{x}twat{x}"), format!("{x}!@#${x}")),
+                (r"\btwat\b", format!("{x}twat{x}"), format!("{x}!@#${x}")),
+            ] {
+                // The subject is folded, so an uppercase ASCII letter is the lowercase one.
+                let is_word = word.contains(&x) || x.is_ascii_uppercase();
+                let want = if is_word { text.clone() } else { hit };
+                assert_eq!(
+                    masked(pattern, &text),
+                    want,
+                    "U+{code:04X} beside {pattern}"
+                );
+            }
+        }
+    }
+
+    /// The characters the table leaves out of its Latin-1 letters, `ª µ º × Þ ÷`, are not word
+    /// characters, and `þ` and `ß`, which sit beside them, are.
+    #[test]
+    fn the_latin1_gaps_in_the_word_table() {
+        for gap in ['ª', 'µ', 'º', '×', 'Þ', '÷'] {
+            assert_eq!(
+                masked(r"\<twat\>", &format!("{gap}twat")),
+                format!("{gap}!@#$"),
+                "{gap}"
+            );
+        }
+        for letter in ['þ', 'ß', 'ÿ', 'À', 'Ý'] {
+            assert_eq!(
+                masked(r"\<twat\>", &format!("{letter}twat")),
+                format!("{letter}twat"),
+                "{letter}"
+            );
+        }
+    }
+
+    /// `\s` is the client's space class: `\t \n \f \r`, the space and `NBSP`, and nothing else,
+    /// where `regex`'s also takes `\v`, `NEL` and the spaces from `U+1680` up (`0x7252b8`,
+    /// `0x72534c`).
+    #[test]
+    fn the_space_escape_is_the_client_space_class() {
+        let f = TextFilter::new(&[], &list(&[r"a\sb"]));
+        for yes in ['\t', '\n', '\u{0c}', '\r', ' ', '\u{a0}'] {
+            assert!(f.is_spam(true, &format!("a{yes}b")), "U+{:04X}", yes as u32);
+        }
+        for no in [
+            '\u{0b}', '\u{85}', '\u{1680}', '\u{2003}', '\u{3000}', '\u{feff}', 'x',
+        ] {
+            assert!(!f.is_spam(true, &format!("a{no}b")), "U+{:04X}", no as u32);
+        }
+    }
+
+    /// The cheap pass drops a boundary, so it may name a row the boundary then refuses: the
+    /// answer is the boundary's.
+    #[test]
+    fn the_cheap_pass_does_not_decide_a_bounded_row() {
+        let lists = NameLists {
+            names: PatternList::compile(&list(&[r"\<thrall\>"]), "t"),
+            chat: Arc::new(PatternList::empty()),
+            reserved: PatternList::empty(),
+        };
+        use benilla_ui::script::NameLists as _;
+        assert!(lists.matches("Thrall"));
+        assert!(!lists.matches("Thralls"));
+        assert!(lists.matches("ыThrallы"));
     }
 
     /// A transcript of the reference's masker: in place, length-preserving, caseless, the phase
@@ -410,7 +664,7 @@ mod tests {
             assert!(
                 !re.is_match(""),
                 "profanity row {i} matches the empty string: {}",
-                re.as_str()
+                profanity[i].pattern
             );
         }
     }
@@ -468,6 +722,18 @@ mod tests {
         assert_eq!(
             line, "you are a &*!@ and a !@#$%^",
             "list order beats text order on the real list too"
+        );
+
+        // Cyrillic is not a word character to the client, so `\<twat\>` bounds against it.
+        let mut cyrillic = "ыtwatы".to_string();
+        assert!(
+            f.mask(true, &mut cyrillic),
+            "twat between Cyrillic letters is masked"
+        );
+        assert!(!cyrillic.contains("twat"), "{cyrillic}");
+        assert!(
+            cyrillic.starts_with('ы') && cyrillic.ends_with('ы'),
+            "{cyrillic}"
         );
 
         let mut clean = "hello friend, nice weather".to_string();
