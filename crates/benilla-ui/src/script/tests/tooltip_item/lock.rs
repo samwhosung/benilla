@@ -378,3 +378,74 @@ fn a_missing_record_row_falls_back_to_the_blocks_row() {
     let lines = bag_lines(&mut s);
     assert!(line(&lines, "[LOCKED]").is_none(), "{lines:?}");
 }
+
+/// A lock type whose name is blank is a row, not a missing one: only a missing row reads `UNKNOWN`
+/// (`0x52bede`..`0x52bef2`), a blank name fills the line as it is (`0x52bef4`).
+#[test]
+fn a_blank_lock_type_name_fills_the_line_and_is_not_unknown() {
+    let mut s = fixture(vec![skill_slot(5, 25)], Some(picker_for(5, 25)));
+    s.set_lock_type_names(HashMap::from([(5, String::new())]));
+    let lines = bag_lines(&mut s);
+    assert!(
+        line(&lines, "[LOCKED_WITH_SPELL_KNOWN ]").is_some(),
+        "{lines:?}"
+    );
+    assert!(line(&lines, "[LOCKED_WITH_SPELL_KNOWN UNKNOWN]").is_none());
+}
+
+fn picker_for(lock_type: u32, points: i32) -> LockOpeners {
+    LockOpeners {
+        spells: vec![LockOpener { lock_type, points }],
+        held: HashSet::new(),
+    }
+}
+
+/// OPENABLE reads the record's raw lock id: a nonzero one needs the object UNLOCKED (`0x52e2fc`),
+/// with no row check, so a lock id without a Lock row (no LOCKED line to draw) still withholds it.
+#[test]
+fn openable_waits_for_unlocked_on_a_lock_id_with_no_row() {
+    const MISSING: u32 = 99;
+    let mut s = fixture_rows(MISSING, Vec::new(), None);
+    s.set_item_template(
+        LOCKBOX,
+        ItemTemplateView {
+            name: "Lockbox".into(),
+            quality: 1,
+            flags: 0x4,
+            lock_id: MISSING,
+            ..Default::default()
+        },
+    );
+    let slot = |flags| ContainerSlot {
+        item_id: LOCKBOX,
+        count: 1,
+        quality: Some(1),
+        flags,
+        ..Default::default()
+    };
+    let hover = |s: &mut UiScript, flags| {
+        s.set_container(
+            0,
+            Some(ContainerState {
+                name: Some("Backpack".into()),
+                num_slots: 16,
+                slots: HashMap::from([(1, slot(flags))]),
+            }),
+        );
+        bag_lines(s)
+    };
+    let lines = hover(&mut s, 0);
+    assert!(
+        line(&lines, "[LOCKED]").is_none(),
+        "no row, no lock: {lines:?}"
+    );
+    assert!(
+        line(&lines, "[ITEM_OPENABLE]").is_none(),
+        "locked by id, not unlocked: {lines:?}"
+    );
+    let lines = hover(&mut s, 0x4);
+    assert!(
+        line(&lines, "[ITEM_OPENABLE]").is_some(),
+        "UNLOCKED: {lines:?}"
+    );
+}

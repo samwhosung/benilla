@@ -67,8 +67,10 @@ pub(in crate::script) struct LockWalk {
     pub key_held: bool,
     /// The spell out parameters (`*a1` nonzero, `*a2` points, `*a3` required, `0x5da6cc`..
     /// `0x5da6f4`) of the last known open-lock spell the walk tried on a skill slot of its lock
-    /// type, whether or not its skill reached the requirement. A held key overwrites `*a1`
-    /// with the key's use spell (`0x5da781`), which a key never has, so it clears this.
+    /// type, whether or not its skill reached the requirement. A held key overwrites `*a1` with
+    /// its use spell (`0x5da781`; `0x5d8c80` returns one when the key has one), so this clears:
+    /// the colour call ignores `*a1` once `*a4` is set (`0x52be1c`), and no `Lock.dbc` row has a
+    /// key slot after a skill slot, so the second walk never loses a spell to a key.
     pub spell: Option<SpellTry>,
 }
 

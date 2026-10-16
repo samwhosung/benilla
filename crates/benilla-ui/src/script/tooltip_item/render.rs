@@ -26,7 +26,7 @@ pub(in crate::script) struct ItemInstance {
     /// unresolved, which prints no line either (`0x52e209`).
     pub creator: Option<String>,
     /// The resolved `ITEM_FIELD_GIFTCREATOR` name (`0x55f080` at `0x52e29d`) of a wrapped item;
-    /// `None` while it is unresolved or the field is 0, which prints no line (`0x52e2a4`).
+    /// `None` while it is unresolved (`0x52e2a4`) or the field is 0 (`0x52e288`): no line either way.
     pub gift_creator: Option<String>,
     /// `ITEM_FIELD_ITEM_TEXT_ID` ≠ 0, a letter's copy: the creator line reads WRITTEN_BY
     /// (`0x52e223`) and READABLE shows (`0x52e348`).
@@ -57,11 +57,22 @@ pub(in crate::script) struct ItemInstance {
     /// none or no block. With no lock row from the template it names one (`0x52bd78`..`0x52bda9`),
     /// and a nonzero one draws LOCKED even without an object (`0x52bdd2`).
     pub block_lock_id: u32,
+    /// The block's wrapped word (`[this+0x42c]`, set by the trade target's setter, `0x534559`): it
+    /// takes the gift arm and the no-id-source fork like an object's WRAPPED flag (`0x52b789`,
+    /// `0x52c991`).
+    pub block_wrapped: bool,
     /// The remaining use cooldown in ms (`[this+0x408]`, `start + duration - now`), 0 for none. Only
     /// the three setters that query the item's cooldown fill it, `SetBagItem` (`0x53488c`),
     /// `SetInventoryItem` (`0x533226`) and `SetAction`'s item leg (`0x5324d5`), and each does so
     /// with p6 = 1; every other source stores 0 there (`0x5326e0`).
     pub cooldown_ms: u32,
+}
+
+impl ItemInstance {
+    /// The wrapped test the builder runs once: the object's WRAPPED flag, or the block's word.
+    fn wrapped(&self) -> bool {
+        self.flags & 0x8 != 0 || self.block_wrapped
+    }
 }
 
 /// The set block's blank gold line, the reference's literal `0x854b2c`: a space and a newline. An
@@ -425,7 +436,7 @@ pub(super) fn render_view_flagged(
         // No id source (`0x52c991`): a wrapped gift, or no item object and no instance block
         // (`+0x440 == 0`), here a hover passing no [`ItemInstance`]. The fork tests the block's
         // presence, not its contents (`0x52c9a3`), so a block source never shows the placeholder.
-        let no_id_source = inst.is_none_or(|i| i.flags & 0x8 != 0);
+        let no_id_source = inst.is_none_or(ItemInstance::wrapped);
         if no_id_source && !signable && v.random_property != 0 {
             keyed("ITEM_RANDOM_ENCHANT", &[], GREEN, false)?;
         }
@@ -661,11 +672,11 @@ pub(super) fn render_view_flagged(
     let Some(inst) = inst else { return Ok(live) };
     // The creator line (`0x52e1b1..0x52e2db`), white `0xc0cf60`. The arm is picked once, at
     // `0x52b78f`..`0x52b7b0`: an item object with WRAPPED `0x8` (`0x52b789`) takes the gift arm,
-    // and so does a block whose `+0x42c` is set. This reads the object's flag; no block source
-    // here carries the wrapped word. The gift arm adds ITEM_WRAPPED_BY off
-    // `ITEM_FIELD_GIFTCREATOR` (`0x52e32a`) and never the creator's line. Any other source adds
+    // and so does a block whose `+0x42c` is set (the trade target's). The gift arm adds
+    // ITEM_WRAPPED_BY off `ITEM_FIELD_GIFTCREATOR` (`0x52e32a`) or the block's `+0x418`, and never
+    // the creator's line. Any other source adds
     // ITEM_WRITTEN_BY for a letter, else ITEM_CREATED_BY, green by its own `|cff00ff00`.
-    if inst.flags & 0x8 != 0 {
+    if inst.wrapped() {
         if let Some(name) = &inst.gift_creator {
             keyed("ITEM_WRAPPED_BY", &[Arg::S(name)], WHITE, false)?;
         }
@@ -712,7 +723,9 @@ struct LockSubLine {
 /// skill slot (`0x52bdde`..`0x52be3d`). The first slot's type then picks the line under it
 /// (`0x52be5d`):
 /// - a key (1) names the key item from the item cache, in white, and nothing on a miss
-///   (`0x52bf30`..`0x52bfa1`); a miss asks for the template, and the hover's repaint draws it;
+///   (`0x52bf30`..`0x52bfa1`); a miss asks for the template, and the line appears on a redraw,
+///   which benilla runs only where stock re-runs `OnEnter` (a bag hover does, the trade
+///   target's does not);
 /// - a skill (2) walks the lock a second time (`0x52be98`) and names the lock type in the ramp's
 ///   colour for the last open-lock spell it tried, even one whose skill falls short; no known
 ///   opener of the type adds nothing (`0x52bea2`);
@@ -759,6 +772,8 @@ fn lock_lines(lua: &Lua, v: &ItemTemplateView, inst: Option<&ItemInstance>) -> O
                 .spell
                 .map(|t| LockSubLine {
                     key: "LOCKED_WITH_SPELL_KNOWN",
+                    // `UNKNOWN` (`0x838044`) only for a missing row (`0x52bede`..`0x52bef2`); a
+                    // blank name stays blank (`0x52bef4`).
                     arg: model
                         .lock_type_names
                         .get(&first.index)

@@ -38,6 +38,14 @@ pub struct TradeSlotItem {
     /// slot holds a live item object, which the tooltip builder's LOCKED gate reads (`0x5342ed`);
     /// the partner's side has none.
     pub object_flags: Option<u32>,
+    /// The wire's wrapped word: the partner's block `+0x42c` (`0x534559`), which the tooltip's
+    /// wrapped gates read (`0x52c991`, `0x52cc5b`). The player's side reads its object's
+    /// `ITEM_FIELD_FLAGS` instead, so this only mirrors them there.
+    pub wrapped: bool,
+    /// The resolved name of the giver of a wrapped gift (`ITEM_FIELD_GIFTCREATOR` on the player's
+    /// side, the block's `+0x418` on the partner's, `0x534574`); `None` while unresolved or when
+    /// the guid is 0, which prints no `ITEM_WRAPPED_BY` line.
+    pub gift_creator: Option<String>,
     /// Slot 7 only: the name of the spell being cast on the item, which stock shows in green
     /// (`TradeFrame.lua:62`); `None` on every other slot and while nothing is cast.
     pub enchantment: Option<String>,
@@ -477,6 +485,8 @@ fn trade_slot_item(model: &Model, item: &cursor::CursorItem) -> TradeSlotItem {
             inventory_type: s.inventory_type,
             lock_id: 0,
             object_flags: Some(s.flags),
+            wrapped: s.flags & 0x8 != 0,
+            gift_creator: s.gift_creator.clone(),
             enchantment: None,
             link: s.link.clone(),
         })
@@ -760,6 +770,8 @@ mod tests {
             inventory_type: 0,
             lock_id: 0,
             object_flags: None,
+            wrapped: false,
+            gift_creator: None,
             enchantment: None,
             link: Some(format!(
                 "|cffffffff|Hitem:{item_id}:0:0:0|h[Linen Cloth]|h|r"
@@ -804,6 +816,8 @@ mod tests {
             inventory_type: 0,
             lock_id: 0,
             object_flags: None,
+            wrapped: false,
+            gift_creator: None,
             enchantment: None,
             link: None,
         });

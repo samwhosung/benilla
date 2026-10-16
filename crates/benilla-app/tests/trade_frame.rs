@@ -43,6 +43,8 @@ fn item(item_id: u32, name: &str, count: u32, quality: u32) -> TradeSlotItem {
         inventory_type: 0,
         lock_id: 0,
         object_flags: None,
+        wrapped: false,
+        gift_creator: None,
         enchantment: None,
         link: Some(format!("|cffffffff|Hitem:{item_id}:0:0:0|h[{name}]|h|r")),
     }

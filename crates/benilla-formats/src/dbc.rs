@@ -62,13 +62,23 @@ pub(crate) fn str_at(rs: &RecordSet, r: &Record, i: usize) -> Option<String> {
 /// The column's raw dword is the offset, as the client reads it, whatever the schema typed it: the
 /// other locales' columns are often left untyped.
 pub(crate) fn loc_str(rs: &RecordSet, r: &Record, first: usize, locale: Locale) -> Option<String> {
+    loc_str_raw(rs, r, first, locale).filter(|s| !s.is_empty())
+}
+
+/// [`loc_str`] for a reader that tells an empty name from no column: `Some("")` is a name the
+/// file leaves blank, `None` a column or offset that cannot be read.
+pub(crate) fn loc_str_raw(
+    rs: &RecordSet,
+    r: &Record,
+    first: usize,
+    locale: Locale,
+) -> Option<String> {
     let off = match r.get_value(first + locale.index())? {
         Value::StringRef(StringRef(off)) | Value::UInt32(off) => *off,
         Value::Int32(off) => *off as u32,
         Value::Float32(f) => f.to_bits(),
     };
-    let s = rs.get_string(StringRef(off)).ok()?;
-    (!s.is_empty()).then(|| s.to_string())
+    rs.get_string(StringRef(off)).ok().map(|s| s.to_string())
 }
 
 /// `SpellIcon.dbc`: id → extensionless texture path (`Interface\Icons\…`).

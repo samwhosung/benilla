@@ -158,6 +158,7 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
         duration_ms: s.duration_ms,
         object: true,
         block_lock_id: 0,
+        block_wrapped: false,
         cooldown_ms: 0,
     }
 }
@@ -468,6 +469,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                     // inspected unit's item is a block (`0x532ee0`).
                                     object: unit.eq_ignore_ascii_case("player"),
                                     block_lock_id: 0,
+                                    block_wrapped: false,
                                     // The player's own item answers the cooldown query
                                     // (`0x5331ec`), unless it is charged and spent
                                     // (`0x53318a`-`0x53319b`, the feed's `None`); an inspected
@@ -660,10 +662,13 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                 clear(lua, h);
                 let inst = render::ItemInstance {
                     name: item.name.clone(),
-                    // The target side's block carries the partner's lock id (`0x534563`); the
-                    // player's is zero (`0x534341`), but its slot is a live item object, whose
-                    // flags the LOCKED gate reads (`0x5342ed`, `0x5343da`).
+                    // The target side's block carries the partner's lock id (`0x534563`), wrapped
+                    // word (`0x534559`) and gift creator (`0x534574`); the player's lock id is
+                    // zero (`0x534341`), but its slot is a live item object, whose flags the
+                    // LOCKED and wrapped gates read (`0x5342ed`, `0x5343da`, `0x52b789`).
                     block_lock_id: if player_side { 0 } else { item.lock_id },
+                    block_wrapped: !player_side && item.wrapped,
+                    gift_creator: item.gift_creator.clone(),
                     object: item.object_flags.is_some(),
                     flags: item.object_flags.unwrap_or(0),
                     ..Default::default()
