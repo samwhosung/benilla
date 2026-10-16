@@ -98,9 +98,9 @@ pub(crate) fn on_cvar(
         // The stock dropdown writes 1 Smart, 2 Always, 0 Never (`UIOptionsFrame.lua:518`).
         "camerasmoothstyle" => follow.style = FollowStyle::from_cvar(v),
         "camerasmoothtrackingstyle" => follow.tracking_style = FollowStyle::from_cvar(v),
-        "camerayawsmoothspeed" => {
-            follow.yaw_speed = v.clamp(*FOLLOW_SPEED_RANGE.start(), *FOLLOW_SPEED_RANGE.end());
-        }
+        // The registry has refused a rate outside the validator's [0.1, 360] (`0x50c000`); the
+        // follow reader takes the stored value as is (`0x512d75`).
+        "camerayawsmoothspeed" => follow.yaw_speed = v,
         _ => {}
     }
 }
@@ -154,8 +154,6 @@ impl LookConfig {
 /// `cameraYawSmoothSpeed`, default 180°/s (`[0xbe1070]`, read at `0x512d75`): a duration divisor,
 /// as a return lasts `|Δyaw| / rate × factor`. The AUTO_FOLLOW_SPEED slider, greyed under Never.
 pub(crate) const FOLLOW_SPEED_DEFAULT: f32 = 180.0;
-/// The 1.12 slider's own range for [`FollowConfig::yaw_speed`].
-pub(crate) const FOLLOW_SPEED_RANGE: std::ops::RangeInclusive<f32> = 90.0..=270.0;
 /// `cameraSmoothTimeMin`/`Max`: 0.1 s and 2.0 s (`[0xbe105c]`/`[0xbe1038]`, clamped at `0x510f4d`).
 const FOLLOW_TIME_MIN: f32 = 0.1;
 const FOLLOW_TIME_MAX: f32 = 2.0;

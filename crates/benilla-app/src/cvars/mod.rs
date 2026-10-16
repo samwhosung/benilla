@@ -1009,7 +1009,7 @@ mod tests {
     use crate::chat_bubble::BubbleConfig;
     use crate::minimap::MinimapZoom;
     use crate::nameplates::NameConfig;
-    use crate::player::camera::{FollowConfig, FollowStyle, LookConfig, FOLLOW_SPEED_RANGE};
+    use crate::player::camera::{FollowConfig, FollowStyle, LookConfig};
     use crate::player::camera_zoom::ZoomLimit;
     use crate::portrait::PaneRate;
     use crate::sound::SoundConfig;
@@ -1525,17 +1525,25 @@ mod tests {
             FollowStyle::Smart,
             "and only that one"
         );
-        apply(&mut app, "cameraYawSmoothSpeed", "270");
-        assert_eq!(res::<FollowConfig>(&app).yaw_speed, 270.0);
-        // Past the validator's 360 (`0x50c000`): refused, 270 stands.
-        assert_eq!(
-            apply(&mut app, "cameraYawSmoothSpeed", "9000"),
-            SetOutcome::Vetoed
-        );
-        assert_eq!(
-            res::<FollowConfig>(&app).yaw_speed,
-            *FOLLOW_SPEED_RANGE.end()
-        );
+        // The validator's [0.1, 360] (`0x50c000`) is the range, not the stock slider's 90 to 270:
+        // a value inside it is stored and used as is (`0x512d75`).
+        for (text, want) in [("270", 270.0), ("360", 360.0), ("0.2", 0.2), ("30", 30.0)] {
+            assert_eq!(
+                apply(&mut app, "cameraYawSmoothSpeed", text),
+                SetOutcome::Changed,
+                "{text}"
+            );
+            assert_eq!(res::<FollowConfig>(&app).yaw_speed, want, "{text}");
+        }
+        // Outside it: refused, and the last stored value stands.
+        for text in ["360.5", "400", "9000", "0", "0.05", "-30"] {
+            assert_eq!(
+                apply(&mut app, "cameraYawSmoothSpeed", text),
+                SetOutcome::Vetoed,
+                "{text}"
+            );
+            assert_eq!(res::<FollowConfig>(&app).yaw_speed, 30.0, "{text}");
+        }
         // The max orbit lands as yards on the knob: `cameraDistanceMax` x the factor, held to
         // [0, 50]; the factor is not held to its slider's 1 to 2.
         apply(&mut app, "cameraDistanceMaxFactor", "1");

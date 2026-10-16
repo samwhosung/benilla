@@ -481,8 +481,8 @@ pub(crate) const REGISTERED: &[Registered] = &[
     same("cameraSmoothTrackingStyle", "1").checked(benilla_ui::script::check_camera_smooth_style),
     // AUTO_FOLLOW_SPEED (`UIOptionsFrame.lua:88`), deg/s, registered "180.0" (`[0xbe1070]`): it
     // sets the transition's duration (`|dyaw| / rate * factor`), an average rate, not a slew. The
-    // validator `0x50c000` refuses outside [0.1, 360]; the knob then clamps to `FOLLOW_SPEED_RANGE`,
-    // the slider's.
+    // validator `0x50c000` refuses outside [0.1, 360] and the follow reader (`0x512d75`) uses the
+    // stored value as is; 90 to 270 is only the stock slider's range.
     same("cameraYawSmoothSpeed", "180").checked(benilla_ui::script::check_camera_rate),
     // `UIOptionsFrame.lua:353` names `cameraPitchSmoothSpeed`, registered "45.0" (`0x50b90b`) with
     // the same validator, and `SetCVar` raises on a name no CVar has (`0x488c53`). `FollowRig` has
