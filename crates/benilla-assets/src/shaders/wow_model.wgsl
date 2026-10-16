@@ -169,8 +169,10 @@ fn stage1_rgb(preset: u32, prev: vec3<f32>, tex: vec4<f32>, diffuse_a: f32) -> v
     return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// Stage 1's alpha (`0x80a274`): 1 modulates, 3 adds, 4 modulates ×2, the rest pass the previous.
-fn stage1_alpha(preset: u32, prev: f32, tex: f32) -> f32 {
+// A stage's alpha on `prev`, the previous stage's (the diffuse alpha, for stage 0), by gx preset
+// (`0x80a274`, args TEXTURE and CURRENT): 1 modulates, 3 adds, 4 modulates ×2, the rest
+// (SELECTARG2) pass the previous.
+fn stage_alpha(preset: u32, prev: f32, tex: f32) -> f32 {
     var a = prev;
     if (preset == 1u) {
         a = prev * tex;
@@ -584,13 +586,14 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     }
 
     // Stage 1 (`0x70b740` binds a stage per texture of the unit): its alpha joins the stage-0
-    // alpha the cutout and the blend read; its colour combines after the light (below).
+    // alpha the cutout reads (the blend's is `faded_alpha`, below); its colour combines after the light (below).
     let stage1_on = m.stage1.x > 0.5;
     let stage1_preset = u32(m.stage1.y);
+    let tex0_alpha = base_color.a;
     var tex1 = vec4<f32>(1.0);
     if (stage1_on) {
         tex1 = textureSampleBias(stage1_texture, stage1_sampler, in.env_uv, view.mip_bias);
-        base_color.a = stage1_alpha(stage1_preset, base_color.a, tex1.a);
+        base_color.a = stage_alpha(stage1_preset, base_color.a, tex1.a);
     }
 
     // The MeshTag (mesh_tag.rs): bit 31 = highlight, bit 30 = interior fog; payload bits 0-5 = the
@@ -629,7 +632,17 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     // The depth-prime twin (`M2UseZFill`) masks colour writes, so only the discards above shape its
     // depth. No early return: naga's MSL backend miscompiles the dead tail ("redefinition of
     // '_tmp'").
-    let faded_alpha = base_color.a * obj_fade;
+    // The blended alpha is the stage chain on the instance alpha, the diffuse (`0x70c73a`, c28.w):
+    // stage 0 combines it with the texel by its preset's alpha op, so an opaque batch's preset 0
+    // (`0x811f8c`) blends by the fade alone and the texel's alpha never reaches the frame. Stage 1
+    // follows on that. `m.stage1.z` is the stage-0 preset + 1, 0 for a batch with none.
+    var faded_alpha = base_color.a * obj_fade;
+    if (m.stage1.z > 0.5) {
+        faded_alpha = stage_alpha(u32(m.stage1.z) - 1u, obj_fade, tex0_alpha);
+        if (stage1_on) {
+            faded_alpha = stage_alpha(stage1_preset, faded_alpha, tex1.a);
+        }
+    }
     let base = alpha_discard(pbr_input.material, base_color);
 
     // --- Lighting --------------------------------------------------------------------------------
@@ -861,7 +874,7 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
 
 
     var out: WowFragOut;
-    // Output alpha is tex × fade. Opaque intent (`clutter_fade.z` bit 3) pins it to 1: a no-op
+    // Output alpha is `faded_alpha`. Opaque intent (`clutter_fade.z` bit 3) pins it to 1: a no-op
     // under correct pipeline state, and a guard for macOS/Metal with an extra camera, where an
     // opaque draw can bind a blending pipeline and show the BLP's garbage alpha.
     let opaque_intent = (u32(m.clutter_fade.z) & 8u) != 0u;

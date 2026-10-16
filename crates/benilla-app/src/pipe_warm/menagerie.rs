@@ -114,6 +114,7 @@ pub(super) fn spawn_menagerie(
                         // Not a `WowModelKey` axis: it swaps a sampled UV, not pipeline state.
                         false,
                         None, // stage 1: a uniform and a binding, not pipeline state
+                        None, // …nor the stage-0 combine
                         ShadeSel::Lit,
                         0,
                         None,
@@ -152,6 +153,7 @@ pub(super) fn spawn_menagerie(
                         // Not a `WowModelKey` axis: it swaps a sampled UV, not pipeline state.
                         false,
                         None, // stage 1: a uniform and a binding, not pipeline state
+                        None, // …nor the stage-0 combine
                         ShadeSel::Lit,
                         0,
                         None,
@@ -199,6 +201,7 @@ pub(super) fn spawn_menagerie(
                     FogPolicy::Off,
                     false,
                     None, // stage 1: a uniform and a binding, not pipeline state
+                    None, // …nor the stage-0 combine
                     ShadeSel::Lit,
                     0,
                     None,
@@ -235,6 +238,7 @@ pub(super) fn spawn_menagerie(
                 // Not a `WowModelKey` axis: it swaps a sampled UV, not pipeline state.
                 false,
                 None, // stage 1: a uniform and a binding, not pipeline state
+                None, // …nor the stage-0 combine
                 ShadeSel::Lit,
                 0,
                 None,
@@ -283,6 +287,7 @@ pub(super) fn spawn_menagerie(
                         // Not a `WowModelKey` axis: it swaps a sampled UV, not pipeline state.
                         false,
                         None, // stage 1: a uniform and a binding, not pipeline state
+                        None, // …nor the stage-0 combine
                         ShadeSel::Lit,
                         0,
                         None,
@@ -747,6 +752,7 @@ fn warm_quad(colors: bool, skinned: bool) -> RenderSubmesh {
         fog_policy: FogPolicy::Scene,
         env_map: false,
         stage1: None,
+        combine: 1,
         billboard: None,
         welded_billboard: false,
         alpha_anim: None,

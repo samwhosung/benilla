@@ -500,6 +500,7 @@ impl AssetLoader for WmoModelLoader {
                     additive: sub.additive,
                     env_map: false,
                     stage1: None, // a WMO batch is one texture stage
+                    combine: None,
                     no_depth_write: false,
                     no_depth_test: false,
                     fog_policy: sub.fog_policy,

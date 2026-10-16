@@ -67,6 +67,9 @@ pub struct ModelSubmesh {
     pub env_map: bool,
     /// The second texture stage the shader draws, a two-texture M2 unit's ([`Stage1`]).
     pub stage1: Option<Stage1>,
+    /// An M2 batch's stage-0 combine preset (`RenderSubmesh::combine`): a faded twin takes its
+    /// alpha by the preset's alpha op. `None` for a WMO batch, which keeps the texel's alpha.
+    pub combine: Option<u8>,
     /// M2 render flag 0x10; unset, a transparent batch writes depth, as in the reference.
     pub no_depth_write: bool,
     /// M2 render flag 0x08: no depth test.

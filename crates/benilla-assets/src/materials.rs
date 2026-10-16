@@ -116,7 +116,8 @@ pub struct WowModelExt {
     #[uniform(100)]
     pub anim_slots: Vec4,
     /// The second texture stage: `x` = bound (1) or not (0), `y` = its combine preset 0-5
-    /// (`benilla_formats::TextureStage::combine`); `zw` unused.
+    /// (`benilla_formats::TextureStage::combine`); `z` = the stage-0 combine preset plus one
+    /// (`benilla_formats::RenderSubmesh::combine`), 0 for a batch that has none; `w` unused.
     #[uniform(100)]
     pub stage1: Vec4,
     /// Stage 1's texture, sampled at the generated environment coordinate when `stage1.x` is set;
@@ -540,8 +541,8 @@ mod tests {
                 "stage 1 combines with the lit stage-0 result, preset 5 by the diffuse alpha",
             ),
             (
-                "base_color.a = stage1_alpha(stage1_preset, base_color.a, tex1.a);",
-                "stage 1's alpha joins the alpha the cutout and blend read",
+                "base_color.a = stage_alpha(stage1_preset, base_color.a, tex1.a);",
+                "stage 1's alpha joins the alpha the cutout reads",
             ),
         ] {
             assert!(src.contains(line), "{why}: `{line}` is gone");
@@ -565,6 +566,70 @@ mod tests {
         }
         let out = preset1([0.8, 0.6, 0.4, 1.0], [0.5, 0.25, 1.0, 0.5]);
         assert_eq!(out, [0.4, 0.15, 0.4, 0.5], "colour and alpha both modulate");
+    }
+
+    /// A fade twin blends by the alpha chain on the instance alpha, not the texel's: stage 0
+    /// combines the diffuse alpha (`0x70c73a`, c28.w) with the texel by its preset's alpha op
+    /// (`0x80a274` = 3, 4, 3, 7, 5, 3 as `D3DTOP`, args TEXTURE and CURRENT, `ALPHAARG` never set),
+    /// so an opaque batch's preset 0 (`0x811f8c`) blends by the fade alone, and the 0x101 models'
+    /// preset 1 by texel × fade.
+    #[test]
+    fn a_fade_twin_blends_by_the_stage_zero_alpha_op() {
+        let src = include_str!("shaders/wow_model.wgsl");
+        for (line, why) in [
+            (
+                "faded_alpha = stage_alpha(u32(m.stage1.z) - 1u, obj_fade, tex0_alpha);",
+                "the blended alpha is stage 0's alpha op on the fade and the texel",
+            ),
+            (
+                "faded_alpha = stage_alpha(stage1_preset, faded_alpha, tex1.a);",
+                "stage 1 follows on the faded alpha",
+            ),
+            (
+                "let tex0_alpha = base_color.a;",
+                "stage 0's texel alpha is read before stage 1 joins it",
+            ),
+            (
+                "fn stage_alpha(preset: u32, prev: f32, tex: f32) -> f32 {\n    var a = prev;",
+                "an alpha op that selects ARG2 passes the previous alpha, the fade, whole",
+            ),
+            (
+                "out.color = vec4<f32>(out_rgb, select(faded_alpha, 1.0, opaque_intent));",
+                "the output alpha is the chain's",
+            ),
+        ] {
+            assert!(src.contains(line), "{why}: `{line}` is gone");
+        }
+        // The old output multiplied the texel into every twin, whatever its combine.
+        assert!(
+            !src.contains("let faded_alpha = base_color.a * obj_fade;"),
+            "the twin's alpha is the texel times the fade again, preset 0 included"
+        );
+
+        /// `stage_alpha`, step for step.
+        fn stage_alpha(preset: u32, prev: f32, tex: f32) -> f32 {
+            match preset {
+                1 => prev * tex,
+                3 => prev + tex,
+                4 => 2.0 * prev * tex,
+                _ => prev,
+            }
+            .clamp(0.0, 1.0)
+        }
+        // A texel at alpha 0 (the Wind Rider's `WyvernSkin02` batch) fading at 0.5.
+        let (fade, texel) = (0.5, 0.0);
+        assert_eq!(stage_alpha(0, fade, texel), 0.5, "preset 0: the fade alone");
+        assert_eq!(stage_alpha(1, fade, texel), 0.0, "preset 1: texel × fade");
+        // Preset 0's alpha does not move with the texel; preset 1's does.
+        for t in [0.0, 0.25, 1.0] {
+            assert_eq!(stage_alpha(0, fade, t), fade);
+            assert_eq!(stage_alpha(1, fade, t), fade * t);
+        }
+        // The rest of the alpha ops: 2 and 5 select ARG2, 3 adds, 4 doubles the product.
+        assert_eq!(stage_alpha(2, 0.5, 0.25), 0.5);
+        assert_eq!(stage_alpha(5, 0.5, 0.25), 0.5);
+        assert_eq!(stage_alpha(3, 0.5, 0.25), 0.75);
+        assert_eq!(stage_alpha(4, 0.5, 0.25), 0.25);
     }
 
     /// The WGSL carries the reference's swatch row arithmetic, and a Rust mirror of it reproduces

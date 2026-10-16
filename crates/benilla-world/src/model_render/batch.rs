@@ -126,7 +126,8 @@ impl M2BatchMaterials<'_> {
                 false, // …and never skips the test
                 sub.fog_policy,
                 sub.env_map,
-                None,          // no shipped skybox unit has a second texture
+                None, // no shipped skybox unit has a second texture
+                Some(sub.combine),
                 ShadeSel::Lit, // unread: every shipped skybox batch is UNLIT (0x01)
                 order,
                 // No texture-transform or colour loop: neither shipped skybox authors one. Wiring
@@ -332,7 +333,8 @@ impl M2BatchMaterials<'_> {
                 benilla_formats::FogPolicy::Scene,
                 // No env map: ArmorReflect reaches a character through its held items' batches.
                 false,
-                None, // …and one texture stage
+                None,                                        // …and one texture stage
+                Some(u8::from(blend != ModelBlend::Opaque)), // …the preset its blend names (`0x811f8c`)
                 shade,
                 0,     // a composite is one sheet, not a batch in an authored order
                 None,  // …with no texture transform
@@ -450,6 +452,7 @@ impl M2BatchMaterials<'_> {
             sub.fog_policy,
             sub.env_map,
             sub.stage1.as_ref(),
+            sub.combine,
             shade,
             order,
             play_uv.then_some(sub.uv_anim.as_ref()).flatten(),

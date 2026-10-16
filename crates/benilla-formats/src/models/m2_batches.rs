@@ -396,6 +396,7 @@ pub fn parse_m2_render_submeshes(
         // `texCoordSet (+0x12) → texture_unit_lookup (0x9c)` above 2 is a generated environment
         // coordinate, as the reference gates it at `0x70b8bd`.
         let env_map = model.stage_is_env_mapped(batch, 0);
+        let combine = model.stage_combine(batch, 0);
         // A unit of two textures binds a second stage (`0x70b740`): texture, coordinates and
         // combine by the same lookups at `+ 1`. No stock unit has more than two, and the shader
         // draws two.
@@ -573,6 +574,7 @@ pub fn parse_m2_render_submeshes(
             });
             sub.env_map = env_map;
             sub.stage1 = stage1.clone();
+            sub.combine = combine;
             sub.additive = additive;
             sub.no_depth_write = no_depth_write;
             sub.no_depth_test = no_depth_test;
@@ -879,6 +881,20 @@ mod tests {
         let one = parse_m2_render_submeshes(&two_texture_model(1), "", &[]).expect("parses");
         assert_eq!(one[0].stage1, None);
         assert_eq!(one[0].texture.as_deref(), Some("A.BLP"));
+    }
+
+    /// A batch carries its stage-0 combine (`0x70b7bf`): a version 0x101 model's array entry 0
+    /// (preset 1 on every stock one), any other version's blend through `0x811f8c`, where the
+    /// opaque blend 0 is preset 0, the diffuse-alpha-only combine.
+    #[test]
+    fn a_batch_carries_its_stage_zero_combine() {
+        let mut b = two_texture_model(2);
+        let s = parse_m2_render_submeshes(&b, "", &[]).expect("parses");
+        assert_eq!(s[0].combine, 1, "0x101 reads its array: entry 0 is 1");
+        // The same bytes as version 0x100 read the blend table, and blend 0 is preset 0.
+        b[4..8].copy_from_slice(&0x100u32.to_le_bytes());
+        let s = parse_m2_render_submeshes(&b, "", &[]).expect("parses as 0x100");
+        assert_eq!(s[0].combine, 0, "blend 0 is combine preset 0");
     }
 
     /// `TaurenMale.m2`'s type-8 fur, opaque core and alpha-cut two-sided fringe alike, surfaces as

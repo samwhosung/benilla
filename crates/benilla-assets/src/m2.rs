@@ -292,6 +292,7 @@ impl AssetLoader for M2ModelLoader {
             submeshes.push(ModelSubmesh {
                 texture,
                 stage1,
+                combine: Some(sub.combine),
                 skin_slot: sub.skin_slot,
                 geoset_id: sub.geoset_id,
                 char_slot: sub.char_slot,

@@ -352,6 +352,9 @@ pub struct RenderSubmesh {
     pub env_map: bool,
     /// The batch's second texture stage, for a unit of two or more textures; `None` for one.
     pub stage1: Option<TextureStage>,
+    /// Stage 0's combine preset, 0 to 5 (`benilla_m2::M2Model::stage_combine`): preset 0, the
+    /// stock opaque batch's, takes its alpha from the diffuse alone, 1 modulates it by the texel.
+    pub combine: u8,
 }
 
 /// A texture stage after the first: the reference binds one per texture of the unit
@@ -438,6 +441,7 @@ impl Default for RenderSubmesh {
             wmo_batch: None,
             env_map: false,
             stage1: None,
+            combine: 1,
             section: None,
         }
     }

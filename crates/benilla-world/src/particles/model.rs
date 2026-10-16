@@ -87,6 +87,7 @@ pub(super) fn update_model_particles(
                         sub.fog_policy,
                         sub.env_map, // texture_unit_lookup > 2 ⇒ the runtime generates this batch's UVs
                         sub.stage1.as_ref(),
+                        sub.combine,
                         // Lit like every entity M2 (`0x69e280`).
                         ShadeSel::Lit,
                         0,

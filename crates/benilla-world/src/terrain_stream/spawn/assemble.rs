@@ -181,6 +181,7 @@ pub fn spawn_model_entities(
             sub.fog_policy,
             sub.env_map, // texture_unit_lookup > 2 ⇒ the runtime generates this batch's UVs
             sub.stage1.as_ref(),
+            sub.combine,
             shade,
             batch_order,
             sub.uv_anim.as_ref(),
@@ -219,6 +220,7 @@ pub fn spawn_model_entities(
                 sub.fog_policy,
                 sub.env_map, // texture_unit_lookup > 2 ⇒ the runtime generates this batch's UVs
                 sub.stage1.as_ref(),
+                sub.combine,
                 shade,
                 batch_order,
                 sub.uv_anim.as_ref(),
