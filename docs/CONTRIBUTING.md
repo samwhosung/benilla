@@ -135,9 +135,8 @@ out of scope is closed with the reason.
     command and logs the reply as `net: server says`. An account named `probe` and digits is
     shielded: every world entry sends `.cheat god on`, `.die` clears it for a death test, and
     `WOW_GOD=off` leaves it off.
-  - The glue screens are the stock GlueXML. `WOW_GLUE_NATIVE=1` puts up the native ones in a
-    dev build until they are deleted; a rig, `WOW_PROBE_CHARCREATE` and a glue capture still drive
-    them, so each puts them up on its own.
+  - A rig, `WOW_PROBE_CHARCREATE` and a glue capture drive the stock glue screens through their
+    own Lua, the calls a player's clicks make.
   - A trace is `WOW_MOVE_TRACE=<file>`, filtered with `WOW_MOVE_TRACE_TAGS` (`"move,snd,in"`) and
     ended by `WOW_PROBE_EXIT_AT=<seconds>`; grep it for the `rly` and `snd` lines.
   - To sniff the wire, trace the tags `in` and `out` (`WOW_MOVE_TRACE_TAGS="in,out"`): one line

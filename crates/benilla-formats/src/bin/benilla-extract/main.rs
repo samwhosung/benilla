@@ -11,7 +11,6 @@ use clap::{Parser, Subcommand};
 mod chaincensus;
 mod charatlas;
 mod charprocs;
-mod glueextent;
 mod kitanim;
 mod m2dump;
 mod scan;
@@ -90,12 +89,6 @@ enum Command {
         /// Write the composited atlas here as a PNG (256²).
         #[arg(long)]
         out: Option<PathBuf>,
-    },
-    /// Measure each shipped glue scene's art extent and the window aspects where it runs out.
-    Glueextent {
-        /// Also print every batch's footprint: front, back and clipped triangles and its extents.
-        #[arg(long)]
-        batches: bool,
     },
     /// Dump a DBC table to CSV using our schema for it (headers included).
     Dbc {
@@ -692,7 +685,6 @@ fn main() -> Result<()> {
                 output.display()
             );
         }
-        Command::Glueextent { batches } => glueextent::glueextent(&mut chain, batches)?,
         Command::M2coll { internal_path } => m2dump::m2coll(&mut chain, &internal_path)?,
         Command::M2cam { internal_path } => m2dump::m2cam(&mut chain, &internal_path)?,
         Command::M2seq { internal_path } => m2dump::m2seq(&mut chain, &internal_path)?,

@@ -9,7 +9,6 @@ use crate::Chain;
 
 mod anim;
 mod anim_summary;
-mod art_extent;
 mod bounds;
 mod collision;
 mod key_anim;
@@ -21,7 +20,6 @@ mod types;
 mod wmo;
 pub use anim::*;
 pub use anim_summary::*;
-pub use art_extent::*;
 pub use bounds::*;
 pub use collision::*;
 pub(crate) use key_anim::{bake_track, SeqSlot};
