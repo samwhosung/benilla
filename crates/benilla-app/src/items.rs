@@ -396,7 +396,8 @@ impl RollCatalogs<'_> {
 /// Item templates by entry, asked once, and the enchant times queued for items not yet held.
 #[derive(Resource, Default)]
 pub(crate) struct Items {
-    /// A `None` answer is the server's unknown entry, cached so it is never re-asked.
+    /// A refused entry is the server's unknown one, read as such by [`Items::template_answered_unknown`]
+    /// and asked again by the next lookup ([`QueryCache::refuse`]); it is never kept as a record.
     templates: QueryCache<u32, ItemInfo>,
     /// Landed since the last [`Self::take_fresh`]; pushed to the UI unprompted.
     fresh: Vec<u32>,
@@ -470,8 +471,9 @@ impl Items {
         taken
     }
 
-    /// The template for `entry` if known; a miss asks once per entry per connection (`guid` rides
-    /// along, `0` for template-only). A cached negative is also `None`, without a re-ask.
+    /// The template for `entry` if known; a miss asks once while in flight (`guid` rides along, `0`
+    /// for template-only). A refused entry is also `None`, and asks again only at a new lookup
+    /// ([`QueryCache::get_or_ask`]).
     pub(crate) fn template(
         &self,
         entry: u32,
@@ -484,8 +486,9 @@ impl Items {
         })
     }
 
-    /// Whether the server answered `entry` as unknown, not still pending; the cast-fail redisplay
-    /// then shows the reference's `"UNKNOWN"` instead of waiting.
+    /// Whether the server refused `entry`, not still pending; the cast-fail redisplay then shows
+    /// the reference's `"UNKNOWN"` instead of waiting (`0x6e29b0` runs on the status-0 callback and
+    /// finds no record, `0x6e2a49`).
     pub(crate) fn template_answered_unknown(&self, entry: u32) -> bool {
         self.templates.answered_unknown(entry)
     }
@@ -520,14 +523,17 @@ impl Items {
         self.templates.get(entry)
     }
 
-    /// Record a template answer (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`); `None` = unknown entry.
+    /// Record a template answer (`SMSG_ITEM_QUERY_SINGLE_RESPONSE`); `None` = a refusal.
     pub(crate) fn insert_template(&mut self, entry: u32, info: Option<ItemInfo>) {
-        if info.is_some() {
-            self.fresh.push(entry);
+        match info {
+            Some(info) => {
+                self.fresh.push(entry);
+                self.templates.insert(entry, info);
+            }
+            // A refusal moves the generation too: "still asking" to "unknown" is a display
+            // transition for the cast-fail redisplay.
+            None => self.templates.refuse(entry),
         }
-        // A negative answer moves the generation too: "still asking" to "answered unknown" is a
-        // display transition for the cast-fail redisplay.
-        self.templates.insert(entry, info);
     }
 
     /// Bumped by every landed answer, for consumers besides the drain; the stand-in for the
@@ -538,10 +544,7 @@ impl Items {
 
     /// Every entry with a cached template.
     pub(crate) fn cached_template_ids(&self) -> Vec<u32> {
-        self.templates
-            .iter()
-            .filter_map(|(&id, t)| t.is_some().then_some(id))
-            .collect()
+        self.templates.iter().map(|(&id, _)| id).collect()
     }
 
     /// Drain the entries whose template landed since the last drain.
@@ -939,19 +942,46 @@ mod tests {
         assert!(gift_box.shows_open_line(ITEM_DYNFLAG_WRAPPED));
     }
 
+    /// `0x55bdf7`: an item key with its top bit set is a refusal. The waiters read unknown once
+    /// (`template_answered_unknown`), nothing is kept, and the next lookup asks again.
     #[test]
-    fn negative_template_answer_is_cached() {
+    fn a_refused_template_reads_unknown_and_the_next_lookup_asks_again() {
         let (cmds, rx) = commands();
         let mut items = Items::default();
 
         assert!(items.template(9999, 0, &cmds).is_none());
-        let _ = rx.try_recv();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::ItemQuery { entry: 9999, .. })
+        ));
+        assert!(!items.template_answered_unknown(9999), "still pending");
+        let before = items.template_epoch();
         items.insert_template(9999, None); // server: unknown entry
+        assert_ne!(
+            items.template_epoch(),
+            before,
+            "the redisplay counter moves"
+        );
+        assert!(items.template_answered_unknown(9999));
+        assert!(items.template_cached(9999).is_none(), "and nothing is kept");
+        assert!(items.cached_template_ids().is_empty());
+
         assert!(items.template(9999, 0, &cmds).is_none());
         assert!(
             matches!(rx.try_recv(), Err(TryRecvError::Empty)),
-            "no re-ask"
+            "a poll of the same lookup does not ask"
         );
+
+        crate::query_cache::test_clock::past_the_gap();
+        assert!(items.template(9999, 0, &cmds).is_none());
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::ItemQuery { entry: 9999, .. })
+            ),
+            "the next lookup does"
+        );
+        assert!(!items.template_answered_unknown(9999), "pending again");
     }
 
     #[test]

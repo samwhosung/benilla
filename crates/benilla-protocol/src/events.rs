@@ -447,7 +447,7 @@ pub enum SessionEvent {
         racial_leader: bool,
     },
     /// `SMSG_GAMEOBJECT_QUERY_RESPONSE`, keyed by template `entry`; `data` is the type-specific
-    /// raw tail. An unknown entry still fires, every field zero or empty.
+    /// raw tail.
     GameObjectInfo {
         entry: u32,
         type_id: u32,
@@ -455,6 +455,9 @@ pub enum SessionEvent {
         name: String,
         data: [i32; 24],
     },
+    /// `SMSG_GAMEOBJECT_QUERY_RESPONSE` for an entry the server does not know: the lone `entry`
+    /// with its top bit set, the refusal the template cache frees a node on (`0x5588e0`).
+    GameObjectUnknown { entry: u32 },
     /// `SMSG_GAMEOBJECT_CUSTOM_ANIM`: the reference arms substate `8 + anim_id`, AnimationData
     /// 153..156 (Custom0..3), and rejects `anim_id >= 4`. A fishing bobber's bite sends 0.
     GameObjectCustomAnim { guid: u64, anim_id: u32 },

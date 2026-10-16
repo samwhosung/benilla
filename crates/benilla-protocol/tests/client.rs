@@ -647,6 +647,38 @@ fn creature_query_empty_subname_decodes_to_none() {
     }
 }
 
+/// `0x5588e0`: a game object key with its top bit set is a refusal, which the template cache
+/// frees a node on. It reaches the app as a refusal, never as a zeroed template.
+#[test]
+fn gameobject_query_miss_decodes_to_a_refusal_not_a_zeroed_template() {
+    let parse = |b: &[u8]| {
+        messages::parse_server(messages::opcode::SMSG_GAMEOBJECT_QUERY_RESPONSE, b).unwrap()
+    };
+    // Entry 1731 with the top bit set, and nothing after it.
+    match decode(parse(&hx("c3060080"))).as_slice() {
+        [SessionEvent::GameObjectUnknown { entry }] => assert_eq!(*entry, 1731),
+        other => panic!("expected one GameObjectUnknown event, got {other:?}"),
+    }
+    // A hit: entry, type 3 (chest), display 259, "Chest", four empty names, 24 data dwords.
+    let mut hit = hx("c3060000030000000301000043686573740000000000");
+    hit.extend((0..24u32).flat_map(|i| (i + 1).to_le_bytes()));
+    match decode(parse(&hit)).as_slice() {
+        [SessionEvent::GameObjectInfo {
+            entry,
+            type_id,
+            display_id,
+            name,
+            data,
+        }] => {
+            assert_eq!((*entry, *type_id, *display_id), (1731, 3, 259));
+            assert_eq!(name, "Chest");
+            assert_eq!(data[0], 1);
+            assert_eq!(data[23], 24);
+        }
+        other => panic!("expected one GameObjectInfo event, got {other:?}"),
+    }
+}
+
 /// `CMSG_PING` is `u32` sequence then `u32` last RTT (reference `0x537e10`, vmangos
 /// `_HandlePing`); `SMSG_PONG` echoes the sequence.
 #[test]

@@ -68,6 +68,7 @@ pub(super) fn register(app: &mut App) {
         .net_handler(K::ObjectsRemoved, on_objects_removed)
         .net_handler(K::MonsterMove, on_monster_move)
         .net_handler(K::GameObjectInfo, on_gameobject_info)
+        .net_handler(K::GameObjectUnknown, on_gameobject_unknown)
         .net_handler(K::GameObjectCustomAnim, on_gameobject_anim)
         .net_handler(K::GameObjectDespawnAnim, on_gameobject_anim)
         .net_handler(K::SplineMoveMode, on_spline_move_mode)
@@ -547,6 +548,14 @@ fn on_gameobject_info(In(ev): In<SessionEvent>, mut sc: Scene) {
             &data,
             &mut sc.go_templates,
         );
+    }
+}
+
+/// A refused entry: the template cache frees it (`0x5588e0`'s refusal leg), so no zeroed template
+/// stands in for the object.
+fn on_gameobject_unknown(In(ev): In<SessionEvent>, mut sc: Scene) {
+    if let SessionEvent::GameObjectUnknown { entry } = ev {
+        sc.go_templates.refuse(entry);
     }
 }
 
@@ -1330,6 +1339,7 @@ mod update_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::ClientCommand;
 
     /// The object packets run the item watchers in wire order: the create hook, a values block,
     /// a seat of ours, a late record, the destroy; another player's item and a resend run none.
@@ -1746,6 +1756,52 @@ mod tests {
                 new_cached: false
             }],
             "a negative answer runs nothing"
+        );
+    }
+
+    /// `0x5588e0`'s refusal leg: a game object entry the server refuses is no template, where a
+    /// zeroed one stood in for it. It reads unknown to the object that waited, and the next
+    /// lookup asks again.
+    #[test]
+    fn a_refused_game_object_entry_is_no_template() {
+        const ENTRY: u32 = 1731;
+        let mut app = crate::game_plugins::schedule_tests::headless_client();
+        let world = app.world_mut();
+        let fields = crate::go_templates::test_fields(ENTRY);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        world
+            .resource::<GameObjectTemplates>()
+            .request(0x11, &fields, &commands);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::GameObjectQuery { entry: ENTRY, .. })
+        ));
+
+        super::super::handlers::dispatch(
+            world,
+            vec![SessionEvent::GameObjectUnknown { entry: ENTRY }],
+        );
+        let templates = world.resource::<GameObjectTemplates>();
+        assert!(
+            templates.of(&fields).is_none(),
+            "no zeroed template stands in"
+        );
+        assert!(templates.is_unknown(ENTRY));
+        templates.request(0x11, &fields, &commands);
+        assert!(
+            rx.try_recv().is_err(),
+            "the object that waited is not re-asked"
+        );
+
+        crate::query_cache::test_clock::past_the_gap();
+        templates.request(0x11, &fields, &commands);
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::GameObjectQuery { entry: ENTRY, .. })
+            ),
+            "the next lookup is"
         );
     }
 

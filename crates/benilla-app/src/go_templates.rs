@@ -75,7 +75,7 @@ pub(crate) struct TextPage {
     pub(crate) material: u32,
 }
 
-/// Entry to template, asked once per connection.
+/// Entry to template, asked once while in flight.
 #[derive(Resource, Default)]
 pub(crate) struct GameObjectTemplates {
     templates: QueryCache<u32, GoTemplate>,
@@ -110,7 +110,19 @@ impl GameObjectTemplates {
         });
     }
 
-    /// Records a `SMSG_GAMEOBJECT_QUERY_RESPONSE`; a miss arrives zeroed, so no lock.
+    /// A refused entry (`SMSG_GAMEOBJECT_QUERY_RESPONSE` with the top bit set, `0x5588e0`): no
+    /// template, and the next lookup asks again ([`QueryCache::refuse`]).
+    pub(crate) fn refuse(&mut self, entry: u32) {
+        self.templates.refuse(entry);
+    }
+
+    /// Whether the server refused `entry` and the readers are still on that lookup.
+    #[cfg(test)]
+    pub(crate) fn is_unknown(&self, entry: u32) -> bool {
+        self.templates.answered_unknown(entry)
+    }
+
+    /// Records a `SMSG_GAMEOBJECT_QUERY_RESPONSE`.
     pub(crate) fn insert(&mut self, entry: u32, type_id: u32, name: String, data: &[i32; 24]) {
         let lock_id = go_lock_slot(type_id)
             .and_then(|slot| data.get(slot))
@@ -146,7 +158,7 @@ impl GameObjectTemplates {
         };
         self.templates.insert(
             entry,
-            Some(GoTemplate {
+            GoTemplate {
                 lock_id,
                 name,
                 highlight_column,
@@ -155,7 +167,7 @@ impl GameObjectTemplates {
                 mo_transport,
                 text_page,
                 quest_material,
-            }),
+            },
         );
     }
 

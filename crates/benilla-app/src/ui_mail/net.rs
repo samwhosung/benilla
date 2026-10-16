@@ -223,7 +223,7 @@ pub(super) fn send_mail_result(
 
 /// `SMSG_ITEM_TEXT_QUERY_RESPONSE`: the body lands in the cache and the feed repaints.
 fn mail_item_text(text_id: u32, text: String, mail: &mut MailOpen) {
-    mail.bodies.insert(text_id, Some(text));
+    mail.bodies.insert(text_id, text);
 }
 
 /// `SMSG_RECEIVED_MAIL` (`0x4ad620`): with a mailbox open it arms the deferred refresh instead of

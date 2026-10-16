@@ -230,13 +230,13 @@ impl PetitionState {
         self.records_epoch = self.records_epoch.wrapping_add(1);
         self.records.insert(
             response.petition_id,
-            Some(Record {
+            Record {
                 owner: response.owner,
                 name: response.name,
                 body_text: response.body_text,
                 required: response.min_signatures as i32,
                 is_charter: response.flags & 1 != 0,
-            }),
+            },
         );
     }
 
@@ -562,7 +562,7 @@ pub(crate) mod net {
             return;
         };
         if !petition.records.answered(id) {
-            petition.records.insert(id, Some(Record::default()));
+            petition.records.insert(id, Record::default());
         }
         if let Some(record) = petition.records.get_mut(id) {
             record.name = rename.name;

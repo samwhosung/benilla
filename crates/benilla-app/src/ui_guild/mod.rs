@@ -50,10 +50,6 @@ impl Identity {
             .map(String::as_str)
             .unwrap_or_default()
     }
-
-    fn exists(&self) -> bool {
-        !self.name.is_empty()
-    }
 }
 
 /// Which `GUILD_ROSTER_UPDATE` the feed owes. A truthy arg1 makes the stock pane re-request the
@@ -90,8 +86,9 @@ pub(crate) struct GuildState {
     guild_id: u32,
     /// Our `PLAYER_GUILDRANK` (field 192), 0-based, `0` = guild master.
     rank_index: u32,
-    /// Guild id to identity, asked once, negatives included; keyed by id because `PLAYER_GUILDID`
-    /// is public, so any visible player's guild is nameable ([`unit_guild`]).
+    /// Guild id to identity, asked once while in flight; an empty name is a refusal (`0x561390`).
+    /// Keyed by id because `PLAYER_GUILDID` is public, so any visible player's guild is nameable
+    /// ([`unit_guild`]).
     identities: QueryCache<u32, Identity>,
     /// Bumped when an identity lands or is evicted, never by an ask; the unit feeds watch it.
     identity_generation: u64,
@@ -177,7 +174,8 @@ impl GuildState {
         self.dirty = true;
     }
 
-    /// Send `CMSG_GUILD_QUERY` for a guild we hold nothing for, a negative counting as held.
+    /// Send `CMSG_GUILD_QUERY` for a guild we hold nothing for, once while in flight and while a
+    /// refusal is being read.
     fn request_identity(&self, guild_id: u32, commands: &NetCommands) {
         if guild_id != 0 {
             self.identities.get_or_ask(guild_id, || {
@@ -186,9 +184,9 @@ impl GuildState {
         }
     }
 
-    /// A guild's identity if we hold a real one; `None` while in flight and for no such guild.
+    /// A guild's identity if we hold one; `None` while in flight and for no such guild.
     fn identity(&self, guild_id: u32) -> Option<&Identity> {
-        self.identities.get(guild_id).filter(|i| i.exists())
+        self.identities.get(guild_id)
     }
 
     /// The read that also asks: `None` on a miss, which sends the query, as the reference's
@@ -229,28 +227,34 @@ impl GuildState {
         }
     }
 
-    /// `SMSG_GUILD_QUERY_RESPONSE`: fill the identity cache, an empty name as a negative.
+    /// `SMSG_GUILD_QUERY_RESPONSE`: fill the identity cache. An empty name is a refusal: the
+    /// reference frees the node and runs the callbacks with status 0 (`0x5552e1`, `0x561390`).
     fn apply_query_response(&mut self, response: GuildQueryResponse) {
         let ours = response.guild_id == self.guild_id;
-        self.identities.insert(
-            response.guild_id,
-            Some(Identity {
-                name: response.name,
-                rank_names: response.rank_names,
-                emblem: GuildEmblem {
-                    emblem_style: response.emblem_style,
-                    emblem_color: response.emblem_color,
-                    border_style: response.border_style,
-                    border_color: response.border_color,
-                    background_color: response.background_color,
+        let found = !response.name.is_empty();
+        if found {
+            self.identities.insert(
+                response.guild_id,
+                Identity {
+                    name: response.name,
+                    rank_names: response.rank_names,
+                    emblem: GuildEmblem {
+                        emblem_style: response.emblem_style,
+                        emblem_color: response.emblem_color,
+                        border_style: response.border_style,
+                        border_color: response.border_color,
+                        background_color: response.background_color,
+                    },
                 },
-            }),
-        );
+            );
+        } else {
+            self.identities.refuse(response.guild_id);
+        }
         self.identity_generation = self.identity_generation.wrapping_add(1);
         self.dirty = true;
-        if ours {
+        if ours && found {
             // Our rank names landed: repaint, never re-request, as the reference's cache callback
-            // `0x4d1480` does (`0x4d148c`).
+            // `0x4d1480` does for a found record only (`0x4d1486`, `0x4d148c`).
             self.note_roster_update(RosterUpdate::Applied);
         }
     }
@@ -860,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_query_name_is_a_negative_not_a_blank_guild() {
+    fn an_empty_query_name_is_a_refusal_not_a_blank_guild() {
         let (commands, rx) = net_commands();
         let mut guild = GuildState::default();
 
@@ -873,13 +877,18 @@ mod tests {
             name: String::new(),
             ..Default::default()
         });
-        assert!(guild.identities.answered(7), "cached as a negative");
+        assert!(guild.identities.answered_unknown(7), "refused, not stored");
         assert!(!guild.identities.is_pending(7), "and no longer in flight");
+        assert!(guild.identities.get(7).is_none());
         assert!(
             guild.resolve_identity(7, &commands).is_none(),
             "an empty name is not a guild"
         );
-        assert_eq!(rx.try_iter().count(), 0, "and is never re-asked");
+        assert_eq!(
+            rx.try_iter().count(),
+            0,
+            "the readers still polling are not re-asked"
+        );
     }
 
     #[test]
@@ -959,9 +968,7 @@ mod tests {
     #[test]
     fn leaving_the_guild_drops_the_roster_but_not_the_identities() {
         let mut guild = GuildState::default();
-        guild
-            .identities
-            .insert(7, Some(identity("Legacy", &["GM"])));
+        guild.identities.insert(7, identity("Legacy", &["GM"]));
         assert!(guild.mirror_self(7, 0), "joined");
         guild.apply_roster(GuildRoster {
             motd: "Raid at eight".into(),
@@ -1040,7 +1047,7 @@ mod tests {
         guild.mirror_self(7, 0);
         guild
             .identities
-            .insert(7, Some(identity("Legacy", &["GM", "Off"])));
+            .insert(7, identity("Legacy", &["GM", "Off"]));
         guild.apply_event(&event(
             guild_event::UPDATE_RANK_NAME,
             &["1", "Officer"],
@@ -1106,7 +1113,7 @@ mod tests {
         let mut guild = GuildState::default();
         guild
             .identities
-            .insert(7, Some(identity("Legacy", &["GM", "Off"])));
+            .insert(7, identity("Legacy", &["GM", "Off"]));
 
         // A creature or a guildless player: no `PLAYER_GUILDID`.
         let guildless = ObjectFields::from_pairs(&[]);
@@ -1143,9 +1150,9 @@ mod tests {
         let mut guild = GuildState::default();
         guild
             .identities
-            .insert(7, Some(identity("Legacy", &["GM", "Off"])));
-        // The negative cache: an empty answer is no such guild.
-        guild.identities.insert(8, Some(identity("", &[])));
+            .insert(7, identity("Legacy", &["GM", "Off"]));
+        // An empty answer is a refusal: no such guild.
+        guild.identities.refuse(8);
 
         let guildless = ObjectFields::from_pairs(&[]);
         assert_eq!(unit_guild_name(&guildless, &mut guild, &commands), None);

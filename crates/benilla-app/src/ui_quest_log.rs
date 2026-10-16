@@ -61,8 +61,9 @@ impl crate::query_cache::AskOnce for QuestLog {
 }
 
 impl QuestLog {
-    /// The template, asked once: a miss sends `CMSG_QUEST_QUERY` (once while in flight); an id
-    /// the server does not know stays `None` without a re-ask.
+    /// The template, asked once while in flight: a miss sends `CMSG_QUEST_QUERY`. A server that
+    /// refuses an id (the reference's top-bit key, `0x562fb7`) is not decoded: vmangos answers
+    /// nothing for one.
     pub(crate) fn template(&self, quest_id: u32, commands: &NetCommands) -> Option<&QuestTemplate> {
         self.templates.get_or_ask(quest_id, || {
             debug!("ui_quest_log: asking quest template (quest {quest_id})");
@@ -79,7 +80,7 @@ impl QuestLog {
 
     /// Record a template answer (`SMSG_QUEST_QUERY_RESPONSE`).
     pub(crate) fn insert_template(&mut self, template: QuestTemplate) {
-        self.templates.insert(template.quest_id, Some(template));
+        self.templates.insert(template.quest_id, template);
     }
 
     /// The carry a dying VM left, dropped when the session ends.

@@ -903,13 +903,7 @@ pub fn decode(packet: ServerPacket) -> Vec<SessionEvent> {
                     name: i.name,
                     data: i.data,
                 },
-                None => SessionEvent::GameObjectInfo {
-                    entry,
-                    type_id: 0,
-                    display_id: 0,
-                    name: String::new(),
-                    data: [0; 24],
-                },
+                None => SessionEvent::GameObjectUnknown { entry },
             };
             vec![event]
         }

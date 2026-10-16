@@ -1180,7 +1180,7 @@ mod tests {
         let mut m = MailOpen::default();
         m.click(0x1);
         m.mails.push(entry(1, Some(0xA), 0, 30.0));
-        m.bodies.insert(7, Some("hi".into()));
+        m.bodies.insert(7, "hi".into());
         m.clear();
         assert!(m.mailbox.is_none());
         assert_eq!(m.mails.len(), 1);
@@ -1282,7 +1282,7 @@ mod tests {
         let commands = NetCommands(tx);
         let names = NameCache::default();
         let mut bodies = QueryCache::default();
-        bodies.insert(99, Some("the letter body".into()));
+        bodies.insert(99, "the letter body".into());
 
         let mut e = entry(1, Some(0xA), 0, 30.0);
         e.item_text_id = 99;

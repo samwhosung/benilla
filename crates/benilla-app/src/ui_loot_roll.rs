@@ -42,7 +42,7 @@ use crate::net::{ClientCommand, NetCommands, SelfGuid};
 use crate::ui_chat::{ChatEvent, ChatEventKind, ChatLog};
 use crate::ui_script::{UiFeed, UiInput};
 
-/// Frames a pending line retries its names before dropping: a negative-cached name never resolves.
+/// Frames a pending line retries its names before dropping: a refused name never resolves.
 const LINE_MAX_TRIES: u16 = 120;
 
 /// How long a fresh roll waits for its item template before `START_LOOT_ROLL` fires anyway: wall

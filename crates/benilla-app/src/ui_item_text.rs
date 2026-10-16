@@ -49,7 +49,7 @@ impl crate::query_cache::AskOnce for PageTexts {
 
 impl PageTexts {
     pub(crate) fn insert(&mut self, page_id: u32, text: String, next: u32) {
-        self.pages.insert(page_id, Some(PageText { text, next }));
+        self.pages.insert(page_id, PageText { text, next });
     }
 
     /// The cached page, asked for once; `guid` is the reading object, which vmangos discards.

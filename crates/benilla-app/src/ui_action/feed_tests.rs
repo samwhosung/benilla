@@ -354,7 +354,7 @@ fn an_unknown_entry_answers_once_and_settles() {
         app.world()
             .resource::<Items>()
             .template_answered_unknown(JERKY),
-        "the negative is cached — the feed must not re-ask on the next resolve"
+        "the refusal stands for the readers still resolving it — the feed must not re-ask"
     );
 }
 
