@@ -272,6 +272,31 @@ fn set_talent_on_an_exceptional_talent_keeps_the_spell_body() {
     assert!(s.take_errors().is_empty());
 }
 
+/// `TOOLTIP_TALENT_RANK` is a `_G` read (`0x703bf0`), so an `__index` that calls a verb runs inside
+/// `SetTalent`; the Model must be free for it.
+#[test]
+fn set_talent_reads_the_rank_string_with_the_model_free() {
+    let mut s = script();
+    s.set_talents(one_tab_state());
+    s.run(
+        r#"
+        local a = CreateFrame("Button", "TB4"); a:SetPoint("CENTER", 0, 0); a:SetWidth(10); a:SetHeight(10)
+        local tt = CreateFrame("GameTooltip", "TT4", nil, "TestTooltipTemplate")
+        tt:SetOwner(a, "ANCHOR_RIGHT")
+        setmetatable(_G, { __index = function(t, k)
+            if k == "TOOLTIP_TALENT_RANK" then
+                CreateFrame("Frame"):SetWidth(10)
+                return "[RANK %d/%d]"
+            end
+        end })
+        tt:SetTalent(1, 2)
+        assert(TT4TextLeft1:GetText() == "[RANK 0/5]", tostring(TT4TextLeft1:GetText()))
+    "#,
+    )
+    .unwrap();
+    assert!(s.take_errors().is_empty());
+}
+
 /// A missing spell view renders the rank line alone and asks for the view once.
 #[test]
 fn set_talent_locked_reqs_and_the_ask_once_miss() {

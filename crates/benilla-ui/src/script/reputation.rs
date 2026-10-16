@@ -283,10 +283,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
                 Row::Header(gi) => {
                     let grp = &model.reputation_groups[gi];
                     let collapsed = model.reputation_collapsed.contains(&grp.key);
-                    let name = if grp.name.is_empty() {
-                        synthetic_header(lua, grp.key)
+                    let (key, own_name) = (grp.key, grp.name.clone());
+                    // The text is read off `_G`, whose `__index` may call any verb: no borrow.
+                    drop(model);
+                    let name = if own_name.is_empty() {
+                        synthetic_header(lua, key)
                     } else {
-                        grp.name.clone()
+                        own_name
                     };
                     Ok(MultiValue::from_vec(vec![
                         Value::String(lua.create_string(&name)?),
@@ -857,6 +860,24 @@ mod tests {
         assert_eq!(s.take_reputation_sends(), [ReputationSend::Watch(Some(0))]);
         s.run("SetWatchedFactionIndex(0)").unwrap();
         assert_eq!(s.take_reputation_sends(), [ReputationSend::Watch(None)]);
+        assert!(s.errors().is_empty(), "{:#?}", s.errors());
+    }
+
+    /// The synthetic header's text is a `_G` read (`0x703bf0`, a `lua_gettable`), so an `__index`
+    /// that calls a verb runs inside `GetFactionInfo`; the Model must be free for it.
+    #[test]
+    fn a_synthetic_header_reads_its_string_with_the_model_free() {
+        let s = seated();
+        s.run(
+            r#"setmetatable(_G, { __index = function(t, k)
+                   if k == "FACTION_OTHER" then
+                       CreateFrame("Frame"):SetWidth(10)
+                       return "Elsewhere"
+                   end
+               end })"#,
+        )
+        .unwrap();
+        assert_eq!(names(&s)[5], "Elsewhere");
         assert!(s.errors().is_empty(), "{:#?}", s.errors());
     }
 }

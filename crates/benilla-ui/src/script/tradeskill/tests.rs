@@ -867,6 +867,34 @@ fn invslot_filter_drops_recipes_and_emptied_groups() {
     assert_eq!(s.eval::<i64>("return GetNumTradeSkills()").unwrap(), 10);
 }
 
+/// Each slot name is a `_G` read (`0x703bf0`), so an `__index` that calls a verb runs inside
+/// `GetTradeSkillInvSlots`; the Model must be free for it.
+#[test]
+fn inv_slot_names_are_read_with_the_model_free() {
+    let mut s = UiScript::new().unwrap();
+    let mut st = state();
+    st.recipes
+        .iter_mut()
+        .find(|r| r.name == "Wind Cloak")
+        .unwrap()
+        .product_inv_type = 16;
+    s.set_trade_skill(Some(st));
+    s.run(
+        r#"setmetatable(_G, { __index = function(t, k)
+               if string.find(k, "SLOT$") then
+                   CreateFrame("Frame"):SetWidth(10)
+                   return "<" .. k .. ">"
+               end
+           end })"#,
+    )
+    .unwrap();
+    assert_eq!(
+        s.eval::<(String, String)>("return GetTradeSkillInvSlots()")
+            .unwrap(),
+        ("<CHESTSLOT>".to_string(), "<BACKSLOT>".to_string())
+    );
+}
+
 /// A one-hand weapon (InventoryType 13, `0x18000`) lists both hand slots and passes either.
 #[test]
 fn one_hand_weapon_spans_both_hand_slots() {

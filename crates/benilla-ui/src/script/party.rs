@@ -159,17 +159,22 @@ impl super::UiScript {
     /// Push the roster snapshot, replacing it, and run `SMSG_GROUP_LIST`'s ready-check leg over the
     /// new roster. The app fires the `PARTY_*` events.
     pub fn set_party(&mut self, state: PartyState) {
-        self.model_mut().party = state;
         // The ready-check leg (`0x4ba5f0`, from the `0x7d` handler): a member who left drops their
         // pending flag, and nobody left pending force-closes the check.
         let lua = self.lua();
-        let mut model = self.model_mut();
-        if model.ready_check.deadline.is_some() {
-            let roster: Vec<u64> = model.party.raid.iter().map(|m| m.guid).collect();
-            model.ready_check.unanswered.retain(|g| roster.contains(g));
-            if model.ready_check.unanswered.is_empty() {
-                ready_check_force_close(lua, &mut model);
+        let close = {
+            let mut model = self.model_mut();
+            model.party = state;
+            if model.ready_check.deadline.is_some() {
+                let roster: Vec<u64> = model.party.raid.iter().map(|m| m.guid).collect();
+                model.ready_check.unanswered.retain(|g| roster.contains(g));
+                model.ready_check.unanswered.is_empty()
+            } else {
+                false
             }
+        };
+        if close {
+            ready_check_force_close(lua);
         }
     }
 
@@ -179,13 +184,17 @@ impl super::UiScript {
     pub fn ready_check_request(&mut self, we_lead: bool) {
         let lua = self.lua();
         let now = clock(lua);
-        let mut model = self.model_mut();
-        if we_lead {
-            if model.ready_check.deadline.is_some() && !ready_check_pending_online(&model) {
-                ready_check_force_close(lua, &mut model);
+        let close = {
+            let mut model = self.model_mut();
+            if we_lead {
+                model.ready_check.deadline.is_some() && !ready_check_pending_online(&model)
+            } else {
+                model.ready_check.deadline = Some(now + READY_CHECK_SECONDS);
+                false
             }
-        } else {
-            model.ready_check.deadline = Some(now + READY_CHECK_SECONDS);
+        };
+        if close {
+            ready_check_force_close(lua);
         }
     }
 
@@ -194,26 +203,36 @@ impl super::UiScript {
     /// constant 0 whatever the status byte (`0x4ba40e`); a `0` also prints `RAID_MEMBER_NOT_READY`
     /// for them (`0x4ba414`). Once no member is both pending and online the check closes at once
     /// (`0x4ba4ce`), so an offline member never holds it open but is still listed as AFK.
+    ///
+    /// The string is read through `0x703bf0` (`lua_gettable` on the globals, `0x704373`), so a
+    /// `_G` `__index` may run and call any verb: the read is made with no Model borrow held.
     pub fn ready_check_answered(&mut self, guid: u64, ready: bool) {
         let lua = self.lua();
-        let mut model = self.model_mut();
-        let Some(member) = model.party.raid.iter().find(|m| m.guid == guid) else {
-            return; // an unmatched guid writes nothing (`0x4ba491`)
+        let name = {
+            let mut model = self.model_mut();
+            let Some(member) = model.party.raid.iter().find(|m| m.guid == guid) else {
+                return; // an unmatched guid writes nothing (`0x4ba491`)
+            };
+            let name = member.name.clone();
+            model.ready_check.unanswered.retain(|g| *g != guid);
+            name
         };
-        let name = member.name.clone();
-        model.ready_check.unanswered.retain(|g| *g != guid);
         if !ready {
             let template: String = lua
                 .globals()
                 .get::<String>("RAID_MEMBER_NOT_READY")
                 .unwrap_or_default();
-            model
+            self.model_mut()
                 .ready_check
                 .lines
                 .push(template.replacen("%s", &name, 1));
         }
-        if model.ready_check.deadline.is_some() && !ready_check_pending_online(&model) {
-            ready_check_force_close(lua, &mut model);
+        let close = {
+            let model = self.model_mut();
+            model.ready_check.deadline.is_some() && !ready_check_pending_online(&model)
+        };
+        if close {
+            ready_check_force_close(lua);
         }
     }
 
@@ -614,14 +633,13 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     // CheckReadyCheckTime() (`0x4bc120` → `0x4bb310`), called every frame from stock
     // `UIParent.xml`'s `OnUpdate`, alone drives the 30 s expiry. Once an armed deadline passes, and
     // only on the leader's client, it disarms and prints `RAID_MEMBERS_AFK` with the pending names
-    // joined by `", "`, or `READY_CHECK_NO_AFK`, as a `CHAT_MSG_SYSTEM` line. Both strings are read
-    // raw from `_G` with an empty default (`0x704350`), not through `GetText`; nothing is sent.
+    // joined by `", "`, or `READY_CHECK_NO_AFK`, as a `CHAT_MSG_SYSTEM` line. The strings are read
+    // raw from `_G` with an empty default (`0x704350`), not through `GetText`, with no Model
+    // borrow held (see `ready_check_tick`); nothing is sent.
     g.set(
         "CheckReadyCheckTime",
         lua.create_function(|lua, ()| {
-            let now = clock(lua);
-            let mut model = lua.app_data_mut::<Model>().expect("model app_data");
-            ready_check_tick(lua, &mut model, now);
+            ready_check_tick(lua, clock(lua));
             Ok(())
         })?,
     )?;
@@ -718,34 +736,48 @@ fn clock(lua: &Lua) -> f64 {
     crate::script::clock::now(lua)
 }
 
-/// The timeout worker `0x4bb310`.
-fn ready_check_tick(lua: &Lua, model: &mut Model, now: f64) {
-    let Some(deadline) = model.ready_check.deadline else {
-        return;
+/// The timeout worker `0x4bb310`. Past its gates it disarms (`0x4bb377`), then reads
+/// `RAID_MEMBERS_AFK` before it walks the roster (`0x4bb372`-`0x4bb381`), and `READY_CHECK_NO_AFK`
+/// as well when the walk finds no name (`0x4bb470`-`0x4bb48e`). Each read is `0x703bf0`, a
+/// `lua_gettable` on the globals (`0x704373`) that runs an `_G` `__index`, which may call any verb;
+/// so none is made while the Model is borrowed, and an `__index` that re-enters finds the check
+/// already disarmed, as the reference's does.
+fn ready_check_tick(lua: &Lua, now: f64) {
+    let names = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        let Some(deadline) = model.ready_check.deadline else {
+            return;
+        };
+        if now < deadline {
+            return;
+        }
+        if model.party.own_guid != model.party.leader_guid {
+            return;
+        }
+        model.ready_check.deadline = None;
+        // A pending member the roster cannot name is skipped (`0x55f080`, its query arm off).
+        let names: Vec<String> = model
+            .ready_check
+            .unanswered
+            .iter()
+            .filter_map(|g| model.party.raid.iter().find(|m| m.guid == *g))
+            .map(|m| m.name.clone())
+            .filter(|n| !n.is_empty())
+            .collect();
+        names
     };
-    if now < deadline {
-        return;
-    }
-    if model.party.own_guid != model.party.leader_guid {
-        return;
-    }
-    model.ready_check.deadline = None;
-    // A pending member the roster cannot name is skipped (`0x55f080`, its query arm off).
-    let names: Vec<&str> = model
-        .ready_check
-        .unanswered
-        .iter()
-        .filter_map(|g| model.party.raid.iter().find(|m| m.guid == *g))
-        .map(|m| m.name.as_str())
-        .filter(|n| !n.is_empty())
-        .collect();
     let raw = |key: &str| lua.globals().get::<String>(key).unwrap_or_default();
+    let template = raw("RAID_MEMBERS_AFK");
     let text = if names.is_empty() {
         raw("READY_CHECK_NO_AFK")
     } else {
-        raw("RAID_MEMBERS_AFK").replacen("%s", &names.join(", "), 1)
+        template.replacen("%s", &names.join(", "), 1)
     };
-    model.ready_check.lines.push(text);
+    lua.app_data_mut::<Model>()
+        .expect("model app_data")
+        .ready_check
+        .lines
+        .push(text);
 }
 
 /// The `0x322` handler's close test (`0x4ba498`-`0x4ba4cc`): a member holds the check open only
@@ -761,13 +793,17 @@ fn ready_check_pending_online(model: &Model) -> bool {
 
 /// The force-close sites (`0x4ba4d4`, `0x4bacb4`): an armed deadline becomes `now - 1` and the
 /// worker runs at once.
-fn ready_check_force_close(lua: &Lua, model: &mut Model) {
-    if model.ready_check.deadline.is_none() {
-        return;
-    }
-    let now = model.now;
-    model.ready_check.deadline = Some(now - 1.0);
-    ready_check_tick(lua, model, now);
+fn ready_check_force_close(lua: &Lua) {
+    let now = {
+        let mut model = lua.app_data_mut::<Model>().expect("model app_data");
+        if model.ready_check.deadline.is_none() {
+            return;
+        }
+        let now = model.now;
+        model.ready_check.deadline = Some(now - 1.0);
+        now
+    };
+    ready_check_tick(lua, now);
 }
 
 #[cfg(test)]
@@ -1618,5 +1654,146 @@ mod tests {
         s.set_now(130.0);
         s.run("CheckReadyCheckTime()").unwrap();
         assert_eq!(s.take_ready_check_lines(), vec![String::new()]);
+    }
+
+    /// Make the three ready-check strings come from an `_G` `__index` that touches the Model, as a
+    /// strict-mode or global-tracking addon's does (`CreateFrame` borrows it mutably), and record
+    /// each key it is asked for in `reads`, in order. The globals are cleared so every read reaches
+    /// it: the reference's lookup is `lua_gettable` on the globals (`0x704373`).
+    fn model_touching_index(s: &UiScript) {
+        s.run(
+            r#"reads = ""
+               RAID_MEMBERS_AFK = nil
+               READY_CHECK_NO_AFK = nil
+               RAID_MEMBER_NOT_READY = nil
+               local text = {
+                   RAID_MEMBER_NOT_READY = "%s is not ready",
+                   RAID_MEMBERS_AFK = "AFK: %s",
+                   READY_CHECK_NO_AFK = "No players are AFK",
+               }
+               setmetatable(_G, { __index = function(t, k)
+                   if text[k] then
+                       reads = reads .. k .. ","
+                       CreateFrame("Frame"):SetWidth(10)
+                       return text[k]
+                   end
+               end })"#,
+        )
+        .unwrap();
+    }
+
+    fn reads(s: &UiScript) -> String {
+        s.eval::<String>("return reads").unwrap()
+    }
+
+    /// `0x4ba414` reads `RAID_MEMBER_NOT_READY` through `0x703bf0`, so a `_G` `__index` runs inside
+    /// the answer. It must find the Model free.
+    #[test]
+    fn a_not_ready_answer_reads_its_string_with_the_model_free() {
+        let mut s = UiScript::new().unwrap();
+        let party = raid_we_lead(&s);
+        s.set_party(party);
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
+        model_touching_index(&s);
+        s.ready_check_answered(0xA11CE, false);
+        assert_eq!(
+            s.take_ready_check_lines(),
+            vec!["Alice is not ready".to_string()]
+        );
+        assert_eq!(reads(&s), "RAID_MEMBER_NOT_READY,");
+        assert!(s.take_errors().is_empty());
+    }
+
+    /// The last answer force-closes (`0x4ba4ce` → `0x4bb310`): the worker reads `RAID_MEMBERS_AFK`
+    /// first, before it walks the roster (`0x4bb381`), and `READY_CHECK_NO_AFK` when it finds no
+    /// name (`0x4bb48e`), so both lookups run for an empty list.
+    #[test]
+    fn the_force_close_from_the_last_answer_reads_its_strings_with_the_model_free() {
+        let mut s = UiScript::new().unwrap();
+        let party = raid_we_lead(&s);
+        s.set_party(party);
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
+        model_touching_index(&s);
+        s.ready_check_answered(0xA11CE, true);
+        s.ready_check_answered(0xB0B, false);
+        assert_eq!(
+            s.take_ready_check_lines(),
+            vec![
+                "Bob is not ready".to_string(),
+                "No players are AFK".to_string()
+            ]
+        );
+        assert_eq!(
+            reads(&s),
+            "RAID_MEMBER_NOT_READY,RAID_MEMBERS_AFK,READY_CHECK_NO_AFK,"
+        );
+        assert!(s.take_errors().is_empty());
+    }
+
+    /// The deadline passing reads one string when a name is pending, and an `__index` that
+    /// re-enters the tick finds the check already disarmed (`0x4bb377` precedes `0x4bb381`), so the
+    /// summary prints once.
+    #[test]
+    fn the_timeout_reads_its_string_with_the_model_free_and_already_disarmed() {
+        let mut s = UiScript::new().unwrap();
+        let party = raid_we_lead(&s);
+        s.set_party(party);
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
+        s.ready_check_answered(0xA11CE, true);
+        model_touching_index(&s);
+        s.run(
+            r#"local inner = getmetatable(_G).__index
+               getmetatable(_G).__index = function(t, k)
+                   if k == "RAID_MEMBERS_AFK" then CheckReadyCheckTime() end
+                   return inner(t, k)
+               end"#,
+        )
+        .unwrap();
+        s.set_now(130.0);
+        s.run("CheckReadyCheckTime()").unwrap();
+        assert_eq!(
+            s.take_ready_check_lines(),
+            vec!["AFK: Bob".to_string()],
+            "one summary"
+        );
+        assert_eq!(reads(&s), "RAID_MEMBERS_AFK,");
+        assert!(s.take_errors().is_empty());
+    }
+
+    /// The roster push and the request echo reach the same force-close.
+    #[test]
+    fn the_force_close_from_a_roster_push_and_from_the_echo_reads_with_the_model_free() {
+        let mut s = UiScript::new().unwrap();
+        let party = raid_we_lead(&s);
+        s.set_party(party.clone());
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
+        s.ready_check_answered(0xA11CE, true);
+        model_touching_index(&s);
+        let mut without_bob = party;
+        without_bob.raid.retain(|m| m.guid != 0xB0B);
+        without_bob.members.retain(|m| m.guid != 0xB0B);
+        s.set_party(without_bob);
+        assert_eq!(
+            s.take_ready_check_lines(),
+            vec!["No players are AFK".to_string()]
+        );
+
+        let mut s = UiScript::new().unwrap();
+        let mut party = raid_we_lead(&s);
+        party.raid.clear();
+        s.set_party(party);
+        s.set_now(100.0);
+        s.run("DoReadyCheck()").unwrap();
+        model_touching_index(&s);
+        s.ready_check_request(true);
+        assert_eq!(
+            s.take_ready_check_lines(),
+            vec!["No players are AFK".to_string()]
+        );
+        assert!(s.take_errors().is_empty());
     }
 }

@@ -266,7 +266,7 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
     m.set(
         "SetTalent",
         lua.create_function(|lua, (this, tab, i): (Table, usize, usize)| {
-            let (display, lines) = {
+            let (display, ranks, mut lines) = {
                 let model = lua.app_data_ref::<Model>().expect("model app_data");
                 let Some(t) = talent_at(&model, tab, i) else {
                     return Ok(());
@@ -280,22 +280,12 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                             .map(|v| v.description.clone())
                     })
                     .flatten();
-                // `TOOLTIP_TALENT_RANK`, "Rank %d/%d" (`0x854a2c`, pushed at `0x52b213`); an
-                // install without it shows no rank line.
-                let rank_line = crate::strings::global(lua, "TOOLTIP_TALENT_RANK").map(|tmpl| {
-                    crate::strings::fill(
-                        &tmpl,
-                        &[
-                            crate::strings::Arg::D(t.rank.into()),
-                            crate::strings::Arg::D(t.max_rank.into()),
-                        ],
-                    )
-                });
                 (
                     t.display_spell,
+                    (t.rank, t.max_rank),
                     TalentLines {
                         exceptional: t.exceptional,
-                        rank_line,
+                        rank_line: None,
                         reqs: t.req_lines.clone(),
                         next_spell: t.next_spell,
                         next_desc,
@@ -303,6 +293,18 @@ pub(super) fn install_tooltip_method(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     },
                 )
             };
+            // `TOOLTIP_TALENT_RANK`, "Rank %d/%d" (`0x854a2c`, pushed at `0x52b213`); an
+            // install without it shows no rank line. A GlobalStrings read runs an `_G` `__index`
+            // (`0x703bf0`), which may call any verb, so it is made once the Model is released.
+            lines.rank_line = crate::strings::global(lua, "TOOLTIP_TALENT_RANK").map(|tmpl| {
+                crate::strings::fill(
+                    &tmpl,
+                    &[
+                        crate::strings::Arg::D(ranks.0.into()),
+                        crate::strings::Arg::D(ranks.1.into()),
+                    ],
+                )
+            });
             super::tooltip_spell::set_spell_with_talent(lua, &this, display, lines)
         })?,
     )?;
