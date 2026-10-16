@@ -353,11 +353,10 @@ impl Dispatch<'_, '_> {
         walked
     }
 
-    /// `0x5f86b0`, `OnUse` past its highlightable gate: the GameObject's own mounted gate, its type's
-    /// use handler, then its lock. A usable object out of `in_reach` goes to
+    /// `0x5f86b0`, `OnUse` past its highlightable gate: `usable`'s player arms, its type's use
+    /// handler, then its lock. A usable object out of `in_reach` goes to
     /// [`Self::walk_to_object`].
     fn use_gameobject(&mut self, entity: Entity, guid: u64, in_reach: bool, walk: bool) {
-        let self_mounted = self.mounted();
         let self_store = self
             .me()
             .and_then(|(e, ..)| self.stores.get(e).ok())
@@ -367,11 +366,6 @@ impl Dispatch<'_, '_> {
             .get(entity)
             .ok()
             .map(|(s, anim)| (s, crate::go_anim::go_state(anim, s)));
-        // The GameObject's own mounted gate (`0x5f31a8`) returns before the opener: no packet, no
-        // cast. It applies only without a Lock.dbc row (`0x5f8180`, a pointer test, so an
-        // all-empty row counts, unlike `LockCatalog::is_locked`); a locked object is refused by
-        // its opener cast. Only MAILBOX is exempt (`0x5f31bb`). Silent: the key has no text or
-        // sound, and `0x4945b0` drops the empty string.
         let lock_id = go
             .and_then(|(s, _)| self.go_inputs.templates.of(&s.0))
             .map_or(0, |t| t.lock_id);
@@ -382,10 +376,18 @@ impl Dispatch<'_, '_> {
                 .as_deref()
                 .is_some_and(|l| l.0.slots(lock_id).is_some());
         let go_type = go.map_or(-1, |(s, _)| s.0.gameobject_type_id());
-        if self_mounted && !has_lock_row && go_type != cursor_mode::GO_TYPE_MAILBOX {
-            debug!(
-                "right-click gameobject {guid:#x}: refused, mounted (lock-less type {go_type}, silent)"
-            );
+        // The player arms refuse ahead of the range arm, so a dead player is never walked there,
+        // and before the opener: no packet, no cast, no mail window.
+        if let Some(refusal) =
+            self_store.and_then(|me| cursor_mode::go_player_refusal(me, has_lock_row, go_type))
+        {
+            debug!("right-click gameobject {guid:#x}: refused, {refusal:?} (type {go_type})");
+            if let Some(key) = refusal.error_key() {
+                self.feedback
+                    .errors
+                    .0
+                    .push(crate::ui_action::UiError::key(key));
+            }
             return;
         }
         // MAILBOX (type 19) opens locally: its use handler `0x5f6820` sends no
@@ -2563,6 +2565,67 @@ mod tests {
                 "{x} yd"
             );
             assert!(!world.is_resource_changed::<Selection>(), "{x} yd");
+        }
+    }
+
+    /// `usable 0x5f3130`'s player arms: dead or a ghost (`0x5f315f`) grays every object's cursor and
+    /// its use raises `ERR_PLAYER_DEAD` (0x7e) with nothing sent and no mail window; mounted
+    /// (`0x5f31a8`) grays a lock-less chest silently, never a mailbox (`0x5f31bb`).
+    #[test]
+    fn a_dead_ghost_or_mounted_player_is_refused_an_object_in_reach() {
+        const F_PLAYER_FLAGS: u16 = 190;
+        const F_MOUNT: u16 = benilla_protocol::field::FIELD_UNIT_MOUNTDISPLAYID;
+        const DEAD: &[(u16, u32)] = &[(F_HEALTH, 0), (F_MAXHEALTH, 100)];
+        const GHOST: &[(u16, u32)] = &[(F_HEALTH, 1), (F_MAXHEALTH, 100), (F_PLAYER_FLAGS, 0x10)];
+        const MOUNTED: &[(u16, u32)] = &[(F_HEALTH, 100), (F_MAXHEALTH, 100), (F_MOUNT, 14_337)];
+        const LIVE: &[(u16, u32)] = &[(F_HEALTH, 100), (F_MAXHEALTH, 100)];
+        const REFUSED: Option<&str> = Some("ERR_PLAYER_DEAD");
+        // (label, our fields, GameObject type, grayed, used, error key)
+        let cases = [
+            ("dead chest", DEAD, 3, true, false, REFUSED),
+            ("dead mailbox", DEAD, 19, true, false, REFUSED),
+            ("ghost chest", GHOST, 3, true, false, REFUSED),
+            ("ghost mailbox", GHOST, 19, true, false, REFUSED),
+            ("mounted chest", MOUNTED, 3, true, false, None),
+            ("mounted mailbox", MOUNTED, 19, false, true, None),
+            ("live chest", LIVE, 3, false, true, None),
+            ("live mailbox", LIVE, 19, false, true, None),
+        ];
+        for (label, own, go_type, grayed, used, error) in cases {
+            let (mut world, _vendor, rx) = walking_world(Vec3::ZERO, false);
+            let me = world
+                .query_filtered::<Entity, With<SelfPlayer>>()
+                .single(&world)
+                .unwrap();
+            world.entity_mut(me).insert(store(own));
+            let object = spawn_object(&mut world, go_type, Vec3::new(2.0, 0.0, 0.0));
+            let hovered = HoveredObject {
+                target: Some(object),
+                guid: Some(CHEST),
+                distance: 2.0,
+            };
+            let cursor = world
+                .run_system_once(move |inputs: cursor_mode::CursorInputs| {
+                    cursor_mode::classify(&inputs, &Hovered::default(), &hovered).0
+                })
+                .unwrap();
+            assert_eq!(cursor.unable, grayed, "{label}: {cursor:?}");
+            interact_with(&mut world, object);
+            let sent_use = rx
+                .try_iter()
+                .any(|c| matches!(c, ClientCommand::GameObjUse { .. }));
+            let mail_open = world
+                .resource::<crate::ui_mail::MailOpen>()
+                .mailbox
+                .is_some();
+            assert_eq!(sent_use || mail_open, used, "{label}");
+            let keys: Vec<&str> = world
+                .resource::<crate::ui_action::UiErrorKeys>()
+                .0
+                .iter()
+                .map(|e| e.key)
+                .collect();
+            assert_eq!(keys, error.into_iter().collect::<Vec<_>>(), "{label}");
         }
     }
 

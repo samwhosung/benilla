@@ -217,6 +217,46 @@ pub(super) fn go_interact_range_sq(type_id: i32) -> f32 {
         _ => GO_INTERACT_RANGE_SQ,
     }
 }
+
+/// Why `usable 0x5f3130`'s player arms, ahead of its lock and range arms, refuse a GameObject.
+/// The cursor grays on any (`0x5f3093`, the Inspect and Mail cursors' `0x5f58a8`, `0x5f6858`),
+/// and the click raises [`PlayerRefusal::error_key`] (`0x5f874b`). Not built: the shapeshift
+/// (`0x5f31df`), combat (`0x5f3231`) and immune arms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PlayerRefusal {
+    /// Dead or a ghost (`IsDeadOrGhost 0x605f30` at `0x5f315f`), for every type: error 0x7e.
+    Dead,
+    /// Mounted (`0x5f31a8`) at an object without a `Lock.dbc` row (`0x5f8180`, a pointer test, so
+    /// an all-empty row counts) that is no MAILBOX (`0x5f31bb`): error 0x19f.
+    Mounted,
+}
+
+impl PlayerRefusal {
+    /// The `DisplayError` key, `None` for 0x19f, whose `ERR_NOT_WHILE_MOUNTED` has no
+    /// GlobalStrings text, so `0x4945b0` drops it unshown.
+    pub(super) fn error_key(self) -> Option<&'static str> {
+        match self {
+            PlayerRefusal::Dead => Some("ERR_PLAYER_DEAD"),
+            PlayerRefusal::Mounted => None,
+        }
+    }
+}
+
+/// [`PlayerRefusal`] for our player at an object of `go_type`, `has_lock_row` its `Lock.dbc` row.
+pub(super) fn go_player_refusal(
+    me: &ObjectStore,
+    has_lock_row: bool,
+    go_type: i32,
+) -> Option<PlayerRefusal> {
+    if me.0.is_dead_or_ghost() {
+        Some(PlayerRefusal::Dead)
+    } else if me.0.unit_mount_display_id() != 0 && !has_lock_row && go_type != GO_TYPE_MAILBOX {
+        Some(PlayerRefusal::Mounted)
+    } else {
+        None
+    }
+}
+
 /// `GameObjectFlags` IN_USE (`0x1`) and NO_INTERACT (`0x10`), which `0x5f2f80` rejects together.
 const GO_FLAG_IN_USE_OR_NO_INTERACT: u32 = 0x11;
 /// `GO_FLAG_INTERACT_COND`: usable only while the per-player activate bit is set, the quest gate.
@@ -623,11 +663,18 @@ pub(super) fn classify(
             go_inputs.locks.as_deref(),
             go_inputs.lock_types.as_deref(),
         );
-        let kind = go_cursor_kind(store.0.gameobject_type_id(), lock_cursor);
+        let go_type = store.0.gameobject_type_id();
+        let kind = go_cursor_kind(go_type, lock_cursor);
         let dist_sq = go_tf.translation.distance_squared(self_tf.translation);
-        // `usable 0x5f3130`'s lock arm (`0x5f32a6`) then range arm (`0x5f330c`); its player-state
-        // arm is not applied. The lock arm needs `GO_FLAG_LOCKED`, so an herb the player cannot
-        // gather stays lit and refuses on the click, while a padlocked door grays.
+        let has_lock_row = lock_id != 0
+            && go_inputs
+                .locks
+                .as_deref()
+                .is_some_and(|l| l.0.slots(lock_id).is_some());
+        let refused = go_player_refusal(self_store, has_lock_row, go_type).is_some();
+        // `usable 0x5f3130`'s player arms, lock arm (`0x5f32a6`), then range arm (`0x5f330c`).
+        // The lock arm needs `GO_FLAG_LOCKED`, so an herb the player cannot gather stays lit and
+        // refuses on the click, while a padlocked door grays.
         let facts = super::lock::go_facts(Some((store, crate::go_anim::go_state(anim, store))));
         let lock_unmet = go_inputs
             .locks
@@ -647,7 +694,7 @@ pub(super) fn classify(
                 .blocks_usable(facts.flag_locked)
             });
         let unable = kind != CursorKind::PickLock
-            && (lock_unmet || dist_sq > go_interact_range_sq(store.0.gameobject_type_id()));
+            && (refused || lock_unmet || dist_sq > go_interact_range_sq(go_type));
         Some((kind, unable))
     };
     // The reference picks once over all objects; benilla picks units and GameObjects apart and
