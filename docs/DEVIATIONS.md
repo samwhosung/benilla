@@ -152,10 +152,10 @@ Each entry is the first sentence of a `Deviation:` comment, linking to where it 
 
 #### login
 
-- The Credits, Cinematics and TOS side of the reference screen is absent, because the screen keeps only what logging in needs. ([`src/login/mod.rs:2`](../crates/benilla-app/src/login/mod.rs#L2))
-- A dial that never opened a socket reads `AUTH_LOGIN_SERVER_NOT_FOUND` or `LOGIN_SERVER_DOWN` plus the address, because with an editable realmlist "Unable to connect" cannot tell a bad name from a server that is down. ([`src/login/mod.rs:339`](../crates/benilla-app/src/login/mod.rs#L339))
-- No URL button on the native screen, because `LaunchURL`'s whitelist (`0x85cc34`) names only Blizzard domains that no longer serve these pages. ([`src/login/mod.rs:388`](../crates/benilla-app/src/login/mod.rs#L388))
-- The reference prints the address, but those Blizzard pages no longer serve and a private realm's player is not served by them. ([`src/login/mod.rs:415`](../crates/benilla-app/src/login/mod.rs#L415))
+- The Credits, Cinematics and TOS side of the reference screen is absent, because the screen keeps only what logging in needs. ([`src/login/mod.rs:5`](../crates/benilla-app/src/login/mod.rs#L5))
+- A dial that never opened a socket reads `AUTH_LOGIN_SERVER_NOT_FOUND` or `LOGIN_SERVER_DOWN` plus the address, because with an editable realmlist "Unable to connect" cannot tell a bad name from a server that is down. ([`src/login/mod.rs:205`](../crates/benilla-app/src/login/mod.rs#L205))
+- No URL button on the native screen, because `LaunchURL`'s whitelist (`0x85cc34`) names only Blizzard domains that no longer serve these pages. ([`src/login/mod.rs:254`](../crates/benilla-app/src/login/mod.rs#L254))
+- The reference prints the address, but those Blizzard pages no longer serve and a private realm's player is not served by them. ([`src/login/mod.rs:281`](../crates/benilla-app/src/login/mod.rs#L281))
 - The Credits, Cinematics and TOS buttons are absent, because the screen keeps only what logging in needs. ([`src/login/screen.rs:5`](../crates/benilla-app/src/login/screen.rs#L5))
 
 #### minimap
