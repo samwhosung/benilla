@@ -1,7 +1,8 @@
 //! The quest log's app side: reads the player's `PLAYER_QUEST_LOG` slots every frame, resolves
 //! each quest through the `SMSG_QUEST_QUERY_RESPONSE` cache and pushes the log, every quest with
-//! its objective lines, firing `QUEST_LOG_UPDATE` on a change. An advanced objective also toasts
-//! its line and fires `QUEST_WATCH_UPDATE`. Abandons, shares and header folds drain from here.
+//! its objective lines, firing `QUEST_LOG_UPDATE` on a change. An advanced kill objective also
+//! toasts its line and fires `QUEST_WATCH_UPDATE`, as an added item does from its packet.
+//! Abandons, shares and header folds drain from here.
 
 use crate::ui_items::{count_of, InventoryScope};
 
@@ -46,6 +47,11 @@ pub(crate) struct QuestLog {
     /// The fold mask and the selected quest a dying VM left ([`fold_dying_vm_quest_folds`]),
     /// seated in the next.
     folds: (std::collections::HashSet<String>, Option<u32>),
+    /// `SMSG_QUESTUPDATE_ADD_ITEM` toasts the handler resolved, shown by the next feed.
+    item_toasts: Vec<ItemToast>,
+    /// `(quest id, item id, count)` pairs of an added item whose quest record was not cached, held
+    /// until it lands (`0x5dd180`).
+    deferred_item_adds: Vec<(u32, u32, u32)>,
 }
 
 impl crate::query_cache::AskOnce for QuestLog {
@@ -86,7 +92,65 @@ impl QuestLog {
         self.templates.clear();
         self.row_slots.clear();
         self.folds = Default::default();
+        self.item_toasts.clear();
+        self.deferred_item_adds.clear();
     }
+}
+
+/// One `ERR_QUEST_ADD_ITEM_SII` toast: the item's name, the count shown and the need.
+#[derive(Debug, PartialEq, Eq)]
+struct ItemToast {
+    quest_id: u32,
+    name: String,
+    cur: u32,
+    need: u32,
+}
+
+/// What `0x5dd060` makes of one log quest for an added item.
+#[derive(Debug, PartialEq, Eq)]
+enum ItemAdd {
+    /// The quest does not need the item: the walk goes on to the next quest.
+    NotNeeded,
+    /// The quest needs it and shows nothing, the item record uncached or the need already met:
+    /// the walk ends.
+    Silent,
+    /// The walk ends on this toast.
+    Toast(ItemToast),
+}
+
+/// `0x5dd060(record, item, count)` for one log quest: the quest's four required item ids
+/// (`+0x14bc`) are searched for `item_id`; the item's record (`0x55ba30`) must be cached and the
+/// count held (`0x622130`, mask 8) below the need (`+0x14cc + 4·i`); the toast shows the held count
+/// plus the added one, capped at the need. `held` and `name` are read in that order only once the
+/// quest needs the item.
+fn item_added_to_quest(
+    template: &QuestTemplate,
+    item_id: u32,
+    count: u32,
+    held: impl FnOnce() -> u32,
+    name: impl FnOnce() -> Option<String>,
+) -> ItemAdd {
+    let Some(need) = template
+        .objectives
+        .iter()
+        .find(|o| o.item_id == item_id)
+        .map(|o| o.item_count)
+    else {
+        return ItemAdd::NotNeeded;
+    };
+    let Some(name) = name() else {
+        return ItemAdd::Silent;
+    };
+    let held = held();
+    if held >= need {
+        return ItemAdd::Silent;
+    }
+    ItemAdd::Toast(ItemToast {
+        quest_id: template.quest_id,
+        name,
+        cur: held.saturating_add(count).min(need),
+        need,
+    })
 }
 
 /// The fold mask (`[0xbb748c]`) and the selection (`[0xbb7480]`) out of a dying VM: C globals
@@ -114,18 +178,124 @@ pub(crate) fn seed_quest_folds(world: &World, script: &mut UiScript) {
 
 /// The quest log's packet handlers.
 mod net {
-    use benilla_protocol::messages::QuestTemplate;
-    use benilla_protocol::{SessionEvent, SessionEventKind};
+    use benilla_protocol::messages::{QuestTemplate, PLAYER_QUEST_LOG_SLOTS};
+    use benilla_protocol::{ObjectFields, SessionEvent, SessionEventKind};
+    use bevy::ecs::system::SystemParam;
     use bevy::prelude::*;
 
-    use super::QuestLog;
-    use crate::net::NetHandlerApp;
+    use super::{item_added_to_quest, ItemAdd, QuestLog};
+    use crate::items::Items;
+    use crate::net::{NetCommands, NetHandlerApp, ObjectStore, Objects, SelfPlayer};
+    use crate::ui_items::{count_of, InventoryScope};
 
-    /// Registers the template handler and the session-end listener.
+    /// Registers the template and item-added handlers and the session-end listener.
     pub(super) fn register(app: &mut App) {
         use SessionEventKind as K;
         app.net_handler(K::QuestTemplate, on_template)
+            .net_handler(K::QuestTemplate, on_template_deferred_item_adds)
+            .net_handler(K::QuestObjectiveItem, on_item_added)
             .net_handler(K::Disconnected, on_session_end);
+    }
+
+    /// What an added item's toast reads off the player: the bags and the item cache.
+    #[derive(SystemParam)]
+    struct ItemBook<'w, 's> {
+        self_q: Query<'w, 's, &'static ObjectStore, With<SelfPlayer>>,
+        objects: Objects<'w, 's>,
+        items: Res<'w, Items>,
+        commands: Res<'w, NetCommands>,
+    }
+
+    impl ItemBook<'_, '_> {
+        fn store(&self) -> Option<&ObjectFields> {
+            self.self_q.iter().next().map(|s| &s.0)
+        }
+
+        /// `0x622130(inventory, item, 8)`: the banked copies count too.
+        fn held(&self, item_id: u32) -> u32 {
+            self.store().map_or(0, |store| {
+                count_of(store, &self.objects, item_id, InventoryScope::QUEST_ITEMS)
+            })
+        }
+
+        fn name(&self, item_id: u32) -> Option<String> {
+            self.items
+                .template(item_id, 0, &self.commands)
+                .map(|t| t.name.clone())
+        }
+    }
+
+    /// `SMSG_QUESTUPDATE_ADD_ITEM` (`0x5e5ad0`, case `0x19a`): the walk over the 20 log slots
+    /// (`0x5e5b3d`-`0x5e5beb`) that `0x5dd060` ends on the first quest needing the item. A quest
+    /// whose record is not cached queues the pair for its arrival and the walk goes on
+    /// (`0x5e5b93`-`0x5e5bd0`). The held count is read now, before the item's own create reaches
+    /// the bags, as the packet leads it (vmangos `Player.cpp:10249`). The reference's expiry latch
+    /// (`0x4df4b0`, a timed quest that ran out) is not modelled.
+    fn on_item_added(In(ev): In<SessionEvent>, book: ItemBook, mut quest_log: ResMut<QuestLog>) {
+        let SessionEvent::QuestObjectiveItem { item_id, count } = ev else {
+            return;
+        };
+        let Some(store) = book.store() else {
+            return;
+        };
+        for slot in 0..PLAYER_QUEST_LOG_SLOTS {
+            let Some(quest_id) = store
+                .player_quest_log(slot)
+                .map(|s| s.quest_id)
+                .filter(|&id| id != 0)
+            else {
+                continue;
+            };
+            let Some(template) = quest_log.template(quest_id, &book.commands) else {
+                if !quest_log.template_answered_unknown(quest_id) {
+                    quest_log
+                        .deferred_item_adds
+                        .push((quest_id, item_id, count));
+                }
+                continue;
+            };
+            match item_added_to_quest(
+                template,
+                item_id,
+                count,
+                || book.held(item_id),
+                || book.name(item_id),
+            ) {
+                ItemAdd::NotNeeded => {}
+                ItemAdd::Silent => return,
+                ItemAdd::Toast(toast) => {
+                    quest_log.item_toasts.push(toast);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// The callback `0x5dd180`: a record that lands runs the queued pairs of its quest through
+    /// `0x5dd060`, whose answer it ignores.
+    fn on_template_deferred_item_adds(
+        In(ev): In<SessionEvent>,
+        book: ItemBook,
+        mut quest_log: ResMut<QuestLog>,
+    ) {
+        let SessionEvent::QuestTemplate(t) = ev else {
+            return;
+        };
+        let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut quest_log.deferred_item_adds)
+            .into_iter()
+            .partition(|&(quest_id, _, _)| quest_id == t.quest_id);
+        quest_log.deferred_item_adds = rest;
+        for (_, item_id, count) in mine {
+            if let ItemAdd::Toast(toast) = item_added_to_quest(
+                &t,
+                item_id,
+                count,
+                || book.held(item_id),
+                || book.name(item_id),
+            ) {
+                quest_log.item_toasts.push(toast);
+            }
+        }
     }
 
     fn on_template(In(ev): In<SessionEvent>, mut quest_log: ResMut<QuestLog>) {
@@ -665,12 +835,14 @@ pub(crate) fn feed_quest_log(
         hidden_quest_ids: Vec::new(),
     };
     if fresh == *last {
+        show_item_toasts(&mut quest_log, &fresh, &mut script, &mut sink);
         return;
     }
     // Announced after the push, so a handler reads the new log. The reference announces from the
-    // `SMSG_QUESTUPDATE_*` handler (`0x5e5ad0`), dropping a toast whose name is uncached; this
-    // rides the log diff, which carries every row, folded ones included. A progress toast is the
-    // leaderboard line, as the `ERR_QUEST_ADD_*_SII` keys compose the same sentence.
+    // `SMSG_QUESTUPDATE_*` handler (`0x5e5ad0`), dropping a toast whose name is uncached; a kill
+    // or use and the COMPLETE flip ride the log diff, which carries every row, folded ones
+    // included, as their line is the leaderboard line, the `ERR_QUEST_ADD_*_SII` keys composing the
+    // same sentence. An item's toast is the packet's alone ([`show_item_toasts`]).
     let progressed = quests_with_progressed_objectives(last, &fresh);
     script.set_quest_log(fresh.clone());
     script.fire_event("QUEST_LOG_UPDATE", vec![]);
@@ -704,7 +876,38 @@ pub(crate) fn feed_quest_log(
             );
         }
     }
+    show_item_toasts(&mut quest_log, &fresh, &mut script, &mut sink);
     *last = fresh;
+}
+
+/// The `SMSG_QUESTUPDATE_ADD_ITEM` toasts the handler resolved: `ERR_QUEST_ADD_ITEM_SII`, then
+/// `QUEST_WATCH_UPDATE` with the quest's row (`0x4df880`, 0 when it has none).
+fn show_item_toasts(
+    quest_log: &mut QuestLog,
+    log: &QuestLogState,
+    script: &mut UiScript,
+    sink: &mut crate::ui_action::MessageSink,
+) {
+    for toast in std::mem::take(&mut quest_log.item_toasts) {
+        let error = crate::ui_action::UiError::args(
+            "ERR_QUEST_ADD_ITEM_SII",
+            vec![
+                crate::ui_action::FillArg::S(toast.name),
+                crate::ui_action::FillArg::D(i64::from(toast.cur)),
+                crate::ui_action::FillArg::D(i64::from(toast.need)),
+            ],
+        );
+        let get = |key: &str| script.lua().globals().get::<String>(key).ok();
+        let line = crate::ui_action::ui_error_text(&error, &get)
+            .map(|text| crate::ui_action::Shown::keyed(error.key, text));
+        crate::ui_action::show_messages(script, sink, "ui_quest_log", line);
+        let row = log
+            .entries
+            .iter()
+            .position(|e| !e.is_header && e.quest_id == toast.quest_id)
+            .map_or(0, |i| i as i64 + 1);
+        script.fire_event("QUEST_WATCH_UPDATE", vec![ScriptValue::Int(row)]);
+    }
 }
 
 /// Every quest-log slot as `(quest id, state)`, the slot watcher's input.
@@ -727,12 +930,13 @@ fn accepted_quests(prior: &[(u32, u8)], now: &[(u32, u8)]) -> Vec<u32> {
         .collect()
 }
 
-/// Whether an objective advanced. The reference toasts only on the server's additive
-/// `SMSG_QUESTUPDATE_ADD_KILL` and `_ADD_ITEM` (`0x5e5ad0`, `0x5dd060`), with no removal opcode,
-/// so a count going down or a name landing late announces nothing. A turn-in destroys the items
-/// (vmangos `Player.cpp:13252`) before the slot clears (`Player.cpp:13294`): a silent dip.
+/// Whether a kill or use objective advanced. The reference toasts only on the server's additive
+/// `SMSG_QUESTUPDATE_ADD_KILL` (`0x5e5ad0`), with no removal opcode, so a count going down or a
+/// name landing late announces nothing. An item line never advances here: its count is the bags',
+/// which a split, a move or a turn-in's destroy moves with no quest packet (vmangos
+/// `Player.cpp:11040`, `13252`), and its toast is `SMSG_QUESTUPDATE_ADD_ITEM`'s alone (`0x5dd060`).
 fn advanced(now: &QuestLogObjectiveView, was: &QuestLogObjectiveView) -> bool {
-    now.cur > was.cur
+    now.kind != "item" && now.cur > was.cur
 }
 
 /// One quest whose objectives advanced between two log states.
@@ -1591,6 +1795,264 @@ mod tests {
         assert!(
             fired[0].changed_lines.is_empty(),
             "the objective count did not move — only the quest's COMPLETE state did"
+        );
+    }
+
+    // ── An item objective's toast is the packet's ───────────────────────────────────────────────
+
+    const WOLF_PELT: u32 = 2000;
+    const ITEM_ENTRY_FIELD: u16 = 3; // OBJECT_FIELD_ENTRY
+    const ITEM_STACK_FIELD: u16 = 14; // ITEM_FIELD_STACK_COUNT
+    const PACK_SLOT_FIELD: u16 = 532; // PLAYER_FIELD_PACK_SLOT_1, two fields a guid
+
+    /// Quest 7 in log slot 0, wanting five pelts, over a backpack of `(slot, guid, count)` stacks.
+    struct BagRig {
+        app: App,
+        player: Entity,
+        rx: crossbeam_channel::Receiver<ClientCommand>,
+        /// The `(pack slot, item guid)` pairs the player names.
+        slots: Vec<(u16, u64)>,
+    }
+
+    impl BagRig {
+        fn new(cached: bool, stacks: &[(u16, u64, u32)]) -> Self {
+            let (tx, rx) = crossbeam_channel::unbounded();
+            let mut app = App::new();
+            app.insert_resource(NetCommands(tx));
+            app.init_resource::<crate::net::GuidIndex>()
+                .init_resource::<NameCache>()
+                .init_resource::<Items>()
+                .init_resource::<crate::world_state::WorldStates>()
+                .init_resource::<crate::ui_chat::ChatLog>()
+                .init_resource::<crate::sound::MessageSounds>()
+                .init_resource::<crate::ui_quest::QuestLines>()
+                .init_resource::<QuestLog>();
+            net::register(&mut app);
+            app.world_mut()
+                .resource_mut::<Items>()
+                .insert_template(WOLF_PELT, Some(crate::items::test_template("Wolf Pelt")));
+            if cached {
+                app.world_mut()
+                    .resource_mut::<QuestLog>()
+                    .insert_template(Self::template());
+            }
+            let player = app
+                .world_mut()
+                .spawn((ObjectStore(ObjectFields::default()), Guid(0x2A), SelfPlayer))
+                .id();
+            let script = UiScript::new().unwrap();
+            script
+                .run(
+                    r#"
+                    SEEN = {}
+                    QUEST_ITEMS_NEEDED = "%s: %d/%d"
+                    ERR_QUEST_ADD_ITEM_SII = "%s: %d/%d"
+                    local f = CreateFrame("Frame")
+                    f:RegisterEvent("UI_INFO_MESSAGE")
+                    f:RegisterEvent("QUEST_WATCH_UPDATE")
+                    f:SetScript("OnEvent", function() table.insert(SEEN, event .. ":" .. tostring(arg1)) end)
+                "#,
+                )
+                .unwrap();
+            app.insert_non_send_resource(script);
+            app.add_systems(Update, feed_quest_log);
+            let mut rig = Self {
+                app,
+                player,
+                rx,
+                slots: Vec::new(),
+            };
+            for &(slot, guid, count) in stacks {
+                rig.set_stack(slot, guid, count);
+            }
+            rig
+        }
+
+        fn template() -> QuestTemplate {
+            let mut t = quest_template([
+                obj(0, 0, WOLF_PELT, 5, ""),
+                obj(0, 0, 0, 0, ""),
+                obj(0, 0, 0, 0, ""),
+                obj(0, 0, 0, 0, ""),
+            ]);
+            t.quest_id = 7;
+            t
+        }
+
+        /// A backpack stack as the wire leaves it: the item's own descriptor, and the player's slot
+        /// field naming its guid.
+        fn set_stack(&mut self, slot: u16, guid: u64, count: u32) {
+            let world = self.app.world_mut();
+            let fields = ObjectFields::from_pairs(&[
+                (ITEM_ENTRY_FIELD, WOLF_PELT),
+                (ITEM_STACK_FIELD, count),
+            ]);
+            let known = world
+                .resource::<crate::net::GuidIndex>()
+                .0
+                .get(&guid)
+                .copied();
+            match known {
+                Some(e) => {
+                    world.entity_mut(e).insert(ObjectStore(fields));
+                }
+                None => {
+                    crate::items::test_spawn_item(world, guid, fields, false);
+                }
+            }
+            self.slots.retain(|&(s, _)| s != slot);
+            self.slots.push((slot, guid));
+            let mut pairs = vec![(
+                benilla_protocol::messages::field::FIELD_PLAYER_QUEST_LOG_1_1,
+                7,
+            )];
+            for &(s, g) in &self.slots {
+                pairs.push((PACK_SLOT_FIELD + 2 * s, g as u32));
+                pairs.push((PACK_SLOT_FIELD + 2 * s + 1, (g >> 32) as u32));
+            }
+            world.get_mut::<ObjectStore>(self.player).unwrap().0 = ObjectFields::from_pairs(&pairs);
+        }
+
+        /// One frame, then the events the script saw in it.
+        fn frame(&mut self) -> Vec<String> {
+            self.app.update();
+            let mut s = self.app.world_mut().non_send_resource_mut::<UiScript>();
+            s.resolve();
+            let out = s.eval::<Vec<String>>("return SEEN").unwrap();
+            s.run("SEEN = {}").unwrap();
+            out
+        }
+
+        fn leaderboard(&mut self) -> String {
+            self.app
+                .world()
+                .non_send_resource::<UiScript>()
+                .eval::<String>("local text = GetQuestLogLeaderBoard(1, 2); return text")
+                .unwrap()
+        }
+
+        fn packet(&mut self, ev: benilla_protocol::SessionEvent) {
+            crate::net::handlers::dispatch(self.app.world_mut(), vec![ev]);
+        }
+    }
+
+    /// Shift-splitting a held stack (`CMSG_SPLIT_ITEM`): vmangos shrinks the source and sends its
+    /// create at once, then creates the new stack at once, but the player's slot field naming it
+    /// waits for the map's batched update (`Player.cpp:11100-11116`, `10324-10327`). A frame in
+    /// between reads the bags one split short, and the next reads them whole again; no
+    /// `SMSG_QUESTUPDATE_*` is sent, so the reference shows nothing.
+    #[test]
+    fn splitting_a_held_stack_toasts_nothing() {
+        let mut rig = BagRig::new(true, &[(0, 0x100, 4)]);
+        assert_eq!(
+            rig.frame(),
+            Vec::<String>::new(),
+            "the login snapshot is silent"
+        );
+        assert_eq!(rig.leaderboard(), "Wolf Pelt: 4/5");
+
+        // The source's create lands with the split off it; the new stack is not in a slot yet.
+        rig.set_stack(0, 0x100, 3);
+        assert_eq!(rig.frame(), Vec::<String>::new());
+        assert_eq!(
+            rig.leaderboard(),
+            "Wolf Pelt: 3/5",
+            "the dip the split makes"
+        );
+
+        // The batched player update seats the new stack.
+        rig.set_stack(1, 0x101, 1);
+        assert_eq!(
+            rig.frame(),
+            Vec::<String>::new(),
+            "the count coming back is the split's, not a pickup"
+        );
+        assert_eq!(rig.leaderboard(), "Wolf Pelt: 4/5");
+    }
+
+    /// A pickup is `SMSG_QUESTUPDATE_ADD_ITEM` ahead of the item's create (`Player.cpp:10249`):
+    /// the toast counts the held pelts plus the added one (`0x5dd060`), once, and the bag change
+    /// after it adds none.
+    #[test]
+    fn a_picked_up_item_toasts_once_from_its_packet() {
+        let mut rig = BagRig::new(true, &[(0, 0x100, 4)]);
+        rig.frame();
+        rig.packet(benilla_protocol::SessionEvent::QuestObjectiveItem {
+            item_id: WOLF_PELT,
+            count: 1,
+        });
+        rig.set_stack(0, 0x100, 5);
+        assert_eq!(
+            rig.frame(),
+            // Row 2: the zone header above the quest is row 1 (`0x4df880` counts headers).
+            ["UI_INFO_MESSAGE:Wolf Pelt: 5/5", "QUEST_WATCH_UPDATE:2"]
+        );
+        assert_eq!(rig.frame(), Vec::<String>::new());
+    }
+
+    /// An added item for a quest whose record is not cached waits for it (`0x5dd180`), reading
+    /// the held count when it lands.
+    #[test]
+    fn an_item_added_before_the_quest_record_lands_toasts_on_its_arrival() {
+        let mut rig = BagRig::new(false, &[(0, 0x100, 4)]);
+        rig.frame();
+        assert!(rig
+            .rx
+            .try_iter()
+            .any(|c| matches!(c, ClientCommand::QuestQuery { quest: 7 })));
+        rig.packet(benilla_protocol::SessionEvent::QuestObjectiveItem {
+            item_id: WOLF_PELT,
+            count: 1,
+        });
+        assert_eq!(
+            rig.frame(),
+            Vec::<String>::new(),
+            "nothing to name the quest by yet"
+        );
+        rig.packet(benilla_protocol::SessionEvent::QuestTemplate(Box::new(
+            BagRig::template(),
+        )));
+        let seen = rig.frame();
+        assert_eq!(
+            seen.first().map(String::as_str),
+            Some("UI_INFO_MESSAGE:Wolf Pelt: 5/5")
+        );
+    }
+
+    fn pelt_quest_template() -> QuestTemplate {
+        BagRig::template()
+    }
+
+    #[test]
+    fn an_added_item_reads_the_quests_need_and_the_held_count() {
+        let t = pelt_quest_template();
+        let name = || Some("Wolf Pelt".to_string());
+        let toast = |held, count| item_added_to_quest(&t, WOLF_PELT, count, || held, name);
+        assert_eq!(
+            toast(2, 1),
+            ItemAdd::Toast(ItemToast {
+                quest_id: 7,
+                name: "Wolf Pelt".into(),
+                cur: 3,
+                need: 5
+            })
+        );
+        // The shown count is capped at the need.
+        assert!(matches!(
+            toast(4, 3),
+            ItemAdd::Toast(ItemToast { cur: 5, .. })
+        ));
+        // A need already met shows nothing, and ends the walk.
+        assert_eq!(toast(5, 1), ItemAdd::Silent);
+        // An item the quest does not need moves the walk on.
+        assert_eq!(
+            item_added_to_quest(&t, 999, 1, || 0, name),
+            ItemAdd::NotNeeded
+        );
+        // An item record not cached is silent, and ends the walk.
+        assert_eq!(
+            item_added_to_quest(&t, WOLF_PELT, 1, || 0, || None),
+            ItemAdd::Silent
         );
     }
 }

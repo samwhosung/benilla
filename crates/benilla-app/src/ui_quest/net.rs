@@ -292,8 +292,8 @@ fn quest_objective_kill(entry: u32, count: u32, required: u32, quest: &mut Quest
     quest.bump_reask();
 }
 
-/// `SMSG_QUESTUPDATE_ADD_ITEM`, which carries only the count added; its toast comes from the same
-/// objective diff.
+/// `SMSG_QUESTUPDATE_ADD_ITEM`, which carries only the count added; its toast is resolved in
+/// `crate::ui_quest_log`, from the bags as they stand when the packet arrives.
 fn quest_objective_item(item_id: u32, count: u32, quest: &mut QuestGiver) {
     debug!("net: quest item objective {item_id} +{count}");
     quest.bump_reask();
