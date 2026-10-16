@@ -830,8 +830,8 @@ impl EditBoxState {
     /// non-spaces at the caret, then over the spaces, and so ends at the next word's start. Left
     /// (`0x77c8c0`) steps back over the spaces before the caret, then over the non-spaces.
     ///
-    /// Left tests the byte before the caret, not the character (`0x77c8da` decodes from
-    /// `caret - 1`), so any non-ASCII character before the caret reads as a non-space there.
+    /// The client decodes Left's character from the single byte `caret - 1` (`0x77c8da`), so a
+    /// multi-byte space reads as a non-space there; that is not copied, the whole character is read.
     pub fn move_by_word(&mut self, right: bool, extend: bool) {
         // Right crosses non-spaces, then spaces; left spaces, then non-spaces.
         let first_is_space = !right;
@@ -840,9 +840,7 @@ impl EditBoxState {
             let sp = if right {
                 text[at..].chars().next().is_some_and(is_space)
             } else {
-                at.checked_sub(1)
-                    .map(|i| text.as_bytes()[i])
-                    .is_some_and(|b| b.is_ascii() && is_space(char::from(b)))
+                text[..at].chars().next_back().is_some_and(is_space)
             };
             if in_first {
                 if sp == first_is_space {

@@ -933,12 +933,14 @@ mod tests {
         assert_eq!(eb.text, "a\t", "TAB does");
     }
 
-    /// Ctrl+Left tests the byte before the caret (`0x77c8da`), where the deletes decode the
-    /// character: a multi-byte space reads as a letter to it.
+    /// Ctrl+Left reads the whole character before the caret, as the deletes do, so a multi-byte
+    /// space ends the word: from the end of "a U+3000 b" it stops after the space.
     #[test]
-    fn ctrl_left_reads_the_byte_before_the_caret() {
+    fn ctrl_left_reads_the_whole_character_before_the_caret() {
         let mut eb = boxed("a\u{3000}b", 5, false);
         press(&mut eb, KeyCode::ArrowLeft, false);
-        assert_eq!(eb.cursor, 0);
+        assert_eq!(eb.cursor, 4);
+        press(&mut eb, KeyCode::ArrowLeft, false);
+        assert_eq!(eb.cursor, 0, "the space, then 'a'");
     }
 }
