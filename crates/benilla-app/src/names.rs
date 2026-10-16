@@ -210,7 +210,8 @@ impl NameCache {
     }
 
     /// A unit's create (`0x5fb880`): every cache its name comes from looked up with a callback,
-    /// the creature record by the descriptor's entry (`0x60b15b`) whatever the name key. A refusal
+    /// the creature record by the descriptor's entry (`0x60b15b`) whatever the name key, and a
+    /// player's name by `GetUnitName` right after `PostInit` (`0x5dec09`, `0x5dec12`). A refusal
     /// is asked again at once, as the reference's next lookup does.
     pub(crate) fn lookup_fields(&self, guid_val: u64, unit: &ObjectFields, commands: &NetCommands) {
         match NameKey::of(guid_val, Some(unit)) {

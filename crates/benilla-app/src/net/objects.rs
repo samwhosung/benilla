@@ -697,7 +697,7 @@ fn object_create(
     // Warm the template cache as a GameObject streams in: only the query carries its lockId,
     // which decides use-vs-cast on a right-click.
     if matches!(kind, EntityKind::GameObject) {
-        go_templates.request(guid, &fields, net_commands);
+        go_templates.request_at_create(guid, &fields, net_commands);
         // Where and how big, under `RUST_LOG=benilla_app::net::objects=debug`.
         debug!(
             "gameobject spawn: entry {:?} display {display_id:?} type {go_type:?} \
@@ -1757,7 +1757,8 @@ mod tests {
     }
 
     /// `0x5588e0`'s refusal leg: a game object entry the server refuses is no template, where a
-    /// zeroed one stood in for it. It reads unknown, and the next spawn of the entry asks again.
+    /// zeroed one stood in for it. It reads unknown, a hover does not ask it again, and the next
+    /// spawn of the entry does.
     #[test]
     fn a_refused_game_object_entry_is_no_template() {
         const ENTRY: u32 = 1731;
@@ -1768,7 +1769,7 @@ mod tests {
         let commands = NetCommands(tx);
         world
             .resource::<GameObjectTemplates>()
-            .request(0x11, &fields, &commands);
+            .request_at_create(0x11, &fields, &commands);
         assert!(matches!(
             rx.try_recv(),
             Ok(ClientCommand::GameObjectQuery { entry: ENTRY, .. })
@@ -1785,8 +1786,17 @@ mod tests {
         );
         assert!(templates.is_unknown(ENTRY));
         assert!(rx.try_recv().is_err(), "reading it asks nothing");
+        // A hover asks every frame while the template is missing (`ui_tooltip`): within the
+        // window of the refusal, none of those asks is sent.
+        for _ in 0..600 {
+            templates.request(0x11, &fields, &commands);
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "a hovered refused object is not asked again"
+        );
 
-        templates.request(0x12, &fields, &commands);
+        templates.request_at_create(0x12, &fields, &commands);
         assert!(
             matches!(
                 rx.try_recv(),

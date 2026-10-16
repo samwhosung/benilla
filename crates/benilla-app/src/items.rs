@@ -496,10 +496,28 @@ impl Items {
         guid: u64,
         commands: &NetCommands,
     ) -> Option<&ItemInfo> {
-        self.templates.get_or_ask(entry, || {
-            debug!("items: asking template (entry {entry})");
-            let _ = commands.0.send(ClientCommand::ItemQuery { entry, guid });
-        })
+        self.templates
+            .get_or_ask(entry, || Self::send_template(entry, guid, commands))
+    }
+
+    fn send_template(entry: u32, guid: u64, commands: &NetCommands) {
+        debug!("items: asking template (entry {entry})");
+        let _ = commands.0.send(ClientCommand::ItemQuery { entry, guid });
+    }
+
+    /// [`Self::held`] as the reference's lookup with a callback on an event, such as a visible
+    /// item changing (`0x5ed764`, callback `0x5ed880`): a refused entry is asked again at once
+    /// ([`QueryCache::lookup`]).
+    pub(crate) fn held_lookup(&self, entry: u32, commands: &NetCommands) -> Option<HeldTemplate> {
+        self.templates
+            .lookup(entry, || Self::send_template(entry, 0, commands))
+            .map(HeldTemplate::of)
+    }
+
+    /// Whether the cache holds a record, a pending ask or a refusal for `entry`
+    /// ([`QueryCache::knows`]).
+    pub(crate) fn template_known(&self, entry: u32) -> bool {
+        self.templates.knows(entry)
     }
 
     /// Whether the server refused `entry`, not still pending; the cast-fail redisplay then shows

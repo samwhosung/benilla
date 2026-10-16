@@ -89,8 +89,10 @@ pub(crate) struct QueryCache<K, V> {
     /// The refused keys with the instant of the refusal: the status-0 answer, held until the next
     /// ask. Locked like `pending`, since that ask drops it.
     refused: Mutex<HashMap<K, Instant>>,
-    /// Bumped by every landing, and by every refusal that found a node: the reference's
-    /// `DBCACHECALLBACK` run, which a status-0 answer is too.
+    /// Bumped by every landing, and by every refusal that found a node. A refused pending node's
+    /// callbacks run with status 0 (`0x556f05`); a node that held a record has none left, as they
+    /// are freed when it lands (`0x556fa0`-`0x556fc9`), so the bump for [`Refused::Record`] is
+    /// benilla's own redisplay of the record's going.
     generation: u64,
 }
 
@@ -169,6 +171,14 @@ impl<K: Copy + Eq + Hash, V> QueryCache<K, V> {
     /// the status-0 answer the waiters are told.
     pub(crate) fn answered_unknown(&self, key: K) -> bool {
         self.refused.lock_recover().contains_key(&key)
+    }
+
+    /// Whether the cache holds anything for `key`: a record, a pending ask or a refusal. A key it
+    /// knows nothing of was never asked, or its ask was dropped ([`Self::clear_pending`]).
+    pub(crate) fn knows(&self, key: K) -> bool {
+        self.answered.contains_key(&key)
+            || self.answered_unknown(key)
+            || self.pending.lock_recover().contains(&key)
     }
 
     #[cfg(test)]

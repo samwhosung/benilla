@@ -184,6 +184,40 @@ impl GuildState {
         }
     }
 
+    /// The guild cache's lookup with a callback on an event (`0x560e30`): a refused guild is
+    /// asked again at once ([`QueryCache::lookup`]). Guild 0 is no guild (`0x560e3d`).
+    fn lookup_identity(&self, guild_id: u32, commands: &NetCommands) -> Option<&Identity> {
+        if guild_id == 0 {
+            return None;
+        }
+        self.identities.lookup(guild_id, || {
+            let _ = commands.0.send(ClientCommand::GuildQuery { guild_id });
+        })
+    }
+
+    /// Asks for `guild_id` and lands the server's refusal of it, for a test elsewhere.
+    #[cfg(test)]
+    pub(crate) fn refuse_for_test(&mut self, guild_id: u32, commands: &NetCommands) {
+        self.request_identity(guild_id, commands);
+        self.apply_query_response(GuildQueryResponse {
+            guild_id,
+            name: String::new(),
+            ..Default::default()
+        });
+    }
+
+    /// Forgets the in-flight asks, as a world entry does, for a test elsewhere.
+    #[cfg(test)]
+    pub(crate) fn drop_pending_for_test(&mut self) {
+        self.identities.clear_pending();
+    }
+
+    /// Whether the cache holds an identity, a pending ask or a refusal for `guild_id`; guild 0
+    /// is no guild, and so known.
+    pub(crate) fn identity_known(&self, guild_id: u32) -> bool {
+        guild_id == 0 || self.identities.knows(guild_id)
+    }
+
     /// A guild's identity if we hold one; `None` while in flight and for no such guild.
     fn identity(&self, guild_id: u32) -> Option<&Identity> {
         self.identities.get(guild_id)
@@ -233,7 +267,9 @@ impl GuildState {
         let ours = response.guild_id == self.guild_id;
         let found = !response.name.is_empty();
         // A refusal redisplays only an identity it took away: every guild callback ignores
-        // status 0 (`0x4d1486`, `0x4c9476`, `0x5dd866`, `0x5e29c6`).
+        // status 0 (`0x4d1486`, `0x4c9476`, `0x5dd866`, `0x5e29c6`, the crest's `0x5e0650` at
+        // `0x5e0679`, the glue's `0x472420` at `0x472435`), and the corpse's `0x5d6f90` only
+        // re-runs its read-only install (`0x5d6ec0(0)` at `0x5d6fba`).
         let moved = if found {
             self.identities.insert(
                 response.guild_id,
@@ -465,6 +501,19 @@ pub(crate) fn unit_guild_emblem(
     commands: &NetCommands,
 ) -> Option<GuildEmblem> {
     guild_emblem(fields.player_guild_id(), guild, commands)
+}
+
+/// [`unit_guild_emblem`] as the tabard's put-on looks it up (`0x5e078f` → `0x6d6d20`), with a
+/// callback: a refused guild is asked again at once.
+pub(crate) fn unit_guild_emblem_lookup(
+    fields: &ObjectFields,
+    guild: &GuildState,
+    commands: &NetCommands,
+) -> Option<GuildEmblem> {
+    let emblem = guild
+        .lookup_identity(fields.player_guild_id(), commands)?
+        .emblem;
+    emblem.is_designed().then_some(emblem)
 }
 
 /// [`unit_guild_emblem`] without the ask: the crest of a guild record already held.

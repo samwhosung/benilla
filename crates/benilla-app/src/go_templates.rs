@@ -95,19 +95,36 @@ impl GameObjectTemplates {
         fields.object_entry().filter(|&e| e != 0)
     }
 
-    /// Asks for an object's template once per entry; every spawn of a template shares the one
-    /// query. The creation hook looks it up with a callback, by the descriptor's entry and the
-    /// guid (`0x5f7c40`, `0x5f7d81`), so a refused entry is asked again by the next spawn.
+    /// The creation hook's ask: it looks the template up with a callback, by the descriptor's
+    /// entry and the guid (`0x5f7c40`, `0x5f7d81`), so a refused entry is asked again by the next
+    /// spawn. Every spawn of a template shares the one pending query.
+    pub(crate) fn request_at_create(
+        &self,
+        guid: u64,
+        fields: &ObjectFields,
+        commands: &NetCommands,
+    ) {
+        if let Some(entry) = Self::key(fields) {
+            self.templates
+                .lookup(entry, || Self::send(entry, guid, commands));
+        }
+    }
+
+    /// A reader's ask for an object's template, run every frame while it is missing (a hover, a
+    /// quest's background): a refused entry is asked again only once the window from the refusal
+    /// has passed ([`QueryCache::get_or_ask`]).
     pub(crate) fn request(&self, guid: u64, fields: &ObjectFields, commands: &NetCommands) {
-        let Some(entry) = Self::key(fields) else {
-            return;
-        };
-        self.templates.lookup(entry, || {
-            debug!("go: asking template (entry {entry}, guid {guid:#x})");
-            let _ = commands
-                .0
-                .send(ClientCommand::GameObjectQuery { entry, guid });
-        });
+        if let Some(entry) = Self::key(fields) {
+            self.templates
+                .get_or_ask(entry, || Self::send(entry, guid, commands));
+        }
+    }
+
+    fn send(entry: u32, guid: u64, commands: &NetCommands) {
+        debug!("go: asking template (entry {entry}, guid {guid:#x})");
+        let _ = commands
+            .0
+            .send(ClientCommand::GameObjectQuery { entry, guid });
     }
 
     /// A refused entry (`SMSG_GAMEOBJECT_QUERY_RESPONSE` with the top bit set, `0x5588e0`): no

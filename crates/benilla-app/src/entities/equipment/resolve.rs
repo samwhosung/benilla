@@ -124,9 +124,12 @@ struct SlotReads<'a> {
 }
 
 impl SlotReads<'_> {
+    /// A changed slot looks up with a callback, as `0x5ed764` does; so does one whose entry the
+    /// cache knows nothing of, its ask dropped by a disconnect or a world entry, since no answer
+    /// will ever come for it. Any other slot only reads.
     fn read(&self, changed: bool, entry: u32) -> Option<HeldTemplate> {
-        if changed {
-            self.templates.held(entry, self.net)
+        if changed || !self.templates.template_known(entry) {
+            self.templates.held_lookup(entry, self.net)
         } else {
             self.templates.template_cached(entry).map(HeldTemplate::of)
         }
@@ -331,8 +334,10 @@ pub(in crate::entities) fn resolve_equipment(
             reads.now.guild = guild_id;
             let tabard_moved = reads.now.visible[18] != prev.visible[18];
             eq.emblem = guilds.as_deref_mut().and_then(|g| {
-                if guild_id != prev.guild || tabard_moved {
-                    crate::ui_guild::unit_guild_emblem(s, g, &net)
+                // `0x5e078f` → `0x6d6d20` → `0x560e30` with callback `0x5e0650`; a guild the
+                // cache knows nothing of, its ask dropped, is looked up again too.
+                if guild_id != prev.guild || tabard_moved || !g.identity_known(guild_id) {
+                    crate::ui_guild::unit_guild_emblem_lookup(s, g, &net)
                 } else {
                     crate::ui_guild::unit_guild_emblem_cached(s, g)
                 }
@@ -979,44 +984,24 @@ mod tests {
         assert!(hidden.settled, "the worn set is still fully resolved");
     }
 
-    /// One resolve pass over a player wearing `entries`, with helm 100 known and chest 300
-    /// answered unknown: the [`Equipment`] and the entries asked.
+    /// A player wearing `entries`, with helm 100 known, dressed once, then dressed again after
+    /// the server refuses chest 300: the [`Equipment`] and the entries asked by the second pass.
     fn dress_with_refusal(entries: &[(u8, u32)]) -> (Equipment, Vec<u32>) {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
         let mut items = Items::default();
         items.insert_template(100, Some(worn(900, 1))); // INVTYPE_HEAD
-        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
-        items.template(300, 0, &NetCommands(tx.clone()));
-        let _ = rx.try_recv();
-        items.insert_template(300, None); // the server refused it
-        app.insert_resource(items);
-        app.init_resource::<crate::net::GuidIndex>();
-        app.insert_resource(NetCommands(tx));
-        app.insert_resource(ItemDisplays::icons_for_tests(
-            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::new()),
-        ));
-        let player = app
-            .world_mut()
-            .spawn((
-                NetEntity {
-                    kind: EntityKind::Player,
-                    display_id: Some(49),
-                    scale: 1.0,
-                },
-                wearing(0, entries),
-            ))
-            .id();
-        app.add_systems(Update, resolve_equipment);
+        let mut app = equip_app(items, Default::default(), tx);
+        let player = spawn_player(&mut app, wearing(0, entries));
         app.update();
-        let asked = rx
-            .try_iter()
-            .filter_map(|c| match c {
-                ClientCommand::ItemQuery { entry, .. } => Some(entry),
-                _ => None,
-            })
-            .collect();
-        (*app.world().get::<Equipment>(player).unwrap(), asked)
+        let _ = rx.try_iter().count();
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(300, None); // the server refused it
+        app.update();
+        (
+            *app.world().get::<Equipment>(player).unwrap(),
+            item_asks(&rx),
+        )
     }
 
     /// The refusal runs the callback with status 0 and `0x5ed880` decrements `[player+0x1d20]`
@@ -1026,14 +1011,158 @@ mod tests {
     fn an_item_the_server_refused_leaves_its_slot_bare_and_does_not_hold_the_player() {
         let (eq, asked) = dress_with_refusal(&[(0, 100), (4, 300)]);
         assert!(eq.settled, "a refused entry is settled, not pending");
-        assert!(asked.is_empty(), "a cached refusal is not asked again");
+        assert!(
+            asked.is_empty(),
+            "an unchanged slot's refusal is not asked again"
+        );
         assert_eq!(eq.bodyslots[1], 0, "the refused chest draws no display");
         assert_eq!(eq.helm, 900, "the rest of the set is unchanged");
 
         // Control: the same set plus a cloak (400) nobody has answered holds the player.
         let (eq, asked) = dress_with_refusal(&[(0, 100), (4, 300), (14, 400)]);
         assert!(!eq.settled, "a pending ask holds the player");
-        assert_eq!(asked, vec![400], "only the unanswered entry is asked");
+        assert!(asked.is_empty(), "its pending ask is not sent twice");
+    }
+
+    /// A resolve app with `items` and a guild cache, single-threaded for the per-thread test
+    /// clock, and the channel its asks go to.
+    fn equip_app(
+        items: Items,
+        guild: crate::ui_guild::GuildState,
+        tx: crossbeam_channel::Sender<ClientCommand>,
+    ) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        app.edit_schedule(Update, |s| {
+            s.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
+        });
+        app.insert_resource(items);
+        app.insert_resource(guild);
+        app.init_resource::<crate::net::GuidIndex>();
+        app.insert_resource(NetCommands(tx));
+        app.insert_resource(ItemDisplays::icons_for_tests(
+            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::new()),
+        ));
+        app.add_systems(Update, resolve_equipment);
+        app
+    }
+
+    fn spawn_player(app: &mut App, store: ObjectStore) -> Entity {
+        app.world_mut()
+            .spawn((
+                NetEntity {
+                    kind: EntityKind::Player,
+                    display_id: Some(49),
+                    scale: 1.0,
+                },
+                store,
+            ))
+            .id()
+    }
+
+    /// The item template asks sent since the last drain.
+    fn item_asks(rx: &crossbeam_channel::Receiver<ClientCommand>) -> Vec<u32> {
+        rx.try_iter()
+            .filter_map(|c| match c {
+                ClientCommand::ItemQuery { entry, .. } => Some(entry),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `0x5ed764` looks a changed slot up with a callback: a player newly wearing an entry
+    /// refused moments ago asks for it again at once and is held for the answer.
+    #[test]
+    fn a_slot_changing_to_a_refused_entry_asks_again_at_once() {
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let mut items = Items::default();
+        items.template(300, 0, &NetCommands(tx.clone()));
+        items.insert_template(300, None);
+        let _ = rx.try_iter().count();
+        let mut app = equip_app(items, Default::default(), tx);
+        let player = spawn_player(&mut app, wearing(0, &[(4, 300)]));
+        app.update();
+        assert_eq!(
+            item_asks(&rx),
+            vec![300],
+            "the refused chest is asked again"
+        );
+        assert!(
+            !app.world().get::<Equipment>(player).unwrap().settled,
+            "and the player waits for the answer"
+        );
+    }
+
+    /// The crest's guild is looked up with a callback as the tabard goes on (`0x5e078f` →
+    /// `0x6d6d20` → `0x560e30`): a player of a guild refused moments ago asks for it again.
+    #[test]
+    fn a_player_of_a_refused_guild_asks_for_it_again_at_once() {
+        const GUILDID: u16 = 191;
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let mut guild = crate::ui_guild::GuildState::default();
+        guild.refuse_for_test(7, &NetCommands(tx.clone()));
+        let _ = rx.try_iter().count();
+        let mut app = equip_app(Items::default(), guild, tx);
+        let store = ObjectStore(ObjectFields::from_pairs(&[
+            (BYTES_0, 1 | 1 << 8),
+            (GUILDID, 7),
+        ]));
+        spawn_player(&mut app, store);
+        app.update();
+        assert!(
+            rx.try_iter()
+                .any(|c| matches!(c, ClientCommand::GuildQuery { guild_id: 7 })),
+            "the refused guild is asked again"
+        );
+    }
+
+    /// A disconnect keeps our own avatar and drops the in-flight asks (`Items::clear_session`,
+    /// the guild cache's world-entry release). A slot and a crest whose ask was dropped are
+    /// unknown to the cache, so the next resolve asks again rather than waiting forever.
+    #[test]
+    fn a_slot_whose_ask_was_dropped_is_asked_again() {
+        const GUILDID: u16 = 191;
+        let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
+        let mut app = equip_app(Items::default(), Default::default(), tx);
+        let store = ObjectStore(ObjectFields::from_pairs(&[
+            (BYTES_0, 1 | 1 << 8),
+            (GUILDID, 7),
+            (258 + 2 + 12 * 4, 300),
+        ]));
+        let player = spawn_player(&mut app, store);
+        app.update();
+        let first: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(first
+            .iter()
+            .any(|c| matches!(c, ClientCommand::ItemQuery { entry: 300, .. })));
+        assert!(first
+            .iter()
+            .any(|c| matches!(c, ClientCommand::GuildQuery { guild_id: 7 })));
+        assert!(!app.world().get::<Equipment>(player).unwrap().settled);
+
+        app.world_mut().resource_mut::<Items>().clear_session();
+        app.world_mut()
+            .resource_mut::<crate::ui_guild::GuildState>()
+            .drop_pending_for_test();
+        // The reconnect's create block rewrites the descriptor.
+        app.world_mut()
+            .get_mut::<ObjectStore>(player)
+            .unwrap()
+            .set_changed();
+        app.update();
+        let again: Vec<ClientCommand> = rx.try_iter().collect();
+        assert!(
+            again
+                .iter()
+                .any(|c| matches!(c, ClientCommand::ItemQuery { entry: 300, .. })),
+            "the dropped slot ask is sent again"
+        );
+        assert!(
+            again
+                .iter()
+                .any(|c| matches!(c, ClientCommand::GuildQuery { guild_id: 7 })),
+            "and the dropped crest ask"
+        );
     }
 
     /// `0x5ed700` looks a slot's item up when the slot's entry changes: a template landing for
@@ -1041,35 +1170,14 @@ mod tests {
     /// player.
     #[test]
     fn a_refused_slot_is_not_asked_again_when_another_template_lands() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
-        // The test clock is per thread: run the resolve on this one.
-        app.edit_schedule(Update, |s| {
-            s.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
-        });
         let (tx, rx) = crossbeam_channel::unbounded::<ClientCommand>();
-        let mut items = Items::default();
-        items.template(300, 0, &NetCommands(tx.clone()));
-        let _ = rx.try_recv();
-        items.insert_template(300, None); // the server refused the chest
-        app.insert_resource(items);
-        app.init_resource::<crate::net::GuidIndex>();
-        app.insert_resource(NetCommands(tx));
-        app.insert_resource(ItemDisplays::icons_for_tests(
-            benilla_formats::ItemDisplayCatalog::from_displays(std::collections::HashMap::new()),
-        ));
-        let player = app
-            .world_mut()
-            .spawn((
-                NetEntity {
-                    kind: EntityKind::Player,
-                    display_id: Some(49),
-                    scale: 1.0,
-                },
-                wearing(0, &[(4, 300)]),
-            ))
-            .id();
-        app.add_systems(Update, resolve_equipment);
+        let mut app = equip_app(Items::default(), Default::default(), tx);
+        let player = spawn_player(&mut app, wearing(0, &[(4, 300)]));
+        app.update();
+        assert_eq!(item_asks(&rx), vec![300]);
+        app.world_mut()
+            .resource_mut::<Items>()
+            .insert_template(300, None); // the server refused the chest
         app.update();
         assert!(app.world().get::<Equipment>(player).unwrap().settled);
 
