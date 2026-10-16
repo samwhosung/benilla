@@ -336,9 +336,9 @@ pub(super) fn live_remaining_ms(cooldown: Option<(f64, f64, bool)>, now: f64) ->
         .clamp(0.0, f64::from(u32::MAX)) as u32
 }
 
-/// The cooldown-remaining leg of the spell builder's return value: the live remaining line is
-/// reached with `param4` nonzero and a recovery column of a minute or more (`0x52f537`..`0x52f581`).
-/// The line itself is not built; only its flag is answered.
+/// Whether the spell builder draws ITEM_COOLDOWN_TIME and sets its return value: `param4` nonzero
+/// and a recovery column of a minute or more (`0x52f537`..`0x52f581`). A shorter cooldown shows
+/// only in the recast cell.
 fn cooldown_countdown(v: &SpellTooltipView, opts: SpellRenderOpts) -> bool {
     !opts.aura && opts.remaining_ms > 0 && v.recovery_ms >= 60_000
 }
@@ -417,6 +417,19 @@ fn render_spell(
         // is not built.
         if let Some(reagents) = v.reagents.as_ref().filter(|_| !alt_caster) {
             append_line(lua, this, (reagents.clone(), WHITE), None, true)?;
+        }
+        // ITEM_COOLDOWN_TIME (`0x854adc`), white and unwrapped, after the reagents and before the
+        // chance line (`0x52f537`..`0x52f577`), through `0x52fa50`'s round-up ladder.
+        if cooldown_countdown(v, opts) {
+            let line = super::tooltip::duration_text(
+                opts.remaining_ms,
+                "ITEM_COOLDOWN_TIME",
+                true,
+                &|key| crate::strings::global(lua, key),
+            );
+            if let Some(line) = line {
+                append_line(lua, this, (line, WHITE), None, false)?;
+            }
         }
         // The chance line, white and unwrapped, between the reagents and the description.
         if let Some(chance) = &v.chance {
@@ -906,10 +919,14 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     Ok(flag(remaining_ms > 0 && live))
                 }
                 // The item builder's block takes the same live cooldown (`0x5324d5`), whose
-                // ITEM_COOLDOWN_TIME line (not built) sets the return value (`0x52e140`).
-                // The tooltip is built either way, but a miss in the player's own items pushes
-                // nil whatever the builder returned (`0x5325bc`, `0x532604`, `0x532404`).
+                // ITEM_COOLDOWN_TIME line sets the return value (`0x52e140`). The tooltip is
+                // built either way, but a miss in the player's own items pushes nil whatever the
+                // builder returned (`0x5325bc`, `0x532604`, `0x532404`).
                 0x80 => {
+                    let mut owned = owned;
+                    if let Some(inst) = owned.as_mut() {
+                        inst.cooldown_ms = remaining_ms;
+                    }
                     let live = super::tooltip_item::render_by_id_flagged(
                         lua,
                         &this,
@@ -918,7 +935,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                         None,
                         owned.as_ref(),
                     )?;
-                    Ok(flag(owned.is_some() && (live || remaining_ms > 0)))
+                    Ok(flag(owned.is_some() && live))
                 }
                 0x40 => {
                     let h = frame_handle_of(lua, &this)?;

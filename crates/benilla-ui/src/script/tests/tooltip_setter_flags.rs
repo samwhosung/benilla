@@ -567,3 +567,79 @@ fn the_action_bar_item_word_walks_the_references_order() {
     s.set_container(-2, bag(vec![(1, timed(0, None))]));
     assert_eq!(ask(&mut s), "1:number:1", "the keyring is walked");
 }
+
+/// ITEM_COOLDOWN_TIME on the spell tooltip (`0x52f537..0x52f577`): drawn only while the setter
+/// passes a running cooldown and the larger modified recovery is a minute or more, between the
+/// reagents and the chance line, counting what is left rounded up (`0x52fa50`). The recovery
+/// gates the line; the time shown is the remainder, so a minute-long spell with 30 s left reads
+/// seconds.
+#[test]
+fn the_spell_cooldown_line_needs_a_minute_of_recovery_and_sits_before_the_chance() {
+    let mut s = fixture();
+    s.run(
+        r#"
+        ITEM_COOLDOWN_TIME_MIN = "[CD %d m]"
+        ITEM_COOLDOWN_TIME_SEC = "[CD %d s]"
+    "#,
+    )
+    .unwrap();
+    let full = |recovery_ms| SpellTooltipView {
+        reagents: Some("Reagents: Feather".into()),
+        description: "Does a thing.".into(),
+        ..view(recovery_ms, Some("5.00% chance to parry"))
+    };
+    s.set_spell_tooltip(871, full(1_800_000));
+    s.set_spell_tooltip(872, full(60_000));
+    s.set_spell_tooltip(873, full(59_999));
+    s.set_spellbook(SpellBookState {
+        tabs: Vec::new(),
+        slots: vec![
+            // 29.99 min left of a half-hour recovery.
+            slot(871, RUNNING_30_MIN),
+            // A minute's recovery with 30 s left: the floor is met, the unit is seconds.
+            slot(872, Some((9_400, 30_600, true))),
+            // One millisecond under the floor.
+            slot(873, RUNNING_30_MIN),
+            // No cooldown running.
+            slot(871, None),
+        ],
+    });
+    let lines = |s: &UiScript, index: u32| -> Vec<String> {
+        s.eval::<Vec<String>>(&format!(
+            "TT:SetOwner(FL, 'ANCHOR_RIGHT') TT:SetSpell({index}, 'spell') \
+             local t = {{}} for i = 1, TT:NumLines() do \
+               t[i] = getglobal('TTTextLeft' .. i):GetText() end return t"
+        ))
+        .unwrap()
+    };
+    let name_to_chance = |l: Vec<String>| l[1..l.len() - 1].to_vec();
+    assert_eq!(
+        name_to_chance(lines(&s, 1)),
+        [
+            "Instant",
+            "Reagents: Feather",
+            "[CD 30 m]",
+            "5.00% chance to parry"
+        ]
+    );
+    assert_eq!(
+        name_to_chance(lines(&s, 2)),
+        [
+            "Instant",
+            "Reagents: Feather",
+            "[CD 30 s]",
+            "5.00% chance to parry"
+        ]
+    );
+    assert_eq!(
+        name_to_chance(lines(&s, 3)),
+        ["Instant", "Reagents: Feather", "5.00% chance to parry"],
+        "under a minute of recovery, only the recast cell shows it"
+    );
+    assert_eq!(
+        name_to_chance(lines(&s, 4)),
+        ["Instant", "Reagents: Feather", "5.00% chance to parry"],
+        "no cooldown running"
+    );
+    assert!(s.take_errors().is_empty(), "{:?}", s.take_errors());
+}

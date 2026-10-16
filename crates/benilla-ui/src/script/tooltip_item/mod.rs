@@ -157,6 +157,7 @@ fn slot_instance(s: &crate::script::ContainerSlot, openable_source: bool) -> ren
         duration_ms: s.duration_ms,
         object: true,
         block_lock_id: 0,
+        cooldown_ms: 0,
     }
 }
 
@@ -464,6 +465,16 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                                     // inspected unit's item is a block (`0x532ee0`).
                                     object: unit.eq_ignore_ascii_case("player"),
                                     block_lock_id: 0,
+                                    // The player's own item answers the cooldown query
+                                    // (`0x5331ec`); an inspected record has none.
+                                    cooldown_ms: if unit.eq_ignore_ascii_case("player") {
+                                        super::tooltip_spell::live_remaining_ms(
+                                            model.inv_slot_cooldown(slot),
+                                            model.now,
+                                        )
+                                    } else {
+                                        0
+                                    },
                                 },
                             )
                         });
@@ -516,7 +527,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     Value::Integer(1),
                     // hasCooldown is the builder's `[ebp-0x38]`, set by four lines: LOCKED, the
                     // temporary-enchant countdown, the item's duration (`0x52ce0d`) and
-                    // ITEM_COOLDOWN_TIME (not built). A template still in flight draws only the
+                    // ITEM_COOLDOWN_TIME (`0x52e140`). A template still in flight draws only the
                     // name, but the slot's own expiry still counts.
                     flag(live || inst.duration_ms.is_some()),
                     Value::Integer(i64::from(repair_cost)),
@@ -533,7 +544,7 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
         "SetBagItem",
         lua.create_function(|lua, (this, bag, slot): (Table, i64, u32)| {
             let h = frame_handle_of(lua, &this)?;
-            let (item_id, count, has_cd, link, quality, inst, repair_cost) = {
+            let (item_id, count, link, quality, inst, repair_cost) = {
                 let model = lua.app_data_mut::<Model>().expect("model app_data");
                 let cost = model.repair_costs.bags.get(&(bag, slot)).copied();
                 match model
@@ -543,21 +554,26 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
                     .filter(|s| s.item_id != 0)
                 {
                     // `0x534620` takes the p6=1 leg iff the cooldown query `0x6e2ed0` reports
-                    // enable, start and duration all non-zero; that one boolean is both the
-                    // `hasCooldown` return and the inverse of the openable gate.
+                    // enable, start and duration all non-zero; that boolean is the inverse of the
+                    // openable gate. `hasCooldown` is the builder's own return.
                     Some(s) => {
                         let has_cd = s
                             .cooldown
                             .is_some_and(|(start, dur, en)| en && start > 0 && dur > 0);
+                        // `start + duration - now` (`0x534882`..`0x53488c`), into `+0x408`.
+                        let mut inst = slot_instance(s, !has_cd);
+                        inst.cooldown_ms = super::tooltip_spell::live_remaining_ms(
+                            model.container_cooldowns.get(&(bag, slot)).copied(),
+                            model.now,
+                        );
                         (
                             s.item_id,
                             s.count.max(1),
-                            has_cd,
                             s.link.clone(),
                             s.quality.unwrap_or(1),
-                            // p6 = 0 iff no cooldown runs; mid-cooldown the reference shows
-                            // ITEM_COOLDOWN_TIME instead, which is not built.
-                            slot_instance(s, !has_cd),
+                            // p6 = 0 iff no cooldown runs; mid-cooldown ITEM_COOLDOWN_TIME takes
+                            // the openable line's place.
+                            inst,
                             cost.unwrap_or(0),
                         )
                     }
@@ -606,8 +622,8 @@ pub(super) fn install_methods(lua: &Lua, m: &Table) -> mlua::Result<()> {
             show_or_hide_empty(lua, h);
             Ok(MultiValue::from_vec(vec![
                 // The builder's `[ebp-0x38]`: LOCKED, a countdown, the item's duration line, or a
-                // running cooldown (ITEM_COOLDOWN_TIME, not drawn here).
-                flag(has_cd || live || inst.duration_ms.is_some()),
+                // running cooldown (ITEM_COOLDOWN_TIME, `0x52e140`).
+                flag(live || inst.duration_ms.is_some()),
                 Value::Integer(i64::from(repair_cost)),
             ]))
         })?,

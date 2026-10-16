@@ -465,6 +465,23 @@ impl Model {
         cost.copied().unwrap_or(0)
     }
 
+    /// The use cooldown `(start, duration, enabled)` in `GetTime` seconds of the player's item at
+    /// live id `slot`: the vault and keyring bands by their container slots, the doll's from the
+    /// worn push.
+    pub(super) fn inv_slot_cooldown(&self, slot: usize) -> Option<(f64, f64, bool)> {
+        if BANK_INV_SLOTS.contains(&slot) {
+            let n = (slot - BANK_INV_SLOTS.start() + 1) as u32;
+            self.container_cooldowns.get(&(BANK_CONTAINER, n)).copied()
+        } else if KEYRING_INV_SLOTS.contains(&slot) {
+            let n = (slot - KEYRING_INV_SLOTS.start() + 1) as u32;
+            self.container_cooldowns
+                .get(&(KEYRING_CONTAINER, n))
+                .copied()
+        } else {
+            self.worn_cooldowns.get(&slot).copied()
+        }
+    }
+
     fn bank_inv_slot(&self, slot: usize) -> Option<InvSlotView> {
         if BANK_INV_SLOTS.contains(&slot) {
             let vault = self.containers.get(&BANK_CONTAINER)?;

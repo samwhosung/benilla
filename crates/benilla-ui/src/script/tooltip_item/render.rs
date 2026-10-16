@@ -54,6 +54,11 @@ pub(in crate::script) struct ItemInstance {
     /// none or no block. With no lock row from the template it names one (`0x52bd78`..`0x52bda9`),
     /// and a nonzero one draws LOCKED even without an object (`0x52bdd2`).
     pub block_lock_id: u32,
+    /// The remaining use cooldown in ms (`[this+0x408]`, `start + duration - now`), 0 for none. Only
+    /// the three setters that query the item's cooldown fill it, `SetBagItem` (`0x53486b`),
+    /// `SetInventoryItem` (`0x533226`) and `SetAction`'s item leg (`0x5324d5`), and each does so
+    /// with p6 = 1; every other source stores 0 there (`0x5326e0`).
+    pub cooldown_ms: u32,
 }
 
 /// The set block's blank gold line, the reference's literal `0x854b2c`: a space and a newline. An
@@ -81,8 +86,8 @@ pub(super) struct BuilderFlags {
 /// (`0x52ce0d`). The
 /// setters push it as 1 or nil; the stock buttons arm `updateTooltip` from it. The LOCKED line
 /// sets it on every lock path (`0x52bfa6`, after `0x52be58`, whether or not a `LOCKED_WITH_*`
-/// sub-line follows), as ITEM_COOLDOWN_TIME does (`0x52e140`). Not built: ITEM_COOLDOWN_TIME,
-/// ITEM_WRAPPED_BY and the `LOCKED_WITH_*` sub-line.
+/// sub-line follows), as ITEM_COOLDOWN_TIME does (`0x52e140`). Not built: ITEM_WRAPPED_BY and the
+/// `LOCKED_WITH_*` sub-line.
 pub(super) fn render_view_flagged(
     lua: &Lua,
     this: &Table,
@@ -628,6 +633,16 @@ pub(super) fn render_view_flagged(
                 keyed("ITEM_SET_BONUS_GRAY", &args, GRAY, true)?;
             }
         }
+    }
+    // ITEM_COOLDOWN_TIME (`0x854adc`), white and unwrapped, after the set block and above p4's cut
+    // (`0x52e0fd..0x52e13b`): the instance fields valid and `+0x408` above 0, with no floor on the
+    // recovery, unlike the spell's. `0x52fa50` rounds days, hours and minutes up and seconds down.
+    // The return value is set after the add whether or not the install's strings gave a line.
+    if let Some(ms) = inst.map(|i| i.cooldown_ms).filter(|&ms| ms > 0) {
+        if let Some(line) = duration_text(ms, "ITEM_COOLDOWN_TIME", true, &get) {
+            add((line, WHITE))?;
+        }
+        live = true;
     }
     // p4's early return (`0x52e147..0x52e14c`): compact falls through to `0x52e14e`, lays out and
     // returns, so nothing from `0x52e170` on runs: flavor text, creator, open or read line, money.

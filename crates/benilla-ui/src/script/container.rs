@@ -258,6 +258,28 @@ impl super::UiScript {
         }
     }
 
+    /// Push the use cooldowns of the worn items, `(start_ms on the GetTime clock, duration_ms,
+    /// enabled)` by live-API slot id, stored in seconds like a bag slot's. No event fires: a
+    /// cooldown moves no inventory slot.
+    pub fn set_worn_cooldowns(
+        &mut self,
+        cooldowns: std::collections::HashMap<usize, (i64, u32, bool)>,
+    ) {
+        self.model_mut().worn_cooldowns = cooldowns
+            .into_iter()
+            .map(|(slot, (start_ms, duration_ms, enabled))| {
+                (
+                    slot,
+                    (
+                        start_ms as f64 / 1000.0,
+                        f64::from(duration_ms) / 1000.0,
+                        enabled,
+                    ),
+                )
+            })
+            .collect();
+    }
+
     /// Push `HasKey()`'s answer: whether the player owns a `BagFamily` key item anywhere.
     pub fn set_has_key(&mut self, has_key: bool) {
         self.model_mut().has_key = has_key;

@@ -20,12 +20,17 @@ use super::{
     KEYRING_SLOTS, PACK_SLOTS,
 };
 
+/// The doll's equipment slots, 0-based descriptor slots 0..=18 (live-API ids 1..=19).
+const WORN_SLOTS: u8 = 19;
+
 /// What the container feed last pushed, for per-bag change events.
 #[derive(Default)]
 pub(crate) struct FeedMemory {
     pushed: HashMap<i64, ContainerState>,
     /// The last `HasKey()` pushed, so its flip is logged once.
     had_key: bool,
+    /// The worn items' cooldowns last pushed, by live-API slot id.
+    worn_cooldowns: HashMap<usize, (i64, u32, bool)>,
     /// Counters for the stores whose lazy resolves make `is_changed` always true.
     items_templates: gate::Watch,
     cooldown_epoch: gate::Watch,
@@ -781,13 +786,51 @@ fn resolve_slot(
         equip_slots: find_equip_slot(t.inventory_type, has_relic_slot),
         bar_placeable: t.placeable_on_action_bar(),
         consumable: t.is_consumable(),
-        cooldown: t.use_spell.and_then(|u| {
-            let sd = spells.and_then(|s| s.get(u.spell_id));
-            cooldowns
-                .info_item(u.spell_id, entry, u.category, sd, now)
-                .ui_triple(now, ui_now)
-        }),
+        cooldown: use_cooldown(&t, entry, cooldowns, spells, now, ui_now),
     })
+}
+
+/// The use cooldown of an item entry, `(start_ms on the GetTime clock, duration_ms, enabled)`,
+/// the reference's item query `0x6e2ed0`: by the entry and its first on-use spell, wherever the
+/// copy sits.
+fn use_cooldown(
+    t: &ItemInfo,
+    entry: u32,
+    cooldowns: &crate::spell::Cooldowns,
+    spells: Option<&benilla_formats::SpellCatalog>,
+    now: std::time::Instant,
+    ui_now: f64,
+) -> Option<(i64, u32, bool)> {
+    t.use_spell.and_then(|u| {
+        let sd = spells.and_then(|s| s.get(u.spell_id));
+        cooldowns
+            .info_item(u.spell_id, entry, u.category, sd, now)
+            .ui_triple(now, ui_now)
+    })
+}
+
+/// The use cooldown of each worn item by live-API slot id (the descriptor slot plus one), for the
+/// tooltip's ITEM_COOLDOWN_TIME line. The doll snapshot does not carry it: a cooldown moves no
+/// inventory slot, and that snapshot's change fires `UNIT_INVENTORY_CHANGED`.
+fn worn_cooldowns(
+    store: &ObjectStore,
+    objects: &Objects,
+    items: &Items,
+    commands: &NetCommands,
+    cooldowns: &crate::spell::Cooldowns,
+    spells: Option<&benilla_formats::SpellCatalog>,
+    now: std::time::Instant,
+    ui_now: f64,
+) -> HashMap<usize, (i64, u32, bool)> {
+    (0..WORN_SLOTS)
+        .filter_map(|slot0| {
+            let guid = store.0.player_inv_slot(slot0).filter(|&g| g != 0)?;
+            let entry = objects.object(guid)?.object_entry()?;
+            let t = items.template(entry, guid, commands)?;
+            let triple = use_cooldown(t, entry, cooldowns, spells, now, ui_now)?;
+            Some((usize::from(slot0) + 1, triple))
+        })
+        .collect()
 }
 
 /// Reason 16's `%s`, the target bag's `BagFamily` name ("Only Arrows can be placed in that."), or
@@ -1212,6 +1255,23 @@ pub(crate) fn feed_containers(
             memory.had_key = key;
         }
         script.set_has_key(key);
+
+        // The worn items' use cooldowns, for the tooltip line; no event rides them.
+        let worn = worn_cooldowns(
+            &store,
+            &inv.objects,
+            &items,
+            &commands,
+            &cooldowns,
+            spell_catalog,
+            now,
+            ui_now,
+        );
+        if worn != memory.worn_cooldowns {
+            gate.audit("feed_containers", "the worn items' cooldowns");
+            script.set_worn_cooldowns(worn.clone());
+            memory.worn_cooldowns = worn;
+        }
     }
 
     if let Some(t0) = cost_t0 {
@@ -1599,6 +1659,78 @@ mod tests {
         assert_eq!(seats(0xB1), Some(2));
         assert_eq!(seats(0xB2), Some(0));
         assert_eq!(seats(0xB3), None, "not a container");
+    }
+
+    /// A worn item answers the item cooldown query by its entry (`0x6e2ed0`): its running use
+    /// cooldown is pushed under the live-API slot id, one past the descriptor slot, and an item
+    /// with none running, or with no use spell, is absent.
+    #[test]
+    fn a_worn_item_on_cooldown_is_keyed_by_its_live_slot_id() {
+        use super::worn_cooldowns;
+        use crate::items::{test_template, Items};
+        use crate::net::{NetCommands, ObjectStore};
+        use crate::ui_items::TestObjects;
+        use benilla_protocol::field::{FIELD_OBJECT_ENTRY, FIELD_PLAYER_INV_SLOT_HEAD};
+        use benilla_protocol::messages::ItemUseSpell;
+        use benilla_protocol::ObjectFields;
+
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let commands = NetCommands(tx);
+        let mut objs = TestObjects::new();
+        for (guid, entry) in [(0xA1_u64, 2000_u32), (0xA2, 2001), (0xA3, 2002)] {
+            objs.spawn(
+                guid,
+                ObjectFields::from_pairs(&[(FIELD_OBJECT_ENTRY, entry)]),
+            );
+        }
+        let use_spell = |spell_id| ItemUseSpell {
+            spell_id,
+            cooldown_ms: 120_000,
+            category: 0,
+            category_cooldown_ms: 0,
+        };
+        let mut items = Items::default();
+        for (entry, spell) in [
+            (2000, Some(use_spell(9000))),
+            (2001, Some(use_spell(9001))),
+            (2002, None),
+        ] {
+            let mut t = test_template("Trinket");
+            t.use_spell = spell;
+            items.insert_template(entry, Some(t));
+        }
+        let now = std::time::Instant::now();
+        let mut cooldowns = crate::spell::Cooldowns::default();
+        // Only 2000 was used; 2001 has a use spell and no cooldown, 2002 has no use spell.
+        cooldowns.start_item(2000, &use_spell(9000), None, now);
+        // Descriptor slots 12 (the trinket), 13 and 3 hold the three items.
+        let slot = |s: u16, guid: u64| {
+            [
+                (FIELD_PLAYER_INV_SLOT_HEAD + 2 * s, guid as u32),
+                (FIELD_PLAYER_INV_SLOT_HEAD + 2 * s + 1, 0),
+            ]
+        };
+        let pairs: Vec<(u16, u32)> = [slot(12, 0xA1), slot(13, 0xA2), slot(3, 0xA3)]
+            .into_iter()
+            .flatten()
+            .collect();
+        let store = ObjectStore(ObjectFields::from_pairs(&pairs));
+
+        let worn = worn_cooldowns(
+            &store,
+            &objs.get(),
+            &items,
+            &commands,
+            &cooldowns,
+            None,
+            now,
+            50.0,
+        );
+        assert_eq!(
+            worn,
+            HashMap::from([(13, (50_000, 120_000, true))]),
+            "descriptor slot 12 is live id 13"
+        );
     }
 
     /// No bags and an empty vault.
