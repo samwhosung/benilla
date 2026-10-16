@@ -350,6 +350,28 @@ pub struct RenderSubmesh {
     /// (`texture_unit_lookup[texCoordSet] > 2`): `uv = normalize(P − 2(P·N)N).xy · 0.5 + 0.5`.
     /// Such a mesh parks its UVs at one point (`GnomeSubwayGlass.m2`).
     pub env_map: bool,
+    /// The batch's second texture stage, for a unit of two or more textures; `None` for one.
+    pub stage1: Option<TextureStage>,
+}
+
+/// A texture stage after the first: the reference binds one per texture of the unit
+/// (`0x70b740`-`0x70b823`), each with its own texture, coordinates and combine.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextureStage {
+    /// The texture through the batch's lookup at `texture_combo_index + k` (`0x70b768`); `None`
+    /// for a slot the spawn site fills (skin, character, icon) or no record.
+    pub texture: Option<String>,
+    /// The texture record's address mode (`flags & 0x1/0x2`), as stage 0's.
+    pub wrap_x: bool,
+    pub wrap_y: bool,
+    /// Generated coordinates: the lookup `texture_unit_lookup[texCoordSet + k]` is above 2
+    /// (`0x70b8bd`), the same view-space sphere map as [`RenderSubmesh::env_map`]. Otherwise the
+    /// stage reads the vertex's UV set `k` (`Model2.bls` binds `texcoord[k]`), which no stock
+    /// two-texture batch does.
+    pub env_map: bool,
+    /// The combine preset (`benilla_m2::M2Model::stage_combine`): 0 and 1 modulate the colour
+    /// with alpha passed or modulated, 3 adds, 4 modulates ×2, 2 and 5 interpolate.
+    pub combine: u8,
 }
 
 /// A flat ground-plane quad: four vertices on one horizontal plane at or just above z = 0 (hover
@@ -415,6 +437,7 @@ impl Default for RenderSubmesh {
             rgb_seq: None,
             wmo_batch: None,
             env_map: false,
+            stage1: None,
             section: None,
         }
     }

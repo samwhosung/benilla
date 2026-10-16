@@ -279,7 +279,7 @@ pub use models::{
     GroundQuad, KeyAnim, M2AnimSummary, M2Attachment, M2Bounds, M2CameraTracks, M2Light,
     M2PaneCamera, M2PortraitCamera, ModelAnimation, ModelBlend, ParentArm, ParentBasis,
     PlayableAnim, RenderSubmesh, RgbAnim, ScalarAnim, SeqLoops, Skeleton, SkeletonBone,
-    StringAnchors, UvAnim, UvRotAnim, WmoBatchClass, WmoDoodad, WmoDoodadSet, WmoFog,
+    StringAnchors, TextureStage, UvAnim, UvRotAnim, WmoBatchClass, WmoDoodad, WmoDoodadSet, WmoFog,
     WmoGroupHeader, WmoGroupInfo, WmoLight, WmoPortalInfo, WmoPortalRef, WmoPortals, WmoRoot,
     DEGENERATE_RING_FOOTPRINT, NO_GROUP_LIQUID, OWNER_RUNG_BUCKETS,
 };

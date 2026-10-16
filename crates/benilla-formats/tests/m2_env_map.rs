@@ -55,3 +55,38 @@ fn weapon_rack_splits_env_from_uv_batches() {
         "the rack's body and blade batches read their authored UVs"
     );
 }
+
+/// `Obsidian_Miningnode_01.m2`, one of the five stock models with a two-texture unit: its rock
+/// batch binds `ARMORREFLECT4.BLP` as stage 1, with generated coordinates (`0xffff`, `0x70b8bd`)
+/// and the version-0x101 combiner `[1, …]` at stage 1 (`0x70b7cb`), a modulate of colour and alpha.
+#[test]
+fn obsidian_node_rock_binds_its_reflection_as_stage_one() {
+    let data = benilla_formats::wow_data_or_skip!();
+    let mut chain = open_chain(&data).expect("open vanilla patch chain");
+    let subs = load_m2_mesh(
+        &mut chain,
+        "World\\SkillActivated\\TradeskillNodes\\Obsidian_Miningnode_01.m2",
+    )
+    .expect("load Obsidian_Miningnode_01");
+    let two: Vec<_> = subs.iter().filter(|s| s.stage1.is_some()).collect();
+    assert_eq!(two.len(), 1, "one two-texture unit");
+    let rock = two[0];
+    assert!(
+        rock.texture
+            .as_deref()
+            .is_some_and(|t| t.to_ascii_lowercase().ends_with("\\obsidian.blp")),
+        "stage 0 is the rock, got {:?}",
+        rock.texture
+    );
+    assert!(!rock.env_map, "stage 0 reads its UVs");
+    let st = rock.stage1.as_ref().expect("stage 1");
+    assert!(
+        st.texture
+            .as_deref()
+            .is_some_and(|t| t.to_ascii_lowercase().ends_with("\\armorreflect4.blp")),
+        "stage 1 is the reflection, got {:?}",
+        st.texture
+    );
+    assert!(st.env_map, "stage 1 generates its coordinates");
+    assert_eq!(st.combine, 1, "the 0x101 combiner at stage 1");
+}

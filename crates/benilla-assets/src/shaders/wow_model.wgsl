@@ -1,6 +1,7 @@
 // The model pass for M2, WMO and ground-clutter meshes, lit and fogged in gamma space:
 //   M2:           color = clamp01(A + D·I·(4/17)(0.375 + 2μ + 1.875μ²)) × tex × tint, μ = N·L
 //   clutter, WMO: color = clamp(ambient + diffuse·max(N·L, 0)) × tex × tint
+//   stage 1:      color = combine(color, tex1), tex1 at the generated coordinate (presets below)
 //   fog:          color = mix(fog_color, color, fog_factor); out = color, raw gamma
 // The M2 law is the order-2 SH lobe of `Shaders\Vertex\Model2.bls` (cvar `M2UseShaders`, default
 // 1); M2's one FFP light site (`70bdf6`) runs only with that cvar off. Clutter and WMO are the FFP
@@ -44,8 +45,13 @@ struct ModelParams {
     // Rows of `wow_light.matanim`, 0 = identity: x = UV scroll, y = tint, z = texture-transform
     // affine, w = the UI tile's cell clip.
     anim_slots: vec4<f32>,
+    // The second texture stage: x = bound (1) or not (0), y = its combine preset 0-5; zw unused.
+    stage1: vec4<f32>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> m: ModelParams;
+// Stage 1's texture, sampled at the generated coordinate `env_uv` when `m.stage1.x` is set.
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var stage1_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var stage1_sampler: sampler;
 
 // The shared light buffer (`lighting::global_light`, rows as packed there), updated once per
 // frame; terrain.wgsl mirrors the prefix, so a tree and the ground under it fog alike.
@@ -131,6 +137,48 @@ struct WowVsOut {
 #ifdef WOW_MERGED_SLOT
     @location(10) @interpolate(flat) merged_slot: u32,
 #endif
+    // Stage 1's generated coordinate, (0, 0) when the material binds no stage 1.
+    @location(11) env_uv: vec2<f32>,
+}
+
+// The generated environment coordinate of `Model2.bls` (its programs for a stage whose coordinate
+// lookup is above 2, `0x70b8bd`): in view space R = normalize(P − 2(P·N)N), uv = R.xy·0.5 + 0.5,
+// per vertex. The reference view basis (`0x5c3e70`) and Bevy's −Z-forward one differ only in z,
+// so R.xy needs no fixup.
+fn wow_env_uv(p_view: vec3<f32>, n_view: vec3<f32>) -> vec2<f32> {
+    let refl = normalize(p_view - 2.0 * dot(p_view, n_view) * n_view);
+    return refl.xy * 0.5 + vec2<f32>(0.5, 0.5);
+}
+
+// Stage 1's colour combine on `prev`, the stage-0 result, by gx preset (`0x80a25c`, `0x85c250`):
+// 0 and 1 modulate, 2 interpolates by the texel's alpha as Direct3D's BLENDTEXTUREALPHA does (the
+// OpenGL record weights by the constant colour's instead), 3 adds, 4 modulates ×2, 5 interpolates
+// by the previous alpha. Each stage's result saturates.
+fn stage1_rgb(preset: u32, prev: vec4<f32>, tex: vec4<f32>) -> vec3<f32> {
+    var c = prev.rgb * tex.rgb;
+    if (preset == 2u) {
+        c = mix(prev.rgb, tex.rgb, tex.a);
+    } else if (preset == 3u) {
+        c = prev.rgb + tex.rgb;
+    } else if (preset == 4u) {
+        c = 2.0 * prev.rgb * tex.rgb;
+    } else if (preset == 5u) {
+        c = mix(prev.rgb, tex.rgb, prev.a);
+    }
+    return clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// Stage 1's alpha (`0x80a274`): 1 modulates, 3 adds, 4 modulates ×2, the rest pass the previous.
+fn stage1_alpha(preset: u32, prev: f32, tex: f32) -> f32 {
+    var a = prev;
+    if (preset == 1u) {
+        a = prev * tex;
+    } else if (preset == 3u) {
+        a = prev + tex;
+    } else if (preset == 4u) {
+        a = 2.0 * prev * tex;
+    }
+    return clamp(a, 0.0, 1.0);
 }
 
 // Zero-safe normalize. M2s author `(0,0,0)` normals (`Creature\QuirajProphet`) and the reference
@@ -376,18 +424,23 @@ fn vertex(vertex: WowVertex) -> WowVsOut {
 #ifdef VERTEX_UVS_A
     out.uv = vertex.uv;
     // Env-mapped batches (`clutter_fade.z` bit 12; `texture_unit_lookup[texCoordSet] > 2` at
-    // `0x70b8bd`) generate their texcoord per vertex as `Model2.bls` does: in view space
-    // R = normalize(P − 2(P·N)N), uv = R.xy·0.5 + 0.5 (`0x70b8d0`). The reference view basis
-    // (`0x5c3e70`) and Bevy's −Z-forward one differ only in z, so R.xy needs no fixup.
+    // `0x70b8bd`) generate their texcoord per vertex (`wow_env_uv`).
 #ifdef VERTEX_POSITIONS
 #ifdef VERTEX_NORMALS
     if ((u32(m.clutter_fade.z) & 4096u) != 0u) {
-        let p_view = view_rot * p_cam;
-        let n_view = normalize(view_rot * out.world_normal);
-        let refl = normalize(p_view - 2.0 * dot(p_view, n_view) * n_view);
-        out.uv = refl.xy * 0.5 + vec2<f32>(0.5, 0.5);
+        out.uv = wow_env_uv(view_rot * p_cam, normalize(view_rot * out.world_normal));
     }
 #endif
+#endif
+#endif
+    // Stage 1 takes the same generated coordinate in its own interpolant: a two-texture unit's
+    // second lookup is the environment one in every stock model (`0xffff`).
+    out.env_uv = vec2<f32>(0.0);
+#ifdef VERTEX_POSITIONS
+#ifdef VERTEX_NORMALS
+    if (m.stage1.x > 0.5) {
+        out.env_uv = wow_env_uv(view_rot * p_cam, normalize(view_rot * out.world_normal));
+    }
 #endif
 #endif
 #ifdef VERTEX_UVS_B
@@ -527,6 +580,17 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
         let u = (z_eye - m.clutter_fade.x) / max(m.clutter_fade.y - m.clutter_fade.x, 0.001);
         let ramp = clamp((254.0 - 256.0 * u) / 255.0, 0.0, 252.0 / 255.0);
         base_color.a = base_color.a * ramp;
+    }
+
+    // Stage 1 (`0x70b740` binds a stage per texture of the unit): its alpha joins the stage-0
+    // alpha the cutout and the blend read; its colour combines after the light (below).
+    let stage1_on = m.stage1.x > 0.5;
+    let stage1_preset = u32(m.stage1.y);
+    let stage0_alpha = base_color.a;
+    var tex1 = vec4<f32>(1.0);
+    if (stage1_on) {
+        tex1 = textureSampleBias(stage1_texture, stage1_sampler, in.env_uv, view.mip_bias);
+        base_color.a = stage1_alpha(stage1_preset, base_color.a, tex1.a);
     }
 
     // The MeshTag (mesh_tag.rs): bit 31 = highlight, bit 30 = interior fog; payload bits 0-5 = the
@@ -765,6 +829,10 @@ fn fragment(in: WowVsOut, @builtin(front_facing) is_front: bool) -> WowFragOut {
     let is_mod2x = (u32(m.clutter_fade.z) & 256u) != 0u;
     if ((is_mod || is_mod2x) && !is_wmo) {
         rgb = base.rgb;
+    }
+    // Stage 1 combines with the stage-0 result, the lit texel, before the fog.
+    if (stage1_on) {
+        rgb = stage1_rgb(stage1_preset, vec4<f32>(rgb, stage0_alpha), tex1);
     }
 
     // Linear fog by planar eye depth, as in terrain.wgsl. Per-batch colour policy (`clutter_fade.z`

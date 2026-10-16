@@ -499,6 +499,7 @@ impl AssetLoader for WmoModelLoader {
                     window: sub.window, // MOMT WINDOW (0x20): the interior midpoint light
                     additive: sub.additive,
                     env_map: false,
+                    stage1: None, // a WMO batch is one texture stage
                     no_depth_write: false,
                     no_depth_test: false,
                     fog_policy: sub.fog_policy,

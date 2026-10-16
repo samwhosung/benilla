@@ -58,6 +58,8 @@ pub struct MatKey {
     fog_policy: benilla_formats::FogPolicy,
     /// The batch samples the generated sphere-map coordinate, not its vertex UVs.
     env_map: bool,
+    /// The second texture stage's texture and combine preset ([`benilla_assets::Stage1`]).
+    stage1: Option<(AssetId<Image>, u8)>,
     /// The static terrain-shade selector, fixed per placement.
     shade: ShadeSel,
     /// Authored batch index + 1 (0 = unordered): the transparent sort bias of every batch, and for
@@ -142,6 +144,7 @@ pub fn model_material(
     no_depth_test: bool,
     fog_policy: benilla_formats::FogPolicy,
     env_map: bool,
+    stage1: Option<&benilla_assets::Stage1>,
     shade: ShadeSel,
     batch_order: u16,
     uv_anim: Option<&std::sync::Arc<benilla_formats::UvAnim>>,
@@ -167,6 +170,7 @@ pub fn model_material(
         no_depth_test,
         fog_policy,
         env_map,
+        stage1: stage1.map(|s| (s.texture.id(), s.combine)),
         shade,
         batch_order,
         uv_anim: uv_anim.map(|a| std::sync::Arc::as_ptr(a) as usize),
@@ -321,6 +325,8 @@ pub fn model_material(
                 },
                 // Zero until a sampler registers this material and bakes its table slot in once.
                 anim_slots: Vec4::ZERO,
+                stage1: stage1_params(stage1),
+                stage1_texture: stage1.map(|s| s.texture.clone()),
                 light_buf: light.clone(),
             },
         },
@@ -376,10 +382,13 @@ pub fn zfill_material(
     cache: &mut MaterialCache,
     materials: &mut Assets<WowModelMaterial>,
     texture: Option<Handle<Image>>,
+    stage1: Option<&benilla_assets::Stage1>,
     two_sided: bool,
     cutout: bool,
     light: &Buffer,
 ) -> Handle<WowModelMaterial> {
+    // Only a cutout reads stage 1, whose alpha joins the one it tests.
+    let stage1 = stage1.filter(|_| cutout);
     let key = MatKey {
         light: light.id(),
         texture: texture.as_ref().map(Handle::id),
@@ -398,6 +407,7 @@ pub fn zfill_material(
         no_depth_test: false,
         fog_policy: benilla_formats::FogPolicy::Scene,
         env_map: false,
+        stage1: stage1.map(|s| (s.texture.id(), s.combine)),
         shade: ShadeSel::Lit,
         batch_order: 0,
         uv_anim: None,
@@ -440,12 +450,21 @@ pub fn zfill_material(
                 tint: Vec4::new(1.0, 1.0, 1.0, 0.0),
                 sidn: Vec4::ZERO,
                 anim_slots: Vec4::ZERO,
+                stage1: stage1_params(stage1),
+                stage1_texture: stage1.map(|s| s.texture.clone()),
                 light_buf: light.clone(),
             },
         },
     );
     cache.insert(key, handle.clone());
     handle
+}
+
+/// `WowModelExt::stage1`: `x` = bound, `y` = the combine preset.
+fn stage1_params(stage1: Option<&benilla_assets::Stage1>) -> Vec4 {
+    stage1.map_or(Vec4::ZERO, |s| {
+        Vec4::new(1.0, f32::from(s.combine), 0.0, 0.0)
+    })
 }
 
 /// `clutter_fade.z` marker bit 11: a far-side-of-water twin, whose −4e4 sort rung `specialize`

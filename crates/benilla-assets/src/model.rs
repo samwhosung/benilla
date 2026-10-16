@@ -65,6 +65,8 @@ pub struct ModelSubmesh {
     pub additive: bool,
     /// Sphere-mapped: `wow_model.wgsl` derives the UV from the view-space reflection.
     pub env_map: bool,
+    /// The second texture stage the shader draws, a two-texture M2 unit's ([`Stage1`]).
+    pub stage1: Option<Stage1>,
     /// M2 render flag 0x10; unset, a transparent batch writes depth, as in the reference.
     pub no_depth_write: bool,
     /// M2 render flag 0x08: no depth test.
@@ -92,6 +94,16 @@ pub struct ModelSubmesh {
     pub wmo_batch: Option<benilla_formats::WmoBatchClass>,
     /// A flat ground quad (WoW model space), which the ground-fx lane redraws as a projected decal.
     pub ground_quad: Option<benilla_formats::GroundQuad>,
+}
+
+/// A batch's second texture stage as `wow_model.wgsl` draws it: the texture at the generated
+/// environment coordinate, combined with the stage-0 result by its gx preset
+/// ([`benilla_formats::TextureStage`]).
+#[derive(Clone)]
+pub struct Stage1 {
+    pub texture: Handle<Image>,
+    /// The combine preset 0-5.
+    pub combine: u8,
 }
 
 /// Bake a [`RenderSubmesh`] to a Bevy-space [`Mesh`]: authored normals, else flat ones.

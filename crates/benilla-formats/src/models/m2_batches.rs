@@ -17,7 +17,7 @@ use super::tex_anim;
 use super::{le_u16, le_u32, model_path, remap_submesh};
 use super::{
     AlphaAnim, Billboard, BillboardKind, BoneScaleAnim, CharSkinSlot, FogPolicy, ModelBlend,
-    RenderSubmesh,
+    RenderSubmesh, TextureStage,
 };
 
 fn parent_dir(path: &str) -> &str {
@@ -394,8 +394,29 @@ pub fn parse_m2_render_submeshes(
         // Render flag 0x04: two-sided; without it the reference culls back faces.
         let two_sided = material.is_some_and(|m| m.flags.bits() & 0x04 != 0);
         // `texCoordSet (+0x12) → texture_unit_lookup (0x9c)` above 2 is a generated environment
-        // coordinate, as the reference gates it at `0x70b8bd`; stage 0 only, one texture a batch.
+        // coordinate, as the reference gates it at `0x70b8bd`.
         let env_map = model.stage_is_env_mapped(batch, 0);
+        // A unit of two textures binds a second stage (`0x70b740`): texture, coordinates and
+        // combine by the same lookups at `+ 1`. No stock unit has more than two, and the shader
+        // draws two.
+        let stage1 = (batch.texture_count >= 2).then(|| {
+            let rec = model
+                .raw_data
+                .texture_lookup_table
+                .get(batch.texture_combo_index as usize + 1)
+                .and_then(|&ti| model.textures.get(ti as usize));
+            let (wrap_x, wrap_y) = rec.map_or((true, true), |t| (t.wrap_x, t.wrap_y));
+            // A slot the spawn site fills resolves only as far as `skins` and its embedded path
+            // reach: the spawn sites fill stage 0's alone, and no stock stage 1 is a slot.
+            let texture = rec.and_then(|t| resolve_texture(t, dir, skins).0);
+            TextureStage {
+                texture,
+                wrap_x,
+                wrap_y,
+                env_map: model.stage_is_env_mapped(batch, 1),
+                combine: model.stage_combine(batch, 1),
+            }
+        });
         // Render flag 0x01, unlit: full texture brightness (lamp glass, glow cards).
         let emissive = material.is_some_and(|m| m.flags.bits() & 0x01 != 0);
         // Render flags 0x10 (no depth write) and 0x08 (no depth test): the reference keys depth
@@ -551,6 +572,7 @@ pub fn parse_m2_render_submeshes(
                 })
             });
             sub.env_map = env_map;
+            sub.stage1 = stage1.clone();
             sub.additive = additive;
             sub.no_depth_write = no_depth_write;
             sub.no_depth_test = no_depth_test;
@@ -756,6 +778,107 @@ mod tests {
         }
         // The snap-up scan relies on the set ascending.
         assert!(OWNER_RUNG_BUCKETS.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    /// A version-0x101 model of one triangle and one unit of `texture_count` textures, shaped like
+    /// the stock two-texture units: lookups `[0, 1]`, coordinates `[0, 0xffff]`, combiners
+    /// `[1, 1]`, blend 0, `B.BLP` clamped and `A.BLP` repeating.
+    fn two_texture_model(texture_count: u16) -> Vec<u8> {
+        fn arr(b: &mut [u8], at: usize, count: usize, ofs: usize) {
+            b[at..at + 4].copy_from_slice(&(count as u32).to_le_bytes());
+            b[at + 4..at + 8].copy_from_slice(&(ofs as u32).to_le_bytes());
+        }
+        fn u16s(b: &mut Vec<u8>, v: &[u16]) -> usize {
+            let at = b.len();
+            b.extend(v.iter().flat_map(|x| x.to_le_bytes()));
+            at
+        }
+        let mut b = vec![0u8; 0x154];
+        b[0..4].copy_from_slice(b"MD20");
+        b[4..8].copy_from_slice(&0x101u32.to_le_bytes());
+        // A non-degenerate header box.
+        for (i, v) in [-1.0f32, -1.0, -1.0, 1.0, 1.0, 1.0].iter().enumerate() {
+            b[0xb4 + 4 * i..0xb8 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        let verts = b.len();
+        for p in [[0.0f32, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] {
+            let mut v = vec![0u8; 48];
+            for (k, c) in p.iter().enumerate() {
+                v[4 * k..4 * k + 4].copy_from_slice(&c.to_le_bytes());
+            }
+            v[12] = 255; // all weight on bone 0
+            v[28..32].copy_from_slice(&1.0f32.to_le_bytes()); // normal +Z
+            b.extend(v);
+        }
+        arr(&mut b, 0x44, 3, verts);
+        let names: Vec<usize> = ["A.BLP\0", "B.BLP\0"]
+            .iter()
+            .map(|n| {
+                let at = b.len();
+                b.extend(n.as_bytes());
+                at
+            })
+            .collect();
+        let texs = b.len();
+        for (i, flags) in [3u32, 0].into_iter().enumerate() {
+            b.extend(0u32.to_le_bytes()); // type 0: a file
+            b.extend(flags.to_le_bytes());
+            b.extend(6u32.to_le_bytes());
+            b.extend((names[i] as u32).to_le_bytes());
+        }
+        arr(&mut b, 0x5c, 2, texs);
+        let mats = u16s(&mut b, &[0, 0]); // flags 0, blend 0
+        arr(&mut b, 0x84, 1, mats);
+        let tex_lookup = u16s(&mut b, &[0, 1]);
+        arr(&mut b, 0x94, 2, tex_lookup);
+        let unit_lookup = u16s(&mut b, &[0, 0xffff]);
+        arr(&mut b, 0x9c, 2, unit_lookup);
+        let combiners = u16s(&mut b, &[1, 1]);
+        arr(&mut b, 0x144, 2, combiners);
+        let indices = u16s(&mut b, &[0, 1, 2]);
+        let tris = u16s(&mut b, &[0, 1, 2]);
+        let section = b.len();
+        let mut sec = vec![0u8; 32];
+        sec[10..12].copy_from_slice(&3u16.to_le_bytes()); // triangle_count
+        b.extend(sec);
+        let unit = b.len();
+        let mut u = vec![0u8; 24];
+        u[0x08..0x0a].copy_from_slice(&0xffffu16.to_le_bytes()); // no colour
+        u[0x0e..0x10].copy_from_slice(&texture_count.to_le_bytes());
+        b.extend(u);
+        let view = b.len();
+        b.extend(vec![0u8; 44]);
+        arr(&mut b, view, 3, indices);
+        arr(&mut b, view + 8, 3, tris);
+        arr(&mut b, view + 24, 1, section);
+        arr(&mut b, view + 32, 1, unit);
+        arr(&mut b, 0x4c, 1, view);
+        b
+    }
+
+    /// A two-texture unit carries its second stage: texture through the lookup at `+ 1`, its
+    /// record's clamp, generated coordinates (`0x70b8bd`) and the 0x101 combiner (`0x70b7cb`).
+    #[test]
+    fn a_two_texture_unit_parses_its_second_stage() {
+        let subs = parse_m2_render_submeshes(&two_texture_model(2), "", &[]).expect("parses");
+        assert_eq!(subs.len(), 1);
+        let s = &subs[0];
+        assert_eq!(s.texture.as_deref(), Some("A.BLP"));
+        assert!(!s.env_map, "stage 0 reads its UVs");
+        assert_eq!(
+            s.stage1,
+            Some(TextureStage {
+                texture: Some("B.BLP".into()),
+                wrap_x: false,
+                wrap_y: false,
+                env_map: true,
+                combine: 1,
+            })
+        );
+        // One texture binds one stage, whatever the lookups past it hold.
+        let one = parse_m2_render_submeshes(&two_texture_model(1), "", &[]).expect("parses");
+        assert_eq!(one[0].stage1, None);
+        assert_eq!(one[0].texture.as_deref(), Some("A.BLP"));
     }
 
     /// `TaurenMale.m2`'s type-8 fur, opaque core and alpha-cut two-sided fringe alike, surfaces as

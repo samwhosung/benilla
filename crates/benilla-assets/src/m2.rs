@@ -24,6 +24,7 @@ use crate::model::{
     arm_subtree_roots, billboard_info, build_animation_clip, build_attachments, build_global_bones,
     build_grip_clip, build_skeleton, finger_subtree_roots, in_subtree, skeleton_pivots,
     upper_subtree_root, AnimClip, ModelAnimations, ModelAttachment, ModelSkeleton, ModelSubmesh,
+    Stage1,
 };
 
 /// A loaded M2: its batches, bounds, collision hull, rig, animations, effects and cameras.
@@ -274,8 +275,23 @@ impl AssetLoader for M2ModelLoader {
             let texture = sub.texture.as_deref().map(|t| {
                 ctx.load::<Image>(crate::texture_url_on(source, t, (sub.wrap_x, sub.wrap_y)))
             });
+            // Stage 1 at the generated coordinate, the only kind a stock unit authors. Not built: a
+            // stage 1 reading the vertex's second UV set, which the mesh does not carry; such a
+            // unit draws its stage 0 alone.
+            let stage1 = sub.stage1.as_ref().filter(|s| s.env_map).and_then(|s| {
+                let t = s.texture.as_deref()?;
+                Some(Stage1 {
+                    texture: ctx.load::<Image>(crate::texture_url_on(
+                        source,
+                        t,
+                        (s.wrap_x, s.wrap_y),
+                    )),
+                    combine: s.combine,
+                })
+            });
             submeshes.push(ModelSubmesh {
                 texture,
+                stage1,
                 skin_slot: sub.skin_slot,
                 geoset_id: sub.geoset_id,
                 char_slot: sub.char_slot,
