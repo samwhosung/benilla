@@ -324,15 +324,17 @@ pub(super) fn emit(
         }
     }
     out.extend(glyphs);
-    // The caret: a 1 px bar in the constructor's white (`0xffffffff`), one line cell tall at the
-    // engine's x, pushed after the glyphs to draw on top. The reference's is 4 UI units wide
-    // (`0x77b8c0`) and takes the edit box's text colour on a font change (`0x77e2a0`). A
-    // single-line box's cut keeps its own bar's width past the edge, where a full window's caret
-    // stands.
+    // The caret: a solid bar one line cell tall at the engine's x, pushed after the glyphs to
+    // draw on top. It is 4 script units of the box's scale wide (`0x77ba2d`-`0x77ba67`, the same
+    // value `SetWidth(4)` stores) and takes the box's text colour, alpha included, whenever its
+    // font changes colour (`0x77e2a0`, `0x77e310`); the constructor's white (`0x779ccc`) is only
+    // the colour before one. A single-line box's cut keeps its own bar's width past the edge,
+    // where a full window's caret stands.
     if let (Some(ui), Some((x0, top, cell_h))) = (ebox, ebox_geom) {
+        let caret_w = caret_width_px(host.scale, host.font_scale);
         let caret_clip = if style.edit_line {
             let mut r = host.rect;
-            r.max.x += 1.0;
+            r.max.x += caret_w;
             Some(host.clip.map_or(r, |c| c.intersect(r)))
         } else {
             text_clip
@@ -343,11 +345,16 @@ pub(super) fn emit(
             // `caret_x` is in engine UI units.
             let cx = x0 + ui.caret_x * host.scale;
             out.push(UiQuad {
-                rect: Rect::new(cx, top, cx + 1.0, top + cell_h),
+                rect: Rect::new(cx, top, cx + caret_w, top + cell_h),
                 z_key: host.z,
                 texture: None,
                 uv: UvRect::FULL,
-                color: [1.0, 1.0, 1.0, host.alpha],
+                color: [
+                    base_color[0],
+                    base_color[1],
+                    base_color[2],
+                    base_color[3] * host.alpha,
+                ],
                 corner_colors: None,
                 additive: false,
                 circular: false,
@@ -363,6 +370,16 @@ pub(super) fn emit(
             });
         }
     }
+}
+
+/// An EditBox caret's width in script units: `0x77b8c0` sets it to `4.0` over `1024` times the
+/// aspect scale `0.75·a` (`0x77ba2d`-`0x77ba67`), which is exactly what `SetWidth(4)` stores
+/// (`0x7a1fce`-`0x7a1feb`), so it is 4 units of the box's own scale at every aspect.
+const CARET_UNITS: f32 = 4.0;
+
+/// The caret's width in px: [`CARET_UNITS`] at the seam scale and the box's effective scale.
+fn caret_width_px(scale: f32, font_scale: f32) -> f32 {
+    CARET_UNITS * scale * font_scale
 }
 
 /// How far below its band a message-frame line's ink reaches, in the rect's px space: the seat
@@ -523,12 +540,10 @@ mod caret_tests {
         app
     }
 
-    /// The caret: the one untextured white quad.
+    /// The caret: the one untextured quad (these boxes hold no selection).
     fn caret(app: &App) -> UiQuad {
         let quads = &app.world().resource::<UiQuads>().quads;
-        let mut carets = quads
-            .iter()
-            .filter(|q| q.texture.is_none() && q.color[..3] == [1.0, 1.0, 1.0]);
+        let mut carets = quads.iter().filter(|q| q.texture.is_none());
         let c = carets
             .next()
             .expect("the focused box draws its caret")
@@ -546,6 +561,58 @@ mod caret_tests {
                 c.rect,
                 "the clip cuts the caret: {clip:?}"
             );
+        }
+    }
+
+    /// A focused single-line box on a 1024x768 window; `before` runs ahead of `SetFont(.., 14)` and
+    /// `after` behind it, both before `SetText`. Its caret and its first glyph.
+    fn single_line_caret(before: &str, after: &str) -> (UiQuad, UiQuad) {
+        let app = app_with(&format!(
+            r#"
+            E = CreateFrame("EditBox", "E")
+            E:SetPoint("TOPLEFT", 100, -100)
+            E:SetWidth(270); E:SetHeight(20)
+            {before}
+            E:SetFont("Fonts\\FRIZQT__.TTF", 14)
+            {after}
+            E:SetFocus()
+            E:SetText("abc")
+        "#
+        ));
+        let quads = &app.world().resource::<UiQuads>().quads;
+        let glyph = quads
+            .iter()
+            .find(|q| q.texture.is_some())
+            .expect("the text draws")
+            .clone();
+        (caret(&app), glyph)
+    }
+
+    /// The caret is 4 script units of the box's scale wide, `SetWidth(4)`'s value (`0x77ba2d`).
+    #[test]
+    fn the_caret_is_four_script_units_wide() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        let (c, _) = single_line_caret("", "");
+        assert!((c.rect.width() - 4.0).abs() < 1e-4, "{:?}", c.rect);
+        let (c, _) = single_line_caret("E:SetScale(2)", "");
+        assert!((c.rect.width() - 8.0).abs() < 1e-4, "{:?}", c.rect);
+    }
+
+    /// The caret takes the box's text colour, alpha included, whichever of the font and the colour
+    /// is set first (`0x77e2a0` takes the font's colour on a colour change, `0x77e310`).
+    #[test]
+    fn the_caret_takes_the_boxs_text_colour() {
+        let _data = benilla_formats::wow_data_or_skip!();
+        for (before, after) in [
+            ("", "E:SetTextColor(1, 0.5, 0.25, 0.5)"),
+            ("E:SetTextColor(1, 0.5, 0.25, 0.5)", ""),
+        ] {
+            let (c, g) = single_line_caret(before, after);
+            assert_eq!(c.color, g.color, "the glyph's colour is the control");
+            let want = [1.0, 0.5, 0.25, 0.5];
+            for (got, want) in c.color.iter().zip(want) {
+                assert!((got - want).abs() < 1e-3, "{:?}", c.color);
+            }
         }
     }
 
