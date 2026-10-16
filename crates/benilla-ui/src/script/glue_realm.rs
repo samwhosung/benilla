@@ -12,7 +12,7 @@
 
 use mlua::{Lua, MultiValue, Value};
 
-use super::binding_abi::{bool_or_default, flag, ftol, string_arg};
+use super::binding_abi::{bool_or_default, flag, flag_or_default, ftol, string_arg};
 use super::glue_core::{call, GlueCall};
 use super::{Model, ScriptValue};
 
@@ -81,7 +81,7 @@ pub struct GlueRealmCells {
     /// category id from `SetPreferredInfo` (`0x46ea52`).
     pub chosen: Option<u32>,
     /// The type `SetPreferredInfo` last asked for (`[0xb41fa8]`, `[0xb41fac]`).
-    pub preferred: (bool, bool),
+    pub preferred: (i32, i32),
 }
 
 impl Default for GlueRealmCells {
@@ -95,7 +95,7 @@ impl Default for GlueRealmCells {
             ],
             category: -1,
             chosen: None,
-            preferred: (false, false),
+            preferred: (0, 0),
         }
     }
 }
@@ -239,6 +239,14 @@ impl GlueRealmList {
             .map_or((false, false), |t| (t.pvp, t.rp))
     }
 
+    /// [`Self::type_of`] as `realm_select` holds it: two 0-or-1 words (`setne`, `0x46eacb`,
+    /// `0x46ead7`), which it compares raw with the integers the script passed (`0x46eada`,
+    /// `0x46eadf`).
+    fn type_flags(&self, realm_type: u32) -> (i32, i32) {
+        let (pvp, rp) = self.type_of(realm_type);
+        (i32::from(pvp), i32::from(rp))
+    }
+
     /// The comparator (`0x46e790`) over two holder indices: the sort records in order, the first
     /// that does not tie decides, negated by its own `descending`.
     fn compare(&self, a: usize, b: usize) -> std::cmp::Ordering {
@@ -378,9 +386,11 @@ impl GlueRealmList {
     /// `realm_select` (`0x46ea20`), `SetPreferredInfo`'s body: the first valid realm of the asked
     /// category with the asked type, else the category's first valid realm, else the first valid
     /// realm of the type in any category; `None` when there is none. "Valid" skips flag `0x01`
-    /// only (`0x46ea7c`), so a realm that is down can be suggested. Returns the pair
-    /// `SUGGEST_REALM` carries: the stored category index plus 1, and the index plus 1.
-    fn select(&mut self, stored: usize, pvp: bool, rp: bool) -> Option<(usize, usize)> {
+    /// only (`0x46ea7c`), so a realm that is down can be suggested. `pvp` and `rp` are the
+    /// integers `0x6f1c10` returned, compared raw with the type's 0 or 1: a 2 fits no realm.
+    /// Returns the pair `SUGGEST_REALM` carries: the stored category index plus 1, and the index
+    /// plus 1.
+    fn select(&mut self, stored: usize, pvp: i32, rp: i32) -> Option<(usize, usize)> {
         let cats = self.categories();
         // `cmp edi,eax ; jbe`: an index past the count reads 0; the count itself is never reached
         // through `0x46edf0`.
@@ -391,7 +401,7 @@ impl GlueRealmList {
         let valid = |list: &Self, h: usize| list.realm(h).is_some_and(|r| r.flags & 0x01 == 0);
         let fits = |list: &Self, h: usize| {
             list.realm(h)
-                .is_some_and(|r| r.flags & 0x01 == 0 && list.type_of(r.realm_type) == (pvp, rp))
+                .is_some_and(|r| r.flags & 0x01 == 0 && list.type_flags(r.realm_type) == (pvp, rp))
         };
         let own = self.buckets.get(stored).cloned().unwrap_or_default();
         if let Some(i) = own.iter().position(|&h| fits(self, h)) {
@@ -645,7 +655,7 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     // `0x46f2c0`: the category through `0x46edf0`, the two flags through `0x6f1c10` with default
-    // 0, then `realm_select` (`0x46ea20`), which fires `SUGGEST_REALM` with `"%d%d"` or, with no
+    // 0, kept as the integers it returns, then `realm_select` (`0x46ea20`), which fires `SUGGEST_REALM` with `"%d%d"` or, with no
     // realm to suggest, `OPEN_REALM_LIST` (`0x46ec21`).
     g.set(
         "SetPreferredInfo",
@@ -654,8 +664,8 @@ pub(super) fn install(lua: &Lua) -> mlua::Result<()> {
             let Some(first) = number_at(lua, &args, 0) else {
                 return Err(mlua::Error::RuntimeError(USAGE.into()));
             };
-            let pvp = bool_or_default(args.get(1), false);
-            let rp = bool_or_default(args.get(2), false);
+            let pvp = flag_or_default(args.get(1), 0);
+            let rp = flag_or_default(args.get(2), 0);
             let suggested = {
                 let mut m = model(lua);
                 let list = &mut m.glue.realms;
@@ -1026,7 +1036,7 @@ mod tests {
         let cells = s.glue_realm_cells();
         assert_eq!(
             (cells.category, cells.chosen, cells.preferred),
-            (1, Some(5), (false, true))
+            (1, Some(5), (0, 1))
         );
         s.set_glue_realms(vec![realm("Invalid", 1, 1, 0x01, 0, 1.0)]);
         s.rebuild_glue_realms();
@@ -1042,6 +1052,46 @@ mod tests {
             err.contains("Usage: SetPreferredInfo(index, pvp, rp)"),
             "{err}"
         );
+    }
+
+    /// `SetPreferredInfo` keeps the integers `0x6f1c10` returns and `0x46ea20` compares them raw
+    /// with a type's 0 or 1 (`0x46eada`, `0x46eadf`): a 2 or a -1 fits no type, so the
+    /// category's first valid realm is suggested; a float truncates, a string goes by its first
+    /// byte, and nil is 0.
+    #[test]
+    fn set_preferred_info_compares_the_integers_raw() {
+        let mut s = vm(vec![
+            realm("Normal", 1, 0, 0, 0, 1.0),
+            realm("Pvp", 1, 1, 0, 0, 1.0),
+        ]);
+        s.rebuild_glue_realms();
+        listen(&s, &["SUGGEST_REALM", "OPEN_REALM_LIST"]);
+        let suggested = |args: &str| {
+            s.run(&format!("SetPreferredInfo(1, {args})")).unwrap();
+            fired(&s)
+        };
+        for (args, want) in [
+            ("1, 0", "SUGGEST_REALM 1 2"),
+            ("true, nil", "SUGGEST_REALM 1 2"),
+            ("1.9, 0", "SUGGEST_REALM 1 2"),
+            ("'1', 0", "SUGGEST_REALM 1 2"),
+            ("4294967297, 0", "SUGGEST_REALM 1 2"),
+            ("0, 0", "SUGGEST_REALM 1 1"),
+            ("nil, nil", "SUGGEST_REALM 1 1"),
+            ("0.9, 0", "SUGGEST_REALM 1 1"),
+            ("'0', 0", "SUGGEST_REALM 1 1"),
+            // Not 0 and not 1: nothing fits, the category's first valid realm answers.
+            ("2, 0", "SUGGEST_REALM 1 1"),
+            ("-1, 0", "SUGGEST_REALM 1 1"),
+            ("0, 2", "SUGGEST_REALM 1 1"),
+            ("1, 2", "SUGGEST_REALM 1 1"),
+            // A string is 0 or 1 by its first byte, whatever number it spells.
+            ("'2', 0", "SUGGEST_REALM 1 2"),
+        ] {
+            assert_eq!(suggested(args), [want], "SetPreferredInfo(1, {args})");
+        }
+        s.run("SetPreferredInfo(1, 2, -3)").unwrap();
+        assert_eq!(s.glue_realm_cells().preferred, (2, -3));
     }
 
     /// `ChangeRealm` stores the category before its range check, sets `realmName`, and asks the

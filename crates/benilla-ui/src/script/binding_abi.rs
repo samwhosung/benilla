@@ -318,22 +318,30 @@ fn scale_by_pow10(value: f64, exp: i32) -> f64 {
 /// So `"0"` is false and `"0.5"` goes by its first byte: the Interface panel passes its options
 /// the strings `"0"` and `"1"`.
 pub(crate) fn bool_or_default(v: Option<&Value>, default: bool) -> bool {
+    flag_or_default(v, i32::from(default)) != 0
+}
+
+/// `GetScriptFlagArg` (`0x6f1c10`) as its caller receives it: the same coercion as
+/// [`bool_or_default`], but the number arm returns the truncated integer itself (`0x6f1c46` calls
+/// `0x40a2b0` and returns, with no `!= 0`), so a caller that compares or stores the value sees a
+/// 2 as 2. A boolean, a string and a nil give 0 or 1, and every other type the raw `default`.
+pub(crate) fn flag_or_default(v: Option<&Value>, default: i32) -> i32 {
     let Some(v) = v else {
         return default; // LUA_TNONE
     };
     match v {
-        Value::Nil => false,
-        Value::Boolean(b) => *b,
+        Value::Nil => 0,
+        Value::Boolean(b) => i32::from(*b),
         Value::LightUserData(_) => default,
         // Truncated like `0x40a2b0` ([`ftol`]), which keeps only the low dword: 2^32 reads 0, and
         // an infinity or NaN too.
-        Value::Integer(i) => (*i as i32) != 0,
-        Value::Number(n) => ftol(*n) != 0,
+        Value::Integer(i) => *i as i32,
+        Value::Number(n) => ftol(*n),
         Value::String(s) => {
             // The keyword arm is also reached by every byte the remap table cannot index (and
             // by an empty string); a string it does not know takes `default`.
             let bytes = s.as_bytes();
-            crate::strings::keyword_bool(&bytes).unwrap_or(default)
+            crate::strings::keyword_bool(&bytes).map_or(default, i32::from)
         }
         _ => default,
     }
@@ -455,6 +463,23 @@ mod tests {
         for none in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 9.3e18, -9.3e18] {
             assert_eq!(ftol(none), 0, "{none}");
         }
+    }
+
+    /// `0x6f1c10` returns the truncated integer for a number (`0x6f1c46` returns `0x40a2b0`'s
+    /// result unchanged), 0 or 1 for a boolean or a string, and the raw default for the rest.
+    #[test]
+    fn flag_or_default_returns_the_number_itself() {
+        let lua = lua();
+        let st = |t: &str| Value::String(lua.create_string(t).unwrap());
+        assert_eq!(flag_or_default(Some(&Value::Number(2.9)), 0), 2);
+        assert_eq!(flag_or_default(Some(&Value::Number(-1.5)), 0), -1);
+        assert_eq!(flag_or_default(Some(&Value::Integer(7)), 0), 7);
+        assert_eq!(flag_or_default(Some(&Value::Boolean(true)), 0), 1);
+        assert_eq!(flag_or_default(Some(&Value::Nil), 5), 0);
+        assert_eq!(flag_or_default(None, 5), 5);
+        assert_eq!(flag_or_default(Some(&st("2")), 0), 1);
+        assert_eq!(flag_or_default(Some(&st("off")), 5), 0);
+        assert_eq!(flag_or_default(Some(&st("maybe")), 5), 5);
     }
 
     #[test]
